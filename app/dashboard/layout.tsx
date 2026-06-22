@@ -19,6 +19,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <Link href="/dashboard/stores" className="hover:text-slate-900">
                 Tiendas
               </Link>
+              <Link href="/dashboard/team" className="hover:text-slate-900">
+                Equipo
+              </Link>
               <Link href="/dashboard/stores/new" className="hover:text-slate-900">
                 Conectar tienda
               </Link>
