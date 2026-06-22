@@ -91,6 +91,9 @@ function rangeBounds(range: DateRange): { startIso: string; endIso: string } {
   return { startIso: `${range.from}T00:00:00Z`, endIso: `${range.to}T23:59:59Z` };
 }
 
+const PAGE_SIZE = 1000;
+const MAX_ROWS = 50_000;
+
 export async function getOrders(
   storeIds: string[],
   range: DateRange,
@@ -98,17 +101,23 @@ export async function getOrders(
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
   const { startIso, endIso } = rangeBounds(range);
-  const { data } = await sb
-    .from("orders")
-    .select(
-      "store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items",
-    )
-    .in("store_id", storeIds)
-    .gte("created_at", startIso)
-    .lte("created_at", endIso)
-    .order("created_at", { ascending: false })
-    .limit(5000);
-  return (data as OrderRow[]) ?? [];
+  const out: OrderRow[] = [];
+  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+    const { data, error } = await sb
+      .from("orders")
+      .select(
+        "store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items",
+      )
+      .in("store_id", storeIds)
+      .gte("created_at", startIso)
+      .lte("created_at", endIso)
+      .order("created_at", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error || !data?.length) break;
+    out.push(...(data as OrderRow[]));
+    if (data.length < PAGE_SIZE) break;
+  }
+  return out;
 }
 
 export async function getConversations(
@@ -118,16 +127,23 @@ export async function getConversations(
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
   const { startIso, endIso } = rangeBounds(range);
-  const { data } = await sb
-    .from("conversations")
-    .select(
-      "store_id,kapso_conversation_id,phone_number_id,started_at,status,message_count,last_message_at",
-    )
-    .in("store_id", storeIds)
-    .gte("started_at", startIso)
-    .lte("started_at", endIso)
-    .limit(20000);
-  return (data as ConversationRow[]) ?? [];
+  const out: ConversationRow[] = [];
+  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+    const { data, error } = await sb
+      .from("conversations")
+      .select(
+        "store_id,kapso_conversation_id,phone_number_id,started_at,status,message_count,last_message_at",
+      )
+      .in("store_id", storeIds)
+      .gte("started_at", startIso)
+      .lte("started_at", endIso)
+      .order("started_at", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error || !data?.length) break;
+    out.push(...(data as ConversationRow[]));
+    if (data.length < PAGE_SIZE) break;
+  }
+  return out;
 }
 
 /** Most recent ops snapshot per store (best-effort operational family). */

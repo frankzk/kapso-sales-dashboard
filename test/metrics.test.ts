@@ -259,7 +259,19 @@ describe("Family 4 — Operativo", () => {
     expect(s.errors).toBe(2);
     expect(s.errorRate).toBe(0.5);
     expect(s.avgLatencyMs).toBe(250);
+    expect(s.p50LatencyMs).toBe(200);
     expect(s.p95LatencyMs).toBe(400);
+  });
+
+  it("summarizeApiLogs tolerates alternate field names + nested timing", () => {
+    const s = summarizeApiLogs([
+      { status: "200", response_time_ms: 50 },
+      { response_status: 503, latency: "150" }, // error + string latency
+      { code: 200, timing: { duration_ms: 100 } }, // nested latency
+    ]);
+    expect(s.total).toBe(3);
+    expect(s.errors).toBe(1);
+    expect(s.avgLatencyMs).toBe(100); // (50+150+100)/3
   });
 });
 

@@ -39,7 +39,13 @@ function pctDelta(cur: number, prev: number): number | null {
 interface OpsPayload {
   capturedAt?: string;
   health?: { status?: string; error?: string | null } | null;
-  apiLogs?: { total?: number; errors?: number; errorRate?: number; avgLatencyMs?: number | null } | null;
+  apiLogs?: {
+    total?: number;
+    errors?: number;
+    errorRate?: number;
+    avgLatencyMs?: number | null;
+    p95LatencyMs?: number | null;
+  } | null;
   activity24h?: { conversations?: number; activeConversations?: number } | null;
 }
 
@@ -117,6 +123,10 @@ export function DashboardView({
 
   const opsStores = singleStore ? [singleStore] : stores;
 
+  const exportQs = new URLSearchParams({ from: range.from, to: range.to });
+  if (scope !== "all") exportQs.set("storeId", scope);
+  const exportBase = exportQs.toString();
+
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -138,6 +148,17 @@ export function DashboardView({
           )}
         </div>
         <DashboardControls stores={stores} scope={scope} from={range.from} to={range.to} />
+      </div>
+
+      <div className="flex items-center gap-2 text-xs text-slate-500">
+        <span>Exportar CSV:</span>
+        <a href={`/api/export?kind=orders&${exportBase}`} className="text-brand-700 hover:underline">
+          órdenes
+        </a>
+        <span>·</span>
+        <a href={`/api/export?kind=rollups&${exportBase}`} className="text-brand-700 hover:underline">
+          rollups
+        </a>
       </div>
 
       {/* KPIs */}
@@ -264,7 +285,14 @@ export function DashboardView({
                         k="Errores API (24h)"
                         v={p.apiLogs ? `${p.apiLogs.errors ?? 0}/${p.apiLogs.total ?? 0} (${formatPct(p.apiLogs.errorRate ?? 0)})` : "—"}
                       />
-                      <Row k="Latencia media" v={p.apiLogs?.avgLatencyMs != null ? `${p.apiLogs.avgLatencyMs} ms` : "—"} />
+                      <Row
+                        k="Latencia (avg/p95)"
+                        v={
+                          p.apiLogs?.avgLatencyMs != null
+                            ? `${p.apiLogs.avgLatencyMs} / ${p.apiLogs.p95LatencyMs ?? "—"} ms`
+                            : "—"
+                        }
+                      />
                       <Row
                         k="Conversaciones 24h"
                         v={p.activity24h ? `${p.activity24h.conversations ?? 0} (${p.activity24h.activeConversations ?? 0} activas)` : "—"}

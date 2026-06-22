@@ -415,22 +415,55 @@ export interface ApiLogsSummary {
   errors: number;
   errorRate: number; // 0..1
   avgLatencyMs: number | null;
+  p50LatencyMs: number | null;
   p95LatencyMs: number | null;
 }
 
-function latencyOf(log: { duration_ms?: number | null; latency_ms?: number | null }): number | null {
-  const v = log.duration_ms ?? log.latency_ms ?? null;
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
+function num(v: unknown): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** Latency in ms, tolerant of the many field names a log might use. */
+function latencyOf(log: Record<string, unknown>): number | null {
+  const direct =
+    num(log.duration_ms) ??
+    num(log.latency_ms) ??
+    num(log.response_time_ms) ??
+    num(log.elapsed_ms) ??
+    num(log.duration) ??
+    num(log.latency);
+  if (direct !== null) return direct;
+  const timing = log.timing as Record<string, unknown> | undefined;
+  if (timing) return num(timing.duration_ms) ?? num(timing.latency_ms) ?? null;
+  return null;
+}
+
+/** HTTP status, tolerant of field-name variants. */
+function statusOf(log: Record<string, unknown>): number | null {
+  return num(log.status_code) ?? num(log.status) ?? num(log.response_status) ?? num(log.code);
+}
+
+/** Nearest-rank percentile (p in 0..1) over a pre-sorted ascending array. */
+function percentile(sorted: number[], p: number): number | null {
+  if (!sorted.length) return null;
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
+  return sorted[idx]!;
 }
 
 export function summarizeApiLogs(
-  logs: Array<{ status_code?: number; duration_ms?: number | null; latency_ms?: number | null }>,
+  logs: ReadonlyArray<Record<string, unknown>>,
 ): ApiLogsSummary {
   const total = logs.length;
   let errors = 0;
   const latencies: number[] = [];
   for (const l of logs) {
-    if ((l.status_code ?? 0) >= 400) errors += 1;
+    const st = statusOf(l);
+    if (st !== null && st >= 400) errors += 1;
     const lat = latencyOf(l);
     if (lat !== null) latencies.push(lat);
   }
@@ -438,15 +471,13 @@ export function summarizeApiLogs(
   const avg = latencies.length
     ? round2(latencies.reduce((s, n) => s + n, 0) / latencies.length)
     : null;
-  const p95 = latencies.length
-    ? latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))]!
-    : null;
   return {
     total,
     errors,
     errorRate: total ? round2((errors / total) * 10000) / 10000 : 0,
     avgLatencyMs: avg,
-    p95LatencyMs: p95,
+    p50LatencyMs: percentile(latencies, 0.5),
+    p95LatencyMs: percentile(latencies, 0.95),
   };
 }
 
