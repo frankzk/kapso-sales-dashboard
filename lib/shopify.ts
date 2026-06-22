@@ -303,8 +303,6 @@ export const ORDERS_QUERY = /* GraphQL */ `
                 title
                 quantity
                 sku
-                product { id }
-                variant { id }
                 originalUnitPriceSet { shopMoney { amount } }
               }
             }
