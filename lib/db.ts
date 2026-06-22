@@ -6,11 +6,13 @@
 
 import { createServerClient } from "@supabase/ssr";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { cookies } from "next/headers";
 import { env } from "@/lib/env";
 
 /** RLS-scoped client bound to the current request's auth cookies. */
 export async function createServerSupabase(): Promise<SupabaseClient> {
+  // Imported dynamically so that admin-only consumers (cron, webhooks, tests)
+  // can use createAdminSupabase() without pulling in the next/headers runtime.
+  const { cookies } = await import("next/headers");
   const cookieStore = await cookies();
   return createServerClient(env.supabaseUrl(), env.supabaseAnonKey(), {
     cookies: {
