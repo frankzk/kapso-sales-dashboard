@@ -1,0 +1,12 @@
+-- Apply the full schema + RLS in order, in one command:
+--   psql "$DATABASE_URL" -f db/apply.sql
+-- (\ir paths are relative to this file.)
+\echo 'Applying 0001_init.sql'
+\ir migrations/0001_init.sql
+\echo 'Applying 0002_rollups.sql'
+\ir migrations/0002_rollups.sql
+\echo 'Applying 0003_refunds.sql'
+\ir migrations/0003_refunds.sql
+\echo 'Applying RLS policies'
+\ir ../supabase/policies.sql
+\echo 'Done.'
