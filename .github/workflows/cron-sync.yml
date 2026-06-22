@@ -1,0 +1,34 @@
+name: Scheduled sync (fallback)
+
+# Calls /api/cron/sync on a schedule. Use this when Vercel's plan limits cron
+# frequency (Hobby runs cron ~once/day). Requires two repo secrets:
+#   APP_URL     = https://<your-vercel-domain>
+#   CRON_SECRET = same value set in the app's env
+# NOTE: scheduled workflows only run on the repository's DEFAULT branch.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: cron-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/cron/sync
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "APP_URL/CRON_SECRET secrets not set — skipping (configure them to enable)."
+            exit 0
+          fi
+          code=$(curl -sS -o /tmp/resp -w "%{http_code}" -X POST \
+            -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/cron/sync")
+          echo "HTTP $code"; cat /tmp/resp; echo
+          [ "$code" = "200" ] || { echo "::error::cron call failed ($code)"; exit 1; }

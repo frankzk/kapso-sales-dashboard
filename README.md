@@ -135,13 +135,23 @@ openssl rand -hex 32
 ## Tests
 
 ```bash
-pnpm test          # vitest run
+pnpm test          # vitest run (54 unit tests)
 pnpm typecheck     # tsc --noEmit
+bash scripts/verify-db.sh   # DB layer on a throwaway Postgres (see below)
 ```
 
-Cubre: round-trip de cifrado AES-GCM (+ detección de manipulación), verificación
-HMAC de Shopify, mapeo orden Shopify→`orders` (REST y GraphQL), construcción de
-queries Kapso/Shopify y cálculo de cada familia de métricas.
+Unit (Vitest) covers: round-trip of AES-GCM encryption (+ tamper detection),
+Shopify HMAC verification, order mapping Shopify→`orders` (REST & GraphQL),
+Shopify/Kapso query building, webhook orchestration (HMAC gate + idempotent
+re-delivery), each metric family, and the demo generator.
+
+`scripts/verify-db.sh` spins up a **throwaway** Postgres 16 cluster (never your
+Supabase DB), applies the migrations + RLS policies, and asserts:
+
+- **Rollup parity** — the SQL `recompute_daily_rollups()` matches the TS
+  `computeDailyRollups()` exactly.
+- **RLS isolation** — a store-A viewer cannot see store B, an org owner sees all
+  its stores, and a viewer with no explicit grant sees nothing.
 
 ## Estructura
 

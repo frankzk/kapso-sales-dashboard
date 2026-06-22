@@ -1,0 +1,136 @@
+import { describe, it, expect } from "vitest";
+import {
+  listConversations,
+  listAllConversations,
+  listApiLogs,
+  getPhoneHealth,
+  nextCursor,
+  mapKapsoConversation,
+  type KapsoClientOpts,
+} from "@/lib/kapso";
+
+const BASE = "https://api.kapso.ai/platform/v1";
+
+interface Capture {
+  url: string;
+  headers: Record<string, string>;
+}
+
+/** Build a fetch mock that records requests and returns `responder(url)`. */
+function mockFetch(
+  responder: (url: URL) => unknown,
+  captures: Capture[],
+): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const urlStr = String(input);
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    captures.push({ url: urlStr, headers });
+    const payload = responder(new URL(urlStr));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => payload,
+      text: async () => JSON.stringify(payload),
+    } as Response;
+  }) as unknown as typeof fetch;
+}
+
+function opts(fetchImpl: typeof fetch): KapsoClientOpts {
+  return { apiKey: "kapso_secret_key", baseUrl: BASE, fetchImpl };
+}
+
+describe("listConversations", () => {
+  it("hits /whatsapp/conversations with snake_case params + X-API-Key", async () => {
+    const caps: Capture[] = [];
+    const f = mockFetch(() => ({ data: [], paging: {} }), caps);
+    await listConversations(opts(f), {
+      phoneNumberId: "pn_1",
+      status: "ended",
+      createdAfter: "2026-06-01T00:00:00Z",
+      limit: 50,
+    });
+    const url = new URL(caps[0]!.url);
+    expect(url.pathname).toBe("/platform/v1/whatsapp/conversations");
+    expect(url.searchParams.get("phone_number_id")).toBe("pn_1");
+    expect(url.searchParams.get("status")).toBe("ended");
+    expect(url.searchParams.get("created_after")).toBe("2026-06-01T00:00:00Z");
+    expect(url.searchParams.get("limit")).toBe("50");
+    expect(caps[0]!.headers["X-API-Key"]).toBe("kapso_secret_key");
+  });
+});
+
+describe("listAllConversations (cursor pagination)", () => {
+  it("follows paging.cursors.after until exhausted", async () => {
+    const caps: Capture[] = [];
+    const f = mockFetch((url) => {
+      const after = url.searchParams.get("after");
+      if (!after) {
+        return { data: [{ id: "a" }], paging: { cursors: { after: "cur1" } } };
+      }
+      if (after === "cur1") {
+        return { data: [{ id: "b" }], paging: { cursors: { after: null } } };
+      }
+      return { data: [], paging: {} };
+    }, caps);
+
+    const all = await listAllConversations(opts(f), { phoneNumberId: "pn_1" });
+    expect(all.map((c) => c.id)).toEqual(["a", "b"]);
+    expect(caps).toHaveLength(2);
+  });
+});
+
+describe("getPhoneHealth", () => {
+  it("hits the per-number health endpoint", async () => {
+    const caps: Capture[] = [];
+    const f = mockFetch(() => ({ status: "healthy", timestamp: "t", checks: {} }), caps);
+    const health = await getPhoneHealth(opts(f), "pn 1/weird");
+    expect(new URL(caps[0]!.url).pathname).toBe(
+      "/platform/v1/whatsapp/phone_numbers/pn%201%2Fweird/health",
+    );
+    expect(health.status).toBe("healthy");
+  });
+});
+
+describe("listApiLogs", () => {
+  it("passes errors_only + period", async () => {
+    const caps: Capture[] = [];
+    const f = mockFetch(() => ({ data: [], paging: {} }), caps);
+    await listApiLogs(opts(f), { errorsOnly: true, period: "24h", statusCode: 500 });
+    const url = new URL(caps[0]!.url);
+    expect(url.pathname).toBe("/platform/v1/api_logs");
+    expect(url.searchParams.get("errors_only")).toBe("true");
+    expect(url.searchParams.get("period")).toBe("24h");
+    expect(url.searchParams.get("status_code")).toBe("500");
+  });
+});
+
+describe("helpers", () => {
+  it("nextCursor reads cursors.after or next", () => {
+    expect(nextCursor({ data: [], paging: { cursors: { after: "x" } } })).toBe("x");
+    expect(nextCursor({ data: [], paging: { next: "y" } })).toBe("y");
+    expect(nextCursor({ data: [], paging: {} })).toBeNull();
+  });
+
+  it("mapKapsoConversation maps platform + kapso-extension shapes", () => {
+    const row = mapKapsoConversation(
+      {
+        id: "conv_1",
+        phone_number_id: "pn_1",
+        status: "ended",
+        created_at: "2026-06-20T10:00:00Z",
+        last_active_at: "2026-06-20T11:00:00Z",
+        kapso: { messages_count: 12, last_message_timestamp: "2026-06-20T11:00:00Z" },
+      },
+      "store-1",
+    );
+    expect(row).toMatchObject({
+      store_id: "store-1",
+      kapso_conversation_id: "conv_1",
+      phone_number_id: "pn_1",
+      started_at: "2026-06-20T10:00:00Z",
+      status: "ended",
+      message_count: 12,
+      last_message_at: "2026-06-20T11:00:00Z",
+    });
+  });
+});
