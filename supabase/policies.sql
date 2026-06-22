@@ -123,3 +123,15 @@ create policy webhook_events_select on webhook_events
 -- NOTE: no INSERT/UPDATE/DELETE policies are defined for the ingested-data
 -- tables. With RLS enabled and no permissive write policy, authenticated/anon
 -- clients cannot write them; only the service-role ingestion path can.
+
+-- ----------------------------------------------------------------------------
+-- Table privileges. On Supabase these are granted to the managed roles by
+-- default; we include them so the schema also enforces correctly on a vanilla
+-- Postgres. RLS still restricts WHICH ROWS each role may read.
+-- service_role is expected to have BYPASSRLS (the Supabase default) so the
+-- ingestion path can write tables that intentionally have no write policy.
+-- ----------------------------------------------------------------------------
+grant usage on schema public to authenticated, service_role;
+grant select on all tables in schema public to authenticated;
+grant all privileges on all tables in schema public to service_role;
+grant execute on all functions in schema public to authenticated, service_role;
