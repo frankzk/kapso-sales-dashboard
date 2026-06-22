@@ -4,6 +4,7 @@ import type {
   OrderRow,
   StoreSummary,
 } from "@/lib/types";
+import Link from "next/link";
 import type { DateRange } from "@/lib/access";
 import {
   aggregateRollups,
@@ -127,6 +128,14 @@ export function DashboardView({
             {range.from} → {range.to}
             {singleStore ? ` · ${singleStore.shopify_domain}` : ` · ${stores.length} tienda(s)`}
           </p>
+          {singleStore && (
+            <Link
+              href={`/dashboard/${singleStore.id}/settings`}
+              className="mt-1 inline-block text-sm text-brand-700 hover:underline"
+            >
+              Ajustes de la tienda →
+            </Link>
+          )}
         </div>
         <DashboardControls stores={stores} scope={scope} from={range.from} to={range.to} />
       </div>
