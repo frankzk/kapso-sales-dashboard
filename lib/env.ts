@@ -26,4 +26,10 @@ export const env = {
   shopifyApiVersion: () => process.env.SHOPIFY_API_VERSION ?? "2025-01",
   kapsoApiBase: () =>
     (process.env.KAPSO_API_BASE ?? "https://api.kapso.ai/platform/v1").replace(/\/$/, ""),
+
+  // --- Shopify OAuth app (optional; enables "Install on Shopify") ---
+  shopifyAppApiKey: () => process.env.SHOPIFY_APP_API_KEY ?? "",
+  shopifyAppApiSecret: () => process.env.SHOPIFY_APP_API_SECRET ?? "",
+  shopifyOAuthConfigured: () =>
+    Boolean(process.env.SHOPIFY_APP_API_KEY && process.env.SHOPIFY_APP_API_SECRET),
 };

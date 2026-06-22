@@ -28,6 +28,7 @@ export interface StoreSettingsData {
     kapso_project_id: string | null;
   };
   has: { shopifyToken: boolean; webhookSecret: boolean; kapsoKey: boolean };
+  oauthAvailable: boolean;
   sync: Array<{
     source: string;
     status: string | null;
@@ -39,7 +40,13 @@ export interface StoreSettingsData {
   webhookCount: number;
 }
 
-export function StoreSettings({ data }: { data: StoreSettingsData }) {
+export function StoreSettings({
+  data,
+  banner,
+}: {
+  data: StoreSettingsData;
+  banner?: { kind: "ok" | "error"; msg: string } | null;
+}) {
   const s = data.store;
   return (
     <div className="space-y-8">
@@ -52,6 +59,47 @@ export function StoreSettings({ data }: { data: StoreSettingsData }) {
           ← Volver al panel
         </Link>
       </div>
+
+      {banner && (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            banner.kind === "ok"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : "border-red-200 bg-red-50 text-red-700"
+          }`}
+        >
+          {banner.msg}
+        </div>
+      )}
+
+      <Section
+        title="Conexión con Shopify"
+        subtitle="Instala vía OAuth y el token se captura y cifra solo (sin copiar/pegar)."
+      >
+        <Card>
+          {data.oauthAvailable ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <a
+                href={`/api/shopify/install?storeId=${s.id}`}
+                className="rounded-lg bg-[#5E8E3E] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+              >
+                {data.has.shopifyToken ? "Reconectar con Shopify" : "Instalar con Shopify"}
+              </a>
+              <span className="text-xs text-slate-500">
+                {data.has.shopifyToken
+                  ? "Token configurado (cifrado)."
+                  : "Aún sin token — instala para activar webhooks + backfill."}
+              </span>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">
+              OAuth no está configurado en el servidor. Configura{" "}
+              <code>SHOPIFY_APP_API_KEY</code> y <code>SHOPIFY_APP_API_SECRET</code>, o pega el token
+              manualmente abajo.
+            </p>
+          )}
+        </Card>
+      </Section>
 
       <SettingsForm data={data} />
 

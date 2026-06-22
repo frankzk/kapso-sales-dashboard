@@ -103,6 +103,12 @@ roles and the `auth` schema, so it just works.
      (Settings → Apps and sales channels → Develop apps → your app → API
      credentials → Admin API access token, `shpat_…`). Scopes needed:
      `read_orders` (and `read_products` if you want richer product data).
+     - *Alternative — "Install on Shopify" (OAuth):* create a Shopify app, set
+       its redirect URL to `{NEXT_PUBLIC_SITE_URL}/api/shopify/callback`, scope
+       `read_orders`, and add `SHOPIFY_APP_API_KEY` + `SHOPIFY_APP_API_SECRET`
+       to Vercel. Then create the store with the token blank and click
+       **Instalar con Shopify** in store **Ajustes** — the token is captured,
+       encrypted, webhooks registered and backfill run automatically.
    - **Shopify API secret key** — same app → *API secret key*. Used to verify
      webhook HMAC. (Without it, webhooks can't be verified.)
    - **Kapso API key** — Kapso dashboard → Integrations → API keys.
