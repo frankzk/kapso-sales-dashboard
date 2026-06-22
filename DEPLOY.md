@@ -85,6 +85,14 @@ roles and the `auth` schema, so it just works.
 4. Deploy. The cron in `vercel.json` (`/api/cron/sync` every 15 min) is picked up
    automatically; Vercel sends `Authorization: Bearer $CRON_SECRET`.
 
+> **Cron on Vercel Hobby**: the Hobby plan runs cron jobs only ~once/day. If you
+> need the 15-min cadence without Pro, use the included GitHub Actions fallback
+> (`.github/workflows/cron-sync.yml`): add repo **secrets** `APP_URL`
+> (your deployed URL) and `CRON_SECRET`, and make sure the workflow is on the
+> repo's **default branch** (scheduled workflows only run there). Webhooks ingest
+> orders in real time regardless; the cron only handles reconciliation, the Kapso
+> pull and ops snapshots.
+
 ## 5. First login + connect a store
 
 1. Open the site → **Login** (Google or magic link).
@@ -113,6 +121,8 @@ roles and the `auth` schema, so it just works.
 
 ## 7. Post-deploy verification
 
+- **Health**: `curl https://<domain>/api/health` → `{ "ok": true, … }` (public,
+  no secrets) confirms the deployment is serving.
 - **Backfill parity**: in Shopify Admin, filter orders by `tag:kapso` for a date
   range and compare the count with the dashboard's order count for the same
   range. They should match.
