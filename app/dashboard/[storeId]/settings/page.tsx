@@ -2,17 +2,33 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createAdminSupabase } from "@/lib/db";
 import { getAccessibleStores, getAdminOrgs } from "@/lib/access";
+import { env } from "@/lib/env";
 import { EmptyState } from "@/components/ui";
 import { StoreSettings, type StoreSettingsData } from "@/components/store-settings";
 
 export const dynamic = "force-dynamic";
 
+const SHOPIFY_ERRORS: Record<string, string> = {
+  "oauth-no-config": "OAuth de Shopify no está configurado en el servidor.",
+  "parametros-invalidos": "Parámetros de OAuth inválidos.",
+  "state-invalido": "La sesión de instalación expiró o no coincide. Intenta de nuevo.",
+  "hmac-invalido": "Firma de Shopify inválida.",
+  "tienda-no-encontrada": "No se encontró la tienda.",
+  "shop-no-coincide": "El dominio autorizado no coincide con el de la tienda.",
+  "sin-permiso": "No tienes permiso sobre esta tienda.",
+  "intercambio-fallo": "Shopify rechazó el intercambio del código por token.",
+  "guardado-fallo": "No se pudo guardar el token.",
+};
+
 export default async function StoreSettingsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ storeId: string }>;
+  searchParams: Promise<{ installed?: string; shopify_error?: string }>;
 }) {
   const { storeId } = await params;
+  const sp = await searchParams;
 
   // RLS gate: the store must be accessible to the caller.
   const stores = await getAccessibleStores();
@@ -68,10 +84,17 @@ export default async function StoreSettingsPage({
       webhookSecret: Boolean(full.shopify_webhook_secret_enc),
       kapsoKey: Boolean(full.kapso_api_key_enc),
     },
+    oauthAvailable: env.shopifyOAuthConfigured(),
     sync: (sync as StoreSettingsData["sync"]) ?? [],
     lastOpsAt: ops?.captured_at ?? null,
     webhookCount: count ?? 0,
   };
 
-  return <StoreSettings data={data} />;
+  const banner = sp.installed
+    ? { kind: "ok" as const, msg: "✅ Tienda conectada con Shopify. Webhooks registrados y backfill iniciado." }
+    : sp.shopify_error
+      ? { kind: "error" as const, msg: `No se pudo conectar con Shopify: ${SHOPIFY_ERRORS[sp.shopify_error] ?? sp.shopify_error}` }
+      : null;
+
+  return <StoreSettings data={data} banner={banner} />;
 }

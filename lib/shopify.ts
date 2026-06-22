@@ -415,3 +415,72 @@ export async function fetchShopInfo(opts: ShopifyClientOpts): Promise<ShopInfo> 
   });
   return data.shop;
 }
+
+// ---------------------------------------------------------------------------
+// OAuth install flow ("Install on Shopify" → token captured automatically)
+// ---------------------------------------------------------------------------
+
+const SHOP_DOMAIN_RE = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
+
+/** Guard against SSRF: only accept canonical *.myshopify.com hosts. */
+export function isValidShopDomain(shop: string): boolean {
+  return SHOP_DOMAIN_RE.test((shop ?? "").toLowerCase());
+}
+
+export function buildAuthorizeUrl(opts: {
+  shop: string;
+  apiKey: string;
+  scopes: string;
+  redirectUri: string;
+  state: string;
+}): string {
+  const u = new URL(`https://${opts.shop}/admin/oauth/authorize`);
+  u.searchParams.set("client_id", opts.apiKey);
+  u.searchParams.set("scope", opts.scopes);
+  u.searchParams.set("redirect_uri", opts.redirectUri);
+  u.searchParams.set("state", opts.state);
+  return u.toString();
+}
+
+/** Verify the HMAC Shopify appends to the OAuth callback query (hex digest). */
+export function verifyShopifyOAuthHmac(
+  params: URLSearchParams,
+  secret: string | null | undefined,
+): boolean {
+  const provided = params.get("hmac");
+  if (!provided || !secret) return false;
+  const pairs: string[] = [];
+  for (const [k, v] of params.entries()) {
+    if (k === "hmac" || k === "signature") continue;
+    pairs.push(`${k}=${v}`);
+  }
+  pairs.sort();
+  const digest = createHmac("sha256", secret).update(pairs.join("&")).digest("hex");
+  const a = Buffer.from(digest);
+  const b = Buffer.from(provided);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/** Exchange an OAuth authorization code for an Admin API access token. */
+export async function exchangeCodeForToken(opts: {
+  shop: string;
+  apiKey: string;
+  apiSecret: string;
+  code: string;
+  fetchImpl?: typeof fetch;
+}): Promise<{ access_token: string; scope: string }> {
+  const doFetch = opts.fetchImpl ?? fetch;
+  const res = await doFetch(`https://${opts.shop}/admin/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ client_id: opts.apiKey, client_secret: opts.apiSecret, code: opts.code }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Shopify token exchange HTTP ${res.status}: ${t.slice(0, 300)}`);
+  }
+  const json: any = await res.json();
+  if (!json?.access_token) throw new Error("Shopify token exchange: missing access_token");
+  return { access_token: String(json.access_token), scope: String(json.scope ?? "") };
+}
