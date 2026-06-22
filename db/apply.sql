@@ -9,4 +9,6 @@
 \ir migrations/0003_refunds.sql
 \echo 'Applying RLS policies'
 \ir ../supabase/policies.sql
+\echo 'Applying 0004_leads.sql'
+\ir migrations/0004_leads.sql
 \echo 'Done.'
