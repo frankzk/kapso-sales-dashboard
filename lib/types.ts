@@ -42,6 +42,8 @@ export interface OrderRow {
   total_amount: number | null;
   currency: string | null;
   financial_status: string | null;
+  cancelled_at: string | null;
+  total_refunded: number;
   tags: string[];
   promo_applied: boolean;
   stock_por_validar: boolean;
@@ -74,6 +76,8 @@ export interface DailyRollupRow {
   stock_validar_orders: number;
   cod_orders: number;
   agency_orders: number;
+  cancelled_orders: number;
+  refunded_amount: number;
 }
 
 export interface StoreSummary {

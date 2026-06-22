@@ -101,7 +101,7 @@ export async function getOrders(
   const { data } = await sb
     .from("orders")
     .select(
-      "store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items",
+      "store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items",
     )
     .in("store_id", storeIds)
     .gte("created_at", startIso)

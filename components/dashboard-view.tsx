@@ -134,7 +134,7 @@ export function DashboardView({
       {/* KPIs */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Órdenes" value={String(totals.ordersCount)} delta={cmp.ordersDeltaPct} sub="vs. periodo previo" />
-        <StatCard label="Ingresos" value={formatCurrency(totals.revenue, currency)} delta={cmp.revenueDeltaPct} sub="vs. periodo previo" />
+        <StatCard label="Ingresos (neto)" value={formatCurrency(totals.revenue, currency)} delta={cmp.revenueDeltaPct} sub="neto de reembolsos/cancelaciones" />
         <StatCard label="Ticket promedio (AOV)" value={formatCurrency(totals.aov, currency)} delta={cmp.aovDeltaPct} />
         <StatCard
           label="Conversión (órdenes/conv.)"
@@ -199,6 +199,8 @@ export function DashboardView({
             <div className="grid grid-cols-2 gap-4">
               <Mini label="% con promo" value={formatPct(breakdown.promoPct / 100)} sub={`${breakdown.promoOrders} órdenes · tag promo-whatsapp`} />
               <Mini label="Stock por validar" value={String(breakdown.stockValidarOrders)} sub="órdenes marcadas" />
+              <Mini label="Canceladas" value={String(totals.cancelledOrders)} sub="excluidas de ingresos" />
+              <Mini label="Reembolsado" value={formatCurrency(totals.refundedAmount, currency)} sub="en órdenes activas" />
             </div>
             <div className="mt-5">
               <p className="mb-2 text-xs font-medium text-slate-500">Modo de envío</p>

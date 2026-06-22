@@ -11,6 +11,7 @@ import {
   buildKapsoOrdersSearchQuery,
   shopifyGraphQL,
   fetchOrdersPage,
+  sumRestRefunds,
 } from "@/lib/shopify";
 
 const SECRET = "shpss_test_secret_key";
@@ -168,6 +169,50 @@ describe("mapGraphqlOrder", () => {
       variant_id: "99",
       price: 250,
     });
+  });
+});
+
+describe("refunds & cancellations", () => {
+  it("mapRestOrder reads cancelled_at and sums refund transactions (ignores voids)", () => {
+    const row = mapRestOrder(
+      {
+        id: 5,
+        total_price: "300.00",
+        cancelled_at: "2026-06-21T00:00:00Z",
+        refunds: [
+          { transactions: [{ kind: "refund", amount: "30.00" }, { kind: "refund", amount: "20.00" }] },
+          { transactions: [{ kind: "void", amount: "999" }] },
+        ],
+      },
+      "s1",
+    );
+    expect(row.cancelled_at).toBe("2026-06-21T00:00:00Z");
+    expect(row.total_amount).toBe(300);
+    expect(row.total_refunded).toBe(50);
+  });
+
+  it("mapGraphqlOrder reads cancelledAt, gross total (totalPriceSet) and totalRefundedSet", () => {
+    const row = mapGraphqlOrder(
+      {
+        id: "gid://shopify/Order/9",
+        totalPriceSet: { shopMoney: { amount: "300.00", currencyCode: "PEN" } },
+        currentTotalPriceSet: { shopMoney: { amount: "250.00", currencyCode: "PEN" } },
+        totalRefundedSet: { shopMoney: { amount: "50.00" } },
+        cancelledAt: "2026-06-21T00:00:00Z",
+        tags: ["kapso"],
+        lineItems: { edges: [] },
+      },
+      "s2",
+    );
+    expect(row.total_amount).toBe(300); // gross, not the current (post-refund) total
+    expect(row.total_refunded).toBe(50);
+    expect(row.cancelled_at).toBe("2026-06-21T00:00:00Z");
+  });
+
+  it("sumRestRefunds handles missing/empty inputs", () => {
+    expect(sumRestRefunds(undefined)).toBe(0);
+    expect(sumRestRefunds([])).toBe(0);
+    expect(sumRestRefunds([{ transactions: [{ kind: "refund", amount: "12.50" }] }])).toBe(12.5);
   });
 });
 

@@ -54,6 +54,16 @@ function pctDelta(current: number, previous: number): number | null {
   return round2(((current - previous) / previous) * 100);
 }
 
+/** Orders excluding cancelled ones — the basis for sales + breakdown metrics. */
+export function activeOrders(orders: OrderRow[]): OrderRow[] {
+  return orders.filter((o) => !o.cancelled_at);
+}
+
+/** Net value of an order: gross total minus refunds. */
+function netAmount(o: OrderRow): number {
+  return (o.total_amount ?? 0) - (o.total_refunded ?? 0);
+}
+
 // ===========================================================================
 // Family 1 — Ventas
 // ===========================================================================
@@ -65,8 +75,9 @@ export interface SalesSummary {
 }
 
 export function salesSummary(orders: OrderRow[]): SalesSummary {
-  const ordersCount = orders.length;
-  const revenue = round2(orders.reduce((s, o) => s + (o.total_amount ?? 0), 0));
+  const active = activeOrders(orders);
+  const ordersCount = active.length;
+  const revenue = round2(active.reduce((s, o) => s + netAmount(o), 0));
   return { ordersCount, revenue, aov: ordersCount ? round2(revenue / ordersCount) : 0 };
 }
 
@@ -82,11 +93,11 @@ export function salesSeriesByDay(
 ): DaySalesPoint[] {
   const byDay = new Map<string, DaySalesPoint>();
   for (const o of orders) {
-    if (!o.created_at) continue;
+    if (o.cancelled_at || !o.created_at) continue;
     const { date } = tzParts(o.created_at, timeZone);
     const pt = byDay.get(date) ?? { date, orders: 0, revenue: 0 };
     pt.orders += 1;
-    pt.revenue = round2(pt.revenue + (o.total_amount ?? 0));
+    pt.revenue = round2(pt.revenue + netAmount(o));
     byDay.set(date, pt);
   }
   return [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -149,6 +160,8 @@ export interface RollupTotals {
   stockValidarOrders: number;
   codOrders: number;
   agencyOrders: number;
+  cancelledOrders: number;
+  refundedAmount: number;
 }
 
 export function aggregateRollups(rows: DailyRollupRow[]): RollupTotals {
@@ -161,6 +174,8 @@ export function aggregateRollups(rows: DailyRollupRow[]): RollupTotals {
       acc.stockValidarOrders += r.stock_validar_orders;
       acc.codOrders += r.cod_orders;
       acc.agencyOrders += r.agency_orders;
+      acc.cancelledOrders += r.cancelled_orders;
+      acc.refundedAmount += Number(r.refunded_amount);
       return acc;
     },
     {
@@ -171,6 +186,8 @@ export function aggregateRollups(rows: DailyRollupRow[]): RollupTotals {
       stockValidarOrders: 0,
       codOrders: 0,
       agencyOrders: 0,
+      cancelledOrders: 0,
+      refundedAmount: 0,
     },
   );
   return {
@@ -185,6 +202,8 @@ export function aggregateRollups(rows: DailyRollupRow[]): RollupTotals {
     stockValidarOrders: t.stockValidarOrders,
     codOrders: t.codOrders,
     agencyOrders: t.agencyOrders,
+    cancelledOrders: t.cancelledOrders,
+    refundedAmount: round2(t.refundedAmount),
   };
 }
 
@@ -231,7 +250,7 @@ export function funnel(
   conversations: ConversationRow[],
 ): Funnel {
   const conv = conversations.length;
-  const ord = orders.length;
+  const ord = activeOrders(orders).length;
   return {
     conversations: conv,
     orders: ord,
@@ -294,19 +313,24 @@ export interface BusinessBreakdown {
   codOrders: number;
   agencyOrders: number;
   otherShippingOrders: number;
+  cancelledOrders: number;
+  refundedAmount: number;
 }
 
 export function businessBreakdown(orders: OrderRow[]): BusinessBreakdown {
-  const total = orders.length;
+  const active = activeOrders(orders);
+  const total = active.length;
   let promoOrders = 0;
   let stockValidarOrders = 0;
   let codOrders = 0;
   let agencyOrders = 0;
-  for (const o of orders) {
+  let refundedAmount = 0;
+  for (const o of active) {
     if (o.promo_applied) promoOrders += 1;
     if (o.stock_por_validar) stockValidarOrders += 1;
     if (o.shipping_mode === "cod") codOrders += 1;
     else if (o.shipping_mode === "agency") agencyOrders += 1;
+    refundedAmount += o.total_refunded ?? 0;
   }
   return {
     total,
@@ -316,6 +340,8 @@ export function businessBreakdown(orders: OrderRow[]): BusinessBreakdown {
     codOrders,
     agencyOrders,
     otherShippingOrders: total - codOrders - agencyOrders,
+    cancelledOrders: orders.length - total,
+    refundedAmount: round2(refundedAmount),
   };
 }
 
@@ -330,7 +356,7 @@ export interface TopProduct {
 /** Aggregate line_items across orders. Groups by SKU when present, else title. */
 export function topProducts(orders: OrderRow[], limit = 10): TopProduct[] {
   const acc = new Map<string, TopProduct>();
-  for (const o of orders) {
+  for (const o of activeOrders(orders)) {
     const seen = new Set<string>();
     for (const li of o.line_items ?? []) {
       const key = (li.sku && li.sku.trim()) || li.title || "—";
@@ -368,7 +394,7 @@ export function dateHourPattern(
   let peak: DateHourPattern["peak"] = null;
 
   for (const o of orders) {
-    if (!o.created_at) continue;
+    if (o.cancelled_at || !o.created_at) continue;
     const { hour, weekday } = tzParts(o.created_at, timeZone);
     const row = matrix[weekday]!;
     row[hour] = (row[hour] ?? 0) + 1;
@@ -476,6 +502,8 @@ export function computeDailyRollups(
         stock_validar_orders: 0,
         cod_orders: 0,
         agency_orders: 0,
+        cancelled_orders: 0,
+        refunded_amount: 0,
       };
       byDate.set(date, a);
     }
@@ -486,8 +514,13 @@ export function computeDailyRollups(
     if (!o.created_at) continue;
     const { date } = tzParts(o.created_at, timeZone);
     const a = ensure(date);
+    if (o.cancelled_at) {
+      a.cancelled_orders += 1;
+      continue;
+    }
     a.orders_count += 1;
-    a.revenue = round2(a.revenue + (o.total_amount ?? 0));
+    a.revenue = round2(a.revenue + netAmount(o));
+    a.refunded_amount = round2(a.refunded_amount + (o.total_refunded ?? 0));
     if (o.promo_applied) a.promo_orders += 1;
     if (o.stock_por_validar) a.stock_validar_orders += 1;
     if (o.shipping_mode === "cod") a.cod_orders += 1;

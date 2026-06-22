@@ -108,6 +108,9 @@ export function generateDemoData(opts: DemoOptions): DemoData {
       if (promo) tags.push("promo-whatsapp");
       if (stock) tags.push("stock-por-validar");
       const created = new Date(started.getTime() + (5 + Math.floor(rnd() * 40)) * 60_000);
+      const gross = round2(subtotal * (promo ? 0.85 : 1));
+      const cancelled = rnd() < 0.07; // COD orders get cancelled sometimes
+      const refunded = !cancelled && rnd() < 0.06 ? round2(gross * 0.5) : 0;
 
       orders.push({
         store_id: opts.storeId,
@@ -116,9 +119,11 @@ export function generateDemoData(opts: DemoOptions): DemoData {
         created_at: created.toISOString(),
         processed_at: created.toISOString(),
         updated_at: created.toISOString(),
-        total_amount: round2(subtotal * (promo ? 0.85 : 1)),
+        total_amount: gross,
         currency: "PEN",
-        financial_status: "paid",
+        financial_status: cancelled ? "voided" : refunded > 0 ? "partially_refunded" : "paid",
+        cancelled_at: cancelled ? new Date(created.getTime() + 3_600_000).toISOString() : null,
+        total_refunded: refunded,
         tags,
         promo_applied: promo,
         stock_por_validar: stock,

@@ -32,6 +32,8 @@ function order(p: Partial<OrderRow> = {}): OrderRow {
     total_amount: 100,
     currency: "PEN",
     financial_status: "paid",
+    cancelled_at: null,
+    total_refunded: 0,
     tags: [],
     promo_applied: false,
     stock_por_validar: false,
@@ -63,6 +65,15 @@ describe("Family 1 — Ventas", () => {
       order({ total_amount: 50 }),
     ]);
     expect(s).toEqual({ ordersCount: 3, revenue: 350, aov: 116.67 });
+  });
+
+  it("salesSummary nets refunds and excludes cancelled orders", () => {
+    const s = salesSummary([
+      order({ total_amount: 200, total_refunded: 50 }), // net 150
+      order({ total_amount: 100 }), // net 100
+      order({ total_amount: 999, cancelled_at: "2026-06-20T16:00:00Z" }), // excluded
+    ]);
+    expect(s).toEqual({ ordersCount: 2, revenue: 250, aov: 125 });
   });
 
   it("salesSeriesByDay buckets in the store timezone", () => {
@@ -137,6 +148,8 @@ function rollup(p: Partial<DailyRollupRow>): DailyRollupRow {
     stock_validar_orders: 0,
     cod_orders: 0,
     agency_orders: 0,
+    cancelled_orders: 0,
+    refunded_amount: 0,
     ...p,
   };
 }
@@ -189,6 +202,18 @@ describe("Family 3 — Desglose de negocio", () => {
       agencyOrders: 1,
       otherShippingOrders: 1,
     });
+  });
+
+  it("businessBreakdown excludes cancelled orders and sums refunds", () => {
+    const b = businessBreakdown([
+      order({ shipping_mode: "cod", total_refunded: 20 }),
+      order({ shipping_mode: "agency", cancelled_at: "2026-06-20T18:00:00Z" }),
+    ]);
+    expect(b.total).toBe(1);
+    expect(b.cancelledOrders).toBe(1);
+    expect(b.refundedAmount).toBe(20);
+    expect(b.codOrders).toBe(1);
+    expect(b.agencyOrders).toBe(0); // cancelled agency order excluded
   });
 
   it("topProducts aggregates line_items by sku", () => {
@@ -262,6 +287,23 @@ describe("computeDailyRollups (mirrors the SQL recompute)", () => {
       conversion_rate: 0.5,
       promo_orders: 1,
       cod_orders: 1,
+      agency_orders: 1,
+    });
+  });
+
+  it("nets refunds and counts cancellations separately", () => {
+    const orders = [
+      order({ created_at: "2026-06-20T15:00:00Z", total_amount: 200, total_refunded: 50, shipping_mode: "cod" }),
+      order({ created_at: "2026-06-20T16:00:00Z", total_amount: 100, shipping_mode: "agency" }),
+      order({ created_at: "2026-06-20T17:00:00Z", total_amount: 300, cancelled_at: "2026-06-20T18:00:00Z", shipping_mode: "cod" }),
+    ];
+    const rows = computeDailyRollups("s1", orders, [], "America/Lima");
+    expect(rows[0]).toMatchObject({
+      orders_count: 2,
+      revenue: 250, // (200-50) + 100
+      refunded_amount: 50,
+      cancelled_orders: 1,
+      cod_orders: 1, // the cancelled COD order is excluded
       agency_orders: 1,
     });
   });

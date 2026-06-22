@@ -91,6 +91,21 @@ function toNumber(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Sum refunded money from a REST order's `refunds[].transactions[]`. */
+export function sumRestRefunds(refunds: any): number {
+  if (!Array.isArray(refunds)) return 0;
+  let total = 0;
+  for (const r of refunds) {
+    const txns = r?.transactions;
+    if (Array.isArray(txns)) {
+      for (const t of txns) {
+        if (t?.kind === "refund") total += toNumber(t?.amount) ?? 0;
+      }
+    }
+  }
+  return Math.round((total + Number.EPSILON) * 100) / 100;
+}
+
 const TRUTHY = new Set(["true", "1", "yes", "si", "sí", "y"]);
 
 function normalizeShippingMode(value?: string | null): ShippingMode {
@@ -161,6 +176,8 @@ export function mapRestOrder(payload: any, storeId: string): OrderRow {
     total_amount: toNumber(payload?.total_price ?? payload?.current_total_price),
     currency: payload?.currency ?? payload?.presentment_currency ?? null,
     financial_status: payload?.financial_status ?? null,
+    cancelled_at: payload?.cancelled_at ?? null,
+    total_refunded: toNumber(payload?.total_refunded) ?? sumRestRefunds(payload?.refunds),
     tags,
     ...flags,
     line_items,
@@ -174,7 +191,8 @@ export function mapGraphqlOrder(node: any, storeId: string): OrderRow {
   const attrs = noteAttributesToMap(node?.customAttributes);
   const flags = deriveOrderFlags(tags, attrs);
 
-  const priceSet = node?.currentTotalPriceSet ?? node?.totalPriceSet;
+  // Gross order value (before refunds) — prefer the original total set.
+  const priceSet = node?.totalPriceSet ?? node?.currentTotalPriceSet;
   const liEdges: any[] = node?.lineItems?.edges ?? [];
   const line_items: OrderLineItem[] = liEdges.map((e) => {
     const n = e?.node ?? {};
@@ -200,6 +218,8 @@ export function mapGraphqlOrder(node: any, storeId: string): OrderRow {
     financial_status: node?.displayFinancialStatus
       ? String(node.displayFinancialStatus).toLowerCase()
       : null,
+    cancelled_at: node?.cancelledAt ?? null,
+    total_refunded: toNumber(node?.totalRefundedSet?.shopMoney?.amount) ?? 0,
     tags,
     ...flags,
     line_items,
@@ -270,8 +290,11 @@ export const ORDERS_QUERY = /* GraphQL */ `
           createdAt
           processedAt
           updatedAt
+          cancelledAt
           displayFinancialStatus
+          totalPriceSet { shopMoney { amount currencyCode } }
           currentTotalPriceSet { shopMoney { amount currencyCode } }
+          totalRefundedSet { shopMoney { amount } }
           tags
           customAttributes { key value }
           lineItems(first: 100) {

@@ -39,13 +39,16 @@ describe("generateDemoData", () => {
     expect(s.aov).toBeGreaterThan(0);
 
     const b = businessBreakdown(orders);
-    expect(b.total).toBe(orders.length);
-    expect(b.codOrders + b.agencyOrders).toBe(orders.length); // demo always sets a mode
+    expect(b.cancelledOrders).toBeGreaterThan(0); // demo includes COD cancellations
+    expect(b.total).toBe(orders.length - b.cancelledOrders); // breakdown is over active orders
+    expect(b.codOrders + b.agencyOrders).toBe(b.total); // every active order has a mode
     expect(topProducts(orders).length).toBeGreaterThan(0);
 
     const rollups = computeDailyRollups("demo", orders, conversations, "America/Lima");
     expect(rollups.length).toBeGreaterThan(0);
-    expect(rollups.reduce((a, r) => a + r.orders_count, 0)).toBe(orders.length);
+    const active = rollups.reduce((a, r) => a + r.orders_count, 0);
+    const cancelled = rollups.reduce((a, r) => a + r.cancelled_orders, 0);
+    expect(active + cancelled).toBe(orders.length);
   });
 
   it("is deterministic for a fixed seed", () => {

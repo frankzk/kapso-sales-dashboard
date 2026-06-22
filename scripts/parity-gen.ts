@@ -31,6 +31,8 @@ const expected = rollups
       r.stock_validar_orders,
       r.cod_orders,
       r.agency_orders,
+      r.cancelled_orders,
+      r.refunded_amount.toFixed(2),
     ].join(","),
   )
   .join("\n");
@@ -50,7 +52,7 @@ for (const o of orders) {
   const tags = `ARRAY[${o.tags.map((t) => `'${esc(t)}'`).join(",")}]::text[]`;
   const li = esc(JSON.stringify(o.line_items));
   sql.push(
-    `insert into orders(store_id,shopify_order_id,name,created_at,processed_at,updated_at,total_amount,currency,financial_status,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items) values ('${STORE}','${o.shopify_order_id}','${o.name}','${o.created_at}','${o.processed_at}','${o.updated_at}',${o.total_amount},'${o.currency}','${o.financial_status}',${tags},${o.promo_applied},${o.stock_por_validar},${o.shipping_mode ? `'${o.shipping_mode}'` : "null"},'${esc(o.kapso_conversation_id ?? "")}','${li}'::jsonb);`,
+    `insert into orders(store_id,shopify_order_id,name,created_at,processed_at,updated_at,total_amount,currency,financial_status,cancelled_at,total_refunded,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items) values ('${STORE}','${o.shopify_order_id}','${o.name}','${o.created_at}','${o.processed_at}','${o.updated_at}',${o.total_amount},'${o.currency}','${o.financial_status}',${o.cancelled_at ? `'${o.cancelled_at}'` : "null"},${o.total_refunded},${tags},${o.promo_applied},${o.stock_por_validar},${o.shipping_mode ? `'${o.shipping_mode}'` : "null"},'${esc(o.kapso_conversation_id ?? "")}','${li}'::jsonb);`,
   );
 }
 sql.push(`select recompute_daily_rollups('${STORE}','${rollups[0]!.date}','${rollups[rollups.length - 1]!.date}');`);
