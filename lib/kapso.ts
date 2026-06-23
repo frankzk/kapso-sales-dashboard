@@ -236,7 +236,13 @@ function msgTimeMs(m: any): number | null {
     m?.message_timestamp ?? m?.wa_timestamp ?? m?.kapso?.timestamp;
   if (t == null) return null;
   if (typeof t === "number") return t < 1e12 ? t * 1000 : t; // seconds → ms
-  const ms = Date.parse(String(t));
+  const s = String(t).trim();
+  if (/^\d+$/.test(s)) {
+    // Kapso sends the timestamp as a unix epoch *string* (e.g. "1782249525").
+    const n = Number(s);
+    return n < 1e12 ? n * 1000 : n; // seconds → ms (else already ms)
+  }
+  const ms = Date.parse(s);
   return Number.isFinite(ms) ? ms : null;
 }
 

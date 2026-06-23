@@ -9,6 +9,7 @@ import {
   conversationToLeadSeed,
   parseHandoffPayload,
   parseOrderSignals,
+  fetchConversationSignals,
   classifyKapsoEvent,
   type KapsoClientOpts,
   type ParsedMsg,
@@ -84,6 +85,50 @@ function mockFetch(
 function opts(fetchImpl: typeof fetch): KapsoClientOpts {
   return { apiKey: "kapso_secret_key", baseUrl: BASE, fetchImpl };
 }
+
+describe("fetchConversationSignals (real Kapso message shape)", () => {
+  it("parses string unix timestamps, direction, district and cart", async () => {
+    const caps: Capture[] = [];
+    // Newest-first, like the real API; timestamps are unix-seconds STRINGS,
+    // direction lives under kapso.direction, text under text.body.
+    const messages = [
+      {
+        id: "m4",
+        timestamp: "1782249300",
+        type: "text",
+        text: {
+          body:
+            "Listo, lo agrego a tu pedido.\n\nTu pedido va así:\n- 3 x Set de Pelador de Verduras + Abridor Premium (2 piezas) (3x2: pagas 2 y llevas 3): S/ 198\nEnvío: gratis\nTotal a pagar: S/ 198\n\n¿Avanzamos con tus datos?",
+        },
+        kapso: { direction: "outbound" },
+      },
+      { id: "m3", timestamp: "1782249200", type: "text", text: { body: "3" }, kapso: { direction: "inbound" } },
+      { id: "m2", timestamp: "1782249100", type: "text", text: { body: "Chosica" }, kapso: { direction: "inbound" } },
+      {
+        id: "m1",
+        timestamp: "1782249000",
+        type: "text",
+        text: { body: "¿A qué distrito sería el envío?" },
+        kapso: { direction: "outbound" },
+      },
+    ];
+    const f = mockFetch(() => ({ data: messages, meta: { page: 1 } }), caps);
+    const sig = await fetchConversationSignals(opts(f), "conv-123");
+    expect(sig).not.toBeNull();
+    expect(sig!.inbound_count).toBe(2);
+    expect(sig!.district).toBe("Chosica");
+    expect(sig!.cart_value).toBe(198);
+    expect(sig!.cart_item_count).toBe(3);
+    expect(sig!.cart_summary).toBe("Set de Pelador de Verduras + Abridor Premium");
+    expect(sig!.first_response_seconds).not.toBeNull();
+    expect(new URL(caps[0]!.url).searchParams.get("conversation_id")).toBe("conv-123");
+  });
+
+  it("returns null when no messages are readable", async () => {
+    const f = mockFetch(() => ({ data: [] }), []);
+    expect(await fetchConversationSignals(opts(f), "c")).toBeNull();
+  });
+});
 
 describe("listConversations", () => {
   it("hits /whatsapp/conversations with snake_case params + X-API-Key", async () => {
