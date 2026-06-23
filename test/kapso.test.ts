@@ -6,6 +6,8 @@ import {
   getPhoneHealth,
   nextCursor,
   mapKapsoConversation,
+  conversationToLeadSeed,
+  parseHandoffPayload,
   type KapsoClientOpts,
 } from "@/lib/kapso";
 
@@ -109,6 +111,36 @@ describe("helpers", () => {
     expect(nextCursor({ data: [], paging: { cursors: { after: "x" } } })).toBe("x");
     expect(nextCursor({ data: [], paging: { next: "y" } })).toBe("y");
     expect(nextCursor({ data: [], paging: {} })).toBeNull();
+  });
+
+  it("conversationToLeadSeed extracts phone/name/conversation id", () => {
+    const seed = conversationToLeadSeed({
+      id: "c1",
+      phone_number: "51980694766",
+      contact_name: "GLORIA",
+      last_active_at: "2026-06-22T20:46:56-04:00",
+      created_at: "2026-06-22T20:31:26-04:00",
+    } as any);
+    expect(seed).toMatchObject({ phone: "51980694766", name: "GLORIA", kapso_conversation_id: "c1" });
+  });
+
+  it("conversationToLeadSeed returns null without a phone", () => {
+    expect(conversationToLeadSeed({ id: "c2" } as any)).toBeNull();
+  });
+
+  it("parseHandoffPayload pulls reason/context/phone (validacion_logistica)", () => {
+    const info = parseHandoffPayload({
+      conversation: { id: "c3", phone_number: "+51 932 011 088", contact_name: "Berna" },
+      reason: "validacion_logistica",
+      context_summary: "Cliente envió voucher de adelanto S/30 ... Shalom ...",
+    });
+    expect(info).toMatchObject({
+      conversationId: "c3",
+      phone: "51932011088",
+      reason: "validacion_logistica",
+      name: "Berna",
+    });
+    expect(info.context).toContain("voucher");
   });
 
   it("mapKapsoConversation maps platform + kapso-extension shapes", () => {

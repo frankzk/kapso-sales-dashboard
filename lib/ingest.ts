@@ -23,6 +23,7 @@ import {
   summarizeApiLogs,
   tzParts,
 } from "@/lib/metrics";
+import { linkOrderToLead, syncStoreLeads } from "@/lib/leads-ingest";
 import type { ConversationRow, OrderRow } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -206,6 +207,25 @@ export async function processShopifyWebhook(
     await recomputeRollups(admin, params.storeId, date, date);
   }
 
+  // Link the order to its lead (won), best-effort.
+  if (row.customer_phone) {
+    try {
+      const { data: ord } = await admin
+        .from("orders")
+        .select("id")
+        .eq("store_id", params.storeId)
+        .eq("shopify_order_id", row.shopify_order_id)
+        .maybeSingle();
+      await linkOrderToLead(admin, {
+        storeId: params.storeId,
+        phone: row.customer_phone,
+        orderId: ord?.id ?? null,
+      });
+    } catch {
+      /* best-effort */
+    }
+  }
+
   await admin
     .from("webhook_events")
     .update({ processed: true })
@@ -222,6 +242,7 @@ export interface SyncReport {
   storeId: string;
   shopifyOrders: number;
   kapsoConversations: number;
+  leads: number;
   opsCaptured: boolean;
   errors: string[];
 }
@@ -234,6 +255,7 @@ export async function runStoreSync(
     storeId,
     shopifyOrders: 0,
     kapsoConversations: 0,
+    leads: 0,
     opsCaptured: false,
     errors: [],
   };
@@ -302,6 +324,18 @@ export async function runStoreSync(
     } catch (e: any) {
       report.errors.push(`kapso: ${e.message}`);
       await setSyncState(admin, storeId, "kapso", null, "error", e.message);
+    }
+  }
+
+  // 2b) Leads — build/refresh from conversations + order linkage.
+  if (creds.kapso_api_key) {
+    try {
+      report.leads = await syncStoreLeads(admin, storeId, {
+        kapso_api_key: creds.kapso_api_key,
+        whatsapp_phone_number_id: creds.whatsapp_phone_number_id,
+      });
+    } catch (e: any) {
+      report.errors.push(`leads: ${e.message}`);
     }
   }
 

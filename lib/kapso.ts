@@ -12,6 +12,7 @@
 
 import { env } from "@/lib/env";
 import { type ConversationRow } from "@/lib/types";
+import { normalizePhone } from "@/lib/phone";
 
 export interface KapsoClientOpts {
   apiKey: string;
@@ -220,5 +221,109 @@ export function mapKapsoConversation(
     last_message_at:
       c.last_active_at ?? c.kapso?.last_message_timestamp ?? null,
     raw: c,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Leads: rich conversation fetch (page-based) + lead extraction + handoff parse
+// ---------------------------------------------------------------------------
+
+export interface KapsoPaged<T> {
+  data: T[];
+  meta?: { page?: number; per_page?: number; total_pages?: number; total_count?: number };
+  paging?: KapsoPage<T>["paging"];
+}
+
+export interface ListRichParams {
+  phoneNumberId?: string;
+  status?: "active" | "ended";
+  lastActiveAfter?: string;
+  page?: number;
+  perPage?: number;
+}
+
+export function listConversationsRichPage(
+  opts: KapsoClientOpts,
+  p: ListRichParams = {},
+): Promise<KapsoPaged<KapsoConversation>> {
+  return kapsoGet<KapsoPaged<KapsoConversation>>(opts, "/whatsapp/conversations", {
+    phone_number_id: p.phoneNumberId,
+    status: p.status,
+    last_active_after: p.lastActiveAfter,
+    page: p.page ?? 1,
+    per_page: p.perPage ?? 100,
+  });
+}
+
+/** Page through conversations (rich fields). Stops at `sinceIso` or maxPages. */
+export async function fetchAllConversationsRich(
+  opts: KapsoClientOpts,
+  p: ListRichParams,
+  sinceIso?: string | null,
+  maxPages = 50,
+): Promise<KapsoConversation[]> {
+  const out: KapsoConversation[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const res = await listConversationsRichPage(opts, { ...p, page });
+    const batch = res.data ?? [];
+    out.push(...batch);
+    const total = res.meta?.total_pages ?? page;
+    const oldest = batch[batch.length - 1]?.last_active_at;
+    if (!batch.length || page >= total) break;
+    if (sinceIso && oldest && oldest <= sinceIso) break; // list is newest-first
+  }
+  return out;
+}
+
+export interface LeadSeed {
+  phone: string;
+  wa_id: string | null;
+  name: string | null;
+  kapso_conversation_id: string;
+  last_interaction_at: string | null;
+  first_seen_at: string | null;
+}
+
+/** Extract the lead identity from a Kapso conversation (null if no phone). */
+export function conversationToLeadSeed(c: KapsoConversation): LeadSeed | null {
+  const phone = normalizePhone((c.phone_number as string) ?? null);
+  if (!phone) return null;
+  return {
+    phone,
+    wa_id: (c.wa_id as string) ?? (c.business_scoped_user_id as string) ?? null,
+    name: (c.contact_name as string) ?? c.kapso?.contact_name ?? null,
+    kapso_conversation_id: String(c.id),
+    last_interaction_at: (c.last_active_at as string) ?? c.kapso?.last_message_timestamp ?? null,
+    first_seen_at: (c.created_at as string) ?? null,
+  };
+}
+
+export interface HandoffInfo {
+  conversationId: string | null;
+  phone: string | null;
+  name: string | null;
+  reason: string | null;
+  context: string | null;
+}
+
+/** Best-effort extraction of a Kapso `workflow.execution.handoff` payload. */
+export function parseHandoffPayload(body: any): HandoffInfo {
+  const conv = body?.conversation ?? body?.data?.conversation ?? {};
+  const exec = body?.execution ?? body?.workflow_execution ?? body?.data ?? {};
+  const reason =
+    body?.reason ?? exec?.reason ?? exec?.handoff_reason ?? exec?.context?.reason ?? null;
+  const context =
+    body?.context_summary ??
+    exec?.context_summary ??
+    exec?.context?.context_summary ??
+    exec?.contextData?.context_summary ??
+    exec?.input?.context_summary ??
+    null;
+  return {
+    conversationId: conv?.id ?? body?.conversation_id ?? exec?.conversation_id ?? null,
+    phone: normalizePhone(conv?.phone_number ?? body?.phone_number ?? null),
+    name: conv?.contact_name ?? conv?.kapso?.contact_name ?? null,
+    reason: reason ? String(reason) : null,
+    context: context ? String(context) : null,
   };
 }

@@ -99,6 +99,34 @@ export function deriveAutoState(sig: AutoSignals): AutoState {
   return { status: "nuevo", category: "open", needsAttention: false };
 }
 
+export interface LeadStateSnapshot {
+  status: string;
+  handoff_reason?: string | null;
+}
+
+/**
+ * Decide the lead's state during a sync pass. Rules:
+ *   - an order exists → won (sticky).
+ *   - the agent already set a manual status → leave it (return null = no change).
+ *   - otherwise re-derive from signals (handoff → hot, else new).
+ */
+export function nextLeadState(
+  existing: LeadStateSnapshot | null,
+  sig: { hasOrder?: boolean },
+): AutoState | null {
+  if (sig.hasOrder) {
+    return { status: "pedido_generado", category: "won", needsAttention: false };
+  }
+  if (existing) {
+    const def = statusDef(existing.status);
+    if (def?.source === "manual") return null; // the agent owns this lead now
+    if (existing.handoff_reason) {
+      return deriveAutoState({ handoffReason: existing.handoff_reason });
+    }
+  }
+  return deriveAutoState({});
+}
+
 // ---------------------------------------------------------------------------
 // Claim / lock — "Tomar lead", one at a time, auto-released after a TTL.
 // ---------------------------------------------------------------------------

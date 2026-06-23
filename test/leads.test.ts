@@ -6,6 +6,7 @@ import {
   isCallable,
   isValidStatus,
   deriveAutoState,
+  nextLeadState,
   isClaimActive,
   mapExcelStatus,
   CLAIM_TTL_MINUTES,
@@ -67,6 +68,27 @@ describe("deriveAutoState", () => {
   });
   it("nothing → nuevo (open)", () => {
     expect(deriveAutoState({})).toEqual({ status: "nuevo", category: "open", needsAttention: false });
+  });
+});
+
+describe("nextLeadState", () => {
+  it("order present → won, overriding anything", () => {
+    expect(nextLeadState({ status: "no_responde" }, { hasOrder: true })).toEqual({
+      status: "pedido_generado",
+      category: "won",
+      needsAttention: false,
+    });
+  });
+  it("keeps an agent's manual status (null = no change)", () => {
+    expect(nextLeadState({ status: "no_responde" }, {})).toBeNull();
+  });
+  it("re-derives hot from an existing handoff reason", () => {
+    expect(
+      nextLeadState({ status: "yape_por_verificar", handoff_reason: "validacion_logistica" }, {}),
+    ).toMatchObject({ status: "yape_por_verificar", category: "hot", needsAttention: true });
+  });
+  it("new lead → nuevo", () => {
+    expect(nextLeadState(null, {})).toEqual({ status: "nuevo", category: "open", needsAttention: false });
   });
 });
 
