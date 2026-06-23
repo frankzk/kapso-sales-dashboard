@@ -119,6 +119,16 @@ export interface LeadRow {
   needs_attention: boolean;
   order_id: string | null;
   has_order: boolean;
+  // Enrichment signals for sub-segmenting "Por llamar" (0007). Informational —
+  // do not affect category/status. Cart + district come from an open Shopify
+  // draft order (COD form); inbound_count from the Kapso conversation. Optional:
+  // not every row/factory carries them (the DB returns null when unset).
+  district?: string | null;
+  cart_value?: number | null;
+  cart_item_count?: number | null;
+  cart_summary?: string | null;
+  draft_order_gid?: string | null;
+  inbound_count?: number | null;
   claimed_by: string | null;
   claimed_at: string | null;
   closed_by: string | null;

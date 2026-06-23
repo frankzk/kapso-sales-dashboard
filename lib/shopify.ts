@@ -412,6 +412,95 @@ export async function fetchOrdersPage(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Draft orders (COD form / WhatsApp carts) — lead enrichment source.
+// An OPEN draft order for a lead's phone means the customer built a cart
+// (lineItems) and usually gave a district (shippingAddress.city) without
+// paying. Requires the `read_draft_orders` scope; callers degrade gracefully
+// (catch + skip) if the token can't read drafts.
+// ---------------------------------------------------------------------------
+
+export interface DraftOrderSignal {
+  phone: string; // normalized — matches lead.phone
+  itemCount: number;
+  totalAmount: number | null;
+  district: string | null; // shippingAddress.city (the Peru district)
+  cartSummary: string | null; // first product titles, e.g. "Serum X ×1, Serum Y ×1"
+  gid: string;
+}
+
+const DRAFT_ORDERS_QUERY = /* GraphQL */ `
+  query KapsoDraftOrders($first: Int!, $after: String, $query: String!) {
+    draftOrders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
+      edges {
+        node {
+          id
+          phone
+          shippingAddress { phone city }
+          billingAddress { phone }
+          totalPriceSet { shopMoney { amount } }
+          lineItems(first: 20) { edges { node { title quantity } } }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+/** Map a Shopify GraphQL draftOrder node → a per-phone enrichment signal. */
+export function mapDraftOrder(node: any): DraftOrderSignal | null {
+  const phone = normalizePhone(
+    node?.phone ?? node?.shippingAddress?.phone ?? node?.billingAddress?.phone,
+  );
+  if (!phone) return null;
+  const liEdges: any[] = node?.lineItems?.edges ?? [];
+  const titles = liEdges.map((e) => String(e?.node?.title ?? "").trim()).filter(Boolean);
+  const itemCount = liEdges.reduce((s, e) => s + Number(e?.node?.quantity ?? 0), 0);
+  const summary =
+    titles.slice(0, 3).join(", ") + (titles.length > 3 ? ` +${titles.length - 3}` : "");
+  return {
+    phone,
+    itemCount,
+    totalAmount: toNumber(node?.totalPriceSet?.shopMoney?.amount),
+    district: node?.shippingAddress?.city ?? null,
+    cartSummary: summary || null,
+    gid: String(node?.id ?? ""),
+  };
+}
+
+/**
+ * Fetch OPEN draft orders (optionally bounded by updated_at), mapped to
+ * per-phone signals for lead enrichment. Bounded by maxPages. Throws if the
+ * token lacks `read_draft_orders` — the caller is expected to catch + skip.
+ */
+export async function fetchOpenDraftOrders(
+  opts: ShopifyClientOpts & {
+    updatedSinceIso?: string | null;
+    first?: number;
+    maxPages?: number;
+  },
+): Promise<DraftOrderSignal[]> {
+  const query =
+    "status:open" + (opts.updatedSinceIso ? ` updated_at:>=${opts.updatedSinceIso}` : "");
+  const out: DraftOrderSignal[] = [];
+  let after: string | null = null;
+  const maxPages = opts.maxPages ?? 20;
+  for (let i = 0; i < maxPages; i++) {
+    const data: any = await shopifyGraphQL<any>({
+      ...opts,
+      query: DRAFT_ORDERS_QUERY,
+      variables: { first: opts.first ?? 100, after, query },
+    });
+    for (const e of (data?.draftOrders?.edges ?? []) as any[]) {
+      const d = mapDraftOrder(e.node);
+      if (d) out.push(d);
+    }
+    if (!data?.draftOrders?.pageInfo?.hasNextPage) break;
+    after = data.draftOrders.pageInfo.endCursor ?? null;
+  }
+  return out;
+}
+
 const WEBHOOK_CREATE_MUTATION = /* GraphQL */ `
   mutation CreateWebhook($topic: WebhookSubscriptionTopic!, $callbackUrl: URL!) {
     webhookSubscriptionCreate(

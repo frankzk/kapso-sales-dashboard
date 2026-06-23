@@ -10,7 +10,46 @@ import {
   isClaimActive,
   mapExcelStatus,
   CLAIM_TTL_MINUTES,
+  LEAD_SEGMENTS,
+  leadSegment,
+  isLeadSegment,
+  countLeadSegments,
 } from "@/lib/leads";
+
+describe("leadSegment (Por llamar sub-segmentation)", () => {
+  it("prioritizes pago (Yape) above everything", () => {
+    expect(
+      leadSegment({ status: "yape_por_verificar", cart_item_count: 3, district: "Breña", inbound_count: 9 }),
+    ).toBe("pago");
+  });
+  it("carrito when an open cart exists (and not a payment handoff)", () => {
+    expect(leadSegment({ status: "nuevo", cart_item_count: 2, district: "Surco" })).toBe("carrito");
+  });
+  it("distrito when a district was given but no cart", () => {
+    expect(leadSegment({ status: "nuevo", district: "Pueblo Libre", inbound_count: 5 })).toBe("distrito");
+    expect(leadSegment({ status: "nuevo", district: "   ", inbound_count: 5 })).toBe("converso"); // blank ignored
+  });
+  it("converso when engaged (inbound >= 2) without cart/district", () => {
+    expect(leadSegment({ status: "nuevo", inbound_count: 2 })).toBe("converso");
+  });
+  it("frio when barely interacted / no signals", () => {
+    expect(leadSegment({ status: "nuevo", inbound_count: 1 })).toBe("frio");
+    expect(leadSegment({ status: "nuevo" })).toBe("frio");
+  });
+  it("countLeadSegments tallies and isLeadSegment validates", () => {
+    const counts = countLeadSegments([
+      { status: "yape_por_verificar" },
+      { status: "nuevo", cart_item_count: 1 },
+      { status: "nuevo", district: "Ate" },
+      { status: "nuevo", inbound_count: 4 },
+      { status: "nuevo", inbound_count: 0 },
+    ]);
+    expect(counts).toEqual({ pago: 1, carrito: 1, distrito: 1, converso: 1, frio: 1 });
+    expect(LEAD_SEGMENTS.map((s) => s.key)).toEqual(["pago", "carrito", "distrito", "converso", "frio"]);
+    expect(isLeadSegment("carrito")).toBe(true);
+    expect(isLeadSegment("nope")).toBe(false);
+  });
+});
 
 describe("lead status model", () => {
   it("every status has a unique code and valid category", () => {

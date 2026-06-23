@@ -128,6 +128,55 @@ export function nextLeadState(
 }
 
 // ---------------------------------------------------------------------------
+// Sub-segmentation of the "Por llamar" queue by buyer intent (informational).
+// A lead lands in exactly one bucket — the highest-priority match. Priority
+// order == call order: pago → carrito → distrito → converso → frio.
+// ---------------------------------------------------------------------------
+
+export type LeadSegment = "pago" | "carrito" | "distrito" | "converso" | "frio";
+
+export const LEAD_SEGMENTS: { key: LeadSegment; label: string }[] = [
+  { key: "pago", label: "🔥 Pago/Yape" },
+  { key: "carrito", label: "🛒 Con carrito" },
+  { key: "distrito", label: "📍 Dio distrito" },
+  { key: "converso", label: "💬 Conversó" },
+  { key: "frio", label: "❄️ Frío" },
+];
+
+export interface LeadSegmentSignals {
+  status: string;
+  cart_item_count?: number | null;
+  district?: string | null;
+  inbound_count?: number | null;
+}
+
+/** Assign a "Por llamar" lead to one sub-segment (highest-priority match). */
+export function leadSegment(lead: LeadSegmentSignals): LeadSegment {
+  if (lead.status === "yape_por_verificar") return "pago"; // bot flagged payment
+  if ((lead.cart_item_count ?? 0) > 0) return "carrito"; // built a cart (draft order)
+  if ((lead.district ?? "").trim()) return "distrito"; // gave a shipping district
+  if ((lead.inbound_count ?? 0) >= 2) return "converso"; // engaged in conversation
+  return "frio"; // just greeted / never replied
+}
+
+export function isLeadSegment(v: string | undefined | null): v is LeadSegment {
+  return !!v && LEAD_SEGMENTS.some((s) => s.key === v);
+}
+
+/** Tally a list of "Por llamar" leads into the sub-segment buckets. */
+export function countLeadSegments(leads: LeadSegmentSignals[]): Record<LeadSegment, number> {
+  const out: Record<LeadSegment, number> = {
+    pago: 0,
+    carrito: 0,
+    distrito: 0,
+    converso: 0,
+    frio: 0,
+  };
+  for (const l of leads) out[leadSegment(l)] += 1;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Claim / lock — "Tomar lead", one at a time, auto-released after a TTL.
 // ---------------------------------------------------------------------------
 

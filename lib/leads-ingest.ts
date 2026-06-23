@@ -11,6 +11,7 @@ import {
   type LeadSeed,
 } from "@/lib/kapso";
 import { deriveAutoState, nextLeadState } from "@/lib/leads";
+import type { DraftOrderSignal } from "@/lib/shopify";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -45,11 +46,22 @@ async function setCursor(admin: SupabaseClient, storeId: string, cursor: string 
  *   - existing handoff → re-derived hot
  *   - otherwise → new/open
  */
+/** Informational enrichment (cart/district/interaction) — never changes state. */
+export interface LeadEnrichment {
+  district?: string | null;
+  cart_value?: number | null;
+  cart_item_count?: number | null;
+  cart_summary?: string | null;
+  draft_order_gid?: string | null;
+  inbound_count?: number | null;
+}
+
 async function upsertLeadFromSeed(
   admin: SupabaseClient,
   storeId: string,
   seed: LeadSeed,
   ctx: { hasOrder: boolean; orderId?: string | null; existing: ExistingLead | null },
+  enrich?: LeadEnrichment,
 ): Promise<void> {
   const ns = nextLeadState(
     ctx.existing ? { status: ctx.existing.status, handoff_reason: ctx.existing.handoff_reason } : null,
@@ -74,6 +86,19 @@ async function upsertLeadFromSeed(
     row.has_order = true;
     row.order_id = ctx.orderId ?? null;
   }
+  // Enrichment — only write fields we actually have (don't clobber with null).
+  if (enrich) {
+    for (const k of [
+      "district",
+      "cart_value",
+      "cart_item_count",
+      "cart_summary",
+      "draft_order_gid",
+      "inbound_count",
+    ] as const) {
+      if (enrich[k] != null) row[k] = enrich[k];
+    }
+  }
   await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
 }
 
@@ -86,6 +111,7 @@ export async function syncStoreLeads(
   admin: SupabaseClient,
   storeId: string,
   creds: { kapso_api_key: string | null; whatsapp_phone_number_id: string | null },
+  draftByPhone?: Map<string, DraftOrderSignal>,
 ): Promise<number> {
   if (!creds.kapso_api_key) return 0;
   const k: KapsoClientOpts = { apiKey: creds.kapso_api_key };
@@ -144,19 +170,69 @@ export async function syncStoreLeads(
     for (const l of (data as ExistingLead[]) ?? []) existingByPhone.set(l.phone, l);
   }
 
+  // Interaction level: the conversation's inbound (customer) message count,
+  // populated by the ops sync's message-timing pass. Joined by conversation id.
+  const convIds = [
+    ...new Set([...seeds.values()].map((s) => s?.kapso_conversation_id).filter(Boolean) as string[]),
+  ];
+  const inboundByConv = new Map<string, number>();
+  if (convIds.length) {
+    const { data } = await admin
+      .from("conversations")
+      .select("kapso_conversation_id, inbound_count")
+      .eq("store_id", storeId)
+      .in("kapso_conversation_id", convIds);
+    for (const c of (data as { kapso_conversation_id: string; inbound_count: number | null }[]) ?? []) {
+      if (c.inbound_count != null) inboundByConv.set(c.kapso_conversation_id, c.inbound_count);
+    }
+  }
+
   let maxTs = cursor;
   for (const phone of phones) {
     const seed = seeds.get(phone)!;
     const existing = existingByPhone.get(phone) ?? null;
     const hasOrder = orderIdByPhone.has(phone);
-    await upsertLeadFromSeed(admin, storeId, seed, {
-      hasOrder,
-      orderId: orderIdByPhone.get(phone) ?? null,
-      existing,
-    });
+    const draft = draftByPhone?.get(phone);
+    const inbound = seed.kapso_conversation_id
+      ? inboundByConv.get(seed.kapso_conversation_id)
+      : undefined;
+    await upsertLeadFromSeed(
+      admin,
+      storeId,
+      seed,
+      { hasOrder, orderId: orderIdByPhone.get(phone) ?? null, existing },
+      {
+        district: draft?.district ?? undefined,
+        cart_value: draft?.totalAmount ?? undefined,
+        cart_item_count: draft?.itemCount ?? undefined,
+        cart_summary: draft?.cartSummary ?? undefined,
+        draft_order_gid: draft?.gid ?? undefined,
+        inbound_count: inbound ?? undefined,
+      },
+    );
 
     if (seed.last_interaction_at && (!maxTs || seed.last_interaction_at > maxTs)) {
       maxTs = seed.last_interaction_at;
+    }
+  }
+
+  // Enrich existing leads whose phone has an open cart but whose conversation
+  // wasn't re-pulled this run, so cart/district show up without a full re-sync.
+  if (draftByPhone) {
+    const seedPhones = new Set(phones);
+    for (const [phone, d] of draftByPhone) {
+      if (seedPhones.has(phone)) continue;
+      await admin
+        .from("leads")
+        .update({
+          district: d.district,
+          cart_value: d.totalAmount,
+          cart_item_count: d.itemCount,
+          cart_summary: d.cartSummary,
+          draft_order_gid: d.gid,
+        })
+        .eq("store_id", storeId)
+        .eq("phone", phone);
     }
   }
 

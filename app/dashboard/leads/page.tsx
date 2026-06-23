@@ -5,6 +5,12 @@ import {
   getStoreLeads,
   type LeadView,
 } from "@/lib/leads-access";
+import {
+  countLeadSegments,
+  isLeadSegment,
+  leadSegment,
+  type LeadSegment,
+} from "@/lib/leads";
 import { EmptyState } from "@/components/ui";
 import { LeadsBoard } from "@/components/leads";
 
@@ -17,7 +23,7 @@ function isLeadView(v: string | undefined): v is LeadView {
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ store?: string; view?: string }>;
+  searchParams: Promise<{ store?: string; view?: string; seg?: string }>;
 }) {
   const sp = await searchParams;
   const stores = await getAccessibleStores();
@@ -33,13 +39,26 @@ export default async function LeadsPage({
   const [counts, leads] = await Promise.all([getLeadCounts(storeId), getStoreLeads(storeId, view)]);
   const user = await getCurrentUser();
 
+  // "Por llamar" splits into intent sub-segments (computed from the fetched
+  // list — it's bounded by getStoreLeads' limit). Other views have none.
+  let segCounts: Record<LeadSegment, number> | null = null;
+  let segment: LeadSegment | null = null;
+  let displayLeads = leads;
+  if (view === "por_llamar") {
+    segCounts = countLeadSegments(leads);
+    segment = isLeadSegment(sp.seg) ? sp.seg : null;
+    if (segment) displayLeads = leads.filter((l) => leadSegment(l) === segment);
+  }
+
   return (
     <LeadsBoard
       stores={stores}
       storeId={storeId}
       view={view}
       counts={counts}
-      leads={leads}
+      leads={displayLeads}
+      segCounts={segCounts}
+      segment={segment}
       currentUserId={user?.id ?? ""}
     />
   );

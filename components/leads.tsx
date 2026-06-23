@@ -9,11 +9,13 @@ import {
   type LeadView,
 } from "@/lib/leads-access";
 import {
+  LEAD_SEGMENTS,
   MANUAL_STATUSES,
   categoryOf,
   isClaimActive,
   labelOf,
   type LeadCategory,
+  type LeadSegment,
 } from "@/lib/leads";
 import {
   claimLead,
@@ -54,12 +56,53 @@ function StatusBadge({ status, needsAttention }: { status: string; needsAttentio
   );
 }
 
+function SegPill({
+  storeId,
+  segKey,
+  label,
+  count,
+  active,
+}: {
+  storeId: string;
+  segKey: LeadSegment | null;
+  label: string;
+  count: number;
+  active: boolean;
+}) {
+  const href = segKey
+    ? `/dashboard/leads?store=${storeId}&view=por_llamar&seg=${segKey}`
+    : `/dashboard/leads?store=${storeId}&view=por_llamar`;
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs",
+        active
+          ? "border-brand-500 bg-brand-50 text-brand-700"
+          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+      )}
+    >
+      {label}
+      <span
+        className={cn(
+          "rounded-full px-1.5 py-0.5 font-medium",
+          active ? "bg-brand-100 text-brand-700" : "bg-slate-100 text-slate-500",
+        )}
+      >
+        {count}
+      </span>
+    </Link>
+  );
+}
+
 export function LeadsBoard({
   stores,
   storeId,
   view,
   counts,
   leads,
+  segCounts,
+  segment,
   currentUserId,
 }: {
   stores: StoreSummary[];
@@ -67,6 +110,8 @@ export function LeadsBoard({
   view: LeadView;
   counts: Record<LeadView, number>;
   leads: LeadRow[];
+  segCounts?: Record<LeadSegment, number> | null;
+  segment?: LeadSegment | null;
   currentUserId: string;
 }) {
   const router = useRouter();
@@ -172,6 +217,29 @@ export function LeadsBoard({
           );
         })}
       </nav>
+
+      {view === "por_llamar" && segCounts && (
+        <nav className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+          <span className="text-xs font-medium text-slate-400">Priorizar:</span>
+          <SegPill
+            storeId={storeId}
+            segKey={null}
+            label="Todos"
+            count={Object.values(segCounts ?? {}).reduce((a, b) => a + b, 0)}
+            active={!segment}
+          />
+          {LEAD_SEGMENTS.map((s) => (
+            <SegPill
+              key={s.key}
+              storeId={storeId}
+              segKey={s.key}
+              label={s.label}
+              count={segCounts?.[s.key] ?? 0}
+              active={segment === s.key}
+            />
+          ))}
+        </nav>
+      )}
 
       {banner && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
@@ -315,6 +383,23 @@ function LeadDrawer({
                 Resumen del bot
               </p>
               <p className="mt-1 whitespace-pre-wrap">{lead.handoff_context}</p>
+            </div>
+          )}
+
+          {(lead.cart_item_count || lead.district) && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              {lead.cart_item_count ? (
+                <p>
+                  🛒 <span className="font-medium">Carrito:</span>{" "}
+                  {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
+                  {lead.cart_value != null ? ` · S/ ${Number(lead.cart_value).toFixed(2)}` : ""}
+                </p>
+              ) : null}
+              {lead.district ? (
+                <p className={lead.cart_item_count ? "mt-1" : ""}>
+                  📍 <span className="font-medium">Distrito:</span> {lead.district}
+                </p>
+              ) : null}
             </div>
           )}
 

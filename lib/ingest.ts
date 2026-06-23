@@ -8,10 +8,12 @@ import { createAdminSupabase } from "@/lib/db";
 import { decryptOrNull } from "@/lib/crypto";
 import {
   buildKapsoOrdersSearchQuery,
+  fetchOpenDraftOrders,
   fetchOrdersPage,
   hasKapsoTag,
   mapRestOrder,
   verifyShopifyHmac,
+  type DraftOrderSignal,
 } from "@/lib/shopify";
 import {
   fetchConversationTiming,
@@ -281,6 +283,8 @@ export async function runStoreSync(
     return report;
   }
   const affectedDates = new Set<string>();
+  // Open draft orders (COD form carts) keyed by phone → lead enrichment below.
+  let draftByPhone: Map<string, DraftOrderSignal> | undefined;
 
   // 1) Shopify reconciliation (tag:kapso, bounded by updated_at cursor)
   if (creds.shopify_token) {
@@ -315,6 +319,28 @@ export async function runStoreSync(
     } catch (e: any) {
       report.errors.push(`shopify: ${e.message}`);
       await setSyncState(admin, storeId, "shopify", null, "error", e.message);
+    }
+  }
+
+  // 1b) Open Shopify draft orders → cart + district per phone (lead enrichment).
+  // Best-effort: needs the `read_draft_orders` scope; if absent we skip without
+  // failing the run (the cart/district sub-segments just stay empty).
+  if (creds.shopify_token) {
+    try {
+      const since = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
+      const drafts = await fetchOpenDraftOrders({
+        domain: creds.shopify_domain,
+        token: creds.shopify_token,
+        updatedSinceIso: since,
+      });
+      draftByPhone = new Map();
+      for (const d of drafts) {
+        const prev = draftByPhone.get(d.phone);
+        // Keep the highest-value open cart per phone.
+        if (!prev || (d.totalAmount ?? 0) > (prev.totalAmount ?? 0)) draftByPhone.set(d.phone, d);
+      }
+    } catch (e: any) {
+      report.errors.push(`draft_orders: ${e.message}`);
     }
   }
 
@@ -361,10 +387,15 @@ export async function runStoreSync(
   // 2b) Leads — build/refresh from conversations + order linkage.
   if (creds.kapso_api_key) {
     try {
-      report.leads = await syncStoreLeads(admin, storeId, {
-        kapso_api_key: creds.kapso_api_key,
-        whatsapp_phone_number_id: creds.whatsapp_phone_number_id,
-      });
+      report.leads = await syncStoreLeads(
+        admin,
+        storeId,
+        {
+          kapso_api_key: creds.kapso_api_key,
+          whatsapp_phone_number_id: creds.whatsapp_phone_number_id,
+        },
+        draftByPhone,
+      );
     } catch (e: any) {
       report.errors.push(`leads: ${e.message}`);
     }
