@@ -59,6 +59,8 @@ function conv(p: Partial<ConversationRow> = {}): ConversationRow {
     status: "ended",
     message_count: 5,
     last_message_at: null,
+    inbound_count: 0,
+    first_response_seconds: null,
     ...p,
   };
 }
@@ -169,6 +171,21 @@ describe("Family 1 — Ventas", () => {
     expect(series).toHaveLength(2);
     expect(series[0]).toMatchObject({ date: "2026-06-20", orders: 3, revenue: 300, conversations: 10, conversionRate: 0.3 });
   });
+
+  it("aggregateRollups averages first-response from sum/samples", () => {
+    const totals = aggregateRollups([
+      rollup({ inbound_messages: 10, response_seconds_sum: 100, response_samples: 2 }),
+      rollup({ inbound_messages: 5, response_seconds_sum: 50, response_samples: 3 }),
+    ]);
+    expect(totals.inboundMessages).toBe(15);
+    expect(totals.avgFirstResponseSeconds).toBe(30); // (100+50)/(2+3)
+  });
+
+  it("aggregateRollups returns null avg response when no samples", () => {
+    const totals = aggregateRollups([rollup({ inbound_messages: 4 })]);
+    expect(totals.inboundMessages).toBe(4);
+    expect(totals.avgFirstResponseSeconds).toBeNull();
+  });
 });
 
 function rollup(p: Partial<DailyRollupRow>): DailyRollupRow {
@@ -186,6 +203,9 @@ function rollup(p: Partial<DailyRollupRow>): DailyRollupRow {
     agency_orders: 0,
     cancelled_orders: 0,
     refunded_amount: 0,
+    inbound_messages: 0,
+    response_seconds_sum: 0,
+    response_samples: 0,
     ...p,
   };
 }
@@ -318,10 +338,10 @@ describe("computeDailyRollups (mirrors the SQL recompute)", () => {
       order({ created_at: "2026-06-20T16:00:00Z", total_amount: 300, shipping_mode: "agency" }),
     ];
     const conversations = [
-      conv({ started_at: "2026-06-20T15:00:00Z" }),
-      conv({ started_at: "2026-06-20T16:00:00Z" }),
-      conv({ started_at: "2026-06-20T17:00:00Z" }),
-      conv({ started_at: "2026-06-20T18:00:00Z" }),
+      conv({ started_at: "2026-06-20T15:00:00Z", inbound_count: 3, first_response_seconds: 30 }),
+      conv({ started_at: "2026-06-20T16:00:00Z", inbound_count: 2, first_response_seconds: 90 }),
+      conv({ started_at: "2026-06-20T17:00:00Z", inbound_count: 5, first_response_seconds: null }),
+      conv({ started_at: "2026-06-20T18:00:00Z", inbound_count: 1, first_response_seconds: 60 }),
     ];
     const rows = computeDailyRollups("s1", orders, conversations, TZ);
     expect(rows).toHaveLength(1);
@@ -336,6 +356,9 @@ describe("computeDailyRollups (mirrors the SQL recompute)", () => {
       promo_orders: 1,
       cod_orders: 1,
       agency_orders: 1,
+      inbound_messages: 11, // 3+2+5+1
+      response_seconds_sum: 180, // 30+90+60 (null excluded)
+      response_samples: 3,
     });
   });
 

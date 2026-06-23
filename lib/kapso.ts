@@ -225,6 +225,66 @@ export function mapKapsoConversation(
 }
 
 // ---------------------------------------------------------------------------
+// Message timing — best-effort first-response time + inbound count per conv.
+// Defensive about the message payload shape (direction + timestamp field names)
+// and bounded to a single page; most sales conversations fit in 100 messages.
+// ---------------------------------------------------------------------------
+
+function msgTimeMs(m: any): number | null {
+  const t =
+    m?.created_at ?? m?.timestamp ?? m?.inserted_at ?? m?.sent_at ?? m?.occurred_at ??
+    m?.message_timestamp ?? m?.wa_timestamp ?? m?.kapso?.timestamp;
+  if (t == null) return null;
+  if (typeof t === "number") return t < 1e12 ? t * 1000 : t; // seconds → ms
+  const ms = Date.parse(String(t));
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function msgDirection(m: any): "inbound" | "outbound" | null {
+  const d = String(m?.direction ?? m?.kapso?.direction ?? "").toLowerCase();
+  if (d.includes("in")) return "inbound";
+  if (d.includes("out")) return "outbound";
+  if (typeof m?.is_inbound === "boolean") return m.is_inbound ? "inbound" : "outbound";
+  if (typeof m?.from_me === "boolean") return m.from_me ? "outbound" : "inbound"; // bot = from_me
+  return null;
+}
+
+export interface ConversationTiming {
+  inbound_count: number;
+  first_response_seconds: number | null;
+}
+
+/**
+ * First-inbound → first-outbound delta (seconds) + inbound message count for a
+ * conversation. Returns null if messages can't be read. Never throws.
+ */
+export async function fetchConversationTiming(
+  opts: KapsoClientOpts,
+  conversationId: string,
+): Promise<ConversationTiming | null> {
+  let page: KapsoPage<any>;
+  try {
+    page = await listMessages(opts, { conversationId, limit: 100 });
+  } catch {
+    return null;
+  }
+  const msgs = (page.data ?? [])
+    .map((m) => ({ t: msgTimeMs(m), dir: msgDirection(m) }))
+    .filter((m): m is { t: number; dir: "inbound" | "outbound" } => m.t != null && m.dir != null)
+    .sort((a, b) => a.t - b.t);
+  if (!msgs.length) return null;
+
+  const inbound_count = msgs.filter((m) => m.dir === "inbound").length;
+  const firstInbound = msgs.find((m) => m.dir === "inbound");
+  let first_response_seconds: number | null = null;
+  if (firstInbound) {
+    const reply = msgs.find((m) => m.dir === "outbound" && m.t >= firstInbound.t);
+    if (reply) first_response_seconds = Math.max(0, Math.round((reply.t - firstInbound.t) / 1000));
+  }
+  return { inbound_count, first_response_seconds };
+}
+
+// ---------------------------------------------------------------------------
 // Leads: rich conversation fetch (page-based) + lead extraction + handoff parse
 // ---------------------------------------------------------------------------
 

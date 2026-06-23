@@ -66,11 +66,12 @@ $PSQL -f "$ROOT/db/migrations/0002_rollups.sql"
 $PSQL -f "$ROOT/db/migrations/0003_refunds.sql"
 $PSQL -f "$ROOT/supabase/policies.sql" 2>/dev/null
 $PSQL -f "$ROOT/db/migrations/0004_leads.sql"
+$PSQL -f "$ROOT/db/migrations/0005_message_timing.sql"
 
 echo "▶ rollup parity (SQL vs TS)"
 ( cd "$ROOT" && ./node_modules/.bin/tsx scripts/parity-gen.ts "$TMP" )
 $PSQL -f "$TMP/seed_demo.sql" >/dev/null
-$PSQL -c "\copy (select date,orders_count,revenue,aov,conversations_count,conversion_rate,promo_orders,stock_validar_orders,cod_orders,agency_orders,cancelled_orders,refunded_amount from daily_rollups where store_id='11111111-1111-1111-1111-111111111111' order by date) to '$TMP/actual_rollups.csv' with csv"
+$PSQL -c "\copy (select date,orders_count,revenue,aov,conversations_count,conversion_rate,promo_orders,stock_validar_orders,cod_orders,agency_orders,cancelled_orders,refunded_amount,inbound_messages,response_seconds_sum,response_samples from daily_rollups where store_id='11111111-1111-1111-1111-111111111111' order by date) to '$TMP/actual_rollups.csv' with csv"
 if diff -q "$TMP/expected_rollups.csv" "$TMP/actual_rollups.csv" >/dev/null; then
   echo "  ✅ rollups: SQL == TS (exact)"
 else

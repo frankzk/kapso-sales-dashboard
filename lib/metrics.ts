@@ -163,6 +163,8 @@ export interface RollupTotals {
   agencyOrders: number;
   cancelledOrders: number;
   refundedAmount: number;
+  inboundMessages: number;
+  avgFirstResponseSeconds: number | null;
 }
 
 export function aggregateRollups(rows: DailyRollupRow[]): RollupTotals {
@@ -177,6 +179,9 @@ export function aggregateRollups(rows: DailyRollupRow[]): RollupTotals {
       acc.agencyOrders += r.agency_orders;
       acc.cancelledOrders += r.cancelled_orders;
       acc.refundedAmount += Number(r.refunded_amount);
+      acc.inboundMessages += r.inbound_messages ?? 0;
+      acc.responseSecondsSum += Number(r.response_seconds_sum ?? 0);
+      acc.responseSamples += r.response_samples ?? 0;
       return acc;
     },
     {
@@ -189,6 +194,9 @@ export function aggregateRollups(rows: DailyRollupRow[]): RollupTotals {
       agencyOrders: 0,
       cancelledOrders: 0,
       refundedAmount: 0,
+      inboundMessages: 0,
+      responseSecondsSum: 0,
+      responseSamples: 0,
     },
   );
   return {
@@ -205,6 +213,10 @@ export function aggregateRollups(rows: DailyRollupRow[]): RollupTotals {
     agencyOrders: t.agencyOrders,
     cancelledOrders: t.cancelledOrders,
     refundedAmount: round2(t.refundedAmount),
+    inboundMessages: t.inboundMessages,
+    avgFirstResponseSeconds: t.responseSamples
+      ? round2(t.responseSecondsSum / t.responseSamples)
+      : null,
   };
 }
 
@@ -536,6 +548,9 @@ export function computeDailyRollups(
         agency_orders: 0,
         cancelled_orders: 0,
         refunded_amount: 0,
+        inbound_messages: 0,
+        response_seconds_sum: 0,
+        response_samples: 0,
       };
       byDate.set(date, a);
     }
@@ -561,7 +576,13 @@ export function computeDailyRollups(
   for (const c of conversations) {
     if (!c.started_at) continue;
     const { date } = tzParts(c.started_at, timeZone);
-    ensure(date).conversations_count += 1;
+    const a = ensure(date);
+    a.conversations_count += 1;
+    a.inbound_messages += c.inbound_count ?? 0;
+    if (c.first_response_seconds != null) {
+      a.response_seconds_sum += c.first_response_seconds;
+      a.response_samples += 1;
+    }
   }
 
   return [...byDate.entries()]

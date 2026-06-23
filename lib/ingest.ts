@@ -13,6 +13,7 @@ import {
   verifyShopifyHmac,
 } from "@/lib/shopify";
 import {
+  fetchConversationTiming,
   getPhoneHealth,
   listAllConversations,
   listApiLogs,
@@ -27,6 +28,9 @@ import { linkOrderToLead, linkOrdersToLeads, syncStoreLeads } from "@/lib/leads-
 import type { ConversationRow, OrderRow } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+// Max conversations to fetch message-timing for per sync run (bounds API cost).
+const KAPSO_TIMING_CAP = 50;
 
 export interface StoreCreds {
   id: string;
@@ -314,6 +318,20 @@ export async function runStoreSync(
       const rows = convs.map((c) => mapKapsoConversation(c, storeId));
       await upsertConversations(admin, rows);
       report.kapsoConversations = rows.length;
+      // Best-effort: capture first-response timing for a bounded number of
+      // conversations (one message page each). Written as a separate guarded
+      // update so it tolerates the timing columns not existing yet (i.e. if the
+      // code deploys before migration 0005 is applied) without breaking sync.
+      for (const r of rows.slice(0, KAPSO_TIMING_CAP)) {
+        const t = await fetchConversationTiming(k, r.kapso_conversation_id);
+        if (!t) continue;
+        const { error: tErr } = await admin
+          .from("conversations")
+          .update({ inbound_count: t.inbound_count, first_response_seconds: t.first_response_seconds })
+          .eq("store_id", storeId)
+          .eq("kapso_conversation_id", r.kapso_conversation_id);
+        if (tErr) break; // columns missing (migration pending) or transient — stop this run
+      }
 
       let maxTs = cursor;
       for (const r of rows) {

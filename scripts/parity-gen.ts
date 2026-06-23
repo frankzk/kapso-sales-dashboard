@@ -33,6 +33,9 @@ const expected = rollups
       r.agency_orders,
       r.cancelled_orders,
       r.refunded_amount.toFixed(2),
+      r.inbound_messages,
+      r.response_seconds_sum,
+      r.response_samples,
     ].join(","),
   )
   .join("\n");
@@ -45,7 +48,7 @@ const sql: string[] = [
 ];
 for (const c of conversations) {
   sql.push(
-    `insert into conversations(store_id,kapso_conversation_id,phone_number_id,started_at,status,message_count,last_message_at) values ('${STORE}','${esc(c.kapso_conversation_id)}','${c.phone_number_id}','${c.started_at}','${c.status}',${c.message_count},'${c.last_message_at}');`,
+    `insert into conversations(store_id,kapso_conversation_id,phone_number_id,started_at,status,message_count,last_message_at,inbound_count,first_response_seconds) values ('${STORE}','${esc(c.kapso_conversation_id)}','${c.phone_number_id}','${c.started_at}','${c.status}',${c.message_count},'${c.last_message_at}',${c.inbound_count ?? "null"},${c.first_response_seconds ?? "null"});`,
   );
 }
 for (const o of orders) {

@@ -62,6 +62,10 @@ export interface ConversationRow {
   status: string | null;
   message_count: number;
   last_message_at: string | null;
+  /** Inbound (customer→bot) message count, captured best-effort from Kapso. */
+  inbound_count?: number | null;
+  /** Seconds from first inbound to first outbound reply (null = unknown). */
+  first_response_seconds?: number | null;
   raw?: unknown;
 }
 
@@ -79,6 +83,11 @@ export interface DailyRollupRow {
   agency_orders: number;
   cancelled_orders: number;
   refunded_amount: number;
+  // Message-timing family (0005). Stored as sum+samples so the average stays
+  // aggregatable across stores/days; the avg is computed at read time.
+  inbound_messages: number;
+  response_seconds_sum: number;
+  response_samples: number;
 }
 
 export interface StoreSummary {

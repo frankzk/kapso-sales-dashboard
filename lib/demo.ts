@@ -72,14 +72,21 @@ export function generateDemoData(opts: DemoOptions): DemoData {
         Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), localHour + 5, minute),
       );
       const convId = `seed-conv-${opts.storeId}-${d}-${i}`;
+      const status = rnd() < 0.85 ? "ended" : "active";
+      const messageCount = 2 + Math.floor(rnd() * 15);
       conversations.push({
         store_id: opts.storeId,
         kapso_conversation_id: convId,
         phone_number_id: "seed-pn",
         started_at: started.toISOString(),
-        status: rnd() < 0.85 ? "ended" : "active",
-        message_count: 2 + Math.floor(rnd() * 15),
+        status,
+        message_count: messageCount,
         last_message_at: started.toISOString(),
+        // Derived deterministically from messageCount (no extra PRNG draws, so
+        // the rest of the demo sequence is unchanged). Active convs have no
+        // first response yet.
+        inbound_count: Math.max(1, Math.round(messageCount / 2)),
+        first_response_seconds: status === "active" ? null : 15 + ((messageCount * 17) % 240),
       });
 
       if (rnd() >= conversion) continue;

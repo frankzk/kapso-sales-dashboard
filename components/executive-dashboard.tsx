@@ -102,8 +102,6 @@ export function ExecutiveDashboard({
   timezone,
   singleStore,
   leads,
-  avgResponseSeconds,
-  inboundMessages,
 }: {
   stores: StoreSummary[];
   scope: "all" | string;
@@ -117,8 +115,6 @@ export function ExecutiveDashboard({
   timezone: string;
   singleStore?: StoreSummary;
   leads?: LeadRow[];
-  avgResponseSeconds?: number | null;
-  inboundMessages?: number | null;
 }) {
   const names: Record<string, string> = Object.fromEntries(stores.map((s) => [s.id, s.name]));
   const totals = aggregateRollups(rollups);
@@ -162,11 +158,11 @@ export function ExecutiveDashboard({
     conversations,
     leads: leadList,
     orders,
-    inboundMessages: inboundMessages ?? null,
+    inboundMessages: totals.inboundMessages || null,
   });
   const health = funnelHealth(funnelStages);
 
-  const hasRt = avgResponseSeconds != null;
+  const hasRt = totals.avgFirstResponseSeconds != null;
 
   const productItems: BarItem[] = products.map((p) => ({
     label: p.title,
@@ -228,7 +224,7 @@ export function ExecutiveDashboard({
         />
         <KpiCard
           label="Tiempo de respuesta"
-          value={hasRt ? formatDuration(avgResponseSeconds) : "—"}
+          value={hasRt ? formatDuration(totals.avgFirstResponseSeconds) : "—"}
           icon={<IconClock className="h-5 w-5" />}
           accent="amber"
           muted={!hasRt}
