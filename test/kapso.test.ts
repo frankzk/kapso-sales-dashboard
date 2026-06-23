@@ -8,6 +8,7 @@ import {
   mapKapsoConversation,
   conversationToLeadSeed,
   parseHandoffPayload,
+  classifyKapsoEvent,
   type KapsoClientOpts,
 } from "@/lib/kapso";
 
@@ -126,6 +127,54 @@ describe("helpers", () => {
 
   it("conversationToLeadSeed returns null without a phone", () => {
     expect(conversationToLeadSeed({ id: "c2" } as any)).toBeNull();
+  });
+
+  it("conversationToLeadSeed reads the v2 webhook shape (kapso.contact_name + bsuid)", () => {
+    // Shape of `conversation` inside a whatsapp.conversation.ended webhook.
+    const seed = conversationToLeadSeed({
+      id: "conv_789",
+      phone_number: "51980694766",
+      business_scoped_user_id: "US.13491208655302741918",
+      status: "ended",
+      last_active_at: "2026-06-22T15:10:45Z",
+      created_at: "2026-06-22T14:00:00Z",
+      kapso: { contact_name: "GLORIA", last_message_timestamp: "2026-06-22T15:10:45Z" },
+    } as any);
+    expect(seed).toMatchObject({
+      phone: "51980694766",
+      name: "GLORIA",
+      wa_id: "US.13491208655302741918",
+      kapso_conversation_id: "conv_789",
+      last_interaction_at: "2026-06-22T15:10:45Z",
+    });
+  });
+});
+
+describe("classifyKapsoEvent (webhook routing)", () => {
+  it("routes the platform handoff event", () => {
+    expect(classifyKapsoEvent("workflow.execution.handoff", {})).toBe("handoff");
+  });
+
+  it("routes WhatsApp conversation events (ended/inactive/created)", () => {
+    expect(classifyKapsoEvent("whatsapp.conversation.ended", {})).toBe("conversation");
+    expect(classifyKapsoEvent("whatsapp.conversation.inactive", {})).toBe("conversation");
+    expect(classifyKapsoEvent("whatsapp.conversation.created", {})).toBe("conversation");
+  });
+
+  it("skips message events", () => {
+    expect(classifyKapsoEvent("whatsapp.message.received", {})).toBe("skip");
+    expect(classifyKapsoEvent("whatsapp.message.delivered", {})).toBe("skip");
+  });
+
+  it("falls back to payload shape when no event header", () => {
+    expect(classifyKapsoEvent(null, { reason: "validacion_logistica", context_summary: "..." })).toBe("handoff");
+    expect(classifyKapsoEvent(undefined, { conversation: { id: "c", phone_number: "51980694766" } })).toBe("conversation");
+    expect(classifyKapsoEvent("", {})).toBe("skip");
+  });
+
+  it("reads the event from the payload body when present", () => {
+    expect(classifyKapsoEvent(null, { event: "whatsapp.conversation.ended" })).toBe("conversation");
+    expect(classifyKapsoEvent(null, { type: "whatsapp.message.received", batch: true, data: [] })).toBe("skip");
   });
 
   it("parseHandoffPayload pulls reason/context/phone (validacion_logistica)", () => {

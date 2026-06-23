@@ -1,12 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
-import { applyHandoff } from "@/lib/leads-ingest";
+import { applyHandoff, ingestConversationEvent } from "@/lib/leads-ingest";
+import { classifyKapsoEvent } from "@/lib/kapso";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Kapso platform webhook for `workflow.execution.handoff` → hot lead.
+// Single Kapso webhook receiver for a store. Handles both of Kapso's webhook
+// systems pointed at this URL:
+//   - Platform webhook  `workflow.execution.handoff`        → hot lead
+//   - WhatsApp webhook  `whatsapp.conversation.ended/inactive` → abandono lead
 // Configure the URL in Kapso as:
 //   {SITE}/api/webhooks/kapso/<storeId>?secret=<CRON_SECRET>
 
@@ -19,17 +23,26 @@ export async function POST(
     return new NextResponse("unauthorized", { status: 401 });
   }
 
-  let body: unknown;
+  let body: any;
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ ok: false, error: "invalid json" }, { status: 400 });
   }
 
+  const kind = classifyKapsoEvent(req.headers.get("x-webhook-event"), body);
+
   try {
     const admin = createAdminSupabase();
-    const res = await applyHandoff(admin, storeId, body);
-    return NextResponse.json(res);
+    let res: { ok: boolean; reason?: string };
+    if (kind === "handoff") {
+      res = await applyHandoff(admin, storeId, body);
+    } else if (kind === "conversation") {
+      res = await ingestConversationEvent(admin, storeId, body);
+    } else {
+      res = { ok: true, reason: "skipped" }; // message events: acknowledged, ignored
+    }
+    return NextResponse.json({ ...res, kind });
   } catch (e) {
     return NextResponse.json(
       { ok: false, error: e instanceof Error ? e.message : "error" },

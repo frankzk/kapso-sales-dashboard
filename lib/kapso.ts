@@ -306,6 +306,34 @@ export interface HandoffInfo {
   context: string | null;
 }
 
+/**
+ * Decide how to handle an incoming Kapso webhook. Kapso runs two webhook
+ * systems that can target the same endpoint:
+ *   - Platform webhooks → `workflow.execution.handoff` (hot lead).
+ *   - WhatsApp webhooks  → `whatsapp.conversation.ended` / `.inactive` (abandono).
+ * Message events are acknowledged but ignored. Routing prefers the
+ * `X-Webhook-Event` header (passed in as `event`) and falls back to the shape.
+ */
+export type KapsoEventKind = "handoff" | "conversation" | "skip";
+
+export function classifyKapsoEvent(event: string | null | undefined, body: any): KapsoEventKind {
+  const e = (event ?? body?.event ?? body?.type ?? "").toString().toLowerCase();
+  if (e.includes("workflow.execution.handoff")) return "handoff";
+  if (e.startsWith("whatsapp.conversation.")) return "conversation";
+  if (e.startsWith("whatsapp.message.")) return "skip";
+  // No/unknown event header — infer from payload shape.
+  if (
+    body?.reason != null ||
+    body?.context_summary != null ||
+    body?.execution != null ||
+    body?.workflow_execution != null
+  ) {
+    return "handoff";
+  }
+  if (body?.conversation != null) return "conversation";
+  return "skip";
+}
+
 /** Best-effort extraction of a Kapso `workflow.execution.handoff` payload. */
 export function parseHandoffPayload(body: any): HandoffInfo {
   const conv = body?.conversation ?? body?.data?.conversation ?? {};

@@ -8,6 +8,7 @@ import {
   parseHandoffPayload,
   type HandoffInfo,
   type KapsoClientOpts,
+  type LeadSeed,
 } from "@/lib/kapso";
 import { deriveAutoState, nextLeadState } from "@/lib/leads";
 
@@ -34,6 +35,46 @@ async function setCursor(admin: SupabaseClient, storeId: string, cursor: string 
     { store_id: storeId, source: "leads", cursor, last_run_at: new Date().toISOString(), status, error: error ?? null },
     { onConflict: "store_id,source" },
   );
+}
+
+/**
+ * Upsert one lead from a Kapso conversation seed without clobbering an agent's
+ * manual disposition. Shared by the periodic sync and the real-time webhook.
+ *   - order exists → won (sticky)
+ *   - existing manual status → left untouched
+ *   - existing handoff → re-derived hot
+ *   - otherwise → new/open
+ */
+async function upsertLeadFromSeed(
+  admin: SupabaseClient,
+  storeId: string,
+  seed: LeadSeed,
+  ctx: { hasOrder: boolean; orderId?: string | null; existing: ExistingLead | null },
+): Promise<void> {
+  const ns = nextLeadState(
+    ctx.existing ? { status: ctx.existing.status, handoff_reason: ctx.existing.handoff_reason } : null,
+    { hasOrder: ctx.hasOrder },
+  );
+
+  const row: any = {
+    store_id: storeId,
+    phone: seed.phone,
+    kapso_conversation_id: seed.kapso_conversation_id,
+  };
+  if (seed.name) row.name = seed.name;
+  if (seed.wa_id) row.wa_id = seed.wa_id;
+  if (seed.last_interaction_at) row.last_interaction_at = seed.last_interaction_at;
+  if (!ctx.existing && seed.first_seen_at) row.first_seen_at = seed.first_seen_at;
+  if (ns) {
+    row.status = ns.status;
+    row.category = ns.category;
+    row.needs_attention = ns.needsAttention;
+  }
+  if (ctx.hasOrder) {
+    row.has_order = true;
+    row.order_id = ctx.orderId ?? null;
+  }
+  await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
 }
 
 /**
@@ -108,27 +149,11 @@ export async function syncStoreLeads(
     const seed = seeds.get(phone)!;
     const existing = existingByPhone.get(phone) ?? null;
     const hasOrder = orderIdByPhone.has(phone);
-    const ns = nextLeadState(existing ? { status: existing.status, handoff_reason: existing.handoff_reason } : null, { hasOrder });
-
-    const row: any = {
-      store_id: storeId,
-      phone,
-      kapso_conversation_id: seed.kapso_conversation_id,
-    };
-    if (seed.name) row.name = seed.name;
-    if (seed.wa_id) row.wa_id = seed.wa_id;
-    if (seed.last_interaction_at) row.last_interaction_at = seed.last_interaction_at;
-    if (!existing && seed.first_seen_at) row.first_seen_at = seed.first_seen_at;
-    if (ns) {
-      row.status = ns.status;
-      row.category = ns.category;
-      row.needs_attention = ns.needsAttention;
-    }
-    if (hasOrder) {
-      row.has_order = true;
-      row.order_id = orderIdByPhone.get(phone) ?? null;
-    }
-    await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
+    await upsertLeadFromSeed(admin, storeId, seed, {
+      hasOrder,
+      orderId: orderIdByPhone.get(phone) ?? null,
+      existing,
+    });
 
     if (seed.last_interaction_at && (!maxTs || seed.last_interaction_at > maxTs)) {
       maxTs = seed.last_interaction_at;
@@ -158,6 +183,47 @@ export async function linkOrderToLead(
     },
     { onConflict: "store_id,phone" },
   );
+}
+
+/**
+ * Ingest a Kapso WhatsApp conversation webhook (`conversation.ended` /
+ * `conversation.inactive` / `conversation.created`) → an abandono lead in real
+ * time. A conversation the bot didn't close becomes a "to call" lead; if the
+ * phone already has an order it lands as won, and an agent's manual disposition
+ * is never overwritten.
+ */
+export async function ingestConversationEvent(
+  admin: SupabaseClient,
+  storeId: string,
+  body: any,
+): Promise<{ ok: boolean; reason?: string }> {
+  const conv = body?.conversation ?? body?.data?.conversation ?? null;
+  const seed = conv ? conversationToLeadSeed(conv) : null;
+  if (!seed) return { ok: false, reason: "no-phone" };
+
+  // Order by phone (non-cancelled) → won linkage.
+  const { data: order } = await admin
+    .from("orders")
+    .select("id")
+    .eq("store_id", storeId)
+    .eq("customer_phone", seed.phone)
+    .is("cancelled_at", null)
+    .limit(1)
+    .maybeSingle();
+
+  const { data: existing } = await admin
+    .from("leads")
+    .select("phone, status, handoff_reason, has_order")
+    .eq("store_id", storeId)
+    .eq("phone", seed.phone)
+    .maybeSingle();
+
+  await upsertLeadFromSeed(admin, storeId, seed, {
+    hasOrder: Boolean(order?.id),
+    orderId: (order as { id: string } | null)?.id ?? null,
+    existing: (existing as ExistingLead | null) ?? null,
+  });
+  return { ok: true };
 }
 
 /** Apply a Kapso handoff webhook → hot lead with the bot's reason/context. */
