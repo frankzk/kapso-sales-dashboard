@@ -118,7 +118,10 @@ export async function syncNow(
     const r = await runStoreSync(storeId, ctx.admin);
     revalidatePath(`/dashboard/${storeId}/settings`);
     revalidatePath(`/dashboard/${storeId}`);
-    const summary = `${r.shopifyOrders} órdenes · ${r.kapsoConversations} conversaciones · ops ${r.opsCaptured ? "✓" : "—"}`;
+    const e = r.enriched;
+    const summary =
+      `${r.shopifyOrders} órdenes · ${r.kapsoConversations} conversaciones · ops ${r.opsCaptured ? "✓" : "—"}` +
+      ` · leads enriquecidos ${e.fetched}/${e.candidates} (🛒${e.cart} 📍${e.district} 💬${e.inbound})`;
     return r.errors.length
       ? { error: `Sync con errores: ${r.errors.join("; ")}`, notice: summary }
       : { notice: `Sync completado: ${summary}.` };

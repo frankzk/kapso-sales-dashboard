@@ -18,6 +18,25 @@ import { deriveAutoState, nextLeadState } from "@/lib/leads";
 // Per-run cap on lead enrichment message fetches (one Kapso message page each).
 const LEAD_ENRICH_CAP = 80;
 
+export interface LeadEnrichStats {
+  candidates: number; // open/hot leads we tried to enrich this run
+  fetched: number; // of those, conversations whose messages we could read
+  inbound: number; // leads with ≥2 customer messages
+  cart: number; // leads where a cart/order summary was detected
+  district: number; // leads where a district was detected
+}
+export interface SyncLeadsResult {
+  touched: number;
+  enriched: LeadEnrichStats;
+}
+const ZERO_ENRICH: LeadEnrichStats = {
+  candidates: 0,
+  fetched: 0,
+  inbound: 0,
+  cart: 0,
+  district: 0,
+};
+
 interface ExistingLead {
   phone: string;
   status: string;
@@ -90,8 +109,8 @@ export async function syncStoreLeads(
   admin: SupabaseClient,
   storeId: string,
   creds: { kapso_api_key: string | null; whatsapp_phone_number_id: string | null },
-): Promise<number> {
-  if (!creds.kapso_api_key) return 0;
+): Promise<SyncLeadsResult> {
+  if (!creds.kapso_api_key) return { touched: 0, enriched: { ...ZERO_ENRICH } };
   const k: KapsoClientOpts = { apiKey: creds.kapso_api_key };
   const cursor = await getCursor(admin, storeId);
 
@@ -104,7 +123,7 @@ export async function syncStoreLeads(
     );
   } catch (e: any) {
     await setCursor(admin, storeId, cursor, "error", e?.message);
-    return 0;
+    return { touched: 0, enriched: { ...ZERO_ENRICH } };
   }
 
   // Dedup by phone, keeping the most recent conversation.
@@ -119,8 +138,16 @@ export async function syncStoreLeads(
   }
   const phones = [...seeds.keys()];
   if (!phones.length) {
+    // No active conversations this run, but still backfill enrichment for the
+    // existing open queue (the 66 leads sitting in "Por llamar").
+    let enriched: LeadEnrichStats = { ...ZERO_ENRICH };
+    try {
+      enriched = await enrichLeadsFromConversations(admin, storeId, k, new Map());
+    } catch {
+      /* best-effort */
+    }
     await setCursor(admin, storeId, cursor, "ok");
-    return 0;
+    return { touched: 0, enriched };
   }
 
   // Orders by phone (non-cancelled) → won linkage.
@@ -167,14 +194,15 @@ export async function syncStoreLeads(
   // Enrich open/hot leads with buyer-intent signals parsed from their Kapso
   // messages (district, cart, inbound count) — Aurela's bot collects these
   // in-chat, there's no Shopify draft order. Best-effort; bounded per run.
+  let enriched: LeadEnrichStats = { ...ZERO_ENRICH };
   try {
-    await enrichLeadsFromConversations(admin, storeId, k, seeds);
+    enriched = await enrichLeadsFromConversations(admin, storeId, k, seeds);
   } catch {
     /* enrichment is best-effort — never blocks the lead sync */
   }
 
   await setCursor(admin, storeId, maxTs, "ok");
-  return phones.length;
+  return { touched: phones.length, enriched };
 }
 
 /**
@@ -188,7 +216,8 @@ async function enrichLeadsFromConversations(
   storeId: string,
   k: KapsoClientOpts,
   seeds: Map<string, ReturnType<typeof conversationToLeadSeed>>,
-): Promise<void> {
+): Promise<LeadEnrichStats> {
+  const stats: LeadEnrichStats = { ...ZERO_ENRICH };
   const convIds = new Set<string>();
   for (const s of seeds.values()) if (s?.kapso_conversation_id) convIds.add(s.kapso_conversation_id);
 
@@ -207,8 +236,13 @@ async function enrichLeadsFromConversations(
   let n = 0;
   for (const convId of convIds) {
     if (n++ >= LEAD_ENRICH_CAP) break;
+    stats.candidates += 1;
     const sig = await fetchConversationSignals(k, convId);
     if (!sig) continue;
+    stats.fetched += 1;
+    if ((sig.inbound_count ?? 0) >= 2) stats.inbound += 1;
+    if ((sig.cart_item_count ?? 0) > 0) stats.cart += 1;
+    if ((sig.district ?? "").trim()) stats.district += 1;
     await admin
       .from("leads")
       .update({
@@ -221,6 +255,7 @@ async function enrichLeadsFromConversations(
       .eq("store_id", storeId)
       .eq("kapso_conversation_id", convId);
   }
+  return stats;
 }
 
 /** Mark the lead for an order's customer as won (sticky), creating it if new. */

@@ -25,7 +25,12 @@ import {
   summarizeApiLogs,
   tzParts,
 } from "@/lib/metrics";
-import { linkOrderToLead, linkOrdersToLeads, syncStoreLeads } from "@/lib/leads-ingest";
+import {
+  linkOrderToLead,
+  linkOrdersToLeads,
+  syncStoreLeads,
+  type LeadEnrichStats,
+} from "@/lib/leads-ingest";
 import type { ConversationRow, OrderRow } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -259,6 +264,7 @@ export interface SyncReport {
   shopifyOrders: number;
   kapsoConversations: number;
   leads: number;
+  enriched: LeadEnrichStats;
   opsCaptured: boolean;
   errors: string[];
 }
@@ -272,6 +278,7 @@ export async function runStoreSync(
     shopifyOrders: 0,
     kapsoConversations: 0,
     leads: 0,
+    enriched: { candidates: 0, fetched: 0, inbound: 0, cart: 0, district: 0 },
     opsCaptured: false,
     errors: [],
   };
@@ -361,10 +368,12 @@ export async function runStoreSync(
   // 2b) Leads — build/refresh from conversations + order linkage.
   if (creds.kapso_api_key) {
     try {
-      report.leads = await syncStoreLeads(admin, storeId, {
+      const lr = await syncStoreLeads(admin, storeId, {
         kapso_api_key: creds.kapso_api_key,
         whatsapp_phone_number_id: creds.whatsapp_phone_number_id,
       });
+      report.leads = lr.touched;
+      report.enriched = lr.enriched;
     } catch (e: any) {
       report.errors.push(`leads: ${e.message}`);
     }
