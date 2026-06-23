@@ -172,7 +172,7 @@ export function LeadsBoard({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-900">Leads</h1>
         {stores.length > 1 && (
@@ -190,7 +190,8 @@ export function LeadsBoard({
         )}
       </div>
 
-      <nav className="flex flex-wrap gap-2">
+      <div className="sticky top-0 z-10 space-y-2 bg-slate-50 pt-1 pb-2">
+      <nav className="flex flex-wrap gap-1.5">
         {LEAD_VIEWS.map((v) => {
           const active = v.key === view;
           return (
@@ -219,7 +220,7 @@ export function LeadsBoard({
       </nav>
 
       {view === "por_llamar" && segCounts && (
-        <nav className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+        <nav className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-2">
           <span className="text-xs font-medium text-slate-400">Priorizar:</span>
           <SegPill
             storeId={storeId}
@@ -240,6 +241,7 @@ export function LeadsBoard({
           ))}
         </nav>
       )}
+      </div>
 
       {banner && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">

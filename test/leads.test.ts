@@ -17,10 +17,12 @@ import {
 } from "@/lib/leads";
 
 describe("leadSegment (Por llamar sub-segmentation)", () => {
-  it("prioritizes pago (Yape) above everything", () => {
+  it("Yape leads are no longer a sub-bucket — classified by their other signals", () => {
+    // (Ya tienen su propia pestaña superior "Yape/Shalom".)
     expect(
       leadSegment({ status: "yape_por_verificar", cart_item_count: 3, district: "Breña", inbound_count: 9 }),
-    ).toBe("pago");
+    ).toBe("carrito");
+    expect(leadSegment({ status: "yape_por_verificar" })).toBe("frio");
   });
   it("carrito when an open cart exists (and not a payment handoff)", () => {
     expect(leadSegment({ status: "nuevo", cart_item_count: 2, district: "Surco" })).toBe("carrito");
@@ -44,8 +46,8 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
       { status: "nuevo", inbound_count: 4 },
       { status: "nuevo", inbound_count: 0 },
     ]);
-    expect(counts).toEqual({ pago: 1, carrito: 1, distrito: 1, converso: 1, frio: 1 });
-    expect(LEAD_SEGMENTS.map((s) => s.key)).toEqual(["pago", "carrito", "distrito", "converso", "frio"]);
+    expect(counts).toEqual({ carrito: 1, distrito: 1, converso: 1, frio: 2 });
+    expect(LEAD_SEGMENTS.map((s) => s.key)).toEqual(["carrito", "distrito", "converso", "frio"]);
     expect(isLeadSegment("carrito")).toBe(true);
     expect(isLeadSegment("nope")).toBe(false);
   });
