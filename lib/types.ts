@@ -1,6 +1,6 @@
 // Shared domain types + constants used across ingestion, metrics and UI.
 
-export type Role = "owner" | "admin" | "viewer";
+export type Role = "owner" | "admin" | "viewer" | "vendedora";
 export type ShippingMode = "cod" | "agency" | null;
 export type SyncSource = "shopify" | "kapso" | "ops";
 

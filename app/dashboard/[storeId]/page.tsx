@@ -1,10 +1,11 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import {
   getAccessibleStores,
   getConversations,
   getLatestOps,
   getOrders,
   getRollups,
+  getUserRoleSummary,
   parseRange,
   previousRange,
 } from "@/lib/access";
@@ -19,6 +20,7 @@ export default async function StorePage({
   params: Promise<{ storeId: string }>;
   searchParams: Promise<{ from?: string; to?: string }>;
 }) {
+  if ((await getUserRoleSummary()).isVendedoraOnly) redirect("/dashboard/leads");
   const { storeId } = await params;
   const sp = await searchParams;
   const range = parseRange(sp);

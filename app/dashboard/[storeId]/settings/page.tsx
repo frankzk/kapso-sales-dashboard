@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { createAdminSupabase } from "@/lib/db";
-import { getAccessibleStores, getAdminOrgs } from "@/lib/access";
+import { getAccessibleStores, getAdminOrgs, getUserRoleSummary } from "@/lib/access";
 import { env } from "@/lib/env";
 import { EmptyState } from "@/components/ui";
 import { StoreSettings, type StoreSettingsData } from "@/components/store-settings";
@@ -27,6 +27,7 @@ export default async function StoreSettingsPage({
   params: Promise<{ storeId: string }>;
   searchParams: Promise<{ installed?: string; shopify_error?: string }>;
 }) {
+  if ((await getUserRoleSummary()).isVendedoraOnly) redirect("/dashboard/leads");
   const { storeId } = await params;
   const sp = await searchParams;
 

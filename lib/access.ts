@@ -71,6 +71,19 @@ export async function getAdminOrgs(): Promise<{ org_id: string; role: string }[]
   return (data as { org_id: string; role: string }[]) ?? [];
 }
 
+/**
+ * The caller's membership roles (across orgs) plus whether they are *only* a
+ * vendedora. Used to gate the financial pages and tailor the nav: a
+ * vendedora-only user sees just the Leads board.
+ */
+export async function getUserRoleSummary(): Promise<{ roles: string[]; isVendedoraOnly: boolean }> {
+  const sb = await createServerSupabase();
+  const { data } = await sb.from("memberships").select("role");
+  const roles = ((data as { role: string }[]) ?? []).map((m) => m.role);
+  const isVendedoraOnly = roles.length > 0 && roles.every((r) => r === "vendedora");
+  return { roles, isVendedoraOnly };
+}
+
 export async function getRollups(
   storeIds: string[],
   range: DateRange,

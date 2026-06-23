@@ -1,10 +1,12 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import {
   getAccessibleStores,
   getConversations,
   getLatestOps,
   getOrders,
   getRollups,
+  getUserRoleSummary,
   parseRange,
   previousRange,
 } from "@/lib/access";
@@ -18,6 +20,7 @@ export default async function ConsolidatedPage({
 }: {
   searchParams: Promise<{ from?: string; to?: string }>;
 }) {
+  if ((await getUserRoleSummary()).isVendedoraOnly) redirect("/dashboard/leads");
   const sp = await searchParams;
   const range = parseRange(sp);
   const stores = await getAccessibleStores();

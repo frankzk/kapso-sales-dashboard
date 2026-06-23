@@ -4,7 +4,7 @@
 
 import type { Role } from "@/lib/types";
 
-export const ROLES: Role[] = ["owner", "admin", "viewer"];
+export const ROLES: Role[] = ["owner", "admin", "viewer", "vendedora"];
 
 export interface MemberLite {
   user_id: string;

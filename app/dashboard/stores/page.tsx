@@ -1,11 +1,13 @@
 import Link from "next/link";
-import { getAccessibleStores } from "@/lib/access";
+import { redirect } from "next/navigation";
+import { getAccessibleStores, getUserRoleSummary } from "@/lib/access";
 import { Card, EmptyState, SimpleTable } from "@/components/ui";
 import type { StoreSummary } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function StoresPage() {
+  if ((await getUserRoleSummary()).isVendedoraOnly) redirect("/dashboard/leads");
   const stores = await getAccessibleStores();
   return (
     <div className="space-y-6">

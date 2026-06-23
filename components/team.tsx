@@ -257,8 +257,9 @@ function StoreAccessCell({
   stores: Store[];
 }) {
   if (!stores.length) return <span className="text-xs text-slate-400">Sin tiendas</span>;
-  // Owners/admins already see every store in the org via their role.
-  if (member.role !== "viewer") {
+  // Owners/admins already see every store in the org via their role; viewers and
+  // vendedoras need explicit per-store grants.
+  if (member.role !== "viewer" && member.role !== "vendedora") {
     return <span className="text-xs text-slate-400">Todas (por rol)</span>;
   }
   const granted = new Set(member.stores);

@@ -1,4 +1,6 @@
+import { redirect } from "next/navigation";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
+import { getUserRoleSummary } from "@/lib/access";
 import { EmptyState } from "@/components/ui";
 import { TeamManager, type TeamMember } from "@/components/team";
 import type { Role } from "@/lib/types";
@@ -10,6 +12,7 @@ export default async function TeamPage({
 }: {
   searchParams: Promise<{ org?: string }>;
 }) {
+  if ((await getUserRoleSummary()).isVendedoraOnly) redirect("/dashboard/leads");
   const sp = await searchParams;
   const sb = await createServerSupabase();
   const {

@@ -1,9 +1,12 @@
+import { redirect } from "next/navigation";
 import { createServerSupabase } from "@/lib/db";
+import { getUserRoleSummary } from "@/lib/access";
 import { CreateOrgForm, CreateStoreForm } from "@/components/forms";
 
 export const dynamic = "force-dynamic";
 
 export default async function NewStorePage() {
+  if ((await getUserRoleSummary()).isVendedoraOnly) redirect("/dashboard/leads");
   // Orgs where the current user is owner/admin (can create stores).
   const sb = await createServerSupabase();
   const { data } = await sb
