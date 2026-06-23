@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { createAdminSupabase } from "@/lib/db";
 import { getAccessibleStores, getAdminOrgs, getUserRoleSummary } from "@/lib/access";
@@ -51,6 +52,12 @@ export default async function StoreSettingsPage({
     );
   }
 
+  // Absolute base URL for copy-paste webhook URLs (works in preview + prod).
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "";
+  const proto = h.get("x-forwarded-proto") ?? "https";
+  const siteUrl = host ? `${proto}://${host}` : "";
+
   const admin = createAdminSupabase();
   const [{ data: full }, { data: sync }, { data: ops }, { count }] = await Promise.all([
     admin.from("stores").select("*").eq("id", storeId).single(),
@@ -86,6 +93,7 @@ export default async function StoreSettingsPage({
       kapsoKey: Boolean(full.kapso_api_key_enc),
     },
     oauthAvailable: env.shopifyOAuthConfigured(),
+    siteUrl,
     sync: (sync as StoreSettingsData["sync"]) ?? [],
     lastOpsAt: ops?.captured_at ?? null,
     webhookCount: count ?? 0,

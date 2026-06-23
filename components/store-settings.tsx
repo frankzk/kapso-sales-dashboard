@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { Card, Section, SimpleTable } from "@/components/ui";
 import { STORE_STATUSES } from "@/lib/store-settings";
 import {
@@ -29,6 +29,7 @@ export interface StoreSettingsData {
   };
   has: { shopifyToken: boolean; webhookSecret: boolean; kapsoKey: boolean };
   oauthAvailable: boolean;
+  siteUrl: string;
   sync: Array<{
     source: string;
     status: string | null;
@@ -101,6 +102,8 @@ export function StoreSettings({
         </Card>
       </Section>
 
+      <KapsoWebhookSection siteUrl={data.siteUrl} storeId={s.id} />
+
       <SettingsForm data={data} />
 
       <Section title="Operaciones">
@@ -152,6 +155,64 @@ export function StoreSettings({
         </Card>
       </Section>
     </div>
+  );
+}
+
+function KapsoWebhookSection({ siteUrl, storeId }: { siteUrl: string; storeId: string }) {
+  const url = `${siteUrl}/api/webhooks/kapso/${storeId}?secret=<CRON_SECRET>`;
+  const [copied, setCopied] = useState(false);
+  return (
+    <Section
+      title="Webhooks de Kapso"
+      subtitle="Pega esta URL en los dos webhooks de Kapso. Reemplaza <CRON_SECRET> por el secreto que tienes en Vercel (variable CRON_SECRET)."
+    >
+      <Card>
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-stretch gap-2">
+            <code className="min-w-0 flex-1 break-all rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+              {url}
+            </code>
+            <button
+              type="button"
+              onClick={() => {
+                navigator.clipboard?.writeText(url).then(
+                  () => {
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  },
+                  () => {},
+                );
+              }}
+              className="shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              {copied ? "¡Copiado!" : "Copiar"}
+            </button>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-lg border border-slate-200 p-3">
+              <p className="text-sm font-medium text-slate-800">1) WhatsApp webhook → abandonos</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Integrations → Webhooks → tu número. Marca <strong>Conversation ended</strong> y{" "}
+                <strong>Conversation inactive</strong>. Deja el <em>signing secret</em> en blanco.
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 p-3">
+              <p className="text-sm font-medium text-slate-800">2) Platform webhook → leads 🔥</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Integrations → Webhooks → pestaña <strong>Platform webhooks</strong>. Marca{" "}
+                <strong>workflow.execution.handoff</strong>.
+              </p>
+            </div>
+          </div>
+
+          <p className="text-xs text-slate-400">
+            El <code>store id</code> de esta tienda ya viene en la URL: <code>{storeId}</code>. No es
+            el Project ID de Kapso.
+          </p>
+        </div>
+      </Card>
+    </Section>
   );
 }
 
