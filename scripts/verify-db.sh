@@ -67,6 +67,7 @@ $PSQL -f "$ROOT/db/migrations/0003_refunds.sql"
 $PSQL -f "$ROOT/supabase/policies.sql" 2>/dev/null
 $PSQL -f "$ROOT/db/migrations/0004_leads.sql"
 $PSQL -f "$ROOT/db/migrations/0005_message_timing.sql"
+$PSQL -f "$ROOT/db/migrations/0006_kapso_only_orders.sql"
 
 echo "▶ rollup parity (SQL vs TS)"
 ( cd "$ROOT" && ./node_modules/.bin/tsx scripts/parity-gen.ts "$TMP" )
