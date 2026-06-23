@@ -39,6 +39,30 @@ describe("parseOrderSignals (buyer intent from chat messages)", () => {
     expect(s.cart_summary).toBe("Set de Pelador de Verduras + Abridor Premium");
   });
 
+  it("uses the LAST district prompt's reply, not the first (bot re-asks)", () => {
+    const s = parseOrderSignals([
+      { t: 1, dir: "outbound", text: "¿A qué distrito sería el envío?" },
+      { t: 2, dir: "inbound", text: "Hola Deseo 3x2" }, // qty, not a district
+      { t: 3, dir: "outbound", text: "Perfecto. ¿A qué distrito sería el envío?" },
+      { t: 4, dir: "inbound", text: "Jesús Maria" }, // the real district
+      { t: 5, dir: "outbound", text: "Envío: gratis a Jesús María\nTotal a pagar: S/ 158" },
+    ]);
+    expect(s.district).toBe("Jesús Maria");
+  });
+
+  it("falls back to the district echoed in the bot summary/confirmation", () => {
+    expect(
+      parseOrderSignals([
+        { t: 1, dir: "outbound", text: "Tu pedido va así:\n- 1 x X: S/ 79\nEnvío: gratis a Ate\nTotal a pagar: S/ 79" },
+      ]).district,
+    ).toBe("Ate");
+    expect(
+      parseOrderSignals([
+        { t: 1, dir: "outbound", text: "Ya tengo tu dirección para la entrega en Surco." },
+      ]).district,
+    ).toBe("Surco");
+  });
+
   it("ignores a district reply that is itself a question", () => {
     const s = parseOrderSignals([
       { t: 1, dir: "outbound", text: "¿A qué distrito sería el envío?" },

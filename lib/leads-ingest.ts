@@ -221,13 +221,15 @@ async function enrichLeadsFromConversations(
   const convIds = new Set<string>();
   for (const s of seeds.values()) if (s?.kapso_conversation_id) convIds.add(s.kapso_conversation_id);
 
+  // Re-enrich the open queue each run (bounded), unenriched leads first, so the
+  // existing queue refreshes — picks up conversation progress and parser fixes.
   const { data: backlog } = await admin
     .from("leads")
     .select("kapso_conversation_id")
     .eq("store_id", storeId)
     .in("category", ["open", "hot"])
-    .is("inbound_count", null)
     .not("kapso_conversation_id", "is", null)
+    .order("inbound_count", { ascending: true, nullsFirst: true })
     .limit(LEAD_ENRICH_CAP);
   for (const l of (backlog as { kapso_conversation_id: string }[]) ?? []) {
     convIds.add(l.kapso_conversation_id);

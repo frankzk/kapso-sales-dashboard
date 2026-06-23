@@ -293,16 +293,28 @@ export interface OrderSignals {
  * Pure + defensive: unknown formats just yield nulls.
  */
 export function parseOrderSignals(msgs: ParsedMsg[]): OrderSignals {
-  // District: first bot prompt mentioning "distrito" → next customer reply.
+  // District. The bot re-asks "¿…distrito…?" several times, so the FIRST reply
+  // is usually about something else (qty). Use the LAST prompt's reply; fall
+  // back to the district the bot echoes in its summary/confirmation
+  // ("Envío: gratis a Jesús María", "…entrega en Ate").
   let district: string | null = null;
-  for (let i = 0; i < msgs.length; i++) {
+  for (let i = msgs.length - 1; i >= 0; i--) {
     if (msgs[i]!.dir !== "outbound" || !/distrito/i.test(msgs[i]!.text)) continue;
     const reply = msgs.slice(i + 1).find((x) => x.dir === "inbound" && x.text.trim());
     if (reply) {
       const d = reply.text.trim().replace(/\s+/g, " ");
       if (d.length <= 40 && !d.includes("?")) district = d; // a place name, not a question
     }
-    break; // first prompt wins
+    break; // last prompt wins
+  }
+  if (!district) {
+    for (const m of msgs) {
+      if (m.dir !== "outbound") continue;
+      const echo =
+        m.text.match(/env[ií]o[^\n]*?\s(?:a|para)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ][^\n.,!?]*)/i) ??
+        m.text.match(/entrega\s+(?:en|para|a)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ][^\n.,!?]*)/i);
+      if (echo) district = echo[1]!.trim().replace(/\s+/g, " ").slice(0, 40); // last wins
+    }
   }
 
   // Cart: the bot's order summary ("Total a pagar: S/ N" + "- N x <producto>").
