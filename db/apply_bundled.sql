@@ -727,6 +727,19 @@ grant execute on function public.recompute_daily_rollups(uuid, date, date) to se
 -- The webhook code is fixed separately (lib/ingest.ts) to stop the bleeding.
 -- ============================================================================
 
+-- 0) Self-sufficiency guard: this migration's recompute_daily_rollups body
+--    references the message-timing columns added in 0005. Add them idempotently
+--    so 0006 can be applied standalone even if 0005 hasn't run yet (no-op when
+--    it has, e.g. via db/apply.sql). Mirrors 0005_message_timing.sql; no data
+--    is touched.
+alter table conversations
+  add column if not exists inbound_count          integer,
+  add column if not exists first_response_seconds integer;
+alter table daily_rollups
+  add column if not exists inbound_messages     integer not null default 0,
+  add column if not exists response_seconds_sum bigint  not null default 0,
+  add column if not exists response_samples     integer not null default 0;
+
 -- 1) Defensive filter: rollups only ever count Kapso orders.
 create or replace function public.recompute_daily_rollups(
   p_store_id uuid,
