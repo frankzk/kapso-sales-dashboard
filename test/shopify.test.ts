@@ -105,6 +105,7 @@ describe("mapRestOrder", () => {
       { name: "kapso_phone_number_id", value: "pn_1" },
       { name: "source", value: "whatsapp-bot" },
     ],
+    customer: { phone: "+51 980 694 766" },
     line_items: [
       { title: "Polo Aurela", quantity: 2, sku: "POLO-1", product_id: 1, variant_id: 11, price: "59.95" },
       { title: "Gorro", quantity: 1, sku: "GORRO", product_id: 2, variant_id: 22, price: "80.00" },
@@ -123,6 +124,7 @@ describe("mapRestOrder", () => {
     expect(row.promo_applied).toBe(true);
     expect(row.stock_por_validar).toBe(false);
     expect(row.kapso_conversation_id).toBe("conv_abc");
+    expect(row.customer_phone).toBe("51980694766");
     expect(row.line_items).toHaveLength(2);
     expect(row.line_items[0]).toMatchObject({ title: "Polo Aurela", quantity: 2, price: 59.95 });
   });

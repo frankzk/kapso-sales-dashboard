@@ -10,6 +10,7 @@ import {
   NOTE_ATTR,
   TAGS,
 } from "@/lib/types";
+import { normalizePhone } from "@/lib/phone";
 
 export const SHOPIFY_DEFAULT_API_VERSION = "2025-01";
 
@@ -178,6 +179,12 @@ export function mapRestOrder(payload: any, storeId: string): OrderRow {
     financial_status: payload?.financial_status ?? null,
     cancelled_at: payload?.cancelled_at ?? null,
     total_refunded: toNumber(payload?.total_refunded) ?? sumRestRefunds(payload?.refunds),
+    customer_phone: normalizePhone(
+      payload?.customer?.phone ??
+        payload?.phone ??
+        payload?.shipping_address?.phone ??
+        payload?.billing_address?.phone,
+    ),
     tags,
     ...flags,
     line_items,

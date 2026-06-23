@@ -11,6 +11,10 @@ alter table memberships drop constraint if exists memberships_role_check;
 alter table memberships add constraint memberships_role_check
   check (role in ('owner', 'admin', 'viewer', 'vendedora'));
 
+-- 1b) Customer phone on orders, so leads (keyed by phone) can link to orders.
+alter table orders add column if not exists customer_phone text;
+create index if not exists orders_store_customer_phone_idx on orders(store_id, customer_phone);
+
 -- 2) Leads — deduped by phone within a store, ordered by last interaction.
 create table if not exists leads (
   id                    uuid primary key default gen_random_uuid(),

@@ -1,11 +1,7 @@
--- ============================================================================
--- apply_bundled.sql — full schema + RLS for the Supabase SQL Editor.
--- Paste this whole file into Supabase → SQL Editor → New query → Run.
--- (Generated from 0001+0002+0003 + policies + 0004.)
--- If you have psql instead, prefer:  psql "$DATABASE_URL" -f db/apply.sql
--- ============================================================================
+-- apply_bundled.sql — full schema + RLS for the Supabase SQL Editor (generated).
+-- Paste into Supabase → SQL Editor → Run. (psql: db/apply.sql)
 
--- ---- 0001_init.sql ----
+-- ---- 0001 ----
 -- ============================================================================
 -- 0001_init.sql — core schema for the Kapso multi-store sales dashboard
 -- Apply with:  psql "$DATABASE_URL" -f db/migrations/0001_init.sql
@@ -169,7 +165,7 @@ create table if not exists webhook_events (
 );
 create index if not exists webhook_events_store_idx on webhook_events(store_id, received_at desc);
 
--- ---- 0002_rollups.sql ----
+-- ---- 0002 ----
 -- ============================================================================
 -- 0002_rollups.sql — authoritative daily rollup recompute
 -- Rebuilds daily_rollups for a store over a date range from orders +
@@ -259,7 +255,7 @@ $$;
 revoke all on function public.recompute_daily_rollups(uuid, date, date) from public;
 grant execute on function public.recompute_daily_rollups(uuid, date, date) to service_role;
 
--- ---- 0003_refunds.sql ----
+-- ---- 0003 ----
 -- ============================================================================
 -- 0003_refunds.sql — cancellations + refunds → net revenue
 --
@@ -363,7 +359,7 @@ $$;
 revoke all on function public.recompute_daily_rollups(uuid, date, date) from public;
 grant execute on function public.recompute_daily_rollups(uuid, date, date) to service_role;
 
--- ---- policies.sql ----
+-- ---- policies ----
 -- ============================================================================
 -- policies.sql — Row Level Security for the Kapso sales dashboard
 -- Apply AFTER db/migrations/*.sql:
@@ -502,7 +498,7 @@ grant select on all tables in schema public to authenticated;
 grant all privileges on all tables in schema public to service_role;
 grant execute on all functions in schema public to authenticated, service_role;
 
--- ---- 0004_leads.sql ----
+-- ---- 0004 ----
 -- ============================================================================
 -- 0004_leads.sql — Leads + call-management module (replaces the "abandonos" Excel)
 -- Adds the 'vendedora' role, a leads table (one per phone within a store) and a
@@ -515,6 +511,10 @@ grant execute on all functions in schema public to authenticated, service_role;
 alter table memberships drop constraint if exists memberships_role_check;
 alter table memberships add constraint memberships_role_check
   check (role in ('owner', 'admin', 'viewer', 'vendedora'));
+
+-- 1b) Customer phone on orders, so leads (keyed by phone) can link to orders.
+alter table orders add column if not exists customer_phone text;
+create index if not exists orders_store_customer_phone_idx on orders(store_id, customer_phone);
 
 -- 2) Leads — deduped by phone within a store, ordered by last interaction.
 create table if not exists leads (
