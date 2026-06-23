@@ -9,7 +9,6 @@ import {
   deriveOrderFlags,
   mapRestOrder,
   mapGraphqlOrder,
-  mapDraftOrder,
   buildKapsoOrdersSearchQuery,
   shopifyGraphQL,
   fetchOrdersPage,
@@ -254,38 +253,6 @@ describe("buildKapsoOrdersSearchQuery", () => {
     expect(buildKapsoOrdersSearchQuery("2026-06-01T00:00:00Z")).toBe(
       "tag:kapso updated_at:>=2026-06-01T00:00:00Z",
     );
-  });
-});
-
-describe("mapDraftOrder (draft order → lead enrichment)", () => {
-  it("maps normalized phone, item count, district and cart summary", () => {
-    const d = mapDraftOrder({
-      id: "gid://shopify/DraftOrder/123",
-      phone: null,
-      shippingAddress: { phone: "+51 980 694 766", city: "Breña, Lima" },
-      totalPriceSet: { shopMoney: { amount: "186.44" } },
-      lineItems: {
-        edges: [
-          { node: { title: "WhiteSkin Serum", quantity: 1 } },
-          { node: { title: "AntiAge Serum", quantity: 2 } },
-        ],
-      },
-    })!;
-    expect(d.phone).toBe("51980694766");
-    expect(d.itemCount).toBe(3);
-    expect(d.totalAmount).toBe(186.44);
-    expect(d.district).toBe("Breña, Lima");
-    expect(d.cartSummary).toBe("WhiteSkin Serum, AntiAge Serum");
-    expect(d.gid).toBe("gid://shopify/DraftOrder/123");
-  });
-  it("summary truncates past 3 titles and null phone → null", () => {
-    const d = mapDraftOrder({
-      id: "x",
-      shippingAddress: { phone: "999888777", city: "Surco" },
-      lineItems: { edges: [1, 2, 3, 4, 5].map((n) => ({ node: { title: `P${n}`, quantity: 1 } })) },
-    })!;
-    expect(d.cartSummary).toBe("P1, P2, P3 +2");
-    expect(mapDraftOrder({ id: "y", lineItems: { edges: [] } })).toBeNull();
   });
 });
 

@@ -5,15 +5,18 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   conversationToLeadSeed,
   fetchAllConversationsRich,
+  fetchConversationSignals,
   parseHandoffPayload,
   type HandoffInfo,
   type KapsoClientOpts,
   type LeadSeed,
 } from "@/lib/kapso";
 import { deriveAutoState, nextLeadState } from "@/lib/leads";
-import type { DraftOrderSignal } from "@/lib/shopify";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+// Per-run cap on lead enrichment message fetches (one Kapso message page each).
+const LEAD_ENRICH_CAP = 80;
 
 interface ExistingLead {
   phone: string;
@@ -46,22 +49,11 @@ async function setCursor(admin: SupabaseClient, storeId: string, cursor: string 
  *   - existing handoff → re-derived hot
  *   - otherwise → new/open
  */
-/** Informational enrichment (cart/district/interaction) — never changes state. */
-export interface LeadEnrichment {
-  district?: string | null;
-  cart_value?: number | null;
-  cart_item_count?: number | null;
-  cart_summary?: string | null;
-  draft_order_gid?: string | null;
-  inbound_count?: number | null;
-}
-
 async function upsertLeadFromSeed(
   admin: SupabaseClient,
   storeId: string,
   seed: LeadSeed,
   ctx: { hasOrder: boolean; orderId?: string | null; existing: ExistingLead | null },
-  enrich?: LeadEnrichment,
 ): Promise<void> {
   const ns = nextLeadState(
     ctx.existing ? { status: ctx.existing.status, handoff_reason: ctx.existing.handoff_reason } : null,
@@ -86,19 +78,6 @@ async function upsertLeadFromSeed(
     row.has_order = true;
     row.order_id = ctx.orderId ?? null;
   }
-  // Enrichment — only write fields we actually have (don't clobber with null).
-  if (enrich) {
-    for (const k of [
-      "district",
-      "cart_value",
-      "cart_item_count",
-      "cart_summary",
-      "draft_order_gid",
-      "inbound_count",
-    ] as const) {
-      if (enrich[k] != null) row[k] = enrich[k];
-    }
-  }
   await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
 }
 
@@ -111,7 +90,6 @@ export async function syncStoreLeads(
   admin: SupabaseClient,
   storeId: string,
   creds: { kapso_api_key: string | null; whatsapp_phone_number_id: string | null },
-  draftByPhone?: Map<string, DraftOrderSignal>,
 ): Promise<number> {
   if (!creds.kapso_api_key) return 0;
   const k: KapsoClientOpts = { apiKey: creds.kapso_api_key };
@@ -170,74 +148,79 @@ export async function syncStoreLeads(
     for (const l of (data as ExistingLead[]) ?? []) existingByPhone.set(l.phone, l);
   }
 
-  // Interaction level: the conversation's inbound (customer) message count,
-  // populated by the ops sync's message-timing pass. Joined by conversation id.
-  const convIds = [
-    ...new Set([...seeds.values()].map((s) => s?.kapso_conversation_id).filter(Boolean) as string[]),
-  ];
-  const inboundByConv = new Map<string, number>();
-  if (convIds.length) {
-    const { data } = await admin
-      .from("conversations")
-      .select("kapso_conversation_id, inbound_count")
-      .eq("store_id", storeId)
-      .in("kapso_conversation_id", convIds);
-    for (const c of (data as { kapso_conversation_id: string; inbound_count: number | null }[]) ?? []) {
-      if (c.inbound_count != null) inboundByConv.set(c.kapso_conversation_id, c.inbound_count);
-    }
-  }
-
   let maxTs = cursor;
   for (const phone of phones) {
     const seed = seeds.get(phone)!;
     const existing = existingByPhone.get(phone) ?? null;
     const hasOrder = orderIdByPhone.has(phone);
-    const draft = draftByPhone?.get(phone);
-    const inbound = seed.kapso_conversation_id
-      ? inboundByConv.get(seed.kapso_conversation_id)
-      : undefined;
-    await upsertLeadFromSeed(
-      admin,
-      storeId,
-      seed,
-      { hasOrder, orderId: orderIdByPhone.get(phone) ?? null, existing },
-      {
-        district: draft?.district ?? undefined,
-        cart_value: draft?.totalAmount ?? undefined,
-        cart_item_count: draft?.itemCount ?? undefined,
-        cart_summary: draft?.cartSummary ?? undefined,
-        draft_order_gid: draft?.gid ?? undefined,
-        inbound_count: inbound ?? undefined,
-      },
-    );
+    await upsertLeadFromSeed(admin, storeId, seed, {
+      hasOrder,
+      orderId: orderIdByPhone.get(phone) ?? null,
+      existing,
+    });
 
     if (seed.last_interaction_at && (!maxTs || seed.last_interaction_at > maxTs)) {
       maxTs = seed.last_interaction_at;
     }
   }
 
-  // Enrich existing leads whose phone has an open cart but whose conversation
-  // wasn't re-pulled this run, so cart/district show up without a full re-sync.
-  if (draftByPhone) {
-    const seedPhones = new Set(phones);
-    for (const [phone, d] of draftByPhone) {
-      if (seedPhones.has(phone)) continue;
-      await admin
-        .from("leads")
-        .update({
-          district: d.district,
-          cart_value: d.totalAmount,
-          cart_item_count: d.itemCount,
-          cart_summary: d.cartSummary,
-          draft_order_gid: d.gid,
-        })
-        .eq("store_id", storeId)
-        .eq("phone", phone);
-    }
+  // Enrich open/hot leads with buyer-intent signals parsed from their Kapso
+  // messages (district, cart, inbound count) — Aurela's bot collects these
+  // in-chat, there's no Shopify draft order. Best-effort; bounded per run.
+  try {
+    await enrichLeadsFromConversations(admin, storeId, k, seeds);
+  } catch {
+    /* enrichment is best-effort — never blocks the lead sync */
   }
 
   await setCursor(admin, storeId, maxTs, "ok");
   return phones.length;
+}
+
+/**
+ * Fill cart/district/inbound on open/hot leads from their Kapso conversation
+ * messages. Targets the conversations active this run plus a backlog of leads
+ * not yet enriched (inbound_count is null), so the existing queue fills in over
+ * a run or two without a full re-pull. Bounded by LEAD_ENRICH_CAP.
+ */
+async function enrichLeadsFromConversations(
+  admin: SupabaseClient,
+  storeId: string,
+  k: KapsoClientOpts,
+  seeds: Map<string, ReturnType<typeof conversationToLeadSeed>>,
+): Promise<void> {
+  const convIds = new Set<string>();
+  for (const s of seeds.values()) if (s?.kapso_conversation_id) convIds.add(s.kapso_conversation_id);
+
+  const { data: backlog } = await admin
+    .from("leads")
+    .select("kapso_conversation_id")
+    .eq("store_id", storeId)
+    .in("category", ["open", "hot"])
+    .is("inbound_count", null)
+    .not("kapso_conversation_id", "is", null)
+    .limit(LEAD_ENRICH_CAP);
+  for (const l of (backlog as { kapso_conversation_id: string }[]) ?? []) {
+    convIds.add(l.kapso_conversation_id);
+  }
+
+  let n = 0;
+  for (const convId of convIds) {
+    if (n++ >= LEAD_ENRICH_CAP) break;
+    const sig = await fetchConversationSignals(k, convId);
+    if (!sig) continue;
+    await admin
+      .from("leads")
+      .update({
+        inbound_count: sig.inbound_count,
+        district: sig.district,
+        cart_value: sig.cart_value,
+        cart_item_count: sig.cart_item_count,
+        cart_summary: sig.cart_summary,
+      })
+      .eq("store_id", storeId)
+      .eq("kapso_conversation_id", convId);
+  }
 }
 
 /** Mark the lead for an order's customer as won (sticky), creating it if new. */

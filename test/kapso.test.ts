@@ -8,9 +8,52 @@ import {
   mapKapsoConversation,
   conversationToLeadSeed,
   parseHandoffPayload,
+  parseOrderSignals,
   classifyKapsoEvent,
   type KapsoClientOpts,
+  type ParsedMsg,
 } from "@/lib/kapso";
+
+describe("parseOrderSignals (buyer intent from chat messages)", () => {
+  // The real josepradorodriguez flow: bot asks district, customer replies, bot
+  // builds an order summary with a total.
+  const convo: ParsedMsg[] = [
+    { t: 1, dir: "outbound", text: "🔥 Promos: 1 und S/ 99 · 3×2 S/ 198\n\n¿A qué distrito sería el envío?" },
+    { t: 2, dir: "inbound", text: "Chosica" },
+    { t: 3, dir: "outbound", text: "¡Gracias! Chosica es Lima Metropolitana. ¿Te llevas 1 por S/ 99 o el 3×2?" },
+    { t: 4, dir: "inbound", text: "3" },
+    {
+      t: 5,
+      dir: "outbound",
+      text:
+        "Listo, lo agrego a tu pedido.\n\nTu pedido va así:\n- 3 x Set de Pelador de Verduras + Abridor Premium (2 piezas) (3×2: pagas 2 y llevas 3): S/ 198\nEnvío: gratis\nTotal a pagar: S/ 198\n\n¿Avanzamos con tus datos para el envío?",
+    },
+  ];
+
+  it("extracts district, cart value, item count and summary", () => {
+    const s = parseOrderSignals(convo);
+    expect(s.district).toBe("Chosica");
+    expect(s.cart_value).toBe(198);
+    expect(s.cart_item_count).toBe(3);
+    expect(s.cart_summary).toBe("Set de Pelador de Verduras + Abridor Premium");
+  });
+
+  it("ignores a district reply that is itself a question", () => {
+    const s = parseOrderSignals([
+      { t: 1, dir: "outbound", text: "¿A qué distrito sería el envío?" },
+      { t: 2, dir: "inbound", text: "¿cuánto cuesta?" },
+    ]);
+    expect(s.district).toBeNull();
+  });
+
+  it("yields all-null when nothing matches", () => {
+    const s = parseOrderSignals([
+      { t: 1, dir: "inbound", text: "hola" },
+      { t: 2, dir: "outbound", text: "¡Hola! ¿En qué te ayudo?" },
+    ]);
+    expect(s).toEqual({ district: null, cart_value: null, cart_item_count: null, cart_summary: null });
+  });
+});
 
 const BASE = "https://api.kapso.ai/platform/v1";
 

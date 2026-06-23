@@ -8,15 +8,13 @@ import { createAdminSupabase } from "@/lib/db";
 import { decryptOrNull } from "@/lib/crypto";
 import {
   buildKapsoOrdersSearchQuery,
-  fetchOpenDraftOrders,
   fetchOrdersPage,
   hasKapsoTag,
   mapRestOrder,
   verifyShopifyHmac,
-  type DraftOrderSignal,
 } from "@/lib/shopify";
 import {
-  fetchConversationTiming,
+  fetchConversationSignals,
   getPhoneHealth,
   listAllConversations,
   listApiLogs,
@@ -283,8 +281,6 @@ export async function runStoreSync(
     return report;
   }
   const affectedDates = new Set<string>();
-  // Open draft orders (COD form carts) keyed by phone → lead enrichment below.
-  let draftByPhone: Map<string, DraftOrderSignal> | undefined;
 
   // 1) Shopify reconciliation (tag:kapso, bounded by updated_at cursor)
   if (creds.shopify_token) {
@@ -322,28 +318,6 @@ export async function runStoreSync(
     }
   }
 
-  // 1b) Open Shopify draft orders → cart + district per phone (lead enrichment).
-  // Best-effort: needs the `read_draft_orders` scope; if absent we skip without
-  // failing the run (the cart/district sub-segments just stay empty).
-  if (creds.shopify_token) {
-    try {
-      const since = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
-      const drafts = await fetchOpenDraftOrders({
-        domain: creds.shopify_domain,
-        token: creds.shopify_token,
-        updatedSinceIso: since,
-      });
-      draftByPhone = new Map();
-      for (const d of drafts) {
-        const prev = draftByPhone.get(d.phone);
-        // Keep the highest-value open cart per phone.
-        if (!prev || (d.totalAmount ?? 0) > (prev.totalAmount ?? 0)) draftByPhone.set(d.phone, d);
-      }
-    } catch (e: any) {
-      report.errors.push(`draft_orders: ${e.message}`);
-    }
-  }
-
   // 2) Kapso pull (conversations since last_active cursor)
   if (creds.kapso_api_key) {
     try {
@@ -361,7 +335,7 @@ export async function runStoreSync(
       // update so it tolerates the timing columns not existing yet (i.e. if the
       // code deploys before migration 0005 is applied) without breaking sync.
       for (const r of rows.slice(0, KAPSO_TIMING_CAP)) {
-        const t = await fetchConversationTiming(k, r.kapso_conversation_id);
+        const t = await fetchConversationSignals(k, r.kapso_conversation_id);
         if (!t) continue;
         const { error: tErr } = await admin
           .from("conversations")
@@ -387,15 +361,10 @@ export async function runStoreSync(
   // 2b) Leads — build/refresh from conversations + order linkage.
   if (creds.kapso_api_key) {
     try {
-      report.leads = await syncStoreLeads(
-        admin,
-        storeId,
-        {
-          kapso_api_key: creds.kapso_api_key,
-          whatsapp_phone_number_id: creds.whatsapp_phone_number_id,
-        },
-        draftByPhone,
-      );
+      report.leads = await syncStoreLeads(admin, storeId, {
+        kapso_api_key: creds.kapso_api_key,
+        whatsapp_phone_number_id: creds.whatsapp_phone_number_id,
+      });
     } catch (e: any) {
       report.errors.push(`leads: ${e.message}`);
     }

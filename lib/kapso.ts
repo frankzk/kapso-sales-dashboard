@@ -249,19 +249,99 @@ function msgDirection(m: any): "inbound" | "outbound" | null {
   return null;
 }
 
-export interface ConversationTiming {
+/** Best-effort text of a message, across WhatsApp/Kapso payload shapes. */
+function msgText(m: any): string {
+  const t =
+    m?.text?.body ??
+    (typeof m?.text === "string" ? m.text : null) ??
+    m?.body ??
+    (typeof m?.content === "string" ? m.content : m?.content?.text) ??
+    m?.message?.text?.body ??
+    m?.message?.body ??
+    (typeof m?.message?.content === "string" ? m.message.content : null) ??
+    m?.caption ??
+    m?.kapso?.text ??
+    "";
+  return typeof t === "string" ? t : "";
+}
+
+export interface ParsedMsg {
+  t: number;
+  dir: "inbound" | "outbound";
+  text: string;
+}
+
+export interface OrderSignals {
+  district: string | null;
+  cart_value: number | null;
+  cart_item_count: number | null;
+  cart_summary: string | null;
+}
+
+/**
+ * Extract buyer-intent signals from a conversation's messages. Aurela's bot
+ * collects these in-chat (no Shopify draft order is created):
+ *   - district: the customer's reply right after the bot asks "¿…distrito…?".
+ *   - cart: parsed from the bot's order summary ("… Total a pagar: S/ N", with
+ *     line items like "- 3 x <producto>").
+ * Pure + defensive: unknown formats just yield nulls.
+ */
+export function parseOrderSignals(msgs: ParsedMsg[]): OrderSignals {
+  // District: first bot prompt mentioning "distrito" → next customer reply.
+  let district: string | null = null;
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i]!.dir !== "outbound" || !/distrito/i.test(msgs[i]!.text)) continue;
+    const reply = msgs.slice(i + 1).find((x) => x.dir === "inbound" && x.text.trim());
+    if (reply) {
+      const d = reply.text.trim().replace(/\s+/g, " ");
+      if (d.length <= 40 && !d.includes("?")) district = d; // a place name, not a question
+    }
+    break; // first prompt wins
+  }
+
+  // Cart: the bot's order summary ("Total a pagar: S/ N" + "- N x <producto>").
+  let cart_value: number | null = null;
+  let cart_item_count: number | null = null;
+  let cart_summary: string | null = null;
+  for (const m of msgs) {
+    if (m.dir !== "outbound") continue;
+    const total = m.text.match(/total a pagar:\s*s\/\.?\s*([\d.,]+)/i);
+    if (!total) continue;
+    cart_value = Number(total[1]!.replace(/,/g, "")) || null;
+    const items: { qty: number; title: string }[] = [];
+    for (const line of m.text.split(/\n/)) {
+      const li = line.match(/^[\s\-•*]*(\d+)\s*x\s+(.+)$/i);
+      if (li) items.push({ qty: Number(li[1]), title: li[2]!.trim() });
+    }
+    if (items.length) {
+      cart_item_count = items.reduce((s, it) => s + it.qty, 0);
+      const titles = items
+        .map((it) => it.title.replace(/\s*\(.*$/, "").replace(/:\s*s\/.*$/i, "").trim())
+        .filter(Boolean);
+      cart_summary =
+        titles.slice(0, 3).join(", ") + (titles.length > 3 ? ` +${titles.length - 3}` : "");
+    } else {
+      cart_item_count = 1; // summary present but no parseable line items
+    }
+    break; // first summary wins
+  }
+  return { district, cart_value, cart_item_count, cart_summary: cart_summary || null };
+}
+
+export interface ConversationSignals extends OrderSignals {
   inbound_count: number;
   first_response_seconds: number | null;
 }
 
 /**
- * First-inbound → first-outbound delta (seconds) + inbound message count for a
- * conversation. Returns null if messages can't be read. Never throws.
+ * First-response timing + inbound count + buyer-intent signals (district, cart)
+ * for a conversation, from a single message page. Returns null if messages
+ * can't be read. Never throws.
  */
-export async function fetchConversationTiming(
+export async function fetchConversationSignals(
   opts: KapsoClientOpts,
   conversationId: string,
-): Promise<ConversationTiming | null> {
+): Promise<ConversationSignals | null> {
   let page: KapsoPage<any>;
   try {
     page = await listMessages(opts, { conversationId, limit: 100 });
@@ -269,8 +349,8 @@ export async function fetchConversationTiming(
     return null;
   }
   const msgs = (page.data ?? [])
-    .map((m) => ({ t: msgTimeMs(m), dir: msgDirection(m) }))
-    .filter((m): m is { t: number; dir: "inbound" | "outbound" } => m.t != null && m.dir != null)
+    .map((m) => ({ t: msgTimeMs(m), dir: msgDirection(m), text: msgText(m) }))
+    .filter((m): m is ParsedMsg => m.t != null && m.dir != null)
     .sort((a, b) => a.t - b.t);
   if (!msgs.length) return null;
 
@@ -281,7 +361,7 @@ export async function fetchConversationTiming(
     const reply = msgs.find((m) => m.dir === "outbound" && m.t >= firstInbound.t);
     if (reply) first_response_seconds = Math.max(0, Math.round((reply.t - firstInbound.t) / 1000));
   }
-  return { inbound_count, first_response_seconds };
+  return { inbound_count, first_response_seconds, ...parseOrderSignals(msgs) };
 }
 
 // ---------------------------------------------------------------------------
