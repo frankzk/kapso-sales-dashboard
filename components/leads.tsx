@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useEffect, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
 import {
   LEAD_VIEWS,
@@ -17,6 +17,7 @@ import {
 } from "@/lib/leads";
 import {
   claimLead,
+  loadLeadDetail,
   registerCall,
   releaseLead,
   type LeadActionState,
@@ -59,7 +60,6 @@ export function LeadsBoard({
   view,
   counts,
   leads,
-  detail,
   currentUserId,
 }: {
   stores: StoreSummary[];
@@ -67,12 +67,15 @@ export function LeadsBoard({
   view: LeadView;
   counts: Record<LeadView, number>;
   leads: LeadRow[];
-  detail: { lead: LeadRow; calls: LeadCallRow[] } | null;
   currentUserId: string;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [banner, setBanner] = useState<string | null>(null);
+  // Drawer is client-state driven: it opens instantly from the row we already
+  // have; the claim + call history load in the background (no page navigation).
+  const [selected, setSelected] = useState<LeadRow | null>(null);
+  const [calls, setCalls] = useState<LeadCallRow[] | null>(null);
 
   function changeStore(nextStore: string) {
     router.push(`/dashboard/leads?store=${nextStore}&view=${view}`);
@@ -80,23 +83,47 @@ export function LeadsBoard({
 
   function openLead(lead: LeadRow) {
     setBanner(null);
+    setSelected(lead); // instant — render from the data we already have
+    setCalls(null);
     startTransition(async () => {
       const res = await claimLead(lead.id);
       if (res.error) {
         setBanner(res.error);
+        setSelected(null);
         return;
       }
-      router.push(`/dashboard/leads?store=${storeId}&view=${view}&lead=${lead.id}`);
+      const d = await loadLeadDetail(lead.id);
+      if ("error" in d) {
+        setBanner(d.error);
+        setSelected(null);
+        return;
+      }
+      setSelected(d.lead);
+      setCalls(d.calls);
+    });
+  }
+
+  function refreshDetail(leadId: string) {
+    startTransition(async () => {
+      const d = await loadLeadDetail(leadId);
+      if (!("error" in d)) {
+        setSelected(d.lead);
+        setCalls(d.calls);
+      }
+      router.refresh(); // reflect status/queue changes in the list + counts
     });
   }
 
   function closeDrawer() {
-    if (!detail) return;
-    const leadId = detail.lead.id;
-    startTransition(async () => {
-      await releaseLead(leadId);
-      router.push(`/dashboard/leads?store=${storeId}&view=${view}`);
-    });
+    const leadId = selected?.id;
+    setSelected(null);
+    setCalls(null);
+    if (leadId) {
+      startTransition(async () => {
+        await releaseLead(leadId);
+        router.refresh();
+      });
+    }
   }
 
   return (
@@ -213,10 +240,12 @@ export function LeadsBoard({
         </div>
       </Card>
 
-      {detail && (
+      {selected && (
         <LeadDrawer
-          detail={detail}
+          lead={selected}
+          calls={calls}
           onClose={closeDrawer}
+          onRegistered={() => refreshDetail(selected.id)}
           closing={pending}
         />
       )}
@@ -225,15 +254,18 @@ export function LeadsBoard({
 }
 
 function LeadDrawer({
-  detail,
+  lead,
+  calls,
   onClose,
+  onRegistered,
   closing,
 }: {
-  detail: { lead: LeadRow; calls: LeadCallRow[] };
+  lead: LeadRow;
+  calls: LeadCallRow[] | null; // null = still loading
   onClose: () => void;
+  onRegistered: () => void;
   closing: boolean;
 }) {
-  const { lead, calls } = detail;
   const handoffTone = categoryOf(lead.status) === "hot" ? "red" : "amber";
   return (
     <>
@@ -292,13 +324,15 @@ function LeadDrawer({
             </p>
           )}
 
-          <CallForm leadId={lead.id} />
+          <CallForm leadId={lead.id} onRegistered={onRegistered} />
 
           <section className="space-y-2">
             <h3 className="text-sm font-semibold tracking-wide text-slate-700 uppercase">
               Historial
             </h3>
-            {calls.length ? (
+            {calls === null ? (
+              <p className="text-sm text-slate-400">Cargando historial…</p>
+            ) : calls.length ? (
               <ul className="space-y-2">
                 {calls.map((c, i) => (
                   <li key={c.id ?? i} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
@@ -332,8 +366,12 @@ function LeadDrawer({
   );
 }
 
-function CallForm({ leadId }: { leadId: string }) {
+function CallForm({ leadId, onRegistered }: { leadId: string; onRegistered: () => void }) {
   const [state, action, pending] = useActionState<LeadActionState, FormData>(registerCall, {});
+  useEffect(() => {
+    if (state.notice) onRegistered();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.notice]);
   return (
     <section className="space-y-3 rounded-xl border border-slate-200 p-4">
       <h3 className="text-sm font-semibold tracking-wide text-slate-700 uppercase">

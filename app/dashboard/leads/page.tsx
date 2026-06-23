@@ -2,7 +2,6 @@ import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import {
   LEAD_VIEWS,
   getLeadCounts,
-  getLeadWithCalls,
   getStoreLeads,
   type LeadView,
 } from "@/lib/leads-access";
@@ -18,7 +17,7 @@ function isLeadView(v: string | undefined): v is LeadView {
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ store?: string; view?: string; lead?: string }>;
+  searchParams: Promise<{ store?: string; view?: string }>;
 }) {
   const sp = await searchParams;
   const stores = await getAccessibleStores();
@@ -32,7 +31,6 @@ export default async function LeadsPage({
   const view: LeadView = isLeadView(sp.view) ? sp.view : "por_llamar";
 
   const [counts, leads] = await Promise.all([getLeadCounts(storeId), getStoreLeads(storeId, view)]);
-  const leadDetail = sp.lead ? await getLeadWithCalls(sp.lead) : null;
   const user = await getCurrentUser();
 
   return (
@@ -42,7 +40,6 @@ export default async function LeadsPage({
       view={view}
       counts={counts}
       leads={leads}
-      detail={leadDetail}
       currentUserId={user?.id ?? ""}
     />
   );

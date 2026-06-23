@@ -3,11 +3,23 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
+import { getLeadWithCalls } from "@/lib/leads-access";
 import { CLAIM_TTL_MINUTES, categoryOf, isValidStatus, labelOf } from "@/lib/leads";
+import type { LeadCallRow, LeadRow } from "@/lib/types";
 
 export interface LeadActionState {
   error?: string;
   notice?: string;
+}
+
+/** Fetch a lead + its call history (RLS-scoped). Drives the drawer client-side. */
+export async function loadLeadDetail(
+  leadId: string,
+): Promise<{ lead: LeadRow; calls: LeadCallRow[] } | { error: string }> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const detail = await getLeadWithCalls(leadId);
+  return detail ?? { error: "No encontrado." };
 }
 
 /** Authorize: the caller must be able to SEE the lead under RLS. Returns its store. */
