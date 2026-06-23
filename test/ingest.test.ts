@@ -170,6 +170,37 @@ describe("processShopifyWebhook", () => {
     expect(fake.processedUpdates).toBe(1);
   });
 
+  it("ignores a non-Kapso order: status ok, nothing recorded", async () => {
+    const { processShopifyWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    // Shopify delivers order webhooks shop-wide; an order without the kapso tag
+    // must not be ingested (parity with the tag:kapso data model).
+    const body = JSON.stringify({
+      id: 9001,
+      name: "#2002",
+      created_at: "2026-06-20T15:00:00Z",
+      total_price: "59.90",
+      currency: "PEN",
+      financial_status: "paid",
+      tags: "whatsapp, promo-whatsapp", // no "kapso"
+      line_items: [{ title: "Gorra", quantity: 1, price: "59.90" }],
+    });
+    const res = await processShopifyWebhook(
+      {
+        storeId: "store-1",
+        topic: "orders/create",
+        rawBody: body,
+        hmacHeader: sign(body),
+        webhookIdHeader: "wh_nonkapso",
+      },
+      fake as any,
+    );
+    expect(res.status).toBe("ok");
+    expect(fake.upsertedOrders).toHaveLength(0); // not ingested
+    expect(fake.insertedWebhookIds.size).toBe(0); // not even recorded
+    expect(fake.recomputeCalls).toHaveLength(0); // no rollup recompute
+  });
+
   it("is idempotent: re-delivering the same body does not duplicate the order", async () => {
     const { processShopifyWebhook } = await import("@/lib/ingest");
     const fake = new FakeSupabase(makeStoreRow());

@@ -123,6 +123,10 @@ export async function getOrders(
         "store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,customer_phone,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items",
       )
       .in("store_id", storeIds)
+      // Kapso orders only (tag:kapso). The webhook path can transiently write a
+      // non-Kapso order before it's tagged; keep the funnel/integrity/export
+      // reads in parity with the headline rollups regardless.
+      .contains("tags", ["kapso"])
       .gte("created_at", startIso)
       .lte("created_at", endIso)
       .order("created_at", { ascending: false })

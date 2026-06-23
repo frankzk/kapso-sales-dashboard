@@ -59,6 +59,17 @@ export function parseTags(
 }
 
 /**
+ * Whether an order is Kapso-attributed — i.e. carries the `kapso` tag
+ * (case-insensitive). Shopify fires order webhooks for the whole shop, so the
+ * webhook ingestion path uses this to keep only Kapso orders, in parity with
+ * the GraphQL reconciliation sync (`buildKapsoOrdersSearchQuery` → `tag:kapso`)
+ * and the dashboard's documented `tag:kapso` data model (see DEPLOY.md §7).
+ */
+export function hasKapsoTag(tags: string[]): boolean {
+  return tags.some((t) => t.toLowerCase() === TAGS.kapso);
+}
+
+/**
  * Build a lower-cased key→value map from REST `note_attributes` ({name,value})
  * or GraphQL `customAttributes` ({key,value}).
  */

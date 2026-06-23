@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import {
   verifyShopifyHmac,
   parseTags,
+  hasKapsoTag,
   noteAttributesToMap,
   extractNumericId,
   deriveOrderFlags,
@@ -228,6 +229,19 @@ describe("refunds & cancellations", () => {
     expect(sumRestRefunds(undefined)).toBe(0);
     expect(sumRestRefunds([])).toBe(0);
     expect(sumRestRefunds([{ transactions: [{ kind: "refund", amount: "12.50" }] }])).toBe(12.5);
+  });
+});
+
+describe("hasKapsoTag", () => {
+  it("true when the kapso tag is present (case-insensitive)", () => {
+    expect(hasKapsoTag(["kapso"])).toBe(true);
+    expect(hasKapsoTag(["whatsapp", "Kapso", "promo-whatsapp"])).toBe(true);
+    expect(hasKapsoTag(["KAPSO"])).toBe(true);
+  });
+  it("false when absent or empty", () => {
+    expect(hasKapsoTag([])).toBe(false);
+    expect(hasKapsoTag(["whatsapp", "contraentrega"])).toBe(false);
+    expect(hasKapsoTag(["kapso-promo"])).toBe(false); // substring, not the tag
   });
 });
 

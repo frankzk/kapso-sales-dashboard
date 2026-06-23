@@ -9,6 +9,7 @@ import { decryptOrNull } from "@/lib/crypto";
 import {
   buildKapsoOrdersSearchQuery,
   fetchOrdersPage,
+  hasKapsoTag,
   mapRestOrder,
   verifyShopifyHmac,
 } from "@/lib/shopify";
@@ -188,6 +189,18 @@ export async function processShopifyWebhook(
   } catch {
     return { status: "error", message: "invalid json" };
   }
+
+  const row = mapRestOrder(payload, params.storeId);
+
+  // Shopify fires order webhooks for the whole shop, but the dashboard must
+  // reflect only Kapso-attributed orders (tag:kapso) — the same set as the
+  // GraphQL reconciliation sync and the Shopify "tag:kapso" view (DEPLOY.md §7).
+  // Drop anything else without recording it; there's nothing for Shopify to
+  // retry, and orders the bot tags after creation arrive via orders/updated.
+  if (!hasKapsoTag(row.tags)) {
+    return { status: "ok" };
+  }
+
   const orderId = payload?.id != null ? String(payload.id) : null;
 
   // Idempotency: the unique (store_id, webhook_id) guards against re-delivery.
@@ -203,7 +216,6 @@ export async function processShopifyWebhook(
     throw new Error(`webhook_events insert: ${insErr.message}`);
   }
 
-  const row = mapRestOrder(payload, params.storeId);
   await upsertOrders(admin, [row]);
 
   if (row.created_at) {

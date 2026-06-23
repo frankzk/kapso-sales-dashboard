@@ -13,4 +13,6 @@
 \ir migrations/0004_leads.sql
 \echo 'Applying 0005_message_timing.sql'
 \ir migrations/0005_message_timing.sql
+\echo 'Applying 0006_kapso_only_orders.sql'
+\ir migrations/0006_kapso_only_orders.sql
 \echo 'Done.'
