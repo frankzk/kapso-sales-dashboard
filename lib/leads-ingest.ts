@@ -179,10 +179,42 @@ export async function linkOrderToLead(
       status: "pedido_generado",
       category: "won",
       needs_attention: false,
-      last_interaction_at: new Date().toISOString(),
     },
     { onConflict: "store_id,phone" },
   );
+}
+
+/**
+ * Link a batch of synced orders to their leads (won) by phone. Resolves each
+ * order's row id once, then marks the matching lead. Lets a full order re-sync
+ * backfill linkage for historical orders (mirrors the webhook path).
+ */
+export async function linkOrdersToLeads(
+  admin: SupabaseClient,
+  storeId: string,
+  orders: { shopify_order_id: number | string | null; customer_phone?: string | null }[],
+): Promise<void> {
+  const withPhone = orders.filter((o) => o.customer_phone && o.shopify_order_id != null);
+  if (!withPhone.length) return;
+
+  const { data } = await admin
+    .from("orders")
+    .select("id, shopify_order_id")
+    .eq("store_id", storeId)
+    .in("shopify_order_id", withPhone.map((o) => o.shopify_order_id) as (number | string)[]);
+
+  const idByShopifyId = new Map<string, string>();
+  for (const r of (data as { id: string; shopify_order_id: number | string }[]) ?? []) {
+    idByShopifyId.set(String(r.shopify_order_id), r.id);
+  }
+
+  for (const o of withPhone) {
+    await linkOrderToLead(admin, {
+      storeId,
+      phone: o.customer_phone ?? null,
+      orderId: idByShopifyId.get(String(o.shopify_order_id)) ?? null,
+    });
+  }
 }
 
 /**

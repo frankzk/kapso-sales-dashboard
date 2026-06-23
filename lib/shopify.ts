@@ -227,6 +227,9 @@ export function mapGraphqlOrder(node: any, storeId: string): OrderRow {
       : null,
     cancelled_at: node?.cancelledAt ?? null,
     total_refunded: toNumber(node?.totalRefundedSet?.shopMoney?.amount) ?? 0,
+    customer_phone: normalizePhone(
+      node?.phone ?? node?.shippingAddress?.phone ?? node?.billingAddress?.phone,
+    ),
     tags,
     ...flags,
     line_items,
@@ -286,7 +289,17 @@ export function buildKapsoOrdersSearchQuery(
   return updatedAtCursorIso ? `${base} updated_at:>=${updatedAtCursorIso}` : base;
 }
 
-export const ORDERS_QUERY = /* GraphQL */ `
+export function buildOrdersQuery(withPhone: boolean): string {
+  // Order/address phone is "protected customer data" — included only on the
+  // first attempt; fetchOrdersPage falls back to the no-phone query if the
+  // store hasn't granted access, so the order sync never breaks.
+  const phoneFields = withPhone
+    ? `
+          phone
+          shippingAddress { phone }
+          billingAddress { phone }`
+    : "";
+  return /* GraphQL */ `
   query KapsoOrders($first: Int!, $after: String, $query: String!) {
     orders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
       edges {
@@ -303,7 +316,7 @@ export const ORDERS_QUERY = /* GraphQL */ `
           currentTotalPriceSet { shopMoney { amount currencyCode } }
           totalRefundedSet { shopMoney { amount } }
           tags
-          customAttributes { key value }
+          customAttributes { key value }${phoneFields}
           lineItems(first: 100) {
             edges {
               node {
@@ -320,6 +333,14 @@ export const ORDERS_QUERY = /* GraphQL */ `
     }
   }
 `;
+}
+
+export const ORDERS_QUERY = buildOrdersQuery(false);
+const ORDERS_QUERY_WITH_PHONE = buildOrdersQuery(true);
+
+// Per-process memo: once a store proves it can't read protected phone data,
+// stop asking for it (avoids a failed+retry round-trip on every page).
+let ordersPhoneSupported = true;
 
 export interface OrdersPage {
   orders: OrderRow[];
@@ -338,15 +359,31 @@ export async function fetchOrdersPage(
     first?: number;
   },
 ): Promise<OrdersPage> {
-  const data = await shopifyGraphQL<any>({
-    ...opts,
-    query: ORDERS_QUERY,
-    variables: {
-      first: opts.first ?? 100,
-      after: opts.after ?? null,
-      query: opts.searchQuery,
-    },
-  });
+  const variables = {
+    first: opts.first ?? 100,
+    after: opts.after ?? null,
+    query: opts.searchQuery,
+  };
+  let data: any;
+  try {
+    data = await shopifyGraphQL<any>({
+      ...opts,
+      query: ordersPhoneSupported ? ORDERS_QUERY_WITH_PHONE : ORDERS_QUERY,
+      variables,
+    });
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e).toLowerCase();
+    const accessIssue =
+      /access denied|access_denied|protected customer|not authorized|cannot query field|doesn't exist/.test(
+        msg,
+      );
+    if (ordersPhoneSupported && accessIssue) {
+      ordersPhoneSupported = false; // degrade gracefully — keep syncing without phone
+      data = await shopifyGraphQL<any>({ ...opts, query: ORDERS_QUERY, variables });
+    } else {
+      throw e;
+    }
+  }
 
   const edges: any[] = data?.orders?.edges ?? [];
   const orders = edges.map((e) => mapGraphqlOrder(e.node, opts.storeId));

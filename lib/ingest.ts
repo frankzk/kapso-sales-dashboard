@@ -23,7 +23,7 @@ import {
   summarizeApiLogs,
   tzParts,
 } from "@/lib/metrics";
-import { linkOrderToLead, syncStoreLeads } from "@/lib/leads-ingest";
+import { linkOrderToLead, linkOrdersToLeads, syncStoreLeads } from "@/lib/leads-ingest";
 import type { ConversationRow, OrderRow } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -283,6 +283,7 @@ export async function runStoreSync(
         });
         if (page.orders.length) {
           await upsertOrders(admin, page.orders);
+          await linkOrdersToLeads(admin, storeId, page.orders); // order → lead (won)
           report.shopifyOrders += page.orders.length;
           for (const o of page.orders) {
             if (o.created_at) affectedDates.add(tzParts(o.created_at, creds.timezone).date);

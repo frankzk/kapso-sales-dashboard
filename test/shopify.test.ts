@@ -172,6 +172,19 @@ describe("mapGraphqlOrder", () => {
       price: 250,
     });
   });
+
+  it("captures customer_phone (normalized) from order/shipping/billing phone", () => {
+    expect(mapGraphqlOrder({ ...node, phone: "+51 980 694 766" }, "s").customer_phone).toBe(
+      "51980694766",
+    );
+    expect(
+      mapGraphqlOrder({ ...node, shippingAddress: { phone: "980694766" } }, "s").customer_phone,
+    ).toBe("51980694766");
+    expect(
+      mapGraphqlOrder({ ...node, billingAddress: { phone: "51980694766" } }, "s").customer_phone,
+    ).toBe("51980694766");
+    expect(mapGraphqlOrder(node, "s").customer_phone).toBeNull(); // no phone fetched → null
+  });
 });
 
 describe("refunds & cancellations", () => {
