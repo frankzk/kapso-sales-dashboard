@@ -12,6 +12,7 @@ import {
   businessBreakdown,
   comparePeriods,
   conversationalFunnel,
+  dateHourPattern,
   formatCurrency,
   formatDuration,
   formatPct,
@@ -25,6 +26,7 @@ import {
 import { BarList, Card, EmptyState, SimpleTable, cn, type BarItem } from "@/components/ui";
 import { ConversionOrdersTrend, RevenueOrdersChart } from "@/components/charts";
 import { DashboardControls } from "@/components/controls";
+import { HourPattern } from "@/components/hour-pattern";
 import { KpiCard } from "@/components/kpi-cards";
 import { HorizontalFunnel } from "@/components/funnel-horizontal";
 import { LossReasonBars, LostRevenueCards } from "@/components/loss-reasons";
@@ -37,6 +39,7 @@ import {
   IconMoney,
   IconTrendingUp,
 } from "@/components/icons";
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 function pctDelta(cur: number, prev: number): number | null {
@@ -148,6 +151,7 @@ export function ExecutiveDashboard({
   const fine = funnelFineLink(orders, conversations);
   const breakdown = businessBreakdown(orders);
   const products = topProducts(orders, 6);
+  const pattern = singleStore ? dateHourPattern(orders, timezone) : null;
 
   // Leads-derived (Phase B)
   const leadList = leads ?? [];
@@ -193,6 +197,14 @@ export function ExecutiveDashboard({
             Resumen ejecutivo de ventas por WhatsApp · {range.from} → {range.to}
             {singleStore ? ` · ${singleStore.shopify_domain}` : ` · ${stores.length} tienda(s)`}
           </p>
+          {singleStore && (
+            <Link
+              href={`/dashboard/${singleStore.id}/settings`}
+              className="mt-1 inline-block text-sm font-medium text-brand-700 hover:underline"
+            >
+              Ajustes de la tienda →
+            </Link>
+          )}
         </div>
         <DashboardControls stores={stores} scope={scope} from={range.from} to={range.to} />
       </div>
@@ -265,6 +277,11 @@ export function ExecutiveDashboard({
             <p className="text-sm text-slate-400">Sin datos en el rango.</p>
           )}
         </Module>
+        {singleStore && pattern ? (
+          <Module title="Patrón fecha / hora" subtitle={timezone} info className="lg:col-span-4">
+            <HourPattern pattern={pattern} />
+          </Module>
+        ) : (
         <Module
           title="Resumen por tienda"
           className="lg:col-span-4"
@@ -303,6 +320,7 @@ export function ExecutiveDashboard({
             ]}
           />
         </Module>
+        )}
         <Module title="Integridad de conversión" info className="lg:col-span-3">
           <dl className="space-y-2 text-sm">
             <Row k="Órdenes con conversación" v={fine.ordersWithConversationId} />

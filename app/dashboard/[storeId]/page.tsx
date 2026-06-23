@@ -3,13 +3,14 @@ import {
   getAccessibleStores,
   getConversations,
   getLatestOps,
+  getLeadsForDashboard,
   getOrders,
   getRollups,
   getUserRoleSummary,
   parseRange,
   previousRange,
 } from "@/lib/access";
-import { DashboardView } from "@/components/dashboard-view";
+import { ExecutiveDashboard } from "@/components/executive-dashboard";
 
 export const dynamic = "force-dynamic";
 
@@ -30,16 +31,17 @@ export default async function StorePage({
   if (!store) notFound(); // not accessible (RLS) or non-existent
 
   const prev = previousRange(range);
-  const [rollups, prevRollups, orders, conversations, ops] = await Promise.all([
+  const [rollups, prevRollups, orders, conversations, leads, ops] = await Promise.all([
     getRollups([storeId], range),
     getRollups([storeId], prev),
     getOrders([storeId], range),
     getConversations([storeId], range),
+    getLeadsForDashboard([storeId], range),
     getLatestOps([storeId]),
   ]);
 
   return (
-    <DashboardView
+    <ExecutiveDashboard
       stores={stores}
       scope={storeId}
       range={range}
@@ -47,6 +49,7 @@ export default async function StorePage({
       prevRollups={prevRollups}
       orders={orders}
       conversations={conversations}
+      leads={leads}
       ops={ops}
       currency={store.currency}
       timezone={store.timezone}
