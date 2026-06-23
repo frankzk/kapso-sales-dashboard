@@ -4,13 +4,14 @@ import {
   getAccessibleStores,
   getConversations,
   getLatestOps,
+  getLeadsForDashboard,
   getOrders,
   getRollups,
   getUserRoleSummary,
   parseRange,
   previousRange,
 } from "@/lib/access";
-import { DashboardView } from "@/components/dashboard-view";
+import { ExecutiveDashboard } from "@/components/executive-dashboard";
 import { EmptyState } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -40,11 +41,12 @@ export default async function ConsolidatedPage({
 
   const storeIds = stores.map((s) => s.id);
   const prev = previousRange(range);
-  const [rollups, prevRollups, orders, conversations, ops] = await Promise.all([
+  const [rollups, prevRollups, orders, conversations, leads, ops] = await Promise.all([
     getRollups(storeIds, range),
     getRollups(storeIds, prev),
     getOrders(storeIds, range),
     getConversations(storeIds, range),
+    getLeadsForDashboard(storeIds, range),
     getLatestOps(storeIds),
   ]);
 
@@ -52,7 +54,7 @@ export default async function ConsolidatedPage({
   const currency = stores.every((s) => s.currency === first.currency) ? first.currency : "PEN";
 
   return (
-    <DashboardView
+    <ExecutiveDashboard
       stores={stores}
       scope="all"
       range={range}
@@ -60,6 +62,7 @@ export default async function ConsolidatedPage({
       prevRollups={prevRollups}
       orders={orders}
       conversations={conversations}
+      leads={leads}
       ops={ops}
       currency={currency}
       timezone={first.timezone}

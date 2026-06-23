@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { ConversationRow, DailyRollupRow, OrderRow } from "@/lib/types";
+import type { ConversationRow, DailyRollupRow, LeadRow, OrderRow } from "@/lib/types";
 import {
   salesSummary,
   salesSeriesByDay,
@@ -15,6 +15,12 @@ import {
   summarizeApiLogs,
   computeDailyRollups,
   tzParts,
+  lossReasons,
+  lostRevenueByReason,
+  botVsAdvisor,
+  conversationalFunnel,
+  funnelHealth,
+  formatDuration,
 } from "@/lib/metrics";
 
 const TZ = "America/Lima"; // UTC-5, no DST — deterministic
@@ -53,6 +59,36 @@ function conv(p: Partial<ConversationRow> = {}): ConversationRow {
     status: "ended",
     message_count: 5,
     last_message_at: null,
+    ...p,
+  };
+}
+
+let leadSeq = 0;
+function lead(p: Partial<LeadRow> = {}): LeadRow {
+  leadSeq += 1;
+  return {
+    id: `l${leadSeq}`,
+    store_id: "s1",
+    phone: `51900000${leadSeq}`,
+    wa_id: null,
+    name: null,
+    email: null,
+    first_seen_at: "2026-06-20T15:00:00Z",
+    last_interaction_at: "2026-06-20T15:00:00Z",
+    kapso_conversation_id: null,
+    bot_compra_state: null,
+    handoff_reason: null,
+    handoff_context: null,
+    handoff_at: null,
+    category: "open",
+    status: "nuevo",
+    needs_attention: false,
+    order_id: null,
+    has_order: false,
+    claimed_by: null,
+    claimed_at: null,
+    closed_by: null,
+    next_followup_at: null,
     ...p,
   };
 }
@@ -326,5 +362,108 @@ describe("tzParts", () => {
     expect(tzParts("2026-06-20T15:00:00Z", TZ)).toEqual({ date: "2026-06-20", hour: 10, weekday: 6 });
     // crosses midnight backwards
     expect(tzParts("2026-06-20T02:00:00Z", TZ)).toEqual({ date: "2026-06-19", hour: 21, weekday: 5 });
+  });
+});
+
+describe("Family 5 — Leads-derived", () => {
+  it("lossReasons buckets non-buying leads and excludes won/hot", () => {
+    const result = lossReasons([
+      lead({ status: "nuevo" }),
+      lead({ status: "nuevo" }),
+      lead({ status: "nuevo" }),
+      lead({ status: "no_responde" }),
+      lead({ status: "ya_compro_otro_lado", category: "lost" }),
+      lead({ status: "sin_stock", category: "lost" }),
+      lead({ status: "solo_informacion", category: "lost" }),
+      lead({ status: "pedido_generado", category: "won", has_order: true }), // excluded
+      lead({ status: "yape_por_verificar", category: "hot" }), // excluded
+    ]);
+    expect(result.total).toBe(7);
+    const byBucket = Object.fromEntries(result.reasons.map((r) => [r.bucket, r.count]));
+    expect(byBucket).toEqual({ no_respondio: 4, compro_otro_lado: 1, sin_stock: 1, solo_info: 1 });
+    expect(result.reasons[0]!.bucket).toBe("no_respondio");
+    expect(result.reasons[0]!.pct).toBe(57.14);
+  });
+
+  it("lostRevenueByReason estimates count × AOV", () => {
+    const loss = lossReasons([
+      lead({ status: "nuevo" }),
+      lead({ status: "nuevo" }),
+      lead({ status: "sin_stock", category: "lost" }),
+    ]);
+    const lr = lostRevenueByReason(loss, 100);
+    expect(lr.total).toBe(300);
+    expect(Object.fromEntries(lr.items.map((i) => [i.bucket, i.estRevenue]))).toEqual({
+      no_respondio: 200,
+      sin_stock: 100,
+    });
+  });
+
+  it("botVsAdvisor splits by handoff and counts orders", () => {
+    const bva = botVsAdvisor([
+      lead({ handoff_at: null, has_order: true }),
+      lead({ handoff_at: null, has_order: false }),
+      lead({ handoff_at: "2026-06-20T16:00:00Z", has_order: true }),
+      lead({ handoff_at: "2026-06-20T16:00:00Z", has_order: false }),
+    ]);
+    expect(bva.bot).toEqual({ leads: 2, orders: 1, conversionRate: 0.5 });
+    expect(bva.advisor).toEqual({ leads: 2, orders: 1, conversionRate: 0.5 });
+  });
+
+  it("conversationalFunnel builds 6 monotonic stages with step %", () => {
+    const stages = conversationalFunnel({
+      conversations: [conv(), conv(), conv(), conv()], // 4 convs × 5 msgs = 20 inbound proxy
+      leads: [
+        lead({ category: "won", has_order: true }),
+        lead({ status: "casi_cierra", category: "hot" }),
+        lead({ status: "otros_productos" }),
+        lead({ status: "nuevo" }),
+      ],
+      orders: [order()],
+    });
+    expect(stages.map((s) => s.key)).toEqual([
+      "mensajes",
+      "conversaciones",
+      "interesados",
+      "datos",
+      "compromiso",
+      "pedidos",
+    ]);
+    expect(stages.map((s) => s.value)).toEqual([20, 4, 3, 2, 1, 1]);
+    expect(stages[0]!.stepPct).toBeNull();
+    expect(stages[1]!.stepPct).toBe(0.2);
+    expect(stages[2]!.stepPct).toBe(0.75);
+    expect(stages[4]!.stepPct).toBe(0.5);
+  });
+
+  it("conversationalFunnel honors an explicit inboundMessages override", () => {
+    const stages = conversationalFunnel({
+      conversations: [conv()],
+      leads: [],
+      orders: [],
+      inboundMessages: 99,
+    });
+    expect(stages[0]!.value).toBe(99);
+  });
+
+  it("funnelHealth flags step thresholds + the worst step", () => {
+    const h = funnelHealth([
+      { key: "a", label: "A", value: 100, stepPct: null },
+      { key: "b", label: "B", value: 80, stepPct: 0.8 },
+      { key: "c", label: "C", value: 40, stepPct: 0.5 },
+      { key: "d", label: "D", value: 8, stepPct: 0.2 },
+    ]);
+    expect(h.stages.map((s) => s.status)).toEqual(["green", "green", "amber", "red"]);
+    expect(h.critical?.key).toBe("d");
+  });
+});
+
+describe("formatDuration", () => {
+  it("formats seconds into a human duration", () => {
+    expect(formatDuration(45)).toBe("45s");
+    expect(formatDuration(72)).toBe("1m 12s");
+    expect(formatDuration(120)).toBe("2m");
+    expect(formatDuration(3660)).toBe("1h 1m");
+    expect(formatDuration(null)).toBe("—");
   });
 });

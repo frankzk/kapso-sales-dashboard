@@ -4,6 +4,7 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
+  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -11,9 +12,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-
-const BRAND = "#2f74ff";
-const GREEN = "#10b981";
+import { CHART } from "@/components/palette";
 
 function shortDate(d: string): string {
   // "2026-06-20" -> "06-20"
@@ -31,13 +30,13 @@ export function RevenueOrdersChart({
         <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
           <defs>
             <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor={BRAND} stopOpacity={0.25} />
-              <stop offset="95%" stopColor={BRAND} stopOpacity={0} />
+              <stop offset="5%" stopColor={CHART.brand} stopOpacity={0.25} />
+              <stop offset="95%" stopColor={CHART.brand} stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" />
-          <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: "#94a3b8" }} />
-          <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} width={48} />
+          <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} />
+          <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: CHART.slate }} />
+          <YAxis tick={{ fontSize: 11, fill: CHART.slate }} width={48} />
           <Tooltip
             labelFormatter={(l) => `Día ${l}`}
             formatter={(value, name) => [
@@ -49,7 +48,7 @@ export function RevenueOrdersChart({
           <Area
             type="monotone"
             dataKey="revenue"
-            stroke={BRAND}
+            stroke={CHART.brand}
             strokeWidth={2}
             fill="url(#rev)"
             name="revenue"
@@ -69,11 +68,11 @@ export function ConversionChart({
     <div className="h-56 w-full">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" />
-          <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: "#94a3b8" }} />
+          <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} />
+          <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: CHART.slate }} />
           <YAxis
             tickFormatter={(v: number) => `${Math.round(v * 100)}%`}
-            tick={{ fontSize: 11, fill: "#94a3b8" }}
+            tick={{ fontSize: 11, fill: CHART.slate }}
             width={44}
           />
           <Tooltip
@@ -84,7 +83,69 @@ export function ConversionChart({
             ]}
             contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12 }}
           />
-          <Line type="monotone" dataKey="conversionRate" stroke={GREEN} strokeWidth={2} dot={false} />
+          <Line type="monotone" dataKey="conversionRate" stroke={CHART.green} strokeWidth={2} dot={false} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/**
+ * Dual-axis trend: conversion % (green, left axis) overlaid with order count
+ * (blue, right axis) — the "Tendencia de Conversión y Pedidos" module.
+ */
+export function ConversionOrdersTrend({
+  data,
+}: {
+  data: Array<{ date: string; conversionRate: number; orders: number }>;
+}) {
+  return (
+    <div className="h-52 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} />
+          <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: CHART.slate }} />
+          <YAxis
+            yAxisId="conv"
+            tickFormatter={(v: number) => `${Math.round(v * 100)}%`}
+            tick={{ fontSize: 11, fill: CHART.slate }}
+            width={40}
+          />
+          <YAxis
+            yAxisId="orders"
+            orientation="right"
+            tick={{ fontSize: 11, fill: CHART.slate }}
+            width={32}
+            allowDecimals={false}
+          />
+          <Tooltip
+            labelFormatter={(l) => `Día ${l}`}
+            formatter={(value, name) =>
+              name === "Conversión"
+                ? [`${((typeof value === "number" ? value : Number(value)) * 100).toFixed(1)}%`, name]
+                : [typeof value === "number" ? value : Number(value), name]
+            }
+            contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12 }}
+          />
+          <Legend wrapperStyle={{ fontSize: 12 }} iconType="plainline" />
+          <Line
+            yAxisId="conv"
+            type="monotone"
+            dataKey="conversionRate"
+            name="Conversión"
+            stroke={CHART.green}
+            strokeWidth={2}
+            dot={false}
+          />
+          <Line
+            yAxisId="orders"
+            type="monotone"
+            dataKey="orders"
+            name="Pedidos"
+            stroke={CHART.blue}
+            strokeWidth={2}
+            dot={false}
+          />
         </LineChart>
       </ResponsiveContainer>
     </div>

@@ -6,6 +6,7 @@ import { createServerSupabase } from "@/lib/db";
 import type {
   ConversationRow,
   DailyRollupRow,
+  LeadRow,
   OrderRow,
   StoreSummary,
 } from "@/lib/types";
@@ -119,7 +120,7 @@ export async function getOrders(
     const { data, error } = await sb
       .from("orders")
       .select(
-        "store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items",
+        "store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,customer_phone,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items",
       )
       .in("store_id", storeIds)
       .gte("created_at", startIso)
@@ -154,6 +155,37 @@ export async function getConversations(
       .range(from, from + PAGE_SIZE - 1);
     if (error || !data?.length) break;
     out.push(...(data as ConversationRow[]));
+    if (data.length < PAGE_SIZE) break;
+  }
+  return out;
+}
+
+/**
+ * Leads active in the range (last_interaction within bounds), RLS-scoped and
+ * paginated. Feeds the leads-derived dashboard modules (loss reasons,
+ * bot-vs-advisor, conversational funnel). Only the columns the metrics need.
+ */
+export async function getLeadsForDashboard(
+  storeIds: string[],
+  range: DateRange,
+): Promise<LeadRow[]> {
+  if (!storeIds.length) return [];
+  const sb = await createServerSupabase();
+  const { startIso, endIso } = rangeBounds(range);
+  const out: LeadRow[] = [];
+  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+    const { data, error } = await sb
+      .from("leads")
+      .select(
+        "id,store_id,phone,wa_id,name,email,first_seen_at,last_interaction_at,kapso_conversation_id,handoff_reason,handoff_at,category,status,needs_attention,order_id,has_order",
+      )
+      .in("store_id", storeIds)
+      .gte("last_interaction_at", startIso)
+      .lte("last_interaction_at", endIso)
+      .order("last_interaction_at", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error || !data?.length) break;
+    out.push(...(data as LeadRow[]));
     if (data.length < PAGE_SIZE) break;
   }
   return out;

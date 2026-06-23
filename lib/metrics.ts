@@ -11,6 +11,7 @@
 import type {
   ConversationRow,
   DailyRollupRow,
+  LeadRow,
   OrderRow,
 } from "@/lib/types";
 
@@ -577,6 +578,249 @@ export function computeDailyRollups(
 }
 
 // ===========================================================================
+// Family 5 — Leads-derived (loss reasons, channels, conversational funnel)
+//
+// These read the `leads` table (phone-based CRM rows the bot/agents maintain).
+// The status taxonomy lives in lib/leads.ts; the bucket mappings below are the
+// product-tunable part — adjust as the CRM grows new statuses.
+// ===========================================================================
+
+/** A lead status code → "why didn't they buy" bucket. */
+const LOSS_BUCKET_BY_STATUS: Record<string, string> = {
+  // not reached / no firm answer / not worked yet
+  nuevo: "no_respondio",
+  no_responde: "no_respondio",
+  cuelga: "no_respondio",
+  buzon: "no_respondio",
+  nr_no_existe: "no_respondio",
+  nr_extranjero: "no_respondio",
+  contactado_dejo_wsp: "no_respondio",
+  // bought elsewhere
+  ya_compro_otro_lado: "compro_otro_lado",
+  // only wanted info / asked other products
+  solo_informacion: "solo_info",
+  otros_productos: "solo_info",
+  // out of stock
+  sin_stock: "sin_stock",
+  // cancelled
+  cancelado: "cancelado",
+  cancelado_cliente: "cancelado",
+  // everything else
+  lista_negra: "otros",
+  duplicado: "otros",
+};
+
+const LOSS_BUCKET_LABEL: Record<string, string> = {
+  no_respondio: "No respondió / sin contactar",
+  compro_otro_lado: "Compró en otro lado",
+  solo_info: "Solo información",
+  sin_stock: "Sin stock",
+  cancelado: "Cancelado",
+  otros: "Otros",
+};
+
+const LOSS_BUCKET_ORDER = [
+  "no_respondio",
+  "compro_otro_lado",
+  "solo_info",
+  "sin_stock",
+  "cancelado",
+  "otros",
+];
+
+export interface LossReason {
+  bucket: string;
+  label: string;
+  count: number;
+  pct: number; // 0..100 share of non-buyers
+}
+
+export interface LossReasonsResult {
+  total: number;
+  reasons: LossReason[];
+}
+
+/**
+ * "¿Por qué NO compraron?" — bucket the non-buying leads by status. The universe
+ * is leads with no order that aren't actively hot (in-progress) or won.
+ */
+export function lossReasons(leads: LeadRow[]): LossReasonsResult {
+  const counts = new Map<string, number>();
+  for (const l of leads) {
+    if (l.has_order) continue;
+    if (l.category === "won" || l.category === "hot") continue;
+    const bucket = LOSS_BUCKET_BY_STATUS[l.status] ?? "otros";
+    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+  }
+  const total = [...counts.values()].reduce((s, n) => s + n, 0);
+  const reasons = LOSS_BUCKET_ORDER.map((bucket) => {
+    const count = counts.get(bucket) ?? 0;
+    return {
+      bucket,
+      label: LOSS_BUCKET_LABEL[bucket]!,
+      count,
+      pct: total ? round2((count / total) * 100) : 0,
+    };
+  })
+    .filter((r) => r.count > 0)
+    .sort((a, b) => b.count - a.count);
+  return { total, reasons };
+}
+
+export interface LostRevenue {
+  bucket: string;
+  label: string;
+  lostCount: number;
+  estRevenue: number;
+}
+
+/**
+ * Estimated lost revenue per reason = lost-lead count × period AOV. A coarse but
+ * defensible "if these had converted at the average ticket" estimate.
+ */
+export function lostRevenueByReason(
+  loss: LossReasonsResult,
+  aov: number,
+): { items: LostRevenue[]; total: number } {
+  const items = loss.reasons.map((r) => ({
+    bucket: r.bucket,
+    label: r.label,
+    lostCount: r.count,
+    estRevenue: round2(r.count * aov),
+  }));
+  return { items, total: round2(items.reduce((s, i) => s + i.estRevenue, 0)) };
+}
+
+export interface ChannelFunnel {
+  leads: number;
+  orders: number;
+  conversionRate: number; // 0..1
+}
+
+export interface BotVsAdvisor {
+  bot: ChannelFunnel;
+  advisor: ChannelFunnel;
+}
+
+/**
+ * Bot-handled vs advisor-handled performance. v1 attributes a lead to the
+ * advisor channel when the bot escalated it (handoff_at set); everything the
+ * bot handled end-to-end is the bot channel. Refine later with vendedora-tagged
+ * orders once the leads "generate order" flow tags them.
+ */
+export function botVsAdvisor(leads: LeadRow[]): BotVsAdvisor {
+  const mk = (subset: LeadRow[]): ChannelFunnel => {
+    const n = subset.length;
+    const orders = subset.filter((l) => l.has_order).length;
+    return { leads: n, orders, conversionRate: n ? round2((orders / n) * 10000) / 10000 : 0 };
+  };
+  return {
+    bot: mk(leads.filter((l) => l.handoff_at == null)),
+    advisor: mk(leads.filter((l) => l.handoff_at != null)),
+  };
+}
+
+export interface FunnelStage {
+  key: string;
+  label: string;
+  value: number;
+  stepPct: number | null; // 0..1 conversion vs. the previous stage (null for the first)
+}
+
+// Lead statuses that signal genuine engagement / data capture / commitment.
+const INTERESADOS_STATUSES = new Set([
+  "casi_cierra",
+  "yape_por_verificar",
+  "otros_productos",
+  "contactado_dejo_wsp",
+]);
+const DATOS_STATUSES = new Set(["casi_cierra", "yape_por_verificar"]);
+
+/**
+ * The 6-stage conversational funnel. Top two stages come from messages/
+ * conversations; the middle three from lead engagement signals; the last from
+ * actual orders. `inboundMessages` (Phase C) overrides the message proxy.
+ */
+export function conversationalFunnel(input: {
+  conversations: ConversationRow[];
+  leads: LeadRow[];
+  orders: OrderRow[];
+  inboundMessages?: number | null;
+}): FunnelStage[] {
+  const { conversations, leads, orders } = input;
+  const isWon = (l: LeadRow) => l.category === "won" || l.has_order;
+  const inbound =
+    input.inboundMessages ?? conversations.reduce((s, c) => s + (c.message_count ?? 0), 0);
+  const raw = [
+    { key: "mensajes", label: "Mensajes entrantes", value: inbound },
+    { key: "conversaciones", label: "Conversaciones iniciadas", value: conversations.length },
+    {
+      key: "interesados",
+      label: "Interesados reales",
+      value: leads.filter((l) => isWon(l) || INTERESADOS_STATUSES.has(l.status)).length,
+    },
+    {
+      key: "datos",
+      label: "Datos capturados",
+      value: leads.filter((l) => isWon(l) || DATOS_STATUSES.has(l.status)).length,
+    },
+    {
+      key: "compromiso",
+      label: "Compromiso de compra",
+      value: leads.filter((l) => isWon(l) || l.status === "yape_por_verificar").length,
+    },
+    { key: "pedidos", label: "Pedidos creados", value: activeOrders(orders).length },
+  ];
+  return raw.map((s, i) => {
+    const prev = i === 0 ? null : raw[i - 1]!.value;
+    return {
+      ...s,
+      stepPct: prev ? round2((s.value / prev) * 10000) / 10000 : i === 0 ? null : null,
+    };
+  });
+}
+
+export type HealthStatus = "green" | "amber" | "red";
+
+export interface StageHealth {
+  key: string;
+  label: string;
+  stepPct: number | null;
+  status: HealthStatus;
+}
+
+export interface FunnelHealthResult {
+  stages: StageHealth[];
+  critical: StageHealth | null;
+}
+
+/**
+ * Heuristic health per funnel step: green if the step conversion clears the
+ * green threshold, amber above the amber threshold, else red. The critical
+ * point is the worst step. Thresholds are tunable to the business benchmarks.
+ */
+export function funnelHealth(
+  stages: FunnelStage[],
+  thresholds: { green: number; amber: number } = { green: 0.6, amber: 0.3 },
+): FunnelHealthResult {
+  const out: StageHealth[] = stages.map((s) => {
+    let status: HealthStatus = "green";
+    if (s.stepPct != null) {
+      if (s.stepPct >= thresholds.green) status = "green";
+      else if (s.stepPct >= thresholds.amber) status = "amber";
+      else status = "red";
+    }
+    return { key: s.key, label: s.label, stepPct: s.stepPct, status };
+  });
+  let critical: StageHealth | null = null;
+  for (const s of out) {
+    if (s.stepPct == null) continue;
+    if (!critical || (critical.stepPct ?? 1) > s.stepPct) critical = s;
+  }
+  return { stages: out, critical };
+}
+
+// ===========================================================================
 // Formatting helpers (used by the UI)
 // ===========================================================================
 
@@ -590,4 +834,18 @@ export function formatCurrency(amount: number, currency = "PEN", locale = "es-PE
 
 export function formatPct(ratio: number, digits = 1): string {
   return `${(ratio * 100).toFixed(digits)}%`;
+}
+
+/** Human duration from seconds: "45s", "1m 12s", "2h 5m". null → "—". */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds)) return "—";
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) {
+    const rem = s % 60;
+    return rem ? `${m}m ${rem}s` : `${m}m`;
+  }
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
 }
