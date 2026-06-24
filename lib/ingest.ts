@@ -26,6 +26,7 @@ import {
   tzParts,
 } from "@/lib/metrics";
 import {
+  flagOverdueFollowups,
   linkOrderToLead,
   linkOrdersToLeads,
   syncStoreLeads,
@@ -377,6 +378,13 @@ export async function runStoreSync(
     } catch (e: any) {
       report.errors.push(`leads: ${e.message}`);
     }
+  }
+
+  // 2c) Bubble overdue follow-ups back up (needs_attention) so they don't slip.
+  try {
+    await flagOverdueFollowups(admin, storeId);
+  } catch (e: any) {
+    report.errors.push(`followups: ${e.message}`);
   }
 
   // 3) Operational snapshot (best-effort; never fails the run)

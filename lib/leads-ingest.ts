@@ -276,6 +276,23 @@ async function enrichLeadsFromConversations(
   return stats;
 }
 
+/** Bubble overdue follow-ups back up: open/hot leads whose next_followup_at has
+ *  passed get needs_attention=true so they float to the top of the queue ("Por
+ *  llamar" / "Seguimientos" sort needs_attention first). Idempotent — only flips
+ *  rows still at false. Returns how many it flagged. */
+export async function flagOverdueFollowups(admin: SupabaseClient, storeId: string): Promise<number> {
+  const { data } = await admin
+    .from("leads")
+    .update({ needs_attention: true })
+    .eq("store_id", storeId)
+    .in("category", ["open", "hot"])
+    .not("next_followup_at", "is", null)
+    .lte("next_followup_at", new Date().toISOString())
+    .eq("needs_attention", false)
+    .select("id");
+  return (data as { id: string }[] | null)?.length ?? 0;
+}
+
 /** Mark the lead for an order's customer as won (sticky), creating it if new. */
 export async function linkOrderToLead(
   admin: SupabaseClient,

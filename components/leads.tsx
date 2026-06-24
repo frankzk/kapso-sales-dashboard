@@ -41,6 +41,25 @@ function fmtDate(value: string | null | undefined): string {
   return new Date(value).toLocaleString("es-PE");
 }
 
+/** Whole days since a timestamp (null if absent). */
+function daysSince(value: string | null | undefined): number | null {
+  if (!value) return null;
+  return Math.floor((Date.now() - new Date(value).getTime()) / 86_400_000);
+}
+
+/** Aging chip for active leads — flags the ones going cold (anti-fuga). */
+function AgingBadge({ at }: { at: string | null | undefined }) {
+  const d = daysSince(at);
+  if (d == null || d < 1) return null;
+  const cls =
+    d >= 7 ? "bg-red-100 text-red-700" : d >= 3 ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500";
+  return (
+    <span className={cn("ml-2 whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", cls)}>
+      hace {d} día{d === 1 ? "" : "s"}
+    </span>
+  );
+}
+
 function StatusBadge({ status, needsAttention }: { status: string; needsAttention?: boolean }) {
   return (
     <span
@@ -285,6 +304,11 @@ export function LeadsBoard({
                   !!lead.claimed_by &&
                   isClaimActive(lead.claimed_at) &&
                   lead.claimed_by !== currentUserId;
+                const active = categoryOf(lead.status) === "open" || categoryOf(lead.status) === "hot";
+                const overdue =
+                  active &&
+                  !!lead.next_followup_at &&
+                  new Date(lead.next_followup_at).getTime() <= Date.now();
                 return (
                   <tr key={lead.id} className="border-b border-slate-100 last:border-0">
                     <td className="py-2.5 text-slate-800">{lead.name || lead.phone}</td>
@@ -298,9 +322,20 @@ export function LeadsBoard({
                         {lead.phone}
                       </a>
                     </td>
-                    <td className="py-2.5 text-slate-600">{fmtDate(lead.last_interaction_at)}</td>
+                    <td className="py-2.5 text-slate-600">
+                      {fmtDate(lead.last_interaction_at)}
+                      {active && <AgingBadge at={lead.last_interaction_at} />}
+                    </td>
                     <td className="py-2.5">
                       <StatusBadge status={lead.status} needsAttention={lead.needs_attention} />
+                      {overdue && (
+                        <span
+                          className="ml-1 whitespace-nowrap rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700"
+                          title="Seguimiento vencido"
+                        >
+                          ⏰ vencido
+                        </span>
+                      )}
                     </td>
                     <td className="py-2.5 text-right">
                       <button
