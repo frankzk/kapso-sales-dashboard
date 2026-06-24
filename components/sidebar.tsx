@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentType, SVGProps } from "react";
 import { cn } from "@/components/ui";
-import { IconChat, IconGrid, IconPlug, IconStore, IconUsers } from "@/components/icons";
+import { IconChat, IconGrid, IconHeadset, IconPlug, IconStore, IconUsers } from "@/components/icons";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 interface NavItem {
@@ -18,6 +18,7 @@ function navItems(isVendedoraOnly: boolean): NavItem[] {
   return [
     { href: "/dashboard", label: "Consolidado", icon: IconGrid },
     { href: "/dashboard/leads", label: "Leads", icon: IconChat },
+    { href: "/dashboard/productividad", label: "Productividad", icon: IconHeadset },
     { href: "/dashboard/stores", label: "Tiendas", icon: IconStore },
     { href: "/dashboard/team", label: "Equipo", icon: IconUsers },
     { href: "/dashboard/stores/new", label: "Conectar tienda", icon: IconPlug },
