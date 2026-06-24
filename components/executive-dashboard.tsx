@@ -10,6 +10,7 @@ import {
   aggregateRollups,
   botVsAdvisor,
   businessBreakdown,
+  campaignBreakdown,
   comparePeriods,
   conversationalFunnel,
   dateHourPattern,
@@ -160,6 +161,7 @@ export function ExecutiveDashboard({
   const lostRev = lostRevenueByReason(loss, totals.aov);
   const channels = botVsAdvisor(leadList);
   const sourceStats = sourceBreakdown(leadList, orders);
+  const campaignStats = campaignBreakdown(leadList, orders);
   const funnelStages = conversationalFunnel({
     conversations,
     leads: leadList,
@@ -300,6 +302,49 @@ export function ExecutiveDashboard({
                   render: (r) => (
                     <span className="font-semibold text-slate-900">{formatPct(r.conversion)}</span>
                   ),
+                },
+                {
+                  key: "ingresos",
+                  header: "Ingresos",
+                  align: "right",
+                  render: (r) => (
+                    <span className="font-semibold text-emerald-700">
+                      {formatCurrency(r.ingresos, currency)}
+                    </span>
+                  ),
+                },
+              ]}
+            />
+          </Module>
+        </div>
+      )}
+
+      {/* Row 2c — Rendimiento por campaña (revenue half of ROAS). Hidden until
+          campaign-attributed leads exist. */}
+      {campaignStats.length > 0 && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          <Module
+            title="Rendimiento por campaña (Meta)"
+            subtitle="Ingresos y conversión por anuncio · el ROAS se completa al sumar el gasto de Meta"
+            info
+            className="lg:col-span-12"
+          >
+            <SimpleTable
+              rows={campaignStats}
+              empty="Sin campañas atribuidas todavía."
+              columns={[
+                {
+                  key: "label",
+                  header: "Campaña / anuncio",
+                  render: (r) => <span className="font-medium text-slate-800">📣 {r.label}</span>,
+                },
+                { key: "leads", header: "Leads", align: "right", render: (r) => r.leads },
+                { key: "pedidos", header: "Pedidos", align: "right", render: (r) => r.pedidos },
+                {
+                  key: "conversion",
+                  header: "Conversión",
+                  align: "right",
+                  render: (r) => formatPct(r.conversion),
                 },
                 {
                   key: "ingresos",

@@ -710,6 +710,54 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
     .sort((a, b) => b.ingresos - a.ingresos || b.leads - a.leads);
 }
 
+export interface CampaignStat {
+  adId: string;
+  label: string; // ad headline if captured, else the ad id
+  leads: number;
+  pedidos: number;
+  conversion: number; // 0..1
+  ingresos: number; // net revenue attributed to this ad's leads
+}
+
+/**
+ * Revenue + conversion per Meta ad — the revenue half of ROAS. Groups the
+ * `meta_ad` leads by `ad_id` (label = captured ad headline) and joins orders by
+ * phone. Ad spend (Meta Ads API) is layered on later to produce ROAS = ingresos
+ * / spend. Returns [] when there are no attributed campaign leads yet.
+ */
+export function campaignBreakdown(leads: LeadRow[], orders: OrderRow[]): CampaignStat[] {
+  const adLeads = leads.filter((l) => l.source === "meta_ad" && (l.ad_id || l.ad_headline));
+  if (!adLeads.length) return [];
+  const netByPhone = new Map<string, number>();
+  for (const o of activeOrders(orders)) {
+    if (!o.customer_phone) continue;
+    const net = Number(o.total_amount ?? 0) - Number(o.total_refunded ?? 0);
+    netByPhone.set(o.customer_phone, (netByPhone.get(o.customer_phone) ?? 0) + net);
+  }
+  const m = new Map<string, { label: string; leads: number; pedidos: number; ingresos: number }>();
+  for (const l of adLeads) {
+    const key = l.ad_id || l.ad_headline!;
+    const b = m.get(key) ?? { label: l.ad_headline || l.ad_id || key, leads: 0, pedidos: 0, ingresos: 0 };
+    if (l.ad_headline) b.label = l.ad_headline; // prefer a human headline
+    b.leads += 1;
+    if (l.has_order) {
+      b.pedidos += 1;
+      b.ingresos += netByPhone.get(l.phone) ?? 0;
+    }
+    m.set(key, b);
+  }
+  return [...m.entries()]
+    .map(([adId, b]) => ({
+      adId,
+      label: b.label,
+      leads: b.leads,
+      pedidos: b.pedidos,
+      conversion: b.leads ? b.pedidos / b.leads : 0,
+      ingresos: round2(b.ingresos),
+    }))
+    .sort((a, b) => b.ingresos - a.ingresos || b.leads - a.leads);
+}
+
 /**
  * "¿Por qué NO compraron?" — bucket the non-buying leads by status. The universe
  * is leads with no order that aren't actively hot (in-progress) or won.
