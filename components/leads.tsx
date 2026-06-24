@@ -72,7 +72,7 @@ function WindowBadge({ lead }: { lead: LeadRow }) {
     const d = daysSince(at);
     return (
       <span className="ml-2 whitespace-nowrap rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-500">
-        ⚫ cerrada{d != null && d >= 1 ? ` · hace ${d}d` : ""}
+        ⚫ vencido{d != null && d >= 1 ? ` · hace ${d}d` : ""}
       </span>
     );
   }
@@ -473,7 +473,7 @@ export function LeadsBoard({
                   onClick={() => setWinFilter("por_vencer")}
                 />
                 <FilterPill
-                  label="⚫ Cerrada"
+                  label="⚫ Vencido"
                   count={winCounts.cerrada}
                   active={winFilter === "cerrada"}
                   onClick={() => setWinFilter("cerrada")}
