@@ -9,6 +9,9 @@ import type { LeadCallRow, LeadRow } from "@/lib/types";
 import { getStoreCreds } from "@/lib/ingest";
 import { fetchLastInboundAt, sendWhatsappText } from "@/lib/kapso";
 
+// Process-level cache of vendedora id → display name (emails ~never change).
+const agentNameCache = new Map<string, string>();
+
 export interface LeadActionState {
   error?: string;
   notice?: string;
@@ -24,21 +27,25 @@ export async function loadLeadDetail(
   if (!detail) return { error: "No encontrado." };
 
   // Resolve who logged each entry (vendedora id → display name) for the history.
-  const admin = createAdminSupabase();
   const ids = [...new Set(detail.calls.map((c) => c.vendedora).filter(Boolean))] as string[];
-  const nameById = new Map<string, string>();
-  for (const id of ids) {
-    try {
-      const { data } = await admin.auth.admin.getUserById(id);
-      const email = data?.user?.email ?? null;
-      nameById.set(id, email ? email.split("@")[0]! : id.slice(0, 8));
-    } catch {
-      /* best-effort — leave unresolved */
-    }
+  const missing = ids.filter((id) => !agentNameCache.has(id));
+  if (missing.length) {
+    const admin = createAdminSupabase();
+    await Promise.all(
+      missing.map(async (id) => {
+        try {
+          const { data } = await admin.auth.admin.getUserById(id);
+          const email = data?.user?.email ?? null;
+          agentNameCache.set(id, email ? email.split("@")[0]! : id.slice(0, 8));
+        } catch {
+          /* leave unresolved */
+        }
+      }),
+    );
   }
   const calls = detail.calls.map((c) => ({
     ...c,
-    vendedora_name: c.vendedora ? (nameById.get(c.vendedora) ?? null) : null,
+    vendedora_name: c.vendedora ? (agentNameCache.get(c.vendedora) ?? null) : null,
   }));
   return { lead: detail.lead, calls };
 }

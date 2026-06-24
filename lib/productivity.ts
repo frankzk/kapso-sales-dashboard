@@ -74,18 +74,30 @@ export function computeAdvisorStats({ calls, leadOutcome, emailById }: Productiv
   return rows;
 }
 
-/** Resolve advisor user_ids → emails via the auth admin API (team-page pattern). */
+// Process-level cache of user_id → email. Emails essentially never change, so a
+// warm instance reuses it across requests (cold start just repopulates).
+const emailCache = new Map<string, string>();
+
+/** Resolve advisor user_ids → emails. One getUserById per *uncached* id, in
+ *  parallel — far cheaper than paging the whole user list on every load. */
 async function resolveEmails(userIds: string[]): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   if (!userIds.length) return map;
-  const want = new Set(userIds);
-  const admin = createAdminSupabase();
-  for (let page = 1; page <= 20; page++) {
-    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
-    if (error || !data) break;
-    for (const u of data.users) if (want.has(u.id)) map.set(u.id, u.email ?? u.id);
-    if (data.users.length < 200) break;
+  const missing = userIds.filter((id) => !emailCache.has(id));
+  if (missing.length) {
+    const admin = createAdminSupabase();
+    await Promise.all(
+      missing.map(async (id) => {
+        try {
+          const { data } = await admin.auth.admin.getUserById(id);
+          emailCache.set(id, data?.user?.email ?? id);
+        } catch {
+          emailCache.set(id, id);
+        }
+      }),
+    );
   }
+  for (const id of userIds) map.set(id, emailCache.get(id) ?? id);
   return map;
 }
 

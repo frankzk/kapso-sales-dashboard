@@ -218,9 +218,11 @@ export function LeadsBoard({
     setSelected(null);
     setCalls(null);
     if (leadId) {
+      // Release the claim in the background. No full-list refresh on close —
+      // status changes already refresh via refreshDetail, so this avoids an
+      // unnecessary refetch of the whole queue every time the drawer closes.
       startTransition(async () => {
         await releaseLead(leadId);
-        router.refresh();
       });
     }
   }
@@ -555,7 +557,11 @@ function LeadDrawer({
             </p>
           )}
 
-          <WhatsappComposer leadId={lead.id} onSent={onRegistered} />
+          <WhatsappComposer
+            leadId={lead.id}
+            lastInteractionAt={lead.last_interaction_at}
+            onSent={onRegistered}
+          />
 
           <section className="space-y-2">
             <h3 className="text-sm font-semibold tracking-wide text-slate-700 uppercase">
@@ -605,7 +611,15 @@ function LeadDrawer({
 }
 
 /** Free-text WhatsApp composer — enabled only inside the 24h session window. */
-function WhatsappComposer({ leadId, onSent }: { leadId: string; onSent: () => void }) {
+function WhatsappComposer({
+  leadId,
+  lastInteractionAt,
+  onSent,
+}: {
+  leadId: string;
+  lastInteractionAt?: string | null;
+  onSent: () => void;
+}) {
   const [win, setWin] = useState<{ loading: boolean; open: boolean; reason?: string }>({
     loading: true,
     open: false,
@@ -616,16 +630,24 @@ function WhatsappComposer({ leadId, onSent }: { leadId: string; onSent: () => vo
 
   useEffect(() => {
     let alive = true;
-    setWin({ loading: true, open: false });
     setText("");
     setMsg(null);
+    // Fast path: the customer hasn't interacted in >24h → the session window is
+    // definitely closed (last inbound ≤ last_interaction_at). Skip the live Kapso
+    // check so the drawer doesn't wait on a network round-trip.
+    const last = lastInteractionAt ? new Date(lastInteractionAt).getTime() : 0;
+    if (!last || Date.now() - last > 24 * 60 * 60 * 1000) {
+      setWin({ loading: false, open: false, reason: "El cliente debe escribirte primero." });
+      return;
+    }
+    setWin({ loading: true, open: false });
     getLeadWindow(leadId).then((w) => {
       if (alive) setWin({ loading: false, open: w.open, reason: w.reason });
     });
     return () => {
       alive = false;
     };
-  }, [leadId]);
+  }, [leadId, lastInteractionAt]);
 
   function send() {
     const body = text.trim();
