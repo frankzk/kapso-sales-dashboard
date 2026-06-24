@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import type { Role } from "@/lib/types";
 import { ROLES } from "@/lib/team";
 import {
@@ -14,6 +14,26 @@ import {
 import { Card } from "@/components/ui";
 
 const initial: TeamActionState = {};
+
+/**
+ * Returns true for a short moment right after a save completes successfully,
+ * so callers can flash a "Guardado ✓" confirmation. Detects the pending→done
+ * transition (rather than a notice change) so repeated identical saves still flash.
+ */
+function useSavedFlash(pending: boolean, notice: string | undefined): boolean {
+  const [show, setShow] = useState(false);
+  const wasPending = useRef(false);
+  useEffect(() => {
+    const justSaved = wasPending.current && !pending && Boolean(notice);
+    wasPending.current = pending;
+    if (justSaved) {
+      setShow(true);
+      const t = setTimeout(() => setShow(false), 2500);
+      return () => clearTimeout(t);
+    }
+  }, [pending, notice]);
+  return show;
+}
 
 export interface TeamMember {
   user_id: string;
@@ -186,6 +206,7 @@ function RoleForm({
   ownerCnt: number;
 }) {
   const [state, action, pending] = useActionState(setMemberRole, initial);
+  const saved = useSavedFlash(pending, state.notice);
   const isOwnerTarget = member.role === "owner";
   const lastOwner = isOwnerTarget && ownerCnt <= 1;
   const canEdit = myRole === "owner" || !isOwnerTarget;
@@ -210,6 +231,11 @@ function RoleForm({
           </option>
         ))}
       </select>
+      {pending ? (
+        <span className="text-xs text-slate-400">Guardando…</span>
+      ) : saved ? (
+        <span className="text-xs font-medium text-emerald-600">Guardado ✓</span>
+      ) : null}
       {state.error && <span className="text-xs text-red-600">{state.error}</span>}
     </form>
   );
@@ -289,9 +315,10 @@ function AccessToggle({
   store: Store;
   has: boolean;
 }) {
-  const [, action, pending] = useActionState(setStoreAccess, initial);
+  const [state, action, pending] = useActionState(setStoreAccess, initial);
+  const saved = useSavedFlash(pending, state.notice);
   return (
-    <form action={action}>
+    <form action={action} className="inline-flex items-center gap-1">
       <input type="hidden" name="org_id" value={orgId} />
       <input type="hidden" name="user_id" value={userId} />
       <input type="hidden" name="store_id" value={store.id} />
@@ -310,6 +337,7 @@ function AccessToggle({
         />
         {store.name}
       </label>
+      {saved && <span className="text-xs font-medium text-emerald-600" title="Guardado">✓</span>}
     </form>
   );
 }
