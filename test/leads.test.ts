@@ -104,6 +104,23 @@ describe("deriveAutoState", () => {
     expect(s.category).toBe("hot");
     expect(s.needsAttention).toBe(true);
   });
+  it("payment-flavoured handoff reason variants → Yape por verificar", () => {
+    expect(deriveAutoState({ handoffReason: "validacion de pago" }).status).toBe("yape_por_verificar");
+    expect(deriveAutoState({ handoffReason: "pago_yape" }).status).toBe("yape_por_verificar");
+    expect(deriveAutoState({ handoffReason: "voucher_adelanto" }).status).toBe("yape_por_verificar");
+  });
+  it("generic handoff reason but payment context → Yape por verificar", () => {
+    const s = deriveAutoState({
+      handoffReason: "needs_human",
+      handoffContext: "Cliente envió voucher de adelanto S/30 para recojo en Shalom",
+    });
+    expect(s.status).toBe("yape_por_verificar");
+  });
+  it("generic handoff reason with non-payment context stays casi_cierra", () => {
+    expect(
+      deriveAutoState({ handoffReason: "needs_human", handoffContext: "Pide hablar con un asesor" }).status,
+    ).toBe("casi_cierra");
+  });
   it("duplicate → lost", () => {
     expect(deriveAutoState({ isDuplicate: true }).status).toBe("duplicado");
   });

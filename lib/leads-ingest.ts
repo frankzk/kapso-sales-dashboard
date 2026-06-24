@@ -398,7 +398,7 @@ export async function applyHandoff(
     return { ok: true };
   }
 
-  const auto = deriveAutoState({ handoffReason: info.reason ?? undefined });
+  const auto = deriveAutoState({ handoffReason: info.reason ?? undefined, handoffContext: info.context });
   const row: any = {
     store_id: storeId,
     phone: info.phone,

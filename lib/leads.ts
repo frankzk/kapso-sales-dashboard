@@ -69,9 +69,25 @@ export const HANDOFF_REASON_STATUS: Record<string, string> = {
   pago: "yape_por_verificar",
 };
 
+// Any handoff whose reason OR context is payment/logistics-flavoured routes to
+// Yape/Shalom — so the bot's handoff lands in the right tab without having to
+// match one of the exact strings above.
+const YAPE_REASON_RE = /pago|yape|plin|voucher|comprobante|adelanto|dep[oó]sito|log[ií]stic/i;
+
+/** Map a Kapso handoff reason (+optional context) → our auto status. Exact
+ *  reason wins; otherwise any payment-flavoured reason/context → Yape/Shalom. */
+export function handoffStatus(reason: string, context?: string | null): string {
+  if (HANDOFF_REASON_STATUS[reason]) return HANDOFF_REASON_STATUS[reason];
+  if (YAPE_REASON_RE.test(reason) || (context != null && YAPE_REASON_RE.test(context))) {
+    return "yape_por_verificar";
+  }
+  return "casi_cierra";
+}
+
 export interface AutoSignals {
   hasOrder?: boolean;
   handoffReason?: string | null;
+  handoffContext?: string | null;
   isDuplicate?: boolean;
 }
 
@@ -93,7 +109,7 @@ export function deriveAutoState(sig: AutoSignals): AutoState {
     return { status: "duplicado", category: "lost", needsAttention: false };
   }
   if (sig.handoffReason) {
-    const code = HANDOFF_REASON_STATUS[sig.handoffReason] ?? "casi_cierra";
+    const code = handoffStatus(sig.handoffReason, sig.handoffContext);
     return { status: code, category: categoryOf(code), needsAttention: true };
   }
   return { status: "nuevo", category: "open", needsAttention: false };
