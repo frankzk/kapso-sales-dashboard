@@ -24,6 +24,7 @@ export interface LeadEnrichStats {
   inbound: number; // leads with ≥2 customer messages
   cart: number; // leads where a cart/order summary was detected
   district: number; // leads where a district was detected
+  yape: number; // leads where a Yape/Shalom advance was detected (promoted if still "nuevo")
 }
 export interface SyncLeadsResult {
   touched: number;
@@ -35,6 +36,7 @@ const ZERO_ENRICH: LeadEnrichStats = {
   inbound: 0,
   cart: 0,
   district: 0,
+  yape: 0,
 };
 
 interface ExistingLead {
@@ -256,6 +258,20 @@ async function enrichLeadsFromConversations(
       })
       .eq("store_id", storeId)
       .eq("kapso_conversation_id", convId);
+
+    // Yape/Shalom advance detected in-chat (the bot didn't fire a handoff, e.g.
+    // the voucher came as an image). Promote the auto-"nuevo" lead to
+    // yape_por_verificar (hot). Only "nuevo" is touched — manual dispositions
+    // and won leads keep their state; already-hot leads are left as-is.
+    if (sig.yape) {
+      stats.yape += 1;
+      await admin
+        .from("leads")
+        .update({ status: "yape_por_verificar", category: "hot", needs_attention: true })
+        .eq("store_id", storeId)
+        .eq("kapso_conversation_id", convId)
+        .eq("status", "nuevo");
+    }
   }
   return stats;
 }

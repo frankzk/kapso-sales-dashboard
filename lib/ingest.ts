@@ -278,7 +278,7 @@ export async function runStoreSync(
     shopifyOrders: 0,
     kapsoConversations: 0,
     leads: 0,
-    enriched: { candidates: 0, fetched: 0, inbound: 0, cart: 0, district: 0 },
+    enriched: { candidates: 0, fetched: 0, inbound: 0, cart: 0, district: 0, yape: 0 },
     opsCaptured: false,
     errors: [],
   };

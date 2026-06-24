@@ -271,10 +271,24 @@ function msgText(m: any): string {
   return typeof t === "string" ? t : "";
 }
 
+/** True when a message carries an image attachment (e.g. a Yape voucher). */
+function msgIsImage(m: any): boolean {
+  if (m?.type === "image" || m?.message?.type === "image") return true;
+  if (m?.image && typeof m.image === "object") return true;
+  const ct =
+    m?.kapso?.media_data?.content_type ??
+    m?.kapso?.message_type_data?.content_type ??
+    m?.media_data?.content_type;
+  if (typeof ct === "string" && ct.startsWith("image/")) return true;
+  // Fallback: media present with no readable text (Kapso stores images this way).
+  return Boolean(m?.kapso?.has_media) && !msgText(m).trim();
+}
+
 export interface ParsedMsg {
   t: number;
   dir: "inbound" | "outbound";
   text: string;
+  image?: boolean; // image/media attachment (Yape voucher, product photo, …)
 }
 
 export interface OrderSignals {
@@ -346,9 +360,39 @@ export function parseOrderSignals(msgs: ParsedMsg[]): OrderSignals {
   return { district, cart_value, cart_item_count, cart_summary: cart_summary || null };
 }
 
+// Payment / Yape-Shalom detection. Aurela's bot reserves a Shalom-pickup order
+// by asking for a Yape "adelanto" (advance) + a "voucher" screenshot; the
+// customer replies with the receipt as an IMAGE (no text, so the cart/text
+// parser alone can't see it). A real advance is signalled by any of:
+//   - the bot/agent confirming it ("pago recibido", "recibí tu voucher"), or
+//   - the customer sending an image right after the bot requested the adelanto, or
+//   - the customer stating they paid ("ya yapeé", "número de operación", …).
+const PAYMENT_CONFIRMED_RE =
+  /pago\s+(recibido|confirmado|verificado)|recib[ií]\s+(tu|el)\s+(pago|yape|voucher|adelanto|comprobante)|adelanto\s+(recibido|confirmado)/i;
+const CUSTOMER_PAID_RE =
+  /\b(ya\s+)?(te\s+)?yape[eé]|yapead|ya\s+(pagu[eé]|deposit[eé]|transfer[ií])|ya\s+(hice|realic[eé])[^.]{0,18}(pago|adelanto|dep[oó]sito)|comprobante|constancia|n[uú]mero\s+de\s+operaci[oó]n|operaci[oó]n\s*[:#]/i;
+
+/** Detect a Yape/Shalom advance payment from a conversation's messages. */
+export function detectYapePayment(msgs: ParsedMsg[]): boolean {
+  let requested = false;
+  for (const m of msgs) {
+    const text = m.text ?? "";
+    if (m.dir === "outbound") {
+      if (PAYMENT_CONFIRMED_RE.test(text)) return true;
+      if (/\badelanto\b/i.test(text) && /\byape\b/i.test(text)) requested = true;
+      else if (/voucher|captura/i.test(text) && /valida|yape|adelanto/i.test(text)) requested = true;
+    } else {
+      if (CUSTOMER_PAID_RE.test(text)) return true;
+      if (requested && m.image) return true; // voucher screenshot after the request
+    }
+  }
+  return false;
+}
+
 export interface ConversationSignals extends OrderSignals {
   inbound_count: number;
   first_response_seconds: number | null;
+  yape: boolean;
 }
 
 /**
@@ -367,8 +411,11 @@ export async function fetchConversationSignals(
     return null;
   }
   const msgs = (page.data ?? [])
-    .map((m) => ({ t: msgTimeMs(m), dir: msgDirection(m), text: msgText(m) }))
-    .filter((m): m is ParsedMsg => m.t != null && m.dir != null)
+    .map((m) => ({ t: msgTimeMs(m), dir: msgDirection(m), text: msgText(m), image: msgIsImage(m) }))
+    .filter(
+      (m): m is { t: number; dir: "inbound" | "outbound"; text: string; image: boolean } =>
+        m.t != null && m.dir != null,
+    )
     .sort((a, b) => a.t - b.t);
   if (!msgs.length) return null;
 
@@ -379,7 +426,7 @@ export async function fetchConversationSignals(
     const reply = msgs.find((m) => m.dir === "outbound" && m.t >= firstInbound.t);
     if (reply) first_response_seconds = Math.max(0, Math.round((reply.t - firstInbound.t) / 1000));
   }
-  return { inbound_count, first_response_seconds, ...parseOrderSignals(msgs) };
+  return { inbound_count, first_response_seconds, yape: detectYapePayment(msgs), ...parseOrderSignals(msgs) };
 }
 
 // ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ export async function getStoreLeads(
     case "por_llamar":
       q = q
         .in("category", ["open", "hot"])
+        .neq("status", "yape_por_verificar") // payment-pending leads live in the Yape/Shalom tab
         .order("needs_attention", { ascending: false })
         .order("last_interaction_at", { ascending: false });
       break;
@@ -66,7 +67,7 @@ export async function getLeadCounts(storeId: string): Promise<Record<LeadView, n
   const head = () => sb.from("leads").select("*", { count: "exact", head: true }).eq("store_id", storeId);
   const nowIso = new Date().toISOString();
   const [porLlamar, yape, calientes, seguimientos, cerrados] = await Promise.all([
-    head().in("category", ["open", "hot"]),
+    head().in("category", ["open", "hot"]).neq("status", "yape_por_verificar"),
     head().eq("status", "yape_por_verificar"),
     head().eq("category", "hot"),
     head().not("next_followup_at", "is", null).lte("next_followup_at", nowIso),
