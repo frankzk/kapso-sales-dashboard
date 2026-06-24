@@ -14,7 +14,53 @@ import {
   leadSegment,
   isLeadSegment,
   countLeadSegments,
+  LEAD_GESTIONES,
+  gestionOf,
+  isLeadGestion,
+  countGestiones,
 } from "@/lib/leads";
+
+describe("gestionOf / countGestiones (call-state buckets)", () => {
+  it("maps call dispositions to the right bucket", () => {
+    expect(gestionOf("nuevo")).toBe("sin_llamar");
+    expect(gestionOf("no_responde")).toBe("nr");
+    expect(gestionOf("buzon")).toBe("buzon_cuelga");
+    expect(gestionOf("cuelga")).toBe("buzon_cuelga");
+    expect(gestionOf("contactado_dejo_wsp")).toBe("contactados");
+    expect(gestionOf("otros_productos")).toBe("contactados");
+  });
+  it("returns null for statuses outside the call queue (casi_cierra, lost, won)", () => {
+    expect(gestionOf("casi_cierra")).toBeNull();
+    expect(gestionOf("cancelado")).toBeNull();
+    expect(gestionOf("pedido_generado")).toBeNull();
+  });
+  it("isLeadGestion validates bucket keys", () => {
+    expect(isLeadGestion("nr")).toBe(true);
+    expect(isLeadGestion("frio")).toBe(false); // that's a segment, not a gestión
+    expect(isLeadGestion(undefined)).toBe(false);
+  });
+  it("countGestiones tallies and ignores unmapped statuses", () => {
+    expect(
+      countGestiones([
+        { status: "nuevo" },
+        { status: "nuevo" },
+        { status: "no_responde" },
+        { status: "buzon" },
+        { status: "cuelga" },
+        { status: "contactado_dejo_wsp" },
+        { status: "casi_cierra" }, // unmapped → ignored
+      ]),
+    ).toEqual({ sin_llamar: 2, nr: 1, buzon_cuelga: 2, contactados: 1 });
+  });
+  it("LEAD_GESTIONES lists the four buckets in order", () => {
+    expect(LEAD_GESTIONES.map((g) => g.key)).toEqual([
+      "sin_llamar",
+      "nr",
+      "buzon_cuelga",
+      "contactados",
+    ]);
+  });
+});
 
 describe("leadSegment (Por llamar sub-segmentation)", () => {
   it("Yape leads are no longer a sub-bucket — classified by their other signals", () => {

@@ -191,6 +191,50 @@ export function countLeadSegments(leads: LeadSegmentSignals[]): Record<LeadSegme
 }
 
 // ---------------------------------------------------------------------------
+// Gestión: a second axis over the "Por llamar" queue — the advisor's call
+// state (the disposition set in "registrar llamada"). Orthogonal to leadSegment
+// (buyer intent); the two combine. Lost dispositions live in the "Perdidos"
+// tab so they're not buckets here; casi_cierra (hot) maps to none.
+// ---------------------------------------------------------------------------
+
+export type LeadGestion = "sin_llamar" | "nr" | "buzon_cuelga" | "contactados";
+
+export const LEAD_GESTIONES: { key: LeadGestion; label: string }[] = [
+  { key: "sin_llamar", label: "🆕 Sin llamar" },
+  { key: "nr", label: "📵 No responde" },
+  { key: "buzon_cuelga", label: "📞 Buzón/Cuelga" },
+  { key: "contactados", label: "💬 Contactados" },
+];
+
+const GESTION_BY_STATUS: Record<string, LeadGestion> = {
+  nuevo: "sin_llamar",
+  no_responde: "nr",
+  buzon: "buzon_cuelga",
+  cuelga: "buzon_cuelga",
+  contactado_dejo_wsp: "contactados",
+  otros_productos: "contactados",
+};
+
+/** The advisor-gestión bucket for a lead's status, or null (e.g. casi_cierra). */
+export function gestionOf(status: string): LeadGestion | null {
+  return GESTION_BY_STATUS[status] ?? null;
+}
+
+export function isLeadGestion(v: string | undefined | null): v is LeadGestion {
+  return !!v && LEAD_GESTIONES.some((g) => g.key === v);
+}
+
+/** Tally "Por llamar" leads into gestión buckets (unmapped statuses ignored). */
+export function countGestiones(leads: { status: string }[]): Record<LeadGestion, number> {
+  const out: Record<LeadGestion, number> = { sin_llamar: 0, nr: 0, buzon_cuelga: 0, contactados: 0 };
+  for (const l of leads) {
+    const g = gestionOf(l.status);
+    if (g) out[g] += 1;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Claim / lock — "Tomar lead", one at a time, auto-released after a TTL.
 // ---------------------------------------------------------------------------
 

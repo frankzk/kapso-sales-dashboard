@@ -6,9 +6,13 @@ import {
   type LeadView,
 } from "@/lib/leads-access";
 import {
+  countGestiones,
   countLeadSegments,
+  gestionOf,
+  isLeadGestion,
   isLeadSegment,
   leadSegment,
+  type LeadGestion,
   type LeadSegment,
 } from "@/lib/leads";
 import { EmptyState } from "@/components/ui";
@@ -23,7 +27,7 @@ function isLeadView(v: string | undefined): v is LeadView {
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ store?: string; view?: string; seg?: string }>;
+  searchParams: Promise<{ store?: string; view?: string; seg?: string; gest?: string }>;
 }) {
   const sp = await searchParams;
   const stores = await getAccessibleStores();
@@ -44,11 +48,20 @@ export default async function LeadsPage({
   // Segment filtering only applies within "Por llamar".
   const porLlamarLeads = view === "por_llamar" ? leads : await getStoreLeads(storeId, "por_llamar");
   const segCounts = countLeadSegments(porLlamarLeads);
+  const gestCounts = countGestiones(porLlamarLeads);
   let segment: LeadSegment | null = null;
+  let gestion: LeadGestion | null = null;
   let displayLeads = leads;
   if (view === "por_llamar") {
     segment = isLeadSegment(sp.seg) ? sp.seg : null;
-    if (segment) displayLeads = leads.filter((l) => leadSegment(l) === segment);
+    gestion = isLeadGestion(sp.gest) ? sp.gest : null;
+    if (segment || gestion) {
+      displayLeads = leads.filter(
+        (l) =>
+          (!segment || leadSegment(l) === segment) &&
+          (!gestion || gestionOf(l.status) === gestion),
+      );
+    }
   }
 
   return (
@@ -60,6 +73,8 @@ export default async function LeadsPage({
       leads={displayLeads}
       segCounts={segCounts}
       segment={segment}
+      gestCounts={gestCounts}
+      gestion={gestion}
       currentUserId={user?.id ?? ""}
     />
   );

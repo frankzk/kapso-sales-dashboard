@@ -6,12 +6,14 @@ import { useActionState, useEffect, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
 import { type LeadView } from "@/lib/leads-access";
 import {
+  LEAD_GESTIONES,
   LEAD_SEGMENTS,
   MANUAL_STATUSES,
   categoryOf,
   isClaimActive,
   labelOf,
   type LeadCategory,
+  type LeadGestion,
   type LeadSegment,
 } from "@/lib/leads";
 import {
@@ -110,6 +112,8 @@ export function LeadsBoard({
   leads,
   segCounts,
   segment,
+  gestCounts,
+  gestion,
   currentUserId,
 }: {
   stores: StoreSummary[];
@@ -119,6 +123,8 @@ export function LeadsBoard({
   leads: LeadRow[];
   segCounts?: Record<LeadSegment, number> | null;
   segment?: LeadSegment | null;
+  gestCounts?: Record<LeadGestion, number> | null;
+  gestion?: LeadGestion | null;
   currentUserId: string;
 }) {
   const router = useRouter();
@@ -199,9 +205,10 @@ export function LeadsBoard({
 
       <div className="sticky top-0 z-10 bg-slate-50 pt-1 pb-2">
         <nav className="flex flex-wrap items-center gap-1.5">
-          {/* Cola "Por llamar": Todos + sub-filtros por intención (frío → con carrito) */}
+          {/* Cola "Por llamar": Todos + sub-filtros por intención (frío → con carrito).
+              Los hrefs preservan el eje de gestión (&gest) para que el combo sobreviva. */}
           <NavPill
-            href={`/dashboard/leads?store=${storeId}&view=por_llamar`}
+            href={`/dashboard/leads?store=${storeId}&view=por_llamar${gestion ? `&gest=${gestion}` : ""}`}
             label="Todos"
             count={counts.por_llamar}
             active={view === "por_llamar" && !segment}
@@ -209,7 +216,7 @@ export function LeadsBoard({
           {(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((k) => (
             <NavPill
               key={k}
-              href={`/dashboard/leads?store=${storeId}&view=por_llamar&seg=${k}`}
+              href={`/dashboard/leads?store=${storeId}&view=por_llamar&seg=${k}${gestion ? `&gest=${gestion}` : ""}`}
               label={SEG_LABEL[k]}
               count={segCounts?.[k] ?? 0}
               active={view === "por_llamar" && segment === k}
@@ -229,6 +236,29 @@ export function LeadsBoard({
             />
           ))}
         </nav>
+
+        {/* 2da línea — Gestión (estado de llamada del asesor); solo en la cola.
+            Combina con el eje de intención: los hrefs preservan &seg. */}
+        {view === "por_llamar" && (
+          <nav className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-2">
+            <span className="text-xs font-medium text-slate-400">Gestión:</span>
+            <NavPill
+              href={`/dashboard/leads?store=${storeId}&view=por_llamar${segment ? `&seg=${segment}` : ""}`}
+              label="Todos"
+              count={counts.por_llamar}
+              active={!gestion}
+            />
+            {LEAD_GESTIONES.map((g) => (
+              <NavPill
+                key={g.key}
+                href={`/dashboard/leads?store=${storeId}&view=por_llamar${segment ? `&seg=${segment}` : ""}&gest=${g.key}`}
+                label={g.label}
+                count={gestCounts?.[g.key] ?? 0}
+                active={gestion === g.key}
+              />
+            ))}
+          </nav>
+        )}
       </div>
 
       {banner && (
