@@ -894,3 +894,28 @@ create index if not exists leads_store_inbound_idx on leads (store_id, last_inbo
 -- ---- 0010 ----
 -- 0010_sin_stock_open.sql — "Sin stock" recuperable: vuelve a la cola "Por llamar"
 update leads set category = 'open' where status = 'sin_stock' and category <> 'open';
+
+-- ---- 0011 ----
+-- 0011_meta_ads.sql — Meta ad attribution lookup (resolved from the Marketing API).
+-- Maps each Meta ad_id to its real ad / adset / campaign names so CTWA leads stop
+-- collapsing under one shared headline. Global (ad_id is unique), read-only for
+-- the app; self-contained RLS. Seed the names with
+-- scripts/sql/seed_meta_ads_viaja_sin_maletas.sql.
+create table if not exists meta_ads (
+  ad_id         text primary key,
+  account_id    text,
+  campaign_id   text,
+  campaign_name text,
+  objective     text,
+  adset_id      text,
+  adset_name    text,
+  ad_name       text,
+  status        text,
+  fetched_at    timestamptz not null default now()
+);
+alter table meta_ads enable row level security;
+drop policy if exists meta_ads_select on meta_ads;
+create policy meta_ads_select on meta_ads for select to authenticated
+  using (true);
+grant select on meta_ads to authenticated;
+grant all privileges on meta_ads to service_role;

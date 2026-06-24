@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   getAccessibleStores,
+  getAdNames,
   getConversations,
   getLatestOps,
   getLeadsForDashboard,
@@ -50,6 +51,9 @@ export default async function ConsolidatedPage({
     getLatestOps(storeIds),
   ]);
 
+  // Resolve Meta ad names for the campaign breakdown (degrades to {} if unseeded).
+  const adNames = await getAdNames(leads.map((l) => l.ad_id));
+
   const first = stores[0]!;
   const currency = stores.every((s) => s.currency === first.currency) ? first.currency : "PEN";
 
@@ -66,6 +70,7 @@ export default async function ConsolidatedPage({
       ops={ops}
       currency={currency}
       timezone={first.timezone}
+      adNames={adNames}
     />
   );
 }

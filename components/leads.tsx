@@ -2,8 +2,15 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useState, useTransition } from "react";
+import { type ReactNode, useActionState, useEffect, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
+import {
+  adObjectiveLabel,
+  adStatusLabel,
+  adsManagerUrl,
+  prettyAdName,
+  type AdMeta,
+} from "@/lib/meta-ads";
 import { type LeadView } from "@/lib/leads-access";
 import {
   LEAD_GESTIONES,
@@ -98,6 +105,70 @@ function StatusBadge({ status, needsAttention }: { status: string; needsAttentio
       {needsAttention ? "🔥 " : ""}
       {labelOf(status)}
     </span>
+  );
+}
+
+/** One label/value line inside the Meta attribution block (drawer). */
+function MetaField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex gap-2">
+      <dt className="w-20 shrink-0 text-xs font-medium text-violet-700/70">{label}</dt>
+      <dd className="min-w-0 flex-1 break-words text-violet-900">{children}</dd>
+    </div>
+  );
+}
+
+/** Full Meta ad attribution for the lead drawer: the real creative plus the
+ *  campaign / adset / objective / status chain behind the Click-to-WhatsApp
+ *  lead. Falls back to a one-liner when the ad_id hasn't been resolved into the
+ *  `meta_ads` lookup yet (only headline + id are then known). */
+function MetaAttribution({ lead, adMeta }: { lead: LeadRow; adMeta: AdMeta | null }) {
+  const name = adMeta?.adName ? prettyAdName(adMeta.adName) : null;
+  const href = adsManagerUrl(adMeta?.accountId ?? null, lead.ad_id ?? "");
+  const objective = adObjectiveLabel(adMeta?.objective ?? null);
+  const status = adStatusLabel(adMeta?.status ?? null);
+  return (
+    <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-sm text-violet-900">
+      <p className="text-xs font-semibold tracking-wide uppercase opacity-80">Fuente · Campaña Meta</p>
+      <dl className="mt-1.5 space-y-1">
+        {lead.ad_headline && <MetaField label="Titular">{lead.ad_headline}</MetaField>}
+        {name ? (
+          <MetaField label="Anuncio">
+            {href ? (
+              <a
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-violet-800 underline decoration-violet-300 hover:decoration-violet-600"
+              >
+                {name}
+              </a>
+            ) : (
+              <span className="font-medium">{name}</span>
+            )}
+          </MetaField>
+        ) : (
+          <p className="text-violet-800">📣 Llegó por un anuncio de Meta (Click-to-WhatsApp)</p>
+        )}
+        {adMeta?.adsetName && <MetaField label="Conjunto">{adMeta.adsetName}</MetaField>}
+        {adMeta?.campaignName && <MetaField label="Campaña">{adMeta.campaignName}</MetaField>}
+        {objective && <MetaField label="Objetivo">{objective}</MetaField>}
+        {status && (
+          <MetaField label="Estado">
+            {status.label}
+            {adMeta?.fetchedAt
+              ? ` · al ${new Date(adMeta.fetchedAt).toLocaleDateString("es-PE")}`
+              : ""}
+          </MetaField>
+        )}
+        {lead.ad_id && (
+          <p className="pt-0.5 text-xs break-all text-violet-700/70">
+            id {lead.ad_id}
+            {lead.ctwa_clid ? ` · clic ${lead.ctwa_clid}` : ""}
+          </p>
+        )}
+      </dl>
+    </div>
   );
 }
 
@@ -211,6 +282,7 @@ export function LeadsBoard({
   view,
   counts,
   leads,
+  adNames,
   initialSeg,
   initialGest,
   currentUserId,
@@ -220,6 +292,7 @@ export function LeadsBoard({
   view: LeadView;
   counts: Record<LeadView, number>;
   leads: LeadRow[];
+  adNames?: Record<string, AdMeta>;
   initialSeg?: LeadSegment | null;
   initialGest?: LeadGestion | null;
   currentUserId: string;
@@ -530,6 +603,7 @@ export function LeadsBoard({
         <LeadDrawer
           lead={selected}
           calls={calls}
+          adMeta={selected.ad_id ? (adNames?.[selected.ad_id] ?? null) : null}
           onClose={closeDrawer}
           onRegistered={() => refreshDetail(selected.id)}
           closing={pending}
@@ -542,12 +616,14 @@ export function LeadsBoard({
 function LeadDrawer({
   lead,
   calls,
+  adMeta,
   onClose,
   onRegistered,
   closing,
 }: {
   lead: LeadRow;
   calls: LeadCallRow[] | null; // null = still loading
+  adMeta: AdMeta | null; // Meta attribution for lead.ad_id (null until resolved)
   onClose: () => void;
   onRegistered: () => void;
   closing: boolean;
@@ -621,24 +697,7 @@ function LeadDrawer({
             </div>
           )}
 
-          {lead.source === "meta_ad" && (
-            <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-sm text-violet-900">
-              <p className="text-xs font-semibold tracking-wide uppercase opacity-80">
-                Fuente · Campaña Meta
-              </p>
-              <p className="mt-1">
-                📣 Llegó por un anuncio de Meta (Click-to-WhatsApp)
-                {lead.ad_headline ? (
-                  <>
-                    : <span className="font-medium">{lead.ad_headline}</span>
-                  </>
-                ) : (
-                  ""
-                )}
-              </p>
-              {lead.ad_id && <p className="mt-0.5 text-xs text-violet-700/80">Anuncio: {lead.ad_id}</p>}
-            </div>
-          )}
+          {lead.source === "meta_ad" && <MetaAttribution lead={lead} adMeta={adMeta} />}
 
           {lead.has_order && (
             <p className="text-sm font-medium text-emerald-700">

@@ -14,6 +14,7 @@ import type {
   LeadRow,
   OrderRow,
 } from "@/lib/types";
+import type { AdMeta } from "@/lib/meta-ads";
 
 // ---------------------------------------------------------------------------
 // Timezone-aware bucketing
@@ -712,7 +713,10 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
 
 export interface CampaignStat {
   adId: string;
-  label: string; // ad headline if captured, else the ad id
+  label: string; // resolved ad name → captured headline → ad id (best display)
+  headline: string | null; // shared CTWA creative headline ("✈️ Viaja Sin Maletas")
+  resolved: boolean; // a real Meta ad name was found in the meta_ads lookup
+  meta: AdMeta | null; // full Meta attribution (account/campaign/adset/objective/status) when resolved
   leads: number;
   pedidos: number;
   conversion: number; // 0..1
@@ -721,11 +725,18 @@ export interface CampaignStat {
 
 /**
  * Revenue + conversion per Meta ad — the revenue half of ROAS. Groups the
- * `meta_ad` leads by `ad_id` (label = captured ad headline) and joins orders by
- * phone. Ad spend (Meta Ads API) is layered on later to produce ROAS = ingresos
- * / spend. Returns [] when there are no attributed campaign leads yet.
+ * `meta_ad` leads by `ad_id` and joins orders by phone. The optional `names`
+ * map (from the `meta_ads` lookup) upgrades the label from the shared CTWA
+ * headline to the real creative name and attaches full attribution; without it
+ * the label degrades to the headline (then the ad id). Ad spend (Meta Ads API)
+ * is layered on later to produce ROAS = ingresos / spend. Returns [] when there
+ * are no attributed campaign leads yet.
  */
-export function campaignBreakdown(leads: LeadRow[], orders: OrderRow[]): CampaignStat[] {
+export function campaignBreakdown(
+  leads: LeadRow[],
+  orders: OrderRow[],
+  names: Record<string, AdMeta> = {},
+): CampaignStat[] {
   const adLeads = leads.filter((l) => l.source === "meta_ad" && (l.ad_id || l.ad_headline));
   if (!adLeads.length) return [];
   const netByPhone = new Map<string, number>();
@@ -734,11 +745,11 @@ export function campaignBreakdown(leads: LeadRow[], orders: OrderRow[]): Campaig
     const net = Number(o.total_amount ?? 0) - Number(o.total_refunded ?? 0);
     netByPhone.set(o.customer_phone, (netByPhone.get(o.customer_phone) ?? 0) + net);
   }
-  const m = new Map<string, { label: string; leads: number; pedidos: number; ingresos: number }>();
+  const m = new Map<string, { headline: string | null; leads: number; pedidos: number; ingresos: number }>();
   for (const l of adLeads) {
     const key = l.ad_id || l.ad_headline!;
-    const b = m.get(key) ?? { label: l.ad_headline || l.ad_id || key, leads: 0, pedidos: 0, ingresos: 0 };
-    if (l.ad_headline) b.label = l.ad_headline; // prefer a human headline
+    const b = m.get(key) ?? { headline: l.ad_headline ?? null, leads: 0, pedidos: 0, ingresos: 0 };
+    if (l.ad_headline) b.headline = l.ad_headline; // keep the human headline
     b.leads += 1;
     if (l.has_order) {
       b.pedidos += 1;
@@ -747,14 +758,20 @@ export function campaignBreakdown(leads: LeadRow[], orders: OrderRow[]): Campaig
     m.set(key, b);
   }
   return [...m.entries()]
-    .map(([adId, b]) => ({
-      adId,
-      label: b.label,
-      leads: b.leads,
-      pedidos: b.pedidos,
-      conversion: b.leads ? b.pedidos / b.leads : 0,
-      ingresos: round2(b.ingresos),
-    }))
+    .map(([adId, b]) => {
+      const meta = names[adId] ?? null;
+      return {
+        adId,
+        label: meta?.adName || b.headline || adId,
+        headline: b.headline,
+        resolved: Boolean(meta?.adName),
+        meta,
+        leads: b.leads,
+        pedidos: b.pedidos,
+        conversion: b.leads ? b.pedidos / b.leads : 0,
+        ingresos: round2(b.ingresos),
+      };
+    })
     .sort((a, b) => b.ingresos - a.ingresos || b.leads - a.leads);
 }
 

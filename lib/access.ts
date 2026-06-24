@@ -10,6 +10,7 @@ import type {
   OrderRow,
   StoreSummary,
 } from "@/lib/types";
+import type { AdMeta } from "@/lib/meta-ads";
 
 export interface DateRange {
   from: string; // YYYY-MM-DD inclusive
@@ -201,6 +202,44 @@ export async function getLeadsForDashboard(
     if (error || !data?.length) break;
     out.push(...(data as unknown as LeadRow[]));
     if (data.length < PAGE_SIZE) break;
+  }
+  return out;
+}
+
+/**
+ * Resolve Meta `ad_id`s → attribution (real ad / adset / campaign names,
+ * objective, status, owning account) from the `meta_ads` lookup. Keyed by the
+ * globally-unique ad_id, so it is not store-scoped. Returns {} when no ids are
+ * given or the table/rows are absent — callers then degrade to the captured
+ * CTWA headline. Never throws (the rest of the dashboard must render regardless).
+ */
+export async function getAdNames(
+  adIds: (string | null | undefined)[],
+): Promise<Record<string, AdMeta>> {
+  const ids = [...new Set(adIds.filter((x): x is string => !!x))];
+  if (!ids.length) return {};
+  const sb = await createServerSupabase();
+  const { data, error } = await sb
+    .from("meta_ads")
+    .select(
+      "ad_id,account_id,campaign_id,campaign_name,objective,adset_id,adset_name,ad_name,status,fetched_at",
+    )
+    .in("ad_id", ids);
+  if (error || !data) return {}; // table not applied yet, or no rows — degrade gracefully
+  const out: Record<string, AdMeta> = {};
+  for (const r of data as Record<string, string | null>[]) {
+    if (!r.ad_id) continue;
+    out[r.ad_id] = {
+      accountId: r.account_id ?? null,
+      campaignId: r.campaign_id ?? null,
+      campaignName: r.campaign_name ?? null,
+      objective: r.objective ?? null,
+      adsetId: r.adset_id ?? null,
+      adsetName: r.adset_name ?? null,
+      adName: r.ad_name ?? null,
+      status: r.status ?? null,
+      fetchedAt: r.fetched_at ?? null,
+    };
   }
   return out;
 }

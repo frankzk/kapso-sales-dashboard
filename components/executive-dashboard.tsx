@@ -25,6 +25,13 @@ import {
   sourceBreakdown,
   topProducts,
 } from "@/lib/metrics";
+import {
+  adObjectiveLabel,
+  adStatusLabel,
+  adsManagerUrl,
+  prettyAdName,
+  type AdMeta,
+} from "@/lib/meta-ads";
 import { BarList, Card, EmptyState, SimpleTable, cn, type BarItem } from "@/components/ui";
 import { ConversionOrdersTrend, RevenueOrdersChart } from "@/components/charts";
 import { DashboardControls } from "@/components/controls";
@@ -107,6 +114,7 @@ export function ExecutiveDashboard({
   timezone,
   singleStore,
   leads,
+  adNames,
 }: {
   stores: StoreSummary[];
   scope: "all" | string;
@@ -120,6 +128,7 @@ export function ExecutiveDashboard({
   timezone: string;
   singleStore?: StoreSummary;
   leads?: LeadRow[];
+  adNames?: Record<string, AdMeta>;
 }) {
   const names: Record<string, string> = Object.fromEntries(stores.map((s) => [s.id, s.name]));
   const totals = aggregateRollups(rollups);
@@ -161,7 +170,7 @@ export function ExecutiveDashboard({
   const lostRev = lostRevenueByReason(loss, totals.aov);
   const channels = botVsAdvisor(leadList);
   const sourceStats = sourceBreakdown(leadList, orders);
-  const campaignStats = campaignBreakdown(leadList, orders);
+  const campaignStats = campaignBreakdown(leadList, orders, adNames ?? {});
   const funnelStages = conversationalFunnel({
     conversations,
     leads: leadList,
@@ -325,7 +334,7 @@ export function ExecutiveDashboard({
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
           <Module
             title="Rendimiento por campaña (Meta)"
-            subtitle="Ingresos y conversión por anuncio · el ROAS se completa al sumar el gasto de Meta"
+            subtitle="Anuncio real de Meta · clic para abrirlo en Ads Manager · el ROAS se completa al sumar el gasto de Meta"
             info
             className="lg:col-span-12"
           >
@@ -336,7 +345,51 @@ export function ExecutiveDashboard({
                 {
                   key: "label",
                   header: "Campaña / anuncio",
-                  render: (r) => <span className="font-medium text-slate-800">📣 {r.label}</span>,
+                  render: (r) => {
+                    const href = adsManagerUrl(r.meta?.accountId ?? null, r.adId);
+                    const name = prettyAdName(r.label);
+                    const st = adStatusLabel(r.meta?.status ?? null);
+                    const ctx = [r.meta?.campaignName, adObjectiveLabel(r.meta?.objective ?? null)]
+                      .filter(Boolean)
+                      .join(" · ");
+                    return (
+                      <div className="flex min-w-0 flex-col">
+                        {href ? (
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="truncate font-medium text-brand-700 hover:underline"
+                            title="Abrir el anuncio en Meta Ads Manager"
+                          >
+                            📣 {name}
+                          </a>
+                        ) : (
+                          <span className="truncate font-medium text-slate-800">📣 {name}</span>
+                        )}
+                        {r.resolved && (ctx || st) && (
+                          <span className="truncate text-xs text-slate-400">
+                            {ctx}
+                            {st && (
+                              <span
+                                className={cn(
+                                  ctx ? "ml-1 " : "",
+                                  st.tone === "green"
+                                    ? "text-emerald-600"
+                                    : st.tone === "amber"
+                                      ? "text-amber-600"
+                                      : "text-slate-400",
+                                )}
+                              >
+                                {ctx ? "· " : ""}
+                                {st.label}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  },
                 },
                 { key: "leads", header: "Leads", align: "right", render: (r) => r.leads },
                 { key: "pedidos", header: "Pedidos", align: "right", render: (r) => r.pedidos },

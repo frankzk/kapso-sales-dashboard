@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import {
   getAccessibleStores,
+  getAdNames,
   getConversations,
   getLatestOps,
   getLeadsForDashboard,
@@ -40,6 +41,9 @@ export default async function StorePage({
     getLatestOps([storeId]),
   ]);
 
+  // Resolve Meta ad names for the campaign breakdown (degrades to {} if unseeded).
+  const adNames = await getAdNames(leads.map((l) => l.ad_id));
+
   return (
     <ExecutiveDashboard
       stores={stores}
@@ -54,6 +58,7 @@ export default async function StorePage({
       currency={store.currency}
       timezone={store.timezone}
       singleStore={store}
+      adNames={adNames}
     />
   );
 }
