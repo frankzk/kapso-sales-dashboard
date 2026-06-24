@@ -153,4 +153,5 @@ export interface LeadCallRow {
   note: string | null;
   next_followup_at: string | null;
   occurred_at?: string;
+  vendedora_name?: string | null; // resolved display name of who logged it (UI only)
 }

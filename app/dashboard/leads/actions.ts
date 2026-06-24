@@ -21,7 +21,26 @@ export async function loadLeadDetail(
   const ctx = await authorizeLead(leadId);
   if (!ctx) return { error: "Sin acceso a este lead." };
   const detail = await getLeadWithCalls(leadId);
-  return detail ?? { error: "No encontrado." };
+  if (!detail) return { error: "No encontrado." };
+
+  // Resolve who logged each entry (vendedora id → display name) for the history.
+  const admin = createAdminSupabase();
+  const ids = [...new Set(detail.calls.map((c) => c.vendedora).filter(Boolean))] as string[];
+  const nameById = new Map<string, string>();
+  for (const id of ids) {
+    try {
+      const { data } = await admin.auth.admin.getUserById(id);
+      const email = data?.user?.email ?? null;
+      nameById.set(id, email ? email.split("@")[0]! : id.slice(0, 8));
+    } catch {
+      /* best-effort — leave unresolved */
+    }
+  }
+  const calls = detail.calls.map((c) => ({
+    ...c,
+    vendedora_name: c.vendedora ? (nameById.get(c.vendedora) ?? null) : null,
+  }));
+  return { lead: detail.lead, calls };
 }
 
 /** Authorize: the caller must be able to SEE the lead under RLS. Returns its store. */

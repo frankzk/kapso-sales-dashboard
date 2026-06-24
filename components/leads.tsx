@@ -470,7 +470,7 @@ function LeadDrawer({
         aria-hidden="true"
       />
       <aside className="fixed inset-y-0 right-0 z-20 w-full max-w-md overflow-y-auto border-l bg-white shadow-xl">
-        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-3">
           <div className="space-y-1">
             <p className="text-base font-semibold text-slate-900">{lead.name || lead.phone}</p>
             <a
@@ -496,11 +496,11 @@ function LeadDrawer({
           </button>
         </div>
 
-        <div className="space-y-5 px-5 py-5">
+        <div className="space-y-4 px-5 py-4">
           {lead.handoff_context && (
             <div
               className={cn(
-                "rounded-xl border px-4 py-3 text-sm",
+                "rounded-xl border px-3 py-2.5 text-sm",
                 handoffTone === "red"
                   ? "border-red-200 bg-red-50 text-red-800"
                   : "border-amber-200 bg-amber-50 text-amber-800",
@@ -514,7 +514,7 @@ function LeadDrawer({
           )}
 
           {(lead.cart_item_count || lead.district) && (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">
               {lead.cart_item_count ? (
                 <p>
                   🛒 <span className="font-medium">Carrito:</span>{" "}
@@ -531,7 +531,7 @@ function LeadDrawer({
           )}
 
           {lead.source === "meta_ad" && (
-            <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-900">
+            <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-sm text-violet-900">
               <p className="text-xs font-semibold tracking-wide uppercase opacity-80">
                 Fuente · Campaña Meta
               </p>
@@ -557,8 +557,6 @@ function LeadDrawer({
 
           <WhatsappComposer leadId={lead.id} onSent={onRegistered} />
 
-          <CallForm leadId={lead.id} onRegistered={onRegistered} />
-
           <section className="space-y-2">
             <h3 className="text-sm font-semibold tracking-wide text-slate-700 uppercase">
               Historial
@@ -570,7 +568,10 @@ function LeadDrawer({
                 {calls.map((c, i) => (
                   <li key={c.id ?? i} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-slate-400">{fmtDate(c.occurred_at)}</span>
+                      <span className="text-xs text-slate-400">
+                        {fmtDate(c.occurred_at)}
+                        {c.vendedora_name ? ` · ${c.vendedora_name}` : ""}
+                      </span>
                       {c.kind === "message" ? (
                         <span className="text-xs font-medium text-brand-700">📤 WhatsApp</span>
                       ) : c.new_status ? (
@@ -587,6 +588,8 @@ function LeadDrawer({
               <p className="text-sm text-slate-400">Sin actividad todavía.</p>
             )}
           </section>
+
+          <CallForm leadId={lead.id} onRegistered={onRegistered} />
 
           <button
             type="button"
@@ -641,7 +644,7 @@ function WhatsappComposer({ leadId, onSent }: { leadId: string; onSent: () => vo
   }
 
   return (
-    <section className="space-y-2 rounded-xl border border-slate-200 p-4">
+    <section className="space-y-2 rounded-xl border border-slate-200 p-3">
       <h3 className="text-sm font-semibold tracking-wide text-slate-700 uppercase">Enviar WhatsApp</h3>
       {win.loading ? (
         <p className="text-sm text-slate-400">Verificando ventana de 24h…</p>
@@ -650,7 +653,7 @@ function WhatsappComposer({ leadId, onSent }: { leadId: string; onSent: () => vo
           <textarea
             value={text}
             onChange={(e) => setText(e.currentTarget.value)}
-            rows={3}
+            rows={2}
             placeholder="Escribe un mensaje…"
             className={inputCls}
             disabled={pending}
@@ -684,11 +687,11 @@ function CallForm({ leadId, onRegistered }: { leadId: string; onRegistered: () =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.notice]);
   return (
-    <section className="space-y-3 rounded-xl border border-slate-200 p-4">
+    <section className="space-y-2.5 rounded-xl border border-slate-200 p-3">
       <h3 className="text-sm font-semibold tracking-wide text-slate-700 uppercase">
         Registrar llamada
       </h3>
-      <form action={action} className="space-y-3">
+      <form action={action} className="space-y-2.5">
         <input type="hidden" name="lead_id" value={leadId} />
         <div>
           <label className={labelCls} htmlFor="status">
@@ -710,7 +713,7 @@ function CallForm({ leadId, onRegistered }: { leadId: string; onRegistered: () =
           <textarea
             id="note"
             name="note"
-            rows={3}
+            rows={2}
             placeholder="Nota de la llamada"
             className={inputCls}
           />
