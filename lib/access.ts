@@ -177,19 +177,29 @@ export async function getLeadsForDashboard(
   const sb = await createServerSupabase();
   const { startIso, endIso } = rangeBounds(range);
   const out: LeadRow[] = [];
-  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
-    const { data, error } = await sb
+  const BASE_COLS =
+    "id,store_id,phone,wa_id,name,email,first_seen_at,last_interaction_at,kapso_conversation_id,handoff_reason,handoff_at,category,status,needs_attention,order_id,has_order";
+  // Source/channel attribution columns (migration 0008). Selected when present;
+  // if the migration hasn't been applied yet the query errors, so we fall back to
+  // the base columns once and keep going — the rest of the dashboard is unaffected.
+  let cols = `${BASE_COLS},source,ad_id,ad_headline`;
+  const pageQuery = (select: string, from: number) =>
+    sb
       .from("leads")
-      .select(
-        "id,store_id,phone,wa_id,name,email,first_seen_at,last_interaction_at,kapso_conversation_id,handoff_reason,handoff_at,category,status,needs_attention,order_id,has_order",
-      )
+      .select(select)
       .in("store_id", storeIds)
       .gte("last_interaction_at", startIso)
       .lte("last_interaction_at", endIso)
       .order("last_interaction_at", { ascending: false })
       .range(from, from + PAGE_SIZE - 1);
+  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+    let { data, error } = await pageQuery(cols, from);
+    if (error && cols !== BASE_COLS) {
+      cols = BASE_COLS; // source columns absent — degrade gracefully
+      ({ data, error } = await pageQuery(cols, from));
+    }
     if (error || !data?.length) break;
-    out.push(...(data as LeadRow[]));
+    out.push(...(data as unknown as LeadRow[]));
     if (data.length < PAGE_SIZE) break;
   }
   return out;

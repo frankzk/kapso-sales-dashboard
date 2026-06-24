@@ -661,6 +661,55 @@ export interface LossReasonsResult {
   reasons: LossReason[];
 }
 
+export interface SourceStat {
+  key: string; // 'meta_ad' | 'organic'
+  label: string;
+  leads: number;
+  pedidos: number; // leads that converted (has_order)
+  conversion: number; // pedidos / leads, 0..1
+  ingresos: number; // net revenue of those orders
+}
+
+/**
+ * Conversion + revenue per acquisition source, so campaign performance can be
+ * read independently and against organic without removing anything from the
+ * shared WhatsApp flow. Leads whose `source` is 'meta_ad' (Click-to-WhatsApp ad)
+ * bucket separately; revenue joins orders by customer phone (the same key the
+ * lead sync links on). Returns [] when no lead carries a source yet, so the
+ * dashboard module stays hidden until campaign data exists.
+ */
+export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceStat[] {
+  if (!leads.some((l) => l.source)) return [];
+  const netByPhone = new Map<string, number>();
+  for (const o of activeOrders(orders)) {
+    if (!o.customer_phone) continue;
+    const net = Number(o.total_amount ?? 0) - Number(o.total_refunded ?? 0);
+    netByPhone.set(o.customer_phone, (netByPhone.get(o.customer_phone) ?? 0) + net);
+  }
+  const buckets = new Map<string, { leads: number; pedidos: number; ingresos: number }>();
+  for (const l of leads) {
+    const key = l.source === "meta_ad" ? "meta_ad" : "organic";
+    const b = buckets.get(key) ?? { leads: 0, pedidos: 0, ingresos: 0 };
+    b.leads += 1;
+    if (l.has_order) {
+      b.pedidos += 1;
+      b.ingresos += netByPhone.get(l.phone) ?? 0;
+    }
+    buckets.set(key, b);
+  }
+  const labels: Record<string, string> = { meta_ad: "Meta Ads (campañas)", organic: "Orgánico" };
+  return [...buckets.entries()]
+    .map(([key, b]) => ({
+      key,
+      label: labels[key] ?? key,
+      leads: b.leads,
+      pedidos: b.pedidos,
+      conversion: b.leads ? b.pedidos / b.leads : 0,
+      ingresos: round2(b.ingresos),
+    }))
+    .sort((a, b) => b.ingresos - a.ingresos || b.leads - a.leads);
+}
+
 /**
  * "¿Por qué NO compraron?" — bucket the non-buying leads by status. The universe
  * is leads with no order that aren't actively hot (in-progress) or won.

@@ -21,6 +21,7 @@ import {
   lossReasons,
   lostRevenueByReason,
   rollupSeries,
+  sourceBreakdown,
   topProducts,
 } from "@/lib/metrics";
 import { BarList, Card, EmptyState, SimpleTable, cn, type BarItem } from "@/components/ui";
@@ -158,6 +159,7 @@ export function ExecutiveDashboard({
   const loss = lossReasons(leadList);
   const lostRev = lostRevenueByReason(loss, totals.aov);
   const channels = botVsAdvisor(leadList);
+  const sourceStats = sourceBreakdown(leadList, orders);
   const funnelStages = conversationalFunnel({
     conversations,
     leads: leadList,
@@ -265,6 +267,55 @@ export function ExecutiveDashboard({
           <LostRevenueCards items={lostRev.items} total={lostRev.total} currency={currency} />
         </Module>
       </div>
+
+      {/* Row 2b — Conversión por fuente (campañas Meta vs orgánico). Hidden until
+          at least one lead carries an attributed source. */}
+      {sourceStats.length > 0 && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          <Module
+            title="Conversión por fuente"
+            subtitle="Campañas de Meta (Click-to-WhatsApp) vs orgánico — mismo canal, atribución separada"
+            info
+            className="lg:col-span-12"
+          >
+            <SimpleTable
+              rows={sourceStats}
+              columns={[
+                {
+                  key: "label",
+                  header: "Fuente",
+                  render: (r) => (
+                    <span className="font-medium text-slate-800">
+                      {r.key === "meta_ad" ? "📣 " : ""}
+                      {r.label}
+                    </span>
+                  ),
+                },
+                { key: "leads", header: "Leads", align: "right", render: (r) => r.leads },
+                { key: "pedidos", header: "Pedidos", align: "right", render: (r) => r.pedidos },
+                {
+                  key: "conversion",
+                  header: "Conversión",
+                  align: "right",
+                  render: (r) => (
+                    <span className="font-semibold text-slate-900">{formatPct(r.conversion)}</span>
+                  ),
+                },
+                {
+                  key: "ingresos",
+                  header: "Ingresos",
+                  align: "right",
+                  render: (r) => (
+                    <span className="font-semibold text-emerald-700">
+                      {formatCurrency(r.ingresos, currency)}
+                    </span>
+                  ),
+                },
+              ]}
+            />
+          </Module>
+        </div>
+      )}
 
       {/* Row 3 — Ventas · Resumen por tienda · Integridad de conversión */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
