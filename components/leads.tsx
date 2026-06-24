@@ -12,6 +12,7 @@ import {
   categoryOf,
   isClaimActive,
   labelOf,
+  leadSegment,
   type LeadCategory,
   type LeadGestion,
   type LeadSegment,
@@ -87,6 +88,23 @@ const OUTCOME_VIEWS: { key: LeadView; label: string }[] = [
 const SEG_LABEL = Object.fromEntries(
   LEAD_SEGMENTS.map((s) => [s.key, s.label] as [LeadSegment, string]),
 ) as Record<LeadSegment, string>;
+
+const SEGMENT_BADGE: Record<LeadSegment, string> = {
+  carrito: "bg-emerald-100 text-emerald-700",
+  distrito: "bg-blue-100 text-blue-700",
+  converso: "bg-violet-100 text-violet-700",
+  frio: "bg-slate-100 text-slate-500",
+};
+
+/** Engagement-level chip (Frío → Conversó → Dio distrito → Con carrito) per row. */
+function SegmentBadge({ lead }: { lead: LeadRow }) {
+  const seg = leadSegment(lead);
+  return (
+    <span className={cn("whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", SEGMENT_BADGE[seg])}>
+      {SEG_LABEL[seg]}
+    </span>
+  );
+}
 
 /** One pill in the unified leads nav (a queue sub-filter or an outcome tab). */
 function NavPill({
@@ -332,6 +350,7 @@ export function LeadsBoard({
                 <th className="py-2 text-left font-medium">Nombre</th>
                 <th className="py-2 text-left font-medium">Teléfono</th>
                 <th className="py-2 text-left font-medium">Última interacción</th>
+                <th className="py-2 text-left font-medium">Calificación</th>
                 <th className="py-2 text-left font-medium">Estado</th>
                 <th className="py-2 text-right font-medium">Acción</th>
               </tr>
@@ -375,6 +394,9 @@ export function LeadsBoard({
                       {active && <AgingBadge at={lead.last_interaction_at} />}
                     </td>
                     <td className="py-2.5">
+                      <SegmentBadge lead={lead} />
+                    </td>
+                    <td className="py-2.5">
                       <StatusBadge status={lead.status} needsAttention={lead.needs_attention} />
                       {overdue && (
                         <span
@@ -401,7 +423,7 @@ export function LeadsBoard({
               })}
               {!shownLeads.length && (
                 <tr>
-                  <td colSpan={5} className="py-4 text-sm text-slate-400">
+                  <td colSpan={6} className="py-4 text-sm text-slate-400">
                     {leads.length ? "No hay leads de esta fuente en la vista." : "No hay leads en esta vista."}
                   </td>
                 </tr>
