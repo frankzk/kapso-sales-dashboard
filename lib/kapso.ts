@@ -145,6 +145,71 @@ export function listMessages(
   });
 }
 
+/**
+ * Send a free-text WhatsApp *session* message via Kapso's Meta proxy
+ * (`POST {origin}/meta/whatsapp/v24.0/{phoneNumberId}/messages`). Only valid
+ * inside the 24h customer-service window — outside it WhatsApp rejects with
+ * error 131047, which we surface as { ok:false, code }. Never throws.
+ */
+export async function sendWhatsappText(
+  opts: KapsoClientOpts,
+  params: { phoneNumberId: string; to: string; body: string },
+): Promise<{ ok: true; id: string | null } | { ok: false; error: string; code?: number }> {
+  const origin = new URL(baseFor(opts)).origin;
+  const url = `${origin}/meta/whatsapp/v24.0/${encodeURIComponent(params.phoneNumberId)}/messages`;
+  const doFetch = opts.fetchImpl ?? fetch;
+  let res: Response;
+  try {
+    res = await doFetch(url, {
+      method: "POST",
+      headers: {
+        "X-API-Key": opts.apiKey,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: params.to,
+        type: "text",
+        text: { preview_url: false, body: params.body },
+      }),
+    });
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? "network error" };
+  }
+  const json: any = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = json?.error ?? json?.errors?.[0] ?? {};
+    return {
+      ok: false,
+      error: err?.message ?? err?.title ?? `HTTP ${res.status}`,
+      code: typeof err?.code === "number" ? err.code : undefined,
+    };
+  }
+  const id = json?.messages?.[0]?.id;
+  return { ok: true, id: typeof id === "string" ? id : null };
+}
+
+/** Latest inbound (customer) message time in ms for a conversation, or null. */
+export async function fetchLastInboundAt(
+  opts: KapsoClientOpts,
+  conversationId: string,
+): Promise<number | null> {
+  let page: KapsoPage<any>;
+  try {
+    page = await listMessages(opts, { conversationId, direction: "inbound", limit: 5 });
+  } catch {
+    return null;
+  }
+  let max: number | null = null;
+  for (const m of page.data ?? []) {
+    const t = msgTimeMs(m);
+    if (t != null && (max == null || t > max)) max = t;
+  }
+  return max;
+}
+
 export function getPhoneHealth(
   opts: KapsoClientOpts,
   phoneNumberId: string,

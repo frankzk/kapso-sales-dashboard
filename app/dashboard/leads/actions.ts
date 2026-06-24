@@ -6,6 +6,8 @@ import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { getLeadWithCalls } from "@/lib/leads-access";
 import { CLAIM_TTL_MINUTES, categoryOf, isValidStatus, labelOf } from "@/lib/leads";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
+import { getStoreCreds } from "@/lib/ingest";
+import { fetchLastInboundAt, sendWhatsappText } from "@/lib/kapso";
 
 export interface LeadActionState {
   error?: string;
@@ -109,4 +111,80 @@ export async function registerCall(
   return {
     notice: status ? `Llamada registrada · ${labelOf(status)}` : "Llamada registrada.",
   };
+}
+
+const WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Is the lead's WhatsApp 24h session window open? (i.e. the customer sent a
+ * message within the last 24h, so we may reply with free text). Reads the last
+ * inbound message time live from Kapso.
+ */
+export async function getLeadWindow(
+  leadId: string,
+): Promise<{ open: boolean; lastInboundAt: string | null; reason?: string }> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { open: false, lastInboundAt: null, reason: "Sin acceso." };
+  const admin = createAdminSupabase();
+  const { data } = await admin
+    .from("leads")
+    .select("kapso_conversation_id")
+    .eq("id", leadId)
+    .maybeSingle();
+  const convId = (data as { kapso_conversation_id: string | null } | null)?.kapso_conversation_id ?? null;
+  if (!convId) return { open: false, lastInboundAt: null, reason: "Sin conversación de WhatsApp." };
+  const creds = await getStoreCreds(ctx.storeId);
+  if (!creds?.kapso_api_key) return { open: false, lastInboundAt: null, reason: "Tienda sin Kapso configurado." };
+  const lastMs = await fetchLastInboundAt({ apiKey: creds.kapso_api_key }, convId);
+  if (lastMs == null) return { open: false, lastInboundAt: null, reason: "El cliente aún no ha escrito." };
+  return { open: Date.now() - lastMs < WINDOW_MS, lastInboundAt: new Date(lastMs).toISOString() };
+}
+
+/**
+ * Send a free-text WhatsApp message to the lead. Only works inside the 24h
+ * session window; outside it WhatsApp rejects the send and we say so. The sent
+ * message is logged to the lead history (kind="message").
+ */
+export async function sendLeadMessage(leadId: string, text: string): Promise<LeadActionState> {
+  const body = text.trim();
+  if (!body) return { error: "Escribe un mensaje." };
+  if (body.length > 4000) return { error: "Mensaje demasiado largo (máx. 4000 caracteres)." };
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+
+  const admin = createAdminSupabase();
+  const { data } = await admin.from("leads").select("phone").eq("id", leadId).maybeSingle();
+  const phone = (data as { phone: string | null } | null)?.phone ?? null;
+  if (!phone) return { error: "El lead no tiene teléfono." };
+
+  const creds = await getStoreCreds(ctx.storeId);
+  if (!creds?.kapso_api_key || !creds.whatsapp_phone_number_id) {
+    return { error: "La tienda no tiene WhatsApp/Kapso configurado." };
+  }
+
+  const res = await sendWhatsappText(
+    { apiKey: creds.kapso_api_key },
+    { phoneNumberId: creds.whatsapp_phone_number_id, to: phone, body },
+  );
+  if (!res.ok) {
+    const closed = res.code === 131047 || /24\s*h|re-?engag|outside|window/i.test(res.error);
+    return {
+      error: closed
+        ? "Ventana de 24h cerrada: el cliente debe escribirte primero (o se necesita una plantilla)."
+        : `No se pudo enviar: ${res.error}`,
+    };
+  }
+
+  await admin.from("lead_calls").insert({
+    lead_id: leadId,
+    store_id: ctx.storeId,
+    vendedora: ctx.userId,
+    kind: "message",
+    new_status: null,
+    note: body,
+  });
+  await admin.from("leads").update({ last_interaction_at: new Date().toISOString() }).eq("id", leadId);
+
+  revalidatePath("/dashboard/leads");
+  return { notice: "Mensaje enviado por WhatsApp ✓" };
 }

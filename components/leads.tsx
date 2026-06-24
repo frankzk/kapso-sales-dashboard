@@ -19,9 +19,11 @@ import {
 } from "@/lib/leads";
 import {
   claimLead,
+  getLeadWindow,
   loadLeadDetail,
   registerCall,
   releaseLead,
+  sendLeadMessage,
   type LeadActionState,
 } from "@/app/dashboard/leads/actions";
 import { Card, cn } from "@/components/ui";
@@ -553,6 +555,8 @@ function LeadDrawer({
             </p>
           )}
 
+          <WhatsappComposer leadId={lead.id} onSent={onRegistered} />
+
           <CallForm leadId={lead.id} onRegistered={onRegistered} />
 
           <section className="space-y-2">
@@ -567,11 +571,13 @@ function LeadDrawer({
                   <li key={c.id ?? i} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs text-slate-400">{fmtDate(c.occurred_at)}</span>
-                      {c.new_status && (
+                      {c.kind === "message" ? (
+                        <span className="text-xs font-medium text-brand-700">📤 WhatsApp</span>
+                      ) : c.new_status ? (
                         <span className="text-xs font-medium text-slate-600">
                           {labelOf(c.new_status)}
                         </span>
-                      )}
+                      ) : null}
                     </div>
                     {c.note && <p className="mt-1 text-slate-700">{c.note}</p>}
                   </li>
@@ -592,6 +598,82 @@ function LeadDrawer({
         </div>
       </aside>
     </>
+  );
+}
+
+/** Free-text WhatsApp composer — enabled only inside the 24h session window. */
+function WhatsappComposer({ leadId, onSent }: { leadId: string; onSent: () => void }) {
+  const [win, setWin] = useState<{ loading: boolean; open: boolean; reason?: string }>({
+    loading: true,
+    open: false,
+  });
+  const [text, setText] = useState("");
+  const [pending, startTransition] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setWin({ loading: true, open: false });
+    setText("");
+    setMsg(null);
+    getLeadWindow(leadId).then((w) => {
+      if (alive) setWin({ loading: false, open: w.open, reason: w.reason });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [leadId]);
+
+  function send() {
+    const body = text.trim();
+    if (!body) return;
+    setMsg(null);
+    startTransition(async () => {
+      const res = await sendLeadMessage(leadId, body);
+      if (res.error) {
+        setMsg(res.error);
+        return;
+      }
+      setText("");
+      setMsg(res.notice ?? "Enviado.");
+      onSent();
+    });
+  }
+
+  return (
+    <section className="space-y-2 rounded-xl border border-slate-200 p-4">
+      <h3 className="text-sm font-semibold tracking-wide text-slate-700 uppercase">Enviar WhatsApp</h3>
+      {win.loading ? (
+        <p className="text-sm text-slate-400">Verificando ventana de 24h…</p>
+      ) : win.open ? (
+        <>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.currentTarget.value)}
+            rows={3}
+            placeholder="Escribe un mensaje…"
+            className={inputCls}
+            disabled={pending}
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={send}
+              disabled={pending || !text.trim()}
+              className="rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
+            >
+              {pending ? "Enviando…" : "Enviar"}
+            </button>
+            {msg && <span className="text-xs text-slate-500">{msg}</span>}
+          </div>
+        </>
+      ) : (
+        <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+          ⏳ {win.reason ?? "El cliente debe escribirte primero."} Solo puedes enviar texto libre dentro
+          de las 24h desde su último mensaje.
+        </p>
+      )}
+    </section>
   );
 }
 
