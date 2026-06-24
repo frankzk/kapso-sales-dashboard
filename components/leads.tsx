@@ -10,6 +10,9 @@ import {
   LEAD_SEGMENTS,
   MANUAL_STATUSES,
   categoryOf,
+  countGestiones,
+  countLeadSegments,
+  gestionOf,
   isClaimActive,
   labelOf,
   leadSegment,
@@ -143,16 +146,48 @@ function NavPill({
   );
 }
 
+/** Client-side filter pill (instant, no navigation) — mirrors NavPill styling. */
+function FilterPill({
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm",
+        active
+          ? "border-brand-500 bg-brand-50 text-brand-700"
+          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+      )}
+    >
+      {label}
+      <span
+        className={cn(
+          "rounded-full px-1.5 py-0.5 text-xs font-medium",
+          active ? "bg-brand-100 text-brand-700" : "bg-slate-100 text-slate-500",
+        )}
+      >
+        {count}
+      </span>
+    </button>
+  );
+}
+
 export function LeadsBoard({
   stores,
   storeId,
   view,
   counts,
   leads,
-  segCounts,
-  segment,
-  gestCounts,
-  gestion,
   currentUserId,
 }: {
   stores: StoreSummary[];
@@ -160,10 +195,6 @@ export function LeadsBoard({
   view: LeadView;
   counts: Record<LeadView, number>;
   leads: LeadRow[];
-  segCounts?: Record<LeadSegment, number> | null;
-  segment?: LeadSegment | null;
-  gestCounts?: Record<LeadGestion, number> | null;
-  gestion?: LeadGestion | null;
   currentUserId: string;
 }) {
   const router = useRouter();
@@ -173,8 +204,11 @@ export function LeadsBoard({
   // have; the claim + call history load in the background (no page navigation).
   const [selected, setSelected] = useState<LeadRow | null>(null);
   const [calls, setCalls] = useState<LeadCallRow[] | null>(null);
-  // Client-side source lens (campaña vs orgánico) — instant, no navigation.
+  // Client-side sub-filters (instant, no navigation): source lens + the queue's
+  // intención/gestión axes within "Por llamar".
   const [srcFilter, setSrcFilter] = useState<"all" | "meta_ad" | "organic">("all");
+  const [segFilter, setSegFilter] = useState<LeadSegment | null>(null);
+  const [gestFilter, setGestFilter] = useState<LeadGestion | null>(null);
 
   function changeStore(nextStore: string) {
     router.push(`/dashboard/leads?store=${nextStore}&view=${view}`);
@@ -230,10 +264,16 @@ export function LeadsBoard({
   const campaignCount = leads.filter((l) => l.source === "meta_ad").length;
   const organicCount = leads.length - campaignCount;
   const hasCampaign = campaignCount > 0;
-  const shownLeads =
-    srcFilter === "all"
-      ? leads
-      : leads.filter((l) => (l.source === "meta_ad" ? "meta_ad" : "organic") === srcFilter);
+  const segCounts = countLeadSegments(leads);
+  const gestCounts = countGestiones(leads);
+  const shownLeads = leads.filter((l) => {
+    if (srcFilter !== "all" && (l.source === "meta_ad" ? "meta_ad" : "organic") !== srcFilter) return false;
+    if (view === "por_llamar") {
+      if (segFilter && leadSegment(l) !== segFilter) return false;
+      if (gestFilter && gestionOf(l.status) !== gestFilter) return false;
+    }
+    return true;
+  });
 
   return (
     <div className="space-y-4">
@@ -283,29 +323,9 @@ export function LeadsBoard({
       )}
 
       <div className="sticky top-0 z-10 bg-slate-50 pt-1 pb-2">
+        {/* Etapas — cambian los datos, así que navegan (con skeleton instantáneo). */}
         <nav className="flex flex-wrap items-center gap-1.5">
-          {/* Cola "Por llamar": Todos + sub-filtros por intención (frío → con carrito).
-              Los hrefs preservan el eje de gestión (&gest) para que el combo sobreviva. */}
-          <NavPill
-            href={`/dashboard/leads?store=${storeId}&view=por_llamar${gestion ? `&gest=${gestion}` : ""}`}
-            label="Todos"
-            count={counts.por_llamar}
-            active={view === "por_llamar" && !segment}
-          />
-          {(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((k) => (
-            <NavPill
-              key={k}
-              href={`/dashboard/leads?store=${storeId}&view=por_llamar&seg=${k}${gestion ? `&gest=${gestion}` : ""}`}
-              label={SEG_LABEL[k]}
-              count={segCounts?.[k] ?? 0}
-              active={view === "por_llamar" && segment === k}
-            />
-          ))}
-
-          {/* separador: izquierda = filtros de la cola · derecha = estados finales */}
-          <span className="mx-1 h-6 w-px shrink-0 self-center bg-slate-300" aria-hidden="true" />
-
-          {OUTCOME_VIEWS.map((v) => (
+          {[{ key: "por_llamar" as LeadView, label: "Por llamar" }, ...OUTCOME_VIEWS].map((v) => (
             <NavPill
               key={v.key}
               href={`/dashboard/leads?store=${storeId}&view=${v.key}`}
@@ -316,27 +336,46 @@ export function LeadsBoard({
           ))}
         </nav>
 
-        {/* 2da línea — Gestión (estado de llamada del asesor); solo en la cola.
-            Combina con el eje de intención: los hrefs preservan &seg. */}
+        {/* Sub-filtros de la cola "Por llamar" — client-side, instantáneos. */}
         {view === "por_llamar" && (
-          <nav className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-2">
-            <span className="text-xs font-medium text-slate-400">Gestión:</span>
-            <NavPill
-              href={`/dashboard/leads?store=${storeId}&view=por_llamar${segment ? `&seg=${segment}` : ""}`}
-              label="Todos"
-              count={counts.por_llamar}
-              active={!gestion}
-            />
-            {LEAD_GESTIONES.map((g) => (
-              <NavPill
-                key={g.key}
-                href={`/dashboard/leads?store=${storeId}&view=por_llamar${segment ? `&seg=${segment}` : ""}&gest=${g.key}`}
-                label={g.label}
-                count={gestCounts?.[g.key] ?? 0}
-                active={gestion === g.key}
+          <div className="mt-2 space-y-2 border-t border-slate-100 pt-2">
+            <nav className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-medium text-slate-400">Intención:</span>
+              <FilterPill
+                label="Todos"
+                count={counts.por_llamar}
+                active={!segFilter}
+                onClick={() => setSegFilter(null)}
               />
-            ))}
-          </nav>
+              {(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((k) => (
+                <FilterPill
+                  key={k}
+                  label={SEG_LABEL[k]}
+                  count={segCounts[k]}
+                  active={segFilter === k}
+                  onClick={() => setSegFilter((p) => (p === k ? null : k))}
+                />
+              ))}
+            </nav>
+            <nav className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-medium text-slate-400">Gestión:</span>
+              <FilterPill
+                label="Todos"
+                count={counts.por_llamar}
+                active={!gestFilter}
+                onClick={() => setGestFilter(null)}
+              />
+              {LEAD_GESTIONES.map((g) => (
+                <FilterPill
+                  key={g.key}
+                  label={g.label}
+                  count={gestCounts[g.key]}
+                  active={gestFilter === g.key}
+                  onClick={() => setGestFilter((p) => (p === g.key ? null : g.key))}
+                />
+              ))}
+            </nav>
+          </div>
         )}
       </div>
 

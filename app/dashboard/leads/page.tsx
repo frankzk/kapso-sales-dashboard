@@ -1,20 +1,5 @@
 import { getAccessibleStores, getCurrentUser } from "@/lib/access";
-import {
-  LEAD_VIEWS,
-  getLeadCounts,
-  getStoreLeads,
-  type LeadView,
-} from "@/lib/leads-access";
-import {
-  countGestiones,
-  countLeadSegments,
-  gestionOf,
-  isLeadGestion,
-  isLeadSegment,
-  leadSegment,
-  type LeadGestion,
-  type LeadSegment,
-} from "@/lib/leads";
+import { LEAD_VIEWS, getLeadCounts, getStoreLeads, type LeadView } from "@/lib/leads-access";
 import { EmptyState } from "@/components/ui";
 import { LeadsBoard } from "@/components/leads";
 
@@ -27,7 +12,7 @@ function isLeadView(v: string | undefined): v is LeadView {
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ store?: string; view?: string; seg?: string; gest?: string }>;
+  searchParams: Promise<{ store?: string; view?: string }>;
 }) {
   const sp = await searchParams;
   const stores = await getAccessibleStores();
@@ -40,29 +25,13 @@ export default async function LeadsPage({
   const storeId = sp.store && stores.some((s) => s.id === sp.store) ? sp.store : fallback.id;
   const view: LeadView = isLeadView(sp.view) ? sp.view : "por_llamar";
 
-  const [counts, leads] = await Promise.all([getLeadCounts(storeId), getStoreLeads(storeId, view)]);
-  const user = await getCurrentUser();
-
-  // The unified nav always shows the "Por llamar" sub-segment counts, so we need
-  // those leads even when another tab is active (bounded by getStoreLeads' limit).
-  // Segment filtering only applies within "Por llamar".
-  const porLlamarLeads = view === "por_llamar" ? leads : await getStoreLeads(storeId, "por_llamar");
-  const segCounts = countLeadSegments(porLlamarLeads);
-  const gestCounts = countGestiones(porLlamarLeads);
-  let segment: LeadSegment | null = null;
-  let gestion: LeadGestion | null = null;
-  let displayLeads = leads;
-  if (view === "por_llamar") {
-    segment = isLeadSegment(sp.seg) ? sp.seg : null;
-    gestion = isLeadGestion(sp.gest) ? sp.gest : null;
-    if (segment || gestion) {
-      displayLeads = leads.filter(
-        (l) =>
-          (!segment || leadSegment(l) === segment) &&
-          (!gestion || gestionOf(l.status) === gestion),
-      );
-    }
-  }
+  // Segment + gestión sub-filtering is client-side in the board now (instant, no
+  // navigation), so the page only fetches the active view's leads + counts.
+  const [counts, leads, user] = await Promise.all([
+    getLeadCounts(storeId),
+    getStoreLeads(storeId, view),
+    getCurrentUser(),
+  ]);
 
   return (
     <LeadsBoard
@@ -70,11 +39,7 @@ export default async function LeadsPage({
       storeId={storeId}
       view={view}
       counts={counts}
-      leads={displayLeads}
-      segCounts={segCounts}
-      segment={segment}
-      gestCounts={gestCounts}
-      gestion={gestion}
+      leads={leads}
       currentUserId={user?.id ?? ""}
     />
   );
