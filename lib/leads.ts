@@ -224,6 +224,52 @@ export function isLeadGestion(v: string | undefined | null): v is LeadGestion {
   return !!v && LEAD_GESTIONES.some((g) => g.key === v);
 }
 
+// ---------------------------------------------------------------------------
+// 24h WhatsApp session window. The window opens on each inbound (customer)
+// message and lasts 24h; outside it we can't send free text. We classify by how
+// much time is LEFT (from the last inbound), so the queue can prioritise leads
+// about to close. Pure: `nowMs` is passed in.
+// ---------------------------------------------------------------------------
+export type LeadWindow = "fresca" | "por_vencer" | "critica" | "cerrada";
+
+export const SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;
+const POR_VENCER_MS = 6 * 60 * 60 * 1000; // ≤6h left
+const CRITICA_MS = 2 * 60 * 60 * 1000; // ≤2h left
+
+/** State + remaining ms of the 24h window, from the last inbound time. */
+export function leadWindowInfo(
+  inboundAt: string | null | undefined,
+  nowMs: number,
+): { state: LeadWindow | null; msLeft: number | null } {
+  if (!inboundAt) return { state: null, msLeft: null };
+  const t = new Date(inboundAt).getTime();
+  if (!Number.isFinite(t)) return { state: null, msLeft: null };
+  const left = SESSION_WINDOW_MS - (nowMs - t);
+  if (left <= 0) return { state: "cerrada", msLeft: 0 };
+  if (left <= CRITICA_MS) return { state: "critica", msLeft: left };
+  if (left <= POR_VENCER_MS) return { state: "por_vencer", msLeft: left };
+  return { state: "fresca", msLeft: left };
+}
+
+export function isLeadWindowFilter(v: string | undefined | null): v is "por_vencer" | "cerrada" {
+  return v === "por_vencer" || v === "cerrada";
+}
+
+/** Tally leads into actionable window buckets (por_vencer groups ≤6h incl. crítica). */
+export function countLeadWindows(
+  leads: { last_inbound_at?: string | null; last_interaction_at?: string | null }[],
+  nowMs: number,
+): { por_vencer: number; cerrada: number } {
+  let por_vencer = 0;
+  let cerrada = 0;
+  for (const l of leads) {
+    const { state } = leadWindowInfo(l.last_inbound_at ?? l.last_interaction_at, nowMs);
+    if (state === "por_vencer" || state === "critica") por_vencer += 1;
+    else if (state === "cerrada") cerrada += 1;
+  }
+  return { por_vencer, cerrada };
+}
+
 /** Tally "Por llamar" leads into gestión buckets (unmapped statuses ignored). */
 export function countGestiones(leads: { status: string }[]): Record<LeadGestion, number> {
   const out: Record<LeadGestion, number> = { sin_llamar: 0, nr: 0, buzon_cuelga: 0, contactados: 0 };

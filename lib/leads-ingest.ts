@@ -89,6 +89,7 @@ async function upsertLeadFromSeed(
   if (seed.name) row.name = seed.name;
   if (seed.wa_id) row.wa_id = seed.wa_id;
   if (seed.last_interaction_at) row.last_interaction_at = seed.last_interaction_at;
+  if (seed.last_inbound_at) row.last_inbound_at = seed.last_inbound_at;
   if (!ctx.existing && seed.first_seen_at) row.first_seen_at = seed.first_seen_at;
   if (ns) {
     row.status = ns.status;

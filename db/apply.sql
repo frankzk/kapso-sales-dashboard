@@ -19,4 +19,6 @@
 \ir migrations/0007_lead_signals.sql
 \echo 'Applying 0008_lead_source.sql'
 \ir migrations/0008_lead_source.sql
+\echo 'Applying 0009_lead_inbound.sql'
+\ir migrations/0009_lead_inbound.sql
 \echo 'Done.'

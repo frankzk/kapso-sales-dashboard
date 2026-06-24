@@ -135,6 +135,7 @@ export interface LeadRow {
   ad_id?: string | null;
   ad_headline?: string | null;
   ctwa_clid?: string | null;
+  last_inbound_at?: string | null; // last customer inbound — drives the 24h window clock
   claimed_by: string | null;
   claimed_at: string | null;
   closed_by: string | null;

@@ -12,10 +12,12 @@ import {
   categoryOf,
   countGestiones,
   countLeadSegments,
+  countLeadWindows,
   gestionOf,
   isClaimActive,
   labelOf,
   leadSegment,
+  leadWindowInfo,
   type LeadCategory,
   type LeadGestion,
   type LeadSegment,
@@ -53,15 +55,34 @@ function daysSince(value: string | null | undefined): number | null {
   return Math.floor((Date.now() - new Date(value).getTime()) / 86_400_000);
 }
 
-/** Aging chip for active leads — flags the ones going cold (anti-fuga). */
-function AgingBadge({ at }: { at: string | null | undefined }) {
-  const d = daysSince(at);
-  if (d == null || d < 1) return null;
+/** 24h-window chip for active leads — time left (🟢/🟡/🔴) or ⚫ cerrada, so the
+ *  team attends the chat before the WhatsApp session window closes. */
+function WindowBadge({ lead }: { lead: LeadRow }) {
+  const at = lead.last_inbound_at ?? lead.last_interaction_at;
+  const { state, msLeft } = leadWindowInfo(at, Date.now());
+  if (!state) return null;
+  if (state === "cerrada") {
+    const d = daysSince(at);
+    return (
+      <span className="ml-2 whitespace-nowrap rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-500">
+        ⚫ cerrada{d != null && d >= 1 ? ` · hace ${d}d` : ""}
+      </span>
+    );
+  }
+  const hours = Math.max(1, Math.ceil((msLeft ?? 0) / 3_600_000));
   const cls =
-    d >= 7 ? "bg-red-100 text-red-700" : d >= 3 ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500";
+    state === "critica"
+      ? "bg-red-100 text-red-700"
+      : state === "por_vencer"
+        ? "bg-amber-100 text-amber-700"
+        : "bg-emerald-100 text-emerald-700";
+  const dot = state === "critica" ? "🔴" : state === "por_vencer" ? "🟡" : "🟢";
   return (
-    <span className={cn("ml-2 whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", cls)}>
-      hace {d} día{d === 1 ? "" : "s"}
+    <span
+      className={cn("ml-2 whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", cls)}
+      title="Tiempo restante de la ventana de 24h (desde el último mensaje del cliente)"
+    >
+      {dot} {hours}h
     </span>
   );
 }
@@ -215,6 +236,7 @@ export function LeadsBoard({
   const [srcFilter, setSrcFilter] = useState<"all" | "meta_ad" | "organic">("all");
   const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
   const [gestFilter, setGestFilter] = useState<LeadGestion | null>(initialGest ?? null);
+  const [winFilter, setWinFilter] = useState<"all" | "por_vencer" | "cerrada">("all");
 
   function changeStore(nextStore: string) {
     router.push(`/dashboard/leads?store=${nextStore}&view=${view}`);
@@ -270,13 +292,20 @@ export function LeadsBoard({
   const campaignCount = leads.filter((l) => l.source === "meta_ad").length;
   const organicCount = leads.length - campaignCount;
   const hasCampaign = campaignCount > 0;
+  const now = Date.now();
   const segCounts = countLeadSegments(leads);
   const gestCounts = countGestiones(leads);
+  const winCounts = countLeadWindows(leads, now);
   const shownLeads = leads.filter((l) => {
     if (srcFilter !== "all" && (l.source === "meta_ad" ? "meta_ad" : "organic") !== srcFilter) return false;
     if (view === "por_llamar") {
       if (segFilter && leadSegment(l) !== segFilter) return false;
       if (gestFilter && gestionOf(l.status) !== gestFilter) return false;
+      if (winFilter !== "all") {
+        const { state } = leadWindowInfo(l.last_inbound_at ?? l.last_interaction_at, now);
+        if (winFilter === "por_vencer" && !(state === "por_vencer" || state === "critica")) return false;
+        if (winFilter === "cerrada" && state !== "cerrada") return false;
+      }
     }
     return true;
   });
@@ -360,6 +389,24 @@ export function LeadsBoard({
                 ))}
               </div>
             )}
+            {view === "por_llamar" && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-medium text-slate-400">Ventana:</span>
+                <FilterPill label="Todos" active={winFilter === "all"} onClick={() => setWinFilter("all")} />
+                <FilterPill
+                  label="⏳ Por vencer"
+                  count={winCounts.por_vencer}
+                  active={winFilter === "por_vencer"}
+                  onClick={() => setWinFilter("por_vencer")}
+                />
+                <FilterPill
+                  label="⚫ Cerrada"
+                  count={winCounts.cerrada}
+                  active={winFilter === "cerrada"}
+                  onClick={() => setWinFilter("cerrada")}
+                />
+              </div>
+            )}
             {hasCampaign && (
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-xs font-medium text-slate-400">Fuente:</span>
@@ -437,7 +484,7 @@ export function LeadsBoard({
                     </td>
                     <td className="py-2.5 text-slate-600">
                       {fmtDate(lead.last_interaction_at)}
-                      {active && <AgingBadge at={lead.last_interaction_at} />}
+                      {active && <WindowBadge lead={lead} />}
                     </td>
                     <td className="py-2.5">
                       <SegmentBadge lead={lead} />

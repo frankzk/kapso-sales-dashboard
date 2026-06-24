@@ -588,6 +588,7 @@ export interface LeadSeed {
   kapso_conversation_id: string;
   last_interaction_at: string | null;
   first_seen_at: string | null;
+  last_inbound_at?: string | null;
 }
 
 /** Extract the lead identity from a Kapso conversation (null if no phone). */
@@ -601,6 +602,10 @@ export function conversationToLeadSeed(c: KapsoConversation): LeadSeed | null {
     kapso_conversation_id: String(c.id),
     last_interaction_at: (c.last_active_at as string) ?? c.kapso?.last_message_timestamp ?? null,
     first_seen_at: (c.created_at as string) ?? null,
+    last_inbound_at:
+      ((c.kapso?.last_inbound_at as string | null | undefined) ??
+        (c.last_inbound_at as string | null | undefined)) ||
+      null,
   };
 }
 

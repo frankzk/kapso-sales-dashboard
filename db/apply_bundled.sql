@@ -885,3 +885,8 @@ alter table leads add column if not exists ad_headline text;
 alter table leads add column if not exists ctwa_clid   text;
 
 create index if not exists leads_store_source_idx on leads (store_id, source);
+
+-- ---- 0009 ----
+-- 0009_lead_inbound.sql — last inbound message time (24h session-window clock)
+alter table leads add column if not exists last_inbound_at timestamptz;
+create index if not exists leads_store_inbound_idx on leads (store_id, last_inbound_at);
