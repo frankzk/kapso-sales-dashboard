@@ -767,6 +767,7 @@ export function lossReasons(leads: LeadRow[]): LossReasonsResult {
   for (const l of leads) {
     if (l.has_order) continue;
     if (l.category === "won" || l.category === "hot") continue;
+    if (l.status === "sin_stock") continue; // recuperable (vuelve a la cola), no cuenta como pérdida
     const bucket = LOSS_BUCKET_BY_STATUS[l.status] ?? "otros";
     counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
   }

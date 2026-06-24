@@ -49,15 +49,17 @@ describe("gestionOf / countGestiones (call-state buckets)", () => {
         { status: "cuelga" },
         { status: "contactado_dejo_wsp" },
         { status: "casi_cierra" }, // unmapped → ignored
+        { status: "sin_stock" },
       ]),
-    ).toEqual({ sin_llamar: 2, nr: 1, buzon_cuelga: 2, contactados: 1 });
+    ).toEqual({ sin_llamar: 2, nr: 1, buzon_cuelga: 2, contactados: 1, sin_stock: 1 });
   });
-  it("LEAD_GESTIONES lists the four buckets in order", () => {
+  it("LEAD_GESTIONES lists the buckets in order", () => {
     expect(LEAD_GESTIONES.map((g) => g.key)).toEqual([
       "sin_llamar",
       "nr",
       "buzon_cuelga",
       "contactados",
+      "sin_stock",
     ]);
   });
 });

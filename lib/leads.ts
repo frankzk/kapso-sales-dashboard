@@ -29,12 +29,12 @@ export const LEAD_STATUSES: LeadStatusDef[] = [
   { code: "cuelga", label: "Cuelga", category: "open", source: "manual", callable: true },
   { code: "buzon", label: "Buzón de voz", category: "open", source: "manual", callable: true },
   { code: "otros_productos", label: "Consultó otros productos", category: "open", source: "manual", callable: true },
+  { code: "sin_stock", label: "Sin stock", category: "open", source: "manual", callable: true },
   // 🔴 lost
   { code: "cancelado_cliente", label: "Cancelado por cliente", category: "lost", source: "manual", callable: false },
   { code: "cancelado", label: "Cancelado", category: "lost", source: "manual", callable: false },
   { code: "ya_compro_otro_lado", label: "Ya compró en otro lado", category: "lost", source: "manual", callable: false },
   { code: "solo_informacion", label: "Solo quería información", category: "lost", source: "manual", callable: false },
-  { code: "sin_stock", label: "Sin stock", category: "lost", source: "manual", callable: false },
   { code: "lista_negra", label: "Lista negra", category: "lost", source: "manual", callable: false },
   { code: "nr_no_existe", label: "Número no existe / incorrecto", category: "lost", source: "manual", callable: false },
   { code: "nr_extranjero", label: "Número extranjero", category: "lost", source: "manual", callable: false },
@@ -197,13 +197,14 @@ export function countLeadSegments(leads: LeadSegmentSignals[]): Record<LeadSegme
 // tab so they're not buckets here; casi_cierra (hot) maps to none.
 // ---------------------------------------------------------------------------
 
-export type LeadGestion = "sin_llamar" | "nr" | "buzon_cuelga" | "contactados";
+export type LeadGestion = "sin_llamar" | "nr" | "buzon_cuelga" | "contactados" | "sin_stock";
 
 export const LEAD_GESTIONES: { key: LeadGestion; label: string }[] = [
   { key: "sin_llamar", label: "🆕 Sin llamar" },
   { key: "nr", label: "📵 No responde" },
   { key: "buzon_cuelga", label: "📞 Buzón/Cuelga" },
   { key: "contactados", label: "💬 Contactados" },
+  { key: "sin_stock", label: "📦 Sin stock" },
 ];
 
 const GESTION_BY_STATUS: Record<string, LeadGestion> = {
@@ -213,6 +214,7 @@ const GESTION_BY_STATUS: Record<string, LeadGestion> = {
   cuelga: "buzon_cuelga",
   contactado_dejo_wsp: "contactados",
   otros_productos: "contactados",
+  sin_stock: "sin_stock",
 };
 
 /** The advisor-gestión bucket for a lead's status, or null (e.g. casi_cierra). */
@@ -272,7 +274,7 @@ export function countLeadWindows(
 
 /** Tally "Por llamar" leads into gestión buckets (unmapped statuses ignored). */
 export function countGestiones(leads: { status: string }[]): Record<LeadGestion, number> {
-  const out: Record<LeadGestion, number> = { sin_llamar: 0, nr: 0, buzon_cuelga: 0, contactados: 0 };
+  const out: Record<LeadGestion, number> = { sin_llamar: 0, nr: 0, buzon_cuelga: 0, contactados: 0, sin_stock: 0 };
   for (const l of leads) {
     const g = gestionOf(l.status);
     if (g) out[g] += 1;

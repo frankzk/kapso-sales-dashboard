@@ -890,3 +890,7 @@ create index if not exists leads_store_source_idx on leads (store_id, source);
 -- 0009_lead_inbound.sql — last inbound message time (24h session-window clock)
 alter table leads add column if not exists last_inbound_at timestamptz;
 create index if not exists leads_store_inbound_idx on leads (store_id, last_inbound_at);
+
+-- ---- 0010 ----
+-- 0010_sin_stock_open.sql — "Sin stock" recuperable: vuelve a la cola "Por llamar"
+update leads set category = 'open' where status = 'sin_stock' and category <> 'open';

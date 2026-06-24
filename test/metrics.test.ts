@@ -401,11 +401,11 @@ describe("Family 5 — Leads-derived", () => {
       lead({ status: "pedido_generado", category: "won", has_order: true }), // excluded
       lead({ status: "yape_por_verificar", category: "hot" }), // excluded
     ]);
-    expect(result.total).toBe(7);
+    expect(result.total).toBe(6); // sin_stock excluido (recuperable, no es pérdida)
     const byBucket = Object.fromEntries(result.reasons.map((r) => [r.bucket, r.count]));
-    expect(byBucket).toEqual({ no_respondio: 4, compro_otro_lado: 1, sin_stock: 1, solo_info: 1 });
+    expect(byBucket).toEqual({ no_respondio: 4, compro_otro_lado: 1, solo_info: 1 });
     expect(result.reasons[0]!.bucket).toBe("no_respondio");
-    expect(result.reasons[0]!.pct).toBe(57.14);
+    expect(result.reasons[0]!.pct).toBe(66.67);
   });
 
   it("lostRevenueByReason estimates count × AOV", () => {
@@ -415,10 +415,9 @@ describe("Family 5 — Leads-derived", () => {
       lead({ status: "sin_stock", category: "lost" }),
     ]);
     const lr = lostRevenueByReason(loss, 100);
-    expect(lr.total).toBe(300);
+    expect(lr.total).toBe(200); // sin_stock ya no cuenta como pérdida
     expect(Object.fromEntries(lr.items.map((i) => [i.bucket, i.estRevenue]))).toEqual({
       no_respondio: 200,
-      sin_stock: 100,
     });
   });
 

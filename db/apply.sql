@@ -21,4 +21,6 @@
 \ir migrations/0008_lead_source.sql
 \echo 'Applying 0009_lead_inbound.sql'
 \ir migrations/0009_lead_inbound.sql
+\echo 'Applying 0010_sin_stock_open.sql'
+\ir migrations/0010_sin_stock_open.sql
 \echo 'Done.'
