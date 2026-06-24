@@ -17,9 +17,10 @@ function advisorName(email: string): string {
   return email.includes("@") ? email.split("@")[0]! : email;
 }
 
-function rangeHref(range: DateRange, storeId: string | null, override?: { from: string; to: string }): string {
-  const qs = new URLSearchParams({ from: override?.from ?? range.from, to: override?.to ?? range.to });
-  if (storeId) qs.set("store", storeId);
+function buildHref(opts: { from: string; to: string; store: string | null; src: string | null }): string {
+  const qs = new URLSearchParams({ from: opts.from, to: opts.to });
+  if (opts.store) qs.set("store", opts.store);
+  if (opts.src) qs.set("src", opts.src);
   return `/dashboard/productividad?${qs.toString()}`;
 }
 
@@ -52,12 +53,14 @@ export function ProductivityBoard({
   currency,
   stores,
   storeId,
+  source,
 }: {
   rows: AdvisorStat[];
   range: DateRange;
   currency: string;
   stores: StoreSummary[];
   storeId: string | null;
+  source: string | null;
 }) {
   const totals = rows.reduce(
     (a, r) => ({
@@ -103,7 +106,7 @@ export function ProductivityBoard({
             return (
               <Chip
                 key={d}
-                href={rangeHref(range, storeId, p)}
+                href={buildHref({ from: p.from, to: p.to, store: storeId, src: source })}
                 label={`${d}d`}
                 active={range.from === p.from && range.to === p.to}
               />
@@ -114,12 +117,40 @@ export function ProductivityBoard({
 
       {stores.length > 1 && (
         <div className="flex flex-wrap gap-1.5">
-          <Chip href={rangeHref(range, null)} label="Todas" active={!storeId} />
+          <Chip
+            href={buildHref({ from: range.from, to: range.to, store: null, src: source })}
+            label="Todas"
+            active={!storeId}
+          />
           {stores.map((s) => (
-            <Chip key={s.id} href={rangeHref(range, s.id)} label={s.name} active={storeId === s.id} />
+            <Chip
+              key={s.id}
+              href={buildHref({ from: range.from, to: range.to, store: s.id, src: source })}
+              label={s.name}
+              active={storeId === s.id}
+            />
           ))}
         </div>
       )}
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs font-medium text-slate-400">Fuente:</span>
+        <Chip
+          href={buildHref({ from: range.from, to: range.to, store: storeId, src: null })}
+          label="Todas"
+          active={!source}
+        />
+        <Chip
+          href={buildHref({ from: range.from, to: range.to, store: storeId, src: "meta_ad" })}
+          label="📣 Campaña"
+          active={source === "meta_ad"}
+        />
+        <Chip
+          href={buildHref({ from: range.from, to: range.to, store: storeId, src: "organic" })}
+          label="Orgánico"
+          active={source === "organic"}
+        />
+      </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard label="Llamadas" value={String(totals.llamadas)} />

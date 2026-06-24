@@ -89,8 +89,13 @@ async function resolveEmails(userIds: string[]): Promise<Map<string, string>> {
   return map;
 }
 
-/** Fetch + aggregate per-advisor productivity for the stores/range (RLS-scoped). */
-export async function getAdvisorProductivity(storeIds: string[], range: DateRange): Promise<AdvisorStat[]> {
+/** Fetch + aggregate per-advisor productivity for the stores/range (RLS-scoped).
+ *  `source` optionally restricts to one acquisition source (campaña vs orgánico). */
+export async function getAdvisorProductivity(
+  storeIds: string[],
+  range: DateRange,
+  source: "meta_ad" | "organic" | null = null,
+): Promise<AdvisorStat[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
   const startIso = `${range.from}T00:00:00Z`;
@@ -107,13 +112,32 @@ export async function getAdvisorProductivity(storeIds: string[], range: DateRang
   const calls = (callsRaw as AdvisorCall[]) ?? [];
   if (!calls.length) return [];
 
-  // 2) Outcome of the touched leads (won? + linked order).
+  // 2) Outcome of the touched leads (won? + linked order + source). `source` is
+  //    selected with a fallback so a pending 0008 migration can't break the page.
   const leadIds = [...new Set(calls.map((c) => c.lead_id))];
-  const { data: leadsRaw } = await sb
-    .from("leads")
-    .select("id, has_order, order_id")
-    .in("id", leadIds);
-  const leadsTouched = (leadsRaw as { id: string; has_order: boolean; order_id: string | null }[]) ?? [];
+  type TouchedLead = { id: string; has_order: boolean; order_id: string | null; source?: string | null };
+  let leadsTouched: TouchedLead[];
+  {
+    const withSource = await sb.from("leads").select("id, has_order, order_id, source").in("id", leadIds);
+    if (withSource.error) {
+      // source column not present yet (migration 0008 pending) — degrade.
+      const base = await sb.from("leads").select("id, has_order, order_id").in("id", leadIds);
+      leadsTouched = (base.data as unknown as TouchedLead[]) ?? [];
+    } else {
+      leadsTouched = (withSource.data as unknown as TouchedLead[]) ?? [];
+    }
+  }
+
+  // Optional source lens: keep only calls/leads of the chosen acquisition source.
+  let scopedCalls = calls;
+  if (source) {
+    const allowed = new Set(
+      leadsTouched.filter((l) => (l.source === "meta_ad" ? "meta_ad" : "organic") === source).map((l) => l.id),
+    );
+    scopedCalls = calls.filter((c) => allowed.has(c.lead_id));
+    leadsTouched = leadsTouched.filter((l) => allowed.has(l.id));
+    if (!scopedCalls.length) return [];
+  }
 
   // 3) Net revenue per linked order.
   const orderIds = leadsTouched.filter((l) => l.has_order && l.order_id).map((l) => l.order_id as string);
@@ -133,6 +157,6 @@ export async function getAdvisorProductivity(storeIds: string[], range: DateRang
     leadOutcome.set(l.id, { won: !!l.has_order, net: l.order_id ? (netByOrder.get(l.order_id) ?? 0) : 0 });
   }
 
-  const emailById = await resolveEmails([...new Set(calls.map((c) => c.vendedora))]);
-  return computeAdvisorStats({ calls, leadOutcome, emailById });
+  const emailById = await resolveEmails([...new Set(scopedCalls.map((c) => c.vendedora))]);
+  return computeAdvisorStats({ calls: scopedCalls, leadOutcome, emailById });
 }
