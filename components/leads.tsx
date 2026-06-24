@@ -4,10 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
-import {
-  LEAD_VIEWS,
-  type LeadView,
-} from "@/lib/leads-access";
+import { type LeadView } from "@/lib/leads-access";
 import {
   LEAD_SEGMENTS,
   MANUAL_STATUSES,
@@ -56,27 +53,37 @@ function StatusBadge({ status, needsAttention }: { status: string; needsAttentio
   );
 }
 
-function SegPill({
-  storeId,
-  segKey,
+// Outcome tabs (right of the separator): distinct buckets, not sub-filters of
+// the call queue. "Calientes" was intentionally dropped — casi-cierra leads
+// stay reachable in the queue, and paid ones live in Yape/Shalom.
+const OUTCOME_VIEWS: { key: LeadView; label: string }[] = [
+  { key: "yape", label: "🔥 Yape/Shalom" },
+  { key: "seguimientos", label: "Seguimientos" },
+  { key: "ganados", label: "Ganados" },
+  { key: "perdidos", label: "Perdidos" },
+];
+
+const SEG_LABEL = Object.fromEntries(
+  LEAD_SEGMENTS.map((s) => [s.key, s.label] as [LeadSegment, string]),
+) as Record<LeadSegment, string>;
+
+/** One pill in the unified leads nav (a queue sub-filter or an outcome tab). */
+function NavPill({
+  href,
   label,
   count,
   active,
 }: {
-  storeId: string;
-  segKey: LeadSegment | null;
+  href: string;
   label: string;
   count: number;
   active: boolean;
 }) {
-  const href = segKey
-    ? `/dashboard/leads?store=${storeId}&view=por_llamar&seg=${segKey}`
-    : `/dashboard/leads?store=${storeId}&view=por_llamar`;
   return (
     <Link
       href={href}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs",
+        "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm",
         active
           ? "border-brand-500 bg-brand-50 text-brand-700"
           : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
@@ -85,7 +92,7 @@ function SegPill({
       {label}
       <span
         className={cn(
-          "rounded-full px-1.5 py-0.5 font-medium",
+          "rounded-full px-1.5 py-0.5 text-xs font-medium",
           active ? "bg-brand-100 text-brand-700" : "bg-slate-100 text-slate-500",
         )}
       >
@@ -190,57 +197,38 @@ export function LeadsBoard({
         )}
       </div>
 
-      <div className="sticky top-0 z-10 space-y-2 bg-slate-50 pt-1 pb-2">
-      <nav className="flex flex-wrap gap-1.5">
-        {LEAD_VIEWS.map((v) => {
-          const active = v.key === view;
-          return (
-            <Link
+      <div className="sticky top-0 z-10 bg-slate-50 pt-1 pb-2">
+        <nav className="flex flex-wrap items-center gap-1.5">
+          {/* Cola "Por llamar": Todos + sub-filtros por intención (frío → con carrito) */}
+          <NavPill
+            href={`/dashboard/leads?store=${storeId}&view=por_llamar`}
+            label="Todos"
+            count={counts.por_llamar}
+            active={view === "por_llamar" && !segment}
+          />
+          {(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((k) => (
+            <NavPill
+              key={k}
+              href={`/dashboard/leads?store=${storeId}&view=por_llamar&seg=${k}`}
+              label={SEG_LABEL[k]}
+              count={segCounts?.[k] ?? 0}
+              active={view === "por_llamar" && segment === k}
+            />
+          ))}
+
+          {/* separador: izquierda = filtros de la cola · derecha = estados finales */}
+          <span className="mx-1 h-6 w-px shrink-0 self-center bg-slate-300" aria-hidden="true" />
+
+          {OUTCOME_VIEWS.map((v) => (
+            <NavPill
               key={v.key}
               href={`/dashboard/leads?store=${storeId}&view=${v.key}`}
-              className={cn(
-                "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm",
-                active
-                  ? "border-brand-500 bg-brand-50 text-brand-700"
-                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
-              )}
-            >
-              {v.label}
-              <span
-                className={cn(
-                  "rounded-full px-1.5 py-0.5 text-xs font-medium",
-                  active ? "bg-brand-100 text-brand-700" : "bg-slate-100 text-slate-500",
-                )}
-              >
-                {counts[v.key]}
-              </span>
-            </Link>
-          );
-        })}
-      </nav>
-
-      {view === "por_llamar" && segCounts && (
-        <nav className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-2">
-          <span className="text-xs font-medium text-slate-400">Priorizar:</span>
-          <SegPill
-            storeId={storeId}
-            segKey={null}
-            label="Todos"
-            count={Object.values(segCounts ?? {}).reduce((a, b) => a + b, 0)}
-            active={!segment}
-          />
-          {LEAD_SEGMENTS.map((s) => (
-            <SegPill
-              key={s.key}
-              storeId={storeId}
-              segKey={s.key}
-              label={s.label}
-              count={segCounts?.[s.key] ?? 0}
-              active={segment === s.key}
+              label={v.label}
+              count={counts[v.key]}
+              active={view === v.key}
             />
           ))}
         </nav>
-      )}
       </div>
 
       {banner && (

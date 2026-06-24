@@ -3,12 +3,11 @@
 import { createServerSupabase } from "@/lib/db";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 
-export type LeadView = "por_llamar" | "yape" | "calientes" | "seguimientos" | "ganados" | "perdidos";
+export type LeadView = "por_llamar" | "yape" | "seguimientos" | "ganados" | "perdidos";
 
 export const LEAD_VIEWS: { key: LeadView; label: string }[] = [
   { key: "por_llamar", label: "Por llamar" },
   { key: "yape", label: "🔥 Yape/Shalom" },
-  { key: "calientes", label: "Calientes" },
   { key: "seguimientos", label: "Seguimientos" },
   { key: "ganados", label: "Ganados" },
   { key: "perdidos", label: "Perdidos" },
@@ -31,9 +30,6 @@ export async function getStoreLeads(
       break;
     case "yape":
       q = q.eq("status", "yape_por_verificar").order("last_interaction_at", { ascending: false });
-      break;
-    case "calientes":
-      q = q.eq("category", "hot").order("last_interaction_at", { ascending: false });
       break;
     case "seguimientos":
       q = q
@@ -70,10 +66,9 @@ export async function getLeadCounts(storeId: string): Promise<Record<LeadView, n
   const sb = await createServerSupabase();
   const head = () => sb.from("leads").select("*", { count: "exact", head: true }).eq("store_id", storeId);
   const nowIso = new Date().toISOString();
-  const [porLlamar, yape, calientes, seguimientos, ganados, perdidos] = await Promise.all([
+  const [porLlamar, yape, seguimientos, ganados, perdidos] = await Promise.all([
     head().in("category", ["open", "hot"]).neq("status", "yape_por_verificar"),
     head().eq("status", "yape_por_verificar"),
-    head().eq("category", "hot"),
     head().not("next_followup_at", "is", null).lte("next_followup_at", nowIso),
     head().eq("category", "won"),
     head().eq("category", "lost"),
@@ -81,7 +76,6 @@ export async function getLeadCounts(storeId: string): Promise<Record<LeadView, n
   return {
     por_llamar: porLlamar.count ?? 0,
     yape: yape.count ?? 0,
-    calientes: calientes.count ?? 0,
     seguimientos: seguimientos.count ?? 0,
     ganados: ganados.count ?? 0,
     perdidos: perdidos.count ?? 0,

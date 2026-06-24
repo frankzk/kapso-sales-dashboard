@@ -39,13 +39,14 @@ export default async function LeadsPage({
   const [counts, leads] = await Promise.all([getLeadCounts(storeId), getStoreLeads(storeId, view)]);
   const user = await getCurrentUser();
 
-  // "Por llamar" splits into intent sub-segments (computed from the fetched
-  // list — it's bounded by getStoreLeads' limit). Other views have none.
-  let segCounts: Record<LeadSegment, number> | null = null;
+  // The unified nav always shows the "Por llamar" sub-segment counts, so we need
+  // those leads even when another tab is active (bounded by getStoreLeads' limit).
+  // Segment filtering only applies within "Por llamar".
+  const porLlamarLeads = view === "por_llamar" ? leads : await getStoreLeads(storeId, "por_llamar");
+  const segCounts = countLeadSegments(porLlamarLeads);
   let segment: LeadSegment | null = null;
   let displayLeads = leads;
   if (view === "por_llamar") {
-    segCounts = countLeadSegments(leads);
     segment = isLeadSegment(sp.seg) ? sp.seg : null;
     if (segment) displayLeads = leads.filter((l) => leadSegment(l) === segment);
   }
