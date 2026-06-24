@@ -1,5 +1,6 @@
 import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { LEAD_VIEWS, getLeadCounts, getStoreLeads, type LeadView } from "@/lib/leads-access";
+import { isLeadGestion, isLeadSegment, type LeadGestion, type LeadSegment } from "@/lib/leads";
 import { EmptyState } from "@/components/ui";
 import { LeadsBoard } from "@/components/leads";
 
@@ -12,7 +13,7 @@ function isLeadView(v: string | undefined): v is LeadView {
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ store?: string; view?: string }>;
+  searchParams: Promise<{ store?: string; view?: string; seg?: string; gest?: string }>;
 }) {
   const sp = await searchParams;
   const stores = await getAccessibleStores();
@@ -24,9 +25,11 @@ export default async function LeadsPage({
   const fallback = stores[0]!;
   const storeId = sp.store && stores.some((s) => s.id === sp.store) ? sp.store : fallback.id;
   const view: LeadView = isLeadView(sp.view) ? sp.view : "por_llamar";
+  // Initial sub-filter when arriving via a link; within the queue these are then
+  // driven client-side in the board for instant switching (no refetch).
+  const initialSeg: LeadSegment | null = isLeadSegment(sp.seg) ? sp.seg : null;
+  const initialGest: LeadGestion | null = isLeadGestion(sp.gest) ? sp.gest : null;
 
-  // Segment + gestión sub-filtering is client-side in the board now (instant, no
-  // navigation), so the page only fetches the active view's leads + counts.
   const [counts, leads, user] = await Promise.all([
     getLeadCounts(storeId),
     getStoreLeads(storeId, view),
@@ -40,6 +43,8 @@ export default async function LeadsPage({
       view={view}
       counts={counts}
       leads={leads}
+      initialSeg={initialSeg}
+      initialGest={initialGest}
       currentUserId={user?.id ?? ""}
     />
   );

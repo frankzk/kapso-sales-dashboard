@@ -154,7 +154,7 @@ function FilterPill({
   onClick,
 }: {
   label: string;
-  count: number;
+  count?: number;
   active: boolean;
   onClick: () => void;
 }) {
@@ -170,14 +170,16 @@ function FilterPill({
       )}
     >
       {label}
-      <span
-        className={cn(
-          "rounded-full px-1.5 py-0.5 text-xs font-medium",
-          active ? "bg-brand-100 text-brand-700" : "bg-slate-100 text-slate-500",
-        )}
-      >
-        {count}
-      </span>
+      {count !== undefined && (
+        <span
+          className={cn(
+            "rounded-full px-1.5 py-0.5 text-xs font-medium",
+            active ? "bg-brand-100 text-brand-700" : "bg-slate-100 text-slate-500",
+          )}
+        >
+          {count}
+        </span>
+      )}
     </button>
   );
 }
@@ -188,6 +190,8 @@ export function LeadsBoard({
   view,
   counts,
   leads,
+  initialSeg,
+  initialGest,
   currentUserId,
 }: {
   stores: StoreSummary[];
@@ -195,6 +199,8 @@ export function LeadsBoard({
   view: LeadView;
   counts: Record<LeadView, number>;
   leads: LeadRow[];
+  initialSeg?: LeadSegment | null;
+  initialGest?: LeadGestion | null;
   currentUserId: string;
 }) {
   const router = useRouter();
@@ -207,8 +213,8 @@ export function LeadsBoard({
   // Client-side sub-filters (instant, no navigation): source lens + the queue's
   // intención/gestión axes within "Por llamar".
   const [srcFilter, setSrcFilter] = useState<"all" | "meta_ad" | "organic">("all");
-  const [segFilter, setSegFilter] = useState<LeadSegment | null>(null);
-  const [gestFilter, setGestFilter] = useState<LeadGestion | null>(null);
+  const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
+  const [gestFilter, setGestFilter] = useState<LeadGestion | null>(initialGest ?? null);
 
   function changeStore(nextStore: string) {
     router.push(`/dashboard/leads?store=${nextStore}&view=${view}`);
@@ -294,38 +300,32 @@ export function LeadsBoard({
         )}
       </div>
 
-      {hasCampaign && (
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-slate-400">Fuente:</span>
-          <div className="inline-flex overflow-hidden rounded-lg border border-slate-200 text-sm">
-            {(["all", "meta_ad", "organic"] as const).map((k) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setSrcFilter(k)}
-                className={cn(
-                  "px-3 py-1.5",
-                  srcFilter === k
-                    ? "bg-brand-50 font-medium text-brand-700"
-                    : "bg-white text-slate-600 hover:bg-slate-50",
-                )}
-              >
-                {k === "all" ? "Todas" : k === "meta_ad" ? "📣 Campaña" : "Orgánico"}
-                {k !== "all" && (
-                  <span className="ml-1 text-xs text-slate-400">
-                    {k === "meta_ad" ? campaignCount : organicCount}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="sticky top-0 z-10 bg-slate-50 pt-1 pb-2">
-        {/* Etapas — cambian los datos, así que navegan (con skeleton instantáneo). */}
+        {/* Una sola línea: cola "Por llamar" + sub-filtros de intención (instantáneos
+            dentro de la cola) · separador · estados finales (navegan con skeleton). */}
         <nav className="flex flex-wrap items-center gap-1.5">
-          {[{ key: "por_llamar" as LeadView, label: "Por llamar" }, ...OUTCOME_VIEWS].map((v) => (
+          {([null, "frio", "converso", "distrito", "carrito"] as (LeadSegment | null)[]).map((seg) => {
+            const inQueue = view === "por_llamar";
+            return (
+              <FilterPill
+                key={seg ?? "all"}
+                label={seg ? SEG_LABEL[seg] : "Todos"}
+                count={inQueue ? (seg ? segCounts[seg] : counts.por_llamar) : undefined}
+                active={inQueue && (seg ? segFilter === seg : !segFilter)}
+                onClick={() => {
+                  if (inQueue) setSegFilter(seg);
+                  else
+                    router.push(
+                      `/dashboard/leads?store=${storeId}&view=por_llamar${seg ? `&seg=${seg}` : ""}`,
+                    );
+                }}
+              />
+            );
+          })}
+
+          <span className="mx-1 h-6 w-px shrink-0 self-center bg-slate-300" aria-hidden="true" />
+
+          {OUTCOME_VIEWS.map((v) => (
             <NavPill
               key={v.key}
               href={`/dashboard/leads?store=${storeId}&view=${v.key}`}
@@ -336,45 +336,48 @@ export function LeadsBoard({
           ))}
         </nav>
 
-        {/* Sub-filtros de la cola "Por llamar" — client-side, instantáneos. */}
-        {view === "por_llamar" && (
-          <div className="mt-2 space-y-2 border-t border-slate-100 pt-2">
-            <nav className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs font-medium text-slate-400">Intención:</span>
-              <FilterPill
-                label="Todos"
-                count={counts.por_llamar}
-                active={!segFilter}
-                onClick={() => setSegFilter(null)}
-              />
-              {(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((k) => (
+        {/* Línea 2: Gestión (en la cola) + Fuente — client-side e instantáneos.
+            En desktop entran en una sola línea; en móvil hacen wrap. */}
+        {(view === "por_llamar" || hasCampaign) && (
+          <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-slate-100 pt-2">
+            {view === "por_llamar" && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-medium text-slate-400">Gestión:</span>
                 <FilterPill
-                  key={k}
-                  label={SEG_LABEL[k]}
-                  count={segCounts[k]}
-                  active={segFilter === k}
-                  onClick={() => setSegFilter((p) => (p === k ? null : k))}
+                  label="Todos"
+                  count={counts.por_llamar}
+                  active={!gestFilter}
+                  onClick={() => setGestFilter(null)}
                 />
-              ))}
-            </nav>
-            <nav className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs font-medium text-slate-400">Gestión:</span>
-              <FilterPill
-                label="Todos"
-                count={counts.por_llamar}
-                active={!gestFilter}
-                onClick={() => setGestFilter(null)}
-              />
-              {LEAD_GESTIONES.map((g) => (
+                {LEAD_GESTIONES.map((g) => (
+                  <FilterPill
+                    key={g.key}
+                    label={g.label}
+                    count={gestCounts[g.key]}
+                    active={gestFilter === g.key}
+                    onClick={() => setGestFilter((p) => (p === g.key ? null : g.key))}
+                  />
+                ))}
+              </div>
+            )}
+            {hasCampaign && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-medium text-slate-400">Fuente:</span>
+                <FilterPill label="Todas" active={srcFilter === "all"} onClick={() => setSrcFilter("all")} />
                 <FilterPill
-                  key={g.key}
-                  label={g.label}
-                  count={gestCounts[g.key]}
-                  active={gestFilter === g.key}
-                  onClick={() => setGestFilter((p) => (p === g.key ? null : g.key))}
+                  label="📣 Campaña"
+                  count={campaignCount}
+                  active={srcFilter === "meta_ad"}
+                  onClick={() => setSrcFilter("meta_ad")}
                 />
-              ))}
-            </nav>
+                <FilterPill
+                  label="Orgánico"
+                  count={organicCount}
+                  active={srcFilter === "organic"}
+                  onClick={() => setSrcFilter("organic")}
+                />
+              </div>
+            )}
           </div>
         )}
       </div>
