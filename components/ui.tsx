@@ -177,3 +177,8 @@ export function EmptyState({ title, children }: { title: string; children?: Reac
     </Card>
   );
 }
+
+/** Pulsing placeholder block for `loading.tsx` skeletons. */
+export function Skeleton({ className }: { className?: string }) {
+  return <div className={cn("animate-pulse rounded-lg bg-slate-200/70", className)} />;
+}
