@@ -153,6 +153,8 @@ export function LeadsBoard({
   // have; the claim + call history load in the background (no page navigation).
   const [selected, setSelected] = useState<LeadRow | null>(null);
   const [calls, setCalls] = useState<LeadCallRow[] | null>(null);
+  // Client-side source lens (campaña vs orgánico) — instant, no navigation.
+  const [srcFilter, setSrcFilter] = useState<"all" | "meta_ad" | "organic">("all");
 
   function changeStore(nextStore: string) {
     router.push(`/dashboard/leads?store=${nextStore}&view=${view}`);
@@ -203,6 +205,14 @@ export function LeadsBoard({
     }
   }
 
+  const campaignCount = leads.filter((l) => l.source === "meta_ad").length;
+  const organicCount = leads.length - campaignCount;
+  const hasCampaign = campaignCount > 0;
+  const shownLeads =
+    srcFilter === "all"
+      ? leads
+      : leads.filter((l) => (l.source === "meta_ad" ? "meta_ad" : "organic") === srcFilter);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -221,6 +231,34 @@ export function LeadsBoard({
           </select>
         )}
       </div>
+
+      {hasCampaign && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-slate-400">Fuente:</span>
+          <div className="inline-flex overflow-hidden rounded-lg border border-slate-200 text-sm">
+            {(["all", "meta_ad", "organic"] as const).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setSrcFilter(k)}
+                className={cn(
+                  "px-3 py-1.5",
+                  srcFilter === k
+                    ? "bg-brand-50 font-medium text-brand-700"
+                    : "bg-white text-slate-600 hover:bg-slate-50",
+                )}
+              >
+                {k === "all" ? "Todas" : k === "meta_ad" ? "📣 Campaña" : "Orgánico"}
+                {k !== "all" && (
+                  <span className="ml-1 text-xs text-slate-400">
+                    {k === "meta_ad" ? campaignCount : organicCount}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="sticky top-0 z-10 bg-slate-50 pt-1 pb-2">
         <nav className="flex flex-wrap items-center gap-1.5">
@@ -299,7 +337,7 @@ export function LeadsBoard({
               </tr>
             </thead>
             <tbody>
-              {leads.map((lead) => {
+              {shownLeads.map((lead) => {
                 const locked =
                   !!lead.claimed_by &&
                   isClaimActive(lead.claimed_at) &&
@@ -361,10 +399,10 @@ export function LeadsBoard({
                   </tr>
                 );
               })}
-              {!leads.length && (
+              {!shownLeads.length && (
                 <tr>
                   <td colSpan={5} className="py-4 text-sm text-slate-400">
-                    No hay leads en esta vista.
+                    {leads.length ? "No hay leads de esta fuente en la vista." : "No hay leads en esta vista."}
                   </td>
                 </tr>
               )}
@@ -465,6 +503,25 @@ function LeadDrawer({
                   📍 <span className="font-medium">Distrito:</span> {lead.district}
                 </p>
               ) : null}
+            </div>
+          )}
+
+          {lead.source === "meta_ad" && (
+            <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-900">
+              <p className="text-xs font-semibold tracking-wide uppercase opacity-80">
+                Fuente · Campaña Meta
+              </p>
+              <p className="mt-1">
+                📣 Llegó por un anuncio de Meta (Click-to-WhatsApp)
+                {lead.ad_headline ? (
+                  <>
+                    : <span className="font-medium">{lead.ad_headline}</span>
+                  </>
+                ) : (
+                  ""
+                )}
+              </p>
+              {lead.ad_id && <p className="mt-0.5 text-xs text-violet-700/80">Anuncio: {lead.ad_id}</p>}
             </div>
           )}
 
