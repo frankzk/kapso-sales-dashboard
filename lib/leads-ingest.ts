@@ -259,6 +259,24 @@ async function enrichLeadsFromConversations(
       .eq("store_id", storeId)
       .eq("kapso_conversation_id", convId);
 
+    // Source attribution: a Click-to-WhatsApp ad referral on the conversation's
+    // first inbound message → stamp the lead's source (first-touch, sticky via
+    // `is("source", null)`). Separate, self-contained write so a pending 0008
+    // migration (columns absent) can't break the cart/district enrichment above.
+    if (sig.referral) {
+      await admin
+        .from("leads")
+        .update({
+          source: sig.referral.source,
+          ad_id: sig.referral.ad_id,
+          ad_headline: sig.referral.ad_headline,
+          ctwa_clid: sig.referral.ctwa_clid,
+        })
+        .eq("store_id", storeId)
+        .eq("kapso_conversation_id", convId)
+        .is("source", null);
+    }
+
     // Yape/Shalom advance detected in-chat (the bot didn't fire a handoff, e.g.
     // the voucher came as an image). Promote the auto-"nuevo" lead to
     // yape_por_verificar (hot). Only "nuevo" is touched — manual dispositions

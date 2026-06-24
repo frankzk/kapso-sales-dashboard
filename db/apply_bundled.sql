@@ -871,3 +871,17 @@ alter table leads
   add column if not exists cart_summary    text,
   add column if not exists draft_order_gid text,
   add column if not exists inbound_count   integer;
+
+-- ---- 0008 ----
+-- ============================================================================
+-- 0008_lead_source.sql — lead source / channel attribution
+-- Captures where a lead came from (CTWA ad campaigns vs organic) so conversion
+-- can be measured per source. Populated from the WhatsApp `referral` object on
+-- the first inbound message by the lead sync (first-touch, sticky).
+-- ============================================================================
+alter table leads add column if not exists source      text;
+alter table leads add column if not exists ad_id       text;
+alter table leads add column if not exists ad_headline text;
+alter table leads add column if not exists ctwa_clid   text;
+
+create index if not exists leads_store_source_idx on leads (store_id, source);

@@ -311,7 +311,17 @@ export function LeadsBoard({
                   new Date(lead.next_followup_at).getTime() <= Date.now();
                 return (
                   <tr key={lead.id} className="border-b border-slate-100 last:border-0">
-                    <td className="py-2.5 text-slate-800">{lead.name || lead.phone}</td>
+                    <td className="py-2.5 text-slate-800">
+                      {lead.name || lead.phone}
+                      {lead.source === "meta_ad" && (
+                        <span
+                          className="ml-2 whitespace-nowrap rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-700"
+                          title={lead.ad_headline ? `Campaña Meta: ${lead.ad_headline}` : "Llegó por campaña de Meta (Click-to-WhatsApp)"}
+                        >
+                          📣 Campaña
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2.5">
                       <a
                         href={`https://wa.me/${lead.phone}`}

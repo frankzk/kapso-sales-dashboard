@@ -17,4 +17,6 @@
 \ir migrations/0006_kapso_only_orders.sql
 \echo 'Applying 0007_lead_signals.sql'
 \ir migrations/0007_lead_signals.sql
+\echo 'Applying 0008_lead_source.sql'
+\ir migrations/0008_lead_source.sql
 \echo 'Done.'

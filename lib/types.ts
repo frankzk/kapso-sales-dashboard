@@ -129,6 +129,12 @@ export interface LeadRow {
   cart_summary?: string | null;
   draft_order_gid?: string | null;
   inbound_count?: number | null;
+  // Source / channel attribution (0008). 'meta_ad' for Click-to-WhatsApp ad
+  // leads (captured from the first inbound message's `referral`); null = organic.
+  source?: string | null;
+  ad_id?: string | null;
+  ad_headline?: string | null;
+  ctwa_clid?: string | null;
   claimed_by: string | null;
   claimed_at: string | null;
   closed_by: string | null;

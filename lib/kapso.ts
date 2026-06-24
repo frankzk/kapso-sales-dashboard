@@ -291,6 +291,34 @@ export interface ParsedMsg {
   image?: boolean; // image/media attachment (Yape voucher, product photo, …)
 }
 
+/**
+ * A normalized Click-to-WhatsApp (CTWA) ad referral. Meta attaches a top-level
+ * `referral` object to the FIRST inbound message of an ad/post-sourced
+ * conversation; its presence means the lead came from a paid Meta entry point.
+ */
+export interface LeadReferral {
+  source: "meta_ad";
+  ad_id: string | null; // referral.source_id (Meta ad id)
+  ad_headline: string | null; // referral.headline (ad creative headline)
+  ctwa_clid: string | null; // referral.ctwa_clid (click id, for Meta CAPI matching)
+}
+
+/** Pull the CTWA referral off a raw Kapso message page (null = organic). */
+export function extractReferral(rawMsgs: any[]): LeadReferral | null {
+  for (const m of rawMsgs ?? []) {
+    const ref = m?.referral ?? m?.message?.referral ?? m?.kapso?.referral;
+    if (ref && typeof ref === "object" && (ref.source_id || ref.source_type || ref.ctwa_clid || ref.headline)) {
+      return {
+        source: "meta_ad",
+        ad_id: ref.source_id != null ? String(ref.source_id) : null,
+        ad_headline: typeof ref.headline === "string" ? ref.headline : null,
+        ctwa_clid: typeof ref.ctwa_clid === "string" ? ref.ctwa_clid : null,
+      };
+    }
+  }
+  return null;
+}
+
 export interface OrderSignals {
   district: string | null;
   cart_value: number | null;
@@ -393,6 +421,7 @@ export interface ConversationSignals extends OrderSignals {
   inbound_count: number;
   first_response_seconds: number | null;
   yape: boolean;
+  referral: LeadReferral | null;
 }
 
 /**
@@ -410,6 +439,7 @@ export async function fetchConversationSignals(
   } catch {
     return null;
   }
+  const referral = extractReferral(page.data ?? []);
   const msgs = (page.data ?? [])
     .map((m) => ({ t: msgTimeMs(m), dir: msgDirection(m), text: msgText(m), image: msgIsImage(m) }))
     .filter(
@@ -426,7 +456,13 @@ export async function fetchConversationSignals(
     const reply = msgs.find((m) => m.dir === "outbound" && m.t >= firstInbound.t);
     if (reply) first_response_seconds = Math.max(0, Math.round((reply.t - firstInbound.t) / 1000));
   }
-  return { inbound_count, first_response_seconds, yape: detectYapePayment(msgs), ...parseOrderSignals(msgs) };
+  return {
+    inbound_count,
+    first_response_seconds,
+    yape: detectYapePayment(msgs),
+    referral,
+    ...parseOrderSignals(msgs),
+  };
 }
 
 // ---------------------------------------------------------------------------
