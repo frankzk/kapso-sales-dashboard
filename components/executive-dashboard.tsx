@@ -25,14 +25,9 @@ import {
   sourceBreakdown,
   topProducts,
 } from "@/lib/metrics";
-import {
-  adObjectiveLabel,
-  adStatusLabel,
-  adsManagerUrl,
-  prettyAdName,
-  type AdMeta,
-} from "@/lib/meta-ads";
+import type { AdMeta } from "@/lib/meta-ads";
 import { BarList, Card, EmptyState, SimpleTable, cn, type BarItem } from "@/components/ui";
+import { CampaignTable } from "@/components/campaign-table";
 import { ConversionOrdersTrend, RevenueOrdersChart } from "@/components/charts";
 import { DashboardControls } from "@/components/controls";
 import { HourPattern } from "@/components/hour-pattern";
@@ -334,83 +329,11 @@ export function ExecutiveDashboard({
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
           <Module
             title="Rendimiento por campaña (Meta)"
-            subtitle="Anuncio real de Meta · clic para abrirlo en Ads Manager · el ROAS se completa al sumar el gasto de Meta"
+            subtitle="Clic en una columna para ordenar · el nombre del anuncio abre Meta Ads Manager · el ROAS se completa al sumar el gasto"
             info
             className="lg:col-span-12"
           >
-            <SimpleTable
-              rows={campaignStats}
-              empty="Sin campañas atribuidas todavía."
-              columns={[
-                {
-                  key: "label",
-                  header: "Campaña / anuncio",
-                  render: (r) => {
-                    const href = adsManagerUrl(r.meta?.accountId ?? null, r.adId);
-                    const name = prettyAdName(r.label);
-                    const st = adStatusLabel(r.meta?.status ?? null);
-                    const ctx = [r.meta?.campaignName, adObjectiveLabel(r.meta?.objective ?? null)]
-                      .filter(Boolean)
-                      .join(" · ");
-                    return (
-                      <div className="flex min-w-0 flex-col">
-                        {href ? (
-                          <a
-                            href={href}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="truncate font-medium text-brand-700 hover:underline"
-                            title="Abrir el anuncio en Meta Ads Manager"
-                          >
-                            📣 {name}
-                          </a>
-                        ) : (
-                          <span className="truncate font-medium text-slate-800">📣 {name}</span>
-                        )}
-                        {r.resolved && (ctx || st) && (
-                          <span className="truncate text-xs text-slate-400">
-                            {ctx}
-                            {st && (
-                              <span
-                                className={cn(
-                                  ctx ? "ml-1 " : "",
-                                  st.tone === "green"
-                                    ? "text-emerald-600"
-                                    : st.tone === "amber"
-                                      ? "text-amber-600"
-                                      : "text-slate-400",
-                                )}
-                              >
-                                {ctx ? "· " : ""}
-                                {st.label}
-                              </span>
-                            )}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  },
-                },
-                { key: "leads", header: "Leads", align: "right", render: (r) => r.leads },
-                { key: "pedidos", header: "Pedidos", align: "right", render: (r) => r.pedidos },
-                {
-                  key: "conversion",
-                  header: "Conversión",
-                  align: "right",
-                  render: (r) => formatPct(r.conversion),
-                },
-                {
-                  key: "ingresos",
-                  header: "Ingresos",
-                  align: "right",
-                  render: (r) => (
-                    <span className="font-semibold text-emerald-700">
-                      {formatCurrency(r.ingresos, currency)}
-                    </span>
-                  ),
-                },
-              ]}
-            />
+            <CampaignTable rows={campaignStats} currency={currency} />
           </Module>
         </div>
       )}
