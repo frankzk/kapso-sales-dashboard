@@ -19,6 +19,22 @@ function rangeForDays(days: number): { from: string; to: string } {
   return { from: isoDate(from), to: isoDate(to) };
 }
 
+/** Local calendar date (browser tz) as YYYY-MM-DD — used for the single-day
+ *  presets so "Hoy"/"Ayer" match the user's actual day (and the store-tz rollups). */
+function localIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function singleDay(offsetBack: number): { from: string; to: string } {
+  const d = new Date();
+  d.setDate(d.getDate() - offsetBack);
+  const s = localIsoDate(d);
+  return { from: s, to: s };
+}
+
 /**
  * Store selector + date range. Navigates by writing ?from&to and switching
  * between /dashboard (consolidated) and /dashboard/[storeId].
@@ -76,7 +92,25 @@ export function DashboardControls({
         />
       </div>
 
-      <div className="flex gap-1">
+      <div className="flex flex-wrap gap-1">
+        <button
+          onClick={() => {
+            const r = singleDay(0);
+            go(scope, r.from, r.to);
+          }}
+          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+        >
+          Hoy
+        </button>
+        <button
+          onClick={() => {
+            const r = singleDay(1);
+            go(scope, r.from, r.to);
+          }}
+          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+        >
+          Ayer
+        </button>
         {[7, 30, 90].map((d) => (
           <button
             key={d}
