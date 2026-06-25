@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useActionState, useEffect, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
@@ -219,76 +218,57 @@ function SegmentBadge({ lead }: { lead: LeadRow }) {
   );
 }
 
-/** One pill in the unified leads nav (a queue sub-filter or an outcome tab). */
-function NavPill({
-  href,
+/**
+ * Segmented control (single-select): a sunken muted track holding pill options;
+ * the active option is a filled brand capsule, the rest are muted text. Used for
+ * every leads filter so the toolbar reads as grouped toggles, not loose pills.
+ * `onChange` receives the option key — the caller decides whether that sets
+ * client state or navigates. value = null (or a key not in the list) → none active.
+ */
+function SegControl({
   label,
-  count,
-  active,
+  options,
+  value,
+  onChange,
 }: {
-  href: string;
-  label: string;
-  count: number;
-  active: boolean;
+  label?: string;
+  options: { key: string; label: string; count?: number }[];
+  value: string | null;
+  onChange: (key: string) => void;
 }) {
   return (
-    <Link
-      href={href}
-      className={cn(
-        "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm",
-        active
-          ? "border-brand-500 bg-brand-50 text-brand-700"
-          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
-      )}
-    >
-      {label}
-      <span
-        className={cn(
-          "rounded-full px-1.5 py-0.5 text-xs font-medium",
-          active ? "bg-brand-100 text-brand-700" : "bg-slate-100 text-slate-500",
-        )}
-      >
-        {count}
-      </span>
-    </Link>
-  );
-}
-
-/** Client-side filter pill (instant, no navigation) — mirrors NavPill styling. */
-function FilterPill({
-  label,
-  count,
-  active,
-  onClick,
-}: {
-  label: string;
-  count?: number;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm",
-        active
-          ? "border-brand-500 bg-brand-50 text-brand-700"
-          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
-      )}
-    >
-      {label}
-      {count !== undefined && (
-        <span
-          className={cn(
-            "rounded-full px-1.5 py-0.5 text-xs font-medium",
-            active ? "bg-brand-100 text-brand-700" : "bg-slate-100 text-slate-500",
-          )}
-        >
-          {count}
-        </span>
-      )}
-    </button>
+    <div className="flex items-center gap-1.5">
+      {label && <span className="shrink-0 text-xs font-medium text-slate-400">{label}</span>}
+      <div className="inline-flex items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+        {options.map((o) => {
+          const active = o.key === value;
+          return (
+            <button
+              key={o.key}
+              type="button"
+              aria-pressed={active}
+              onClick={() => onChange(o.key)}
+              className={cn(
+                "inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium transition",
+                active ? "bg-brand-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-800",
+              )}
+            >
+              {o.label}
+              {o.count !== undefined && (
+                <span
+                  className={cn(
+                    "rounded-full px-1.5 text-[11px] font-semibold tabular-nums",
+                    active ? "bg-white/25 text-white" : "bg-slate-200 text-slate-500",
+                  )}
+                >
+                  {o.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -472,125 +452,122 @@ export function LeadsBoard({
       </div>
 
       <div className="sticky top-0 z-10 bg-slate-50 pt-1 pb-2">
-        {/* Una sola línea: cola "Por llamar" + sub-filtros de intención (instantáneos
-            dentro de la cola) · separador · estados finales (navegan con skeleton). */}
-        <nav className="flex flex-wrap items-center gap-1.5">
-          {([null, "frio", "converso", "distrito", "carrito"] as (LeadSegment | null)[]).map((seg) => {
-            const inQueue = view === "por_llamar";
-            return (
-              <FilterPill
-                key={seg ?? "all"}
-                label={seg ? SEG_LABEL[seg] : "Todos"}
-                count={inQueue ? (seg ? segCounts[seg] : counts.por_llamar) : undefined}
-                active={inQueue && (seg ? segFilter === seg : !segFilter)}
-                onClick={() => {
-                  if (inQueue) setSegFilter(seg);
-                  else
-                    router.push(
-                      `/dashboard/leads?store=${storeId}&view=por_llamar${seg ? `&seg=${seg}` : ""}`,
-                    );
-                }}
-              />
-            );
-          })}
+        {/* Fila 1: etapa/segmento (filtra dentro de la cola; navega fuera de ella) ·
+            vistas finales · buscador. Cada grupo es un segmented control. */}
+        <nav className="flex flex-wrap items-center gap-2">
+          <SegControl
+            value={view === "por_llamar" ? (segFilter ?? "all") : ""}
+            onChange={(key) => {
+              if (view === "por_llamar") setSegFilter(key === "all" ? null : (key as LeadSegment));
+              else
+                router.push(
+                  `/dashboard/leads?store=${storeId}&view=por_llamar${key !== "all" ? `&seg=${key}` : ""}`,
+                );
+            }}
+            options={[
+              { key: "all", label: "Todos", count: view === "por_llamar" ? counts.por_llamar : undefined },
+              ...(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((s) => ({
+                key: s,
+                label: SEG_LABEL[s],
+                count: view === "por_llamar" ? segCounts[s] : undefined,
+              })),
+            ]}
+          />
+          <SegControl
+            value={OUTCOME_VIEWS.some((v) => v.key === view) ? view : ""}
+            onChange={(key) => router.push(`/dashboard/leads?store=${storeId}&view=${key}`)}
+            options={OUTCOME_VIEWS.map((v) => ({ key: v.key, label: v.label, count: counts[v.key] }))}
+          />
 
-          <span className="mx-1 h-6 w-px shrink-0 self-center bg-slate-300" aria-hidden="true" />
-
-          {OUTCOME_VIEWS.map((v) => (
-            <NavPill
-              key={v.key}
-              href={`/dashboard/leads?store=${storeId}&view=${v.key}`}
-              label={v.label}
-              count={counts[v.key]}
-              active={view === v.key}
+          <div className="relative ml-auto w-full sm:w-64">
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 20 20"
+              fill="none"
+              className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400"
+            >
+              <circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="2" />
+              <path d="m14 14 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.currentTarget.value)}
+              placeholder="Buscar por nombre o celular…"
+              aria-label="Buscar lead por nombre o celular"
+              className="w-full rounded-lg border border-slate-300 py-1.5 pr-9 pl-9 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
             />
-          ))}
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label="Limpiar búsqueda"
+                className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                ✕
+              </button>
+            )}
+          </div>
         </nav>
 
-        {/* Línea 2: Gestión (en la cola) + Fuente — client-side e instantáneos.
-            En desktop entran en una sola línea; en móvil hacen wrap. */}
+        {/* Fila 2: refinos de la cola (Gestión/Ventana) + Fuente + Número, cada uno
+            como segmented control. Solo aparece lo que aplica a la vista. */}
         {(view === "por_llamar" || hasCampaign || hasMultiNumbers) && (
-          <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-slate-100 pt-2">
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 pt-2">
             {view === "por_llamar" && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-xs font-medium text-slate-400">Gestión:</span>
-                <FilterPill
-                  label="Todos"
-                  count={counts.por_llamar}
-                  active={!gestFilter}
-                  onClick={() => setGestFilter(null)}
-                />
-                {LEAD_GESTIONES.map((g) => (
-                  <FilterPill
-                    key={g.key}
-                    label={g.label}
-                    count={gestCounts[g.key]}
-                    active={gestFilter === g.key}
-                    onClick={() => setGestFilter((p) => (p === g.key ? null : g.key))}
-                  />
-                ))}
-              </div>
+              <SegControl
+                label="Gestión"
+                value={gestFilter ?? "all"}
+                onChange={(key) => setGestFilter(key === "all" ? null : (key as LeadGestion))}
+                options={[
+                  { key: "all", label: "Todos", count: counts.por_llamar },
+                  ...LEAD_GESTIONES.map((g) => ({ key: g.key, label: g.label, count: gestCounts[g.key] })),
+                ]}
+              />
             )}
             {view === "por_llamar" && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-xs font-medium text-slate-400">Ventana:</span>
-                <FilterPill label="Todos" active={winFilter === "all"} onClick={() => setWinFilter("all")} />
-                <FilterPill
-                  label="🟢 A tiempo"
-                  count={winCounts.a_tiempo}
-                  active={winFilter === "fresca"}
-                  onClick={() => setWinFilter("fresca")}
-                />
-                <FilterPill
-                  label="⏳ Por vencer"
-                  count={winCounts.por_vencer}
-                  active={winFilter === "por_vencer"}
-                  onClick={() => setWinFilter("por_vencer")}
-                />
-                <FilterPill
-                  label="⚫ Vencido"
-                  count={winCounts.cerrada}
-                  active={winFilter === "cerrada"}
-                  onClick={() => setWinFilter("cerrada")}
-                />
-              </div>
+              <SegControl
+                label="Ventana"
+                value={winFilter}
+                onChange={(key) => setWinFilter(key as "all" | "fresca" | "por_vencer" | "cerrada")}
+                options={[
+                  { key: "all", label: "Todos" },
+                  { key: "fresca", label: "🟢 A tiempo", count: winCounts.a_tiempo },
+                  { key: "por_vencer", label: "⏳ Por vencer", count: winCounts.por_vencer },
+                  { key: "cerrada", label: "⚫ Vencido", count: winCounts.cerrada },
+                ]}
+              />
             )}
             {hasCampaign && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-xs font-medium text-slate-400">Fuente:</span>
-                <FilterPill label="Todas" active={srcFilter === "all"} onClick={() => setSrcFilter("all")} />
-                <FilterPill
-                  label="📣 Campaña"
-                  count={campaignCount}
-                  active={srcFilter === "meta_ad"}
-                  onClick={() => setSrcFilter("meta_ad")}
-                />
-                <FilterPill
-                  label="Orgánico"
-                  count={organicCount}
-                  active={srcFilter === "organic"}
-                  onClick={() => setSrcFilter("organic")}
-                />
-              </div>
+              <SegControl
+                label="Fuente"
+                value={srcFilter}
+                onChange={(key) => setSrcFilter(key as "all" | "meta_ad" | "organic")}
+                options={[
+                  { key: "all", label: "Todas" },
+                  { key: "meta_ad", label: "📣 Campaña", count: campaignCount },
+                  { key: "organic", label: "Orgánico", count: organicCount },
+                ]}
+              />
             )}
             {hasMultiNumbers && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-xs font-medium text-slate-400">Número:</span>
-                <FilterPill label="Todos" active={numFilter === null} onClick={() => setNumFilter(null)} />
-                {waIds.map((id) => {
-                  const n = waNumbers?.[id];
-                  const kind = waKindLabel(n?.kind ?? null);
-                  return (
-                    <FilterPill
-                      key={id}
-                      label={`📱 ${waLabel(n, id)}${kind ? ` · ${kind}` : ""}`}
-                      count={waCounts.get(id) ?? 0}
-                      active={numFilter === id}
-                      onClick={() => setNumFilter((p) => (p === id ? null : id))}
-                    />
-                  );
-                })}
-              </div>
+              <SegControl
+                label="Número"
+                value={numFilter ?? "all"}
+                onChange={(key) => setNumFilter(key === "all" ? null : key)}
+                options={[
+                  { key: "all", label: "Todos" },
+                  ...waIds.map((id) => {
+                    const n = waNumbers?.[id];
+                    const kind = waKindLabel(n?.kind ?? null);
+                    return {
+                      key: id,
+                      label: `📱 ${waLabel(n, id)}${kind ? ` · ${kind}` : ""}`,
+                      count: waCounts.get(id) ?? 0,
+                    };
+                  }),
+                ]}
+              />
             )}
           </div>
         )}
@@ -602,46 +579,15 @@ export function LeadsBoard({
         </div>
       )}
 
-      <div>
-        <div className="relative">
-          <svg
-            aria-hidden="true"
-            viewBox="0 0 20 20"
-            fill="none"
-            className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400"
-          >
-            <circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="2" />
-            <path d="m14 14 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.currentTarget.value)}
-            placeholder="Buscar lead por nombre o celular…"
-            aria-label="Buscar lead por nombre o celular"
-            className="w-full rounded-lg border border-slate-300 py-2 pr-9 pl-9 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-          />
-          {query && (
-            <button
-              type="button"
-              onClick={() => setQuery("")}
-              aria-label="Limpiar búsqueda"
-              className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-            >
-              ✕
-            </button>
-          )}
-        </div>
-        {query.trim().length >= 2 && (
-          <p className="mt-1.5 text-xs text-slate-500">
-            {searching
-              ? "Buscando en todas las etapas…"
-              : searchMode
-                ? `🔎 ${displayLeads.length} resultado${displayLeads.length === 1 ? "" : "s"} para «${query.trim()}» · en todas las etapas`
-                : null}
-          </p>
-        )}
-      </div>
+      {query.trim().length >= 2 && (
+        <p className="text-xs text-slate-500">
+          {searching
+            ? "Buscando en todas las etapas…"
+            : searchMode
+              ? `🔎 ${displayLeads.length} resultado${displayLeads.length === 1 ? "" : "s"} para «${query.trim()}» · en todas las etapas`
+              : null}
+        </p>
+      )}
 
       <Card>
         <div className="overflow-x-auto">
