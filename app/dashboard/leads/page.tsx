@@ -39,6 +39,8 @@ export default async function LeadsPage({
   // Meta ad attribution for the leads in view (drawer shows the full chain).
   const adNames = await getAdNames(leads.map((l) => l.ad_id));
 
+  const currency = stores.find((s) => s.id === storeId)?.currency ?? "PEN";
+
   return (
     <LeadsBoard
       stores={stores}
@@ -47,6 +49,7 @@ export default async function LeadsPage({
       counts={counts}
       leads={leads}
       adNames={adNames}
+      currency={currency}
       initialSeg={initialSeg}
       initialGest={initialGest}
       currentUserId={user?.id ?? ""}

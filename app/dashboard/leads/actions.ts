@@ -181,6 +181,120 @@ export async function registerCall(
   };
 }
 
+/**
+ * Close a sale by phone (contraentrega / COD). Records a lightweight manual
+ * order, marks the lead as Ganado and credits the advisor — so a sale closed on
+ * a call counts in revenue, COD totals and productividad just like a bot order.
+ *
+ * The order is a real `orders` row tagged `kapso` (so recompute_daily_rollups
+ * counts it) + `venta_manual` (so it's identifiable), with a synthetic
+ * `shopify_order_id` ("manual-…") that never collides with or is touched by the
+ * Shopify sync (which only upserts by numeric id). COD ⇒ financial_status
+ * 'pending'. Day rollups are recomputed inline so the dashboard updates now.
+ */
+export async function closeSale(
+  leadId: string,
+  input: { amount: number; products?: string; district?: string },
+): Promise<LeadActionState> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+
+  const amount = Math.round(Number(input.amount) * 100) / 100;
+  if (!Number.isFinite(amount) || amount <= 0) return { error: "Ingresa un monto válido (mayor a 0)." };
+  if (amount > 1_000_000) return { error: "Monto demasiado alto." };
+
+  const admin = createAdminSupabase();
+  const { data: lead } = await admin
+    .from("leads")
+    .select("phone, kapso_conversation_id, has_order")
+    .eq("id", leadId)
+    .maybeSingle();
+  if (!lead) return { error: "Lead no encontrado." };
+  const l = lead as { phone: string | null; kapso_conversation_id: string | null; has_order: boolean };
+  if (l.has_order) return { error: "Este lead ya tiene un pedido registrado." };
+
+  const { data: store } = await admin
+    .from("stores")
+    .select("currency")
+    .eq("id", ctx.storeId)
+    .maybeSingle();
+  const currency = (store as { currency: string } | null)?.currency ?? "PEN";
+
+  const products = (input.products ?? "").trim();
+  const district = (input.district ?? "").trim();
+  const nowIso = new Date().toISOString();
+  const syntheticId = `manual-${crypto.randomUUID()}`;
+
+  // 1) Manual COD order. Tagged `kapso` so it counts in the rollups; `venta_manual`
+  //    so it can be told apart from bot/Shopify orders.
+  const { data: order, error: orderErr } = await admin
+    .from("orders")
+    .insert({
+      store_id: ctx.storeId,
+      shopify_order_id: syntheticId,
+      name: `LLAM-${syntheticId.slice(7, 13).toUpperCase()}`,
+      created_at: nowIso,
+      processed_at: nowIso,
+      total_amount: amount,
+      total_refunded: 0,
+      currency,
+      financial_status: "pending", // contraentrega = pago pendiente
+      cancelled_at: null,
+      customer_phone: l.phone,
+      tags: ["kapso", "venta_manual"],
+      promo_applied: false,
+      stock_por_validar: false,
+      shipping_mode: "cod",
+      line_items: [{ title: products || "Venta por llamada", quantity: 1, price: amount }],
+      kapso_conversation_id: l.kapso_conversation_id ?? null,
+    })
+    .select("id")
+    .maybeSingle();
+  if (orderErr || !order) {
+    return { error: `No se pudo registrar la venta: ${orderErr?.message ?? "error desconocido"}` };
+  }
+
+  // 2) Mark the lead won + link the order (sticky).
+  await admin
+    .from("leads")
+    .update({
+      has_order: true,
+      order_id: (order as { id: string }).id,
+      status: "pedido_generado",
+      category: "won",
+      needs_attention: false,
+      last_interaction_at: nowIso,
+    })
+    .eq("id", leadId);
+
+  // 3) Log the sale in the lead history — this is what credits the advisor in
+  //    Productividad (last caller of a won lead, with the order's net).
+  const noteParts = [`Venta cerrada por llamada · ${currency} ${amount.toFixed(2)} · contraentrega (pago pendiente)`];
+  if (products) noteParts.push(`Productos: ${products}`);
+  if (district) noteParts.push(`Distrito: ${district}`);
+  await admin.from("lead_calls").insert({
+    lead_id: leadId,
+    store_id: ctx.storeId,
+    vendedora: ctx.userId,
+    kind: "sale",
+    new_status: "pedido_generado",
+    note: noteParts.join(" · "),
+  });
+
+  // 4) Recompute the day's rollups so revenue / COD / AOV reflect the sale now
+  //    (otherwise it would only appear on the next 15-min cron).
+  try {
+    const day = nowIso.slice(0, 10);
+    await admin.rpc("recompute_daily_rollups", { p_store_id: ctx.storeId, p_from: day, p_to: day });
+  } catch {
+    /* non-fatal: the next sync's rollup recompute will pick it up */
+  }
+
+  revalidatePath("/dashboard/leads");
+  revalidatePath("/dashboard");
+  return { notice: `Venta registrada ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)` };
+}
+
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**

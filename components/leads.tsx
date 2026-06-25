@@ -31,6 +31,7 @@ import {
 } from "@/lib/leads";
 import {
   claimLead,
+  closeSale,
   getLeadWindow,
   loadLeadDetail,
   registerCall,
@@ -297,6 +298,7 @@ export function LeadsBoard({
   counts,
   leads,
   adNames,
+  currency,
   initialSeg,
   initialGest,
   currentUserId,
@@ -307,6 +309,7 @@ export function LeadsBoard({
   counts: Record<LeadView, number>;
   leads: LeadRow[];
   adNames?: Record<string, AdMeta>;
+  currency: string;
   initialSeg?: LeadSegment | null;
   initialGest?: LeadGestion | null;
   currentUserId: string;
@@ -719,6 +722,7 @@ export function LeadsBoard({
           lead={selected}
           calls={calls}
           adMeta={selected.ad_id ? (adNames?.[selected.ad_id] ?? null) : null}
+          currency={currency}
           onClose={closeDrawer}
           onRegistered={() => refreshDetail(selected.id)}
           closing={pending}
@@ -732,6 +736,7 @@ function LeadDrawer({
   lead,
   calls,
   adMeta,
+  currency,
   onClose,
   onRegistered,
   closing,
@@ -739,6 +744,7 @@ function LeadDrawer({
   lead: LeadRow;
   calls: LeadCallRow[] | null; // null = still loading
   adMeta: AdMeta | null; // Meta attribution for lead.ad_id (null until resolved)
+  currency: string;
   onClose: () => void;
   onRegistered: () => void;
   closing: boolean;
@@ -860,13 +866,9 @@ function LeadDrawer({
 
           <CallForm leadId={lead.id} onRegistered={onRegistered} />
 
-          <button
-            type="button"
-            disabled
-            className="w-full rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-400"
-          >
-            Cerrar venta (crear orden) — próximamente
-          </button>
+          {!lead.has_order && (
+            <CloseSaleForm lead={lead} currency={currency} onRegistered={onRegistered} />
+          )}
         </div>
       </aside>
     </>
@@ -961,6 +963,132 @@ function WhatsappComposer({
           de las 24h desde su último mensaje.
         </p>
       )}
+    </section>
+  );
+}
+
+/** Close a sale by phone (contraentrega / COD). Records a lightweight manual
+ *  order, marks the lead Ganado and credits the advisor. Collapsed by default to
+ *  keep the drawer tidy; expands into the amount / products / district form. */
+function CloseSaleForm({
+  lead,
+  currency,
+  onRegistered,
+}: {
+  lead: LeadRow;
+  currency: string;
+  onRegistered: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [products, setProducts] = useState(lead.cart_summary ?? "");
+  const [district, setDistrict] = useState(lead.district ?? "");
+  const [pending, startTransition] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+
+  function submit() {
+    const amt = Number(amount.replace(",", ".").trim());
+    if (!Number.isFinite(amt) || amt <= 0) {
+      setMsg("Ingresa un monto válido (mayor a 0).");
+      return;
+    }
+    setMsg(null);
+    startTransition(async () => {
+      const res = await closeSale(lead.id, {
+        amount: amt,
+        products: products.trim(),
+        district: district.trim(),
+      });
+      if (res.error) {
+        setMsg(res.error);
+        return;
+      }
+      setMsg(res.notice ?? "Venta registrada.");
+      onRegistered();
+    });
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+      >
+        💰 Cerrar venta (contraentrega)
+      </button>
+    );
+  }
+
+  return (
+    <section className="space-y-2.5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+      <h3 className="text-sm font-semibold tracking-wide text-emerald-800 uppercase">
+        Cerrar venta · contraentrega
+      </h3>
+      <div>
+        <label className={labelCls} htmlFor="sale_amount">
+          Monto total ({currency})
+        </label>
+        <input
+          id="sale_amount"
+          inputMode="decimal"
+          value={amount}
+          onChange={(e) => setAmount(e.currentTarget.value)}
+          placeholder="0.00"
+          className={inputCls}
+          disabled={pending}
+          autoFocus
+        />
+      </div>
+      <div>
+        <label className={labelCls} htmlFor="sale_products">
+          Productos
+        </label>
+        <input
+          id="sale_products"
+          value={products}
+          onChange={(e) => setProducts(e.currentTarget.value)}
+          placeholder="Ej. Mochila viral x1"
+          className={inputCls}
+          disabled={pending}
+        />
+      </div>
+      <div>
+        <label className={labelCls} htmlFor="sale_district">
+          Distrito (entrega)
+        </label>
+        <input
+          id="sale_district"
+          value={district}
+          onChange={(e) => setDistrict(e.currentTarget.value)}
+          placeholder="Distrito del cliente"
+          className={inputCls}
+          disabled={pending}
+        />
+      </div>
+      <p className="text-xs text-emerald-700/80">
+        Pago contraentrega → queda como <span className="font-medium">pago pendiente</span>. Marca el
+        lead como <span className="font-medium">Ganado</span> y suma a tu productividad.
+      </p>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={submit}
+          disabled={pending}
+          className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+        >
+          {pending ? "Registrando…" : "Registrar venta"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          disabled={pending}
+          className="text-sm text-slate-500 hover:underline disabled:opacity-60"
+        >
+          Cancelar
+        </button>
+        {msg && <span className="text-xs text-slate-600">{msg}</span>}
+      </div>
     </section>
   );
 }
