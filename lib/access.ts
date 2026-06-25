@@ -181,10 +181,18 @@ export async function getLeadsForDashboard(
   const out: LeadRow[] = [];
   const BASE_COLS =
     "id,store_id,phone,wa_id,name,email,first_seen_at,last_interaction_at,kapso_conversation_id,handoff_reason,handoff_at,category,status,needs_attention,order_id,has_order";
-  // Source/channel attribution columns (migration 0008). Selected when present;
-  // if the migration hasn't been applied yet the query errors, so we fall back to
-  // the base columns once and keep going — the rest of the dashboard is unaffected.
-  let cols = `${BASE_COLS},source,ad_id,ad_headline,wa_phone_number_id`;
+  // Optional attribution columns, richest first. We try the fullest set and step
+  // DOWN one level on a schema error (column not yet added by a migration), so a
+  // not-yet-applied migration only drops its OWN new columns — never the older
+  // ones. 0012 added wa_phone_number_id on top of 0008's source/ad_id/ad_headline;
+  // the previous all-or-nothing fallback to BASE_COLS would have hidden the Meta
+  // campaign breakdown whenever 0012 hadn't been applied yet.
+  const COL_SETS = [
+    `${BASE_COLS},source,ad_id,ad_headline,wa_phone_number_id`,
+    `${BASE_COLS},source,ad_id,ad_headline`,
+    BASE_COLS,
+  ];
+  let colIdx = 0;
   const pageQuery = (select: string, from: number) =>
     sb
       .from("leads")
@@ -195,10 +203,10 @@ export async function getLeadsForDashboard(
       .order("last_interaction_at", { ascending: false })
       .range(from, from + PAGE_SIZE - 1);
   for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
-    let { data, error } = await pageQuery(cols, from);
-    if (error && cols !== BASE_COLS) {
-      cols = BASE_COLS; // source columns absent — degrade gracefully
-      ({ data, error } = await pageQuery(cols, from));
+    let { data, error } = await pageQuery(COL_SETS[colIdx]!, from);
+    while (error && colIdx < COL_SETS.length - 1) {
+      colIdx++; // step down to a simpler column set and retry this page
+      ({ data, error } = await pageQuery(COL_SETS[colIdx]!, from));
     }
     if (error || !data?.length) break;
     out.push(...(data as unknown as LeadRow[]));
