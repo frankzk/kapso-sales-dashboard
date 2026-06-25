@@ -35,6 +35,7 @@ import {
   loadLeadDetail,
   registerCall,
   releaseLead,
+  searchLeads,
   sendLeadMessage,
   type LeadActionState,
 } from "@/app/dashboard/leads/actions";
@@ -310,6 +311,34 @@ export function LeadsBoard({
   const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
   const [gestFilter, setGestFilter] = useState<LeadGestion | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "por_vencer" | "cerrada">("all");
+  // Search box: instant client-side narrowing of the current view PLUS a
+  // debounced global lookup (all stages) so you can find any customer, not just
+  // those loaded in the active tab.
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<LeadRow[] | null>(null);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let alive = true;
+    const t = setTimeout(async () => {
+      const res = await searchLeads(storeId, q);
+      if (alive) {
+        setResults(res);
+        setSearching(false);
+      }
+    }, 220);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [query, storeId]);
 
   function changeStore(nextStore: string) {
     router.push(`/dashboard/leads?store=${nextStore}&view=${view}`);
@@ -369,7 +398,14 @@ export function LeadsBoard({
   const segCounts = countLeadSegments(leads);
   const gestCounts = countGestiones(leads);
   const winCounts = countLeadWindows(leads, now);
+  const q = query.trim().toLowerCase();
+  const qDigits = q.replace(/\D/g, "");
   const shownLeads = leads.filter((l) => {
+    if (q) {
+      const name = (l.name ?? "").toLowerCase();
+      const phoneDigits = (l.phone ?? "").replace(/\D/g, "");
+      if (!(name.includes(q) || (qDigits.length > 0 && phoneDigits.includes(qDigits)))) return false;
+    }
     if (srcFilter !== "all" && (l.source === "meta_ad" ? "meta_ad" : "organic") !== srcFilter) return false;
     if (view === "por_llamar") {
       if (segFilter && leadSegment(l) !== segFilter) return false;
@@ -382,6 +418,10 @@ export function LeadsBoard({
     }
     return true;
   });
+  // In search mode show the global results (all stages); otherwise the filtered
+  // view (already narrowed client-side by the query for instant feedback).
+  const searchMode = results !== null;
+  const displayLeads = results ?? shownLeads;
 
   return (
     <div className="space-y-4">
@@ -508,6 +548,47 @@ export function LeadsBoard({
         </div>
       )}
 
+      <div>
+        <div className="relative">
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 20 20"
+            fill="none"
+            className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400"
+          >
+            <circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="2" />
+            <path d="m14 14 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.currentTarget.value)}
+            placeholder="Buscar lead por nombre o celular…"
+            aria-label="Buscar lead por nombre o celular"
+            className="w-full rounded-lg border border-slate-300 py-2 pr-9 pl-9 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              aria-label="Limpiar búsqueda"
+              className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+        {query.trim().length >= 2 && (
+          <p className="mt-1.5 text-xs text-slate-500">
+            {searching
+              ? "Buscando en todas las etapas…"
+              : searchMode
+                ? `🔎 ${displayLeads.length} resultado${displayLeads.length === 1 ? "" : "s"} para «${query.trim()}» · en todas las etapas`
+                : null}
+          </p>
+        )}
+      </div>
+
       <Card>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -522,7 +603,7 @@ export function LeadsBoard({
               </tr>
             </thead>
             <tbody>
-              {shownLeads.map((lead) => {
+              {displayLeads.map((lead) => {
                 const locked =
                   !!lead.claimed_by &&
                   isClaimActive(lead.claimed_at) &&
@@ -587,10 +668,16 @@ export function LeadsBoard({
                   </tr>
                 );
               })}
-              {!shownLeads.length && (
+              {!displayLeads.length && (
                 <tr>
                   <td colSpan={6} className="py-4 text-sm text-slate-400">
-                    {leads.length ? "No hay leads de esta fuente en la vista." : "No hay leads en esta vista."}
+                    {query.trim()
+                      ? searching
+                        ? "Buscando…"
+                        : `Sin resultados para «${query.trim()}».`
+                      : leads.length
+                        ? "No hay leads de esta fuente en la vista."
+                        : "No hay leads en esta vista."}
                   </td>
                 </tr>
               )}

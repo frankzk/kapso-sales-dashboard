@@ -50,6 +50,48 @@ export async function loadLeadDetail(
   return { lead: detail.lead, calls };
 }
 
+/**
+ * Search leads in a store by name OR phone, across ALL stages (RLS-scoped, so a
+ * user only ever matches rows in stores they may access). Powers the leads
+ * search box. Two ILIKE passes (name + phone digits) merged + deduped, most
+ * recent first, capped. Returns [] for queries shorter than 2 chars.
+ */
+export async function searchLeads(storeId: string, query: string): Promise<LeadRow[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const sb = await createServerSupabase();
+  const nameLike = `%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`; // escape LIKE wildcards
+  const digits = q.replace(/\D/g, "");
+  const passes = [
+    sb
+      .from("leads")
+      .select("*")
+      .eq("store_id", storeId)
+      .ilike("name", nameLike)
+      .order("last_interaction_at", { ascending: false })
+      .limit(40),
+  ];
+  if (digits.length >= 2) {
+    passes.push(
+      sb
+        .from("leads")
+        .select("*")
+        .eq("store_id", storeId)
+        .ilike("phone", `%${digits}%`)
+        .order("last_interaction_at", { ascending: false })
+        .limit(40),
+    );
+  }
+  const settled = await Promise.all(passes);
+  const byId = new Map<string, LeadRow>();
+  for (const { data } of settled) {
+    for (const r of (data as LeadRow[] | null) ?? []) byId.set(r.id!, r);
+  }
+  return [...byId.values()]
+    .sort((a, b) => (b.last_interaction_at ?? "").localeCompare(a.last_interaction_at ?? ""))
+    .slice(0, 40);
+}
+
 /** Authorize: the caller must be able to SEE the lead under RLS. Returns its store. */
 async function authorizeLead(leadId: string): Promise<{ userId: string; storeId: string } | null> {
   const sb = await createServerSupabase();
