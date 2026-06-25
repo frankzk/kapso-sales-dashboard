@@ -101,7 +101,16 @@ async function upsertLeadFromSeed(
     row.has_order = true;
     row.order_id = ctx.orderId ?? null;
   }
-  await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
+  // Upsert resiliently: wa_phone_number_id (migration 0012) may not be applied
+  // yet. NEVER let that optional attribution column break lead creation — if the
+  // column is absent the upsert errors, so we retry once without it. (This is the
+  // bug that silently stopped ALL new leads: the column was written blindly and
+  // the error swallowed whenever 0012 hadn't been applied.)
+  const { error } = await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
+  if (error && "wa_phone_number_id" in row) {
+    delete row.wa_phone_number_id;
+    await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
+  }
 }
 
 /**
