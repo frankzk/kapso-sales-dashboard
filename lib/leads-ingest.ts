@@ -131,7 +131,11 @@ export async function syncStoreLeads(
   try {
     convs = await fetchAllConversationsRich(
       k,
-      { phoneNumberId: creds.whatsapp_phone_number_id ?? undefined, lastActiveAfter: cursor ?? undefined },
+      // Pull from ALL of the store's WhatsApp numbers, not just the send-from
+      // number. A store can connect several numbers to one Kapso project (e.g. an
+      // API/Cloud number + a Business/coexistence number); filtering by
+      // whatsapp_phone_number_id silently dropped the other numbers' leads.
+      { lastActiveAfter: cursor ?? undefined },
       cursor,
     );
   } catch (e: any) {

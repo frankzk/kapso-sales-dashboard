@@ -332,7 +332,8 @@ export async function runStoreSync(
       const k = { apiKey: creds.kapso_api_key };
       const cursor = await getSyncCursor(admin, storeId, "kapso");
       const convs = await listAllConversations(k, {
-        phoneNumberId: creds.whatsapp_phone_number_id ?? undefined,
+        // All of the store's WhatsApp numbers (not just the send-from number) —
+        // see the note in syncStoreLeads. Keeps both API + Business numbers synced.
         lastActiveAfter: cursor ?? undefined,
       });
       const rows = convs.map((c) => mapKapsoConversation(c, storeId));
@@ -413,7 +414,7 @@ export async function runStoreSync(
         const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
         const recent = await listAllConversations(
           k,
-          { phoneNumberId: creds.whatsapp_phone_number_id ?? undefined, lastActiveAfter: since },
+          { lastActiveAfter: since }, // all numbers
           10,
         );
         activity24h = {
