@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { campaignBreakdown } from "@/lib/metrics";
+import { campaignBreakdown, campaignDailyTrend } from "@/lib/metrics";
 import type { AdMeta } from "@/lib/meta-ads";
 import type { LeadRow, OrderRow } from "@/lib/types";
 
@@ -53,6 +53,21 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
     expect(cocina.label).toBe("🍳 Set Cocina");
     expect(cocina.resolved).toBe(false);
     expect(cocina.meta).toBeNull();
+  });
+
+  it("campaignDailyTrend buckets leads per day per ad (store tz)", () => {
+    const trendLeads = [
+      { phone: "1", source: "meta_ad", ad_id: "A", ad_headline: "H", first_seen_at: "2026-06-24T10:00:00Z" },
+      { phone: "2", source: "meta_ad", ad_id: "A", ad_headline: "H", first_seen_at: "2026-06-25T10:00:00Z" },
+      { phone: "3", source: "meta_ad", ad_id: "B", ad_headline: "H2", first_seen_at: "2026-06-25T10:00:00Z" },
+    ] as unknown as LeadRow[];
+    const t = campaignDailyTrend(trendLeads, {}, "UTC");
+    expect(t.rows.map((r) => r.date)).toEqual(["2026-06-24", "2026-06-25"]);
+    expect(t.series.map((s) => s.key)).toEqual(["A", "B"]); // A (2 leads) before B (1)
+    const d25 = t.rows.find((r) => r.date === "2026-06-25")!;
+    expect(d25["A"]).toBe(1);
+    expect(d25["B"]).toBe(1);
+    expect(t.rows.find((r) => r.date === "2026-06-24")!["B"]).toBe(0);
   });
 
   it("returns [] when there are no campaign-attributed leads", () => {

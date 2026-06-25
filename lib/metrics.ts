@@ -14,7 +14,7 @@ import type {
   LeadRow,
   OrderRow,
 } from "@/lib/types";
-import type { AdMeta } from "@/lib/meta-ads";
+import { prettyAdName, type AdMeta } from "@/lib/meta-ads";
 
 // ---------------------------------------------------------------------------
 // Timezone-aware bucketing
@@ -773,6 +773,65 @@ export function campaignBreakdown(
       };
     })
     .sort((a, b) => b.ingresos - a.ingresos || b.leads - a.leads);
+}
+
+export interface CampaignTrend {
+  rows: Array<Record<string, string | number>>; // [{ date, [adKey]: count }] for recharts
+  series: { key: string; label: string }[]; // top ads (+ "Otros"), in legend order
+}
+
+/**
+ * Leads per day per Meta ad — the "tendencia por anuncio" chart. Buckets the
+ * meta_ad leads by arrival day (store tz) and ad, keeps the top `topN` ads and
+ * folds the rest into "Otros". Returns recharts-ready rows + series; empty when
+ * there are no campaign leads.
+ */
+export function campaignDailyTrend(
+  leads: LeadRow[],
+  names: Record<string, AdMeta>,
+  timeZone: string,
+  topN = 5,
+): CampaignTrend {
+  const adLeads = leads.filter((l) => l.source === "meta_ad" && (l.ad_id || l.ad_headline));
+  if (!adLeads.length) return { rows: [], series: [] };
+
+  const keyOf = (l: LeadRow) => (l.ad_id || l.ad_headline!).replace(/\./g, "_");
+  const labelByKey = new Map<string, string>();
+  const totalByKey = new Map<string, number>();
+  for (const l of adLeads) {
+    const key = keyOf(l);
+    const meta = l.ad_id ? names[l.ad_id] : undefined;
+    labelByKey.set(key, prettyAdName(meta?.adName || l.ad_headline || key));
+    totalByKey.set(key, (totalByKey.get(key) ?? 0) + 1);
+  }
+  const topKeys = [...totalByKey.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN)
+    .map(([k]) => k);
+  const topSet = new Set(topKeys);
+  const hasOthers = totalByKey.size > topKeys.length;
+
+  const byDay = new Map<string, Map<string, number>>();
+  for (const l of adLeads) {
+    const at = l.first_seen_at ?? l.last_interaction_at;
+    if (!at) continue;
+    const day = tzParts(at, timeZone).date;
+    const sKey = topSet.has(keyOf(l)) ? keyOf(l) : "otros";
+    const dm = byDay.get(day) ?? new Map<string, number>();
+    dm.set(sKey, (dm.get(sKey) ?? 0) + 1);
+    byDay.set(day, dm);
+  }
+
+  const series = topKeys.map((k) => ({ key: k, label: labelByKey.get(k) ?? k }));
+  if (hasOthers) series.push({ key: "otros", label: "Otros" });
+
+  const rows = [...byDay.keys()].sort().map((day) => {
+    const dm = byDay.get(day)!;
+    const row: Record<string, string | number> = { date: day };
+    for (const s of series) row[s.key] = dm.get(s.key) ?? 0;
+    return row;
+  });
+  return { rows, series };
 }
 
 export interface WaNumberStat {

@@ -11,6 +11,7 @@ import {
   botVsAdvisor,
   businessBreakdown,
   campaignBreakdown,
+  campaignDailyTrend,
   comparePeriods,
   conversationalFunnel,
   dateHourPattern,
@@ -30,7 +31,7 @@ import type { AdMeta } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import { BarList, Card, EmptyState, SimpleTable, cn, type BarItem } from "@/components/ui";
 import { CampaignTable } from "@/components/campaign-table";
-import { ConversionOrdersTrend, RevenueOrdersChart } from "@/components/charts";
+import { CampaignTrendChart, ConversionOrdersTrend, RevenueOrdersChart } from "@/components/charts";
 import { DashboardControls } from "@/components/controls";
 import { HourPattern } from "@/components/hour-pattern";
 import { KpiCard } from "@/components/kpi-cards";
@@ -170,6 +171,7 @@ export function ExecutiveDashboard({
   const channels = botVsAdvisor(leadList);
   const sourceStats = sourceBreakdown(leadList, orders);
   const campaignStats = campaignBreakdown(leadList, orders, adNames ?? {});
+  const campaignTrend = campaignDailyTrend(leadList, adNames ?? {}, timezone);
   const waStats = leadsByWaNumber(leadList, orders);
   const funnelStages = conversationalFunnel({
     conversations,
@@ -339,6 +341,20 @@ export function ExecutiveDashboard({
             className="lg:col-span-12"
           >
             <CampaignTable rows={campaignStats} currency={currency} />
+          </Module>
+        </div>
+      )}
+
+      {/* Row 2c-bis — Tendencia por anuncio (leads/día). Hidden until ≥2 días con datos. */}
+      {campaignTrend.rows.length > 1 && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          <Module
+            title="Tendencia por anuncio (Meta)"
+            subtitle="Leads por día, una línea por anuncio (top 5 + Otros)"
+            info
+            className="lg:col-span-12"
+          >
+            <CampaignTrendChart rows={campaignTrend.rows} series={campaignTrend.series} />
           </Module>
         </div>
       )}
