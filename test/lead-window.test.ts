@@ -32,6 +32,7 @@ describe("countLeadWindows", () => {
       { last_inbound_at: null, last_interaction_at: inboundHoursAgo(21) }, // fallback → por_vencer
     ];
     const c = countLeadWindows(leads, now);
+    expect(c.a_tiempo).toBe(1);
     expect(c.por_vencer).toBe(3);
     expect(c.cerrada).toBe(1);
   });

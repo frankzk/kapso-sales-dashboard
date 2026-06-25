@@ -57,6 +57,19 @@ function fmtDate(value: string | null | undefined): string {
   return new Date(value).toLocaleString("es-PE");
 }
 
+/** Compact date for the leads table (no seconds, 24h) so the row fits at narrow
+ *  widths — e.g. "24/06, 06:17". The drawer keeps the full fmtDate. */
+function fmtDateShort(value: string | null | undefined): string {
+  if (!value) return "—";
+  return new Date(value).toLocaleString("es-PE", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
 /** Whole days since a timestamp (null if absent). */
 function daysSince(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -310,7 +323,7 @@ export function LeadsBoard({
   const [srcFilter, setSrcFilter] = useState<"all" | "meta_ad" | "organic">("all");
   const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
   const [gestFilter, setGestFilter] = useState<LeadGestion | null>(initialGest ?? null);
-  const [winFilter, setWinFilter] = useState<"all" | "por_vencer" | "cerrada">("all");
+  const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
   // Search box: instant client-side narrowing of the current view PLUS a
   // debounced global lookup (all stages) so you can find any customer, not just
   // those loaded in the active tab.
@@ -412,6 +425,7 @@ export function LeadsBoard({
       if (gestFilter && gestionOf(l.status) !== gestFilter) return false;
       if (winFilter !== "all") {
         const { state } = leadWindowInfo(l.last_inbound_at ?? l.last_interaction_at, now);
+        if (winFilter === "fresca" && state !== "fresca") return false;
         if (winFilter === "por_vencer" && !(state === "por_vencer" || state === "critica")) return false;
         if (winFilter === "cerrada" && state !== "cerrada") return false;
       }
@@ -507,6 +521,12 @@ export function LeadsBoard({
                 <span className="text-xs font-medium text-slate-400">Ventana:</span>
                 <FilterPill label="Todos" active={winFilter === "all"} onClick={() => setWinFilter("all")} />
                 <FilterPill
+                  label="🟢 A tiempo"
+                  count={winCounts.a_tiempo}
+                  active={winFilter === "fresca"}
+                  onClick={() => setWinFilter("fresca")}
+                />
+                <FilterPill
                   label="⏳ Por vencer"
                   count={winCounts.por_vencer}
                   active={winFilter === "por_vencer"}
@@ -597,7 +617,7 @@ export function LeadsBoard({
                 <th className="py-2 text-left font-medium">Nombre</th>
                 <th className="py-2 text-left font-medium">Teléfono</th>
                 <th className="py-2 text-left font-medium">Última interacción</th>
-                <th className="py-2 text-left font-medium">Calificación</th>
+                <th className="hidden py-2 text-left font-medium md:table-cell">Calificación</th>
                 <th className="py-2 text-left font-medium">Estado</th>
                 <th className="py-2 text-right font-medium">Acción</th>
               </tr>
@@ -616,31 +636,39 @@ export function LeadsBoard({
                 return (
                   <tr key={lead.id} className="border-b border-slate-100 last:border-0">
                     <td className="py-2.5 text-slate-800">
-                      {lead.name || lead.phone}
-                      {lead.source === "meta_ad" && (
-                        <span
-                          className="ml-2 whitespace-nowrap rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-700"
-                          title={lead.ad_headline ? `Campaña Meta: ${lead.ad_headline}` : "Llegó por campaña de Meta (Click-to-WhatsApp)"}
-                        >
-                          📣 Campaña
+                      <div className="flex flex-col gap-1">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span>{lead.name || lead.phone}</span>
+                          {lead.source === "meta_ad" && (
+                            <span
+                              className="whitespace-nowrap rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-700"
+                              title={lead.ad_headline ? `Campaña Meta: ${lead.ad_headline}` : "Llegó por campaña de Meta (Click-to-WhatsApp)"}
+                            >
+                              📣 Campaña
+                            </span>
+                          )}
+                        </div>
+                        {/* Calificación column is hidden on narrow screens — surface it here. */}
+                        <span className="md:hidden">
+                          <SegmentBadge lead={lead} />
                         </span>
-                      )}
+                      </div>
                     </td>
                     <td className="py-2.5">
                       <a
                         href={`https://wa.me/${lead.phone}`}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-brand-700 hover:underline"
+                        className="whitespace-nowrap text-brand-700 hover:underline"
                       >
                         {lead.phone}
                       </a>
                     </td>
                     <td className="py-2.5 text-slate-600">
-                      {fmtDate(lead.last_interaction_at)}
+                      <span className="whitespace-nowrap">{fmtDateShort(lead.last_interaction_at)}</span>
                       {active && <WindowBadge lead={lead} />}
                     </td>
-                    <td className="py-2.5">
+                    <td className="hidden py-2.5 md:table-cell">
                       <SegmentBadge lead={lead} />
                     </td>
                     <td className="py-2.5">

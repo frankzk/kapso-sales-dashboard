@@ -253,23 +253,27 @@ export function leadWindowInfo(
   return { state: "fresca", msLeft: left };
 }
 
-export function isLeadWindowFilter(v: string | undefined | null): v is "por_vencer" | "cerrada" {
-  return v === "por_vencer" || v === "cerrada";
+export function isLeadWindowFilter(
+  v: string | undefined | null,
+): v is "fresca" | "por_vencer" | "cerrada" {
+  return v === "fresca" || v === "por_vencer" || v === "cerrada";
 }
 
 /** Tally leads into actionable window buckets (por_vencer groups ≤6h incl. crítica). */
 export function countLeadWindows(
   leads: { last_inbound_at?: string | null; last_interaction_at?: string | null }[],
   nowMs: number,
-): { por_vencer: number; cerrada: number } {
+): { a_tiempo: number; por_vencer: number; cerrada: number } {
+  let a_tiempo = 0;
   let por_vencer = 0;
   let cerrada = 0;
   for (const l of leads) {
     const { state } = leadWindowInfo(l.last_inbound_at ?? l.last_interaction_at, nowMs);
-    if (state === "por_vencer" || state === "critica") por_vencer += 1;
+    if (state === "fresca") a_tiempo += 1;
+    else if (state === "por_vencer" || state === "critica") por_vencer += 1;
     else if (state === "cerrada") cerrada += 1;
   }
-  return { por_vencer, cerrada };
+  return { a_tiempo, por_vencer, cerrada };
 }
 
 /** Tally "Por llamar" leads into gestión buckets (unmapped statuses ignored). */
