@@ -102,20 +102,28 @@ roles and the `auth` schema, so it just works.
    - **Shopify Admin API access token** — from a Shopify *custom app*
      (Settings → Apps and sales channels → Develop apps → your app → API
      credentials → Admin API access token, `shpat_…`). Scopes needed:
-     `read_orders` (and `read_products` if you want richer product data).
+     `read_orders`, `read_draft_orders`, `write_draft_orders` (the draft scopes
+     power the abandoned-cart / Releasit COD feature — read open/completed drafts
+     and let "Generar pedido" complete a draft into an order; `read_products`
+     optional for richer product data).
      - *Alternative — "Install on Shopify" (OAuth):* create a Shopify app, set
-       its redirect URL to `{NEXT_PUBLIC_SITE_URL}/api/shopify/callback`, scope
-       `read_orders`, and add `SHOPIFY_APP_API_KEY` + `SHOPIFY_APP_API_SECRET`
+       its redirect URL to `{NEXT_PUBLIC_SITE_URL}/api/shopify/callback`, scopes
+       `read_orders,read_draft_orders,write_draft_orders`, and add
+       `SHOPIFY_APP_API_KEY` + `SHOPIFY_APP_API_SECRET`
        to Vercel. Then create the store with the token blank and click
        **Instalar con Shopify** in store **Ajustes** — the token is captured,
        encrypted, webhooks registered and backfill run automatically.
+     - *Existing stores must re-grant the draft scopes:* re-run
+       `/api/shopify/install?storeId=<id>` (OAuth) or paste a custom-app token
+       that already includes them. Until then the abandoned-cart feature stays
+       empty — the draft sync logs a scope error but never breaks orders/leads.
    - **Shopify API secret key** — same app → *API secret key*. Used to verify
      webhook HMAC. (Without it, webhooks can't be verified.)
    - **Kapso API key** — Kapso dashboard → Integrations → API keys.
    - **WhatsApp phone number id** + Kapso project id (optional but enables the
      funnel + operational family).
 4. On save, the app validates the token, **registers** `orders/create` +
-   `orders/updated` webhooks pointing at
+   `orders/updated` + `draft_orders/create|update|delete` webhooks pointing at
    `https://<your-domain>/api/webhooks/shopify/<storeId>`, and runs an initial
    **backfill** of `tag:kapso` orders.
 

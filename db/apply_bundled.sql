@@ -946,3 +946,53 @@ update leads l
    and c.kapso_conversation_id = l.kapso_conversation_id
    and l.wa_phone_number_id is null
    and c.phone_number_id is not null;
+
+-- ---- 0013 ----
+-- 0013_draft_orders.sql — Shopify Draft Orders (Releasit COD form abandoned carts).
+-- OPEN draft = abandoned cart to work; COMPLETED = recovered. Mirrors `orders`.
+-- Requires read_draft_orders (sync) + write_draft_orders ("Generar pedido").
+create table if not exists draft_orders (
+  id                     uuid primary key default gen_random_uuid(),
+  store_id               uuid not null references stores(id) on delete cascade,
+  shopify_draft_order_id text not null,
+  draft_order_gid        text,
+  name                   text,
+  status                 text,
+  created_at             timestamptz,
+  updated_at             timestamptz,
+  completed_at           timestamptz,
+  invoice_url            text,
+  total_amount           numeric(14, 2),
+  currency               text,
+  customer_phone         text,
+  customer_name          text,
+  district               text,
+  province               text,
+  region                 text,
+  address1               text,
+  referencia             text,
+  tags                   text[] not null default '{}',
+  note                   text,
+  line_items             jsonb not null default '[]'::jsonb,
+  order_gid              text,
+  raw                    jsonb,
+  ingested_at            timestamptz not null default now(),
+  unique (store_id, shopify_draft_order_id)
+);
+create index if not exists draft_orders_store_phone_idx   on draft_orders(store_id, customer_phone);
+create index if not exists draft_orders_store_status_idx  on draft_orders(store_id, status);
+create index if not exists draft_orders_store_updated_idx on draft_orders(store_id, updated_at);
+create index if not exists draft_orders_tags_gin          on draft_orders using gin (tags);
+alter table draft_orders enable row level security;
+drop policy if exists draft_orders_select on draft_orders;
+create policy draft_orders_select on draft_orders for select to authenticated
+  using (store_id in (select auth_store_ids()));
+grant select on draft_orders to authenticated;
+grant all privileges on draft_orders to service_role;
+alter table leads
+  add column if not exists draft_order_name   text,
+  add column if not exists draft_order_status text,
+  add column if not exists draft_order_url    text,
+  add column if not exists province           text,
+  add column if not exists region             text,
+  add column if not exists referencia         text;

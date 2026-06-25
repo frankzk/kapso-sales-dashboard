@@ -62,6 +62,43 @@ export async function getLeadWithCalls(
   return { lead: lead as LeadRow, calls: (calls as LeadCallRow[]) ?? [] };
 }
 
+export interface CustomerHistory {
+  orderCount: number; // prior non-cancelled orders for this phone (excl. the lead's own)
+  lastOrderName: string | null;
+  lastOrderAt: string | null;
+  lastProduct: string | null;
+}
+
+/**
+ * Prior purchase history for a phone — powers the "cliente recurrente" block in
+ * the lead drawer (último pedido / cuándo / qué compró). RLS-scoped, so it only
+ * sees orders in stores the caller may access. Excludes the lead's own order.
+ */
+export async function getCustomerHistory(
+  storeId: string,
+  phone: string | null,
+  excludeOrderId?: string | null,
+): Promise<CustomerHistory | null> {
+  if (!phone) return null;
+  const sb = await createServerSupabase();
+  const { data } = await sb
+    .from("orders")
+    .select("id, name, created_at, line_items")
+    .eq("store_id", storeId)
+    .eq("customer_phone", phone)
+    .is("cancelled_at", null)
+    .order("created_at", { ascending: false })
+    .limit(10);
+  let rows =
+    (data as { id: string; name: string | null; created_at: string | null; line_items: unknown }[]) ?? [];
+  if (excludeOrderId) rows = rows.filter((r) => r.id !== excludeOrderId);
+  if (!rows.length) return { orderCount: 0, lastOrderName: null, lastOrderAt: null, lastProduct: null };
+  const last = rows[0]!;
+  const items = Array.isArray(last.line_items) ? (last.line_items as { title?: string }[]) : [];
+  const lastProduct = items.length ? String(items[0]?.title ?? "").trim() || null : null;
+  return { orderCount: rows.length, lastOrderName: last.name, lastOrderAt: last.created_at, lastProduct };
+}
+
 export async function getLeadCounts(storeId: string): Promise<Record<LeadView, number>> {
   const sb = await createServerSupabase();
   const head = () => sb.from("leads").select("*", { count: "exact", head: true }).eq("store_id", storeId);

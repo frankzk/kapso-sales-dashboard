@@ -4,6 +4,8 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
+  type DraftOrderRow,
+  type DraftOrderStatus,
   type OrderLineItem,
   type OrderRow,
   type ShippingMode,
@@ -249,6 +251,125 @@ export function mapGraphqlOrder(node: any, storeId: string): OrderRow {
 }
 
 // ---------------------------------------------------------------------------
+// Draft orders (Releasit COD form abandoned carts)
+// ---------------------------------------------------------------------------
+
+/** Lowercase a Shopify DraftOrderStatus (OPEN/INVOICE_SENT/COMPLETED). */
+function normalizeDraftStatus(v: unknown): DraftOrderStatus {
+  if (v == null) return null;
+  const s = String(v).toLowerCase();
+  return s === "open" || s === "invoice_sent" || s === "completed" ? s : null;
+}
+
+/** Map a Shopify GraphQL DraftOrder node → DraftOrderRow. Mirrors mapGraphqlOrder. */
+export function mapGraphqlDraftOrder(node: any, storeId: string): DraftOrderRow {
+  const tags = parseTags(node?.tags);
+  const ship = node?.shippingAddress ?? null;
+  const liEdges: any[] = node?.lineItems?.edges ?? [];
+  const line_items: OrderLineItem[] = liEdges.map((e) => {
+    const n = e?.node ?? {};
+    return {
+      title: String(n?.title ?? n?.name ?? ""),
+      quantity: Number(n?.quantity ?? 0),
+      sku: n?.sku ?? null,
+      product_id: n?.product?.id ? extractNumericId(n.product.id) : null,
+      variant_id: n?.variant?.id ? extractNumericId(n.variant.id) : null,
+      price: toNumber(n?.originalUnitPriceSet?.shopMoney?.amount),
+    };
+  });
+  const province = ship?.province ?? null;
+  return {
+    store_id: storeId,
+    shopify_draft_order_id: extractNumericId(node?.id),
+    draft_order_gid: String(node?.id ?? ""),
+    name: node?.name ?? null,
+    status: normalizeDraftStatus(node?.status),
+    created_at: node?.createdAt ?? null,
+    updated_at: node?.updatedAt ?? null,
+    completed_at: node?.completedAt ?? null,
+    invoice_url: node?.invoiceUrl ?? null,
+    total_amount: toNumber(node?.totalPriceSet?.shopMoney?.amount),
+    currency: node?.totalPriceSet?.shopMoney?.currencyCode ?? null,
+    customer_phone: normalizePhone(node?.phone ?? ship?.phone),
+    customer_name: node?.customer?.displayName ?? ship?.name ?? null,
+    district: ship?.city ?? null,
+    province,
+    region: province, // Peru has no 3rd Shopify admin level; province ≈ region
+    address1: ship?.address1 ?? null,
+    referencia: ship?.address2 ?? null,
+    tags,
+    note: node?.note2 ?? null,
+    line_items,
+    order_gid: node?.order?.id ?? null,
+    raw: node,
+  };
+}
+
+/** Map a Shopify REST draft_order webhook payload → DraftOrderRow. */
+export function mapRestDraftOrder(payload: any, storeId: string): DraftOrderRow {
+  const tags = parseTags(payload?.tags);
+  const ship = payload?.shipping_address ?? null;
+  const cust = payload?.customer ?? null;
+  const line_items: OrderLineItem[] = Array.isArray(payload?.line_items)
+    ? payload.line_items.map((li: any) => ({
+        title: String(li?.title ?? li?.name ?? ""),
+        quantity: Number(li?.quantity ?? 0),
+        sku: li?.sku ?? null,
+        product_id: li?.product_id != null ? String(li.product_id) : null,
+        variant_id: li?.variant_id != null ? String(li.variant_id) : null,
+        price: toNumber(li?.price),
+      }))
+    : [];
+  const province = ship?.province ?? null;
+  const custName = cust
+    ? [cust.first_name, cust.last_name].filter(Boolean).join(" ").trim() || null
+    : null;
+  const numericId = extractNumericId(payload?.id);
+  return {
+    store_id: storeId,
+    shopify_draft_order_id: numericId,
+    draft_order_gid:
+      payload?.admin_graphql_api_id ?? (numericId ? `gid://shopify/DraftOrder/${numericId}` : ""),
+    name: payload?.name ?? null,
+    status: normalizeDraftStatus(payload?.status),
+    created_at: payload?.created_at ?? null,
+    updated_at: payload?.updated_at ?? null,
+    completed_at: payload?.completed_at ?? null,
+    invoice_url: payload?.invoice_url ?? null,
+    total_amount: toNumber(payload?.total_price),
+    currency: payload?.currency ?? null,
+    customer_phone: normalizePhone(payload?.phone ?? ship?.phone ?? cust?.phone),
+    customer_name: custName ?? ship?.name ?? null,
+    district: ship?.city ?? null,
+    province,
+    region: province,
+    address1: ship?.address1 ?? null,
+    referencia: ship?.address2 ?? null,
+    tags,
+    note: payload?.note ?? null,
+    line_items,
+    order_gid:
+      payload?.order_id != null ? `gid://shopify/Order/${extractNumericId(payload.order_id)}` : null,
+    raw: payload,
+  };
+}
+
+const RELEASIT_DRAFT_HINTS = ["releasit", "cod form", "cash on delivery", "contraentrega", "contra entrega"];
+
+/**
+ * Whether a draft looks like a Releasit COD-form abandoned cart (vs a manual
+ * quote/wholesale draft that must NOT become a call lead). Prefers an explicit
+ * Releasit marker (tag/note); falls back to "open draft with a shipping phone",
+ * since the COD form always collects one. TODO(verify): confirm the real marker
+ * on a live draft (dump `raw`) and tighten if the store also makes manual drafts.
+ */
+export function isCodFormDraft(row: DraftOrderRow): boolean {
+  const hay = [...row.tags, row.note ?? ""].join(" ").toLowerCase();
+  if (RELEASIT_DRAFT_HINTS.some((h) => hay.includes(h))) return true;
+  return Boolean(row.customer_phone);
+}
+
+// ---------------------------------------------------------------------------
 // Admin GraphQL client
 // ---------------------------------------------------------------------------
 
@@ -412,6 +533,178 @@ export async function fetchOrdersPage(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Draft-order fetch (read_draft_orders) + complete (write_draft_orders)
+// ---------------------------------------------------------------------------
+
+/** Only ingest OPEN carts touched within this window — keeps a backlog of dead
+ *  drafts from flooding the "Por llamar" queue. The caller floors the cursor. */
+export const DRAFT_OPEN_WINDOW_DAYS = 30;
+
+export function buildDraftOrdersQuery(withPhone: boolean): string {
+  // Draft/shipping phone is "protected customer data" — requested only on the
+  // first attempt; fetchDraftOrdersPage retries without it if access is denied.
+  const draftPhone = withPhone ? "\n          phone" : "";
+  const shipPhone = withPhone ? " phone" : "";
+  return /* GraphQL */ `
+  query DraftOrders($first: Int!, $after: String, $query: String!) {
+    draftOrders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
+      edges {
+        cursor
+        node {
+          id
+          name
+          status
+          createdAt
+          updatedAt
+          completedAt
+          invoiceUrl
+          note2
+          tags${draftPhone}
+          totalPriceSet { shopMoney { amount currencyCode } }
+          customer { displayName }
+          shippingAddress { city province address1 address2 name${shipPhone} }
+          order { id }
+          lineItems(first: 100) {
+            edges {
+              node {
+                title
+                quantity
+                sku
+                originalUnitPriceSet { shopMoney { amount } }
+              }
+            }
+          }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+}
+
+export const DRAFT_ORDERS_QUERY = buildDraftOrdersQuery(false);
+const DRAFT_ORDERS_QUERY_WITH_PHONE = buildDraftOrdersQuery(true);
+
+// Per-process memo (mirrors ordersPhoneSupported): once a store proves it can't
+// read protected phone data, stop asking for it.
+let draftPhoneSupported = true;
+
+/** Search for draft orders of a given status, bounded by an updated_at cursor.
+ *  The OPEN-cart 30-day floor is applied by the caller (passed in via the iso). */
+export function buildDraftOrdersSearchQuery(
+  status: "open" | "completed",
+  updatedAtCursorIso?: string | null,
+): string {
+  const parts = [`status:${status}`];
+  if (updatedAtCursorIso) parts.push(`updated_at:>=${updatedAtCursorIso}`);
+  return parts.join(" ");
+}
+
+export interface DraftOrdersPage {
+  draftOrders: DraftOrderRow[];
+  hasNextPage: boolean;
+  endCursor: string | null;
+  /** Max updated_at on this page (advances the reconciliation cursor). */
+  maxUpdatedAt: string | null;
+}
+
+/**
+ * Fetch one page of draft orders, mapped to DraftOrderRow. Degrades like
+ * fetchOrdersPage: drops the protected phone fields if access is denied. If the
+ * whole `draftOrders` field is denied (missing read_draft_orders), this throws —
+ * the caller (runStoreSync) records it and the feature stays empty, non-breaking.
+ */
+export async function fetchDraftOrdersPage(
+  opts: ShopifyClientOpts & {
+    storeId: string;
+    searchQuery: string;
+    after?: string | null;
+    first?: number;
+  },
+): Promise<DraftOrdersPage> {
+  const variables = {
+    first: opts.first ?? 100,
+    after: opts.after ?? null,
+    query: opts.searchQuery,
+  };
+  let data: any;
+  try {
+    data = await shopifyGraphQL<any>({
+      ...opts,
+      query: draftPhoneSupported ? DRAFT_ORDERS_QUERY_WITH_PHONE : DRAFT_ORDERS_QUERY,
+      variables,
+    });
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e).toLowerCase();
+    const accessIssue =
+      /access denied|access_denied|protected customer|not authorized|cannot query field|doesn't exist/.test(
+        msg,
+      );
+    if (draftPhoneSupported && accessIssue) {
+      draftPhoneSupported = false; // degrade gracefully — keep syncing without phone
+      data = await shopifyGraphQL<any>({ ...opts, query: DRAFT_ORDERS_QUERY, variables });
+    } else {
+      throw e;
+    }
+  }
+
+  const edges: any[] = data?.draftOrders?.edges ?? [];
+  const draftOrders = edges.map((e) => mapGraphqlDraftOrder(e.node, opts.storeId));
+  let maxUpdatedAt: string | null = null;
+  for (const d of draftOrders) {
+    if (d.updated_at && (!maxUpdatedAt || d.updated_at > maxUpdatedAt)) {
+      maxUpdatedAt = d.updated_at;
+    }
+  }
+  return {
+    draftOrders,
+    hasNextPage: Boolean(data?.draftOrders?.pageInfo?.hasNextPage),
+    endCursor: data?.draftOrders?.pageInfo?.endCursor ?? null,
+    maxUpdatedAt,
+  };
+}
+
+const DRAFT_ORDER_COMPLETE_MUTATION = /* GraphQL */ `
+  mutation DraftOrderComplete($id: ID!, $paymentPending: Boolean) {
+    draftOrderComplete(id: $id, paymentPending: $paymentPending) {
+      draftOrder { id status order { id name } }
+      userErrors { field message }
+    }
+  }
+`;
+
+export interface DraftOrderCompleteResult {
+  orderGid: string | null;
+  orderName: string | null;
+  status: DraftOrderStatus;
+}
+
+/**
+ * Complete a draft order in Shopify → a real order (requires write_draft_orders).
+ * COD ⇒ paymentPending:true (the order is created unpaid). Throws on userErrors
+ * (e.g. the draft was already completed); the caller maps that to "recovered".
+ */
+export async function completeDraftOrder(
+  opts: ShopifyClientOpts & { draftGid: string; paymentPending?: boolean },
+): Promise<DraftOrderCompleteResult> {
+  const data = await shopifyGraphQL<any>({
+    ...opts,
+    query: DRAFT_ORDER_COMPLETE_MUTATION,
+    variables: { id: opts.draftGid, paymentPending: opts.paymentPending ?? true },
+  });
+  const errs = data?.draftOrderComplete?.userErrors ?? [];
+  if (errs.length) {
+    throw new Error(`draftOrderComplete: ${errs.map((e: any) => e.message).join("; ")}`);
+  }
+  const draft = data?.draftOrderComplete?.draftOrder ?? null;
+  return {
+    orderGid: draft?.order?.id ?? null,
+    orderName: draft?.order?.name ?? null,
+    status: normalizeDraftStatus(draft?.status),
+  };
+}
+
 const WEBHOOK_CREATE_MUTATION = /* GraphQL */ `
   mutation CreateWebhook($topic: WebhookSubscriptionTopic!, $callbackUrl: URL!) {
     webhookSubscriptionCreate(
@@ -425,13 +718,21 @@ const WEBHOOK_CREATE_MUTATION = /* GraphQL */ `
 `;
 
 export const ORDER_WEBHOOK_TOPICS = ["ORDERS_CREATE", "ORDERS_UPDATED"] as const;
+// Draft-order topics (note the singular DRAFT_ORDERS_UPDATE, unlike ORDERS_UPDATED).
+// Registering these needs read_draft_orders; without it Shopify returns a
+// userError per topic (collected below) rather than throwing — non-breaking.
+export const DRAFT_ORDER_WEBHOOK_TOPICS = [
+  "DRAFT_ORDERS_CREATE",
+  "DRAFT_ORDERS_UPDATE",
+  "DRAFT_ORDERS_DELETE",
+] as const;
 
-/** Register orders/create + orders/updated webhooks pointing at our handler. */
+/** Register orders + draft_orders create/update(/delete) webhooks at our handler. */
 export async function registerOrderWebhooks(
   opts: ShopifyClientOpts & { callbackUrl: string },
 ): Promise<Array<{ topic: string; id: string | null; error?: string }>> {
   const results: Array<{ topic: string; id: string | null; error?: string }> = [];
-  for (const topic of ORDER_WEBHOOK_TOPICS) {
+  for (const topic of [...ORDER_WEBHOOK_TOPICS, ...DRAFT_ORDER_WEBHOOK_TOPICS]) {
     const data = await shopifyGraphQL<any>({
       ...opts,
       query: WEBHOOK_CREATE_MUTATION,

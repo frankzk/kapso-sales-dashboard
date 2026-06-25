@@ -44,6 +44,24 @@ class FakeBuilder {
     Object.assign(this.filters, m);
     return this;
   }
+  in(k: string, v: any[]) {
+    this.filters[k] = v;
+    return this;
+  }
+  is(k: string, v: any) {
+    this.filters[k] = v;
+    return this;
+  }
+  delete() {
+    this.op = "delete";
+    return this;
+  }
+  order() {
+    return this;
+  }
+  limit() {
+    return this;
+  }
   single() {
     this._single = true;
     return this;
@@ -61,6 +79,10 @@ class FakeSupabase {
   storeRow: Row;
   insertedWebhookIds = new Set<string>();
   upsertedOrders: any[] = [];
+  upsertedDrafts: any[] = [];
+  upsertedLeads: any[] = [];
+  deletedDrafts: any[] = [];
+  existingLeadPhones = new Set<string>();
   recomputeCalls: any[] = [];
   processedUpdates = 0;
   constructor(storeRow: Row) {
@@ -91,6 +113,25 @@ class FakeSupabase {
     }
     if (b.table === "orders" && b.op === "upsert") {
       this.upsertedOrders.push(...(b.payload as any[]));
+      return { data: null, error: null };
+    }
+    if (b.table === "draft_orders" && b.op === "upsert") {
+      this.upsertedDrafts.push(...(b.payload as any[]));
+      return { data: null, error: null };
+    }
+    if (b.table === "draft_orders" && b.op === "delete") {
+      this.deletedDrafts.push(b.filters);
+      return { data: null, error: null };
+    }
+    if (b.table === "leads" && b.op === "select") {
+      const ph = (b.filters as any).phone;
+      const list = Array.isArray(ph) ? ph : ph != null ? [ph] : [];
+      const rows = list.filter((p: string) => this.existingLeadPhones.has(p)).map((p: string) => ({ phone: p }));
+      return { data: rows, error: null };
+    }
+    if (b.table === "leads" && b.op === "upsert") {
+      const rows = Array.isArray(b.payload) ? b.payload : [b.payload];
+      this.upsertedLeads.push(...rows);
       return { data: null, error: null };
     }
     return { data: null, error: null };
@@ -233,5 +274,100 @@ describe("processShopifyWebhook", () => {
       fake as any,
     );
     expect(res.status).toBe("error");
+  });
+});
+
+const DRAFT_OPEN_BODY = JSON.stringify({
+  id: 1122334455,
+  admin_graphql_api_id: "gid://shopify/DraftOrder/1122334455",
+  name: "#D12",
+  status: "open",
+  created_at: "2026-06-24T12:00:00Z",
+  updated_at: "2026-06-24T12:30:00Z",
+  invoice_url: "https://aurela.myshopify.com/invoice/abc",
+  total_price: "120.00",
+  currency: "PEN",
+  shipping_address: { phone: "+51 980 111 222", city: "Miraflores", province: "Lima", address1: "Av X 123", address2: "Dpto 4" },
+  line_items: [{ title: "Mochila", quantity: 2, price: "60.00" }],
+  tags: "",
+  note: "Releasit COD form",
+});
+
+const DRAFT_COMPLETED_BODY = JSON.stringify({
+  id: 1122334455,
+  admin_graphql_api_id: "gid://shopify/DraftOrder/1122334455",
+  name: "#D12",
+  status: "completed",
+  created_at: "2026-06-24T12:00:00Z",
+  updated_at: "2026-06-24T13:00:00Z",
+  completed_at: "2026-06-24T13:00:00Z",
+  total_price: "120.00",
+  currency: "PEN",
+  shipping_address: { phone: "+51 980 111 222", city: "Miraflores" },
+  line_items: [{ title: "Mochila", quantity: 2, price: "60.00" }],
+  order_id: 99887766,
+  note: "Releasit COD form",
+});
+
+describe("processShopifyWebhook · draft orders", () => {
+  it("draft_orders/create: upserts the draft and creates a cart lead", async () => {
+    const { processShopifyWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const res = await processShopifyWebhook(
+      { storeId: "store-1", topic: "draft_orders/create", rawBody: DRAFT_OPEN_BODY, hmacHeader: sign(DRAFT_OPEN_BODY), webhookIdHeader: "wh_d1" },
+      fake as any,
+    );
+    expect(res.status).toBe("ok");
+    expect(fake.upsertedDrafts).toHaveLength(1);
+    expect(fake.upsertedDrafts[0]).toMatchObject({
+      store_id: "store-1",
+      shopify_draft_order_id: "1122334455",
+      status: "open",
+      district: "Miraflores",
+      customer_phone: "51980111222",
+    });
+    expect(fake.upsertedLeads).toHaveLength(1);
+    expect(fake.upsertedLeads[0]).toMatchObject({
+      phone: "51980111222",
+      status: "nuevo",
+      category: "open",
+      source: "cod_cart",
+      cart_item_count: 2,
+    });
+    expect(fake.upsertedLeads[0].draft_order_gid).toBe("gid://shopify/DraftOrder/1122334455");
+  });
+
+  it("draft_orders/update completed: marks the lead won (recovered)", async () => {
+    const { processShopifyWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const res = await processShopifyWebhook(
+      { storeId: "store-1", topic: "draft_orders/update", rawBody: DRAFT_COMPLETED_BODY, hmacHeader: sign(DRAFT_COMPLETED_BODY), webhookIdHeader: "wh_d2" },
+      fake as any,
+    );
+    expect(res.status).toBe("ok");
+    expect(fake.upsertedLeads).toHaveLength(1);
+    expect(fake.upsertedLeads[0]).toMatchObject({
+      phone: "51980111222",
+      status: "pedido_generado",
+      category: "won",
+      has_order: true,
+    });
+  });
+});
+
+describe("linkDraftOrdersToLeads precedence", () => {
+  it("enriches an existing lead's cart but never overwrites its manual status", async () => {
+    const { linkDraftOrdersToLeads } = await import("@/lib/leads-ingest");
+    const { mapRestDraftOrder } = await import("@/lib/shopify");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.existingLeadPhones.add("51980111222"); // a lead the agent already dispositioned
+    const draft = mapRestDraftOrder(JSON.parse(DRAFT_OPEN_BODY), "store-1");
+    await linkDraftOrdersToLeads(fake as any, "store-1", [draft]);
+    expect(fake.upsertedLeads).toHaveLength(1);
+    const row = fake.upsertedLeads[0];
+    expect(row.cart_item_count).toBe(2); // cart enriched
+    expect(row.draft_order_gid).toBeTruthy();
+    expect(row.status).toBeUndefined(); // manual disposition preserved
+    expect(row.source).toBeUndefined();
   });
 });

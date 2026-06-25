@@ -7,7 +7,10 @@ import { buildAuthorizeUrl, isValidShopDomain } from "@/lib/shopify";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const SCOPES = "read_orders";
+// read_draft_orders + write_draft_orders power the abandoned-cart (Releasit COD)
+// feature: read open/completed drafts, and "Generar pedido" completes a draft
+// into a real order. read_orders stays for the existing order sync.
+const SCOPES = "read_orders,read_draft_orders,write_draft_orders";
 
 // Start the Shopify OAuth install for a store the caller owns/admins.
 //   GET /api/shopify/install?storeId=<id>
