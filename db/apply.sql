@@ -25,4 +25,6 @@
 \ir migrations/0010_sin_stock_open.sql
 \echo 'Applying 0011_meta_ads.sql'
 \ir migrations/0011_meta_ads.sql
+\echo 'Applying 0012_lead_wa_number.sql'
+\ir migrations/0012_lead_wa_number.sql
 \echo 'Done.'

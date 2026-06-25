@@ -19,6 +19,7 @@ import {
   formatPct,
   funnelFineLink,
   funnelHealth,
+  leadsByWaNumber,
   lossReasons,
   lostRevenueByReason,
   rollupSeries,
@@ -26,6 +27,7 @@ import {
   topProducts,
 } from "@/lib/metrics";
 import type { AdMeta } from "@/lib/meta-ads";
+import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import { BarList, Card, EmptyState, SimpleTable, cn, type BarItem } from "@/components/ui";
 import { CampaignTable } from "@/components/campaign-table";
 import { ConversionOrdersTrend, RevenueOrdersChart } from "@/components/charts";
@@ -110,6 +112,7 @@ export function ExecutiveDashboard({
   singleStore,
   leads,
   adNames,
+  waNumbers,
 }: {
   stores: StoreSummary[];
   scope: "all" | string;
@@ -124,6 +127,7 @@ export function ExecutiveDashboard({
   singleStore?: StoreSummary;
   leads?: LeadRow[];
   adNames?: Record<string, AdMeta>;
+  waNumbers?: Record<string, WaNumber>;
 }) {
   const names: Record<string, string> = Object.fromEntries(stores.map((s) => [s.id, s.name]));
   const totals = aggregateRollups(rollups);
@@ -166,6 +170,7 @@ export function ExecutiveDashboard({
   const channels = botVsAdvisor(leadList);
   const sourceStats = sourceBreakdown(leadList, orders);
   const campaignStats = campaignBreakdown(leadList, orders, adNames ?? {});
+  const waStats = leadsByWaNumber(leadList, orders);
   const funnelStages = conversationalFunnel({
     conversations,
     leads: leadList,
@@ -334,6 +339,62 @@ export function ExecutiveDashboard({
             className="lg:col-span-12"
           >
             <CampaignTable rows={campaignStats} currency={currency} />
+          </Module>
+        </div>
+      )}
+
+      {/* Row 2d — Por número de WhatsApp (API vs Business). Hidden until ≥2 buckets. */}
+      {waStats.length > 1 && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          <Module
+            title="Por número de WhatsApp"
+            subtitle="Leads, conversión e ingresos según el número por el que escribió el cliente"
+            info
+            className="lg:col-span-12"
+          >
+            <SimpleTable
+              rows={waStats}
+              empty="Sin números atribuidos todavía."
+              columns={[
+                {
+                  key: "label",
+                  header: "Número",
+                  render: (r) => {
+                    if (!r.phoneNumberId)
+                      return <span className="text-slate-500">📱 Sin asignar</span>;
+                    const n = waNumbers?.[r.phoneNumberId];
+                    const kind = waKindLabel(n?.kind ?? null);
+                    return (
+                      <span className="font-medium text-slate-800">
+                        📱 {waLabel(n, r.phoneNumberId)}
+                        {kind && <span className="ml-1 font-normal text-slate-400">· {kind}</span>}
+                        {n?.displayPhone && (
+                          <span className="ml-1 font-normal text-slate-400">· {n.displayPhone}</span>
+                        )}
+                      </span>
+                    );
+                  },
+                },
+                { key: "leads", header: "Leads", align: "right", render: (r) => r.leads },
+                { key: "pedidos", header: "Pedidos", align: "right", render: (r) => r.pedidos },
+                {
+                  key: "conversion",
+                  header: "Conversión",
+                  align: "right",
+                  render: (r) => formatPct(r.conversion),
+                },
+                {
+                  key: "ingresos",
+                  header: "Ingresos",
+                  align: "right",
+                  render: (r) => (
+                    <span className="font-semibold text-emerald-700">
+                      {formatCurrency(r.ingresos, currency)}
+                    </span>
+                  ),
+                },
+              ]}
+            />
           </Module>
         </div>
       )}

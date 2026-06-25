@@ -919,3 +919,30 @@ create policy meta_ads_select on meta_ads for select to authenticated
   using (true);
 grant select on meta_ads to authenticated;
 grant all privileges on meta_ads to service_role;
+
+-- ---- 0012 ----
+-- 0012_lead_wa_number.sql — which WhatsApp number a lead wrote to.
+-- leads.wa_phone_number_id + a whatsapp_numbers lookup (phone_number_id → name /
+-- phone / kind). Seed labels with scripts/sql/seed_whatsapp_numbers.sql.
+alter table leads add column if not exists wa_phone_number_id text;
+create index if not exists leads_store_wa_number_idx on leads (store_id, wa_phone_number_id);
+create table if not exists whatsapp_numbers (
+  phone_number_id text primary key,
+  name            text,
+  display_phone   text,
+  kind            text,
+  fetched_at      timestamptz not null default now()
+);
+alter table whatsapp_numbers enable row level security;
+drop policy if exists whatsapp_numbers_select on whatsapp_numbers;
+create policy whatsapp_numbers_select on whatsapp_numbers for select to authenticated
+  using (true);
+grant select on whatsapp_numbers to authenticated;
+grant all privileges on whatsapp_numbers to service_role;
+update leads l
+   set wa_phone_number_id = c.phone_number_id
+  from conversations c
+ where c.store_id = l.store_id
+   and c.kapso_conversation_id = l.kapso_conversation_id
+   and l.wa_phone_number_id is null
+   and c.phone_number_id is not null;

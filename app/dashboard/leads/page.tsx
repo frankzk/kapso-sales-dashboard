@@ -1,4 +1,4 @@
-import { getAccessibleStores, getAdNames, getCurrentUser } from "@/lib/access";
+import { getAccessibleStores, getAdNames, getCurrentUser, getWaNumbers } from "@/lib/access";
 import { LEAD_VIEWS, getLeadCounts, getStoreLeads, type LeadView } from "@/lib/leads-access";
 import { isLeadGestion, isLeadSegment, type LeadGestion, type LeadSegment } from "@/lib/leads";
 import { EmptyState } from "@/components/ui";
@@ -36,8 +36,11 @@ export default async function LeadsPage({
     getCurrentUser(),
   ]);
 
-  // Meta ad attribution for the leads in view (drawer shows the full chain).
-  const adNames = await getAdNames(leads.map((l) => l.ad_id));
+  // Meta ad attribution + WhatsApp-number labels for the leads in view.
+  const [adNames, waNumbers] = await Promise.all([
+    getAdNames(leads.map((l) => l.ad_id)),
+    getWaNumbers(leads.map((l) => l.wa_phone_number_id)),
+  ]);
 
   const currency = stores.find((s) => s.id === storeId)?.currency ?? "PEN";
 
@@ -49,6 +52,7 @@ export default async function LeadsPage({
       counts={counts}
       leads={leads}
       adNames={adNames}
+      waNumbers={waNumbers}
       currency={currency}
       initialSeg={initialSeg}
       initialGest={initialGest}

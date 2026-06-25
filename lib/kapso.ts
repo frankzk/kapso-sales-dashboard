@@ -586,6 +586,7 @@ export interface LeadSeed {
   wa_id: string | null;
   name: string | null;
   kapso_conversation_id: string;
+  phone_number_id: string | null; // destination WhatsApp business number
   last_interaction_at: string | null;
   first_seen_at: string | null;
   last_inbound_at?: string | null;
@@ -600,6 +601,7 @@ export function conversationToLeadSeed(c: KapsoConversation): LeadSeed | null {
     wa_id: (c.wa_id as string) ?? (c.business_scoped_user_id as string) ?? null,
     name: (c.contact_name as string) ?? c.kapso?.contact_name ?? null,
     kapso_conversation_id: String(c.id),
+    phone_number_id: (c.phone_number_id as string) ?? null,
     last_interaction_at: (c.last_active_at as string) ?? c.kapso?.last_message_timestamp ?? null,
     first_seen_at: (c.created_at as string) ?? null,
     last_inbound_at:

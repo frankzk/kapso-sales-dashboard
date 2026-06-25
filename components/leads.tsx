@@ -11,6 +11,7 @@ import {
   prettyAdName,
   type AdMeta,
 } from "@/lib/meta-ads";
+import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import { type LeadView } from "@/lib/leads-access";
 import {
   LEAD_GESTIONES,
@@ -298,6 +299,7 @@ export function LeadsBoard({
   counts,
   leads,
   adNames,
+  waNumbers,
   currency,
   initialSeg,
   initialGest,
@@ -309,6 +311,7 @@ export function LeadsBoard({
   counts: Record<LeadView, number>;
   leads: LeadRow[];
   adNames?: Record<string, AdMeta>;
+  waNumbers?: Record<string, WaNumber>;
   currency: string;
   initialSeg?: LeadSegment | null;
   initialGest?: LeadGestion | null;
@@ -327,6 +330,7 @@ export function LeadsBoard({
   const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
   const [gestFilter, setGestFilter] = useState<LeadGestion | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
+  const [numFilter, setNumFilter] = useState<string | null>(null); // WhatsApp number (phone_number_id)
   // Search box: instant client-side narrowing of the current view PLUS a
   // debounced global lookup (all stages) so you can find any customer, not just
   // those loaded in the active tab.
@@ -414,6 +418,13 @@ export function LeadsBoard({
   const segCounts = countLeadSegments(leads);
   const gestCounts = countGestiones(leads);
   const winCounts = countLeadWindows(leads, now);
+  // WhatsApp numbers present in this view (to split the queue by number).
+  const waCounts = new Map<string, number>();
+  for (const l of leads) {
+    if (l.wa_phone_number_id) waCounts.set(l.wa_phone_number_id, (waCounts.get(l.wa_phone_number_id) ?? 0) + 1);
+  }
+  const waIds = [...waCounts.keys()];
+  const hasMultiNumbers = waIds.length >= 2;
   const q = query.trim().toLowerCase();
   const qDigits = q.replace(/\D/g, "");
   const shownLeads = leads.filter((l) => {
@@ -423,6 +434,7 @@ export function LeadsBoard({
       if (!(name.includes(q) || (qDigits.length > 0 && phoneDigits.includes(qDigits)))) return false;
     }
     if (srcFilter !== "all" && (l.source === "meta_ad" ? "meta_ad" : "organic") !== srcFilter) return false;
+    if (numFilter && l.wa_phone_number_id !== numFilter) return false;
     if (view === "por_llamar") {
       if (segFilter && leadSegment(l) !== segFilter) return false;
       if (gestFilter && gestionOf(l.status) !== gestFilter) return false;
@@ -497,7 +509,7 @@ export function LeadsBoard({
 
         {/* Línea 2: Gestión (en la cola) + Fuente — client-side e instantáneos.
             En desktop entran en una sola línea; en móvil hacen wrap. */}
-        {(view === "por_llamar" || hasCampaign) && (
+        {(view === "por_llamar" || hasCampaign || hasMultiNumbers) && (
           <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-slate-100 pt-2">
             {view === "por_llamar" && (
               <div className="flex flex-wrap items-center gap-1.5">
@@ -559,6 +571,25 @@ export function LeadsBoard({
                   active={srcFilter === "organic"}
                   onClick={() => setSrcFilter("organic")}
                 />
+              </div>
+            )}
+            {hasMultiNumbers && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-medium text-slate-400">Número:</span>
+                <FilterPill label="Todos" active={numFilter === null} onClick={() => setNumFilter(null)} />
+                {waIds.map((id) => {
+                  const n = waNumbers?.[id];
+                  const kind = waKindLabel(n?.kind ?? null);
+                  return (
+                    <FilterPill
+                      key={id}
+                      label={`📱 ${waLabel(n, id)}${kind ? ` · ${kind}` : ""}`}
+                      count={waCounts.get(id) ?? 0}
+                      active={numFilter === id}
+                      onClick={() => setNumFilter((p) => (p === id ? null : id))}
+                    />
+                  );
+                })}
               </div>
             )}
           </div>
@@ -650,6 +681,16 @@ export function LeadsBoard({
                               📣 Campaña
                             </span>
                           )}
+                          {hasMultiNumbers && lead.wa_phone_number_id && (
+                            <span
+                              className="whitespace-nowrap rounded bg-sky-100 px-1.5 py-0.5 text-xs font-medium text-sky-700"
+                              title={`WhatsApp: ${waLabel(waNumbers?.[lead.wa_phone_number_id], lead.wa_phone_number_id)}${waNumbers?.[lead.wa_phone_number_id]?.displayPhone ? ` · ${waNumbers[lead.wa_phone_number_id]!.displayPhone}` : ""}`}
+                            >
+                              📱{" "}
+                              {waKindLabel(waNumbers?.[lead.wa_phone_number_id]?.kind ?? null) ??
+                                waLabel(waNumbers?.[lead.wa_phone_number_id], lead.wa_phone_number_id)}
+                            </span>
+                          )}
                         </div>
                         {/* Calificación column is hidden on narrow screens — surface it here. */}
                         <span className="md:hidden">
@@ -722,6 +763,7 @@ export function LeadsBoard({
           lead={selected}
           calls={calls}
           adMeta={selected.ad_id ? (adNames?.[selected.ad_id] ?? null) : null}
+          waNumber={selected.wa_phone_number_id ? (waNumbers?.[selected.wa_phone_number_id] ?? null) : null}
           currency={currency}
           onClose={closeDrawer}
           onRegistered={() => refreshDetail(selected.id)}
@@ -736,6 +778,7 @@ function LeadDrawer({
   lead,
   calls,
   adMeta,
+  waNumber,
   currency,
   onClose,
   onRegistered,
@@ -744,6 +787,7 @@ function LeadDrawer({
   lead: LeadRow;
   calls: LeadCallRow[] | null; // null = still loading
   adMeta: AdMeta | null; // Meta attribution for lead.ad_id (null until resolved)
+  waNumber: WaNumber | null; // resolved label for lead.wa_phone_number_id (null = unresolved)
   currency: string;
   onClose: () => void;
   onRegistered: () => void;
@@ -819,6 +863,19 @@ function LeadDrawer({
           )}
 
           {lead.source === "meta_ad" && <MetaAttribution lead={lead} adMeta={adMeta} />}
+
+          {lead.wa_phone_number_id && (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
+              <p className="text-xs font-semibold tracking-wide uppercase opacity-80">
+                Número de WhatsApp
+              </p>
+              <p className="mt-1">
+                📱 <span className="font-medium">{waLabel(waNumber, lead.wa_phone_number_id)}</span>
+                {waKindLabel(waNumber?.kind ?? null) ? ` · ${waKindLabel(waNumber?.kind ?? null)}` : ""}
+                {waNumber?.displayPhone ? ` · ${waNumber.displayPhone}` : ""}
+              </p>
+            </div>
+          )}
 
           {lead.has_order && (
             <p className="text-sm font-medium text-emerald-700">

@@ -8,6 +8,7 @@ import {
   getOrders,
   getRollups,
   getUserRoleSummary,
+  getWaNumbers,
   parseRange,
   previousRange,
 } from "@/lib/access";
@@ -41,8 +42,11 @@ export default async function StorePage({
     getLatestOps([storeId]),
   ]);
 
-  // Resolve Meta ad names for the campaign breakdown (degrades to {} if unseeded).
-  const adNames = await getAdNames(leads.map((l) => l.ad_id));
+  // Resolve Meta ad names + WhatsApp-number labels for the breakdowns.
+  const [adNames, waNumbers] = await Promise.all([
+    getAdNames(leads.map((l) => l.ad_id)),
+    getWaNumbers(leads.map((l) => l.wa_phone_number_id)),
+  ]);
 
   return (
     <ExecutiveDashboard
@@ -59,6 +63,7 @@ export default async function StorePage({
       timezone={store.timezone}
       singleStore={store}
       adNames={adNames}
+      waNumbers={waNumbers}
     />
   );
 }

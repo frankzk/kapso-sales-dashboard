@@ -11,6 +11,7 @@ import type {
   StoreSummary,
 } from "@/lib/types";
 import type { AdMeta } from "@/lib/meta-ads";
+import type { WaNumber } from "@/lib/wa-numbers";
 
 export interface DateRange {
   from: string; // YYYY-MM-DD inclusive
@@ -183,7 +184,7 @@ export async function getLeadsForDashboard(
   // Source/channel attribution columns (migration 0008). Selected when present;
   // if the migration hasn't been applied yet the query errors, so we fall back to
   // the base columns once and keep going — the rest of the dashboard is unaffected.
-  let cols = `${BASE_COLS},source,ad_id,ad_headline`;
+  let cols = `${BASE_COLS},source,ad_id,ad_headline,wa_phone_number_id`;
   const pageQuery = (select: string, from: number) =>
     sb
       .from("leads")
@@ -239,6 +240,35 @@ export async function getAdNames(
       adName: r.ad_name ?? null,
       status: r.status ?? null,
       fetchedAt: r.fetched_at ?? null,
+    };
+  }
+  return out;
+}
+
+/**
+ * Resolve WhatsApp `phone_number_id`s → friendly labels (name / display phone /
+ * kind) from the `whatsapp_numbers` lookup. Returns {} when none given or the
+ * table/rows are absent — callers then fall back to the raw id. Never throws.
+ */
+export async function getWaNumbers(
+  phoneNumberIds: (string | null | undefined)[],
+): Promise<Record<string, WaNumber>> {
+  const ids = [...new Set(phoneNumberIds.filter((x): x is string => !!x))];
+  if (!ids.length) return {};
+  const sb = await createServerSupabase();
+  const { data, error } = await sb
+    .from("whatsapp_numbers")
+    .select("phone_number_id,name,display_phone,kind")
+    .in("phone_number_id", ids);
+  if (error || !data) return {};
+  const out: Record<string, WaNumber> = {};
+  for (const r of data as Record<string, string | null>[]) {
+    if (!r.phone_number_id) continue;
+    out[r.phone_number_id] = {
+      phoneNumberId: r.phone_number_id,
+      name: r.name ?? null,
+      displayPhone: r.display_phone ?? null,
+      kind: r.kind ?? null,
     };
   }
   return out;

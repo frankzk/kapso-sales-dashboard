@@ -135,6 +135,7 @@ export interface LeadRow {
   ad_id?: string | null;
   ad_headline?: string | null;
   ctwa_clid?: string | null;
+  wa_phone_number_id?: string | null; // which WhatsApp business number the lead wrote to (0012)
   last_inbound_at?: string | null; // last customer inbound — drives the 24h window clock
   claimed_by: string | null;
   claimed_at: string | null;

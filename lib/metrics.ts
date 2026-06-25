@@ -775,6 +775,50 @@ export function campaignBreakdown(
     .sort((a, b) => b.ingresos - a.ingresos || b.leads - a.leads);
 }
 
+export interface WaNumberStat {
+  phoneNumberId: string; // "" = not yet attributed
+  leads: number;
+  pedidos: number;
+  conversion: number; // 0..1
+  ingresos: number; // net revenue attributed to this number's leads
+}
+
+/**
+ * Leads + conversion + revenue per WhatsApp business number, so a store running
+ * several numbers (e.g. API vs Business coexistence) can compare them. Groups by
+ * `wa_phone_number_id` (empty string = not yet attributed) and joins orders by
+ * phone. Returns [] when no lead carries a number yet (module stays hidden).
+ */
+export function leadsByWaNumber(leads: LeadRow[], orders: OrderRow[]): WaNumberStat[] {
+  if (!leads.some((l) => l.wa_phone_number_id)) return [];
+  const netByPhone = new Map<string, number>();
+  for (const o of activeOrders(orders)) {
+    if (!o.customer_phone) continue;
+    const net = Number(o.total_amount ?? 0) - Number(o.total_refunded ?? 0);
+    netByPhone.set(o.customer_phone, (netByPhone.get(o.customer_phone) ?? 0) + net);
+  }
+  const m = new Map<string, { leads: number; pedidos: number; ingresos: number }>();
+  for (const l of leads) {
+    const key = l.wa_phone_number_id ?? "";
+    const b = m.get(key) ?? { leads: 0, pedidos: 0, ingresos: 0 };
+    b.leads += 1;
+    if (l.has_order) {
+      b.pedidos += 1;
+      b.ingresos += netByPhone.get(l.phone) ?? 0;
+    }
+    m.set(key, b);
+  }
+  return [...m.entries()]
+    .map(([phoneNumberId, b]) => ({
+      phoneNumberId,
+      leads: b.leads,
+      pedidos: b.pedidos,
+      conversion: b.leads ? b.pedidos / b.leads : 0,
+      ingresos: round2(b.ingresos),
+    }))
+    .sort((a, b) => b.leads - a.leads);
+}
+
 /**
  * "¿Por qué NO compraron?" — bucket the non-buying leads by status. The universe
  * is leads with no order that aren't actively hot (in-progress) or won.

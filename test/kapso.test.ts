@@ -319,6 +319,7 @@ describe("helpers", () => {
     const seed = conversationToLeadSeed({
       id: "conv_789",
       phone_number: "51980694766",
+      phone_number_id: "1241790819006805",
       business_scoped_user_id: "US.13491208655302741918",
       status: "ended",
       last_active_at: "2026-06-22T15:10:45Z",
@@ -330,6 +331,7 @@ describe("helpers", () => {
       name: "GLORIA",
       wa_id: "US.13491208655302741918",
       kapso_conversation_id: "conv_789",
+      phone_number_id: "1241790819006805",
       last_interaction_at: "2026-06-22T15:10:45Z",
     });
   });
