@@ -75,6 +75,9 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
   it("carrito when an open cart exists (and not a payment handoff)", () => {
     expect(leadSegment({ status: "nuevo", cart_item_count: 2, district: "Surco" })).toBe("carrito");
   });
+  it("carrito also triggers on a real Shopify draft (draft_order_gid)", () => {
+    expect(leadSegment({ status: "nuevo", draft_order_gid: "gid://shopify/DraftOrder/1" })).toBe("carrito");
+  });
   it("distrito when a district was given but no cart", () => {
     expect(leadSegment({ status: "nuevo", district: "Pueblo Libre", inbound_count: 5 })).toBe("distrito");
     expect(leadSegment({ status: "nuevo", district: "   ", inbound_count: 5 })).toBe("converso"); // blank ignored
@@ -128,6 +131,26 @@ describe("lead status model", () => {
     expect(isValidStatus("inventado")).toBe(false);
     expect(categoryOf("ya_compro_otro_lado")).toBe("lost");
     expect(categoryOf("unknown")).toBe("open");
+  });
+
+  it("includes the abandoned-cart Excel statuses with the right category", () => {
+    expect(isValidStatus("repetido")).toBe(true);
+    expect(categoryOf("repetido")).toBe("open");
+    expect(isValidStatus("volver_a_llamar")).toBe(true);
+    expect(categoryOf("volver_a_llamar")).toBe("open");
+    expect(categoryOf("solo_miraba")).toBe("lost");
+    expect(categoryOf("fuera_de_ciudad")).toBe("lost");
+    expect(MANUAL_STATUSES.map((s) => s.code)).toEqual(
+      expect.arrayContaining(["repetido", "volver_a_llamar", "solo_miraba", "fuera_de_ciudad"]),
+    );
+  });
+
+  it("mapExcelStatus maps the new abandoned-cart comments + reuses buzon for Buzón-CE", () => {
+    expect(mapExcelStatus("Solo miraba")).toBe("solo_miraba");
+    expect(mapExcelStatus("Fuera de la ciudad")).toBe("fuera_de_ciudad");
+    expect(mapExcelStatus("Volver a llamar")).toBe("volver_a_llamar");
+    expect(mapExcelStatus("Repetido")).toBe("repetido");
+    expect(mapExcelStatus("buzon-ce-sin wsp")).toBe("buzon");
   });
 });
 

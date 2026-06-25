@@ -120,7 +120,7 @@ export async function syncNow(
     revalidatePath(`/dashboard/${storeId}`);
     const e = r.enriched;
     const summary =
-      `${r.shopifyOrders} órdenes · ${r.kapsoConversations} conversaciones · ops ${r.opsCaptured ? "✓" : "—"}` +
+      `${r.shopifyOrders} órdenes · ${r.draftOrders} carritos · ${r.kapsoConversations} conversaciones · ops ${r.opsCaptured ? "✓" : "—"}` +
       ` · leads enriquecidos ${e.fetched}/${e.candidates} (🛒${e.cart} 📍${e.district} 💬${e.inbound})`;
     return r.errors.length
       ? { error: `Sync con errores: ${r.errors.join("; ")}`, notice: summary }

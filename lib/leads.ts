@@ -30,11 +30,15 @@ export const LEAD_STATUSES: LeadStatusDef[] = [
   { code: "buzon", label: "Buzón de voz", category: "open", source: "manual", callable: true },
   { code: "otros_productos", label: "Consultó otros productos", category: "open", source: "manual", callable: true },
   { code: "sin_stock", label: "Sin stock", category: "open", source: "manual", callable: true },
+  { code: "repetido", label: "Repetido", category: "open", source: "manual", callable: true },
+  { code: "volver_a_llamar", label: "Volver a llamar", category: "open", source: "manual", callable: true },
   // 🔴 lost
   { code: "cancelado_cliente", label: "Cancelado por cliente", category: "lost", source: "manual", callable: false },
   { code: "cancelado", label: "Cancelado", category: "lost", source: "manual", callable: false },
   { code: "ya_compro_otro_lado", label: "Ya compró en otro lado", category: "lost", source: "manual", callable: false },
   { code: "solo_informacion", label: "Solo quería información", category: "lost", source: "manual", callable: false },
+  { code: "solo_miraba", label: "Solo miraba", category: "lost", source: "manual", callable: false },
+  { code: "fuera_de_ciudad", label: "Fuera de la ciudad", category: "lost", source: "manual", callable: false },
   { code: "lista_negra", label: "Lista negra", category: "lost", source: "manual", callable: false },
   { code: "nr_no_existe", label: "Número no existe / incorrecto", category: "lost", source: "manual", callable: false },
   { code: "nr_extranjero", label: "Número extranjero", category: "lost", source: "manual", callable: false },
@@ -163,12 +167,14 @@ export interface LeadSegmentSignals {
   cart_item_count?: number | null;
   district?: string | null;
   inbound_count?: number | null;
+  draft_order_gid?: string | null;
 }
 
 /** Assign a "Por llamar" lead to one sub-segment (highest-priority match).
  *  (Leads en Yape ya tienen su propia pestaña superior, no un sub-bucket.) */
 export function leadSegment(lead: LeadSegmentSignals): LeadSegment {
-  if ((lead.cart_item_count ?? 0) > 0) return "carrito"; // armó pedido en el chat
+  // Cart from a real Shopify draft (draft_order_gid) OR parsed from the chat.
+  if ((lead.cart_item_count ?? 0) > 0 || (lead.draft_order_gid ?? "").length > 0) return "carrito";
   if ((lead.district ?? "").trim()) return "distrito"; // dio distrito de envío
   if ((lead.inbound_count ?? 0) >= 2) return "converso"; // conversó (≥2 mensajes)
   return "frio"; // solo saludó / no respondió
@@ -320,6 +326,11 @@ const EXCEL_STATUS_MAP: Record<string, string> = {
   cuelga: "cuelga",
   "buzon-ce-sin wsp": "buzon",
   "soloqueria informacion": "solo_informacion",
+  "solo miraba": "solo_miraba",
+  "fuera de la ciudad": "fuera_de_ciudad",
+  "fuera de la cuidad": "fuera_de_ciudad",
+  "volver a llamar": "volver_a_llamar",
+  repetido: "repetido",
   "cns x otro productos": "otros_productos",
   "sin stock": "sin_stock",
   "lista negra": "lista_negra",

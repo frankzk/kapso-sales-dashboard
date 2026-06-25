@@ -9,6 +9,10 @@ import {
   deriveOrderFlags,
   mapRestOrder,
   mapGraphqlOrder,
+  mapGraphqlDraftOrder,
+  mapRestDraftOrder,
+  isCodFormDraft,
+  buildDraftOrdersSearchQuery,
   buildKapsoOrdersSearchQuery,
   shopifyGraphQL,
   fetchOrdersPage,
@@ -342,5 +346,81 @@ describe("shopifyGraphQL client (injected fetch)", () => {
     expect(page.hasNextPage).toBe(true);
     expect(page.endCursor).toBe("c2");
     expect(page.maxUpdatedAt).toBe("2026-06-12T00:00:00Z");
+  });
+});
+
+describe("draft orders (Releasit COD)", () => {
+  const node = {
+    id: "gid://shopify/DraftOrder/777",
+    name: "#D7",
+    status: "OPEN",
+    createdAt: "2026-06-24T10:00:00Z",
+    updatedAt: "2026-06-24T10:30:00Z",
+    invoiceUrl: "https://aurela.myshopify.com/invoice/x",
+    note2: "Releasit COD form",
+    tags: ["releasit"],
+    totalPriceSet: { shopMoney: { amount: "150.00", currencyCode: "PEN" } },
+    customer: { displayName: "Ana P" },
+    shippingAddress: { city: "Surco", province: "Lima", address1: "Av Y 1", address2: "Ref: óvalo", name: "Ana P", phone: "+51 980 694 766" },
+    order: null,
+    lineItems: {
+      edges: [{ node: { title: "Polo", quantity: 2, sku: "P1", originalUnitPriceSet: { shopMoney: { amount: "75.00" } } } }],
+    },
+  };
+
+  it("mapGraphqlDraftOrder maps gid, status, address, money, phone, line items", () => {
+    const row = mapGraphqlDraftOrder(node, "s1");
+    expect(row.shopify_draft_order_id).toBe("777");
+    expect(row.draft_order_gid).toBe("gid://shopify/DraftOrder/777");
+    expect(row.status).toBe("open"); // OPEN → lowercased
+    expect(row.total_amount).toBe(150);
+    expect(row.currency).toBe("PEN");
+    expect(row.invoice_url).toBe("https://aurela.myshopify.com/invoice/x");
+    expect(row.district).toBe("Surco");
+    expect(row.province).toBe("Lima");
+    expect(row.region).toBe("Lima");
+    expect(row.referencia).toBe("Ref: óvalo");
+    expect(row.customer_phone).toBe("51980694766");
+    expect(row.customer_name).toBe("Ana P");
+    expect(row.line_items[0]).toMatchObject({ title: "Polo", quantity: 2, price: 75 });
+  });
+
+  it("mapRestDraftOrder maps a webhook payload (status, address, order_gid)", () => {
+    const row = mapRestDraftOrder(
+      {
+        id: 888,
+        admin_graphql_api_id: "gid://shopify/DraftOrder/888",
+        name: "#D8",
+        status: "completed",
+        total_price: "99.00",
+        currency: "PEN",
+        completed_at: "2026-06-24T11:00:00Z",
+        shipping_address: { city: "Lince", province: "Lima", address2: "casa azul", phone: "980694766" },
+        line_items: [{ title: "Gorra", quantity: 1, price: "99.00" }],
+        order_id: 543,
+        note: "Releasit",
+      },
+      "s2",
+    );
+    expect(row.shopify_draft_order_id).toBe("888");
+    expect(row.status).toBe("completed");
+    expect(row.district).toBe("Lince");
+    expect(row.referencia).toBe("casa azul");
+    expect(row.customer_phone).toBe("51980694766");
+    expect(row.order_gid).toBe("gid://shopify/Order/543");
+  });
+
+  it("isCodFormDraft: true with a Releasit hint or a phone; false without either", () => {
+    const base = mapGraphqlDraftOrder(node, "s");
+    expect(isCodFormDraft(base)).toBe(true); // phone + releasit tag
+    expect(isCodFormDraft({ ...base, tags: [], note: null })).toBe(true); // phone alone
+    expect(isCodFormDraft({ ...base, tags: [], note: null, customer_phone: null })).toBe(false);
+  });
+
+  it("buildDraftOrdersSearchQuery bounds open carts by updated_at", () => {
+    expect(buildDraftOrdersSearchQuery("open", "2026-06-01T00:00:00Z")).toBe(
+      "status:open updated_at:>=2026-06-01T00:00:00Z",
+    );
+    expect(buildDraftOrdersSearchQuery("completed")).toBe("status:completed");
   });
 });

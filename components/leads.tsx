@@ -11,7 +11,7 @@ import {
   type AdMeta,
 } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
-import { type LeadView } from "@/lib/leads-access";
+import { type CustomerHistory, type LeadView } from "@/lib/leads-access";
 import {
   LEAD_GESTIONES,
   LEAD_SEGMENTS,
@@ -34,6 +34,7 @@ import {
   closeSale,
   getLeadWindow,
   loadLeadDetail,
+  recoverCart,
   registerCall,
   releaseLead,
   searchLeads,
@@ -304,6 +305,7 @@ export function LeadsBoard({
   // have; the claim + call history load in the background (no page navigation).
   const [selected, setSelected] = useState<LeadRow | null>(null);
   const [calls, setCalls] = useState<LeadCallRow[] | null>(null);
+  const [history, setHistory] = useState<CustomerHistory | null>(null); // recurrent-customer block
   // Client-side sub-filters (instant, no navigation): source lens + the queue's
   // intención/gestión axes within "Por llamar".
   const [srcFilter, setSrcFilter] = useState<"all" | "meta_ad" | "organic">("all");
@@ -348,6 +350,7 @@ export function LeadsBoard({
     setBanner(null);
     setSelected(lead); // instant — render from the data we already have
     setCalls(null);
+    setHistory(null);
     startTransition(async () => {
       const res = await claimLead(lead.id);
       if (res.error) {
@@ -363,6 +366,7 @@ export function LeadsBoard({
       }
       setSelected(d.lead);
       setCalls(d.calls);
+      setHistory(d.customerHistory);
     });
   }
 
@@ -372,6 +376,7 @@ export function LeadsBoard({
       if (!("error" in d)) {
         setSelected(d.lead);
         setCalls(d.calls);
+        setHistory(d.customerHistory);
       }
       router.refresh(); // reflect status/queue changes in the list + counts
     });
@@ -381,6 +386,7 @@ export function LeadsBoard({
     const leadId = selected?.id;
     setSelected(null);
     setCalls(null);
+    setHistory(null);
     if (leadId) {
       // Release the claim in the background. No full-list refresh on close —
       // status changes already refresh via refreshDetail, so this avoids an
@@ -627,6 +633,14 @@ export function LeadsBoard({
                               📣 Campaña
                             </span>
                           )}
+                          {lead.source === "cod_cart" && (
+                            <span
+                              className="whitespace-nowrap rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-700"
+                              title="Carrito abandonado del formulario COD (sin WhatsApp)"
+                            >
+                              🛒 Carrito
+                            </span>
+                          )}
                           {hasMultiNumbers && lead.wa_phone_number_id && (
                             <span
                               className="whitespace-nowrap rounded bg-sky-100 px-1.5 py-0.5 text-xs font-medium text-sky-700"
@@ -708,6 +722,7 @@ export function LeadsBoard({
         <LeadDrawer
           lead={selected}
           calls={calls}
+          history={history}
           adMeta={selected.ad_id ? (adNames?.[selected.ad_id] ?? null) : null}
           waNumber={selected.wa_phone_number_id ? (waNumbers?.[selected.wa_phone_number_id] ?? null) : null}
           currency={currency}
@@ -723,6 +738,7 @@ export function LeadsBoard({
 function LeadDrawer({
   lead,
   calls,
+  history,
   adMeta,
   waNumber,
   currency,
@@ -732,6 +748,7 @@ function LeadDrawer({
 }: {
   lead: LeadRow;
   calls: LeadCallRow[] | null; // null = still loading
+  history: CustomerHistory | null; // prior purchases (recurrent-customer block)
   adMeta: AdMeta | null; // Meta attribution for lead.ad_id (null until resolved)
   waNumber: WaNumber | null; // resolved label for lead.wa_phone_number_id (null = unresolved)
   currency: string;
@@ -791,22 +808,50 @@ function LeadDrawer({
             </div>
           )}
 
-          {(lead.cart_item_count || lead.district) && (
+          {(lead.cart_item_count || lead.district || lead.draft_order_gid) && (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">
+              {lead.draft_order_gid && (
+                <p className="mb-1 text-xs font-semibold tracking-wide uppercase text-emerald-700/80">
+                  {lead.draft_order_status === "completed" ? "✅ Carrito recuperado" : "🛒 Carrito abandonado"}
+                  {lead.draft_order_name ? ` · ${lead.draft_order_name}` : ""}
+                </p>
+              )}
               {lead.cart_item_count ? (
                 <p>
                   🛒 <span className="font-medium">Carrito:</span>{" "}
                   {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
-                  {lead.cart_value != null ? ` · S/ ${Number(lead.cart_value).toFixed(2)}` : ""}
+                  {lead.cart_value != null ? ` · ${currency} ${Number(lead.cart_value).toFixed(2)}` : ""}
                 </p>
               ) : null}
-              {lead.district ? (
+              {(lead.district || lead.province || lead.referencia) && (
                 <p className={lead.cart_item_count ? "mt-1" : ""}>
-                  📍 <span className="font-medium">Distrito:</span> {lead.district}
+                  📍 <span className="font-medium">Entrega:</span>{" "}
+                  {[lead.district, lead.province, lead.referencia].filter(Boolean).join(" · ")}
                 </p>
-              ) : null}
+              )}
+              {lead.draft_order_url && (
+                <a
+                  href={lead.draft_order_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1.5 inline-block text-xs font-medium text-emerald-700 underline hover:text-emerald-900"
+                >
+                  Ver borrador en Shopify ↗
+                </a>
+              )}
             </div>
           )}
+
+          {lead.draft_order_gid && lead.draft_order_status !== "completed" && !lead.has_order && (
+            <RecoverCartButton
+              leadId={lead.id}
+              currency={currency}
+              cartValue={lead.cart_value}
+              onRecovered={onRegistered}
+            />
+          )}
+
+          <RecurrentCustomer history={history} />
 
           {lead.source === "meta_ad" && <MetaAttribution lead={lead} adMeta={adMeta} />}
 
@@ -828,6 +873,8 @@ function LeadDrawer({
               ✅ Pedido generado{lead.order_id ? ` · ${lead.order_id}` : ""}
             </p>
           )}
+
+          {!lead.kapso_conversation_id && lead.draft_order_gid && <CallAffordance phone={lead.phone} />}
 
           <WhatsappComposer
             leadId={lead.id}
@@ -1093,6 +1140,106 @@ function CloseSaleForm({
         {msg && <span className="text-xs text-slate-600">{msg}</span>}
       </div>
     </section>
+  );
+}
+
+/** Recover an abandoned cart → complete its Shopify draft into a real COD order
+ *  (recoverCart). The primary CTA for an open cart lead. */
+function RecoverCartButton({
+  leadId,
+  currency,
+  cartValue,
+  onRecovered,
+}: {
+  leadId: string;
+  currency: string;
+  cartValue?: number | null;
+  onRecovered: () => void;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+  function run() {
+    if (
+      !confirm(
+        "¿Generar el pedido en Shopify? El borrador se completará como contraentrega (pago pendiente).",
+      )
+    )
+      return;
+    setMsg(null);
+    startTransition(async () => {
+      const res = await recoverCart(leadId);
+      setMsg(res.error ?? res.notice ?? null);
+      if (!res.error) onRecovered();
+    });
+  }
+  return (
+    <div className="space-y-1.5">
+      <button
+        type="button"
+        onClick={run}
+        disabled={pending}
+        className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+      >
+        {pending
+          ? "Generando pedido…"
+          : `✅ Generar pedido${cartValue != null ? ` · ${currency} ${Number(cartValue).toFixed(2)}` : ""} (contraentrega)`}
+      </button>
+      {msg && <p className="text-xs text-slate-600">{msg}</p>}
+    </div>
+  );
+}
+
+/** Prior-purchase summary for a recurrent customer (último pedido / cuándo / qué). */
+function RecurrentCustomer({ history }: { history: CustomerHistory | null }) {
+  if (!history || !history.lastOrderAt) return null;
+  const days = Math.max(0, Math.floor((Date.now() - new Date(history.lastOrderAt).getTime()) / 86_400_000));
+  const ago = days === 0 ? "hoy" : days === 1 ? "hace 1 día" : `hace ${days} días`;
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+      <p className="text-xs font-semibold tracking-wide uppercase opacity-80">Cliente recurrente</p>
+      <p className="mt-1">
+        🔁 Último pedido{history.lastOrderName ? ` ${history.lastOrderName}` : ""} · {ago}
+        {history.orderCount > 1 ? ` · ${history.orderCount} pedidos previos` : ""}
+      </p>
+      {history.lastProduct && <p className="mt-0.5 text-amber-800/90">Compró: {history.lastProduct}</p>}
+    </div>
+  );
+}
+
+/** Call affordance for a web cart with no WhatsApp chat: tel: link + copy number. */
+function CallAffordance({ phone }: { phone: string }) {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    navigator.clipboard?.writeText(phone).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => {},
+    );
+  }
+  return (
+    <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-sm text-indigo-900">
+      <p className="text-xs font-semibold tracking-wide uppercase opacity-80">Carrito web — sin WhatsApp</p>
+      <p className="mt-1 mb-2 text-indigo-800/90">
+        El cliente no escribió por WhatsApp. Llámalo para recuperar el carrito.
+      </p>
+      <div className="flex items-center gap-2">
+        <a
+          href={`tel:${phone}`}
+          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+        >
+          📞 Llamar {phone}
+        </a>
+        <button
+          type="button"
+          onClick={copy}
+          className="rounded-lg border border-indigo-300 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+        >
+          {copied ? "Copiado ✓" : "Copiar número"}
+        </button>
+      </div>
+    </div>
   );
 }
 

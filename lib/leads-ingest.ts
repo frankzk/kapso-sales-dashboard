@@ -12,6 +12,8 @@ import {
   type LeadSeed,
 } from "@/lib/kapso";
 import { deriveAutoState, nextLeadState } from "@/lib/leads";
+import { extractNumericId, isCodFormDraft } from "@/lib/shopify";
+import { COD_CART_SOURCE, type DraftOrderRow, type OrderLineItem } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -272,7 +274,11 @@ async function enrichLeadsFromConversations(
         cart_summary: sig.cart_summary,
       })
       .eq("store_id", storeId)
-      .eq("kapso_conversation_id", convId);
+      .eq("kapso_conversation_id", convId)
+      // Never clobber cart/district that came from a real Shopify draft order:
+      // the draft (linkDraftOrdersToLeads) is the source of truth; this WhatsApp
+      // parse is only the fallback for leads that have no draft.
+      .is("draft_order_gid", null);
 
     // Source attribution: a Click-to-WhatsApp ad referral on the conversation's
     // first inbound message → stamp the lead's source (first-touch, sticky via
@@ -376,6 +382,137 @@ export async function linkOrdersToLeads(
       phone: o.customer_phone ?? null,
       orderId: idByShopifyId.get(String(o.shopify_order_id)) ?? null,
     });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Draft orders (Releasit COD carts) → leads. Mirrors linkOrdersToLeads.
+// ---------------------------------------------------------------------------
+
+/** First-3-titles cart summary, matching the WhatsApp parser's format. */
+function draftCartSummary(items: OrderLineItem[]): string | null {
+  const titles = items
+    .map((it) => String(it.title ?? "").replace(/\s*\(.*$/, "").trim())
+    .filter(Boolean);
+  if (!titles.length) return null;
+  return titles.slice(0, 3).join(", ") + (titles.length > 3 ? ` +${titles.length - 3}` : "");
+}
+
+/** Upsert a lead, dropping the 0013-only columns and retrying if the migration
+ *  isn't applied yet (mirrors the wa_phone_number_id resilience above). */
+async function upsertLeadResilient(admin: SupabaseClient, row: any): Promise<void> {
+  const { error } = await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
+  if (!error) return;
+  let dropped = false;
+  for (const c of ["draft_order_name", "draft_order_status", "draft_order_url", "province", "region", "referencia"]) {
+    if (c in row) {
+      delete row[c];
+      dropped = true;
+    }
+  }
+  if (dropped) await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
+}
+
+/** OPEN/INVOICE_SENT draft → ensure a callable "cart" lead (create if new). */
+async function upsertDraftCartLead(
+  admin: SupabaseClient,
+  storeId: string,
+  d: DraftOrderRow,
+  exists: boolean,
+): Promise<void> {
+  const qty = d.line_items.reduce((s, li) => s + (Number(li.quantity) || 0), 0);
+  const row: any = {
+    store_id: storeId,
+    phone: d.customer_phone,
+    draft_order_gid: d.draft_order_gid,
+    draft_order_name: d.name,
+    draft_order_status: d.status,
+    draft_order_url: d.invoice_url,
+    cart_value: d.total_amount,
+    cart_item_count: qty > 0 ? qty : 1, // >0 so leadSegment() → "carrito"
+    cart_summary: draftCartSummary(d.line_items),
+    district: d.district,
+    province: d.province,
+    region: d.region,
+    referencia: d.referencia,
+  };
+  // Status/source/identity ONLY for a brand-new lead — never touch an existing
+  // lead's disposition or won state (parity with nextLeadState's manual guard).
+  if (!exists) {
+    row.status = "nuevo";
+    row.category = "open";
+    row.needs_attention = false;
+    row.source = COD_CART_SOURCE;
+    if (d.customer_name) row.name = d.customer_name;
+    if (d.created_at) row.first_seen_at = d.created_at;
+    const seen = d.updated_at ?? d.created_at;
+    if (seen) row.last_interaction_at = seen;
+  }
+  await upsertLeadResilient(admin, row);
+}
+
+/** COMPLETED draft → recovered → won (the resulting order usually isn't
+ *  tag:kapso, so the order sync wouldn't flip it). Mirrors linkOrderToLead. */
+async function linkCompletedDraftToLead(
+  admin: SupabaseClient,
+  storeId: string,
+  d: DraftOrderRow,
+): Promise<void> {
+  let orderId: string | null = null;
+  if (d.order_gid) {
+    const { data } = await admin
+      .from("orders")
+      .select("id")
+      .eq("store_id", storeId)
+      .eq("shopify_order_id", extractNumericId(d.order_gid))
+      .maybeSingle();
+    orderId = (data as { id: string } | null)?.id ?? null;
+  }
+  await upsertLeadResilient(admin, {
+    store_id: storeId,
+    phone: d.customer_phone,
+    has_order: true,
+    order_id: orderId,
+    status: "pedido_generado",
+    category: "won",
+    needs_attention: false,
+    draft_order_gid: d.draft_order_gid,
+    draft_order_status: "completed",
+  });
+}
+
+/**
+ * Link a batch of Shopify draft orders to their leads by phone. OPEN carts
+ * become callable "cart" leads (created if the phone is new); COMPLETED carts
+ * mark the lead won (recovered). Only Releasit COD-form drafts with a phone are
+ * linked (isCodFormDraft). Never clobbers a manual disposition or won state.
+ */
+export async function linkDraftOrdersToLeads(
+  admin: SupabaseClient,
+  storeId: string,
+  drafts: DraftOrderRow[],
+): Promise<void> {
+  const eligible = drafts.filter((d) => d.customer_phone && isCodFormDraft(d));
+  if (!eligible.length) return;
+
+  // Which phones already have a lead (so we never re-open a manual/won lead).
+  const phones = [...new Set(eligible.map((d) => d.customer_phone as string))];
+  const exists = new Set<string>();
+  {
+    const { data } = await admin
+      .from("leads")
+      .select("phone")
+      .eq("store_id", storeId)
+      .in("phone", phones);
+    for (const l of (data as { phone: string }[]) ?? []) exists.add(l.phone);
+  }
+
+  for (const d of eligible) {
+    if (d.status === "completed") {
+      await linkCompletedDraftToLead(admin, storeId, d);
+    } else {
+      await upsertDraftCartLead(admin, storeId, d, exists.has(d.customer_phone as string));
+    }
   }
 }
 

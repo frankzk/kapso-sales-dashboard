@@ -7,9 +7,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { decryptOrNull } from "@/lib/crypto";
 import {
+  buildDraftOrdersSearchQuery,
   buildKapsoOrdersSearchQuery,
+  DRAFT_OPEN_WINDOW_DAYS,
+  fetchDraftOrdersPage,
   fetchOrdersPage,
   hasKapsoTag,
+  mapRestDraftOrder,
   mapRestOrder,
   verifyShopifyHmac,
 } from "@/lib/shopify";
@@ -27,12 +31,13 @@ import {
 } from "@/lib/metrics";
 import {
   flagOverdueFollowups,
+  linkDraftOrdersToLeads,
   linkOrderToLead,
   linkOrdersToLeads,
   syncStoreLeads,
   type LeadEnrichStats,
 } from "@/lib/leads-ingest";
-import type { ConversationRow, OrderRow } from "@/lib/types";
+import type { ConversationRow, DraftOrderRow, OrderRow } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -90,6 +95,17 @@ export async function upsertOrders(
     .from("orders")
     .upsert(rows, { onConflict: "store_id,shopify_order_id" });
   if (error) throw new Error(`upsertOrders: ${error.message}`);
+}
+
+export async function upsertDraftOrders(
+  admin: SupabaseClient,
+  rows: DraftOrderRow[],
+): Promise<void> {
+  if (!rows.length) return;
+  const { error } = await admin
+    .from("draft_orders")
+    .upsert(rows, { onConflict: "store_id,shopify_draft_order_id" });
+  if (error) throw new Error(`upsertDraftOrders: ${error.message}`);
 }
 
 export async function upsertConversations(
@@ -170,9 +186,11 @@ export interface ProcessWebhookParams {
 }
 
 /**
- * Verify a Shopify order webhook, dedupe it, upsert the order, and recompute
- * the affected day's rollup. Idempotent: re-delivering the same webhook (same
- * X-Shopify-Webhook-Id, or identical body) is a no-op returning "duplicate".
+ * Verify a Shopify webhook (HMAC), parse it, then route by topic: orders/* →
+ * processOrderWebhook (upsert kapso order, recompute the day, link won);
+ * draft_orders/* → processDraftOrderWebhook (upsert draft, (re)link the cart
+ * lead). Idempotent: re-delivering the same webhook (same X-Shopify-Webhook-Id,
+ * or identical body) is a no-op returning "duplicate".
  */
 export async function processShopifyWebhook(
   params: ProcessWebhookParams,
@@ -196,6 +214,21 @@ export async function processShopifyWebhook(
     return { status: "error", message: "invalid json" };
   }
 
+  // Route by topic. Order topics (orders/*) and draft topics (draft_orders/*)
+  // share the HMAC/idempotency/JSON prefix above, then diverge.
+  return params.topic.startsWith("draft_orders/")
+    ? processDraftOrderWebhook(admin, creds, params, payload, webhookId)
+    : processOrderWebhook(admin, creds, params, payload, webhookId);
+}
+
+/** orders/create|updated → upsert the kapso order, recompute the day, link won. */
+async function processOrderWebhook(
+  admin: SupabaseClient,
+  creds: StoreCreds,
+  params: ProcessWebhookParams,
+  payload: any,
+  webhookId: string,
+): Promise<WebhookResult> {
   const row = mapRestOrder(payload, params.storeId);
 
   // Shopify fires order webhooks for the whole shop, but the dashboard must
@@ -256,6 +289,62 @@ export async function processShopifyWebhook(
   return { status: "ok" };
 }
 
+/**
+ * draft_orders/create|update|delete → upsert the draft + (re)link its lead. NO
+ * tag:kapso filter (the Releasit COD form isn't the bot) — isCodFormDraft inside
+ * linkDraftOrdersToLeads decides. delete: drop the row + clear the lead's cart
+ * fields, but keep the lead (don't auto-lose it).
+ */
+async function processDraftOrderWebhook(
+  admin: SupabaseClient,
+  _creds: StoreCreds,
+  params: ProcessWebhookParams,
+  payload: any,
+  webhookId: string,
+): Promise<WebhookResult> {
+  const draftId = payload?.id != null ? String(payload.id) : null;
+
+  const { error: insErr } = await admin.from("webhook_events").insert({
+    store_id: params.storeId,
+    topic: params.topic,
+    shopify_id: draftId,
+    webhook_id: webhookId,
+    processed: false,
+  });
+  if (insErr) {
+    if ((insErr as any).code === "23505") return { status: "duplicate" };
+    throw new Error(`webhook_events insert: ${insErr.message}`);
+  }
+
+  if (params.topic === "draft_orders/delete") {
+    if (draftId) {
+      await admin
+        .from("draft_orders")
+        .delete()
+        .match({ store_id: params.storeId, shopify_draft_order_id: draftId });
+      // Clear the cart signals (only 0007 columns, always present) so the lead
+      // drops out of "Con carrito"; keep the lead row itself.
+      const gid = payload?.admin_graphql_api_id ?? `gid://shopify/DraftOrder/${draftId}`;
+      await admin
+        .from("leads")
+        .update({ draft_order_gid: null, cart_value: null, cart_item_count: null, cart_summary: null })
+        .eq("store_id", params.storeId)
+        .eq("draft_order_gid", gid);
+    }
+  } else {
+    const row = mapRestDraftOrder(payload, params.storeId);
+    await upsertDraftOrders(admin, [row]);
+    await linkDraftOrdersToLeads(admin, params.storeId, [row]);
+  }
+
+  await admin
+    .from("webhook_events")
+    .update({ processed: true })
+    .match({ store_id: params.storeId, webhook_id: webhookId });
+
+  return { status: "ok" };
+}
+
 // ---------------------------------------------------------------------------
 // Full store sync (cron): Shopify reconciliation + Kapso pull + ops snapshot
 // ---------------------------------------------------------------------------
@@ -263,6 +352,7 @@ export async function processShopifyWebhook(
 export interface SyncReport {
   storeId: string;
   shopifyOrders: number;
+  draftOrders: number;
   kapsoConversations: number;
   leads: number;
   enriched: LeadEnrichStats;
@@ -277,6 +367,7 @@ export async function runStoreSync(
   const report: SyncReport = {
     storeId,
     shopifyOrders: 0,
+    draftOrders: 0,
     kapsoConversations: 0,
     leads: 0,
     enriched: { candidates: 0, fetched: 0, inbound: 0, cart: 0, district: 0, yape: 0 },
@@ -323,6 +414,47 @@ export async function runStoreSync(
     } catch (e: any) {
       report.errors.push(`shopify: ${e.message}`);
       await setSyncState(admin, storeId, "shopify", null, "error", e.message);
+    }
+  }
+
+  // 1b) Shopify draft orders (Releasit COD carts → "Con carrito" leads).
+  //     Own try/catch + cursor: a missing read_draft_orders scope just records
+  //     an error here and never breaks the orders/Kapso/leads sync.
+  if (creds.shopify_token) {
+    try {
+      const cursor = await getSyncCursor(admin, storeId, "shopify_drafts");
+      // OPEN carts: floor the cursor to the last DRAFT_OPEN_WINDOW_DAYS so a
+      // backlog of dead drafts doesn't flood "Por llamar". COMPLETED: full cursor.
+      const floor = new Date(Date.now() - DRAFT_OPEN_WINDOW_DAYS * 86_400_000).toISOString();
+      const openFrom = cursor && cursor > floor ? cursor : floor;
+      let maxUpdatedAt = cursor;
+      for (const status of ["open", "completed"] as const) {
+        const searchQuery = buildDraftOrdersSearchQuery(status, status === "open" ? openFrom : cursor);
+        let after: string | null = null;
+        for (let i = 0; i < 50; i++) {
+          const page = await fetchDraftOrdersPage({
+            domain: creds.shopify_domain,
+            token: creds.shopify_token,
+            storeId,
+            searchQuery,
+            after,
+          });
+          if (page.draftOrders.length) {
+            await upsertDraftOrders(admin, page.draftOrders);
+            await linkDraftOrdersToLeads(admin, storeId, page.draftOrders);
+            report.draftOrders += page.draftOrders.length;
+          }
+          if (page.maxUpdatedAt && (!maxUpdatedAt || page.maxUpdatedAt > maxUpdatedAt)) {
+            maxUpdatedAt = page.maxUpdatedAt;
+          }
+          if (!page.hasNextPage) break;
+          after = page.endCursor;
+        }
+      }
+      await setSyncState(admin, storeId, "shopify_drafts", maxUpdatedAt, "ok");
+    } catch (e: any) {
+      report.errors.push(`shopify_drafts: ${e.message}`);
+      await setSyncState(admin, storeId, "shopify_drafts", null, "error", e.message);
     }
   }
 

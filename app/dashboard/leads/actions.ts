@@ -3,10 +3,11 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
-import { getLeadWithCalls } from "@/lib/leads-access";
+import { getCustomerHistory, getLeadWithCalls, type CustomerHistory } from "@/lib/leads-access";
 import { CLAIM_TTL_MINUTES, categoryOf, isValidStatus, labelOf } from "@/lib/leads";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import { getStoreCreds } from "@/lib/ingest";
+import { completeDraftOrder, extractNumericId } from "@/lib/shopify";
 import { fetchLastInboundAt, sendWhatsappText } from "@/lib/kapso";
 
 // Process-level cache of vendedora id → display name (emails ~never change).
@@ -20,7 +21,9 @@ export interface LeadActionState {
 /** Fetch a lead + its call history (RLS-scoped). Drives the drawer client-side. */
 export async function loadLeadDetail(
   leadId: string,
-): Promise<{ lead: LeadRow; calls: LeadCallRow[] } | { error: string }> {
+): Promise<
+  { lead: LeadRow; calls: LeadCallRow[]; customerHistory: CustomerHistory | null } | { error: string }
+> {
   const ctx = await authorizeLead(leadId);
   if (!ctx) return { error: "Sin acceso a este lead." };
   const detail = await getLeadWithCalls(leadId);
@@ -47,7 +50,9 @@ export async function loadLeadDetail(
     ...c,
     vendedora_name: c.vendedora ? (agentNameCache.get(c.vendedora) ?? null) : null,
   }));
-  return { lead: detail.lead, calls };
+  // Recurrent-customer block: prior purchases for this phone (excl. its own order).
+  const customerHistory = await getCustomerHistory(ctx.storeId, detail.lead.phone, detail.lead.order_id);
+  return { lead: detail.lead, calls, customerHistory };
 }
 
 /**
@@ -293,6 +298,164 @@ export async function closeSale(
   revalidatePath("/dashboard/leads");
   revalidatePath("/dashboard");
   return { notice: `Venta registrada ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)` };
+}
+
+/**
+ * Recover an abandoned cart: complete its Shopify draft order (→ a real COD
+ * order with payment pending), then mark the lead won + credit the advisor,
+ * exactly like closeSale. Requires the store's Shopify token to have
+ * write_draft_orders; without it we return a clear, actionable error.
+ */
+export async function recoverCart(leadId: string): Promise<LeadActionState> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+
+  const admin = createAdminSupabase();
+  const { data: lead } = await admin
+    .from("leads")
+    .select("phone, draft_order_gid, draft_order_name, cart_value, cart_summary, district, has_order")
+    .eq("id", leadId)
+    .maybeSingle();
+  if (!lead) return { error: "Lead no encontrado." };
+  const l = lead as {
+    phone: string | null;
+    draft_order_gid: string | null;
+    draft_order_name: string | null;
+    cart_value: number | null;
+    cart_summary: string | null;
+    district: string | null;
+    has_order: boolean;
+  };
+  if (l.has_order) return { error: "Este lead ya tiene un pedido registrado." };
+  if (!l.draft_order_gid) return { error: "Este lead no tiene un carrito (borrador) de Shopify." };
+
+  const creds = await getStoreCreds(ctx.storeId);
+  if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify configurado." };
+
+  // 1) Complete the draft in Shopify (COD ⇒ payment pending). Tolerate "already
+  //    completed" (someone closed it in Shopify) → just mark the lead won.
+  let completed: Awaited<ReturnType<typeof completeDraftOrder>>;
+  try {
+    completed = await completeDraftOrder({
+      domain: creds.shopify_domain,
+      token: creds.shopify_token,
+      draftGid: l.draft_order_gid,
+      paymentPending: true,
+    });
+  } catch (e: any) {
+    const msg = String(e?.message ?? e).toLowerCase();
+    if (/already.*complet|complet.*already|has already|is complete/.test(msg)) {
+      completed = { orderGid: null, orderName: null, status: "completed" };
+    } else if (/write_draft_orders|access denied|not authorized|access scope|require/.test(msg)) {
+      return { error: "Falta el permiso de escritura en Shopify (write_draft_orders). Re-autoriza la tienda en Ajustes." };
+    } else {
+      return { error: `No se pudo generar el pedido en Shopify: ${e?.message ?? "error desconocido"}` };
+    }
+  }
+
+  // 2) Pull the draft's amount/products/phone for the order row.
+  const { data: draft } = await admin
+    .from("draft_orders")
+    .select("total_amount, currency, customer_phone, line_items")
+    .eq("store_id", ctx.storeId)
+    .eq("draft_order_gid", l.draft_order_gid)
+    .maybeSingle();
+  const d = (draft as {
+    total_amount: number | null;
+    currency: string | null;
+    customer_phone: string | null;
+    line_items: unknown;
+  } | null) ?? null;
+  const amount = Math.round(Number(d?.total_amount ?? l.cart_value ?? 0) * 100) / 100;
+  const currency = d?.currency ?? creds.currency ?? "PEN";
+  const phone = d?.customer_phone ?? l.phone ?? null;
+  const lineItems =
+    Array.isArray(d?.line_items) && d.line_items.length
+      ? (d.line_items as unknown[])
+      : [{ title: l.cart_summary || "Carrito recuperado", quantity: 1, price: amount }];
+  const nowIso = new Date().toISOString();
+
+  // 3) Record the resulting order. Tagged `kapso` so recompute_daily_rollups
+  //    counts it; `carrito_recuperado` so it's identifiable. Use the real Shopify
+  //    id when returned (so a later order sync upserts the same row, no dup);
+  //    else a synthetic id. COD ⇒ financial_status 'pending'.
+  const realOrderId = completed.orderGid ? extractNumericId(completed.orderGid) : null;
+  const shopifyOrderId = realOrderId || `draft-${extractNumericId(l.draft_order_gid)}`;
+  const { data: order, error: orderErr } = await admin
+    .from("orders")
+    .upsert(
+      {
+        store_id: ctx.storeId,
+        shopify_order_id: shopifyOrderId,
+        name: completed.orderName ?? l.draft_order_name ?? `REC-${shopifyOrderId.slice(-6).toUpperCase()}`,
+        created_at: nowIso,
+        processed_at: nowIso,
+        total_amount: amount,
+        total_refunded: 0,
+        currency,
+        financial_status: "pending",
+        cancelled_at: null,
+        customer_phone: phone,
+        tags: ["kapso", "carrito_recuperado"],
+        promo_applied: false,
+        stock_por_validar: false,
+        shipping_mode: "cod",
+        line_items: lineItems,
+        kapso_conversation_id: null,
+      },
+      { onConflict: "store_id,shopify_order_id" },
+    )
+    .select("id")
+    .maybeSingle();
+  if (orderErr || !order) {
+    return {
+      error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr?.message ?? "error"}`,
+    };
+  }
+
+  // 4) Mark the lead won + link the order; reflect the draft as completed.
+  await admin
+    .from("leads")
+    .update({
+      has_order: true,
+      order_id: (order as { id: string }).id,
+      status: "pedido_generado",
+      category: "won",
+      needs_attention: false,
+      draft_order_status: "completed",
+      last_interaction_at: nowIso,
+    })
+    .eq("id", leadId);
+  await admin
+    .from("draft_orders")
+    .update({ status: "completed", completed_at: nowIso, order_gid: completed.orderGid })
+    .eq("store_id", ctx.storeId)
+    .eq("draft_order_gid", l.draft_order_gid);
+
+  // 5) Log the recovery — credits the advisor in Productividad (like closeSale).
+  const noteParts = [`Carrito recuperado · pedido generado en Shopify · ${currency} ${amount.toFixed(2)} · contraentrega`];
+  if (l.cart_summary) noteParts.push(`Productos: ${l.cart_summary}`);
+  if (l.district) noteParts.push(`Distrito: ${l.district}`);
+  await admin.from("lead_calls").insert({
+    lead_id: leadId,
+    store_id: ctx.storeId,
+    vendedora: ctx.userId,
+    kind: "sale",
+    new_status: "pedido_generado",
+    note: noteParts.join(" · "),
+  });
+
+  // 6) Recompute the day's rollups so revenue / COD reflect the recovery now.
+  try {
+    const day = nowIso.slice(0, 10);
+    await admin.rpc("recompute_daily_rollups", { p_store_id: ctx.storeId, p_from: day, p_to: day });
+  } catch {
+    /* non-fatal: the next sync's rollup recompute will pick it up */
+  }
+
+  revalidatePath("/dashboard/leads");
+  revalidatePath("/dashboard");
+  return { notice: `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)` };
 }
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;

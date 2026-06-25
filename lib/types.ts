@@ -22,6 +22,10 @@ export const NOTE_ATTR = {
 
 export const WHATSAPP_BOT_SOURCE = "whatsapp-bot";
 
+/** `leads.source` for a lead created from a Shopify draft order (Releasit COD
+ *  form) with no prior WhatsApp conversation — a pure-web abandoned cart. */
+export const COD_CART_SOURCE = "cod_cart";
+
 export interface OrderLineItem {
   title: string;
   quantity: number;
@@ -51,6 +55,39 @@ export interface OrderRow {
   shipping_mode: ShippingMode;
   kapso_conversation_id: string | null;
   line_items: OrderLineItem[];
+  raw?: unknown;
+}
+
+export type DraftOrderStatus = "open" | "invoice_sent" | "completed" | null;
+
+/**
+ * A Shopify Draft Order (Releasit COD form) ready to upsert into `draft_orders`.
+ * `open` = abandoned cart to work; `completed` = recovered (became a real order).
+ * Mirrors OrderRow and reuses OrderLineItem. Phone normalized via normalizePhone().
+ */
+export interface DraftOrderRow {
+  store_id: string;
+  shopify_draft_order_id: string; // numeric id as text (from the GID)
+  draft_order_gid: string; // gid://shopify/DraftOrder/...
+  name: string | null; // "#D123"
+  status: DraftOrderStatus; // OPEN | INVOICE_SENT | COMPLETED -> lowercased
+  created_at: string | null;
+  updated_at: string | null; // reconciliation cursor
+  completed_at: string | null;
+  invoice_url: string | null;
+  total_amount: number | null;
+  currency: string | null;
+  customer_phone?: string | null; // normalizePhone() applied
+  customer_name: string | null;
+  district: string | null; // shippingAddress.city
+  province: string | null;
+  region: string | null;
+  address1: string | null;
+  referencia: string | null; // shippingAddress.address2
+  tags: string[];
+  note: string | null;
+  line_items: OrderLineItem[];
+  order_gid: string | null; // the resulting order GID once completed
   raw?: unknown;
 }
 
@@ -128,6 +165,14 @@ export interface LeadRow {
   cart_item_count?: number | null;
   cart_summary?: string | null;
   draft_order_gid?: string | null;
+  // Draft-order denormalized fields (0013): the board reads these directly so it
+  // never needs to join `draft_orders`. Extended address mirrors the COD form.
+  draft_order_name?: string | null;
+  draft_order_status?: string | null; // open | invoice_sent | completed
+  draft_order_url?: string | null; // Shopify draft invoiceUrl ("Ver borrador")
+  province?: string | null;
+  region?: string | null;
+  referencia?: string | null;
   inbound_count?: number | null;
   // Source / channel attribution (0008). 'meta_ad' for Click-to-WhatsApp ad
   // leads (captured from the first inbound message's `referral`); null = organic.
