@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type ReactNode, useActionState, useEffect, useState, useTransition } from "react";
+import { type ReactNode, useActionState, useEffect, useRef, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
 import {
   adObjectiveLabel,
@@ -57,6 +57,14 @@ function leadSourceKey(s: string | null | undefined): "meta_ad" | "cod_cart" | "
       : s === "abandoned_browse"
         ? "abandoned_browse"
         : "organic";
+}
+
+/** Toggle inmutable de una clave en un Set (para estado de multi-select). */
+function withToggled(s: Set<string>, key: string): Set<string> {
+  const next = new Set(s);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return next;
 }
 
 const CATEGORY_BADGE: Record<LeadCategory, string> = {
@@ -322,6 +330,95 @@ function SegControl({
   );
 }
 
+/** Multi-select dropdown for filter groups with many options (Fuente, Número).
+ *  A compact trigger that opens a checkbox panel; selecting several = OR within
+ *  the group. `selected` empty = sin filtro ("Todas/Todos"). Cierra con
+ *  click-outside (mismo patrón que el drawer). Los counts por opción vienen
+ *  faceteados desde el padre (independientes de la selección del propio grupo). */
+function MultiSelect({
+  label,
+  options,
+  selected,
+  onToggle,
+  onClear,
+  summaryAll,
+}: {
+  label: string;
+  options: { key: string; label: string; count?: number }[];
+  selected: Set<string>;
+  onToggle: (key: string) => void;
+  onClear: () => void;
+  summaryAll: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const n = selected.size;
+  const summary =
+    n === 0 ? summaryAll : n === 1 ? (options.find((o) => selected.has(o.key))?.label ?? `${n}`) : `${n} seleccionadas`;
+
+  return (
+    <div className="relative flex items-center gap-1.5" ref={ref}>
+      <span className="shrink-0 text-xs font-medium text-slate-400">{label}</span>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1 text-xs font-medium transition",
+          n > 0
+            ? "border-brand-300 bg-brand-50 text-brand-700"
+            : "border-slate-300 text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+        )}
+      >
+        {summary}
+        {n > 0 && (
+          <span className="rounded-full bg-brand-600 px-1.5 text-[11px] font-semibold tabular-nums text-white">{n}</span>
+        )}
+        <span className="text-slate-400" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 z-20 mt-1 max-h-72 w-56 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+          <button
+            type="button"
+            onClick={onClear}
+            className="flex w-full items-center rounded-md px-2 py-1.5 text-xs hover:bg-slate-50"
+          >
+            <span className={cn(n === 0 ? "font-semibold text-brand-700" : "text-slate-600")}>{summaryAll}</span>
+          </button>
+          {options.map((o) => {
+            const on = selected.has(o.key);
+            return (
+              <button
+                key={o.key}
+                type="button"
+                onClick={() => onToggle(o.key)}
+                className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-50"
+              >
+                <span className="flex items-center gap-2">
+                  <input type="checkbox" readOnly checked={on} className="h-3.5 w-3.5 accent-brand-600" />
+                  <span className={cn(on ? "font-medium text-slate-900" : "text-slate-600")}>{o.label}</span>
+                </span>
+                {o.count !== undefined && <span className="tabular-nums text-slate-400">{o.count}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function LeadsBoard({
   stores,
   storeId,
@@ -360,13 +457,12 @@ export function LeadsBoard({
   const [history, setHistory] = useState<CustomerHistory | null>(null); // recurrent-customer block
   // Client-side sub-filters (instant, no navigation): source lens + the queue's
   // intención/gestión axes within "Por llamar".
-  const [srcFilter, setSrcFilter] = useState<
-    "all" | "meta_ad" | "cod_cart" | "abandoned_browse" | "organic"
-  >("all");
+  // Fuente y Número: multi-select (OR dentro del grupo). Set vacío = sin filtro.
+  const [srcFilter, setSrcFilter] = useState<Set<string>>(new Set());
   const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
   const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
-  const [numFilter, setNumFilter] = useState<string | null>(null); // WhatsApp number (phone_number_id)
+  const [numFilter, setNumFilter] = useState<Set<string>>(new Set()); // WhatsApp phone_number_id(s) + "__none__"
   // Search box: instant client-side narrowing of the current view PLUS a
   // debounced global lookup (all stages) so you can find any customer, not just
   // those loaded in the active tab.
@@ -470,9 +566,12 @@ export function LeadsBoard({
     const phoneDigits = (l.phone ?? "").replace(/\D/g, "");
     return name.includes(q) || (qDigits.length > 0 && phoneDigits.includes(qDigits));
   };
-  const matchSrc = (l: LeadRow) => srcFilter === "all" || leadSourceKey(l.source) === srcFilter;
-  const matchNum = (l: LeadRow) =>
-    !numFilter || (numFilter === "__none__" ? !l.wa_phone_number_id : l.wa_phone_number_id === numFilter);
+  const matchSrc = (l: LeadRow) => srcFilter.size === 0 || srcFilter.has(leadSourceKey(l.source));
+  const matchNum = (l: LeadRow) => {
+    if (numFilter.size === 0) return true;
+    if (!l.wa_phone_number_id) return numFilter.has("__none__");
+    return numFilter.has(l.wa_phone_number_id);
+  };
   const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadSegment(l) === segFilter;
   const matchGest = (l: LeadRow) => {
     if (!inQueue || !gestFilter) return true;
@@ -496,7 +595,6 @@ export function LeadsBoard({
   const srcBase = leadsExcept("src");
   const srcCounts = { meta_ad: 0, cod_cart: 0, abandoned_browse: 0, organic: 0 };
   for (const l of srcBase) srcCounts[leadSourceKey(l.source)] += 1;
-  const srcTotal = srcBase.length;
   const hasCampaign = leads.some((l) => l.source === "meta_ad");
   const hasCart = leads.some((l) => l.source === "cod_cart");
   const hasBrowse = leads.some((l) => l.source === "abandoned_browse");
@@ -533,13 +631,13 @@ export function LeadsBoard({
 
   // Filtros de refinamiento activos (excluye el buscador, que tiene su propia ✕).
   const hasActiveFilters =
-    (inQueue && (!!segFilter || !!gestFilter || winFilter !== "all")) || srcFilter !== "all" || !!numFilter;
+    (inQueue && (!!segFilter || !!gestFilter || winFilter !== "all")) || srcFilter.size > 0 || numFilter.size > 0;
   function clearFilters() {
     setSegFilter(null);
     setGestFilter(null);
     setWinFilter("all");
-    setSrcFilter("all");
-    setNumFilter(null);
+    setSrcFilter(new Set());
+    setNumFilter(new Set());
   }
 
   const shownLeads = leads.filter((l) => facetKeys.every((k) => FACETS[k](l)));
@@ -669,12 +767,13 @@ export function LeadsBoard({
               />
             )}
             {(hasCampaign || hasCart || hasBrowse) && (
-              <SegControl
+              <MultiSelect
                 label="Fuente"
-                value={srcFilter}
-                onChange={(key) => setSrcFilter(key as typeof srcFilter)}
+                summaryAll="Todas"
+                selected={srcFilter}
+                onToggle={(key) => setSrcFilter((s) => withToggled(s, key))}
+                onClear={() => setSrcFilter(new Set())}
                 options={[
-                  { key: "all", label: "Todas", count: srcTotal },
                   ...(hasCampaign ? [{ key: "meta_ad", label: "📣 Campaña", count: srcCounts.meta_ad }] : []),
                   ...(hasCart ? [{ key: "cod_cart", label: "🛒 Carrito", count: srcCounts.cod_cart }] : []),
                   ...(hasBrowse
@@ -685,12 +784,13 @@ export function LeadsBoard({
               />
             )}
             {hasMultiNumbers && (
-              <SegControl
+              <MultiSelect
                 label="Número"
-                value={numFilter ?? "all"}
-                onChange={(key) => setNumFilter(key === "all" ? null : key)}
+                summaryAll="Todos"
+                selected={numFilter}
+                onToggle={(key) => setNumFilter((s) => withToggled(s, key))}
+                onClear={() => setNumFilter(new Set())}
                 options={[
-                  { key: "all", label: "Todos", count: numTotal },
                   ...waIds.map((id) => {
                     const n = waNumbers?.[id];
                     const kind = waKindLabel(n?.kind ?? null);
@@ -700,9 +800,9 @@ export function LeadsBoard({
                       count: waCounts.get(id) ?? 0,
                     };
                   }),
-                  // Igual que "Otros": el chip "Sin número" persiste mientras sea el
-                  // filtro activo aunque su count sea 0, para poder deseleccionarlo.
-                  ...(numOtros > 0 || numFilter === "__none__"
+                  // El chip "Sin número" persiste mientras sea el filtro activo aunque
+                  // su count sea 0, para poder deseleccionarlo desde el panel.
+                  ...(numOtros > 0 || numFilter.has("__none__")
                     ? [{ key: "__none__", label: "Sin número", count: numOtros }]
                     : []),
                 ]}
