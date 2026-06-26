@@ -32,7 +32,10 @@ export default async function LeadsPage({
 
   const [counts, leads, user] = await Promise.all([
     getLeadCounts(storeId),
-    getStoreLeads(storeId, view),
+    // "Por llamar" se filtra/cuenta en cliente (jerarquía de facetas), así que la
+    // cola debe cargarse completa para que los conteos reflejen el total real;
+    // las demás vistas mantienen el tope estándar.
+    getStoreLeads(storeId, view, view === "por_llamar" ? 1000 : 200),
     getCurrentUser(),
   ]);
 
