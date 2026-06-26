@@ -26,6 +26,9 @@ export interface StoreSettingsData {
     status: string;
     whatsapp_phone_number_id: string | null;
     kapso_project_id: string | null;
+    browse_template_enabled: boolean;
+    browse_template_name: string | null;
+    browse_template_language: string | null;
   };
   has: { shopifyToken: boolean; webhookSecret: boolean; kapsoKey: boolean; flowSecret: boolean };
   oauthAvailable: boolean;
@@ -333,6 +336,53 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
           <SecretField name="shopify_webhook_secret" label="Shopify API secret (HMAC)" set={data.has.webhookSecret} />
           <SecretField name="kapso_api_key" label="Kapso API key" set={data.has.kapsoKey} />
           <SecretField name="flow_webhook_secret" label="Secreto webhook de Shopify Flow (búsquedas)" set={data.has.flowSecret} />
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Mensaje automático de búsqueda abandonada
+          </legend>
+          <p className="text-xs text-slate-500">
+            Cuando un cliente identificado mira un producto y se va, se le envía esta
+            plantilla de WhatsApp para re-engancharlo. Solo se manda a leads{" "}
+            <strong>nuevos</strong> con nombre y producto, y requiere la plantilla{" "}
+            <strong>aprobada por Meta</strong>. Si el cliente responde, el bot de Kapso
+            toma la conversación.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelCls} htmlFor="browse_template_enabled">Envío automático</label>
+              <select
+                id="browse_template_enabled"
+                name="browse_template_enabled"
+                defaultValue={s.browse_template_enabled ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">Deshabilitado</option>
+                <option value="true">Habilitado</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="browse_template_name">Nombre de la plantilla</label>
+              <input
+                id="browse_template_name"
+                name="browse_template_name"
+                defaultValue={s.browse_template_name ?? ""}
+                placeholder="busqueda_abandonada_1"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="browse_template_language">Idioma</label>
+              <input
+                id="browse_template_language"
+                name="browse_template_language"
+                defaultValue={s.browse_template_language ?? ""}
+                placeholder="es"
+                className={inputCls}
+              />
+            </div>
+          </div>
         </fieldset>
 
         <div className="flex items-center gap-3">

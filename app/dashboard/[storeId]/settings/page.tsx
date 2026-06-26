@@ -92,6 +92,9 @@ export default async function StoreSettingsPage({
       status: full.status,
       whatsapp_phone_number_id: full.whatsapp_phone_number_id ?? null,
       kapso_project_id: full.kapso_project_id ?? null,
+      browse_template_enabled: full.browse_template_enabled ?? false,
+      browse_template_name: full.browse_template_name ?? null,
+      browse_template_language: full.browse_template_language ?? null,
     },
     has: {
       shopifyToken: Boolean(full.shopify_token_enc),

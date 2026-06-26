@@ -8,10 +8,12 @@ import {
   fetchAllConversationsRich,
   fetchConversationSignals,
   parseHandoffPayload,
+  sendWhatsappTemplate,
   type HandoffInfo,
   type KapsoClientOpts,
   type LeadSeed,
 } from "@/lib/kapso";
+import type { StoreCreds } from "@/lib/ingest";
 import { deriveAutoState, nextLeadState } from "@/lib/leads";
 import { normalizePhone } from "@/lib/phone";
 import { DRAFT_GRACE_MINUTES, extractNumericId, isCodFormDraft } from "@/lib/shopify";
@@ -656,6 +658,8 @@ export async function processBrowseAbandonment(
   admin: SupabaseClient,
   storeId: string,
   body: any,
+  creds?: StoreCreds | null,
+  sendTemplate: typeof sendWhatsappTemplate = sendWhatsappTemplate,
 ): Promise<{ status: "ok" | "duplicate" }> {
   const abandonmentId = body?.abandonment?.id != null ? String(body.abandonment.id) : null;
   const webhookId =
@@ -674,8 +678,9 @@ export async function processBrowseAbandonment(
   }
 
   const seed = browseLeadSeed(body);
+  let created: "ok" | "exists" | null = null;
   if (seed) {
-    await insertLeadResilient(admin, {
+    created = await insertLeadResilient(admin, {
       store_id: storeId,
       phone: seed.phone,
       source: BROWSE_SOURCE,
@@ -698,6 +703,56 @@ export async function processBrowseAbandonment(
     .from("webhook_events")
     .update({ processed: true })
     .match({ store_id: storeId, webhook_id: webhookId });
+
+  // Cold re-engagement: fire the Meta-approved WhatsApp template to a *brand-new*
+  // browse lead only (never to a phone that already had a lead → no spam; if the
+  // customer replies, the Kapso bot on the store's number takes over). Gated
+  // per-store and needs both template variables (name {{1}} + product {{2}}).
+  // Best-effort: any send/log failure must never 500 the webhook (Flow retries
+  // on non-2xx, which would duplicate the lead).
+  if (
+    created === "ok" &&
+    seed &&
+    creds?.browse_template_enabled &&
+    creds.browse_template_name &&
+    creds.kapso_api_key &&
+    creds.whatsapp_phone_number_id &&
+    seed.name &&
+    seed.cart_summary
+  ) {
+    try {
+      const send = await sendTemplate(
+        { apiKey: creds.kapso_api_key },
+        {
+          phoneNumberId: creds.whatsapp_phone_number_id,
+          to: seed.phone,
+          templateName: creds.browse_template_name,
+          language: creds.browse_template_language ?? "es",
+          bodyParams: [seed.name, seed.cart_summary],
+        },
+      );
+      const { data: lead } = await admin
+        .from("leads")
+        .select("id")
+        .eq("store_id", storeId)
+        .eq("phone", seed.phone)
+        .maybeSingle();
+      if (lead?.id) {
+        await admin.from("lead_calls").insert({
+          lead_id: lead.id,
+          store_id: storeId,
+          kind: "system",
+          vendedora: null,
+          note: send.ok
+            ? `📤 WhatsApp: plantilla «${creds.browse_template_name}» enviada`
+            : `⚠️ WhatsApp: falló envío de «${creds.browse_template_name}» (${send.error})`,
+        });
+      }
+    } catch {
+      /* best-effort — never break the webhook ack */
+    }
+  }
+
   return { status: "ok" };
 }
 

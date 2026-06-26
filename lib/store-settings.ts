@@ -14,6 +14,10 @@ export interface StoreSettingsInput {
   whatsapp_phone_number_id?: string;
   kapso_project_id?: string;
   status?: string;
+  // Browse-abandonment WhatsApp template (plain, non-secret).
+  browse_template_enabled?: string | boolean;
+  browse_template_name?: string;
+  browse_template_language?: string;
   // Secrets — only applied when non-empty.
   shopify_token?: string;
   shopify_webhook_secret?: string;
@@ -43,6 +47,18 @@ export function buildStoreUpdate(
   if (status && (STORE_STATUSES as readonly string[]).includes(status)) {
     patch.status = status;
   }
+
+  // Browse-abandonment template config (plain). The enabled flag is a real
+  // boolean toggle (so it can be turned OFF); name/language follow the
+  // blank = keep-existing convention of the other plain fields.
+  if (input.browse_template_enabled !== undefined) {
+    patch.browse_template_enabled =
+      input.browse_template_enabled === true || input.browse_template_enabled === "true";
+  }
+  const tplName = clean(typeof input.browse_template_name === "string" ? input.browse_template_name : undefined);
+  if (tplName !== null) patch.browse_template_name = tplName;
+  const tplLang = clean(typeof input.browse_template_language === "string" ? input.browse_template_language : undefined);
+  if (tplLang !== null) patch.browse_template_language = tplLang;
 
   const token = clean(input.shopify_token);
   if (token) patch.shopify_token_enc = encrypt(token, keyOverride);
