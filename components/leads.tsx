@@ -224,8 +224,31 @@ const SEGMENT_BADGE: Record<LeadSegment, string> = {
   frio: "bg-slate-100 text-slate-500",
 };
 
-/** Engagement-level chip (Frío → Conversó → Dio distrito → Con carrito) per row. */
+// Terminal outcomes shown in the Calificación column instead of an engagement
+// segment — a cancelled lead is "Perdidos", not "🛒 Con carrito".
+const OUTCOME_SEG_BADGE: Record<"won" | "lost", { label: string; cls: string }> = {
+  won: { label: "Ganados", cls: "bg-emerald-100 text-emerald-700" },
+  lost: { label: "Perdidos", cls: "bg-slate-200 text-slate-600" },
+};
+
+/** Calificación chip per row. Active leads (open/hot) show their engagement level
+ *  (Frío → Conversó → Dio distrito → Con carrito); leads that are already won or
+ *  lost show the outcome (Ganados/Perdidos) — the engagement level is meaningless
+ *  once the lead is closed, and "Con carrito" on a cancelled lead is misleading.
+ *  The specific reason (e.g. "Cancelado por cliente") stays available on hover. */
 function SegmentBadge({ lead }: { lead: LeadRow }) {
+  const cat = categoryOf(lead.status);
+  if (cat === "won" || cat === "lost") {
+    const b = OUTCOME_SEG_BADGE[cat];
+    return (
+      <span
+        className={cn("whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", b.cls)}
+        title={labelOf(lead.status)}
+      >
+        {b.label}
+      </span>
+    );
+  }
   const seg = leadSegment(lead);
   return (
     <span className={cn("whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", SEGMENT_BADGE[seg])}>
@@ -314,7 +337,10 @@ export function LeadsBoard({
   currentUserId: string;
 }) {
   const router = useRouter();
-  const [pending, startTransition] = useTransition();
+  // Only the row being opened is disabled (its claim is in flight) — never the
+  // whole list. Background work (post-save refresh, claim release) must NOT
+  // freeze every "Tomar / Ver" button, which is why it's not a shared transition.
+  const [openingId, setOpeningId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   // Drawer is client-state driven: it opens instantly from the row we already
   // have; the claim + call history load in the background (no page navigation).
@@ -366,27 +392,35 @@ export function LeadsBoard({
     setSelected(lead); // instant — render from the data we already have
     setCalls(null);
     setHistory(null);
-    startTransition(async () => {
-      const res = await claimLead(lead.id);
-      if (res.error) {
-        setBanner(res.error);
-        setSelected(null);
-        return;
+    setOpeningId(lead.id); // disable only this row's button while the claim loads
+    void (async () => {
+      try {
+        const res = await claimLead(lead.id);
+        if (res.error) {
+          setBanner(res.error);
+          setSelected(null);
+          return;
+        }
+        const d = await loadLeadDetail(lead.id);
+        if ("error" in d) {
+          setBanner(d.error);
+          setSelected(null);
+          return;
+        }
+        setSelected(d.lead);
+        setCalls(d.calls);
+        setHistory(d.customerHistory);
+      } finally {
+        setOpeningId(null);
       }
-      const d = await loadLeadDetail(lead.id);
-      if ("error" in d) {
-        setBanner(d.error);
-        setSelected(null);
-        return;
-      }
-      setSelected(d.lead);
-      setCalls(d.calls);
-      setHistory(d.customerHistory);
-    });
+    })();
   }
 
   function refreshDetail(leadId: string) {
-    startTransition(async () => {
+    // Refresh the drawer + the list/counts in the background. Deliberately NOT a
+    // transition tied to the row buttons: a call save shouldn't disable every
+    // "Tomar / Ver" while the (heavier) list refetch runs.
+    void (async () => {
       const d = await loadLeadDetail(leadId);
       if (!("error" in d)) {
         setSelected(d.lead);
@@ -394,7 +428,7 @@ export function LeadsBoard({
         setHistory(d.customerHistory);
       }
       router.refresh(); // reflect status/queue changes in the list + counts
-    });
+    })();
   }
 
   function closeDrawer() {
@@ -402,14 +436,9 @@ export function LeadsBoard({
     setSelected(null);
     setCalls(null);
     setHistory(null);
-    if (leadId) {
-      // Release the claim in the background. No full-list refresh on close —
-      // status changes already refresh via refreshDetail, so this avoids an
-      // unnecessary refetch of the whole queue every time the drawer closes.
-      startTransition(async () => {
-        await releaseLead(leadId);
-      });
-    }
+    // Release the claim in the background (fire-and-forget). No full-list refresh
+    // on close, and no shared transition that would freeze the row buttons.
+    if (leadId) void releaseLead(leadId);
   }
 
   const campaignCount = leads.filter((l) => l.source === "meta_ad").length;
@@ -705,11 +734,11 @@ export function LeadsBoard({
                       <button
                         type="button"
                         onClick={() => openLead(lead)}
-                        disabled={pending}
+                        disabled={openingId === lead.id}
                         className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                       >
                         {locked && <span title="Tomado por otro vendedor">🔒 tomado</span>}
-                        Tomar / Ver
+                        {openingId === lead.id ? "Abriendo…" : "Tomar / Ver"}
                       </button>
                     </td>
                   </tr>
@@ -743,7 +772,6 @@ export function LeadsBoard({
           currency={currency}
           onClose={closeDrawer}
           onRegistered={() => refreshDetail(selected.id)}
-          closing={pending}
         />
       )}
     </div>
@@ -759,7 +787,6 @@ function LeadDrawer({
   currency,
   onClose,
   onRegistered,
-  closing,
 }: {
   lead: LeadRow;
   calls: LeadCallRow[] | null; // null = still loading
@@ -769,7 +796,6 @@ function LeadDrawer({
   currency: string;
   onClose: () => void;
   onRegistered: () => void;
-  closing: boolean;
 }) {
   const handoffTone = categoryOf(lead.status) === "hot" ? "red" : "amber";
   return (
@@ -809,9 +835,8 @@ function LeadDrawer({
           <button
             type="button"
             onClick={onClose}
-            disabled={closing}
             aria-label="Cerrar"
-            className="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60"
+            className="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
           >
             ✕
           </button>
