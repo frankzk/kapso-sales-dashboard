@@ -52,6 +52,8 @@ export interface StoreSettingsData {
 /** Friendly label for a webhook topic in the received-webhooks log. */
 function webhookTopicLabel(topic: string): string {
   if (topic === "flow/abandoned_browse") return "🔎 Búsqueda abandonada";
+  if (topic === "flow/unauthorized") return "🚫 Rechazado (secreto)";
+  if (topic === "flow/bad_request") return "🚫 Payload inválido";
   if (topic.startsWith("draft_orders/")) return "🛒 Borrador (carrito)";
   if (topic.startsWith("orders/")) return "📦 Orden";
   return topic;

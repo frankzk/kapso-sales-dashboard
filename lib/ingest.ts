@@ -279,6 +279,28 @@ function verifyFlowSecret(provided: string | null | undefined, expected: string 
   return timingSafeEqual(a, b);
 }
 
+/** Best-effort: record a REJECTED Flow webhook (bad secret / bad payload) in
+ *  `webhook_events` so it shows in the store's webhook log — invaluable for
+ *  debugging a 401/400 without guessing. Deduped by a body hash so a retried bad
+ *  request doesn't pile up. (Logs unauthenticated POSTs to a valid store's flow
+ *  URL; acceptable since the storeId is semi-secret.) Never throws. */
+async function recordFlowRejection(
+  admin: SupabaseClient,
+  storeId: string,
+  rawBody: string,
+  topic: string,
+  error: string,
+): Promise<void> {
+  try {
+    const webhookId = "rej-" + createHash("sha256").update(rawBody, "utf8").digest("hex").slice(0, 40);
+    await admin
+      .from("webhook_events")
+      .insert({ store_id: storeId, topic, shopify_id: null, webhook_id: webhookId, processed: false, error });
+  } catch {
+    /* logging is best-effort — never let it affect the webhook response */
+  }
+}
+
 /**
  * Authenticate + route an inbound Shopify Flow webhook (shared per-store secret
  * in the X-RecoverOps-Secret header). Routes by `body.source`; today only
@@ -292,6 +314,13 @@ export async function processFlowWebhook(
   const creds = await getStoreCreds(params.storeId, admin);
   if (!creds) return { status: "error", message: "unknown store" };
   if (!verifyFlowSecret(params.secretHeader, creds.flow_webhook_secret)) {
+    await recordFlowRejection(
+      admin,
+      params.storeId,
+      params.rawBody,
+      "flow/unauthorized",
+      "Secreto X-RecoverOps-Secret inválido o ausente",
+    );
     return { status: "unauthorized" };
   }
 
@@ -299,6 +328,7 @@ export async function processFlowWebhook(
   try {
     payload = JSON.parse(params.rawBody);
   } catch {
+    await recordFlowRejection(admin, params.storeId, params.rawBody, "flow/bad_request", "El body no es JSON válido");
     return { status: "error", message: "invalid json" };
   }
 

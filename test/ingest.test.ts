@@ -477,7 +477,7 @@ describe("processFlowWebhook · abandoned browse", () => {
     expect(fake.upsertedLeads).toHaveLength(0); // never downgrades an existing lead
   });
 
-  it("rejects a wrong secret (unauthorized, no writes)", async () => {
+  it("rejects a wrong secret (unauthorized, no lead) but logs the rejection", async () => {
     const { processFlowWebhook } = await import("@/lib/ingest");
     const fake = new FakeSupabase(makeStoreRow());
     const res = await processFlowWebhook(
@@ -485,7 +485,8 @@ describe("processFlowWebhook · abandoned browse", () => {
       fake as any,
     );
     expect(res.status).toBe("unauthorized");
-    expect(fake.upsertedLeads).toHaveLength(0);
+    expect(fake.upsertedLeads).toHaveLength(0); // no lead created
+    expect(fake.insertedWebhookIds.size).toBe(1); // the rejection IS recorded for the webhook log
   });
 
   it("is idempotent on the abandonment id (re-delivery → duplicate)", async () => {
