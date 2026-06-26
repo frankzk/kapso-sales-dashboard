@@ -716,6 +716,73 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
     .sort((a, b) => b.ingresos - a.ingresos || b.leads - a.leads);
 }
 
+// ---------------------------------------------------------------------------
+// Recuperación de carritos abandonados (Shopify draft orders / Releasit COD).
+// How many carts came in, how many became real orders (recovery rate), the
+// revenue recovered, and the value still on the table. A "cart lead" is one
+// backed by a real Shopify draft (draft_order_gid) or born from the COD form
+// (source cod_cart) — NOT a chat the bot merely summarized.
+// ---------------------------------------------------------------------------
+
+export interface CartRecoveryStats {
+  total: number; // abandoned-cart leads in range
+  recuperados: number; // became a real order
+  pendientes: number; // still open / workable
+  perdidos: number; // marked lost (cancelado, ya compró en otro lado, …)
+  tasaRecuperacion: number; // recuperados / total, 0..1
+  ingresosRecuperados: number; // net revenue of recovered carts
+  ticketPromedio: number; // ingresosRecuperados / recuperados (0 if none)
+  valorEnRiesgo: number; // Σ cart_value of the pendientes (money still on the table)
+}
+
+/** True for a lead backed by a real abandoned cart (Shopify draft or COD form). */
+function isCartLead(l: LeadRow): boolean {
+  return !!l.draft_order_gid || l.source === "cod_cart";
+}
+
+/** Abandoned-cart recovery for the period. Returns null when there are no cart
+ *  leads at all, so the dashboard module stays hidden until carts exist. */
+export function cartRecovery(leads: LeadRow[], orders: OrderRow[]): CartRecoveryStats | null {
+  const carts = leads.filter(isCartLead);
+  if (!carts.length) return null;
+
+  const netByPhone = new Map<string, number>();
+  for (const o of activeOrders(orders)) {
+    if (!o.customer_phone) continue;
+    const net = Number(o.total_amount ?? 0) - Number(o.total_refunded ?? 0);
+    netByPhone.set(o.customer_phone, (netByPhone.get(o.customer_phone) ?? 0) + net);
+  }
+
+  let recuperados = 0;
+  let pendientes = 0;
+  let perdidos = 0;
+  let ingresosRecuperados = 0;
+  let valorEnRiesgo = 0;
+  for (const l of carts) {
+    const recovered = !!l.has_order || l.draft_order_status === "completed";
+    if (recovered) {
+      recuperados += 1;
+      ingresosRecuperados += netByPhone.get(l.phone) ?? 0;
+    } else if (l.category === "lost") {
+      perdidos += 1;
+    } else {
+      pendientes += 1;
+      valorEnRiesgo += Number(l.cart_value ?? 0);
+    }
+  }
+  const total = carts.length;
+  return {
+    total,
+    recuperados,
+    pendientes,
+    perdidos,
+    tasaRecuperacion: total ? recuperados / total : 0,
+    ingresosRecuperados: round2(ingresosRecuperados),
+    ticketPromedio: recuperados ? round2(ingresosRecuperados / recuperados) : 0,
+    valorEnRiesgo: round2(valorEnRiesgo),
+  };
+}
+
 export interface CampaignStat {
   adId: string;
   label: string; // resolved ad name → captured headline → ad id (best display)
