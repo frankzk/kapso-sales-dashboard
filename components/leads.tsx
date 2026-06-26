@@ -140,14 +140,27 @@ function MetaField({ label, children }: { label: string; children: ReactNode }) 
  *  lead. Falls back to a one-liner when the ad_id hasn't been resolved into the
  *  `meta_ads` lookup yet (only headline + id are then known). */
 function MetaAttribution({ lead, adMeta }: { lead: LeadRow; adMeta: AdMeta | null }) {
+  const [open, setOpen] = useState(false);
   const name = adMeta?.adName ? prettyAdName(adMeta.adName) : null;
   const href = adsManagerUrl(adMeta?.accountId ?? null, lead.ad_id ?? "");
   const objective = adObjectiveLabel(adMeta?.objective ?? null);
   const status = adStatusLabel(adMeta?.status ?? null);
   return (
-    <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-sm text-violet-900">
-      <p className="text-xs font-semibold tracking-wide uppercase opacity-80">Fuente · Campaña Meta</p>
-      <dl className="mt-1.5 space-y-1">
+    <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-2"
+      >
+        <span className="text-xs font-semibold tracking-wide uppercase opacity-80">📣 Campaña Meta</span>
+        <span className="shrink-0 text-xs text-violet-700">{open ? "ocultar ▲" : "ver más ▼"}</span>
+      </button>
+      {!open ? (
+        <p className="mt-1 truncate text-xs text-violet-800">
+          {lead.ad_headline || name || "Llegó por un anuncio de Meta"}
+        </p>
+      ) : (
+        <dl className="mt-1.5 space-y-1">
         {lead.ad_headline && <MetaField label="Titular">{lead.ad_headline}</MetaField>}
         {name ? (
           <MetaField label="Anuncio">
@@ -184,7 +197,8 @@ function MetaAttribution({ lead, adMeta }: { lead: LeadRow; adMeta: AdMeta | nul
             {lead.ctwa_clid ? ` · clic ${lead.ctwa_clid}` : ""}
           </p>
         )}
-      </dl>
+        </dl>
+      )}
     </div>
   );
 }
@@ -767,17 +781,28 @@ function LeadDrawer({
       />
       <aside className="fixed inset-y-0 right-0 z-20 w-full max-w-md overflow-y-auto border-l bg-white shadow-xl">
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-3">
-          <div className="space-y-1">
-            <p className="text-base font-semibold text-slate-900">{lead.name || lead.phone}</p>
-            <a
-              href={`https://wa.me/${lead.phone}`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-sm text-brand-700 hover:underline"
-            >
-              {lead.phone}
-            </a>
-            <div>
+          <div className="min-w-0 space-y-1">
+            <div className="flex items-center gap-2">
+              <p className="truncate text-base font-semibold text-slate-900">{lead.name || lead.phone}</p>
+              {lead.source === "cod_cart" && (
+                <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-700">🛒</span>
+              )}
+              {lead.source === "meta_ad" && (
+                <span className="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-700">📣</span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <a
+                href={`https://wa.me/${lead.phone}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm text-brand-700 hover:underline"
+              >
+                {lead.phone}
+              </a>
+              <a href={`tel:${lead.phone}`} className="text-xs text-slate-400 hover:text-slate-600">
+                · llamar
+              </a>
               <StatusBadge status={lead.status} needsAttention={lead.needs_attention} />
             </div>
           </div>
@@ -786,29 +811,14 @@ function LeadDrawer({
             onClick={onClose}
             disabled={closing}
             aria-label="Cerrar"
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60"
+            className="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60"
           >
             ✕
           </button>
         </div>
 
         <div className="space-y-4 px-5 py-4">
-          {lead.handoff_context && (
-            <div
-              className={cn(
-                "rounded-xl border px-3 py-2.5 text-sm",
-                handoffTone === "red"
-                  ? "border-red-200 bg-red-50 text-red-800"
-                  : "border-amber-200 bg-amber-50 text-amber-800",
-              )}
-            >
-              <p className="text-xs font-semibold tracking-wide uppercase opacity-80">
-                Resumen del bot
-              </p>
-              <p className="mt-1 whitespace-pre-wrap">{lead.handoff_context}</p>
-            </div>
-          )}
-
+          {/* Contexto: carrito + entrega (lo que miras antes de llamar/cerrar) */}
           {(lead.cart_item_count || lead.district || lead.draft_order_gid) && (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">
               {lead.draft_order_gid && (
@@ -824,11 +834,16 @@ function LeadDrawer({
                   {lead.cart_value != null ? ` · ${currency} ${Number(lead.cart_value).toFixed(2)}` : ""}
                 </p>
               ) : null}
-              {(lead.district || lead.province || lead.referencia) && (
-                <p className={lead.cart_item_count ? "mt-1" : ""}>
-                  📍 <span className="font-medium">Entrega:</span>{" "}
-                  {[lead.district, lead.province, lead.referencia].filter(Boolean).join(" · ")}
-                </p>
+              {(lead.district || lead.referencia) && (
+                <div className={lead.cart_item_count ? "mt-1 space-y-0.5" : "space-y-0.5"}>
+                  {lead.district && (
+                    <p>
+                      📍 <span className="font-medium">Distrito:</span> {lead.district}
+                      {lead.province ? <span className="text-emerald-800/70"> · {lead.province}</span> : null}
+                    </p>
+                  )}
+                  {lead.referencia && <p className="text-emerald-800/90">Ref: {lead.referencia}</p>}
+                </div>
               )}
               {lead.draft_order_url && (
                 <a
@@ -843,41 +858,26 @@ function LeadDrawer({
             </div>
           )}
 
-          <RecurrentCustomer history={history} />
-
-          {lead.source === "meta_ad" && <MetaAttribution lead={lead} adMeta={adMeta} />}
-
-          {lead.wa_phone_number_id && (
-            <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
-              <p className="text-xs font-semibold tracking-wide uppercase opacity-80">
-                Número de WhatsApp
-              </p>
-              <p className="mt-1">
-                📱 <span className="font-medium">{waLabel(waNumber, lead.wa_phone_number_id)}</span>
-                {waKindLabel(waNumber?.kind ?? null) ? ` · ${waKindLabel(waNumber?.kind ?? null)}` : ""}
-                {waNumber?.displayPhone ? ` · ${waNumber.displayPhone}` : ""}
-              </p>
-            </div>
-          )}
-
-          {lead.has_order && (
+          {/* Acción principal: generar / registrar el pedido */}
+          {lead.has_order ? (
             <p className="text-sm font-medium text-emerald-700">
               ✅ Pedido generado{lead.order_id ? ` · ${lead.order_id}` : ""}
             </p>
+          ) : (
+            <OrderForm
+              leadId={lead.id}
+              currency={currency}
+              hasCart={!!lead.draft_order_gid && lead.draft_order_status !== "completed"}
+              onRegistered={onRegistered}
+            />
           )}
 
-          {!lead.kapso_conversation_id && lead.draft_order_gid && <CallAffordance phone={lead.phone} />}
+          {/* Registrar llamada (lo más usado al trabajar) */}
+          <CallForm leadId={lead.id} onRegistered={onRegistered} />
 
-          <WhatsappComposer
-            leadId={lead.id}
-            lastInteractionAt={lead.last_interaction_at}
-            onSent={onRegistered}
-          />
-
+          {/* Historial */}
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold tracking-wide text-slate-700 uppercase">
-              Historial
-            </h3>
+            <h3 className="text-sm font-semibold tracking-wide text-slate-700 uppercase">Historial</h3>
             {calls === null ? (
               <p className="text-sm text-slate-400">Cargando historial…</p>
             ) : calls.length ? (
@@ -892,9 +892,7 @@ function LeadDrawer({
                       {c.kind === "message" ? (
                         <span className="text-xs font-medium text-brand-700">📤 WhatsApp</span>
                       ) : c.new_status ? (
-                        <span className="text-xs font-medium text-slate-600">
-                          {labelOf(c.new_status)}
-                        </span>
+                        <span className="text-xs font-medium text-slate-600">{labelOf(c.new_status)}</span>
                       ) : null}
                     </div>
                     {c.note && <p className="mt-1 text-slate-700">{c.note}</p>}
@@ -906,16 +904,42 @@ function LeadDrawer({
             )}
           </section>
 
-          <CallForm leadId={lead.id} onRegistered={onRegistered} />
+          {/* Enviar WhatsApp / llamar */}
+          {!lead.kapso_conversation_id && lead.draft_order_gid && <CallAffordance phone={lead.phone} />}
+          <WhatsappComposer
+            leadId={lead.id}
+            lastInteractionAt={lead.last_interaction_at}
+            onSent={onRegistered}
+          />
 
-          {!lead.has_order && (
-            <OrderForm
-              leadId={lead.id}
-              currency={currency}
-              hasCart={!!lead.draft_order_gid && lead.draft_order_status !== "completed"}
-              onRegistered={onRegistered}
-            />
+          {/* Contexto secundario (abajo: se consulta menos) */}
+          <RecurrentCustomer history={history} />
+
+          {lead.handoff_context && (
+            <div
+              className={cn(
+                "rounded-xl border px-3 py-2.5 text-sm",
+                handoffTone === "red"
+                  ? "border-red-200 bg-red-50 text-red-800"
+                  : "border-amber-200 bg-amber-50 text-amber-800",
+              )}
+            >
+              <p className="text-xs font-semibold tracking-wide uppercase opacity-80">Resumen del bot</p>
+              <p className="mt-1 whitespace-pre-wrap">{lead.handoff_context}</p>
+            </div>
           )}
+
+          {lead.wa_phone_number_id && (
+            <p className="text-xs text-slate-500">
+              📱 WhatsApp:{" "}
+              <span className="font-medium text-slate-700">
+                {waNumber?.name ?? waNumber?.displayPhone ?? "número sin nombre"}
+              </span>
+              {waKindLabel(waNumber?.kind ?? null) ? ` · ${waKindLabel(waNumber?.kind ?? null)}` : ""}
+            </p>
+          )}
+
+          {lead.source === "meta_ad" && <MetaAttribution lead={lead} adMeta={adMeta} />}
         </div>
       </aside>
     </>
