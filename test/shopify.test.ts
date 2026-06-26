@@ -410,11 +410,12 @@ describe("draft orders (Releasit COD)", () => {
     expect(row.order_gid).toBe("gid://shopify/Order/543");
   });
 
-  it("isCodFormDraft: true with a Releasit hint or a phone; false without either", () => {
-    const base = mapGraphqlDraftOrder(node, "s");
-    expect(isCodFormDraft(base)).toBe(true); // phone + releasit tag
-    expect(isCodFormDraft({ ...base, tags: [], note: null })).toBe(true); // phone alone
-    expect(isCodFormDraft({ ...base, tags: [], note: null, customer_phone: null })).toBe(false);
+  it("isCodFormDraft: requires a Releasit/EasySell marker (tag or note)", () => {
+    const base = mapGraphqlDraftOrder(node, "s"); // has the 'releasit' tag
+    expect(isCodFormDraft(base)).toBe(true);
+    expect(isCodFormDraft({ ...base, tags: ["easysell_cod_form"], note: null })).toBe(true);
+    expect(isCodFormDraft({ ...base, tags: ["easysell-abandoned-checkout"], note: null })).toBe(true);
+    expect(isCodFormDraft({ ...base, tags: [], note: null })).toBe(false); // manual/test draft → excluded
   });
 
   it("buildDraftOrdersSearchQuery bounds open carts by updated_at", () => {

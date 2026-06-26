@@ -354,19 +354,21 @@ export function mapRestDraftOrder(payload: any, storeId: string): DraftOrderRow 
   };
 }
 
-const RELEASIT_DRAFT_HINTS = ["releasit", "cod form", "cash on delivery", "contraentrega", "contra entrega"];
+// Releasit (formerly EasySell) COD Form tags its drafts — confirmed on live Aurela
+// drafts: `easysell_cod_form` + `easysell-abandoned-checkout` (plus the variant
+// `abandoned_checkout_releasit_cod_form`). Matched case-insensitively as substrings
+// so every variant qualifies. This marker is what tells a real abandoned COD cart
+// apart from a manual quote/wholesale draft (which carries none).
+const RELEASIT_DRAFT_HINTS = ["easysell", "releasit", "cod_form", "cod form"];
 
 /**
- * Whether a draft looks like a Releasit COD-form abandoned cart (vs a manual
- * quote/wholesale draft that must NOT become a call lead). Prefers an explicit
- * Releasit marker (tag/note); falls back to "open draft with a shipping phone",
- * since the COD form always collects one. TODO(verify): confirm the real marker
- * on a live draft (dump `raw`) and tighten if the store also makes manual drafts.
+ * Whether a draft is a Releasit/EasySell COD-form abandoned cart (vs a manual
+ * quote/wholesale draft that must NOT become a call lead). Requires a Releasit
+ * tag/note marker — manual/test drafts have none, so they're excluded.
  */
 export function isCodFormDraft(row: DraftOrderRow): boolean {
   const hay = [...row.tags, row.note ?? ""].join(" ").toLowerCase();
-  if (RELEASIT_DRAFT_HINTS.some((h) => hay.includes(h))) return true;
-  return Boolean(row.customer_phone);
+  return RELEASIT_DRAFT_HINTS.some((h) => hay.includes(h));
 }
 
 // ---------------------------------------------------------------------------
