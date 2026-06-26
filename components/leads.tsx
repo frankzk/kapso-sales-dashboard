@@ -351,7 +351,7 @@ export function LeadsBoard({
   // intención/gestión axes within "Por llamar".
   const [srcFilter, setSrcFilter] = useState<"all" | "meta_ad" | "organic">("all");
   const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
-  const [gestFilter, setGestFilter] = useState<LeadGestion | null>(initialGest ?? null);
+  const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
   const [numFilter, setNumFilter] = useState<string | null>(null); // WhatsApp number (phone_number_id)
   // Search box: instant client-side narrowing of the current view PLUS a
@@ -459,9 +459,14 @@ export function LeadsBoard({
   };
   const matchSrc = (l: LeadRow) =>
     srcFilter === "all" || (l.source === "meta_ad" ? "meta_ad" : "organic") === srcFilter;
-  const matchNum = (l: LeadRow) => !numFilter || l.wa_phone_number_id === numFilter;
+  const matchNum = (l: LeadRow) =>
+    !numFilter || (numFilter === "__none__" ? !l.wa_phone_number_id : l.wa_phone_number_id === numFilter);
   const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadSegment(l) === segFilter;
-  const matchGest = (l: LeadRow) => !inQueue || !gestFilter || gestionOf(l.status) === gestFilter;
+  const matchGest = (l: LeadRow) => {
+    if (!inQueue || !gestFilter) return true;
+    if (gestFilter === "otros") return gestionOf(l.status) === null; // casi_cierra, repetido, volver_a_llamar…
+    return gestionOf(l.status) === gestFilter;
+  };
   const matchWin = (l: LeadRow) => {
     if (!inQueue || winFilter === "all") return true;
     const { state } = leadWindowInfo(l.last_inbound_at ?? l.last_interaction_at, now);
@@ -489,6 +494,9 @@ export function LeadsBoard({
   const gestBase = leadsExcept("gest");
   const gestCounts = countGestiones(gestBase);
   const gestTotal = gestBase.length;
+  // Leads sin bucket de gestión (casi_cierra/repetido/volver_a_llamar): el resto
+  // para que Gestión "Todos" cuadre con la suma de sus chips.
+  const gestOtros = gestTotal - Object.values(gestCounts).reduce((a, b) => a + b, 0);
 
   const winBase = leadsExcept("win");
   const winCounts = countLeadWindows(winBase, now);
@@ -503,8 +511,22 @@ export function LeadsBoard({
   for (const l of numBase) {
     if (l.wa_phone_number_id) waCounts.set(l.wa_phone_number_id, (waCounts.get(l.wa_phone_number_id) ?? 0) + 1);
   }
+  // Leads sin número de WhatsApp asignado (ej. carrito/Shopify): el resto para
+  // que Número "Todos" cuadre con la suma de sus chips.
+  const numOtros = numTotal - [...waCounts.values()].reduce((a, b) => a + b, 0);
   const waIds = [...new Set(leads.map((l) => l.wa_phone_number_id).filter((id): id is string => !!id))];
   const hasMultiNumbers = waIds.length >= 2;
+
+  // Filtros de refinamiento activos (excluye el buscador, que tiene su propia ✕).
+  const hasActiveFilters =
+    (inQueue && (!!segFilter || !!gestFilter || winFilter !== "all")) || srcFilter !== "all" || !!numFilter;
+  function clearFilters() {
+    setSegFilter(null);
+    setGestFilter(null);
+    setWinFilter("all");
+    setSrcFilter("all");
+    setNumFilter(null);
+  }
 
   const shownLeads = leads.filter((l) => facetKeys.every((k) => FACETS[k](l)));
   // In search mode show the global results (all stages); otherwise the filtered
@@ -558,6 +580,15 @@ export function LeadsBoard({
             onChange={(key) => router.push(`/dashboard/leads?store=${storeId}&view=${key}`)}
             options={OUTCOME_VIEWS.map((v) => ({ key: v.key, label: v.label, count: counts[v.key] }))}
           />
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+            >
+              ✕ Limpiar filtros
+            </button>
+          )}
 
           <div className="relative ml-auto w-full sm:w-64">
             <svg
@@ -598,10 +629,11 @@ export function LeadsBoard({
               <SegControl
                 label="Gestión"
                 value={gestFilter ?? "all"}
-                onChange={(key) => setGestFilter(key === "all" ? null : (key as LeadGestion))}
+                onChange={(key) => setGestFilter(key === "all" ? null : (key as LeadGestion | "otros"))}
                 options={[
                   { key: "all", label: "Todos", count: gestTotal },
                   ...LEAD_GESTIONES.map((g) => ({ key: g.key, label: g.label, count: gestCounts[g.key] })),
+                  ...(gestOtros > 0 ? [{ key: "otros", label: "Otros", count: gestOtros }] : []),
                 ]}
               />
             )}
@@ -646,6 +678,7 @@ export function LeadsBoard({
                       count: waCounts.get(id) ?? 0,
                     };
                   }),
+                  ...(numOtros > 0 ? [{ key: "__none__", label: "Sin número", count: numOtros }] : []),
                 ]}
               />
             )}
