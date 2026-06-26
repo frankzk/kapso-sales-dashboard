@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeAdvisorStats, type AdvisorCall } from "@/lib/productivity";
+import { attachDeltas, computeAdvisorStats, type AdvisorCall, type AdvisorStat } from "@/lib/productivity";
 
 describe("computeAdvisorStats (per-advisor productivity)", () => {
   const emailById = new Map([
@@ -58,6 +58,40 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
     const u1 = rows.find((r) => r.userId === "u1")!;
     expect(u1.horas).toBeCloseTo(1.5); // 1h + 0.5h; the day-2 singleton adds 0
     expect(u1.dias).toBe(2);
+  });
+
+  it("attachDeltas computes per-advisor deltas, flags newcomers, and rolls up prev totals", () => {
+    const mk = (o: Partial<AdvisorStat> & { userId: string }): AdvisorStat => ({
+      email: o.userId,
+      llamadas: 0,
+      leadsTrabajados: 0,
+      cerrados: 0,
+      ingresos: 0,
+      conversion: 0,
+      horas: 0,
+      dias: 0,
+      ...o,
+    });
+    const cur = [
+      mk({ userId: "u1", llamadas: 10, leadsTrabajados: 8, cerrados: 5, ingresos: 1200, conversion: 0.625 }),
+      mk({ userId: "u2", llamadas: 4, leadsTrabajados: 4, cerrados: 1, ingresos: 200, conversion: 0.25 }), // new
+    ];
+    const prev = [
+      mk({ userId: "u1", llamadas: 8, leadsTrabajados: 6, cerrados: 3, ingresos: 900, conversion: 0.5 }),
+      mk({ userId: "u3", llamadas: 2, leadsTrabajados: 2, cerrados: 0, ingresos: 0, conversion: 0 }), // dropped
+    ];
+    const { rows, prevTotals } = attachDeltas(cur, prev);
+
+    const u1 = rows.find((r) => r.userId === "u1")!;
+    expect(u1.delta).toMatchObject({ llamadas: 2, cerrados: 2, ingresos: 300, isNew: false });
+    expect(u1.delta.conversionPP).toBeCloseTo(12.5); // 62.5% − 50%
+
+    const u2 = rows.find((r) => r.userId === "u2")!;
+    expect(u2.delta.isNew).toBe(true); // no baseline last period
+    expect(u2.delta.ingresos).toBe(200); // vs 0
+
+    // prev totals include the dropped advisor (u3), not the current-only one (u2)
+    expect(prevTotals).toMatchObject({ llamadas: 10, leadsTrabajados: 8, cerrados: 3, ingresos: 900 });
   });
 
   it("sorts by revenue desc and ignores calls without a vendedora", () => {
