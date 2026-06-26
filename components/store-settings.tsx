@@ -39,6 +39,22 @@ export interface StoreSettingsData {
   }>;
   lastOpsAt: string | null;
   webhookCount: number;
+  webhookEvents: Array<{
+    id: string;
+    topic: string;
+    shopify_id: string | null;
+    received_at: string;
+    processed: boolean;
+    error: string | null;
+  }>;
+}
+
+/** Friendly label for a webhook topic in the received-webhooks log. */
+function webhookTopicLabel(topic: string): string {
+  if (topic === "flow/abandoned_browse") return "🔎 Búsqueda abandonada";
+  if (topic.startsWith("draft_orders/")) return "🛒 Borrador (carrito)";
+  if (topic.startsWith("orders/")) return "📦 Orden";
+  return topic;
 }
 
 export function StoreSettings({
@@ -152,6 +168,48 @@ export function StoreSettings({
             Último snapshot operativo: {data.lastOpsAt ? new Date(data.lastOpsAt).toLocaleString("es-PE") : "—"} ·
             eventos de webhook recibidos: {data.webhookCount}
           </p>
+        </Card>
+      </Section>
+
+      <Section title="Registro de webhooks recibidos">
+        <Card>
+          <SimpleTable
+            rows={data.webhookEvents}
+            empty="Aún no se han recibido webhooks."
+            columns={[
+              {
+                key: "received_at",
+                header: "Recibido",
+                render: (r) => (
+                  <span className="whitespace-nowrap">{new Date(r.received_at).toLocaleString("es-PE")}</span>
+                ),
+              },
+              { key: "topic", header: "Tipo", render: (r) => webhookTopicLabel(r.topic) },
+              {
+                key: "status",
+                header: "Estado",
+                render: (r) =>
+                  r.error ? (
+                    <span className="text-red-600">✗ error</span>
+                  ) : r.processed ? (
+                    <span className="text-emerald-700">✓ procesado</span>
+                  ) : (
+                    <span className="text-slate-400">⏳ pendiente</span>
+                  ),
+              },
+              {
+                key: "detail",
+                header: "Detalle",
+                render: (r) =>
+                  r.error ? (
+                    <span className="text-xs text-red-600">{r.error}</span>
+                  ) : (
+                    <span className="text-xs text-slate-400">{r.shopify_id ?? "—"}</span>
+                  ),
+              },
+            ]}
+          />
+          <p className="mt-3 text-xs text-slate-400">Últimos 30 eventos · recarga la página para actualizar.</p>
         </Card>
       </Section>
     </div>

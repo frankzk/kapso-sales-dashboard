@@ -59,7 +59,7 @@ export default async function StoreSettingsPage({
   const siteUrl = host ? `${proto}://${host}` : "";
 
   const admin = createAdminSupabase();
-  const [{ data: full }, { data: sync }, { data: ops }, { count }] = await Promise.all([
+  const [{ data: full }, { data: sync }, { data: ops }, { count }, { data: events }] = await Promise.all([
     admin.from("stores").select("*").eq("id", storeId).single(),
     admin
       .from("sync_state")
@@ -74,6 +74,12 @@ export default async function StoreSettingsPage({
       .limit(1)
       .maybeSingle(),
     admin.from("webhook_events").select("*", { count: "exact", head: true }).eq("store_id", storeId),
+    admin
+      .from("webhook_events")
+      .select("id, topic, shopify_id, received_at, processed, error")
+      .eq("store_id", storeId)
+      .order("received_at", { ascending: false })
+      .limit(30),
   ]);
 
   const data: StoreSettingsData = {
@@ -98,6 +104,7 @@ export default async function StoreSettingsPage({
     sync: (sync as StoreSettingsData["sync"]) ?? [],
     lastOpsAt: ops?.captured_at ?? null,
     webhookCount: count ?? 0,
+    webhookEvents: (events as StoreSettingsData["webhookEvents"]) ?? [],
   };
 
   const banner = sp.installed
