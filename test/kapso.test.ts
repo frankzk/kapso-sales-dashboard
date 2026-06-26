@@ -10,6 +10,7 @@ import {
   parseHandoffPayload,
   parseOrderSignals,
   detectYapePayment,
+  extractReferral,
   fetchConversationSignals,
   classifyKapsoEvent,
   type KapsoClientOpts,
@@ -400,5 +401,45 @@ describe("classifyKapsoEvent (webhook routing)", () => {
       message_count: 12,
       last_message_at: "2026-06-20T11:00:00Z",
     });
+  });
+});
+
+describe("extractReferral (Meta ad attribution)", () => {
+  it("reads a structured CTWA referral (real ad_id wins)", () => {
+    const msgs = [
+      { kapso: { direction: "inbound" }, text: { body: "hola" }, referral: { source_type: "ad", source_id: "120800", headline: "✈️ Viaja", ctwa_clid: "clid123" } },
+    ];
+    expect(extractReferral(msgs)).toEqual({
+      source: "meta_ad",
+      ad_id: "120800",
+      ad_headline: "✈️ Viaja",
+      ctwa_clid: "clid123",
+    });
+  });
+
+  it("falls back to a Meta ad link in the customer's opening message (channel, no ad_id)", () => {
+    // The real "Sol" case: ad → site → "tengo una consulta" button, UTM in text.
+    const msgs = [
+      { kapso: { direction: "outbound" }, text: { body: "¡Hola! Soy Akemi de Aurela 😊" } },
+      {
+        kapso: { direction: "inbound" },
+        text: { body: "Tengo una consulta | Aurela https://aurela.pe/products/mochila?utm_content=Facebook_Mobile_Feed" },
+      },
+    ];
+    expect(extractReferral(msgs)).toEqual({ source: "meta_ad", ad_id: null, ad_headline: null, ctwa_clid: null });
+  });
+
+  it("detects fbclid / utm_source=facebook too", () => {
+    expect(extractReferral([{ kapso: { direction: "inbound" }, text: { body: "vi esto https://x.pe/p?fbclid=AbC" } }])?.source).toBe("meta_ad");
+    expect(extractReferral([{ kapso: { direction: "inbound" }, text: { body: "https://x.pe/p?utm_source=facebook&utm_medium=cpc" } }])?.source).toBe("meta_ad");
+  });
+
+  it("returns null for an organic message (no referral, no Meta link)", () => {
+    expect(extractReferral([{ kapso: { direction: "inbound" }, text: { body: "hola, tienen la mochila negra?" } }])).toBeNull();
+  });
+
+  it("ignores a Meta link the BOT sent (outbound) — only customer messages attribute", () => {
+    const msgs = [{ kapso: { direction: "outbound" }, text: { body: "míralo aquí https://aurela.pe/p?utm_source=facebook" } }];
+    expect(extractReferral(msgs)).toBeNull();
   });
 });

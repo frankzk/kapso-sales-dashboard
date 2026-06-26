@@ -13,12 +13,15 @@ import {
 } from "@/lib/kapso";
 import { deriveAutoState, nextLeadState } from "@/lib/leads";
 import { DRAFT_GRACE_MINUTES, extractNumericId, isCodFormDraft } from "@/lib/shopify";
-import { COD_CART_SOURCE, type DraftOrderRow, type OrderLineItem } from "@/lib/types";
+import { COD_CART_SOURCE, WHATSAPP_BOT_SOURCE, type DraftOrderRow, type OrderLineItem } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // Per-run cap on lead enrichment message fetches (one Kapso message page each).
 const LEAD_ENRICH_CAP = 80;
+// Per-run cap on source-attributing WON leads (the open/hot enrichment skips
+// them). Bounded so a one-time backfill spreads over a few runs.
+const WON_ATTR_CAP = 60;
 
 export interface LeadEnrichStats {
   candidates: number; // open/hot leads we tried to enrich this run
@@ -165,6 +168,11 @@ export async function syncStoreLeads(
     } catch {
       /* best-effort */
     }
+    try {
+      await attributeWonLeadSources(admin, storeId, k);
+    } catch {
+      /* best-effort — backfill won-lead sources even on a quiet run */
+    }
     await setCursor(admin, storeId, cursor, "ok");
     return { touched: 0, enriched };
   }
@@ -219,9 +227,61 @@ export async function syncStoreLeads(
   } catch {
     /* enrichment is best-effort — never blocks the lead sync */
   }
+  try {
+    await attributeWonLeadSources(admin, storeId, k);
+  } catch {
+    /* source backfill is best-effort — never blocks the lead sync */
+  }
 
   await setCursor(admin, storeId, maxTs, "ok");
   return { touched: phones.length, enriched };
+}
+
+/**
+ * Source-attribute WON leads that the open/hot enrichment skips (`category in
+ * (open,hot)` there). A lead that converts before its CTWA referral is captured
+ * would otherwise stay unattributed forever. For each WON lead still missing a
+ * `source`, read its conversation: a Meta ad referral (structured OR a Meta ad
+ * link in the opening message) → `meta_ad`; anything else → the bot/organic
+ * sentinel so it's marked checked and not re-fetched. Bounded per run, ordered
+ * newest-first, so it both backfills history and catches fast-closed leads.
+ */
+async function attributeWonLeadSources(
+  admin: SupabaseClient,
+  storeId: string,
+  k: KapsoClientOpts,
+): Promise<number> {
+  const { data } = await admin
+    .from("leads")
+    .select("kapso_conversation_id")
+    .eq("store_id", storeId)
+    .eq("category", "won")
+    .is("source", null)
+    .not("kapso_conversation_id", "is", null)
+    .order("updated_at", { ascending: false })
+    .limit(WON_ATTR_CAP);
+  const convIds = [...new Set(((data as { kapso_conversation_id: string }[]) ?? []).map((l) => l.kapso_conversation_id))];
+  let n = 0;
+  for (const convId of convIds) {
+    const sig = await fetchConversationSignals(k, convId);
+    if (!sig) continue; // couldn't read the conversation — retry next run
+    const patch = sig.referral
+      ? {
+          source: sig.referral.source,
+          ad_id: sig.referral.ad_id,
+          ad_headline: sig.referral.ad_headline,
+          ctwa_clid: sig.referral.ctwa_clid,
+        }
+      : { source: WHATSAPP_BOT_SOURCE }; // checked, no ad signal → organic sentinel
+    await admin
+      .from("leads")
+      .update(patch)
+      .eq("store_id", storeId)
+      .eq("kapso_conversation_id", convId)
+      .is("source", null);
+    n++;
+  }
+  return n;
 }
 
 /**
