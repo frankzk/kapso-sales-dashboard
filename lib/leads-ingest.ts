@@ -12,7 +12,7 @@ import {
   type LeadSeed,
 } from "@/lib/kapso";
 import { deriveAutoState, nextLeadState } from "@/lib/leads";
-import { extractNumericId, isCodFormDraft } from "@/lib/shopify";
+import { DRAFT_GRACE_MINUTES, extractNumericId, isCodFormDraft } from "@/lib/shopify";
 import { COD_CART_SOURCE, type DraftOrderRow, type OrderLineItem } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -507,12 +507,17 @@ export async function linkDraftOrdersToLeads(
     for (const l of (data as { phone: string }[]) ?? []) exists.add(l.phone);
   }
 
+  const graceMs = DRAFT_GRACE_MINUTES * 60_000;
   for (const d of eligible) {
     if (d.status === "completed") {
-      await linkCompletedDraftToLead(admin, storeId, d);
-    } else {
-      await upsertDraftCartLead(admin, storeId, d, exists.has(d.customer_phone as string));
+      await linkCompletedDraftToLead(admin, storeId, d); // a finished sale → won now
+      continue;
     }
+    // OPEN/INVOICE_SENT: hold a brand-new cart for the grace period so we don't
+    // call someone who's still checking out. Once it ages past the grace, the next
+    // sync (which re-scans the whole window) surfaces it as a callable lead.
+    if (d.created_at && Date.now() - new Date(d.created_at).getTime() < graceMs) continue;
+    await upsertDraftCartLead(admin, storeId, d, exists.has(d.customer_phone as string));
   }
 }
 

@@ -418,18 +418,18 @@ export async function runStoreSync(
   }
 
   // 1b) Shopify draft orders (Releasit COD carts → "Con carrito" leads).
-  //     Own try/catch + cursor: a missing read_draft_orders scope just records
-  //     an error here and never breaks the orders/Kapso/leads sync.
+  //     Re-scan the whole DRAFT_OPEN_WINDOW_DAYS window EVERY run (not incremental):
+  //     a cart created fresh is held back by the grace period in
+  //     linkDraftOrdersToLeads, and re-scanning is what promotes it to a lead once
+  //     it ages past the grace. The window is small (a couple of days) so a full
+  //     rescan is cheap. Own try/catch: a missing read_draft_orders scope just
+  //     records an error here and never breaks the orders/Kapso/leads sync.
   if (creds.shopify_token) {
     try {
-      const cursor = await getSyncCursor(admin, storeId, "shopify_drafts");
-      // OPEN carts: floor the cursor to the last DRAFT_OPEN_WINDOW_DAYS so a
-      // backlog of dead drafts doesn't flood "Por llamar". COMPLETED: full cursor.
       const floor = new Date(Date.now() - DRAFT_OPEN_WINDOW_DAYS * 86_400_000).toISOString();
-      const openFrom = cursor && cursor > floor ? cursor : floor;
-      let maxUpdatedAt = cursor;
+      let maxUpdatedAt: string | null = null;
       for (const status of ["open", "completed"] as const) {
-        const searchQuery = buildDraftOrdersSearchQuery(status, status === "open" ? openFrom : cursor);
+        const searchQuery = buildDraftOrdersSearchQuery(status, floor);
         let after: string | null = null;
         for (let i = 0; i < 50; i++) {
           const page = await fetchDraftOrdersPage({

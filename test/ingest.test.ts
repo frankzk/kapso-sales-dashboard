@@ -370,4 +370,17 @@ describe("linkDraftOrdersToLeads precedence", () => {
     expect(row.status).toBeUndefined(); // manual disposition preserved
     expect(row.source).toBeUndefined();
   });
+
+  it("holds a brand-new open cart within the grace period (no lead yet)", async () => {
+    const { linkDraftOrdersToLeads } = await import("@/lib/leads-ingest");
+    const { mapRestDraftOrder } = await import("@/lib/shopify");
+    const fake = new FakeSupabase(makeStoreRow());
+    const fresh = JSON.parse(DRAFT_OPEN_BODY);
+    const recent = new Date(Date.now() - 5 * 60 * 1000).toISOString(); // 5 min ago
+    fresh.created_at = recent;
+    fresh.updated_at = recent;
+    const draft = mapRestDraftOrder(fresh, "store-1");
+    await linkDraftOrdersToLeads(fake as any, "store-1", [draft]);
+    expect(fake.upsertedLeads).toHaveLength(0); // too fresh — waits for the grace period
+  });
 });
