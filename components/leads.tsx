@@ -633,7 +633,11 @@ export function LeadsBoard({
                 options={[
                   { key: "all", label: "Todos", count: gestTotal },
                   ...LEAD_GESTIONES.map((g) => ({ key: g.key, label: g.label, count: gestCounts[g.key] })),
-                  ...(gestOtros > 0 ? [{ key: "otros", label: "Otros", count: gestOtros }] : []),
+                  // Mantener el chip "Otros" mientras sea el filtro activo aunque su
+                  // count caiga a 0, para que siga deseleccionable (no quede huérfano).
+                  ...(gestOtros > 0 || gestFilter === "otros"
+                    ? [{ key: "otros", label: "Otros", count: gestOtros }]
+                    : []),
                 ]}
               />
             )}
@@ -678,7 +682,11 @@ export function LeadsBoard({
                       count: waCounts.get(id) ?? 0,
                     };
                   }),
-                  ...(numOtros > 0 ? [{ key: "__none__", label: "Sin número", count: numOtros }] : []),
+                  // Igual que "Otros": el chip "Sin número" persiste mientras sea el
+                  // filtro activo aunque su count sea 0, para poder deseleccionarlo.
+                  ...(numOtros > 0 || numFilter === "__none__"
+                    ? [{ key: "__none__", label: "Sin número", count: numOtros }]
+                    : []),
                 ]}
               />
             )}
