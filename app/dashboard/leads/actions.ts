@@ -776,17 +776,38 @@ export async function generateOrder(
   const isCart = !!l.draft_order_gid;
   let draftGid = l.draft_order_gid;
 
+  // Build+run the draft (create for a new sale, update for a cart). withPhone=false
+  // is the retry path when Shopify rejects the phone ("Phone is invalid") — a bad
+  // phone must never block the sale; the lead keeps the number anyway.
+  const runDraft = async (withPhone: boolean): Promise<string> => {
+    const addr = { ...address, phone: withPhone ? phone : null };
+    const ph = withPhone ? phone : null;
+    if (isCart && l.draft_order_gid) {
+      await updateDraftOrder({
+        ...sclient,
+        gid: l.draft_order_gid,
+        input: { lineItems: lineItemsInput, address: addr, phone: ph, note: input.note ?? null },
+      });
+      return l.draft_order_gid;
+    }
+    const created = await createDraftOrder({
+      ...sclient,
+      input: { lineItems: lineItemsInput, address: addr, phone: ph, note: input.note ?? null, tags: ["venta_manual"] },
+    });
+    return created.gid;
+  };
+
   // 1) Create/update the draft, then complete it (COD ⇒ payment pending).
   let completed: Awaited<ReturnType<typeof completeDraftOrder>>;
   try {
-    if (isCart && draftGid) {
-      await updateDraftOrder({ ...sclient, gid: draftGid, input: { lineItems: lineItemsInput, address, phone, note: input.note ?? null } });
-    } else {
-      const created = await createDraftOrder({
-        ...sclient,
-        input: { lineItems: lineItemsInput, address, phone, note: input.note ?? null, tags: ["venta_manual"] },
-      });
-      draftGid = created.gid;
+    try {
+      draftGid = await runDraft(true);
+    } catch (e: any) {
+      if (/phone/i.test(String(e?.message ?? e))) {
+        draftGid = await runDraft(false); // bad phone → generate the order without it
+      } else {
+        throw e;
+      }
     }
     completed = await completeDraftOrder({ ...sclient, draftGid: draftGid!, paymentPending: true });
   } catch (e: any) {
