@@ -537,9 +537,17 @@ export async function fetchOrdersPage(
 // Draft-order fetch (read_draft_orders) + complete (write_draft_orders)
 // ---------------------------------------------------------------------------
 
-/** Only ingest OPEN carts touched within this window — keeps a backlog of dead
- *  drafts from flooding the "Por llamar" queue. The caller floors the cursor. */
-export const DRAFT_OPEN_WINDOW_DAYS = 30;
+/** Only ingest carts updated within this window — keeps a backlog of dead drafts
+ *  out of the queue. The draft sync re-scans this whole window every run (cheap,
+ *  since it's a couple of days), which is also what promotes a cart to a lead
+ *  once it ages past the grace period below. */
+export const DRAFT_OPEN_WINDOW_DAYS = 2;
+
+/** Grace period before a brand-new abandoned cart becomes a callable lead — gives
+ *  the customer time to finish checkout on their own (if they do, the draft is
+ *  completed and lands as won instead of a call task). Applied to OPEN/INVOICE_SENT
+ *  drafts only; a completed cart is surfaced immediately. */
+export const DRAFT_GRACE_MINUTES = 60;
 
 export function buildDraftOrdersQuery(withPhone: boolean): string {
   // Draft/shipping phone is "protected customer data" — requested only on the
