@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAccessibleStores, getUserRoleSummary, parseRange } from "@/lib/access";
-import { getAdvisorProductivity } from "@/lib/productivity";
+import { getAdvisorProductivityCompare } from "@/lib/productivity";
 import { ProductivityBoard } from "@/components/productivity";
 import { EmptyState } from "@/components/ui";
 
@@ -31,11 +31,19 @@ export default async function ProductividadPage({
   // Infer active hours by each store's local day; mixed tz → Lima (the business default).
   const tz = stores.every((s) => s.timezone === first.timezone) ? first.timezone : "America/Lima";
 
-  const rows = await getAdvisorProductivity(scopeIds, range, source, tz);
+  const { rows, prevTotals, prevRange, hasPrev } = await getAdvisorProductivityCompare(
+    scopeIds,
+    range,
+    source,
+    tz,
+  );
 
   return (
     <ProductivityBoard
       rows={rows}
+      prevTotals={prevTotals}
+      prevRange={prevRange}
+      hasPrev={hasPrev}
       range={range}
       currency={currency}
       stores={stores}

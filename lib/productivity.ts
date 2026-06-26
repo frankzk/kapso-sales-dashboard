@@ -5,7 +5,7 @@
 
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
-import type { DateRange } from "@/lib/access";
+import { previousRange, type DateRange } from "@/lib/access";
 
 export interface AdvisorStat {
   userId: string;
@@ -227,6 +227,88 @@ export async function getAdvisorProductivity(
 
   const emailById = await resolveEmails([...new Set(scopedCalls.map((c) => c.vendedora))]);
   return computeAdvisorStats({ calls: scopedCalls, leadOutcome, emailById }, tz);
+}
+
+// ───────────────────────── Comparativo vs período anterior ─────────────────────
+
+export interface ProductivityTotals {
+  llamadas: number;
+  leadsTrabajados: number;
+  cerrados: number;
+  ingresos: number;
+}
+
+export interface AdvisorDelta {
+  llamadas: number; // current − previous (absolute)
+  cerrados: number;
+  ingresos: number;
+  conversionPP: number; // change in % cierre, in percentage POINTS
+  isNew: boolean; // no activity in the previous period (no baseline)
+}
+
+export interface AdvisorStatWithDelta extends AdvisorStat {
+  delta: AdvisorDelta;
+}
+
+export interface ProductivityComparison {
+  rows: AdvisorStatWithDelta[];
+  prevTotals: ProductivityTotals; // team totals of the previous period (for arrows)
+  prevRange: DateRange;
+  hasPrev: boolean; // the previous period had any advisor activity (a baseline exists)
+}
+
+function sumTotals(rows: AdvisorStat[]): ProductivityTotals {
+  return rows.reduce(
+    (a, r) => ({
+      llamadas: a.llamadas + r.llamadas,
+      leadsTrabajados: a.leadsTrabajados + r.leadsTrabajados,
+      cerrados: a.cerrados + r.cerrados,
+      ingresos: Math.round((a.ingresos + r.ingresos) * 100) / 100,
+    }),
+    { llamadas: 0, leadsTrabajados: 0, cerrados: 0, ingresos: 0 },
+  );
+}
+
+/** Per-advisor productivity for `range` plus deltas vs the equally-sized period
+ *  immediately before it. Only current-active advisors are listed (the board
+ *  shows who's working now); `prevTotals` captures team-level movement including
+ *  advisors who dropped to zero. */
+export async function getAdvisorProductivityCompare(
+  storeIds: string[],
+  range: DateRange,
+  source: "meta_ad" | "cod_cart" | "organic" | null = null,
+  tz = "America/Lima",
+): Promise<ProductivityComparison> {
+  const prevRange = previousRange(range);
+  const [cur, prev] = await Promise.all([
+    getAdvisorProductivity(storeIds, range, source, tz),
+    getAdvisorProductivity(storeIds, prevRange, source, tz),
+  ]);
+  const { rows, prevTotals } = attachDeltas(cur, prev);
+  return { rows, prevTotals, prevRange, hasPrev: prev.length > 0 };
+}
+
+/** Pure: attach per-advisor deltas (current − previous) and roll up the previous
+ *  team totals. Advisors absent from `prev` are flagged `isNew` (no baseline). */
+export function attachDeltas(
+  cur: AdvisorStat[],
+  prev: AdvisorStat[],
+): { rows: AdvisorStatWithDelta[]; prevTotals: ProductivityTotals } {
+  const prevById = new Map(prev.map((r) => [r.userId, r]));
+  const rows: AdvisorStatWithDelta[] = cur.map((r) => {
+    const p = prevById.get(r.userId);
+    return {
+      ...r,
+      delta: {
+        llamadas: r.llamadas - (p?.llamadas ?? 0),
+        cerrados: r.cerrados - (p?.cerrados ?? 0),
+        ingresos: Math.round((r.ingresos - (p?.ingresos ?? 0)) * 100) / 100,
+        conversionPP: Math.round((r.conversion - (p?.conversion ?? 0)) * 1000) / 10,
+        isNew: !p,
+      },
+    };
+  });
+  return { rows, prevTotals: sumTotals(prev) };
 }
 
 // ───────────────────────── Drill-down: leads an advisor worked ─────────────────

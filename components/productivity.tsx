@@ -3,12 +3,25 @@ import { Card, Section, StatCard, cn } from "@/components/ui";
 import { ProductivityTable } from "@/components/productivity-table";
 import type { DateRange } from "@/lib/access";
 import type { StoreSummary } from "@/lib/types";
-import type { AdvisorStat } from "@/lib/productivity";
+import type { AdvisorStatWithDelta, ProductivityTotals } from "@/lib/productivity";
 
 type SourceFilter = "meta_ad" | "cod_cart" | "organic" | null;
 
 function money(n: number, currency: string): string {
   return new Intl.NumberFormat("es-PE", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
+}
+
+/** Signed % change current vs previous; null when there's no base (prev = 0). */
+function pctDelta(cur: number, prev: number): number | null {
+  if (prev === 0) return cur === 0 ? 0 : null;
+  return Math.round(((cur - prev) / prev) * 1000) / 10;
+}
+
+function shortDate(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString("es-PE", { day: "2-digit", month: "short", timeZone: "UTC" });
 }
 
 function buildHref(opts: { from: string; to: string; store: string | null; src: string | null }): string {
@@ -43,13 +56,19 @@ function Chip({ href, label, active }: { href: string; label: string; active: bo
 
 export function ProductivityBoard({
   rows,
+  prevTotals,
+  prevRange,
+  hasPrev,
   range,
   currency,
   stores,
   storeId,
   source,
 }: {
-  rows: AdvisorStat[];
+  rows: AdvisorStatWithDelta[];
+  prevTotals: ProductivityTotals;
+  prevRange: DateRange;
+  hasPrev: boolean;
   range: DateRange;
   currency: string;
   stores: StoreSummary[];
@@ -133,20 +152,41 @@ export function ProductivityBoard({
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="Llamadas" value={String(totals.llamadas)} />
-        <StatCard label="Leads trabajados" value={String(totals.leads)} />
-        <StatCard label="Pedidos cerrados" value={String(totals.cerrados)} />
-        <StatCard label="Ingresos atribuidos" value={money(totals.ingresos, currency)} />
+        <StatCard
+          label="Llamadas"
+          value={String(totals.llamadas)}
+          delta={hasPrev ? pctDelta(totals.llamadas, prevTotals.llamadas) : undefined}
+        />
+        <StatCard
+          label="Leads trabajados"
+          value={String(totals.leads)}
+          delta={hasPrev ? pctDelta(totals.leads, prevTotals.leadsTrabajados) : undefined}
+        />
+        <StatCard
+          label="Pedidos cerrados"
+          value={String(totals.cerrados)}
+          delta={hasPrev ? pctDelta(totals.cerrados, prevTotals.cerrados) : undefined}
+        />
+        <StatCard
+          label="Ingresos atribuidos"
+          value={money(totals.ingresos, currency)}
+          delta={hasPrev ? pctDelta(totals.ingresos, prevTotals.ingresos) : undefined}
+        />
       </div>
 
       <Section
         title="Desempeño por asesora"
-        subtitle="El pedido se acredita a la última asesora que registró una llamada sobre ese lead en el período. Las horas se estiman a partir de la actividad registrada."
+        subtitle={
+          hasPrev
+            ? `El pedido se acredita a la última asesora que registró una llamada sobre ese lead. Flechas = cambio vs el período anterior (${shortDate(prevRange.from)} → ${shortDate(prevRange.to)}).`
+            : "El pedido se acredita a la última asesora que registró una llamada sobre ese lead en el período. Las horas se estiman a partir de la actividad registrada."
+        }
       >
         <Card>
           <ProductivityTable
             rows={rows}
             currency={currency}
+            hasPrev={hasPrev}
             ctx={{ from: range.from, to: range.to, store: storeId, source }}
           />
         </Card>

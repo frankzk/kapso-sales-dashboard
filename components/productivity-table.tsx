@@ -4,7 +4,7 @@ import { Fragment, useState } from "react";
 import { cn } from "@/components/ui";
 import { categoryOf, labelOf } from "@/lib/leads";
 import { loadAgentLeads } from "@/app/dashboard/productividad/actions";
-import type { AdvisorStat, AgentLeadRow } from "@/lib/productivity";
+import type { AdvisorStatWithDelta, AgentLeadRow } from "@/lib/productivity";
 
 function money(n: number, currency: string): string {
   return new Intl.NumberFormat("es-PE", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
@@ -12,6 +12,18 @@ function money(n: number, currency: string): string {
 
 function pct(x: number): string {
   return `${Math.round(x * 100)}%`;
+}
+
+/** Tiny ↑/↓ change vs the previous period, rendered after a metric value. */
+function DeltaInline({ value, fmt }: { value: number; fmt: (n: number) => string }) {
+  if (value === 0) return <span className="ml-1 align-middle text-[11px] text-slate-300">→</span>;
+  const up = value > 0;
+  return (
+    <span className={cn("ml-1 align-middle text-[11px] font-medium", up ? "text-emerald-600" : "text-rose-500")}>
+      {up ? "↑" : "↓"}
+      {fmt(Math.abs(value))}
+    </span>
+  );
 }
 
 /** Show the name part of the email (before @) as a friendlier label. */
@@ -103,10 +115,12 @@ function AgentLeads({ state, currency }: { state: LoadState; currency: string })
 export function ProductivityTable({
   rows,
   currency,
+  hasPrev,
   ctx,
 }: {
-  rows: AdvisorStat[];
+  rows: AdvisorStatWithDelta[];
   currency: string;
+  hasPrev: boolean;
   ctx: DrillContext;
 }) {
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -148,6 +162,7 @@ export function ProductivityTable({
         <tbody>
           {rows.map((r) => {
             const open = expanded === r.userId;
+            const showDelta = hasPrev && !r.delta.isNew; // hide arrows when there's no baseline
             return (
               <Fragment key={r.userId}>
                 <tr
@@ -162,16 +177,30 @@ export function ProductivityTable({
                       {open ? "▾" : "▸"}
                     </span>
                     <span className="font-medium text-slate-800">{advisorName(r.email)}</span>
+                    {hasPrev && r.delta.isNew && (
+                      <span className="ml-2 rounded bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-600">
+                        nuevo
+                      </span>
+                    )}
                   </td>
                   <td className="py-2.5 text-right text-slate-700">{r.llamadas}</td>
                   <td className="py-2.5 text-right text-slate-700">{r.leadsTrabajados}</td>
-                  <td className="py-2.5 text-right text-slate-700">{r.cerrados}</td>
-                  <td className="py-2.5 text-right text-slate-700">{pct(r.conversion)}</td>
+                  <td className="py-2.5 text-right text-slate-700">
+                    {r.cerrados}
+                    {showDelta && <DeltaInline value={r.delta.cerrados} fmt={(n) => String(n)} />}
+                  </td>
+                  <td className="py-2.5 text-right text-slate-700">
+                    {pct(r.conversion)}
+                    {showDelta && <DeltaInline value={r.delta.conversionPP} fmt={(n) => `${n}pp`} />}
+                  </td>
                   <td className="py-2.5 text-right">
                     <span className="text-slate-700">{r.horas}h</span>
                     {r.dias > 0 && <span className="ml-1 text-xs text-slate-400">· {r.dias}d</span>}
                   </td>
-                  <td className="py-2.5 text-right font-semibold text-emerald-700">{money(r.ingresos, currency)}</td>
+                  <td className="py-2.5 text-right font-semibold text-emerald-700">
+                    {money(r.ingresos, currency)}
+                    {showDelta && <DeltaInline value={r.delta.ingresos} fmt={(n) => money(n, currency)} />}
+                  </td>
                 </tr>
                 {open && (
                   <tr>
