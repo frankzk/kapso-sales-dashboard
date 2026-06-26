@@ -441,42 +441,72 @@ export function LeadsBoard({
     if (leadId) void releaseLead(leadId);
   }
 
-  const campaignCount = leads.filter((l) => l.source === "meta_ad").length;
-  const organicCount = leads.length - campaignCount;
-  const hasCampaign = campaignCount > 0;
   const now = Date.now();
-  const segCounts = countLeadSegments(leads);
-  const gestCounts = countGestiones(leads);
-  const winCounts = countLeadWindows(leads, now);
-  // WhatsApp numbers present in this view (to split the queue by number).
-  const waCounts = new Map<string, number>();
-  for (const l of leads) {
-    if (l.wa_phone_number_id) waCounts.set(l.wa_phone_number_id, (waCounts.get(l.wa_phone_number_id) ?? 0) + 1);
-  }
-  const waIds = [...waCounts.keys()];
-  const hasMultiNumbers = waIds.length >= 2;
   const q = query.trim().toLowerCase();
   const qDigits = q.replace(/\D/g, "");
-  const shownLeads = leads.filter((l) => {
-    if (q) {
-      const name = (l.name ?? "").toLowerCase();
-      const phoneDigits = (l.phone ?? "").replace(/\D/g, "");
-      if (!(name.includes(q) || (qDigits.length > 0 && phoneDigits.includes(qDigits)))) return false;
-    }
-    if (srcFilter !== "all" && (l.source === "meta_ad" ? "meta_ad" : "organic") !== srcFilter) return false;
-    if (numFilter && l.wa_phone_number_id !== numFilter) return false;
-    if (view === "por_llamar") {
-      if (segFilter && leadSegment(l) !== segFilter) return false;
-      if (gestFilter && gestionOf(l.status) !== gestFilter) return false;
-      if (winFilter !== "all") {
-        const { state } = leadWindowInfo(l.last_inbound_at ?? l.last_interaction_at, now);
-        if (winFilter === "fresca" && state !== "fresca") return false;
-        if (winFilter === "por_vencer" && !(state === "por_vencer" || state === "critica")) return false;
-        if (winFilter === "cerrada" && state !== "cerrada") return false;
-      }
-    }
-    return true;
-  });
+  const inQueue = view === "por_llamar";
+
+  // Jerarquía de filtros (faceted counts): los contadores de cada grupo se
+  // calculan sobre los leads que pasan TODOS los demás filtros activos, pero NO
+  // el propio. Así, al elegir "Con carrito" (18), Gestión/Ventana/Fuente/Número
+  // muestran su "Todos" = 18 y sus sub-botones suman ese subconjunto, mientras
+  // que cada grupo conserva sus opciones para poder cambiar dentro de él.
+  const matchQuery = (l: LeadRow) => {
+    if (!q) return true;
+    const name = (l.name ?? "").toLowerCase();
+    const phoneDigits = (l.phone ?? "").replace(/\D/g, "");
+    return name.includes(q) || (qDigits.length > 0 && phoneDigits.includes(qDigits));
+  };
+  const matchSrc = (l: LeadRow) =>
+    srcFilter === "all" || (l.source === "meta_ad" ? "meta_ad" : "organic") === srcFilter;
+  const matchNum = (l: LeadRow) => !numFilter || l.wa_phone_number_id === numFilter;
+  const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadSegment(l) === segFilter;
+  const matchGest = (l: LeadRow) => !inQueue || !gestFilter || gestionOf(l.status) === gestFilter;
+  const matchWin = (l: LeadRow) => {
+    if (!inQueue || winFilter === "all") return true;
+    const { state } = leadWindowInfo(l.last_inbound_at ?? l.last_interaction_at, now);
+    if (winFilter === "fresca") return state === "fresca";
+    if (winFilter === "por_vencer") return state === "por_vencer" || state === "critica";
+    return state === "cerrada";
+  };
+  const FACETS = { query: matchQuery, src: matchSrc, num: matchNum, seg: matchSeg, gest: matchGest, win: matchWin };
+  type Facet = keyof typeof FACETS;
+  const facetKeys = Object.keys(FACETS) as Facet[];
+  // Leads que pasan todos los filtros activos salvo el indicado: la base sobre
+  // la que un grupo cuenta sus badges (un grupo nunca se filtra a sí mismo).
+  const leadsExcept = (skip: Facet) => leads.filter((l) => facetKeys.every((k) => k === skip || FACETS[k](l)));
+
+  const srcBase = leadsExcept("src");
+  const campaignCount = srcBase.filter((l) => l.source === "meta_ad").length;
+  const organicCount = srcBase.length - campaignCount;
+  const srcTotal = srcBase.length;
+  const hasCampaign = leads.some((l) => l.source === "meta_ad");
+
+  const segBase = leadsExcept("seg");
+  const segCounts = countLeadSegments(segBase);
+  const segTotal = segBase.length;
+
+  const gestBase = leadsExcept("gest");
+  const gestCounts = countGestiones(gestBase);
+  const gestTotal = gestBase.length;
+
+  const winBase = leadsExcept("win");
+  const winCounts = countLeadWindows(winBase, now);
+  const winTotal = winBase.length;
+
+  // WhatsApp numbers present in this view (to split the queue by number). The
+  // chip list comes from the full view so picking a number never hides the
+  // others; the counts come from the faceted base.
+  const numBase = leadsExcept("num");
+  const numTotal = numBase.length;
+  const waCounts = new Map<string, number>();
+  for (const l of numBase) {
+    if (l.wa_phone_number_id) waCounts.set(l.wa_phone_number_id, (waCounts.get(l.wa_phone_number_id) ?? 0) + 1);
+  }
+  const waIds = [...new Set(leads.map((l) => l.wa_phone_number_id).filter((id): id is string => !!id))];
+  const hasMultiNumbers = waIds.length >= 2;
+
+  const shownLeads = leads.filter((l) => facetKeys.every((k) => FACETS[k](l)));
   // In search mode show the global results (all stages); otherwise the filtered
   // view (already narrowed client-side by the query for instant feedback).
   const searchMode = results !== null;
@@ -515,7 +545,7 @@ export function LeadsBoard({
                 );
             }}
             options={[
-              { key: "all", label: "Todos", count: view === "por_llamar" ? counts.por_llamar : undefined },
+              { key: "all", label: "Todos", count: view === "por_llamar" ? segTotal : undefined },
               ...(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((s) => ({
                 key: s,
                 label: SEG_LABEL[s],
@@ -570,7 +600,7 @@ export function LeadsBoard({
                 value={gestFilter ?? "all"}
                 onChange={(key) => setGestFilter(key === "all" ? null : (key as LeadGestion))}
                 options={[
-                  { key: "all", label: "Todos", count: counts.por_llamar },
+                  { key: "all", label: "Todos", count: gestTotal },
                   ...LEAD_GESTIONES.map((g) => ({ key: g.key, label: g.label, count: gestCounts[g.key] })),
                 ]}
               />
@@ -581,7 +611,7 @@ export function LeadsBoard({
                 value={winFilter}
                 onChange={(key) => setWinFilter(key as "all" | "fresca" | "por_vencer" | "cerrada")}
                 options={[
-                  { key: "all", label: "Todos" },
+                  { key: "all", label: "Todos", count: winTotal },
                   { key: "fresca", label: "🟢 A tiempo", count: winCounts.a_tiempo },
                   { key: "por_vencer", label: "⏳ Por vencer", count: winCounts.por_vencer },
                   { key: "cerrada", label: "⚫ Vencido", count: winCounts.cerrada },
@@ -594,7 +624,7 @@ export function LeadsBoard({
                 value={srcFilter}
                 onChange={(key) => setSrcFilter(key as "all" | "meta_ad" | "organic")}
                 options={[
-                  { key: "all", label: "Todas" },
+                  { key: "all", label: "Todas", count: srcTotal },
                   { key: "meta_ad", label: "📣 Campaña", count: campaignCount },
                   { key: "organic", label: "Orgánico", count: organicCount },
                 ]}
@@ -606,7 +636,7 @@ export function LeadsBoard({
                 value={numFilter ?? "all"}
                 onChange={(key) => setNumFilter(key === "all" ? null : key)}
                 options={[
-                  { key: "all", label: "Todos" },
+                  { key: "all", label: "Todos", count: numTotal },
                   ...waIds.map((id) => {
                     const n = waNumbers?.[id];
                     const kind = waKindLabel(n?.kind ?? null);
