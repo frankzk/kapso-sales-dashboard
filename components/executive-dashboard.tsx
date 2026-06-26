@@ -12,6 +12,7 @@ import {
   businessBreakdown,
   campaignBreakdown,
   campaignDailyTrend,
+  cartRecovery,
   comparePeriods,
   conversationalFunnel,
   dateHourPattern,
@@ -26,10 +27,11 @@ import {
   rollupSeries,
   sourceBreakdown,
   topProducts,
+  type CartRecoveryStats,
 } from "@/lib/metrics";
 import type { AdMeta } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
-import { BarList, Card, EmptyState, SimpleTable, cn, type BarItem } from "@/components/ui";
+import { BarList, Card, EmptyState, SimpleTable, StatCard, cn, type BarItem } from "@/components/ui";
 import { CampaignTable } from "@/components/campaign-table";
 import { CampaignTrendChart, ConversionOrdersTrend, RevenueOrdersChart } from "@/components/charts";
 import { DashboardControls } from "@/components/controls";
@@ -52,6 +54,40 @@ import type { ReactNode } from "react";
 function pctDelta(cur: number, prev: number): number | null {
   if (prev === 0) return cur === 0 ? 0 : null;
   return Math.round(((cur - prev) / prev) * 10000) / 100;
+}
+
+/** Stacked composition bar for cart outcomes: recuperados / por trabajar / perdidos. */
+function CartRecoveryBar({ stats }: { stats: CartRecoveryStats }) {
+  const total = Math.max(1, stats.total);
+  const seg = [
+    { label: "Recuperados", n: stats.recuperados, cls: "bg-emerald-500" },
+    { label: "Por trabajar", n: stats.pendientes, cls: "bg-amber-400" },
+    { label: "Perdidos", n: stats.perdidos, cls: "bg-slate-300" },
+  ];
+  return (
+    <div className="space-y-1.5">
+      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+        {seg
+          .filter((s) => s.n > 0)
+          .map((s) => (
+            <div
+              key={s.label}
+              className={s.cls}
+              style={{ width: `${(s.n / total) * 100}%` }}
+              title={`${s.label}: ${s.n}`}
+            />
+          ))}
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+        {seg.map((s) => (
+          <span key={s.label} className="inline-flex items-center gap-1.5">
+            <span className={cn("inline-block h-2 w-2 rounded-full", s.cls)} />
+            {s.label} <span className="font-medium text-slate-700">{s.n}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 interface OpsPayload {
@@ -170,6 +206,7 @@ export function ExecutiveDashboard({
   const lostRev = lostRevenueByReason(loss, totals.aov);
   const channels = botVsAdvisor(leadList);
   const sourceStats = sourceBreakdown(leadList, orders);
+  const cartStats = cartRecovery(leadList, orders);
   const campaignStats = campaignBreakdown(leadList, orders, adNames ?? {});
   const campaignTrend = campaignDailyTrend(leadList, adNames ?? {}, timezone);
   const waStats = leadsByWaNumber(leadList, orders);
@@ -326,6 +363,48 @@ export function ExecutiveDashboard({
                 },
               ]}
             />
+          </Module>
+        </div>
+      )}
+
+      {/* Row 2b-bis — Recuperación de carritos abandonados. Hidden until carts exist. */}
+      {cartStats && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          <Module
+            title="🛒 Recuperación de carritos"
+            subtitle="Carritos abandonados (formulario COD / borradores de Shopify) que se convirtieron en pedido real"
+            info
+            className="lg:col-span-12"
+          >
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <StatCard
+                  label="Carritos del período"
+                  value={String(cartStats.total)}
+                  sub={`${cartStats.pendientes} por trabajar`}
+                />
+                <StatCard
+                  label="Recuperados"
+                  value={`${cartStats.recuperados} · ${formatPct(cartStats.tasaRecuperacion)}`}
+                  sub="se volvieron pedido"
+                />
+                <StatCard
+                  label="Ingresos recuperados"
+                  value={formatCurrency(cartStats.ingresosRecuperados, currency)}
+                  sub={
+                    cartStats.recuperados
+                      ? `ticket prom. ${formatCurrency(cartStats.ticketPromedio, currency)}`
+                      : undefined
+                  }
+                />
+                <StatCard
+                  label="Valor en riesgo"
+                  value={formatCurrency(cartStats.valorEnRiesgo, currency)}
+                  sub="carritos abiertos sin cerrar"
+                />
+              </div>
+              <CartRecoveryBar stats={cartStats} />
+            </div>
           </Module>
         </div>
       )}
