@@ -36,6 +36,30 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
     expect(u2.email).toBe("gaby@aurela.pe");
   });
 
+  it("infers active hours by local day, splitting blocks on idle gaps >45min", () => {
+    const calls: AdvisorCall[] = [
+      // Day 1 (Lima 2026-06-20): one block 09:00→10:00 = 1h
+      { vendedora: "u1", lead_id: "L1", kind: "call", occurred_at: "2026-06-20T14:00:00Z" },
+      { vendedora: "u1", lead_id: "L1", kind: "call", occurred_at: "2026-06-20T14:30:00Z" },
+      { vendedora: "u1", lead_id: "L2", kind: "call", occurred_at: "2026-06-20T15:00:00Z" },
+      // …then a 2h idle gap → new block 12:00→12:30 = 0.5h
+      { vendedora: "u1", lead_id: "L2", kind: "call", occurred_at: "2026-06-20T17:00:00Z" },
+      { vendedora: "u1", lead_id: "L3", kind: "call", occurred_at: "2026-06-20T17:30:00Z" },
+      // Day 2 (Lima 2026-06-21): a single action → 0h but still a worked day
+      { vendedora: "u1", lead_id: "L4", kind: "call", occurred_at: "2026-06-21T15:00:00Z" },
+    ];
+    const leadOutcome = new Map([
+      ["L1", { won: false, net: 0 }],
+      ["L2", { won: false, net: 0 }],
+      ["L3", { won: false, net: 0 }],
+      ["L4", { won: false, net: 0 }],
+    ]);
+    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const u1 = rows.find((r) => r.userId === "u1")!;
+    expect(u1.horas).toBeCloseTo(1.5); // 1h + 0.5h; the day-2 singleton adds 0
+    expect(u1.dias).toBe(2);
+  });
+
   it("sorts by revenue desc and ignores calls without a vendedora", () => {
     const calls: AdvisorCall[] = [
       { vendedora: "u1", lead_id: "L1", kind: "call", occurred_at: "2026-06-20T10:00:00Z" },

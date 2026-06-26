@@ -1,20 +1,14 @@
 import Link from "next/link";
-import { Card, Section, SimpleTable, StatCard, cn, type Column } from "@/components/ui";
+import { Card, Section, StatCard, cn } from "@/components/ui";
+import { ProductivityTable } from "@/components/productivity-table";
 import type { DateRange } from "@/lib/access";
 import type { StoreSummary } from "@/lib/types";
 import type { AdvisorStat } from "@/lib/productivity";
 
+type SourceFilter = "meta_ad" | "cod_cart" | "organic" | null;
+
 function money(n: number, currency: string): string {
   return new Intl.NumberFormat("es-PE", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
-}
-
-function pct(x: number): string {
-  return `${Math.round(x * 100)}%`;
-}
-
-/** Show the name part of the email (before @) as a friendlier label. */
-function advisorName(email: string): string {
-  return email.includes("@") ? email.split("@")[0]! : email;
 }
 
 function buildHref(opts: { from: string; to: string; store: string | null; src: string | null }): string {
@@ -60,7 +54,7 @@ export function ProductivityBoard({
   currency: string;
   stores: StoreSummary[];
   storeId: string | null;
-  source: string | null;
+  source: SourceFilter;
 }) {
   const totals = rows.reduce(
     (a, r) => ({
@@ -71,25 +65,6 @@ export function ProductivityBoard({
     }),
     { llamadas: 0, leads: 0, cerrados: 0, ingresos: 0 },
   );
-
-  const columns: Column<AdvisorStat>[] = [
-    {
-      key: "email",
-      header: "Asesora",
-      align: "left",
-      render: (r) => <span className="font-medium text-slate-800">{advisorName(r.email)}</span>,
-    },
-    { key: "llamadas", header: "Llamadas", align: "right", render: (r) => r.llamadas },
-    { key: "leads", header: "Leads", align: "right", render: (r) => r.leadsTrabajados },
-    { key: "cerrados", header: "Cerrados", align: "right", render: (r) => r.cerrados },
-    { key: "conv", header: "% cierre", align: "right", render: (r) => pct(r.conversion) },
-    {
-      key: "ingresos",
-      header: "Ingresos",
-      align: "right",
-      render: (r) => <span className="font-semibold text-emerald-700">{money(r.ingresos, currency)}</span>,
-    },
-  ];
 
   return (
     <div className="space-y-6">
@@ -146,6 +121,11 @@ export function ProductivityBoard({
           active={source === "meta_ad"}
         />
         <Chip
+          href={buildHref({ from: range.from, to: range.to, store: storeId, src: "cod_cart" })}
+          label="🛒 Carrito"
+          active={source === "cod_cart"}
+        />
+        <Chip
           href={buildHref({ from: range.from, to: range.to, store: storeId, src: "organic" })}
           label="Orgánico"
           active={source === "organic"}
@@ -161,10 +141,14 @@ export function ProductivityBoard({
 
       <Section
         title="Desempeño por asesora"
-        subtitle="El pedido se acredita a la última asesora que registró una llamada sobre ese lead en el período."
+        subtitle="El pedido se acredita a la última asesora que registró una llamada sobre ese lead en el período. Las horas se estiman a partir de la actividad registrada."
       >
         <Card>
-          <SimpleTable columns={columns} rows={rows} empty="Sin actividad de asesoras en este período." />
+          <ProductivityTable
+            rows={rows}
+            currency={currency}
+            ctx={{ from: range.from, to: range.to, store: storeId, source }}
+          />
         </Card>
       </Section>
     </div>

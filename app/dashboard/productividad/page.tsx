@@ -23,11 +23,15 @@ export default async function ProductividadPage({
   const storeIds = stores.map((s) => s.id);
   const storeId = sp.store && stores.some((s) => s.id === sp.store) ? sp.store : null;
   const scopeIds = storeId ? [storeId] : storeIds;
-  const source = sp.src === "meta_ad" || sp.src === "organic" ? sp.src : null;
+  const source =
+    sp.src === "meta_ad" || sp.src === "cod_cart" || sp.src === "organic" ? sp.src : null;
 
-  const rows = await getAdvisorProductivity(scopeIds, range, source);
   const first = stores[0]!;
   const currency = stores.every((s) => s.currency === first.currency) ? first.currency : "PEN";
+  // Infer active hours by each store's local day; mixed tz → Lima (the business default).
+  const tz = stores.every((s) => s.timezone === first.timezone) ? first.timezone : "America/Lima";
+
+  const rows = await getAdvisorProductivity(scopeIds, range, source, tz);
 
   return (
     <ProductivityBoard

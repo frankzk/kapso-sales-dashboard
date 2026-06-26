@@ -121,6 +121,7 @@ export async function syncNow(
     const e = r.enriched;
     const summary =
       `${r.shopifyOrders} órdenes · ${r.draftOrders} carritos · ${r.kapsoConversations} conversaciones · ops ${r.opsCaptured ? "✓" : "—"}` +
+      ` · ${r.whatsappNumbers} números WhatsApp` +
       ` · leads enriquecidos ${e.fetched}/${e.candidates} (🛒${e.cart} 📍${e.district} 💬${e.inbound})`;
     return r.errors.length
       ? { error: `Sync con errores: ${r.errors.join("; ")}`, notice: summary }

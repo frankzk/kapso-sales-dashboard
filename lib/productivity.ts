@@ -4,6 +4,7 @@
 // split from the fetch so it can be unit-tested.
 
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
+import { tzParts } from "@/lib/metrics";
 import type { DateRange } from "@/lib/access";
 
 export interface AdvisorStat {
@@ -14,6 +15,13 @@ export interface AdvisorStat {
   cerrados: number; // touched leads now won, attributed by last touch
   ingresos: number; // net revenue (total - refunded) of those orders
   conversion: number; // cerrados / leadsTrabajados, 0..1
+  horas: number; // active hours inferred from action timestamps (idle-gap-split)
+  dias: number; // distinct days with logged activity
+}
+
+/** Canonical acquisition-source bucket for a lead's `source`. */
+function sourceKey(s: string | null | undefined): "meta_ad" | "cod_cart" | "organic" {
+  return s === "meta_ad" ? "meta_ad" : s === "cod_cart" ? "cod_cart" : "organic";
 }
 
 export interface AdvisorCall {
@@ -30,10 +38,36 @@ export interface ProductivityInput {
   emailById: Map<string, string>;
 }
 
-/** Aggregate advisor activity + last-touch-attributed wins. Pure. */
-export function computeAdvisorStats({ calls, leadOutcome, emailById }: ProductivityInput): AdvisorStat[] {
+const ACTIVE_GAP_MS = 45 * 60 * 1000; // a gap >45 min splits work blocks (lunch/break)
+
+/** Active hours from sorted action timestamps (ms), summing blocks split on idle
+ *  gaps. A lone action contributes ~0 (can't infer a span from one point). */
+function activeHoursFromTimes(sorted: number[]): number {
+  if (sorted.length < 2) return 0;
+  let total = 0;
+  let blockStart = sorted[0]!;
+  let prev = sorted[0]!;
+  for (let i = 1; i < sorted.length; i++) {
+    const t = sorted[i]!;
+    if (t - prev > ACTIVE_GAP_MS) {
+      total += prev - blockStart;
+      blockStart = t;
+    }
+    prev = t;
+  }
+  total += prev - blockStart;
+  return total / 3_600_000;
+}
+
+/** Aggregate advisor activity + last-touch-attributed wins + inferred active
+ *  hours (from the spread of their action timestamps, by local day). Pure. */
+export function computeAdvisorStats(
+  { calls, leadOutcome, emailById }: ProductivityInput,
+  tz = "America/Lima",
+): AdvisorStat[] {
   const agg = new Map<string, { llamadas: number; leads: Set<string> }>();
   const lastCaller = new Map<string, { vendedora: string; at: string }>();
+  const timesByAgentDay = new Map<string, number[]>(); // `${agent}|${localDate}` → ms[]
 
   for (const c of calls) {
     if (!c.vendedora) continue;
@@ -44,6 +78,26 @@ export function computeAdvisorStats({ calls, leadOutcome, emailById }: Productiv
 
     const prev = lastCaller.get(c.lead_id);
     if (!prev || c.occurred_at > prev.at) lastCaller.set(c.lead_id, { vendedora: c.vendedora, at: c.occurred_at });
+
+    const ms = new Date(c.occurred_at).getTime();
+    if (Number.isFinite(ms)) {
+      const k = `${c.vendedora}|${tzParts(c.occurred_at, tz).date}`;
+      const arr = timesByAgentDay.get(k) ?? [];
+      arr.push(ms);
+      timesByAgentDay.set(k, arr);
+    }
+  }
+
+  const hoursByAgent = new Map<string, { horas: number; dias: Set<string> }>();
+  for (const [k, times] of timesByAgentDay) {
+    const sep = k.indexOf("|");
+    const agent = k.slice(0, sep);
+    const day = k.slice(sep + 1);
+    times.sort((x, y) => x - y);
+    const e = hoursByAgent.get(agent) ?? { horas: 0, dias: new Set<string>() };
+    e.horas += activeHoursFromTimes(times);
+    e.dias.add(day);
+    hoursByAgent.set(agent, e);
   }
 
   const won = new Map<string, { cerrados: number; ingresos: number }>();
@@ -59,6 +113,7 @@ export function computeAdvisorStats({ calls, leadOutcome, emailById }: Productiv
   const rows: AdvisorStat[] = [];
   for (const [userId, a] of agg) {
     const w = won.get(userId) ?? { cerrados: 0, ingresos: 0 };
+    const h = hoursByAgent.get(userId);
     const leadsTrabajados = a.leads.size;
     rows.push({
       userId,
@@ -68,6 +123,8 @@ export function computeAdvisorStats({ calls, leadOutcome, emailById }: Productiv
       cerrados: w.cerrados,
       ingresos: w.ingresos,
       conversion: leadsTrabajados ? w.cerrados / leadsTrabajados : 0,
+      horas: Math.round((h?.horas ?? 0) * 10) / 10,
+      dias: h?.dias.size ?? 0,
     });
   }
   rows.sort((x, y) => y.ingresos - x.ingresos || y.cerrados - x.cerrados || y.llamadas - x.llamadas);
@@ -106,7 +163,8 @@ async function resolveEmails(userIds: string[]): Promise<Map<string, string>> {
 export async function getAdvisorProductivity(
   storeIds: string[],
   range: DateRange,
-  source: "meta_ad" | "organic" | null = null,
+  source: "meta_ad" | "cod_cart" | "organic" | null = null,
+  tz = "America/Lima",
 ): Promise<AdvisorStat[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
@@ -143,9 +201,7 @@ export async function getAdvisorProductivity(
   // Optional source lens: keep only calls/leads of the chosen acquisition source.
   let scopedCalls = calls;
   if (source) {
-    const allowed = new Set(
-      leadsTouched.filter((l) => (l.source === "meta_ad" ? "meta_ad" : "organic") === source).map((l) => l.id),
-    );
+    const allowed = new Set(leadsTouched.filter((l) => sourceKey(l.source) === source).map((l) => l.id));
     scopedCalls = calls.filter((c) => allowed.has(c.lead_id));
     leadsTouched = leadsTouched.filter((l) => allowed.has(l.id));
     if (!scopedCalls.length) return [];
@@ -170,5 +226,108 @@ export async function getAdvisorProductivity(
   }
 
   const emailById = await resolveEmails([...new Set(scopedCalls.map((c) => c.vendedora))]);
-  return computeAdvisorStats({ calls: scopedCalls, leadOutcome, emailById });
+  return computeAdvisorStats({ calls: scopedCalls, leadOutcome, emailById }, tz);
+}
+
+// ───────────────────────── Drill-down: leads an advisor worked ─────────────────
+
+export interface AgentLeadRow {
+  id: string;
+  name: string | null;
+  phone: string | null;
+  status: string;
+  category: string | null;
+  source: "meta_ad" | "cod_cart" | "organic";
+  won: boolean;
+  net: number; // net revenue if won, else 0
+  llamadas: number; // calls this advisor logged on the lead
+  lastTouch: string; // ISO of this advisor's last action on the lead
+}
+
+/** Leads a single advisor (vendedora) worked in the range, for the drill-down.
+ *  Mirrors `getAdvisorProductivity`'s fetch/scoping but keyed to one vendedora,
+ *  returning one row per touched lead (newest activity first). RLS-scoped. */
+export async function getAgentLeadsWorked(
+  storeIds: string[],
+  range: DateRange,
+  vendedoraId: string,
+  source: "meta_ad" | "cod_cart" | "organic" | null = null,
+): Promise<AgentLeadRow[]> {
+  if (!storeIds.length || !vendedoraId) return [];
+  const sb = await createServerSupabase();
+  const startIso = `${range.from}T00:00:00Z`;
+  const endIso = `${range.to}T23:59:59Z`;
+
+  // 1) This advisor's calls in range.
+  const { data: callsRaw } = await sb
+    .from("lead_calls")
+    .select("vendedora, lead_id, kind, occurred_at")
+    .in("store_id", storeIds)
+    .eq("vendedora", vendedoraId)
+    .gte("occurred_at", startIso)
+    .lte("occurred_at", endIso);
+  const calls = (callsRaw as AdvisorCall[]) ?? [];
+  if (!calls.length) return [];
+
+  const llamadasByLead = new Map<string, number>();
+  const lastTouchByLead = new Map<string, string>();
+  for (const c of calls) {
+    if (c.kind === "call") llamadasByLead.set(c.lead_id, (llamadasByLead.get(c.lead_id) ?? 0) + 1);
+    const prev = lastTouchByLead.get(c.lead_id);
+    if (!prev || c.occurred_at > prev) lastTouchByLead.set(c.lead_id, c.occurred_at);
+  }
+
+  // 2) The touched leads (source selected with a degrade fallback, as elsewhere).
+  const leadIds = [...lastTouchByLead.keys()];
+  type TouchedLead = {
+    id: string;
+    name: string | null;
+    phone: string | null;
+    status: string;
+    category: string | null;
+    has_order: boolean;
+    order_id: string | null;
+    source?: string | null;
+  };
+  let leads: TouchedLead[];
+  {
+    const cols = "id, name, phone, status, category, has_order, order_id, source";
+    const withSource = await sb.from("leads").select(cols).in("id", leadIds);
+    if (withSource.error) {
+      const base = await sb.from("leads").select("id, name, phone, status, category, has_order, order_id").in("id", leadIds);
+      leads = (base.data as unknown as TouchedLead[]) ?? [];
+    } else {
+      leads = (withSource.data as unknown as TouchedLead[]) ?? [];
+    }
+  }
+  if (source) leads = leads.filter((l) => sourceKey(l.source) === source);
+  if (!leads.length) return [];
+
+  // 3) Net revenue per linked order.
+  const orderIds = leads.filter((l) => l.has_order && l.order_id).map((l) => l.order_id as string);
+  const netByOrder = new Map<string, number>();
+  if (orderIds.length) {
+    const { data: ordersRaw } = await sb
+      .from("orders")
+      .select("id, total_amount, total_refunded")
+      .in("id", orderIds);
+    for (const o of (ordersRaw as { id: string; total_amount: number | null; total_refunded: number | null }[]) ?? []) {
+      netByOrder.set(o.id, (o.total_amount ?? 0) - (o.total_refunded ?? 0));
+    }
+  }
+
+  const rows: AgentLeadRow[] = leads.map((l) => ({
+    id: l.id,
+    name: l.name,
+    phone: l.phone,
+    status: l.status,
+    category: l.category,
+    source: sourceKey(l.source),
+    won: !!l.has_order,
+    net: l.order_id ? (netByOrder.get(l.order_id) ?? 0) : 0,
+    llamadas: llamadasByLead.get(l.id) ?? 0,
+    lastTouch: lastTouchByLead.get(l.id) ?? startIso,
+  }));
+  rows.sort((a, b) => (a.lastTouch < b.lastTouch ? 1 : a.lastTouch > b.lastTouch ? -1 : 0));
+  return rows;
 }

@@ -4,6 +4,7 @@
 // Endpoints (confirmed against docs.kapso.ai):
 //   GET /whatsapp/conversations                     — list (cursor pagination)
 //   GET /whatsapp/messages                          — list (cursor pagination)
+//   GET /whatsapp/phone_numbers                     — list connected numbers (page pagination)
 //   GET /whatsapp/phone_numbers/{id}/health         — live number health
 //   GET /api_logs                                   — external API call logs
 //
@@ -218,6 +219,44 @@ export function getPhoneHealth(
     opts,
     `/whatsapp/phone_numbers/${encodeURIComponent(phoneNumberId)}/health`,
   );
+}
+
+/** A connected WhatsApp number as returned by GET /whatsapp/phone_numbers.
+ *  Only the label-relevant fields are typed; the rest are passed through. */
+export interface KapsoPhoneNumber {
+  phone_number_id?: string | null;
+  name?: string | null;
+  verified_name?: string | null;
+  display_name?: string | null;
+  display_phone_number?: string | null;
+  display_phone_number_normalized?: string | null;
+  is_coexistence?: boolean | null;
+  kind?: string | null; // Kapso lifecycle: 'production' | 'sandbox'
+  status?: string | null;
+  [k: string]: any;
+}
+
+interface KapsoNumbersPage {
+  data: KapsoPhoneNumber[];
+  meta?: { page?: number; per_page?: number; total_pages?: number; total_count?: number } | null;
+}
+
+/** List every WhatsApp number connected to the project for this API key (most
+ *  recent first), paging through all pages. Used to auto-populate the
+ *  `whatsapp_numbers` label lookup during sync. */
+export async function listWhatsappNumbers(opts: KapsoClientOpts): Promise<KapsoPhoneNumber[]> {
+  const out: KapsoPhoneNumber[] = [];
+  const maxPages = 20; // safety bound; a project has a handful of numbers
+  for (let page = 1; page <= maxPages; page++) {
+    const res = await kapsoGet<KapsoNumbersPage>(opts, "/whatsapp/phone_numbers", {
+      per_page: 100,
+      page,
+    });
+    out.push(...(res.data ?? []));
+    const totalPages = res.meta?.total_pages ?? 1;
+    if (!res.data?.length || page >= totalPages) break;
+  }
+  return out;
 }
 
 export interface ListApiLogsParams {
