@@ -802,6 +802,14 @@ export interface BuildDraftOrderInput {
   tags?: string[];
 }
 
+/** Format a phone to E.164 (+<digits>) — Shopify rejects bare local numbers with
+ *  "Phone is invalid". Returns null if too short to be a real number. */
+function toE164(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const digits = String(phone).replace(/[^\d]/g, "");
+  return digits.length >= 8 ? `+${digits}` : null;
+}
+
 function toGqlDraftInput(input: BuildDraftOrderInput): Record<string, unknown> {
   const lineItems = input.lineItems
     .filter((li) => (li.variantId || li.title) && li.quantity > 0)
@@ -818,7 +826,8 @@ function toGqlDraftInput(input: BuildDraftOrderInput): Record<string, unknown> {
   if (input.note) gql.note = input.note;
   if (input.tags?.length) gql.tags = input.tags;
   if (input.email) gql.email = input.email;
-  if (input.phone) gql.phone = input.phone;
+  const e164 = toE164(input.phone);
+  if (e164) gql.phone = e164;
   const a = input.address;
   if (a) {
     const parts = (a.name ?? "").trim().split(/\s+/).filter(Boolean);
@@ -828,7 +837,7 @@ function toGqlDraftInput(input: BuildDraftOrderInput): Record<string, unknown> {
       city: a.city ?? null,
       province: a.province ?? null,
       country: a.country ?? "Peru",
-      phone: a.phone ?? input.phone ?? null,
+      phone: toE164(a.phone ?? input.phone),
       firstName: parts[0] ?? (a.name ?? null),
       lastName: parts.length > 1 ? parts.slice(1).join(" ") : null,
     };

@@ -1034,6 +1034,19 @@ type ProductResult = Awaited<ReturnType<typeof searchStoreProducts>>[number];
 
 const rid = () => Math.random().toString(36).slice(2);
 
+const PERU_REGIONS = [
+  "Amazonas", "Áncash", "Apurímac", "Arequipa", "Ayacucho", "Cajamarca", "Callao", "Cusco",
+  "Huancavelica", "Huánuco", "Ica", "Junín", "La Libertad", "Lambayeque", "Lima", "Loreto",
+  "Madre de Dios", "Moquegua", "Pasco", "Piura", "Puno", "San Martín", "Tacna", "Tumbes", "Ucayali",
+];
+/** Map a free-text province (e.g. "Lima (provincia)") to a canonical Peru region. */
+function matchPeruRegion(v: string | null | undefined): string {
+  if (!v) return "";
+  const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const nv = norm(v);
+  return PERU_REGIONS.find((r) => nv.includes(norm(r))) ?? v;
+}
+
 function OrderForm({
   leadId,
   currency,
@@ -1108,7 +1121,7 @@ function OrderFormPanel({
         setPhone(res.phone ?? "");
         setAddress1(res.address1 ?? "");
         setDistrict(res.district ?? "");
-        setProvince(res.province ?? "");
+        setProvince(matchPeruRegion(res.province));
         setReferencia(res.referencia ?? "");
         setWindowOpen(res.windowOpen);
         setSendConfirm(res.windowOpen);
@@ -1284,7 +1297,23 @@ function OrderFormPanel({
           <Field label="Dirección *" value={address1} onChange={setAddress1} disabled={pending} placeholder="Av. / Calle y número" />
           <div className="grid grid-cols-2 gap-2">
             <Field label="Distrito *" value={district} onChange={setDistrict} disabled={pending} placeholder="Distrito de entrega" />
-            <Field label="Provincia / Región" value={province} onChange={setProvince} disabled={pending} placeholder="Lima" />
+            <div>
+              <label className={labelCls}>Provincia / Región</label>
+              <select
+                value={province}
+                onChange={(e) => setProvince(e.currentTarget.value)}
+                className={inputCls}
+                disabled={pending}
+              >
+                <option value="">—</option>
+                {province && !PERU_REGIONS.includes(province) && <option value={province}>{province}</option>}
+                {PERU_REGIONS.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
           <Field label="Referencia" value={referencia} onChange={setReferencia} disabled={pending} placeholder="Frente a…, color de puerta…" />
 
