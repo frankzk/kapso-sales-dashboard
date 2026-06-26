@@ -22,7 +22,9 @@ import {
   getPhoneHealth,
   listAllConversations,
   listApiLogs,
+  listWhatsappNumbers,
   mapKapsoConversation,
+  type KapsoPhoneNumber,
 } from "@/lib/kapso";
 import {
   buildOpsSnapshotPayload,
@@ -84,6 +86,43 @@ export async function getStoreCreds(
     timezone: data.timezone ?? "America/Lima",
     status: data.status ?? "active",
   };
+}
+
+/** Map a Kapso phone-number record → a `whatsapp_numbers` label row. `kind` is
+ *  normalized to our 'api' | 'business' | 'sandbox' vocabulary: a sandbox number
+ *  stays sandbox; a coexistence (Business app) number is 'business'; anything
+ *  else on Cloud API is 'api'. */
+export function mapKapsoNumber(
+  n: KapsoPhoneNumber,
+): { phone_number_id: string; name: string | null; display_phone: string | null; kind: string } | null {
+  const id = n.phone_number_id ? String(n.phone_number_id) : null;
+  if (!id) return null;
+  const kind = n.kind === "sandbox" ? "sandbox" : n.is_coexistence ? "business" : "api";
+  return {
+    phone_number_id: id,
+    name: n.name ?? n.verified_name ?? n.display_name ?? null,
+    display_phone: n.display_phone_number ?? null,
+    kind,
+  };
+}
+
+/** Auto-populate the `whatsapp_numbers` label lookup from Kapso (one upsert per
+ *  number, keyed by phone_number_id). Returns how many were written. Best-effort:
+ *  the caller swallows errors so a label refresh never fails the sync. */
+export async function upsertWhatsappNumbers(
+  admin: SupabaseClient,
+  numbers: KapsoPhoneNumber[],
+): Promise<number> {
+  const rows = numbers.map(mapKapsoNumber).filter((r): r is NonNullable<typeof r> => r !== null);
+  if (!rows.length) return 0;
+  const { error } = await admin
+    .from("whatsapp_numbers")
+    .upsert(
+      rows.map((r) => ({ ...r, fetched_at: new Date().toISOString() })),
+      { onConflict: "phone_number_id" },
+    );
+  if (error) throw new Error(`upsertWhatsappNumbers: ${error.message}`);
+  return rows.length;
 }
 
 export async function upsertOrders(
@@ -357,6 +396,7 @@ export interface SyncReport {
   leads: number;
   enriched: LeadEnrichStats;
   opsCaptured: boolean;
+  whatsappNumbers: number;
   errors: string[];
 }
 
@@ -372,6 +412,7 @@ export async function runStoreSync(
     leads: 0,
     enriched: { candidates: 0, fetched: 0, inbound: 0, cart: 0, district: 0, yape: 0 },
     opsCaptured: false,
+    whatsappNumbers: 0,
     errors: [],
   };
   const creds = await getStoreCreds(storeId, admin);
@@ -562,6 +603,17 @@ export async function runStoreSync(
       report.opsCaptured = true;
     } catch (e: any) {
       report.errors.push(`ops: ${e.message}`);
+    }
+  }
+
+  // 3b) Refresh the WhatsApp number → name lookup from Kapso (best-effort; the
+  //     drawer/queue resolve `phone_number_id` → friendly name through it).
+  if (creds.kapso_api_key) {
+    try {
+      const numbers = await listWhatsappNumbers({ apiKey: creds.kapso_api_key });
+      report.whatsappNumbers = await upsertWhatsappNumbers(admin, numbers);
+    } catch (e: any) {
+      report.errors.push(`wa_numbers: ${e.message}`);
     }
   }
 

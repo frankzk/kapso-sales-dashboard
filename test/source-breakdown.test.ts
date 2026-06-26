@@ -32,6 +32,30 @@ describe("sourceBreakdown (per-source conversion)", () => {
     expect(stats[0]!.key).toBe("meta_ad");
   });
 
+  it("separates abandoned-cart (cod_cart) into its own channel", () => {
+    const cartOrders = [
+      ...orders,
+      { customer_phone: "51933333333", total_amount: 150, total_refunded: 0, cancelled_at: null },
+    ] as unknown as OrderRow[];
+    const cartLeads = [
+      ...leads,
+      { phone: "51933333333", source: "cod_cart", has_order: true }, // recovered cart → won (S/150)
+      { phone: "51944444444", source: "cod_cart", has_order: false }, // abandoned cart → not won
+    ] as unknown as LeadRow[];
+
+    const stats = sourceBreakdown(cartLeads, cartOrders);
+    expect(stats).toHaveLength(3);
+
+    const cart = stats.find((s) => s.key === "cod_cart")!;
+    expect(cart).toMatchObject({ leads: 2, pedidos: 1, ingresos: 150 });
+    expect(cart.conversion).toBeCloseTo(0.5);
+    expect(cart.label).toContain("Carrito");
+
+    // cod_cart must NOT be folded into organic anymore
+    const org = stats.find((s) => s.key === "organic")!;
+    expect(org.leads).toBe(2);
+  });
+
   it("returns [] when no lead has a source yet (module stays hidden)", () => {
     const noSource = [{ phone: "x", source: null, has_order: false }] as unknown as LeadRow[];
     expect(sourceBreakdown(noSource, orders)).toEqual([]);

@@ -663,7 +663,7 @@ export interface LossReasonsResult {
 }
 
 export interface SourceStat {
-  key: string; // 'meta_ad' | 'organic'
+  key: string; // 'meta_ad' | 'cod_cart' | 'organic'
   label: string;
   leads: number;
   pedidos: number; // leads that converted (has_order)
@@ -689,7 +689,8 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
   }
   const buckets = new Map<string, { leads: number; pedidos: number; ingresos: number }>();
   for (const l of leads) {
-    const key = l.source === "meta_ad" ? "meta_ad" : "organic";
+    const key =
+      l.source === "meta_ad" ? "meta_ad" : l.source === "cod_cart" ? "cod_cart" : "organic";
     const b = buckets.get(key) ?? { leads: 0, pedidos: 0, ingresos: 0 };
     b.leads += 1;
     if (l.has_order) {
@@ -698,7 +699,11 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
     }
     buckets.set(key, b);
   }
-  const labels: Record<string, string> = { meta_ad: "Meta Ads (campañas)", organic: "Orgánico" };
+  const labels: Record<string, string> = {
+    meta_ad: "Meta Ads (campañas)",
+    cod_cart: "🛒 Carrito abandonado",
+    organic: "Orgánico",
+  };
   return [...buckets.entries()]
     .map(([key, b]) => ({
       key,
