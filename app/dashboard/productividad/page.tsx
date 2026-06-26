@@ -24,7 +24,9 @@ export default async function ProductividadPage({
   const storeId = sp.store && stores.some((s) => s.id === sp.store) ? sp.store : null;
   const scopeIds = storeId ? [storeId] : storeIds;
   const source =
-    sp.src === "meta_ad" || sp.src === "cod_cart" || sp.src === "organic" ? sp.src : null;
+    sp.src === "meta_ad" || sp.src === "cod_cart" || sp.src === "abandoned_browse" || sp.src === "organic"
+      ? sp.src
+      : null;
 
   const first = stores[0]!;
   const currency = stores.every((s) => s.currency === first.currency) ? first.currency : "PEN";

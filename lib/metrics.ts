@@ -690,7 +690,13 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
   const buckets = new Map<string, { leads: number; pedidos: number; ingresos: number }>();
   for (const l of leads) {
     const key =
-      l.source === "meta_ad" ? "meta_ad" : l.source === "cod_cart" ? "cod_cart" : "organic";
+      l.source === "meta_ad"
+        ? "meta_ad"
+        : l.source === "cod_cart"
+          ? "cod_cart"
+          : l.source === "abandoned_browse"
+            ? "abandoned_browse"
+            : "organic";
     const b = buckets.get(key) ?? { leads: 0, pedidos: 0, ingresos: 0 };
     b.leads += 1;
     if (l.has_order) {
@@ -702,6 +708,7 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
   const labels: Record<string, string> = {
     meta_ad: "Meta Ads (campañas)",
     cod_cart: "🛒 Carrito abandonado",
+    abandoned_browse: "🔎 Búsqueda abandonada",
     organic: "Orgánico",
   };
   return [...buckets.entries()]

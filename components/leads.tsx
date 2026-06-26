@@ -48,6 +48,17 @@ const inputCls =
   "mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
 const labelCls = "block text-sm font-medium text-slate-700";
 
+/** Canonical acquisition-source bucket for a lead's `source` (Fuente filter). */
+function leadSourceKey(s: string | null | undefined): "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" {
+  return s === "meta_ad"
+    ? "meta_ad"
+    : s === "cod_cart"
+      ? "cod_cart"
+      : s === "abandoned_browse"
+        ? "abandoned_browse"
+        : "organic";
+}
+
 const CATEGORY_BADGE: Record<LeadCategory, string> = {
   won: "border-emerald-200 bg-emerald-50 text-emerald-700",
   hot: "border-red-200 bg-red-50 text-red-700",
@@ -349,7 +360,9 @@ export function LeadsBoard({
   const [history, setHistory] = useState<CustomerHistory | null>(null); // recurrent-customer block
   // Client-side sub-filters (instant, no navigation): source lens + the queue's
   // intención/gestión axes within "Por llamar".
-  const [srcFilter, setSrcFilter] = useState<"all" | "meta_ad" | "organic">("all");
+  const [srcFilter, setSrcFilter] = useState<
+    "all" | "meta_ad" | "cod_cart" | "abandoned_browse" | "organic"
+  >("all");
   const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
   const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
@@ -457,8 +470,7 @@ export function LeadsBoard({
     const phoneDigits = (l.phone ?? "").replace(/\D/g, "");
     return name.includes(q) || (qDigits.length > 0 && phoneDigits.includes(qDigits));
   };
-  const matchSrc = (l: LeadRow) =>
-    srcFilter === "all" || (l.source === "meta_ad" ? "meta_ad" : "organic") === srcFilter;
+  const matchSrc = (l: LeadRow) => srcFilter === "all" || leadSourceKey(l.source) === srcFilter;
   const matchNum = (l: LeadRow) =>
     !numFilter || (numFilter === "__none__" ? !l.wa_phone_number_id : l.wa_phone_number_id === numFilter);
   const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadSegment(l) === segFilter;
@@ -482,10 +494,12 @@ export function LeadsBoard({
   const leadsExcept = (skip: Facet) => leads.filter((l) => facetKeys.every((k) => k === skip || FACETS[k](l)));
 
   const srcBase = leadsExcept("src");
-  const campaignCount = srcBase.filter((l) => l.source === "meta_ad").length;
-  const organicCount = srcBase.length - campaignCount;
+  const srcCounts = { meta_ad: 0, cod_cart: 0, abandoned_browse: 0, organic: 0 };
+  for (const l of srcBase) srcCounts[leadSourceKey(l.source)] += 1;
   const srcTotal = srcBase.length;
   const hasCampaign = leads.some((l) => l.source === "meta_ad");
+  const hasCart = leads.some((l) => l.source === "cod_cart");
+  const hasBrowse = leads.some((l) => l.source === "abandoned_browse");
 
   const segBase = leadsExcept("seg");
   const segCounts = countLeadSegments(segBase);
@@ -654,15 +668,19 @@ export function LeadsBoard({
                 ]}
               />
             )}
-            {hasCampaign && (
+            {(hasCampaign || hasCart || hasBrowse) && (
               <SegControl
                 label="Fuente"
                 value={srcFilter}
-                onChange={(key) => setSrcFilter(key as "all" | "meta_ad" | "organic")}
+                onChange={(key) => setSrcFilter(key as typeof srcFilter)}
                 options={[
                   { key: "all", label: "Todas", count: srcTotal },
-                  { key: "meta_ad", label: "📣 Campaña", count: campaignCount },
-                  { key: "organic", label: "Orgánico", count: organicCount },
+                  ...(hasCampaign ? [{ key: "meta_ad", label: "📣 Campaña", count: srcCounts.meta_ad }] : []),
+                  ...(hasCart ? [{ key: "cod_cart", label: "🛒 Carrito", count: srcCounts.cod_cart }] : []),
+                  ...(hasBrowse
+                    ? [{ key: "abandoned_browse", label: "🔎 Búsqueda", count: srcCounts.abandoned_browse }]
+                    : []),
+                  { key: "organic", label: "Orgánico", count: srcCounts.organic },
                 ]}
               />
             )}
@@ -754,6 +772,14 @@ export function LeadsBoard({
                               title="Carrito abandonado del formulario COD (sin WhatsApp)"
                             >
                               🛒 Carrito
+                            </span>
+                          )}
+                          {lead.source === "abandoned_browse" && (
+                            <span
+                              className="whitespace-nowrap rounded bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-700"
+                              title="Búsqueda abandonada: vio un producto en la tienda y se fue (sin WhatsApp)"
+                            >
+                              🔎 Búsqueda
                             </span>
                           )}
                           {hasMultiNumbers && lead.wa_phone_number_id && (
@@ -883,6 +909,9 @@ function LeadDrawer({
               <p className="truncate text-base font-semibold text-slate-900">{lead.name || lead.phone}</p>
               {lead.source === "cod_cart" && (
                 <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-700">🛒</span>
+              )}
+              {lead.source === "abandoned_browse" && (
+                <span className="shrink-0 rounded bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-700">🔎</span>
               )}
               {lead.source === "meta_ad" && (
                 <span className="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-700">📣</span>

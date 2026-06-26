@@ -4,6 +4,7 @@ import { encrypt, generateEncryptionKey } from "@/lib/crypto";
 
 const KEY = generateEncryptionKey();
 const WEBHOOK_SECRET = "shpss_store_secret";
+const FLOW_SECRET = "flow_recoverops_secret";
 
 beforeAll(() => {
   process.env.ENCRYPTION_KEY = KEY;
@@ -134,6 +135,18 @@ class FakeSupabase {
       this.upsertedLeads.push(...rows);
       return { data: null, error: null };
     }
+    if (b.table === "leads" && b.op === "insert") {
+      // Model the unique (store_id, phone): a clash → 23505 (→ "exists" no-op).
+      const rows = Array.isArray(b.payload) ? b.payload : [b.payload];
+      for (const r of rows) {
+        if (this.existingLeadPhones.has(r.phone)) {
+          return { data: null, error: { code: "23505", message: "duplicate phone" } };
+        }
+      }
+      this.upsertedLeads.push(...rows);
+      for (const r of rows) if (r.phone) this.existingLeadPhones.add(r.phone);
+      return { data: null, error: null };
+    }
     return { data: null, error: null };
   }
 }
@@ -148,6 +161,7 @@ function makeStoreRow(): Row {
     shopify_webhook_secret_enc: encrypt(WEBHOOK_SECRET, KEY),
     kapso_project_id: null,
     kapso_api_key_enc: null,
+    flow_webhook_secret_enc: encrypt(FLOW_SECRET, KEY),
     whatsapp_phone_number_id: null,
     currency: "PEN",
     timezone: "America/Lima",
@@ -383,5 +397,115 @@ describe("linkDraftOrdersToLeads precedence", () => {
     const draft = mapRestDraftOrder(fresh, "store-1");
     await linkDraftOrdersToLeads(fake as any, "store-1", [draft]);
     expect(fake.upsertedLeads).toHaveLength(0); // too fresh — waits for the grace period
+  });
+});
+
+const BROWSE_BODY = JSON.stringify({
+  source: "abandoned_browse",
+  sourceLabel: "Búsqueda",
+  event: "customer_left_online_store",
+  sentAt: "2026-06-26T15:00:00Z",
+  shop: { domain: "kenkuperu.myshopify.com" },
+  abandonment: { id: "gid://shopify/Abandonment/abc123" },
+  customer: {
+    name: "Sol",
+    email: "sol@example.com",
+    phone: "+51 953 249 192",
+    defaultAddress: { city: "Aplao", province: "Arequipa", address1: "Calle 8" },
+  },
+  productsAddedToCart: [],
+  productsViewed: [{ productTitle: "TravelersBackpack™", variantTitle: "Negro", quantity: 1 }],
+});
+
+describe("browseLeadSeed (abandoned-browse payload → lead fields)", () => {
+  it("normalizes phone, summarizes the viewed product, and maps the address → district", async () => {
+    const { browseLeadSeed } = await import("@/lib/leads-ingest");
+    const seed = browseLeadSeed(JSON.parse(BROWSE_BODY))!;
+    expect(seed.phone).toBe("51953249192");
+    expect(seed.name).toBe("Sol");
+    expect(seed.cart_summary).toContain("TravelersBackpack");
+    expect(seed.cart_item_count).toBeNull(); // only viewed → NOT a cart → "frío"/"distrito"
+    expect(seed.district).toBe("Aplao");
+    expect(seed.province).toBe("Arequipa");
+  });
+
+  it("treats productsAddedToCart as a cart (cart_item_count set → 'Con carrito')", async () => {
+    const { browseLeadSeed } = await import("@/lib/leads-ingest");
+    const body = JSON.parse(BROWSE_BODY);
+    body.productsAddedToCart = [{ productTitle: "Mochila", quantity: 2 }];
+    const seed = browseLeadSeed(body)!;
+    expect(seed.cart_item_count).toBe(2);
+    expect(seed.cart_summary).toContain("Mochila");
+  });
+
+  it("returns null when there's no usable phone (anonymous browse can't be a lead)", async () => {
+    const { browseLeadSeed } = await import("@/lib/leads-ingest");
+    const body = JSON.parse(BROWSE_BODY);
+    body.customer.phone = null;
+    expect(browseLeadSeed(body)).toBeNull();
+  });
+});
+
+describe("processFlowWebhook · abandoned browse", () => {
+  it("creates a browse lead for a new phone", async () => {
+    const { processFlowWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const res = await processFlowWebhook(
+      { storeId: "store-1", secretHeader: FLOW_SECRET, rawBody: BROWSE_BODY },
+      fake as any,
+    );
+    expect(res.status).toBe("ok");
+    expect(fake.upsertedLeads).toHaveLength(1);
+    expect(fake.upsertedLeads[0]).toMatchObject({
+      phone: "51953249192",
+      source: "abandoned_browse",
+      status: "nuevo",
+      category: "open",
+      district: "Aplao",
+    });
+  });
+
+  it("does NOT create a lead when the phone already has one (lowest precedence)", async () => {
+    const { processFlowWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.existingLeadPhones.add("51953249192"); // an existing WhatsApp/cart/ad lead
+    const res = await processFlowWebhook(
+      { storeId: "store-1", secretHeader: FLOW_SECRET, rawBody: BROWSE_BODY },
+      fake as any,
+    );
+    expect(res.status).toBe("ok");
+    expect(fake.upsertedLeads).toHaveLength(0); // never downgrades an existing lead
+  });
+
+  it("rejects a wrong secret (unauthorized, no writes)", async () => {
+    const { processFlowWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const res = await processFlowWebhook(
+      { storeId: "store-1", secretHeader: "wrong-secret", rawBody: BROWSE_BODY },
+      fake as any,
+    );
+    expect(res.status).toBe("unauthorized");
+    expect(fake.upsertedLeads).toHaveLength(0);
+  });
+
+  it("is idempotent on the abandonment id (re-delivery → duplicate)", async () => {
+    const { processFlowWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const p = { storeId: "store-1", secretHeader: FLOW_SECRET, rawBody: BROWSE_BODY };
+    expect((await processFlowWebhook(p, fake as any)).status).toBe("ok");
+    expect((await processFlowWebhook(p, fake as any)).status).toBe("duplicate");
+    expect(fake.upsertedLeads).toHaveLength(1);
+  });
+
+  it("ignores an unknown Flow source (ok, no lead)", async () => {
+    const { processFlowWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const body = JSON.stringify({ source: "something_else", abandonment: { id: "zzz" } });
+    const res = await processFlowWebhook(
+      { storeId: "store-1", secretHeader: FLOW_SECRET, rawBody: body },
+      fake as any,
+    );
+    expect(res.status).toBe("ok");
+    expect(fake.upsertedLeads).toHaveLength(0);
   });
 });

@@ -27,7 +27,7 @@ export interface StoreSettingsData {
     whatsapp_phone_number_id: string | null;
     kapso_project_id: string | null;
   };
-  has: { shopifyToken: boolean; webhookSecret: boolean; kapsoKey: boolean };
+  has: { shopifyToken: boolean; webhookSecret: boolean; kapsoKey: boolean; flowSecret: boolean };
   oauthAvailable: boolean;
   siteUrl: string;
   sync: Array<{
@@ -272,6 +272,7 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
           <SecretField name="shopify_token" label="Shopify Admin API token" set={data.has.shopifyToken} />
           <SecretField name="shopify_webhook_secret" label="Shopify API secret (HMAC)" set={data.has.webhookSecret} />
           <SecretField name="kapso_api_key" label="Kapso API key" set={data.has.kapsoKey} />
+          <SecretField name="flow_webhook_secret" label="Secreto webhook de Shopify Flow (búsquedas)" set={data.has.flowSecret} />
         </fieldset>
 
         <div className="flex items-center gap-3">

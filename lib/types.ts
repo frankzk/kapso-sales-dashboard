@@ -26,6 +26,11 @@ export const WHATSAPP_BOT_SOURCE = "whatsapp-bot";
  *  form) with no prior WhatsApp conversation — a pure-web abandoned cart. */
 export const COD_CART_SOURCE = "cod_cart";
 
+/** `leads.source` for a lead created from an abandoned BROWSE (Shopify Flow
+ *  "customer left online store"): an identified visitor who only viewed a
+ *  product page — no cart, no WhatsApp chat. Weakest-intent web source. */
+export const BROWSE_SOURCE = "abandoned_browse";
+
 export interface OrderLineItem {
   title: string;
   quantity: number;

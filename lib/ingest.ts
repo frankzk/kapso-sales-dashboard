@@ -2,7 +2,7 @@
 // All writes go through the service-role admin client (RLS-bypassing) and are
 // idempotent. Per-store tokens are decrypted here, on demand, server-side only.
 
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { decryptOrNull } from "@/lib/crypto";
@@ -36,6 +36,7 @@ import {
   linkDraftOrdersToLeads,
   linkOrderToLead,
   linkOrdersToLeads,
+  processBrowseAbandonment,
   syncStoreLeads,
   type LeadEnrichStats,
 } from "@/lib/leads-ingest";
@@ -55,6 +56,7 @@ export interface StoreCreds {
   shopify_webhook_secret: string | null;
   kapso_project_id: string | null;
   kapso_api_key: string | null;
+  flow_webhook_secret: string | null;
   whatsapp_phone_number_id: string | null;
   currency: string;
   timezone: string;
@@ -81,6 +83,7 @@ export async function getStoreCreds(
     shopify_webhook_secret: decryptOrNull(data.shopify_webhook_secret_enc),
     kapso_project_id: data.kapso_project_id ?? null,
     kapso_api_key: decryptOrNull(data.kapso_api_key_enc),
+    flow_webhook_secret: decryptOrNull(data.flow_webhook_secret_enc),
     whatsapp_phone_number_id: data.whatsapp_phone_number_id ?? null,
     currency: data.currency ?? "PEN",
     timezone: data.timezone ?? "America/Lima",
@@ -258,6 +261,50 @@ export async function processShopifyWebhook(
   return params.topic.startsWith("draft_orders/")
     ? processDraftOrderWebhook(admin, creds, params, payload, webhookId)
     : processOrderWebhook(admin, creds, params, payload, webhookId);
+}
+
+export interface FlowWebhookParams {
+  storeId: string;
+  secretHeader: string | null;
+  rawBody: string;
+}
+
+/** Constant-time compare of the X-RecoverOps-Secret header vs the store secret. */
+function verifyFlowSecret(provided: string | null | undefined, expected: string | null): boolean {
+  if (!expected || !provided) return false;
+  const a = Buffer.from(provided, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Authenticate + route an inbound Shopify Flow webhook (shared per-store secret
+ * in the X-RecoverOps-Secret header). Routes by `body.source`; today only
+ * `abandoned_browse` (Búsquedas abandonadas) → processBrowseAbandonment. Unknown
+ * sources are accepted (no Flow retry) and ignored — extensible to more events.
+ */
+export async function processFlowWebhook(
+  params: FlowWebhookParams,
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<WebhookResult> {
+  const creds = await getStoreCreds(params.storeId, admin);
+  if (!creds) return { status: "error", message: "unknown store" };
+  if (!verifyFlowSecret(params.secretHeader, creds.flow_webhook_secret)) {
+    return { status: "unauthorized" };
+  }
+
+  let payload: any;
+  try {
+    payload = JSON.parse(params.rawBody);
+  } catch {
+    return { status: "error", message: "invalid json" };
+  }
+
+  if (String(payload?.source ?? "") === "abandoned_browse") {
+    return processBrowseAbandonment(admin, params.storeId, payload);
+  }
+  return { status: "ok" }; // unknown Flow source — accept + ignore
 }
 
 /** orders/create|updated → upsert the kapso order, recompute the day, link won. */
