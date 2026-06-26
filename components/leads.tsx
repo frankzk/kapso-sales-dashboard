@@ -943,8 +943,8 @@ function LeadDrawer({
         </div>
 
         <div className="space-y-4 px-5 py-4">
-          {/* Contexto: carrito + entrega (lo que miras antes de llamar/cerrar) */}
-          {(lead.cart_item_count || lead.district || lead.draft_order_gid) && (
+          {/* Contexto: carrito/producto visto + entrega (lo que miras antes de llamar/cerrar) */}
+          {(lead.cart_item_count || lead.district || lead.draft_order_gid || lead.cart_summary) && (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">
               {lead.draft_order_gid && (
                 <p className="mb-1 text-xs font-semibold tracking-wide uppercase text-emerald-700/80">
@@ -957,6 +957,10 @@ function LeadDrawer({
                   🛒 <span className="font-medium">Carrito:</span>{" "}
                   {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
                   {lead.cart_value != null ? ` · ${currency} ${Number(lead.cart_value).toFixed(2)}` : ""}
+                </p>
+              ) : lead.cart_summary ? (
+                <p>
+                  🔎 <span className="font-medium">Vio:</span> {lead.cart_summary}
                 </p>
               ) : null}
               {(lead.district || lead.referencia) && (
