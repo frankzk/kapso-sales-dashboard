@@ -996,3 +996,7 @@ alter table leads
   add column if not exists province           text,
   add column if not exists region             text,
   add column if not exists referencia         text;
+
+-- ---- 0014 ----
+-- per-store secret for the Shopify Flow webhook (abandoned-browse source).
+alter table stores add column if not exists flow_webhook_secret_enc text;

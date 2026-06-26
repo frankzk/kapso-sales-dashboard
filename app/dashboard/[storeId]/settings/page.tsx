@@ -91,6 +91,7 @@ export default async function StoreSettingsPage({
       shopifyToken: Boolean(full.shopify_token_enc),
       webhookSecret: Boolean(full.shopify_webhook_secret_enc),
       kapsoKey: Boolean(full.kapso_api_key_enc),
+      flowSecret: Boolean(full.flow_webhook_secret_enc),
     },
     oauthAvailable: env.shopifyOAuthConfigured(),
     siteUrl,

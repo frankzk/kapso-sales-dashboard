@@ -1,6 +1,7 @@
 // Lead ingestion: build/maintain leads from Kapso conversations, link them to
 // Shopify orders, and apply bot handoffs (Yape/hot). Service-role only.
 
+import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   conversationToLeadSeed,
@@ -12,8 +13,15 @@ import {
   type LeadSeed,
 } from "@/lib/kapso";
 import { deriveAutoState, nextLeadState } from "@/lib/leads";
+import { normalizePhone } from "@/lib/phone";
 import { DRAFT_GRACE_MINUTES, extractNumericId, isCodFormDraft } from "@/lib/shopify";
-import { COD_CART_SOURCE, WHATSAPP_BOT_SOURCE, type DraftOrderRow, type OrderLineItem } from "@/lib/types";
+import {
+  BROWSE_SOURCE,
+  COD_CART_SOURCE,
+  WHATSAPP_BOT_SOURCE,
+  type DraftOrderRow,
+  type OrderLineItem,
+} from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -509,6 +517,143 @@ async function upsertDraftCartLead(
     if (seen) row.last_interaction_at = seen;
   }
   await upsertLeadResilient(admin, row);
+}
+
+// ───────────────────── Búsquedas abandonadas (Shopify Flow) ─────────────────
+// Web-only source: an identified visitor who viewed a product page and left
+// (Shopify Flow "customer left online store"). No cart, no chat — the weakest
+// intent. Mirrors the cod_cart web-only lead, but NEVER overwrites an existing
+// lead (lowest precedence): a plain insert + unique(store_id,phone) guarantees
+// we only CREATE, never downgrade a WhatsApp/cart/campaign lead.
+
+export interface BrowseLeadSeed {
+  phone: string;
+  name: string | null;
+  email: string | null;
+  cart_summary: string | null; // product(s) viewed/added, for advisor context
+  cart_item_count: number | null; // only when products were actually added → "carrito"
+  district: string | null; // from customer.defaultAddress, if the Flow sends it
+  province: string | null;
+  referencia: string | null;
+  first_seen_at: string | null;
+  last_interaction_at: string | null;
+}
+
+function flowStr(v: any): string | null {
+  if (v == null) return null;
+  const t = String(v).trim();
+  return t || null;
+}
+
+function browseProductSummary(items: any[]): string | null {
+  const titles = (Array.isArray(items) ? items : [])
+    .map((it) => flowStr(it?.productTitle))
+    .filter((t): t is string => !!t);
+  if (!titles.length) return null;
+  return titles.slice(0, 3).join(", ") + (titles.length > 3 ? ` +${titles.length - 3}` : "");
+}
+
+/** Map a Shopify Flow `abandoned_browse` payload → lead fields. Returns null when
+ *  there's no usable phone (an anonymous browse can't be a callable lead). Pure.
+ *  Classification falls out of the fields: products added → cart_item_count ⇒
+ *  "carrito"; a district ⇒ "distrito"; otherwise "frío" (product still shown). */
+export function browseLeadSeed(body: any): BrowseLeadSeed | null {
+  const rawPhone = body?.customer?.phone ?? body?.customer?.defaultPhoneNumber?.phoneNumber ?? null;
+  const phone = normalizePhone(rawPhone);
+  if (!phone) return null;
+
+  const added = Array.isArray(body?.productsAddedToCart) ? body.productsAddedToCart : [];
+  const viewed = Array.isArray(body?.productsViewed) ? body.productsViewed : [];
+  const hasCart = added.length > 0;
+  const qty = added.reduce((s: number, it: any) => s + (Number(it?.quantity) || 0), 0);
+  const addr = body?.customer?.defaultAddress ?? body?.customer?.address ?? null;
+  const sentAt = flowStr(body?.sentAt);
+
+  return {
+    phone,
+    name: flowStr(body?.customer?.name),
+    email: flowStr(body?.customer?.email),
+    cart_summary: browseProductSummary(hasCart ? added : viewed),
+    cart_item_count: hasCart ? (qty > 0 ? qty : added.length) : null,
+    district: flowStr(addr?.city),
+    province: flowStr(addr?.province),
+    referencia: flowStr(addr?.address1),
+    first_seen_at: sentAt,
+    last_interaction_at: sentAt,
+  };
+}
+
+/** Insert a lead, tolerating a not-yet-applied 0013 migration (drop optional
+ *  columns and retry). Returns "exists" on a unique (store_id, phone) clash —
+ *  a lead already owns this phone, so we leave it untouched. */
+async function insertLeadResilient(admin: SupabaseClient, row: any): Promise<"ok" | "exists"> {
+  const ins = await admin.from("leads").insert(row);
+  if (!ins.error) return "ok";
+  if ((ins.error as any).code === "23505") return "exists";
+  let dropped = false;
+  for (const c of ["province", "region", "referencia"]) {
+    if (c in row) {
+      delete row[c];
+      dropped = true;
+    }
+  }
+  if (!dropped) throw new Error(`insertLead: ${ins.error.message}`);
+  const retry = await admin.from("leads").insert(row);
+  if (!retry.error) return "ok";
+  if ((retry.error as any).code === "23505") return "exists";
+  throw new Error(`insertLead: ${retry.error.message}`);
+}
+
+/** Ingest a Shopify Flow "abandoned browse" event → a NEW lead (source
+ *  abandoned_browse), created only if no lead exists for that phone. Idempotent
+ *  on the abandonment id (webhook_events). */
+export async function processBrowseAbandonment(
+  admin: SupabaseClient,
+  storeId: string,
+  body: any,
+): Promise<{ status: "ok" | "duplicate" }> {
+  const abandonmentId = body?.abandonment?.id != null ? String(body.abandonment.id) : null;
+  const webhookId =
+    abandonmentId ?? createHash("sha256").update(JSON.stringify(body ?? {}), "utf8").digest("hex");
+
+  const { error: insErr } = await admin.from("webhook_events").insert({
+    store_id: storeId,
+    topic: "flow/abandoned_browse",
+    shopify_id: abandonmentId,
+    webhook_id: webhookId,
+    processed: false,
+  });
+  if (insErr) {
+    if ((insErr as any).code === "23505") return { status: "duplicate" };
+    throw new Error(`webhook_events insert: ${insErr.message}`);
+  }
+
+  const seed = browseLeadSeed(body);
+  if (seed) {
+    await insertLeadResilient(admin, {
+      store_id: storeId,
+      phone: seed.phone,
+      source: BROWSE_SOURCE,
+      status: "nuevo",
+      category: "open",
+      needs_attention: false,
+      name: seed.name,
+      email: seed.email,
+      cart_summary: seed.cart_summary,
+      cart_item_count: seed.cart_item_count,
+      district: seed.district,
+      province: seed.province,
+      referencia: seed.referencia,
+      first_seen_at: seed.first_seen_at,
+      last_interaction_at: seed.last_interaction_at,
+    });
+  }
+
+  await admin
+    .from("webhook_events")
+    .update({ processed: true })
+    .match({ store_id: storeId, webhook_id: webhookId });
+  return { status: "ok" };
 }
 
 /** COMPLETED draft → recovered → won (the resulting order usually isn't

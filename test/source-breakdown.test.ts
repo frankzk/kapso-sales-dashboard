@@ -56,6 +56,29 @@ describe("sourceBreakdown (per-source conversion)", () => {
     expect(org.leads).toBe(2);
   });
 
+  it("separates abandoned-browse into its own channel (not organic)", () => {
+    const browseOrders = [
+      ...orders,
+      { customer_phone: "51955555555", total_amount: 80, total_refunded: 0, cancelled_at: null },
+    ] as unknown as OrderRow[];
+    const browseLeads = [
+      ...leads,
+      { phone: "51955555555", source: "abandoned_browse", has_order: true }, // browse → won (S/80)
+      { phone: "51966666666", source: "abandoned_browse", has_order: false }, // browse → not won
+    ] as unknown as LeadRow[];
+
+    const stats = sourceBreakdown(browseLeads, browseOrders);
+    expect(stats).toHaveLength(3); // meta_ad, abandoned_browse, organic
+
+    const browse = stats.find((s) => s.key === "abandoned_browse")!;
+    expect(browse).toMatchObject({ leads: 2, pedidos: 1, ingresos: 80 });
+    expect(browse.conversion).toBeCloseTo(0.5);
+    expect(browse.label).toContain("Búsqueda");
+
+    const org = stats.find((s) => s.key === "organic")!;
+    expect(org.leads).toBe(2); // browse not folded into organic
+  });
+
   it("returns [] when no lead has a source yet (module stays hidden)", () => {
     const noSource = [{ phone: "x", source: null, has_order: false }] as unknown as LeadRow[];
     expect(sourceBreakdown(noSource, orders)).toEqual([]);

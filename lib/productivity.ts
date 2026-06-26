@@ -20,8 +20,14 @@ export interface AdvisorStat {
 }
 
 /** Canonical acquisition-source bucket for a lead's `source`. */
-function sourceKey(s: string | null | undefined): "meta_ad" | "cod_cart" | "organic" {
-  return s === "meta_ad" ? "meta_ad" : s === "cod_cart" ? "cod_cart" : "organic";
+function sourceKey(s: string | null | undefined): "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" {
+  return s === "meta_ad"
+    ? "meta_ad"
+    : s === "cod_cart"
+      ? "cod_cart"
+      : s === "abandoned_browse"
+        ? "abandoned_browse"
+        : "organic";
 }
 
 export interface AdvisorCall {
@@ -163,7 +169,7 @@ async function resolveEmails(userIds: string[]): Promise<Map<string, string>> {
 export async function getAdvisorProductivity(
   storeIds: string[],
   range: DateRange,
-  source: "meta_ad" | "cod_cart" | "organic" | null = null,
+  source: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null = null,
   tz = "America/Lima",
 ): Promise<AdvisorStat[]> {
   if (!storeIds.length) return [];
@@ -276,7 +282,7 @@ function sumTotals(rows: AdvisorStat[]): ProductivityTotals {
 export async function getAdvisorProductivityCompare(
   storeIds: string[],
   range: DateRange,
-  source: "meta_ad" | "cod_cart" | "organic" | null = null,
+  source: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null = null,
   tz = "America/Lima",
 ): Promise<ProductivityComparison> {
   const prevRange = previousRange(range);
@@ -319,7 +325,7 @@ export interface AgentLeadRow {
   phone: string | null;
   status: string;
   category: string | null;
-  source: "meta_ad" | "cod_cart" | "organic";
+  source: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic";
   won: boolean;
   net: number; // net revenue if won, else 0
   llamadas: number; // calls this advisor logged on the lead
@@ -333,7 +339,7 @@ export async function getAgentLeadsWorked(
   storeIds: string[],
   range: DateRange,
   vendedoraId: string,
-  source: "meta_ad" | "cod_cart" | "organic" | null = null,
+  source: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null = null,
 ): Promise<AgentLeadRow[]> {
   if (!storeIds.length || !vendedoraId) return [];
   const sb = await createServerSupabase();

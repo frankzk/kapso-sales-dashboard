@@ -129,6 +129,37 @@ roles and the `auth` schema, so it just works.
    `https://<your-domain>/api/webhooks/shopify/<storeId>`, and runs an initial
    **backfill** of `tag:kapso` orders.
 
+## 5b. Abandoned browse (Búsquedas abandonadas) via Shopify Flow
+
+A second, lower-intent web source: a Shopify Flow that fires on **"Customer left
+online store"** posts the identified visitor + the product they viewed to the
+dashboard, creating a `🔎 Búsqueda abandonada` lead — only when a phone is
+present, and only if no lead already exists for that phone (it never downgrades a
+WhatsApp / cart / campaign lead).
+
+1. **Set the per-store secret.** Generate one (`openssl rand -base64 24`), then in
+   **Ajustes de la tienda → Rotar credenciales**, paste it into *Secreto webhook
+   de Shopify Flow (búsquedas)*. Store the same value as a Shopify **secret** for
+   the Flow action.
+2. **Build the Flow** (Shopify Admin → Settings → Flow): trigger *Customer left
+   online store* → action **Send HTTP request**:
+   - **POST** `https://<your-domain>/api/webhooks/flow/<storeId>`
+   - Headers `Content-Type: application/json` and
+     `X-RecoverOps-Secret: {{ the secret from step 1 }}`.
+   - Body (Liquid) carrying at least: `source: "abandoned_browse"`,
+     `abandonment.id`, `customer.phone`
+     (`{{ customer.defaultPhoneNumber.phoneNumber }}`), `customer.name`,
+     `productsViewed[]`, `productsAddedToCart[]`, `sentAt`.
+   - **Optional but recommended** — to classify by district, also send the saved
+     address: `customer.defaultAddress.city` (→ distrito), `.province`,
+     `.address1`. Without it, browse-only leads land in *Frío* with the viewed
+     product shown for context.
+3. **Validate.** `GET https://<your-domain>/api/webhooks/flow/<storeId>` →
+   `{ ok: true }`. Trigger a real browse → the lead appears in *Por llamar* with
+   the `🔎 Búsqueda` chip; the server logs `[flow-webhook]` with the payload
+   *shape* (booleans/counts, no PII). Re-delivering the same `abandonment.id` does
+   not duplicate; a phone that already has a lead is left untouched.
+
 ## 6. Invite your team
 
 **Equipo** → invite by email with a role:
@@ -153,6 +184,8 @@ roles and the `auth` schema, so it just works.
 
 - Per-store Shopify/Kapso credentials are **AES-256-GCM encrypted** in the DB and
   decrypted only server-side. They are never in the repo, env, or client.
-- Webhook HMAC is verified with the **per-store** Shopify API secret.
+- Webhook HMAC is verified with the **per-store** Shopify API secret. The Shopify
+  Flow webhook (abandoned browse) uses a **per-store shared secret**
+  (`X-RecoverOps-Secret`), compared in constant time.
 - Cron is protected by `CRON_SECRET`; ingestion writes via the service role.
 - RLS restricts every read to the caller's accessible stores.

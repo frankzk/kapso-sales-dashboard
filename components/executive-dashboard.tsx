@@ -324,7 +324,7 @@ export function ExecutiveDashboard({
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
           <Module
             title="Conversión por fuente"
-            subtitle="Meta (Click-to-WhatsApp) vs carritos abandonados vs orgánico — atribución separada por canal"
+            subtitle="Meta (CTWA) vs carritos abandonados vs búsquedas abandonadas vs orgánico — atribución separada por canal"
             info
             className="lg:col-span-12"
           >

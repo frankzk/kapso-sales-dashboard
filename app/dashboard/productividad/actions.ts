@@ -11,7 +11,7 @@ export async function loadAgentLeads(input: {
   from: string;
   to: string;
   store?: string | null;
-  source?: "meta_ad" | "cod_cart" | "organic" | null;
+  source?: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null;
 }): Promise<AgentLeadRow[]> {
   if ((await getUserRoleSummary()).isVendedoraOnly) return [];
   const stores = await getAccessibleStores();

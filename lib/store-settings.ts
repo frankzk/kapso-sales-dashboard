@@ -18,6 +18,7 @@ export interface StoreSettingsInput {
   shopify_token?: string;
   shopify_webhook_secret?: string;
   kapso_api_key?: string;
+  flow_webhook_secret?: string;
 }
 
 function clean(v: string | undefined): string | null {
@@ -49,6 +50,8 @@ export function buildStoreUpdate(
   if (secret) patch.shopify_webhook_secret_enc = encrypt(secret, keyOverride);
   const kapso = clean(input.kapso_api_key);
   if (kapso) patch.kapso_api_key_enc = encrypt(kapso, keyOverride);
+  const flow = clean(input.flow_webhook_secret);
+  if (flow) patch.flow_webhook_secret_enc = encrypt(flow, keyOverride);
 
   return patch;
 }

@@ -5,7 +5,7 @@ import type { DateRange } from "@/lib/access";
 import type { StoreSummary } from "@/lib/types";
 import type { AdvisorStatWithDelta, ProductivityTotals } from "@/lib/productivity";
 
-type SourceFilter = "meta_ad" | "cod_cart" | "organic" | null;
+type SourceFilter = "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null;
 
 function money(n: number, currency: string): string {
   return new Intl.NumberFormat("es-PE", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
@@ -143,6 +143,11 @@ export function ProductivityBoard({
           href={buildHref({ from: range.from, to: range.to, store: storeId, src: "cod_cart" })}
           label="🛒 Carrito"
           active={source === "cod_cart"}
+        />
+        <Chip
+          href={buildHref({ from: range.from, to: range.to, store: storeId, src: "abandoned_browse" })}
+          label="🔎 Búsqueda"
+          active={source === "abandoned_browse"}
         />
         <Chip
           href={buildHref({ from: range.from, to: range.to, store: storeId, src: "organic" })}

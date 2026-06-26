@@ -40,6 +40,7 @@ function shortWhen(iso: string): string {
 const SOURCE_CHIP: Record<AgentLeadRow["source"], { label: string; cls: string }> = {
   meta_ad: { label: "📣 Campaña", cls: "bg-sky-50 text-sky-700" },
   cod_cart: { label: "🛒 Carrito", cls: "bg-amber-50 text-amber-700" },
+  abandoned_browse: { label: "🔎 Búsqueda", cls: "bg-orange-50 text-orange-700" },
   organic: { label: "Orgánico", cls: "bg-slate-100 text-slate-600" },
 };
 
@@ -54,7 +55,7 @@ type DrillContext = {
   from: string;
   to: string;
   store: string | null;
-  source: "meta_ad" | "cod_cart" | "organic" | null;
+  source: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null;
 };
 
 type LoadState = AgentLeadRow[] | "loading" | "error" | undefined;
