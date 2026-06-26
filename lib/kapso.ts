@@ -407,8 +407,19 @@ export interface LeadReferral {
   ctwa_clid: string | null; // referral.ctwa_clid (click id, for Meta CAPI matching)
 }
 
-/** Pull the CTWA referral off a raw Kapso message page (null = organic). */
+// Paid-Meta signals embedded in a pre-filled wa.me opening message (ad → site →
+// "tengo una consulta" WhatsApp button) rather than a structured CTWA referral.
+// These tokens essentially only appear in Meta ad destination URLs, so a customer
+// message carrying one came from a Facebook/Instagram ad. No ad_id is available
+// from the URL here, so we attribute the channel (Campaña) without a specific ad.
+const META_AD_HINT_RE =
+  /fbclid=|utm_source=(?:facebook|fb|meta|instagram|ig)\b|(?:facebook|instagram)_(?:mobile_feed|desktop_feed|feed|stories|reels|marketplace)/i;
+
+/** Pull the Meta ad attribution off a raw Kapso message page (null = organic).
+ *  Prefers the structured CTWA `referral` (carries the real ad_id); falls back to
+ *  a Meta ad link inside the customer's opening message (channel only, no ad_id). */
 export function extractReferral(rawMsgs: any[]): LeadReferral | null {
+  // 1) Structured CTWA referral — preferred (has the real ad_id).
   for (const m of rawMsgs ?? []) {
     const ref = m?.referral ?? m?.message?.referral ?? m?.kapso?.referral;
     if (ref && typeof ref === "object" && (ref.source_id || ref.source_type || ref.ctwa_clid || ref.headline)) {
@@ -418,6 +429,14 @@ export function extractReferral(rawMsgs: any[]): LeadReferral | null {
         ad_headline: typeof ref.headline === "string" ? ref.headline : null,
         ctwa_clid: typeof ref.ctwa_clid === "string" ? ref.ctwa_clid : null,
       };
+    }
+  }
+  // 2) Fallback: a Meta ad link in a customer (inbound) message. Same channel,
+  //    but the URL carries no ad_id → attribute Campaña without a specific ad.
+  for (const m of rawMsgs ?? []) {
+    if (msgDirection(m) !== "inbound") continue;
+    if (META_AD_HINT_RE.test(msgText(m))) {
+      return { source: "meta_ad", ad_id: null, ad_headline: null, ctwa_clid: null };
     }
   }
   return null;
