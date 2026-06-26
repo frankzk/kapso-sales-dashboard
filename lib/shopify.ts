@@ -546,10 +546,10 @@ export async function fetchOrdersPage(
 export const DRAFT_OPEN_WINDOW_DAYS = 2;
 
 /** Grace period before a brand-new abandoned cart becomes a callable lead — gives
- *  the customer time to finish checkout on their own (if they do, the draft is
- *  completed and lands as won instead of a call task). Applied to OPEN/INVOICE_SENT
- *  drafts only; a completed cart is surfaced immediately. */
-export const DRAFT_GRACE_MINUTES = 60;
+ *  the customer a few minutes to finish checkout on their own (if they do, the
+ *  draft is completed and lands as won instead of a call task). Applied to
+ *  OPEN/INVOICE_SENT drafts only; a completed cart is surfaced immediately. */
+export const DRAFT_GRACE_MINUTES = 5;
 
 export function buildDraftOrdersQuery(withPhone: boolean): string {
   // Draft/shipping phone is "protected customer data" — requested only on the

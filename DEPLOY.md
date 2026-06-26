@@ -82,11 +82,11 @@ roles and the `auth` schema, so it just works.
 
    `DATABASE_URL` is only needed for migrations; you don't have to add it to
    Vercel.
-4. Deploy. The cron in `vercel.json` (`/api/cron/sync` every 15 min) is picked up
+4. Deploy. The cron in `vercel.json` (`/api/cron/sync` every 5 min) is picked up
    automatically; Vercel sends `Authorization: Bearer $CRON_SECRET`.
 
 > **Cron on Vercel Hobby**: the Hobby plan runs cron jobs only ~once/day. If you
-> need the 15-min cadence without Pro, use the included GitHub Actions fallback
+> need the 5-min cadence without Pro, use the included GitHub Actions fallback
 > (`.github/workflows/cron-sync.yml`): add repo **secrets** `APP_URL`
 > (your deployed URL) and `CRON_SECRET`, and make sure the workflow is on the
 > repo's **default branch** (scheduled workflows only run there). Webhooks ingest

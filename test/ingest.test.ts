@@ -373,10 +373,11 @@ describe("linkDraftOrdersToLeads precedence", () => {
 
   it("holds a brand-new open cart within the grace period (no lead yet)", async () => {
     const { linkDraftOrdersToLeads } = await import("@/lib/leads-ingest");
-    const { mapRestDraftOrder } = await import("@/lib/shopify");
+    const { mapRestDraftOrder, DRAFT_GRACE_MINUTES } = await import("@/lib/shopify");
     const fake = new FakeSupabase(makeStoreRow());
     const fresh = JSON.parse(DRAFT_OPEN_BODY);
-    const recent = new Date(Date.now() - 5 * 60 * 1000).toISOString(); // 5 min ago
+    // Half the grace ago — robustly "still within grace" whatever the constant is.
+    const recent = new Date(Date.now() - (DRAFT_GRACE_MINUTES / 2) * 60 * 1000).toISOString();
     fresh.created_at = recent;
     fresh.updated_at = recent;
     const draft = mapRestDraftOrder(fresh, "store-1");
