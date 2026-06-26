@@ -13,7 +13,13 @@ ventanas de 24h + plantillas.
 
 ---
 
-## 2. Formulario final de pedido (unificado, editable y validado)
+## 2. ✅ Formulario final de pedido (unificado, editable y validado) — IMPLEMENTADO
+
+> **Implementado.** `generateOrder` (`app/dashboard/leads/actions.ts`),
+> `OrderForm`/`ProductPicker` (`components/leads.tsx`), y
+> `createDraftOrder`/`updateDraftOrder`/`searchProductVariants`/`getDraftOrderForEdit`
+> (`lib/shopify.ts`). Reemplaza "Cerrar venta" + "Generar pedido". Requiere el scope
+> `read_products` (re-autorizar). Lo de abajo es el diseño original, ya construido.
 
 **Requisito.** Todo pedido que sube a Shopify debe ir **con los datos completos y
 correctos** — tanto al **completar un carrito abandonado** como al **registrar una

@@ -715,6 +715,237 @@ export async function completeDraftOrder(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Order form: catalog search + draft create/update/read (for the unified
+// "Generar pedido / Registrar pedido" flow). Requires read_products (search)
+// and write_draft_orders (create/update/complete).
+// ---------------------------------------------------------------------------
+
+export interface ProductVariantResult {
+  variantId: string; // gid
+  title: string; // "Producto · Variante"
+  price: number | null;
+  inventory: number | null;
+  sku: string | null;
+  imageUrl: string | null;
+}
+
+const PRODUCT_SEARCH_QUERY = /* GraphQL */ `
+  query SearchProducts($q: String!, $first: Int!) {
+    products(first: $first, query: $q, sortKey: RELEVANCE) {
+      edges {
+        node {
+          id
+          title
+          featuredImage { url }
+          variants(first: 20) {
+            edges { node { id title price inventoryQuantity sku } }
+          }
+        }
+      }
+    }
+  }
+`;
+
+/** Search the store catalog → flat list of variants (title · price · stock). */
+export async function searchProductVariants(
+  opts: ShopifyClientOpts & { query: string; first?: number },
+): Promise<ProductVariantResult[]> {
+  const q = opts.query.trim();
+  const search = q ? `${q} status:active` : "status:active";
+  const data = await shopifyGraphQL<any>({
+    ...opts,
+    query: PRODUCT_SEARCH_QUERY,
+    variables: { q: search, first: opts.first ?? 20 },
+  });
+  const out: ProductVariantResult[] = [];
+  for (const pe of data?.products?.edges ?? []) {
+    const p = pe?.node ?? {};
+    const img = p?.featuredImage?.url ?? null;
+    for (const ve of p?.variants?.edges ?? []) {
+      const v = ve?.node ?? {};
+      const vt = String(v?.title ?? "");
+      out.push({
+        variantId: String(v?.id ?? ""),
+        title: vt && vt !== "Default Title" ? `${p.title} · ${vt}` : String(p.title ?? ""),
+        price: toNumber(v?.price),
+        inventory: typeof v?.inventoryQuantity === "number" ? v.inventoryQuantity : null,
+        sku: v?.sku ?? null,
+        imageUrl: img,
+      });
+    }
+  }
+  return out;
+}
+
+export interface OrderLineItemInput {
+  variantId?: string | null; // gid (catalog item)
+  title?: string | null; // custom item
+  quantity: number;
+  unitPrice?: number | null;
+}
+export interface OrderAddressInput {
+  name?: string | null;
+  phone?: string | null;
+  address1?: string | null;
+  address2?: string | null; // referencia
+  city?: string | null; // distrito
+  province?: string | null; // región
+  country?: string | null;
+}
+export interface BuildDraftOrderInput {
+  lineItems: OrderLineItemInput[];
+  address?: OrderAddressInput | null;
+  phone?: string | null;
+  email?: string | null;
+  note?: string | null;
+  tags?: string[];
+}
+
+function toGqlDraftInput(input: BuildDraftOrderInput): Record<string, unknown> {
+  const lineItems = input.lineItems
+    .filter((li) => (li.variantId || li.title) && li.quantity > 0)
+    .map((li) => {
+      const item: Record<string, unknown> = { quantity: Math.max(1, Math.floor(li.quantity)) };
+      if (li.variantId) item.variantId = li.variantId;
+      else item.title = li.title || "Producto";
+      // Preserve the exact agreed unit price. NOTE: if a future API version
+      // rejects `originalUnitPrice`, switch this single line to `priceOverride`.
+      if (li.unitPrice != null) item.originalUnitPrice = li.unitPrice.toFixed(2);
+      return item;
+    });
+  const gql: Record<string, unknown> = { lineItems };
+  if (input.note) gql.note = input.note;
+  if (input.tags?.length) gql.tags = input.tags;
+  if (input.email) gql.email = input.email;
+  if (input.phone) gql.phone = input.phone;
+  const a = input.address;
+  if (a) {
+    const parts = (a.name ?? "").trim().split(/\s+/).filter(Boolean);
+    gql.shippingAddress = {
+      address1: a.address1 ?? null,
+      address2: a.address2 ?? null,
+      city: a.city ?? null,
+      province: a.province ?? null,
+      country: a.country ?? "Peru",
+      phone: a.phone ?? input.phone ?? null,
+      firstName: parts[0] ?? (a.name ?? null),
+      lastName: parts.length > 1 ? parts.slice(1).join(" ") : null,
+    };
+  }
+  return gql;
+}
+
+const DRAFT_ORDER_CREATE_MUTATION = /* GraphQL */ `
+  mutation DraftOrderCreate($input: DraftOrderInput!) {
+    draftOrderCreate(input: $input) {
+      draftOrder { id name }
+      userErrors { field message }
+    }
+  }
+`;
+const DRAFT_ORDER_UPDATE_MUTATION = /* GraphQL */ `
+  mutation DraftOrderUpdate($id: ID!, $input: DraftOrderInput!) {
+    draftOrderUpdate(id: $id, input: $input) {
+      draftOrder { id name }
+      userErrors { field message }
+    }
+  }
+`;
+
+/** Create a draft order (new sale) → returns its GID; complete it separately. */
+export async function createDraftOrder(
+  opts: ShopifyClientOpts & { input: BuildDraftOrderInput },
+): Promise<{ gid: string; name: string | null }> {
+  const data = await shopifyGraphQL<any>({
+    ...opts,
+    query: DRAFT_ORDER_CREATE_MUTATION,
+    variables: { input: toGqlDraftInput(opts.input) },
+  });
+  const errs = data?.draftOrderCreate?.userErrors ?? [];
+  if (errs.length) throw new Error(`draftOrderCreate: ${errs.map((e: any) => e.message).join("; ")}`);
+  const d = data?.draftOrderCreate?.draftOrder;
+  if (!d?.id) throw new Error("draftOrderCreate: respuesta sin draftOrder");
+  return { gid: String(d.id), name: d.name ?? null };
+}
+
+/** Update an existing draft (cart) with corrected line items / address. */
+export async function updateDraftOrder(
+  opts: ShopifyClientOpts & { gid: string; input: BuildDraftOrderInput },
+): Promise<void> {
+  const data = await shopifyGraphQL<any>({
+    ...opts,
+    query: DRAFT_ORDER_UPDATE_MUTATION,
+    variables: { id: opts.gid, input: toGqlDraftInput(opts.input) },
+  });
+  const errs = data?.draftOrderUpdate?.userErrors ?? [];
+  if (errs.length) throw new Error(`draftOrderUpdate: ${errs.map((e: any) => e.message).join("; ")}`);
+}
+
+export interface DraftOrderEdit {
+  gid: string;
+  name: string | null;
+  lineItems: { variantId: string | null; title: string; quantity: number; unitPrice: number | null }[];
+  address: {
+    name: string | null;
+    address1: string | null;
+    address2: string | null;
+    city: string | null;
+    province: string | null;
+  };
+}
+
+const DRAFT_ORDER_GET_QUERY = /* GraphQL */ `
+  query GetDraft($id: ID!) {
+    draftOrder(id: $id) {
+      id
+      name
+      shippingAddress { address1 address2 city province name }
+      lineItems(first: 50) {
+        edges {
+          node {
+            title
+            quantity
+            originalUnitPriceSet { shopMoney { amount } }
+            variant { id }
+          }
+        }
+      }
+    }
+  }
+`;
+
+/** Read a draft live (with variant ids + prices) to pre-fill the order form. */
+export async function getDraftOrderForEdit(
+  opts: ShopifyClientOpts & { gid: string },
+): Promise<DraftOrderEdit | null> {
+  const data = await shopifyGraphQL<any>({ ...opts, query: DRAFT_ORDER_GET_QUERY, variables: { id: opts.gid } });
+  const d = data?.draftOrder;
+  if (!d) return null;
+  const lineItems = (d.lineItems?.edges ?? []).map((e: any) => {
+    const n = e?.node ?? {};
+    return {
+      variantId: n?.variant?.id ? String(n.variant.id) : null,
+      title: String(n?.title ?? ""),
+      quantity: Number(n?.quantity ?? 1),
+      unitPrice: toNumber(n?.originalUnitPriceSet?.shopMoney?.amount),
+    };
+  });
+  const a = d.shippingAddress ?? {};
+  return {
+    gid: String(d.id),
+    name: d.name ?? null,
+    lineItems,
+    address: {
+      name: a.name ?? null,
+      address1: a.address1 ?? null,
+      address2: a.address2 ?? null,
+      city: a.city ?? null,
+      province: a.province ?? null,
+    },
+  };
+}
+
 const WEBHOOK_CREATE_MUTATION = /* GraphQL */ `
   mutation CreateWebhook($topic: WebhookSubscriptionTopic!, $callbackUrl: URL!) {
     webhookSubscriptionCreate(

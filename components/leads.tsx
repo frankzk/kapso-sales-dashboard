@@ -31,13 +31,14 @@ import {
 } from "@/lib/leads";
 import {
   claimLead,
-  closeSale,
+  generateOrder,
   getLeadWindow,
   loadLeadDetail,
-  recoverCart,
+  loadOrderDraft,
   registerCall,
   releaseLead,
   searchLeads,
+  searchStoreProducts,
   sendLeadMessage,
   type LeadActionState,
 } from "@/app/dashboard/leads/actions";
@@ -842,15 +843,6 @@ function LeadDrawer({
             </div>
           )}
 
-          {lead.draft_order_gid && lead.draft_order_status !== "completed" && !lead.has_order && (
-            <RecoverCartButton
-              leadId={lead.id}
-              currency={currency}
-              cartValue={lead.cart_value}
-              onRecovered={onRegistered}
-            />
-          )}
-
           <RecurrentCustomer history={history} />
 
           {lead.source === "meta_ad" && <MetaAttribution lead={lead} adMeta={adMeta} />}
@@ -917,7 +909,12 @@ function LeadDrawer({
           <CallForm leadId={lead.id} onRegistered={onRegistered} />
 
           {!lead.has_order && (
-            <CloseSaleForm lead={lead} currency={currency} onRegistered={onRegistered} />
+            <OrderForm
+              leadId={lead.id}
+              currency={currency}
+              hasCart={!!lead.draft_order_gid && lead.draft_order_status !== "completed"}
+              onRegistered={onRegistered}
+            />
           )}
         </div>
       </aside>
@@ -1020,44 +1017,35 @@ function WhatsappComposer({
 /** Close a sale by phone (contraentrega / COD). Records a lightweight manual
  *  order, marks the lead Ganado and credits the advisor. Collapsed by default to
  *  keep the drawer tidy; expands into the amount / products / district form. */
-function CloseSaleForm({
-  lead,
+// ---------------------------------------------------------------------------
+// Unified order form (supersedes Cerrar venta + Generar pedido). Pre-fills from
+// the cart's draft (or blank for a new sale), products from the real catalog
+// (or a custom item), required address, then generates a REAL Shopify order.
+// ---------------------------------------------------------------------------
+
+type OrderItem = {
+  key: string;
+  variantId: string | null;
+  title: string;
+  quantity: number;
+  unitPrice: number | null;
+};
+type ProductResult = Awaited<ReturnType<typeof searchStoreProducts>>[number];
+
+const rid = () => Math.random().toString(36).slice(2);
+
+function OrderForm({
+  leadId,
   currency,
+  hasCart,
   onRegistered,
 }: {
-  lead: LeadRow;
+  leadId: string;
   currency: string;
+  hasCart: boolean;
   onRegistered: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [amount, setAmount] = useState("");
-  const [products, setProducts] = useState(lead.cart_summary ?? "");
-  const [district, setDistrict] = useState(lead.district ?? "");
-  const [pending, startTransition] = useTransition();
-  const [msg, setMsg] = useState<string | null>(null);
-
-  function submit() {
-    const amt = Number(amount.replace(",", ".").trim());
-    if (!Number.isFinite(amt) || amt <= 0) {
-      setMsg("Ingresa un monto válido (mayor a 0).");
-      return;
-    }
-    setMsg(null);
-    startTransition(async () => {
-      const res = await closeSale(lead.id, {
-        amount: amt,
-        products: products.trim(),
-        district: district.trim(),
-      });
-      if (res.error) {
-        setMsg(res.error);
-        return;
-      }
-      setMsg(res.notice ?? "Venta registrada.");
-      onRegistered();
-    });
-  }
-
   if (!open) {
     return (
       <button
@@ -1065,126 +1053,399 @@ function CloseSaleForm({
         onClick={() => setOpen(true)}
         className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
       >
-        💰 Cerrar venta (contraentrega)
+        {hasCart ? "✅ Generar pedido (contraentrega)" : "🧾 Registrar pedido (contraentrega)"}
       </button>
     );
   }
+  return (
+    <OrderFormPanel
+      leadId={leadId}
+      currency={currency}
+      hasCart={hasCart}
+      onRegistered={onRegistered}
+      onClose={() => setOpen(false)}
+    />
+  );
+}
+
+function OrderFormPanel({
+  leadId,
+  currency,
+  hasCart,
+  onRegistered,
+  onClose,
+}: {
+  leadId: string;
+  currency: string;
+  hasCart: boolean;
+  onRegistered: () => void;
+  onClose: () => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<OrderItem[]>([]);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [address1, setAddress1] = useState("");
+  const [district, setDistrict] = useState("");
+  const [province, setProvince] = useState("");
+  const [referencia, setReferencia] = useState("");
+  const [windowOpen, setWindowOpen] = useState(false);
+  const [sendConfirm, setSendConfirm] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [showPicker, setShowPicker] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    loadOrderDraft(leadId).then((res) => {
+      if (!alive) return;
+      if ("error" in res) {
+        setMsg(res.error);
+      } else {
+        setItems(res.lineItems.map((li) => ({ ...li, key: rid() })));
+        setName(res.customerName ?? "");
+        setPhone(res.phone ?? "");
+        setAddress1(res.address1 ?? "");
+        setDistrict(res.district ?? "");
+        setProvince(res.province ?? "");
+        setReferencia(res.referencia ?? "");
+        setWindowOpen(res.windowOpen);
+        setSendConfirm(res.windowOpen);
+      }
+      setLoading(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [leadId]);
+
+  const total = items.reduce((s, it) => s + (it.unitPrice ?? 0) * (Number(it.quantity) || 0), 0);
+  const valid = items.length > 0 && address1.trim().length > 0 && district.trim().length > 0 && total > 0;
+
+  function patchItem(key: string, patch: Partial<OrderItem>) {
+    setItems((x) => x.map((it) => (it.key === key ? { ...it, ...patch } : it)));
+  }
+  function removeItem(key: string) {
+    setItems((x) => x.filter((it) => it.key !== key));
+  }
+
+  function submit() {
+    if (!valid) {
+      setMsg("Completa productos, dirección y distrito antes de generar.");
+      return;
+    }
+    setMsg(null);
+    startTransition(async () => {
+      const res = await generateOrder(leadId, {
+        lineItems: items.map((it) => ({
+          variantId: it.variantId,
+          title: it.title,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+        })),
+        customerName: name.trim(),
+        phone: phone.trim(),
+        address1: address1.trim(),
+        district: district.trim(),
+        province: province.trim(),
+        referencia: referencia.trim(),
+        sendConfirmation: sendConfirm,
+        confirmationText: confirmText.trim() || undefined,
+      });
+      if (res.error) {
+        setMsg(res.error);
+        return;
+      }
+      setMsg(res.notice ?? "Pedido generado.");
+      onRegistered();
+    });
+  }
 
   return (
-    <section className="space-y-2.5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
-      <h3 className="text-sm font-semibold tracking-wide text-emerald-800 uppercase">
-        Cerrar venta · contraentrega
-      </h3>
-      <div>
-        <label className={labelCls} htmlFor="sale_amount">
-          Monto total ({currency})
-        </label>
-        <input
-          id="sale_amount"
-          inputMode="decimal"
-          value={amount}
-          onChange={(e) => setAmount(e.currentTarget.value)}
-          placeholder="0.00"
-          className={inputCls}
-          disabled={pending}
-          autoFocus
-        />
-      </div>
-      <div>
-        <label className={labelCls} htmlFor="sale_products">
-          Productos
-        </label>
-        <input
-          id="sale_products"
-          value={products}
-          onChange={(e) => setProducts(e.currentTarget.value)}
-          placeholder="Ej. Mochila viral x1"
-          className={inputCls}
-          disabled={pending}
-        />
-      </div>
-      <div>
-        <label className={labelCls} htmlFor="sale_district">
-          Distrito (entrega)
-        </label>
-        <input
-          id="sale_district"
-          value={district}
-          onChange={(e) => setDistrict(e.currentTarget.value)}
-          placeholder="Distrito del cliente"
-          className={inputCls}
-          disabled={pending}
-        />
-      </div>
-      <p className="text-xs text-emerald-700/80">
-        Pago contraentrega → queda como <span className="font-medium">pago pendiente</span>. Marca el
-        lead como <span className="font-medium">Ganado</span> y suma a tu productividad.
-      </p>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={submit}
-          disabled={pending}
-          className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-        >
-          {pending ? "Registrando…" : "Registrar venta"}
+    <section className="space-y-3 rounded-xl border border-emerald-300 bg-emerald-50/50 p-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold tracking-wide text-emerald-800 uppercase">
+          {hasCart ? "Generar pedido · contraentrega" : "Registrar pedido · contraentrega"}
+        </h3>
+        <button type="button" onClick={onClose} disabled={pending} className="text-xs text-slate-500 hover:underline">
+          Cerrar
         </button>
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          disabled={pending}
-          className="text-sm text-slate-500 hover:underline disabled:opacity-60"
-        >
-          Cancelar
-        </button>
-        {msg && <span className="text-xs text-slate-600">{msg}</span>}
       </div>
+
+      {loading ? (
+        <p className="text-sm text-slate-400">Cargando datos del pedido…</p>
+      ) : (
+        <>
+          <div className="space-y-1.5">
+            <p className={labelCls}>Productos</p>
+            {items.length === 0 && (
+              <p className="text-xs text-slate-400">Sin productos. Agrega del catálogo o un ítem manual.</p>
+            )}
+            {items.map((it) => (
+              <div key={it.key} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                <div className="flex items-start gap-2">
+                  {it.variantId ? (
+                    <span className="flex-1 text-sm text-slate-800">{it.title}</span>
+                  ) : (
+                    <input
+                      value={it.title}
+                      onChange={(e) => patchItem(it.key, { title: e.currentTarget.value })}
+                      placeholder="Producto (ítem manual)"
+                      className="flex-1 rounded border border-slate-200 px-2 py-1 text-sm"
+                      disabled={pending}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removeItem(it.key)}
+                    disabled={pending}
+                    className="text-slate-400 hover:text-red-600"
+                    aria-label="Quitar"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                  <label className="flex items-center gap-1">
+                    Cant.
+                    <input
+                      type="number"
+                      min={1}
+                      value={it.quantity}
+                      onChange={(e) => patchItem(it.key, { quantity: Math.max(1, Number(e.currentTarget.value) || 1) })}
+                      className="w-14 rounded border border-slate-200 px-1.5 py-0.5 text-sm"
+                      disabled={pending}
+                    />
+                  </label>
+                  <label className="flex items-center gap-1">
+                    {currency}
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={it.unitPrice ?? ""}
+                      onChange={(e) =>
+                        patchItem(it.key, {
+                          unitPrice: e.currentTarget.value === "" ? null : Number(e.currentTarget.value),
+                        })
+                      }
+                      className="w-20 rounded border border-slate-200 px-1.5 py-0.5 text-sm"
+                      disabled={pending}
+                    />
+                  </label>
+                  <span className="ml-auto font-medium text-slate-700">
+                    {currency} {((it.unitPrice ?? 0) * (Number(it.quantity) || 0)).toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            ))}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowPicker(true)}
+                disabled={pending}
+                className="rounded-lg border border-emerald-300 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+              >
+                + Producto del catálogo
+              </button>
+              <button
+                type="button"
+                onClick={() => setItems((x) => [...x, { key: rid(), variantId: null, title: "", quantity: 1, unitPrice: null }])}
+                disabled={pending}
+                className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+              >
+                + Ítem manual
+              </button>
+              <span className="ml-auto text-sm font-semibold text-emerald-800">
+                Total: {currency} {total.toFixed(2)}
+              </span>
+            </div>
+            {showPicker && (
+              <ProductPicker
+                leadId={leadId}
+                currency={currency}
+                onPick={(p) => {
+                  setItems((x) => [
+                    ...x,
+                    { key: rid(), variantId: p.variantId, title: p.title, quantity: 1, unitPrice: p.price },
+                  ]);
+                  setShowPicker(false);
+                }}
+                onClose={() => setShowPicker(false)}
+              />
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Cliente" value={name} onChange={setName} disabled={pending} placeholder="Nombre" />
+            <Field label="Teléfono" value={phone} onChange={setPhone} disabled={pending} placeholder="519…" />
+          </div>
+          <Field label="Dirección *" value={address1} onChange={setAddress1} disabled={pending} placeholder="Av. / Calle y número" />
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Distrito *" value={district} onChange={setDistrict} disabled={pending} placeholder="Distrito de entrega" />
+            <Field label="Provincia / Región" value={province} onChange={setProvince} disabled={pending} placeholder="Lima" />
+          </div>
+          <Field label="Referencia" value={referencia} onChange={setReferencia} disabled={pending} placeholder="Frente a…, color de puerta…" />
+
+          <div className="rounded-lg border border-slate-200 bg-white p-2">
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={sendConfirm}
+                onChange={(e) => setSendConfirm(e.currentTarget.checked)}
+                disabled={pending || !windowOpen}
+              />
+              Enviar confirmación por WhatsApp al cliente
+            </label>
+            {windowOpen ? (
+              sendConfirm && (
+                <textarea
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.currentTarget.value)}
+                  rows={3}
+                  placeholder="(Se usa un mensaje de confirmación por defecto si lo dejas vacío)"
+                  className="mt-1.5 w-full rounded border border-slate-200 px-2 py-1 text-sm"
+                  disabled={pending}
+                />
+              )
+            ) : (
+              <p className="mt-1 text-xs text-slate-400">
+                Ventana de 24h cerrada — no se puede enviar texto libre (se necesitaría una plantilla).
+              </p>
+            )}
+          </div>
+
+          <p className="text-xs text-emerald-700/80">
+            Pago contraentrega → queda como <span className="font-medium">pago pendiente</span> y sube como pedido
+            real a Shopify. Marca el lead <span className="font-medium">Ganado</span> y suma a tu productividad.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={submit}
+              disabled={pending || !valid}
+              className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {pending ? "Generando…" : "Generar pedido"}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={pending}
+              className="text-sm text-slate-500 hover:underline disabled:opacity-60"
+            >
+              Cancelar
+            </button>
+            {msg && <span className="text-xs text-slate-600">{msg}</span>}
+          </div>
+        </>
+      )}
     </section>
   );
 }
 
-/** Recover an abandoned cart → complete its Shopify draft into a real COD order
- *  (recoverCart). The primary CTA for an open cart lead. */
-function RecoverCartButton({
+function Field({
+  label,
+  value,
+  onChange,
+  disabled,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className={labelCls}>{label}</label>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.currentTarget.value)}
+        placeholder={placeholder}
+        className={inputCls}
+        disabled={disabled}
+      />
+    </div>
+  );
+}
+
+function ProductPicker({
   leadId,
   currency,
-  cartValue,
-  onRecovered,
+  onPick,
+  onClose,
 }: {
   leadId: string;
   currency: string;
-  cartValue?: number | null;
-  onRecovered: () => void;
+  onPick: (p: ProductResult) => void;
+  onClose: () => void;
 }) {
-  const [pending, startTransition] = useTransition();
-  const [msg, setMsg] = useState<string | null>(null);
-  function run() {
-    if (
-      !confirm(
-        "¿Generar el pedido en Shopify? El borrador se completará como contraentrega (pago pendiente).",
-      )
-    )
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<ProductResult[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    const term = q.trim();
+    if (term.length < 2) {
+      setResults(null);
+      setSearching(false);
       return;
-    setMsg(null);
-    startTransition(async () => {
-      const res = await recoverCart(leadId);
-      setMsg(res.error ?? res.notice ?? null);
-      if (!res.error) onRecovered();
-    });
-  }
+    }
+    setSearching(true);
+    let alive = true;
+    const t = setTimeout(async () => {
+      const r = await searchStoreProducts(leadId, term);
+      if (alive) {
+        setResults(r);
+        setSearching(false);
+      }
+    }, 280);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [q, leadId]);
   return (
-    <div className="space-y-1.5">
-      <button
-        type="button"
-        onClick={run}
-        disabled={pending}
-        className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-      >
-        {pending
-          ? "Generando pedido…"
-          : `✅ Generar pedido${cartValue != null ? ` · ${currency} ${Number(cartValue).toFixed(2)}` : ""} (contraentrega)`}
-      </button>
-      {msg && <p className="text-xs text-slate-600">{msg}</p>}
+    <div className="rounded-lg border border-emerald-200 bg-white p-2">
+      <div className="flex items-center gap-2">
+        <input
+          autoFocus
+          value={q}
+          onChange={(e) => setQ(e.currentTarget.value)}
+          placeholder="Buscar producto…"
+          className="flex-1 rounded border border-slate-200 px-2 py-1 text-sm"
+        />
+        <button type="button" onClick={onClose} className="text-xs text-slate-500 hover:underline">
+          Cerrar
+        </button>
+      </div>
+      {searching && <p className="mt-1 text-xs text-slate-400">Buscando…</p>}
+      {results && results.length === 0 && !searching && (
+        <p className="mt-1 text-xs text-slate-400">Sin resultados (o falta el permiso read_products).</p>
+      )}
+      {results && results.length > 0 && (
+        <ul className="mt-1 max-h-56 overflow-y-auto">
+          {results.map((p) => (
+            <li key={p.variantId}>
+              <button
+                type="button"
+                onClick={() => onPick(p)}
+                className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-emerald-50"
+              >
+                <span className="flex-1 text-sm text-slate-800">{p.title}</span>
+                <span className={cn("text-xs", (p.inventory ?? 0) > 0 ? "text-slate-500" : "text-amber-600")}>
+                  {p.inventory != null ? `stock ${p.inventory}` : ""}
+                </span>
+                <span className="text-sm font-medium text-slate-700">
+                  {currency} {(p.price ?? 0).toFixed(2)}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

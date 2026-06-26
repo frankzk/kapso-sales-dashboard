@@ -16,6 +16,9 @@ import {
   buildKapsoOrdersSearchQuery,
   shopifyGraphQL,
   fetchOrdersPage,
+  searchProductVariants,
+  createDraftOrder,
+  getDraftOrderForEdit,
   sumRestRefunds,
 } from "@/lib/shopify";
 
@@ -423,5 +426,92 @@ describe("draft orders (Releasit COD)", () => {
       "status:open updated_at:>=2026-06-01T00:00:00Z",
     );
     expect(buildDraftOrdersSearchQuery("completed")).toBe("status:completed");
+  });
+});
+
+describe("order form (catalog search + draft create/read)", () => {
+  function fakeFetch(payload: unknown, ok = true, status = 200): typeof fetch {
+    return (async () =>
+      ({
+        ok,
+        status,
+        json: async () => payload,
+        text: async () => JSON.stringify(payload),
+      }) as Response) as unknown as typeof fetch;
+  }
+
+  it("searchProductVariants flattens variants with price + stock", async () => {
+    const resp = {
+      data: {
+        products: {
+          edges: [
+            {
+              node: {
+                id: "gid://shopify/Product/1",
+                title: "Mochila",
+                featuredImage: { url: "u" },
+                variants: {
+                  edges: [
+                    { node: { id: "gid://shopify/ProductVariant/11", title: "Default Title", price: "129.90", inventoryQuantity: 5, sku: "M1" } },
+                  ],
+                },
+              },
+            },
+            {
+              node: {
+                id: "gid://shopify/Product/2",
+                title: "Polo",
+                featuredImage: null,
+                variants: {
+                  edges: [
+                    { node: { id: "gid://shopify/ProductVariant/21", title: "Rojo", price: "59.00", inventoryQuantity: 0, sku: "P-R" } },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      },
+    };
+    const out = await searchProductVariants({ domain: "x.myshopify.com", token: "t", query: "m", fetchImpl: fakeFetch(resp) });
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ variantId: "gid://shopify/ProductVariant/11", title: "Mochila", price: 129.9, inventory: 5 });
+    expect(out[1]).toMatchObject({ title: "Polo · Rojo", price: 59, inventory: 0 }); // non-default variant title appended
+  });
+
+  it("createDraftOrder returns the gid; throws on userErrors", async () => {
+    const ok = { data: { draftOrderCreate: { draftOrder: { id: "gid://shopify/DraftOrder/5", name: "#D5" }, userErrors: [] } } };
+    const r = await createDraftOrder({
+      domain: "x.myshopify.com",
+      token: "t",
+      input: { lineItems: [{ variantId: "gid://shopify/ProductVariant/1", quantity: 2, unitPrice: 10 }] },
+      fetchImpl: fakeFetch(ok),
+    });
+    expect(r.gid).toBe("gid://shopify/DraftOrder/5");
+
+    const bad = { data: { draftOrderCreate: { draftOrder: null, userErrors: [{ message: "boom" }] } } };
+    await expect(
+      createDraftOrder({ domain: "x.myshopify.com", token: "t", input: { lineItems: [] }, fetchImpl: fakeFetch(bad) }),
+    ).rejects.toThrow(/boom/);
+  });
+
+  it("getDraftOrderForEdit maps line items (variant id + price) and address", async () => {
+    const resp = {
+      data: {
+        draftOrder: {
+          id: "gid://shopify/DraftOrder/7",
+          name: "#D7",
+          shippingAddress: { address1: "Av X 1", address2: "ref", city: "Surco", province: "Lima", name: "Ana" },
+          lineItems: {
+            edges: [
+              { node: { title: "Mochila", quantity: 2, originalUnitPriceSet: { shopMoney: { amount: "60.00" } }, variant: { id: "gid://shopify/ProductVariant/11" } } },
+            ],
+          },
+        },
+      },
+    };
+    const d = await getDraftOrderForEdit({ domain: "x.myshopify.com", token: "t", gid: "gid://shopify/DraftOrder/7", fetchImpl: fakeFetch(resp) });
+    expect(d?.lineItems[0]).toMatchObject({ variantId: "gid://shopify/ProductVariant/11", title: "Mochila", quantity: 2, unitPrice: 60 });
+    expect(d?.address).toMatchObject({ address1: "Av X 1", city: "Surco", province: "Lima", address2: "ref", name: "Ana" });
   });
 });
