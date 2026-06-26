@@ -32,6 +32,7 @@ import {
   tzParts,
 } from "@/lib/metrics";
 import {
+  archiveStaleLeads,
   flagOverdueFollowups,
   linkDraftOrdersToLeads,
   linkOrderToLead,
@@ -444,6 +445,7 @@ export interface SyncReport {
   enriched: LeadEnrichStats;
   opsCaptured: boolean;
   whatsappNumbers: number;
+  archived: number;
   errors: string[];
 }
 
@@ -460,6 +462,7 @@ export async function runStoreSync(
     enriched: { candidates: 0, fetched: 0, inbound: 0, cart: 0, district: 0, yape: 0 },
     opsCaptured: false,
     whatsappNumbers: 0,
+    archived: 0,
     errors: [],
   };
   const creds = await getStoreCreds(storeId, admin);
@@ -606,6 +609,14 @@ export async function runStoreSync(
     await flagOverdueFollowups(admin, storeId);
   } catch (e: any) {
     report.errors.push(`followups: ${e.message}`);
+  }
+
+  // 2d) Auto-archivar leads vencidos viejos (sin interacción > STALE_LEAD_DAYS)
+  //     para que la cola "Por llamar" no se reacumule de backlog. Best-effort.
+  try {
+    report.archived = await archiveStaleLeads(admin, storeId);
+  } catch (e: any) {
+    report.errors.push(`archive: ${e.message}`);
   }
 
   // 3) Operational snapshot (best-effort; never fails the run)

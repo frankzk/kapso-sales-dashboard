@@ -400,6 +400,51 @@ export async function flagOverdueFollowups(admin: SupabaseClient, storeId: strin
   return (data as { id: string }[] | null)?.length ?? 0;
 }
 
+/** Días sin interacción tras los cuales un lead en cola se archiva como Perdido. */
+export const STALE_LEAD_DAYS = 7;
+
+/** Auto-archiva los leads en cola (open/hot, sin yape, sin seguimiento agendado)
+ *  cuya última interacción es anterior al corte (> `days` días). Espejo del
+ *  descarte manual: pasan a Perdido (`cancelado`) con una fila de auditoría en
+ *  `lead_calls`. La ventana de 24h ya está vencida por definición (días >> 24h).
+ *  Idempotente: tras pasar a 'lost' dejan de calzar el filtro. Cap por corrida
+ *  para que un backlog grande drene en varias pasadas del cron sin updates
+ *  gigantes. Excluye `next_followup_at` agendados (la vista Seguimientos ignora
+ *  la categoría) y los pagos pendientes (`yape_por_verificar`). */
+export async function archiveStaleLeads(
+  admin: SupabaseClient,
+  storeId: string,
+  days = STALE_LEAD_DAYS,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+  const { data } = await admin
+    .from("leads")
+    .select("id")
+    .eq("store_id", storeId)
+    .in("category", ["open", "hot"])
+    .neq("status", "yape_por_verificar")
+    .is("next_followup_at", null)
+    .lt("last_interaction_at", cutoff)
+    .limit(1000);
+  const ids = (data as { id: string }[] | null)?.map((r) => r.id) ?? [];
+  if (!ids.length) return 0;
+  await admin.from("lead_calls").insert(
+    ids.map((id) => ({
+      lead_id: id,
+      store_id: storeId,
+      vendedora: null,
+      kind: "system",
+      new_status: "cancelado",
+      note: `Auto-archivado por inactividad (> ${days} dias sin interaccion)`,
+    })),
+  );
+  await admin
+    .from("leads")
+    .update({ category: "lost", status: "cancelado", needs_attention: false })
+    .in("id", ids);
+  return ids.length;
+}
+
 /** Mark the lead for an order's customer as won (sticky), creating it if new. */
 export async function linkOrderToLead(
   admin: SupabaseClient,
