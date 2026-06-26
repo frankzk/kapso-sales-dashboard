@@ -17,9 +17,11 @@ class FakeBuilder {
   payload: any;
   filters: Row = {};
   _single = false;
+  selectCols: string | null = null;
   constructor(public table: string, public store: FakeSupabase) {}
-  select() {
+  select(cols?: string) {
     this.op = this.op ?? "select";
+    if (typeof cols === "string") this.selectCols = cols;
     return this;
   }
   insert(p: any) {
@@ -82,6 +84,7 @@ class FakeSupabase {
   upsertedOrders: any[] = [];
   upsertedDrafts: any[] = [];
   upsertedLeads: any[] = [];
+  leadCalls: any[] = [];
   deletedDrafts: any[] = [];
   existingLeadPhones = new Set<string>();
   recomputeCalls: any[] = [];
@@ -126,6 +129,12 @@ class FakeSupabase {
     }
     if (b.table === "leads" && b.op === "select") {
       const ph = (b.filters as any).phone;
+      // Browse send-path looks the freshly-created lead up by id (maybeSingle) →
+      // a single row with an id (or null), not the array shape the bulk paths use.
+      if (b._single && b.selectCols === "id") {
+        const exists = typeof ph === "string" && this.existingLeadPhones.has(ph);
+        return { data: exists ? { id: `lead-${ph}` } : null, error: null };
+      }
       const list = Array.isArray(ph) ? ph : ph != null ? [ph] : [];
       const rows = list.filter((p: string) => this.existingLeadPhones.has(p)).map((p: string) => ({ phone: p }));
       return { data: rows, error: null };
@@ -145,6 +154,11 @@ class FakeSupabase {
       }
       this.upsertedLeads.push(...rows);
       for (const r of rows) if (r.phone) this.existingLeadPhones.add(r.phone);
+      return { data: null, error: null };
+    }
+    if (b.table === "lead_calls" && b.op === "insert") {
+      const rows = Array.isArray(b.payload) ? b.payload : [b.payload];
+      this.leadCalls.push(...rows);
       return { data: null, error: null };
     }
     return { data: null, error: null };
@@ -508,5 +522,109 @@ describe("processFlowWebhook · abandoned browse", () => {
     );
     expect(res.status).toBe("ok");
     expect(fake.upsertedLeads).toHaveLength(0);
+  });
+});
+
+// A full StoreCreds-shaped object with the browse template ENABLED (the Settings
+// toggle on). Cast to any at call sites — only the send-path fields are read.
+function browseCreds(over: Record<string, any> = {}): any {
+  return {
+    id: "store-1",
+    org_id: "org-1",
+    name: "Aurela",
+    shopify_domain: "aurela.myshopify.com",
+    shopify_token: null,
+    shopify_webhook_secret: null,
+    kapso_project_id: null,
+    kapso_api_key: "kapso-key",
+    flow_webhook_secret: FLOW_SECRET,
+    whatsapp_phone_number_id: "PN-1241790819006805",
+    currency: "PEN",
+    timezone: "America/Lima",
+    status: "active",
+    browse_template_enabled: true,
+    browse_template_name: "busqueda_abandonada_1",
+    browse_template_language: "es",
+    ...over,
+  };
+}
+
+function spyTemplate(result: any = { ok: true, id: "wamid.sent" }) {
+  const calls: Array<{ opts: any; params: any }> = [];
+  const fn = (async (opts: any, params: any) => {
+    calls.push({ opts, params });
+    return result;
+  }) as any;
+  return { fn, calls };
+}
+
+describe("processBrowseAbandonment · WhatsApp template send", () => {
+  it("sends the approved template for a fresh lead and logs it", async () => {
+    const { processBrowseAbandonment } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const { fn, calls } = spyTemplate();
+    const res = await processBrowseAbandonment(fake as any, "store-1", JSON.parse(BROWSE_BODY), browseCreds(), fn);
+    expect(res.status).toBe("ok");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.opts).toEqual({ apiKey: "kapso-key" });
+    expect(calls[0]!.params).toMatchObject({
+      phoneNumberId: "PN-1241790819006805",
+      to: "51953249192",
+      templateName: "busqueda_abandonada_1",
+      language: "es",
+    });
+    expect(calls[0]!.params.bodyParams[0]).toBe("Sol"); // {{1}} = name
+    expect(calls[0]!.params.bodyParams[1]).toContain("TravelersBackpack"); // {{2}} = viewed product
+    expect(fake.leadCalls).toHaveLength(1);
+    expect(fake.leadCalls[0]).toMatchObject({ store_id: "store-1", kind: "system", vendedora: null });
+    expect(fake.leadCalls[0].note).toContain("busqueda_abandonada_1");
+  });
+
+  it("does NOT send when the template is disabled (lead still created)", async () => {
+    const { processBrowseAbandonment } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const { fn, calls } = spyTemplate();
+    await processBrowseAbandonment(
+      fake as any,
+      "store-1",
+      JSON.parse(BROWSE_BODY),
+      browseCreds({ browse_template_enabled: false }),
+      fn,
+    );
+    expect(calls).toHaveLength(0);
+    expect(fake.upsertedLeads).toHaveLength(1);
+    expect(fake.leadCalls).toHaveLength(0);
+  });
+
+  it("does NOT send when the phone already has a lead (no spam)", async () => {
+    const { processBrowseAbandonment } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.existingLeadPhones.add("51953249192");
+    const { fn, calls } = spyTemplate();
+    await processBrowseAbandonment(fake as any, "store-1", JSON.parse(BROWSE_BODY), browseCreds(), fn);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("does NOT send when no product was captured (empty {{2}})", async () => {
+    const { processBrowseAbandonment } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const body = JSON.parse(BROWSE_BODY);
+    body.productsViewed = [];
+    body.productsAddedToCart = [];
+    const { fn, calls } = spyTemplate();
+    await processBrowseAbandonment(fake as any, "store-1", body, browseCreds(), fn);
+    expect(calls).toHaveLength(0);
+    expect(fake.upsertedLeads).toHaveLength(1); // lead still created, just no auto-message
+  });
+
+  it("logs a failure note but never throws when the send is rejected", async () => {
+    const { processBrowseAbandonment } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const { fn } = spyTemplate({ ok: false, error: "Template paused", code: 132015 });
+    const res = await processBrowseAbandonment(fake as any, "store-1", JSON.parse(BROWSE_BODY), browseCreds(), fn);
+    expect(res.status).toBe("ok");
+    expect(fake.upsertedLeads).toHaveLength(1);
+    expect(fake.leadCalls).toHaveLength(1);
+    expect(fake.leadCalls[0].note).toContain("falló");
   });
 });

@@ -62,6 +62,9 @@ export interface StoreCreds {
   currency: string;
   timezone: string;
   status: string;
+  browse_template_enabled: boolean;
+  browse_template_name: string | null;
+  browse_template_language: string | null;
 }
 
 /** Load a store row and decrypt its credentials (service-role only). */
@@ -89,6 +92,9 @@ export async function getStoreCreds(
     currency: data.currency ?? "PEN",
     timezone: data.timezone ?? "America/Lima",
     status: data.status ?? "active",
+    browse_template_enabled: data.browse_template_enabled ?? false,
+    browse_template_name: data.browse_template_name ?? null,
+    browse_template_language: data.browse_template_language ?? null,
   };
 }
 
@@ -333,7 +339,7 @@ export async function processFlowWebhook(
   }
 
   if (String(payload?.source ?? "") === "abandoned_browse") {
-    return processBrowseAbandonment(admin, params.storeId, payload);
+    return processBrowseAbandonment(admin, params.storeId, payload, creds);
   }
   return { status: "ok" }; // unknown Flow source — accept + ignore
 }

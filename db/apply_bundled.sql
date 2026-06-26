@@ -1000,3 +1000,9 @@ alter table leads
 -- ---- 0014 ----
 -- per-store secret for the Shopify Flow webhook (abandoned-browse source).
 alter table stores add column if not exists flow_webhook_secret_enc text;
+
+-- ---- 0015 ----
+-- per-store WhatsApp template config for the abandoned-browse auto message.
+alter table stores add column if not exists browse_template_enabled  boolean not null default false;
+alter table stores add column if not exists browse_template_name      text;
+alter table stores add column if not exists browse_template_language  text;

@@ -68,6 +68,9 @@ export async function updateStore(
     shopify_webhook_secret: get("shopify_webhook_secret"),
     kapso_api_key: get("kapso_api_key"),
     flow_webhook_secret: get("flow_webhook_secret"),
+    browse_template_enabled: get("browse_template_enabled"),
+    browse_template_name: get("browse_template_name"),
+    browse_template_language: get("browse_template_language"),
   });
 
   if (!Object.keys(patch).length) return { notice: "No hay cambios para guardar." };

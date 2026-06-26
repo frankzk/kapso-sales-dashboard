@@ -146,18 +146,24 @@ export function listMessages(
   });
 }
 
+export type WhatsappSendResult =
+  | { ok: true; id: string | null }
+  | { ok: false; error: string; code?: number };
+
 /**
- * Send a free-text WhatsApp *session* message via Kapso's Meta proxy
- * (`POST {origin}/meta/whatsapp/v24.0/{phoneNumberId}/messages`). Only valid
- * inside the 24h customer-service window — outside it WhatsApp rejects with
- * error 131047, which we surface as { ok:false, code }. Never throws.
+ * POST a pre-built message payload to Kapso's Meta proxy
+ * (`{origin}/meta/whatsapp/v24.0/{phoneNumberId}/messages`, header `X-API-Key`).
+ * Shared by the text and template senders. Never throws — network/HTTP errors
+ * come back as { ok:false }, surfacing Meta's error `code` when present (e.g.
+ * 131047 = closed 24h window; 132xxx = template problems).
  */
-export async function sendWhatsappText(
+async function postWhatsappMessage(
   opts: KapsoClientOpts,
-  params: { phoneNumberId: string; to: string; body: string },
-): Promise<{ ok: true; id: string | null } | { ok: false; error: string; code?: number }> {
+  phoneNumberId: string,
+  payload: Record<string, unknown>,
+): Promise<WhatsappSendResult> {
   const origin = new URL(baseFor(opts)).origin;
-  const url = `${origin}/meta/whatsapp/v24.0/${encodeURIComponent(params.phoneNumberId)}/messages`;
+  const url = `${origin}/meta/whatsapp/v24.0/${encodeURIComponent(phoneNumberId)}/messages`;
   const doFetch = opts.fetchImpl ?? fetch;
   let res: Response;
   try {
@@ -168,13 +174,7 @@ export async function sendWhatsappText(
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: params.to,
-        type: "text",
-        text: { preview_url: false, body: params.body },
-      }),
+      body: JSON.stringify(payload),
     });
   } catch (e: any) {
     return { ok: false, error: e?.message ?? "network error" };
@@ -190,6 +190,58 @@ export async function sendWhatsappText(
   }
   const id = json?.messages?.[0]?.id;
   return { ok: true, id: typeof id === "string" ? id : null };
+}
+
+/**
+ * Send a free-text WhatsApp *session* message via Kapso's Meta proxy. Only valid
+ * inside the 24h customer-service window — outside it WhatsApp rejects with
+ * error 131047, which we surface as { ok:false, code }. Never throws.
+ */
+export async function sendWhatsappText(
+  opts: KapsoClientOpts,
+  params: { phoneNumberId: string; to: string; body: string },
+): Promise<WhatsappSendResult> {
+  return postWhatsappMessage(opts, params.phoneNumberId, {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: params.to,
+    type: "text",
+    text: { preview_url: false, body: params.body },
+  });
+}
+
+/**
+ * Send a WhatsApp **template** (HSM) message via Kapso's Meta proxy. Templates
+ * are the only way to open a conversation OUTSIDE the 24h window (cold
+ * re-engagement) and must be pre-approved by Meta. `bodyParams` fill the
+ * positional body variables ({{1}}, {{2}}, …) in order. Quick-reply buttons in
+ * the template carry no variables, so no button component is needed here.
+ * Never throws; a rejected template surfaces as { ok:false, code } (e.g. 132xxx).
+ */
+export async function sendWhatsappTemplate(
+  opts: KapsoClientOpts,
+  params: {
+    phoneNumberId: string;
+    to: string;
+    templateName: string;
+    language: string;
+    bodyParams?: string[];
+  },
+): Promise<WhatsappSendResult> {
+  const components = params.bodyParams?.length
+    ? [{ type: "body", parameters: params.bodyParams.map((text) => ({ type: "text", text })) }]
+    : [];
+  return postWhatsappMessage(opts, params.phoneNumberId, {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: params.to,
+    type: "template",
+    template: {
+      name: params.templateName,
+      language: { code: params.language },
+      components,
+    },
+  });
 }
 
 /** Latest inbound (customer) message time in ms for a conversation, or null. */
