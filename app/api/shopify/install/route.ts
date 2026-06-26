@@ -9,8 +9,9 @@ export const dynamic = "force-dynamic";
 
 // read_draft_orders + write_draft_orders power the abandoned-cart (Releasit COD)
 // feature: read open/completed drafts, and "Generar pedido" completes a draft
-// into a real order. read_orders stays for the existing order sync.
-const SCOPES = "read_orders,read_draft_orders,write_draft_orders";
+// into a real order. read_products powers the order form's catalog picker
+// (productos reales con stock + precio). read_orders stays for the order sync.
+const SCOPES = "read_orders,read_draft_orders,write_draft_orders,read_products";
 
 // Start the Shopify OAuth install for a store the caller owns/admins.
 //   GET /api/shopify/install?storeId=<id>

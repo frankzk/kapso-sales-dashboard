@@ -7,7 +7,15 @@ import { getCustomerHistory, getLeadWithCalls, type CustomerHistory } from "@/li
 import { CLAIM_TTL_MINUTES, categoryOf, isValidStatus, labelOf } from "@/lib/leads";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import { getStoreCreds } from "@/lib/ingest";
-import { completeDraftOrder, extractNumericId } from "@/lib/shopify";
+import {
+  completeDraftOrder,
+  createDraftOrder,
+  extractNumericId,
+  getDraftOrderForEdit,
+  searchProductVariants,
+  updateDraftOrder,
+  type ProductVariantResult,
+} from "@/lib/shopify";
 import { fetchLastInboundAt, sendWhatsappText } from "@/lib/kapso";
 
 // Process-level cache of vendedora id → display name (emails ~never change).
@@ -532,4 +540,375 @@ export async function sendLeadMessage(leadId: string, text: string): Promise<Lea
 
   revalidatePath("/dashboard/leads");
   return { notice: "Mensaje enviado por WhatsApp ✓" };
+}
+
+// ===========================================================================
+// Unified order form: search catalog · pre-fill from cart · generate the order
+// (supersedes closeSale + recoverCart). Cart → update+complete the draft; new
+// sale → create+complete a draft. Always a REAL Shopify order, COD pago pendiente.
+// ===========================================================================
+
+/** Search the lead's store catalog for the product picker (RLS-authorized). */
+export async function searchStoreProducts(
+  leadId: string,
+  query: string,
+): Promise<ProductVariantResult[]> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return [];
+  const creds = await getStoreCreds(ctx.storeId);
+  if (!creds?.shopify_token) return [];
+  try {
+    return await searchProductVariants({
+      domain: creds.shopify_domain,
+      token: creds.shopify_token,
+      query,
+      first: 20,
+    });
+  } catch {
+    return []; // e.g. read_products not granted yet → picker degrades to custom items
+  }
+}
+
+export interface OrderFormPrefill {
+  isCart: boolean;
+  draftGid: string | null;
+  lineItems: { variantId: string | null; title: string; quantity: number; unitPrice: number | null }[];
+  customerName: string | null;
+  phone: string | null;
+  address1: string | null;
+  district: string | null;
+  province: string | null;
+  referencia: string | null;
+  windowOpen: boolean; // 24h WhatsApp window (drives the confirmation default)
+}
+
+/** Pre-fill the order form: for a cart, read the live draft (variant ids + price
+ *  + address); for a new sale, return the lead's defaults blank. */
+export async function loadOrderDraft(leadId: string): Promise<OrderFormPrefill | { error: string }> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+  const { data: lead } = await admin
+    .from("leads")
+    .select("phone, name, draft_order_gid, district, province, referencia, kapso_conversation_id")
+    .eq("id", leadId)
+    .maybeSingle();
+  if (!lead) return { error: "Lead no encontrado." };
+  const l = lead as {
+    phone: string | null;
+    name: string | null;
+    draft_order_gid: string | null;
+    district: string | null;
+    province: string | null;
+    referencia: string | null;
+    kapso_conversation_id: string | null;
+  };
+
+  const out: OrderFormPrefill = {
+    isCart: !!l.draft_order_gid,
+    draftGid: l.draft_order_gid,
+    lineItems: [],
+    customerName: l.name,
+    phone: l.phone,
+    address1: null,
+    district: l.district,
+    province: l.province,
+    referencia: l.referencia,
+    windowOpen: false,
+  };
+
+  if (l.draft_order_gid) {
+    const creds = await getStoreCreds(ctx.storeId);
+    let filled = false;
+    if (creds?.shopify_token) {
+      try {
+        const draft = await getDraftOrderForEdit({
+          domain: creds.shopify_domain,
+          token: creds.shopify_token,
+          gid: l.draft_order_gid,
+        });
+        if (draft) {
+          out.lineItems = draft.lineItems;
+          out.customerName = draft.address.name ?? l.name;
+          out.address1 = draft.address.address1;
+          out.district = draft.address.city ?? l.district;
+          out.province = draft.address.province ?? l.province;
+          out.referencia = draft.address.address2 ?? l.referencia;
+          filled = true;
+        }
+      } catch {
+        /* live fetch failed → fall back to stored draft_orders data below */
+      }
+    }
+    if (!filled) {
+      const { data: d } = await admin
+        .from("draft_orders")
+        .select("line_items, address1, district, province, referencia, customer_name")
+        .eq("store_id", ctx.storeId)
+        .eq("draft_order_gid", l.draft_order_gid)
+        .maybeSingle();
+      const dd = d as {
+        line_items: unknown;
+        address1: string | null;
+        district: string | null;
+        province: string | null;
+        referencia: string | null;
+        customer_name: string | null;
+      } | null;
+      if (dd) {
+        out.lineItems = (Array.isArray(dd.line_items) ? dd.line_items : []).map((li: any) => ({
+          variantId: null,
+          title: String(li?.title ?? ""),
+          quantity: Number(li?.quantity ?? 1),
+          unitPrice: li?.price != null ? Number(li.price) : null,
+        }));
+        out.address1 = dd.address1 ?? out.address1;
+        out.district = dd.district ?? out.district;
+        out.province = dd.province ?? out.province;
+        out.referencia = dd.referencia ?? out.referencia;
+        out.customerName = dd.customer_name ?? out.customerName;
+      }
+    }
+  }
+
+  // 24h window (drives the confirmation checkbox default).
+  if (l.kapso_conversation_id) {
+    const w = await getLeadWindow(leadId);
+    out.windowOpen = w.open;
+  }
+  return out;
+}
+
+export interface GenerateOrderInput {
+  lineItems: { variantId?: string | null; title?: string | null; quantity: number; unitPrice: number | null }[];
+  customerName?: string;
+  phone?: string;
+  address1: string;
+  district: string;
+  province?: string;
+  referencia?: string;
+  note?: string;
+  sendConfirmation?: boolean;
+  confirmationText?: string;
+}
+
+function defaultConfirmation(o: {
+  name: string | null;
+  products: { title: string; quantity: number }[];
+  amount: number;
+  currency: string;
+  district: string;
+  address1: string;
+}): string {
+  const items = o.products.map((p) => `• ${p.quantity}× ${p.title}`).join("\n");
+  const hi = o.name ? ` ${o.name.split(/\s+/)[0]}` : "";
+  return (
+    `¡Hola${hi}! 🎉 Tu pedido quedó confirmado:\n${items}\n` +
+    `Total: ${o.currency} ${o.amount.toFixed(2)} (pago contraentrega)\n` +
+    `Entrega: ${o.address1}, ${o.district}\n¡Gracias por tu compra! 📦`
+  );
+}
+
+/**
+ * Generate the order from the unified form. Validates required data (≥1 product,
+ * address + distrito), then: cart → updateDraftOrder + completeDraftOrder; new →
+ * createDraftOrder + completeDraftOrder. Records the order (tag:kapso so it counts),
+ * marks the lead won, credits the advisor, recomputes rollups, and — if asked and
+ * the 24h window is open — sends a WhatsApp confirmation from the lead's number.
+ */
+export async function generateOrder(
+  leadId: string,
+  input: GenerateOrderInput,
+): Promise<LeadActionState> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+
+  const items = (input.lineItems ?? []).filter(
+    (li) => (li.variantId || (li.title ?? "").trim()) && Number(li.quantity) > 0,
+  );
+  if (!items.length) return { error: "Agrega al menos un producto." };
+  const address1 = (input.address1 ?? "").trim();
+  const district = (input.district ?? "").trim();
+  if (!address1) return { error: "La dirección es obligatoria." };
+  if (!district) return { error: "El distrito es obligatorio." };
+
+  const admin = createAdminSupabase();
+  const { data: lead } = await admin
+    .from("leads")
+    .select("phone, name, wa_phone_number_id, kapso_conversation_id, draft_order_gid, has_order")
+    .eq("id", leadId)
+    .maybeSingle();
+  if (!lead) return { error: "Lead no encontrado." };
+  const l = lead as {
+    phone: string | null;
+    name: string | null;
+    wa_phone_number_id: string | null;
+    kapso_conversation_id: string | null;
+    draft_order_gid: string | null;
+    has_order: boolean;
+  };
+  if (l.has_order) return { error: "Este lead ya tiene un pedido registrado." };
+
+  const creds = await getStoreCreds(ctx.storeId);
+  if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify configurado." };
+  const currency = creds.currency ?? "PEN";
+  const phone = ((input.phone ?? "").trim() || l.phone) ?? null;
+
+  const lineItemsInput = items.map((li) => ({
+    variantId: li.variantId ?? null,
+    title: (li.title ?? "").trim() || null,
+    quantity: Math.max(1, Math.floor(Number(li.quantity))),
+    unitPrice: li.unitPrice != null ? Math.round(Number(li.unitPrice) * 100) / 100 : null,
+  }));
+  const amount = Math.round(lineItemsInput.reduce((s, li) => s + (li.unitPrice ?? 0) * li.quantity, 0) * 100) / 100;
+  if (amount <= 0) return { error: "El monto del pedido debe ser mayor a 0." };
+
+  const address = {
+    name: (input.customerName ?? l.name ?? "").trim() || null,
+    phone,
+    address1,
+    address2: (input.referencia ?? "").trim() || null,
+    city: district,
+    province: (input.province ?? "").trim() || null,
+    country: "Peru",
+  };
+  const sclient = { domain: creds.shopify_domain, token: creds.shopify_token };
+  const isCart = !!l.draft_order_gid;
+  let draftGid = l.draft_order_gid;
+
+  // 1) Create/update the draft, then complete it (COD ⇒ payment pending).
+  let completed: Awaited<ReturnType<typeof completeDraftOrder>>;
+  try {
+    if (isCart && draftGid) {
+      await updateDraftOrder({ ...sclient, gid: draftGid, input: { lineItems: lineItemsInput, address, phone, note: input.note ?? null } });
+    } else {
+      const created = await createDraftOrder({
+        ...sclient,
+        input: { lineItems: lineItemsInput, address, phone, note: input.note ?? null, tags: ["venta_manual"] },
+      });
+      draftGid = created.gid;
+    }
+    completed = await completeDraftOrder({ ...sclient, draftGid: draftGid!, paymentPending: true });
+  } catch (e: any) {
+    const msg = String(e?.message ?? e).toLowerCase();
+    if (/already.*complet|complet.*already|has already|is complete/.test(msg)) {
+      completed = { orderGid: null, orderName: null, status: "completed" };
+    } else if (/write_draft_orders|access denied|not authorized|access scope|require/.test(msg)) {
+      return { error: "Falta el permiso de escritura en Shopify (write_draft_orders). Re-autoriza la tienda en Ajustes." };
+    } else {
+      return { error: `No se pudo generar el pedido en Shopify: ${e?.message ?? "error desconocido"}` };
+    }
+  }
+
+  // 2) Record the resulting order (tag:kapso so recompute_daily_rollups counts it).
+  const nowIso = new Date().toISOString();
+  const realOrderId = completed.orderGid ? extractNumericId(completed.orderGid) : null;
+  const shopifyOrderId = realOrderId || `draft-${extractNumericId(draftGid!)}`;
+  const products = lineItemsInput.map((li) => ({
+    title: li.title || "Producto",
+    quantity: li.quantity,
+    price: li.unitPrice,
+  }));
+  const { data: order, error: orderErr } = await admin
+    .from("orders")
+    .upsert(
+      {
+        store_id: ctx.storeId,
+        shopify_order_id: shopifyOrderId,
+        name: completed.orderName ?? `PED-${shopifyOrderId.slice(-6).toUpperCase()}`,
+        created_at: nowIso,
+        processed_at: nowIso,
+        total_amount: amount,
+        total_refunded: 0,
+        currency,
+        financial_status: "pending",
+        cancelled_at: null,
+        customer_phone: phone,
+        tags: isCart ? ["kapso", "carrito_recuperado"] : ["kapso", "venta_manual"],
+        promo_applied: false,
+        stock_por_validar: false,
+        shipping_mode: "cod",
+        line_items: products,
+        kapso_conversation_id: l.kapso_conversation_id ?? null,
+      },
+      { onConflict: "store_id,shopify_order_id" },
+    )
+    .select("id")
+    .maybeSingle();
+  if (orderErr || !order) {
+    return { error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr?.message ?? "error"}` };
+  }
+
+  // 3) Lead won + draft mirror.
+  await admin
+    .from("leads")
+    .update({
+      has_order: true,
+      order_id: (order as { id: string }).id,
+      status: "pedido_generado",
+      category: "won",
+      needs_attention: false,
+      last_interaction_at: nowIso,
+      ...(isCart ? { draft_order_status: "completed" } : {}),
+    })
+    .eq("id", leadId);
+  if (isCart && draftGid) {
+    await admin
+      .from("draft_orders")
+      .update({ status: "completed", completed_at: nowIso, order_gid: completed.orderGid })
+      .eq("store_id", ctx.storeId)
+      .eq("draft_order_gid", draftGid);
+  }
+
+  // 4) Log the sale (credits the advisor in Productividad).
+  const note = [
+    `${isCart ? "Carrito recuperado" : "Venta nueva"} · pedido generado en Shopify · ${currency} ${amount.toFixed(2)} · contraentrega`,
+    `Productos: ${products.map((p) => `${p.quantity}× ${p.title}`).join(", ")}`,
+    `Entrega: ${district}${address.address2 ? " · " + address.address2 : ""}`,
+  ].join(" · ");
+  await admin.from("lead_calls").insert({
+    lead_id: leadId,
+    store_id: ctx.storeId,
+    vendedora: ctx.userId,
+    kind: "sale",
+    new_status: "pedido_generado",
+    note,
+  });
+
+  // 5) Recompute today's rollups so revenue/COD reflect it now.
+  try {
+    const day = nowIso.slice(0, 10);
+    await admin.rpc("recompute_daily_rollups", { p_store_id: ctx.storeId, p_from: day, p_to: day });
+  } catch {
+    /* next sync recomputes */
+  }
+
+  // 6) Confirmation WhatsApp (best-effort; only if asked + a number is set).
+  let confirmNote = "";
+  if (input.sendConfirmation && phone) {
+    const pnId = l.wa_phone_number_id ?? creds.whatsapp_phone_number_id;
+    if (creds.kapso_api_key && pnId) {
+      const body =
+        (input.confirmationText ?? "").trim() ||
+        defaultConfirmation({ name: address.name, products, amount, currency, district, address1 });
+      const res = await sendWhatsappText({ apiKey: creds.kapso_api_key }, { phoneNumberId: pnId, to: phone, body });
+      if (res.ok) {
+        await admin.from("lead_calls").insert({
+          lead_id: leadId,
+          store_id: ctx.storeId,
+          vendedora: ctx.userId,
+          kind: "message",
+          new_status: null,
+          note: body,
+        });
+        confirmNote = " · confirmación enviada ✓";
+      } else {
+        confirmNote = " · (no se envió la confirmación: ventana de 24h cerrada o error)";
+      }
+    }
+  }
+
+  revalidatePath("/dashboard/leads");
+  revalidatePath("/dashboard");
+  return { notice: `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}` };
 }
