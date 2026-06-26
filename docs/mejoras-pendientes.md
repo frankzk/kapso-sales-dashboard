@@ -13,39 +13,51 @@ ventanas de 24h + plantillas.
 
 ---
 
-## 2. "Cerrar venta" estructurada (selector de productos reales)
+## 2. Formulario final de pedido (unificado, editable y validado)
 
-**Problema detectado.** El cierre manual — "Cerrar venta · contraentrega"
-(`CloseSaleForm` → `closeSale` en `app/dashboard/leads/actions.ts`) — es **texto
-libre**: monto, producto y distrito arbitrarios, sin validar contra el catálogo.
-Se puede registrar cualquier producto a cualquier precio.
+**Requisito.** Todo pedido que sube a Shopify debe ir **con los datos completos y
+correctos** — tanto al **completar un carrito abandonado** como al **registrar una
+venta nueva** (del chat/llamada). Hoy ninguno de los dos garantiza eso:
 
-> ⚠️ Importante: esto **NO** aplica al botón de carritos **"Generar pedido"**
-> (`recoverCart`), que completa el borrador real de Releasit con producto, precio
-> y dirección reales. El freeform es solo el cierre **manual** (leads sin carrito).
+- **"Generar pedido"** (`recoverCart`) **completa el borrador tal cual**, sin paso
+  de revisión. Si el carrito de Releasit trae la **dirección incompleta** o algún
+  dato malo, generaría el pedido **con datos malos**. ⚠️
+- **"Cerrar venta"** (`closeSale`) es **texto libre**: producto/precio/distrito
+  arbitrarios, sin validar contra el catálogo.
 
-**Objetivo.** Que el cierre manual se parezca a la pantalla nativa de Shopify
-("Create order" → "Seleccionar productos"): productos reales del catálogo, con
-**stock y precio reales**.
+**Objetivo.** Un **único formulario final de pedido**, con campos completos,
+**editables y validados**, que sirva para los dos casos:
 
-**Diseño propuesto.**
-- **Selector de productos** que busca en el catálogo de Shopify (Admin API; el
-  token ya tiene `read_products`) y muestra **título · stock disponible · precio
-  real**. El asesor elige producto(s) + cantidad y el **monto se calcula solo**.
-  - *Bonus:* el stock visible apoya el estado "Sin stock" — se ve la
-    disponibilidad real al momento de cerrar.
-- **Distrito como lista** estructurada (distritos de Lima/Perú), no texto libre.
-- **Ocultar "Cerrar venta" cuando el lead ya tiene carrito** → ahí debe usarse
-  "Generar pedido" (datos reales del borrador). Evita los dos botones a la vez.
-- **Dos niveles** (elegir al construir):
-  - **(a) Form estructurado:** productos/precio reales + distrito, guardado en
-    nuestra BD como hoy (orden manual `tag:kapso` + `venta_manual`). Menor esfuerzo.
-  - **(b) Pedido real en Shopify:** crear un draft order / orden real con esos
-    line items + cliente + dirección, como la UI nativa. Más completo, vive en
-    Shopify (y lo levanta el sync de órdenes/borradores).
+- **Carrito abandonado:** se **pre-llena** con los datos del borrador de Releasit
+  (productos, precio, cliente, teléfono, dirección, distrito) y el asesor
+  **completa/corrige** lo que falte **antes** de generar.
+- **Venta nueva (chat/llamada):** el mismo formulario, en blanco.
 
-**Archivos.** nuevo server action de búsqueda de productos (`shopifyGraphQL` en
-`lib/shopify.ts`), `components/leads.tsx` (`CloseSaleForm` → picker),
-`app/dashboard/leads/actions.ts` (`closeSale` con line items reales / crear draft).
+**Campos + validación.**
+- **Productos:** selector del catálogo real de Shopify (título · **stock** ·
+  **precio real**) + cantidad → monto calculado. (El stock visible apoya el estado
+  "Sin stock".)
+- **Cliente:** nombre, teléfono.
+- **Dirección completa:** dirección, **distrito**, provincia/región, referencia —
+  **obligatorios**. No se puede generar el pedido con la dirección incompleta.
+- Bloquear "Generar pedido" hasta que los campos obligatorios estén completos.
 
-**Reuso.** `shopifyGraphQL`, `getStoreCreds`, el patrón de `recoverCart`/`closeSale`.
+**Al confirmar.**
+- **Carrito:** actualizar el borrador en Shopify con los datos corregidos
+  (`draftOrderUpdate`) y luego completarlo (`draftOrderComplete`) → orden correcta.
+- **Venta nueva:** crear el borrador/orden con los datos ingresados.
+
+**Esto reemplaza** el botón directo "Generar pedido" (`RecoverCartButton`) y el
+form libre "Cerrar venta" (`CloseSaleForm`) por **un solo flujo** con datos
+validados. (Antes "Ocultar Cerrar venta cuando hay carrito" — ya no aplica: es el
+mismo formulario.)
+
+**Archivos.** `lib/shopify.ts` (`draftOrderUpdate` + búsqueda de productos),
+`components/leads.tsx` (formulario unificado en el drawer),
+`app/dashboard/leads/actions.ts` (`recoverCart`/`closeSale` → un flujo validado).
+
+**Reuso.** `shopifyGraphQL`, `getStoreCreds`, `completeDraftOrder`, el patrón de
+`recoverCart`/`closeSale`.
+
+**Nota de riesgo (mientras tanto).** Hasta construir esto, "Generar pedido"
+completa el borrador **tal cual** → usarlo solo en carritos con datos completos.
