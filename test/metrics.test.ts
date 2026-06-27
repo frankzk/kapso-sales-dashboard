@@ -421,15 +421,15 @@ describe("Family 5 — Leads-derived", () => {
     });
   });
 
-  it("botVsAdvisor splits by handoff and counts orders", () => {
+  it("botVsAdvisor splits revenue by advisor-closed tags (net of refunds, active only)", () => {
     const bva = botVsAdvisor([
-      lead({ handoff_at: null, has_order: true }),
-      lead({ handoff_at: null, has_order: false }),
-      lead({ handoff_at: "2026-06-20T16:00:00Z", has_order: true }),
-      lead({ handoff_at: "2026-06-20T16:00:00Z", has_order: false }),
+      order({ tags: ["kapso", "venta_manual"], total_amount: 100 }),
+      order({ tags: ["kapso", "carrito_recuperado"], total_amount: 200, total_refunded: 50 }),
+      order({ tags: ["kapso"], total_amount: 80 }), // bot / Shopify → no advisor tag
+      order({ tags: ["kapso", "venta_manual"], total_amount: 20, cancelled_at: "2026-06-20T00:00:00Z" }), // ignored
     ]);
-    expect(bva.bot).toEqual({ leads: 2, orders: 1, conversionRate: 0.5 });
-    expect(bva.advisor).toEqual({ leads: 2, orders: 1, conversionRate: 0.5 });
+    expect(bva.advisor).toEqual({ orders: 2, revenue: 250 }); // 100 + (200 − 50)
+    expect(bva.bot).toEqual({ orders: 1, revenue: 80 });
   });
 
   it("conversationalFunnel builds 6 monotonic stages with step %", () => {

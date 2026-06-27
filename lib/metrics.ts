@@ -1010,9 +1010,8 @@ export function lostRevenueByReason(
 }
 
 export interface ChannelFunnel {
-  leads: number;
   orders: number;
-  conversionRate: number; // 0..1
+  revenue: number; // net (total_amount − refunds) of the side's active orders
 }
 
 export interface BotVsAdvisor {
@@ -1020,22 +1019,29 @@ export interface BotVsAdvisor {
   advisor: ChannelFunnel;
 }
 
+// An order a human advisor closed through the dashboard is tagged this way. The
+// manual-sale, cart-recovery and generate-order flows ALL apply one of these
+// tags AND log a lead_calls kind="sale", so the tag ⇒ "an advisor closed it".
+const ADVISOR_ORDER_TAGS = new Set(["venta_manual", "carrito_recuperado"]);
+
 /**
- * Bot-handled vs advisor-handled performance. v1 attributes a lead to the
- * advisor channel when the bot escalated it (handoff_at set); everything the
- * bot handled end-to-end is the bot channel. Refine later with vendedora-tagged
- * orders once the leads "generate order" flow tags them.
+ * Bot-closed vs advisor-closed SALES — revenue + order count per side. An active
+ * order is attributed to the ADVISOR side when a human closed it via the
+ * dashboard (tagged `venta_manual`/`carrito_recuperado`); every other active
+ * order arrived through the bot / Shopify sync. Revenue is net of refunds.
  */
-export function botVsAdvisor(leads: LeadRow[]): BotVsAdvisor {
-  const mk = (subset: LeadRow[]): ChannelFunnel => {
-    const n = subset.length;
-    const orders = subset.filter((l) => l.has_order).length;
-    return { leads: n, orders, conversionRate: n ? round2((orders / n) * 10000) / 10000 : 0 };
-  };
-  return {
-    bot: mk(leads.filter((l) => l.handoff_at == null)),
-    advisor: mk(leads.filter((l) => l.handoff_at != null)),
-  };
+export function botVsAdvisor(orders: OrderRow[]): BotVsAdvisor {
+  const bot: ChannelFunnel = { orders: 0, revenue: 0 };
+  const advisor: ChannelFunnel = { orders: 0, revenue: 0 };
+  for (const o of activeOrders(orders)) {
+    const net = (o.total_amount ?? 0) - (o.total_refunded ?? 0);
+    const side = (o.tags ?? []).some((t) => ADVISOR_ORDER_TAGS.has(t)) ? advisor : bot;
+    side.orders += 1;
+    side.revenue += net;
+  }
+  advisor.revenue = round2(advisor.revenue);
+  bot.revenue = round2(bot.revenue);
+  return { bot, advisor };
 }
 
 export interface FunnelStage {

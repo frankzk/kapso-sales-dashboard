@@ -204,7 +204,7 @@ export function ExecutiveDashboard({
   const leadList = leads ?? [];
   const loss = lossReasons(leadList);
   const lostRev = lostRevenueByReason(loss, totals.aov);
-  const channels = botVsAdvisor(leadList);
+  const channels = botVsAdvisor(orders);
   const sourceStats = sourceBreakdown(leadList, orders);
   const cartStats = cartRecovery(leadList, orders);
   const campaignStats = campaignBreakdown(leadList, orders, adNames ?? {});
@@ -561,8 +561,8 @@ export function ExecutiveDashboard({
 
       {/* Row 4 — BOT vs Asesores · Tendencia · Salud del embudo */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Module title="Rendimiento: BOT vs Asesores" info className="lg:col-span-5">
-          <BotVsAdvisor bot={channels.bot} advisor={channels.advisor} />
+        <Module title="Ventas generadas: BOT vs Asesores" info className="lg:col-span-5">
+          <BotVsAdvisor bot={channels.bot} advisor={channels.advisor} currency={currency} />
         </Module>
         <Module
           title="Tendencia de conversión y pedidos"
