@@ -424,7 +424,7 @@ async function processOrderWebhook(
  */
 async function processDraftOrderWebhook(
   admin: SupabaseClient,
-  _creds: StoreCreds,
+  creds: StoreCreds,
   params: ProcessWebhookParams,
   payload: any,
   webhookId: string,
@@ -461,7 +461,20 @@ async function processDraftOrderWebhook(
   } else {
     const row = mapRestDraftOrder(payload, params.storeId);
     await upsertDraftOrders(admin, [row]);
-    await linkDraftOrdersToLeads(admin, params.storeId, [row]);
+    const shopify = creds.shopify_token ? { domain: creds.shopify_domain, token: creds.shopify_token } : undefined;
+    const recovered = await linkDraftOrdersToLeads(admin, params.storeId, [row], shopify);
+    if (recovered.length) {
+      try {
+        await recomputeRollups(
+          admin,
+          params.storeId,
+          tzParts(recovered[0]!, creds.timezone).date,
+          tzParts(recovered[recovered.length - 1]!, creds.timezone).date,
+        );
+      } catch {
+        /* rollup recompute is best-effort */
+      }
+    }
   }
 
   await admin
@@ -572,7 +585,13 @@ export async function runStoreSync(
           });
           if (page.draftOrders.length) {
             await upsertDraftOrders(admin, page.draftOrders);
-            await linkDraftOrdersToLeads(admin, storeId, page.draftOrders);
+            // Capture COD-recovered orders (not tag:kapso) so their revenue counts;
+            // their dates feed the daily-rollup recompute below.
+            const recovered = await linkDraftOrdersToLeads(admin, storeId, page.draftOrders, {
+              domain: creds.shopify_domain,
+              token: creds.shopify_token,
+            });
+            for (const iso of recovered) affectedDates.add(tzParts(iso, creds.timezone).date);
             report.draftOrders += page.draftOrders.length;
           }
           if (page.maxUpdatedAt && (!maxUpdatedAt || page.maxUpdatedAt > maxUpdatedAt)) {

@@ -132,9 +132,12 @@ export interface LeadStateSnapshot {
  */
 export function nextLeadState(
   existing: LeadStateSnapshot | null,
-  sig: { hasOrder?: boolean },
+  sig: { hasOrder?: boolean; hasRecentIntent?: boolean },
 ): AutoState | null {
-  if (sig.hasOrder) {
+  // A prior order wins the lead — UNLESS there's a newer buying signal (a fresh
+  // open cart created after that order): a repeat customer working a NEW purchase.
+  // Then we fall through and re-derive an actionable state instead of staying won.
+  if (sig.hasOrder && !sig.hasRecentIntent) {
     return { status: "pedido_generado", category: "won", needsAttention: false };
   }
   if (existing) {
