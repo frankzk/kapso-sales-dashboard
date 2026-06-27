@@ -6,6 +6,7 @@ import { Card, Section, SimpleTable } from "@/components/ui";
 import { STORE_STATUSES } from "@/lib/store-settings";
 import {
   reRegisterWebhooks,
+  sendTelegramTest,
   syncNow,
   updateStore,
   type SettingsState,
@@ -141,6 +142,12 @@ export function StoreSettings({
             storeId={s.id}
             label="Re-registrar webhooks"
             help="Vuelve a registrar orders/create y orders/updated apuntando a este panel."
+          />
+          <ActionButton
+            action={sendTelegramTest}
+            storeId={s.id}
+            label="Enviar resumen de prueba (Telegram)"
+            help="Manda ahora mismo a tu Telegram el resumen del día anterior, para validar la configuración."
           />
         </div>
       </Section>

@@ -4,7 +4,7 @@
 // reuses the pure productivity aggregation. The formatter renders Telegram HTML.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { formatCurrency } from "@/lib/metrics";
+import { formatCurrency, tzParts } from "@/lib/metrics";
 import {
   computeAdvisorStats,
   resolveEmails,
@@ -16,6 +16,28 @@ export interface StoreDailySummary {
   totalOrders: number;
   totalRevenue: number; // net (total_amount − refunds) of active orders in the window
   advisors: AdvisorStat[]; // sorted by ingresos desc (computeAdvisorStats order)
+}
+
+/** Yesterday's Lima-day UTC bounds (UTC-5, no DST): a Lima day [D 00:00, D+1
+ *  00:00) is [D 05:00Z, D+1 05:00Z). `dateOverride` (YYYY-MM-DD) forces a day.
+ *  Returns the date, the window, and a human label ("jue 26 jun"). */
+export function limaDayBounds(dateOverride: string | null = null): {
+  date: string;
+  startIso: string;
+  endIso: string;
+  label: string;
+} {
+  const date =
+    dateOverride ?? tzParts(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), "America/Lima").date;
+  const startIso = `${date}T05:00:00.000Z`;
+  const endIso = new Date(new Date(startIso).getTime() + 24 * 60 * 60 * 1000).toISOString();
+  const label = new Date(`${date}T12:00:00Z`).toLocaleDateString("es-PE", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    timeZone: "America/Lima",
+  });
+  return { date, startIso, endIso, label };
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */

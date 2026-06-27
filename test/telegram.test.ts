@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { sendTelegramMessage } from "@/lib/telegram";
-import { formatDailySummary, type StoreDailySummary } from "@/lib/daily-summary";
+import { formatDailySummary, limaDayBounds, type StoreDailySummary } from "@/lib/daily-summary";
 
 function fakeFetch(status: number, json: unknown, capture?: (url: string, init: any) => void) {
   return (async (url: string, init: any) => {
@@ -62,5 +62,14 @@ describe("formatDailySummary", () => {
   it("handles no advisor activity", () => {
     const msg = formatDailySummary("Kenku", "jue 26 jun", { totalOrders: 0, totalRevenue: 0, advisors: [] }, "PEN");
     expect(msg).toContain("Sin ventas");
+  });
+});
+
+describe("limaDayBounds", () => {
+  it("maps a Lima date to its UTC day window (UTC-5)", () => {
+    const b = limaDayBounds("2026-06-26");
+    expect(b.date).toBe("2026-06-26");
+    expect(b.startIso).toBe("2026-06-26T05:00:00.000Z");
+    expect(b.endIso).toBe("2026-06-27T05:00:00.000Z");
   });
 });
