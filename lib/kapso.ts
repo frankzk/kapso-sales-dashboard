@@ -262,6 +262,44 @@ export async function sendWhatsappImage(
   });
 }
 
+/**
+ * Send a **document** (PDF/boleta/etc.) by public link. `filename` is what the
+ * recipient sees in WhatsApp. Valid inside the 24h window. Never throws.
+ */
+export async function sendWhatsappDocument(
+  opts: KapsoClientOpts,
+  params: { phoneNumberId: string; to: string; documentUrl: string; filename?: string; caption?: string },
+): Promise<WhatsappSendResult> {
+  return postWhatsappMessage(opts, params.phoneNumberId, {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: params.to,
+    type: "document",
+    document: {
+      link: params.documentUrl,
+      ...(params.filename ? { filename: params.filename } : {}),
+      ...(params.caption ? { caption: params.caption } : {}),
+    },
+  });
+}
+
+/**
+ * Send a **video** (mp4/3gpp) by public link. Valid inside the 24h window.
+ * Never throws.
+ */
+export async function sendWhatsappVideo(
+  opts: KapsoClientOpts,
+  params: { phoneNumberId: string; to: string; videoUrl: string; caption?: string },
+): Promise<WhatsappSendResult> {
+  return postWhatsappMessage(opts, params.phoneNumberId, {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: params.to,
+    type: "video",
+    video: { link: params.videoUrl, ...(params.caption ? { caption: params.caption } : {}) },
+  });
+}
+
 /** Latest inbound (customer) message time in ms for a conversation, or null. */
 export async function fetchLastInboundAt(
   opts: KapsoClientOpts,
