@@ -244,6 +244,24 @@ export async function sendWhatsappTemplate(
   });
 }
 
+/**
+ * Send an **image** message via Kapso's Meta proxy, by public link (Meta fetches
+ * the image from `imageUrl` at send time, so it must be a public HTTPS URL).
+ * Valid only inside the 24h session window, like free text. Never throws.
+ */
+export async function sendWhatsappImage(
+  opts: KapsoClientOpts,
+  params: { phoneNumberId: string; to: string; imageUrl: string; caption?: string },
+): Promise<WhatsappSendResult> {
+  return postWhatsappMessage(opts, params.phoneNumberId, {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: params.to,
+    type: "image",
+    image: { link: params.imageUrl, ...(params.caption ? { caption: params.caption } : {}) },
+  });
+}
+
 /** Latest inbound (customer) message time in ms for a conversation, or null. */
 export async function fetchLastInboundAt(
   opts: KapsoClientOpts,

@@ -31,16 +31,21 @@ import {
 } from "@/lib/leads";
 import {
   claimLead,
+  createQuickReply,
+  deleteQuickReply,
   generateOrder,
   getLeadWindow,
+  listQuickReplies,
   loadLeadDetail,
   loadOrderDraft,
   registerCall,
   releaseLead,
   searchLeads,
   searchStoreProducts,
+  sendLeadImage,
   sendLeadMessage,
   type LeadActionState,
+  type QuickReply,
 } from "@/app/dashboard/leads/actions";
 import { Card, cn } from "@/components/ui";
 
@@ -1246,6 +1251,7 @@ function WhatsappComposer({
         <p className="text-sm text-slate-400">Verificando ventana de 24h…</p>
       ) : win.open ? (
         <>
+          <QuickReplyBar leadId={leadId} onInsert={(b) => setText(b)} />
           <textarea
             value={text}
             onChange={(e) => setText(e.currentTarget.value)}
@@ -1265,6 +1271,7 @@ function WhatsappComposer({
             </button>
             {msg && <span className="text-xs text-slate-500">{msg}</span>}
           </div>
+          <ImageAttach leadId={leadId} disabled={pending} onSent={onSent} />
         </>
       ) : (
         <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
@@ -1273,6 +1280,239 @@ function WhatsappComposer({
         </p>
       )}
     </section>
+  );
+}
+
+/** Downscale + re-encode an image so WhatsApp sends stay fast and under the
+ *  server-action body limit. Falls back to the original file on any failure. */
+async function resizeImageToBlob(file: File, maxDim = 1600, quality = 0.8): Promise<Blob> {
+  try {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result as string);
+      r.onerror = () => reject(new Error("read"));
+      r.readAsDataURL(file);
+    });
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("decode"));
+      i.src = dataUrl;
+    });
+    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const cx = canvas.getContext("2d");
+    if (!cx) return file;
+    cx.drawImage(img, 0, 0, w, h);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+    return blob ?? file;
+  } catch {
+    return file;
+  }
+}
+
+/** Per-store canned messages: chips that fill the composer + an inline manager. */
+function QuickReplyBar({ leadId, onInsert }: { leadId: string; onInsert: (body: string) => void }) {
+  const [replies, setReplies] = useState<QuickReply[]>([]);
+  const [manage, setManage] = useState(false);
+  const [label, setLabel] = useState("");
+  const [body, setBody] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  useEffect(() => {
+    let alive = true;
+    listQuickReplies(leadId).then((r) => {
+      if (alive) setReplies(r);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [leadId]);
+
+  function add() {
+    if (!label.trim() || !body.trim()) return;
+    startTransition(async () => {
+      const res = await createQuickReply(leadId, label, body);
+      if ("error" in res) {
+        setMsg(res.error);
+        return;
+      }
+      setReplies(res.replies);
+      setLabel("");
+      setBody("");
+      setMsg(null);
+    });
+  }
+  function remove(id: string) {
+    startTransition(async () => {
+      const res = await deleteQuickReply(leadId, id);
+      if (!("error" in res)) setReplies(res.replies);
+    });
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {replies.map((r) => (
+          <button
+            key={r.id}
+            type="button"
+            onClick={() => onInsert(r.body)}
+            title={r.body}
+            className="rounded-full border border-brand-200 bg-brand-50 px-2.5 py-0.5 text-xs text-brand-700 hover:bg-brand-100"
+          >
+            {r.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => setManage((m) => !m)}
+          className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-100"
+        >
+          {manage ? "✕ cerrar" : "✎ respuestas"}
+        </button>
+      </div>
+      {manage && (
+        <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+          {replies.length === 0 && <p className="text-xs text-slate-400">Aún no hay respuestas rápidas.</p>}
+          {replies.map((r) => (
+            <div key={r.id} className="flex items-center gap-2 text-xs">
+              <span className="min-w-[90px] font-medium text-slate-700">{r.label}</span>
+              <span className="flex-1 truncate text-slate-500">{r.body}</span>
+              <button
+                type="button"
+                onClick={() => remove(r.id)}
+                disabled={pending}
+                className="text-slate-400 hover:text-red-600"
+                aria-label="Eliminar"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          <div className="grid gap-1.5 border-t border-slate-200 pt-2">
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.currentTarget.value)}
+              placeholder="Título (ej. Datos de pago)"
+              className="rounded border border-slate-200 px-2 py-1 text-xs"
+              disabled={pending}
+            />
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.currentTarget.value)}
+              rows={2}
+              placeholder="Mensaje…"
+              className="rounded border border-slate-200 px-2 py-1 text-xs"
+              disabled={pending}
+            />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={add}
+                disabled={pending || !label.trim() || !body.trim()}
+                className="rounded border border-brand-300 px-2 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-60"
+              >
+                + Agregar
+              </button>
+              {msg && <span className="text-xs text-red-600">{msg}</span>}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Pick an image, resize it client-side, and send it over WhatsApp as an image. */
+function ImageAttach({ leadId, disabled, onSent }: { leadId: string; disabled: boolean; onSent: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [caption, setCaption] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function pick(f: File | null) {
+    setPreview((p) => {
+      if (p) URL.revokeObjectURL(p);
+      return f ? URL.createObjectURL(f) : null;
+    });
+    setFile(f);
+    setMsg(null);
+  }
+
+  function send() {
+    if (!file) return;
+    setMsg(null);
+    startTransition(async () => {
+      const blob = await resizeImageToBlob(file);
+      const fd = new FormData();
+      fd.append("image", blob, "image.jpg");
+      fd.append("caption", caption.trim());
+      const res = await sendLeadImage(leadId, fd);
+      if (res.error) {
+        setMsg(res.error);
+        return;
+      }
+      pick(null);
+      setCaption("");
+      setMsg(res.notice ?? "Imagen enviada.");
+      onSent();
+    });
+  }
+
+  return (
+    <div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => pick(e.currentTarget.files?.[0] ?? null)}
+      />
+      {!file ? (
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          disabled={disabled || pending}
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
+        >
+          📷 Enviar imagen
+        </button>
+      ) : (
+        <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={preview ?? ""} alt="Vista previa" className="max-h-40 rounded" />
+          <input
+            value={caption}
+            onChange={(e) => setCaption(e.currentTarget.value)}
+            placeholder="Texto de la imagen (opcional)"
+            disabled={pending}
+            className="w-full rounded border border-slate-200 px-2 py-1 text-sm"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={send}
+              disabled={pending}
+              className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
+            >
+              {pending ? "Enviando…" : "Enviar imagen"}
+            </button>
+            <button type="button" onClick={() => pick(null)} disabled={pending} className="text-xs text-slate-500 hover:underline">
+              Quitar
+            </button>
+            {msg && <span className="text-xs text-slate-500">{msg}</span>}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

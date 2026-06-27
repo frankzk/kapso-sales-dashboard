@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sendWhatsappText, sendWhatsappTemplate, fetchLastInboundAt } from "@/lib/kapso";
+import { sendWhatsappText, sendWhatsappTemplate, sendWhatsappImage, fetchLastInboundAt } from "@/lib/kapso";
 
 function fakeFetch(status: number, json: unknown, capture?: (url: string, init: any) => void) {
   return (async (url: string, init: any) => {
@@ -109,6 +109,43 @@ describe("sendWhatsappTemplate", () => {
     );
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.code).toBe(132001);
+  });
+});
+
+describe("sendWhatsappImage", () => {
+  it("POSTs an image message by link with an optional caption", async () => {
+    let seen: { url: string; init: any } | null = null;
+    const res = await sendWhatsappImage(
+      {
+        apiKey: "k",
+        baseUrl: base,
+        fetchImpl: fakeFetch(200, { messages: [{ id: "wamid.IMG" }] }, (url, init) => {
+          seen = { url, init };
+        }),
+      },
+      { phoneNumberId: "123", to: "51999", imageUrl: "https://cdn.example.com/x.jpg", caption: "Tu pedido" },
+    );
+    expect(res).toEqual({ ok: true, id: "wamid.IMG" });
+    expect(seen!.url).toBe("https://api.kapso.ai/meta/whatsapp/v24.0/123/messages");
+    const body = JSON.parse(seen!.init.body);
+    expect(body).toMatchObject({
+      messaging_product: "whatsapp",
+      to: "51999",
+      type: "image",
+      image: { link: "https://cdn.example.com/x.jpg", caption: "Tu pedido" },
+    });
+  });
+
+  it("omits the caption when not provided", async () => {
+    let seen: { url: string; init: any } | null = null;
+    await sendWhatsappImage(
+      { apiKey: "k", baseUrl: base, fetchImpl: fakeFetch(200, { messages: [{ id: "y" }] }, (url, init) => {
+        seen = { url, init };
+      }) },
+      { phoneNumberId: "123", to: "51999", imageUrl: "https://cdn.example.com/x.jpg" },
+    );
+    const body = JSON.parse(seen!.init.body);
+    expect(body.image).toEqual({ link: "https://cdn.example.com/x.jpg" });
   });
 });
 
