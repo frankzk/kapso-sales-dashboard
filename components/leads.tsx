@@ -1368,6 +1368,8 @@ function OrderFormPanel({
   const [sendConfirm, setSendConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [showPicker, setShowPicker] = useState(false);
+  const [discountKind, setDiscountKind] = useState<"none" | "fixed" | "percent">("none");
+  const [discountValue, setDiscountValue] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -1395,8 +1397,15 @@ function OrderFormPanel({
     };
   }, [leadId]);
 
-  const total = items.reduce((s, it) => s + (it.unitPrice ?? 0) * (Number(it.quantity) || 0), 0);
-  const valid = items.length > 0 && address1.trim().length > 0 && district.trim().length > 0 && total > 0;
+  const subtotal = items.reduce((s, it) => s + (it.unitPrice ?? 0) * (Number(it.quantity) || 0), 0);
+  const discountAmount =
+    discountKind !== "none" && discountValue != null && discountValue > 0
+      ? discountKind === "percent"
+        ? (subtotal * Math.min(100, discountValue)) / 100
+        : Math.min(subtotal, discountValue)
+      : 0;
+  const total = Math.max(0, subtotal - discountAmount);
+  const valid = items.length > 0 && address1.trim().length > 0 && district.trim().length > 0 && subtotal > 0;
 
   function patchItem(key: string, patch: Partial<OrderItem>) {
     setItems((x) => x.map((it) => (it.key === key ? { ...it, ...patch } : it)));
@@ -1427,6 +1436,10 @@ function OrderFormPanel({
         referencia: referencia.trim(),
         sendConfirmation: sendConfirm,
         confirmationText: confirmText.trim() || undefined,
+        discount:
+          discountKind === "none" || discountValue == null || discountValue <= 0
+            ? null
+            : { kind: discountKind, value: discountValue },
       });
       if (res.error) {
         setMsg(res.error);
@@ -1532,9 +1545,66 @@ function OrderFormPanel({
               >
                 + Ítem manual
               </button>
-              <span className="ml-auto text-sm font-semibold text-emerald-800">
-                Total: {currency} {total.toFixed(2)}
-              </span>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white px-2 py-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-slate-600">Descuento</span>
+                <select
+                  value={discountKind}
+                  onChange={(e) => {
+                    const k = e.currentTarget.value as "none" | "fixed" | "percent";
+                    setDiscountKind(k);
+                    if (k === "none") setDiscountValue(null);
+                  }}
+                  disabled={pending}
+                  className="rounded border border-slate-200 px-1.5 py-0.5 text-xs"
+                >
+                  <option value="none">Sin descuento</option>
+                  <option value="fixed">Monto ({currency})</option>
+                  <option value="percent">Porcentaje (%)</option>
+                </select>
+                {discountKind !== "none" && (
+                  <input
+                    type="number"
+                    min={0}
+                    step={discountKind === "percent" ? "1" : "0.01"}
+                    max={discountKind === "percent" ? 100 : undefined}
+                    value={discountValue ?? ""}
+                    onChange={(e) =>
+                      setDiscountValue(e.currentTarget.value === "" ? null : Math.max(0, Number(e.currentTarget.value)))
+                    }
+                    placeholder={discountKind === "percent" ? "%" : currency}
+                    disabled={pending}
+                    className="w-24 rounded border border-slate-200 px-1.5 py-0.5 text-sm"
+                  />
+                )}
+              </div>
+              {discountAmount > 0 && (
+                <div className="mt-2 space-y-0.5">
+                  <div className="flex justify-between text-xs text-slate-500">
+                    <span>Subtotal</span>
+                    <span>
+                      {currency} {subtotal.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs text-rose-600">
+                    <span>
+                      Descuento
+                      {discountKind === "percent" && discountValue ? ` (${Math.min(100, discountValue)}%)` : ""}
+                    </span>
+                    <span>
+                      −{currency} {discountAmount.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              )}
+              <div className="mt-1 flex justify-between text-sm font-semibold text-emerald-800">
+                <span>Total</span>
+                <span>
+                  {currency} {total.toFixed(2)}
+                </span>
+              </div>
             </div>
             {showPicker && (
               <ProductPicker

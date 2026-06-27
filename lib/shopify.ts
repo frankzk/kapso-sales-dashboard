@@ -793,6 +793,13 @@ export interface OrderAddressInput {
   province?: string | null; // región
   country?: string | null;
 }
+/** Order-level discount mapped to Shopify's DraftOrderAppliedDiscount input. */
+export interface AppliedDiscountInput {
+  title?: string | null;
+  description?: string | null;
+  value: number;
+  valueType: "PERCENTAGE" | "FIXED_AMOUNT";
+}
 export interface BuildDraftOrderInput {
   lineItems: OrderLineItemInput[];
   address?: OrderAddressInput | null;
@@ -800,6 +807,40 @@ export interface BuildDraftOrderInput {
   email?: string | null;
   note?: string | null;
   tags?: string[];
+  appliedDiscount?: AppliedDiscountInput | null;
+}
+
+/** Discount as captured in the order form: a fixed amount (store currency) or a
+ *  percentage off the subtotal. */
+export type OrderDiscountInput = { kind: "fixed" | "percent"; value: number };
+
+/**
+ * Resolve a form discount against a subtotal → the net total, the discount
+ * amount, and the Shopify `appliedDiscount` payload. Pure + defensive: a
+ * missing/non-positive discount leaves the subtotal untouched. Percentages clamp
+ * to 0–100; a fixed amount clamps to the subtotal (the total never goes negative).
+ */
+export function resolveOrderDiscount(
+  subtotal: number,
+  d: OrderDiscountInput | null | undefined,
+): { total: number; discountAmount: number; appliedDiscount: AppliedDiscountInput | null } {
+  const sub = Math.round((Number(subtotal) || 0) * 100) / 100;
+  if (!d || !(Number(d.value) > 0)) return { total: sub, discountAmount: 0, appliedDiscount: null };
+  if (d.kind === "percent") {
+    const pct = Math.min(100, Math.max(0, d.value));
+    const discountAmount = Math.round(sub * pct) / 100; // sub * (pct/100)
+    return {
+      total: Math.round((sub - discountAmount) * 100) / 100,
+      discountAmount,
+      appliedDiscount: { value: pct, valueType: "PERCENTAGE", title: "Descuento" },
+    };
+  }
+  const amt = Math.min(sub, Math.max(0, Math.round(d.value * 100) / 100));
+  return {
+    total: Math.round((sub - amt) * 100) / 100,
+    discountAmount: amt,
+    appliedDiscount: { value: amt, valueType: "FIXED_AMOUNT", title: "Descuento" },
+  };
 }
 
 /** Format a phone to E.164 (+<digits>) — Shopify rejects bare local numbers with
@@ -840,6 +881,15 @@ function toGqlDraftInput(input: BuildDraftOrderInput): Record<string, unknown> {
       phone: toE164(a.phone ?? input.phone),
       firstName: parts[0] ?? (a.name ?? null),
       lastName: parts.length > 1 ? parts.slice(1).join(" ") : null,
+    };
+  }
+  const ad = input.appliedDiscount;
+  if (ad && ad.value > 0) {
+    gql.appliedDiscount = {
+      title: ad.title ?? "Descuento",
+      value: ad.value,
+      valueType: ad.valueType,
+      ...(ad.description ? { description: ad.description } : {}),
     };
   }
   return gql;

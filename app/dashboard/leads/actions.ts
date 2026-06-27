@@ -12,6 +12,7 @@ import {
   createDraftOrder,
   extractNumericId,
   getDraftOrderForEdit,
+  resolveOrderDiscount,
   searchProductVariants,
   updateDraftOrder,
   type ProductVariantResult,
@@ -690,6 +691,7 @@ export interface GenerateOrderInput {
   note?: string;
   sendConfirmation?: boolean;
   confirmationText?: string;
+  discount?: { kind: "fixed" | "percent"; value: number } | null;
 }
 
 function defaultConfirmation(o: {
@@ -760,8 +762,10 @@ export async function generateOrder(
     quantity: Math.max(1, Math.floor(Number(li.quantity))),
     unitPrice: li.unitPrice != null ? Math.round(Number(li.unitPrice) * 100) / 100 : null,
   }));
-  const amount = Math.round(lineItemsInput.reduce((s, li) => s + (li.unitPrice ?? 0) * li.quantity, 0) * 100) / 100;
-  if (amount <= 0) return { error: "El monto del pedido debe ser mayor a 0." };
+  const subtotal = Math.round(lineItemsInput.reduce((s, li) => s + (li.unitPrice ?? 0) * li.quantity, 0) * 100) / 100;
+  if (subtotal <= 0) return { error: "El monto del pedido debe ser mayor a 0." };
+  // Order-level discount (Monto/Porcentaje) → net total + Shopify appliedDiscount.
+  const { total: amount, discountAmount, appliedDiscount } = resolveOrderDiscount(subtotal, input.discount);
 
   const address = {
     name: (input.customerName ?? l.name ?? "").trim() || null,
@@ -786,13 +790,13 @@ export async function generateOrder(
       await updateDraftOrder({
         ...sclient,
         gid: l.draft_order_gid,
-        input: { lineItems: lineItemsInput, address: addr, phone: ph, note: input.note ?? null },
+        input: { lineItems: lineItemsInput, address: addr, phone: ph, note: input.note ?? null, appliedDiscount },
       });
       return l.draft_order_gid;
     }
     const created = await createDraftOrder({
       ...sclient,
-      input: { lineItems: lineItemsInput, address: addr, phone: ph, note: input.note ?? null, tags: ["venta_manual"] },
+      input: { lineItems: lineItemsInput, address: addr, phone: ph, note: input.note ?? null, tags: ["venta_manual"], appliedDiscount },
     });
     return created.gid;
   };
@@ -882,8 +886,14 @@ export async function generateOrder(
   }
 
   // 4) Log the sale (credits the advisor in Productividad).
+  const discLabel =
+    discountAmount > 0
+      ? input.discount?.kind === "percent"
+        ? ` · desc. ${Math.min(100, input.discount.value)}% (−${currency} ${discountAmount.toFixed(2)})`
+        : ` · desc. ${currency} ${discountAmount.toFixed(2)}`
+      : "";
   const note = [
-    `${isCart ? "Carrito recuperado" : "Venta nueva"} · pedido generado en Shopify · ${currency} ${amount.toFixed(2)} · contraentrega`,
+    `${isCart ? "Carrito recuperado" : "Venta nueva"} · pedido generado en Shopify · ${currency} ${amount.toFixed(2)}${discLabel} · contraentrega`,
     `Productos: ${products.map((p) => `${p.quantity}× ${p.title}`).join(", ")}`,
     `Entrega: ${district}${address.address2 ? " · " + address.address2 : ""}`,
   ].join(" · ");
