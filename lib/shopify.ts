@@ -535,6 +535,69 @@ export async function fetchOrdersPage(
   };
 }
 
+function buildOrderByIdQuery(withPhone: boolean): string {
+  const phoneFields = withPhone
+    ? `
+        phone
+        shippingAddress { phone }
+        billingAddress { phone }`
+    : "";
+  return /* GraphQL */ `
+  query OrderById($id: ID!) {
+    order(id: $id) {
+      id
+      name
+      createdAt
+      processedAt
+      updatedAt
+      cancelledAt
+      displayFinancialStatus
+      totalPriceSet { shopMoney { amount currencyCode } }
+      currentTotalPriceSet { shopMoney { amount currencyCode } }
+      totalRefundedSet { shopMoney { amount } }
+      tags
+      customAttributes { key value }${phoneFields}
+      lineItems(first: 100) {
+        edges { node { title quantity sku originalUnitPriceSet { shopMoney { amount } } } }
+      }
+    }
+  }
+`;
+}
+
+const ORDER_BY_ID_QUERY = buildOrderByIdQuery(false);
+const ORDER_BY_ID_QUERY_WITH_PHONE = buildOrderByIdQuery(true);
+
+/** Fetch ONE order by its GraphQL gid → OrderRow (null if not found). Lets us
+ *  capture a COD-recovered order that isn't tag:kapso (the paginated order sync
+ *  only searches `tag:kapso`, so it would miss it). Mirrors fetchOrdersPage's
+ *  protected-phone fallback. */
+export async function fetchOrderById(
+  opts: ShopifyClientOpts & { storeId: string; orderGid: string },
+): Promise<OrderRow | null> {
+  const variables = { id: opts.orderGid };
+  let data: any;
+  try {
+    data = await shopifyGraphQL<any>({
+      ...opts,
+      query: ordersPhoneSupported ? ORDER_BY_ID_QUERY_WITH_PHONE : ORDER_BY_ID_QUERY,
+      variables,
+    });
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e).toLowerCase();
+    const accessIssue =
+      /access denied|access_denied|protected customer|not authorized|cannot query field|doesn't exist/.test(msg);
+    if (ordersPhoneSupported && accessIssue) {
+      ordersPhoneSupported = false;
+      data = await shopifyGraphQL<any>({ ...opts, query: ORDER_BY_ID_QUERY, variables });
+    } else {
+      throw e;
+    }
+  }
+  const node = data?.order;
+  return node ? mapGraphqlOrder(node, opts.storeId) : null;
+}
+
 // ---------------------------------------------------------------------------
 // Draft-order fetch (read_draft_orders) + complete (write_draft_orders)
 // ---------------------------------------------------------------------------

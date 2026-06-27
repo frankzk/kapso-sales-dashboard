@@ -16,7 +16,7 @@ import {
 import type { StoreCreds } from "@/lib/ingest";
 import { deriveAutoState, nextLeadState } from "@/lib/leads";
 import { normalizePhone } from "@/lib/phone";
-import { DRAFT_GRACE_MINUTES, extractNumericId, isCodFormDraft } from "@/lib/shopify";
+import { DRAFT_GRACE_MINUTES, extractNumericId, fetchOrderById, isCodFormDraft } from "@/lib/shopify";
 import {
   BROWSE_SOURCE,
   COD_CART_SOURCE,
@@ -89,11 +89,11 @@ async function upsertLeadFromSeed(
   admin: SupabaseClient,
   storeId: string,
   seed: LeadSeed,
-  ctx: { hasOrder: boolean; orderId?: string | null; existing: ExistingLead | null },
+  ctx: { hasOrder: boolean; orderId?: string | null; existing: ExistingLead | null; hasRecentIntent?: boolean },
 ): Promise<void> {
   const ns = nextLeadState(
     ctx.existing ? { status: ctx.existing.status, handoff_reason: ctx.existing.handoff_reason } : null,
-    { hasOrder: ctx.hasOrder },
+    { hasOrder: ctx.hasOrder, hasRecentIntent: ctx.hasRecentIntent },
   );
 
   const row: any = {
@@ -187,17 +187,39 @@ export async function syncStoreLeads(
     return { touched: 0, enriched };
   }
 
-  // Orders by phone (non-cancelled) → won linkage.
-  const orderIdByPhone = new Map<string, string>();
+  // Orders by phone (non-cancelled, keep the most recent) → won linkage.
+  const orderByPhone = new Map<string, { id: string; createdAt: string | null }>();
   {
     const { data } = await admin
       .from("orders")
-      .select("id, customer_phone")
+      .select("id, customer_phone, created_at")
       .eq("store_id", storeId)
       .in("customer_phone", phones)
       .is("cancelled_at", null);
-    for (const o of (data as { id: string; customer_phone: string }[]) ?? []) {
-      if (o.customer_phone) orderIdByPhone.set(o.customer_phone, o.id);
+    for (const o of (data as { id: string; customer_phone: string; created_at: string | null }[]) ?? []) {
+      if (!o.customer_phone) continue;
+      const prev = orderByPhone.get(o.customer_phone);
+      if (!prev || (o.created_at ?? "") > (prev.createdAt ?? "")) {
+        orderByPhone.set(o.customer_phone, { id: o.id, createdAt: o.created_at });
+      }
+    }
+  }
+
+  // Newest OPEN cart (draft) per phone → "new buying intent" signal. A draft
+  // created after a won order means a repeat purchase in progress, so the lead
+  // must reopen instead of staying won (recompra).
+  const newestOpenCartAt = new Map<string, string>();
+  {
+    const { data } = await admin
+      .from("draft_orders")
+      .select("customer_phone, created_at")
+      .eq("store_id", storeId)
+      .in("customer_phone", phones)
+      .in("status", ["open", "invoice_sent"]);
+    for (const d of (data as { customer_phone: string | null; created_at: string | null }[]) ?? []) {
+      if (!d.customer_phone || !d.created_at) continue;
+      const prev = newestOpenCartAt.get(d.customer_phone);
+      if (!prev || d.created_at > prev) newestOpenCartAt.set(d.customer_phone, d.created_at);
     }
   }
 
@@ -216,11 +238,14 @@ export async function syncStoreLeads(
   for (const phone of phones) {
     const seed = seeds.get(phone)!;
     const existing = existingByPhone.get(phone) ?? null;
-    const hasOrder = orderIdByPhone.has(phone);
+    const order = orderByPhone.get(phone);
+    const cartAt = newestOpenCartAt.get(phone) ?? null;
+    const hasRecentIntent = !!(order?.createdAt && cartAt && cartAt > order.createdAt);
     await upsertLeadFromSeed(admin, storeId, seed, {
-      hasOrder,
-      orderId: orderIdByPhone.get(phone) ?? null,
+      hasOrder: !!order,
+      orderId: order?.id ?? null,
       existing,
+      hasRecentIntent,
     });
 
     if (seed.last_interaction_at && (!maxTs || seed.last_interaction_at > maxTs)) {
@@ -528,12 +553,16 @@ async function upsertLeadResilient(admin: SupabaseClient, row: any): Promise<voi
   if (dropped) await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
 }
 
-/** OPEN/INVOICE_SENT draft → ensure a callable "cart" lead (create if new). */
+/** OPEN/INVOICE_SENT draft → ensure a callable "cart" lead. Creates it if new;
+ *  `reopen` reactivates an existing WON lead whose new cart post-dates its order
+ *  (a repeat customer) back to an actionable state. Otherwise an existing lead's
+ *  disposition/won state is left untouched (only cart fields refreshed). */
 async function upsertDraftCartLead(
   admin: SupabaseClient,
   storeId: string,
   d: DraftOrderRow,
   exists: boolean,
+  reopen = false,
 ): Promise<void> {
   const qty = d.line_items.reduce((s, li) => s + (Number(li.quantity) || 0), 0);
   const row: any = {
@@ -562,6 +591,11 @@ async function upsertDraftCartLead(
     if (d.created_at) row.first_seen_at = d.created_at;
     const seen = d.updated_at ?? d.created_at;
     if (seen) row.last_interaction_at = seen;
+  } else if (reopen) {
+    // Repeat customer: a new cart after a won order → make it workable again.
+    row.status = "nuevo";
+    row.category = "open";
+    row.needs_attention = false;
   }
   await upsertLeadResilient(admin, row);
 }
@@ -756,22 +790,52 @@ export async function processBrowseAbandonment(
   return { status: "ok" };
 }
 
-/** COMPLETED draft → recovered → won (the resulting order usually isn't
- *  tag:kapso, so the order sync wouldn't flip it). Mirrors linkOrderToLead. */
+/** COMPLETED draft → recovered → won. The resulting order isn't tag:kapso, so the
+ *  order sync (tag:kapso only) never imports it. When given Shopify creds we fetch
+ *  that order by gid and capture it in `orders` (marked so the kapso-only rollup
+ *  counts its revenue), then link the lead. Returns the recovered order's
+ *  created_at (for the daily-rollup recompute) or null. Mirrors linkOrderToLead. */
 async function linkCompletedDraftToLead(
   admin: SupabaseClient,
   storeId: string,
   d: DraftOrderRow,
-): Promise<void> {
+  shopify?: { domain: string; token: string },
+): Promise<string | null> {
   let orderId: string | null = null;
+  let recoveredAt: string | null = null;
   if (d.order_gid) {
+    const numId = extractNumericId(d.order_gid);
     const { data } = await admin
       .from("orders")
       .select("id")
       .eq("store_id", storeId)
-      .eq("shopify_order_id", extractNumericId(d.order_gid))
+      .eq("shopify_order_id", numId)
       .maybeSingle();
     orderId = (data as { id: string } | null)?.id ?? null;
+    // Not in our `orders` (the recovered order isn't tag:kapso) → fetch it from
+    // Shopify and capture it so its revenue is attributed. Best-effort: a failure
+    // here still marks the lead won below.
+    if (!orderId && shopify) {
+      try {
+        const order = await fetchOrderById({ ...shopify, storeId, orderGid: d.order_gid });
+        if (order?.shopify_order_id) {
+          // `kapso` so the rollup (filters lower(t)='kapso') counts it; `cod_recuperado`
+          // keeps recovered sales distinguishable from bot orders.
+          order.tags = [...new Set([...order.tags, "kapso", "cod_recuperado"])];
+          await admin.from("orders").upsert([order], { onConflict: "store_id,shopify_order_id" });
+          recoveredAt = order.created_at;
+          const { data: ins } = await admin
+            .from("orders")
+            .select("id")
+            .eq("store_id", storeId)
+            .eq("shopify_order_id", order.shopify_order_id)
+            .maybeSingle();
+          orderId = (ins as { id: string } | null)?.id ?? null;
+        }
+      } catch {
+        /* best-effort */
+      }
+    }
   }
   await upsertLeadResilient(admin, {
     store_id: storeId,
@@ -784,6 +848,7 @@ async function linkCompletedDraftToLead(
     draft_order_gid: d.draft_order_gid,
     draft_order_status: "completed",
   });
+  return recoveredAt;
 }
 
 /**
@@ -796,34 +861,61 @@ export async function linkDraftOrdersToLeads(
   admin: SupabaseClient,
   storeId: string,
   drafts: DraftOrderRow[],
-): Promise<void> {
+  shopify?: { domain: string; token: string },
+): Promise<string[]> {
   const eligible = drafts.filter((d) => d.customer_phone && isCodFormDraft(d));
-  if (!eligible.length) return;
+  if (!eligible.length) return [];
 
-  // Which phones already have a lead (so we never re-open a manual/won lead).
+  // Which phones already have a lead (with its category, to detect a won lead a
+  // repeat cart should reopen).
   const phones = [...new Set(eligible.map((d) => d.customer_phone as string))];
-  const exists = new Set<string>();
+  const existingCategory = new Map<string, string>();
   {
     const { data } = await admin
       .from("leads")
-      .select("phone")
+      .select("phone, category")
       .eq("store_id", storeId)
       .in("phone", phones);
-    for (const l of (data as { phone: string }[]) ?? []) exists.add(l.phone);
+    for (const l of (data as { phone: string; category: string }[]) ?? []) {
+      existingCategory.set(l.phone, l.category);
+    }
   }
 
+  // Latest won order date per phone → a newer open cart means a repeat purchase.
+  const orderCreatedAt = new Map<string, string>();
+  {
+    const { data } = await admin
+      .from("orders")
+      .select("customer_phone, created_at")
+      .eq("store_id", storeId)
+      .in("customer_phone", phones)
+      .is("cancelled_at", null);
+    for (const o of (data as { customer_phone: string | null; created_at: string | null }[]) ?? []) {
+      if (!o.customer_phone || !o.created_at) continue;
+      const prev = orderCreatedAt.get(o.customer_phone);
+      if (!prev || o.created_at > prev) orderCreatedAt.set(o.customer_phone, o.created_at);
+    }
+  }
+
+  const recoveredDates: string[] = []; // created_at of newly-captured recovered orders
   const graceMs = DRAFT_GRACE_MINUTES * 60_000;
   for (const d of eligible) {
     if (d.status === "completed") {
-      await linkCompletedDraftToLead(admin, storeId, d); // a finished sale → won now
+      const at = await linkCompletedDraftToLead(admin, storeId, d, shopify); // a finished sale → won now
+      if (at) recoveredDates.push(at);
       continue;
     }
     // OPEN/INVOICE_SENT: hold a brand-new cart for the grace period so we don't
     // call someone who's still checking out. Once it ages past the grace, the next
     // sync (which re-scans the whole window) surfaces it as a callable lead.
     if (d.created_at && Date.now() - new Date(d.created_at).getTime() < graceMs) continue;
-    await upsertDraftCartLead(admin, storeId, d, exists.has(d.customer_phone as string));
+    const phone = d.customer_phone as string;
+    const wonAt = orderCreatedAt.get(phone);
+    // Reopen only a WON lead whose new cart post-dates its order (recompra).
+    const reopen = existingCategory.get(phone) === "won" && !!(wonAt && d.created_at && d.created_at > wonAt);
+    await upsertDraftCartLead(admin, storeId, d, existingCategory.has(phone), reopen);
   }
+  return recoveredDates;
 }
 
 /**
