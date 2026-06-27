@@ -465,7 +465,11 @@ export function LeadsBoard({
   // Fuente y Número: multi-select (OR dentro del grupo). Set vacío = sin filtro.
   const [srcFilter, setSrcFilter] = useState<Set<string>>(new Set());
   const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
-  const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(initialGest ?? null);
+  // Por defecto la cola arranca en "Sin llamar" (los leads que nadie tomó). Un
+  // ?gest= explícito gana; un ?seg= (drill-down) no fuerza el default.
+  const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(
+    initialGest ?? (view === "por_llamar" && !initialSeg ? "sin_llamar" : null),
+  );
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
   const [numFilter, setNumFilter] = useState<Set<string>>(new Set()); // WhatsApp phone_number_id(s) + "__none__"
   // Search box: instant client-side narrowing of the current view PLUS a
