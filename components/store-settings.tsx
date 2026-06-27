@@ -129,6 +129,15 @@ export function StoreSettings({
 
       <SettingsForm data={data} />
 
+      <div className="-mt-2">
+        <ActionButton
+          action={sendTelegramTest}
+          storeId={s.id}
+          label="Enviar resumen de prueba (Telegram)"
+          help="Manda ahora mismo a tu Telegram el resumen del día anterior, para validar la configuración de Telegram de arriba."
+        />
+      </div>
+
       <Section title="Operaciones">
         <div className="grid gap-4 sm:grid-cols-2">
           <ActionButton
@@ -142,12 +151,6 @@ export function StoreSettings({
             storeId={s.id}
             label="Re-registrar webhooks"
             help="Vuelve a registrar orders/create y orders/updated apuntando a este panel."
-          />
-          <ActionButton
-            action={sendTelegramTest}
-            storeId={s.id}
-            label="Enviar resumen de prueba (Telegram)"
-            help="Manda ahora mismo a tu Telegram el resumen del día anterior, para validar la configuración."
           />
         </div>
       </Section>
@@ -348,29 +351,6 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
           <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
-            Resumen diario por Telegram
-          </legend>
-          <p className="text-xs text-slate-500">
-            Cada día a las <strong>8:00 am</strong> (Perú) te llega a Telegram el resumen del día
-            anterior: <strong>pedidos, ingresos y rendimiento por asesor</strong>. Crea un bot con{" "}
-            <strong>@BotFather</strong>, pega su token aquí y pon el <strong>chat id</strong> del
-            chat o grupo donde quieres recibirlo.
-          </p>
-          <SecretField name="telegram_bot_token" label="Token de bot de Telegram" set={data.has.telegramToken} />
-          <div>
-            <label className={labelCls} htmlFor="telegram_chat_id">Chat ID de Telegram</label>
-            <input
-              id="telegram_chat_id"
-              name="telegram_chat_id"
-              defaultValue={s.telegram_chat_id ?? ""}
-              placeholder="-1001234567890"
-              className={inputCls}
-            />
-          </div>
-        </fieldset>
-
-        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
-          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
             Mensaje automático de búsqueda abandonada
           </legend>
           <p className="text-xs text-slate-500">
@@ -413,6 +393,29 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
                 className={inputCls}
               />
             </div>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Resumen diario por Telegram
+          </legend>
+          <p className="text-xs text-slate-500">
+            Cada día a las <strong>8:00 am</strong> (Perú) te llega a Telegram el resumen del día
+            anterior: <strong>pedidos, ingresos y rendimiento por asesor</strong>. Crea un bot con{" "}
+            <strong>@BotFather</strong>, pega su token aquí y pon el <strong>chat id</strong> del
+            chat o grupo donde quieres recibirlo. Guarda y usa el botón de prueba de abajo.
+          </p>
+          <SecretField name="telegram_bot_token" label="Token de bot de Telegram" set={data.has.telegramToken} />
+          <div>
+            <label className={labelCls} htmlFor="telegram_chat_id">Chat ID de Telegram</label>
+            <input
+              id="telegram_chat_id"
+              name="telegram_chat_id"
+              defaultValue={s.telegram_chat_id ?? ""}
+              placeholder="-1001234567890"
+              className={inputCls}
+            />
           </div>
         </fieldset>
 
