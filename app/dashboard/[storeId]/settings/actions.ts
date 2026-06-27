@@ -71,6 +71,8 @@ export async function updateStore(
     browse_template_enabled: get("browse_template_enabled"),
     browse_template_name: get("browse_template_name"),
     browse_template_language: get("browse_template_language"),
+    telegram_chat_id: get("telegram_chat_id"),
+    telegram_bot_token: get("telegram_bot_token"),
   });
 
   if (!Object.keys(patch).length) return { notice: "No hay cambios para guardar." };

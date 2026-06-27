@@ -29,8 +29,9 @@ export interface StoreSettingsData {
     browse_template_enabled: boolean;
     browse_template_name: string | null;
     browse_template_language: string | null;
+    telegram_chat_id: string | null;
   };
-  has: { shopifyToken: boolean; webhookSecret: boolean; kapsoKey: boolean; flowSecret: boolean };
+  has: { shopifyToken: boolean; webhookSecret: boolean; kapsoKey: boolean; flowSecret: boolean; telegramToken: boolean };
   oauthAvailable: boolean;
   siteUrl: string;
   sync: Array<{
@@ -336,6 +337,29 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
           <SecretField name="shopify_webhook_secret" label="Shopify API secret (HMAC)" set={data.has.webhookSecret} />
           <SecretField name="kapso_api_key" label="Kapso API key" set={data.has.kapsoKey} />
           <SecretField name="flow_webhook_secret" label="Secreto webhook de Shopify Flow (búsquedas)" set={data.has.flowSecret} />
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Resumen diario por Telegram
+          </legend>
+          <p className="text-xs text-slate-500">
+            Cada día a las <strong>8:00 am</strong> (Perú) te llega a Telegram el resumen del día
+            anterior: <strong>pedidos, ingresos y rendimiento por asesor</strong>. Crea un bot con{" "}
+            <strong>@BotFather</strong>, pega su token aquí y pon el <strong>chat id</strong> del
+            chat o grupo donde quieres recibirlo.
+          </p>
+          <SecretField name="telegram_bot_token" label="Token de bot de Telegram" set={data.has.telegramToken} />
+          <div>
+            <label className={labelCls} htmlFor="telegram_chat_id">Chat ID de Telegram</label>
+            <input
+              id="telegram_chat_id"
+              name="telegram_chat_id"
+              defaultValue={s.telegram_chat_id ?? ""}
+              placeholder="-1001234567890"
+              className={inputCls}
+            />
+          </div>
         </fieldset>
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">

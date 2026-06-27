@@ -1031,3 +1031,8 @@ create policy quick_replies_update on quick_replies for update to authenticated
 drop policy if exists quick_replies_delete on quick_replies;
 create policy quick_replies_delete on quick_replies for delete to authenticated
   using (store_id in (select auth_store_ids()));
+
+-- ---- 0017 ----
+-- per-store Telegram config for the daily sales summary.
+alter table stores add column if not exists telegram_bot_token_enc text;
+alter table stores add column if not exists telegram_chat_id        text;
