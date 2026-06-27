@@ -19,6 +19,7 @@ import {
   searchProductVariants,
   createDraftOrder,
   getDraftOrderForEdit,
+  resolveOrderDiscount,
   sumRestRefunds,
 } from "@/lib/shopify";
 
@@ -513,5 +514,53 @@ describe("order form (catalog search + draft create/read)", () => {
     const d = await getDraftOrderForEdit({ domain: "x.myshopify.com", token: "t", gid: "gid://shopify/DraftOrder/7", fetchImpl: fakeFetch(resp) });
     expect(d?.lineItems[0]).toMatchObject({ variantId: "gid://shopify/ProductVariant/11", title: "Mochila", quantity: 2, unitPrice: 60 });
     expect(d?.address).toMatchObject({ address1: "Av X 1", city: "Surco", province: "Lima", address2: "ref", name: "Ana" });
+  });
+
+  it("createDraftOrder forwards the order-level appliedDiscount into the GraphQL input", async () => {
+    let seenBody: any = null;
+    const capture = (async (_url: string, init: any) => {
+      seenBody = JSON.parse(init.body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: { draftOrderCreate: { draftOrder: { id: "gid://shopify/DraftOrder/9", name: "#D9" }, userErrors: [] } },
+        }),
+        text: async () => "",
+      } as Response;
+    }) as unknown as typeof fetch;
+    await createDraftOrder({
+      domain: "x.myshopify.com",
+      token: "t",
+      input: {
+        lineItems: [{ variantId: "gid://shopify/ProductVariant/1", quantity: 1, unitPrice: 100 }],
+        appliedDiscount: { value: 10, valueType: "PERCENTAGE", title: "Descuento" },
+      },
+      fetchImpl: capture,
+    });
+    expect(seenBody.variables.input.appliedDiscount).toEqual({ title: "Descuento", value: 10, valueType: "PERCENTAGE" });
+  });
+});
+
+describe("resolveOrderDiscount", () => {
+  it("leaves the subtotal untouched when there is no (or zero) discount", () => {
+    expect(resolveOrderDiscount(120, null)).toEqual({ total: 120, discountAmount: 0, appliedDiscount: null });
+    expect(resolveOrderDiscount(120, { kind: "fixed", value: 0 }).appliedDiscount).toBeNull();
+  });
+
+  it("applies a percentage discount and maps it to PERCENTAGE (clamped to 100)", () => {
+    const r = resolveOrderDiscount(120, { kind: "percent", value: 10 });
+    expect(r).toMatchObject({ total: 108, discountAmount: 12 });
+    expect(r.appliedDiscount).toEqual({ value: 10, valueType: "PERCENTAGE", title: "Descuento" });
+    // > 100% clamps to a full discount → total floors at 0, never negative.
+    expect(resolveOrderDiscount(50, { kind: "percent", value: 150 }).total).toBe(0);
+  });
+
+  it("applies a fixed-amount discount and maps it to FIXED_AMOUNT (clamped to subtotal)", () => {
+    const r = resolveOrderDiscount(120, { kind: "fixed", value: 30 });
+    expect(r).toMatchObject({ total: 90, discountAmount: 30 });
+    expect(r.appliedDiscount).toEqual({ value: 30, valueType: "FIXED_AMOUNT", title: "Descuento" });
+    // A discount bigger than the subtotal floors the total at 0.
+    expect(resolveOrderDiscount(40, { kind: "fixed", value: 100 })).toMatchObject({ total: 0, discountAmount: 40 });
   });
 });
