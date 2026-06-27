@@ -1,9 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
-import { buildStoreDailySummary, formatDailySummary } from "@/lib/daily-summary";
+import { buildStoreDailySummary, formatDailySummary, limaDayBounds } from "@/lib/daily-summary";
 import { sendTelegramMessage } from "@/lib/telegram";
-import { tzParts } from "@/lib/metrics";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -17,27 +16,6 @@ function authorized(req: NextRequest): boolean {
   // Vercel Cron sends `Authorization: Bearer <CRON_SECRET>` automatically.
   if (req.headers.get("authorization") === `Bearer ${secret}`) return true;
   return req.nextUrl.searchParams.get("secret") === secret;
-}
-
-// Yesterday's Lima-day UTC bounds. Lima is UTC-5 (no DST): a Lima day [D 00:00,
-// D+1 00:00) is [D 05:00Z, D+1 05:00Z). `?date=YYYY-MM-DD` overrides the day (to
-// re-send a specific date for testing).
-function limaDayBounds(dateOverride: string | null): {
-  date: string;
-  startIso: string;
-  endIso: string;
-  label: string;
-} {
-  const date = dateOverride ?? tzParts(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), TZ).date;
-  const startIso = `${date}T05:00:00.000Z`;
-  const endIso = new Date(new Date(startIso).getTime() + 24 * 60 * 60 * 1000).toISOString();
-  const label = new Date(`${date}T12:00:00Z`).toLocaleDateString("es-PE", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    timeZone: TZ,
-  });
-  return { date, startIso, endIso, label };
 }
 
 async function run(req: NextRequest) {

@@ -7,6 +7,8 @@ import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { buildStoreUpdate } from "@/lib/store-settings";
 import { getStoreCreds, runStoreSync } from "@/lib/ingest";
 import { registerOrderWebhooks } from "@/lib/shopify";
+import { buildStoreDailySummary, formatDailySummary, limaDayBounds } from "@/lib/daily-summary";
+import { sendTelegramMessage } from "@/lib/telegram";
 import { env } from "@/lib/env";
 
 export interface SettingsState {
@@ -132,6 +134,30 @@ export async function syncNow(
     return r.errors.length
       ? { error: `Sync con errores: ${r.errors.join("; ")}`, notice: summary }
       : { notice: `Sync completado: ${summary}.` };
+  } catch (e) {
+    return { error: errMsg(e) };
+  }
+}
+
+export async function sendTelegramTest(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+
+  const creds = await getStoreCreds(storeId, ctx.admin);
+  if (!creds?.telegram_bot_token || !creds.telegram_chat_id) {
+    return { error: "Configura primero el token y el chat id de Telegram (y guarda)." };
+  }
+  try {
+    const { date, startIso, endIso, label } = limaDayBounds(null);
+    const summary = await buildStoreDailySummary(ctx.admin, storeId, startIso, endIso, "America/Lima");
+    const text = formatDailySummary(creds.name, label, summary, creds.currency);
+    const res = await sendTelegramMessage(creds.telegram_bot_token, creds.telegram_chat_id, text);
+    if (!res.ok) return { error: `Telegram rechazó el envío: ${res.error}` };
+    return { notice: `Resumen de ${date} enviado a Telegram ✓ (${summary.totalOrders} pedidos).` };
   } catch (e) {
     return { error: errMsg(e) };
   }
