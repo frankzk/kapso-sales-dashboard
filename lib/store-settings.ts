@@ -18,11 +18,14 @@ export interface StoreSettingsInput {
   browse_template_enabled?: string | boolean;
   browse_template_name?: string;
   browse_template_language?: string;
+  // Telegram daily summary: chat id is plain, token is a secret.
+  telegram_chat_id?: string;
   // Secrets — only applied when non-empty.
   shopify_token?: string;
   shopify_webhook_secret?: string;
   kapso_api_key?: string;
   flow_webhook_secret?: string;
+  telegram_bot_token?: string;
 }
 
 function clean(v: string | undefined): string | null {
@@ -59,6 +62,8 @@ export function buildStoreUpdate(
   if (tplName !== null) patch.browse_template_name = tplName;
   const tplLang = clean(typeof input.browse_template_language === "string" ? input.browse_template_language : undefined);
   if (tplLang !== null) patch.browse_template_language = tplLang;
+  const tgChat = clean(input.telegram_chat_id);
+  if (tgChat !== null) patch.telegram_chat_id = tgChat;
 
   const token = clean(input.shopify_token);
   if (token) patch.shopify_token_enc = encrypt(token, keyOverride);
@@ -68,6 +73,8 @@ export function buildStoreUpdate(
   if (kapso) patch.kapso_api_key_enc = encrypt(kapso, keyOverride);
   const flow = clean(input.flow_webhook_secret);
   if (flow) patch.flow_webhook_secret_enc = encrypt(flow, keyOverride);
+  const tgToken = clean(input.telegram_bot_token);
+  if (tgToken) patch.telegram_bot_token_enc = encrypt(tgToken, keyOverride);
 
   return patch;
 }

@@ -143,7 +143,7 @@ const emailCache = new Map<string, string>();
 
 /** Resolve advisor user_ids → emails. One getUserById per *uncached* id, in
  *  parallel — far cheaper than paging the whole user list on every load. */
-async function resolveEmails(userIds: string[]): Promise<Map<string, string>> {
+export async function resolveEmails(userIds: string[]): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   if (!userIds.length) return map;
   const missing = userIds.filter((id) => !emailCache.has(id));
