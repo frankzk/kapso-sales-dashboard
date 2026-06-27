@@ -362,8 +362,13 @@ function MultiSelect({
   }, [open]);
 
   const n = selected.size;
+  const selectedLabels = options.filter((o) => selected.has(o.key)).map((o) => o.label);
   const summary =
-    n === 0 ? summaryAll : n === 1 ? (options.find((o) => selected.has(o.key))?.label ?? `${n}`) : `${n} seleccionadas`;
+    n === 0
+      ? summaryAll
+      : selectedLabels.length <= 3
+        ? selectedLabels.join(", ") // muestra los nombres elegidos
+        : `${selectedLabels.slice(0, 2).join(", ")} +${selectedLabels.length - 2}`; // compacto si son muchos
 
   return (
     <div className="relative flex items-center gap-1.5" ref={ref}>
