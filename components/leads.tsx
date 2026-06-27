@@ -40,13 +40,15 @@ import {
   loadOrderDraft,
   registerCall,
   releaseLead,
+  createWaMediaUpload,
   searchLeads,
   searchStoreProducts,
-  sendLeadImage,
+  sendLeadMedia,
   sendLeadMessage,
   type LeadActionState,
   type QuickReply,
 } from "@/app/dashboard/leads/actions";
+import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { Card, cn } from "@/components/ui";
 
 const inputCls =
@@ -1204,12 +1206,14 @@ function WhatsappComposer({
     open: false,
   });
   const [text, setText] = useState("");
+  const [attachFile, setAttachFile] = useState<File | null>(null);
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     setText("");
+    setAttachFile(null);
     setMsg(null);
     // Fast path: the customer hasn't interacted in >24h → the session window is
     // definitely closed (last inbound ≤ last_interaction_at). Skip the live Kapso
@@ -1255,8 +1259,16 @@ function WhatsappComposer({
           <textarea
             value={text}
             onChange={(e) => setText(e.currentTarget.value)}
+            onPaste={(e) => {
+              // Ctrl+V de una imagen → la adjunta (reusa MediaAttach).
+              const img = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith("image/"));
+              if (img) {
+                e.preventDefault();
+                setAttachFile(img);
+              }
+            }}
             rows={2}
-            placeholder="Escribe un mensaje…"
+            placeholder="Escribe un mensaje… (pega una imagen con Ctrl+V)"
             className={inputCls}
             disabled={pending}
           />
@@ -1271,7 +1283,7 @@ function WhatsappComposer({
             </button>
             {msg && <span className="text-xs text-slate-500">{msg}</span>}
           </div>
-          <ImageAttach leadId={leadId} disabled={pending} onSent={onSent} />
+          <MediaAttach leadId={leadId} file={attachFile} setFile={setAttachFile} disabled={pending} onSent={onSent} />
         </>
       ) : (
         <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
@@ -1430,20 +1442,42 @@ function QuickReplyBar({ leadId, onInsert }: { leadId: string; onInsert: (body: 
 }
 
 /** Pick an image, resize it client-side, and send it over WhatsApp as an image. */
-function ImageAttach({ leadId, disabled, onSent }: { leadId: string; disabled: boolean; onSent: () => void }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
+/** Attach + send media over WhatsApp: image, PDF/boleta (document) or video.
+ *  `file` is controlled by the composer so a Ctrl+V paste can set it. The file is
+ *  uploaded DIRECTLY to Storage (signed URL) — bypassing the Server-Action body
+ *  limit — then sent to Meta by public link. Images are downscaled first. */
+function MediaAttach({
+  leadId,
+  file,
+  setFile,
+  disabled,
+  onSent,
+}: {
+  leadId: string;
+  file: File | null;
+  setFile: (f: File | null) => void;
+  disabled: boolean;
+  onSent: () => void;
+}) {
   const [caption, setCaption] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const inputRef = useRef<HTMLInputElement>(null);
 
-  function pick(f: File | null) {
-    setPreview((p) => {
-      if (p) URL.revokeObjectURL(p);
-      return f ? URL.createObjectURL(f) : null;
-    });
-    setFile(f);
+  // Object-URL preview for image/video (revoked on change/unmount).
+  useEffect(() => {
+    if (file && (file.type.startsWith("image/") || file.type.startsWith("video/"))) {
+      const url = URL.createObjectURL(file);
+      setPreview(url);
+      return () => URL.revokeObjectURL(url);
+    }
+    setPreview(null);
+  }, [file]);
+
+  function clear() {
+    setFile(null);
+    setCaption("");
     setMsg(null);
   }
 
@@ -1451,30 +1485,57 @@ function ImageAttach({ leadId, disabled, onSent }: { leadId: string; disabled: b
     if (!file) return;
     setMsg(null);
     startTransition(async () => {
-      const blob = await resizeImageToBlob(file);
-      const fd = new FormData();
-      fd.append("image", blob, "image.jpg");
-      fd.append("caption", caption.trim());
-      const res = await sendLeadImage(leadId, fd);
-      if (res.error) {
-        setMsg(res.error);
-        return;
+      try {
+        const isImage = file.type.startsWith("image/");
+        const blob: Blob = isImage ? await resizeImageToBlob(file) : file;
+        const contentType = isImage ? "image/jpeg" : file.type;
+        const filename = file.name || (isImage ? "imagen.jpg" : "archivo");
+        const prep = await createWaMediaUpload(leadId, contentType, filename);
+        if ("error" in prep) {
+          setMsg(prep.error);
+          return;
+        }
+        const sb = createBrowserSupabase();
+        const up = await sb.storage
+          .from("whatsapp-media")
+          .uploadToSignedUrl(prep.path, prep.token, blob, { contentType });
+        if (up.error) {
+          setMsg(`No se pudo subir: ${up.error.message}`);
+          return;
+        }
+        const res = await sendLeadMedia(leadId, { path: prep.path, kind: prep.kind, filename, caption: caption.trim() });
+        if (res.error) {
+          setMsg(res.error);
+          return;
+        }
+        clear();
+        setMsg(res.notice ?? "Enviado.");
+        onSent();
+      } catch (e) {
+        setMsg(`Error: ${(e as Error)?.message ?? "no se pudo enviar"}`);
       }
-      pick(null);
-      setCaption("");
-      setMsg(res.notice ?? "Imagen enviada.");
-      onSent();
     });
   }
+
+  const kindLabel = !file
+    ? ""
+    : file.type.startsWith("image/")
+      ? "imagen"
+      : file.type.startsWith("video/")
+        ? "video"
+        : "documento";
 
   return (
     <div>
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,application/pdf,video/mp4,video/3gpp"
         className="hidden"
-        onChange={(e) => pick(e.currentTarget.files?.[0] ?? null)}
+        onChange={(e) => {
+          setFile(e.currentTarget.files?.[0] ?? null);
+          setMsg(null);
+        }}
       />
       {!file ? (
         <button
@@ -1483,16 +1544,25 @@ function ImageAttach({ leadId, disabled, onSent }: { leadId: string; disabled: b
           disabled={disabled || pending}
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
         >
-          📷 Enviar imagen
+          📎 Adjuntar (imagen, PDF o video)
         </button>
       ) : (
         <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-2">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={preview ?? ""} alt="Vista previa" className="max-h-40 rounded" />
+          {file.type.startsWith("image/") ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={preview ?? ""} alt="Vista previa" className="max-h-40 rounded" />
+          ) : file.type.startsWith("video/") ? (
+            // eslint-disable-next-line jsx-a11y/media-has-caption
+            <video src={preview ?? ""} controls className="max-h-40 rounded" />
+          ) : (
+            <div className="flex items-center gap-2 text-sm text-slate-600">
+              📄 <span className="truncate">{file.name || "Documento"}</span>
+            </div>
+          )}
           <input
             value={caption}
             onChange={(e) => setCaption(e.currentTarget.value)}
-            placeholder="Texto de la imagen (opcional)"
+            placeholder="Texto (opcional)"
             disabled={pending}
             className="w-full rounded border border-slate-200 px-2 py-1 text-sm"
           />
@@ -1503,9 +1573,9 @@ function ImageAttach({ leadId, disabled, onSent }: { leadId: string; disabled: b
               disabled={pending}
               className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
             >
-              {pending ? "Enviando…" : "Enviar imagen"}
+              {pending ? "Enviando…" : `Enviar ${kindLabel}`}
             </button>
-            <button type="button" onClick={() => pick(null)} disabled={pending} className="text-xs text-slate-500 hover:underline">
+            <button type="button" onClick={clear} disabled={pending} className="text-xs text-slate-500 hover:underline">
               Quitar
             </button>
             {msg && <span className="text-xs text-slate-500">{msg}</span>}

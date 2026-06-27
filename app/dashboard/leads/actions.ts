@@ -17,7 +17,13 @@ import {
   updateDraftOrder,
   type ProductVariantResult,
 } from "@/lib/shopify";
-import { fetchLastInboundAt, sendWhatsappImage, sendWhatsappText } from "@/lib/kapso";
+import {
+  fetchLastInboundAt,
+  sendWhatsappDocument,
+  sendWhatsappImage,
+  sendWhatsappText,
+  sendWhatsappVideo,
+} from "@/lib/kapso";
 
 // Process-level cache of vendedora id → display name (emails ~never change).
 const agentNameCache = new Map<string, string>();
@@ -552,20 +558,65 @@ async function ensureWaMediaBucket(admin: ReturnType<typeof createAdminSupabase>
   _waMediaBucketReady = true;
 }
 
+export type WaMediaKind = "image" | "document" | "video";
+
+/** Map a MIME type to a WhatsApp media kind, or null if not allowed. */
+function waMediaKind(contentType: string): WaMediaKind | null {
+  const ct = contentType.toLowerCase();
+  if (ct.startsWith("image/")) return "image";
+  if (ct === "video/mp4" || ct === "video/3gpp") return "video";
+  if (ct === "application/pdf") return "document";
+  return null;
+}
+
 /**
- * Send an IMAGE to the lead over WhatsApp (inside the 24h window). The image is
- * uploaded to a public Storage bucket and sent to Meta by link; logged to the
- * history like a message. The uploaded file is removed if the send fails.
+ * Mint a signed upload URL so the browser can push a media file (image/PDF/video)
+ * DIRECTLY to the public Storage bucket — bypassing the ~4.5 MB Server-Action body
+ * limit (videos reach 16 MB). The client then calls `sendLeadMedia` with the path.
  */
-export async function sendLeadImage(leadId: string, formData: FormData): Promise<LeadActionState> {
-  const file = formData.get("image");
-  const caption = String(formData.get("caption") ?? "").trim();
-  if (!(file instanceof File) || file.size === 0) return { error: "Adjunta una imagen." };
-  if (!file.type.startsWith("image/")) return { error: "El archivo debe ser una imagen." };
-  if (file.size > 6 * 1024 * 1024) return { error: "La imagen es muy grande (máx. 6 MB)." };
-  if (caption.length > 1024) return { error: "El texto de la imagen es muy largo (máx. 1024)." };
+export async function createWaMediaUpload(
+  leadId: string,
+  contentType: string,
+  filename: string,
+): Promise<{ error: string } | { path: string; token: string; kind: WaMediaKind }> {
+  const kind = waMediaKind(contentType);
+  if (!kind) return { error: "Tipo de archivo no soportado (imagen, PDF o video mp4)." };
   const ctx = await authorizeLead(leadId);
   if (!ctx) return { error: "Sin acceso a este lead." };
+
+  const admin = createAdminSupabase();
+  try {
+    await ensureWaMediaBucket(admin);
+    const safeExt = (filename.split(".").pop() || contentType.split("/")[1] || "bin")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "")
+      .slice(0, 8);
+    const path = `${ctx.storeId}/${leadId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${safeExt}`;
+    const { data, error } = await admin.storage.from("whatsapp-media").createSignedUploadUrl(path);
+    if (error || !data) return { error: `No se pudo preparar la subida: ${error?.message ?? "error"}` };
+    return { path: data.path, token: data.token, kind };
+  } catch (e) {
+    return { error: `No se pudo preparar la subida: ${(e as Error)?.message ?? "error"}` };
+  }
+}
+
+/**
+ * Send an already-uploaded media file (by Storage `path`) to the lead over
+ * WhatsApp (inside the 24h window) — image, document (boleta/PDF) or video. Sent
+ * to Meta by public link; logged to the history. The object is removed if the
+ * send fails so we don't leave orphans.
+ */
+export async function sendLeadMedia(
+  leadId: string,
+  args: { path: string; kind: WaMediaKind; filename?: string; caption?: string },
+): Promise<LeadActionState> {
+  const caption = (args.caption ?? "").trim();
+  if (caption.length > 1024) return { error: "El texto es muy largo (máx. 1024)." };
+  if (!["image", "document", "video"].includes(args.kind)) return { error: "Tipo de archivo no soportado." };
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  // The path must live under this store's prefix (defense against arbitrary sends).
+  if (!args.path.startsWith(`${ctx.storeId}/`)) return { error: "Archivo inválido." };
 
   const admin = createAdminSupabase();
   const { data } = await admin.from("leads").select("phone").eq("id", leadId).maybeSingle();
@@ -577,50 +628,46 @@ export async function sendLeadImage(leadId: string, formData: FormData): Promise
     return { error: "La tienda no tiene WhatsApp/Kapso configurado." };
   }
 
-  // Upload to a public bucket so Meta can fetch the image by URL.
-  let imageUrl: string;
-  let path: string;
-  try {
-    await ensureWaMediaBucket(admin);
-    const ext = ((file.type.split("/")[1] || "jpg").split("+")[0] ?? "jpg").replace("jpeg", "jpg");
-    path = `${ctx.storeId}/${leadId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const up = await admin.storage.from("whatsapp-media").upload(path, bytes, {
-      contentType: file.type,
-      upsert: false,
-    });
-    if (up.error) return { error: `No se pudo subir la imagen: ${up.error.message}` };
-    imageUrl = admin.storage.from("whatsapp-media").getPublicUrl(path).data.publicUrl;
-  } catch (e) {
-    return { error: `No se pudo preparar la imagen: ${(e as Error)?.message ?? "error"}` };
-  }
+  const url = admin.storage.from("whatsapp-media").getPublicUrl(args.path).data.publicUrl;
+  const k = { apiKey: creds.kapso_api_key };
+  const pnId = creds.whatsapp_phone_number_id;
+  const res =
+    args.kind === "image"
+      ? await sendWhatsappImage(k, { phoneNumberId: pnId, to: phone, imageUrl: url, caption: caption || undefined })
+      : args.kind === "video"
+        ? await sendWhatsappVideo(k, { phoneNumberId: pnId, to: phone, videoUrl: url, caption: caption || undefined })
+        : await sendWhatsappDocument(k, {
+            phoneNumberId: pnId,
+            to: phone,
+            documentUrl: url,
+            filename: args.filename || undefined,
+            caption: caption || undefined,
+          });
 
-  const res = await sendWhatsappImage(
-    { apiKey: creds.kapso_api_key },
-    { phoneNumberId: creds.whatsapp_phone_number_id, to: phone, imageUrl, caption: caption || undefined },
-  );
   if (!res.ok) {
-    await admin.storage.from("whatsapp-media").remove([path]).catch(() => {}); // no dejes huérfanos
+    await admin.storage.from("whatsapp-media").remove([args.path]).catch(() => {}); // no dejes huérfanos
     const closed = res.code === 131047 || /24\s*h|re-?engag|outside|window/i.test(res.error);
     return {
       error: closed
         ? "Ventana de 24h cerrada: el cliente debe escribirte primero (o se necesita una plantilla)."
-        : `No se pudo enviar la imagen: ${res.error}`,
+        : `No se pudo enviar: ${res.error}`,
     };
   }
 
+  const icon = args.kind === "image" ? "📷" : args.kind === "video" ? "🎥" : "📄";
+  const label = args.kind === "image" ? "Imagen" : args.kind === "video" ? "Video" : args.filename || "Documento";
   await admin.from("lead_calls").insert({
     lead_id: leadId,
     store_id: ctx.storeId,
     vendedora: ctx.userId,
     kind: "message",
     new_status: null,
-    note: caption ? `📷 ${caption}` : "📷 Imagen enviada",
+    note: caption ? `${icon} ${caption}` : `${icon} ${label} enviado`,
   });
   await admin.from("leads").update({ last_interaction_at: new Date().toISOString() }).eq("id", leadId);
 
   revalidatePath("/dashboard/leads");
-  return { notice: "Imagen enviada por WhatsApp ✓" };
+  return { notice: "Enviado por WhatsApp ✓" };
 }
 
 // ---------------------------------------------------------------------------
