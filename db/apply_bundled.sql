@@ -1006,3 +1006,28 @@ alter table stores add column if not exists flow_webhook_secret_enc text;
 alter table stores add column if not exists browse_template_enabled  boolean not null default false;
 alter table stores add column if not exists browse_template_name      text;
 alter table stores add column if not exists browse_template_language  text;
+
+-- ---- 0016 ----
+-- per-store canned WhatsApp messages (respuestas rápidas) for the lead drawer.
+create table if not exists quick_replies (
+  id          uuid primary key default gen_random_uuid(),
+  store_id    uuid not null references stores(id) on delete cascade,
+  label       text not null,
+  body        text not null,
+  sort        integer not null default 0,
+  created_at  timestamptz not null default now()
+);
+create index if not exists quick_replies_store_idx on quick_replies (store_id, sort);
+alter table quick_replies enable row level security;
+drop policy if exists quick_replies_select on quick_replies;
+create policy quick_replies_select on quick_replies for select to authenticated
+  using (store_id in (select auth_store_ids()));
+drop policy if exists quick_replies_insert on quick_replies;
+create policy quick_replies_insert on quick_replies for insert to authenticated
+  with check (store_id in (select auth_store_ids()));
+drop policy if exists quick_replies_update on quick_replies;
+create policy quick_replies_update on quick_replies for update to authenticated
+  using (store_id in (select auth_store_ids())) with check (store_id in (select auth_store_ids()));
+drop policy if exists quick_replies_delete on quick_replies;
+create policy quick_replies_delete on quick_replies for delete to authenticated
+  using (store_id in (select auth_store_ids()));

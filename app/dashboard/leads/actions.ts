@@ -17,7 +17,7 @@ import {
   updateDraftOrder,
   type ProductVariantResult,
 } from "@/lib/shopify";
-import { fetchLastInboundAt, sendWhatsappText } from "@/lib/kapso";
+import { fetchLastInboundAt, sendWhatsappImage, sendWhatsappText } from "@/lib/kapso";
 
 // Process-level cache of vendedora id → display name (emails ~never change).
 const agentNameCache = new Map<string, string>();
@@ -541,6 +541,139 @@ export async function sendLeadMessage(leadId: string, text: string): Promise<Lea
 
   revalidatePath("/dashboard/leads");
   return { notice: "Mensaje enviado por WhatsApp ✓" };
+}
+
+// Lazily ensure the public bucket for WhatsApp image sends exists (memoized per
+// server instance). Service-role bypasses Storage RLS; public ⇒ Meta can fetch.
+let _waMediaBucketReady = false;
+async function ensureWaMediaBucket(admin: ReturnType<typeof createAdminSupabase>): Promise<void> {
+  if (_waMediaBucketReady) return;
+  await admin.storage.createBucket("whatsapp-media", { public: true }); // error if exists ⇒ fine
+  _waMediaBucketReady = true;
+}
+
+/**
+ * Send an IMAGE to the lead over WhatsApp (inside the 24h window). The image is
+ * uploaded to a public Storage bucket and sent to Meta by link; logged to the
+ * history like a message. The uploaded file is removed if the send fails.
+ */
+export async function sendLeadImage(leadId: string, formData: FormData): Promise<LeadActionState> {
+  const file = formData.get("image");
+  const caption = String(formData.get("caption") ?? "").trim();
+  if (!(file instanceof File) || file.size === 0) return { error: "Adjunta una imagen." };
+  if (!file.type.startsWith("image/")) return { error: "El archivo debe ser una imagen." };
+  if (file.size > 6 * 1024 * 1024) return { error: "La imagen es muy grande (máx. 6 MB)." };
+  if (caption.length > 1024) return { error: "El texto de la imagen es muy largo (máx. 1024)." };
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+
+  const admin = createAdminSupabase();
+  const { data } = await admin.from("leads").select("phone").eq("id", leadId).maybeSingle();
+  const phone = (data as { phone: string | null } | null)?.phone ?? null;
+  if (!phone) return { error: "El lead no tiene teléfono." };
+
+  const creds = await getStoreCreds(ctx.storeId);
+  if (!creds?.kapso_api_key || !creds.whatsapp_phone_number_id) {
+    return { error: "La tienda no tiene WhatsApp/Kapso configurado." };
+  }
+
+  // Upload to a public bucket so Meta can fetch the image by URL.
+  let imageUrl: string;
+  let path: string;
+  try {
+    await ensureWaMediaBucket(admin);
+    const ext = ((file.type.split("/")[1] || "jpg").split("+")[0] ?? "jpg").replace("jpeg", "jpg");
+    path = `${ctx.storeId}/${leadId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const up = await admin.storage.from("whatsapp-media").upload(path, bytes, {
+      contentType: file.type,
+      upsert: false,
+    });
+    if (up.error) return { error: `No se pudo subir la imagen: ${up.error.message}` };
+    imageUrl = admin.storage.from("whatsapp-media").getPublicUrl(path).data.publicUrl;
+  } catch (e) {
+    return { error: `No se pudo preparar la imagen: ${(e as Error)?.message ?? "error"}` };
+  }
+
+  const res = await sendWhatsappImage(
+    { apiKey: creds.kapso_api_key },
+    { phoneNumberId: creds.whatsapp_phone_number_id, to: phone, imageUrl, caption: caption || undefined },
+  );
+  if (!res.ok) {
+    await admin.storage.from("whatsapp-media").remove([path]).catch(() => {}); // no dejes huérfanos
+    const closed = res.code === 131047 || /24\s*h|re-?engag|outside|window/i.test(res.error);
+    return {
+      error: closed
+        ? "Ventana de 24h cerrada: el cliente debe escribirte primero (o se necesita una plantilla)."
+        : `No se pudo enviar la imagen: ${res.error}`,
+    };
+  }
+
+  await admin.from("lead_calls").insert({
+    lead_id: leadId,
+    store_id: ctx.storeId,
+    vendedora: ctx.userId,
+    kind: "message",
+    new_status: null,
+    note: caption ? `📷 ${caption}` : "📷 Imagen enviada",
+  });
+  await admin.from("leads").update({ last_interaction_at: new Date().toISOString() }).eq("id", leadId);
+
+  revalidatePath("/dashboard/leads");
+  return { notice: "Imagen enviada por WhatsApp ✓" };
+}
+
+// ---------------------------------------------------------------------------
+// Quick replies (respuestas rápidas) — per-store canned messages the advisor
+// inserts into the WhatsApp composer. Shared across the store's advisors.
+// ---------------------------------------------------------------------------
+export interface QuickReply {
+  id: string;
+  label: string;
+  body: string;
+}
+
+export async function listQuickReplies(leadId: string): Promise<QuickReply[]> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return [];
+  const admin = createAdminSupabase();
+  const { data } = await admin
+    .from("quick_replies")
+    .select("id, label, body")
+    .eq("store_id", ctx.storeId)
+    .order("sort", { ascending: true })
+    .order("created_at", { ascending: true });
+  return (data as QuickReply[] | null) ?? [];
+}
+
+export async function createQuickReply(
+  leadId: string,
+  label: string,
+  body: string,
+): Promise<{ replies: QuickReply[] } | { error: string }> {
+  const l = label.trim();
+  const b = body.trim();
+  if (!l || !b) return { error: "Completa el título y el mensaje." };
+  if (l.length > 40) return { error: "El título es muy largo (máx. 40)." };
+  if (b.length > 4000) return { error: "El mensaje es muy largo." };
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+  const { error } = await admin.from("quick_replies").insert({ store_id: ctx.storeId, label: l, body: b });
+  if (error) return { error: error.message };
+  return { replies: await listQuickReplies(leadId) };
+}
+
+export async function deleteQuickReply(
+  leadId: string,
+  id: string,
+): Promise<{ replies: QuickReply[] } | { error: string }> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+  const { error } = await admin.from("quick_replies").delete().eq("id", id).eq("store_id", ctx.storeId);
+  if (error) return { error: error.message };
+  return { replies: await listQuickReplies(leadId) };
 }
 
 // ===========================================================================
