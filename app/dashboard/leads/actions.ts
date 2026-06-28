@@ -20,12 +20,13 @@ import {
 import {
   fetchConversationTranscript,
   fetchLastInboundAt,
-  findConversationIdByPhone,
+  listConversationsByPhone,
   sendWhatsappDocument,
   sendWhatsappImage,
   sendWhatsappText,
   sendWhatsappVideo,
 } from "@/lib/kapso";
+import { getWaNumbers } from "@/lib/access";
 
 // Process-level cache of vendedora id → display name (emails ~never change).
 const agentNameCache = new Map<string, string>();
@@ -485,16 +486,22 @@ const WINDOW_MS = 24 * 60 * 60 * 1000;
  */
 export async function getLeadWindow(
   leadId: string,
+  conversationId?: string,
 ): Promise<{ open: boolean; lastInboundAt: string | null; reason?: string }> {
   const ctx = await authorizeLead(leadId);
   if (!ctx) return { open: false, lastInboundAt: null, reason: "Sin acceso." };
-  const admin = createAdminSupabase();
-  const { data } = await admin
-    .from("leads")
-    .select("kapso_conversation_id")
-    .eq("id", leadId)
-    .maybeSingle();
-  const convId = (data as { kapso_conversation_id: string | null } | null)?.kapso_conversation_id ?? null;
+  // Per-conversation window: a multi-number lead has its own 24h window per number,
+  // so honour the active thread's conversation when given.
+  let convId = conversationId ?? null;
+  if (!convId) {
+    const admin = createAdminSupabase();
+    const { data } = await admin
+      .from("leads")
+      .select("kapso_conversation_id")
+      .eq("id", leadId)
+      .maybeSingle();
+    convId = (data as { kapso_conversation_id: string | null } | null)?.kapso_conversation_id ?? null;
+  }
   if (!convId) return { open: false, lastInboundAt: null, reason: "Sin conversación de WhatsApp." };
   const creds = await getStoreCreds(ctx.storeId);
   if (!creds?.kapso_api_key) return { open: false, lastInboundAt: null, reason: "Tienda sin Kapso configurado." };
@@ -516,20 +523,45 @@ export interface LeadConversationMessage {
   status: string | null; // WhatsApp delivery status (sent/delivered/read/failed)
 }
 
+/** One WhatsApp thread for a lead: the customer wrote to this business number.
+ *  A lead can have several (one per connected Kapso number). */
+export interface LeadThread {
+  conversationId: string;
+  phoneNumberId: string | null;
+  label: string; // friendly number name (e.g. "Aurela")
+  displayPhone: string | null; // e.g. "+51 917 173 327"
+  lastActiveAt: string | null;
+}
+
 export interface LeadConversation {
   messages: LeadConversationMessage[];
+  threads: LeadThread[]; // all conversations for this phone (drives the number selector)
+  activeConversationId: string | null;
+  activePhoneNumberId: string | null; // the number to reply FROM for the active thread
   reason?: string; // set (with messages: []) when the transcript can't be shown
 }
 
 /**
- * Load the FULL WhatsApp conversation for a lead (text + media) from Kapso, so
- * the advisor can read the whole thread — including Yape vouchers and product
- * photos — without leaving the dashboard. Requested with `fields=kapso(default)`
- * so each message carries its stable `media_url`. RLS-authorized; never throws.
+ * Load a lead's WhatsApp conversation (text + media) from Kapso. Also returns the
+ * list of THREADS — one per connected number the customer wrote to — so the drawer
+ * can show a selector when there's more than one (a customer who messaged both of
+ * the store's numbers). `conversationId` picks which thread to read (validated to
+ * belong to this lead's phone); otherwise the stored or most-recent one is used.
+ * Requested with `fields=kapso(default)` for stable media URLs. RLS-authorized.
  */
-export async function loadLeadConversation(leadId: string): Promise<LeadConversation> {
+export async function loadLeadConversation(
+  leadId: string,
+  conversationId?: string,
+): Promise<LeadConversation> {
+  const empty = (reason?: string): LeadConversation => ({
+    messages: [],
+    threads: [],
+    activeConversationId: null,
+    activePhoneNumberId: null,
+    reason,
+  });
   const ctx = await authorizeLead(leadId);
-  if (!ctx) return { messages: [], reason: "Sin acceso a este lead." };
+  if (!ctx) return empty("Sin acceso a este lead.");
 
   const admin = createAdminSupabase();
   const { data } = await admin
@@ -544,25 +576,49 @@ export async function loadLeadConversation(leadId: string): Promise<LeadConversa
   } | null) ?? null;
 
   const creds = await getStoreCreds(ctx.storeId);
-  if (!creds?.kapso_api_key) return { messages: [], reason: "La tienda no tiene Kapso configurado." };
+  if (!creds?.kapso_api_key) return empty("La tienda no tiene Kapso configurado.");
 
-  // Prefer the stored conversation id; fall back to resolving it from the phone
-  // (ad/cart leads often have a WhatsApp thread but no id captured at ingest).
-  let convId = lead?.kapso_conversation_id ?? null;
-  if (!convId && lead?.phone) {
-    convId = await findConversationIdByPhone(
-      { apiKey: creds.kapso_api_key },
-      lead.phone,
-      lead.wa_phone_number_id,
-    );
-  }
-  if (!convId) return { messages: [], reason: "Este lead no tiene conversación de WhatsApp todavía." };
+  // All conversations for this phone across the project's numbers (drives the selector).
+  const convs = lead?.phone
+    ? await listConversationsByPhone({ apiKey: creds.kapso_api_key }, lead.phone)
+    : [];
+  const labels = await getWaNumbers(convs.map((c) => (c.phone_number_id as string | null) ?? null));
+  const threads: LeadThread[] = convs.map((c) => {
+    const pnid = (c.phone_number_id as string | null) ?? null;
+    const wn = pnid ? labels[pnid] : null;
+    return {
+      conversationId: String(c.id),
+      phoneNumberId: pnid,
+      label: wn?.name || wn?.displayPhone || pnid || "WhatsApp",
+      displayPhone: wn?.displayPhone ?? null,
+      lastActiveAt:
+        (c.last_active_at as string | null) ?? (c.kapso?.last_message_timestamp as string | null) ?? null,
+    };
+  });
+  const ids = new Set(threads.map((t) => t.conversationId));
+
+  // Pick the active thread: explicit param (validated) → stored id → most recent.
+  let activeId: string | null = null;
+  if (conversationId && ids.has(conversationId)) activeId = conversationId;
+  else if (lead?.kapso_conversation_id && ids.has(lead.kapso_conversation_id)) activeId = lead.kapso_conversation_id;
+  else if (threads[0]) activeId = threads[0].conversationId;
+  else activeId = lead?.kapso_conversation_id ?? null;
+  if (!activeId) return empty("Este lead no tiene conversación de WhatsApp todavía.");
+
+  const activeThread = threads.find((t) => t.conversationId === activeId) ?? null;
+  const activePhoneNumberId = activeThread?.phoneNumberId ?? lead?.wa_phone_number_id ?? null;
 
   let parsed;
   try {
-    parsed = await fetchConversationTranscript({ apiKey: creds.kapso_api_key }, convId);
+    parsed = await fetchConversationTranscript({ apiKey: creds.kapso_api_key }, activeId);
   } catch {
-    return { messages: [], reason: "No se pudo cargar la conversación de WhatsApp." };
+    return {
+      messages: [],
+      threads,
+      activeConversationId: activeId,
+      activePhoneNumberId,
+      reason: "No se pudo cargar la conversación de WhatsApp.",
+    };
   }
 
   const messages: LeadConversationMessage[] = parsed.map((m) => ({
@@ -574,8 +630,13 @@ export async function loadLeadConversation(leadId: string): Promise<LeadConversa
     mediaUrl: m.mediaUrl,
     status: m.status,
   }));
-  if (!messages.length) return { messages: [], reason: "Sin mensajes en esta conversación todavía." };
-  return { messages };
+  return {
+    messages,
+    threads,
+    activeConversationId: activeId,
+    activePhoneNumberId,
+    reason: messages.length ? undefined : "Sin mensajes en esta conversación todavía.",
+  };
 }
 
 /**
@@ -583,7 +644,11 @@ export async function loadLeadConversation(leadId: string): Promise<LeadConversa
  * session window; outside it WhatsApp rejects the send and we say so. The sent
  * message is logged to the lead history (kind="message").
  */
-export async function sendLeadMessage(leadId: string, text: string): Promise<LeadActionState> {
+export async function sendLeadMessage(
+  leadId: string,
+  text: string,
+  phoneNumberId?: string,
+): Promise<LeadActionState> {
   const body = text.trim();
   if (!body) return { error: "Escribe un mensaje." };
   if (body.length > 4000) return { error: "Mensaje demasiado largo (máx. 4000 caracteres)." };
@@ -596,13 +661,15 @@ export async function sendLeadMessage(leadId: string, text: string): Promise<Lea
   if (!phone) return { error: "El lead no tiene teléfono." };
 
   const creds = await getStoreCreds(ctx.storeId);
-  if (!creds?.kapso_api_key || !creds.whatsapp_phone_number_id) {
+  // Reply FROM the active thread's number (multi-number leads); fall back to the store's.
+  const pnId = (phoneNumberId && phoneNumberId.trim()) || creds?.whatsapp_phone_number_id;
+  if (!creds?.kapso_api_key || !pnId) {
     return { error: "La tienda no tiene WhatsApp/Kapso configurado." };
   }
 
   const res = await sendWhatsappText(
     { apiKey: creds.kapso_api_key },
-    { phoneNumberId: creds.whatsapp_phone_number_id, to: phone, body },
+    { phoneNumberId: pnId, to: phone, body },
   );
   if (!res.ok) {
     const closed = res.code === 131047 || /24\s*h|re-?engag|outside|window/i.test(res.error);
@@ -688,6 +755,7 @@ export async function createWaMediaUpload(
 export async function sendLeadMedia(
   leadId: string,
   args: { path: string; kind: WaMediaKind; filename?: string; caption?: string },
+  phoneNumberId?: string,
 ): Promise<LeadActionState> {
   const caption = (args.caption ?? "").trim();
   if (caption.length > 1024) return { error: "El texto es muy largo (máx. 1024)." };
@@ -703,13 +771,14 @@ export async function sendLeadMedia(
   if (!phone) return { error: "El lead no tiene teléfono." };
 
   const creds = await getStoreCreds(ctx.storeId);
-  if (!creds?.kapso_api_key || !creds.whatsapp_phone_number_id) {
+  // Send FROM the active thread's number (multi-number leads); fall back to the store's.
+  const pnId = (phoneNumberId && phoneNumberId.trim()) || creds?.whatsapp_phone_number_id;
+  if (!creds?.kapso_api_key || !pnId) {
     return { error: "La tienda no tiene WhatsApp/Kapso configurado." };
   }
 
   const url = admin.storage.from("whatsapp-media").getPublicUrl(args.path).data.publicUrl;
   const k = { apiKey: creds.kapso_api_key };
-  const pnId = creds.whatsapp_phone_number_id;
   const res =
     args.kind === "image"
       ? await sendWhatsappImage(k, { phoneNumberId: pnId, to: phone, imageUrl: url, caption: caption || undefined })
