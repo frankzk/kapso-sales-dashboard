@@ -9,6 +9,7 @@ import { getStoreCreds, runStoreSync } from "@/lib/ingest";
 import { registerOrderWebhooks } from "@/lib/shopify";
 import { buildStoreDailySummary, formatDailySummary, limaDayBounds } from "@/lib/daily-summary";
 import { sendTelegramMessage } from "@/lib/telegram";
+import { listMetaAdAccounts, type MetaAdAccount } from "@/lib/meta-marketing";
 import { env } from "@/lib/env";
 
 export interface SettingsState {
@@ -75,6 +76,7 @@ export async function updateStore(
     browse_template_language: get("browse_template_language"),
     telegram_chat_id: get("telegram_chat_id"),
     telegram_bot_token: get("telegram_bot_token"),
+    meta_access_token: get("meta_access_token"),
   });
 
   if (!Object.keys(patch).length) return { notice: "No hay cambios para guardar." };
@@ -137,6 +139,40 @@ export async function syncNow(
   } catch (e) {
     return { error: errMsg(e) };
   }
+}
+
+/** List the ad accounts the store's Meta token can access (for the picker). */
+export async function listStoreMetaAdAccounts(
+  storeId: string,
+): Promise<{ accounts: MetaAdAccount[] } | { error: string }> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const creds = await getStoreCreds(storeId, ctx.admin);
+  if (!creds?.meta_access_token) {
+    return { error: "Primero pega el access token de Meta arriba y guarda los cambios." };
+  }
+  const res = await listMetaAdAccounts(creds.meta_access_token);
+  if (!res.ok) return { error: `Meta rechazó la consulta: ${res.error}` };
+  return { accounts: res.accounts };
+}
+
+/** Persist the selected Meta ad account (id + display name) for the store. */
+export async function saveMetaAdAccount(
+  storeId: string,
+  accountId: string,
+  accountName: string,
+): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const id = accountId.trim();
+  if (!id) return { error: "Selecciona una cuenta publicitaria." };
+  const { error } = await ctx.admin
+    .from("stores")
+    .update({ meta_ad_account_id: id, meta_ad_account_name: accountName.trim() || null })
+    .eq("id", storeId);
+  if (error) return { error: error.message };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: `Cuenta publicitaria guardada: ${accountName.trim() || id} ✓` };
 }
 
 export async function sendTelegramTest(

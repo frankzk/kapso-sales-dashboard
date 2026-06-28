@@ -96,6 +96,8 @@ export default async function StoreSettingsPage({
       browse_template_name: full.browse_template_name ?? null,
       browse_template_language: full.browse_template_language ?? null,
       telegram_chat_id: full.telegram_chat_id ?? null,
+      meta_ad_account_id: full.meta_ad_account_id ?? null,
+      meta_ad_account_name: full.meta_ad_account_name ?? null,
     },
     has: {
       shopifyToken: Boolean(full.shopify_token_enc),
@@ -103,6 +105,7 @@ export default async function StoreSettingsPage({
       kapsoKey: Boolean(full.kapso_api_key_enc),
       flowSecret: Boolean(full.flow_webhook_secret_enc),
       telegramToken: Boolean(full.telegram_bot_token_enc),
+      metaToken: Boolean(full.meta_access_token_enc),
     },
     oauthAvailable: env.shopifyOAuthConfigured(),
     siteUrl,
