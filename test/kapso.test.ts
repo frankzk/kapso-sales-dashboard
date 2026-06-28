@@ -14,6 +14,7 @@ import {
   fetchConversationSignals,
   fetchConversationTranscript,
   findConversationIdByPhone,
+  listConversationsByPhone,
   classifyKapsoEvent,
   type KapsoClientOpts,
   type ParsedMsg,
@@ -516,5 +517,30 @@ describe("fetchConversationTranscript", () => {
     expect(caps).toHaveLength(2); // followed the cursor for a second page
     expect(new URL(caps[1]!.url).searchParams.get("after")).toBe("NEXT");
     expect(out).toHaveLength(101);
+  });
+});
+
+describe("listConversationsByPhone (multi-number)", () => {
+  it("returns all of a phone's conversations newest-first (across numbers)", async () => {
+    const caps: Capture[] = [];
+    const f = mockFetch(
+      () => ({
+        data: [
+          { id: "older", phone_number: "51999", phone_number_id: "NUM_A", last_active_at: "2026-06-20T10:00:00Z" },
+          { id: "newer", phone_number: "51999", phone_number_id: "NUM_B", last_active_at: "2026-06-27T19:00:00Z" },
+        ],
+      }),
+      caps,
+    );
+    const convs = await listConversationsByPhone(opts(f), "51999");
+    expect(convs.map((c) => c.id)).toEqual(["newer", "older"]); // newest first
+    expect(convs.map((c) => c.phone_number_id)).toEqual(["NUM_B", "NUM_A"]);
+    expect(new URL(caps[0]!.url).searchParams.get("phone_number")).toBe("51999");
+  });
+
+  it("returns [] for an empty phone (no request)", async () => {
+    const caps: Capture[] = [];
+    expect(await listConversationsByPhone(opts(mockFetch(() => ({ data: [] }), caps)), "")).toEqual([]);
+    expect(caps).toHaveLength(0);
   });
 });

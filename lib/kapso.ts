@@ -122,6 +122,35 @@ export function listConversations(
 }
 
 /**
+ * All Kapso conversations for a customer phone (newest-first), across the
+ * project's connected business numbers. A customer who wrote to two of the
+ * store's numbers has one conversation per number. Optionally scoped to one
+ * business number. Never throws ([] on error).
+ */
+export async function listConversationsByPhone(
+  opts: KapsoClientOpts,
+  phone: string,
+  phoneNumberId?: string | null,
+): Promise<KapsoConversation[]> {
+  if (!phone) return [];
+  let page: KapsoPage<KapsoConversation>;
+  try {
+    page = await kapsoGet<KapsoPage<KapsoConversation>>(opts, "/whatsapp/conversations", {
+      phone_number: phone,
+      phone_number_id: phoneNumberId ?? undefined,
+      limit: 20,
+    });
+  } catch {
+    return [];
+  }
+  return (page.data ?? []).slice().sort((a, b) => {
+    const ta = String(a.last_active_at ?? a.created_at ?? "");
+    const tb = String(b.last_active_at ?? b.created_at ?? "");
+    return tb.localeCompare(ta); // newest first
+  });
+}
+
+/**
  * Find the most-recent Kapso conversation id for a customer phone (null if none).
  * Lets the lead drawer show a WhatsApp transcript even when the lead's
  * `kapso_conversation_id` wasn't captured at ingest (e.g. some ad/cart leads).
@@ -132,22 +161,7 @@ export async function findConversationIdByPhone(
   phone: string,
   phoneNumberId?: string | null,
 ): Promise<string | null> {
-  if (!phone) return null;
-  let page: KapsoPage<KapsoConversation>;
-  try {
-    page = await kapsoGet<KapsoPage<KapsoConversation>>(opts, "/whatsapp/conversations", {
-      phone_number: phone,
-      phone_number_id: phoneNumberId ?? undefined,
-      limit: 10,
-    });
-  } catch {
-    return null;
-  }
-  const convs = (page.data ?? []).slice().sort((a, b) => {
-    const ta = String(a.last_active_at ?? a.created_at ?? "");
-    const tb = String(b.last_active_at ?? b.created_at ?? "");
-    return tb.localeCompare(ta); // newest first
-  });
+  const convs = await listConversationsByPhone(opts, phone, phoneNumberId);
   const id = convs[0]?.id;
   return id != null ? String(id) : null;
 }

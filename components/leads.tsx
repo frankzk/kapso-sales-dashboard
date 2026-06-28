@@ -48,6 +48,7 @@ import {
   sendLeadMessage,
   type LeadActionState,
   type LeadConversationMessage,
+  type LeadThread,
   type QuickReply,
 } from "@/app/dashboard/leads/actions";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
@@ -1245,39 +1246,58 @@ function WhatsappChat({
   onSent: () => void;
 }) {
   const [state, setState] = useState<
-    { status: "loading" } | { status: "ready"; messages: LeadConversationMessage[]; reason?: string }
+    | { status: "loading" }
+    | {
+        status: "ready";
+        messages: LeadConversationMessage[];
+        reason?: string;
+        threads: LeadThread[];
+        activeId: string | null;
+        activePhoneNumberId: string | null;
+      }
   >({ status: "loading" });
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true); // is the user near the bottom of the thread?
   const countRef = useRef(0); // previous message count, to detect new arrivals
+  const activeIdRef = useRef<string | null>(null); // active thread (for silent polls)
   const [showJump, setShowJump] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
 
   const load = useCallback(
-    (opts?: { silent?: boolean }) => {
+    (opts?: { silent?: boolean; conversationId?: string }) => {
       if (!opts?.silent) setState({ status: "loading" });
-      loadLeadConversation(leadId).then((res) =>
-        setState({ status: "ready", messages: res.messages, reason: res.reason }),
-      );
+      loadLeadConversation(leadId, opts?.conversationId).then((res) => {
+        activeIdRef.current = res.activeConversationId;
+        setState({
+          status: "ready",
+          messages: res.messages,
+          reason: res.reason,
+          threads: res.threads,
+          activeId: res.activeConversationId,
+          activePhoneNumberId: res.activePhoneNumberId,
+        });
+      });
     },
     [leadId],
   );
 
-  // Load on open; reset scroll tracking when switching leads.
+  // Load on open; reset scroll/thread tracking when switching leads.
   useEffect(() => {
     atBottomRef.current = true;
     countRef.current = 0;
+    activeIdRef.current = null;
     setShowJump(false);
+    setSearch("");
     if (hasConversation) load();
   }, [hasConversation, load]);
 
-  // Live updates: refresh quietly every 20s while the lead is open and the tab visible.
+  // Live updates: refresh the ACTIVE thread quietly every 20s while open + visible.
   useEffect(() => {
     if (!hasConversation) return;
     const id = setInterval(() => {
       if (typeof document === "undefined" || document.visibilityState === "visible") {
-        load({ silent: true });
+        load({ silent: true, conversationId: activeIdRef.current ?? undefined });
       }
     }, 20000);
     return () => clearInterval(id);
@@ -1314,9 +1334,29 @@ function WhatsappChat({
     setShowJump(false);
   }
 
+  // Switch to another number's thread (multi-number lead).
+  function switchThread(convId: string) {
+    if (convId === activeIdRef.current) return;
+    atBottomRef.current = true;
+    setShowJump(false);
+    setSearch("");
+    load({ conversationId: convId });
+  }
+
   if (!hasConversation) return null;
 
+  const threads = state.status === "ready" ? state.threads : [];
+  const activeId = state.status === "ready" ? state.activeId : null;
+  const activePhoneNumberId = state.status === "ready" ? state.activePhoneNumberId : null;
   const allMessages = state.status === "ready" ? state.messages : [];
+  const activeThread = threads.find((t) => t.conversationId === activeId) ?? null;
+  // Clarify which number you reply FROM — only when the lead has more than one.
+  const numberHint =
+    threads.length > 1 && activeThread
+      ? activeThread.displayPhone
+        ? `${activeThread.label} · ${activeThread.displayPhone}`
+        : activeThread.label
+      : null;
   const q = search.trim().toLowerCase();
   const messages = q ? allMessages.filter((m) => m.text.toLowerCase().includes(q)) : allMessages;
   // Interleave day separators ("Hoy", "Ayer", "26 jun") into the (filtered) thread.
@@ -1372,6 +1412,28 @@ function WhatsappChat({
           </button>
         </div>
       </div>
+
+      {/* Selector de número: solo si el cliente escribió a más de un número */}
+      {threads.length > 1 && (
+        <div className="flex gap-1 overflow-x-auto border-b border-slate-200 bg-slate-50 px-2 py-1.5">
+          {threads.map((t) => (
+            <button
+              key={t.conversationId}
+              type="button"
+              onClick={() => switchThread(t.conversationId)}
+              title={t.displayPhone ?? undefined}
+              className={cn(
+                "shrink-0 rounded-full px-2.5 py-1 text-xs font-medium",
+                t.conversationId === activeId
+                  ? "bg-emerald-600 text-white"
+                  : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100",
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Buscar dentro de la conversación */}
       {searchOpen && (
@@ -1438,9 +1500,12 @@ function WhatsappChat({
       <WhatsappComposer
         leadId={leadId}
         lastInteractionAt={lastInteractionAt}
+        conversationId={activeId}
+        phoneNumberId={activePhoneNumberId}
+        numberHint={numberHint}
         onSent={() => {
           onSent();
-          load({ silent: true });
+          load({ silent: true, conversationId: activeIdRef.current ?? undefined });
         }}
       />
     </section>
@@ -1578,10 +1643,16 @@ function ChatBubble({
 function WhatsappComposer({
   leadId,
   lastInteractionAt,
+  conversationId,
+  phoneNumberId,
+  numberHint,
   onSent,
 }: {
   leadId: string;
   lastInteractionAt?: string | null;
+  conversationId?: string | null;
+  phoneNumberId?: string | null;
+  numberHint?: string | null;
   onSent: () => void;
 }) {
   const [win, setWin] = useState<{ loading: boolean; open: boolean; reason?: string }>({
@@ -1617,20 +1688,20 @@ function WhatsappComposer({
       return;
     }
     setWin({ loading: true, open: false });
-    getLeadWindow(leadId).then((w) => {
+    getLeadWindow(leadId, conversationId ?? undefined).then((w) => {
       if (alive) setWin({ loading: false, open: w.open, reason: w.reason });
     });
     return () => {
       alive = false;
     };
-  }, [leadId, lastInteractionAt]);
+  }, [leadId, lastInteractionAt, conversationId]);
 
   function send() {
     const body = text.trim();
     if (!body) return;
     setMsg(null);
     startTransition(async () => {
-      const res = await sendLeadMessage(leadId, body);
+      const res = await sendLeadMessage(leadId, body, phoneNumberId ?? undefined);
       if (res.error) {
         // Window closed mid-send → flip to the closed state with a clear reason
         // (retry is futile). Other errors keep the text so "Reintentar" can resend.
@@ -1668,6 +1739,11 @@ function WhatsappComposer({
       <div className="px-2 pt-2">
         <QuickReplyBar leadId={leadId} onInsert={(b) => setText(b)} />
       </div>
+      {numberHint && (
+        <p className="px-3 pt-1 text-[11px] text-slate-500">
+          Respondes desde <span className="font-medium text-slate-700">{numberHint}</span>
+        </p>
+      )}
       {attachFile && (
         <div className="px-2 pt-2">
           <MediaAttach
@@ -1675,6 +1751,7 @@ function WhatsappComposer({
             file={attachFile}
             setFile={setAttachFile}
             disabled={pending}
+            phoneNumberId={phoneNumberId}
             onSent={onSent}
             onWindowClosed={() => setWin({ loading: false, open: false, reason: "Se cerró la ventana de 24h." })}
           />
@@ -1907,6 +1984,7 @@ function MediaAttach({
   file,
   setFile,
   disabled,
+  phoneNumberId,
   onSent,
   onWindowClosed,
 }: {
@@ -1914,6 +1992,7 @@ function MediaAttach({
   file: File | null;
   setFile: (f: File | null) => void;
   disabled: boolean;
+  phoneNumberId?: string | null;
   onSent: () => void;
   onWindowClosed?: () => void;
 }) {
@@ -1960,7 +2039,11 @@ function MediaAttach({
           setMsg(`No se pudo subir: ${up.error.message}`);
           return;
         }
-        const res = await sendLeadMedia(leadId, { path: prep.path, kind: prep.kind, filename, caption: caption.trim() });
+        const res = await sendLeadMedia(
+          leadId,
+          { path: prep.path, kind: prep.kind, filename, caption: caption.trim() },
+          phoneNumberId ?? undefined,
+        );
         if (res.error) {
           if (res.windowClosed) {
             clear();
