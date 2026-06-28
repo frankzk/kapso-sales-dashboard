@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { listMetaAdAccounts } from "@/lib/meta-marketing";
+import { listMetaAdAccounts, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
 
 function fakeFetch(status: number, json: unknown, capture?: (url: string) => void) {
   return (async (url: string) => {
@@ -51,5 +51,31 @@ describe("listMetaAdAccounts", () => {
     const res = await listMetaAdAccounts("", { fetchImpl: fakeFetch(200, {}, () => (called = true)) });
     expect(res.ok).toBe(false);
     expect(called).toBe(false);
+  });
+});
+
+describe("normalizeMetaAdAccounts (multi-account, with back-compat)", () => {
+  it("parses + dedupes the jsonb array of {id,name}", () => {
+    const out = normalizeMetaAdAccounts([
+      { id: "act_1", name: "Aurela" },
+      { id: "act_2", name: "Kenku" },
+      { id: "act_1", name: "dup" }, // dropped
+      { id: "  ", name: "blank" }, // dropped
+    ]);
+    expect(out).toEqual([
+      { id: "act_1", name: "Aurela" },
+      { id: "act_2", name: "Kenku" },
+    ]);
+  });
+
+  it("falls back to the legacy single id/name when the array is empty", () => {
+    expect(normalizeMetaAdAccounts([], "act_9", "Legacy")).toEqual([{ id: "act_9", name: "Legacy" }]);
+    expect(normalizeMetaAdAccounts(null, "act_9", null)).toEqual([{ id: "act_9", name: null }]);
+  });
+
+  it("returns [] for garbage / nothing set", () => {
+    expect(normalizeMetaAdAccounts(undefined)).toEqual([]);
+    expect(normalizeMetaAdAccounts("nope")).toEqual([]);
+    expect(normalizeMetaAdAccounts([{ name: "no id" }])).toEqual([]);
   });
 });

@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { createAdminSupabase } from "@/lib/db";
 import { getAccessibleStores, getAdminOrgs, getUserRoleSummary } from "@/lib/access";
 import { env } from "@/lib/env";
+import { normalizeMetaAdAccounts } from "@/lib/meta-marketing";
 import { EmptyState } from "@/components/ui";
 import { StoreSettings, type StoreSettingsData } from "@/components/store-settings";
 
@@ -96,8 +97,11 @@ export default async function StoreSettingsPage({
       browse_template_name: full.browse_template_name ?? null,
       browse_template_language: full.browse_template_language ?? null,
       telegram_chat_id: full.telegram_chat_id ?? null,
-      meta_ad_account_id: full.meta_ad_account_id ?? null,
-      meta_ad_account_name: full.meta_ad_account_name ?? null,
+      meta_ad_accounts: normalizeMetaAdAccounts(
+        full.meta_ad_accounts,
+        full.meta_ad_account_id,
+        full.meta_ad_account_name,
+      ),
     },
     has: {
       shopifyToken: Boolean(full.shopify_token_enc),

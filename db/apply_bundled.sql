@@ -1042,3 +1042,13 @@ alter table stores add column if not exists telegram_chat_id        text;
 alter table stores add column if not exists meta_access_token_enc text;
 alter table stores add column if not exists meta_ad_account_id     text;
 alter table stores add column if not exists meta_ad_account_name   text;
+
+-- ---- 0019 ----
+-- Multi-account Meta Ads: a store can track spend across several ad accounts.
+alter table stores add column if not exists meta_ad_accounts jsonb not null default '[]'::jsonb;
+update stores
+   set meta_ad_accounts = jsonb_build_array(
+         jsonb_build_object('id', meta_ad_account_id, 'name', meta_ad_account_name)
+       )
+ where meta_ad_account_id is not null
+   and (meta_ad_accounts is null or meta_ad_accounts = '[]'::jsonb);
