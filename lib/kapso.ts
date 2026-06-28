@@ -121,6 +121,37 @@ export function listConversations(
   });
 }
 
+/**
+ * Find the most-recent Kapso conversation id for a customer phone (null if none).
+ * Lets the lead drawer show a WhatsApp transcript even when the lead's
+ * `kapso_conversation_id` wasn't captured at ingest (e.g. some ad/cart leads).
+ * Optionally scoped to a business number. Never throws.
+ */
+export async function findConversationIdByPhone(
+  opts: KapsoClientOpts,
+  phone: string,
+  phoneNumberId?: string | null,
+): Promise<string | null> {
+  if (!phone) return null;
+  let page: KapsoPage<KapsoConversation>;
+  try {
+    page = await kapsoGet<KapsoPage<KapsoConversation>>(opts, "/whatsapp/conversations", {
+      phone_number: phone,
+      phone_number_id: phoneNumberId ?? undefined,
+      limit: 10,
+    });
+  } catch {
+    return null;
+  }
+  const convs = (page.data ?? []).slice().sort((a, b) => {
+    const ta = String(a.last_active_at ?? a.created_at ?? "");
+    const tb = String(b.last_active_at ?? b.created_at ?? "");
+    return tb.localeCompare(ta); // newest first
+  });
+  const id = convs[0]?.id;
+  return id != null ? String(id) : null;
+}
+
 export interface ListMessagesParams {
   phoneNumberId?: string;
   conversationId?: string;

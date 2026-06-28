@@ -1151,8 +1151,10 @@ function LeadDrawer({
             )}
           </section>
 
-          {/* Conversación completa de WhatsApp (texto + imágenes), traída de Kapso */}
-          <WhatsappConversation leadId={lead.id} hasConversation={!!lead.kapso_conversation_id} />
+          {/* Conversación completa de WhatsApp (texto + imágenes), traída de Kapso.
+              Se muestra para cualquier lead con teléfono: si no hay conversation_id
+              guardado, se resuelve por teléfono al abrir el panel. */}
+          <WhatsappConversation leadId={lead.id} hasConversation={!!(lead.kapso_conversation_id || lead.phone)} />
 
           {/* Enviar WhatsApp / llamar */}
           {!lead.kapso_conversation_id && lead.draft_order_gid && <CallAffordance phone={lead.phone} />}

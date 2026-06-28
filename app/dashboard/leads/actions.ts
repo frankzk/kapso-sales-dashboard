@@ -19,6 +19,7 @@ import {
 } from "@/lib/shopify";
 import {
   fetchLastInboundAt,
+  findConversationIdByPhone,
   listMessages,
   parseConversationMessages,
   sendWhatsappDocument,
@@ -532,14 +533,29 @@ export async function loadLeadConversation(leadId: string): Promise<LeadConversa
   const admin = createAdminSupabase();
   const { data } = await admin
     .from("leads")
-    .select("kapso_conversation_id")
+    .select("kapso_conversation_id, phone, wa_phone_number_id")
     .eq("id", leadId)
     .maybeSingle();
-  const convId = (data as { kapso_conversation_id: string | null } | null)?.kapso_conversation_id ?? null;
-  if (!convId) return { messages: [], reason: "Este lead no tiene conversación de WhatsApp." };
+  const lead = (data as {
+    kapso_conversation_id: string | null;
+    phone: string | null;
+    wa_phone_number_id: string | null;
+  } | null) ?? null;
 
   const creds = await getStoreCreds(ctx.storeId);
   if (!creds?.kapso_api_key) return { messages: [], reason: "La tienda no tiene Kapso configurado." };
+
+  // Prefer the stored conversation id; fall back to resolving it from the phone
+  // (ad/cart leads often have a WhatsApp thread but no id captured at ingest).
+  let convId = lead?.kapso_conversation_id ?? null;
+  if (!convId && lead?.phone) {
+    convId = await findConversationIdByPhone(
+      { apiKey: creds.kapso_api_key },
+      lead.phone,
+      lead.wa_phone_number_id,
+    );
+  }
+  if (!convId) return { messages: [], reason: "Este lead no tiene conversación de WhatsApp todavía." };
 
   let page;
   try {
