@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type ReactNode, useActionState, useEffect, useRef, useState, useTransition } from "react";
+import { type ReactNode, useActionState, useCallback, useEffect, useRef, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
 import {
   adObjectiveLabel,
@@ -1151,16 +1151,16 @@ function LeadDrawer({
             )}
           </section>
 
-          {/* Conversación completa de WhatsApp (texto + imágenes), traída de Kapso.
-              Se muestra para cualquier lead con teléfono: si no hay conversation_id
-              guardado, se resuelve por teléfono al abrir el panel. */}
-          <WhatsappConversation leadId={lead.id} hasConversation={!!(lead.kapso_conversation_id || lead.phone)} />
-
-          {/* Enviar WhatsApp / llamar */}
+          {/* Llamar — para leads de carrito sin conversación de WhatsApp */}
           {!lead.kapso_conversation_id && lead.draft_order_gid && <CallAffordance phone={lead.phone} />}
-          <WhatsappComposer
+
+          {/* Chat de WhatsApp: conversación completa (texto + imágenes) + composer
+              pegado abajo, estilo WhatsApp. Carga al abrir el lead y se resuelve por
+              teléfono si no hay conversation_id guardado. */}
+          <WhatsappChat
             leadId={lead.id}
             lastInteractionAt={lead.last_interaction_at}
+            hasConversation={!!(lead.kapso_conversation_id || lead.phone)}
             onSent={onRegistered}
           />
 
@@ -1206,95 +1206,154 @@ const MEDIA_KIND_META: Record<NonNullable<LeadConversationMessage["mediaKind"]>,
   sticker: { icon: "🩷", label: "Sticker" },
 };
 
+/** yyyy-mm-dd key (local) for grouping chat messages by day. */
+function dayKeyOf(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+/** WhatsApp-style day separator label: Hoy / Ayer / "26 jun". */
+function chatDayLabel(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  if (sameDay(d, now)) return "Hoy";
+  const yest = new Date(now);
+  yest.setDate(now.getDate() - 1);
+  if (sameDay(d, yest)) return "Ayer";
+  return d.toLocaleDateString("es-PE", { day: "2-digit", month: "short" });
+}
+
+/** Time-only (HH:mm) shown inside a chat bubble. */
+function chatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
 /**
- * Full WhatsApp transcript (text + inline images like Yape vouchers) pulled live
- * from Kapso. Collapsed by default and loaded on first expand, so opening a lead
- * drawer never waits on a Kapso round-trip the advisor didn't ask for.
+ * The lead's WhatsApp chat as a self-contained widget — the full conversation
+ * (text + inline images like Yape vouchers) with the composer attached at the
+ * bottom, styled like WhatsApp. Loads when the drawer opens (resolving the
+ * conversation by phone if no id was stored) and refreshes after each send.
  */
-function WhatsappConversation({ leadId, hasConversation }: { leadId: string; hasConversation: boolean }) {
-  const [open, setOpen] = useState(false);
+function WhatsappChat({
+  leadId,
+  lastInteractionAt,
+  hasConversation,
+  onSent,
+}: {
+  leadId: string;
+  lastInteractionAt?: string | null;
+  hasConversation: boolean;
+  onSent: () => void;
+}) {
   const [state, setState] = useState<
-    | { status: "idle" | "loading" }
-    | { status: "ready"; messages: LeadConversationMessage[]; reason?: string }
-  >({ status: "idle" });
+    { status: "loading" } | { status: "ready"; messages: LeadConversationMessage[]; reason?: string }
+  >({ status: "loading" });
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  function load() {
+  const load = useCallback(() => {
     setState({ status: "loading" });
     loadLeadConversation(leadId).then((res) =>
       setState({ status: "ready", messages: res.messages, reason: res.reason }),
     );
-  }
+  }, [leadId]);
 
-  function toggle() {
-    const next = !open;
-    setOpen(next);
-    if (next && state.status === "idle") load();
-  }
-
-  // Jump to the most recent message once the transcript renders.
   useEffect(() => {
-    if (open && state.status === "ready" && scrollRef.current) {
+    if (hasConversation) load();
+  }, [hasConversation, load]);
+
+  // Stick to the latest message whenever the thread (re)renders.
+  useEffect(() => {
+    if (state.status === "ready" && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [open, state]);
+  }, [state]);
 
   if (!hasConversation) return null;
 
+  const messages = state.status === "ready" ? state.messages : [];
+  // Interleave day separators ("Hoy", "Ayer", "26 jun") into the thread.
+  const rows: ReactNode[] = [];
+  let lastDay = "";
+  messages.forEach((m, i) => {
+    const day = dayKeyOf(m.at);
+    if (day !== lastDay) {
+      rows.push(
+        <div key={`day-${i}`} className="flex justify-center py-1.5">
+          <span className="rounded-full bg-white/80 px-2.5 py-0.5 text-[11px] font-medium text-slate-500 shadow-sm">
+            {chatDayLabel(m.at)}
+          </span>
+        </div>,
+      );
+      lastDay = day;
+    }
+    rows.push(<ChatBubble key={m.id ?? `m-${i}`} leadId={leadId} msg={m} />);
+  });
+
   return (
-    <section className="space-y-2">
-      <button
-        type="button"
-        onClick={toggle}
-        className="flex w-full items-center justify-between gap-2 text-sm font-semibold tracking-wide text-slate-700 uppercase"
-        aria-expanded={open}
-      >
-        <span>💬 Conversación de WhatsApp</span>
-        <span className="text-slate-400">{open ? "▲" : "▼"}</span>
-      </button>
-      {open && (
-        <div className="rounded-xl border border-slate-200 bg-slate-50">
-          {state.status !== "ready" ? (
-            <p className="px-3 py-6 text-center text-sm text-slate-400">Cargando conversación…</p>
-          ) : state.messages.length ? (
-            <>
-              <div ref={scrollRef} className="max-h-96 space-y-2 overflow-y-auto px-3 py-3">
-                {state.messages.map((m, i) => (
-                  <ChatBubble key={m.id ?? i} leadId={leadId} msg={m} />
-                ))}
-              </div>
-              <div className="flex items-center justify-between border-t border-slate-200 px-3 py-1.5">
-                <span className="text-xs text-slate-400">{state.messages.length} mensajes</span>
-                <button type="button" onClick={load} className="text-xs font-medium text-brand-700 hover:underline">
-                  Actualizar
-                </button>
-              </div>
-            </>
-          ) : (
-            <p className="px-3 py-6 text-center text-sm text-slate-400">
-              {state.reason ?? "Sin mensajes en esta conversación."}
-            </p>
+    <section className="overflow-hidden rounded-2xl border border-slate-200 shadow-sm">
+      {/* Cabecera estilo WhatsApp */}
+      <div className="flex items-center justify-between gap-2 bg-emerald-600 px-3 py-2 text-white">
+        <div className="flex min-w-0 items-center gap-2">
+          <span aria-hidden>💬</span>
+          <span className="truncate text-sm font-semibold">Conversación de WhatsApp</span>
+          {state.status === "ready" && state.messages.length > 0 && (
+            <span className="shrink-0 text-xs text-emerald-100">· {state.messages.length}</span>
           )}
         </div>
-      )}
+        <button
+          type="button"
+          onClick={load}
+          title="Actualizar"
+          aria-label="Actualizar conversación"
+          className="shrink-0 rounded-full px-1.5 text-lg leading-none text-emerald-100 hover:bg-white/15 hover:text-white"
+        >
+          ↻
+        </button>
+      </div>
+
+      {/* Hilo de mensajes */}
+      <div
+        ref={scrollRef}
+        className="max-h-[55vh] min-h-[180px] space-y-1 overflow-y-auto bg-[#efeae2] px-3 py-3"
+      >
+        {state.status === "loading" ? (
+          <p className="py-10 text-center text-sm text-slate-500">Cargando conversación…</p>
+        ) : messages.length ? (
+          rows
+        ) : (
+          <p className="py-10 text-center text-sm text-slate-500">
+            {state.status === "ready" ? (state.reason ?? "Sin mensajes todavía.") : ""}
+          </p>
+        )}
+      </div>
+
+      {/* Composer pegado abajo */}
+      <WhatsappComposer
+        leadId={leadId}
+        lastInteractionAt={lastInteractionAt}
+        onSent={() => {
+          onSent();
+          load();
+        }}
+      />
     </section>
   );
 }
 
-/** One WhatsApp bubble: customer (left/white) vs. business (right/green), with
- *  inline image previews and links for other media — all via the media proxy. */
+/** One WhatsApp bubble: customer (left/white) vs. business (right/WA green),
+ *  inline image previews + links for other media — all via the media proxy. */
 function ChatBubble({ leadId, msg }: { leadId: string; msg: LeadConversationMessage }) {
   const outbound = msg.direction === "outbound";
-  const mediaSrc = msg.mediaUrl
-    ? `/api/leads/${leadId}/media?u=${encodeURIComponent(msg.mediaUrl)}`
-    : null;
+  const mediaSrc = msg.mediaUrl ? `/api/leads/${leadId}/media?u=${encodeURIComponent(msg.mediaUrl)}` : null;
   const meta = msg.mediaKind ? MEDIA_KIND_META[msg.mediaKind] : null;
   return (
     <div className={cn("flex", outbound ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "max-w-[82%] space-y-1 rounded-2xl px-3 py-2 text-sm shadow-sm",
-          outbound ? "rounded-br-sm bg-emerald-100 text-emerald-950" : "rounded-bl-sm bg-white text-slate-800",
+          "max-w-[85%] rounded-2xl px-2.5 py-1.5 text-sm shadow-sm",
+          outbound ? "rounded-tr-sm bg-[#d9fdd3] text-slate-900" : "rounded-tl-sm bg-white text-slate-800",
         )}
       >
         {mediaSrc && msg.mediaKind === "image" ? (
@@ -1304,7 +1363,7 @@ function ChatBubble({ leadId, msg }: { leadId: string; msg: LeadConversationMess
               src={mediaSrc}
               alt={msg.text || "Imagen"}
               loading="lazy"
-              className="max-h-60 w-full rounded-lg object-cover"
+              className="mb-1 max-h-64 w-full rounded-lg object-cover"
             />
           </a>
         ) : mediaSrc && meta ? (
@@ -1312,21 +1371,23 @@ function ChatBubble({ leadId, msg }: { leadId: string; msg: LeadConversationMess
             href={mediaSrc}
             target="_blank"
             rel="noreferrer"
-            className="flex items-center gap-1.5 font-medium text-brand-700 hover:underline"
+            className="mb-0.5 flex items-center gap-1.5 font-medium text-emerald-700 hover:underline"
           >
             <span>{meta.icon}</span> {meta.label}
           </a>
         ) : null}
         {msg.text && <p className="break-words whitespace-pre-wrap">{msg.text}</p>}
-        <p className={cn("text-right text-[10px]", outbound ? "text-emerald-700/70" : "text-slate-400")}>
-          {fmtDateShort(msg.at)}
+        <p className={cn("mt-0.5 text-right text-[10px]", outbound ? "text-emerald-800/60" : "text-slate-400")}>
+          {chatTime(msg.at)}
         </p>
       </div>
     </div>
   );
 }
 
-/** Free-text WhatsApp composer — enabled only inside the 24h session window. */
+/** WhatsApp-style composer bar, attached under the conversation: quick replies,
+ *  inline attach (📎), Ctrl+V-to-attach, Enter-to-send. Enabled only inside the
+ *  24h session window; otherwise shows why the customer must write first. */
 function WhatsappComposer({
   leadId,
   lastInteractionAt,
@@ -1344,6 +1405,7 @@ function WhatsappComposer({
   const [attachFile, setAttachFile] = useState<File | null>(null);
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let alive = true;
@@ -1378,55 +1440,93 @@ function WhatsappComposer({
         return;
       }
       setText("");
-      setMsg(res.notice ?? "Enviado.");
-      onSent();
+      setMsg(null);
+      onSent(); // refresh the thread so the sent message appears
     });
   }
 
+  if (win.loading) {
+    return (
+      <div className="border-t border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-400">
+        Verificando ventana de 24h…
+      </div>
+    );
+  }
+  if (!win.open) {
+    return (
+      <div className="border-t border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-500">
+        ⏳ {win.reason ?? "El cliente debe escribirte primero."} Solo puedes escribir dentro de las 24h
+        desde su último mensaje.
+      </div>
+    );
+  }
+
   return (
-    <section className="space-y-2 rounded-xl border border-slate-200 p-3">
-      <h3 className="text-sm font-semibold tracking-wide text-slate-700 uppercase">Enviar WhatsApp</h3>
-      {win.loading ? (
-        <p className="text-sm text-slate-400">Verificando ventana de 24h…</p>
-      ) : win.open ? (
-        <>
-          <QuickReplyBar leadId={leadId} onInsert={(b) => setText(b)} />
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.currentTarget.value)}
-            onPaste={(e) => {
-              // Ctrl+V de una imagen → la adjunta (reusa MediaAttach).
-              const img = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith("image/"));
-              if (img) {
-                e.preventDefault();
-                setAttachFile(img);
-              }
-            }}
-            rows={2}
-            placeholder="Escribe un mensaje… (pega una imagen con Ctrl+V)"
-            className={inputCls}
-            disabled={pending}
-          />
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={send}
-              disabled={pending || !text.trim()}
-              className="rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
-            >
-              {pending ? "Enviando…" : "Enviar"}
-            </button>
-            {msg && <span className="text-xs text-slate-500">{msg}</span>}
-          </div>
+    <div className="border-t border-slate-200 bg-white">
+      <div className="px-2 pt-2">
+        <QuickReplyBar leadId={leadId} onInsert={(b) => setText(b)} />
+      </div>
+      {attachFile && (
+        <div className="px-2 pt-2">
           <MediaAttach leadId={leadId} file={attachFile} setFile={setAttachFile} disabled={pending} onSent={onSent} />
-        </>
-      ) : (
-        <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-          ⏳ {win.reason ?? "El cliente debe escribirte primero."} Solo puedes enviar texto libre dentro
-          de las 24h desde su último mensaje.
-        </p>
+        </div>
       )}
-    </section>
+      <div className="flex items-end gap-1.5 px-2 py-2">
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*,application/pdf,video/mp4,video/3gpp"
+          className="hidden"
+          onChange={(e) => {
+            setAttachFile(e.currentTarget.files?.[0] ?? null);
+            setMsg(null);
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={pending}
+          title="Adjuntar imagen, PDF o video"
+          aria-label="Adjuntar"
+          className="shrink-0 rounded-full p-2 text-lg leading-none text-slate-500 hover:bg-slate-100 disabled:opacity-60"
+        >
+          📎
+        </button>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+          onPaste={(e) => {
+            // Ctrl+V de una imagen → la adjunta (reusa MediaAttach).
+            const img = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith("image/"));
+            if (img) {
+              e.preventDefault();
+              setAttachFile(img);
+            }
+          }}
+          rows={1}
+          placeholder="Escribe un mensaje…"
+          disabled={pending}
+          className="max-h-28 grow resize-none rounded-2xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+        />
+        <button
+          type="button"
+          onClick={send}
+          disabled={pending || !text.trim()}
+          title="Enviar"
+          aria-label="Enviar"
+          className="shrink-0 rounded-full bg-emerald-600 p-2.5 text-sm leading-none text-white hover:bg-emerald-700 disabled:opacity-50"
+        >
+          {pending ? "…" : "➤"}
+        </button>
+      </div>
+      {msg && <p className="px-3 pb-2 text-xs text-red-600">{msg}</p>}
+    </div>
   );
 }
 
@@ -1576,11 +1676,10 @@ function QuickReplyBar({ leadId, onInsert }: { leadId: string; onInsert: (body: 
   );
 }
 
-/** Pick an image, resize it client-side, and send it over WhatsApp as an image. */
-/** Attach + send media over WhatsApp: image, PDF/boleta (document) or video.
- *  `file` is controlled by the composer so a Ctrl+V paste can set it. The file is
- *  uploaded DIRECTLY to Storage (signed URL) — bypassing the Server-Action body
- *  limit — then sent to Meta by public link. Images are downscaled first. */
+/** Staged-attachment preview + send (image, PDF/boleta or video). The file is
+ *  chosen/pasted by the composer; here we preview it, take an optional caption,
+ *  upload it DIRECTLY to Storage via a signed URL (bypassing the Server-Action
+ *  body limit) and send it to Meta by public link. Images are downscaled first. */
 function MediaAttach({
   leadId,
   file,
@@ -1598,7 +1697,6 @@ function MediaAttach({
   const [msg, setMsg] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const inputRef = useRef<HTMLInputElement>(null);
 
   // Object-URL preview for image/video (revoked on change/unmount).
   useEffect(() => {
@@ -1644,79 +1742,54 @@ function MediaAttach({
           return;
         }
         clear();
-        setMsg(res.notice ?? "Enviado.");
-        onSent();
+        onSent(); // refresh the thread so the sent media appears
       } catch (e) {
         setMsg(`Error: ${(e as Error)?.message ?? "no se pudo enviar"}`);
       }
     });
   }
 
-  const kindLabel = !file
-    ? ""
-    : file.type.startsWith("image/")
-      ? "imagen"
-      : file.type.startsWith("video/")
-        ? "video"
-        : "documento";
+  if (!file) return null;
+  const kindLabel = file.type.startsWith("image/")
+    ? "imagen"
+    : file.type.startsWith("video/")
+      ? "video"
+      : "documento";
 
   return (
-    <div>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*,application/pdf,video/mp4,video/3gpp"
-        className="hidden"
-        onChange={(e) => {
-          setFile(e.currentTarget.files?.[0] ?? null);
-          setMsg(null);
-        }}
-      />
-      {!file ? (
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          disabled={disabled || pending}
-          className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
-        >
-          📎 Adjuntar (imagen, PDF o video)
-        </button>
+    <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+      {file.type.startsWith("image/") ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={preview ?? ""} alt="Vista previa" className="max-h-40 rounded" />
+      ) : file.type.startsWith("video/") ? (
+        // eslint-disable-next-line jsx-a11y/media-has-caption
+        <video src={preview ?? ""} controls className="max-h-40 rounded" />
       ) : (
-        <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-2">
-          {file.type.startsWith("image/") ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={preview ?? ""} alt="Vista previa" className="max-h-40 rounded" />
-          ) : file.type.startsWith("video/") ? (
-            // eslint-disable-next-line jsx-a11y/media-has-caption
-            <video src={preview ?? ""} controls className="max-h-40 rounded" />
-          ) : (
-            <div className="flex items-center gap-2 text-sm text-slate-600">
-              📄 <span className="truncate">{file.name || "Documento"}</span>
-            </div>
-          )}
-          <input
-            value={caption}
-            onChange={(e) => setCaption(e.currentTarget.value)}
-            placeholder="Texto (opcional)"
-            disabled={pending}
-            className="w-full rounded border border-slate-200 px-2 py-1 text-sm"
-          />
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={send}
-              disabled={pending}
-              className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
-            >
-              {pending ? "Enviando…" : `Enviar ${kindLabel}`}
-            </button>
-            <button type="button" onClick={clear} disabled={pending} className="text-xs text-slate-500 hover:underline">
-              Quitar
-            </button>
-            {msg && <span className="text-xs text-slate-500">{msg}</span>}
-          </div>
+        <div className="flex items-center gap-2 text-sm text-slate-600">
+          📄 <span className="truncate">{file.name || "Documento"}</span>
         </div>
       )}
+      <input
+        value={caption}
+        onChange={(e) => setCaption(e.currentTarget.value)}
+        placeholder="Texto (opcional)"
+        disabled={pending}
+        className="w-full rounded border border-slate-200 px-2 py-1 text-sm"
+      />
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={send}
+          disabled={disabled || pending}
+          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+        >
+          {pending ? "Enviando…" : `Enviar ${kindLabel}`}
+        </button>
+        <button type="button" onClick={clear} disabled={pending} className="text-xs text-slate-500 hover:underline">
+          Quitar
+        </button>
+        {msg && <span className="text-xs text-red-600">{msg}</span>}
+      </div>
     </div>
   );
 }
