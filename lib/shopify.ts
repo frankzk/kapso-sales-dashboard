@@ -954,6 +954,12 @@ function toGqlDraftInput(input: BuildDraftOrderInput): Record<string, unknown> {
       valueType: ad.valueType,
       ...(ad.description ? { description: ad.description } : {}),
     };
+  } else {
+    // Clear any order-level discount the abandoned cart carried. Otherwise a
+    // recovered cart keeps the customer's inherited promo (e.g. a code that zeroes
+    // the total) and `draftOrderComplete` would mark a S/ 0 COD order as "paid".
+    // The COD total is the line items minus ONLY the advisor's explicit discount.
+    gql.appliedDiscount = null;
   }
   return gql;
 }

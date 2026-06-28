@@ -1095,6 +1095,9 @@ export async function generateOrder(
   if (subtotal <= 0) return { error: "El monto del pedido debe ser mayor a 0." };
   // Order-level discount (Monto/Porcentaje) → net total + Shopify appliedDiscount.
   const { total: amount, discountAmount, appliedDiscount } = resolveOrderDiscount(subtotal, input.discount);
+  // COD orders are collected on delivery: the total must be > 0. A S/ 0 total
+  // makes Shopify mark the order "paid" (nothing to collect), which we never want.
+  if (amount <= 0) return { error: "El total del pedido no puede ser 0. Revisa el descuento." };
 
   const address = {
     name: (input.customerName ?? l.name ?? "").trim() || null,

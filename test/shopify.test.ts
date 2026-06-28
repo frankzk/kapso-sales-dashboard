@@ -540,6 +540,28 @@ describe("order form (catalog search + draft create/read)", () => {
     });
     expect(seenBody.variables.input.appliedDiscount).toEqual({ title: "Descuento", value: 10, valueType: "PERCENTAGE" });
   });
+
+  it("clears the order-level discount (appliedDiscount:null) when none is given — so a recovered cart never inherits a promo that zeroes the total", async () => {
+    let seenBody: any = null;
+    const capture = (async (_url: string, init: any) => {
+      seenBody = JSON.parse(init.body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: { draftOrderCreate: { draftOrder: { id: "gid://shopify/DraftOrder/9", name: "#D9" }, userErrors: [] } },
+        }),
+        text: async () => "",
+      } as Response;
+    }) as unknown as typeof fetch;
+    await createDraftOrder({
+      domain: "x.myshopify.com",
+      token: "t",
+      input: { lineItems: [{ variantId: "gid://shopify/ProductVariant/1", quantity: 1, unitPrice: 100 }] },
+      fetchImpl: capture,
+    });
+    expect(seenBody.variables.input.appliedDiscount).toBeNull();
+  });
 });
 
 describe("resolveOrderDiscount", () => {
