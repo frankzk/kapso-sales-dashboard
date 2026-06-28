@@ -33,6 +33,7 @@ const agentNameCache = new Map<string, string>();
 export interface LeadActionState {
   error?: string;
   notice?: string;
+  windowClosed?: boolean; // the 24h WhatsApp session window is closed (retry won't help)
 }
 
 /** Fetch a lead + its call history (RLS-scoped). Drives the drawer client-side. */
@@ -606,8 +607,9 @@ export async function sendLeadMessage(leadId: string, text: string): Promise<Lea
   if (!res.ok) {
     const closed = res.code === 131047 || /24\s*h|re-?engag|outside|window/i.test(res.error);
     return {
+      windowClosed: closed,
       error: closed
-        ? "Ventana de 24h cerrada: el cliente debe escribirte primero (o se necesita una plantilla)."
+        ? "Se cerró la ventana de 24h: el cliente debe volver a escribirte para poder responderle."
         : `No se pudo enviar: ${res.error}`,
     };
   }
@@ -725,8 +727,9 @@ export async function sendLeadMedia(
     await admin.storage.from("whatsapp-media").remove([args.path]).catch(() => {}); // no dejes huérfanos
     const closed = res.code === 131047 || /24\s*h|re-?engag|outside|window/i.test(res.error);
     return {
+      windowClosed: closed,
       error: closed
-        ? "Ventana de 24h cerrada: el cliente debe escribirte primero (o se necesita una plantilla)."
+        ? "Se cerró la ventana de 24h: el cliente debe volver a escribirte para poder responderle."
         : `No se pudo enviar: ${res.error}`,
     };
   }

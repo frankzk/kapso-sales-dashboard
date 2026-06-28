@@ -1251,6 +1251,8 @@ function WhatsappChat({
   const atBottomRef = useRef(true); // is the user near the bottom of the thread?
   const countRef = useRef(0); // previous message count, to detect new arrivals
   const [showJump, setShowJump] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [search, setSearch] = useState("");
 
   const load = useCallback(
     (opts?: { silent?: boolean }) => {
@@ -1314,8 +1316,10 @@ function WhatsappChat({
 
   if (!hasConversation) return null;
 
-  const messages = state.status === "ready" ? state.messages : [];
-  // Interleave day separators ("Hoy", "Ayer", "26 jun") into the thread.
+  const allMessages = state.status === "ready" ? state.messages : [];
+  const q = search.trim().toLowerCase();
+  const messages = q ? allMessages.filter((m) => m.text.toLowerCase().includes(q)) : allMessages;
+  // Interleave day separators ("Hoy", "Ayer", "26 jun") into the (filtered) thread.
   const rows: ReactNode[] = [];
   let lastDay = "";
   messages.forEach((m, i) => {
@@ -1330,7 +1334,7 @@ function WhatsappChat({
       );
       lastDay = day;
     }
-    rows.push(<ChatBubble key={m.id ?? `m-${i}`} leadId={leadId} msg={m} />);
+    rows.push(<ChatBubble key={m.id ?? `m-${i}`} leadId={leadId} msg={m} highlight={q} />);
   });
 
   return (
@@ -1344,16 +1348,59 @@ function WhatsappChat({
             <span className="shrink-0 text-xs text-emerald-100">· {state.messages.length}</span>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => load()}
-          title="Actualizar"
-          aria-label="Actualizar conversación"
-          className="shrink-0 rounded-full px-1.5 text-lg leading-none text-emerald-100 hover:bg-white/15 hover:text-white"
-        >
-          ↻
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setSearchOpen((s) => !s)}
+            title="Buscar en la conversación"
+            aria-label="Buscar"
+            className={cn(
+              "rounded-full px-1.5 text-base leading-none hover:bg-white/15 hover:text-white",
+              searchOpen ? "text-white" : "text-emerald-100",
+            )}
+          >
+            🔍
+          </button>
+          <button
+            type="button"
+            onClick={() => load()}
+            title="Actualizar"
+            aria-label="Actualizar conversación"
+            className="rounded-full px-1.5 text-lg leading-none text-emerald-100 hover:bg-white/15 hover:text-white"
+          >
+            ↻
+          </button>
+        </div>
       </div>
+
+      {/* Buscar dentro de la conversación */}
+      {searchOpen && (
+        <div className="flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
+          <input
+            autoFocus
+            value={search}
+            onChange={(e) => setSearch(e.currentTarget.value)}
+            placeholder="Buscar en la conversación…"
+            className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+          />
+          {q && (
+            <span className="shrink-0 text-xs text-slate-500">
+              {messages.length} {messages.length === 1 ? "coincidencia" : "coincidencias"}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setSearch("");
+              setSearchOpen(false);
+            }}
+            className="shrink-0 text-sm text-slate-400 hover:text-slate-700"
+            aria-label="Cerrar búsqueda"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Hilo de mensajes */}
       <div className="relative">
@@ -1368,7 +1415,11 @@ function WhatsappChat({
             rows
           ) : (
             <p className="py-10 text-center text-sm text-slate-500">
-              {state.status === "ready" ? (state.reason ?? "Sin mensajes todavía.") : ""}
+              {state.status !== "ready"
+                ? ""
+                : q
+                  ? `Sin coincidencias para «${search.trim()}»`
+                  : (state.reason ?? "Sin mensajes todavía.")}
             </p>
           )}
         </div>
@@ -1409,6 +1460,27 @@ function linkify(text: string): ReactNode[] {
   );
 }
 
+/** Render text with case-insensitive <mark> highlights of `term` (already lowercased). */
+function highlightText(text: string, term: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  let rest = text;
+  let k = 0;
+  let pos = rest.toLowerCase().indexOf(term);
+  while (pos >= 0 && term) {
+    if (pos > 0) out.push(<span key={`t${k}`}>{rest.slice(0, pos)}</span>);
+    out.push(
+      <mark key={`h${k}`} className="rounded bg-yellow-200 px-0.5">
+        {rest.slice(pos, pos + term.length)}
+      </mark>,
+    );
+    rest = rest.slice(pos + term.length);
+    k++;
+    pos = rest.toLowerCase().indexOf(term);
+  }
+  if (rest) out.push(<span key={`t${k}`}>{rest}</span>);
+  return out;
+}
+
 /** WhatsApp delivery ticks for an outbound message (null = no indicator). */
 function statusTicks(status: string | null): { marks: string; cls: string; label: string } | null {
   switch (status) {
@@ -1428,7 +1500,15 @@ function statusTicks(status: string | null): { marks: string; cls: string; label
 
 /** One WhatsApp bubble: customer (left/white) vs. business (right/WA green), with
  *  inline image/audio/video players, delivery ticks (outbound) and clickable links. */
-function ChatBubble({ leadId, msg }: { leadId: string; msg: LeadConversationMessage }) {
+function ChatBubble({
+  leadId,
+  msg,
+  highlight,
+}: {
+  leadId: string;
+  msg: LeadConversationMessage;
+  highlight?: string;
+}) {
   const outbound = msg.direction === "outbound";
   const mediaSrc = msg.mediaUrl ? `/api/leads/${leadId}/media?u=${encodeURIComponent(msg.mediaUrl)}` : null;
   const meta = msg.mediaKind ? MEDIA_KIND_META[msg.mediaKind] : null;
@@ -1469,7 +1549,11 @@ function ChatBubble({ leadId, msg }: { leadId: string; msg: LeadConversationMess
             <span>{meta.icon}</span> {meta.label}
           </a>
         ) : null}
-        {msg.text && <p className="break-words whitespace-pre-wrap">{linkify(msg.text)}</p>}
+        {msg.text && (
+          <p className="break-words whitespace-pre-wrap">
+            {highlight ? highlightText(msg.text, highlight) : linkify(msg.text)}
+          </p>
+        )}
         <p
           className={cn(
             "mt-0.5 flex items-center justify-end gap-1 text-[10px]",
@@ -1509,6 +1593,15 @@ function WhatsappComposer({
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow the input as the advisor types (capped), like a real chat box.
+  useEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }, [text]);
 
   useEffect(() => {
     let alive = true;
@@ -1539,6 +1632,12 @@ function WhatsappComposer({
     startTransition(async () => {
       const res = await sendLeadMessage(leadId, body);
       if (res.error) {
+        // Window closed mid-send → flip to the closed state with a clear reason
+        // (retry is futile). Other errors keep the text so "Reintentar" can resend.
+        if (res.windowClosed) {
+          setWin({ loading: false, open: false, reason: "Se cerró la ventana de 24h." });
+          return;
+        }
         setMsg(res.error);
         return;
       }
@@ -1571,7 +1670,14 @@ function WhatsappComposer({
       </div>
       {attachFile && (
         <div className="px-2 pt-2">
-          <MediaAttach leadId={leadId} file={attachFile} setFile={setAttachFile} disabled={pending} onSent={onSent} />
+          <MediaAttach
+            leadId={leadId}
+            file={attachFile}
+            setFile={setAttachFile}
+            disabled={pending}
+            onSent={onSent}
+            onWindowClosed={() => setWin({ loading: false, open: false, reason: "Se cerró la ventana de 24h." })}
+          />
         </div>
       )}
       <div className="flex items-end gap-1.5 px-2 py-2">
@@ -1596,6 +1702,7 @@ function WhatsappComposer({
           📎
         </button>
         <textarea
+          ref={taRef}
           value={text}
           onChange={(e) => setText(e.currentTarget.value)}
           onKeyDown={(e) => {
@@ -1615,7 +1722,7 @@ function WhatsappComposer({
           rows={1}
           placeholder="Escribe un mensaje…"
           disabled={pending}
-          className="max-h-28 grow resize-none rounded-2xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+          className="grow resize-none overflow-y-auto rounded-2xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
         />
         <button
           type="button"
@@ -1628,7 +1735,19 @@ function WhatsappComposer({
           {pending ? "…" : "➤"}
         </button>
       </div>
-      {msg && <p className="px-3 pb-2 text-xs text-red-600">{msg}</p>}
+      {msg && (
+        <div className="flex items-center gap-2 px-3 pb-2 text-xs">
+          <span className="text-red-600">{msg}</span>
+          <button
+            type="button"
+            onClick={send}
+            disabled={pending}
+            className="shrink-0 font-medium text-emerald-700 hover:underline disabled:opacity-60"
+          >
+            ↻ Reintentar
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1789,12 +1908,14 @@ function MediaAttach({
   setFile,
   disabled,
   onSent,
+  onWindowClosed,
 }: {
   leadId: string;
   file: File | null;
   setFile: (f: File | null) => void;
   disabled: boolean;
   onSent: () => void;
+  onWindowClosed?: () => void;
 }) {
   const [caption, setCaption] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
@@ -1841,6 +1962,11 @@ function MediaAttach({
         }
         const res = await sendLeadMedia(leadId, { path: prep.path, kind: prep.kind, filename, caption: caption.trim() });
         if (res.error) {
+          if (res.windowClosed) {
+            clear();
+            onWindowClosed?.(); // flip the composer to the closed state with a clear reason
+            return;
+          }
           setMsg(res.error);
           return;
         }
