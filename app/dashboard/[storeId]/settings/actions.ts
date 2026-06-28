@@ -9,7 +9,7 @@ import { getStoreCreds, runStoreSync } from "@/lib/ingest";
 import { registerOrderWebhooks } from "@/lib/shopify";
 import { buildStoreDailySummary, formatDailySummary, limaDayBounds } from "@/lib/daily-summary";
 import { sendTelegramMessage } from "@/lib/telegram";
-import { listMetaAdAccounts, type MetaAdAccount } from "@/lib/meta-marketing";
+import { listMetaAdAccounts, type MetaAdAccount, type StoreMetaAdAccount } from "@/lib/meta-marketing";
 import { env } from "@/lib/env";
 
 export interface SettingsState {
@@ -156,23 +156,36 @@ export async function listStoreMetaAdAccounts(
   return { accounts: res.accounts };
 }
 
-/** Persist the selected Meta ad account (id + display name) for the store. */
-export async function saveMetaAdAccount(
+/** Persist the SELECTED Meta ad accounts (several per store) — their combined
+ *  spend will later power ROAS. Sanitizes/dedupes the client payload. */
+export async function saveMetaAdAccounts(
   storeId: string,
-  accountId: string,
-  accountName: string,
+  accounts: StoreMetaAdAccount[],
 ): Promise<SettingsState> {
   const ctx = await requireStoreAdmin(storeId);
   if (!ctx) return { error: "Sin permiso." };
-  const id = accountId.trim();
-  if (!id) return { error: "Selecciona una cuenta publicitaria." };
+  const clean: StoreMetaAdAccount[] = [];
+  for (const a of accounts ?? []) {
+    const id = (a?.id ?? "").trim();
+    if (!id || clean.some((x) => x.id === id)) continue;
+    clean.push({ id, name: (a?.name ?? "").trim() || null });
+  }
   const { error } = await ctx.admin
     .from("stores")
-    .update({ meta_ad_account_id: id, meta_ad_account_name: accountName.trim() || null })
+    .update({
+      meta_ad_accounts: clean,
+      // Keep the legacy single columns in sync (first = primary) for back-compat.
+      meta_ad_account_id: clean[0]?.id ?? null,
+      meta_ad_account_name: clean[0]?.name ?? null,
+    })
     .eq("id", storeId);
   if (error) return { error: error.message };
   revalidatePath(`/dashboard/${storeId}/settings`);
-  return { notice: `Cuenta publicitaria guardada: ${accountName.trim() || id} ✓` };
+  return {
+    notice: clean.length
+      ? `${clean.length} ${clean.length === 1 ? "cuenta guardada" : "cuentas guardadas"} ✓`
+      : "Se quitaron las cuentas publicitarias.",
+  };
 }
 
 export async function sendTelegramTest(

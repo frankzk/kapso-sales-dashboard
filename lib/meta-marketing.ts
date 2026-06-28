@@ -19,6 +19,37 @@ export type MetaAdAccountsResult =
   | { ok: true; accounts: MetaAdAccount[] }
   | { ok: false; error: string };
 
+/** A store's saved ad account (one of possibly several). */
+export interface StoreMetaAdAccount {
+  id: string; // "act_1234567890"
+  name: string | null;
+}
+
+/**
+ * Normalize the stored `meta_ad_accounts` jsonb into a clean, deduped list.
+ * Back-compat: when the array is empty but a legacy single id exists (migration
+ * 0018), it becomes a one-item list. Pure.
+ */
+export function normalizeMetaAdAccounts(
+  raw: unknown,
+  legacyId?: string | null,
+  legacyName?: string | null,
+): StoreMetaAdAccount[] {
+  const out: StoreMetaAdAccount[] = [];
+  if (Array.isArray(raw)) {
+    for (const a of raw) {
+      const id = typeof (a as any)?.id === "string" ? (a as any).id.trim() : "";
+      if (!id || out.some((x) => x.id === id)) continue;
+      const name = typeof (a as any)?.name === "string" ? (a as any).name : null;
+      out.push({ id, name });
+    }
+  }
+  if (!out.length && legacyId && legacyId.trim()) {
+    out.push({ id: legacyId.trim(), name: legacyName ?? null });
+  }
+  return out;
+}
+
 /**
  * List the ad accounts the token can access (`GET /me/adaccounts`). Returns the
  * accounts on success, or a human error (e.g. an expired/invalid token) without

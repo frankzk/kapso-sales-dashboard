@@ -6,6 +6,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { decryptOrNull } from "@/lib/crypto";
+import { normalizeMetaAdAccounts, type StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
   buildDraftOrdersSearchQuery,
   buildKapsoOrdersSearchQuery,
@@ -68,8 +69,7 @@ export interface StoreCreds {
   telegram_bot_token: string | null;
   telegram_chat_id: string | null;
   meta_access_token: string | null;
-  meta_ad_account_id: string | null;
-  meta_ad_account_name: string | null;
+  meta_ad_accounts: StoreMetaAdAccount[];
 }
 
 /** Load a store row and decrypt its credentials (service-role only). */
@@ -103,8 +103,11 @@ export async function getStoreCreds(
     telegram_bot_token: decryptOrNull(data.telegram_bot_token_enc),
     telegram_chat_id: data.telegram_chat_id ?? null,
     meta_access_token: decryptOrNull(data.meta_access_token_enc),
-    meta_ad_account_id: data.meta_ad_account_id ?? null,
-    meta_ad_account_name: data.meta_ad_account_name ?? null,
+    meta_ad_accounts: normalizeMetaAdAccounts(
+      data.meta_ad_accounts,
+      data.meta_ad_account_id,
+      data.meta_ad_account_name,
+    ),
   };
 }
 
