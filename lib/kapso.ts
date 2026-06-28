@@ -619,6 +619,47 @@ export function parseConversationMessages(rawMsgs: any[]): ConversationMessage[]
 }
 
 /**
+ * Fetch a lead's full WhatsApp transcript for the drawer, oldest-first. Kapso
+ * caps `limit` at 100, so page through the cursor (bounded by `maxPages`) and
+ * concatenate. Requested with `fields=kapso(default)` so each message carries
+ * its stable `media_url`. The first page may throw (the caller surfaces the
+ * error); a later page failing just returns what was gathered so far.
+ */
+export async function fetchConversationTranscript(
+  opts: KapsoClientOpts,
+  conversationId: string,
+  maxPages = 5,
+): Promise<ConversationMessage[]> {
+  const raw: any[] = [];
+  let after: string | undefined;
+  for (let i = 0; i < maxPages; i++) {
+    let page: KapsoPage<any>;
+    try {
+      page = await listMessages(opts, { conversationId, limit: 100, fields: "kapso(default)", after });
+    } catch (e) {
+      if (i === 0) throw e; // couldn't fetch even the first page → real error
+      break; // already have some pages; stop on a later failure
+    }
+    const batch = page.data ?? [];
+    raw.push(...batch);
+    if (batch.length < 100) break; // partial page ⇒ last page
+    const next = page.paging?.cursors?.after ?? page.paging?.next ?? null;
+    if (!next) break;
+    after = String(next);
+  }
+  // Dedupe by id (cursor pages shouldn't overlap, but be safe) + normalize.
+  const seen = new Set<string>();
+  const deduped = raw.filter((m) => {
+    const id = m?.id != null ? String(m.id) : null;
+    if (id == null) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return parseConversationMessages(deduped);
+}
+
+/**
  * A normalized Click-to-WhatsApp (CTWA) ad referral. Meta attaches a top-level
  * `referral` object to the FIRST inbound message of an ad/post-sourced
  * conversation; its presence means the lead came from a paid Meta entry point.
