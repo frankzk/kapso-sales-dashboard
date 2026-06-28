@@ -512,6 +512,7 @@ export interface LeadConversationMessage {
   text: string;
   mediaKind: "image" | "audio" | "video" | "document" | "sticker" | null;
   mediaUrl: string | null;
+  status: string | null; // WhatsApp delivery status (sent/delivered/read/failed)
 }
 
 export interface LeadConversation {
@@ -570,6 +571,7 @@ export async function loadLeadConversation(leadId: string): Promise<LeadConversa
     text: m.text,
     mediaKind: m.mediaKind,
     mediaUrl: m.mediaUrl,
+    status: m.status,
   }));
   if (!messages.length) return { messages: [], reason: "Sin mensajes en esta conversación todavía." };
   return { messages };

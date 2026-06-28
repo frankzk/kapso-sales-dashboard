@@ -1105,6 +1105,16 @@ function LeadDrawer({
             </div>
           )}
 
+          {/* Chat de WhatsApp arriba del todo: leer la conversación antes de actuar.
+              Se resuelve por teléfono si no hay conversation_id guardado. */}
+          {!lead.kapso_conversation_id && lead.draft_order_gid && <CallAffordance phone={lead.phone} />}
+          <WhatsappChat
+            leadId={lead.id}
+            lastInteractionAt={lead.last_interaction_at}
+            hasConversation={!!(lead.kapso_conversation_id || lead.phone)}
+            onSent={onRegistered}
+          />
+
           {/* Acción principal: generar / registrar el pedido */}
           {lead.has_order ? (
             <p className="text-sm font-medium text-emerald-700">
@@ -1150,19 +1160,6 @@ function LeadDrawer({
               <p className="text-sm text-slate-400">Sin actividad todavía.</p>
             )}
           </section>
-
-          {/* Llamar — para leads de carrito sin conversación de WhatsApp */}
-          {!lead.kapso_conversation_id && lead.draft_order_gid && <CallAffordance phone={lead.phone} />}
-
-          {/* Chat de WhatsApp: conversación completa (texto + imágenes) + composer
-              pegado abajo, estilo WhatsApp. Carga al abrir el lead y se resuelve por
-              teléfono si no hay conversation_id guardado. */}
-          <WhatsappChat
-            leadId={lead.id}
-            lastInteractionAt={lead.last_interaction_at}
-            hasConversation={!!(lead.kapso_conversation_id || lead.phone)}
-            onSent={onRegistered}
-          />
 
           {/* Contexto secundario (abajo: se consulta menos) */}
           <RecurrentCustomer history={history} />
@@ -1251,24 +1248,69 @@ function WhatsappChat({
     { status: "loading" } | { status: "ready"; messages: LeadConversationMessage[]; reason?: string }
   >({ status: "loading" });
   const scrollRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true); // is the user near the bottom of the thread?
+  const countRef = useRef(0); // previous message count, to detect new arrivals
+  const [showJump, setShowJump] = useState(false);
 
-  const load = useCallback(() => {
-    setState({ status: "loading" });
-    loadLeadConversation(leadId).then((res) =>
-      setState({ status: "ready", messages: res.messages, reason: res.reason }),
-    );
-  }, [leadId]);
+  const load = useCallback(
+    (opts?: { silent?: boolean }) => {
+      if (!opts?.silent) setState({ status: "loading" });
+      loadLeadConversation(leadId).then((res) =>
+        setState({ status: "ready", messages: res.messages, reason: res.reason }),
+      );
+    },
+    [leadId],
+  );
 
+  // Load on open; reset scroll tracking when switching leads.
   useEffect(() => {
+    atBottomRef.current = true;
+    countRef.current = 0;
+    setShowJump(false);
     if (hasConversation) load();
   }, [hasConversation, load]);
 
-  // Stick to the latest message whenever the thread (re)renders.
+  // Live updates: refresh quietly every 20s while the lead is open and the tab visible.
   useEffect(() => {
-    if (state.status === "ready" && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (!hasConversation) return;
+    const id = setInterval(() => {
+      if (typeof document === "undefined" || document.visibilityState === "visible") {
+        load({ silent: true });
+      }
+    }, 20000);
+    return () => clearInterval(id);
+  }, [hasConversation, load]);
+
+  // Smart scroll: stick to the bottom only if the user is already there; otherwise
+  // surface a "nuevos mensajes" button when new messages arrive while scrolled up.
+  useEffect(() => {
+    if (state.status !== "ready") return;
+    const el = scrollRef.current;
+    const grew = state.messages.length > countRef.current;
+    countRef.current = state.messages.length;
+    if (!el) return;
+    if (atBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setShowJump(false);
+    } else if (grew) {
+      setShowJump(true);
     }
   }, [state]);
+
+  function onThreadScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    atBottomRef.current = nearBottom;
+    if (nearBottom) setShowJump(false);
+  }
+
+  function jumpToBottom() {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    atBottomRef.current = true;
+    setShowJump(false);
+  }
 
   if (!hasConversation) return null;
 
@@ -1304,7 +1346,7 @@ function WhatsappChat({
         </div>
         <button
           type="button"
-          onClick={load}
+          onClick={() => load()}
           title="Actualizar"
           aria-label="Actualizar conversación"
           className="shrink-0 rounded-full px-1.5 text-lg leading-none text-emerald-100 hover:bg-white/15 hover:text-white"
@@ -1314,18 +1356,30 @@ function WhatsappChat({
       </div>
 
       {/* Hilo de mensajes */}
-      <div
-        ref={scrollRef}
-        className="max-h-[55vh] min-h-[180px] space-y-1 overflow-y-auto bg-[#efeae2] px-3 py-3"
-      >
-        {state.status === "loading" ? (
-          <p className="py-10 text-center text-sm text-slate-500">Cargando conversación…</p>
-        ) : messages.length ? (
-          rows
-        ) : (
-          <p className="py-10 text-center text-sm text-slate-500">
-            {state.status === "ready" ? (state.reason ?? "Sin mensajes todavía.") : ""}
-          </p>
+      <div className="relative">
+        <div
+          ref={scrollRef}
+          onScroll={onThreadScroll}
+          className="max-h-[55vh] min-h-[180px] space-y-1 overflow-y-auto bg-[#efeae2] px-3 py-3"
+        >
+          {state.status === "loading" ? (
+            <p className="py-10 text-center text-sm text-slate-500">Cargando conversación…</p>
+          ) : messages.length ? (
+            rows
+          ) : (
+            <p className="py-10 text-center text-sm text-slate-500">
+              {state.status === "ready" ? (state.reason ?? "Sin mensajes todavía.") : ""}
+            </p>
+          )}
+        </div>
+        {showJump && (
+          <button
+            type="button"
+            onClick={jumpToBottom}
+            className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-emerald-600 px-3 py-1 text-xs font-medium text-white shadow-md hover:bg-emerald-700"
+          >
+            ↓ Nuevos mensajes
+          </button>
         )}
       </div>
 
@@ -1335,19 +1389,50 @@ function WhatsappChat({
         lastInteractionAt={lastInteractionAt}
         onSent={() => {
           onSent();
-          load();
+          load({ silent: true });
         }}
       />
     </section>
   );
 }
 
-/** One WhatsApp bubble: customer (left/white) vs. business (right/WA green),
- *  inline image previews + links for other media — all via the media proxy. */
+/** Render message text with clickable http(s) links. */
+function linkify(text: string): ReactNode[] {
+  return text.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
+    /^https?:\/\//.test(part) ? (
+      <a key={i} href={part} target="_blank" rel="noreferrer" className="underline">
+        {part}
+      </a>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+}
+
+/** WhatsApp delivery ticks for an outbound message (null = no indicator). */
+function statusTicks(status: string | null): { marks: string; cls: string; label: string } | null {
+  switch (status) {
+    case "read":
+      return { marks: "✓✓", cls: "text-sky-500", label: "Leído" };
+    case "delivered":
+      return { marks: "✓✓", cls: "text-emerald-800/50", label: "Entregado" };
+    case "sent":
+      return { marks: "✓", cls: "text-emerald-800/50", label: "Enviado" };
+    case "failed":
+    case "error":
+      return { marks: "⚠", cls: "text-red-500", label: "No se envió" };
+    default:
+      return null;
+  }
+}
+
+/** One WhatsApp bubble: customer (left/white) vs. business (right/WA green), with
+ *  inline image/audio/video players, delivery ticks (outbound) and clickable links. */
 function ChatBubble({ leadId, msg }: { leadId: string; msg: LeadConversationMessage }) {
   const outbound = msg.direction === "outbound";
   const mediaSrc = msg.mediaUrl ? `/api/leads/${leadId}/media?u=${encodeURIComponent(msg.mediaUrl)}` : null;
   const meta = msg.mediaKind ? MEDIA_KIND_META[msg.mediaKind] : null;
+  const ticks = outbound ? statusTicks(msg.status) : null;
   return (
     <div className={cn("flex", outbound ? "justify-end" : "justify-start")}>
       <div
@@ -1356,16 +1441,24 @@ function ChatBubble({ leadId, msg }: { leadId: string; msg: LeadConversationMess
           outbound ? "rounded-tr-sm bg-[#d9fdd3] text-slate-900" : "rounded-tl-sm bg-white text-slate-800",
         )}
       >
-        {mediaSrc && msg.mediaKind === "image" ? (
+        {mediaSrc && (msg.mediaKind === "image" || msg.mediaKind === "sticker") ? (
           <a href={mediaSrc} target="_blank" rel="noreferrer" className="block">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={mediaSrc}
               alt={msg.text || "Imagen"}
               loading="lazy"
-              className="mb-1 max-h-64 w-full rounded-lg object-cover"
+              className={cn(
+                "rounded-lg object-cover",
+                msg.mediaKind === "sticker" ? "max-h-28" : "mb-1 max-h-64 w-full",
+              )}
             />
           </a>
+        ) : mediaSrc && msg.mediaKind === "audio" ? (
+          <audio controls preload="none" src={mediaSrc} className="mb-1 h-9 w-56 max-w-full" />
+        ) : mediaSrc && msg.mediaKind === "video" ? (
+          // eslint-disable-next-line jsx-a11y/media-has-caption
+          <video controls preload="none" src={mediaSrc} className="mb-1 max-h-64 w-full rounded-lg" />
         ) : mediaSrc && meta ? (
           <a
             href={mediaSrc}
@@ -1376,9 +1469,19 @@ function ChatBubble({ leadId, msg }: { leadId: string; msg: LeadConversationMess
             <span>{meta.icon}</span> {meta.label}
           </a>
         ) : null}
-        {msg.text && <p className="break-words whitespace-pre-wrap">{msg.text}</p>}
-        <p className={cn("mt-0.5 text-right text-[10px]", outbound ? "text-emerald-800/60" : "text-slate-400")}>
-          {chatTime(msg.at)}
+        {msg.text && <p className="break-words whitespace-pre-wrap">{linkify(msg.text)}</p>}
+        <p
+          className={cn(
+            "mt-0.5 flex items-center justify-end gap-1 text-[10px]",
+            outbound ? "text-emerald-800/60" : "text-slate-400",
+          )}
+        >
+          <span>{chatTime(msg.at)}</span>
+          {ticks && (
+            <span className={ticks.cls} title={ticks.label} aria-label={ticks.label}>
+              {ticks.marks}
+            </span>
+          )}
         </p>
       </div>
     </div>
