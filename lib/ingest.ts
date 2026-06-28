@@ -67,6 +67,9 @@ export interface StoreCreds {
   browse_template_language: string | null;
   telegram_bot_token: string | null;
   telegram_chat_id: string | null;
+  meta_access_token: string | null;
+  meta_ad_account_id: string | null;
+  meta_ad_account_name: string | null;
 }
 
 /** Load a store row and decrypt its credentials (service-role only). */
@@ -99,6 +102,9 @@ export async function getStoreCreds(
     browse_template_language: data.browse_template_language ?? null,
     telegram_bot_token: decryptOrNull(data.telegram_bot_token_enc),
     telegram_chat_id: data.telegram_chat_id ?? null,
+    meta_access_token: decryptOrNull(data.meta_access_token_enc),
+    meta_ad_account_id: data.meta_ad_account_id ?? null,
+    meta_ad_account_name: data.meta_ad_account_name ?? null,
   };
 }
 

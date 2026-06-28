@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useState } from "react";
+import { useActionState, useState, useTransition } from "react";
 import { Card, Section, SimpleTable } from "@/components/ui";
 import { STORE_STATUSES } from "@/lib/store-settings";
+import type { MetaAdAccount } from "@/lib/meta-marketing";
 import {
+  listStoreMetaAdAccounts,
   reRegisterWebhooks,
+  saveMetaAdAccount,
   sendTelegramTest,
   syncNow,
   updateStore,
@@ -31,8 +34,17 @@ export interface StoreSettingsData {
     browse_template_name: string | null;
     browse_template_language: string | null;
     telegram_chat_id: string | null;
+    meta_ad_account_id: string | null;
+    meta_ad_account_name: string | null;
   };
-  has: { shopifyToken: boolean; webhookSecret: boolean; kapsoKey: boolean; flowSecret: boolean; telegramToken: boolean };
+  has: {
+    shopifyToken: boolean;
+    webhookSecret: boolean;
+    kapsoKey: boolean;
+    flowSecret: boolean;
+    telegramToken: boolean;
+    metaToken: boolean;
+  };
   oauthAvailable: boolean;
   siteUrl: string;
   sync: Array<{
@@ -135,6 +147,14 @@ export function StoreSettings({
           storeId={s.id}
           label="Enviar resumen de prueba (Telegram)"
           help="Manda ahora mismo a tu Telegram el resumen del día anterior, para validar la configuración de Telegram de arriba."
+        />
+      </div>
+
+      <div className="-mt-2">
+        <MetaAdAccountPicker
+          storeId={s.id}
+          currentId={s.meta_ad_account_id}
+          currentName={s.meta_ad_account_name}
         />
       </div>
 
@@ -419,6 +439,25 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
           </div>
         </fieldset>
 
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Meta Ads · Marketing API
+          </legend>
+          <p className="text-xs text-slate-500">
+            Conecta la <strong>Marketing API</strong> de Meta para cruzar el <strong>gasto</strong> de
+            tus anuncios con las ventas (ROAS). Pega un <strong>access token</strong> con permiso{" "}
+            <code>ads_read</code> (ideal: token de un <em>system user</em>), guarda los cambios y luego
+            elige la <strong>cuenta publicitaria</strong> en el botón de abajo.
+          </p>
+          <SecretField name="meta_access_token" label="Access token de Meta (Marketing API)" set={data.has.metaToken} />
+          <p className="text-xs text-slate-500">
+            Cuenta seleccionada:{" "}
+            <strong className="text-slate-700">
+              {s.meta_ad_account_name || s.meta_ad_account_id || "ninguna"}
+            </strong>
+          </p>
+        </fieldset>
+
         <div className="flex items-center gap-3">
           <button
             type="submit"
@@ -476,6 +515,105 @@ function ActionButton({
         {state.error && <p className="text-sm text-red-600">{state.error}</p>}
         {state.notice && <p className="text-sm text-emerald-600">{state.notice}</p>}
       </form>
+    </Card>
+  );
+}
+
+/** Fetch the Meta ad accounts the saved token can access, then pick + save one
+ *  for this store. The selection later powers ad-spend ↔ ventas (ROAS). */
+function MetaAdAccountPicker({
+  storeId,
+  currentId,
+  currentName,
+}: {
+  storeId: string;
+  currentId: string | null;
+  currentName: string | null;
+}) {
+  const [accounts, setAccounts] = useState<MetaAdAccount[] | null>(null);
+  const [selected, setSelected] = useState<string | null>(currentId);
+  const [msg, setMsg] = useState<{ error?: string; notice?: string } | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  function fetchAccounts() {
+    setMsg(null);
+    startTransition(async () => {
+      const res = await listStoreMetaAdAccounts(storeId);
+      if ("error" in res) {
+        setAccounts(null);
+        setMsg({ error: res.error });
+        return;
+      }
+      setAccounts(res.accounts);
+      if (!res.accounts.length) setMsg({ notice: "El token no tiene cuentas publicitarias accesibles." });
+    });
+  }
+
+  function choose(a: MetaAdAccount) {
+    setMsg(null);
+    startTransition(async () => {
+      const res = await saveMetaAdAccount(storeId, a.id, a.name);
+      if (res.error) setMsg({ error: res.error });
+      else {
+        setSelected(a.id);
+        setMsg({ notice: res.notice });
+      }
+    });
+  }
+
+  return (
+    <Card>
+      <div className="space-y-3">
+        <div>
+          <p className="text-sm font-medium text-slate-700">Cuenta publicitaria de Meta</p>
+          <p className="text-xs text-slate-400">
+            Trae las cuentas a las que tu token tiene acceso y elige cuál usar para esta tienda.
+            {currentId ? (
+              <>
+                {" "}
+                Actual: <strong className="text-slate-600">{currentName || currentId}</strong>.
+              </>
+            ) : null}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={fetchAccounts}
+          disabled={pending}
+          className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+        >
+          {pending ? "Cargando…" : "Buscar cuentas publicitarias"}
+        </button>
+        {accounts && accounts.length > 0 && (
+          <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+            {accounts.map((a) => (
+              <li key={a.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                <span className="min-w-0">
+                  <span className="font-medium text-slate-800">{a.name}</span>{" "}
+                  <span className="text-xs text-slate-400">
+                    {a.id}
+                    {a.currency ? ` · ${a.currency}` : ""}
+                  </span>
+                </span>
+                {selected === a.id ? (
+                  <span className="shrink-0 text-xs font-medium text-emerald-600">✓ seleccionada</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => choose(a)}
+                    disabled={pending}
+                    className="shrink-0 rounded border border-brand-300 px-2 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-60"
+                  >
+                    Elegir
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {msg?.error && <p className="text-sm text-red-600">{msg.error}</p>}
+        {msg?.notice && <p className="text-sm text-emerald-600">{msg.notice}</p>}
+      </div>
     </Card>
   );
 }

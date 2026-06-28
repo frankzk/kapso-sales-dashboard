@@ -26,6 +26,7 @@ export interface StoreSettingsInput {
   kapso_api_key?: string;
   flow_webhook_secret?: string;
   telegram_bot_token?: string;
+  meta_access_token?: string;
 }
 
 function clean(v: string | undefined): string | null {
@@ -75,6 +76,8 @@ export function buildStoreUpdate(
   if (flow) patch.flow_webhook_secret_enc = encrypt(flow, keyOverride);
   const tgToken = clean(input.telegram_bot_token);
   if (tgToken) patch.telegram_bot_token_enc = encrypt(tgToken, keyOverride);
+  const metaTok = clean(input.meta_access_token);
+  if (metaTok) patch.meta_access_token_enc = encrypt(metaTok, keyOverride);
 
   return patch;
 }

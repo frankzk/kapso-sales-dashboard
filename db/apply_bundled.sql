@@ -1036,3 +1036,9 @@ create policy quick_replies_delete on quick_replies for delete to authenticated
 -- per-store Telegram config for the daily sales summary.
 alter table stores add column if not exists telegram_bot_token_enc text;
 alter table stores add column if not exists telegram_chat_id        text;
+
+-- ---- 0018 ----
+-- Meta (Facebook) Marketing API connection per store (for ad-spend ↔ ROAS).
+alter table stores add column if not exists meta_access_token_enc text;
+alter table stores add column if not exists meta_ad_account_id     text;
+alter table stores add column if not exists meta_ad_account_name   text;
