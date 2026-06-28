@@ -12,6 +12,7 @@ import {
   detectYapePayment,
   extractReferral,
   fetchConversationSignals,
+  fetchConversationTranscript,
   findConversationIdByPhone,
   classifyKapsoEvent,
   type KapsoClientOpts,
@@ -473,5 +474,47 @@ describe("findConversationIdByPhone", () => {
   it("returns null (never throws) for an empty phone", async () => {
     const f = mockFetch(() => ({ data: [{ id: "x" }] }), []);
     expect(await findConversationIdByPhone(opts(f), "")).toBeNull();
+  });
+});
+
+describe("fetchConversationTranscript", () => {
+  it("uses limit=100 (Kapso's cap) + fields=kapso(default) and returns oldest-first", async () => {
+    const caps: Capture[] = [];
+    // Newest-first from the API; the helper sorts ascending for display.
+    const msgs = [
+      { id: "b", timestamp: "1782249200", type: "text", text: { body: "segundo" }, kapso: { direction: "outbound" } },
+      { id: "a", timestamp: "1782249100", type: "text", text: { body: "primero" }, kapso: { direction: "inbound" } },
+    ];
+    const f = mockFetch(() => ({ data: msgs, paging: { cursors: { after: "CUR" }, next: null } }), caps);
+    const out = await fetchConversationTranscript(opts(f), "conv-1");
+    expect(out.map((m) => m.id)).toEqual(["a", "b"]); // oldest-first
+    const u = new URL(caps[0]!.url);
+    expect(u.searchParams.get("limit")).toBe("100"); // never 200 (would 400)
+    expect(u.searchParams.get("fields")).toBe("kapso(default)");
+    expect(caps).toHaveLength(1); // a short page (<100) ⇒ no extra request despite the cursor
+  });
+
+  it("pages through the cursor when a full page (100) comes back", async () => {
+    const caps: Capture[] = [];
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({
+      id: `p1-${i}`,
+      timestamp: String(1782249000 + i),
+      type: "text",
+      text: { body: String(i) },
+      kapso: { direction: "inbound" },
+    }));
+    const lastPage = [
+      { id: "p2-0", timestamp: "1782250000", type: "text", text: { body: "fin" }, kapso: { direction: "outbound" } },
+    ];
+    const f = mockFetch((url) => {
+      const after = url.searchParams.get("after");
+      return after
+        ? { data: lastPage, paging: { cursors: {}, next: null } }
+        : { data: fullPage, paging: { cursors: { after: "NEXT" }, next: null } };
+    }, caps);
+    const out = await fetchConversationTranscript(opts(f), "conv-2");
+    expect(caps).toHaveLength(2); // followed the cursor for a second page
+    expect(new URL(caps[1]!.url).searchParams.get("after")).toBe("NEXT");
+    expect(out).toHaveLength(101);
   });
 });

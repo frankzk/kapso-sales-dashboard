@@ -18,10 +18,9 @@ import {
   type ProductVariantResult,
 } from "@/lib/shopify";
 import {
+  fetchConversationTranscript,
   fetchLastInboundAt,
   findConversationIdByPhone,
-  listMessages,
-  parseConversationMessages,
   sendWhatsappDocument,
   sendWhatsappImage,
   sendWhatsappText,
@@ -557,17 +556,14 @@ export async function loadLeadConversation(leadId: string): Promise<LeadConversa
   }
   if (!convId) return { messages: [], reason: "Este lead no tiene conversación de WhatsApp todavía." };
 
-  let page;
+  let parsed;
   try {
-    page = await listMessages(
-      { apiKey: creds.kapso_api_key },
-      { conversationId: convId, limit: 200, fields: "kapso(default)" },
-    );
+    parsed = await fetchConversationTranscript({ apiKey: creds.kapso_api_key }, convId);
   } catch {
     return { messages: [], reason: "No se pudo cargar la conversación de WhatsApp." };
   }
 
-  const messages: LeadConversationMessage[] = parseConversationMessages(page.data ?? []).map((m) => ({
+  const messages: LeadConversationMessage[] = parsed.map((m) => ({
     id: m.id,
     direction: m.dir,
     at: new Date(m.t).toISOString(),
