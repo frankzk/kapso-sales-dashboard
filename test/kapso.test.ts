@@ -12,6 +12,7 @@ import {
   detectYapePayment,
   extractReferral,
   fetchConversationSignals,
+  findConversationIdByPhone,
   classifyKapsoEvent,
   type KapsoClientOpts,
   type ParsedMsg,
@@ -441,5 +442,36 @@ describe("extractReferral (Meta ad attribution)", () => {
   it("ignores a Meta link the BOT sent (outbound) — only customer messages attribute", () => {
     const msgs = [{ kapso: { direction: "outbound" }, text: { body: "míralo aquí https://aurela.pe/p?utm_source=facebook" } }];
     expect(extractReferral(msgs)).toBeNull();
+  });
+});
+
+describe("findConversationIdByPhone", () => {
+  it("requests /whatsapp/conversations by phone and returns the newest conv id", async () => {
+    const caps: Capture[] = [];
+    const f = mockFetch(
+      () => ({
+        data: [
+          { id: "old", phone_number: "51999", last_active_at: "2026-06-20T10:00:00Z" },
+          { id: "new", phone_number: "51999", last_active_at: "2026-06-27T19:38:59Z" },
+        ],
+      }),
+      caps,
+    );
+    const id = await findConversationIdByPhone(opts(f), "51999", "PNID-1");
+    expect(id).toBe("new"); // newest by last_active_at, regardless of order
+    const u = new URL(caps[0]!.url);
+    expect(u.pathname).toContain("/whatsapp/conversations");
+    expect(u.searchParams.get("phone_number")).toBe("51999");
+    expect(u.searchParams.get("phone_number_id")).toBe("PNID-1");
+  });
+
+  it("returns null when no conversation matches the phone", async () => {
+    const f = mockFetch(() => ({ data: [] }), []);
+    expect(await findConversationIdByPhone(opts(f), "51000")).toBeNull();
+  });
+
+  it("returns null (never throws) for an empty phone", async () => {
+    const f = mockFetch(() => ({ data: [{ id: "x" }] }), []);
+    expect(await findConversationIdByPhone(opts(f), "")).toBeNull();
   });
 });
