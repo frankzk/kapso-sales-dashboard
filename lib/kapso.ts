@@ -129,6 +129,8 @@ export interface ListMessagesParams {
   messageType?: string;
   limit?: number;
   after?: string;
+  /** Kapso field selector, e.g. `kapso(default)` to include media_url/direction. */
+  fields?: string;
 }
 
 export function listMessages(
@@ -143,6 +145,7 @@ export function listMessages(
     message_type: p.messageType,
     limit: p.limit ?? 100,
     after: p.after,
+    fields: p.fields,
   });
 }
 
@@ -501,6 +504,87 @@ export interface ParsedMsg {
   dir: "inbound" | "outbound";
   text: string;
   image?: boolean; // image/media attachment (Yape voucher, product photo, …)
+}
+
+export type MediaKind = "image" | "audio" | "video" | "document" | "sticker";
+
+/** Classify a message's media attachment (null = plain text / no media). */
+function msgMediaKind(m: any): MediaKind | null {
+  const t = m?.type ?? m?.message?.type;
+  if (t === "image" || t === "audio" || t === "video" || t === "document" || t === "sticker") return t;
+  if (m?.image) return "image";
+  if (m?.sticker) return "sticker";
+  if (m?.video) return "video";
+  if (m?.audio) return "audio";
+  if (m?.document) return "document";
+  const ct: string =
+    m?.kapso?.media_data?.content_type ??
+    m?.kapso?.message_type_data?.content_type ??
+    m?.media_data?.content_type ??
+    "";
+  if (typeof ct === "string" && ct) {
+    if (ct.startsWith("image/")) return "image";
+    if (ct.startsWith("audio/")) return "audio";
+    if (ct.startsWith("video/")) return "video";
+    if (ct.startsWith("application/") || ct.startsWith("text/")) return "document";
+  }
+  return null;
+}
+
+/** Kapso's stored, stable media URL for a message (null if none). Prefers the
+ *  `kapso.media_url` extension (returned with `fields=kapso(default)`); the
+ *  Meta `image.url`/`lookaside.fbsbx.com` link expires + needs auth, so it's a
+ *  last resort only. Must be requested through the authenticated media proxy. */
+function msgMediaUrl(m: any): string | null {
+  const u = m?.kapso?.media_url ?? m?.kapso?.media_data?.url ?? m?.media_data?.url ?? null;
+  return typeof u === "string" && u ? u : null;
+}
+
+/** Caption that travels with an image/video/document (separate from a text body). */
+function msgCaption(m: any): string {
+  const c =
+    m?.image?.caption ??
+    m?.video?.caption ??
+    m?.document?.caption ??
+    m?.kapso?.message_type_data?.caption ??
+    null;
+  return typeof c === "string" ? c : "";
+}
+
+/** A conversation message normalized for display in the lead drawer. */
+export interface ConversationMessage {
+  id: string | null;
+  dir: "inbound" | "outbound";
+  t: number; // epoch ms
+  text: string; // text body or media caption
+  mediaKind: MediaKind | null;
+  mediaUrl: string | null; // Kapso stored URL — fetch via the authenticated proxy
+}
+
+/**
+ * Normalize a raw Kapso message page (fetched with `fields=kapso(default)`) into
+ * an ordered, display-ready transcript: text + media (Yape vouchers, product
+ * photos) with their stable `media_url`. Pure + defensive about payload shapes;
+ * messages without a usable timestamp are dropped, unknown direction defaults to
+ * inbound. Oldest first.
+ */
+export function parseConversationMessages(rawMsgs: any[]): ConversationMessage[] {
+  return (rawMsgs ?? [])
+    .map((m): ConversationMessage | null => {
+      const t = msgTimeMs(m);
+      if (t == null) return null;
+      const caption = msgCaption(m);
+      return {
+        id: m?.id != null ? String(m.id) : null,
+        dir: msgDirection(m) ?? "inbound",
+        t,
+        text: msgText(m) || caption,
+        mediaKind: msgMediaKind(m),
+        mediaUrl: msgMediaUrl(m),
+      };
+    })
+    .filter((m): m is ConversationMessage => m != null)
+    .sort((a, b) => a.t - b.t);
 }
 
 /**

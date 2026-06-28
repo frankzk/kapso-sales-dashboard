@@ -36,6 +36,7 @@ import {
   generateOrder,
   getLeadWindow,
   listQuickReplies,
+  loadLeadConversation,
   loadLeadDetail,
   loadOrderDraft,
   registerCall,
@@ -46,6 +47,7 @@ import {
   sendLeadMedia,
   sendLeadMessage,
   type LeadActionState,
+  type LeadConversationMessage,
   type QuickReply,
 } from "@/app/dashboard/leads/actions";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
@@ -1149,6 +1151,9 @@ function LeadDrawer({
             )}
           </section>
 
+          {/* Conversación completa de WhatsApp (texto + imágenes), traída de Kapso */}
+          <WhatsappConversation leadId={lead.id} hasConversation={!!lead.kapso_conversation_id} />
+
           {/* Enviar WhatsApp / llamar */}
           {!lead.kapso_conversation_id && lead.draft_order_gid && <CallAffordance phone={lead.phone} />}
           <WhatsappComposer
@@ -1188,6 +1193,134 @@ function LeadDrawer({
         </div>
       </aside>
     </>
+  );
+}
+
+const MEDIA_KIND_META: Record<NonNullable<LeadConversationMessage["mediaKind"]>, { icon: string; label: string }> = {
+  image: { icon: "🖼️", label: "Imagen" },
+  audio: { icon: "🎧", label: "Audio" },
+  video: { icon: "🎬", label: "Video" },
+  document: { icon: "📄", label: "Documento" },
+  sticker: { icon: "🩷", label: "Sticker" },
+};
+
+/**
+ * Full WhatsApp transcript (text + inline images like Yape vouchers) pulled live
+ * from Kapso. Collapsed by default and loaded on first expand, so opening a lead
+ * drawer never waits on a Kapso round-trip the advisor didn't ask for.
+ */
+function WhatsappConversation({ leadId, hasConversation }: { leadId: string; hasConversation: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<
+    | { status: "idle" | "loading" }
+    | { status: "ready"; messages: LeadConversationMessage[]; reason?: string }
+  >({ status: "idle" });
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  function load() {
+    setState({ status: "loading" });
+    loadLeadConversation(leadId).then((res) =>
+      setState({ status: "ready", messages: res.messages, reason: res.reason }),
+    );
+  }
+
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && state.status === "idle") load();
+  }
+
+  // Jump to the most recent message once the transcript renders.
+  useEffect(() => {
+    if (open && state.status === "ready" && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [open, state]);
+
+  if (!hasConversation) return null;
+
+  return (
+    <section className="space-y-2">
+      <button
+        type="button"
+        onClick={toggle}
+        className="flex w-full items-center justify-between gap-2 text-sm font-semibold tracking-wide text-slate-700 uppercase"
+        aria-expanded={open}
+      >
+        <span>💬 Conversación de WhatsApp</span>
+        <span className="text-slate-400">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50">
+          {state.status !== "ready" ? (
+            <p className="px-3 py-6 text-center text-sm text-slate-400">Cargando conversación…</p>
+          ) : state.messages.length ? (
+            <>
+              <div ref={scrollRef} className="max-h-96 space-y-2 overflow-y-auto px-3 py-3">
+                {state.messages.map((m, i) => (
+                  <ChatBubble key={m.id ?? i} leadId={leadId} msg={m} />
+                ))}
+              </div>
+              <div className="flex items-center justify-between border-t border-slate-200 px-3 py-1.5">
+                <span className="text-xs text-slate-400">{state.messages.length} mensajes</span>
+                <button type="button" onClick={load} className="text-xs font-medium text-brand-700 hover:underline">
+                  Actualizar
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="px-3 py-6 text-center text-sm text-slate-400">
+              {state.reason ?? "Sin mensajes en esta conversación."}
+            </p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** One WhatsApp bubble: customer (left/white) vs. business (right/green), with
+ *  inline image previews and links for other media — all via the media proxy. */
+function ChatBubble({ leadId, msg }: { leadId: string; msg: LeadConversationMessage }) {
+  const outbound = msg.direction === "outbound";
+  const mediaSrc = msg.mediaUrl
+    ? `/api/leads/${leadId}/media?u=${encodeURIComponent(msg.mediaUrl)}`
+    : null;
+  const meta = msg.mediaKind ? MEDIA_KIND_META[msg.mediaKind] : null;
+  return (
+    <div className={cn("flex", outbound ? "justify-end" : "justify-start")}>
+      <div
+        className={cn(
+          "max-w-[82%] space-y-1 rounded-2xl px-3 py-2 text-sm shadow-sm",
+          outbound ? "rounded-br-sm bg-emerald-100 text-emerald-950" : "rounded-bl-sm bg-white text-slate-800",
+        )}
+      >
+        {mediaSrc && msg.mediaKind === "image" ? (
+          <a href={mediaSrc} target="_blank" rel="noreferrer" className="block">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={mediaSrc}
+              alt={msg.text || "Imagen"}
+              loading="lazy"
+              className="max-h-60 w-full rounded-lg object-cover"
+            />
+          </a>
+        ) : mediaSrc && meta ? (
+          <a
+            href={mediaSrc}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 font-medium text-brand-700 hover:underline"
+          >
+            <span>{meta.icon}</span> {meta.label}
+          </a>
+        ) : null}
+        {msg.text && <p className="break-words whitespace-pre-wrap">{msg.text}</p>}
+        <p className={cn("text-right text-[10px]", outbound ? "text-emerald-700/70" : "text-slate-400")}>
+          {fmtDateShort(msg.at)}
+        </p>
+      </div>
+    </div>
   );
 }
 

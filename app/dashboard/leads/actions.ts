@@ -19,6 +19,8 @@ import {
 } from "@/lib/shopify";
 import {
   fetchLastInboundAt,
+  listMessages,
+  parseConversationMessages,
   sendWhatsappDocument,
   sendWhatsappImage,
   sendWhatsappText,
@@ -498,6 +500,67 @@ export async function getLeadWindow(
   const lastMs = await fetchLastInboundAt({ apiKey: creds.kapso_api_key }, convId);
   if (lastMs == null) return { open: false, lastInboundAt: null, reason: "El cliente aún no ha escrito." };
   return { open: Date.now() - lastMs < WINDOW_MS, lastInboundAt: new Date(lastMs).toISOString() };
+}
+
+/** One message of the live WhatsApp transcript shown in the drawer. `mediaUrl`
+ *  is the Kapso stored URL — it must be loaded through `/api/leads/[id]/media`
+ *  (the authenticated proxy), never put in an <img> src directly. */
+export interface LeadConversationMessage {
+  id: string | null;
+  direction: "inbound" | "outbound";
+  at: string; // ISO timestamp
+  text: string;
+  mediaKind: "image" | "audio" | "video" | "document" | "sticker" | null;
+  mediaUrl: string | null;
+}
+
+export interface LeadConversation {
+  messages: LeadConversationMessage[];
+  reason?: string; // set (with messages: []) when the transcript can't be shown
+}
+
+/**
+ * Load the FULL WhatsApp conversation for a lead (text + media) from Kapso, so
+ * the advisor can read the whole thread — including Yape vouchers and product
+ * photos — without leaving the dashboard. Requested with `fields=kapso(default)`
+ * so each message carries its stable `media_url`. RLS-authorized; never throws.
+ */
+export async function loadLeadConversation(leadId: string): Promise<LeadConversation> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { messages: [], reason: "Sin acceso a este lead." };
+
+  const admin = createAdminSupabase();
+  const { data } = await admin
+    .from("leads")
+    .select("kapso_conversation_id")
+    .eq("id", leadId)
+    .maybeSingle();
+  const convId = (data as { kapso_conversation_id: string | null } | null)?.kapso_conversation_id ?? null;
+  if (!convId) return { messages: [], reason: "Este lead no tiene conversación de WhatsApp." };
+
+  const creds = await getStoreCreds(ctx.storeId);
+  if (!creds?.kapso_api_key) return { messages: [], reason: "La tienda no tiene Kapso configurado." };
+
+  let page;
+  try {
+    page = await listMessages(
+      { apiKey: creds.kapso_api_key },
+      { conversationId: convId, limit: 200, fields: "kapso(default)" },
+    );
+  } catch {
+    return { messages: [], reason: "No se pudo cargar la conversación de WhatsApp." };
+  }
+
+  const messages: LeadConversationMessage[] = parseConversationMessages(page.data ?? []).map((m) => ({
+    id: m.id,
+    direction: m.dir,
+    at: new Date(m.t).toISOString(),
+    text: m.text,
+    mediaKind: m.mediaKind,
+    mediaUrl: m.mediaUrl,
+  }));
+  if (!messages.length) return { messages: [], reason: "Sin mensajes en esta conversación todavía." };
+  return { messages };
 }
 
 /**
