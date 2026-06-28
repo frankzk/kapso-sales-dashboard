@@ -590,6 +590,7 @@ export interface ConversationMessage {
   text: string; // text body or media caption
   mediaKind: MediaKind | null;
   mediaUrl: string | null; // Kapso stored URL — fetch via the authenticated proxy
+  status: string | null; // WhatsApp delivery status (sent/delivered/read/failed) — outbound
 }
 
 /**
@@ -605,6 +606,7 @@ export function parseConversationMessages(rawMsgs: any[]): ConversationMessage[]
       const t = msgTimeMs(m);
       if (t == null) return null;
       const caption = msgCaption(m);
+      const status = m?.kapso?.status ?? m?.status;
       return {
         id: m?.id != null ? String(m.id) : null,
         dir: msgDirection(m) ?? "inbound",
@@ -612,6 +614,7 @@ export function parseConversationMessages(rawMsgs: any[]): ConversationMessage[]
         text: msgText(m) || caption,
         mediaKind: msgMediaKind(m),
         mediaUrl: msgMediaUrl(m),
+        status: typeof status === "string" ? status : null,
       };
     })
     .filter((m): m is ConversationMessage => m != null)

@@ -82,3 +82,16 @@ describe("parseConversationMessages", () => {
     expect(out[0]!.dir).toBe("inbound");
   });
 });
+
+describe("parseConversationMessages — delivery status", () => {
+  it("passes through kapso.status (sent/delivered/read/failed); null when absent", () => {
+    const out = parseConversationMessages([
+      { id: "a", type: "text", timestamp: "1700000100", text: { body: "hola" }, kapso: { direction: "outbound", status: "read" } },
+      { id: "b", type: "text", timestamp: "1700000200", text: { body: "ok" }, kapso: { direction: "inbound" } },
+      { id: "c", type: "text", timestamp: "1700000300", text: { body: "falló" }, status: "failed" },
+    ]);
+    expect(out.find((m) => m.id === "a")!.status).toBe("read");
+    expect(out.find((m) => m.id === "b")!.status).toBeNull();
+    expect(out.find((m) => m.id === "c")!.status).toBe("failed"); // top-level fallback
+  });
+});
