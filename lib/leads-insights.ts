@@ -141,7 +141,15 @@ export async function getLeadsInsights(
   // Entrants (created) + leavers (left the "por llamar" queue: won/lost/Yape) in
   // the window. Two light queries, run together.
   const [entrantsRes, leaversRes] = await Promise.all([
-    sb.from("leads").select("created_at").eq("store_id", storeId).gte("created_at", windowStartIso).limit(5000),
+    // "Entró" = first_seen_at (fecha REAL de primer contacto), no created_at — que
+    // es cuándo se insertó la fila y por un backfill masivo puede caer todo el
+    // mismo día (un pico falso). Caemos a created_at solo si first_seen es null.
+    sb
+      .from("leads")
+      .select("created_at, first_seen_at")
+      .eq("store_id", storeId)
+      .or(`first_seen_at.gte.${windowStartIso},and(first_seen_at.is.null,created_at.gte.${windowStartIso})`)
+      .limit(5000),
     sb
       .from("leads")
       .select("last_interaction_at")
@@ -153,9 +161,10 @@ export async function getLeadsInsights(
 
   const entranByDate: Record<string, number> = {};
   const entrantHours: number[] = []; // today only
-  for (const r of (entrantsRes.data as { created_at: string | null }[]) ?? []) {
-    if (!r.created_at) continue;
-    const p = tzParts(r.created_at, tz);
+  for (const r of (entrantsRes.data as { created_at: string | null; first_seen_at: string | null }[]) ?? []) {
+    const arrived = r.first_seen_at ?? r.created_at;
+    if (!arrived) continue;
+    const p = tzParts(arrived, tz);
     entranByDate[p.date] = (entranByDate[p.date] ?? 0) + 1;
     if (p.date === todayDate) entrantHours.push(p.hour);
   }
