@@ -95,6 +95,12 @@ function fmtDateShort(value: string | null | undefined): string {
   });
 }
 
+/** "12 may" — compact day+month for the previous-orders list. */
+function orderDateShort(value: string | null | undefined): string {
+  if (!value) return "—";
+  return new Date(value).toLocaleDateString("es-PE", { day: "numeric", month: "short" });
+}
+
 /** One label/value line inside the Meta attribution block (drawer). */
 function MetaField({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -1397,8 +1403,35 @@ function LeadDrawer({
                 <YapeAssign leadId={lead.id} storeId={lead.store_id} onAssigned={onRegistered} />
               )}
 
-              {/* Pedidos anteriores (cliente recurrente) */}
-              <RecurrentCustomer history={history} />
+              {/* Pedidos anteriores: últimos 3 pedidos de Shopify de este cliente */}
+              {history && history.recentOrders.length > 0 && (
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold tracking-wide text-slate-400 uppercase">
+                      Pedidos anteriores · {history.recentOrders.length}
+                    </p>
+                    <span className="shrink-0 text-xs font-semibold text-emerald-700">
+                      {currency} {history.recentOrders.reduce((s, o) => s + o.amount, 0).toFixed(2)} en total
+                    </span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {history.recentOrders.map((o, i) => (
+                      <div
+                        key={o.name ?? i}
+                        className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2"
+                      >
+                        <span className="truncate text-sm font-medium text-slate-800">Pedido {o.name ?? "—"}</span>
+                        <span className="flex shrink-0 items-center gap-2.5">
+                          <span className="text-xs text-slate-400">{orderDateShort(o.createdAt)}</span>
+                          <span className="text-sm font-semibold text-emerald-700">
+                            {currency} {o.amount.toFixed(2)}
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Resultado de la llamada */}
               <CallForm leadId={lead.id} onRegistered={onRegistered} />
@@ -1467,13 +1500,15 @@ function LeadDrawer({
               {lead.source === "meta_ad" && <MetaAttribution lead={lead} adMeta={adMeta} />}
             </div>
 
-            {/* Formulario de pedido: lo abre el CTA del footer; cubre la columna de acción. */}
-            {orderOpen && !lead.has_order && (
+            {/* Formulario de pedido: lo abre el CTA del footer; cubre la columna de acción.
+                allowExisting permite generar OTRO pedido aunque el lead ya tenga uno. */}
+            {orderOpen && (
               <div className="absolute inset-0 overflow-y-auto bg-slate-50 p-4">
                 <OrderFormPanel
                   leadId={lead.id}
                   currency={currency}
                   hasCart={hasCart}
+                  allowExisting={lead.has_order}
                   onRegistered={onRegistered}
                   onClose={() => setOrderOpen(false)}
                 />
@@ -1482,13 +1517,25 @@ function LeadDrawer({
           </div>
         </div>
 
-        {/* Footer CTA: cierre de venta */}
-        {(lead.has_order || !orderOpen) && (
+        {/* Footer CTA: cierre de venta (oculto mientras el formulario está abierto) */}
+        {!orderOpen && (
           <div className="border-t border-slate-200 bg-white p-3.5">
             {lead.has_order ? (
-              <p className="text-center text-sm font-medium text-emerald-700">
-                ✅ Pedido generado{lead.order_id ? ` · ${lead.order_id}` : ""}
-              </p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="min-w-0 truncate text-sm font-medium text-emerald-700">
+                  ✅ Pedido generado{history?.currentOrderName ? ` · ${history.currentOrderName}` : ""}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setOrderOpen(true)}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                  Generar nuevo pedido
+                </button>
+              </div>
             ) : (
               <button
                 type="button"
@@ -2456,12 +2503,14 @@ function OrderFormPanel({
   leadId,
   currency,
   hasCart,
+  allowExisting,
   onRegistered,
   onClose,
 }: {
   leadId: string;
   currency: string;
   hasCart: boolean;
+  allowExisting?: boolean; // permitir generar OTRO pedido aunque el lead ya tenga uno
   onRegistered: () => void;
   onClose: () => void;
 }) {
@@ -2549,6 +2598,7 @@ function OrderFormPanel({
           discountKind === "none" || discountValue == null || discountValue <= 0
             ? null
             : { kind: discountKind, value: discountValue },
+        allowExisting,
       });
       if (res.error) {
         setMsg(res.error);
@@ -2930,24 +2980,6 @@ function ProductPicker({
   );
 }
 
-/** Prior-purchase summary for a recurrent customer (último pedido / cuándo / qué). */
-function RecurrentCustomer({ history }: { history: CustomerHistory | null }) {
-  if (!history || !history.lastOrderAt) return null;
-  const days = Math.max(0, Math.floor((Date.now() - new Date(history.lastOrderAt).getTime()) / 86_400_000));
-  const ago = days === 0 ? "hoy" : days === 1 ? "hace 1 día" : `hace ${days} días`;
-  return (
-    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
-      <p className="text-xs font-semibold tracking-wide uppercase opacity-80">Cliente recurrente</p>
-      <p className="mt-1">
-        🔁 Último pedido{history.lastOrderName ? ` ${history.lastOrderName}` : ""} · {ago}
-        {history.orderCount > 1 ? ` · ${history.orderCount} pedidos previos` : ""}
-      </p>
-      {history.lastProduct && <p className="mt-0.5 text-amber-800/90">Compró: {history.lastProduct}</p>}
-    </div>
-  );
-}
-
-/** Call affordance for a web cart with no WhatsApp chat: tel: link + copy number. */
 function CallForm({ leadId, onRegistered }: { leadId: string; onRegistered: () => void }) {
   const [state, action, pending] = useActionState<LeadActionState, FormData>(registerCall, {});
   const [status, setStatus] = useState("");
