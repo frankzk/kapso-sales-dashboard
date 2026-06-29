@@ -1,5 +1,6 @@
 import { getAccessibleStores, getAdNames, getCurrentUser, getWaNumbers } from "@/lib/access";
 import { LEAD_VIEWS, getLeadCounts, getStoreLeads, type LeadView } from "@/lib/leads-access";
+import { getLeadsInsights } from "@/lib/leads-insights";
 import { isLeadGestion, isLeadSegment, type LeadGestion, type LeadSegment } from "@/lib/leads";
 import { EmptyState } from "@/components/ui";
 import { LeadsBoard } from "@/components/leads";
@@ -39,13 +40,18 @@ export default async function LeadsPage({
     getCurrentUser(),
   ]);
 
-  // Meta ad attribution + WhatsApp-number labels for the leads in view.
-  const [adNames, waNumbers] = await Promise.all([
+  const store = stores.find((s) => s.id === storeId);
+  const currency = store?.currency ?? "PEN";
+  const timezone = store?.timezone ?? "America/Lima";
+
+  // Meta ad attribution + WhatsApp-number labels for the leads in view, plus the
+  // "Tablero de hoy" insights (burndown + 7-day flow/saldo + productividad). The
+  // insights anchor on the current "por llamar" count, so they wait on `counts`.
+  const [adNames, waNumbers, insights] = await Promise.all([
     getAdNames(leads.map((l) => l.ad_id)),
     getWaNumbers(leads.map((l) => l.wa_phone_number_id)),
+    getLeadsInsights(storeId, timezone, counts.por_llamar),
   ]);
-
-  const currency = stores.find((s) => s.id === storeId)?.currency ?? "PEN";
 
   return (
     <LeadsBoard
@@ -57,6 +63,7 @@ export default async function LeadsPage({
       adNames={adNames}
       waNumbers={waNumbers}
       currency={currency}
+      insights={insights}
       initialSeg={initialSeg}
       initialGest={initialGest}
       initialOpenId={typeof sp.open === "string" ? sp.open : null}
