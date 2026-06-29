@@ -810,7 +810,7 @@ export async function loadLeadConversation(
     ? await listConversationsByPhone({ apiKey: creds.kapso_api_key }, lead.phone)
     : [];
   const labels = await getWaNumbers(convs.map((c) => (c.phone_number_id as string | null) ?? null));
-  const threads: LeadThread[] = convs.map((c) => {
+  const threadsRaw: LeadThread[] = convs.map((c) => {
     const pnid = (c.phone_number_id as string | null) ?? null;
     const wn = pnid ? labels[pnid] : null;
     return {
@@ -822,14 +822,31 @@ export async function loadLeadConversation(
         (c.last_active_at as string | null) ?? (c.kapso?.last_message_timestamp as string | null) ?? null,
     };
   });
-  const ids = new Set(threads.map((t) => t.conversationId));
+  // Un tab por NÚMERO: varias conversaciones de Kapso en el mismo phone_number_id
+  // se colapsan en una sola (la más reciente). El selector solo aparece si el
+  // cliente escribió de verdad a más de un número.
+  const byNumber = new Map<string, LeadThread>();
+  for (const t of threadsRaw) {
+    const key = t.phoneNumberId ?? "__none__";
+    const prev = byNumber.get(key);
+    if (!prev || (t.lastActiveAt ?? "") > (prev.lastActiveAt ?? "")) byNumber.set(key, t);
+  }
+  const threads = [...byNumber.values()].sort((a, b) =>
+    (b.lastActiveAt ?? "").localeCompare(a.lastActiveAt ?? ""),
+  );
+  const pnidOfConv = new Map(threadsRaw.map((t) => [t.conversationId, t.phoneNumberId ?? "__none__"]));
 
-  // Pick the active thread: explicit param (validated) → stored id → most recent.
-  let activeId: string | null = null;
-  if (conversationId && ids.has(conversationId)) activeId = conversationId;
-  else if (lead?.kapso_conversation_id && ids.has(lead.kapso_conversation_id)) activeId = lead.kapso_conversation_id;
-  else if (threads[0]) activeId = threads[0].conversationId;
-  else activeId = lead?.kapso_conversation_id ?? null;
+  // Resolve the active NUMBER → its representative (newest) conversation:
+  //   explicit param → stored conv's number → lead's number → most recent number.
+  let activeKey: string | null = null;
+  if (conversationId && pnidOfConv.has(conversationId)) activeKey = pnidOfConv.get(conversationId)!;
+  else if (lead?.kapso_conversation_id && pnidOfConv.has(lead.kapso_conversation_id))
+    activeKey = pnidOfConv.get(lead.kapso_conversation_id)!;
+  else if (lead?.wa_phone_number_id && byNumber.has(lead.wa_phone_number_id))
+    activeKey = lead.wa_phone_number_id;
+  else if (threads[0]) activeKey = threads[0].phoneNumberId ?? "__none__";
+  let activeId: string | null = activeKey ? (byNumber.get(activeKey)?.conversationId ?? null) : null;
+  if (!activeId) activeId = lead?.kapso_conversation_id ?? null;
   if (!activeId) return empty("Este lead no tiene conversación de WhatsApp todavía.");
 
   const activeThread = threads.find((t) => t.conversationId === activeId) ?? null;
