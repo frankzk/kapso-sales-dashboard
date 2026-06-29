@@ -24,7 +24,6 @@ import {
   labelOf,
   leadSegment,
   leadWindowInfo,
-  type LeadCategory,
   type LeadGestion,
   type LeadSegment,
   type LeadWindow,
@@ -77,13 +76,6 @@ function withToggled(s: Set<string>, key: string): Set<string> {
   return next;
 }
 
-const CATEGORY_BADGE: Record<LeadCategory, string> = {
-  won: "border-emerald-200 bg-emerald-50 text-emerald-700",
-  hot: "border-red-200 bg-red-50 text-red-700",
-  open: "border-amber-200 bg-amber-50 text-amber-700",
-  lost: "border-slate-200 bg-slate-50 text-slate-600",
-};
-
 function fmtDate(value: string | null | undefined): string {
   if (!value) return "—";
   return new Date(value).toLocaleString("es-PE");
@@ -100,20 +92,6 @@ function fmtDateShort(value: string | null | undefined): string {
     minute: "2-digit",
     hour12: false,
   });
-}
-
-function StatusBadge({ status, needsAttention }: { status: string; needsAttention?: boolean }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium",
-        CATEGORY_BADGE[categoryOf(status)],
-      )}
-    >
-      {needsAttention ? "🔥 " : ""}
-      {labelOf(status)}
-    </span>
-  );
 }
 
 /** One label/value line inside the Meta attribution block (drawer). */
@@ -432,12 +410,12 @@ function avatarTint(id: string): string {
 // Square source chip (📣 Campaña / 🛒 Carrito / 🔎 Búsqueda / "Directo").
 const SOURCE_CHIP: Record<
   "meta_ad" | "cod_cart" | "abandoned_browse" | "organic",
-  { glyph: string; cls: string; title: string; isText?: boolean }
+  { glyph: string; label: string; cls: string; title: string; isText?: boolean }
 > = {
-  meta_ad: { glyph: "📣", cls: "bg-violet-100 text-violet-700", title: "Campaña Meta (Click-to-WhatsApp)" },
-  cod_cart: { glyph: "🛒", cls: "bg-emerald-100 text-emerald-700", title: "Carrito abandonado (formulario COD)" },
-  abandoned_browse: { glyph: "🔎", cls: "bg-orange-100 text-orange-700", title: "Búsqueda abandonada" },
-  organic: { glyph: "Directo", cls: "bg-slate-100 text-slate-500", title: "Orgánico / directo", isText: true },
+  meta_ad: { glyph: "📣", label: "Campaña", cls: "bg-violet-100 text-violet-700", title: "Campaña Meta (Click-to-WhatsApp)" },
+  cod_cart: { glyph: "🛒", label: "Carrito", cls: "bg-emerald-100 text-emerald-700", title: "Carrito abandonado (formulario COD)" },
+  abandoned_browse: { glyph: "🔎", label: "Búsqueda", cls: "bg-orange-100 text-orange-700", title: "Búsqueda abandonada" },
+  organic: { glyph: "Directo", label: "Directo", cls: "bg-slate-100 text-slate-500", title: "Orgánico / directo", isText: true },
 };
 function SourceChip({ source }: { source: string | null | undefined }) {
   const s = SOURCE_CHIP[leadSourceKey(source)];
@@ -1207,183 +1185,300 @@ function LeadDrawer({
   onRegistered: () => void;
 }) {
   const handoffTone = categoryOf(lead.status) === "hot" ? "red" : "amber";
+  const [orderOpen, setOrderOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  // cod_cart sin conversación → empty-state; el resto muestra el chat (que se
+  // resuelve por teléfono si no hay conversation_id guardado).
+  const hasWa = lead.source !== "cod_cart" || !!lead.kapso_conversation_id;
+  const hasCart = !!lead.draft_order_gid && lead.draft_order_status !== "completed";
+  const isRecurrent = !!history?.lastOrderAt;
+  const { state: winState, msLeft } = leadWindowInfo(lead.last_inbound_at ?? lead.last_interaction_at, Date.now());
+  const wd = WIN_DISPLAY[winKey(winState)];
+  const winLabel =
+    winState === null
+      ? "Sin ventana"
+      : winState === "cerrada"
+        ? "Ventana vencida"
+        : `${Math.max(1, Math.ceil((msLeft ?? 0) / 3_600_000))}h restantes`;
+  const src = SOURCE_CHIP[leadSourceKey(lead.source)];
+  const initial = (lead.name || lead.phone).trim()[0]?.toUpperCase() || "?";
+
+  async function copyPhone() {
+    try {
+      await navigator.clipboard.writeText(`+${lead.phone}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard no disponible */
+    }
+  }
+
   return (
     <>
-      <div
-        className="fixed inset-0 z-10 bg-slate-900/30"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <aside className="fixed inset-y-0 right-0 z-20 w-full max-w-md overflow-y-auto border-l bg-white shadow-xl">
-        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-3">
-          <div className="min-w-0 space-y-1">
-            <div className="flex items-center gap-2">
-              <p className="truncate text-base font-semibold text-slate-900">{lead.name || lead.phone}</p>
-              {lead.source === "cod_cart" && (
-                <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-700">🛒</span>
-              )}
-              {lead.source === "abandoned_browse" && (
-                <span className="shrink-0 rounded bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-700">🔎</span>
-              )}
-              {lead.source === "meta_ad" && (
-                <span className="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-700">📣</span>
-              )}
-            </div>
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <a
-                href={`https://wa.me/${lead.phone}`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sm text-brand-700 hover:underline"
-              >
-                {lead.phone}
-              </a>
-              <a href={`tel:${lead.phone}`} className="text-xs text-slate-400 hover:text-slate-600">
-                · llamar
-              </a>
-              <StatusBadge status={lead.status} needsAttention={lead.needs_attention} />
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Cerrar"
-            className="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-          >
-            ✕
-          </button>
-        </div>
-
-        <div className="space-y-4 px-5 py-4">
-          {/* Contexto: carrito/producto visto + entrega (lo que miras antes de llamar/cerrar) */}
-          {(lead.cart_item_count || lead.district || lead.draft_order_gid || lead.cart_summary) && (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">
-              {lead.draft_order_gid && (
-                <p className="mb-1 text-xs font-semibold tracking-wide uppercase text-emerald-700/80">
-                  {lead.draft_order_status === "completed" ? "✅ Carrito recuperado" : "🛒 Carrito abandonado"}
-                  {lead.draft_order_name ? ` · ${lead.draft_order_name}` : ""}
-                </p>
-              )}
-              {lead.cart_item_count ? (
-                <p>
-                  🛒 <span className="font-medium">Carrito:</span>{" "}
-                  {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
-                  {lead.cart_value != null ? ` · ${currency} ${Number(lead.cart_value).toFixed(2)}` : ""}
-                </p>
-              ) : lead.cart_summary ? (
-                <p>
-                  🔎 <span className="font-medium">Vio:</span> {lead.cart_summary}
-                </p>
-              ) : null}
-              {(lead.district || lead.referencia) && (
-                <div className={lead.cart_item_count ? "mt-1 space-y-0.5" : "space-y-0.5"}>
-                  {lead.district && (
-                    <p>
-                      📍 <span className="font-medium">Distrito:</span> {lead.district}
-                      {lead.province ? <span className="text-emerald-800/70"> · {lead.province}</span> : null}
-                    </p>
-                  )}
-                  {lead.referencia && <p className="text-emerald-800/90">Ref: {lead.referencia}</p>}
-                </div>
-              )}
-              {lead.draft_order_url && (
-                <a
-                  href={lead.draft_order_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-1.5 inline-block text-xs font-medium text-emerald-700 underline hover:text-emerald-900"
-                >
-                  Ver borrador en Shopify ↗
-                </a>
-              )}
-            </div>
-          )}
-
-          {/* Chat de WhatsApp arriba del todo: leer la conversación antes de actuar.
-              Se resuelve por teléfono si no hay conversation_id guardado. */}
-          {!lead.kapso_conversation_id && lead.draft_order_gid && <CallAffordance phone={lead.phone} />}
-          <WhatsappChat
-            leadId={lead.id}
-            lastInteractionAt={lead.last_interaction_at}
-            hasConversation={!!(lead.kapso_conversation_id || lead.phone)}
-            onSent={onRegistered}
-          />
-
-          {/* Acción principal: generar / registrar el pedido */}
-          {lead.has_order ? (
-            <p className="text-sm font-medium text-emerald-700">
-              ✅ Pedido generado{lead.order_id ? ` · ${lead.order_id}` : ""}
-            </p>
-          ) : (
-            <OrderForm
-              leadId={lead.id}
-              currency={currency}
-              hasCart={!!lead.draft_order_gid && lead.draft_order_status !== "completed"}
-              onRegistered={onRegistered}
-            />
-          )}
-
-          {/* Registrar llamada (lo más usado al trabajar) */}
-          <CallForm leadId={lead.id} onRegistered={onRegistered} />
-
-          {/* Historial */}
-          <section className="space-y-2">
-            <h3 className="text-sm font-semibold tracking-wide text-slate-700 uppercase">Historial</h3>
-            {calls === null ? (
-              <p className="text-sm text-slate-400">Cargando historial…</p>
-            ) : calls.length ? (
-              <ul className="space-y-2">
-                {calls.map((c, i) => (
-                  <li key={c.id ?? i} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-slate-400">
-                        {fmtDate(c.occurred_at)}
-                        {c.vendedora_name ? ` · ${c.vendedora_name}` : ""}
-                      </span>
-                      {c.kind === "message" ? (
-                        <span className="text-xs font-medium text-brand-700">📤 WhatsApp</span>
-                      ) : c.new_status ? (
-                        <span className="text-xs font-medium text-slate-600">{labelOf(c.new_status)}</span>
-                      ) : null}
-                    </div>
-                    {c.note && <p className="mt-1 text-slate-700">{c.note}</p>}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-sm text-slate-400">Sin actividad todavía.</p>
-            )}
-          </section>
-
-          {/* Contexto secundario (abajo: se consulta menos) */}
-          <RecurrentCustomer history={history} />
-
-          {lead.handoff_context && (
-            <div
+      <div className="fixed inset-0 z-10 bg-slate-900/30" onClick={onClose} aria-hidden="true" />
+      <aside className="@container fixed inset-y-0 right-0 z-20 flex h-full w-[min(880px,96%)] flex-col border-l border-slate-200 bg-slate-50 shadow-xl">
+        {/* Header */}
+        <div className="border-b border-slate-200 bg-white px-5 py-4">
+          <div className="flex items-start gap-3">
+            <span
               className={cn(
-                "rounded-xl border px-3 py-2.5 text-sm",
-                handoffTone === "red"
-                  ? "border-red-200 bg-red-50 text-red-800"
-                  : "border-amber-200 bg-amber-50 text-amber-800",
+                "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-base font-semibold",
+                avatarTint(lead.id),
               )}
             >
-              <p className="text-xs font-semibold tracking-wide uppercase opacity-80">Resumen del bot</p>
-              <p className="mt-1 whitespace-pre-wrap">{lead.handoff_context}</p>
+              {initial}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-lg font-semibold text-slate-900">{lead.name || lead.phone}</h2>
+                {isRecurrent && <Pill className="bg-amber-50 text-amber-700">★ Recurrente</Pill>}
+              </div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm">
+                <span className="tabular-nums text-slate-700">+{lead.phone}</span>
+                <button
+                  type="button"
+                  onClick={copyPhone}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="11" height="11" rx="2" />
+                    <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+                  </svg>
+                  {copied ? "copiado" : "copiar"}
+                </button>
+                <a href={`tel:+${lead.phone}`} className="text-xs text-slate-400 hover:text-slate-600">
+                  · llamar
+                </a>
+              </div>
             </div>
-          )}
-
-          {lead.wa_phone_number_id && (
-            <p className="text-xs text-slate-500">
-              📱 WhatsApp:{" "}
-              <span className="font-medium text-slate-700">
-                {waNumber?.name ?? waNumber?.displayPhone ?? "número sin nombre"}
-              </span>
-              {waKindLabel(waNumber?.kind ?? null) ? ` · ${waKindLabel(waNumber?.kind ?? null)}` : ""}
-            </p>
-          )}
-
-          {lead.source === "meta_ad" && <MetaAttribution lead={lead} adMeta={adMeta} />}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Cerrar"
+              className="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <Pill className="bg-slate-100">
+              <span className={cn("h-1.5 w-1.5 rounded-full", wd.dot)} />
+              <span className={wd.fg}>{winLabel}</span>
+            </Pill>
+            <SegmentBadge lead={lead} />
+            <Pill className={src.cls}>{src.isText ? src.label : `${src.glyph} ${src.label}`}</Pill>
+          </div>
         </div>
+
+        {/* Body: conversación (izq) · acción (der). Se apila ≤720px de ancho del panel. */}
+        <div className="flex min-h-0 flex-1 flex-col @min-[720px]:flex-row">
+          {/* Izquierda · conversación de WhatsApp */}
+          <div className="flex max-h-[55vh] min-h-0 flex-col border-b border-slate-200 @min-[720px]:max-h-none @min-[720px]:w-1/2 @min-[720px]:border-r @min-[720px]:border-b-0">
+            {hasWa ? (
+              <WhatsappChat
+                leadId={lead.id}
+                lastInteractionAt={lead.last_interaction_at}
+                hasConversation={!!(lead.kapso_conversation_id || lead.phone)}
+                onSent={onRegistered}
+              />
+            ) : (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+                <span className="flex h-12 w-12 items-center justify-center rounded-full bg-violet-100 text-violet-700">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z" />
+                    <path d="m4 4 16 16" />
+                  </svg>
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">Sin conversación de WhatsApp</p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    El cliente abandonó un carrito web sin escribir. Llámalo para recuperar la venta.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={copyPhone}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-brand-700 hover:bg-slate-50"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="11" height="11" rx="2" />
+                    <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+                  </svg>
+                  {copied ? "Copiado" : `Copiar +${lead.phone}`}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Derecha · acción (scroll propio; el formulario de pedido la cubre al abrirse) */}
+          <div className="relative min-h-0 flex-1 @min-[720px]:w-1/2">
+            <div className="h-full space-y-4 overflow-y-auto p-5">
+              {/* Contexto: carrito/producto visto + entrega */}
+              {(lead.cart_item_count || lead.district || lead.draft_order_gid || lead.cart_summary) && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">
+                  {lead.draft_order_gid && (
+                    <p className="mb-1 text-xs font-semibold tracking-wide text-emerald-700/80 uppercase">
+                      {lead.draft_order_status === "completed" ? "✅ Carrito recuperado" : "🛒 Carrito abandonado"}
+                      {lead.draft_order_name ? ` · ${lead.draft_order_name}` : ""}
+                    </p>
+                  )}
+                  {lead.cart_item_count ? (
+                    <p>
+                      🛒 <span className="font-medium">Carrito:</span>{" "}
+                      {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
+                      {lead.cart_value != null ? ` · ${currency} ${Number(lead.cart_value).toFixed(2)}` : ""}
+                    </p>
+                  ) : lead.cart_summary ? (
+                    <p>
+                      🔎 <span className="font-medium">Vio:</span> {lead.cart_summary}
+                    </p>
+                  ) : null}
+                  {(lead.district || lead.referencia) && (
+                    <div className={lead.cart_item_count ? "mt-1 space-y-0.5" : "space-y-0.5"}>
+                      {lead.district && (
+                        <p>
+                          📍 <span className="font-medium">Distrito:</span> {lead.district}
+                          {lead.province ? <span className="text-emerald-800/70"> · {lead.province}</span> : null}
+                        </p>
+                      )}
+                      {lead.referencia && <p className="text-emerald-800/90">Ref: {lead.referencia}</p>}
+                    </div>
+                  )}
+                  {lead.draft_order_url && (
+                    <a
+                      href={lead.draft_order_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1.5 inline-block text-xs font-medium text-emerald-700 underline hover:text-emerald-900"
+                    >
+                      Ver borrador en Shopify ↗
+                    </a>
+                  )}
+                </div>
+              )}
+
+              {/* Resumen del bot */}
+              {lead.handoff_context && (
+                <div
+                  className={cn(
+                    "rounded-xl border px-3 py-2.5 text-sm",
+                    handoffTone === "red"
+                      ? "border-red-200 bg-red-50 text-red-800"
+                      : "border-amber-200 bg-amber-50 text-amber-800",
+                  )}
+                >
+                  <p className="text-xs font-semibold tracking-wide uppercase opacity-80">Resumen del bot</p>
+                  <p className="mt-1 whitespace-pre-wrap">{lead.handoff_context}</p>
+                </div>
+              )}
+
+              {/* Pedidos anteriores (cliente recurrente) */}
+              <RecurrentCustomer history={history} />
+
+              {/* Resultado de la llamada */}
+              <CallForm leadId={lead.id} onRegistered={onRegistered} />
+
+              {/* Historial (timeline) */}
+              <section>
+                <p className="mb-2 text-xs font-semibold tracking-wide text-slate-400 uppercase">Historial</p>
+                {calls === null ? (
+                  <p className="text-sm text-slate-400">Cargando historial…</p>
+                ) : calls.length ? (
+                  <div>
+                    {calls.map((c, i) => {
+                      const last = i === calls.length - 1;
+                      return (
+                        <div key={c.id ?? i} className="flex gap-2.5">
+                          <div className="flex flex-col items-center">
+                            <span
+                              className={cn(
+                                "mt-1 h-2.5 w-2.5 shrink-0 rounded-full border-2 bg-white",
+                                c.kind === "message"
+                                  ? "border-emerald-500"
+                                  : c.new_status
+                                    ? "border-brand-500"
+                                    : "border-slate-300",
+                              )}
+                            />
+                            {!last && <span className="my-0.5 w-0.5 flex-1 bg-slate-200" />}
+                          </div>
+                          <div className={cn("min-w-0", last ? "pb-0" : "pb-3")}>
+                            <p className="text-sm text-slate-800">
+                              {c.kind === "message" ? (
+                                <span className="font-medium text-brand-700">📤 WhatsApp</span>
+                              ) : c.new_status ? (
+                                <span className="font-medium">{labelOf(c.new_status)}</span>
+                              ) : (
+                                <span className="text-slate-500">Nota</span>
+                              )}
+                            </p>
+                            {c.note && <p className="mt-0.5 text-sm text-slate-600">{c.note}</p>}
+                            <p className="mt-0.5 text-[11px] text-slate-400">
+                              {fmtDate(c.occurred_at)}
+                              {c.vendedora_name ? ` · ${c.vendedora_name}` : ""}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-400">Sin actividad todavía.</p>
+                )}
+              </section>
+
+              {/* Número de WhatsApp */}
+              {lead.wa_phone_number_id && (
+                <p className="text-xs text-slate-500">
+                  📱 WhatsApp:{" "}
+                  <span className="font-medium text-slate-700">
+                    {waNumber?.name ?? waNumber?.displayPhone ?? "número sin nombre"}
+                  </span>
+                  {waKindLabel(waNumber?.kind ?? null) ? ` · ${waKindLabel(waNumber?.kind ?? null)}` : ""}
+                </p>
+              )}
+
+              {/* Campaña Meta */}
+              {lead.source === "meta_ad" && <MetaAttribution lead={lead} adMeta={adMeta} />}
+            </div>
+
+            {/* Formulario de pedido: lo abre el CTA del footer; cubre la columna de acción. */}
+            {orderOpen && !lead.has_order && (
+              <div className="absolute inset-0 overflow-y-auto bg-slate-50 p-4">
+                <OrderFormPanel
+                  leadId={lead.id}
+                  currency={currency}
+                  hasCart={hasCart}
+                  onRegistered={onRegistered}
+                  onClose={() => setOrderOpen(false)}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer CTA: cierre de venta */}
+        {(lead.has_order || !orderOpen) && (
+          <div className="border-t border-slate-200 bg-white p-3.5">
+            {lead.has_order ? (
+              <p className="text-center text-sm font-medium text-emerald-700">
+                ✅ Pedido generado{lead.order_id ? ` · ${lead.order_id}` : ""}
+              </p>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setOrderOpen(true)}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 11l3 3 8-8" />
+                  <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
+                </svg>
+                {hasCart ? "Generar pedido (contraentrega)" : "Registrar pedido (contraentrega)"}
+              </button>
+            )}
+          </div>
+        )}
       </aside>
     </>
   );
@@ -1571,7 +1666,7 @@ function WhatsappChat({
   });
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 shadow-sm">
+    <section className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white">
       {/* Cabecera estilo WhatsApp */}
       <div className="flex items-center justify-between gap-2 bg-emerald-600 px-3 py-2 text-white">
         <div className="flex min-w-0 items-center gap-2">
@@ -1658,11 +1753,11 @@ function WhatsappChat({
       )}
 
       {/* Hilo de mensajes */}
-      <div className="relative">
+      <div className="relative min-h-0 flex-1">
         <div
           ref={scrollRef}
           onScroll={onThreadScroll}
-          className="max-h-[55vh] min-h-[180px] space-y-1 overflow-y-auto bg-[#efeae2] px-3 py-3"
+          className="absolute inset-0 space-y-1 overflow-y-auto bg-[#efeae2] px-3 py-3"
         >
           {state.status === "loading" ? (
             <p className="py-10 text-center text-sm text-slate-500">Cargando conversación…</p>
@@ -2332,40 +2427,6 @@ function matchPeruRegion(v: string | null | undefined): string {
   return PERU_REGIONS.find((r) => nv.includes(norm(r))) ?? v;
 }
 
-function OrderForm({
-  leadId,
-  currency,
-  hasCart,
-  onRegistered,
-}: {
-  leadId: string;
-  currency: string;
-  hasCart: boolean;
-  onRegistered: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
-      >
-        {hasCart ? "✅ Generar pedido (contraentrega)" : "🧾 Registrar pedido (contraentrega)"}
-      </button>
-    );
-  }
-  return (
-    <OrderFormPanel
-      leadId={leadId}
-      currency={currency}
-      hasCart={hasCart}
-      onRegistered={onRegistered}
-      onClose={() => setOpen(false)}
-    />
-  );
-}
-
 function OrderFormPanel({
   leadId,
   currency,
@@ -2862,98 +2923,82 @@ function RecurrentCustomer({ history }: { history: CustomerHistory | null }) {
 }
 
 /** Call affordance for a web cart with no WhatsApp chat: tel: link + copy number. */
-function CallAffordance({ phone }: { phone: string }) {
-  const [copied, setCopied] = useState(false);
-  function copy() {
-    navigator.clipboard?.writeText(phone).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      },
-      () => {},
-    );
-  }
-  return (
-    <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-sm text-indigo-900">
-      <p className="text-xs font-semibold tracking-wide uppercase opacity-80">Carrito web — sin WhatsApp</p>
-      <p className="mt-1 mb-2 text-indigo-800/90">
-        El cliente no escribió por WhatsApp. Llámalo para recuperar el carrito.
-      </p>
-      <div className="flex items-center gap-2">
-        <a
-          href={`tel:${phone}`}
-          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
-        >
-          📞 Llamar {phone}
-        </a>
-        <button
-          type="button"
-          onClick={copy}
-          className="rounded-lg border border-indigo-300 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
-        >
-          {copied ? "Copiado ✓" : "Copiar número"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function CallForm({ leadId, onRegistered }: { leadId: string; onRegistered: () => void }) {
   const [state, action, pending] = useActionState<LeadActionState, FormData>(registerCall, {});
+  const [status, setStatus] = useState("");
   useEffect(() => {
-    if (state.notice) onRegistered();
+    if (state.notice) {
+      onRegistered();
+      setStatus("");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.notice]);
+  // Disposiciones más usadas como chips; el resto en el <select> "Otros estados"
+  // (registerCall acepta cualquier estado válido, así que no se pierde ninguno).
+  const CHIPS: [string, string][] = [
+    ["casi_cierra", "🔥 Casi cierra"],
+    ["no_responde", "🚫 No contestó"],
+    ["volver_a_llamar", "📞 Volver a llamar"],
+    ["contactado_dejo_wsp", "💬 Contactado"],
+    ["buzon", "📭 Buzón"],
+    ["sin_stock", "📦 Sin stock"],
+  ];
+  const chipKeys = new Set(CHIPS.map(([k]) => k));
   return (
-    <section className="space-y-2.5 rounded-xl border border-slate-200 p-3">
-      <h3 className="text-sm font-semibold tracking-wide text-slate-700 uppercase">
-        Registrar llamada
-      </h3>
+    <section>
+      <p className="mb-2 text-xs font-semibold tracking-wide text-slate-400 uppercase">Resultado de la llamada</p>
       <form action={action} className="space-y-2.5">
         <input type="hidden" name="lead_id" value={leadId} />
-        <div>
-          <label className={labelCls} htmlFor="status">
-            Estado
-          </label>
-          <select id="status" name="status" defaultValue="" className={inputCls}>
-            <option value="">(mantener estado)</option>
-            {MANUAL_STATUSES.map((s) => (
-              <option key={s.code} value={s.code}>
-                {s.label}
-              </option>
-            ))}
-          </select>
+        <input type="hidden" name="status" value={status} />
+        <div className="flex flex-wrap gap-1.5">
+          {CHIPS.map(([k, label]) => {
+            const on = status === k;
+            return (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setStatus(on ? "" : k)}
+                className={cn(
+                  "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                  on
+                    ? "border-brand-600 bg-brand-600 text-white"
+                    : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50",
+                )}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
-        <div>
-          <label className={labelCls} htmlFor="note">
-            Nota
-          </label>
-          <textarea
-            id="note"
-            name="note"
-            rows={2}
-            placeholder="Nota de la llamada"
-            className={inputCls}
-          />
-        </div>
-        <div>
-          <label className={labelCls} htmlFor="next_followup_at">
-            Próximo seguimiento
-          </label>
+        <select
+          value={chipKeys.has(status) ? "" : status}
+          onChange={(e) => setStatus(e.currentTarget.value)}
+          className={inputCls}
+          aria-label="Otros estados"
+        >
+          <option value="">Otros estados…</option>
+          {MANUAL_STATUSES.filter((s) => !chipKeys.has(s.code)).map((s) => (
+            <option key={s.code} value={s.code}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        <textarea name="note" rows={2} placeholder="Nota rápida…" className={inputCls} />
+        <div className="flex gap-2">
           <input
-            id="next_followup_at"
             name="next_followup_at"
             type="datetime-local"
-            className={inputCls}
+            aria-label="Reprogramar seguimiento"
+            className={cn(inputCls, "flex-1")}
           />
+          <button
+            type="submit"
+            disabled={pending}
+            className="shrink-0 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
+          >
+            {pending ? "Guardando…" : "Guardar"}
+          </button>
         </div>
-        <button
-          type="submit"
-          disabled={pending}
-          className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
-        >
-          {pending ? "Guardando…" : "Guardar llamada"}
-        </button>
         {state.error && <p className="text-sm text-red-600">{state.error}</p>}
         {state.notice && <p className="text-sm text-emerald-600">{state.notice}</p>}
       </form>
