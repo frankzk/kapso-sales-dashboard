@@ -5,6 +5,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   LabelList,
   Line,
   LineChart,
@@ -50,16 +51,22 @@ function BurndownChart({ data, nowHourLabel }: { data: LeadsInsights["burndown"]
 /** "Sin llamar · últimos 7 días" — leads en cola sin gestionar (status `nuevo`),
  *  agrupados por la fecha de su última interacción. Una barra por día, con el
  *  número encima — para ver qué día se está quedando gente sin llamar. */
-function SinLlamarChart({ data }: { data: LeadsInsights["sinLlamar"] }) {
+function SinLlamarChart({ data, older }: { data: LeadsInsights["sinLlamar"]; older: number }) {
+  // El bucket "+7d" (más viejos que la ventana, sumados) va primero y en rojo: es
+  // la alarma — gente que escribió hace +7 días y sigue sin que nadie la llame.
+  const bars = [{ dia: "+7d", count: older }, ...data];
   return (
     <div className="h-44 w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 16, right: 6, left: -8, bottom: 0 }}>
+        <BarChart data={bars} margin={{ top: 16, right: 6, left: -8, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} vertical={false} />
           <XAxis dataKey="dia" interval={0} tick={AXIS_TICK} />
           <YAxis tick={AXIS_TICK} width={28} allowDecimals={false} />
           <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: "#f8fafc" }} formatter={(v) => [v, "Sin llamar"]} />
-          <Bar dataKey="count" name="Sin llamar" fill={CHART.amber} radius={[3, 3, 0, 0]} isAnimationActive={false}>
+          <Bar dataKey="count" name="Sin llamar" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+            {bars.map((b) => (
+              <Cell key={b.dia} fill={b.dia === "+7d" ? CHART.red : CHART.amber} />
+            ))}
             <LabelList dataKey="count" position="top" fontSize={10} fill={CHART.slate} />
           </Bar>
         </BarChart>
@@ -161,15 +168,10 @@ export function LeadsInsightsPanel({
             <p className="text-sm font-semibold text-slate-800">Sin llamar · últimos 7 días</p>
             <p className="mb-1 text-xs text-slate-500">
               Por última interacción ·{" "}
-              <span className="font-medium text-slate-700">{data.sinLlamarTotal} en total</span>
-              {data.sinLlamarOlder > 0 && (
-                <>
-                  {" · "}
-                  <span className="font-medium text-red-600">{data.sinLlamarOlder} de +7 días</span>
-                </>
-              )}
+              <span className="font-medium text-slate-700">{data.sinLlamarTotal} en total</span> ·{" "}
+              <span className="text-red-600">barra roja = +7 días</span>
             </p>
-            <SinLlamarChart data={data.sinLlamar} />
+            <SinLlamarChart data={data.sinLlamar} older={data.sinLlamarOlder} />
           </div>
 
           <div className="rounded-xl border border-slate-200 bg-white p-3">
