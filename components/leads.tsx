@@ -2336,22 +2336,32 @@ function OrderFormPanel({
                       disabled={pending}
                     />
                   </label>
-                  <label className="flex items-center gap-1">
-                    {currency}
-                    <input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={it.unitPrice ?? ""}
-                      onChange={(e) =>
-                        patchItem(it.key, {
-                          unitPrice: e.currentTarget.value === "" ? null : Number(e.currentTarget.value),
-                        })
-                      }
-                      className="w-20 rounded border border-slate-200 px-1.5 py-0.5 text-sm"
-                      disabled={pending}
-                    />
-                  </label>
+                  {it.variantId ? (
+                    // Catalog product: unit price is fixed to the catalog (read-only).
+                    // Any reduction is handled via the order-level "Descuento" field.
+                    <span className="flex items-center gap-1 text-slate-500">
+                      {currency} {(it.unitPrice ?? 0).toFixed(2)}
+                      <span className="text-[10px] text-slate-400">c/u</span>
+                    </span>
+                  ) : (
+                    // Manual item: no catalog price to pull from, so it stays editable.
+                    <label className="flex items-center gap-1">
+                      {currency}
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={it.unitPrice ?? ""}
+                        onChange={(e) =>
+                          patchItem(it.key, {
+                            unitPrice: e.currentTarget.value === "" ? null : Number(e.currentTarget.value),
+                          })
+                        }
+                        className="w-20 rounded border border-slate-200 px-1.5 py-0.5 text-sm"
+                        disabled={pending}
+                      />
+                    </label>
+                  )}
                   <span className="ml-auto font-medium text-slate-700">
                     {currency} {((it.unitPrice ?? 0) * (Number(it.quantity) || 0)).toFixed(2)}
                   </span>
