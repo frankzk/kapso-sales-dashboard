@@ -2576,6 +2576,7 @@ function OrderFormPanel({
   const [district, setDistrict] = useState("");
   const [province, setProvince] = useState("");
   const [referencia, setReferencia] = useState("");
+  const [orderNote, setOrderNote] = useState(""); // → Notas del pedido en Shopify
   const [windowOpen, setWindowOpen] = useState(false);
   const [sendConfirm, setSendConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState("");
@@ -2646,6 +2647,7 @@ function OrderFormPanel({
         district: district.trim(),
         province: province.trim(),
         referencia: referencia.trim(),
+        note: orderNote.trim() || undefined,
         sendConfirmation: sendConfirm,
         confirmationText: confirmText.trim() || undefined,
         discount:
@@ -2871,6 +2873,21 @@ function OrderFormPanel({
             </div>
           </div>
           <Field label="Referencia" value={referencia} onChange={setReferencia} disabled={pending} placeholder="Frente a…, color de puerta…" />
+
+          <div>
+            <label className={labelCls}>Notas del pedido</label>
+            <textarea
+              value={orderNote}
+              onChange={(e) => setOrderNote(e.currentTarget.value)}
+              rows={2}
+              placeholder="Ej: enviar con Alexis (opcional)"
+              className={inputCls}
+              disabled={pending}
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              Se guarda en las Notas del pedido en Shopify (no se envía al cliente).
+            </p>
+          </div>
 
           <div className="rounded-lg border border-slate-200 bg-white p-2">
             <label className="flex items-center gap-2 text-sm text-slate-700">
