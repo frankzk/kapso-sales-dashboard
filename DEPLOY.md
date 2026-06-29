@@ -102,23 +102,28 @@ roles and the `auth` schema, so it just works.
    - **Shopify Admin API access token** — from a Shopify *custom app*
      (Settings → Apps and sales channels → Develop apps → your app → API
      credentials → Admin API access token, `shpat_…`). Scopes needed:
-     `read_orders`, `read_draft_orders`, `write_draft_orders`, `read_products`.
+     `read_orders`, `read_draft_orders`, `write_draft_orders`, `read_products`,
+     `read_customers`.
      The draft scopes power the abandoned-cart / Releasit COD feature (read
      open/completed drafts and let "Generar pedido" complete a draft into an
      order); `read_products` powers the order form's catalog picker (productos
-     reales con stock + precio).
+     reales con stock + precio); `read_customers` powers the leads drawer's
+     "Pedidos anteriores" (Shopify can't search orders by phone, so we resolve
+     the customer by phone and read their orders — the local table is kapso-only).
      - *Alternative — "Install on Shopify" (OAuth):* create a Shopify app, set
        its redirect URL to `{NEXT_PUBLIC_SITE_URL}/api/shopify/callback`, scopes
-       `read_orders,read_draft_orders,write_draft_orders,read_products`, and add
-       `SHOPIFY_APP_API_KEY` + `SHOPIFY_APP_API_SECRET`
+       `read_orders,read_draft_orders,write_draft_orders,read_products,read_customers`,
+       and add `SHOPIFY_APP_API_KEY` + `SHOPIFY_APP_API_SECRET`
        to Vercel. Then create the store with the token blank and click
        **Instalar con Shopify** in store **Ajustes** — the token is captured,
        encrypted, webhooks registered and backfill run automatically.
-     - *Existing stores must re-grant the draft + product scopes:* re-run
-       `/api/shopify/install?storeId=<id>` (OAuth) or paste a custom-app token
-       that already includes them. Until then the abandoned-cart feature stays
-       empty (the draft sync logs a scope error, non-breaking) and the order
-       form's catalog picker returns nothing (falls back to manual items).
+     - *Existing stores must re-grant the draft + product + customer scopes:* re-run
+       `/api/shopify/install?storeId=<id>` (OAuth, or click **Reconectar con
+       Shopify** in store **Ajustes**) or paste a custom-app token that already
+       includes them. Until then the abandoned-cart feature stays empty (the draft
+       sync logs a scope error, non-breaking), the order form's catalog picker
+       returns nothing (falls back to manual items), and the leads drawer's
+       "Pedidos anteriores" stays empty (degrades gracefully).
    - **Shopify API secret key** — same app → *API secret key*. Used to verify
      webhook HMAC. (Without it, webhooks can't be verified.)
    - **Kapso API key** — Kapso dashboard → Integrations → API keys.
