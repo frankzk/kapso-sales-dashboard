@@ -415,6 +415,56 @@ export async function shopifyGraphQL<T = any>(
   return json.data as T;
 }
 
+/**
+ * A customer's most recent orders in Shopify, looked up by phone (the dashboard's
+ * `orders` table only holds tag:kapso orders, so the full history lives in
+ * Shopify). Shopify can't search orders by phone, so we find the customer by
+ * phone and read their orders connection. Requires the `read_customers` scope;
+ * if it's missing (or no customer matches) this returns [] — never throws.
+ */
+export async function getCustomerRecentOrders(
+  opts: ShopifyClientOpts,
+  phone: string | null | undefined,
+  { excludeName, limit = 3 }: { excludeName?: string | null; limit?: number } = {},
+): Promise<{ name: string | null; createdAt: string | null; amount: number }[]> {
+  const e164 = toE164(phone);
+  if (!e164) return [];
+  const query = `
+    query($q: String!, $n: Int!) {
+      customers(first: 1, query: $q) {
+        edges {
+          node {
+            orders(first: $n, sortKey: CREATED_AT, reverse: true) {
+              edges { node { name createdAt currentTotalPriceSet { shopMoney { amount } } } }
+            }
+          }
+        }
+      }
+    }`;
+  try {
+    const data = await shopifyGraphQL<{
+      customers?: { edges?: { node?: { orders?: { edges?: { node?: unknown }[] } } }[] };
+    }>({ ...opts, query, variables: { q: `phone:${e164}`, n: limit + 1 } });
+    const edges = data?.customers?.edges?.[0]?.node?.orders?.edges ?? [];
+    const orders = edges.map((e) => {
+      const n = (e?.node ?? {}) as {
+        name?: string | null;
+        createdAt?: string | null;
+        currentTotalPriceSet?: { shopMoney?: { amount?: string } };
+      };
+      return {
+        name: n.name ?? null,
+        createdAt: n.createdAt ?? null,
+        amount: Math.round(Number(n.currentTotalPriceSet?.shopMoney?.amount ?? 0) * 100) / 100,
+      };
+    });
+    const filtered = excludeName ? orders.filter((o) => o.name !== excludeName) : orders;
+    return filtered.slice(0, limit);
+  } catch {
+    return []; // missing read_customers scope / no customer / API error → graceful
+  }
+}
+
 /** Shopify order search query for tag:kapso, optionally bounded by updated_at. */
 export function buildKapsoOrdersSearchQuery(
   updatedAtCursorIso?: string | null,

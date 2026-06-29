@@ -1217,7 +1217,10 @@ function LeadDrawer({
   // resuelve por teléfono si no hay conversation_id guardado).
   const hasWa = lead.source !== "cod_cart" || !!lead.kapso_conversation_id;
   const hasCart = !!lead.draft_order_gid && lead.draft_order_status !== "completed";
-  const isRecurrent = !!history?.lastOrderAt;
+  // Recurrent if there are prior purchases — either the local last-order signal or
+  // the (authoritative) Shopify "Pedidos anteriores" list, which catches customers
+  // whose past orders were placed outside the bot (not in the kapso-only table).
+  const isRecurrent = !!history?.lastOrderAt || (history?.recentOrders?.length ?? 0) > 0;
   const { state: winState, msLeft } = leadWindowInfo(lead.last_inbound_at ?? lead.last_interaction_at, Date.now());
   const wd = WIN_DISPLAY[winKey(winState)];
   const winLabel =
