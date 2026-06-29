@@ -1673,11 +1673,29 @@ function WhatsappChat({
     if (!el) return;
     if (atBottomRef.current) {
       el.scrollTop = el.scrollHeight;
+      // Re-anchor after layout settles (bubbles/players expanding).
+      requestAnimationFrame(() => {
+        const e = scrollRef.current;
+        if (e && atBottomRef.current) e.scrollTop = e.scrollHeight;
+      });
       setShowJump(false);
     } else if (grew) {
       setShowJump(true);
     }
   }, [state]);
+
+  // Imágenes/audio/video cargan async y crecen el hilo, empujando el contenido;
+  // re-anclamos al fondo cuando cada uno carga (solo si ya estabas abajo). El
+  // evento `load` no burbujea → se escucha en fase de captura.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onMediaLoad = () => {
+      if (atBottomRef.current) el.scrollTop = el.scrollHeight;
+    };
+    el.addEventListener("load", onMediaLoad, true);
+    return () => el.removeEventListener("load", onMediaLoad, true);
+  }, [hasConversation]);
 
   function onThreadScroll() {
     const el = scrollRef.current;
