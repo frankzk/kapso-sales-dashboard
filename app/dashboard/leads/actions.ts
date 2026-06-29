@@ -154,16 +154,13 @@ export async function claimLead(leadId: string): Promise<LeadActionState> {
 
   const admin = createAdminSupabase();
   const cutoff = new Date(Date.now() - CLAIM_TTL_MINUTES * 60_000).toISOString();
+  // NOTE: keep this update on the CORE columns only. Opening any lead calls
+  // claimLead, so it must never depend on the Yape-routing columns (a lead that
+  // gets claimed leaves the rotation anyway — listYapeAlerts/reconcile exclude
+  // claimed leads). This keeps the drawer working even if migration 0020 lags.
   const { data, error } = await admin
     .from("leads")
-    .update({
-      claimed_by: ctx.userId,
-      claimed_at: new Date().toISOString(),
-      // Whoever claims it owns it → clear the Yape rotation offer.
-      yape_offered_to: null,
-      yape_offered_at: null,
-      yape_passed: [],
-    })
+    .update({ claimed_by: ctx.userId, claimed_at: new Date().toISOString() })
     .eq("id", leadId)
     .or(`claimed_by.is.null,claimed_by.eq.${ctx.userId},claimed_at.lt.${cutoff}`)
     .select("id")
@@ -282,6 +279,7 @@ export async function listYapeAlerts(): Promise<YapeAlert[]> {
   const storeIds = ((storeRows as { id: string }[] | null) ?? []).map((s) => s.id);
   for (const sid of storeIds) await reconcileYapeOffers(admin, sid, nowMs);
   const offerCutoff = new Date(nowMs - OFFER_TTL_MS).toISOString();
+  const claimCutoff = new Date(nowMs - CLAIM_TTL_MINUTES * 60_000).toISOString();
   const { data, error } = await admin
     .from("leads")
     .select("id, store_id, name, phone, cart_summary, handoff_context, last_inbound_at, last_interaction_at")
@@ -289,6 +287,8 @@ export async function listYapeAlerts(): Promise<YapeAlert[]> {
     .eq("status", "yape_por_verificar")
     .eq("has_order", false)
     .gte("yape_offered_at", offerCutoff)
+    // Exclude one I (or anyone) already took, so it doesn't linger in the pop-up.
+    .or(`claimed_by.is.null,claimed_at.lt.${claimCutoff}`)
     .order("yape_offered_at", { ascending: true })
     .limit(20);
   if (error || !data) return [];
