@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
 import { runStoreSync } from "@/lib/ingest";
+import { alertUnattendedYapes } from "@/lib/yape-alert-telegram";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -41,7 +42,21 @@ async function run(req: NextRequest) {
       reports.push({ storeId: id, error: e instanceof Error ? e.message : String(e) });
     }
   }
-  return NextResponse.json({ ok: true, stores: storeIds.length, reports });
+
+  // Off-hours safety net: ping Telegram about Yapes nobody has taken in a while
+  // (the advisor rotation is poll-driven, so it can't alert when no one is on).
+  // Best-effort — a Telegram failure must never fail the sync.
+  let yapeAlerts = 0;
+  for (const id of storeIds) {
+    try {
+      const r = await alertUnattendedYapes(id, admin);
+      yapeAlerts += r.alerted;
+    } catch {
+      /* ignore — alerting is best-effort */
+    }
+  }
+
+  return NextResponse.json({ ok: true, stores: storeIds.length, yapeAlerts, reports });
 }
 
 export async function GET(req: NextRequest) {

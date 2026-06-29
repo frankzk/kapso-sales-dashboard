@@ -1068,3 +1068,7 @@ alter table leads add column if not exists yape_passed uuid[] not null default '
 
 create index if not exists leads_yape_offer_idx
   on leads(store_id) where status = 'yape_por_verificar';
+
+-- ---- 0021 ----
+-- Telegram alert for unattended Yapes: when we last pinged the channel (dedup).
+alter table leads add column if not exists yape_alert_sent_at timestamptz;
