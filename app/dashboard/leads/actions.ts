@@ -40,6 +40,27 @@ import { getWaNumbers } from "@/lib/access";
 // Process-level cache of vendedora id → display name (emails ~never change).
 const agentNameCache = new Map<string, string>();
 
+/**
+ * Resolve a vendedora's display name (email local-part), cached process-wide.
+ * Returns null if the lookup fails (left uncached so it retries next time) —
+ * same semantics the call-history resolver has always used.
+ */
+async function resolveAgentName(
+  userId: string,
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<string | null> {
+  if (agentNameCache.has(userId)) return agentNameCache.get(userId)!;
+  try {
+    const { data } = await admin.auth.admin.getUserById(userId);
+    const email = data?.user?.email ?? null;
+    const name = email ? email.split("@")[0]! : userId.slice(0, 8);
+    agentNameCache.set(userId, name);
+    return name;
+  } catch {
+    return null; // leave unresolved — retried next call
+  }
+}
+
 export interface LeadActionState {
   error?: string;
   notice?: string;
@@ -70,20 +91,9 @@ export async function loadLeadDetail(
 
   // Resolve who logged each entry (vendedora id → display name) for the history.
   const ids = [...new Set(detail.calls.map((c) => c.vendedora).filter(Boolean))] as string[];
-  const missing = ids.filter((id) => !agentNameCache.has(id));
-  if (missing.length) {
+  if (ids.length) {
     const admin = createAdminSupabase();
-    await Promise.all(
-      missing.map(async (id) => {
-        try {
-          const { data } = await admin.auth.admin.getUserById(id);
-          const email = data?.user?.email ?? null;
-          agentNameCache.set(id, email ? email.split("@")[0]! : id.slice(0, 8));
-        } catch {
-          /* leave unresolved */
-        }
-      }),
-    );
+    await Promise.all(ids.map((id) => resolveAgentName(id, admin)));
   }
   const calls = detail.calls.map((c) => ({
     ...c,
@@ -188,7 +198,18 @@ export async function claimLead(leadId: string): Promise<LeadActionState> {
     .select("id")
     .maybeSingle();
   if (error) return { error: error.message };
-  if (!data) return { error: "Otro vendedor está atendiendo este lead." };
+  if (!data) {
+    // The claim failed because someone else holds a fresh one — name them so the
+    // advisor sees exactly who's on it (not a generic "otro vendedor").
+    const { data: held } = await admin
+      .from("leads")
+      .select("claimed_by")
+      .eq("id", leadId)
+      .maybeSingle();
+    const holderId = (held as { claimed_by: string | null } | null)?.claimed_by ?? null;
+    const who = holderId && holderId !== ctx.userId ? await resolveAgentName(holderId, admin) : null;
+    return { error: who ? `${who} está atendiendo este lead.` : "Otro vendedor está atendiendo este lead." };
+  }
   revalidatePath("/dashboard/leads");
   return { notice: "Lead tomado." };
 }
