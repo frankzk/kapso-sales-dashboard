@@ -872,24 +872,28 @@ export async function loadLeadConversation(
   if (!ctx) return empty("Sin acceso a este lead.");
 
   const admin = createAdminSupabase();
-  const { data } = await admin
-    .from("leads")
-    .select("kapso_conversation_id, phone, wa_phone_number_id")
-    .eq("id", leadId)
-    .maybeSingle();
-  const lead = (data as {
+  // Lead row + store creds are independent — fetch together.
+  const [leadRes, creds] = await Promise.all([
+    admin.from("leads").select("kapso_conversation_id, phone, wa_phone_number_id").eq("id", leadId).maybeSingle(),
+    getStoreCreds(ctx.storeId),
+  ]);
+  const lead = (leadRes.data as {
     kapso_conversation_id: string | null;
     phone: string | null;
     wa_phone_number_id: string | null;
   } | null) ?? null;
-
-  const creds = await getStoreCreds(ctx.storeId);
   if (!creds?.kapso_api_key) return empty("La tienda no tiene Kapso configurado.");
+  const apiKey = creds.kapso_api_key;
 
-  // All conversations for this phone across the project's numbers (drives the selector).
-  const convs = lead?.phone
-    ? await listConversationsByPhone({ apiKey: creds.kapso_api_key }, lead.phone)
-    : [];
+  // The transcript is the slow part the user waits on. Fetch it for the best-known
+  // conversation id CONCURRENTLY with the conversation list (which only drives the
+  // multi-number selector) instead of strictly after it — that halves the Kapso
+  // round-trip latency on open. Capped to 2 pages (200 msgs) for a fast first paint.
+  const storedId = (conversationId && conversationId.trim()) || lead?.kapso_conversation_id || null;
+  const [convs, storedTranscript] = await Promise.all([
+    lead?.phone ? listConversationsByPhone({ apiKey }, lead.phone) : Promise.resolve([]),
+    storedId ? fetchConversationTranscript({ apiKey }, storedId, 2).catch(() => null) : Promise.resolve(null),
+  ]);
   const labels = await getWaNumbers(convs.map((c) => (c.phone_number_id as string | null) ?? null));
   const threadsRaw: LeadThread[] = convs.map((c) => {
     const pnid = (c.phone_number_id as string | null) ?? null;
@@ -933,20 +937,24 @@ export async function loadLeadConversation(
   const activeThread = threads.find((t) => t.conversationId === activeId) ?? null;
   const activePhoneNumberId = activeThread?.phoneNumberId ?? lead?.wa_phone_number_id ?? null;
 
-  let parsed;
-  try {
-    parsed = await fetchConversationTranscript({ apiKey: creds.kapso_api_key }, activeId);
-  } catch {
-    return {
-      messages: [],
-      threads,
-      activeConversationId: activeId,
-      activePhoneNumberId,
-      reason: "No se pudo cargar la conversación de WhatsApp.",
-    };
+  // Reuse the transcript we already fetched in parallel when the resolved active
+  // conversation is the stored one (the common case); otherwise fetch it now.
+  let parsed = storedId && activeId === storedId ? storedTranscript : null;
+  if (parsed == null) {
+    try {
+      parsed = await fetchConversationTranscript({ apiKey }, activeId, 2);
+    } catch {
+      return {
+        messages: [],
+        threads,
+        activeConversationId: activeId,
+        activePhoneNumberId,
+        reason: "No se pudo cargar la conversación de WhatsApp.",
+      };
+    }
   }
 
-  const messages: LeadConversationMessage[] = parsed.map((m) => ({
+  const messages: LeadConversationMessage[] = (parsed ?? []).map((m) => ({
     id: m.id,
     direction: m.dir,
     at: new Date(m.t).toISOString(),
