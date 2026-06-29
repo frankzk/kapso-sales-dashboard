@@ -47,14 +47,34 @@ function BurndownChart({ data, nowHourLabel }: { data: LeadsInsights["burndown"]
   );
 }
 
-/** "Flujo y saldo" — bars (entran vs cierran, left axis) + saldo line (right axis). */
+/** X-axis tick: el día + su NETO del día (entran − cierran) — rojo si el backlog
+ *  creció ese día, verde si bajó, gris si quedó igual. */
+function FlowTick(props: { x?: number; y?: number; payload?: { value?: string }; netByDia?: Record<string, number> }) {
+  const { x = 0, y = 0, payload, netByDia } = props;
+  const n = netByDia?.[payload?.value ?? ""] ?? 0;
+  const color = n > 0 ? CHART.red : n < 0 ? CHART.green : CHART.slate;
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text dy={11} textAnchor="middle" fontSize={11} fill={CHART.slate}>
+        {payload?.value}
+      </text>
+      <text dy={23} textAnchor="middle" fontSize={10} fontWeight={600} fill={color}>
+        {n > 0 ? `+${n}` : String(n)}
+      </text>
+    </g>
+  );
+}
+
+/** "Flujo y saldo" — barras (entran vs cierran) + línea de saldo acumulado, con el
+ *  neto del día (entran − cierran) bajo cada fecha. */
 function FlowSaldoChart({ data, saldoInicio }: { data: LeadsInsights["trend"]; saldoInicio: number }) {
+  const netByDia: Record<string, number> = Object.fromEntries(data.map((d) => [d.dia, d.entran - d.cierran]));
   return (
     <div className="h-44 w-full">
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 8, right: 4, left: -8, bottom: 0 }} barGap={2}>
           <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} vertical={false} />
-          <XAxis dataKey="dia" tick={AXIS_TICK} />
+          <XAxis dataKey="dia" interval={0} height={36} tick={(p: object) => <FlowTick {...p} netByDia={netByDia} />} />
           <YAxis yAxisId="flujo" tick={AXIS_TICK} width={28} allowDecimals={false} />
           <YAxis yAxisId="saldo" orientation="right" tick={{ ...AXIS_TICK, fill: CHART.red }} width={32} allowDecimals={false} />
           <Tooltip
@@ -65,7 +85,7 @@ function FlowSaldoChart({ data, saldoInicio }: { data: LeadsInsights["trend"]; s
           <ReferenceLine yAxisId="saldo" y={saldoInicio} stroke={CHART.red} strokeDasharray="4 4" strokeOpacity={0.5} />
           <Bar yAxisId="flujo" dataKey="entran" name="Entran" fill="#cbd5e1" radius={[3, 3, 0, 0]} isAnimationActive={false} />
           <Bar yAxisId="flujo" dataKey="cierran" name="Cierran" fill={CHART.brand} radius={[3, 3, 0, 0]} isAnimationActive={false} />
-          <Line yAxisId="saldo" dataKey="saldo" name="Saldo" stroke={CHART.red} strokeWidth={2.5} dot={{ r: 3 }} isAnimationActive={false} />
+          <Line yAxisId="saldo" dataKey="saldo" name="Saldo acum." stroke={CHART.red} strokeWidth={2.5} dot={{ r: 3 }} isAnimationActive={false} />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
