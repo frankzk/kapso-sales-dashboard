@@ -62,17 +62,27 @@ export async function getLeadWithCalls(
   return { lead: lead as LeadRow, calls: (calls as LeadCallRow[]) ?? [] };
 }
 
+/** One prior Shopify order, for the drawer's "Pedidos anteriores" list. */
+export interface PriorOrder {
+  name: string | null; // Shopify order name, e.g. "#AUR1234"
+  createdAt: string | null;
+  amount: number; // net (total_amount − refunds)
+}
+
 export interface CustomerHistory {
   orderCount: number; // prior non-cancelled orders for this phone (excl. the lead's own)
   lastOrderName: string | null;
   lastOrderAt: string | null;
   lastProduct: string | null;
+  currentOrderName: string | null; // Shopify name (#AUR…) of the lead's OWN current order
+  recentOrders: PriorOrder[]; // last 3 prior orders (excl. own), newest first
 }
 
 /**
- * Prior purchase history for a phone — powers the "cliente recurrente" block in
- * the lead drawer (último pedido / cuándo / qué compró). RLS-scoped, so it only
- * sees orders in stores the caller may access. Excludes the lead's own order.
+ * Prior purchase history for a phone — powers the "cliente recurrente" pill, the
+ * "Pedidos anteriores" list, and the current order's Shopify name in the drawer.
+ * RLS-scoped (only stores the caller may access). Excludes the lead's own order
+ * from the prior list, but resolves its name separately for the footer.
  */
 export async function getCustomerHistory(
   storeId: string,
@@ -81,22 +91,51 @@ export async function getCustomerHistory(
 ): Promise<CustomerHistory | null> {
   if (!phone) return null;
   const sb = await createServerSupabase();
+
+  // The lead's own current order name (#AUR…) — resolved by id so it's reliable
+  // regardless of phone formatting.
+  let currentOrderName: string | null = null;
+  if (excludeOrderId) {
+    const { data: cur } = await sb.from("orders").select("name").eq("id", excludeOrderId).maybeSingle();
+    currentOrderName = (cur as { name: string | null } | null)?.name ?? null;
+  }
+
   const { data } = await sb
     .from("orders")
-    .select("id, name, created_at, line_items")
+    .select("id, name, created_at, total_amount, total_refunded, line_items")
     .eq("store_id", storeId)
     .eq("customer_phone", phone)
     .is("cancelled_at", null)
     .order("created_at", { ascending: false })
     .limit(10);
   let rows =
-    (data as { id: string; name: string | null; created_at: string | null; line_items: unknown }[]) ?? [];
+    (data as {
+      id: string;
+      name: string | null;
+      created_at: string | null;
+      total_amount: number | null;
+      total_refunded: number | null;
+      line_items: unknown;
+    }[]) ?? [];
   if (excludeOrderId) rows = rows.filter((r) => r.id !== excludeOrderId);
-  if (!rows.length) return { orderCount: 0, lastOrderName: null, lastOrderAt: null, lastProduct: null };
+  const empty = { orderCount: 0, lastOrderName: null, lastOrderAt: null, lastProduct: null };
+  if (!rows.length) return { ...empty, currentOrderName, recentOrders: [] };
   const last = rows[0]!;
   const items = Array.isArray(last.line_items) ? (last.line_items as { title?: string }[]) : [];
   const lastProduct = items.length ? String(items[0]?.title ?? "").trim() || null : null;
-  return { orderCount: rows.length, lastOrderName: last.name, lastOrderAt: last.created_at, lastProduct };
+  const recentOrders: PriorOrder[] = rows.slice(0, 3).map((r) => ({
+    name: r.name,
+    createdAt: r.created_at,
+    amount: Math.round(((r.total_amount ?? 0) - (r.total_refunded ?? 0)) * 100) / 100,
+  }));
+  return {
+    orderCount: rows.length,
+    lastOrderName: last.name,
+    lastOrderAt: last.created_at,
+    lastProduct,
+    currentOrderName,
+    recentOrders,
+  };
 }
 
 export async function getLeadCounts(storeId: string): Promise<Record<LeadView, number>> {

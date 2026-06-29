@@ -1248,6 +1248,7 @@ export interface GenerateOrderInput {
   sendConfirmation?: boolean;
   confirmationText?: string;
   discount?: { kind: "fixed" | "percent"; value: number } | null;
+  allowExisting?: boolean; // permitir generar OTRO pedido aunque el lead ya tenga uno
 }
 
 function defaultConfirmation(o: {
@@ -1305,7 +1306,9 @@ export async function generateOrder(
     draft_order_gid: string | null;
     has_order: boolean;
   };
-  if (l.has_order) return { error: "Este lead ya tiene un pedido registrado." };
+  // Por defecto se bloquea un 2º pedido (evita dobles accidentales); el botón
+  // "Generar nuevo pedido" del drawer lo permite explícitamente con allowExisting.
+  if (l.has_order && !input.allowExisting) return { error: "Este lead ya tiene un pedido registrado." };
 
   const creds = await getStoreCreds(ctx.storeId);
   if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify configurado." };
