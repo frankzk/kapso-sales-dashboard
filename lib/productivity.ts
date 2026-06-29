@@ -7,6 +7,35 @@ import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
 import { previousRange, type DateRange } from "@/lib/access";
 
+/** Minutes to ADD to UTC to reach local time in `tz` at `date` (Lima → −300). */
+export function tzOffsetMinutes(date: Date, tz: string): number {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const m: Record<string, string> = {};
+  for (const p of dtf.formatToParts(date)) m[p.type] = p.value;
+  const asUtc = Date.UTC(+m.year!, +m.month! - 1, +m.day!, +(m.hour === "24" ? "0" : m.hour!), +m.minute!, +m.second!);
+  return Math.round((asUtc - date.getTime()) / 60000);
+}
+
+/** UTC ISO bounds of the local-day range [from..to] (YYYY-MM-DD) in `tz`. "Today"
+ *  must mean the STORE's local day, not a UTC day — otherwise the prior evening's
+ *  activity (e.g. Lima 19:00–23:59 = UTC 00:00–04:59) leaks into it. */
+export function localRangeBoundsIso(from: string, to: string, tz: string): { startIso: string; endIso: string } {
+  const offFrom = tzOffsetMinutes(new Date(`${from}T12:00:00Z`), tz);
+  const offTo = tzOffsetMinutes(new Date(`${to}T12:00:00Z`), tz);
+  const startMs = new Date(`${from}T00:00:00Z`).getTime() - offFrom * 60_000;
+  const endMs = new Date(`${to}T00:00:00Z`).getTime() - offTo * 60_000 + 86_400_000 - 1;
+  return { startIso: new Date(startMs).toISOString(), endIso: new Date(endMs).toISOString() };
+}
+
 export interface AdvisorStat {
   userId: string;
   email: string;
@@ -174,8 +203,7 @@ export async function getAdvisorProductivity(
 ): Promise<AdvisorStat[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
-  const startIso = `${range.from}T00:00:00Z`;
-  const endIso = `${range.to}T23:59:59Z`;
+  const { startIso, endIso } = localRangeBoundsIso(range.from, range.to, tz);
 
   // 1) Advisor calls in range (vendedora not null = a human touch).
   const { data: callsRaw } = await sb
@@ -340,11 +368,11 @@ export async function getAgentLeadsWorked(
   range: DateRange,
   vendedoraId: string,
   source: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null = null,
+  tz = "America/Lima",
 ): Promise<AgentLeadRow[]> {
   if (!storeIds.length || !vendedoraId) return [];
   const sb = await createServerSupabase();
-  const startIso = `${range.from}T00:00:00Z`;
-  const endIso = `${range.to}T23:59:59Z`;
+  const { startIso, endIso } = localRangeBoundsIso(range.from, range.to, tz);
 
   // 1) This advisor's calls in range.
   const { data: callsRaw } = await sb
