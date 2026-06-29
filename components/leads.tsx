@@ -12,6 +12,8 @@ import {
 } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import { type CustomerHistory, type LeadView } from "@/lib/leads-access";
+import { LeadsInsightsPanel } from "@/components/leads-insights";
+import type { LeadsInsights } from "@/lib/leads-insights";
 import {
   LEAD_GESTIONES,
   MANUAL_STATUSES,
@@ -506,6 +508,7 @@ export function LeadsBoard({
   adNames,
   waNumbers,
   currency,
+  insights,
   initialSeg,
   initialGest,
   initialOpenId,
@@ -519,6 +522,7 @@ export function LeadsBoard({
   adNames?: Record<string, AdMeta>;
   waNumbers?: Record<string, WaNumber>;
   currency: string;
+  insights: LeadsInsights;
   initialSeg?: LeadSegment | null;
   initialGest?: LeadGestion | null;
   initialOpenId?: string | null; // ?open=<id> → auto-abre ese lead (desde el pop-up de Yapes)
@@ -823,6 +827,9 @@ export function LeadsBoard({
           </div>
         </div>
       </div>
+
+      {/* Tablero de hoy: burndown + flujo/saldo (7 días) + productividad por persona. */}
+      <LeadsInsightsPanel data={insights} />
 
       <div className="sticky top-0 z-10 space-y-2 bg-slate-50 pt-1 pb-2">
         {/* Toolbar: pestañas de la cola por segmento · píldora Yape/Shalom · Filtros. */}
