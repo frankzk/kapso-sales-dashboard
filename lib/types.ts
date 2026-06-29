@@ -207,3 +207,87 @@ export interface LeadCallRow {
   occurred_at?: string;
   vendedora_name?: string | null; // resolved display name of who logged it (UI only)
 }
+
+// ── Envíos module (couriers Aliclik / Fenix) ────────────────────────────────
+
+export interface ShipmentRow {
+  id: string;
+  store_id: string;
+  courier: string; // aliclik | fenix
+  guide_code: string; // AUR5X… (aliclik) or Fenix tracking
+  delivery_status: string; // see lib/shipments.ts
+  status_category: string; // in_transit | delivered | failure | rerouting | closed
+  order_id: string | null;
+  matched: boolean;
+  match_method: string | null; // order_name | phone | manual | none
+  order_name: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  product: string | null;
+  district: string | null;
+  city: string | null; // normalized coverage key
+  region: string | null;
+  fenix_eligible: boolean;
+  fenix_shipment_id: string | null;
+  reroute_attempts: number;
+  reroute_outcome: string | null;
+  claimed_by: string | null;
+  claimed_at: string | null;
+  next_followup_at: string | null;
+  source_batch_id: string | null;
+  last_report_at: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ShipmentCallRow {
+  id?: string;
+  shipment_id: string;
+  store_id: string;
+  agent: string | null;
+  kind: string; // call | state_change | note | reroute | system
+  new_status: string | null;
+  note: string | null;
+  next_followup_at: string | null;
+  occurred_at?: string;
+  agent_name?: string | null; // resolved display name (UI only)
+}
+
+export interface FenixStockRowDb {
+  id: string;
+  org_id: string;
+  city: string;
+  product: string;
+  sku: string | null;
+  quantity: number;
+  updated_by: string | null;
+  updated_at?: string;
+  created_at?: string;
+}
+
+export interface ImportBatchRow {
+  id: string;
+  store_id: string;
+  kind: string;
+  filename: string | null;
+  uploaded_by: string | null;
+  row_count: number;
+  matched_count: number;
+  unmatched_count: number;
+  status: string; // processing | processed | failed
+  error: string | null;
+  created_at?: string;
+}
+
+export interface ImportRowRow {
+  id: string;
+  batch_id: string;
+  store_id: string;
+  row_index: number;
+  raw: Record<string, string>;
+  parsed: Record<string, unknown> | null;
+  match_status: string; // matched | unmatched | review | error
+  shipment_id: string | null;
+  error: string | null;
+  created_at?: string;
+}

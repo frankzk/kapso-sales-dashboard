@@ -1,0 +1,392 @@
+"use server";
+
+import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { createServerSupabase, createAdminSupabase } from "@/lib/db";
+import { getShipmentWithCalls } from "@/lib/shipments-access";
+import {
+  CLAIM_TTL_MINUTES,
+  categoryOf,
+  isValidStatus,
+  nextRerouteOutcome,
+  type RerouteDisposition,
+} from "@/lib/shipments";
+import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
+import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
+
+export interface ShipmentActionState {
+  error?: string;
+  notice?: string;
+}
+
+// Process-level cache of agent id → display name (email local-part).
+const agentNameCache = new Map<string, string>();
+
+async function resolveAgentName(
+  userId: string,
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<string | null> {
+  if (agentNameCache.has(userId)) return agentNameCache.get(userId)!;
+  try {
+    const { data } = await admin.auth.admin.getUserById(userId);
+    const email = data?.user?.email ?? null;
+    const name = email ? email.split("@")[0]! : userId.slice(0, 8);
+    agentNameCache.set(userId, name);
+    return name;
+  } catch {
+    return null;
+  }
+}
+
+/** Authorize the caller against a shipment via RLS (must see its store). */
+async function authorizeShipment(
+  shipmentId: string,
+): Promise<{ userId: string; storeId: string } | null> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  const { data } = await sb.from("shipments").select("store_id").eq("id", shipmentId).maybeSingle();
+  if (!data) return null;
+  return { userId: user.id, storeId: data.store_id as string };
+}
+
+/** Fetch a shipment + its call history (RLS-scoped). Drives the drawer. */
+export async function loadShipmentDetail(
+  shipmentId: string,
+): Promise<{ shipment: ShipmentRow; calls: ShipmentCallRow[] } | { error: string }> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a este envío." };
+  const detail = await getShipmentWithCalls(shipmentId);
+  if (!detail) return { error: "No encontrado." };
+  const ids = [...new Set(detail.calls.map((c) => c.agent).filter(Boolean))] as string[];
+  if (ids.length) {
+    const admin = createAdminSupabase();
+    await Promise.all(ids.map((id) => resolveAgentName(id, admin)));
+  }
+  const calls = detail.calls.map((c) => ({
+    ...c,
+    agent_name: c.agent ? (agentNameCache.get(c.agent) ?? null) : null,
+  }));
+  return { shipment: detail.shipment, calls };
+}
+
+/** Claim a shipment (one at a time). Succeeds if free, stale, or already mine. */
+export async function claimShipment(shipmentId: string): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a este envío." };
+  const admin = createAdminSupabase();
+  const cutoff = new Date(Date.now() - CLAIM_TTL_MINUTES * 60_000).toISOString();
+  const { data, error } = await admin
+    .from("shipments")
+    .update({ claimed_by: ctx.userId, claimed_at: new Date().toISOString() })
+    .eq("id", shipmentId)
+    .or(`claimed_by.is.null,claimed_by.eq.${ctx.userId},claimed_at.lt.${cutoff}`)
+    .select("id")
+    .maybeSingle();
+  if (error) return { error: error.message };
+  if (!data) {
+    const { data: held } = await admin
+      .from("shipments")
+      .select("claimed_by")
+      .eq("id", shipmentId)
+      .maybeSingle();
+    const holderId = (held as { claimed_by: string | null } | null)?.claimed_by ?? null;
+    const who = holderId && holderId !== ctx.userId ? await resolveAgentName(holderId, admin) : null;
+    return { error: who ? `${who} está atendiendo este envío.` : "Otro agente está atendiendo este envío." };
+  }
+  revalidatePath("/dashboard/envios");
+  return { notice: "Envío tomado." };
+}
+
+/** Release a claim (only your own). */
+export async function releaseShipment(shipmentId: string): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso." };
+  const admin = createAdminSupabase();
+  await admin
+    .from("shipments")
+    .update({ claimed_by: null, claimed_at: null })
+    .eq("id", shipmentId)
+    .eq("claimed_by", ctx.userId);
+  revalidatePath("/dashboard/envios");
+  return { notice: "Liberado." };
+}
+
+async function fetchOrgFenixStock(admin: SupabaseClient, storeId: string): Promise<FenixStockRow[]> {
+  const { data: store } = await admin.from("stores").select("org_id").eq("id", storeId).maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  if (!orgId) return [];
+  const { data } = await admin.from("fenix_stock").select("city,product,quantity").eq("org_id", orgId);
+  return (data as FenixStockRow[]) ?? [];
+}
+
+/**
+ * Register a re-route call attempt. Records the call, increments the attempt
+ * count, applies the decision flow (entregado/reprograma/no_contesta/rechaza)
+ * gated by Fenix eligibility, and updates the shipment.
+ */
+export async function registerRerouteCall(
+  shipmentId: string,
+  input: { disposition: RerouteDisposition; note?: string; nextFollowupAt?: string | null },
+): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a este envío." };
+  const admin = createAdminSupabase();
+
+  const { data: ship } = await admin
+    .from("shipments")
+    .select("id,store_id,city,product,reroute_attempts")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (!ship) return { error: "No encontrado." };
+
+  const attempts = ((ship as { reroute_attempts: number }).reroute_attempts ?? 0) + 1;
+  const stock = await fetchOrgFenixStock(admin, ctx.storeId);
+  const eligible = evaluateFenix(ship as { city?: string | null; product?: string | null }, stock).eligible;
+  const outcome = nextRerouteOutcome(input.disposition, attempts, eligible);
+
+  // when the queue should keep this shipment, carry the agent's next-call date
+  const nextFollowup = outcome.closed ? null : input.nextFollowupAt ?? null;
+
+  const { error: updErr } = await admin
+    .from("shipments")
+    .update({
+      delivery_status: outcome.status,
+      status_category: categoryOf(outcome.status),
+      reroute_attempts: attempts,
+      reroute_outcome: outcome.outcome,
+      fenix_eligible: eligible,
+      next_followup_at: nextFollowup,
+      // closing drops the claim so the queue frees it
+      ...(outcome.closed ? { claimed_by: null, claimed_at: null } : {}),
+    })
+    .eq("id", shipmentId);
+  if (updErr) return { error: updErr.message };
+
+  await admin.from("shipment_calls").insert({
+    shipment_id: shipmentId,
+    store_id: ctx.storeId,
+    agent: ctx.userId,
+    kind: "call",
+    new_status: outcome.status,
+    note: input.note?.trim() || null,
+    next_followup_at: nextFollowup,
+  });
+
+  revalidatePath("/dashboard/envios");
+  return {
+    notice: outcome.closed
+      ? "Llamada registrada — envío cerrado."
+      : "Llamada registrada — reprogramado.",
+  };
+}
+
+/** Manually set a delivery status (e.g. correcting an import). Logged. */
+export async function setShipmentStatus(
+  shipmentId: string,
+  status: string,
+  note?: string,
+): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso." };
+  if (!isValidStatus(status)) return { error: "Estado inválido." };
+  const admin = createAdminSupabase();
+  const { error } = await admin
+    .from("shipments")
+    .update({ delivery_status: status, status_category: categoryOf(status) })
+    .eq("id", shipmentId);
+  if (error) return { error: error.message };
+  await admin.from("shipment_calls").insert({
+    shipment_id: shipmentId,
+    store_id: ctx.storeId,
+    agent: ctx.userId,
+    kind: "state_change",
+    new_status: status,
+    note: note?.trim() || null,
+  });
+  revalidatePath("/dashboard/envios");
+  return { notice: "Estado actualizado." };
+}
+
+/**
+ * Create a Fenix sub-guide for a re-routed shipment (manual entry of the guide
+ * number generated in Fenix's own system). Inserts a second shipments row
+ * (courier='fenix') and links the parent. API-ready: a later phase swaps the
+ * manual `guideCode` for createFenixGuideViaApi() without changing this shape.
+ */
+export async function createFenixGuide(
+  shipmentId: string,
+  input: { guideCode: string },
+): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso." };
+  const guideCode = input.guideCode.trim().toUpperCase();
+  if (!guideCode) return { error: "Ingresa el número de guía de Fenix." };
+  const admin = createAdminSupabase();
+
+  const { data: parent } = await admin
+    .from("shipments")
+    .select(
+      "store_id,order_id,order_name,customer_name,customer_phone,product,district,city,region,fenix_shipment_id",
+    )
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (!parent) return { error: "No encontrado." };
+  if ((parent as { fenix_shipment_id: string | null }).fenix_shipment_id) {
+    return { error: "Este envío ya tiene una guía Fenix." };
+  }
+
+  const p = parent as Record<string, unknown>;
+  const { data: child, error: insErr } = await admin
+    .from("shipments")
+    .insert({
+      courier: "fenix",
+      guide_code: guideCode,
+      store_id: p.store_id,
+      order_id: p.order_id,
+      matched: !!p.order_id,
+      match_method: "manual",
+      order_name: p.order_name,
+      customer_name: p.customer_name,
+      customer_phone: p.customer_phone,
+      product: p.product,
+      district: p.district,
+      city: p.city,
+      region: p.region,
+      delivery_status: "por_preparar",
+      status_category: "in_transit",
+    })
+    .select("id")
+    .single();
+  if (insErr || !child) {
+    // unique violation → guide code already used
+    return { error: insErr?.message ?? "No se pudo crear la guía Fenix." };
+  }
+
+  await admin
+    .from("shipments")
+    .update({ fenix_shipment_id: child.id })
+    .eq("id", shipmentId);
+  await admin.from("shipment_calls").insert({
+    shipment_id: shipmentId,
+    store_id: ctx.storeId,
+    agent: ctx.userId,
+    kind: "reroute",
+    note: `Guía Fenix creada: ${guideCode}`,
+  });
+
+  revalidatePath("/dashboard/envios");
+  return { notice: `Guía Fenix ${guideCode} creada.` };
+}
+
+/**
+ * Resolve a manual-review import row: either link it to an order (and mark the
+ * shipment matched) or confirm it has no order (Kenku/manual).
+ */
+export async function resolveImportRow(
+  rowId: string,
+  input: { orderId?: string | null },
+): Promise<ShipmentActionState> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  // RLS check: can the caller see this row?
+  const { data: row } = await sb
+    .from("import_rows")
+    .select("id,store_id,shipment_id")
+    .eq("id", rowId)
+    .maybeSingle();
+  if (!row) return { error: "Sin acceso a esta fila." };
+
+  const admin = createAdminSupabase();
+  const shipmentId = (row as { shipment_id: string | null }).shipment_id;
+  const orderId = input.orderId ?? null;
+
+  if (orderId) {
+    // verify the order is in an accessible store + resolve its store_id
+    const { data: order } = await sb
+      .from("orders")
+      .select("id,store_id")
+      .eq("id", orderId)
+      .maybeSingle();
+    if (!order) return { error: "Pedido inválido o sin acceso." };
+    if (shipmentId) {
+      await admin
+        .from("shipments")
+        .update({
+          order_id: orderId,
+          store_id: (order as { store_id: string }).store_id,
+          matched: true,
+          match_method: "manual",
+        })
+        .eq("id", shipmentId);
+    }
+    await admin.from("import_rows").update({ match_status: "matched" }).eq("id", rowId);
+    revalidatePath("/dashboard/envios");
+    return { notice: "Pedido vinculado." };
+  }
+
+  // confirmed: no order (Kenku/manual) — leave the snapshot, clear the queue flag
+  await admin.from("import_rows").update({ match_status: "unmatched" }).eq("id", rowId);
+  if (shipmentId) {
+    await admin.from("shipments").update({ match_method: "none" }).eq("id", shipmentId);
+  }
+  revalidatePath("/dashboard/envios");
+  return { notice: "Marcado sin pedido." };
+}
+
+// ── Fenix stock (admin) ──────────────────────────────────────────────────────
+
+/** Upsert a Fenix stock row for the caller's org. RLS gates the write to admins. */
+export async function upsertFenixStock(input: {
+  city: string;
+  product: string;
+  quantity: number;
+  sku?: string | null;
+}): Promise<ShipmentActionState> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  // resolve the caller's admin org (first one)
+  const { data: mem } = await sb.from("memberships").select("org_id,role");
+  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
+    (m) => m.role === "owner" || m.role === "admin",
+  );
+  if (!adminOrg) return { error: "Solo un administrador puede editar el stock." };
+
+  const city = input.city.trim().toLowerCase();
+  const product = input.product.trim();
+  if (!city || !product) return { error: "Ciudad y producto son obligatorios." };
+
+  // write under RLS as the user (the policy allows org admins)
+  const { error } = await sb.from("fenix_stock").upsert(
+    {
+      org_id: adminOrg.org_id,
+      city,
+      product,
+      sku: input.sku?.trim() || null,
+      quantity: Math.max(0, Math.trunc(input.quantity)),
+      updated_by: user.id,
+    },
+    { onConflict: "org_id,city,product" },
+  );
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard/envios/stock");
+  return { notice: "Stock actualizado." };
+}
+
+/** Delete a Fenix stock row (admin). */
+export async function deleteFenixStock(id: string): Promise<ShipmentActionState> {
+  const sb = await createServerSupabase();
+  const { error } = await sb.from("fenix_stock").delete().eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard/envios/stock");
+  return { notice: "Eliminado." };
+}

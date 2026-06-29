@@ -150,3 +150,14 @@ export function IconHeadset(props: IconProps) {
     </svg>
   );
 }
+
+export function IconTruck(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h9A1.5 1.5 0 0 1 15 6.5V16H3z" />
+      <path d="M15 9h3.5L21 12v4h-6z" />
+      <circle cx="7" cy="18" r="1.8" />
+      <circle cx="17.5" cy="18" r="1.8" />
+    </svg>
+  );
+}
