@@ -3,9 +3,24 @@
 @theme {
   --color-brand-50: #eef6ff;
   --color-brand-100: #d9eaff;
+  --color-brand-200: #b9d6ff;
+  --color-brand-300: #8fbcff;
   --color-brand-500: #2f74ff;
   --color-brand-600: #1f5fe0;
   --color-brand-700: #1b4fbd;
+
+  /* "Atendiendo ahora" / lead tomado: punto que pulsa (opacity 1 → .35 → 1). */
+  --animate-pulse-dot: pulse-dot 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
 :root {
