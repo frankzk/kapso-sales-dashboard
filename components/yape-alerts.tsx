@@ -9,7 +9,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { claimLead, listYapeAlerts, type YapeAlert } from "@/app/dashboard/leads/actions";
+import {
+  assignYape,
+  claimLead,
+  listStoreVendedoras,
+  listYapeAlerts,
+  passYape,
+  type YapeAlert,
+} from "@/app/dashboard/leads/actions";
 
 const POLL_MS = 15_000;
 
@@ -39,7 +46,6 @@ function beep() {
 export function YapeAlerts() {
   const router = useRouter();
   const [alerts, setAlerts] = useState<YapeAlert[]>([]);
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [busyId, setBusyId] = useState<string | null>(null);
   const knownRef = useRef<Set<string>>(new Set()); // ids already alerted (to beep only on new)
 
@@ -70,23 +76,32 @@ export function YapeAlerts() {
     };
   }, [refresh]);
 
-  const visible = alerts.filter((a) => !dismissed.has(a.id));
-  if (!visible.length) return null;
-  const top = visible[0]!;
-  const extra = visible.length - 1;
+  if (!alerts.length) return null;
+  const top = alerts[0]!;
+  const extra = alerts.length - 1;
   const detail = top.cartSummary || top.handoffContext || null;
+
+  function drop(id: string) {
+    setAlerts((list) => list.filter((x) => x.id !== id));
+    knownRef.current.delete(id); // if the loop re-offers it later, it re-beeps
+  }
 
   async function take(a: YapeAlert) {
     setBusyId(a.id);
     const res = await claimLead(a.id);
     setBusyId(null);
-    setDismissed((s) => new Set(s).add(a.id));
+    drop(a.id);
     if (res.error) {
-      void refresh(); // someone else got it first — refresh the queue
+      void refresh(); // someone else got it first
       return;
     }
-    setAlerts((list) => list.filter((x) => x.id !== a.id));
     router.push(`/dashboard/leads?store=${a.storeId}&view=yape&open=${a.id}`);
+  }
+
+  // "Ahora no" → escalate to the next advisor right away (I'm added to `passed`).
+  async function pass(a: YapeAlert) {
+    drop(a.id);
+    await passYape(a.id);
   }
 
   return (
@@ -123,7 +138,7 @@ export function YapeAlerts() {
             </button>
             <button
               type="button"
-              onClick={() => setDismissed((s) => new Set(s).add(top.id))}
+              onClick={() => pass(top)}
               className="rounded-lg border border-slate-300 px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
             >
               Ahora no
@@ -131,6 +146,64 @@ export function YapeAlerts() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Admin-only control inside the drawer: assign a Yape to a specific vendedora.
+ *  Self-gating — `listStoreVendedoras` returns [] for non-admins, so it renders
+ *  nothing for them. */
+export function YapeAssign({
+  leadId,
+  storeId,
+  onAssigned,
+}: {
+  leadId: string;
+  storeId: string;
+  onAssigned?: () => void;
+}) {
+  const [vendedoras, setVendedoras] = useState<{ id: string; name: string }[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    listStoreVendedoras(storeId).then((v) => {
+      if (alive) setVendedoras(v);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [storeId]);
+
+  if (!vendedoras || !vendedoras.length) return null;
+
+  async function assign(id: string) {
+    if (!id) return;
+    setBusy(true);
+    const res = await assignYape(leadId, id);
+    setBusy(false);
+    setMsg(res.error ?? "Asignado ✓");
+    onAssigned?.();
+  }
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+      <p className="mb-1.5 text-xs font-semibold tracking-wide text-slate-400 uppercase">Asignar Yape a</p>
+      <select
+        defaultValue=""
+        disabled={busy}
+        onChange={(e) => assign(e.currentTarget.value)}
+        className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-brand-500"
+      >
+        <option value="">Elegir vendedora…</option>
+        {vendedoras.map((v) => (
+          <option key={v.id} value={v.id}>
+            {v.name}
+          </option>
+        ))}
+      </select>
+      {msg && <p className="mt-1 text-xs text-slate-500">{msg}</p>}
     </div>
   );
 }
