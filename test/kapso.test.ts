@@ -13,6 +13,7 @@ import {
   extractReferral,
   fetchConversationSignals,
   fetchConversationTranscript,
+  parseConversationMessages,
   findConversationIdByPhone,
   listConversationsByPhone,
   classifyKapsoEvent,
@@ -517,6 +518,44 @@ describe("fetchConversationTranscript", () => {
     expect(caps).toHaveLength(2); // followed the cursor for a second page
     expect(new URL(caps[1]!.url).searchParams.get("after")).toBe("NEXT");
     expect(out).toHaveLength(101);
+  });
+});
+
+describe("parseConversationMessages (template body)", () => {
+  it("reads a TEMPLATE (HSM) message's rendered text from kapso.content", () => {
+    // Shape mirrors a real Kapso `fields=kapso(default)` template message: no
+    // `text.body`; the rendered body lives in `kapso.content` (+ `template`).
+    const out = parseConversationMessages([
+      {
+        id: "wamid.X",
+        timestamp: "1782735944",
+        type: "template",
+        template: { name: "busqueda_abandonada_1", language: { code: "es" } },
+        kapso: {
+          direction: "outbound",
+          status: "delivered",
+          content:
+            "🎀 ¡Hola Martina! Vi que elegiste *Estante Giratorio Multifuncional* en nuestra tienda 😊",
+        },
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.dir).toBe("outbound");
+    expect(out[0]!.text).toContain("Estante Giratorio Multifuncional");
+    expect(out[0]!.status).toBe("delivered");
+  });
+
+  it("still prefers an explicit text.body over kapso.content", () => {
+    const out = parseConversationMessages([
+      {
+        id: "m1",
+        timestamp: "1782735000",
+        type: "text",
+        text: { body: "hola" },
+        kapso: { direction: "inbound", content: "IGNORAR" },
+      },
+    ]);
+    expect(out[0]!.text).toBe("hola");
   });
 });
 
