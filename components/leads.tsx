@@ -1429,6 +1429,31 @@ function LeadDrawer({
                           <span className="text-sm font-semibold text-emerald-700">
                             {currency} {o.amount.toFixed(2)}
                           </span>
+                          {o.adminUrl && (
+                            <a
+                              href={o.adminUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Abrir en Shopify"
+                              aria-label={`Abrir ${o.name ?? "pedido"} en Shopify (nueva pestaña)`}
+                              className="inline-flex shrink-0 items-center justify-center rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-brand-600"
+                            >
+                              <svg
+                                width="13"
+                                height="13"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2.2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                aria-hidden="true"
+                              >
+                                <path d="M7 17 17 7" />
+                                <path d="M8 7h9v9" />
+                              </svg>
+                            </a>
+                          )}
                         </span>
                       </div>
                     ))}

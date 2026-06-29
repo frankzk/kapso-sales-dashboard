@@ -99,6 +99,22 @@ export function extractNumericId(
   return m?.[1] ?? s;
 }
 
+/**
+ * Admin deep-link for an order, e.g.
+ * `https://admin.shopify.com/store/<handle>/orders/<numericId>`. The handle is
+ * the myshopify subdomain. Returns null if we can't build a valid link.
+ */
+export function shopifyOrderAdminUrl(
+  domain: string | null | undefined,
+  gidOrId: string | number | null | undefined,
+): string | null {
+  const id = extractNumericId(gidOrId);
+  if (!domain || !id) return null;
+  const handle = String(domain).trim().toLowerCase().replace(/\.myshopify\.com$/i, "");
+  if (!handle) return null;
+  return `https://admin.shopify.com/store/${handle}/orders/${id}`;
+}
+
 function toNumber(v: unknown): number | null {
   if (v == null || v === "") return null;
   const n = typeof v === "number" ? v : Number(v);
@@ -426,7 +442,7 @@ export async function getCustomerRecentOrders(
   opts: ShopifyClientOpts,
   phone: string | null | undefined,
   { excludeName, limit = 3 }: { excludeName?: string | null; limit?: number } = {},
-): Promise<{ name: string | null; createdAt: string | null; amount: number }[]> {
+): Promise<{ name: string | null; createdAt: string | null; amount: number; adminUrl: string | null }[]> {
   const e164 = toE164(phone);
   if (!e164) return [];
   const query = `
@@ -435,7 +451,7 @@ export async function getCustomerRecentOrders(
         edges {
           node {
             orders(first: $n, sortKey: CREATED_AT, reverse: true) {
-              edges { node { name createdAt currentTotalPriceSet { shopMoney { amount } } } }
+              edges { node { id name createdAt currentTotalPriceSet { shopMoney { amount } } } }
             }
           }
         }
@@ -448,6 +464,7 @@ export async function getCustomerRecentOrders(
     const edges = data?.customers?.edges?.[0]?.node?.orders?.edges ?? [];
     const orders = edges.map((e) => {
       const n = (e?.node ?? {}) as {
+        id?: string | null;
         name?: string | null;
         createdAt?: string | null;
         currentTotalPriceSet?: { shopMoney?: { amount?: string } };
@@ -456,6 +473,7 @@ export async function getCustomerRecentOrders(
         name: n.name ?? null,
         createdAt: n.createdAt ?? null,
         amount: Math.round(Number(n.currentTotalPriceSet?.shopMoney?.amount ?? 0) * 100) / 100,
+        adminUrl: shopifyOrderAdminUrl(opts.domain, n.id),
       };
     });
     const filtered = excludeName ? orders.filter((o) => o.name !== excludeName) : orders;

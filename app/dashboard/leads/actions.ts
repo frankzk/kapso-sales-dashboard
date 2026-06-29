@@ -105,19 +105,23 @@ export async function loadLeadDetail(
   // resolve the customer by phone and read THEIR orders directly — that's the only
   // source that reflects ALL of the customer's history. Best-effort: needs the
   // read_customers scope; if the store hasn't re-authorized (or the call fails) we
-  // keep the local list as a fallback.
-  const customerHistory = await getCustomerHistory(ctx.storeId, detail.lead.phone, detail.lead.order_id);
-  if (customerHistory && detail.lead.phone) {
+  // keep the local list as a fallback. The store creds are fetched once here and
+  // reused to build the admin deep-links for both the Shopify and local lists.
+  const creds = await getStoreCreds(ctx.storeId);
+  const customerHistory = await getCustomerHistory(
+    ctx.storeId,
+    detail.lead.phone,
+    detail.lead.order_id,
+    creds?.shopify_domain ?? null,
+  );
+  if (customerHistory && detail.lead.phone && creds?.shopify_token) {
     try {
-      const creds = await getStoreCreds(ctx.storeId);
-      if (creds?.shopify_token) {
-        const shopOrders = await getCustomerRecentOrders(
-          { domain: creds.shopify_domain, token: creds.shopify_token },
-          detail.lead.phone,
-          { excludeName: customerHistory.currentOrderName, limit: 3 },
-        );
-        if (shopOrders.length) customerHistory.recentOrders = shopOrders;
-      }
+      const shopOrders = await getCustomerRecentOrders(
+        { domain: creds.shopify_domain, token: creds.shopify_token },
+        detail.lead.phone,
+        { excludeName: customerHistory.currentOrderName, limit: 3 },
+      );
+      if (shopOrders.length) customerHistory.recentOrders = shopOrders;
     } catch {
       /* keep the local fallback list */
     }
