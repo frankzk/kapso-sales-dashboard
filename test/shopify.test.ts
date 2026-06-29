@@ -6,6 +6,7 @@ import {
   hasKapsoTag,
   noteAttributesToMap,
   extractNumericId,
+  shopifyOrderAdminUrl,
   deriveOrderFlags,
   mapRestOrder,
   mapGraphqlOrder,
@@ -82,6 +83,20 @@ describe("small helpers", () => {
     );
     expect(extractNumericId(12345)).toBe("12345");
     expect(extractNumericId(null)).toBe("");
+  });
+
+  it("shopifyOrderAdminUrl builds an admin deep-link from domain + gid", () => {
+    expect(
+      shopifyOrderAdminUrl("aurela.myshopify.com", "gid://shopify/Order/123"),
+    ).toBe("https://admin.shopify.com/store/aurela/orders/123");
+    // bare numeric id + uppercase domain
+    expect(shopifyOrderAdminUrl("AURELA.MYSHOPIFY.COM", 456)).toBe(
+      "https://admin.shopify.com/store/aurela/orders/456",
+    );
+    // missing pieces → null (no link rendered)
+    expect(shopifyOrderAdminUrl(null, "123")).toBeNull();
+    expect(shopifyOrderAdminUrl("aurela.myshopify.com", null)).toBeNull();
+    expect(shopifyOrderAdminUrl("aurela.myshopify.com", "")).toBeNull();
   });
 
   it("deriveOrderFlags reads promo/stock/shipping/conversation", () => {

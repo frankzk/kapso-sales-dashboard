@@ -1,6 +1,7 @@
 // RLS-scoped reads for the leads module (queue views, lead detail, counts).
 
 import { createServerSupabase } from "@/lib/db";
+import { shopifyOrderAdminUrl } from "@/lib/shopify";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 
 export type LeadView = "por_llamar" | "yape" | "seguimientos" | "ganados" | "perdidos";
@@ -67,6 +68,7 @@ export interface PriorOrder {
   name: string | null; // Shopify order name, e.g. "#AUR1234"
   createdAt: string | null;
   amount: number; // net (total_amount − refunds)
+  adminUrl: string | null; // deep-link to the order in Shopify admin (new tab)
 }
 
 export interface CustomerHistory {
@@ -88,6 +90,7 @@ export async function getCustomerHistory(
   storeId: string,
   phone: string | null,
   excludeOrderId?: string | null,
+  shopDomain?: string | null,
 ): Promise<CustomerHistory | null> {
   if (!phone) return null;
   const sb = await createServerSupabase();
@@ -102,7 +105,7 @@ export async function getCustomerHistory(
 
   const { data } = await sb
     .from("orders")
-    .select("id, name, created_at, total_amount, total_refunded, line_items")
+    .select("id, shopify_order_id, name, created_at, total_amount, total_refunded, line_items")
     .eq("store_id", storeId)
     .eq("customer_phone", phone)
     .is("cancelled_at", null)
@@ -111,6 +114,7 @@ export async function getCustomerHistory(
   let rows =
     (data as {
       id: string;
+      shopify_order_id: string | null;
       name: string | null;
       created_at: string | null;
       total_amount: number | null;
@@ -127,6 +131,7 @@ export async function getCustomerHistory(
     name: r.name,
     createdAt: r.created_at,
     amount: Math.round(((r.total_amount ?? 0) - (r.total_refunded ?? 0)) * 100) / 100,
+    adminUrl: shopifyOrderAdminUrl(shopDomain, r.shopify_order_id),
   }));
   return {
     orderCount: rows.length,
