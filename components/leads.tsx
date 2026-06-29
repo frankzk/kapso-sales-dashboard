@@ -14,7 +14,6 @@ import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import { type CustomerHistory, type LeadView } from "@/lib/leads-access";
 import {
   LEAD_GESTIONES,
-  LEAD_SEGMENTS,
   MANUAL_STATUSES,
   categoryOf,
   countGestiones,
@@ -28,6 +27,7 @@ import {
   type LeadCategory,
   type LeadGestion,
   type LeadSegment,
+  type LeadWindow,
 } from "@/lib/leads";
 import {
   claimLead,
@@ -52,7 +52,7 @@ import {
   type QuickReply,
 } from "@/app/dashboard/leads/actions";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
-import { Card, cn } from "@/components/ui";
+import { cn } from "@/components/ui";
 
 const inputCls =
   "mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
@@ -100,44 +100,6 @@ function fmtDateShort(value: string | null | undefined): string {
     minute: "2-digit",
     hour12: false,
   });
-}
-
-/** Whole days since a timestamp (null if absent). */
-function daysSince(value: string | null | undefined): number | null {
-  if (!value) return null;
-  return Math.floor((Date.now() - new Date(value).getTime()) / 86_400_000);
-}
-
-/** 24h-window chip for active leads — time left (🟢/🟡/🔴) or ⚫ cerrada, so the
- *  team attends the chat before the WhatsApp session window closes. */
-function WindowBadge({ lead }: { lead: LeadRow }) {
-  const at = lead.last_inbound_at ?? lead.last_interaction_at;
-  const { state, msLeft } = leadWindowInfo(at, Date.now());
-  if (!state) return null;
-  if (state === "cerrada") {
-    const d = daysSince(at);
-    return (
-      <span className="ml-2 whitespace-nowrap rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-500">
-        ⚫ vencido{d != null && d >= 1 ? ` · hace ${d}d` : ""}
-      </span>
-    );
-  }
-  const hours = Math.max(1, Math.ceil((msLeft ?? 0) / 3_600_000));
-  const cls =
-    state === "critica"
-      ? "bg-red-100 text-red-700"
-      : state === "por_vencer"
-        ? "bg-amber-100 text-amber-700"
-        : "bg-emerald-100 text-emerald-700";
-  const dot = state === "critica" ? "🔴" : state === "por_vencer" ? "🟡" : "🟢";
-  return (
-    <span
-      className={cn("ml-2 whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", cls)}
-      title="Tiempo restante de la ventana de 24h (desde el último mensaje del cliente)"
-    >
-      {dot} {hours}h
-    </span>
-  );
 }
 
 function StatusBadge({ status, needsAttention }: { status: string; needsAttention?: boolean }) {
@@ -242,15 +204,27 @@ const OUTCOME_VIEWS: { key: LeadView; label: string }[] = [
   { key: "perdidos", label: "Perdidos" },
 ];
 
-const SEG_LABEL = Object.fromEntries(
-  LEAD_SEGMENTS.map((s) => [s.key, s.label] as [LeadSegment, string]),
-) as Record<LeadSegment, string>;
-
 const SEGMENT_BADGE: Record<LeadSegment, string> = {
-  carrito: "bg-emerald-100 text-emerald-700",
-  distrito: "bg-blue-100 text-blue-700",
-  converso: "bg-violet-100 text-violet-700",
+  carrito: "bg-emerald-50 text-emerald-700",
+  distrito: "bg-red-50 text-red-600",
+  converso: "bg-blue-50 text-blue-700",
   frio: "bg-slate-100 text-slate-500",
+};
+
+// Plain calificación labels (no emoji) for the row/drawer pills, per the redesign.
+const SEG_PILL_LABEL: Record<LeadSegment, string> = {
+  carrito: "Con carrito",
+  distrito: "Dio distrito",
+  converso: "Conversó",
+  frio: "Frío",
+};
+
+// Primary-tab labels for the segment queue (only Carrito carries an emoji).
+const SEG_TAB_LABEL: Record<LeadSegment, string> = {
+  carrito: "🛒 Carrito",
+  distrito: "Dio distrito",
+  converso: "Conversó",
+  frio: "Frío",
 };
 
 // Terminal outcomes shown in the Calificación column instead of an engagement
@@ -281,7 +255,7 @@ function SegmentBadge({ lead }: { lead: LeadRow }) {
   const seg = leadSegment(lead);
   return (
     <span className={cn("whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", SEGMENT_BADGE[seg])}>
-      {SEG_LABEL[seg]}
+      {SEG_PILL_LABEL[seg]}
     </span>
   );
 }
@@ -434,6 +408,110 @@ function MultiSelect({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Presentational helpers for the redesigned board (pixel-perfect with the design
+// handoff). Pure styling — all data comes from the existing lib/leads helpers.
+// ---------------------------------------------------------------------------
+
+// Avatar tints rotate across 6 soft palettes, keyed by a stable hash of the
+// (UUID) id so a lead always gets the same colour.
+const AVATAR_TINTS = [
+  "bg-brand-50 text-brand-700",
+  "bg-violet-50 text-violet-700",
+  "bg-emerald-50 text-emerald-700",
+  "bg-amber-50 text-amber-700",
+  "bg-sky-50 text-sky-700",
+  "bg-orange-50 text-orange-700",
+];
+function avatarTint(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h + id.charCodeAt(i)) % AVATAR_TINTS.length;
+  return AVATAR_TINTS[h]!;
+}
+
+// Square source chip (📣 Campaña / 🛒 Carrito / 🔎 Búsqueda / "Directo").
+const SOURCE_CHIP: Record<
+  "meta_ad" | "cod_cart" | "abandoned_browse" | "organic",
+  { glyph: string; cls: string; title: string; isText?: boolean }
+> = {
+  meta_ad: { glyph: "📣", cls: "bg-violet-100 text-violet-700", title: "Campaña Meta (Click-to-WhatsApp)" },
+  cod_cart: { glyph: "🛒", cls: "bg-emerald-100 text-emerald-700", title: "Carrito abandonado (formulario COD)" },
+  abandoned_browse: { glyph: "🔎", cls: "bg-orange-100 text-orange-700", title: "Búsqueda abandonada" },
+  organic: { glyph: "Directo", cls: "bg-slate-100 text-slate-500", title: "Orgánico / directo", isText: true },
+};
+function SourceChip({ source }: { source: string | null | undefined }) {
+  const s = SOURCE_CHIP[leadSourceKey(source)];
+  return (
+    <span
+      title={s.title}
+      className={cn(
+        "inline-flex h-5 min-w-[22px] shrink-0 items-center justify-center rounded-md px-1.5 font-semibold leading-none",
+        s.isText ? "text-[10px]" : "text-[11px]",
+        s.cls,
+      )}
+    >
+      {s.glyph}
+    </span>
+  );
+}
+
+// Gestión (advisor call-state) → label + dot for the "Última gestión" column.
+const GESTION_DISPLAY: Record<LeadGestion, { label: string; dot: string; fg: string; hollow?: boolean }> = {
+  sin_llamar: { label: "Sin llamar", dot: "border-[1.5px] border-amber-500", fg: "text-amber-700", hollow: true },
+  nr: { label: "No responde", dot: "bg-slate-400", fg: "text-slate-600" },
+  buzon_cuelga: { label: "Buzón/Cuelga", dot: "bg-slate-400", fg: "text-slate-600" },
+  contactados: { label: "Contactado", dot: "bg-emerald-500", fg: "text-emerald-700" },
+  sin_stock: { label: "Sin stock", dot: "bg-blue-500", fg: "text-blue-700" },
+};
+
+// 24h window state → dot/text colour + the inset urgency accent (left border).
+const WIN_DISPLAY: Record<"fresca" | "por_vencer" | "cerrada", { dot: string; fg: string; accent: string }> = {
+  fresca: { dot: "bg-emerald-500", fg: "text-emerald-700", accent: "#34d399" },
+  por_vencer: { dot: "bg-amber-500", fg: "text-amber-700", accent: "#fbbf24" },
+  cerrada: { dot: "bg-slate-400", fg: "text-slate-500", accent: "#cbd5e1" },
+};
+function winKey(state: LeadWindow | null): "fresca" | "por_vencer" | "cerrada" {
+  if (state === "por_vencer" || state === "critica") return "por_vencer";
+  if (state === "cerrada") return "cerrada";
+  return "fresca"; // fresca or null (no inbound yet) → neutral-fresh accent
+}
+
+/** Small rounded pill (header/drawer chips). */
+function Pill({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium",
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+/** Single-path stroke icon (Lucide/Feather style) used across the board. */
+function StrokeIcon({ d, size = 15 }: { d: string; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={d} />
+    </svg>
+  );
+}
+const ICON_PHONE =
+  "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3.1-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8.1 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z";
+const ICON_CHAT = "M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z";
+
 export function LeadsBoard({
   stores,
   storeId,
@@ -488,6 +566,11 @@ export function LeadsBoard({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<LeadRow[] | null>(null);
   const [searching, setSearching] = useState(false);
+  // Outcome views other than the queue/Yape (Seguimientos/Ganados/Perdidos) live
+  // inside the collapsible "Filtros" panel; open it by default when we land on
+  // one so the active view is never hidden.
+  const isReviewView = view === "seguimientos" || view === "ganados" || view === "perdidos";
+  const [more, setMore] = useState<boolean>(isReviewView);
 
   useEffect(() => {
     const q = query.trim();
@@ -573,6 +656,7 @@ export function LeadsBoard({
   const q = query.trim().toLowerCase();
   const qDigits = q.replace(/\D/g, "");
   const inQueue = view === "por_llamar";
+  const isYape = view === "yape"; // tinta las filas en rojo + 🔥 en la vista Yape/Shalom
 
   // Jerarquía de filtros (faceted counts): los contadores de cada grupo se
   // calculan sobre los leads que pasan TODOS los demás filtros activos, pero NO
@@ -651,6 +735,14 @@ export function LeadsBoard({
   // Filtros de refinamiento activos (excluye el buscador, que tiene su propia ✕).
   const hasActiveFilters =
     (inQueue && (!!segFilter || !!gestFilter || winFilter !== "all")) || srcFilter.size > 0 || numFilter.size > 0;
+  // Badge on the "Filtros" button: count the active refinement groups (segmento
+  // ya es una pestaña principal, así que no cuenta aquí).
+  const refinementCount =
+    (inQueue && !!gestFilter ? 1 : 0) +
+    (inQueue && winFilter !== "all" ? 1 : 0) +
+    (srcFilter.size > 0 ? 1 : 0) +
+    (numFilter.size > 0 ? 1 : 0) +
+    (isReviewView ? 1 : 0);
   function clearFilters() {
     setSegFilter(null);
     setGestFilter(null);
@@ -667,61 +759,40 @@ export function LeadsBoard({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold text-slate-900">Leads</h1>
-        {stores.length > 1 && (
-          <select
-            value={storeId}
-            onChange={(e) => changeStore(e.currentTarget.value)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
-          >
-            {stores.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
-
-      <div className="sticky top-0 z-10 bg-slate-50 pt-1 pb-2">
-        {/* Fila 1: etapa/segmento (filtra dentro de la cola; navega fuera de ella) ·
-            vistas finales · buscador. Cada grupo es un segmented control. */}
-        <nav className="flex flex-wrap items-center gap-2">
-          <SegControl
-            value={view === "por_llamar" ? (segFilter ?? "all") : ""}
-            onChange={(key) => {
-              if (view === "por_llamar") setSegFilter(key === "all" ? null : (key as LeadSegment));
-              else
-                router.push(
-                  `/dashboard/leads?store=${storeId}&view=por_llamar${key !== "all" ? `&seg=${key}` : ""}`,
-                );
-            }}
-            options={[
-              { key: "all", label: "Todos", count: view === "por_llamar" ? segTotal : undefined },
-              ...(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((s) => ({
-                key: s,
-                label: SEG_LABEL[s],
-                count: view === "por_llamar" ? segCounts[s] : undefined,
-              })),
-            ]}
-          />
-          <SegControl
-            value={OUTCOME_VIEWS.some((v) => v.key === view) ? view : ""}
-            onChange={(key) => router.push(`/dashboard/leads?store=${storeId}&view=${key}`)}
-            options={OUTCOME_VIEWS.map((v) => ({ key: v.key, label: v.label, count: counts[v.key] }))}
-          />
-          {hasActiveFilters && (
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-900">Leads</h1>
+          <p className="mt-0.5 text-sm text-slate-500">
+            <span className="font-semibold text-slate-800">{counts.por_llamar} por llamar</span> hoy
+            {counts.yape > 0 && (
+              <>
+                {" · "}
+                <button
+                  type="button"
+                  onClick={() => router.push(`/dashboard/leads?store=${storeId}&view=yape`)}
+                  className="font-semibold text-red-600 hover:underline"
+                >
+                  🔥 {counts.yape} en Yape/Shalom
+                </button>
+              </>
+            )}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {stores.length > 1 && (
+            <select
+              value={storeId}
+              onChange={(e) => changeStore(e.currentTarget.value)}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
             >
-              ✕ Limpiar filtros
-            </button>
+              {stores.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
           )}
-
-          <div className="relative ml-auto w-full sm:w-64">
+          <div className="relative w-44 sm:w-60">
             <svg
               aria-hidden="true"
               viewBox="0 0 20 20"
@@ -735,9 +806,9 @@ export function LeadsBoard({
               type="search"
               value={query}
               onChange={(e) => setQuery(e.currentTarget.value)}
-              placeholder="Buscar por nombre o celular…"
+              placeholder="Buscar lead…"
               aria-label="Buscar lead por nombre o celular"
-              className="w-full rounded-lg border border-slate-300 py-1.5 pr-9 pl-9 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+              className="w-full rounded-lg border border-slate-300 py-2 pr-9 pl-9 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
             />
             {query && (
               <button
@@ -750,12 +821,79 @@ export function LeadsBoard({
               </button>
             )}
           </div>
-        </nav>
+        </div>
+      </div>
 
-        {/* Fila 2: refinos de la cola (Gestión/Ventana) + Fuente + Número, cada uno
-            como segmented control. Solo aparece lo que aplica a la vista. */}
-        {(view === "por_llamar" || hasCampaign || hasMultiNumbers) && (
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 pt-2">
+      <div className="sticky top-0 z-10 space-y-2 bg-slate-50 pt-1 pb-2">
+        {/* Toolbar: pestañas de la cola por segmento · píldora Yape/Shalom · Filtros. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <SegControl
+            value={view === "por_llamar" ? (segFilter ?? "all") : ""}
+            onChange={(key) => {
+              if (view === "por_llamar") setSegFilter(key === "all" ? null : (key as LeadSegment));
+              else
+                router.push(
+                  `/dashboard/leads?store=${storeId}&view=por_llamar${key !== "all" ? `&seg=${key}` : ""}`,
+                );
+            }}
+            options={[
+              { key: "all", label: "Por llamar", count: counts.por_llamar },
+              ...(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((s) => ({
+                key: s,
+                label: SEG_TAB_LABEL[s],
+                count: view === "por_llamar" ? segCounts[s] : undefined,
+              })),
+            ]}
+          />
+          {counts.yape > 0 && (
+            <button
+              type="button"
+              aria-pressed={view === "yape"}
+              onClick={() =>
+                router.push(`/dashboard/leads?store=${storeId}&view=${view === "yape" ? "por_llamar" : "yape"}`)
+              }
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition",
+                view === "yape"
+                  ? "border-red-600 bg-red-600 text-white"
+                  : "border-red-200 bg-red-50 text-red-700 hover:bg-red-100",
+              )}
+            >
+              🔥 Yape/Shalom
+              <span
+                className={cn(
+                  "rounded-full px-1.5 tabular-nums",
+                  view === "yape" ? "bg-white/25 text-white" : "bg-white text-red-700",
+                )}
+              >
+                {counts.yape}
+              </span>
+            </button>
+          )}
+          <button
+            type="button"
+            aria-expanded={more}
+            onClick={() => setMore((v) => !v)}
+            className={cn(
+              "ml-auto inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition",
+              more
+                ? "border-brand-300 bg-brand-50 text-brand-700"
+                : "border-slate-300 text-slate-600 hover:bg-slate-100",
+            )}
+          >
+            <StrokeIcon d="M3 5h18M6 12h12M10 19h4" />
+            Filtros
+            {refinementCount > 0 && (
+              <span className="rounded-full bg-brand-600 px-1.5 text-[11px] font-semibold tabular-nums text-white">
+                {refinementCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Panel "Más filtros" (colapsable): refinos de la cola · Fuente · Número · Vista. */}
+        {more && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border border-slate-200 bg-white px-3.5 py-3 shadow-sm">
             {view === "por_llamar" && (
               <SegControl
                 label="Gestión"
@@ -827,6 +965,29 @@ export function LeadsBoard({
                 ]}
               />
             )}
+            {/* Vista: la cola + las vistas de revisión (Yape tiene su píldora aparte). */}
+            <SegControl
+              label="Vista"
+              value={isReviewView ? view : view === "por_llamar" ? "por_llamar" : ""}
+              onChange={(key) => router.push(`/dashboard/leads?store=${storeId}&view=${key}`)}
+              options={[
+                { key: "por_llamar", label: "Cola", count: counts.por_llamar },
+                ...OUTCOME_VIEWS.filter((v) => v.key !== "yape").map((v) => ({
+                  key: v.key,
+                  label: v.label,
+                  count: counts[v.key],
+                })),
+              ]}
+            />
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+              >
+                ✕ Limpiar
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -847,136 +1008,168 @@ export function LeadsBoard({
         </p>
       )}
 
-      <Card>
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-xs text-slate-500">
-                <th className="py-2 text-left font-medium">Nombre</th>
-                <th className="py-2 text-left font-medium">Teléfono</th>
-                <th className="py-2 text-left font-medium">Última interacción</th>
-                <th className="hidden py-2 text-left font-medium md:table-cell">Calificación</th>
-                <th className="py-2 text-left font-medium">Estado</th>
-                <th className="py-2 text-right font-medium">Acción</th>
-              </tr>
-            </thead>
-            <tbody>
-              {displayLeads.map((lead) => {
-                const locked =
-                  !!lead.claimed_by &&
-                  isClaimActive(lead.claimed_at) &&
-                  lead.claimed_by !== currentUserId;
-                const active = categoryOf(lead.status) === "open" || categoryOf(lead.status) === "hot";
-                const overdue =
-                  active &&
-                  !!lead.next_followup_at &&
-                  new Date(lead.next_followup_at).getTime() <= Date.now();
-                return (
-                  <tr key={lead.id} className="border-b border-slate-100 last:border-0">
-                    <td className="py-2.5 text-slate-800">
-                      <div className="flex flex-col gap-1">
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <span>{lead.name || lead.phone}</span>
-                          {lead.source === "meta_ad" && (
-                            <span
-                              className="whitespace-nowrap rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-700"
-                              title={lead.ad_headline ? `Campaña Meta: ${lead.ad_headline}` : "Llegó por campaña de Meta (Click-to-WhatsApp)"}
-                            >
-                              📣 Campaña
-                            </span>
-                          )}
-                          {lead.source === "cod_cart" && (
-                            <span
-                              className="whitespace-nowrap rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-700"
-                              title="Carrito abandonado del formulario COD (sin WhatsApp)"
-                            >
-                              🛒 Carrito
-                            </span>
-                          )}
-                          {lead.source === "abandoned_browse" && (
-                            <span
-                              className="whitespace-nowrap rounded bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-700"
-                              title="Búsqueda abandonada: vio un producto en la tienda y se fue (sin WhatsApp)"
-                            >
-                              🔎 Búsqueda
-                            </span>
-                          )}
-                          {hasMultiNumbers && lead.wa_phone_number_id && (
-                            <span
-                              className="whitespace-nowrap rounded bg-sky-100 px-1.5 py-0.5 text-xs font-medium text-sky-700"
-                              title={`WhatsApp: ${waLabel(waNumbers?.[lead.wa_phone_number_id], lead.wa_phone_number_id)}${waNumbers?.[lead.wa_phone_number_id]?.displayPhone ? ` · ${waNumbers[lead.wa_phone_number_id]!.displayPhone}` : ""}`}
-                            >
-                              📱{" "}
-                              {waKindLabel(waNumbers?.[lead.wa_phone_number_id]?.kind ?? null) ??
-                                waLabel(waNumbers?.[lead.wa_phone_number_id], lead.wa_phone_number_id)}
-                            </span>
-                          )}
-                        </div>
-                        {/* Calificación column is hidden on narrow screens — surface it here. */}
-                        <span className="md:hidden">
-                          <SegmentBadge lead={lead} />
-                        </span>
-                      </div>
-                    </td>
-                    <td className="py-2.5">
-                      <a
-                        href={`https://wa.me/${lead.phone}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="whitespace-nowrap text-brand-700 hover:underline"
-                      >
-                        {lead.phone}
-                      </a>
-                    </td>
-                    <td className="py-2.5 text-slate-600">
-                      <span className="whitespace-nowrap">{fmtDateShort(lead.last_interaction_at)}</span>
-                      {active && <WindowBadge lead={lead} />}
-                    </td>
-                    <td className="hidden py-2.5 md:table-cell">
+          <div className="min-w-[680px]">
+            {/* Header de tabla (grid). */}
+            <div className="grid grid-cols-[42px_minmax(0,1fr)_184px_78px_78px] items-center gap-[14px] border-b border-slate-200 bg-slate-50 px-[18px] py-2.5 text-[11px] font-semibold tracking-wide text-slate-400 uppercase">
+              <span />
+              <span>Lead</span>
+              <span>Última gestión</span>
+              <span>Ventana</span>
+              <span />
+            </div>
+            {displayLeads.map((lead) => {
+              const locked =
+                !!lead.claimed_by && isClaimActive(lead.claimed_at) && lead.claimed_by !== currentUserId;
+              const g = gestionOf(lead.status);
+              const gd = g
+                ? GESTION_DISPLAY[g]
+                : { label: labelOf(lead.status), dot: "bg-slate-400", fg: "text-slate-600", hollow: false };
+              const metaLine = g === "sin_llamar" ? "nadie aún" : fmtDateShort(lead.last_interaction_at);
+              const { state, msLeft } = leadWindowInfo(lead.last_inbound_at ?? lead.last_interaction_at, now);
+              const wd = WIN_DISPLAY[winKey(state)];
+              const windowLabel =
+                state === null
+                  ? "—"
+                  : state === "cerrada"
+                    ? "venc."
+                    : `${Math.max(1, Math.ceil((msLeft ?? 0) / 3_600_000))}h`;
+              const initial = (lead.name || lead.phone).trim()[0]?.toUpperCase() || "?";
+              return (
+                <div
+                  key={lead.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openLead(lead)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      openLead(lead);
+                    }
+                  }}
+                  className={cn(
+                    "group grid cursor-pointer grid-cols-[42px_minmax(0,1fr)_184px_78px_78px] items-center gap-[14px] border-b border-slate-100 px-[18px] py-2.5 transition last:border-0",
+                    locked ? "bg-brand-50" : isYape ? "bg-red-50" : "hover:bg-slate-50",
+                    openingId === lead.id && "opacity-60",
+                  )}
+                  style={{ boxShadow: `inset 3px 0 0 ${wd.accent}` }}
+                >
+                  {/* Col 1 · avatar */}
+                  <span
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold",
+                      avatarTint(lead.id),
+                    )}
+                  >
+                    {initial}
+                  </span>
+
+                  {/* Col 2 · lead */}
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-sm font-semibold text-slate-900">{lead.name || lead.phone}</span>
+                    {isYape && <span aria-hidden="true">🔥</span>}
+                    <SourceChip source={lead.source} />
+                    <span className="shrink-0">
                       <SegmentBadge lead={lead} />
-                    </td>
-                    <td className="py-2.5">
-                      <StatusBadge status={lead.status} needsAttention={lead.needs_attention} />
-                      {overdue && (
-                        <span
-                          className="ml-1 whitespace-nowrap rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700"
-                          title="Seguimiento vencido"
-                        >
-                          ⏰ vencido
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2.5 text-right">
-                      <button
-                        type="button"
-                        onClick={() => openLead(lead)}
-                        disabled={openingId === lead.id}
-                        className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    </span>
+                    {locked && (
+                      <span
+                        title="Tomado por otro vendedor"
+                        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-brand-100 px-2 py-0.5 text-[11px] font-semibold text-brand-700"
                       >
-                        {locked && <span title="Tomado por otro vendedor">🔒 tomado</span>}
-                        {openingId === lead.id ? "Abriendo…" : "Tomar / Ver"}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {!displayLeads.length && (
-                <tr>
-                  <td colSpan={6} className="py-4 text-sm text-slate-400">
-                    {query.trim()
-                      ? searching
-                        ? "Buscando…"
-                        : `Sin resultados para «${query.trim()}».`
-                      : leads.length
-                        ? "No hay leads de esta fuente en la vista."
-                        : "No hay leads en esta vista."}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                          <rect x="5" y="11" width="14" height="9" rx="2" />
+                          <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+                        </svg>
+                        Tomado
+                      </span>
+                    )}
+                    {hasMultiNumbers && lead.wa_phone_number_id && (
+                      <span
+                        className="shrink-0 rounded bg-sky-100 px-1.5 py-0.5 text-[11px] font-medium text-sky-700"
+                        title={`WhatsApp: ${waLabel(waNumbers?.[lead.wa_phone_number_id], lead.wa_phone_number_id)}${waNumbers?.[lead.wa_phone_number_id]?.displayPhone ? ` · ${waNumbers[lead.wa_phone_number_id]!.displayPhone}` : ""}`}
+                      >
+                        📱{" "}
+                        {waKindLabel(waNumbers?.[lead.wa_phone_number_id]?.kind ?? null) ??
+                          waLabel(waNumbers?.[lead.wa_phone_number_id], lead.wa_phone_number_id)}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Col 3 · última gestión */}
+                  <div className="min-w-0">
+                    {locked ? (
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-brand-700">
+                        <span className="h-[7px] w-[7px] shrink-0 animate-pulse-dot rounded-full bg-brand-500 motion-reduce:animate-none" />
+                        Atendiendo ahora
+                      </div>
+                    ) : (
+                      <>
+                        <div className={cn("flex min-w-0 items-center gap-1.5 text-xs font-semibold", gd.fg)}>
+                          <span
+                            className={cn(
+                              "h-[7px] w-[7px] shrink-0 rounded-full",
+                              gd.hollow ? "border-[1.5px] border-amber-500" : gd.dot,
+                            )}
+                          />
+                          <span className="truncate">{gd.label}</span>
+                        </div>
+                        <div className="mt-0.5 truncate text-[11px] text-slate-400">{metaLine}</div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Col 4 · ventana */}
+                  <span className={cn("inline-flex items-center gap-1.5 text-sm font-semibold", wd.fg)}>
+                    <span className={cn("h-[7px] w-[7px] shrink-0 rounded-full", wd.dot)} />
+                    {windowLabel}
+                  </span>
+
+                  {/* Col 5 · acciones rápidas (al hover) */}
+                  <div className="flex items-center justify-end gap-1.5">
+                    {locked ? (
+                      <span className="text-[11px] whitespace-nowrap text-slate-400">en curso</span>
+                    ) : (
+                      <div className="flex gap-1.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                        <a
+                          title="Llamar"
+                          href={`tel:+${lead.phone}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+                        >
+                          <StrokeIcon d={ICON_PHONE} />
+                        </a>
+                        <a
+                          title="WhatsApp"
+                          href={`https://wa.me/${lead.phone}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+                        >
+                          <StrokeIcon d={ICON_CHAT} />
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {!displayLeads.length && (
+              <div className="px-[18px] py-6 text-sm text-slate-400">
+                {query.trim()
+                  ? searching
+                    ? "Buscando…"
+                    : `Sin resultados para «${query.trim()}».`
+                  : leads.length
+                    ? "No hay leads de esta fuente en la vista."
+                    : "No hay leads en esta vista."}
+              </div>
+            )}
+          </div>
         </div>
-      </Card>
+      </div>
 
       {selected && (
         <LeadDrawer
