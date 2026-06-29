@@ -82,23 +82,27 @@ function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
     return <p className="text-xs text-slate-400">Sin actividad de asesoras registrada hoy todavía.</p>;
   }
   return (
-    <div className="flex max-h-44 flex-col gap-2 overflow-y-auto">
-      {rows.map((r) => (
-        <div key={r.name} className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700">
-            {avatarInitial(r.name)}
-          </span>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-slate-800" title={r.name}>
-              {r.name}
-            </p>
-            <p className="text-xs text-slate-500">
-              <span className="font-semibold text-slate-700">{r.contactos}</span> contactos ·{" "}
-              <span className="font-semibold text-emerald-700">{r.pedidos}</span> pedidos
-            </p>
+    // Container queries: 1 columna cuando va angosto (en la fila de 3), 2–3 cuando
+    // el panel se apila y la tarjeta es ancha. Filas compactas, sin scroll.
+    <div className="@container">
+      <div className="grid grid-cols-1 gap-1.5 @[19rem]:grid-cols-2 @[34rem]:grid-cols-3">
+        {rows.map((r) => (
+          <div key={r.name} className="flex items-center gap-2 rounded-lg bg-slate-50/70 px-2.5 py-1.5">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-100 text-[10px] font-semibold text-brand-700">
+              {avatarInitial(r.name)}
+            </span>
+            <div className="min-w-0 leading-tight">
+              <p className="truncate text-xs font-medium text-slate-800" title={r.name}>
+                {r.name}
+              </p>
+              <p className="text-[11px] text-slate-500">
+                <span className="font-semibold text-slate-700">{r.contactos}</span> contactos ·{" "}
+                <span className="font-semibold text-emerald-700">{r.pedidos}</span> pedidos
+              </p>
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
