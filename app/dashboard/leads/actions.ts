@@ -34,6 +34,7 @@ import {
   sendWhatsappImage,
   sendWhatsappText,
   sendWhatsappVideo,
+  templateProductParam,
 } from "@/lib/kapso";
 import { getWaNumbers } from "@/lib/access";
 
@@ -124,6 +125,39 @@ export async function loadLeadDetail(
       if (shopOrders.length) customerHistory.recentOrders = shopOrders;
     } catch {
       /* keep the local fallback list */
+    }
+  }
+
+  // Recover the browsed product for legacy búsqueda leads whose cart_summary was
+  // wiped before the additive-enrich fix. The product still lives on Kapso as the
+  // LAST param of the re-engagement template we sent; pull it, show it now, and
+  // self-heal the row so it persists (and the "🔎 Vio:" card shows next time too).
+  if (
+    detail.lead.source === "abandoned_browse" &&
+    !detail.lead.cart_summary &&
+    creds?.kapso_api_key &&
+    creds.browse_template_name
+  ) {
+    try {
+      let convId = detail.lead.kapso_conversation_id;
+      if (!convId && detail.lead.phone) {
+        const convs = await listConversationsByPhone({ apiKey: creds.kapso_api_key }, detail.lead.phone);
+        convId = convs[0]?.id != null ? String(convs[0].id) : null;
+      }
+      if (convId) {
+        const msgs = await fetchConversationTranscript({ apiKey: creds.kapso_api_key }, convId);
+        const product = templateProductParam(msgs, creds.browse_template_name);
+        if (product) {
+          detail.lead.cart_summary = product;
+          await createAdminSupabase()
+            .from("leads")
+            .update({ cart_summary: product })
+            .eq("id", leadId)
+            .is("cart_summary", null); // don't overwrite if it got set meanwhile
+        }
+      }
+    } catch {
+      /* best-effort recovery — never break the drawer */
     }
   }
   return { lead: detail.lead, calls, customerHistory };
