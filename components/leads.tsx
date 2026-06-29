@@ -763,27 +763,31 @@ export function LeadsBoard({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-900">Leads</h1>
-          <p className="mt-0.5 text-sm text-slate-500">
-            <span className="font-semibold text-slate-800">{counts.por_llamar} por llamar</span> hoy
-            {counts.yape > 0 && (
-              <>
-                {" · "}
-                <button
-                  type="button"
-                  onClick={() => router.push(`/dashboard/leads?store=${storeId}&view=yape`)}
-                  className="font-semibold text-red-600 hover:underline"
-                >
-                  🔥 {counts.yape} en Yape/Shalom
-                </button>
-              </>
-            )}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {stores.length > 1 && (
+      {/* Título "Leads" + tablero de hoy (burndown · flujo/saldo · productividad). */}
+      <LeadsInsightsPanel
+        data={insights}
+        titleSlot={
+          <div>
+            <h1 className="text-xl font-semibold text-slate-900">Leads</h1>
+            <p className="mt-0.5 text-sm text-slate-500">
+              <span className="font-semibold text-slate-800">{counts.por_llamar} por llamar</span> hoy
+              {counts.yape > 0 && (
+                <>
+                  {" · "}
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/dashboard/leads?store=${storeId}&view=yape`)}
+                    className="font-semibold text-red-600 hover:underline"
+                  >
+                    🔥 {counts.yape} en Yape/Shalom
+                  </button>
+                </>
+              )}
+            </p>
+          </div>
+        }
+        actionsSlot={
+          stores.length > 1 ? (
             <select
               value={storeId}
               onChange={(e) => changeStore(e.currentTarget.value)}
@@ -795,41 +799,9 @@ export function LeadsBoard({
                 </option>
               ))}
             </select>
-          )}
-          <div className="relative w-44 sm:w-60">
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 20 20"
-              fill="none"
-              className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400"
-            >
-              <circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="2" />
-              <path d="m14 14 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.currentTarget.value)}
-              placeholder="Buscar lead…"
-              aria-label="Buscar lead por nombre o celular"
-              className="w-full rounded-lg border border-slate-300 py-2 pr-9 pl-9 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-            />
-            {query && (
-              <button
-                type="button"
-                onClick={() => setQuery("")}
-                aria-label="Limpiar búsqueda"
-                className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Tablero de hoy: burndown + flujo/saldo (7 días) + productividad por persona. */}
-      <LeadsInsightsPanel data={insights} />
+          ) : null
+        }
+      />
 
       <div className="sticky top-0 z-10 space-y-2 bg-slate-50 pt-1 pb-2">
         {/* Toolbar: pestañas de la cola por segmento · píldora Yape/Shalom · Filtros. */}
@@ -880,12 +852,41 @@ export function LeadsBoard({
             </button>
           )}
           </div>
+          <div className="relative w-40 shrink-0 sm:w-52">
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 20 20"
+              fill="none"
+              className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400"
+            >
+              <circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="2" />
+              <path d="m14 14 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.currentTarget.value)}
+              placeholder="Buscar lead…"
+              aria-label="Buscar lead por nombre o celular"
+              className="w-full rounded-lg border border-slate-300 py-1.5 pr-8 pl-9 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label="Limpiar búsqueda"
+                className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                ✕
+              </button>
+            )}
+          </div>
           <button
             type="button"
             aria-expanded={more}
             onClick={() => setMore((v) => !v)}
             className={cn(
-              "ml-auto inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition",
+              "inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition",
               more
                 ? "border-brand-300 bg-brand-50 text-brand-700"
                 : "border-slate-300 text-slate-600 hover:bg-slate-100",

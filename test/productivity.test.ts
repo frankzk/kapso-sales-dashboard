@@ -1,5 +1,26 @@
 import { describe, it, expect } from "vitest";
-import { attachDeltas, computeAdvisorStats, type AdvisorCall, type AdvisorStat } from "@/lib/productivity";
+import {
+  attachDeltas,
+  computeAdvisorStats,
+  localRangeBoundsIso,
+  type AdvisorCall,
+  type AdvisorStat,
+} from "@/lib/productivity";
+
+describe("localRangeBoundsIso (today = the STORE's local day, not a UTC day)", () => {
+  it("maps a Lima (UTC−5) local day to its true UTC bounds", () => {
+    const { startIso, endIso } = localRangeBoundsIso("2026-06-29", "2026-06-29", "America/Lima");
+    // Lima 2026-06-29 00:00 = 05:00Z ; end = next day 04:59:59.999Z
+    expect(startIso).toBe("2026-06-29T05:00:00.000Z");
+    expect(endIso).toBe("2026-06-30T04:59:59.999Z");
+  });
+
+  it("UTC tz is the plain calendar day", () => {
+    const { startIso, endIso } = localRangeBoundsIso("2026-06-29", "2026-06-29", "UTC");
+    expect(startIso).toBe("2026-06-29T00:00:00.000Z");
+    expect(endIso).toBe("2026-06-29T23:59:59.999Z");
+  });
+});
 
 describe("computeAdvisorStats (per-advisor productivity)", () => {
   const emailById = new Map([

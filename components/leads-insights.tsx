@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Bar,
   CartesianGrid,
@@ -82,9 +82,9 @@ function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
     return <p className="text-xs text-slate-400">Sin actividad de asesoras registrada hoy todavía.</p>;
   }
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+    <div className="flex max-h-44 flex-col gap-2 overflow-y-auto">
       {rows.map((r) => (
-        <div key={r.name} className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-3 py-2">
+        <div key={r.name} className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2">
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700">
             {avatarInitial(r.name)}
           </span>
@@ -117,28 +117,42 @@ function trendInsight(trend: LeadsInsights["trend"]): { text: string; tone: "red
 
 const INSIGHT_TONE = { red: "text-red-600", green: "text-emerald-600", slate: "text-slate-400" } as const;
 
-/** Card panel above the Leads filters: burndown + flujo/saldo + productividad. */
-export function LeadsInsightsPanel({ data }: { data: LeadsInsights }) {
+/** Card panel above the Leads filters: burndown + flujo/saldo + productividad.
+ *  `titleSlot` (the page "Leads" title) heads the panel; `actionsSlot` (e.g. the
+ *  store selector) sits with the show/hide toggle. */
+export function LeadsInsightsPanel({
+  data,
+  titleSlot,
+  actionsSlot,
+}: {
+  data: LeadsInsights;
+  titleSlot?: ReactNode;
+  actionsSlot?: ReactNode;
+}) {
   const [open, setOpen] = useState(true);
   const landing = [...data.burndown].reverse().find((p) => p.proy != null)?.proy ?? null;
   const insight = trendInsight(data.trend);
 
   return (
     <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 sm:p-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-slate-700">Tablero de hoy</h2>
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-200/60 hover:text-slate-700"
-        >
-          {open ? "Ocultar" : "Mostrar"}
-        </button>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          {titleSlot ?? <h2 className="text-sm font-semibold text-slate-700">Tablero de hoy</h2>}
+        </div>
+        <div className="flex items-center gap-2">
+          {actionsSlot}
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-200/60 hover:text-slate-700"
+          >
+            {open ? "Ocultar tablero" : "Mostrar tablero"}
+          </button>
+        </div>
       </div>
 
       {open && (
-        <div className="mt-3 space-y-3">
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
             <div className="rounded-xl border border-slate-200 bg-white p-3">
               <p className="text-sm font-semibold text-slate-800">¿Cerramos hoy?</p>
               <p className="mb-1 text-xs text-slate-500">
@@ -163,14 +177,13 @@ export function LeadsInsightsPanel({ data }: { data: LeadsInsights }) {
               <p className={`mb-1 text-xs ${INSIGHT_TONE[insight.tone]}`}>{insight.text || " "}</p>
               <FlowSaldoChart data={data.trend} saldoInicio={data.saldoInicio} />
             </div>
-          </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <p className="mb-2 text-sm font-semibold text-slate-800">
-              Productividad de hoy <span className="font-normal text-slate-400">· contactos y pedidos por persona</span>
-            </p>
-            <ProductivityToday rows={data.productivity} />
-          </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <p className="mb-2 text-sm font-semibold text-slate-800">
+                Productividad de hoy <span className="font-normal text-slate-400">· por persona</span>
+              </p>
+              <ProductivityToday rows={data.productivity} />
+            </div>
         </div>
       )}
     </section>
