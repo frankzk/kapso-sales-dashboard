@@ -1,6 +1,7 @@
 import { getCurrentUser, getUserRoleSummary } from "@/lib/access";
 import { signOut } from "./actions";
 import { Sidebar } from "@/components/sidebar";
+import { YapeAlerts } from "@/components/yape-alerts";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
         roleLabel={roleLabel}
       />
       <main className="min-w-0 flex-1 px-4 py-6 sm:px-5 lg:px-8">{children}</main>
+      {/* Pop-up global de Yapes/Shalom por verificar (el primero que toca, lo toma). */}
+      <YapeAlerts />
     </div>
   );
 }

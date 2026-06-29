@@ -501,6 +501,7 @@ export function LeadsBoard({
   currency,
   initialSeg,
   initialGest,
+  initialOpenId,
   currentUserId,
 }: {
   stores: StoreSummary[];
@@ -513,6 +514,7 @@ export function LeadsBoard({
   currency: string;
   initialSeg?: LeadSegment | null;
   initialGest?: LeadGestion | null;
+  initialOpenId?: string | null; // ?open=<id> → auto-abre ese lead (desde el pop-up de Yapes)
   currentUserId: string;
 }) {
   const router = useRouter();
@@ -571,6 +573,19 @@ export function LeadsBoard({
       clearTimeout(t);
     };
   }, [query, storeId]);
+
+  // Auto-abrir un lead cuando llega ?open=<id> (p. ej. al tocar "Tomar" en el
+  // pop-up de Yapes). Solo una vez por id; si no está en la vista cargada, se ignora.
+  const openedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialOpenId || openedRef.current === initialOpenId) return;
+    const lead = leads.find((l) => l.id === initialOpenId);
+    if (lead) {
+      openedRef.current = initialOpenId;
+      openLead(lead);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialOpenId, leads]);
 
   function changeStore(nextStore: string) {
     router.push(`/dashboard/leads?store=${nextStore}&view=${view}`);
