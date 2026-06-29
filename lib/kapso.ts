@@ -600,6 +600,20 @@ function msgCaption(m: any): string {
   return typeof c === "string" ? c : "";
 }
 
+/** Template (HSM) name + body parameters, when the message is a template send. */
+function msgTemplate(m: any): { name: string | null; params: string[] } | null {
+  const tpl = m?.template ?? m?.kapso?.message_type_data ?? m?.message_type_data ?? null;
+  if (!tpl || typeof tpl !== "object") return null;
+  const name = typeof tpl.name === "string" ? tpl.name : null;
+  const comps = Array.isArray(tpl.components) ? tpl.components : [];
+  const body = comps.find((c: any) => c?.type === "body");
+  const params = Array.isArray(body?.parameters)
+    ? body.parameters.map((p: any) => String(p?.text ?? "").trim()).filter(Boolean)
+    : [];
+  if (!name && !params.length) return null;
+  return { name, params };
+}
+
 /** A conversation message normalized for display in the lead drawer. */
 export interface ConversationMessage {
   id: string | null;
@@ -609,6 +623,8 @@ export interface ConversationMessage {
   mediaKind: MediaKind | null;
   mediaUrl: string | null; // Kapso stored URL — fetch via the authenticated proxy
   status: string | null; // WhatsApp delivery status (sent/delivered/read/failed) — outbound
+  templateName?: string | null; // template (HSM) name, when this is a template send
+  templateParams?: string[]; // template body params (e.g. [nombre, producto])
 }
 
 /**
@@ -625,6 +641,7 @@ export function parseConversationMessages(rawMsgs: any[]): ConversationMessage[]
       if (t == null) return null;
       const caption = msgCaption(m);
       const status = m?.kapso?.status ?? m?.status;
+      const tpl = msgTemplate(m);
       return {
         id: m?.id != null ? String(m.id) : null,
         dir: msgDirection(m) ?? "inbound",
@@ -633,10 +650,32 @@ export function parseConversationMessages(rawMsgs: any[]): ConversationMessage[]
         mediaKind: msgMediaKind(m),
         mediaUrl: msgMediaUrl(m),
         status: typeof status === "string" ? status : null,
+        ...(tpl?.name ? { templateName: tpl.name } : {}),
+        ...(tpl?.params.length ? { templateParams: tpl.params } : {}),
       };
     })
     .filter((m): m is ConversationMessage => m != null)
     .sort((a, b) => a.t - b.t);
+}
+
+/**
+ * The product a re-engagement template was sent about: the LAST body parameter
+ * of the first OUTBOUND message whose template name matches `templateName`. Our
+ * browse template's params are [nombre, producto], so the product is last. Used
+ * to recover a browse lead's product when its `cart_summary` was lost. Null when
+ * no matching template message is found.
+ */
+export function templateProductParam(
+  messages: ConversationMessage[],
+  templateName: string | null | undefined,
+): string | null {
+  if (!templateName) return null;
+  for (const m of messages) {
+    if (m.dir === "outbound" && m.templateName === templateName && m.templateParams?.length) {
+      return m.templateParams[m.templateParams.length - 1] ?? null;
+    }
+  }
+  return null;
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   fetchConversationSignals,
   fetchConversationTranscript,
   parseConversationMessages,
+  templateProductParam,
   findConversationIdByPhone,
   listConversationsByPhone,
   classifyKapsoEvent,
@@ -556,6 +557,36 @@ describe("parseConversationMessages (template body)", () => {
       },
     ]);
     expect(out[0]!.text).toBe("hola");
+  });
+
+  it("exposes template name + body params, and templateProductParam pulls the product", () => {
+    const out = parseConversationMessages([
+      {
+        id: "wamid.X",
+        timestamp: "1782735944",
+        type: "template",
+        template: {
+          name: "busqueda_abandonada_1",
+          components: [
+            {
+              type: "body",
+              parameters: [
+                { type: "text", text: "Martina Perez" },
+                { type: "text", text: "Estante Giratorio Multifuncional" },
+              ],
+            },
+          ],
+        },
+        kapso: { direction: "outbound", content: "🎀 …" },
+      },
+    ]);
+    expect(out[0]!.templateName).toBe("busqueda_abandonada_1");
+    expect(out[0]!.templateParams).toEqual(["Martina Perez", "Estante Giratorio Multifuncional"]);
+    // The product is the LAST body param of the matching outbound template.
+    expect(templateProductParam(out, "busqueda_abandonada_1")).toBe("Estante Giratorio Multifuncional");
+    // No match → null (wrong name, or no template name given).
+    expect(templateProductParam(out, "otra_plantilla")).toBeNull();
+    expect(templateProductParam(out, null)).toBeNull();
   });
 });
 
