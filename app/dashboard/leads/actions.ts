@@ -37,6 +37,17 @@ export interface LeadActionState {
   windowClosed?: boolean; // the 24h WhatsApp session window is closed (retry won't help)
 }
 
+/** A Yape/Shalom lead awaiting verification, surfaced to advisors as a pop-up. */
+export interface YapeAlert {
+  id: string;
+  storeId: string;
+  name: string | null;
+  phone: string;
+  cartSummary: string | null;
+  handoffContext: string | null;
+  lastInboundAt: string | null;
+}
+
 /** Fetch a lead + its call history (RLS-scoped). Drives the drawer client-side. */
 export async function loadLeadDetail(
   leadId: string,
@@ -160,6 +171,47 @@ export async function releaseLead(leadId: string): Promise<LeadActionState> {
     .eq("claimed_by", ctx.userId);
   revalidatePath("/dashboard/leads");
   return { notice: "Liberado." };
+}
+
+/**
+ * Yape/Shalom leads waiting for verification that NOBODY is actively handling
+ * (claim free or stale, no order yet) — RLS-scoped to the caller's stores, so an
+ * advisor only ever sees alerts for her tiendas. Drives the advisor pop-up: once
+ * someone claims one (fresh), it drops out on the next poll. Newest inbound first.
+ */
+export async function listYapeAlerts(): Promise<YapeAlert[]> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) return [];
+  const cutoff = new Date(Date.now() - CLAIM_TTL_MINUTES * 60_000).toISOString();
+  const { data, error } = await sb
+    .from("leads")
+    .select(
+      "id, store_id, name, phone, cart_summary, handoff_context, last_inbound_at, last_interaction_at, claimed_by, claimed_at, has_order, status",
+    )
+    .eq("status", "yape_por_verificar")
+    .eq("has_order", false)
+    .order("last_inbound_at", { ascending: false, nullsFirst: false })
+    .limit(20);
+  if (error || !data) return [];
+  return (data as Array<Record<string, unknown>>)
+    .filter((l) => {
+      // A fresh claim (within the TTL) means someone is on it → not an alert.
+      const claimedFresh =
+        !!l.claimed_by && typeof l.claimed_at === "string" && l.claimed_at >= cutoff;
+      return !claimedFresh;
+    })
+    .map((l) => ({
+      id: l.id as string,
+      storeId: l.store_id as string,
+      name: (l.name as string | null) ?? null,
+      phone: l.phone as string,
+      cartSummary: (l.cart_summary as string | null) ?? null,
+      handoffContext: (l.handoff_context as string | null) ?? null,
+      lastInboundAt: (l.last_inbound_at as string | null) ?? (l.last_interaction_at as string | null) ?? null,
+    }));
 }
 
 /** Register a call: log it, apply the new status, set the next follow-up. */

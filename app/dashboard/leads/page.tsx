@@ -13,7 +13,7 @@ function isLeadView(v: string | undefined): v is LeadView {
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ store?: string; view?: string; seg?: string; gest?: string }>;
+  searchParams: Promise<{ store?: string; view?: string; seg?: string; gest?: string; open?: string }>;
 }) {
   const sp = await searchParams;
   const stores = await getAccessibleStores();
@@ -59,6 +59,7 @@ export default async function LeadsPage({
       currency={currency}
       initialSeg={initialSeg}
       initialGest={initialGest}
+      initialOpenId={typeof sp.open === "string" ? sp.open : null}
       currentUserId={user?.id ?? ""}
     />
   );
