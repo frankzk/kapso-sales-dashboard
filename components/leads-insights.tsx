@@ -3,9 +3,9 @@
 import { useState, type ReactNode } from "react";
 import {
   Bar,
+  BarChart,
   CartesianGrid,
-  ComposedChart,
-  Legend,
+  LabelList,
   Line,
   LineChart,
   ReferenceLine,
@@ -47,46 +47,22 @@ function BurndownChart({ data, nowHourLabel }: { data: LeadsInsights["burndown"]
   );
 }
 
-/** X-axis tick: el día + su NETO del día (entran − cierran) — rojo si el backlog
- *  creció ese día, verde si bajó, gris si quedó igual. */
-function FlowTick(props: { x?: number; y?: number; payload?: { value?: string }; netByDia?: Record<string, number> }) {
-  const { x = 0, y = 0, payload, netByDia } = props;
-  const n = netByDia?.[payload?.value ?? ""] ?? 0;
-  const color = n > 0 ? CHART.red : n < 0 ? CHART.green : CHART.slate;
-  return (
-    <g transform={`translate(${x},${y})`}>
-      <text dy={11} textAnchor="middle" fontSize={11} fill={CHART.slate}>
-        {payload?.value}
-      </text>
-      <text dy={23} textAnchor="middle" fontSize={10} fontWeight={600} fill={color}>
-        {n > 0 ? `+${n}` : String(n)}
-      </text>
-    </g>
-  );
-}
-
-/** "Flujo y saldo" — barras (entran vs cierran) + línea de saldo acumulado, con el
- *  neto del día (entran − cierran) bajo cada fecha. */
-function FlowSaldoChart({ data, saldoInicio }: { data: LeadsInsights["trend"]; saldoInicio: number }) {
-  const netByDia: Record<string, number> = Object.fromEntries(data.map((d) => [d.dia, d.entran - d.cierran]));
+/** "Sin llamar · últimos 7 días" — leads en cola sin gestionar (status `nuevo`),
+ *  agrupados por la fecha de su última interacción. Una barra por día, con el
+ *  número encima — para ver qué día se está quedando gente sin llamar. */
+function SinLlamarChart({ data }: { data: LeadsInsights["sinLlamar"] }) {
   return (
     <div className="h-44 w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={data} margin={{ top: 8, right: 4, left: -8, bottom: 0 }} barGap={2}>
+        <BarChart data={data} margin={{ top: 16, right: 6, left: -8, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} vertical={false} />
-          <XAxis dataKey="dia" interval={0} height={36} tick={(p: object) => <FlowTick {...p} netByDia={netByDia} />} />
-          <YAxis yAxisId="flujo" tick={AXIS_TICK} width={28} allowDecimals={false} />
-          <YAxis yAxisId="saldo" orientation="right" tick={{ ...AXIS_TICK, fill: CHART.red }} width={32} allowDecimals={false} />
-          <Tooltip
-            contentStyle={TOOLTIP_STYLE}
-            formatter={(v, name) => [v, String(name)]}
-          />
-          <Legend wrapperStyle={{ fontSize: 11 }} iconSize={9} />
-          <ReferenceLine yAxisId="saldo" y={saldoInicio} stroke={CHART.red} strokeDasharray="4 4" strokeOpacity={0.5} />
-          <Bar yAxisId="flujo" dataKey="entran" name="Entran" fill="#cbd5e1" radius={[3, 3, 0, 0]} isAnimationActive={false} />
-          <Bar yAxisId="flujo" dataKey="cierran" name="Cierran" fill={CHART.brand} radius={[3, 3, 0, 0]} isAnimationActive={false} />
-          <Line yAxisId="saldo" dataKey="saldo" name="Saldo acum." stroke={CHART.red} strokeWidth={2.5} dot={{ r: 3 }} isAnimationActive={false} />
-        </ComposedChart>
+          <XAxis dataKey="dia" interval={0} tick={AXIS_TICK} />
+          <YAxis tick={AXIS_TICK} width={28} allowDecimals={false} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: "#f8fafc" }} formatter={(v) => [v, "Sin llamar"]} />
+          <Bar dataKey="count" name="Sin llamar" fill={CHART.amber} radius={[3, 3, 0, 0]} isAnimationActive={false}>
+            <LabelList dataKey="count" position="top" fontSize={10} fill={CHART.slate} />
+          </Bar>
+        </BarChart>
       </ResponsiveContainer>
     </div>
   );
@@ -127,21 +103,7 @@ function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
   );
 }
 
-function trendInsight(trend: LeadsInsights["trend"]): { text: string; tone: "red" | "green" | "slate" } {
-  if (trend.length < 2) return { text: "", tone: "slate" };
-  const entran = trend.reduce((s, d) => s + d.entran, 0);
-  const cierran = trend.reduce((s, d) => s + d.cierran, 0);
-  const gap = Math.round((entran - cierran) / trend.length);
-  if (gap >= 1)
-    return { text: `Entran ~${gap}/día más de lo que cierras → el backlog crece.`, tone: "red" };
-  if (gap <= -1)
-    return { text: `Cierras ~${-gap}/día más de lo que entra → el backlog baja.`, tone: "green" };
-  return { text: "Entradas y cierres van parejos.", tone: "slate" };
-}
-
-const INSIGHT_TONE = { red: "text-red-600", green: "text-emerald-600", slate: "text-slate-400" } as const;
-
-/** Card panel above the Leads filters: burndown + flujo/saldo + productividad.
+/** Card panel above the Leads filters: burndown + sin llamar + productividad.
  *  `titleSlot` (the page "Leads" title) heads the panel; `actionsSlot` (e.g. the
  *  store selector) sits with the show/hide toggle. */
 export function LeadsInsightsPanel({
@@ -155,7 +117,6 @@ export function LeadsInsightsPanel({
 }) {
   const [open, setOpen] = useState(true);
   const landing = [...data.burndown].reverse().find((p) => p.proy != null)?.proy ?? null;
-  const insight = trendInsight(data.trend);
 
   return (
     <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 sm:p-4">
@@ -177,37 +138,46 @@ export function LeadsInsightsPanel({
 
       {open && (
         <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <div className="rounded-xl border border-slate-200 bg-white p-3">
-              <p className="text-sm font-semibold text-slate-800">¿Cerramos hoy?</p>
-              <p className="mb-1 text-xs text-slate-500">
-                Pendientes vs. ritmo para tocar 0 a las {String(data.burndown.at(-1)?.h ?? "20h")}
-                {landing != null && landing > 0 ? (
-                  <>
-                    {" · "}
-                    <span className="font-medium text-red-600">al ritmo actual cierras con ~{landing}</span>
-                  </>
-                ) : (
-                  <>
-                    {" · "}
-                    <span className="font-medium text-emerald-600">vas a ritmo de cerrar a 0</span>
-                  </>
-                )}
-              </p>
-              <BurndownChart data={data.burndown} nowHourLabel={data.nowHourLabel} />
-            </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <p className="text-sm font-semibold text-slate-800">¿Cerramos hoy?</p>
+            <p className="mb-1 text-xs text-slate-500">
+              Pendientes vs. ritmo para tocar 0 a las {String(data.burndown.at(-1)?.h ?? "20h")}
+              {landing != null && landing > 0 ? (
+                <>
+                  {" · "}
+                  <span className="font-medium text-red-600">al ritmo actual cierras con ~{landing}</span>
+                </>
+              ) : (
+                <>
+                  {" · "}
+                  <span className="font-medium text-emerald-600">vas a ritmo de cerrar a 0</span>
+                </>
+              )}
+            </p>
+            <BurndownChart data={data.burndown} nowHourLabel={data.nowHourLabel} />
+          </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-3">
-              <p className="text-sm font-semibold text-slate-800">Flujo y saldo · 7 días</p>
-              <p className={`mb-1 text-xs ${INSIGHT_TONE[insight.tone]}`}>{insight.text || " "}</p>
-              <FlowSaldoChart data={data.trend} saldoInicio={data.saldoInicio} />
-            </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <p className="text-sm font-semibold text-slate-800">Sin llamar · últimos 7 días</p>
+            <p className="mb-1 text-xs text-slate-500">
+              Por última interacción ·{" "}
+              <span className="font-medium text-slate-700">{data.sinLlamarTotal} en total</span>
+              {data.sinLlamarOlder > 0 && (
+                <>
+                  {" · "}
+                  <span className="font-medium text-red-600">{data.sinLlamarOlder} de +7 días</span>
+                </>
+              )}
+            </p>
+            <SinLlamarChart data={data.sinLlamar} />
+          </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-3">
-              <p className="mb-2 text-sm font-semibold text-slate-800">
-                Productividad de hoy <span className="font-normal text-slate-400">· por persona</span>
-              </p>
-              <ProductivityToday rows={data.productivity} />
-            </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <p className="mb-2 text-sm font-semibold text-slate-800">
+              Productividad de hoy <span className="font-normal text-slate-400">· por persona</span>
+            </p>
+            <ProductivityToday rows={data.productivity} />
+          </div>
         </div>
       )}
     </section>

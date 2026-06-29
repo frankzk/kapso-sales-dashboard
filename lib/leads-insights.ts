@@ -44,6 +44,9 @@ export interface LeadsInsights {
   pendingNow: number;
   nowHourLabel: string; // e.g. "15h" — the "ahora" marker
   productivity: AdvisorToday[];
+  sinLlamar: { dia: string; count: number }[]; // sin-gestión leads por día de última interacción
+  sinLlamarTotal: number; // total sin llamar (incl. older than the window)
+  sinLlamarOlder: number; // sin llamar cuya última interacción fue hace +7 días (la alarma)
 }
 
 const WEEKDAYS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
@@ -140,7 +143,7 @@ export async function getLeadsInsights(
 
   // Entrants (created) + leavers (left the "por llamar" queue: won/lost/Yape) in
   // the window. Two light queries, run together.
-  const [entrantsRes, leaversRes] = await Promise.all([
+  const [entrantsRes, leaversRes, sinLlamarRes] = await Promise.all([
     // "Entró" = first_seen_at (fecha REAL de primer contacto), no created_at — que
     // es cuándo se insertó la fila y por un backfill masivo puede caer todo el
     // mismo día (un pico falso). Caemos a created_at solo si first_seen es null.
@@ -156,6 +159,16 @@ export async function getLeadsInsights(
       .eq("store_id", storeId)
       .gte("last_interaction_at", windowStartIso)
       .or("category.in.(won,lost),status.eq.yape_por_verificar")
+      .limit(5000),
+    // "Sin llamar" = en cola (open/hot) y status `nuevo` (nunca lo gestionó un
+    // asesor). Los agrupamos por fecha de última interacción para ver qué día
+    // se está quedando gente sin llamar.
+    sb
+      .from("leads")
+      .select("last_interaction_at, first_seen_at")
+      .eq("store_id", storeId)
+      .in("category", ["open", "hot"])
+      .eq("status", "nuevo")
       .limit(5000),
   ]);
 
@@ -176,6 +189,22 @@ export async function getLeadsInsights(
     cierranByDate[p.date] = (cierranByDate[p.date] ?? 0) + 1;
     if (p.date === todayDate) leaverHours.push(p.hour);
   }
+
+  // "Sin llamar" por día de última interacción (+ cuántos son de hace +7 días).
+  const daySet = new Set(days.map((d) => d.date));
+  const firstDay = days[0]!.date;
+  const sinLlamarByDate: Record<string, number> = {};
+  let sinLlamarOlder = 0;
+  for (const r of (sinLlamarRes.data as { last_interaction_at: string | null; first_seen_at: string | null }[]) ??
+    []) {
+    const ts = r.last_interaction_at ?? r.first_seen_at;
+    if (!ts) continue;
+    const d = tzParts(ts, tz).date;
+    if (daySet.has(d)) sinLlamarByDate[d] = (sinLlamarByDate[d] ?? 0) + 1;
+    else if (d < firstDay) sinLlamarOlder += 1; // anterior a la ventana = leads viejos sin llamar
+  }
+  const sinLlamar = days.map((dd) => ({ dia: dd.label, count: sinLlamarByDate[dd.date] ?? 0 }));
+  const sinLlamarTotal = sinLlamar.reduce((s, x) => s + x.count, 0) + sinLlamarOlder;
 
   const burndown = buildBurndown({ pendingNow, nowHour: now.hour, entrantHours, leaverHours });
   const { trend, saldoInicio } = buildTrend({ days, pendingNow, entranByDate, cierranByDate });
@@ -205,5 +234,8 @@ export async function getLeadsInsights(
     pendingNow,
     nowHourLabel: hourLabel(clampHour(now.hour)),
     productivity,
+    sinLlamar,
+    sinLlamarTotal,
+    sinLlamarOlder,
   };
 }
