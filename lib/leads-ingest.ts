@@ -359,21 +359,28 @@ async function enrichLeadsFromConversations(
     if ((sig.inbound_count ?? 0) >= 2) stats.inbound += 1;
     if ((sig.cart_item_count ?? 0) > 0) stats.cart += 1;
     if ((sig.district ?? "").trim()) stats.district += 1;
-    await admin
-      .from("leads")
-      .update({
-        inbound_count: sig.inbound_count,
-        district: sig.district,
-        cart_value: sig.cart_value,
-        cart_item_count: sig.cart_item_count,
-        cart_summary: sig.cart_summary,
-      })
-      .eq("store_id", storeId)
-      .eq("kapso_conversation_id", convId)
-      // Never clobber cart/district that came from a real Shopify draft order:
-      // the draft (linkDraftOrdersToLeads) is the source of truth; this WhatsApp
-      // parse is only the fallback for leads that have no draft.
-      .is("draft_order_gid", null);
+    // Only FILL IN values from the WhatsApp parse — never erase existing lead
+    // data with a null/empty parse. A browse (abandoned_browse) lead carries its
+    // viewed product in `cart_summary` (+ maybe a Flow district) from the seed;
+    // its bot conversation rarely re-mentions them, so a blind write wiped that
+    // context. `inbound_count` is conversation-owned, so it always updates.
+    const patch: Record<string, unknown> = {};
+    if (sig.inbound_count != null) patch.inbound_count = sig.inbound_count;
+    if ((sig.district ?? "").trim()) patch.district = sig.district;
+    if (sig.cart_value != null) patch.cart_value = sig.cart_value;
+    if (sig.cart_item_count != null) patch.cart_item_count = sig.cart_item_count;
+    if ((sig.cart_summary ?? "").trim()) patch.cart_summary = sig.cart_summary;
+    if (Object.keys(patch).length) {
+      await admin
+        .from("leads")
+        .update(patch)
+        .eq("store_id", storeId)
+        .eq("kapso_conversation_id", convId)
+        // Never clobber cart/district that came from a real Shopify draft order:
+        // the draft (linkDraftOrdersToLeads) is the source of truth; this WhatsApp
+        // parse is only the fallback for leads that have no draft.
+        .is("draft_order_gid", null);
+    }
 
     // Source attribution: a Click-to-WhatsApp ad referral on the conversation's
     // first inbound message → stamp the lead's source (first-touch, sticky via

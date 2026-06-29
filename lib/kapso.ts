@@ -525,6 +525,10 @@ function msgText(m: any): string {
     m?.message?.text?.body ??
     m?.message?.body ??
     (typeof m?.message?.content === "string" ? m.message.content : null) ??
+    // Kapso's canonical rendered body — this is where TEMPLATE (HSM) messages
+    // keep their text (the browse re-engagement template, etc.); they have no
+    // `text.body`, so without this they rendered as empty bubbles.
+    (typeof m?.kapso?.content === "string" ? m.kapso.content : null) ??
     m?.caption ??
     m?.kapso?.text ??
     "";
