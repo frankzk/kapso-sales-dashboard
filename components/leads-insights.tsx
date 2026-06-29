@@ -59,7 +59,7 @@ function FlowSaldoChart({ data, saldoInicio }: { data: LeadsInsights["trend"]; s
           <YAxis yAxisId="saldo" orientation="right" tick={{ ...AXIS_TICK, fill: CHART.red }} width={32} allowDecimals={false} />
           <Tooltip
             contentStyle={TOOLTIP_STYLE}
-            formatter={(v, name) => [v, name === "entran" ? "Entran" : name === "cierran" ? "Cierran" : "Saldo"]}
+            formatter={(v, name) => [v, String(name)]}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} iconSize={9} />
           <ReferenceLine yAxisId="saldo" y={saldoInicio} stroke={CHART.red} strokeDasharray="4 4" strokeOpacity={0.5} />
