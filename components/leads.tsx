@@ -820,7 +820,9 @@ export function LeadsBoard({
 
       <div className="sticky top-0 z-10 space-y-2 bg-slate-50 pt-1 pb-2">
         {/* Toolbar: pestañas de la cola por segmento · píldora Yape/Shalom · Filtros. */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2">
+          {/* Tira de pestañas: en móvil scrollea sola (no empuja el ancho de la página). */}
+          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
           <SegControl
             value={view === "por_llamar" ? (segFilter ?? "all") : ""}
             onChange={(key) => {
@@ -864,6 +866,7 @@ export function LeadsBoard({
               </span>
             </button>
           )}
+          </div>
           <button
             type="button"
             aria-expanded={more}
@@ -1004,9 +1007,9 @@ export function LeadsBoard({
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
-          <div className="min-w-[680px]">
-            {/* Header de tabla (grid). */}
-            <div className="grid grid-cols-[42px_minmax(0,1fr)_184px_78px_78px] items-center gap-[14px] border-b border-slate-200 bg-slate-50 px-[18px] py-2.5 text-[11px] font-semibold tracking-wide text-slate-400 uppercase">
+          <div className="min-w-0">
+            {/* Cabecera de columnas — solo md+; en móvil cada fila se apila. */}
+            <div className="hidden grid-cols-[42px_minmax(0,1fr)_184px_78px_78px] items-center gap-[14px] border-b border-slate-200 bg-slate-50 px-[18px] py-2.5 text-[11px] font-semibold tracking-wide text-slate-400 uppercase md:grid">
               <span />
               <span>Lead</span>
               <span>Última gestión</span>
@@ -1043,7 +1046,8 @@ export function LeadsBoard({
                     }
                   }}
                   className={cn(
-                    "group grid cursor-pointer grid-cols-[42px_minmax(0,1fr)_184px_78px_78px] items-center gap-[14px] border-b border-slate-100 px-[18px] py-2.5 transition last:border-0",
+                    // Móvil: tarjeta apilada (flex-wrap). md+: el grid de columnas.
+                    "group flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-4 py-3 transition last:border-0 md:grid md:grid-cols-[42px_minmax(0,1fr)_184px_78px_78px] md:gap-x-[14px] md:gap-y-0 md:px-[18px] md:py-2.5",
                     locked ? "bg-brand-50" : isYape ? "bg-red-50" : "hover:bg-slate-50",
                     openingId === lead.id && "opacity-60",
                   )}
@@ -1059,8 +1063,8 @@ export function LeadsBoard({
                     {initial}
                   </span>
 
-                  {/* Col 2 · lead */}
-                  <div className="flex min-w-0 items-center gap-1.5">
+                  {/* Col 2 · lead (en móvil ocupa la 1ª línea; gestión/ventana bajan) */}
+                  <div className="flex min-w-0 flex-1 items-center gap-1.5 md:flex-none">
                     <span className="truncate text-sm font-semibold text-slate-900">{lead.name || lead.phone}</span>
                     {isYape && <span aria-hidden="true">🔥</span>}
                     <SourceChip source={lead.source} />
@@ -1120,8 +1124,8 @@ export function LeadsBoard({
                     {windowLabel}
                   </span>
 
-                  {/* Col 5 · acciones rápidas (al hover) */}
-                  <div className="flex items-center justify-end gap-1.5">
+                  {/* Col 5 · acciones rápidas (hover en desktop; ocultas en móvil, ahí se abre tocando la fila) */}
+                  <div className="ml-auto hidden items-center justify-end gap-1.5 md:flex">
                     {locked ? (
                       <span className="text-[11px] whitespace-nowrap text-slate-400">en curso</span>
                     ) : (
@@ -2965,6 +2969,13 @@ function CallForm({ leadId, onRegistered }: { leadId: string; onRegistered: () =
     ["sin_stock", "📦 Sin stock"],
   ];
   const chipKeys = new Set(CHIPS.map(([k]) => k));
+  // El desplegable lista TODOS los estados (los de los chips primero, con su
+  // etiqueta canónica) y muestra siempre el seleccionado, así chips y desplegable
+  // quedan sincronizados en ambos sentidos.
+  const STATUS_OPTIONS = [
+    ...CHIPS.map(([code]) => ({ code, label: labelOf(code) })),
+    ...MANUAL_STATUSES.filter((s) => !chipKeys.has(s.code)).map((s) => ({ code: s.code, label: s.label })),
+  ];
   return (
     <section>
       <p className="mb-2 text-xs font-semibold tracking-wide text-slate-400 uppercase">Resultado de la llamada</p>
@@ -2992,13 +3003,13 @@ function CallForm({ leadId, onRegistered }: { leadId: string; onRegistered: () =
           })}
         </div>
         <select
-          value={chipKeys.has(status) ? "" : status}
+          value={status}
           onChange={(e) => setStatus(e.currentTarget.value)}
           className={inputCls}
-          aria-label="Otros estados"
+          aria-label="Estado de la llamada"
         >
-          <option value="">Otros estados…</option>
-          {MANUAL_STATUSES.filter((s) => !chipKeys.has(s.code)).map((s) => (
+          <option value="">(mantener estado)</option>
+          {STATUS_OPTIONS.map((s) => (
             <option key={s.code} value={s.code}>
               {s.label}
             </option>
