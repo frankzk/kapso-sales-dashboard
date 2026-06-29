@@ -1052,3 +1052,19 @@ update stores
        )
  where meta_ad_account_id is not null
    and (meta_ad_accounts is null or meta_ad_accounts = '[]'::jsonb);
+
+-- ---- 0020 ----
+-- v2 advisor routing for Yape/Shalom alerts: presence heartbeat + rotating offer.
+create table if not exists user_presence (
+  user_id      uuid primary key references auth.users(id) on delete cascade,
+  last_seen_at timestamptz not null default now()
+);
+alter table user_presence enable row level security;
+grant all privileges on user_presence to service_role;
+
+alter table leads add column if not exists yape_offered_to uuid references auth.users(id) on delete set null;
+alter table leads add column if not exists yape_offered_at timestamptz;
+alter table leads add column if not exists yape_passed uuid[] not null default '{}';
+
+create index if not exists leads_yape_offer_idx
+  on leads(store_id) where status = 'yape_por_verificar';

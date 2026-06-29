@@ -5,6 +5,14 @@ import { revalidatePath } from "next/cache";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { getCustomerHistory, getLeadWithCalls, type CustomerHistory } from "@/lib/leads-access";
 import { CLAIM_TTL_MINUTES, categoryOf, isValidStatus, labelOf } from "@/lib/leads";
+import {
+  OFFER_TTL_MS,
+  ONLINE_TTL_MS,
+  planYapeOffers,
+  type RoutingAdvisor,
+  type RoutingLead,
+} from "@/lib/yape-routing";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import { getStoreCreds } from "@/lib/ingest";
 import {
@@ -148,7 +156,14 @@ export async function claimLead(leadId: string): Promise<LeadActionState> {
   const cutoff = new Date(Date.now() - CLAIM_TTL_MINUTES * 60_000).toISOString();
   const { data, error } = await admin
     .from("leads")
-    .update({ claimed_by: ctx.userId, claimed_at: new Date().toISOString() })
+    .update({
+      claimed_by: ctx.userId,
+      claimed_at: new Date().toISOString(),
+      // Whoever claims it owns it → clear the Yape rotation offer.
+      yape_offered_to: null,
+      yape_offered_at: null,
+      yape_passed: [],
+    })
     .eq("id", leadId)
     .or(`claimed_by.is.null,claimed_by.eq.${ctx.userId},claimed_at.lt.${cutoff}`)
     .select("id")
@@ -173,11 +188,86 @@ export async function releaseLead(leadId: string): Promise<LeadActionState> {
   return { notice: "Liberado." };
 }
 
+// ── Yape/Shalom advisor routing (v2) ──────────────────────────────────────────
+// Each Yape is offered to ONE online advisor at a time (90s), escalating in an
+// infinite loop until someone claims it. Offers are advanced lazily here on each
+// poll (no cron). Cross-advisor reads use the service role; only the offered
+// advisor ever sees a given Yape (others see nothing).
+
+/** Online vendedoras (presence heartbeat fresh) with access to the store. */
+async function onlineVendedoras(
+  admin: SupabaseClient,
+  storeId: string,
+  nowMs: number,
+): Promise<RoutingAdvisor[]> {
+  const { data: store } = await admin.from("stores").select("org_id").eq("id", storeId).maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  if (!orgId) return [];
+  const { data: mem } = await admin
+    .from("memberships")
+    .select("user_id")
+    .eq("org_id", orgId)
+    .eq("role", "vendedora");
+  const vendIds = new Set(((mem as { user_id: string }[] | null) ?? []).map((m) => m.user_id));
+  if (!vendIds.size) return [];
+  const { data: acc } = await admin.from("user_store_access").select("user_id").eq("store_id", storeId);
+  const accessIds = ((acc as { user_id: string }[] | null) ?? [])
+    .map((a) => a.user_id)
+    .filter((id) => vendIds.has(id));
+  if (!accessIds.length) return [];
+  const onlineCutoff = new Date(nowMs - ONLINE_TTL_MS).toISOString();
+  const { data: pres } = await admin
+    .from("user_presence")
+    .select("user_id, last_seen_at")
+    .in("user_id", accessIds)
+    .gte("last_seen_at", onlineCutoff);
+  return ((pres as { user_id: string; last_seen_at: string }[] | null) ?? []).map((p) => ({
+    id: p.user_id,
+    lastSeenMs: new Date(p.last_seen_at).getTime(),
+  }));
+}
+
+/** Advance the rotating offers for one store's active Yapes (lazy, on poll). */
+async function reconcileYapeOffers(admin: SupabaseClient, storeId: string, nowMs: number): Promise<void> {
+  const claimCutoff = new Date(nowMs - CLAIM_TTL_MINUTES * 60_000).toISOString();
+  const { data } = await admin
+    .from("leads")
+    .select("id, claimed_by, claimed_at, yape_offered_to, yape_offered_at, yape_passed")
+    .eq("store_id", storeId)
+    .eq("status", "yape_por_verificar")
+    .eq("has_order", false);
+  const rows = (data as Array<Record<string, unknown>> | null) ?? [];
+  if (!rows.length) return;
+  const leads: RoutingLead[] = rows.map((r) => ({
+    id: r.id as string,
+    claimedBy:
+      r.claimed_by && typeof r.claimed_at === "string" && r.claimed_at >= claimCutoff
+        ? (r.claimed_by as string)
+        : null,
+    offeredTo: (r.yape_offered_to as string | null) ?? null,
+    offeredAtMs: r.yape_offered_at ? new Date(r.yape_offered_at as string).getTime() : null,
+    passed: Array.isArray(r.yape_passed) ? (r.yape_passed as string[]) : [],
+  }));
+  const advisors = await onlineVendedoras(admin, storeId, nowMs);
+  const plans = planYapeOffers(leads, advisors, nowMs);
+  if (!plans.length) return;
+  const offerCutoff = new Date(nowMs - OFFER_TTL_MS).toISOString();
+  const nowIso = new Date(nowMs).toISOString();
+  for (const p of plans) {
+    // Atomic: only (re)assign a free/expired offer, so two concurrent polls can't
+    // double-assign (the loser's guard no longer matches).
+    await admin
+      .from("leads")
+      .update({ yape_offered_to: p.offeredTo, yape_offered_at: nowIso, yape_passed: p.passed })
+      .eq("id", p.leadId)
+      .or(`yape_offered_at.is.null,yape_offered_at.lt.${offerCutoff}`);
+  }
+}
+
 /**
- * Yape/Shalom leads waiting for verification that NOBODY is actively handling
- * (claim free or stale, no order yet) — RLS-scoped to the caller's stores, so an
- * advisor only ever sees alerts for her tiendas. Drives the advisor pop-up: once
- * someone claims one (fresh), it drops out on the next poll. Newest inbound first.
+ * Heartbeat + advance offers + return the Yapes currently offered to ME (fresh).
+ * The caller's accessible stores come via RLS; reconciliation uses the service
+ * role to see the whole advisor pool. Drives the advisor pop-up.
  */
 export async function listYapeAlerts(): Promise<YapeAlert[]> {
   const sb = await createServerSupabase();
@@ -185,33 +275,118 @@ export async function listYapeAlerts(): Promise<YapeAlert[]> {
     data: { user },
   } = await sb.auth.getUser();
   if (!user) return [];
-  const cutoff = new Date(Date.now() - CLAIM_TTL_MINUTES * 60_000).toISOString();
-  const { data, error } = await sb
+  const admin = createAdminSupabase();
+  const nowMs = Date.now();
+  await admin.from("user_presence").upsert({ user_id: user.id, last_seen_at: new Date(nowMs).toISOString() });
+  const { data: storeRows } = await sb.from("stores").select("id");
+  const storeIds = ((storeRows as { id: string }[] | null) ?? []).map((s) => s.id);
+  for (const sid of storeIds) await reconcileYapeOffers(admin, sid, nowMs);
+  const offerCutoff = new Date(nowMs - OFFER_TTL_MS).toISOString();
+  const { data, error } = await admin
     .from("leads")
-    .select(
-      "id, store_id, name, phone, cart_summary, handoff_context, last_inbound_at, last_interaction_at, claimed_by, claimed_at, has_order, status",
-    )
+    .select("id, store_id, name, phone, cart_summary, handoff_context, last_inbound_at, last_interaction_at")
+    .eq("yape_offered_to", user.id)
     .eq("status", "yape_por_verificar")
     .eq("has_order", false)
-    .order("last_inbound_at", { ascending: false, nullsFirst: false })
+    .gte("yape_offered_at", offerCutoff)
+    .order("yape_offered_at", { ascending: true })
     .limit(20);
   if (error || !data) return [];
-  return (data as Array<Record<string, unknown>>)
-    .filter((l) => {
-      // A fresh claim (within the TTL) means someone is on it → not an alert.
-      const claimedFresh =
-        !!l.claimed_by && typeof l.claimed_at === "string" && l.claimed_at >= cutoff;
-      return !claimedFresh;
-    })
-    .map((l) => ({
-      id: l.id as string,
-      storeId: l.store_id as string,
-      name: (l.name as string | null) ?? null,
-      phone: l.phone as string,
-      cartSummary: (l.cart_summary as string | null) ?? null,
-      handoffContext: (l.handoff_context as string | null) ?? null,
-      lastInboundAt: (l.last_inbound_at as string | null) ?? (l.last_interaction_at as string | null) ?? null,
-    }));
+  return (data as Array<Record<string, unknown>>).map((l) => ({
+    id: l.id as string,
+    storeId: l.store_id as string,
+    name: (l.name as string | null) ?? null,
+    phone: l.phone as string,
+    cartSummary: (l.cart_summary as string | null) ?? null,
+    handoffContext: (l.handoff_context as string | null) ?? null,
+    lastInboundAt: (l.last_inbound_at as string | null) ?? (l.last_interaction_at as string | null) ?? null,
+  }));
+}
+
+/** "Ahora no": pass the offer to the next advisor immediately (adds me to passed). */
+export async function passYape(leadId: string): Promise<LeadActionState> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) return { error: "Sin sesión." };
+  const admin = createAdminSupabase();
+  const { data } = await admin
+    .from("leads")
+    .select("yape_passed")
+    .eq("id", leadId)
+    .eq("yape_offered_to", user.id)
+    .maybeSingle();
+  if (!data) return { notice: "Ya no estaba asignado a ti." };
+  const prev = Array.isArray((data as { yape_passed?: unknown }).yape_passed)
+    ? (data as { yape_passed: string[] }).yape_passed
+    : [];
+  const passed = prev.includes(user.id) ? prev : [...prev, user.id];
+  await admin
+    .from("leads")
+    .update({ yape_offered_to: null, yape_offered_at: null, yape_passed: passed })
+    .eq("id", leadId)
+    .eq("yape_offered_to", user.id);
+  return { notice: "Pasado." };
+}
+
+/** Admin override: assign a Yape directly to a vendedora (resets the lap). */
+export async function assignYape(leadId: string, vendedoraId: string): Promise<LeadActionState> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const sb = await createServerSupabase();
+  const { data: rolesData } = await sb.from("memberships").select("role");
+  const roles = ((rolesData as { role: string }[] | null) ?? []).map((m) => m.role);
+  if (!roles.some((r) => r === "owner" || r === "admin")) {
+    return { error: "Solo un administrador puede asignar." };
+  }
+  const admin = createAdminSupabase();
+  await admin
+    .from("leads")
+    .update({ yape_offered_to: vendedoraId, yape_offered_at: new Date().toISOString(), yape_passed: [] })
+    .eq("id", leadId);
+  return { notice: "Asignado." };
+}
+
+/** Vendedoras of a store (id + display name) for the admin "assign" dropdown.
+ *  Returns [] for non-admins, so the UI self-gates. */
+export async function listStoreVendedoras(storeId: string): Promise<{ id: string; name: string }[]> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) return [];
+  const { data: rolesData } = await sb.from("memberships").select("role");
+  const roles = ((rolesData as { role: string }[] | null) ?? []).map((m) => m.role);
+  if (!roles.some((r) => r === "owner" || r === "admin")) return [];
+  const admin = createAdminSupabase();
+  const { data: store } = await admin.from("stores").select("org_id").eq("id", storeId).maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  if (!orgId) return [];
+  const { data: mem } = await admin
+    .from("memberships")
+    .select("user_id")
+    .eq("org_id", orgId)
+    .eq("role", "vendedora");
+  const vendIds = new Set(((mem as { user_id: string }[] | null) ?? []).map((m) => m.user_id));
+  const { data: acc } = await admin.from("user_store_access").select("user_id").eq("store_id", storeId);
+  const ids = ((acc as { user_id: string }[] | null) ?? [])
+    .map((a) => a.user_id)
+    .filter((id) => vendIds.has(id));
+  const out: { id: string; name: string }[] = [];
+  for (const id of ids) {
+    if (!agentNameCache.has(id)) {
+      try {
+        const { data } = await admin.auth.admin.getUserById(id);
+        const email = data?.user?.email ?? null;
+        agentNameCache.set(id, email ? email.split("@")[0]! : id.slice(0, 8));
+      } catch {
+        agentNameCache.set(id, id.slice(0, 8));
+      }
+    }
+    out.push({ id, name: agentNameCache.get(id)! });
+  }
+  return out;
 }
 
 /** Register a call: log it, apply the new status, set the next follow-up. */

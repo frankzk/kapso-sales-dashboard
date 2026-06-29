@@ -52,6 +52,7 @@ import {
 } from "@/app/dashboard/leads/actions";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { cn } from "@/components/ui";
+import { YapeAssign } from "@/components/yape-alerts";
 
 const inputCls =
   "mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
@@ -1385,6 +1386,11 @@ function LeadDrawer({
                   <p className="text-xs font-semibold tracking-wide uppercase opacity-80">Resumen del bot</p>
                   <p className="mt-1 whitespace-pre-wrap">{lead.handoff_context}</p>
                 </div>
+              )}
+
+              {/* Asignar Yape (solo admins; se auto-oculta para vendedoras) */}
+              {lead.status === "yape_por_verificar" && (
+                <YapeAssign leadId={lead.id} storeId={lead.store_id} onAssigned={onRegistered} />
               )}
 
               {/* Pedidos anteriores (cliente recurrente) */}
