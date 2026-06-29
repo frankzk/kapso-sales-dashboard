@@ -128,5 +128,16 @@ export function formatDailySummary(
   } else {
     lines.push("👥 Sin ventas registradas por asesores.");
   }
+
+  // Bot share = the residual not attributed to any advisor (orders the Kapso bot
+  // closed directly). Shown so the breakdown reconciles to the total.
+  const advisorOrders = s.advisors.reduce((sum, a) => sum + a.cerrados, 0);
+  const advisorRevenue = s.advisors.reduce((sum, a) => sum + a.ingresos, 0);
+  const botOrders = Math.max(0, s.totalOrders - advisorOrders);
+  const botRevenue = Math.round(Math.max(0, s.totalRevenue - advisorRevenue) * 100) / 100;
+  if (botOrders > 0) {
+    lines.push("");
+    lines.push(`🤖 <b>Bot</b> — ${botOrders} ${botOrders === 1 ? "venta" : "ventas"} · ${money(botRevenue)}`);
+  }
   return lines.join("\n");
 }

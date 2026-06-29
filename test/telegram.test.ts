@@ -59,6 +59,32 @@ describe("formatDailySummary", () => {
     expect(msg).toMatch(/Por asesor/);
   });
 
+  it("appends the bot residual so the breakdown reconciles to the total", () => {
+    // 30 total − (21 + 1) advisor = 8 bot orders; 4430 − (3180 + 800) = 450 bot revenue.
+    const msg = formatDailySummary("Aurela", "jue 26 jun", summary, "PEN");
+    expect(msg).toContain("Bot");
+    expect(msg).toContain("8 ventas");
+    expect(msg).toMatch(/Bot.*8 ventas/s);
+  });
+
+  it("renders the bot residual as the only seller when no advisor closed", () => {
+    // All orders closed by the bot (no human touches in the window).
+    const msg = formatDailySummary("Kenku", "jue 26 jun", { totalOrders: 3, totalRevenue: 300, advisors: [] }, "PEN");
+    expect(msg).toContain("Sin ventas"); // no advisor breakdown
+    expect(msg).toContain("Bot");
+    expect(msg).toContain("3 ventas");
+  });
+
+  it("omits the bot line when advisors account for every order", () => {
+    const exact: StoreDailySummary = {
+      totalOrders: 22,
+      totalRevenue: 3980,
+      advisors: summary.advisors,
+    };
+    const msg = formatDailySummary("Aurela", "jue 26 jun", exact, "PEN");
+    expect(msg).not.toContain("Bot");
+  });
+
   it("handles no advisor activity", () => {
     const msg = formatDailySummary("Kenku", "jue 26 jun", { totalOrders: 0, totalRevenue: 0, advisors: [] }, "PEN");
     expect(msg).toContain("Sin ventas");
