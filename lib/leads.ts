@@ -200,45 +200,34 @@ export function countLeadSegments(leads: LeadSegmentSignals[]): Record<LeadSegme
 }
 
 // ---------------------------------------------------------------------------
-// Queue tabs: the flat, single-select row over the "Por llamar" queue. It mixes
-// TWO axes on purpose — STATE (`sin_llamar` = nobody has called yet, status
-// `nuevo`; `seguimiento` = already gestioned but still pending) and SEGMENT
-// (frío…carrito). Counts overlap by design (a "Sin llamar + Carrito" lead shows
-// in both tabs). Default tab = `sin_llamar` (first contact is the priority).
+// Queue state: the PRIMARY axis over the "Por llamar" queue — has anyone called
+// this lead yet? `sin_llamar` = status `nuevo` (nobody touched it; the priority);
+// `seguimiento` = already gestioned but still pending (no responde, buzón, …).
+// It's a SEPARATE axis from the buyer-intent segment (frío…carrito); the two
+// combine — the segment row is scoped WITHIN the active state. Default `sin_llamar`.
 // ---------------------------------------------------------------------------
 
-export type QueueTab = "sin_llamar" | "seguimiento" | LeadSegment;
+export type QueueState = "sin_llamar" | "seguimiento";
 
-export const QUEUE_TABS: { key: QueueTab; label: string }[] = [
+export const QUEUE_STATES: { key: QueueState; label: string }[] = [
   { key: "sin_llamar", label: "Sin llamar" },
   { key: "seguimiento", label: "En seguimiento" },
-  { key: "frio", label: "Frío" },
-  { key: "converso", label: "Conversó" },
-  { key: "distrito", label: "Dio distrito" },
-  { key: "carrito", label: "🛒 Carrito" },
 ];
 
-export function isQueueTab(v: string | undefined | null): v is QueueTab {
-  return !!v && QUEUE_TABS.some((t) => t.key === v);
+export function isQueueState(v: string | undefined | null): v is QueueState {
+  return v === "sin_llamar" || v === "seguimiento";
 }
 
-/** Does a queue lead belong in `tab`? `sin_llamar`/`seguimiento` split on whether
- *  anyone has called yet (status `nuevo`); the rest match by buyer-intent segment. */
-export function matchesQueueTab(lead: LeadSegmentSignals, tab: QueueTab): boolean {
-  if (tab === "sin_llamar") return lead.status === "nuevo";
-  if (tab === "seguimiento") return lead.status !== "nuevo";
-  return leadSegment(lead) === tab;
+/** Split the queue by whether anyone has called the lead yet (status `nuevo`). */
+export function matchesQueueState(lead: { status: string }, state: QueueState): boolean {
+  return state === "sin_llamar" ? lead.status === "nuevo" : lead.status !== "nuevo";
 }
 
-/** Tab counts for a loaded queue batch (overlapping by design — see above). */
-export function countQueueTabs(leads: LeadSegmentSignals[]): Record<QueueTab, number> {
+/** State counts for a loaded queue batch: { sin_llamar, seguimiento }. */
+export function countQueueStates(leads: { status: string }[]): Record<QueueState, number> {
   let sinLlamar = 0;
   for (const l of leads) if (l.status === "nuevo") sinLlamar += 1;
-  return {
-    sin_llamar: sinLlamar,
-    seguimiento: leads.length - sinLlamar,
-    ...countLeadSegments(leads),
-  };
+  return { sin_llamar: sinLlamar, seguimiento: leads.length - sinLlamar };
 }
 
 // ---------------------------------------------------------------------------

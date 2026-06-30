@@ -17,21 +17,22 @@ import type { LeadsInsights } from "@/lib/leads-insights";
 import {
   LEAD_GESTIONES,
   MANUAL_STATUSES,
-  QUEUE_TABS,
+  QUEUE_STATES,
   categoryOf,
   countGestiones,
+  countLeadSegments,
   countLeadWindows,
-  countQueueTabs,
+  countQueueStates,
   gestionOf,
   isClaimActive,
   labelOf,
   leadSegment,
   leadWindowInfo,
-  matchesQueueTab,
+  matchesQueueState,
   type LeadGestion,
   type LeadSegment,
   type LeadWindow,
-  type QueueTab,
+  type QueueState,
 } from "@/lib/leads";
 import {
   claimLead,
@@ -204,6 +205,14 @@ const SEGMENT_BADGE: Record<LeadSegment, string> = {
 // Plain calificación labels (no emoji) for the row/drawer pills, per the redesign.
 const SEG_PILL_LABEL: Record<LeadSegment, string> = {
   carrito: "Con carrito",
+  distrito: "Dio distrito",
+  converso: "Conversó",
+  frio: "Frío",
+};
+
+// Labels for the segment "accesos directos" row (only Carrito carries an emoji).
+const SEG_TAB_LABEL: Record<LeadSegment, string> = {
+  carrito: "🛒 Carrito",
   distrito: "Dio distrito",
   converso: "Conversó",
   frio: "Frío",
@@ -504,7 +513,8 @@ export function LeadsBoard({
   waNumbers,
   currency,
   insights,
-  initialTab,
+  initialState,
+  initialSeg,
   initialGest,
   initialOpenId,
   currentUserId,
@@ -518,7 +528,8 @@ export function LeadsBoard({
   waNumbers?: Record<string, WaNumber>;
   currency: string;
   insights: LeadsInsights;
-  initialTab?: QueueTab | null;
+  initialState?: QueueState | null;
+  initialSeg?: LeadSegment | null;
   initialGest?: LeadGestion | null;
   initialOpenId?: string | null; // ?open=<id> → auto-abre ese lead (desde el pop-up de Yapes)
   currentUserId: string;
@@ -538,12 +549,12 @@ export function LeadsBoard({
   // intención/gestión axes within "Por llamar".
   // Fuente y Número: multi-select (OR dentro del grupo). Set vacío = sin filtro.
   const [srcFilter, setSrcFilter] = useState<Set<string>>(new Set());
-  // Pestaña primaria de la cola (fila plana, single-select). Default "Sin llamar"
-  // = leads que nadie ha tocado (status nuevo); "En seguimiento" = ya gestionados
-  // pero pendientes; el resto, por segmento. Los conteos solapan a propósito.
-  const [queueTab, setQueueTab] = useState<QueueTab>(initialTab ?? "sin_llamar");
-  // Gestión (No responde / Buzón / Contactados / Sin stock) es un refino dentro de
-  // "En seguimiento"; vive en Filtros. Sin default (la cola ya arranca en Sin llamar).
+  // Cola de DOS ejes que se combinan. Eje 1 (estado, tabs primarios): "Sin llamar"
+  // (default) = nadie lo tocó (status nuevo); "En seguimiento" = ya gestionado pero
+  // pendiente. Eje 2 (segmento, "accesos directos" debajo): frío…carrito, scopeado
+  // al estado activo. La Gestión es un refino que vive en Filtros (sin default).
+  const [queueState, setQueueState] = useState<QueueState>(initialState ?? "sin_llamar");
+  const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
   const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
   const [numFilter, setNumFilter] = useState<Set<string>>(new Set()); // WhatsApp phone_number_id(s) + "__none__"
@@ -675,10 +686,13 @@ export function LeadsBoard({
     if (!l.wa_phone_number_id) return numFilter.has("__none__");
     return numFilter.has(l.wa_phone_number_id);
   };
-  const matchTab = (l: LeadRow) => !inQueue || matchesQueueTab(l, queueTab);
+  // Eje 1 (estado) y eje 2 (segmento) son facets independientes que combinan por
+  // AND: el segmento se filtra DENTRO del estado activo (no lo reemplaza).
+  const matchState = (l: LeadRow) => !inQueue || matchesQueueState(l, queueState);
+  const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadSegment(l) === segFilter;
   const matchGest = (l: LeadRow) => {
     // En "Sin llamar" todos son nuevos → la gestión no aplica (su panel se oculta).
-    if (!inQueue || queueTab === "sin_llamar" || !gestFilter) return true;
+    if (!inQueue || queueState === "sin_llamar" || !gestFilter) return true;
     if (gestFilter === "otros") return gestionOf(l.status) === null; // casi_cierra, repetido, volver_a_llamar…
     return gestionOf(l.status) === gestFilter;
   };
@@ -689,7 +703,15 @@ export function LeadsBoard({
     if (winFilter === "por_vencer") return state === "por_vencer" || state === "critica";
     return state === "cerrada";
   };
-  const FACETS = { query: matchQuery, src: matchSrc, num: matchNum, tab: matchTab, gest: matchGest, win: matchWin };
+  const FACETS = {
+    query: matchQuery,
+    src: matchSrc,
+    num: matchNum,
+    state: matchState,
+    seg: matchSeg,
+    gest: matchGest,
+    win: matchWin,
+  };
   type Facet = keyof typeof FACETS;
   const facetKeys = Object.keys(FACETS) as Facet[];
   // Leads que pasan todos los filtros activos salvo el indicado: la base sobre
@@ -703,10 +725,16 @@ export function LeadsBoard({
   const hasCart = leads.some((l) => l.source === "cod_cart");
   const hasBrowse = leads.some((l) => l.source === "abandoned_browse");
 
-  // Conteos por pestaña sobre la base faceteada (todos los demás filtros salvo la
-  // propia pestaña). Solapan a propósito: un lead "Sin llamar + Carrito" suma en ambas.
-  const tabBase = leadsExcept("tab");
-  const tabCounts = countQueueTabs(tabBase);
+  // Eje 2 (segmento): conteos SCOPEADOS al estado activo. `leadsExcept("seg")` pasa
+  // el facet de estado, así que los segmentos suman el total del estado (p.ej. 237
+  // en Sin llamar), no los 429. "Todos" = ese total.
+  const segBase = leadsExcept("seg");
+  const segCounts = countLeadSegments(segBase);
+  const segTotal = segBase.length;
+  // Eje 1 (estado): tabs primarios con totales estables (237 / 192). Su base salta
+  // el propio estado Y el segmento, para no encogerse al elegir un segmento.
+  const stateBase = leads.filter((l) => facetKeys.every((k) => k === "state" || k === "seg" || FACETS[k](l)));
+  const stateCounts = countQueueStates(stateBase);
 
   const gestBase = leadsExcept("gest");
   const gestCounts = countGestiones(gestBase);
@@ -736,7 +764,7 @@ export function LeadsBoard({
 
   // Gestión solo cuenta como filtro activo donde es visible (no en "Sin llamar",
   // donde su panel se oculta y matchGest la ignora) — así el badge no miente.
-  const gestActive = inQueue && queueTab !== "sin_llamar" && !!gestFilter;
+  const gestActive = inQueue && queueState !== "sin_llamar" && !!gestFilter;
   // Filtros de refinamiento activos (excluye el buscador, que tiene su propia ✕).
   const hasActiveFilters =
     gestActive || (inQueue && winFilter !== "all") || srcFilter.size > 0 || numFilter.size > 0;
@@ -749,6 +777,7 @@ export function LeadsBoard({
     (numFilter.size > 0 ? 1 : 0) +
     (isReviewView ? 1 : 0);
   function clearFilters() {
+    setSegFilter(null);
     setGestFilter(null);
     setWinFilter("all");
     setSrcFilter(new Set());
@@ -811,17 +840,17 @@ export function LeadsBoard({
           {/* Tira de pestañas: en móvil scrollea sola (no empuja el ancho de la página). */}
           <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
           <SegControl
-            value={inQueue ? queueTab : ""}
+            value={inQueue ? queueState : ""}
             onChange={(key) => {
-              // Dentro de la cola es cambio de pestaña instantáneo (client-side, sin
-              // refetch); desde una vista de revisión, navega de vuelta a la cola.
-              if (inQueue) setQueueTab(key as QueueTab);
-              else router.push(`/dashboard/leads?store=${storeId}&view=por_llamar&tab=${key}`);
+              // Cambio de tab instantáneo (client-side, sin refetch); desde una vista
+              // de revisión, navega de vuelta a la cola en ese estado.
+              if (inQueue) setQueueState(key as QueueState);
+              else router.push(`/dashboard/leads?store=${storeId}&view=por_llamar&state=${key}`);
             }}
-            options={QUEUE_TABS.map((t) => ({
-              key: t.key,
-              label: t.label,
-              count: inQueue ? tabCounts[t.key] : undefined,
+            options={QUEUE_STATES.map((s) => ({
+              key: s.key,
+              label: s.label,
+              count: inQueue ? stateCounts[s.key] : undefined,
             }))}
           />
           {counts.yape > 0 && (
@@ -900,10 +929,30 @@ export function LeadsBoard({
           </button>
         </div>
 
+        {/* Fila 2 — accesos directos por segmento, scopeados al tab de estado activo
+            (en "Sin llamar" suman los 237, no los 429; en "En seguimiento", los 192). */}
+        {inQueue && (
+          <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
+            <SegControl
+              label="Segmento"
+              value={segFilter ?? "all"}
+              onChange={(key) => setSegFilter(key === "all" ? null : (key as LeadSegment))}
+              options={[
+                { key: "all", label: "Todos", count: segTotal },
+                ...(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((s) => ({
+                  key: s,
+                  label: SEG_TAB_LABEL[s],
+                  count: segCounts[s],
+                })),
+              ]}
+            />
+          </div>
+        )}
+
         {/* Panel "Más filtros" (colapsable): refinos de la cola · Fuente · Número · Vista. */}
         {more && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border border-slate-200 bg-white px-3.5 py-3 shadow-sm">
-            {view === "por_llamar" && queueTab !== "sin_llamar" && (
+            {view === "por_llamar" && queueState !== "sin_llamar" && (
               <SegControl
                 label="Gestión"
                 value={gestFilter ?? "all"}
