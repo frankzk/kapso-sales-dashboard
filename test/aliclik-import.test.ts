@@ -86,6 +86,26 @@ describe("parseAliclikRow", () => {
     expect(row.delivery_status).toBe("entregado");
   });
 
+  it("detects delivery via the 'ESTADO DE ENTREGA' header variant too", () => {
+    // some exports name the column with "DE" — must still classify as entregado
+    // (and not be mistaken for a despacho-status column).
+    expect(
+      parseAliclikRow({
+        "NRO. PEDIDO": "AUR5X108281725702",
+        "ESTADO DESPACHO": "VALIDADO",
+        "ESTADO DE ENTREGA": "ENTREGADO",
+      }).delivery_status,
+    ).toBe("entregado");
+    // entregado overrides even a failure-branch despacho (ciclo ya finalizado)
+    expect(
+      parseAliclikRow({
+        "NRO. PEDIDO": "AUR5X2",
+        "ESTADO DESPACHO": "POR DEVOLVER",
+        "ESTADO DE ENTREGA": "ENTREGADO",
+      }).delivery_status,
+    ).toBe("entregado");
+  });
+
   it("falls back to ESTADO DESPACHO when ESTADO ENTREGA isn't a delivery", () => {
     // non-delivered ESTADO ENTREGA values (CANCELADO, NO CONTESTA, etc.) don't
     // override — the despacho state drives the status.
