@@ -200,6 +200,48 @@ export function countLeadSegments(leads: LeadSegmentSignals[]): Record<LeadSegme
 }
 
 // ---------------------------------------------------------------------------
+// Queue tabs: the flat, single-select row over the "Por llamar" queue. It mixes
+// TWO axes on purpose — STATE (`sin_llamar` = nobody has called yet, status
+// `nuevo`; `seguimiento` = already gestioned but still pending) and SEGMENT
+// (frío…carrito). Counts overlap by design (a "Sin llamar + Carrito" lead shows
+// in both tabs). Default tab = `sin_llamar` (first contact is the priority).
+// ---------------------------------------------------------------------------
+
+export type QueueTab = "sin_llamar" | "seguimiento" | LeadSegment;
+
+export const QUEUE_TABS: { key: QueueTab; label: string }[] = [
+  { key: "sin_llamar", label: "Sin llamar" },
+  { key: "seguimiento", label: "En seguimiento" },
+  { key: "frio", label: "Frío" },
+  { key: "converso", label: "Conversó" },
+  { key: "distrito", label: "Dio distrito" },
+  { key: "carrito", label: "🛒 Carrito" },
+];
+
+export function isQueueTab(v: string | undefined | null): v is QueueTab {
+  return !!v && QUEUE_TABS.some((t) => t.key === v);
+}
+
+/** Does a queue lead belong in `tab`? `sin_llamar`/`seguimiento` split on whether
+ *  anyone has called yet (status `nuevo`); the rest match by buyer-intent segment. */
+export function matchesQueueTab(lead: LeadSegmentSignals, tab: QueueTab): boolean {
+  if (tab === "sin_llamar") return lead.status === "nuevo";
+  if (tab === "seguimiento") return lead.status !== "nuevo";
+  return leadSegment(lead) === tab;
+}
+
+/** Tab counts for a loaded queue batch (overlapping by design — see above). */
+export function countQueueTabs(leads: LeadSegmentSignals[]): Record<QueueTab, number> {
+  let sinLlamar = 0;
+  for (const l of leads) if (l.status === "nuevo") sinLlamar += 1;
+  return {
+    sin_llamar: sinLlamar,
+    seguimiento: leads.length - sinLlamar,
+    ...countLeadSegments(leads),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Gestión: a second axis over the "Por llamar" queue — the advisor's call
 // state (the disposition set in "registrar llamada"). Orthogonal to leadSegment
 // (buyer intent); the two combine. Lost dispositions live in the "Perdidos"

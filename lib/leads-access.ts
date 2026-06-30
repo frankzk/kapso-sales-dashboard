@@ -143,16 +143,20 @@ export async function getCustomerHistory(
   };
 }
 
-export async function getLeadCounts(storeId: string): Promise<Record<LeadView, number>> {
+/** View counts + `sin_llamar` (status `nuevo`), the default queue tab + burndown anchor. */
+export type LeadCounts = Record<LeadView, number> & { sin_llamar: number };
+
+export async function getLeadCounts(storeId: string): Promise<LeadCounts> {
   const sb = await createServerSupabase();
   const head = () => sb.from("leads").select("*", { count: "exact", head: true }).eq("store_id", storeId);
   const nowIso = new Date().toISOString();
-  const [porLlamar, yape, seguimientos, ganados, perdidos] = await Promise.all([
+  const [porLlamar, yape, seguimientos, ganados, perdidos, sinLlamar] = await Promise.all([
     head().in("category", ["open", "hot"]).neq("status", "yape_por_verificar"),
     head().eq("status", "yape_por_verificar"),
     head().not("next_followup_at", "is", null).lte("next_followup_at", nowIso),
     head().eq("category", "won"),
     head().eq("category", "lost"),
+    head().in("category", ["open", "hot"]).eq("status", "nuevo"), // "Sin llamar"
   ]);
   return {
     por_llamar: porLlamar.count ?? 0,
@@ -160,5 +164,6 @@ export async function getLeadCounts(storeId: string): Promise<Record<LeadView, n
     seguimientos: seguimientos.count ?? 0,
     ganados: ganados.count ?? 0,
     perdidos: perdidos.count ?? 0,
+    sin_llamar: sinLlamar.count ?? 0,
   };
 }
