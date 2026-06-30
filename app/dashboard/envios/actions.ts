@@ -13,6 +13,8 @@ import {
   type RerouteDisposition,
 } from "@/lib/shipments";
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
+import { getStoreCreds } from "@/lib/ingest";
+import { searchProductVariants, type ProductVariantResult } from "@/lib/shopify";
 import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
 
 export interface ShipmentActionState {
@@ -327,6 +329,37 @@ export async function resolveShipmentMatch(
   if (error) return { error: error.message };
   revalidatePath("/dashboard/envios");
   return { notice: "Marcado sin pedido." };
+}
+
+/**
+ * Search a store's Shopify catalog to populate the Fenix-stock product picker.
+ * RLS-authorized to the store; the store is only the catalog source (Fenix stock
+ * itself stays org-scoped). Degrades to [] if the store lacks read_products.
+ */
+export async function searchStockProducts(
+  storeId: string,
+  query: string,
+): Promise<ProductVariantResult[]> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  // RLS check: can the caller see this store?
+  const { data: store } = await sb.from("stores").select("id").eq("id", storeId).maybeSingle();
+  if (!store) return [];
+  const creds = await getStoreCreds(storeId);
+  if (!creds?.shopify_token) return [];
+  try {
+    return await searchProductVariants({
+      domain: creds.shopify_domain,
+      token: creds.shopify_token,
+      query,
+      first: 20,
+    });
+  } catch {
+    return []; // read_products not granted → picker degrades to a free-text product
+  }
 }
 
 // ── Fenix stock (admin) ──────────────────────────────────────────────────────

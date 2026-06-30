@@ -1,22 +1,32 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
-import { Card } from "@/components/ui";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { Card, cn } from "@/components/ui";
 import { FENIX_CITIES } from "@/lib/shipments";
-import type { FenixStockRowDb } from "@/lib/types";
-import { deleteFenixStock, upsertFenixStock } from "@/app/dashboard/envios/actions";
+import type { FenixStockRowDb, StoreSummary } from "@/lib/types";
+import {
+  deleteFenixStock,
+  searchStockProducts,
+  upsertFenixStock,
+} from "@/app/dashboard/envios/actions";
+
+type ProductResult = Awaited<ReturnType<typeof searchStockProducts>>[number];
 
 export function FenixStockEditor({
   rows,
   canEdit,
+  stores,
 }: {
   rows: FenixStockRowDb[];
   canEdit: boolean;
+  stores: StoreSummary[];
 }) {
   const router = useRouter();
+  const [storeId, setStoreId] = useState<string>(stores[0]?.id ?? "");
   const [city, setCity] = useState<string>(FENIX_CITIES[0] ?? "cusco");
   const [product, setProduct] = useState("");
+  const [sku, setSku] = useState<string | null>(null);
   const [quantity, setQuantity] = useState("0");
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -27,10 +37,12 @@ export function FenixStockEditor({
         city,
         product,
         quantity: Number(quantity) || 0,
+        sku,
       });
       setMsg(r.error ?? r.notice ?? null);
       if (!r.error) {
         setProduct("");
+        setSku(null);
         setQuantity("0");
         router.refresh();
       }
@@ -66,6 +78,24 @@ export function FenixStockEditor({
           <p className="text-sm font-medium text-slate-800">Agregar / actualizar</p>
           <div className="flex flex-wrap items-end gap-2">
             <div>
+              <label className="block text-xs text-slate-400">Tienda</label>
+              <select
+                value={storeId}
+                onChange={(e) => {
+                  setStoreId(e.target.value);
+                  setProduct(""); // catalog changes → reset the picked product
+                  setSku(null);
+                }}
+                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+              >
+                {stores.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
               <label className="block text-xs text-slate-400">Ciudad</label>
               <select
                 value={city}
@@ -79,13 +109,15 @@ export function FenixStockEditor({
                 ))}
               </select>
             </div>
-            <div className="flex-1">
+            <div className="min-w-[16rem] flex-1">
               <label className="block text-xs text-slate-400">Producto</label>
-              <input
+              <ProductCombobox
+                storeId={storeId}
                 value={product}
-                onChange={(e) => setProduct(e.target.value)}
-                placeholder="Nombre del producto"
-                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                onChange={(p, s) => {
+                  setProduct(p);
+                  setSku(s);
+                }}
               />
             </div>
             <div>
@@ -148,6 +180,108 @@ export function FenixStockEditor({
           </div>
         )}
       </Card>
+    </div>
+  );
+}
+
+/**
+ * Product typeahead sourced from the selected store's Shopify catalog (mirrors
+ * the leads ProductPicker). Empty query → active products, so focusing the field
+ * shows the catalog as a dropdown. Picking a product also carries its SKU; free
+ * typing keeps working (and clears the SKU) when read_products isn't granted.
+ */
+function ProductCombobox({
+  storeId,
+  value,
+  onChange,
+}: {
+  storeId: string;
+  value: string;
+  onChange: (product: string, sku: string | null) => void;
+}) {
+  const [results, setResults] = useState<ProductResult[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  // search on (value, store) change, debounced; empty value lists active products
+  useEffect(() => {
+    if (!storeId) {
+      setResults(null);
+      return;
+    }
+    setSearching(true);
+    let alive = true;
+    const t = setTimeout(async () => {
+      const r = await searchStockProducts(storeId, value.trim());
+      if (alive) {
+        setResults(r);
+        setSearching(false);
+      }
+    }, 280);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [value, storeId]);
+
+  // close the dropdown on outside click
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  return (
+    <div ref={boxRef} className="relative">
+      <input
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value, null); // typing clears the picked SKU
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        placeholder="Buscar producto…"
+        className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+      />
+      {open && (results !== null || searching) && (
+        <div className="absolute z-10 mt-1 w-full rounded-lg border border-slate-200 bg-white shadow-lg">
+          {searching && <p className="px-2.5 py-1.5 text-xs text-slate-400">Buscando…</p>}
+          {results && results.length === 0 && !searching && (
+            <p className="px-2.5 py-1.5 text-xs text-slate-400">
+              Sin resultados (o falta el permiso read_products). Puedes escribir el nombre.
+            </p>
+          )}
+          {results && results.length > 0 && (
+            <ul className="max-h-56 overflow-y-auto py-1">
+              {results.map((p) => (
+                <li key={p.variantId}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onChange(p.title, p.sku ?? null);
+                      setOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-slate-50"
+                  >
+                    <span className="flex-1 text-sm text-slate-800">{p.title}</span>
+                    <span
+                      className={cn(
+                        "text-xs",
+                        (p.inventory ?? 0) > 0 ? "text-slate-400" : "text-amber-600",
+                      )}
+                    >
+                      {p.inventory != null ? `stock ${p.inventory}` : ""}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 }
