@@ -3,8 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useRef, useState, useTransition } from "react";
 import { Card } from "@/components/ui";
-import type { ImportRowRow, StoreSummary } from "@/lib/types";
-import { resolveImportRow } from "@/app/dashboard/envios/actions";
+import type { ShipmentRow, StoreSummary } from "@/lib/types";
+import { resolveShipmentMatch } from "@/app/dashboard/envios/actions";
 
 export function ImportReview({
   stores,
@@ -13,7 +13,7 @@ export function ImportReview({
 }: {
   stores: StoreSummary[];
   storeId: string;
-  reviewRows: ImportRowRow[];
+  reviewRows: ShipmentRow[];
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -110,7 +110,7 @@ export function ImportReview({
         ) : (
           <ul className="divide-y divide-slate-100">
             {reviewRows.map((row) => (
-              <ReviewRow key={row.id} row={row} />
+              <ReviewRow key={row.id} shipment={row} />
             ))}
           </ul>
         )}
@@ -119,15 +119,14 @@ export function ImportReview({
   );
 }
 
-function ReviewRow({ row }: { row: ImportRowRow }) {
+function ReviewRow({ shipment }: { shipment: ShipmentRow }) {
   const router = useRouter();
   const [orderId, setOrderId] = useState("");
   const [pending, start] = useTransition();
-  const parsed = (row.parsed ?? {}) as Record<string, string>;
 
   function run(input: { orderId?: string | null }) {
     start(async () => {
-      await resolveImportRow(row.id, input);
+      await resolveShipmentMatch(shipment.id, input);
       router.refresh();
     });
   }
@@ -135,13 +134,13 @@ function ReviewRow({ row }: { row: ImportRowRow }) {
   return (
     <li className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-sm">
       <div className="min-w-0">
-        <p className="font-mono text-xs text-slate-700">{parsed.guide_code ?? "—"}</p>
+        <p className="font-mono text-xs text-slate-700">{shipment.guide_code}</p>
         <p className="text-slate-700">
-          {parsed.order_name ?? "sin pedido"} · {parsed.customer_name ?? "—"} ·{" "}
-          {parsed.customer_phone ?? "—"}
+          {shipment.order_name ?? "sin pedido"} · {shipment.customer_name ?? "—"} ·{" "}
+          {shipment.customer_phone ?? "—"}
         </p>
         <p className="text-xs text-slate-400">
-          {parsed.store_hint ?? ""} {parsed.city ? `· ${parsed.city}` : ""}
+          {shipment.product ?? ""} {shipment.city ? `· ${shipment.city}` : ""}
         </p>
       </div>
       <div className="flex items-center gap-2">

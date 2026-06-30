@@ -100,6 +100,17 @@ const PROVINCE_KEYS = ["provincia"];
 const DEPARTMENT_KEYS = ["departamento", "region"];
 const STORE_KEYS = ["tienda", "canal", "marca", "proveedor"];
 const ORDER_KEYS = ["pedido", "numero de pedido", "n pedido", "orden", "order"];
+// The customer-facing delivery outcome. In Aliclik's "order-delivery-report"
+// the platform column ("ESTADO DESPACHO") tops out at "validado" — a confirmed
+// delivery only ever shows up here, as "ENTREGADO". So we read this column to
+// override the despacho-derived status when the order was actually delivered.
+const ENTREGA_KEYS = ["estado entrega"];
+
+/** True when the "ESTADO ENTREGA" cell says the order was delivered. */
+function isDeliveredEntrega(raw: string | null): boolean {
+  if (!raw) return false;
+  return stripAccents(raw.trim().toLowerCase()) === "entregado";
+}
 
 /** Map one report row object → canonical ParsedShipmentRow. */
 export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow {
@@ -114,6 +125,12 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
   const fenixCity = normalizeCity(combined);
   const city = isFenixCity(fenixCity) ? fenixCity : district ? normalizeCity(district) : null;
 
+  // A confirmed delivery only appears in "ESTADO ENTREGA"; otherwise derive the
+  // status from the platform's "ESTADO DESPACHO" (which never reaches entregado).
+  const delivery_status = isDeliveredEntrega(pick(map, ENTREGA_KEYS))
+    ? "entregado"
+    : mapAliclikStatus(pick(map, STATUS_KEYS));
+
   return {
     guide_code: findGuideCode(raw),
     order_name: extractKpOrderName(map.get("nota"), pick(map, ORDER_KEYS)),
@@ -122,7 +139,7 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
     product: pick(map, PRODUCT_KEYS),
     district: district || null,
     city: city || null,
-    delivery_status: mapAliclikStatus(pick(map, STATUS_KEYS)),
+    delivery_status,
     store_hint: pick(map, STORE_KEYS),
     raw,
   };

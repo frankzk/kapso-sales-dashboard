@@ -1,5 +1,5 @@
 import { getAccessibleStores } from "@/lib/access";
-import { getReviewRows } from "@/lib/shipments-access";
+import { getReviewShipments } from "@/lib/shipments-access";
 import { EmptyState } from "@/components/ui";
 import { ImportReview } from "@/components/import-review";
 
@@ -17,7 +17,7 @@ export default async function ImportPage({
   }
   const fallback = stores[0]!;
   const storeId = sp.store && stores.some((s) => s.id === sp.store) ? sp.store : fallback.id;
-  const reviewRows = await getReviewRows(stores.map((s) => s.id));
+  const reviewRows = await getReviewShipments(stores.map((s) => s.id));
 
   return <ImportReview stores={stores} storeId={storeId} reviewRows={reviewRows} />;
 }

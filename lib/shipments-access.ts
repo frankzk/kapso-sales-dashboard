@@ -2,7 +2,26 @@
 // listing by view, counts, and a shipment + call-history detail loader.
 
 import { createServerSupabase } from "@/lib/db";
-import type { ImportRowRow, ShipmentCallRow, ShipmentRow } from "@/lib/types";
+import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
+
+// The manual-review queue: guides that didn't auto-link to an order AND still
+// need a human. We exclude terminal states (delivered/closed) — an already
+// delivered or returned guide needs no linking — and rows explicitly dismissed
+// as "sin pedido" (match_method='dismissed'). Driven off `shipments` (not
+// import_rows) so it dedupes by guide and reflects the latest re-import.
+const REVIEW_CATEGORIES = ["in_transit", "failure", "rerouting"];
+
+function isReviewShipment(r: {
+  matched: boolean;
+  status_category: string;
+  match_method: string | null;
+}): boolean {
+  return (
+    !r.matched &&
+    r.match_method !== "dismissed" &&
+    REVIEW_CATEGORIES.includes(r.status_category)
+  );
+}
 
 export type ShipmentView =
   | "por_reprogramar"
@@ -73,37 +92,34 @@ export async function getShipmentCounts(
   const sb = await createServerSupabase();
   const { data } = await sb
     .from("shipments")
-    .select("status_category")
+    .select("status_category,matched,match_method")
     .in("store_id", storeIds)
     .limit(20000);
-  for (const r of (data as { status_category: string }[]) ?? []) {
+  for (const r of (data as { status_category: string; matched: boolean; match_method: string | null }[]) ?? []) {
     if (r.status_category === "failure" || r.status_category === "rerouting") out.por_reprogramar += 1;
     else if (r.status_category === "in_transit") out.en_transito += 1;
     else if (r.status_category === "delivered") out.entregados += 1;
     else if (r.status_category === "closed") out.devueltos += 1;
+    // revisión: unmatched, non-terminal guides still needing a human
+    if (isReviewShipment(r)) out.revision += 1;
   }
-  // revisión: import rows still needing a human
-  const { count } = await sb
-    .from("import_rows")
-    .select("id", { count: "exact", head: true })
-    .in("store_id", storeIds)
-    .in("match_status", ["review", "unmatched"]);
-  out.revision = count ?? 0;
   return out;
 }
 
-/** Import rows awaiting manual review/match. */
-export async function getReviewRows(storeIds: string[]): Promise<ImportRowRow[]> {
+/** Unmatched shipments awaiting manual linking (the "Por revisar" queue). */
+export async function getReviewShipments(storeIds: string[]): Promise<ShipmentRow[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
   const { data } = await sb
-    .from("import_rows")
-    .select("id,batch_id,store_id,row_index,raw,parsed,match_status,shipment_id,error,created_at")
+    .from("shipments")
+    .select(SHIPMENT_COLUMNS)
     .in("store_id", storeIds)
-    .in("match_status", ["review", "unmatched"])
+    .eq("matched", false)
+    .in("status_category", REVIEW_CATEGORIES)
+    .or("match_method.is.null,match_method.neq.dismissed")
     .order("created_at", { ascending: false })
     .limit(1000);
-  return (data as ImportRowRow[]) ?? [];
+  return (data as ShipmentRow[]) ?? [];
 }
 
 /** A shipment + its call history (RLS-scoped). Drives the drawer. */
