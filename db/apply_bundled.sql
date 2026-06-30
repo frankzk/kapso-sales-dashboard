@@ -1072,3 +1072,211 @@ create index if not exists leads_yape_offer_idx
 -- ---- 0021 ----
 -- Telegram alert for unattended Yapes: when we last pinged the channel (dedup).
 alter table leads add column if not exists yape_alert_sent_at timestamptz;
+
+-- ---- 0022 ----
+-- ============================================================================
+-- 0022_shipments.sql — Envíos module: one row per courier guide (Aliclik AUR5X
+-- and Fenix sub-guides). Tracks the delivery state machine and carries an order
+-- snapshot so unmatched / Kenku guides work before the store is connected.
+--
+-- The AUR5X guide pool is shared across stores ("multitienda"), so the guide
+-- code is unique GLOBALLY by courier — NOT per store (the one deliberate
+-- departure from leads' unique(store_id, phone)). store_id is still carried for
+-- RLS scoping + per-store queue filters.
+--
+-- RLS: store-scoped reads; writes go through the service role (server actions),
+-- like the rest of the ingested data. Apply AFTER supabase/policies.sql.
+-- ============================================================================
+
+create table if not exists shipments (
+  id                 uuid primary key default gen_random_uuid(),
+  store_id           uuid not null references stores(id) on delete cascade,
+  -- identity: the courier + its guide code (AUR5X… for aliclik, tracking for fenix)
+  courier            text not null default 'aliclik',     -- aliclik | fenix
+  guide_code         text not null,
+  -- delivery state machine (see lib/shipments.ts)
+  delivery_status    text not null default 'por_preparar',
+  status_category    text not null default 'in_transit',  -- in_transit | delivered | failure | rerouting | closed
+  -- order linkage: auto-link to a synced order when matched; null for Kenku/unmatched
+  order_id           uuid references orders(id) on delete set null,
+  matched            boolean not null default false,
+  match_method       text,                                -- order_name | phone | manual | none
+  -- carried order snapshot (authoritative for Kenku + unmatched; cached for matched)
+  order_name         text,                                -- "#KP114985" as imported
+  customer_name      text,
+  customer_phone     text,                                -- normalized via lib/phone.ts
+  product            text,                                -- product/line summary from the report
+  district           text,
+  city               text,                                -- normalized city for Fenix coverage gating
+  region             text,
+  -- Fenix re-routing
+  fenix_eligible     boolean not null default false,      -- city covered AND stock>0 at last eval
+  fenix_shipment_id  uuid references shipments(id) on delete set null,  -- the Fenix sub-guide
+  reroute_attempts   integer not null default 0,          -- 0..5
+  reroute_outcome    text,                                -- reprogramado | entregado | devuelto | sin_cobertura | fin
+  -- call queue / claim (mirror leads)
+  claimed_by         uuid references auth.users(id) on delete set null,
+  claimed_at         timestamptz,
+  next_followup_at   timestamptz,
+  -- provenance
+  source_batch_id    uuid,                                -- references import_batches(id), added in 0024
+  last_report_at     timestamptz,                         -- max report timestamp seen (monotonic guard)
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now()
+);
+
+-- Guide code is unique per courier across the whole multitienda pool.
+create unique index if not exists shipments_guide_code_uniq on shipments(courier, guide_code);
+create index if not exists shipments_store_status_idx   on shipments(store_id, delivery_status);
+create index if not exists shipments_store_category_idx on shipments(store_id, status_category);
+create index if not exists shipments_store_followup_idx on shipments(store_id, next_followup_at);
+create index if not exists shipments_store_phone_idx    on shipments(store_id, customer_phone);
+create index if not exists shipments_order_idx          on shipments(order_id);
+create index if not exists shipments_reroute_idx        on shipments(store_id, fenix_eligible, status_category);
+
+alter table shipments enable row level security;
+
+drop policy if exists shipments_select on shipments;
+create policy shipments_select on shipments for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+grant select on shipments to authenticated;
+grant all privileges on shipments to service_role;
+
+-- keep updated_at fresh (touch_updated_at() defined in 0004_leads.sql)
+drop trigger if exists shipments_touch on shipments;
+create trigger shipments_touch before update on shipments
+  for each row execute function public.touch_updated_at();
+
+-- ---- 0023 ----
+-- ============================================================================
+-- 0023_shipment_calls.sql — activity log for shipments (calls, state changes,
+-- notes, re-routes). A near-verbatim copy of lead_calls, but a SEPARATE table:
+-- lead_calls.lead_id is NOT NULL + FK to leads, and a shipment often has no lead
+-- (Kenku/unmatched), so overloading lead_calls would break its schema + queries.
+--
+-- RLS: store-scoped reads; writes via service role. Apply after 0022.
+-- ============================================================================
+
+create table if not exists shipment_calls (
+  id                uuid primary key default gen_random_uuid(),
+  shipment_id       uuid not null references shipments(id) on delete cascade,
+  store_id          uuid not null references stores(id) on delete cascade,
+  agent             uuid references auth.users(id) on delete set null,  -- 'vendedora' equiv
+  kind              text not null default 'call',  -- call | state_change | note | reroute | system
+  new_status        text,                          -- delivery_status set, if any
+  note              text,
+  next_followup_at  timestamptz,
+  occurred_at       timestamptz not null default now(),
+  created_at        timestamptz not null default now()
+);
+create index if not exists shipment_calls_shipment_idx on shipment_calls(shipment_id, occurred_at desc);
+create index if not exists shipment_calls_store_idx     on shipment_calls(store_id, occurred_at desc);
+create index if not exists shipment_calls_agent_idx     on shipment_calls(agent, occurred_at desc);
+
+alter table shipment_calls enable row level security;
+
+drop policy if exists shipment_calls_select on shipment_calls;
+create policy shipment_calls_select on shipment_calls for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+grant select on shipment_calls to authenticated;
+grant all privileges on shipment_calls to service_role;
+
+-- ---- 0024 ----
+-- ============================================================================
+-- 0024_import_batches.sql — uploaded Aliclik delivery reports. import_batches is
+-- one upload; import_rows are the parsed source rows (kept for audit, idempotent
+-- re-import, and the manual-review queue: rows that didn't auto-match an order).
+--
+-- RLS: store-scoped reads; writes via service role. Apply after 0022/0023.
+-- ============================================================================
+
+create table if not exists import_batches (
+  id              uuid primary key default gen_random_uuid(),
+  store_id        uuid not null references stores(id) on delete cascade,  -- default store for unmatched rows
+  kind            text not null default 'aliclik_delivery',
+  filename        text,
+  uploaded_by     uuid references auth.users(id) on delete set null,
+  row_count       integer not null default 0,
+  matched_count   integer not null default 0,
+  unmatched_count integer not null default 0,
+  status          text not null default 'processed',  -- processing | processed | failed
+  error           text,
+  created_at      timestamptz not null default now()
+);
+create index if not exists import_batches_store_idx on import_batches(store_id, created_at desc);
+
+create table if not exists import_rows (
+  id            uuid primary key default gen_random_uuid(),
+  batch_id      uuid not null references import_batches(id) on delete cascade,
+  store_id      uuid not null references stores(id) on delete cascade,
+  row_index     integer not null,
+  raw           jsonb not null,                  -- the parsed source row (audit + re-match)
+  parsed        jsonb,                           -- canonicalized {guide_code, order_name, phone, ...}
+  match_status  text not null default 'pending', -- matched | unmatched | review | error
+  shipment_id   uuid references shipments(id) on delete set null,
+  error         text,
+  created_at    timestamptz not null default now()
+);
+create index if not exists import_rows_batch_idx  on import_rows(batch_id, row_index);
+create index if not exists import_rows_review_idx  on import_rows(store_id, match_status);
+
+alter table import_batches enable row level security;
+alter table import_rows    enable row level security;
+
+drop policy if exists import_batches_select on import_batches;
+create policy import_batches_select on import_batches for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+drop policy if exists import_rows_select on import_rows;
+create policy import_rows_select on import_rows for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+grant select on import_batches to authenticated;
+grant select on import_rows to authenticated;
+grant all privileges on import_batches to service_role;
+grant all privileges on import_rows to service_role;
+
+-- ---- 0025 ----
+-- ============================================================================
+-- 0025_fenix_stock.sql — admin-maintained Fenix stock per city × product. Used
+-- to gate whether a failed shipment can be re-routed to Fenix. Org-scoped (one
+-- table serves the whole multitienda operation, not per store).
+--
+-- This is the ONE module table authenticated users WRITE directly: org admins
+-- maintain it in-app (mirrors stores_admin_write in supabase/policies.sql).
+-- Server actions may still write via service role for consistency.
+-- ============================================================================
+
+create table if not exists fenix_stock (
+  id           uuid primary key default gen_random_uuid(),
+  org_id       uuid not null references organizations(id) on delete cascade,
+  city         text not null,            -- normalized: huancayo | juliaca | puno | cusco | arequipa | trujillo
+  product      text not null,            -- product/variant label (loose-matched to shipment.product)
+  sku          text,                     -- optional precise key for later
+  quantity     integer not null default 0,
+  updated_by   uuid references auth.users(id) on delete set null,
+  updated_at   timestamptz not null default now(),
+  created_at   timestamptz not null default now(),
+  unique (org_id, city, product)
+);
+create index if not exists fenix_stock_org_city_idx on fenix_stock(org_id, city);
+
+alter table fenix_stock enable row level security;
+
+drop policy if exists fenix_stock_select on fenix_stock;
+create policy fenix_stock_select on fenix_stock for select to authenticated
+  using (org_id in (select auth_org_ids()));
+
+drop policy if exists fenix_stock_write on fenix_stock;
+create policy fenix_stock_write on fenix_stock for all to authenticated
+  using (org_id in (select auth_admin_org_ids()))
+  with check (org_id in (select auth_admin_org_ids()));
+
+grant select, insert, update, delete on fenix_stock to authenticated;
+grant all privileges on fenix_stock to service_role;
+
+drop trigger if exists fenix_stock_touch on fenix_stock;
+create trigger fenix_stock_touch before update on fenix_stock
+  for each row execute function public.touch_updated_at();
