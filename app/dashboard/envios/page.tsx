@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export default async function EnviosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ store?: string; view?: string }>;
+  searchParams: Promise<{ view?: string }>;
 }) {
   const sp = await searchParams;
   const stores = await getAccessibleStores();
@@ -21,22 +21,19 @@ export default async function EnviosPage({
     return <EmptyState title="No tienes tiendas asignadas" />;
   }
 
-  const fallback = stores[0]!;
-  const storeId = sp.store && stores.some((s) => s.id === sp.store) ? sp.store : fallback.id;
   const view: ShipmentView = isShipmentView(sp.view) ? sp.view : "por_reprogramar";
 
-  // counts span all accessible stores; the queue lists every accessible store too
-  // (guides are a shared multitienda pool) — store selector narrows the view.
+  // counts + queue span ALL accessible stores (guides are a shared multitienda
+  // pool); the store/city multi-select filters happen client-side in the board.
   const storeIds = stores.map((s) => s.id);
   const [counts, shipments] = await Promise.all([
     getShipmentCounts(storeIds),
-    getStoreShipments([storeId], view),
+    getStoreShipments(storeIds, view),
   ]);
 
   return (
     <ShipmentsBoard
       stores={stores}
-      storeId={storeId}
       view={view}
       counts={counts}
       shipments={shipments}

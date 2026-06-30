@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import { Card } from "@/components/ui";
 import {
@@ -48,15 +48,15 @@ function StatusBadge({ category, status }: { category: string; status: string })
   );
 }
 
+const SIN_CIUDAD = "(sin ciudad)";
+
 export function ShipmentsBoard({
   stores,
-  storeId,
   view,
   counts,
   shipments,
 }: {
   stores: StoreSummary[];
-  storeId: string;
   view: ShipmentView;
   counts: Record<ShipmentView, number>;
   shipments: ShipmentRow[];
@@ -64,9 +64,39 @@ export function ShipmentsBoard({
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(null);
 
+  // store + city multi-select filters (client-side). Empty set = "all".
+  const [storeFilter, setStoreFilter] = useState<Set<string>>(new Set());
+  const [cityFilter, setCityFilter] = useState<Set<string>>(new Set());
+
+  const storeName = (id: string) => stores.find((s) => s.id === id)?.name ?? "—";
+
+  // distinct cities present in the loaded view, for the city picker
+  const cityOptions = Array.from(
+    new Set(shipments.map((s) => s.city || SIN_CIUDAD)),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const filtered = shipments.filter(
+    (s) =>
+      (storeFilter.size === 0 || storeFilter.has(s.store_id)) &&
+      (cityFilter.size === 0 || cityFilter.has(s.city || SIN_CIUDAD)),
+  );
+
   function go(params: Record<string, string>) {
-    const sp = new URLSearchParams({ store: storeId, view, ...params });
+    const sp = new URLSearchParams({ view, ...params });
     router.push(`/dashboard/envios?${sp.toString()}`);
+  }
+
+  function toggleStore(id: string) {
+    setStoreFilter((prev) => {
+      const next = new Set(prev);
+      // first click on an "all" (empty) set means "only this one"
+      if (next.size === 0) {
+        stores.forEach((s) => next.add(s.id));
+      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   return (
@@ -74,17 +104,6 @@ export function ShipmentsBoard({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-semibold text-slate-900">Envíos</h1>
         <div className="flex items-center gap-2">
-          <select
-            value={storeId}
-            onChange={(e) => go({ store: e.target.value })}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm"
-          >
-            {stores.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
           <a
             href="/dashboard/envios/import"
             className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
@@ -117,6 +136,55 @@ export function ShipmentsBoard({
         ))}
       </div>
 
+      {/* filters: store chips + city multi-select */}
+      {view !== "revision" && (
+        <div className="flex flex-wrap items-center gap-2">
+          {stores.length > 1 && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-slate-400">Tienda:</span>
+              {stores.map((s) => {
+                const active = storeFilter.size === 0 || storeFilter.has(s.id);
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => toggleStore(s.id)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-xs font-medium transition",
+                      active
+                        ? "border-brand-200 bg-brand-50 text-brand-700"
+                        : "border-slate-200 bg-white text-slate-400",
+                    )}
+                  >
+                    {s.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {cityOptions.length > 1 && (
+            <CityFilter
+              options={cityOptions}
+              selected={cityFilter}
+              onChange={setCityFilter}
+            />
+          )}
+          {(storeFilter.size > 0 || cityFilter.size > 0) && (
+            <button
+              onClick={() => {
+                setStoreFilter(new Set());
+                setCityFilter(new Set());
+              }}
+              className="text-xs text-slate-500 hover:underline"
+            >
+              Limpiar filtros
+            </button>
+          )}
+          <span className="ml-auto text-xs text-slate-400">
+            Mostrando {filtered.length} de {shipments.length}
+          </span>
+        </div>
+      )}
+
       {view === "revision" ? (
         <Card>
           <p className="text-sm text-slate-500">
@@ -129,14 +197,17 @@ export function ShipmentsBoard({
         </Card>
       ) : (
         <Card className="p-0">
-          {shipments.length === 0 ? (
-            <p className="p-5 text-sm text-slate-400">Sin envíos en esta vista.</p>
+          {filtered.length === 0 ? (
+            <p className="p-5 text-sm text-slate-400">
+              {shipments.length === 0 ? "Sin envíos en esta vista." : "Ningún envío con esos filtros."}
+            </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-xs text-slate-500">
                     <th className="px-4 py-2.5 text-left font-medium">Guía</th>
+                    {stores.length > 1 && <th className="px-4 py-2.5 text-left font-medium">Tienda</th>}
                     <th className="px-4 py-2.5 text-left font-medium">Pedido</th>
                     <th className="px-4 py-2.5 text-left font-medium">Cliente</th>
                     <th className="px-4 py-2.5 text-left font-medium">Ciudad</th>
@@ -145,7 +216,7 @@ export function ShipmentsBoard({
                   </tr>
                 </thead>
                 <tbody>
-                  {shipments.map((s) => (
+                  {filtered.map((s) => (
                     <tr
                       key={s.id}
                       onClick={() => setOpenId(s.id)}
@@ -159,6 +230,9 @@ export function ShipmentsBoard({
                           </span>
                         )}
                       </td>
+                      {stores.length > 1 && (
+                        <td className="px-4 py-2.5 text-slate-600">{storeName(s.store_id)}</td>
+                      )}
                       <td className="px-4 py-2.5 text-slate-700">{s.order_name ?? "—"}</td>
                       <td className="px-4 py-2.5 text-slate-700">
                         {s.customer_name ?? "—"}
@@ -410,6 +484,93 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Multi-select city filter: a button + popover checklist with a search box.
+ *  Empty selection = no filter (all cities shown). */
+function CityFilter({
+  options,
+  selected,
+  onChange,
+}: {
+  options: string[];
+  selected: Set<string>;
+  onChange: (next: Set<string>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  const term = q.trim().toLowerCase();
+  const shown = term ? options.filter((o) => o.toLowerCase().includes(term)) : options;
+
+  function toggle(city: string) {
+    const next = new Set(selected);
+    if (next.has(city)) next.delete(city);
+    else next.add(city);
+    onChange(next);
+  }
+
+  return (
+    <div ref={boxRef} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          "rounded-lg border px-2.5 py-1 text-xs font-medium",
+          selected.size > 0
+            ? "border-brand-200 bg-brand-50 text-brand-700"
+            : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+        )}
+      >
+        Ciudad{selected.size > 0 ? ` (${selected.size})` : ""} ▾
+      </button>
+      {open && (
+        <div className="absolute left-0 z-10 mt-1 w-60 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Buscar ciudad…"
+            className="mb-2 w-full rounded border border-slate-200 px-2 py-1 text-xs"
+          />
+          {selected.size > 0 && (
+            <button
+              onClick={() => onChange(new Set())}
+              className="mb-1 text-xs text-slate-500 hover:underline"
+            >
+              Limpiar selección
+            </button>
+          )}
+          <ul className="max-h-60 overflow-y-auto">
+            {shown.map((city) => (
+              <li key={city}>
+                <label className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-sm capitalize hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(city)}
+                    onChange={() => toggle(city)}
+                    className="h-3.5 w-3.5"
+                  />
+                  <span className="text-slate-700">{city}</span>
+                </label>
+              </li>
+            ))}
+            {shown.length === 0 && (
+              <li className="px-1.5 py-1 text-xs text-slate-400">Sin coincidencias.</li>
+            )}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
