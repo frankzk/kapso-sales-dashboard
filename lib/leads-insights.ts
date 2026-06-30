@@ -1,14 +1,13 @@
-// Dashboard insights for the Leads page: today's backlog burndown, the 7-day
-// flow & saldo, and today's per-advisor productivity.
+// Dashboard insights for the Leads page: today's "Sin llamar" burndown, the
+// 7-day sin-llamar flow, and today's per-advisor productivity.
 //
-// Everything is RECONSTRUCTED from existing lead timestamps — no snapshot job:
-//   • a lead ENTERS the queue at `created_at`;
-//   • a lead LEAVES the "por llamar" queue when it's resolved (won/lost) or moved
-//     to Yape — its leave time ≈ `last_interaction_at`;
-//   • the current backlog (`pendingNow` = "por llamar" count) is the anchor.
-// Walking those flows back from the anchor yields REAL history from day one. The
-// only fuzz: `last_interaction_at` is a proxy for an exact close time (we don't
-// store one), accurate for the vast majority of resolved leads. RLS-scoped.
+// Everything is RECONSTRUCTED from existing timestamps — no snapshot job:
+//   • a lead ENTERS "Sin llamar" when it's created (status `nuevo`) ≈ `first_seen_at`;
+//   • a lead LEAVES "Sin llamar" at its FIRST gestión — the earliest `lead_calls`
+//     row that moved its status off `nuevo` (`occurred_at`); re-touches don't recount;
+//   • the current backlog (`pendingNow` = "Sin llamar" count) is the anchor.
+// Walking those flows back from the anchor yields REAL history from day one.
+// RLS-scoped.
 
 import { createServerSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
@@ -141,8 +140,8 @@ export async function getLeadsInsights(
   }
   const windowStartIso = new Date(nowMs - 7 * 86_400_000).toISOString();
 
-  // Entrants (created) + leavers (left the "por llamar" queue: won/lost/Yape) in
-  // the window. Two light queries, run together.
+  // Entrants (entraron a "Sin llamar" = se crearon, status nuevo) + leavers
+  // (dejaron "Sin llamar" = primera gestión) + el universo actual sin llamar.
   const [entrantsRes, leaversRes, sinLlamarRes] = await Promise.all([
     // "Entró" = first_seen_at (fecha REAL de primer contacto), no created_at — que
     // es cuándo se insertó la fila y por un backfill masivo puede caer todo el
@@ -153,13 +152,20 @@ export async function getLeadsInsights(
       .eq("store_id", storeId)
       .or(`first_seen_at.gte.${windowStartIso},and(first_seen_at.is.null,created_at.gte.${windowStartIso})`)
       .limit(5000),
+    // "Salió de Sin llamar" = la PRIMERA gestión del lead: la fila de lead_calls
+    // más temprana que cambió su status a algo distinto de `nuevo` (una llamada
+    // con disposición o un pedido directo). Pedimos asc → la primera fila por lead
+    // es su salida real; re-toques posteriores (seguimiento) no recuentan. Más
+    // preciso que last_interaction_at. El tope cubre todo el historial de estas
+    // tiendas con holgura.
     sb
-      .from("leads")
-      .select("last_interaction_at")
+      .from("lead_calls")
+      .select("lead_id, occurred_at")
       .eq("store_id", storeId)
-      .gte("last_interaction_at", windowStartIso)
-      .or("category.in.(won,lost),status.eq.yape_por_verificar")
-      .limit(5000),
+      .not("new_status", "is", null)
+      .neq("new_status", "nuevo")
+      .order("occurred_at", { ascending: true })
+      .limit(20000),
     // "Sin llamar" = en cola (open/hot) y status `nuevo` (nunca lo gestionó un
     // asesor). Los agrupamos por fecha de última interacción para ver qué día
     // se está quedando gente sin llamar.
@@ -183,10 +189,12 @@ export async function getLeadsInsights(
   }
   const cierranByDate: Record<string, number> = {};
   const leaverHours: number[] = [];
-  for (const r of (leaversRes.data as { last_interaction_at: string | null }[]) ?? []) {
-    if (!r.last_interaction_at) continue;
-    const p = tzParts(r.last_interaction_at, tz);
-    cierranByDate[p.date] = (cierranByDate[p.date] ?? 0) + 1;
+  const seenLeaver = new Set<string>(); // primera salida por lead (asc → la más temprana)
+  for (const r of (leaversRes.data as { lead_id: string; occurred_at: string | null }[]) ?? []) {
+    if (!r.occurred_at || seenLeaver.has(r.lead_id)) continue;
+    seenLeaver.add(r.lead_id);
+    const p = tzParts(r.occurred_at, tz);
+    cierranByDate[p.date] = (cierranByDate[p.date] ?? 0) + 1; // fuera de la ventana: los consumidores no lo leen
     if (p.date === todayDate) leaverHours.push(p.hour);
   }
 

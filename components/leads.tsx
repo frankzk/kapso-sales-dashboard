@@ -11,24 +11,27 @@ import {
   type AdMeta,
 } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
-import { type CustomerHistory, type LeadView } from "@/lib/leads-access";
+import { type CustomerHistory, type LeadCounts, type LeadView } from "@/lib/leads-access";
 import { LeadsInsightsPanel } from "@/components/leads-insights";
 import type { LeadsInsights } from "@/lib/leads-insights";
 import {
   LEAD_GESTIONES,
   MANUAL_STATUSES,
+  QUEUE_TABS,
   categoryOf,
   countGestiones,
-  countLeadSegments,
   countLeadWindows,
+  countQueueTabs,
   gestionOf,
   isClaimActive,
   labelOf,
   leadSegment,
   leadWindowInfo,
+  matchesQueueTab,
   type LeadGestion,
   type LeadSegment,
   type LeadWindow,
+  type QueueTab,
 } from "@/lib/leads";
 import {
   claimLead,
@@ -201,14 +204,6 @@ const SEGMENT_BADGE: Record<LeadSegment, string> = {
 // Plain calificación labels (no emoji) for the row/drawer pills, per the redesign.
 const SEG_PILL_LABEL: Record<LeadSegment, string> = {
   carrito: "Con carrito",
-  distrito: "Dio distrito",
-  converso: "Conversó",
-  frio: "Frío",
-};
-
-// Primary-tab labels for the segment queue (only Carrito carries an emoji).
-const SEG_TAB_LABEL: Record<LeadSegment, string> = {
-  carrito: "🛒 Carrito",
   distrito: "Dio distrito",
   converso: "Conversó",
   frio: "Frío",
@@ -509,7 +504,7 @@ export function LeadsBoard({
   waNumbers,
   currency,
   insights,
-  initialSeg,
+  initialTab,
   initialGest,
   initialOpenId,
   currentUserId,
@@ -517,13 +512,13 @@ export function LeadsBoard({
   stores: StoreSummary[];
   storeId: string;
   view: LeadView;
-  counts: Record<LeadView, number>;
+  counts: LeadCounts;
   leads: LeadRow[];
   adNames?: Record<string, AdMeta>;
   waNumbers?: Record<string, WaNumber>;
   currency: string;
   insights: LeadsInsights;
-  initialSeg?: LeadSegment | null;
+  initialTab?: QueueTab | null;
   initialGest?: LeadGestion | null;
   initialOpenId?: string | null; // ?open=<id> → auto-abre ese lead (desde el pop-up de Yapes)
   currentUserId: string;
@@ -543,12 +538,13 @@ export function LeadsBoard({
   // intención/gestión axes within "Por llamar".
   // Fuente y Número: multi-select (OR dentro del grupo). Set vacío = sin filtro.
   const [srcFilter, setSrcFilter] = useState<Set<string>>(new Set());
-  const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
-  // Por defecto la cola arranca en "Sin llamar" (los leads que nadie tomó). Un
-  // ?gest= explícito gana; un ?seg= (drill-down) no fuerza el default.
-  const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(
-    initialGest ?? (view === "por_llamar" && !initialSeg ? "sin_llamar" : null),
-  );
+  // Pestaña primaria de la cola (fila plana, single-select). Default "Sin llamar"
+  // = leads que nadie ha tocado (status nuevo); "En seguimiento" = ya gestionados
+  // pero pendientes; el resto, por segmento. Los conteos solapan a propósito.
+  const [queueTab, setQueueTab] = useState<QueueTab>(initialTab ?? "sin_llamar");
+  // Gestión (No responde / Buzón / Contactados / Sin stock) es un refino dentro de
+  // "En seguimiento"; vive en Filtros. Sin default (la cola ya arranca en Sin llamar).
+  const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
   const [numFilter, setNumFilter] = useState<Set<string>>(new Set()); // WhatsApp phone_number_id(s) + "__none__"
   // Search box: instant client-side narrowing of the current view PLUS a
@@ -679,9 +675,10 @@ export function LeadsBoard({
     if (!l.wa_phone_number_id) return numFilter.has("__none__");
     return numFilter.has(l.wa_phone_number_id);
   };
-  const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadSegment(l) === segFilter;
+  const matchTab = (l: LeadRow) => !inQueue || matchesQueueTab(l, queueTab);
   const matchGest = (l: LeadRow) => {
-    if (!inQueue || !gestFilter) return true;
+    // En "Sin llamar" todos son nuevos → la gestión no aplica (su panel se oculta).
+    if (!inQueue || queueTab === "sin_llamar" || !gestFilter) return true;
     if (gestFilter === "otros") return gestionOf(l.status) === null; // casi_cierra, repetido, volver_a_llamar…
     return gestionOf(l.status) === gestFilter;
   };
@@ -692,7 +689,7 @@ export function LeadsBoard({
     if (winFilter === "por_vencer") return state === "por_vencer" || state === "critica";
     return state === "cerrada";
   };
-  const FACETS = { query: matchQuery, src: matchSrc, num: matchNum, seg: matchSeg, gest: matchGest, win: matchWin };
+  const FACETS = { query: matchQuery, src: matchSrc, num: matchNum, tab: matchTab, gest: matchGest, win: matchWin };
   type Facet = keyof typeof FACETS;
   const facetKeys = Object.keys(FACETS) as Facet[];
   // Leads que pasan todos los filtros activos salvo el indicado: la base sobre
@@ -706,9 +703,10 @@ export function LeadsBoard({
   const hasCart = leads.some((l) => l.source === "cod_cart");
   const hasBrowse = leads.some((l) => l.source === "abandoned_browse");
 
-  const segBase = leadsExcept("seg");
-  const segCounts = countLeadSegments(segBase);
-  const segTotal = segBase.length;
+  // Conteos por pestaña sobre la base faceteada (todos los demás filtros salvo la
+  // propia pestaña). Solapan a propósito: un lead "Sin llamar + Carrito" suma en ambas.
+  const tabBase = leadsExcept("tab");
+  const tabCounts = countQueueTabs(tabBase);
 
   const gestBase = leadsExcept("gest");
   const gestCounts = countGestiones(gestBase);
@@ -736,19 +734,21 @@ export function LeadsBoard({
   const waIds = [...new Set(leads.map((l) => l.wa_phone_number_id).filter((id): id is string => !!id))];
   const hasMultiNumbers = waIds.length >= 2;
 
+  // Gestión solo cuenta como filtro activo donde es visible (no en "Sin llamar",
+  // donde su panel se oculta y matchGest la ignora) — así el badge no miente.
+  const gestActive = inQueue && queueTab !== "sin_llamar" && !!gestFilter;
   // Filtros de refinamiento activos (excluye el buscador, que tiene su propia ✕).
   const hasActiveFilters =
-    (inQueue && (!!segFilter || !!gestFilter || winFilter !== "all")) || srcFilter.size > 0 || numFilter.size > 0;
-  // Badge on the "Filtros" button: count the active refinement groups (segmento
-  // ya es una pestaña principal, así que no cuenta aquí).
+    gestActive || (inQueue && winFilter !== "all") || srcFilter.size > 0 || numFilter.size > 0;
+  // Badge on the "Filtros" button: count the active refinement groups (la pestaña
+  // primaria de la cola no cuenta aquí).
   const refinementCount =
-    (inQueue && !!gestFilter ? 1 : 0) +
+    (gestActive ? 1 : 0) +
     (inQueue && winFilter !== "all" ? 1 : 0) +
     (srcFilter.size > 0 ? 1 : 0) +
     (numFilter.size > 0 ? 1 : 0) +
     (isReviewView ? 1 : 0);
   function clearFilters() {
-    setSegFilter(null);
     setGestFilter(null);
     setWinFilter("all");
     setSrcFilter(new Set());
@@ -763,14 +763,16 @@ export function LeadsBoard({
 
   return (
     <div className="space-y-4">
-      {/* Título "Leads" + tablero de hoy (burndown · flujo/saldo · productividad). */}
+      {/* Título "Leads" + tablero de hoy (burndown · sin llamar · productividad). */}
       <LeadsInsightsPanel
         data={insights}
         titleSlot={
           <div>
             <h1 className="text-xl font-semibold text-slate-900">Leads</h1>
             <p className="mt-0.5 text-sm text-slate-500">
-              <span className="font-semibold text-slate-800">{counts.por_llamar} por llamar</span> hoy
+              <span className="font-semibold text-slate-800">{counts.sin_llamar} sin llamar</span>
+              {" · "}
+              <span className="text-slate-600">{counts.por_llamar - counts.sin_llamar} en seguimiento</span>
               {counts.yape > 0 && (
                 <>
                   {" · "}
@@ -804,27 +806,23 @@ export function LeadsBoard({
       />
 
       <div className="sticky top-0 z-10 space-y-2 bg-slate-50 pt-1 pb-2">
-        {/* Toolbar: pestañas de la cola por segmento · píldora Yape/Shalom · Filtros. */}
+        {/* Toolbar: pestañas de la cola (Sin llamar/En seguimiento/segmento) · píldora Yape/Shalom · Filtros. */}
         <div className="flex items-center gap-2">
           {/* Tira de pestañas: en móvil scrollea sola (no empuja el ancho de la página). */}
           <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
           <SegControl
-            value={view === "por_llamar" ? (segFilter ?? "all") : ""}
+            value={inQueue ? queueTab : ""}
             onChange={(key) => {
-              if (view === "por_llamar") setSegFilter(key === "all" ? null : (key as LeadSegment));
-              else
-                router.push(
-                  `/dashboard/leads?store=${storeId}&view=por_llamar${key !== "all" ? `&seg=${key}` : ""}`,
-                );
+              // Dentro de la cola es cambio de pestaña instantáneo (client-side, sin
+              // refetch); desde una vista de revisión, navega de vuelta a la cola.
+              if (inQueue) setQueueTab(key as QueueTab);
+              else router.push(`/dashboard/leads?store=${storeId}&view=por_llamar&tab=${key}`);
             }}
-            options={[
-              { key: "all", label: "Por llamar", count: counts.por_llamar },
-              ...(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((s) => ({
-                key: s,
-                label: SEG_TAB_LABEL[s],
-                count: view === "por_llamar" ? segCounts[s] : undefined,
-              })),
-            ]}
+            options={QUEUE_TABS.map((t) => ({
+              key: t.key,
+              label: t.label,
+              count: inQueue ? tabCounts[t.key] : undefined,
+            }))}
           />
           {counts.yape > 0 && (
             <button
@@ -905,7 +903,7 @@ export function LeadsBoard({
         {/* Panel "Más filtros" (colapsable): refinos de la cola · Fuente · Número · Vista. */}
         {more && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border border-slate-200 bg-white px-3.5 py-3 shadow-sm">
-            {view === "por_llamar" && (
+            {view === "por_llamar" && queueTab !== "sin_llamar" && (
               <SegControl
                 label="Gestión"
                 value={gestFilter ?? "all"}

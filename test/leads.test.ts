@@ -18,6 +18,10 @@ import {
   gestionOf,
   isLeadGestion,
   countGestiones,
+  QUEUE_TABS,
+  isQueueTab,
+  matchesQueueTab,
+  countQueueTabs,
 } from "@/lib/leads";
 
 describe("gestionOf / countGestiones (call-state buckets)", () => {
@@ -101,6 +105,60 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
     expect(LEAD_SEGMENTS.map((s) => s.key)).toEqual(["carrito", "distrito", "converso", "frio"]);
     expect(isLeadSegment("carrito")).toBe(true);
     expect(isLeadSegment("nope")).toBe(false);
+  });
+});
+
+describe("queue tabs (flat single-select row over Por llamar)", () => {
+  it("QUEUE_TABS lists state axes first, then segments, in order", () => {
+    expect(QUEUE_TABS.map((t) => t.key)).toEqual([
+      "sin_llamar",
+      "seguimiento",
+      "frio",
+      "converso",
+      "distrito",
+      "carrito",
+    ]);
+  });
+
+  it("isQueueTab accepts tabs (incl. segments) but not gestión/loose keys", () => {
+    expect(isQueueTab("sin_llamar")).toBe(true);
+    expect(isQueueTab("seguimiento")).toBe(true);
+    expect(isQueueTab("carrito")).toBe(true); // a segment is also a tab
+    expect(isQueueTab("nr")).toBe(false); // that's a gestión bucket
+    expect(isQueueTab("all")).toBe(false);
+    expect(isQueueTab(undefined)).toBe(false);
+  });
+
+  it("sin_llamar / seguimiento split on whether anyone has called (status nuevo)", () => {
+    const nuevo = { status: "nuevo" };
+    const gestionado = { status: "no_responde" };
+    expect(matchesQueueTab(nuevo, "sin_llamar")).toBe(true);
+    expect(matchesQueueTab(nuevo, "seguimiento")).toBe(false);
+    expect(matchesQueueTab(gestionado, "sin_llamar")).toBe(false);
+    expect(matchesQueueTab(gestionado, "seguimiento")).toBe(true);
+  });
+
+  it("segment tabs match by buyer-intent; axes overlap on purpose", () => {
+    // A gestioned lead that conversó shows in BOTH "En seguimiento" and "Conversó".
+    const lead = { status: "no_responde", inbound_count: 5 };
+    expect(matchesQueueTab(lead, "seguimiento")).toBe(true);
+    expect(matchesQueueTab(lead, "converso")).toBe(true);
+    expect(matchesQueueTab(lead, "carrito")).toBe(false);
+    // A fresh lead with a cart shows in BOTH "Sin llamar" and "Carrito".
+    const carrito = { status: "nuevo", cart_item_count: 2 };
+    expect(matchesQueueTab(carrito, "sin_llamar")).toBe(true);
+    expect(matchesQueueTab(carrito, "carrito")).toBe(true);
+  });
+
+  it("countQueueTabs tallies the two state axes + the four segments (overlapping)", () => {
+    expect(
+      countQueueTabs([
+        { status: "nuevo", cart_item_count: 1 }, // sin_llamar + carrito
+        { status: "nuevo", inbound_count: 0 }, // sin_llamar + frio
+        { status: "no_responde", district: "Ate" }, // seguimiento + distrito
+        { status: "contactado_dejo_wsp", inbound_count: 3 }, // seguimiento + converso
+      ]),
+    ).toEqual({ sin_llamar: 2, seguimiento: 2, carrito: 1, distrito: 1, converso: 1, frio: 1 });
   });
 });
 
