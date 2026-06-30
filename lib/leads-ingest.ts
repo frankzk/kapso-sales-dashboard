@@ -234,13 +234,21 @@ export async function syncStoreLeads(
     for (const l of (data as ExistingLead[]) ?? []) existingByPhone.set(l.phone, l);
   }
 
+  // Last manual call disposition per phone → a cart only counts as "new intent"
+  // (reopen) when it post-dates the agent's registered result. Otherwise a cart
+  // created BEFORE the disposition would wrongly revert a worked lead to "Sin
+  // llamar".
+  const dispositionByPhone = await lastDispositionAtByPhone(admin, storeId, phones);
+
   let maxTs = cursor;
   for (const phone of phones) {
     const seed = seeds.get(phone)!;
     const existing = existingByPhone.get(phone) ?? null;
     const order = orderByPhone.get(phone);
     const cartAt = newestOpenCartAt.get(phone) ?? null;
-    const hasRecentIntent = !!(order?.createdAt && cartAt && cartAt > order.createdAt);
+    const hasRecentIntent =
+      !!(order?.createdAt && cartAt && cartAt > order.createdAt) &&
+      eventOverridesDisposition(cartAt, dispositionByPhone.get(phone));
     await upsertLeadFromSeed(admin, storeId, seed, {
       hasOrder: !!order,
       orderId: order?.id ?? null,
@@ -479,24 +487,76 @@ export async function archiveStaleLeads(
   return ids.length;
 }
 
-/** Mark the lead for an order's customer as won (sticky), creating it if new. */
+/** Whether an automatic order/cart event may override the lead's state: only when
+ *  it post-dates the agent's last manual call disposition (or there is none).
+ *  Keeps a registered result (e.g. "ya compró en otro lado") from being reverted
+ *  to "Sin llamar" by an order/cart that predates it. Pure. */
+export function eventOverridesDisposition(
+  eventAt: string | null | undefined,
+  dispositionAt: string | null | undefined,
+): boolean {
+  if (!dispositionAt) return true; // no human result to respect
+  if (!eventAt) return false; // can't prove the event is newer → respect the result
+  return eventAt > dispositionAt;
+}
+
+/** Most recent MANUAL call disposition time per phone (when an agent set a call
+ *  result). The auto-sync must not override a disposition with an order/cart that
+ *  predates it. Returns {} on any error. */
+export async function lastDispositionAtByPhone(
+  admin: SupabaseClient,
+  storeId: string,
+  phones: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!phones.length) return out;
+  const { data: leadRows } = await admin
+    .from("leads")
+    .select("id, phone")
+    .eq("store_id", storeId)
+    .in("phone", phones);
+  const phoneById = new Map<string, string>();
+  const ids: string[] = [];
+  for (const l of (leadRows as { id: string; phone: string }[]) ?? []) {
+    phoneById.set(l.id, l.phone);
+    ids.push(l.id);
+  }
+  if (!ids.length) return out;
+  const { data: calls } = await admin
+    .from("lead_calls")
+    .select("lead_id, occurred_at")
+    .eq("store_id", storeId)
+    .eq("kind", "call")
+    .not("new_status", "is", null)
+    .in("lead_id", ids);
+  for (const c of (calls as { lead_id: string; occurred_at: string }[]) ?? []) {
+    const phone = phoneById.get(c.lead_id);
+    if (!phone) continue;
+    const prev = out.get(phone);
+    if (!prev || c.occurred_at > prev) out.set(phone, c.occurred_at);
+  }
+  return out;
+}
+
+/** Mark the lead for an order's customer as won (sticky), creating it if new.
+ *  `win` is false when the order predates the agent's last manual disposition →
+ *  we only link the order (has_order/order_id) and keep the registered result. */
 export async function linkOrderToLead(
   admin: SupabaseClient,
-  params: { storeId: string; phone: string | null; orderId: string | null },
+  params: { storeId: string; phone: string | null; orderId: string | null; win?: boolean },
 ): Promise<void> {
   if (!params.phone) return;
-  await admin.from("leads").upsert(
-    {
-      store_id: params.storeId,
-      phone: params.phone,
-      has_order: true,
-      order_id: params.orderId,
-      status: "pedido_generado",
-      category: "won",
-      needs_attention: false,
-    },
-    { onConflict: "store_id,phone" },
-  );
+  const base = {
+    store_id: params.storeId,
+    phone: params.phone,
+    has_order: true,
+    order_id: params.orderId,
+  };
+  const row =
+    params.win === false
+      ? base
+      : { ...base, status: "pedido_generado", category: "won", needs_attention: false };
+  await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
 }
 
 /**
@@ -507,7 +567,7 @@ export async function linkOrderToLead(
 export async function linkOrdersToLeads(
   admin: SupabaseClient,
   storeId: string,
-  orders: { shopify_order_id: number | string | null; customer_phone?: string | null }[],
+  orders: { shopify_order_id: number | string | null; customer_phone?: string | null; created_at?: string | null }[],
 ): Promise<void> {
   const withPhone = orders.filter((o) => o.customer_phone && o.shopify_order_id != null);
   if (!withPhone.length) return;
@@ -523,11 +583,17 @@ export async function linkOrdersToLeads(
     idByShopifyId.set(String(r.shopify_order_id), r.id);
   }
 
+  // Don't override a registered call result with an order that predates it.
+  const dispositionAt = await lastDispositionAtByPhone(admin, storeId, [
+    ...new Set(withPhone.map((o) => o.customer_phone as string)),
+  ]);
+
   for (const o of withPhone) {
     await linkOrderToLead(admin, {
       storeId,
       phone: o.customer_phone ?? null,
       orderId: idByShopifyId.get(String(o.shopify_order_id)) ?? null,
+      win: eventOverridesDisposition(o.created_at, dispositionAt.get(o.customer_phone as string)),
     });
   }
 }
@@ -904,6 +970,10 @@ export async function linkDraftOrdersToLeads(
     }
   }
 
+  // Last manual call disposition per phone → a repeat cart only reopens a won lead
+  // when it post-dates the agent's registered result (don't revert a worked lead).
+  const dispositionByPhone = await lastDispositionAtByPhone(admin, storeId, phones);
+
   const recoveredDates: string[] = []; // created_at of newly-captured recovered orders
   const graceMs = DRAFT_GRACE_MINUTES * 60_000;
   for (const d of eligible) {
@@ -918,8 +988,12 @@ export async function linkDraftOrdersToLeads(
     if (d.created_at && Date.now() - new Date(d.created_at).getTime() < graceMs) continue;
     const phone = d.customer_phone as string;
     const wonAt = orderCreatedAt.get(phone);
-    // Reopen only a WON lead whose new cart post-dates its order (recompra).
-    const reopen = existingCategory.get(phone) === "won" && !!(wonAt && d.created_at && d.created_at > wonAt);
+    // Reopen only a WON lead whose new cart post-dates its order (recompra) AND
+    // also post-dates the agent's last manual disposition (don't revert a result).
+    const reopen =
+      existingCategory.get(phone) === "won" &&
+      !!(wonAt && d.created_at && d.created_at > wonAt) &&
+      eventOverridesDisposition(d.created_at, dispositionByPhone.get(phone));
     await upsertDraftCartLead(admin, storeId, d, existingCategory.has(phone), reopen);
   }
   return recoveredDates;

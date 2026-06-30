@@ -55,6 +55,9 @@ class FakeBuilder {
     this.filters[k] = v;
     return this;
   }
+  not() {
+    return this;
+  }
   delete() {
     this.op = "delete";
     return this;

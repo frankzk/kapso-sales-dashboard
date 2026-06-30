@@ -34,7 +34,9 @@ import {
 } from "@/lib/metrics";
 import {
   archiveStaleLeads,
+  eventOverridesDisposition,
   flagOverdueFollowups,
+  lastDispositionAtByPhone,
   linkDraftOrdersToLeads,
   linkOrderToLead,
   linkOrdersToLeads,
@@ -407,10 +409,13 @@ async function processOrderWebhook(
         .eq("store_id", params.storeId)
         .eq("shopify_order_id", row.shopify_order_id)
         .maybeSingle();
+      // Don't override a registered call result with an order that predates it.
+      const dispAt = await lastDispositionAtByPhone(admin, params.storeId, [row.customer_phone]);
       await linkOrderToLead(admin, {
         storeId: params.storeId,
         phone: row.customer_phone,
         orderId: ord?.id ?? null,
+        win: eventOverridesDisposition(row.created_at, dispAt.get(row.customer_phone)),
       });
     } catch {
       /* best-effort */
