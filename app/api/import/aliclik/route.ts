@@ -7,6 +7,8 @@ import { ingestAliclikReport } from "@/lib/aliclik-ingest";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Large reports (1000s of rows) parse + bulk-write here; give the function room.
+export const maxDuration = 120;
 
 // Upload an Aliclik delivery report (CSV or XLSX) and ingest it into shipments.
 //   POST /api/import/aliclik   (multipart: file=<report>, storeId=<default store>)
