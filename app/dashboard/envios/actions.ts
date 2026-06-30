@@ -13,6 +13,8 @@ import {
   type RerouteDisposition,
 } from "@/lib/shipments";
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
+import { getStoreCreds } from "@/lib/ingest";
+import { searchProductVariants, type ProductVariantResult } from "@/lib/shopify";
 import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
 
 export interface ShipmentActionState {
@@ -283,61 +285,81 @@ export async function createFenixGuide(
 }
 
 /**
- * Resolve a manual-review import row: either link it to an order (and mark the
- * shipment matched) or confirm it has no order (Kenku/manual).
+ * Resolve an unmatched shipment in the "Por revisar" queue: either link it to an
+ * order (mark it matched) or confirm it has no order (Kenku/manual), which drops
+ * it from the queue via match_method='dismissed' without inventing a link.
  */
-export async function resolveImportRow(
-  rowId: string,
+export async function resolveShipmentMatch(
+  shipmentId: string,
   input: { orderId?: string | null },
 ): Promise<ShipmentActionState> {
-  const sb = await createServerSupabase();
-  const {
-    data: { user },
-  } = await sb.auth.getUser();
-  if (!user) redirect("/login");
-  // RLS check: can the caller see this row?
-  const { data: row } = await sb
-    .from("import_rows")
-    .select("id,store_id,shipment_id")
-    .eq("id", rowId)
-    .maybeSingle();
-  if (!row) return { error: "Sin acceso a esta fila." };
-
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
-  const shipmentId = (row as { shipment_id: string | null }).shipment_id;
   const orderId = input.orderId ?? null;
 
   if (orderId) {
-    // verify the order is in an accessible store + resolve its store_id
+    // verify the order is in an accessible store + resolve its store_id (RLS)
+    const sb = await createServerSupabase();
     const { data: order } = await sb
       .from("orders")
       .select("id,store_id")
       .eq("id", orderId)
       .maybeSingle();
     if (!order) return { error: "Pedido inválido o sin acceso." };
-    if (shipmentId) {
-      await admin
-        .from("shipments")
-        .update({
-          order_id: orderId,
-          store_id: (order as { store_id: string }).store_id,
-          matched: true,
-          match_method: "manual",
-        })
-        .eq("id", shipmentId);
-    }
-    await admin.from("import_rows").update({ match_status: "matched" }).eq("id", rowId);
+    const { error } = await admin
+      .from("shipments")
+      .update({
+        order_id: orderId,
+        store_id: (order as { store_id: string }).store_id,
+        matched: true,
+        match_method: "manual",
+      })
+      .eq("id", shipmentId);
+    if (error) return { error: error.message };
     revalidatePath("/dashboard/envios");
     return { notice: "Pedido vinculado." };
   }
 
-  // confirmed: no order (Kenku/manual) — leave the snapshot, clear the queue flag
-  await admin.from("import_rows").update({ match_status: "unmatched" }).eq("id", rowId);
-  if (shipmentId) {
-    await admin.from("shipments").update({ match_method: "none" }).eq("id", shipmentId);
-  }
+  // confirmed: no order (Kenku/manual) — keep the snapshot, drop it from review
+  const { error } = await admin
+    .from("shipments")
+    .update({ match_method: "dismissed" })
+    .eq("id", shipmentId);
+  if (error) return { error: error.message };
   revalidatePath("/dashboard/envios");
   return { notice: "Marcado sin pedido." };
+}
+
+/**
+ * Search a store's Shopify catalog to populate the Fenix-stock product picker.
+ * RLS-authorized to the store; the store is only the catalog source (Fenix stock
+ * itself stays org-scoped). Degrades to [] if the store lacks read_products.
+ */
+export async function searchStockProducts(
+  storeId: string,
+  query: string,
+): Promise<ProductVariantResult[]> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  // RLS check: can the caller see this store?
+  const { data: store } = await sb.from("stores").select("id").eq("id", storeId).maybeSingle();
+  if (!store) return [];
+  const creds = await getStoreCreds(storeId);
+  if (!creds?.shopify_token) return [];
+  try {
+    return await searchProductVariants({
+      domain: creds.shopify_domain,
+      token: creds.shopify_token,
+      query,
+      first: 20,
+    });
+  } catch {
+    return []; // read_products not granted → picker degrades to a free-text product
+  }
 }
 
 // ── Fenix stock (admin) ──────────────────────────────────────────────────────

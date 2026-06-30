@@ -1,5 +1,5 @@
 import { createServerSupabase } from "@/lib/db";
-import { getAdminOrgs } from "@/lib/access";
+import { getAccessibleStores, getAdminOrgs } from "@/lib/access";
 import { EmptyState } from "@/components/ui";
 import { FenixStockEditor } from "@/components/fenix-stock";
 import type { FenixStockRowDb } from "@/lib/types";
@@ -22,5 +22,8 @@ export default async function FenixStockPage() {
     return <EmptyState title="Sin stock de Fenix registrado" />;
   }
 
-  return <FenixStockEditor rows={rows} canEdit={canEdit} />;
+  // stores only source the product catalog for the picker (stock stays org-level)
+  const stores = await getAccessibleStores();
+
+  return <FenixStockEditor rows={rows} canEdit={canEdit} stores={stores} />;
 }

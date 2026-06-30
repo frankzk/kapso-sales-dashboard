@@ -75,13 +75,34 @@ describe("parseAliclikRow", () => {
     expect(row.store_hint).toBe("KENKU");
   });
 
-  it("uses ESTADO DESPACHO over other status columns", () => {
+  it("treats ESTADO ENTREGA=ENTREGADO as delivered even when ESTADO DESPACHO=VALIDADO", () => {
+    // The platform column ("ESTADO DESPACHO") tops out at "validado"; a confirmed
+    // delivery only shows up in "ESTADO ENTREGA". This is the most common pair.
     const row = parseAliclikRow({
       "NRO. PEDIDO": "AUR5X1",
       "ESTADO DESPACHO": "VALIDADO",
       "ESTADO ENTREGA": "ENTREGADO",
     });
-    expect(row.delivery_status).toBe("validado");
+    expect(row.delivery_status).toBe("entregado");
+  });
+
+  it("falls back to ESTADO DESPACHO when ESTADO ENTREGA isn't a delivery", () => {
+    // non-delivered ESTADO ENTREGA values (CANCELADO, NO CONTESTA, etc.) don't
+    // override — the despacho state drives the status.
+    expect(
+      parseAliclikRow({
+        "NRO. PEDIDO": "AUR5X1",
+        "ESTADO DESPACHO": "POR DEVOLVER",
+        "ESTADO ENTREGA": "CANCELADO",
+      }).delivery_status,
+    ).toBe("por_devolver");
+    expect(
+      parseAliclikRow({
+        "NRO. PEDIDO": "AUR5X2",
+        "ESTADO DESPACHO": "VALIDADO",
+        "ESTADO ENTREGA": "POR ENTREGAR",
+      }).delivery_status,
+    ).toBe("validado");
   });
 
   it("flags an Aurela row with no #KP as no order_name (matches by phone later)", () => {
