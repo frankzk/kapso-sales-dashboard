@@ -500,6 +500,25 @@ export function eventOverridesDisposition(
   return eventAt > dispositionAt;
 }
 
+/**
+ * Should a fresh OPEN cart re-open a lead currently marked `won`? Yes when the cart
+ * out-ranks the win — either there is NO active (non-cancelled) order anchoring it
+ * (`lastOrderAt` null: the winning order was cancelled or is gone), or the cart
+ * post-dates that order (a recompra) — AND the cart also post-dates the agent's last
+ * manual disposition (never revert a worked result). Pure; drives the reopen guard.
+ */
+export function shouldReopenWonCart(opts: {
+  category: string | undefined;
+  draftCreatedAt: string | null;
+  lastOrderAt: string | null | undefined; // latest NON-cancelled order for the phone
+  lastDispositionAt: string | null | undefined;
+}): boolean {
+  if (opts.category !== "won") return false;
+  const cartBeatsOrder =
+    !opts.lastOrderAt || (!!opts.draftCreatedAt && opts.draftCreatedAt > opts.lastOrderAt);
+  return cartBeatsOrder && eventOverridesDisposition(opts.draftCreatedAt, opts.lastDispositionAt);
+}
+
 /** Most recent MANUAL call disposition time per phone (when an agent set a call
  *  result). The auto-sync must not override a disposition with an order/cart that
  *  predates it. Returns {} on any error. */
@@ -636,6 +655,7 @@ async function upsertDraftCartLead(
   d: DraftOrderRow,
   exists: boolean,
   reopen = false,
+  fillSource = false,
 ): Promise<void> {
   const qty = d.line_items.reduce((s, li) => s + (Number(li.quantity) || 0), 0);
   const row: any = {
@@ -665,10 +685,12 @@ async function upsertDraftCartLead(
     const seen = d.updated_at ?? d.created_at;
     if (seen) row.last_interaction_at = seen;
   } else if (reopen) {
-    // Repeat customer: a new cart after a won order → make it workable again.
+    // Recompra, o sobra de una orden cancelada: un carrito abierto fresco lo vuelve
+    // a poner como llamable. Atribuye a "carrito" si el lead no tenía fuente.
     row.status = "nuevo";
     row.category = "open";
     row.needs_attention = false;
+    if (fillSource) row.source = COD_CART_SOURCE;
   }
   await upsertLeadResilient(admin, row);
 }
@@ -943,14 +965,16 @@ export async function linkDraftOrdersToLeads(
   // repeat cart should reopen).
   const phones = [...new Set(eligible.map((d) => d.customer_phone as string))];
   const existingCategory = new Map<string, string>();
+  const existingSource = new Map<string, string | null>();
   {
     const { data } = await admin
       .from("leads")
-      .select("phone, category")
+      .select("phone, category, source")
       .eq("store_id", storeId)
       .in("phone", phones);
-    for (const l of (data as { phone: string; category: string }[]) ?? []) {
+    for (const l of (data as { phone: string; category: string; source: string | null }[]) ?? []) {
       existingCategory.set(l.phone, l.category);
+      existingSource.set(l.phone, l.source);
     }
   }
 
@@ -987,14 +1011,19 @@ export async function linkDraftOrdersToLeads(
     // sync (which re-scans the whole window) surfaces it as a callable lead.
     if (d.created_at && Date.now() - new Date(d.created_at).getTime() < graceMs) continue;
     const phone = d.customer_phone as string;
-    const wonAt = orderCreatedAt.get(phone);
-    // Reopen only a WON lead whose new cart post-dates its order (recompra) AND
-    // also post-dates the agent's last manual disposition (don't revert a result).
-    const reopen =
-      existingCategory.get(phone) === "won" &&
-      !!(wonAt && d.created_at && d.created_at > wonAt) &&
-      eventOverridesDisposition(d.created_at, dispositionByPhone.get(phone));
-    await upsertDraftCartLead(admin, storeId, d, existingCategory.has(phone), reopen);
+    // Reopen a WON lead when a fresh open cart out-ranks the win — a recompra
+    // (cart newer than the order) OR the winning order is no longer active
+    // (cancelled/gone, so no `wonAt`) — and the cart post-dates any manual result.
+    const reopen = shouldReopenWonCart({
+      category: existingCategory.get(phone),
+      draftCreatedAt: d.created_at,
+      lastOrderAt: orderCreatedAt.get(phone),
+      lastDispositionAt: dispositionByPhone.get(phone),
+    });
+    // On reopen, attribute the lead to the cart if it has no source yet (a bare lead
+    // created by the order link) so it shows under "Carrito" in the Fuente filter.
+    const fillSource = reopen && !existingSource.get(phone);
+    await upsertDraftCartLead(admin, storeId, d, existingCategory.has(phone), reopen, fillSource);
   }
   return recoveredDates;
 }

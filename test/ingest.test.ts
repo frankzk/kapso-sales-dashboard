@@ -417,6 +417,69 @@ describe("linkDraftOrdersToLeads precedence", () => {
   });
 });
 
+describe("shouldReopenWonCart (open cart vs a sticky `won` lead)", () => {
+  it("reopens a won lead with NO active order (cancelled/gone) + a fresh cart", async () => {
+    const { shouldReopenWonCart } = await import("@/lib/leads-ingest");
+    // The reported bug: won from an order that's no longer active → lastOrderAt null.
+    expect(
+      shouldReopenWonCart({
+        category: "won",
+        draftCreatedAt: "2026-06-30T18:33:41Z",
+        lastOrderAt: null, // no non-cancelled order anchoring the win
+        lastDispositionAt: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("reopens on a recompra (cart newer than the active order)", async () => {
+    const { shouldReopenWonCart } = await import("@/lib/leads-ingest");
+    expect(
+      shouldReopenWonCart({
+        category: "won",
+        draftCreatedAt: "2026-06-30T10:00:00Z",
+        lastOrderAt: "2026-06-01T10:00:00Z", // older order → the new cart is a re-purchase
+        lastDispositionAt: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("does NOT reopen when the active order is newer than the cart (real, fresh win)", async () => {
+    const { shouldReopenWonCart } = await import("@/lib/leads-ingest");
+    expect(
+      shouldReopenWonCart({
+        category: "won",
+        draftCreatedAt: "2026-06-30T10:00:00Z",
+        lastOrderAt: "2026-06-30T12:00:00Z", // order after the cart → keep the win
+        lastDispositionAt: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("does NOT reopen when an agent's disposition post-dates the cart", async () => {
+    const { shouldReopenWonCart } = await import("@/lib/leads-ingest");
+    expect(
+      shouldReopenWonCart({
+        category: "won",
+        draftCreatedAt: "2026-06-30T10:00:00Z",
+        lastOrderAt: null,
+        lastDispositionAt: "2026-06-30T11:00:00Z", // worked after the cart → respect it
+      }),
+    ).toBe(false);
+  });
+
+  it("never touches a lead that isn't won", async () => {
+    const { shouldReopenWonCart } = await import("@/lib/leads-ingest");
+    expect(
+      shouldReopenWonCart({
+        category: "open",
+        draftCreatedAt: "2026-06-30T10:00:00Z",
+        lastOrderAt: null,
+        lastDispositionAt: null,
+      }),
+    ).toBe(false);
+  });
+});
+
 const BROWSE_BODY = JSON.stringify({
   source: "abandoned_browse",
   sourceLabel: "Búsqueda",
