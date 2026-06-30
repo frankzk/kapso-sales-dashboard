@@ -14,10 +14,16 @@ export default async function NewStorePage() {
     .select("org_id, role, organizations(name)")
     .in("role", ["owner", "admin"]);
 
-  const orgs = (data ?? []).map((m: any) => ({
-    id: m.org_id as string,
-    name: (m.organizations?.name as string) ?? m.org_id,
-  }));
+  // Una entrada por organización: por RLS, un admin ve las membresías de TODOS
+  // los owner/admin de su org, así que aquí pueden venir varias filas con el
+  // mismo org_id (una por cada admin). Deduplicamos para no repetir la org.
+  const byOrg = new Map<string, { id: string; name: string }>();
+  for (const m of (data ?? []) as any[]) {
+    if (!byOrg.has(m.org_id)) {
+      byOrg.set(m.org_id, { id: m.org_id as string, name: (m.organizations?.name as string) ?? m.org_id });
+    }
+  }
+  const orgs = [...byOrg.values()];
 
   return (
     <div className="space-y-6">
