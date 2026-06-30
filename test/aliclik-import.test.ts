@@ -51,6 +51,51 @@ describe("parseAliclikRow", () => {
     expect(row.guide_code).toBe(null);
   });
 
+  it("parses the real 'order-delivery-report' export (AUR5X en NRO. PEDIDO)", () => {
+    // Real column layout: the AUR5X code lives in "NRO. PEDIDO"; the Shopify
+    // order ref (#KP…) is inside "NOTA"; state in "ESTADO DESPACHO".
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X119633",
+      NOTA: "#KP115879 - 100 metros adelante de la plaza",
+      "NOMBRE COMPLETO": "Perla Guerrero Linares",
+      "TELÉFONO": "51965956470",
+      PRODUCTO: "SUPER HUMAN Ethiopian Black Seed Oil",
+      DISTRITO: "Cusco",
+      PROVINCIA: "Cusco",
+      DEPARTAMENTO: "Cusco",
+      "ESTADO DESPACHO": "POR DEVOLVER",
+      CANAL: "KENKU",
+    });
+    expect(row.guide_code).toBe("AUR5X119633"); // detected by value, not header
+    expect(row.order_name).toBe("#KP115879"); // extracted from NOTA
+    expect(row.customer_name).toBe("Perla Guerrero Linares");
+    expect(row.customer_phone).toBe("51965956470");
+    expect(row.city).toBe("cusco");
+    expect(row.delivery_status).toBe("por_devolver"); // from ESTADO DESPACHO
+    expect(row.store_hint).toBe("KENKU");
+  });
+
+  it("uses ESTADO DESPACHO over other status columns", () => {
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X1",
+      "ESTADO DESPACHO": "VALIDADO",
+      "ESTADO ENTREGA": "ENTREGADO",
+    });
+    expect(row.delivery_status).toBe("validado");
+  });
+
+  it("flags an Aurela row with no #KP as no order_name (matches by phone later)", () => {
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X114314",
+      NOTA: "114314 - referencia",
+      "TELÉFONO": "919006661",
+      "ESTADO DESPACHO": "ENTREGADO".replace("ENTREGADO", "VALIDADO"),
+    });
+    expect(row.guide_code).toBe("AUR5X114314");
+    expect(row.order_name).toBe(null); // no #KP token → relies on phone match
+    expect(row.customer_phone).toBe("51919006661");
+  });
+
   it("parses a whole report", () => {
     const rows = parseAliclikReport([
       { "Guia Aliclik": "AUR5X1", Estado: "Entregado" },
