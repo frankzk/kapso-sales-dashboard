@@ -764,18 +764,14 @@ function Field({ label, value }: { label: string; value: string | null | undefin
   );
 }
 
-/** The Aliclik NOTA parse can guess an order reference before it's actually
- *  linked (matched=false) — shown muted + "(candidato)" so it's never
- *  mistaken for a confirmed vínculo, in the table or the drawer. */
+/**
+ * The Aliclik NOTA parse can guess an order reference before it's actually
+ * linked (matched=false) — but that guess is unverified (no phone check), so
+ * it's never shown as if it were a real pedido. Only a confirmed vínculo
+ * renders here; the guess still prefills the search box in OrderLinkPicker,
+ * where it's verified against the phone before linking.
+ */
 function OrderNameLabel({ name, matched }: { name: string | null; matched: boolean }) {
-  if (!name) return <span className="text-slate-400">—</span>;
-  if (matched) return <>{name}</>;
-  return (
-    <span
-      className="italic text-slate-400"
-      title="Referencia detectada en la nota del reporte — aún no vinculada a un pedido real"
-    >
-      {name} <span className="text-[10px] not-italic">(candidato)</span>
-    </span>
-  );
+  if (matched && name) return <>{name}</>;
+  return <span className="text-slate-400">—</span>;
 }
