@@ -86,7 +86,6 @@ const STATUS_KEYS = [
   "estado despacho", // Aliclik "order-delivery-report" — the platform state
   "estado de pedido",
   "estado del pedido",
-  "estado de entrega",
   "estado plataforma",
   "estado de plataforma",
   "estado",
@@ -104,9 +103,10 @@ const ORDER_KEYS = ["pedido", "numero de pedido", "n pedido", "orden", "order"];
 // the platform column ("ESTADO DESPACHO") tops out at "validado" — a confirmed
 // delivery only ever shows up here, as "ENTREGADO". So we read this column to
 // override the despacho-derived status when the order was actually delivered.
-const ENTREGA_KEYS = ["estado entrega"];
+// Header drifts between exports: "ESTADO ENTREGA" and "ESTADO DE ENTREGA".
+const ENTREGA_KEYS = ["estado entrega", "estado de entrega"];
 
-/** True when the "ESTADO ENTREGA" cell says the order was delivered. */
+/** True when the delivery-outcome cell ("ESTADO [DE] ENTREGA") says delivered. */
 function isDeliveredEntrega(raw: string | null): boolean {
   if (!raw) return false;
   return stripAccents(raw.trim().toLowerCase()) === "entregado";
