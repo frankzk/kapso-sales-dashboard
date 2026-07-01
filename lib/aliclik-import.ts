@@ -10,6 +10,9 @@ import { isFenixCity, normalizeCity } from "./shipments";
 export interface ParsedShipmentRow {
   guide_code: string | null; // AUR5X… (required to be a real row)
   order_name: string | null; // normalized "#KP114985" (Shopify ref, when present)
+  order_name_confirmed: boolean; // false when order_name is an unconfirmed bare-number
+  // guess from free text (NOTA) — the matcher must cross-validate it (phone)
+  // before trusting it; true when a literal "KP" token was found.
   customer_name: string | null;
   customer_phone: string | null; // normalized
   product: string | null;
@@ -61,13 +64,30 @@ function findGuideCode(raw: Record<string, string>): string | null {
 // A Shopify order name looks like "#KP114985". The Aliclik "NOTA" field often
 // carries it (esp. for Kenku) mixed with reference text, so we extract the token.
 const KP_RE = /#?\s*(KP\d[A-Za-z0-9-]*)/i;
-function extractKpOrderName(...values: (string | null | undefined)[]): string | null {
-  for (const v of values) {
+// Sometimes NOTA has just the bare order number (no "KP" prefix), e.g. "119358 -
+// referencia". A standalone 6-digit run is our best guess, but free text can
+// coincidentally contain unrelated 6-digit numbers — so this is returned
+// UNCONFIRMED; the matcher only trusts it after cross-validating a second signal
+// (the customer phone) against the guessed order.
+const BARE_ORDER_RE = /\b(\d{6})\b/;
+
+interface ExtractedOrderRef {
+  name: string | null;
+  confirmed: boolean;
+}
+
+function extractOrderReference(
+  nota: string | null | undefined,
+  orderColumnValue: string | null | undefined,
+): ExtractedOrderRef {
+  for (const v of [nota, orderColumnValue]) {
     if (!v) continue;
     const m = String(v).match(KP_RE);
-    if (m && m[1]) return "#" + m[1].toUpperCase();
+    if (m && m[1]) return { name: "#" + m[1].toUpperCase(), confirmed: true };
   }
-  return null;
+  const m = nota ? String(nota).match(BARE_ORDER_RE) : null;
+  if (m && m[1]) return { name: "#KP" + m[1], confirmed: false };
+  return { name: null, confirmed: false };
 }
 
 /** Normalize a Shopify-style order name to the "#KP114985" form (used by the
@@ -124,9 +144,12 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
   // used to classify anymore.
   const delivery_status = isDeliveredEntrega(pick(map, ENTREGA_KEYS)) ? "entregado" : "pendiente";
 
+  const orderRef = extractOrderReference(map.get("nota"), pick(map, ORDER_KEYS));
+
   return {
     guide_code: findGuideCode(raw),
-    order_name: extractKpOrderName(map.get("nota"), pick(map, ORDER_KEYS)),
+    order_name: orderRef.name,
+    order_name_confirmed: orderRef.confirmed,
     customer_name: pick(map, NAME_KEYS),
     customer_phone: normalizePhone(pick(map, PHONE_KEYS)),
     product: pick(map, PRODUCT_KEYS),

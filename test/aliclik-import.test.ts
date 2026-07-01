@@ -119,16 +119,37 @@ describe("parseAliclikRow", () => {
     }
   });
 
-  it("flags an Aurela row with no #KP as no order_name (matches by phone later)", () => {
+  it("extracts a bare-number NOTA token as an unconfirmed candidate (needs phone cross-check)", () => {
     const row = parseAliclikRow({
       "NRO. PEDIDO": "AUR5X114314",
       NOTA: "114314 - referencia",
       "TELÉFONO": "919006661",
-      "ESTADO DESPACHO": "ENTREGADO".replace("ENTREGADO", "VALIDADO"),
+      "ESTADO DESPACHO": "VALIDADO",
     });
     expect(row.guide_code).toBe("AUR5X114314");
-    expect(row.order_name).toBe(null); // no #KP token → relies on phone match
+    // no literal "KP" token → best-effort guess from the bare 6-digit run, but
+    // NOT confirmed — the matcher must cross-validate it via phone before using it.
+    expect(row.order_name).toBe("#KP114314");
+    expect(row.order_name_confirmed).toBe(false);
     expect(row.customer_phone).toBe("51919006661");
+  });
+
+  it("matches the real report's bare-number NOTA case (e.g. '119358 -')", () => {
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X119358",
+      NOTA: "119358 -",
+    });
+    expect(row.order_name).toBe("#KP119358");
+    expect(row.order_name_confirmed).toBe(false);
+  });
+
+  it("still marks a literal 'KP' token as confirmed", () => {
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X1",
+      NOTA: "#KP115879 - 100 metros adelante de la plaza",
+    });
+    expect(row.order_name).toBe("#KP115879");
+    expect(row.order_name_confirmed).toBe(true);
   });
 
   it("parses a whole report", () => {
