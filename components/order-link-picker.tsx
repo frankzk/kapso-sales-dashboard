@@ -10,6 +10,35 @@ import {
 } from "@/app/dashboard/envios/actions";
 import type { OrderLinkCandidate } from "@/lib/shipments-access";
 
+function PhoneBadge({
+  candidatePhone,
+  shipmentPhone,
+}: {
+  candidatePhone: string | null;
+  shipmentPhone?: string | null;
+}) {
+  if (!shipmentPhone || !candidatePhone) return null;
+  return candidatePhone === shipmentPhone ? (
+    <span className="text-xs font-medium text-emerald-600">✓ mismo teléfono</span>
+  ) : (
+    <span className="text-xs font-medium text-amber-600">⚠ teléfono distinto</span>
+  );
+}
+
+/** Phone-matching candidates first — the safest guess surfaces before a
+ *  coincidental digit-substring match. */
+function sortByPhoneMatch<T extends { customer_phone: string | null }>(
+  list: T[],
+  shipmentPhone: string | null | undefined,
+): T[] {
+  if (!shipmentPhone) return list;
+  return [...list].sort((a, b) => {
+    const am = a.customer_phone === shipmentPhone ? 0 : 1;
+    const bm = b.customer_phone === shipmentPhone ? 0 : 1;
+    return am - bm;
+  });
+}
+
 /**
  * Typeahead to manually link a shipment to a Shopify order — search by order
  * number or phone (orders has no customer-name column, so results are shown
@@ -19,10 +48,15 @@ import type { OrderLinkCandidate } from "@/lib/shipments-access";
 export function OrderLinkPicker({
   shipmentId,
   prefill,
+  customerPhone,
   onLinked,
 }: {
   shipmentId: string;
   prefill?: string | null;
+  /** The shipment's own phone — flags results as ✓/⚠ so a coincidental
+   *  number-substring match (e.g. a bare order number without prefix) isn't
+   *  mistaken for the right order without checking the customer first. */
+  customerPhone?: string | null;
   onLinked?: () => void;
 }) {
   const [q, setQ] = useState(prefill?.trim() || "");
@@ -121,7 +155,7 @@ export function OrderLinkPicker({
       )}
       {results && results.length > 0 && (
         <ul className="max-h-48 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
-          {results.map((o) => (
+          {sortByPhoneMatch(results, customerPhone).map((o) => (
             <li key={o.id}>
               <button
                 type="button"
@@ -131,6 +165,7 @@ export function OrderLinkPicker({
               >
                 <span className="font-mono text-xs text-slate-700">{o.name ?? "—"}</span>
                 <span className="text-xs text-slate-500">{o.customer_phone ?? "—"}</span>
+                <PhoneBadge candidatePhone={o.customer_phone} shipmentPhone={customerPhone} />
                 <span className="text-xs text-slate-400">
                   {o.created_at ? new Date(o.created_at).toLocaleDateString("es-PE") : ""}
                 </span>
@@ -157,7 +192,7 @@ export function OrderLinkPicker({
       )}
       {shopifyResults && shopifyResults.length > 0 && (
         <ul className="max-h-48 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
-          {shopifyResults.map((o) => (
+          {sortByPhoneMatch(shopifyResults, customerPhone).map((o) => (
             <li key={o.gid}>
               <button
                 type="button"
@@ -167,6 +202,7 @@ export function OrderLinkPicker({
               >
                 <span className="font-mono text-xs text-slate-700">{o.name ?? "—"}</span>
                 <span className="text-xs text-slate-500">{o.customer_phone ?? "—"}</span>
+                <PhoneBadge candidatePhone={o.customer_phone} shipmentPhone={customerPhone} />
                 <span className="text-xs text-slate-400">
                   {o.created_at ? new Date(o.created_at).toLocaleDateString("es-PE") : ""}
                 </span>

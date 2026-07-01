@@ -497,6 +497,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                 <OrderLinkPicker
                   shipmentId={shipmentId}
                   prefill={detail.shipment.order_name}
+                  customerPhone={detail.shipment.customer_phone}
                   onLinked={() => {
                     setShowOrderPicker(false);
                     refresh();
