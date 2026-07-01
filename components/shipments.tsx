@@ -7,6 +7,7 @@ import { Card } from "@/components/ui";
 import {
   DELIVERY_STATUSES,
   attemptLabel,
+  isFenixDistrict,
   labelOf,
   type RerouteDisposition,
 } from "@/lib/shipments";
@@ -18,6 +19,7 @@ import {
   loadShipmentDetail,
   registerRerouteCall,
   releaseShipment,
+  searchShipments,
   setShipmentStatus,
 } from "@/app/dashboard/envios/actions";
 
@@ -65,7 +67,7 @@ function StatusBadge({
   );
 }
 
-const SIN_CIUDAD = "(sin ciudad)";
+const SIN_DISTRITO = "(sin distrito)";
 
 export function ShipmentsBoard({
   stores,
@@ -81,22 +83,67 @@ export function ShipmentsBoard({
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(null);
 
-  // store + city multi-select filters (client-side). Empty set = "all".
+  // client-side filters over the loaded view. Empty store/district set = "all".
   const [storeFilter, setStoreFilter] = useState<Set<string>>(new Set());
-  const [cityFilter, setCityFilter] = useState<Set<string>>(new Set());
+  const [districtFilter, setDistrictFilter] = useState<Set<string>>(new Set());
+  const [dateFilter, setDateFilter] = useState(""); // YYYY-MM-DD on next_followup_at
+
+  // global search (across all tabs, server-side)
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState<ShipmentRow[] | null>(null);
+  const [searching, setSearching] = useState(false);
 
   const storeName = (id: string) => stores.find((s) => s.id === id)?.name ?? "—";
 
-  // distinct cities present in the loaded view, for the city picker
-  const cityOptions = Array.from(
-    new Set(shipments.map((s) => s.city || SIN_CIUDAD)),
+  // distinct districts present in this view, for the picker
+  const districtOptions = Array.from(
+    new Set(shipments.map((s) => s.district || SIN_DISTRITO)),
   ).sort((a, b) => a.localeCompare(b));
+
+  // On view change, default-select the Fenix-served districts present (the
+  // "routable" ones) and reset the date filter.
+  useEffect(() => {
+    const covered = new Set(
+      Array.from(new Set(shipments.map((s) => s.district || SIN_DISTRITO))).filter(
+        (d) => d !== SIN_DISTRITO && isFenixDistrict(d),
+      ),
+    );
+    setDistrictFilter(covered);
+    setDateFilter("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  // debounced global search
+  useEffect(() => {
+    const term = search.trim();
+    if (term.length < 2) {
+      setResults(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let alive = true;
+    const t = setTimeout(async () => {
+      const r = await searchShipments(term);
+      if (alive) {
+        setResults(r);
+        setSearching(false);
+      }
+    }, 280);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [search]);
 
   const filtered = shipments.filter(
     (s) =>
       (storeFilter.size === 0 || storeFilter.has(s.store_id)) &&
-      (cityFilter.size === 0 || cityFilter.has(s.city || SIN_CIUDAD)),
+      (districtFilter.size === 0 || districtFilter.has(s.district || SIN_DISTRITO)) &&
+      (!dateFilter || (s.next_followup_at ? s.next_followup_at.slice(0, 10) === dateFilter : false)),
   );
+
+  const searchActive = search.trim().length >= 2;
 
   function go(params: Record<string, string>) {
     const sp = new URLSearchParams({ view, ...params });
@@ -106,10 +153,7 @@ export function ShipmentsBoard({
   function toggleStore(id: string) {
     setStoreFilter((prev) => {
       const next = new Set(prev);
-      // first click on an "all" (empty) set means "only this one"
-      if (next.size === 0) {
-        stores.forEach((s) => next.add(s.id));
-      }
+      if (next.size === 0) stores.forEach((s) => next.add(s.id)); // "all" → start from all
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
@@ -121,6 +165,26 @@ export function ShipmentsBoard({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-semibold text-slate-900">Envíos</h1>
         <div className="flex items-center gap-2">
+          {/* global search */}
+          <div className="relative">
+            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400">
+              🔍
+            </span>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar guía, pedido, guía Fenix, celular…"
+              className="w-64 rounded-lg border border-slate-200 py-1.5 pl-8 pr-7 text-sm"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                ✕
+              </button>
+            )}
+          </div>
           <a
             href="/dashboard/envios/import"
             className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
@@ -136,153 +200,195 @@ export function ShipmentsBoard({
         </div>
       </div>
 
-      {/* tabs */}
-      <div className="flex flex-wrap gap-1.5">
-        {SHIPMENT_VIEWS.map((v) => (
-          <button
-            key={v.key}
-            onClick={() => go({ view: v.key })}
-            className={cn(
-              "rounded-lg px-3 py-1.5 text-sm font-medium transition",
-              v.key === view ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50",
-            )}
-          >
-            {v.label}
-            <span className="ml-1.5 text-xs text-slate-400">{counts[v.key]}</span>
-          </button>
-        ))}
-      </div>
-
-      {/* filters: store chips + city multi-select */}
-      {view !== "revision" && (
-        <div className="flex flex-wrap items-center gap-2">
-          {stores.length > 1 && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-slate-400">Tienda:</span>
-              {stores.map((s) => {
-                const active = storeFilter.size === 0 || storeFilter.has(s.id);
-                return (
-                  <button
-                    key={s.id}
-                    onClick={() => toggleStore(s.id)}
-                    className={cn(
-                      "rounded-full border px-2.5 py-1 text-xs font-medium transition",
-                      active
-                        ? "border-brand-200 bg-brand-50 text-brand-700"
-                        : "border-slate-200 bg-white text-slate-400",
-                    )}
-                  >
-                    {s.name}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          {cityOptions.length > 1 && (
-            <CityFilter
-              options={cityOptions}
-              selected={cityFilter}
-              onChange={setCityFilter}
-            />
-          )}
-          {(storeFilter.size > 0 || cityFilter.size > 0) && (
-            <button
-              onClick={() => {
-                setStoreFilter(new Set());
-                setCityFilter(new Set());
-              }}
-              className="text-xs text-slate-500 hover:underline"
-            >
-              Limpiar filtros
+      {searchActive ? (
+        <Card className="p-0">
+          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+            <p className="text-sm font-medium text-slate-800">
+              Resultados de búsqueda {results ? `(${results.length})` : ""}
+            </p>
+            <button onClick={() => setSearch("")} className="text-xs text-slate-500 hover:underline">
+              Limpiar búsqueda
             </button>
+          </div>
+          {searching ? (
+            <p className="p-5 text-sm text-slate-400">Buscando…</p>
+          ) : results && results.length > 0 ? (
+            <ShipmentTable rows={results} stores={stores} storeName={storeName} onOpen={setOpenId} />
+          ) : (
+            <p className="p-5 text-sm text-slate-400">Sin coincidencias.</p>
           )}
-          <span className="ml-auto text-xs text-slate-400">
-            Mostrando {filtered.length} de {shipments.length}
-          </span>
-        </div>
-      )}
-
-      {view === "revision" ? (
-        <Card>
-          <p className="text-sm text-slate-500">
-            Las filas por revisar se gestionan desde{" "}
-            <a className="text-brand-700 underline" href="/dashboard/envios/import">
-              Importar reporte
-            </a>
-            .
-          </p>
         </Card>
       ) : (
-        <Card className="p-0">
-          {filtered.length === 0 ? (
-            <p className="p-5 text-sm text-slate-400">
-              {shipments.length === 0 ? "Sin envíos en esta vista." : "Ningún envío con esos filtros."}
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-xs text-slate-500">
-                    <th className="px-4 py-2.5 text-left font-medium">Guía</th>
-                    {stores.length > 1 && <th className="px-4 py-2.5 text-left font-medium">Tienda</th>}
-                    <th className="px-4 py-2.5 text-left font-medium">Pedido</th>
-                    <th className="px-4 py-2.5 text-left font-medium">Cliente</th>
-                    <th className="px-4 py-2.5 text-left font-medium">Ciudad</th>
-                    <th className="px-4 py-2.5 text-left font-medium">Estado</th>
-                    <th className="px-4 py-2.5 text-right font-medium">Intentos</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((s) => (
-                    <tr
-                      key={s.id}
-                      onClick={() => setOpenId(s.id)}
-                      className="cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50"
-                    >
-                      <td className="px-4 py-2.5 font-mono text-xs text-slate-700">
-                        {s.guide_code}
-                        {s.courier === "fenix" && (
-                          <span className="ml-1 rounded bg-orange-50 px-1 text-[10px] text-orange-700">
-                            Fenix
-                          </span>
+        <>
+          {/* tabs */}
+          <div className="flex flex-wrap gap-1.5">
+            {SHIPMENT_VIEWS.map((v) => (
+              <button
+                key={v.key}
+                onClick={() => go({ view: v.key })}
+                className={cn(
+                  "rounded-lg px-3 py-1.5 text-sm font-medium transition",
+                  v.key === view ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50",
+                )}
+              >
+                {v.label}
+                <span className="ml-1.5 text-xs text-slate-400">{counts[v.key]}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* filters: store chips + district multi-select + programación date */}
+          {view !== "revision" && (
+            <div className="flex flex-wrap items-center gap-2">
+              {stores.length > 1 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-slate-400">Tienda:</span>
+                  {stores.map((s) => {
+                    const active = storeFilter.size === 0 || storeFilter.has(s.id);
+                    return (
+                      <button
+                        key={s.id}
+                        onClick={() => toggleStore(s.id)}
+                        className={cn(
+                          "rounded-full border px-2.5 py-1 text-xs font-medium transition",
+                          active
+                            ? "border-brand-200 bg-brand-50 text-brand-700"
+                            : "border-slate-200 bg-white text-slate-400",
                         )}
-                      </td>
-                      {stores.length > 1 && (
-                        <td className="px-4 py-2.5 text-slate-600">{storeName(s.store_id)}</td>
-                      )}
-                      <td className="px-4 py-2.5 text-slate-700">{s.order_name ?? "—"}</td>
-                      <td className="px-4 py-2.5 text-slate-700">
-                        {s.customer_name ?? "—"}
-                        <span className="block text-xs text-slate-400">{s.customer_phone ?? ""}</span>
-                      </td>
-                      <td className="px-4 py-2.5 capitalize text-slate-700">
-                        {s.city ?? "—"}
-                        {s.fenix_eligible && (
-                          <span className="ml-1 rounded bg-emerald-50 px-1 text-[10px] text-emerald-700">
-                            Fenix ok
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <StatusBadge
-                          category={s.status_category}
-                          status={s.delivery_status}
-                          suffix={subState(s)}
-                        />
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-slate-600">
-                        {s.status_category === "pending" ? `${s.reroute_attempts} / 7` : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      >
+                        {s.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {districtOptions.length > 1 && (
+                <ChecklistFilter
+                  label="Distrito"
+                  options={districtOptions}
+                  selected={districtFilter}
+                  onChange={setDistrictFilter}
+                />
+              )}
+              <label className="flex items-center gap-1.5 text-xs text-slate-400">
+                Programación:
+                <input
+                  type="date"
+                  value={dateFilter}
+                  onChange={(e) => setDateFilter(e.target.value)}
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
+                />
+              </label>
+              {(storeFilter.size > 0 || districtFilter.size > 0 || dateFilter) && (
+                <button
+                  onClick={() => {
+                    setStoreFilter(new Set());
+                    setDistrictFilter(new Set());
+                    setDateFilter("");
+                  }}
+                  className="text-xs text-slate-500 hover:underline"
+                >
+                  Limpiar filtros
+                </button>
+              )}
+              <span className="ml-auto text-xs text-slate-400">
+                Mostrando {filtered.length} de {shipments.length}
+              </span>
             </div>
           )}
-        </Card>
+
+          {view === "revision" ? (
+            <Card>
+              <p className="text-sm text-slate-500">
+                Las filas por revisar se gestionan desde{" "}
+                <a className="text-brand-700 underline" href="/dashboard/envios/import">
+                  Importar reporte
+                </a>
+                .
+              </p>
+            </Card>
+          ) : (
+            <Card className="p-0">
+              {filtered.length === 0 ? (
+                <p className="p-5 text-sm text-slate-400">
+                  {shipments.length === 0 ? "Sin envíos en esta vista." : "Ningún envío con esos filtros."}
+                </p>
+              ) : (
+                <ShipmentTable rows={filtered} stores={stores} storeName={storeName} onOpen={setOpenId} />
+              )}
+            </Card>
+          )}
+        </>
       )}
 
       {openId && <ShipmentDrawer shipmentId={openId} onClose={() => setOpenId(null)} />}
+    </div>
+  );
+}
+
+function ShipmentTable({
+  rows,
+  stores,
+  storeName,
+  onOpen,
+}: {
+  rows: ShipmentRow[];
+  stores: StoreSummary[];
+  storeName: (id: string) => string;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-slate-200 text-xs text-slate-500">
+            <th className="px-4 py-2.5 text-left font-medium">Guía</th>
+            {stores.length > 1 && <th className="px-4 py-2.5 text-left font-medium">Tienda</th>}
+            <th className="px-4 py-2.5 text-left font-medium">Pedido</th>
+            <th className="px-4 py-2.5 text-left font-medium">Cliente</th>
+            <th className="px-4 py-2.5 text-left font-medium">Distrito / Ciudad</th>
+            <th className="px-4 py-2.5 text-left font-medium">Estado</th>
+            <th className="px-4 py-2.5 text-right font-medium">Intentos</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((s) => (
+            <tr
+              key={s.id}
+              onClick={() => onOpen(s.id)}
+              className="cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50"
+            >
+              <td className="px-4 py-2.5 font-mono text-xs text-slate-700">
+                {s.guide_code}
+                {s.courier === "fenix" && (
+                  <span className="ml-1 rounded bg-orange-50 px-1 text-[10px] text-orange-700">Fenix</span>
+                )}
+              </td>
+              {stores.length > 1 && (
+                <td className="px-4 py-2.5 text-slate-600">{storeName(s.store_id)}</td>
+              )}
+              <td className="px-4 py-2.5 text-slate-700">{s.order_name ?? "—"}</td>
+              <td className="px-4 py-2.5 text-slate-700">
+                {s.customer_name ?? "—"}
+                <span className="block text-xs text-slate-400">{s.customer_phone ?? ""}</span>
+              </td>
+              <td className="px-4 py-2.5 text-slate-700">
+                {s.district ?? "—"}
+                <span className="block text-xs capitalize text-slate-400">
+                  {s.city ?? ""}
+                  {s.fenix_eligible && <span className="ml-1 text-emerald-600">· Fenix ok</span>}
+                </span>
+              </td>
+              <td className="px-4 py-2.5">
+                <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
+              </td>
+              <td className="px-4 py-2.5 text-right text-slate-600">
+                {s.status_category === "pending" ? `${s.reroute_attempts} / 7` : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -511,11 +617,13 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
 
 /** Multi-select city filter: a button + popover checklist with a search box.
  *  Empty selection = no filter (all cities shown). */
-function CityFilter({
+function ChecklistFilter({
+  label,
   options,
   selected,
   onChange,
 }: {
+  label: string;
   options: string[];
   selected: Set<string>;
   onChange: (next: Set<string>) => void;
@@ -553,7 +661,7 @@ function CityFilter({
             : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
         )}
       >
-        Ciudad{selected.size > 0 ? ` (${selected.size})` : ""} ▾
+        {label}{selected.size > 0 ? ` (${selected.size})` : ""} ▾
       </button>
       {open && (
         <div className="absolute left-0 z-10 mt-1 w-60 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
@@ -561,7 +669,7 @@ function CityFilter({
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Buscar ciudad…"
+            placeholder={`Buscar ${label.toLowerCase()}…`}
             className="mb-2 w-full rounded border border-slate-200 px-2 py-1 text-xs"
           />
           {selected.size > 0 && (

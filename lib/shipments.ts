@@ -91,6 +91,36 @@ export function isFenixCity(city: string | null | undefined): boolean {
   return FENIX_CITIES.includes(normalizeCity(city));
 }
 
+// The specific districts Fenix serves within each covered city. Used to
+// pre-select the district filter by default (the "routable" districts). City
+// (cercado) forms are stored bare so a district cell of just "Arequipa" matches.
+export const FENIX_DISTRICTS = [
+  // Arequipa
+  "jose luis bustamante y rivero", "cerro colorado", "alto selva alegre", "yanahuara",
+  "sachaca", "tiabaya", "jacobo hunter", "paucarpata", "arequipa", "sabandia", "socabaya",
+  // Trujillo
+  "florencia de mora", "el porvenir", "trujillo", "victor larco herrera", "la esperanza",
+  "huanchaco", "laredo", "moche", "salaverry",
+  // Cusco
+  "san sebastian", "san jeronimo", "wanchaq", "santiago", "cusco",
+  // Juliaca / Puno
+  "juliaca", "san miguel", "puno", "ayaviri",
+];
+
+/** Normalize a district label for comparison (lowercase, no accents, collapsed). */
+export function normalizeDistrict(raw: string | null | undefined): string {
+  if (!raw) return "";
+  return stripAccents(String(raw).trim().toLowerCase()).replace(/\s+/g, " ");
+}
+
+/** Whether a district is in the Fenix-served set (tolerant: handles "(cercado)"
+ *  and longer official names like "… y Rivero"). */
+export function isFenixDistrict(raw: string | null | undefined): boolean {
+  const d = normalizeDistrict(raw);
+  if (!d) return false;
+  return FENIX_DISTRICTS.some((c) => d === c || d.startsWith(c) || c.startsWith(d));
+}
+
 // ---------------------------------------------------------------------------
 // Gestión decision flow — up to 7 call attempts ("intentos") in Pendiente.
 //

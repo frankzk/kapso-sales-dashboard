@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
-import { getShipmentWithCalls } from "@/lib/shipments-access";
+import { getShipmentWithCalls, searchShipmentsQuery } from "@/lib/shipments-access";
 import {
   CLAIM_TTL_MINUTES,
   attemptLabel,
@@ -73,6 +73,16 @@ export async function loadShipmentDetail(
     agent_name: c.agent ? (agentNameCache.get(c.agent) ?? null) : null,
   }));
   return { shipment: detail.shipment, calls };
+}
+
+/** Global search (guía / pedido / guía Fenix / celular), RLS-scoped. */
+export async function searchShipments(query: string): Promise<ShipmentRow[]> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  return searchShipmentsQuery(query);
 }
 
 /** Claim a shipment (one at a time). Succeeds if free, stale, or already mine. */

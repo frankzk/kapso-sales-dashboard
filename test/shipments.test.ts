@@ -9,6 +9,7 @@ import {
   attemptLabel,
   normalizeCity,
   isFenixCity,
+  isFenixDistrict,
   nextShipmentTransition,
   MAX_INTENTOS,
   FENIX_CITIES,
@@ -58,6 +59,14 @@ describe("normalizeCity", () => {
     for (const c of FENIX_CITIES) expect(isFenixCity(c)).toBe(true);
     expect(isFenixCity("Lima")).toBe(false);
     expect(isFenixCity(null)).toBe(false);
+  });
+  it("matches Fenix-served districts tolerantly (accents, (cercado), longer names)", () => {
+    expect(isFenixDistrict("Cerro Colorado")).toBe(true);
+    expect(isFenixDistrict("San Sebastián")).toBe(true); // accents
+    expect(isFenixDistrict("Arequipa (Cercado)")).toBe(true); // (cercado) → bare form
+    expect(isFenixDistrict("Jose Luis Bustamante")).toBe(true); // shorter than "… y Rivero"
+    expect(isFenixDistrict("Miraflores")).toBe(false); // Lima district, not served
+    expect(isFenixDistrict(null)).toBe(false);
   });
 });
 

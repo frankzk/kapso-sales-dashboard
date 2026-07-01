@@ -136,6 +136,22 @@ export async function getReviewShipments(storeIds: string[]): Promise<ShipmentRo
   return (data as ShipmentRow[]) ?? [];
 }
 
+/** Global search across all accessible shipments (RLS-scoped) by guide code
+ *  (aliclik OR fenix), order name (#KP…) or customer phone. */
+export async function searchShipmentsQuery(query: string): Promise<ShipmentRow[]> {
+  const q = query.trim().replace(/[,()*%]/g, ""); // strip chars that break the or() filter
+  if (q.length < 2) return [];
+  const sb = await createServerSupabase();
+  const like = `%${q}%`;
+  const { data } = await sb
+    .from("shipments")
+    .select(SHIPMENT_COLUMNS)
+    .or(`guide_code.ilike.${like},order_name.ilike.${like},customer_phone.ilike.${like}`)
+    .order("updated_at", { ascending: false })
+    .limit(50);
+  return (data as ShipmentRow[]) ?? [];
+}
+
 /** A shipment + its call history (RLS-scoped). Drives the drawer. */
 export async function getShipmentWithCalls(
   shipmentId: string,
