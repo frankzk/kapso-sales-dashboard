@@ -7,9 +7,22 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ParsedShipmentRow } from "./aliclik-import";
 import { parseAliclikReport } from "./aliclik-import";
-import { matchShipment, type OrderCandidate } from "./shipment-match";
-import { categoryOf, isFailureState } from "./shipments";
+import { matchShipment, type MatchResult, type OrderCandidate } from "./shipment-match";
+import { categoryOf, isFailureState, reconcileDeliveryStatus } from "./shipments";
 import { evaluateFenix, type FenixStockRow } from "./fenix";
+
+// Existing shipment fields we need to reconcile a re-import against (so we don't
+// reset progress the team already made). See reconcileDeliveryStatus + the
+// linkage rules below.
+interface ExistingShipment {
+  guide_code: string;
+  delivery_status: string;
+  matched: boolean;
+  match_method: string | null;
+  order_id: string | null;
+  store_id: string;
+  last_report_at: string | null;
+}
 
 export interface IngestResult {
   batchId: string;
@@ -54,7 +67,9 @@ export async function ingestAliclikReport(
   // 3) Fenix stock for this store's org (to flag eligibility on failure rows)
   const stockRows = await fetchOrgFenixStock(admin, storeId);
 
-  // 4) classify each row; build the shipment upserts (deduped by guide code)
+  // 4) classify each row; collect the incoming data per guide (deduped by guide,
+  //    last row wins). We resolve the final upsert payload in step 4b, AFTER
+  //    reading existing rows, so a re-import merges instead of resetting.
   interface RowMeta {
     index: number;
     guideCode: string | null;
@@ -63,8 +78,13 @@ export async function ingestAliclikReport(
     error: string | null;
     parsed: ParsedShipmentRow;
   }
+  interface Incoming {
+    row: ParsedShipmentRow;
+    match: MatchResult;
+    resolvedStore: string;
+  }
   const rowMetas: RowMeta[] = [];
-  const shipmentByGuide = new Map<string, Record<string, unknown>>();
+  const incomingByGuide = new Map<string, Incoming>();
 
   for (let i = 0; i < parsed.length; i++) {
     const row = parsed[i];
@@ -75,28 +95,7 @@ export async function ingestAliclikReport(
     }
     const match = matchShipment(row, candidates);
     const resolvedStore = match.matched && match.store_id ? match.store_id : storeId;
-    const status = row.delivery_status;
-    const fenix = isFailureState(status) ? evaluateFenix(row, stockRows).eligible : false;
-
-    shipmentByGuide.set(row.guide_code, {
-      courier: "aliclik",
-      guide_code: row.guide_code,
-      store_id: resolvedStore,
-      order_id: match.order_id,
-      matched: match.matched,
-      match_method: match.method,
-      order_name: row.order_name,
-      customer_name: row.customer_name,
-      customer_phone: row.customer_phone,
-      product: row.product,
-      district: row.district,
-      city: row.city,
-      delivery_status: status,
-      status_category: categoryOf(status),
-      fenix_eligible: fenix,
-      source_batch_id: batchId,
-      last_report_at: meta.reportAt,
-    });
+    incomingByGuide.set(row.guide_code, { row, match, resolvedStore });
     rowMetas.push({
       index: i,
       guideCode: row.guide_code,
@@ -107,9 +106,68 @@ export async function ingestAliclikReport(
     });
   }
 
+  // 4b) read existing shipments for these guides, then build merged payloads.
+  //   - delivery_status: reconciled (only ever moves forward; ENTREGADO/DEVUELTO
+  //     close; an older re-upload can't regress it).
+  //   - linkage: a manual order link or a "sin pedido" dismissal is preserved.
+  //   - reroute_attempts / claims / next_followup / fenix sub-guide are NOT in
+  //     the payload, so the upsert leaves them untouched.
+  const existingByGuide = await fetchExistingShipments(admin, [...incomingByGuide.keys()]);
+  const shipmentRows: Record<string, unknown>[] = [];
+  for (const [guide, inc] of incomingByGuide) {
+    const existing = existingByGuide.get(guide);
+    const mergedStatus = reconcileDeliveryStatus(existing?.delivery_status, inc.row.delivery_status);
+    const fenix = isFailureState(mergedStatus) ? evaluateFenix(inc.row, stockRows).eligible : false;
+
+    // linkage: never downgrade an established link or a dismissal
+    let order_id: string | null;
+    let matched: boolean;
+    let match_method: string | null;
+    let linkStore: string;
+    if (existing?.matched) {
+      ({ order_id, store_id: linkStore } = existing);
+      matched = true;
+      match_method = existing.match_method;
+    } else if (existing?.match_method === "dismissed") {
+      order_id = existing.order_id;
+      matched = false;
+      match_method = "dismissed";
+      linkStore = existing.store_id;
+    } else {
+      order_id = inc.match.order_id;
+      matched = inc.match.matched;
+      match_method = inc.match.method;
+      linkStore = inc.resolvedStore;
+    }
+
+    const last_report_at =
+      existing?.last_report_at && existing.last_report_at > meta.reportAt
+        ? existing.last_report_at
+        : meta.reportAt;
+
+    shipmentRows.push({
+      courier: "aliclik",
+      guide_code: guide,
+      store_id: linkStore,
+      order_id,
+      matched,
+      match_method,
+      order_name: inc.row.order_name,
+      customer_name: inc.row.customer_name,
+      customer_phone: inc.row.customer_phone,
+      product: inc.row.product,
+      district: inc.row.district,
+      city: inc.row.city,
+      delivery_status: mergedStatus,
+      status_category: categoryOf(mergedStatus),
+      fenix_eligible: fenix,
+      source_batch_id: batchId,
+      last_report_at,
+    });
+  }
+
   // 5) bulk-upsert shipments; map guide_code → id for the import_rows links
   const guideToId = new Map<string, string>();
-  const shipmentRows = [...shipmentByGuide.values()];
   for (const chunk of chunked(shipmentRows, CHUNK)) {
     const { data, error } = await admin
       .from("shipments")
@@ -193,6 +251,24 @@ async function fetchOrderCandidates(
     push(data as OrderCandidate[] | null);
   }
   return out;
+}
+
+/** Read existing aliclik shipments for the given guide codes (to merge on re-import). */
+async function fetchExistingShipments(
+  admin: SupabaseClient,
+  guideCodes: string[],
+): Promise<Map<string, ExistingShipment>> {
+  const map = new Map<string, ExistingShipment>();
+  if (!guideCodes.length) return map;
+  for (const chunk of chunked(guideCodes, 200)) {
+    const { data } = await admin
+      .from("shipments")
+      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at")
+      .eq("courier", "aliclik")
+      .in("guide_code", chunk);
+    for (const r of (data as ExistingShipment[]) ?? []) map.set(r.guide_code, r);
+  }
+  return map;
 }
 
 async function fetchOrgFenixStock(admin: SupabaseClient, storeId: string): Promise<FenixStockRow[]> {

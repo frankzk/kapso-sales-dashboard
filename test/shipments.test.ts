@@ -13,6 +13,7 @@ import {
   nextRerouteOutcome,
   MAX_REROUTE_ATTEMPTS,
   FENIX_CITIES,
+  reconcileDeliveryStatus,
 } from "@/lib/shipments";
 
 describe("delivery status model", () => {
@@ -101,5 +102,32 @@ describe("nextRerouteOutcome (decision flow)", () => {
     expect(r.outcome).toBe("sin_cobertura");
     expect(r.closed).toBe(true);
     expect(r.status).toBe("por_devolver");
+  });
+});
+
+describe("reconcileDeliveryStatus (re-import merge)", () => {
+  it("keeps agent progress when the report is behind", () => {
+    // agent already re-scheduled; a report still saying "por devolver" must not reset it
+    expect(reconcileDeliveryStatus("reprogramado", "por_devolver")).toBe("reprogramado");
+  });
+  it("adopts a fresh ENTREGADO to close the guide (out of Fenix)", () => {
+    expect(reconcileDeliveryStatus("reprogramado", "entregado")).toBe("entregado");
+    expect(reconcileDeliveryStatus("por_devolver", "entregado")).toBe("entregado");
+    expect(reconcileDeliveryStatus("validado", "entregado")).toBe("entregado");
+  });
+  it("locks a terminal state against a lower report", () => {
+    expect(reconcileDeliveryStatus("entregado", "devuelto")).toBe("entregado");
+    expect(reconcileDeliveryStatus("devuelto", "por_devolver")).toBe("devuelto");
+  });
+  it("never regresses within the happy path (old re-uploaded file)", () => {
+    expect(reconcileDeliveryStatus("validado", "recolectado")).toBe("validado");
+  });
+  it("advances a normal in-transit guide forward", () => {
+    expect(reconcileDeliveryStatus("recolectado", "en_agencia")).toBe("en_agencia");
+    expect(reconcileDeliveryStatus("validado", "por_devolver")).toBe("por_devolver");
+  });
+  it("takes the incoming status for a brand-new guide (no existing)", () => {
+    expect(reconcileDeliveryStatus(null, "por_preparar")).toBe("por_preparar");
+    expect(reconcileDeliveryStatus(undefined, "entregado")).toBe("entregado");
   });
 });

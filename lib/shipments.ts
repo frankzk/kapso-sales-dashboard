@@ -193,3 +193,43 @@ export function isClaimActive(
   const t = typeof claimedAt === "string" ? new Date(claimedAt) : claimedAt;
   return now.getTime() - t.getTime() < CLAIM_TTL_MINUTES * 60_000;
 }
+
+// ---------------------------------------------------------------------------
+// Re-import reconciliation — a re-imported report must NOT reset progress the
+// team already made (a re-routed guide, a manual state advance). We keep the
+// status that is "further along" and only ever move forward. This is a lifecycle
+// PRECEDENCE, deliberately different from the DELIVERY_STATUSES array order
+// (where `entregado` sits before the failure branch): a confirmed delivery and a
+// return are the most final outcomes, so they rank highest and always win.
+// ---------------------------------------------------------------------------
+
+const STATUS_PRECEDENCE: Record<string, number> = {
+  por_preparar: 1,
+  preparado: 2,
+  recolectado: 3,
+  en_agencia: 4,
+  validado: 5,
+  por_devolver: 6,
+  dejado_almacen: 6,
+  remanente_transito: 6,
+  reprogramado: 7,
+  devuelto: 8,
+  entregado: 9,
+};
+
+/** Lifecycle rank used to reconcile a re-imported status (0 = unknown). */
+export function statusPrecedence(code: string | null | undefined): number {
+  return (code && STATUS_PRECEDENCE[code]) || 0;
+}
+
+/**
+ * Reconcile the delivery status when re-importing an existing guide: the report
+ * only wins if it is strictly further along the lifecycle than what we already
+ * have. This preserves agent progress (e.g. `reprogramado` survives a report
+ * that still says `por_devolver`), lets a fresh `entregado`/`devuelto` close the
+ * guide, and prevents an older re-uploaded file from regressing the state.
+ */
+export function reconcileDeliveryStatus(existing: string | null | undefined, incoming: string): string {
+  if (!existing) return incoming;
+  return statusPrecedence(incoming) > statusPrecedence(existing) ? incoming : existing;
+}
