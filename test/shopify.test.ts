@@ -16,7 +16,7 @@ import {
   buildDraftOrdersSearchQuery,
   buildKapsoOrdersSearchQuery,
   buildLiveOrderSearchQuery,
-  buildPrefixedOrderSearchQuery,
+  buildExactOrderQuery,
   pickStoresForOrderQuery,
   searchOrdersLive,
   shopifyGraphQL,
@@ -303,11 +303,11 @@ describe("buildLiveOrderSearchQuery", () => {
   });
 });
 
-describe("buildPrefixedOrderSearchQuery", () => {
-  it("tries the real order-name prefixes (KP, AUR)", () => {
-    expect(buildPrefixedOrderSearchQuery("118200")).toBe(
-      "name:*KP118200* OR name:*AUR118200*",
-    );
+describe("buildExactOrderQuery", () => {
+  it("prefixes the term with # unscoped — mirrors the Shopify admin search box", () => {
+    expect(buildExactOrderQuery("KP118200")).toBe("#KP118200");
+    expect(buildExactOrderQuery("#KP118200")).toBe("#KP118200");
+    expect(buildExactOrderQuery("119603")).toBe("#119603");
   });
 });
 
@@ -366,11 +366,11 @@ describe("searchOrdersLive (injected fetch)", () => {
     };
   }
 
-  it("returns the exact prefixed match without falling back to the loose search", async () => {
+  it("returns the exact # match without falling back to the loose search", async () => {
     let calls = 0;
     const fetchImpl = fakeFetchByQuery((query) => {
       calls++;
-      expect(query).toBe("name:*KP118200* OR name:*AUR118200*");
+      expect(query).toBe("#kp118200");
       return ordersPage(["#KP118200"]);
     });
     const orders = await searchOrdersLive({
@@ -384,11 +384,11 @@ describe("searchOrdersLive (injected fetch)", () => {
     expect(orders.map((o) => o.name)).toEqual(["#KP118200"]);
   });
 
-  it("falls back to the loose digits/phone search when the prefixed search finds nothing", async () => {
+  it("falls back to the loose digits/phone search when the exact search finds nothing", async () => {
     const seenQueries: string[] = [];
     const fetchImpl = fakeFetchByQuery((query) => {
       seenQueries.push(query);
-      if (query.startsWith("name:*KP")) return ordersPage([]);
+      if (query.startsWith("#")) return ordersPage([]);
       return ordersPage(["#118200"]);
     });
     const orders = await searchOrdersLive({
@@ -398,10 +398,7 @@ describe("searchOrdersLive (injected fetch)", () => {
       query: "118200",
       fetchImpl,
     });
-    expect(seenQueries).toEqual([
-      "name:*KP118200* OR name:*AUR118200*",
-      "name:*118200* OR phone:*118200*",
-    ]);
+    expect(seenQueries).toEqual(["#118200", "name:*118200* OR phone:*118200*"]);
     expect(orders.map((o) => o.name)).toEqual(["#118200"]);
   });
 });
