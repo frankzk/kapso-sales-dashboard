@@ -30,7 +30,7 @@ export function isShipmentView(v: string | undefined | null): v is ShipmentView 
 }
 
 const SHIPMENT_COLUMNS =
-  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,delivered_source,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,created_at,updated_at";
+  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,delivered_source,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
 // Each view maps to a status_category filter. Every non-delivered guide lands in
 // "pendiente"; fenix_eligible is shown as a per-row indicator, it does NOT split

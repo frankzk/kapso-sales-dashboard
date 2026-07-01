@@ -27,6 +27,7 @@ import {
   searchProductVariants,
   type ProductVariantResult,
 } from "@/lib/shopify";
+import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
 import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
 
 export interface ShipmentActionState {
@@ -464,6 +465,52 @@ export async function linkShipmentToShopifyOrder(
   if (!orderId) return { error: "No se pudo vincular el pedido." };
 
   return resolveShipmentMatch(shipmentId, { orderId });
+}
+
+/**
+ * Process one chunk of the "Revisión" queue against live Shopify: for each
+ * unchecked unmatched shipment, search (routed by store like the live picker)
+ * and — only when a candidate's phone cross-validates the shipment's own
+ * phone — persist a suggestion for a human to confirm (never linked
+ * automatically). Admin-gated: it fans out many live Shopify calls and writes
+ * across potentially hundreds of shipments in one org, same category as
+ * upsertFenixStock's bulk-maintenance gate.
+ */
+export async function processSuggestionBatch(): Promise<
+  { error: string } | BatchResult
+> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  const { data: mem } = await sb.from("memberships").select("org_id,role");
+  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
+    (m) => m.role === "owner" || m.role === "admin",
+  );
+  if (!adminOrg) return { error: "Solo un administrador puede ejecutar el emparejamiento automático." };
+
+  const stores = await getAccessibleStores();
+  const storeIds = stores.map((s) => s.id);
+  if (!storeIds.length) return { processed: 0, suggested: 0, done: true };
+  return runSuggestionBatch(createAdminSupabase(), storeIds, stores, SUGGESTION_BATCH_SIZE);
+}
+
+/**
+ * Clear a pending suggestion without dismissing the shipment — it stays in
+ * Revisión, still searchable manually via OrderLinkPicker underneath.
+ */
+export async function clearShipmentSuggestion(shipmentId: string): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a este envío." };
+  const admin = createAdminSupabase();
+  const { error } = await admin
+    .from("shipments")
+    .update({ suggested_order_gid: null, suggested_store_id: null, suggested_order_name: null })
+    .eq("id", shipmentId);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard/envios");
+  return { notice: "Sugerencia descartada." };
 }
 
 /**
