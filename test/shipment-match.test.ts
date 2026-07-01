@@ -74,14 +74,45 @@ describe("matchShipment", () => {
       expect(r).toMatchObject({ order_id: "o1", matched: true, method: "order_name" });
     });
 
-    it("still sends an ambiguous confirmed name straight to review", () => {
+    it("disambiguates an ambiguous confirmed name using the phone", () => {
+      // two orders share the same order name (rare, but possible across stores)
+      // — the row's phone matches exactly one of them, so it resolves instead
+      // of forcing a manual review.
       const dup: OrderCandidate[] = [
         { id: "o1", store_id: "s1", name: "#KP114985", customer_phone: "51914699634" },
         { id: "o1b", store_id: "s1", name: "#KP114985", customer_phone: "51900000000" },
       ];
       const r = matchShipment(row({ PEDIDO: "#KP114985", CELULAR: "914699634" }), dup);
+      expect(r).toMatchObject({ order_id: "o1", matched: true, method: "order_name_phone" });
+    });
+
+    it("still sends a genuinely ambiguous confirmed name to review (no phone to disambiguate)", () => {
+      const dup: OrderCandidate[] = [
+        { id: "o1", store_id: "s1", name: "#KP114985", customer_phone: "51914699634" },
+        { id: "o1b", store_id: "s1", name: "#KP114985", customer_phone: "51900000000" },
+      ];
+      const r = matchShipment(row({ PEDIDO: "#KP114985" }), dup); // no phone on the row
       expect(r.matched).toBe(false);
       expect(r.status).toBe("review");
+    });
+  });
+
+  describe("'#AUR######' (Aurela's real order.name) — same confidence as KP", () => {
+    const aurOrders: OrderCandidate[] = [
+      { id: "a1", store_id: "s1", name: "#AUR173123", customer_phone: "51987654321" },
+    ];
+
+    it("matches uniquely regardless of phone", () => {
+      const r = matchShipment(row({ PEDIDO: "#AUR173123", CELULAR: "000000000" }), aurOrders);
+      expect(r).toMatchObject({ order_id: "a1", matched: true, method: "order_name" });
+    });
+
+    it("extracts it from NOTA too", () => {
+      const r = matchShipment(
+        row({ NOTA: "#AUR173123 - /cliente confirma pedido", CELULAR: "987654321" }),
+        aurOrders,
+      );
+      expect(r).toMatchObject({ order_id: "a1", matched: true, method: "order_name" });
     });
   });
 });

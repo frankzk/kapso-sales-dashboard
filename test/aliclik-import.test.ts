@@ -152,6 +152,33 @@ describe("parseAliclikRow", () => {
     expect(row.order_name_confirmed).toBe(true);
   });
 
+  it("recognizes '#AUR######' (Aurela's real Shopify order.name) as confirmed", () => {
+    const inNota = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X342527857589",
+      NOTA: "#AUR173127 - /cliente confirma pedido en llamada>aliclick (mm",
+    });
+    expect(inNota.order_name).toBe("#AUR173127");
+    expect(inNota.order_name_confirmed).toBe(true);
+
+    const inOrderColumn = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X613",
+      PEDIDO: "#AUR173123",
+    });
+    expect(inOrderColumn.order_name).toBe("#AUR173123");
+    expect(inOrderColumn.order_name_confirmed).toBe(true);
+  });
+
+  it("does not mistake the guide code itself for an order reference", () => {
+    // "AUR5X342527857589" has a digit ("5") then a LETTER ("X") right after
+    // "AUR" — never satisfies AUR_ORDER_RE's \d{4,} requirement — and it's not
+    // 6 digits alone either, so no order_name should be inferred from it.
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X342527857589",
+      NOTA: "AUR5X342527857589",
+    });
+    expect(row.order_name).toBe(null);
+  });
+
   it("parses a whole report", () => {
     const rows = parseAliclikReport([
       { "Guia Aliclik": "AUR5X1", Estado: "Entregado" },
