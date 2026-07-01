@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { resolveShipmentMatch, searchOrdersToLink } from "@/app/dashboard/envios/actions";
+import {
+  linkShipmentToShopifyOrder,
+  resolveShipmentMatch,
+  searchOrdersToLink,
+  searchShopifyOrdersLive,
+  type ShopifyOrderCandidate,
+} from "@/app/dashboard/envios/actions";
 import type { OrderLinkCandidate } from "@/lib/shipments-access";
 
 /**
@@ -22,10 +28,13 @@ export function OrderLinkPicker({
   const [q, setQ] = useState(prefill?.trim() || "");
   const [results, setResults] = useState<OrderLinkCandidate[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [shopifyResults, setShopifyResults] = useState<ShopifyOrderCandidate[] | null>(null);
+  const [searchingShopify, setSearchingShopify] = useState(false);
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
+    setShopifyResults(null);
     const term = q.trim();
     if (term.length < 2) {
       setResults(null);
@@ -67,6 +76,28 @@ export function OrderLinkPicker({
     });
   }
 
+  async function searchShopify() {
+    const term = q.trim();
+    if (term.length < 2) return;
+    setSearchingShopify(true);
+    const r = await searchShopifyOrdersLive(shipmentId, term);
+    setShopifyResults(r);
+    setSearchingShopify(false);
+  }
+
+  function linkShopify(gid: string) {
+    start(async () => {
+      const r = await linkShipmentToShopifyOrder(shipmentId, gid);
+      setMsg(r.error ?? r.notice ?? null);
+      if (!r.error) {
+        setQ("");
+        setResults(null);
+        setShopifyResults(null);
+        onLinked?.();
+      }
+    });
+  }
+
   return (
     <div className="space-y-2">
       <div className="flex gap-2">
@@ -95,6 +126,42 @@ export function OrderLinkPicker({
               <button
                 type="button"
                 onClick={() => link(o.id)}
+                disabled={pending}
+                className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                <span className="font-mono text-xs text-slate-700">{o.name ?? "—"}</span>
+                <span className="text-xs text-slate-500">{o.customer_phone ?? "—"}</span>
+                <span className="text-xs text-slate-400">
+                  {o.created_at ? new Date(o.created_at).toLocaleDateString("es-PE") : ""}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={searchShopify}
+          disabled={q.trim().length < 2 || searchingShopify}
+          className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+        >
+          {searchingShopify ? "Buscando en Shopify…" : "Buscar en Shopify"}
+        </button>
+        <span className="text-xs text-slate-400">
+          Para pedidos que aún no se sincronizaron localmente.
+        </span>
+      </div>
+      {shopifyResults && shopifyResults.length === 0 && !searchingShopify && (
+        <p className="text-xs text-slate-400">Sin coincidencias en Shopify.</p>
+      )}
+      {shopifyResults && shopifyResults.length > 0 && (
+        <ul className="max-h-48 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
+          {shopifyResults.map((o) => (
+            <li key={o.gid}>
+              <button
+                type="button"
+                onClick={() => linkShopify(o.gid)}
                 disabled={pending}
                 className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm hover:bg-slate-50 disabled:opacity-50"
               >

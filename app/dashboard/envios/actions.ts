@@ -19,7 +19,12 @@ import {
   type RerouteDisposition,
 } from "@/lib/shipments";
 import { getStoreCreds } from "@/lib/ingest";
-import { searchProductVariants, type ProductVariantResult } from "@/lib/shopify";
+import {
+  fetchOrderById,
+  searchOrdersLive,
+  searchProductVariants,
+  type ProductVariantResult,
+} from "@/lib/shopify";
 import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
 
 export interface ShipmentActionState {
@@ -346,6 +351,93 @@ export async function resolveShipmentMatch(
   if (error) return { error: error.message };
   revalidatePath("/dashboard/envios");
   return { notice: "Marcado sin pedido." };
+}
+
+export interface ShopifyOrderCandidate {
+  gid: string;
+  name: string | null;
+  customer_phone: string | null;
+  created_at: string | null;
+}
+
+/**
+ * On-demand live search against Shopify (NOT the local, tag:kapso-scoped
+ * `orders` table) — a fallback for orders the reconciliation sync never pulled
+ * in, e.g. a real order referenced in an Aliclik guide that isn't tag:kapso.
+ */
+export async function searchShopifyOrdersLive(
+  shipmentId: string,
+  query: string,
+): Promise<ShopifyOrderCandidate[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return [];
+  const creds = await getStoreCreds(ctx.storeId);
+  if (!creds?.shopify_token) return [];
+  try {
+    const orders = await searchOrdersLive({
+      domain: creds.shopify_domain,
+      token: creds.shopify_token,
+      storeId: ctx.storeId,
+      query: q,
+      first: 10,
+    });
+    return orders.map((o) => ({
+      gid: (o.raw as { id?: string } | undefined)?.id ?? `gid://shopify/Order/${o.shopify_order_id}`,
+      name: o.name,
+      customer_phone: o.customer_phone ?? null,
+      created_at: o.created_at,
+    }));
+  } catch {
+    return []; // missing scope / API error → picker just shows no live results
+  }
+}
+
+/**
+ * Capture one Shopify order on-demand (by gid, from the live-search fallback
+ * above) and link it to the shipment. Preserves the order's real tags — unlike
+ * the COD-recovery precedent in lib/leads-ingest.ts, this order may genuinely
+ * not be Kapso-attributed, so we must not force the `kapso` tag onto it.
+ */
+export async function linkShipmentToShopifyOrder(
+  shipmentId: string,
+  orderGid: string,
+): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a este envío." };
+  const creds = await getStoreCreds(ctx.storeId);
+  if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify conectado." };
+
+  let order;
+  try {
+    order = await fetchOrderById({
+      domain: creds.shopify_domain,
+      token: creds.shopify_token,
+      storeId: ctx.storeId,
+      orderGid,
+    });
+  } catch {
+    return { error: "No se pudo obtener el pedido de Shopify." };
+  }
+  if (!order) return { error: "Pedido no encontrado en Shopify." };
+
+  const admin = createAdminSupabase();
+  const { error: upsertErr } = await admin
+    .from("orders")
+    .upsert([order], { onConflict: "store_id,shopify_order_id" });
+  if (upsertErr) return { error: upsertErr.message };
+
+  const { data: row } = await admin
+    .from("orders")
+    .select("id")
+    .eq("store_id", ctx.storeId)
+    .eq("shopify_order_id", order.shopify_order_id)
+    .maybeSingle();
+  const orderId = (row as { id: string } | null)?.id ?? null;
+  if (!orderId) return { error: "No se pudo vincular el pedido." };
+
+  return resolveShipmentMatch(shipmentId, { orderId });
 }
 
 /**
