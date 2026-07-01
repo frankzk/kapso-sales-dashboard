@@ -381,7 +381,9 @@ function ShipmentTable({
               {stores.length > 1 && (
                 <td className="px-4 py-2.5 text-slate-600">{storeName(s.store_id)}</td>
               )}
-              <td className="px-4 py-2.5 text-slate-700">{s.order_name ?? "—"}</td>
+              <td className="px-4 py-2.5 text-slate-700">
+                <OrderNameLabel name={s.order_name} matched={s.matched} />
+              </td>
               <td className="px-4 py-2.5 text-slate-700">
                 {s.customer_name ?? "—"}
                 <span className="block text-xs text-slate-400">{s.customer_phone ?? ""}</span>
@@ -475,7 +477,12 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
             </div>
 
             <dl className="grid grid-cols-2 gap-2 text-sm">
-              <Field label="Pedido" value={detail.shipment.order_name} />
+              <div>
+                <dt className="text-xs text-slate-400">Pedido</dt>
+                <dd className="text-slate-700">
+                  <OrderNameLabel name={detail.shipment.order_name} matched={detail.shipment.matched} />
+                </dd>
+              </div>
               <Field label="Cliente" value={detail.shipment.customer_name} />
               <Field label="Teléfono" value={detail.shipment.customer_phone} />
               <Field label="Ciudad" value={detail.shipment.city} />
@@ -754,5 +761,21 @@ function Field({ label, value }: { label: string; value: string | null | undefin
       <dt className="text-xs text-slate-400">{label}</dt>
       <dd className="text-slate-700">{value || "—"}</dd>
     </div>
+  );
+}
+
+/** The Aliclik NOTA parse can guess an order reference before it's actually
+ *  linked (matched=false) — shown muted + "(candidato)" so it's never
+ *  mistaken for a confirmed vínculo, in the table or the drawer. */
+function OrderNameLabel({ name, matched }: { name: string | null; matched: boolean }) {
+  if (!name) return <span className="text-slate-400">—</span>;
+  if (matched) return <>{name}</>;
+  return (
+    <span
+      className="italic text-slate-400"
+      title="Referencia detectada en la nota del reporte — aún no vinculada a un pedido real"
+    >
+      {name} <span className="text-[10px] not-italic">(candidato)</span>
+    </span>
   );
 }
