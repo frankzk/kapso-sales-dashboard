@@ -1302,3 +1302,21 @@ update shipments set status_category = 'delivered' where delivery_status = 'entr
 update shipments set status_category = 'closed'    where delivery_status = 'anulado';
 update shipments set status_category = 'in_route'  where delivery_status = 'en_ruta';
 update shipments set status_category = 'pending'   where delivery_status = 'pendiente';
+
+
+-- ---- 0027 ----
+-- 0027_shipment_suggestions.sql — batch Shopify-search auto-match suggestions
+-- for the "Revisión" queue. A suggestion is a high-confidence candidate found
+-- by live-searching Shopify (order-reference + phone cross-validated), never
+-- applied automatically — a human confirms via the existing
+-- resolveShipmentMatch/linkShipmentToShopifyOrder actions. suggestion_checked_at
+-- marks a shipment as already processed (skip on re-run) — resumable. Idempotent.
+
+alter table shipments add column if not exists suggested_order_gid text;
+alter table shipments add column if not exists suggested_store_id uuid references stores(id) on delete set null;
+alter table shipments add column if not exists suggested_order_name text;
+alter table shipments add column if not exists suggestion_checked_at timestamptz;
+
+create index if not exists shipments_suggestion_pending_idx
+  on shipments (created_at)
+  where matched = false and suggestion_checked_at is null;

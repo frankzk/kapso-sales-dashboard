@@ -237,6 +237,9 @@ export interface ShipmentRow {
   next_followup_at: string | null;
   source_batch_id: string | null;
   last_report_at: string | null;
+  suggested_order_gid: string | null;
+  suggested_store_id: string | null;
+  suggested_order_name: string | null;
   created_at?: string;
   updated_at?: string;
 }
