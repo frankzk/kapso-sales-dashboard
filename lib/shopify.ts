@@ -666,6 +666,19 @@ export async function fetchOrderById(
   return node ? mapGraphqlOrder(node, opts.storeId) : null;
 }
 
+/** Live, on-demand order search for manual linking — NOT scoped to tag:kapso.
+ *  Free-text query (same syntax as the Shopify admin order search box: matches
+ *  name, phone, email, etc). Small page size — drives an interactive picker,
+ *  not a bulk sync. */
+export async function searchOrdersLive(
+  opts: ShopifyClientOpts & { storeId: string; query: string; first?: number },
+): Promise<OrderRow[]> {
+  const q = opts.query.trim();
+  if (!q) return [];
+  const page = await fetchOrdersPage({ ...opts, searchQuery: q, first: opts.first ?? 10 });
+  return page.orders;
+}
+
 // ---------------------------------------------------------------------------
 // Draft-order fetch (read_draft_orders) + complete (write_draft_orders)
 // ---------------------------------------------------------------------------
