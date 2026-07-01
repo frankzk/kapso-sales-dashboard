@@ -454,7 +454,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
   return (
     <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={onClose}>
       <div
-        className="h-full w-full max-w-md overflow-y-auto bg-white p-5 shadow-xl"
+        className="h-full w-full max-w-md overflow-y-auto bg-white p-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         {detail && "error" in detail ? (
@@ -462,7 +462,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
         ) : !detail ? (
           <p className="text-sm text-slate-400">Cargando…</p>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-3">
             <div className="flex items-start justify-between">
               <div>
                 <p className="font-mono text-sm text-slate-800">{detail.shipment.guide_code}</p>
@@ -477,18 +477,12 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
               </button>
             </div>
 
-            <dl className="grid grid-cols-2 gap-2 text-sm">
-              <div>
-                <dt className="text-xs text-slate-400">Pedido</dt>
-                <dd className="text-slate-700">
-                  <OrderNameLabel name={detail.shipment.order_name} matched={detail.shipment.matched} />
-                </dd>
-              </div>
+            <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
               <Field label="Cliente" value={detail.shipment.customer_name} />
               <Field label="Teléfono" value={detail.shipment.customer_phone} />
               <Field label="Ciudad" value={detail.shipment.city} />
               <Field label="Distrito" value={detail.shipment.district} />
-              <Field label="Producto" value={detail.shipment.product} />
+              <Field label="Producto" value={detail.shipment.product} clamp />
               <Field label="Intentos" value={`${detail.shipment.reroute_attempts} / 7`} />
               <Field
                 label="Fenix"
@@ -496,25 +490,26 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
               />
             </dl>
 
-            {msg && <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">{msg}</p>}
+            {msg && <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-sm text-slate-700">{msg}</p>}
 
             {/* order link — search+link (not just a raw UUID) for any shipment,
                 so a wrong auto-match can also be corrected here */}
-            <section className="space-y-2 rounded-xl border border-slate-200 p-3">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-medium text-slate-800">Pedido</p>
+            <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm text-slate-700">
+                  <span className="text-xs text-slate-400">Pedido </span>
+                  <OrderNameLabel name={detail.shipment.order_name} matched={detail.shipment.matched} />
+                </p>
                 {detail.shipment.matched && (
                   <button
                     onClick={() => setShowOrderPicker((v) => !v)}
-                    className="text-xs text-brand-700 hover:underline"
+                    className="shrink-0 text-xs text-brand-700 hover:underline"
                   >
                     {showOrderPicker ? "Cancelar" : "Cambiar"}
                   </button>
                 )}
               </div>
-              {detail.shipment.matched && !showOrderPicker ? (
-                <p className="text-sm text-slate-700">{detail.shipment.order_name ?? "—"}</p>
-              ) : (
+              {(!detail.shipment.matched || showOrderPicker) && (
                 <OrderLinkPicker
                   shipmentId={shipmentId}
                   prefill={detail.shipment.order_name}
@@ -528,7 +523,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
             </section>
 
             {/* claim + re-route call */}
-            <section className="space-y-2 rounded-xl border border-slate-200 p-3">
+            <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
               <p className="text-sm font-medium text-slate-800">Registrar llamada (reprogramación)</p>
               <div className="flex gap-2">
                 <button
@@ -589,7 +584,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
             </section>
 
             {/* Fenix guide */}
-            <section className="space-y-2 rounded-xl border border-slate-200 p-3">
+            <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
               <p className="text-sm font-medium text-slate-800">Generar guía Fenix</p>
               {detail.shipment.fenix_shipment_id ? (
                 <p className="text-xs text-emerald-700">Ya tiene guía Fenix vinculada.</p>
@@ -628,7 +623,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
             </section>
 
             {/* manual status */}
-            <section className="space-y-2 rounded-xl border border-slate-200 p-3">
+            <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
               <p className="text-sm font-medium text-slate-800">Cambiar estado (manual)</p>
               <div className="flex gap-2">
                 <select
@@ -771,11 +766,23 @@ function ChecklistFilter({
   );
 }
 
-function Field({ label, value }: { label: string; value: string | null | undefined }) {
+function Field({
+  label,
+  value,
+  clamp,
+}: {
+  label: string;
+  value: string | null | undefined;
+  /** Truncate long values (e.g. a product name) to 2 lines instead of
+   *  eating the drawer's vertical space — full text still on hover. */
+  clamp?: boolean;
+}) {
   return (
     <div>
       <dt className="text-xs text-slate-400">{label}</dt>
-      <dd className="text-slate-700">{value || "—"}</dd>
+      <dd className={cn("text-slate-700", clamp && "line-clamp-2")} title={clamp ? (value ?? undefined) : undefined}>
+        {value || "—"}
+      </dd>
     </div>
   );
 }
