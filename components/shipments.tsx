@@ -22,6 +22,7 @@ import {
   searchShipments,
   setShipmentStatus,
 } from "@/app/dashboard/envios/actions";
+import { OrderLinkPicker } from "@/components/order-link-picker";
 
 const CATEGORY_BADGE: Record<string, string> = {
   pending: "bg-amber-50 text-amber-700",
@@ -407,6 +408,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
   const [nextDate, setNextDate] = useState("");
   const [manualStatus, setManualStatus] = useState("");
   const [fenixGuide, setFenixGuide] = useState("");
+  const [showOrderPicker, setShowOrderPicker] = useState(false);
 
   const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => {
@@ -474,6 +476,34 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
             </dl>
 
             {msg && <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">{msg}</p>}
+
+            {/* order link — search+link (not just a raw UUID) for any shipment,
+                so a wrong auto-match can also be corrected here */}
+            <section className="space-y-2 rounded-xl border border-slate-200 p-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-slate-800">Pedido</p>
+                {detail.shipment.matched && (
+                  <button
+                    onClick={() => setShowOrderPicker((v) => !v)}
+                    className="text-xs text-brand-700 hover:underline"
+                  >
+                    {showOrderPicker ? "Cancelar" : "Cambiar"}
+                  </button>
+                )}
+              </div>
+              {detail.shipment.matched && !showOrderPicker ? (
+                <p className="text-sm text-slate-700">{detail.shipment.order_name ?? "—"}</p>
+              ) : (
+                <OrderLinkPicker
+                  shipmentId={shipmentId}
+                  prefill={detail.shipment.order_name}
+                  onLinked={() => {
+                    setShowOrderPicker(false);
+                    refresh();
+                  }}
+                />
+              )}
+            </section>
 
             {/* claim + re-route call */}
             <section className="space-y-2 rounded-xl border border-slate-200 p-3">
