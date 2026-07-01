@@ -232,3 +232,17 @@ export function reconcileDeliveryStatus(existing: string | null | undefined, inc
   if (!existing) return incoming;
   return statusPrecedence(incoming) > statusPrecedence(existing) ? incoming : existing;
 }
+
+/**
+ * Suggest a Fenix guide code from the linked Shopify order + today's date
+ * (DDMMYYYY), e.g. order "#KP118847" on 2026-07-01 → "#KP11884701072026".
+ * Just a starting point the operator can edit before creating the guide —
+ * `now` is injectable for tests.
+ */
+export function autoFenixGuideCode(orderName: string | null | undefined, now: Date = new Date()): string {
+  if (!orderName?.trim()) return "";
+  const dd = String(now.getDate()).padStart(2, "0");
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const yyyy = now.getFullYear();
+  return `${orderName.trim()}${dd}${mm}${yyyy}`;
+}
