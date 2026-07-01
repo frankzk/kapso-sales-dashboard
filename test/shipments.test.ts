@@ -14,6 +14,7 @@ import {
   MAX_INTENTOS,
   FENIX_CITIES,
   reconcileDeliveryStatus,
+  autoFenixGuideCode,
 } from "@/lib/shipments";
 
 describe("delivery status model", () => {
@@ -127,5 +128,19 @@ describe("reconcileDeliveryStatus (re-import merge)", () => {
   it("takes the incoming status for a brand-new guide (no existing)", () => {
     expect(reconcileDeliveryStatus(null, "pendiente")).toBe("pendiente");
     expect(reconcileDeliveryStatus(undefined, "entregado")).toBe("entregado");
+  });
+});
+
+describe("autoFenixGuideCode", () => {
+  it("appends today's DDMMYYYY to the order name", () => {
+    expect(autoFenixGuideCode("#KP118847", new Date(2026, 6, 1))).toBe("#KP11884701072026");
+  });
+  it("pads single-digit day/month", () => {
+    expect(autoFenixGuideCode("#AUR173123", new Date(2026, 0, 5))).toBe("#AUR17312305012026");
+  });
+  it("returns empty string when there's no order name", () => {
+    expect(autoFenixGuideCode(null)).toBe("");
+    expect(autoFenixGuideCode(undefined)).toBe("");
+    expect(autoFenixGuideCode("  ")).toBe("");
   });
 });

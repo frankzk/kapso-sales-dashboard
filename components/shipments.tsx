@@ -7,6 +7,7 @@ import { Card } from "@/components/ui";
 import {
   DELIVERY_STATUSES,
   attemptLabel,
+  autoFenixGuideCode,
   isFenixDistrict,
   labelOf,
   type RerouteDisposition,
@@ -594,12 +595,27 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                 <p className="text-xs text-emerald-700">Ya tiene guía Fenix vinculada.</p>
               ) : (
                 <>
-                  <input
-                    value={fenixGuide}
-                    onChange={(e) => setFenixGuide(e.target.value)}
-                    placeholder="N° de guía Fenix"
-                    className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                  />
+                  <div className="flex gap-2">
+                    <input
+                      value={fenixGuide}
+                      onChange={(e) => setFenixGuide(e.target.value)}
+                      placeholder="N° de guía Fenix"
+                      className="flex-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setFenixGuide(autoFenixGuideCode(detail.shipment.order_name))}
+                      disabled={!detail.shipment.order_name}
+                      title={
+                        detail.shipment.order_name
+                          ? undefined
+                          : "Este envío no tiene N° de pedido para generar la guía"
+                      }
+                      className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Autogenerar
+                    </button>
+                  </div>
                   <button
                     onClick={() => run(() => createFenixGuide(shipmentId, { guideCode: fenixGuide }))}
                     disabled={pending || !fenixGuide.trim()}
