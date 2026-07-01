@@ -88,6 +88,7 @@ export function ShipmentsBoard({
   const [storeFilter, setStoreFilter] = useState<Set<string>>(new Set());
   const [districtFilter, setDistrictFilter] = useState<Set<string>>(new Set());
   const [dateFilter, setDateFilter] = useState(""); // YYYY-MM-DD on next_followup_at
+  const [unmatchedOnly, setUnmatchedOnly] = useState(false);
 
   // global search (across all tabs, server-side)
   const [search, setSearch] = useState("");
@@ -111,6 +112,7 @@ export function ShipmentsBoard({
     );
     setDistrictFilter(covered);
     setDateFilter("");
+    setUnmatchedOnly(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
@@ -141,7 +143,8 @@ export function ShipmentsBoard({
     (s) =>
       (storeFilter.size === 0 || storeFilter.has(s.store_id)) &&
       (districtFilter.size === 0 || districtFilter.has(s.district || SIN_DISTRITO)) &&
-      (!dateFilter || (s.next_followup_at ? s.next_followup_at.slice(0, 10) === dateFilter : false)),
+      (!dateFilter || (s.next_followup_at ? s.next_followup_at.slice(0, 10) === dateFilter : false)) &&
+      (!unmatchedOnly || !s.matched),
   );
 
   const searchActive = search.trim().length >= 2;
@@ -280,12 +283,22 @@ export function ShipmentsBoard({
                   className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
                 />
               </label>
-              {(storeFilter.size > 0 || districtFilter.size > 0 || dateFilter) && (
+              <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={unmatchedOnly}
+                  onChange={(e) => setUnmatchedOnly(e.target.checked)}
+                  className="rounded border-slate-300"
+                />
+                Solo sin pedido
+              </label>
+              {(storeFilter.size > 0 || districtFilter.size > 0 || dateFilter || unmatchedOnly) && (
                 <button
                   onClick={() => {
                     setStoreFilter(new Set());
                     setDistrictFilter(new Set());
                     setDateFilter("");
+                    setUnmatchedOnly(false);
                   }}
                   className="text-xs text-slate-500 hover:underline"
                 >
