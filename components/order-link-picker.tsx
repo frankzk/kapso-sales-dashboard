@@ -90,6 +90,16 @@ export function OrderLinkPicker({
     };
   }, [q]);
 
+  // Auto-run the Shopify search once, on open, when there's a candidate
+  // reference to search for — skips the manual "Buscar en Shopify" click for
+  // the common case (a guide whose NOTA parse gave us a reference), while
+  // still leaving the button below for a re-search on an edited/typed term.
+  useEffect(() => {
+    const term = prefill?.trim();
+    if (term && term.length >= 2) void searchShopify(term);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function link(orderId: string) {
     start(async () => {
       const r = await resolveShipmentMatch(shipmentId, { orderId });
@@ -117,6 +127,13 @@ export function OrderLinkPicker({
     setShopifyResults(r);
     setSearchingShopify(false);
   }
+
+  // Exactly one live-Shopify result whose phone cross-validates the shipment's
+  // own phone — safe to surface as a one-click "Confirmar" instead of making
+  // the operator pick it out of the list themselves.
+  const phoneMatches =
+    customerPhone && shopifyResults ? shopifyResults.filter((o) => o.customer_phone === customerPhone) : [];
+  const bestMatch = phoneMatches.length === 1 ? phoneMatches[0]! : null;
 
   function linkShopify(gid: string, storeId: string) {
     start(async () => {
@@ -189,7 +206,23 @@ export function OrderLinkPicker({
       {shopifyResults && shopifyResults.length === 0 && !searchingShopify && (
         <p className="text-xs text-slate-400">Sin coincidencias en Shopify.</p>
       )}
-      {shopifyResults && shopifyResults.length > 0 && (
+      {bestMatch && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-sm">
+          <p className="text-slate-700">
+            Coincidencia: <span className="font-mono text-xs">{bestMatch.name ?? "—"}</span>
+            <span className="ml-2 text-xs font-medium text-emerald-600">✓ mismo teléfono</span>
+          </p>
+          <button
+            type="button"
+            onClick={() => linkShopify(bestMatch.gid, bestMatch.storeId)}
+            disabled={pending}
+            className="mt-1 rounded-lg bg-brand-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+          >
+            Confirmar vínculo
+          </button>
+        </div>
+      )}
+      {shopifyResults && shopifyResults.length > (bestMatch ? 1 : 0) && (
         <ul className="max-h-48 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
           {sortByPhoneMatch(shopifyResults, customerPhone).map((o) => (
             <li key={o.gid}>
