@@ -10,18 +10,6 @@ import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
 // dedupes by guide and reflects the latest re-import.
 const REVIEW_CATEGORIES = ["pending", "in_route"];
 
-function isReviewShipment(r: {
-  matched: boolean;
-  status_category: string;
-  match_method: string | null;
-}): boolean {
-  return (
-    !r.matched &&
-    r.match_method !== "dismissed" &&
-    REVIEW_CATEGORIES.includes(r.status_category)
-  );
-}
-
 export type ShipmentView =
   | "pendiente"
   | "en_ruta"
@@ -55,6 +43,11 @@ const VIEW_CATEGORIES: Record<ShipmentView, string[]> = {
   revision: [], // special-cased: unmatched guides
 };
 
+// PostgREST caps a single response at its `db-max-rows` (1000 on Supabase by
+// default), so we paginate with .range() instead of a big .limit().
+const PAGE = 1000;
+const MAX_LIST = 5000;
+
 /** Shipments for a view across the given (accessible) stores. */
 export async function getStoreShipments(
   storeIds: string[],
@@ -63,21 +56,42 @@ export async function getStoreShipments(
   if (!storeIds.length || view === "revision") return [];
   const sb = await createServerSupabase();
   const cats = VIEW_CATEGORIES[view];
-  let q = sb
-    .from("shipments")
-    .select(SHIPMENT_COLUMNS)
-    .in("store_id", storeIds)
-    .in("status_category", cats);
-  // pending is the single managed queue: soonest follow-up first; others recent
-  q =
-    view === "pendiente"
-      ? q.order("next_followup_at", { ascending: true, nullsFirst: true }).order("updated_at", { ascending: false })
-      : q.order("updated_at", { ascending: false });
-  const { data } = await q.limit(2000);
-  return (data as ShipmentRow[]) ?? [];
+  const out: ShipmentRow[] = [];
+  for (let from = 0; from < MAX_LIST; from += PAGE) {
+    let q = sb
+      .from("shipments")
+      .select(SHIPMENT_COLUMNS)
+      .in("store_id", storeIds)
+      .in("status_category", cats);
+    // pending is the single managed queue: soonest follow-up first; others recent
+    q =
+      view === "pendiente"
+        ? q.order("next_followup_at", { ascending: true, nullsFirst: true }).order("updated_at", { ascending: false })
+        : q.order("updated_at", { ascending: false });
+    const { data } = await q.range(from, from + PAGE - 1);
+    const rows = (data as ShipmentRow[]) ?? [];
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return out;
 }
 
-/** Tally shipments into the view buckets (for tab badges). */
+/** Count of shipments matching a category set (exact, not row-capped). */
+async function countByCategory(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: string[],
+  cats: string[],
+): Promise<number> {
+  const { count } = await sb
+    .from("shipments")
+    .select("id", { count: "exact", head: true })
+    .in("store_id", storeIds)
+    .in("status_category", cats);
+  return count ?? 0;
+}
+
+/** Tally shipments into the view buckets (for tab badges). Uses exact COUNT
+ *  queries (head-only) so the totals are never truncated by the row cap. */
 export async function getShipmentCounts(
   storeIds: string[],
 ): Promise<Record<ShipmentView, number>> {
@@ -90,20 +104,20 @@ export async function getShipmentCounts(
   };
   if (!storeIds.length) return out;
   const sb = await createServerSupabase();
-  const { data } = await sb
+  const { count: revision } = await sb
     .from("shipments")
-    .select("status_category,matched,match_method")
+    .select("id", { count: "exact", head: true })
     .in("store_id", storeIds)
-    .limit(20000);
-  for (const r of (data as { status_category: string; matched: boolean; match_method: string | null }[]) ?? []) {
-    if (r.status_category === "pending") out.pendiente += 1;
-    else if (r.status_category === "in_route") out.en_ruta += 1;
-    else if (r.status_category === "delivered") out.entregado += 1;
-    else if (r.status_category === "closed") out.anulado += 1;
-    // revisión: unmatched, non-terminal guides still needing a human
-    if (isReviewShipment(r)) out.revision += 1;
-  }
-  return out;
+    .eq("matched", false)
+    .in("status_category", REVIEW_CATEGORIES)
+    .or("match_method.is.null,match_method.neq.dismissed");
+  const [pendiente, en_ruta, entregado, anulado] = await Promise.all([
+    countByCategory(sb, storeIds, ["pending"]),
+    countByCategory(sb, storeIds, ["in_route"]),
+    countByCategory(sb, storeIds, ["delivered"]),
+    countByCategory(sb, storeIds, ["closed"]),
+  ]);
+  return { pendiente, en_ruta, entregado, anulado, revision: revision ?? 0 };
 }
 
 /** Unmatched shipments awaiting manual linking (the "Por revisar" queue). */
