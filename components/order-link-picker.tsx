@@ -118,12 +118,6 @@ export function OrderLinkPicker({
     setSearchingShopify(false);
   }
 
-  function searchByShipmentPhone() {
-    if (!customerPhone) return;
-    setQ(customerPhone);
-    searchShopify(customerPhone);
-  }
-
   function linkShopify(gid: string, storeId: string) {
     start(async () => {
       const r = await linkShipmentToShopifyOrder(shipmentId, gid, storeId);
@@ -154,15 +148,6 @@ export function OrderLinkPicker({
           Sin pedido
         </button>
       </div>
-      {customerPhone && (
-        <button
-          type="button"
-          onClick={searchByShipmentPhone}
-          className="text-xs text-brand-700 hover:underline"
-        >
-          Buscar por el teléfono del envío ({customerPhone})
-        </button>
-      )}
       {searching && <p className="text-xs text-slate-400">Buscando…</p>}
       {results && results.length === 0 && !searching && (
         <p className="text-xs text-slate-400">Sin coincidencias.</p>
