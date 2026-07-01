@@ -682,14 +682,37 @@ export function buildLiveOrderSearchQuery(term: string): string {
   return clauses.join(" OR ");
 }
 
-/** Live, on-demand order search for manual linking — NOT scoped to tag:kapso.
- *  Matches order name (any casing/prefix) or phone. Small page size — drives
- *  an interactive picker, not a bulk sync. */
+// The two real Shopify order-name prefixes seen across connected stores
+// (AUR confirmed for Aurela; KP is Kenku's established reference format).
+const KNOWN_ORDER_PREFIXES = ["KP", "AUR"];
+
+/** Exact-prefix order name search — `#KP119603` / `#AUR173123` — the real
+ *  order.name format, so a hit here is trustworthy without a phone check. */
+export function buildPrefixedOrderSearchQuery(digits: string): string {
+  return KNOWN_ORDER_PREFIXES.map((p) => `name:*${p}${digits}*`).join(" OR ");
+}
+
+/**
+ * Live, on-demand order search for manual linking — NOT scoped to tag:kapso.
+ * Tries the exact prefixed name first (`#KP…` / `#AUR…`, the real order.name
+ * format) and only falls back to a loose digits/phone match — which can
+ * surface an unrelated order that merely shares the same numeric tail — when
+ * the strict search finds nothing.
+ */
 export async function searchOrdersLive(
   opts: ShopifyClientOpts & { storeId: string; query: string; first?: number },
 ): Promise<OrderRow[]> {
   const q = opts.query.trim();
   if (!q) return [];
+  const digits = q.replace(/\D/g, "");
+  if (digits.length >= 4) {
+    const strict = await fetchOrdersPage({
+      ...opts,
+      searchQuery: buildPrefixedOrderSearchQuery(digits),
+      first: opts.first ?? 10,
+    });
+    if (strict.orders.length) return strict.orders;
+  }
   const page = await fetchOrdersPage({
     ...opts,
     searchQuery: buildLiveOrderSearchQuery(q),

@@ -16,6 +16,8 @@ import {
   buildDraftOrdersSearchQuery,
   buildKapsoOrdersSearchQuery,
   buildLiveOrderSearchQuery,
+  buildPrefixedOrderSearchQuery,
+  searchOrdersLive,
   shopifyGraphQL,
   fetchOrdersPage,
   searchProductVariants,
@@ -297,6 +299,88 @@ describe("buildLiveOrderSearchQuery", () => {
   it("adds a phone clause only once digits reach 6+", () => {
     expect(buildLiveOrderSearchQuery("51999")).toBe("name:*51999*");
     expect(buildLiveOrderSearchQuery("519990")).toBe("name:*519990* OR phone:*519990*");
+  });
+});
+
+describe("buildPrefixedOrderSearchQuery", () => {
+  it("tries the real order-name prefixes (KP, AUR)", () => {
+    expect(buildPrefixedOrderSearchQuery("118200")).toBe(
+      "name:*KP118200* OR name:*AUR118200*",
+    );
+  });
+});
+
+describe("searchOrdersLive (injected fetch)", () => {
+  function fakeFetchByQuery(handler: (query: string) => unknown): typeof fetch {
+    return (async (_url: unknown, init: unknown) => {
+      const body = JSON.parse(String((init as { body?: string })?.body ?? "{}"));
+      const query = String(body?.variables?.query ?? "");
+      const payload = handler(query);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => payload,
+        text: async () => JSON.stringify(payload),
+      } as Response;
+    }) as unknown as typeof fetch;
+  }
+
+  function ordersPage(names: string[]): unknown {
+    return {
+      data: {
+        orders: {
+          edges: names.map((name, i) => ({
+            cursor: `c${i}`,
+            node: {
+              id: `gid://shopify/Order/${i}`,
+              name,
+              tags: [],
+              lineItems: { edges: [] },
+            },
+          })),
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      },
+    };
+  }
+
+  it("returns the exact prefixed match without falling back to the loose search", async () => {
+    let calls = 0;
+    const fetchImpl = fakeFetchByQuery((query) => {
+      calls++;
+      expect(query).toBe("name:*KP118200* OR name:*AUR118200*");
+      return ordersPage(["#KP118200"]);
+    });
+    const orders = await searchOrdersLive({
+      domain: "kenku.myshopify.com",
+      token: "t",
+      storeId: "store1",
+      query: "kp118200",
+      fetchImpl,
+    });
+    expect(calls).toBe(1);
+    expect(orders.map((o) => o.name)).toEqual(["#KP118200"]);
+  });
+
+  it("falls back to the loose digits/phone search when the prefixed search finds nothing", async () => {
+    const seenQueries: string[] = [];
+    const fetchImpl = fakeFetchByQuery((query) => {
+      seenQueries.push(query);
+      if (query.startsWith("name:*KP")) return ordersPage([]);
+      return ordersPage(["#118200"]);
+    });
+    const orders = await searchOrdersLive({
+      domain: "kenku.myshopify.com",
+      token: "t",
+      storeId: "store1",
+      query: "118200",
+      fetchImpl,
+    });
+    expect(seenQueries).toEqual([
+      "name:*KP118200* OR name:*AUR118200*",
+      "name:*118200* OR phone:*118200*",
+    ]);
+    expect(orders.map((o) => o.name)).toEqual(["#118200"]);
   });
 });
 
