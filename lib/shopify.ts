@@ -666,16 +666,35 @@ export async function fetchOrderById(
   return node ? mapGraphqlOrder(node, opts.storeId) : null;
 }
 
+/**
+ * Build a Shopify order-search query that matches the order name as a
+ * case-insensitive substring, with or without a leading "#" or a non-numeric
+ * prefix (operators type "kp119603", "#KP119603", or just "119603"), plus a
+ * phone fallback. Plain unscoped text search doesn't reliably substring-match
+ * the name field, so this scopes explicitly with wildcards instead.
+ */
+export function buildLiveOrderSearchQuery(term: string): string {
+  const cleaned = term.trim().replace(/^#/, "");
+  const digits = cleaned.replace(/\D/g, "");
+  const clauses = [`name:*${cleaned}*`];
+  if (digits && digits !== cleaned) clauses.push(`name:*${digits}*`);
+  if (digits.length >= 6) clauses.push(`phone:*${digits}*`);
+  return clauses.join(" OR ");
+}
+
 /** Live, on-demand order search for manual linking — NOT scoped to tag:kapso.
- *  Free-text query (same syntax as the Shopify admin order search box: matches
- *  name, phone, email, etc). Small page size — drives an interactive picker,
- *  not a bulk sync. */
+ *  Matches order name (any casing/prefix) or phone. Small page size — drives
+ *  an interactive picker, not a bulk sync. */
 export async function searchOrdersLive(
   opts: ShopifyClientOpts & { storeId: string; query: string; first?: number },
 ): Promise<OrderRow[]> {
   const q = opts.query.trim();
   if (!q) return [];
-  const page = await fetchOrdersPage({ ...opts, searchQuery: q, first: opts.first ?? 10 });
+  const page = await fetchOrdersPage({
+    ...opts,
+    searchQuery: buildLiveOrderSearchQuery(q),
+    first: opts.first ?? 10,
+  });
   return page.orders;
 }
 

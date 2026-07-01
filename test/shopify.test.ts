@@ -15,6 +15,7 @@ import {
   isCodFormDraft,
   buildDraftOrdersSearchQuery,
   buildKapsoOrdersSearchQuery,
+  buildLiveOrderSearchQuery,
   shopifyGraphQL,
   fetchOrdersPage,
   searchProductVariants,
@@ -276,6 +277,26 @@ describe("buildKapsoOrdersSearchQuery", () => {
     expect(buildKapsoOrdersSearchQuery("2026-06-01T00:00:00Z")).toBe(
       "tag:kapso updated_at:>=2026-06-01T00:00:00Z",
     );
+  });
+});
+
+describe("buildLiveOrderSearchQuery", () => {
+  it("wraps a bare number in name wildcards + a phone fallback (6+ digits)", () => {
+    expect(buildLiveOrderSearchQuery("119603")).toBe("name:*119603* OR phone:*119603*");
+  });
+  it("strips a leading # and adds a digits-only fallback for a prefixed name", () => {
+    expect(buildLiveOrderSearchQuery("#KP119603")).toBe(
+      "name:*KP119603* OR name:*119603* OR phone:*119603*",
+    );
+  });
+  it("is case-preserving (Shopify text search is case-insensitive)", () => {
+    expect(buildLiveOrderSearchQuery("kp119603")).toBe(
+      "name:*kp119603* OR name:*119603* OR phone:*119603*",
+    );
+  });
+  it("adds a phone clause only once digits reach 6+", () => {
+    expect(buildLiveOrderSearchQuery("51999")).toBe("name:*51999*");
+    expect(buildLiveOrderSearchQuery("519990")).toBe("name:*519990* OR phone:*519990*");
   });
 });
 
