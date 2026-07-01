@@ -24,7 +24,6 @@ function isReviewShipment(r: {
 
 export type ShipmentView =
   | "pendiente"
-  | "sin_cobertura"
   | "en_ruta"
   | "entregado"
   | "anulado"
@@ -35,7 +34,6 @@ export const SHIPMENT_VIEWS: { key: ShipmentView; label: string }[] = [
   { key: "en_ruta", label: "En ruta" },
   { key: "entregado", label: "Entregado" },
   { key: "anulado", label: "Anulado" },
-  { key: "sin_cobertura", label: "Sin cobertura" },
   { key: "revision", label: "Revisión" },
 ];
 
@@ -46,11 +44,11 @@ export function isShipmentView(v: string | undefined | null): v is ShipmentView 
 const SHIPMENT_COLUMNS =
   "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,delivered_source,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,created_at,updated_at";
 
-// Each view maps to a status_category filter. "pendiente"/"sin_cobertura" both
-// sit in the `pending` category but split by fenix_eligible (managed vs parked).
+// Each view maps to a status_category filter. Every non-delivered guide lands in
+// "pendiente"; fenix_eligible is shown as a per-row indicator, it does NOT split
+// the queue.
 const VIEW_CATEGORIES: Record<ShipmentView, string[]> = {
   pendiente: ["pending"],
-  sin_cobertura: ["pending"],
   en_ruta: ["in_route"],
   entregado: ["delivered"],
   anulado: ["closed"],
@@ -70,10 +68,7 @@ export async function getStoreShipments(
     .select(SHIPMENT_COLUMNS)
     .in("store_id", storeIds)
     .in("status_category", cats);
-  // pending splits by Fenix coverage: managed queue vs parked "sin cobertura"
-  if (view === "pendiente") q = q.eq("fenix_eligible", true);
-  else if (view === "sin_cobertura") q = q.eq("fenix_eligible", false);
-  // managed queue: soonest follow-up first; others most recent first
+  // pending is the single managed queue: soonest follow-up first; others recent
   q =
     view === "pendiente"
       ? q.order("next_followup_at", { ascending: true, nullsFirst: true }).order("updated_at", { ascending: false })
@@ -88,7 +83,6 @@ export async function getShipmentCounts(
 ): Promise<Record<ShipmentView, number>> {
   const out: Record<ShipmentView, number> = {
     pendiente: 0,
-    sin_cobertura: 0,
     en_ruta: 0,
     entregado: 0,
     anulado: 0,
@@ -98,11 +92,11 @@ export async function getShipmentCounts(
   const sb = await createServerSupabase();
   const { data } = await sb
     .from("shipments")
-    .select("status_category,matched,match_method,fenix_eligible")
+    .select("status_category,matched,match_method")
     .in("store_id", storeIds)
     .limit(20000);
-  for (const r of (data as { status_category: string; matched: boolean; match_method: string | null; fenix_eligible: boolean }[]) ?? []) {
-    if (r.status_category === "pending") (r.fenix_eligible ? (out.pendiente += 1) : (out.sin_cobertura += 1));
+  for (const r of (data as { status_category: string; matched: boolean; match_method: string | null }[]) ?? []) {
+    if (r.status_category === "pending") out.pendiente += 1;
     else if (r.status_category === "in_route") out.en_ruta += 1;
     else if (r.status_category === "delivered") out.entregado += 1;
     else if (r.status_category === "closed") out.anulado += 1;
