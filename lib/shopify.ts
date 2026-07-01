@@ -686,6 +686,24 @@ export function buildLiveOrderSearchQuery(term: string): string {
 // (AUR confirmed for Aurela; KP is Kenku's established reference format).
 const KNOWN_ORDER_PREFIXES = ["KP", "AUR"];
 
+/**
+ * Which connected store(s) to search for a given order reference — a guide's
+ * own `store_id` isn't reliable here (the Aliclik pool is shared across
+ * stores, and unmatched guides default to whichever store the import batch
+ * picked). `#KP…` orders live in Kenku's store, `#AUR…` in Aurela's; a bare
+ * number or phone doesn't tell us which, so search every connected store.
+ */
+export function pickStoresForOrderQuery<T extends { name: string }>(
+  query: string,
+  stores: T[],
+): T[] {
+  const prefix = query.trim().replace(/^#/, "").toUpperCase();
+  let matched: T[] = [];
+  if (prefix.startsWith("KP")) matched = stores.filter((s) => /kenku/i.test(s.name));
+  else if (prefix.startsWith("AUR")) matched = stores.filter((s) => /aurela/i.test(s.name));
+  return matched.length ? matched : stores;
+}
+
 /** Exact-prefix order name search — `#KP119603` / `#AUR173123` — the real
  *  order.name format, so a hit here is trustworthy without a phone check. */
 export function buildPrefixedOrderSearchQuery(digits: string): string {

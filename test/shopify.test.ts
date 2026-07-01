@@ -17,6 +17,7 @@ import {
   buildKapsoOrdersSearchQuery,
   buildLiveOrderSearchQuery,
   buildPrefixedOrderSearchQuery,
+  pickStoresForOrderQuery,
   searchOrdersLive,
   shopifyGraphQL,
   fetchOrdersPage,
@@ -307,6 +308,27 @@ describe("buildPrefixedOrderSearchQuery", () => {
     expect(buildPrefixedOrderSearchQuery("118200")).toBe(
       "name:*KP118200* OR name:*AUR118200*",
     );
+  });
+});
+
+describe("pickStoresForOrderQuery", () => {
+  const aurela = { id: "s1", name: "Aurela" };
+  const kenku = { id: "s2", name: "Kenku Peru" };
+  const stores = [aurela, kenku];
+
+  it("routes a #KP order to the Kenku store only", () => {
+    expect(pickStoresForOrderQuery("#KP118200", stores)).toEqual([kenku]);
+    expect(pickStoresForOrderQuery("kp118200", stores)).toEqual([kenku]);
+  });
+  it("routes a #AUR order to the Aurela store only", () => {
+    expect(pickStoresForOrderQuery("#AUR173123", stores)).toEqual([aurela]);
+  });
+  it("searches every store for a bare number or phone", () => {
+    expect(pickStoresForOrderQuery("118200", stores)).toEqual(stores);
+    expect(pickStoresForOrderQuery("51930295803", stores)).toEqual(stores);
+  });
+  it("falls back to every store if the matching store isn't connected", () => {
+    expect(pickStoresForOrderQuery("#KP118200", [aurela])).toEqual([aurela]);
   });
 });
 

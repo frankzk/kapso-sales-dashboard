@@ -124,9 +124,9 @@ export function OrderLinkPicker({
     searchShopify(customerPhone);
   }
 
-  function linkShopify(gid: string) {
+  function linkShopify(gid: string, storeId: string) {
     start(async () => {
-      const r = await linkShipmentToShopifyOrder(shipmentId, gid);
+      const r = await linkShipmentToShopifyOrder(shipmentId, gid, storeId);
       setMsg(r.error ?? r.notice ?? null);
       if (!r.error) {
         setQ("");
@@ -210,7 +210,7 @@ export function OrderLinkPicker({
             <li key={o.gid}>
               <button
                 type="button"
-                onClick={() => linkShopify(o.gid)}
+                onClick={() => linkShopify(o.gid, o.storeId)}
                 disabled={pending}
                 className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm hover:bg-slate-50 disabled:opacity-50"
               >
