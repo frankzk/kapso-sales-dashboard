@@ -31,7 +31,8 @@ describe("parseAliclikRow", () => {
     expect(row.product).toContain("SUPER HUMAN");
     expect(row.district).toBe("Cusco");
     expect(row.city).toBe("cusco"); // from district when no city column
-    expect(row.delivery_status).toBe("por_devolver");
+    // classification is customer-outcome centric: anything not delivered → pendiente
+    expect(row.delivery_status).toBe("pendiente");
     expect(row.store_hint).toBe("Kenku");
   });
 
@@ -53,7 +54,7 @@ describe("parseAliclikRow", () => {
 
   it("parses the real 'order-delivery-report' export (AUR5X en NRO. PEDIDO)", () => {
     // Real column layout: the AUR5X code lives in "NRO. PEDIDO"; the Shopify
-    // order ref (#KP…) is inside "NOTA"; state in "ESTADO DESPACHO".
+    // order ref (#KP…) is inside "NOTA"; the delivery outcome in "ESTADO ENTREGA".
     const row = parseAliclikRow({
       "NRO. PEDIDO": "AUR5X119633",
       NOTA: "#KP115879 - 100 metros adelante de la plaza",
@@ -71,13 +72,13 @@ describe("parseAliclikRow", () => {
     expect(row.customer_name).toBe("Perla Guerrero Linares");
     expect(row.customer_phone).toBe("51965956470");
     expect(row.city).toBe("cusco");
-    expect(row.delivery_status).toBe("por_devolver"); // from ESTADO DESPACHO
+    expect(row.delivery_status).toBe("pendiente"); // not delivered → gestión queue
     expect(row.store_hint).toBe("KENKU");
   });
 
   it("treats ESTADO ENTREGA=ENTREGADO as delivered even when ESTADO DESPACHO=VALIDADO", () => {
-    // The platform column ("ESTADO DESPACHO") tops out at "validado"; a confirmed
-    // delivery only shows up in "ESTADO ENTREGA". This is the most common pair.
+    // A confirmed delivery only shows up in "ESTADO ENTREGA" (the despacho column
+    // tops out at "validado"). This is the most common pair.
     const row = parseAliclikRow({
       "NRO. PEDIDO": "AUR5X1",
       "ESTADO DESPACHO": "VALIDADO",
@@ -87,8 +88,7 @@ describe("parseAliclikRow", () => {
   });
 
   it("detects delivery via the 'ESTADO DE ENTREGA' header variant too", () => {
-    // some exports name the column with "DE" — must still classify as entregado
-    // (and not be mistaken for a despacho-status column).
+    // some exports name the column with "DE" — must still classify as entregado.
     expect(
       parseAliclikRow({
         "NRO. PEDIDO": "AUR5X108281725702",
@@ -96,7 +96,7 @@ describe("parseAliclikRow", () => {
         "ESTADO DE ENTREGA": "ENTREGADO",
       }).delivery_status,
     ).toBe("entregado");
-    // entregado overrides even a failure-branch despacho (ciclo ya finalizado)
+    // entregado closes even with a failure-branch despacho (ciclo ya finalizado)
     expect(
       parseAliclikRow({
         "NRO. PEDIDO": "AUR5X2",
@@ -106,23 +106,17 @@ describe("parseAliclikRow", () => {
     ).toBe("entregado");
   });
 
-  it("falls back to ESTADO DESPACHO when ESTADO ENTREGA isn't a delivery", () => {
-    // non-delivered ESTADO ENTREGA values (CANCELADO, NO CONTESTA, etc.) don't
-    // override — the despacho state drives the status.
-    expect(
-      parseAliclikRow({
-        "NRO. PEDIDO": "AUR5X1",
-        "ESTADO DESPACHO": "POR DEVOLVER",
-        "ESTADO ENTREGA": "CANCELADO",
-      }).delivery_status,
-    ).toBe("por_devolver");
-    expect(
-      parseAliclikRow({
-        "NRO. PEDIDO": "AUR5X2",
-        "ESTADO DESPACHO": "VALIDADO",
-        "ESTADO ENTREGA": "POR ENTREGAR",
-      }).delivery_status,
-    ).toBe("validado");
+  it("classifies every non-delivered outcome as pendiente (enters gestión)", () => {
+    // CANCELADO / NO CONTESTA / POR ENTREGAR / etc. → pendiente, regardless of despacho
+    for (const entrega of ["CANCELADO", "NO CONTESTA", "POR ENTREGAR", "RECHAZADO"]) {
+      expect(
+        parseAliclikRow({
+          "NRO. PEDIDO": "AUR5X1",
+          "ESTADO DESPACHO": "POR DEVOLVER",
+          "ESTADO ENTREGA": entrega,
+        }).delivery_status,
+      ).toBe("pendiente");
+    }
   });
 
   it("flags an Aurela row with no #KP as no order_name (matches by phone later)", () => {
@@ -142,6 +136,6 @@ describe("parseAliclikRow", () => {
       { "Guia Aliclik": "AUR5X1", Estado: "Entregado" },
       { "Guia Aliclik": "AUR5X2", Estado: "Por devolver" },
     ]);
-    expect(rows.map((r) => r.delivery_status)).toEqual(["entregado", "por_devolver"]);
+    expect(rows.map((r) => r.delivery_status)).toEqual(["entregado", "pendiente"]);
   });
 });

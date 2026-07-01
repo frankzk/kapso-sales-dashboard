@@ -8,7 +8,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ParsedShipmentRow } from "./aliclik-import";
 import { parseAliclikReport } from "./aliclik-import";
 import { matchShipment, type MatchResult, type OrderCandidate } from "./shipment-match";
-import { categoryOf, isFailureState, reconcileDeliveryStatus } from "./shipments";
+import { categoryOf, isPending, reconcileDeliveryStatus } from "./shipments";
 import { evaluateFenix, type FenixStockRow } from "./fenix";
 
 // Existing shipment fields we need to reconcile a re-import against (so we don't
@@ -22,6 +22,7 @@ interface ExistingShipment {
   order_id: string | null;
   store_id: string;
   last_report_at: string | null;
+  delivered_source: string | null;
 }
 
 export interface IngestResult {
@@ -117,7 +118,13 @@ export async function ingestAliclikReport(
   for (const [guide, inc] of incomingByGuide) {
     const existing = existingByGuide.get(guide);
     const mergedStatus = reconcileDeliveryStatus(existing?.delivery_status, inc.row.delivery_status);
-    const fenix = isFailureState(mergedStatus) ? evaluateFenix(inc.row, stockRows).eligible : false;
+    // Fenix coverage/stock is evaluated for every managed (pendiente) guide — the
+    // UI splits Pendiente vs "Sin cobertura" by this flag.
+    const fenix = isPending(mergedStatus) ? evaluateFenix(inc.row, stockRows).eligible : false;
+    // delivered_source: keep an existing source; a delivery that comes from the
+    // report (not from agent gestión) is "aliclik".
+    let delivered_source = existing?.delivered_source ?? null;
+    if (mergedStatus === "entregado" && !delivered_source) delivered_source = "aliclik";
 
     // linkage: never downgrade an established link or a dismissal
     let order_id: string | null;
@@ -160,6 +167,7 @@ export async function ingestAliclikReport(
       city: inc.row.city,
       delivery_status: mergedStatus,
       status_category: categoryOf(mergedStatus),
+      delivered_source,
       fenix_eligible: fenix,
       source_batch_id: batchId,
       last_report_at,
@@ -263,7 +271,7 @@ async function fetchExistingShipments(
   for (const chunk of chunked(guideCodes, 200)) {
     const { data } = await admin
       .from("shipments")
-      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at")
+      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,delivered_source")
       .eq("courier", "aliclik")
       .in("guide_code", chunk);
     for (const r of (data as ExistingShipment[]) ?? []) map.set(r.guide_code, r);

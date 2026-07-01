@@ -5,52 +5,44 @@ import {
   isCallable,
   isTerminal,
   isValidStatus,
-  isFailureState,
-  entersRerouteQueue,
-  mapAliclikStatus,
+  isPending,
+  attemptLabel,
   normalizeCity,
   isFenixCity,
-  nextRerouteOutcome,
-  MAX_REROUTE_ATTEMPTS,
+  nextShipmentTransition,
+  MAX_INTENTOS,
   FENIX_CITIES,
   reconcileDeliveryStatus,
 } from "@/lib/shipments";
 
 describe("delivery status model", () => {
-  it("has unique codes and consistent categories", () => {
+  it("has the four global states with consistent categories", () => {
     const codes = DELIVERY_STATUSES.map((s) => s.code);
-    expect(new Set(codes).size).toBe(codes.length);
+    expect(new Set(codes)).toEqual(new Set(["pendiente", "en_ruta", "entregado", "anulado"]));
+    expect(categoryOf("pendiente")).toBe("pending");
+    expect(categoryOf("en_ruta")).toBe("in_route");
     expect(categoryOf("entregado")).toBe("delivered");
-    expect(categoryOf("por_devolver")).toBe("failure");
-    expect(categoryOf("reprogramado")).toBe("rerouting");
-    expect(categoryOf("devuelto")).toBe("closed");
+    expect(categoryOf("anulado")).toBe("closed");
   });
 
-  it("flags callable/terminal/failure states", () => {
-    expect(isCallable("por_devolver")).toBe(true);
+  it("flags callable/terminal/pending states", () => {
+    expect(isCallable("pendiente")).toBe(true);
+    expect(isCallable("en_ruta")).toBe(true);
     expect(isCallable("entregado")).toBe(false);
     expect(isTerminal("entregado")).toBe(true);
-    expect(isTerminal("devuelto")).toBe(true);
-    expect(isTerminal("por_preparar")).toBe(false);
-    expect(isFailureState("dejado_almacen")).toBe(true);
-    expect(entersRerouteQueue("reprogramado")).toBe(true);
-    expect(entersRerouteQueue("en_agencia")).toBe(false);
+    expect(isTerminal("anulado")).toBe(true);
+    expect(isTerminal("pendiente")).toBe(false);
+    expect(isPending("pendiente")).toBe(true);
+    expect(isPending("en_ruta")).toBe(false);
     expect(isValidStatus("nope")).toBe(false);
   });
-});
 
-describe("mapAliclikStatus", () => {
-  it("maps canonical and accented Spanish labels", () => {
-    expect(mapAliclikStatus("Entregado")).toBe("entregado");
-    expect(mapAliclikStatus("POR DEVOLVER")).toBe("por_devolver");
-    expect(mapAliclikStatus("Dejado en almacén")).toBe("dejado_almacen");
-    expect(mapAliclikStatus("Dejado en almacen")).toBe("dejado_almacen");
-    expect(mapAliclikStatus("Remanente en tránsito")).toBe("remanente_transito");
-  });
-  it("falls back to por_preparar on unknown/empty", () => {
-    expect(mapAliclikStatus("")).toBe("por_preparar");
-    expect(mapAliclikStatus(null)).toBe("por_preparar");
-    expect(mapAliclikStatus("estado raro")).toBe("por_preparar");
+  it("labels the pending sub-state from the intento counter", () => {
+    expect(attemptLabel(0)).toBe("Ingestión");
+    expect(attemptLabel(null)).toBe("Ingestión");
+    expect(attemptLabel(3)).toBe("Intento 3");
+    expect(attemptLabel(7)).toBe("Intento 7");
+    expect(attemptLabel(99)).toBe("Intento 7"); // clamped to MAX_INTENTOS
   });
 });
 
@@ -69,65 +61,62 @@ describe("normalizeCity", () => {
   });
 });
 
-describe("nextRerouteOutcome (decision flow)", () => {
-  it("entregado → FIN delivered, closed", () => {
-    expect(nextRerouteOutcome("entregado", 1, true)).toEqual({
-      status: "entregado",
-      outcome: "entregado",
-      closed: true,
-    });
-  });
-  it("rechaza → devuelto, closed", () => {
-    expect(nextRerouteOutcome("rechaza", 1, true)).toEqual({
-      status: "devuelto",
-      outcome: "devuelto",
-      closed: true,
-    });
-  });
-  it("reprograma → reprogramado, stays open", () => {
-    const r = nextRerouteOutcome("reprograma", 2, true);
-    expect(r.status).toBe("reprogramado");
+describe("nextShipmentTransition (gestión flow)", () => {
+  it("pending: no_contesta advances the intento", () => {
+    const r = nextShipmentTransition("pendiente", "no_contesta", 2);
+    expect(r.status).toBe("pendiente");
+    expect(r.attempts).toBe(3);
     expect(r.closed).toBe(false);
   });
-  it("no_contesta keeps the shipment until attempts run out", () => {
-    const early = nextRerouteOutcome("no_contesta", 3, true);
-    expect(early.status).toBe("dejado_almacen");
-    expect(early.closed).toBe(false);
-    const last = nextRerouteOutcome("no_contesta", MAX_REROUTE_ATTEMPTS, true);
-    expect(last.status).toBe("devuelto");
-    expect(last.closed).toBe(true);
-  });
-  it("ineligible city → sin_cobertura, closed regardless of disposition", () => {
-    const r = nextRerouteOutcome("reprograma", 1, false);
-    expect(r.outcome).toBe("sin_cobertura");
+  it("pending: failing past intento 7 gives up → anulado", () => {
+    const r = nextShipmentTransition("pendiente", "no_contesta", MAX_INTENTOS);
+    expect(r.status).toBe("anulado");
     expect(r.closed).toBe(true);
-    expect(r.status).toBe("por_devolver");
+  });
+  it("pending: confirma → en_ruta keeping the intento", () => {
+    const r = nextShipmentTransition("pendiente", "confirma", 4);
+    expect(r.status).toBe("en_ruta");
+    expect(r.attempts).toBe(4);
+    expect(r.closed).toBe(false);
+  });
+  it("pending: cancela → anulado", () => {
+    expect(nextShipmentTransition("pendiente", "cancela", 1).status).toBe("anulado");
+  });
+  it("en_ruta: entregado → entregado por Fenix", () => {
+    const r = nextShipmentTransition("en_ruta", "entregado", 3);
+    expect(r.status).toBe("entregado");
+    expect(r.deliveredSource).toBe("fenix");
+    expect(r.closed).toBe(true);
+  });
+  it("en_ruta: no_contesta returns to pending at the SAME intento", () => {
+    const r = nextShipmentTransition("en_ruta", "no_contesta", 2);
+    expect(r.status).toBe("pendiente");
+    expect(r.attempts).toBe(2); // does not increment
+    expect(r.closed).toBe(false);
+  });
+  it("en_ruta: cancela → anulado", () => {
+    expect(nextShipmentTransition("en_ruta", "cancela", 5).status).toBe("anulado");
   });
 });
 
 describe("reconcileDeliveryStatus (re-import merge)", () => {
-  it("keeps agent progress when the report is behind", () => {
-    // agent already re-scheduled; a report still saying "por devolver" must not reset it
-    expect(reconcileDeliveryStatus("reprogramado", "por_devolver")).toBe("reprogramado");
+  it("keeps En ruta when the report still says pendiente", () => {
+    expect(reconcileDeliveryStatus("en_ruta", "pendiente")).toBe("en_ruta");
   });
-  it("adopts a fresh ENTREGADO to close the guide (out of Fenix)", () => {
-    expect(reconcileDeliveryStatus("reprogramado", "entregado")).toBe("entregado");
-    expect(reconcileDeliveryStatus("por_devolver", "entregado")).toBe("entregado");
-    expect(reconcileDeliveryStatus("validado", "entregado")).toBe("entregado");
+  it("adopts a fresh ENTREGADO to close the guide", () => {
+    expect(reconcileDeliveryStatus("pendiente", "entregado")).toBe("entregado");
+    expect(reconcileDeliveryStatus("en_ruta", "entregado")).toBe("entregado");
   });
-  it("locks a terminal state against a lower report", () => {
-    expect(reconcileDeliveryStatus("entregado", "devuelto")).toBe("entregado");
-    expect(reconcileDeliveryStatus("devuelto", "por_devolver")).toBe("devuelto");
+  it("never reopens a terminal state", () => {
+    expect(reconcileDeliveryStatus("entregado", "pendiente")).toBe("entregado");
+    expect(reconcileDeliveryStatus("anulado", "pendiente")).toBe("anulado");
+    expect(reconcileDeliveryStatus("entregado", "entregado")).toBe("entregado");
   });
-  it("never regresses within the happy path (old re-uploaded file)", () => {
-    expect(reconcileDeliveryStatus("validado", "recolectado")).toBe("validado");
-  });
-  it("advances a normal in-transit guide forward", () => {
-    expect(reconcileDeliveryStatus("recolectado", "en_agencia")).toBe("en_agencia");
-    expect(reconcileDeliveryStatus("validado", "por_devolver")).toBe("por_devolver");
+  it("keeps pendiente idempotent on re-import (attempts preserved elsewhere)", () => {
+    expect(reconcileDeliveryStatus("pendiente", "pendiente")).toBe("pendiente");
   });
   it("takes the incoming status for a brand-new guide (no existing)", () => {
-    expect(reconcileDeliveryStatus(null, "por_preparar")).toBe("por_preparar");
+    expect(reconcileDeliveryStatus(null, "pendiente")).toBe("pendiente");
     expect(reconcileDeliveryStatus(undefined, "entregado")).toBe("entregado");
   });
 });

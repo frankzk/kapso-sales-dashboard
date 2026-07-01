@@ -5,11 +5,10 @@ import { createServerSupabase } from "@/lib/db";
 import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
 
 // The manual-review queue: guides that didn't auto-link to an order AND still
-// need a human. We exclude terminal states (delivered/closed) — an already
-// delivered or returned guide needs no linking — and rows explicitly dismissed
-// as "sin pedido" (match_method='dismissed'). Driven off `shipments` (not
-// import_rows) so it dedupes by guide and reflects the latest re-import.
-const REVIEW_CATEGORIES = ["in_transit", "failure", "rerouting"];
+// need a human. We exclude terminal states (delivered/closed) and rows dismissed
+// as "sin pedido" (match_method='dismissed'). Driven off `shipments` so it
+// dedupes by guide and reflects the latest re-import.
+const REVIEW_CATEGORIES = ["pending", "in_route"];
 
 function isReviewShipment(r: {
   matched: boolean;
@@ -24,17 +23,19 @@ function isReviewShipment(r: {
 }
 
 export type ShipmentView =
-  | "por_reprogramar"
-  | "en_transito"
-  | "entregados"
-  | "devueltos"
+  | "pendiente"
+  | "sin_cobertura"
+  | "en_ruta"
+  | "entregado"
+  | "anulado"
   | "revision";
 
 export const SHIPMENT_VIEWS: { key: ShipmentView; label: string }[] = [
-  { key: "por_reprogramar", label: "Por reprogramar" },
-  { key: "en_transito", label: "En tránsito" },
-  { key: "entregados", label: "Entregados" },
-  { key: "devueltos", label: "Devueltos" },
+  { key: "pendiente", label: "Pendiente" },
+  { key: "en_ruta", label: "En ruta" },
+  { key: "entregado", label: "Entregado" },
+  { key: "anulado", label: "Anulado" },
+  { key: "sin_cobertura", label: "Sin cobertura" },
   { key: "revision", label: "Revisión" },
 ];
 
@@ -43,16 +44,17 @@ export function isShipmentView(v: string | undefined | null): v is ShipmentView 
 }
 
 const SHIPMENT_COLUMNS =
-  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,created_at,updated_at";
+  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,delivered_source,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,created_at,updated_at";
 
-// Each view maps to a status_category filter (plus ordering). "por_reprogramar"
-// covers the active failure + rerouting queue.
+// Each view maps to a status_category filter. "pendiente"/"sin_cobertura" both
+// sit in the `pending` category but split by fenix_eligible (managed vs parked).
 const VIEW_CATEGORIES: Record<ShipmentView, string[]> = {
-  por_reprogramar: ["failure", "rerouting"],
-  en_transito: ["in_transit"],
-  entregados: ["delivered"],
-  devueltos: ["closed"],
-  revision: [], // special-cased: unresolved import rows
+  pendiente: ["pending"],
+  sin_cobertura: ["pending"],
+  en_ruta: ["in_route"],
+  entregado: ["delivered"],
+  anulado: ["closed"],
+  revision: [], // special-cased: unmatched guides
 };
 
 /** Shipments for a view across the given (accessible) stores. */
@@ -68,9 +70,12 @@ export async function getStoreShipments(
     .select(SHIPMENT_COLUMNS)
     .in("store_id", storeIds)
     .in("status_category", cats);
-  // re-route queue: surface soonest follow-up first; others most recent first
+  // pending splits by Fenix coverage: managed queue vs parked "sin cobertura"
+  if (view === "pendiente") q = q.eq("fenix_eligible", true);
+  else if (view === "sin_cobertura") q = q.eq("fenix_eligible", false);
+  // managed queue: soonest follow-up first; others most recent first
   q =
-    view === "por_reprogramar"
+    view === "pendiente"
       ? q.order("next_followup_at", { ascending: true, nullsFirst: true }).order("updated_at", { ascending: false })
       : q.order("updated_at", { ascending: false });
   const { data } = await q.limit(2000);
@@ -82,24 +87,25 @@ export async function getShipmentCounts(
   storeIds: string[],
 ): Promise<Record<ShipmentView, number>> {
   const out: Record<ShipmentView, number> = {
-    por_reprogramar: 0,
-    en_transito: 0,
-    entregados: 0,
-    devueltos: 0,
+    pendiente: 0,
+    sin_cobertura: 0,
+    en_ruta: 0,
+    entregado: 0,
+    anulado: 0,
     revision: 0,
   };
   if (!storeIds.length) return out;
   const sb = await createServerSupabase();
   const { data } = await sb
     .from("shipments")
-    .select("status_category,matched,match_method")
+    .select("status_category,matched,match_method,fenix_eligible")
     .in("store_id", storeIds)
     .limit(20000);
-  for (const r of (data as { status_category: string; matched: boolean; match_method: string | null }[]) ?? []) {
-    if (r.status_category === "failure" || r.status_category === "rerouting") out.por_reprogramar += 1;
-    else if (r.status_category === "in_transit") out.en_transito += 1;
-    else if (r.status_category === "delivered") out.entregados += 1;
-    else if (r.status_category === "closed") out.devueltos += 1;
+  for (const r of (data as { status_category: string; matched: boolean; match_method: string | null; fenix_eligible: boolean }[]) ?? []) {
+    if (r.status_category === "pending") (r.fenix_eligible ? (out.pendiente += 1) : (out.sin_cobertura += 1));
+    else if (r.status_category === "in_route") out.en_ruta += 1;
+    else if (r.status_category === "delivered") out.entregado += 1;
+    else if (r.status_category === "closed") out.anulado += 1;
     // revisión: unmatched, non-terminal guides still needing a human
     if (isReviewShipment(r)) out.revision += 1;
   }

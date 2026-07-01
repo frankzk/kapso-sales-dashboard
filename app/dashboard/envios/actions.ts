@@ -7,12 +7,12 @@ import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { getShipmentWithCalls } from "@/lib/shipments-access";
 import {
   CLAIM_TTL_MINUTES,
+  attemptLabel,
   categoryOf,
   isValidStatus,
-  nextRerouteOutcome,
+  nextShipmentTransition,
   type RerouteDisposition,
 } from "@/lib/shipments";
-import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
 import { getStoreCreds } from "@/lib/ingest";
 import { searchProductVariants, type ProductVariantResult } from "@/lib/shopify";
 import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
@@ -117,18 +117,10 @@ export async function releaseShipment(shipmentId: string): Promise<ShipmentActio
   return { notice: "Liberado." };
 }
 
-async function fetchOrgFenixStock(admin: SupabaseClient, storeId: string): Promise<FenixStockRow[]> {
-  const { data: store } = await admin.from("stores").select("org_id").eq("id", storeId).maybeSingle();
-  const orgId = (store as { org_id?: string } | null)?.org_id;
-  if (!orgId) return [];
-  const { data } = await admin.from("fenix_stock").select("city,product,quantity").eq("org_id", orgId);
-  return (data as FenixStockRow[]) ?? [];
-}
-
 /**
- * Register a re-route call attempt. Records the call, increments the attempt
- * count, applies the decision flow (entregado/reprograma/no_contesta/rechaza)
- * gated by Fenix eligibility, and updates the shipment.
+ * Register a gestión call. Reads the current state, applies the transition
+ * (confirma→En ruta / no_contesta→siguiente intento o Anulado / cancela→Anulado
+ * / entregado→Entregado por Fenix), updates the shipment and logs the call.
  */
 export async function registerRerouteCall(
   shipmentId: string,
@@ -140,30 +132,26 @@ export async function registerRerouteCall(
 
   const { data: ship } = await admin
     .from("shipments")
-    .select("id,store_id,city,product,reroute_attempts")
+    .select("id,delivery_status,reroute_attempts")
     .eq("id", shipmentId)
     .maybeSingle();
   if (!ship) return { error: "No encontrado." };
+  const cur = ship as { delivery_status: string; reroute_attempts: number | null };
 
-  const attempts = ((ship as { reroute_attempts: number }).reroute_attempts ?? 0) + 1;
-  const stock = await fetchOrgFenixStock(admin, ctx.storeId);
-  const eligible = evaluateFenix(ship as { city?: string | null; product?: string | null }, stock).eligible;
-  const outcome = nextRerouteOutcome(input.disposition, attempts, eligible);
-
-  // when the queue should keep this shipment, carry the agent's next-call date
-  const nextFollowup = outcome.closed ? null : input.nextFollowupAt ?? null;
+  const t = nextShipmentTransition(cur.delivery_status, input.disposition, cur.reroute_attempts ?? 0);
+  // when the queue keeps this shipment, carry the agent's next-call date
+  const nextFollowup = t.closed ? null : input.nextFollowupAt ?? null;
 
   const { error: updErr } = await admin
     .from("shipments")
     .update({
-      delivery_status: outcome.status,
-      status_category: categoryOf(outcome.status),
-      reroute_attempts: attempts,
-      reroute_outcome: outcome.outcome,
-      fenix_eligible: eligible,
+      delivery_status: t.status,
+      status_category: categoryOf(t.status),
+      reroute_attempts: t.attempts,
       next_followup_at: nextFollowup,
+      ...(t.deliveredSource ? { delivered_source: t.deliveredSource } : {}),
       // closing drops the claim so the queue frees it
-      ...(outcome.closed ? { claimed_by: null, claimed_at: null } : {}),
+      ...(t.closed ? { claimed_by: null, claimed_at: null } : {}),
     })
     .eq("id", shipmentId);
   if (updErr) return { error: updErr.message };
@@ -173,17 +161,21 @@ export async function registerRerouteCall(
     store_id: ctx.storeId,
     agent: ctx.userId,
     kind: "call",
-    new_status: outcome.status,
+    new_status: t.status,
     note: input.note?.trim() || null,
     next_followup_at: nextFollowup,
   });
 
   revalidatePath("/dashboard/envios");
-  return {
-    notice: outcome.closed
-      ? "Llamada registrada — envío cerrado."
-      : "Llamada registrada — reprogramado.",
-  };
+  const notice =
+    t.status === "en_ruta"
+      ? "Registrado — En ruta (Fenix)."
+      : t.status === "entregado"
+        ? "Registrado — Entregado."
+        : t.status === "anulado"
+          ? "Registrado — Anulado."
+          : `Registrado — ${attemptLabel(t.attempts)}.`;
+  return { notice };
 }
 
 /** Manually set a delivery status (e.g. correcting an import). Logged. */
@@ -258,8 +250,8 @@ export async function createFenixGuide(
       district: p.district,
       city: p.city,
       region: p.region,
-      delivery_status: "por_preparar",
-      status_category: "in_transit",
+      delivery_status: "en_ruta",
+      status_category: "in_route",
     })
     .select("id")
     .single();

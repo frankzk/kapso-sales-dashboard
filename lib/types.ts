@@ -216,7 +216,7 @@ export interface ShipmentRow {
   courier: string; // aliclik | fenix
   guide_code: string; // AUR5X… (aliclik) or Fenix tracking
   delivery_status: string; // see lib/shipments.ts
-  status_category: string; // in_transit | delivered | failure | rerouting | closed
+  status_category: string; // pending | in_route | delivered | closed
   order_id: string | null;
   matched: boolean;
   match_method: string | null; // order_name | phone | manual | none
@@ -229,6 +229,7 @@ export interface ShipmentRow {
   region: string | null;
   fenix_eligible: boolean;
   fenix_shipment_id: string | null;
+  delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado
   reroute_attempts: number;
   reroute_outcome: string | null;
   claimed_by: string | null;
