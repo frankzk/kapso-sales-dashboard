@@ -19,8 +19,10 @@ import {
   type RerouteDisposition,
 } from "@/lib/shipments";
 import { getStoreCreds } from "@/lib/ingest";
+import { getAccessibleStores } from "@/lib/access";
 import {
   fetchOrderById,
+  pickStoresForOrderQuery,
   searchOrdersLive,
   searchProductVariants,
   type ProductVariantResult,
@@ -357,6 +359,7 @@ export async function resolveShipmentMatch(
 
 export interface ShopifyOrderCandidate {
   gid: string;
+  storeId: string;
   name: string | null;
   customer_phone: string | null;
   created_at: string | null;
@@ -366,6 +369,12 @@ export interface ShopifyOrderCandidate {
  * On-demand live search against Shopify (NOT the local, tag:kapso-scoped
  * `orders` table) — a fallback for orders the reconciliation sync never pulled
  * in, e.g. a real order referenced in an Aliclik guide that isn't tag:kapso.
+ *
+ * A guide's own `store_id` isn't a reliable hint for which store to search:
+ * the Aliclik guide pool is shared across stores, and an unmatched guide just
+ * carries whatever store the import batch defaulted to. Instead route by the
+ * query itself — `#KP…` → Kenku, `#AUR…` → Aurela, otherwise every connected
+ * store (see `pickStoresForOrderQuery`) — and search all of those.
  */
 export async function searchShopifyOrdersLive(
   shipmentId: string,
@@ -375,25 +384,33 @@ export async function searchShopifyOrdersLive(
   if (q.length < 2) return [];
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return [];
-  const creds = await getStoreCreds(ctx.storeId);
-  if (!creds?.shopify_token) return [];
-  try {
-    const orders = await searchOrdersLive({
-      domain: creds.shopify_domain,
-      token: creds.shopify_token,
-      storeId: ctx.storeId,
-      query: q,
-      first: 10,
-    });
-    return orders.map((o) => ({
-      gid: (o.raw as { id?: string } | undefined)?.id ?? `gid://shopify/Order/${o.shopify_order_id}`,
-      name: o.name,
-      customer_phone: o.customer_phone ?? null,
-      created_at: o.created_at,
-    }));
-  } catch {
-    return []; // missing scope / API error → picker just shows no live results
-  }
+  const stores = await getAccessibleStores();
+  const targets = pickStoresForOrderQuery(q, stores);
+  const perStore = await Promise.all(
+    targets.map(async (store) => {
+      const creds = await getStoreCreds(store.id);
+      if (!creds?.shopify_token) return [];
+      try {
+        const orders = await searchOrdersLive({
+          domain: creds.shopify_domain,
+          token: creds.shopify_token,
+          storeId: store.id,
+          query: q,
+          first: 10,
+        });
+        return orders.map((o) => ({
+          gid: (o.raw as { id?: string } | undefined)?.id ?? `gid://shopify/Order/${o.shopify_order_id}`,
+          storeId: store.id,
+          name: o.name,
+          customer_phone: o.customer_phone ?? null,
+          created_at: o.created_at,
+        }));
+      } catch {
+        return []; // missing scope / API error on this store → skip it
+      }
+    }),
+  );
+  return perStore.flat().slice(0, 10);
 }
 
 /**
@@ -401,14 +418,21 @@ export async function searchShopifyOrdersLive(
  * above) and link it to the shipment. Preserves the order's real tags — unlike
  * the COD-recovery precedent in lib/leads-ingest.ts, this order may genuinely
  * not be Kapso-attributed, so we must not force the `kapso` tag onto it.
+ * `storeId` is the store the candidate was found in (from searchShopifyOrdersLive),
+ * which may differ from the shipment's current store — resolveShipmentMatch
+ * below re-homes the shipment to it, same as a local-search manual link would.
  */
 export async function linkShipmentToShopifyOrder(
   shipmentId: string,
   orderGid: string,
+  storeId: string,
 ): Promise<ShipmentActionState> {
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
-  const creds = await getStoreCreds(ctx.storeId);
+  const sb = await createServerSupabase();
+  const { data: store } = await sb.from("stores").select("id").eq("id", storeId).maybeSingle();
+  if (!store) return { error: "Tienda inválida o sin acceso." };
+  const creds = await getStoreCreds(storeId);
   if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify conectado." };
 
   let order;
@@ -416,7 +440,7 @@ export async function linkShipmentToShopifyOrder(
     order = await fetchOrderById({
       domain: creds.shopify_domain,
       token: creds.shopify_token,
-      storeId: ctx.storeId,
+      storeId,
       orderGid,
     });
   } catch {
@@ -433,7 +457,7 @@ export async function linkShipmentToShopifyOrder(
   const { data: row } = await admin
     .from("orders")
     .select("id")
-    .eq("store_id", ctx.storeId)
+    .eq("store_id", storeId)
     .eq("shopify_order_id", order.shopify_order_id)
     .maybeSingle();
   const orderId = (row as { id: string } | null)?.id ?? null;
