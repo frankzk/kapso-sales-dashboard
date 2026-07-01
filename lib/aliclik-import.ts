@@ -5,7 +5,7 @@
 // Aliclik exports vary ("GUÍA ALICLICK" in some, "NRO. PEDIDO" in others).
 
 import { normalizePhone } from "./phone";
-import { isFenixCity, mapAliclikStatus, normalizeCity } from "./shipments";
+import { isFenixCity, normalizeCity } from "./shipments";
 
 export interface ParsedShipmentRow {
   guide_code: string | null; // AUR5X… (required to be a real row)
@@ -82,15 +82,6 @@ export function normalizeOrderName(raw: string | null | undefined): string | nul
 }
 
 // Header aliases per canonical field (normalized keys).
-const STATUS_KEYS = [
-  "estado despacho", // Aliclik "order-delivery-report" — the platform state
-  "estado de pedido",
-  "estado del pedido",
-  "estado plataforma",
-  "estado de plataforma",
-  "estado",
-  "situacion",
-];
 const NAME_KEYS = ["nombre completo", "nombre", "cliente", "destinatario"];
 const PHONE_KEYS = ["telefono", "celular", "telefono / celular", "whatsapp"];
 const PRODUCT_KEYS = ["producto", "productos"];
@@ -103,8 +94,10 @@ const ORDER_KEYS = ["pedido", "numero de pedido", "n pedido", "orden", "order"];
 // the platform column ("ESTADO DESPACHO") tops out at "validado" — a confirmed
 // delivery only ever shows up here, as "ENTREGADO". So we read this column to
 // override the despacho-derived status when the order was actually delivered.
-// Header drifts between exports: "ESTADO ENTREGA" and "ESTADO DE ENTREGA".
-const ENTREGA_KEYS = ["estado entrega", "estado de entrega"];
+// Header drifts between exports: "ESTADO ENTREGA" / "ESTADO DE ENTREGA"; a bare
+// "ESTADO" is used as a last-resort fallback (only ever fires when its value is
+// exactly "entregado", so a dispatch-state "ESTADO" won't be misread).
+const ENTREGA_KEYS = ["estado entrega", "estado de entrega", "estado"];
 
 /** True when the delivery-outcome cell ("ESTADO [DE] ENTREGA") says delivered. */
 function isDeliveredEntrega(raw: string | null): boolean {
@@ -125,11 +118,11 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
   const fenixCity = normalizeCity(combined);
   const city = isFenixCity(fenixCity) ? fenixCity : district ? normalizeCity(district) : null;
 
-  // A confirmed delivery only appears in "ESTADO ENTREGA"; otherwise derive the
-  // status from the platform's "ESTADO DESPACHO" (which never reaches entregado).
-  const delivery_status = isDeliveredEntrega(pick(map, ENTREGA_KEYS))
-    ? "entregado"
-    : mapAliclikStatus(pick(map, STATUS_KEYS));
+  // Classification is customer-outcome centric: only a report that already says
+  // ENTREGADO (in "ESTADO [DE] ENTREGA") is delivered; everything else enters the
+  // gestión queue as "pendiente" (Ingestión). The Aliclik dispatch state is not
+  // used to classify anymore.
+  const delivery_status = isDeliveredEntrega(pick(map, ENTREGA_KEYS)) ? "entregado" : "pendiente";
 
   return {
     guide_code: findGuideCode(raw),

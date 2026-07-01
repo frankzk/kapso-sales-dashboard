@@ -6,6 +6,7 @@ import { cn } from "@/components/ui";
 import { Card } from "@/components/ui";
 import {
   DELIVERY_STATUSES,
+  attemptLabel,
   labelOf,
   type RerouteDisposition,
 } from "@/lib/shipments";
@@ -21,21 +22,36 @@ import {
 } from "@/app/dashboard/envios/actions";
 
 const CATEGORY_BADGE: Record<string, string> = {
-  in_transit: "bg-sky-50 text-sky-700",
+  pending: "bg-amber-50 text-amber-700",
+  in_route: "bg-violet-50 text-violet-700",
   delivered: "bg-emerald-50 text-emerald-700",
-  failure: "bg-amber-50 text-amber-700",
-  rerouting: "bg-violet-50 text-violet-700",
   closed: "bg-slate-100 text-slate-600",
 };
 
 const DISPOSITIONS: { key: RerouteDisposition; label: string }[] = [
-  { key: "reprograma", label: "Acepta reprogramar" },
+  { key: "confirma", label: "Cliente confirma (→ En ruta)" },
   { key: "no_contesta", label: "No contesta" },
-  { key: "entregado", label: "Entregado" },
-  { key: "rechaza", label: "Rechaza / cancela" },
+  { key: "entregado", label: "Entregado (Fenix)" },
+  { key: "cancela", label: "Cliente cancela / anula" },
 ];
 
-function StatusBadge({ category, status }: { category: string; status: string }) {
+/** Human sub-state suffix: "· Intento 3" for pending, "· por Fenix" for entregado. */
+function subState(s: { status_category: string; reroute_attempts: number; delivered_source: string | null }): string {
+  if (s.status_category === "pending") return ` · ${attemptLabel(s.reroute_attempts)}`;
+  if (s.status_category === "delivered" && s.delivered_source)
+    return ` · por ${s.delivered_source === "fenix" ? "Fenix" : "Aliclik"}`;
+  return "";
+}
+
+function StatusBadge({
+  category,
+  status,
+  suffix,
+}: {
+  category: string;
+  status: string;
+  suffix?: string;
+}) {
   return (
     <span
       className={cn(
@@ -44,6 +60,7 @@ function StatusBadge({ category, status }: { category: string; status: string })
       )}
     >
       {labelOf(status)}
+      {suffix}
     </span>
   );
 }
@@ -247,9 +264,15 @@ export function ShipmentsBoard({
                         )}
                       </td>
                       <td className="px-4 py-2.5">
-                        <StatusBadge category={s.status_category} status={s.delivery_status} />
+                        <StatusBadge
+                          category={s.status_category}
+                          status={s.delivery_status}
+                          suffix={subState(s)}
+                        />
                       </td>
-                      <td className="px-4 py-2.5 text-right text-slate-600">{s.reroute_attempts}</td>
+                      <td className="px-4 py-2.5 text-right text-slate-600">
+                        {s.status_category === "pending" ? `${s.reroute_attempts} / 7` : "—"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -273,7 +296,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
   const [pending, start] = useTransition();
 
   // form state
-  const [disposition, setDisposition] = useState<RerouteDisposition>("reprograma");
+  const [disposition, setDisposition] = useState<RerouteDisposition>("confirma");
   const [note, setNote] = useState("");
   const [nextDate, setNextDate] = useState("");
   const [manualStatus, setManualStatus] = useState("");
@@ -322,6 +345,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                 <StatusBadge
                   category={detail.shipment.status_category}
                   status={detail.shipment.delivery_status}
+                  suffix={subState(detail.shipment)}
                 />
               </div>
               <button onClick={onClose} className="text-sm text-slate-400 hover:text-slate-700">
@@ -336,10 +360,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
               <Field label="Ciudad" value={detail.shipment.city} />
               <Field label="Distrito" value={detail.shipment.district} />
               <Field label="Producto" value={detail.shipment.product} />
-              <Field
-                label="Intentos"
-                value={`${detail.shipment.reroute_attempts} / 5`}
-              />
+              <Field label="Intentos" value={`${detail.shipment.reroute_attempts} / 7`} />
               <Field
                 label="Fenix"
                 value={detail.shipment.fenix_eligible ? "Elegible" : "No elegible"}

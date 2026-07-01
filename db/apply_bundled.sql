@@ -1280,3 +1280,25 @@ grant all privileges on fenix_stock to service_role;
 drop trigger if exists fenix_stock_touch on fenix_stock;
 create trigger fenix_stock_touch before update on fenix_stock
   for each row execute function public.touch_updated_at();
+
+
+-- ---- 0026 ----
+-- 0026_shipment_states_v2.sql — remap the shipment state model to the gestión +
+-- Fenix flow (Pendiente / En ruta / Entregado / Anulado). Adds delivered_source
+-- and rewrites old delivery_status / status_category codes. reroute_attempts kept
+-- as the Intento counter; fenix_eligible recomputed on next import. Idempotent.
+
+alter table shipments add column if not exists delivered_source text;
+
+update shipments set delivered_source = 'aliclik'
+  where delivery_status = 'entregado' and delivered_source is null;
+
+update shipments set delivery_status = 'anulado' where delivery_status = 'devuelto';
+update shipments set delivery_status = 'en_ruta' where delivery_status = 'reprogramado';
+update shipments set delivery_status = 'pendiente'
+  where delivery_status not in ('entregado', 'anulado', 'en_ruta', 'pendiente');
+
+update shipments set status_category = 'delivered' where delivery_status = 'entregado';
+update shipments set status_category = 'closed'    where delivery_status = 'anulado';
+update shipments set status_category = 'in_route'  where delivery_status = 'en_ruta';
+update shipments set status_category = 'pending'   where delivery_status = 'pendiente';

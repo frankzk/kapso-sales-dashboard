@@ -21,7 +21,7 @@ export default async function EnviosPage({
     return <EmptyState title="No tienes tiendas asignadas" />;
   }
 
-  const view: ShipmentView = isShipmentView(sp.view) ? sp.view : "por_reprogramar";
+  const view: ShipmentView = isShipmentView(sp.view) ? sp.view : "pendiente";
 
   // counts + queue span ALL accessible stores (guides are a shared multitienda
   // pool); the store/city multi-select filters happen client-side in the board.
