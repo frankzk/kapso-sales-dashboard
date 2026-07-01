@@ -325,15 +325,17 @@ export async function resolveShipmentMatch(
     const sb = await createServerSupabase();
     const { data: order } = await sb
       .from("orders")
-      .select("id,store_id")
+      .select("id,store_id,name")
       .eq("id", orderId)
       .maybeSingle();
     if (!order) return { error: "Pedido inválido o sin acceso." };
+    const o = order as { store_id: string; name: string | null };
     const { error } = await admin
       .from("shipments")
       .update({
         order_id: orderId,
-        store_id: (order as { store_id: string }).store_id,
+        store_id: o.store_id,
+        order_name: o.name,
         matched: true,
         match_method: "manual",
       })
