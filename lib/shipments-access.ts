@@ -152,6 +152,30 @@ export async function searchShipmentsQuery(query: string): Promise<ShipmentRow[]
   return (data as ShipmentRow[]) ?? [];
 }
 
+export interface OrderLinkCandidate {
+  id: string;
+  name: string | null;
+  customer_phone: string | null;
+  created_at: string | null;
+}
+
+/** Search accessible orders (RLS-scoped) by order name or phone, to manually
+ *  link a shipment. `orders` has no customer-name column, so results are
+ *  distinguished by order number + phone + date. */
+export async function searchOrdersForLink(query: string): Promise<OrderLinkCandidate[]> {
+  const q = query.trim().replace(/[,()*%]/g, "");
+  if (q.length < 2) return [];
+  const sb = await createServerSupabase();
+  const like = `%${q}%`;
+  const { data } = await sb
+    .from("orders")
+    .select("id,name,customer_phone,created_at")
+    .or(`name.ilike.${like},customer_phone.ilike.${like}`)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  return (data as OrderLinkCandidate[]) ?? [];
+}
+
 /** A shipment + its call history (RLS-scoped). Drives the drawer. */
 export async function getShipmentWithCalls(
   shipmentId: string,

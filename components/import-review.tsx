@@ -1,10 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState, useTransition } from "react";
+import { useRef, useState } from "react";
 import { Card } from "@/components/ui";
 import type { ShipmentRow, StoreSummary } from "@/lib/types";
-import { resolveShipmentMatch } from "@/app/dashboard/envios/actions";
+import { OrderLinkPicker } from "@/components/order-link-picker";
 
 export function ImportReview({
   stores,
@@ -121,18 +121,9 @@ export function ImportReview({
 
 function ReviewRow({ shipment }: { shipment: ShipmentRow }) {
   const router = useRouter();
-  const [orderId, setOrderId] = useState("");
-  const [pending, start] = useTransition();
-
-  function run(input: { orderId?: string | null }) {
-    start(async () => {
-      await resolveShipmentMatch(shipment.id, input);
-      router.refresh();
-    });
-  }
 
   return (
-    <li className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-sm">
+    <li className="space-y-2 px-5 py-3 text-sm">
       <div className="min-w-0">
         <p className="font-mono text-xs text-slate-700">{shipment.guide_code}</p>
         <p className="text-slate-700">
@@ -143,28 +134,11 @@ function ReviewRow({ shipment }: { shipment: ShipmentRow }) {
           {shipment.product ?? ""} {shipment.city ? `· ${shipment.city}` : ""}
         </p>
       </div>
-      <div className="flex items-center gap-2">
-        <input
-          value={orderId}
-          onChange={(e) => setOrderId(e.target.value)}
-          placeholder="UUID del pedido"
-          className="w-40 rounded-lg border border-slate-200 px-2 py-1 text-xs"
-        />
-        <button
-          onClick={() => orderId.trim() && run({ orderId: orderId.trim() })}
-          disabled={pending || !orderId.trim()}
-          className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
-        >
-          Vincular
-        </button>
-        <button
-          onClick={() => run({ orderId: null })}
-          disabled={pending}
-          className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs hover:bg-slate-50"
-        >
-          Sin pedido
-        </button>
-      </div>
+      <OrderLinkPicker
+        shipmentId={shipment.id}
+        prefill={shipment.order_name}
+        onLinked={() => router.refresh()}
+      />
     </li>
   );
 }

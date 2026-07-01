@@ -4,7 +4,12 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
-import { getShipmentWithCalls, searchShipmentsQuery } from "@/lib/shipments-access";
+import {
+  getShipmentWithCalls,
+  searchOrdersForLink,
+  searchShipmentsQuery,
+  type OrderLinkCandidate,
+} from "@/lib/shipments-access";
 import {
   CLAIM_TTL_MINUTES,
   attemptLabel,
@@ -83,6 +88,16 @@ export async function searchShipments(query: string): Promise<ShipmentRow[]> {
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
   return searchShipmentsQuery(query);
+}
+
+/** Search accessible orders (guía/pedido drawer's manual-link picker), RLS-scoped. */
+export async function searchOrdersToLink(query: string): Promise<OrderLinkCandidate[]> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  return searchOrdersForLink(query);
 }
 
 /** Claim a shipment (one at a time). Succeeds if free, stale, or already mine. */
