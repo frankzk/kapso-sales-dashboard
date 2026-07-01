@@ -137,6 +137,7 @@ function ReviewRow({ shipment }: { shipment: ShipmentRow }) {
       <OrderLinkPicker
         shipmentId={shipment.id}
         prefill={shipment.order_name}
+        customerPhone={shipment.customer_phone}
         onLinked={() => router.refresh()}
       />
     </li>
