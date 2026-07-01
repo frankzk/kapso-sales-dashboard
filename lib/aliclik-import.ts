@@ -64,11 +64,17 @@ function findGuideCode(raw: Record<string, string>): string | null {
 // A Shopify order name looks like "#KP114985". The Aliclik "NOTA" field often
 // carries it (esp. for Kenku) mixed with reference text, so we extract the token.
 const KP_RE = /#?\s*(KP\d[A-Za-z0-9-]*)/i;
-// Sometimes NOTA has just the bare order number (no "KP" prefix), e.g. "119358 -
-// referencia". A standalone 6-digit run is our best guess, but free text can
-// coincidentally contain unrelated 6-digit numbers — so this is returned
-// UNCONFIRMED; the matcher only trusts it after cross-validating a second signal
-// (the customer phone) against the guessed order.
+// Aurela's own Shopify order.name prefix is "AUR" (e.g. "#AUR173123") — a real,
+// deliberate order reference, just like "KP" is for Kenku. The literal "#" is
+// required (unlike KP, where it's optional) and at least 4 digits must follow
+// "AUR" immediately: the AUR5X… guide code has a letter ("X") right after the
+// leading digit, so it can never satisfy \d{4,} here — no collision risk.
+const AUR_ORDER_RE = /#\s*(AUR\d{4,}[A-Za-z0-9-]*)/i;
+// Sometimes NOTA has just the bare order number (no "KP"/"AUR" prefix), e.g.
+// "119358 - referencia". A standalone 6-digit run is our best guess, but free
+// text can coincidentally contain unrelated 6-digit numbers — so this is
+// returned UNCONFIRMED; the matcher only trusts it after cross-validating a
+// second signal (the customer phone) against the guessed order.
 const BARE_ORDER_RE = /\b(\d{6})\b/;
 
 interface ExtractedOrderRef {
@@ -82,8 +88,11 @@ function extractOrderReference(
 ): ExtractedOrderRef {
   for (const v of [nota, orderColumnValue]) {
     if (!v) continue;
-    const m = String(v).match(KP_RE);
-    if (m && m[1]) return { name: "#" + m[1].toUpperCase(), confirmed: true };
+    const s = String(v);
+    const kp = s.match(KP_RE);
+    if (kp && kp[1]) return { name: "#" + kp[1].toUpperCase(), confirmed: true };
+    const aur = s.match(AUR_ORDER_RE);
+    if (aur && aur[1]) return { name: "#" + aur[1].toUpperCase(), confirmed: true };
   }
   const m = nota ? String(nota).match(BARE_ORDER_RE) : null;
   if (m && m[1]) return { name: "#KP" + m[1], confirmed: false };

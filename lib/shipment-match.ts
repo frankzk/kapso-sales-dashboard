@@ -26,13 +26,16 @@ export interface MatchResult {
 
 /**
  * Match a parsed row against candidate orders.
- *   1) by order name (#KP…) — exact on the normalized name. A CONFIRMED name
- *      (literal "KP" token found) behaves as before: unique → match, ambiguous
- *      → review. An UNCONFIRMED name (bare-number guess extracted from free-text
- *      NOTA) is only trusted after cross-validating the customer phone against
- *      the SAME candidate order — this also disambiguates the case where two
- *      orders share a phone number (see step 2) by picking the one whose order
- *      number the report actually mentioned.
+ *   1) by order name (#KP…/#AUR…) — exact on the normalized name. A CONFIRMED
+ *      name (literal "KP"/"AUR" token found) behaves as before: unique → match.
+ *      If it's ambiguous (2+ orders share the name — rare), try to disambiguate
+ *      by phone before giving up, same technique as the unconfirmed case below;
+ *      only genuinely ambiguous (still 0 or 2+ after that) → review. An
+ *      UNCONFIRMED name (bare-number guess extracted from free-text NOTA) is
+ *      only trusted after cross-validating the customer phone against the SAME
+ *      candidate order — this also disambiguates the case where two orders
+ *      share a phone number (see step 2) by picking the one whose order number
+ *      the report actually mentioned.
  *   2) by phone — only when exactly one order carries that phone.
  * Ambiguous (multiple) or zero matches → review (no order linked).
  */
@@ -47,6 +50,21 @@ export function matchShipment(row: ParsedShipmentRow, candidates: OrderCandidate
         return { order_id: o.id, store_id: o.store_id, matched: true, method: "order_name", status: "matched" };
       }
       if (byName.length > 1) {
+        // ambiguous confirmed name (rare) — try to disambiguate by phone before
+        // giving up, rather than sending a resolvable case straight to review
+        if (row.customer_phone) {
+          const disambiguated = byName.filter((c) => c.customer_phone === row.customer_phone);
+          if (disambiguated.length === 1) {
+            const o = disambiguated[0]!;
+            return {
+              order_id: o.id,
+              store_id: o.store_id,
+              matched: true,
+              method: "order_name_phone",
+              status: "matched",
+            };
+          }
+        }
         return { order_id: null, store_id: null, matched: false, method: "none", status: "review" };
       }
     } else if (row.customer_phone) {
