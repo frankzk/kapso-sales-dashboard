@@ -110,13 +110,18 @@ export function OrderLinkPicker({
     });
   }
 
-  async function searchShopify() {
-    const term = q.trim();
+  async function searchShopify(term = q.trim()) {
     if (term.length < 2) return;
     setSearchingShopify(true);
     const r = await searchShopifyOrdersLive(shipmentId, term);
     setShopifyResults(r);
     setSearchingShopify(false);
+  }
+
+  function searchByShipmentPhone() {
+    if (!customerPhone) return;
+    setQ(customerPhone);
+    searchShopify(customerPhone);
   }
 
   function linkShopify(gid: string) {
@@ -149,6 +154,15 @@ export function OrderLinkPicker({
           Sin pedido
         </button>
       </div>
+      {customerPhone && (
+        <button
+          type="button"
+          onClick={searchByShipmentPhone}
+          className="text-xs text-brand-700 hover:underline"
+        >
+          Buscar por el teléfono del envío ({customerPhone})
+        </button>
+      )}
       {searching && <p className="text-xs text-slate-400">Buscando…</p>}
       {results && results.length === 0 && !searching && (
         <p className="text-xs text-slate-400">Sin coincidencias.</p>
@@ -177,7 +191,7 @@ export function OrderLinkPicker({
       <div className="flex items-center gap-2">
         <button
           type="button"
-          onClick={searchShopify}
+          onClick={() => searchShopify()}
           disabled={q.trim().length < 2 || searchingShopify}
           className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
         >
