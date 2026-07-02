@@ -2,10 +2,28 @@ import { describe, it, expect } from "vitest";
 import {
   attachDeltas,
   computeAdvisorStats,
+  isWonLead,
   localRangeBoundsIso,
   type AdvisorCall,
   type AdvisorStat,
 } from "@/lib/productivity";
+
+describe("isWonLead (a close requires the lead's OWN disposition, not has_order)", () => {
+  it("true only for category='won'", () => {
+    expect(isWonLead("won")).toBe(true);
+  });
+  it("false for a lead dispositioned lost — even though has_order can still be true", () => {
+    // The reported bug: a lead the advisor marked "ya compró en otro lado" (lost)
+    // still has has_order=true from an unrelated linked order. Must not count.
+    expect(isWonLead("lost")).toBe(false);
+  });
+  it("false for open/hot/null/undefined", () => {
+    expect(isWonLead("open")).toBe(false);
+    expect(isWonLead("hot")).toBe(false);
+    expect(isWonLead(null)).toBe(false);
+    expect(isWonLead(undefined)).toBe(false);
+  });
+});
 
 describe("localRangeBoundsIso (today = the STORE's local day, not a UTC day)", () => {
   it("maps a Lima (UTC−5) local day to its true UTC bounds", () => {

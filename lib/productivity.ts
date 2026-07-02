@@ -48,6 +48,15 @@ export interface AdvisorStat {
   dias: number; // distinct days with logged activity
 }
 
+/** A touched lead counts as a close only if its OWN disposition is `won` —
+ *  `has_order` alone is not enough: it can be `true` from an unrelated order
+ *  linked by phone (e.g. a past purchase) while the advisor dispositioned THIS
+ *  lead as lost ("ya compró en otro lado"). Crediting on `has_order` would count
+ *  a lost call as a sale. */
+export function isWonLead(category: string | null | undefined): boolean {
+  return category === "won";
+}
+
 /** Canonical acquisition-source bucket for a lead's `source`. */
 function sourceKey(s: string | null | undefined): "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" {
   return s === "meta_ad"
@@ -219,13 +228,19 @@ export async function getAdvisorProductivity(
   // 2) Outcome of the touched leads (won? + linked order + source). `source` is
   //    selected with a fallback so a pending 0008 migration can't break the page.
   const leadIds = [...new Set(calls.map((c) => c.lead_id))];
-  type TouchedLead = { id: string; has_order: boolean; order_id: string | null; source?: string | null };
+  type TouchedLead = {
+    id: string;
+    category: string | null;
+    has_order: boolean;
+    order_id: string | null;
+    source?: string | null;
+  };
   let leadsTouched: TouchedLead[];
   {
-    const withSource = await sb.from("leads").select("id, has_order, order_id, source").in("id", leadIds);
+    const withSource = await sb.from("leads").select("id, category, has_order, order_id, source").in("id", leadIds);
     if (withSource.error) {
       // source column not present yet (migration 0008 pending) — degrade.
-      const base = await sb.from("leads").select("id, has_order, order_id").in("id", leadIds);
+      const base = await sb.from("leads").select("id, category, has_order, order_id").in("id", leadIds);
       leadsTouched = (base.data as unknown as TouchedLead[]) ?? [];
     } else {
       leadsTouched = (withSource.data as unknown as TouchedLead[]) ?? [];
@@ -256,7 +271,7 @@ export async function getAdvisorProductivity(
 
   const leadOutcome = new Map<string, { won: boolean; net: number }>();
   for (const l of leadsTouched) {
-    leadOutcome.set(l.id, { won: !!l.has_order, net: l.order_id ? (netByOrder.get(l.order_id) ?? 0) : 0 });
+    leadOutcome.set(l.id, { won: isWonLead(l.category), net: l.order_id ? (netByOrder.get(l.order_id) ?? 0) : 0 });
   }
 
   const emailById = await resolveEmails([...new Set(scopedCalls.map((c) => c.vendedora))]);
@@ -439,7 +454,7 @@ export async function getAgentLeadsWorked(
     status: l.status,
     category: l.category,
     source: sourceKey(l.source),
-    won: !!l.has_order,
+    won: isWonLead(l.category),
     net: l.order_id ? (netByOrder.get(l.order_id) ?? 0) : 0,
     llamadas: llamadasByLead.get(l.id) ?? 0,
     lastTouch: lastTouchByLead.get(l.id) ?? startIso,
