@@ -1320,3 +1320,16 @@ alter table shipments add column if not exists suggestion_checked_at timestamptz
 create index if not exists shipments_suggestion_pending_idx
   on shipments (created_at)
   where matched = false and suggestion_checked_at is null;
+
+
+-- ---- 0028 ----
+-- 0028_shipment_transferido.sql — new terminal status "transferido" (category
+-- "transferred") for the Aliclik "parent" guide once a Fenix sub-guide is
+-- created for it. No schema change needed — one-time backfill for guides
+-- already transferred before this migration. Idempotent.
+
+update shipments
+set delivery_status = 'transferido', status_category = 'transferred'
+where courier = 'aliclik'
+  and fenix_shipment_id is not null
+  and delivery_status <> 'transferido';
