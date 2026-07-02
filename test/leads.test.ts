@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   LEAD_STATUSES,
   MANUAL_STATUSES,
+  canDispositionLead,
   categoryOf,
   isCallable,
   isValidStatus,
@@ -23,6 +24,35 @@ import {
   matchesQueueState,
   countQueueStates,
 } from "@/lib/leads";
+
+describe("canDispositionLead (a manual call must not silently erase a real sale)", () => {
+  it("blocks downgrading a won lead with an ACTIVE order to a non-won status", () => {
+    // The reported bug: an order placed directly in Shopify, then a different
+    // advisor re-calls the same lead before the queue catches up and marks it
+    // "ya_compro_otro_lado" — erasing a real sale.
+    expect(
+      canDispositionLead({ currentCategory: "won", newStatus: "ya_compro_otro_lado", hasActiveOrder: true }),
+    ).toBe(false);
+  });
+  it("allows the downgrade once the order is no longer active (a genuine loss)", () => {
+    expect(
+      canDispositionLead({ currentCategory: "won", newStatus: "ya_compro_otro_lado", hasActiveOrder: false }),
+    ).toBe(true);
+  });
+  it("allows re-dispositioning won→won (e.g. re-registering the same sale)", () => {
+    expect(
+      canDispositionLead({ currentCategory: "won", newStatus: "pedido_generado", hasActiveOrder: true }),
+    ).toBe(true);
+  });
+  it("has nothing to protect when the lead isn't currently won", () => {
+    expect(
+      canDispositionLead({ currentCategory: "open", newStatus: "ya_compro_otro_lado", hasActiveOrder: true }),
+    ).toBe(true);
+    expect(
+      canDispositionLead({ currentCategory: undefined, newStatus: "no_responde", hasActiveOrder: true }),
+    ).toBe(true);
+  });
+});
 
 describe("gestionOf / countGestiones (call-state buckets)", () => {
   it("maps call dispositions to the right bucket", () => {

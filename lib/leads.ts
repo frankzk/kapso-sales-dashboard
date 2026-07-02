@@ -63,6 +63,27 @@ export function isValidStatus(code: string): boolean {
   return BY_CODE.has(code);
 }
 
+/**
+ * Guards a manual call disposition from silently downgrading a lead away from
+ * `won` while its order is still ACTIVE (not cancelled) — that's a completed
+ * sale, not a loss. Mirrors `shouldReopenWonCart`'s active-order check
+ * (lib/leads-ingest.ts) from the opposite direction: there, an active order lets
+ * a fresh cart reclaim a stale win; here, an active order stops a later manual
+ * call from erasing a real one (e.g. an order placed directly in Shopify, then a
+ * different advisor re-calls the same lead before the queue catches up).
+ * Safe to apply when: the lead isn't currently won, the new status is ALSO won,
+ * or the order backing the win is no longer active (a genuine loss/cancellation).
+ */
+export function canDispositionLead(opts: {
+  currentCategory: string | undefined;
+  newStatus: string;
+  hasActiveOrder: boolean;
+}): boolean {
+  if (opts.currentCategory !== "won") return true;
+  if (categoryOf(opts.newStatus) === "won") return true;
+  return !opts.hasActiveOrder;
+}
+
 /** Statuses an agent may set by hand (the call-disposition dropdown). */
 export const MANUAL_STATUSES: LeadStatusDef[] = LEAD_STATUSES.filter((s) => s.source === "manual");
 
