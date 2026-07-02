@@ -18,21 +18,26 @@ import {
 } from "@/lib/shipments";
 
 describe("delivery status model", () => {
-  it("has the four global states with consistent categories", () => {
+  it("has the five global states with consistent categories", () => {
     const codes = DELIVERY_STATUSES.map((s) => s.code);
-    expect(new Set(codes)).toEqual(new Set(["pendiente", "en_ruta", "entregado", "anulado"]));
+    expect(new Set(codes)).toEqual(
+      new Set(["pendiente", "en_ruta", "entregado", "anulado", "transferido"]),
+    );
     expect(categoryOf("pendiente")).toBe("pending");
     expect(categoryOf("en_ruta")).toBe("in_route");
     expect(categoryOf("entregado")).toBe("delivered");
     expect(categoryOf("anulado")).toBe("closed");
+    expect(categoryOf("transferido")).toBe("transferred");
   });
 
   it("flags callable/terminal/pending states", () => {
     expect(isCallable("pendiente")).toBe(true);
     expect(isCallable("en_ruta")).toBe(true);
     expect(isCallable("entregado")).toBe(false);
+    expect(isCallable("transferido")).toBe(false);
     expect(isTerminal("entregado")).toBe(true);
     expect(isTerminal("anulado")).toBe(true);
+    expect(isTerminal("transferido")).toBe(true);
     expect(isTerminal("pendiente")).toBe(false);
     expect(isPending("pendiente")).toBe(true);
     expect(isPending("en_ruta")).toBe(false);
@@ -121,6 +126,10 @@ describe("reconcileDeliveryStatus (re-import merge)", () => {
     expect(reconcileDeliveryStatus("entregado", "pendiente")).toBe("entregado");
     expect(reconcileDeliveryStatus("anulado", "pendiente")).toBe("anulado");
     expect(reconcileDeliveryStatus("entregado", "entregado")).toBe("entregado");
+  });
+  it("never reverts a transferido guide (highest precedence)", () => {
+    expect(reconcileDeliveryStatus("transferido", "entregado")).toBe("transferido");
+    expect(reconcileDeliveryStatus("transferido", "pendiente")).toBe("transferido");
   });
   it("keeps pendiente idempotent on re-import (attempts preserved elsewhere)", () => {
     expect(reconcileDeliveryStatus("pendiente", "pendiente")).toBe("pendiente");

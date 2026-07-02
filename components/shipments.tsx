@@ -8,6 +8,7 @@ import {
   DELIVERY_STATUSES,
   attemptLabel,
   autoFenixGuideCode,
+  isCallable,
   isFenixDistrict,
   labelOf,
   type RerouteDisposition,
@@ -30,6 +31,7 @@ const CATEGORY_BADGE: Record<string, string> = {
   in_route: "bg-violet-50 text-violet-700",
   delivered: "bg-emerald-50 text-emerald-700",
   closed: "bg-slate-100 text-slate-600",
+  transferred: "bg-sky-50 text-sky-700",
 };
 
 const DISPOSITIONS: { key: RerouteDisposition; label: string }[] = [
@@ -522,66 +524,69 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
               )}
             </section>
 
-            {/* claim + re-route call */}
-            <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
-              <p className="text-sm font-medium text-slate-800">Registrar llamada (reprogramación)</p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => run(() => claimShipment(shipmentId))}
-                  disabled={pending}
-                  className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs hover:bg-slate-50"
+            {/* claim + re-route call — hidden once the shipment is terminal (entregado/
+                anulado/transferido) so a stray "no contesta" can't reopen a closed guide */}
+            {isCallable(detail.shipment.delivery_status) && (
+              <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
+                <p className="text-sm font-medium text-slate-800">Registrar llamada (reprogramación)</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => run(() => claimShipment(shipmentId))}
+                    disabled={pending}
+                    className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs hover:bg-slate-50"
+                  >
+                    Tomar
+                  </button>
+                  <button
+                    onClick={() => run(() => releaseShipment(shipmentId))}
+                    disabled={pending}
+                    className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs hover:bg-slate-50"
+                  >
+                    Liberar
+                  </button>
+                </div>
+                <select
+                  value={disposition}
+                  onChange={(e) => setDisposition(e.target.value as RerouteDisposition)}
+                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
                 >
-                  Tomar
-                </button>
+                  {DISPOSITIONS.map((d) => (
+                    <option key={d.key} value={d.key}>
+                      {d.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="date"
+                  value={nextDate}
+                  onChange={(e) => setNextDate(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                  placeholder="Próximo intento"
+                />
+                <textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Nota de la llamada…"
+                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                  rows={2}
+                />
                 <button
-                  onClick={() => run(() => releaseShipment(shipmentId))}
+                  onClick={() =>
+                    run(() =>
+                      registerRerouteCall(shipmentId, {
+                        disposition,
+                        note,
+                        nextFollowupAt: nextDate ? new Date(nextDate).toISOString() : null,
+                      }),
+                    )
+                  }
                   disabled={pending}
-                  className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs hover:bg-slate-50"
+                  className="w-full rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
                 >
-                  Liberar
+                  Registrar llamada
                 </button>
-              </div>
-              <select
-                value={disposition}
-                onChange={(e) => setDisposition(e.target.value as RerouteDisposition)}
-                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-              >
-                {DISPOSITIONS.map((d) => (
-                  <option key={d.key} value={d.key}>
-                    {d.label}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="date"
-                value={nextDate}
-                onChange={(e) => setNextDate(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                placeholder="Próximo intento"
-              />
-              <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="Nota de la llamada…"
-                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                rows={2}
-              />
-              <button
-                onClick={() =>
-                  run(() =>
-                    registerRerouteCall(shipmentId, {
-                      disposition,
-                      note,
-                      nextFollowupAt: nextDate ? new Date(nextDate).toISOString() : null,
-                    }),
-                  )
-                }
-                disabled={pending}
-                className="w-full rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
-              >
-                Registrar llamada
-              </button>
-            </section>
+              </section>
+            )}
 
             {/* Fenix guide */}
             <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
