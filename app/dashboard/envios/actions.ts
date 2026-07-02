@@ -295,7 +295,7 @@ export async function createFenixGuide(
 
   await admin
     .from("shipments")
-    .update({ fenix_shipment_id: child.id })
+    .update({ fenix_shipment_id: child.id, delivery_status: "transferido", status_category: "transferred" })
     .eq("id", shipmentId);
   await admin.from("shipment_calls").insert({
     shipment_id: shipmentId,

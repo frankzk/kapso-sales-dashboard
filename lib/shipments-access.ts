@@ -15,6 +15,7 @@ export type ShipmentView =
   | "en_ruta"
   | "entregado"
   | "anulado"
+  | "transferido"
   | "revision";
 
 export const SHIPMENT_VIEWS: { key: ShipmentView; label: string }[] = [
@@ -22,6 +23,7 @@ export const SHIPMENT_VIEWS: { key: ShipmentView; label: string }[] = [
   { key: "en_ruta", label: "En ruta" },
   { key: "entregado", label: "Entregado" },
   { key: "anulado", label: "Anulado" },
+  { key: "transferido", label: "Transferido" },
   { key: "revision", label: "Revisión" },
 ];
 
@@ -40,6 +42,7 @@ const VIEW_CATEGORIES: Record<ShipmentView, string[]> = {
   en_ruta: ["in_route"],
   entregado: ["delivered"],
   anulado: ["closed"],
+  transferido: ["transferred"],
   revision: [], // special-cased: unmatched guides
 };
 
@@ -100,6 +103,7 @@ export async function getShipmentCounts(
     en_ruta: 0,
     entregado: 0,
     anulado: 0,
+    transferido: 0,
     revision: 0,
   };
   if (!storeIds.length) return out;
@@ -111,13 +115,14 @@ export async function getShipmentCounts(
     .eq("matched", false)
     .in("status_category", REVIEW_CATEGORIES)
     .or("match_method.is.null,match_method.neq.dismissed");
-  const [pendiente, en_ruta, entregado, anulado] = await Promise.all([
+  const [pendiente, en_ruta, entregado, anulado, transferido] = await Promise.all([
     countByCategory(sb, storeIds, ["pending"]),
     countByCategory(sb, storeIds, ["in_route"]),
     countByCategory(sb, storeIds, ["delivered"]),
     countByCategory(sb, storeIds, ["closed"]),
+    countByCategory(sb, storeIds, ["transferred"]),
   ]);
-  return { pendiente, en_ruta, entregado, anulado, revision: revision ?? 0 };
+  return { pendiente, en_ruta, entregado, anulado, transferido, revision: revision ?? 0 };
 }
 
 /** Unmatched shipments awaiting manual linking (the "Por revisar" queue). */

@@ -12,7 +12,7 @@
 // the report already says ENTREGADO. The `pendiente` queue is split in the UI by
 // `fenix_eligible` (only guides with Fenix stock in their city are worked).
 
-export type ShipmentCategory = "pending" | "in_route" | "delivered" | "closed";
+export type ShipmentCategory = "pending" | "in_route" | "delivered" | "closed" | "transferred";
 
 export interface DeliveryStatusDef {
   code: string;
@@ -27,6 +27,10 @@ export const DELIVERY_STATUSES: DeliveryStatusDef[] = [
   { code: "en_ruta", label: "En ruta", category: "in_route", callable: true, terminal: false },
   { code: "entregado", label: "Entregado", category: "delivered", callable: false, terminal: true },
   { code: "anulado", label: "Anulado", category: "closed", callable: false, terminal: true },
+  // Set on the Aliclik "parent" guide when a Fenix sub-guide is created for it — the
+  // Fenix guide becomes the active shipment going forward, so the parent freezes here
+  // instead of staying duplicated in the same active tabs as its child.
+  { code: "transferido", label: "Transferido", category: "transferred", callable: false, terminal: true },
 ];
 
 const BY_CODE = new Map(DELIVERY_STATUSES.map((s) => [s.code, s]));
@@ -214,6 +218,7 @@ const STATUS_PRECEDENCE: Record<string, number> = {
   en_ruta: 2,
   anulado: 3,
   entregado: 3,
+  transferido: 4,
 };
 
 /** Lifecycle rank used to reconcile a re-imported status (0 = unknown). */
