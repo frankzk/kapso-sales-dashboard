@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { getCustomerHistory, getLeadWithCalls, type CustomerHistory } from "@/lib/leads-access";
-import { CLAIM_TTL_MINUTES, categoryOf, isValidStatus, labelOf } from "@/lib/leads";
+import { CLAIM_TTL_MINUTES, canDispositionLead, categoryOf, isValidStatus, labelOf } from "@/lib/leads";
 import {
   OFFER_TTL_MS,
   ONLINE_TTL_MS,
@@ -487,6 +487,33 @@ export async function registerCall(
   if (status && !isValidStatus(status)) return { error: "Estado inválido." };
 
   const admin = createAdminSupabase();
+
+  // Don't let a manual disposition silently erase a real sale: if the lead is
+  // already `won` with an ACTIVE order (not cancelled) — e.g. one placed
+  // directly in Shopify, before the queue caught up — block a downgrade and
+  // point the agent at the order instead of quietly losing it.
+  if (status) {
+    const { data: current } = await admin
+      .from("leads")
+      .select("category, has_order, order_id")
+      .eq("id", leadId)
+      .maybeSingle();
+    const lead = current as { category: string; has_order: boolean; order_id: string | null } | null;
+    if (lead?.has_order && lead.order_id) {
+      const { data: order } = await admin
+        .from("orders")
+        .select("name, cancelled_at")
+        .eq("id", lead.order_id)
+        .maybeSingle();
+      const o = order as { name: string | null; cancelled_at: string | null } | null;
+      const hasActiveOrder = !!o && !o.cancelled_at;
+      if (!canDispositionLead({ currentCategory: lead.category, newStatus: status, hasActiveOrder })) {
+        return {
+          error: `Este lead ya tiene un pedido activo${o?.name ? ` (${o.name})` : ""}. Si el cliente canceló, cancela el pedido en Shopify primero.`,
+        };
+      }
+    }
+  }
 
   await admin.from("lead_calls").insert({
     lead_id: leadId,
