@@ -13,6 +13,12 @@ import {
   TAGS,
 } from "@/lib/types";
 import { normalizePhone } from "@/lib/phone";
+import { extractNumericId, shopifyOrderAdminUrl } from "@/lib/shopify-urls";
+
+// Client-safe id/URL helpers (extractNumericId, admin deep-links) live in
+// lib/shopify-urls.ts — this module imports node:crypto, so client components
+// can't import it. Re-exported here for the existing server-side consumers.
+export { extractNumericId, shopifyDraftOrderAdminUrl, shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 
 export const SHOPIFY_DEFAULT_API_VERSION = "2025-01";
 
@@ -87,32 +93,6 @@ export function noteAttributesToMap(
     map[key.toLowerCase()] = a.value == null ? "" : String(a.value);
   }
   return map;
-}
-
-/** Extract the trailing numeric id from a Shopify GID or pass numbers through. */
-export function extractNumericId(
-  gid: string | number | null | undefined,
-): string {
-  if (gid == null) return "";
-  const s = String(gid);
-  const m = s.match(/(\d+)\s*$/);
-  return m?.[1] ?? s;
-}
-
-/**
- * Admin deep-link for an order, e.g.
- * `https://admin.shopify.com/store/<handle>/orders/<numericId>`. The handle is
- * the myshopify subdomain. Returns null if we can't build a valid link.
- */
-export function shopifyOrderAdminUrl(
-  domain: string | null | undefined,
-  gidOrId: string | number | null | undefined,
-): string | null {
-  const id = extractNumericId(gidOrId);
-  if (!domain || !id) return null;
-  const handle = String(domain).trim().toLowerCase().replace(/\.myshopify\.com$/i, "");
-  if (!handle) return null;
-  return `https://admin.shopify.com/store/${handle}/orders/${id}`;
 }
 
 function toNumber(v: unknown): number | null {

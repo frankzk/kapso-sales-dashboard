@@ -7,6 +7,7 @@ import {
   noteAttributesToMap,
   extractNumericId,
   shopifyOrderAdminUrl,
+  shopifyDraftOrderAdminUrl,
   deriveOrderFlags,
   mapRestOrder,
   mapGraphqlOrder,
@@ -101,6 +102,15 @@ describe("small helpers", () => {
     expect(shopifyOrderAdminUrl(null, "123")).toBeNull();
     expect(shopifyOrderAdminUrl("aurela.myshopify.com", null)).toBeNull();
     expect(shopifyOrderAdminUrl("aurela.myshopify.com", "")).toBeNull();
+  });
+
+  it("shopifyDraftOrderAdminUrl deep-links the draft in the admin, not the checkout", () => {
+    expect(
+      shopifyDraftOrderAdminUrl("kenkuperu.myshopify.com", "gid://shopify/DraftOrder/1315710075175"),
+    ).toBe("https://admin.shopify.com/store/kenkuperu/draft_orders/1315710075175");
+    // missing pieces → null (the UI falls back to the stored invoiceUrl)
+    expect(shopifyDraftOrderAdminUrl(null, "gid://shopify/DraftOrder/123")).toBeNull();
+    expect(shopifyDraftOrderAdminUrl("kenkuperu.myshopify.com", null)).toBeNull();
   });
 
   it("deriveOrderFlags reads promo/stock/shipping/conversation", () => {
