@@ -56,6 +56,7 @@ import {
   type LeadThread,
   type QuickReply,
 } from "@/app/dashboard/leads/actions";
+import { shopifyDraftOrderAdminUrl } from "@/lib/shopify-urls";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { cn } from "@/components/ui";
 import { YapeAssign } from "@/components/yape-alerts";
@@ -1237,6 +1238,7 @@ export function LeadsBoard({
           history={history}
           adMeta={selected.ad_id ? (adNames?.[selected.ad_id] ?? null) : null}
           waNumber={selected.wa_phone_number_id ? (waNumbers?.[selected.wa_phone_number_id] ?? null) : null}
+          shopifyDomain={stores.find((s) => s.id === selected.store_id)?.shopify_domain ?? null}
           currency={currency}
           onClose={closeDrawer}
           onRegistered={() => refreshDetail(selected.id)}
@@ -1252,6 +1254,7 @@ function LeadDrawer({
   history,
   adMeta,
   waNumber,
+  shopifyDomain,
   currency,
   onClose,
   onRegistered,
@@ -1261,6 +1264,7 @@ function LeadDrawer({
   history: CustomerHistory | null; // prior purchases (recurrent-customer block)
   adMeta: AdMeta | null; // Meta attribution for lead.ad_id (null until resolved)
   waNumber: WaNumber | null; // resolved label for lead.wa_phone_number_id (null = unresolved)
+  shopifyDomain: string | null; // myshopify domain of the lead's store (admin deep-links)
   currency: string;
   onClose: () => void;
   onRegistered: () => void;
@@ -1272,6 +1276,10 @@ function LeadDrawer({
   // resuelve por teléfono si no hay conversation_id guardado).
   const hasWa = lead.source !== "cod_cart" || !!lead.kapso_conversation_id;
   const hasCart = !!lead.draft_order_gid && lead.draft_order_status !== "completed";
+  // "Ver borrador" abre el draft en el ADMIN de Shopify, no el checkout del
+  // cliente (invoiceUrl); ese queda solo como fallback si falta gid/dominio.
+  const draftOrderHref =
+    shopifyDraftOrderAdminUrl(shopifyDomain, lead.draft_order_gid) ?? lead.draft_order_url ?? null;
   // Recurrent if there are prior purchases — either the local last-order signal or
   // the (authoritative) Shopify "Pedidos anteriores" list, which catches customers
   // whose past orders were placed outside the bot (not in the kapso-only table).
@@ -1428,9 +1436,9 @@ function LeadDrawer({
                       {lead.referencia && <p className="text-emerald-800/90">Ref: {lead.referencia}</p>}
                     </div>
                   )}
-                  {lead.draft_order_url && (
+                  {draftOrderHref && (
                     <a
-                      href={lead.draft_order_url}
+                      href={draftOrderHref}
                       target="_blank"
                       rel="noreferrer"
                       className="mt-1.5 inline-block text-xs font-medium text-emerald-700 underline hover:text-emerald-900"
