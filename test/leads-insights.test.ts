@@ -1,5 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { buildBurndown, buildTrend, SHIFT_START, SHIFT_END } from "@/lib/leads-insights";
+import { buildBurndown, buildTrend, shortLocalDate, SHIFT_START, SHIFT_END } from "@/lib/leads-insights";
+
+describe("shortLocalDate (fecha corta del tooltip de pedidos)", () => {
+  it("formats an ISO as dd/mm/aa in the store's timezone", () => {
+    // 2026-07-06 02:30Z = still 2026-07-05 in Lima (UTC−5)
+    expect(shortLocalDate("2026-07-06T02:30:00Z", "America/Lima")).toBe("05/07/26");
+    expect(shortLocalDate("2026-07-05T14:00:00Z", "America/Lima")).toBe("05/07/26");
+  });
+  it("null-safe", () => {
+    expect(shortLocalDate(null, "America/Lima")).toBeNull();
+    expect(shortLocalDate(undefined, "America/Lima")).toBeNull();
+  });
+});
 
 describe("buildTrend (saldo walked back from the current backlog)", () => {
   it("reconstructs saldo via saldo(d-1) = saldo(d) − entran(d) + cierran(d)", () => {

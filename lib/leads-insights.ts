@@ -34,6 +34,14 @@ export interface AdvisorToday {
   name: string;
   contactos: number; // calls logged today
   pedidos: number; // wins attributed today (last-touch)
+  pedidosDetalle: { code: string | null; fecha: string | null }[]; // "#AUR1091" + "05/07/26"
+}
+
+/** ISO → "dd/mm/aa" in the store's timezone (null-safe), for the pedidos tooltip. */
+export function shortLocalDate(iso: string | null | undefined, tz: string): string | null {
+  if (!iso) return null;
+  const d = tzParts(iso, tz).date; // YYYY-MM-DD
+  return `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(2, 4)}`;
 }
 
 export interface LeadsInsights {
@@ -228,6 +236,7 @@ export async function getLeadsInsights(
         name: r.email.includes("@") ? r.email.split("@")[0]! : r.email,
         contactos: r.llamadas,
         pedidos: r.cerrados,
+        pedidosDetalle: r.cerradosDetalle.map((o) => ({ code: o.name, fecha: shortLocalDate(o.at, tz) })),
       }))
       .filter((r) => r.contactos > 0 || r.pedidos > 0)
       .sort((a, b) => b.pedidos - a.pedidos || b.contactos - a.contactos);

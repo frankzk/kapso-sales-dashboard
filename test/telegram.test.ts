@@ -43,8 +43,8 @@ describe("formatDailySummary", () => {
     totalOrders: 30,
     totalRevenue: 4430,
     advisors: [
-      { userId: "u1", email: "alessandra@kapso.pe", llamadas: 10, leadsTrabajados: 25, cerrados: 21, ingresos: 3180, conversion: 0.84, horas: 6, dias: 1 },
-      { userId: "u2", email: "rocio@kapso.pe", llamadas: 4, leadsTrabajados: 9, cerrados: 1, ingresos: 800, conversion: 0.11, horas: 3, dias: 1 },
+      { userId: "u1", email: "alessandra@kapso.pe", llamadas: 10, leadsTrabajados: 25, cerrados: 21, cerradosDetalle: [], ingresos: 3180, conversion: 0.84, horas: 6, dias: 1 },
+      { userId: "u2", email: "rocio@kapso.pe", llamadas: 4, leadsTrabajados: 9, cerrados: 1, cerradosDetalle: [], ingresos: 800, conversion: 0.11, horas: 3, dias: 1 },
     ],
   };
 
