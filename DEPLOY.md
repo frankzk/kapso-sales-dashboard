@@ -235,6 +235,31 @@ neto, canal, cupón) and sanity-check the assignment.
   are ignored; both fill in once orders re-sync after the migration.
 - The same source breakdown is appended to the daily **Telegram** summary.
 
+## 5e. Comprobante Yape por visión (opcional)
+
+The **"Yape/Shalom por verificar"** alert fires when a customer pays the advance.
+The text/caption detector already catches the explicit cases ("ya pagué", "nº de
+operación", or a bot confirmation). A **silent voucher image** (a screenshot sent
+with no words) can only be told apart from an unrelated capture by reading it — so
+an optional vision check (Claude) inspects the image before firing.
+
+- **Opt-in via env** (Vercel → Project → Settings → Environment Variables):
+  - `ANTHROPIC_API_KEY` — enables the vision check. **Without it, detection stays
+    text/caption-only** (the safe default: a bare screenshot never trips the
+    alert). This is the only required var.
+  - `YAPE_VISION_MODEL` — optional; defaults to `claude-opus-4-8`. Set it to a
+    cheaper model (e.g. `claude-haiku-4-5`) to lower per-image cost — this is a
+    simple per-image classification, so a smaller model is usually plenty.
+- **Needs migration 0031** (`yape_vision_checks`) — dedup + audit so each image is
+  analyzed **once ever**. Before it runs (or if absent), the check still works but
+  can't dedup; with a key set it re-analyzes each run, so apply the migration.
+- **What counts as a voucher**: the model must see the Yape interface/logo plus the
+  payment indicators (monto, fecha/hora, destinatario "Grupo GF SAC", estado "Pago
+  realizado"/"Transferencia exitosa"/"Yapeaste", nº de operación). Only images sent
+  **after** the bot asked for the adelanto/voucher are checked; the run is bounded
+  (≤12 new images/run) and the verdict is recorded in `yape_vision_checks`
+  (`is_voucher`, `indicators`, `model`) for auditing.
+
 ## 7. Post-deploy verification
 
 - **Health**: `curl https://<domain>/api/health` → `{ "ok": true, … }` (public,

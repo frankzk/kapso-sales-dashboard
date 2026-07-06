@@ -27,6 +27,17 @@ export const env = {
   kapsoApiBase: () =>
     (process.env.KAPSO_API_BASE ?? "https://api.kapso.ai/platform/v1").replace(/\/$/, ""),
 
+  // --- Yape voucher vision check (optional; enables reading a silent voucher
+  //     image instead of firing the alert on any screenshot). Without a key the
+  //     detector stays text/caption-only (the safe default). Model is
+  //     configurable so cost can be tuned (e.g. a cheaper model for this simple
+  //     per-image classification) without a redeploy of code. ---
+  anthropicApiKey: () => process.env.ANTHROPIC_API_KEY ?? "",
+  anthropicApiBase: () =>
+    (process.env.ANTHROPIC_API_BASE ?? "https://api.anthropic.com").replace(/\/$/, ""),
+  yapeVisionModel: () => process.env.YAPE_VISION_MODEL ?? "claude-opus-4-8",
+  yapeVisionEnabled: () => Boolean(process.env.ANTHROPIC_API_KEY),
+
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---
   shopifyAppApiKey: () => process.env.SHOPIFY_APP_API_KEY ?? "",
   shopifyAppApiSecret: () => process.env.SHOPIFY_APP_API_SECRET ?? "",

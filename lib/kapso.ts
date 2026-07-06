@@ -553,6 +553,8 @@ export interface ParsedMsg {
   dir: "inbound" | "outbound";
   text: string;
   image?: boolean; // image/media attachment (Yape voucher, product photo, …)
+  id?: string | null; // Kapso message id (for dedup of vision checks)
+  mediaUrl?: string | null; // stored media URL (to fetch the image bytes)
 }
 
 export type MediaKind = "image" | "audio" | "video" | "document" | "sticker";
@@ -874,11 +876,62 @@ export function detectYapePayment(msgs: ParsedMsg[]): boolean {
   return false;
 }
 
+/**
+ * A bare inbound IMAGE that the text detector could NOT confirm as a payment,
+ * but which arrived after the bot/agent asked for the Yape "adelanto"/voucher —
+ * i.e. a candidate the vision layer should look at before firing the alert.
+ */
+export interface VoucherCandidate {
+  messageId: string;
+  mediaUrl: string;
+}
+
+// The bot/agent asking the customer to pay the advance and send the receipt
+// ("adelanto", "yapea al …", "envíame el voucher/comprobante/captura"). An
+// inbound image AFTER such a request — with no confirming text — is the exact
+// case where a screenshot could be a real voucher OR just an unrelated capture,
+// so it's what the vision check is for.
+const VOUCHER_REQUEST_RE =
+  /adelanto|voucher|comprobante|yape|dep[oó]sito|pantallazo|captura|constancia|n[uú]mero\s+de\s+cuenta/i;
+
+/**
+ * Collect inbound images that MIGHT be Yape vouchers: an image, sent by the
+ * customer, after the bot/agent requested the advance/voucher. Bare screenshots
+ * with no request context are skipped (they'd be product photos, chats, etc.).
+ * Deduped by message id; needs both a message id and a media URL to be fetchable.
+ * Pure + exported for testing.
+ */
+export function collectVoucherCandidates(msgs: ParsedMsg[]): VoucherCandidate[] {
+  let requestedAt: number | null = null;
+  for (const m of msgs) {
+    if (m.dir === "outbound" && VOUCHER_REQUEST_RE.test(m.text)) {
+      requestedAt = m.t;
+      break; // first request opens the window
+    }
+  }
+  if (requestedAt == null) return [];
+  const out: VoucherCandidate[] = [];
+  const seen = new Set<string>();
+  for (const m of msgs) {
+    if (m.dir !== "inbound" || !m.image || m.t < requestedAt) continue;
+    const id = m.id ?? null;
+    const url = m.mediaUrl ?? null;
+    if (!id || !url || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ messageId: id, mediaUrl: url });
+  }
+  return out;
+}
+
 export interface ConversationSignals extends OrderSignals {
   inbound_count: number;
   first_response_seconds: number | null;
   yape: boolean;
   referral: LeadReferral | null;
+  // Inbound images (post voucher-request) the text detector did not confirm — a
+  // vision check reads these to decide the alert. Empty when the flow doesn't
+  // apply. Always present so the ingest gate can iterate without a null check.
+  voucherCandidates: VoucherCandidate[];
 }
 
 /**
@@ -900,16 +953,27 @@ export async function fetchConversationSignals(
   const msgs = (page.data ?? [])
     // Fold the image caption into `text` so a voucher sent WITH a payment note
     // ("ya pagué", "mi comprobante") still trips the Yape text detector, while a
-    // bare screenshot (no words) does not.
+    // bare screenshot (no words) does not. Keep id + media URL so a bare voucher
+    // image can be handed to the vision check (collectVoucherCandidates).
     .map((m) => ({
       t: msgTimeMs(m),
       dir: msgDirection(m),
       text: [msgText(m), msgCaption(m)].filter(Boolean).join(" ").trim(),
       image: msgIsImage(m),
+      id: m?.id != null ? String(m.id) : null,
+      mediaUrl: msgMediaUrl(m),
     }))
     .filter(
-      (m): m is { t: number; dir: "inbound" | "outbound"; text: string; image: boolean } =>
-        m.t != null && m.dir != null,
+      (
+        m,
+      ): m is {
+        t: number;
+        dir: "inbound" | "outbound";
+        text: string;
+        image: boolean;
+        id: string | null;
+        mediaUrl: string | null;
+      } => m.t != null && m.dir != null,
     )
     .sort((a, b) => a.t - b.t);
   if (!msgs.length) return null;
@@ -926,8 +990,60 @@ export async function fetchConversationSignals(
     first_response_seconds,
     yape: detectYapePayment(msgs),
     referral,
+    voucherCandidates: collectVoucherCandidates(msgs),
     ...parseOrderSignals(msgs),
   };
+}
+
+// Only ever pull media from Kapso's own hosts (the stored blob on app.kapso.ai,
+// or a future api.kapso.ai variant). Message data is external input, so this
+// allowlist stops a crafted media_url from turning the fetch into an SSRF. The
+// initial hop may 3xx to a storage CDN — `redirect: follow` handles that.
+const KAPSO_MEDIA_HOSTS = new Set(["app.kapso.ai", "api.kapso.ai"]);
+const IMAGE_FETCH_TIMEOUT_MS = 15_000;
+// Cap raw bytes so a huge upload can't blow the request budget; the Messages API
+// rejects images over ~5MB base64 anyway (base64 inflates ~33%).
+const MAX_IMAGE_BYTES = 3_500_000;
+
+/**
+ * Fetch a Kapso-hosted image and return it base64-encoded (+ its content-type),
+ * authenticated with the store's Kapso key. Host-allowlisted, size-capped,
+ * timeout-bounded. Returns null on any problem — NEVER throws (callers treat a
+ * null as "couldn't read the image", not an error).
+ */
+export async function fetchKapsoImageBase64(
+  opts: KapsoClientOpts,
+  mediaUrl: string,
+): Promise<{ base64: string; contentType: string | null } | null> {
+  let url: URL;
+  try {
+    url = new URL(mediaUrl);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || !KAPSO_MEDIA_HOSTS.has(url.hostname)) return null;
+
+  const doFetch = opts.fetchImpl ?? fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+  try {
+    const res = await doFetch(url.toString(), {
+      headers: { "X-API-Key": opts.apiKey },
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (!buf.length || buf.length > MAX_IMAGE_BYTES) return null;
+    return {
+      base64: Buffer.from(buf).toString("base64"),
+      contentType: res.headers.get("content-type"),
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -549,7 +549,7 @@ export async function runStoreSync(
     draftOrders: 0,
     kapsoConversations: 0,
     leads: 0,
-    enriched: { candidates: 0, fetched: 0, inbound: 0, cart: 0, district: 0, yape: 0 },
+    enriched: { candidates: 0, fetched: 0, inbound: 0, cart: 0, district: 0, yape: 0, visionChecks: 0 },
     opsCaptured: false,
     whatsappNumbers: 0,
     archived: 0,

@@ -7,12 +7,16 @@ import {
   conversationToLeadSeed,
   fetchAllConversationsRich,
   fetchConversationSignals,
+  fetchKapsoImageBase64,
   parseHandoffPayload,
   sendWhatsappTemplate,
   type HandoffInfo,
   type KapsoClientOpts,
   type LeadSeed,
+  type VoucherCandidate,
 } from "@/lib/kapso";
+import { env } from "@/lib/env";
+import { analyzeYapeVoucher } from "@/lib/vision";
 import type { StoreCreds } from "@/lib/ingest";
 import { deriveAutoState, nextLeadState } from "@/lib/leads";
 import { normalizePhone } from "@/lib/phone";
@@ -40,6 +44,7 @@ export interface LeadEnrichStats {
   cart: number; // leads where a cart/order summary was detected
   district: number; // leads where a district was detected
   yape: number; // leads where a Yape/Shalom advance was detected (promoted if still "nuevo")
+  visionChecks: number; // voucher images analyzed by the vision check this run
 }
 export interface SyncLeadsResult {
   touched: number;
@@ -52,7 +57,98 @@ const ZERO_ENRICH: LeadEnrichStats = {
   cart: 0,
   district: 0,
   yape: 0,
+  visionChecks: 0,
 };
+
+// Per-run budget on Yape voucher vision checks (one Claude call per new image).
+// Only the specific Yape-Shalom flow produces candidates and each image is
+// analyzed once ever (yape_vision_checks dedup), so steady state is a handful;
+// this just bounds a first-run backlog.
+const YAPE_VISION_RUN_CAP = 12;
+
+/** Injectable image→verdict analyzer, so the gate is testable without a network. */
+export type YapeVisionAnalyzer = (
+  base64: string,
+  contentType: string | null,
+) => Promise<{ isVoucher: boolean; indicators: Record<string, unknown>; model: string }>;
+
+export interface YapeVisionOutcome {
+  voucher: boolean; // any candidate turned out to be a real voucher
+  analyzed: number; // how many images we actually sent to the model this call
+}
+
+/**
+ * Decide via a vision check whether any candidate image is a genuine Yape
+ * voucher. Dedups against `yape_vision_checks` (each image analyzed once ever)
+ * and records every verdict for audit. Bounded by `cap`. Never throws — a
+ * fetch/vision failure just yields "not a voucher" and is retried a later run
+ * (only decided verdicts are recorded, so failures don't get cached as false).
+ */
+export async function detectYapeByVision(
+  admin: SupabaseClient,
+  storeId: string,
+  k: KapsoClientOpts,
+  candidates: VoucherCandidate[],
+  analyze: YapeVisionAnalyzer,
+  opts?: {
+    cap?: number;
+    fetchImage?: (url: string) => Promise<{ base64: string; contentType: string | null } | null>;
+  },
+): Promise<YapeVisionOutcome> {
+  if (!candidates.length) return { voucher: false, analyzed: 0 };
+  const cap = opts?.cap ?? YAPE_VISION_RUN_CAP;
+  if (cap <= 0) return { voucher: false, analyzed: 0 };
+  const fetchImage = opts?.fetchImage ?? ((url: string) => fetchKapsoImageBase64(k, url));
+
+  // Dedup: which of these images did we already analyze?
+  const decided = new Map<string, boolean>();
+  try {
+    const { data } = await admin
+      .from("yape_vision_checks")
+      .select("message_id, is_voucher")
+      .eq("store_id", storeId)
+      .in(
+        "message_id",
+        candidates.map((c) => c.messageId),
+      );
+    for (const r of (data as { message_id: string; is_voucher: boolean }[] | null) ?? []) {
+      decided.set(r.message_id, r.is_voucher);
+    }
+  } catch {
+    // Table absent (pending migration) → nothing decided yet; proceed without dedup.
+  }
+  // A prior run already confirmed one → done, no new calls.
+  for (const c of candidates) if (decided.get(c.messageId) === true) return { voucher: true, analyzed: 0 };
+
+  let voucher = false;
+  let analyzed = 0;
+  for (const c of candidates) {
+    if (decided.has(c.messageId)) continue; // already analyzed (was false)
+    if (analyzed >= cap) break;
+    const img = await fetchImage(c.mediaUrl);
+    if (!img) continue; // couldn't read the image — retry next run (not recorded)
+    analyzed += 1;
+    const verdict = await analyze(img.base64, img.contentType);
+    // Record for dedup + audit. Best-effort; ignore duplicates (concurrent runs)
+    // and a missing table (pending migration).
+    try {
+      await admin.from("yape_vision_checks").upsert(
+        {
+          store_id: storeId,
+          message_id: c.messageId,
+          is_voucher: verdict.isVoucher,
+          indicators: verdict.indicators ?? {},
+          model: verdict.model,
+        },
+        { onConflict: "store_id,message_id", ignoreDuplicates: true },
+      );
+    } catch {
+      /* pending migration / race — ignore */
+    }
+    if (verdict.isVoucher) voucher = true;
+  }
+  return { voucher, analyzed };
+}
 
 interface ExistingLead {
   phone: string;
@@ -357,6 +453,16 @@ async function enrichLeadsFromConversations(
     convIds.add(l.kapso_conversation_id);
   }
 
+  // Vision check is opt-in (needs ANTHROPIC_API_KEY); build the analyzer once so
+  // the per-conversation gate is cheap. Bounded per run by `visionRemaining`.
+  const visionKey = env.anthropicApiKey();
+  const visionModel = env.yapeVisionModel();
+  const visionApiBase = env.anthropicApiBase();
+  const visionAnalyze: YapeVisionAnalyzer | null = visionKey
+    ? (b64, ct) => analyzeYapeVoucher(b64, ct, { apiKey: visionKey, model: visionModel, apiBase: visionApiBase })
+    : null;
+  let visionRemaining = YAPE_VISION_RUN_CAP;
+
   let n = 0;
   for (const convId of convIds) {
     if (n++ >= LEAD_ENRICH_CAP) break;
@@ -408,11 +514,27 @@ async function enrichLeadsFromConversations(
         .is("source", null);
     }
 
-    // Yape/Shalom advance detected in-chat (the bot didn't fire a handoff, e.g.
-    // the voucher came as an image). Promote the auto-"nuevo" lead to
-    // yape_por_verificar (hot). Only "nuevo" is touched — manual dispositions
-    // and won leads keep their state; already-hot leads are left as-is.
-    if (sig.yape) {
+    // Yape/Shalom advance detection. The text/caption detector (`sig.yape`)
+    // handles the explicit cases. When it's silent but the customer sent a bare
+    // IMAGE after the bot asked for the adelanto/voucher, read that image with a
+    // vision check before firing — so a random screenshot never trips the alert,
+    // only a real voucher (Yape interface + monto + destinatario + estado + nº).
+    // Vision is opt-in (key present) and bounded/deduped; without it we keep the
+    // conservative text-only behavior.
+    let yapeConfirmed = sig.yape;
+    if (!yapeConfirmed && visionAnalyze && visionRemaining > 0 && sig.voucherCandidates.length) {
+      const outcome = await detectYapeByVision(admin, storeId, k, sig.voucherCandidates, visionAnalyze, {
+        cap: visionRemaining,
+      });
+      visionRemaining -= outcome.analyzed;
+      stats.visionChecks += outcome.analyzed;
+      yapeConfirmed = outcome.voucher;
+    }
+
+    // Promote the auto-"nuevo" lead to yape_por_verificar (hot). Only "nuevo" is
+    // touched — manual dispositions and won leads keep their state; already-hot
+    // leads are left as-is.
+    if (yapeConfirmed) {
       stats.yape += 1;
       await admin
         .from("leads")

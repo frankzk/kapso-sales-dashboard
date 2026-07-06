@@ -821,3 +821,120 @@ describe("processWinback · recuperación de clientes (60 días)", () => {
     expect(fake.webhookUpdates.at(-1).error).toContain("no tiene nombre"); // skip reason recorded
   });
 });
+
+describe("detectYapeByVision · vision gate for silent voucher images", () => {
+  // Minimal admin: serves prior checks for the dedup query and records upserts.
+  function visionAdmin(existing: { message_id: string; is_voucher: boolean }[] = []) {
+    const upserts: any[] = [];
+    const admin = {
+      from(_t: string) {
+        const b: any = {
+          select: () => b,
+          eq: () => b,
+          in: () => Promise.resolve({ data: existing }),
+          upsert: (row: any) => {
+            upserts.push(row);
+            return Promise.resolve({ data: null, error: null });
+          },
+        };
+        return b;
+      },
+    };
+    return { admin, upserts };
+  }
+
+  const K = { apiKey: "k" } as any;
+  const CANDS = [{ messageId: "m1", mediaUrl: "https://app.kapso.ai/a.jpg" }];
+  const okImage = async () => ({ base64: "AAAA", contentType: "image/jpeg" });
+
+  async function run(
+    admin: any,
+    candidates: any[],
+    analyze: any,
+    opts: any = {},
+  ) {
+    const { detectYapeByVision } = await import("@/lib/leads-ingest");
+    return detectYapeByVision(admin, "store-1", K, candidates, analyze, { fetchImage: okImage, ...opts });
+  }
+
+  it("confirms a voucher and records the verdict", async () => {
+    const { admin, upserts } = visionAdmin();
+    let calls = 0;
+    const analyze = async () => {
+      calls++;
+      return { isVoucher: true, indicators: { logo: true }, model: "m" };
+    };
+    const out = await run(admin, CANDS, analyze);
+    expect(out).toEqual({ voucher: true, analyzed: 1 });
+    expect(calls).toBe(1);
+    expect(upserts).toHaveLength(1);
+    expect(upserts[0]).toMatchObject({ store_id: "store-1", message_id: "m1", is_voucher: true, model: "m" });
+  });
+
+  it("records a non-voucher verdict (so it is not re-analyzed) and stays negative", async () => {
+    const { admin, upserts } = visionAdmin();
+    const out = await run(admin, CANDS, async () => ({ isVoucher: false, indicators: {}, model: "m" }));
+    expect(out).toEqual({ voucher: false, analyzed: 1 });
+    expect(upserts[0]).toMatchObject({ message_id: "m1", is_voucher: false });
+  });
+
+  it("short-circuits on a prior positive check (no new model call)", async () => {
+    const { admin } = visionAdmin([{ message_id: "m1", is_voucher: true }]);
+    let calls = 0;
+    const out = await run(admin, CANDS, async () => {
+      calls++;
+      return { isVoucher: true, indicators: {}, model: "m" };
+    });
+    expect(out).toEqual({ voucher: true, analyzed: 0 });
+    expect(calls).toBe(0);
+  });
+
+  it("skips an image already decided negative (no re-analysis)", async () => {
+    const { admin } = visionAdmin([{ message_id: "m1", is_voucher: false }]);
+    let calls = 0;
+    const out = await run(admin, CANDS, async () => {
+      calls++;
+      return { isVoucher: true, indicators: {}, model: "m" };
+    });
+    expect(out).toEqual({ voucher: false, analyzed: 0 });
+    expect(calls).toBe(0);
+  });
+
+  it("honors the per-run cap", async () => {
+    const { admin } = visionAdmin();
+    let calls = 0;
+    const cands = [
+      { messageId: "m1", mediaUrl: "https://app.kapso.ai/a.jpg" },
+      { messageId: "m2", mediaUrl: "https://app.kapso.ai/b.jpg" },
+    ];
+    const out = await run(admin, cands, async () => {
+      calls++;
+      return { isVoucher: false, indicators: {}, model: "m" };
+    }, { cap: 1 });
+    expect(out.analyzed).toBe(1);
+    expect(calls).toBe(1);
+  });
+
+  it("does not record when the image cannot be fetched (retryable)", async () => {
+    const { admin, upserts } = visionAdmin();
+    let calls = 0;
+    const out = await run(admin, CANDS, async () => {
+      calls++;
+      return { isVoucher: true, indicators: {}, model: "m" };
+    }, { fetchImage: async () => null });
+    expect(out).toEqual({ voucher: false, analyzed: 0 });
+    expect(calls).toBe(0);
+    expect(upserts).toHaveLength(0);
+  });
+
+  it("returns negative for an empty candidate list without touching the model", async () => {
+    const { admin } = visionAdmin();
+    let calls = 0;
+    const out = await run(admin, [], async () => {
+      calls++;
+      return { isVoucher: true, indicators: {}, model: "m" };
+    });
+    expect(out).toEqual({ voucher: false, analyzed: 0 });
+    expect(calls).toBe(0);
+  });
+});
