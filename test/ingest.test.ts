@@ -92,6 +92,7 @@ class FakeSupabase {
   existingLeadPhones = new Set<string>();
   recomputeCalls: any[] = [];
   processedUpdates = 0;
+  webhookUpdates: any[] = [];
   constructor(storeRow: Row) {
     this.storeRow = storeRow;
   }
@@ -116,6 +117,7 @@ class FakeSupabase {
     }
     if (b.table === "webhook_events" && b.op === "update") {
       this.processedUpdates += 1;
+      this.webhookUpdates.push(b.payload);
       return { data: null, error: null };
     }
     if (b.table === "orders" && b.op === "upsert") {
@@ -750,6 +752,7 @@ describe("processWinback · recuperación de clientes (60 días)", () => {
     });
     expect(fake.upsertedLeads).toHaveLength(0);
     expect(fake.leadCalls).toHaveLength(0); // no existing lead to log on
+    expect(fake.webhookUpdates.at(-1)).toMatchObject({ processed: true, error: null }); // sent → clean log
   });
 
   it("logs on the phone's existing lead (send ok and send failed)", async () => {
@@ -770,6 +773,7 @@ describe("processWinback · recuperación de clientes (60 días)", () => {
     const res = await processWinback(fake2 as any, "store-1", body2, winbackCreds(), bad.fn);
     expect(res.status).toBe("ok"); // never throws
     expect(fake2.leadCalls[0].note).toContain("falló");
+    expect(fake2.webhookUpdates.at(-1).error).toContain("Falló el envío"); // reason visible in webhook log
   });
 
   it("does NOT send when disabled or when the name for {{1}} is missing", async () => {
@@ -784,6 +788,7 @@ describe("processWinback · recuperación de clientes (60 días)", () => {
       fn,
     );
     expect(calls).toHaveLength(0);
+    expect(fake.webhookUpdates.at(-1).error).toContain("deshabilitado"); // skip reason recorded
 
     const body = JSON.parse(WINBACK_BODY);
     body.order.id = 7003;
@@ -791,5 +796,6 @@ describe("processWinback · recuperación de clientes (60 días)", () => {
     await processWinback(fake as any, "store-1", body, winbackCreds(), fn);
     expect(calls).toHaveLength(0); // {{1}} would be empty → Meta rejects; skip
     expect(fake.insertedWebhookIds.has("winback-7003")).toBe(true); // event still recorded
+    expect(fake.webhookUpdates.at(-1).error).toContain("no tiene nombre"); // skip reason recorded
   });
 });

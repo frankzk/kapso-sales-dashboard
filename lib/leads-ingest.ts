@@ -941,21 +941,19 @@ export async function processWinback(
     throw new Error(`webhook_events insert: ${insErr.message}`);
   }
 
-  await admin
-    .from("webhook_events")
-    .update({ processed: true })
-    .match({ store_id: storeId, webhook_id: webhookId });
-
   // Gated send: per-store opt-in + Kapso creds + a phone and a name (the
-  // template's {{1}}). Best-effort: a send/log failure must never 500 the
-  // webhook (Flow would retry and the event is already recorded).
-  if (
-    seed?.name &&
-    creds?.winback_template_enabled &&
-    creds.winback_template_name &&
-    creds.kapso_api_key &&
-    creds.whatsapp_phone_number_id
-  ) {
+  // template's {{1}}). Winback has no lead to surface problems on, so the
+  // outcome of a skip/failure is recorded in webhook_events.error (visible in
+  // the Settings webhook log) — a silent no-send is undebuggable. Best-effort:
+  // a send/log failure must never 500 the webhook.
+  let outcome: string | null = null;
+  if (!seed) outcome = "Omitido: el payload no trae un teléfono utilizable";
+  else if (!seed.name) outcome = "Omitido: el cliente no tiene nombre para {{1}}";
+  else if (!creds?.winback_template_enabled) outcome = "Omitido: envío deshabilitado en Ajustes";
+  else if (!creds.winback_template_name) outcome = "Omitido: falta el nombre de la plantilla en Ajustes";
+  else if (!creds.kapso_api_key || !creds.whatsapp_phone_number_id)
+    outcome = "Omitido: faltan credenciales de Kapso (API key / número)";
+  else {
     try {
       const send = await sendTemplate(
         { apiKey: creds.kapso_api_key },
@@ -967,6 +965,7 @@ export async function processWinback(
           bodyParams: [seed.name],
         },
       );
+      if (!send.ok) outcome = `Falló el envío de «${creds.winback_template_name}»: ${send.error}`;
       // Log on the phone's lead IF one exists (winback never creates leads).
       const { data: lead } = await admin
         .from("leads")
@@ -985,10 +984,15 @@ export async function processWinback(
             : `⚠️ WhatsApp: falló envío de «${creds.winback_template_name}» (${send.error})`,
         });
       }
-    } catch {
-      /* best-effort — never break the webhook ack */
+    } catch (e) {
+      outcome = `Error en el envío: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
+
+  await admin
+    .from("webhook_events")
+    .update({ processed: true, error: outcome })
+    .match({ store_id: storeId, webhook_id: webhookId });
 
   return { status: "ok" };
 }
