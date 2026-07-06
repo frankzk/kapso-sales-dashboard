@@ -43,16 +43,26 @@ describe("normalizeMediaType", () => {
   });
 });
 
-describe("isVoucherVerdict (decision threshold)", () => {
+describe("isVoucherVerdict (decision threshold — precision over recall)", () => {
   it("false when the model says it is not a voucher", () => {
-    expect(isVoucherVerdict({ is_voucher: false, indicators: { logo: true, monto: true } })).toBe(false);
+    expect(isVoucherVerdict({ is_voucher: false, indicators: { logo: true, monto: true, estado: true } })).toBe(false);
   });
   it("false when the Yape interface/logo is absent (chat/product screenshot)", () => {
-    expect(isVoucherVerdict({ is_voucher: true, indicators: { logo: false, monto: true } })).toBe(false);
+    expect(isVoucherVerdict({ is_voucher: true, indicators: { logo: false, monto: true, estado: true } })).toBe(false);
+    expect(isVoucherVerdict({ is_voucher: true, indicators: { monto: true, estado: true } })).toBe(false); // logo unspecified
   });
-  it("true when the model confirms and the logo is present (or unspecified)", () => {
-    expect(isVoucherVerdict({ is_voucher: true, indicators: { logo: true } })).toBe(true);
-    expect(isVoucherVerdict({ is_voucher: true, indicators: {} })).toBe(true); // logo not contradicted
+  it("false when the logo is present but NO concrete payment fact corroborates it", () => {
+    expect(isVoucherVerdict({ is_voucher: true, indicators: { logo: true } })).toBe(false);
+    expect(isVoucherVerdict({ is_voucher: true, indicators: {} })).toBe(false);
+    // only date/time + recipient, no monto/estado/operacion → still not enough
+    expect(isVoucherVerdict({ is_voucher: true, indicators: { logo: true, fecha_hora: true, destinatario: true } })).toBe(
+      false,
+    );
+  });
+  it("true with the Yape interface + at least one payment fact (monto / estado / operación)", () => {
+    expect(isVoucherVerdict({ is_voucher: true, indicators: { logo: true, monto: true } })).toBe(true);
+    expect(isVoucherVerdict({ is_voucher: true, indicators: { logo: true, estado: true } })).toBe(true);
+    expect(isVoucherVerdict({ is_voucher: true, indicators: { logo: true, operacion: true } })).toBe(true);
   });
 });
 
@@ -69,6 +79,7 @@ describe("analyzeYapeVoucher", () => {
       fetchImpl: f,
     });
     expect(res.isVoucher).toBe(true);
+    expect(res.ok).toBe(true);
     expect(res.indicators.destinatario).toBe(true);
     expect(res.model).toBe("claude-opus-4-8");
     // Request shape: endpoint, auth headers, model, and an image block.
@@ -80,45 +91,50 @@ describe("analyzeYapeVoucher", () => {
     expect(img.source).toEqual({ type: "base64", media_type: "image/png", data: "BASE64DATA" });
   });
 
-  it("returns NOT a voucher when the model declines (holistic)", async () => {
+  it("returns a real NOT-a-voucher verdict (ok:true) when the model declines", async () => {
     const f = mockAnthropic('{"is_voucher": false, "indicators": {"logo": false}}');
     const res = await analyzeYapeVoucher("x", "image/jpeg", { apiKey: KEY, model: "m", fetchImpl: f });
     expect(res.isVoucher).toBe(false);
+    expect(res.ok).toBe(true); // decided, not a failure — safe to cache
   });
 
   it("overrides an over-eager is_voucher when the Yape logo is absent", async () => {
-    const f = mockAnthropic('{"is_voucher": true, "indicators": {"logo": false, "monto": true}}');
+    const f = mockAnthropic('{"is_voucher": true, "indicators": {"logo": false, "monto": true, "estado": true}}');
     const res = await analyzeYapeVoucher("x", "image/jpeg", { apiKey: KEY, model: "m", fetchImpl: f });
     expect(res.isVoucher).toBe(false);
+    expect(res.ok).toBe(true);
   });
 
   it("tolerates markdown fences / surrounding prose around the JSON", async () => {
-    const f = mockAnthropic('Claro:\n```json\n{"is_voucher": true, "indicators": {"logo": true}}\n```');
+    const f = mockAnthropic('Claro:\n```json\n{"is_voucher": true, "indicators": {"logo": true, "estado": true}}\n```');
     const res = await analyzeYapeVoucher("x", "image/jpeg", { apiKey: KEY, model: "m", fetchImpl: f });
     expect(res.isVoucher).toBe(true);
   });
 
-  it("is conservative (not a voucher) on unparseable output", async () => {
+  it("marks ok:false (a failure, NOT a decided negative) on unparseable output", async () => {
     const f = mockAnthropic("no puedo determinarlo");
     const res = await analyzeYapeVoucher("x", "image/jpeg", { apiKey: KEY, model: "m", fetchImpl: f });
     expect(res.isVoucher).toBe(false);
+    expect(res.ok).toBe(false);
   });
 
-  it("is conservative on a non-2xx response", async () => {
+  it("marks ok:false on a non-2xx response", async () => {
     const f = mockAnthropic("{}", undefined, { ok: false, status: 429 });
     const res = await analyzeYapeVoucher("x", "image/jpeg", { apiKey: KEY, model: "m", fetchImpl: f });
     expect(res.isVoucher).toBe(false);
+    expect(res.ok).toBe(false);
   });
 
-  it("never throws on a network error", async () => {
+  it("never throws on a network error (ok:false)", async () => {
     const f = (async () => {
       throw new Error("network down");
     }) as unknown as typeof fetch;
     const res = await analyzeYapeVoucher("x", "image/jpeg", { apiKey: KEY, model: "m", fetchImpl: f });
     expect(res.isVoucher).toBe(false);
+    expect(res.ok).toBe(false);
   });
 
-  it("short-circuits (no call) when no API key is configured", async () => {
+  it("short-circuits (no call, ok:false) when no API key is configured", async () => {
     let called = false;
     const f = (async () => {
       called = true;
@@ -126,6 +142,7 @@ describe("analyzeYapeVoucher", () => {
     }) as unknown as typeof fetch;
     const res = await analyzeYapeVoucher("x", "image/jpeg", { apiKey: "", model: "m", fetchImpl: f });
     expect(res.isVoucher).toBe(false);
+    expect(res.ok).toBe(false);
     expect(called).toBe(false);
   });
 });

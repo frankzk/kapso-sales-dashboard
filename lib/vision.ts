@@ -38,6 +38,11 @@ export interface YapeVisionResult {
   isVoucher: boolean;
   indicators: YapeVoucherIndicators;
   model: string;
+  // Whether we actually got a verdict from the model. FALSE on any failure (no
+  // key, non-2xx, timeout, network, unparseable) — the caller MUST NOT record a
+  // `!ok` result as a decided "not a voucher": that would cache a transient
+  // outage as a permanent negative and silently drop a real voucher.
+  ok: boolean;
 }
 
 export interface AnalyzeYapeOpts {
@@ -132,15 +137,20 @@ function parseVerdict(text: string): { is_voucher: boolean; indicators: YapeVouc
 
 /**
  * Decide, from the model's verdict, whether the image is a Yape voucher.
- * The Yape interface/logo is a NECESSARY condition: a chat screenshot or a
- * product photo never shows the payment UI, so `logo === false` overrides an
- * over-eager `is_voucher`. Beyond that we trust the model's holistic call.
- * Pure + exported so the threshold is testable and tunable in one place.
+ * Precision over recall (the whole point is to stop false positives on random
+ * screenshots), so we require BOTH:
+ *   - the Yape interface/logo (`logo === true`) — a chat/product screenshot
+ *     never shows the payment UI; and
+ *   - at least one concrete payment fact (monto / estado / nº de operación) —
+ *     guards against a terse or hallucinated `{"is_voucher": true}` with no
+ *     corroborating indicator.
+ * A voucher cropped above the logo is intentionally missed (rare; the customer
+ * can resend). Pure + exported so the threshold is testable and tunable here.
  */
 export function isVoucherVerdict(v: { is_voucher: boolean; indicators: YapeVoucherIndicators }): boolean {
   if (!v.is_voucher) return false;
-  if (v.indicators.logo === false) return false; // no Yape interface → not a voucher
-  return true;
+  if (v.indicators.logo !== true) return false; // Yape interface required
+  return v.indicators.monto === true || v.indicators.estado === true || v.indicators.operacion === true;
 }
 
 /**
@@ -154,7 +164,9 @@ export async function analyzeYapeVoucher(
   opts: AnalyzeYapeOpts,
 ): Promise<YapeVisionResult> {
   const model = opts.model;
-  const safe: YapeVisionResult = { isVoucher: false, indicators: {}, model };
+  // `ok:false` — a failure/unavailable result the caller must NOT cache as a
+  // decided negative (see YapeVisionResult.ok).
+  const safe: YapeVisionResult = { isVoucher: false, indicators: {}, model, ok: false };
   if (!opts.apiKey || !imageBase64) return safe;
 
   const doFetch = opts.fetchImpl ?? fetch;
@@ -196,7 +208,8 @@ export async function analyzeYapeVoucher(
     const json = await res.json();
     const verdict = parseVerdict(extractText(json));
     if (!verdict) return safe;
-    return { isVoucher: isVoucherVerdict(verdict), indicators: verdict.indicators, model };
+    // A real, parsed verdict → ok:true (it may still be "not a voucher").
+    return { isVoucher: isVoucherVerdict(verdict), indicators: verdict.indicators, model, ok: true };
   } catch {
     return safe;
   } finally {
@@ -214,6 +227,6 @@ export async function analyzeYapeVoucherFromEnv(
 ): Promise<YapeVisionResult> {
   const apiKey = env.anthropicApiKey();
   const model = env.yapeVisionModel();
-  if (!apiKey) return { isVoucher: false, indicators: {}, model };
+  if (!apiKey) return { isVoucher: false, indicators: {}, model, ok: false };
   return analyzeYapeVoucher(imageBase64, contentType, { apiKey, model, apiBase: env.anthropicApiBase() });
 }

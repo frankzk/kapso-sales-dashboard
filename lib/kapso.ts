@@ -535,19 +535,6 @@ function msgText(m: any): string {
   return typeof t === "string" ? t : "";
 }
 
-/** True when a message carries an image attachment (e.g. a Yape voucher). */
-function msgIsImage(m: any): boolean {
-  if (m?.type === "image" || m?.message?.type === "image") return true;
-  if (m?.image && typeof m.image === "object") return true;
-  const ct =
-    m?.kapso?.media_data?.content_type ??
-    m?.kapso?.message_type_data?.content_type ??
-    m?.media_data?.content_type;
-  if (typeof ct === "string" && ct.startsWith("image/")) return true;
-  // Fallback: media present with no readable text (Kapso stores images this way).
-  return Boolean(m?.kapso?.has_media) && !msgText(m).trim();
-}
-
 export interface ParsedMsg {
   t: number;
   dir: "inbound" | "outbound";
@@ -887,12 +874,14 @@ export interface VoucherCandidate {
 }
 
 // The bot/agent asking the customer to pay the advance and send the receipt
-// ("adelanto", "yapea al …", "envíame el voucher/comprobante/captura"). An
+// ("adelanto", "yapéame al …", "envíame el voucher/comprobante/captura"). An
 // inbound image AFTER such a request — with no confirming text — is the exact
 // case where a screenshot could be a real voucher OR just an unrelated capture,
-// so it's what the vision check is for.
+// so it's what the vision check is for. Deliberately does NOT match a bare
+// "Yape" (payment-method mention, e.g. "aceptamos Yape") — only a request/action
+// ("yapéa(me)", "adelanto", "voucher", …) opens the candidate window.
 const VOUCHER_REQUEST_RE =
-  /adelanto|voucher|comprobante|yape|dep[oó]sito|pantallazo|captura|constancia|n[uú]mero\s+de\s+cuenta/i;
+  /adelanto|voucher|comprobante|constancia|dep[oó]sito|pantallazo|captura|yape[aá]|n[uú]mero\s+de\s+cuenta/i;
 
 /**
  * Collect inbound images that MIGHT be Yape vouchers: an image, sent by the
@@ -959,7 +948,11 @@ export async function fetchConversationSignals(
       t: msgTimeMs(m),
       dir: msgDirection(m),
       text: [msgText(m), msgCaption(m)].filter(Boolean).join(" ").trim(),
-      image: msgIsImage(m),
+      // Strictly an image (not any media): a voice note / document must not be
+      // sent to the vision check as a fake image. `msgMediaKind` reads the real
+      // type/content-type, so a captionless audio is classified as audio, not
+      // image.
+      image: msgMediaKind(m) === "image",
       id: m?.id != null ? String(m.id) : null,
       mediaUrl: msgMediaUrl(m),
     }))
@@ -997,19 +990,29 @@ export async function fetchConversationSignals(
 
 // Only ever pull media from Kapso's own hosts (the stored blob on app.kapso.ai,
 // or a future api.kapso.ai variant). Message data is external input, so this
-// allowlist stops a crafted media_url from turning the fetch into an SSRF. The
-// initial hop may 3xx to a storage CDN — `redirect: follow` handles that.
+// allowlist stops a crafted media_url from turning the fetch into an SSRF.
 const KAPSO_MEDIA_HOSTS = new Set(["app.kapso.ai", "api.kapso.ai"]);
 const IMAGE_FETCH_TIMEOUT_MS = 15_000;
+const MAX_IMAGE_REDIRECTS = 4;
 // Cap raw bytes so a huge upload can't blow the request budget; the Messages API
 // rejects images over ~5MB base64 anyway (base64 inflates ~33%).
 const MAX_IMAGE_BYTES = 3_500_000;
+
+function isAllowedMediaUrl(u: URL): boolean {
+  return u.protocol === "https:" && KAPSO_MEDIA_HOSTS.has(u.hostname);
+}
 
 /**
  * Fetch a Kapso-hosted image and return it base64-encoded (+ its content-type),
  * authenticated with the store's Kapso key. Host-allowlisted, size-capped,
  * timeout-bounded. Returns null on any problem — NEVER throws (callers treat a
  * null as "couldn't read the image", not an error).
+ *
+ * Redirects are followed MANUALLY (Kapso 3xx's the stored blob to a signed
+ * storage CDN) so the store's `X-API-Key` is sent ONLY while the request stays
+ * on an allowlisted Kapso host. Node's `fetch` (undici) does NOT strip custom
+ * headers on cross-origin redirects, so `redirect: "follow"` would leak the key
+ * to the CDN. Once we leave Kapso, the (signed) URL needs no key, so we drop it.
  */
 export async function fetchKapsoImageBase64(
   opts: KapsoClientOpts,
@@ -1021,24 +1024,42 @@ export async function fetchKapsoImageBase64(
   } catch {
     return null;
   }
-  if (url.protocol !== "https:" || !KAPSO_MEDIA_HOSTS.has(url.hostname)) return null;
+  if (!isAllowedMediaUrl(url)) return null;
 
   const doFetch = opts.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
   try {
-    const res = await doFetch(url.toString(), {
-      headers: { "X-API-Key": opts.apiKey },
-      redirect: "follow",
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
-    const buf = new Uint8Array(await res.arrayBuffer());
-    if (!buf.length || buf.length > MAX_IMAGE_BYTES) return null;
-    return {
-      base64: Buffer.from(buf).toString("base64"),
-      contentType: res.headers.get("content-type"),
-    };
+    for (let hop = 0; hop <= MAX_IMAGE_REDIRECTS; hop++) {
+      const onKapso = isAllowedMediaUrl(url);
+      const res = await doFetch(url.toString(), {
+        // Send the key only on Kapso's own hosts; never carry it to a CDN.
+        headers: onKapso ? { "X-API-Key": opts.apiKey } : {},
+        redirect: "manual",
+        signal: controller.signal,
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get("location");
+        if (!loc) return null;
+        let next: URL;
+        try {
+          next = new URL(loc, url); // resolve relative Location against current
+        } catch {
+          return null;
+        }
+        if (next.protocol !== "https:") return null; // never downgrade / non-http scheme
+        url = next;
+        continue; // re-evaluate auth for the new origin on the next hop
+      }
+      if (!res.ok) return null;
+      const buf = new Uint8Array(await res.arrayBuffer());
+      if (!buf.length || buf.length > MAX_IMAGE_BYTES) return null;
+      return {
+        base64: Buffer.from(buf).toString("base64"),
+        contentType: res.headers.get("content-type"),
+      };
+    }
+    return null; // too many redirects
   } catch {
     return null;
   } finally {

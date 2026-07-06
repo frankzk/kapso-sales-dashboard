@@ -309,6 +309,9 @@ describe("collectVoucherCandidates (bare voucher images after a request)", () =>
   it("returns nothing when the bot never requested a voucher/adelanto", () => {
     expect(collectVoucherCandidates([{ t: 1, dir: "outbound", text: "hola" }, img({})])).toEqual([]);
   });
+  it("does NOT open the window on a bare payment-method mention ('aceptamos Yape')", () => {
+    expect(collectVoucherCandidates([{ t: 1, dir: "outbound", text: "Sí, aceptamos Yape 😊" }, img({})])).toEqual([]);
+  });
   it("collects an inbound image sent after the request", () => {
     expect(collectVoucherCandidates([req, img({})])).toEqual([
       { messageId: "m1", mediaUrl: "https://app.kapso.ai/media/a.jpg" },
@@ -358,6 +361,37 @@ describe("fetchKapsoImageBase64 (auth'd, host-allowlisted image fetch)", () => {
     const res = await fetchKapsoImageBase64(opts(f), "https://app.kapso.ai/media/x.png");
     expect(res).toEqual({ base64: Buffer.from([1, 2, 3, 4]).toString("base64"), contentType: "image/png" });
     expect(cap.headers!["X-API-Key"]).toBe("kapso_secret_key");
+  });
+
+  it("follows a redirect to a storage CDN but drops X-API-Key off the Kapso host", async () => {
+    // Kapso 3xx's the stored blob to a signed CDN URL. The key must go ONLY to
+    // the allowlisted origin, never to the CDN (undici keeps custom headers on
+    // cross-origin redirects, so redirect:follow would leak it).
+    const calls: { url: string; headers: Record<string, string> }[] = [];
+    const f = (async (input: RequestInfo | URL, req?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, headers: (req?.headers ?? {}) as Record<string, string> });
+      if (url.startsWith("https://app.kapso.ai/")) {
+        return {
+          status: 302,
+          ok: false,
+          headers: { get: (h: string) => (h.toLowerCase() === "location" ? "https://cdn.storage.example/signed.jpg?sig=abc" : null) },
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (h: string) => (h.toLowerCase() === "content-type" ? "image/jpeg" : null) },
+        arrayBuffer: async () => new Uint8Array([9, 9, 9]).buffer,
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const res = await fetchKapsoImageBase64(opts(f), "https://app.kapso.ai/media/x.jpg");
+    expect(res).toEqual({ base64: Buffer.from([9, 9, 9]).toString("base64"), contentType: "image/jpeg" });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.headers["X-API-Key"]).toBe("kapso_secret_key"); // Kapso hop: key sent
+    expect(calls[1]!.url).toContain("cdn.storage.example");
+    expect(calls[1]!.headers["X-API-Key"]).toBeUndefined(); // CDN hop: NO key
   });
 
   it("refuses a non-allowlisted host (no fetch)", async () => {

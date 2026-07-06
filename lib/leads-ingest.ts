@@ -66,23 +66,31 @@ const ZERO_ENRICH: LeadEnrichStats = {
 // this just bounds a first-run backlog.
 const YAPE_VISION_RUN_CAP = 12;
 
-/** Injectable image→verdict analyzer, so the gate is testable without a network. */
+/** Injectable image→verdict analyzer, so the gate is testable without a network.
+ *  `ok:false` marks a failure (timeout/HTTP/parse) the caller must not persist. */
 export type YapeVisionAnalyzer = (
   base64: string,
   contentType: string | null,
-) => Promise<{ isVoucher: boolean; indicators: Record<string, unknown>; model: string }>;
+) => Promise<{ isVoucher: boolean; indicators: Record<string, unknown>; model: string; ok: boolean }>;
 
 export interface YapeVisionOutcome {
   voucher: boolean; // any candidate turned out to be a real voucher
-  analyzed: number; // how many images we actually sent to the model this call
+  analyzed: number; // model calls made this invocation (success OR error) — counts toward the cap
 }
 
 /**
  * Decide via a vision check whether any candidate image is a genuine Yape
  * voucher. Dedups against `yape_vision_checks` (each image analyzed once ever)
- * and records every verdict for audit. Bounded by `cap`. Never throws — a
- * fetch/vision failure just yields "not a voucher" and is retried a later run
- * (only decided verdicts are recorded, so failures don't get cached as false).
+ * and records every DECIDED verdict for audit. Bounded by `cap`. Never throws.
+ *
+ * Two guardrails learned the hard way:
+ *  - If the dedup SELECT errors (table absent = pending migration, or DB down),
+ *    we SKIP entirely — otherwise, with the table missing, every run would
+ *    re-fetch + re-analyze (and re-bill) the same images forever, recording
+ *    nothing. The SELECT doubles as a "is the feature installed?" probe.
+ *  - A vision CALL that fails (`ok:false`: outage/timeout/HTTP/parse) is NOT
+ *    recorded, so it retries next run — but it still counts toward `cap`, so a
+ *    provider outage can't turn into an unbounded fetch/analyze storm.
  */
 export async function detectYapeByVision(
   admin: SupabaseClient,
@@ -100,22 +108,21 @@ export async function detectYapeByVision(
   if (cap <= 0) return { voucher: false, analyzed: 0 };
   const fetchImage = opts?.fetchImage ?? ((url: string) => fetchKapsoImageBase64(k, url));
 
-  // Dedup: which of these images did we already analyze?
+  // Dedup + install probe: which of these images did we already analyze? A query
+  // ERROR (missing table / DB issue) means we can't record results either, so
+  // skip rather than analyze-without-recording (which would re-bill every run).
+  const { data, error } = await admin
+    .from("yape_vision_checks")
+    .select("message_id, is_voucher")
+    .eq("store_id", storeId)
+    .in(
+      "message_id",
+      candidates.map((c) => c.messageId),
+    );
+  if (error) return { voucher: false, analyzed: 0 };
   const decided = new Map<string, boolean>();
-  try {
-    const { data } = await admin
-      .from("yape_vision_checks")
-      .select("message_id, is_voucher")
-      .eq("store_id", storeId)
-      .in(
-        "message_id",
-        candidates.map((c) => c.messageId),
-      );
-    for (const r of (data as { message_id: string; is_voucher: boolean }[] | null) ?? []) {
-      decided.set(r.message_id, r.is_voucher);
-    }
-  } catch {
-    // Table absent (pending migration) → nothing decided yet; proceed without dedup.
+  for (const r of (data as { message_id: string; is_voucher: boolean }[] | null) ?? []) {
+    decided.set(r.message_id, r.is_voucher);
   }
   // A prior run already confirmed one → done, no new calls.
   for (const c of candidates) if (decided.get(c.messageId) === true) return { voucher: true, analyzed: 0 };
@@ -126,11 +133,12 @@ export async function detectYapeByVision(
     if (decided.has(c.messageId)) continue; // already analyzed (was false)
     if (analyzed >= cap) break;
     const img = await fetchImage(c.mediaUrl);
-    if (!img) continue; // couldn't read the image — retry next run (not recorded)
-    analyzed += 1;
+    if (!img) continue; // couldn't read the image — retry next run (not a model call)
+    analyzed += 1; // a model call is about to happen — count it toward the cap
     const verdict = await analyze(img.base64, img.contentType);
-    // Record for dedup + audit. Best-effort; ignore duplicates (concurrent runs)
-    // and a missing table (pending migration).
+    if (!verdict.ok) continue; // transient failure — DON'T record; retry next run
+    // Record the decided verdict for dedup + audit. Best-effort; ignore
+    // duplicates from a concurrent run.
     try {
       await admin.from("yape_vision_checks").upsert(
         {
@@ -143,7 +151,7 @@ export async function detectYapeByVision(
         { onConflict: "store_id,message_id", ignoreDuplicates: true },
       );
     } catch {
-      /* pending migration / race — ignore */
+      /* concurrent-run race — ignore */
     }
     if (verdict.isVoucher) voucher = true;
   }
