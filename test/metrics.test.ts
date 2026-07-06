@@ -18,6 +18,9 @@ import {
   lossReasons,
   lostRevenueByReason,
   botVsAdvisor,
+  salesAttribution,
+  attributionDailyTrend,
+  type AttributionInputs,
   conversationalFunnel,
   funnelHealth,
   formatDuration,
@@ -488,5 +491,118 @@ describe("formatDuration", () => {
     expect(formatDuration(120)).toBe("2m");
     expect(formatDuration(3660)).toBe("1h 1m");
     expect(formatDuration(null)).toBe("—");
+  });
+});
+
+describe("salesAttribution (order-centric fuente × cierre, reconciles to revenue)", () => {
+  const emptyInputs = (): AttributionInputs => ({
+    sourceByPhone: new Map(),
+    advisorTouchesByPhone: new Map(),
+    winbackByPhone: new Map(),
+  });
+
+  it("assigns each order one source + one channel; Σ sources = Σ channels = total", () => {
+    const inputs = emptyInputs();
+    inputs.sourceByPhone.set("p_ad", "meta_ad");
+    inputs.sourceByPhone.set("p_cart", "cod_cart");
+    inputs.sourceByPhone.set("p_org", "organic");
+    // p_ad advisor touch 2 days before the order → bot_asistido
+    inputs.advisorTouchesByPhone.set("p_ad", ["2026-06-18T10:00:00Z"]);
+    const orders = [
+      order({ customer_phone: "p_ad", created_at: "2026-06-20T15:00:00Z", total_amount: 200 }),
+      order({ customer_phone: "p_cart", created_at: "2026-06-20T15:00:00Z", total_amount: 100, tags: ["kapso", "venta_manual"] }),
+      order({ customer_phone: "p_org", created_at: "2026-06-20T15:00:00Z", total_amount: 50 }),
+      order({ customer_phone: "p_none", created_at: "2026-06-20T15:00:00Z", total_amount: 30 }), // no lead → sin_atribucion
+      order({ customer_phone: "p_ad", created_at: "2026-06-20T15:00:00Z", total_amount: 40, cancelled_at: "x" }), // excluded
+    ];
+    const a = salesAttribution(orders, inputs);
+    expect(a.total).toEqual({ orders: 4, revenue: 380 });
+    const sumSources = a.sources.reduce((s, r) => s + r.revenue, 0);
+    const sumChannels = a.channels.bot.revenue + a.channels.bot_asistido.revenue + a.channels.asesora.revenue;
+    expect(sumSources).toBe(380);
+    expect(sumChannels).toBe(380);
+    // channels: p_ad=bot_asistido(200), p_cart=asesora(100), p_org=bot(50), p_none=bot(30)
+    expect(a.channels.bot_asistido).toEqual({ orders: 1, revenue: 200 });
+    expect(a.channels.asesora).toEqual({ orders: 1, revenue: 100 });
+    expect(a.channels.bot).toEqual({ orders: 2, revenue: 80 });
+    const sinAttr = a.sources.find((r) => r.key === "sin_atribucion")!;
+    expect(sinAttr.orders).toBe(1);
+    expect(sinAttr.revenue).toBe(30);
+  });
+
+  it("winback pisa la fuente cuando hay cupón + plantilla ≤30d; sin cupón = halo", () => {
+    const inputs = emptyInputs();
+    inputs.sourceByPhone.set("p1", "meta_ad"); // llegó por ad hace meses
+    inputs.sourceByPhone.set("p2", "meta_ad");
+    inputs.winbackByPhone.set("p1", ["2026-06-05T10:00:00Z"]); // plantilla 15 días antes
+    inputs.winbackByPhone.set("p2", ["2026-06-05T10:00:00Z"]);
+    const orders = [
+      // p1: cupón + plantilla reciente → winback (pisa meta_ad)
+      order({ customer_phone: "p1", created_at: "2026-06-20T12:00:00Z", total_amount: 120, discount_codes: ["AURELA10"] }),
+      // p2: plantilla reciente pero SIN cupón → sigue meta_ad, cuenta como halo
+      order({ customer_phone: "p2", created_at: "2026-06-20T12:00:00Z", total_amount: 80, discount_codes: [] }),
+    ];
+    const a = salesAttribution(orders, inputs);
+    const wb = a.sources.find((r) => r.key === "winback");
+    const ad = a.sources.find((r) => r.key === "meta_ad");
+    expect(wb?.revenue).toBe(120);
+    expect(ad?.revenue).toBe(80); // p2 stays with its original source
+    expect(a.halo).toEqual({ orders: 1, revenue: 80 }); // p2 influenced but credited elsewhere
+    expect(a.total.revenue).toBe(200); // halo NOT double-counted
+  });
+
+  it("a coupon WITHOUT a recent winback send is not winback (stale >30d ignored)", () => {
+    const inputs = emptyInputs();
+    inputs.sourceByPhone.set("p1", "cod_cart");
+    inputs.winbackByPhone.set("p1", ["2026-05-01T10:00:00Z"]); // 50 días antes → fuera de ventana
+    const orders = [
+      order({ customer_phone: "p1", created_at: "2026-06-20T12:00:00Z", total_amount: 90, discount_codes: ["AURELA10"] }),
+    ];
+    const a = salesAttribution(orders, inputs);
+    expect(a.sources.find((r) => r.key === "winback")).toBeUndefined();
+    expect(a.sources.find((r) => r.key === "cod_cart")?.revenue).toBe(90);
+    expect(a.halo.orders).toBe(0); // send is stale → not even halo
+  });
+
+  it("bot_asistido only within 7 days; an 8-day-old touch stays bot", () => {
+    const inputs = emptyInputs();
+    inputs.sourceByPhone.set("p1", "organic");
+    inputs.advisorTouchesByPhone.set("p1", ["2026-06-12T10:00:00Z"]); // 8 días antes del 06-20
+    const a = salesAttribution(
+      [order({ customer_phone: "p1", created_at: "2026-06-20T12:00:00Z", total_amount: 60 })],
+      inputs,
+    );
+    expect(a.channels.bot.orders).toBe(1);
+    expect(a.channels.bot_asistido.orders).toBe(0);
+  });
+
+  it("net revenue is after refunds; pct sums ~100", () => {
+    const inputs = emptyInputs();
+    inputs.sourceByPhone.set("p1", "meta_ad");
+    const a = salesAttribution(
+      [order({ customer_phone: "p1", total_amount: 100, total_refunded: 40 })],
+      inputs,
+    );
+    expect(a.total.revenue).toBe(60);
+    expect(a.sources[0]!.pct).toBe(100);
+  });
+
+  it("attributionDailyTrend stacks net revenue by source per day", () => {
+    const inputs = emptyInputs();
+    inputs.sourceByPhone.set("p1", "meta_ad");
+    inputs.sourceByPhone.set("p2", "organic");
+    const a = salesAttribution(
+      [
+        order({ customer_phone: "p1", created_at: "2026-06-20T15:00:00Z", total_amount: 100 }),
+        order({ customer_phone: "p2", created_at: "2026-06-20T15:00:00Z", total_amount: 50 }),
+        order({ customer_phone: "p1", created_at: "2026-06-21T15:00:00Z", total_amount: 30 }),
+      ],
+      inputs,
+    );
+    const t = attributionDailyTrend(a.orders, "America/Lima");
+    expect(t.series.map((s) => s.key)).toEqual(["meta_ad", "organic"]); // canonical order
+    expect(t.rows).toHaveLength(2);
+    expect(t.rows[0]).toMatchObject({ date: "2026-06-20", meta_ad: 100, organic: 50 });
+    expect(t.rows[1]).toMatchObject({ date: "2026-06-21", meta_ad: 30 });
   });
 });

@@ -86,3 +86,50 @@ export async function listMetaAdAccounts(
   }));
   return { ok: true, accounts };
 }
+
+/**
+ * Total ad SPEND across the given ad accounts for a date range (the cost half of
+ * ROAS), summed at the account level via `GET /act_<id>/insights?fields=spend`.
+ * Best-effort: returns null on any failure (bad token, network, timeout) so the
+ * dashboard shows "—" for ROAS instead of breaking. `accountIds` accept "act_…"
+ * or bare numeric ids. A short AbortController timeout keeps a slow Graph API
+ * from hanging the render.
+ */
+export async function fetchMetaSpend(
+  token: string,
+  accountIds: string[],
+  range: { from: string; to: string },
+  opts?: { fetchImpl?: typeof fetch; baseUrl?: string; timeoutMs?: number },
+): Promise<number | null> {
+  if (!token?.trim() || !accountIds.length) return null;
+  const base = (opts?.baseUrl ?? GRAPH_BASE).replace(/\/$/, "");
+  const doFetch = opts?.fetchImpl ?? fetch;
+  const timeMs = opts?.timeoutMs ?? 4000;
+
+  const spends = await Promise.all(
+    accountIds.map(async (raw) => {
+      const act = raw.startsWith("act_") ? raw : `act_${raw}`;
+      const url = new URL(`${base}/${act}/insights`);
+      url.searchParams.set("fields", "spend");
+      url.searchParams.set("level", "account");
+      url.searchParams.set("time_range", JSON.stringify({ since: range.from, until: range.to }));
+      url.searchParams.set("access_token", token.trim());
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeMs);
+      try {
+        const res = await doFetch(url.toString(), { headers: { Accept: "application/json" }, signal: ctrl.signal });
+        const json: any = await res.json().catch(() => null);
+        if (!res.ok || json?.error) return null;
+        const spend = Number(json?.data?.[0]?.spend);
+        return Number.isFinite(spend) ? spend : 0;
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }),
+  );
+  // If every account failed, we truly have no data → null; otherwise sum the ok ones.
+  if (spends.every((s) => s == null)) return null;
+  return Math.round(spends.reduce((sum: number, s) => sum + (s ?? 0), 0) * 100) / 100;
+}

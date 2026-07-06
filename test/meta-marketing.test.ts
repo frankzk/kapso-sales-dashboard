@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { listMetaAdAccounts, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
+import { fetchMetaSpend, listMetaAdAccounts, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
 
 function fakeFetch(status: number, json: unknown, capture?: (url: string) => void) {
   return (async (url: string) => {
@@ -77,5 +77,50 @@ describe("normalizeMetaAdAccounts (multi-account, with back-compat)", () => {
     expect(normalizeMetaAdAccounts(undefined)).toEqual([]);
     expect(normalizeMetaAdAccounts("nope")).toEqual([]);
     expect(normalizeMetaAdAccounts([{ name: "no id" }])).toEqual([]);
+  });
+});
+
+describe("fetchMetaSpend", () => {
+  function spendFetch(byAccount: Record<string, number>, capture?: (url: string) => void) {
+    return (async (url: string) => {
+      capture?.(url);
+      const act = /act_([^/]+)\/insights/.exec(url)?.[1] ?? "";
+      const spend = byAccount[act];
+      return {
+        ok: spend !== undefined,
+        status: spend !== undefined ? 200 : 400,
+        json: async () => (spend !== undefined ? { data: [{ spend: String(spend) }] } : { error: { message: "bad" } }),
+      };
+    }) as unknown as typeof fetch;
+  }
+
+  it("sums spend across accounts for the range", async () => {
+    const seen: string[] = [];
+    const total = await fetchMetaSpend("TOK", ["act_111", "222"], { from: "2026-07-01", to: "2026-07-06" }, {
+      baseUrl: "https://graph.test/v21.0",
+      fetchImpl: spendFetch({ "111": 120.5, "222": 80 }, (u) => seen.push(u)),
+    });
+    expect(total).toBe(200.5);
+    expect(seen[0]).toContain("act_111/insights");
+    expect(seen[0]).toContain("time_range=");
+    expect(seen[1]).toContain("act_222/insights"); // bare id gets act_ prefix
+  });
+
+  it("returns null when no accounts or no token", async () => {
+    expect(await fetchMetaSpend("", ["act_1"], { from: "a", to: "b" })).toBeNull();
+    expect(await fetchMetaSpend("T", [], { from: "a", to: "b" })).toBeNull();
+  });
+
+  it("returns null when every account errors, but sums the ok ones otherwise", async () => {
+    const allBad = await fetchMetaSpend("T", ["act_9"], { from: "a", to: "b" }, {
+      baseUrl: "https://graph.test/v21.0",
+      fetchImpl: spendFetch({}),
+    });
+    expect(allBad).toBeNull();
+    const partial = await fetchMetaSpend("T", ["act_1", "act_2"], { from: "a", to: "b" }, {
+      baseUrl: "https://graph.test/v21.0",
+      fetchImpl: spendFetch({ "1": 50 }), // act_2 errors → counts as 0, not null
+    });
+    expect(partial).toBe(50);
   });
 });

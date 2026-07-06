@@ -1044,6 +1044,229 @@ export function botVsAdvisor(orders: OrderRow[]): BotVsAdvisor {
   return { bot, advisor };
 }
 
+// ===========================================================================
+// Ventas por FUENTE y CIERRE — order-centric attribution (auditable).
+//
+// Every ACTIVE order is assigned exactly ONE acquisition source and ONE closing
+// channel, so the buckets always reconcile to headline net revenue (Σ sources
+// = Σ channels = total). This is the audit tool: the numbers can't silently
+// double-count or drop a sale, and each order carries its assigned source +
+// channel so the UI can drill down and a human can sanity-check the call.
+//
+// SOURCE precedence (per the product decisions):
+//   winback (used a coupon AND got the recuperación-60d template ≤30d before the
+//     order) ▸ pisa a la fuente original — el mensaje fue lo que lo reactivó
+//   else the customer's lead source (meta_ad | cod_cart | abandoned_browse |
+//     organic = tiene lead sin fuente de campaña)
+//   else "sin_atribucion" (an order whose phone has no lead at all — pure web
+//     checkout / histórico; surfaced on purpose so it can be investigated)
+//
+// CLOSING channel:
+//   asesora        — closed via the dashboard (venta_manual|carrito_recuperado)
+//   bot_asistido   — no dashboard tag, but an advisor logged activity on the
+//                    lead within 7 días before the order (convenció por teléfono,
+//                    el checkout lo hizo el cliente/bot)
+//   bot            — everything else (bot/Shopify sin toque humano previo)
+// ===========================================================================
+
+export type AttributionSource =
+  | "winback"
+  | "meta_ad"
+  | "cod_cart"
+  | "abandoned_browse"
+  | "organic"
+  | "sin_atribucion";
+
+export type ClosingChannel = "asesora" | "bot_asistido" | "bot";
+
+/** Per-phone signals for attribution, none of them range-bound (an order in the
+ *  period may reference a lead/touch/send from before it). Built by lib/access. */
+export interface AttributionInputs {
+  /** phone → normalized lead source bucket. Absent ⇒ no lead ⇒ sin_atribucion. */
+  sourceByPhone: Map<string, AttributionSource>;
+  /** phone → sorted ISO timestamps of advisor actions (lead_calls, vendedora≠null). */
+  advisorTouchesByPhone: Map<string, string[]>;
+  /** phone → sorted ISO timestamps of successful winback template sends. */
+  winbackByPhone: Map<string, string[]>;
+}
+
+export interface AttributedOrder {
+  name: string | null;
+  createdAt: string | null;
+  net: number;
+  source: AttributionSource;
+  channel: ClosingChannel;
+  coupons: string[];
+  // NB: no customer phone here on purpose — this array is serialized to the
+  // client for the drill-down, which shows only order code/date/net/channel/
+  // coupon. Keeping PII (phone) out of the browser payload.
+}
+
+export interface SourceRow {
+  key: AttributionSource;
+  label: string;
+  orders: number;
+  revenue: number;
+  pct: number; // share of total net revenue, 0..100
+  byChannel: Record<ClosingChannel, { orders: number; revenue: number }>;
+}
+
+export interface SalesAttribution {
+  total: { orders: number; revenue: number };
+  sources: SourceRow[]; // revenue desc; only sources present in the period
+  channels: Record<ClosingChannel, { orders: number; revenue: number }>; // marginal totals
+  /** Winback "halo": orders whose phone got the template ≤30d before but were
+   *  credited to another source (no coupon match). Informational — NOT added to
+   *  the winback bucket, so it never steals attribution. */
+  halo: { orders: number; revenue: number };
+  orders: AttributedOrder[]; // every active order, attributed — the drill-down/audit feed
+}
+
+const WINBACK_ATTR_DAYS = 30; // coupon order ≤30d after the template ⇒ recuperación
+const ASSIST_ATTR_DAYS = 7; // advisor touch ≤7d before the order ⇒ bot asistido
+
+const SOURCE_LABELS: Record<AttributionSource, string> = {
+  winback: "🔁 Recuperación 60d",
+  meta_ad: "Meta Ads (campañas)",
+  cod_cart: "🛒 Carrito abandonado",
+  abandoned_browse: "🔎 Búsqueda abandonada",
+  organic: "Orgánico (WhatsApp)",
+  sin_atribucion: "Sin atribuir",
+};
+
+/** Canonical stacking/legend order for the daily chart + tables (matches the
+ *  funnel narrative: paid → carts → browse → winback → organic → unknown). */
+export const ATTRIBUTION_SOURCE_ORDER: AttributionSource[] = [
+  "meta_ad",
+  "cod_cart",
+  "abandoned_browse",
+  "winback",
+  "organic",
+  "sin_atribucion",
+];
+
+const emptyChannels = (): Record<ClosingChannel, { orders: number; revenue: number }> => ({
+  asesora: { orders: 0, revenue: 0 },
+  bot_asistido: { orders: 0, revenue: 0 },
+  bot: { orders: 0, revenue: 0 },
+});
+
+/** Whether any timestamp in the sorted list falls within [ref − days, ref]. */
+function hasEventWithin(times: string[] | undefined, refIso: string | null, days: number): boolean {
+  if (!times?.length || !refIso) return false;
+  const ref = new Date(refIso).getTime();
+  if (!Number.isFinite(ref)) return false;
+  const lo = ref - days * 86_400_000;
+  for (const t of times) {
+    const ms = new Date(t).getTime();
+    if (Number.isFinite(ms) && ms <= ref && ms >= lo) return true;
+  }
+  return false;
+}
+
+/** Attribute every active order to one source + one closing channel. Pure. */
+export function salesAttribution(orders: OrderRow[], inputs: AttributionInputs): SalesAttribution {
+  const { sourceByPhone, advisorTouchesByPhone, winbackByPhone } = inputs;
+  const attributed: AttributedOrder[] = [];
+  const channels = emptyChannels();
+  const bySource = new Map<AttributionSource, SourceRow>();
+  let haloOrders = 0;
+  let haloRevenue = 0;
+  let totalRevenue = 0;
+
+  for (const o of activeOrders(orders)) {
+    const net = round2((o.total_amount ?? 0) - (o.total_refunded ?? 0));
+    const phone = o.customer_phone ?? null;
+    const coupons = o.discount_codes ?? [];
+    const gotWinback = phone ? hasEventWithin(winbackByPhone.get(phone), o.created_at, WINBACK_ATTR_DAYS) : false;
+
+    // Source (winback precedence): a coupon on the order AND a winback template
+    // received ≤30d before ⇒ the message reactivated them.
+    let source: AttributionSource;
+    if (gotWinback && coupons.length > 0) {
+      source = "winback";
+    } else {
+      source = (phone && sourceByPhone.get(phone)) || "sin_atribucion";
+    }
+    // Halo: influenced by the message but credited elsewhere (no coupon match).
+    if (gotWinback && source !== "winback") {
+      haloOrders += 1;
+      haloRevenue += net;
+    }
+
+    // Closing channel.
+    let channel: ClosingChannel;
+    if ((o.tags ?? []).some((t) => ADVISOR_ORDER_TAGS.has(t))) {
+      channel = "asesora";
+    } else if (phone && hasEventWithin(advisorTouchesByPhone.get(phone), o.created_at, ASSIST_ATTR_DAYS)) {
+      channel = "bot_asistido";
+    } else {
+      channel = "bot";
+    }
+
+    totalRevenue += net;
+    channels[channel].orders += 1;
+    channels[channel].revenue += net;
+    const row =
+      bySource.get(source) ??
+      ({ key: source, label: SOURCE_LABELS[source], orders: 0, revenue: 0, pct: 0, byChannel: emptyChannels() } as SourceRow);
+    row.orders += 1;
+    row.revenue += net;
+    row.byChannel[channel].orders += 1;
+    row.byChannel[channel].revenue += net;
+    bySource.set(source, row);
+
+    attributed.push({ name: o.name, createdAt: o.created_at, net, source, channel, coupons });
+  }
+
+  totalRevenue = round2(totalRevenue);
+  const sources = [...bySource.values()]
+    .map((r) => {
+      r.revenue = round2(r.revenue);
+      r.pct = totalRevenue ? round2((r.revenue / totalRevenue) * 100) : 0;
+      for (const c of Object.keys(r.byChannel) as ClosingChannel[]) r.byChannel[c].revenue = round2(r.byChannel[c].revenue);
+      return r;
+    })
+    .sort((a, b) => b.revenue - a.revenue || b.orders - a.orders);
+  for (const c of Object.keys(channels) as ClosingChannel[]) channels[c].revenue = round2(channels[c].revenue);
+
+  return {
+    total: { orders: attributed.length, revenue: totalRevenue },
+    sources,
+    channels,
+    halo: { orders: haloOrders, revenue: round2(haloRevenue) },
+    orders: attributed,
+  };
+}
+
+/** Daily net revenue stacked by source, for the tendencia chart. Buckets each
+ *  attributed order by its created_at day (store tz). Returns recharts-ready
+ *  rows + the present sources in canonical order. Pure. */
+export function attributionDailyTrend(
+  attributed: AttributedOrder[],
+  timeZone: string,
+): { rows: Array<Record<string, string | number>>; series: { key: AttributionSource; label: string }[] } {
+  if (!attributed.length) return { rows: [], series: [] };
+  const present = new Set<AttributionSource>();
+  const byDay = new Map<string, Map<AttributionSource, number>>();
+  for (const o of attributed) {
+    if (!o.createdAt) continue;
+    const day = tzParts(o.createdAt, timeZone).date;
+    present.add(o.source);
+    const dm = byDay.get(day) ?? new Map<AttributionSource, number>();
+    dm.set(o.source, round2((dm.get(o.source) ?? 0) + o.net));
+    byDay.set(day, dm);
+  }
+  const series = ATTRIBUTION_SOURCE_ORDER.filter((k) => present.has(k)).map((k) => ({ key: k, label: SOURCE_LABELS[k] }));
+  const rows = [...byDay.keys()].sort().map((day) => {
+    const dm = byDay.get(day)!;
+    const row: Record<string, string | number> = { date: day };
+    for (const s of series) row[s.key] = dm.get(s.key) ?? 0;
+    return row;
+  });
+  return { rows, series };
+}
+
 export interface FunnelStage {
   key: string;
   label: string;
