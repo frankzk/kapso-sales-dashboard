@@ -136,6 +136,17 @@ function shippingFromTags(lowerTags: string[]): ShippingMode {
   return null;
 }
 
+/** Coupon codes on a REST order (`discount_codes: [{code,…}]`) or a GraphQL
+ *  order (`discountCodes: [String]`) → a clean, upper-cased, deduped string[]. */
+export function parseDiscountCodes(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const codes = input
+    .map((d) => (typeof d === "string" ? d : (d as { code?: unknown })?.code))
+    .map((c) => (c == null ? "" : String(c).trim().toUpperCase()))
+    .filter(Boolean);
+  return [...new Set(codes)];
+}
+
 /** Derive the business-breakdown flags from tags + note attributes. */
 export function deriveOrderFlags(
   tags: string[],
@@ -195,6 +206,7 @@ export function mapRestOrder(payload: any, storeId: string): OrderRow {
         payload?.billing_address?.phone,
     ),
     tags,
+    discount_codes: parseDiscountCodes(payload?.discount_codes),
     ...flags,
     line_items,
     raw: payload,
@@ -240,6 +252,7 @@ export function mapGraphqlOrder(node: any, storeId: string): OrderRow {
       node?.phone ?? node?.shippingAddress?.phone ?? node?.billingAddress?.phone,
     ),
     tags,
+    discount_codes: parseDiscountCodes(node?.discountCodes),
     ...flags,
     line_items,
     raw: node,
@@ -498,6 +511,7 @@ export function buildOrdersQuery(withPhone: boolean): string {
           currentTotalPriceSet { shopMoney { amount currencyCode } }
           totalRefundedSet { shopMoney { amount } }
           tags
+          discountCodes
           customAttributes { key value }${phoneFields}
           lineItems(first: 100) {
             edges {
@@ -604,6 +618,7 @@ function buildOrderByIdQuery(withPhone: boolean): string {
       currentTotalPriceSet { shopMoney { amount currencyCode } }
       totalRefundedSet { shopMoney { amount } }
       tags
+      discountCodes
       customAttributes { key value }${phoneFields}
       lineItems(first: 100) {
         edges { node { title quantity sku originalUnitPriceSet { shopMoney { amount } } } }

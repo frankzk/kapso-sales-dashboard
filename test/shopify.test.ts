@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import {
   verifyShopifyHmac,
   parseTags,
+  parseDiscountCodes,
   hasKapsoTag,
   noteAttributesToMap,
   extractNumericId,
@@ -138,6 +139,7 @@ describe("mapRestOrder", () => {
     currency: "PEN",
     financial_status: "paid",
     tags: "kapso, whatsapp, promo-whatsapp",
+    discount_codes: [{ code: "aurela10", amount: "19.99", type: "percentage" }],
     note_attributes: [
       { name: "kapso_conversation_id", value: "conv_abc" },
       { name: "kapso_phone_number_id", value: "pn_1" },
@@ -165,6 +167,14 @@ describe("mapRestOrder", () => {
     expect(row.customer_phone).toBe("51980694766");
     expect(row.line_items).toHaveLength(2);
     expect(row.line_items[0]).toMatchObject({ title: "Polo Aurela", quantity: 2, price: 59.95 });
+    expect(row.discount_codes).toEqual(["AURELA10"]); // REST [{code}] → upper-cased
+  });
+
+  it("parseDiscountCodes normalizes REST objects and GraphQL strings, deduped", () => {
+    expect(parseDiscountCodes([{ code: "aurela10" }, { code: "AURELA10" }])).toEqual(["AURELA10"]);
+    expect(parseDiscountCodes(["Promo5", " promo5 "])).toEqual(["PROMO5"]);
+    expect(parseDiscountCodes(null)).toEqual([]);
+    expect(parseDiscountCodes([{ amount: "5" }])).toEqual([]); // no code field → dropped
   });
 });
 
@@ -177,6 +187,7 @@ describe("mapGraphqlOrder", () => {
     displayFinancialStatus: "PAID",
     currentTotalPriceSet: { shopMoney: { amount: "250.00", currencyCode: "PEN" } },
     tags: ["kapso", "stock-por-validar", "contraentrega"],
+    discountCodes: ["AURELA10"],
     customAttributes: [{ key: "kapso_conversation_id", value: "conv_77" }],
     lineItems: {
       edges: [
@@ -203,6 +214,7 @@ describe("mapGraphqlOrder", () => {
     expect(row.stock_por_validar).toBe(true);
     expect(row.shipping_mode).toBe("cod");
     expect(row.kapso_conversation_id).toBe("conv_77");
+    expect(row.discount_codes).toEqual(["AURELA10"]); // GraphQL [String] passthrough
     expect(row.line_items[0]).toMatchObject({
       title: "Zapatos",
       product_id: "9",

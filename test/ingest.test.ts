@@ -93,6 +93,7 @@ class FakeSupabase {
   recomputeCalls: any[] = [];
   processedUpdates = 0;
   webhookUpdates: any[] = [];
+  winbackSends: any[] = [];
   constructor(storeRow: Row) {
     this.storeRow = storeRow;
   }
@@ -164,6 +165,11 @@ class FakeSupabase {
     if (b.table === "lead_calls" && b.op === "insert") {
       const rows = Array.isArray(b.payload) ? b.payload : [b.payload];
       this.leadCalls.push(...rows);
+      return { data: null, error: null };
+    }
+    if (b.table === "winback_sends" && b.op === "insert") {
+      const rows = Array.isArray(b.payload) ? b.payload : [b.payload];
+      this.winbackSends.push(...rows);
       return { data: null, error: null };
     }
     return { data: null, error: null };
@@ -753,6 +759,22 @@ describe("processWinback · recuperación de clientes (60 días)", () => {
     expect(fake.upsertedLeads).toHaveLength(0);
     expect(fake.leadCalls).toHaveLength(0); // no existing lead to log on
     expect(fake.webhookUpdates.at(-1)).toMatchObject({ processed: true, error: null }); // sent → clean log
+    // A successful send is recorded so a later coupon order can be attributed.
+    expect(fake.winbackSends).toHaveLength(1);
+    expect(fake.winbackSends[0]).toMatchObject({
+      store_id: "store-1",
+      phone: "51953249192",
+      template_name: "recuperacion_60d_1",
+      order_gid: "gid://shopify/Order/7001",
+    });
+  });
+
+  it("does NOT record a winback_send when the template send fails", async () => {
+    const { processWinback } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const bad = spyTemplate({ ok: false, error: "Template paused", code: 132015 });
+    await processWinback(fake as any, "store-1", JSON.parse(WINBACK_BODY), winbackCreds(), bad.fn);
+    expect(fake.winbackSends).toHaveLength(0); // only successful sends count
   });
 
   it("logs on the phone's existing lead (send ok and send failed)", async () => {

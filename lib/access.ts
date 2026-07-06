@@ -117,24 +117,35 @@ export async function getOrders(
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
   const { startIso, endIso } = rangeBounds(range);
+  const BASE =
+    "store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,customer_phone,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items";
+  // `discount_codes` is added by 0030; step down to the base set if the column
+  // isn't there yet so the dashboard never breaks during the migration window.
+  const COL_SETS = [`${BASE},discount_codes`, BASE];
+  let colIdx = 0;
   const out: OrderRow[] = [];
   for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
-    const { data, error } = await sb
-      .from("orders")
-      .select(
-        "store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,customer_phone,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items",
-      )
-      .in("store_id", storeIds)
-      // Kapso orders only (tag:kapso). The webhook path can transiently write a
-      // non-Kapso order before it's tagged; keep the funnel/integrity/export
-      // reads in parity with the headline rollups regardless.
-      .contains("tags", ["kapso"])
-      .gte("created_at", startIso)
-      .lte("created_at", endIso)
-      .order("created_at", { ascending: false })
-      .range(from, from + PAGE_SIZE - 1);
+    const page = () =>
+      sb
+        .from("orders")
+        .select(COL_SETS[colIdx]!)
+        .in("store_id", storeIds)
+        // Kapso orders only (tag:kapso). The webhook path can transiently write a
+        // non-Kapso order before it's tagged; keep the funnel/integrity/export
+        // reads in parity with the headline rollups regardless.
+        .contains("tags", ["kapso"])
+        .gte("created_at", startIso)
+        .lte("created_at", endIso)
+        .order("created_at", { ascending: false })
+        .range(from, from + PAGE_SIZE - 1);
+    let { data, error } = await page();
+    while (error && colIdx < COL_SETS.length - 1) {
+      colIdx++;
+      ({ data, error } = await page());
+    }
     if (error || !data?.length) break;
-    out.push(...(data as OrderRow[]));
+    // Default discount_codes to [] when the column wasn't selected (pre-0030).
+    out.push(...(data as unknown as OrderRow[]).map((o) => ({ ...o, discount_codes: o.discount_codes ?? [] })));
     if (data.length < PAGE_SIZE) break;
   }
   return out;

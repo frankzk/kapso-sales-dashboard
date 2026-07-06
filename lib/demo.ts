@@ -132,6 +132,7 @@ export function generateDemoData(opts: DemoOptions): DemoData {
         cancelled_at: cancelled ? new Date(created.getTime() + 3_600_000).toISOString() : null,
         total_refunded: refunded,
         tags,
+        discount_codes: [],
         promo_applied: promo,
         stock_por_validar: stock,
         shipping_mode: cod ? "cod" : "agency",

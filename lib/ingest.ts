@@ -165,7 +165,19 @@ export async function upsertOrders(
   const { error } = await admin
     .from("orders")
     .upsert(rows, { onConflict: "store_id,shopify_order_id" });
-  if (error) throw new Error(`upsertOrders: ${error.message}`);
+  if (!error) return;
+  // `discount_codes` is added by migration 0030; before it runs, writing that
+  // column errors and would break the whole order sync. Drop it and retry once
+  // so the sync keeps working — attribution just misses coupons until migrated.
+  if (/discount_codes/.test(error.message)) {
+    const stripped = rows.map(({ discount_codes: _drop, ...rest }) => rest);
+    const retry = await admin
+      .from("orders")
+      .upsert(stripped, { onConflict: "store_id,shopify_order_id" });
+    if (!retry.error) return;
+    throw new Error(`upsertOrders: ${retry.error.message}`);
+  }
+  throw new Error(`upsertOrders: ${error.message}`);
 }
 
 export async function upsertDraftOrders(

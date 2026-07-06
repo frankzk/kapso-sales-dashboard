@@ -966,6 +966,22 @@ export async function processWinback(
         },
       );
       if (!send.ok) outcome = `Falló el envío de «${creds.winback_template_name}»: ${send.error}`;
+      // Record the send so a later order can be attributed to "recuperación 60d"
+      // (order used a winback coupon AND got the template ≤30 días antes). Only
+      // successful sends count. Best-effort: a missing winback_sends table (0030
+      // not applied yet) must not break the webhook — swallow and move on.
+      if (send.ok) {
+        try {
+          await admin.from("winback_sends").insert({
+            store_id: storeId,
+            phone: seed.phone,
+            template_name: creds.winback_template_name,
+            order_gid: seed.orderId ? `gid://shopify/Order/${seed.orderId}` : null,
+          });
+        } catch {
+          /* table may not exist pre-0030 — attribution just misses this send */
+        }
+      }
       // Log on the phone's lead IF one exists (winback never creates leads).
       const { data: lead } = await admin
         .from("leads")
