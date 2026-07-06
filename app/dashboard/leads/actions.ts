@@ -22,9 +22,9 @@ import {
   getCustomerRecentOrders,
   getDraftOrderForEdit,
   resolveOrderDiscount,
-  searchProductVariants,
+  searchCatalogProducts,
   updateDraftOrder,
-  type ProductVariantResult,
+  type ProductSearchResult,
 } from "@/lib/shopify";
 import {
   fetchConversationTranscript,
@@ -1261,13 +1261,13 @@ export async function deleteQuickReply(
 export async function searchStoreProducts(
   leadId: string,
   query: string,
-): Promise<ProductVariantResult[]> {
+): Promise<ProductSearchResult[]> {
   const ctx = await authorizeLead(leadId);
   if (!ctx) return [];
   const creds = await getStoreCreds(ctx.storeId);
   if (!creds?.shopify_token) return [];
   try {
-    return await searchProductVariants({
+    return await searchCatalogProducts({
       domain: creds.shopify_domain,
       token: creds.shopify_token,
       query,

@@ -2621,7 +2621,9 @@ type OrderItem = {
   quantity: number;
   unitPrice: number | null;
 };
-type ProductResult = Awaited<ReturnType<typeof searchStoreProducts>>[number];
+type ProductResult = Awaited<ReturnType<typeof searchStoreProducts>>[number]; // producto + variantes
+// A single variant flattened for the line-item add (what ProductPicker returns).
+type PickedVariant = { variantId: string; title: string; price: number | null; inventory: number | null };
 
 const rid = () => Math.random().toString(36).slice(2);
 
@@ -3066,12 +3068,23 @@ function ProductPicker({
 }: {
   leadId: string;
   currency: string;
-  onPick: (p: ProductResult) => void;
+  onPick: (v: PickedVariant) => void;
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<ProductResult[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [openProd, setOpenProd] = useState<string | null>(null); // productId cuyas variantes están expandidas
+
+  // Flatten a chosen (product, variant) into the line-item shape, keeping the
+  // "Producto · Variante" title the rest of the form + Shopify draft expect.
+  const pick = (p: ProductResult, v: ProductResult["variants"][number]) =>
+    onPick({
+      variantId: v.variantId,
+      title: v.variantTitle ? `${p.title} · ${v.variantTitle}` : p.title,
+      price: v.price,
+      inventory: v.inventory,
+    });
   useEffect(() => {
     const term = q.trim();
     if (term.length < 2) {
@@ -3085,6 +3098,7 @@ function ProductPicker({
       const r = await searchStoreProducts(leadId, term);
       if (alive) {
         setResults(r);
+        setOpenProd(null); // nueva búsqueda → colapsa cualquier producto expandido
         setSearching(false);
       }
     }, 280);
@@ -3113,23 +3127,58 @@ function ProductPicker({
       )}
       {results && results.length > 0 && (
         <ul className="mt-1 max-h-56 overflow-y-auto">
-          {results.map((p) => (
-            <li key={p.variantId}>
-              <button
-                type="button"
-                onClick={() => onPick(p)}
-                className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-emerald-50"
-              >
-                <span className="flex-1 text-sm text-slate-800">{p.title}</span>
-                <span className={cn("text-xs", (p.inventory ?? 0) > 0 ? "text-slate-500" : "text-amber-600")}>
-                  {p.inventory != null ? `stock ${p.inventory}` : ""}
-                </span>
-                <span className="text-sm font-medium text-slate-700">
-                  {currency} {(p.price ?? 0).toFixed(2)}
-                </span>
-              </button>
-            </li>
-          ))}
+          {results.map((p) => {
+            const single = p.variants.length === 1; // sin variantes reales → se agrega directo
+            const expanded = openProd === p.productId;
+            const totalStock = p.variants.reduce((s, v) => s + (v.inventory ?? 0), 0);
+            return (
+              <li key={p.productId}>
+                <button
+                  type="button"
+                  onClick={() => (single ? pick(p, p.variants[0]!) : setOpenProd(expanded ? null : p.productId))}
+                  className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-emerald-50"
+                >
+                  {!single && <span className="text-slate-300">{expanded ? "▾" : "▸"}</span>}
+                  <span className="flex-1 text-sm text-slate-800">{p.title}</span>
+                  {single ? (
+                    <>
+                      <span className={cn("text-xs", (p.variants[0]!.inventory ?? 0) > 0 ? "text-slate-500" : "text-amber-600")}>
+                        {p.variants[0]!.inventory != null ? `stock ${p.variants[0]!.inventory}` : ""}
+                      </span>
+                      <span className="text-sm font-medium text-slate-700">
+                        {currency} {(p.variants[0]!.price ?? 0).toFixed(2)}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-xs text-slate-400">
+                      {p.variants.length} variantes{totalStock > 0 ? ` · stock ${totalStock}` : ""}
+                    </span>
+                  )}
+                </button>
+                {expanded && !single && (
+                  <ul className="mb-1 ml-4 border-l border-slate-200 pl-2">
+                    {p.variants.map((v) => (
+                      <li key={v.variantId}>
+                        <button
+                          type="button"
+                          onClick={() => pick(p, v)}
+                          className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-emerald-50"
+                        >
+                          <span className="flex-1 text-sm text-slate-700">{v.variantTitle || "Estándar"}</span>
+                          <span className={cn("text-xs", (v.inventory ?? 0) > 0 ? "text-slate-500" : "text-amber-600")}>
+                            {v.inventory != null ? `stock ${v.inventory}` : ""}
+                          </span>
+                          <span className="text-sm font-medium text-slate-700">
+                            {currency} {(v.price ?? 0).toFixed(2)}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
