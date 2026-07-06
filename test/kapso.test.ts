@@ -87,20 +87,7 @@ describe("parseOrderSignals (buyer intent from chat messages)", () => {
   });
 });
 
-describe("detectYapePayment (Yape/Shalom advance from chat)", () => {
-  // The real Marco flow: bot requests a Yape adelanto + voucher, the customer
-  // replies with the receipt as an IMAGE (no text), and the agent confirms.
-  const marco: ParsedMsg[] = [
-    { t: 1, dir: "outbound", text: "Listo, lo enviamos a esa agencia Shalom 🙌\nPara separarlo, realiza el adelanto de S/30 al Yape:\nGrupo GF SAC\n930 555 309\nEnvíame el voucher o captura para pasarlo a validación logística ✅" },
-    { t: 2, dir: "inbound", text: "" , image: true }, // the Yape voucher screenshot
-    { t: 3, dir: "outbound", text: "¡Gracias! Solo falta que me envíes el DNI del titular que recogerá en Shalom Jr Aguilar." },
-    { t: 4, dir: "inbound", text: "45440100" },
-  ];
-
-  it("detects an advance when a voucher image follows the bot's Yape request", () => {
-    expect(detectYapePayment(marco)).toBe(true);
-  });
-
+describe("detectYapePayment (Yape/Shalom advance from chat — TEXT/caption only)", () => {
   it("detects an explicit agent confirmation (pago recibido)", () => {
     expect(detectYapePayment([{ t: 1, dir: "outbound", text: "Pago recibido" }])).toBe(true);
   });
@@ -110,6 +97,23 @@ describe("detectYapePayment (Yape/Shalom advance from chat)", () => {
       { t: 1, dir: "outbound", text: "Realiza el adelanto al Yape y envíame el voucher" },
       { t: 2, dir: "inbound", text: "Listo, ya yapeé. Número de operación 21691317" },
     ])).toBe(true);
+  });
+
+  it("detects a voucher image whose CAPTION states payment (caption folded into text upstream)", () => {
+    expect(detectYapePayment([
+      { t: 1, dir: "outbound", text: "Envíame el voucher del adelanto al Yape" },
+      { t: 2, dir: "inbound", text: "Ya pagué, aquí está mi comprobante", image: true },
+    ])).toBe(true);
+  });
+
+  it("does NOT fire on a BARE voucher image with no words — precision over recall", () => {
+    // The reported false positive: after a Yape request the customer sends a
+    // screenshot with no text. We can't tell a real receipt from a conversation
+    // screenshot without reading the image, so a bare image must NOT auto-fire.
+    expect(detectYapePayment([
+      { t: 1, dir: "outbound", text: "Para separarlo, realiza el adelanto al Yape y envíame el voucher ✅" },
+      { t: 2, dir: "inbound", text: "", image: true },
+    ])).toBe(false);
   });
 
   it("does NOT fire when the advance was requested but no proof was sent", () => {
@@ -126,10 +130,10 @@ describe("detectYapePayment (Yape/Shalom advance from chat)", () => {
     ])).toBe(false);
   });
 
-  it("does NOT treat a non-payment image (product photo) as an advance", () => {
+  it("does NOT treat a non-payment image (conversation/product screenshot) as an advance", () => {
     expect(detectYapePayment([
       { t: 1, dir: "outbound", text: "¿Te gustaría avanzar con tu pedido?" },
-      { t: 2, dir: "inbound", text: "", image: true }, // customer sends a random photo, no Yape context
+      { t: 2, dir: "inbound", text: "", image: true }, // random screenshot, no Yape words
     ])).toBe(false);
   });
 });
@@ -202,15 +206,15 @@ describe("fetchConversationSignals (real Kapso message shape)", () => {
     expect(new URL(caps[0]!.url).searchParams.get("conversation_id")).toBe("conv-123");
   });
 
-  it("flags yape from an inbound image voucher after the bot's Yape request", async () => {
-    // Real Kapso shapes: an inbound image (type:"image", no text body, media
-    // under kapso) following the bot's adelanto request.
+  it("flags yape from an inbound image voucher whose CAPTION states payment", async () => {
+    // Real Kapso shapes: an inbound image with a payment caption. The caption is
+    // folded into the scanned text, so the Yape detector trips on it.
     const messages = [
       {
         id: "img",
         timestamp: "1782260858",
         type: "image",
-        image: { id: "1", mime_type: "image/jpeg" },
+        image: { id: "1", mime_type: "image/jpeg", caption: "Ya yapeé, aquí mi comprobante" },
         kapso: { direction: "inbound", has_media: true },
       },
       {
@@ -225,6 +229,32 @@ describe("fetchConversationSignals (real Kapso message shape)", () => {
     const sig = await fetchConversationSignals(opts(f), "c");
     expect(sig).not.toBeNull();
     expect(sig!.yape).toBe(true);
+  });
+
+  it("does NOT flag yape from a BARE inbound image (no caption) after a Yape request", async () => {
+    // The reported false positive: a customer sends a conversation/product
+    // screenshot (no words) after the bot asked for the voucher. Without reading
+    // the image we can't call it a receipt, so it must NOT fire the alert.
+    const messages = [
+      {
+        id: "img",
+        timestamp: "1782260858",
+        type: "image",
+        image: { id: "1", mime_type: "image/jpeg" },
+        kapso: { direction: "inbound", has_media: true },
+      },
+      {
+        id: "req",
+        timestamp: "1782255723",
+        type: "text",
+        text: { body: "Realiza el adelanto de S/30 al Yape y envíame el voucher ✅" },
+        kapso: { direction: "outbound" },
+      },
+    ];
+    const f = mockFetch(() => ({ data: messages }), []);
+    const sig = await fetchConversationSignals(opts(f), "c");
+    expect(sig).not.toBeNull();
+    expect(sig!.yape).toBe(false);
   });
 
   it("returns null when no messages are readable", async () => {
