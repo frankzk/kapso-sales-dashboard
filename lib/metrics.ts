@@ -1096,8 +1096,10 @@ export interface AttributedOrder {
   net: number;
   source: AttributionSource;
   channel: ClosingChannel;
-  phone: string | null;
   coupons: string[];
+  // NB: no customer phone here on purpose — this array is serialized to the
+  // client for the drill-down, which shows only order code/date/net/channel/
+  // coupon. Keeping PII (phone) out of the browser payload.
 }
 
 export interface SourceRow {
@@ -1214,7 +1216,7 @@ export function salesAttribution(orders: OrderRow[], inputs: AttributionInputs):
     row.byChannel[channel].revenue += net;
     bySource.set(source, row);
 
-    attributed.push({ name: o.name, createdAt: o.created_at, net, source, channel, phone, coupons });
+    attributed.push({ name: o.name, createdAt: o.created_at, net, source, channel, coupons });
   }
 
   totalRevenue = round2(totalRevenue);

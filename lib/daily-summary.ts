@@ -43,41 +43,52 @@ async function attributionInputsAdmin(
 
   const norm = (s: string | null | undefined): AttributionSource =>
     s === "meta_ad" || s === "cod_cart" || s === "abandoned_browse" ? s : "organic";
+  // Chunk every .in(...) by 300 (parity with access.getAttributionInputs) so a
+  // high-volume store's day doesn't blow the PostgREST/proxy URL length limit.
+  const chunk = <T,>(arr: T[], size: number): T[][] => {
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  };
+
   const leadIdToPhone = new Map<string, string>();
-  let leadsRes = await admin.from("leads").select("id,phone,source").eq("store_id", storeId).in("phone", phones);
-  if (leadsRes.error) {
-    leadsRes = (await admin.from("leads").select("id,phone").eq("store_id", storeId).in("phone", phones)) as typeof leadsRes;
-  }
-  for (const r of (leadsRes.data as { id: string; phone: string; source?: string | null }[]) ?? []) {
-    leadIdToPhone.set(r.id, r.phone);
-    sourceByPhone.set(r.phone, norm(r.source));
+  for (const part of chunk(phones, 300)) {
+    let leadsRes = await admin.from("leads").select("id,phone,source").eq("store_id", storeId).in("phone", part);
+    if (leadsRes.error) {
+      leadsRes = (await admin.from("leads").select("id,phone").eq("store_id", storeId).in("phone", part)) as typeof leadsRes;
+    }
+    for (const r of (leadsRes.data as { id: string; phone: string; source?: string | null }[]) ?? []) {
+      leadIdToPhone.set(r.id, r.phone);
+      sourceByPhone.set(r.phone, norm(r.source));
+    }
   }
   const leadIds = [...leadIdToPhone.keys()];
-  if (leadIds.length) {
+  for (const part of chunk(leadIds, 300)) {
     const { data } = await admin
       .from("lead_calls")
       .select("lead_id,occurred_at")
       .eq("store_id", storeId)
-      .in("lead_id", leadIds)
+      .in("lead_id", part)
       .not("vendedora", "is", null);
     for (const r of (data as { lead_id: string; occurred_at: string | null }[]) ?? []) {
       const phone = leadIdToPhone.get(r.lead_id);
       if (phone && r.occurred_at) (advisorTouchesByPhone.get(phone) ?? advisorTouchesByPhone.set(phone, []).get(phone)!).push(r.occurred_at);
     }
-    for (const arr of advisorTouchesByPhone.values()) arr.sort();
   }
-  const { data: wb, error: wbErr } = await admin
-    .from("winback_sends")
-    .select("phone,sent_at")
-    .eq("store_id", storeId)
-    .in("phone", phones)
-    .eq("ok", true);
-  if (!wbErr) {
+  for (const arr of advisorTouchesByPhone.values()) arr.sort();
+  for (const part of chunk(phones, 300)) {
+    const { data: wb, error: wbErr } = await admin
+      .from("winback_sends")
+      .select("phone,sent_at")
+      .eq("store_id", storeId)
+      .in("phone", part)
+      .eq("ok", true);
+    if (wbErr) break; // table absent pre-0030 → leave winback map empty
     for (const r of (wb as { phone: string; sent_at: string | null }[]) ?? []) {
       if (r.sent_at) (winbackByPhone.get(r.phone) ?? winbackByPhone.set(r.phone, []).get(r.phone)!).push(r.sent_at);
     }
-    for (const arr of winbackByPhone.values()) arr.sort();
   }
+  for (const arr of winbackByPhone.values()) arr.sort();
   return { sourceByPhone, advisorTouchesByPhone, winbackByPhone };
 }
 
