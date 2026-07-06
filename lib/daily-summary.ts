@@ -4,7 +4,8 @@
 // reuses the pure productivity aggregation. The formatter renders Telegram HTML.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { formatCurrency, tzParts } from "@/lib/metrics";
+import { formatCurrency, salesAttribution, tzParts, type AttributionInputs, type AttributionSource } from "@/lib/metrics";
+import type { OrderRow } from "@/lib/types";
 import {
   computeAdvisorStats,
   resolveEmails,
@@ -12,10 +13,72 @@ import {
   type AdvisorStat,
 } from "@/lib/productivity";
 
+export interface DailySourceRow {
+  key: AttributionSource;
+  label: string;
+  orders: number;
+  revenue: number;
+}
+
 export interface StoreDailySummary {
   totalOrders: number;
   totalRevenue: number; // net (total_amount − refunds) of active orders in the window
   advisors: AdvisorStat[]; // sorted by ingresos desc (computeAdvisorStats order)
+  bySource: DailySourceRow[]; // net revenue by acquisition source (order-centric)
+}
+
+/** Build the per-phone attribution signals for a window with the ADMIN client
+ *  (the cron has no user session). Mirrors access.getAttributionInputs; resilient
+ *  to a missing `source` column / `winback_sends` table. */
+async function attributionInputsAdmin(
+  admin: SupabaseClient,
+  storeId: string,
+  orders: OrderRow[],
+): Promise<AttributionInputs> {
+  const sourceByPhone = new Map<string, AttributionSource>();
+  const advisorTouchesByPhone = new Map<string, string[]>();
+  const winbackByPhone = new Map<string, string[]>();
+  const phones = [...new Set(orders.map((o) => o.customer_phone).filter((p): p is string => !!p))];
+  if (!phones.length) return { sourceByPhone, advisorTouchesByPhone, winbackByPhone };
+
+  const norm = (s: string | null | undefined): AttributionSource =>
+    s === "meta_ad" || s === "cod_cart" || s === "abandoned_browse" ? s : "organic";
+  const leadIdToPhone = new Map<string, string>();
+  let leadsRes = await admin.from("leads").select("id,phone,source").eq("store_id", storeId).in("phone", phones);
+  if (leadsRes.error) {
+    leadsRes = (await admin.from("leads").select("id,phone").eq("store_id", storeId).in("phone", phones)) as typeof leadsRes;
+  }
+  for (const r of (leadsRes.data as { id: string; phone: string; source?: string | null }[]) ?? []) {
+    leadIdToPhone.set(r.id, r.phone);
+    sourceByPhone.set(r.phone, norm(r.source));
+  }
+  const leadIds = [...leadIdToPhone.keys()];
+  if (leadIds.length) {
+    const { data } = await admin
+      .from("lead_calls")
+      .select("lead_id,occurred_at")
+      .eq("store_id", storeId)
+      .in("lead_id", leadIds)
+      .not("vendedora", "is", null);
+    for (const r of (data as { lead_id: string; occurred_at: string | null }[]) ?? []) {
+      const phone = leadIdToPhone.get(r.lead_id);
+      if (phone && r.occurred_at) (advisorTouchesByPhone.get(phone) ?? advisorTouchesByPhone.set(phone, []).get(phone)!).push(r.occurred_at);
+    }
+    for (const arr of advisorTouchesByPhone.values()) arr.sort();
+  }
+  const { data: wb, error: wbErr } = await admin
+    .from("winback_sends")
+    .select("phone,sent_at")
+    .eq("store_id", storeId)
+    .in("phone", phones)
+    .eq("ok", true);
+  if (!wbErr) {
+    for (const r of (wb as { phone: string; sent_at: string | null }[]) ?? []) {
+      if (r.sent_at) (winbackByPhone.get(r.phone) ?? winbackByPhone.set(r.phone, []).get(r.phone)!).push(r.sent_at);
+    }
+    for (const arr of winbackByPhone.values()) arr.sort();
+  }
+  return { sourceByPhone, advisorTouchesByPhone, winbackByPhone };
 }
 
 /** Yesterday's Lima-day UTC bounds (UTC-5, no DST): a Lima day [D 00:00, D+1
@@ -54,21 +117,65 @@ export async function buildStoreDailySummary(
   endIso: string,
   tz = "America/Lima",
 ): Promise<StoreDailySummary> {
-  // 1) Totals from active orders created in the window.
-  const { data: ordersRaw } = await admin
+  // 1) Active orders in the window (extended fields for source attribution).
+  //    `discount_codes` is 0030 — select resilient so the cron survives pre-migration.
+  const OCOLS = "name, total_amount, total_refunded, cancelled_at, created_at, customer_phone, tags";
+  let ordersRes = await admin
     .from("orders")
-    .select("total_amount, total_refunded, cancelled_at, created_at")
+    .select(`${OCOLS}, discount_codes`)
     .eq("store_id", storeId)
     .gte("created_at", startIso)
     .lt("created_at", endIso);
+  if (ordersRes.error) {
+    ordersRes = (await admin
+      .from("orders")
+      .select(OCOLS)
+      .eq("store_id", storeId)
+      .gte("created_at", startIso)
+      .lt("created_at", endIso)) as typeof ordersRes;
+  }
+  const orderRows = ((ordersRes.data as any[]) ?? []).map(
+    (o) =>
+      ({
+        store_id: storeId,
+        shopify_order_id: "",
+        name: o.name ?? null,
+        created_at: o.created_at ?? null,
+        processed_at: null,
+        updated_at: null,
+        total_amount: o.total_amount ?? null,
+        currency: null,
+        financial_status: null,
+        cancelled_at: o.cancelled_at ?? null,
+        total_refunded: o.total_refunded ?? 0,
+        customer_phone: o.customer_phone ?? null,
+        tags: o.tags ?? [],
+        discount_codes: o.discount_codes ?? [],
+        promo_applied: false,
+        stock_por_validar: false,
+        shipping_mode: null,
+        kapso_conversation_id: null,
+        line_items: [],
+      }) as OrderRow,
+  );
   let totalOrders = 0;
   let totalRevenue = 0;
-  for (const o of (ordersRaw as any[]) ?? []) {
+  for (const o of orderRows) {
     if (o.cancelled_at) continue;
     totalOrders += 1;
     totalRevenue += (o.total_amount ?? 0) - (o.total_refunded ?? 0);
   }
   totalRevenue = Math.round(totalRevenue * 100) / 100;
+
+  // Source attribution (order-centric, same engine as the dashboard).
+  const attrInputs = await attributionInputsAdmin(admin, storeId, orderRows);
+  const attribution = salesAttribution(orderRows, attrInputs);
+  const bySource: DailySourceRow[] = attribution.sources.map((s) => ({
+    key: s.key,
+    label: s.label,
+    orders: s.orders,
+    revenue: s.revenue,
+  }));
 
   // 2) Per-advisor: human touches (vendedora) in the window → last-touch wins.
   const { data: callsRaw } = await admin
@@ -100,7 +207,7 @@ export async function buildStoreDailySummary(
     advisors = computeAdvisorStats({ calls, leadOutcome, emailById }, tz);
   }
 
-  return { totalOrders, totalRevenue, advisors };
+  return { totalOrders, totalRevenue, advisors, bySource };
 }
 
 /** Render a store's daily summary as a Telegram HTML message. `dateLabel` is the
@@ -119,6 +226,13 @@ export function formatDailySummary(
     `💰 <b>${s.totalOrders}</b> pedidos · <b>${money(s.totalRevenue)}</b>`,
     "",
   ];
+  if (s.bySource?.length) {
+    lines.push("📌 <b>Por fuente</b>");
+    for (const src of s.bySource) {
+      lines.push(`• ${esc(src.label)} — ${src.orders} ${src.orders === 1 ? "pedido" : "pedidos"} · ${money(src.revenue)}`);
+    }
+    lines.push("");
+  }
   if (s.advisors.length) {
     lines.push("👥 <b>Por asesor</b>");
     s.advisors.forEach((a, i) => {

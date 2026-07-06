@@ -2,7 +2,9 @@
 // through the cookie-bound server client, so a user only ever sees rows for
 // stores they may access.
 
-import { createServerSupabase } from "@/lib/db";
+import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { decryptOrNull } from "@/lib/crypto";
+import { fetchMetaSpend, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
 import type {
   ConversationRow,
   DailyRollupRow,
@@ -11,6 +13,7 @@ import type {
   StoreSummary,
 } from "@/lib/types";
 import type { AdMeta } from "@/lib/meta-ads";
+import type { AttributionInputs, AttributionSource } from "@/lib/metrics";
 import type { WaNumber } from "@/lib/wa-numbers";
 
 export interface DateRange {
@@ -224,6 +227,120 @@ export async function getLeadsForDashboard(
     if (data.length < PAGE_SIZE) break;
   }
   return out;
+}
+
+/** Normalize a lead's `source` column into an attribution bucket. Campaign/cart/
+ *  browse pass through; everything else (incl. null) is organic WhatsApp. Winback
+ *  is never a lead source — it's derived from coupon + template send. */
+function normAttributionSource(s: string | null | undefined): AttributionSource {
+  return s === "meta_ad" || s === "cod_cart" || s === "abandoned_browse" ? s : "organic";
+}
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/**
+ * Per-phone signals for order-source attribution (lib/metrics `salesAttribution`),
+ * keyed off the ORDERS in the period — NOT range-bound, because an order may
+ * reference a lead created, an advisor touch logged, or a winback message sent
+ * before the period. RLS-scoped. Resilient: a missing `source` column (pre-0008)
+ * or `winback_sends` table (pre-0030) simply yields fewer signals, never throws.
+ */
+export async function getAttributionInputs(
+  storeIds: string[],
+  orders: OrderRow[],
+): Promise<AttributionInputs> {
+  const sourceByPhone = new Map<string, AttributionSource>();
+  const advisorTouchesByPhone = new Map<string, string[]>();
+  const winbackByPhone = new Map<string, string[]>();
+  const phones = [...new Set(orders.map((o) => o.customer_phone).filter((p): p is string => !!p))];
+  if (!storeIds.length || !phones.length) {
+    return { sourceByPhone, advisorTouchesByPhone, winbackByPhone };
+  }
+  const sb = await createServerSupabase();
+
+  // 1) Leads for these phones → source bucket + id→phone (for the touch join).
+  const leadIdToPhone = new Map<string, string>();
+  for (const part of chunk(phones, 300)) {
+    let res = await sb.from("leads").select("id,phone,source").in("store_id", storeIds).in("phone", part);
+    if (res.error) {
+      res = (await sb.from("leads").select("id,phone").in("store_id", storeIds).in("phone", part)) as typeof res;
+    }
+    for (const r of (res.data as { id: string; phone: string; source?: string | null }[]) ?? []) {
+      leadIdToPhone.set(r.id, r.phone);
+      sourceByPhone.set(r.phone, normAttributionSource(r.source));
+    }
+  }
+
+  // 2) Advisor touches (lead_calls with a vendedora) on those leads → by phone.
+  const leadIds = [...leadIdToPhone.keys()];
+  for (const part of chunk(leadIds, 300)) {
+    const { data } = await sb
+      .from("lead_calls")
+      .select("lead_id,occurred_at")
+      .in("store_id", storeIds)
+      .in("lead_id", part)
+      .not("vendedora", "is", null);
+    for (const r of (data as { lead_id: string; occurred_at: string | null }[]) ?? []) {
+      const phone = leadIdToPhone.get(r.lead_id);
+      if (!phone || !r.occurred_at) continue;
+      (advisorTouchesByPhone.get(phone) ?? advisorTouchesByPhone.set(phone, []).get(phone)!).push(r.occurred_at);
+    }
+  }
+  for (const arr of advisorTouchesByPhone.values()) arr.sort();
+
+  // 3) Winback sends (successful) for these phones → by phone. Table may be absent
+  //    before migration 0030; a query error just leaves this map empty.
+  for (const part of chunk(phones, 300)) {
+    const { data, error } = await sb
+      .from("winback_sends")
+      .select("phone,sent_at")
+      .in("store_id", storeIds)
+      .in("phone", part)
+      .eq("ok", true);
+    if (error) break;
+    for (const r of (data as { phone: string; sent_at: string | null }[]) ?? []) {
+      if (!r.sent_at) continue;
+      (winbackByPhone.get(r.phone) ?? winbackByPhone.set(r.phone, []).get(r.phone)!).push(r.sent_at);
+    }
+  }
+  for (const arr of winbackByPhone.values()) arr.sort();
+
+  return { sourceByPhone, advisorTouchesByPhone, winbackByPhone };
+}
+
+/**
+ * Total Meta ad spend for a store over the range (the cost side of ROAS on the
+ * "Meta Ads" attribution row). Loads the store's decrypted token + ad accounts
+ * and calls the Graph API best-effort. Returns null when the store hasn't
+ * connected Meta or the API can't be reached — the UI then shows "—". Uses the
+ * admin client to decrypt the token (the caller has already verified the user
+ * may access this store), and never throws.
+ */
+export async function getMetaSpend(storeId: string, range: DateRange): Promise<number | null> {
+  try {
+    const admin = createAdminSupabase();
+    const { data } = await admin
+      .from("stores")
+      .select("meta_access_token_enc, meta_ad_accounts, meta_ad_account_id, meta_ad_account_name")
+      .eq("id", storeId)
+      .maybeSingle();
+    if (!data) return null;
+    const token = decryptOrNull((data as { meta_access_token_enc: string | null }).meta_access_token_enc);
+    if (!token) return null;
+    const accounts = normalizeMetaAdAccounts(
+      (data as { meta_ad_accounts: unknown }).meta_ad_accounts,
+      (data as { meta_ad_account_id?: string | null }).meta_ad_account_id,
+      (data as { meta_ad_account_name?: string | null }).meta_ad_account_name,
+    );
+    if (!accounts.length) return null;
+    return await fetchMetaSpend(token, accounts.map((a) => a.id), range);
+  } catch {
+    return null;
+  }
 }
 
 /**

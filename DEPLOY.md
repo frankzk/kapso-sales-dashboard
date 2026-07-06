@@ -213,6 +213,28 @@ created; if the customer replies, the normal Kapso inbound flow takes over.
 - **owner / admin**: see every store in the org.
 - **viewer**: only the stores you explicitly grant (checkboxes per store).
 
+## 5d. Ventas por fuente y cierre (atribución auditable)
+
+The store dashboard's **"Ventas por fuente y cierre"** module attributes every
+active order to exactly ONE acquisition source and ONE closing channel, so the
+buckets always reconcile to the headline net revenue (Σ fuentes = Σ canales =
+total). It's the audit tool — click a source to see its orders (código, fecha,
+neto, canal, cupón) and sanity-check the assignment.
+
+- **Source** precedence: winback (used a coupon AND got the recuperación-60d
+  template ≤30 días antes) ▸ the customer's lead source (Meta Ads / carrito /
+  búsqueda / orgánico) ▸ "Sin atribuir" (order whose phone has no lead — pure web
+  checkout / histórico, surfaced on purpose).
+- **Closing channel**: Asesora (closed via the dashboard: `venta_manual` /
+  `carrito_recuperado`) ▸ Bot asistido (an advisor logged activity on the lead
+  ≤7 días antes del pedido) ▸ Bot.
+- **ROAS** on the Meta row = attributed revenue / Meta ad spend for the range
+  (live from the Marketing API; shows "—" if Meta isn't connected).
+- Needs **migration 0030** (`discount_codes` on orders + `winback_sends`). Before
+  it runs, the module still renders — winback just can't be detected and coupons
+  are ignored; both fill in once orders re-sync after the migration.
+- The same source breakdown is appended to the daily **Telegram** summary.
+
 ## 7. Post-deploy verification
 
 - **Health**: `curl https://<domain>/api/health` → `{ "ok": true, … }` (public,

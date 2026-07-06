@@ -46,9 +46,13 @@ describe("formatDailySummary", () => {
       { userId: "u1", email: "alessandra@kapso.pe", llamadas: 10, leadsTrabajados: 25, cerrados: 21, cerradosDetalle: [], ingresos: 3180, conversion: 0.84, horas: 6, dias: 1 },
       { userId: "u2", email: "rocio@kapso.pe", llamadas: 4, leadsTrabajados: 9, cerrados: 1, cerradosDetalle: [], ingresos: 800, conversion: 0.11, horas: 3, dias: 1 },
     ],
+    bySource: [
+      { key: "meta_ad", label: "Meta Ads (campañas)", orders: 18, revenue: 2600 },
+      { key: "organic", label: "Orgánico (WhatsApp)", orders: 12, revenue: 1830 },
+    ],
   };
 
-  it("renders store, totals and per-advisor lines", () => {
+  it("renders store, totals, per-source and per-advisor lines", () => {
     const msg = formatDailySummary("Aurela", "jue 26 jun", summary, "PEN");
     expect(msg).toContain("Aurela");
     expect(msg).toContain("jue 26 jun");
@@ -57,6 +61,9 @@ describe("formatDailySummary", () => {
     expect(msg).toContain("21 ventas");
     expect(msg).toContain("1 venta"); // singular for rocío
     expect(msg).toMatch(/Por asesor/);
+    expect(msg).toMatch(/Por fuente/);
+    expect(msg).toContain("Meta Ads (campañas)"); // source breakdown line
+    expect(msg).toContain("18 pedidos");
   });
 
   it("appends the bot residual so the breakdown reconciles to the total", () => {
@@ -69,7 +76,7 @@ describe("formatDailySummary", () => {
 
   it("renders the bot residual as the only seller when no advisor closed", () => {
     // All orders closed by the bot (no human touches in the window).
-    const msg = formatDailySummary("Kenku", "jue 26 jun", { totalOrders: 3, totalRevenue: 300, advisors: [] }, "PEN");
+    const msg = formatDailySummary("Kenku", "jue 26 jun", { totalOrders: 3, totalRevenue: 300, advisors: [], bySource: [] }, "PEN");
     expect(msg).toContain("Sin ventas"); // no advisor breakdown
     expect(msg).toContain("Bot");
     expect(msg).toContain("3 ventas");
@@ -80,13 +87,14 @@ describe("formatDailySummary", () => {
       totalOrders: 22,
       totalRevenue: 3980,
       advisors: summary.advisors,
+      bySource: [],
     };
     const msg = formatDailySummary("Aurela", "jue 26 jun", exact, "PEN");
     expect(msg).not.toContain("Bot");
   });
 
   it("handles no advisor activity", () => {
-    const msg = formatDailySummary("Kenku", "jue 26 jun", { totalOrders: 0, totalRevenue: 0, advisors: [] }, "PEN");
+    const msg = formatDailySummary("Kenku", "jue 26 jun", { totalOrders: 0, totalRevenue: 0, advisors: [], bySource: [] }, "PEN");
     expect(msg).toContain("Sin ventas");
   });
 });

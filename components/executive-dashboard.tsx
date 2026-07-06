@@ -25,9 +25,9 @@ import {
   lossReasons,
   lostRevenueByReason,
   rollupSeries,
-  sourceBreakdown,
   topProducts,
   type CartRecoveryStats,
+  type SalesAttribution,
 } from "@/lib/metrics";
 import type { AdMeta } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
@@ -41,6 +41,7 @@ import { HorizontalFunnel } from "@/components/funnel-horizontal";
 import { LossReasonBars, LostRevenueCards } from "@/components/loss-reasons";
 import { FunnelHealth } from "@/components/funnel-health";
 import { BotVsAdvisor } from "@/components/bot-vs-advisor";
+import { SalesAttributionModule } from "@/components/sales-attribution";
 import {
   IconCart,
   IconClock,
@@ -150,6 +151,8 @@ export function ExecutiveDashboard({
   leads,
   adNames,
   waNumbers,
+  attribution,
+  metaSpend,
 }: {
   stores: StoreSummary[];
   scope: "all" | string;
@@ -165,6 +168,8 @@ export function ExecutiveDashboard({
   leads?: LeadRow[];
   adNames?: Record<string, AdMeta>;
   waNumbers?: Record<string, WaNumber>;
+  attribution?: SalesAttribution;
+  metaSpend?: number | null;
 }) {
   const names: Record<string, string> = Object.fromEntries(stores.map((s) => [s.id, s.name]));
   const totals = aggregateRollups(rollups);
@@ -205,7 +210,6 @@ export function ExecutiveDashboard({
   const loss = lossReasons(leadList);
   const lostRev = lostRevenueByReason(loss, totals.aov);
   const channels = botVsAdvisor(orders);
-  const sourceStats = sourceBreakdown(leadList, orders);
   const cartStats = cartRecovery(leadList, orders);
   const campaignStats = campaignBreakdown(leadList, orders, adNames ?? {});
   const campaignTrend = campaignDailyTrend(leadList, adNames ?? {}, timezone);
@@ -318,50 +322,22 @@ export function ExecutiveDashboard({
         </Module>
       </div>
 
-      {/* Row 2b — Conversión por fuente (campañas Meta vs orgánico). Hidden until
-          at least one lead carries an attributed source. */}
-      {sourceStats.length > 0 && (
+      {/* Row 2b — Ventas por fuente y cierre (order-centric, reconciles to headline
+          revenue). Every active order → one source + one closing channel, with a
+          per-source drill-down for auditing the assignment. */}
+      {attribution && attribution.total.orders > 0 && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
           <Module
-            title="Conversión por fuente"
-            subtitle="Meta (CTWA) vs carritos abandonados vs búsquedas abandonadas vs orgánico — atribución separada por canal"
+            title="Ventas por fuente y cierre"
+            subtitle="Cada pedido asignado a una fuente (de dónde vino el cliente) y un canal de cierre (bot / bot asistido / asesora) — suma exacta de las ventas del período · clic en una fuente para auditar sus pedidos"
             info
             className="lg:col-span-12"
           >
-            <SimpleTable
-              rows={sourceStats}
-              columns={[
-                {
-                  key: "label",
-                  header: "Fuente",
-                  render: (r) => (
-                    <span className="font-medium text-slate-800">
-                      {r.key === "meta_ad" ? "📣 " : ""}
-                      {r.label}
-                    </span>
-                  ),
-                },
-                { key: "leads", header: "Leads", align: "right", render: (r) => r.leads },
-                { key: "pedidos", header: "Pedidos", align: "right", render: (r) => r.pedidos },
-                {
-                  key: "conversion",
-                  header: "Conversión",
-                  align: "right",
-                  render: (r) => (
-                    <span className="font-semibold text-slate-900">{formatPct(r.conversion)}</span>
-                  ),
-                },
-                {
-                  key: "ingresos",
-                  header: "Ingresos",
-                  align: "right",
-                  render: (r) => (
-                    <span className="font-semibold text-emerald-700">
-                      {formatCurrency(r.ingresos, currency)}
-                    </span>
-                  ),
-                },
-              ]}
+            <SalesAttributionModule
+              attribution={attribution}
+              metaSpend={metaSpend ?? null}
+              currency={currency}
+              timezone={timezone}
             />
           </Module>
         </div>
