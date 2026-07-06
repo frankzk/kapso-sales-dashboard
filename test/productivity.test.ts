@@ -75,6 +75,35 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
     expect(u2.email).toBe("gaby@aurela.pe");
   });
 
+  it("collects the won orders' code+date per advisor (cerradosDetalle, oldest first)", () => {
+    const calls: AdvisorCall[] = [
+      { vendedora: "u1", lead_id: "L1", kind: "call", occurred_at: "2026-07-05T10:00:00Z" },
+      { vendedora: "u1", lead_id: "L2", kind: "call", occurred_at: "2026-07-05T11:00:00Z" },
+      { vendedora: "u1", lead_id: "L3", kind: "call", occurred_at: "2026-07-05T12:00:00Z" },
+      { vendedora: "u2", lead_id: "L4", kind: "call", occurred_at: "2026-07-05T13:00:00Z" },
+    ];
+    const leadOutcome = new Map([
+      // L1's order is NEWER than L2's → the detail must come out chronological (L2's first).
+      ["L1", { won: true, net: 189, orderName: "#AUR1091", orderAt: "2026-07-05T14:00:00Z" }],
+      ["L2", { won: true, net: 99, orderName: "#AUR1088", orderAt: "2026-07-05T09:00:00Z" }],
+      // Won but the order isn't ingested/linked yet → placeholder entry, sorted last.
+      ["L3", { won: true, net: 0 }],
+      ["L4", { won: false, net: 0 }],
+    ]);
+    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const u1 = rows.find((r) => r.userId === "u1")!;
+    const u2 = rows.find((r) => r.userId === "u2")!;
+
+    expect(u1.cerrados).toBe(3);
+    expect(u1.cerradosDetalle).toEqual([
+      { name: "#AUR1088", at: "2026-07-05T09:00:00Z" },
+      { name: "#AUR1091", at: "2026-07-05T14:00:00Z" },
+      { name: null, at: null },
+    ]);
+    expect(u2.cerrados).toBe(0);
+    expect(u2.cerradosDetalle).toEqual([]); // no wins → empty detail
+  });
+
   it("infers active hours by local day, splitting blocks on idle gaps >45min", () => {
     const calls: AdvisorCall[] = [
       // Day 1 (Lima 2026-06-20): one block 09:00→10:00 = 1h
@@ -105,6 +134,7 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
       llamadas: 0,
       leadsTrabajados: 0,
       cerrados: 0,
+      cerradosDetalle: [],
       ingresos: 0,
       conversion: 0,
       horas: 0,

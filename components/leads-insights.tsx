@@ -16,6 +16,7 @@ import {
   YAxis,
 } from "recharts";
 import { CHART } from "@/components/palette";
+import { cn } from "@/components/ui";
 import type { LeadsInsights } from "@/lib/leads-insights";
 
 const TOOLTIP_STYLE = { borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12 } as const;
@@ -79,8 +80,11 @@ function avatarInitial(name: string): string {
   return (name.trim()[0] ?? "?").toUpperCase();
 }
 
-/** Today's per-advisor productivity: contactos (llamadas) + pedidos (cierres). */
+/** Today's per-advisor productivity: contactos (llamadas) + pedidos (cierres).
+ *  El ⓘ junto a "pedidos" lista QUÉ pedidos generó (código #… + fecha): se abre
+ *  con hover en desktop y con tap/click se fija (otro tap o clic afuera cierra). */
 function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
+  const [pinned, setPinned] = useState<string | null>(null); // asesora con el detalle fijado
   if (!rows.length) {
     return <p className="text-xs text-slate-400">Sin actividad de asesoras registrada hoy todavía.</p>;
   }
@@ -101,6 +105,32 @@ function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
               <p className="text-[11px] text-slate-500">
                 <span className="font-semibold text-slate-700">{r.contactos}</span> contactos ·{" "}
                 <span className="font-semibold text-emerald-700">{r.pedidos}</span> pedidos
+                {r.pedidosDetalle.length > 0 && (
+                  <span className="group relative inline-block">
+                    <button
+                      type="button"
+                      aria-label={`Ver los pedidos de ${r.name}`}
+                      onClick={() => setPinned((v) => (v === r.name ? null : r.name))}
+                      onBlur={() => setPinned((v) => (v === r.name ? null : v))}
+                      className="ml-1 inline-flex h-3.5 w-3.5 -translate-y-px items-center justify-center rounded-full border border-slate-300 text-[9px] font-semibold text-slate-400 hover:border-slate-400 hover:text-slate-600"
+                    >
+                      i
+                    </button>
+                    <span
+                      className={cn(
+                        "absolute left-0 top-full z-20 mt-1 max-h-44 w-max min-w-[9rem] overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 text-left shadow-lg",
+                        pinned === r.name ? "block" : "hidden group-hover:block",
+                      )}
+                    >
+                      {r.pedidosDetalle.map((o, i) => (
+                        <span key={i} className="flex items-baseline justify-between gap-3 py-px">
+                          <span className="text-[11px] font-medium text-slate-800">{o.code ?? "Sin código aún"}</span>
+                          {o.fecha && <span className="text-[10px] text-slate-400">{o.fecha}</span>}
+                        </span>
+                      ))}
+                    </span>
+                  </span>
+                )}
               </p>
             </div>
           </div>

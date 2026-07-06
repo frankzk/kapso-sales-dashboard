@@ -36,12 +36,19 @@ export function localRangeBoundsIso(from: string, to: string, tz: string): { sta
   return { startIso: new Date(startMs).toISOString(), endIso: new Date(endMs).toISOString() };
 }
 
+/** One attributed win, for drill-down UIs (tooltip "qué pedidos generó"). */
+export interface WonOrderRef {
+  name: string | null; // order code, e.g. "#AUR1091" (null = order not ingested/linked yet)
+  at: string | null; // order created_at ISO
+}
+
 export interface AdvisorStat {
   userId: string;
   email: string;
   llamadas: number; // calls of kind="call"
   leadsTrabajados: number; // distinct leads touched
   cerrados: number; // touched leads now won, attributed by last touch
+  cerradosDetalle: WonOrderRef[]; // the orders behind `cerrados`, oldest first
   ingresos: number; // net revenue (total - refunded) of those orders
   conversion: number; // cerrados / leadsTrabajados, 0..1
   horas: number; // active hours inferred from action timestamps (idle-gap-split)
@@ -77,8 +84,9 @@ export interface AdvisorCall {
 
 export interface ProductivityInput {
   calls: AdvisorCall[];
-  /** Outcome of every touched lead: won? + net order revenue. */
-  leadOutcome: Map<string, { won: boolean; net: number }>;
+  /** Outcome of every touched lead: won? + net order revenue (+ the linked
+   *  order's code/date, when known, for the per-advisor detail). */
+  leadOutcome: Map<string, { won: boolean; net: number; orderName?: string | null; orderAt?: string | null }>;
   emailById: Map<string, string>;
 }
 
@@ -144,27 +152,31 @@ export function computeAdvisorStats(
     hoursByAgent.set(agent, e);
   }
 
-  const won = new Map<string, { cerrados: number; ingresos: number }>();
+  const won = new Map<string, { cerrados: number; ingresos: number; detalle: WonOrderRef[] }>();
   for (const [leadId, lc] of lastCaller) {
     const o = leadOutcome.get(leadId);
     if (!o?.won) continue;
-    const w = won.get(lc.vendedora) ?? { cerrados: 0, ingresos: 0 };
+    const w = won.get(lc.vendedora) ?? { cerrados: 0, ingresos: 0, detalle: [] };
     w.cerrados += 1;
     w.ingresos += o.net;
+    w.detalle.push({ name: o.orderName ?? null, at: o.orderAt ?? null });
     won.set(lc.vendedora, w);
   }
 
   const rows: AdvisorStat[] = [];
   for (const [userId, a] of agg) {
-    const w = won.get(userId) ?? { cerrados: 0, ingresos: 0 };
+    const w = won.get(userId) ?? { cerrados: 0, ingresos: 0, detalle: [] };
     const h = hoursByAgent.get(userId);
     const leadsTrabajados = a.leads.size;
+    // Oldest first; wins without an ingested order (no date yet) go last.
+    w.detalle.sort((x, y) => ((x.at ?? "9999") < (y.at ?? "9999") ? -1 : 1));
     rows.push({
       userId,
       email: emailById.get(userId) ?? userId,
       llamadas: a.llamadas,
       leadsTrabajados,
       cerrados: w.cerrados,
+      cerradosDetalle: w.detalle,
       ingresos: w.ingresos,
       conversion: leadsTrabajados ? w.cerrados / leadsTrabajados : 0,
       horas: Math.round((h?.horas ?? 0) * 10) / 10,
@@ -256,22 +268,40 @@ export async function getAdvisorProductivity(
     if (!scopedCalls.length) return [];
   }
 
-  // 3) Net revenue per linked order.
+  // 3) Net revenue + code/date per linked order (code/date feed cerradosDetalle).
   const orderIds = leadsTouched.filter((l) => l.has_order && l.order_id).map((l) => l.order_id as string);
-  const netByOrder = new Map<string, number>();
+  type OrderInfo = { net: number; name: string | null; created_at: string | null };
+  const infoByOrder = new Map<string, OrderInfo>();
   if (orderIds.length) {
     const { data: ordersRaw } = await sb
       .from("orders")
-      .select("id, total_amount, total_refunded")
+      .select("id, name, created_at, total_amount, total_refunded")
       .in("id", orderIds);
-    for (const o of (ordersRaw as { id: string; total_amount: number | null; total_refunded: number | null }[]) ?? []) {
-      netByOrder.set(o.id, (o.total_amount ?? 0) - (o.total_refunded ?? 0));
+    type OrderRaw = {
+      id: string;
+      name: string | null;
+      created_at: string | null;
+      total_amount: number | null;
+      total_refunded: number | null;
+    };
+    for (const o of (ordersRaw as OrderRaw[]) ?? []) {
+      infoByOrder.set(o.id, {
+        net: (o.total_amount ?? 0) - (o.total_refunded ?? 0),
+        name: o.name,
+        created_at: o.created_at,
+      });
     }
   }
 
-  const leadOutcome = new Map<string, { won: boolean; net: number }>();
+  const leadOutcome: ProductivityInput["leadOutcome"] = new Map();
   for (const l of leadsTouched) {
-    leadOutcome.set(l.id, { won: isWonLead(l.category), net: l.order_id ? (netByOrder.get(l.order_id) ?? 0) : 0 });
+    const info = l.order_id ? infoByOrder.get(l.order_id) : undefined;
+    leadOutcome.set(l.id, {
+      won: isWonLead(l.category),
+      net: info?.net ?? 0,
+      orderName: info?.name ?? null,
+      orderAt: info?.created_at ?? null,
+    });
   }
 
   const emailById = await resolveEmails([...new Set(scopedCalls.map((c) => c.vendedora))]);
