@@ -164,6 +164,25 @@ export async function loadLeadDetail(
 }
 
 /**
+ * Lightweight liveness poll for the open drawer: just the lead's order/status
+ * signal, so the client can detect when a pending lead flips to won (an order
+ * placed via Yape/bot links a few seconds later) and refresh itself — instead of
+ * showing a stale "pendiente" state and, e.g., letting an advisor mistakenly mark
+ * a real sale as lost. RLS-scoped, cheap (one indexed row), never throws.
+ */
+export async function pollLeadState(
+  leadId: string,
+): Promise<{ hasOrder: boolean; status: string | null; category: string | null } | { error: string }> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const sb = await createServerSupabase();
+  const { data } = await sb.from("leads").select("has_order, status, category").eq("id", leadId).maybeSingle();
+  const l = data as { has_order: boolean; status: string | null; category: string | null } | null;
+  if (!l) return { error: "No encontrado." };
+  return { hasOrder: !!l.has_order, status: l.status, category: l.category };
+}
+
+/**
  * Search leads in a store by name OR phone, across ALL stages (RLS-scoped, so a
  * user only ever matches rows in stores they may access). Powers the leads
  * search box. Two ILIKE passes (name + phone digits) merged + deduped, most
