@@ -18,6 +18,10 @@ export interface StoreSettingsInput {
   browse_template_enabled?: string | boolean;
   browse_template_name?: string;
   browse_template_language?: string;
+  // Winback (recuperación 60 días) WhatsApp template (plain, non-secret).
+  winback_template_enabled?: string | boolean;
+  winback_template_name?: string;
+  winback_template_language?: string;
   // Telegram daily summary: chat id is plain, token is a secret.
   telegram_chat_id?: string;
   // Secrets — only applied when non-empty.
@@ -63,6 +67,16 @@ export function buildStoreUpdate(
   if (tplName !== null) patch.browse_template_name = tplName;
   const tplLang = clean(typeof input.browse_template_language === "string" ? input.browse_template_language : undefined);
   if (tplLang !== null) patch.browse_template_language = tplLang;
+
+  // Winback template config (plain) — same conventions as the browse trio.
+  if (input.winback_template_enabled !== undefined) {
+    patch.winback_template_enabled =
+      input.winback_template_enabled === true || input.winback_template_enabled === "true";
+  }
+  const wbName = clean(typeof input.winback_template_name === "string" ? input.winback_template_name : undefined);
+  if (wbName !== null) patch.winback_template_name = wbName;
+  const wbLang = clean(typeof input.winback_template_language === "string" ? input.winback_template_language : undefined);
+  if (wbLang !== null) patch.winback_template_language = wbLang;
   const tgChat = clean(input.telegram_chat_id);
   if (tgChat !== null) patch.telegram_chat_id = tgChat;
 

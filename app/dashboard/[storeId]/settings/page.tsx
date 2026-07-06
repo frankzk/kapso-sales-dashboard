@@ -96,6 +96,9 @@ export default async function StoreSettingsPage({
       browse_template_enabled: full.browse_template_enabled ?? false,
       browse_template_name: full.browse_template_name ?? null,
       browse_template_language: full.browse_template_language ?? null,
+      winback_template_enabled: full.winback_template_enabled ?? false,
+      winback_template_name: full.winback_template_name ?? null,
+      winback_template_language: full.winback_template_language ?? null,
       telegram_chat_id: full.telegram_chat_id ?? null,
       meta_ad_accounts: normalizeMetaAdAccounts(
         full.meta_ad_accounts,

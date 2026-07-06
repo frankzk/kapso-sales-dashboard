@@ -33,6 +33,9 @@ export interface StoreSettingsData {
     browse_template_enabled: boolean;
     browse_template_name: string | null;
     browse_template_language: string | null;
+    winback_template_enabled: boolean;
+    winback_template_name: string | null;
+    winback_template_language: string | null;
     telegram_chat_id: string | null;
     meta_ad_accounts: StoreMetaAdAccount[];
   };
@@ -404,6 +407,53 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
                 id="browse_template_language"
                 name="browse_template_language"
                 defaultValue={s.browse_template_language ?? ""}
+                placeholder="es"
+                className={inputCls}
+              />
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Recuperación de clientes (60 días sin comprar)
+          </legend>
+          <p className="text-xs text-slate-500">
+            Un Shopify Flow avisa cuando un cliente lleva <strong>~60 días sin volver a
+            comprar</strong> y se le envía esta plantilla de WhatsApp (cupón + botón a la
+            tienda) para traerlo de vuelta. Requiere la plantilla <strong>aprobada por
+            Meta</strong> y usa el mismo secreto del webhook de Flow. No crea leads: si el
+            cliente responde, entra por el flujo normal de Kapso.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelCls} htmlFor="winback_template_enabled">Envío automático</label>
+              <select
+                id="winback_template_enabled"
+                name="winback_template_enabled"
+                defaultValue={s.winback_template_enabled ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">Deshabilitado</option>
+                <option value="true">Habilitado</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="winback_template_name">Nombre de la plantilla</label>
+              <input
+                id="winback_template_name"
+                name="winback_template_name"
+                defaultValue={s.winback_template_name ?? ""}
+                placeholder="recuperacion_60d_1"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="winback_template_language">Idioma</label>
+              <input
+                id="winback_template_language"
+                name="winback_template_language"
+                defaultValue={s.winback_template_language ?? ""}
                 placeholder="es"
                 className={inputCls}
               />

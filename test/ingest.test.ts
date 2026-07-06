@@ -694,3 +694,102 @@ describe("processBrowseAbandonment · WhatsApp template send", () => {
     expect(fake.leadCalls[0].note).toContain("falló");
   });
 });
+
+// Shopify Flow "winback" payload: order created → wait 60 days → no new order.
+const WINBACK_BODY = JSON.stringify({
+  source: "winback",
+  event: "winback_60d",
+  order: { id: 7001 },
+  customer: { id: 9001, name: "Fanny", phone: "+51 953 249 192" },
+  sentAt: "2026-07-06T12:00:00Z",
+});
+
+function winbackCreds(over: Record<string, any> = {}): any {
+  return browseCreds({
+    winback_template_enabled: true,
+    winback_template_name: "recuperacion_60d_1",
+    winback_template_language: "es",
+    ...over,
+  });
+}
+
+describe("processWinback · recuperación de clientes (60 días)", () => {
+  it("winbackSeed extracts phone/name/ids (null without a usable phone)", async () => {
+    const { winbackSeed } = await import("@/lib/leads-ingest");
+    const seed = winbackSeed(JSON.parse(WINBACK_BODY))!;
+    expect(seed).toEqual({ phone: "51953249192", name: "Fanny", customerId: "9001", orderId: "7001" });
+    // firstName fallback when Flow sends it instead of name
+    expect(winbackSeed({ customer: { firstName: "Sol", phone: "+51999888777" } })!.name).toBe("Sol");
+    expect(winbackSeed({ customer: { name: "Ana" } })).toBeNull(); // no phone → nothing to send
+  });
+
+  it("routes source=winback via processFlowWebhook, dedupes by order cycle, creates NO lead", async () => {
+    const { processFlowWebhook } = await import("@/lib/ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const p = { storeId: "store-1", secretHeader: FLOW_SECRET, rawBody: WINBACK_BODY };
+    expect((await processFlowWebhook(p, fake as any)).status).toBe("ok");
+    expect((await processFlowWebhook(p, fake as any)).status).toBe("duplicate"); // Flow retry
+    expect(fake.insertedWebhookIds.has("winback-7001")).toBe(true);
+    expect(fake.upsertedLeads).toHaveLength(0); // winback never creates leads
+  });
+
+  it("sends the template with {{1}} = name; no lead → no lead_calls log", async () => {
+    const { processWinback } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const { fn, calls } = spyTemplate();
+    const res = await processWinback(fake as any, "store-1", JSON.parse(WINBACK_BODY), winbackCreds(), fn);
+    expect(res.status).toBe("ok");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.opts).toEqual({ apiKey: "kapso-key" });
+    expect(calls[0]!.params).toMatchObject({
+      phoneNumberId: "PN-1241790819006805",
+      to: "51953249192",
+      templateName: "recuperacion_60d_1",
+      language: "es",
+      bodyParams: ["Fanny"],
+    });
+    expect(fake.upsertedLeads).toHaveLength(0);
+    expect(fake.leadCalls).toHaveLength(0); // no existing lead to log on
+  });
+
+  it("logs on the phone's existing lead (send ok and send failed)", async () => {
+    const { processWinback } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.existingLeadPhones.add("51953249192");
+    const { fn } = spyTemplate();
+    await processWinback(fake as any, "store-1", JSON.parse(WINBACK_BODY), winbackCreds(), fn);
+    expect(fake.leadCalls).toHaveLength(1);
+    expect(fake.leadCalls[0]).toMatchObject({ kind: "system", vendedora: null });
+    expect(fake.leadCalls[0].note).toContain("recuperacion_60d_1");
+
+    const fake2 = new FakeSupabase(makeStoreRow());
+    fake2.existingLeadPhones.add("51953249192");
+    const bad = spyTemplate({ ok: false, error: "Template paused", code: 132015 });
+    const body2 = JSON.parse(WINBACK_BODY);
+    body2.order.id = 7002; // new cycle → not a duplicate
+    const res = await processWinback(fake2 as any, "store-1", body2, winbackCreds(), bad.fn);
+    expect(res.status).toBe("ok"); // never throws
+    expect(fake2.leadCalls[0].note).toContain("falló");
+  });
+
+  it("does NOT send when disabled or when the name for {{1}} is missing", async () => {
+    const { processWinback } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    const { fn, calls } = spyTemplate();
+    await processWinback(
+      fake as any,
+      "store-1",
+      JSON.parse(WINBACK_BODY),
+      winbackCreds({ winback_template_enabled: false }),
+      fn,
+    );
+    expect(calls).toHaveLength(0);
+
+    const body = JSON.parse(WINBACK_BODY);
+    body.order.id = 7003;
+    delete body.customer.name;
+    await processWinback(fake as any, "store-1", body, winbackCreds(), fn);
+    expect(calls).toHaveLength(0); // {{1}} would be empty → Meta rejects; skip
+    expect(fake.insertedWebhookIds.has("winback-7003")).toBe(true); // event still recorded
+  });
+});

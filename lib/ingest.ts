@@ -41,6 +41,7 @@ import {
   linkOrderToLead,
   linkOrdersToLeads,
   processBrowseAbandonment,
+  processWinback,
   syncStoreLeads,
   type LeadEnrichStats,
 } from "@/lib/leads-ingest";
@@ -68,6 +69,9 @@ export interface StoreCreds {
   browse_template_enabled: boolean;
   browse_template_name: string | null;
   browse_template_language: string | null;
+  winback_template_enabled: boolean;
+  winback_template_name: string | null;
+  winback_template_language: string | null;
   telegram_bot_token: string | null;
   telegram_chat_id: string | null;
   meta_access_token: string | null;
@@ -102,6 +106,9 @@ export async function getStoreCreds(
     browse_template_enabled: data.browse_template_enabled ?? false,
     browse_template_name: data.browse_template_name ?? null,
     browse_template_language: data.browse_template_language ?? null,
+    winback_template_enabled: data.winback_template_enabled ?? false,
+    winback_template_name: data.winback_template_name ?? null,
+    winback_template_language: data.winback_template_language ?? null,
     telegram_bot_token: decryptOrNull(data.telegram_bot_token_enc),
     telegram_chat_id: data.telegram_chat_id ?? null,
     meta_access_token: decryptOrNull(data.meta_access_token_enc),
@@ -324,9 +331,10 @@ async function recordFlowRejection(
 
 /**
  * Authenticate + route an inbound Shopify Flow webhook (shared per-store secret
- * in the X-RecoverOps-Secret header). Routes by `body.source`; today only
- * `abandoned_browse` (Búsquedas abandonadas) → processBrowseAbandonment. Unknown
- * sources are accepted (no Flow retry) and ignored — extensible to more events.
+ * in the X-RecoverOps-Secret header). Routes by `body.source`:
+ * `abandoned_browse` (Búsquedas abandonadas) → processBrowseAbandonment;
+ * `winback` (Recuperación de clientes 60d) → processWinback. Unknown sources
+ * are accepted (no Flow retry) and ignored — extensible to more events.
  */
 export async function processFlowWebhook(
   params: FlowWebhookParams,
@@ -355,6 +363,9 @@ export async function processFlowWebhook(
 
   if (String(payload?.source ?? "") === "abandoned_browse") {
     return processBrowseAbandonment(admin, params.storeId, payload, creds);
+  }
+  if (String(payload?.source ?? "") === "winback") {
+    return processWinback(admin, params.storeId, payload, creds);
   }
   return { status: "ok" }; // unknown Flow source — accept + ignore
 }
