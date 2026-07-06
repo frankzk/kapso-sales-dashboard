@@ -821,3 +821,137 @@ describe("processWinback · recuperación de clientes (60 días)", () => {
     expect(fake.webhookUpdates.at(-1).error).toContain("no tiene nombre"); // skip reason recorded
   });
 });
+
+describe("detectYapeByVision · vision gate for silent voucher images", () => {
+  // Minimal admin: serves prior checks for the dedup query and records upserts.
+  // `selectError` simulates a missing table / DB failure on the dedup query.
+  function visionAdmin(existing: { message_id: string; is_voucher: boolean }[] = [], selectError = false) {
+    const upserts: any[] = [];
+    const admin = {
+      from(_t: string) {
+        const b: any = {
+          select: () => b,
+          eq: () => b,
+          in: () => Promise.resolve(selectError ? { data: null, error: { message: "relation missing" } } : { data: existing }),
+          upsert: (row: any) => {
+            upserts.push(row);
+            return Promise.resolve({ data: null, error: null });
+          },
+        };
+        return b;
+      },
+    };
+    return { admin, upserts };
+  }
+
+  const K = { apiKey: "k" } as any;
+  const CANDS = [{ messageId: "m1", mediaUrl: "https://app.kapso.ai/a.jpg" }];
+  const okImage = async () => ({ base64: "AAAA", contentType: "image/jpeg" });
+  // A decided verdict (ok:true) vs a transient failure (ok:false).
+  const verdict = (isVoucher: boolean, extra: any = {}) => ({ isVoucher, indicators: { logo: true, monto: true }, model: "m", ok: true, ...extra });
+  const failed = () => ({ isVoucher: false, indicators: {}, model: "m", ok: false });
+
+  async function run(admin: any, candidates: any[], analyze: any, opts: any = {}) {
+    const { detectYapeByVision } = await import("@/lib/leads-ingest");
+    return detectYapeByVision(admin, "store-1", K, candidates, analyze, { fetchImage: okImage, ...opts });
+  }
+
+  it("confirms a voucher and records the verdict", async () => {
+    const { admin, upserts } = visionAdmin();
+    let calls = 0;
+    const out = await run(admin, CANDS, async () => {
+      calls++;
+      return verdict(true);
+    });
+    expect(out).toEqual({ voucher: true, analyzed: 1 });
+    expect(calls).toBe(1);
+    expect(upserts).toHaveLength(1);
+    expect(upserts[0]).toMatchObject({ store_id: "store-1", message_id: "m1", is_voucher: true, model: "m" });
+  });
+
+  it("records a non-voucher verdict (so it is not re-analyzed) and stays negative", async () => {
+    const { admin, upserts } = visionAdmin();
+    const out = await run(admin, CANDS, async () => verdict(false));
+    expect(out).toEqual({ voucher: false, analyzed: 1 });
+    expect(upserts[0]).toMatchObject({ message_id: "m1", is_voucher: false });
+  });
+
+  it("does NOT record a transient failure (ok:false) — retries next run, no poison", async () => {
+    const { admin, upserts } = visionAdmin();
+    const out = await run(admin, CANDS, async () => failed());
+    expect(out).toEqual({ voucher: false, analyzed: 1 }); // counted toward cap…
+    expect(upserts).toHaveLength(0); // …but NOT persisted → re-analyzed next run
+  });
+
+  it("skips entirely when the dedup query errors (table absent → no re-billing)", async () => {
+    const { admin, upserts } = visionAdmin([], true);
+    let calls = 0;
+    const out = await run(admin, CANDS, async () => {
+      calls++;
+      return verdict(true);
+    });
+    expect(out).toEqual({ voucher: false, analyzed: 0 });
+    expect(calls).toBe(0); // no model call, no fetch — nothing until the migration lands
+    expect(upserts).toHaveLength(0);
+  });
+
+  it("short-circuits on a prior positive check (no new model call)", async () => {
+    const { admin } = visionAdmin([{ message_id: "m1", is_voucher: true }]);
+    let calls = 0;
+    const out = await run(admin, CANDS, async () => {
+      calls++;
+      return verdict(true);
+    });
+    expect(out).toEqual({ voucher: true, analyzed: 0 });
+    expect(calls).toBe(0);
+  });
+
+  it("skips an image already decided negative (no re-analysis)", async () => {
+    const { admin } = visionAdmin([{ message_id: "m1", is_voucher: false }]);
+    let calls = 0;
+    const out = await run(admin, CANDS, async () => {
+      calls++;
+      return verdict(true);
+    });
+    expect(out).toEqual({ voucher: false, analyzed: 0 });
+    expect(calls).toBe(0);
+  });
+
+  it("honors the per-run cap (a provider outage can't storm)", async () => {
+    const { admin } = visionAdmin();
+    let calls = 0;
+    const cands = [
+      { messageId: "m1", mediaUrl: "https://app.kapso.ai/a.jpg" },
+      { messageId: "m2", mediaUrl: "https://app.kapso.ai/b.jpg" },
+    ];
+    const out = await run(admin, cands, async () => {
+      calls++;
+      return failed(); // even failures count toward the cap
+    }, { cap: 1 });
+    expect(out.analyzed).toBe(1);
+    expect(calls).toBe(1);
+  });
+
+  it("does not record or count when the image cannot be fetched (retryable)", async () => {
+    const { admin, upserts } = visionAdmin();
+    let calls = 0;
+    const out = await run(admin, CANDS, async () => {
+      calls++;
+      return verdict(true);
+    }, { fetchImage: async () => null });
+    expect(out).toEqual({ voucher: false, analyzed: 0 });
+    expect(calls).toBe(0);
+    expect(upserts).toHaveLength(0);
+  });
+
+  it("returns negative for an empty candidate list without touching the model", async () => {
+    const { admin } = visionAdmin();
+    let calls = 0;
+    const out = await run(admin, [], async () => {
+      calls++;
+      return verdict(true);
+    });
+    expect(out).toEqual({ voucher: false, analyzed: 0 });
+    expect(calls).toBe(0);
+  });
+});

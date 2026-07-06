@@ -10,6 +10,8 @@ import {
   parseHandoffPayload,
   parseOrderSignals,
   detectYapePayment,
+  collectVoucherCandidates,
+  fetchKapsoImageBase64,
   extractReferral,
   fetchConversationSignals,
   fetchConversationTranscript,
@@ -257,9 +259,167 @@ describe("fetchConversationSignals (real Kapso message shape)", () => {
     expect(sig!.yape).toBe(false);
   });
 
+  it("surfaces a bare inbound image (with media URL) after a request as a voucher candidate", async () => {
+    // Same false-positive shape, but the image has a stored media_url — so it can
+    // be fetched + read by the vision layer. Text stays yape=false; the image is
+    // handed off as a candidate.
+    const messages = [
+      {
+        id: "img",
+        timestamp: "1782260858",
+        type: "image",
+        image: { id: "1", mime_type: "image/jpeg" },
+        kapso: { direction: "inbound", has_media: true, media_url: "https://app.kapso.ai/media/img.jpg" },
+      },
+      {
+        id: "req",
+        timestamp: "1782255723",
+        type: "text",
+        text: { body: "Realiza el adelanto de S/30 al Yape y envíame el voucher ✅" },
+        kapso: { direction: "outbound" },
+      },
+    ];
+    const f = mockFetch(() => ({ data: messages }), []);
+    const sig = await fetchConversationSignals(opts(f), "c");
+    expect(sig).not.toBeNull();
+    expect(sig!.yape).toBe(false);
+    expect(sig!.voucherCandidates).toEqual([
+      { messageId: "img", mediaUrl: "https://app.kapso.ai/media/img.jpg" },
+    ]);
+  });
+
   it("returns null when no messages are readable", async () => {
     const f = mockFetch(() => ({ data: [] }), []);
     expect(await fetchConversationSignals(opts(f), "c")).toBeNull();
+  });
+});
+
+describe("collectVoucherCandidates (bare voucher images after a request)", () => {
+  const req: ParsedMsg = { t: 100, dir: "outbound", text: "Yapea el adelanto y envíame el voucher" };
+  const img = (over: Partial<ParsedMsg>): ParsedMsg => ({
+    t: 200,
+    dir: "inbound",
+    text: "",
+    image: true,
+    id: "m1",
+    mediaUrl: "https://app.kapso.ai/media/a.jpg",
+    ...over,
+  });
+
+  it("returns nothing when the bot never requested a voucher/adelanto", () => {
+    expect(collectVoucherCandidates([{ t: 1, dir: "outbound", text: "hola" }, img({})])).toEqual([]);
+  });
+  it("does NOT open the window on a bare payment-method mention ('aceptamos Yape')", () => {
+    expect(collectVoucherCandidates([{ t: 1, dir: "outbound", text: "Sí, aceptamos Yape 😊" }, img({})])).toEqual([]);
+  });
+  it("collects an inbound image sent after the request", () => {
+    expect(collectVoucherCandidates([req, img({})])).toEqual([
+      { messageId: "m1", mediaUrl: "https://app.kapso.ai/media/a.jpg" },
+    ]);
+  });
+  it("excludes an image sent BEFORE the request", () => {
+    expect(collectVoucherCandidates([img({ t: 50 }), req])).toEqual([]);
+  });
+  it("excludes images without a fetchable media URL or id", () => {
+    expect(collectVoucherCandidates([req, img({ mediaUrl: null })])).toEqual([]);
+    expect(collectVoucherCandidates([req, img({ id: null })])).toEqual([]);
+  });
+  it("excludes non-image and outbound messages", () => {
+    expect(collectVoucherCandidates([req, img({ image: false })])).toEqual([]);
+    expect(collectVoucherCandidates([req, img({ dir: "outbound" })])).toEqual([]);
+  });
+  it("dedups by message id", () => {
+    const out = collectVoucherCandidates([req, img({ t: 200 }), img({ t: 300 })]);
+    expect(out).toHaveLength(1);
+  });
+});
+
+describe("fetchKapsoImageBase64 (auth'd, host-allowlisted image fetch)", () => {
+  function imgFetch(
+    bytes: Uint8Array,
+    contentType: string,
+    capture?: { url?: string; headers?: Record<string, string> },
+    init?: { ok?: boolean; status?: number },
+  ): typeof fetch {
+    return (async (input: RequestInfo | URL, req?: RequestInit) => {
+      if (capture) {
+        capture.url = String(input);
+        capture.headers = (req?.headers ?? {}) as Record<string, string>;
+      }
+      return {
+        ok: init?.ok ?? true,
+        status: init?.status ?? 200,
+        headers: { get: (h: string) => (h.toLowerCase() === "content-type" ? contentType : null) },
+        arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+  }
+
+  it("returns base64 + content-type and sends X-API-Key for an allowed host", async () => {
+    const cap: { url?: string; headers?: Record<string, string> } = {};
+    const f = imgFetch(new Uint8Array([1, 2, 3, 4]), "image/png", cap);
+    const res = await fetchKapsoImageBase64(opts(f), "https://app.kapso.ai/media/x.png");
+    expect(res).toEqual({ base64: Buffer.from([1, 2, 3, 4]).toString("base64"), contentType: "image/png" });
+    expect(cap.headers!["X-API-Key"]).toBe("kapso_secret_key");
+  });
+
+  it("follows a redirect to a storage CDN but drops X-API-Key off the Kapso host", async () => {
+    // Kapso 3xx's the stored blob to a signed CDN URL. The key must go ONLY to
+    // the allowlisted origin, never to the CDN (undici keeps custom headers on
+    // cross-origin redirects, so redirect:follow would leak it).
+    const calls: { url: string; headers: Record<string, string> }[] = [];
+    const f = (async (input: RequestInfo | URL, req?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, headers: (req?.headers ?? {}) as Record<string, string> });
+      if (url.startsWith("https://app.kapso.ai/")) {
+        return {
+          status: 302,
+          ok: false,
+          headers: { get: (h: string) => (h.toLowerCase() === "location" ? "https://cdn.storage.example/signed.jpg?sig=abc" : null) },
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (h: string) => (h.toLowerCase() === "content-type" ? "image/jpeg" : null) },
+        arrayBuffer: async () => new Uint8Array([9, 9, 9]).buffer,
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const res = await fetchKapsoImageBase64(opts(f), "https://app.kapso.ai/media/x.jpg");
+    expect(res).toEqual({ base64: Buffer.from([9, 9, 9]).toString("base64"), contentType: "image/jpeg" });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.headers["X-API-Key"]).toBe("kapso_secret_key"); // Kapso hop: key sent
+    expect(calls[1]!.url).toContain("cdn.storage.example");
+    expect(calls[1]!.headers["X-API-Key"]).toBeUndefined(); // CDN hop: NO key
+  });
+
+  it("refuses a non-allowlisted host (no fetch)", async () => {
+    let called = false;
+    const f = (async () => {
+      called = true;
+      return {} as Response;
+    }) as unknown as typeof fetch;
+    expect(await fetchKapsoImageBase64(opts(f), "https://evil.example.com/x.png")).toBeNull();
+    expect(called).toBe(false);
+  });
+
+  it("refuses non-https and unparseable URLs", async () => {
+    const f = imgFetch(new Uint8Array([1]), "image/png");
+    expect(await fetchKapsoImageBase64(opts(f), "http://app.kapso.ai/x.png")).toBeNull();
+    expect(await fetchKapsoImageBase64(opts(f), "not a url")).toBeNull();
+  });
+
+  it("returns null on a non-2xx response", async () => {
+    const f = imgFetch(new Uint8Array([1]), "image/png", undefined, { ok: false, status: 404 });
+    expect(await fetchKapsoImageBase64(opts(f), "https://app.kapso.ai/x.png")).toBeNull();
+  });
+
+  it("returns null on an empty or oversize body", async () => {
+    const empty = imgFetch(new Uint8Array([]), "image/png");
+    expect(await fetchKapsoImageBase64(opts(empty), "https://app.kapso.ai/x.png")).toBeNull();
+    const huge = imgFetch(new Uint8Array(3_500_001), "image/png");
+    expect(await fetchKapsoImageBase64(opts(huge), "https://app.kapso.ai/x.png")).toBeNull();
   });
 });
 

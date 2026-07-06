@@ -1370,3 +1370,29 @@ create policy winback_sends_select on winback_sends for select to authenticated
   using (store_id in (select auth_store_ids()));
 grant select on winback_sends to authenticated;
 grant all privileges on winback_sends to service_role;
+
+
+-- ---- 0031 ----
+-- 0031_yape_vision_checks.sql — audit + dedup for vision-based Yape voucher
+-- detection. One row per inbound image analyzed (message_id = dedup key), so the
+-- "Yape/Shalom por verificar" alert can be re-enabled for silent voucher images
+-- while analyzing each image at most once. RLS read-only, writes via service role.
+
+create table if not exists yape_vision_checks (
+  id           uuid primary key default gen_random_uuid(),
+  store_id     uuid not null references stores(id) on delete cascade,
+  message_id   text not null,
+  is_voucher   boolean not null,
+  indicators   jsonb not null default '{}'::jsonb,
+  model        text,
+  checked_at   timestamptz not null default now(),
+  unique (store_id, message_id)
+);
+create index if not exists yape_vision_checks_store_idx on yape_vision_checks(store_id, checked_at);
+
+alter table yape_vision_checks enable row level security;
+drop policy if exists yape_vision_checks_select on yape_vision_checks;
+create policy yape_vision_checks_select on yape_vision_checks for select to authenticated
+  using (store_id in (select auth_store_ids()));
+grant select on yape_vision_checks to authenticated;
+grant all privileges on yape_vision_checks to service_role;
