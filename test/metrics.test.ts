@@ -41,6 +41,7 @@ function order(p: Partial<OrderRow> = {}): OrderRow {
     cancelled_at: null,
     total_refunded: 0,
     tags: [],
+    discount_codes: [],
     promo_applied: false,
     stock_por_validar: false,
     shipping_mode: null,

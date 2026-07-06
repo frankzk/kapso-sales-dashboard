@@ -55,6 +55,7 @@ export interface OrderRow {
   total_refunded: number;
   customer_phone?: string | null;
   tags: string[];
+  discount_codes: string[]; // coupon codes applied (e.g. ["AURELA10"]); [] when none
   promo_applied: boolean;
   stock_por_validar: boolean;
   shipping_mode: ShippingMode;

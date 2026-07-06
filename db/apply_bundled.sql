@@ -1343,3 +1343,30 @@ where courier = 'aliclik'
 alter table stores add column if not exists winback_template_enabled  boolean not null default false;
 alter table stores add column if not exists winback_template_name      text;
 alter table stores add column if not exists winback_template_language  text;
+
+
+-- ---- 0030 ----
+-- 0030_attribution.sql — order-source attribution: orders.discount_codes (coupons)
+-- + winback_sends (one row per winback template sent), for the order-centric
+-- "ventas por fuente y cierre" module. RLS read-only, writes via service role.
+
+alter table orders add column if not exists discount_codes text[] not null default '{}';
+create index if not exists orders_discount_codes_gin on orders using gin (discount_codes);
+
+create table if not exists winback_sends (
+  id             uuid primary key default gen_random_uuid(),
+  store_id       uuid not null references stores(id) on delete cascade,
+  phone          text not null,
+  template_name  text,
+  order_gid      text,
+  sent_at        timestamptz not null default now(),
+  ok             boolean not null default true
+);
+create index if not exists winback_sends_store_phone_idx on winback_sends(store_id, phone, sent_at);
+
+alter table winback_sends enable row level security;
+drop policy if exists winback_sends_select on winback_sends;
+create policy winback_sends_select on winback_sends for select to authenticated
+  using (store_id in (select auth_store_ids()));
+grant select on winback_sends to authenticated;
+grant all privileges on winback_sends to service_role;
