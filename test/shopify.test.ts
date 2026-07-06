@@ -24,6 +24,7 @@ import {
   shopifyGraphQL,
   fetchOrdersPage,
   searchProductVariants,
+  searchCatalogProducts,
   createDraftOrder,
   getDraftOrderForEdit,
   resolveOrderDiscount,
@@ -639,6 +640,50 @@ describe("order form (catalog search + draft create/read)", () => {
     expect(out).toHaveLength(2);
     expect(out[0]).toMatchObject({ variantId: "gid://shopify/ProductVariant/11", title: "Mochila", price: 129.9, inventory: 5 });
     expect(out[1]).toMatchObject({ title: "Polo · Rojo", price: 59, inventory: 0 }); // non-default variant title appended
+  });
+
+  it("searchCatalogProducts groups variants under their product", async () => {
+    const resp = {
+      data: {
+        products: {
+          edges: [
+            {
+              node: {
+                id: "gid://shopify/Product/1",
+                title: "TravelersBackpack",
+                featuredImage: { url: "u" },
+                variants: {
+                  edges: [
+                    { node: { id: "gid://shopify/ProductVariant/11", title: "Plomo", price: "219.00", inventoryQuantity: 2, sku: "TB-P" } },
+                    { node: { id: "gid://shopify/ProductVariant/12", title: "Negro", price: "219.00", inventoryQuantity: 25, sku: "TB-N" } },
+                  ],
+                },
+              },
+            },
+            {
+              node: {
+                id: "gid://shopify/Product/2",
+                title: "Polo",
+                featuredImage: null,
+                variants: {
+                  edges: [{ node: { id: "gid://shopify/ProductVariant/21", title: "Default Title", price: "59.00", inventoryQuantity: 3, sku: "P" } }],
+                },
+              },
+            },
+          ],
+        },
+      },
+    };
+    const out = await searchCatalogProducts({ domain: "x.myshopify.com", token: "t", query: "m", fetchImpl: fakeFetch(resp) });
+    expect(out).toHaveLength(2);
+    // Product 1: two real variants grouped, titles preserved (no product prefix here).
+    expect(out[0]).toMatchObject({ productId: "gid://shopify/Product/1", title: "TravelersBackpack" });
+    expect(out[0]!.variants).toHaveLength(2);
+    expect(out[0]!.variants[0]).toMatchObject({ variantTitle: "Plomo", price: 219, inventory: 2 });
+    expect(out[0]!.variants[1]).toMatchObject({ variantTitle: "Negro", inventory: 25 });
+    // Product 2: single default variant → variantTitle normalized to "" (added directly, no second step).
+    expect(out[1]!.variants).toHaveLength(1);
+    expect(out[1]!.variants[0]!.variantTitle).toBe("");
   });
 
   it("createDraftOrder returns the gid; throws on userErrors", async () => {

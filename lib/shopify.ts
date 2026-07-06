@@ -972,6 +972,57 @@ export async function searchProductVariants(
   return out;
 }
 
+export interface CatalogVariant {
+  variantId: string; // gid
+  variantTitle: string; // "Plomo" / "Talla M" — "" for a single/default variant
+  price: number | null;
+  inventory: number | null;
+  sku: string | null;
+}
+
+export interface ProductSearchResult {
+  productId: string; // gid
+  title: string; // product title only (no variant suffix)
+  imageUrl: string | null;
+  variants: CatalogVariant[];
+}
+
+/** Search the store catalog → products GROUPED with their variants, so the UI
+ *  can offer "pick product → pick variant" instead of a flat variant list (a
+ *  product with many colors/sizes floods a single-level list). Same query as
+ *  searchProductVariants; only the shape differs. */
+export async function searchCatalogProducts(
+  opts: ShopifyClientOpts & { query: string; first?: number },
+): Promise<ProductSearchResult[]> {
+  const q = opts.query.trim();
+  const search = q ? `${q} status:active` : "status:active";
+  const data = await shopifyGraphQL<any>({
+    ...opts,
+    query: PRODUCT_SEARCH_QUERY,
+    variables: { q: search, first: opts.first ?? 20 },
+  });
+  const out: ProductSearchResult[] = [];
+  for (const pe of data?.products?.edges ?? []) {
+    const p = pe?.node ?? {};
+    const variants: CatalogVariant[] = [];
+    for (const ve of p?.variants?.edges ?? []) {
+      const v = ve?.node ?? {};
+      const vt = String(v?.title ?? "");
+      variants.push({
+        variantId: String(v?.id ?? ""),
+        variantTitle: vt && vt !== "Default Title" ? vt : "",
+        price: toNumber(v?.price),
+        inventory: typeof v?.inventoryQuantity === "number" ? v.inventoryQuantity : null,
+        sku: v?.sku ?? null,
+      });
+    }
+    if (variants.length) {
+      out.push({ productId: String(p?.id ?? ""), title: String(p?.title ?? ""), imageUrl: p?.featuredImage?.url ?? null, variants });
+    }
+  }
+  return out;
+}
+
 export interface OrderLineItemInput {
   variantId?: string | null; // gid (catalog item)
   title?: string | null; // custom item
