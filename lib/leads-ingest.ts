@@ -885,6 +885,114 @@ export async function processBrowseAbandonment(
   return { status: "ok" };
 }
 
+// ───────────────────── Recuperación de clientes (winback 60d) ────────────────
+// A Shopify Flow (order created → wait 60 days → condition: no new order) posts
+// the lapsed customer here with source "winback". This is a pure SEND: the
+// Meta-approved template (coupon + store-link button) goes out and NO lead is
+// created — these are past customers, not queue work; if one replies, the
+// normal Kapso inbound ingestion creates/updates the lead as usual.
+
+export interface WinbackSeed {
+  phone: string;
+  name: string | null; // template {{1}}
+  customerId: string | null;
+  orderId: string | null; // the order whose 60-day wait triggered this cycle
+}
+
+/** Map a Shopify Flow `winback` payload → send fields. Returns null when
+ *  there's no usable phone (nothing to send to). Pure. */
+export function winbackSeed(body: any): WinbackSeed | null {
+  const rawPhone = body?.customer?.phone ?? body?.customer?.defaultPhoneNumber?.phoneNumber ?? null;
+  const phone = normalizePhone(rawPhone);
+  if (!phone) return null;
+  return {
+    phone,
+    name: flowStr(body?.customer?.name) ?? flowStr(body?.customer?.firstName),
+    customerId: body?.customer?.id != null ? String(body.customer.id) : null,
+    orderId: body?.order?.id != null ? String(body.order.id) : null,
+  };
+}
+
+/** Ingest a Shopify Flow "winback" event → send the re-engagement template.
+ *  Idempotent per order cycle (`winback-<orderId>`): Flow retries dedupe, but a
+ *  customer who buys again and lapses again re-enters with a NEW order id and
+ *  gets the next cycle's message — intended. */
+export async function processWinback(
+  admin: SupabaseClient,
+  storeId: string,
+  body: any,
+  creds?: StoreCreds | null,
+  sendTemplate: typeof sendWhatsappTemplate = sendWhatsappTemplate,
+): Promise<{ status: "ok" | "duplicate" }> {
+  const seed = winbackSeed(body);
+  const webhookId = seed?.orderId
+    ? `winback-${seed.orderId}`
+    : "winback-" + createHash("sha256").update(JSON.stringify(body ?? {}), "utf8").digest("hex").slice(0, 40);
+
+  const { error: insErr } = await admin.from("webhook_events").insert({
+    store_id: storeId,
+    topic: "flow/winback",
+    shopify_id: seed?.customerId ?? null,
+    webhook_id: webhookId,
+    processed: false,
+  });
+  if (insErr) {
+    if ((insErr as any).code === "23505") return { status: "duplicate" };
+    throw new Error(`webhook_events insert: ${insErr.message}`);
+  }
+
+  await admin
+    .from("webhook_events")
+    .update({ processed: true })
+    .match({ store_id: storeId, webhook_id: webhookId });
+
+  // Gated send: per-store opt-in + Kapso creds + a phone and a name (the
+  // template's {{1}}). Best-effort: a send/log failure must never 500 the
+  // webhook (Flow would retry and the event is already recorded).
+  if (
+    seed?.name &&
+    creds?.winback_template_enabled &&
+    creds.winback_template_name &&
+    creds.kapso_api_key &&
+    creds.whatsapp_phone_number_id
+  ) {
+    try {
+      const send = await sendTemplate(
+        { apiKey: creds.kapso_api_key },
+        {
+          phoneNumberId: creds.whatsapp_phone_number_id,
+          to: seed.phone,
+          templateName: creds.winback_template_name,
+          language: creds.winback_template_language ?? "es",
+          bodyParams: [seed.name],
+        },
+      );
+      // Log on the phone's lead IF one exists (winback never creates leads).
+      const { data: lead } = await admin
+        .from("leads")
+        .select("id")
+        .eq("store_id", storeId)
+        .eq("phone", seed.phone)
+        .maybeSingle();
+      if (lead?.id) {
+        await admin.from("lead_calls").insert({
+          lead_id: lead.id,
+          store_id: storeId,
+          kind: "system",
+          vendedora: null,
+          note: send.ok
+            ? `📤 WhatsApp: plantilla «${creds.winback_template_name}» enviada (recuperación 60 días)`
+            : `⚠️ WhatsApp: falló envío de «${creds.winback_template_name}» (${send.error})`,
+        });
+      }
+    } catch {
+      /* best-effort — never break the webhook ack */
+    }
+  }
+
+  return { status: "ok" };
+}
+
 /** COMPLETED draft → recovered → won. The resulting order isn't tag:kapso, so the
  *  order sync (tag:kapso only) never imports it. When given Shopify creds we fetch
  *  that order by gid and capture it in `orders` (marked so the kapso-only rollup

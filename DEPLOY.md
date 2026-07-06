@@ -165,6 +165,48 @@ WhatsApp / cart / campaign lead).
    *shape* (booleans/counts, no PII). Re-delivering the same `abandonment.id` does
    not duplicate; a phone that already has a lead is left untouched.
 
+## 5c. Winback (Recuperación de clientes, 60 días) via Shopify Flow
+
+A re-engagement message for customers with **no new purchase in ~60 days**: a
+Shopify Flow posts the lapsed customer to the same Flow webhook with
+`source: "winback"` and the dashboard fires the Meta-approved WhatsApp template
+(discount coupon + store-link button). It is a **pure send** — no lead is
+created; if the customer replies, the normal Kapso inbound flow takes over.
+
+1. **Create + approve the template** (Kapso → Templates), e.g.
+   `recuperacion_60d_1` with `{{1}}` = customer first name and a static URL
+   button (a `https://<storefront>/discount/<CODE>` link auto-applies the coupon).
+2. **Configure it in Settings** (Ajustes de la tienda → *Recuperación de
+   clientes*): enable + template name + language. Uses the same
+   *Secreto webhook de Shopify Flow* as §5b (set it up first if missing).
+3. **Build the Flow** (Shopify Admin → Flow): trigger **Order created** →
+   **Wait 60 days** → **Condition** "customer has not ordered since" (e.g.
+   `customer.lastOrderId == order.id` / `numberOfOrders` unchanged) → action
+   **Send HTTP request**:
+   - **POST** `https://<your-domain>/api/webhooks/flow/<storeId>`
+   - Headers `Content-Type: application/json` and
+     `X-RecoverOps-Secret: {{ the §5b secret }}`.
+   - Body (Liquid):
+     ```json
+     {
+       "source": "winback",
+       "event": "winback_60d",
+       "order": { "id": "{{ order.id }}" },
+       "customer": {
+         "id": "{{ order.customer.id }}",
+         "name": "{{ order.customer.firstName }}",
+         "phone": "{{ order.customer.defaultPhoneNumber.phoneNumber }}"
+       },
+       "sentAt": "{{ "now" | date: "%Y-%m-%dT%H:%M:%S%z" }}"
+     }
+     ```
+4. **Semantics.** Idempotent per order cycle (`winback-<order.id>`): Flow
+   retries dedupe; a customer who buys again and lapses again enters a new
+   cycle (new order id) and gets the next message — intended. The send is
+   skipped (event still recorded) when the config is disabled, the phone is
+   missing, or there's no name for `{{1}}`. If the phone has a lead, the send
+   is logged on its Historial as a `system` entry.
+
 ## 6. Invite your team
 
 **Equipo** → invite by email with a role:

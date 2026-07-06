@@ -1333,3 +1333,13 @@ set delivery_status = 'transferido', status_category = 'transferred'
 where courier = 'aliclik'
   and fenix_shipment_id is not null
   and delivery_status <> 'transferido';
+
+
+-- ---- 0029 ----
+-- 0029_winback_template_config.sql — per-store WhatsApp template for the
+-- "Recuperación de clientes" (60-day winback) message sent via Shopify Flow
+-- (source "winback"). Off by default; no lead is created on send.
+
+alter table stores add column if not exists winback_template_enabled  boolean not null default false;
+alter table stores add column if not exists winback_template_name      text;
+alter table stores add column if not exists winback_template_language  text;
