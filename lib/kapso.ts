@@ -847,18 +847,28 @@ const PAYMENT_CONFIRMED_RE =
 const CUSTOMER_PAID_RE =
   /\b(ya\s+)?(te\s+)?yape[eé]|yapead|ya\s+(pagu[eé]|deposit[eé]|transfer[ií])|ya\s+(hice|realic[eé])[^.]{0,18}(pago|adelanto|dep[oó]sito)|comprobante|constancia|n[uú]mero\s+de\s+operaci[oó]n|operaci[oó]n\s*[:#]/i;
 
-/** Detect a Yape/Shalom advance payment from a conversation's messages. */
+/**
+ * Detect a Yape/Shalom advance payment from a conversation's messages.
+ * Confirmed ONLY from TEXT/caption signals: the customer states they paid
+ * (`CUSTOMER_PAID_RE` — "ya yapeé", "comprobante", "número de operación", …) or
+ * the bot/agent confirms receipt (`PAYMENT_CONFIRMED_RE`).
+ *
+ * A bare inbound IMAGE is deliberately NOT treated as a voucher: a screenshot of
+ * a conversation, a product, or a document must not fire the "Yape/Shalom por
+ * verificar" alert. Telling a real Yape receipt apart from any other image needs
+ * its CONTENT (Yape logo/interfaz, monto, fecha/hora, destinatario "Grupo GF
+ * SAC", estado "Pago realizado/Transferencia exitosa/Yapeaste", nº de operación)
+ * — i.e. vision/OCR, which layers on separately when enabled. Image captions ARE
+ * scanned (folded into `text` upstream), so a voucher sent with "ya pagué" still
+ * fires.
+ */
 export function detectYapePayment(msgs: ParsedMsg[]): boolean {
-  let requested = false;
   for (const m of msgs) {
     const text = m.text ?? "";
     if (m.dir === "outbound") {
       if (PAYMENT_CONFIRMED_RE.test(text)) return true;
-      if (/\badelanto\b/i.test(text) && /\byape\b/i.test(text)) requested = true;
-      else if (/voucher|captura/i.test(text) && /valida|yape|adelanto/i.test(text)) requested = true;
-    } else {
-      if (CUSTOMER_PAID_RE.test(text)) return true;
-      if (requested && m.image) return true; // voucher screenshot after the request
+    } else if (CUSTOMER_PAID_RE.test(text)) {
+      return true;
     }
   }
   return false;
@@ -888,7 +898,15 @@ export async function fetchConversationSignals(
   }
   const referral = extractReferral(page.data ?? []);
   const msgs = (page.data ?? [])
-    .map((m) => ({ t: msgTimeMs(m), dir: msgDirection(m), text: msgText(m), image: msgIsImage(m) }))
+    // Fold the image caption into `text` so a voucher sent WITH a payment note
+    // ("ya pagué", "mi comprobante") still trips the Yape text detector, while a
+    // bare screenshot (no words) does not.
+    .map((m) => ({
+      t: msgTimeMs(m),
+      dir: msgDirection(m),
+      text: [msgText(m), msgCaption(m)].filter(Boolean).join(" ").trim(),
+      image: msgIsImage(m),
+    }))
     .filter(
       (m): m is { t: number; dir: "inbound" | "outbound"; text: string; image: boolean } =>
         m.t != null && m.dir != null,
