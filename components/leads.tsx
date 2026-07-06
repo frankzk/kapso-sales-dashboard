@@ -44,6 +44,7 @@ import {
   loadLeadConversation,
   loadLeadDetail,
   loadOrderDraft,
+  pollLeadState,
   registerCall,
   releaseLead,
   createWaMediaUpload,
@@ -1272,6 +1273,35 @@ function LeadDrawer({
   const handoffTone = categoryOf(lead.status) === "hot" ? "red" : "amber";
   const [orderOpen, setOrderOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // Live sync while a lead WITHOUT an order is open: a Yape/bot purchase links the
+  // order a few seconds later (webhook → lead becomes won). Poll the lead's
+  // order/status signal every 12s and, the moment it flips, refresh the drawer —
+  // so the asesora sees "✅ Pedido generado" instead of a stale "pendiente" (which
+  // is what led to mistakenly marking a real sale as "ya compró en otro lado").
+  // Stops once the lead has an order (deps change) or the drawer closes (unmount).
+  const onRegisteredRef = useRef(onRegistered);
+  onRegisteredRef.current = onRegistered;
+  useEffect(() => {
+    if (lead.has_order) return; // already won → nothing to watch
+    let inFlight = false;
+    const id = setInterval(() => {
+      if (inFlight || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+      inFlight = true;
+      void pollLeadState(lead.id)
+        .then((r) => {
+          if ("error" in r) return;
+          if (r.hasOrder !== lead.has_order || r.status !== lead.status || r.category !== lead.category) {
+            onRegisteredRef.current(); // real change → full refresh (lead + historial + lista)
+          }
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    }, 12_000);
+    return () => clearInterval(id);
+  }, [lead.id, lead.has_order, lead.status, lead.category]);
+
   // cod_cart sin conversación → empty-state; el resto muestra el chat (que se
   // resuelve por teléfono si no hay conversation_id guardado).
   const hasWa = lead.source !== "cod_cart" || !!lead.kapso_conversation_id;
