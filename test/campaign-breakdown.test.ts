@@ -25,6 +25,21 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
     expect(rows[0]!.adId).toBe("120246653255450657"); // sorted by revenue desc
   });
 
+  it("keeps two ads that SHARE a headline as separate rows, distinguishable by metaAdId", () => {
+    // The reported case: two distinct ad_ids with the same CTWA headline ("Madera
+    // Como Nueva"). They must stay ad-level (2 rows), told apart by the real ad_id.
+    const mixed = [
+      { phone: "a", source: "meta_ad", ad_id: "111", ad_headline: "Madera Como Nueva", has_order: false },
+      { phone: "b", source: "meta_ad", ad_id: "222", ad_headline: "Madera Como Nueva", has_order: false },
+      { phone: "c", source: "meta_ad", ad_id: null, ad_headline: "Madera Como Nueva", has_order: false }, // Meta sent no ad_id
+    ] as unknown as LeadRow[];
+    const rows = campaignBreakdown(mixed, orders);
+    expect(rows).toHaveLength(3); // two ads + the headline-only group — NOT collapsed into one
+    expect(rows.find((r) => r.adId === "111")!.metaAdId).toBe("111");
+    expect(rows.find((r) => r.adId === "222")!.metaAdId).toBe("222");
+    expect(rows.find((r) => r.adId === "Madera Como Nueva")!.metaAdId).toBeNull(); // "sin ad id"
+  });
+
   it("upgrades the label to the real Meta ad name when resolved, else falls back", () => {
     const names: Record<string, AdMeta> = {
       "120246653255450657": {

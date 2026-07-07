@@ -24,7 +24,7 @@ const COLUMNS: { key: SortKey; header: string; align: "left" | "right"; numeric:
 /** The campaign / ad name cell — real Meta ad name (linked to Ads Manager) with
  *  the campaign · objetivo · estado context line, or the headline fallback. */
 function LabelCell({ r }: { r: CampaignStat }) {
-  const href = adsManagerUrl(r.meta?.accountId ?? null, r.adId);
+  const href = adsManagerUrl(r.meta?.accountId ?? null, r.metaAdId ?? r.adId);
   const name = prettyAdName(r.label);
   const st = adStatusLabel(r.meta?.status ?? null);
   const ctx = [r.meta?.campaignName, adObjectiveLabel(r.meta?.objective ?? null)]
@@ -65,6 +65,11 @@ function LabelCell({ r }: { r: CampaignStat }) {
           )}
         </span>
       )}
+      {/* ad_id — two ads can share the same CTWA headline ("Madera Como Nueva"),
+          so the id is what tells them apart at the ad level. */}
+      <span className="truncate font-mono text-[11px] text-slate-400" title="ID del anuncio (Meta ad id)">
+        {r.metaAdId ? `ad id ${r.metaAdId}` : "sin ad id (Meta no envió el anuncio)"}
+      </span>
     </div>
   );
 }

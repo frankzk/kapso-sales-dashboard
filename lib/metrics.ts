@@ -791,7 +791,8 @@ export function cartRecovery(leads: LeadRow[], orders: OrderRow[]): CartRecovery
 }
 
 export interface CampaignStat {
-  adId: string;
+  adId: string; // grouping key: the real Meta ad_id, or the headline when no ad_id
+  metaAdId: string | null; // the real Meta ad_id (null = leads carried only a headline, no ad_id)
   label: string; // resolved ad name → captured headline → ad id (best display)
   headline: string | null; // shared CTWA creative headline ("✈️ Viaja Sin Maletas")
   resolved: boolean; // a real Meta ad name was found in the meta_ads lookup
@@ -824,11 +825,15 @@ export function campaignBreakdown(
     const net = Number(o.total_amount ?? 0) - Number(o.total_refunded ?? 0);
     netByPhone.set(o.customer_phone, (netByPhone.get(o.customer_phone) ?? 0) + net);
   }
-  const m = new Map<string, { headline: string | null; leads: number; pedidos: number; ingresos: number }>();
+  const m = new Map<
+    string,
+    { headline: string | null; adId: string | null; leads: number; pedidos: number; ingresos: number }
+  >();
   for (const l of adLeads) {
     const key = l.ad_id || l.ad_headline!;
-    const b = m.get(key) ?? { headline: l.ad_headline ?? null, leads: 0, pedidos: 0, ingresos: 0 };
+    const b = m.get(key) ?? { headline: l.ad_headline ?? null, adId: l.ad_id ?? null, leads: 0, pedidos: 0, ingresos: 0 };
     if (l.ad_headline) b.headline = l.ad_headline; // keep the human headline
+    if (l.ad_id) b.adId = l.ad_id; // the real Meta ad_id (distinguishes ads sharing a headline)
     b.leads += 1;
     if (l.has_order) {
       b.pedidos += 1;
@@ -841,6 +846,7 @@ export function campaignBreakdown(
       const meta = names[adId] ?? null;
       return {
         adId,
+        metaAdId: b.adId,
         label: meta?.adName || b.headline || adId,
         headline: b.headline,
         resolved: Boolean(meta?.adName),
