@@ -1455,15 +1455,25 @@ function LeadDrawer({
                       🔎 <span className="font-medium">Vio:</span> {lead.cart_summary}
                     </p>
                   ) : null}
-                  {(lead.district || lead.referencia) && (
+                  {(lead.ship_name || lead.address1 || lead.district || lead.referencia) && (
                     <div className={lead.cart_item_count ? "mt-1 space-y-0.5" : "space-y-0.5"}>
+                      {lead.ship_name && lead.ship_name !== lead.name && (
+                        <p>
+                          👤 <span className="font-medium">Recibe:</span> {lead.ship_name}
+                        </p>
+                      )}
+                      {lead.address1 && (
+                        <p>
+                          🏠 <span className="font-medium">Dirección:</span> {lead.address1}
+                        </p>
+                      )}
+                      {lead.referencia && <p className="text-emerald-800/90">Ref: {lead.referencia}</p>}
                       {lead.district && (
                         <p>
                           📍 <span className="font-medium">Distrito:</span> {lead.district}
                           {lead.province ? <span className="text-emerald-800/70"> · {lead.province}</span> : null}
                         </p>
                       )}
-                      {lead.referencia && <p className="text-emerald-800/90">Ref: {lead.referencia}</p>}
                     </div>
                   )}
                   {draftOrderHref && (

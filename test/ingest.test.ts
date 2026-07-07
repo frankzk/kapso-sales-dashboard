@@ -326,7 +326,7 @@ const DRAFT_OPEN_BODY = JSON.stringify({
   invoice_url: "https://aurela.myshopify.com/invoice/abc",
   total_price: "120.00",
   currency: "PEN",
-  shipping_address: { phone: "+51 980 111 222", city: "Miraflores", province: "Lima", address1: "Av X 123", address2: "Dpto 4" },
+  shipping_address: { name: "María Luna", phone: "+51 980 111 222", city: "Miraflores", province: "Lima", address1: "Av X 123", address2: "Dpto 4" },
   line_items: [{ title: "Mochila", quantity: 2, price: "60.00" }],
   tags: "",
   note: "Releasit COD form",
@@ -372,6 +372,11 @@ describe("processShopifyWebhook · draft orders", () => {
       category: "open",
       source: "cod_cart",
       cart_item_count: 2,
+      // Full shipping address denormalized onto the lead (0032): street + recipient.
+      address1: "Av X 123",
+      ship_name: "María Luna",
+      referencia: "Dpto 4",
+      district: "Miraflores",
     });
     expect(fake.upsertedLeads[0].draft_order_gid).toBe("gid://shopify/DraftOrder/1122334455");
   });
