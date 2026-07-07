@@ -44,6 +44,7 @@ export interface StoreSettingsData {
     webhookSecret: boolean;
     kapsoKey: boolean;
     flowSecret: boolean;
+    kapsoWebhookSecret: boolean;
     telegramToken: boolean;
     metaToken: boolean;
   };
@@ -139,7 +140,7 @@ export function StoreSettings({
         </Card>
       </Section>
 
-      <KapsoWebhookSection siteUrl={data.siteUrl} storeId={s.id} />
+      <KapsoWebhookSection siteUrl={data.siteUrl} storeId={s.id} hasSecret={data.has.kapsoWebhookSecret} />
 
       <SettingsForm data={data} />
 
@@ -250,13 +251,26 @@ export function StoreSettings({
   );
 }
 
-function KapsoWebhookSection({ siteUrl, storeId }: { siteUrl: string; storeId: string }) {
-  const url = `${siteUrl}/api/webhooks/kapso/${storeId}?secret=<CRON_SECRET>`;
+function KapsoWebhookSection({
+  siteUrl,
+  storeId,
+  hasSecret,
+}: {
+  siteUrl: string;
+  storeId: string;
+  hasSecret: boolean;
+}) {
+  const placeholder = hasSecret ? "<SECRETO_WEBHOOK_KAPSO>" : "<SECRETO_WEBHOOK_KAPSO_O_CRON_SECRET>";
+  const url = `${siteUrl}/api/webhooks/kapso/${storeId}?secret=${placeholder}`;
   const [copied, setCopied] = useState(false);
   return (
     <Section
       title="Webhooks de Kapso"
-      subtitle="Pega esta URL en los dos webhooks de Kapso. Reemplaza <CRON_SECRET> por el secreto que tienes en Vercel (variable CRON_SECRET)."
+      subtitle={
+        hasSecret
+          ? "Pega esta URL en los dos webhooks de Kapso. Reemplaza el marcador por el «Secreto webhook de Kapso» que configuraste arriba (es exclusivo de esta tienda)."
+          : "Pega esta URL en los dos webhooks de Kapso. Define un «Secreto webhook de Kapso» arriba (exclusivo de esta tienda) y úsalo aquí. Mientras no lo configures, sigue valiendo el CRON_SECRET compartido."
+      }
     >
       <Card>
         <div className="space-y-4">
@@ -365,6 +379,7 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
           <SecretField name="shopify_webhook_secret" label="Shopify API secret (HMAC)" set={data.has.webhookSecret} />
           <SecretField name="kapso_api_key" label="Kapso API key" set={data.has.kapsoKey} />
           <SecretField name="flow_webhook_secret" label="Secreto webhook de Shopify Flow (búsquedas)" set={data.has.flowSecret} />
+          <SecretField name="kapso_webhook_secret" label="Secreto webhook de Kapso (leads)" set={data.has.kapsoWebhookSecret} />
         </fieldset>
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">

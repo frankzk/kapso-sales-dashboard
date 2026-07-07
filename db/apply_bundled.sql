@@ -1406,3 +1406,12 @@ grant all privileges on yape_vision_checks to service_role;
 
 alter table leads add column if not exists address1  text;
 alter table leads add column if not exists ship_name text;
+
+-- ---- 0033 ----
+-- 0033_kapso_webhook_secret.sql — per-store secret for the Kapso webhook.
+-- Replaces the shared CRON_SECRET as the per-tenant auth for
+-- /api/webhooks/kapso/[storeId] so one owner can't inject leads into another
+-- store. Encrypted at rest (AES-256-GCM). CRON_SECRET stays as a legacy
+-- fallback only for stores that have not set their own secret yet.
+
+alter table stores add column if not exists kapso_webhook_secret_enc text;

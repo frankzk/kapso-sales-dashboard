@@ -29,6 +29,7 @@ export interface StoreSettingsInput {
   shopify_webhook_secret?: string;
   kapso_api_key?: string;
   flow_webhook_secret?: string;
+  kapso_webhook_secret?: string;
   telegram_bot_token?: string;
   meta_access_token?: string;
 }
@@ -88,6 +89,8 @@ export function buildStoreUpdate(
   if (kapso) patch.kapso_api_key_enc = encrypt(kapso, keyOverride);
   const flow = clean(input.flow_webhook_secret);
   if (flow) patch.flow_webhook_secret_enc = encrypt(flow, keyOverride);
+  const kapsoWebhook = clean(input.kapso_webhook_secret);
+  if (kapsoWebhook) patch.kapso_webhook_secret_enc = encrypt(kapsoWebhook, keyOverride);
   const tgToken = clean(input.telegram_bot_token);
   if (tgToken) patch.telegram_bot_token_enc = encrypt(tgToken, keyOverride);
   const metaTok = clean(input.meta_access_token);

@@ -67,6 +67,13 @@ el dashboard solo **lee** bajo RLS.
   `CRON_SECRET`).
 - **HMAC de webhooks** verificado (`X-Shopify-Hmac-Sha256`, comparación en
   tiempo constante) con el secreto **por tienda** descifrado.
+- **Webhook de Kapso aislado por tienda.** `/api/webhooks/kapso/[storeId]` se
+  autentica con un **secreto por tienda** (`?secret=…`, en *Ajustes → Rotar
+  credenciales*), comparado en tiempo constante. Cuando una tienda define el
+  suyo, solo ese secreto la autoriza — el `CRON_SECRET` compartido deja de servir
+  para esa tienda, así **un dueño no puede inyectar leads en la tienda de otro**.
+  Las tiendas sin secreto propio conservan el `CRON_SECRET` como respaldo
+  (compatibilidad); configúralo antes de dar acceso a dueños externos.
 - **Idempotencia** de webhooks con `webhook_events (store_id, topic, shopify_id)`.
 - **Cron protegido** por `CRON_SECRET`.
 

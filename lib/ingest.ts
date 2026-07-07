@@ -5,6 +5,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
+import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
 import { fetchMetaAdMeta, normalizeMetaAdAccounts, type StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
@@ -19,6 +20,7 @@ import {
   verifyShopifyHmac,
 } from "@/lib/shopify";
 import {
+  classifyKapsoEvent,
   fetchConversationSignals,
   getPhoneHealth,
   listAllConversations,
@@ -33,9 +35,11 @@ import {
   tzParts,
 } from "@/lib/metrics";
 import {
+  applyHandoff,
   archiveStaleLeads,
   eventOverridesDisposition,
   flagOverdueFollowups,
+  ingestConversationEvent,
   lastDispositionAtByPhone,
   linkDraftOrdersToLeads,
   linkOrderToLead,
@@ -62,6 +66,7 @@ export interface StoreCreds {
   kapso_project_id: string | null;
   kapso_api_key: string | null;
   flow_webhook_secret: string | null;
+  kapso_webhook_secret: string | null;
   whatsapp_phone_number_id: string | null;
   currency: string;
   timezone: string;
@@ -99,6 +104,7 @@ export async function getStoreCreds(
     kapso_project_id: data.kapso_project_id ?? null,
     kapso_api_key: decryptOrNull(data.kapso_api_key_enc),
     flow_webhook_secret: decryptOrNull(data.flow_webhook_secret_enc),
+    kapso_webhook_secret: decryptOrNull(data.kapso_webhook_secret_enc),
     whatsapp_phone_number_id: data.whatsapp_phone_number_id ?? null,
     currency: data.currency ?? "PEN",
     timezone: data.timezone ?? "America/Lima",
@@ -380,6 +386,105 @@ export async function processFlowWebhook(
     return processWinback(admin, params.storeId, payload, creds);
   }
   return { status: "ok" }; // unknown Flow source — accept + ignore
+}
+
+// ---------------------------------------------------------------------------
+// Kapso webhook (per-store secret + tenant isolation)
+// ---------------------------------------------------------------------------
+
+export interface KapsoWebhookParams {
+  storeId: string;
+  /** Secret from the `?secret=` query param on the webhook URL. */
+  providedSecret: string | null;
+  /** The `X-Webhook-Event` header (used to classify the event). */
+  eventHeader: string | null;
+  body: any;
+}
+
+export interface KapsoWebhookResult {
+  status: "ok" | "unauthorized";
+  kind?: string;
+  reason?: string;
+}
+
+/** Constant-time string compare (equal-length gate first, then timingSafeEqual). */
+function constantTimeEquals(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * Authorize a Kapso webhook call. A store's OWN secret is authoritative: once
+ * `perStoreSecret` is set, only it is accepted (the shared CRON_SECRET no longer
+ * authorizes writes to that store, closing the cross-tenant injection hole).
+ * Stores that have not set a per-store secret yet fall back to `cronSecret` so
+ * existing wiring keeps working during migration. Pure + unit-tested.
+ */
+export function authorizeKapsoWebhook(
+  provided: string | null | undefined,
+  perStoreSecret: string | null,
+  cronSecret: string | null,
+): boolean {
+  const expected = perStoreSecret ?? cronSecret;
+  if (!expected || !provided) return false;
+  return constantTimeEquals(provided, expected);
+}
+
+/**
+ * Authenticate + dispatch an inbound Kapso webhook for a single store. Loads the
+ * store's per-store secret, authorizes (see authorizeKapsoWebhook), then routes:
+ * a Platform `workflow.execution.handoff` → hot lead; a WhatsApp
+ * `conversation.ended/inactive` → abandono lead; message events are acked and
+ * ignored. All writes are scoped to `storeId` by the callees.
+ */
+/**
+ * Load a store and authorize a Kapso webhook request against its per-store
+ * secret (with the CRON_SECRET fallback). Returns the decrypted creds when the
+ * caller is authorized, or null when the store is unknown OR the secret is
+ * wrong — callers must not distinguish the two (no store enumeration). Shared by
+ * the POST handler and the GET validation ping.
+ */
+export async function authorizeKapsoRequest(
+  storeId: string,
+  providedSecret: string | null,
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<StoreCreds | null> {
+  const creds = await getStoreCreds(storeId, admin);
+  if (!creds) return null;
+  // Only need the shared CRON_SECRET as a fallback when this store has no secret
+  // of its own; read it lazily so a per-store-secured store works even without
+  // CRON_SECRET configured.
+  let cronSecret: string | null = null;
+  if (!creds.kapso_webhook_secret) {
+    try {
+      cronSecret = env.cronSecret();
+    } catch {
+      cronSecret = null;
+    }
+  }
+  return authorizeKapsoWebhook(providedSecret, creds.kapso_webhook_secret, cronSecret) ? creds : null;
+}
+
+export async function processKapsoWebhook(
+  params: KapsoWebhookParams,
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<KapsoWebhookResult> {
+  const creds = await authorizeKapsoRequest(params.storeId, params.providedSecret, admin);
+  // Unknown store OR bad secret → unauthorized (don't reveal which).
+  if (!creds) return { status: "unauthorized" };
+
+  const kind = classifyKapsoEvent(params.eventHeader, params.body);
+  if (kind === "handoff") {
+    const res = await applyHandoff(admin, params.storeId, params.body);
+    return { status: "ok", kind, reason: res.reason };
+  }
+  if (kind === "conversation") {
+    const res = await ingestConversationEvent(admin, params.storeId, params.body);
+    return { status: "ok", kind, reason: res.reason };
+  }
+  return { status: "ok", kind, reason: "skipped" };
 }
 
 /** orders/create|updated → upsert the kapso order, recompute the day, link won. */
