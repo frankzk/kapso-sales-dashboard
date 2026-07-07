@@ -1396,3 +1396,13 @@ create policy yape_vision_checks_select on yape_vision_checks for select to auth
   using (store_id in (select auth_store_ids()));
 grant select on yape_vision_checks to authenticated;
 grant all privileges on yape_vision_checks to service_role;
+
+
+-- ---- 0032 ----
+-- 0032_lead_ship_address.sql — surface the full shipping address on cart leads:
+-- address1 (street) + ship_name (recipient) denormalized from the Shopify draft
+-- (the rest — district/province/region/referencia — already landed in 0013).
+-- Fills in on the next sync from data already in draft_orders (no re-fetch).
+
+alter table leads add column if not exists address1  text;
+alter table leads add column if not exists ship_name text;

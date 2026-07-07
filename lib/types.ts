@@ -179,6 +179,8 @@ export interface LeadRow {
   province?: string | null;
   region?: string | null;
   referencia?: string | null;
+  address1?: string | null; // shippingAddress.address1 (calle) — 0032
+  ship_name?: string | null; // shipping recipient (draft customer_name) — 0032
   inbound_count?: number | null;
   // Source / channel attribution (0008). 'meta_ad' for Click-to-WhatsApp ad
   // leads (captured from the first inbound message's `referral`); null = organic.

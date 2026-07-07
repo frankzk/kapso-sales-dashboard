@@ -766,7 +766,7 @@ async function upsertLeadResilient(admin: SupabaseClient, row: any): Promise<voi
   const { error } = await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
   if (!error) return;
   let dropped = false;
-  for (const c of ["draft_order_name", "draft_order_status", "draft_order_url", "province", "region", "referencia"]) {
+  for (const c of ["draft_order_name", "draft_order_status", "draft_order_url", "province", "region", "referencia", "address1", "ship_name"]) {
     if (c in row) {
       delete row[c];
       dropped = true;
@@ -802,6 +802,8 @@ async function upsertDraftCartLead(
     province: d.province,
     region: d.region,
     referencia: d.referencia,
+    address1: d.address1,
+    ship_name: d.customer_name, // shipping recipient (may differ from lead.name)
   };
   // Status/source/identity ONLY for a brand-new lead — never touch an existing
   // lead's disposition or won state (parity with nextLeadState's manual guard).
