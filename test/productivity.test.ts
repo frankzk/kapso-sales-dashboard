@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   attachDeltas,
   computeAdvisorStats,
+  emptyPorFuente,
   isWonLead,
   localRangeBoundsIso,
   type AdvisorCall,
@@ -104,6 +105,33 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
     expect(u2.cerradosDetalle).toEqual([]); // no wins → empty detail
   });
 
+  it("splits an advisor's wins by acquisition source (porFuente), defaulting missing to organic", () => {
+    const calls: AdvisorCall[] = [
+      { vendedora: "u1", lead_id: "L1", kind: "call", occurred_at: "2026-07-05T10:00:00Z" },
+      { vendedora: "u1", lead_id: "L2", kind: "call", occurred_at: "2026-07-05T11:00:00Z" },
+      { vendedora: "u1", lead_id: "L3", kind: "call", occurred_at: "2026-07-05T12:00:00Z" },
+      { vendedora: "u1", lead_id: "L4", kind: "call", occurred_at: "2026-07-05T13:00:00Z" }, // won, no source → organic
+      { vendedora: "u1", lead_id: "L5", kind: "call", occurred_at: "2026-07-05T14:00:00Z" }, // not won → ignored
+    ];
+    const leadOutcome = new Map<string, { won: boolean; net: number; source?: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" }>([
+      ["L1", { won: true, net: 100, source: "meta_ad" }],
+      ["L2", { won: true, net: 50, source: "cod_cart" }],
+      ["L3", { won: true, net: 30, source: "meta_ad" }], // second ad sale → aggregates
+      ["L4", { won: true, net: 20 }], // no source → organic bucket
+      ["L5", { won: false, net: 999, source: "abandoned_browse" }], // not won → not counted
+    ]);
+    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const u1 = rows.find((r) => r.userId === "u1")!;
+    expect(u1.cerrados).toBe(4);
+    expect(u1.porFuente.meta_ad).toEqual({ cerrados: 2, ingresos: 130 });
+    expect(u1.porFuente.cod_cart).toEqual({ cerrados: 1, ingresos: 50 });
+    expect(u1.porFuente.organic).toEqual({ cerrados: 1, ingresos: 20 });
+    expect(u1.porFuente.abandoned_browse).toEqual({ cerrados: 0, ingresos: 0 }); // L5 not won
+    // Per-source cerrados sum to the total.
+    const sum = Object.values(u1.porFuente).reduce((a, c) => a + c.cerrados, 0);
+    expect(sum).toBe(u1.cerrados);
+  });
+
   it("infers active hours by local day, splitting blocks on idle gaps >45min", () => {
     const calls: AdvisorCall[] = [
       // Day 1 (Lima 2026-06-20): one block 09:00→10:00 = 1h
@@ -136,6 +164,7 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
       cerrados: 0,
       cerradosDetalle: [],
       ingresos: 0,
+      porFuente: emptyPorFuente(),
       conversion: 0,
       horas: 0,
       dias: 0,
