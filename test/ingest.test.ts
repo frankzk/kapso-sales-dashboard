@@ -55,6 +55,25 @@ class FakeBuilder {
     this.filters[k] = v;
     return this;
   }
+  lt(k: string, v: any) {
+    this.filters[`${k}__lt`] = v;
+    return this;
+  }
+  gt(k: string, v: any) {
+    this.filters[`${k}__gt`] = v;
+    return this;
+  }
+  lte(k: string, v: any) {
+    this.filters[`${k}__lte`] = v;
+    return this;
+  }
+  gte(k: string, v: any) {
+    this.filters[`${k}__gte`] = v;
+    return this;
+  }
+  or() {
+    return this;
+  }
   not() {
     return this;
   }
@@ -489,6 +508,69 @@ describe("shouldReopenWonCart (open cart vs a sticky `won` lead)", () => {
         lastOrderAt: null,
         lastDispositionAt: null,
       }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldReopenLostCart (fresh cart on an auto-archived lead)", () => {
+  const staleCutoff = "2026-06-28T00:00:00Z"; // now − 7d
+
+  it("reopens a lost lead when a FRESH cart (after the cutoff) arrives, no disposition", async () => {
+    const { shouldReopenLostCart } = await import("@/lib/leads-ingest");
+    // The reported bug: a lead auto-archived by inactivity gets a brand-new cart.
+    expect(
+      shouldReopenLostCart({
+        category: "lost",
+        draftCreatedAt: "2026-07-05T13:00:00Z",
+        lastDispositionAt: null, // auto-archive is a SYSTEM row, not a manual result
+        staleCutoff,
+      }),
+    ).toBe(true);
+  });
+
+  it("reopens when the fresh cart post-dates an older manual disposition", async () => {
+    const { shouldReopenLostCart } = await import("@/lib/leads-ingest");
+    expect(
+      shouldReopenLostCart({
+        category: "lost",
+        draftCreatedAt: "2026-07-05T13:00:00Z",
+        lastDispositionAt: "2026-06-29T10:00:00Z", // marked lost earlier, cart is newer
+        staleCutoff,
+      }),
+    ).toBe(true);
+  });
+
+  it("does NOT reopen when the agent's manual result post-dates the cart", async () => {
+    const { shouldReopenLostCart } = await import("@/lib/leads-ingest");
+    expect(
+      shouldReopenLostCart({
+        category: "lost",
+        draftCreatedAt: "2026-07-05T13:00:00Z",
+        lastDispositionAt: "2026-07-06T09:00:00Z", // "ya compró en otro lado" after the cart
+        staleCutoff,
+      }),
+    ).toBe(false);
+  });
+
+  it("does NOT reopen a DEAD cart (created before the stale window) — no ping-pong", async () => {
+    const { shouldReopenLostCart } = await import("@/lib/leads-ingest");
+    expect(
+      shouldReopenLostCart({
+        category: "lost",
+        draftCreatedAt: "2026-06-20T13:00:00Z", // the same old cart that caused the archive
+        lastDispositionAt: null,
+        staleCutoff,
+      }),
+    ).toBe(false);
+  });
+
+  it("never touches a lead that isn't lost", async () => {
+    const { shouldReopenLostCart } = await import("@/lib/leads-ingest");
+    expect(
+      shouldReopenLostCart({ category: "open", draftCreatedAt: "2026-07-05T13:00:00Z", lastDispositionAt: null, staleCutoff }),
+    ).toBe(false);
+    expect(
+      shouldReopenLostCart({ category: "won", draftCreatedAt: "2026-07-05T13:00:00Z", lastDispositionAt: null, staleCutoff }),
     ).toBe(false);
   });
 });

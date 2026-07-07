@@ -649,6 +649,25 @@ export function shouldReopenWonCart(opts: {
   return cartBeatsOrder && eventOverridesDisposition(opts.draftCreatedAt, opts.lastDispositionAt);
 }
 
+/**
+ * Should a fresh OPEN cart re-open a lead currently `lost` — typically one
+ * auto-archived by inactivity (`archiveStaleLeads`)? Yes when the cart was created
+ * WITHIN the stale window (a genuine fresh signal, not the same old cart that
+ * caused the archive — which would ping-pong reopen↔archive) AND it post-dates the
+ * agent's last MANUAL result (never revert a just-registered "ya compró en otro
+ * lado"). Pure; mirrors shouldReopenWonCart for the archived case.
+ */
+export function shouldReopenLostCart(opts: {
+  category: string | undefined;
+  draftCreatedAt: string | null;
+  lastDispositionAt: string | null | undefined;
+  staleCutoff: string; // now − STALE_LEAD_DAYS (ISO); a cart older than this is dead
+}): boolean {
+  if (opts.category !== "lost") return false;
+  if (!opts.draftCreatedAt || opts.draftCreatedAt <= opts.staleCutoff) return false;
+  return eventOverridesDisposition(opts.draftCreatedAt, opts.lastDispositionAt);
+}
+
 /** Most recent MANUAL call disposition time per phone (when an agent set a call
  *  result). The auto-sync must not override a disposition with an order/cart that
  *  predates it. Returns {} on any error. */
@@ -788,6 +807,7 @@ async function upsertDraftCartLead(
   fillSource = false,
 ): Promise<void> {
   const qty = d.line_items.reduce((s, li) => s + (Number(li.quantity) || 0), 0);
+  const seen = d.updated_at ?? d.created_at; // the cart's activity time
   const row: any = {
     store_id: storeId,
     phone: d.customer_phone,
@@ -814,17 +834,29 @@ async function upsertDraftCartLead(
     row.source = COD_CART_SOURCE;
     if (d.customer_name) row.name = d.customer_name;
     if (d.created_at) row.first_seen_at = d.created_at;
-    const seen = d.updated_at ?? d.created_at;
     if (seen) row.last_interaction_at = seen;
   } else if (reopen) {
-    // Recompra, o sobra de una orden cancelada: un carrito abierto fresco lo vuelve
-    // a poner como llamable. Atribuye a "carrito" si el lead no tenía fuente.
+    // Recompra, o sobra de una orden cancelada, o un lead auto-archivado: un carrito
+    // abierto fresco lo vuelve a poner como llamable. Atribuye a "carrito" si no tenía fuente.
     row.status = "nuevo";
     row.category = "open";
     row.needs_attention = false;
     if (fillSource) row.source = COD_CART_SOURCE;
   }
   await upsertLeadResilient(admin, row);
+
+  // A fresh cart is a fresh signal of interest → advance the staleness clock so a
+  // new cart on an EXISTING lead isn't auto-archived (archiveStaleLeads keys on
+  // last_interaction_at). Advance-only (`.lt`): never regress a newer WhatsApp
+  // interaction; a null clock isn't archived anyway. New leads already set it above.
+  if (exists && seen && d.customer_phone) {
+    await admin
+      .from("leads")
+      .update({ last_interaction_at: seen })
+      .eq("store_id", storeId)
+      .eq("phone", d.customer_phone)
+      .lt("last_interaction_at", seen);
+  }
 }
 
 // ───────────────────── Búsquedas abandonadas (Shopify Flow) ─────────────────
@@ -1257,6 +1289,9 @@ export async function linkDraftOrdersToLeads(
   // Last manual call disposition per phone → a repeat cart only reopens a won lead
   // when it post-dates the agent's registered result (don't revert a worked lead).
   const dispositionByPhone = await lastDispositionAtByPhone(admin, storeId, phones);
+  // Carts created before this are "dead" (past the auto-archive window) — a lost
+  // lead only reopens for a cart fresher than this, so it never ping-pongs.
+  const staleCutoff = new Date(Date.now() - STALE_LEAD_DAYS * 86_400_000).toISOString();
 
   const recoveredDates: string[] = []; // created_at of newly-captured recovered orders
   const graceMs = DRAFT_GRACE_MINUTES * 60_000;
@@ -1271,15 +1306,22 @@ export async function linkDraftOrdersToLeads(
     // sync (which re-scans the whole window) surfaces it as a callable lead.
     if (d.created_at && Date.now() - new Date(d.created_at).getTime() < graceMs) continue;
     const phone = d.customer_phone as string;
+    const category = existingCategory.get(phone);
+    const lastDispositionAt = dispositionByPhone.get(phone);
     // Reopen a WON lead when a fresh open cart out-ranks the win — a recompra
     // (cart newer than the order) OR the winning order is no longer active
     // (cancelled/gone, so no `wonAt`) — and the cart post-dates any manual result.
-    const reopen = shouldReopenWonCart({
-      category: existingCategory.get(phone),
-      draftCreatedAt: d.created_at,
-      lastOrderAt: orderCreatedAt.get(phone),
-      lastDispositionAt: dispositionByPhone.get(phone),
-    });
+    // Also reopen a LOST lead (usually auto-archived by inactivity) when a genuinely
+    // fresh cart arrives — the customer came back — so a new cart never shows under
+    // a "Perdido".
+    const reopen =
+      shouldReopenWonCart({
+        category,
+        draftCreatedAt: d.created_at,
+        lastOrderAt: orderCreatedAt.get(phone),
+        lastDispositionAt,
+      }) ||
+      shouldReopenLostCart({ category, draftCreatedAt: d.created_at, lastDispositionAt, staleCutoff });
     // On reopen, attribute the lead to the cart if it has no source yet (a bare lead
     // created by the order link) so it shows under "Carrito" in the Fuente filter.
     const fillSource = reopen && !existingSource.get(phone);
