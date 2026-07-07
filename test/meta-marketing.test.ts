@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fetchMetaSpend, listMetaAdAccounts, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
+import { fetchMetaAdMeta, fetchMetaSpend, listMetaAdAccounts, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
 
 function fakeFetch(status: number, json: unknown, capture?: (url: string) => void) {
   return (async (url: string) => {
@@ -122,5 +122,63 @@ describe("fetchMetaSpend", () => {
       fetchImpl: spendFetch({ "1": 50 }), // act_2 errors → counts as 0, not null
     });
     expect(partial).toBe(50);
+  });
+});
+
+describe("fetchMetaAdMeta", () => {
+  function adFetch(byId: Record<string, any>, capture?: (url: string) => void) {
+    return (async (url: string) => {
+      capture?.(url);
+      const id = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() ?? "");
+      const a = byId[id];
+      const ok = a !== undefined && !a?.error;
+      return { ok, status: ok ? 200 : 400, json: async () => a ?? { error: { message: "not found" } } };
+    }) as unknown as typeof fetch;
+  }
+
+  it("resolves ad_ids to real ad / adset / campaign names", async () => {
+    const seen: string[] = [];
+    const rows = await fetchMetaAdMeta("TOK", ["111", "222"], {
+      baseUrl: "https://graph.test/v21.0",
+      fetchImpl: adFetch(
+        {
+          "111": {
+            name: "mochila viral 81 9:16",
+            effective_status: "ACTIVE",
+            account_id: "act_999",
+            adset: { id: "as1", name: "Conjunto A" },
+            campaign: { id: "c1", name: "CBO Nail", objective: "OUTCOME_ENGAGEMENT" },
+          },
+          "222": { name: "Madera 3", effective_status: "PAUSED", account_id: "999", campaign: { id: "c1", name: "CBO Nail" } },
+        },
+        (u) => seen.push(u),
+      ),
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.ad_id === "111")).toMatchObject({
+      ad_name: "mochila viral 81 9:16",
+      status: "ACTIVE",
+      account_id: "999", // act_ prefix stripped
+      adset_id: "as1",
+      adset_name: "Conjunto A",
+      campaign_name: "CBO Nail",
+      objective: "OUTCOME_ENGAGEMENT",
+    });
+    expect(rows.find((r) => r.ad_id === "222")!.adset_id).toBeNull(); // no adset in the response
+    expect(seen[0]).toContain("/v21.0/111?");
+    expect(seen[0]).toContain("access_token=TOK");
+  });
+
+  it("omits ids that error (deleted / no access) without throwing", async () => {
+    const rows = await fetchMetaAdMeta("TOK", ["ok", "bad"], {
+      baseUrl: "https://graph.test/v21.0",
+      fetchImpl: adFetch({ ok: { name: "Anuncio", account_id: "1" } }), // "bad" absent → 400
+    });
+    expect(rows.map((r) => r.ad_id)).toEqual(["ok"]);
+  });
+
+  it("returns [] for empty inputs", async () => {
+    expect(await fetchMetaAdMeta("", ["1"])).toEqual([]);
+    expect(await fetchMetaAdMeta("T", [])).toEqual([]);
   });
 });

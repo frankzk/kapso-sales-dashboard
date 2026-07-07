@@ -1042,3 +1042,63 @@ describe("detectYapeByVision · vision gate for silent voucher images", () => {
     expect(calls).toBe(0);
   });
 });
+
+describe("resolveMetaAdNames · populate meta_ads with real ad names", () => {
+  // Minimal admin: leads.select(...).limit() → the store's ad_ids; meta_ads
+  // .select(...).in() → cached rows; meta_ads.upsert() → recorded.
+  function fakeAdmin(leadIds: string[], cached: { ad_id: string; fetched_at: string | null }[]) {
+    const upserts: any[] = [];
+    const admin = {
+      from(_t: string) {
+        const b: any = {
+          select: () => b,
+          eq: () => b,
+          not: () => b,
+          in: () => Promise.resolve({ data: cached }), // meta_ads cached lookup
+          limit: () => Promise.resolve({ data: leadIds.map((ad_id) => ({ ad_id })) }), // leads
+          upsert: (rows: any[]) => {
+            upserts.push(...rows);
+            return Promise.resolve({ data: null, error: null });
+          },
+        };
+        return b;
+      },
+    };
+    return { admin, upserts };
+  }
+
+  const okFetch = (async (url: string) => {
+    const id = new URL(url).pathname.split("/").filter(Boolean).pop();
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ name: `Ad ${id}`, account_id: "9", campaign: { id: "c", name: "Camp" } }),
+    };
+  }) as unknown as typeof fetch;
+
+  it("resolves only uncached/stale ad_ids and upserts them with a timestamp", async () => {
+    const { resolveMetaAdNames } = await import("@/lib/ingest");
+    const fresh = new Date().toISOString();
+    const { admin, upserts } = fakeAdmin(["111", "222", "222", "333"], [{ ad_id: "111", fetched_at: fresh }]);
+    const n = await resolveMetaAdNames(admin as any, "store-1", "TOK", { fetchImpl: okFetch });
+    expect(n).toBe(2); // 111 is fresh-cached → skipped; 222 (deduped) + 333 resolved
+    expect(upserts.map((r) => r.ad_id).sort()).toEqual(["222", "333"]);
+    expect(upserts.every((r) => r.fetched_at && r.ad_name)).toBe(true);
+  });
+
+  it("re-resolves a STALE cached ad (keeps status fresh)", async () => {
+    const { resolveMetaAdNames } = await import("@/lib/ingest");
+    const old = "2020-01-01T00:00:00Z";
+    const { admin, upserts } = fakeAdmin(["111"], [{ ad_id: "111", fetched_at: old }]);
+    const n = await resolveMetaAdNames(admin as any, "store-1", "TOK", { fetchImpl: okFetch });
+    expect(n).toBe(1);
+    expect(upserts[0].ad_id).toBe("111");
+  });
+
+  it("no-ops without a token or with no campaign leads", async () => {
+    const { resolveMetaAdNames } = await import("@/lib/ingest");
+    const { admin } = fakeAdmin([], []);
+    expect(await resolveMetaAdNames(admin as any, "s", "")).toBe(0); // no token
+    expect(await resolveMetaAdNames(admin as any, "s", "TOK", { fetchImpl: okFetch })).toBe(0); // no ad_ids
+  });
+});

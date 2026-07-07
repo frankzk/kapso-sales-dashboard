@@ -87,6 +87,70 @@ export async function listMetaAdAccounts(
   return { ok: true, accounts };
 }
 
+/** A resolved Meta ad → the row shape stored in `meta_ads` (real names + status). */
+export interface MetaAdRow {
+  ad_id: string;
+  account_id: string | null;
+  campaign_id: string | null;
+  campaign_name: string | null;
+  objective: string | null;
+  adset_id: string | null;
+  adset_name: string | null;
+  ad_name: string | null;
+  status: string | null; // effective_status snapshot (ACTIVE/PAUSED/…)
+}
+
+/**
+ * Resolve Meta `ad_id`s → their real ad / adset / campaign names via the Graph
+ * API (`GET /<ad_id>?fields=…`). One request per id (robust: a deleted/forbidden
+ * ad just yields null instead of poisoning a whole batch), run concurrently.
+ * Best-effort: unresolved ids are omitted and never throw. `access_token` travels
+ * as a query param (standard for the Graph API); a short timeout per id keeps a
+ * slow API from hanging the sync. Cap the id list at the call site.
+ */
+export async function fetchMetaAdMeta(
+  token: string,
+  adIds: string[],
+  opts?: { fetchImpl?: typeof fetch; baseUrl?: string; timeoutMs?: number },
+): Promise<MetaAdRow[]> {
+  if (!token?.trim() || !adIds.length) return [];
+  const base = (opts?.baseUrl ?? GRAPH_BASE).replace(/\/$/, "");
+  const doFetch = opts?.fetchImpl ?? fetch;
+  const timeMs = opts?.timeoutMs ?? 6000;
+  const fields = "name,effective_status,account_id,adset{id,name},campaign{id,name,objective}";
+
+  const rows = await Promise.all(
+    adIds.map(async (id): Promise<MetaAdRow | null> => {
+      const url = new URL(`${base}/${encodeURIComponent(id)}`);
+      url.searchParams.set("fields", fields);
+      url.searchParams.set("access_token", token.trim());
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeMs);
+      try {
+        const res = await doFetch(url.toString(), { headers: { Accept: "application/json" }, signal: ctrl.signal });
+        const a: any = await res.json().catch(() => null);
+        if (!res.ok || !a || a.error) return null; // deleted / no access / error → skip
+        return {
+          ad_id: id,
+          account_id: a.account_id ? String(a.account_id).replace(/^act_/, "") : null,
+          campaign_id: a.campaign?.id ?? null,
+          campaign_name: a.campaign?.name ?? null,
+          objective: a.campaign?.objective ?? null,
+          adset_id: a.adset?.id ?? null,
+          adset_name: a.adset?.name ?? null,
+          ad_name: typeof a.name === "string" ? a.name : null,
+          status: a.effective_status ?? null,
+        };
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }),
+  );
+  return rows.filter((r): r is MetaAdRow => r != null);
+}
+
 /**
  * Total ad SPEND across the given ad accounts for a date range (the cost half of
  * ROAS), summed at the account level via `GET /act_<id>/insights?fields=spend`.

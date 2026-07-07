@@ -6,7 +6,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { decryptOrNull } from "@/lib/crypto";
-import { normalizeMetaAdAccounts, type StoreMetaAdAccount } from "@/lib/meta-marketing";
+import { fetchMetaAdMeta, normalizeMetaAdAccounts, type StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
   buildDraftOrdersSearchQuery,
   buildKapsoOrdersSearchQuery,
@@ -536,7 +536,61 @@ export interface SyncReport {
   opsCaptured: boolean;
   whatsappNumbers: number;
   archived: number;
+  metaAdsResolved: number; // Meta ad_ids whose real names we resolved this run
   errors: string[];
+}
+
+// Resolve up to this many new/stale Meta ad_ids per run (drains a backlog over a
+// few runs; keeps a run's Graph API load bounded).
+const META_AD_RESOLVE_CAP = 25;
+// Re-resolve a cached ad older than this so its status (ACTIVE/PAUSED) stays current.
+const META_AD_STALE_DAYS = 7;
+
+/**
+ * Populate the `meta_ads` lookup with real ad / adset / campaign names so the
+ * "Rendimiento por anuncio" report shows the creative name instead of the shared
+ * CTWA headline ("Madera Como Nueva"). Resolves this store's meta_ad lead ad_ids
+ * that aren't cached yet (or are stale) via the Meta Graph API, then upserts.
+ * Best-effort; returns how many rows it resolved. Never throws.
+ */
+export async function resolveMetaAdNames(
+  admin: SupabaseClient,
+  storeId: string,
+  token: string,
+  opts?: { fetchImpl?: typeof fetch },
+): Promise<number> {
+  if (!token) return 0;
+  const { data: leadAds } = await admin
+    .from("leads")
+    .select("ad_id")
+    .eq("store_id", storeId)
+    .eq("source", "meta_ad")
+    .not("ad_id", "is", null)
+    .limit(2000);
+  const adIds = [
+    ...new Set(((leadAds as { ad_id: string | null }[]) ?? []).map((l) => l.ad_id).filter((x): x is string => !!x)),
+  ];
+  if (!adIds.length) return 0;
+
+  // Which are already cached AND fresh? (meta_ads is global — creative names
+  // aren't store-scoped.) Missing or stale ids get (re)resolved.
+  const { data: cached } = await admin.from("meta_ads").select("ad_id, fetched_at").in("ad_id", adIds);
+  const staleCut = Date.now() - META_AD_STALE_DAYS * 86_400_000;
+  const fresh = new Set<string>();
+  for (const r of (cached as { ad_id: string; fetched_at: string | null }[]) ?? []) {
+    if (r.fetched_at && new Date(r.fetched_at).getTime() > staleCut) fresh.add(r.ad_id);
+  }
+  const toResolve = adIds.filter((id) => !fresh.has(id)).slice(0, META_AD_RESOLVE_CAP);
+  if (!toResolve.length) return 0;
+
+  const rows = await fetchMetaAdMeta(token, toResolve, opts);
+  if (!rows.length) return 0;
+  const now = new Date().toISOString();
+  await admin.from("meta_ads").upsert(
+    rows.map((r) => ({ ...r, fetched_at: now })),
+    { onConflict: "ad_id" },
+  );
+  return rows.length;
 }
 
 export async function runStoreSync(
@@ -553,6 +607,7 @@ export async function runStoreSync(
     opsCaptured: false,
     whatsappNumbers: 0,
     archived: 0,
+    metaAdsResolved: 0,
     errors: [],
   };
   const creds = await getStoreCreds(storeId, admin);
@@ -713,6 +768,16 @@ export async function runStoreSync(
     report.archived = await archiveStaleLeads(admin, storeId);
   } catch (e: any) {
     report.errors.push(`archive: ${e.message}`);
+  }
+
+  // 2e) Resolver nombres reales de anuncios Meta (meta_ads) para "Rendimiento por
+  //     anuncio". Best-effort, gateado por el token de Meta; drena por corrida.
+  if (creds.meta_access_token) {
+    try {
+      report.metaAdsResolved = await resolveMetaAdNames(admin, storeId, creds.meta_access_token);
+    } catch (e: any) {
+      report.errors.push(`meta-ads: ${e.message}`);
+    }
   }
 
   // 3) Operational snapshot (best-effort; never fails the run)
