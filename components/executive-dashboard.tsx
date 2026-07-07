@@ -390,8 +390,8 @@ export function ExecutiveDashboard({
       {campaignStats.length > 0 && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
           <Module
-            title="Rendimiento por campaña (Meta)"
-            subtitle="Clic en una columna para ordenar · el nombre del anuncio abre Meta Ads Manager · el ROAS se completa al sumar el gasto"
+            title="Rendimiento por anuncio (Meta)"
+            subtitle="Una fila por anuncio (ad id) · clic en una columna para ordenar · el nombre del anuncio abre Meta Ads Manager · el ROAS se completa al sumar el gasto"
             info
             className="lg:col-span-12"
           >
