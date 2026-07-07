@@ -41,6 +41,12 @@ const DISPOSITIONS: { key: RerouteDisposition; label: string }[] = [
   { key: "cancela", label: "Cliente cancela / anula" },
 ];
 
+/** Next reprogrammed follow-up date (next_followup_at) as "12 ago", or "—". */
+function fmtReprogram(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("es-PE", { day: "2-digit", month: "short" });
+}
+
 /** Human sub-state suffix: "· Intento 3" for pending, "· por Fenix" for entregado. */
 function subState(s: { status_category: string; reroute_attempts: number; delivered_source: string | null }): string {
   if (s.status_category === "pending") return ` · ${attemptLabel(s.reroute_attempts)}`;
@@ -365,6 +371,7 @@ function ShipmentTable({
             <th className="px-4 py-2.5 text-left font-medium">Cliente</th>
             <th className="px-4 py-2.5 text-left font-medium">Distrito / Ciudad</th>
             <th className="px-4 py-2.5 text-left font-medium">Estado</th>
+            <th className="px-4 py-2.5 text-left font-medium">Reprogramación</th>
             <th className="px-4 py-2.5 text-right font-medium">Intentos</th>
           </tr>
         </thead>
@@ -401,6 +408,7 @@ function ShipmentTable({
               <td className="px-4 py-2.5">
                 <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
               </td>
+              <td className="px-4 py-2.5 text-slate-600">{fmtReprogram(s.next_followup_at)}</td>
               <td className="px-4 py-2.5 text-right text-slate-600">
                 {s.status_category === "pending" ? `${s.reroute_attempts} / 7` : "—"}
               </td>
