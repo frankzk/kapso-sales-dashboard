@@ -42,6 +42,27 @@ export interface WonOrderRef {
   at: string | null; // order created_at ISO
 }
 
+/** The four acquisition-source buckets a won order can be attributed to. */
+export type SourceBucket = "meta_ad" | "cod_cart" | "abandoned_browse" | "organic";
+export const SOURCE_BUCKETS: SourceBucket[] = ["meta_ad", "cod_cart", "abandoned_browse", "organic"];
+
+/** One advisor×source cell: how many orders closed and their net revenue. */
+export interface SourceCell {
+  cerrados: number;
+  ingresos: number;
+}
+
+/** A zeroed per-source breakdown (all four buckets present, so the matrix table
+ *  can render every column without null checks). */
+export function emptyPorFuente(): Record<SourceBucket, SourceCell> {
+  return {
+    meta_ad: { cerrados: 0, ingresos: 0 },
+    cod_cart: { cerrados: 0, ingresos: 0 },
+    abandoned_browse: { cerrados: 0, ingresos: 0 },
+    organic: { cerrados: 0, ingresos: 0 },
+  };
+}
+
 export interface AdvisorStat {
   userId: string;
   email: string;
@@ -50,6 +71,7 @@ export interface AdvisorStat {
   cerrados: number; // touched leads now won, attributed by last touch
   cerradosDetalle: WonOrderRef[]; // the orders behind `cerrados`, oldest first
   ingresos: number; // net revenue (total - refunded) of those orders
+  porFuente: Record<SourceBucket, SourceCell>; // cerrados+ingresos split by acquisition source
   conversion: number; // cerrados / leadsTrabajados, 0..1
   horas: number; // active hours inferred from action timestamps (idle-gap-split)
   dias: number; // distinct days with logged activity
@@ -65,7 +87,7 @@ export function isWonLead(category: string | null | undefined): boolean {
 }
 
 /** Canonical acquisition-source bucket for a lead's `source`. */
-function sourceKey(s: string | null | undefined): "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" {
+function sourceKey(s: string | null | undefined): SourceBucket {
   return s === "meta_ad"
     ? "meta_ad"
     : s === "cod_cart"
@@ -84,9 +106,12 @@ export interface AdvisorCall {
 
 export interface ProductivityInput {
   calls: AdvisorCall[];
-  /** Outcome of every touched lead: won? + net order revenue (+ the linked
-   *  order's code/date, when known, for the per-advisor detail). */
-  leadOutcome: Map<string, { won: boolean; net: number; orderName?: string | null; orderAt?: string | null }>;
+  /** Outcome of every touched lead: won? + net order revenue + acquisition
+   *  source bucket (+ the linked order's code/date, when known, for detail). */
+  leadOutcome: Map<
+    string,
+    { won: boolean; net: number; source?: SourceBucket; orderName?: string | null; orderAt?: string | null }
+  >;
   emailById: Map<string, string>;
 }
 
@@ -152,20 +177,24 @@ export function computeAdvisorStats(
     hoursByAgent.set(agent, e);
   }
 
-  const won = new Map<string, { cerrados: number; ingresos: number; detalle: WonOrderRef[] }>();
+  type WonAgg = { cerrados: number; ingresos: number; detalle: WonOrderRef[]; porFuente: Record<SourceBucket, SourceCell> };
+  const won = new Map<string, WonAgg>();
   for (const [leadId, lc] of lastCaller) {
     const o = leadOutcome.get(leadId);
     if (!o?.won) continue;
-    const w = won.get(lc.vendedora) ?? { cerrados: 0, ingresos: 0, detalle: [] };
+    const w = won.get(lc.vendedora) ?? { cerrados: 0, ingresos: 0, detalle: [], porFuente: emptyPorFuente() };
     w.cerrados += 1;
     w.ingresos += o.net;
+    const bucket = o.source ?? "organic";
+    w.porFuente[bucket].cerrados += 1;
+    w.porFuente[bucket].ingresos += o.net;
     w.detalle.push({ name: o.orderName ?? null, at: o.orderAt ?? null });
     won.set(lc.vendedora, w);
   }
 
   const rows: AdvisorStat[] = [];
   for (const [userId, a] of agg) {
-    const w = won.get(userId) ?? { cerrados: 0, ingresos: 0, detalle: [] };
+    const w = won.get(userId) ?? { cerrados: 0, ingresos: 0, detalle: [], porFuente: emptyPorFuente() };
     const h = hoursByAgent.get(userId);
     const leadsTrabajados = a.leads.size;
     // Oldest first; wins without an ingested order (no date yet) go last.
@@ -178,6 +207,7 @@ export function computeAdvisorStats(
       cerrados: w.cerrados,
       cerradosDetalle: w.detalle,
       ingresos: w.ingresos,
+      porFuente: w.porFuente,
       conversion: leadsTrabajados ? w.cerrados / leadsTrabajados : 0,
       horas: Math.round((h?.horas ?? 0) * 10) / 10,
       dias: h?.dias.size ?? 0,
@@ -299,6 +329,7 @@ export async function getAdvisorProductivity(
     leadOutcome.set(l.id, {
       won: isWonLead(l.category),
       net: info?.net ?? 0,
+      source: sourceKey(l.source),
       orderName: info?.name ?? null,
       orderAt: info?.created_at ?? null,
     });

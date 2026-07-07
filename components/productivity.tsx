@@ -3,9 +3,18 @@ import { Card, Section, StatCard, cn } from "@/components/ui";
 import { ProductivityTable } from "@/components/productivity-table";
 import type { DateRange } from "@/lib/access";
 import type { StoreSummary } from "@/lib/types";
-import type { AdvisorStatWithDelta, ProductivityTotals } from "@/lib/productivity";
+import type { AdvisorStatWithDelta, ProductivityTotals, SourceBucket, SourceCell } from "@/lib/productivity";
 
 type SourceFilter = "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null;
+
+/** Columns of the advisor×source matrix, in display order (same labels as the
+ *  "Fuente" filter chips). */
+const SOURCE_COLS: { key: SourceBucket; label: string }[] = [
+  { key: "meta_ad", label: "📣 Campaña" },
+  { key: "cod_cart", label: "🛒 Carrito" },
+  { key: "abandoned_browse", label: "🔎 Búsqueda" },
+  { key: "organic", label: "Orgánico" },
+];
 
 function money(n: number, currency: string): string {
   return new Intl.NumberFormat("es-PE", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
@@ -36,6 +45,14 @@ function presetRange(days: number): { from: string; to: string } {
   const from = new Date();
   from.setUTCDate(from.getUTCDate() - (days - 1));
   return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+}
+
+/** A single-day range `offset` days ago (0 = hoy, 1 = ayer). */
+function dayPreset(offset: number): { from: string; to: string } {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - offset);
+  const s = d.toISOString().slice(0, 10);
+  return { from: s, to: s };
 }
 
 function Chip({ href, label, active }: { href: string; label: string; active: boolean }) {
@@ -95,6 +112,17 @@ export function ProductivityBoard({
           </p>
         </div>
         <div className="flex flex-wrap gap-1.5">
+          {[
+            { label: "Hoy", p: dayPreset(0) },
+            { label: "Ayer", p: dayPreset(1) },
+          ].map(({ label, p }) => (
+            <Chip
+              key={label}
+              href={buildHref({ from: p.from, to: p.to, store: storeId, src: source })}
+              label={label}
+              active={range.from === p.from && range.to === p.to}
+            />
+          ))}
           {[7, 30, 90].map((d) => {
             const p = presetRange(d);
             return (
@@ -180,6 +208,15 @@ export function ProductivityBoard({
       </div>
 
       <Section
+        title="Ventas por asesora y fuente"
+        subtitle="Pedidos cerrados (y sus ingresos) de cada asesora, desglosados por cómo llegó el lead. El pedido se acredita a la última asesora que registró una llamada sobre ese lead."
+      >
+        <Card>
+          <SourceMatrix rows={rows} currency={currency} />
+        </Card>
+      </Section>
+
+      <Section
         title="Desempeño por asesora"
         subtitle={
           hasPrev
@@ -196,6 +233,85 @@ export function ProductivityBoard({
           />
         </Card>
       </Section>
+    </div>
+  );
+}
+
+/** Show the name part of the email (before @) as a friendlier label. */
+function advisorName(email: string): string {
+  return email.includes("@") ? email.split("@")[0]! : email;
+}
+
+/** One matrix cell: closed-order count (bold) + its net revenue (muted). Renders
+ *  a dash when the advisor closed nothing from that source. */
+function MatrixCell({ cell, currency, strong }: { cell: SourceCell; currency: string; strong?: boolean }) {
+  if (cell.cerrados === 0) {
+    return <td className="px-3 py-2 text-right align-top text-slate-300">—</td>;
+  }
+  return (
+    <td className="px-3 py-2 text-right align-top">
+      <div className={cn("tabular-nums", strong ? "font-semibold text-slate-900" : "font-medium text-slate-700")}>
+        {cell.cerrados}
+      </div>
+      <div className="text-xs tabular-nums text-slate-400">{money(cell.ingresos, currency)}</div>
+    </td>
+  );
+}
+
+/** Advisor × acquisition-source matrix: each advisor's closed orders (and their
+ *  revenue) split across the four sources, with per-source and grand totals.
+ *  Advisors with no closes in the period are omitted (an all-dashes row is noise). */
+function SourceMatrix({ rows, currency }: { rows: AdvisorStatWithDelta[]; currency: string }) {
+  const advisors = rows.filter((r) => r.cerrados > 0);
+  if (!advisors.length) {
+    return <p className="px-3 py-6 text-center text-sm text-slate-500">Sin pedidos cerrados en este período.</p>;
+  }
+  const colTotals = SOURCE_COLS.map(({ key }) =>
+    advisors.reduce(
+      (a, r) => ({ cerrados: a.cerrados + r.porFuente[key].cerrados, ingresos: a.ingresos + r.porFuente[key].ingresos }),
+      { cerrados: 0, ingresos: 0 } as SourceCell,
+    ),
+  );
+  const grand = advisors.reduce(
+    (a, r) => ({ cerrados: a.cerrados + r.cerrados, ingresos: a.ingresos + r.ingresos }),
+    { cerrados: 0, ingresos: 0 } as SourceCell,
+  );
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[620px] border-collapse text-sm">
+        <thead>
+          <tr className="border-b border-slate-200 text-xs font-medium text-slate-400">
+            <th className="px-3 py-2 text-left">Asesora</th>
+            {SOURCE_COLS.map((c) => (
+              <th key={c.key} className="px-3 py-2 text-right whitespace-nowrap">
+                {c.label}
+              </th>
+            ))}
+            <th className="px-3 py-2 text-right">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {advisors.map((r) => (
+            <tr key={r.userId} className="border-b border-slate-100">
+              <td className="px-3 py-2 align-top font-medium text-slate-800">{advisorName(r.email)}</td>
+              {SOURCE_COLS.map((c) => (
+                <MatrixCell key={c.key} cell={r.porFuente[c.key]} currency={currency} />
+              ))}
+              <MatrixCell cell={{ cerrados: r.cerrados, ingresos: r.ingresos }} currency={currency} strong />
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr className="border-t-2 border-slate-200 text-slate-600">
+            <td className="px-3 py-2 text-xs font-medium text-slate-400">Total equipo</td>
+            {colTotals.map((t, i) => (
+              <MatrixCell key={SOURCE_COLS[i]!.key} cell={t} currency={currency} strong />
+            ))}
+            <MatrixCell cell={grand} currency={currency} strong />
+          </tr>
+        </tfoot>
+      </table>
     </div>
   );
 }
