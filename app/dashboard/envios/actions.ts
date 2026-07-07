@@ -470,10 +470,11 @@ export async function linkShipmentToShopifyOrder(
 /**
  * Process one chunk of the "Revisión" queue against live Shopify: for each
  * unchecked unmatched shipment, search (routed by store like the live picker)
- * and — only when a candidate's phone cross-validates the shipment's own
- * phone — persist a suggestion for a human to confirm (never linked
- * automatically). Admin-gated: it fans out many live Shopify calls and writes
- * across potentially hundreds of shipments in one org, same category as
+ * and — only when exactly one candidate's phone cross-validates the shipment's
+ * own phone (NOTA reference + same phone) — LINK it directly to that Shopify
+ * order (falling back to a saved suggestion only if the link's fetch/upsert
+ * fails). Admin-gated: it fans out many live Shopify calls and writes across
+ * potentially hundreds of shipments in one org, same category as
  * upsertFenixStock's bulk-maintenance gate.
  */
 export async function processSuggestionBatch(): Promise<
@@ -492,8 +493,10 @@ export async function processSuggestionBatch(): Promise<
 
   const stores = await getAccessibleStores();
   const storeIds = stores.map((s) => s.id);
-  if (!storeIds.length) return { processed: 0, suggested: 0, done: true };
-  return runSuggestionBatch(createAdminSupabase(), storeIds, stores, SUGGESTION_BATCH_SIZE);
+  if (!storeIds.length) return { processed: 0, linked: 0, done: true };
+  const result = await runSuggestionBatch(createAdminSupabase(), storeIds, stores, SUGGESTION_BATCH_SIZE);
+  if (result.linked > 0) revalidatePath("/dashboard/envios");
+  return result;
 }
 
 /**
