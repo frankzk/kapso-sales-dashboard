@@ -1096,6 +1096,65 @@ function toE164(phone: string | null | undefined): string | null {
   return digits.length >= 8 ? `+${digits}` : null;
 }
 
+// ISO 3166-2:PE codes for Peru's departamentos (+ Callao). Shopify resolves an
+// address's region by matching the `province` value against its subdivision list;
+// a plain NAME that doesn't match Shopify's canonical spelling (e.g. "Lima" vs its
+// internal name) is silently DROPPED, leaving the order with an incomplete address
+// ("Revisa los problemas con la dirección"). The subdivision CODE is unambiguous,
+// so we send that instead. Keyed by normalized (lowercase, no accents) name.
+const PERU_PROVINCE_CODES: Record<string, string> = {
+  amazonas: "AMA",
+  ancash: "ANC",
+  apurimac: "APU",
+  arequipa: "ARE",
+  ayacucho: "AYA",
+  cajamarca: "CAJ",
+  callao: "CAL",
+  cusco: "CUS",
+  huancavelica: "HUV",
+  huanuco: "HUC",
+  ica: "ICA",
+  junin: "JUN",
+  "la libertad": "LAL",
+  lambayeque: "LAM",
+  lima: "LMA",
+  loreto: "LOR",
+  "madre de dios": "MDD",
+  moquegua: "MOQ",
+  pasco: "PAS",
+  piura: "PIU",
+  puno: "PUN",
+  "san martin": "SAM",
+  tacna: "TAC",
+  tumbes: "TUM",
+  ucayali: "UCA",
+};
+const PERU_PROVINCE_CODE_SET = new Set(Object.values(PERU_PROVINCE_CODES));
+const normPeru = (s: string) =>
+  s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+
+/**
+ * Resolve a Peru region to its ISO 3166-2 code (e.g. "Lima" → "LMA"), accepting
+ * a departamento name, an already-valid code, "PE-LMA", or free text that
+ * contains the name ("Lima (provincia)"). Returns null if unrecognized (caller
+ * then falls back to sending the raw string). Pure + exported for testing.
+ */
+export function resolvePeruProvinceCode(input: string | null | undefined): string | null {
+  if (!input) return null;
+  const upper = input.trim().toUpperCase();
+  if (PERU_PROVINCE_CODE_SET.has(upper)) return upper; // already a code ("LMA")
+  const iso = upper.match(/^PE-([A-Z]{3})$/); // "PE-LMA" → "LMA"
+  if (iso && PERU_PROVINCE_CODE_SET.has(iso[1]!)) return iso[1]!;
+  const n = normPeru(input);
+  if (!n) return null;
+  if (PERU_PROVINCE_CODES[n]) return PERU_PROVINCE_CODES[n]; // exact departamento
+  // Free text that embeds the name, e.g. "Lima (provincia)", "Dpto. de Piura".
+  for (const [name, code] of Object.entries(PERU_PROVINCE_CODES)) {
+    if (n.includes(name)) return code;
+  }
+  return null;
+}
+
 function toGqlDraftInput(input: BuildDraftOrderInput): Record<string, unknown> {
   const lineItems = input.lineItems
     .filter((li) => (li.variantId || li.title) && li.quantity > 0)
@@ -1117,12 +1176,16 @@ function toGqlDraftInput(input: BuildDraftOrderInput): Record<string, unknown> {
   const a = input.address;
   if (a) {
     const parts = (a.name ?? "").trim().split(/\s+/).filter(Boolean);
+    // Send the ISO subdivision CODE ("LMA") + country code "PE" when we recognize
+    // the Peru region, so Shopify keeps the province (a bare name like "Lima" gets
+    // dropped). Unknown region → fall back to the raw name + its country.
+    const provinceCode = resolvePeruProvinceCode(a.province);
     gql.shippingAddress = {
       address1: a.address1 ?? null,
       address2: a.address2 ?? null,
       city: a.city ?? null,
-      province: a.province ?? null,
-      country: a.country ?? "Peru",
+      province: provinceCode ?? a.province ?? null,
+      country: provinceCode ? "PE" : (a.country ?? "Peru"),
       phone: toE164(a.phone ?? input.phone),
       firstName: parts[0] ?? (a.name ?? null),
       lastName: parts.length > 1 ? parts.slice(1).join(" ") : null,

@@ -28,6 +28,7 @@ import {
   createDraftOrder,
   getDraftOrderForEdit,
   resolveOrderDiscount,
+  resolvePeruProvinceCode,
   sumRestRefunds,
 } from "@/lib/shopify";
 
@@ -790,5 +791,36 @@ describe("resolveOrderDiscount", () => {
     expect(r.appliedDiscount).toEqual({ value: 30, valueType: "FIXED_AMOUNT", title: "Descuento" });
     // A discount bigger than the subtotal floors the total at 0.
     expect(resolveOrderDiscount(40, { kind: "fixed", value: 100 })).toMatchObject({ total: 0, discountAmount: 40 });
+  });
+});
+
+describe("resolvePeruProvinceCode (province → ISO code so Shopify keeps it)", () => {
+  it("maps departamento names to their ISO 3166-2:PE code", () => {
+    expect(resolvePeruProvinceCode("Lima")).toBe("LMA");
+    expect(resolvePeruProvinceCode("lima")).toBe("LMA");
+    expect(resolvePeruProvinceCode("Arequipa")).toBe("ARE");
+    expect(resolvePeruProvinceCode("Callao")).toBe("CAL");
+    expect(resolvePeruProvinceCode("Cusco")).toBe("CUS");
+  });
+  it("handles accents and multi-word names", () => {
+    expect(resolvePeruProvinceCode("Áncash")).toBe("ANC");
+    expect(resolvePeruProvinceCode("Ancash")).toBe("ANC");
+    expect(resolvePeruProvinceCode("La Libertad")).toBe("LAL");
+    expect(resolvePeruProvinceCode("San Martín")).toBe("SAM");
+    expect(resolvePeruProvinceCode("Madre de Dios")).toBe("MDD");
+  });
+  it("accepts an already-valid code or an ISO 'PE-XXX' form", () => {
+    expect(resolvePeruProvinceCode("LMA")).toBe("LMA");
+    expect(resolvePeruProvinceCode("PE-LMA")).toBe("LMA");
+    expect(resolvePeruProvinceCode("pe-are")).toBe("ARE");
+  });
+  it("resolves free text that embeds the departamento name", () => {
+    expect(resolvePeruProvinceCode("Lima (provincia)")).toBe("LMA");
+    expect(resolvePeruProvinceCode("Departamento de Piura")).toBe("PIU");
+  });
+  it("returns null for empty or unrecognized input (caller keeps the raw value)", () => {
+    expect(resolvePeruProvinceCode(null)).toBeNull();
+    expect(resolvePeruProvinceCode("")).toBeNull();
+    expect(resolvePeruProvinceCode("Provincia Inventada")).toBeNull();
   });
 });
