@@ -38,6 +38,16 @@ export async function POST(req: NextRequest) {
   if (!(file instanceof File) || file.size === 0) {
     return NextResponse.json({ error: "Falta el archivo del reporte." }, { status: 400 });
   }
+  // Size cap BEFORE parsing: an XLSX is a zip, so a small upload can inflate to
+  // hundreds of MB in memory (zip bomb) → OOM. Real Aliclik reports are well
+  // under this. (Route handlers don't honor the Server Actions bodySizeLimit.)
+  const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return NextResponse.json(
+      { error: "El archivo es demasiado grande (máx. 8 MB)." },
+      { status: 413 },
+    );
+  }
 
   // Parse by extension/type: CSV text vs XLSX binary.
   const name = file.name || "reporte";
@@ -59,6 +69,13 @@ export async function POST(req: NextRequest) {
 
   if (!rows.length) {
     return NextResponse.json({ error: "El archivo no tiene filas de datos." }, { status: 400 });
+  }
+  const MAX_ROWS = 50_000;
+  if (rows.length > MAX_ROWS) {
+    return NextResponse.json(
+      { error: `El reporte tiene demasiadas filas (${rows.length}, máx. ${MAX_ROWS}).` },
+      { status: 413 },
+    );
   }
 
   const admin = createAdminSupabase();

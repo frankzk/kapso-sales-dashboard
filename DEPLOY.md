@@ -281,5 +281,13 @@ an optional vision check (Claude) inspects the image before firing.
 - Webhook HMAC is verified with the **per-store** Shopify API secret. The Shopify
   Flow webhook (abandoned browse) uses a **per-store shared secret**
   (`X-RecoverOps-Secret`), compared in constant time.
+- The **Kapso lead webhook** (`/api/webhooks/kapso/[storeId]`) authenticates with
+  a **per-store secret** (`?secret=…`, set in *Ajustes → Rotar credenciales →
+  Secreto webhook de Kapso*), compared in constant time. Once a store sets its
+  own secret, only that secret is accepted for it — the shared `CRON_SECRET` no
+  longer authorizes writes to that store, so one tenant cannot inject leads into
+  another. Stores that haven't set a secret yet keep the `CRON_SECRET` fallback
+  for backward compatibility; **set a per-store secret before onboarding
+  third-party store owners.**
 - Cron is protected by `CRON_SECRET`; ingestion writes via the service role.
 - RLS restricts every read to the caller's accessible stores.

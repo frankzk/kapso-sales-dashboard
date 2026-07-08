@@ -38,10 +38,14 @@ export default async function NewStorePage() {
       {orgs.length ? (
         <CreateStoreForm orgs={orgs} />
       ) : (
-        <div className="space-y-4">
-          <p className="text-sm text-slate-500">
-            Primero crea una organización; serás su <strong>owner</strong>.
-          </p>
+        <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-5">
+          <div>
+            <p className="text-sm font-semibold text-slate-800">Paso 1 · Crea tu espacio de trabajo</p>
+            <p className="mt-1 text-sm text-slate-500">
+              Es tu organización: tú eres el <strong>dueño</strong> y solo tú (y a quien invites) verán
+              su data. En el siguiente paso conectas tu tienda.
+            </p>
+          </div>
           <CreateOrgForm />
         </div>
       )}

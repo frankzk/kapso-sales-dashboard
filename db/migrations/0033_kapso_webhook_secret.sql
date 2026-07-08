@@ -1,0 +1,12 @@
+-- ============================================================================
+-- 0033_kapso_webhook_secret.sql — per-store secret for the Kapso webhook
+-- The Kapso lead webhook (/api/webhooks/kapso/[storeId]) used to authenticate
+-- with the GLOBAL CRON_SECRET, shared across every tenant — so any store owner
+-- who knew it could POST leads/conversations into ANY other store. This adds a
+-- per-store secret (AES-256-GCM encrypted at rest, like the other store
+-- secrets); once a store sets it, only that secret is accepted for its webhook
+-- and the shared CRON_SECRET no longer authorizes writes to it. Stores that
+-- have not set one yet keep the legacy CRON_SECRET fallback so nothing breaks
+-- mid-migration.
+-- ============================================================================
+alter table stores add column if not exists kapso_webhook_secret_enc text;

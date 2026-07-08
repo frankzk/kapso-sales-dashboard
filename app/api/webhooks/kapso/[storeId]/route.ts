@@ -1,8 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createAdminSupabase } from "@/lib/db";
-import { applyHandoff, ingestConversationEvent } from "@/lib/leads-ingest";
-import { classifyKapsoEvent } from "@/lib/kapso";
-import { env } from "@/lib/env";
+import { authorizeKapsoRequest, processKapsoWebhook } from "@/lib/ingest";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,16 +9,19 @@ export const dynamic = "force-dynamic";
 //   - Platform webhook  `workflow.execution.handoff`        → hot lead
 //   - WhatsApp webhook  `whatsapp.conversation.ended/inactive` → abandono lead
 // Configure the URL in Kapso as:
-//   {SITE}/api/webhooks/kapso/<storeId>?secret=<CRON_SECRET>
+//   {SITE}/api/webhooks/kapso/<storeId>?secret=<STORE_WEBHOOK_SECRET>
+//
+// Auth is PER-STORE: the `secret` query param is matched (constant-time) against
+// the store's own `kapso_webhook_secret` (set in Ajustes → "Rotar credenciales").
+// This keeps one store owner from POSTing leads into another store. Stores that
+// have not set a per-store secret yet fall back to the shared CRON_SECRET (see
+// lib/ingest.ts → authorizeKapsoWebhook).
 
 export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ storeId: string }> },
 ) {
   const { storeId } = await ctx.params;
-  if (req.nextUrl.searchParams.get("secret") !== env.cronSecret()) {
-    return new NextResponse("unauthorized", { status: 401 });
-  }
 
   let body: any;
   try {
@@ -30,19 +30,17 @@ export async function POST(
     return NextResponse.json({ ok: false, error: "invalid json" }, { status: 400 });
   }
 
-  const kind = classifyKapsoEvent(req.headers.get("x-webhook-event"), body);
-
   try {
-    const admin = createAdminSupabase();
-    let res: { ok: boolean; reason?: string };
-    if (kind === "handoff") {
-      res = await applyHandoff(admin, storeId, body);
-    } else if (kind === "conversation") {
-      res = await ingestConversationEvent(admin, storeId, body);
-    } else {
-      res = { ok: true, reason: "skipped" }; // message events: acknowledged, ignored
+    const result = await processKapsoWebhook({
+      storeId,
+      providedSecret: req.nextUrl.searchParams.get("secret"),
+      eventHeader: req.headers.get("x-webhook-event"),
+      body,
+    });
+    if (result.status === "unauthorized") {
+      return new NextResponse("unauthorized", { status: 401 });
     }
-    return NextResponse.json({ ...res, kind });
+    return NextResponse.json({ ok: true, kind: result.kind, reason: result.reason });
   } catch (e) {
     return NextResponse.json(
       { ok: false, error: e instanceof Error ? e.message : "error" },
@@ -51,10 +49,11 @@ export async function POST(
   }
 }
 
-// Some providers ping with GET to validate the endpoint.
-export async function GET(req: NextRequest) {
-  if (req.nextUrl.searchParams.get("secret") !== env.cronSecret()) {
-    return new NextResponse("unauthorized", { status: 401 });
-  }
+// Some providers ping with GET to validate the endpoint. Authorize it the same
+// per-store way so the ping doubles as a "did I paste the right secret?" check.
+export async function GET(req: NextRequest, ctx: { params: Promise<{ storeId: string }> }) {
+  const { storeId } = await ctx.params;
+  const creds = await authorizeKapsoRequest(storeId, req.nextUrl.searchParams.get("secret"));
+  if (!creds) return new NextResponse("unauthorized", { status: 401 });
   return NextResponse.json({ ok: true });
 }

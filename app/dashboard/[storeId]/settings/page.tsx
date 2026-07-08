@@ -111,6 +111,7 @@ export default async function StoreSettingsPage({
       webhookSecret: Boolean(full.shopify_webhook_secret_enc),
       kapsoKey: Boolean(full.kapso_api_key_enc),
       flowSecret: Boolean(full.flow_webhook_secret_enc),
+      kapsoWebhookSecret: Boolean(full.kapso_webhook_secret_enc),
       telegramToken: Boolean(full.telegram_bot_token_enc),
       metaToken: Boolean(full.meta_access_token_enc),
     },

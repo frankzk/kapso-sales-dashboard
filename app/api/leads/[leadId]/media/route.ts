@@ -41,12 +41,35 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ leadId: str
   const creds = await getStoreCreds((lead as { store_id: string }).store_id);
   if (!creds?.kapso_api_key) return new NextResponse("kapso not configured", { status: 404 });
 
+  // Follow redirects MANUALLY: Kapso often 302s to a storage CDN, and the
+  // store's Kapso key must NOT be sent to a non-allowlisted host (undici keeps
+  // custom headers across cross-origin redirects). Only attach X-API-Key while
+  // the current host is still on the allowlist.
+  const MAX_REDIRECTS = 5;
+  const MAX_BYTES = 25 * 1024 * 1024; // ceiling for a single WhatsApp media blob
+  let current = target;
   let upstream: Response;
   try {
-    upstream = await fetch(target.toString(), {
-      headers: { "X-API-Key": creds.kapso_api_key },
-      redirect: "follow",
-    });
+    let hops = 0;
+    for (;;) {
+      const onAllowlist = ALLOWED_HOSTS.has(current.hostname);
+      upstream = await fetch(current.toString(), {
+        headers: onAllowlist ? { "X-API-Key": creds.kapso_api_key } : {},
+        redirect: "manual",
+      });
+      if (upstream.status < 300 || upstream.status >= 400) break;
+      const loc = upstream.headers.get("location");
+      if (!loc || hops >= MAX_REDIRECTS) return new NextResponse("too many redirects", { status: 502 });
+      let nextUrl: URL;
+      try {
+        nextUrl = new URL(loc, current);
+      } catch {
+        return new NextResponse("bad redirect", { status: 502 });
+      }
+      if (nextUrl.protocol !== "https:") return new NextResponse("forbidden redirect", { status: 502 });
+      current = nextUrl;
+      hops += 1;
+    }
   } catch {
     return new NextResponse("upstream error", { status: 502 });
   }
@@ -54,10 +77,26 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ leadId: str
     return new NextResponse("media unavailable", { status: upstream.status === 404 ? 404 : 502 });
   }
 
+  // Size ceiling when the upstream declares one (bandwidth/cost DoS guard).
+  const declared = Number(upstream.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_BYTES) {
+    return new NextResponse("media too large", { status: 413 });
+  }
+
+  // The blob is served from THIS origin, so an attacker-influenced content-type
+  // (text/html, image/svg+xml) could execute inline. Only pass through a safe
+  // media allowlist; anything else becomes an opaque download. `nosniff` stops
+  // the browser from second-guessing us.
+  const rawCt = (upstream.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+  const safeCt = /^(image\/(png|jpe?g|gif|webp|bmp)|audio\/|video\/|application\/pdf)$/.test(rawCt)
+    ? rawCt
+    : "application/octet-stream";
+
   return new NextResponse(upstream.body, {
     status: 200,
     headers: {
-      "content-type": upstream.headers.get("content-type") ?? "application/octet-stream",
+      "content-type": safeCt,
+      "x-content-type-options": "nosniff",
       // Private (per-user) + short cache so re-opening the drawer is instant
       // without persisting media in shared caches.
       "cache-control": "private, max-age=3600",
