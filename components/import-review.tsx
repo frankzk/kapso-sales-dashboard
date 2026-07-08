@@ -43,10 +43,23 @@ export function ImportReview({
       if (!res.ok) {
         setMsg(json.error ?? "Error al importar.");
       } else {
-        setMsg(
-          `Importadas ${json.rowCount} filas — ${json.matchedCount} con pedido, ${json.unmatchedCount} a revisión, ${json.errorCount} con error.`,
-        );
+        const base = `Importadas ${json.rowCount} filas — ${json.matchedCount} con pedido, ${json.unmatchedCount} a revisión, ${json.errorCount} con error.`;
         if (fileRef.current) fileRef.current.value = "";
+        // Auto-link the fresh review rows against live Shopify (NOTA + phone) so
+        // the operator doesn't have to click through them one by one.
+        if (json.unmatchedCount > 0) {
+          setMsg(`${base} Buscando coincidencias…`);
+          const r = await runAutoLinkLoop(({ linked }) =>
+            setMsg(`${base} Vinculando… (${linked} vinculados)`),
+          );
+          setMsg(
+            r.error
+              ? `${base} (auto-vínculo: ${r.error})`
+              : `${base} Auto-vinculadas ${r.linked} guías; el resto queda para revisión.`,
+          );
+        } else {
+          setMsg(base);
+        }
         router.refresh();
       }
     } catch (e) {
@@ -71,8 +84,9 @@ export function ImportReview({
       <Card className="space-y-3">
         <p className="text-sm text-slate-600">
           Sube el reporte de entregas de Aliclik (CSV o Excel). Las guías AUR5X se
-          enlazan automáticamente al pedido por número (#KP…) o teléfono; lo que no
-          calce queda abajo para revisión manual.
+          enlazan automáticamente al pedido por número (#KP…) o teléfono; al terminar
+          se buscan las restantes en Shopify y se vinculan solas cuando el número de
+          nota y el teléfono coinciden. Solo lo ambiguo queda abajo para revisión manual.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-sm text-slate-600">Tienda por defecto</label>
@@ -126,30 +140,45 @@ export function ImportReview({
 }
 
 /**
- * Kicks off a batch of live-Shopify search suggestions over the whole
- * Revisión queue: each click processes SUGGESTION_BATCH_SIZE shipments per
- * round-trip and loops until the batch reports `done`, so no single request
- * risks a serverless timeout. Running this does NOT shrink "Por revisar" —
- * only confirming a suggestion does; it just pre-fills candidates to review.
+ * Drive the whole Revisión queue through the auto-link batch: process
+ * SUGGESTION_BATCH_SIZE shipments per round-trip and loop until `done`, so no
+ * single request risks a serverless timeout. Each confident match (NOTA
+ * reference + same phone) is linked directly, shrinking "Por revisar". Shared
+ * by the manual button and the post-import auto-run. `onProgress` fires after
+ * every chunk with running totals.
+ */
+async function runAutoLinkLoop(
+  onProgress?: (totals: { processed: number; linked: number }) => void,
+): Promise<{ processed: number; linked: number; error?: string }> {
+  let processed = 0;
+  let linked = 0;
+  for (;;) {
+    const r = await processSuggestionBatch();
+    if ("error" in r) return { processed, linked, error: r.error };
+    processed += r.processed;
+    linked += r.linked;
+    onProgress?.({ processed, linked });
+    if (r.done) break;
+  }
+  return { processed, linked };
+}
+
+/**
+ * Manual trigger for the auto-link batch (the post-import path runs it too).
+ * Links every confident match across the queue; anything ambiguous stays in
+ * Revisión for a human.
  */
 function SuggestionBatchRunner({ onDone }: { onDone: () => void }) {
   const [running, setRunning] = useState(false);
-  const [stats, setStats] = useState({ processed: 0, suggested: 0 });
+  const [stats, setStats] = useState({ processed: 0, linked: 0 });
   const [err, setErr] = useState<string | null>(null);
 
   async function run() {
     setRunning(true);
     setErr(null);
-    setStats({ processed: 0, suggested: 0 });
-    for (;;) {
-      const r = await processSuggestionBatch();
-      if ("error" in r) {
-        setErr(r.error);
-        break;
-      }
-      setStats((s) => ({ processed: s.processed + r.processed, suggested: s.suggested + r.suggested }));
-      if (r.done) break;
-    }
+    setStats({ processed: 0, linked: 0 });
+    const r = await runAutoLinkLoop(setStats);
+    if (r.error) setErr(r.error);
     setRunning(false);
     onDone();
   }
@@ -163,8 +192,8 @@ function SuggestionBatchRunner({ onDone }: { onDone: () => void }) {
         className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
       >
         {running
-          ? `Procesando… (${stats.processed} revisados, ${stats.suggested} sugeridos)`
-          : "Buscar coincidencias automáticas"}
+          ? `Procesando… (${stats.processed} revisados, ${stats.linked} vinculados)`
+          : "Vincular coincidencias automáticas"}
       </button>
       {err && <span className="text-xs text-rose-600">{err}</span>}
     </div>
