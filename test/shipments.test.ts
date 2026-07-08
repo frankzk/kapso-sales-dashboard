@@ -15,6 +15,7 @@ import {
   FENIX_CITIES,
   reconcileDeliveryStatus,
   autoFenixGuideCode,
+  rescheduleGuideCode,
   statusSince,
 } from "@/lib/shipments";
 
@@ -152,6 +153,39 @@ describe("autoFenixGuideCode", () => {
     expect(autoFenixGuideCode(null)).toBe("");
     expect(autoFenixGuideCode(undefined)).toBe("");
     expect(autoFenixGuideCode("  ")).toBe("");
+  });
+});
+
+describe("rescheduleGuideCode (unique Fenix guide per confirmed reprogramación)", () => {
+  it("stamps the operator-picked reprogramación date (UTC calendar day) onto the code", () => {
+    // <input type=date> "2026-07-10" → client encodes it as UTC midnight
+    const iso = "2026-07-10T00:00:00.000Z";
+    expect(rescheduleGuideCode("#KP118847", iso)).toBe("#KP11884710072026");
+  });
+
+  it("reads the UTC day even when the ISO carries a time component", () => {
+    expect(rescheduleGuideCode("#AUR173123", "2026-01-05T09:30:00.000Z")).toBe("#AUR17312305012026");
+  });
+
+  it("produces a DIFFERENT code for a different reprogramación date (so Fenix accepts it)", () => {
+    const a = rescheduleGuideCode("#KP118847", "2026-07-10T00:00:00.000Z");
+    const b = rescheduleGuideCode("#KP118847", "2026-07-15T00:00:00.000Z");
+    expect(a).not.toBe(b);
+    expect(b).toBe("#KP11884715072026");
+  });
+
+  it("falls back to `now` when no reprogramación date was picked", () => {
+    expect(rescheduleGuideCode("#KP118847", null, new Date(2026, 6, 1))).toBe("#KP11884701072026");
+    expect(rescheduleGuideCode("#KP118847", "", new Date(2026, 0, 5))).toBe("#KP11884705012026");
+  });
+
+  it("falls back to `now` when the reprogramación date is unparseable", () => {
+    expect(rescheduleGuideCode("#KP118847", "not-a-date", new Date(2026, 6, 1))).toBe("#KP11884701072026");
+  });
+
+  it("returns empty string when there's no order name (caller keeps the manual path)", () => {
+    expect(rescheduleGuideCode(null, "2026-07-10T00:00:00.000Z")).toBe("");
+    expect(rescheduleGuideCode("  ", "2026-07-10T00:00:00.000Z")).toBe("");
   });
 });
 

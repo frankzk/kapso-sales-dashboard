@@ -16,6 +16,7 @@ import {
   categoryOf,
   isValidStatus,
   nextShipmentTransition,
+  rescheduleGuideCode,
   type RerouteDisposition,
 } from "@/lib/shipments";
 import { getStoreCreds } from "@/lib/ingest";
@@ -155,6 +156,13 @@ export async function releaseShipment(shipmentId: string): Promise<ShipmentActio
  * Register a gestión call. Reads the current state, applies the transition
  * (confirma→En ruta / no_contesta→siguiente intento o Anulado / cancela→Anulado
  * / entregado→Entregado por Fenix), updates the shipment and logs the call.
+ *
+ * "Cliente confirma" doubles as the re-dispatch step: it AUTO-generates a new,
+ * unique Fenix guide (date-stamped with the reprogramación date) and transfers
+ * this shipment to it, in one action — because Fenix rejects re-uploading a guide
+ * code it has already seen, every confirmed reprogramación needs a fresh guide.
+ * Successive re-dispatches chain (each new guide spins off the current active one),
+ * so an order can accumulate several Fenix guides over its life.
  */
 export async function registerRerouteCall(
   shipmentId: string,
@@ -166,11 +174,44 @@ export async function registerRerouteCall(
 
   const { data: ship } = await admin
     .from("shipments")
-    .select("id,delivery_status,reroute_attempts")
+    .select("id,delivery_status,reroute_attempts,order_name,fenix_shipment_id")
     .eq("id", shipmentId)
     .maybeSingle();
   if (!ship) return { error: "No encontrado." };
-  const cur = ship as { delivery_status: string; reroute_attempts: number | null };
+  const cur = ship as {
+    delivery_status: string;
+    reroute_attempts: number | null;
+    order_name: string | null;
+    fenix_shipment_id: string | null;
+  };
+
+  // Cliente confirma + fecha → generate a NEW Fenix guide automatically and
+  // transfer this shipment to it (skip if already transferred). Needs an order
+  // name to build the code; without one we fall through to the plain En ruta
+  // transition and the operator uses the manual "Generar guía Fenix" section.
+  if (input.disposition === "confirma" && !cur.fenix_shipment_id) {
+    const guideCode = rescheduleGuideCode(cur.order_name, input.nextFollowupAt ?? null);
+    if (guideCode) {
+      const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode);
+      // A failure here (e.g. the code was already used) is surfaced rather than
+      // falling back to En ruta — that would re-activate the old, unusable guide.
+      if ("error" in spun) return { error: spun.error };
+      const nextFollowup = input.nextFollowupAt ?? null;
+      // carry the reprogramación date + agent note onto the new active guide
+      await admin.from("shipments").update({ next_followup_at: nextFollowup }).eq("id", spun.childId);
+      await admin.from("shipment_calls").insert({
+        shipment_id: spun.childId,
+        store_id: ctx.storeId,
+        agent: ctx.userId,
+        kind: "call",
+        new_status: "en_ruta",
+        note: input.note?.trim() || null,
+        next_followup_at: nextFollowup,
+      });
+      revalidatePath("/dashboard/envios");
+      return { notice: `Confirmado — nueva guía Fenix ${spun.guideCode} (En ruta).` };
+    }
+  }
 
   const t = nextShipmentTransition(cur.delivery_status, input.disposition, cur.reroute_attempts ?? 0);
   // when the queue keeps this shipment, carry the agent's next-call date
@@ -240,20 +281,22 @@ export async function setShipmentStatus(
 }
 
 /**
- * Create a Fenix sub-guide for a re-routed shipment (manual entry of the guide
- * number generated in Fenix's own system). Inserts a second shipments row
- * (courier='fenix') and links the parent. API-ready: a later phase swaps the
- * manual `guideCode` for createFenixGuideViaApi() without changing this shape.
+ * Spin off a Fenix sub-guide from a shipment: insert a second shipments row
+ * (courier='fenix', En ruta) carrying the order snapshot, then freeze the source
+ * shipment as `transferido` (the Fenix guide is the active shipment going
+ * forward) and log the hand-off. Shared by the manual `createFenixGuide` and the
+ * automatic confirma flow in `registerRerouteCall`. `guideCode` is normalized
+ * (trim + uppercase). Returns the new child id + code, or an error (missing code,
+ * source already transferred, or a unique violation = code already used in Fenix).
  */
-export async function createFenixGuide(
+async function spinOffFenixGuide(
+  admin: SupabaseClient,
+  ctx: { userId: string; storeId: string },
   shipmentId: string,
-  input: { guideCode: string },
-): Promise<ShipmentActionState> {
-  const ctx = await authorizeShipment(shipmentId);
-  if (!ctx) return { error: "Sin acceso." };
-  const guideCode = input.guideCode.trim().toUpperCase();
-  if (!guideCode) return { error: "Ingresa el número de guía de Fenix." };
-  const admin = createAdminSupabase();
+  guideCode: string,
+): Promise<{ error: string } | { childId: string; guideCode: string }> {
+  const code = guideCode.trim().toUpperCase();
+  if (!code) return { error: "Ingresa el número de guía de Fenix." };
 
   const { data: parent } = await admin
     .from("shipments")
@@ -272,7 +315,7 @@ export async function createFenixGuide(
     .from("shipments")
     .insert({
       courier: "fenix",
-      guide_code: guideCode,
+      guide_code: code,
       store_id: p.store_id,
       order_id: p.order_id,
       matched: !!p.order_id,
@@ -296,18 +339,45 @@ export async function createFenixGuide(
 
   await admin
     .from("shipments")
-    .update({ fenix_shipment_id: child.id, delivery_status: "transferido", status_category: "transferred" })
+    .update({
+      fenix_shipment_id: child.id,
+      delivery_status: "transferido",
+      status_category: "transferred",
+      // the source guide is now terminal — free its claim so the queue releases it
+      claimed_by: null,
+      claimed_at: null,
+    })
     .eq("id", shipmentId);
   await admin.from("shipment_calls").insert({
     shipment_id: shipmentId,
     store_id: ctx.storeId,
     agent: ctx.userId,
     kind: "reroute",
-    note: `Guía Fenix creada: ${guideCode}`,
+    note: `Guía Fenix creada: ${code}`,
   });
 
+  return { childId: child.id as string, guideCode: code };
+}
+
+/**
+ * Create a Fenix sub-guide for a re-routed shipment (manual entry of the guide
+ * number generated in Fenix's own system). Inserts a second shipments row
+ * (courier='fenix') and links the parent. API-ready: a later phase swaps the
+ * manual `guideCode` for createFenixGuideViaApi() without changing this shape.
+ */
+export async function createFenixGuide(
+  shipmentId: string,
+  input: { guideCode: string },
+): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso." };
+  const admin = createAdminSupabase();
+
+  const r = await spinOffFenixGuide(admin, ctx, shipmentId, input.guideCode);
+  if ("error" in r) return { error: r.error };
+
   revalidatePath("/dashboard/envios");
-  return { notice: `Guía Fenix ${guideCode} creada.` };
+  return { notice: `Guía Fenix ${r.guideCode} creada.` };
 }
 
 /**

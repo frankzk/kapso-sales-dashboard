@@ -270,3 +270,33 @@ export function autoFenixGuideCode(orderName: string | null | undefined, now: Da
   const yyyy = now.getFullYear();
   return `${orderName.trim()}${dd}${mm}${yyyy}`;
 }
+
+/**
+ * Guide code for a confirmed re-dispatch (reprogramación). Each confirmed
+ * reprogramación must produce a NEW, unique Fenix guide — Fenix rejects
+ * re-uploading a guide code it has already seen — so the code carries the
+ * reprogramación date (DDMMYYYY) to disambiguate successive dispatches of the
+ * same order.
+ *
+ * `reprogramIso` is the operator-picked date (from `<input type="date">`, encoded
+ * by the client as UTC midnight). We read its UTC calendar day so the code
+ * reflects the date the operator chose regardless of the server's timezone. When
+ * no date is picked, falls back to `now`. Empty string when there's no order name
+ * (the caller then keeps the manual "Generar guía Fenix" path). Pure.
+ */
+export function rescheduleGuideCode(
+  orderName: string | null | undefined,
+  reprogramIso: string | null | undefined,
+  now: Date = new Date(),
+): string {
+  let date = now;
+  if (reprogramIso) {
+    const d = new Date(reprogramIso);
+    if (!Number.isNaN(d.getTime())) {
+      // rebuild at local midnight of the UTC calendar day so autoFenixGuideCode's
+      // local getters yield the exact day the operator picked (server-TZ safe)
+      date = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    }
+  }
+  return autoFenixGuideCode(orderName, date);
+}

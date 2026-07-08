@@ -36,7 +36,7 @@ const CATEGORY_BADGE: Record<string, string> = {
 };
 
 const DISPOSITIONS: { key: RerouteDisposition; label: string }[] = [
-  { key: "confirma", label: "Cliente confirma (→ En ruta)" },
+  { key: "confirma", label: "Cliente confirma (→ nueva guía Fenix)" },
   { key: "no_contesta", label: "No contesta" },
   { key: "entregado", label: "Entregado (Fenix)" },
   { key: "cancela", label: "Cliente cancela / anula" },
@@ -605,13 +605,27 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                     </option>
                   ))}
                 </select>
-                <input
-                  type="date"
-                  value={nextDate}
-                  onChange={(e) => setNextDate(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                  placeholder="Próximo intento"
-                />
+                {disposition === "confirma" &&
+                  (detail.shipment.order_name ? (
+                    <p className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
+                      Al confirmar se generará automáticamente una <b>nueva guía Fenix</b> con la fecha
+                      elegida, lista para subir al sistema Fenix.
+                    </p>
+                  ) : (
+                    <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
+                      Este envío no tiene N° de pedido para autogenerar la guía. Se marcará En ruta y
+                      podrás crear la guía en <b>Generar guía Fenix (manual)</b> abajo.
+                    </p>
+                  ))}
+                <label className="block text-xs text-slate-500">
+                  {disposition === "confirma" ? "Fecha de reprogramación (va en la guía)" : "Próximo intento"}
+                  <input
+                    type="date"
+                    value={nextDate}
+                    onChange={(e) => setNextDate(e.target.value)}
+                    className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
+                  />
+                </label>
                 <textarea
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
@@ -637,9 +651,11 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
               </section>
             )}
 
-            {/* Fenix guide */}
+            {/* Fenix guide — manual fallback. The common path auto-generates the
+                guide from "Cliente confirma" above; this stays for shipments
+                without an order name, or to type a specific Fenix code. */}
             <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
-              <p className="text-sm font-medium text-slate-800">Generar guía Fenix</p>
+              <p className="text-sm font-medium text-slate-800">Generar guía Fenix (manual)</p>
               {detail.shipment.fenix_shipment_id ? (
                 <p className="text-xs text-emerald-700">Ya tiene guía Fenix vinculada.</p>
               ) : (
