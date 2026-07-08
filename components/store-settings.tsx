@@ -6,6 +6,7 @@ import { Card, Section, SimpleTable } from "@/components/ui";
 import { STORE_STATUSES } from "@/lib/store-settings";
 import type { MetaAdAccount, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
+  generateKapsoWebhookSecret,
   listStoreMetaAdAccounts,
   reRegisterWebhooks,
   saveMetaAdAccounts,
@@ -260,39 +261,86 @@ function KapsoWebhookSection({
   storeId: string;
   hasSecret: boolean;
 }) {
-  const placeholder = hasSecret ? "<SECRETO_WEBHOOK_KAPSO>" : "<SECRETO_WEBHOOK_KAPSO_O_CRON_SECRET>";
-  const url = `${siteUrl}/api/webhooks/kapso/${storeId}?secret=${placeholder}`;
+  const [state, action, pending] = useActionState(generateKapsoWebhookSecret, initial);
+  const revealed = state.kapsoSecret ?? null;
+  // Once a secret is minted we can show the ready-to-paste URL with the real
+  // secret inlined; otherwise show a masked template (the plaintext is never
+  // readable after minting, by design).
+  const url = revealed
+    ? `${siteUrl}/api/webhooks/kapso/${storeId}?secret=${revealed}`
+    : `${siteUrl}/api/webhooks/kapso/${storeId}?secret=${
+        hasSecret ? "<TU_SECRETO_DE_ESTA_TIENDA>" : "<GENERA_EL_SECRETO_ABAJO>"
+      }`;
   const [copied, setCopied] = useState(false);
   return (
     <Section
       title="Webhooks de Kapso"
-      subtitle={
-        hasSecret
-          ? "Pega esta URL en los dos webhooks de Kapso. Reemplaza el marcador por el «Secreto webhook de Kapso» que configuraste arriba (es exclusivo de esta tienda)."
-          : "Pega esta URL en los dos webhooks de Kapso. Define un «Secreto webhook de Kapso» arriba (exclusivo de esta tienda) y úsalo aquí. Mientras no lo configures, sigue valiendo el CRON_SECRET compartido."
-      }
+      subtitle="Genera un secreto exclusivo de esta tienda y pega la URL resultante en los dos webhooks de Kapso. Así los leads de esta tienda quedan aislados de las demás."
     >
       <Card>
         <div className="space-y-4">
+          {/* Status + generate */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm">
+              {hasSecret ? (
+                <span className="font-medium text-emerald-700">✓ Esta tienda tiene su propio secreto</span>
+              ) : (
+                <span className="font-medium text-amber-700">
+                  ⚠ Aún sin secreto propio — genera uno antes de conectar Kapso
+                </span>
+              )}
+            </p>
+            <form action={action}>
+              <input type="hidden" name="store_id" value={storeId} />
+              <button
+                type="submit"
+                disabled={pending}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {pending ? "Generando…" : hasSecret ? "Regenerar secreto" : "Generar secreto"}
+              </button>
+            </form>
+          </div>
+
+          {state.error ? <p className="text-sm text-rose-600">{state.error}</p> : null}
+
+          {revealed ? (
+            <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-900">
+              <p className="font-semibold">
+                Secreto generado. Cópialo ahora — no se vuelve a mostrar.
+              </p>
+              <code className="mt-1 block break-all rounded bg-white px-2 py-1 text-emerald-800">
+                {revealed}
+              </code>
+              <p className="mt-2 text-emerald-800">
+                Regenerar invalida el anterior: recuerda actualizar la URL en los dos webhooks de
+                Kapso.
+              </p>
+            </div>
+          ) : null}
+
+          {/* Ready-to-paste URL */}
           <div className="flex flex-wrap items-stretch gap-2">
             <code className="min-w-0 flex-1 break-all rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
               {url}
             </code>
-            <button
-              type="button"
-              onClick={() => {
-                navigator.clipboard?.writeText(url).then(
-                  () => {
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 1500);
-                  },
-                  () => {},
-                );
-              }}
-              className="shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
-              {copied ? "¡Copiado!" : "Copiar"}
-            </button>
+            {revealed ? (
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(url).then(
+                    () => {
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1500);
+                    },
+                    () => {},
+                  );
+                }}
+                className="shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                {copied ? "¡Copiado!" : "Copiar"}
+              </button>
+            ) : null}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">

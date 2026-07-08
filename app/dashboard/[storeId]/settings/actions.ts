@@ -1,5 +1,6 @@
 "use server";
 
+import { randomBytes } from "node:crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -15,6 +16,9 @@ import { env } from "@/lib/env";
 export interface SettingsState {
   error?: string;
   notice?: string;
+  /** One-time reveal of a freshly generated Kapso webhook secret. Never stored
+   *  in plaintext, so it is only ever returned here, once, right after minting. */
+  kapsoSecret?: string;
 }
 
 async function requireStoreAdmin(
@@ -92,6 +96,34 @@ export async function updateStore(
   revalidatePath(`/dashboard/${storeId}`);
   revalidatePath("/dashboard/stores");
   return { notice: "Tienda actualizada." };
+}
+
+/**
+ * Mint a fresh per-store Kapso webhook secret, store it encrypted, and reveal
+ * the plaintext ONCE (it can't be read back afterwards). This is how a store
+ * owner secures their Kapso webhook without ever touching the shared CRON_SECRET
+ * — the returned URL goes into both Kapso webhooks. Regenerating invalidates the
+ * previous secret, so the owner must re-paste the new URL in Kapso.
+ */
+export async function generateKapsoWebhookSecret(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso para editar esta tienda." };
+
+  // URL-safe (hex) so it drops straight into the webhook `?secret=` param.
+  const secret = randomBytes(32).toString("hex");
+  const patch = buildStoreUpdate({ kapso_webhook_secret: secret });
+  const { error } = await ctx.admin.from("stores").update(patch).eq("id", storeId);
+  if (error) return { error: error.message };
+
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return {
+    notice: "Secreto de webhook de Kapso generado. Cópialo ahora: no se vuelve a mostrar.",
+    kapsoSecret: secret,
+  };
 }
 
 export async function reRegisterWebhooks(
