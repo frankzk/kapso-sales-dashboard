@@ -11,6 +11,7 @@ import {
   isCallable,
   isFenixDistrict,
   labelOf,
+  statusSince,
   type RerouteDisposition,
 } from "@/lib/shipments";
 import type { ShipmentCallRow, ShipmentRow, StoreSummary } from "@/lib/types";
@@ -47,6 +48,22 @@ function subState(s: { status_category: string; reroute_attempts: number; delive
   if (s.status_category === "delivered" && s.delivered_source)
     return ` · por ${s.delivered_source === "fenix" ? "Fenix" : "Aliclik"}`;
   return "";
+}
+
+/** "05 jul, 3:20 p. m." in the store's local time — when the shipment entered its
+ *  current status (from `statusSince`). Null when the time is unknown/invalid. */
+function fmtStatusSince(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString("es-PE", {
+    timeZone: "America/Lima",
+    day: "2-digit",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
 }
 
 function StatusBadge({
@@ -473,6 +490,14 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                   status={detail.shipment.delivery_status}
                   suffix={subState(detail.shipment)}
                 />
+                {/* Since when it's in this status (e.g. the day it went "En ruta"),
+                    derived from the transition in its history. */}
+                {(() => {
+                  const since = fmtStatusSince(
+                    statusSince(detail.calls, detail.shipment.delivery_status),
+                  );
+                  return since ? <p className="mt-1 text-xs text-slate-500">Desde {since}</p> : null;
+                })()}
               </div>
               <button onClick={onClose} className="text-sm text-slate-400 hover:text-slate-700">
                 Cerrar

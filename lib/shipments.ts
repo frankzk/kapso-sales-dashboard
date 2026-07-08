@@ -59,6 +59,25 @@ export function isPending(code: string): boolean {
   return categoryOf(code) === "pending";
 }
 
+/**
+ * ISO time the shipment ENTERED its current status, derived from its call history
+ * (the most recent state transition INTO `status`). Lets the panel show "En ruta
+ * desde el <día>" — the status alone doesn't say when it was dispatched. Null
+ * when no such transition is recorded (e.g. the initial state). Pure.
+ */
+export function statusSince(
+  calls: { new_status: string | null; occurred_at?: string | null }[],
+  status: string,
+): string | null {
+  let best: string | null = null;
+  for (const c of calls) {
+    if (c.new_status === status && c.occurred_at && (!best || c.occurred_at > best)) {
+      best = c.occurred_at;
+    }
+  }
+  return best;
+}
+
 /** Sub-state label of a pending shipment, derived from its intento counter. */
 export function attemptLabel(attempts: number | null | undefined): string {
   const n = attempts ?? 0;
