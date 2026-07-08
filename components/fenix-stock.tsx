@@ -7,6 +7,7 @@ import { FENIX_CITIES } from "@/lib/shipments";
 import type { FenixStockRowDb, StoreSummary } from "@/lib/types";
 import {
   deleteFenixStock,
+  recomputeFenixEligibility,
   searchStockProducts,
   upsertFenixStock,
 } from "@/app/dashboard/envios/actions";
@@ -56,13 +57,32 @@ export function FenixStockEditor({
     });
   }
 
+  function recompute() {
+    start(async () => {
+      const r = await recomputeFenixEligibility();
+      setMsg("error" in r ? r.error : r.notice);
+      if (!("error" in r)) router.refresh();
+    });
+  }
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <h1 className="text-lg font-semibold text-slate-900">Stock Fenix por ciudad</h1>
-        <a href="/dashboard/envios" className="text-sm text-brand-700 hover:underline">
-          ← Volver a Envíos
-        </a>
+        <div className="flex items-center gap-3">
+          {canEdit && (
+            <button
+              onClick={recompute}
+              disabled={pending}
+              className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Recalcular elegibilidad
+            </button>
+          )}
+          <a href="/dashboard/envios" className="text-sm text-brand-700 hover:underline">
+            ← Volver a Envíos
+          </a>
+        </div>
       </div>
 
       {!canEdit && (
