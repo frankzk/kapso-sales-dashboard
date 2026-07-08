@@ -82,8 +82,18 @@ roles and the `auth` schema, so it just works.
 
    `DATABASE_URL` is only needed for migrations; you don't have to add it to
    Vercel.
-4. Deploy. The cron in `vercel.json` (`/api/cron/sync` every 5 min) is picked up
-   automatically; Vercel sends `Authorization: Bearer $CRON_SECRET`.
+4. Deploy. The crons in `vercel.json` are picked up automatically; Vercel sends
+   `Authorization: Bearer $CRON_SECRET`:
+   - `/api/cron/sync` — every 5 min (reconciliation + ops snapshots).
+   - `/api/cron/telegram-summary` — daily 13:00 UTC (per-store daily summary).
+   - `/api/cron/backup` — daily 08:00 UTC (~03:00 Lima). Snapshots the
+     dashboard-native tables (`leads`, `lead_calls`, `shipment_calls`) to CSV in
+     the private Supabase Storage bucket `db-backups` (auto-created, keeps the
+     last 14), and pings Telegram. **No manual setup.** This is a lightweight
+     complement to Supabase's daily backups / PITR, not a replacement — it
+     covers table-level loss (bad migration, accidental DROP), not "whole
+     project gone". **Restore:** download the CSV from the bucket and `COPY`/
+     import it back into the table.
 
 > **Cron on Vercel Hobby**: the Hobby plan runs cron jobs only ~once/day. If you
 > need the 5-min cadence without Pro, use the included GitHub Actions fallback
