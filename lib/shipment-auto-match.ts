@@ -63,6 +63,13 @@ interface CandidateRow {
   customer_phone: string | null;
 }
 
+interface PendingSuggestionRow {
+  id: string;
+  suggested_order_gid: string | null;
+  suggested_store_id: string | null;
+  suggested_order_name: string | null;
+}
+
 /**
  * Link a shipment to a confidently-matched Shopify order using the admin
  * client — mirrors linkShipmentToShopifyOrder's fetch→upsert→resolve, but in
@@ -122,12 +129,14 @@ async function autoLinkShipment(
 }
 
 /**
- * Process one chunk of the "Revisión" queue: search Shopify for each
- * unprocessed shipment's order_name and — when the phone cross-validates a
- * single candidate — LINK it directly (falling back to a saved suggestion only
- * if the link's Shopify fetch/upsert fails). `suggestion_checked_at is null`
- * doubles as the resumability cursor — no separate cursor table needed, since
- * progress is genuinely per-shipment, not a single linear stream.
+ * Process one chunk of the "Revisión" queue in two passes: first LINK any row
+ * that already carries a saved suggestion (from a prior suggest-only run) —
+ * straight from the stored gid, no search — then, once those are drained,
+ * search Shopify for each never-checked shipment's order_name and LINK it when
+ * the phone cross-validates a single candidate. `suggestion_checked_at is null`
+ * is the resumability cursor for the search pass; `suggested_order_gid is not
+ * null` for the drain pass. A stored suggestion whose link fails has its
+ * suggestion cleared (drops to plain manual review) so it can't loop forever.
  */
 export async function runSuggestionBatch(
   admin: SupabaseClient,
@@ -135,6 +144,56 @@ export async function runSuggestionBatch(
   stores: StoreSummary[],
   limit: number = SUGGESTION_BATCH_SIZE,
 ): Promise<BatchResult> {
+  const now = new Date().toISOString();
+
+  // Decrypt each store's Shopify creds once — reused by both passes.
+  const credsByStore = new Map<string, StoreCreds>();
+  await Promise.all(
+    stores.map(async (s) => {
+      const c = await getStoreCreds(s.id, admin);
+      if (c?.shopify_token) credsByStore.set(s.id, c);
+    }),
+  );
+
+  // Pass 1: drain rows that already have a saved suggestion — link them from
+  // the stored gid (no Shopify search). Returns early so the caller keeps
+  // looping until this backlog is empty before moving on to the search pass.
+  const { data: pend } = await admin
+    .from("shipments")
+    .select("id,suggested_order_gid,suggested_store_id,suggested_order_name")
+    .in("store_id", storeIds)
+    .eq("matched", false)
+    .not("suggested_order_gid", "is", null)
+    .limit(limit);
+  const pendRows = (pend as PendingSuggestionRow[]) ?? [];
+  if (pendRows.length) {
+    let linked = 0;
+    for (const r of pendRows) {
+      const ok =
+        r.suggested_store_id != null &&
+        (await autoLinkShipment(
+          admin,
+          r.id,
+          {
+            gid: r.suggested_order_gid!,
+            storeId: r.suggested_store_id,
+            name: r.suggested_order_name,
+            customer_phone: null,
+          },
+          credsByStore,
+          now,
+        ));
+      if (ok) linked++;
+      else
+        await admin
+          .from("shipments")
+          .update({ suggested_order_gid: null, suggested_store_id: null, suggested_order_name: null })
+          .eq("id", r.id);
+    }
+    return { processed: pendRows.length, linked, done: false };
+  }
+
+  // Pass 2: never-checked rows — search Shopify then link.
   const { data } = await admin
     .from("shipments")
     .select("id,order_name,customer_phone")
@@ -147,7 +206,6 @@ export async function runSuggestionBatch(
   const rows = (data as CandidateRow[]) ?? [];
   if (!rows.length) return { processed: 0, linked: 0, done: true };
 
-  const now = new Date().toISOString();
   const noReference = rows.filter((r) => !r.order_name);
   if (noReference.length) {
     await admin
@@ -158,16 +216,6 @@ export async function runSuggestionBatch(
         noReference.map((r) => r.id),
       );
   }
-
-  // Decrypt each store's Shopify creds once — reused for both the live search
-  // and the follow-up order fetch when a match links.
-  const credsByStore = new Map<string, StoreCreds>();
-  await Promise.all(
-    stores.map(async (s) => {
-      const c = await getStoreCreds(s.id, admin);
-      if (c?.shopify_token) credsByStore.set(s.id, c);
-    }),
-  );
 
   const searchable = rows.filter((r) => r.order_name);
   let linked = 0;
