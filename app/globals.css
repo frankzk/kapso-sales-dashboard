@@ -11,6 +11,11 @@
 
   /* "Atendiendo ahora" / lead tomado: punto que pulsa (opacity 1 → .35 → 1). */
   --animate-pulse-dot: pulse-dot 1.6s ease-in-out infinite;
+
+  /* Landing: entrada suave y flotación de la maqueta del producto. */
+  --animate-fade-up: fade-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-float: float 7s ease-in-out infinite;
+  --animate-sheen: sheen 8s ease-in-out infinite;
 }
 
 @keyframes pulse-dot {
@@ -20,6 +25,37 @@
   }
   50% {
     opacity: 0.35;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+@keyframes sheen {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.9;
   }
 }
 
