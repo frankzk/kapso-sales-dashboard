@@ -51,7 +51,12 @@ async function run(req: NextRequest) {
     /* ignore — notifying is best-effort */
   }
 
-  return NextResponse.json({ ok: report.ok, notified: sentTo.size, report });
+  // Non-2xx on a failed/incomplete backup so Vercel's cron monitor flags it —
+  // a second signal beyond the (best-effort) Telegram ping.
+  return NextResponse.json(
+    { ok: report.ok, notified: sentTo.size, report },
+    { status: report.ok ? 200 : 500 },
+  );
 }
 
 export async function GET(req: NextRequest) {

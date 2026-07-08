@@ -114,4 +114,14 @@ describe("formatBackupSummary", () => {
     expect(s).toContain("truncado");
     expect(s).toContain("❌ boom");
   });
+
+  it("HTML-escapes error text so Telegram's HTML parser doesn't 400", () => {
+    const s = formatBackupSummary({
+      ...base,
+      ok: false,
+      tables: [{ table: "leads", rows: 0, bytes: 0, truncated: false, error: 'relation <x> & "y"' }],
+    });
+    expect(s).toContain("relation &lt;x&gt; &amp; \"y\"");
+    expect(s).not.toContain("<x>");
+  });
 });

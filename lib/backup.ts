@@ -13,6 +13,7 @@
 // the format is plain CSV so it opens in a spreadsheet too.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { escapeHtml } from "@/lib/telegram";
 
 /** Private bucket the CSV snapshots land in. Created lazily (service-role). */
 export const BACKUP_BUCKET = "db-backups";
@@ -106,11 +107,14 @@ async function fetchAllRows(
     if (error) throw new Error(error.message);
     const batch = (data ?? []) as Record<string, unknown>[];
     rows.push(...batch);
-    if (batch.length < PAGE_SIZE) break;
-    if (rows.length >= MAX_ROWS_PER_TABLE) {
+    // strictly-greater so a table of exactly MAX rows (which ends on a full page)
+    // isn't mis-flagged: we only call it truncated once we've actually seen a row
+    // beyond the cap. Costs at most one extra empty page fetch at the boundary.
+    if (rows.length > MAX_ROWS_PER_TABLE) {
       truncated = true;
       break;
     }
+    if (batch.length < PAGE_SIZE) break;
     from += PAGE_SIZE;
   }
   return { rows: rows.slice(0, MAX_ROWS_PER_TABLE), truncated };
@@ -142,8 +146,11 @@ export async function runStorageBackup(
   const retention = opts.retention ?? BACKUP_RETENTION;
   const folder = backupFolderName(opts.now);
 
-  // Ensure the private bucket exists (error if it already does ⇒ fine).
+  // Ensure the private bucket exists (create errors if it already does ⇒ fine),
+  // then force it private in case it pre-existed as public — these CSVs carry PII
+  // (customer name/phone/address from `leads`), so they must never be public.
   await admin.storage.createBucket(bucket, { public: false }).catch(() => {});
+  await admin.storage.updateBucket(bucket, { public: false }).catch(() => {});
 
   const results: TableBackupResult[] = [];
   for (const table of tables) {
@@ -155,7 +162,7 @@ export async function runStorageBackup(
         .from(bucket)
         .upload(`${folder}/${table}.csv`, body, { contentType: "text/csv", upsert: true });
       if (error) throw new Error(error.message);
-      results.push({ table, rows: rows.length, bytes: csv.length, truncated });
+      results.push({ table, rows: rows.length, bytes: body.size, truncated });
     } catch (e) {
       results.push({
         table,
@@ -191,7 +198,9 @@ export async function runStorageBackup(
 export function formatBackupSummary(report: StorageBackupReport): string {
   const head = report.ok ? "🗄️ <b>Backup diario</b>" : "⚠️ <b>Backup diario (con avisos)</b>";
   const lines = report.tables.map((t) => {
-    if (t.error) return `• ${t.table}: ❌ ${t.error}`;
+    // error text can contain <, >, & — escape it or Telegram's HTML parser 400s
+    // and the whole failure alert is lost on the very run that had a failure.
+    if (t.error) return `• ${t.table}: ❌ ${escapeHtml(t.error)}`;
     const warn = t.truncated ? ` ⚠️ truncado en ${t.rows.toLocaleString("es-PE")}` : "";
     return `• ${t.table}: ${t.rows.toLocaleString("es-PE")} filas${warn}`;
   });
