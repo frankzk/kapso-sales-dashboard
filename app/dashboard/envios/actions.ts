@@ -626,7 +626,7 @@ export async function recomputeFenixEligibility(): Promise<
   const admin = createAdminSupabase();
   const { data: stock } = await admin
     .from("fenix_stock")
-    .select("city,product,quantity")
+    .select("city,product,sku,quantity")
     .eq("org_id", adminOrg.org_id);
   const stockRows = (stock as FenixStockRow[]) ?? [];
 
@@ -634,14 +634,40 @@ export async function recomputeFenixEligibility(): Promise<
   // whose stored flag no longer matches.
   const { data: rows } = await admin
     .from("shipments")
-    .select("id,city,product,fenix_eligible")
+    .select("id,city,product,order_id,fenix_eligible")
     .in("store_id", storeIds)
     .eq("status_category", "pending");
-  const shipments = (rows as { id: string; city: string | null; product: string | null; fenix_eligible: boolean }[]) ?? [];
+  const shipments =
+    (rows as {
+      id: string;
+      city: string | null;
+      product: string | null;
+      order_id: string | null;
+      fenix_eligible: boolean;
+    }[]) ?? [];
+
+  // Pull the linked orders' line items so eligibility can match against the
+  // Shopify catalog (title + SKU) — the same source the stock sheet is keyed
+  // on — instead of the Aliclik report's free-text product.
+  const orderIds = Array.from(new Set(shipments.map((s) => s.order_id).filter((v): v is string => !!v)));
+  const productsByOrder = new Map<string, { title?: string | null; sku?: string | null }[]>();
+  for (let i = 0; i < orderIds.length; i += 300) {
+    const { data: orders } = await admin
+      .from("orders")
+      .select("id,line_items")
+      .in("id", orderIds.slice(i, i + 300));
+    for (const o of (orders as { id: string; line_items: { title?: string | null; sku?: string | null }[] | null }[]) ?? []) {
+      productsByOrder.set(
+        o.id,
+        (o.line_items ?? []).map((li) => ({ title: li.title ?? null, sku: li.sku ?? null })),
+      );
+    }
+  }
 
   let updated = 0;
   for (const s of shipments) {
-    const eligible = evaluateFenix(s, stockRows).eligible;
+    const orderProducts = s.order_id ? productsByOrder.get(s.order_id) : undefined;
+    const eligible = evaluateFenix(s, stockRows, orderProducts).eligible;
     if (eligible !== s.fenix_eligible) {
       await admin.from("shipments").update({ fenix_eligible: eligible }).eq("id", s.id);
       updated++;

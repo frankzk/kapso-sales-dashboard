@@ -68,4 +68,26 @@ describe("evaluateFenix", () => {
     expect(r.eligible).toBe(false);
     expect(r.reason).toBe("sin_stock");
   });
+
+  it("matches the linked order's products (by SKU) over the Aliclik free-text", () => {
+    const s: FenixStockRow[] = [
+      { city: "cusco", product: "8 en 1 Ultra SuperHuman", sku: "SH-8EN1", quantity: 5 },
+    ];
+    // The Aliclik free-text product wouldn't match by name, but the linked
+    // Shopify order's line item shares the exact SKU → eligible.
+    const r = evaluateFenix(
+      { city: "Cusco", product: "combo raro tipeado por el courier" },
+      s,
+      [{ title: "8 en 1 Ultra - Cápsulas … SuperHuman™", sku: "SH-8EN1" }],
+    );
+    expect(r.eligible).toBe(true);
+    expect(r.reason).toBe("ok");
+  });
+
+  it("falls back to the free-text product when the guide has no linked order", () => {
+    const s: FenixStockRow[] = [{ city: "trujillo", product: "Mushroom Coffee", quantity: 3 }];
+    // no orderProducts (undefined or empty) → uses shipment.product
+    expect(evaluateFenix({ city: "Trujillo", product: "Mushroom Coffee 180g" }, s).eligible).toBe(true);
+    expect(evaluateFenix({ city: "Trujillo", product: "Otra cosa" }, s, []).eligible).toBe(false);
+  });
 });

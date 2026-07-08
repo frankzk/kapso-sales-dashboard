@@ -8,7 +8,15 @@ import { isFenixCity, normalizeCity } from "./shipments";
 export interface FenixStockRow {
   city: string; // normalized coverage key
   product: string;
+  sku?: string | null; // exact catalog key when available
   quantity: number;
+}
+
+/** A product to check against stock — from the linked Shopify order's line
+ *  items (title + sku from the same catalog the stock is keyed on). */
+export interface ProductRef {
+  title?: string | null;
+  sku?: string | null;
 }
 
 export interface FenixEligibility {
@@ -68,16 +76,31 @@ function productMatches(stockProduct: string, shipmentProduct: string): boolean 
   return shared >= 2 && shared / Math.min(ta.size, tb.size) >= 0.6;
 }
 
+/** True when a stock row covers a product reference: by SKU (exact, naming-
+ *  independent) when both sides have one, else by the loose title match. */
+function stockCoversRef(stock: FenixStockRow, ref: ProductRef): boolean {
+  const sSku = (stock.sku ?? "").trim().toLowerCase();
+  const rSku = (ref.sku ?? "").trim().toLowerCase();
+  if (sSku && rSku) return sSku === rSku;
+  return productMatches(stock.product, ref.title ?? "");
+}
+
 /**
  * Evaluate whether a shipment can be re-routed to Fenix.
  *   - city must be in the covered set (a fenix_stock row for that city exists,
  *     or it's a known FENIX_CITY), AND
- *   - some stock row for that city loosely matches the product with quantity > 0.
+ *   - some stock row for that city covers the product with quantity > 0.
+ *
+ * When the guide is linked to a Shopify order, pass its line items as
+ * `orderProducts`: the stock sheet is keyed on the Shopify catalog (title +
+ * SKU), so matching against the order is exact — the Aliclik report's free-text
+ * `shipment.product` is only a fallback for still-unmatched guides.
  * `stockRows` should already be scoped to the shipment's org and (ideally) city.
  */
 export function evaluateFenix(
   shipment: { city?: string | null; product?: string | null },
   stockRows: FenixStockRow[],
+  orderProducts?: ProductRef[],
 ): FenixEligibility {
   const city = normalizeCity(shipment.city);
   const cityRows = stockRows.filter((r) => normalizeCity(r.city) === city);
@@ -85,8 +108,12 @@ export function evaluateFenix(
   if (!city || !covered) {
     return { eligible: false, reason: "sin_cobertura", city };
   }
+  const refs: ProductRef[] =
+    orderProducts && orderProducts.length
+      ? orderProducts
+      : [{ title: shipment.product ?? null, sku: null }];
   const hasStock = cityRows.some(
-    (r) => r.quantity > 0 && productMatches(r.product, shipment.product ?? ""),
+    (r) => r.quantity > 0 && refs.some((ref) => stockCoversRef(r, ref)),
   );
   if (!hasStock) {
     return { eligible: false, reason: "sin_stock", city };

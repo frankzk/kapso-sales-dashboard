@@ -9,6 +9,7 @@ import {
   clearShipmentSuggestion,
   linkShipmentToShopifyOrder,
   processSuggestionBatch,
+  recomputeFenixEligibility,
 } from "@/app/dashboard/envios/actions";
 
 export function ImportReview({
@@ -52,6 +53,9 @@ export function ImportReview({
           const r = await runAutoLinkLoop(({ linked }) =>
             setMsg(`${base} Vinculando… (${linked} vinculados)`),
           );
+          // Now that guides carry their Shopify order, re-evaluate Fenix
+          // eligibility off the order's products (best-effort; admins only).
+          await recomputeFenixEligibility().catch(() => {});
           setMsg(
             r.error
               ? `${base} (auto-vínculo: ${r.error})`
