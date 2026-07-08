@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { runStoreSync } from "@/lib/ingest";
 import { alertUnattendedYapes } from "@/lib/yape-alert-telegram";
@@ -8,11 +9,21 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+/** Constant-time equality (length-gated) to avoid leaking the secret via timing. */
+function secretEquals(provided: string | null, expected: string): boolean {
+  if (!provided) return false;
+  const a = Buffer.from(provided, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
 function authorized(req: NextRequest): boolean {
   const secret = env.cronSecret();
   // Vercel Cron sends `Authorization: Bearer <CRON_SECRET>` automatically.
-  if (req.headers.get("authorization") === `Bearer ${secret}`) return true;
-  return req.nextUrl.searchParams.get("secret") === secret;
+  const bearer = req.headers.get("authorization");
+  if (bearer?.startsWith("Bearer ") && secretEquals(bearer.slice(7), secret)) return true;
+  return secretEquals(req.nextUrl.searchParams.get("secret"), secret);
 }
 
 async function run(req: NextRequest) {

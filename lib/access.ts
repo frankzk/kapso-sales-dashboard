@@ -355,8 +355,12 @@ export async function getAdNames(
 ): Promise<Record<string, AdMeta>> {
   const ids = [...new Set(adIds.filter((x): x is string => !!x))];
   if (!ids.length) return {};
-  const sb = await createServerSupabase();
-  const { data, error } = await sb
+  // The `meta_ads` label table is not readable under RLS (migration 0034). The
+  // ad_ids passed in already come from the caller's own RLS-scoped leads, so
+  // resolving their labels via the service-role client leaks nothing: you can
+  // only look up ads your own leads reference.
+  const admin = createAdminSupabase();
+  const { data, error } = await admin
     .from("meta_ads")
     .select(
       "ad_id,account_id,campaign_id,campaign_name,objective,adset_id,adset_name,ad_name,status,fetched_at",
@@ -391,8 +395,11 @@ export async function getWaNumbers(
 ): Promise<Record<string, WaNumber>> {
   const ids = [...new Set(phoneNumberIds.filter((x): x is string => !!x))];
   if (!ids.length) return {};
-  const sb = await createServerSupabase();
-  const { data, error } = await sb
+  // `whatsapp_numbers` is not readable under RLS (migration 0034); resolve the
+  // labels via the service-role client. The ids come from the caller's own
+  // RLS-scoped leads/conversations, so this exposes nothing cross-tenant.
+  const admin = createAdminSupabase();
+  const { data, error } = await admin
     .from("whatsapp_numbers")
     .select("phone_number_id,name,display_phone,kind")
     .in("phone_number_id", ids);

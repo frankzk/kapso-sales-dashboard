@@ -5,10 +5,22 @@ const UTF8_BOM = "﻿";
 function escapeCell(v: unknown): string {
   if (v === null || v === undefined) return "";
   let s: string;
-  if (typeof v === "string") s = v;
-  else if (Array.isArray(v)) s = v.join("|");
-  else if (typeof v === "object") s = JSON.stringify(v);
-  else s = String(v);
+  let textual = false; // only user text needs the formula-injection guard
+  if (typeof v === "string") {
+    s = v;
+    textual = true;
+  } else if (Array.isArray(v)) {
+    s = v.join("|");
+    textual = true;
+  } else if (typeof v === "object") {
+    s = JSON.stringify(v);
+  } else {
+    s = String(v); // number / boolean — safe, must stay unprefixed (e.g. "-5")
+  }
+  // Formula-injection guard: a text cell that starts with = + - @ (or a control
+  // char) is executed as a formula by Excel/Sheets. Values here come from
+  // Shopify/WhatsApp/customer input, so neutralize with a leading apostrophe.
+  if (textual && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   if (/[",\n\r]/.test(s)) s = `"${s.replace(/"/g, '""')}"`;
   return s;
 }

@@ -20,6 +20,55 @@ un par de validaciones de entrada que faltan. Nada es un RCE de un disparo, pero
 en conjunto dejan la plataforma clickjackeable, con XSS amplificable y barata de
 tirar por DoS. Es "un PR de config te sube de D a B".
 
+## Estado de remediación (este PR)
+
+| # | Hallazgo | Sev | Estado |
+|---|---|---|---|
+| A1 | Headers de seguridad (CSP/HSTS/X-Frame/nosniff/…) | Alta | ✅ Arreglado (`next.config.ts`) |
+| A2 | Rate limiting | Alta | ⏳ **Acción tuya en Vercel** (pasos abajo) |
+| A3 | SSRF por `shopify_domain` | Alta | ✅ Arreglado (validación `isValidShopDomain`) |
+| A4 | Open redirect en `/auth/callback` | Alta | ✅ Arreglado (redirect solo same-origin) |
+| M1 | Rol `viewer` puede escribir | Media | ⏳ Pendiente (necesita prueba del flujo vendedora) |
+| M2 | Proxy de media (key en redirect, sniff, tamaño) | Media | ✅ Arreglado |
+| M3 | Import sin tope de tamaño/filas | Media | ✅ Arreglado (8 MB / 50k filas) |
+| B1 | `meta_ads`/`whatsapp_numbers` cross-tenant | Baja | ✅ Arreglado (migración `0034` + admin client) |
+| B2 | Formula injection en CSV | Baja | ✅ Arreglado (`lib/csv.ts` + test) |
+| B3 | Cron comparación no-constante | Baja | ✅ Arreglado (`timingSafeEqual`) |
+| B4 | Respuestas 500 con `e.message` | Baja | ⏳ Pendiente (opcional) |
+| B5 | `exchangeCodeForSession` sin chequear error | Baja | ✅ Arreglado |
+| B6 | Roles admin globales, no por-org | Baja | ⏳ Pendiente |
+| B7 | Deps moderadas (postcss/uuid) | Baja | ⏳ Pendiente (ver abajo) |
+| B8 | Cookies legibles por JS (Supabase SSR) | Baja | ➖ Riesgo aceptado (mitigado por CSP A1) |
+
+> **Requiere migración:** aplica `db/migrations/0034_scope_label_tables.sql` en
+> Supabase (SQL Editor) al desplegar, igual que la `0033`.
+
+### A2 — Cómo activar el rate limiting (Vercel, sin código)
+En el proyecto de Vercel → **Firewall** → **Rate Limiting** → crea reglas:
+1. Path `/(api/webhooks/.*)` → límite p. ej. **60 req/min por IP** (protege el
+   flood/brute-force del `?secret=` de los webhooks).
+2. Path `/(api/import/.*)` → **10 req/min por IP** (protege el import pesado).
+3. (Opcional) `/login` y `/auth/.*` → **20 req/min por IP** además del límite de
+   Supabase.
+Alternativa por código: `@upstash/ratelimit` + Upstash Redis, llamando al inicio
+de cada handler con clave `storeId`+IP. La regla de Firewall es más rápida y no
+requiere infra nueva.
+
+### M1 — Por qué quedó pendiente
+Bloquear la escritura del rol `viewer` toca la ruta de autorización de leads/
+envíos. Hacerlo mal podría **bloquear a una vendedora legítima**, y no hay tests
+del flujo de ventas para verificarlo. Recomendado: agregar un helper
+`requireWriter` (rol ∈ {owner, admin, vendedora} en la org de la tienda) en
+`authorizeLead`/`authorizeShipment` para las acciones con efecto externo
+(`closeSale`/`generateOrder`, `sendLeadMessage`, `sendLeadMedia`), con una prueba
+que confirme que una vendedora sí puede y un viewer no.
+
+### B7 — Dependencias
+`postcss <8.5.10` (dentro de Next) y `uuid` (dentro de `exceljs`), ambas
+moderadas y de build-time. Corre `pnpm update` cuando actualices Next/exceljs, o
+fija con `pnpm.overrides` tras probar el build (evita forzar `uuid` a v11 sin
+verificar que `exceljs` no rompe).
+
 ---
 
 ## Prioridad ALTA — arreglar antes de abrir a dueños externos

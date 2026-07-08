@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { encryptOrNull } from "@/lib/crypto";
-import { fetchShopInfo, registerOrderWebhooks } from "@/lib/shopify";
+import { fetchShopInfo, isValidShopDomain, registerOrderWebhooks } from "@/lib/shopify";
 import { runStoreSync } from "@/lib/ingest";
 import { env } from "@/lib/env";
 
@@ -93,6 +93,13 @@ export async function createStore(
   }
   // Normalise to the bare *.myshopify.com host.
   shopify_domain = shopify_domain.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  // Reject anything that isn't a real *.myshopify.com host. Without this, the
+  // domain is fetched verbatim (fetchShopInfo below + every sync), so a value
+  // like an internal IP / hostname would be an SSRF sink. isValidShopDomain is
+  // the same guard used on the OAuth install/callback paths.
+  if (!isValidShopDomain(shopify_domain)) {
+    return { error: "Dominio de Shopify inválido. Debe ser tu-tienda.myshopify.com." };
+  }
 
   const warnings: string[] = [];
 

@@ -1415,3 +1415,12 @@ alter table leads add column if not exists ship_name text;
 -- fallback only for stores that have not set their own secret yet.
 
 alter table stores add column if not exists kapso_webhook_secret_enc text;
+
+-- ---- 0034 ----
+-- 0034_scope_label_tables.sql — drop the `using(true)` SELECT policies on the
+-- meta_ads and whatsapp_numbers label tables so they are no longer readable
+-- across tenants. Labels are resolved server-side via the service-role client
+-- for the caller's own lead ids (getAdNames/getWaNumbers), which bypasses RLS.
+
+drop policy if exists meta_ads_select on meta_ads;
+drop policy if exists whatsapp_numbers_select on whatsapp_numbers;
