@@ -78,7 +78,7 @@ function productMatches(stockProduct: string, shipmentProduct: string): boolean 
 
 /** True when a stock row covers a product reference: by SKU (exact, naming-
  *  independent) when both sides have one, else by the loose title match. */
-function stockCoversRef(stock: FenixStockRow, ref: ProductRef): boolean {
+export function stockCoversRef(stock: FenixStockRow, ref: ProductRef): boolean {
   const sSku = (stock.sku ?? "").trim().toLowerCase();
   const rSku = (ref.sku ?? "").trim().toLowerCase();
   if (sSku && rSku) return sSku === rSku;

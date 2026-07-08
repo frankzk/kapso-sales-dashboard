@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Card, cn } from "@/components/ui";
 import { FENIX_CITIES } from "@/lib/shipments";
+import type { DemandRow } from "@/lib/fenix-demand";
 import type { FenixStockRowDb, StoreSummary } from "@/lib/types";
 import {
   deleteFenixStock,
@@ -18,10 +19,12 @@ export function FenixStockEditor({
   rows,
   canEdit,
   stores,
+  demand = [],
 }: {
   rows: FenixStockRowDb[];
   canEdit: boolean;
   stores: StoreSummary[];
+  demand?: DemandRow[];
 }) {
   const router = useRouter();
   const [storeId, setStoreId] = useState<string>(stores[0]?.id ?? "");
@@ -84,6 +87,8 @@ export function FenixStockEditor({
           </a>
         </div>
       </div>
+
+      <DemandReport demand={demand} />
 
       {!canEdit && (
         <Card>
@@ -201,6 +206,92 @@ export function FenixStockEditor({
         )}
       </Card>
     </div>
+  );
+}
+
+const DEMAND_BADGE: Record<string, string> = {
+  sin_stock: "bg-rose-50 text-rose-700",
+  reponer: "bg-amber-50 text-amber-700",
+  ok: "bg-emerald-50 text-emerald-700",
+};
+const DEMAND_LABEL: Record<string, string> = {
+  sin_stock: "Sin stock",
+  reponer: "Reponer",
+  ok: "OK",
+};
+
+/**
+ * Demand-vs-stock report: what pending guides need in each province vs. what's
+ * in stock. Rows needing action (shortfall > 0) float to the top, so the list
+ * doubles as the "prepare & send" checklist. Recomputed on every page load, so
+ * it tracks the queue as order states change.
+ */
+function DemandReport({ demand }: { demand: DemandRow[] }) {
+  const toSend = demand.filter((d) => d.shortfall > 0);
+  const cities = new Set(toSend.map((d) => d.city)).size;
+  const units = toSend.reduce((n, d) => n + d.shortfall, 0);
+
+  return (
+    <Card className="p-0">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-5 py-3">
+        <p className="text-sm font-medium text-slate-800">Demanda por ciudad (guías pendientes)</p>
+        {toSend.length > 0 ? (
+          <span className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700">
+            ⚠ {toSend.length} producto(s) por reponer · {units} unidad(es) · {cities} ciudad(es)
+          </span>
+        ) : (
+          <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+            Stock cubre la demanda actual
+          </span>
+        )}
+      </div>
+      {demand.length === 0 ? (
+        <p className="p-5 text-sm text-slate-400">Sin guías pendientes en ciudades Fenix.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-xs text-slate-500">
+                <th className="px-4 py-2.5 text-left font-medium">Ciudad</th>
+                <th className="px-4 py-2.5 text-left font-medium">Producto</th>
+                <th className="px-4 py-2.5 text-right font-medium">Pendientes</th>
+                <th className="px-4 py-2.5 text-right font-medium">Stock</th>
+                <th className="px-4 py-2.5 text-right font-medium">Faltante</th>
+                <th className="px-4 py-2.5 text-left font-medium">Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {demand.map((d, i) => (
+                <tr key={`${d.city}-${d.product}-${i}`} className="border-b border-slate-100 last:border-0">
+                  <td className="px-4 py-2.5 capitalize text-slate-700">{d.city}</td>
+                  <td className="px-4 py-2.5 text-slate-700">{d.product}</td>
+                  <td className="px-4 py-2.5 text-right text-slate-700">{d.demand}</td>
+                  <td className="px-4 py-2.5 text-right text-slate-700">{d.stock}</td>
+                  <td
+                    className={cn(
+                      "px-4 py-2.5 text-right font-medium",
+                      d.shortfall > 0 ? "text-rose-600" : "text-slate-400",
+                    )}
+                  >
+                    {d.shortfall > 0 ? d.shortfall : "—"}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <span
+                      className={cn(
+                        "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
+                        DEMAND_BADGE[d.status] ?? "bg-slate-100 text-slate-600",
+                      )}
+                    >
+                      {DEMAND_LABEL[d.status] ?? d.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }
 
