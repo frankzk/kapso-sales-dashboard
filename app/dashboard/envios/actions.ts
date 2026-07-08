@@ -14,6 +14,7 @@ import {
   CLAIM_TTL_MINUTES,
   attemptLabel,
   categoryOf,
+  isCallable,
   isValidStatus,
   nextShipmentTransition,
   rescheduleGuideCode,
@@ -185,20 +186,35 @@ export async function registerRerouteCall(
     fenix_shipment_id: string | null;
   };
 
+  // Only pendiente/en_ruta admit gestión. The UI hides this on terminal guides,
+  // but enforce it server-side too so a stale drawer can't reactivate a frozen
+  // (transferido/entregado/anulado) guide into an active queue.
+  if (!isCallable(cur.delivery_status)) {
+    return { error: "Este envío ya no admite gestión (entregado, anulado o transferido)." };
+  }
+
+  // A confirmed reprogramación must carry its date: it stamps the new Fenix guide
+  // and schedules the dispatch. Required so we never mint a guide with a silent
+  // "today" fallback (the UI also disables the button until a date is picked).
+  if (input.disposition === "confirma" && !input.nextFollowupAt) {
+    return { error: "Elige la fecha de reprogramación para confirmar." };
+  }
+
   // Cliente confirma + fecha → generate a NEW Fenix guide automatically and
   // transfer this shipment to it (skip if already transferred). Needs an order
   // name to build the code; without one we fall through to the plain En ruta
   // transition and the operator uses the manual "Generar guía Fenix" section.
   if (input.disposition === "confirma" && !cur.fenix_shipment_id) {
-    const guideCode = rescheduleGuideCode(cur.order_name, input.nextFollowupAt ?? null);
+    const guideCode = rescheduleGuideCode(cur.order_name, input.nextFollowupAt);
     if (guideCode) {
-      const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode);
+      // carry the reprogramación date onto the new active guide at insert time
+      const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
+        childNextFollowupAt: input.nextFollowupAt,
+      });
       // A failure here (e.g. the code was already used) is surfaced rather than
       // falling back to En ruta — that would re-activate the old, unusable guide.
       if ("error" in spun) return { error: spun.error };
-      const nextFollowup = input.nextFollowupAt ?? null;
-      // carry the reprogramación date + agent note onto the new active guide
-      await admin.from("shipments").update({ next_followup_at: nextFollowup }).eq("id", spun.childId);
+      // audit the confirma on the new active guide (best-effort, like other logs)
       await admin.from("shipment_calls").insert({
         shipment_id: spun.childId,
         store_id: ctx.storeId,
@@ -206,7 +222,7 @@ export async function registerRerouteCall(
         kind: "call",
         new_status: "en_ruta",
         note: input.note?.trim() || null,
-        next_followup_at: nextFollowup,
+        next_followup_at: input.nextFollowupAt,
       });
       revalidatePath("/dashboard/envios");
       return { notice: `Confirmado — nueva guía Fenix ${spun.guideCode} (En ruta).` };
@@ -294,6 +310,7 @@ async function spinOffFenixGuide(
   ctx: { userId: string; storeId: string },
   shipmentId: string,
   guideCode: string,
+  opts: { childNextFollowupAt?: string | null } = {},
 ): Promise<{ error: string } | { childId: string; guideCode: string }> {
   const code = guideCode.trim().toUpperCase();
   if (!code) return { error: "Ingresa el número de guía de Fenix." };
@@ -329,15 +346,25 @@ async function spinOffFenixGuide(
       region: p.region,
       delivery_status: "en_ruta",
       status_category: "in_route",
+      next_followup_at: opts.childNextFollowupAt ?? null,
     })
     .select("id")
     .single();
   if (insErr || !child) {
-    // unique violation → guide code already used
-    return { error: insErr?.message ?? "No se pudo crear la guía Fenix." };
+    // unique(courier, guide_code) violation → this code was already used in Fenix
+    const dup = (insErr as { code?: string } | null)?.code === "23505";
+    return {
+      error: dup
+        ? `Ya existe una guía Fenix con el código ${code}. Elige otra fecha de reprogramación.`
+        : (insErr?.message ?? "No se pudo crear la guía Fenix."),
+    };
   }
 
-  await admin
+  // Transfer the source guide atomically: the UPDATE only matches while
+  // fenix_shipment_id is still null, so two concurrent spin-offs can't both
+  // transfer the same parent (each would otherwise leave an orphan En ruta
+  // child). If we lost the race, roll back the child we just inserted.
+  const { data: transferred, error: updErr } = await admin
     .from("shipments")
     .update({
       fenix_shipment_id: child.id,
@@ -347,7 +374,14 @@ async function spinOffFenixGuide(
       claimed_by: null,
       claimed_at: null,
     })
-    .eq("id", shipmentId);
+    .eq("id", shipmentId)
+    .is("fenix_shipment_id", null)
+    .select("id")
+    .maybeSingle();
+  if (updErr || !transferred) {
+    await admin.from("shipments").delete().eq("id", child.id);
+    return { error: "Este envío acaba de recibir otra guía Fenix. Actualiza y reintenta." };
+  }
   await admin.from("shipment_calls").insert({
     shipment_id: shipmentId,
     store_id: ctx.storeId,

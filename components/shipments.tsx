@@ -42,10 +42,17 @@ const DISPOSITIONS: { key: RerouteDisposition; label: string }[] = [
   { key: "cancela", label: "Cliente cancela / anula" },
 ];
 
-/** Next reprogrammed follow-up date (next_followup_at) as "12 ago", or "—". */
+/** Next reprogrammed follow-up date (next_followup_at) as "12 ago", or "—".
+ *  Read in UTC: the date is picked from `<input type=date>` and stored as UTC
+ *  midnight, so this shows the day the operator chose (and matches the day the
+ *  Fenix guide code is stamped with) regardless of the viewer's timezone. */
 function fmtReprogram(iso: string | null | undefined): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("es-PE", { day: "2-digit", month: "short" });
+  return new Date(iso).toLocaleDateString("es-PE", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  });
 }
 
 /** Human sub-state suffix: "· Intento 3" for pending, "· por Fenix" for entregado. */
@@ -608,13 +615,13 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                 {disposition === "confirma" &&
                   (detail.shipment.order_name ? (
                     <p className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
-                      Al confirmar se generará automáticamente una <b>nueva guía Fenix</b> con la fecha
-                      elegida, lista para subir al sistema Fenix.
+                      Elige la fecha y al confirmar se generará automáticamente una{" "}
+                      <b>nueva guía Fenix</b> con esa fecha, lista para subir al sistema Fenix.
                     </p>
                   ) : (
                     <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
-                      Este envío no tiene N° de pedido para autogenerar la guía. Se marcará En ruta y
-                      podrás crear la guía en <b>Generar guía Fenix (manual)</b> abajo.
+                      Este envío no tiene N° de pedido para autogenerar la guía. Elige la fecha; se
+                      marcará En ruta y podrás crear la guía en <b>Generar guía Fenix (manual)</b> abajo.
                     </p>
                   ))}
                 <label className="block text-xs text-slate-500">
@@ -643,10 +650,10 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                       }),
                     )
                   }
-                  disabled={pending}
-                  className="w-full rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
+                  disabled={pending || (disposition === "confirma" && !nextDate)}
+                  className="w-full rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
                 >
-                  Registrar llamada
+                  {disposition === "confirma" && !nextDate ? "Elige la fecha para confirmar" : "Registrar llamada"}
                 </button>
               </section>
             )}
