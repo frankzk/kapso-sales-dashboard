@@ -98,6 +98,7 @@ export function ShipmentsBoard({
   const [districtFilter, setDistrictFilter] = useState<Set<string>>(new Set());
   const [dateFilter, setDateFilter] = useState(""); // YYYY-MM-DD on next_followup_at
   const [unmatchedOnly, setUnmatchedOnly] = useState(false);
+  const [fenixFilter, setFenixFilter] = useState<"all" | "ok" | "no">("all"); // fenix_eligible
 
   // global search (across all tabs, server-side)
   const [search, setSearch] = useState("");
@@ -122,6 +123,7 @@ export function ShipmentsBoard({
     setDistrictFilter(covered);
     setDateFilter("");
     setUnmatchedOnly(false);
+    setFenixFilter("all");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
@@ -153,7 +155,8 @@ export function ShipmentsBoard({
       (storeFilter.size === 0 || storeFilter.has(s.store_id)) &&
       (districtFilter.size === 0 || districtFilter.has(s.district || SIN_DISTRITO)) &&
       (!dateFilter || (s.next_followup_at ? s.next_followup_at.slice(0, 10) === dateFilter : false)) &&
-      (!unmatchedOnly || !s.matched),
+      (!unmatchedOnly || !s.matched) &&
+      (fenixFilter === "all" || (fenixFilter === "ok" ? s.fenix_eligible : !s.fenix_eligible)),
   );
 
   const searchActive = search.trim().length >= 2;
@@ -292,6 +295,18 @@ export function ShipmentsBoard({
                   className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
                 />
               </label>
+              <label className="flex items-center gap-1.5 text-xs text-slate-400">
+                Fenix:
+                <select
+                  value={fenixFilter}
+                  onChange={(e) => setFenixFilter(e.target.value as "all" | "ok" | "no")}
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
+                >
+                  <option value="all">Todos</option>
+                  <option value="ok">Con stock (Fenix ok)</option>
+                  <option value="no">Sin cobertura</option>
+                </select>
+              </label>
               <label className="flex items-center gap-1.5 text-xs text-slate-600">
                 <input
                   type="checkbox"
@@ -301,13 +316,14 @@ export function ShipmentsBoard({
                 />
                 Solo sin pedido
               </label>
-              {(storeFilter.size > 0 || districtFilter.size > 0 || dateFilter || unmatchedOnly) && (
+              {(storeFilter.size > 0 || districtFilter.size > 0 || dateFilter || unmatchedOnly || fenixFilter !== "all") && (
                 <button
                   onClick={() => {
                     setStoreFilter(new Set());
                     setDistrictFilter(new Set());
                     setDateFilter("");
                     setUnmatchedOnly(false);
+                    setFenixFilter("all");
                   }}
                   className="text-xs text-slate-500 hover:underline"
                 >
