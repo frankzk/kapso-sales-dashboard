@@ -15,6 +15,7 @@ import {
   FENIX_CITIES,
   reconcileDeliveryStatus,
   autoFenixGuideCode,
+  statusSince,
 } from "@/lib/shipments";
 
 describe("delivery status model", () => {
@@ -151,5 +152,32 @@ describe("autoFenixGuideCode", () => {
     expect(autoFenixGuideCode(null)).toBe("");
     expect(autoFenixGuideCode(undefined)).toBe("");
     expect(autoFenixGuideCode("  ")).toBe("");
+  });
+});
+
+describe("statusSince (when the shipment entered its current status)", () => {
+  it("returns the occurred_at of the most recent transition INTO the status", () => {
+    const calls = [
+      { new_status: "pendiente", occurred_at: "2026-07-01T10:00:00Z" },
+      { new_status: "en_ruta", occurred_at: "2026-07-03T15:20:00Z" }, // dispatched
+      { new_status: null, occurred_at: "2026-07-04T09:00:00Z", note: "nota" } as any,
+    ];
+    expect(statusSince(calls, "en_ruta")).toBe("2026-07-03T15:20:00Z");
+    expect(statusSince(calls, "pendiente")).toBe("2026-07-01T10:00:00Z");
+  });
+
+  it("picks the LATEST when a status was entered more than once (re-route back to en_ruta)", () => {
+    const calls = [
+      { new_status: "en_ruta", occurred_at: "2026-07-02T10:00:00Z" },
+      { new_status: "pendiente", occurred_at: "2026-07-03T10:00:00Z" },
+      { new_status: "en_ruta", occurred_at: "2026-07-05T12:00:00Z" }, // most recent → wins
+    ];
+    expect(statusSince(calls, "en_ruta")).toBe("2026-07-05T12:00:00Z");
+  });
+
+  it("returns null when the status was never recorded, or calls lack a timestamp", () => {
+    expect(statusSince([], "en_ruta")).toBeNull();
+    expect(statusSince([{ new_status: "pendiente", occurred_at: "2026-07-01T10:00:00Z" }], "en_ruta")).toBeNull();
+    expect(statusSince([{ new_status: "en_ruta" }], "en_ruta")).toBeNull(); // no occurred_at
   });
 });
