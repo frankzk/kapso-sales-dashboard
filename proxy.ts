@@ -38,7 +38,7 @@ export async function proxy(request: NextRequest) {
     url.searchParams.set("redirectedFrom", path);
     return NextResponse.redirect(url);
   }
-  if (path === "/login" && user) {
+  if ((path === "/login" || path === "/signup") && user) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     url.search = "";
