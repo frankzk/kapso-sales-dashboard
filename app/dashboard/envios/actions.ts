@@ -28,6 +28,7 @@ import {
   type ProductVariantResult,
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
+import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
 import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
 
 export interface ShipmentActionState {
@@ -596,4 +597,56 @@ export async function deleteFenixStock(id: string): Promise<ShipmentActionState>
   if (error) return { error: error.message };
   revalidatePath("/dashboard/envios/stock");
   return { notice: "Eliminado." };
+}
+
+/**
+ * Recompute `fenix_eligible` for every pending shipment against the current
+ * stock. Eligibility is normally set at import time, so this applies stock
+ * edits (and any change to the matching logic) to guides already in the queue
+ * without waiting for the next Aliclik import. Admin-gated, same as stock edits.
+ */
+export async function recomputeFenixEligibility(): Promise<
+  { error: string } | { notice: string; updated: number }
+> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  const { data: mem } = await sb.from("memberships").select("org_id,role");
+  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
+    (m) => m.role === "owner" || m.role === "admin",
+  );
+  if (!adminOrg) return { error: "Solo un administrador puede recalcular la elegibilidad." };
+
+  const stores = await getAccessibleStores();
+  const storeIds = stores.map((s) => s.id);
+  if (!storeIds.length) return { notice: "Sin envíos.", updated: 0 };
+
+  const admin = createAdminSupabase();
+  const { data: stock } = await admin
+    .from("fenix_stock")
+    .select("city,product,quantity")
+    .eq("org_id", adminOrg.org_id);
+  const stockRows = (stock as FenixStockRow[]) ?? [];
+
+  // Only pending guides carry eligibility; re-evaluate each and flip the ones
+  // whose stored flag no longer matches.
+  const { data: rows } = await admin
+    .from("shipments")
+    .select("id,city,product,fenix_eligible")
+    .in("store_id", storeIds)
+    .eq("status_category", "pending");
+  const shipments = (rows as { id: string; city: string | null; product: string | null; fenix_eligible: boolean }[]) ?? [];
+
+  let updated = 0;
+  for (const s of shipments) {
+    const eligible = evaluateFenix(s, stockRows).eligible;
+    if (eligible !== s.fenix_eligible) {
+      await admin.from("shipments").update({ fenix_eligible: eligible }).eq("id", s.id);
+      updated++;
+    }
+  }
+  revalidatePath("/dashboard/envios");
+  return { notice: `Elegibilidad recalculada — ${updated} guías actualizadas.`, updated };
 }

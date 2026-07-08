@@ -37,4 +37,35 @@ describe("evaluateFenix", () => {
     const j: FenixStockRow[] = [{ city: "juliaca", product: "X", quantity: 2 }];
     expect(evaluateFenix({ city: "Juliaca/Puno", product: "X" }, j).eligible).toBe(true);
   });
+
+  it("matches the same product across naming drift (token overlap)", () => {
+    // Real case: report label vs stock-sheet label describe the same product
+    // differently — neither contains the other, but the ingredient tokens match.
+    const s: FenixStockRow[] = [
+      {
+        city: "cusco",
+        product:
+          "8 en 1 Ultra - Cápsulas de Shilajit Ashwagandha Rhodiola Rosea Panax y Ginseng (120 Cápsulas) SuperHuman™ PG",
+        quantity: 5,
+      },
+    ];
+    const r = evaluateFenix(
+      { city: "Cusco", product: "8 en 1 Cápsulas - Shilajit Ashwagandha Rhodiola Rosea Panax y Ginseng" },
+      s,
+    );
+    expect(r.eligible).toBe(true);
+    expect(r.reason).toBe("ok");
+  });
+
+  it("does not over-match two different products that share a generic word", () => {
+    const s: FenixStockRow[] = [
+      { city: "cusco", product: "Colágeno Hidrolizado en Cápsulas SuperHuman", quantity: 5 },
+    ];
+    const r = evaluateFenix(
+      { city: "Cusco", product: "Magnesio en Cápsulas SuperHuman" },
+      s,
+    );
+    expect(r.eligible).toBe(false);
+    expect(r.reason).toBe("sin_stock");
+  });
 });
