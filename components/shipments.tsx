@@ -9,8 +9,8 @@ import {
   attemptLabel,
   autoFenixGuideCode,
   isCallable,
-  isFenixDistrict,
   labelOf,
+  normalizeCity,
   statusSince,
   type RerouteDisposition,
 } from "@/lib/shipments";
@@ -102,23 +102,27 @@ function StatusBadge({
 }
 
 const SIN_DISTRITO = "(sin distrito)";
+const SIN_CIUDAD = "(sin provincia)";
 
 export function ShipmentsBoard({
   stores,
   view,
   counts,
   shipments,
+  fenixStockCities = [],
 }: {
   stores: StoreSummary[];
   view: ShipmentView;
   counts: Record<ShipmentView, number>;
   shipments: ShipmentRow[];
+  fenixStockCities?: string[]; // normalized provinces with Fenix stock
 }) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(null);
 
-  // client-side filters over the loaded view. Empty store/district set = "all".
+  // client-side filters over the loaded view. Empty set = "all".
   const [storeFilter, setStoreFilter] = useState<Set<string>>(new Set());
+  const [cityFilter, setCityFilter] = useState<Set<string>>(new Set());
   const [districtFilter, setDistrictFilter] = useState<Set<string>>(new Set());
   const [dateFilter, setDateFilter] = useState(""); // YYYY-MM-DD on next_followup_at
   const [unmatchedOnly, setUnmatchedOnly] = useState(false);
@@ -131,20 +135,25 @@ export function ShipmentsBoard({
 
   const storeName = (id: string) => stores.find((s) => s.id === id)?.name ?? "—";
 
-  // distinct districts present in this view, for the picker
+  // distinct provinces (city) and districts present in this view, for the pickers
+  const cityOptions = Array.from(
+    new Set(shipments.map((s) => normalizeCity(s.city) || SIN_CIUDAD)),
+  ).sort((a, b) => a.localeCompare(b));
   const districtOptions = Array.from(
     new Set(shipments.map((s) => s.district || SIN_DISTRITO)),
   ).sort((a, b) => a.localeCompare(b));
 
-  // On view change, default-select the Fenix-served districts present (the
-  // "routable" ones) and reset the date filter.
+  // On view change, default-select the provinces where Fenix has stock (present
+  // in this view); districts start unfiltered. Reset the other filters.
   useEffect(() => {
-    const covered = new Set(
-      Array.from(new Set(shipments.map((s) => s.district || SIN_DISTRITO))).filter(
-        (d) => d !== SIN_DISTRITO && isFenixDistrict(d),
+    const stock = new Set(fenixStockCities);
+    const defaultCities = new Set(
+      Array.from(new Set(shipments.map((s) => normalizeCity(s.city) || SIN_CIUDAD))).filter(
+        (c) => c !== SIN_CIUDAD && stock.has(c),
       ),
     );
-    setDistrictFilter(covered);
+    setCityFilter(defaultCities);
+    setDistrictFilter(new Set());
     setDateFilter("");
     setUnmatchedOnly(false);
     setFenixFilter("all");
@@ -177,6 +186,7 @@ export function ShipmentsBoard({
   const filtered = shipments.filter(
     (s) =>
       (storeFilter.size === 0 || storeFilter.has(s.store_id)) &&
+      (cityFilter.size === 0 || cityFilter.has(normalizeCity(s.city) || SIN_CIUDAD)) &&
       (districtFilter.size === 0 || districtFilter.has(s.district || SIN_DISTRITO)) &&
       (!dateFilter || (s.next_followup_at ? s.next_followup_at.slice(0, 10) === dateFilter : false)) &&
       (!unmatchedOnly || !s.matched) &&
@@ -302,6 +312,14 @@ export function ShipmentsBoard({
                   })}
                 </div>
               )}
+              {cityOptions.length > 1 && (
+                <ChecklistFilter
+                  label="Provincia"
+                  options={cityOptions}
+                  selected={cityFilter}
+                  onChange={setCityFilter}
+                />
+              )}
               {districtOptions.length > 1 && (
                 <ChecklistFilter
                   label="Distrito"
@@ -340,10 +358,16 @@ export function ShipmentsBoard({
                 />
                 Solo sin pedido
               </label>
-              {(storeFilter.size > 0 || districtFilter.size > 0 || dateFilter || unmatchedOnly || fenixFilter !== "all") && (
+              {(storeFilter.size > 0 ||
+                cityFilter.size > 0 ||
+                districtFilter.size > 0 ||
+                dateFilter ||
+                unmatchedOnly ||
+                fenixFilter !== "all") && (
                 <button
                   onClick={() => {
                     setStoreFilter(new Set());
+                    setCityFilter(new Set());
                     setDistrictFilter(new Set());
                     setDateFilter("");
                     setUnmatchedOnly(false);

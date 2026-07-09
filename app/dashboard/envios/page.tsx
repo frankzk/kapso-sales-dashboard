@@ -1,3 +1,4 @@
+import { createServerSupabase } from "@/lib/db";
 import { getAccessibleStores } from "@/lib/access";
 import {
   getShipmentCounts,
@@ -5,6 +6,7 @@ import {
   isShipmentView,
   type ShipmentView,
 } from "@/lib/shipments-access";
+import { normalizeCity } from "@/lib/shipments";
 import { EmptyState } from "@/components/ui";
 import { ShipmentsBoard } from "@/components/shipments";
 
@@ -26,10 +28,18 @@ export default async function EnviosPage({
   // counts + queue span ALL accessible stores (guides are a shared multitienda
   // pool); the store/city multi-select filters happen client-side in the board.
   const storeIds = stores.map((s) => s.id);
-  const [counts, shipments] = await Promise.all([
+  const sb = await createServerSupabase();
+  const [counts, shipments, stock] = await Promise.all([
     getShipmentCounts(storeIds),
     getStoreShipments(storeIds, view),
+    sb.from("fenix_stock").select("city,quantity").gt("quantity", 0),
   ]);
+
+  // Provinces where Fenix currently has stock — the province filter defaults to
+  // these (normalized coverage keys).
+  const fenixStockCities = Array.from(
+    new Set(((stock.data as { city: string }[]) ?? []).map((r) => normalizeCity(r.city))),
+  );
 
   return (
     <ShipmentsBoard
@@ -37,6 +47,7 @@ export default async function EnviosPage({
       view={view}
       counts={counts}
       shipments={shipments}
+      fenixStockCities={fenixStockCities}
     />
   );
 }
