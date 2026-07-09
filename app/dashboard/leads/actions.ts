@@ -562,6 +562,63 @@ export async function registerCall(
 }
 
 /**
+ * Confirm a lead as won when it already carries an ACTIVE order but wasn't
+ * auto-marked (the bot/Shopify order was linked with win=false because a later
+ * call disposition took precedence — see linkOrderToLead). Only flips
+ * category→won when the backing order is real and not cancelled, so it can't
+ * fake a win on an order-less lead. Idempotent. The order itself already counts
+ * the sale, so this is pure re-categorization (logged, not a new sale).
+ */
+export async function confirmLeadWon(leadId: string): Promise<LeadActionState> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+
+  const { data: current } = await admin
+    .from("leads")
+    .select("category, has_order, order_id")
+    .eq("id", leadId)
+    .maybeSingle();
+  const lead = current as { category: string; has_order: boolean; order_id: string | null } | null;
+  if (!lead) return { error: "Lead no encontrado." };
+  if (lead.category === "won") return { notice: "El lead ya está marcado como ganado." };
+  if (!lead.has_order || !lead.order_id) {
+    return { error: "Este lead no tiene un pedido activo para marcar como ganado." };
+  }
+  const { data: order } = await admin
+    .from("orders")
+    .select("name, cancelled_at")
+    .eq("id", lead.order_id)
+    .maybeSingle();
+  const o = order as { name: string | null; cancelled_at: string | null } | null;
+  if (!o || o.cancelled_at) {
+    return { error: "El pedido vinculado está cancelado o no existe. No se puede marcar como ganado." };
+  }
+
+  const nowIso = new Date().toISOString();
+  await admin
+    .from("leads")
+    .update({
+      status: "ya_tiene_pedido",
+      category: "won",
+      needs_attention: false,
+      last_interaction_at: nowIso,
+    })
+    .eq("id", leadId);
+  await admin.from("lead_calls").insert({
+    lead_id: leadId,
+    store_id: ctx.storeId,
+    vendedora: ctx.userId,
+    kind: "call",
+    new_status: "ya_tiene_pedido",
+    note: `Confirmado como ganado — ya tiene pedido${o.name ? ` (${o.name})` : ""}.`,
+  });
+
+  revalidatePath("/dashboard/leads");
+  return { notice: `Marcado como ganado${o.name ? ` · ${o.name}` : ""}.` };
+}
+
+/**
  * Close a sale by phone (contraentrega / COD). Records a lightweight manual
  * order, marks the lead as Ganado and credits the advisor — so a sale closed on
  * a call counts in revenue, COD totals and productividad just like a bot order.

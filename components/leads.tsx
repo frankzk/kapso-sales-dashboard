@@ -36,6 +36,7 @@ import {
 } from "@/lib/leads";
 import {
   claimLead,
+  confirmLeadWon,
   createQuickReply,
   deleteQuickReply,
   generateOrder,
@@ -1280,6 +1281,7 @@ function LeadDrawer({
   const handoffTone = categoryOf(lead.status) === "hot" ? "red" : "amber";
   const [orderOpen, setOrderOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [confirmingWon, startConfirmWon] = useTransition();
 
   // Live sync while a lead WITHOUT an order is open: a Yape/bot purchase links the
   // order a few seconds later (webhook → lead becomes won). Poll the lead's
@@ -1659,20 +1661,42 @@ function LeadDrawer({
         {!orderOpen && (
           <div className="border-t border-slate-200 bg-white p-3.5">
             {lead.has_order ? (
-              <div className="flex items-center justify-between gap-3">
-                <p className="min-w-0 truncate text-sm font-medium text-emerald-700">
-                  ✅ Pedido generado{history?.currentOrderName ? ` · ${history.currentOrderName}` : ""}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setOrderOpen(true)}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 5v14M5 12h14" />
-                  </svg>
-                  Generar nuevo pedido
-                </button>
+              <div className="space-y-2">
+                {/* Lead has an order but the auto-linker didn't mark it won (a later
+                    call disposition took precedence). Let the asesor confirm it. */}
+                {lead.category !== "won" && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      startConfirmWon(async () => {
+                        await confirmLeadWon(lead.id);
+                        onRegistered();
+                      })
+                    }
+                    disabled={confirmingWon}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                    {confirmingWon ? "Marcando…" : "Marcar como ganado (ya tiene pedido)"}
+                  </button>
+                )}
+                <div className="flex items-center justify-between gap-3">
+                  <p className="min-w-0 truncate text-sm font-medium text-emerald-700">
+                    ✅ Pedido generado{history?.currentOrderName ? ` · ${history.currentOrderName}` : ""}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setOrderOpen(true)}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                    Generar nuevo pedido
+                  </button>
+                </div>
               </div>
             ) : (
               <button
