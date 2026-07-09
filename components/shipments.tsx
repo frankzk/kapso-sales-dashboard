@@ -7,10 +7,10 @@ import { Card } from "@/components/ui";
 import {
   DELIVERY_STATUSES,
   attemptLabel,
-  autoFenixGuideCode,
   isCallable,
   labelOf,
   normalizeCity,
+  rescheduleGuideCode,
   statusSince,
   type RerouteDisposition,
 } from "@/lib/shipments";
@@ -691,6 +691,15 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                 <p className="text-xs text-emerald-700">Ya tiene guía Fenix vinculada.</p>
               ) : (
                 <>
+                  <label className="block text-xs text-slate-500">
+                    Fecha de reprogramación (va en la guía)
+                  </label>
+                  <input
+                    type="date"
+                    value={nextDate}
+                    onChange={(e) => setNextDate(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                  />
                   <div className="flex gap-2">
                     <input
                       value={fenixGuide}
@@ -700,7 +709,14 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                     />
                     <button
                       type="button"
-                      onClick={() => setFenixGuide(autoFenixGuideCode(detail.shipment.order_name))}
+                      onClick={() =>
+                        setFenixGuide(
+                          rescheduleGuideCode(
+                            detail.shipment.order_name,
+                            nextDate ? new Date(nextDate).toISOString() : null,
+                          ),
+                        )
+                      }
                       disabled={!detail.shipment.order_name}
                       title={
                         detail.shipment.order_name
@@ -713,7 +729,14 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                     </button>
                   </div>
                   <button
-                    onClick={() => run(() => createFenixGuide(shipmentId, { guideCode: fenixGuide }))}
+                    onClick={() =>
+                      run(() =>
+                        createFenixGuide(shipmentId, {
+                          guideCode: fenixGuide,
+                          nextFollowupAt: nextDate ? new Date(nextDate).toISOString() : null,
+                        }),
+                      )
+                    }
                     disabled={pending || !fenixGuide.trim()}
                     className="w-full rounded-lg border border-orange-300 bg-orange-50 px-3 py-1.5 text-sm font-medium text-orange-800 hover:bg-orange-100 disabled:opacity-50"
                   >
