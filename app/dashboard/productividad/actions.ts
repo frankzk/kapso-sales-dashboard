@@ -1,7 +1,7 @@
 "use server";
 
 import { getAccessibleStores, getUserRoleSummary, type DateRange } from "@/lib/access";
-import { getAgentLeadsWorked, type AgentLeadRow } from "@/lib/productivity";
+import { getAgentLeadsWorked, type AgentLeadRow, type SourceBucket } from "@/lib/productivity";
 
 /** Leads a single advisor worked in the range — drives the drill-down rows that
  *  expand under each asesora in the productividad table. RLS-scoped; managers
@@ -11,7 +11,7 @@ export async function loadAgentLeads(input: {
   from: string;
   to: string;
   store?: string | null;
-  source?: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null;
+  source?: SourceBucket | null;
 }): Promise<AgentLeadRow[]> {
   if ((await getUserRoleSummary()).isVendedoraOnly) return [];
   const stores = await getAccessibleStores();

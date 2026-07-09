@@ -612,8 +612,10 @@ describe("extractReferral (Meta ad attribution)", () => {
     });
   });
 
-  it("falls back to a Meta ad link in the customer's opening message (channel, no ad_id)", () => {
-    // The real "Sol" case: ad → site → "tengo una consulta" button, UTM in text.
+  it("falls back to fb_web (NOT meta_ad) for a Facebook/IG web link in the opening message", () => {
+    // The real "Sol"/"Carmen" case: ad OR organic post → site → "tengo una consulta"
+    // button, UTM in text. No CTWA referral, no ad_id → the weaker fb_web source,
+    // kept out of the provable "Meta Ads (campañas)" bucket.
     const msgs = [
       { kapso: { direction: "outbound" }, text: { body: "¡Hola! Soy Akemi de Aurela 😊" } },
       {
@@ -621,12 +623,24 @@ describe("extractReferral (Meta ad attribution)", () => {
         text: { body: "Tengo una consulta | Aurela https://aurela.pe/products/mochila?utm_content=Facebook_Mobile_Feed" },
       },
     ];
-    expect(extractReferral(msgs)).toEqual({ source: "meta_ad", ad_id: null, ad_headline: null, ctwa_clid: null });
+    expect(extractReferral(msgs)).toEqual({ source: "fb_web", ad_id: null, ad_headline: null, ctwa_clid: null });
   });
 
-  it("detects fbclid / utm_source=facebook too", () => {
-    expect(extractReferral([{ kapso: { direction: "inbound" }, text: { body: "vi esto https://x.pe/p?fbclid=AbC" } }])?.source).toBe("meta_ad");
-    expect(extractReferral([{ kapso: { direction: "inbound" }, text: { body: "https://x.pe/p?utm_source=facebook&utm_medium=cpc" } }])?.source).toBe("meta_ad");
+  it("classifies fbclid / utm_source=facebook web links as fb_web", () => {
+    expect(extractReferral([{ kapso: { direction: "inbound" }, text: { body: "vi esto https://x.pe/p?fbclid=AbC" } }])?.source).toBe("fb_web");
+    expect(extractReferral([{ kapso: { direction: "inbound" }, text: { body: "https://x.pe/p?utm_source=facebook&utm_medium=cpc" } }])?.source).toBe("fb_web");
+  });
+
+  it("still uses meta_ad (not fb_web) when a structured CTWA referral is present", () => {
+    // structured referral wins even if the same message also carries a fb link
+    const msgs = [
+      {
+        kapso: { direction: "inbound" },
+        text: { body: "hola https://aurela.pe/p?utm_source=facebook" },
+        referral: { source_id: "999", headline: "Anuncio" },
+      },
+    ];
+    expect(extractReferral(msgs)?.source).toBe("meta_ad");
   });
 
   it("returns null for an organic message (no referral, no Meta link)", () => {

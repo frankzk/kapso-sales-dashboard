@@ -388,9 +388,9 @@ export async function syncStoreLeads(
  * Source-attribute WON leads that the open/hot enrichment skips (`category in
  * (open,hot)` there). A lead that converts before its CTWA referral is captured
  * would otherwise stay unattributed forever. For each WON lead still missing a
- * `source`, read its conversation: a Meta ad referral (structured OR a Meta ad
- * link in the opening message) → `meta_ad`; anything else → the bot/organic
- * sentinel so it's marked checked and not re-fetched. Bounded per run, ordered
+ * `source`, read its conversation: a structured CTWA referral → `meta_ad`, a
+ * Facebook/IG web link in the opening message → `fb_web`; anything else → the
+ * bot/organic sentinel so it's marked checked and not re-fetched. Bounded per run, ordered
  * newest-first, so it both backfills history and catches fast-closed leads.
  */
 async function attributeWonLeadSources(

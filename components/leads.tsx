@@ -67,14 +67,18 @@ const inputCls =
 const labelCls = "block text-sm font-medium text-slate-700";
 
 /** Canonical acquisition-source bucket for a lead's `source` (Fuente filter). */
-function leadSourceKey(s: string | null | undefined): "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" {
+function leadSourceKey(
+  s: string | null | undefined,
+): "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic" {
   return s === "meta_ad"
     ? "meta_ad"
-    : s === "cod_cart"
-      ? "cod_cart"
-      : s === "abandoned_browse"
-        ? "abandoned_browse"
-        : "organic";
+    : s === "fb_web"
+      ? "fb_web"
+      : s === "cod_cart"
+        ? "cod_cart"
+        : s === "abandoned_browse"
+          ? "abandoned_browse"
+          : "organic";
 }
 
 /** Toggle inmutable de una clave en un Set (para estado de multi-select). */
@@ -422,12 +426,13 @@ function avatarTint(id: string): string {
   return AVATAR_TINTS[h]!;
 }
 
-// Square source chip (📣 Campaña / 🛒 Carrito / 🔎 Búsqueda / "Directo").
+// Square source chip (📣 Campaña / 🌐 FB/Web / 🛒 Carrito / 🔎 Búsqueda / "Directo").
 const SOURCE_CHIP: Record<
-  "meta_ad" | "cod_cart" | "abandoned_browse" | "organic",
+  "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic",
   { glyph: string; label: string; cls: string; title: string; isText?: boolean }
 > = {
-  meta_ad: { glyph: "📣", label: "Campaña", cls: "bg-violet-100 text-violet-700", title: "Campaña Meta (Click-to-WhatsApp)" },
+  meta_ad: { glyph: "📣", label: "Campaña", cls: "bg-violet-100 text-violet-700", title: "Campaña Meta (Click-to-WhatsApp, con anuncio)" },
+  fb_web: { glyph: "🌐", label: "FB/Web", cls: "bg-sky-100 text-sky-700", title: "Llegó por un link de Facebook/IG en la web (sin anuncio confirmado)" },
   cod_cart: { glyph: "🛒", label: "Carrito", cls: "bg-emerald-100 text-emerald-700", title: "Carrito abandonado (formulario COD)" },
   abandoned_browse: { glyph: "🔎", label: "Búsqueda", cls: "bg-orange-100 text-orange-700", title: "Búsqueda abandonada" },
   organic: { glyph: "Directo", label: "Directo", cls: "bg-slate-100 text-slate-500", title: "Orgánico / directo", isText: true },
@@ -721,9 +726,10 @@ export function LeadsBoard({
   const leadsExcept = (skip: Facet) => leads.filter((l) => facetKeys.every((k) => k === skip || FACETS[k](l)));
 
   const srcBase = leadsExcept("src");
-  const srcCounts = { meta_ad: 0, cod_cart: 0, abandoned_browse: 0, organic: 0 };
+  const srcCounts = { meta_ad: 0, fb_web: 0, cod_cart: 0, abandoned_browse: 0, organic: 0 };
   for (const l of srcBase) srcCounts[leadSourceKey(l.source)] += 1;
   const hasCampaign = leads.some((l) => l.source === "meta_ad");
+  const hasFbWeb = leads.some((l) => l.source === "fb_web");
   const hasCart = leads.some((l) => l.source === "cod_cart");
   const hasBrowse = leads.some((l) => l.source === "abandoned_browse");
 
@@ -983,7 +989,7 @@ export function LeadsBoard({
                 ]}
               />
             )}
-            {(hasCampaign || hasCart || hasBrowse) && (
+            {(hasCampaign || hasFbWeb || hasCart || hasBrowse) && (
               <MultiSelect
                 label="Fuente"
                 summaryAll="Todas"
@@ -992,6 +998,7 @@ export function LeadsBoard({
                 onClear={() => setSrcFilter(new Set())}
                 options={[
                   ...(hasCampaign ? [{ key: "meta_ad", label: "📣 Campaña", count: srcCounts.meta_ad }] : []),
+                  ...(hasFbWeb ? [{ key: "fb_web", label: "🌐 FB/Web", count: srcCounts.fb_web }] : []),
                   ...(hasCart ? [{ key: "cod_cart", label: "🛒 Carrito", count: srcCounts.cod_cart }] : []),
                   ...(hasBrowse
                     ? [{ key: "abandoned_browse", label: "🔎 Búsqueda", count: srcCounts.abandoned_browse }]
