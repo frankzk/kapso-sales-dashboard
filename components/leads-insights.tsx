@@ -140,22 +140,33 @@ function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
     return <p className="text-xs text-slate-400">Sin actividad de asesoras registrada hoy todavía.</p>;
   }
   return (
-    // Container queries: 1 columna cuando va angosto (en la fila de 3), 2–3 cuando
-    // el panel se apila y la tarjeta es ancha. Filas compactas, sin scroll.
-    <div className="@container">
-      <div className="grid grid-cols-1 gap-1.5 @[19rem]:grid-cols-2 @[34rem]:grid-cols-3">
-        {rows.map((r) => (
-          <div key={r.name} className="flex items-center gap-2 rounded-lg bg-slate-50/70 px-2.5 py-1.5">
+    <div className="space-y-2.5">
+      {rows.map((r) => {
+        const conv = r.contactos > 0 ? Math.round((r.pedidos / r.contactos) * 100) : null;
+        return (
+          <div key={r.name} className="flex items-center gap-2">
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-100 text-[10px] font-semibold text-brand-700">
               {avatarInitial(r.name)}
             </span>
-            <div className="min-w-0 leading-tight">
-              <p className="truncate text-xs font-medium text-slate-800" title={r.name}>
-                {r.name}
-              </p>
-              <p className="text-[11px] text-slate-500">
-                <span className="font-semibold text-slate-700">{r.contactos}</span> contactos ·{" "}
-                <span className="font-semibold text-emerald-700">{r.pedidos}</span> pedidos
+            <div className="min-w-0 flex-1 leading-tight">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="truncate text-xs font-medium text-slate-800" title={r.name}>
+                  {r.name}
+                </span>
+                <span
+                  className="shrink-0 text-xs font-semibold text-slate-700"
+                  title={conv != null ? `${r.pedidos} pedidos / ${r.contactos} contactos` : undefined}
+                >
+                  {conv != null ? `${conv}%` : "—"}
+                </span>
+              </div>
+              {/* barra horizontal de conversión (0–100%) */}
+              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className="h-full rounded-full bg-emerald-500" style={{ width: `${conv ?? 0}%` }} />
+              </div>
+              <p className="mt-0.5 text-[10px] text-slate-400">
+                <span className="text-slate-500">{r.contactos}</span> contactos ·{" "}
+                <span className="text-emerald-700">{r.pedidos}</span> pedidos
                 {r.pedidosDetalle.length > 0 && (
                   <span className="group relative inline-block">
                     <button
@@ -169,7 +180,7 @@ function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
                     </button>
                     <span
                       className={cn(
-                        "absolute left-0 top-full z-20 mt-1 max-h-44 w-max min-w-[9rem] overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 text-left shadow-lg",
+                        "absolute right-0 top-full z-20 mt-1 max-h-44 w-max min-w-[9rem] overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 text-left shadow-lg",
                         pinned === r.name ? "block" : "hidden group-hover:block",
                       )}
                     >
@@ -182,23 +193,11 @@ function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
                     </span>
                   </span>
                 )}
-                {r.contactos > 0 && (
-                  <>
-                    {" · "}
-                    <span
-                      className="font-semibold text-slate-700"
-                      title={`${r.pedidos} pedidos / ${r.contactos} contactos`}
-                    >
-                      {Math.round((r.pedidos / r.contactos) * 100)}%
-                    </span>{" "}
-                    conv.
-                  </>
-                )}
               </p>
             </div>
           </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }
@@ -237,8 +236,7 @@ export function LeadsInsightsPanel({
       </div>
 
       {open && (
-        <div className="mt-3 space-y-3">
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-xl border border-slate-200 bg-white p-3">
               <p className="text-sm font-semibold text-slate-800">¿Cerramos hoy?</p>
               <p className="mb-1 text-xs text-slate-500">
@@ -276,7 +274,6 @@ export function LeadsInsightsPanel({
               </p>
               <ConversionChart data={data.conversion} />
             </div>
-          </div>
 
           <div className="rounded-xl border border-slate-200 bg-white p-3">
             <p className="mb-2 text-sm font-semibold text-slate-800">
