@@ -38,21 +38,25 @@ export interface AdvisorToday {
 }
 
 /** One day of the team conversion chart: contactos (gestión calls) vs pedidos
- *  (won leads credited to their last-CALL day). Attributing by last CALL (not
- *  any touch) guarantees pedidos ≤ contactos, so the "bar = contactos, relleno =
- *  pedidos, % encima" encoding never exceeds 100%. */
+ *  (won leads credited to their last-TOUCH day). Pedidos se atribuye por ÚLTIMO
+ *  TOQUE (cualquier tipo), IGUAL que el panel de Productividad — así el "Hoy" del
+ *  gráfico cuadra con la suma de pedidos por asesora (un cierre registrado sin
+ *  llamada — "generar pedido" / cambio de estado — igual cuenta). contactos sigue
+ *  contando solo kind="call". En un día muy flojo pedidos podría superar contactos;
+ *  el gráfico recorta el relleno verde y topa el % a 100. */
 export interface ConversionDay {
   dia: string; // weekday label, or "Hoy"
   contactos: number; // kind="call" calls that day
-  pedidos: number; // distinct won leads whose last CALL (kind="call") fell that day
+  pedidos: number; // distinct won leads whose last TOUCH (any kind) fell that day
 }
 
 /**
  * Team conversion per day. contactos = kind="call" calls; a won lead is credited
- * to the DAY of its last CALL (guaranteeing pedidos ≤ contactos so the rate stays
- * ≤ 100%). Pure so it can be unit-tested. `calls` are all advisor (`vendedora`
- * not null) lead_calls in the window; `wonLeadIds` is the set of those leads
- * currently won.
+ * to the DAY of its last TOUCH (any kind) — the same last-touch attribution the
+ * Productividad panel uses, so the chart's "Hoy" pedidos equals the sum of the
+ * per-advisor pedidos (a sale closed without logging a call still counts). Pure so
+ * it can be unit-tested. `calls` are all advisor (`vendedora` not null) lead_calls
+ * in the window; `wonLeadIds` is the set of those leads currently won.
  */
 export function computeTeamConversionByDay(opts: {
   calls: { lead_id: string; kind: string | null; occurred_at: string | null }[];
@@ -62,16 +66,18 @@ export function computeTeamConversionByDay(opts: {
 }): ConversionDay[] {
   const daySet = new Set(opts.days.map((d) => d.date));
   const contactosByDate: Record<string, number> = {};
-  const lastCallByLead: Record<string, string> = {}; // only kind="call" → pedidos land on a call day
+  const lastTouchByLead: Record<string, string> = {}; // ANY kind → el pedido cae el día del ÚLTIMO TOQUE (igual que Productividad)
   for (const c of opts.calls) {
-    if (c.kind !== "call" || !c.occurred_at) continue;
-    const d = tzParts(c.occurred_at, opts.tz).date;
-    if (daySet.has(d)) contactosByDate[d] = (contactosByDate[d] ?? 0) + 1;
-    const prev = lastCallByLead[c.lead_id];
-    if (!prev || c.occurred_at > prev) lastCallByLead[c.lead_id] = c.occurred_at;
+    if (!c.occurred_at) continue;
+    if (c.kind === "call") {
+      const d = tzParts(c.occurred_at, opts.tz).date;
+      if (daySet.has(d)) contactosByDate[d] = (contactosByDate[d] ?? 0) + 1;
+    }
+    const prev = lastTouchByLead[c.lead_id];
+    if (!prev || c.occurred_at > prev) lastTouchByLead[c.lead_id] = c.occurred_at;
   }
   const pedidosByDate: Record<string, number> = {};
-  for (const [leadId, at] of Object.entries(lastCallByLead)) {
+  for (const [leadId, at] of Object.entries(lastTouchByLead)) {
     if (!opts.wonLeadIds.has(leadId)) continue;
     const d = tzParts(at, opts.tz).date;
     if (daySet.has(d)) pedidosByDate[d] = (pedidosByDate[d] ?? 0) + 1;

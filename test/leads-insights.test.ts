@@ -39,14 +39,25 @@ describe("computeTeamConversionByDay (conversión por día del equipo)", () => {
     ]);
   });
 
-  it("un kind distinto de 'call' no cuenta ni como contacto ni para atribuir el pedido (se usa la última LLAMADA)", () => {
+  it("atribuye el pedido al ÚLTIMO TOQUE (cualquier tipo), no solo a la última llamada — cuadra con Productividad; contactos sigue contando solo kind='call'", () => {
     const calls = [
-      { lead_id: "A", kind: "call", occurred_at: at("2026-07-08") }, // última llamada → pedido el 08
-      { lead_id: "A", kind: "state_change", occurred_at: at("2026-07-09") }, // toque posterior, se ignora
+      { lead_id: "A", kind: "call", occurred_at: at("2026-07-08") }, // contacto (llamada) el 08
+      { lead_id: "A", kind: "state_change", occurred_at: at("2026-07-09") }, // se cerró el 09 → pedido el 09
     ];
     expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz })).toEqual([
-      { dia: "Mié", contactos: 1, pedidos: 1 },
-      { dia: "Hoy", contactos: 0, pedidos: 0 },
+      { dia: "Mié", contactos: 1, pedidos: 0 },
+      { dia: "Hoy", contactos: 0, pedidos: 1 },
+    ]);
+  });
+
+  it("un lead ganado tocado hoy SOLO por una acción que no es llamada igual cuenta como pedido (0 contactos · 1 pedido, igual que el panel)", () => {
+    const calls = [
+      // "Generar pedido" / cambio de estado sin registrar una llamada: 0 contactos ese día, 1 pedido.
+      { lead_id: "A", kind: "state_change", occurred_at: at("2026-07-09") },
+    ];
+    expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz })).toEqual([
+      { dia: "Mié", contactos: 0, pedidos: 0 },
+      { dia: "Hoy", contactos: 0, pedidos: 1 },
     ]);
   });
 
