@@ -30,11 +30,13 @@ import {
   fetchConversationTranscript,
   fetchLastInboundAt,
   listConversationsByPhone,
+  mergeTranscripts,
   sendWhatsappDocument,
   sendWhatsappImage,
   sendWhatsappText,
   sendWhatsappVideo,
   templateProductParam,
+  type ConversationMessage,
 } from "@/lib/kapso";
 import { getWaNumbers } from "@/lib/access";
 
@@ -895,13 +897,20 @@ export interface LeadConversation {
   reason?: string; // set (with messages: []) when the transcript can't be shown
 }
 
+/** How many of a number's session-conversations the drawer merges into the
+ *  transcript (newest-first). Covers virtually all real contacts while bounding
+ *  the Kapso fan-out on drawer open. */
+const MAX_DRAWER_CONVERSATIONS = 10;
+
 /**
  * Load a lead's WhatsApp conversation (text + media) from Kapso. Also returns the
  * list of THREADS — one per connected number the customer wrote to — so the drawer
  * can show a selector when there's more than one (a customer who messaged both of
  * the store's numbers). `conversationId` picks which thread to read (validated to
  * belong to this lead's phone); otherwise the stored or most-recent one is used.
- * Requested with `fields=kapso(default)` for stable media URLs. RLS-authorized.
+ * The active number's session-conversations are MERGED so the full history shows,
+ * not just the newest session. Requested with `fields=kapso(default)` for stable
+ * media URLs. RLS-authorized.
  */
 export async function loadLeadConversation(
   leadId: string,
@@ -983,22 +992,43 @@ export async function loadLeadConversation(
   const activeThread = threads.find((t) => t.conversationId === activeId) ?? null;
   const activePhoneNumberId = activeThread?.phoneNumberId ?? lead?.wa_phone_number_id ?? null;
 
-  // Reuse the transcript we already fetched in parallel when the resolved active
-  // conversation is the stored one (the common case); otherwise fetch it now.
-  let parsed = storedId && activeId === storedId ? storedTranscript : null;
-  if (parsed == null) {
-    try {
-      parsed = await fetchConversationTranscript({ apiKey }, activeId, 2);
-    } catch {
-      return {
-        messages: [],
-        threads,
-        activeConversationId: activeId,
-        activePhoneNumberId,
-        reason: "No se pudo cargar la conversación de WhatsApp.",
-      };
-    }
+  // Kapso splits a contact's chat into session-window "conversations" (each its
+  // own id). The drawer wants the FULL history for the active number, so gather
+  // ALL its conversation ids (newest-first, bounded) and merge their transcripts —
+  // otherwise only the newest session shows and older messages look truncated.
+  const activeConvIds = threadsRaw
+    .filter((t) => (t.phoneNumberId ?? "__none__") === activeKey)
+    .sort((a, b) => (b.lastActiveAt ?? "").localeCompare(a.lastActiveAt ?? ""))
+    .map((t) => t.conversationId);
+  const idsToFetch = [...new Set([activeId, ...activeConvIds])].slice(0, MAX_DRAWER_CONVERSATIONS);
+  const olderIds = idsToFetch.filter((id) => id !== activeId);
+
+  // The active (newest) conversation is the primary read — a failure there is a
+  // real error. Older sessions are best-effort (a failing one is just skipped),
+  // and we reuse the transcript prefetched in parallel above wherever it matches.
+  let activeMsgs: ConversationMessage[];
+  try {
+    activeMsgs =
+      activeId === storedId && storedTranscript
+        ? storedTranscript
+        : await fetchConversationTranscript({ apiKey }, activeId, 2);
+  } catch {
+    return {
+      messages: [],
+      threads,
+      activeConversationId: activeId,
+      activePhoneNumberId,
+      reason: "No se pudo cargar la conversación de WhatsApp.",
+    };
   }
+  const olderMsgs = await Promise.all(
+    olderIds.map((id) =>
+      id === storedId && storedTranscript
+        ? Promise.resolve(storedTranscript)
+        : fetchConversationTranscript({ apiKey }, id, 2).catch(() => [] as ConversationMessage[]),
+    ),
+  );
+  const parsed = mergeTranscripts([activeMsgs, ...olderMsgs]);
 
   const messages: LeadConversationMessage[] = (parsed ?? []).map((m) => ({
     id: m.id,

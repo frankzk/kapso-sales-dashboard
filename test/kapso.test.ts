@@ -16,6 +16,7 @@ import {
   fetchConversationSignals,
   fetchConversationTranscript,
   parseConversationMessages,
+  mergeTranscripts,
   templateProductParam,
   findConversationIdByPhone,
   listConversationsByPhone,
@@ -816,5 +817,43 @@ describe("listConversationsByPhone (multi-number)", () => {
     const caps: Capture[] = [];
     expect(await listConversationsByPhone(opts(mockFetch(() => ({ data: [] }), caps)), "")).toEqual([]);
     expect(caps).toHaveLength(0);
+  });
+});
+
+describe("mergeTranscripts (full history across Kapso session-conversations)", () => {
+  const msg = (id: string, t: number, text = ""): any => ({
+    id,
+    dir: "inbound",
+    t,
+    text,
+    mediaKind: null,
+    mediaUrl: null,
+    status: null,
+  });
+
+  it("concatenates several conversations into ONE oldest-first stream", () => {
+    const older = [msg("a", 1000), msg("b", 2000)]; // a prior session
+    const newer = [msg("c", 5000), msg("d", 6000)]; // the current session
+    const merged = mergeTranscripts([newer, older]); // caller may pass newest-first
+    expect(merged.map((m) => m.id)).toEqual(["a", "b", "c", "d"]); // re-sorted by t
+  });
+
+  it("interleaves by timestamp, not by conversation", () => {
+    const convA = [msg("a1", 1000), msg("a2", 4000)];
+    const convB = [msg("b1", 2000), msg("b2", 3000)];
+    expect(mergeTranscripts([convA, convB]).map((m) => m.id)).toEqual(["a1", "b1", "b2", "a2"]);
+  });
+
+  it("dedupes by id across conversations (overlapping window)", () => {
+    const a = [msg("x", 1000), msg("y", 2000)];
+    const b = [msg("y", 2000), msg("z", 3000)]; // y repeated
+    const merged = mergeTranscripts([a, b]);
+    expect(merged.map((m) => m.id)).toEqual(["x", "y", "z"]);
+  });
+
+  it("keeps messages without an id (can't dedupe them) and handles empty input", () => {
+    expect(mergeTranscripts([])).toEqual([]);
+    const withNulls = mergeTranscripts([[{ ...msg("", 1000), id: null }, { ...msg("", 1000), id: null }]]);
+    expect(withNulls).toHaveLength(2);
   });
 });

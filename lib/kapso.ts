@@ -709,6 +709,29 @@ export async function fetchConversationTranscript(
 }
 
 /**
+ * Merge several conversations' transcripts into ONE oldest-first stream, deduped
+ * by id. Kapso splits a contact's chat into session-window "conversations" (each
+ * its own id), so the drawer — which wants the whole history for a number —
+ * concatenates their per-conversation transcripts and re-sorts by timestamp (`t`,
+ * epoch ms; id as a stable tiebreak). Pure.
+ */
+export function mergeTranscripts(perConversation: ConversationMessage[][]): ConversationMessage[] {
+  const seen = new Set<string>();
+  const out: ConversationMessage[] = [];
+  for (const list of perConversation) {
+    for (const m of list) {
+      const id = m.id != null ? String(m.id) : null;
+      if (id != null) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      out.push(m);
+    }
+  }
+  return out.sort((a, b) => a.t - b.t || String(a.id ?? "").localeCompare(String(b.id ?? "")));
+}
+
+/**
  * A normalized Click-to-WhatsApp (CTWA) ad referral. Meta attaches a top-level
  * `referral` object to the FIRST inbound message of an ad/post-sourced
  * conversation; its presence means the lead came from a paid Meta entry point.
