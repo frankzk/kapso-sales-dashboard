@@ -81,13 +81,17 @@ function SinLlamarChart({ data, older }: { data: LeadsInsights["sinLlamar"]; old
  *  VOLUMEN + TASA juntos: un día de "100% pero 1 contacto" sale como barra chiquita
  *  y no engaña con un % inflado. */
 function ConversionChart({ data }: { data: LeadsInsights["conversion"] }) {
-  const rows = data.map((d) => ({
-    dia: d.dia,
-    pedidos: d.pedidos,
-    resto: Math.max(0, d.contactos - d.pedidos), // relleno gris encima del verde → total = contactos
-    contactos: d.contactos,
-    pct: d.contactos > 0 ? Math.round((d.pedidos / d.contactos) * 100) : null,
-  }));
+  const rows = data.map((d) => {
+    const fill = Math.min(d.pedidos, d.contactos); // el verde nunca desborda la barra de contactos
+    return {
+      dia: d.dia,
+      pedidos: fill, // segmento verde (recortado al alto de la barra)
+      pedidosReal: d.pedidos, // conteo real (honesto) para el tooltip
+      resto: Math.max(0, d.contactos - fill), // relleno gris encima del verde → total = contactos
+      contactos: d.contactos,
+      pct: d.contactos > 0 ? Math.min(100, Math.round((d.pedidos / d.contactos) * 100)) : null,
+    };
+  });
   return (
     <div className="h-44 w-full">
       <ResponsiveContainer width="100%" height="100%">
@@ -104,7 +108,7 @@ function ConversionChart({ data }: { data: LeadsInsights["conversion"] }) {
                 <div style={{ ...TOOLTIP_STYLE, background: "#fff", padding: "6px 9px" }}>
                   <div className="font-medium text-slate-700">{label}</div>
                   <div className="text-slate-500">
-                    {p.contactos} contactos · <span className="text-emerald-700">{p.pedidos} pedidos</span>
+                    {p.contactos} contactos · <span className="text-emerald-700">{p.pedidosReal} pedidos</span>
                     {p.pct != null ? ` · ${p.pct}%` : ""}
                   </div>
                 </div>
