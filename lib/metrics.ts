@@ -692,11 +692,13 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
     const key =
       l.source === "meta_ad"
         ? "meta_ad"
-        : l.source === "cod_cart"
-          ? "cod_cart"
-          : l.source === "abandoned_browse"
-            ? "abandoned_browse"
-            : "organic";
+        : l.source === "fb_web"
+          ? "fb_web"
+          : l.source === "cod_cart"
+            ? "cod_cart"
+            : l.source === "abandoned_browse"
+              ? "abandoned_browse"
+              : "organic";
     const b = buckets.get(key) ?? { leads: 0, pedidos: 0, ingresos: 0 };
     b.leads += 1;
     if (l.has_order) {
@@ -707,6 +709,7 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
   }
   const labels: Record<string, string> = {
     meta_ad: "Meta Ads (campañas)",
+    fb_web: "🌐 Facebook / Web",
     cod_cart: "🛒 Carrito abandonado",
     abandoned_browse: "🔎 Búsqueda abandonada",
     organic: "Orgánico",
@@ -1078,6 +1081,7 @@ export function botVsAdvisor(orders: OrderRow[]): BotVsAdvisor {
 export type AttributionSource =
   | "winback"
   | "meta_ad"
+  | "fb_web"
   | "cod_cart"
   | "abandoned_browse"
   | "organic"
@@ -1134,6 +1138,7 @@ const ASSIST_ATTR_DAYS = 7; // advisor touch ≤7d before the order ⇒ bot asis
 const SOURCE_LABELS: Record<AttributionSource, string> = {
   winback: "🔁 Recuperación 60d",
   meta_ad: "Meta Ads (campañas)",
+  fb_web: "🌐 Facebook / Web",
   cod_cart: "🛒 Carrito abandonado",
   abandoned_browse: "🔎 Búsqueda abandonada",
   organic: "Orgánico (WhatsApp)",
@@ -1144,6 +1149,7 @@ const SOURCE_LABELS: Record<AttributionSource, string> = {
  *  funnel narrative: paid → carts → browse → winback → organic → unknown). */
 export const ATTRIBUTION_SOURCE_ORDER: AttributionSource[] = [
   "meta_ad",
+  "fb_web",
   "cod_cart",
   "abandoned_browse",
   "winback",

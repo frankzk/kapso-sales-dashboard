@@ -79,6 +79,29 @@ describe("sourceBreakdown (per-source conversion)", () => {
     expect(org.leads).toBe(2); // browse not folded into organic
   });
 
+  it("separates fb_web (Facebook/web link) from meta_ad (provable ad click)", () => {
+    const fbOrders = [
+      ...orders,
+      { customer_phone: "51977777777", total_amount: 130, total_refunded: 0, cancelled_at: null },
+    ] as unknown as OrderRow[];
+    const fbLeads = [
+      ...leads,
+      { phone: "51977777777", source: "fb_web", has_order: true }, // FB/web link → won (S/130)
+      { phone: "51988888888", source: "fb_web", has_order: false }, // FB/web link → not won
+    ] as unknown as LeadRow[];
+
+    const stats = sourceBreakdown(fbLeads, fbOrders);
+    expect(stats).toHaveLength(3); // meta_ad, fb_web, organic
+
+    const fb = stats.find((s) => s.key === "fb_web")!;
+    expect(fb).toMatchObject({ leads: 2, pedidos: 1, ingresos: 130 });
+    expect(fb.label).toContain("Facebook");
+
+    // NOT folded into meta_ad (campañas stays only the provable ad clicks)
+    const ad = stats.find((s) => s.key === "meta_ad")!;
+    expect(ad.leads).toBe(2);
+  });
+
   it("returns [] when no lead has a source yet (module stays hidden)", () => {
     const noSource = [{ phone: "x", source: null, has_order: false }] as unknown as LeadRow[];
     expect(sourceBreakdown(noSource, orders)).toEqual([]);

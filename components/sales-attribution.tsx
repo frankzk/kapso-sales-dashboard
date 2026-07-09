@@ -17,6 +17,7 @@ import { cn } from "@/components/ui";
 // legend reads the same in both.
 const SOURCE_COLOR: Record<AttributionSource, string> = {
   meta_ad: CHART.brand,
+  fb_web: CHART.blue,
   cod_cart: CHART.orange,
   abandoned_browse: CHART.teal,
   winback: CHART.purple,

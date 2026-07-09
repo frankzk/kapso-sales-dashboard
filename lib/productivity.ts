@@ -42,9 +42,11 @@ export interface WonOrderRef {
   at: string | null; // order created_at ISO
 }
 
-/** The four acquisition-source buckets a won order can be attributed to. */
-export type SourceBucket = "meta_ad" | "cod_cart" | "abandoned_browse" | "organic";
-export const SOURCE_BUCKETS: SourceBucket[] = ["meta_ad", "cod_cart", "abandoned_browse", "organic"];
+/** The acquisition-source buckets a won order can be attributed to. `meta_ad` =
+ *  provable Click-to-WhatsApp ad click (has ad_id); `fb_web` = reached WhatsApp
+ *  via a Facebook/IG web link (paid or organic, no ad_id). */
+export type SourceBucket = "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic";
+export const SOURCE_BUCKETS: SourceBucket[] = ["meta_ad", "fb_web", "cod_cart", "abandoned_browse", "organic"];
 
 /** One advisor×source cell: how many orders closed and their net revenue. */
 export interface SourceCell {
@@ -57,6 +59,7 @@ export interface SourceCell {
 export function emptyPorFuente(): Record<SourceBucket, SourceCell> {
   return {
     meta_ad: { cerrados: 0, ingresos: 0 },
+    fb_web: { cerrados: 0, ingresos: 0 },
     cod_cart: { cerrados: 0, ingresos: 0 },
     abandoned_browse: { cerrados: 0, ingresos: 0 },
     organic: { cerrados: 0, ingresos: 0 },
@@ -90,11 +93,13 @@ export function isWonLead(category: string | null | undefined): boolean {
 function sourceKey(s: string | null | undefined): SourceBucket {
   return s === "meta_ad"
     ? "meta_ad"
-    : s === "cod_cart"
-      ? "cod_cart"
-      : s === "abandoned_browse"
-        ? "abandoned_browse"
-        : "organic";
+    : s === "fb_web"
+      ? "fb_web"
+      : s === "cod_cart"
+        ? "cod_cart"
+        : s === "abandoned_browse"
+          ? "abandoned_browse"
+          : "organic";
 }
 
 export interface AdvisorCall {
@@ -249,7 +254,7 @@ export async function resolveEmails(userIds: string[]): Promise<Map<string, stri
 export async function getAdvisorProductivity(
   storeIds: string[],
   range: DateRange,
-  source: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null = null,
+  source: SourceBucket | null = null,
   tz = "America/Lima",
 ): Promise<AdvisorStat[]> {
   if (!storeIds.length) return [];
@@ -386,7 +391,7 @@ function sumTotals(rows: AdvisorStat[]): ProductivityTotals {
 export async function getAdvisorProductivityCompare(
   storeIds: string[],
   range: DateRange,
-  source: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null = null,
+  source: SourceBucket | null = null,
   tz = "America/Lima",
 ): Promise<ProductivityComparison> {
   const prevRange = previousRange(range);
@@ -429,7 +434,7 @@ export interface AgentLeadRow {
   phone: string | null;
   status: string;
   category: string | null;
-  source: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic";
+  source: SourceBucket;
   won: boolean;
   net: number; // net revenue if won, else 0
   llamadas: number; // calls this advisor logged on the lead
@@ -443,7 +448,7 @@ export async function getAgentLeadsWorked(
   storeIds: string[],
   range: DateRange,
   vendedoraId: string,
-  source: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null = null,
+  source: SourceBucket | null = null,
   tz = "America/Lima",
 ): Promise<AgentLeadRow[]> {
   if (!storeIds.length || !vendedoraId) return [];

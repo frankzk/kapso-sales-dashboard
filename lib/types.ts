@@ -182,8 +182,10 @@ export interface LeadRow {
   address1?: string | null; // shippingAddress.address1 (calle) — 0032
   ship_name?: string | null; // shipping recipient (draft customer_name) — 0032
   inbound_count?: number | null;
-  // Source / channel attribution (0008). 'meta_ad' for Click-to-WhatsApp ad
-  // leads (captured from the first inbound message's `referral`); null = organic.
+  // Source / channel attribution (0008). 'meta_ad' = structured Click-to-WhatsApp
+  // referral (real ad_id); 'fb_web' = reached WhatsApp via a Facebook/IG web link
+  // (utm_source=facebook/fbclid, no ad_id); 'cod_cart'/'abandoned_browse' = flows;
+  // null = organic. Captured from the first inbound message's `referral`.
   source?: string | null;
   ad_id?: string | null;
   ad_headline?: string | null;

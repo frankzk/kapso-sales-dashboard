@@ -5,12 +5,13 @@ import type { DateRange } from "@/lib/access";
 import type { StoreSummary } from "@/lib/types";
 import type { AdvisorStatWithDelta, ProductivityTotals, SourceBucket, SourceCell } from "@/lib/productivity";
 
-type SourceFilter = "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" | null;
+type SourceFilter = SourceBucket | null;
 
 /** Columns of the advisor×source matrix, in display order (same labels as the
  *  "Fuente" filter chips). */
 const SOURCE_COLS: { key: SourceBucket; label: string }[] = [
   { key: "meta_ad", label: "📣 Campaña" },
+  { key: "fb_web", label: "🌐 FB/Web" },
   { key: "cod_cart", label: "🛒 Carrito" },
   { key: "abandoned_browse", label: "🔎 Búsqueda" },
   { key: "organic", label: "Orgánico" },
@@ -166,6 +167,11 @@ export function ProductivityBoard({
           href={buildHref({ from: range.from, to: range.to, store: storeId, src: "meta_ad" })}
           label="📣 Campaña"
           active={source === "meta_ad"}
+        />
+        <Chip
+          href={buildHref({ from: range.from, to: range.to, store: storeId, src: "fb_web" })}
+          label="🌐 FB/Web"
+          active={source === "fb_web"}
         />
         <Chip
           href={buildHref({ from: range.from, to: range.to, store: storeId, src: "cod_cart" })}

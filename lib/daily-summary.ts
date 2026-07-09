@@ -42,7 +42,7 @@ async function attributionInputsAdmin(
   if (!phones.length) return { sourceByPhone, advisorTouchesByPhone, winbackByPhone };
 
   const norm = (s: string | null | undefined): AttributionSource =>
-    s === "meta_ad" || s === "cod_cart" || s === "abandoned_browse" ? s : "organic";
+    s === "meta_ad" || s === "fb_web" || s === "cod_cart" || s === "abandoned_browse" ? s : "organic";
   // Chunk every .in(...) by 300 (parity with access.getAttributionInputs) so a
   // high-volume store's day doesn't blow the PostgREST/proxy URL length limit.
   const chunk = <T,>(arr: T[], size: number): T[][] => {

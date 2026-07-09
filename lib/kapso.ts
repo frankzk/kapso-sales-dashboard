@@ -714,8 +714,14 @@ export async function fetchConversationTranscript(
  * conversation; its presence means the lead came from a paid Meta entry point.
  */
 export interface LeadReferral {
-  source: "meta_ad";
-  ad_id: string | null; // referral.source_id (Meta ad id)
+  // "meta_ad" = a structured Click-to-WhatsApp referral (a real, provable ad click,
+  // carries the ad_id). "fb_web" = the weaker fallback: the customer reached the
+  // SITE from a Facebook/IG link (utm_source=facebook, fbclid, a placement macro)
+  // and then opened WhatsApp from a web button — could be paid OR organic, and
+  // there's no ad_id to tie it to a specific campaign. Kept separate so the
+  // "Meta Ads (campañas)" bucket stays trustworthy (only real ad clicks).
+  source: "meta_ad" | "fb_web";
+  ad_id: string | null; // referral.source_id (Meta ad id) — null for fb_web
   ad_headline: string | null; // referral.headline (ad creative headline)
   ctwa_clid: string | null; // referral.ctwa_clid (click id, for Meta CAPI matching)
 }
@@ -744,12 +750,14 @@ export function extractReferral(rawMsgs: any[]): LeadReferral | null {
       };
     }
   }
-  // 2) Fallback: a Meta ad link in a customer (inbound) message. Same channel,
-  //    but the URL carries no ad_id → attribute Campaña without a specific ad.
+  // 2) Fallback: a Facebook/IG link in a customer (inbound) message — they reached
+  //    the SITE from Meta and opened WhatsApp from a web button. NOT a direct ad
+  //    click (no CTWA referral, no ad_id) and possibly organic, so it's the weaker
+  //    "fb_web" source, kept out of the provable "meta_ad" (campañas) bucket.
   for (const m of rawMsgs ?? []) {
     if (msgDirection(m) !== "inbound") continue;
     if (META_AD_HINT_RE.test(msgText(m))) {
-      return { source: "meta_ad", ad_id: null, ad_headline: null, ctwa_clid: null };
+      return { source: "fb_web", ad_id: null, ad_headline: null, ctwa_clid: null };
     }
   }
   return null;
