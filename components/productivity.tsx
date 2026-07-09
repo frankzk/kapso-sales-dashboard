@@ -11,7 +11,7 @@ type SourceFilter = SourceBucket | null;
  *  "Fuente" filter chips). */
 const SOURCE_COLS: { key: SourceBucket; label: string }[] = [
   { key: "meta_ad", label: "📣 Campaña" },
-  { key: "fb_web", label: "🌐 FB/Web" },
+  { key: "fb_web", label: "🌐 Meta/Web" },
   { key: "cod_cart", label: "🛒 Carrito" },
   { key: "abandoned_browse", label: "🔎 Búsqueda" },
   { key: "organic", label: "Orgánico" },
@@ -170,7 +170,7 @@ export function ProductivityBoard({
         />
         <Chip
           href={buildHref({ from: range.from, to: range.to, store: storeId, src: "fb_web" })}
-          label="🌐 FB/Web"
+          label="🌐 Meta/Web"
           active={source === "fb_web"}
         />
         <Chip

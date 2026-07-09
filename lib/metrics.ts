@@ -709,7 +709,7 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
   }
   const labels: Record<string, string> = {
     meta_ad: "Meta Ads (campañas)",
-    fb_web: "🌐 Facebook / Web",
+    fb_web: "🌐 Meta / Web (FB·IG)",
     cod_cart: "🛒 Carrito abandonado",
     abandoned_browse: "🔎 Búsqueda abandonada",
     organic: "Orgánico",
@@ -1138,7 +1138,7 @@ const ASSIST_ATTR_DAYS = 7; // advisor touch ≤7d before the order ⇒ bot asis
 const SOURCE_LABELS: Record<AttributionSource, string> = {
   winback: "🔁 Recuperación 60d",
   meta_ad: "Meta Ads (campañas)",
-  fb_web: "🌐 Facebook / Web",
+  fb_web: "🌐 Meta / Web (FB·IG)",
   cod_cart: "🛒 Carrito abandonado",
   abandoned_browse: "🔎 Búsqueda abandonada",
   organic: "Orgánico (WhatsApp)",

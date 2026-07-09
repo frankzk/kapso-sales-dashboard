@@ -426,13 +426,13 @@ function avatarTint(id: string): string {
   return AVATAR_TINTS[h]!;
 }
 
-// Square source chip (📣 Campaña / 🌐 FB/Web / 🛒 Carrito / 🔎 Búsqueda / "Directo").
+// Square source chip (📣 Campaña / 🌐 Meta/Web / 🛒 Carrito / 🔎 Búsqueda / "Directo").
 const SOURCE_CHIP: Record<
   "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic",
   { glyph: string; label: string; cls: string; title: string; isText?: boolean }
 > = {
   meta_ad: { glyph: "📣", label: "Campaña", cls: "bg-violet-100 text-violet-700", title: "Campaña Meta (Click-to-WhatsApp, con anuncio)" },
-  fb_web: { glyph: "🌐", label: "FB/Web", cls: "bg-sky-100 text-sky-700", title: "Llegó por un link de Facebook/IG en la web (sin anuncio confirmado)" },
+  fb_web: { glyph: "🌐", label: "Meta/Web", cls: "bg-sky-100 text-sky-700", title: "Llegó por un link de Meta (Facebook/Instagram) en la web (sin anuncio confirmado)" },
   cod_cart: { glyph: "🛒", label: "Carrito", cls: "bg-emerald-100 text-emerald-700", title: "Carrito abandonado (formulario COD)" },
   abandoned_browse: { glyph: "🔎", label: "Búsqueda", cls: "bg-orange-100 text-orange-700", title: "Búsqueda abandonada" },
   organic: { glyph: "Directo", label: "Directo", cls: "bg-slate-100 text-slate-500", title: "Orgánico / directo", isText: true },
@@ -998,7 +998,7 @@ export function LeadsBoard({
                 onClear={() => setSrcFilter(new Set())}
                 options={[
                   ...(hasCampaign ? [{ key: "meta_ad", label: "📣 Campaña", count: srcCounts.meta_ad }] : []),
-                  ...(hasFbWeb ? [{ key: "fb_web", label: "🌐 FB/Web", count: srcCounts.fb_web }] : []),
+                  ...(hasFbWeb ? [{ key: "fb_web", label: "🌐 Meta/Web", count: srcCounts.fb_web }] : []),
                   ...(hasCart ? [{ key: "cod_cart", label: "🛒 Carrito", count: srcCounts.cod_cart }] : []),
                   ...(hasBrowse
                     ? [{ key: "abandoned_browse", label: "🔎 Búsqueda", count: srcCounts.abandoned_browse }]
