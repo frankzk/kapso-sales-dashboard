@@ -95,7 +95,7 @@ describe("sourceBreakdown (per-source conversion)", () => {
 
     const fb = stats.find((s) => s.key === "fb_web")!;
     expect(fb).toMatchObject({ leads: 2, pedidos: 1, ingresos: 130 });
-    expect(fb.label).toContain("Facebook");
+    expect(fb.label).toContain("Meta");
 
     // NOT folded into meta_ad (campañas stays only the provable ad clicks)
     const ad = stats.find((s) => s.key === "meta_ad")!;
