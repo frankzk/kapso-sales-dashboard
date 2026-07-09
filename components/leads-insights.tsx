@@ -131,6 +131,18 @@ function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
                     </span>
                   </span>
                 )}
+                {r.contactos > 0 && (
+                  <>
+                    {" · "}
+                    <span
+                      className="font-semibold text-slate-700"
+                      title={`${r.pedidos} pedidos / ${r.contactos} contactos`}
+                    >
+                      {Math.round((r.pedidos / r.contactos) * 100)}%
+                    </span>{" "}
+                    conv.
+                  </>
+                )}
               </p>
             </div>
           </div>
