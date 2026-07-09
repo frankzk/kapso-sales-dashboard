@@ -401,13 +401,17 @@ async function spinOffFenixGuide(
  */
 export async function createFenixGuide(
   shipmentId: string,
-  input: { guideCode: string },
+  input: { guideCode: string; nextFollowupAt?: string | null },
 ): Promise<ShipmentActionState> {
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso." };
   const admin = createAdminSupabase();
 
-  const r = await spinOffFenixGuide(admin, ctx, shipmentId, input.guideCode);
+  // carry the reprogramación date onto the new Fenix guide (same as the
+  // automatic confirma flow) so it isn't left En ruta without a dispatch date
+  const r = await spinOffFenixGuide(admin, ctx, shipmentId, input.guideCode, {
+    childNextFollowupAt: input.nextFollowupAt ?? null,
+  });
   if ("error" in r) return { error: r.error };
 
   revalidatePath("/dashboard/envios");
