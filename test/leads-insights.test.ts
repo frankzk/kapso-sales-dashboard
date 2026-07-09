@@ -1,5 +1,66 @@
 import { describe, it, expect } from "vitest";
-import { buildBurndown, buildTrend, shortLocalDate, SHIFT_START, SHIFT_END } from "@/lib/leads-insights";
+import {
+  buildBurndown,
+  buildTrend,
+  shortLocalDate,
+  computeTeamConversionByDay,
+  SHIFT_START,
+  SHIFT_END,
+} from "@/lib/leads-insights";
+
+describe("computeTeamConversionByDay (conversión por día del equipo)", () => {
+  const days = [
+    { date: "2026-07-08", label: "Mié" },
+    { date: "2026-07-09", label: "Hoy" },
+  ];
+  const tz = "America/Lima";
+  const at = (date: string) => `${date}T17:00:00Z`; // 12:00 Lima (UTC−5) → mismo día local
+
+  it("cuenta kind='call' como contactos y leads ganados (último toque) como pedidos", () => {
+    const calls = [
+      { lead_id: "A", kind: "call", occurred_at: at("2026-07-08") }, // ganado → pedido el 08
+      { lead_id: "B", kind: "call", occurred_at: at("2026-07-09") }, // no ganado
+      { lead_id: "C", kind: "call", occurred_at: at("2026-07-09") }, // ganado → pedido el 09
+    ];
+    expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A", "C"]), days, tz })).toEqual([
+      { dia: "Mié", contactos: 1, pedidos: 1 },
+      { dia: "Hoy", contactos: 2, pedidos: 1 },
+    ]);
+  });
+
+  it("atribuye el pedido al ÚLTIMO toque; varias llamadas = varios contactos, un pedido", () => {
+    const calls = [
+      { lead_id: "A", kind: "call", occurred_at: at("2026-07-08") },
+      { lead_id: "A", kind: "call", occurred_at: at("2026-07-09") }, // más reciente → pedido aquí
+    ];
+    expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz })).toEqual([
+      { dia: "Mié", contactos: 1, pedidos: 0 },
+      { dia: "Hoy", contactos: 1, pedidos: 1 },
+    ]);
+  });
+
+  it("un kind distinto de 'call' no cuenta ni como contacto ni para atribuir el pedido (se usa la última LLAMADA)", () => {
+    const calls = [
+      { lead_id: "A", kind: "call", occurred_at: at("2026-07-08") }, // última llamada → pedido el 08
+      { lead_id: "A", kind: "state_change", occurred_at: at("2026-07-09") }, // toque posterior, se ignora
+    ];
+    expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz })).toEqual([
+      { dia: "Mié", contactos: 1, pedidos: 1 },
+      { dia: "Hoy", contactos: 0, pedidos: 0 },
+    ]);
+  });
+
+  it("ignora toques fuera de la ventana y sin timestamp", () => {
+    const calls = [
+      { lead_id: "A", kind: "call", occurred_at: at("2026-07-01") }, // fuera de la ventana
+      { lead_id: "B", kind: "call", occurred_at: null },
+    ];
+    expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A", "B"]), days, tz })).toEqual([
+      { dia: "Mié", contactos: 0, pedidos: 0 },
+      { dia: "Hoy", contactos: 0, pedidos: 0 },
+    ]);
+  });
+});
 
 describe("shortLocalDate (fecha corta del tooltip de pedidos)", () => {
   it("formats an ISO as dd/mm/aa in the store's timezone", () => {
