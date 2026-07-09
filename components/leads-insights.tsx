@@ -76,6 +76,57 @@ function SinLlamarChart({ data, older }: { data: LeadsInsights["sinLlamar"]; old
   );
 }
 
+/** "Conversión · últimos 7 días" (equipo) — una barra por día = contactos, con la
+ *  parte de abajo rellena = pedidos (cierres) y el % de conversión encima. Muestra
+ *  VOLUMEN + TASA juntos: un día de "100% pero 1 contacto" sale como barra chiquita
+ *  y no engaña con un % inflado. */
+function ConversionChart({ data }: { data: LeadsInsights["conversion"] }) {
+  const rows = data.map((d) => ({
+    dia: d.dia,
+    pedidos: d.pedidos,
+    resto: Math.max(0, d.contactos - d.pedidos), // relleno gris encima del verde → total = contactos
+    contactos: d.contactos,
+    pct: d.contactos > 0 ? Math.round((d.pedidos / d.contactos) * 100) : null,
+  }));
+  return (
+    <div className="h-44 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={rows} margin={{ top: 16, right: 6, left: -8, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} vertical={false} />
+          <XAxis dataKey="dia" interval={0} tick={AXIS_TICK} />
+          <YAxis tick={AXIS_TICK} width={28} allowDecimals={false} />
+          <Tooltip
+            cursor={{ fill: "#f8fafc" }}
+            content={({ active, payload, label }) => {
+              if (!active || !payload?.length) return null;
+              const p = payload[0]!.payload as (typeof rows)[number];
+              return (
+                <div style={{ ...TOOLTIP_STYLE, background: "#fff", padding: "6px 9px" }}>
+                  <div className="font-medium text-slate-700">{label}</div>
+                  <div className="text-slate-500">
+                    {p.contactos} contactos · <span className="text-emerald-700">{p.pedidos} pedidos</span>
+                    {p.pct != null ? ` · ${p.pct}%` : ""}
+                  </div>
+                </div>
+              );
+            }}
+          />
+          <Bar dataKey="pedidos" stackId="c" fill={CHART.green} isAnimationActive={false} />
+          <Bar dataKey="resto" stackId="c" fill="#e2e8f0" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+            <LabelList
+              dataKey="pct"
+              position="top"
+              fontSize={10}
+              fill={CHART.slate}
+              formatter={(v: unknown) => (v == null || v === "" ? "" : `${v}%`)}
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 function avatarInitial(name: string): string {
   return (name.trim()[0] ?? "?").toUpperCase();
 }
@@ -186,34 +237,45 @@ export function LeadsInsightsPanel({
       </div>
 
       {open && (
-        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <p className="text-sm font-semibold text-slate-800">¿Cerramos hoy?</p>
-            <p className="mb-1 text-xs text-slate-500">
-              Pendientes vs. ritmo para tocar 0 a las {String(data.burndown.at(-1)?.h ?? "20h")}
-              {landing != null && landing > 0 ? (
-                <>
-                  {" · "}
-                  <span className="font-medium text-red-600">al ritmo actual cierras con ~{landing}</span>
-                </>
-              ) : (
-                <>
-                  {" · "}
-                  <span className="font-medium text-emerald-600">vas a ritmo de cerrar a 0</span>
-                </>
-              )}
-            </p>
-            <BurndownChart data={data.burndown} nowHourLabel={data.nowHourLabel} />
-          </div>
+        <div className="mt-3 space-y-3">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <p className="text-sm font-semibold text-slate-800">¿Cerramos hoy?</p>
+              <p className="mb-1 text-xs text-slate-500">
+                Pendientes vs. ritmo para tocar 0 a las {String(data.burndown.at(-1)?.h ?? "20h")}
+                {landing != null && landing > 0 ? (
+                  <>
+                    {" · "}
+                    <span className="font-medium text-red-600">al ritmo actual cierras con ~{landing}</span>
+                  </>
+                ) : (
+                  <>
+                    {" · "}
+                    <span className="font-medium text-emerald-600">vas a ritmo de cerrar a 0</span>
+                  </>
+                )}
+              </p>
+              <BurndownChart data={data.burndown} nowHourLabel={data.nowHourLabel} />
+            </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <p className="text-sm font-semibold text-slate-800">Sin llamar · últimos 7 días</p>
-            <p className="mb-1 text-xs text-slate-500">
-              Por última interacción ·{" "}
-              <span className="font-medium text-slate-700">{data.sinLlamarTotal} en total</span> ·{" "}
-              <span className="text-red-600">barra roja = +7 días</span>
-            </p>
-            <SinLlamarChart data={data.sinLlamar} older={data.sinLlamarOlder} />
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <p className="text-sm font-semibold text-slate-800">Sin llamar · últimos 7 días</p>
+              <p className="mb-1 text-xs text-slate-500">
+                Por última interacción ·{" "}
+                <span className="font-medium text-slate-700">{data.sinLlamarTotal} en total</span> ·{" "}
+                <span className="text-red-600">barra roja = +7 días</span>
+              </p>
+              <SinLlamarChart data={data.sinLlamar} older={data.sinLlamarOlder} />
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <p className="text-sm font-semibold text-slate-800">Conversión · últimos 7 días</p>
+              <p className="mb-1 text-xs text-slate-500">
+                Del equipo · barra = <span className="font-medium text-slate-700">contactos</span>, relleno ={" "}
+                <span className="font-medium text-emerald-700">pedidos</span> · % encima
+              </p>
+              <ConversionChart data={data.conversion} />
+            </div>
           </div>
 
           <div className="rounded-xl border border-slate-200 bg-white p-3">

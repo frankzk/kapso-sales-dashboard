@@ -37,6 +37,52 @@ export interface AdvisorToday {
   pedidosDetalle: { code: string | null; fecha: string | null }[]; // "#AUR1091" + "05/07/26"
 }
 
+/** One day of the team conversion chart: contactos (gestión calls) vs pedidos
+ *  (won leads credited to their last-CALL day). Attributing by last CALL (not
+ *  any touch) guarantees pedidos ≤ contactos, so the "bar = contactos, relleno =
+ *  pedidos, % encima" encoding never exceeds 100%. */
+export interface ConversionDay {
+  dia: string; // weekday label, or "Hoy"
+  contactos: number; // kind="call" calls that day
+  pedidos: number; // distinct won leads whose last CALL (kind="call") fell that day
+}
+
+/**
+ * Team conversion per day. contactos = kind="call" calls; a won lead is credited
+ * to the DAY of its last CALL (guaranteeing pedidos ≤ contactos so the rate stays
+ * ≤ 100%). Pure so it can be unit-tested. `calls` are all advisor (`vendedora`
+ * not null) lead_calls in the window; `wonLeadIds` is the set of those leads
+ * currently won.
+ */
+export function computeTeamConversionByDay(opts: {
+  calls: { lead_id: string; kind: string | null; occurred_at: string | null }[];
+  wonLeadIds: Set<string>;
+  days: { date: string; label: string }[];
+  tz: string;
+}): ConversionDay[] {
+  const daySet = new Set(opts.days.map((d) => d.date));
+  const contactosByDate: Record<string, number> = {};
+  const lastCallByLead: Record<string, string> = {}; // only kind="call" → pedidos land on a call day
+  for (const c of opts.calls) {
+    if (c.kind !== "call" || !c.occurred_at) continue;
+    const d = tzParts(c.occurred_at, opts.tz).date;
+    if (daySet.has(d)) contactosByDate[d] = (contactosByDate[d] ?? 0) + 1;
+    const prev = lastCallByLead[c.lead_id];
+    if (!prev || c.occurred_at > prev) lastCallByLead[c.lead_id] = c.occurred_at;
+  }
+  const pedidosByDate: Record<string, number> = {};
+  for (const [leadId, at] of Object.entries(lastCallByLead)) {
+    if (!opts.wonLeadIds.has(leadId)) continue;
+    const d = tzParts(at, opts.tz).date;
+    if (daySet.has(d)) pedidosByDate[d] = (pedidosByDate[d] ?? 0) + 1;
+  }
+  return opts.days.map((dd) => ({
+    dia: dd.label,
+    contactos: contactosByDate[dd.date] ?? 0,
+    pedidos: pedidosByDate[dd.date] ?? 0,
+  }));
+}
+
 /** ISO → "dd/mm/aa" in the store's timezone (null-safe), for the pedidos tooltip. */
 export function shortLocalDate(iso: string | null | undefined, tz: string): string | null {
   if (!iso) return null;
@@ -51,6 +97,7 @@ export interface LeadsInsights {
   pendingNow: number;
   nowHourLabel: string; // e.g. "15h" — the "ahora" marker
   productivity: AdvisorToday[];
+  conversion: ConversionDay[]; // contactos vs pedidos por día (equipo), últimos 7 días
   sinLlamar: { dia: string; count: number }[]; // sin-gestión leads por día de última interacción
   sinLlamarTotal: number; // total sin llamar (incl. older than the window)
   sinLlamarOlder: number; // sin llamar cuya última interacción fue hace +7 días (la alarma)
@@ -150,7 +197,7 @@ export async function getLeadsInsights(
 
   // Entrants (entraron a "Sin llamar" = se crearon, status nuevo) + leavers
   // (dejaron "Sin llamar" = primera gestión) + el universo actual sin llamar.
-  const [entrantsRes, leaversRes, sinLlamarRes] = await Promise.all([
+  const [entrantsRes, leaversRes, sinLlamarRes, convCallsRes, wonRes] = await Promise.all([
     // "Entró" = first_seen_at (fecha REAL de primer contacto), no created_at — que
     // es cuándo se insertó la fila y por un backfill masivo puede caer todo el
     // mismo día (un pico falso). Caemos a created_at solo si first_seen es null.
@@ -184,6 +231,16 @@ export async function getLeadsInsights(
       .in("category", ["open", "hot"])
       .eq("status", "nuevo")
       .limit(5000),
+    // Conversión por día (equipo): TODAS las llamadas de asesora en la ventana
+    // (vendedora not null) + qué leads están ganados, para contactos vs pedidos.
+    sb
+      .from("lead_calls")
+      .select("lead_id, kind, occurred_at")
+      .eq("store_id", storeId)
+      .not("vendedora", "is", null)
+      .gte("occurred_at", windowStartIso)
+      .limit(20000),
+    sb.from("leads").select("id").eq("store_id", storeId).eq("category", "won").limit(20000),
   ]);
 
   const entranByDate: Record<string, number> = {};
@@ -222,6 +279,16 @@ export async function getLeadsInsights(
   const sinLlamar = days.map((dd) => ({ dia: dd.label, count: sinLlamarByDate[dd.date] ?? 0 }));
   const sinLlamarTotal = sinLlamar.reduce((s, x) => s + x.count, 0) + sinLlamarOlder;
 
+  // Conversión por día (equipo): contactos (llamadas) vs pedidos (cierres por
+  // último toque), mismas nociones que las tarjetas por-persona pero sumadas.
+  const wonLeadIds = new Set(((wonRes.data as { id: string }[]) ?? []).map((l) => l.id));
+  const conversion = computeTeamConversionByDay({
+    calls: (convCallsRes.data as { lead_id: string; kind: string | null; occurred_at: string | null }[]) ?? [],
+    wonLeadIds,
+    days,
+    tz,
+  });
+
   const burndown = buildBurndown({ pendingNow, nowHour: now.hour, entrantHours, leaverHours });
   const { trend, saldoInicio } = buildTrend({ days, pendingNow, entranByDate, cierranByDate });
 
@@ -251,6 +318,7 @@ export async function getLeadsInsights(
     pendingNow,
     nowHourLabel: hourLabel(clampHour(now.hour)),
     productivity,
+    conversion,
     sinLlamar,
     sinLlamarTotal,
     sinLlamarOlder,
