@@ -83,6 +83,52 @@ export function computeTeamConversionByDay(opts: {
   }));
 }
 
+/**
+ * Fetch + compute the team conversion series, robust to PostgREST's `max-rows`
+ * cap. PAGES the window's advisor calls (a `.limit()` alone is silently capped, so
+ * a busy store would only get an arbitrary slice) and looks up the won flag for
+ * ONLY the touched leads in chunks — never "all won leads in the store", which is
+ * unbounded and was the truncation that collapsed the chart's pedidos. Best-effort.
+ */
+async function computeTeamConversion(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeId: string,
+  sinceIso: string,
+  days: { date: string; label: string }[],
+  tz: string,
+): Promise<ConversionDay[]> {
+  const PAGE = 1000;
+  const CAP = 40000; // absolute safety bound on a runaway store
+  const calls: { lead_id: string; kind: string | null; occurred_at: string | null }[] = [];
+  for (let from = 0; from < CAP; from += PAGE) {
+    const { data, error } = await sb
+      .from("lead_calls")
+      .select("lead_id, kind, occurred_at")
+      .eq("store_id", storeId)
+      .not("vendedora", "is", null)
+      .gte("occurred_at", sinceIso)
+      .order("occurred_at", { ascending: false })
+      .order("id", { ascending: false }) // stable tiebreak so pages don't overlap/skip
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    const batch = (data as typeof calls) ?? [];
+    calls.push(...batch);
+    if (batch.length < PAGE) break;
+  }
+  // Won flag for the touched leads only (chunked .in — never "all won leads").
+  const touchedIds = [...new Set(calls.map((c) => c.lead_id))];
+  const wonLeadIds = new Set<string>();
+  for (let i = 0; i < touchedIds.length; i += 300) {
+    const { data } = await sb
+      .from("leads")
+      .select("id")
+      .in("id", touchedIds.slice(i, i + 300))
+      .eq("category", "won");
+    for (const l of (data as { id: string }[]) ?? []) wonLeadIds.add(l.id);
+  }
+  return computeTeamConversionByDay({ calls, wonLeadIds, days, tz });
+}
+
 /** ISO → "dd/mm/aa" in the store's timezone (null-safe), for the pedidos tooltip. */
 export function shortLocalDate(iso: string | null | undefined, tz: string): string | null {
   if (!iso) return null;
@@ -197,7 +243,7 @@ export async function getLeadsInsights(
 
   // Entrants (entraron a "Sin llamar" = se crearon, status nuevo) + leavers
   // (dejaron "Sin llamar" = primera gestión) + el universo actual sin llamar.
-  const [entrantsRes, leaversRes, sinLlamarRes, convCallsRes, wonRes] = await Promise.all([
+  const [entrantsRes, leaversRes, sinLlamarRes] = await Promise.all([
     // "Entró" = first_seen_at (fecha REAL de primer contacto), no created_at — que
     // es cuándo se insertó la fila y por un backfill masivo puede caer todo el
     // mismo día (un pico falso). Caemos a created_at solo si first_seen es null.
@@ -231,16 +277,6 @@ export async function getLeadsInsights(
       .in("category", ["open", "hot"])
       .eq("status", "nuevo")
       .limit(5000),
-    // Conversión por día (equipo): TODAS las llamadas de asesora en la ventana
-    // (vendedora not null) + qué leads están ganados, para contactos vs pedidos.
-    sb
-      .from("lead_calls")
-      .select("lead_id, kind, occurred_at")
-      .eq("store_id", storeId)
-      .not("vendedora", "is", null)
-      .gte("occurred_at", windowStartIso)
-      .limit(20000),
-    sb.from("leads").select("id").eq("store_id", storeId).eq("category", "won").limit(20000),
   ]);
 
   const entranByDate: Record<string, number> = {};
@@ -279,15 +315,16 @@ export async function getLeadsInsights(
   const sinLlamar = days.map((dd) => ({ dia: dd.label, count: sinLlamarByDate[dd.date] ?? 0 }));
   const sinLlamarTotal = sinLlamar.reduce((s, x) => s + x.count, 0) + sinLlamarOlder;
 
-  // Conversión por día (equipo): contactos (llamadas) vs pedidos (cierres por
-  // último toque), mismas nociones que las tarjetas por-persona pero sumadas.
-  const wonLeadIds = new Set(((wonRes.data as { id: string }[]) ?? []).map((l) => l.id));
-  const conversion = computeTeamConversionByDay({
-    calls: (convCallsRes.data as { lead_id: string; kind: string | null; occurred_at: string | null }[]) ?? [],
-    wonLeadIds,
-    days,
-    tz,
-  });
+  // Conversión por día (equipo). Robusto al tope de filas de PostgREST: pagina las
+  // llamadas de la ventana y consulta el estado "ganado" SOLO de los leads tocados
+  // (acotado), en vez de traer TODOS los ganados de la tienda — que en tiendas con
+  // mucho volumen se truncaba a un subconjunto y hundía los pedidos del gráfico.
+  let conversion: ConversionDay[] = days.map((dd) => ({ dia: dd.label, contactos: 0, pedidos: 0 }));
+  try {
+    conversion = await computeTeamConversion(sb, storeId, windowStartIso, days, tz);
+  } catch {
+    /* best-effort — deja el gráfico en ceros si falla */
+  }
 
   const burndown = buildBurndown({ pendingNow, nowHour: now.hour, entrantHours, leaverHours });
   const { trend, saldoInicio } = buildTrend({ days, pendingNow, entranByDate, cierranByDate });
