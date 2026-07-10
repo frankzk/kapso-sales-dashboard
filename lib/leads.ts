@@ -109,6 +109,27 @@ export function handoffStatus(reason: string, context?: string | null): string {
   return "casi_cierra";
 }
 
+/** Las dos mitades del bucket "Yape/Shalom": 💰 pago (verificar Yape/voucher) o
+ *  📦 agencia (coordinar un envío por agencia — Shalom/Olva). */
+export type YapeKind = "pago" | "agencia";
+
+/** Señales de que el handoff Yape/Shalom es de AGENCIA (coordinar el envío) y no
+ *  de pago. Solo se usa cuando el motivo exacto no lo decide. */
+const AGENCY_HANDOFF_RE = /log[ií]stic|agencia|shalom|olva|sucursal|recojo/i;
+
+/** Para un lead en la pestaña Yape/Shalom (`yape_por_verificar`), ¿qué mitad es?
+ *  El motivo exacto del handoff manda (`validacion_logistica` → agencia;
+ *  `validacion_pago`/`pago` → pago); si no, se busca una señal de agencia en el
+ *  motivo/contexto. Por defecto **pago** — cubre el voucher detectado por visión,
+ *  que deja el estado sin motivo de handoff. Puro (testeable). */
+export function yapeKind(reason: string | null | undefined, context?: string | null): YapeKind {
+  const r = (reason ?? "").trim().toLowerCase();
+  if (r === "validacion_logistica") return "agencia";
+  if (r === "validacion_pago" || r === "pago") return "pago";
+  if (AGENCY_HANDOFF_RE.test(reason ?? "") || AGENCY_HANDOFF_RE.test(context ?? "")) return "agencia";
+  return "pago";
+}
+
 export interface AutoSignals {
   hasOrder?: boolean;
   handoffReason?: string | null;

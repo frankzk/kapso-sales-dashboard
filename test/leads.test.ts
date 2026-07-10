@@ -23,6 +23,7 @@ import {
   isQueueState,
   matchesQueueState,
   countQueueStates,
+  yapeKind,
 } from "@/lib/leads";
 
 describe("canDispositionLead (a manual call must not silently erase a real sale)", () => {
@@ -320,5 +321,29 @@ describe("mapExcelStatus", () => {
     expect(mapExcelStatus("NR")).toBe("no_responde");
     expect(mapExcelStatus("SOLOQUERIA INFORMACION")).toBe("solo_informacion");
     expect(mapExcelStatus("algo raro")).toBe("nuevo");
+  });
+});
+
+describe("yapeKind (💰 pago vs 📦 agencia dentro de Yape/Shalom)", () => {
+  it("el motivo exacto manda: validacion_logistica → agencia; validacion_pago/pago → pago", () => {
+    expect(yapeKind("validacion_logistica")).toBe("agencia");
+    expect(yapeKind("validacion_pago")).toBe("pago");
+    expect(yapeKind("pago")).toBe("pago");
+  });
+
+  it("sin motivo exacto, una señal de agencia en el motivo o el contexto → agencia", () => {
+    expect(yapeKind("otro", "envío por Shalom a Chimbote")).toBe("agencia");
+    expect(yapeKind("coordinar recojo en agencia")).toBe("agencia");
+    expect(yapeKind(null, "quiere Olva")).toBe("agencia");
+  });
+
+  it("por defecto es pago — incl. voucher por visión (sin motivo de handoff)", () => {
+    expect(yapeKind(null, null)).toBe("pago");
+    expect(yapeKind(undefined)).toBe("pago");
+    expect(yapeKind("", "me pasó su Yape")).toBe("pago");
+  });
+
+  it("el pago explícito NO se confunde aunque el contexto mencione agencia (el motivo exacto gana)", () => {
+    expect(yapeKind("validacion_pago", "luego lo envía por agencia")).toBe("pago");
   });
 });
