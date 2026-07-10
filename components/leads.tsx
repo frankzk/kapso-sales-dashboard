@@ -29,10 +29,12 @@ import {
   leadSegment,
   leadWindowInfo,
   matchesQueueState,
+  yapeKind,
   type LeadGestion,
   type LeadSegment,
   type LeadWindow,
   type QueueState,
+  type YapeKind,
 } from "@/lib/leads";
 import {
   claimLead,
@@ -475,9 +477,10 @@ function winKey(state: LeadWindow | null): "fresca" | "por_vencer" | "cerrada" {
 }
 
 /** Small rounded pill (header/drawer chips). */
-function Pill({ children, className }: { children: ReactNode; className?: string }) {
+function Pill({ children, className, title }: { children: ReactNode; className?: string; title?: string }) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium",
         className,
@@ -485,6 +488,25 @@ function Pill({ children, className }: { children: ReactNode; className?: string
     >
       {children}
     </span>
+  );
+}
+
+// Chip para leads Yape/Shalom: distingue si el handoff fue por 💰 pago (verificar
+// Yape) o 📦 agencia (coordinar el envío por Shalom/Olva). Se deriva del motivo del
+// handoff — no parte la pestaña, solo aclara de un vistazo qué media es.
+const YAPE_KIND_CHIP: Record<YapeKind, { glyph: string; label: string; cls: string; title: string }> = {
+  pago: { glyph: "💰", label: "Pago", cls: "bg-amber-100 text-amber-800", title: "Verificar el pago (Yape / comprobante)" },
+  agencia: { glyph: "📦", label: "Agencia", cls: "bg-indigo-100 text-indigo-700", title: "Coordinar el envío por agencia (Shalom / Olva)" },
+};
+
+/** Chip 💰 Pago / 📦 Agencia — solo para leads en Yape/Shalom (`yape_por_verificar`). */
+function YapeKindChip({ lead }: { lead: LeadRow }) {
+  if (lead.status !== "yape_por_verificar") return null;
+  const k = YAPE_KIND_CHIP[yapeKind(lead.handoff_reason, lead.handoff_context)];
+  return (
+    <Pill className={k.cls} title={k.title}>
+      {`${k.glyph} ${k.label}`}
+    </Pill>
   );
 }
 
@@ -1141,6 +1163,9 @@ export function LeadsBoard({
                     <span className="shrink-0">
                       <SegmentBadge lead={lead} />
                     </span>
+                    <span className="shrink-0">
+                      <YapeKindChip lead={lead} />
+                    </span>
                     {locked && (
                       <span
                         title="Tomado por otro vendedor"
@@ -1396,6 +1421,7 @@ function LeadDrawer({
             </Pill>
             <SegmentBadge lead={lead} />
             <Pill className={src.cls}>{src.isText ? src.label : `${src.glyph} ${src.label}`}</Pill>
+            <YapeKindChip lead={lead} />
           </div>
         </div>
 
