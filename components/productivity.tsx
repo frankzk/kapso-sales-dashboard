@@ -226,9 +226,9 @@ export function ProductivityBoard({
           />
         </div>
         <p className="shrink-0 border-t border-slate-100 px-3 py-1.5 text-[11px] text-slate-400">
-          Actividad = higiene operativa (todas las gestiones por hora, sin filtro de fuente) — la señal de
-          eficiencia es su contraste con el % de cierre · el pedido se acredita a la asesora del último toque ·
-          toca una fila para ver sus leads.
+          Actividad = higiene operativa (leads distintos gestionados por hora, sin filtro de fuente) — la señal
+          de eficiencia es su contraste con el % de cierre · el pedido se acredita a la asesora del último toque
+          · toca una fila para ver sus leads.
         </p>
       </Card>
     </div>

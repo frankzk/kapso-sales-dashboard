@@ -70,7 +70,15 @@ function statusClass(status: string): string {
 
 // ── Celdas visuales (divs/SVG a mano — recharts por fila sería pesadísimo) ─────
 
-/** Franja de actividad 08–20h: 13 celdas, opacidad = intensidad vs el máximo
+// CHART.brand ("#2f74ff") → "r, g, b" para pintar la celda con alpha en el
+// FONDO (usar opacity en el elemento desvanecería también el número de adentro).
+const BRAND_RGB = (() => {
+  const h = CHART.brand.replace("#", "");
+  return `${parseInt(h.slice(0, 2), 16)}, ${parseInt(h.slice(2, 4), 16)}, ${parseInt(h.slice(4, 6), 16)}`;
+})();
+
+/** Franja de actividad 08–20h: 13 celdas con el NÚMERO de leads distintos
+ *  gestionados esa hora adentro; el tinte de fondo = intensidad vs el máximo
  *  GLOBAL del tablero (todas las filas comparten escala). Tooltip nativo. */
 function HeatStrip({
   heat,
@@ -88,14 +96,23 @@ function HeatStrip({
       {heat.map((v, i) => {
         const hour = startHour + i;
         const title =
-          mode === "avg" ? `${hour}h — ${v} acciones/día (prom.)` : `${hour}h — ${v} ${v === 1 ? "acción" : "acciones"}`;
+          mode === "avg"
+            ? `${hour}h — ${v} leads/día (prom.)`
+            : `${hour}h — ${v} ${v === 1 ? "lead gestionado" : "leads gestionados"}`;
+        const n = Math.round(v);
+        const intensity = Math.min(1, v / max);
         return (
           <span
             key={hour}
             title={title}
-            className={cn("h-3.5 w-3 rounded-[3px]", v === 0 && "bg-slate-100")}
-            style={v > 0 ? { backgroundColor: CHART.brand, opacity: 0.15 + 0.85 * Math.min(1, v / max) } : undefined}
-          />
+            className={cn(
+              "flex h-5 w-5 items-center justify-center rounded-[4px] text-[9px] leading-none font-semibold tabular-nums",
+              v === 0 ? "bg-slate-100" : intensity > 0.55 ? "text-white" : "text-slate-700",
+            )}
+            style={v > 0 ? { backgroundColor: `rgba(${BRAND_RGB}, ${(0.15 + 0.85 * intensity).toFixed(2)})` } : undefined}
+          >
+            {v > 0 && n > 0 ? n : ""}
+          </span>
         );
       })}
     </span>
@@ -358,7 +375,10 @@ export function ProductivityTable({
       <thead className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_#e2e8f0]">
         <tr className="text-xs text-slate-500">
           <th className="px-3 py-2 text-left font-medium">Asesora</th>
-          <th className="py-2 text-left font-medium" title="Gestiones registradas por hora (08–20h), todas las fuentes">
+          <th
+            className="py-2 text-left font-medium"
+            title="Leads distintos gestionados por hora (08–20h), todas las fuentes"
+          >
             Actividad 08–20h
           </th>
           <th className="py-2 text-right font-medium">Horas</th>
