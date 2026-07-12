@@ -5,7 +5,7 @@
 
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
-import { previousRange, type DateRange } from "@/lib/access";
+import { chunk, previousRange, type DateRange } from "@/lib/access";
 
 /** Minutes to ADD to UTC to reach local time in `tz` at `date` (Lima → −300). */
 export function tzOffsetMinutes(date: Date, tz: string): number {
@@ -107,6 +107,42 @@ export interface AdvisorCall {
   lead_id: string;
   kind: string;
   occurred_at: string;
+}
+
+/** Advisor lead_calls in [startIso..endIso], PAGED past PostgREST's silent
+ *  max-rows cap. A bare `.select()` tops out at ~1000 rows, so a busy store's
+ *  30d window lost most of its calls — and the follow-up `.in("id", leadIds)`
+ *  lookup then failed outright on the oversized URL, which is how the board
+ *  once showed 830 llamadas · 0 cerrados · S/ 0. Stable (occurred_at, id)
+ *  ordering keeps pages from overlapping or skipping. Best-effort: stops at
+ *  the first page error, returning what it has. */
+async function fetchAdvisorLeadCallsPaged(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: string[],
+  startIso: string,
+  endIso: string,
+  vendedoraId?: string,
+): Promise<AdvisorCall[]> {
+  const PAGE = 1000;
+  const CAP = 40000; // safety bound: ~40 pages even on a runaway store
+  const calls: AdvisorCall[] = [];
+  for (let from = 0; from < CAP; from += PAGE) {
+    const base = sb
+      .from("lead_calls")
+      .select("vendedora, lead_id, kind, occurred_at")
+      .in("store_id", storeIds)
+      .gte("occurred_at", startIso)
+      .lte("occurred_at", endIso);
+    const { data, error } = await (vendedoraId ? base.eq("vendedora", vendedoraId) : base.not("vendedora", "is", null))
+      .order("occurred_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    const batch = (data as AdvisorCall[]) ?? [];
+    calls.push(...batch);
+    if (batch.length < PAGE) break;
+  }
+  return calls;
 }
 
 export interface ProductivityInput {
@@ -261,19 +297,15 @@ export async function getAdvisorProductivity(
   const sb = await createServerSupabase();
   const { startIso, endIso } = localRangeBoundsIso(range.from, range.to, tz);
 
-  // 1) Advisor calls in range (vendedora not null = a human touch).
-  const { data: callsRaw } = await sb
-    .from("lead_calls")
-    .select("vendedora, lead_id, kind, occurred_at")
-    .in("store_id", storeIds)
-    .not("vendedora", "is", null)
-    .gte("occurred_at", startIso)
-    .lte("occurred_at", endIso);
-  const calls = (callsRaw as AdvisorCall[]) ?? [];
+  // 1) Advisor calls in range (vendedora not null = a human touch), paged past
+  //    PostgREST's max-rows cap.
+  const calls = await fetchAdvisorLeadCallsPaged(sb, storeIds, startIso, endIso);
   if (!calls.length) return [];
 
-  // 2) Outcome of the touched leads (won? + linked order + source). `source` is
-  //    selected with a fallback so a pending 0008 migration can't break the page.
+  // 2) Outcome of the touched leads (won? + linked order + source), in chunks of
+  //    300 — hundreds of ids in one `.in()` overflow the GET URL. `source` is
+  //    selected with a fallback so a pending 0008 migration can't break the page;
+  //    it degrades ONCE and stays degraded for the remaining chunks.
   const leadIds = [...new Set(calls.map((c) => c.lead_id))];
   type TouchedLead = {
     id: string;
@@ -282,16 +314,19 @@ export async function getAdvisorProductivity(
     order_id: string | null;
     source?: string | null;
   };
-  let leadsTouched: TouchedLead[];
-  {
-    const withSource = await sb.from("leads").select("id, category, has_order, order_id, source").in("id", leadIds);
-    if (withSource.error) {
-      // source column not present yet (migration 0008 pending) — degrade.
-      const base = await sb.from("leads").select("id, category, has_order, order_id").in("id", leadIds);
-      leadsTouched = (base.data as unknown as TouchedLead[]) ?? [];
-    } else {
-      leadsTouched = (withSource.data as unknown as TouchedLead[]) ?? [];
+  let leadsTouched: TouchedLead[] = [];
+  let sourceMissing = false;
+  for (const part of chunk(leadIds, 300)) {
+    if (!sourceMissing) {
+      const withSource = await sb.from("leads").select("id, category, has_order, order_id, source").in("id", part);
+      if (!withSource.error) {
+        leadsTouched.push(...((withSource.data as unknown as TouchedLead[]) ?? []));
+        continue;
+      }
+      sourceMissing = true; // source column not present yet (migration 0008 pending) — degrade.
     }
+    const base = await sb.from("leads").select("id, category, has_order, order_id").in("id", part);
+    leadsTouched.push(...((base.data as unknown as TouchedLead[]) ?? []));
   }
 
   // Optional source lens: keep only calls/leads of the chosen acquisition source.
@@ -304,14 +339,15 @@ export async function getAdvisorProductivity(
   }
 
   // 3) Net revenue + code/date per linked order (code/date feed cerradosDetalle).
+  //    Chunked like the leads lookup.
   const orderIds = leadsTouched.filter((l) => l.has_order && l.order_id).map((l) => l.order_id as string);
   type OrderInfo = { net: number; name: string | null; created_at: string | null };
   const infoByOrder = new Map<string, OrderInfo>();
-  if (orderIds.length) {
+  for (const part of chunk(orderIds, 300)) {
     const { data: ordersRaw } = await sb
       .from("orders")
       .select("id, name, created_at, total_amount, total_refunded")
-      .in("id", orderIds);
+      .in("id", part);
     type OrderRaw = {
       id: string;
       name: string | null;
@@ -455,15 +491,8 @@ export async function getAgentLeadsWorked(
   const sb = await createServerSupabase();
   const { startIso, endIso } = localRangeBoundsIso(range.from, range.to, tz);
 
-  // 1) This advisor's calls in range.
-  const { data: callsRaw } = await sb
-    .from("lead_calls")
-    .select("vendedora, lead_id, kind, occurred_at")
-    .in("store_id", storeIds)
-    .eq("vendedora", vendedoraId)
-    .gte("occurred_at", startIso)
-    .lte("occurred_at", endIso);
-  const calls = (callsRaw as AdvisorCall[]) ?? [];
+  // 1) This advisor's calls in range, paged past PostgREST's max-rows cap.
+  const calls = await fetchAdvisorLeadCallsPaged(sb, storeIds, startIso, endIso, vendedoraId);
   if (!calls.length) return [];
 
   const llamadasByLead = new Map<string, number>();
@@ -486,28 +515,35 @@ export async function getAgentLeadsWorked(
     order_id: string | null;
     source?: string | null;
   };
-  let leads: TouchedLead[];
+  let leads: TouchedLead[] = [];
   {
     const cols = "id, name, phone, status, category, has_order, order_id, source";
-    const withSource = await sb.from("leads").select(cols).in("id", leadIds);
-    if (withSource.error) {
-      const base = await sb.from("leads").select("id, name, phone, status, category, has_order, order_id").in("id", leadIds);
-      leads = (base.data as unknown as TouchedLead[]) ?? [];
-    } else {
-      leads = (withSource.data as unknown as TouchedLead[]) ?? [];
+    // Chunked .in() + one-time source degrade, same as getAdvisorProductivity.
+    let sourceMissing = false;
+    for (const part of chunk(leadIds, 300)) {
+      if (!sourceMissing) {
+        const withSource = await sb.from("leads").select(cols).in("id", part);
+        if (!withSource.error) {
+          leads.push(...((withSource.data as unknown as TouchedLead[]) ?? []));
+          continue;
+        }
+        sourceMissing = true;
+      }
+      const base = await sb.from("leads").select("id, name, phone, status, category, has_order, order_id").in("id", part);
+      leads.push(...((base.data as unknown as TouchedLead[]) ?? []));
     }
   }
   if (source) leads = leads.filter((l) => sourceKey(l.source) === source);
   if (!leads.length) return [];
 
-  // 3) Net revenue per linked order.
+  // 3) Net revenue per linked order (chunked).
   const orderIds = leads.filter((l) => l.has_order && l.order_id).map((l) => l.order_id as string);
   const netByOrder = new Map<string, number>();
-  if (orderIds.length) {
+  for (const part of chunk(orderIds, 300)) {
     const { data: ordersRaw } = await sb
       .from("orders")
       .select("id, total_amount, total_refunded")
-      .in("id", orderIds);
+      .in("id", part);
     for (const o of (ordersRaw as { id: string; total_amount: number | null; total_refunded: number | null }[]) ?? []) {
       netByOrder.set(o.id, (o.total_amount ?? 0) - (o.total_refunded ?? 0));
     }

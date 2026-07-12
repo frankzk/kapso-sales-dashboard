@@ -236,7 +236,9 @@ function normAttributionSource(s: string | null | undefined): AttributionSource 
   return s === "meta_ad" || s === "fb_web" || s === "cod_cart" || s === "abandoned_browse" ? s : "organic";
 }
 
-function chunk<T>(arr: T[], size: number): T[][] {
+/** Split `arr` into consecutive slices of ≤`size` — the standard cure for
+ *  PostgREST `.in()` lookups whose id list would otherwise blow the GET URL. */
+export function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
