@@ -6,6 +6,8 @@
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
 import { chunk, previousRange, type DateRange } from "@/lib/access";
+import { onlineVendedoraIds } from "@/lib/presence";
+import { leadSegment, type LeadSegment } from "@/lib/leads";
 
 /** Minutes to ADD to UTC to reach local time in `tz` at `date` (Lima → −300). */
 export function tzOffsetMinutes(date: Date, tz: string): number {
@@ -143,6 +145,110 @@ async function fetchAdvisorLeadCallsPaged(
     if (batch.length < PAGE) break;
   }
   return calls;
+}
+
+// ── Presets de rango en día LOCAL de la tienda ────────────────────────────────
+// Un preset con fecha UTC se corre de día a las 19:00 de Lima (UTC−5): "Hoy"
+// apuntaba al día local siguiente y el tablero salía vacío por la noche.
+
+/** Single-day range `offset` days back, in the STORE's local calendar (0 = hoy). */
+export function localDayPreset(offset: number, tz: string, nowIso = new Date().toISOString()): DateRange {
+  const d = tzParts(new Date(Date.parse(nowIso) - offset * 86_400_000).toISOString(), tz).date;
+  return { from: d, to: d };
+}
+
+/** Last `days` local days ending today (inclusive), in the store's tz. */
+export function localPresetRange(days: number, tz: string, nowIso = new Date().toISOString()): DateRange {
+  const nowMs = Date.parse(nowIso);
+  return {
+    from: tzParts(new Date(nowMs - (days - 1) * 86_400_000).toISOString(), tz).date,
+    to: tzParts(new Date(nowMs).toISOString(), tz).date,
+  };
+}
+
+// ── Actividad por hora (heatmap "¿está conectada trabajando?") ────────────────
+
+export const HEAT_START = 8; // business shift, aligned with the leads burndown
+export const HEAT_END = 20; // inclusive → 13 cells
+
+export interface HourlyActivity {
+  /** userId → 13 celdas (horas locales 08..20). */
+  byAgent: Record<string, number[]>;
+  /** Máximo global (≥ 1) para que todas las filas compartan la escala de color. */
+  max: number;
+  /** "day" = conteos crudos de un solo día; "avg" = promedio por día (multi-día). */
+  mode: "day" | "avg";
+}
+
+/** Hourly activity per advisor from ANY registered human event (calls, sales,
+ *  WhatsApp messages, shipment gestiones). Hours outside the 08–20 shift are
+ *  DROPPED — folding them to the edges would fabricate fake 08h/20h peaks. Pure. */
+export function computeHourlyActivity(opts: {
+  events: { agent: string | null; occurred_at: string | null }[];
+  tz: string;
+  rangeDays: number;
+}): HourlyActivity {
+  const cells = HEAT_END - HEAT_START + 1;
+  const byAgent: Record<string, number[]> = {};
+  for (const e of opts.events) {
+    if (!e.agent || !e.occurred_at) continue;
+    const h = tzParts(e.occurred_at, opts.tz).hour;
+    if (h < HEAT_START || h > HEAT_END) continue;
+    const arr = (byAgent[e.agent] ??= new Array<number>(cells).fill(0));
+    const i = h - HEAT_START;
+    arr[i] = (arr[i] ?? 0) + 1;
+  }
+  const mode: HourlyActivity["mode"] = opts.rangeDays > 1 ? "avg" : "day";
+  if (mode === "avg") {
+    const div = Math.max(1, opts.rangeDays);
+    for (const arr of Object.values(byAgent)) {
+      for (let i = 0; i < arr.length; i++) arr[i] = Math.round((arr[i]! / div) * 10) / 10;
+    }
+  }
+  let max = 1;
+  for (const arr of Object.values(byAgent)) for (const v of arr) if (v > max) max = v;
+  return { byAgent, max, mode };
+}
+
+// ── Tendencia diaria por asesora (sparkline de % cierre) ──────────────────────
+
+export interface TrendCell {
+  date: string; // YYYY-MM-DD local
+  label: string; // "Lun"… / "Hoy"
+  contactos: number; // kind="call" de la asesora ese día
+  pedidos: number; // leads ganados acreditados a la asesora ese día
+}
+
+/** Daily contactos/pedidos series PER ADVISOR. Same attribution as
+ *  computeAdvisorStats so the sparkline reconciles with "Cerrados": the win goes
+ *  to the advisor of the lead's LAST touch (any kind), on that touch's local day;
+ *  contactos count only the advisor's own kind="call". Pure. */
+export function computeAdvisorConversionByDay(opts: {
+  calls: AdvisorCall[];
+  wonLeadIds: Set<string>;
+  days: { date: string; label: string }[];
+  tz: string;
+}): Record<string, TrendCell[]> {
+  const idx = new Map(opts.days.map((d, i) => [d.date, i]));
+  const series: Record<string, TrendCell[]> = {};
+  const rowOf = (agent: string) =>
+    (series[agent] ??= opts.days.map((d) => ({ date: d.date, label: d.label, contactos: 0, pedidos: 0 })));
+  const lastTouch = new Map<string, { vendedora: string; at: string }>();
+  for (const c of opts.calls) {
+    if (!c.vendedora || !c.occurred_at) continue;
+    if (c.kind === "call") {
+      const i = idx.get(tzParts(c.occurred_at, opts.tz).date);
+      if (i != null) rowOf(c.vendedora)[i]!.contactos += 1;
+    }
+    const prev = lastTouch.get(c.lead_id);
+    if (!prev || c.occurred_at > prev.at) lastTouch.set(c.lead_id, { vendedora: c.vendedora, at: c.occurred_at });
+  }
+  for (const [leadId, t] of lastTouch) {
+    if (!opts.wonLeadIds.has(leadId)) continue;
+    const i = idx.get(tzParts(t.at, opts.tz).date);
+    if (i != null) rowOf(t.vendedora)[i]!.pedidos += 1;
+  }
+  return series;
 }
 
 export interface ProductivityInput {
@@ -285,27 +391,19 @@ export async function resolveEmails(userIds: string[]): Promise<Map<string, stri
   return map;
 }
 
-/** Fetch + aggregate per-advisor productivity for the stores/range (RLS-scoped).
- *  `source` optionally restricts to one acquisition source (campaña vs orgánico). */
-export async function getAdvisorProductivity(
-  storeIds: string[],
-  range: DateRange,
-  source: SourceBucket | null = null,
-  tz = "America/Lima",
-): Promise<AdvisorStat[]> {
-  if (!storeIds.length) return [];
-  const sb = await createServerSupabase();
-  const { startIso, endIso } = localRangeBoundsIso(range.from, range.to, tz);
-
-  // 1) Advisor calls in range (vendedora not null = a human touch), paged past
-  //    PostgREST's max-rows cap.
-  const calls = await fetchAdvisorLeadCallsPaged(sb, storeIds, startIso, endIso);
-  if (!calls.length) return [];
-
-  // 2) Outcome of the touched leads (won? + linked order + source), in chunks of
-  //    300 — hundreds of ids in one `.in()` overflow the GET URL. `source` is
-  //    selected with a fallback so a pending 0008 migration can't break the page;
-  //    it degrades ONCE and stays degraded for the remaining chunks.
+/** From the range's advisor calls, resolve the touched leads' outcome (won? +
+ *  linked order + source) and apply the optional source lens. Shared by
+ *  getAdvisorProductivity and getProductivityBoard so the board reuses the same
+ *  (already paged) calls for metrics AND heatmap without a second fetch. */
+async function buildAdvisorInputs(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  calls: AdvisorCall[],
+  source: SourceBucket | null,
+): Promise<{ scopedCalls: AdvisorCall[]; leadOutcome: ProductivityInput["leadOutcome"] }> {
+  // Outcome of the touched leads, in chunks of 300 — hundreds of ids in one
+  // `.in()` overflow the GET URL. `source` is selected with a fallback so a
+  // pending 0008 migration can't break the page; it degrades ONCE and stays
+  // degraded for the remaining chunks.
   const leadIds = [...new Set(calls.map((c) => c.lead_id))];
   type TouchedLead = {
     id: string;
@@ -335,11 +433,10 @@ export async function getAdvisorProductivity(
     const allowed = new Set(leadsTouched.filter((l) => sourceKey(l.source) === source).map((l) => l.id));
     scopedCalls = calls.filter((c) => allowed.has(c.lead_id));
     leadsTouched = leadsTouched.filter((l) => allowed.has(l.id));
-    if (!scopedCalls.length) return [];
   }
 
-  // 3) Net revenue + code/date per linked order (code/date feed cerradosDetalle).
-  //    Chunked like the leads lookup.
+  // Net revenue + code/date per linked order (code/date feed cerradosDetalle).
+  // Chunked like the leads lookup.
   const orderIds = leadsTouched.filter((l) => l.has_order && l.order_id).map((l) => l.order_id as string);
   type OrderInfo = { net: number; name: string | null; created_at: string | null };
   const infoByOrder = new Map<string, OrderInfo>();
@@ -375,6 +472,29 @@ export async function getAdvisorProductivity(
       orderAt: info?.created_at ?? null,
     });
   }
+  return { scopedCalls, leadOutcome };
+}
+
+/** Fetch + aggregate per-advisor productivity for the stores/range (RLS-scoped).
+ *  `source` optionally restricts to one acquisition source (campaña vs orgánico). */
+export async function getAdvisorProductivity(
+  storeIds: string[],
+  range: DateRange,
+  source: SourceBucket | null = null,
+  tz = "America/Lima",
+): Promise<AdvisorStat[]> {
+  if (!storeIds.length) return [];
+  const sb = await createServerSupabase();
+  const { startIso, endIso } = localRangeBoundsIso(range.from, range.to, tz);
+
+  // 1) Advisor calls in range (vendedora not null = a human touch), paged past
+  //    PostgREST's max-rows cap.
+  const calls = await fetchAdvisorLeadCallsPaged(sb, storeIds, startIso, endIso);
+  if (!calls.length) return [];
+
+  // 2+3) Touched-lead outcomes + linked orders + source lens (shared helper).
+  const { scopedCalls, leadOutcome } = await buildAdvisorInputs(sb, calls, source);
+  if (!scopedCalls.length) return [];
 
   const emailById = await resolveEmails([...new Set(scopedCalls.map((c) => c.vendedora))]);
   return computeAdvisorStats({ calls: scopedCalls, leadOutcome, emailById }, tz);
@@ -462,6 +582,170 @@ export function attachDeltas(
   return { rows, prevTotals: sumTotals(prev) };
 }
 
+// ───────────────────────── Tablero de una pantalla ────────────────────────────
+
+const WEEKDAYS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+
+export interface AdvisorBoardRow extends AdvisorStatWithDelta {
+  heat: number[]; // 13 celdas, horas locales 08..20 (actividad, SIN lente de fuente)
+  trend: TrendCell[]; // 7 días terminando en range.to (CON lente de fuente)
+  online: boolean; // presencia al momento del render
+}
+
+export interface ProductivityBoardData {
+  rows: AdvisorBoardRow[];
+  prevTotals: ProductivityTotals;
+  prevRange: DateRange;
+  hasPrev: boolean;
+  heatMax: number; // máximo global de la escala del heatmap
+  heatMode: "day" | "avg";
+  /** En línea AHORA pero sin actividad registrada en el rango — la señal clave
+   *  para asesoras remotas ("conectada pero no está registrando nada"). */
+  onlineIdle: { userId: string; email: string }[];
+}
+
+/** Paged shipment_calls events (agent + occurred_at) for the heatmap — Envíos
+ *  gestiones are real work too. Resilient: an unapplied 0023 migration (or any
+ *  page error) just contributes no events. */
+async function fetchShipmentEventsPaged(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: string[],
+  startIso: string,
+  endIso: string,
+): Promise<{ agent: string | null; occurred_at: string | null }[]> {
+  const PAGE = 1000;
+  const CAP = 20000;
+  const out: { agent: string | null; occurred_at: string | null }[] = [];
+  for (let from = 0; from < CAP; from += PAGE) {
+    const { data, error } = await sb
+      .from("shipment_calls")
+      .select("agent, occurred_at")
+      .in("store_id", storeIds)
+      .not("agent", "is", null)
+      .neq("kind", "system")
+      .gte("occurred_at", startIso)
+      .lte("occurred_at", endIso)
+      .order("occurred_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    const batch = (data as { agent: string | null; occurred_at: string | null }[]) ?? [];
+    out.push(...batch);
+    if (batch.length < PAGE) break;
+  }
+  return out;
+}
+
+/**
+ * Everything the one-screen productivity board needs, in one call:
+ * per-advisor stats + deltas (like getAdvisorProductivityCompare), PLUS the
+ * hourly activity heatmap (all human events, source lens NOT applied — it
+ * measures "is she connected working", not efficiency), the 7-day trend series
+ * per advisor (source lens applied, consistent with % cierre), and the live
+ * presence snapshot. The range's lead_calls are fetched ONCE and feed both
+ * metrics and heatmap. All returned structures are JSON-serializable.
+ */
+export async function getProductivityBoard(
+  storeIds: string[],
+  range: DateRange,
+  source: SourceBucket | null = null,
+  tz = "America/Lima",
+): Promise<ProductivityBoardData> {
+  const prevRange = previousRange(range);
+  const empty: ProductivityBoardData = {
+    rows: [],
+    prevTotals: { llamadas: 0, leadsTrabajados: 0, cerrados: 0, ingresos: 0 },
+    prevRange,
+    hasPrev: false,
+    heatMax: 1,
+    heatMode: "day",
+    onlineIdle: [],
+  };
+  if (!storeIds.length) return empty;
+  const sb = await createServerSupabase();
+  const { startIso, endIso } = localRangeBoundsIso(range.from, range.to, tz);
+  const rangeDays = Math.max(1, Math.round((Date.parse(range.to) - Date.parse(range.from)) / 86_400_000) + 1);
+  const nowMs = Date.now();
+
+  // Trend window: the 7 calendar days ending at range.to (labels "Lun"…/"Hoy").
+  const todayLocal = tzParts(new Date(nowMs).toISOString(), tz).date;
+  const toMs = Date.parse(`${range.to}T12:00:00Z`); // noon anchor → date math is DST-proof
+  const trendDays: { date: string; label: string }[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const date = new Date(toMs - i * 86_400_000).toISOString().slice(0, 10);
+    const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+    trendDays.push({ date, label: date === todayLocal ? "Hoy" : (WEEKDAYS[weekday] ?? date.slice(5)) });
+  }
+  const { startIso: trendStartIso } = localRangeBoundsIso(trendDays[0]!.date, range.to, tz);
+  const needPrefix = trendStartIso < startIso; // rango corto (Hoy/Ayer) → faltan días previos
+  const prefixEndIso = new Date(Date.parse(startIso) - 1).toISOString();
+
+  const [calls, prevRows, shipEvents, onlineIds, prefixCalls] = await Promise.all([
+    fetchAdvisorLeadCallsPaged(sb, storeIds, startIso, endIso),
+    getAdvisorProductivity(storeIds, prevRange, source, tz),
+    fetchShipmentEventsPaged(sb, storeIds, startIso, endIso),
+    (async () => {
+      try {
+        return await onlineVendedoraIds(createAdminSupabase(), storeIds, nowMs);
+      } catch {
+        return new Set<string>(); // best-effort: sin presencia el tablero igual carga
+      }
+    })(),
+    needPrefix
+      ? fetchAdvisorLeadCallsPaged(sb, storeIds, trendStartIso, prefixEndIso)
+      : Promise.resolve([] as AdvisorCall[]),
+  ]);
+
+  // Metrics from the SAME calls (source lens inside), same as getAdvisorProductivity.
+  const { scopedCalls, leadOutcome } = await buildAdvisorInputs(sb, calls, source);
+  const emailById = await resolveEmails([...new Set(scopedCalls.map((c) => c.vendedora))]);
+  const cur = scopedCalls.length ? computeAdvisorStats({ calls: scopedCalls, leadOutcome, emailById }, tz) : [];
+  const { rows: withDeltas, prevTotals } = attachDeltas(cur, prevRows);
+
+  // Trend series: window calls (range slice + prefix) with the SAME source lens.
+  let trendCalls = scopedCalls.filter((c) => c.occurred_at >= trendStartIso);
+  const trendWon = new Set<string>();
+  for (const [id, o] of leadOutcome) if (o.won) trendWon.add(id);
+  if (prefixCalls.length) {
+    const prefix = await buildAdvisorInputs(sb, prefixCalls, source);
+    trendCalls = trendCalls.concat(prefix.scopedCalls);
+    for (const [id, o] of prefix.leadOutcome) if (o.won) trendWon.add(id);
+  }
+  const trendSeries = computeAdvisorConversionByDay({ calls: trendCalls, wonLeadIds: trendWon, days: trendDays, tz });
+
+  // Heatmap: ALL human events in range (no source lens) + Envíos gestiones.
+  const heat = computeHourlyActivity({
+    events: [...calls.map((c) => ({ agent: c.vendedora, occurred_at: c.occurred_at })), ...shipEvents],
+    tz,
+    rangeDays,
+  });
+
+  const zeroHeat = () => new Array<number>(HEAT_END - HEAT_START + 1).fill(0);
+  const emptyTrend = () => trendDays.map((d) => ({ date: d.date, label: d.label, contactos: 0, pedidos: 0 }));
+  const rows: AdvisorBoardRow[] = withDeltas.map((r) => ({
+    ...r,
+    heat: heat.byAgent[r.userId] ?? zeroHeat(),
+    trend: trendSeries[r.userId] ?? emptyTrend(),
+    online: onlineIds.has(r.userId),
+  }));
+
+  // Online RIGHT NOW but absent from the board (no registered activity in range).
+  const activeIds = new Set(rows.map((r) => r.userId));
+  const idleIds = [...onlineIds].filter((id) => !activeIds.has(id));
+  const idleEmails = idleIds.length ? await resolveEmails(idleIds) : new Map<string, string>();
+  const onlineIdle = idleIds.map((id) => ({ userId: id, email: idleEmails.get(id) ?? id }));
+
+  return {
+    rows,
+    prevTotals,
+    prevRange,
+    hasPrev: prevRows.length > 0,
+    heatMax: heat.max,
+    heatMode: heat.mode,
+    onlineIdle,
+  };
+}
+
 // ───────────────────────── Drill-down: leads an advisor worked ─────────────────
 
 export interface AgentLeadRow {
@@ -471,6 +755,7 @@ export interface AgentLeadRow {
   status: string;
   category: string | null;
   source: SourceBucket;
+  segment: LeadSegment; // calidad del lead (carrito/distrito/conversó/frío)
   won: boolean;
   net: number; // net revenue if won, else 0
   llamadas: number; // calls this advisor logged on the lead
@@ -503,7 +788,8 @@ export async function getAgentLeadsWorked(
     if (!prev || c.occurred_at > prev) lastTouchByLead.set(c.lead_id, c.occurred_at);
   }
 
-  // 2) The touched leads (source selected with a degrade fallback, as elsewhere).
+  // 2) The touched leads (source + segment signals selected with a degrade
+  //    fallback, as elsewhere).
   const leadIds = [...lastTouchByLead.keys()];
   type TouchedLead = {
     id: string;
@@ -514,20 +800,26 @@ export async function getAgentLeadsWorked(
     has_order: boolean;
     order_id: string | null;
     source?: string | null;
+    cart_item_count?: number | null;
+    district?: string | null;
+    inbound_count?: number | null;
+    draft_order_gid?: string | null;
   };
   let leads: TouchedLead[] = [];
   {
-    const cols = "id, name, phone, status, category, has_order, order_id, source";
-    // Chunked .in() + one-time source degrade, same as getAdvisorProductivity.
-    let sourceMissing = false;
+    const cols =
+      "id, name, phone, status, category, has_order, order_id, source, cart_item_count, district, inbound_count, draft_order_gid";
+    // Chunked .in() + one-time degrade (missing 0007/0008 columns), same as
+    // getAdvisorProductivity.
+    let colsMissing = false;
     for (const part of chunk(leadIds, 300)) {
-      if (!sourceMissing) {
-        const withSource = await sb.from("leads").select(cols).in("id", part);
-        if (!withSource.error) {
-          leads.push(...((withSource.data as unknown as TouchedLead[]) ?? []));
+      if (!colsMissing) {
+        const withCols = await sb.from("leads").select(cols).in("id", part);
+        if (!withCols.error) {
+          leads.push(...((withCols.data as unknown as TouchedLead[]) ?? []));
           continue;
         }
-        sourceMissing = true;
+        colsMissing = true;
       }
       const base = await sb.from("leads").select("id, name, phone, status, category, has_order, order_id").in("id", part);
       leads.push(...((base.data as unknown as TouchedLead[]) ?? []));
@@ -556,6 +848,7 @@ export async function getAgentLeadsWorked(
     status: l.status,
     category: l.category,
     source: sourceKey(l.source),
+    segment: leadSegment(l),
     won: isWonLead(l.category),
     net: l.order_id ? (netByOrder.get(l.order_id) ?? 0) : 0,
     llamadas: llamadasByLead.get(l.id) ?? 0,

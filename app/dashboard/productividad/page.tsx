@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAccessibleStores, getUserRoleSummary, parseRange } from "@/lib/access";
-import { getAdvisorProductivityCompare } from "@/lib/productivity";
+import { getProductivityBoard } from "@/lib/productivity";
 import { ProductivityBoard } from "@/components/productivity";
 import { EmptyState } from "@/components/ui";
 
@@ -37,24 +37,29 @@ export default async function ProductividadPage({
   // Infer active hours by each store's local day; mixed tz → Lima (the business default).
   const tz = stores.every((s) => s.timezone === first.timezone) ? first.timezone : "America/Lima";
 
-  const { rows, prevTotals, prevRange, hasPrev } = await getAdvisorProductivityCompare(
-    scopeIds,
-    range,
-    source,
-    tz,
-  );
+  const board = await getProductivityBoard(scopeIds, range, source, tz);
+  // Dots iniciales: asesoras del tablero online + las online sin actividad.
+  const initialOnlineIds = [
+    ...board.rows.filter((r) => r.online).map((r) => r.userId),
+    ...board.onlineIdle.map((i) => i.userId),
+  ];
 
   return (
     <ProductivityBoard
-      rows={rows}
-      prevTotals={prevTotals}
-      prevRange={prevRange}
-      hasPrev={hasPrev}
+      rows={board.rows}
+      prevTotals={board.prevTotals}
+      prevRange={board.prevRange}
+      hasPrev={board.hasPrev}
       range={range}
       currency={currency}
       stores={stores}
       storeId={storeId}
       source={source}
+      tz={tz}
+      heatMax={board.heatMax}
+      heatMode={board.heatMode}
+      onlineIdle={board.onlineIdle}
+      initialOnlineIds={initialOnlineIds}
     />
   );
 }
