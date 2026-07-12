@@ -5,13 +5,8 @@ import { revalidatePath } from "next/cache";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { getCustomerHistory, getLeadWithCalls, type CustomerHistory } from "@/lib/leads-access";
 import { CLAIM_TTL_MINUTES, canDispositionLead, categoryOf, isValidStatus, labelOf } from "@/lib/leads";
-import {
-  OFFER_TTL_MS,
-  ONLINE_TTL_MS,
-  planYapeOffers,
-  type RoutingAdvisor,
-  type RoutingLead,
-} from "@/lib/yape-routing";
+import { OFFER_TTL_MS, planYapeOffers, type RoutingLead } from "@/lib/yape-routing";
+import { onlineVendedorasForStore } from "@/lib/presence";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import { getStoreCreds } from "@/lib/ingest";
@@ -293,39 +288,6 @@ export async function releaseLead(leadId: string): Promise<LeadActionState> {
 // poll (no cron). Cross-advisor reads use the service role; only the offered
 // advisor ever sees a given Yape (others see nothing).
 
-/** Online vendedoras (presence heartbeat fresh) with access to the store. */
-async function onlineVendedoras(
-  admin: SupabaseClient,
-  storeId: string,
-  nowMs: number,
-): Promise<RoutingAdvisor[]> {
-  const { data: store } = await admin.from("stores").select("org_id").eq("id", storeId).maybeSingle();
-  const orgId = (store as { org_id?: string } | null)?.org_id;
-  if (!orgId) return [];
-  const { data: mem } = await admin
-    .from("memberships")
-    .select("user_id")
-    .eq("org_id", orgId)
-    .eq("role", "vendedora");
-  const vendIds = new Set(((mem as { user_id: string }[] | null) ?? []).map((m) => m.user_id));
-  if (!vendIds.size) return [];
-  const { data: acc } = await admin.from("user_store_access").select("user_id").eq("store_id", storeId);
-  const accessIds = ((acc as { user_id: string }[] | null) ?? [])
-    .map((a) => a.user_id)
-    .filter((id) => vendIds.has(id));
-  if (!accessIds.length) return [];
-  const onlineCutoff = new Date(nowMs - ONLINE_TTL_MS).toISOString();
-  const { data: pres } = await admin
-    .from("user_presence")
-    .select("user_id, last_seen_at")
-    .in("user_id", accessIds)
-    .gte("last_seen_at", onlineCutoff);
-  return ((pres as { user_id: string; last_seen_at: string }[] | null) ?? []).map((p) => ({
-    id: p.user_id,
-    lastSeenMs: new Date(p.last_seen_at).getTime(),
-  }));
-}
-
 /** Advance the rotating offers for one store's active Yapes (lazy, on poll). */
 async function reconcileYapeOffers(admin: SupabaseClient, storeId: string, nowMs: number): Promise<void> {
   const claimCutoff = new Date(nowMs - CLAIM_TTL_MINUTES * 60_000).toISOString();
@@ -347,7 +309,7 @@ async function reconcileYapeOffers(admin: SupabaseClient, storeId: string, nowMs
     offeredAtMs: r.yape_offered_at ? new Date(r.yape_offered_at as string).getTime() : null,
     passed: Array.isArray(r.yape_passed) ? (r.yape_passed as string[]) : [],
   }));
-  const advisors = await onlineVendedoras(admin, storeId, nowMs);
+  const advisors = await onlineVendedorasForStore(admin, storeId, nowMs);
   const plans = planYapeOffers(leads, advisors, nowMs);
   if (!plans.length) return;
   const offerCutoff = new Date(nowMs - OFFER_TTL_MS).toISOString();

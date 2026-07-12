@@ -1,9 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
+  HEAT_END,
+  HEAT_START,
   attachDeltas,
+  computeAdvisorConversionByDay,
   computeAdvisorStats,
+  computeHourlyActivity,
   emptyPorFuente,
   isWonLead,
+  localDayPreset,
+  localPresetRange,
   localRangeBoundsIso,
   type AdvisorCall,
   type AdvisorStat,
@@ -205,5 +211,125 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
     const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
     expect(rows.map((r) => r.userId)).toEqual(["u2", "u1"]); // u2 has more revenue first
     expect(rows).toHaveLength(2); // the empty-vendedora system row is skipped
+  });
+});
+
+describe("computeHourlyActivity (heatmap de actividad por hora local)", () => {
+  const cells = HEAT_END - HEAT_START + 1; // 13
+
+  it("bucketiza por hora LOCAL de Lima (UTC−5)", () => {
+    const { byAgent, mode } = computeHourlyActivity({
+      events: [
+        { agent: "u1", occurred_at: "2026-07-09T14:00:00Z" }, // 09h Lima
+        { agent: "u1", occurred_at: "2026-07-09T14:30:00Z" }, // 09h Lima
+        { agent: "u1", occurred_at: "2026-07-10T01:00:00Z" }, // 20h Lima del 09/07
+      ],
+      tz: "America/Lima",
+      rangeDays: 1,
+    });
+    expect(mode).toBe("day");
+    expect(byAgent.u1).toHaveLength(cells);
+    expect(byAgent.u1![9 - HEAT_START]).toBe(2); // 09h
+    expect(byAgent.u1![20 - HEAT_START]).toBe(1); // 20h
+  });
+
+  it("descarta horas fuera del turno 08–20 (no las pliega a los bordes)", () => {
+    const { byAgent, max } = computeHourlyActivity({
+      events: [
+        { agent: "u1", occurred_at: "2026-07-09T11:00:00Z" }, // 06h Lima → fuera
+        { agent: "u1", occurred_at: "2026-07-10T03:00:00Z" }, // 22h Lima → fuera
+        { agent: null, occurred_at: "2026-07-09T15:00:00Z" }, // sin agente → fuera
+        { agent: "u1", occurred_at: null }, // sin timestamp → fuera
+      ],
+      tz: "America/Lima",
+      rangeDays: 1,
+    });
+    expect(byAgent.u1 ?? new Array(cells).fill(0)).toEqual(new Array(cells).fill(0));
+    expect(max).toBe(1); // piso 1 para que la escala nunca divida por 0
+  });
+
+  it("multi-día → modo 'avg' con promedio por día; max global entre asesoras", () => {
+    const events = [
+      // u1: 7 acciones a las 10h Lima (15:00Z) repartidas en la semana
+      ...Array.from({ length: 7 }, (_, i) => ({
+        agent: "u1",
+        occurred_at: `2026-07-0${i + 1}T15:00:00Z`,
+      })),
+      { agent: "u2", occurred_at: "2026-07-01T15:00:00Z" },
+    ];
+    const { byAgent, max, mode } = computeHourlyActivity({ events, tz: "America/Lima", rangeDays: 7 });
+    expect(mode).toBe("avg");
+    expect(byAgent.u1![10 - HEAT_START]).toBe(1); // 7/7 = 1 por día
+    expect(byAgent.u2![10 - HEAT_START]).toBeCloseTo(0.1); // 1/7 ≈ 0.1 (redondeado)
+    expect(max).toBe(1);
+  });
+});
+
+describe("computeAdvisorConversionByDay (sparkline: contactos y pedidos por día)", () => {
+  const days = [
+    { date: "2026-07-08", label: "Mié" },
+    { date: "2026-07-09", label: "Hoy" },
+  ];
+  const tz = "America/Lima";
+  const at = (date: string, h = 17) => `${date}T${String(h).padStart(2, "0")}:00:00Z`; // 12:00 Lima
+
+  it("contactos = kind 'call' de la PROPIA asesora por día local", () => {
+    const calls: AdvisorCall[] = [
+      { vendedora: "u1", lead_id: "A", kind: "call", occurred_at: at("2026-07-08") },
+      { vendedora: "u1", lead_id: "B", kind: "message", occurred_at: at("2026-07-08") }, // no cuenta
+      { vendedora: "u2", lead_id: "C", kind: "call", occurred_at: at("2026-07-09") },
+    ];
+    const s = computeAdvisorConversionByDay({ calls, wonLeadIds: new Set(), days, tz });
+    expect(s.u1!.map((c) => c.contactos)).toEqual([1, 0]);
+    expect(s.u2!.map((c) => c.contactos)).toEqual([0, 1]);
+  });
+
+  it("el pedido va a la asesora del ÚLTIMO toque global (cualquier kind), en su día", () => {
+    const calls: AdvisorCall[] = [
+      { vendedora: "u1", lead_id: "A", kind: "call", occurred_at: at("2026-07-08", 15) },
+      // u2 toca después con un MENSAJE → se lleva el pedido el 09 (no suma contactos)
+      { vendedora: "u2", lead_id: "A", kind: "message", occurred_at: at("2026-07-09", 15) },
+    ];
+    const s = computeAdvisorConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz });
+    expect(s.u1!.map((c) => c.pedidos)).toEqual([0, 0]);
+    expect(s.u2!.map((c) => c.pedidos)).toEqual([0, 1]);
+    expect(s.u2!.map((c) => c.contactos)).toEqual([0, 0]);
+  });
+
+  it("siempre devuelve una celda por día (ceros incluidos) y ignora días fuera de la ventana", () => {
+    const calls: AdvisorCall[] = [
+      { vendedora: "u1", lead_id: "A", kind: "call", occurred_at: at("2026-07-01") }, // fuera
+      { vendedora: "u1", lead_id: "B", kind: "call", occurred_at: at("2026-07-09") },
+    ];
+    const s = computeAdvisorConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz });
+    expect(s.u1).toEqual([
+      { date: "2026-07-08", label: "Mié", contactos: 0, pedidos: 0 },
+      { date: "2026-07-09", label: "Hoy", contactos: 1, pedidos: 0 },
+    ]);
+  });
+});
+
+describe("presets de rango en día LOCAL de la tienda", () => {
+  it("a las 20:30 de Lima, 'Hoy' sigue siendo el día local (no el UTC siguiente)", () => {
+    // 2026-07-13T01:30Z = 2026-07-12 20:30 en Lima
+    expect(localDayPreset(0, "America/Lima", "2026-07-13T01:30:00Z")).toEqual({
+      from: "2026-07-12",
+      to: "2026-07-12",
+    });
+    expect(localDayPreset(1, "America/Lima", "2026-07-13T01:30:00Z")).toEqual({
+      from: "2026-07-11",
+      to: "2026-07-11",
+    });
+  });
+
+  it("localPresetRange termina hoy local e incluye N días", () => {
+    expect(localPresetRange(7, "America/Lima", "2026-07-13T01:30:00Z")).toEqual({
+      from: "2026-07-06",
+      to: "2026-07-12",
+    });
+  });
+
+  it("en UTC coincide con el día calendario", () => {
+    expect(localDayPreset(0, "UTC", "2026-07-13T01:30:00Z")).toEqual({ from: "2026-07-13", to: "2026-07-13" });
   });
 });
