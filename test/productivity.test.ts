@@ -214,32 +214,47 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
   });
 });
 
-describe("computeHourlyActivity (heatmap de actividad por hora local)", () => {
+describe("computeHourlyActivity (heatmap: leads DISTINTOS gestionados por hora local)", () => {
   const cells = HEAT_END - HEAT_START + 1; // 13
 
-  it("bucketiza por hora LOCAL de Lima (UTC−5)", () => {
+  it("bucketiza por hora LOCAL de Lima (UTC−5) contando leads distintos", () => {
     const { byAgent, mode } = computeHourlyActivity({
       events: [
-        { agent: "u1", occurred_at: "2026-07-09T14:00:00Z" }, // 09h Lima
-        { agent: "u1", occurred_at: "2026-07-09T14:30:00Z" }, // 09h Lima
-        { agent: "u1", occurred_at: "2026-07-10T01:00:00Z" }, // 20h Lima del 09/07
+        { agent: "u1", occurred_at: "2026-07-09T14:00:00Z", ref: "L1" }, // 09h Lima
+        { agent: "u1", occurred_at: "2026-07-09T14:30:00Z", ref: "L2" }, // 09h Lima
+        { agent: "u1", occurred_at: "2026-07-10T01:00:00Z", ref: "L3" }, // 20h Lima del 09/07
       ],
       tz: "America/Lima",
       rangeDays: 1,
     });
     expect(mode).toBe("day");
     expect(byAgent.u1).toHaveLength(cells);
-    expect(byAgent.u1![9 - HEAT_START]).toBe(2); // 09h
+    expect(byAgent.u1![9 - HEAT_START]).toBe(2); // 09h: 2 leads distintos
     expect(byAgent.u1![20 - HEAT_START]).toBe(1); // 20h
+  });
+
+  it("el MISMO lead tocado varias veces en una hora cuenta 1 (anti-busywork); en horas distintas cuenta en cada una", () => {
+    const { byAgent } = computeHourlyActivity({
+      events: [
+        { agent: "u1", occurred_at: "2026-07-09T14:00:00Z", ref: "L1" }, // 09h
+        { agent: "u1", occurred_at: "2026-07-09T14:20:00Z", ref: "L1" }, // 09h, mismo lead
+        { agent: "u1", occurred_at: "2026-07-09T14:40:00Z", ref: "L1" }, // 09h, mismo lead
+        { agent: "u1", occurred_at: "2026-07-09T16:00:00Z", ref: "L1" }, // 11h, mismo lead → cuenta aparte
+      ],
+      tz: "America/Lima",
+      rangeDays: 1,
+    });
+    expect(byAgent.u1![9 - HEAT_START]).toBe(1);
+    expect(byAgent.u1![11 - HEAT_START]).toBe(1);
   });
 
   it("descarta horas fuera del turno 08–20 (no las pliega a los bordes)", () => {
     const { byAgent, max } = computeHourlyActivity({
       events: [
-        { agent: "u1", occurred_at: "2026-07-09T11:00:00Z" }, // 06h Lima → fuera
-        { agent: "u1", occurred_at: "2026-07-10T03:00:00Z" }, // 22h Lima → fuera
-        { agent: null, occurred_at: "2026-07-09T15:00:00Z" }, // sin agente → fuera
-        { agent: "u1", occurred_at: null }, // sin timestamp → fuera
+        { agent: "u1", occurred_at: "2026-07-09T11:00:00Z", ref: "L1" }, // 06h Lima → fuera
+        { agent: "u1", occurred_at: "2026-07-10T03:00:00Z", ref: "L2" }, // 22h Lima → fuera
+        { agent: null, occurred_at: "2026-07-09T15:00:00Z", ref: "L3" }, // sin agente → fuera
+        { agent: "u1", occurred_at: null, ref: "L4" }, // sin timestamp → fuera
       ],
       tz: "America/Lima",
       rangeDays: 1,
@@ -248,18 +263,19 @@ describe("computeHourlyActivity (heatmap de actividad por hora local)", () => {
     expect(max).toBe(1); // piso 1 para que la escala nunca divida por 0
   });
 
-  it("multi-día → modo 'avg' con promedio por día; max global entre asesoras", () => {
+  it("multi-día → 'avg' de distintos POR DÍA (el mismo lead cada día cuenta 1 por día); max global entre asesoras", () => {
     const events = [
-      // u1: 7 acciones a las 10h Lima (15:00Z) repartidas en la semana
+      // u1: el MISMO lead gestionado a las 10h Lima (15:00Z) los 7 días
       ...Array.from({ length: 7 }, (_, i) => ({
         agent: "u1",
         occurred_at: `2026-07-0${i + 1}T15:00:00Z`,
+        ref: "A",
       })),
-      { agent: "u2", occurred_at: "2026-07-01T15:00:00Z" },
+      { agent: "u2", occurred_at: "2026-07-01T15:00:00Z", ref: "B" },
     ];
     const { byAgent, max, mode } = computeHourlyActivity({ events, tz: "America/Lima", rangeDays: 7 });
     expect(mode).toBe("avg");
-    expect(byAgent.u1![10 - HEAT_START]).toBe(1); // 7/7 = 1 por día
+    expect(byAgent.u1![10 - HEAT_START]).toBe(1); // 1 distinto/día × 7 días / 7 = 1
     expect(byAgent.u2![10 - HEAT_START]).toBeCloseTo(0.1); // 1/7 ≈ 0.1 (redondeado)
     expect(max).toBe(1);
   });

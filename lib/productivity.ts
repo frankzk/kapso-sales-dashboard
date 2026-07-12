@@ -172,41 +172,45 @@ export const HEAT_START = 8; // business shift, aligned with the leads burndown
 export const HEAT_END = 20; // inclusive → 13 cells
 
 export interface HourlyActivity {
-  /** userId → 13 celdas (horas locales 08..20). */
+  /** userId → 13 celdas (horas locales 08..20) con LEADS/ENVÍOS DISTINTOS gestionados. */
   byAgent: Record<string, number[]>;
   /** Máximo global (≥ 1) para que todas las filas compartan la escala de color. */
   max: number;
-  /** "day" = conteos crudos de un solo día; "avg" = promedio por día (multi-día). */
+  /** "day" = distintos de un solo día; "avg" = promedio de distintos/día (multi-día). */
   mode: "day" | "avg";
 }
 
-/** Hourly activity per advisor from ANY registered human event (calls, sales,
- *  WhatsApp messages, shipment gestiones). Hours outside the 08–20 shift are
- *  DROPPED — folding them to the edges would fabricate fake 08h/20h peaks. Pure. */
+/** Hourly DISTINCT leads (or shipments) each advisor worked, from any registered
+ *  human event (calls, sales, WhatsApp messages, shipment gestiones). `ref` is
+ *  the unit of gestión (lead_id / shipment_id): 3 messages to the same lead in
+ *  one hour count as 1 — raw action counts reward busywork, distinct leads
+ *  don't. Dedupe is per (hour, LOCAL DAY), so in avg mode the same lead worked
+ *  at 10h on 7 different days contributes 1 per day (avg 1), not 1/7. Hours
+ *  outside the 08–20 shift are DROPPED — folding them to the edges would
+ *  fabricate fake 08h/20h peaks. Pure. */
 export function computeHourlyActivity(opts: {
-  events: { agent: string | null; occurred_at: string | null }[];
+  events: { agent: string | null; occurred_at: string | null; ref: string }[];
   tz: string;
   rangeDays: number;
 }): HourlyActivity {
   const cells = HEAT_END - HEAT_START + 1;
-  const byAgent: Record<string, number[]> = {};
+  const setsByAgent: Record<string, Set<string>[]> = {};
   for (const e of opts.events) {
     if (!e.agent || !e.occurred_at) continue;
-    const h = tzParts(e.occurred_at, opts.tz).hour;
-    if (h < HEAT_START || h > HEAT_END) continue;
-    const arr = (byAgent[e.agent] ??= new Array<number>(cells).fill(0));
-    const i = h - HEAT_START;
-    arr[i] = (arr[i] ?? 0) + 1;
+    const p = tzParts(e.occurred_at, opts.tz);
+    if (p.hour < HEAT_START || p.hour > HEAT_END) continue;
+    const sets = (setsByAgent[e.agent] ??= Array.from({ length: cells }, () => new Set<string>()));
+    sets[p.hour - HEAT_START]!.add(`${p.date}|${e.ref}`);
   }
   const mode: HourlyActivity["mode"] = opts.rangeDays > 1 ? "avg" : "day";
-  if (mode === "avg") {
-    const div = Math.max(1, opts.rangeDays);
-    for (const arr of Object.values(byAgent)) {
-      for (let i = 0; i < arr.length; i++) arr[i] = Math.round((arr[i]! / div) * 10) / 10;
-    }
-  }
+  const div = mode === "avg" ? Math.max(1, opts.rangeDays) : 1;
+  const byAgent: Record<string, number[]> = {};
   let max = 1;
-  for (const arr of Object.values(byAgent)) for (const v of arr) if (v > max) max = v;
+  for (const [agent, sets] of Object.entries(setsByAgent)) {
+    const arr = sets.map((s) => (mode === "avg" ? Math.round((s.size / div) * 10) / 10 : s.size));
+    byAgent[agent] = arr;
+    for (const v of arr) if (v > max) max = v;
+  }
   return { byAgent, max, mode };
 }
 
@@ -604,22 +608,23 @@ export interface ProductivityBoardData {
   onlineIdle: { userId: string; email: string }[];
 }
 
-/** Paged shipment_calls events (agent + occurred_at) for the heatmap — Envíos
- *  gestiones are real work too. Resilient: an unapplied 0023 migration (or any
- *  page error) just contributes no events. */
+/** Paged shipment_calls events (agent + occurred_at + shipment ref) for the
+ *  heatmap — Envíos gestiones are real work too; each distinct shipment counts
+ *  as one gestión. Resilient: an unapplied 0023 migration (or any page error)
+ *  just contributes no events. */
 async function fetchShipmentEventsPaged(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,
   storeIds: string[],
   startIso: string,
   endIso: string,
-): Promise<{ agent: string | null; occurred_at: string | null }[]> {
+): Promise<{ agent: string | null; occurred_at: string | null; ref: string }[]> {
   const PAGE = 1000;
   const CAP = 20000;
-  const out: { agent: string | null; occurred_at: string | null }[] = [];
+  const out: { agent: string | null; occurred_at: string | null; ref: string }[] = [];
   for (let from = 0; from < CAP; from += PAGE) {
     const { data, error } = await sb
       .from("shipment_calls")
-      .select("agent, occurred_at")
+      .select("shipment_id, agent, occurred_at")
       .in("store_id", storeIds)
       .not("agent", "is", null)
       .neq("kind", "system")
@@ -629,8 +634,9 @@ async function fetchShipmentEventsPaged(
       .order("id", { ascending: false })
       .range(from, from + PAGE - 1);
     if (error) break;
-    const batch = (data as { agent: string | null; occurred_at: string | null }[]) ?? [];
-    out.push(...batch);
+    const batch = (data as { shipment_id: string; agent: string | null; occurred_at: string | null }[]) ?? [];
+    // Prefijo "s:" para que un shipment_id jamás colisione con un lead_id.
+    out.push(...batch.map((r) => ({ agent: r.agent, occurred_at: r.occurred_at, ref: `s:${r.shipment_id}` })));
     if (batch.length < PAGE) break;
   }
   return out;
@@ -713,9 +719,13 @@ export async function getProductivityBoard(
   }
   const trendSeries = computeAdvisorConversionByDay({ calls: trendCalls, wonLeadIds: trendWon, days: trendDays, tz });
 
-  // Heatmap: ALL human events in range (no source lens) + Envíos gestiones.
+  // Heatmap: ALL human events in range (no source lens) + Envíos gestiones,
+  // counted as DISTINCT leads/shipments per hour.
   const heat = computeHourlyActivity({
-    events: [...calls.map((c) => ({ agent: c.vendedora, occurred_at: c.occurred_at })), ...shipEvents],
+    events: [
+      ...calls.map((c) => ({ agent: c.vendedora, occurred_at: c.occurred_at, ref: c.lead_id })),
+      ...shipEvents,
+    ],
     tz,
     rangeDays,
   });
