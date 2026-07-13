@@ -175,6 +175,36 @@ function SourceMiniChips({ porFuente, currency }: { porFuente: AdvisorBoardRow["
   );
 }
 
+/** Chips "AUR 5 · KP 12": pedidos cerrados por tienda dentro de la fila. Con una
+ *  sola tienda en el filtro queda su chip solo (el desglose viene del scope). */
+function StoreMiniChips({
+  porTienda,
+  storeInfo,
+  currency,
+}: {
+  porTienda: AdvisorBoardRow["porTienda"];
+  storeInfo: Record<string, { short: string; name: string }>;
+  currency: string;
+}) {
+  const entries = Object.entries(porTienda)
+    .filter(([, c]) => c.cerrados > 0)
+    .sort((a, b) => (storeInfo[a[0]]?.short ?? "?").localeCompare(storeInfo[b[0]]?.short ?? "?"));
+  if (!entries.length) return null;
+  return (
+    <span className="mt-1 flex justify-end gap-1">
+      {entries.map(([sid, c]) => (
+        <span
+          key={sid}
+          title={`${storeInfo[sid]?.name ?? "Otra tienda"} — ${c.cerrados} pedido${c.cerrados === 1 ? "" : "s"} · ${money(c.ingresos, currency)}`}
+          className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap text-slate-500"
+        >
+          {storeInfo[sid]?.short ?? "?"} {c.cerrados}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /** Punto de presencia: verde pulsante = con el dashboard abierto ahora. */
 function OnlineDot({ online }: { online: boolean }) {
   if (!online) return null;
@@ -305,6 +335,7 @@ export function ProductivityTable({
   heatMax,
   heatMode,
   heatStart,
+  storeInfo,
   onlineIdle,
   initialOnlineIds,
 }: {
@@ -315,6 +346,7 @@ export function ProductivityTable({
   heatMax: number;
   heatMode: "day" | "avg";
   heatStart: number;
+  storeInfo: Record<string, { short: string; name: string }>;
   onlineIdle: { userId: string; email: string }[];
   initialOnlineIds: string[];
 }) {
@@ -440,8 +472,11 @@ export function ProductivityTable({
                   <Sparkline trend={r.trend} />
                 </td>
                 <td className="py-2.5 text-right whitespace-nowrap text-slate-700">
-                  {r.cerrados}
-                  {showDelta && <DeltaInline value={r.delta.cerrados} fmt={(n) => String(n)} />}
+                  <span>
+                    {r.cerrados}
+                    {showDelta && <DeltaInline value={r.delta.cerrados} fmt={(n) => String(n)} />}
+                  </span>
+                  <StoreMiniChips porTienda={r.porTienda} storeInfo={storeInfo} currency={currency} />
                 </td>
                 <td className="py-2.5 pl-3 text-right">
                   <SourceMiniChips porFuente={r.porFuente} currency={currency} />

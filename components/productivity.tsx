@@ -7,6 +7,7 @@ import {
   HEAT_START,
   localDayPreset,
   localPresetRange,
+  storeInitials,
   type AdvisorBoardRow,
   type ProductivityTotals,
   type SourceBucket,
@@ -118,6 +119,10 @@ export function ProductivityBoard({
     { llamadas: 0, leads: 0, cerrados: 0, ingresos: 0 },
   );
   const onlineCount = initialOnlineIds.length;
+  // Sigla + nombre por tienda para los chips "AUR 5 · KP 12" junto a Cerrados.
+  const storeInfo = Object.fromEntries(
+    stores.map((s) => [s.id, { short: storeInitials(s.name), name: s.name }]),
+  ) as Record<string, { short: string; name: string }>;
 
   // Range presets anchored on the STORE's local day (a UTC date flips to
   // "tomorrow" at 19:00 Lima and used to blank the board at night).
@@ -221,6 +226,7 @@ export function ProductivityBoard({
             heatMax={heatMax}
             heatMode={heatMode}
             heatStart={HEAT_START}
+            storeInfo={storeInfo}
             onlineIdle={onlineIdle}
             initialOnlineIds={initialOnlineIds}
           />

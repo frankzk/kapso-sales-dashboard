@@ -77,9 +77,21 @@ export interface AdvisorStat {
   cerradosDetalle: WonOrderRef[]; // the orders behind `cerrados`, oldest first
   ingresos: number; // net revenue (total - refunded) of those orders
   porFuente: Record<SourceBucket, SourceCell>; // cerrados+ingresos split by acquisition source
+  porTienda: Record<string, SourceCell>; // cerrados+ingresos split by store id
   conversion: number; // cerrados / leadsTrabajados, 0..1
   horas: number; // active hours inferred from action timestamps (idle-gap-split)
   dias: number; // distinct days with logged activity
+}
+
+/** Sigla corta de una tienda para chips: "Kenku Peru" → "KP", "Aurela" → "AUR". */
+export function storeInitials(name: string | null | undefined): string {
+  const words = (name ?? "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return "?";
+  if (words.length === 1) return words[0]!.slice(0, 3).toUpperCase();
+  return words
+    .map((w) => w[0]!.toUpperCase())
+    .join("")
+    .slice(0, 3);
 }
 
 /** A touched lead counts as a close only if its OWN disposition is `won` —
@@ -258,10 +270,17 @@ export function computeAdvisorConversionByDay(opts: {
 export interface ProductivityInput {
   calls: AdvisorCall[];
   /** Outcome of every touched lead: won? + net order revenue + acquisition
-   *  source bucket (+ the linked order's code/date, when known, for detail). */
+   *  source bucket + store (+ the linked order's code/date, when known). */
   leadOutcome: Map<
     string,
-    { won: boolean; net: number; source?: SourceBucket; orderName?: string | null; orderAt?: string | null }
+    {
+      won: boolean;
+      net: number;
+      source?: SourceBucket;
+      storeId?: string | null;
+      orderName?: string | null;
+      orderAt?: string | null;
+    }
   >;
   emailById: Map<string, string>;
 }
@@ -328,24 +347,34 @@ export function computeAdvisorStats(
     hoursByAgent.set(agent, e);
   }
 
-  type WonAgg = { cerrados: number; ingresos: number; detalle: WonOrderRef[]; porFuente: Record<SourceBucket, SourceCell> };
+  type WonAgg = {
+    cerrados: number;
+    ingresos: number;
+    detalle: WonOrderRef[];
+    porFuente: Record<SourceBucket, SourceCell>;
+    porTienda: Record<string, SourceCell>;
+  };
+  const emptyWon = (): WonAgg => ({ cerrados: 0, ingresos: 0, detalle: [], porFuente: emptyPorFuente(), porTienda: {} });
   const won = new Map<string, WonAgg>();
   for (const [leadId, lc] of lastCaller) {
     const o = leadOutcome.get(leadId);
     if (!o?.won) continue;
-    const w = won.get(lc.vendedora) ?? { cerrados: 0, ingresos: 0, detalle: [], porFuente: emptyPorFuente() };
+    const w = won.get(lc.vendedora) ?? emptyWon();
     w.cerrados += 1;
     w.ingresos += o.net;
     const bucket = o.source ?? "organic";
     w.porFuente[bucket].cerrados += 1;
     w.porFuente[bucket].ingresos += o.net;
+    const t = (w.porTienda[o.storeId ?? "otras"] ??= { cerrados: 0, ingresos: 0 });
+    t.cerrados += 1;
+    t.ingresos += o.net;
     w.detalle.push({ name: o.orderName ?? null, at: o.orderAt ?? null });
     won.set(lc.vendedora, w);
   }
 
   const rows: AdvisorStat[] = [];
   for (const [userId, a] of agg) {
-    const w = won.get(userId) ?? { cerrados: 0, ingresos: 0, detalle: [], porFuente: emptyPorFuente() };
+    const w = won.get(userId) ?? emptyWon();
     const h = hoursByAgent.get(userId);
     const leadsTrabajados = a.leads.size;
     // Oldest first; wins without an ingested order (no date yet) go last.
@@ -359,6 +388,7 @@ export function computeAdvisorStats(
       cerradosDetalle: w.detalle,
       ingresos: w.ingresos,
       porFuente: w.porFuente,
+      porTienda: w.porTienda,
       conversion: leadsTrabajados ? w.cerrados / leadsTrabajados : 0,
       horas: Math.round((h?.horas ?? 0) * 10) / 10,
       dias: h?.dias.size ?? 0,
@@ -411,6 +441,7 @@ async function buildAdvisorInputs(
   const leadIds = [...new Set(calls.map((c) => c.lead_id))];
   type TouchedLead = {
     id: string;
+    store_id: string;
     category: string | null;
     has_order: boolean;
     order_id: string | null;
@@ -420,14 +451,17 @@ async function buildAdvisorInputs(
   let sourceMissing = false;
   for (const part of chunk(leadIds, 300)) {
     if (!sourceMissing) {
-      const withSource = await sb.from("leads").select("id, category, has_order, order_id, source").in("id", part);
+      const withSource = await sb
+        .from("leads")
+        .select("id, store_id, category, has_order, order_id, source")
+        .in("id", part);
       if (!withSource.error) {
         leadsTouched.push(...((withSource.data as unknown as TouchedLead[]) ?? []));
         continue;
       }
       sourceMissing = true; // source column not present yet (migration 0008 pending) — degrade.
     }
-    const base = await sb.from("leads").select("id, category, has_order, order_id").in("id", part);
+    const base = await sb.from("leads").select("id, store_id, category, has_order, order_id").in("id", part);
     leadsTouched.push(...((base.data as unknown as TouchedLead[]) ?? []));
   }
 
@@ -472,6 +506,7 @@ async function buildAdvisorInputs(
       won: isWonLead(l.category),
       net: info?.net ?? 0,
       source: sourceKey(l.source),
+      storeId: l.store_id,
       orderName: info?.name ?? null,
       orderAt: info?.created_at ?? null,
     });
