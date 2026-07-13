@@ -120,34 +120,92 @@ function HeatStrip({
 }
 
 /** Sparkline SVG (sin librerías) del % de cierre diario de los últimos 7 días.
- *  Cada punto lleva tooltip nativo con el detalle contactos/pedidos del día. */
+ *  Escala 0–50% (donde vive el negocio: duplica la resolución visual; >50% se
+ *  recorta arriba pero el número muestra el % real), con el % de cada día
+ *  VISIBLE encima de su punto, guía punteada en el 10% (el piso esperado del
+ *  equipo) y tooltip propio INSTANTÁNEO (el `title` nativo tarda ~1s). */
 function Sparkline({ trend }: { trend: TrendCell[] }) {
-  const W = 96;
-  const H = 26;
-  const stepX = trend.length > 1 ? (W - 8) / (trend.length - 1) : 0;
+  const [hover, setHover] = useState<number | null>(null);
+  const W = 140;
+  const H = 36;
+  const TOP = 14; // y del 50%
+  const BOTTOM = H - 4; // y del 0%
+  const SCALE_MAX = 0.5;
+  const FLOOR = 0.1; // guía del 10%
+  const stepX = trend.length > 1 ? (W - 12) / (trend.length - 1) : 0;
   const pts = trend.map((t, i) => {
     const rate = t.contactos > 0 ? Math.min(1, t.pedidos / t.contactos) : t.pedidos > 0 ? 1 : 0;
     const idle = t.contactos === 0 && t.pedidos === 0;
-    return { x: 4 + i * stepX, y: 22 - 18 * rate, rate, idle, t };
+    const y = BOTTOM - (BOTTOM - TOP) * Math.min(1, rate / SCALE_MAX);
+    return { x: 6 + i * stepX, y, rate, idle, t };
   });
+  const floorY = BOTTOM - (BOTTOM - TOP) * (FLOOR / SCALE_MAX);
+  const h = hover != null ? pts[hover] : null;
   return (
-    <svg width={W} height={H} className="align-middle" role="img" aria-label="Tendencia de cierre 7 días">
-      <polyline
-        points={pts.map((p) => `${p.x},${p.y}`).join(" ")}
-        fill="none"
-        stroke={CHART.green}
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-      {pts.map((p) => (
-        <circle key={p.t.date} cx={p.x} cy={p.y} r="2.4" fill={p.idle ? CHART.slate : CHART.green} opacity={p.idle ? 0.45 : 1}>
-          <title>
-            {`${p.t.label} ${p.t.date.slice(8, 10)}/${p.t.date.slice(5, 7)} — ${p.t.pedidos}/${p.t.contactos} · ${Math.round(p.rate * 100)}%`}
-          </title>
-        </circle>
-      ))}
-    </svg>
+    <span className="relative inline-block align-middle">
+      <svg width={W} height={H} role="img" aria-label="Tendencia de cierre 7 días (escala 0–50%)">
+        {/* piso esperado: 10% */}
+        <line x1={4} x2={W - 4} y1={floorY} y2={floorY} stroke={CHART.slate} strokeDasharray="2 3" opacity={0.35} />
+        <polyline
+          points={pts.map((p) => `${p.x},${p.y}`).join(" ")}
+          fill="none"
+          stroke={CHART.green}
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        {/* % visible de cada día (los días sin actividad no llevan número) */}
+        {pts.map(
+          (p, i) =>
+            !p.idle && (
+              <text
+                key={`n${p.t.date}`}
+                x={p.x}
+                y={9}
+                textAnchor="middle"
+                fontSize="8.5"
+                fontWeight="600"
+                fill={hover === i ? CHART.green : CHART.slate}
+              >
+                {Math.round(p.rate * 100)}
+              </text>
+            ),
+        )}
+        {pts.map((p, i) => (
+          <circle
+            key={p.t.date}
+            cx={p.x}
+            cy={p.y}
+            r={hover === i ? 3.2 : 2.4}
+            fill={p.idle ? CHART.slate : CHART.green}
+            opacity={p.idle ? 0.45 : 1}
+          />
+        ))}
+        {/* zonas de hover generosas (columna completa por día) → tooltip al instante */}
+        {pts.map((p, i) => (
+          <rect
+            key={`h${p.t.date}`}
+            x={p.x - stepX / 2}
+            y={0}
+            width={stepX}
+            height={H}
+            fill="transparent"
+            onMouseEnter={() => setHover(i)}
+            onMouseLeave={() => setHover(null)}
+          />
+        ))}
+      </svg>
+      {h && (
+        <span
+          className="pointer-events-none absolute z-20 rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] whitespace-nowrap text-slate-600 shadow-sm"
+          style={{ left: Math.min(Math.max(h.x - 45, 0), W - 90), top: -22 }}
+        >
+          {h.t.label} {h.t.date.slice(8, 10)}/{h.t.date.slice(5, 7)} —{" "}
+          <span className="font-semibold text-emerald-700">{h.t.pedidos}</span>/{h.t.contactos} ·{" "}
+          {Math.round(h.rate * 100)}%
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -417,7 +475,10 @@ export function ProductivityTable({
           <th className="py-2 text-right font-medium">Leads</th>
           <th className="py-2 text-right font-medium">Llamadas</th>
           <th className="py-2 text-right font-medium">% cierre</th>
-          <th className="py-2 pl-3 text-left font-medium" title="% de cierre por día, últimos 7 días">
+          <th
+            className="py-2 pl-3 text-left font-medium"
+            title="% de cierre por día, últimos 7 días · escala 0–50% · guía punteada = piso del 10%"
+          >
             Tendencia 7d
           </th>
           <th
