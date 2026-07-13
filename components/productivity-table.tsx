@@ -5,6 +5,7 @@ import { cn } from "@/components/ui";
 import { CHART } from "@/components/palette";
 import { categoryOf, labelOf, LEAD_SEGMENTS, type LeadSegment } from "@/lib/leads";
 import { getOnlineAdvisorIds, loadAgentLeads } from "@/app/dashboard/productividad/actions";
+import { RITMO_MIN_HORA, heatStatuses, ritmoPorHora } from "@/lib/heat";
 // Type-only import: pulling runtime values from lib/productivity would drag the
 // whole server data layer (supabase clients) into this client bundle.
 import type { AdvisorBoardRow, AgentLeadRow, SourceBucket, TrendCell } from "@/lib/productivity";
@@ -78,8 +79,10 @@ const BRAND_RGB = (() => {
 })();
 
 /** Franja de actividad 08–20h: 13 celdas con el NÚMERO de leads distintos
- *  gestionados esa hora adentro; el tinte de fondo = intensidad vs el máximo
- *  GLOBAL del tablero (todas las filas comparten escala). Tooltip nativo. */
+ *  gestionados esa hora adentro, y SEMÁFORO de ritmo juzgado dentro de la
+ *  jornada real (heatStatuses): azul = a ritmo (≥RITMO_MIN_HORA, tinte por
+ *  intensidad vs el máximo global), ámbar = bajo ritmo, rojo suave = hora
+ *  muerta en pleno turno, gris = fuera de jornada (no se juzga). */
 function HeatStrip({
   heat,
   max,
@@ -91,14 +94,21 @@ function HeatStrip({
   mode: "day" | "avg";
   startHour: number;
 }) {
+  const statuses = heatStatuses(heat);
   return (
     <span className="inline-flex gap-[2px] align-middle">
       {heat.map((v, i) => {
         const hour = startHour + i;
+        const status = statuses[i]!;
+        const unit = mode === "avg" ? `${v} leads/día (prom.)` : `${v} ${v === 1 ? "lead gestionado" : "leads gestionados"}`;
         const title =
-          mode === "avg"
-            ? `${hour}h — ${v} leads/día (prom.)`
-            : `${hour}h — ${v} ${v === 1 ? "lead gestionado" : "leads gestionados"}`;
+          status === "muerta"
+            ? `${hour}h — hora muerta: 0 leads en plena jornada (mín. ${RITMO_MIN_HORA}/h)`
+            : status === "bajo"
+              ? `${hour}h — ${unit} · bajo ritmo (mín. ${RITMO_MIN_HORA}/h)`
+              : status === "ok"
+                ? `${hour}h — ${unit} · a ritmo`
+                : `${hour}h — fuera de su jornada`;
         const n = Math.round(v);
         const intensity = Math.min(1, v / max);
         return (
@@ -107,9 +117,16 @@ function HeatStrip({
             title={title}
             className={cn(
               "flex h-5 w-5 items-center justify-center rounded-[4px] text-[9px] leading-none font-semibold tabular-nums",
-              v === 0 ? "bg-slate-100" : intensity > 0.55 ? "text-white" : "text-slate-700",
+              status === "fuera" && "bg-slate-100",
+              status === "muerta" && "bg-rose-200 text-rose-900",
+              status === "bajo" && "bg-amber-200 text-amber-900",
+              status === "ok" && (intensity > 0.55 ? "text-white" : "text-slate-700"),
             )}
-            style={v > 0 ? { backgroundColor: `rgba(${BRAND_RGB}, ${(0.15 + 0.85 * intensity).toFixed(2)})` } : undefined}
+            style={
+              status === "ok"
+                ? { backgroundColor: `rgba(${BRAND_RGB}, ${(0.15 + 0.85 * intensity).toFixed(2)})` }
+                : undefined
+            }
           >
             {v > 0 && n > 0 ? n : ""}
           </span>
@@ -467,7 +484,7 @@ export function ProductivityTable({
           <th className="px-3 py-2 text-left font-medium">Asesora</th>
           <th
             className="py-2 text-left font-medium"
-            title="Leads distintos gestionados por hora (08–20h), todas las fuentes"
+            title={`Leads distintos gestionados por hora (08–20h), todas las fuentes · azul = a ritmo (≥${RITMO_MIN_HORA}/h) · ámbar = bajo ritmo · rojo = hora muerta en plena jornada · gris = fuera de jornada`}
           >
             Actividad 08–20h
           </th>
@@ -522,6 +539,24 @@ export function ProductivityTable({
                 <td className="py-2.5 text-right whitespace-nowrap">
                   <span className="text-slate-700">{r.horas}h</span>
                   {r.dias > 1 && <span className="ml-1 text-xs text-slate-400">· {r.dias}d</span>}
+                  {(() => {
+                    const ritmo = ritmoPorHora(r.leadsTrabajados, r.horas);
+                    if (ritmo == null) return null;
+                    const ok = ritmo >= RITMO_MIN_HORA;
+                    return (
+                      <span className="mt-1 flex justify-end">
+                        <span
+                          title={`Ritmo global: ${r.leadsTrabajados} leads ÷ ${r.horas}h activas · mínimo ${RITMO_MIN_HORA}/h`}
+                          className={cn(
+                            "rounded-md px-1.5 py-0.5 text-[10px] font-medium",
+                            ok ? "bg-brand-50 text-brand-700" : "bg-amber-100 text-amber-800",
+                          )}
+                        >
+                          {ritmo}/h
+                        </span>
+                      </span>
+                    );
+                  })()}
                 </td>
                 <td className="py-2.5 text-right text-slate-700">{r.leadsTrabajados}</td>
                 <td className="py-2.5 text-right text-slate-700">{r.llamadas}</td>
