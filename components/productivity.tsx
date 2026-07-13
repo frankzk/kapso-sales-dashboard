@@ -235,7 +235,7 @@ export function ProductivityBoard({
           Actividad = leads distintos gestionados por hora (sin filtro de fuente): <span className="text-brand-700">azul</span> a
           ritmo (≥6/h) · <span className="text-amber-700">ámbar</span> bajo ritmo · <span className="text-rose-600">rojo</span> hora
           muerta en plena jornada · gris fuera de jornada — la señal de eficiencia es su contraste con el % de
-          cierre · el pedido se acredita a la asesora del último toque · toca una fila para ver sus leads.
+          cierre · el pedido se acredita a la asesora del último toque · toca una asesora para ver sus leads.
         </p>
       </Card>
     </div>

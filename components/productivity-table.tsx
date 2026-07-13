@@ -227,13 +227,21 @@ function Sparkline({ trend }: { trend: TrendCell[] }) {
 }
 
 /** Chips compactos "2×📣 1×🛒" con los cierres por fuente de la fila. */
-function SourceMiniChips({ porFuente, currency }: { porFuente: AdvisorBoardRow["porFuente"]; currency: string }) {
+function SourceMiniChips({
+  porFuente,
+  currency,
+  align = "end",
+}: {
+  porFuente: AdvisorBoardRow["porFuente"];
+  currency: string;
+  align?: "start" | "end";
+}) {
   const entries = (Object.keys(SOURCE_CHIP) as SourceBucket[])
     .map((k) => ({ k, cell: porFuente[k] }))
     .filter((e) => e.cell.cerrados > 0);
   if (!entries.length) return <span className="text-slate-300">—</span>;
   return (
-    <span className="inline-flex flex-wrap justify-end gap-1">
+    <span className={cn("inline-flex flex-wrap gap-1", align === "end" ? "justify-end" : "justify-start")}>
       {entries.map(({ k, cell }) => {
         const c = SOURCE_CHIP[k];
         return (
@@ -256,17 +264,19 @@ function StoreMiniChips({
   porTienda,
   storeInfo,
   currency,
+  align = "end",
 }: {
   porTienda: AdvisorBoardRow["porTienda"];
   storeInfo: Record<string, { short: string; name: string }>;
   currency: string;
+  align?: "start" | "end";
 }) {
   const entries = Object.entries(porTienda)
     .filter(([, c]) => c.cerrados > 0)
     .sort((a, b) => (storeInfo[a[0]]?.short ?? "?").localeCompare(storeInfo[b[0]]?.short ?? "?"));
   if (!entries.length) return null;
   return (
-    <span className="mt-1 flex justify-end gap-1">
+    <span className={cn("mt-1 flex gap-1", align === "end" ? "justify-end" : "justify-start")}>
       {entries.map(([sid, c]) => (
         <span
           key={sid}
@@ -276,6 +286,25 @@ function StoreMiniChips({
           {storeInfo[sid]?.short ?? "?"} {c.cerrados}
         </span>
       ))}
+    </span>
+  );
+}
+
+/** Chip de ritmo global de la fila: leads trabajados ÷ horas activas — azul a
+ *  ritmo (≥RITMO_MIN_HORA), ámbar por debajo; sin horas inferidas no se juzga. */
+function RitmoChip({ leads, horas }: { leads: number; horas: number }) {
+  const ritmo = ritmoPorHora(leads, horas);
+  if (ritmo == null) return null;
+  const ok = ritmo >= RITMO_MIN_HORA;
+  return (
+    <span
+      title={`Ritmo global: ${leads} leads ÷ ${horas}h activas · mínimo ${RITMO_MIN_HORA}/h`}
+      className={cn(
+        "rounded-md px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap",
+        ok ? "bg-brand-50 text-brand-700" : "bg-amber-100 text-amber-800",
+      )}
+    >
+      {ritmo}/h
     </span>
   );
 }
@@ -345,7 +374,42 @@ function AgentLeads({ state, currency }: { state: LoadState; currency: string })
   return (
     <div className="pb-1">
       <SegmentSummary rows={state} />
-      <div className="overflow-x-auto px-1 py-1">
+      {/* móvil: lista compacta de leads (la tabla ancha obligaría a scroll lateral) */}
+      <div className="space-y-2 p-2 md:hidden">
+        {state.map((l) => {
+          const chip = SOURCE_CHIP[l.source];
+          return (
+            <div key={l.id} className="rounded-lg border border-slate-200 bg-white p-2.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="min-w-0 truncate text-sm font-medium text-slate-800">{l.name || "Sin nombre"}</span>
+                {l.won ? (
+                  <span className="shrink-0 text-sm font-semibold text-emerald-700">{money(l.net, currency)}</span>
+                ) : (
+                  <span className="shrink-0 text-slate-300">—</span>
+                )}
+              </div>
+              {l.phone && <p className="text-xs text-slate-400">{l.phone}</p>}
+              <p className={cn("mt-0.5 text-xs", statusClass(l.status))}>
+                {labelOf(l.status)}
+                <span className="text-slate-400">
+                  {" "}
+                  · {l.llamadas} llam. · {shortWhen(l.lastTouch)}
+                </span>
+              </p>
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                <span className={cn("rounded-md px-1.5 py-0.5 text-xs font-medium", chip.cls)}>
+                  {chip.glyph === "Org" ? chip.label : `${chip.glyph} ${chip.label}`}
+                </span>
+                <span className={cn("rounded-md px-1.5 py-0.5 text-xs font-medium", SEGMENT_CHIP[l.segment].cls)}>
+                  {segmentLabel(l.segment)}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {/* escritorio: tabla completa */}
+      <div className="hidden overflow-x-auto px-1 py-1 md:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-xs text-slate-500">
@@ -478,7 +542,79 @@ export function ProductivityTable({
   const idleNow = onlineIdle.filter((i) => onlineIds.has(i.userId));
 
   return (
-    <table className="w-full text-sm">
+    <>
+      {/* móvil: tarjetas apiladas (la tabla de 10 columnas obligaría a scroll lateral) */}
+      <div className="space-y-2.5 p-2.5 md:hidden">
+        {rows.map((r) => {
+          const open = expanded === r.userId;
+          const showDelta = hasPrev && !r.delta.isNew;
+          return (
+            <div key={r.userId} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <button type="button" onClick={() => toggle(r.userId)} className="w-full p-3 text-left">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="min-w-0 truncate">
+                    <span className="mr-1 text-slate-400" aria-hidden>
+                      {open ? "▾" : "▸"}
+                    </span>
+                    <span className="text-sm font-medium text-slate-800">{advisorName(r.email)}</span>
+                    <OnlineDot online={onlineIds.has(r.userId)} />
+                    {hasPrev && r.delta.isNew && (
+                      <span className="ml-2 rounded bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-600">
+                        nuevo
+                      </span>
+                    )}
+                  </span>
+                  <span className="shrink-0 text-sm font-semibold text-slate-800">
+                    {pct(r.conversion)}
+                    {showDelta && <DeltaInline value={r.delta.conversionPP} fmt={(n) => `${n}pp`} />}
+                  </span>
+                </div>
+                <div className="mt-2">
+                  <HeatStrip heat={r.heat} max={heatMax} mode={heatMode} startHour={heatStart} />
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <Sparkline trend={r.trend} />
+                  <RitmoChip leads={r.leadsTrabajados} horas={r.horas} />
+                </div>
+                <p className="mt-1.5 text-xs text-slate-500">
+                  <span className="font-medium text-slate-700">{r.leadsTrabajados}</span> leads ·{" "}
+                  <span className="font-medium text-slate-700">{r.llamadas}</span> llamadas · {r.horas}h
+                  {r.dias > 1 && ` · ${r.dias}d`}
+                </p>
+                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                  <span className="text-xs text-slate-700">
+                    Cerrados <span className="font-semibold">{r.cerrados}</span>
+                    {showDelta && <DeltaInline value={r.delta.cerrados} fmt={(n) => String(n)} />}
+                  </span>
+                  <span className="text-sm font-semibold text-emerald-700">
+                    {money(r.ingresos, currency)}
+                    {showDelta && <DeltaInline value={r.delta.ingresos} fmt={(n) => money(n, currency)} />}
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <StoreMiniChips porTienda={r.porTienda} storeInfo={storeInfo} currency={currency} align="start" />
+                  <SourceMiniChips porFuente={r.porFuente} currency={currency} align="start" />
+                </div>
+              </button>
+              {open && (
+                <div className="border-t border-slate-100 bg-slate-50/60">
+                  <AgentLeads state={cache[r.userId]} currency={currency} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {idleNow.map((i) => (
+          <div key={i.userId} className="rounded-xl border border-slate-200 bg-white p-3 text-slate-400">
+            <span className="text-sm font-medium">{advisorName(i.email)}</span>
+            <OnlineDot online />
+            <p className="mt-0.5 text-xs italic">En línea · sin actividad registrada en el período</p>
+          </div>
+        ))}
+      </div>
+
+      {/* escritorio: tabla densa */}
+      <table className="hidden w-full text-sm md:table">
       <thead className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_#e2e8f0]">
         <tr className="text-xs text-slate-500">
           <th className="px-3 py-2 text-left font-medium">Asesora</th>
@@ -539,24 +675,9 @@ export function ProductivityTable({
                 <td className="py-2.5 text-right whitespace-nowrap">
                   <span className="text-slate-700">{r.horas}h</span>
                   {r.dias > 1 && <span className="ml-1 text-xs text-slate-400">· {r.dias}d</span>}
-                  {(() => {
-                    const ritmo = ritmoPorHora(r.leadsTrabajados, r.horas);
-                    if (ritmo == null) return null;
-                    const ok = ritmo >= RITMO_MIN_HORA;
-                    return (
-                      <span className="mt-1 flex justify-end">
-                        <span
-                          title={`Ritmo global: ${r.leadsTrabajados} leads ÷ ${r.horas}h activas · mínimo ${RITMO_MIN_HORA}/h`}
-                          className={cn(
-                            "rounded-md px-1.5 py-0.5 text-[10px] font-medium",
-                            ok ? "bg-brand-50 text-brand-700" : "bg-amber-100 text-amber-800",
-                          )}
-                        >
-                          {ritmo}/h
-                        </span>
-                      </span>
-                    );
-                  })()}
+                  <span className="mt-1 flex justify-end">
+                    <RitmoChip leads={r.leadsTrabajados} horas={r.horas} />
+                  </span>
                 </td>
                 <td className="py-2.5 text-right text-slate-700">{r.leadsTrabajados}</td>
                 <td className="py-2.5 text-right text-slate-700">{r.llamadas}</td>
@@ -607,6 +728,7 @@ export function ProductivityTable({
           </tr>
         ))}
       </tbody>
-    </table>
+      </table>
+    </>
   );
 }
