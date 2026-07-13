@@ -11,6 +11,7 @@ import {
   localDayPreset,
   localPresetRange,
   localRangeBoundsIso,
+  storeInitials,
   type AdvisorCall,
   type AdvisorStat,
 } from "@/lib/productivity";
@@ -171,6 +172,7 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
       cerradosDetalle: [],
       ingresos: 0,
       porFuente: emptyPorFuente(),
+      porTienda: {},
       conversion: 0,
       horas: 0,
       dias: 0,
@@ -211,6 +213,37 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
     const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
     expect(rows.map((r) => r.userId)).toEqual(["u2", "u1"]); // u2 has more revenue first
     expect(rows).toHaveLength(2); // the empty-vendedora system row is skipped
+  });
+
+  it("desglosa los cierres por tienda (porTienda) según el store del lead ganado", () => {
+    const calls: AdvisorCall[] = [
+      { vendedora: "u1", lead_id: "L1", kind: "call", occurred_at: "2026-06-20T10:00:00Z" },
+      { vendedora: "u1", lead_id: "L2", kind: "call", occurred_at: "2026-06-20T11:00:00Z" },
+      { vendedora: "u1", lead_id: "L3", kind: "call", occurred_at: "2026-06-20T12:00:00Z" }, // no ganado
+    ];
+    const leadOutcome = new Map([
+      ["L1", { won: true, net: 100, storeId: "aurela" }],
+      ["L2", { won: true, net: 250, storeId: "kenku" }],
+      ["L3", { won: false, net: 0, storeId: "kenku" }],
+    ]);
+    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const u1 = rows.find((r) => r.userId === "u1")!;
+    expect(u1.porTienda).toEqual({
+      aurela: { cerrados: 1, ingresos: 100 },
+      kenku: { cerrados: 1, ingresos: 250 },
+    });
+  });
+});
+
+describe("storeInitials (sigla de tienda para los chips)", () => {
+  it("multi-palabra → iniciales; una palabra → 3 primeras letras", () => {
+    expect(storeInitials("Kenku Peru")).toBe("KP");
+    expect(storeInitials("Aurela")).toBe("AUR");
+    expect(storeInitials("Mi Tienda Genial")).toBe("MTG");
+  });
+  it("null-safe", () => {
+    expect(storeInitials(null)).toBe("?");
+    expect(storeInitials("  ")).toBe("?");
   });
 });
 
