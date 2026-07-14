@@ -4,6 +4,7 @@
 // reuses the pure productivity aggregation. The formatter renders Telegram HTML.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { chunk } from "@/lib/access";
 import { formatCurrency, salesAttribution, tzParts, type AttributionInputs, type AttributionSource } from "@/lib/metrics";
 import type { OrderRow } from "@/lib/types";
 import {
@@ -43,14 +44,9 @@ async function attributionInputsAdmin(
 
   const norm = (s: string | null | undefined): AttributionSource =>
     s === "meta_ad" || s === "fb_web" || s === "cod_cart" || s === "abandoned_browse" ? s : "organic";
-  // Chunk every .in(...) by 300 (parity with access.getAttributionInputs) so a
-  // high-volume store's day doesn't blow the PostgREST/proxy URL length limit.
-  const chunk = <T,>(arr: T[], size: number): T[][] => {
-    const out: T[][] = [];
-    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-    return out;
-  };
-
+  // Chunk every .in(...) by 300 (shared helper, parity with
+  // access.getAttributionInputs) so a high-volume store's day doesn't blow the
+  // PostgREST/proxy URL length limit.
   const leadIdToPhone = new Map<string, string>();
   for (const part of chunk(phones, 300)) {
     let leadsRes = await admin.from("leads").select("id,phone,source").eq("store_id", storeId).in("phone", part);
@@ -189,23 +185,38 @@ export async function buildStoreDailySummary(
   }));
 
   // 2) Per-advisor: human touches (vendedora) in the window → last-touch wins.
-  const { data: callsRaw } = await admin
-    .from("lead_calls")
-    .select("vendedora, lead_id, kind, occurred_at")
-    .eq("store_id", storeId)
-    .not("vendedora", "is", null)
-    .gte("occurred_at", startIso)
-    .lt("occurred_at", endIso);
-  const calls = (callsRaw as AdvisorCall[]) ?? [];
+  //    Paged: PostgREST responde ~1000 filas como máximo por llamada, y un día
+  //    movido supera eso — el recorte silencioso descontaba gestiones (y con
+  //    ellas cierres last-touch) del resumen.
+  const calls: AdvisorCall[] = [];
+  for (let from = 0; from < 20_000; from += 1000) {
+    const { data, error } = await admin
+      .from("lead_calls")
+      .select("vendedora, lead_id, kind, occurred_at")
+      .eq("store_id", storeId)
+      .not("vendedora", "is", null)
+      .gte("occurred_at", startIso)
+      .lt("occurred_at", endIso)
+      .order("occurred_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + 999);
+    if (error) break;
+    const batch = (data as AdvisorCall[]) ?? [];
+    calls.push(...batch);
+    if (batch.length < 1000) break;
+  }
   let advisors: AdvisorStat[] = [];
   if (calls.length) {
     const leadIds = [...new Set(calls.map((c) => c.lead_id))];
-    const { data: leadsRaw } = await admin.from("leads").select("id, has_order, order_id").in("id", leadIds);
-    const touched = (leadsRaw as { id: string; has_order: boolean; order_id: string | null }[]) ?? [];
+    const touched: { id: string; has_order: boolean; order_id: string | null }[] = [];
+    for (const part of chunk(leadIds, 300)) {
+      const { data: leadsRaw } = await admin.from("leads").select("id, has_order, order_id").in("id", part);
+      touched.push(...((leadsRaw as typeof touched | null) ?? []));
+    }
     const orderIds = touched.filter((l) => l.has_order && l.order_id).map((l) => l.order_id as string);
     const netByOrder = new Map<string, number>();
-    if (orderIds.length) {
-      const { data: oRaw } = await admin.from("orders").select("id, total_amount, total_refunded").in("id", orderIds);
+    for (const part of chunk(orderIds, 300)) {
+      const { data: oRaw } = await admin.from("orders").select("id, total_amount, total_refunded").in("id", part);
       for (const o of (oRaw as { id: string; total_amount: number | null; total_refunded: number | null }[]) ?? []) {
         netByOrder.set(o.id, (o.total_amount ?? 0) - (o.total_refunded ?? 0));
       }

@@ -5,7 +5,7 @@
 
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
-import { chunk, previousRange, type DateRange } from "@/lib/access";
+import { chunk, defaultRange, previousRange, type DateRange } from "@/lib/access";
 import { onlineVendedoraIds } from "@/lib/presence";
 import { leadSegment, type LeadSegment } from "@/lib/leads";
 
@@ -169,13 +169,12 @@ export function localDayPreset(offset: number, tz: string, nowIso = new Date().t
   return { from: d, to: d };
 }
 
-/** Last `days` local days ending today (inclusive), in the store's tz. */
+/** Last `days` local days ending today (inclusive), in the store's tz.
+ *  Delegates to `defaultRange` so the preset chips and a parameterless landing
+ *  (parseRange sin ?from/?to) siempre calculan el MISMO rango — si divergen, de
+ *  noche ningún chip queda activo. */
 export function localPresetRange(days: number, tz: string, nowIso = new Date().toISOString()): DateRange {
-  const nowMs = Date.parse(nowIso);
-  return {
-    from: tzParts(new Date(nowMs - (days - 1) * 86_400_000).toISOString(), tz).date,
-    to: tzParts(new Date(nowMs).toISOString(), tz).date,
-  };
+  return defaultRange(days, tz, nowIso);
 }
 
 // ── Actividad por hora (heatmap "¿está conectada trabajando?") ────────────────
