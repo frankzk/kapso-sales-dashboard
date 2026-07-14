@@ -3320,6 +3320,13 @@ function CallForm({ leadId, onRegistered }: { leadId: string; onRegistered: () =
           ))}
         </select>
         <textarea name="note" rows={2} placeholder="Nota rápida…" className={inputCls} />
+        {(status === "casi_cierra" || status === "volver_a_llamar") && (
+          <p className="text-[11px] leading-snug text-slate-400">
+            Sin fecha se agenda solo: <span className="font-medium text-slate-500">hoy 18:00</span> (si aún no son las
+            16h) o <span className="font-medium text-slate-500">mañana 10:00</span> — lo verás en la vista
+            Seguimientos a esa hora.
+          </p>
+        )}
         <div className="flex gap-2">
           <input
             name="next_followup_at"

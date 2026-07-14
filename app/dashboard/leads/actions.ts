@@ -4,7 +4,15 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { getCustomerHistory, getLeadWithCalls, type CustomerHistory } from "@/lib/leads-access";
-import { CLAIM_TTL_MINUTES, canDispositionLead, categoryOf, isValidStatus, labelOf } from "@/lib/leads";
+import {
+  AUTO_FOLLOWUP_STATUSES,
+  CLAIM_TTL_MINUTES,
+  canDispositionLead,
+  categoryOf,
+  defaultFollowupAt,
+  isValidStatus,
+  labelOf,
+} from "@/lib/leads";
 import { OFFER_TTL_MS, planYapeOffers, type RoutingLead } from "@/lib/yape-routing";
 import { onlineVendedorasForStore } from "@/lib/presence";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -465,7 +473,8 @@ export async function registerCall(
   const status = String(formData.get("status") ?? "").trim();
   const note = String(formData.get("note") ?? "").trim() || null;
   const followupRaw = String(formData.get("next_followup_at") ?? "").trim();
-  const nextFollowup = followupRaw ? new Date(followupRaw).toISOString() : null;
+  let nextFollowup = followupRaw ? new Date(followupRaw).toISOString() : null;
+  let autoFollowupLabel: string | null = null;
 
   if (status && !isValidStatus(status)) return { error: "Estado inválido." };
 
@@ -478,10 +487,15 @@ export async function registerCall(
   if (status) {
     const { data: current } = await admin
       .from("leads")
-      .select("category, has_order, order_id")
+      .select("category, has_order, order_id, next_followup_at")
       .eq("id", leadId)
       .maybeSingle();
-    const lead = current as { category: string; has_order: boolean; order_id: string | null } | null;
+    const lead = current as {
+      category: string;
+      has_order: boolean;
+      order_id: string | null;
+      next_followup_at: string | null;
+    } | null;
     if (lead?.has_order && lead.order_id) {
       const { data: order } = await admin
         .from("orders")
@@ -495,6 +509,27 @@ export async function registerCall(
           error: `Este lead ya tiene un pedido activo${o?.name ? ` (${o.name})` : ""}. Si el cliente canceló, cancela el pedido en Shopify primero.`,
         };
       }
+    }
+
+    // "Casi cierra" / "Volver a llamar" sin fecha explícita: agenda automática
+    // (hoy 18:00 si la llamada fue antes de las 16h locales; si no, mañana
+    // 10:00) para que el lead reaparezca solo en la vista Seguimientos, suba
+    // con atención al vencer y no lo toque el auto-archivado. Una fecha ya
+    // agendada a futuro se respeta; la fecha del formulario siempre gana.
+    const hasFutureFollowup = !!lead?.next_followup_at && lead.next_followup_at > new Date().toISOString();
+    if (!nextFollowup && (AUTO_FOLLOWUP_STATUSES as readonly string[]).includes(status) && !hasFutureFollowup) {
+      const { data: st } = await admin.from("stores").select("timezone").eq("id", ctx.storeId).maybeSingle();
+      const tz = (st as { timezone: string | null } | null)?.timezone ?? "America/Lima";
+      nextFollowup = defaultFollowupAt(new Date().toISOString(), tz);
+      autoFollowupLabel = new Intl.DateTimeFormat("es-PE", {
+        weekday: "short",
+        day: "numeric",
+        month: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: tz,
+      }).format(new Date(nextFollowup));
     }
   }
 
@@ -519,7 +554,9 @@ export async function registerCall(
 
   revalidatePath("/dashboard/leads");
   return {
-    notice: status ? `Llamada registrada · ${labelOf(status)}` : "Llamada registrada.",
+    notice: status
+      ? `Llamada registrada · ${labelOf(status)}${autoFollowupLabel ? ` · seguimiento ${autoFollowupLabel}` : ""}`
+      : "Llamada registrada.",
   };
 }
 
