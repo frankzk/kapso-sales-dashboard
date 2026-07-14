@@ -15,6 +15,7 @@ import {
   mapGraphqlDraftOrder,
   mapRestDraftOrder,
   isCodFormDraft,
+  isRecoveredDraft,
   buildDraftOrdersSearchQuery,
   buildKapsoOrdersSearchQuery,
   buildLiveOrderSearchQuery,
@@ -822,5 +823,42 @@ describe("resolvePeruProvinceCode (province → ISO code so Shopify keeps it)", 
     expect(resolvePeruProvinceCode(null)).toBeNull();
     expect(resolvePeruProvinceCode("")).toBeNull();
     expect(resolvePeruProvinceCode("Provincia Inventada")).toBeNull();
+  });
+});
+
+describe("isRecoveredDraft (un draft completado solo es recuperación si estuvo abandonado)", () => {
+  it("compra COD normal (EasySell completa el draft al instante) → NO es recuperación", () => {
+    expect(
+      isRecoveredDraft({ createdAt: "2026-07-14T10:00:00Z", completedAt: "2026-07-14T10:02:00Z" }),
+    ).toBe(false);
+    // 29 min tampoco alcanza (el umbral es 30)
+    expect(
+      isRecoveredDraft({ createdAt: "2026-07-14T10:00:00Z", completedAt: "2026-07-14T10:29:00Z" }),
+    ).toBe(false);
+  });
+
+  it("≥30 min abandonado antes de completarse → SÍ es recuperación", () => {
+    expect(
+      isRecoveredDraft({ createdAt: "2026-07-14T10:00:00Z", completedAt: "2026-07-14T10:30:00Z" }),
+    ).toBe(true);
+    expect(
+      isRecoveredDraft({ createdAt: "2026-07-14T10:00:00Z", completedAt: "2026-07-15T09:00:00Z" }),
+    ).toBe(true);
+  });
+
+  it("un tag de abandono prueba la recuperación aunque haya completado al instante", () => {
+    expect(
+      isRecoveredDraft({
+        createdAt: "2026-07-14T10:00:00Z",
+        completedAt: "2026-07-14T10:01:00Z",
+        orderTags: ["easysell-abandoned-checkout", "cod"],
+      }),
+    ).toBe(true);
+  });
+
+  it("sin timestamps no se puede probar el abandono → false (conservador: no inflar ingresos)", () => {
+    expect(isRecoveredDraft({ createdAt: null, completedAt: "2026-07-14T10:30:00Z" })).toBe(false);
+    expect(isRecoveredDraft({ createdAt: "2026-07-14T10:00:00Z", completedAt: null })).toBe(false);
+    expect(isRecoveredDraft({ createdAt: null, completedAt: null, orderTags: ["cod"] })).toBe(false);
   });
 });

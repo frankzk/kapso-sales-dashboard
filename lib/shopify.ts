@@ -745,6 +745,32 @@ export const DRAFT_OPEN_WINDOW_DAYS = 2;
  *  OPEN/INVOICE_SENT drafts only; a completed cart is surfaced immediately. */
 export const DRAFT_GRACE_MINUTES = 5;
 
+/** Minutes a COD-form draft must sit unfinished before its completion counts as
+ *  a RECOVERY. In Kenku, EasySell creates a draft for EVERY normal COD order and
+ *  completes it instantly — never an abandoned cart — and capturing those as
+ *  "recuperado" inflated the kapso revenue (17 of 39 tagged orders were plain
+ *  purchases). Releasit doesn't tag abandonment, so elapsed time decides. */
+export const RECOVERY_MIN_ABANDONED_MINUTES = 30;
+
+// Marcadores de abandono en tags (cubre "easysell-abandoned-checkout" y afines).
+const ABANDONED_TAG_RE = /abandon/i;
+
+/** A COMPLETED draft is a RECOVERY only if it was actually abandoned first:
+ *  ≥ RECOVERY_MIN_ABANDONED_MINUTES elapsed between creation and completion, or
+ *  the order/draft carries an abandonment tag. An instant checkout (normal COD
+ *  purchase) → false. Missing timestamps → false (can't prove abandonment; the
+ *  conservative call keeps fake revenue out of the rollups). Pure. */
+export function isRecoveredDraft(opts: {
+  createdAt: string | null;
+  completedAt: string | null;
+  orderTags?: string[] | null;
+}): boolean {
+  if ((opts.orderTags ?? []).some((t) => ABANDONED_TAG_RE.test(t))) return true;
+  if (!opts.createdAt || !opts.completedAt) return false;
+  const ms = Date.parse(opts.completedAt) - Date.parse(opts.createdAt);
+  return Number.isFinite(ms) && ms >= RECOVERY_MIN_ABANDONED_MINUTES * 60_000;
+}
+
 export function buildDraftOrdersQuery(withPhone: boolean): string {
   // Draft/shipping phone is "protected customer data" — requested only on the
   // first attempt; fetchDraftOrdersPage retries without it if access is denied.
