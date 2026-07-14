@@ -5,6 +5,7 @@
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { decryptOrNull } from "@/lib/crypto";
 import { fetchMetaSpend, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
+import { tzParts } from "@/lib/metrics";
 import type {
   ConversationRow,
   DailyRollupRow,
@@ -25,11 +26,19 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-export function defaultRange(days = 30): DateRange {
-  const to = new Date();
-  const from = new Date();
-  from.setUTCDate(from.getUTCDate() - (days - 1));
-  return { from: isoDate(from), to: isoDate(to) };
+/**
+ * Default range = last `days` calendar days ending "today" in the STORE-LOCAL
+ * timezone (Lima for every current store). The old UTC version flipped `to` to
+ * tomorrow at 19:00 Lima, so every dashboard that landed without ?from/?to ran
+ * one day ahead at night (and no preset chip matched). `nowIso` is injectable
+ * for tests.
+ */
+export function defaultRange(days = 30, tz = "America/Lima", nowIso = new Date().toISOString()): DateRange {
+  const nowMs = Date.parse(nowIso);
+  return {
+    from: tzParts(new Date(nowMs - (days - 1) * 86_400_000).toISOString(), tz).date,
+    to: tzParts(new Date(nowMs).toISOString(), tz).date,
+  };
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;

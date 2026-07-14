@@ -9,6 +9,7 @@
 // Walking those flows back from the anchor yields REAL history from day one.
 // RLS-scoped.
 
+import { chunk } from "@/lib/access";
 import { createServerSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
 import { getAdvisorProductivity } from "@/lib/productivity";
@@ -135,6 +136,74 @@ async function computeTeamConversion(
   return computeTeamConversionByDay({ calls, wonLeadIds, days, tz });
 }
 
+const PAGE_SIZE = 1000;
+const PAGE_CAP = 20_000; // absolute safety bound per fetch (≈20 páginas)
+
+type Sb = Awaited<ReturnType<typeof createServerSupabase>>;
+
+/**
+ * Drena una consulta PostgREST por páginas de `.range()`. Una sola llamada
+ * devuelve como máximo ~1000 filas (max-rows) AUNQUE se pida `.limit(5000)`,
+ * y el recorte es silencioso. El builder debe llevar un orden estable (id o
+ * occurred_at+id) para que las páginas no se solapen ni salten filas.
+ */
+async function pageAll<T>(
+  build: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>,
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let from = 0; from < PAGE_CAP; from += PAGE_SIZE) {
+    const { data, error } = await build(from, from + PAGE_SIZE - 1);
+    if (error) break;
+    const batch = (data as T[] | null) ?? [];
+    out.push(...batch);
+    if (batch.length < PAGE_SIZE) break;
+  }
+  return out;
+}
+
+/**
+ * Salidas de "Sin llamar" DENTRO de la ventana: la primera fila in-window de
+ * lead_calls que movió el status del lead fuera de `nuevo`, descartando los
+ * leads que ya tenían una gestión así ANTES de la ventana (su salida real fue
+ * entonces; un re-toque posterior no recuenta). Equivale al viejo "primera
+ * gestión de todo el historial" pero acotado para siempre: se pagina solo la
+ * ventana y el pasado se consulta puntualmente (chunked) para los leads
+ * tocados. Devuelve el occurred_at de cada salida.
+ */
+async function fetchQueueLeavers(sb: Sb, storeId: string, windowStartIso: string): Promise<string[]> {
+  const rows = await pageAll<{ lead_id: string; occurred_at: string | null }>((from, to) =>
+    sb
+      .from("lead_calls")
+      .select("lead_id, occurred_at")
+      .eq("store_id", storeId)
+      .not("new_status", "is", null)
+      .neq("new_status", "nuevo")
+      .gte("occurred_at", windowStartIso)
+      .order("occurred_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
+  const firstInWindow = new Map<string, string>(); // lead → su primera gestión in-window
+  for (const r of rows) {
+    if (r.occurred_at && !firstInWindow.has(r.lead_id)) firstInWindow.set(r.lead_id, r.occurred_at);
+  }
+  // Un lead con gestión previa a la ventana ya había salido de la cola: fuera.
+  // Chunk corto (150) para que ni un lead muy re-tocado acerque la respuesta
+  // del lookup al tope de filas.
+  for (const part of chunk([...firstInWindow.keys()], 150)) {
+    const { data } = await sb
+      .from("lead_calls")
+      .select("lead_id")
+      .eq("store_id", storeId)
+      .not("new_status", "is", null)
+      .neq("new_status", "nuevo")
+      .lt("occurred_at", windowStartIso)
+      .in("lead_id", part);
+    for (const r of (data as { lead_id: string }[]) ?? []) firstInWindow.delete(r.lead_id);
+  }
+  return [...firstInWindow.values()];
+}
+
 /** ISO → "dd/mm/aa" in the store's timezone (null-safe), for the pedidos tooltip. */
 export function shortLocalDate(iso: string | null | undefined, tz: string): string | null {
   if (!iso) return null;
@@ -249,45 +318,46 @@ export async function getLeadsInsights(
 
   // Entrants (entraron a "Sin llamar" = se crearon, status nuevo) + leavers
   // (dejaron "Sin llamar" = primera gestión) + el universo actual sin llamar.
-  const [entrantsRes, leaversRes, sinLlamarRes] = await Promise.all([
+  // Los tres se DRENAN por páginas (antes iban con .limit(5000/20000) en una
+  // sola llamada y PostgREST recorta a ~1000 filas en silencio). El caso grave
+  // era leavers: pedía TODO el historial ascendente, así que con >1000
+  // gestiones históricas solo llegaban las más viejas y los días recientes
+  // quedaban con cierran=0 — el saldo del trend se inflaba hacia atrás y el
+  // burndown de hoy no bajaba nunca.
+  const [entrantRows, leaverAts, sinLlamarRows] = await Promise.all([
     // "Entró" = first_seen_at (fecha REAL de primer contacto), no created_at — que
     // es cuándo se insertó la fila y por un backfill masivo puede caer todo el
     // mismo día (un pico falso). Caemos a created_at solo si first_seen es null.
-    sb
-      .from("leads")
-      .select("created_at, first_seen_at")
-      .eq("store_id", storeId)
-      .or(`first_seen_at.gte.${windowStartIso},and(first_seen_at.is.null,created_at.gte.${windowStartIso})`)
-      .limit(5000),
-    // "Salió de Sin llamar" = la PRIMERA gestión del lead: la fila de lead_calls
-    // más temprana que cambió su status a algo distinto de `nuevo` (una llamada
-    // con disposición o un pedido directo). Pedimos asc → la primera fila por lead
-    // es su salida real; re-toques posteriores (seguimiento) no recuentan. Más
-    // preciso que last_interaction_at. El tope cubre todo el historial de estas
-    // tiendas con holgura.
-    sb
-      .from("lead_calls")
-      .select("lead_id, occurred_at")
-      .eq("store_id", storeId)
-      .not("new_status", "is", null)
-      .neq("new_status", "nuevo")
-      .order("occurred_at", { ascending: true })
-      .limit(20000),
+    pageAll<{ created_at: string | null; first_seen_at: string | null }>((from, to) =>
+      sb
+        .from("leads")
+        .select("created_at, first_seen_at")
+        .eq("store_id", storeId)
+        .or(`first_seen_at.gte.${windowStartIso},and(first_seen_at.is.null,created_at.gte.${windowStartIso})`)
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
+    // "Salió de Sin llamar" = primera gestión del lead dentro de la ventana,
+    // excluyendo a los que ya habían salido antes (ver fetchQueueLeavers).
+    fetchQueueLeavers(sb, storeId, windowStartIso),
     // "Sin llamar" = en cola (open/hot) y status `nuevo` (nunca lo gestionó un
     // asesor). Los agrupamos por fecha de última interacción para ver qué día
     // se está quedando gente sin llamar.
-    sb
-      .from("leads")
-      .select("last_interaction_at, first_seen_at")
-      .eq("store_id", storeId)
-      .in("category", ["open", "hot"])
-      .eq("status", "nuevo")
-      .limit(5000),
+    pageAll<{ last_interaction_at: string | null; first_seen_at: string | null }>((from, to) =>
+      sb
+        .from("leads")
+        .select("last_interaction_at, first_seen_at")
+        .eq("store_id", storeId)
+        .in("category", ["open", "hot"])
+        .eq("status", "nuevo")
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
   ]);
 
   const entranByDate: Record<string, number> = {};
   const entrantHours: number[] = []; // today only
-  for (const r of (entrantsRes.data as { created_at: string | null; first_seen_at: string | null }[]) ?? []) {
+  for (const r of entrantRows) {
     const arrived = r.first_seen_at ?? r.created_at;
     if (!arrived) continue;
     const p = tzParts(arrived, tz);
@@ -296,12 +366,9 @@ export async function getLeadsInsights(
   }
   const cierranByDate: Record<string, number> = {};
   const leaverHours: number[] = [];
-  const seenLeaver = new Set<string>(); // primera salida por lead (asc → la más temprana)
-  for (const r of (leaversRes.data as { lead_id: string; occurred_at: string | null }[]) ?? []) {
-    if (!r.occurred_at || seenLeaver.has(r.lead_id)) continue;
-    seenLeaver.add(r.lead_id);
-    const p = tzParts(r.occurred_at, tz);
-    cierranByDate[p.date] = (cierranByDate[p.date] ?? 0) + 1; // fuera de la ventana: los consumidores no lo leen
+  for (const at of leaverAts) {
+    const p = tzParts(at, tz);
+    cierranByDate[p.date] = (cierranByDate[p.date] ?? 0) + 1;
     if (p.date === todayDate) leaverHours.push(p.hour);
   }
 
@@ -310,8 +377,7 @@ export async function getLeadsInsights(
   const firstDay = days[0]!.date;
   const sinLlamarByDate: Record<string, number> = {};
   let sinLlamarOlder = 0;
-  for (const r of (sinLlamarRes.data as { last_interaction_at: string | null; first_seen_at: string | null }[]) ??
-    []) {
+  for (const r of sinLlamarRows) {
     const ts = r.last_interaction_at ?? r.first_seen_at;
     if (!ts) continue;
     const d = tzParts(ts, tz).date;
