@@ -20,7 +20,13 @@ import { analyzeYapeVoucher } from "@/lib/vision";
 import type { StoreCreds } from "@/lib/ingest";
 import { deriveAutoState, nextLeadState } from "@/lib/leads";
 import { normalizePhone } from "@/lib/phone";
-import { DRAFT_GRACE_MINUTES, extractNumericId, fetchOrderById, isCodFormDraft } from "@/lib/shopify";
+import {
+  DRAFT_GRACE_MINUTES,
+  extractNumericId,
+  fetchOrderById,
+  isCodFormDraft,
+  isRecoveredDraft,
+} from "@/lib/shopify";
 import {
   BROWSE_SOURCE,
   COD_CART_SOURCE,
@@ -1177,19 +1183,24 @@ export async function processWinback(
   return { status: "ok" };
 }
 
-/** COMPLETED draft → recovered → won. The resulting order isn't tag:kapso, so the
- *  order sync (tag:kapso only) never imports it. When given Shopify creds we fetch
- *  that order by gid and capture it in `orders` (marked so the kapso-only rollup
- *  counts its revenue), then link the lead. Returns the recovered order's
- *  created_at (for the daily-rollup recompute) or null. Mirrors linkOrderToLead. */
+/** COMPLETED draft → won lead, y SOLO si fue una recuperación real (el draft
+ *  estuvo abandonado ≥30 min o la orden trae tag de abandono — isRecoveredDraft)
+ *  se captura la orden en `orders` con `kapso`+`cod_recuperado` para que el
+ *  rollup kapso-only cuente su ingreso. Un draft que se completó al instante es
+ *  una compra COD normal (EasySell crea y completa un draft por CADA pedido):
+ *  NO se etiqueta, NO entra a orders/rollups y NO crea un lead nuevo — solo
+ *  marca won un lead que YA existía (el cliente sí compró). Returns the
+ *  recovered order's created_at (for the daily-rollup recompute) or null. */
 async function linkCompletedDraftToLead(
   admin: SupabaseClient,
   storeId: string,
   d: DraftOrderRow,
+  leadExists: boolean,
   shopify?: { domain: string; token: string },
 ): Promise<string | null> {
   let orderId: string | null = null;
   let recoveredAt: string | null = null;
+  let recovered = isRecoveredDraft({ createdAt: d.created_at, completedAt: d.completed_at });
   if (d.order_gid) {
     const numId = extractNumericId(d.order_gid);
     const { data } = await admin
@@ -1200,30 +1211,40 @@ async function linkCompletedDraftToLead(
       .maybeSingle();
     orderId = (data as { id: string } | null)?.id ?? null;
     // Not in our `orders` (the recovered order isn't tag:kapso) → fetch it from
-    // Shopify and capture it so its revenue is attributed. Best-effort: a failure
-    // here still marks the lead won below.
+    // Shopify and, ONLY when it's a genuine recovery, capture it so its revenue
+    // is attributed. Best-effort: a fetch failure still links the lead below.
     if (!orderId && shopify) {
       try {
         const order = await fetchOrderById({ ...shopify, storeId, orderGid: d.order_gid });
         if (order?.shopify_order_id) {
-          // `kapso` so the rollup (filters lower(t)='kapso') counts it; `cod_recuperado`
-          // keeps recovered sales distinguishable from bot orders.
-          order.tags = [...new Set([...order.tags, "kapso", "cod_recuperado"])];
-          await admin.from("orders").upsert([order], { onConflict: "store_id,shopify_order_id" });
-          recoveredAt = order.created_at;
-          const { data: ins } = await admin
-            .from("orders")
-            .select("id")
-            .eq("store_id", storeId)
-            .eq("shopify_order_id", order.shopify_order_id)
-            .maybeSingle();
-          orderId = (ins as { id: string } | null)?.id ?? null;
+          recovered = isRecoveredDraft({
+            createdAt: d.created_at,
+            completedAt: d.completed_at,
+            orderTags: order.tags, // el tag de abandono (p.ej. easysell-abandoned-checkout) también prueba la recuperación
+          });
+          if (recovered) {
+            // `kapso` so the rollup (filters lower(t)='kapso') counts it; `cod_recuperado`
+            // keeps recovered sales distinguishable from bot orders.
+            order.tags = [...new Set([...order.tags, "kapso", "cod_recuperado"])];
+            await admin.from("orders").upsert([order], { onConflict: "store_id,shopify_order_id" });
+            recoveredAt = order.created_at;
+            const { data: ins } = await admin
+              .from("orders")
+              .select("id")
+              .eq("store_id", storeId)
+              .eq("shopify_order_id", order.shopify_order_id)
+              .maybeSingle();
+            orderId = (ins as { id: string } | null)?.id ?? null;
+          }
         }
       } catch {
         /* best-effort */
       }
     }
   }
+  // Una compra normal instantánea sin lead previo no genera lead: no hubo gestión
+  // ni recuperación que registrar (crearlo solo ensuciaba la cola y los ganados).
+  if (!orderId && !leadExists && !recovered) return null;
   await upsertLeadResilient(admin, {
     store_id: storeId,
     phone: d.customer_phone,
@@ -1297,7 +1318,8 @@ export async function linkDraftOrdersToLeads(
   const graceMs = DRAFT_GRACE_MINUTES * 60_000;
   for (const d of eligible) {
     if (d.status === "completed") {
-      const at = await linkCompletedDraftToLead(admin, storeId, d, shopify); // a finished sale → won now
+      const leadExists = existingCategory.has(d.customer_phone as string);
+      const at = await linkCompletedDraftToLead(admin, storeId, d, leadExists, shopify); // a finished sale → won now
       if (at) recoveredDates.push(at);
       continue;
     }
