@@ -46,6 +46,7 @@ import {
   linkOrdersToLeads,
   processBrowseAbandonment,
   processWinback,
+  sendSeguimientoDrip,
   syncStoreLeads,
   type LeadEnrichStats,
 } from "@/lib/leads-ingest";
@@ -77,6 +78,9 @@ export interface StoreCreds {
   winback_template_enabled: boolean;
   winback_template_name: string | null;
   winback_template_language: string | null;
+  drip_template_enabled: boolean;
+  drip_template_name: string | null;
+  drip_template_language: string | null;
   telegram_bot_token: string | null;
   telegram_chat_id: string | null;
   meta_access_token: string | null;
@@ -115,6 +119,10 @@ export async function getStoreCreds(
     winback_template_enabled: data.winback_template_enabled ?? false,
     winback_template_name: data.winback_template_name ?? null,
     winback_template_language: data.winback_template_language ?? null,
+    // Pre-0035 las columnas no existen (select * → undefined) ⇒ drip apagado.
+    drip_template_enabled: data.drip_template_enabled ?? false,
+    drip_template_name: data.drip_template_name ?? null,
+    drip_template_language: data.drip_template_language ?? null,
     telegram_bot_token: decryptOrNull(data.telegram_bot_token_enc),
     telegram_chat_id: data.telegram_chat_id ?? null,
     meta_access_token: decryptOrNull(data.meta_access_token_enc),
@@ -642,6 +650,7 @@ export interface SyncReport {
   whatsappNumbers: number;
   archived: number;
   metaAdsResolved: number; // Meta ad_ids whose real names we resolved this run
+  dripSent: number; // plantillas de seguimiento enviadas esta corrida
   errors: string[];
 }
 
@@ -713,6 +722,7 @@ export async function runStoreSync(
     whatsappNumbers: 0,
     archived: 0,
     metaAdsResolved: 0,
+    dripSent: 0,
     errors: [],
   };
   const creds = await getStoreCreds(storeId, admin);
@@ -865,6 +875,21 @@ export async function runStoreSync(
     await flagOverdueFollowups(admin, storeId);
   } catch (e: any) {
     report.errors.push(`followups: ${e.message}`);
+  }
+
+  // 2c.5) Drip de seguimiento: plantilla WhatsApp a leads nr/buzón/cuelga sin
+  //       respuesta (máx 2 toques, horario laboral). Va DESPUÉS de 2c a
+  //       propósito: un seguimiento manual vencido acaba de ganar
+  //       needs_attention=true y el drip lo respeta (la asesora manda sobre el
+  //       bot). Gateado por Ajustes; best-effort.
+  if (creds.drip_template_enabled) {
+    try {
+      const drip = await sendSeguimientoDrip(admin, storeId, creds);
+      report.dripSent = drip.sent;
+      if (drip.failed) report.errors.push(`drip: ${drip.failed} envíos fallidos`);
+    } catch (e: any) {
+      report.errors.push(`drip: ${e.message}`);
+    }
   }
 
   // 2d) Auto-archivar leads vencidos viejos (sin interacción > STALE_LEAD_DAYS)

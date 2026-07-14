@@ -22,6 +22,10 @@ export interface StoreSettingsInput {
   winback_template_enabled?: string | boolean;
   winback_template_name?: string;
   winback_template_language?: string;
+  // Drip de seguimiento (no contesta) WhatsApp template (plain, non-secret).
+  drip_template_enabled?: string | boolean;
+  drip_template_name?: string;
+  drip_template_language?: string;
   // Telegram daily summary: chat id is plain, token is a secret.
   telegram_chat_id?: string;
   // Secrets — only applied when non-empty.
@@ -78,6 +82,16 @@ export function buildStoreUpdate(
   if (wbName !== null) patch.winback_template_name = wbName;
   const wbLang = clean(typeof input.winback_template_language === "string" ? input.winback_template_language : undefined);
   if (wbLang !== null) patch.winback_template_language = wbLang;
+
+  // Drip de seguimiento template config (plain) — same conventions again.
+  if (input.drip_template_enabled !== undefined) {
+    patch.drip_template_enabled =
+      input.drip_template_enabled === true || input.drip_template_enabled === "true";
+  }
+  const drName = clean(typeof input.drip_template_name === "string" ? input.drip_template_name : undefined);
+  if (drName !== null) patch.drip_template_name = drName;
+  const drLang = clean(typeof input.drip_template_language === "string" ? input.drip_template_language : undefined);
+  if (drLang !== null) patch.drip_template_language = drLang;
   const tgChat = clean(input.telegram_chat_id);
   if (tgChat !== null) patch.telegram_chat_id = tgChat;
 

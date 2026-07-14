@@ -19,6 +19,7 @@ import { env } from "@/lib/env";
 import { analyzeYapeVoucher } from "@/lib/vision";
 import type { StoreCreds } from "@/lib/ingest";
 import { deriveAutoState, nextLeadState } from "@/lib/leads";
+import { tzParts } from "@/lib/metrics";
 import { normalizePhone } from "@/lib/phone";
 import {
   DRAFT_GRACE_MINUTES,
@@ -1181,6 +1182,169 @@ export async function processWinback(
     .match({ store_id: storeId, webhook_id: webhookId });
 
   return { status: "ok" };
+}
+
+// ───────────────────── Drip de seguimiento (no contesta) ─────────────────────
+// Plantillas de WhatsApp a leads que NO contestan (no_responde/buzon/cuelga) —
+// y solo a esos: "contactados" ya tiene conversación humana, "sin llamar" aún
+// no fue tocado (sería mentir con "no logramos ubicarte") y "sin stock" no
+// tiene novedad que ofrecer. Corre dentro del cron de sync, gateado por tienda.
+
+/** Estados que reciben drip: la asesora llamó y nadie contestó. */
+export const DRIP_STATUSES = ["no_responde", "buzon", "cuelga"] as const;
+/** Máximo de toques automáticos por lead (después, que decida la asesora). */
+export const DRIP_MAX_TOUCHES = 2;
+/** Horas de silencio tras la última actividad antes del primer toque. */
+export const DRIP_FIRST_TOUCH_HOURS = 6;
+/** Horas entre el toque 1 y el toque 2. */
+export const DRIP_SECOND_TOUCH_HOURS = 24;
+/** Ventana horaria local (tienda) en la que se permite enviar: [inicio, fin). */
+export const DRIP_HOUR_START = 9;
+export const DRIP_HOUR_END = 20;
+/** Tope de envíos por tienda por corrida del cron (drena de a pocos). */
+export const DRIP_BATCH_CAP = 25;
+
+export interface DripLead {
+  id: string;
+  phone: string;
+  name: string | null;
+  status: string;
+  needs_attention: boolean;
+  next_followup_at: string | null;
+  last_interaction_at: string | null;
+  last_inbound_at: string | null;
+  drip_touches: number | null;
+  last_drip_at: string | null;
+}
+
+/**
+ * Por qué un lead NO recibe drip ahora (null = elegible). Pure — es LA regla
+ * del drip, el fetch solo pre-filtra en SQL lo barato. Guardas, en orden:
+ * status fuera de nr/buzón/cuelga; atención pendiente (respondió o venció un
+ * seguimiento → lo ve la asesora, no el bot); agenda manual (next_followup_at
+ * manda); tope de toques; sin nombre (la plantilla lleva {{1}}); actividad
+ * hace <6h (llamada, mensaje o lo que sea — el silencio aún no es silencio);
+ * toque 2 antes de 24h del toque 1; o el cliente escribió DESPUÉS del último
+ * drip (last_inbound_at > last_drip_at ⇒ ya no es "no contesta").
+ */
+export function dripSkipReason(l: DripLead, nowMs: number): string | null {
+  if (!(DRIP_STATUSES as readonly string[]).includes(l.status)) return "status";
+  if (l.needs_attention) return "atencion";
+  if (l.next_followup_at) return "agendado";
+  if ((l.drip_touches ?? 0) >= DRIP_MAX_TOUCHES) return "tope";
+  if (!l.name) return "sin_nombre";
+  const lastAct = l.last_interaction_at ? Date.parse(l.last_interaction_at) : NaN;
+  if (!Number.isFinite(lastAct) || nowMs - lastAct < DRIP_FIRST_TOUCH_HOURS * 3_600_000) return "reciente";
+  if (l.last_drip_at) {
+    if (nowMs - Date.parse(l.last_drip_at) < DRIP_SECOND_TOUCH_HOURS * 3_600_000) return "espera_toque2";
+    if (l.last_inbound_at && l.last_inbound_at > l.last_drip_at) return "respondio";
+  }
+  return null;
+}
+
+/** ¿Estamos en horario de envío (9–20) en la zona de la tienda? Pure. */
+export function dripWithinHours(nowIso: string, tz: string): boolean {
+  const h = tzParts(nowIso, tz).hour;
+  return h >= DRIP_HOUR_START && h < DRIP_HOUR_END;
+}
+
+export interface DripReport {
+  sent: number;
+  failed: number;
+  skipped: number; // candidatos SQL descartados por la regla fina (incl. sin nombre)
+}
+
+/**
+ * Un pase del drip para una tienda: selecciona los leads elegibles (SQL grueso
+ * + `dripSkipReason` fino), envía la plantilla y registra el toque. El toque se
+ * CONSUME aunque el envío falle (drip_touches++) para no re-martillar cada 5
+ * min un número que Meta rechaza — el motivo queda en drip_sends.error y en el
+ * timeline del lead. No toca last_interaction_at (es actividad nuestra, no del
+ * cliente: resetearlo alargaría la vida del lead en cola y desordenaría la
+ * lista) ni el status (el lead sigue en "En seguimiento"). Pre-0035 nunca
+ * llega aquí: getStoreCreds devuelve drip_template_enabled=false sin columnas.
+ */
+export async function sendSeguimientoDrip(
+  admin: SupabaseClient,
+  storeId: string,
+  creds: StoreCreds,
+  sendTemplate: typeof sendWhatsappTemplate = sendWhatsappTemplate,
+  nowIso = new Date().toISOString(),
+): Promise<DripReport> {
+  const report: DripReport = { sent: 0, failed: 0, skipped: 0 };
+  if (!creds.drip_template_enabled || !creds.drip_template_name) return report;
+  if (!creds.kapso_api_key || !creds.whatsapp_phone_number_id) return report;
+  if (!dripWithinHours(nowIso, creds.timezone || "America/Lima")) return report;
+
+  const nowMs = Date.parse(nowIso);
+  const quietSinceIso = new Date(nowMs - DRIP_FIRST_TOUCH_HOURS * 3_600_000).toISOString();
+  const { data, error } = await admin
+    .from("leads")
+    .select(
+      "id, phone, name, status, needs_attention, next_followup_at, last_interaction_at, last_inbound_at, drip_touches, last_drip_at",
+    )
+    .eq("store_id", storeId)
+    .in("status", [...DRIP_STATUSES])
+    .eq("needs_attention", false)
+    .is("next_followup_at", null)
+    .lt("drip_touches", DRIP_MAX_TOUCHES)
+    .lte("last_interaction_at", quietSinceIso)
+    .order("last_interaction_at", { ascending: true }) // los más olvidados primero
+    .limit(200);
+  if (error) throw new Error(`drip select: ${error.message}`);
+
+  const rows = (data as DripLead[] | null) ?? [];
+  const eligible = rows.filter((l) => dripSkipReason(l, nowMs) === null);
+  report.skipped = rows.length - eligible.length;
+  const batch = eligible.slice(0, DRIP_BATCH_CAP);
+
+  for (const l of batch) {
+    const touch = (l.drip_touches ?? 0) + 1;
+    let ok = false;
+    let err: string | null = null;
+    try {
+      const send = await sendTemplate(
+        { apiKey: creds.kapso_api_key },
+        {
+          phoneNumberId: creds.whatsapp_phone_number_id,
+          to: l.phone,
+          templateName: creds.drip_template_name,
+          language: creds.drip_template_language ?? "es",
+          bodyParams: [l.name!],
+        },
+      );
+      ok = send.ok;
+      if (!send.ok) err = send.error ?? "envío rechazado";
+    } catch (e) {
+      err = e instanceof Error ? e.message : String(e);
+    }
+
+    await admin
+      .from("leads")
+      .update({ drip_touches: touch, last_drip_at: nowIso })
+      .eq("id", l.id);
+    await admin.from("drip_sends").insert({
+      store_id: storeId,
+      lead_id: l.id,
+      phone: l.phone,
+      template_name: creds.drip_template_name,
+      touch,
+      ok,
+      error: err,
+    });
+    await admin.from("lead_calls").insert({
+      lead_id: l.id,
+      store_id: storeId,
+      kind: "system",
+      vendedora: null,
+      note: ok
+        ? `📤 Drip: plantilla «${creds.drip_template_name}» enviada (toque ${touch}/${DRIP_MAX_TOUCHES})`
+        : `⚠️ Drip: falló envío de «${creds.drip_template_name}» (${err})`,
+    });
+    if (ok) report.sent += 1;
+    else report.failed += 1;
+  }
+  return report;
 }
 
 /** COMPLETED draft → won lead, y SOLO si fue una recuperación real (el draft

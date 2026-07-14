@@ -37,6 +37,9 @@ export interface StoreSettingsData {
     winback_template_enabled: boolean;
     winback_template_name: string | null;
     winback_template_language: string | null;
+    drip_template_enabled: boolean;
+    drip_template_name: string | null;
+    drip_template_language: string | null;
     telegram_chat_id: string | null;
     meta_ad_accounts: StoreMetaAdAccount[];
   };
@@ -517,6 +520,55 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
                 id="winback_template_language"
                 name="winback_template_language"
                 defaultValue={s.winback_template_language ?? ""}
+                placeholder="es"
+                className={inputCls}
+              />
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Drip de seguimiento (no contesta)
+          </legend>
+          <p className="text-xs text-slate-500">
+            A los leads en <strong>No responde / Buzón / Cuelga</strong> se les envía esta
+            plantilla de WhatsApp automáticamente: <strong>máximo 2 toques</strong> (~6h después
+            de la llamada sin respuesta y +24h el segundo), solo de <strong>9 am a 8 pm</strong>.
+            Se detiene si el cliente responde o si la asesora agendó un seguimiento manual.
+            Requiere la plantilla <strong>aprobada por Meta</strong> con el nombre del cliente
+            como variable {"{{1}}"} (los leads sin nombre se omiten). Cada envío queda en el
+            historial del lead.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelCls} htmlFor="drip_template_enabled">Envío automático</label>
+              <select
+                id="drip_template_enabled"
+                name="drip_template_enabled"
+                defaultValue={s.drip_template_enabled ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">Deshabilitado</option>
+                <option value="true">Habilitado</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="drip_template_name">Nombre de la plantilla</label>
+              <input
+                id="drip_template_name"
+                name="drip_template_name"
+                defaultValue={s.drip_template_name ?? ""}
+                placeholder="seguimiento_nr_1"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="drip_template_language">Idioma</label>
+              <input
+                id="drip_template_language"
+                name="drip_template_language"
+                defaultValue={s.drip_template_language ?? ""}
                 placeholder="es"
                 className={inputCls}
               />

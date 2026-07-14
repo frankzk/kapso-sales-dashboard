@@ -113,6 +113,9 @@ class FakeSupabase {
   processedUpdates = 0;
   webhookUpdates: any[] = [];
   winbackSends: any[] = [];
+  dripLeads: any[] = []; // filas que responde el select de candidatos del drip
+  dripSends: any[] = [];
+  leadPatches: any[] = []; // updates a leads (drip_touches, etc.)
   constructor(storeRow: Row) {
     this.storeRow = storeRow;
   }
@@ -150,6 +153,20 @@ class FakeSupabase {
     }
     if (b.table === "draft_orders" && b.op === "delete") {
       this.deletedDrafts.push(b.filters);
+      return { data: null, error: null };
+    }
+    if (b.table === "leads" && b.op === "select" && b.selectCols?.includes("drip_touches")) {
+      // Selector de candidatos del drip — devuelve las filas preparadas tal cual
+      // (el filtro fino es dripSkipReason en JS, que es lo que se testea).
+      return { data: this.dripLeads, error: null };
+    }
+    if (b.table === "leads" && b.op === "update") {
+      this.leadPatches.push({ ...(b.filters as any), ...b.payload });
+      return { data: null, error: null };
+    }
+    if (b.table === "drip_sends" && b.op === "insert") {
+      const rows = Array.isArray(b.payload) ? b.payload : [b.payload];
+      this.dripSends.push(...rows);
       return { data: null, error: null };
     }
     if (b.table === "leads" && b.op === "select") {
@@ -1100,5 +1117,162 @@ describe("resolveMetaAdNames · populate meta_ads with real ad names", () => {
     const { admin } = fakeAdmin([], []);
     expect(await resolveMetaAdNames(admin as any, "s", "")).toBe(0); // no token
     expect(await resolveMetaAdNames(admin as any, "s", "TOK", { fetchImpl: okFetch })).toBe(0); // no ad_ids
+  });
+});
+
+// ───────────────────── Drip de seguimiento (no contesta) ─────────────────────
+
+function dripCreds(over: Record<string, any> = {}): any {
+  return browseCreds({
+    drip_template_enabled: true,
+    drip_template_name: "seguimiento_nr_1",
+    drip_template_language: "es",
+    ...over,
+  });
+}
+
+// 15:00Z = 10:00 en Lima (UTC−5) → dentro del horario 9–20.
+const DRIP_NOW = "2026-07-13T15:00:00Z";
+
+function dripLead(over: Record<string, any> = {}): any {
+  return {
+    id: "L1",
+    phone: "51999888777",
+    name: "Ana",
+    status: "no_responde",
+    needs_attention: false,
+    next_followup_at: null,
+    last_interaction_at: "2026-07-13T05:00:00Z", // hace 10h → silencio suficiente
+    last_inbound_at: null,
+    drip_touches: 0,
+    last_drip_at: null,
+    ...over,
+  };
+}
+
+describe("dripSkipReason · la regla del drip (pura)", () => {
+  it("acepta un nr silencioso y en orden", async () => {
+    const { dripSkipReason } = await import("@/lib/leads-ingest");
+    expect(dripSkipReason(dripLead(), Date.parse(DRIP_NOW))).toBeNull();
+    expect(dripSkipReason(dripLead({ status: "buzon" }), Date.parse(DRIP_NOW))).toBeNull();
+    expect(dripSkipReason(dripLead({ status: "cuelga" }), Date.parse(DRIP_NOW))).toBeNull();
+  });
+
+  it("rechaza estados fuera de nr/buzón/cuelga y las guardas de la asesora", async () => {
+    const { dripSkipReason } = await import("@/lib/leads-ingest");
+    const now = Date.parse(DRIP_NOW);
+    expect(dripSkipReason(dripLead({ status: "contactado_dejo_wsp" }), now)).toBe("status");
+    expect(dripSkipReason(dripLead({ status: "nuevo" }), now)).toBe("status");
+    expect(dripSkipReason(dripLead({ needs_attention: true }), now)).toBe("atencion");
+    expect(dripSkipReason(dripLead({ next_followup_at: "2026-07-14T15:00:00Z" }), now)).toBe("agendado");
+  });
+
+  it("respeta tope de toques, nombre para {{1}} y el silencio mínimo de 6h", async () => {
+    const { dripSkipReason, DRIP_MAX_TOUCHES } = await import("@/lib/leads-ingest");
+    const now = Date.parse(DRIP_NOW);
+    expect(dripSkipReason(dripLead({ drip_touches: DRIP_MAX_TOUCHES }), now)).toBe("tope");
+    expect(dripSkipReason(dripLead({ name: null }), now)).toBe("sin_nombre");
+    expect(dripSkipReason(dripLead({ last_interaction_at: "2026-07-13T13:30:00Z" }), now)).toBe("reciente"); // hace 1.5h
+    expect(dripSkipReason(dripLead({ last_interaction_at: null }), now)).toBe("reciente"); // sin señal → conservador
+  });
+
+  it("toque 2: espera 24h del toque 1 y se corta si el cliente respondió", async () => {
+    const { dripSkipReason } = await import("@/lib/leads-ingest");
+    const now = Date.parse(DRIP_NOW);
+    const t1 = dripLead({ drip_touches: 1, last_drip_at: "2026-07-13T02:00:00Z" }); // hace 13h
+    expect(dripSkipReason(t1, now)).toBe("espera_toque2");
+    const t2 = dripLead({ drip_touches: 1, last_drip_at: "2026-07-12T10:00:00Z" }); // hace 29h
+    expect(dripSkipReason(t2, now)).toBeNull();
+    const respondio = dripLead({
+      drip_touches: 1,
+      last_drip_at: "2026-07-12T10:00:00Z",
+      last_inbound_at: "2026-07-12T18:00:00Z", // escribió DESPUÉS del drip
+    });
+    expect(dripSkipReason(respondio, now)).toBe("respondio");
+  });
+});
+
+describe("dripWithinHours · horario 9–20 en la zona de la tienda", () => {
+  it("dentro/fuera de la ventana en Lima (UTC−5)", async () => {
+    const { dripWithinHours } = await import("@/lib/leads-ingest");
+    expect(dripWithinHours("2026-07-13T14:00:00Z", "America/Lima")).toBe(true); // 09:00
+    expect(dripWithinHours("2026-07-13T13:59:00Z", "America/Lima")).toBe(false); // 08:59
+    expect(dripWithinHours("2026-07-13T23:00:00Z", "America/Lima")).toBe(true); // 18:00
+    expect(dripWithinHours("2026-07-14T01:00:00Z", "America/Lima")).toBe(false); // 20:00
+  });
+});
+
+describe("sendSeguimientoDrip · envío y registro", () => {
+  it("no hace nada deshabilitado, sin plantilla o fuera de horario", async () => {
+    const { sendSeguimientoDrip } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.dripLeads = [dripLead()];
+    const { fn, calls } = spyTemplate();
+
+    let r = await sendSeguimientoDrip(fake as any, "store-1", dripCreds({ drip_template_enabled: false }), fn, DRIP_NOW);
+    expect(r).toEqual({ sent: 0, failed: 0, skipped: 0 });
+    r = await sendSeguimientoDrip(fake as any, "store-1", dripCreds({ drip_template_name: null }), fn, DRIP_NOW);
+    expect(r).toEqual({ sent: 0, failed: 0, skipped: 0 });
+    r = await sendSeguimientoDrip(fake as any, "store-1", dripCreds(), fn, "2026-07-14T01:30:00Z"); // 20:30 Lima
+    expect(r).toEqual({ sent: 0, failed: 0, skipped: 0 });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("envía la plantilla, consume el toque y registra en drip_sends + timeline", async () => {
+    const { sendSeguimientoDrip } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.dripLeads = [dripLead(), dripLead({ id: "L2", phone: "51911222333", name: null })]; // L2 sin nombre → skip
+    const { fn, calls } = spyTemplate();
+
+    const r = await sendSeguimientoDrip(fake as any, "store-1", dripCreds(), fn, DRIP_NOW);
+    expect(r).toEqual({ sent: 1, failed: 0, skipped: 1 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.params).toMatchObject({
+      phoneNumberId: "PN-1241790819006805",
+      to: "51999888777",
+      templateName: "seguimiento_nr_1",
+      language: "es",
+      bodyParams: ["Ana"],
+    });
+    expect(fake.leadPatches).toHaveLength(1);
+    expect(fake.leadPatches[0]).toMatchObject({ id: "L1", drip_touches: 1, last_drip_at: DRIP_NOW });
+    expect(fake.dripSends).toHaveLength(1);
+    expect(fake.dripSends[0]).toMatchObject({
+      store_id: "store-1",
+      lead_id: "L1",
+      phone: "51999888777",
+      template_name: "seguimiento_nr_1",
+      touch: 1,
+      ok: true,
+      error: null,
+    });
+    expect(fake.leadCalls).toHaveLength(1);
+    expect(fake.leadCalls[0]).toMatchObject({ lead_id: "L1", kind: "system", vendedora: null });
+    expect(fake.leadCalls[0].note).toContain("toque 1/2");
+  });
+
+  it("un envío rechazado consume el toque igual (no re-martilla) y deja el motivo", async () => {
+    const { sendSeguimientoDrip } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.dripLeads = [dripLead()];
+    const bad = spyTemplate({ ok: false, error: "Template paused", code: 132015 });
+
+    const r = await sendSeguimientoDrip(fake as any, "store-1", dripCreds(), bad.fn, DRIP_NOW);
+    expect(r).toEqual({ sent: 0, failed: 1, skipped: 0 });
+    expect(fake.leadPatches[0]).toMatchObject({ drip_touches: 1 }); // toque consumido
+    expect(fake.dripSends[0]).toMatchObject({ ok: false, error: "Template paused" });
+    expect(fake.leadCalls[0].note).toContain("falló");
+  });
+
+  it("respeta el cap por corrida (DRIP_BATCH_CAP)", async () => {
+    const { sendSeguimientoDrip, DRIP_BATCH_CAP } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.dripLeads = Array.from({ length: DRIP_BATCH_CAP + 5 }, (_, i) =>
+      dripLead({ id: `L${i}`, phone: `5199900${String(i).padStart(4, "0")}` }),
+    );
+    const { fn, calls } = spyTemplate();
+    const r = await sendSeguimientoDrip(fake as any, "store-1", dripCreds(), fn, DRIP_NOW);
+    expect(r.sent).toBe(DRIP_BATCH_CAP);
+    expect(calls).toHaveLength(DRIP_BATCH_CAP);
   });
 });

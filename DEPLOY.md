@@ -270,6 +270,32 @@ an optional vision check (Claude) inspects the image before firing.
   (≤12 new images/run) and the verdict is recorded in `yape_vision_checks`
   (`is_voucher`, `indicators`, `model`) for auditing.
 
+## 5f. Drip de seguimiento — no contesta (opcional)
+
+Leads en **No responde / Buzón / Cuelga** reciben automáticamente una plantilla
+de WhatsApp para reengancharlos (fuera de la ventana de 24h solo Meta-approved
+templates pueden abrir conversación). Reglas fijas: **máx 2 toques** por lead
+(~6h después de la gestión sin respuesta y +24h el segundo), **solo 9–20h**
+hora de la tienda, nunca si el cliente respondió (`last_inbound_at`), si la
+asesora agendó `next_followup_at` o si el lead tiene atención pendiente. Cada
+intento queda en `drip_sends` y como nota en el timeline del lead. El toque se
+consume aunque Meta rechace el envío (no se re-martilla un número roto).
+
+- **Needs migration 0035** (`drip_template_*` en stores, `drip_touches` /
+  `last_drip_at` en leads, tabla `drip_sends`). Antes de correrla el paso es un
+  no-op (el toggle lee `false`).
+- **Plantilla Meta**: crear en el WABA de cada tienda una plantilla con el
+  nombre del cliente como única variable `{{1}}` (p.ej. `seguimiento_nr_1`,
+  idioma `es`) — idealmente con botones de respuesta rápida para que la
+  respuesta reabra la ventana de 24h por el flujo normal de Kapso. Los leads
+  sin nombre se omiten.
+- **Activación**: Ajustes → *Drip de seguimiento (no contesta)* → Habilitado +
+  nombre de plantilla + idioma. Off por defecto; se puede apagar al instante
+  desde el mismo lugar.
+- **Verificar**: correr el cron y revisar `select * from drip_sends order by
+  sent_at desc limit 20;` + la nota "📤 Drip: …" en un lead tocado. El reporte
+  del cron trae `dripSent`.
+
 ## 7. Post-deploy verification
 
 - **Health**: `curl https://<domain>/api/health` → `{ "ok": true, … }` (public,

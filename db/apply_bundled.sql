@@ -1424,3 +1424,36 @@ alter table stores add column if not exists kapso_webhook_secret_enc text;
 
 drop policy if exists meta_ads_select on meta_ads;
 drop policy if exists whatsapp_numbers_select on whatsapp_numbers;
+
+-- ---- 0035 ----
+-- 0035_seguimiento_drip.sql — drip de seguimiento por WhatsApp para leads que
+-- no contestan (no_responde/buzon/cuelga): config por tienda, contadores de
+-- toque en leads y log drip_sends (RLS lectura por tienda, escribe service role).
+
+alter table stores add column if not exists drip_template_enabled  boolean not null default false;
+alter table stores add column if not exists drip_template_name      text;
+alter table stores add column if not exists drip_template_language  text;
+
+alter table leads add column if not exists drip_touches int not null default 0;
+alter table leads add column if not exists last_drip_at timestamptz;
+
+create table if not exists drip_sends (
+  id             uuid primary key default gen_random_uuid(),
+  store_id       uuid not null references stores(id) on delete cascade,
+  lead_id        uuid not null references leads(id) on delete cascade,
+  phone          text not null,
+  template_name  text,
+  touch          int  not null,
+  ok             boolean not null default true,
+  error          text,
+  sent_at        timestamptz not null default now()
+);
+create index if not exists drip_sends_store_sent_idx on drip_sends(store_id, sent_at);
+create index if not exists drip_sends_lead_idx on drip_sends(lead_id);
+
+alter table drip_sends enable row level security;
+drop policy if exists drip_sends_select on drip_sends;
+create policy drip_sends_select on drip_sends for select to authenticated
+  using (store_id in (select auth_store_ids()));
+grant select on drip_sends to authenticated;
+grant all privileges on drip_sends to service_role;
