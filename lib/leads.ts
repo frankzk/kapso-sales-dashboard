@@ -309,6 +309,70 @@ export function isLeadGestion(v: string | undefined | null): v is LeadGestion {
 }
 
 // ---------------------------------------------------------------------------
+// Seguimiento automático de re-contacto. "Casi cierra (dio datos)" y "Volver a
+// llamar" son leads que SÍ o SÍ hay que volver a tocar; si la asesora no pone
+// fecha, se agenda solo: al final del MISMO día (18:00 local) cuando la llamada
+// fue antes de las 16:00, o mañana a las 10:00 si ya es tarde. Con la fecha
+// puesta, el sistema hace el resto: el lead aparece en la vista Seguimientos al
+// vencer, sube con needs_attention (cron) y queda protegido del auto-archivado
+// de 7 días. Una fecha explícita del formulario siempre gana.
+// ---------------------------------------------------------------------------
+
+export const AUTO_FOLLOWUP_STATUSES = ["casi_cierra", "volver_a_llamar"] as const;
+export const AUTO_FOLLOWUP_CUTOFF_HOUR = 16; // antes de las 16 → hoy; después → mañana
+export const AUTO_FOLLOWUP_EOD_HOUR = 18; // "al final del día"
+export const AUTO_FOLLOWUP_MORNING_HOUR = 10; // "mañana a primera hora"
+
+/** Local calendar parts of an instant in `tz` via Intl (self-contained so this
+ *  client-safe module doesn't pull other libs). */
+function localParts(atMs: number, tz: string): { date: string; hour: number } {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+  });
+  const p: Record<string, string> = {};
+  for (const part of dtf.formatToParts(new Date(atMs))) p[part.type] = part.value;
+  const hour = p.hour === "24" ? 0 : Number(p.hour);
+  return { date: `${p.year}-${p.month}-${p.day}`, hour };
+}
+
+/** `date` (YYYY-MM-DD) + `hour` LOCAL en `tz` → instante UTC ISO. */
+function localToUtcIso(date: string, hour: number, tz: string): string {
+  // Offset de la zona alrededor de ese instante (exacto para zonas de offset
+  // fijo como Lima; el error DST en el borde es irrelevante para una agenda).
+  const guess = Date.parse(`${date}T${String(hour).padStart(2, "0")}:00:00Z`);
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const p: Record<string, string> = {};
+  for (const part of dtf.formatToParts(new Date(guess))) p[part.type] = part.value;
+  const asUtc = Date.parse(
+    `${p.year}-${p.month}-${p.day}T${p.hour === "24" ? "00" : p.hour}:${p.minute}:${p.second}Z`,
+  );
+  return new Date(guess - (asUtc - guess)).toISOString();
+}
+
+/** Seguimiento por defecto para casi_cierra / volver_a_llamar sin fecha. Pure. */
+export function defaultFollowupAt(nowIso: string, tz: string): string {
+  const nowMs = Date.parse(nowIso);
+  const now = localParts(nowMs, tz);
+  if (now.hour < AUTO_FOLLOWUP_CUTOFF_HOUR) return localToUtcIso(now.date, AUTO_FOLLOWUP_EOD_HOUR, tz);
+  const tomorrow = localParts(nowMs + 86_400_000, tz);
+  return localToUtcIso(tomorrow.date, AUTO_FOLLOWUP_MORNING_HOUR, tz);
+}
+
+// ---------------------------------------------------------------------------
 // 24h WhatsApp session window. The window opens on each inbound (customer)
 // message and lasts 24h; outside it we can't send free text. We classify by how
 // much time is LEFT (from the last inbound), so the queue can prioritise leads

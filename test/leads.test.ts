@@ -18,6 +18,8 @@ import {
   LEAD_GESTIONES,
   gestionOf,
   isLeadGestion,
+  AUTO_FOLLOWUP_STATUSES,
+  defaultFollowupAt,
   countGestiones,
   QUEUE_STATES,
   isQueueState,
@@ -345,5 +347,31 @@ describe("yapeKind (💰 pago vs 📦 agencia dentro de Yape/Shalom)", () => {
 
   it("el pago explícito NO se confunde aunque el contexto mencione agencia (el motivo exacto gana)", () => {
     expect(yapeKind("validacion_pago", "luego lo envía por agencia")).toBe("pago");
+  });
+});
+
+describe("defaultFollowupAt · agenda automática de casi_cierra / volver_a_llamar", () => {
+  it("antes de las 16h locales → hoy 18:00 (Lima, UTC−5)", () => {
+    // 15:00Z = 10:00 en Lima → mismo día a las 18:00 Lima = 23:00Z
+    expect(defaultFollowupAt("2026-07-13T15:00:00Z", "America/Lima")).toBe("2026-07-13T23:00:00.000Z");
+  });
+
+  it("a las 16h o después → mañana 10:00 local", () => {
+    // 21:30Z = 16:30 Lima → 14/07 a las 10:00 Lima = 15:00Z
+    expect(defaultFollowupAt("2026-07-13T21:30:00Z", "America/Lima")).toBe("2026-07-14T15:00:00.000Z");
+  });
+
+  it("de noche cruzando la medianoche UTC, 'mañana' es el día local siguiente", () => {
+    // 02:00Z del 14/07 = 21:00 del 13/07 en Lima → mañana local = 14/07 10:00 Lima
+    expect(defaultFollowupAt("2026-07-14T02:00:00Z", "America/Lima")).toBe("2026-07-14T15:00:00.000Z");
+  });
+
+  it("en UTC reproduce la regla tal cual", () => {
+    expect(defaultFollowupAt("2026-07-13T09:00:00Z", "UTC")).toBe("2026-07-13T18:00:00.000Z");
+    expect(defaultFollowupAt("2026-07-13T17:00:00Z", "UTC")).toBe("2026-07-14T10:00:00.000Z");
+  });
+
+  it("aplica exactamente a casi_cierra y volver_a_llamar", () => {
+    expect(AUTO_FOLLOWUP_STATUSES).toEqual(["casi_cierra", "volver_a_llamar"]);
   });
 });
