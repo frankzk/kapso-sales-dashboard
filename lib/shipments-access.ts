@@ -4,6 +4,7 @@
 import { createServerSupabase } from "@/lib/db";
 import type { ShipmentCallRow, ShipmentOrderDetail, ShipmentRow } from "@/lib/types";
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
+import { limaCalendarDayBounds } from "@/lib/shipments";
 
 // The manual-review queue: guides that didn't auto-link to an order AND still
 // need a human. We exclude terminal states (delivered/closed) and rows dismissed
@@ -44,6 +45,50 @@ type ShipmentWithCallCount = ShipmentRow & {
 function withContactCount(row: ShipmentWithCallCount): ShipmentRow {
   const { shipment_calls: calls, ...shipment } = row;
   return { ...shipment, contact_count: calls?.[0]?.count ?? 0 };
+}
+
+/** Attach today's team-wide call count to each queue row. This is deliberately
+ * a separate read from the lifetime nested count so both filters can coexist. */
+async function withTodayContactCount(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  rows: ShipmentRow[],
+  storeIds: string[],
+): Promise<ShipmentRow[]> {
+  if (!rows.length) return rows;
+  const { startIso, endIso } = limaCalendarDayBounds();
+  const countByShipment = new Map<string, number>();
+
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await sb
+      .from("shipment_calls")
+      .select("id,shipment_id")
+      .in("store_id", storeIds)
+      .eq("kind", "call")
+      .gte("occurred_at", startIso)
+      .lt("occurred_at", endIso)
+      .order("occurred_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+
+    if (error) {
+      // Conservative fallback: avoid duplicate calls if the daily read fails.
+      return rows.map((row) => ({
+        ...row,
+        today_contact_count: row.contact_count ?? 0,
+      }));
+    }
+
+    const calls = (data as { id: string; shipment_id: string }[]) ?? [];
+    for (const call of calls) {
+      countByShipment.set(call.shipment_id, (countByShipment.get(call.shipment_id) ?? 0) + 1);
+    }
+    if (calls.length < PAGE) break;
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    today_contact_count: countByShipment.get(row.id) ?? 0,
+  }));
 }
 
 /** Resolve eligibility from current stock for every returned pending guide.
@@ -166,7 +211,9 @@ export async function getStoreShipments(
     out.push(...rows);
     if (rows.length < PAGE) break;
   }
-  return withCurrentFenixEligibility(sb, out);
+  const withTodayCalls =
+    view === "pendiente" ? await withTodayContactCount(sb, out, storeIds) : out;
+  return withCurrentFenixEligibility(sb, withTodayCalls);
 }
 
 /** Count of shipments matching a category set (exact, not row-capped). */
