@@ -11,6 +11,8 @@ import {
   isFutureShipmentFollowup,
   isShipmentFollowupDue,
   isShipmentReadyForContact,
+  isShipmentReadyForContactToday,
+  limaCalendarDayBounds,
   normalizeCity,
   isFenixCity,
   isFenixDistrict,
@@ -71,6 +73,23 @@ describe("delivery status model", () => {
     expect(isShipmentReadyForContact(1, "2026-07-22T00:00:00.000Z", now)).toBe(false);
     expect(isShipmentReadyForContact(1, "2026-07-21T00:00:00.000Z", now)).toBe(true);
     expect(isShipmentReadyForContact(1, "2026-07-20T00:00:00.000Z", now)).toBe(true);
+  });
+
+  it("hides guides contacted today and respects future programmed calls", () => {
+    const now = new Date("2026-07-21T15:00:00.000Z"); // July 21 in Lima
+    expect(isShipmentReadyForContactToday(0, null, now)).toBe(true);
+    expect(isShipmentReadyForContactToday(1, null, now)).toBe(false);
+    expect(isShipmentReadyForContactToday(0, "2026-07-22T00:00:00.000Z", now)).toBe(false);
+    expect(isShipmentReadyForContactToday(0, "2026-07-21T00:00:00.000Z", now)).toBe(true);
+    expect(isShipmentReadyForContactToday(1, "2026-07-21T00:00:00.000Z", now)).toBe(false);
+  });
+
+  it("uses midnight in Lima for the daily contact interval", () => {
+    const evening = new Date("2026-07-22T01:00:00.000Z"); // July 21, 8 p.m. Lima
+    expect(limaCalendarDayBounds(evening)).toEqual({
+      startIso: "2026-07-21T05:00:00.000Z",
+      endIso: "2026-07-22T05:00:00.000Z",
+    });
   });
 
   it("compares programmed dates as Lima calendar days", () => {

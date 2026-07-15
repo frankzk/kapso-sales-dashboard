@@ -244,6 +244,8 @@ export interface ShipmentRow {
   reroute_attempts: number;
   /** Number of logged calls, populated on shipment queue reads. */
   contact_count?: number;
+  /** Number of calls logged today in Lima, across the whole team. */
+  today_contact_count?: number;
   reroute_outcome: string | null;
   claimed_by: string | null;
   claimed_at: string | null;

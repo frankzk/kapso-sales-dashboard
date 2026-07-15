@@ -9,6 +9,7 @@ import {
   attemptLabel,
   isCallable,
   isShipmentReadyForContact,
+  isShipmentReadyForContactToday,
   labelOf,
   normalizeCity,
   rescheduleGuideCode,
@@ -147,7 +148,8 @@ export function ShipmentsBoard({
   const [districtFilter, setDistrictFilter] = useState<Set<string>>(new Set());
   const [dateFilter, setDateFilter] = useState(""); // YYYY-MM-DD on next_followup_at
   const [unmatchedOnly, setUnmatchedOnly] = useState(false);
-  const [uncontactedOnly, setUncontactedOnly] = useState(view === "pendiente");
+  const [uncontactedTodayOnly, setUncontactedTodayOnly] = useState(view === "pendiente");
+  const [uncontactedOnly, setUncontactedOnly] = useState(false);
   const [fenixFilter, setFenixFilter] = useState<"all" | "ok" | "no">("all"); // fenix_eligible
 
   // global search (across all tabs, server-side)
@@ -178,7 +180,8 @@ export function ShipmentsBoard({
     setDistrictFilter(new Set());
     setDateFilter("");
     setUnmatchedOnly(false);
-    setUncontactedOnly(view === "pendiente");
+    setUncontactedTodayOnly(view === "pendiente");
+    setUncontactedOnly(false);
     setFenixFilter("all");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
@@ -213,6 +216,9 @@ export function ShipmentsBoard({
       (districtFilter.size === 0 || districtFilter.has(s.district || SIN_DISTRITO)) &&
       (!dateFilter || (s.next_followup_at ? s.next_followup_at.slice(0, 10) === dateFilter : false)) &&
       (!unmatchedOnly || !s.matched) &&
+      (!uncontactedTodayOnly ||
+        view !== "pendiente" ||
+        isShipmentReadyForContactToday(s.today_contact_count, s.next_followup_at)) &&
       (!uncontactedOnly ||
         view !== "pendiente" ||
         isShipmentReadyForContact(s.contact_count, s.next_followup_at)) &&
@@ -385,21 +391,33 @@ export function ShipmentsBoard({
                 Solo sin pedido
               </label>
               {view === "pendiente" && (
-                <label className="flex items-center gap-1.5 text-xs text-slate-600">
-                  <input
-                    type="checkbox"
-                    checked={uncontactedOnly}
-                    onChange={(e) => setUncontactedOnly(e.target.checked)}
-                    className="rounded border-slate-300"
-                  />
-                  Solo sin contactar
-                </label>
+                <>
+                  <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={uncontactedTodayOnly}
+                      onChange={(e) => setUncontactedTodayOnly(e.target.checked)}
+                      className="rounded border-slate-300"
+                    />
+                    Solo sin contactar hoy
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={uncontactedOnly}
+                      onChange={(e) => setUncontactedOnly(e.target.checked)}
+                      className="rounded border-slate-300"
+                    />
+                    Solo sin contactar
+                  </label>
+                </>
               )}
               {(storeFilter.size > 0 ||
                 cityFilter.size > 0 ||
                 districtFilter.size > 0 ||
                 dateFilter ||
                 unmatchedOnly ||
+                uncontactedTodayOnly ||
                 uncontactedOnly ||
                 fenixFilter !== "all") && (
                 <button
@@ -409,6 +427,7 @@ export function ShipmentsBoard({
                     setDistrictFilter(new Set());
                     setDateFilter("");
                     setUnmatchedOnly(false);
+                    setUncontactedTodayOnly(false);
                     setUncontactedOnly(false);
                     setFenixFilter("all");
                   }}

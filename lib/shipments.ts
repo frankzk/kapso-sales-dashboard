@@ -105,6 +105,21 @@ function dateKeyInTimeZone(date: Date, timeZone: string): string {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
+/** UTC interval for the current Lima calendar day. The upper bound is
+ * exclusive, ready to use with PostgREST's gte/lt filters. Peru is UTC-5 and
+ * does not observe daylight saving time. */
+export function limaCalendarDayBounds(now: Date = new Date()): {
+  startIso: string;
+  endIso: string;
+} {
+  const limaDate = dateKeyInTimeZone(now, "America/Lima");
+  const startMs = Date.parse(`${limaDate}T00:00:00-05:00`);
+  return {
+    startIso: new Date(startMs).toISOString(),
+    endIso: new Date(startMs + 86_400_000).toISOString(),
+  };
+}
+
 function selectedUtcDateKey(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const date = new Date(iso);
@@ -133,6 +148,18 @@ export function isShipmentReadyForContact(
   now: Date = new Date(),
 ): boolean {
   return !hasShipmentContact(contactCount) || isShipmentFollowupDue(nextFollowupAt, now);
+}
+
+/** Daily queue rule used by “Solo sin contactar hoy”. A guide disappears after
+ * any team member calls it today and returns on the next Lima calendar day.
+ * Future programmed calls remain hidden until their selected date. */
+export function isShipmentReadyForContactToday(
+  todayContactCount: number | null | undefined,
+  nextFollowupAt: string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (hasShipmentContact(todayContactCount)) return false;
+  return !nextFollowupAt || isShipmentFollowupDue(nextFollowupAt, now);
 }
 
 /** A programmed call must be at least the next Lima calendar day. */
