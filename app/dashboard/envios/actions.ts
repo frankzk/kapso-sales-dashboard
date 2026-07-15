@@ -14,6 +14,7 @@ import {
   CLAIM_TTL_MINUTES,
   attemptLabel,
   categoryOf,
+  isFutureShipmentFollowup,
   isCallable,
   isValidStatus,
   nextShipmentTransition,
@@ -199,6 +200,12 @@ export async function registerRerouteCall(
   if (input.disposition === "confirma" && !input.nextFollowupAt) {
     return { error: "Elige la fecha de reprogramación para confirmar." };
   }
+  if (
+    input.disposition === "programar" &&
+    !isFutureShipmentFollowup(input.nextFollowupAt)
+  ) {
+    return { error: "Elige una fecha futura para programar la próxima llamada." };
+  }
 
   // Cliente confirma + fecha → generate a NEW Fenix guide automatically and
   // transfer this shipment to it (skip if already transferred). Needs an order
@@ -252,20 +259,31 @@ export async function registerRerouteCall(
     store_id: ctx.storeId,
     agent: ctx.userId,
     kind: "call",
-    new_status: t.status,
+    // Programming a call does not enter a new delivery state. Keeping this
+    // null also prevents statusSince() from treating it as a state transition.
+    new_status: input.disposition === "programar" ? null : t.status,
     note: input.note?.trim() || null,
     next_followup_at: nextFollowup,
   });
 
   revalidatePath("/dashboard/envios");
-  const notice =
-    t.status === "en_ruta"
-      ? "Registrado — En ruta (Fenix)."
-      : t.status === "entregado"
-        ? "Registrado — Entregado."
-        : t.status === "anulado"
-          ? "Registrado — Anulado."
-          : `Registrado — ${attemptLabel(t.attempts)}.`;
+  let notice: string;
+  if (input.disposition === "programar") {
+    const date = new Date(nextFollowup!).toLocaleDateString("es-PE", {
+      day: "2-digit",
+      month: "short",
+      timeZone: "UTC",
+    });
+    notice = `Llamada programada para el ${date}; los intentos no cambiaron.`;
+  } else if (t.status === "en_ruta") {
+    notice = "Registrado — En ruta (Fenix).";
+  } else if (t.status === "entregado") {
+    notice = "Registrado — Entregado.";
+  } else if (t.status === "anulado") {
+    notice = "Registrado — Anulado.";
+  } else {
+    notice = `Registrado — ${attemptLabel(t.attempts)}.`;
+  }
   return { notice };
 }
 
@@ -694,8 +712,12 @@ export async function upsertFenixStock(input: {
     { onConflict: "org_id,city,product" },
   );
   if (error) return { error: error.message };
+  const sync = await recomputeFenixEligibility();
   revalidatePath("/dashboard/envios/stock");
-  return { notice: "Stock actualizado." };
+  revalidatePath("/dashboard/envios");
+  return "error" in sync
+    ? { notice: `Stock actualizado. No se pudo sincronizar las guías: ${sync.error}` }
+    : { notice: `Stock actualizado — ${sync.updated} guías sincronizadas.` };
 }
 
 /** Delete a Fenix stock row (admin). */
@@ -703,8 +725,12 @@ export async function deleteFenixStock(id: string): Promise<ShipmentActionState>
   const sb = await createServerSupabase();
   const { error } = await sb.from("fenix_stock").delete().eq("id", id);
   if (error) return { error: error.message };
+  const sync = await recomputeFenixEligibility();
   revalidatePath("/dashboard/envios/stock");
-  return { notice: "Eliminado." };
+  revalidatePath("/dashboard/envios");
+  return "error" in sync
+    ? { notice: `Stock eliminado. No se pudo sincronizar las guías: ${sync.error}` }
+    : { notice: `Stock eliminado — ${sync.updated} guías sincronizadas.` };
 }
 
 /**
@@ -727,32 +753,42 @@ export async function recomputeFenixEligibility(): Promise<
   );
   if (!adminOrg) return { error: "Solo un administrador puede recalcular la elegibilidad." };
 
-  const stores = await getAccessibleStores();
+  const stores = (await getAccessibleStores()).filter((s) => s.org_id === adminOrg.org_id);
   const storeIds = stores.map((s) => s.id);
   if (!storeIds.length) return { notice: "Sin envíos.", updated: 0 };
 
   const admin = createAdminSupabase();
-  const { data: stock } = await admin
+  const { data: stock, error: stockError } = await admin
     .from("fenix_stock")
     .select("city,product,sku,quantity")
     .eq("org_id", adminOrg.org_id);
+  if (stockError) return { error: stockError.message };
   const stockRows = (stock as FenixStockRow[]) ?? [];
 
   // Only pending guides carry eligibility; re-evaluate each and flip the ones
-  // whose stored flag no longer matches.
-  const { data: rows } = await admin
-    .from("shipments")
-    .select("id,city,product,order_id,fenix_eligible")
-    .in("store_id", storeIds)
-    .eq("status_category", "pending");
-  const shipments =
-    (rows as {
-      id: string;
-      city: string | null;
-      product: string | null;
-      order_id: string | null;
-      fenix_eligible: boolean;
-    }[]) ?? [];
+  // whose stored flag no longer matches. Paginate past Supabase's 1,000-row
+  // response cap so a large queue is never only partially synchronized.
+  type PendingShipment = {
+    id: string;
+    city: string | null;
+    product: string | null;
+    order_id: string | null;
+    fenix_eligible: boolean;
+  };
+  const shipments: PendingShipment[] = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data: rows, error: rowsError } = await admin
+      .from("shipments")
+      .select("id,city,product,order_id,fenix_eligible")
+      .in("store_id", storeIds)
+      .eq("status_category", "pending")
+      .range(from, from + pageSize - 1);
+    if (rowsError) return { error: rowsError.message };
+    const page = (rows as PendingShipment[]) ?? [];
+    shipments.push(...page);
+    if (page.length < pageSize) break;
+  }
 
   // Pull the linked orders' line items so eligibility can match against the
   // Shopify catalog (title + SKU) — the same source the stock sheet is keyed
@@ -760,10 +796,11 @@ export async function recomputeFenixEligibility(): Promise<
   const orderIds = Array.from(new Set(shipments.map((s) => s.order_id).filter((v): v is string => !!v)));
   const productsByOrder = new Map<string, { title?: string | null; sku?: string | null }[]>();
   for (let i = 0; i < orderIds.length; i += 300) {
-    const { data: orders } = await admin
+    const { data: orders, error: ordersError } = await admin
       .from("orders")
       .select("id,line_items")
       .in("id", orderIds.slice(i, i + 300));
+    if (ordersError) return { error: ordersError.message };
     for (const o of (orders as { id: string; line_items: { title?: string | null; sku?: string | null }[] | null }[]) ?? []) {
       productsByOrder.set(
         o.id,
@@ -772,15 +809,30 @@ export async function recomputeFenixEligibility(): Promise<
     }
   }
 
-  let updated = 0;
+  const toEligible: string[] = [];
+  const toIneligible: string[] = [];
   for (const s of shipments) {
     const orderProducts = s.order_id ? productsByOrder.get(s.order_id) : undefined;
     const eligible = evaluateFenix(s, stockRows, orderProducts).eligible;
     if (eligible !== s.fenix_eligible) {
-      await admin.from("shipments").update({ fenix_eligible: eligible }).eq("id", s.id);
-      updated++;
+      (eligible ? toEligible : toIneligible).push(s.id);
     }
   }
+
+  // Update in bounded groups instead of one network round-trip per guide.
+  for (const [eligible, ids] of [
+    [true, toEligible],
+    [false, toIneligible],
+  ] as const) {
+    for (let i = 0; i < ids.length; i += 150) {
+      const { error: updateError } = await admin
+        .from("shipments")
+        .update({ fenix_eligible: eligible })
+        .in("id", ids.slice(i, i + 150));
+      if (updateError) return { error: updateError.message };
+    }
+  }
+  const updated = toEligible.length + toIneligible.length;
   revalidatePath("/dashboard/envios");
   return { notice: `Elegibilidad recalculada — ${updated} guías actualizadas.`, updated };
 }

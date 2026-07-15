@@ -3,6 +3,7 @@
 
 import { createServerSupabase } from "@/lib/db";
 import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
+import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
 
 // The manual-review queue: guides that didn't auto-link to an order AND still
 // need a human. We exclude terminal states (delivered/closed) and rows dismissed
@@ -43,6 +44,83 @@ type ShipmentWithCallCount = ShipmentRow & {
 function withContactCount(row: ShipmentWithCallCount): ShipmentRow {
   const { shipment_calls: calls, ...shipment } = row;
   return { ...shipment, contact_count: calls?.[0]?.count ?? 0 };
+}
+
+/** Resolve eligibility from current stock for every returned pending guide.
+ * The database flag remains useful as a cache, but reads must not show a stale
+ * “Elegible” after stock reaches zero or is deleted. Stock is grouped by org so
+ * users with access to more than one organization never cross-match inventory. */
+async function withCurrentFenixEligibility(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  rows: ShipmentRow[],
+): Promise<ShipmentRow[]> {
+  const pending = rows.filter((s) => s.status_category === "pending");
+  if (!pending.length) return rows;
+
+  const storeIds = Array.from(new Set(pending.map((s) => s.store_id)));
+  const { data: stores, error: storesError } = await sb
+    .from("stores")
+    .select("id,org_id")
+    .in("id", storeIds);
+  if (storesError) return rows;
+  const orgByStore = new Map(
+    ((stores as { id: string; org_id: string }[]) ?? []).map((s) => [s.id, s.org_id]),
+  );
+  const orgIds = Array.from(new Set(orgByStore.values()));
+  if (!orgIds.length) return rows;
+
+  const { data: stock, error: stockError } = await sb
+    .from("fenix_stock")
+    .select("org_id,city,product,sku,quantity")
+    .in("org_id", orgIds);
+  if (stockError) return rows;
+  const stockByOrg = new Map<string, FenixStockRow[]>();
+  for (const item of (stock as (FenixStockRow & { org_id: string })[]) ?? []) {
+    const group = stockByOrg.get(item.org_id) ?? [];
+    group.push(item);
+    stockByOrg.set(item.org_id, group);
+  }
+
+  const orderIds = Array.from(
+    new Set(pending.map((s) => s.order_id).filter((id): id is string => !!id)),
+  );
+  const productsByOrder = new Map<
+    string,
+    { title?: string | null; sku?: string | null }[]
+  >();
+  for (let i = 0; i < orderIds.length; i += 300) {
+    const { data: orders, error: ordersError } = await sb
+      .from("orders")
+      .select("id,line_items")
+      .in("id", orderIds.slice(i, i + 300));
+    if (ordersError) return rows;
+    for (const order of
+      (orders as {
+        id: string;
+        line_items: { title?: string | null; sku?: string | null }[] | null;
+      }[]) ?? []) {
+      productsByOrder.set(
+        order.id,
+        (order.line_items ?? []).map((item) => ({
+          title: item.title ?? null,
+          sku: item.sku ?? null,
+        })),
+      );
+    }
+  }
+
+  return rows.map((shipment) => {
+    if (shipment.status_category !== "pending") return shipment;
+    const orgId = orgByStore.get(shipment.store_id);
+    const current = evaluateFenix(
+      shipment,
+      orgId ? stockByOrg.get(orgId) ?? [] : [],
+      shipment.order_id ? productsByOrder.get(shipment.order_id) : undefined,
+    ).eligible;
+    return current === shipment.fenix_eligible
+      ? shipment
+      : { ...shipment, fenix_eligible: current };
+  });
 }
 
 // Each view maps to a status_category filter. Every non-delivered guide lands in
@@ -88,7 +166,7 @@ export async function getStoreShipments(
     out.push(...rows);
     if (rows.length < PAGE) break;
   }
-  return out;
+  return withCurrentFenixEligibility(sb, out);
 }
 
 /** Count of shipments matching a category set (exact, not row-capped). */
@@ -150,7 +228,7 @@ export async function getReviewShipments(storeIds: string[]): Promise<ShipmentRo
     .or("match_method.is.null,match_method.neq.dismissed")
     .order("created_at", { ascending: false })
     .limit(1000);
-  return (data as ShipmentRow[]) ?? [];
+  return withCurrentFenixEligibility(sb, (data as ShipmentRow[]) ?? []);
 }
 
 /** Global search across all accessible shipments (RLS-scoped) by guide code
@@ -166,7 +244,7 @@ export async function searchShipmentsQuery(query: string): Promise<ShipmentRow[]
     .or(`guide_code.ilike.${like},order_name.ilike.${like},customer_phone.ilike.${like}`)
     .order("updated_at", { ascending: false })
     .limit(50);
-  return (data as ShipmentRow[]) ?? [];
+  return withCurrentFenixEligibility(sb, (data as ShipmentRow[]) ?? []);
 }
 
 export interface OrderLinkCandidate {
@@ -209,5 +287,9 @@ export async function getShipmentWithCalls(
     .select("id,shipment_id,store_id,agent,kind,new_status,note,next_followup_at,occurred_at")
     .eq("shipment_id", shipmentId)
     .order("occurred_at", { ascending: false });
-  return { shipment: shipment as ShipmentRow, calls: (calls as ShipmentCallRow[]) ?? [] };
+  const [currentShipment] = await withCurrentFenixEligibility(sb, [shipment as ShipmentRow]);
+  return {
+    shipment: currentShipment ?? (shipment as ShipmentRow),
+    calls: (calls as ShipmentCallRow[]) ?? [],
+  };
 }

@@ -7,8 +7,8 @@ import { Card } from "@/components/ui";
 import {
   DELIVERY_STATUSES,
   attemptLabel,
-  hasShipmentContact,
   isCallable,
+  isShipmentReadyForContact,
   labelOf,
   normalizeCity,
   rescheduleGuideCode,
@@ -38,6 +38,7 @@ const CATEGORY_BADGE: Record<string, string> = {
 
 const DISPOSITIONS: { key: RerouteDisposition; label: string }[] = [
   { key: "confirma", label: "Cliente confirma (→ nueva guía Fenix)" },
+  { key: "programar", label: "Programar próxima llamada" },
   { key: "no_contesta", label: "No contesta" },
   { key: "entregado", label: "Entregado (Fenix)" },
   { key: "cancela", label: "Cliente cancela / anula" },
@@ -54,6 +55,20 @@ function fmtReprogram(iso: string | null | undefined): string {
     month: "short",
     timeZone: "UTC",
   });
+}
+
+function localDateInputValue(date: Date = new Date()): string {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function tomorrowDateInputValue(): string {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return localDateInputValue(tomorrow);
 }
 
 /** Human sub-state suffix: "· Intento 3" for pending, "· por Fenix" for entregado. */
@@ -193,7 +208,9 @@ export function ShipmentsBoard({
       (districtFilter.size === 0 || districtFilter.has(s.district || SIN_DISTRITO)) &&
       (!dateFilter || (s.next_followup_at ? s.next_followup_at.slice(0, 10) === dateFilter : false)) &&
       (!unmatchedOnly || !s.matched) &&
-      (!uncontactedOnly || view !== "pendiente" || !hasShipmentContact(s.contact_count)) &&
+      (!uncontactedOnly ||
+        view !== "pendiente" ||
+        isShipmentReadyForContact(s.contact_count, s.next_followup_at)) &&
       (fenixFilter === "all" || (fenixFilter === "ok" ? s.fenix_eligible : !s.fenix_eligible)),
   );
 
@@ -542,6 +559,11 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
     });
   }
 
+  const programDateInvalid =
+    disposition === "programar" && (!nextDate || nextDate <= localDateInputValue());
+  const requiredDateMissing =
+    (disposition === "confirma" && !nextDate) || programDateInvalid;
+
   return (
     <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={onClose}>
       <div
@@ -625,7 +647,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                 anulado/transferido) so a stray "no contesta" can't reopen a closed guide */}
             {isCallable(detail.shipment.delivery_status) && (
               <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
-                <p className="text-sm font-medium text-slate-800">Registrar llamada (reprogramación)</p>
+                <p className="text-sm font-medium text-slate-800">Registrar o programar llamada</p>
                 <div className="flex gap-2">
                   <button
                     onClick={() => run(() => claimShipment(shipmentId))}
@@ -665,12 +687,23 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                       marcará En ruta y podrás crear la guía en <b>Generar guía Fenix (manual)</b> abajo.
                     </p>
                   ))}
+                {disposition === "programar" && (
+                  <p className="rounded-lg bg-sky-50 px-2.5 py-1.5 text-xs text-sky-800">
+                    La guía se ocultará hasta la fecha elegida y volverá a la cola ese día.
+                    No aumenta los intentos ni cambia el estado del envío.
+                  </p>
+                )}
                 <label className="block text-xs text-slate-500">
-                  {disposition === "confirma" ? "Fecha de reprogramación (va en la guía)" : "Próximo intento"}
+                  {disposition === "confirma"
+                    ? "Fecha de reprogramación (va en la guía)"
+                    : disposition === "programar"
+                      ? "Fecha de próxima llamada"
+                      : "Próximo intento"}
                   <input
                     type="date"
                     value={nextDate}
                     onChange={(e) => setNextDate(e.target.value)}
+                    min={disposition === "programar" ? tomorrowDateInputValue() : undefined}
                     className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
                   />
                 </label>
@@ -691,10 +724,16 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                       }),
                     )
                   }
-                  disabled={pending || (disposition === "confirma" && !nextDate)}
+                  disabled={pending || requiredDateMissing}
                   className="w-full rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
                 >
-                  {disposition === "confirma" && !nextDate ? "Elige la fecha para confirmar" : "Registrar llamada"}
+                  {disposition === "confirma" && !nextDate
+                    ? "Elige la fecha para confirmar"
+                    : programDateInvalid
+                      ? "Elige una fecha futura"
+                      : disposition === "programar"
+                        ? "Programar llamada"
+                        : "Registrar llamada"}
                 </button>
               </section>
             )}
@@ -800,12 +839,24 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                     <li key={c.id} className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
                       <div className="flex justify-between">
                         <span className="font-medium text-slate-700">
-                          {c.kind}
+                          {c.kind === "call" && !c.new_status && c.next_followup_at
+                            ? "Llamada programada"
+                            : c.kind}
                           {c.new_status ? ` → ${labelOf(c.new_status)}` : ""}
                         </span>
                         <span className="text-slate-400">{c.agent_name ?? ""}</span>
                       </div>
                       {c.note && <p className="mt-0.5">{c.note}</p>}
+                      {c.next_followup_at && (
+                        <p className="mt-0.5 text-slate-500">
+                          {c.new_status === "en_ruta"
+                            ? "Fecha de reprogramación"
+                            : c.new_status
+                              ? "Próximo intento"
+                              : "Próxima llamada"}
+                          : {fmtReprogram(c.next_followup_at)}
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ul>
