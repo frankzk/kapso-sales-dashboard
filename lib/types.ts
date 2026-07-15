@@ -236,6 +236,8 @@ export interface ShipmentRow {
   fenix_shipment_id: string | null;
   delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado
   reroute_attempts: number;
+  /** Number of logged calls, populated on shipment queue reads. */
+  contact_count?: number;
   reroute_outcome: string | null;
   claimed_by: string | null;
   claimed_at: string | null;
