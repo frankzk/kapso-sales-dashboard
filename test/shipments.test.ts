@@ -7,6 +7,7 @@ import {
   isValidStatus,
   isPending,
   attemptLabel,
+  hasShipmentContact,
   normalizeCity,
   isFenixCity,
   isFenixDistrict,
@@ -52,6 +53,13 @@ describe("delivery status model", () => {
     expect(attemptLabel(3)).toBe("Intento 3");
     expect(attemptLabel(7)).toBe("Intento 7");
     expect(attemptLabel(99)).toBe("Intento 7"); // clamped to MAX_INTENTOS
+  });
+
+  it("distinguishes guides with a logged call", () => {
+    expect(hasShipmentContact(null)).toBe(false);
+    expect(hasShipmentContact(0)).toBe(false);
+    expect(hasShipmentContact(1)).toBe(true);
+    expect(hasShipmentContact(7)).toBe(true);
   });
 });
 

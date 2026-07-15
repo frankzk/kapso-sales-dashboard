@@ -85,6 +85,11 @@ export function attemptLabel(attempts: number | null | undefined): string {
   return `Intento ${Math.min(n, MAX_INTENTOS)}`;
 }
 
+/** Whether the shipment already has at least one logged customer call. */
+export function hasShipmentContact(contactCount: number | null | undefined): boolean {
+  return (contactCount ?? 0) > 0;
+}
+
 function stripAccents(s: string): string {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }

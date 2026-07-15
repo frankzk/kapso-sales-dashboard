@@ -34,6 +34,17 @@ export function isShipmentView(v: string | undefined | null): v is ShipmentView 
 const SHIPMENT_COLUMNS =
   "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,delivered_source,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
+const SHIPMENT_LIST_COLUMNS = `${SHIPMENT_COLUMNS},shipment_calls(count)`;
+
+type ShipmentWithCallCount = ShipmentRow & {
+  shipment_calls?: { count: number | null }[] | null;
+};
+
+function withContactCount(row: ShipmentWithCallCount): ShipmentRow {
+  const { shipment_calls: calls, ...shipment } = row;
+  return { ...shipment, contact_count: calls?.[0]?.count ?? 0 };
+}
+
 // Each view maps to a status_category filter. Every non-delivered guide lands in
 // "pendiente"; fenix_eligible is shown as a per-row indicator, it does NOT split
 // the queue.
@@ -63,16 +74,17 @@ export async function getStoreShipments(
   for (let from = 0; from < MAX_LIST; from += PAGE) {
     let q = sb
       .from("shipments")
-      .select(SHIPMENT_COLUMNS)
+      .select(SHIPMENT_LIST_COLUMNS)
       .in("store_id", storeIds)
-      .in("status_category", cats);
+      .in("status_category", cats)
+      .eq("shipment_calls.kind", "call");
     // pending is the single managed queue: soonest follow-up first; others recent
     q =
       view === "pendiente"
         ? q.order("next_followup_at", { ascending: true, nullsFirst: true }).order("updated_at", { ascending: false })
         : q.order("updated_at", { ascending: false });
     const { data } = await q.range(from, from + PAGE - 1);
-    const rows = (data as ShipmentRow[]) ?? [];
+    const rows = ((data as ShipmentWithCallCount[]) ?? []).map(withContactCount);
     out.push(...rows);
     if (rows.length < PAGE) break;
   }
