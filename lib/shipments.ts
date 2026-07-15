@@ -90,6 +90,60 @@ export function hasShipmentContact(contactCount: number | null | undefined): boo
   return (contactCount ?? 0) > 0;
 }
 
+/** Calendar date selected by the operator is stored as UTC midnight. Compare
+ * calendar keys (rather than instants) so a follow-up for July 21 does not
+ * become due at 7 p.m. Lima on July 20. */
+function dateKeyInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const part = (type: "year" | "month" | "day") =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function selectedUtcDateKey(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, "0"),
+    String(date.getUTCDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+/** Whether a date-only follow-up is due today (Lima) or overdue. */
+export function isShipmentFollowupDue(
+  nextFollowupAt: string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  const selected = selectedUtcDateKey(nextFollowupAt);
+  return !!selected && selected <= dateKeyInTimeZone(now, "America/Lima");
+}
+
+/** Queue rule used by “Solo sin contactar”: untouched guides are ready now;
+ * contacted guides return automatically on their scheduled follow-up date. */
+export function isShipmentReadyForContact(
+  contactCount: number | null | undefined,
+  nextFollowupAt: string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  return !hasShipmentContact(contactCount) || isShipmentFollowupDue(nextFollowupAt, now);
+}
+
+/** A programmed call must be at least the next Lima calendar day. */
+export function isFutureShipmentFollowup(
+  nextFollowupAt: string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  const selected = selectedUtcDateKey(nextFollowupAt);
+  return !!selected && selected > dateKeyInTimeZone(now, "America/Lima");
+}
+
 function stripAccents(s: string): string {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
@@ -165,6 +219,7 @@ export const MAX_INTENTOS = 7;
 /** The disposition an agent records at the end of a gestión call. */
 export type RerouteDisposition =
   | "confirma" // customer confirmed → goes out with Fenix (en_ruta)
+  | "programar" // customer asks for a later call; keep state + intento
   | "no_contesta" // no answer
   | "cancela" // customer cancels / refuses → anulado
   | "entregado"; // delivery confirmed (por Fenix)
@@ -195,6 +250,10 @@ export function nextShipmentTransition(
     case "confirma":
       // customer accepts → out for delivery with Fenix (keep the intento reached)
       return { status: "en_ruta", attempts, deliveredSource: null, closed: false };
+    case "programar":
+      // A real contact that only schedules the next conversation. Do not make
+      // it look like a failed attempt and do not change an in-route shipment.
+      return { status: current, attempts, deliveredSource: null, closed: false };
     case "no_contesta":
     default:
       if (inRoute) {

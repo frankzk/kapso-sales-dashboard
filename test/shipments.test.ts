@@ -8,6 +8,9 @@ import {
   isPending,
   attemptLabel,
   hasShipmentContact,
+  isFutureShipmentFollowup,
+  isShipmentFollowupDue,
+  isShipmentReadyForContact,
   normalizeCity,
   isFenixCity,
   isFenixDistrict,
@@ -61,6 +64,24 @@ describe("delivery status model", () => {
     expect(hasShipmentContact(1)).toBe(true);
     expect(hasShipmentContact(7)).toBe(true);
   });
+
+  it("returns contacted guides to the queue when their programmed date is due", () => {
+    const now = new Date("2026-07-21T15:00:00.000Z"); // July 21 in Lima
+    expect(isShipmentReadyForContact(0, null, now)).toBe(true);
+    expect(isShipmentReadyForContact(1, "2026-07-22T00:00:00.000Z", now)).toBe(false);
+    expect(isShipmentReadyForContact(1, "2026-07-21T00:00:00.000Z", now)).toBe(true);
+    expect(isShipmentReadyForContact(1, "2026-07-20T00:00:00.000Z", now)).toBe(true);
+  });
+
+  it("compares programmed dates as Lima calendar days", () => {
+    // At 8 p.m. Lima it is already July 21 in UTC, but a July 21 follow-up is
+    // still due today and July 22 is still future.
+    const evening = new Date("2026-07-22T01:00:00.000Z");
+    expect(isShipmentFollowupDue("2026-07-21T00:00:00.000Z", evening)).toBe(true);
+    expect(isFutureShipmentFollowup("2026-07-22T00:00:00.000Z", evening)).toBe(true);
+    expect(isFutureShipmentFollowup("2026-07-21T00:00:00.000Z", evening)).toBe(false);
+    expect(isFutureShipmentFollowup("not-a-date", evening)).toBe(false);
+  });
 });
 
 describe("normalizeCity", () => {
@@ -103,6 +124,20 @@ describe("nextShipmentTransition (gestión flow)", () => {
     expect(r.status).toBe("en_ruta");
     expect(r.attempts).toBe(4);
     expect(r.closed).toBe(false);
+  });
+  it("programar keeps the current state and intento", () => {
+    expect(nextShipmentTransition("pendiente", "programar", 2)).toEqual({
+      status: "pendiente",
+      attempts: 2,
+      deliveredSource: null,
+      closed: false,
+    });
+    expect(nextShipmentTransition("en_ruta", "programar", 4)).toEqual({
+      status: "en_ruta",
+      attempts: 4,
+      deliveredSource: null,
+      closed: false,
+    });
   });
   it("pending: cancela → anulado", () => {
     expect(nextShipmentTransition("pendiente", "cancela", 1).status).toBe("anulado");
