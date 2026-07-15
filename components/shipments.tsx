@@ -15,7 +15,12 @@ import {
   statusSince,
   type RerouteDisposition,
 } from "@/lib/shipments";
-import type { ShipmentCallRow, ShipmentRow, StoreSummary } from "@/lib/types";
+import type {
+  ShipmentCallRow,
+  ShipmentOrderDetail,
+  ShipmentRow,
+  StoreSummary,
+} from "@/lib/types";
 import { SHIPMENT_VIEWS, type ShipmentView } from "@/lib/shipments-access";
 import {
   claimShipment,
@@ -521,7 +526,13 @@ function ShipmentTable({
 function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: () => void }) {
   const router = useRouter();
   const [detail, setDetail] = useState<
-    { shipment: ShipmentRow; calls: ShipmentCallRow[] } | { error: string } | null
+    | {
+        shipment: ShipmentRow;
+        calls: ShipmentCallRow[];
+        order: ShipmentOrderDetail | null;
+      }
+    | { error: string }
+    | null
   >(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -641,6 +652,14 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                   }}
                 />
               )}
+              {detail.shipment.matched && !showOrderPicker &&
+                (detail.order ? (
+                  <ShipmentOrderItems order={detail.order} />
+                ) : (
+                  <p className="border-t border-slate-100 pt-2 text-xs text-slate-400">
+                    No se encontró el detalle sincronizado de Shopify.
+                  </p>
+                ))}
             </section>
 
             {/* claim + re-route call — hidden once the shipment is terminal (entregado/
@@ -989,4 +1008,49 @@ function Field({
 function OrderNameLabel({ name, matched }: { name: string | null; matched: boolean }) {
   if (matched && name) return <>{name}</>;
   return <span className="text-slate-400">—</span>;
+}
+
+function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
+  const units = order.line_items.reduce(
+    (total, item) => total + Math.max(0, item.quantity || 0),
+    0,
+  );
+
+  return (
+    <div className="border-t border-slate-100 pt-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-medium text-slate-600">Productos de Shopify</p>
+        {order.line_items.length > 0 && (
+          <p className="shrink-0 text-xs tabular-nums text-slate-400">
+            {order.line_items.length} {order.line_items.length === 1 ? "producto" : "productos"}
+            {" · "}
+            {units} {units === 1 ? "unidad" : "unidades"}
+          </p>
+        )}
+      </div>
+
+      {order.line_items.length === 0 ? (
+        <p className="mt-1.5 text-xs text-slate-400">Shopify no devolvió productos para este pedido.</p>
+      ) : (
+        <ul className="mt-1.5 divide-y divide-slate-100">
+          {order.line_items.map((item, index) => (
+            <li
+              key={`${item.variant_id ?? item.sku ?? item.title}-${index}`}
+              className="flex items-start gap-2.5 py-2 first:pt-1 last:pb-0"
+            >
+              <span className="inline-flex h-6 min-w-8 shrink-0 items-center justify-center rounded-md bg-slate-100 px-1.5 text-xs font-semibold tabular-nums text-slate-700">
+                {item.quantity}×
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm leading-5 text-slate-700">
+                  {item.title || "Producto sin nombre"}
+                </p>
+                {item.sku && <p className="mt-0.5 text-xs text-slate-400">SKU {item.sku}</p>}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }

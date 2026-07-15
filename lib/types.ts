@@ -40,6 +40,12 @@ export interface OrderLineItem {
   price: number | null;
 }
 
+/** Shopify order fields shown inside the shipment drawer. */
+export interface ShipmentOrderDetail {
+  name: string | null;
+  line_items: OrderLineItem[];
+}
+
 /** A row ready to be upserted into the `orders` table. */
 export interface OrderRow {
   store_id: string;

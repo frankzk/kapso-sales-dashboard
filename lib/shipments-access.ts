@@ -2,7 +2,7 @@
 // listing by view, counts, and a shipment + call-history detail loader.
 
 import { createServerSupabase } from "@/lib/db";
-import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
+import type { ShipmentCallRow, ShipmentOrderDetail, ShipmentRow } from "@/lib/types";
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
 
 // The manual-review queue: guides that didn't auto-link to an order AND still
@@ -274,7 +274,11 @@ export async function searchOrdersForLink(query: string): Promise<OrderLinkCandi
 /** A shipment + its call history (RLS-scoped). Drives the drawer. */
 export async function getShipmentWithCalls(
   shipmentId: string,
-): Promise<{ shipment: ShipmentRow; calls: ShipmentCallRow[] } | null> {
+): Promise<{
+  shipment: ShipmentRow;
+  calls: ShipmentCallRow[];
+  order: ShipmentOrderDetail | null;
+} | null> {
   const sb = await createServerSupabase();
   const { data: shipment } = await sb
     .from("shipments")
@@ -287,9 +291,23 @@ export async function getShipmentWithCalls(
     .select("id,shipment_id,store_id,agent,kind,new_status,note,next_followup_at,occurred_at")
     .eq("shipment_id", shipmentId)
     .order("occurred_at", { ascending: false });
-  const [currentShipment] = await withCurrentFenixEligibility(sb, [shipment as ShipmentRow]);
+  const shipmentRow = shipment as ShipmentRow;
+  let order: ShipmentOrderDetail | null = null;
+  if (shipmentRow.order_id) {
+    const { data } = await sb
+      .from("orders")
+      .select("name,line_items")
+      .eq("id", shipmentRow.order_id)
+      .maybeSingle();
+    const orderRow = data as ShipmentOrderDetail | null;
+    if (orderRow) {
+      order = { name: orderRow.name, line_items: orderRow.line_items ?? [] };
+    }
+  }
+  const [currentShipment] = await withCurrentFenixEligibility(sb, [shipmentRow]);
   return {
-    shipment: currentShipment ?? (shipment as ShipmentRow),
+    shipment: currentShipment ?? shipmentRow,
     calls: (calls as ShipmentCallRow[]) ?? [],
+    order,
   };
 }

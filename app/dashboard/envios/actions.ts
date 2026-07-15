@@ -32,7 +32,7 @@ import {
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
-import type { ShipmentCallRow, ShipmentRow } from "@/lib/types";
+import type { ShipmentCallRow, ShipmentOrderDetail, ShipmentRow } from "@/lib/types";
 
 export interface ShipmentActionState {
   error?: string;
@@ -75,7 +75,14 @@ async function authorizeShipment(
 /** Fetch a shipment + its call history (RLS-scoped). Drives the drawer. */
 export async function loadShipmentDetail(
   shipmentId: string,
-): Promise<{ shipment: ShipmentRow; calls: ShipmentCallRow[] } | { error: string }> {
+): Promise<
+  | {
+      shipment: ShipmentRow;
+      calls: ShipmentCallRow[];
+      order: ShipmentOrderDetail | null;
+    }
+  | { error: string }
+> {
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
   const detail = await getShipmentWithCalls(shipmentId);
@@ -89,7 +96,7 @@ export async function loadShipmentDetail(
     ...c,
     agent_name: c.agent ? (agentNameCache.get(c.agent) ?? null) : null,
   }));
-  return { shipment: detail.shipment, calls };
+  return { shipment: detail.shipment, calls, order: detail.order };
 }
 
 /** Global search (guía / pedido / guía Fenix / celular), RLS-scoped. */
