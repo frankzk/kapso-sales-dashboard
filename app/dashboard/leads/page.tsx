@@ -5,6 +5,7 @@ import {
   isLeadGestion,
   isLeadSegment,
   isQueueState,
+  leadInteractionDateFilterFromParams,
   type LeadGestion,
   type LeadSegment,
   type QueueState,
@@ -28,6 +29,8 @@ export default async function LeadsPage({
     tab?: string; // back-compat con el PR #76 (fila plana)
     seg?: string;
     gest?: string;
+    last_date?: string;
+    last_before?: string;
     open?: string;
   }>;
 }) {
@@ -61,6 +64,7 @@ export default async function LeadsPage({
       ? sp.tab
       : null;
   const initialGest: LeadGestion | null = isLeadGestion(sp.gest) ? sp.gest : null;
+  const initialInteractionDate = leadInteractionDateFilterFromParams(sp.last_date, sp.last_before);
 
   const [counts, leads, user] = await Promise.all([
     getLeadCounts(storeId),
@@ -94,10 +98,12 @@ export default async function LeadsPage({
       adNames={adNames}
       waNumbers={waNumbers}
       currency={currency}
+      timezone={timezone}
       insights={insights}
       initialState={initialState}
       initialSeg={initialSeg}
       initialGest={initialGest}
+      initialInteractionDate={initialInteractionDate}
       initialOpenId={typeof sp.open === "string" ? sp.open : null}
       currentUserId={user?.id ?? ""}
     />

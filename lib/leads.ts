@@ -273,6 +273,56 @@ export function countQueueStates(leads: { status: string }[]): Record<QueueState
 }
 
 // ---------------------------------------------------------------------------
+// Last-interaction date drill-down. The “Sin llamar · últimos 7 días” chart and
+// the date input in Filters share this exact model so their results cannot
+// diverge. `older.before` is exclusive: every local date before it belongs to
+// the chart's aggregated “+7d” bucket.
+// ---------------------------------------------------------------------------
+
+export type LeadInteractionDateFilter =
+  | { kind: "day"; date: string }
+  | { kind: "older"; before: string };
+
+export function isDateKey(value: string | null | undefined): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+export function leadInteractionDateFilterFromParams(
+  date: string | null | undefined,
+  before: string | null | undefined,
+): LeadInteractionDateFilter | null {
+  if (isDateKey(date)) return { kind: "day", date };
+  if (isDateKey(before)) return { kind: "older", before };
+  return null;
+}
+
+/** Calendar key of the signal used by the chart: last interaction, falling back
+ * to first seen when the conversation has no interaction timestamp. */
+export function leadInteractionDateKey(
+  lead: { last_interaction_at?: string | null; first_seen_at?: string | null },
+  timeZone: string,
+): string | null {
+  const iso = lead.last_interaction_at ?? lead.first_seen_at;
+  if (!iso) return null;
+  const atMs = Date.parse(iso);
+  if (!Number.isFinite(atMs)) return null;
+  return localParts(atMs, timeZone).date;
+}
+
+export function matchesLeadInteractionDate(
+  lead: { last_interaction_at?: string | null; first_seen_at?: string | null },
+  filter: LeadInteractionDateFilter | null,
+  timeZone: string,
+): boolean {
+  if (!filter) return true;
+  const date = leadInteractionDateKey(lead, timeZone);
+  if (!date) return false;
+  return filter.kind === "day" ? date === filter.date : date < filter.before;
+}
+
+// ---------------------------------------------------------------------------
 // Gestión: a second axis over the "Por llamar" queue — the advisor's call
 // state (the disposition set in "registrar llamada"). Orthogonal to leadSegment
 // (buyer intent); the two combine. Lost dispositions live in the "Perdidos"

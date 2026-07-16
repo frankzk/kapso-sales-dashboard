@@ -18,6 +18,7 @@ import {
 import { CHART } from "@/components/palette";
 import { cn } from "@/components/ui";
 import type { LeadsInsights } from "@/lib/leads-insights";
+import type { LeadInteractionDateFilter } from "@/lib/leads";
 
 const TOOLTIP_STYLE = { borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12 } as const;
 const AXIS_TICK = { fontSize: 11, fill: CHART.slate } as const;
@@ -52,10 +53,48 @@ function BurndownChart({ data, nowHourLabel }: { data: LeadsInsights["burndown"]
 /** "Sin llamar · últimos 7 días" — leads en cola sin gestionar (status `nuevo`),
  *  agrupados por la fecha de su última interacción. Una barra por día, con el
  *  número encima — para ver qué día se está quedando gente sin llamar. */
-function SinLlamarChart({ data, older }: { data: LeadsInsights["sinLlamar"]; older: number }) {
+function sameInteractionFilter(
+  a: LeadInteractionDateFilter | null,
+  b: LeadInteractionDateFilter | null,
+): boolean {
+  if (!a || !b || a.kind !== b.kind) return a === b;
+  if (a.kind === "day" && b.kind === "day") return a.date === b.date;
+  return a.kind === "older" && b.kind === "older" && a.before === b.before;
+}
+
+function SinLlamarChart({
+  data,
+  older,
+  olderBefore,
+  selected,
+  onSelect,
+}: {
+  data: LeadsInsights["sinLlamar"];
+  older: number;
+  olderBefore: string;
+  selected: LeadInteractionDateFilter | null;
+  onSelect: (filter: LeadInteractionDateFilter | null) => void;
+}) {
   // El bucket "+7d" (más viejos que la ventana, sumados) va primero y en rojo: es
   // la alarma — gente que escribió hace +7 días y sigue sin que nadie la llame.
-  const bars = [{ dia: "+7d", count: older }, ...data];
+  const bars = [
+    {
+      date: null,
+      dia: "+7d",
+      count: older,
+      filter: { kind: "older", before: olderBefore } as LeadInteractionDateFilter,
+    },
+    ...data.map((d) => ({
+      ...d,
+      filter: { kind: "day", date: d.date } as LeadInteractionDateFilter,
+    })),
+  ];
+
+  function activate(bar: (typeof bars)[number]) {
+    if (bar.count <= 0) return;
+    onSelect(sameInteractionFilter(selected, bar.filter) ? null : bar.filter);
+  }
+  const selectedInChart = bars.some((bar) => sameInteractionFilter(selected, bar.filter));
   return (
     <div className="h-44 w-full">
       <ResponsiveContainer width="100%" height="100%">
@@ -65,9 +104,34 @@ function SinLlamarChart({ data, older }: { data: LeadsInsights["sinLlamar"]; old
           <YAxis tick={AXIS_TICK} width={28} allowDecimals={false} />
           <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: "#f8fafc" }} formatter={(v) => [v, "Sin llamar"]} />
           <Bar dataKey="count" name="Sin llamar" radius={[3, 3, 0, 0]} isAnimationActive={false}>
-            {bars.map((b) => (
-              <Cell key={b.dia} fill={b.dia === "+7d" ? CHART.red : CHART.amber} />
-            ))}
+            {bars.map((b) => {
+              const active = sameInteractionFilter(selected, b.filter);
+              return (
+                <Cell
+                  key={b.dia}
+                  fill={b.dia === "+7d" ? CHART.red : CHART.amber}
+                  opacity={selectedInChart && !active ? 0.35 : 1}
+                  stroke={active ? CHART.brand : "transparent"}
+                  strokeWidth={active ? 2 : 0}
+                  cursor={b.count > 0 ? "pointer" : "default"}
+                  role={b.count > 0 ? "button" : undefined}
+                  tabIndex={b.count > 0 ? 0 : -1}
+                  aria-pressed={b.count > 0 ? active : undefined}
+                  aria-label={
+                    b.count > 0
+                      ? `Filtrar ${b.count} leads sin llamar de ${b.dia === "+7d" ? "hace más de 7 días" : b.date}`
+                      : undefined
+                  }
+                  onClick={() => activate(b)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      activate(b);
+                    }
+                  }}
+                />
+              );
+            })}
             <LabelList dataKey="count" position="top" fontSize={10} fill={CHART.slate} />
           </Bar>
         </BarChart>
@@ -213,10 +277,14 @@ export function LeadsInsightsPanel({
   data,
   titleSlot,
   actionsSlot,
+  interactionDateFilter,
+  onInteractionDateFilterChange,
 }: {
   data: LeadsInsights;
   titleSlot?: ReactNode;
   actionsSlot?: ReactNode;
+  interactionDateFilter: LeadInteractionDateFilter | null;
+  onInteractionDateFilterChange: (filter: LeadInteractionDateFilter | null) => void;
 }) {
   const [open, setOpen] = useState(true);
   const landing = [...data.burndown].reverse().find((p) => p.proy != null)?.proy ?? null;
@@ -265,9 +333,15 @@ export function LeadsInsightsPanel({
               <p className="mb-1 text-xs text-slate-500">
                 Por última interacción ·{" "}
                 <span className="font-medium text-slate-700">{data.sinLlamarTotal} en total</span> ·{" "}
-                <span className="text-red-600">barra roja = +7 días</span>
+                <span className="text-red-600">barra roja = +7 días</span> · toca una barra para filtrar
               </p>
-              <SinLlamarChart data={data.sinLlamar} older={data.sinLlamarOlder} />
+              <SinLlamarChart
+                data={data.sinLlamar}
+                older={data.sinLlamarOlder}
+                olderBefore={data.sinLlamarOlderBefore}
+                selected={interactionDateFilter}
+                onSelect={onInteractionDateFilterChange}
+              />
             </div>
 
             <div className="rounded-xl border border-slate-200 bg-white p-3">

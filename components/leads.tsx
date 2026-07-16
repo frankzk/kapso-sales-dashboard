@@ -27,10 +27,12 @@ import {
   isClaimActive,
   labelOf,
   leadSegment,
+  matchesLeadInteractionDate,
   leadWindowInfo,
   matchesQueueState,
   yapeKind,
   type LeadGestion,
+  type LeadInteractionDateFilter,
   type LeadSegment,
   type LeadWindow,
   type QueueState,
@@ -90,6 +92,16 @@ function withToggled(s: Set<string>, key: string): Set<string> {
   if (next.has(key)) next.delete(key);
   else next.add(key);
   return next;
+}
+
+function interactionDateFilterLabel(filter: LeadInteractionDateFilter): string {
+  if (filter.kind === "older") return "Más de 7 días";
+  return new Date(`${filter.date}T00:00:00.000Z`).toLocaleDateString("es-PE", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 function fmtDate(value: string | null | undefined): string {
@@ -542,10 +554,12 @@ export function LeadsBoard({
   adNames,
   waNumbers,
   currency,
+  timezone,
   insights,
   initialState,
   initialSeg,
   initialGest,
+  initialInteractionDate,
   initialOpenId,
   currentUserId,
 }: {
@@ -557,10 +571,12 @@ export function LeadsBoard({
   adNames?: Record<string, AdMeta>;
   waNumbers?: Record<string, WaNumber>;
   currency: string;
+  timezone: string;
   insights: LeadsInsights;
   initialState?: QueueState | null;
   initialSeg?: LeadSegment | null;
   initialGest?: LeadGestion | null;
+  initialInteractionDate?: LeadInteractionDateFilter | null;
   initialOpenId?: string | null; // ?open=<id> → auto-abre ese lead (desde el pop-up de Yapes)
   currentUserId: string;
 }) {
@@ -588,6 +604,9 @@ export function LeadsBoard({
   const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
   const [numFilter, setNumFilter] = useState<Set<string>>(new Set()); // WhatsApp phone_number_id(s) + "__none__"
+  const [interactionDateFilter, setInteractionDateFilter] = useState<LeadInteractionDateFilter | null>(
+    initialInteractionDate ?? null,
+  );
   // Search box: instant client-side narrowing of the current view PLUS a
   // debounced global lookup (all stages) so you can find any customer, not just
   // those loaded in the active tab.
@@ -637,6 +656,23 @@ export function LeadsBoard({
 
   function changeStore(nextStore: string) {
     router.push(`/dashboard/leads?store=${nextStore}&view=${view}`);
+  }
+
+  function changeInteractionDateFilter(next: LeadInteractionDateFilter | null) {
+    setQuery("");
+    if (!inQueue && next) {
+      const params = new URLSearchParams({
+        store: storeId,
+        view: "por_llamar",
+        state: "sin_llamar",
+      });
+      if (next.kind === "day") params.set("last_date", next.date);
+      else params.set("last_before", next.before);
+      router.push(`/dashboard/leads?${params.toString()}`);
+      return;
+    }
+    setQueueState("sin_llamar");
+    setInteractionDateFilter(next);
   }
 
   function openLead(lead: LeadRow) {
@@ -733,6 +769,10 @@ export function LeadsBoard({
     if (winFilter === "por_vencer") return state === "por_vencer" || state === "critica";
     return state === "cerrada";
   };
+  const matchInteractionDate = (l: LeadRow) =>
+    !inQueue ||
+    queueState !== "sin_llamar" ||
+    matchesLeadInteractionDate(l, interactionDateFilter, timezone);
   const FACETS = {
     query: matchQuery,
     src: matchSrc,
@@ -741,6 +781,7 @@ export function LeadsBoard({
     seg: matchSeg,
     gest: matchGest,
     win: matchWin,
+    interactionDate: matchInteractionDate,
   };
   type Facet = keyof typeof FACETS;
   const facetKeys = Object.keys(FACETS) as Facet[];
@@ -798,12 +839,17 @@ export function LeadsBoard({
   const gestActive = inQueue && queueState !== "sin_llamar" && !!gestFilter;
   // Filtros de refinamiento activos (excluye el buscador, que tiene su propia ✕).
   const hasActiveFilters =
-    gestActive || (inQueue && winFilter !== "all") || srcFilter.size > 0 || numFilter.size > 0;
+    gestActive ||
+    (inQueue && winFilter !== "all") ||
+    (inQueue && queueState === "sin_llamar" && !!interactionDateFilter) ||
+    srcFilter.size > 0 ||
+    numFilter.size > 0;
   // Badge on the "Filtros" button: count the active refinement groups (la pestaña
   // primaria de la cola no cuenta aquí).
   const refinementCount =
     (gestActive ? 1 : 0) +
     (inQueue && winFilter !== "all" ? 1 : 0) +
+    (inQueue && queueState === "sin_llamar" && interactionDateFilter ? 1 : 0) +
     (srcFilter.size > 0 ? 1 : 0) +
     (numFilter.size > 0 ? 1 : 0) +
     (isReviewView ? 1 : 0);
@@ -811,6 +857,7 @@ export function LeadsBoard({
     setSegFilter(null);
     setGestFilter(null);
     setWinFilter("all");
+    setInteractionDateFilter(null);
     setSrcFilter(new Set());
     setNumFilter(new Set());
   }
@@ -826,6 +873,8 @@ export function LeadsBoard({
       {/* Título "Leads" + tablero de hoy (burndown · sin llamar · productividad). */}
       <LeadsInsightsPanel
         data={insights}
+        interactionDateFilter={interactionDateFilter}
+        onInteractionDateFilterChange={changeInteractionDateFilter}
         titleSlot={
           <div>
             <h1 className="text-xl font-semibold text-slate-900">Leads</h1>
@@ -875,8 +924,13 @@ export function LeadsBoard({
             onChange={(key) => {
               // Cambio de tab instantáneo (client-side, sin refetch); desde una vista
               // de revisión, navega de vuelta a la cola en ese estado.
-              if (inQueue) setQueueState(key as QueueState);
-              else router.push(`/dashboard/leads?store=${storeId}&view=por_llamar&state=${key}`);
+              if (inQueue) {
+                const nextState = key as QueueState;
+                setQueueState(nextState);
+                if (nextState !== "sin_llamar") setInteractionDateFilter(null);
+              } else {
+                router.push(`/dashboard/leads?store=${storeId}&view=por_llamar&state=${key}`);
+              }
             }}
             options={QUEUE_STATES.map((s) => ({
               key: s.key,
@@ -977,6 +1031,17 @@ export function LeadsBoard({
                 })),
               ]}
             />
+            {interactionDateFilter && queueState === "sin_llamar" && (
+              <button
+                type="button"
+                onClick={() => changeInteractionDateFilter(null)}
+                aria-label="Quitar filtro de última interacción"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-100"
+              >
+                Última interacción: {interactionDateFilterLabel(interactionDateFilter)}
+                <span aria-hidden="true">×</span>
+              </button>
+            )}
           </div>
         )}
 
@@ -998,6 +1063,24 @@ export function LeadsBoard({
                     : []),
                 ]}
               />
+            )}
+            {view === "por_llamar" && queueState === "sin_llamar" && (
+              <label className="flex items-center gap-2 text-xs text-slate-500">
+                Última interacción
+                <input
+                  type="date"
+                  value={interactionDateFilter?.kind === "day" ? interactionDateFilter.date : ""}
+                  max={insights.sinLlamar.at(-1)?.date}
+                  onChange={(event) =>
+                    changeInteractionDateFilter(
+                      event.currentTarget.value
+                        ? { kind: "day", date: event.currentTarget.value }
+                        : null,
+                    )
+                  }
+                  className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                />
+              </label>
             )}
             {view === "por_llamar" && (
               <SegControl
