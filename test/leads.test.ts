@@ -24,6 +24,9 @@ import {
   QUEUE_STATES,
   isQueueState,
   matchesQueueState,
+  leadInteractionDateFilterFromParams,
+  leadInteractionDateKey,
+  matchesLeadInteractionDate,
   countQueueStates,
   yapeKind,
 } from "@/lib/leads";
@@ -172,6 +175,42 @@ describe("queue state (primary axis: Sin llamar vs En seguimiento)", () => {
         { status: "buzon" },
       ]),
     ).toEqual({ sin_llamar: 2, seguimiento: 3 });
+  });
+});
+
+describe("last interaction date filter", () => {
+  const lead = {
+    last_interaction_at: "2026-07-16T02:30:00.000Z", // July 15, 9:30 p.m. Lima
+    first_seen_at: "2026-07-01T15:00:00.000Z",
+  };
+
+  it("uses the store calendar day and prefers last interaction over first seen", () => {
+    expect(leadInteractionDateKey(lead, "America/Lima")).toBe("2026-07-15");
+    expect(
+      leadInteractionDateKey(
+        { last_interaction_at: null, first_seen_at: "2026-07-14T15:00:00.000Z" },
+        "America/Lima",
+      ),
+    ).toBe("2026-07-14");
+  });
+
+  it("matches an exact day and the exclusive +7d boundary", () => {
+    expect(matchesLeadInteractionDate(lead, { kind: "day", date: "2026-07-15" }, "America/Lima")).toBe(true);
+    expect(matchesLeadInteractionDate(lead, { kind: "day", date: "2026-07-16" }, "America/Lima")).toBe(false);
+    expect(matchesLeadInteractionDate(lead, { kind: "older", before: "2026-07-16" }, "America/Lima")).toBe(true);
+    expect(matchesLeadInteractionDate(lead, { kind: "older", before: "2026-07-15" }, "America/Lima")).toBe(false);
+  });
+
+  it("parses only valid shareable filter params", () => {
+    expect(leadInteractionDateFilterFromParams("2026-07-15", undefined)).toEqual({
+      kind: "day",
+      date: "2026-07-15",
+    });
+    expect(leadInteractionDateFilterFromParams(undefined, "2026-07-10")).toEqual({
+      kind: "older",
+      before: "2026-07-10",
+    });
+    expect(leadInteractionDateFilterFromParams("2026-02-31", undefined)).toBeNull();
   });
 });
 

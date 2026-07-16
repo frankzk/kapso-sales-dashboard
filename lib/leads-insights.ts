@@ -219,9 +219,10 @@ export interface LeadsInsights {
   nowHourLabel: string; // e.g. "15h" — the "ahora" marker
   productivity: AdvisorToday[];
   conversion: ConversionDay[]; // contactos vs pedidos por día (equipo), últimos 7 días
-  sinLlamar: { dia: string; count: number }[]; // sin-gestión leads por día de última interacción
+  sinLlamar: { date: string; dia: string; count: number }[]; // sin-gestión leads por día de última interacción
   sinLlamarTotal: number; // total sin llamar (incl. older than the window)
   sinLlamarOlder: number; // sin llamar cuya última interacción fue hace +7 días (la alarma)
+  sinLlamarOlderBefore: string; // límite exclusivo del bucket +7d
 }
 
 const WEEKDAYS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
@@ -384,7 +385,11 @@ export async function getLeadsInsights(
     if (daySet.has(d)) sinLlamarByDate[d] = (sinLlamarByDate[d] ?? 0) + 1;
     else if (d < firstDay) sinLlamarOlder += 1; // anterior a la ventana = leads viejos sin llamar
   }
-  const sinLlamar = days.map((dd) => ({ dia: dd.label, count: sinLlamarByDate[dd.date] ?? 0 }));
+  const sinLlamar = days.map((dd) => ({
+    date: dd.date,
+    dia: dd.label,
+    count: sinLlamarByDate[dd.date] ?? 0,
+  }));
   const sinLlamarTotal = sinLlamar.reduce((s, x) => s + x.count, 0) + sinLlamarOlder;
 
   // Conversión por día (equipo). Robusto al tope de filas de PostgREST: pagina las
@@ -431,5 +436,6 @@ export async function getLeadsInsights(
     sinLlamar,
     sinLlamarTotal,
     sinLlamarOlder,
+    sinLlamarOlderBefore: firstDay,
   };
 }
