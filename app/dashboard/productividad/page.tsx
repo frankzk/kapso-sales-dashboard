@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { getAccessibleStores, getUserRoleSummary, parseRange } from "@/lib/access";
-import { getProductivityBoard } from "@/lib/productivity";
+import { getAccessibleStores, getUserRoleSummary } from "@/lib/access";
+import { getProductivityBoard, productivityInitialRange } from "@/lib/productivity";
 import { ProductivityBoard } from "@/components/productivity";
 import { EmptyState } from "@/components/ui";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
@@ -31,8 +31,6 @@ async function ProductividadContent({
     getAccessibleStores(),
   ]);
   if (role.isVendedoraOnly) redirect("/dashboard/leads");
-  const range = parseRange(sp);
-
   if (!stores.length) {
     return <EmptyState title="Aún no tienes tiendas conectadas" />;
   }
@@ -54,6 +52,7 @@ async function ProductividadContent({
   // Infer active hours by each store's local day; mixed tz → Lima (the business default).
   const tz = stores.every((s) => s.timezone === first.timezone) ? first.timezone : "America/Lima";
 
+  const range = productivityInitialRange(sp, tz);
   const board = await getProductivityBoard(scopeIds, range, source, tz);
   // Dots iniciales: asesoras del tablero online + las online sin actividad.
   const initialOnlineIds = [

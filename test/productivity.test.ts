@@ -11,6 +11,7 @@ import {
   localDayPreset,
   localPresetRange,
   localRangeBoundsIso,
+  productivityInitialRange,
   storeInitials,
   type AdvisorCall,
   type AdvisorStat,
@@ -359,6 +360,23 @@ describe("computeAdvisorConversionByDay (sparkline: contactos y pedidos por día
 });
 
 describe("presets de rango en día LOCAL de la tienda", () => {
+  it("Productividad abre en Hoy cuando la URL no trae un rango", () => {
+    expect(productivityInitialRange({}, "America/Lima", "2026-07-18T02:30:00Z")).toEqual({
+      from: "2026-07-17",
+      to: "2026-07-17",
+    });
+  });
+
+  it("conserva el rango explícito al cambiar filtros o reabrir un enlace", () => {
+    expect(
+      productivityInitialRange(
+        { from: "2026-06-18", to: "2026-07-17" },
+        "America/Lima",
+        "2026-07-18T02:30:00Z",
+      ),
+    ).toEqual({ from: "2026-06-18", to: "2026-07-17" });
+  });
+
   it("a las 20:30 de Lima, 'Hoy' sigue siendo el día local (no el UTC siguiente)", () => {
     // 2026-07-13T01:30Z = 2026-07-12 20:30 en Lima
     expect(localDayPreset(0, "America/Lima", "2026-07-13T01:30:00Z")).toEqual({
