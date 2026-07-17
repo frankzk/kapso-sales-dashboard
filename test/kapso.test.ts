@@ -88,6 +88,96 @@ describe("parseOrderSignals (buyer intent from chat messages)", () => {
     ]);
     expect(s).toEqual({ district: null, cart_value: null, cart_item_count: null, cart_summary: null });
   });
+
+  // ── Parser ensanchado: variantes de total (otros guiones de bot) ────────────
+  it("reconoce variantes del total: 'Total:', 'del pedido', 'Monto', 'un total de', 'soles'", () => {
+    const cases: [string, number][] = [
+      ["Tu pedido:\n- 2 x Colágeno Premium\nTotal: S/ 138", 138],
+      ["Resumen:\n- 1 x Shampoo Anticaída\nTotal del pedido: S/. 79", 79],
+      ["Monto a pagar: S/149\nPago contra entrega", 149],
+      ["Serían 2 frascos, un total de S/ 138 con envío gratis. ¿Confirmamos?", 138],
+      ["Tu pedido queda en un total de 138 soles ¿confirmamos?", 138],
+    ];
+    for (const [text, value] of cases) {
+      const s = parseOrderSignals([{ t: 1, dir: "outbound", text }]);
+      expect(s.cart_value).toBe(value);
+      expect((s.cart_item_count ?? 0) > 0).toBe(true);
+    }
+  });
+
+  it("NO confunde el total del ENVÍO (ni menciones de producto sin total) con un pedido", () => {
+    expect(
+      parseOrderSignals([{ t: 1, dir: "outbound", text: "El total del envío: S/ 10 se paga al recibir" }]).cart_value,
+    ).toBeNull();
+    expect(
+      parseOrderSignals([{ t: 1, dir: "inbound", text: "quiero 2 del colágeno" }]).cart_item_count,
+    ).toBeNull();
+  });
+
+  it("ítems en formatos nuevos: 'Producto x2' y 'N unidades de'", () => {
+    const a = parseOrderSignals([
+      { t: 1, dir: "outbound", text: "Tu pedido:\n• Colágeno bebible x2\nTotal: S/ 178" },
+    ]);
+    expect(a.cart_item_count).toBe(2);
+    expect(a.cart_summary).toContain("Colágeno");
+    const b = parseOrderSignals([
+      { t: 1, dir: "outbound", text: "Resumen:\n- 2 unidades de Faja Reductora\nTotal a pagar: S/ 120" },
+    ]);
+    expect(b.cart_item_count).toBe(2);
+    expect(b.cart_summary).toContain("Faja");
+  });
+
+  // ── Parser ensanchado: prompts de ubicación + ubicación espontánea ──────────
+  it("prompt de ubicación ampliado (ciudad/provincia) — solo cuando es una pregunta", () => {
+    const s = parseOrderSignals([
+      { t: 1, dir: "outbound", text: "¿A qué ciudad o provincia hacemos el envío?" },
+      { t: 2, dir: "inbound", text: "Arequipa" },
+    ]);
+    expect(s.district).toBe("Arequipa");
+    // texto de marketing con "ciudades" SIN pregunta no captura la respuesta
+    const n = parseOrderSignals([
+      { t: 1, dir: "outbound", text: "Hacemos envíos a todas las ciudades del Perú, entrega en 24-48h." },
+      { t: 2, dir: "inbound", text: "genial" },
+    ]);
+    expect(n.district).toBeNull();
+  });
+
+  it("rechaza respuestas de relleno o cantidades como distrito", () => {
+    expect(
+      parseOrderSignals([
+        { t: 1, dir: "outbound", text: "¿A qué distrito sería el envío?" },
+        { t: 2, dir: "inbound", text: "ok gracias" },
+      ]).district,
+    ).toBeNull();
+    expect(
+      parseOrderSignals([
+        { t: 1, dir: "outbound", text: "¿A qué distrito sería el envío?" },
+        { t: 2, dir: "inbound", text: "3x2" },
+      ]).district,
+    ).toBeNull();
+  });
+
+  it("captura la ubicación espontánea del cliente ('soy de X' / 'vivo en X')", () => {
+    expect(
+      parseOrderSignals([{ t: 1, dir: "inbound", text: "Hola, soy de Arequipa y quiero el pack x2" }]).district,
+    ).toBe("Arequipa");
+    expect(
+      parseOrderSignals([{ t: 1, dir: "inbound", text: "vivo en el departamento de Cusco" }]).district,
+    ).toBe("Cusco");
+    // "vivo en un departamento" (vivienda) NO es una ubicación
+    expect(
+      parseOrderSignals([{ t: 1, dir: "inbound", text: "vivo en un departamento en el piso cuatro" }]).district,
+    ).toBeNull();
+  });
+
+  it("el prompt del bot sigue mandando sobre la mención espontánea", () => {
+    const s = parseOrderSignals([
+      { t: 1, dir: "inbound", text: "soy de Trujillo" },
+      { t: 2, dir: "outbound", text: "¿A qué distrito sería el envío?" },
+      { t: 3, dir: "inbound", text: "San Isidro" },
+    ]);
+    expect(s.district).toBe("San Isidro");
+  });
 });
 
 describe("detectYapePayment (Yape/Shalom advance from chat — TEXT/caption only)", () => {

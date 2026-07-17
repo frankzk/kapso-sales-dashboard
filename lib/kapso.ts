@@ -793,26 +793,98 @@ export interface OrderSignals {
   cart_summary: string | null;
 }
 
+// Frases de TOTAL que anclan un "pedido armado" en un mensaje del bot. El ancla
+// es siempre una frase de total con monto — nunca una mera mención de producto —
+// para que "carrito" siga significando pedido armado. Orden: explícitas primero.
+// "total del envío: S/ 10" NO calza en ninguna (el genérico exige el monto
+// inmediatamente después de "total", sin palabras de por medio).
+const ORDER_TOTAL_RES: RegExp[] = [
+  /(?:total\s+a\s+pagar|total\s+del?\s+pedido|monto\s+(?:total|a\s+pagar))\s*:?\s*(?:es\s+|ser[ií]an?\s+|de\s+)?s\/\.?\s*([\d.,]+)/i,
+  /(?:total\s+a\s+pagar|total\s+del?\s+pedido|monto\s+(?:total|a\s+pagar))\s*:?\s*(?:es\s+|ser[ií]an?\s+|de\s+)?([\d.,]+)\s*soles\b/i,
+  /\btotal\s*:?\s*(?:es\s+|ser[ií]an?\s+|de\s+)?s\/\.?\s*([\d.,]+)/i,
+  /\btotal\s*:?\s*(?:es\s+|ser[ií]an?\s+|de\s+)?([\d.,]+)\s*soles\b/i,
+];
+
+function matchOrderTotal(text: string): number | null {
+  for (const re of ORDER_TOTAL_RES) {
+    const m = text.match(re);
+    if (m) return Number(m[1]!.replace(/,/g, "")) || null;
+  }
+  return null;
+}
+
+/** Líneas de ítems dentro de un resumen de pedido (solo se llama sobre mensajes
+ *  que YA calzaron un total): "- 3 x Producto", "- 2 unidades de Producto" y
+ *  "• Producto x2". Títulos que son puro precio se descartan. */
+function parseSummaryItems(text: string): { qty: number; title: string }[] {
+  const items: { qty: number; title: string }[] = [];
+  const push = (qty: number, title: string) => {
+    const t = title.trim();
+    if (t && !/^s\/\.?\s*[\d.,]*$/i.test(t)) items.push({ qty, title: t });
+  };
+  for (const line of text.split(/\n/)) {
+    let m = line.match(/^[\s\-•*]*(\d+)\s*x\s+(.+)$/i);
+    if (m) {
+      push(Number(m[1]), m[2]!);
+      continue;
+    }
+    m = line.match(/^[\s\-•*]*(\d+)\s*(?:und\.?|unid\.?|unidad(?:es)?)\s*(?:de\s+)?(.+)$/i);
+    if (m) {
+      push(Number(m[1]), m[2]!);
+      continue;
+    }
+    m = line.match(/^[\s\-•*]*(.{3,}?)\s+x\s?(\d+)\s*(?:[-–—:(].*)?$/i);
+    if (m && !/^(?:talla|color|tama[nñ]o|medida)\b/i.test(m[1]!.trim())) {
+      push(Number(m[2]), m[1]!);
+    }
+  }
+  return items;
+}
+
+// Respuestas que NO son un lugar: puro relleno conversacional ("ok gracias",
+// "sí claro") o una cantidad ("3", "3x2") — el cliente suele contestar la
+// promo, no el distrito.
+const LOCATION_FILLER_RE =
+  /^(?:(?:ok(?:ay)?|s[ií]|ya|no|gracias|listo|bueno|claro|hola|buenas|dale|perfecto|genial)\b[\s!.,]*)+$/i;
+// Ecos del bot que no son un lugar concreto: marketing ("envíos a todas las
+// ciudades", "a nivel nacional") o "entrega a domicilio".
+const ECHO_NOT_PLACE_RE = /^(?:tod[oa]s?\b|cualquier\b|nivel\b|domicilio\b|provincias\b)/i;
+// Tras limpiar artículos, un residuo así no es un lugar ("vivo en un
+// departamento", "estoy en camino/casa/el trabajo").
+const NOT_A_PLACE_RE =
+  /^(?:en|de|del|al|el|la|un|una|departamento|provincia|ciudad|distrito|zona|casa|depa|camino|trabajo|oficina|centro|momento|reuni[oó]n)\b/i;
+
 /**
- * Extract buyer-intent signals from a conversation's messages. Aurela's bot
- * collects these in-chat (no Shopify draft order is created):
- *   - district: the customer's reply right after the bot asks "¿…distrito…?".
- *   - cart: parsed from the bot's order summary ("… Total a pagar: S/ N", with
- *     line items like "- 3 x <producto>").
+ * Extract buyer-intent signals from a conversation's messages. The bots collect
+ * these in-chat (no Shopify draft order is created):
+ *   - district: la respuesta del cliente al ÚLTIMO prompt de ubicación del bot.
+ *     "distrito" vale siempre (bot clásico de Aurela); ciudad/provincia/
+ *     departamento/"¿dónde…enviamos?" solo si el mensaje es una PREGUNTA (para
+ *     no confundir marketing — "envíos a todas las ciudades" — con un prompt).
+ *     Fallbacks: el eco del bot ("Envío: gratis a Ate") y, al final, la
+ *     ubicación espontánea del cliente ("soy de Arequipa", "vivo en Comas") —
+ *     clave para Kenku, que vende a nivel nacional y cuyo guion no siempre
+ *     pregunta "distrito".
+ *   - cart: el resumen de pedido del bot, anclado en una frase de total con
+ *     monto (variantes en ORDER_TOTAL_RES) + líneas de ítems.
  * Pure + defensive: unknown formats just yield nulls.
  */
 export function parseOrderSignals(msgs: ParsedMsg[]): OrderSignals {
-  // District. The bot re-asks "¿…distrito…?" several times, so the FIRST reply
-  // is usually about something else (qty). Use the LAST prompt's reply; fall
-  // back to the district the bot echoes in its summary/confirmation
-  // ("Envío: gratis a Jesús María", "…entrega en Ate").
+  // District. The bot re-asks several times, so the FIRST reply is usually
+  // about something else (qty). Use the LAST prompt's reply.
+  const isLocationPrompt = (text: string): boolean =>
+    /distrito/i.test(text) ||
+    (/[?¿]/.test(text) && /(?:provincia|ciudad|departamento|d[oó]nde\s+.{0,24}(?:env[ií]|entreg))/i.test(text));
   let district: string | null = null;
   for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i]!.dir !== "outbound" || !/distrito/i.test(msgs[i]!.text)) continue;
+    if (msgs[i]!.dir !== "outbound" || !isLocationPrompt(msgs[i]!.text)) continue;
     const reply = msgs.slice(i + 1).find((x) => x.dir === "inbound" && x.text.trim());
     if (reply) {
       const d = reply.text.trim().replace(/\s+/g, " ");
-      if (d.length <= 40 && !d.includes("?")) district = d; // a place name, not a question
+      // a place name: short, not a question, not filler, not a quantity
+      if (d.length <= 40 && !d.includes("?") && !LOCATION_FILLER_RE.test(d) && !/^[\d\sx×]+$/i.test(d)) {
+        district = d;
+      }
     }
     break; // last prompt wins
   }
@@ -822,24 +894,38 @@ export function parseOrderSignals(msgs: ParsedMsg[]): OrderSignals {
       const echo =
         m.text.match(/env[ií]o[^\n]*?\s(?:a|para)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ][^\n.,!?]*)/i) ??
         m.text.match(/entrega\s+(?:en|para|a)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ][^\n.,!?]*)/i);
-      if (echo) district = echo[1]!.trim().replace(/\s+/g, " ").slice(0, 40); // last wins
+      if (echo) {
+        const e = echo[1]!.trim().replace(/\s+/g, " ");
+        if (!ECHO_NOT_PLACE_RE.test(e)) district = e.slice(0, 40); // last wins
+      }
+    }
+  }
+  // Último recurso: el cliente lo dice espontáneamente. Se limpia el artículo y
+  // el "departamento/ciudad de …"; un residuo que no es lugar se descarta.
+  if (!district) {
+    for (const m of msgs) {
+      if (m.dir !== "inbound") continue;
+      const v = m.text.match(
+        /(?:soy de|vivo en|estoy en|me encuentro en|mi (?:distrito|ciudad|provincia) es)\s+([a-záéíóúñü][a-záéíóúñü\s]{1,38}?)(?=\s+(?:y|pero|que|para|porque|cerca)\b|[.,;!?\n]|$)/i,
+      );
+      if (!v) continue;
+      let d = v[1]!.trim().replace(/\s+/g, " ");
+      d = d.replace(/^(?:el|la|los|las|un|una|mi)\s+/i, "");
+      d = d.replace(/^(?:departamento|provincia|ciudad|distrito|zona)\s+(?:de\s+)?/i, "");
+      if (d.length >= 3 && !NOT_A_PLACE_RE.test(d)) district = d.slice(0, 40); // last wins
     }
   }
 
-  // Cart: the bot's order summary ("Total a pagar: S/ N" + "- N x <producto>").
+  // Cart: the bot's order summary, anchored on a money-total phrase.
   let cart_value: number | null = null;
   let cart_item_count: number | null = null;
   let cart_summary: string | null = null;
   for (const m of msgs) {
     if (m.dir !== "outbound") continue;
-    const total = m.text.match(/total a pagar:\s*s\/\.?\s*([\d.,]+)/i);
-    if (!total) continue;
-    cart_value = Number(total[1]!.replace(/,/g, "")) || null;
-    const items: { qty: number; title: string }[] = [];
-    for (const line of m.text.split(/\n/)) {
-      const li = line.match(/^[\s\-•*]*(\d+)\s*x\s+(.+)$/i);
-      if (li) items.push({ qty: Number(li[1]), title: li[2]!.trim() });
-    }
+    const total = matchOrderTotal(m.text);
+    if (total == null) continue;
+    cart_value = total;
+    const items = parseSummaryItems(m.text);
     if (items.length) {
       cart_item_count = items.reduce((s, it) => s + it.qty, 0);
       const titles = items
