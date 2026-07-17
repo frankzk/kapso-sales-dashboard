@@ -43,13 +43,14 @@ function beep() {
   }
 }
 
-export function YapeAlerts() {
+export function YapeAlerts({ enabled = true }: { enabled?: boolean }) {
   const router = useRouter();
   const [alerts, setAlerts] = useState<YapeAlert[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const knownRef = useRef<Set<string>>(new Set()); // ids already alerted (to beep only on new)
 
   const refresh = useCallback(async () => {
+    if (!enabled) return;
     if (typeof document !== "undefined" && document.hidden) return;
     let next: YapeAlert[];
     try {
@@ -61,9 +62,14 @@ export function YapeAlerts() {
     const hasNew = next.some((a) => !knownRef.current.has(a.id));
     knownRef.current = new Set(next.map((a) => a.id)); // forget ones that left → a re-entry re-beeps
     if (hasNew) beep();
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
+    if (!enabled) {
+      setAlerts([]);
+      knownRef.current = new Set();
+      return;
+    }
     void refresh();
     const id = setInterval(() => void refresh(), POLL_MS);
     const onVis = () => {
@@ -74,9 +80,9 @@ export function YapeAlerts() {
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [refresh]);
+  }, [enabled, refresh]);
 
-  if (!alerts.length) return null;
+  if (!enabled || !alerts.length) return null;
   const top = alerts[0]!;
   const extra = alerts.length - 1;
   const detail = top.cartSummary || top.handoffContext || null;

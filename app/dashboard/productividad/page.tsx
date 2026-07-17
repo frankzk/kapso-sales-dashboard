@@ -1,20 +1,37 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getAccessibleStores, getUserRoleSummary, parseRange } from "@/lib/access";
 import { getProductivityBoard } from "@/lib/productivity";
 import { ProductivityBoard } from "@/components/productivity";
 import { EmptyState } from "@/components/ui";
+import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
 export const dynamic = "force-dynamic";
 
-export default async function ProductividadPage({
+export default function ProductividadPage({
   searchParams,
 }: {
   searchParams: Promise<{ from?: string; to?: string; store?: string; src?: string }>;
 }) {
-  if ((await getUserRoleSummary()).isVendedoraOnly) redirect("/dashboard/leads");
-  const sp = await searchParams;
+  return (
+    <Suspense fallback={<DashboardRouteSkeleton />}>
+      <ProductividadContent searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function ProductividadContent({
+  searchParams,
+}: {
+  searchParams: Promise<{ from?: string; to?: string; store?: string; src?: string }>;
+}) {
+  const [role, sp, stores] = await Promise.all([
+    getUserRoleSummary(),
+    searchParams,
+    getAccessibleStores(),
+  ]);
+  if (role.isVendedoraOnly) redirect("/dashboard/leads");
   const range = parseRange(sp);
-  const stores = await getAccessibleStores();
 
   if (!stores.length) {
     return <EmptyState title="Aún no tienes tiendas conectadas" />;

@@ -114,11 +114,28 @@ async function withCurrentFenixEligibility(
   const orgIds = Array.from(new Set(orgByStore.values()));
   if (!orgIds.length) return rows;
 
-  const { data: stock, error: stockError } = await sb
+  const stockPromise = sb
     .from("fenix_stock")
     .select("org_id,city,product,sku,quantity")
     .in("org_id", orgIds);
-  if (stockError) return rows;
+  const orderIds = Array.from(
+    new Set(pending.map((s) => s.order_id).filter((id): id is string => !!id)),
+  );
+  const orderParts = Array.from(
+    { length: Math.ceil(orderIds.length / 300) },
+    (_, index) => orderIds.slice(index * 300, index * 300 + 300),
+  );
+  const orderPagesPromise = Promise.all(
+    orderParts.map((part) =>
+      sb.from("orders").select("id,line_items").in("id", part),
+    ),
+  );
+  const [{ data: stock, error: stockError }, orderPages] = await Promise.all([
+    stockPromise,
+    orderPagesPromise,
+  ]);
+  if (stockError || orderPages.some((page) => !!page.error)) return rows;
+
   const stockByOrg = new Map<string, FenixStockRow[]>();
   for (const item of (stock as (FenixStockRow & { org_id: string })[]) ?? []) {
     const group = stockByOrg.get(item.org_id) ?? [];
@@ -126,19 +143,11 @@ async function withCurrentFenixEligibility(
     stockByOrg.set(item.org_id, group);
   }
 
-  const orderIds = Array.from(
-    new Set(pending.map((s) => s.order_id).filter((id): id is string => !!id)),
-  );
   const productsByOrder = new Map<
     string,
     { title?: string | null; sku?: string | null }[]
   >();
-  for (let i = 0; i < orderIds.length; i += 300) {
-    const { data: orders, error: ordersError } = await sb
-      .from("orders")
-      .select("id,line_items")
-      .in("id", orderIds.slice(i, i + 300));
-    if (ordersError) return rows;
+  for (const { data: orders } of orderPages) {
     for (const order of
       (orders as {
         id: string;
@@ -211,9 +220,21 @@ export async function getStoreShipments(
     out.push(...rows);
     if (rows.length < PAGE) break;
   }
-  const withTodayCalls =
-    view === "pendiente" ? await withTodayContactCount(sb, out, storeIds) : out;
-  return withCurrentFenixEligibility(sb, withTodayCalls);
+  if (view !== "pendiente") return out;
+
+  // Today's contacts and current Fenix eligibility are independent enrichments.
+  // Run them together, then merge the one field produced by the stock read.
+  const [withTodayCalls, withEligibility] = await Promise.all([
+    withTodayContactCount(sb, out, storeIds),
+    withCurrentFenixEligibility(sb, out),
+  ]);
+  const eligibilityById = new Map(
+    withEligibility.map((shipment) => [shipment.id, shipment.fenix_eligible]),
+  );
+  return withTodayCalls.map((shipment) => ({
+    ...shipment,
+    fenix_eligible: eligibilityById.get(shipment.id) ?? shipment.fenix_eligible,
+  }));
 }
 
 /** Count of shipments matching a category set (exact, not row-capped). */
@@ -245,21 +266,24 @@ export async function getShipmentCounts(
   };
   if (!storeIds.length) return out;
   const sb = await createServerSupabase();
-  const { count: revision } = await sb
-    .from("shipments")
-    .select("id", { count: "exact", head: true })
-    .in("store_id", storeIds)
-    .eq("matched", false)
-    .in("status_category", REVIEW_CATEGORIES)
-    .or("match_method.is.null,match_method.neq.dismissed");
-  const [pendiente, en_ruta, entregado, anulado, transferido] = await Promise.all([
+  const [revision, pendiente, en_ruta, entregado, anulado, transferido] = await Promise.all([
+    (async () => {
+      const { count } = await sb
+        .from("shipments")
+        .select("id", { count: "exact", head: true })
+        .in("store_id", storeIds)
+        .eq("matched", false)
+        .in("status_category", REVIEW_CATEGORIES)
+        .or("match_method.is.null,match_method.neq.dismissed");
+      return count ?? 0;
+    })(),
     countByCategory(sb, storeIds, ["pending"]),
     countByCategory(sb, storeIds, ["in_route"]),
     countByCategory(sb, storeIds, ["delivered"]),
     countByCategory(sb, storeIds, ["closed"]),
     countByCategory(sb, storeIds, ["transferred"]),
   ]);
-  return { pendiente, en_ruta, entregado, anulado, transferido, revision: revision ?? 0 };
+  return { pendiente, en_ruta, entregado, anulado, transferido, revision };
 }
 
 /** Unmatched shipments awaiting manual linking (the "Por revisar" queue). */

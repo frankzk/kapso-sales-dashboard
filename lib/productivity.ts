@@ -9,6 +9,22 @@ import { chunk, defaultRange, previousRange, type DateRange } from "@/lib/access
 import { onlineVendedoraIds } from "@/lib/presence";
 import { leadSegment, type LeadSegment } from "@/lib/leads";
 
+const DB_READ_CONCURRENCY = 4;
+
+/** Keep independent PostgREST reads concurrent without opening an unbounded
+ * number of connections on large ranges. */
+async function mapInBatches<T, R>(
+  items: T[],
+  worker: (item: T) => Promise<R>,
+  concurrency = DB_READ_CONCURRENCY,
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    out.push(...(await Promise.all(items.slice(i, i + concurrency).map(worker))));
+  }
+  return out;
+}
+
 /** Minutes to ADD to UTC to reach local time in `tz` at `date` (Lima → −300). */
 export function tzOffsetMinutes(date: Date, tz: string): number {
   const dtf = new Intl.DateTimeFormat("en-US", {
@@ -139,22 +155,35 @@ async function fetchAdvisorLeadCallsPaged(
 ): Promise<AdvisorCall[]> {
   const PAGE = 1000;
   const CAP = 40000; // safety bound: ~40 pages even on a runaway store
+  const PAGE_WINDOW = 4;
   const calls: AdvisorCall[] = [];
-  for (let from = 0; from < CAP; from += PAGE) {
-    const base = sb
-      .from("lead_calls")
-      .select("vendedora, lead_id, kind, occurred_at")
-      .in("store_id", storeIds)
-      .gte("occurred_at", startIso)
-      .lte("occurred_at", endIso);
-    const { data, error } = await (vendedoraId ? base.eq("vendedora", vendedoraId) : base.not("vendedora", "is", null))
-      .order("occurred_at", { ascending: false })
-      .order("id", { ascending: false })
-      .range(from, from + PAGE - 1);
-    if (error) break;
-    const batch = (data as AdvisorCall[]) ?? [];
-    calls.push(...batch);
-    if (batch.length < PAGE) break;
+  for (let from = 0; from < CAP; from += PAGE * PAGE_WINDOW) {
+    const offsets = Array.from(
+      { length: Math.min(PAGE_WINDOW, Math.ceil((CAP - from) / PAGE)) },
+      (_, index) => from + index * PAGE,
+    );
+    const pages = await Promise.all(
+      offsets.map((offset) => {
+        const base = sb
+          .from("lead_calls")
+          .select("vendedora, lead_id, kind, occurred_at")
+          .in("store_id", storeIds)
+          .gte("occurred_at", startIso)
+          .lte("occurred_at", endIso);
+        return (vendedoraId
+          ? base.eq("vendedora", vendedoraId)
+          : base.not("vendedora", "is", null))
+          .order("occurred_at", { ascending: false })
+          .order("id", { ascending: false })
+          .range(offset, offset + PAGE - 1);
+      }),
+    );
+    for (const { data, error } of pages) {
+      if (error) return calls;
+      const batch = (data as AdvisorCall[]) ?? [];
+      calls.push(...batch);
+      if (batch.length < PAGE) return calls;
+    }
   }
   return calls;
 }
@@ -448,20 +477,39 @@ async function buildAdvisorInputs(
   };
   let leadsTouched: TouchedLead[] = [];
   let sourceMissing = false;
-  for (const part of chunk(leadIds, 300)) {
-    if (!sourceMissing) {
-      const withSource = await sb
-        .from("leads")
-        .select("id, store_id, category, has_order, order_id, source")
-        .in("id", part);
-      if (!withSource.error) {
-        leadsTouched.push(...((withSource.data as unknown as TouchedLead[]) ?? []));
-        continue;
+  let loadedInParallel = false;
+  const leadParts = chunk(leadIds, 300);
+  const parallelLeadPages = await mapInBatches(leadParts, async (part) =>
+    await sb
+      .from("leads")
+      .select("id, store_id, category, has_order, order_id, source")
+      .in("id", part),
+  );
+  if (parallelLeadPages.every((page) => !page.error)) {
+    leadsTouched = parallelLeadPages.flatMap(
+      (page) => (page.data as unknown as TouchedLead[]) ?? [],
+    );
+    loadedInParallel = true;
+  }
+  if (!loadedInParallel) {
+    for (const part of leadParts) {
+      if (!sourceMissing) {
+        const withSource = await sb
+          .from("leads")
+          .select("id, store_id, category, has_order, order_id, source")
+          .in("id", part);
+        if (!withSource.error) {
+          leadsTouched.push(...((withSource.data as unknown as TouchedLead[]) ?? []));
+          continue;
+        }
+        sourceMissing = true; // source column not present yet (migration 0008 pending) — degrade.
       }
-      sourceMissing = true; // source column not present yet (migration 0008 pending) — degrade.
+      const base = await sb
+        .from("leads")
+        .select("id, store_id, category, has_order, order_id")
+        .in("id", part);
+      leadsTouched.push(...((base.data as unknown as TouchedLead[]) ?? []));
     }
-    const base = await sb.from("leads").select("id, store_id, category, has_order, order_id").in("id", part);
-    leadsTouched.push(...((base.data as unknown as TouchedLead[]) ?? []));
   }
 
   // Optional source lens: keep only calls/leads of the chosen acquisition source.
@@ -474,14 +522,20 @@ async function buildAdvisorInputs(
 
   // Net revenue + code/date per linked order (code/date feed cerradosDetalle).
   // Chunked like the leads lookup.
-  const orderIds = leadsTouched.filter((l) => l.has_order && l.order_id).map((l) => l.order_id as string);
+  const orderIds = [
+    ...new Set(
+      leadsTouched.filter((l) => l.has_order && l.order_id).map((l) => l.order_id as string),
+    ),
+  ];
   type OrderInfo = { net: number; name: string | null; created_at: string | null };
   const infoByOrder = new Map<string, OrderInfo>();
-  for (const part of chunk(orderIds, 300)) {
-    const { data: ordersRaw } = await sb
+  const orderPages = await mapInBatches(chunk(orderIds, 300), async (part) =>
+    await sb
       .from("orders")
       .select("id, name, created_at, total_amount, total_refunded")
-      .in("id", part);
+      .in("id", part),
+  );
+  for (const { data: ordersRaw } of orderPages) {
     type OrderRaw = {
       id: string;
       name: string | null;
@@ -654,24 +708,41 @@ async function fetchShipmentEventsPaged(
 ): Promise<{ agent: string | null; occurred_at: string | null; ref: string }[]> {
   const PAGE = 1000;
   const CAP = 20000;
+  const PAGE_WINDOW = 4;
   const out: { agent: string | null; occurred_at: string | null; ref: string }[] = [];
-  for (let from = 0; from < CAP; from += PAGE) {
-    const { data, error } = await sb
-      .from("shipment_calls")
-      .select("shipment_id, agent, occurred_at")
-      .in("store_id", storeIds)
-      .not("agent", "is", null)
-      .neq("kind", "system")
-      .gte("occurred_at", startIso)
-      .lte("occurred_at", endIso)
-      .order("occurred_at", { ascending: false })
-      .order("id", { ascending: false })
-      .range(from, from + PAGE - 1);
-    if (error) break;
-    const batch = (data as { shipment_id: string; agent: string | null; occurred_at: string | null }[]) ?? [];
-    // Prefijo "s:" para que un shipment_id jamás colisione con un lead_id.
-    out.push(...batch.map((r) => ({ agent: r.agent, occurred_at: r.occurred_at, ref: `s:${r.shipment_id}` })));
-    if (batch.length < PAGE) break;
+  for (let from = 0; from < CAP; from += PAGE * PAGE_WINDOW) {
+    const offsets = Array.from(
+      { length: Math.min(PAGE_WINDOW, Math.ceil((CAP - from) / PAGE)) },
+      (_, index) => from + index * PAGE,
+    );
+    const pages = await Promise.all(
+      offsets.map((offset) =>
+        sb
+          .from("shipment_calls")
+          .select("shipment_id, agent, occurred_at")
+          .in("store_id", storeIds)
+          .not("agent", "is", null)
+          .neq("kind", "system")
+          .gte("occurred_at", startIso)
+          .lte("occurred_at", endIso)
+          .order("occurred_at", { ascending: false })
+          .order("id", { ascending: false })
+          .range(offset, offset + PAGE - 1),
+      ),
+    );
+    for (const { data, error } of pages) {
+      if (error) return out;
+      const batch =
+        (data as { shipment_id: string; agent: string | null; occurred_at: string | null }[]) ?? [];
+      out.push(
+        ...batch.map((r) => ({
+          agent: r.agent,
+          occurred_at: r.occurred_at,
+          ref: `s:${r.shipment_id}`,
+        })),
+      );
+      if (batch.length < PAGE) return out;
+    }
   }
   return out;
 }

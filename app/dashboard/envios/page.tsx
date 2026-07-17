@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { createServerSupabase } from "@/lib/db";
 import { getAccessibleStores } from "@/lib/access";
 import {
@@ -9,16 +10,28 @@ import {
 import { normalizeCity } from "@/lib/shipments";
 import { EmptyState } from "@/components/ui";
 import { ShipmentsBoard } from "@/components/shipments";
+import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
 export const dynamic = "force-dynamic";
 
-export default async function EnviosPage({
+export default function EnviosPage({
   searchParams,
 }: {
   searchParams: Promise<{ view?: string }>;
 }) {
-  const sp = await searchParams;
-  const stores = await getAccessibleStores();
+  return (
+    <Suspense fallback={<DashboardRouteSkeleton />}>
+      <EnviosContent searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function EnviosContent({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>;
+}) {
+  const [sp, stores] = await Promise.all([searchParams, getAccessibleStores()]);
   if (!stores.length) {
     return <EmptyState title="No tienes tiendas asignadas" />;
   }
