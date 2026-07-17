@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { getCustomerHistory, getLeadWithCalls, type CustomerHistory } from "@/lib/leads-access";
 import {
@@ -73,6 +74,11 @@ export interface LeadActionState {
   error?: string;
   notice?: string;
   windowClosed?: boolean; // the 24h WhatsApp session window is closed (retry won't help)
+  savedCall?: LeadCallRow;
+  leadPatch?: Partial<
+    Pick<LeadRow, "status" | "category" | "needs_attention" | "next_followup_at" | "last_interaction_at">
+  >;
+  sentMessage?: LeadConversationMessage;
 }
 
 /** Load the analytical panel after the queue is interactive. Keeping these
@@ -258,16 +264,38 @@ export async function searchLeads(storeId: string, query: string): Promise<LeadR
     .slice(0, 40);
 }
 
-/** Authorize: the caller must be able to SEE the lead under RLS. Returns its store. */
-async function authorizeLead(leadId: string): Promise<{ userId: string; storeId: string } | null> {
+type AuthorizedLeadContext = {
+  userId: string;
+  storeId: string;
+  phone: string | null;
+  kapsoConversationId: string | null;
+  waPhoneNumberId: string | null;
+};
+
+/** Authorize: the caller must be able to SEE the lead under RLS. Returns the
+ * small core fields reused by chat/window/send actions, avoiding a duplicate
+ * read of the same lead immediately after authorization. */
+async function authorizeLead(leadId: string): Promise<AuthorizedLeadContext | null> {
   const sb = await createServerSupabase();
-  const {
-    data: { user },
-  } = await sb.auth.getUser();
-  if (!user) redirect("/login");
-  const { data } = await sb.from("leads").select("store_id").eq("id", leadId).maybeSingle();
+  // `getClaims()` verifies the signed JWT locally for asymmetric-key projects.
+  // `getUser()` performs a network request to Auth on every drawer action, which
+  // made calls, chat reads and sends all pay an avoidable round trip.
+  const { data: claimsData } = await sb.auth.getClaims();
+  const userId = claimsData?.claims?.sub;
+  if (!userId) redirect("/login");
+  const { data } = await sb
+    .from("leads")
+    .select("store_id,phone,kapso_conversation_id,wa_phone_number_id")
+    .eq("id", leadId)
+    .maybeSingle();
   if (!data) return null;
-  return { userId: user.id, storeId: data.store_id as string };
+  return {
+    userId,
+    storeId: data.store_id as string,
+    phone: (data.phone as string | null) ?? null,
+    kapsoConversationId: (data.kapso_conversation_id as string | null) ?? null,
+    waPhoneNumberId: (data.wa_phone_number_id as string | null) ?? null,
+  };
 }
 
 /** Claim a lead (one at a time). Succeeds if free, stale, or already mine. */
@@ -517,6 +545,7 @@ export async function registerCall(
   if (status && !isValidStatus(status)) return { error: "Estado inválido." };
 
   const admin = createAdminSupabase();
+  const nowIso = new Date().toISOString();
 
   // Don't let a manual disposition silently erase a real sale: if the lead is
   // already `won` with an ACTIVE order (not cancelled) — e.g. one placed
@@ -554,11 +583,11 @@ export async function registerCall(
     // 10:00) para que el lead reaparezca solo en la vista Seguimientos, suba
     // con atención al vencer y no lo toque el auto-archivado. Una fecha ya
     // agendada a futuro se respeta; la fecha del formulario siempre gana.
-    const hasFutureFollowup = !!lead?.next_followup_at && lead.next_followup_at > new Date().toISOString();
+    const hasFutureFollowup = !!lead?.next_followup_at && lead.next_followup_at > nowIso;
     if (!nextFollowup && (AUTO_FOLLOWUP_STATUSES as readonly string[]).includes(status) && !hasFutureFollowup) {
       const { data: st } = await admin.from("stores").select("timezone").eq("id", ctx.storeId).maybeSingle();
       const tz = (st as { timezone: string | null } | null)?.timezone ?? "America/Lima";
-      nextFollowup = defaultFollowupAt(new Date().toISOString(), tz);
+      nextFollowup = defaultFollowupAt(nowIso, tz);
       autoFollowupLabel = new Intl.DateTimeFormat("es-PE", {
         weekday: "short",
         day: "numeric",
@@ -571,7 +600,7 @@ export async function registerCall(
     }
   }
 
-  await admin.from("lead_calls").insert({
+  const callPayload = {
     lead_id: leadId,
     store_id: ctx.storeId,
     vendedora: ctx.userId,
@@ -579,22 +608,36 @@ export async function registerCall(
     new_status: status || null,
     note,
     next_followup_at: nextFollowup,
-  });
+  };
 
-  const patch: Record<string, unknown> = { last_interaction_at: new Date().toISOString() };
+  const patch: Record<string, unknown> = { last_interaction_at: nowIso };
   if (status) {
     patch.status = status;
     patch.category = categoryOf(status);
     patch.needs_attention = false;
   }
   if (nextFollowup) patch.next_followup_at = nextFollowup;
-  await admin.from("leads").update(patch).eq("id", leadId);
+  // The log and lead update are independent writes. Performing them together
+  // removes one database round trip from every saved call.
+  const [callRes, leadRes] = await Promise.all([
+    admin
+      .from("lead_calls")
+      .insert(callPayload)
+      .select("id,lead_id,store_id,vendedora,kind,new_status,note,next_followup_at,occurred_at")
+      .single(),
+    admin.from("leads").update(patch).eq("id", leadId),
+  ]);
+  if (callRes.error) return { error: `No se pudo registrar la llamada: ${callRes.error.message}` };
+  if (leadRes.error) return { error: `La llamada se registró, pero no se pudo actualizar el lead: ${leadRes.error.message}` };
 
   revalidatePath("/dashboard/leads");
+  const savedCall = { ...(callRes.data as LeadCallRow), vendedora_name: "Tú" };
   return {
     notice: status
       ? `Llamada registrada · ${labelOf(status)}${autoFollowupLabel ? ` · seguimiento ${autoFollowupLabel}` : ""}`
       : "Llamada registrada.",
+    savedCall,
+    leadPatch: patch,
   };
 }
 
@@ -942,16 +985,7 @@ export async function getLeadWindow(
   if (!ctx) return { open: false, lastInboundAt: null, reason: "Sin acceso." };
   // Per-conversation window: a multi-number lead has its own 24h window per number,
   // so honour the active thread's conversation when given.
-  let convId = conversationId ?? null;
-  if (!convId) {
-    const admin = createAdminSupabase();
-    const { data } = await admin
-      .from("leads")
-      .select("kapso_conversation_id")
-      .eq("id", leadId)
-      .maybeSingle();
-    convId = (data as { kapso_conversation_id: string | null } | null)?.kapso_conversation_id ?? null;
-  }
+  const convId = conversationId ?? ctx.kapsoConversationId;
   if (!convId) return { open: false, lastInboundAt: null, reason: "Sin conversación de WhatsApp." };
   const creds = await getStoreCreds(ctx.storeId);
   if (!creds?.kapso_api_key) return { open: false, lastInboundAt: null, reason: "Tienda sin Kapso configurado." };
@@ -991,6 +1025,18 @@ export interface LeadConversation {
   reason?: string; // set (with messages: []) when the transcript can't be shown
 }
 
+function toLeadConversationMessages(parsed: ConversationMessage[]): LeadConversationMessage[] {
+  return parsed.map((m) => ({
+    id: m.id,
+    direction: m.dir,
+    at: new Date(m.t).toISOString(),
+    text: m.text,
+    mediaKind: m.mediaKind,
+    mediaUrl: m.mediaUrl,
+    status: m.status,
+  }));
+}
+
 /**
  * Load a lead's WhatsApp conversation (text + media) from Kapso. Also returns the
  * list of THREADS — one per connected number the customer wrote to — so the drawer
@@ -1016,17 +1062,12 @@ export async function loadLeadConversation(
   const ctx = await authorizeLead(leadId);
   if (!ctx) return empty("Sin acceso a este lead.");
 
-  const admin = createAdminSupabase();
-  // Lead row + store creds are independent — fetch together.
-  const [leadRes, creds] = await Promise.all([
-    admin.from("leads").select("kapso_conversation_id, phone, wa_phone_number_id").eq("id", leadId).maybeSingle(),
-    getStoreCreds(ctx.storeId),
-  ]);
-  const lead = (leadRes.data as {
-    kapso_conversation_id: string | null;
-    phone: string | null;
-    wa_phone_number_id: string | null;
-  } | null) ?? null;
+  const creds = await getStoreCreds(ctx.storeId);
+  const lead = {
+    kapso_conversation_id: ctx.kapsoConversationId,
+    phone: ctx.phone,
+    wa_phone_number_id: ctx.waPhoneNumberId,
+  };
   if (!creds?.kapso_api_key) return empty("La tienda no tiene Kapso configurado.");
   const apiKey = creds.kapso_api_key;
 
@@ -1035,6 +1076,33 @@ export async function loadLeadConversation(
   // multi-number selector) instead of strictly after it — that halves the Kapso
   // round-trip latency on open. Capped to 2 pages (200 msgs) for a fast first paint.
   const storedId = (conversationId && conversationId.trim()) || lead?.kapso_conversation_id || null;
+
+  // Common first-paint path: the lead already carries its active conversation
+  // id. Show that session immediately instead of waiting for Kapso's slower
+  // phone-wide conversation discovery and the WhatsApp-number labels. The client
+  // requests the full multi-session context silently right after this response.
+  if (!includeOlder && !conversationId && storedId) {
+    try {
+      const activeMsgs = await fetchConversationTranscript({ apiKey }, storedId, 1);
+      const messages = toLeadConversationMessages(activeMsgs);
+      return {
+        messages,
+        threads: [],
+        activeConversationId: storedId,
+        activePhoneNumberId: lead?.wa_phone_number_id ?? null,
+        reason: messages.length ? undefined : "Sin mensajes en esta conversación todavía.",
+      };
+    } catch {
+      return {
+        messages: [],
+        threads: [],
+        activeConversationId: storedId,
+        activePhoneNumberId: lead?.wa_phone_number_id ?? null,
+        reason: "No se pudo cargar la conversación de WhatsApp.",
+      };
+    }
+  }
+
   const [convs, storedTranscript] = await Promise.all([
     lead?.phone ? listConversationsByPhone({ apiKey }, lead.phone) : Promise.resolve([]),
     storedId ? fetchConversationTranscript({ apiKey }, storedId, 2).catch(() => null) : Promise.resolve(null),
@@ -1120,15 +1188,7 @@ export async function loadLeadConversation(
   );
   const parsed = mergeTranscripts([activeMsgs, ...olderMsgs]);
 
-  const messages: LeadConversationMessage[] = (parsed ?? []).map((m) => ({
-    id: m.id,
-    direction: m.dir,
-    at: new Date(m.t).toISOString(),
-    text: m.text,
-    mediaKind: m.mediaKind,
-    mediaUrl: m.mediaUrl,
-    status: m.status,
-  }));
+  const messages = toLeadConversationMessages(parsed ?? []);
   return {
     messages,
     threads,
@@ -1155,11 +1215,10 @@ export async function sendLeadMessage(
   if (!ctx) return { error: "Sin acceso a este lead." };
 
   const admin = createAdminSupabase();
-  const { data } = await admin.from("leads").select("phone").eq("id", leadId).maybeSingle();
-  const phone = (data as { phone: string | null } | null)?.phone ?? null;
+  const phone = ctx.phone;
   if (!phone) return { error: "El lead no tiene teléfono." };
 
-  const creds = await getStoreCreds(ctx.storeId);
+  const creds = await getStoreCreds(ctx.storeId, admin);
   // Reply FROM the active thread's number (multi-number leads); fall back to the store's.
   const pnId = (phoneNumberId && phoneNumberId.trim()) || creds?.whatsapp_phone_number_id;
   if (!creds?.kapso_api_key || !pnId) {
@@ -1180,18 +1239,38 @@ export async function sendLeadMessage(
     };
   }
 
-  await admin.from("lead_calls").insert({
-    lead_id: leadId,
-    store_id: ctx.storeId,
-    vendedora: ctx.userId,
-    kind: "message",
-    new_status: null,
-    note: body,
+  const sentAt = new Date().toISOString();
+  // Kapso/Meta already accepted the message. Audit logging, lead freshness and
+  // cache invalidation must still complete, but they no longer hold the response
+  // open while the advisor waits. Next's `after()` keeps the serverless invocation
+  // alive until these writes settle.
+  after(async () => {
+    await Promise.all([
+      admin.from("lead_calls").insert({
+        lead_id: leadId,
+        store_id: ctx.storeId,
+        vendedora: ctx.userId,
+        kind: "message",
+        new_status: null,
+        note: body,
+      }),
+      admin.from("leads").update({ last_interaction_at: sentAt }).eq("id", leadId),
+    ]);
+    revalidatePath("/dashboard/leads");
   });
-  await admin.from("leads").update({ last_interaction_at: new Date().toISOString() }).eq("id", leadId);
-
-  revalidatePath("/dashboard/leads");
-  return { notice: "Mensaje enviado por WhatsApp ✓" };
+  return {
+    notice: "Mensaje enviado por WhatsApp ✓",
+    sentMessage: {
+      id: res.id,
+      direction: "outbound",
+      at: sentAt,
+      text: body,
+      mediaKind: null,
+      mediaUrl: null,
+      status: "sent",
+    },
+    leadPatch: { last_interaction_at: sentAt },
+  };
 }
 
 // Lazily ensure the public bucket for WhatsApp image sends exists (memoized per

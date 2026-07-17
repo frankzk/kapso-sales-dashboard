@@ -27,7 +27,6 @@ import {
   createQuickReply,
   deleteQuickReply,
   generateOrder,
-  getLeadWindow,
   listQuickReplies,
   loadLeadConversation,
   loadOrderDraft,
@@ -56,13 +55,37 @@ export type LeadDrawerProps = {
   shopifyDomain: string | null;
   currency: string;
   onClose: () => void;
-  onRegistered: () => void;
+  onRegistered: (update?: LeadDrawerUpdate) => void;
   onReady?: () => void;
+};
+
+export type LeadDrawerUpdate = {
+  savedCall?: LeadCallRow;
+  leadPatch?: LeadActionState["leadPatch"];
+  refreshList?: boolean;
 };
 
 const inputCls =
   "mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
 const labelCls = "block text-sm font-medium text-slate-700";
+
+function startUiMeasure(name: string) {
+  if (typeof performance === "undefined") return;
+  performance.clearMarks(`${name}:start`);
+  performance.clearMarks(`${name}:end`);
+  performance.clearMeasures(name);
+  performance.mark(`${name}:start`);
+}
+
+function finishUiMeasure(name: string) {
+  if (typeof performance === "undefined" || !performance.getEntriesByName(`${name}:start`).length) return;
+  performance.mark(`${name}:end`);
+  performance.measure(name, `${name}:start`, `${name}:end`);
+  const duration = performance.getEntriesByName(name).at(-1)?.duration;
+  if (duration != null && process.env.NODE_ENV !== "test") {
+    console.info(`[Kapso performance] ${name} en ${Math.round(duration)} ms`);
+  }
+}
 
 /** Canonical acquisition-source bucket for a lead's `source` (Fuente filter). */
 function leadSourceKey(
@@ -459,7 +482,7 @@ export function LeadDrawer({
             {hasWa ? (
               <WhatsappChat
                 leadId={lead.id}
-                lastInteractionAt={lead.last_interaction_at}
+                lastInboundAt={lead.last_inbound_at}
                 hasConversation={!!(lead.kapso_conversation_id || lead.phone)}
                 onSent={onRegistered}
               />
@@ -809,14 +832,14 @@ function chatTime(iso: string): string {
  */
 function WhatsappChat({
   leadId,
-  lastInteractionAt,
+  lastInboundAt,
   hasConversation,
   onSent,
 }: {
   leadId: string;
-  lastInteractionAt?: string | null;
+  lastInboundAt?: string | null;
   hasConversation: boolean;
-  onSent: () => void;
+  onSent: (update?: LeadDrawerUpdate) => void;
 }) {
   const [state, setState] = useState<
     | { status: "loading" }
@@ -841,18 +864,32 @@ function WhatsappChat({
   const load = useCallback(
     (opts?: { silent?: boolean; conversationId?: string }) => {
       const requestId = ++requestRef.current;
-      if (!opts?.silent) setState({ status: "loading" });
+      if (!opts?.silent) {
+        startUiMeasure("kapso:whatsapp-chat-first-paint");
+        setState({ status: "loading" });
+      }
+      let firstPaintPending = !opts?.silent;
       const apply = (res: Awaited<ReturnType<typeof loadLeadConversation>>) => {
         if (requestRef.current !== requestId) return;
         activeIdRef.current = res.activeConversationId;
-        setState({
-          status: "ready",
-          messages: res.messages,
-          reason: res.reason,
-          threads: res.threads,
-          activeId: res.activeConversationId,
-          activePhoneNumberId: res.activePhoneNumberId,
+        setState((current) => {
+          const localMessages =
+            current.status === "ready"
+              ? current.messages.filter((message) => message.id?.startsWith("local-") && message.status === "sending")
+              : [];
+          return {
+            status: "ready",
+            messages: [...res.messages, ...localMessages],
+            reason: res.reason,
+            threads: res.threads,
+            activeId: res.activeConversationId,
+            activePhoneNumberId: res.activePhoneNumberId,
+          };
         });
+        if (firstPaintPending) {
+          firstPaintPending = false;
+          finishUiMeasure("kapso:whatsapp-chat-first-paint");
+        }
       };
       // First paint reads only the active session. Older sessions are merged in
       // a silent follow-up, while 20s polls remain cheap and active-session only.
@@ -936,6 +973,43 @@ function WhatsappChat({
     setShowJump(false);
   }
 
+  function addOptimisticMessage(body: string): string {
+    const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setState((current) =>
+      current.status === "ready"
+        ? {
+            ...current,
+            messages: [
+              ...current.messages,
+              {
+                id: localId,
+                direction: "outbound",
+                at: new Date().toISOString(),
+                text: body,
+                mediaKind: null,
+                mediaUrl: null,
+                status: "sending",
+              },
+            ],
+          }
+        : current,
+    );
+    return localId;
+  }
+
+  function settleOptimisticMessage(localId: string, sent: LeadConversationMessage | null) {
+    setState((current) => {
+      if (current.status !== "ready") return current;
+      if (!sent) return { ...current, messages: current.messages.filter((message) => message.id !== localId) };
+      return {
+        ...current,
+        messages: current.messages.map((message) =>
+          message.id === localId ? { ...sent, id: sent.id ?? localId } : message,
+        ),
+      };
+    });
+  }
+
   // Switch to another number's thread (multi-number lead).
   function switchThread(convId: string) {
     if (convId === activeIdRef.current) return;
@@ -951,6 +1025,8 @@ function WhatsappChat({
   const activeId = state.status === "ready" ? state.activeId : null;
   const activePhoneNumberId = state.status === "ready" ? state.activePhoneNumberId : null;
   const allMessages = state.status === "ready" ? state.messages : [];
+  const transcriptLastInboundAt = [...allMessages].reverse().find((message) => message.direction === "inbound")?.at;
+  const effectiveLastInboundAt = transcriptLastInboundAt ?? lastInboundAt;
   const activeThread = threads.find((t) => t.conversationId === activeId) ?? null;
   // Clarify which number you reply FROM — only when the lead has more than one.
   const numberHint =
@@ -1101,14 +1177,12 @@ function WhatsappChat({
       {/* Composer pegado abajo */}
       <WhatsappComposer
         leadId={leadId}
-        lastInteractionAt={lastInteractionAt}
-        conversationId={activeId}
+        lastInboundAt={effectiveLastInboundAt}
         phoneNumberId={activePhoneNumberId}
         numberHint={numberHint}
-        onSent={() => {
-          onSent();
-          load({ silent: true, conversationId: activeIdRef.current ?? undefined });
-        }}
+        onOptimisticSend={addOptimisticMessage}
+        onSendSettled={settleOptimisticMessage}
+        onSent={(leadPatch) => onSent({ leadPatch })}
       />
     </section>
   );
@@ -1157,6 +1231,8 @@ function statusTicks(status: string | null): { marks: string; cls: string; label
       return { marks: "✓✓", cls: "text-emerald-800/50", label: "Entregado" };
     case "sent":
       return { marks: "✓", cls: "text-emerald-800/50", label: "Enviado" };
+    case "sending":
+      return { marks: "◷", cls: "text-emerald-800/40", label: "Enviando" };
     case "failed":
     case "error":
       return { marks: "⚠", cls: "text-red-500", label: "No se envió" };
@@ -1244,18 +1320,20 @@ function ChatBubble({
  *  24h session window; otherwise shows why the customer must write first. */
 function WhatsappComposer({
   leadId,
-  lastInteractionAt,
-  conversationId,
+  lastInboundAt,
   phoneNumberId,
   numberHint,
+  onOptimisticSend,
+  onSendSettled,
   onSent,
 }: {
   leadId: string;
-  lastInteractionAt?: string | null;
-  conversationId?: string | null;
+  lastInboundAt?: string | null;
   phoneNumberId?: string | null;
   numberHint?: string | null;
-  onSent: () => void;
+  onOptimisticSend: (body: string) => string;
+  onSendSettled: (localId: string, sent: LeadConversationMessage | null) => void;
+  onSent: (leadPatch?: LeadActionState["leadPatch"]) => void;
 }) {
   const [win, setWin] = useState<{ loading: boolean; open: boolean; reason?: string }>({
     loading: true,
@@ -1281,42 +1359,46 @@ function WhatsappComposer({
     setText("");
     setAttachFile(null);
     setMsg(null);
-    // Fast path: the customer hasn't interacted in >24h → the session window is
-    // definitely closed (last inbound ≤ last_interaction_at). Skip the live Kapso
-    // check so the drawer doesn't wait on a network round-trip.
-    const last = lastInteractionAt ? new Date(lastInteractionAt).getTime() : 0;
+    // The transcript/lead already carries the authoritative last inbound time.
+    // Calculate the rolling window locally; Meta still enforces it on send, so a
+    // boundary race is surfaced normally without blocking the composer on Kapso.
+    const last = lastInboundAt ? new Date(lastInboundAt).getTime() : 0;
     if (!last || Date.now() - last > 24 * 60 * 60 * 1000) {
       setWin({ loading: false, open: false, reason: "El cliente debe escribirte primero." });
       return;
     }
-    setWin({ loading: true, open: false });
-    getLeadWindow(leadId, conversationId ?? undefined).then((w) => {
-      if (alive) setWin({ loading: false, open: w.open, reason: w.reason });
-    });
+    if (alive) setWin({ loading: false, open: true });
     return () => {
       alive = false;
     };
-  }, [leadId, lastInteractionAt, conversationId]);
+  }, [leadId, lastInboundAt]);
 
   function send() {
     const body = text.trim();
     if (!body) return;
     setMsg(null);
+    setText("");
+    const localId = onOptimisticSend(body);
+    startUiMeasure("kapso:whatsapp-send");
     startTransition(async () => {
       const res = await sendLeadMessage(leadId, body, phoneNumberId ?? undefined);
+      finishUiMeasure("kapso:whatsapp-send");
       if (res.error) {
+        onSendSettled(localId, null);
+        setText(body);
         // Window closed mid-send → flip to the closed state with a clear reason
         // (retry is futile). Other errors keep the text so "Reintentar" can resend.
         if (res.windowClosed) {
           setWin({ loading: false, open: false, reason: "Se cerró la ventana de 24h." });
+          setMsg(res.error);
           return;
         }
         setMsg(res.error);
         return;
       }
-      setText("");
+      onSendSettled(localId, res.sentMessage ?? null);
       setMsg(null);
-      onSent(); // refresh the thread so the sent message appears
+      onSent(res.leadPatch);
     });
   }
 
@@ -2288,12 +2370,19 @@ function ProductPicker({
   );
 }
 
-function CallForm({ leadId, onRegistered }: { leadId: string; onRegistered: () => void }) {
+function CallForm({
+  leadId,
+  onRegistered,
+}: {
+  leadId: string;
+  onRegistered: (update?: LeadDrawerUpdate) => void;
+}) {
   const [state, action, pending] = useActionState<LeadActionState, FormData>(registerCall, {});
   const [status, setStatus] = useState("");
   useEffect(() => {
+    if (state.notice || state.error) finishUiMeasure("kapso:call-save");
     if (state.notice) {
-      onRegistered();
+      onRegistered({ savedCall: state.savedCall, leadPatch: state.leadPatch, refreshList: true });
       setStatus("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2319,7 +2408,7 @@ function CallForm({ leadId, onRegistered }: { leadId: string; onRegistered: () =
   return (
     <section>
       <p className="mb-2 text-xs font-semibold tracking-wide text-slate-400 uppercase">Resultado de la llamada</p>
-      <form action={action} className="space-y-2.5">
+      <form action={action} onSubmit={() => startUiMeasure("kapso:call-save")} className="space-y-2.5">
         <input type="hidden" name="lead_id" value={leadId} />
         <input type="hidden" name="status" value={status} />
         <div className="flex flex-wrap gap-1.5">
