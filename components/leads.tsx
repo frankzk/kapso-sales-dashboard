@@ -40,7 +40,7 @@ import {
   searchLeads,
 } from "@/app/dashboard/leads/actions";
 import { cn } from "@/components/ui";
-import type { LeadDrawerProps } from "@/components/leads-drawer";
+import type { LeadDrawerProps, LeadDrawerUpdate } from "@/components/leads-drawer";
 
 const LeadsInsightsPanel = dynamic(
   () => import("@/components/leads-insights").then((module) => module.LeadsInsightsPanel),
@@ -692,7 +692,23 @@ export function LeadsBoard({
     })();
   }
 
-  function refreshDetail(leadId: string) {
+  function refreshDetail(leadId: string, update?: LeadDrawerUpdate) {
+    if (update) {
+      if (activeLeadIdRef.current === leadId) {
+        if (update.leadPatch) {
+          setSelected((current) => (current?.id === leadId ? { ...current, ...update.leadPatch } : current));
+        }
+        if (update.savedCall) {
+          setCalls((current) => [update.savedCall!, ...(current ?? []).filter((call) => call.id !== update.savedCall!.id)]);
+        }
+      }
+      // The drawer is already current. Only refresh the queue/counts when the
+      // mutation can change its membership (a call disposition), and do it in
+      // the background without reloading Shopify history or the drawer detail.
+      if (update.refreshList) router.refresh();
+      return;
+    }
+
     // Refresh the drawer + the list/counts in the background. Deliberately NOT a
     // transition tied to the row buttons: a call save shouldn't disable every
     // "Tomar / Ver" while the (heavier) list refetch runs.
@@ -1362,7 +1378,7 @@ export function LeadsBoard({
           shopifyDomain={stores.find((s) => s.id === selected.store_id)?.shopify_domain ?? null}
           currency={currency}
           onClose={closeDrawer}
-          onRegistered={() => refreshDetail(selected.id)}
+          onRegistered={(update) => refreshDetail(selected.id, update)}
           onReady={measureLeadDrawerReady}
         />
       )}
