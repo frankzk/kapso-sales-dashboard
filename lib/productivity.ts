@@ -5,7 +5,7 @@
 
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
-import { chunk, defaultRange, previousRange, type DateRange } from "@/lib/access";
+import { chunk, defaultRange, parseRange, previousRange, type DateRange } from "@/lib/access";
 import { onlineVendedoraIds } from "@/lib/presence";
 import { leadSegment, type LeadSegment } from "@/lib/leads";
 
@@ -198,10 +198,21 @@ export function localDayPreset(offset: number, tz: string, nowIso = new Date().t
   return { from: d, to: d };
 }
 
+/** Productividad opens on the store-local current day unless the URL carries
+ * an explicit range. Preset links always include both dates, so navigating
+ * between stores/sources keeps the range the user selected. */
+export function productivityInitialRange(
+  sp: { from?: string; to?: string },
+  tz: string,
+  nowIso = new Date().toISOString(),
+): DateRange {
+  if (!sp.from && !sp.to) return localDayPreset(0, tz, nowIso);
+  return parseRange(sp);
+}
+
 /** Last `days` local days ending today (inclusive), in the store's tz.
- *  Delegates to `defaultRange` so the preset chips and a parameterless landing
- *  (parseRange sin ?from/?to) siempre calculan el MISMO rango — si divergen, de
- *  noche ningún chip queda activo. */
+ * Delegates to `defaultRange` so each multi-day preset remains anchored to the
+ * same local calendar used by the single-day presets. */
 export function localPresetRange(days: number, tz: string, nowIso = new Date().toISOString()): DateRange {
   return defaultRange(days, tz, nowIso);
 }
