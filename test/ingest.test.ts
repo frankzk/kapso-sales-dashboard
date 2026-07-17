@@ -115,7 +115,9 @@ class FakeSupabase {
   winbackSends: any[] = [];
   dripLeads: any[] = []; // filas que responde el select de candidatos del drip
   dripSends: any[] = [];
-  leadPatches: any[] = []; // updates a leads (drip_touches, etc.)
+  leadPatches: any[] = []; // updates a leads (drip_touches, attention_waves, etc.)
+  waveLeads: any[] = []; // filas que responde el select de candidatos de olas
+  waveSelectError: string | null = null; // simula la columna 0036 ausente
   constructor(storeRow: Row) {
     this.storeRow = storeRow;
   }
@@ -154,6 +156,10 @@ class FakeSupabase {
     if (b.table === "draft_orders" && b.op === "delete") {
       this.deletedDrafts.push(b.filters);
       return { data: null, error: null };
+    }
+    if (b.table === "leads" && b.op === "select" && b.selectCols?.includes("attention_waves")) {
+      if (this.waveSelectError) return { data: null, error: { message: this.waveSelectError } };
+      return { data: this.waveLeads, error: null };
     }
     if (b.table === "leads" && b.op === "select" && b.selectCols?.includes("drip_touches")) {
       // Selector de candidatos del drip — devuelve las filas preparadas tal cual
@@ -1274,5 +1280,61 @@ describe("sendSeguimientoDrip · envío y registro", () => {
     const r = await sendSeguimientoDrip(fake as any, "store-1", dripCreds(), fn, DRIP_NOW);
     expect(r.sent).toBe(DRIP_BATCH_CAP);
     expect(calls).toHaveLength(DRIP_BATCH_CAP);
+  });
+});
+
+
+// ─────────────── Olas de reencolado de carritos (no contestan) ───────────────
+
+describe("flagCartAttentionWaves · olas de reencolado con tope", () => {
+  const waveLead = (over: Record<string, any> = {}): any => ({
+    id: "W1",
+    cart_item_count: 2,
+    draft_order_gid: null,
+    attention_waves: 0,
+    ...over,
+  });
+
+  it("sube con atención, suma la ola y deja la nota 🔁 (ola 1/2 y 2/2)", async () => {
+    const { flagCartAttentionWaves } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.waveLeads = [waveLead(), waveLead({ id: "W2", attention_waves: 1 })];
+    const n = await flagCartAttentionWaves(fake as any, "store-1");
+    expect(n).toBe(2);
+    expect(fake.leadPatches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ needs_attention: true, attention_waves: 1 }),
+        expect.objectContaining({ needs_attention: true, attention_waves: 2 }),
+      ]),
+    );
+    const notes = fake.leadCalls.map((c) => c.note).join("\n");
+    expect(notes).toContain("ola 1/2");
+    expect(notes).toContain("ola 2/2");
+    expect(fake.leadCalls.every((c) => c.kind === "system" && c.vendedora === null)).toBe(true);
+  });
+
+  it("descarta filas sin señal de carrito (re-chequeo fino)", async () => {
+    const { flagCartAttentionWaves } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.waveLeads = [waveLead({ cart_item_count: 0, draft_order_gid: null }), waveLead({ id: "W2" })];
+    const n = await flagCartAttentionWaves(fake as any, "store-1");
+    expect(n).toBe(1);
+    expect(fake.leadPatches).toHaveLength(1);
+  });
+
+  it("con draft_order_gid (sin count) también es carrito", async () => {
+    const { flagCartAttentionWaves } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.waveLeads = [waveLead({ cart_item_count: null, draft_order_gid: "gid://shopify/DraftOrder/1" })];
+    expect(await flagCartAttentionWaves(fake as any, "store-1")).toBe(1);
+  });
+
+  it("pre-0036 (columna ausente) es un no-op silencioso", async () => {
+    const { flagCartAttentionWaves } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.waveSelectError = 'column leads.attention_waves does not exist';
+    fake.waveLeads = [waveLead()];
+    expect(await flagCartAttentionWaves(fake as any, "store-1")).toBe(0);
+    expect(fake.leadPatches).toHaveLength(0);
   });
 });

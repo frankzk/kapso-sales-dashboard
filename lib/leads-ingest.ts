@@ -1347,6 +1347,80 @@ export async function sendSeguimientoDrip(
   return report;
 }
 
+// ─────────────── Olas de reencolado: carritos que no contestan ───────────────
+// Un CARRITO cuyo último resultado fue "no logré contactar" (los mismos
+// estados que el drip: no_responde/buzon/cuelga) y lleva 48h quieto vuelve a
+// subir con needs_attention — la lista lo ordena PRIMERO apenas se abre "En
+// seguimiento". Tope de 2 olas por lead (ola 1 ≈ día 2, ola 2 ≈ día 4): sin
+// tope sería un ping-pong infinito, porque cada gestión apaga la atención y
+// reinicia el reloj. Los estados de "sí hablé" (contactado/otros productos) y
+// los cierres (Perdidos) NUNCA se reencolan; casi_cierra/volver_a_llamar ya se
+// agendan solos. Complementa al drip: el drip escribe, la ola hace que llamen.
+
+export const ATTENTION_WAVE_MAX = 2;
+export const ATTENTION_WAVE_QUIET_HOURS = 48;
+
+/**
+ * Un pase de olas para una tienda: marca con atención (y suma la ola) a los
+ * carritos elegibles, dejando la nota 🔁 en el timeline. Idempotente dentro de
+ * la ola (needs_attention=false es parte del filtro). Pre-0036 (columna
+ * attention_waves ausente) es un no-op silencioso. Devuelve cuántos subió.
+ */
+export async function flagCartAttentionWaves(admin: SupabaseClient, storeId: string): Promise<number> {
+  const cutoff = new Date(Date.now() - ATTENTION_WAVE_QUIET_HOURS * 3_600_000).toISOString();
+  const { data, error } = await admin
+    .from("leads")
+    .select("id, cart_item_count, draft_order_gid, attention_waves")
+    .eq("store_id", storeId)
+    .in("status", [...DRIP_STATUSES])
+    .in("category", ["open", "hot"])
+    .eq("needs_attention", false)
+    .is("next_followup_at", null)
+    .lt("attention_waves", ATTENTION_WAVE_MAX)
+    .lt("last_interaction_at", cutoff)
+    .or("cart_item_count.gt.0,draft_order_gid.not.is.null")
+    .limit(500);
+  if (error) {
+    if (/attention_waves/i.test(error.message)) return 0; // 0036 aún no aplicada
+    throw new Error(`attention waves select: ${error.message}`);
+  }
+  const rows =
+    (data as { id: string; cart_item_count: number | null; draft_order_gid: string | null; attention_waves: number | null }[]) ??
+    [];
+  // Re-chequeo fino del carrito por si el .or() del filtro grueso difiere.
+  const eligible = rows.filter((l) => (l.cart_item_count ?? 0) > 0 || (l.draft_order_gid ?? "").length > 0);
+  if (!eligible.length) return 0;
+
+  // Agrupa por nº de ola resultante para actualizar en bloque (waves es parte
+  // del update, así que no se puede un solo UPDATE para todos).
+  const byWave = new Map<number, string[]>();
+  for (const l of eligible) {
+    const wave = (l.attention_waves ?? 0) + 1;
+    (byWave.get(wave) ?? byWave.set(wave, []).get(wave)!).push(l.id);
+  }
+  for (const [wave, ids] of byWave) {
+    for (const part of chunkIds(ids, 300)) {
+      await admin.from("leads").update({ needs_attention: true, attention_waves: wave }).in("id", part);
+      await admin.from("lead_calls").insert(
+        part.map((id) => ({
+          lead_id: id,
+          store_id: storeId,
+          vendedora: null,
+          kind: "system",
+          note: `🔁 Reencolado automático: carrito sin contacto por ${ATTENTION_WAVE_QUIET_HOURS}h (ola ${wave}/${ATTENTION_WAVE_MAX})`,
+        })),
+      );
+    }
+  }
+  return eligible.length;
+}
+
+function chunkIds<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 /** COMPLETED draft → won lead, y SOLO si fue una recuperación real (el draft
  *  estuvo abandonado ≥30 min o la orden trae tag de abandono — isRecoveredDraft)
  *  se captura la orden en `orders` con `kapso`+`cod_recuperado` para que el

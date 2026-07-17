@@ -234,7 +234,7 @@ function SegControl({
   onChange,
 }: {
   label?: string;
-  options: { key: string; label: string; count?: number }[];
+  options: { key: string; label: string; count?: number; alert?: number }[];
   value: string | null;
   onChange: (key: string) => void;
 }) {
@@ -264,6 +264,20 @@ function SegControl({
                   )}
                 >
                   {o.count}
+                </span>
+              )}
+              {/* Semáforo: leads con atención pendiente dentro de este estado
+                  (reencolados por ola, respuestas nuevas, seguimientos vencidos).
+                  Rojo fuerte a propósito: la deuda debe verse sin abrir el tab. */}
+              {!!o.alert && (
+                <span
+                  title="Requieren atención: reencolados, respuestas nuevas o seguimientos vencidos"
+                  className={cn(
+                    "rounded-full px-1.5 text-[11px] font-bold tabular-nums",
+                    active ? "bg-white text-red-600" : "bg-red-600 text-white",
+                  )}
+                >
+                  {o.alert}
                 </span>
               )}
             </button>
@@ -821,6 +835,11 @@ export function LeadsBoard({
   // el propio estado Y el segmento, para no encogerse al elegir un segmento.
   const stateBase = leads.filter((l) => facetKeys.every((k) => k === "state" || k === "seg" || FACETS[k](l)));
   const stateCounts = countQueueStates(stateBase);
+  // Semáforo del tab "En seguimiento": cuántos piden atención (olas de carrito,
+  // respuestas nuevas, seguimientos vencidos) — visible sin entrar al tab.
+  const seguimientoAlert = stateBase.filter(
+    (l) => matchesQueueState(l, "seguimiento") && l.needs_attention,
+  ).length;
 
   const gestBase = leadsExcept("gest");
   const gestCounts = countGestiones(gestBase);
@@ -956,6 +975,7 @@ export function LeadsBoard({
               key: s.key,
               label: s.label,
               count: inQueue ? stateCounts[s.key] : undefined,
+              alert: inQueue && s.key === "seguimiento" ? seguimientoAlert || undefined : undefined,
             }))}
           />
           {counts.yape > 0 && (
