@@ -33,7 +33,12 @@ import type { AdMeta } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import { BarList, Card, EmptyState, SimpleTable, StatCard, cn, type BarItem } from "@/components/ui";
 import { CampaignTable } from "@/components/campaign-table";
-import { CampaignTrendChart, ConversionOrdersTrend, RevenueOrdersChart } from "@/components/charts";
+import {
+  CampaignTrendChart,
+  ConversionOrdersTrend,
+  RevenueOrdersChart,
+  SalesAttributionModule,
+} from "@/components/lazy-dashboard-modules";
 import { DashboardControls } from "@/components/controls";
 import { HourPattern } from "@/components/hour-pattern";
 import { KpiCard } from "@/components/kpi-cards";
@@ -41,7 +46,6 @@ import { HorizontalFunnel } from "@/components/funnel-horizontal";
 import { LossReasonBars, LostRevenueCards } from "@/components/loss-reasons";
 import { FunnelHealth } from "@/components/funnel-health";
 import { BotVsAdvisor } from "@/components/bot-vs-advisor";
-import { SalesAttributionModule } from "@/components/sales-attribution";
 import {
   IconCart,
   IconClock,

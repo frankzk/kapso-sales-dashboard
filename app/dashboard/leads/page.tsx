@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { getAccessibleStores, getAdNames, getCurrentUser, getWaNumbers } from "@/lib/access";
 import { LEAD_VIEWS, getLeadCounts, getStoreLeads, type LeadView } from "@/lib/leads-access";
 import {
@@ -11,6 +12,7 @@ import {
 } from "@/lib/leads";
 import { EmptyState } from "@/components/ui";
 import { LeadsBoard } from "@/components/leads";
+import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
 export const dynamic = "force-dynamic";
 
@@ -18,20 +20,34 @@ function isLeadView(v: string | undefined): v is LeadView {
   return !!v && LEAD_VIEWS.some((view) => view.key === v);
 }
 
-export default async function LeadsPage({
+type LeadsSearchParams = {
+  store?: string;
+  view?: string;
+  state?: string;
+  tab?: string; // back-compat con el PR #76 (fila plana)
+  seg?: string;
+  gest?: string;
+  last_date?: string;
+  last_before?: string;
+  open?: string;
+};
+
+export default function LeadsPage({
   searchParams,
 }: {
-  searchParams: Promise<{
-    store?: string;
-    view?: string;
-    state?: string;
-    tab?: string; // back-compat con el PR #76 (fila plana)
-    seg?: string;
-    gest?: string;
-    last_date?: string;
-    last_before?: string;
-    open?: string;
-  }>;
+  searchParams: Promise<LeadsSearchParams>;
+}) {
+  return (
+    <Suspense fallback={<DashboardRouteSkeleton />}>
+      <LeadsContent searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function LeadsContent({
+  searchParams,
+}: {
+  searchParams: Promise<LeadsSearchParams>;
 }) {
   const sp = await searchParams;
   const stores = await getAccessibleStores();

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import type { ComponentType, SVGProps } from "react";
 import { cn } from "@/components/ui";
 import { IconChat, IconGrid, IconHeadset, IconPlug, IconStore, IconTruck, IconUsers } from "@/components/icons";
@@ -46,20 +46,49 @@ export function Sidebar({
   signOut,
   userEmail,
   roleLabel,
+  pendingHref,
+  onNavigate,
 }: {
   isVendedoraOnly: boolean;
   signOut: () => void | Promise<void>;
   userEmail?: string | null;
   roleLabel: string;
+  pendingHref?: string | null;
+  onNavigate?: (href: string) => void;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const items = navItems(isVendedoraOnly);
+  const pendingPath = pendingHref?.split("?", 1)[0] ?? null;
+  const displayPath = pendingPath ?? pathname;
 
   // Longest-prefix match so /dashboard/stores/new highlights "Conectar tienda"
   // (not "Tiendas") and bare /dashboard highlights only "Consolidado".
   const activeHref = items
-    .filter((it) => pathname === it.href || pathname.startsWith(it.href + "/"))
+    .filter((it) => displayPath === it.href || displayPath.startsWith(it.href + "/"))
     .sort((a, b) => b.href.length - a.href.length)[0]?.href;
+
+  function prepare(href: string) {
+    if (href !== pathname) router.prefetch(href);
+  }
+
+  function beginNavigation(
+    event: React.MouseEvent<HTMLAnchorElement>,
+    href: string,
+  ) {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey ||
+      href === pathname
+    ) {
+      return;
+    }
+    onNavigate?.(href);
+  }
 
   return (
     <>
@@ -76,6 +105,11 @@ export function Sidebar({
               <Link
                 key={it.href}
                 href={it.href}
+                prefetch={false}
+                onPointerEnter={() => prepare(it.href)}
+                onFocus={() => prepare(it.href)}
+                onClick={(event) => beginNavigation(event, it.href)}
+                aria-current={active ? "page" : undefined}
                 className={cn(
                   "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition",
                   active
@@ -122,6 +156,11 @@ export function Sidebar({
               <Link
                 key={it.href}
                 href={it.href}
+                prefetch={false}
+                onPointerEnter={() => prepare(it.href)}
+                onFocus={() => prepare(it.href)}
+                onClick={(event) => beginNavigation(event, it.href)}
+                aria-current={active ? "page" : undefined}
                 className={cn(
                   "shrink-0 rounded-lg px-3 py-1.5 font-medium transition",
                   active ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50",

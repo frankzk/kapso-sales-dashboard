@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import {
   getAccessibleStores,
@@ -15,18 +16,34 @@ import {
 } from "@/lib/access";
 import { ExecutiveDashboard } from "@/components/executive-dashboard";
 import { EmptyState } from "@/components/ui";
+import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
 export const dynamic = "force-dynamic";
 
-export default async function ConsolidatedPage({
+export default function ConsolidatedPage({
   searchParams,
 }: {
   searchParams: Promise<{ from?: string; to?: string }>;
 }) {
-  if ((await getUserRoleSummary()).isVendedoraOnly) redirect("/dashboard/leads");
-  const sp = await searchParams;
+  return (
+    <Suspense fallback={<DashboardRouteSkeleton />}>
+      <ConsolidatedContent searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function ConsolidatedContent({
+  searchParams,
+}: {
+  searchParams: Promise<{ from?: string; to?: string }>;
+}) {
+  const [role, sp, stores] = await Promise.all([
+    getUserRoleSummary(),
+    searchParams,
+    getAccessibleStores(),
+  ]);
+  if (role.isVendedoraOnly) redirect("/dashboard/leads");
   const range = parseRange(sp);
-  const stores = await getAccessibleStores();
 
   if (!stores.length) {
     return (
@@ -43,20 +60,22 @@ export default async function ConsolidatedPage({
 
   const storeIds = stores.map((s) => s.id);
   const prev = previousRange(range);
-  const [rollups, prevRollups, orders, conversations, leads, ops] = await Promise.all([
-    getRollups(storeIds, range),
-    getRollups(storeIds, prev),
-    getOrders(storeIds, range),
-    getConversations(storeIds, range),
-    getLeadsForDashboard(storeIds, range),
-    getLatestOps(storeIds),
-  ]);
-
-  // Resolve Meta ad names + WhatsApp-number labels for the breakdowns.
-  const [adNames, waNumbers] = await Promise.all([
-    getAdNames(leads.map((l) => l.ad_id)),
+  const leadsPromise = getLeadsForDashboard(storeIds, range);
+  const adNamesPromise = leadsPromise.then((leads) => getAdNames(leads.map((l) => l.ad_id)));
+  const waNumbersPromise = leadsPromise.then((leads) =>
     getWaNumbers(leads.map((l) => l.wa_phone_number_id)),
-  ]);
+  );
+  const [rollups, prevRollups, orders, conversations, leads, ops, adNames, waNumbers] =
+    await Promise.all([
+      getRollups(storeIds, range),
+      getRollups(storeIds, prev),
+      getOrders(storeIds, range),
+      getConversations(storeIds, range),
+      leadsPromise,
+      getLatestOps(storeIds),
+      adNamesPromise,
+      waNumbersPromise,
+    ]);
 
   const first = stores[0]!;
   const currency = stores.every((s) => s.currency === first.currency) ? first.currency : "PEN";

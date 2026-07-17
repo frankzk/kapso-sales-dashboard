@@ -26,19 +26,23 @@ export async function proxy(request: NextRequest) {
     },
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // `getUser()` always makes a round trip to Supabase Auth. Proxy runs for
+  // every dashboard/RSC navigation, so that check was adding network latency
+  // before Next could even start rendering the destination. `getClaims()` is
+  // the Supabase-recommended SSR guard: it validates asymmetric JWTs locally
+  // with the cached JWKS (and still falls back safely for symmetric projects).
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const isAuthenticated = !!claimsData?.claims?.sub;
 
   const path = request.nextUrl.pathname;
 
-  if (path.startsWith("/dashboard") && !user) {
+  if (path.startsWith("/dashboard") && !isAuthenticated) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("redirectedFrom", path);
     return NextResponse.redirect(url);
   }
-  if ((path === "/login" || path === "/signup") && user) {
+  if ((path === "/login" || path === "/signup") && isAuthenticated) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     url.search = "";

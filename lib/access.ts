@@ -3,6 +3,7 @@
 // stores they may access.
 
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { cache } from "react";
 import { decryptOrNull } from "@/lib/crypto";
 import { fetchMetaSpend, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
 import { tzParts } from "@/lib/metrics";
@@ -62,15 +63,22 @@ export function previousRange(r: DateRange): DateRange {
   return { from: isoDate(prevFrom), to: isoDate(prevTo) };
 }
 
-export async function getCurrentUser() {
+async function getCurrentUserUncached(): Promise<{ id: string; email: string | null } | null> {
   const sb = await createServerSupabase();
-  const {
-    data: { user },
-  } = await sb.auth.getUser();
-  return user;
+  const { data } = await sb.auth.getClaims();
+  const claims = data?.claims;
+  if (!claims?.sub) return null;
+  return {
+    id: claims.sub,
+    email: typeof claims.email === "string" ? claims.email : null,
+  };
 }
 
-export async function getAccessibleStores(): Promise<StoreSummary[]> {
+/** Request-scoped memoization prevents the shared layout and destination page
+ * from repeating the same auth/store reads during one RSC navigation. */
+export const getCurrentUser = cache(getCurrentUserUncached);
+
+async function getAccessibleStoresUncached(): Promise<StoreSummary[]> {
   const sb = await createServerSupabase();
   const { data } = await sb
     .from("stores")
@@ -78,6 +86,8 @@ export async function getAccessibleStores(): Promise<StoreSummary[]> {
     .order("name");
   return (data as StoreSummary[]) ?? [];
 }
+
+export const getAccessibleStores = cache(getAccessibleStoresUncached);
 
 /** Whether the user is owner/admin of at least one organization. */
 export async function getAdminOrgs(): Promise<{ org_id: string; role: string }[]> {
@@ -91,13 +101,15 @@ export async function getAdminOrgs(): Promise<{ org_id: string; role: string }[]
  * vendedora. Used to gate the financial pages and tailor the nav: a
  * vendedora-only user sees just the Leads board.
  */
-export async function getUserRoleSummary(): Promise<{ roles: string[]; isVendedoraOnly: boolean }> {
+async function getUserRoleSummaryUncached(): Promise<{ roles: string[]; isVendedoraOnly: boolean }> {
   const sb = await createServerSupabase();
   const { data } = await sb.from("memberships").select("role");
   const roles = ((data as { role: string }[]) ?? []).map((m) => m.role);
   const isVendedoraOnly = roles.length > 0 && roles.every((r) => r === "vendedora");
   return { roles, isVendedoraOnly };
 }
+
+export const getUserRoleSummary = cache(getUserRoleSummaryUncached);
 
 export async function getRollups(
   storeIds: string[],

@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useActionState, useCallback, useEffect, useRef, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
@@ -12,7 +13,6 @@ import {
 } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import { type CustomerHistory, type LeadCounts, type LeadView } from "@/lib/leads-access";
-import { LeadsInsightsPanel } from "@/components/leads-insights";
 import type { LeadsInsights } from "@/lib/leads-insights";
 import {
   LEAD_GESTIONES,
@@ -68,6 +68,23 @@ import { shopifyDraftOrderAdminUrl } from "@/lib/shopify-urls";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { cn } from "@/components/ui";
 import { YapeAssign } from "@/components/yape-alerts";
+
+const LeadsInsightsPanel = dynamic(
+  () => import("@/components/leads-insights").then((module) => module.LeadsInsightsPanel),
+  {
+    ssr: false,
+    loading: () => (
+      <section className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+        <div className="mb-4 h-7 w-44 animate-pulse rounded-lg bg-slate-200/70" />
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} className="h-56 animate-pulse rounded-xl bg-slate-200/60" />
+          ))}
+        </div>
+      </section>
+    ),
+  },
+);
 
 const inputCls =
   "mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
