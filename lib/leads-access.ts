@@ -16,6 +16,43 @@ export const LEAD_VIEWS: { key: LeadView; label: string }[] = [
 
 const LEADS_PAGE_SIZE = 1000;
 const LEADS_PAGE_CAP = 20_000;
+// Keep the queue payload lean: the drawer refetches the full row on open. Every
+// field below is used by the list, its facets, or the drawer's instant shell.
+const LEAD_BOARD_SELECT = [
+  "id",
+  "store_id",
+  "phone",
+  "name",
+  "first_seen_at",
+  "last_interaction_at",
+  "kapso_conversation_id",
+  "handoff_reason",
+  "handoff_context",
+  "category",
+  "status",
+  "has_order",
+  "district",
+  "cart_value",
+  "cart_item_count",
+  "cart_summary",
+  "draft_order_gid",
+  "draft_order_name",
+  "draft_order_status",
+  "draft_order_url",
+  "province",
+  "referencia",
+  "address1",
+  "ship_name",
+  "inbound_count",
+  "source",
+  "ad_id",
+  "ad_headline",
+  "ctwa_clid",
+  "wa_phone_number_id",
+  "last_inbound_at",
+  "claimed_by",
+  "claimed_at",
+].join(",");
 
 export async function getStoreLeads(
   storeId: string,
@@ -24,7 +61,7 @@ export async function getStoreLeads(
 ): Promise<LeadRow[]> {
   const sb = await createServerSupabase();
   const buildQuery = () => {
-    let q = sb.from("leads").select("*").eq("store_id", storeId);
+    let q = sb.from("leads").select(LEAD_BOARD_SELECT).eq("store_id", storeId);
     switch (view) {
       case "por_llamar":
         q = q
@@ -65,7 +102,7 @@ export async function getStoreLeads(
 
   if (limit !== null) {
     const { data } = await buildQuery().limit(limit);
-    return (data as LeadRow[]) ?? [];
+    return (data as unknown as LeadRow[]) ?? [];
   }
 
   // PostgREST caps one response at ~1000 rows even when `.limit()` asks for
@@ -75,7 +112,7 @@ export async function getStoreLeads(
   for (let from = 0; from < LEADS_PAGE_CAP; from += LEADS_PAGE_SIZE) {
     const { data, error } = await buildQuery().range(from, from + LEADS_PAGE_SIZE - 1);
     if (error) break;
-    const batch = (data as LeadRow[] | null) ?? [];
+    const batch = (data as unknown as LeadRow[] | null) ?? [];
     rows.push(...batch);
     if (batch.length < LEADS_PAGE_SIZE) break;
   }
