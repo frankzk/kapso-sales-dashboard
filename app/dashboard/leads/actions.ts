@@ -42,6 +42,8 @@ import {
   type ConversationMessage,
 } from "@/lib/kapso";
 import { getWaNumbers } from "@/lib/access";
+import { getLeadsInsights, type LeadsInsights } from "@/lib/leads-insights";
+import { drawerConversationIds } from "@/lib/lead-drawer";
 
 // Process-level cache of vendedora id → display name (emails ~never change).
 const agentNameCache = new Map<string, string>();
@@ -73,6 +75,21 @@ export interface LeadActionState {
   windowClosed?: boolean; // the 24h WhatsApp session window is closed (retry won't help)
 }
 
+/** Load the analytical panel after the queue is interactive. Keeping these
+ * heavier aggregates out of the page's critical path makes store/view changes
+ * commit as soon as the list is ready. Every query remains RLS-scoped. */
+export async function loadLeadsInsightsPanel(
+  storeId: string,
+  timezone: string,
+  pendingNow: number,
+): Promise<LeadsInsights | { error: string }> {
+  try {
+    return await getLeadsInsights(storeId, timezone, pendingNow);
+  } catch {
+    return { error: "No se pudo cargar el tablero." };
+  }
+}
+
 /** A Yape/Shalom lead awaiting verification, surfaced to advisors as a pop-up. */
 export interface YapeAlert {
   id: string;
@@ -84,18 +101,16 @@ export interface YapeAlert {
   lastInboundAt: string | null;
 }
 
-/** Fetch a lead + its call history (RLS-scoped). Drives the drawer client-side. */
+/** Fetch only the drawer's critical lead + call history. External Shopify/Kapso
+ * enrichment is deliberately split into `loadLeadCustomerHistory` below. */
 export async function loadLeadDetail(
   leadId: string,
-): Promise<
-  { lead: LeadRow; calls: LeadCallRow[]; customerHistory: CustomerHistory | null } | { error: string }
-> {
+): Promise<{ lead: LeadRow; calls: LeadCallRow[] } | { error: string }> {
   const ctx = await authorizeLead(leadId);
   if (!ctx) return { error: "Sin acceso a este lead." };
   const detail = await getLeadWithCalls(leadId);
   if (!detail) return { error: "No encontrado." };
 
-  // Resolve who logged each entry (vendedora id → display name) for the history.
   const ids = [...new Set(detail.calls.map((c) => c.vendedora).filter(Boolean))] as string[];
   if (ids.length) {
     const admin = createAdminSupabase();
@@ -105,26 +120,48 @@ export async function loadLeadDetail(
     ...c,
     vendedora_name: c.vendedora ? (agentNameCache.get(c.vendedora) ?? null) : null,
   }));
-  // Recurrent-customer block: prior purchases for this phone (excl. its own order).
-  // The local `orders` table is kapso-only (migration 0006), so purchases placed
-  // outside the bot never land there. Shopify can't search orders by phone, so we
-  // resolve the customer by phone and read THEIR orders directly — that's the only
-  // source that reflects ALL of the customer's history. Best-effort: needs the
-  // read_customers scope; if the store hasn't re-authorized (or the call fails) we
-  // keep the local list as a fallback. The store creds are fetched once here and
-  // reused to build the admin deep-links for both the Shopify and local lists.
-  const creds = await getStoreCreds(ctx.storeId);
+  return { lead: detail.lead, calls };
+}
+
+/** Non-critical customer context loaded progressively after the drawer is
+ * usable. Shopify and legacy Kapso recovery can take seconds and must not block
+ * the forms, call history, or lead metadata. */
+export async function loadLeadCustomerHistory(
+  leadId: string,
+): Promise<
+  { customerHistory: CustomerHistory | null; cartSummary: string | null } | { error: string }
+> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+  const [leadRes, creds] = await Promise.all([
+    admin
+      .from("leads")
+      .select("phone,order_id,source,cart_summary,kapso_conversation_id")
+      .eq("id", leadId)
+      .maybeSingle(),
+    getStoreCreds(ctx.storeId, admin),
+  ]);
+  const lead = leadRes.data as {
+    phone: string | null;
+    order_id: string | null;
+    source: string | null;
+    cart_summary: string | null;
+    kapso_conversation_id: string | null;
+  } | null;
+  if (!lead) return { error: "No encontrado." };
+
   const customerHistory = await getCustomerHistory(
     ctx.storeId,
-    detail.lead.phone,
-    detail.lead.order_id,
+    lead.phone,
+    lead.order_id,
     creds?.shopify_domain ?? null,
   );
-  if (customerHistory && detail.lead.phone && creds?.shopify_token) {
+  if (customerHistory && lead.phone && creds?.shopify_token) {
     try {
       const shopOrders = await getCustomerRecentOrders(
         { domain: creds.shopify_domain, token: creds.shopify_token },
-        detail.lead.phone,
+        lead.phone,
         { excludeName: customerHistory.currentOrderName, limit: 3 },
       );
       if (shopOrders.length) customerHistory.recentOrders = shopOrders;
@@ -133,39 +170,31 @@ export async function loadLeadDetail(
     }
   }
 
-  // Recover the browsed product for legacy búsqueda leads whose cart_summary was
-  // wiped before the additive-enrich fix. The product still lives on Kapso as the
-  // LAST param of the re-engagement template we sent; pull it, show it now, and
-  // self-heal the row so it persists (and the "🔎 Vio:" card shows next time too).
-  if (
-    detail.lead.source === "abandoned_browse" &&
-    !detail.lead.cart_summary &&
-    creds?.kapso_api_key &&
-    creds.browse_template_name
-  ) {
+  let cartSummary = lead.cart_summary;
+  if (lead.source === "abandoned_browse" && !cartSummary && creds?.kapso_api_key && creds.browse_template_name) {
     try {
-      let convId = detail.lead.kapso_conversation_id;
-      if (!convId && detail.lead.phone) {
-        const convs = await listConversationsByPhone({ apiKey: creds.kapso_api_key }, detail.lead.phone);
+      let convId = lead.kapso_conversation_id;
+      if (!convId && lead.phone) {
+        const convs = await listConversationsByPhone({ apiKey: creds.kapso_api_key }, lead.phone);
         convId = convs[0]?.id != null ? String(convs[0].id) : null;
       }
       if (convId) {
         const msgs = await fetchConversationTranscript({ apiKey: creds.kapso_api_key }, convId);
         const product = templateProductParam(msgs, creds.browse_template_name);
         if (product) {
-          detail.lead.cart_summary = product;
-          await createAdminSupabase()
+          cartSummary = product;
+          await admin
             .from("leads")
             .update({ cart_summary: product })
             .eq("id", leadId)
-            .is("cart_summary", null); // don't overwrite if it got set meanwhile
+            .is("cart_summary", null);
         }
       }
     } catch {
       /* best-effort recovery — never break the drawer */
     }
   }
-  return { lead: detail.lead, calls, customerHistory };
+  return { customerHistory, cartSummary };
 }
 
 /**
@@ -272,8 +301,18 @@ export async function claimLead(leadId: string): Promise<LeadActionState> {
     const who = holderId && holderId !== ctx.userId ? await resolveAgentName(holderId, admin) : null;
     return { error: who ? `${who} está atendiendo este lead.` : "Otro vendedor está atendiendo este lead." };
   }
-  revalidatePath("/dashboard/leads");
   return { notice: "Lead tomado." };
+}
+
+/** Claim + critical drawer data in one browser round trip. The two server tasks
+ * run concurrently; customer history and old WhatsApp sessions remain separate
+ * progressive reads. */
+export async function openLeadDrawer(
+  leadId: string,
+): Promise<{ lead: LeadRow; calls: LeadCallRow[] } | { error: string }> {
+  const [claim, detail] = await Promise.all([claimLead(leadId), loadLeadDetail(leadId)]);
+  if (claim.error) return { error: claim.error };
+  return detail;
 }
 
 /** Release a claim (called when closing the drawer). Only releases your own. */
@@ -286,7 +325,6 @@ export async function releaseLead(leadId: string): Promise<LeadActionState> {
     .update({ claimed_by: null, claimed_at: null })
     .eq("id", leadId)
     .eq("claimed_by", ctx.userId);
-  revalidatePath("/dashboard/leads");
   return { notice: "Liberado." };
 }
 
@@ -953,11 +991,6 @@ export interface LeadConversation {
   reason?: string; // set (with messages: []) when the transcript can't be shown
 }
 
-/** How many of a number's session-conversations the drawer merges into the
- *  transcript (newest-first). Covers virtually all real contacts while bounding
- *  the Kapso fan-out on drawer open. */
-const MAX_DRAWER_CONVERSATIONS = 10;
-
 /**
  * Load a lead's WhatsApp conversation (text + media) from Kapso. Also returns the
  * list of THREADS — one per connected number the customer wrote to — so the drawer
@@ -971,6 +1004,7 @@ const MAX_DRAWER_CONVERSATIONS = 10;
 export async function loadLeadConversation(
   leadId: string,
   conversationId?: string,
+  includeOlder = true,
 ): Promise<LeadConversation> {
   const empty = (reason?: string): LeadConversation => ({
     messages: [],
@@ -1056,7 +1090,7 @@ export async function loadLeadConversation(
     .filter((t) => (t.phoneNumberId ?? "__none__") === activeKey)
     .sort((a, b) => (b.lastActiveAt ?? "").localeCompare(a.lastActiveAt ?? ""))
     .map((t) => t.conversationId);
-  const idsToFetch = [...new Set([activeId, ...activeConvIds])].slice(0, MAX_DRAWER_CONVERSATIONS);
+  const idsToFetch = drawerConversationIds(activeId, activeConvIds, includeOlder);
   const olderIds = idsToFetch.filter((id) => id !== activeId);
 
   // The active (newest) conversation is the primary read — a failure there is a

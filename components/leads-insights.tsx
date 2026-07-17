@@ -280,14 +280,14 @@ export function LeadsInsightsPanel({
   interactionDateFilter,
   onInteractionDateFilterChange,
 }: {
-  data: LeadsInsights;
+  data: LeadsInsights | null;
   titleSlot?: ReactNode;
   actionsSlot?: ReactNode;
   interactionDateFilter: LeadInteractionDateFilter | null;
   onInteractionDateFilterChange: (filter: LeadInteractionDateFilter | null) => void;
 }) {
   const [open, setOpen] = useState(true);
-  const landing = [...data.burndown].reverse().find((p) => p.proy != null)?.proy ?? null;
+  const landing = data ? ([...data.burndown].reverse().find((p) => p.proy != null)?.proy ?? null) : null;
 
   return (
     <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 sm:p-4">
@@ -307,7 +307,23 @@ export function LeadsInsightsPanel({
         </div>
       </div>
 
-      {open && (
+      {open && !data && (
+        <div
+          className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4"
+          aria-label="Cargando tablero"
+          aria-busy="true"
+        >
+          {Array.from({ length: 4 }, (_, index) => (
+            <div key={index} className="h-[250px] rounded-xl border border-slate-200 bg-white p-3">
+              <div className="h-4 w-32 animate-pulse rounded bg-slate-200 motion-reduce:animate-none" />
+              <div className="mt-2 h-3 w-4/5 animate-pulse rounded bg-slate-100 motion-reduce:animate-none" />
+              <div className="mt-8 h-36 animate-pulse rounded-lg bg-slate-100 motion-reduce:animate-none" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {open && data && (
         <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-xl border border-slate-200 bg-white p-3">
               <p className="text-sm font-semibold text-slate-800">¿Cerramos hoy?</p>

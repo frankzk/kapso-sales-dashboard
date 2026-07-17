@@ -39,7 +39,6 @@ import {
   type YapeKind,
 } from "@/lib/leads";
 import {
-  claimLead,
   confirmLeadWon,
   createQuickReply,
   deleteQuickReply,
@@ -47,8 +46,11 @@ import {
   getLeadWindow,
   listQuickReplies,
   loadLeadConversation,
+  loadLeadCustomerHistory,
   loadLeadDetail,
+  loadLeadsInsightsPanel,
   loadOrderDraft,
+  openLeadDrawer,
   pollLeadState,
   registerCall,
   releaseLead,
@@ -572,7 +574,7 @@ export function LeadsBoard({
   waNumbers?: Record<string, WaNumber>;
   currency: string;
   timezone: string;
-  insights: LeadsInsights;
+  insights: LeadsInsights | null;
   initialState?: QueueState | null;
   initialSeg?: LeadSegment | null;
   initialGest?: LeadGestion | null;
@@ -581,6 +583,8 @@ export function LeadsBoard({
   currentUserId: string;
 }) {
   const router = useRouter();
+  const [routePending, startRouteTransition] = useTransition();
+  const [insightsData, setInsightsData] = useState<LeadsInsights | null>(insights);
   // Only the row being opened is disabled (its claim is in flight) — never the
   // whole list. Background work (post-save refresh, claim release) must NOT
   // freeze every "Tomar / Ver" button, which is why it's not a shared transition.
@@ -591,6 +595,7 @@ export function LeadsBoard({
   const [selected, setSelected] = useState<LeadRow | null>(null);
   const [calls, setCalls] = useState<LeadCallRow[] | null>(null);
   const [history, setHistory] = useState<CustomerHistory | null>(null); // recurrent-customer block
+  const activeLeadIdRef = useRef<string | null>(null);
   // Client-side sub-filters (instant, no navigation): source lens + the queue's
   // intención/gestión axes within "Por llamar".
   // Fuente y Número: multi-select (OR dentro del grupo). Set vacío = sin filtro.
@@ -618,6 +623,20 @@ export function LeadsBoard({
   // one so the active view is never hidden.
   const isReviewView = view === "seguimientos" || view === "ganados" || view === "perdidos";
   const [more, setMore] = useState<boolean>(isReviewView);
+
+  useEffect(() => {
+    let alive = true;
+    setInsightsData(insights);
+    if (insights) return () => {
+      alive = false;
+    };
+    void loadLeadsInsightsPanel(storeId, timezone, counts.sin_llamar).then((result) => {
+      if (alive && !("error" in result)) setInsightsData(result);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [counts.sin_llamar, insights, storeId, timezone]);
 
   useEffect(() => {
     const q = query.trim();
@@ -655,7 +674,21 @@ export function LeadsBoard({
   }, [initialOpenId, leads]);
 
   function changeStore(nextStore: string) {
-    router.push(`/dashboard/leads?store=${nextStore}&view=${view}`);
+    startRouteTransition(() => {
+      router.push(`/dashboard/leads?store=${nextStore}&view=${view}`);
+    });
+  }
+
+  function prefetchOtherStores() {
+    for (const store of stores) {
+      if (store.id !== storeId) router.prefetch(`/dashboard/leads?store=${store.id}&view=${view}`);
+    }
+  }
+
+  function navigateToView(nextView: string) {
+    startRouteTransition(() => {
+      router.push(`/dashboard/leads?store=${storeId}&view=${nextView}`);
+    });
   }
 
   function changeInteractionDateFilter(next: LeadInteractionDateFilter | null) {
@@ -668,7 +701,9 @@ export function LeadsBoard({
       });
       if (next.kind === "day") params.set("last_date", next.date);
       else params.set("last_before", next.before);
-      router.push(`/dashboard/leads?${params.toString()}`);
+      startRouteTransition(() => {
+        router.push(`/dashboard/leads?${params.toString()}`);
+      });
       return;
     }
     setQueueState("sin_llamar");
@@ -676,30 +711,36 @@ export function LeadsBoard({
   }
 
   function openLead(lead: LeadRow) {
+    activeLeadIdRef.current = lead.id;
     setBanner(null);
     setSelected(lead); // instant — render from the data we already have
     setCalls(null);
     setHistory(null);
     setOpeningId(lead.id); // disable only this row's button while the claim loads
     void (async () => {
+      const historyPromise = loadLeadCustomerHistory(lead.id).catch(() => null);
       try {
-        const res = await claimLead(lead.id);
-        if (res.error) {
-          setBanner(res.error);
-          setSelected(null);
-          return;
-        }
-        const d = await loadLeadDetail(lead.id);
+        const d = await openLeadDrawer(lead.id);
+        if (activeLeadIdRef.current !== lead.id) return;
         if ("error" in d) {
           setBanner(d.error);
           setSelected(null);
+          activeLeadIdRef.current = null;
           return;
         }
         setSelected(d.lead);
         setCalls(d.calls);
-        setHistory(d.customerHistory);
+        void historyPromise.then((extra) => {
+          if (!extra || "error" in extra || activeLeadIdRef.current !== lead.id) return;
+          setHistory(extra.customerHistory);
+          if (extra.cartSummary) {
+            setSelected((current) =>
+              current?.id === lead.id ? { ...current, cart_summary: extra.cartSummary } : current,
+            );
+          }
+        });
       } finally {
-        setOpeningId(null);
+        setOpeningId((current) => (current === lead.id ? null : current));
       }
     })();
   }
@@ -709,18 +750,28 @@ export function LeadsBoard({
     // transition tied to the row buttons: a call save shouldn't disable every
     // "Tomar / Ver" while the (heavier) list refetch runs.
     void (async () => {
+      const historyPromise = loadLeadCustomerHistory(leadId).catch(() => null);
       const d = await loadLeadDetail(leadId);
-      if (!("error" in d)) {
+      if (!("error" in d) && activeLeadIdRef.current === leadId) {
         setSelected(d.lead);
         setCalls(d.calls);
-        setHistory(d.customerHistory);
       }
+      void historyPromise.then((extra) => {
+        if (!extra || "error" in extra || activeLeadIdRef.current !== leadId) return;
+        setHistory(extra.customerHistory);
+        if (extra.cartSummary) {
+          setSelected((current) =>
+            current?.id === leadId ? { ...current, cart_summary: extra.cartSummary } : current,
+          );
+        }
+      });
       router.refresh(); // reflect status/queue changes in the list + counts
     })();
   }
 
   function closeDrawer() {
     const leadId = selected?.id;
+    activeLeadIdRef.current = null;
     setSelected(null);
     setCalls(null);
     setHistory(null);
@@ -869,10 +920,10 @@ export function LeadsBoard({
   const displayLeads = results ?? shownLeads;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" aria-busy={routePending}>
       {/* Título "Leads" + tablero de hoy (burndown · sin llamar · productividad). */}
       <LeadsInsightsPanel
-        data={insights}
+        data={insightsData}
         interactionDateFilter={interactionDateFilter}
         onInteractionDateFilterChange={changeInteractionDateFilter}
         titleSlot={
@@ -887,7 +938,7 @@ export function LeadsBoard({
                   {" · "}
                   <button
                     type="button"
-                    onClick={() => router.push(`/dashboard/leads?store=${storeId}&view=yape`)}
+                    onClick={() => navigateToView("yape")}
                     className="font-semibold text-red-600 hover:underline"
                   >
                     🔥 {counts.yape} en Yape/Shalom
@@ -902,6 +953,10 @@ export function LeadsBoard({
             <select
               value={storeId}
               onChange={(e) => changeStore(e.currentTarget.value)}
+              onFocus={prefetchOtherStores}
+              onPointerDown={prefetchOtherStores}
+              disabled={routePending}
+              aria-label="Tienda"
               className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
             >
               {stores.map((s) => (
@@ -929,7 +984,9 @@ export function LeadsBoard({
                 setQueueState(nextState);
                 if (nextState !== "sin_llamar") setInteractionDateFilter(null);
               } else {
-                router.push(`/dashboard/leads?store=${storeId}&view=por_llamar&state=${key}`);
+                startRouteTransition(() => {
+                  router.push(`/dashboard/leads?store=${storeId}&view=por_llamar&state=${key}`);
+                });
               }
             }}
             options={QUEUE_STATES.map((s) => ({
@@ -942,9 +999,7 @@ export function LeadsBoard({
             <button
               type="button"
               aria-pressed={view === "yape"}
-              onClick={() =>
-                router.push(`/dashboard/leads?store=${storeId}&view=${view === "yape" ? "por_llamar" : "yape"}`)
-              }
+              onClick={() => navigateToView(view === "yape" ? "por_llamar" : "yape")}
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition",
                 view === "yape"
@@ -1070,7 +1125,7 @@ export function LeadsBoard({
                 <input
                   type="date"
                   value={interactionDateFilter?.kind === "day" ? interactionDateFilter.date : ""}
-                  max={insights.sinLlamar.at(-1)?.date}
+                  max={insightsData?.sinLlamar.at(-1)?.date}
                   onChange={(event) =>
                     changeInteractionDateFilter(
                       event.currentTarget.value
@@ -1142,7 +1197,7 @@ export function LeadsBoard({
             <SegControl
               label="Vista"
               value={isReviewView ? view : view === "por_llamar" ? "por_llamar" : ""}
-              onChange={(key) => router.push(`/dashboard/leads?store=${storeId}&view=${key}`)}
+              onChange={navigateToView}
               options={[
                 { key: "por_llamar", label: "Cola", count: counts.por_llamar },
                 ...OUTCOME_VIEWS.filter((v) => v.key !== "yape").map((v) => ({
@@ -1223,7 +1278,7 @@ export function LeadsBoard({
                   }}
                   className={cn(
                     // Móvil: tarjeta apilada (flex-wrap). md+: el grid de columnas.
-                    "group flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-4 py-3 transition last:border-0 md:grid md:grid-cols-[42px_minmax(0,1fr)_184px_78px_78px] md:gap-x-[14px] md:gap-y-0 md:px-[18px] md:py-2.5",
+                    "group flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-4 py-3 transition [contain-intrinsic-size:auto_54px] [content-visibility:auto] last:border-0 md:grid md:grid-cols-[42px_minmax(0,1fr)_184px_78px_78px] md:gap-x-[14px] md:gap-y-0 md:px-[18px] md:py-2.5",
                     locked ? "bg-brand-50" : isYape ? "bg-red-50" : "hover:bg-slate-50",
                     openingId === lead.id && "opacity-60",
                   )}
@@ -1891,14 +1946,17 @@ function WhatsappChat({
   const atBottomRef = useRef(true); // is the user near the bottom of the thread?
   const countRef = useRef(0); // previous message count, to detect new arrivals
   const activeIdRef = useRef<string | null>(null); // active thread (for silent polls)
+  const requestRef = useRef(0); // ignore a slower response after switching threads/leads
   const [showJump, setShowJump] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
 
   const load = useCallback(
     (opts?: { silent?: boolean; conversationId?: string }) => {
+      const requestId = ++requestRef.current;
       if (!opts?.silent) setState({ status: "loading" });
-      loadLeadConversation(leadId, opts?.conversationId).then((res) => {
+      const apply = (res: Awaited<ReturnType<typeof loadLeadConversation>>) => {
+        if (requestRef.current !== requestId) return;
         activeIdRef.current = res.activeConversationId;
         setState({
           status: "ready",
@@ -1908,6 +1966,14 @@ function WhatsappChat({
           activeId: res.activeConversationId,
           activePhoneNumberId: res.activePhoneNumberId,
         });
+      };
+      // First paint reads only the active session. Older sessions are merged in
+      // a silent follow-up, while 20s polls remain cheap and active-session only.
+      loadLeadConversation(leadId, opts?.conversationId, false).then((res) => {
+        apply(res);
+        if (!opts?.silent && res.activeConversationId) {
+          void loadLeadConversation(leadId, res.activeConversationId, true).then(apply);
+        }
       });
     },
     [leadId],
