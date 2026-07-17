@@ -14,39 +14,72 @@ export const LEAD_VIEWS: { key: LeadView; label: string }[] = [
   { key: "perdidos", label: "Perdidos" },
 ];
 
+const LEADS_PAGE_SIZE = 1000;
+const LEADS_PAGE_CAP = 20_000;
+
 export async function getStoreLeads(
   storeId: string,
   view: LeadView,
-  limit = 200,
+  limit: number | null = 200,
 ): Promise<LeadRow[]> {
   const sb = await createServerSupabase();
-  let q = sb.from("leads").select("*").eq("store_id", storeId);
-  switch (view) {
-    case "por_llamar":
-      q = q
-        .in("category", ["open", "hot"])
-        .neq("status", "yape_por_verificar") // payment-pending leads live in the Yape/Shalom tab
-        .order("needs_attention", { ascending: false })
-        .order("last_interaction_at", { ascending: false });
-      break;
-    case "yape":
-      q = q.eq("status", "yape_por_verificar").order("last_interaction_at", { ascending: false });
-      break;
-    case "seguimientos":
-      q = q
-        .not("next_followup_at", "is", null)
-        .lte("next_followup_at", new Date().toISOString())
-        .order("next_followup_at", { ascending: true });
-      break;
-    case "ganados":
-      q = q.eq("category", "won").order("updated_at", { ascending: false });
-      break;
-    case "perdidos":
-      q = q.eq("category", "lost").order("updated_at", { ascending: false });
-      break;
+  const buildQuery = () => {
+    let q = sb.from("leads").select("*").eq("store_id", storeId);
+    switch (view) {
+      case "por_llamar":
+        q = q
+          .in("category", ["open", "hot"])
+          .neq("status", "yape_por_verificar") // payment-pending leads live in the Yape/Shalom tab
+          .order("needs_attention", { ascending: false })
+          .order("last_interaction_at", { ascending: false })
+          .order("id", { ascending: true }); // stable pagination tie-breaker
+        break;
+      case "yape":
+        q = q
+          .eq("status", "yape_por_verificar")
+          .order("last_interaction_at", { ascending: false })
+          .order("id", { ascending: true });
+        break;
+      case "seguimientos":
+        q = q
+          .not("next_followup_at", "is", null)
+          .lte("next_followup_at", new Date().toISOString())
+          .order("next_followup_at", { ascending: true })
+          .order("id", { ascending: true });
+        break;
+      case "ganados":
+        q = q
+          .eq("category", "won")
+          .order("updated_at", { ascending: false })
+          .order("id", { ascending: true });
+        break;
+      case "perdidos":
+        q = q
+          .eq("category", "lost")
+          .order("updated_at", { ascending: false })
+          .order("id", { ascending: true });
+        break;
+    }
+    return q;
+  };
+
+  if (limit !== null) {
+    const { data } = await buildQuery().limit(limit);
+    return (data as LeadRow[]) ?? [];
   }
-  const { data } = await q.limit(limit);
-  return (data as LeadRow[]) ?? [];
+
+  // PostgREST caps one response at ~1000 rows even when `.limit()` asks for
+  // more. The queue's facets and chart drill-downs run client-side, so they must
+  // receive the same complete universe that the paginated insights query uses.
+  const rows: LeadRow[] = [];
+  for (let from = 0; from < LEADS_PAGE_CAP; from += LEADS_PAGE_SIZE) {
+    const { data, error } = await buildQuery().range(from, from + LEADS_PAGE_SIZE - 1);
+    if (error) break;
+    const batch = (data as LeadRow[] | null) ?? [];
+    rows.push(...batch);
+    if (batch.length < LEADS_PAGE_SIZE) break;
+  }
+  return rows;
 }
 
 export async function getLeadWithCalls(
