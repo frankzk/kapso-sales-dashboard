@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/sidebar";
 import { YapeAlerts } from "@/components/yape-alerts";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
+import { finishPanelNavigation } from "@/lib/client-performance";
 
 function pathOf(href: string | null): string | null {
   return href?.split("?", 1)[0] ?? null;
@@ -30,6 +31,7 @@ export function DashboardShell({
   const routePending = pathOf(pendingHref) !== null && pathOf(pendingHref) !== pathname;
 
   useEffect(() => {
+    finishPanelNavigation(pathname);
     setPendingHref(null);
   }, [pathname]);
 

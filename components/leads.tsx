@@ -41,6 +41,7 @@ import {
 } from "@/app/dashboard/leads/actions";
 import { cn } from "@/components/ui";
 import type { LeadDrawerProps, LeadDrawerUpdate } from "@/components/leads-drawer";
+import { reportClientPerformanceMetric } from "@/lib/client-performance";
 
 const LeadsInsightsPanel = dynamic(
   () => import("@/components/leads-insights").then((module) => module.LeadsInsightsPanel),
@@ -105,6 +106,7 @@ function measureLeadDrawerReady() {
   const duration = performance.getEntriesByName(DRAWER_MEASURE).at(-1)?.duration;
   if (duration != null && process.env.NODE_ENV !== "test") {
     console.info(`[Kapso performance] Drawer listo en ${Math.round(duration)} ms`);
+    reportClientPerformanceMetric(DRAWER_MEASURE, duration);
   }
 }
 

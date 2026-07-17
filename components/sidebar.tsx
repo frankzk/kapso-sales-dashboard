@@ -2,9 +2,15 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import type { ComponentType, SVGProps } from "react";
+import { useCallback, useEffect, type ComponentType, type SVGProps } from "react";
 import { cn } from "@/components/ui";
 import { IconChat, IconGrid, IconHeadset, IconPlug, IconStore, IconTruck, IconUsers } from "@/components/icons";
+import {
+  canBackgroundPrefetch,
+  panelPrefetchOrder,
+  registerPanelPrefetch,
+  startPanelNavigation,
+} from "@/lib/client-performance";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 interface NavItem {
@@ -68,9 +74,36 @@ export function Sidebar({
     .filter((it) => displayPath === it.href || displayPath.startsWith(it.href + "/"))
     .sort((a, b) => b.href.length - a.href.length)[0]?.href;
 
-  function prepare(href: string) {
-    if (href !== pathname) router.prefetch(href);
-  }
+  const prepare = useCallback((href: string) => {
+    if (href === pathname || !registerPanelPrefetch(href)) return;
+    router.prefetch(href);
+  }, [pathname, router]);
+
+  // Warm the likely next operational panels. Requests are staggered and only
+  // start while the browser is idle, never on data-saver or a 2G connection.
+  // Intent (hover/focus/touch) still prefetches immediately.
+  useEffect(() => {
+    if (!canBackgroundPrefetch()) return;
+    const timers: number[] = [];
+    const idleHandles: number[] = [];
+    panelPrefetchOrder(pathname, isVendedoraOnly).forEach((href, index) => {
+      timers.push(window.setTimeout(() => {
+        if (document.visibilityState !== "visible") return;
+        const run = () => prepare(href);
+        if (typeof window.requestIdleCallback === "function") {
+          idleHandles.push(window.requestIdleCallback(run, { timeout: 2_000 }));
+        } else {
+          run();
+        }
+      }, 800 + index * 1_400));
+    });
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      if (typeof window.cancelIdleCallback === "function") {
+        idleHandles.forEach((handle) => window.cancelIdleCallback(handle));
+      }
+    };
+  }, [isVendedoraOnly, pathname, prepare]);
 
   function beginNavigation(
     event: React.MouseEvent<HTMLAnchorElement>,
@@ -87,6 +120,7 @@ export function Sidebar({
     ) {
       return;
     }
+    startPanelNavigation(pathname, href);
     onNavigate?.(href);
   }
 
@@ -108,6 +142,7 @@ export function Sidebar({
                 prefetch={false}
                 onPointerEnter={() => prepare(it.href)}
                 onFocus={() => prepare(it.href)}
+                onTouchStart={() => prepare(it.href)}
                 onClick={(event) => beginNavigation(event, it.href)}
                 aria-current={active ? "page" : undefined}
                 className={cn(
@@ -159,6 +194,7 @@ export function Sidebar({
                 prefetch={false}
                 onPointerEnter={() => prepare(it.href)}
                 onFocus={() => prepare(it.href)}
+                onTouchStart={() => prepare(it.href)}
                 onClick={(event) => beginNavigation(event, it.href)}
                 aria-current={active ? "page" : undefined}
                 className={cn(

@@ -45,6 +45,7 @@ import { shopifyDraftOrderAdminUrl } from "@/lib/shopify-urls";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { cn } from "@/components/ui";
 import { YapeAssign } from "@/components/yape-alerts";
+import { reportClientPerformanceMetric } from "@/lib/client-performance";
 
 export type LeadDrawerProps = {
   lead: LeadRow;
@@ -84,6 +85,13 @@ function finishUiMeasure(name: string) {
   const duration = performance.getEntriesByName(name).at(-1)?.duration;
   if (duration != null && process.env.NODE_ENV !== "test") {
     console.info(`[Kapso performance] ${name} en ${Math.round(duration)} ms`);
+    if (
+      name === "kapso:call-save" ||
+      name === "kapso:whatsapp-chat-first-paint" ||
+      name === "kapso:whatsapp-send"
+    ) {
+      reportClientPerformanceMetric(name, duration);
+    }
   }
 }
 
