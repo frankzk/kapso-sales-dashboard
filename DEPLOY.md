@@ -296,6 +296,25 @@ consume aunque Meta rechace el envío (no se re-martilla un número roto).
   sent_at desc limit 20;` + la nota "📤 Drip: …" en un lead tocado. El reporte
   del cron trae `dripSent`.
 
+## 5g. Olas de reencolado de carritos (automático)
+
+Complemento del drip por el canal de LLAMADAS: un lead **con carrito** cuyo
+último resultado fue "no logré contactar" (no_responde/buzon/cuelga) y lleva
+**48h sin actividad** vuelve a subir con `needs_attention` — la lista lo ordena
+primero y el tab "En seguimiento" muestra un **contador rojo** con los que
+piden atención. **Máximo 2 olas por lead** (≈ día 2 y día 4; sin tope sería un
+ping-pong infinito, porque cada gestión apaga la atención y reinicia el reloj).
+Tras la ola 2: o la asesora agenda/dispone, o el auto-archivado de 7 días lo
+saca. Los estados de "sí hablé" (contactado/otros productos) y los cierres
+(Perdidos) nunca se reencolan; el que dijo que no y quedó marcado
+"Cancelado por cliente" queda en paz.
+
+- **Needs migration 0036** (`leads.attention_waves`). Antes de correrla el paso
+  es un no-op silencioso. Siempre activo tras la migración (sin toggle); la
+  primera corrida del cron ejecuta la "ola inicial" sobre el stock acumulado.
+- Cada ola deja una nota en el timeline: `🔁 Reencolado automático: carrito sin
+  contacto por 48h (ola 1/2)`. El reporte del cron trae `requeued`.
+
 ## 7. Post-deploy verification
 
 - **Health**: `curl https://<domain>/api/health` → `{ "ok": true, … }` (public,

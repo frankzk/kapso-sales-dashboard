@@ -1457,3 +1457,10 @@ create policy drip_sends_select on drip_sends for select to authenticated
   using (store_id in (select auth_store_ids()));
 grant select on drip_sends to authenticated;
 grant all privileges on drip_sends to service_role;
+
+-- ---- 0036 ----
+-- 0036_attention_waves.sql — contador de olas de reencolado automático:
+-- carritos en no_responde/buzon/cuelga quietos 48h suben con needs_attention,
+-- máximo 2 veces por lead (evita el ping-pong infinito de reencolados).
+
+alter table leads add column if not exists attention_waves int not null default 0;

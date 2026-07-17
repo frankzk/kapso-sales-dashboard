@@ -38,6 +38,7 @@ import {
   applyHandoff,
   archiveStaleLeads,
   eventOverridesDisposition,
+  flagCartAttentionWaves,
   flagOverdueFollowups,
   ingestConversationEvent,
   lastDispositionAtByPhone,
@@ -651,6 +652,7 @@ export interface SyncReport {
   archived: number;
   metaAdsResolved: number; // Meta ad_ids whose real names we resolved this run
   dripSent: number; // plantillas de seguimiento enviadas esta corrida
+  requeued: number; // carritos reencolados con atención (olas, máx 2 por lead)
   errors: string[];
 }
 
@@ -723,6 +725,7 @@ export async function runStoreSync(
     archived: 0,
     metaAdsResolved: 0,
     dripSent: 0,
+    requeued: 0,
     errors: [],
   };
   const creds = await getStoreCreds(storeId, admin);
@@ -890,6 +893,15 @@ export async function runStoreSync(
     } catch (e: any) {
       report.errors.push(`drip: ${e.message}`);
     }
+  }
+
+  // 2c.6) Olas de reencolado: carritos en nr/buzón/cuelga quietos 48h suben con
+  //       needs_attention (máx 2 olas por lead) para que la llamada de
+  //       recontacto no se pase. Pre-0036 es un no-op. Best-effort.
+  try {
+    report.requeued = await flagCartAttentionWaves(admin, storeId);
+  } catch (e: any) {
+    report.errors.push(`waves: ${e.message}`);
   }
 
   // 2d) Auto-archivar leads vencidos viejos (sin interacción > STALE_LEAD_DAYS)
