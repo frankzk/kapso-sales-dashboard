@@ -93,6 +93,7 @@ export function ProductivityBoard({
   heatMode,
   onlineIdle,
   initialOnlineIds,
+  solo = false,
 }: {
   rows: AdvisorBoardRow[];
   prevTotals: ProductivityTotals;
@@ -108,6 +109,8 @@ export function ProductivityBoard({
   heatMode: "day" | "avg";
   onlineIdle: { userId: string; email: string }[];
   initialOnlineIds: string[];
+  /** Vista de vendedora: solo su propia fila — sin KPI de presencia del equipo. */
+  solo?: boolean;
 }) {
   const totals = rows.reduce(
     (a, r) => ({
@@ -137,7 +140,9 @@ export function ProductivityBoard({
       {/* Header + todos los filtros en una sola franja */}
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex items-baseline gap-2">
-          <h1 className="text-lg font-semibold text-slate-900">Productividad por asesora</h1>
+          <h1 className="text-lg font-semibold text-slate-900">
+            {solo ? "Mi productividad" : "Productividad por asesora"}
+          </h1>
           <p className="text-xs text-slate-400">
             {range.from} → {range.to}
           </p>
@@ -186,33 +191,36 @@ export function ProductivityBoard({
         </div>
       </div>
 
-      {/* KPIs compactos */}
-      <div className="grid shrink-0 grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+      {/* KPIs compactos (en modo solo son LOS SUYOS; el de presencia del equipo
+          no aplica y se oculta) */}
+      <div className={cn("grid shrink-0 grid-cols-2 gap-3 md:grid-cols-3", solo ? "xl:grid-cols-4" : "xl:grid-cols-5")}>
         <Kpi
-          label="Llamadas"
+          label={solo ? "Mis llamadas" : "Llamadas"}
           value={String(totals.llamadas)}
           delta={hasPrev ? pctDelta(totals.llamadas, prevTotals.llamadas) : undefined}
         />
         <Kpi
-          label="Leads trabajados"
+          label={solo ? "Mis leads" : "Leads trabajados"}
           value={String(totals.leads)}
           delta={hasPrev ? pctDelta(totals.leads, prevTotals.leadsTrabajados) : undefined}
         />
         <Kpi
-          label="Pedidos cerrados"
+          label={solo ? "Mis cerrados" : "Pedidos cerrados"}
           value={String(totals.cerrados)}
           delta={hasPrev ? pctDelta(totals.cerrados, prevTotals.cerrados) : undefined}
         />
         <Kpi
-          label="Ingresos atribuidos"
+          label={solo ? "Mis ingresos" : "Ingresos atribuidos"}
           value={money(totals.ingresos, currency)}
           delta={hasPrev ? pctDelta(totals.ingresos, prevTotals.ingresos) : undefined}
         />
-        <Kpi
-          label="En línea ahora"
-          value={String(onlineCount)}
-          sub={onlineCount ? "con el dashboard abierto" : "nadie conectada"}
-        />
+        {!solo && (
+          <Kpi
+            label="En línea ahora"
+            value={String(onlineCount)}
+            sub={onlineCount ? "con el dashboard abierto" : "nadie conectada"}
+          />
+        )}
       </div>
 
       {/* Tabla única — scroll interno, encabezado sticky */}
@@ -235,7 +243,8 @@ export function ProductivityBoard({
           Actividad = leads distintos gestionados por hora (sin filtro de fuente): <span className="text-brand-700">azul</span> a
           ritmo (≥6/h) · <span className="text-amber-700">ámbar</span> bajo ritmo · <span className="text-rose-600">rojo</span> hora
           muerta en plena jornada · gris fuera de jornada — la señal de eficiencia es su contraste con el % de
-          cierre · el pedido se acredita a la asesora del último toque · toca una asesora para ver sus leads.
+          cierre · el pedido se acredita a la asesora del último toque ·{" "}
+          {solo ? "toca tu fila para ver tus leads." : "toca una asesora para ver sus leads."}
         </p>
       </Card>
     </div>
