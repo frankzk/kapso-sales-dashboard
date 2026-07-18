@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseAliclikAttempts,
+  parseAliclikCoordinate,
   parseAliclikDate,
   parseAliclikRow,
   parseAliclikReport,
@@ -35,6 +36,37 @@ describe("parseAliclikRow", () => {
     expect(parseAliclikDate("31/02/2026")).toBeNull();
     expect(parseAliclikAttempts("Intento 2")).toBe(2);
     expect(parseAliclikAttempts("")).toBeNull();
+  });
+
+  it("reads the full delivery destination and coordinates from Aliclik", () => {
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X763370265582",
+      DIRECCION: "Av. José Gálvez 145, Urb. Miramar",
+      REFERENCIA: "Puerta azul, frente al parque",
+      DISTRITO: "Ilo",
+      PROVINCIA: "Ilo",
+      DEPARTAMENTO: "Moquegua",
+      LATITUD: "-17.6468721185573",
+      LONGITUD: "-71.3448429172091",
+    });
+
+    expect(row.delivery_address).toBe("Av. José Gálvez 145, Urb. Miramar");
+    expect(row.delivery_reference).toBe("Puerta azul, frente al parque");
+    expect(row.region).toBe("Moquegua");
+    expect(row.latitude).toBe(-17.6468721185573);
+    expect(row.longitude).toBe(-71.3448429172091);
+  });
+
+  it("accepts decimal commas and rejects coordinates outside the valid range", () => {
+    expect(parseAliclikCoordinate("-16,442941896382326", "latitude")).toBeCloseTo(
+      -16.442941896382326,
+    );
+    expect(parseAliclikCoordinate("-71,5566983697624", "longitude")).toBeCloseTo(
+      -71.5566983697624,
+    );
+    expect(parseAliclikCoordinate("-91", "latitude")).toBeNull();
+    expect(parseAliclikCoordinate("181", "longitude")).toBeNull();
+    expect(parseAliclikCoordinate("sin coordenada", "latitude")).toBeNull();
   });
 
   it("maps the spreadsheet headers seen in the real reports", () => {

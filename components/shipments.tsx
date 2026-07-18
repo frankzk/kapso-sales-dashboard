@@ -33,6 +33,8 @@ import {
   releaseShipment,
   searchShipments,
   setShipmentStatus,
+  updateShipmentDeliveryAddress,
+  type ShipmentAddressInput,
 } from "@/app/dashboard/envios/actions";
 import { OrderLinkPicker } from "@/components/order-link-picker";
 
@@ -611,6 +613,14 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
   const [manualStatus, setManualStatus] = useState("");
   const [fenixGuide, setFenixGuide] = useState("");
   const [showOrderPicker, setShowOrderPicker] = useState(false);
+  const [showAddressEditor, setShowAddressEditor] = useState(false);
+  const [address, setAddress] = useState("");
+  const [addressReference, setAddressReference] = useState("");
+  const [addressDistrict, setAddressDistrict] = useState("");
+  const [addressCity, setAddressCity] = useState("");
+  const [addressRegion, setAddressRegion] = useState("");
+  const [addressLatitude, setAddressLatitude] = useState("");
+  const [addressLongitude, setAddressLongitude] = useState("");
   const [reprogramProvider, setReprogramProvider] = useState<"aliclik" | "fenix">("fenix");
   const [forceAliclik, setForceAliclik] = useState(false);
 
@@ -628,6 +638,13 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
         });
         setReprogramProvider(decision.eligible ? "aliclik" : "fenix");
         setForceAliclik(false);
+        setAddress(d.shipment.delivery_address ?? "");
+        setAddressReference(d.shipment.delivery_reference ?? "");
+        setAddressDistrict(d.shipment.district ?? "");
+        setAddressCity(d.shipment.city ?? "");
+        setAddressRegion(d.shipment.region ?? "");
+        setAddressLatitude(d.shipment.latitude == null ? "" : String(d.shipment.latitude));
+        setAddressLongitude(d.shipment.longitude == null ? "" : String(d.shipment.longitude));
       }
     });
     return () => {
@@ -641,11 +658,17 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
     router.refresh();
   }
 
-  function run(fn: () => Promise<{ error?: string; notice?: string }>) {
+  function run(
+    fn: () => Promise<{ error?: string; notice?: string }>,
+    onSuccess?: () => void,
+  ) {
     start(async () => {
       const r = await fn();
       setMsg(r.error ?? r.notice ?? null);
-      if (!r.error) refresh();
+      if (!r.error) {
+        onSuccess?.();
+        refresh();
+      }
     });
   }
 
@@ -673,6 +696,21 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
     programDateInvalid ||
     overrideNoteMissing ||
     fenixAutoUnavailable;
+  const parsedLatitude = Number(addressLatitude.replace(",", "."));
+  const parsedLongitude = Number(addressLongitude.replace(",", "."));
+  const addressFormValid =
+    !!address.trim() &&
+    !!addressDistrict.trim() &&
+    !!addressCity.trim() &&
+    !!addressRegion.trim() &&
+    addressLatitude.trim() !== "" &&
+    addressLongitude.trim() !== "" &&
+    Number.isFinite(parsedLatitude) &&
+    parsedLatitude >= -90 &&
+    parsedLatitude <= 90 &&
+    Number.isFinite(parsedLongitude) &&
+    parsedLongitude >= -180 &&
+    parsedLongitude <= 180;
 
   return (
     <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={onClose}>
@@ -729,6 +767,175 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                 value={detail.shipment.fenix_eligible ? "Elegible" : "No elegible"}
               />
             </dl>
+
+            <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/60 p-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <p className="text-sm font-semibold text-slate-800">Destino de entrega</p>
+                    {detail.shipment.address_override && (
+                      <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">
+                        Modificado
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    {detail.shipment.address_override ? "Protegido frente al siguiente Excel" : "Importado desde Aliclik"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAddressEditor((value) => !value)}
+                  className="shrink-0 text-xs font-medium text-brand-700 hover:underline"
+                >
+                  {showAddressEditor ? "Cerrar edición" : "Modificar destino"}
+                </button>
+              </div>
+
+              {!showAddressEditor ? (
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-xs text-slate-400">Dirección completa</p>
+                    <p className="text-sm leading-snug text-slate-800">
+                      {detail.shipment.delivery_address ?? "No informada en el Excel."}
+                    </p>
+                    {detail.shipment.delivery_reference && (
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        Ref.: {detail.shipment.delivery_reference}
+                      </p>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-white p-2">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Latitud</p>
+                      <p className="select-all font-mono text-xs text-slate-700">
+                        {detail.shipment.latitude ?? "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Longitud</p>
+                      <p className="select-all font-mono text-xs text-slate-700">
+                        {detail.shipment.longitude ?? "—"}
+                      </p>
+                    </div>
+                  </div>
+                  {detail.shipment.latitude != null && detail.shipment.longitude != null && (
+                    <a
+                      href={`https://www.google.com/maps?q=${detail.shipment.latitude},${detail.shipment.longitude}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex text-xs font-medium text-brand-700 hover:underline"
+                    >
+                      Abrir ubicación en Google Maps ↗
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2 border-t border-slate-200 pt-2">
+                  <label className="block text-xs text-slate-500">
+                    Dirección completa
+                    <textarea
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                      rows={2}
+                      placeholder="Calle, número, urbanización…"
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800"
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-500">
+                    Referencia
+                    <input
+                      value={addressReference}
+                      onChange={(e) => setAddressReference(e.target.value)}
+                      placeholder="Frente a…, puerta color…"
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800"
+                    />
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block text-xs text-slate-500">
+                      Distrito
+                      <input
+                        value={addressDistrict}
+                        onChange={(e) => setAddressDistrict(e.target.value)}
+                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+                      />
+                    </label>
+                    <label className="block text-xs text-slate-500">
+                      Ciudad / provincia
+                      <input
+                        value={addressCity}
+                        onChange={(e) => setAddressCity(e.target.value)}
+                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+                      />
+                    </label>
+                  </div>
+                  <label className="block text-xs text-slate-500">
+                    Departamento
+                    <input
+                      value={addressRegion}
+                      onChange={(e) => setAddressRegion(e.target.value)}
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+                    />
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block text-xs text-slate-500">
+                      Latitud
+                      <input
+                        value={addressLatitude}
+                        onChange={(e) => setAddressLatitude(e.target.value)}
+                        inputMode="decimal"
+                        placeholder="-16.409…"
+                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs"
+                      />
+                    </label>
+                    <label className="block text-xs text-slate-500">
+                      Longitud
+                      <input
+                        value={addressLongitude}
+                        onChange={(e) => setAddressLongitude(e.target.value)}
+                        inputMode="decimal"
+                        placeholder="-71.556…"
+                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs"
+                      />
+                    </label>
+                  </div>
+                  <p className="rounded-lg bg-sky-50 px-2 py-1.5 text-[11px] leading-relaxed text-sky-800">
+                    Al guardar se actualizará el pedido de Shopify y esta dirección no será reemplazada por futuros Excel.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddressEditor(false)}
+                      className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const payload: ShipmentAddressInput = {
+                          address,
+                          reference: addressReference,
+                          district: addressDistrict,
+                          city: addressCity,
+                          region: addressRegion,
+                          latitude: parsedLatitude,
+                          longitude: parsedLongitude,
+                        };
+                        run(
+                          () => updateShipmentDeliveryAddress(shipmentId, payload),
+                          () => setShowAddressEditor(false),
+                        );
+                      }}
+                      disabled={pending || !addressFormValid}
+                      className="flex-1 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                    >
+                      {pending ? "Guardando…" : "Guardar nuevo destino"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
 
             {msg && <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-sm text-slate-700">{msg}</p>}
 

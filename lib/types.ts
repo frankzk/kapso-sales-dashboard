@@ -43,6 +43,7 @@ export interface OrderLineItem {
 /** Shopify order fields shown inside the shipment drawer. */
 export interface ShipmentOrderDetail {
   name: string | null;
+  shopify_order_id: string | null;
   line_items: OrderLineItem[];
 }
 
@@ -238,6 +239,13 @@ export interface ShipmentRow {
   district: string | null;
   city: string | null; // normalized coverage key
   region: string | null;
+  delivery_address: string | null;
+  delivery_reference: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  address_override: boolean;
+  address_updated_at: string | null;
+  address_updated_by: string | null;
   fenix_eligible: boolean;
   fenix_shipment_id: string | null;
   delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado

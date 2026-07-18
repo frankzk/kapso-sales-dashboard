@@ -40,7 +40,7 @@ export function isShipmentView(v: string | undefined | null): v is ShipmentView 
 }
 
 const SHIPMENT_COLUMNS =
-  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
+  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_eligible,fenix_shipment_id,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
 const SHIPMENT_LIST_COLUMNS = `${SHIPMENT_COLUMNS},shipment_calls(count)`;
 
@@ -373,12 +373,16 @@ export async function getShipmentWithCalls(
   if (shipmentRow.order_id) {
     const { data } = await sb
       .from("orders")
-      .select("name,line_items")
+      .select("name,shopify_order_id,line_items")
       .eq("id", shipmentRow.order_id)
       .maybeSingle();
     const orderRow = data as ShipmentOrderDetail | null;
     if (orderRow) {
-      order = { name: orderRow.name, line_items: orderRow.line_items ?? [] };
+      order = {
+        name: orderRow.name,
+        shopify_order_id: orderRow.shopify_order_id,
+        line_items: orderRow.line_items ?? [],
+      };
     }
   }
   const [currentShipment] = await withCurrentFenixEligibility(sb, [shipmentRow]);

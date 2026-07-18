@@ -18,6 +18,11 @@ export interface ParsedShipmentRow {
   product: string | null;
   district: string | null;
   city: string | null; // normalized coverage key (Fenix city when covered)
+  region: string | null;
+  delivery_address: string | null;
+  delivery_reference: string | null;
+  latitude: number | null;
+  longitude: number | null;
   delivery_status: string; // canonical code
   store_hint: string | null; // raw "Tienda"/"Canal" value (AURELA / KENKU)
   // Aliclik's own delivery-attempt counter and operative delivery date. These
@@ -132,6 +137,17 @@ const ALICLIK_SERVICE_DATE_KEYS = [
   "fecha de visita",
   "fecha de despacho",
 ];
+const ADDRESS_KEYS = [
+  "direccion completa",
+  "direccion de entrega",
+  "direccion entrega",
+  "direccion destino",
+  "direccion",
+  "domicilio",
+];
+const REFERENCE_KEYS = ["referencia de entrega", "referencia entrega", "referencia", "ref"];
+const LATITUDE_KEYS = ["latitud", "latitude"];
+const LONGITUDE_KEYS = ["longitud", "longitude", "lng", "lon"];
 // The customer-facing delivery outcome. In Aliclik's "order-delivery-report"
 // the platform column ("ESTADO DESPACHO") tops out at "validado" — a confirmed
 // delivery only ever shows up here, as "ENTREGADO". So we read this column to
@@ -153,6 +169,16 @@ export function parseAliclikAttempts(raw: string | null | undefined): number | n
   if (!match) return null;
   const value = Number.parseInt(match[0], 10);
   return Number.isFinite(value) ? Math.max(0, value) : null;
+}
+
+export function parseAliclikCoordinate(
+  raw: string | null | undefined,
+  kind: "latitude" | "longitude",
+): number | null {
+  if (raw == null || String(raw).trim() === "") return null;
+  const value = Number(String(raw).trim().replace(",", "."));
+  const limit = kind === "latitude" ? 90 : 180;
+  return Number.isFinite(value) && value >= -limit && value <= limit ? value : null;
 }
 
 /** Parse the date formats emitted by Aliclik/Excel into a calendar date. */
@@ -213,6 +239,11 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
     product: pick(map, PRODUCT_KEYS),
     district: district || null,
     city: city || null,
+    region: department || null,
+    delivery_address: pick(map, ADDRESS_KEYS),
+    delivery_reference: pick(map, REFERENCE_KEYS),
+    latitude: parseAliclikCoordinate(pick(map, LATITUDE_KEYS), "latitude"),
+    longitude: parseAliclikCoordinate(pick(map, LONGITUDE_KEYS), "longitude"),
     delivery_status,
     store_hint: pick(map, STORE_KEYS),
     aliclik_attempts: parseAliclikAttempts(pick(map, ALICLIK_ATTEMPT_KEYS)),

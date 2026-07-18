@@ -17,8 +17,10 @@ import {
   evaluateAliclikReschedule,
   isFutureShipmentFollowup,
   isCallable,
+  isFenixCity,
   isValidStatus,
   nextShipmentTransition,
+  normalizeCity,
   rescheduleGuideCode,
   type RerouteDisposition,
 } from "@/lib/shipments";
@@ -29,6 +31,7 @@ import {
   pickStoresForOrderQuery,
   searchOrdersLive,
   searchProductVariants,
+  updateOrderShippingAddress,
   type ProductVariantResult,
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
@@ -384,6 +387,156 @@ function aliclikDecisionMessage(
   return "El Excel no informó una fecha operativa válida. Continúa con Fenix o usa la excepción manual.";
 }
 
+export interface ShipmentAddressInput {
+  address: string;
+  reference?: string | null;
+  district: string;
+  city: string;
+  region: string;
+  latitude: number;
+  longitude: number;
+}
+
+/** Update the delivery destination in Shopify first, then persist an override
+ * on the shipment so later Aliclik Excel imports cannot revert it. */
+export async function updateShipmentDeliveryAddress(
+  shipmentId: string,
+  input: ShipmentAddressInput,
+): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a este envío." };
+
+  const address = input.address.trim();
+  const reference = input.reference?.trim() || null;
+  const district = input.district.trim();
+  const cityLabel = input.city.trim();
+  const region = input.region.trim();
+  if (!address || !district || !cityLabel || !region) {
+    return { error: "Dirección, distrito, ciudad/provincia y departamento son obligatorios." };
+  }
+  if (address.length > 500 || (reference?.length ?? 0) > 500) {
+    return { error: "La dirección o referencia es demasiado larga." };
+  }
+  if (!Number.isFinite(input.latitude) || input.latitude < -90 || input.latitude > 90) {
+    return { error: "La latitud debe estar entre -90 y 90." };
+  }
+  if (!Number.isFinite(input.longitude) || input.longitude < -180 || input.longitude > 180) {
+    return { error: "La longitud debe estar entre -180 y 180." };
+  }
+
+  const admin = createAdminSupabase();
+  const { data: shipment } = await admin
+    .from("shipments")
+    .select("id,store_id,order_id,customer_name,customer_phone,product,fenix_shipment_id")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (!shipment) return { error: "Envío no encontrado." };
+  const current = shipment as {
+    store_id: string;
+    order_id: string | null;
+    customer_name: string | null;
+    customer_phone: string | null;
+    product: string | null;
+    fenix_shipment_id: string | null;
+  };
+
+  type LinkedOrderForAddress = {
+    shopify_order_id: string | null;
+    line_items: { title?: string | null; sku?: string | null }[] | null;
+  };
+  let order: LinkedOrderForAddress | null = null;
+  if (current.order_id) {
+    const { data } = await admin
+      .from("orders")
+      .select("shopify_order_id,line_items")
+      .eq("id", current.order_id)
+      .maybeSingle();
+    order = data as LinkedOrderForAddress | null;
+  }
+
+  const shopifyOrderId = order?.shopify_order_id;
+  const isRealShopifyOrder = !!shopifyOrderId && !shopifyOrderId.startsWith("manual-");
+  if (isRealShopifyOrder) {
+    const creds = await getStoreCreds(current.store_id);
+    if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify conectado." };
+    try {
+      await updateOrderShippingAddress({
+        domain: creds.shopify_domain,
+        token: creds.shopify_token,
+        orderGid: `gid://shopify/Order/${shopifyOrderId}`,
+        address: {
+          name: current.customer_name,
+          phone: current.customer_phone,
+          address1: address,
+          address2: reference,
+          city: district,
+          province: region,
+          country: "Peru",
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        error: message.includes("Access denied") || message.includes("write_orders")
+          ? "Shopify no autorizó el cambio. La tienda necesita el permiso write_orders."
+          : `Shopify rechazó la dirección: ${message}`,
+      };
+    }
+  }
+
+  const combinedCity = normalizeCity([district, cityLabel, region].join(" "));
+  const city = isFenixCity(combinedCity) ? combinedCity : normalizeCity(cityLabel || district);
+  const { data: store } = await admin
+    .from("stores")
+    .select("org_id")
+    .eq("id", current.store_id)
+    .maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  let fenixEligible = false;
+  if (orgId) {
+    const { data: stock } = await admin
+      .from("fenix_stock")
+      .select("city,product,sku,quantity")
+      .eq("org_id", orgId);
+    fenixEligible = evaluateFenix(
+      { city, product: current.product },
+      (stock as FenixStockRow[]) ?? [],
+      order?.line_items ?? undefined,
+    ).eligible;
+  }
+
+  const update = {
+    delivery_address: address,
+    delivery_reference: reference,
+    district,
+    city,
+    region,
+    latitude: input.latitude,
+    longitude: input.longitude,
+    address_override: true,
+    address_updated_at: new Date().toISOString(),
+    address_updated_by: ctx.userId,
+    fenix_eligible: fenixEligible,
+  };
+  const targetIds = [shipmentId, current.fenix_shipment_id].filter((id): id is string => !!id);
+  const { error: updateError } = await admin.from("shipments").update(update).in("id", targetIds);
+  if (updateError) return { error: updateError.message };
+
+  await admin.from("shipment_calls").insert({
+    shipment_id: shipmentId,
+    store_id: current.store_id,
+    agent: ctx.userId,
+    kind: "address_change",
+    note: `Dirección actualizada: ${address}${reference ? ` · Ref.: ${reference}` : ""} · ${input.latitude}, ${input.longitude}`,
+  });
+  revalidatePath("/dashboard/envios");
+  return {
+    notice: isRealShopifyOrder
+      ? "Dirección y coordenadas actualizadas en Shopify y en el envío."
+      : "Dirección y coordenadas actualizadas en el envío; no había un pedido Shopify vinculado.",
+  };
+}
+
 /** Manually set a delivery status (e.g. correcting an import). Logged. */
 export async function setShipmentStatus(
   shipmentId: string,
@@ -433,7 +586,7 @@ async function spinOffFenixGuide(
   const { data: parent } = await admin
     .from("shipments")
     .select(
-      "store_id,order_id,order_name,customer_name,customer_phone,product,district,city,region,fenix_shipment_id",
+      "store_id,order_id,order_name,customer_name,customer_phone,product,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_shipment_id",
     )
     .eq("id", shipmentId)
     .maybeSingle();
@@ -459,6 +612,13 @@ async function spinOffFenixGuide(
       district: p.district,
       city: p.city,
       region: p.region,
+      delivery_address: p.delivery_address,
+      delivery_reference: p.delivery_reference,
+      latitude: p.latitude,
+      longitude: p.longitude,
+      address_override: p.address_override,
+      address_updated_at: p.address_updated_at,
+      address_updated_by: p.address_updated_by,
       delivery_status: "en_ruta",
       status_category: "in_route",
       next_followup_at: opts.childNextFollowupAt ?? null,
