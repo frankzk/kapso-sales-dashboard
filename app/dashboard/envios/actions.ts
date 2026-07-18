@@ -12,8 +12,10 @@ import {
 } from "@/lib/shipments-access";
 import {
   CLAIM_TTL_MINUTES,
+  COURIER_REPORT_RESULTS,
   attemptLabel,
   categoryOf,
+  courierReportTransition,
   evaluateAliclikReschedule,
   isFutureShipmentFollowup,
   isCallable,
@@ -22,6 +24,7 @@ import {
   nextShipmentTransition,
   normalizeCity,
   rescheduleGuideCode,
+  type CourierReportResult,
   type RerouteDisposition,
 } from "@/lib/shipments";
 import { getStoreCreds } from "@/lib/ingest";
@@ -36,7 +39,12 @@ import {
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
-import type { ShipmentCallRow, ShipmentOrderDetail, ShipmentRow } from "@/lib/types";
+import type {
+  LinkedShipmentSummary,
+  ShipmentCallRow,
+  ShipmentOrderDetail,
+  ShipmentRow,
+} from "@/lib/types";
 
 export interface ShipmentActionState {
   error?: string;
@@ -84,6 +92,7 @@ export async function loadShipmentDetail(
       shipment: ShipmentRow;
       calls: ShipmentCallRow[];
       order: ShipmentOrderDetail | null;
+      linkedFenixShipment: LinkedShipmentSummary | null;
     }
   | { error: string }
 > {
@@ -100,7 +109,12 @@ export async function loadShipmentDetail(
     ...c,
     agent_name: c.agent ? (agentNameCache.get(c.agent) ?? null) : null,
   }));
-  return { shipment: detail.shipment, calls, order: detail.order };
+  return {
+    shipment: detail.shipment,
+    calls,
+    order: detail.order,
+    linkedFenixShipment: detail.linkedFenixShipment,
+  };
 }
 
 /** Global search (guía / pedido / guía Fenix / celular), RLS-scoped. */
@@ -534,6 +548,105 @@ export async function updateShipmentDeliveryAddress(
     notice: isRealShopifyOrder
       ? "Dirección y coordenadas actualizadas en Shopify y en el envío."
       : "Dirección y coordenadas actualizadas en el envío; no había un pedido Shopify vinculado.",
+  };
+}
+
+/** Register one row/result from the Fenix courier report. Operators choose the
+ * courier outcome; the application owns the internal status transition. */
+export async function registerCourierReportResult(
+  shipmentId: string,
+  input: {
+    result: CourierReportResult;
+    deliveryDate?: string | null;
+    note?: string | null;
+  },
+): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a esta guía." };
+
+  const definition = COURIER_REPORT_RESULTS.find((item) => item.code === input.result);
+  if (!definition) return { error: "Resultado del courier inválido." };
+
+  const note = input.note?.trim() || null;
+  if (definition.requiresNote && !note) {
+    return { error: "Describe el motivo informado por Fenix para anular la guía." };
+  }
+
+  let deliveryDate: string | null = null;
+  if (definition.requiresDate) {
+    if (!input.deliveryDate) return { error: "Elige la nueva fecha de entrega." };
+    const parsed = new Date(input.deliveryDate);
+    if (Number.isNaN(parsed.getTime())) return { error: "La fecha de entrega no es válida." };
+    deliveryDate = parsed.toISOString();
+  }
+
+  const admin = createAdminSupabase();
+  const { data: shipment } = await admin
+    .from("shipments")
+    .select("id,courier,guide_code,delivery_status,next_followup_at,fenix_shipment_id")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (!shipment) return { error: "Guía no encontrada." };
+  const current = shipment as {
+    courier: string;
+    guide_code: string;
+    delivery_status: string;
+    next_followup_at: string | null;
+    fenix_shipment_id: string | null;
+  };
+  if (current.courier !== "fenix") {
+    return { error: "Este flujo corresponde al reporte Fenix. Aliclik se actualiza con su Excel diario." };
+  }
+  if (current.delivery_status === "transferido") {
+    return {
+      error: current.fenix_shipment_id
+        ? "Esta guía ya fue reemplazada. Registra el resultado en su nueva guía Fenix."
+        : "Una guía transferida no admite resultados; abre la guía Fenix activa.",
+    };
+  }
+
+  const transition = courierReportTransition(input.result);
+  const nextFollowupAt =
+    input.result === "reprogramado"
+      ? deliveryDate
+      : transition.clearScheduledDate
+        ? null
+        : current.next_followup_at;
+
+  const { error } = await admin
+    .from("shipments")
+    .update({
+      delivery_status: transition.status,
+      status_category: categoryOf(transition.status),
+      reroute_outcome: transition.outcome,
+      next_followup_at: nextFollowupAt,
+      delivered_source: transition.deliveredSource,
+      claimed_by: null,
+      claimed_at: null,
+    })
+    .eq("id", shipmentId);
+  if (error) return { error: error.message };
+
+  const auditNote = [
+    `Resultado Fenix: ${definition.label}.`,
+    note,
+  ].filter(Boolean).join(" ");
+  await admin.from("shipment_calls").insert({
+    shipment_id: shipmentId,
+    store_id: ctx.storeId,
+    agent: ctx.userId,
+    kind: "courier_report",
+    new_status: transition.status,
+    note: auditNote,
+    // Only a courier reprogramming creates a new delivery date. `en_ruta`
+    // preserves the shipment's existing date but does not pretend the report
+    // changed it in this history entry.
+    next_followup_at: input.result === "reprogramado" ? deliveryDate : null,
+  });
+
+  revalidatePath("/dashboard/envios");
+  return {
+    notice: `Guía ${current.guide_code}: ${definition.label} → ${definition.effect}`,
   };
 }
 

@@ -2,7 +2,12 @@
 // listing by view, counts, and a shipment + call-history detail loader.
 
 import { createServerSupabase } from "@/lib/db";
-import type { ShipmentCallRow, ShipmentOrderDetail, ShipmentRow } from "@/lib/types";
+import type {
+  LinkedShipmentSummary,
+  ShipmentCallRow,
+  ShipmentOrderDetail,
+  ShipmentRow,
+} from "@/lib/types";
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
 import {
   computeReprogramStats,
@@ -355,6 +360,7 @@ export async function getShipmentWithCalls(
   shipment: ShipmentRow;
   calls: ShipmentCallRow[];
   order: ShipmentOrderDetail | null;
+  linkedFenixShipment: LinkedShipmentSummary | null;
 } | null> {
   const sb = await createServerSupabase();
   const { data: shipment } = await sb
@@ -370,6 +376,7 @@ export async function getShipmentWithCalls(
     .order("occurred_at", { ascending: false });
   const shipmentRow = shipment as ShipmentRow;
   let order: ShipmentOrderDetail | null = null;
+  let linkedFenixShipment: LinkedShipmentSummary | null = null;
   if (shipmentRow.order_id) {
     const { data } = await sb
       .from("orders")
@@ -385,11 +392,20 @@ export async function getShipmentWithCalls(
       };
     }
   }
+  if (shipmentRow.fenix_shipment_id) {
+    const { data } = await sb
+      .from("shipments")
+      .select("id,courier,guide_code,delivery_status,status_category")
+      .eq("id", shipmentRow.fenix_shipment_id)
+      .maybeSingle();
+    linkedFenixShipment = data as LinkedShipmentSummary | null;
+  }
   const [currentShipment] = await withCurrentFenixEligibility(sb, [shipmentRow]);
   return {
     shipment: currentShipment ?? shipmentRow,
     calls: (calls as ShipmentCallRow[]) ?? [],
     order,
+    linkedFenixShipment,
   };
 }
 

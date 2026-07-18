@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   DELIVERY_STATUSES,
+  COURIER_REPORT_RESULTS,
   computeReprogramStats,
   evaluateAliclikReschedule,
   type ReprogramChildRow,
@@ -20,6 +21,7 @@ import {
   isFenixCity,
   isFenixDistrict,
   nextShipmentTransition,
+  courierReportTransition,
   MAX_INTENTOS,
   FENIX_CITIES,
   reconcileDeliveryStatus,
@@ -226,6 +228,52 @@ describe("nextShipmentTransition (gestión flow)", () => {
   });
   it("en_ruta: cancela → anulado", () => {
     expect(nextShipmentTransition("en_ruta", "cancela", 5).status).toBe("anulado");
+  });
+});
+
+describe("courierReportTransition (reporte Fenix)", () => {
+  it("maps courier outcomes to operational states without exposing transferido", () => {
+    expect(COURIER_REPORT_RESULTS.map((result) => result.code)).toEqual([
+      "entregado",
+      "no_contesta",
+      "reprogramado",
+      "en_ruta",
+      "cancelado",
+    ]);
+    const resultingStatuses: string[] = COURIER_REPORT_RESULTS.map((result) => result.resultingStatus);
+    expect(resultingStatuses).not.toContain("transferido");
+  });
+
+  it("No contesta reopens the guide in Pendiente and clears its delivery date", () => {
+    expect(courierReportTransition("no_contesta")).toEqual({
+      status: "pendiente",
+      outcome: "courier_no_contesta",
+      deliveredSource: null,
+      closed: false,
+      clearScheduledDate: true,
+    });
+  });
+
+  it("Reprogramado remains En ruta and preserves the new scheduled date", () => {
+    expect(courierReportTransition("reprogramado")).toMatchObject({
+      status: "en_ruta",
+      outcome: "courier_reprogramado",
+      clearScheduledDate: false,
+    });
+    expect(COURIER_REPORT_RESULTS.find((result) => result.code === "reprogramado")?.requiresDate).toBe(true);
+  });
+
+  it("Entregado closes by Fenix; Cancelado closes as Anulado", () => {
+    expect(courierReportTransition("entregado")).toMatchObject({
+      status: "entregado",
+      deliveredSource: "fenix",
+      closed: true,
+    });
+    expect(courierReportTransition("cancelado")).toMatchObject({
+      status: "anulado",
+      deliveredSource: null,
+      closed: true,
+    });
   });
 });
 

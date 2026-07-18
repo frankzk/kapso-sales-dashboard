@@ -357,6 +357,119 @@ export function nextShipmentTransition(
 }
 
 // ---------------------------------------------------------------------------
+// Resultado del reporte Fenix — traduce lo que informa el courier a nuestros
+// estados internos. La asesora nunca debe elegir directamente `transferido`:
+// ese estado se reserva para la guía anterior cuando el sistema crea una hija.
+// ---------------------------------------------------------------------------
+
+export const COURIER_REPORT_RESULTS = [
+  {
+    code: "entregado",
+    label: "Entregado",
+    optionLabel: "Entregado — cerrar la guía",
+    effect: "La guía quedará cerrada como Entregada por Fenix.",
+    resultingStatus: "entregado",
+    requiresDate: false,
+    requiresNote: false,
+  },
+  {
+    code: "no_contesta",
+    label: "No contesta",
+    optionLabel: "No contesta — volver a gestión",
+    effect: "La guía volverá a Pendiente para contactar al cliente; no suma un intento de llamada.",
+    resultingStatus: "pendiente",
+    requiresDate: false,
+    requiresNote: false,
+  },
+  {
+    code: "reprogramado",
+    label: "Reprogramado por Fenix",
+    optionLabel: "Reprogramado — indicar nueva fecha",
+    effect: "La guía continuará En ruta con una nueva fecha de entrega.",
+    resultingStatus: "en_ruta",
+    requiresDate: true,
+    requiresNote: false,
+  },
+  {
+    code: "en_ruta",
+    label: "Sigue en ruta / enviado a provincia",
+    optionLabel: "Sigue en ruta / enviado a provincia",
+    effect: "La guía continuará En ruta sin cambiar la fecha registrada.",
+    resultingStatus: "en_ruta",
+    requiresDate: false,
+    requiresNote: false,
+  },
+  {
+    code: "cancelado",
+    label: "Cancelado o rechazado",
+    optionLabel: "Cancelado / rechazado — anular la guía",
+    effect: "La guía quedará Anulada y saldrá de la gestión activa.",
+    resultingStatus: "anulado",
+    requiresDate: false,
+    requiresNote: true,
+  },
+] as const;
+
+export type CourierReportResult = (typeof COURIER_REPORT_RESULTS)[number]["code"];
+
+export interface CourierReportTransition {
+  status: "pendiente" | "en_ruta" | "entregado" | "anulado";
+  outcome: string;
+  deliveredSource: "fenix" | null;
+  closed: boolean;
+  clearScheduledDate: boolean;
+}
+
+/** Pure transition used by the individual report-entry flow. It deliberately
+ * allows a courier correction to reopen an incorrectly closed Fenix guide
+ * (e.g. Anulado → No contesta → Pendiente), while `transferido` is blocked by
+ * the server action because its active result belongs on the child guide. */
+export function courierReportTransition(result: CourierReportResult): CourierReportTransition {
+  switch (result) {
+    case "entregado":
+      return {
+        status: "entregado",
+        outcome: "courier_entregado",
+        deliveredSource: "fenix",
+        closed: true,
+        clearScheduledDate: true,
+      };
+    case "no_contesta":
+      return {
+        status: "pendiente",
+        outcome: "courier_no_contesta",
+        deliveredSource: null,
+        closed: false,
+        clearScheduledDate: true,
+      };
+    case "reprogramado":
+      return {
+        status: "en_ruta",
+        outcome: "courier_reprogramado",
+        deliveredSource: null,
+        closed: false,
+        clearScheduledDate: false,
+      };
+    case "en_ruta":
+      return {
+        status: "en_ruta",
+        outcome: "courier_en_ruta",
+        deliveredSource: null,
+        closed: false,
+        clearScheduledDate: false,
+      };
+    case "cancelado":
+      return {
+        status: "anulado",
+        outcome: "courier_cancelado",
+        deliveredSource: null,
+        closed: true,
+        clearScheduledDate: true,
+      };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Claim / lock — "Tomar envío", one at a time, auto-released after a TTL.
 // Same shape as leads (CLAIM_TTL_MINUTES / isClaimActive).
 // ---------------------------------------------------------------------------

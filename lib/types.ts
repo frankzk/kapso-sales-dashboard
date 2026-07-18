@@ -271,6 +271,16 @@ export interface ShipmentRow {
   updated_at?: string;
 }
 
+/** Minimal linked-guide identity used to move from a frozen source guide to
+ * the active Fenix guide without leaving the drawer. */
+export interface LinkedShipmentSummary {
+  id: string;
+  courier: string;
+  guide_code: string;
+  delivery_status: string;
+  status_category: string;
+}
+
 export interface ShipmentCallRow {
   id?: string;
   shipment_id: string;

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import { Card } from "@/components/ui";
 import {
-  DELIVERY_STATUSES,
+  COURIER_REPORT_RESULTS,
   attemptLabel,
   evaluateAliclikReschedule,
   isCallable,
@@ -15,9 +15,11 @@ import {
   normalizeCity,
   rescheduleGuideCode,
   statusSince,
+  type CourierReportResult,
   type RerouteDisposition,
 } from "@/lib/shipments";
 import type {
+  LinkedShipmentSummary,
   ShipmentCallRow,
   ShipmentOrderDetail,
   ShipmentRow,
@@ -29,10 +31,10 @@ import {
   claimShipment,
   createFenixGuide,
   loadShipmentDetail,
+  registerCourierReportResult,
   registerRerouteCall,
   releaseShipment,
   searchShipments,
-  setShipmentStatus,
   updateShipmentDeliveryAddress,
   type ShipmentAddressInput,
 } from "@/app/dashboard/envios/actions";
@@ -76,6 +78,21 @@ function fmtAliclikDate(date: string | null | undefined): string {
     month: "short",
     timeZone: "UTC",
   });
+}
+
+function shipmentHistoryLabel(call: ShipmentCallRow): string {
+  if (call.kind === "call" && !call.new_status && call.next_followup_at) {
+    return "Llamada programada";
+  }
+  const labels: Record<string, string> = {
+    call: "Gestión de llamada",
+    courier_report: "Reporte Fenix",
+    state_change: "Corrección administrativa",
+    reroute: "Reprogramación",
+    address_change: "Cambio de dirección",
+    system: "Actualización del sistema",
+  };
+  return labels[call.kind] ?? call.kind;
 }
 
 function aliclikDecisionCopy(
@@ -498,7 +515,13 @@ export function ShipmentsBoard({
         </>
       )}
 
-      {openId && <ShipmentDrawer shipmentId={openId} onClose={() => setOpenId(null)} />}
+      {openId && (
+        <ShipmentDrawer
+          shipmentId={openId}
+          onClose={() => setOpenId(null)}
+          onOpenShipment={setOpenId}
+        />
+      )}
     </div>
   );
 }
@@ -592,13 +615,22 @@ function AliclikRouteCell({ shipment }: { shipment: ShipmentRow }) {
   );
 }
 
-function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: () => void }) {
+function ShipmentDrawer({
+  shipmentId,
+  onClose,
+  onOpenShipment,
+}: {
+  shipmentId: string;
+  onClose: () => void;
+  onOpenShipment: (id: string) => void;
+}) {
   const router = useRouter();
   const [detail, setDetail] = useState<
     | {
         shipment: ShipmentRow;
         calls: ShipmentCallRow[];
         order: ShipmentOrderDetail | null;
+        linkedFenixShipment: LinkedShipmentSummary | null;
       }
     | { error: string }
     | null
@@ -610,7 +642,9 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
   const [disposition, setDisposition] = useState<RerouteDisposition>("confirma");
   const [note, setNote] = useState("");
   const [nextDate, setNextDate] = useState("");
-  const [manualStatus, setManualStatus] = useState("");
+  const [courierResult, setCourierResult] = useState<CourierReportResult | "">("");
+  const [courierDate, setCourierDate] = useState("");
+  const [courierNote, setCourierNote] = useState("");
   const [fenixGuide, setFenixGuide] = useState("");
   const [showOrderPicker, setShowOrderPicker] = useState(false);
   const [showAddressEditor, setShowAddressEditor] = useState(false);
@@ -627,10 +661,16 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
   const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => {
     let alive = true;
+    setDetail(null);
+    setShowAddressEditor(false);
     loadShipmentDetail(shipmentId).then((d) => {
       if (!alive) return;
       setDetail(d);
       if (d && !("error" in d)) {
+        setCourierResult("");
+        setCourierDate("");
+        setCourierNote("");
+        setMsg(null);
         const decision = evaluateAliclikReschedule({
           courier: d.shipment.courier,
           attempts: d.shipment.aliclik_attempts,
@@ -711,6 +751,18 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
     Number.isFinite(parsedLongitude) &&
     parsedLongitude >= -180 &&
     parsedLongitude <= 180;
+  const courierResultDefinition = courierResult
+    ? COURIER_REPORT_RESULTS.find((item) => item.code === courierResult) ?? null
+    : null;
+  const courierFormValid =
+    !!courierResultDefinition &&
+    (!courierResultDefinition.requiresDate || !!courierDate) &&
+    (!courierResultDefinition.requiresNote || !!courierNote.trim());
+  const reopensClosedGuide =
+    !!courierResultDefinition &&
+    (shipment?.delivery_status === "anulado" || shipment?.delivery_status === "entregado") &&
+    courierResultDefinition.resultingStatus !== "anulado" &&
+    courierResultDefinition.resultingStatus !== "entregado";
 
   return (
     <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={onClose}>
@@ -1215,31 +1267,147 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
               )}
             </section>
 
-            {/* manual status */}
-            <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
-              <p className="text-sm font-medium text-slate-800">Cambiar estado (manual)</p>
-              <div className="flex gap-2">
-                <select
-                  value={manualStatus}
-                  onChange={(e) => setManualStatus(e.target.value)}
-                  className="flex-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                >
-                  <option value="">Selecciona…</option>
-                  {DELIVERY_STATUSES.map((s) => (
-                    <option key={s.code} value={s.code}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => manualStatus && run(() => setShipmentStatus(shipmentId, manualStatus))}
-                  disabled={pending || !manualStatus}
-                  className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Aplicar
-                </button>
-              </div>
-            </section>
+            {/* Courier result — workflow language instead of raw internal states. */}
+            {detail.shipment.courier === "fenix" ? (
+              detail.shipment.delivery_status === "transferido" ? (
+                <section className="space-y-2 rounded-xl border border-sky-200 bg-sky-50 p-3">
+                  <div>
+                    <p className="text-sm font-semibold text-sky-900">Esta guía ya fue reemplazada</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-sky-800">
+                      “Transferido” lo asigna Kapta automáticamente. El resultado del courier debe registrarse en la guía Fenix activa.
+                    </p>
+                  </div>
+                  {detail.linkedFenixShipment && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenShipment(detail.linkedFenixShipment!.id)}
+                      className="flex w-full items-center justify-between rounded-lg border border-sky-200 bg-white px-3 py-2 text-left hover:bg-sky-50"
+                    >
+                      <span>
+                        <span className="block text-[10px] uppercase tracking-wide text-sky-600">Abrir guía activa</span>
+                        <span className="font-mono text-xs font-semibold text-sky-900">
+                          {detail.linkedFenixShipment.guide_code}
+                        </span>
+                      </span>
+                      <span className="text-sm text-sky-700">→</span>
+                    </button>
+                  )}
+                </section>
+              ) : (
+                <section className="space-y-2.5 rounded-xl border border-orange-200 bg-orange-50/40 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Actualizar resultado del courier</p>
+                      <p className="mt-0.5 text-[11px] text-slate-500">Guía Fenix seleccionada</p>
+                      <p className="select-all font-mono text-xs font-semibold text-orange-800">
+                        {detail.shipment.guide_code}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Estado actual</p>
+                      <StatusBadge
+                        category={detail.shipment.status_category}
+                        status={detail.shipment.delivery_status}
+                      />
+                    </div>
+                  </div>
+
+                  <label className="block text-xs font-medium text-slate-600">
+                    ¿Qué informó Fenix?
+                    <select
+                      value={courierResult}
+                      onChange={(e) => {
+                        setCourierResult(e.target.value as CourierReportResult | "");
+                        setCourierDate("");
+                      }}
+                      className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm text-slate-800"
+                    >
+                      <option value="">Selecciona el resultado…</option>
+                      {COURIER_REPORT_RESULTS.map((result) => (
+                        <option key={result.code} value={result.code}>{result.optionLabel}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  {courierResultDefinition && (
+                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Qué sucederá</p>
+                      <p className="mt-0.5 text-xs leading-relaxed text-slate-700">
+                        {courierResultDefinition.effect}
+                      </p>
+                      {reopensClosedGuide && (
+                        <p className="mt-1.5 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800">
+                          Esta corrección reabrirá una guía que actualmente está cerrada.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {courierResultDefinition?.requiresDate && (
+                    <label className="block text-xs font-medium text-slate-600">
+                      Nueva fecha de entrega
+                      <input
+                        type="date"
+                        value={courierDate}
+                        onChange={(e) => setCourierDate(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm"
+                      />
+                    </label>
+                  )}
+
+                  {courierResultDefinition && (
+                    <label className="block text-xs font-medium text-slate-600">
+                      {courierResultDefinition.requiresNote ? "Motivo informado por Fenix" : "Detalle del reporte (opcional)"}
+                      <textarea
+                        value={courierNote}
+                        onChange={(e) => setCourierNote(e.target.value)}
+                        rows={2}
+                        placeholder={
+                          courierResultDefinition.requiresNote
+                            ? "Ej.: cliente rechazó el pedido…"
+                            : "Ej.: no respondió al motorizado…"
+                        }
+                        className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm"
+                      />
+                    </label>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!courierResult) return;
+                      run(
+                        () => registerCourierReportResult(shipmentId, {
+                          result: courierResult,
+                          deliveryDate: courierDate ? new Date(courierDate).toISOString() : null,
+                          note: courierNote,
+                        }),
+                        () => {
+                          setCourierResult("");
+                          setCourierDate("");
+                          setCourierNote("");
+                        },
+                      );
+                    }}
+                    disabled={pending || !courierFormValid}
+                    className="w-full rounded-lg bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
+                  >
+                    {pending ? "Registrando…" : "Registrar resultado en esta guía"}
+                  </button>
+
+                  <p className="text-[10px] leading-relaxed text-slate-400">
+                    Pendiente, En ruta, Entregado y Anulado se calculan automáticamente. Transferido no es seleccionable.
+                  </p>
+                </section>
+              )
+            ) : (
+              <section className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-medium text-slate-700">Estado informado por Aliclik</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Esta guía se actualiza desde el Excel diario de Aliclik. Las reprogramaciones se gestionan en el bloque superior.
+                </p>
+              </section>
+            )}
 
             {/* history */}
             <section className="space-y-2">
@@ -1252,9 +1420,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                     <li key={c.id} className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
                       <div className="flex justify-between">
                         <span className="font-medium text-slate-700">
-                          {c.kind === "call" && !c.new_status && c.next_followup_at
-                            ? "Llamada programada"
-                            : c.kind}
+                          {shipmentHistoryLabel(c)}
                           {c.new_status ? ` → ${labelOf(c.new_status)}` : ""}
                         </span>
                         <span className="text-slate-400">{c.agent_name ?? ""}</span>
