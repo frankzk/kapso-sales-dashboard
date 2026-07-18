@@ -216,7 +216,7 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
     expect(rows).toHaveLength(2); // the empty-vendedora system row is skipped
   });
 
-  it("desglosa los cierres por tienda (porTienda) según el store del lead ganado", () => {
+  it("desglosa por tienda: leads trabajados (denominador) + cierres del lead ganado", () => {
     const calls: AdvisorCall[] = [
       { vendedora: "u1", lead_id: "L1", kind: "call", occurred_at: "2026-06-20T10:00:00Z" },
       { vendedora: "u1", lead_id: "L2", kind: "call", occurred_at: "2026-06-20T11:00:00Z" },
@@ -229,9 +229,10 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
     ]);
     const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
     const u1 = rows.find((r) => r.userId === "u1")!;
+    // kenku = "1/2": cerró 1 de los 2 leads que trabajó ahí (el chip "KP 1/2").
     expect(u1.porTienda).toEqual({
-      aurela: { cerrados: 1, ingresos: 100 },
-      kenku: { cerrados: 1, ingresos: 250 },
+      aurela: { leads: 1, cerrados: 1, ingresos: 100 },
+      kenku: { leads: 2, cerrados: 1, ingresos: 250 },
     });
   });
 });

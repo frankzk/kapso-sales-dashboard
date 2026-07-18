@@ -72,6 +72,14 @@ export interface SourceCell {
   ingresos: number;
 }
 
+/** One advisor×store cell: pedidos cerrados DE cuántos leads trabajados en esa
+ *  tienda (el "5/30" de los chips) + los ingresos de esos cierres. */
+export interface StoreCell {
+  leads: number; // leads distintos trabajados de esa tienda
+  cerrados: number;
+  ingresos: number;
+}
+
 /** A zeroed per-source breakdown (all four buckets present, so the matrix table
  *  can render every column without null checks). */
 export function emptyPorFuente(): Record<SourceBucket, SourceCell> {
@@ -93,7 +101,7 @@ export interface AdvisorStat {
   cerradosDetalle: WonOrderRef[]; // the orders behind `cerrados`, oldest first
   ingresos: number; // net revenue (total - refunded) of those orders
   porFuente: Record<SourceBucket, SourceCell>; // cerrados+ingresos split by acquisition source
-  porTienda: Record<string, SourceCell>; // cerrados+ingresos split by store id
+  porTienda: Record<string, StoreCell>; // leads trabajados + cerrados + ingresos por tienda
   conversion: number; // cerrados / leadsTrabajados, 0..1
   horas: number; // active hours inferred from action timestamps (idle-gap-split)
   dias: number; // distinct days with logged activity
@@ -416,6 +424,20 @@ export function computeAdvisorStats(
     const w = won.get(userId) ?? emptyWon();
     const h = hoursByAgent.get(userId);
     const leadsTrabajados = a.leads.size;
+    // Por tienda: el DENOMINADOR son los leads distintos que la asesora trabajó
+    // de esa tienda (leadOutcome trae el store de cada lead tocado — sin fetch
+    // extra); encima se montan los cierres/ingresos last-touch de WonAgg. Así
+    // los chips pueden decir "AUR 5/30" y no solo "AUR 5".
+    const porTienda: Record<string, StoreCell> = {};
+    for (const leadId of a.leads) {
+      const sid = leadOutcome.get(leadId)?.storeId ?? "otras";
+      (porTienda[sid] ??= { leads: 0, cerrados: 0, ingresos: 0 }).leads += 1;
+    }
+    for (const [sid, cell] of Object.entries(w.porTienda)) {
+      const t = (porTienda[sid] ??= { leads: 0, cerrados: 0, ingresos: 0 });
+      t.cerrados = cell.cerrados;
+      t.ingresos = cell.ingresos;
+    }
     // Oldest first; wins without an ingested order (no date yet) go last.
     w.detalle.sort((x, y) => ((x.at ?? "9999") < (y.at ?? "9999") ? -1 : 1));
     rows.push({
@@ -427,7 +449,7 @@ export function computeAdvisorStats(
       cerradosDetalle: w.detalle,
       ingresos: w.ingresos,
       porFuente: w.porFuente,
-      porTienda: w.porTienda,
+      porTienda,
       conversion: leadsTrabajados ? w.cerrados / leadsTrabajados : 0,
       horas: Math.round((h?.horas ?? 0) * 10) / 10,
       dias: h?.dias.size ?? 0,

@@ -271,21 +271,26 @@ function StoreMiniChips({
   currency: string;
   align?: "start" | "end";
 }) {
+  // Se muestran también las tiendas con 0 cierres pero leads trabajados
+  // ("KP 0/28"): ese cero visible es la señal de barril roto por tienda.
   const entries = Object.entries(porTienda)
-    .filter(([, c]) => c.cerrados > 0)
+    .filter(([, c]) => c.cerrados > 0 || c.leads > 0)
     .sort((a, b) => (storeInfo[a[0]]?.short ?? "?").localeCompare(storeInfo[b[0]]?.short ?? "?"));
   if (!entries.length) return null;
   return (
     <span className={cn("mt-1 flex gap-1", align === "end" ? "justify-end" : "justify-start")}>
-      {entries.map(([sid, c]) => (
-        <span
-          key={sid}
-          title={`${storeInfo[sid]?.name ?? "Otra tienda"} — ${c.cerrados} pedido${c.cerrados === 1 ? "" : "s"} · ${money(c.ingresos, currency)}`}
-          className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap text-slate-500"
-        >
-          {storeInfo[sid]?.short ?? "?"} {c.cerrados}
-        </span>
-      ))}
+      {entries.map(([sid, c]) => {
+        const pct = c.leads > 0 ? Math.round((c.cerrados / c.leads) * 100) : null;
+        return (
+          <span
+            key={sid}
+            title={`${storeInfo[sid]?.name ?? "Otra tienda"} — ${c.cerrados} pedido${c.cerrados === 1 ? "" : "s"} de ${c.leads} lead${c.leads === 1 ? "" : "s"} trabajado${c.leads === 1 ? "" : "s"}${pct != null ? ` (${pct}%)` : ""} · ${money(c.ingresos, currency)}`}
+            className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap text-slate-500"
+          >
+            {storeInfo[sid]?.short ?? "?"} <span className="font-semibold text-slate-600">{c.cerrados}</span>/{c.leads}
+          </span>
+        );
+      })}
     </span>
   );
 }
