@@ -24,6 +24,9 @@ function navItems(isVendedoraOnly: boolean): NavItem[] {
     return [
       { href: "/dashboard/leads", label: "Leads", icon: IconChat },
       { href: "/dashboard/envios", label: "Envíos", icon: IconTruck },
+      // Modo solo: la página filtra server-side a la fila propia — una
+      // vendedora nunca ve los resultados del resto del equipo.
+      { href: "/dashboard/productividad", label: "Mi productividad", icon: IconHeadset },
     ];
   return [
     { href: "/dashboard", label: "Consolidado", icon: IconGrid },

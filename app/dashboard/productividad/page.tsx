@@ -1,6 +1,5 @@
 import { Suspense } from "react";
-import { redirect } from "next/navigation";
-import { getAccessibleStores, getUserRoleSummary } from "@/lib/access";
+import { getAccessibleStores, getCurrentUser, getUserRoleSummary } from "@/lib/access";
 import { getProductivityBoard, productivityInitialRange } from "@/lib/productivity";
 import { ProductivityBoard } from "@/components/productivity";
 import { EmptyState } from "@/components/ui";
@@ -25,12 +24,16 @@ async function ProductividadContent({
 }: {
   searchParams: Promise<{ from?: string; to?: string; store?: string; src?: string }>;
 }) {
-  const [role, sp, stores] = await Promise.all([
+  const [role, sp, stores, user] = await Promise.all([
     getUserRoleSummary(),
     searchParams,
     getAccessibleStores(),
+    getCurrentUser(),
   ]);
-  if (role.isVendedoraOnly) redirect("/dashboard/leads");
+  // Vendedoras ven el tablero en modo SOLO: únicamente su propia fila (el
+  // filtrado ocurre AQUÍ, server-side — al cliente nunca viaja el resto del
+  // equipo), sin presencia de otras ni comparativas del equipo.
+  const solo = role.isVendedoraOnly;
   if (!stores.length) {
     return <EmptyState title="Aún no tienes tiendas conectadas" />;
   }
@@ -54,28 +57,33 @@ async function ProductividadContent({
 
   const range = productivityInitialRange(sp, tz);
   const board = await getProductivityBoard(scopeIds, range, source, tz);
+  // Modo solo: la fila propia con la escala de calor propia; los totales del
+  // periodo anterior son del EQUIPO, así que se ocultan los deltas (hasPrev).
+  const rows = solo ? board.rows.filter((r) => r.userId === user?.id) : board.rows;
+  const heatMax = solo ? Math.max(1, ...rows.flatMap((r) => r.heat)) : board.heatMax;
+  const onlineIdle = solo ? [] : board.onlineIdle;
   // Dots iniciales: asesoras del tablero online + las online sin actividad.
-  const initialOnlineIds = [
-    ...board.rows.filter((r) => r.online).map((r) => r.userId),
-    ...board.onlineIdle.map((i) => i.userId),
-  ];
+  const initialOnlineIds = solo
+    ? []
+    : [...board.rows.filter((r) => r.online).map((r) => r.userId), ...board.onlineIdle.map((i) => i.userId)];
 
   return (
     <ProductivityBoard
-      rows={board.rows}
+      rows={rows}
       prevTotals={board.prevTotals}
       prevRange={board.prevRange}
-      hasPrev={board.hasPrev}
+      hasPrev={solo ? false : board.hasPrev}
       range={range}
       currency={currency}
       stores={stores}
       storeId={storeId}
       source={source}
       tz={tz}
-      heatMax={board.heatMax}
+      heatMax={heatMax}
       heatMode={board.heatMode}
-      onlineIdle={board.onlineIdle}
+      onlineIdle={onlineIdle}
       initialOnlineIds={initialOnlineIds}
+      solo={solo}
     />
   );
 }

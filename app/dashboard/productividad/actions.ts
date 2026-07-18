@@ -1,6 +1,6 @@
 "use server";
 
-import { getAccessibleStores, getUserRoleSummary, type DateRange } from "@/lib/access";
+import { getAccessibleStores, getCurrentUser, getUserRoleSummary, type DateRange } from "@/lib/access";
 import { getAgentLeadsWorked, type AgentLeadRow, type SourceBucket } from "@/lib/productivity";
 import { onlineVendedoraIds } from "@/lib/presence";
 import { createAdminSupabase } from "@/lib/db";
@@ -27,8 +27,9 @@ export async function getOnlineAdvisorIds(): Promise<string[]> {
 }
 
 /** Leads a single advisor worked in the range — drives the drill-down rows that
- *  expand under each asesora in the productividad table. RLS-scoped; managers
- *  only (vendedoras don't see this page). Returns [] on any access problem. */
+ *  expand under each asesora in the productividad table. RLS-scoped. Managers
+ *  ven a cualquiera; una vendedora SOLO puede pedir sus propios leads (la vista
+ *  "Mi productividad") — cualquier otro id devuelve []. */
 export async function loadAgentLeads(input: {
   vendedoraId: string;
   from: string;
@@ -36,7 +37,10 @@ export async function loadAgentLeads(input: {
   store?: string | null;
   source?: SourceBucket | null;
 }): Promise<AgentLeadRow[]> {
-  if ((await getUserRoleSummary()).isVendedoraOnly) return [];
+  if ((await getUserRoleSummary()).isVendedoraOnly) {
+    const user = await getCurrentUser();
+    if (!user || user.id !== input.vendedoraId) return [];
+  }
   const stores = await getAccessibleStores();
   if (!stores.length) return [];
   const storeIds = stores.map((s) => s.id);
