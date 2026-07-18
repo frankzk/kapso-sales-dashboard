@@ -314,6 +314,9 @@ saca. Los estados de "sí hablé" (contactado/otros productos) y los cierres
   primera corrida del cron ejecuta la "ola inicial" sobre el stock acumulado.
 - Cada ola deja una nota en el timeline: `🔁 Reencolado automático: carrito sin
   contacto por 48h (ola 1/2)`. El reporte del cron trae `requeued`.
+- El **auto-archivado de 7 días respeta la atención pendiente**: un lead con el
+  marcador rojo activo (ola, respuesta nueva, seguimiento vencido) no se
+  archiva en silencio — el reloj se reanuda cuando la asesora lo gestiona.
 
 ## 7. Post-deploy verification
 
