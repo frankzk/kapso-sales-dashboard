@@ -14,6 +14,7 @@ import {
   labelOf,
   normalizeCity,
   rescheduleGuideCode,
+  shipmentRequiresCourierResult,
   statusSince,
   type CourierReportResult,
   type RerouteDisposition,
@@ -645,6 +646,7 @@ function ShipmentDrawer({
   const [courierResult, setCourierResult] = useState<CourierReportResult | "">("");
   const [courierDate, setCourierDate] = useState("");
   const [courierNote, setCourierNote] = useState("");
+  const [showCourierCorrection, setShowCourierCorrection] = useState(false);
   const [fenixGuide, setFenixGuide] = useState("");
   const [showOrderPicker, setShowOrderPicker] = useState(false);
   const [showAddressEditor, setShowAddressEditor] = useState(false);
@@ -670,6 +672,7 @@ function ShipmentDrawer({
         setCourierResult("");
         setCourierDate("");
         setCourierNote("");
+        setShowCourierCorrection(false);
         setMsg(null);
         const decision = evaluateAliclikReschedule({
           courier: d.shipment.courier,
@@ -763,6 +766,10 @@ function ShipmentDrawer({
     (shipment?.delivery_status === "anulado" || shipment?.delivery_status === "entregado") &&
     courierResultDefinition.resultingStatus !== "anulado" &&
     courierResultDefinition.resultingStatus !== "entregado";
+  const fenixAwaitingCourierResult =
+    shipmentRequiresCourierResult(shipment?.courier, shipment?.delivery_status);
+  const fenixReadyForCustomerManagement =
+    shipment?.courier === "fenix" && shipment.delivery_status === "pendiente";
 
   return (
     <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={onClose}>
@@ -1029,9 +1036,173 @@ function ShipmentDrawer({
                 ))}
             </section>
 
+            {/* Step 1 for active Fenix deliveries: process the courier outcome
+                before any customer call or reprogramming can be registered. */}
+            {detail.shipment.courier === "fenix" && (
+              detail.shipment.delivery_status === "transferido" ? (
+                <section className="space-y-2 rounded-xl border border-sky-200 bg-sky-50 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600">Guía reemplazada</p>
+                  <p className="text-sm font-semibold text-sky-900">Continúa en la guía Fenix activa</p>
+                  <p className="text-xs leading-relaxed text-sky-800">
+                    “Transferido” lo asigna Kapta automáticamente; no es un resultado del motorizado.
+                  </p>
+                  {detail.linkedFenixShipment && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenShipment(detail.linkedFenixShipment!.id)}
+                      className="flex w-full items-center justify-between rounded-lg border border-sky-200 bg-white px-3 py-2 text-left hover:bg-sky-50"
+                    >
+                      <span>
+                        <span className="block text-[10px] uppercase tracking-wide text-sky-600">Abrir guía activa</span>
+                        <span className="font-mono text-xs font-semibold text-sky-900">
+                          {detail.linkedFenixShipment.guide_code}
+                        </span>
+                      </span>
+                      <span className="text-sm text-sky-700">→</span>
+                    </button>
+                  )}
+                </section>
+              ) : fenixReadyForCustomerManagement && !showCourierCorrection ? (
+                <section className="flex items-start justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">Etapa 1 completada</p>
+                    <p className="mt-0.5 text-sm font-semibold text-emerald-900">Pendiente de gestión con el cliente</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-emerald-800">
+                      Continúa abajo con la llamada. Si confirma, recién se generará la nueva reprogramación.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowCourierCorrection(true)}
+                    className="shrink-0 text-[11px] font-medium text-emerald-800 hover:underline"
+                  >
+                    Corregir resultado
+                  </button>
+                </section>
+              ) : (
+                <section className="space-y-2.5 rounded-xl border border-orange-200 bg-orange-50/40 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-orange-700">
+                        {fenixAwaitingCourierResult ? "Etapa 1 · obligatoria" : "Corrección del reporte"}
+                      </p>
+                      <p className="mt-0.5 text-sm font-semibold text-slate-900">Registrar resultado del courier</p>
+                      <p className="mt-0.5 font-mono text-xs font-semibold text-orange-800">
+                        {detail.shipment.guide_code}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Estado actual</p>
+                      <StatusBadge
+                        category={detail.shipment.status_category}
+                        status={detail.shipment.delivery_status}
+                      />
+                    </div>
+                  </div>
+
+                  {fenixAwaitingCourierResult && (
+                    <p className="rounded-lg bg-orange-100 px-2.5 py-2 text-xs leading-relaxed text-orange-900">
+                      Esta guía está En ruta. Primero registra lo informado por el motorizado; la llamada y la reprogramación se habilitarán solo si vuelve a Pendiente.
+                    </p>
+                  )}
+
+                  <label className="block text-xs font-medium text-slate-600">
+                    ¿Qué informó Fenix?
+                    <select
+                      value={courierResult}
+                      onChange={(e) => {
+                        setCourierResult(e.target.value as CourierReportResult | "");
+                        setCourierDate("");
+                      }}
+                      className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm text-slate-800"
+                    >
+                      <option value="">Selecciona el resultado…</option>
+                      {COURIER_REPORT_RESULTS.map((result) => (
+                        <option key={result.code} value={result.code}>{result.optionLabel}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  {courierResultDefinition && (
+                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Qué sucederá</p>
+                      <p className="mt-0.5 text-xs leading-relaxed text-slate-700">
+                        {courierResultDefinition.effect}
+                      </p>
+                      {reopensClosedGuide && (
+                        <p className="mt-1.5 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800">
+                          Esta corrección reabrirá una guía que actualmente está cerrada.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {courierResultDefinition?.requiresDate && (
+                    <label className="block text-xs font-medium text-slate-600">
+                      Nueva fecha de entrega informada por Fenix
+                      <input
+                        type="date"
+                        value={courierDate}
+                        onChange={(e) => setCourierDate(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm"
+                      />
+                    </label>
+                  )}
+
+                  {courierResultDefinition && (
+                    <label className="block text-xs font-medium text-slate-600">
+                      {courierResultDefinition.requiresNote ? "Motivo informado por Fenix" : "Detalle del reporte (opcional)"}
+                      <textarea
+                        value={courierNote}
+                        onChange={(e) => setCourierNote(e.target.value)}
+                        rows={2}
+                        placeholder={courierResultDefinition.requiresNote ? "Ej.: cliente rechazó el pedido…" : "Ej.: no respondió al motorizado…"}
+                        className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm"
+                      />
+                    </label>
+                  )}
+
+                  <div className="flex gap-2">
+                    {showCourierCorrection && (
+                      <button
+                        type="button"
+                        onClick={() => setShowCourierCorrection(false)}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
+                      >
+                        Cancelar
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!courierResult) return;
+                        run(
+                          () => registerCourierReportResult(shipmentId, {
+                            result: courierResult,
+                            deliveryDate: courierDate ? new Date(courierDate).toISOString() : null,
+                            note: courierNote,
+                          }),
+                          () => {
+                            setCourierResult("");
+                            setCourierDate("");
+                            setCourierNote("");
+                            setShowCourierCorrection(false);
+                          },
+                        );
+                      }}
+                      disabled={pending || !courierFormValid}
+                      className="flex-1 rounded-lg bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
+                    >
+                      {pending ? "Registrando…" : "Registrar resultado y continuar"}
+                    </button>
+                  </div>
+                </section>
+              )
+            )}
+
             {/* claim + re-route call — hidden once the shipment is terminal (entregado/
                 anulado/transferido) so a stray "no contesta" can't reopen a closed guide */}
-            {isCallable(detail.shipment.delivery_status) && (
+            {isCallable(detail.shipment.delivery_status) && !fenixAwaitingCourierResult && (
               <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
                 <p className="text-sm font-medium text-slate-800">Registrar o programar llamada</p>
                 <div className="flex gap-2">
@@ -1206,7 +1377,8 @@ function ShipmentDrawer({
             {/* Fenix guide — manual fallback. The common path auto-generates the
                 guide from "Cliente confirma" above; this stays for shipments
                 without an order name, or to type a specific Fenix code. */}
-            <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
+            {detail.shipment.delivery_status === "pendiente" && (
+              <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
               <p className="text-sm font-medium text-slate-800">Generar guía Fenix (manual)</p>
               {detail.shipment.fenix_shipment_id ? (
                 <p className="text-xs text-emerald-700">Ya tiene guía Fenix vinculada.</p>
@@ -1265,147 +1437,6 @@ function ShipmentDrawer({
                   </button>
                 </>
               )}
-            </section>
-
-            {/* Courier result — workflow language instead of raw internal states. */}
-            {detail.shipment.courier === "fenix" ? (
-              detail.shipment.delivery_status === "transferido" ? (
-                <section className="space-y-2 rounded-xl border border-sky-200 bg-sky-50 p-3">
-                  <div>
-                    <p className="text-sm font-semibold text-sky-900">Esta guía ya fue reemplazada</p>
-                    <p className="mt-0.5 text-xs leading-relaxed text-sky-800">
-                      “Transferido” lo asigna Kapta automáticamente. El resultado del courier debe registrarse en la guía Fenix activa.
-                    </p>
-                  </div>
-                  {detail.linkedFenixShipment && (
-                    <button
-                      type="button"
-                      onClick={() => onOpenShipment(detail.linkedFenixShipment!.id)}
-                      className="flex w-full items-center justify-between rounded-lg border border-sky-200 bg-white px-3 py-2 text-left hover:bg-sky-50"
-                    >
-                      <span>
-                        <span className="block text-[10px] uppercase tracking-wide text-sky-600">Abrir guía activa</span>
-                        <span className="font-mono text-xs font-semibold text-sky-900">
-                          {detail.linkedFenixShipment.guide_code}
-                        </span>
-                      </span>
-                      <span className="text-sm text-sky-700">→</span>
-                    </button>
-                  )}
-                </section>
-              ) : (
-                <section className="space-y-2.5 rounded-xl border border-orange-200 bg-orange-50/40 p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">Actualizar resultado del courier</p>
-                      <p className="mt-0.5 text-[11px] text-slate-500">Guía Fenix seleccionada</p>
-                      <p className="select-all font-mono text-xs font-semibold text-orange-800">
-                        {detail.shipment.guide_code}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Estado actual</p>
-                      <StatusBadge
-                        category={detail.shipment.status_category}
-                        status={detail.shipment.delivery_status}
-                      />
-                    </div>
-                  </div>
-
-                  <label className="block text-xs font-medium text-slate-600">
-                    ¿Qué informó Fenix?
-                    <select
-                      value={courierResult}
-                      onChange={(e) => {
-                        setCourierResult(e.target.value as CourierReportResult | "");
-                        setCourierDate("");
-                      }}
-                      className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm text-slate-800"
-                    >
-                      <option value="">Selecciona el resultado…</option>
-                      {COURIER_REPORT_RESULTS.map((result) => (
-                        <option key={result.code} value={result.code}>{result.optionLabel}</option>
-                      ))}
-                    </select>
-                  </label>
-
-                  {courierResultDefinition && (
-                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Qué sucederá</p>
-                      <p className="mt-0.5 text-xs leading-relaxed text-slate-700">
-                        {courierResultDefinition.effect}
-                      </p>
-                      {reopensClosedGuide && (
-                        <p className="mt-1.5 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800">
-                          Esta corrección reabrirá una guía que actualmente está cerrada.
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  {courierResultDefinition?.requiresDate && (
-                    <label className="block text-xs font-medium text-slate-600">
-                      Nueva fecha de entrega
-                      <input
-                        type="date"
-                        value={courierDate}
-                        onChange={(e) => setCourierDate(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm"
-                      />
-                    </label>
-                  )}
-
-                  {courierResultDefinition && (
-                    <label className="block text-xs font-medium text-slate-600">
-                      {courierResultDefinition.requiresNote ? "Motivo informado por Fenix" : "Detalle del reporte (opcional)"}
-                      <textarea
-                        value={courierNote}
-                        onChange={(e) => setCourierNote(e.target.value)}
-                        rows={2}
-                        placeholder={
-                          courierResultDefinition.requiresNote
-                            ? "Ej.: cliente rechazó el pedido…"
-                            : "Ej.: no respondió al motorizado…"
-                        }
-                        className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm"
-                      />
-                    </label>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!courierResult) return;
-                      run(
-                        () => registerCourierReportResult(shipmentId, {
-                          result: courierResult,
-                          deliveryDate: courierDate ? new Date(courierDate).toISOString() : null,
-                          note: courierNote,
-                        }),
-                        () => {
-                          setCourierResult("");
-                          setCourierDate("");
-                          setCourierNote("");
-                        },
-                      );
-                    }}
-                    disabled={pending || !courierFormValid}
-                    className="w-full rounded-lg bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
-                  >
-                    {pending ? "Registrando…" : "Registrar resultado en esta guía"}
-                  </button>
-
-                  <p className="text-[10px] leading-relaxed text-slate-400">
-                    Pendiente, En ruta, Entregado y Anulado se calculan automáticamente. Transferido no es seleccionable.
-                  </p>
-                </section>
-              )
-            ) : (
-              <section className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <p className="text-sm font-medium text-slate-700">Estado informado por Aliclik</p>
-                <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                  Esta guía se actualiza desde el Excel diario de Aliclik. Las reprogramaciones se gestionan en el bloque superior.
-                </p>
               </section>
             )}
 

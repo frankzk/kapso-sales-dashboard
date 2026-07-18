@@ -24,6 +24,7 @@ import {
   nextShipmentTransition,
   normalizeCity,
   rescheduleGuideCode,
+  shipmentRequiresCourierResult,
   type CourierReportResult,
   type RerouteDisposition,
 } from "@/lib/shipments";
@@ -222,6 +223,15 @@ export async function registerRerouteCall(
     aliclik_attempts: number | null;
     aliclik_service_date: string | null;
   };
+
+  // A Fenix guide that is still En ruta is waiting for the courier/motorizado
+  // outcome. Do not let a stale drawer skip that operational stage and create
+  // another reprogramming before the delivery result has been processed.
+  if (shipmentRequiresCourierResult(cur.courier, cur.delivery_status)) {
+    return {
+      error: `Primero registra el resultado del courier para la guía ${cur.guide_code}. Si Fenix informa “No contesta”, volverá a Pendiente y se habilitará la gestión con el cliente.`,
+    };
+  }
 
   // Only pendiente/en_ruta admit gestión. The UI hides this on terminal guides,
   // but enforce it server-side too so a stale drawer can't reactivate a frozen
@@ -699,12 +709,20 @@ async function spinOffFenixGuide(
   const { data: parent } = await admin
     .from("shipments")
     .select(
-      "store_id,order_id,order_name,customer_name,customer_phone,product,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_shipment_id",
+      "courier,delivery_status,store_id,order_id,order_name,customer_name,customer_phone,product,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_shipment_id",
     )
     .eq("id", shipmentId)
     .maybeSingle();
   if (!parent) return { error: "No encontrado." };
-  if ((parent as { fenix_shipment_id: string | null }).fenix_shipment_id) {
+  const source = parent as {
+    courier: string;
+    delivery_status: string;
+    fenix_shipment_id: string | null;
+  };
+  if (shipmentRequiresCourierResult(source.courier, source.delivery_status)) {
+    return { error: "Primero registra el resultado del courier antes de crear otra guía Fenix." };
+  }
+  if (source.fenix_shipment_id) {
     return { error: "Este envío ya tiene una guía Fenix." };
   }
 

@@ -27,6 +27,7 @@ import {
   reconcileDeliveryStatus,
   autoFenixGuideCode,
   rescheduleGuideCode,
+  shipmentRequiresCourierResult,
   statusSince,
 } from "@/lib/shipments";
 
@@ -232,6 +233,12 @@ describe("nextShipmentTransition (gestión flow)", () => {
 });
 
 describe("courierReportTransition (reporte Fenix)", () => {
+  it("requires a courier result only while the active Fenix guide is En ruta", () => {
+    expect(shipmentRequiresCourierResult("fenix", "en_ruta")).toBe(true);
+    expect(shipmentRequiresCourierResult("fenix", "pendiente")).toBe(false);
+    expect(shipmentRequiresCourierResult("aliclik", "en_ruta")).toBe(false);
+  });
+
   it("maps courier outcomes to operational states without exposing transferido", () => {
     expect(COURIER_REPORT_RESULTS.map((result) => result.code)).toEqual([
       "entregado",

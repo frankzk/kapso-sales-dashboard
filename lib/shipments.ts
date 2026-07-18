@@ -412,6 +412,15 @@ export const COURIER_REPORT_RESULTS = [
 
 export type CourierReportResult = (typeof COURIER_REPORT_RESULTS)[number]["code"];
 
+/** An active Fenix dispatch must receive the motorizado/courier outcome before
+ * the customer-management flow can create another reprogramming. */
+export function shipmentRequiresCourierResult(
+  courier: string | null | undefined,
+  deliveryStatus: string | null | undefined,
+): boolean {
+  return courier === "fenix" && deliveryStatus === "en_ruta";
+}
+
 export interface CourierReportTransition {
   status: "pendiente" | "en_ruta" | "entregado" | "anulado";
   outcome: string;
