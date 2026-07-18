@@ -1224,6 +1224,7 @@ export interface DripLead {
   last_drip_at: string | null;
   cart_item_count?: number | null; // señal de carrito — solo para PRIORIZAR
   draft_order_gid?: string | null;
+  attention_waves?: number | null; // >0 = la atención vino de una OLA de reencolado
 }
 
 /** ¿El lead tiene carrito? (mismo criterio que leadSegment / las olas). */
@@ -1241,9 +1242,26 @@ export function dripHasCart(l: Pick<DripLead, "cart_item_count" | "draft_order_g
  * toque 2 antes de 24h del toque 1; o el cliente escribió DESPUÉS del último
  * drip (last_inbound_at > last_drip_at ⇒ ya no es "no contesta").
  */
+/** Horas de silencio del CLIENTE exigidas para que el drip pise un lead cuya
+ *  atención viene de una ola (si escribió hace poco, que lo vea la asesora). */
+export const DRIP_WAVE_INBOUND_QUIET_HOURS = 48;
+
+/** La atención prendida normalmente FRENA el drip (el cliente respondió o hay
+ *  algo que debe ver la asesora). Excepción: si la atención vino de una OLA de
+ *  reencolado (attention_waves > 0) y el cliente no escribe hace ≥48h, ola y
+ *  drip corren EN PARALELO — la ola pide la llamada, el drip escribe. Ese es el
+ *  diseño de dos canales: sin esta excepción, la ola inicial bloqueaba al drip
+ *  justo sobre su audiencia principal. (Los seguimientos vencidos no llegan
+ *  aquí: los frena el guard de agenda, que mira next_followup_at.) */
+function waveOverridesAttention(l: DripLead, nowMs: number): boolean {
+  if ((l.attention_waves ?? 0) <= 0) return false;
+  if (!l.last_inbound_at) return true;
+  return nowMs - Date.parse(l.last_inbound_at) >= DRIP_WAVE_INBOUND_QUIET_HOURS * 3_600_000;
+}
+
 export function dripSkipReason(l: DripLead, nowMs: number): string | null {
   if (!(DRIP_STATUSES as readonly string[]).includes(l.status)) return "status";
-  if (l.needs_attention) return "atencion";
+  if (l.needs_attention && !waveOverridesAttention(l, nowMs)) return "atencion";
   if (l.next_followup_at) return "agendado";
   if ((l.drip_touches ?? 0) >= DRIP_MAX_TOUCHES) return "tope";
   if (!l.name) return "sin_nombre";
@@ -1297,20 +1315,28 @@ export async function sendSeguimientoDrip(
   // vigila la calidad de la plantilla en sus primeros días (bloqueos/reportes):
   // si algo se topa o se pausa, que lo enviado haya sido la audiencia con más
   // valor y mejor recepción. Los viejos salen igual, al final de la cola.
-  const { data, error } = await admin
-    .from("leads")
-    .select(
-      "id, phone, name, status, needs_attention, next_followup_at, last_interaction_at, last_inbound_at, drip_touches, last_drip_at, cart_item_count, draft_order_gid",
-    )
-    .eq("store_id", storeId)
-    .in("status", [...DRIP_STATUSES])
-    .eq("needs_attention", false)
-    .is("next_followup_at", null)
-    .lt("drip_touches", DRIP_MAX_TOUCHES)
-    .lte("last_interaction_at", quietSinceIso)
-    .order("cart_item_count", { ascending: false, nullsFirst: false })
-    .order("last_interaction_at", { ascending: false })
-    .limit(200);
+  const buildSelect = (cols: string) =>
+    admin
+      .from("leads")
+      .select(cols)
+      .eq("store_id", storeId)
+      .in("status", [...DRIP_STATUSES])
+      .is("next_followup_at", null)
+      .lt("drip_touches", DRIP_MAX_TOUCHES)
+      .lte("last_interaction_at", quietSinceIso)
+      .order("cart_item_count", { ascending: false, nullsFirst: false })
+      .order("last_interaction_at", { ascending: false })
+      .limit(200);
+  // needs_attention ya NO se filtra en SQL: el guard fino decide (una atención
+  // de OLA no frena el drip; una respuesta del cliente sí).
+  const BASE_COLS =
+    "id, phone, name, status, needs_attention, next_followup_at, last_interaction_at, last_inbound_at, drip_touches, last_drip_at, cart_item_count, draft_order_gid";
+  let { data, error } = await buildSelect(`${BASE_COLS}, attention_waves`);
+  if (error && /attention_waves/i.test(error.message)) {
+    // Pre-0036: sin la columna se degrada al comportamiento clásico (toda
+    // atención prendida frena el drip).
+    ({ data, error } = await buildSelect(BASE_COLS));
+  }
   if (error) throw new Error(`drip select: ${error.message}`);
 
   const rows = (data as DripLead[] | null) ?? [];

@@ -157,14 +157,16 @@ class FakeSupabase {
       this.deletedDrafts.push(b.filters);
       return { data: null, error: null };
     }
+    if (b.table === "leads" && b.op === "select" && b.selectCols?.includes("drip_touches")) {
+      // Selector de candidatos del drip (su marcador distintivo es drip_touches;
+      // también trae attention_waves, así que esta rama va ANTES que la de olas).
+      // Devuelve las filas preparadas tal cual — el filtro fino es
+      // dripSkipReason en JS, que es lo que se testea.
+      return { data: this.dripLeads, error: null };
+    }
     if (b.table === "leads" && b.op === "select" && b.selectCols?.includes("attention_waves")) {
       if (this.waveSelectError) return { data: null, error: { message: this.waveSelectError } };
       return { data: this.waveLeads, error: null };
-    }
-    if (b.table === "leads" && b.op === "select" && b.selectCols?.includes("drip_touches")) {
-      // Selector de candidatos del drip — devuelve las filas preparadas tal cual
-      // (el filtro fino es dripSkipReason en JS, que es lo que se testea).
-      return { data: this.dripLeads, error: null };
     }
     if (b.table === "leads" && b.op === "update") {
       this.leadPatches.push({ ...(b.filters as any), ...b.payload });
@@ -1171,6 +1173,27 @@ describe("dripSkipReason · la regla del drip (pura)", () => {
     expect(dripSkipReason(dripLead({ status: "nuevo" }), now)).toBe("status");
     expect(dripSkipReason(dripLead({ needs_attention: true }), now)).toBe("atencion");
     expect(dripSkipReason(dripLead({ next_followup_at: "2026-07-14T15:00:00Z" }), now)).toBe("agendado");
+  });
+
+  it("la atención de una OLA no frena el drip (paralelo) — salvo respuesta reciente del cliente", async () => {
+    const { dripSkipReason } = await import("@/lib/leads-ingest");
+    const now = Date.parse(DRIP_NOW);
+    // Reencolado por ola, cliente callado → drip dispara en paralelo a la llamada.
+    expect(dripSkipReason(dripLead({ needs_attention: true, attention_waves: 1 }), now)).toBeNull();
+    // Reencolado por ola PERO el cliente escribió hace 2h → lo ve la asesora.
+    expect(
+      dripSkipReason(
+        dripLead({ needs_attention: true, attention_waves: 1, last_inbound_at: "2026-07-13T13:00:00Z" }),
+        now,
+      ),
+    ).toBe("atencion");
+    // Escribió hace 3 días → silencio suficiente, el drip vuelve a poder.
+    expect(
+      dripSkipReason(
+        dripLead({ needs_attention: true, attention_waves: 1, last_inbound_at: "2026-07-10T10:00:00Z" }),
+        now,
+      ),
+    ).toBeNull();
   });
 
   it("respeta tope de toques, nombre para {{1}} y el silencio mínimo de 6h", async () => {
