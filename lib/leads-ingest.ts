@@ -1222,6 +1222,13 @@ export interface DripLead {
   last_inbound_at: string | null;
   drip_touches: number | null;
   last_drip_at: string | null;
+  cart_item_count?: number | null; // señal de carrito — solo para PRIORIZAR
+  draft_order_gid?: string | null;
+}
+
+/** ¿El lead tiene carrito? (mismo criterio que leadSegment / las olas). */
+export function dripHasCart(l: Pick<DripLead, "cart_item_count" | "draft_order_gid">): boolean {
+  return (l.cart_item_count ?? 0) > 0 || (l.draft_order_gid ?? "").length > 0;
 }
 
 /**
@@ -1285,10 +1292,15 @@ export async function sendSeguimientoDrip(
 
   const nowMs = Date.parse(nowIso);
   const quietSinceIso = new Date(nowMs - DRIP_FIRST_TOUCH_HOURS * 3_600_000).toISOString();
+  // Orden de despacho: CARRITOS primero y, dentro de cada grupo, los más
+  // recientes primero. Meta raciona los envíos de marketing por niveles y
+  // vigila la calidad de la plantilla en sus primeros días (bloqueos/reportes):
+  // si algo se topa o se pausa, que lo enviado haya sido la audiencia con más
+  // valor y mejor recepción. Los viejos salen igual, al final de la cola.
   const { data, error } = await admin
     .from("leads")
     .select(
-      "id, phone, name, status, needs_attention, next_followup_at, last_interaction_at, last_inbound_at, drip_touches, last_drip_at",
+      "id, phone, name, status, needs_attention, next_followup_at, last_interaction_at, last_inbound_at, drip_touches, last_drip_at, cart_item_count, draft_order_gid",
     )
     .eq("store_id", storeId)
     .in("status", [...DRIP_STATUSES])
@@ -1296,13 +1308,17 @@ export async function sendSeguimientoDrip(
     .is("next_followup_at", null)
     .lt("drip_touches", DRIP_MAX_TOUCHES)
     .lte("last_interaction_at", quietSinceIso)
-    .order("last_interaction_at", { ascending: true }) // los más olvidados primero
+    .order("cart_item_count", { ascending: false, nullsFirst: false })
+    .order("last_interaction_at", { ascending: false })
     .limit(200);
   if (error) throw new Error(`drip select: ${error.message}`);
 
   const rows = (data as DripLead[] | null) ?? [];
   const eligible = rows.filter((l) => dripSkipReason(l, nowMs) === null);
   report.skipped = rows.length - eligible.length;
+  // Re-afina la prioridad en JS: el orden SQL usa cart_item_count, pero un
+  // carrito solo-con-draft (count nulo) también debe adelantarse.
+  eligible.sort((a, b) => (dripHasCart(b) ? 1 : 0) - (dripHasCart(a) ? 1 : 0));
   const batch = eligible.slice(0, DRIP_BATCH_CAP);
 
   for (const l of batch) {

@@ -1270,6 +1270,20 @@ describe("sendSeguimientoDrip · envío y registro", () => {
     expect(fake.leadCalls[0].note).toContain("falló");
   });
 
+  it("despacha CARRITOS primero (Meta raciona y vigila la plantilla nueva)", async () => {
+    const { sendSeguimientoDrip } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.dripLeads = [
+      dripLead({ id: "F1", phone: "51900000001" }), // frio, sin carrito
+      dripLead({ id: "C1", phone: "51900000002", cart_item_count: 2 }),
+      dripLead({ id: "C2", phone: "51900000003", cart_item_count: null, draft_order_gid: "gid://shopify/DraftOrder/9" }),
+    ];
+    const { fn, calls } = spyTemplate();
+    await sendSeguimientoDrip(fake as any, "store-1", dripCreds(), fn, DRIP_NOW);
+    // Los dos carritos (por count y por draft) salen antes que el frío.
+    expect(calls.map((c) => c.params.to)).toEqual(["51900000002", "51900000003", "51900000001"]);
+  });
+
   it("respeta el cap por corrida (DRIP_BATCH_CAP)", async () => {
     const { sendSeguimientoDrip, DRIP_BATCH_CAP } = await import("@/lib/leads-ingest");
     const fake = new FakeSupabase(makeStoreRow());
