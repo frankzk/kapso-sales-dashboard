@@ -846,13 +846,22 @@ function parseSummaryItems(text: string): { qty: number; title: string }[] {
 // promo, no el distrito.
 const LOCATION_FILLER_RE =
   /^(?:(?:ok(?:ay)?|s[ií]|ya|no|gracias|listo|bueno|claro|hola|buenas|dale|perfecto|genial)\b[\s!.,]*)+$/i;
-// Ecos del bot que no son un lugar concreto: marketing ("envíos a todas las
-// ciudades", "a nivel nacional") o "entrega a domicilio".
-const ECHO_NOT_PLACE_RE = /^(?:tod[oa]s?\b|cualquier\b|nivel\b|domicilio\b|provincias\b)/i;
-// Tras limpiar artículos, un residuo así no es un lugar ("vivo en un
-// departamento", "estoy en camino/casa/el trabajo").
+// Arranques que delatan que la captura NO es un lugar: frase conversacional
+// ("cuando quieras ver más modelos…", "que lo veas"), marketing ("todas las
+// ciudades", "a nivel nacional", "a domicilio"), tiempos ("en el transcurso
+// del día", "en la tarde") o residuos ("vivo en un departamento", "estoy en
+// camino/casa/el trabajo"). Se evalúa tras quitar el artículo inicial.
 const NOT_A_PLACE_RE =
-  /^(?:en|de|del|al|el|la|un|una|departamento|provincia|ciudad|distrito|zona|casa|depa|camino|trabajo|oficina|centro|momento|reuni[oó]n)\b/i;
+  /^(?:en|de|del|al|tod[oa]s?|cualquier|nivel|domicilio|provincias|cuando|que|como|si|d[oó]nde|donde|gratis|recibir|coordinar|confirmar|transcurso|horario|d[ií]as?|madrugada|mañana|tarde|noche|semana|departamento|provincia|ciudad|distrito|zona|casa|depa|camino|trabajo|oficina|centro|momento|reuni[oó]n)\b/i;
+
+/** ¿El texto PARECE un lugar? Corto (≤4 palabras — cubre "San Juan de
+ *  Lurigancho"), sin dígitos y sin arranque de frase/relleno. Mata capturas
+ *  conversacionales del eco ("te lo envío para cuando quieras…"). */
+function looksLikePlace(s: string): boolean {
+  if (s.length < 3 || /\d/.test(s)) return false;
+  if (s.split(/\s+/).length > 4) return false;
+  return !NOT_A_PLACE_RE.test(s);
+}
 
 /**
  * Extract buyer-intent signals from a conversation's messages. The bots collect
@@ -896,7 +905,10 @@ export function parseOrderSignals(msgs: ParsedMsg[]): OrderSignals {
         m.text.match(/entrega\s+(?:en|para|a)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ][^\n.,!?]*)/i);
       if (echo) {
         const e = echo[1]!.trim().replace(/\s+/g, " ");
-        if (!ECHO_NOT_PLACE_RE.test(e)) district = e.slice(0, 40); // last wins
+        // Valida SIN el artículo ("La Molina" → "Molina" pasa el filtro) pero
+        // guarda el texto original. Mata capturas conversacionales del bot:
+        // "te lo envío para cuando quieras ver más modelos con calma".
+        if (looksLikePlace(e.replace(/^(?:el|la|los|las|un|una)\s+/i, ""))) district = e.slice(0, 40); // last wins
       }
     }
   }
@@ -912,7 +924,7 @@ export function parseOrderSignals(msgs: ParsedMsg[]): OrderSignals {
       let d = v[1]!.trim().replace(/\s+/g, " ");
       d = d.replace(/^(?:el|la|los|las|un|una|mi)\s+/i, "");
       d = d.replace(/^(?:departamento|provincia|ciudad|distrito|zona)\s+(?:de\s+)?/i, "");
-      if (d.length >= 3 && !NOT_A_PLACE_RE.test(d)) district = d.slice(0, 40); // last wins
+      if (looksLikePlace(d)) district = d.slice(0, 40); // last wins
     }
   }
 

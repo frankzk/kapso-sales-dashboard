@@ -170,6 +170,29 @@ describe("parseOrderSignals (buyer intent from chat messages)", () => {
     ).toBeNull();
   });
 
+  it("el eco NO captura frases conversacionales como distrito (caso real Cecilio)", () => {
+    // El bot dijo "te lo envío para cuando quieras ver más modelos con calma"
+    // → el eco viejo guardaba "cuando quieras ver mas modelos con calma".
+    expect(
+      parseOrderSignals([
+        { t: 1, dir: "outbound", text: "Te lo envío para cuando quieras ver más modelos con calma 😊" },
+      ]).district,
+    ).toBeNull();
+    expect(
+      parseOrderSignals([{ t: 1, dir: "outbound", text: "Ahora te envío el video para que lo veas" }]).district,
+    ).toBeNull();
+    // Los ecos reales siguen funcionando, artículo incluido.
+    expect(
+      parseOrderSignals([
+        { t: 1, dir: "outbound", text: "Envío: gratis a La Molina\nTotal a pagar: S/ 79" },
+      ]).district,
+    ).toBe("La Molina");
+    // Y un distrito largo real (4 palabras) pasa el filtro.
+    expect(
+      parseOrderSignals([{ t: 1, dir: "outbound", text: "Perfecto, entrega en San Juan de Lurigancho" }]).district,
+    ).toBe("San Juan de Lurigancho");
+  });
+
   it("el prompt del bot sigue mandando sobre la mención espontánea", () => {
     const s = parseOrderSignals([
       { t: 1, dir: "inbound", text: "soy de Trujillo" },
