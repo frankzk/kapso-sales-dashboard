@@ -39,6 +39,18 @@ export default async function StoresPage() {
               { key: "currency", header: "Moneda", render: (s) => s.currency },
               { key: "tz", header: "Zona horaria", render: (s) => s.timezone },
               { key: "status", header: "Estado", render: (s) => s.status },
+              {
+                key: "actions",
+                header: "",
+                render: (s) => (
+                  <Link
+                    href={`/dashboard/${s.id}/settings`}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    ⚙️ Ajustes
+                  </Link>
+                ),
+              },
             ]}
           />
         </Card>
