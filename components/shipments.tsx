@@ -904,7 +904,7 @@ function ShipmentDrawer({
   return (
     <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={onClose}>
       <div
-        className="h-full w-full max-w-md overflow-y-auto bg-white p-4 shadow-xl"
+        className="h-full w-full max-w-[34rem] overflow-y-auto bg-white p-3.5 shadow-xl sm:p-4"
         onClick={(e) => e.stopPropagation()}
       >
         {detail && "error" in detail ? (
@@ -912,22 +912,24 @@ function ShipmentDrawer({
         ) : !detail ? (
           <p className="text-sm text-slate-400">Cargando…</p>
         ) : (
-          <div className="space-y-3">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="font-mono text-sm text-slate-800">{detail.shipment.guide_code}</p>
-                <StatusBadge
-                  category={detail.shipment.status_category}
-                  status={detail.shipment.delivery_status}
-                  suffix={subState(detail.shipment)}
-                />
+          <div className="space-y-2.5">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-2.5">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-mono text-sm font-semibold text-slate-800">{detail.shipment.guide_code}</p>
+                  <StatusBadge
+                    category={detail.shipment.status_category}
+                    status={detail.shipment.delivery_status}
+                    suffix={subState(detail.shipment)}
+                  />
+                </div>
                 {/* Since when it's in this status (e.g. the day it went "En ruta"),
                     derived from the transition in its history. */}
                 {(() => {
                   const since = fmtStatusSince(
                     statusSince(detail.calls, detail.shipment.delivery_status),
                   );
-                  return since ? <p className="mt-1 text-xs text-slate-500">Desde {since}</p> : null;
+                  return since ? <p className="mt-0.5 text-[11px] text-slate-500">Desde {since}</p> : null;
                 })()}
               </div>
               <button onClick={onClose} className="text-sm text-slate-400 hover:text-slate-700">
@@ -935,29 +937,37 @@ function ShipmentDrawer({
               </button>
             </div>
 
-            <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
-              <Field label="Cliente" value={detail.shipment.customer_name} />
-              <Field label="Teléfono" value={detail.shipment.customer_phone} />
-              <Field label="Ciudad" value={detail.shipment.city} />
-              <Field label="Distrito" value={detail.shipment.district} />
-              <Field label="Producto" value={detail.shipment.product} clamp />
-              <Field
-                label="Intentos Aliclik"
-                value={
-                  detail.shipment.aliclik_attempts == null
-                    ? "Sin dato"
-                    : `${detail.shipment.aliclik_attempts} / 3`
-                }
-              />
-              <Field label="Fecha Aliclik" value={fmtAliclikDate(detail.shipment.aliclik_service_date)} />
-              <Field label="Llamadas de gestión" value={`${detail.shipment.reroute_attempts} / 7`} />
-              <Field
-                label="Fenix"
-                value={detail.shipment.fenix_eligible ? "Elegible" : "No elegible"}
-              />
-            </dl>
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 px-3 py-2.5 text-sm">
+                <Field label="Cliente" value={detail.shipment.customer_name} />
+                <Field label="Teléfono" value={detail.shipment.customer_phone} />
+                <Field label="Ciudad" value={detail.shipment.city} />
+                <Field label="Distrito" value={detail.shipment.district} />
+                <div className="col-span-2 border-t border-slate-100 pt-1.5">
+                  <Field label="Producto declarado" value={detail.shipment.product} />
+                </div>
+              </dl>
+              <dl className="grid grid-cols-2 border-t border-slate-100 bg-slate-50/70 sm:grid-cols-4">
+                <CompactMetric
+                  label="Intentos Aliclik"
+                  value={
+                    detail.shipment.aliclik_attempts == null
+                      ? "Sin dato"
+                      : `${detail.shipment.aliclik_attempts} / 3`
+                  }
+                />
+                <CompactMetric label="Fecha Aliclik" value={fmtAliclikDate(detail.shipment.aliclik_service_date)} />
+                <CompactMetric label="Llamadas" value={`${detail.shipment.reroute_attempts} / 7`} />
+                <CompactMetric
+                  label="Fenix"
+                  value={detail.shipment.fenix_eligible ? "Elegible" : "No elegible"}
+                  tone={detail.shipment.fenix_eligible ? "positive" : "neutral"}
+                />
+              </dl>
+            </section>
 
-            <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/60 p-2.5">
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <div className="space-y-2 bg-slate-50/60 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -967,10 +977,10 @@ function ShipmentDrawer({
                         Modificado
                       </span>
                     )}
+                    <span className="text-[11px] text-slate-400">
+                      · {detail.shipment.address_override ? "Protegido frente al siguiente Excel" : "Importado desde Aliclik"}
+                    </span>
                   </div>
-                  <p className="text-[11px] text-slate-400">
-                    {detail.shipment.address_override ? "Protegido frente al siguiente Excel" : "Importado desde Aliclik"}
-                  </p>
                 </div>
                 <button
                   type="button"
@@ -994,7 +1004,7 @@ function ShipmentDrawer({
                       </p>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-white p-2">
+                  <div className="grid grid-cols-2 gap-3 border-t border-slate-200 pt-2">
                     <div>
                       <p className="text-[10px] uppercase tracking-wide text-slate-400">Latitud</p>
                       <p className="select-all font-mono text-xs text-slate-700">
@@ -1124,13 +1134,11 @@ function ShipmentDrawer({
                   </div>
                 </div>
               )}
-            </section>
-
-            {msg && <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-sm text-slate-700">{msg}</p>}
+              </div>
 
             {/* order link — search+link (not just a raw UUID) for any shipment,
                 so a wrong auto-match can also be corrected here */}
-            <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
+              <div className="space-y-1.5 border-t border-slate-200 p-3">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm text-slate-700">
                   <span className="text-xs text-slate-400">Pedido </span>
@@ -1164,7 +1172,10 @@ function ShipmentDrawer({
                     No se encontró el detalle sincronizado de Shopify.
                   </p>
                 ))}
+              </div>
             </section>
+
+            {msg && <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-sm text-slate-700">{msg}</p>}
 
             {/* Step 1 for active Fenix deliveries: process the courier outcome
                 before any customer call or reprogramming can be registered. */}
@@ -1728,6 +1739,32 @@ function Field({
     <div>
       <dt className="text-xs text-slate-400">{label}</dt>
       <dd className={cn("text-slate-700", clamp && "line-clamp-2")} title={clamp ? (value ?? undefined) : undefined}>
+        {value || "—"}
+      </dd>
+    </div>
+  );
+}
+
+function CompactMetric({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string | null | undefined;
+  tone?: "neutral" | "positive";
+}) {
+  return (
+    <div className="min-w-0 px-2.5 py-2">
+      <dt className="text-[10px] font-medium uppercase leading-tight tracking-wide text-slate-400">
+        {label}
+      </dt>
+      <dd
+        className={cn(
+          "mt-0.5 text-xs font-semibold leading-tight tabular-nums",
+          tone === "positive" ? "text-emerald-700" : "text-slate-700",
+        )}
+      >
         {value || "—"}
       </dd>
     </div>
