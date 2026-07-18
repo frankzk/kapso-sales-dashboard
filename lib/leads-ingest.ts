@@ -589,7 +589,13 @@ export const STALE_LEAD_DAYS = 7;
  *  Idempotente: tras pasar a 'lost' dejan de calzar el filtro. Cap por corrida
  *  para que un backlog grande drene en varias pasadas del cron sin updates
  *  gigantes. Excluye `next_followup_at` agendados (la vista Seguimientos ignora
- *  la categoría) y los pagos pendientes (`yape_por_verificar`). */
+ *  la categoría), los pagos pendientes (`yape_por_verificar`) y — clave — los
+ *  leads con `needs_attention` prendida: un reencolado por ola (🔁), una
+ *  respuesta nueva o un seguimiento vencido son trabajo PENDIENTE marcado en
+ *  rojo, y archivarlo en silencio contradice el semáforo (pasó en producción:
+ *  la ola marcó un carrito día 6 y el archivador lo mató al día siguiente sin
+ *  que nadie lo llamara). El reloj de 7 días se reanuda cuando la asesora lo
+ *  gestiona (la gestión apaga la atención y refresca la interacción). */
 export async function archiveStaleLeads(
   admin: SupabaseClient,
   storeId: string,
@@ -603,6 +609,7 @@ export async function archiveStaleLeads(
     .in("category", ["open", "hot"])
     .neq("status", "yape_por_verificar")
     .is("next_followup_at", null)
+    .eq("needs_attention", false)
     .lt("last_interaction_at", cutoff)
     .limit(1000);
   const ids = (data as { id: string }[] | null)?.map((r) => r.id) ?? [];
