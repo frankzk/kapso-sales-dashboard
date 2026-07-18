@@ -391,3 +391,106 @@ export function rescheduleGuideCode(
   }
   return autoFenixGuideCode(orderName, date);
 }
+
+// ── Métricas de reprogramación (guías Fénix hijas creadas desde el dashboard) ─
+// El universo es EXACTO por construcción: cada reprogramación confirmada en el
+// dashboard genera una guía Fénix nueva vinculada a la guía Aliclik original
+// (fenix_shipment_id) — las entregas de primer intento de Aliclik no entran.
+// "En curso" es el RESTO (todo lo que no cerró en entregado/anulado): cubre
+// pendiente, en_ruta, transferido, por_preparar y cualquier estado futuro sin
+// listas que se desactualicen. La tasa se calcula SOLO sobre casos cerrados
+// para que un lote recién reprogramado no la hunda artificialmente.
+
+export const REPROGRAM_STALE_DAYS = 7;
+
+export interface ReprogramChildRow {
+  storeId: string | null;
+  createdAt: string | null; // cuándo se confirmó la reprogramación (guía hija creada)
+  status: string; // delivery_status actual de la guía Fénix
+}
+
+export interface ReprogramCounts {
+  total: number;
+  entregados: number;
+  anulados: number;
+  enCurso: number; // resto: aún sin desenlace
+  enCursoViejos: number; // en curso hace más de REPROGRAM_STALE_DAYS días (probables muertos)
+  tasa: number | null; // entregados / (entregados + anulados); null sin cerrados
+}
+
+export interface ReprogramWeek {
+  start: string; // lunes (fecha local Lima) de la semana
+  total: number;
+  entregados: number;
+  anulados: number;
+}
+
+export interface ReprogramStats {
+  last30: ReprogramCounts;
+  historico: ReprogramCounts;
+  porTienda: Record<string, ReprogramCounts>; // histórico, por store id ("otras" si falta)
+  semanas: ReprogramWeek[]; // últimas 8 semanas, la actual al final
+}
+
+const LIMA_OFFSET_MS = 5 * 3_600_000; // UTC−5 sin DST (misma convención que limaCalendarDayBounds)
+
+/** Lunes (fecha local Lima, YYYY-MM-DD) de la semana que contiene el instante. */
+function limaWeekStart(ms: number): string {
+  const shifted = new Date(ms - LIMA_OFFSET_MS);
+  const sinceMonday = (shifted.getUTCDay() + 6) % 7;
+  return new Date(shifted.getTime() - sinceMonday * 86_400_000).toISOString().slice(0, 10);
+}
+
+function emptyReprogramCounts(): ReprogramCounts {
+  return { total: 0, entregados: 0, anulados: 0, enCurso: 0, enCursoViejos: 0, tasa: null };
+}
+
+/** Agrega las guías hijas en los cortes del strip/popup. Pure (nowMs inyectable). */
+export function computeReprogramStats(rows: ReprogramChildRow[], nowMs: number): ReprogramStats {
+  const last30Cut = nowMs - 30 * 86_400_000;
+  const staleCut = nowMs - REPROGRAM_STALE_DAYS * 86_400_000;
+  const historico = emptyReprogramCounts();
+  const last30 = emptyReprogramCounts();
+  const porTienda: Record<string, ReprogramCounts> = {};
+  const semanas = new Map<string, ReprogramWeek>();
+  for (let i = 7; i >= 0; i--) {
+    const start = limaWeekStart(nowMs - i * 7 * 86_400_000);
+    semanas.set(start, { start, total: 0, entregados: 0, anulados: 0 });
+  }
+
+  const bump = (c: ReprogramCounts, kind: "entregado" | "anulado" | "curso", viejo: boolean) => {
+    c.total += 1;
+    if (kind === "entregado") c.entregados += 1;
+    else if (kind === "anulado") c.anulados += 1;
+    else {
+      c.enCurso += 1;
+      if (viejo) c.enCursoViejos += 1;
+    }
+  };
+
+  for (const r of rows) {
+    const ms = r.createdAt ? Date.parse(r.createdAt) : NaN;
+    const kind = r.status === "entregado" ? "entregado" : r.status === "anulado" ? "anulado" : "curso";
+    const viejo = kind === "curso" && Number.isFinite(ms) && ms < staleCut;
+    bump(historico, kind, viejo);
+    if (Number.isFinite(ms) && ms >= last30Cut) bump(last30, kind, viejo);
+    bump((porTienda[r.storeId ?? "otras"] ??= emptyReprogramCounts()), kind, viejo);
+    if (Number.isFinite(ms)) {
+      const wk = semanas.get(limaWeekStart(ms));
+      if (wk) {
+        wk.total += 1;
+        if (kind === "entregado") wk.entregados += 1;
+        else if (kind === "anulado") wk.anulados += 1;
+      }
+    }
+  }
+
+  const finish = (c: ReprogramCounts) => {
+    const cerrados = c.entregados + c.anulados;
+    c.tasa = cerrados ? c.entregados / cerrados : null;
+  };
+  finish(historico);
+  finish(last30);
+  for (const c of Object.values(porTienda)) finish(c);
+  return { historico, last30, porTienda, semanas: [...semanas.values()] };
+}

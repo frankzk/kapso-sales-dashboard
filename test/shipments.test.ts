@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   DELIVERY_STATUSES,
+  computeReprogramStats,
+  type ReprogramChildRow,
   categoryOf,
   isCallable,
   isTerminal,
@@ -275,5 +277,64 @@ describe("statusSince (when the shipment entered its current status)", () => {
     expect(statusSince([], "en_ruta")).toBeNull();
     expect(statusSince([{ new_status: "pendiente", occurred_at: "2026-07-01T10:00:00Z" }], "en_ruta")).toBeNull();
     expect(statusSince([{ new_status: "en_ruta" }], "en_ruta")).toBeNull(); // no occurred_at
+  });
+});
+
+describe("computeReprogramStats · métricas de reprogramación Kapso→Fénix", () => {
+  const NOW = Date.parse("2026-07-18T15:00:00Z");
+  const daysAgo = (d: number) => new Date(NOW - d * 86_400_000).toISOString();
+  const row = (over: Partial<ReprogramChildRow> = {}): ReprogramChildRow => ({
+    storeId: "kenku",
+    createdAt: daysAgo(2),
+    status: "en_ruta",
+    ...over,
+  });
+
+  it("en curso es el RESTO: transferido/por_preparar no se escapan", () => {
+    const s = computeReprogramStats(
+      [
+        row({ status: "entregado" }),
+        row({ status: "anulado" }),
+        row({ status: "en_ruta" }),
+        row({ status: "pendiente" }),
+        row({ status: "transferido" }),
+        row({ status: "por_preparar" }),
+      ],
+      NOW,
+    );
+    expect(s.historico).toMatchObject({ total: 6, entregados: 1, anulados: 1, enCurso: 4 });
+    expect(s.historico.tasa).toBe(0.5); // 1 de 2 cerrados — lo en curso no la toca
+  });
+
+  it("sin casos cerrados la tasa es null (no 0)", () => {
+    const s = computeReprogramStats([row(), row()], NOW);
+    expect(s.historico.tasa).toBeNull();
+  });
+
+  it("marca como varados los en-curso con más de 7 días", () => {
+    const s = computeReprogramStats([row({ createdAt: daysAgo(10) }), row({ createdAt: daysAgo(2) })], NOW);
+    expect(s.historico.enCursoViejos).toBe(1);
+  });
+
+  it("last30 filtra por fecha de reprogramación; el histórico lo tiene todo", () => {
+    const s = computeReprogramStats(
+      [row({ createdAt: daysAgo(40), status: "entregado" }), row({ createdAt: daysAgo(5), status: "anulado" })],
+      NOW,
+    );
+    expect(s.historico.total).toBe(2);
+    expect(s.last30).toMatchObject({ total: 1, anulados: 1, entregados: 0 });
+  });
+
+  it("split por tienda y 8 semanas con la actual al final", () => {
+    const s = computeReprogramStats(
+      [row({ storeId: "aurela", status: "entregado" }), row({ storeId: "kenku" })],
+      NOW,
+    );
+    expect(s.porTienda.aurela).toMatchObject({ total: 1, entregados: 1 });
+    expect(s.porTienda.kenku).toMatchObject({ total: 1, enCurso: 1 });
+    expect(s.semanas).toHaveLength(8);
+    // 18/07/2026 es sábado; su lunes local (Lima) es el 13/07 — la última semana.
+    expect(s.semanas[7]!.start).toBe("2026-07-13");
+    expect(s.semanas[7]!.total).toBe(2);
   });
 });

@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { createServerSupabase } from "@/lib/db";
 import { getAccessibleStores } from "@/lib/access";
 import {
+  getReprogramStats,
   getShipmentCounts,
   getStoreShipments,
   isShipmentView,
@@ -42,10 +43,11 @@ async function EnviosContent({
   // pool); the store/city multi-select filters happen client-side in the board.
   const storeIds = stores.map((s) => s.id);
   const sb = await createServerSupabase();
-  const [counts, shipments, stock] = await Promise.all([
+  const [counts, shipments, stock, reprogram] = await Promise.all([
     getShipmentCounts(storeIds),
     getStoreShipments(storeIds, view),
     sb.from("fenix_stock").select("city,quantity").gt("quantity", 0),
+    getReprogramStats(storeIds),
   ]);
 
   // Provinces where Fenix currently has stock — the province filter defaults to
@@ -58,6 +60,7 @@ async function EnviosContent({
     <ShipmentsBoard
       stores={stores}
       view={view}
+      reprogram={reprogram}
       counts={counts}
       shipments={shipments}
       fenixStockCities={fenixStockCities}

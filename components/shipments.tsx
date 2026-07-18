@@ -23,6 +23,7 @@ import type {
   StoreSummary,
 } from "@/lib/types";
 import { SHIPMENT_VIEWS, type ShipmentView } from "@/lib/shipments-access";
+import { REPROGRAM_STALE_DAYS, type ReprogramCounts, type ReprogramStats } from "@/lib/shipments";
 import {
   claimShipment,
   createFenixGuide,
@@ -132,12 +133,14 @@ export function ShipmentsBoard({
   counts,
   shipments,
   fenixStockCities = [],
+  reprogram,
 }: {
   stores: StoreSummary[];
   view: ShipmentView;
   counts: Record<ShipmentView, number>;
   shipments: ShipmentRow[];
   fenixStockCities?: string[]; // normalized provinces with Fenix stock
+  reprogram?: ReprogramStats;
 }) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(null);
@@ -281,6 +284,8 @@ export function ShipmentsBoard({
           </a>
         </div>
       </div>
+
+      {reprogram && <ReprogramStrip stats={reprogram} stores={stores} />}
 
       {searchActive ? (
         <Card className="p-0">
@@ -1070,6 +1075,142 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+
+// ── Métricas de reprogramación Kapso→Fénix ───────────────────────────────────
+
+function pctLabel(tasa: number | null): string | null {
+  return tasa == null ? null : `${Math.round(tasa * 100)}%`;
+}
+
+/** Franja compacta bajo el encabezado: la tasa de entrega de lo reprogramado en
+ *  Kapso (guías Fénix hijas), visible sin clics. "Ver detalle" abre el popup. */
+function ReprogramStrip({ stats, stores }: { stats: ReprogramStats; stores: StoreSummary[] }) {
+  const [open, setOpen] = useState(false);
+  if (!stats.historico.total) return null;
+  const c = stats.last30;
+  const pct = pctLabel(c.tasa);
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+        <span className="font-semibold text-slate-800">🔁 Reprogramados en Kapso</span>
+        <span className="text-slate-400">últimos 30 días:</span>
+        <span className="font-semibold text-slate-800">{c.total}</span>
+        <span>
+          ✅ {c.entregados} entregados por Fénix
+          {pct && (
+            <>
+              {" "}
+              (<b>{pct}</b> de los cerrados)
+            </>
+          )}
+        </span>
+        <span>✖ {c.anulados} anulados</span>
+        <span>
+          🚚 {c.enCurso} en curso
+          {c.enCursoViejos > 0 && (
+            <span className="font-medium text-amber-600"> · ⚠️ {c.enCursoViejos} varados +{REPROGRAM_STALE_DAYS}d</span>
+          )}
+        </span>
+        <button type="button" onClick={() => setOpen(true)} className="ml-auto font-medium text-brand-700 hover:underline">
+          Ver detalle
+        </button>
+      </div>
+      {open && <ReprogramModal stats={stats} stores={stores} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function ReprogramCountsRow({ label, c }: { label: string; c: ReprogramCounts }) {
+  const pct = pctLabel(c.tasa);
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-sm">
+      <span className="w-28 shrink-0 truncate font-medium text-slate-700">{label}</span>
+      <span className="tabular-nums text-slate-800">{c.total}</span>
+      <span className="tabular-nums text-emerald-700">✅ {c.entregados}</span>
+      <span className="tabular-nums text-slate-500">✖ {c.anulados}</span>
+      <span className="tabular-nums text-slate-500">🚚 {c.enCurso}</span>
+      {c.enCursoViejos > 0 && <span className="tabular-nums text-amber-600">⚠️ {c.enCursoViejos}</span>}
+      <span className="ml-auto font-semibold tabular-nums text-slate-800">{pct ?? "—"}</span>
+    </div>
+  );
+}
+
+/** Popup de análisis: histórico, tendencia semanal y split por tienda. La tasa
+ *  siempre es sobre CERRADOS (entregado+anulado) — lo en curso se lista aparte. */
+function ReprogramModal({
+  stats,
+  stores,
+  onClose,
+}: {
+  stats: ReprogramStats;
+  stores: StoreSummary[];
+  onClose: () => void;
+}) {
+  const storeName = (id: string) => stores.find((s) => s.id === id)?.name ?? "Otra";
+  const maxWeek = Math.max(1, ...stats.semanas.map((w) => w.total));
+  const weekLabel = (start: string) => `${start.slice(8, 10)}/${start.slice(5, 7)}`;
+  return (
+    <div className="fixed inset-0 z-30 grid place-items-center bg-slate-900/30 p-4" onClick={onClose}>
+      <div
+        className="max-h-[85vh] w-full max-w-lg overflow-auto rounded-2xl bg-white p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-base font-semibold text-slate-900">🔁 Reprogramaciones Kapso → Fénix</h2>
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            ✕
+          </button>
+        </div>
+
+        <div className="space-y-1.5 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+          <ReprogramCountsRow label="Últimos 30 días" c={stats.last30} />
+          <ReprogramCountsRow label="Histórico" c={stats.historico} />
+        </div>
+
+        {/* Tendencia semanal (semana = lunes local). Barra = reprogramados; el
+            segmento verde son los que YA terminaron entregados. */}
+        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-400 uppercase">Últimas 8 semanas</p>
+        <div className="flex items-end gap-1.5">
+          {stats.semanas.map((w) => {
+            const h = Math.round((w.total / maxWeek) * 64);
+            const hOk = w.total ? Math.round((w.entregados / w.total) * h) : 0;
+            return (
+              <div key={w.start} className="flex flex-1 flex-col items-center gap-0.5">
+                <span className="text-[10px] tabular-nums text-slate-500">{w.total || ""}</span>
+                <div
+                  className="flex w-full flex-col justify-end overflow-hidden rounded-sm bg-slate-100"
+                  style={{ height: 64 }}
+                  title={`Semana del ${weekLabel(w.start)}: ${w.total} reprogramados · ${w.entregados} entregados · ${w.anulados} anulados`}
+                >
+                  <div className="w-full bg-slate-300" style={{ height: Math.max(0, h - hOk) }} />
+                  <div className="w-full bg-emerald-500" style={{ height: hOk }} />
+                </div>
+                <span className="text-[10px] text-slate-400">{weekLabel(w.start)}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-400 uppercase">Por tienda (histórico)</p>
+        <div className="space-y-1.5">
+          {Object.entries(stats.porTienda)
+            .sort((a, b) => b[1].total - a[1].total)
+            .map(([sid, c]) => (
+              <ReprogramCountsRow key={sid} label={storeName(sid)} c={c} />
+            ))}
+        </div>
+
+        <p className="mt-4 text-[11px] leading-snug text-slate-400">
+          Universo: guías Fénix creadas por una reprogramación confirmada en el dashboard (las entregas de primer
+          intento de Aliclik no entran). La <b>tasa</b> es entregados ÷ cerrados (entregados + anulados) — lo en curso
+          no la afecta. <b>⚠️ Varados</b>: en curso hace más de {REPROGRAM_STALE_DAYS} días, probables anulados sin
+          confirmar.
+        </p>
+      </div>
     </div>
   );
 }
