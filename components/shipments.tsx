@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import { Card } from "@/components/ui";
 import {
@@ -27,6 +27,11 @@ import type {
   StoreSummary,
 } from "@/lib/types";
 import { SHIPMENT_VIEWS, type ShipmentView } from "@/lib/shipments-access";
+import {
+  sortShipmentRows,
+  type ShipmentSortDirection,
+  type ShipmentSortKey,
+} from "@/lib/shipment-sort";
 import { REPROGRAM_STALE_DAYS, type ReprogramCounts, type ReprogramStats } from "@/lib/shipments";
 import {
   claimShipment,
@@ -538,23 +543,41 @@ function ShipmentTable({
   storeName: (id: string) => string;
   onOpen: (id: string) => void;
 }) {
+  const [sort, setSort] = useState<{
+    key: ShipmentSortKey;
+    direction: ShipmentSortDirection;
+  } | null>(null);
+  const sortedRows = useMemo(
+    () => sort ? sortShipmentRows(rows, sort.key, sort.direction, storeName) : rows,
+    [rows, sort, storeName],
+  );
+
+  function toggleSort(key: ShipmentSortKey) {
+    setSort((current) => ({
+      key,
+      direction: current?.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+  }
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-slate-200 text-xs text-slate-500">
-            <th className="px-4 py-2.5 text-left font-medium">Guía</th>
-            {stores.length > 1 && <th className="px-4 py-2.5 text-left font-medium">Tienda</th>}
-            <th className="px-4 py-2.5 text-left font-medium">Pedido</th>
-            <th className="px-4 py-2.5 text-left font-medium">Cliente</th>
-            <th className="px-4 py-2.5 text-left font-medium">Distrito / Ciudad</th>
-            <th className="px-4 py-2.5 text-left font-medium">Estado</th>
-            <th className="px-4 py-2.5 text-left font-medium">Reprogramación</th>
-            <th className="px-4 py-2.5 text-left font-medium">Ruta sugerida</th>
+            <SortableShipmentHeader label="Guía" sortKey="guide" sort={sort} onSort={toggleSort} />
+            {stores.length > 1 && (
+              <SortableShipmentHeader label="Tienda" sortKey="store" sort={sort} onSort={toggleSort} />
+            )}
+            <SortableShipmentHeader label="Pedido" sortKey="order" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Cliente" sortKey="customer" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Distrito / Ciudad" sortKey="location" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Estado" sortKey="status" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Reprogramación" sortKey="reprogramming" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Ruta sugerida" sortKey="route" sort={sort} onSort={toggleSort} />
           </tr>
         </thead>
         <tbody>
-          {rows.map((s) => (
+          {sortedRows.map((s) => (
             <tr
               key={s.id}
               onClick={() => onOpen(s.id)}
@@ -593,6 +616,45 @@ function ShipmentTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function SortableShipmentHeader({
+  label,
+  sortKey,
+  sort,
+  onSort,
+}: {
+  label: string;
+  sortKey: ShipmentSortKey;
+  sort: { key: ShipmentSortKey; direction: ShipmentSortDirection } | null;
+  onSort: (key: ShipmentSortKey) => void;
+}) {
+  const active = sort?.key === sortKey;
+  const ariaSort = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
+  return (
+    <th scope="col" aria-sort={ariaSort} className="px-2 py-1 text-left font-medium first:pl-4 last:pr-4">
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        title={`Ordenar por ${label}`}
+        className={cn(
+          "group inline-flex min-h-8 w-full items-center gap-1 rounded-md px-2 text-left transition hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
+          active && "bg-brand-50 text-brand-700",
+        )}
+      >
+        <span>{label}</span>
+        <span
+          aria-hidden="true"
+          className={cn(
+            "text-[11px] transition",
+            active ? "text-brand-600" : "text-slate-300 group-hover:text-slate-500",
+          )}
+        >
+          {active ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}
+        </span>
+      </button>
+    </th>
   );
 }
 
