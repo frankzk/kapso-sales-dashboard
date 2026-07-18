@@ -4,7 +4,13 @@
 import { createServerSupabase } from "@/lib/db";
 import type { ShipmentCallRow, ShipmentOrderDetail, ShipmentRow } from "@/lib/types";
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
-import { limaCalendarDayBounds } from "@/lib/shipments";
+import {
+  computeReprogramStats,
+  limaCalendarDayBounds,
+  type ReprogramChildRow,
+  type ReprogramStats,
+} from "@/lib/shipments";
+import { chunk } from "@/lib/access";
 
 // The manual-review queue: guides that didn't auto-link to an order AND still
 // need a human. We exclude terminal states (delivered/closed) and rows dismissed
@@ -381,4 +387,40 @@ export async function getShipmentWithCalls(
     calls: (calls as ShipmentCallRow[]) ?? [],
     order,
   };
+}
+
+
+/**
+ * Métricas de reprogramación Kapso→Fénix: junta las guías Fénix HIJAS (las que
+ * nació cada reprogramación confirmada en el dashboard, vía fenix_shipment_id)
+ * y las agrega con computeReprogramStats. RLS-scoped; paginado + chunked para
+ * ser inmune al tope de ~1000 filas de PostgREST.
+ */
+export async function getReprogramStats(storeIds: string[]): Promise<ReprogramStats> {
+  const sb = await createServerSupabase();
+  const childIds: string[] = [];
+  for (let from = 0; from < 20_000; from += 1000) {
+    const { data, error } = await sb
+      .from("shipments")
+      .select("fenix_shipment_id")
+      .in("store_id", storeIds)
+      .not("fenix_shipment_id", "is", null)
+      .order("id", { ascending: true })
+      .range(from, from + 999);
+    if (error) break;
+    const batch = (data as { fenix_shipment_id: string | null }[]) ?? [];
+    for (const r of batch) if (r.fenix_shipment_id) childIds.push(r.fenix_shipment_id);
+    if (batch.length < 1000) break;
+  }
+  const rows: ReprogramChildRow[] = [];
+  for (const part of chunk(childIds, 300)) {
+    const { data } = await sb
+      .from("shipments")
+      .select("id, store_id, created_at, delivery_status")
+      .in("id", part);
+    for (const r of (data as { store_id: string | null; created_at: string | null; delivery_status: string }[]) ?? []) {
+      rows.push({ storeId: r.store_id, createdAt: r.created_at, status: r.delivery_status });
+    }
+  }
+  return computeReprogramStats(rows, Date.now());
 }
