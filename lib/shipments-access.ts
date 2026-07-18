@@ -47,7 +47,15 @@ export function isShipmentView(v: string | undefined | null): v is ShipmentView 
 const SHIPMENT_COLUMNS =
   "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_eligible,fenix_shipment_id,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
+// Deployment safety: application deploys and database migrations are separate
+// operations in production. Keep queue reads alive while 0038 is being applied;
+// otherwise PostgREST rejects the whole select and every tab appears empty even
+// though the count queries still show rows.
+const LEGACY_SHIPMENT_COLUMNS =
+  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,delivered_source,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
+
 const SHIPMENT_LIST_COLUMNS = `${SHIPMENT_COLUMNS},shipment_calls(count)`;
+const LEGACY_SHIPMENT_LIST_COLUMNS = `${LEGACY_SHIPMENT_COLUMNS},shipment_calls(count)`;
 
 type ShipmentWithCallCount = ShipmentRow & {
   shipment_calls?: { count: number | null }[] | null;
@@ -55,7 +63,22 @@ type ShipmentWithCallCount = ShipmentRow & {
 
 function withContactCount(row: ShipmentWithCallCount): ShipmentRow {
   const { shipment_calls: calls, ...shipment } = row;
-  return { ...shipment, contact_count: calls?.[0]?.count ?? 0 };
+  return withEnhancementDefaults({ ...shipment, contact_count: calls?.[0]?.count ?? 0 });
+}
+
+function withEnhancementDefaults(row: Partial<ShipmentRow>): ShipmentRow {
+  return {
+    delivery_address: null,
+    delivery_reference: null,
+    latitude: null,
+    longitude: null,
+    address_override: false,
+    address_updated_at: null,
+    address_updated_by: null,
+    aliclik_attempts: null,
+    aliclik_service_date: null,
+    ...row,
+  } as ShipmentRow;
 }
 
 /** Attach today's team-wide call count to each queue row. This is deliberately
@@ -215,19 +238,23 @@ export async function getStoreShipments(
   const cats = VIEW_CATEGORIES[view];
   const out: ShipmentRow[] = [];
   for (let from = 0; from < MAX_LIST; from += PAGE) {
-    let q = sb
-      .from("shipments")
-      .select(SHIPMENT_LIST_COLUMNS)
-      .in("store_id", storeIds)
-      .in("status_category", cats)
-      .eq("shipment_calls.kind", "call");
-    // pending is the single managed queue: soonest follow-up first; others recent
-    q =
-      view === "pendiente"
-        ? q.order("next_followup_at", { ascending: true, nullsFirst: true }).order("updated_at", { ascending: false })
-        : q.order("updated_at", { ascending: false });
-    const { data } = await q.range(from, from + PAGE - 1);
-    const rows = ((data as ShipmentWithCallCount[]) ?? []).map(withContactCount);
+    const fetchPage = (columns: string) => {
+      let query = sb
+        .from("shipments")
+        .select(columns)
+        .in("store_id", storeIds)
+        .in("status_category", cats)
+        .eq("shipment_calls.kind", "call");
+      query =
+        view === "pendiente"
+          ? query.order("next_followup_at", { ascending: true, nullsFirst: true }).order("updated_at", { ascending: false })
+          : query.order("updated_at", { ascending: false });
+      return query.range(from, from + PAGE - 1);
+    };
+    let page = await fetchPage(SHIPMENT_LIST_COLUMNS);
+    if (page.error) page = await fetchPage(LEGACY_SHIPMENT_LIST_COLUMNS);
+    if (page.error) break;
+    const rows = ((page.data as unknown as ShipmentWithCallCount[]) ?? []).map(withContactCount);
     out.push(...rows);
     if (rows.length < PAGE) break;
   }
@@ -301,16 +328,19 @@ export async function getShipmentCounts(
 export async function getReviewShipments(storeIds: string[]): Promise<ShipmentRow[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
-  const { data } = await sb
+  const fetchRows = (columns: string) => sb
     .from("shipments")
-    .select(SHIPMENT_COLUMNS)
+    .select(columns)
     .in("store_id", storeIds)
     .eq("matched", false)
     .in("status_category", REVIEW_CATEGORIES)
     .or("match_method.is.null,match_method.neq.dismissed")
     .order("created_at", { ascending: false })
     .limit(1000);
-  return withCurrentFenixEligibility(sb, (data as ShipmentRow[]) ?? []);
+  let result = await fetchRows(SHIPMENT_COLUMNS);
+  if (result.error) result = await fetchRows(LEGACY_SHIPMENT_COLUMNS);
+  const rows = ((result.data as unknown as ShipmentRow[]) ?? []).map(withEnhancementDefaults);
+  return withCurrentFenixEligibility(sb, rows);
 }
 
 /** Global search across all accessible shipments (RLS-scoped) by guide code
@@ -320,13 +350,16 @@ export async function searchShipmentsQuery(query: string): Promise<ShipmentRow[]
   if (q.length < 2) return [];
   const sb = await createServerSupabase();
   const like = `%${q}%`;
-  const { data } = await sb
+  const fetchRows = (columns: string) => sb
     .from("shipments")
-    .select(SHIPMENT_COLUMNS)
+    .select(columns)
     .or(`guide_code.ilike.${like},order_name.ilike.${like},customer_phone.ilike.${like}`)
     .order("updated_at", { ascending: false })
     .limit(50);
-  return withCurrentFenixEligibility(sb, (data as ShipmentRow[]) ?? []);
+  let result = await fetchRows(SHIPMENT_COLUMNS);
+  if (result.error) result = await fetchRows(LEGACY_SHIPMENT_COLUMNS);
+  const rows = ((result.data as unknown as ShipmentRow[]) ?? []).map(withEnhancementDefaults);
+  return withCurrentFenixEligibility(sb, rows);
 }
 
 export interface OrderLinkCandidate {
@@ -363,18 +396,21 @@ export async function getShipmentWithCalls(
   linkedFenixShipment: LinkedShipmentSummary | null;
 } | null> {
   const sb = await createServerSupabase();
-  const { data: shipment } = await sb
+  const fetchShipment = (columns: string) => sb
     .from("shipments")
-    .select(SHIPMENT_COLUMNS)
+    .select(columns)
     .eq("id", shipmentId)
     .maybeSingle();
+  let shipmentResult = await fetchShipment(SHIPMENT_COLUMNS);
+  if (shipmentResult.error) shipmentResult = await fetchShipment(LEGACY_SHIPMENT_COLUMNS);
+  const shipment = shipmentResult.data;
   if (!shipment) return null;
   const { data: calls } = await sb
     .from("shipment_calls")
     .select("id,shipment_id,store_id,agent,kind,new_status,note,next_followup_at,occurred_at")
     .eq("shipment_id", shipmentId)
     .order("occurred_at", { ascending: false });
-  const shipmentRow = shipment as ShipmentRow;
+  const shipmentRow = withEnhancementDefaults(shipment as Partial<ShipmentRow>);
   let order: ShipmentOrderDetail | null = null;
   let linkedFenixShipment: LinkedShipmentSummary | null = null;
   if (shipmentRow.order_id) {
