@@ -1292,6 +1292,18 @@ export function LeadsBoard({
                     <span className="shrink-0">
                       <YapeKindChip lead={lead} />
                     </span>
+                    {/* Marcador de atención: sin esto un reencolado (ola 🔁),
+                        una respuesta nueva o un seguimiento vencido eran
+                        invisibles en la fila — solo cambiaban el orden. */}
+                    {lead.needs_attention && !isYape && (
+                      <span
+                        title="Requiere atención: reencolado por carrito sin contacto, respuesta nueva o seguimiento vencido"
+                        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-1.5 py-0.5 text-[11px] font-semibold text-red-600"
+                      >
+                        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-red-600" />
+                        atención
+                      </span>
+                    )}
                     {locked && (
                       <span
                         title="Tomado por otro vendedor"
