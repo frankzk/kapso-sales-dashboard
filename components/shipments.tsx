@@ -1213,14 +1213,29 @@ function ShipmentDrawer({
 
                   {courierResultDefinition && (
                     <label className="block text-xs font-medium text-slate-600">
-                      {courierResultDefinition.requiresNote ? "Motivo informado por Fenix" : "Detalle del reporte (opcional)"}
+                      {courierResult === "no_contesta"
+                        ? "Comentario para el historial (opcional)"
+                        : courierResultDefinition.requiresNote
+                          ? "Motivo informado por Fenix"
+                          : "Detalle del reporte (opcional)"}
                       <textarea
                         value={courierNote}
                         onChange={(e) => setCourierNote(e.target.value)}
                         rows={2}
-                        placeholder={courierResultDefinition.requiresNote ? "Ej.: cliente rechazó el pedido…" : "Ej.: no respondió al motorizado…"}
+                        placeholder={
+                          courierResult === "no_contesta"
+                            ? "Ej.: motorizado llamó dos veces; cliente no respondió…"
+                            : courierResultDefinition.requiresNote
+                              ? "Ej.: cliente rechazó el pedido…"
+                              : "Detalle informado por el courier…"
+                        }
                         className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm"
                       />
+                      {courierResult === "no_contesta" && (
+                        <span className="mt-1 block text-[10px] font-normal leading-relaxed text-slate-400">
+                          Se guardará en el historial junto al cambio No contesta → Pendiente.
+                        </span>
+                      )}
                     </label>
                   )}
 
