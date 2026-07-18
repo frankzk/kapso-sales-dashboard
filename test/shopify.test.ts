@@ -30,6 +30,7 @@ import {
   getDraftOrderForEdit,
   resolveOrderDiscount,
   resolvePeruProvinceCode,
+  updateOrderShippingAddress,
   sumRestRefunds,
 } from "@/lib/shopify";
 
@@ -769,6 +770,77 @@ describe("order form (catalog search + draft create/read)", () => {
       fetchImpl: capture,
     });
     expect(seenBody.variables.input.appliedDiscount).toBeNull();
+  });
+
+  it("updates an order with the complete delivery address and Peru subdivision code", async () => {
+    let seenBody: any = null;
+    const capture = (async (_url: string, init: any) => {
+      seenBody = JSON.parse(init.body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            orderUpdate: {
+              order: { id: "gid://shopify/Order/123" },
+              userErrors: [],
+            },
+          },
+        }),
+        text: async () => "",
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    await updateOrderShippingAddress({
+      domain: "x.myshopify.com",
+      token: "t",
+      orderGid: "gid://shopify/Order/123",
+      address: {
+        name: "Ana María Pérez",
+        phone: "51987654321",
+        address1: "Av. Ejército 123",
+        address2: "Puerta azul",
+        city: "Cayma",
+        province: "Arequipa",
+        country: "Peru",
+      },
+      fetchImpl: capture,
+    });
+
+    expect(seenBody.query).toContain("orderUpdate");
+    expect(seenBody.variables.input).toEqual({
+      id: "gid://shopify/Order/123",
+      shippingAddress: {
+        address1: "Av. Ejército 123",
+        address2: "Puerta azul",
+        city: "Cayma",
+        countryCode: "PE",
+        firstName: "Ana",
+        lastName: "María Pérez",
+        phone: "+51987654321",
+        provinceCode: "ARE",
+      },
+    });
+  });
+
+  it("surfaces Shopify validation errors when the address cannot be updated", async () => {
+    const bad = {
+      data: {
+        orderUpdate: {
+          order: null,
+          userErrors: [{ field: ["shippingAddress", "city"], message: "Ciudad inválida" }],
+        },
+      },
+    };
+    await expect(
+      updateOrderShippingAddress({
+        domain: "x.myshopify.com",
+        token: "t",
+        orderGid: "gid://shopify/Order/123",
+        address: { address1: "Av. X", city: "X", province: "Lima" },
+        fetchImpl: fakeFetch(bad),
+      }),
+    ).rejects.toThrow(/Ciudad inválida/);
   });
 });
 

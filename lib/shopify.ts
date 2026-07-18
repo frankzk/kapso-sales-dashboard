@@ -1181,6 +1181,59 @@ export function resolvePeruProvinceCode(input: string | null | undefined): strin
   return null;
 }
 
+const ORDER_ADDRESS_UPDATE_MUTATION = /* GraphQL */ `
+  mutation OrderAddressUpdate($input: OrderInput!) {
+    orderUpdate(input: $input) {
+      order {
+        id
+        shippingAddress {
+          address1 address2 city provinceCode countryCodeV2 firstName lastName phone
+        }
+      }
+      userErrors { field message }
+    }
+  }
+`;
+
+/** Update the delivery address of an existing Shopify order. `orderUpdate`
+ * replaces the shipping-address object, so we send the complete known address
+ * (recipient + phone included) rather than only the changed street line. */
+export async function updateOrderShippingAddress(
+  opts: ShopifyClientOpts & { orderGid: string; address: OrderAddressInput },
+): Promise<void> {
+  const parts = (opts.address.name ?? "").trim().split(/\s+/).filter(Boolean);
+  const provinceCode = resolvePeruProvinceCode(opts.address.province);
+  const shippingAddress: Record<string, unknown> = {
+    address1: opts.address.address1?.trim() || null,
+    address2: opts.address.address2?.trim() || null,
+    city: opts.address.city?.trim() || null,
+    countryCode: "PE",
+    firstName: parts[0] ?? null,
+    lastName: parts.length > 1 ? parts.slice(1).join(" ") : null,
+    phone: toE164(opts.address.phone),
+  };
+  if (provinceCode) shippingAddress.provinceCode = provinceCode;
+
+  const data = await shopifyGraphQL<{
+    orderUpdate?: {
+      userErrors?: { field?: string[] | null; message?: string | null }[];
+    };
+  }>({
+    ...opts,
+    query: ORDER_ADDRESS_UPDATE_MUTATION,
+    variables: {
+      input: {
+        id: opts.orderGid,
+        shippingAddress,
+      },
+    },
+  });
+  const errors = data?.orderUpdate?.userErrors ?? [];
+  if (errors.length) {
+    throw new Error(errors.map((e) => e.message || "Dirección inválida.").join(" · "));
+  }
+}
+
 function toGqlDraftInput(input: BuildDraftOrderInput): Record<string, unknown> {
   const lineItems = input.lineItems
     .filter((li) => (li.variantId || li.title) && li.quantity > 0)

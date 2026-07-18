@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   DELIVERY_STATUSES,
+  COURIER_REPORT_RESULTS,
   computeReprogramStats,
+  evaluateAliclikReschedule,
   type ReprogramChildRow,
   categoryOf,
   isCallable,
@@ -19,11 +21,13 @@ import {
   isFenixCity,
   isFenixDistrict,
   nextShipmentTransition,
+  courierReportTransition,
   MAX_INTENTOS,
   FENIX_CITIES,
   reconcileDeliveryStatus,
   autoFenixGuideCode,
   rescheduleGuideCode,
+  shipmentRequiresCourierResult,
   statusSince,
 } from "@/lib/shipments";
 
@@ -105,6 +109,54 @@ describe("delivery status model", () => {
   });
 });
 
+describe("evaluateAliclikReschedule", () => {
+  const friday = new Date("2026-07-17T15:00:00.000Z");
+
+  it("allows Saturday through the current Friday while attempts stay below 3", () => {
+    expect(
+      evaluateAliclikReschedule(
+        { courier: "aliclik", attempts: 2, serviceDate: "2026-07-11" },
+        friday,
+      ),
+    ).toMatchObject({ eligible: true, cutoffDate: "2026-07-11", today: "2026-07-17" });
+  });
+
+  it("blocks 3 or more Aliclik attempts", () => {
+    expect(
+      evaluateAliclikReschedule(
+        { courier: "aliclik", attempts: 3, serviceDate: "2026-07-17" },
+        friday,
+      ),
+    ).toMatchObject({ eligible: false, reason: "three_attempts" });
+  });
+
+  it("resets the window on Saturday so the previous Friday moves to Fenix", () => {
+    const saturday = new Date("2026-07-18T15:00:00.000Z");
+    expect(
+      evaluateAliclikReschedule(
+        { courier: "aliclik", attempts: 1, serviceDate: "2026-07-17" },
+        saturday,
+      ),
+    ).toMatchObject({ eligible: false, reason: "outside_week", cutoffDate: "2026-07-18" });
+    expect(
+      evaluateAliclikReschedule(
+        { courier: "aliclik", attempts: 1, serviceDate: "2026-07-18" },
+        saturday,
+      ).eligible,
+    ).toBe(true);
+  });
+
+  it("fails closed when the Excel omitted attempts or service date", () => {
+    expect(
+      evaluateAliclikReschedule({ courier: "aliclik", attempts: null, serviceDate: "2026-07-17" }, friday)
+        .reason,
+    ).toBe("missing_attempts");
+    expect(
+      evaluateAliclikReschedule({ courier: "aliclik", attempts: 1, serviceDate: null }, friday).reason,
+    ).toBe("missing_service_date");
+  });
+});
+
 describe("normalizeCity", () => {
   it("collapses Juliaca/Puno and strips accents/casing", () => {
     expect(normalizeCity("Cusco")).toBe("cusco");
@@ -177,6 +229,58 @@ describe("nextShipmentTransition (gestión flow)", () => {
   });
   it("en_ruta: cancela → anulado", () => {
     expect(nextShipmentTransition("en_ruta", "cancela", 5).status).toBe("anulado");
+  });
+});
+
+describe("courierReportTransition (reporte Fenix)", () => {
+  it("requires a courier result only while the active Fenix guide is En ruta", () => {
+    expect(shipmentRequiresCourierResult("fenix", "en_ruta")).toBe(true);
+    expect(shipmentRequiresCourierResult("fenix", "pendiente")).toBe(false);
+    expect(shipmentRequiresCourierResult("aliclik", "en_ruta")).toBe(false);
+  });
+
+  it("maps courier outcomes to operational states without exposing transferido", () => {
+    expect(COURIER_REPORT_RESULTS.map((result) => result.code)).toEqual([
+      "entregado",
+      "no_contesta",
+      "reprogramado",
+      "en_ruta",
+      "cancelado",
+    ]);
+    const resultingStatuses: string[] = COURIER_REPORT_RESULTS.map((result) => result.resultingStatus);
+    expect(resultingStatuses).not.toContain("transferido");
+  });
+
+  it("No contesta reopens the guide in Pendiente and clears its delivery date", () => {
+    expect(courierReportTransition("no_contesta")).toEqual({
+      status: "pendiente",
+      outcome: "courier_no_contesta",
+      deliveredSource: null,
+      closed: false,
+      clearScheduledDate: true,
+    });
+  });
+
+  it("Reprogramado remains En ruta and preserves the new scheduled date", () => {
+    expect(courierReportTransition("reprogramado")).toMatchObject({
+      status: "en_ruta",
+      outcome: "courier_reprogramado",
+      clearScheduledDate: false,
+    });
+    expect(COURIER_REPORT_RESULTS.find((result) => result.code === "reprogramado")?.requiresDate).toBe(true);
+  });
+
+  it("Entregado closes by Fenix; Cancelado closes as Anulado", () => {
+    expect(courierReportTransition("entregado")).toMatchObject({
+      status: "entregado",
+      deliveredSource: "fenix",
+      closed: true,
+    });
+    expect(courierReportTransition("cancelado")).toMatchObject({
+      status: "anulado",
+      deliveredSource: null,
+      closed: true,
+    });
   });
 });
 

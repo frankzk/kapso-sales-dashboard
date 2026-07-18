@@ -18,8 +18,18 @@ export interface ParsedShipmentRow {
   product: string | null;
   district: string | null;
   city: string | null; // normalized coverage key (Fenix city when covered)
+  region: string | null;
+  delivery_address: string | null;
+  delivery_reference: string | null;
+  latitude: number | null;
+  longitude: number | null;
   delivery_status: string; // canonical code
   store_hint: string | null; // raw "Tienda"/"Canal" value (AURELA / KENKU)
+  // Aliclik's own delivery-attempt counter and operative delivery date. These
+  // are intentionally separate from reroute_attempts, which counts the team's
+  // calls inside the dashboard.
+  aliclik_attempts: number | null;
+  aliclik_service_date: string | null; // YYYY-MM-DD
   raw: Record<string, string>;
 }
 
@@ -119,6 +129,25 @@ const PROVINCE_KEYS = ["provincia"];
 const DEPARTMENT_KEYS = ["departamento", "region"];
 const STORE_KEYS = ["tienda", "canal", "marca", "proveedor"];
 const ORDER_KEYS = ["pedido", "numero de pedido", "n pedido", "orden", "order"];
+const ALICLIK_ATTEMPT_KEYS = ["nro. intentos", "nro intentos", "numero de intentos", "intentos"];
+const ALICLIK_SERVICE_DATE_KEYS = [
+  "fecha entrega",
+  "fecha de entrega",
+  "fecha en ruta",
+  "fecha de visita",
+  "fecha de despacho",
+];
+const ADDRESS_KEYS = [
+  "direccion completa",
+  "direccion de entrega",
+  "direccion entrega",
+  "direccion destino",
+  "direccion",
+  "domicilio",
+];
+const REFERENCE_KEYS = ["referencia de entrega", "referencia entrega", "referencia", "ref"];
+const LATITUDE_KEYS = ["latitud", "latitude"];
+const LONGITUDE_KEYS = ["longitud", "longitude", "lng", "lon"];
 // The customer-facing delivery outcome. In Aliclik's "order-delivery-report"
 // the platform column ("ESTADO DESPACHO") tops out at "validado" — a confirmed
 // delivery only ever shows up here, as "ENTREGADO". So we read this column to
@@ -132,6 +161,52 @@ const ENTREGA_KEYS = ["estado entrega", "estado de entrega", "estado"];
 function isDeliveredEntrega(raw: string | null): boolean {
   if (!raw) return false;
   return stripAccents(raw.trim().toLowerCase()) === "entregado";
+}
+
+export function parseAliclikAttempts(raw: string | null | undefined): number | null {
+  if (raw == null || String(raw).trim() === "") return null;
+  const match = String(raw).trim().match(/\d+/);
+  if (!match) return null;
+  const value = Number.parseInt(match[0], 10);
+  return Number.isFinite(value) ? Math.max(0, value) : null;
+}
+
+export function parseAliclikCoordinate(
+  raw: string | null | undefined,
+  kind: "latitude" | "longitude",
+): number | null {
+  if (raw == null || String(raw).trim() === "") return null;
+  const value = Number(String(raw).trim().replace(",", "."));
+  const limit = kind === "latitude" ? 90 : 180;
+  return Number.isFinite(value) && value >= -limit && value <= limit ? value : null;
+}
+
+/** Parse the date formats emitted by Aliclik/Excel into a calendar date. */
+export function parseAliclikDate(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const value = String(raw).trim();
+  if (!value) return null;
+
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:T|\s|$)/);
+  if (iso) return validDateKey(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+
+  const local = value.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})/);
+  if (!local) return null;
+  const yearRaw = Number(local[3]);
+  const year = yearRaw < 100 ? 2000 + yearRaw : yearRaw;
+  return validDateKey(year, Number(local[2]), Number(local[1]));
+}
+
+function validDateKey(year: number, month: number, day: number): string | null {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return [year, String(month).padStart(2, "0"), String(day).padStart(2, "0")].join("-");
 }
 
 /** Map one report row object → canonical ParsedShipmentRow. */
@@ -164,8 +239,15 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
     product: pick(map, PRODUCT_KEYS),
     district: district || null,
     city: city || null,
+    region: department || null,
+    delivery_address: pick(map, ADDRESS_KEYS),
+    delivery_reference: pick(map, REFERENCE_KEYS),
+    latitude: parseAliclikCoordinate(pick(map, LATITUDE_KEYS), "latitude"),
+    longitude: parseAliclikCoordinate(pick(map, LONGITUDE_KEYS), "longitude"),
     delivery_status,
     store_hint: pick(map, STORE_KEYS),
+    aliclik_attempts: parseAliclikAttempts(pick(map, ALICLIK_ATTEMPT_KEYS)),
+    aliclik_service_date: parseAliclikDate(pick(map, ALICLIK_SERVICE_DATE_KEYS)),
     raw,
   };
 }

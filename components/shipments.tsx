@@ -1,37 +1,48 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import { Card } from "@/components/ui";
 import {
-  DELIVERY_STATUSES,
+  COURIER_REPORT_RESULTS,
   attemptLabel,
+  evaluateAliclikReschedule,
   isCallable,
   isShipmentReadyForContact,
   isShipmentReadyForContactToday,
   labelOf,
   normalizeCity,
   rescheduleGuideCode,
+  shipmentRequiresCourierResult,
   statusSince,
+  type CourierReportResult,
   type RerouteDisposition,
 } from "@/lib/shipments";
 import type {
+  LinkedShipmentSummary,
   ShipmentCallRow,
   ShipmentOrderDetail,
   ShipmentRow,
   StoreSummary,
 } from "@/lib/types";
 import { SHIPMENT_VIEWS, type ShipmentView } from "@/lib/shipments-access";
+import {
+  sortShipmentRows,
+  type ShipmentSortDirection,
+  type ShipmentSortKey,
+} from "@/lib/shipment-sort";
 import { REPROGRAM_STALE_DAYS, type ReprogramCounts, type ReprogramStats } from "@/lib/shipments";
 import {
   claimShipment,
   createFenixGuide,
   loadShipmentDetail,
+  registerCourierReportResult,
   registerRerouteCall,
   releaseShipment,
   searchShipments,
-  setShipmentStatus,
+  updateShipmentDeliveryAddress,
+  type ShipmentAddressInput,
 } from "@/app/dashboard/envios/actions";
 import { OrderLinkPicker } from "@/components/order-link-picker";
 
@@ -44,7 +55,7 @@ const CATEGORY_BADGE: Record<string, string> = {
 };
 
 const DISPOSITIONS: { key: RerouteDisposition; label: string }[] = [
-  { key: "confirma", label: "Cliente confirma (→ nueva guía Fenix)" },
+  { key: "confirma", label: "Cliente confirma reprogramación" },
   { key: "programar", label: "Programar próxima llamada" },
   { key: "no_contesta", label: "No contesta" },
   { key: "entregado", label: "Entregado (Fenix)" },
@@ -62,6 +73,45 @@ function fmtReprogram(iso: string | null | undefined): string {
     month: "short",
     timeZone: "UTC",
   });
+}
+
+function fmtAliclikDate(date: string | null | undefined): string {
+  if (!date) return "—";
+  const parsed = new Date(`${date}T12:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return parsed.toLocaleDateString("es-PE", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  });
+}
+
+function shipmentHistoryLabel(call: ShipmentCallRow): string {
+  if (call.kind === "call" && !call.new_status && call.next_followup_at) {
+    return "Llamada programada";
+  }
+  const labels: Record<string, string> = {
+    call: "Gestión de llamada",
+    courier_report: "Reporte Fenix",
+    state_change: "Corrección administrativa",
+    reroute: "Reprogramación",
+    address_change: "Cambio de dirección",
+    system: "Actualización del sistema",
+  };
+  return labels[call.kind] ?? call.kind;
+}
+
+function aliclikDecisionCopy(
+  decision: ReturnType<typeof evaluateAliclikReschedule>,
+): string {
+  if (decision.eligible) return "Disponible: menos de 3 intentos y dentro de la semana vigente.";
+  if (decision.reason === "three_attempts") return "Bloqueado: Aliclik registra 3 intentos o más.";
+  if (decision.reason === "outside_week") {
+    return `Bloqueado: la fecha está fuera de la ventana ${decision.cutoffDate}–${decision.today}.`;
+  }
+  if (decision.reason === "missing_attempts") return "Bloqueado: el Excel no informó NRO. INTENTOS.";
+  if (decision.reason === "missing_service_date") return "Bloqueado: el Excel no informó la fecha operativa.";
+  return "No aplica: esta ya no es una guía Aliclik.";
 }
 
 function localDateInputValue(date: Date = new Date()): string {
@@ -154,6 +204,8 @@ export function ShipmentsBoard({
   const [uncontactedTodayOnly, setUncontactedTodayOnly] = useState(view === "pendiente");
   const [uncontactedOnly, setUncontactedOnly] = useState(false);
   const [fenixFilter, setFenixFilter] = useState<"all" | "ok" | "no">("all"); // fenix_eligible
+  const [exportingFenix, setExportingFenix] = useState(false);
+  const [fenixExportError, setFenixExportError] = useState<string | null>(null);
 
   // global search (across all tabs, server-side)
   const [search, setSearch] = useState("");
@@ -227,6 +279,9 @@ export function ShipmentsBoard({
         isShipmentReadyForContact(s.contact_count, s.next_followup_at)) &&
       (fenixFilter === "all" || (fenixFilter === "ok" ? s.fenix_eligible : !s.fenix_eligible)),
   );
+  const fenixRowsForExport = filtered.filter(
+    (shipment) => shipment.courier === "fenix" && shipment.status_category === "in_route",
+  );
 
   const searchActive = search.trim().length >= 2;
 
@@ -243,6 +298,42 @@ export function ShipmentsBoard({
       else next.add(id);
       return next;
     });
+  }
+
+  async function downloadFenixProgrammingWorkbook() {
+    if (!dateFilter || !fenixRowsForExport.length || exportingFenix) return;
+    setExportingFenix(true);
+    setFenixExportError(null);
+    try {
+      const response = await fetch("/api/export/fenix-programacion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: dateFilter,
+          shipmentIds: fenixRowsForExport.map((shipment) => shipment.id),
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || "No se pudo generar el Excel de Fenix.");
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `fenix_programacion_${dateFilter}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setFenixExportError(
+        error instanceof Error ? error.message : "No se pudo generar el Excel de Fenix.",
+      );
+    } finally {
+      setExportingFenix(false);
+    }
   }
 
   return (
@@ -374,6 +465,28 @@ export function ShipmentsBoard({
                   className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
                 />
               </label>
+              {view === "en_ruta" && (
+                <button
+                  type="button"
+                  onClick={downloadFenixProgrammingWorkbook}
+                  disabled={!dateFilter || !fenixRowsForExport.length || exportingFenix}
+                  title={
+                    !dateFilter
+                      ? "Elige primero la fecha de programación"
+                      : !fenixRowsForExport.length
+                        ? "No hay guías Fenix visibles para esa fecha"
+                        : "Descarga las guías Fenix que quedan en la lista"
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:shadow-none"
+                >
+                  <span aria-hidden="true">↓</span>
+                  {exportingFenix
+                    ? "Generando Excel…"
+                    : !dateFilter
+                      ? "Elige fecha para Excel"
+                      : `Descargar Excel Fenix (${fenixRowsForExport.length})`}
+                </button>
+              )}
               <label className="flex items-center gap-1.5 text-xs text-slate-400">
                 Fenix:
                 <select
@@ -446,6 +559,11 @@ export function ShipmentsBoard({
               </span>
             </div>
           )}
+          {fenixExportError && view === "en_ruta" && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {fenixExportError}
+            </div>
+          )}
 
           {view === "revision" ? (
             <Card>
@@ -471,7 +589,13 @@ export function ShipmentsBoard({
         </>
       )}
 
-      {openId && <ShipmentDrawer shipmentId={openId} onClose={() => setOpenId(null)} />}
+      {openId && (
+        <ShipmentDrawer
+          shipmentId={openId}
+          onClose={() => setOpenId(null)}
+          onOpenShipment={setOpenId}
+        />
+      )}
     </div>
   );
 }
@@ -487,23 +611,41 @@ function ShipmentTable({
   storeName: (id: string) => string;
   onOpen: (id: string) => void;
 }) {
+  const [sort, setSort] = useState<{
+    key: ShipmentSortKey;
+    direction: ShipmentSortDirection;
+  } | null>(null);
+  const sortedRows = useMemo(
+    () => sort ? sortShipmentRows(rows, sort.key, sort.direction, storeName) : rows,
+    [rows, sort, storeName],
+  );
+
+  function toggleSort(key: ShipmentSortKey) {
+    setSort((current) => ({
+      key,
+      direction: current?.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+  }
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-slate-200 text-xs text-slate-500">
-            <th className="px-4 py-2.5 text-left font-medium">Guía</th>
-            {stores.length > 1 && <th className="px-4 py-2.5 text-left font-medium">Tienda</th>}
-            <th className="px-4 py-2.5 text-left font-medium">Pedido</th>
-            <th className="px-4 py-2.5 text-left font-medium">Cliente</th>
-            <th className="px-4 py-2.5 text-left font-medium">Distrito / Ciudad</th>
-            <th className="px-4 py-2.5 text-left font-medium">Estado</th>
-            <th className="px-4 py-2.5 text-left font-medium">Reprogramación</th>
-            <th className="px-4 py-2.5 text-right font-medium">Intentos</th>
+            <SortableShipmentHeader label="Guía" sortKey="guide" sort={sort} onSort={toggleSort} />
+            {stores.length > 1 && (
+              <SortableShipmentHeader label="Tienda" sortKey="store" sort={sort} onSort={toggleSort} />
+            )}
+            <SortableShipmentHeader label="Pedido" sortKey="order" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Cliente" sortKey="customer" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Distrito / Ciudad" sortKey="location" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Estado" sortKey="status" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Reprogramación" sortKey="reprogramming" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Ruta sugerida" sortKey="route" sort={sort} onSort={toggleSort} />
           </tr>
         </thead>
         <tbody>
-          {rows.map((s) => (
+          {sortedRows.map((s) => (
             <tr
               key={s.id}
               onClick={() => onOpen(s.id)}
@@ -536,9 +678,7 @@ function ShipmentTable({
                 <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
               </td>
               <td className="px-4 py-2.5 text-slate-600">{fmtReprogram(s.next_followup_at)}</td>
-              <td className="px-4 py-2.5 text-right text-slate-600">
-                {s.status_category === "pending" ? `${s.reroute_attempts} / 7` : "—"}
-              </td>
+              <td className="px-4 py-2.5"><AliclikRouteCell shipment={s} /></td>
             </tr>
           ))}
         </tbody>
@@ -547,13 +687,81 @@ function ShipmentTable({
   );
 }
 
-function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: () => void }) {
+function SortableShipmentHeader({
+  label,
+  sortKey,
+  sort,
+  onSort,
+}: {
+  label: string;
+  sortKey: ShipmentSortKey;
+  sort: { key: ShipmentSortKey; direction: ShipmentSortDirection } | null;
+  onSort: (key: ShipmentSortKey) => void;
+}) {
+  const active = sort?.key === sortKey;
+  const ariaSort = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
+  return (
+    <th scope="col" aria-sort={ariaSort} className="px-2 py-1 text-left font-medium first:pl-4 last:pr-4">
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        title={`Ordenar por ${label}`}
+        className={cn(
+          "group inline-flex min-h-8 w-full items-center gap-1 rounded-md px-2 text-left transition hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
+          active && "bg-brand-50 text-brand-700",
+        )}
+      >
+        <span>{label}</span>
+        <span
+          aria-hidden="true"
+          className={cn(
+            "text-[11px] transition",
+            active ? "text-brand-600" : "text-slate-300 group-hover:text-slate-500",
+          )}
+        >
+          {active ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}
+        </span>
+      </button>
+    </th>
+  );
+}
+
+function AliclikRouteCell({ shipment }: { shipment: ShipmentRow }) {
+  if (shipment.courier !== "aliclik" || shipment.status_category !== "pending") {
+    return <span className="text-slate-400">—</span>;
+  }
+  const decision = evaluateAliclikReschedule({
+    courier: shipment.courier,
+    attempts: shipment.aliclik_attempts,
+    serviceDate: shipment.aliclik_service_date,
+  });
+  return decision.eligible ? (
+    <span className="inline-flex rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+      Aliclik · {shipment.aliclik_attempts ?? 0}/3
+    </span>
+  ) : (
+    <span className="inline-flex rounded-full bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700">
+      Fenix · {shipment.aliclik_attempts == null ? "sin dato" : `${shipment.aliclik_attempts}/3`}
+    </span>
+  );
+}
+
+function ShipmentDrawer({
+  shipmentId,
+  onClose,
+  onOpenShipment,
+}: {
+  shipmentId: string;
+  onClose: () => void;
+  onOpenShipment: (id: string) => void;
+}) {
   const router = useRouter();
   const [detail, setDetail] = useState<
     | {
         shipment: ShipmentRow;
         calls: ShipmentCallRow[];
         order: ShipmentOrderDetail | null;
+        linkedFenixShipment: LinkedShipmentSummary | null;
       }
     | { error: string }
     | null
@@ -565,15 +773,52 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
   const [disposition, setDisposition] = useState<RerouteDisposition>("confirma");
   const [note, setNote] = useState("");
   const [nextDate, setNextDate] = useState("");
-  const [manualStatus, setManualStatus] = useState("");
+  const [courierResult, setCourierResult] = useState<CourierReportResult | "">("");
+  const [courierDate, setCourierDate] = useState("");
+  const [courierNote, setCourierNote] = useState("");
+  const [showCourierCorrection, setShowCourierCorrection] = useState(false);
   const [fenixGuide, setFenixGuide] = useState("");
   const [showOrderPicker, setShowOrderPicker] = useState(false);
+  const [showAddressEditor, setShowAddressEditor] = useState(false);
+  const [address, setAddress] = useState("");
+  const [addressReference, setAddressReference] = useState("");
+  const [addressDistrict, setAddressDistrict] = useState("");
+  const [addressCity, setAddressCity] = useState("");
+  const [addressRegion, setAddressRegion] = useState("");
+  const [addressLatitude, setAddressLatitude] = useState("");
+  const [addressLongitude, setAddressLongitude] = useState("");
+  const [reprogramProvider, setReprogramProvider] = useState<"aliclik" | "fenix">("fenix");
+  const [forceAliclik, setForceAliclik] = useState(false);
 
   const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => {
     let alive = true;
+    setDetail(null);
+    setShowAddressEditor(false);
     loadShipmentDetail(shipmentId).then((d) => {
-      if (alive) setDetail(d);
+      if (!alive) return;
+      setDetail(d);
+      if (d && !("error" in d)) {
+        setCourierResult("");
+        setCourierDate("");
+        setCourierNote("");
+        setShowCourierCorrection(false);
+        setMsg(null);
+        const decision = evaluateAliclikReschedule({
+          courier: d.shipment.courier,
+          attempts: d.shipment.aliclik_attempts,
+          serviceDate: d.shipment.aliclik_service_date,
+        });
+        setReprogramProvider(decision.eligible ? "aliclik" : "fenix");
+        setForceAliclik(false);
+        setAddress(d.shipment.delivery_address ?? "");
+        setAddressReference(d.shipment.delivery_reference ?? "");
+        setAddressDistrict(d.shipment.district ?? "");
+        setAddressCity(d.shipment.city ?? "");
+        setAddressRegion(d.shipment.region ?? "");
+        setAddressLatitude(d.shipment.latitude == null ? "" : String(d.shipment.latitude));
+        setAddressLongitude(d.shipment.longitude == null ? "" : String(d.shipment.longitude));
+      }
     });
     return () => {
       alive = false;
@@ -586,18 +831,75 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
     router.refresh();
   }
 
-  function run(fn: () => Promise<{ error?: string; notice?: string }>) {
+  function run(
+    fn: () => Promise<{ error?: string; notice?: string }>,
+    onSuccess?: () => void,
+  ) {
     start(async () => {
       const r = await fn();
       setMsg(r.error ?? r.notice ?? null);
-      if (!r.error) refresh();
+      if (!r.error) {
+        onSuccess?.();
+        refresh();
+      }
     });
   }
 
   const programDateInvalid =
     disposition === "programar" && (!nextDate || nextDate <= localDateInputValue());
+  const shipment = detail && !("error" in detail) ? detail.shipment : null;
+  const aliclikDecision = shipment
+    ? evaluateAliclikReschedule({
+        courier: shipment.courier,
+        attempts: shipment.aliclik_attempts,
+        serviceDate: shipment.aliclik_service_date,
+      })
+    : null;
+  const overrideNoteMissing =
+    disposition === "confirma" && reprogramProvider === "aliclik" && forceAliclik && !note.trim();
+  const fenixAutoUnavailable =
+    disposition === "confirma" &&
+    reprogramProvider === "fenix" &&
+    shipment?.courier === "aliclik" &&
+    !shipment.fenix_eligible;
+  const fenixRouteAvailable =
+    !!shipment && (shipment.courier !== "aliclik" || shipment.fenix_eligible);
   const requiredDateMissing =
-    (disposition === "confirma" && !nextDate) || programDateInvalid;
+    (disposition === "confirma" && !nextDate) ||
+    programDateInvalid ||
+    overrideNoteMissing ||
+    fenixAutoUnavailable;
+  const parsedLatitude = Number(addressLatitude.replace(",", "."));
+  const parsedLongitude = Number(addressLongitude.replace(",", "."));
+  const addressFormValid =
+    !!address.trim() &&
+    !!addressDistrict.trim() &&
+    !!addressCity.trim() &&
+    !!addressRegion.trim() &&
+    addressLatitude.trim() !== "" &&
+    addressLongitude.trim() !== "" &&
+    Number.isFinite(parsedLatitude) &&
+    parsedLatitude >= -90 &&
+    parsedLatitude <= 90 &&
+    Number.isFinite(parsedLongitude) &&
+    parsedLongitude >= -180 &&
+    parsedLongitude <= 180;
+  const courierResultDefinition = courierResult
+    ? COURIER_REPORT_RESULTS.find((item) => item.code === courierResult) ?? null
+    : null;
+  const courierFormValid =
+    !!courierResultDefinition &&
+    (!courierResultDefinition.requiresDate || !!courierDate) &&
+    (!courierResultDefinition.requiresNote || !!courierNote.trim());
+  const reopensClosedGuide =
+    !!courierResultDefinition &&
+    (shipment?.delivery_status === "anulado" || shipment?.delivery_status === "entregado") &&
+    courierResultDefinition.resultingStatus !== "anulado" &&
+    courierResultDefinition.resultingStatus !== "entregado";
+  const fenixAwaitingCourierResult =
+    shipmentRequiresCourierResult(shipment?.courier, shipment?.delivery_status);
+  const fenixReadyForCustomerManagement =
+    shipment?.courier === "fenix" && shipment.delivery_status === "pendiente";
 
   return (
     <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={onClose}>
@@ -639,12 +941,190 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
               <Field label="Ciudad" value={detail.shipment.city} />
               <Field label="Distrito" value={detail.shipment.district} />
               <Field label="Producto" value={detail.shipment.product} clamp />
-              <Field label="Intentos" value={`${detail.shipment.reroute_attempts} / 7`} />
+              <Field
+                label="Intentos Aliclik"
+                value={
+                  detail.shipment.aliclik_attempts == null
+                    ? "Sin dato"
+                    : `${detail.shipment.aliclik_attempts} / 3`
+                }
+              />
+              <Field label="Fecha Aliclik" value={fmtAliclikDate(detail.shipment.aliclik_service_date)} />
+              <Field label="Llamadas de gestión" value={`${detail.shipment.reroute_attempts} / 7`} />
               <Field
                 label="Fenix"
                 value={detail.shipment.fenix_eligible ? "Elegible" : "No elegible"}
               />
             </dl>
+
+            <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/60 p-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <p className="text-sm font-semibold text-slate-800">Destino de entrega</p>
+                    {detail.shipment.address_override && (
+                      <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">
+                        Modificado
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    {detail.shipment.address_override ? "Protegido frente al siguiente Excel" : "Importado desde Aliclik"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAddressEditor((value) => !value)}
+                  className="shrink-0 text-xs font-medium text-brand-700 hover:underline"
+                >
+                  {showAddressEditor ? "Cerrar edición" : "Modificar destino"}
+                </button>
+              </div>
+
+              {!showAddressEditor ? (
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-xs text-slate-400">Dirección completa</p>
+                    <p className="text-sm leading-snug text-slate-800">
+                      {detail.shipment.delivery_address ?? "No informada en el Excel."}
+                    </p>
+                    {detail.shipment.delivery_reference && (
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        Ref.: {detail.shipment.delivery_reference}
+                      </p>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-white p-2">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Latitud</p>
+                      <p className="select-all font-mono text-xs text-slate-700">
+                        {detail.shipment.latitude ?? "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Longitud</p>
+                      <p className="select-all font-mono text-xs text-slate-700">
+                        {detail.shipment.longitude ?? "—"}
+                      </p>
+                    </div>
+                  </div>
+                  {detail.shipment.latitude != null && detail.shipment.longitude != null && (
+                    <a
+                      href={`https://www.google.com/maps?q=${detail.shipment.latitude},${detail.shipment.longitude}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex text-xs font-medium text-brand-700 hover:underline"
+                    >
+                      Abrir ubicación en Google Maps ↗
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2 border-t border-slate-200 pt-2">
+                  <label className="block text-xs text-slate-500">
+                    Dirección completa
+                    <textarea
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                      rows={2}
+                      placeholder="Calle, número, urbanización…"
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800"
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-500">
+                    Referencia
+                    <input
+                      value={addressReference}
+                      onChange={(e) => setAddressReference(e.target.value)}
+                      placeholder="Frente a…, puerta color…"
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800"
+                    />
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block text-xs text-slate-500">
+                      Distrito
+                      <input
+                        value={addressDistrict}
+                        onChange={(e) => setAddressDistrict(e.target.value)}
+                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+                      />
+                    </label>
+                    <label className="block text-xs text-slate-500">
+                      Ciudad / provincia
+                      <input
+                        value={addressCity}
+                        onChange={(e) => setAddressCity(e.target.value)}
+                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+                      />
+                    </label>
+                  </div>
+                  <label className="block text-xs text-slate-500">
+                    Departamento
+                    <input
+                      value={addressRegion}
+                      onChange={(e) => setAddressRegion(e.target.value)}
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+                    />
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block text-xs text-slate-500">
+                      Latitud
+                      <input
+                        value={addressLatitude}
+                        onChange={(e) => setAddressLatitude(e.target.value)}
+                        inputMode="decimal"
+                        placeholder="-16.409…"
+                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs"
+                      />
+                    </label>
+                    <label className="block text-xs text-slate-500">
+                      Longitud
+                      <input
+                        value={addressLongitude}
+                        onChange={(e) => setAddressLongitude(e.target.value)}
+                        inputMode="decimal"
+                        placeholder="-71.556…"
+                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs"
+                      />
+                    </label>
+                  </div>
+                  <p className="rounded-lg bg-sky-50 px-2 py-1.5 text-[11px] leading-relaxed text-sky-800">
+                    Al guardar se actualizará el pedido de Shopify y esta dirección no será reemplazada por futuros Excel.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddressEditor(false)}
+                      className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const payload: ShipmentAddressInput = {
+                          address,
+                          reference: addressReference,
+                          district: addressDistrict,
+                          city: addressCity,
+                          region: addressRegion,
+                          latitude: parsedLatitude,
+                          longitude: parsedLongitude,
+                        };
+                        run(
+                          () => updateShipmentDeliveryAddress(shipmentId, payload),
+                          () => setShowAddressEditor(false),
+                        );
+                      }}
+                      disabled={pending || !addressFormValid}
+                      className="flex-1 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                    >
+                      {pending ? "Guardando…" : "Guardar nuevo destino"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
 
             {msg && <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-sm text-slate-700">{msg}</p>}
 
@@ -686,9 +1166,188 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                 ))}
             </section>
 
+            {/* Step 1 for active Fenix deliveries: process the courier outcome
+                before any customer call or reprogramming can be registered. */}
+            {detail.shipment.courier === "fenix" && (
+              detail.shipment.delivery_status === "transferido" ? (
+                <section className="space-y-2 rounded-xl border border-sky-200 bg-sky-50 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600">Guía reemplazada</p>
+                  <p className="text-sm font-semibold text-sky-900">Continúa en la guía Fenix activa</p>
+                  <p className="text-xs leading-relaxed text-sky-800">
+                    “Transferido” lo asigna Kapta automáticamente; no es un resultado del motorizado.
+                  </p>
+                  {detail.linkedFenixShipment && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenShipment(detail.linkedFenixShipment!.id)}
+                      className="flex w-full items-center justify-between rounded-lg border border-sky-200 bg-white px-3 py-2 text-left hover:bg-sky-50"
+                    >
+                      <span>
+                        <span className="block text-[10px] uppercase tracking-wide text-sky-600">Abrir guía activa</span>
+                        <span className="font-mono text-xs font-semibold text-sky-900">
+                          {detail.linkedFenixShipment.guide_code}
+                        </span>
+                      </span>
+                      <span className="text-sm text-sky-700">→</span>
+                    </button>
+                  )}
+                </section>
+              ) : fenixReadyForCustomerManagement && !showCourierCorrection ? (
+                <section className="flex items-start justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">Etapa 1 completada</p>
+                    <p className="mt-0.5 text-sm font-semibold text-emerald-900">Pendiente de gestión con el cliente</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-emerald-800">
+                      Continúa abajo con la llamada. Si confirma, recién se generará la nueva reprogramación.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowCourierCorrection(true)}
+                    className="shrink-0 text-[11px] font-medium text-emerald-800 hover:underline"
+                  >
+                    Corregir resultado
+                  </button>
+                </section>
+              ) : (
+                <section className="space-y-2.5 rounded-xl border border-orange-200 bg-orange-50/40 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-orange-700">
+                        {fenixAwaitingCourierResult ? "Etapa 1 · obligatoria" : "Corrección del reporte"}
+                      </p>
+                      <p className="mt-0.5 text-sm font-semibold text-slate-900">Registrar resultado del courier</p>
+                      <p className="mt-0.5 font-mono text-xs font-semibold text-orange-800">
+                        {detail.shipment.guide_code}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Estado actual</p>
+                      <StatusBadge
+                        category={detail.shipment.status_category}
+                        status={detail.shipment.delivery_status}
+                      />
+                    </div>
+                  </div>
+
+                  {fenixAwaitingCourierResult && (
+                    <p className="rounded-lg bg-orange-100 px-2.5 py-2 text-xs leading-relaxed text-orange-900">
+                      Esta guía está En ruta. Primero registra lo informado por el motorizado; la llamada y la reprogramación se habilitarán solo si vuelve a Pendiente.
+                    </p>
+                  )}
+
+                  <label className="block text-xs font-medium text-slate-600">
+                    ¿Qué informó Fenix?
+                    <select
+                      value={courierResult}
+                      onChange={(e) => {
+                        setCourierResult(e.target.value as CourierReportResult | "");
+                        setCourierDate("");
+                      }}
+                      className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm text-slate-800"
+                    >
+                      <option value="">Selecciona el resultado…</option>
+                      {COURIER_REPORT_RESULTS.map((result) => (
+                        <option key={result.code} value={result.code}>{result.optionLabel}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  {courierResultDefinition && (
+                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Qué sucederá</p>
+                      <p className="mt-0.5 text-xs leading-relaxed text-slate-700">
+                        {courierResultDefinition.effect}
+                      </p>
+                      {reopensClosedGuide && (
+                        <p className="mt-1.5 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800">
+                          Esta corrección reabrirá una guía que actualmente está cerrada.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {courierResultDefinition?.requiresDate && (
+                    <label className="block text-xs font-medium text-slate-600">
+                      Nueva fecha de entrega informada por Fenix
+                      <input
+                        type="date"
+                        value={courierDate}
+                        onChange={(e) => setCourierDate(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm"
+                      />
+                    </label>
+                  )}
+
+                  {courierResultDefinition && (
+                    <label className="block text-xs font-medium text-slate-600">
+                      {courierResult === "no_contesta"
+                        ? "Comentario para el historial (opcional)"
+                        : courierResultDefinition.requiresNote
+                          ? "Motivo informado por Fenix"
+                          : "Detalle del reporte (opcional)"}
+                      <textarea
+                        value={courierNote}
+                        onChange={(e) => setCourierNote(e.target.value)}
+                        rows={2}
+                        placeholder={
+                          courierResult === "no_contesta"
+                            ? "Ej.: motorizado llamó dos veces; cliente no respondió…"
+                            : courierResultDefinition.requiresNote
+                              ? "Ej.: cliente rechazó el pedido…"
+                              : "Detalle informado por el courier…"
+                        }
+                        className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm"
+                      />
+                      {courierResult === "no_contesta" && (
+                        <span className="mt-1 block text-[10px] font-normal leading-relaxed text-slate-400">
+                          Se guardará en el historial junto al cambio No contesta → Pendiente.
+                        </span>
+                      )}
+                    </label>
+                  )}
+
+                  <div className="flex gap-2">
+                    {showCourierCorrection && (
+                      <button
+                        type="button"
+                        onClick={() => setShowCourierCorrection(false)}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
+                      >
+                        Cancelar
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!courierResult) return;
+                        run(
+                          () => registerCourierReportResult(shipmentId, {
+                            result: courierResult,
+                            deliveryDate: courierDate ? new Date(courierDate).toISOString() : null,
+                            note: courierNote,
+                          }),
+                          () => {
+                            setCourierResult("");
+                            setCourierDate("");
+                            setCourierNote("");
+                            setShowCourierCorrection(false);
+                          },
+                        );
+                      }}
+                      disabled={pending || !courierFormValid}
+                      className="flex-1 rounded-lg bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
+                    >
+                      {pending ? "Registrando…" : "Registrar resultado y continuar"}
+                    </button>
+                  </div>
+                </section>
+              )
+            )}
+
             {/* claim + re-route call — hidden once the shipment is terminal (entregado/
                 anulado/transferido) so a stray "no contesta" can't reopen a closed guide */}
-            {isCallable(detail.shipment.delivery_status) && (
+            {isCallable(detail.shipment.delivery_status) && !fenixAwaitingCourierResult && (
               <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
                 <p className="text-sm font-medium text-slate-800">Registrar o programar llamada</p>
                 <div className="flex gap-2">
@@ -718,18 +1377,85 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                     </option>
                   ))}
                 </select>
-                {disposition === "confirma" &&
-                  (detail.shipment.order_name ? (
-                    <p className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
-                      Elige la fecha y al confirmar se generará automáticamente una{" "}
-                      <b>nueva guía Fenix</b> con esa fecha, lista para subir al sistema Fenix.
-                    </p>
-                  ) : (
-                    <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
-                      Este envío no tiene N° de pedido para autogenerar la guía. Elige la fecha; se
-                      marcará En ruta y podrás crear la guía en <b>Generar guía Fenix (manual)</b> abajo.
-                    </p>
-                  ))}
+                {disposition === "confirma" && aliclikDecision && (
+                  <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Paso 1 · elegir ruta
+                      </p>
+                      <p className="mt-0.5 text-xs text-slate-600">{aliclikDecisionCopy(aliclikDecision)}</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReprogramProvider("aliclik");
+                          setForceAliclik(false);
+                        }}
+                        disabled={!aliclikDecision.eligible}
+                        className={cn(
+                          "rounded-lg border px-2.5 py-2 text-left text-xs transition",
+                          reprogramProvider === "aliclik" && !forceAliclik
+                            ? "border-emerald-500 bg-emerald-50 text-emerald-800"
+                            : "border-slate-200 bg-white text-slate-600",
+                          !aliclikDecision.eligible && "cursor-not-allowed opacity-45",
+                        )}
+                      >
+                        <span className="block font-semibold">Aliclik</span>
+                        <span>Misma guía</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReprogramProvider("fenix");
+                          setForceAliclik(false);
+                        }}
+                        disabled={!fenixRouteAvailable}
+                        className={cn(
+                          "rounded-lg border px-2.5 py-2 text-left text-xs transition",
+                          reprogramProvider === "fenix"
+                            ? "border-orange-400 bg-orange-50 text-orange-800"
+                            : "border-slate-200 bg-white text-slate-600",
+                          !fenixRouteAvailable && "cursor-not-allowed opacity-45",
+                        )}
+                      >
+                        <span className="block font-semibold">Fenix</span>
+                        <span>{fenixRouteAvailable ? "Nueva guía" : "Sin stock/cobertura"}</span>
+                      </button>
+                    </div>
+                    {!aliclikDecision.eligible &&
+                      aliclikDecision.reason !== "not_aliclik" &&
+                      aliclikDecision.reason !== "three_attempts" && (
+                      <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-dashed border-slate-300 bg-white p-2 text-xs text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={forceAliclik}
+                          onChange={(e) => {
+                            setForceAliclik(e.target.checked);
+                            setReprogramProvider(e.target.checked ? "aliclik" : "fenix");
+                          }}
+                          className="mt-0.5"
+                        />
+                        <span>
+                          <b>Excepción manual Aliclik.</b> Requiere explicar el motivo en la nota y quedará auditada.
+                        </span>
+                      </label>
+                    )}
+                    {reprogramProvider === "aliclik" ? (
+                      <p className="rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-800">
+                        Primero realiza la reprogramación en Aliclik. Luego confírmala aquí: se conservará la guía actual.
+                      </p>
+                    ) : detail.shipment.order_name ? (
+                      <p className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
+                        Se generará automáticamente una <b>nueva guía Fenix</b> con la fecha elegida.
+                      </p>
+                    ) : (
+                      <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
+                        Sin N° de pedido no se puede autogenerar. Usa <b>Generar guía Fenix (manual)</b> abajo.
+                      </p>
+                    )}
+                  </div>
+                )}
                 {disposition === "programar" && (
                   <p className="rounded-lg bg-sky-50 px-2.5 py-1.5 text-xs text-sky-800">
                     La guía se ocultará hasta la fecha elegida y volverá a la cola ese día.
@@ -738,7 +1464,9 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                 )}
                 <label className="block text-xs text-slate-500">
                   {disposition === "confirma"
-                    ? "Fecha de reprogramación (va en la guía)"
+                    ? reprogramProvider === "aliclik"
+                      ? "Fecha de reprogramación en Aliclik"
+                      : "Fecha de reprogramación (va en la nueva guía Fenix)"
                     : disposition === "programar"
                       ? "Fecha de próxima llamada"
                       : "Próximo intento"}
@@ -764,6 +1492,8 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                         disposition,
                         note,
                         nextFollowupAt: nextDate ? new Date(nextDate).toISOString() : null,
+                        reprogramProvider,
+                        forceAliclik,
                       }),
                     )
                   }
@@ -772,11 +1502,19 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                 >
                   {disposition === "confirma" && !nextDate
                     ? "Elige la fecha para confirmar"
+                    : fenixAutoUnavailable
+                      ? "Fenix no disponible; usa una excepción manual"
+                    : overrideNoteMissing
+                      ? "Explica el motivo de la excepción"
                     : programDateInvalid
                       ? "Elige una fecha futura"
                       : disposition === "programar"
                         ? "Programar llamada"
-                        : "Registrar llamada"}
+                        : disposition === "confirma" && reprogramProvider === "aliclik"
+                          ? "Confirmar reprogramación Aliclik"
+                          : disposition === "confirma"
+                            ? "Crear guía Fenix y confirmar"
+                            : "Registrar llamada"}
                 </button>
               </section>
             )}
@@ -784,7 +1522,8 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
             {/* Fenix guide — manual fallback. The common path auto-generates the
                 guide from "Cliente confirma" above; this stays for shipments
                 without an order name, or to type a specific Fenix code. */}
-            <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
+            {detail.shipment.delivery_status === "pendiente" && (
+              <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
               <p className="text-sm font-medium text-slate-800">Generar guía Fenix (manual)</p>
               {detail.shipment.fenix_shipment_id ? (
                 <p className="text-xs text-emerald-700">Ya tiene guía Fenix vinculada.</p>
@@ -843,33 +1582,8 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                   </button>
                 </>
               )}
-            </section>
-
-            {/* manual status */}
-            <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
-              <p className="text-sm font-medium text-slate-800">Cambiar estado (manual)</p>
-              <div className="flex gap-2">
-                <select
-                  value={manualStatus}
-                  onChange={(e) => setManualStatus(e.target.value)}
-                  className="flex-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                >
-                  <option value="">Selecciona…</option>
-                  {DELIVERY_STATUSES.map((s) => (
-                    <option key={s.code} value={s.code}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => manualStatus && run(() => setShipmentStatus(shipmentId, manualStatus))}
-                  disabled={pending || !manualStatus}
-                  className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Aplicar
-                </button>
-              </div>
-            </section>
+              </section>
+            )}
 
             {/* history */}
             <section className="space-y-2">
@@ -882,9 +1596,7 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                     <li key={c.id} className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
                       <div className="flex justify-between">
                         <span className="font-medium text-slate-700">
-                          {c.kind === "call" && !c.new_status && c.next_followup_at
-                            ? "Llamada programada"
-                            : c.kind}
+                          {shipmentHistoryLabel(c)}
                           {c.new_status ? ` → ${labelOf(c.new_status)}` : ""}
                         </span>
                         <span className="text-slate-400">{c.agent_name ?? ""}</span>

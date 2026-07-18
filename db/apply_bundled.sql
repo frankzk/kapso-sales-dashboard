@@ -1504,3 +1504,22 @@ create policy whatsapp_outbox_select on whatsapp_outbox for select to authentica
   using (store_id in (select auth_store_ids()));
 grant select on whatsapp_outbox to authenticated;
 grant all privileges on whatsapp_outbox to service_role;
+
+-- ---- 0038 ----
+-- 0038_aliclik_reprogramming.sql — source fields used to decide whether the
+-- original Aliclik guide can still be reprogrammed before falling back to Fenix.
+-- Kept separate from reroute_attempts, which is the dashboard's call counter.
+
+alter table shipments add column if not exists aliclik_attempts integer;
+alter table shipments add column if not exists aliclik_service_date date;
+alter table shipments add column if not exists delivery_address text;
+alter table shipments add column if not exists delivery_reference text;
+alter table shipments add column if not exists latitude double precision;
+alter table shipments add column if not exists longitude double precision;
+alter table shipments add column if not exists address_override boolean not null default false;
+alter table shipments add column if not exists address_updated_at timestamptz;
+alter table shipments add column if not exists address_updated_by uuid references auth.users(id) on delete set null;
+
+create index if not exists shipments_aliclik_reprogram_idx
+  on shipments (courier, aliclik_service_date, aliclik_attempts)
+  where courier = 'aliclik' and status_category in ('pending', 'in_route');

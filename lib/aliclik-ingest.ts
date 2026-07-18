@@ -23,6 +23,16 @@ interface ExistingShipment {
   store_id: string;
   last_report_at: string | null;
   delivered_source: string | null;
+  aliclik_attempts: number | null;
+  aliclik_service_date: string | null;
+  district: string | null;
+  city: string | null;
+  region: string | null;
+  delivery_address: string | null;
+  delivery_reference: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  address_override: boolean;
 }
 
 export interface IngestResult {
@@ -118,9 +128,29 @@ export async function ingestAliclikReport(
   for (const [guide, inc] of incomingByGuide) {
     const existing = existingByGuide.get(guide);
     const mergedStatus = reconcileDeliveryStatus(existing?.delivery_status, inc.row.delivery_status);
+    const keepManualAddress = existing?.address_override === true;
+    const district = keepManualAddress
+      ? existing.district
+      : (inc.row.district ?? existing?.district ?? null);
+    const city = keepManualAddress ? existing.city : (inc.row.city ?? existing?.city ?? null);
+    const region = keepManualAddress ? existing.region : (inc.row.region ?? existing?.region ?? null);
+    const deliveryAddress = keepManualAddress
+      ? existing.delivery_address
+      : (inc.row.delivery_address ?? existing?.delivery_address ?? null);
+    const deliveryReference = keepManualAddress
+      ? existing.delivery_reference
+      : (inc.row.delivery_reference ?? existing?.delivery_reference ?? null);
+    const latitude = keepManualAddress
+      ? existing.latitude
+      : (inc.row.latitude ?? existing?.latitude ?? null);
+    const longitude = keepManualAddress
+      ? existing.longitude
+      : (inc.row.longitude ?? existing?.longitude ?? null);
     // Fenix coverage/stock is evaluated for every managed (pendiente) guide — the
     // UI splits Pendiente vs "Sin cobertura" by this flag.
-    const fenix = isPending(mergedStatus) ? evaluateFenix(inc.row, stockRows).eligible : false;
+    const fenix = isPending(mergedStatus)
+      ? evaluateFenix({ city, product: inc.row.product }, stockRows).eligible
+      : false;
     // delivered_source: keep an existing source; a delivery that comes from the
     // report (not from agent gestión) is "aliclik".
     let delivered_source = existing?.delivered_source ?? null;
@@ -163,12 +193,20 @@ export async function ingestAliclikReport(
       customer_name: inc.row.customer_name,
       customer_phone: inc.row.customer_phone,
       product: inc.row.product,
-      district: inc.row.district,
-      city: inc.row.city,
+      district,
+      city,
+      region,
+      delivery_address: deliveryAddress,
+      delivery_reference: deliveryReference,
+      latitude,
+      longitude,
+      address_override: keepManualAddress,
       delivery_status: mergedStatus,
       status_category: categoryOf(mergedStatus),
       delivered_source,
       fenix_eligible: fenix,
+      aliclik_attempts: inc.row.aliclik_attempts ?? existing?.aliclik_attempts ?? null,
+      aliclik_service_date: inc.row.aliclik_service_date ?? existing?.aliclik_service_date ?? null,
       source_batch_id: batchId,
       last_report_at,
     });
@@ -201,8 +239,15 @@ export async function ingestAliclikReport(
       product: rm.parsed.product,
       district: rm.parsed.district,
       city: rm.parsed.city,
+      region: rm.parsed.region,
+      delivery_address: rm.parsed.delivery_address,
+      delivery_reference: rm.parsed.delivery_reference,
+      latitude: rm.parsed.latitude,
+      longitude: rm.parsed.longitude,
       delivery_status: rm.parsed.delivery_status,
       store_hint: rm.parsed.store_hint,
+      aliclik_attempts: rm.parsed.aliclik_attempts,
+      aliclik_service_date: rm.parsed.aliclik_service_date,
     },
     match_status: rm.matchStatus,
     shipment_id: rm.guideCode ? (guideToId.get(rm.guideCode) ?? null) : null,
@@ -271,7 +316,7 @@ async function fetchExistingShipments(
   for (const chunk of chunked(guideCodes, 200)) {
     const { data } = await admin
       .from("shipments")
-      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,delivered_source")
+      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
       .eq("courier", "aliclik")
       .in("guide_code", chunk);
     for (const r of (data as ExistingShipment[]) ?? []) map.set(r.guide_code, r);

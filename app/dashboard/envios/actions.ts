@@ -12,13 +12,20 @@ import {
 } from "@/lib/shipments-access";
 import {
   CLAIM_TTL_MINUTES,
+  COURIER_REPORT_RESULTS,
   attemptLabel,
   categoryOf,
+  courierReportTransition,
+  evaluateAliclikReschedule,
   isFutureShipmentFollowup,
   isCallable,
+  isFenixCity,
   isValidStatus,
   nextShipmentTransition,
+  normalizeCity,
   rescheduleGuideCode,
+  shipmentRequiresCourierResult,
+  type CourierReportResult,
   type RerouteDisposition,
 } from "@/lib/shipments";
 import { getStoreCreds } from "@/lib/ingest";
@@ -28,11 +35,17 @@ import {
   pickStoresForOrderQuery,
   searchOrdersLive,
   searchProductVariants,
+  updateOrderShippingAddress,
   type ProductVariantResult,
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
-import type { ShipmentCallRow, ShipmentOrderDetail, ShipmentRow } from "@/lib/types";
+import type {
+  LinkedShipmentSummary,
+  ShipmentCallRow,
+  ShipmentOrderDetail,
+  ShipmentRow,
+} from "@/lib/types";
 
 export interface ShipmentActionState {
   error?: string;
@@ -80,6 +93,7 @@ export async function loadShipmentDetail(
       shipment: ShipmentRow;
       calls: ShipmentCallRow[];
       order: ShipmentOrderDetail | null;
+      linkedFenixShipment: LinkedShipmentSummary | null;
     }
   | { error: string }
 > {
@@ -96,7 +110,12 @@ export async function loadShipmentDetail(
     ...c,
     agent_name: c.agent ? (agentNameCache.get(c.agent) ?? null) : null,
   }));
-  return { shipment: detail.shipment, calls, order: detail.order };
+  return {
+    shipment: detail.shipment,
+    calls,
+    order: detail.order,
+    linkedFenixShipment: detail.linkedFenixShipment,
+  };
 }
 
 /** Global search (guía / pedido / guía Fenix / celular), RLS-scoped. */
@@ -175,7 +194,13 @@ export async function releaseShipment(shipmentId: string): Promise<ShipmentActio
  */
 export async function registerRerouteCall(
   shipmentId: string,
-  input: { disposition: RerouteDisposition; note?: string; nextFollowupAt?: string | null },
+  input: {
+    disposition: RerouteDisposition;
+    note?: string;
+    nextFollowupAt?: string | null;
+    reprogramProvider?: "aliclik" | "fenix";
+    forceAliclik?: boolean;
+  },
 ): Promise<ShipmentActionState> {
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
@@ -183,16 +208,30 @@ export async function registerRerouteCall(
 
   const { data: ship } = await admin
     .from("shipments")
-    .select("id,delivery_status,reroute_attempts,order_name,fenix_shipment_id")
+    .select("id,courier,guide_code,delivery_status,reroute_attempts,order_name,fenix_eligible,fenix_shipment_id,aliclik_attempts,aliclik_service_date")
     .eq("id", shipmentId)
     .maybeSingle();
   if (!ship) return { error: "No encontrado." };
   const cur = ship as {
+    courier: string;
+    guide_code: string;
     delivery_status: string;
     reroute_attempts: number | null;
     order_name: string | null;
+    fenix_eligible: boolean;
     fenix_shipment_id: string | null;
+    aliclik_attempts: number | null;
+    aliclik_service_date: string | null;
   };
+
+  // A Fenix guide that is still En ruta is waiting for the courier/motorizado
+  // outcome. Do not let a stale drawer skip that operational stage and create
+  // another reprogramming before the delivery result has been processed.
+  if (shipmentRequiresCourierResult(cur.courier, cur.delivery_status)) {
+    return {
+      error: `Primero registra el resultado del courier para la guía ${cur.guide_code}. Si Fenix informa “No contesta”, volverá a Pendiente y se habilitará la gestión con el cliente.`,
+    };
+  }
 
   // Only pendiente/en_ruta admit gestión. The UI hides this on terminal guides,
   // but enforce it server-side too so a stale drawer can't reactivate a frozen
@@ -218,7 +257,70 @@ export async function registerRerouteCall(
   // transfer this shipment to it (skip if already transferred). Needs an order
   // name to build the code; without one we fall through to the plain En ruta
   // transition and the operator uses the manual "Generar guía Fenix" section.
-  if (input.disposition === "confirma" && !cur.fenix_shipment_id) {
+  const reprogramProvider = input.reprogramProvider ?? "fenix";
+  if (input.disposition === "confirma" && reprogramProvider === "aliclik") {
+    const decision = evaluateAliclikReschedule({
+      courier: cur.courier,
+      attempts: cur.aliclik_attempts,
+      serviceDate: cur.aliclik_service_date,
+    });
+    if (decision.reason === "not_aliclik") {
+      return { error: "Esta ya no es una guía Aliclik; corresponde continuar con Fenix." };
+    }
+    if (decision.reason === "three_attempts") {
+      return { error: "Aliclik ya registra 3 intentos o más; solo corresponde continuar con Fenix." };
+    }
+    if (!decision.eligible && !input.forceAliclik) {
+      return { error: aliclikDecisionMessage(decision) };
+    }
+    if (!decision.eligible && !input.note?.trim()) {
+      return { error: "Describe el motivo de la excepción manual para reprogramar con Aliclik." };
+    }
+
+    const overrideLabel = decision.eligible ? "" : " (excepción manual)";
+    const auditNote = [`Reprogramación Aliclik${overrideLabel}.`, input.note?.trim() || null]
+      .filter(Boolean)
+      .join(" ");
+    const { error: updateError } = await admin
+      .from("shipments")
+      .update({
+        delivery_status: "en_ruta",
+        status_category: categoryOf("en_ruta"),
+        next_followup_at: input.nextFollowupAt,
+        reroute_outcome: decision.eligible ? "reprogramado_aliclik" : "reprogramado_aliclik_manual",
+      })
+      .eq("id", shipmentId);
+    if (updateError) return { error: updateError.message };
+
+    await admin.from("shipment_calls").insert({
+      shipment_id: shipmentId,
+      store_id: ctx.storeId,
+      agent: ctx.userId,
+      kind: "reroute",
+      new_status: "en_ruta",
+      note: auditNote,
+      next_followup_at: input.nextFollowupAt,
+    });
+    revalidatePath("/dashboard/envios");
+    return { notice: `Reprogramado en Aliclik${overrideLabel}; se conserva la guía ${cur.guide_code}.` };
+  }
+
+  if (
+    input.disposition === "confirma" &&
+    reprogramProvider === "fenix" &&
+    cur.courier === "aliclik" &&
+    !cur.fenix_eligible
+  ) {
+    return {
+      error: "Fenix no está disponible por cobertura o stock. Revisa el stock o usa una opción manual excepcional.",
+    };
+  }
+
+  if (
+    input.disposition === "confirma" &&
+    reprogramProvider === "fenix" &&
+    !cur.fenix_shipment_id
+  ) {
     const guideCode = rescheduleGuideCode(cur.order_name, input.nextFollowupAt);
     if (guideCode) {
       // carry the reprogramación date onto the new active guide at insert time
@@ -294,6 +396,270 @@ export async function registerRerouteCall(
   return { notice };
 }
 
+function aliclikDecisionMessage(
+  decision: ReturnType<typeof evaluateAliclikReschedule>,
+): string {
+  if (decision.reason === "three_attempts") {
+    return "Aliclik ya registra 3 intentos o más; solo corresponde continuar con Fenix.";
+  }
+  if (decision.reason === "outside_week") {
+    return `La fecha de Aliclik está fuera de la ventana ${decision.cutoffDate}–${decision.today}. Continúa con Fenix o usa la excepción manual.`;
+  }
+  if (decision.reason === "missing_attempts") {
+    return "El Excel no informó NRO. INTENTOS. Continúa con Fenix o usa la excepción manual.";
+  }
+  return "El Excel no informó una fecha operativa válida. Continúa con Fenix o usa la excepción manual.";
+}
+
+export interface ShipmentAddressInput {
+  address: string;
+  reference?: string | null;
+  district: string;
+  city: string;
+  region: string;
+  latitude: number;
+  longitude: number;
+}
+
+/** Update the delivery destination in Shopify first, then persist an override
+ * on the shipment so later Aliclik Excel imports cannot revert it. */
+export async function updateShipmentDeliveryAddress(
+  shipmentId: string,
+  input: ShipmentAddressInput,
+): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a este envío." };
+
+  const address = input.address.trim();
+  const reference = input.reference?.trim() || null;
+  const district = input.district.trim();
+  const cityLabel = input.city.trim();
+  const region = input.region.trim();
+  if (!address || !district || !cityLabel || !region) {
+    return { error: "Dirección, distrito, ciudad/provincia y departamento son obligatorios." };
+  }
+  if (address.length > 500 || (reference?.length ?? 0) > 500) {
+    return { error: "La dirección o referencia es demasiado larga." };
+  }
+  if (!Number.isFinite(input.latitude) || input.latitude < -90 || input.latitude > 90) {
+    return { error: "La latitud debe estar entre -90 y 90." };
+  }
+  if (!Number.isFinite(input.longitude) || input.longitude < -180 || input.longitude > 180) {
+    return { error: "La longitud debe estar entre -180 y 180." };
+  }
+
+  const admin = createAdminSupabase();
+  const { data: shipment } = await admin
+    .from("shipments")
+    .select("id,store_id,order_id,customer_name,customer_phone,product,fenix_shipment_id")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (!shipment) return { error: "Envío no encontrado." };
+  const current = shipment as {
+    store_id: string;
+    order_id: string | null;
+    customer_name: string | null;
+    customer_phone: string | null;
+    product: string | null;
+    fenix_shipment_id: string | null;
+  };
+
+  type LinkedOrderForAddress = {
+    shopify_order_id: string | null;
+    line_items: { title?: string | null; sku?: string | null }[] | null;
+  };
+  let order: LinkedOrderForAddress | null = null;
+  if (current.order_id) {
+    const { data } = await admin
+      .from("orders")
+      .select("shopify_order_id,line_items")
+      .eq("id", current.order_id)
+      .maybeSingle();
+    order = data as LinkedOrderForAddress | null;
+  }
+
+  const shopifyOrderId = order?.shopify_order_id;
+  const isRealShopifyOrder = !!shopifyOrderId && !shopifyOrderId.startsWith("manual-");
+  if (isRealShopifyOrder) {
+    const creds = await getStoreCreds(current.store_id);
+    if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify conectado." };
+    try {
+      await updateOrderShippingAddress({
+        domain: creds.shopify_domain,
+        token: creds.shopify_token,
+        orderGid: `gid://shopify/Order/${shopifyOrderId}`,
+        address: {
+          name: current.customer_name,
+          phone: current.customer_phone,
+          address1: address,
+          address2: reference,
+          city: district,
+          province: region,
+          country: "Peru",
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        error: message.includes("Access denied") || message.includes("write_orders")
+          ? "Shopify no autorizó el cambio. La tienda necesita el permiso write_orders."
+          : `Shopify rechazó la dirección: ${message}`,
+      };
+    }
+  }
+
+  const combinedCity = normalizeCity([district, cityLabel, region].join(" "));
+  const city = isFenixCity(combinedCity) ? combinedCity : normalizeCity(cityLabel || district);
+  const { data: store } = await admin
+    .from("stores")
+    .select("org_id")
+    .eq("id", current.store_id)
+    .maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  let fenixEligible = false;
+  if (orgId) {
+    const { data: stock } = await admin
+      .from("fenix_stock")
+      .select("city,product,sku,quantity")
+      .eq("org_id", orgId);
+    fenixEligible = evaluateFenix(
+      { city, product: current.product },
+      (stock as FenixStockRow[]) ?? [],
+      order?.line_items ?? undefined,
+    ).eligible;
+  }
+
+  const update = {
+    delivery_address: address,
+    delivery_reference: reference,
+    district,
+    city,
+    region,
+    latitude: input.latitude,
+    longitude: input.longitude,
+    address_override: true,
+    address_updated_at: new Date().toISOString(),
+    address_updated_by: ctx.userId,
+    fenix_eligible: fenixEligible,
+  };
+  const targetIds = [shipmentId, current.fenix_shipment_id].filter((id): id is string => !!id);
+  const { error: updateError } = await admin.from("shipments").update(update).in("id", targetIds);
+  if (updateError) return { error: updateError.message };
+
+  await admin.from("shipment_calls").insert({
+    shipment_id: shipmentId,
+    store_id: current.store_id,
+    agent: ctx.userId,
+    kind: "address_change",
+    note: `Dirección actualizada: ${address}${reference ? ` · Ref.: ${reference}` : ""} · ${input.latitude}, ${input.longitude}`,
+  });
+  revalidatePath("/dashboard/envios");
+  return {
+    notice: isRealShopifyOrder
+      ? "Dirección y coordenadas actualizadas en Shopify y en el envío."
+      : "Dirección y coordenadas actualizadas en el envío; no había un pedido Shopify vinculado.",
+  };
+}
+
+/** Register one row/result from the Fenix courier report. Operators choose the
+ * courier outcome; the application owns the internal status transition. */
+export async function registerCourierReportResult(
+  shipmentId: string,
+  input: {
+    result: CourierReportResult;
+    deliveryDate?: string | null;
+    note?: string | null;
+  },
+): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a esta guía." };
+
+  const definition = COURIER_REPORT_RESULTS.find((item) => item.code === input.result);
+  if (!definition) return { error: "Resultado del courier inválido." };
+
+  const note = input.note?.trim() || null;
+  if (definition.requiresNote && !note) {
+    return { error: "Describe el motivo informado por Fenix para anular la guía." };
+  }
+
+  let deliveryDate: string | null = null;
+  if (definition.requiresDate) {
+    if (!input.deliveryDate) return { error: "Elige la nueva fecha de entrega." };
+    const parsed = new Date(input.deliveryDate);
+    if (Number.isNaN(parsed.getTime())) return { error: "La fecha de entrega no es válida." };
+    deliveryDate = parsed.toISOString();
+  }
+
+  const admin = createAdminSupabase();
+  const { data: shipment } = await admin
+    .from("shipments")
+    .select("id,courier,guide_code,delivery_status,next_followup_at,fenix_shipment_id")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (!shipment) return { error: "Guía no encontrada." };
+  const current = shipment as {
+    courier: string;
+    guide_code: string;
+    delivery_status: string;
+    next_followup_at: string | null;
+    fenix_shipment_id: string | null;
+  };
+  if (current.courier !== "fenix") {
+    return { error: "Este flujo corresponde al reporte Fenix. Aliclik se actualiza con su Excel diario." };
+  }
+  if (current.delivery_status === "transferido") {
+    return {
+      error: current.fenix_shipment_id
+        ? "Esta guía ya fue reemplazada. Registra el resultado en su nueva guía Fenix."
+        : "Una guía transferida no admite resultados; abre la guía Fenix activa.",
+    };
+  }
+
+  const transition = courierReportTransition(input.result);
+  const nextFollowupAt =
+    input.result === "reprogramado"
+      ? deliveryDate
+      : transition.clearScheduledDate
+        ? null
+        : current.next_followup_at;
+
+  const { error } = await admin
+    .from("shipments")
+    .update({
+      delivery_status: transition.status,
+      status_category: categoryOf(transition.status),
+      reroute_outcome: transition.outcome,
+      next_followup_at: nextFollowupAt,
+      delivered_source: transition.deliveredSource,
+      claimed_by: null,
+      claimed_at: null,
+    })
+    .eq("id", shipmentId);
+  if (error) return { error: error.message };
+
+  const auditNote = [
+    `Resultado Fenix: ${definition.label}.`,
+    note,
+  ].filter(Boolean).join(" ");
+  await admin.from("shipment_calls").insert({
+    shipment_id: shipmentId,
+    store_id: ctx.storeId,
+    agent: ctx.userId,
+    kind: "courier_report",
+    new_status: transition.status,
+    note: auditNote,
+    // Only a courier reprogramming creates a new delivery date. `en_ruta`
+    // preserves the shipment's existing date but does not pretend the report
+    // changed it in this history entry.
+    next_followup_at: input.result === "reprogramado" ? deliveryDate : null,
+  });
+
+  revalidatePath("/dashboard/envios");
+  return {
+    notice: `Guía ${current.guide_code}: ${definition.label} → ${definition.effect}`,
+  };
+}
+
 /** Manually set a delivery status (e.g. correcting an import). Logged. */
 export async function setShipmentStatus(
   shipmentId: string,
@@ -343,12 +709,20 @@ async function spinOffFenixGuide(
   const { data: parent } = await admin
     .from("shipments")
     .select(
-      "store_id,order_id,order_name,customer_name,customer_phone,product,district,city,region,fenix_shipment_id",
+      "courier,delivery_status,store_id,order_id,order_name,customer_name,customer_phone,product,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_shipment_id",
     )
     .eq("id", shipmentId)
     .maybeSingle();
   if (!parent) return { error: "No encontrado." };
-  if ((parent as { fenix_shipment_id: string | null }).fenix_shipment_id) {
+  const source = parent as {
+    courier: string;
+    delivery_status: string;
+    fenix_shipment_id: string | null;
+  };
+  if (shipmentRequiresCourierResult(source.courier, source.delivery_status)) {
+    return { error: "Primero registra el resultado del courier antes de crear otra guía Fenix." };
+  }
+  if (source.fenix_shipment_id) {
     return { error: "Este envío ya tiene una guía Fenix." };
   }
 
@@ -369,6 +743,13 @@ async function spinOffFenixGuide(
       district: p.district,
       city: p.city,
       region: p.region,
+      delivery_address: p.delivery_address,
+      delivery_reference: p.delivery_reference,
+      latitude: p.latitude,
+      longitude: p.longitude,
+      address_override: p.address_override,
+      address_updated_at: p.address_updated_at,
+      address_updated_by: p.address_updated_by,
       delivery_status: "en_ruta",
       status_category: "in_route",
       next_followup_at: opts.childNextFollowupAt ?? null,
