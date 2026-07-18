@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   DELIVERY_STATUSES,
   computeReprogramStats,
+  evaluateAliclikReschedule,
   type ReprogramChildRow,
   categoryOf,
   isCallable,
@@ -102,6 +103,54 @@ describe("delivery status model", () => {
     expect(isFutureShipmentFollowup("2026-07-22T00:00:00.000Z", evening)).toBe(true);
     expect(isFutureShipmentFollowup("2026-07-21T00:00:00.000Z", evening)).toBe(false);
     expect(isFutureShipmentFollowup("not-a-date", evening)).toBe(false);
+  });
+});
+
+describe("evaluateAliclikReschedule", () => {
+  const friday = new Date("2026-07-17T15:00:00.000Z");
+
+  it("allows Saturday through the current Friday while attempts stay below 3", () => {
+    expect(
+      evaluateAliclikReschedule(
+        { courier: "aliclik", attempts: 2, serviceDate: "2026-07-11" },
+        friday,
+      ),
+    ).toMatchObject({ eligible: true, cutoffDate: "2026-07-11", today: "2026-07-17" });
+  });
+
+  it("blocks 3 or more Aliclik attempts", () => {
+    expect(
+      evaluateAliclikReschedule(
+        { courier: "aliclik", attempts: 3, serviceDate: "2026-07-17" },
+        friday,
+      ),
+    ).toMatchObject({ eligible: false, reason: "three_attempts" });
+  });
+
+  it("resets the window on Saturday so the previous Friday moves to Fenix", () => {
+    const saturday = new Date("2026-07-18T15:00:00.000Z");
+    expect(
+      evaluateAliclikReschedule(
+        { courier: "aliclik", attempts: 1, serviceDate: "2026-07-17" },
+        saturday,
+      ),
+    ).toMatchObject({ eligible: false, reason: "outside_week", cutoffDate: "2026-07-18" });
+    expect(
+      evaluateAliclikReschedule(
+        { courier: "aliclik", attempts: 1, serviceDate: "2026-07-18" },
+        saturday,
+      ).eligible,
+    ).toBe(true);
+  });
+
+  it("fails closed when the Excel omitted attempts or service date", () => {
+    expect(
+      evaluateAliclikReschedule({ courier: "aliclik", attempts: null, serviceDate: "2026-07-17" }, friday)
+        .reason,
+    ).toBe("missing_attempts");
+    expect(
+      evaluateAliclikReschedule({ courier: "aliclik", attempts: 1, serviceDate: null }, friday).reason,
+    ).toBe("missing_service_date");
   });
 });
 

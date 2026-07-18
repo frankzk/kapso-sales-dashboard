@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { parseAliclikRow, parseAliclikReport, normalizeOrderName } from "@/lib/aliclik-import";
+import {
+  parseAliclikAttempts,
+  parseAliclikDate,
+  parseAliclikRow,
+  parseAliclikReport,
+  normalizeOrderName,
+} from "@/lib/aliclik-import";
 
 describe("normalizeOrderName", () => {
   it("normalizes to #KP… form", () => {
@@ -13,6 +19,24 @@ describe("normalizeOrderName", () => {
 });
 
 describe("parseAliclikRow", () => {
+  it("reads Aliclik's NRO. INTENTOS and operative delivery date", () => {
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X120731",
+      "NRO. INTENTOS": "3",
+      "FECHA ENTREGA": "14/07/2026",
+    });
+    expect(row.aliclik_attempts).toBe(3);
+    expect(row.aliclik_service_date).toBe("2026-07-14");
+  });
+
+  it("normalizes Excel ISO dates and rejects invalid source values", () => {
+    expect(parseAliclikDate("2026-07-18T00:00:00.000Z")).toBe("2026-07-18");
+    expect(parseAliclikDate("18/07/26")).toBe("2026-07-18");
+    expect(parseAliclikDate("31/02/2026")).toBeNull();
+    expect(parseAliclikAttempts("Intento 2")).toBe(2);
+    expect(parseAliclikAttempts("")).toBeNull();
+  });
+
   it("maps the spreadsheet headers seen in the real reports", () => {
     const row = parseAliclikRow({
       PEDIDO: "#KP114985",

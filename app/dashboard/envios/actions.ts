@@ -14,6 +14,7 @@ import {
   CLAIM_TTL_MINUTES,
   attemptLabel,
   categoryOf,
+  evaluateAliclikReschedule,
   isFutureShipmentFollowup,
   isCallable,
   isValidStatus,
@@ -175,7 +176,13 @@ export async function releaseShipment(shipmentId: string): Promise<ShipmentActio
  */
 export async function registerRerouteCall(
   shipmentId: string,
-  input: { disposition: RerouteDisposition; note?: string; nextFollowupAt?: string | null },
+  input: {
+    disposition: RerouteDisposition;
+    note?: string;
+    nextFollowupAt?: string | null;
+    reprogramProvider?: "aliclik" | "fenix";
+    forceAliclik?: boolean;
+  },
 ): Promise<ShipmentActionState> {
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
@@ -183,15 +190,20 @@ export async function registerRerouteCall(
 
   const { data: ship } = await admin
     .from("shipments")
-    .select("id,delivery_status,reroute_attempts,order_name,fenix_shipment_id")
+    .select("id,courier,guide_code,delivery_status,reroute_attempts,order_name,fenix_eligible,fenix_shipment_id,aliclik_attempts,aliclik_service_date")
     .eq("id", shipmentId)
     .maybeSingle();
   if (!ship) return { error: "No encontrado." };
   const cur = ship as {
+    courier: string;
+    guide_code: string;
     delivery_status: string;
     reroute_attempts: number | null;
     order_name: string | null;
+    fenix_eligible: boolean;
     fenix_shipment_id: string | null;
+    aliclik_attempts: number | null;
+    aliclik_service_date: string | null;
   };
 
   // Only pendiente/en_ruta admit gestión. The UI hides this on terminal guides,
@@ -218,7 +230,70 @@ export async function registerRerouteCall(
   // transfer this shipment to it (skip if already transferred). Needs an order
   // name to build the code; without one we fall through to the plain En ruta
   // transition and the operator uses the manual "Generar guía Fenix" section.
-  if (input.disposition === "confirma" && !cur.fenix_shipment_id) {
+  const reprogramProvider = input.reprogramProvider ?? "fenix";
+  if (input.disposition === "confirma" && reprogramProvider === "aliclik") {
+    const decision = evaluateAliclikReschedule({
+      courier: cur.courier,
+      attempts: cur.aliclik_attempts,
+      serviceDate: cur.aliclik_service_date,
+    });
+    if (decision.reason === "not_aliclik") {
+      return { error: "Esta ya no es una guía Aliclik; corresponde continuar con Fenix." };
+    }
+    if (decision.reason === "three_attempts") {
+      return { error: "Aliclik ya registra 3 intentos o más; solo corresponde continuar con Fenix." };
+    }
+    if (!decision.eligible && !input.forceAliclik) {
+      return { error: aliclikDecisionMessage(decision) };
+    }
+    if (!decision.eligible && !input.note?.trim()) {
+      return { error: "Describe el motivo de la excepción manual para reprogramar con Aliclik." };
+    }
+
+    const overrideLabel = decision.eligible ? "" : " (excepción manual)";
+    const auditNote = [`Reprogramación Aliclik${overrideLabel}.`, input.note?.trim() || null]
+      .filter(Boolean)
+      .join(" ");
+    const { error: updateError } = await admin
+      .from("shipments")
+      .update({
+        delivery_status: "en_ruta",
+        status_category: categoryOf("en_ruta"),
+        next_followup_at: input.nextFollowupAt,
+        reroute_outcome: decision.eligible ? "reprogramado_aliclik" : "reprogramado_aliclik_manual",
+      })
+      .eq("id", shipmentId);
+    if (updateError) return { error: updateError.message };
+
+    await admin.from("shipment_calls").insert({
+      shipment_id: shipmentId,
+      store_id: ctx.storeId,
+      agent: ctx.userId,
+      kind: "reroute",
+      new_status: "en_ruta",
+      note: auditNote,
+      next_followup_at: input.nextFollowupAt,
+    });
+    revalidatePath("/dashboard/envios");
+    return { notice: `Reprogramado en Aliclik${overrideLabel}; se conserva la guía ${cur.guide_code}.` };
+  }
+
+  if (
+    input.disposition === "confirma" &&
+    reprogramProvider === "fenix" &&
+    cur.courier === "aliclik" &&
+    !cur.fenix_eligible
+  ) {
+    return {
+      error: "Fenix no está disponible por cobertura o stock. Revisa el stock o usa una opción manual excepcional.",
+    };
+  }
+
+  if (
+    input.disposition === "confirma" &&
+    reprogramProvider === "fenix" &&
+    !cur.fenix_shipment_id
+  ) {
     const guideCode = rescheduleGuideCode(cur.order_name, input.nextFollowupAt);
     if (guideCode) {
       // carry the reprogramación date onto the new active guide at insert time
@@ -292,6 +367,21 @@ export async function registerRerouteCall(
     notice = `Registrado — ${attemptLabel(t.attempts)}.`;
   }
   return { notice };
+}
+
+function aliclikDecisionMessage(
+  decision: ReturnType<typeof evaluateAliclikReschedule>,
+): string {
+  if (decision.reason === "three_attempts") {
+    return "Aliclik ya registra 3 intentos o más; solo corresponde continuar con Fenix.";
+  }
+  if (decision.reason === "outside_week") {
+    return `La fecha de Aliclik está fuera de la ventana ${decision.cutoffDate}–${decision.today}. Continúa con Fenix o usa la excepción manual.`;
+  }
+  if (decision.reason === "missing_attempts") {
+    return "El Excel no informó NRO. INTENTOS. Continúa con Fenix o usa la excepción manual.";
+  }
+  return "El Excel no informó una fecha operativa válida. Continúa con Fenix o usa la excepción manual.";
 }
 
 /** Manually set a delivery status (e.g. correcting an import). Logged. */

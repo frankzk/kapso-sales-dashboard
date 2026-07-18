@@ -241,6 +241,10 @@ export interface ShipmentRow {
   fenix_eligible: boolean;
   fenix_shipment_id: string | null;
   delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado
+  /** Delivery attempts reported by Aliclik's daily Excel (NRO. INTENTOS). */
+  aliclik_attempts: number | null;
+  /** Operative delivery date reported by Aliclik, as YYYY-MM-DD. */
+  aliclik_service_date: string | null;
   reroute_attempts: number;
   /** Number of logged calls, populated on shipment queue reads. */
   contact_count?: number;

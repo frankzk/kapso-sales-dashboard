@@ -23,6 +23,8 @@ interface ExistingShipment {
   store_id: string;
   last_report_at: string | null;
   delivered_source: string | null;
+  aliclik_attempts: number | null;
+  aliclik_service_date: string | null;
 }
 
 export interface IngestResult {
@@ -169,6 +171,8 @@ export async function ingestAliclikReport(
       status_category: categoryOf(mergedStatus),
       delivered_source,
       fenix_eligible: fenix,
+      aliclik_attempts: inc.row.aliclik_attempts ?? existing?.aliclik_attempts ?? null,
+      aliclik_service_date: inc.row.aliclik_service_date ?? existing?.aliclik_service_date ?? null,
       source_batch_id: batchId,
       last_report_at,
     });
@@ -203,6 +207,8 @@ export async function ingestAliclikReport(
       city: rm.parsed.city,
       delivery_status: rm.parsed.delivery_status,
       store_hint: rm.parsed.store_hint,
+      aliclik_attempts: rm.parsed.aliclik_attempts,
+      aliclik_service_date: rm.parsed.aliclik_service_date,
     },
     match_status: rm.matchStatus,
     shipment_id: rm.guideCode ? (guideToId.get(rm.guideCode) ?? null) : null,
@@ -271,7 +277,7 @@ async function fetchExistingShipments(
   for (const chunk of chunked(guideCodes, 200)) {
     const { data } = await admin
       .from("shipments")
-      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,delivered_source")
+      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,delivered_source,aliclik_attempts,aliclik_service_date")
       .eq("courier", "aliclik")
       .in("guide_code", chunk);
     for (const r of (data as ExistingShipment[]) ?? []) map.set(r.guide_code, r);

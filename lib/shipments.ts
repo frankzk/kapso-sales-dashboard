@@ -1,6 +1,7 @@
 // Canonical shipment state model + helpers. Pure + unit-tested. The model is
-// centered on the CALL-GESTIÓN + Fenix delivery flow (not Aliclik's dispatch
-// states). Four global states:
+// centered on the CALL-GESTIÓN flow. A confirmed reprogramming first stays on
+// Aliclik when its weekly/attempt rules allow it; otherwise it can spin off a
+// Fenix guide. The shared state machine remains courier-agnostic:
 //
 //   pendiente → (confirma) → en_ruta → (entregado) → entregado
 //        │                      │
@@ -118,6 +119,63 @@ export function limaCalendarDayBounds(now: Date = new Date()): {
     startIso: new Date(startMs).toISOString(),
     endIso: new Date(startMs + 86_400_000).toISOString(),
   };
+}
+
+export type AliclikRescheduleReason =
+  | "eligible"
+  | "not_aliclik"
+  | "missing_attempts"
+  | "three_attempts"
+  | "missing_service_date"
+  | "outside_week";
+
+export interface AliclikRescheduleDecision {
+  eligible: boolean;
+  reason: AliclikRescheduleReason;
+  cutoffDate: string;
+  today: string;
+}
+
+/**
+ * Aliclik permits a reprogramming only for guides dated from the most recent
+ * Saturday through today, and only while its own report shows fewer than three
+ * delivery attempts. On Saturday the window resets, so older guides move to
+ * Fenix. Missing source data fails closed; the UI still offers an audited
+ * manual override for exceptional cases.
+ */
+export function evaluateAliclikReschedule(
+  input: {
+    courier?: string | null;
+    attempts?: number | null;
+    serviceDate?: string | null;
+  },
+  now: Date = new Date(),
+): AliclikRescheduleDecision {
+  const today = dateKeyInTimeZone(now, "America/Lima");
+  const todayUtc = new Date(`${today}T12:00:00.000Z`);
+  const daysSinceSaturday = (todayUtc.getUTCDay() + 1) % 7;
+  const cutoffDate = new Date(todayUtc.getTime() - daysSinceSaturday * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  const result = (eligible: boolean, reason: AliclikRescheduleReason): AliclikRescheduleDecision => ({
+    eligible,
+    reason,
+    cutoffDate,
+    today,
+  });
+
+  if ((input.courier ?? "aliclik").toLowerCase() !== "aliclik") {
+    return result(false, "not_aliclik");
+  }
+  if (input.attempts == null) return result(false, "missing_attempts");
+  if (input.attempts >= 3) return result(false, "three_attempts");
+  if (!input.serviceDate || !/^\d{4}-\d{2}-\d{2}$/.test(input.serviceDate)) {
+    return result(false, "missing_service_date");
+  }
+  if (input.serviceDate < cutoffDate || input.serviceDate > today) {
+    return result(false, "outside_week");
+  }
+  return result(true, "eligible");
 }
 
 function selectedUtcDateKey(iso: string | null | undefined): string | null {

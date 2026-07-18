@@ -7,6 +7,7 @@ import { Card } from "@/components/ui";
 import {
   DELIVERY_STATUSES,
   attemptLabel,
+  evaluateAliclikReschedule,
   isCallable,
   isShipmentReadyForContact,
   isShipmentReadyForContactToday,
@@ -44,7 +45,7 @@ const CATEGORY_BADGE: Record<string, string> = {
 };
 
 const DISPOSITIONS: { key: RerouteDisposition; label: string }[] = [
-  { key: "confirma", label: "Cliente confirma (→ nueva guía Fenix)" },
+  { key: "confirma", label: "Cliente confirma reprogramación" },
   { key: "programar", label: "Programar próxima llamada" },
   { key: "no_contesta", label: "No contesta" },
   { key: "entregado", label: "Entregado (Fenix)" },
@@ -62,6 +63,30 @@ function fmtReprogram(iso: string | null | undefined): string {
     month: "short",
     timeZone: "UTC",
   });
+}
+
+function fmtAliclikDate(date: string | null | undefined): string {
+  if (!date) return "—";
+  const parsed = new Date(`${date}T12:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return parsed.toLocaleDateString("es-PE", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  });
+}
+
+function aliclikDecisionCopy(
+  decision: ReturnType<typeof evaluateAliclikReschedule>,
+): string {
+  if (decision.eligible) return "Disponible: menos de 3 intentos y dentro de la semana vigente.";
+  if (decision.reason === "three_attempts") return "Bloqueado: Aliclik registra 3 intentos o más.";
+  if (decision.reason === "outside_week") {
+    return `Bloqueado: la fecha está fuera de la ventana ${decision.cutoffDate}–${decision.today}.`;
+  }
+  if (decision.reason === "missing_attempts") return "Bloqueado: el Excel no informó NRO. INTENTOS.";
+  if (decision.reason === "missing_service_date") return "Bloqueado: el Excel no informó la fecha operativa.";
+  return "No aplica: esta ya no es una guía Aliclik.";
 }
 
 function localDateInputValue(date: Date = new Date()): string {
@@ -499,7 +524,7 @@ function ShipmentTable({
             <th className="px-4 py-2.5 text-left font-medium">Distrito / Ciudad</th>
             <th className="px-4 py-2.5 text-left font-medium">Estado</th>
             <th className="px-4 py-2.5 text-left font-medium">Reprogramación</th>
-            <th className="px-4 py-2.5 text-right font-medium">Intentos</th>
+            <th className="px-4 py-2.5 text-left font-medium">Ruta sugerida</th>
           </tr>
         </thead>
         <tbody>
@@ -536,14 +561,32 @@ function ShipmentTable({
                 <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
               </td>
               <td className="px-4 py-2.5 text-slate-600">{fmtReprogram(s.next_followup_at)}</td>
-              <td className="px-4 py-2.5 text-right text-slate-600">
-                {s.status_category === "pending" ? `${s.reroute_attempts} / 7` : "—"}
-              </td>
+              <td className="px-4 py-2.5"><AliclikRouteCell shipment={s} /></td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function AliclikRouteCell({ shipment }: { shipment: ShipmentRow }) {
+  if (shipment.courier !== "aliclik" || shipment.status_category !== "pending") {
+    return <span className="text-slate-400">—</span>;
+  }
+  const decision = evaluateAliclikReschedule({
+    courier: shipment.courier,
+    attempts: shipment.aliclik_attempts,
+    serviceDate: shipment.aliclik_service_date,
+  });
+  return decision.eligible ? (
+    <span className="inline-flex rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+      Aliclik · {shipment.aliclik_attempts ?? 0}/3
+    </span>
+  ) : (
+    <span className="inline-flex rounded-full bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700">
+      Fenix · {shipment.aliclik_attempts == null ? "sin dato" : `${shipment.aliclik_attempts}/3`}
+    </span>
   );
 }
 
@@ -568,12 +611,24 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
   const [manualStatus, setManualStatus] = useState("");
   const [fenixGuide, setFenixGuide] = useState("");
   const [showOrderPicker, setShowOrderPicker] = useState(false);
+  const [reprogramProvider, setReprogramProvider] = useState<"aliclik" | "fenix">("fenix");
+  const [forceAliclik, setForceAliclik] = useState(false);
 
   const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => {
     let alive = true;
     loadShipmentDetail(shipmentId).then((d) => {
-      if (alive) setDetail(d);
+      if (!alive) return;
+      setDetail(d);
+      if (d && !("error" in d)) {
+        const decision = evaluateAliclikReschedule({
+          courier: d.shipment.courier,
+          attempts: d.shipment.aliclik_attempts,
+          serviceDate: d.shipment.aliclik_service_date,
+        });
+        setReprogramProvider(decision.eligible ? "aliclik" : "fenix");
+        setForceAliclik(false);
+      }
     });
     return () => {
       alive = false;
@@ -596,8 +651,28 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
 
   const programDateInvalid =
     disposition === "programar" && (!nextDate || nextDate <= localDateInputValue());
+  const shipment = detail && !("error" in detail) ? detail.shipment : null;
+  const aliclikDecision = shipment
+    ? evaluateAliclikReschedule({
+        courier: shipment.courier,
+        attempts: shipment.aliclik_attempts,
+        serviceDate: shipment.aliclik_service_date,
+      })
+    : null;
+  const overrideNoteMissing =
+    disposition === "confirma" && reprogramProvider === "aliclik" && forceAliclik && !note.trim();
+  const fenixAutoUnavailable =
+    disposition === "confirma" &&
+    reprogramProvider === "fenix" &&
+    shipment?.courier === "aliclik" &&
+    !shipment.fenix_eligible;
+  const fenixRouteAvailable =
+    !!shipment && (shipment.courier !== "aliclik" || shipment.fenix_eligible);
   const requiredDateMissing =
-    (disposition === "confirma" && !nextDate) || programDateInvalid;
+    (disposition === "confirma" && !nextDate) ||
+    programDateInvalid ||
+    overrideNoteMissing ||
+    fenixAutoUnavailable;
 
   return (
     <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={onClose}>
@@ -639,7 +714,16 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
               <Field label="Ciudad" value={detail.shipment.city} />
               <Field label="Distrito" value={detail.shipment.district} />
               <Field label="Producto" value={detail.shipment.product} clamp />
-              <Field label="Intentos" value={`${detail.shipment.reroute_attempts} / 7`} />
+              <Field
+                label="Intentos Aliclik"
+                value={
+                  detail.shipment.aliclik_attempts == null
+                    ? "Sin dato"
+                    : `${detail.shipment.aliclik_attempts} / 3`
+                }
+              />
+              <Field label="Fecha Aliclik" value={fmtAliclikDate(detail.shipment.aliclik_service_date)} />
+              <Field label="Llamadas de gestión" value={`${detail.shipment.reroute_attempts} / 7`} />
               <Field
                 label="Fenix"
                 value={detail.shipment.fenix_eligible ? "Elegible" : "No elegible"}
@@ -718,18 +802,85 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                     </option>
                   ))}
                 </select>
-                {disposition === "confirma" &&
-                  (detail.shipment.order_name ? (
-                    <p className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
-                      Elige la fecha y al confirmar se generará automáticamente una{" "}
-                      <b>nueva guía Fenix</b> con esa fecha, lista para subir al sistema Fenix.
-                    </p>
-                  ) : (
-                    <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
-                      Este envío no tiene N° de pedido para autogenerar la guía. Elige la fecha; se
-                      marcará En ruta y podrás crear la guía en <b>Generar guía Fenix (manual)</b> abajo.
-                    </p>
-                  ))}
+                {disposition === "confirma" && aliclikDecision && (
+                  <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Paso 1 · elegir ruta
+                      </p>
+                      <p className="mt-0.5 text-xs text-slate-600">{aliclikDecisionCopy(aliclikDecision)}</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReprogramProvider("aliclik");
+                          setForceAliclik(false);
+                        }}
+                        disabled={!aliclikDecision.eligible}
+                        className={cn(
+                          "rounded-lg border px-2.5 py-2 text-left text-xs transition",
+                          reprogramProvider === "aliclik" && !forceAliclik
+                            ? "border-emerald-500 bg-emerald-50 text-emerald-800"
+                            : "border-slate-200 bg-white text-slate-600",
+                          !aliclikDecision.eligible && "cursor-not-allowed opacity-45",
+                        )}
+                      >
+                        <span className="block font-semibold">Aliclik</span>
+                        <span>Misma guía</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReprogramProvider("fenix");
+                          setForceAliclik(false);
+                        }}
+                        disabled={!fenixRouteAvailable}
+                        className={cn(
+                          "rounded-lg border px-2.5 py-2 text-left text-xs transition",
+                          reprogramProvider === "fenix"
+                            ? "border-orange-400 bg-orange-50 text-orange-800"
+                            : "border-slate-200 bg-white text-slate-600",
+                          !fenixRouteAvailable && "cursor-not-allowed opacity-45",
+                        )}
+                      >
+                        <span className="block font-semibold">Fenix</span>
+                        <span>{fenixRouteAvailable ? "Nueva guía" : "Sin stock/cobertura"}</span>
+                      </button>
+                    </div>
+                    {!aliclikDecision.eligible &&
+                      aliclikDecision.reason !== "not_aliclik" &&
+                      aliclikDecision.reason !== "three_attempts" && (
+                      <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-dashed border-slate-300 bg-white p-2 text-xs text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={forceAliclik}
+                          onChange={(e) => {
+                            setForceAliclik(e.target.checked);
+                            setReprogramProvider(e.target.checked ? "aliclik" : "fenix");
+                          }}
+                          className="mt-0.5"
+                        />
+                        <span>
+                          <b>Excepción manual Aliclik.</b> Requiere explicar el motivo en la nota y quedará auditada.
+                        </span>
+                      </label>
+                    )}
+                    {reprogramProvider === "aliclik" ? (
+                      <p className="rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-800">
+                        Primero realiza la reprogramación en Aliclik. Luego confírmala aquí: se conservará la guía actual.
+                      </p>
+                    ) : detail.shipment.order_name ? (
+                      <p className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
+                        Se generará automáticamente una <b>nueva guía Fenix</b> con la fecha elegida.
+                      </p>
+                    ) : (
+                      <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
+                        Sin N° de pedido no se puede autogenerar. Usa <b>Generar guía Fenix (manual)</b> abajo.
+                      </p>
+                    )}
+                  </div>
+                )}
                 {disposition === "programar" && (
                   <p className="rounded-lg bg-sky-50 px-2.5 py-1.5 text-xs text-sky-800">
                     La guía se ocultará hasta la fecha elegida y volverá a la cola ese día.
@@ -738,7 +889,9 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                 )}
                 <label className="block text-xs text-slate-500">
                   {disposition === "confirma"
-                    ? "Fecha de reprogramación (va en la guía)"
+                    ? reprogramProvider === "aliclik"
+                      ? "Fecha de reprogramación en Aliclik"
+                      : "Fecha de reprogramación (va en la nueva guía Fenix)"
                     : disposition === "programar"
                       ? "Fecha de próxima llamada"
                       : "Próximo intento"}
@@ -764,6 +917,8 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                         disposition,
                         note,
                         nextFollowupAt: nextDate ? new Date(nextDate).toISOString() : null,
+                        reprogramProvider,
+                        forceAliclik,
                       }),
                     )
                   }
@@ -772,11 +927,19 @@ function ShipmentDrawer({ shipmentId, onClose }: { shipmentId: string; onClose: 
                 >
                   {disposition === "confirma" && !nextDate
                     ? "Elige la fecha para confirmar"
+                    : fenixAutoUnavailable
+                      ? "Fenix no disponible; usa una excepción manual"
+                    : overrideNoteMissing
+                      ? "Explica el motivo de la excepción"
                     : programDateInvalid
                       ? "Elige una fecha futura"
                       : disposition === "programar"
                         ? "Programar llamada"
-                        : "Registrar llamada"}
+                        : disposition === "confirma" && reprogramProvider === "aliclik"
+                          ? "Confirmar reprogramación Aliclik"
+                          : disposition === "confirma"
+                            ? "Crear guía Fenix y confirmar"
+                            : "Registrar llamada"}
                 </button>
               </section>
             )}
