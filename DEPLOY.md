@@ -320,6 +320,19 @@ saca. Los estados de "sí hablé" (contactado/otros productos) y los cierres
 
 ## 7. Post-deploy verification
 
+### WhatsApp delivery lifecycle
+
+- Apply migration **0037** (`whatsapp_outbox`) before deploying the application.
+  It is additive and does not lock or rewrite existing leads/messages.
+- In Kapso, point the WhatsApp status events `sent`, `delivered`, `read` and
+  `failed` to the existing per-store endpoint
+  `/api/webhooks/kapso/[storeId]?secret=<STORE_WEBHOOK_SECRET>`. Transcript
+  polling also repairs a missed webhook in the background.
+- Send one test message and confirm its row advances in order in
+  `whatsapp_outbox`. A provider-declared failure must show **Reintentar**; a
+  network-ambiguous result must show **Estado por confirmar** and must not offer
+  an unsafe automatic retry.
+
 - **Health**: `curl https://<domain>/api/health` → `{ "ok": true, … }` (public,
   no secrets) confirms the deployment is serving.
 - **Backfill parity**: in Shopify Admin, filter orders by `tag:kapso` for a date

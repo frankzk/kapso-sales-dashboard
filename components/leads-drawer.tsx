@@ -36,6 +36,7 @@ import {
   searchStoreProducts,
   sendLeadMedia,
   sendLeadMessage,
+  retryLeadMessage,
   type LeadActionState,
   type LeadConversationMessage,
   type LeadThread,
@@ -868,6 +869,7 @@ function WhatsappChat({
   const [showJump, setShowJump] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const load = useCallback(
     (opts?: { silent?: boolean; conversationId?: string }) => {
@@ -1018,6 +1020,26 @@ function WhatsappChat({
     });
   }
 
+  async function retryMessage(message: LeadConversationMessage) {
+    if (!message.outboxId || retryingId) return;
+    setRetryingId(message.outboxId);
+    try {
+      const result = await retryLeadMessage(leadId, message.outboxId);
+      setState((current) => {
+        if (current.status !== "ready" || !result.sentMessage) return current;
+        return {
+          ...current,
+          messages: current.messages.map((item) =>
+            item.outboxId === message.outboxId ? result.sentMessage! : item,
+          ),
+        };
+      });
+      if (!result.error) onSent({ leadPatch: result.leadPatch });
+    } finally {
+      setRetryingId(null);
+    }
+  }
+
   // Switch to another number's thread (multi-number lead).
   function switchThread(convId: string) {
     if (convId === activeIdRef.current) return;
@@ -1060,7 +1082,16 @@ function WhatsappChat({
       );
       lastDay = day;
     }
-    rows.push(<ChatBubble key={m.id ?? `m-${i}`} leadId={leadId} msg={m} highlight={q} />);
+    rows.push(
+      <ChatBubble
+        key={m.id ?? `m-${i}`}
+        leadId={leadId}
+        msg={m}
+        highlight={q}
+        onRetry={retryMessage}
+        retrying={retryingId === m.outboxId}
+      />,
+    );
   });
 
   return (
@@ -1239,8 +1270,11 @@ function statusTicks(status: string | null): { marks: string; cls: string; label
       return { marks: "✓✓", cls: "text-emerald-800/50", label: "Entregado" };
     case "sent":
       return { marks: "✓", cls: "text-emerald-800/50", label: "Enviado" };
+    case "pending":
     case "sending":
       return { marks: "◷", cls: "text-emerald-800/40", label: "Enviando" };
+    case "unknown":
+      return { marks: "?", cls: "text-amber-600", label: "Estado por confirmar" };
     case "failed":
     case "error":
       return { marks: "⚠", cls: "text-red-500", label: "No se envió" };
@@ -1255,10 +1289,14 @@ function ChatBubble({
   leadId,
   msg,
   highlight,
+  onRetry,
+  retrying,
 }: {
   leadId: string;
   msg: LeadConversationMessage;
   highlight?: string;
+  onRetry: (message: LeadConversationMessage) => void;
+  retrying: boolean;
 }) {
   const outbound = msg.direction === "outbound";
   const mediaSrc = msg.mediaUrl ? `/api/leads/${leadId}/media?u=${encodeURIComponent(msg.mediaUrl)}` : null;
@@ -1318,6 +1356,27 @@ function ChatBubble({
             </span>
           )}
         </p>
+        {outbound && msg.status === "unknown" && (
+          <p className="mt-1 text-[11px] text-amber-700">
+            Estado por confirmar. Actualiza el chat antes de volver a enviar.
+          </p>
+        )}
+        {outbound && (msg.status === "failed" || msg.status === "error") && (
+          <div className="mt-1 flex items-center justify-end gap-2 text-[11px] text-red-700">
+            <span className="min-w-0 truncate" title={msg.error ?? undefined}>No se envió</span>
+            {msg.retryable && msg.outboxId && (
+              <button
+                type="button"
+                onClick={() => onRetry(msg)}
+                disabled={retrying}
+                className="shrink-0 rounded-full border border-red-300 bg-white/70 px-2 py-0.5 font-semibold hover:bg-white disabled:opacity-60"
+                aria-label="Reintentar mensaje fallido"
+              >
+                {retrying ? "Reintentando…" : "↻ Reintentar"}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1387,13 +1446,16 @@ function WhatsappComposer({
     setMsg(null);
     setText("");
     const localId = onOptimisticSend(body);
+    const clientToken = crypto.randomUUID();
     startUiMeasure("kapso:whatsapp-send");
     startTransition(async () => {
-      const res = await sendLeadMessage(leadId, body, phoneNumberId ?? undefined);
+      const res = await sendLeadMessage(leadId, body, phoneNumberId ?? undefined, clientToken);
       finishUiMeasure("kapso:whatsapp-send");
       if (res.error) {
-        onSendSettled(localId, null);
-        setText(body);
+        onSendSettled(localId, res.sentMessage ?? null);
+        // Once an attempt is persisted it stays in the transcript and owns its
+        // retry action. Restore the draft only when no attempt was recorded.
+        if (!res.sentMessage) setText(body);
         // Window closed mid-send → flip to the closed state with a clear reason
         // (retry is futile). Other errors keep the text so "Reintentar" can resend.
         if (res.windowClosed) {
@@ -1401,7 +1463,7 @@ function WhatsappComposer({
           setMsg(res.error);
           return;
         }
-        setMsg(res.error);
+        setMsg(res.sentMessage ? null : res.error);
         return;
       }
       onSendSettled(localId, res.sentMessage ?? null);

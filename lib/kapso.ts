@@ -196,7 +196,7 @@ export function listMessages(
 
 export type WhatsappSendResult =
   | { ok: true; id: string | null }
-  | { ok: false; error: string; code?: number };
+  | { ok: false; error: string; code?: number; ambiguous?: boolean };
 
 /**
  * POST a pre-built message payload to Kapso's Meta proxy
@@ -225,7 +225,9 @@ async function postWhatsappMessage(
       body: JSON.stringify(payload),
     });
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "network error" };
+    // The request may have reached Meta even though its response never reached
+    // us. Mark it ambiguous so callers do not auto-retry and duplicate a send.
+    return { ok: false, error: e?.message ?? "network error", ambiguous: true };
   }
   const json: any = await res.json().catch(() => null);
   if (!res.ok) {
@@ -1290,15 +1292,25 @@ export interface HandoffInfo {
  * systems that can target the same endpoint:
  *   - Platform webhooks → `workflow.execution.handoff` (hot lead).
  *   - WhatsApp webhooks  → `whatsapp.conversation.ended` / `.inactive` (abandono).
- * Message events are acknowledged but ignored. Routing prefers the
+ * Delivery-status message events update the reliable outbox; inbound message
+ * events are acknowledged without a second ingestion path. Routing prefers the
  * `X-Webhook-Event` header (passed in as `event`) and falls back to the shape.
  */
-export type KapsoEventKind = "handoff" | "conversation" | "skip";
+export type KapsoEventKind = "handoff" | "conversation" | "message_status" | "skip";
 
 export function classifyKapsoEvent(event: string | null | undefined, body: any): KapsoEventKind {
   const e = (event ?? body?.event ?? body?.type ?? "").toString().toLowerCase();
   if (e.includes("workflow.execution.handoff")) return "handoff";
   if (e.startsWith("whatsapp.conversation.")) return "conversation";
+  if (
+    e.startsWith("whatsapp.message.") &&
+    (["sent", "delivered", "read", "failed"].some((status) => e.endsWith(`.${status}`)) ||
+      [body?.status, body?.message?.status, body?.data?.message?.status].some((status) =>
+        ["sent", "delivered", "read", "failed"].includes(String(status ?? "").toLowerCase()),
+      ))
+  ) {
+    return "message_status";
+  }
   if (e.startsWith("whatsapp.message.")) return "skip";
   // No/unknown event header — infer from payload shape.
   if (
@@ -1310,6 +1322,15 @@ export function classifyKapsoEvent(event: string | null | undefined, body: any):
     return "handoff";
   }
   if (body?.conversation != null) return "conversation";
+  if (
+    Array.isArray(body?.statuses) ||
+    Array.isArray(body?.data?.statuses) ||
+    (Array.isArray(body?.entry) && body.entry.some((entry: any) =>
+      entry?.changes?.some((change: any) => Array.isArray(change?.value?.statuses)),
+    ))
+  ) {
+    return "message_status";
+  }
   return "skip";
 }
 
