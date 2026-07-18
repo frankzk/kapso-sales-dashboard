@@ -637,7 +637,7 @@ describe("classifyKapsoEvent (webhook routing)", () => {
 
   it("skips message events", () => {
     expect(classifyKapsoEvent("whatsapp.message.received", {})).toBe("skip");
-    expect(classifyKapsoEvent("whatsapp.message.delivered", {})).toBe("skip");
+    expect(classifyKapsoEvent("whatsapp.message.delivered", {})).toBe("message_status");
   });
 
   it("falls back to payload shape when no event header", () => {

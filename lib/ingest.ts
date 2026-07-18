@@ -34,6 +34,7 @@ import {
   summarizeApiLogs,
   tzParts,
 } from "@/lib/metrics";
+import { applyWhatsappStatusEvents, parseWhatsappStatusEvents } from "@/lib/whatsapp-outbox";
 import {
   applyHandoff,
   archiveStaleLeads,
@@ -492,6 +493,11 @@ export async function processKapsoWebhook(
   if (kind === "conversation") {
     const res = await ingestConversationEvent(admin, params.storeId, params.body);
     return { status: "ok", kind, reason: res.reason };
+  }
+  if (kind === "message_status") {
+    const events = parseWhatsappStatusEvents(params.body, params.eventHeader);
+    const updated = await applyWhatsappStatusEvents(admin, params.storeId, events);
+    return { status: "ok", kind, reason: `statuses:${events.length};updated:${updated}` };
   }
   return { status: "ok", kind, reason: "skipped" };
 }

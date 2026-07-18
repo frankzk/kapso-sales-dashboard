@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
@@ -45,6 +46,15 @@ import {
 import { getWaNumbers } from "@/lib/access";
 import { getLeadsInsights, type LeadsInsights } from "@/lib/leads-insights";
 import { drawerConversationIds } from "@/lib/lead-drawer";
+import {
+  applyWhatsappStatusEvents,
+  isMissingWhatsappOutbox,
+  isRetryableWhatsappFailure,
+  listLeadWhatsappOutbox,
+  mergeTranscriptWithOutbox,
+  normalizeWhatsappStatus,
+  type WhatsappOutboxRow,
+} from "@/lib/whatsapp-outbox";
 
 // Process-level cache of vendedora id → display name (emails ~never change).
 const agentNameCache = new Map<string, string>();
@@ -1005,6 +1015,9 @@ export interface LeadConversationMessage {
   mediaKind: "image" | "audio" | "video" | "document" | "sticker" | null;
   mediaUrl: string | null;
   status: string | null; // WhatsApp delivery status (sent/delivered/read/failed)
+  outboxId?: string;
+  retryable?: boolean;
+  error?: string | null;
 }
 
 /** One WhatsApp thread for a lead: the customer wrote to this business number.
@@ -1037,6 +1050,30 @@ function toLeadConversationMessages(parsed: ConversationMessage[]): LeadConversa
   }));
 }
 
+/** Webhooks are the primary lifecycle signal. Transcript polling also repairs
+ * missed/out-of-order webhooks in the background without delaying chat paint. */
+function reconcileTranscriptStatuses(storeId: string, messages: LeadConversationMessage[]): void {
+  const events = messages.flatMap((message) => {
+    const status = normalizeWhatsappStatus(message.status);
+    if (message.direction !== "outbound" || !message.id || !status) return [];
+    return [{
+      providerMessageId: message.id,
+      status,
+      at: message.at,
+      errorCode: null,
+      errorMessage: null,
+    }];
+  });
+  if (!events.length) return;
+  after(async () => {
+    try {
+      await applyWhatsappStatusEvents(createAdminSupabase(), storeId, events);
+    } catch {
+      // Best-effort repair; the next webhook/poll will retry.
+    }
+  });
+}
+
 /**
  * Load a lead's WhatsApp conversation (text + media) from Kapso. Also returns the
  * list of THREADS — one per connected number the customer wrote to — so the drawer
@@ -1061,6 +1098,7 @@ export async function loadLeadConversation(
   });
   const ctx = await authorizeLead(leadId);
   if (!ctx) return empty("Sin acceso a este lead.");
+  const outboxPromise = listLeadWhatsappOutbox(createAdminSupabase(), ctx.storeId, leadId).catch(() => []);
 
   const creds = await getStoreCreds(ctx.storeId);
   const lead = {
@@ -1084,7 +1122,13 @@ export async function loadLeadConversation(
   if (!includeOlder && !conversationId && storedId) {
     try {
       const activeMsgs = await fetchConversationTranscript({ apiKey }, storedId, 1);
-      const messages = toLeadConversationMessages(activeMsgs);
+      const providerMessages = toLeadConversationMessages(activeMsgs);
+      reconcileTranscriptStatuses(ctx.storeId, providerMessages);
+      const messages = mergeTranscriptWithOutbox(
+        providerMessages,
+        await outboxPromise,
+        lead?.wa_phone_number_id ?? null,
+      );
       return {
         messages,
         threads: [],
@@ -1093,12 +1137,17 @@ export async function loadLeadConversation(
         reason: messages.length ? undefined : "Sin mensajes en esta conversación todavía.",
       };
     } catch {
+      const messages = mergeTranscriptWithOutbox(
+        [],
+        await outboxPromise,
+        lead?.wa_phone_number_id ?? null,
+      );
       return {
-        messages: [],
+        messages,
         threads: [],
         activeConversationId: storedId,
         activePhoneNumberId: lead?.wa_phone_number_id ?? null,
-        reason: "No se pudo cargar la conversación de WhatsApp.",
+        reason: messages.length ? undefined : "No se pudo cargar la conversación de WhatsApp.",
       };
     }
   }
@@ -1171,12 +1220,13 @@ export async function loadLeadConversation(
         ? storedTranscript
         : await fetchConversationTranscript({ apiKey }, activeId, 2);
   } catch {
+    const messages = mergeTranscriptWithOutbox([], await outboxPromise, activePhoneNumberId);
     return {
-      messages: [],
+      messages,
       threads,
       activeConversationId: activeId,
       activePhoneNumberId,
-      reason: "No se pudo cargar la conversación de WhatsApp.",
+      reason: messages.length ? undefined : "No se pudo cargar la conversación de WhatsApp.",
     };
   }
   const olderMsgs = await Promise.all(
@@ -1187,8 +1237,13 @@ export async function loadLeadConversation(
     ),
   );
   const parsed = mergeTranscripts([activeMsgs, ...olderMsgs]);
-
-  const messages = toLeadConversationMessages(parsed ?? []);
+  const providerMessages = toLeadConversationMessages(parsed ?? []);
+  reconcileTranscriptStatuses(ctx.storeId, providerMessages);
+  const messages = mergeTranscriptWithOutbox(
+    providerMessages,
+    await outboxPromise,
+    activePhoneNumberId,
+  );
   return {
     messages,
     threads,
@@ -1207,6 +1262,8 @@ export async function sendLeadMessage(
   leadId: string,
   text: string,
   phoneNumberId?: string,
+  clientToken?: string,
+  retryOf?: string,
 ): Promise<LeadActionState> {
   const body = text.trim();
   if (!body) return { error: "Escribe un mensaje." };
@@ -1225,21 +1282,134 @@ export async function sendLeadMessage(
     return { error: "La tienda no tiene WhatsApp/Kapso configurado." };
   }
 
+  const token = (clientToken ?? randomUUID()).trim();
+  if (!token || token.length > 100) return { error: "Identificador de envío inválido." };
+  if (retryOf) {
+    const { data: previous } = await admin
+      .from("whatsapp_outbox")
+      .select("body,phone_number_id,status,retryable")
+      .eq("id", retryOf)
+      .eq("lead_id", leadId)
+      .eq("store_id", ctx.storeId)
+      .maybeSingle();
+    if (
+      !previous ||
+      previous.status !== "failed" ||
+      previous.retryable !== true ||
+      previous.body !== body ||
+      previous.phone_number_id !== pnId
+    ) {
+      return { error: "Este mensaje no se puede reintentar de forma segura." };
+    }
+  }
+  let outbox: WhatsappOutboxRow | null = null;
+  const { data: inserted, error: insertError } = await admin
+    .from("whatsapp_outbox")
+    .insert({
+      store_id: ctx.storeId,
+      lead_id: leadId,
+      client_token: token,
+      retry_of: retryOf ?? null,
+      phone_number_id: pnId,
+      to_phone: phone,
+      kind: "text",
+      body,
+      status: "pending",
+    })
+    .select("*")
+    .single();
+  if (insertError?.code === "23505") {
+    const { data: existing } = await admin
+      .from("whatsapp_outbox")
+      .select("*")
+      .eq("store_id", ctx.storeId)
+      .eq("client_token", token)
+      .maybeSingle();
+    if (!existing) return { error: "No se pudo verificar el envío. Actualiza la conversación." };
+    const row = existing as WhatsappOutboxRow;
+    return {
+      notice: row.status === "pending" ? "El envío ya está en proceso." : "Este envío ya fue procesado.",
+      sentMessage: {
+        id: row.provider_message_id ?? `outbox:${row.id}`,
+        direction: "outbound",
+        at: row.created_at,
+        text: row.body ?? body,
+        mediaKind: null,
+        mediaUrl: null,
+        status: row.status,
+        outboxId: row.id,
+        retryable: row.retryable,
+        error: row.error_message,
+      },
+    };
+  }
+  if (insertError && !isMissingWhatsappOutbox(insertError)) {
+    return { error: "No se pudo preparar el envío. Intenta nuevamente." };
+  }
+  outbox = inserted ? (inserted as WhatsappOutboxRow) : null;
+
   const res = await sendWhatsappText(
     { apiKey: creds.kapso_api_key },
     { phoneNumberId: pnId, to: phone, body },
   );
   if (!res.ok) {
     const closed = res.code === 131047 || /24\s*h|re-?engag|outside|window/i.test(res.error);
+    const ambiguous = res.ambiguous === true;
+    const status = ambiguous ? "unknown" : "failed";
+    const retryable = !ambiguous && !closed && isRetryableWhatsappFailure(res.code);
+    if (outbox) {
+      const failedAt = new Date().toISOString();
+      const { data } = await admin
+        .from("whatsapp_outbox")
+        .update({
+          status,
+          retryable,
+          error_code: res.code != null ? String(res.code) : null,
+          error_message: res.error,
+          failed_at: ambiguous ? null : failedAt,
+          updated_at: failedAt,
+        })
+        .eq("id", outbox.id)
+        .eq("store_id", ctx.storeId)
+        .select("*")
+        .single();
+      if (data) outbox = data as WhatsappOutboxRow;
+    }
     return {
       windowClosed: closed,
+      sentMessage: outbox
+        ? {
+            id: outbox.provider_message_id ?? `outbox:${outbox.id}`,
+            direction: "outbound",
+            at: outbox.created_at,
+            text: outbox.body ?? body,
+            mediaKind: null,
+            mediaUrl: null,
+            status: outbox.status,
+            outboxId: outbox.id,
+            retryable: outbox.retryable,
+            error: outbox.error_message,
+          }
+        : undefined,
       error: closed
         ? "Se cerró la ventana de 24h: el cliente debe volver a escribirte para poder responderle."
-        : `No se pudo enviar: ${res.error}`,
+        : ambiguous
+          ? "No pudimos confirmar el resultado. No reintentes todavía para evitar duplicarlo; actualiza el chat."
+          : `No se pudo enviar: ${res.error}`,
     };
   }
 
   const sentAt = new Date().toISOString();
+  if (outbox) {
+    const { data } = await admin
+      .from("whatsapp_outbox")
+      .update({ provider_message_id: res.id, status: "sent", sent_at: sentAt, updated_at: sentAt })
+      .eq("id", outbox.id)
+      .eq("store_id", ctx.storeId)
+      .select("*")
+      .single();
+    if (data) outbox = data as WhatsappOutboxRow;
+  }
   // Kapso/Meta already accepted the message. Audit logging, lead freshness and
   // cache invalidation must still complete, but they no longer hold the response
   // open while the advisor waits. Next's `after()` keeps the serverless invocation
@@ -1261,16 +1431,46 @@ export async function sendLeadMessage(
   return {
     notice: "Mensaje enviado por WhatsApp ✓",
     sentMessage: {
-      id: res.id,
+      id: res.id ?? (outbox ? `outbox:${outbox.id}` : null),
       direction: "outbound",
       at: sentAt,
       text: body,
       mediaKind: null,
       mediaUrl: null,
       status: "sent",
+      outboxId: outbox?.id,
+      retryable: false,
     },
     leadPatch: { last_interaction_at: sentAt },
   };
+}
+
+/** Explicit retry of a provider-declared failure. Ambiguous network outcomes are
+ * intentionally excluded because resending them could duplicate a message. */
+export async function retryLeadMessage(leadId: string, outboxId: string): Promise<LeadActionState> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const admin = createAdminSupabase();
+  const { data, error } = await admin
+    .from("whatsapp_outbox")
+    .select("*")
+    .eq("id", outboxId)
+    .eq("lead_id", leadId)
+    .eq("store_id", ctx.storeId)
+    .maybeSingle();
+  if (error || !data) return { error: "No encontramos el intento fallido." };
+  const previous = data as WhatsappOutboxRow;
+  if (previous.status !== "failed" || !previous.retryable || !previous.body) {
+    return { error: "Este mensaje no se puede reintentar de forma segura." };
+  }
+  const result = await sendLeadMessage(
+    leadId,
+    previous.body,
+    previous.phone_number_id,
+    randomUUID(),
+    previous.id,
+  );
+  return result;
 }
 
 // Lazily ensure the public bucket for WhatsApp image sends exists (memoized per
