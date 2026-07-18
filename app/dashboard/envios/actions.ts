@@ -206,13 +206,24 @@ export async function registerRerouteCall(
   if (!ctx) return { error: "Sin acceso a este envío." };
   const admin = createAdminSupabase();
 
-  const { data: ship } = await admin
+  const fetchShipment = (columns: string) => admin
     .from("shipments")
-    .select("id,courier,guide_code,delivery_status,reroute_attempts,order_name,fenix_eligible,fenix_shipment_id,aliclik_attempts,aliclik_service_date")
+    .select(columns)
     .eq("id", shipmentId)
     .maybeSingle();
+  let shipmentResult = await fetchShipment(
+    "id,courier,guide_code,delivery_status,reroute_attempts,order_name,fenix_eligible,fenix_shipment_id,aliclik_attempts,aliclik_service_date",
+  );
+  // 0038 may land moments after the app deploy. Preserve the existing Fenix
+  // workflow instead of making every gestión return "No encontrado".
+  if (shipmentResult.error) {
+    shipmentResult = await fetchShipment(
+      "id,courier,guide_code,delivery_status,reroute_attempts,order_name,fenix_eligible,fenix_shipment_id",
+    );
+  }
+  const ship = shipmentResult.data;
   if (!ship) return { error: "No encontrado." };
-  const cur = ship as {
+  const shipmentSnapshot = ship as unknown as {
     courier: string;
     guide_code: string;
     delivery_status: string;
@@ -220,8 +231,13 @@ export async function registerRerouteCall(
     order_name: string | null;
     fenix_eligible: boolean;
     fenix_shipment_id: string | null;
-    aliclik_attempts: number | null;
-    aliclik_service_date: string | null;
+    aliclik_attempts?: number | null;
+    aliclik_service_date?: string | null;
+  };
+  const cur = {
+    ...shipmentSnapshot,
+    aliclik_attempts: shipmentSnapshot.aliclik_attempts ?? null,
+    aliclik_service_date: shipmentSnapshot.aliclik_service_date ?? null,
   };
 
   // A Fenix guide that is still En ruta is waiting for the courier/motorizado
@@ -706,15 +722,22 @@ async function spinOffFenixGuide(
   const code = guideCode.trim().toUpperCase();
   if (!code) return { error: "Ingresa el número de guía de Fenix." };
 
-  const { data: parent } = await admin
+  const fetchParent = (columns: string) => admin
     .from("shipments")
-    .select(
-      "courier,delivery_status,store_id,order_id,order_name,customer_name,customer_phone,product,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_shipment_id",
-    )
+    .select(columns)
     .eq("id", shipmentId)
     .maybeSingle();
+  let parentResult = await fetchParent(
+    "courier,delivery_status,store_id,order_id,order_name,customer_name,customer_phone,product,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_shipment_id",
+  );
+  if (parentResult.error) {
+    parentResult = await fetchParent(
+      "courier,delivery_status,store_id,order_id,order_name,customer_name,customer_phone,product,district,city,region,fenix_shipment_id",
+    );
+  }
+  const parent = parentResult.data;
   if (!parent) return { error: "No encontrado." };
-  const source = parent as {
+  const source = parent as unknown as {
     courier: string;
     delivery_status: string;
     fenix_shipment_id: string | null;
@@ -726,7 +749,7 @@ async function spinOffFenixGuide(
     return { error: "Este envío ya tiene una guía Fenix." };
   }
 
-  const p = parent as Record<string, unknown>;
+  const p = parent as unknown as Record<string, unknown>;
   const { data: child, error: insErr } = await admin
     .from("shipments")
     .insert({
