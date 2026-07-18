@@ -204,6 +204,8 @@ export function ShipmentsBoard({
   const [uncontactedTodayOnly, setUncontactedTodayOnly] = useState(view === "pendiente");
   const [uncontactedOnly, setUncontactedOnly] = useState(false);
   const [fenixFilter, setFenixFilter] = useState<"all" | "ok" | "no">("all"); // fenix_eligible
+  const [exportingFenix, setExportingFenix] = useState(false);
+  const [fenixExportError, setFenixExportError] = useState<string | null>(null);
 
   // global search (across all tabs, server-side)
   const [search, setSearch] = useState("");
@@ -277,6 +279,9 @@ export function ShipmentsBoard({
         isShipmentReadyForContact(s.contact_count, s.next_followup_at)) &&
       (fenixFilter === "all" || (fenixFilter === "ok" ? s.fenix_eligible : !s.fenix_eligible)),
   );
+  const fenixRowsForExport = filtered.filter(
+    (shipment) => shipment.courier === "fenix" && shipment.status_category === "in_route",
+  );
 
   const searchActive = search.trim().length >= 2;
 
@@ -293,6 +298,42 @@ export function ShipmentsBoard({
       else next.add(id);
       return next;
     });
+  }
+
+  async function downloadFenixProgrammingWorkbook() {
+    if (!dateFilter || !fenixRowsForExport.length || exportingFenix) return;
+    setExportingFenix(true);
+    setFenixExportError(null);
+    try {
+      const response = await fetch("/api/export/fenix-programacion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: dateFilter,
+          shipmentIds: fenixRowsForExport.map((shipment) => shipment.id),
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || "No se pudo generar el Excel de Fenix.");
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `fenix_programacion_${dateFilter}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setFenixExportError(
+        error instanceof Error ? error.message : "No se pudo generar el Excel de Fenix.",
+      );
+    } finally {
+      setExportingFenix(false);
+    }
   }
 
   return (
@@ -424,6 +465,28 @@ export function ShipmentsBoard({
                   className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
                 />
               </label>
+              {view === "en_ruta" && (
+                <button
+                  type="button"
+                  onClick={downloadFenixProgrammingWorkbook}
+                  disabled={!dateFilter || !fenixRowsForExport.length || exportingFenix}
+                  title={
+                    !dateFilter
+                      ? "Elige primero la fecha de programación"
+                      : !fenixRowsForExport.length
+                        ? "No hay guías Fenix visibles para esa fecha"
+                        : "Descarga las guías Fenix que quedan en la lista"
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:shadow-none"
+                >
+                  <span aria-hidden="true">↓</span>
+                  {exportingFenix
+                    ? "Generando Excel…"
+                    : !dateFilter
+                      ? "Elige fecha para Excel"
+                      : `Descargar Excel Fenix (${fenixRowsForExport.length})`}
+                </button>
+              )}
               <label className="flex items-center gap-1.5 text-xs text-slate-400">
                 Fenix:
                 <select
@@ -494,6 +557,11 @@ export function ShipmentsBoard({
               <span className="ml-auto text-xs text-slate-400">
                 Mostrando {filtered.length} de {shipments.length}
               </span>
+            </div>
+          )}
+          {fenixExportError && view === "en_ruta" && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {fenixExportError}
             </div>
           )}
 
