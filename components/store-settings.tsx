@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Card, Section, SimpleTable } from "@/components/ui";
 import { STORE_STATUSES } from "@/lib/store-settings";
 import type { MetaAdAccount, StoreMetaAdAccount } from "@/lib/meta-marketing";
@@ -375,7 +376,16 @@ function KapsoWebhookSection({
 
 function SettingsForm({ data }: { data: StoreSettingsData }) {
   const [state, action, pending] = useActionState(updateStore, initial);
+  const router = useRouter();
   const s = data.store;
+
+  // Server actions reset uncontrolled form fields to their previous defaults.
+  // Refresh the server component after a successful save so toggles and secret
+  // indicators immediately reflect the values that were persisted.
+  useEffect(() => {
+    if (state.notice === "Tienda actualizada.") router.refresh();
+  }, [router, state]);
+
   return (
     <Card>
       <form action={action} className="space-y-5">

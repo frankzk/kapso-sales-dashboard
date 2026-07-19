@@ -33,4 +33,26 @@ describe("buildStoreUpdate", () => {
     const patch = buildStoreUpdate({ shopify_token: "shpat_abc" }, KEY);
     expect(decrypt(patch.shopify_token_enc as string, KEY)).toBe("shpat_abc");
   });
+
+  it("persists browse and winback automatic-send toggles", () => {
+    expect(
+      buildStoreUpdate({
+        browse_template_enabled: "true",
+        winback_template_enabled: "true",
+      }),
+    ).toMatchObject({
+      browse_template_enabled: true,
+      winback_template_enabled: true,
+    });
+
+    expect(
+      buildStoreUpdate({
+        browse_template_enabled: "false",
+        winback_template_enabled: "false",
+      }),
+    ).toMatchObject({
+      browse_template_enabled: false,
+      winback_template_enabled: false,
+    });
+  });
 });
