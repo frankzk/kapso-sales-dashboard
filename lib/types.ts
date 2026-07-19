@@ -257,6 +257,8 @@ export interface ShipmentRow {
   address_updated_at: string | null;
   address_updated_by: string | null;
   fenix_eligible: boolean;
+  /** Current stock evaluation, added at read time for the Envios UI. */
+  fenix_reason?: "ok" | "sin_stock" | "sin_cobertura";
   fenix_shipment_id: string | null;
   delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado
   /** Delivery attempts reported by Aliclik's daily Excel (NRO. INTENTOS). */
