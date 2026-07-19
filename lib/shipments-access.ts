@@ -205,10 +205,12 @@ async function withCurrentFenixEligibility(
       shipment,
       orgId ? stockByOrg.get(orgId) ?? [] : [],
       shipment.order_id ? productsByOrder.get(shipment.order_id) : undefined,
-    ).eligible;
-    return current === shipment.fenix_eligible
-      ? shipment
-      : { ...shipment, fenix_eligible: current };
+    );
+    return {
+      ...shipment,
+      fenix_eligible: current.eligible,
+      fenix_reason: current.reason,
+    };
   });
 }
 
@@ -268,12 +270,19 @@ export async function getStoreShipments(
     withCurrentFenixEligibility(sb, out),
   ]);
   const eligibilityById = new Map(
-    withEligibility.map((shipment) => [shipment.id, shipment.fenix_eligible]),
+    withEligibility.map((shipment) => [shipment.id, {
+      eligible: shipment.fenix_eligible,
+      reason: shipment.fenix_reason,
+    }]),
   );
-  return withTodayCalls.map((shipment) => ({
-    ...shipment,
-    fenix_eligible: eligibilityById.get(shipment.id) ?? shipment.fenix_eligible,
-  }));
+  return withTodayCalls.map((shipment) => {
+    const eligibility = eligibilityById.get(shipment.id);
+    return {
+      ...shipment,
+      fenix_eligible: eligibility?.eligible ?? shipment.fenix_eligible,
+      fenix_reason: eligibility?.reason,
+    };
+  });
 }
 
 /** Count of shipments matching a category set (exact, not row-capped). */

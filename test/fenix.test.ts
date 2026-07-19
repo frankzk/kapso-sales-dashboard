@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
+import {
+  currentFenixReason,
+  evaluateFenix,
+  matchesFenixAvailability,
+  type FenixStockRow,
+} from "@/lib/fenix";
 
 const stock: FenixStockRow[] = [
   { city: "cusco", product: "SUPER HUMAN Ethiopian Black Seed Oil", quantity: 5 },
@@ -89,5 +94,25 @@ describe("evaluateFenix", () => {
     // no orderProducts (undefined or empty) → uses shipment.product
     expect(evaluateFenix({ city: "Trujillo", product: "Mushroom Coffee 180g" }, s).eligible).toBe(true);
     expect(evaluateFenix({ city: "Trujillo", product: "Otra cosa" }, s, []).eligible).toBe(false);
+  });
+});
+
+describe("Fenix availability filters", () => {
+  it("separates no-stock cases from cities outside coverage", () => {
+    const noStock = { city: "Cusco", fenix_eligible: false, fenix_reason: "sin_stock" as const };
+    const noCoverage = {
+      city: "Piura",
+      fenix_eligible: false,
+      fenix_reason: "sin_cobertura" as const,
+    };
+    expect(currentFenixReason(noStock)).toBe("sin_stock");
+    expect(matchesFenixAvailability(noStock, "sin_stock")).toBe(true);
+    expect(matchesFenixAvailability(noStock, "sin_cobertura")).toBe(false);
+    expect(matchesFenixAvailability(noCoverage, "sin_cobertura")).toBe(true);
+  });
+
+  it("classifies legacy false rows by known Fenix coverage", () => {
+    expect(currentFenixReason({ city: "Arequipa", fenix_eligible: false })).toBe("sin_stock");
+    expect(currentFenixReason({ city: "Piura", fenix_eligible: false })).toBe("sin_cobertura");
   });
 });

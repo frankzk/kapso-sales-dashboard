@@ -47,6 +47,11 @@ import {
   type ShipmentAddressInput,
 } from "@/app/dashboard/envios/actions";
 import { OrderLinkPicker } from "@/components/order-link-picker";
+import {
+  currentFenixReason,
+  matchesFenixAvailability,
+  type FenixAvailabilityFilter,
+} from "@/lib/fenix";
 
 const CATEGORY_BADGE: Record<string, string> = {
   pending: "bg-amber-50 text-amber-700",
@@ -205,7 +210,7 @@ export function ShipmentsBoard({
   const [unmatchedOnly, setUnmatchedOnly] = useState(false);
   const [uncontactedTodayOnly, setUncontactedTodayOnly] = useState(view === "pendiente");
   const [uncontactedOnly, setUncontactedOnly] = useState(false);
-  const [fenixFilter, setFenixFilter] = useState<"all" | "ok" | "no">("all"); // fenix_eligible
+  const [fenixFilter, setFenixFilter] = useState<FenixAvailabilityFilter>("all");
   const [exportingFenix, setExportingFenix] = useState(false);
   const [fenixExportError, setFenixExportError] = useState<string | null>(null);
 
@@ -279,7 +284,7 @@ export function ShipmentsBoard({
       (!uncontactedOnly ||
         view !== "pendiente" ||
         isShipmentReadyForContact(s.contact_count, s.next_followup_at)) &&
-      (fenixFilter === "all" || (fenixFilter === "ok" ? s.fenix_eligible : !s.fenix_eligible)),
+      matchesFenixAvailability(s, fenixFilter),
   );
   const fenixRowsForExport = filtered.filter(
     (shipment) => shipment.courier === "fenix" && shipment.status_category === "in_route",
@@ -493,12 +498,19 @@ export function ShipmentsBoard({
                 Fenix:
                 <select
                   value={fenixFilter}
-                  onChange={(e) => setFenixFilter(e.target.value as "all" | "ok" | "no")}
+                  onChange={(e) => {
+                    const next = e.target.value as FenixAvailabilityFilter;
+                    setFenixFilter(next);
+                    if (next === "sin_stock" || next === "sin_cobertura") {
+                      setCityFilter(new Set());
+                    }
+                  }}
                   className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
                 >
                   <option value="all">Todos</option>
-                  <option value="ok">Con stock (Fenix ok)</option>
-                  <option value="no">Sin cobertura</option>
+                  <option value="ok">Fenix ok · con stock</option>
+                  <option value="sin_stock">Sin stock Fenix</option>
+                  <option value="sin_cobertura">Fuera de cobertura</option>
                 </select>
               </label>
               <label className="flex items-center gap-1.5 text-xs text-slate-600">
@@ -682,7 +694,7 @@ function ShipmentTable({
                 {s.district ?? "—"}
                 <span className="block text-xs capitalize text-slate-400">
                   {s.city ?? ""}
-                  {s.fenix_eligible && <span className="ml-1 text-emerald-600">· Fenix ok</span>}
+                  <FenixAvailabilityInline shipment={s} />
                 </span>
               </td>
               <td className="px-4 py-2.5">
@@ -755,6 +767,17 @@ function AliclikRouteCell({ shipment }: { shipment: ShipmentRow }) {
       Fenix · {shipment.aliclik_attempts == null ? "sin dato" : `${shipment.aliclik_attempts}/3`}
     </span>
   );
+}
+
+function FenixAvailabilityInline({ shipment }: { shipment: ShipmentRow }) {
+  const reason = currentFenixReason(shipment);
+  if (reason === "ok") {
+    return <span className="ml-1 font-medium text-emerald-600">· Fenix ok</span>;
+  }
+  if (reason === "sin_stock") {
+    return <span className="ml-1 font-medium text-amber-600">· Sin stock Fenix</span>;
+  }
+  return <span className="ml-1 font-medium text-rose-500">· Fuera de cobertura</span>;
 }
 
 function ShipmentDrawer({
@@ -936,6 +959,7 @@ function ShipmentDrawer({
   const programDateInvalid =
     disposition === "programar" && (!nextDate || nextDate <= localDateInputValue());
   const shipment = detail && !("error" in detail) ? detail.shipment : null;
+  const fenixReason = shipment ? currentFenixReason(shipment) : null;
   const shopifyAddress = detail && !("error" in detail) ? detail.order?.shipping_address ?? null : null;
   const deliveryAddress = shipment?.delivery_address ?? shopifyAddress?.address1 ?? null;
   const deliveryReference = shipment?.delivery_reference ?? shopifyAddress?.address2 ?? null;
@@ -1095,8 +1119,14 @@ function ShipmentDrawer({
                 <CompactMetric label="Llamadas" value={`${detail.shipment.reroute_attempts} / 7`} />
                 <CompactMetric
                   label="Fenix"
-                  value={detail.shipment.fenix_eligible ? "Elegible" : "No elegible"}
-                  tone={detail.shipment.fenix_eligible ? "positive" : "neutral"}
+                  value={
+                    fenixReason === "ok"
+                      ? "Fenix ok"
+                      : fenixReason === "sin_stock"
+                        ? "Sin stock"
+                        : "Fuera de cobertura"
+                  }
+                  tone={fenixReason === "ok" ? "positive" : fenixReason === "sin_stock" ? "warning" : "negative"}
                 />
               </dl>
             </section>
@@ -1876,7 +1906,7 @@ function CompactMetric({
 }: {
   label: string;
   value: string | null | undefined;
-  tone?: "neutral" | "positive";
+  tone?: "neutral" | "positive" | "warning" | "negative";
 }) {
   return (
     <div className="min-w-0 px-2.5 py-2">
@@ -1886,7 +1916,13 @@ function CompactMetric({
       <dd
         className={cn(
           "mt-0.5 text-xs font-semibold leading-tight tabular-nums",
-          tone === "positive" ? "text-emerald-700" : "text-slate-700",
+          tone === "positive"
+            ? "text-emerald-700"
+            : tone === "warning"
+              ? "text-amber-700"
+              : tone === "negative"
+                ? "text-rose-600"
+                : "text-slate-700",
         )}
       >
         {value || "—"}

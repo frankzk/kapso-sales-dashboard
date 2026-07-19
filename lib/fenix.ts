@@ -25,6 +25,27 @@ export interface FenixEligibility {
   city: string; // normalized
 }
 
+export type FenixAvailabilityFilter = "all" | "ok" | "sin_stock" | "sin_cobertura";
+
+/** Resolves the UI status, including a safe fallback for legacy rows that were
+ * loaded without the read-time reason enrichment. */
+export function currentFenixReason(shipment: {
+  city?: string | null;
+  fenix_eligible: boolean;
+  fenix_reason?: FenixEligibility["reason"];
+}): FenixEligibility["reason"] {
+  if (shipment.fenix_reason) return shipment.fenix_reason;
+  if (shipment.fenix_eligible) return "ok";
+  return isFenixCity(shipment.city) ? "sin_stock" : "sin_cobertura";
+}
+
+export function matchesFenixAvailability(
+  shipment: Parameters<typeof currentFenixReason>[0],
+  filter: FenixAvailabilityFilter,
+): boolean {
+  return filter === "all" || currentFenixReason(shipment) === filter;
+}
+
 function normProduct(s: string | null | undefined): string {
   return (s ?? "")
     .normalize("NFD")
