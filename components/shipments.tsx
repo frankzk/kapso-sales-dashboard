@@ -872,11 +872,12 @@ function ShipmentDrawer({
         });
         setReprogramProvider(decision.eligible ? "aliclik" : "fenix");
         setForceAliclik(false);
-        setAddress(d.shipment.delivery_address ?? "");
-        setAddressReference(d.shipment.delivery_reference ?? "");
-        setAddressDistrict(d.shipment.district ?? "");
-        setAddressCity(d.shipment.city ?? "");
-        setAddressRegion(d.shipment.region ?? "");
+        const shopifyAddress = d.order?.shipping_address;
+        setAddress(d.shipment.delivery_address ?? shopifyAddress?.address1 ?? "");
+        setAddressReference(d.shipment.delivery_reference ?? shopifyAddress?.address2 ?? "");
+        setAddressDistrict(d.shipment.district ?? shopifyAddress?.city ?? "");
+        setAddressCity(d.shipment.city ?? shopifyAddress?.city ?? "");
+        setAddressRegion(d.shipment.region ?? shopifyAddress?.province ?? "");
         setAddressLatitude(d.shipment.latitude == null ? "" : String(d.shipment.latitude));
         setAddressLongitude(d.shipment.longitude == null ? "" : String(d.shipment.longitude));
       }
@@ -926,6 +927,19 @@ function ShipmentDrawer({
   const programDateInvalid =
     disposition === "programar" && (!nextDate || nextDate <= localDateInputValue());
   const shipment = detail && !("error" in detail) ? detail.shipment : null;
+  const shopifyAddress = detail && !("error" in detail) ? detail.order?.shipping_address ?? null : null;
+  const deliveryAddress = shipment?.delivery_address ?? shopifyAddress?.address1 ?? null;
+  const deliveryReference = shipment?.delivery_reference ?? shopifyAddress?.address2 ?? null;
+  const deliveryLocality = !shipment?.delivery_address
+    ? [shopifyAddress?.city, shopifyAddress?.province].filter(Boolean).join(" · ") || null
+    : null;
+  const deliverySource = shipment?.address_override
+    ? "Modificado en Kapta · protegido frente al siguiente Excel"
+    : shipment?.delivery_address
+      ? "Importado desde Aliclik"
+      : shopifyAddress?.address1
+        ? "Obtenido de Shopify"
+        : "Sin dirección disponible";
   const aliclikDecision = shipment
     ? evaluateAliclikReschedule({
         courier: shipment.courier,
@@ -1049,7 +1063,7 @@ function ShipmentDrawer({
 
             <fieldset disabled={claimState !== "mine"} className="contents">
 
-            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <section className="overflow-hidden rounded-xl border border-sky-200 bg-white shadow-[0_1px_0_rgba(14,165,233,0.08)]">
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 px-3 py-2.5 text-sm">
                 <Field label="Cliente" value={detail.shipment.customer_name} />
                 <Field label="Teléfono" value={detail.shipment.customer_phone} />
@@ -1059,7 +1073,7 @@ function ShipmentDrawer({
                   <Field label="Producto declarado" value={detail.shipment.product} />
                 </div>
               </dl>
-              <dl className="grid grid-cols-2 border-t border-slate-100 bg-slate-50/70 sm:grid-cols-4">
+              <dl className="grid grid-cols-2 border-t border-sky-100 bg-sky-50/75 sm:grid-cols-4">
                 <CompactMetric
                   label="Intentos Aliclik"
                   value={
@@ -1078,26 +1092,26 @@ function ShipmentDrawer({
               </dl>
             </section>
 
-            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-              <div className="space-y-2 bg-slate-50/60 p-3">
+            <section className="overflow-hidden rounded-xl border border-teal-200 bg-white shadow-[0_1px_0_rgba(13,148,136,0.08)]">
+              <div className="space-y-2 bg-teal-50/70 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <p className="text-sm font-semibold text-slate-800">Destino de entrega</p>
+                    <p className="text-sm font-semibold text-teal-950">Destino de entrega</p>
                     {detail.shipment.address_override && (
                       <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">
                         Modificado
                       </span>
                     )}
-                    <span className="text-[11px] text-slate-400">
-                      · {detail.shipment.address_override ? "Protegido frente al siguiente Excel" : "Importado desde Aliclik"}
+                    <span className="text-[11px] text-teal-600">
+                      · {deliverySource}
                     </span>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setShowAddressEditor((value) => !value)}
-                  className="shrink-0 text-xs font-medium text-brand-700 hover:underline"
+                  className="shrink-0 text-xs font-semibold text-teal-700 hover:text-teal-900 hover:underline"
                 >
                   {showAddressEditor ? "Cerrar edición" : "Modificar destino"}
                 </button>
@@ -1108,11 +1122,14 @@ function ShipmentDrawer({
                   <div>
                     <p className="text-xs text-slate-400">Dirección completa</p>
                     <p className="text-sm leading-snug text-slate-800">
-                      {detail.shipment.delivery_address ?? "No informada en el Excel."}
+                      {deliveryAddress ?? "No informada en Aliclik ni Shopify."}
                     </p>
-                    {detail.shipment.delivery_reference && (
+                    {deliveryLocality && (
+                      <p className="mt-0.5 text-xs font-medium text-teal-700">{deliveryLocality}</p>
+                    )}
+                    {deliveryReference && (
                       <p className="mt-0.5 text-xs text-slate-500">
-                        Ref.: {detail.shipment.delivery_reference}
+                        Ref.: {deliveryReference}
                       </p>
                     )}
                   </div>
@@ -1250,16 +1267,16 @@ function ShipmentDrawer({
 
             {/* order link — search+link (not just a raw UUID) for any shipment,
                 so a wrong auto-match can also be corrected here */}
-              <div className="space-y-1.5 border-t border-slate-200 p-3">
+              <div className="space-y-1.5 border-t border-indigo-200 bg-indigo-50/65 p-3">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-sm text-slate-700">
-                  <span className="text-xs text-slate-400">Pedido </span>
+                <p className="text-sm font-medium text-indigo-950">
+                  <span className="text-xs font-normal text-indigo-500">Pedido </span>
                   <OrderNameLabel name={detail.shipment.order_name} matched={detail.shipment.matched} />
                 </p>
                 {detail.shipment.matched && (
                   <button
                     onClick={() => setShowOrderPicker((v) => !v)}
-                    className="shrink-0 text-xs text-brand-700 hover:underline"
+                    className="shrink-0 text-xs font-semibold text-indigo-700 hover:text-indigo-900 hover:underline"
                   >
                     {showOrderPicker ? "Cancelar" : "Cambiar"}
                   </button>
@@ -1471,8 +1488,8 @@ function ShipmentDrawer({
             {/* claim + re-route call — hidden once the shipment is terminal (entregado/
                 anulado/transferido) so a stray "no contesta" can't reopen a closed guide */}
             {isCallable(detail.shipment.delivery_status) && !fenixAwaitingCourierResult && (
-              <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
-                <p className="text-sm font-medium text-slate-800">Registrar o programar llamada</p>
+              <section className="space-y-1.5 rounded-xl border border-amber-200 bg-amber-50/45 p-2.5 shadow-[0_1px_0_rgba(245,158,11,0.08)]">
+                <p className="text-sm font-semibold text-amber-950">Registrar o programar llamada</p>
                 <select
                   value={disposition}
                   onChange={(e) => setDisposition(e.target.value as RerouteDisposition)}
@@ -1630,8 +1647,8 @@ function ShipmentDrawer({
                 guide from "Cliente confirma" above; this stays for shipments
                 without an order name, or to type a specific Fenix code. */}
             {detail.shipment.delivery_status === "pendiente" && (
-              <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
-              <p className="text-sm font-medium text-slate-800">Generar guía Fenix (manual)</p>
+              <section className="space-y-1.5 rounded-xl border border-orange-200 bg-orange-50/45 p-2.5 shadow-[0_1px_0_rgba(249,115,22,0.08)]">
+              <p className="text-sm font-semibold text-orange-950">Generar guía Fenix (manual)</p>
               {detail.shipment.fenix_shipment_id ? (
                 <p className="text-xs text-emerald-700">Ya tiene guía Fenix vinculada.</p>
               ) : (
@@ -1695,14 +1712,14 @@ function ShipmentDrawer({
             </fieldset>
 
             {/* history */}
-            <section className="space-y-2">
-              <p className="text-sm font-medium text-slate-800">Historial</p>
+            <section className="space-y-2 rounded-xl border border-violet-200 bg-violet-50/45 p-2.5">
+              <p className="text-sm font-semibold text-violet-950">Historial</p>
               {detail.calls.length === 0 ? (
                 <p className="text-xs text-slate-400">Sin registros.</p>
               ) : (
                 <ul className="space-y-2">
                   {detail.calls.map((c) => (
-                    <li key={c.id} className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    <li key={c.id} className="rounded-lg border border-violet-100 bg-white px-3 py-2 text-xs text-slate-600">
                       <div className="flex justify-between">
                         <span className="font-medium text-slate-700">
                           {shipmentHistoryLabel(c)}

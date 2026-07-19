@@ -491,7 +491,7 @@ export function buildOrdersQuery(withPhone: boolean): string {
   const phoneFields = withPhone
     ? `
           phone
-          shippingAddress { phone }
+          shippingAddress { address1 address2 city province name phone }
           billingAddress { phone }`
     : "";
   return /* GraphQL */ `
@@ -601,7 +601,7 @@ function buildOrderByIdQuery(withPhone: boolean): string {
   const phoneFields = withPhone
     ? `
         phone
-        shippingAddress { phone }
+        shippingAddress { address1 address2 city province name phone }
         billingAddress { phone }`
     : "";
   return /* GraphQL */ `
