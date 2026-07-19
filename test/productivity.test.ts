@@ -5,8 +5,10 @@ import {
   attachDeltas,
   computeAdvisorConversionByDay,
   computeAdvisorStats,
+  computeFirstTouchStats,
   computeHourlyActivity,
   emptyPorFuente,
+  formatMinutes,
   isWonLead,
   localDayPreset,
   localPresetRange,
@@ -15,6 +17,7 @@ import {
   storeInitials,
   type AdvisorCall,
   type AdvisorStat,
+  type FirstTouchLeadInput,
 } from "@/lib/productivity";
 
 describe("isWonLead (a close requires the lead's OWN disposition, not has_order)", () => {
@@ -357,6 +360,72 @@ describe("computeAdvisorConversionByDay (sparkline: contactos y pedidos por día
       { date: "2026-07-08", label: "Mié", contactos: 0, pedidos: 0 },
       { date: "2026-07-09", label: "Hoy", contactos: 1, pedidos: 0 },
     ]);
+  });
+});
+
+describe("computeFirstTouchStats (velocidad de 1ª gestión)", () => {
+  const lead = (id: string, created: string, over: Partial<FirstTouchLeadInput> = {}): FirstTouchLeadInput => ({
+    id,
+    created_at: created,
+    category: "open",
+    cart: false,
+    ...over,
+  });
+  const call = (lead_id: string, vendedora: string, occurred_at: string) => ({ lead_id, vendedora, occurred_at });
+
+  it("mediana, % <30 min y atribución al PRIMER toque (no al último)", () => {
+    const r = computeFirstTouchStats({
+      leads: [
+        lead("L1", "2026-07-13T10:00:00Z"), // 1ª gestión a los 10 min (ana)
+        lead("L2", "2026-07-13T10:00:00Z"), // a los 20 min (bea)
+        lead("L3", "2026-07-13T10:00:00Z"), // a los 300 min (ana)
+      ],
+      calls: [
+        call("L1", "ana", "2026-07-13T10:10:00Z"),
+        call("L1", "bea", "2026-07-13T12:00:00Z"), // toque posterior — NO cambia la atribución
+        call("L2", "bea", "2026-07-13T10:20:00Z"),
+        call("L3", "ana", "2026-07-13T15:00:00Z"),
+      ],
+    });
+    expect(r.resto.n).toBe(3);
+    expect(r.resto.medianMin).toBe(20);
+    expect(r.resto.under30Pct).toBe(67); // 2 de 3 dentro de los 30 min
+    expect(r.byAgent["ana"]).toEqual({ medianMin: 155, n: 2 }); // (10+300)/2
+    expect(r.byAgent["bea"]).toEqual({ medianMin: 20, n: 1 });
+  });
+
+  it("separa carritos de resto y cuenta sinGestionar SOLO en cola (open/hot)", () => {
+    const r = computeFirstTouchStats({
+      leads: [
+        lead("C1", "2026-07-13T10:00:00Z", { cart: true }), // gestionado a los 40 min
+        lead("C2", "2026-07-13T11:00:00Z", { cart: true, category: "hot" }), // sin gestión → pendiente
+        lead("L1", "2026-07-13T10:00:00Z", { category: "won" }), // won sin toque humano (bot) → fuera
+        lead("L2", "2026-07-13T10:00:00Z", { category: "lost" }), // lost sin toque → fuera
+        lead("L3", "2026-07-13T10:00:00Z"), // open sin gestión → pendiente resto
+      ],
+      calls: [call("C1", "ana", "2026-07-13T10:40:00Z")],
+    });
+    expect(r.carritos).toMatchObject({ n: 1, medianMin: 40, under30Pct: 0, sinGestionar: 1 });
+    expect(r.resto).toMatchObject({ n: 0, medianMin: null, under30Pct: null, sinGestionar: 1 });
+  });
+
+  it("mediana par promedia los dos centrales y un reloj desfasado se fija en 0", () => {
+    const r = computeFirstTouchStats({
+      leads: [lead("L1", "2026-07-13T10:00:00Z"), lead("L2", "2026-07-13T10:00:00Z")],
+      calls: [
+        call("L1", "ana", "2026-07-13T10:10:00Z"), // 10 min
+        call("L2", "ana", "2026-07-13T09:59:00Z"), // "antes" de crearse (skew) → 0
+      ],
+    });
+    expect(r.resto.medianMin).toBe(5); // (0 + 10) / 2
+    expect(r.byAgent["ana"]).toEqual({ medianMin: 5, n: 2 });
+  });
+
+  it("formatMinutes: minutos, horas, días y null", () => {
+    expect(formatMinutes(null)).toBe("—");
+    expect(formatMinutes(38)).toBe("38 min");
+    expect(formatMinutes(126)).toBe("2.1 h");
+    expect(formatMinutes(2016)).toBe("1.4 d");
   });
 });
 

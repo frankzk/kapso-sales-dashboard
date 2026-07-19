@@ -4,11 +4,14 @@ import { ProductivityTable } from "@/components/productivity-table";
 import type { DateRange } from "@/lib/access";
 import type { StoreSummary } from "@/lib/types";
 import {
+  FIRST_TOUCH_FAST_MIN,
   HEAT_START,
+  formatMinutes,
   localDayPreset,
   localPresetRange,
   storeInitials,
   type AdvisorBoardRow,
+  type FirstTouchStats,
   type ProductivityTotals,
   type SourceBucket,
 } from "@/lib/productivity";
@@ -93,6 +96,7 @@ export function ProductivityBoard({
   heatMode,
   onlineIdle,
   initialOnlineIds,
+  firstTouch,
   solo = false,
 }: {
   rows: AdvisorBoardRow[];
@@ -109,6 +113,9 @@ export function ProductivityBoard({
   heatMode: "day" | "avg";
   onlineIdle: { userId: string; email: string }[];
   initialOnlineIds: string[];
+  /** Velocidad de 1ª gestión del equipo — null en modo solo (privacidad: la
+   *  vendedora ve la suya propia, derivada de su fila). */
+  firstTouch: FirstTouchStats | null;
   /** Vista de vendedora: solo su propia fila — sin KPI de presencia del equipo. */
   solo?: boolean;
 }) {
@@ -122,6 +129,17 @@ export function ProductivityBoard({
     { llamadas: 0, leads: 0, cerrados: 0, ingresos: 0 },
   );
   const onlineCount = initialOnlineIds.length;
+  // KPI de 1ª gestión: en equipo manda la mediana de CARRITOS (el segmento con
+  // plata); en modo solo, la propia (derivada de la fila — sin datos del equipo).
+  const ownFirstTouch = rows[0]?.primeraGestion ?? { medianMin: null, n: 0 };
+  const ftPend = firstTouch ? firstTouch.carritos.sinGestionar + firstTouch.resto.sinGestionar : 0;
+  const ftSub = firstTouch
+    ? firstTouch.carritos.n
+      ? `${firstTouch.carritos.under30Pct}% en <${FIRST_TOUCH_FAST_MIN} min · resto: ${formatMinutes(firstTouch.resto.medianMin)}` +
+        (ftPend ? ` · sin gestionar: ${ftPend}` : "")
+      : `sin carritos nuevos · resto: ${formatMinutes(firstTouch.resto.medianMin)}` +
+        (ftPend ? ` · sin gestionar: ${ftPend}` : "")
+    : undefined;
   // Sigla + nombre por tienda para los chips "AUR 5 · KP 12" junto a Cerrados.
   const storeInfo = Object.fromEntries(
     stores.map((s) => [s.id, { short: storeInitials(s.name), name: s.name }]),
@@ -193,7 +211,7 @@ export function ProductivityBoard({
 
       {/* KPIs compactos (en modo solo son LOS SUYOS; el de presencia del equipo
           no aplica y se oculta) */}
-      <div className={cn("grid shrink-0 grid-cols-2 gap-3 md:grid-cols-3", solo ? "xl:grid-cols-4" : "xl:grid-cols-5")}>
+      <div className={cn("grid shrink-0 grid-cols-2 gap-3 md:grid-cols-3", solo ? "xl:grid-cols-5" : "xl:grid-cols-6")}>
         <Kpi
           label={solo ? "Mis llamadas" : "Llamadas"}
           value={String(totals.llamadas)}
@@ -213,6 +231,17 @@ export function ProductivityBoard({
           label={solo ? "Mis ingresos" : "Ingresos atribuidos"}
           value={money(totals.ingresos, currency)}
           delta={hasPrev ? pctDelta(totals.ingresos, prevTotals.ingresos) : undefined}
+        />
+        <Kpi
+          label={solo ? "Mi 1ª gestión" : "1ª gestión carritos"}
+          value={formatMinutes(solo ? ownFirstTouch.medianMin : (firstTouch?.carritos.medianMin ?? null))}
+          sub={
+            solo
+              ? ownFirstTouch.n
+                ? `mediana de ${ownFirstTouch.n} leads que tocaste primero`
+                : "aún sin leads frescos tocados primero"
+              : ftSub
+          }
         />
         {!solo && (
           <Kpi

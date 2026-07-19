@@ -83,6 +83,7 @@ async function ProductividadContent({
       heatMode={board.heatMode}
       onlineIdle={onlineIdle}
       initialOnlineIds={initialOnlineIds}
+      firstTouch={solo ? null : board.firstTouch}
       solo={solo}
     />
   );
