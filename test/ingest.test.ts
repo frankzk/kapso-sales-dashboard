@@ -1293,6 +1293,69 @@ describe("sendSeguimientoDrip · envío y registro", () => {
     expect(fake.leadCalls[0].note).toContain("falló");
   });
 
+  it("multinúmero: envía por el número del LEAD y cae al default de la tienda", async () => {
+    const { sendSeguimientoDrip } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.dripLeads = [
+      dripLead({ id: "L1", phone: "51900000001", wa_phone_number_id: "PN-LEAD-77" }),
+      dripLead({ id: "L2", phone: "51900000002" }), // sin número propio → default de tienda
+    ];
+    const { fn, calls } = spyTemplate();
+    const r = await sendSeguimientoDrip(fake as any, "store-1", dripCreds(), fn, DRIP_NOW);
+    expect(r).toEqual({ sent: 2, failed: 0, skipped: 0 });
+    expect(calls.map((c) => c.params.phoneNumberId)).toEqual(["PN-LEAD-77", "PN-1241790819006805"]);
+  });
+
+  it("tienda SIN default (Kenku): envía por el número del lead; sin ninguno no consume toque", async () => {
+    const { sendSeguimientoDrip } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.dripLeads = [
+      dripLead({ id: "L1", phone: "51900000001", wa_phone_number_id: "PN-LEAD-77" }),
+      dripLead({ id: "L2", phone: "51900000002" }), // sin número resoluble → skip
+    ];
+    const { fn, calls } = spyTemplate();
+    const r = await sendSeguimientoDrip(
+      fake as any,
+      "store-1",
+      dripCreds({ whatsapp_phone_number_id: null }),
+      fn,
+      DRIP_NOW,
+    );
+    expect(r).toEqual({ sent: 1, failed: 0, skipped: 1 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.params.phoneNumberId).toBe("PN-LEAD-77");
+    expect(fake.leadPatches).toHaveLength(1); // solo L1 consumió toque
+    expect(fake.dripSends).toHaveLength(1);
+  });
+
+  it("tope de mensajería (tier): corta el lote, registra el intento y NO quema toques", async () => {
+    const { sendSeguimientoDrip } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.dripLeads = [
+      dripLead(),
+      dripLead({ id: "L2", phone: "51911222333" }),
+      dripLead({ id: "L3", phone: "51911222444" }),
+    ];
+    const bad = spyTemplate({ ok: false, error: "Spam rate limit hit", code: 131048 });
+    const r = await sendSeguimientoDrip(fake as any, "store-1", dripCreds(), bad.fn, DRIP_NOW);
+    expect(r).toEqual({ sent: 0, failed: 1, skipped: 0 });
+    expect(bad.calls).toHaveLength(1); // cortó tras el primer rechazo (el tope es de la tienda)
+    expect(fake.leadPatches).toHaveLength(0); // ningún toque consumido
+    expect(fake.dripSends).toHaveLength(1);
+    expect(fake.dripSends[0]).toMatchObject({ ok: false, error: "Spam rate limit hit", touch: 1 });
+    expect(fake.leadCalls).toHaveLength(0); // sin nota ⚠️ en el timeline (no es culpa del lead)
+  });
+
+  it("isTierLimitError clasifica códigos y mensajes de tope", async () => {
+    const { isTierLimitError } = await import("@/lib/leads-ingest");
+    expect(isTierLimitError(131048, "Spam rate limit hit")).toBe(true);
+    expect(isTierLimitError(130429, null)).toBe(true);
+    expect(isTierLimitError(undefined, "Messaging limit reached")).toBe(true);
+    expect(isTierLimitError(132015, "Template paused")).toBe(false);
+    expect(isTierLimitError(undefined, "Template paused")).toBe(false);
+    expect(isTierLimitError(undefined, null)).toBe(false);
+  });
+
   it("despacha CARRITOS primero (Meta raciona y vigila la plantilla nueva)", async () => {
     const { sendSeguimientoDrip } = await import("@/lib/leads-ingest");
     const fake = new FakeSupabase(makeStoreRow());
