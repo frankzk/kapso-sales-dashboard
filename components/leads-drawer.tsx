@@ -1,6 +1,7 @@
 "use client";
 
 import { type ReactNode, useActionState, useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { CallQr } from "@/components/call-qr";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import {
   adObjectiveLabel,
@@ -463,6 +464,11 @@ export function LeadDrawer({
                   · llamar
                 </a>
               </div>
+            </div>
+            {/* QR tel: — solo en panel ancho (desktop): la asesora escanea con
+                su celular y el marcador abre listo. En móvil ya está «llamar». */}
+            <div className="hidden @min-[720px]:block">
+              <CallQr phone={lead.phone} />
             </div>
             <button
               type="button"
