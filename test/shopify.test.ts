@@ -18,6 +18,7 @@ import {
   isRecoveredDraft,
   buildDraftOrdersSearchQuery,
   buildKapsoOrdersSearchQuery,
+  buildOrdersQuery,
   buildLiveOrderSearchQuery,
   buildExactOrderQuery,
   pickStoresForOrderQuery,
@@ -33,6 +34,14 @@ import {
   updateOrderShippingAddress,
   sumRestRefunds,
 } from "@/lib/shopify";
+
+describe("Shopify order destination query", () => {
+  it("requests the full shipping address when protected data is available", () => {
+    const query = buildOrdersQuery(true);
+    expect(query).toContain("shippingAddress { address1 address2 city province name phone }");
+    expect(buildOrdersQuery(false)).not.toContain("shippingAddress");
+  });
+});
 
 const SECRET = "shpss_test_secret_key";
 

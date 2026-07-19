@@ -41,10 +41,20 @@ export interface OrderLineItem {
 }
 
 /** Shopify order fields shown inside the shipment drawer. */
+export interface OrderShippingAddress {
+  address1: string | null;
+  address2: string | null;
+  city: string | null;
+  province: string | null;
+  name: string | null;
+  phone: string | null;
+}
+
 export interface ShipmentOrderDetail {
   name: string | null;
   shopify_order_id: string | null;
   line_items: OrderLineItem[];
+  shipping_address: OrderShippingAddress | null;
 }
 
 /** A row ready to be upserted into the `orders` table. */

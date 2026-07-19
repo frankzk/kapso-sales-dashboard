@@ -16,6 +16,7 @@ import {
   type ReprogramStats,
 } from "@/lib/shipments";
 import { chunk } from "@/lib/access";
+import { shopifyShippingAddress } from "@/lib/shopify-address";
 
 // The manual-review queue: guides that didn't auto-link to an order AND still
 // need a human. We exclude terminal states (delivered/closed) and rows dismissed
@@ -416,15 +417,16 @@ export async function getShipmentWithCalls(
   if (shipmentRow.order_id) {
     const { data } = await sb
       .from("orders")
-      .select("name,shopify_order_id,line_items")
+      .select("name,shopify_order_id,line_items,raw")
       .eq("id", shipmentRow.order_id)
       .maybeSingle();
-    const orderRow = data as ShipmentOrderDetail | null;
+    const orderRow = data as (Omit<ShipmentOrderDetail, "shipping_address"> & { raw?: unknown }) | null;
     if (orderRow) {
       order = {
         name: orderRow.name,
         shopify_order_id: orderRow.shopify_order_id,
         line_items: orderRow.line_items ?? [],
+        shipping_address: shopifyShippingAddress(orderRow.raw),
       };
     }
   }
