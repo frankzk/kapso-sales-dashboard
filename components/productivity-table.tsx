@@ -20,6 +20,23 @@ function pct(x: number): string {
   return `${Math.round(x * 100)}%`;
 }
 
+/** Copia local de formatMinutes (lib/productivity) — este archivo solo importa
+ *  TIPOS de ese módulo para no arrastrar el data layer al bundle cliente. */
+function fmtMin(min: number | null): string {
+  if (min == null) return "—";
+  if (min < 60) return `${Math.round(min)} min`;
+  if (min < 1440) return `${(min / 60).toFixed(1)} h`;
+  return `${(min / 1440).toFixed(1)} d`;
+}
+
+/** Tono de la 1ª gestión: verde ≤30 min · neutro ≤4 h · rojo más allá. */
+function firstTouchTone(min: number | null): string {
+  if (min == null) return "text-slate-400";
+  if (min <= 30) return "text-emerald-700";
+  if (min <= 240) return "text-slate-700";
+  return "text-rose-600";
+}
+
 /** Tiny ↑/↓ change vs the previous period, rendered after a metric value. */
 function DeltaInline({ value, fmt }: { value: number; fmt: (n: number) => string }) {
   if (value === 0) return <span className="ml-1 align-middle text-[11px] text-slate-300">→</span>;
@@ -548,7 +565,7 @@ export function ProductivityTable({
 
   return (
     <>
-      {/* móvil: tarjetas apiladas (la tabla de 10 columnas obligaría a scroll lateral) */}
+      {/* móvil: tarjetas apiladas (la tabla de 11 columnas obligaría a scroll lateral) */}
       <div className="space-y-2.5 p-2.5 md:hidden">
         {rows.map((r) => {
           const open = expanded === r.userId;
@@ -585,6 +602,14 @@ export function ProductivityTable({
                   <span className="font-medium text-slate-700">{r.leadsTrabajados}</span> leads ·{" "}
                   <span className="font-medium text-slate-700">{r.llamadas}</span> llamadas · {r.horas}h
                   {r.dias > 1 && ` · ${r.dias}d`}
+                  {r.primeraGestion.medianMin != null && (
+                    <>
+                      {" · 1ª gestión "}
+                      <span className={cn("font-medium", firstTouchTone(r.primeraGestion.medianMin))}>
+                        {fmtMin(r.primeraGestion.medianMin)}
+                      </span>
+                    </>
+                  )}
                 </p>
                 <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                   <span className="text-xs text-slate-700">
@@ -632,6 +657,12 @@ export function ProductivityTable({
           <th className="py-2 text-right font-medium">Horas</th>
           <th className="py-2 text-right font-medium">Leads</th>
           <th className="py-2 text-right font-medium">Llamadas</th>
+          <th
+            className="cursor-help py-2 text-right font-medium"
+            title="Mediana de minutos desde que el lead LLEGA hasta su primera gestión humana — cuenta los leads del rango que esta asesora tocó primero · verde ≤30 min · rojo >4 h"
+          >
+            1ª gestión ⓘ
+          </th>
           <th className="py-2 text-right font-medium">% cierre</th>
           <th
             className="py-2 pl-3 text-left font-medium"
@@ -686,6 +717,16 @@ export function ProductivityTable({
                 </td>
                 <td className="py-2.5 text-right text-slate-700">{r.leadsTrabajados}</td>
                 <td className="py-2.5 text-right text-slate-700">{r.llamadas}</td>
+                <td className="py-2.5 text-right whitespace-nowrap">
+                  <span className={cn("font-medium", firstTouchTone(r.primeraGestion.medianMin))}>
+                    {fmtMin(r.primeraGestion.medianMin)}
+                  </span>
+                  {r.primeraGestion.n > 0 && (
+                    <span className="ml-1 text-xs text-slate-400" title="Leads del rango que tocó primero">
+                      · {r.primeraGestion.n}
+                    </span>
+                  )}
+                </td>
                 <td className="py-2.5 text-right whitespace-nowrap text-slate-700">
                   {pct(r.conversion)}
                   {showDelta && <DeltaInline value={r.delta.conversionPP} fmt={(n) => `${n}pp`} />}
@@ -710,7 +751,7 @@ export function ProductivityTable({
               </tr>
               {open && (
                 <tr>
-                  <td colSpan={10} className="bg-slate-50/60 p-0">
+                  <td colSpan={11} className="bg-slate-50/60 p-0">
                     <AgentLeads state={cache[r.userId]} currency={currency} />
                   </td>
                 </tr>
@@ -727,7 +768,7 @@ export function ProductivityTable({
               <span className="font-medium">{advisorName(i.email)}</span>
               <OnlineDot online />
             </td>
-            <td colSpan={9} className="py-2.5 pl-1 text-left text-xs italic">
+            <td colSpan={10} className="py-2.5 pl-1 text-left text-xs italic">
               En línea · sin actividad registrada en el período
             </td>
           </tr>

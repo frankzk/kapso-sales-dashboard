@@ -314,6 +314,108 @@ export function computeAdvisorConversionByDay(opts: {
   return series;
 }
 
+// ── Velocidad de 1ª gestión (speed-to-lead) ──────────────────────────────────
+// Cuánto tarda un lead recién llegado en recibir su PRIMERA gestión humana. Es
+// la palanca clásica de conversión en COD: la probabilidad de contacto se
+// desploma con cada hora sin llamada, y un carrito (formulario lleno) que se
+// enfría es plata de ads perdida. Mediana — no promedio: un lead olvidado 3
+// días no debe esconder al equipo rápido — más el % dentro de los 30 min.
+
+export const FIRST_TOUCH_FAST_MIN = 30;
+
+export interface FirstTouchLeadInput {
+  id: string;
+  created_at: string;
+  category: string; // open | hot | won | lost | …
+  cart: boolean; // cart_item_count > 0 o draft_order_gid presente
+}
+
+export interface FirstTouchCell {
+  n: number; // leads del rango que YA recibieron su 1ª gestión humana
+  medianMin: number | null; // mediana de minutos hasta esa 1ª gestión
+  under30Pct: number | null; // % de gestionados dentro de FIRST_TOUCH_FAST_MIN
+  sinGestionar: number; // creados en el rango AÚN en cola (open/hot) sin gestión
+}
+
+export interface FirstTouchStats {
+  carritos: FirstTouchCell;
+  resto: FirstTouchCell;
+  /** Mediana por asesora sobre los leads que ELLA tocó primero — la mediana del
+   *  equipo esconde a quien deja enfriar los leads frescos. */
+  byAgent: Record<string, { medianMin: number | null; n: number }>;
+}
+
+export function emptyFirstTouchStats(): FirstTouchStats {
+  const cell = (): FirstTouchCell => ({ n: 0, medianMin: null, under30Pct: null, sinGestionar: 0 });
+  return { carritos: cell(), resto: cell(), byAgent: {} };
+}
+
+function medianOf(xs: number[]): number | null {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  const m = s.length % 2 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
+  return Math.round(m * 10) / 10;
+}
+
+/** "38 min" · "2.1 h" · "1.3 d" · "—" — formato compartido tarjeta/tabla. */
+export function formatMinutes(min: number | null): string {
+  if (min == null) return "—";
+  if (min < 60) return `${Math.round(min)} min`;
+  if (min < 1440) return `${(min / 60).toFixed(1)} h`;
+  return `${(min / 1440).toFixed(1)} d`;
+}
+
+/**
+ * Pure. `leads` = creados en el rango; `calls` = TODAS las gestiones humanas del
+ * rango (SIN lente de fuente — mide disciplina operativa, como el heatmap). Un
+ * lead ya cerrado (won/lost) sin gestión humana no cuenta en ningún lado: lo
+ * cerró el bot o llegó por importación y no tiene historia de SLA. En rangos
+ * históricos un lead cuya 1ª gestión cayó DESPUÉS del fin del rango aparece
+ * como sinGestionar si sigue en cola; en las vistas vivas (Hoy/7d/30d hasta
+ * hoy — el uso real del tablero) el corte es exacto. Un reloj desfasado
+ * (gestión "antes" de la creación) se fija en 0.
+ */
+export function computeFirstTouchStats(opts: {
+  leads: FirstTouchLeadInput[];
+  calls: Pick<AdvisorCall, "vendedora" | "lead_id" | "occurred_at">[];
+}): FirstTouchStats {
+  const first = new Map<string, { at: number; vendedora: string }>();
+  for (const c of opts.calls) {
+    const t = Date.parse(c.occurred_at);
+    if (!Number.isFinite(t)) continue;
+    const cur = first.get(c.lead_id);
+    if (!cur || t < cur.at) first.set(c.lead_id, { at: t, vendedora: c.vendedora });
+  }
+  const mins = { carritos: [] as number[], resto: [] as number[] };
+  const pend = { carritos: 0, resto: 0 };
+  const byAgentMins = new Map<string, number[]>();
+  for (const l of opts.leads) {
+    const key = l.cart ? ("carritos" as const) : ("resto" as const);
+    const f = first.get(l.id);
+    if (!f) {
+      if (l.category === "open" || l.category === "hot") pend[key] += 1;
+      continue;
+    }
+    const created = Date.parse(l.created_at);
+    if (!Number.isFinite(created)) continue;
+    const min = Math.max(0, (f.at - created) / 60_000);
+    mins[key].push(min);
+    (byAgentMins.get(f.vendedora) ?? byAgentMins.set(f.vendedora, []).get(f.vendedora)!).push(min);
+  }
+  const cell = (xs: number[], sinGestionar: number): FirstTouchCell => ({
+    n: xs.length,
+    medianMin: medianOf(xs),
+    under30Pct: xs.length
+      ? Math.round((100 * xs.filter((m) => m <= FIRST_TOUCH_FAST_MIN).length) / xs.length)
+      : null,
+    sinGestionar,
+  });
+  const byAgent: FirstTouchStats["byAgent"] = {};
+  for (const [id, xs] of byAgentMins) byAgent[id] = { medianMin: medianOf(xs), n: xs.length };
+  return { carritos: cell(mins.carritos, pend.carritos), resto: cell(mins.resto, pend.resto), byAgent };
+}
+
 export interface ProductivityInput {
   calls: AdvisorCall[];
   /** Outcome of every touched lead: won? + net order revenue + acquisition
@@ -715,6 +817,8 @@ export interface AdvisorBoardRow extends AdvisorStatWithDelta {
   heat: number[]; // 13 celdas, horas locales 08..20 (actividad, SIN lente de fuente)
   trend: TrendCell[]; // 7 días terminando en range.to (CON lente de fuente)
   online: boolean; // presencia al momento del render
+  /** 1ª gestión de los leads del rango que ELLA tocó primero (sin lente). */
+  primeraGestion: { medianMin: number | null; n: number };
 }
 
 export interface ProductivityBoardData {
@@ -727,6 +831,8 @@ export interface ProductivityBoardData {
   /** En línea AHORA pero sin actividad registrada en el rango — la señal clave
    *  para asesoras remotas ("conectada pero no está registrando nada"). */
   onlineIdle: { userId: string; email: string }[];
+  /** Velocidad de 1ª gestión del rango (equipo, carritos vs resto). */
+  firstTouch: FirstTouchStats;
 }
 
 /** Paged shipment_calls events (agent + occurred_at + shipment ref) for the
@@ -780,6 +886,61 @@ async function fetchShipmentEventsPaged(
   return out;
 }
 
+/** Leads CREADOS en el rango (paged past PostgREST's max-rows cap) — insumo de
+ *  la velocidad de 1ª gestión. Solo las columnas del cálculo. Best-effort: un
+ *  error de página devuelve lo acumulado, igual que los demás fetchers. */
+async function fetchLeadsCreatedPaged(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: string[],
+  startIso: string,
+  endIso: string,
+): Promise<FirstTouchLeadInput[]> {
+  const PAGE = 1000;
+  const CAP = 20000;
+  const PAGE_WINDOW = 4;
+  const out: FirstTouchLeadInput[] = [];
+  for (let from = 0; from < CAP; from += PAGE * PAGE_WINDOW) {
+    const offsets = Array.from(
+      { length: Math.min(PAGE_WINDOW, Math.ceil((CAP - from) / PAGE)) },
+      (_, index) => from + index * PAGE,
+    );
+    const pages = await Promise.all(
+      offsets.map((offset) =>
+        sb
+          .from("leads")
+          .select("id, created_at, category, cart_item_count, draft_order_gid")
+          .in("store_id", storeIds)
+          .gte("created_at", startIso)
+          .lte("created_at", endIso)
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
+          .range(offset, offset + PAGE - 1),
+      ),
+    );
+    for (const { data, error } of pages) {
+      if (error) return out;
+      const batch =
+        (data as {
+          id: string;
+          created_at: string;
+          category: string | null;
+          cart_item_count: number | null;
+          draft_order_gid: string | null;
+        }[]) ?? [];
+      out.push(
+        ...batch.map((r) => ({
+          id: r.id,
+          created_at: r.created_at,
+          category: r.category ?? "open",
+          cart: (r.cart_item_count ?? 0) > 0 || (r.draft_order_gid ?? "").length > 0,
+        })),
+      );
+      if (batch.length < PAGE) return out;
+    }
+  }
+  return out;
+}
+
 /**
  * Everything the one-screen productivity board needs, in one call:
  * per-advisor stats + deltas (like getAdvisorProductivityCompare), PLUS the
@@ -804,6 +965,7 @@ export async function getProductivityBoard(
     heatMax: 1,
     heatMode: "day",
     onlineIdle: [],
+    firstTouch: emptyFirstTouchStats(),
   };
   if (!storeIds.length) return empty;
   const sb = await createServerSupabase();
@@ -824,7 +986,7 @@ export async function getProductivityBoard(
   const needPrefix = trendStartIso < startIso; // rango corto (Hoy/Ayer) → faltan días previos
   const prefixEndIso = new Date(Date.parse(startIso) - 1).toISOString();
 
-  const [calls, prevRows, shipEvents, onlineIds, prefixCalls] = await Promise.all([
+  const [calls, prevRows, shipEvents, onlineIds, prefixCalls, createdLeads] = await Promise.all([
     fetchAdvisorLeadCallsPaged(sb, storeIds, startIso, endIso),
     getAdvisorProductivity(storeIds, prevRange, source, tz),
     fetchShipmentEventsPaged(sb, storeIds, startIso, endIso),
@@ -838,6 +1000,7 @@ export async function getProductivityBoard(
     needPrefix
       ? fetchAdvisorLeadCallsPaged(sb, storeIds, trendStartIso, prefixEndIso)
       : Promise.resolve([] as AdvisorCall[]),
+    fetchLeadsCreatedPaged(sb, storeIds, startIso, endIso),
   ]);
 
   // Metrics from the SAME calls (source lens inside), same as getAdvisorProductivity.
@@ -868,6 +1031,10 @@ export async function getProductivityBoard(
     rangeDays,
   });
 
+  // Velocidad de 1ª gestión: leads creados en el rango × primer toque humano
+  // (calls SIN lente de fuente, igual que el heatmap — mide disciplina).
+  const firstTouch = computeFirstTouchStats({ leads: createdLeads, calls });
+
   const zeroHeat = () => new Array<number>(HEAT_END - HEAT_START + 1).fill(0);
   const emptyTrend = () => trendDays.map((d) => ({ date: d.date, label: d.label, contactos: 0, pedidos: 0 }));
   const rows: AdvisorBoardRow[] = withDeltas.map((r) => ({
@@ -875,6 +1042,7 @@ export async function getProductivityBoard(
     heat: heat.byAgent[r.userId] ?? zeroHeat(),
     trend: trendSeries[r.userId] ?? emptyTrend(),
     online: onlineIds.has(r.userId),
+    primeraGestion: firstTouch.byAgent[r.userId] ?? { medianMin: null, n: 0 },
   }));
 
   // Online RIGHT NOW but absent from the board (no registered activity in range).
@@ -891,6 +1059,7 @@ export async function getProductivityBoard(
     heatMax: heat.max,
     heatMode: heat.mode,
     onlineIdle,
+    firstTouch,
   };
 }
 
