@@ -8,21 +8,26 @@ import {
   COURIER_REPORT_RESULTS,
   attemptLabel,
   evaluateAliclikReschedule,
+  getFenixDeliverySchedule,
   isCallable,
   isShipmentReadyForContact,
   isShipmentReadyForContactToday,
   labelOf,
+  matchesAliclikRouteFilter,
   normalizeCity,
   rescheduleGuideCode,
   SHIPMENT_CLAIM_HEARTBEAT_MS,
   shipmentRequiresCourierResult,
   statusSince,
+  type AliclikRescheduleReason,
+  type AliclikRouteFilter,
   type CourierReportResult,
   type RerouteDisposition,
 } from "@/lib/shipments";
 import type {
   LinkedShipmentSummary,
   ShipmentCallRow,
+  ShipmentHistoryGuide,
   ShipmentOrderDetail,
   ShipmentRow,
   StoreSummary,
@@ -182,21 +187,23 @@ function StatusBadge({
 }
 
 const SIN_DISTRITO = "(sin distrito)";
-const SIN_CIUDAD = "(sin provincia)";
+const SIN_PROVINCIA = "(sin provincia)";
+
+function shipmentProvince(shipment: Pick<ShipmentRow, "province" | "region">): string {
+  return shipment.province?.trim() || shipment.region?.trim() || SIN_PROVINCIA;
+}
 
 export function ShipmentsBoard({
   stores,
   view,
   counts,
   shipments,
-  fenixStockCities = [],
   reprogram,
 }: {
   stores: StoreSummary[];
   view: ShipmentView;
   counts: Record<ShipmentView, number>;
   shipments: ShipmentRow[];
-  fenixStockCities?: string[]; // normalized provinces with Fenix stock
   reprogram?: ReprogramStats;
 }) {
   const router = useRouter();
@@ -204,13 +211,14 @@ export function ShipmentsBoard({
 
   // client-side filters over the loaded view. Empty set = "all".
   const [storeFilter, setStoreFilter] = useState<Set<string>>(new Set());
-  const [cityFilter, setCityFilter] = useState<Set<string>>(new Set());
+  const [provinceFilter, setProvinceFilter] = useState<Set<string>>(new Set());
   const [districtFilter, setDistrictFilter] = useState<Set<string>>(new Set());
   const [dateFilter, setDateFilter] = useState(""); // YYYY-MM-DD on next_followup_at
   const [unmatchedOnly, setUnmatchedOnly] = useState(false);
   const [uncontactedTodayOnly, setUncontactedTodayOnly] = useState(view === "pendiente");
   const [uncontactedOnly, setUncontactedOnly] = useState(false);
   const [fenixFilter, setFenixFilter] = useState<FenixAvailabilityFilter>("all");
+  const [aliclikRouteFilter, setAliclikRouteFilter] = useState<AliclikRouteFilter>("all");
   const [exportingFenix, setExportingFenix] = useState(false);
   const [fenixExportError, setFenixExportError] = useState<string | null>(null);
 
@@ -218,33 +226,30 @@ export function ShipmentsBoard({
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<ShipmentRow[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [recentlyUpdatedId, setRecentlyUpdatedId] = useState<string | null>(null);
+  const updatedRowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const storeName = (id: string) => stores.find((s) => s.id === id)?.name ?? "—";
 
-  // distinct provinces (city) and districts present in this view, for the pickers
-  const cityOptions = Array.from(
-    new Set(shipments.map((s) => normalizeCity(s.city) || SIN_CIUDAD)),
+  // Province is imported from Aliclik. Keep it separate from `city`, which is
+  // the normalized Fenix coverage key and can intentionally contain a district.
+  const provinceOptions = Array.from(
+    new Set(shipments.map(shipmentProvince)),
   ).sort((a, b) => a.localeCompare(b));
   const districtOptions = Array.from(
     new Set(shipments.map((s) => s.district || SIN_DISTRITO)),
   ).sort((a, b) => a.localeCompare(b));
 
-  // On view change, default-select the provinces where Fenix has stock (present
-  // in this view); districts start unfiltered. Reset the other filters.
+  // Every view opens without province or district restrictions.
   useEffect(() => {
-    const stock = new Set(fenixStockCities);
-    const defaultCities = new Set(
-      Array.from(new Set(shipments.map((s) => normalizeCity(s.city) || SIN_CIUDAD))).filter(
-        (c) => c !== SIN_CIUDAD && stock.has(c),
-      ),
-    );
-    setCityFilter(defaultCities);
+    setProvinceFilter(new Set());
     setDistrictFilter(new Set());
     setDateFilter("");
     setUnmatchedOnly(false);
     setUncontactedTodayOnly(view === "pendiente");
     setUncontactedOnly(false);
     setFenixFilter("all");
+    setAliclikRouteFilter("all");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
@@ -271,10 +276,14 @@ export function ShipmentsBoard({
     };
   }, [search]);
 
-  const filtered = shipments.filter(
+  useEffect(() => () => {
+    if (updatedRowTimerRef.current) clearTimeout(updatedRowTimerRef.current);
+  }, []);
+
+  const filteredWithoutAliclikRoute = shipments.filter(
     (s) =>
       (storeFilter.size === 0 || storeFilter.has(s.store_id)) &&
-      (cityFilter.size === 0 || cityFilter.has(normalizeCity(s.city) || SIN_CIUDAD)) &&
+      (provinceFilter.size === 0 || provinceFilter.has(shipmentProvince(s))) &&
       (districtFilter.size === 0 || districtFilter.has(s.district || SIN_DISTRITO)) &&
       (!dateFilter || (s.next_followup_at ? s.next_followup_at.slice(0, 10) === dateFilter : false)) &&
       (!unmatchedOnly || !s.matched) &&
@@ -285,6 +294,31 @@ export function ShipmentsBoard({
         view !== "pendiente" ||
         isShipmentReadyForContact(s.contact_count, s.next_followup_at)) &&
       matchesFenixAvailability(s, fenixFilter),
+  );
+  const aliclikRouteCounts = filteredWithoutAliclikRoute.reduce(
+    (routeCounts, shipment) => {
+      const input = {
+        courier: shipment.courier,
+        statusCategory: shipment.status_category,
+        attempts: shipment.aliclik_attempts,
+        serviceDate: shipment.aliclik_service_date,
+      };
+      if (matchesAliclikRouteFilter(input, "aliclik_available")) {
+        routeCounts.aliclikAvailable += 1;
+      } else if (matchesAliclikRouteFilter(input, "fenix_required")) {
+        routeCounts.fenixRequired += 1;
+      }
+      return routeCounts;
+    },
+    { aliclikAvailable: 0, fenixRequired: 0 },
+  );
+  const filtered = filteredWithoutAliclikRoute.filter((shipment) =>
+    matchesAliclikRouteFilter({
+      courier: shipment.courier,
+      statusCategory: shipment.status_category,
+      attempts: shipment.aliclik_attempts,
+      serviceDate: shipment.aliclik_service_date,
+    }, aliclikRouteFilter),
   );
   const fenixRowsForExport = filtered.filter(
     (shipment) => shipment.courier === "fenix" && shipment.status_category === "in_route",
@@ -305,6 +339,26 @@ export function ShipmentsBoard({
       else next.add(id);
       return next;
     });
+  }
+
+  async function handleShipmentUpdated(id: string) {
+    // The server-rendered queue refreshes in the background. Global search is
+    // client-side state, so refresh it explicitly to avoid leaving a stale row.
+    router.refresh();
+    const term = search.trim();
+    if (term.length >= 2) {
+      try {
+        setResults(await searchShipments(term));
+      } catch {
+        // The drawer still reloads the saved record; a later search can retry.
+      }
+    }
+
+    setRecentlyUpdatedId(id);
+    if (updatedRowTimerRef.current) clearTimeout(updatedRowTimerRef.current);
+    updatedRowTimerRef.current = setTimeout(() => {
+      setRecentlyUpdatedId((current) => current === id ? null : current);
+    }, 2400);
   }
 
   async function downloadFenixProgrammingWorkbook() {
@@ -398,7 +452,13 @@ export function ShipmentsBoard({
           {searching ? (
             <p className="p-5 text-sm text-slate-400">Buscando…</p>
           ) : results && results.length > 0 ? (
-            <ShipmentTable rows={results} stores={stores} storeName={storeName} onOpen={setOpenId} />
+            <ShipmentTable
+              rows={results}
+              stores={stores}
+              storeName={storeName}
+              onOpen={setOpenId}
+              highlightedId={recentlyUpdatedId}
+            />
           ) : (
             <p className="p-5 text-sm text-slate-400">Sin coincidencias.</p>
           )}
@@ -447,12 +507,12 @@ export function ShipmentsBoard({
                   })}
                 </div>
               )}
-              {cityOptions.length > 1 && (
+              {provinceOptions.length > 1 && (
                 <ChecklistFilter
                   label="Provincia"
-                  options={cityOptions}
-                  selected={cityFilter}
-                  onChange={setCityFilter}
+                  options={provinceOptions}
+                  selected={provinceFilter}
+                  onChange={setProvinceFilter}
                 />
               )}
               {districtOptions.length > 1 && (
@@ -494,6 +554,31 @@ export function ShipmentsBoard({
                       : `Descargar Excel Fenix (${fenixRowsForExport.length})`}
                 </button>
               )}
+              {view === "pendiente" && (
+                <label className="flex items-center gap-1.5 text-xs text-slate-400">
+                  Gestión:
+                  <select
+                    value={aliclikRouteFilter}
+                    onChange={(e) => setAliclikRouteFilter(e.target.value as AliclikRouteFilter)}
+                    className={cn(
+                      "rounded-lg border px-2 py-1 text-xs font-medium",
+                      aliclikRouteFilter === "aliclik_available"
+                        ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                        : aliclikRouteFilter === "fenix_required"
+                          ? "border-orange-300 bg-orange-50 text-orange-800"
+                          : "border-slate-200 bg-white text-slate-700",
+                    )}
+                  >
+                    <option value="all">Todas las rutas</option>
+                    <option value="aliclik_available">
+                      Aliclik disponible ({aliclikRouteCounts.aliclikAvailable})
+                    </option>
+                    <option value="fenix_required">
+                      Fenix requerido ({aliclikRouteCounts.fenixRequired})
+                    </option>
+                  </select>
+                </label>
+              )}
               <label className="flex items-center gap-1.5 text-xs text-slate-400">
                 Fenix:
                 <select
@@ -502,7 +587,7 @@ export function ShipmentsBoard({
                     const next = e.target.value as FenixAvailabilityFilter;
                     setFenixFilter(next);
                     if (next === "sin_stock" || next === "sin_cobertura") {
-                      setCityFilter(new Set());
+                      setProvinceFilter(new Set());
                     }
                   }}
                   className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
@@ -545,22 +630,24 @@ export function ShipmentsBoard({
                 </>
               )}
               {(storeFilter.size > 0 ||
-                cityFilter.size > 0 ||
+                provinceFilter.size > 0 ||
                 districtFilter.size > 0 ||
                 dateFilter ||
                 unmatchedOnly ||
                 uncontactedTodayOnly ||
                 uncontactedOnly ||
+                aliclikRouteFilter !== "all" ||
                 fenixFilter !== "all") && (
                 <button
                   onClick={() => {
                     setStoreFilter(new Set());
-                    setCityFilter(new Set());
+                    setProvinceFilter(new Set());
                     setDistrictFilter(new Set());
                     setDateFilter("");
                     setUnmatchedOnly(false);
                     setUncontactedTodayOnly(false);
                     setUncontactedOnly(false);
+                    setAliclikRouteFilter("all");
                     setFenixFilter("all");
                   }}
                   className="text-xs text-slate-500 hover:underline"
@@ -596,7 +683,13 @@ export function ShipmentsBoard({
                   {shipments.length === 0 ? "Sin envíos en esta vista." : "Ningún envío con esos filtros."}
                 </p>
               ) : (
-                <ShipmentTable rows={filtered} stores={stores} storeName={storeName} onOpen={setOpenId} />
+                <ShipmentTable
+                  rows={filtered}
+                  stores={stores}
+                  storeName={storeName}
+                  onOpen={setOpenId}
+                  highlightedId={recentlyUpdatedId}
+                />
               )}
             </Card>
           )}
@@ -608,6 +701,7 @@ export function ShipmentsBoard({
           shipmentId={openId}
           onClose={() => setOpenId(null)}
           onOpenShipment={setOpenId}
+          onShipmentUpdated={handleShipmentUpdated}
         />
       )}
     </div>
@@ -619,11 +713,13 @@ function ShipmentTable({
   stores,
   storeName,
   onOpen,
+  highlightedId,
 }: {
   rows: ShipmentRow[];
   stores: StoreSummary[];
   storeName: (id: string) => string;
   onOpen: (id: string) => void;
+  highlightedId?: string | null;
 }) {
   const [sort, setSort] = useState<{
     key: ShipmentSortKey;
@@ -664,7 +760,10 @@ function ShipmentTable({
             <tr
               key={s.id}
               onClick={() => onOpen(s.id)}
-              className="cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50"
+              className={cn(
+                "cursor-pointer border-b border-slate-100 transition-colors duration-500 last:border-0",
+                highlightedId === s.id ? "bg-emerald-50" : "hover:bg-slate-50",
+              )}
             >
               <td className="px-4 py-2.5 font-mono text-xs text-slate-700">
                 {s.guide_code}
@@ -700,7 +799,12 @@ function ShipmentTable({
               <td className="px-4 py-2.5">
                 <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
               </td>
-              <td className="px-4 py-2.5 text-slate-600">{fmtReprogram(s.next_followup_at)}</td>
+              <td className="px-4 py-2.5 text-slate-600">
+                {fmtReprogram(s.next_followup_at)}
+                {highlightedId === s.id && (
+                  <span className="block text-[10px] font-semibold text-emerald-700">✓ Actualizado</span>
+                )}
+              </td>
               <td className="px-4 py-2.5"><AliclikRouteCell shipment={s} /></td>
             </tr>
           ))}
@@ -758,14 +862,34 @@ function AliclikRouteCell({ shipment }: { shipment: ShipmentRow }) {
     attempts: shipment.aliclik_attempts,
     serviceDate: shipment.aliclik_service_date,
   });
-  return decision.eligible ? (
-    <span className="inline-flex rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
-      Aliclik · {shipment.aliclik_attempts ?? 0}/3
-    </span>
-  ) : (
-    <span className="inline-flex rounded-full bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700">
-      Fenix · {shipment.aliclik_attempts == null ? "sin dato" : `${shipment.aliclik_attempts}/3`}
-    </span>
+  if (decision.eligible) {
+    return (
+      <div className="min-w-32">
+        <span className="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+          Aliclik disponible
+        </span>
+        <span className="mt-0.5 block text-[10px] leading-3 text-emerald-700">
+          Dentro de ventana · {shipment.aliclik_attempts ?? 0}/3 intentos
+        </span>
+      </div>
+    );
+  }
+
+  const reasonLabels: Partial<Record<AliclikRescheduleReason, string>> = {
+    three_attempts: "3 intentos alcanzados",
+    outside_week: "Fuera de la ventana operativa",
+    missing_attempts: "Sin NRO. INTENTOS en Excel",
+    missing_service_date: "Sin fecha Aliclik en Excel",
+  };
+  return (
+    <div className="min-w-32">
+      <span className="inline-flex rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-semibold text-orange-800">
+        Fenix requerido
+      </span>
+      <span className="mt-0.5 block text-[10px] leading-3 text-orange-700">
+        {reasonLabels[decision.reason] ?? "Aliclik no disponible"}
+      </span>
+    </div>
   );
 }
 
@@ -784,16 +908,18 @@ function ShipmentDrawer({
   shipmentId,
   onClose,
   onOpenShipment,
+  onShipmentUpdated,
 }: {
   shipmentId: string;
   onClose: () => void;
   onOpenShipment: (id: string) => void;
+  onShipmentUpdated: (id: string) => void | Promise<void>;
 }) {
-  const router = useRouter();
   const [detail, setDetail] = useState<
     | {
         shipment: ShipmentRow;
         calls: ShipmentCallRow[];
+        guideHistory: ShipmentHistoryGuide[];
         order: ShipmentOrderDetail | null;
         linkedFenixShipment: LinkedShipmentSummary | null;
       }
@@ -908,7 +1034,7 @@ function ShipmentDrawer({
         setAddress(d.shipment.delivery_address ?? shopifyAddress?.address1 ?? "");
         setAddressReference(d.shipment.delivery_reference ?? shopifyAddress?.address2 ?? "");
         setAddressDistrict(d.shipment.district ?? shopifyAddress?.city ?? "");
-        setAddressCity(d.shipment.city ?? shopifyAddress?.city ?? "");
+        setAddressCity(d.shipment.province ?? d.shipment.city ?? shopifyAddress?.city ?? "");
         setAddressRegion(d.shipment.region ?? shopifyAddress?.province ?? "");
         setAddressLatitude(d.shipment.latitude == null ? "" : String(d.shipment.latitude));
         setAddressLongitude(d.shipment.longitude == null ? "" : String(d.shipment.longitude));
@@ -922,7 +1048,6 @@ function ShipmentDrawer({
   function refresh() {
     setDetail(null);
     setReloadKey((k) => k + 1);
-    router.refresh();
   }
 
   function releaseCurrentClaim() {
@@ -944,13 +1069,14 @@ function ShipmentDrawer({
 
   function run(
     fn: () => Promise<{ error?: string; notice?: string }>,
-    onSuccess?: () => void,
+    onSuccess?: () => void | Promise<void>,
   ) {
     start(async () => {
       const r = await fn();
       setMsg(r.error ?? r.notice ?? null);
       if (!r.error) {
-        onSuccess?.();
+        await onSuccess?.();
+        await onShipmentUpdated(shipmentId);
         refresh();
       }
     });
@@ -960,6 +1086,9 @@ function ShipmentDrawer({
     disposition === "programar" && (!nextDate || nextDate <= localDateInputValue());
   const shipment = detail && !("error" in detail) ? detail.shipment : null;
   const fenixReason = shipment ? currentFenixReason(shipment) : null;
+  const fenixDeliverySchedule = shipment
+    ? getFenixDeliverySchedule(shipment.city, shipment.district)
+    : null;
   const shopifyAddress = detail && !("error" in detail) ? detail.order?.shipping_address ?? null : null;
   const deliveryAddress = shipment?.delivery_address ?? shopifyAddress?.address1 ?? null;
   const deliveryReference = shipment?.delivery_reference ?? shopifyAddress?.address2 ?? null;
@@ -1129,6 +1258,17 @@ function ShipmentDrawer({
                   tone={fenixReason === "ok" ? "positive" : fenixReason === "sin_stock" ? "warning" : "negative"}
                 />
               </dl>
+              {fenixDeliverySchedule && (
+                <div className="flex items-center gap-1.5 border-t border-amber-200 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-950">
+                  <span aria-hidden="true" className="text-sm text-amber-600">◷</span>
+                  <span>
+                    <strong>Horario Fenix: {fenixDeliverySchedule.hours}</strong>
+                    {fenixDeliverySchedule.note && (
+                      <span className="text-amber-800"> · {fenixDeliverySchedule.note}</span>
+                    )}
+                  </span>
+                </div>
+              )}
             </section>
 
             <section className="overflow-hidden rounded-xl border border-teal-200 bg-white shadow-[0_1px_0_rgba(13,148,136,0.08)]">
@@ -1750,38 +1890,7 @@ function ShipmentDrawer({
 
             </fieldset>
 
-            {/* history */}
-            <section className="space-y-2 rounded-xl border border-violet-200 bg-violet-50/45 p-2.5">
-              <p className="text-sm font-semibold text-violet-950">Historial</p>
-              {detail.calls.length === 0 ? (
-                <p className="text-xs text-slate-400">Sin registros.</p>
-              ) : (
-                <ul className="space-y-2">
-                  {detail.calls.map((c) => (
-                    <li key={c.id} className="rounded-lg border border-violet-100 bg-white px-3 py-2 text-xs text-slate-600">
-                      <div className="flex justify-between">
-                        <span className="font-medium text-slate-700">
-                          {shipmentHistoryLabel(c)}
-                          {c.new_status ? ` → ${labelOf(c.new_status)}` : ""}
-                        </span>
-                        <span className="text-slate-400">{c.agent_name ?? ""}</span>
-                      </div>
-                      {c.note && <p className="mt-0.5">{c.note}</p>}
-                      {c.next_followup_at && (
-                        <p className="mt-0.5 text-slate-500">
-                          {c.new_status === "en_ruta"
-                            ? "Fecha de reprogramación"
-                            : c.new_status
-                              ? "Próximo intento"
-                              : "Próxima llamada"}
-                          : {fmtReprogram(c.next_followup_at)}
-                        </p>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
+            <ShipmentGuideHistory guides={detail.guideHistory} />
           </div>
         )}
       </div>
@@ -1789,8 +1898,119 @@ function ShipmentDrawer({
   );
 }
 
-/** Multi-select city filter: a button + popover checklist with a search box.
- *  Empty selection = no filter (all cities shown). */
+function ShipmentGuideHistory({ guides }: { guides: ShipmentHistoryGuide[] }) {
+  return (
+    <section className="space-y-2.5 rounded-xl border border-violet-200 bg-violet-50/45 p-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-violet-950">Historial desde el origen</p>
+          <p className="text-[11px] text-violet-600">Todas las guías de esta reprogramación</p>
+        </div>
+        <span className="rounded-full border border-violet-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-violet-700">
+          {guides.length} {guides.length === 1 ? "guía" : "guías"}
+        </span>
+      </div>
+
+      <div>
+        {guides.map((guide, guideIndex) => (
+          <div key={guide.id}>
+            {guideIndex > 0 && (
+              <div className="flex items-center gap-2 py-1.5" aria-label="Transferencia a una nueva guía">
+                <span className="h-px flex-1 bg-violet-200" />
+                <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700">
+                  Transferida → nueva guía Fenix
+                </span>
+                <span className="h-px flex-1 bg-violet-200" />
+              </div>
+            )}
+
+            <article
+              className={cn(
+                "overflow-hidden rounded-xl border bg-white",
+                guide.is_current
+                  ? "border-brand-300 shadow-[0_0_0_1px_rgba(37,99,235,0.08)]"
+                  : "border-violet-100",
+              )}
+            >
+              <header
+                className={cn(
+                  "flex items-start justify-between gap-3 border-b px-3 py-2",
+                  guide.is_current
+                    ? "border-brand-100 bg-brand-50/80"
+                    : "border-violet-100 bg-violet-50/55",
+                )}
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-600">
+                      {guideIndex === 0 ? "Guía original" : `Reprogramación ${guideIndex}`}
+                    </span>
+                    <span
+                      className={cn(
+                        "rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
+                        guide.courier === "fenix"
+                          ? "bg-orange-100 text-orange-700"
+                          : "bg-sky-100 text-sky-700",
+                      )}
+                    >
+                      {guide.courier === "fenix" ? "Fenix" : "Aliclik"}
+                    </span>
+                    {guide.is_current && (
+                      <span className="rounded-full bg-brand-600 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">
+                        Vista actual
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 break-all font-mono text-xs font-semibold text-slate-800">
+                    {guide.guide_code}
+                  </p>
+                </div>
+                <StatusBadge category={guide.status_category} status={guide.delivery_status} />
+              </header>
+
+              {guide.calls.length === 0 ? (
+                <p className="px-3 py-2.5 text-xs text-slate-400">Sin gestiones registradas en esta guía.</p>
+              ) : (
+                <ul className="divide-y divide-slate-100">
+                  {guide.calls.map((call, callIndex) => {
+                    const occurredAt = fmtStatusSince(call.occurred_at ?? null);
+                    return (
+                      <li key={call.id ?? `${guide.id}-${callIndex}`} className="px-3 py-2 text-xs text-slate-600">
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="font-medium text-slate-700">
+                            {shipmentHistoryLabel(call)}
+                            {call.new_status ? ` → ${labelOf(call.new_status)}` : ""}
+                          </span>
+                          <span className="shrink-0 text-right text-[10px] leading-tight text-slate-400">
+                            {occurredAt && <span className="block">{occurredAt}</span>}
+                            {call.agent_name && <span className="block">{call.agent_name}</span>}
+                          </span>
+                        </div>
+                        {call.note && <p className="mt-0.5 leading-relaxed text-slate-600">{call.note}</p>}
+                        {call.next_followup_at && (
+                          <p className="mt-0.5 text-slate-500">
+                            {call.new_status === "en_ruta"
+                              ? "Fecha de reprogramación"
+                              : call.new_status
+                                ? "Próximo intento"
+                                : "Próxima llamada"}
+                            : {fmtReprogram(call.next_followup_at)}
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </article>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** Generic checklist filter. Empty selection means no restriction. */
 function ChecklistFilter({
   label,
   options,

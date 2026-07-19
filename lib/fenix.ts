@@ -27,6 +27,14 @@ export interface FenixEligibility {
 
 export type FenixAvailabilityFilter = "all" | "ok" | "sin_stock" | "sin_cobertura";
 
+/** Puno and Juliaca are distinct delivery locations but draw inventory from
+ * the same Fenix warehouse. Keep the visible city untouched and only collapse
+ * the key used to compare stock rows. */
+export function fenixStockCityKey(city: string | null | undefined): string {
+  const normalized = normalizeCity(city);
+  return normalized === "puno" ? "juliaca" : normalized;
+}
+
 /** Resolves the UI status, including a safe fallback for legacy rows that were
  * loaded without the read-time reason enrichment. */
 export function currentFenixReason(shipment: {
@@ -124,7 +132,8 @@ export function evaluateFenix(
   orderProducts?: ProductRef[],
 ): FenixEligibility {
   const city = normalizeCity(shipment.city);
-  const cityRows = stockRows.filter((r) => normalizeCity(r.city) === city);
+  const stockCity = fenixStockCityKey(city);
+  const cityRows = stockRows.filter((r) => fenixStockCityKey(r.city) === stockCity);
   const covered = isFenixCity(city) || cityRows.length > 0;
   if (!city || !covered) {
     return { eligible: false, reason: "sin_cobertura", city };

@@ -26,6 +26,7 @@ interface ExistingShipment {
   aliclik_attempts: number | null;
   aliclik_service_date: string | null;
   district: string | null;
+  province: string | null;
   city: string | null;
   region: string | null;
   delivery_address: string | null;
@@ -132,6 +133,9 @@ export async function ingestAliclikReport(
     const district = keepManualAddress
       ? existing.district
       : (inc.row.district ?? existing?.district ?? null);
+    const province = keepManualAddress
+      ? existing.province
+      : (inc.row.province ?? existing?.province ?? inc.row.region ?? null);
     const city = keepManualAddress ? existing.city : (inc.row.city ?? existing?.city ?? null);
     const region = keepManualAddress ? existing.region : (inc.row.region ?? existing?.region ?? null);
     const deliveryAddress = keepManualAddress
@@ -194,6 +198,7 @@ export async function ingestAliclikReport(
       customer_phone: inc.row.customer_phone,
       product: inc.row.product,
       district,
+      province,
       city,
       region,
       delivery_address: deliveryAddress,
@@ -215,10 +220,18 @@ export async function ingestAliclikReport(
   // 5) bulk-upsert shipments; map guide_code → id for the import_rows links
   const guideToId = new Map<string, string>();
   for (const chunk of chunked(shipmentRows, CHUNK)) {
-    const { data, error } = await admin
+    let upsertResult = await admin
       .from("shipments")
       .upsert(chunk, { onConflict: "courier,guide_code" })
       .select("id,guide_code");
+    if (isMissingProvinceColumn(upsertResult.error)) {
+      const legacyChunk = chunk.map(({ province: _province, ...row }) => row);
+      upsertResult = await admin
+        .from("shipments")
+        .upsert(legacyChunk, { onConflict: "courier,guide_code" })
+        .select("id,guide_code");
+    }
+    const { data, error } = upsertResult;
     if (error) throw new Error(error.message);
     for (const r of (data as { id: string; guide_code: string }[]) ?? []) {
       guideToId.set(r.guide_code, r.id);
@@ -238,6 +251,7 @@ export async function ingestAliclikReport(
       customer_phone: rm.parsed.customer_phone,
       product: rm.parsed.product,
       district: rm.parsed.district,
+      province: rm.parsed.province,
       city: rm.parsed.city,
       region: rm.parsed.region,
       delivery_address: rm.parsed.delivery_address,
@@ -314,11 +328,20 @@ async function fetchExistingShipments(
   const map = new Map<string, ExistingShipment>();
   if (!guideCodes.length) return map;
   for (const chunk of chunked(guideCodes, 200)) {
-    const { data } = await admin
+    const currentResult = await admin
       .from("shipments")
-      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,delivered_source,aliclik_attempts,aliclik_service_date,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
       .eq("courier", "aliclik")
       .in("guide_code", chunk);
+    let data: unknown = currentResult.data;
+    if (isMissingProvinceColumn(currentResult.error)) {
+      const legacyResult = await admin
+        .from("shipments")
+        .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+        .eq("courier", "aliclik")
+        .in("guide_code", chunk);
+      data = legacyResult.data;
+    }
     for (const r of (data as ExistingShipment[]) ?? []) map.set(r.guide_code, r);
   }
   return map;
@@ -341,4 +364,12 @@ function chunked<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
+}
+
+function isMissingProvinceColumn(error: { code?: string; message?: string } | null): boolean {
+  return !!error && (
+    error.code === "PGRST204" ||
+    error.code === "42703" ||
+    error.message?.toLowerCase().includes("province") === true
+  );
 }

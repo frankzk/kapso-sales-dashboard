@@ -247,6 +247,8 @@ export interface ShipmentRow {
   customer_phone: string | null;
   product: string | null;
   district: string | null;
+  /** Administrative province imported from Aliclik (not the Fenix coverage city). */
+  province?: string | null;
   city: string | null; // normalized coverage key
   region: string | null;
   delivery_address: string | null;
@@ -291,6 +293,13 @@ export interface LinkedShipmentSummary {
   guide_code: string;
   delivery_status: string;
   status_category: string;
+}
+
+export interface ShipmentHistoryGuide extends LinkedShipmentSummary {
+  fenix_shipment_id: string | null;
+  created_at: string | null;
+  is_current: boolean;
+  calls: ShipmentCallRow[];
 }
 
 export interface ShipmentCallRow {

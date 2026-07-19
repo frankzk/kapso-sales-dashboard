@@ -39,10 +39,12 @@ import {
   type ProductVariantResult,
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
-import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
+import { evaluateFenix, type FenixEligibility, type FenixStockRow } from "@/lib/fenix";
+import { shopifyShippingAddress } from "@/lib/shopify-address";
 import type {
   LinkedShipmentSummary,
   ShipmentCallRow,
+  ShipmentHistoryGuide,
   ShipmentOrderDetail,
   ShipmentRow,
 } from "@/lib/types";
@@ -50,6 +52,37 @@ import type {
 export interface ShipmentActionState {
   error?: string;
   notice?: string;
+}
+
+async function resolveCurrentFenixEligibility(
+  admin: SupabaseClient,
+  storeId: string,
+  shipment: { city: string | null; product: string | null; order_id: string | null },
+): Promise<FenixEligibility | { error: string }> {
+  const { data: store, error: storeError } = await admin
+    .from("stores")
+    .select("org_id")
+    .eq("id", storeId)
+    .maybeSingle();
+  if (storeError || !store) return { error: storeError?.message ?? "No se encontró la organización." };
+
+  const stockPromise = admin
+    .from("fenix_stock")
+    .select("city,product,sku,quantity")
+    .eq("org_id", (store as { org_id: string }).org_id);
+  const orderPromise = shipment.order_id
+    ? admin.from("orders").select("line_items").eq("id", shipment.order_id).maybeSingle()
+    : Promise.resolve({ data: null, error: null });
+  const [{ data: stock, error: stockError }, { data: order, error: orderError }] = await Promise.all([
+    stockPromise,
+    orderPromise,
+  ]);
+  if (stockError || orderError) return { error: stockError?.message ?? orderError?.message ?? "No se pudo consultar el stock." };
+
+  const lineItems = (order as {
+    line_items?: { title?: string | null; sku?: string | null }[] | null;
+  } | null)?.line_items ?? undefined;
+  return evaluateFenix(shipment, (stock as FenixStockRow[]) ?? [], lineItems);
 }
 
 // Process-level cache of agent id → display name (email local-part).
@@ -92,6 +125,7 @@ export async function loadShipmentDetail(
   | {
       shipment: ShipmentRow;
       calls: ShipmentCallRow[];
+      guideHistory: ShipmentHistoryGuide[];
       order: ShipmentOrderDetail | null;
       linkedFenixShipment: LinkedShipmentSummary | null;
     }
@@ -101,19 +135,63 @@ export async function loadShipmentDetail(
   if (!ctx) return { error: "Sin acceso a este envío." };
   const detail = await getShipmentWithCalls(shipmentId);
   if (!detail) return { error: "No encontrado." };
-  const ids = [...new Set(detail.calls.map((c) => c.agent).filter(Boolean))] as string[];
+  const admin = createAdminSupabase();
+  const historyCalls = detail.guideHistory.flatMap((guide) => guide.calls);
+  const ids = [...new Set(historyCalls.map((c) => c.agent).filter(Boolean))] as string[];
   if (ids.length) {
-    const admin = createAdminSupabase();
     await Promise.all(ids.map((id) => resolveAgentName(id, admin)));
   }
   const calls = detail.calls.map((c) => ({
     ...c,
     agent_name: c.agent ? (agentNameCache.get(c.agent) ?? null) : null,
   }));
+  const guideHistory = detail.guideHistory.map((guide) => ({
+    ...guide,
+    calls: guide.calls.map((call) => ({
+      ...call,
+      agent_name: call.agent ? (agentNameCache.get(call.agent) ?? null) : null,
+    })),
+  }));
+  let order = detail.order;
+  // If the local order came from an older no-phone Shopify fallback, its raw
+  // payload can have products but no shippingAddress. Refresh that one order
+  // live, cache the repaired payload, and keep the drawer fast on later opens.
+  if (order && !order.shipping_address && order.shopify_order_id) {
+    const creds = await getStoreCreds(ctx.storeId, admin);
+    if (creds?.shopify_token) {
+      try {
+        const liveOrder = await fetchOrderById({
+          domain: creds.shopify_domain,
+          token: creds.shopify_token,
+          storeId: ctx.storeId,
+          orderGid: `gid://shopify/Order/${order.shopify_order_id}`,
+        });
+        const liveAddress = shopifyShippingAddress(liveOrder?.raw);
+        if (liveOrder && liveAddress) {
+          order = {
+            name: liveOrder.name,
+            shopify_order_id: liveOrder.shopify_order_id,
+            line_items: liveOrder.line_items,
+            shipping_address: liveAddress,
+          };
+          if (detail.shipment.order_id) {
+            await admin
+              .from("orders")
+              .update({ raw: liveOrder.raw, line_items: liveOrder.line_items })
+              .eq("id", detail.shipment.order_id);
+          }
+        }
+      } catch {
+        // Keep the local/draft-order result; the drawer remains usable if the
+        // store temporarily cannot be reached.
+      }
+    }
+  }
   return {
     shipment: detail.shipment,
     calls,
-    order: detail.order,
+    guideHistory,
+    order,
     linkedFenixShipment: detail.linkedFenixShipment,
   };
 }
@@ -227,13 +305,13 @@ export async function registerRerouteCall(
     .eq("id", shipmentId)
     .maybeSingle();
   let shipmentResult = await fetchShipment(
-    "id,courier,guide_code,delivery_status,reroute_attempts,order_name,fenix_eligible,fenix_shipment_id,aliclik_attempts,aliclik_service_date",
+    "id,courier,guide_code,delivery_status,reroute_attempts,order_id,order_name,city,product,fenix_eligible,fenix_shipment_id,aliclik_attempts,aliclik_service_date",
   );
   // 0038 may land moments after the app deploy. Preserve the existing Fenix
   // workflow instead of making every gestión return "No encontrado".
   if (shipmentResult.error) {
     shipmentResult = await fetchShipment(
-      "id,courier,guide_code,delivery_status,reroute_attempts,order_name,fenix_eligible,fenix_shipment_id",
+      "id,courier,guide_code,delivery_status,reroute_attempts,order_id,order_name,city,product,fenix_eligible,fenix_shipment_id",
     );
   }
   const ship = shipmentResult.data;
@@ -243,7 +321,10 @@ export async function registerRerouteCall(
     guide_code: string;
     delivery_status: string;
     reroute_attempts: number | null;
+    order_id: string | null;
     order_name: string | null;
+    city: string | null;
+    product: string | null;
     fenix_eligible: boolean;
     fenix_shipment_id: string | null;
     aliclik_attempts?: number | null;
@@ -336,15 +417,21 @@ export async function registerRerouteCall(
     return { notice: `Reprogramado en Aliclik${overrideLabel}; se conserva la guía ${cur.guide_code}.` };
   }
 
-  if (
-    input.disposition === "confirma" &&
-    reprogramProvider === "fenix" &&
-    cur.courier === "aliclik" &&
-    !cur.fenix_eligible
-  ) {
-    return {
-      error: "Fenix no está disponible por cobertura o stock. Revisa el stock o usa una opción manual excepcional.",
-    };
+  if (input.disposition === "confirma" && reprogramProvider === "fenix" && cur.courier === "aliclik") {
+    const currentFenix = await resolveCurrentFenixEligibility(admin, ctx.storeId, cur);
+    if ("error" in currentFenix) {
+      return { error: `No se pudo validar el stock Fenix: ${currentFenix.error}` };
+    }
+    if (currentFenix.eligible !== cur.fenix_eligible) {
+      await admin.from("shipments").update({ fenix_eligible: currentFenix.eligible }).eq("id", shipmentId);
+    }
+    if (!currentFenix.eligible) {
+      return {
+        error: currentFenix.reason === "sin_stock"
+          ? `Fenix no tiene stock disponible para este producto en ${cur.city ?? "la ciudad indicada"}.`
+          : `Fenix no tiene cobertura en ${cur.city ?? "la ciudad indicada"}.`,
+      };
+    }
   }
 
   if (
@@ -564,6 +651,7 @@ export async function updateShipmentDeliveryAddress(
     delivery_address: address,
     delivery_reference: reference,
     district,
+    province: cityLabel,
     city,
     region,
     latitude: input.latitude,
@@ -574,7 +662,17 @@ export async function updateShipmentDeliveryAddress(
     fenix_eligible: fenixEligible,
   };
   const targetIds = [shipmentId, current.fenix_shipment_id].filter((id): id is string => !!id);
-  const { error: updateError } = await admin.from("shipments").update(update).in("id", targetIds);
+  let updateResult = await admin.from("shipments").update(update).in("id", targetIds);
+  if (
+    updateResult.error &&
+    (updateResult.error.code === "PGRST204" ||
+      updateResult.error.code === "42703" ||
+      updateResult.error.message.toLowerCase().includes("province"))
+  ) {
+    const { province: _province, ...legacyUpdate } = update;
+    updateResult = await admin.from("shipments").update(legacyUpdate).in("id", targetIds);
+  }
+  const updateError = updateResult.error;
   if (updateError) return { error: updateError.message };
 
   await admin.from("shipment_calls").insert({
@@ -743,7 +841,7 @@ async function spinOffFenixGuide(
     .eq("id", shipmentId)
     .maybeSingle();
   let parentResult = await fetchParent(
-    "courier,delivery_status,store_id,order_id,order_name,customer_name,customer_phone,product,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_shipment_id",
+    "courier,delivery_status,store_id,order_id,order_name,customer_name,customer_phone,product,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_shipment_id",
   );
   if (parentResult.error) {
     parentResult = await fetchParent(
@@ -779,6 +877,7 @@ async function spinOffFenixGuide(
       customer_phone: p.customer_phone,
       product: p.product,
       district: p.district,
+      province: p.province,
       city: p.city,
       region: p.region,
       delivery_address: p.delivery_address,

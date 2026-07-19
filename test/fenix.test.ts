@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   currentFenixReason,
   evaluateFenix,
+  fenixStockCityKey,
   matchesFenixAvailability,
   type FenixStockRow,
 } from "@/lib/fenix";
@@ -41,6 +42,32 @@ describe("evaluateFenix", () => {
   it("handles Juliaca/Puno normalization", () => {
     const j: FenixStockRow[] = [{ city: "juliaca", product: "X", quantity: 2 }];
     expect(evaluateFenix({ city: "Juliaca/Puno", product: "X" }, j).eligible).toBe(true);
+  });
+
+  it("shares the same Fenix stock pool between Juliaca and Puno", () => {
+    const juliacaStock: FenixStockRow[] = [
+      { city: "juliaca", product: "Ethiopian Black Seed Oil", sku: "PRUEBA-ETHIOPIAN", quantity: 3 },
+    ];
+    const punoStock: FenixStockRow[] = [
+      { city: "puno", product: "Pulsera Magnética", sku: "PULSERA", quantity: 2 },
+    ];
+
+    expect(fenixStockCityKey("Puno")).toBe("juliaca");
+    expect(fenixStockCityKey("Juliaca")).toBe("juliaca");
+    expect(
+      evaluateFenix(
+        { city: "Puno", product: "Nombre distinto" },
+        juliacaStock,
+        [{ title: "Ethiopian Black Seed Oil", sku: "PRUEBA-ETHIOPIAN" }],
+      ).eligible,
+    ).toBe(true);
+    expect(
+      evaluateFenix(
+        { city: "Juliaca", product: "Nombre distinto" },
+        punoStock,
+        [{ title: "Pulsera Magnética", sku: "PULSERA" }],
+      ).eligible,
+    ).toBe(true);
   });
 
   it("matches the same product across naming drift (token overlap)", () => {

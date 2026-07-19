@@ -36,10 +36,12 @@ import {
 } from "@/lib/shopify";
 
 describe("Shopify order destination query", () => {
-  it("requests the full shipping address when protected data is available", () => {
+  it("always requests the delivery address and only drops protected phone fields", () => {
     const query = buildOrdersQuery(true);
     expect(query).toContain("shippingAddress { address1 address2 city province name phone }");
-    expect(buildOrdersQuery(false)).not.toContain("shippingAddress");
+    const withoutPhone = buildOrdersQuery(false);
+    expect(withoutPhone).toContain("shippingAddress { address1 address2 city province name }");
+    expect(withoutPhone).not.toContain("billingAddress { phone }");
   });
 });
 

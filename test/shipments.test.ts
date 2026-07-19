@@ -4,6 +4,8 @@ import {
   COURIER_REPORT_RESULTS,
   computeReprogramStats,
   evaluateAliclikReschedule,
+  getFenixDeliverySchedule,
+  matchesAliclikRouteFilter,
   type ReprogramChildRow,
   categoryOf,
   isCallable,
@@ -166,6 +168,45 @@ describe("evaluateAliclikReschedule", () => {
   });
 });
 
+describe("matchesAliclikRouteFilter", () => {
+  const friday = new Date("2026-07-17T15:00:00.000Z");
+  const pendingAliclik = {
+    courier: "aliclik",
+    statusCategory: "pending",
+    attempts: 2,
+    serviceDate: "2026-07-11",
+  };
+
+  it("separates Aliclik-available guides from guides that require Fenix", () => {
+    expect(matchesAliclikRouteFilter(pendingAliclik, "aliclik_available", friday)).toBe(true);
+    expect(matchesAliclikRouteFilter(pendingAliclik, "fenix_required", friday)).toBe(false);
+    expect(
+      matchesAliclikRouteFilter({ ...pendingAliclik, attempts: 3 }, "fenix_required", friday),
+    ).toBe(true);
+    expect(
+      matchesAliclikRouteFilter(
+        { ...pendingAliclik, serviceDate: "2026-07-10" },
+        "fenix_required",
+        friday,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not mix Fenix or non-pending guides into the Aliclik route filters", () => {
+    expect(
+      matchesAliclikRouteFilter({ ...pendingAliclik, courier: "fenix" }, "fenix_required", friday),
+    ).toBe(false);
+    expect(
+      matchesAliclikRouteFilter(
+        { ...pendingAliclik, statusCategory: "in_route" },
+        "aliclik_available",
+        friday,
+      ),
+    ).toBe(false);
+    expect(matchesAliclikRouteFilter(pendingAliclik, "all", friday)).toBe(true);
+  });
+});
+
 describe("normalizeCity", () => {
   it("collapses Juliaca/Puno and strips accents/casing", () => {
     expect(normalizeCity("Cusco")).toBe("cusco");
@@ -186,6 +227,35 @@ describe("normalizeCity", () => {
     expect(isFenixDistrict("Jose Luis Bustamante")).toBe(true); // shorter than "… y Rivero"
     expect(isFenixDistrict("Miraflores")).toBe(false); // Lima district, not served
     expect(isFenixDistrict(null)).toBe(false);
+  });
+});
+
+describe("getFenixDeliverySchedule", () => {
+  it("uses the city-wide Fenix hours", () => {
+    expect(getFenixDeliverySchedule("Huancayo", null)).toEqual({ hours: "9 a. m.–6 p. m." });
+    expect(getFenixDeliverySchedule("Trujillo", "Laredo")).toEqual({ hours: "9 a. m.–5 p. m." });
+    expect(getFenixDeliverySchedule("Juliaca/Puno", "Juliaca")).toEqual({ hours: "9 a. m.–4 p. m." });
+  });
+
+  it("distinguishes the two Cusco schedules by district", () => {
+    expect(getFenixDeliverySchedule("Cusco", "Wanchaq")).toEqual({ hours: "9 a. m.–4 p. m." });
+    expect(getFenixDeliverySchedule("Cusco", "San Sebastián")).toEqual({ hours: "10 a. m.–1 p. m." });
+    expect(getFenixDeliverySchedule("Cusco", "San Jerónimo")).toEqual({ hours: "10 a. m.–1 p. m." });
+  });
+
+  it("shows the matching Arequipa warning without guessing an unknown district", () => {
+    expect(getFenixDeliverySchedule("Arequipa", "Cerro Colorado")).toEqual({
+      hours: "9 a. m.–1 p. m.",
+      note: "Sin express ni retorno",
+    });
+    expect(getFenixDeliverySchedule("Arequipa", "José Luis Bustamante y Rivero")).toEqual({
+      hours: "9 a. m.–6 p. m.",
+      note: "No aplica los sábados",
+    });
+    expect(getFenixDeliverySchedule("Arequipa", "Distrito no informado")).toEqual({
+      hours: "Confirmar según distrito",
+    });
+    expect(getFenixDeliverySchedule("Puno", "Puno")).toBeNull();
   });
 });
 

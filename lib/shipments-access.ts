@@ -5,6 +5,7 @@ import { createServerSupabase } from "@/lib/db";
 import type {
   LinkedShipmentSummary,
   ShipmentCallRow,
+  ShipmentHistoryGuide,
   ShipmentOrderDetail,
   ShipmentRow,
 } from "@/lib/types";
@@ -17,6 +18,10 @@ import {
 } from "@/lib/shipments";
 import { chunk } from "@/lib/access";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import {
+  buildShipmentLineage,
+  type ShipmentLineageNode,
+} from "@/lib/shipment-lineage";
 
 // The manual-review queue: guides that didn't auto-link to an order AND still
 // need a human. We exclude terminal states (delivered/closed) and rows dismissed
@@ -46,7 +51,7 @@ export function isShipmentView(v: string | undefined | null): v is ShipmentView 
 }
 
 const SHIPMENT_COLUMNS =
-  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_eligible,fenix_shipment_id,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
+  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_eligible,fenix_shipment_id,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
 // Deployment safety: application deploys and database migrations are separate
 // operations in production. Keep queue reads alive while 0038 is being applied;
@@ -79,6 +84,7 @@ function withEnhancementDefaults(row: Partial<ShipmentRow>): ShipmentRow {
     aliclik_attempts: null,
     aliclik_service_date: null,
     ...row,
+    province: row.province ?? row.region ?? null,
   } as ShipmentRow;
 }
 
@@ -397,11 +403,96 @@ export async function searchOrdersForLink(query: string): Promise<OrderLinkCandi
 }
 
 /** A shipment + its call history (RLS-scoped). Drives the drawer. */
+const LINEAGE_COLUMNS =
+  "id,courier,guide_code,delivery_status,status_category,fenix_shipment_id,created_at";
+
+function toLineageNode(shipment: ShipmentRow): ShipmentLineageNode {
+  return {
+    id: shipment.id,
+    courier: shipment.courier,
+    guide_code: shipment.guide_code,
+    delivery_status: shipment.delivery_status,
+    status_category: shipment.status_category,
+    fenix_shipment_id: shipment.fenix_shipment_id,
+    created_at: shipment.created_at ?? null,
+  };
+}
+
+async function getShipmentLineage(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  shipment: ShipmentRow,
+): Promise<ShipmentLineageNode[]> {
+  let candidates: ShipmentLineageNode[] = [];
+  let candidateLookupSucceeded = false;
+  if (shipment.order_id) {
+    const { data, error } = await sb
+      .from("shipments")
+      .select(LINEAGE_COLUMNS)
+      .eq("order_id", shipment.order_id)
+      .limit(100);
+    candidates = (data as ShipmentLineageNode[]) ?? [];
+    candidateLookupSucceeded = !error;
+  } else if (shipment.order_name) {
+    const { data, error } = await sb
+      .from("shipments")
+      .select(LINEAGE_COLUMNS)
+      .eq("store_id", shipment.store_id)
+      .eq("order_name", shipment.order_name)
+      .limit(100);
+    candidates = (data as ShipmentLineageNode[]) ?? [];
+    candidateLookupSucceeded = !error;
+  }
+
+  const currentNode = toLineageNode(shipment);
+  if (!candidates.some((candidate) => candidate.id === currentNode.id)) {
+    candidates.push(currentNode);
+  }
+  let lineage = buildShipmentLineage(candidates, shipment.id);
+  if (lineage.length > 1 || candidateLookupSucceeded) return lineage;
+
+  // Rare unmatched rows can have neither an order id nor an order name. Follow
+  // their explicit links directly; the chain is capped to avoid malformed loops.
+  const seen = new Set<string>([shipment.id]);
+  const ancestors: ShipmentLineageNode[] = [];
+  let childId = shipment.id;
+  for (let depth = 0; depth < 29; depth += 1) {
+    const { data } = await sb
+      .from("shipments")
+      .select(LINEAGE_COLUMNS)
+      .eq("fenix_shipment_id", childId)
+      .limit(1);
+    const parent = ((data as ShipmentLineageNode[]) ?? [])[0];
+    if (!parent || seen.has(parent.id)) break;
+    ancestors.unshift(parent);
+    seen.add(parent.id);
+    childId = parent.id;
+  }
+
+  const descendants: ShipmentLineageNode[] = [];
+  let cursor = currentNode;
+  for (let depth = 0; depth < 29 - ancestors.length; depth += 1) {
+    if (!cursor.fenix_shipment_id || seen.has(cursor.fenix_shipment_id)) break;
+    const { data } = await sb
+      .from("shipments")
+      .select(LINEAGE_COLUMNS)
+      .eq("id", cursor.fenix_shipment_id)
+      .maybeSingle();
+    const child = data as ShipmentLineageNode | null;
+    if (!child) break;
+    descendants.push(child);
+    seen.add(child.id);
+    cursor = child;
+  }
+  lineage = [...ancestors, currentNode, ...descendants];
+  return lineage;
+}
+
 export async function getShipmentWithCalls(
   shipmentId: string,
 ): Promise<{
   shipment: ShipmentRow;
   calls: ShipmentCallRow[];
+  guideHistory: ShipmentHistoryGuide[];
   order: ShipmentOrderDetail | null;
   linkedFenixShipment: LinkedShipmentSummary | null;
 } | null> {
@@ -415,12 +506,32 @@ export async function getShipmentWithCalls(
   if (shipmentResult.error) shipmentResult = await fetchShipment(LEGACY_SHIPMENT_COLUMNS);
   const shipment = shipmentResult.data;
   if (!shipment) return null;
-  const { data: calls } = await sb
+  const shipmentRow = withEnhancementDefaults(shipment as Partial<ShipmentRow>);
+  const lineage = await getShipmentLineage(sb, shipmentRow);
+  const lineageIds = lineage.map((guide) => guide.id);
+  const { data: historyCalls } = await sb
     .from("shipment_calls")
     .select("id,shipment_id,store_id,agent,kind,new_status,note,next_followup_at,occurred_at")
-    .eq("shipment_id", shipmentId)
-    .order("occurred_at", { ascending: false });
-  const shipmentRow = withEnhancementDefaults(shipment as Partial<ShipmentRow>);
+    .in("shipment_id", lineageIds)
+    .order("occurred_at", { ascending: true });
+  const callsByShipment = new Map<string, ShipmentCallRow[]>();
+  for (const call of (historyCalls as ShipmentCallRow[]) ?? []) {
+    const guideCalls = callsByShipment.get(call.shipment_id) ?? [];
+    guideCalls.push(call);
+    callsByShipment.set(call.shipment_id, guideCalls);
+  }
+  const guideHistory: ShipmentHistoryGuide[] = lineage.map((guide) => ({
+    id: guide.id,
+    courier: guide.courier,
+    guide_code: guide.guide_code,
+    delivery_status: guide.delivery_status,
+    status_category: guide.status_category,
+    fenix_shipment_id: guide.fenix_shipment_id,
+    created_at: guide.created_at ?? null,
+    is_current: guide.id === shipmentId,
+    calls: callsByShipment.get(guide.id) ?? [],
+  }));
+  const calls = [...(callsByShipment.get(shipmentId) ?? [])].reverse();
   let order: ShipmentOrderDetail | null = null;
   let linkedFenixShipment: LinkedShipmentSummary | null = null;
   if (shipmentRow.order_id) {
@@ -431,26 +542,60 @@ export async function getShipmentWithCalls(
       .maybeSingle();
     const orderRow = data as (Omit<ShipmentOrderDetail, "shipping_address"> & { raw?: unknown }) | null;
     if (orderRow) {
+      let shippingAddress = shopifyShippingAddress(orderRow.raw);
+      // COD apps often create a DraftOrder first. Older order syncs could omit
+      // shippingAddress when Shopify rejected protected phone fields, while the
+      // completed draft still retained the full destination locally.
+      if (!shippingAddress && orderRow.shopify_order_id) {
+        const { data: draft } = await sb
+          .from("draft_orders")
+          .select("address1,referencia,district,province,customer_name,customer_phone")
+          .eq("order_gid", `gid://shopify/Order/${orderRow.shopify_order_id}`)
+          .maybeSingle();
+        const draftAddress = draft as {
+          address1?: string | null;
+          referencia?: string | null;
+          district?: string | null;
+          province?: string | null;
+          customer_name?: string | null;
+          customer_phone?: string | null;
+        } | null;
+        if (draftAddress?.address1) {
+          shippingAddress = {
+            address1: draftAddress.address1,
+            address2: draftAddress.referencia ?? null,
+            city: draftAddress.district ?? null,
+            province: draftAddress.province ?? null,
+            name: draftAddress.customer_name ?? null,
+            phone: draftAddress.customer_phone ?? null,
+          };
+        }
+      }
       order = {
         name: orderRow.name,
         shopify_order_id: orderRow.shopify_order_id,
         line_items: orderRow.line_items ?? [],
-        shipping_address: shopifyShippingAddress(orderRow.raw),
+        shipping_address: shippingAddress,
       };
     }
   }
   if (shipmentRow.fenix_shipment_id) {
-    const { data } = await sb
-      .from("shipments")
-      .select("id,courier,guide_code,delivery_status,status_category")
-      .eq("id", shipmentRow.fenix_shipment_id)
-      .maybeSingle();
-    linkedFenixShipment = data as LinkedShipmentSummary | null;
+    const child = lineage.find((guide) => guide.id === shipmentRow.fenix_shipment_id);
+    linkedFenixShipment = child
+      ? {
+          id: child.id,
+          courier: child.courier,
+          guide_code: child.guide_code,
+          delivery_status: child.delivery_status,
+          status_category: child.status_category,
+        }
+      : null;
   }
   const [currentShipment] = await withCurrentFenixEligibility(sb, [shipmentRow]);
   return {
     shipment: currentShipment ?? shipmentRow,
-    calls: (calls as ShipmentCallRow[]) ?? [],
+    calls,
+    guideHistory,
     order,
     linkedFenixShipment,
   };

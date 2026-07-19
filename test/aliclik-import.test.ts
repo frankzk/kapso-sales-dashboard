@@ -52,6 +52,7 @@ describe("parseAliclikRow", () => {
 
     expect(row.delivery_address).toBe("Av. José Gálvez 145, Urb. Miramar");
     expect(row.delivery_reference).toBe("Puerta azul, frente al parque");
+    expect(row.province).toBe("Ilo");
     expect(row.region).toBe("Moquegua");
     expect(row.latitude).toBe(-17.6468721185573);
     expect(row.longitude).toBe(-71.3448429172091);
@@ -101,6 +102,18 @@ describe("parseAliclikRow", () => {
     });
     expect(row.city).toBe("cusco");
     expect(row.district).toBe("San Sebastián");
+  });
+
+  it("keeps the administrative province separate from the district", () => {
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X998",
+      DISTRITO: "Wanchaq",
+      PROVINCIA: "Cusco",
+      DEPARTAMENTO: "Cusco",
+    });
+    expect(row.district).toBe("Wanchaq");
+    expect(row.province).toBe("Cusco");
+    expect(row.city).toBe("cusco");
   });
 
   it("flags rows with no guide code", () => {

@@ -17,6 +17,7 @@ export interface ParsedShipmentRow {
   customer_phone: string | null; // normalized
   product: string | null;
   district: string | null;
+  province: string | null; // exact PROVINCIA value from the Aliclik report
   city: string | null; // normalized coverage key (Fenix city when covered)
   region: string | null;
   delivery_address: string | null;
@@ -238,6 +239,7 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
     customer_phone: normalizePhone(pick(map, PHONE_KEYS)),
     product: pick(map, PRODUCT_KEYS),
     district: district || null,
+    province: province || null,
     city: city || null,
     region: department || null,
     delivery_address: pick(map, ADDRESS_KEYS),

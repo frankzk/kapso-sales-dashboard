@@ -136,6 +136,8 @@ export interface AliclikRescheduleDecision {
   today: string;
 }
 
+export type AliclikRouteFilter = "all" | "aliclik_available" | "fenix_required";
+
 /**
  * Aliclik permits a reprogramming only for guides dated from the most recent
  * Saturday through today, and only while its own report shows fewer than three
@@ -176,6 +178,28 @@ export function evaluateAliclikReschedule(
     return result(false, "outside_week");
   }
   return result(true, "eligible");
+}
+
+/** Matches the operational route shown in the pending-shipment queue. Non-Aliclik
+ * guides are intentionally excluded from the two route-specific options: the
+ * filter answers whether an original Aliclik guide can still be managed there. */
+export function matchesAliclikRouteFilter(
+  input: {
+    courier?: string | null;
+    statusCategory?: string | null;
+    attempts?: number | null;
+    serviceDate?: string | null;
+  },
+  filter: AliclikRouteFilter,
+  now: Date = new Date(),
+): boolean {
+  if (filter === "all") return true;
+  if ((input.courier ?? "").toLowerCase() !== "aliclik" || input.statusCategory !== "pending") {
+    return false;
+  }
+
+  const decision = evaluateAliclikReschedule(input, now);
+  return filter === "aliclik_available" ? decision.eligible : !decision.eligible;
 }
 
 function selectedUtcDateKey(iso: string | null | undefined): string | null {
@@ -286,6 +310,83 @@ export function isFenixDistrict(raw: string | null | undefined): boolean {
   const d = normalizeDistrict(raw);
   if (!d) return false;
   return FENIX_DISTRICTS.some((c) => d === c || d.startsWith(c) || c.startsWith(d));
+}
+
+export interface FenixDeliverySchedule {
+  hours: string;
+  note?: string;
+}
+
+const AREQUIPA_SHORT_SCHEDULE_DISTRICTS = [
+  "cayma",
+  "cerro colorado",
+  "tiabaya",
+  "socabaya",
+  "characato",
+  "sabandia",
+  "sachaca",
+  "jacobo hunter",
+];
+
+const AREQUIPA_LONG_SCHEDULE_DISTRICTS = [
+  "arequipa",
+  "cercado",
+  "cercado de arequipa",
+  "yanahuara",
+  "jose luis bustamante y rivero",
+  "alto selva alegre",
+  "miraflores",
+  "mariano melgar",
+  "paucarpata",
+];
+
+function belongsToDistrictGroup(district: string, group: string[]): boolean {
+  if (!district) return false;
+  return group.some(
+    (candidate) =>
+      district === candidate ||
+      district.startsWith(`${candidate} `) ||
+      candidate.startsWith(`${district} `),
+  );
+}
+
+/** Operational delivery hours supplied by Fenix. District takes precedence in
+ * cities whose schedule changes within the same province. */
+export function getFenixDeliverySchedule(
+  city: string | null | undefined,
+  district: string | null | undefined,
+): FenixDeliverySchedule | null {
+  const normalizedCity = normalizeCity(city);
+  const normalizedDistrict = normalizeDistrict(district);
+
+  if (normalizedCity === "huancayo") return { hours: "9 a. m.–6 p. m." };
+  if (normalizedCity === "trujillo") return { hours: "9 a. m.–5 p. m." };
+  if (normalizedCity === "juliaca") return { hours: "9 a. m.–4 p. m." };
+
+  if (normalizedCity === "cusco") {
+    if (belongsToDistrictGroup(normalizedDistrict, ["san sebastian", "san jeronimo"])) {
+      return { hours: "10 a. m.–1 p. m." };
+    }
+    if (
+      !normalizedDistrict ||
+      belongsToDistrictGroup(normalizedDistrict, ["cusco", "wanchaq", "santiago"])
+    ) {
+      return { hours: "9 a. m.–4 p. m." };
+    }
+    return null;
+  }
+
+  if (normalizedCity === "arequipa") {
+    if (belongsToDistrictGroup(normalizedDistrict, AREQUIPA_SHORT_SCHEDULE_DISTRICTS)) {
+      return { hours: "9 a. m.–1 p. m.", note: "Sin express ni retorno" };
+    }
+    if (belongsToDistrictGroup(normalizedDistrict, AREQUIPA_LONG_SCHEDULE_DISTRICTS)) {
+      return { hours: "9 a. m.–6 p. m.", note: "No aplica los sábados" };
+    }
+    return { hours: "Confirmar según distrito" };
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------

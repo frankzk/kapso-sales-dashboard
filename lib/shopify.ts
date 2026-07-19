@@ -488,12 +488,9 @@ export function buildOrdersQuery(withPhone: boolean): string {
   // Order/address phone is "protected customer data" — included only on the
   // first attempt; fetchOrdersPage falls back to the no-phone query if the
   // store hasn't granted access, so the order sync never breaks.
-  const phoneFields = withPhone
-    ? `
-          phone
-          shippingAddress { address1 address2 city province name phone }
-          billingAddress { phone }`
-    : "";
+  const orderPhone = withPhone ? "\n          phone" : "";
+  const shippingPhone = withPhone ? " phone" : "";
+  const billingPhone = withPhone ? "\n          billingAddress { phone }" : "";
   return /* GraphQL */ `
   query KapsoOrders($first: Int!, $after: String, $query: String!) {
     orders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
@@ -512,7 +509,8 @@ export function buildOrdersQuery(withPhone: boolean): string {
           totalRefundedSet { shopMoney { amount } }
           tags
           discountCodes
-          customAttributes { key value }${phoneFields}
+          customAttributes { key value }${orderPhone}
+          shippingAddress { address1 address2 city province name${shippingPhone} }${billingPhone}
           lineItems(first: 100) {
             edges {
               node {
@@ -598,12 +596,9 @@ export async function fetchOrdersPage(
 }
 
 function buildOrderByIdQuery(withPhone: boolean): string {
-  const phoneFields = withPhone
-    ? `
-        phone
-        shippingAddress { address1 address2 city province name phone }
-        billingAddress { phone }`
-    : "";
+  const orderPhone = withPhone ? "\n      phone" : "";
+  const shippingPhone = withPhone ? " phone" : "";
+  const billingPhone = withPhone ? "\n      billingAddress { phone }" : "";
   return /* GraphQL */ `
   query OrderById($id: ID!) {
     order(id: $id) {
@@ -619,7 +614,8 @@ function buildOrderByIdQuery(withPhone: boolean): string {
       totalRefundedSet { shopMoney { amount } }
       tags
       discountCodes
-      customAttributes { key value }${phoneFields}
+      customAttributes { key value }${orderPhone}
+      shippingAddress { address1 address2 city province name${shippingPhone} }${billingPhone}
       lineItems(first: 100) {
         edges { node { title quantity sku originalUnitPriceSet { shopMoney { amount } } } }
       }
