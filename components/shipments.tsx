@@ -14,6 +14,7 @@ import {
   labelOf,
   normalizeCity,
   rescheduleGuideCode,
+  SHIPMENT_CLAIM_HEARTBEAT_MS,
   shipmentRequiresCourierResult,
   statusSince,
   type CourierReportResult,
@@ -40,6 +41,7 @@ import {
   registerCourierReportResult,
   registerRerouteCall,
   releaseShipment,
+  renewShipmentClaim,
   searchShipments,
   updateShipmentDeliveryAddress,
   type ShipmentAddressInput,
@@ -768,6 +770,12 @@ function ShipmentDrawer({
   >(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const [claimState, setClaimState] = useState<"claiming" | "mine" | "blocked">("claiming");
+  const [claimMessage, setClaimMessage] = useState<string | null>(null);
+  const claimSessionRef = useRef<{
+    shipmentId: string;
+    shouldRelease: boolean;
+  } | null>(null);
 
   // form state
   const [disposition, setDisposition] = useState<RerouteDisposition>("confirma");
@@ -791,6 +799,59 @@ function ShipmentDrawer({
   const [forceAliclik, setForceAliclik] = useState(false);
 
   const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+    const session = { shipmentId, shouldRelease: false };
+    claimSessionRef.current = session;
+    setClaimState("claiming");
+    setClaimMessage(null);
+
+    void claimShipment(shipmentId)
+      .then((result) => {
+        if (session.shouldRelease) {
+          if (!result.error) void releaseShipment(shipmentId).catch(() => undefined);
+          return;
+        }
+        if (!active) return;
+        if (result.error) {
+          setClaimState("blocked");
+          setClaimMessage(result.error);
+          return;
+        }
+
+        setClaimState("mine");
+        heartbeat = setInterval(() => {
+          void renewShipmentClaim(shipmentId)
+            .then((renewal) => {
+              if (!active || session.shouldRelease || !renewal.error) return;
+              setClaimState("blocked");
+              setClaimMessage(renewal.error);
+              if (heartbeat) clearInterval(heartbeat);
+              heartbeat = null;
+            })
+            .catch(() => {
+              if (!active || session.shouldRelease) return;
+              setClaimState("blocked");
+              setClaimMessage("No pudimos renovar la reserva. Cierra y vuelve a abrir este envío.");
+              if (heartbeat) clearInterval(heartbeat);
+              heartbeat = null;
+            });
+        }, SHIPMENT_CLAIM_HEARTBEAT_MS);
+      })
+      .catch(() => {
+        if (!active || session.shouldRelease) return;
+        setClaimState("blocked");
+        setClaimMessage("No pudimos reservar este envío. Cierra y vuelve a intentarlo.");
+      });
+
+    return () => {
+      active = false;
+      if (heartbeat) clearInterval(heartbeat);
+    };
+  }, [shipmentId]);
+
   useEffect(() => {
     let alive = true;
     setDetail(null);
@@ -829,6 +890,23 @@ function ShipmentDrawer({
     setDetail(null);
     setReloadKey((k) => k + 1);
     router.refresh();
+  }
+
+  function releaseCurrentClaim() {
+    const session = claimSessionRef.current;
+    if (!session) return;
+    session.shouldRelease = true;
+    void releaseShipment(session.shipmentId).catch(() => undefined);
+  }
+
+  function handleClose() {
+    releaseCurrentClaim();
+    onClose();
+  }
+
+  function handleOpenShipment(id: string) {
+    releaseCurrentClaim();
+    onOpenShipment(id);
   }
 
   function run(
@@ -902,7 +980,7 @@ function ShipmentDrawer({
     shipment?.courier === "fenix" && shipment.delivery_status === "pendiente";
 
   return (
-    <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={onClose}>
+    <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={handleClose}>
       <div
         className="h-full w-full max-w-[34rem] overflow-y-auto bg-white p-3.5 shadow-xl sm:p-4"
         onClick={(e) => e.stopPropagation()}
@@ -932,10 +1010,44 @@ function ShipmentDrawer({
                   return since ? <p className="mt-0.5 text-[11px] text-slate-500">Desde {since}</p> : null;
                 })()}
               </div>
-              <button onClick={onClose} className="text-sm text-slate-400 hover:text-slate-700">
+              <button onClick={handleClose} className="text-sm text-slate-400 hover:text-slate-700">
                 Cerrar
               </button>
             </div>
+
+            <div
+              role="status"
+              className={cn(
+                "flex items-start gap-2 rounded-lg border px-2.5 py-2 text-xs",
+                claimState === "mine"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : claimState === "blocked"
+                    ? "border-amber-200 bg-amber-50 text-amber-900"
+                    : "border-slate-200 bg-slate-50 text-slate-600",
+              )}
+            >
+              <span
+                className={cn(
+                  "mt-1 h-2 w-2 shrink-0 rounded-full",
+                  claimState === "mine"
+                    ? "bg-emerald-500"
+                    : claimState === "blocked"
+                      ? "bg-amber-500"
+                      : "animate-pulse bg-slate-400",
+                )}
+              />
+              <span>
+                {claimState === "mine" ? (
+                  <><b>Reservado para ti.</b> Se liberará automáticamente al cerrar este panel.</>
+                ) : claimState === "blocked" ? (
+                  <><b>{claimMessage ?? "Otro asesor está atendiendo este envío."}</b> Puedes consultar la información, pero no modificarla.</>
+                ) : (
+                  "Reservando este envío…"
+                )}
+              </span>
+            </div>
+
+            <fieldset disabled={claimState !== "mine"} className="contents">
 
             <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 px-3 py-2.5 text-sm">
@@ -1190,7 +1302,7 @@ function ShipmentDrawer({
                   {detail.linkedFenixShipment && (
                     <button
                       type="button"
-                      onClick={() => onOpenShipment(detail.linkedFenixShipment!.id)}
+                      onClick={() => handleOpenShipment(detail.linkedFenixShipment!.id)}
                       className="flex w-full items-center justify-between rounded-lg border border-sky-200 bg-white px-3 py-2 text-left hover:bg-sky-50"
                     >
                       <span>
@@ -1361,22 +1473,6 @@ function ShipmentDrawer({
             {isCallable(detail.shipment.delivery_status) && !fenixAwaitingCourierResult && (
               <section className="space-y-1.5 rounded-xl border border-slate-200 p-2.5">
                 <p className="text-sm font-medium text-slate-800">Registrar o programar llamada</p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => run(() => claimShipment(shipmentId))}
-                    disabled={pending}
-                    className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs hover:bg-slate-50"
-                  >
-                    Tomar
-                  </button>
-                  <button
-                    onClick={() => run(() => releaseShipment(shipmentId))}
-                    disabled={pending}
-                    className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs hover:bg-slate-50"
-                  >
-                    Liberar
-                  </button>
-                </div>
                 <select
                   value={disposition}
                   onChange={(e) => setDisposition(e.target.value as RerouteDisposition)}
@@ -1595,6 +1691,8 @@ function ShipmentDrawer({
               )}
               </section>
             )}
+
+            </fieldset>
 
             {/* history */}
             <section className="space-y-2">
