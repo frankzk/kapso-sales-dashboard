@@ -28,8 +28,17 @@ import {
   autoFenixGuideCode,
   rescheduleGuideCode,
   shipmentRequiresCourierResult,
+  CLAIM_TTL_MINUTES,
+  SHIPMENT_CLAIM_HEARTBEAT_MS,
   statusSince,
 } from "@/lib/shipments";
+
+describe("shipment drawer reservation", () => {
+  it("renews before the claim can expire", () => {
+    expect(SHIPMENT_CLAIM_HEARTBEAT_MS).toBeGreaterThan(0);
+    expect(SHIPMENT_CLAIM_HEARTBEAT_MS).toBeLessThan(CLAIM_TTL_MINUTES * 60_000);
+  });
+});
 
 describe("delivery status model", () => {
   it("has the five global states with consistent categories", () => {

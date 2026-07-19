@@ -484,6 +484,8 @@ export function courierReportTransition(result: CourierReportResult): CourierRep
 // ---------------------------------------------------------------------------
 
 export const CLAIM_TTL_MINUTES = 10;
+/** Refresh an open drawer's reservation well before the 10-minute TTL. */
+export const SHIPMENT_CLAIM_HEARTBEAT_MS = 4 * 60_000;
 
 export function isClaimActive(
   claimedAt: string | Date | null | undefined,

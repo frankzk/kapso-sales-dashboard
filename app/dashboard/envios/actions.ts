@@ -162,8 +162,24 @@ export async function claimShipment(shipmentId: string): Promise<ShipmentActionS
     const who = holderId && holderId !== ctx.userId ? await resolveAgentName(holderId, admin) : null;
     return { error: who ? `${who} está atendiendo este envío.` : "Otro agente está atendiendo este envío." };
   }
-  revalidatePath("/dashboard/envios");
   return { notice: "Envío tomado." };
+}
+
+/** Keep an existing reservation alive while its drawer remains open. */
+export async function renewShipmentClaim(shipmentId: string): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a este envío." };
+  const admin = createAdminSupabase();
+  const { data, error } = await admin
+    .from("shipments")
+    .update({ claimed_at: new Date().toISOString() })
+    .eq("id", shipmentId)
+    .eq("claimed_by", ctx.userId)
+    .select("id")
+    .maybeSingle();
+  if (error) return { error: error.message };
+  if (!data) return { error: "La reserva de este envío ya no está activa." };
+  return { notice: "Reserva renovada." };
 }
 
 /** Release a claim (only your own). */
@@ -176,7 +192,6 @@ export async function releaseShipment(shipmentId: string): Promise<ShipmentActio
     .update({ claimed_by: null, claimed_at: null })
     .eq("id", shipmentId)
     .eq("claimed_by", ctx.userId);
-  revalidatePath("/dashboard/envios");
   return { notice: "Liberado." };
 }
 
