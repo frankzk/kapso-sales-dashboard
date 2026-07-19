@@ -6,6 +6,7 @@ export type ShipmentSortKey =
   | "store"
   | "order"
   | "customer"
+  | "product"
   | "location"
   | "status"
   | "reprogramming"
@@ -39,6 +40,8 @@ function sortValue(
       return shipment.order_name;
     case "customer":
       return shipment.customer_name || shipment.customer_phone;
+    case "product":
+      return shipment.product;
     case "location":
       return [shipment.district, normalizeCity(shipment.city)].filter(Boolean).join(" ");
     case "status":

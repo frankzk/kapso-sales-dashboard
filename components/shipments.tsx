@@ -640,6 +640,7 @@ function ShipmentTable({
             )}
             <SortableShipmentHeader label="Pedido" sortKey="order" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Cliente" sortKey="customer" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Producto" sortKey="product" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Distrito / Ciudad" sortKey="location" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Estado" sortKey="status" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Reprogramación" sortKey="reprogramming" sort={sort} onSort={toggleSort} />
@@ -668,6 +669,14 @@ function ShipmentTable({
               <td className="px-4 py-2.5 text-slate-700">
                 {s.customer_name ?? "—"}
                 <span className="block text-xs text-slate-400">{s.customer_phone ?? ""}</span>
+              </td>
+              <td className="w-44 max-w-44 px-3 py-2.5 align-middle">
+                <span
+                  className="line-clamp-2 text-[11px] leading-4 text-slate-600"
+                  title={s.product ?? undefined}
+                >
+                  {s.product ?? "—"}
+                </span>
               </td>
               <td className="px-4 py-2.5 text-slate-700">
                 {s.district ?? "—"}
