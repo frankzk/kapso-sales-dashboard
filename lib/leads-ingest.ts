@@ -1214,6 +1214,9 @@ export const DRIP_BATCH_CAP = 25;
 export interface DripLead {
   id: string;
   phone: string;
+  /** Número de la tienda por el que escribió el cliente (0012) — el drip envía
+   *  por ESE número (fallback: el default de la tienda). */
+  wa_phone_number_id?: string | null;
   name: string | null;
   status: string;
   needs_attention: boolean;
@@ -1283,18 +1286,35 @@ export function dripWithinHours(nowIso: string, tz: string): boolean {
 export interface DripReport {
   sent: number;
   failed: number;
-  skipped: number; // candidatos SQL descartados por la regla fina (incl. sin nombre)
+  skipped: number; // candidatos SQL descartados por la regla fina (incl. sin nombre / sin número)
+}
+
+/** Códigos de Meta que significan "tope de mensajería / rate limit": 80007
+ *  throughput, 130429 rate limit del Cloud API, 131048 spam rate limit,
+ *  131056 pair rate limit. El límite es del NÚMERO o de la cuenta — no del
+ *  destinatario — así que seguir martillando el lote solo suma rechazos. */
+export const TIER_LIMIT_CODES = [80007, 130429, 131048, 131056] as const;
+
+export function isTierLimitError(code: number | undefined, msg: string | null | undefined): boolean {
+  if (code !== undefined && (TIER_LIMIT_CODES as readonly number[]).includes(code)) return true;
+  return !!msg && /rate limit|messaging limit|limit (hit|reached)|too many messages/i.test(msg);
 }
 
 /**
  * Un pase del drip para una tienda: selecciona los leads elegibles (SQL grueso
- * + `dripSkipReason` fino), envía la plantilla y registra el toque. El toque se
- * CONSUME aunque el envío falle (drip_touches++) para no re-martillar cada 5
- * min un número que Meta rechaza — el motivo queda en drip_sends.error y en el
- * timeline del lead. No toca last_interaction_at (es actividad nuestra, no del
- * cliente: resetearlo alargaría la vida del lead en cola y desordenaría la
- * lista) ni el status (el lead sigue en "En seguimiento"). Pre-0035 nunca
- * llega aquí: getStoreCreds devuelve drip_template_enabled=false sin columnas.
+ * + `dripSkipReason` fino), envía la plantilla y registra el toque. Cada envío
+ * sale por el número por el que ESCRIBIÓ el cliente (`wa_phone_number_id` —
+ * clave en tiendas multinúmero: la plantilla debe llegar al chat que él
+ * conoce), con fallback al default de la tienda; sin ninguno de los dos el
+ * lead queda fuera del lote sin consumir toque. El toque se CONSUME aunque el
+ * envío falle (drip_touches++) para no re-martillar cada 5 min un número que
+ * Meta rechaza — el motivo queda en drip_sends.error y en el timeline del
+ * lead. Excepción: un tope de mensajería (`isTierLimitError`) corta el lote
+ * SIN consumir toques — el límite es de la tienda, no del lead, y mañana se
+ * resetea. No toca last_interaction_at (es actividad nuestra, no del cliente:
+ * resetearlo alargaría la vida del lead en cola y desordenaría la lista) ni el
+ * status (el lead sigue en "En seguimiento"). Pre-0035 nunca llega aquí:
+ * getStoreCreds devuelve drip_template_enabled=false sin columnas.
  */
 export async function sendSeguimientoDrip(
   admin: SupabaseClient,
@@ -1305,7 +1325,7 @@ export async function sendSeguimientoDrip(
 ): Promise<DripReport> {
   const report: DripReport = { sent: 0, failed: 0, skipped: 0 };
   if (!creds.drip_template_enabled || !creds.drip_template_name) return report;
-  if (!creds.kapso_api_key || !creds.whatsapp_phone_number_id) return report;
+  if (!creds.kapso_api_key) return report;
   if (!dripWithinHours(nowIso, creds.timezone || "America/Lima")) return report;
 
   const nowMs = Date.parse(nowIso);
@@ -1330,7 +1350,7 @@ export async function sendSeguimientoDrip(
   // needs_attention ya NO se filtra en SQL: el guard fino decide (una atención
   // de OLA no frena el drip; una respuesta del cliente sí).
   const BASE_COLS =
-    "id, phone, name, status, needs_attention, next_followup_at, last_interaction_at, last_inbound_at, drip_touches, last_drip_at, cart_item_count, draft_order_gid";
+    "id, phone, name, status, needs_attention, next_followup_at, last_interaction_at, last_inbound_at, drip_touches, last_drip_at, cart_item_count, draft_order_gid, wa_phone_number_id";
   let { data, error } = await buildSelect(`${BASE_COLS}, attention_waves`);
   if (error && /attention_waves/i.test(error.message)) {
     // Pre-0036: sin la columna se degrada al comportamiento clásico (toda
@@ -1341,21 +1361,26 @@ export async function sendSeguimientoDrip(
 
   const rows = (data as DripLead[] | null) ?? [];
   const eligible = rows.filter((l) => dripSkipReason(l, nowMs) === null);
-  report.skipped = rows.length - eligible.length;
+  // Sin número resoluble (ni el del chat del lead ni default de tienda) no hay
+  // desde dónde enviar: fuera del lote SIN consumir toque (nada se intentó).
+  const sendable = eligible.filter((l) => l.wa_phone_number_id || creds.whatsapp_phone_number_id);
+  report.skipped = rows.length - sendable.length;
   // Re-afina la prioridad en JS: el orden SQL usa cart_item_count, pero un
   // carrito solo-con-draft (count nulo) también debe adelantarse.
-  eligible.sort((a, b) => (dripHasCart(b) ? 1 : 0) - (dripHasCart(a) ? 1 : 0));
-  const batch = eligible.slice(0, DRIP_BATCH_CAP);
+  sendable.sort((a, b) => (dripHasCart(b) ? 1 : 0) - (dripHasCart(a) ? 1 : 0));
+  const batch = sendable.slice(0, DRIP_BATCH_CAP);
 
   for (const l of batch) {
     const touch = (l.drip_touches ?? 0) + 1;
+    const pnId = (l.wa_phone_number_id ?? creds.whatsapp_phone_number_id)!;
     let ok = false;
     let err: string | null = null;
+    let errCode: number | undefined;
     try {
       const send = await sendTemplate(
         { apiKey: creds.kapso_api_key },
         {
-          phoneNumberId: creds.whatsapp_phone_number_id,
+          phoneNumberId: pnId,
           to: l.phone,
           templateName: creds.drip_template_name,
           language: creds.drip_template_language ?? "es",
@@ -1363,9 +1388,29 @@ export async function sendSeguimientoDrip(
         },
       );
       ok = send.ok;
-      if (!send.ok) err = send.error ?? "envío rechazado";
+      if (!send.ok) {
+        err = send.error ?? "envío rechazado";
+        errCode = send.code;
+      }
     } catch (e) {
       err = e instanceof Error ? e.message : String(e);
+    }
+
+    // Tope de mensajería de Meta: registra el intento para auditoría pero NO
+    // consume el toque (el lead no tuvo la culpa y debe volver a salir cuando
+    // el tier se resetee) ni ensucia su timeline, y corta el resto del lote.
+    if (!ok && isTierLimitError(errCode, err)) {
+      await admin.from("drip_sends").insert({
+        store_id: storeId,
+        lead_id: l.id,
+        phone: l.phone,
+        template_name: creds.drip_template_name,
+        touch,
+        ok: false,
+        error: err,
+      });
+      report.failed += 1;
+      break;
     }
 
     await admin

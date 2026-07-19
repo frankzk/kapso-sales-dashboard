@@ -279,7 +279,14 @@ templates pueden abrir conversación). Reglas fijas: **máx 2 toques** por lead
 hora de la tienda, nunca si el cliente respondió (`last_inbound_at`), si la
 asesora agendó `next_followup_at` o si el lead tiene atención pendiente. Cada
 intento queda en `drip_sends` y como nota en el timeline del lead. El toque se
-consume aunque Meta rechace el envío (no se re-martilla un número roto).
+consume aunque Meta rechace el envío (no se re-martilla un número roto), con
+una excepción: un **tope de mensajería de Meta** (tier / rate limit) corta el
+lote de esa corrida sin consumir toques — el límite es de la tienda, no del
+lead, y al resetearse el tier los mismos leads vuelven a salir. Cada envío sale
+por el **número por el que escribió el cliente** (`leads.wa_phone_number_id` —
+clave en tiendas multinúmero como Kenku), con fallback al número default de la
+tienda; un lead sin ninguno de los dos se omite sin consumir toque, así que el
+default en Ajustes es opcional pero recomendado como respaldo.
 
 - **Needs migration 0035** (`drip_template_*` en stores, `drip_touches` /
   `last_drip_at` en leads, tabla `drip_sends`). Antes de correrla el paso es un
