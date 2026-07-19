@@ -80,6 +80,19 @@ describe("sortShipmentRows", () => {
     expect(sortShipmentRows(rows, "order", "desc", storeName).map((row) => row.id)).toEqual(["b", "a"]);
   });
 
+  it("sorts products alphabetically and keeps missing products last", () => {
+    const rows = [
+      shipment("none"),
+      shipment("z", { product: "Pulsera magnética" }),
+      shipment("a", { product: "Aceite de semillas" }),
+    ];
+    expect(sortShipmentRows(rows, "product", "asc", storeName).map((row) => row.id)).toEqual([
+      "a",
+      "z",
+      "none",
+    ]);
+  });
+
   it("sorts visible store, customer, location and status labels", () => {
     const rows = [
       shipment("kenku", {
