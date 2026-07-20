@@ -38,7 +38,12 @@ import {
   type ShipmentSortDirection,
   type ShipmentSortKey,
 } from "@/lib/shipment-sort";
-import { REPROGRAM_STALE_DAYS, type ReprogramCounts, type ReprogramStats } from "@/lib/shipments";
+import {
+  REPROGRAM_STALE_DAYS,
+  REPROGRAM_UNASSIGNED,
+  type ReprogramCounts,
+  type ReprogramStats,
+} from "@/lib/shipments";
 import {
   claimShipment,
   createFenixGuide,
@@ -2330,6 +2335,19 @@ function ReprogramModal({
             .sort((a, b) => b[1].total - a[1].total)
             .map(([sid, c]) => (
               <ReprogramCountsRow key={sid} label={storeName(sid)} c={c} />
+            ))}
+        </div>
+
+        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-400 uppercase">Por asesor (histórico)</p>
+        <div className="space-y-1.5">
+          {Object.entries(stats.porAsesor)
+            .sort((a, b) => b[1].total - a[1].total)
+            .map(([uid, c]) => (
+              <ReprogramCountsRow
+                key={uid}
+                label={uid === REPROGRAM_UNASSIGNED ? "Sin asignar" : stats.asesorNames[uid] ?? uid}
+                c={c}
+              />
             ))}
         </div>
 

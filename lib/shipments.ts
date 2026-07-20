@@ -690,7 +690,11 @@ export interface ReprogramChildRow {
   storeId: string | null;
   createdAt: string | null; // cuándo se confirmó la reprogramación (guía hija creada)
   status: string; // delivery_status actual de la guía Fénix
+  agent?: string | null; // user id de quien confirmó la reprogramación (null = histórico sin log)
 }
+
+/** Clave del asesor no atribuible (guías previas a que se registrara el agente). */
+export const REPROGRAM_UNASSIGNED = "sin_asignar";
 
 export interface ReprogramCounts {
   total: number;
@@ -712,6 +716,8 @@ export interface ReprogramStats {
   last30: ReprogramCounts;
   historico: ReprogramCounts;
   porTienda: Record<string, ReprogramCounts>; // histórico, por store id ("otras" si falta)
+  porAsesor: Record<string, ReprogramCounts>; // histórico, por user id (REPROGRAM_UNASSIGNED si falta)
+  asesorNames: Record<string, string>; // user id → etiqueta legible (la llena el access layer)
   semanas: ReprogramWeek[]; // últimas 8 semanas, la actual al final
 }
 
@@ -735,6 +741,7 @@ export function computeReprogramStats(rows: ReprogramChildRow[], nowMs: number):
   const historico = emptyReprogramCounts();
   const last30 = emptyReprogramCounts();
   const porTienda: Record<string, ReprogramCounts> = {};
+  const porAsesor: Record<string, ReprogramCounts> = {};
   const semanas = new Map<string, ReprogramWeek>();
   for (let i = 7; i >= 0; i--) {
     const start = limaWeekStart(nowMs - i * 7 * 86_400_000);
@@ -758,6 +765,7 @@ export function computeReprogramStats(rows: ReprogramChildRow[], nowMs: number):
     bump(historico, kind, viejo);
     if (Number.isFinite(ms) && ms >= last30Cut) bump(last30, kind, viejo);
     bump((porTienda[r.storeId ?? "otras"] ??= emptyReprogramCounts()), kind, viejo);
+    bump((porAsesor[r.agent ?? REPROGRAM_UNASSIGNED] ??= emptyReprogramCounts()), kind, viejo);
     if (Number.isFinite(ms)) {
       const wk = semanas.get(limaWeekStart(ms));
       if (wk) {
@@ -775,5 +783,6 @@ export function computeReprogramStats(rows: ReprogramChildRow[], nowMs: number):
   finish(historico);
   finish(last30);
   for (const c of Object.values(porTienda)) finish(c);
-  return { historico, last30, porTienda, semanas: [...semanas.values()] };
+  for (const c of Object.values(porAsesor)) finish(c);
+  return { historico, last30, porTienda, porAsesor, asesorNames: {}, semanas: [...semanas.values()] };
 }
