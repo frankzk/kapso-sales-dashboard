@@ -302,6 +302,13 @@ default en Ajustes es opcional pero recomendado como respaldo.
 - **Verificar**: correr el cron y revisar `select * from drip_sends order by
   sent_at desc limit 20;` + la nota "📤 Drip: …" en un lead tocado. El reporte
   del cron trae `dripSent`.
+- **Cede los carritos a la secuencia**: cuando la *Secuencia de carritos
+  abandonados* (`cart_seq_enabled`) está activa, el drip genérico **omite los
+  carritos** (`dripSkipReason` → `carrito_secuencia`) para no mandar dos
+  plantillas de marketing al mismo cliente — el carrito recibe
+  `carrito_abandonado_1/2` y el genérico queda solo para los no-carrito
+  (Frío/Conversó/Distrito). Con la secuencia apagada, el drip sigue cubriendo
+  también a los carritos (comportamiento previo).
 
 ## 5g. Olas de reencolado de carritos (automático)
 

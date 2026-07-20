@@ -1238,12 +1238,15 @@ export function dripHasCart(l: Pick<DripLead, "cart_item_count" | "draft_order_g
 /**
  * Por qué un lead NO recibe drip ahora (null = elegible). Pure — es LA regla
  * del drip, el fetch solo pre-filtra en SQL lo barato. Guardas, en orden:
- * status fuera de nr/buzón/cuelga; atención pendiente (respondió o venció un
- * seguimiento → lo ve la asesora, no el bot); agenda manual (next_followup_at
- * manda); tope de toques; sin nombre (la plantilla lleva {{1}}); actividad
- * hace <6h (llamada, mensaje o lo que sea — el silencio aún no es silencio);
- * toque 2 antes de 24h del toque 1; o el cliente escribió DESPUÉS del último
- * drip (last_inbound_at > last_drip_at ⇒ ya no es "no contesta").
+ * status fuera de nr/buzón/cuelga; CARRITO cuando la secuencia de carritos lo
+ * gestiona (`cartSeqOwnsCarts` — el carrito recibe carrito_abandonado, no el
+ * genérico: sin esto le llegarían las dos plantillas); atención pendiente
+ * (respondió o venció un seguimiento → lo ve la asesora, no el bot); agenda
+ * manual (next_followup_at manda); tope de toques; sin nombre (la plantilla
+ * lleva {{1}}); actividad hace <6h (llamada, mensaje o lo que sea — el silencio
+ * aún no es silencio); toque 2 antes de 24h del toque 1; o el cliente escribió
+ * DESPUÉS del último drip (last_inbound_at > last_drip_at ⇒ ya no es "no
+ * contesta").
  */
 /** Horas de silencio del CLIENTE exigidas para que el drip pise un lead cuya
  *  atención viene de una ola (si escribió hace poco, que lo vea la asesora). */
@@ -1262,8 +1265,13 @@ function waveOverridesAttention(l: DripLead, nowMs: number): boolean {
   return nowMs - Date.parse(l.last_inbound_at) >= DRIP_WAVE_INBOUND_QUIET_HOURS * 3_600_000;
 }
 
-export function dripSkipReason(l: DripLead, nowMs: number): string | null {
+export function dripSkipReason(l: DripLead, nowMs: number, cartSeqOwnsCarts = false): string | null {
   if (!(DRIP_STATUSES as readonly string[]).includes(l.status)) return "status";
+  // La secuencia de carritos (carrito_abandonado_1/2) es dueña de los carritos
+  // cuando está activa: el drip genérico les cede el turno para no mandar dos
+  // plantillas de marketing al mismo cliente (riesgo de calidad ante Meta). El
+  // genérico queda para los NO-carrito (Frío/Conversó/Distrito).
+  if (cartSeqOwnsCarts && dripHasCart(l)) return "carrito_secuencia";
   if (l.needs_attention && !waveOverridesAttention(l, nowMs)) return "atencion";
   if (l.next_followup_at) return "agendado";
   if ((l.drip_touches ?? 0) >= DRIP_MAX_TOUCHES) return "tope";
@@ -1360,7 +1368,10 @@ export async function sendSeguimientoDrip(
   if (error) throw new Error(`drip select: ${error.message}`);
 
   const rows = (data as DripLead[] | null) ?? [];
-  const eligible = rows.filter((l) => dripSkipReason(l, nowMs) === null);
+  // Con la secuencia de carritos activa, el drip genérico cede los carritos
+  // (los toma carrito_abandonado_1/2) y solo cubre los no-carrito.
+  const cartSeqOwnsCarts = !!creds.cart_seq_enabled;
+  const eligible = rows.filter((l) => dripSkipReason(l, nowMs, cartSeqOwnsCarts) === null);
   // Sin número resoluble (ni el del chat del lead ni default de tienda) no hay
   // desde dónde enviar: fuera del lote SIN consumir toque (nada se intentó).
   const sendable = eligible.filter((l) => l.wa_phone_number_id || creds.whatsapp_phone_number_id);
