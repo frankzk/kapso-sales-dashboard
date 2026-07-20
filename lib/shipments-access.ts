@@ -13,7 +13,6 @@ import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
 import {
   computeReprogramStats,
   limaCalendarDayBounds,
-  REPROGRAM_UNASSIGNED,
   type ReprogramChildRow,
   type ReprogramStats,
 } from "@/lib/shipments";
@@ -610,7 +609,25 @@ export async function getShipmentWithCalls(
  * y las agrega con computeReprogramStats. RLS-scoped; paginado + chunked para
  * ser inmune al tope de ~1000 filas de PostgREST.
  */
+/** Filas crudas de las guías Fénix hijas (reprogramaciones) con su asesor +
+ *  nombres resueltos, para recomputar cortes por rango en el cliente. */
+export async function getReprogramRows(
+  storeIds: string[],
+): Promise<{ rows: ReprogramChildRow[]; asesorNames: Record<string, string> }> {
+  const built = await buildReprogramRows(storeIds);
+  return built;
+}
+
 export async function getReprogramStats(storeIds: string[]): Promise<ReprogramStats> {
+  const { rows, asesorNames } = await buildReprogramRows(storeIds);
+  const stats = computeReprogramStats(rows, Date.now());
+  stats.asesorNames = asesorNames;
+  return stats;
+}
+
+async function buildReprogramRows(
+  storeIds: string[],
+): Promise<{ rows: ReprogramChildRow[]; asesorNames: Record<string, string> }> {
   const sb = await createServerSupabase();
   // Padres con guía Fénix: id (para atribuir el asesor) + child id (métricas).
   const parentToChild = new Map<string, string>(); // parentId → childId
@@ -665,12 +682,12 @@ export async function getReprogramStats(storeIds: string[]): Promise<ReprogramSt
     }
   }
 
-  const stats = computeReprogramStats(rows, Date.now());
   // Resolver nombres de los asesores presentes (emails, como en Productividad).
-  const agentIds = Object.keys(stats.porAsesor).filter((k) => k !== REPROGRAM_UNASSIGNED);
+  const agentIds = [...new Set(rows.map((r) => r.agent).filter((a): a is string => !!a))];
+  let asesorNames: Record<string, string> = {};
   if (agentIds.length) {
     const emails = await resolveEmails(agentIds);
-    stats.asesorNames = Object.fromEntries(agentIds.map((id) => [id, emails.get(id) ?? id]));
+    asesorNames = Object.fromEntries(agentIds.map((id) => [id, emails.get(id) ?? id]));
   }
-  return stats;
+  return { rows, asesorNames };
 }
