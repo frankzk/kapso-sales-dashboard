@@ -54,6 +54,86 @@ export interface CartSeqLead {
   last_cart_seq_at: string | null;
   cart_seq_gid: string | null;
   cart_summary?: string | null;
+  cart_value?: number | null;
+  address1?: string | null;
+  district?: string | null;
+  referencia?: string | null;
+}
+
+/** Snapshot del draft (la fuente del carrito) para armar las variables de la
+ *  plantilla; los campos del lead son el fallback denormalizado. */
+export interface CartSnapshot {
+  created_at: string | null;
+  line_items?: { title?: string | null; quantity?: number | null }[] | null;
+  total_amount?: number | null;
+  currency?: string | null;
+  address1?: string | null;
+  district?: string | null;
+  referencia?: string | null;
+}
+
+/** "Set de Pelador de Verduras + Abridor Premium x 1" — títulos con cantidad
+ *  desde los line_items del draft; fallback al cart_summary del lead. */
+export function cartProductLabel(
+  lineItems: CartSnapshot["line_items"],
+  fallbackSummary: string | null | undefined,
+): string | null {
+  const items = (lineItems ?? [])
+    .map((li) => {
+      const title = String(li?.title ?? "").replace(/\s*\(.*$/, "").trim();
+      if (!title) return null;
+      const qty = Math.max(1, Math.trunc(Number(li?.quantity ?? 1)) || 1);
+      return `${title} x ${qty}`;
+    })
+    .filter(Boolean) as string[];
+  if (items.length) {
+    return items.slice(0, 3).join(", ") + (items.length > 3 ? ` +${items.length - 3}` : "");
+  }
+  const summary = (fallbackSummary ?? "").trim();
+  return summary || null;
+}
+
+/** "S/.99.00" para PEN (formato de la automatización existente); otras monedas
+ *  van con su código delante. */
+export function cartPriceLabel(
+  amount: number | null | undefined,
+  currency: string | null | undefined,
+): string | null {
+  if (amount == null || !Number.isFinite(amount) || amount <= 0) return null;
+  const n = amount.toFixed(2);
+  const cur = (currency ?? "PEN").toUpperCase();
+  return cur === "PEN" ? `S/.${n}` : `${cur} ${n}`;
+}
+
+/** "Condominio Orquideas Del Sol, B-5, Cuzco (referencia)" — dirección + distrito
+ *  del draft (fallback: columnas del lead), con la referencia entre paréntesis
+ *  solo cuando existe. */
+export function cartAddressLabel(
+  snap: Pick<CartSnapshot, "address1" | "district" | "referencia">,
+  lead: Pick<CartSeqLead, "address1" | "district" | "referencia">,
+): string | null {
+  const addr = (snap.address1 ?? lead.address1 ?? "").trim();
+  const district = (snap.district ?? lead.district ?? "").trim();
+  const ref = (snap.referencia ?? lead.referencia ?? "").trim();
+  const base = [addr, district].filter(Boolean).join(", ");
+  if (!base) return null;
+  return ref ? `${base} (${ref})` : base;
+}
+
+/**
+ * Las 4 variables de las plantillas (formato de la automatización ya en
+ * producción): {{1}} nombre, {{2}} producto(s) x cantidad, {{3}} precio,
+ * {{4}} dirección registrada. Devuelve null si falta cualquiera — Meta
+ * rechaza plantillas con variables vacías, así que ese lead se omite SIN
+ * consumir toque (reintenta cuando el dato llegue por el sync).
+ */
+export function cartTemplateParams(l: CartSeqLead, snap: CartSnapshot | null): string[] | null {
+  const name = (l.name ?? "").trim();
+  const product = cartProductLabel(snap?.line_items, l.cart_summary);
+  const price = cartPriceLabel(snap?.total_amount ?? l.cart_value, snap?.currency);
+  const address = cartAddressLabel(snap ?? {}, l);
+  if (!name || !product || !price || !address) return null;
+  return [name, product, price, address];
 }
 
 /** Toques que cuentan para el carrito ACTUAL: un gid distinto = carrito nuevo
@@ -168,7 +248,7 @@ export async function runCartSequence(
   const { data, error } = await admin
     .from("leads")
     .select(
-      "id, phone, name, category, has_order, draft_order_gid, draft_order_status, last_inbound_at, cart_seq_touches, last_cart_seq_at, cart_seq_gid, cart_summary, wa_phone_number_id",
+      "id, phone, name, category, has_order, draft_order_gid, draft_order_status, last_inbound_at, cart_seq_touches, last_cart_seq_at, cart_seq_gid, cart_summary, cart_value, address1, district, referencia, wa_phone_number_id",
     )
     .eq("store_id", storeId)
     .eq("has_order", false)
@@ -181,29 +261,34 @@ export async function runCartSequence(
   const rows = (data as CartSeqLead[] | null) ?? [];
   if (!rows.length) return report;
 
-  // Fecha de creación (Shopify) de cada carrito — el ancla del reloj.
+  // Snapshot del draft por gid: la fecha de creación (Shopify) es el ancla
+  // del reloj; line_items/total/dirección alimentan las variables de la
+  // plantilla (con las columnas del lead como fallback).
   const gids = Array.from(new Set(rows.map((l) => l.draft_order_gid).filter(Boolean))) as string[];
-  const createdByGid = new Map<string, string | null>();
+  const snapByGid = new Map<string, CartSnapshot>();
   for (let i = 0; i < gids.length; i += 200) {
     const { data: drafts } = await admin
       .from("draft_orders")
-      .select("draft_order_gid, created_at")
+      .select("draft_order_gid, created_at, line_items, total_amount, currency, address1, district, referencia")
       .eq("store_id", storeId)
       .in("draft_order_gid", gids.slice(i, i + 200));
-    for (const d of (drafts as { draft_order_gid: string | null; created_at: string | null }[]) ?? []) {
-      if (d.draft_order_gid) createdByGid.set(d.draft_order_gid, d.created_at);
+    for (const d of (drafts as ({ draft_order_gid: string | null } & CartSnapshot)[]) ?? []) {
+      if (d.draft_order_gid) snapByGid.set(d.draft_order_gid, d);
     }
   }
 
   const eligible = rows.filter(
-    (l) => cartSeqSkipReason(l, createdByGid.get(l.draft_order_gid!) ?? null, nowMs, cfg) === null,
+    (l) =>
+      cartSeqSkipReason(l, snapByGid.get(l.draft_order_gid!)?.created_at ?? null, nowMs, cfg) ===
+      null,
   );
-  // La plantilla del toque debe estar configurada; sin número desde dónde
-  // enviar tampoco hay envío. Fuera del lote SIN consumir toque.
+  // La plantilla del toque debe estar configurada, las 4 variables completas
+  // y debe haber número desde dónde enviar. Fuera del lote SIN consumir toque.
   const sendable = eligible.filter((l) => {
     const touch = cartSeqTouchesFor(l) + 1;
     const template = touch === 1 ? creds.cart_seq_template_1_name : creds.cart_seq_template_2_name;
-    return !!template && !!(l.wa_phone_number_id || creds.whatsapp_phone_number_id);
+    if (!template || !(l.wa_phone_number_id || creds.whatsapp_phone_number_id)) return false;
+    return cartTemplateParams(l, snapByGid.get(l.draft_order_gid!) ?? null) !== null;
   });
   report.skipped = rows.length - sendable.length;
   const batch = sendable.slice(0, CART_SEQ_BATCH_CAP);
@@ -216,7 +301,7 @@ export async function runCartSequence(
       (touch === 1 ? creds.cart_seq_template_1_language : creds.cart_seq_template_2_language) ??
       "es";
     const pnId = (l.wa_phone_number_id ?? creds.whatsapp_phone_number_id)!;
-    const cartLabel = (l.cart_summary ?? "").trim() || "tu pedido pendiente";
+    const bodyParams = cartTemplateParams(l, snapByGid.get(l.draft_order_gid!) ?? null)!;
 
     let ok = false;
     let err: string | null = null;
@@ -229,7 +314,7 @@ export async function runCartSequence(
           to: l.phone,
           templateName,
           language,
-          bodyParams: [l.name!, cartLabel],
+          bodyParams,
         },
       );
       ok = send.ok;

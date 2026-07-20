@@ -1,9 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   CART_SEQ_MAX_TOUCHES,
+  cartAddressLabel,
+  cartPriceLabel,
+  cartProductLabel,
   cartSeqSkipReason,
   cartSeqTouchesFor,
   cartSeqWithinHours,
+  cartTemplateParams,
   type CartSeqLead,
 } from "@/lib/cart-sequence";
 
@@ -105,6 +109,81 @@ describe("cartSeqSkipReason — paradas acordadas", () => {
   it("la gestión de la asesora (status manual, open) NO frena la secuencia — corre en paralelo", () => {
     expect(cartSeqSkipReason(lead({ category: "open" }), CART_AT, NOW, CFG)).toBeNull();
     expect(cartSeqSkipReason(lead({ category: "hot" }), CART_AT, NOW, CFG)).toBeNull();
+  });
+});
+
+describe("variables de plantilla (formato de la automatización existente)", () => {
+  it("producto: títulos con cantidad desde los line_items del draft", () => {
+    expect(
+      cartProductLabel(
+        [{ title: "Set de Pelador de Verduras + Abridor Premium", quantity: 1 }],
+        null,
+      ),
+    ).toBe("Set de Pelador de Verduras + Abridor Premium x 1");
+    expect(
+      cartProductLabel(
+        [
+          { title: "Sérum Tea Tree (30ml)", quantity: 2 },
+          { title: "Champú Keratina", quantity: 1 },
+        ],
+        null,
+      ),
+    ).toBe("Sérum Tea Tree x 2, Champú Keratina x 1");
+  });
+  it("producto: cae al cart_summary del lead y a null sin datos", () => {
+    expect(cartProductLabel(null, "Mushroom Coffee")).toBe("Mushroom Coffee");
+    expect(cartProductLabel([], "  ")).toBeNull();
+  });
+  it("precio: S/. para PEN, código para otras monedas, null sin monto", () => {
+    expect(cartPriceLabel(99, "PEN")).toBe("S/.99.00");
+    expect(cartPriceLabel(158.5, null)).toBe("S/.158.50");
+    expect(cartPriceLabel(25, "USD")).toBe("USD 25.00");
+    expect(cartPriceLabel(null, "PEN")).toBeNull();
+    expect(cartPriceLabel(0, "PEN")).toBeNull();
+  });
+  it("dirección: dirección + distrito, referencia solo cuando existe", () => {
+    expect(
+      cartAddressLabel(
+        { address1: "Condominio Orquideas Del Sol, B-5", district: "Cuzco", referencia: null },
+        lead(),
+      ),
+    ).toBe("Condominio Orquideas Del Sol, B-5, Cuzco");
+    expect(
+      cartAddressLabel(
+        { address1: "Av. Principal 123", district: "Chorrillos", referencia: "portón verde" },
+        lead(),
+      ),
+    ).toBe("Av. Principal 123, Chorrillos (portón verde)");
+    // fallback a las columnas del lead cuando el draft no trae dirección
+    expect(
+      cartAddressLabel({}, lead({ address1: "Jr. Lima 456", district: "Juliaca" })),
+    ).toBe("Jr. Lima 456, Juliaca");
+    expect(cartAddressLabel({}, lead({ address1: null, district: null }))).toBeNull();
+  });
+  it("cartTemplateParams arma [nombre, producto, precio, dirección] o null si falta algo", () => {
+    const snap = {
+      created_at: CART_AT,
+      line_items: [{ title: "Set Pelador Premium", quantity: 1 }],
+      total_amount: 99,
+      currency: "PEN",
+      address1: "Condominio Orquideas Del Sol, B-5",
+      district: "Cuzco",
+      referencia: null,
+    };
+    expect(cartTemplateParams(lead(), snap)).toEqual([
+      "María",
+      "Set Pelador Premium x 1",
+      "S/.99.00",
+      "Condominio Orquideas Del Sol, B-5, Cuzco",
+    ]);
+    // sin precio (ni en draft ni en lead) → null: no se envía ni consume toque
+    expect(
+      cartTemplateParams(lead({ cart_value: null }), { ...snap, total_amount: null }),
+    ).toBeNull();
+    // el precio cae al cart_value del lead si el draft no lo trae
+    expect(
+      cartTemplateParams(lead({ cart_value: 158 }), { ...snap, total_amount: null })?.[2],
+    ).toBe("S/.158.00");
   });
 });
 
