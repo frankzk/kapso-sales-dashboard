@@ -26,6 +26,16 @@ export interface StoreSettingsInput {
   drip_template_enabled?: string | boolean;
   drip_template_name?: string;
   drip_template_language?: string;
+  // Secuencia de carritos abandonados (2 plantillas + horas, plain).
+  cart_seq_enabled?: string | boolean;
+  cart_seq_template_1_name?: string;
+  cart_seq_template_1_language?: string;
+  cart_seq_template_2_name?: string;
+  cart_seq_template_2_language?: string;
+  cart_seq_hours_1?: string;
+  cart_seq_hours_2?: string;
+  cart_seq_hour_start?: string;
+  cart_seq_hour_end?: string;
   // Telegram daily summary: chat id is plain, token is a secret.
   telegram_chat_id?: string;
   // Secrets — only applied when non-empty.
@@ -92,6 +102,37 @@ export function buildStoreUpdate(
   if (drName !== null) patch.drip_template_name = drName;
   const drLang = clean(typeof input.drip_template_language === "string" ? input.drip_template_language : undefined);
   if (drLang !== null) patch.drip_template_language = drLang;
+
+  // Secuencia de carritos — mismo trío x2 + horas. Las horas solo se aplican
+  // cuando parsean a un entero en rango; un valor inválido conserva el actual.
+  if (input.cart_seq_enabled !== undefined) {
+    patch.cart_seq_enabled =
+      input.cart_seq_enabled === true || input.cart_seq_enabled === "true";
+  }
+  for (const k of [
+    "cart_seq_template_1_name",
+    "cart_seq_template_1_language",
+    "cart_seq_template_2_name",
+    "cart_seq_template_2_language",
+  ] as const) {
+    const v = clean(input[k]);
+    if (v !== null) patch[k] = v;
+  }
+  const intField = (raw: string | undefined, min: number, max: number): number | null => {
+    const v = clean(raw);
+    if (v === null) return null;
+    const n = Number.parseInt(v, 10);
+    return Number.isFinite(n) && n >= min && n <= max ? n : null;
+  };
+  const h1 = intField(input.cart_seq_hours_1, 1, 168);
+  if (h1 !== null) patch.cart_seq_hours_1 = h1;
+  const h2 = intField(input.cart_seq_hours_2, 1, 336);
+  if (h2 !== null) patch.cart_seq_hours_2 = h2;
+  const hs = intField(input.cart_seq_hour_start, 0, 23);
+  if (hs !== null) patch.cart_seq_hour_start = hs;
+  const he = intField(input.cart_seq_hour_end, 1, 24);
+  if (he !== null) patch.cart_seq_hour_end = he;
+
   const tgChat = clean(input.telegram_chat_id);
   if (tgChat !== null) patch.telegram_chat_id = tgChat;
 

@@ -41,6 +41,15 @@ export interface StoreSettingsData {
     drip_template_enabled: boolean;
     drip_template_name: string | null;
     drip_template_language: string | null;
+    cart_seq_enabled: boolean;
+    cart_seq_template_1_name: string | null;
+    cart_seq_template_1_language: string | null;
+    cart_seq_template_2_name: string | null;
+    cart_seq_template_2_language: string | null;
+    cart_seq_hours_1: number;
+    cart_seq_hours_2: number;
+    cart_seq_hour_start: number;
+    cart_seq_hour_end: number;
     telegram_chat_id: string | null;
     meta_ad_accounts: StoreMetaAdAccount[];
   };
@@ -579,6 +588,123 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
                 id="drip_template_language"
                 name="drip_template_language"
                 defaultValue={s.drip_template_language ?? ""}
+                placeholder="es"
+                className={inputCls}
+              />
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Secuencia de carritos abandonados
+          </legend>
+          <p className="text-xs text-slate-500">
+            A los <strong>carritos abandonados</strong> (formulario COD de Shopify) se les envían
+            hasta <strong>2 plantillas de WhatsApp</strong>, contadas desde que el cliente dejó el
+            carrito, dentro del horario configurado. Corre en paralelo a la gestión de las
+            asesoras (no cambia el estado del lead) y <strong>se detiene sola</strong> si el
+            cliente compra, responde, el carrito se completa o el lead se marca ganado/perdido.
+            Requiere las plantillas <strong>aprobadas por Meta</strong> con {"{{1}}"} = nombre y{" "}
+            {"{{2}}"} = producto(s) del carrito. Cada envío queda en el historial del lead.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelCls} htmlFor="cart_seq_enabled">Envío automático</label>
+              <select
+                id="cart_seq_enabled"
+                name="cart_seq_enabled"
+                defaultValue={s.cart_seq_enabled ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">Deshabilitado</option>
+                <option value="true">Habilitado</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="cart_seq_hour_start">Enviar desde (hora local)</label>
+              <input
+                id="cart_seq_hour_start"
+                name="cart_seq_hour_start"
+                type="number"
+                min={0}
+                max={23}
+                defaultValue={s.cart_seq_hour_start}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="cart_seq_hour_end">Enviar hasta (hora local)</label>
+              <input
+                id="cart_seq_hour_end"
+                name="cart_seq_hour_end"
+                type="number"
+                min={1}
+                max={24}
+                defaultValue={s.cart_seq_hour_end}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="cart_seq_hours_1">Mensaje 1: horas tras el abandono</label>
+              <input
+                id="cart_seq_hours_1"
+                name="cart_seq_hours_1"
+                type="number"
+                min={1}
+                max={168}
+                defaultValue={s.cart_seq_hours_1}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="cart_seq_template_1_name">Plantilla 1 · nombre</label>
+              <input
+                id="cart_seq_template_1_name"
+                name="cart_seq_template_1_name"
+                defaultValue={s.cart_seq_template_1_name ?? ""}
+                placeholder="carrito_abandonado_1"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="cart_seq_template_1_language">Plantilla 1 · idioma</label>
+              <input
+                id="cart_seq_template_1_language"
+                name="cart_seq_template_1_language"
+                defaultValue={s.cart_seq_template_1_language ?? ""}
+                placeholder="es"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="cart_seq_hours_2">Mensaje 2: horas tras el abandono</label>
+              <input
+                id="cart_seq_hours_2"
+                name="cart_seq_hours_2"
+                type="number"
+                min={1}
+                max={336}
+                defaultValue={s.cart_seq_hours_2}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="cart_seq_template_2_name">Plantilla 2 · nombre</label>
+              <input
+                id="cart_seq_template_2_name"
+                name="cart_seq_template_2_name"
+                defaultValue={s.cart_seq_template_2_name ?? ""}
+                placeholder="carrito_abandonado_2"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="cart_seq_template_2_language">Plantilla 2 · idioma</label>
+              <input
+                id="cart_seq_template_2_language"
+                name="cart_seq_template_2_language"
+                defaultValue={s.cart_seq_template_2_language ?? ""}
                 placeholder="es"
                 className={inputCls}
               />
