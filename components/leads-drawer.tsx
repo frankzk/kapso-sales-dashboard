@@ -464,11 +464,22 @@ export function LeadDrawer({
                   · llamar
                 </a>
               </div>
+              {/* Chips de estado bajo el teléfono: rellenan el alto del QR para
+                  que el header quede balanceado, sin el hueco en blanco. */}
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <Pill className="bg-slate-100">
+                  <span className={cn("h-1.5 w-1.5 rounded-full", wd.dot)} />
+                  <span className={wd.fg}>{winLabel}</span>
+                </Pill>
+                <SegmentBadge lead={lead} />
+                <Pill className={src.cls}>{src.isText ? src.label : `${src.glyph} ${src.label}`}</Pill>
+                <YapeKindChip lead={lead} />
+              </div>
             </div>
             {/* QR tel: — solo en panel ancho (desktop): la asesora escanea con
                 su celular y el marcador abre listo. En móvil ya está «llamar». */}
-            <div className="hidden @min-[720px]:block">
-              <CallQr phone={lead.phone} />
+            <div className="hidden shrink-0 self-start @min-[720px]:block">
+              <CallQr phone={lead.phone} size={72} />
             </div>
             <button
               type="button"
@@ -478,15 +489,6 @@ export function LeadDrawer({
             >
               ✕
             </button>
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            <Pill className="bg-slate-100">
-              <span className={cn("h-1.5 w-1.5 rounded-full", wd.dot)} />
-              <span className={wd.fg}>{winLabel}</span>
-            </Pill>
-            <SegmentBadge lead={lead} />
-            <Pill className={src.cls}>{src.isText ? src.label : `${src.glyph} ${src.label}`}</Pill>
-            <YapeKindChip lead={lead} />
           </div>
         </div>
 
