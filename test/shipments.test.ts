@@ -3,6 +3,8 @@ import {
   DELIVERY_STATUSES,
   COURIER_REPORT_RESULTS,
   computeReprogramStats,
+  reprogramRangeStats,
+  limaRangeBounds,
   evaluateAliclikReschedule,
   getFenixDeliverySchedule,
   matchesAliclikRouteFilter,
@@ -536,5 +538,41 @@ describe("computeReprogramStats · métricas de reprogramación Kapso→Fénix",
     expect(s.porAsesor.u2).toMatchObject({ total: 1, enCurso: 1 });
     expect(s.porAsesor.sin_asignar).toMatchObject({ total: 1 });
     expect(s.asesorNames).toEqual({}); // los nombres los llena el access layer
+  });
+});
+
+describe("reprogramRangeStats + limaRangeBounds · cortes por rango del popup", () => {
+  // Sábado 18/07/2026, mediodía Lima.
+  const NOW = Date.parse("2026-07-18T17:00:00Z");
+  const child = (over: Partial<ReprogramChildRow>): ReprogramChildRow => ({
+    storeId: "kenku",
+    createdAt: "2026-07-18T15:00:00Z", // 10am Lima del 18
+    status: "en_ruta",
+    agent: "u1",
+    ...over,
+  });
+
+  it("limaRangeBounds: [00:00 Lima del from, 00:00 Lima del to+1) en UTC", () => {
+    const { startMs, endMs } = limaRangeBounds("2026-07-18", "2026-07-18");
+    expect(new Date(startMs).toISOString()).toBe("2026-07-18T05:00:00.000Z");
+    expect(new Date(endMs).toISOString()).toBe("2026-07-19T05:00:00.000Z");
+  });
+
+  it("solo cuenta las guías confirmadas dentro del rango", () => {
+    const rows = [
+      child({ createdAt: "2026-07-18T15:00:00Z", status: "entregado", agent: "u1" }), // hoy
+      child({ createdAt: "2026-07-17T15:00:00Z", status: "anulado", agent: "u2" }), // ayer
+      child({ createdAt: "2026-07-10T15:00:00Z", status: "entregado", agent: "u1" }), // fuera
+    ];
+    const hoy = limaRangeBounds("2026-07-18", "2026-07-18");
+    const r = reprogramRangeStats(rows, hoy.startMs, hoy.endMs, NOW);
+    expect(r.counts).toMatchObject({ total: 1, entregados: 1 });
+    expect(r.porAsesor.u1).toMatchObject({ total: 1, entregados: 1 });
+    expect(r.porAsesor.u2).toBeUndefined();
+    expect(r.porTienda.kenku).toMatchObject({ total: 1 });
+
+    const semana = limaRangeBounds("2026-07-12", "2026-07-18");
+    const r7 = reprogramRangeStats(rows, semana.startMs, semana.endMs, NOW);
+    expect(r7.counts.total).toBe(2); // hoy + ayer, no el del 10
   });
 });

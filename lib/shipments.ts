@@ -734,6 +734,74 @@ function emptyReprogramCounts(): ReprogramCounts {
   return { total: 0, entregados: 0, anulados: 0, enCurso: 0, enCursoViejos: 0, tasa: null };
 }
 
+type ReprogramKind = "entregado" | "anulado" | "curso";
+
+function bumpCounts(c: ReprogramCounts, kind: ReprogramKind, viejo: boolean): void {
+  c.total += 1;
+  if (kind === "entregado") c.entregados += 1;
+  else if (kind === "anulado") c.anulados += 1;
+  else {
+    c.enCurso += 1;
+    if (viejo) c.enCursoViejos += 1;
+  }
+}
+
+function finishCounts(c: ReprogramCounts): void {
+  const cerrados = c.entregados + c.anulados;
+  c.tasa = cerrados ? c.entregados / cerrados : null;
+}
+
+function reprogramKindOf(status: string): ReprogramKind {
+  return status === "entregado" ? "entregado" : status === "anulado" ? "anulado" : "curso";
+}
+
+export interface ReprogramRangeStats {
+  counts: ReprogramCounts;
+  porTienda: Record<string, ReprogramCounts>;
+  porAsesor: Record<string, ReprogramCounts>;
+}
+
+/** Cortes de reprogramación acotados a [startMs, endMs) por fecha de confirmación
+ *  (createdAt de la guía hija) — insumo de los chips de rango del popup. Pure. */
+export function reprogramRangeStats(
+  rows: ReprogramChildRow[],
+  startMs: number,
+  endMs: number,
+  nowMs: number,
+): ReprogramRangeStats {
+  const staleCut = nowMs - REPROGRAM_STALE_DAYS * 86_400_000;
+  const counts = emptyReprogramCounts();
+  const porTienda: Record<string, ReprogramCounts> = {};
+  const porAsesor: Record<string, ReprogramCounts> = {};
+  for (const r of rows) {
+    const ms = r.createdAt ? Date.parse(r.createdAt) : NaN;
+    if (!Number.isFinite(ms) || ms < startMs || ms >= endMs) continue;
+    const kind = reprogramKindOf(r.status);
+    const viejo = kind === "curso" && ms < staleCut;
+    bumpCounts(counts, kind, viejo);
+    bumpCounts((porTienda[r.storeId ?? "otras"] ??= emptyReprogramCounts()), kind, viejo);
+    bumpCounts((porAsesor[r.agent ?? REPROGRAM_UNASSIGNED] ??= emptyReprogramCounts()), kind, viejo);
+  }
+  finishCounts(counts);
+  for (const c of Object.values(porTienda)) finishCounts(c);
+  for (const c of Object.values(porAsesor)) finishCounts(c);
+  return { counts, porTienda, porAsesor };
+}
+
+/** [startMs, endMs) en UTC para un rango de días-calendario Lima (UTC−5, sin
+ *  DST), fin exclusivo. `fromYmd`/`toYmd` son "YYYY-MM-DD". */
+export function limaRangeBounds(fromYmd: string, toYmd: string): { startMs: number; endMs: number } {
+  return {
+    startMs: Date.parse(`${fromYmd}T00:00:00-05:00`),
+    endMs: Date.parse(`${toYmd}T00:00:00-05:00`) + 86_400_000,
+  };
+}
+
+/** Fecha de hoy en Lima como "YYYY-MM-DD". */
+export function limaTodayKey(now: Date = new Date()): string {
+  return dateKeyInTimeZone(now, "America/Lima");
+}
+
 /** Agrega las guías hijas en los cortes del strip/popup. Pure (nowMs inyectable). */
 export function computeReprogramStats(rows: ReprogramChildRow[], nowMs: number): ReprogramStats {
   const last30Cut = nowMs - 30 * 86_400_000;
@@ -748,24 +816,14 @@ export function computeReprogramStats(rows: ReprogramChildRow[], nowMs: number):
     semanas.set(start, { start, total: 0, entregados: 0, anulados: 0 });
   }
 
-  const bump = (c: ReprogramCounts, kind: "entregado" | "anulado" | "curso", viejo: boolean) => {
-    c.total += 1;
-    if (kind === "entregado") c.entregados += 1;
-    else if (kind === "anulado") c.anulados += 1;
-    else {
-      c.enCurso += 1;
-      if (viejo) c.enCursoViejos += 1;
-    }
-  };
-
   for (const r of rows) {
     const ms = r.createdAt ? Date.parse(r.createdAt) : NaN;
-    const kind = r.status === "entregado" ? "entregado" : r.status === "anulado" ? "anulado" : "curso";
+    const kind = reprogramKindOf(r.status);
     const viejo = kind === "curso" && Number.isFinite(ms) && ms < staleCut;
-    bump(historico, kind, viejo);
-    if (Number.isFinite(ms) && ms >= last30Cut) bump(last30, kind, viejo);
-    bump((porTienda[r.storeId ?? "otras"] ??= emptyReprogramCounts()), kind, viejo);
-    bump((porAsesor[r.agent ?? REPROGRAM_UNASSIGNED] ??= emptyReprogramCounts()), kind, viejo);
+    bumpCounts(historico, kind, viejo);
+    if (Number.isFinite(ms) && ms >= last30Cut) bumpCounts(last30, kind, viejo);
+    bumpCounts((porTienda[r.storeId ?? "otras"] ??= emptyReprogramCounts()), kind, viejo);
+    bumpCounts((porAsesor[r.agent ?? REPROGRAM_UNASSIGNED] ??= emptyReprogramCounts()), kind, viejo);
     if (Number.isFinite(ms)) {
       const wk = semanas.get(limaWeekStart(ms));
       if (wk) {
@@ -776,13 +834,9 @@ export function computeReprogramStats(rows: ReprogramChildRow[], nowMs: number):
     }
   }
 
-  const finish = (c: ReprogramCounts) => {
-    const cerrados = c.entregados + c.anulados;
-    c.tasa = cerrados ? c.entregados / cerrados : null;
-  };
-  finish(historico);
-  finish(last30);
-  for (const c of Object.values(porTienda)) finish(c);
-  for (const c of Object.values(porAsesor)) finish(c);
+  finishCounts(historico);
+  finishCounts(last30);
+  for (const c of Object.values(porTienda)) finishCounts(c);
+  for (const c of Object.values(porAsesor)) finishCounts(c);
   return { historico, last30, porTienda, porAsesor, asesorNames: {}, semanas: [...semanas.values()] };
 }

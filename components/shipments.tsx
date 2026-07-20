@@ -41,12 +41,17 @@ import {
 import {
   REPROGRAM_STALE_DAYS,
   REPROGRAM_UNASSIGNED,
+  limaRangeBounds,
+  limaTodayKey,
+  reprogramRangeStats,
+  type ReprogramChildRow,
   type ReprogramCounts,
   type ReprogramStats,
 } from "@/lib/shipments";
 import {
   claimShipment,
   createFenixGuide,
+  loadReprogramData,
   loadShipmentDetail,
   registerCourierReportResult,
   registerRerouteCall,
@@ -2273,8 +2278,43 @@ function ReprogramCountsRow({ label, c }: { label: string; c: ReprogramCounts })
   );
 }
 
-/** Popup de análisis: histórico, tendencia semanal y split por tienda. La tasa
- *  siempre es sobre CERRADOS (entregado+anulado) — lo en curso se lista aparte. */
+type ReprogramPreset = "hoy" | "ayer" | "7d" | "mes" | "rango";
+const REPROGRAM_PRESETS: { key: ReprogramPreset; label: string }[] = [
+  { key: "hoy", label: "Hoy" },
+  { key: "ayer", label: "Ayer" },
+  { key: "7d", label: "Últimos 7 días" },
+  { key: "mes", label: "Mes" },
+  { key: "rango", label: "Rango" },
+];
+
+/** Rango de fechas-calendario Lima (YYYY-MM-DD) para un chip. */
+function reprogramPresetRange(
+  preset: ReprogramPreset,
+  custom: { from: string; to: string },
+): { from: string; to: string } {
+  const today = limaTodayKey();
+  const shift = (base: string, days: number) =>
+    new Date(Date.parse(`${base}T12:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+  switch (preset) {
+    case "hoy":
+      return { from: today, to: today };
+    case "ayer": {
+      const y = shift(today, -1);
+      return { from: y, to: y };
+    }
+    case "7d":
+      return { from: shift(today, -6), to: today };
+    case "mes":
+      return { from: `${today.slice(0, 7)}-01`, to: today };
+    case "rango":
+      return { from: custom.from || today, to: custom.to || today };
+  }
+}
+
+/** Popup de análisis: cortes por rango (chips), tendencia semanal y splits por
+ *  tienda/asesor. La tasa siempre es sobre CERRADOS (entregado+anulado) — lo en
+ *  curso se lista aparte. Las filas crudas se cargan una vez y los chips
+ *  recomputan al instante en el cliente. */
 function ReprogramModal({
   stats,
   stores,
@@ -2287,6 +2327,31 @@ function ReprogramModal({
   const storeName = (id: string) => stores.find((s) => s.id === id)?.name ?? "Otra";
   const maxWeek = Math.max(1, ...stats.semanas.map((w) => w.total));
   const weekLabel = (start: string) => `${start.slice(8, 10)}/${start.slice(5, 7)}`;
+
+  const [data, setData] = useState<{ rows: ReprogramChildRow[]; asesorNames: Record<string, string> } | null>(null);
+  const [preset, setPreset] = useState<ReprogramPreset>("hoy");
+  const today = limaTodayKey();
+  const [custom, setCustom] = useState({ from: today, to: today });
+
+  useEffect(() => {
+    let alive = true;
+    loadReprogramData().then((d) => {
+      if (alive) setData(d);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const { from, to } = reprogramPresetRange(preset, custom);
+  const asesorNames = data?.asesorNames ?? stats.asesorNames;
+  const ranged = data
+    ? (() => {
+        const { startMs, endMs } = limaRangeBounds(from, to);
+        return reprogramRangeStats(data.rows, startMs, endMs, Date.now());
+      })()
+    : null;
+
   return (
     <div className="fixed inset-0 z-30 grid place-items-center bg-slate-900/30 p-4" onClick={onClose}>
       <div
@@ -2300,8 +2365,55 @@ function ReprogramModal({
           </button>
         </div>
 
-        <div className="space-y-1.5 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-          <ReprogramCountsRow label="Últimos 30 días" c={stats.last30} />
+        {/* Chips de rango — para monitorear qué se está gestionando. */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {REPROGRAM_PRESETS.map((p) => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => setPreset(p.key)}
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-xs font-medium transition",
+                preset === p.key
+                  ? "border-brand-200 bg-brand-50 text-brand-700"
+                  : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        {preset === "rango" && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span>Del</span>
+            <input
+              type="date"
+              value={custom.from}
+              max={custom.to}
+              onChange={(e) => setCustom((s) => ({ ...s, from: e.target.value || s.from }))}
+              className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
+            />
+            <span>al</span>
+            <input
+              type="date"
+              value={custom.to}
+              min={custom.from}
+              max={today}
+              onChange={(e) => setCustom((s) => ({ ...s, to: e.target.value || s.to }))}
+              className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
+            />
+          </div>
+        )}
+
+        <div className="mt-3 space-y-1.5 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+          {ranged ? (
+            <ReprogramCountsRow
+              label={from === to ? from.slice(5) : `${from.slice(5)}–${to.slice(5)}`}
+              c={ranged.counts}
+            />
+          ) : (
+            <p className="text-sm text-slate-400">Cargando…</p>
+          )}
           <ReprogramCountsRow label="Histórico" c={stats.historico} />
         </div>
 
@@ -2329,35 +2441,57 @@ function ReprogramModal({
           })}
         </div>
 
-        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-400 uppercase">Por tienda (histórico)</p>
+        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-400 uppercase">
+          Por tienda ({presetLabel(preset)})
+        </p>
         <div className="space-y-1.5">
-          {Object.entries(stats.porTienda)
-            .sort((a, b) => b[1].total - a[1].total)
-            .map(([sid, c]) => (
-              <ReprogramCountsRow key={sid} label={storeName(sid)} c={c} />
-            ))}
+          {ranged ? (
+            Object.entries(ranged.porTienda).length ? (
+              Object.entries(ranged.porTienda)
+                .sort((a, b) => b[1].total - a[1].total)
+                .map(([sid, c]) => <ReprogramCountsRow key={sid} label={storeName(sid)} c={c} />)
+            ) : (
+              <p className="text-xs text-slate-400">Sin reprogramaciones en este rango.</p>
+            )
+          ) : (
+            <p className="text-xs text-slate-400">Cargando…</p>
+          )}
         </div>
 
-        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-400 uppercase">Por asesor (histórico)</p>
+        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-400 uppercase">
+          Por asesor ({presetLabel(preset)})
+        </p>
         <div className="space-y-1.5">
-          {Object.entries(stats.porAsesor)
-            .sort((a, b) => b[1].total - a[1].total)
-            .map(([uid, c]) => (
-              <ReprogramCountsRow
-                key={uid}
-                label={uid === REPROGRAM_UNASSIGNED ? "Sin asignar" : stats.asesorNames[uid] ?? uid}
-                c={c}
-              />
-            ))}
+          {ranged ? (
+            Object.entries(ranged.porAsesor).length ? (
+              Object.entries(ranged.porAsesor)
+                .sort((a, b) => b[1].total - a[1].total)
+                .map(([uid, c]) => (
+                  <ReprogramCountsRow
+                    key={uid}
+                    label={uid === REPROGRAM_UNASSIGNED ? "Sin asignar" : asesorNames[uid] ?? uid}
+                    c={c}
+                  />
+                ))
+            ) : (
+              <p className="text-xs text-slate-400">Sin reprogramaciones en este rango.</p>
+            )
+          ) : (
+            <p className="text-xs text-slate-400">Cargando…</p>
+          )}
         </div>
 
         <p className="mt-4 text-[11px] leading-snug text-slate-400">
           Universo: guías Fénix creadas por una reprogramación confirmada en el dashboard (las entregas de primer
-          intento de Aliclik no entran). La <b>tasa</b> es entregados ÷ cerrados (entregados + anulados) — lo en curso
-          no la afecta. <b>⚠️ Varados</b>: en curso hace más de {REPROGRAM_STALE_DAYS} días, probables anulados sin
-          confirmar.
+          intento de Aliclik no entran). Los cortes por rango usan la fecha en que se confirmó la reprogramación. La{" "}
+          <b>tasa</b> es entregados ÷ cerrados (entregados + anulados) — lo en curso no la afecta. <b>⚠️ Varados</b>:
+          en curso hace más de {REPROGRAM_STALE_DAYS} días, probables anulados sin confirmar.
         </p>
       </div>
     </div>
   );
+}
+
+function presetLabel(preset: ReprogramPreset): string {
+  return REPROGRAM_PRESETS.find((p) => p.key === preset)?.label.toLowerCase() ?? "rango";
 }

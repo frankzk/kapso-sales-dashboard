@@ -5,11 +5,13 @@ import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import {
+  getReprogramRows,
   getShipmentWithCalls,
   searchOrdersForLink,
   searchShipmentsQuery,
   type OrderLinkCandidate,
 } from "@/lib/shipments-access";
+import type { ReprogramChildRow } from "@/lib/shipments";
 import {
   CLAIM_TTL_MINUTES,
   COURIER_REPORT_RESULTS,
@@ -52,6 +54,18 @@ import type {
 export interface ShipmentActionState {
   error?: string;
   notice?: string;
+}
+
+/** Filas crudas de reprogramaciones (guías Fénix hijas) + nombres de asesor,
+ *  para que el popup recompute los cortes por rango en el cliente. RLS-scoped. */
+export async function loadReprogramData(): Promise<{
+  rows: ReprogramChildRow[];
+  asesorNames: Record<string, string>;
+}> {
+  const stores = await getAccessibleStores();
+  const storeIds = stores.map((s) => s.id);
+  if (!storeIds.length) return { rows: [], asesorNames: {} };
+  return getReprogramRows(storeIds);
 }
 
 async function resolveCurrentFenixEligibility(
