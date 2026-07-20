@@ -520,4 +520,21 @@ describe("computeReprogramStats · métricas de reprogramación Kapso→Fénix",
     expect(s.semanas[7]!.start).toBe("2026-07-13");
     expect(s.semanas[7]!.total).toBe(2);
   });
+
+  it("split por asesor; sin agente cae a 'sin_asignar'", () => {
+    const s = computeReprogramStats(
+      [
+        row({ agent: "u1", status: "entregado" }),
+        row({ agent: "u1", status: "anulado" }),
+        row({ agent: "u2", status: "en_ruta" }),
+        row({ agent: null }),
+      ],
+      NOW,
+    );
+    expect(s.porAsesor.u1).toMatchObject({ total: 2, entregados: 1, anulados: 1 });
+    expect(s.porAsesor.u1!.tasa).toBe(0.5);
+    expect(s.porAsesor.u2).toMatchObject({ total: 1, enCurso: 1 });
+    expect(s.porAsesor.sin_asignar).toMatchObject({ total: 1 });
+    expect(s.asesorNames).toEqual({}); // los nombres los llena el access layer
+  });
 });

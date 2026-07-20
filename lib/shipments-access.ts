@@ -13,10 +13,12 @@ import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
 import {
   computeReprogramStats,
   limaCalendarDayBounds,
+  REPROGRAM_UNASSIGNED,
   type ReprogramChildRow,
   type ReprogramStats,
 } from "@/lib/shipments";
 import { chunk } from "@/lib/access";
+import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import {
   buildShipmentLineage,
@@ -610,29 +612,65 @@ export async function getShipmentWithCalls(
  */
 export async function getReprogramStats(storeIds: string[]): Promise<ReprogramStats> {
   const sb = await createServerSupabase();
-  const childIds: string[] = [];
+  // Padres con guía Fénix: id (para atribuir el asesor) + child id (métricas).
+  const parentToChild = new Map<string, string>(); // parentId → childId
   for (let from = 0; from < 20_000; from += 1000) {
     const { data, error } = await sb
       .from("shipments")
-      .select("fenix_shipment_id")
+      .select("id, fenix_shipment_id")
       .in("store_id", storeIds)
       .not("fenix_shipment_id", "is", null)
       .order("id", { ascending: true })
       .range(from, from + 999);
     if (error) break;
-    const batch = (data as { fenix_shipment_id: string | null }[]) ?? [];
-    for (const r of batch) if (r.fenix_shipment_id) childIds.push(r.fenix_shipment_id);
+    const batch = (data as { id: string; fenix_shipment_id: string | null }[]) ?? [];
+    for (const r of batch) if (r.fenix_shipment_id) parentToChild.set(r.id, r.fenix_shipment_id);
     if (batch.length < 1000) break;
   }
+  const childIds = [...parentToChild.values()];
+  const childToParent = new Map<string, string>();
+  for (const [p, c] of parentToChild) childToParent.set(c, p);
+
+  // Asesor que confirmó cada reprogramación: el log kind='reroute' ("Guía Fénix
+  // creada") queda en el PADRE con el agente. Un padre puede tener más de un log
+  // (reintentos); nos quedamos con el primero con agente.
+  const agentByParent = new Map<string, string>();
+  for (const part of chunk([...parentToChild.keys()], 300)) {
+    const { data } = await sb
+      .from("shipment_calls")
+      .select("shipment_id, agent, occurred_at")
+      .in("shipment_id", part)
+      .eq("kind", "reroute")
+      .not("agent", "is", null)
+      .order("occurred_at", { ascending: true });
+    for (const r of (data as { shipment_id: string; agent: string | null }[]) ?? []) {
+      if (r.agent && !agentByParent.has(r.shipment_id)) agentByParent.set(r.shipment_id, r.agent);
+    }
+  }
+
   const rows: ReprogramChildRow[] = [];
   for (const part of chunk(childIds, 300)) {
     const { data } = await sb
       .from("shipments")
       .select("id, store_id, created_at, delivery_status")
       .in("id", part);
-    for (const r of (data as { store_id: string | null; created_at: string | null; delivery_status: string }[]) ?? []) {
-      rows.push({ storeId: r.store_id, createdAt: r.created_at, status: r.delivery_status });
+    for (const r of (data as { id: string; store_id: string | null; created_at: string | null; delivery_status: string }[]) ?? []) {
+      const parentId = childToParent.get(r.id);
+      rows.push({
+        storeId: r.store_id,
+        createdAt: r.created_at,
+        status: r.delivery_status,
+        agent: parentId ? agentByParent.get(parentId) ?? null : null,
+      });
     }
   }
-  return computeReprogramStats(rows, Date.now());
+
+  const stats = computeReprogramStats(rows, Date.now());
+  // Resolver nombres de los asesores presentes (emails, como en Productividad).
+  const agentIds = Object.keys(stats.porAsesor).filter((k) => k !== REPROGRAM_UNASSIGNED);
+  if (agentIds.length) {
+    const emails = await resolveEmails(agentIds);
+    stats.asesorNames = Object.fromEntries(agentIds.map((id) => [id, emails.get(id) ?? id]));
+  }
+  return stats;
 }
