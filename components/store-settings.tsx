@@ -605,8 +605,10 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
             carrito, dentro del horario configurado. Corre en paralelo a la gestión de las
             asesoras (no cambia el estado del lead) y <strong>se detiene sola</strong> si el
             cliente compra, responde, el carrito se completa o el lead se marca ganado/perdido.
-            Requiere las plantillas <strong>aprobadas por Meta</strong> con {"{{1}}"} = nombre y{" "}
-            {"{{2}}"} = producto(s) del carrito. Cada envío queda en el historial del lead.
+            Requiere las plantillas <strong>aprobadas por Meta</strong> con 4 variables:{" "}
+            {"{{1}}"} nombre, {"{{2}}"} producto(s) x cantidad, {"{{3}}"} precio y {"{{4}}"}{" "}
+            dirección (formato y textos en <code>docs/carritos-secuencia-whatsapp.md</code>).
+            Cada envío queda en el historial del lead.
           </p>
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
