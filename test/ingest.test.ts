@@ -1196,6 +1196,20 @@ describe("dripSkipReason · la regla del drip (pura)", () => {
     ).toBeNull();
   });
 
+  it("cede los carritos a la secuencia cuando cart_seq está activa (evita doble mensaje)", async () => {
+    const { dripSkipReason } = await import("@/lib/leads-ingest");
+    const now = Date.parse(DRIP_NOW);
+    // cart_seq activa: un carrito NR cede su turno a carrito_abandonado_1/2.
+    expect(dripSkipReason(dripLead({ cart_item_count: 2 }), now, true)).toBe("carrito_secuencia");
+    expect(
+      dripSkipReason(dripLead({ draft_order_gid: "gid://shopify/DraftOrder/9" }), now, true),
+    ).toBe("carrito_secuencia");
+    // Sin carrito → el genérico lo cubre igual, aunque cart_seq esté activa.
+    expect(dripSkipReason(dripLead(), now, true)).toBeNull();
+    // cart_seq apagada (default) → el carrito sigue recibiendo el genérico.
+    expect(dripSkipReason(dripLead({ cart_item_count: 2 }), now)).toBeNull();
+  });
+
   it("respeta tope de toques, nombre para {{1}} y el silencio mínimo de 6h", async () => {
     const { dripSkipReason, DRIP_MAX_TOUCHES } = await import("@/lib/leads-ingest");
     const now = Date.parse(DRIP_NOW);
@@ -1354,6 +1368,20 @@ describe("sendSeguimientoDrip · envío y registro", () => {
     expect(isTierLimitError(132015, "Template paused")).toBe(false);
     expect(isTierLimitError(undefined, "Template paused")).toBe(false);
     expect(isTierLimitError(undefined, null)).toBe(false);
+  });
+
+  it("con la secuencia de carritos activa, el drip cede los carritos (solo envía a no-carrito)", async () => {
+    const { sendSeguimientoDrip } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.dripLeads = [
+      dripLead({ id: "C1", phone: "51900000001", cart_item_count: 2 }), // carrito → lo toma carrito_abandonado
+      dripLead({ id: "F1", phone: "51900000002" }), // frío → genérico
+    ];
+    const { fn, calls } = spyTemplate();
+    const r = await sendSeguimientoDrip(fake as any, "store-1", dripCreds({ cart_seq_enabled: true }), fn, DRIP_NOW);
+    expect(r.sent).toBe(1);
+    expect(calls.map((c) => c.params.to)).toEqual(["51900000002"]); // solo el no-carrito
+    expect(fake.dripSends).toHaveLength(1);
   });
 
   it("despacha CARRITOS primero (Meta raciona y vigila la plantilla nueva)", async () => {
