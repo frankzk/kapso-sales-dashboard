@@ -52,6 +52,7 @@ import {
   syncStoreLeads,
   type LeadEnrichStats,
 } from "@/lib/leads-ingest";
+import { runCartSequence } from "@/lib/cart-sequence";
 import type { ConversationRow, DraftOrderRow, OrderRow } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -83,6 +84,15 @@ export interface StoreCreds {
   drip_template_enabled: boolean;
   drip_template_name: string | null;
   drip_template_language: string | null;
+  cart_seq_enabled: boolean;
+  cart_seq_template_1_name: string | null;
+  cart_seq_template_1_language: string | null;
+  cart_seq_template_2_name: string | null;
+  cart_seq_template_2_language: string | null;
+  cart_seq_hours_1: number;
+  cart_seq_hours_2: number;
+  cart_seq_hour_start: number;
+  cart_seq_hour_end: number;
   telegram_bot_token: string | null;
   telegram_chat_id: string | null;
   meta_access_token: string | null;
@@ -125,6 +135,16 @@ export async function getStoreCreds(
     drip_template_enabled: data.drip_template_enabled ?? false,
     drip_template_name: data.drip_template_name ?? null,
     drip_template_language: data.drip_template_language ?? null,
+    // Pre-0040 ⇒ secuencia de carritos apagada, defaults espejo de la migración.
+    cart_seq_enabled: data.cart_seq_enabled ?? false,
+    cart_seq_template_1_name: data.cart_seq_template_1_name ?? null,
+    cart_seq_template_1_language: data.cart_seq_template_1_language ?? null,
+    cart_seq_template_2_name: data.cart_seq_template_2_name ?? null,
+    cart_seq_template_2_language: data.cart_seq_template_2_language ?? null,
+    cart_seq_hours_1: data.cart_seq_hours_1 ?? 3,
+    cart_seq_hours_2: data.cart_seq_hours_2 ?? 24,
+    cart_seq_hour_start: data.cart_seq_hour_start ?? 8,
+    cart_seq_hour_end: data.cart_seq_hour_end ?? 21,
     telegram_bot_token: decryptOrNull(data.telegram_bot_token_enc),
     telegram_chat_id: data.telegram_chat_id ?? null,
     meta_access_token: decryptOrNull(data.meta_access_token_enc),
@@ -658,6 +678,7 @@ export interface SyncReport {
   archived: number;
   metaAdsResolved: number; // Meta ad_ids whose real names we resolved this run
   dripSent: number; // plantillas de seguimiento enviadas esta corrida
+  cartSeqSent: number; // plantillas de carrito abandonado enviadas esta corrida
   requeued: number; // carritos reencolados con atención (olas, máx 2 por lead)
   errors: string[];
 }
@@ -731,6 +752,7 @@ export async function runStoreSync(
     archived: 0,
     metaAdsResolved: 0,
     dripSent: 0,
+    cartSeqSent: 0,
     requeued: 0,
     errors: [],
   };
@@ -898,6 +920,21 @@ export async function runStoreSync(
       if (drip.failed) report.errors.push(`drip: ${drip.failed} envíos fallidos`);
     } catch (e: any) {
       report.errors.push(`drip: ${e.message}`);
+    }
+  }
+
+  // 2c.55) Secuencia de carritos abandonados: 2 plantillas ancladas a la
+  //        creación del carrito (+3h/+24h configurables, horario local). Canal
+  //        independiente del drip y de la gestión humana: solo-envío, nunca
+  //        toca status/category (ver lib/cart-sequence.ts). Gateado por
+  //        Ajustes; best-effort. Pre-0040 es un no-op (enabled=false).
+  if (creds.cart_seq_enabled) {
+    try {
+      const seq = await runCartSequence(admin, storeId, creds);
+      report.cartSeqSent = seq.sent;
+      if (seq.failed) report.errors.push(`cart_seq: ${seq.failed} envíos fallidos`);
+    } catch (e: any) {
+      report.errors.push(`cart_seq: ${e.message}`);
     }
   }
 
