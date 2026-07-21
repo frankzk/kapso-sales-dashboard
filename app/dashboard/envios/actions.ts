@@ -42,6 +42,15 @@ import {
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
 import { evaluateFenix, type FenixEligibility, type FenixStockRow } from "@/lib/fenix";
+import {
+  ajusteDelta,
+  consumeFenixStockOnDelivery,
+  recordStockMovement,
+  STOCK_MOVEMENT_LABEL,
+  type StockMovementKind,
+  type StockMovementRow,
+} from "@/lib/fenix-ledger";
+import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import type {
   LinkedShipmentSummary,
@@ -507,6 +516,11 @@ export async function registerRerouteCall(
     next_followup_at: nextFollowup,
   });
 
+  // Guía Fénix entregada → descuenta 1 del inventario (idempotente, best-effort).
+  if (t.status === "entregado") {
+    await consumeFenixStockOnDelivery(admin, shipmentId).catch(() => {});
+  }
+
   revalidatePath("/dashboard/envios");
   let notice: string;
   if (input.disposition === "programar") {
@@ -797,6 +811,10 @@ export async function registerCourierReportResult(
     next_followup_at: input.result === "reprogramado" ? deliveryDate : null,
   });
 
+  if (transition.status === "entregado") {
+    await consumeFenixStockOnDelivery(admin, shipmentId).catch(() => {});
+  }
+
   revalidatePath("/dashboard/envios");
   return {
     notice: `Guía ${current.guide_code}: ${definition.label} → ${definition.effect}`,
@@ -826,6 +844,9 @@ export async function setShipmentStatus(
     new_status: status,
     note: note?.trim() || null,
   });
+  if (status === "entregado") {
+    await consumeFenixStockOnDelivery(admin, shipmentId).catch(() => {});
+  }
   revalidatePath("/dashboard/envios");
   return { notice: "Estado actualizado." };
 }
@@ -1237,20 +1258,54 @@ export async function upsertFenixStock(input: {
   const city = input.city.trim().toLowerCase();
   const product = input.product.trim();
   if (!city || !product) return { error: "Ciudad y producto son obligatorios." };
+  const targetQty = Math.max(0, Math.trunc(input.quantity));
 
-  // write under RLS as the user (the policy allows org admins)
-  const { error } = await sb.from("fenix_stock").upsert(
-    {
+  const admin = createAdminSupabase();
+  // Saldo previo (para saber si es alta = entrada, o edición = ajuste).
+  const { data: prev } = await admin
+    .from("fenix_stock")
+    .select("id, quantity")
+    .eq("org_id", adminOrg.org_id)
+    .eq("city", city)
+    .eq("product", product)
+    .maybeSingle();
+  const isNew = !prev;
+  const oldQty = (prev as { quantity: number } | null)?.quantity ?? 0;
+
+  const { data: row, error } = await admin
+    .from("fenix_stock")
+    .upsert(
+      {
+        org_id: adminOrg.org_id,
+        city,
+        product,
+        sku: input.sku?.trim() || null,
+        quantity: targetQty,
+        updated_by: user.id,
+      },
+      { onConflict: "org_id,city,product" },
+    )
+    .select("id")
+    .single();
+  if (error || !row) return { error: error?.message ?? "No se pudo guardar." };
+
+  // Kardex: alta con cantidad → entrada; editar la cantidad → ajuste. El saldo
+  // ya quedó en targetQty por el upsert, así que el movimiento lo registra con
+  // ese balance_after (no vuelve a aplicar el delta).
+  const delta = targetQty - oldQty;
+  if (delta !== 0) {
+    await admin.from("fenix_stock_movements").insert({
       org_id: adminOrg.org_id,
+      fenix_stock_id: (row as { id: string }).id,
       city,
       product,
-      sku: input.sku?.trim() || null,
-      quantity: Math.max(0, Math.trunc(input.quantity)),
-      updated_by: user.id,
-    },
-    { onConflict: "org_id,city,product" },
-  );
-  if (error) return { error: error.message };
+      kind: isNew ? "entrada" : "ajuste",
+      delta,
+      balance_after: targetQty,
+      note: isNew ? "Alta de producto" : "Ajuste desde el formulario de stock",
+      created_by: user.id,
+    });
+  }
   const sync = await recomputeFenixEligibility();
   revalidatePath("/dashboard/envios/stock");
   revalidatePath("/dashboard/envios");
@@ -1270,6 +1325,94 @@ export async function deleteFenixStock(id: string): Promise<ShipmentActionState>
   return "error" in sync
     ? { notice: `Stock eliminado. No se pudo sincronizar las guías: ${sync.error}` }
     : { notice: `Stock eliminado — ${sync.updated} guías sincronizadas.` };
+}
+
+/**
+ * Registra un movimiento manual de kardex sobre un renglón de stock (admin):
+ *   entrada       → suma `quantity` unidades.
+ *   salida_merma  → resta `quantity` unidades (daño/pérdida), motivo obligatorio.
+ *   ajuste        → `quantity` es el CONTEO REAL de Fénix; el delta se calcula
+ *                   solo para llevar el saldo a ese número.
+ * Actualiza el saldo + inserta el historial (recordStockMovement) y re-sincroniza
+ * la elegibilidad de las guías.
+ */
+export async function recordFenixStockMovement(input: {
+  stockId: string;
+  kind: Exclude<StockMovementKind, "salida_entrega">;
+  quantity: number;
+  note?: string | null;
+}): Promise<ShipmentActionState> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  const { data: mem } = await sb.from("memberships").select("org_id,role");
+  const adminOrgs = ((mem as { org_id: string; role: string }[]) ?? [])
+    .filter((m) => m.role === "owner" || m.role === "admin")
+    .map((m) => m.org_id);
+  if (!adminOrgs.length) return { error: "Solo un administrador puede mover el stock." };
+
+  const admin = createAdminSupabase();
+  const { data: stock } = await admin
+    .from("fenix_stock")
+    .select("id, org_id, city, product, quantity")
+    .eq("id", input.stockId)
+    .maybeSingle();
+  const s = stock as { id: string; org_id: string; city: string; product: string; quantity: number } | null;
+  if (!s || !adminOrgs.includes(s.org_id)) return { error: "Renglón de stock no encontrado o sin acceso." };
+
+  const qty = Math.max(0, Math.trunc(input.quantity));
+  const note = input.note?.trim() || null;
+  let delta: number;
+  if (input.kind === "entrada") delta = qty;
+  else if (input.kind === "salida_merma") {
+    if (qty <= 0) return { error: "Indica cuántas unidades salieron." };
+    if (!note) return { error: "La merma/pérdida necesita un motivo." };
+    delta = -qty;
+  } else {
+    // ajuste: qty es el conteo real de Fénix
+    delta = ajusteDelta(s.quantity, qty);
+  }
+  if (delta === 0) return { notice: "El saldo ya coincide; no se registró movimiento." };
+
+  const balance = await recordStockMovement(admin, {
+    stockId: s.id,
+    orgId: s.org_id,
+    city: s.city,
+    product: s.product,
+    kind: input.kind,
+    delta,
+    note,
+    createdBy: user.id,
+  });
+  if (balance === null) return { error: "No se pudo registrar el movimiento." };
+
+  const sync = await recomputeFenixEligibility();
+  revalidatePath("/dashboard/envios/stock");
+  revalidatePath("/dashboard/envios");
+  const label = STOCK_MOVEMENT_LABEL[input.kind];
+  return "error" in sync
+    ? { notice: `${label} registrada. Saldo: ${balance}. (No se sincronizaron las guías: ${sync.error})` }
+    : { notice: `${label} registrada — saldo ${balance}, ${sync.updated} guías sincronizadas.` };
+}
+
+/** Historial de movimientos (kardex) de un renglón de stock, con el nombre de
+ *  quien lo registró. RLS-scoped (lectura para miembros de la org). */
+export async function getFenixStockMovements(
+  stockId: string,
+): Promise<(StockMovementRow & { by: string | null })[]> {
+  const sb = await createServerSupabase();
+  const { data } = await sb
+    .from("fenix_stock_movements")
+    .select("id, kind, delta, balance_after, note, shipment_id, created_by, created_at")
+    .eq("fenix_stock_id", stockId)
+    .order("created_at", { ascending: false })
+    .limit(200);
+  const rows = (data as StockMovementRow[]) ?? [];
+  const userIds = [...new Set(rows.map((r) => r.created_by).filter((v): v is string => !!v))];
+  const names = userIds.length ? await resolveEmails(userIds) : new Map<string, string>();
+  return rows.map((r) => ({ ...r, by: r.created_by ? names.get(r.created_by) ?? null : null }));
 }
 
 /**
