@@ -95,7 +95,7 @@ const BRAND_RGB = (() => {
   return `${parseInt(h.slice(0, 2), 16)}, ${parseInt(h.slice(2, 4), 16)}, ${parseInt(h.slice(4, 6), 16)}`;
 })();
 
-/** Franja de actividad 08–20h: 13 celdas con el NÚMERO de leads distintos
+/** Franja de actividad 07–21h: 15 celdas con el NÚMERO de leads distintos
  *  gestionados esa hora adentro, y SEMÁFORO de ritmo juzgado dentro de la
  *  jornada real (heatStatuses): azul = a ritmo (≥RITMO_MIN_HORA, tinte por
  *  intensidad vs el máximo global), ámbar = bajo ritmo, rojo suave = hora
@@ -650,9 +650,9 @@ export function ProductivityTable({
           <th className="px-3 py-2 text-left font-medium">Asesora</th>
           <th
             className="py-2 text-left font-medium"
-            title={`Leads distintos gestionados por hora (08–20h), todas las fuentes · azul = a ritmo (≥${RITMO_MIN_HORA}/h) · ámbar = bajo ritmo · rojo = hora muerta en plena jornada · gris = fuera de jornada`}
+            title={`Leads distintos gestionados por hora (07–21h), todas las fuentes · azul = a ritmo (≥${RITMO_MIN_HORA}/h) · ámbar = bajo ritmo · rojo = hora muerta en plena jornada · gris = fuera de jornada`}
           >
-            Actividad 08–20h
+            Actividad 07–21h
           </th>
           <th className="py-2 text-right font-medium">Horas</th>
           <th className="py-2 text-right font-medium">Leads</th>
