@@ -410,7 +410,7 @@ export function ShipmentsBoard({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-lg font-semibold text-slate-900">Envíos</h1>
+        <h1 className="text-lg font-semibold text-slate-900">Repro Provincia</h1>
         <div className="flex items-center gap-2">
           {/* global search */}
           <div className="relative">

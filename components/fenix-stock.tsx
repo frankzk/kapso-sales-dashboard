@@ -83,7 +83,7 @@ export function FenixStockEditor({
             </button>
           )}
           <a href="/dashboard/envios" className="text-sm text-brand-700 hover:underline">
-            ← Volver a Envíos
+            ← Volver a Repro Provincia
           </a>
         </div>
       </div>

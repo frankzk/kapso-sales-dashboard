@@ -150,7 +150,7 @@ function AppShot() {
               <span className="text-xs font-semibold text-slate-700">Kapso Sales</span>
             </div>
             <nav className="mt-3 space-y-0.5">
-              {([["Resumen", true], ["Ventas", false], ["Conversión", false], ["Leads", false], ["Atribución Meta", false], ["Envíos", false], ["Equipo", false]] as [string, boolean][]).map(([label, active]) => (
+              {([["Resumen", true], ["Ventas", false], ["Conversión", false], ["Leads", false], ["Atribución Meta", false], ["Repro Provincia", false], ["Equipo", false]] as [string, boolean][]).map(([label, active]) => (
                 <div key={label} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[11px] ${active ? "bg-brand-50 font-semibold text-brand-700" : "text-slate-500"}`}>
                   <span className={`h-1.5 w-1.5 rounded-full ${active ? "bg-brand-500" : "bg-slate-300"}`} />
                   {label}
