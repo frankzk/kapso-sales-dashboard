@@ -688,17 +688,19 @@ export const REPROGRAM_STALE_DAYS = 7;
 
 export interface ReprogramChildRow {
   storeId: string | null;
-  createdAt: string | null; // cuándo se confirmó la reprogramación (guía hija creada)
-  status: string; // delivery_status actual de la guía Fénix
+  createdAt: string | null; // cuándo se confirmó la reprogramación
+  status: string; // delivery_status actual de la guía
   agent?: string | null; // user id de quien confirmó la reprogramación (null = histórico sin log)
+  fenix?: boolean; // true (o ausente) = guía Fénix; false = reprogramación Aliclik
 }
 
 /** Clave del asesor no atribuible (guías previas a que se registrara el agente). */
 export const REPROGRAM_UNASSIGNED = "sin_asignar";
 
 export interface ReprogramCounts {
-  total: number;
-  entregados: number;
+  total: number; // reprogramaciones confirmadas (Aliclik + Fénix)
+  entregados: number; // entregados de ambos couriers
+  entregadosFenix: number; // de `entregados`, los que salieron por una guía Fénix (dato aparte)
   anulados: number;
   enCurso: number; // resto: aún sin desenlace
   enCursoViejos: number; // en curso hace más de REPROGRAM_STALE_DAYS días (probables muertos)
@@ -731,15 +733,17 @@ function limaWeekStart(ms: number): string {
 }
 
 function emptyReprogramCounts(): ReprogramCounts {
-  return { total: 0, entregados: 0, anulados: 0, enCurso: 0, enCursoViejos: 0, tasa: null };
+  return { total: 0, entregados: 0, entregadosFenix: 0, anulados: 0, enCurso: 0, enCursoViejos: 0, tasa: null };
 }
 
 type ReprogramKind = "entregado" | "anulado" | "curso";
 
-function bumpCounts(c: ReprogramCounts, kind: ReprogramKind, viejo: boolean): void {
+function bumpCounts(c: ReprogramCounts, kind: ReprogramKind, viejo: boolean, fenix: boolean): void {
   c.total += 1;
-  if (kind === "entregado") c.entregados += 1;
-  else if (kind === "anulado") c.anulados += 1;
+  if (kind === "entregado") {
+    c.entregados += 1;
+    if (fenix) c.entregadosFenix += 1;
+  } else if (kind === "anulado") c.anulados += 1;
   else {
     c.enCurso += 1;
     if (viejo) c.enCursoViejos += 1;
@@ -778,9 +782,10 @@ export function reprogramRangeStats(
     if (!Number.isFinite(ms) || ms < startMs || ms >= endMs) continue;
     const kind = reprogramKindOf(r.status);
     const viejo = kind === "curso" && ms < staleCut;
-    bumpCounts(counts, kind, viejo);
-    bumpCounts((porTienda[r.storeId ?? "otras"] ??= emptyReprogramCounts()), kind, viejo);
-    bumpCounts((porAsesor[r.agent ?? REPROGRAM_UNASSIGNED] ??= emptyReprogramCounts()), kind, viejo);
+    const fenix = r.fenix !== false;
+    bumpCounts(counts, kind, viejo, fenix);
+    bumpCounts((porTienda[r.storeId ?? "otras"] ??= emptyReprogramCounts()), kind, viejo, fenix);
+    bumpCounts((porAsesor[r.agent ?? REPROGRAM_UNASSIGNED] ??= emptyReprogramCounts()), kind, viejo, fenix);
   }
   finishCounts(counts);
   for (const c of Object.values(porTienda)) finishCounts(c);
@@ -820,10 +825,11 @@ export function computeReprogramStats(rows: ReprogramChildRow[], nowMs: number):
     const ms = r.createdAt ? Date.parse(r.createdAt) : NaN;
     const kind = reprogramKindOf(r.status);
     const viejo = kind === "curso" && Number.isFinite(ms) && ms < staleCut;
-    bumpCounts(historico, kind, viejo);
-    if (Number.isFinite(ms) && ms >= last30Cut) bumpCounts(last30, kind, viejo);
-    bumpCounts((porTienda[r.storeId ?? "otras"] ??= emptyReprogramCounts()), kind, viejo);
-    bumpCounts((porAsesor[r.agent ?? REPROGRAM_UNASSIGNED] ??= emptyReprogramCounts()), kind, viejo);
+    const fenix = r.fenix !== false;
+    bumpCounts(historico, kind, viejo, fenix);
+    if (Number.isFinite(ms) && ms >= last30Cut) bumpCounts(last30, kind, viejo, fenix);
+    bumpCounts((porTienda[r.storeId ?? "otras"] ??= emptyReprogramCounts()), kind, viejo, fenix);
+    bumpCounts((porAsesor[r.agent ?? REPROGRAM_UNASSIGNED] ??= emptyReprogramCounts()), kind, viejo, fenix);
     if (Number.isFinite(ms)) {
       const wk = semanas.get(limaWeekStart(ms));
       if (wk) {

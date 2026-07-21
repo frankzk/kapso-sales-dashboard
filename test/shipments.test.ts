@@ -496,6 +496,22 @@ describe("computeReprogramStats · métricas de reprogramación Kapso→Fénix",
     expect(s.historico.tasa).toBeNull();
   });
 
+  it("cuenta Aliclik + Fénix; entregadosFenix es solo los de guía Fénix", () => {
+    const s = computeReprogramStats(
+      [
+        row({ status: "entregado", fenix: true, agent: "u1" }), // entregado por Fénix
+        row({ status: "entregado", fenix: false, agent: "u1" }), // entregado por Aliclik
+        row({ status: "anulado", fenix: false, agent: "u2" }),
+      ],
+      NOW,
+    );
+    expect(s.historico).toMatchObject({ total: 3, entregados: 2, entregadosFenix: 1, anulados: 1 });
+    expect(s.historico.tasa).toBe(2 / 3); // 2 entregados de 3 cerrados
+    // el asesor u1 hizo 2 reprogramaciones (1 Fénix, 1 Aliclik); ambas cuentan
+    expect(s.porAsesor.u1).toMatchObject({ total: 2, entregados: 2, entregadosFenix: 1 });
+    expect(s.porAsesor.u2).toMatchObject({ total: 1, anulados: 1, entregadosFenix: 0 });
+  });
+
   it("marca como varados los en-curso con más de 7 días", () => {
     const s = computeReprogramStats([row({ createdAt: daysAgo(10) }), row({ createdAt: daysAgo(2) })], NOW);
     expect(s.historico.enCursoViejos).toBe(1);

@@ -2237,9 +2237,11 @@ function ReprogramStrip({ stats, stores }: { stats: ReprogramStats; stores: Stor
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
         <span className="font-semibold text-slate-800">🔁 Reprogramados en Kapso</span>
         <span className="text-slate-400">últimos 30 días:</span>
-        <span className="font-semibold text-slate-800">{c.total}</span>
+        <span className="font-semibold text-slate-800" title="Reprogramaciones confirmadas (Aliclik + Fénix)">
+          {c.total}
+        </span>
         <span>
-          ✅ {c.entregados} entregados por Fénix
+          ✅ {c.entregados} entregados
           {pct && (
             <>
               {" "}
@@ -2247,6 +2249,7 @@ function ReprogramStrip({ stats, stores }: { stats: ReprogramStats; stores: Stor
             </>
           )}
         </span>
+        <span className="text-sky-700">🔁 {c.entregadosFenix} por Fénix</span>
         <span>✖ {c.anulados} anulados</span>
         <span>
           🚚 {c.enCurso} en curso
@@ -2268,8 +2271,13 @@ function ReprogramCountsRow({ label, c }: { label: string; c: ReprogramCounts })
   return (
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-sm">
       <span className="w-28 shrink-0 truncate font-medium text-slate-700">{label}</span>
-      <span className="tabular-nums text-slate-800">{c.total}</span>
-      <span className="tabular-nums text-emerald-700">✅ {c.entregados}</span>
+      <span className="tabular-nums text-slate-800" title="Reprogramaciones (Aliclik + Fénix)">{c.total}</span>
+      <span className="tabular-nums text-emerald-700" title="Entregados (ambos couriers)">✅ {c.entregados}</span>
+      {c.entregadosFenix > 0 && (
+        <span className="tabular-nums text-sky-700" title="De los entregados, los que salieron por Fénix">
+          🔁 {c.entregadosFenix} Fénix
+        </span>
+      )}
       <span className="tabular-nums text-slate-500">✖ {c.anulados}</span>
       <span className="tabular-nums text-slate-500">🚚 {c.enCurso}</span>
       {c.enCursoViejos > 0 && <span className="tabular-nums text-amber-600">⚠️ {c.enCursoViejos}</span>}
@@ -2359,7 +2367,7 @@ function ReprogramModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-slate-900">🔁 Reprogramaciones Kapso → Fénix</h2>
+          <h2 className="text-base font-semibold text-slate-900">🔁 Reprogramaciones (Aliclik + Fénix)</h2>
           <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600">
             ✕
           </button>
@@ -2482,10 +2490,11 @@ function ReprogramModal({
         </div>
 
         <p className="mt-4 text-[11px] leading-snug text-slate-400">
-          Universo: guías Fénix creadas por una reprogramación confirmada en el dashboard (las entregas de primer
-          intento de Aliclik no entran). Los cortes por rango usan la fecha en que se confirmó la reprogramación. La{" "}
-          <b>tasa</b> es entregados ÷ cerrados (entregados + anulados) — lo en curso no la afecta. <b>⚠️ Varados</b>:
-          en curso hace más de {REPROGRAM_STALE_DAYS} días, probables anulados sin confirmar.
+          Universo: reprogramaciones confirmadas en el dashboard — <b>Aliclik</b> (la guía sigue en Aliclik) y{" "}
+          <b>Fénix</b> (se creó una guía Fénix); las entregas de primer intento no entran. <b>🔁 por Fénix</b> es el
+          subconjunto de entregados que salió por una guía Fénix. Los cortes por rango usan la fecha en que se confirmó
+          la reprogramación. La <b>tasa</b> es entregados ÷ cerrados (entregados + anulados) — lo en curso no la afecta.{" "}
+          <b>⚠️ Varados</b>: en curso hace más de {REPROGRAM_STALE_DAYS} días, probables anulados sin confirmar.
         </p>
       </div>
     </div>
