@@ -34,6 +34,11 @@ export function FenixStockEditor({
   const [quantity, setQuantity] = useState("0");
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const [cityFilter, setCityFilter] = useState<string | null>(null); // null = todas
+
+  // Provincias presentes en el inventario, para el filtro.
+  const cityOptions = Array.from(new Set(rows.map((r) => r.city))).sort((a, b) => a.localeCompare(b));
+  const visibleRows = cityFilter ? rows.filter((r) => r.city === cityFilter) : rows;
 
   function add() {
     start(async () => {
@@ -171,6 +176,42 @@ export function FenixStockEditor({
         {rows.length === 0 ? (
           <p className="p-5 text-sm text-slate-400">Sin stock registrado.</p>
         ) : (
+          <>
+            {cityOptions.length > 1 && (
+              <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-200 px-4 py-2.5">
+                <span className="text-xs text-slate-400">Provincia:</span>
+                <button
+                  type="button"
+                  onClick={() => setCityFilter(null)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-xs font-medium capitalize transition",
+                    cityFilter === null
+                      ? "border-brand-200 bg-brand-50 text-brand-700"
+                      : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+                  )}
+                >
+                  Todas
+                </button>
+                {cityOptions.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setCityFilter(c)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-xs font-medium capitalize transition",
+                      cityFilter === c
+                        ? "border-brand-200 bg-brand-50 text-brand-700"
+                        : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+                    )}
+                  >
+                    {c}
+                  </button>
+                ))}
+                <span className="ml-auto text-xs text-slate-400">
+                  {visibleRows.length} producto(s) · {visibleRows.reduce((n, r) => n + r.quantity, 0)} u.
+                </span>
+              </div>
+            )}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -182,7 +223,7 @@ export function FenixStockEditor({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {visibleRows.map((r) => (
                   <tr key={r.id} className="border-b border-slate-100 last:border-0">
                     <td className="px-4 py-2.5 capitalize text-slate-700">{r.city}</td>
                     <td className="px-4 py-2.5 text-slate-700">{r.product}</td>
@@ -203,6 +244,7 @@ export function FenixStockEditor({
               </tbody>
             </table>
           </div>
+          </>
         )}
       </Card>
     </div>
