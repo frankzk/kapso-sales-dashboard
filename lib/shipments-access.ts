@@ -11,6 +11,7 @@ import type {
 } from "@/lib/types";
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
 import {
+  ALICLIK_REPROGRAM_OUTCOMES,
   computeReprogramStats,
   limaCalendarDayBounds,
   type ReprogramChildRow,
@@ -695,7 +696,7 @@ async function buildReprogramRows(
       .select("id, store_id, delivery_status")
       .in("store_id", storeIds)
       .is("fenix_shipment_id", null)
-      .in("reroute_outcome", ["reprogramado_aliclik", "reprogramado_aliclik_manual"])
+      .in("reroute_outcome", ALICLIK_REPROGRAM_OUTCOMES)
       .order("id", { ascending: true })
       .range(from, from + 999);
     if (error) break;
