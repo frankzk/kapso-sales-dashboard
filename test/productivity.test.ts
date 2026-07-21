@@ -253,7 +253,7 @@ describe("storeInitials (sigla de tienda para los chips)", () => {
 });
 
 describe("computeHourlyActivity (heatmap: leads DISTINTOS gestionados por hora local)", () => {
-  const cells = HEAT_END - HEAT_START + 1; // 13
+  const cells = HEAT_END - HEAT_START + 1; // 15
 
   it("bucketiza por hora LOCAL de Lima (UTC−5) contando leads distintos", () => {
     const { byAgent, mode } = computeHourlyActivity({
@@ -286,7 +286,7 @@ describe("computeHourlyActivity (heatmap: leads DISTINTOS gestionados por hora l
     expect(byAgent.u1![11 - HEAT_START]).toBe(1);
   });
 
-  it("descarta horas fuera del turno 08–20 (no las pliega a los bordes)", () => {
+  it("descarta horas fuera del turno 07–21 (no las pliega a los bordes)", () => {
     const { byAgent, max } = computeHourlyActivity({
       events: [
         { agent: "u1", occurred_at: "2026-07-09T11:00:00Z", ref: "L1" }, // 06h Lima → fuera

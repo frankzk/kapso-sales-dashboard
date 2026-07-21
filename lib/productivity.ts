@@ -227,11 +227,11 @@ export function localPresetRange(days: number, tz: string, nowIso = new Date().t
 
 // ── Actividad por hora (heatmap "¿está conectada trabajando?") ────────────────
 
-export const HEAT_START = 8; // business shift, aligned with the leads burndown
-export const HEAT_END = 20; // inclusive → 13 cells
+export const HEAT_START = 7; // business shift, aligned with the leads burndown
+export const HEAT_END = 21; // inclusive → 15 cells
 
 export interface HourlyActivity {
-  /** userId → 13 celdas (horas locales 08..20) con LEADS/ENVÍOS DISTINTOS gestionados. */
+  /** userId → 15 celdas (horas locales 07..21) con LEADS/ENVÍOS DISTINTOS gestionados. */
   byAgent: Record<string, number[]>;
   /** Máximo global (≥ 1) para que todas las filas compartan la escala de color. */
   max: number;
@@ -245,8 +245,8 @@ export interface HourlyActivity {
  *  one hour count as 1 — raw action counts reward busywork, distinct leads
  *  don't. Dedupe is per (hour, LOCAL DAY), so in avg mode the same lead worked
  *  at 10h on 7 different days contributes 1 per day (avg 1), not 1/7. Hours
- *  outside the 08–20 shift are DROPPED — folding them to the edges would
- *  fabricate fake 08h/20h peaks. Pure. */
+ *  outside the 07–21 shift are DROPPED — folding them to the edges would
+ *  fabricate fake 07h/21h peaks. Pure. */
 export function computeHourlyActivity(opts: {
   events: { agent: string | null; occurred_at: string | null; ref: string }[];
   tz: string;
@@ -814,7 +814,7 @@ export function attachDeltas(
 const WEEKDAYS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
 export interface AdvisorBoardRow extends AdvisorStatWithDelta {
-  heat: number[]; // 13 celdas, horas locales 08..20 (actividad, SIN lente de fuente)
+  heat: number[]; // 15 celdas, horas locales 07..21 (actividad, SIN lente de fuente)
   trend: TrendCell[]; // 7 días terminando en range.to (CON lente de fuente)
   online: boolean; // presencia al momento del render
   /** 1ª gestión de los leads del rango que ELLA tocó primero (sin lente). */
