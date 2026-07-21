@@ -678,8 +678,53 @@ async function buildReprogramRows(
         createdAt: r.created_at,
         status: r.delivery_status,
         agent: parentId ? agentByParent.get(parentId) ?? null : null,
+        fenix: true,
       });
     }
+  }
+
+  // Reprogramaciones ALICLIK: la guía sigue en Aliclik (sin guía hija), marcada
+  // por reroute_outcome. Cuentan como reprogramación confirmada por su asesor,
+  // pero NO como "entregado por Fénix" (fenix: false). Se atribuyen al log
+  // 'reroute' más reciente con agente (la reprogramación que las dejó así); su
+  // fecha de confirmación es la de ese log.
+  const aliclik: { id: string; store_id: string | null; delivery_status: string }[] = [];
+  for (let from = 0; from < 20_000; from += 1000) {
+    const { data, error } = await sb
+      .from("shipments")
+      .select("id, store_id, delivery_status")
+      .in("store_id", storeIds)
+      .is("fenix_shipment_id", null)
+      .in("reroute_outcome", ["reprogramado_aliclik", "reprogramado_aliclik_manual"])
+      .order("id", { ascending: true })
+      .range(from, from + 999);
+    if (error) break;
+    const batch = (data as { id: string; store_id: string | null; delivery_status: string }[]) ?? [];
+    aliclik.push(...batch);
+    if (batch.length < 1000) break;
+  }
+  const aliclikMeta = new Map<string, { agent: string | null; at: string | null }>();
+  for (const part of chunk(aliclik.map((a) => a.id), 300)) {
+    const { data } = await sb
+      .from("shipment_calls")
+      .select("shipment_id, agent, occurred_at")
+      .in("shipment_id", part)
+      .eq("kind", "reroute")
+      .not("agent", "is", null)
+      .order("occurred_at", { ascending: false });
+    for (const r of (data as { shipment_id: string; agent: string | null; occurred_at: string | null }[]) ?? []) {
+      if (!aliclikMeta.has(r.shipment_id)) aliclikMeta.set(r.shipment_id, { agent: r.agent, at: r.occurred_at });
+    }
+  }
+  for (const a of aliclik) {
+    const meta = aliclikMeta.get(a.id);
+    rows.push({
+      storeId: a.store_id,
+      createdAt: meta?.at ?? null,
+      status: a.delivery_status,
+      agent: meta?.agent ?? null,
+      fenix: false,
+    });
   }
 
   // Resolver nombres de los asesores presentes (emails, como en Productividad).
