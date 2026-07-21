@@ -185,6 +185,21 @@ describe("variables de plantilla (formato de la automatización existente)", () 
       cartTemplateParams(lead({ cart_value: 158 }), { ...snap, total_amount: null })?.[2],
     ).toBe("S/.158.00");
   });
+  it("sanitiza los parámetros: colapsa saltos/espacios (evita el #132018 de Meta)", () => {
+    const snap = {
+      created_at: CART_AT,
+      line_items: [{ title: "Set Pelador Premium", quantity: 1 }],
+      total_amount: 99,
+      currency: "PEN",
+      // dirección con salto de línea + espacios múltiples → Meta la rechazaría cruda
+      address1: "Av. Principal 123\n\n  Dpto   401",
+      district: "Chorrillos",
+      referencia: null,
+    };
+    const params = cartTemplateParams(lead({ name: "  María\n José " }), snap);
+    expect(params?.[0]).toBe("María José"); // nombre colapsado
+    expect(params?.[3]).toBe("Av. Principal 123 Dpto 401, Chorrillos"); // sin saltos ni dobles espacios
+  });
 });
 
 describe("cartSeqWithinHours", () => {

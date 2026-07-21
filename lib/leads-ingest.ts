@@ -1308,6 +1308,22 @@ export function isTierLimitError(code: number | undefined, msg: string | null | 
   return !!msg && /rate limit|messaging limit|limit (hit|reached)|too many messages/i.test(msg);
 }
 
+/** Limpia un parámetro de plantilla para Meta: colapsa saltos de línea y
+ *  espacios múltiples (Meta rechaza newlines y 4+ espacios seguidos con
+ *  `#132018 issue with the parameters`) y lo recorta a un largo sano — los
+ *  params de cuerpo topan ~1024, pero 120 basta para nombre/producto/precio/
+ *  dirección y evita textos gigantes que también gatillan el rechazo. */
+export function sanitizeTemplateParam(s: string | null | undefined): string {
+  return (s ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+/** WhatsApp de Perú válido para envío: código país 51 + 9 dígitos de móvil. Un
+ *  número malformado (dígitos de menos, prefijo raro) va a la nada — se salta
+ *  SIN gastar toque en vez de quemar un envío que Meta acepta pero no entrega. */
+export function isSendablePhone(phone: string | null | undefined): boolean {
+  return /^51\d{9}$/.test((phone ?? "").trim());
+}
+
 /**
  * Un pase del drip para una tienda: selecciona los leads elegibles (SQL grueso
  * + `dripSkipReason` fino), envía la plantilla y registra el toque. Cada envío
@@ -1372,9 +1388,12 @@ export async function sendSeguimientoDrip(
   // (los toma carrito_abandonado_1/2) y solo cubre los no-carrito.
   const cartSeqOwnsCarts = !!creds.cart_seq_enabled;
   const eligible = rows.filter((l) => dripSkipReason(l, nowMs, cartSeqOwnsCarts) === null);
-  // Sin número resoluble (ni el del chat del lead ni default de tienda) no hay
-  // desde dónde enviar: fuera del lote SIN consumir toque (nada se intentó).
-  const sendable = eligible.filter((l) => l.wa_phone_number_id || creds.whatsapp_phone_number_id);
+  // Sin número resoluble (ni el del chat del lead ni default de tienda) o con
+  // teléfono destino malformado no hay a dónde enviar: fuera del lote SIN
+  // consumir toque (nada se intentó).
+  const sendable = eligible.filter(
+    (l) => (l.wa_phone_number_id || creds.whatsapp_phone_number_id) && isSendablePhone(l.phone),
+  );
   report.skipped = rows.length - sendable.length;
   // Re-afina la prioridad en JS: el orden SQL usa cart_item_count, pero un
   // carrito solo-con-draft (count nulo) también debe adelantarse.
@@ -1395,7 +1414,7 @@ export async function sendSeguimientoDrip(
           to: l.phone,
           templateName: creds.drip_template_name,
           language: creds.drip_template_language ?? "es",
-          bodyParams: [l.name!],
+          bodyParams: [sanitizeTemplateParam(l.name)],
         },
       );
       ok = send.ok;
