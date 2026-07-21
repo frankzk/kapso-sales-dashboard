@@ -8,6 +8,7 @@ import {
   evaluateAliclikReschedule,
   getFenixDeliverySchedule,
   matchesAliclikRouteFilter,
+  reprogramCourierOf,
   type ReprogramChildRow,
   categoryOf,
   isCallable,
@@ -206,6 +207,31 @@ describe("matchesAliclikRouteFilter", () => {
       ),
     ).toBe(false);
     expect(matchesAliclikRouteFilter(pendingAliclik, "all", friday)).toBe(true);
+  });
+});
+
+describe("reprogramCourierOf (filtro Aliclik vs Fénix en 'En ruta')", () => {
+  it("marca como Fénix las guías hijas (courier=fenix)", () => {
+    expect(reprogramCourierOf({ courier: "fenix", reroute_outcome: null })).toBe("fenix");
+    // courier fenix manda aunque tuviera un outcome heredado
+    expect(reprogramCourierOf({ courier: "fenix", reroute_outcome: "reprogramado_aliclik" })).toBe(
+      "fenix",
+    );
+  });
+
+  it("marca como Aliclik las guías con reroute_outcome de reprogramación Aliclik", () => {
+    expect(reprogramCourierOf({ courier: "aliclik", reroute_outcome: "reprogramado_aliclik" })).toBe(
+      "aliclik",
+    );
+    expect(
+      reprogramCourierOf({ courier: "aliclik", reroute_outcome: "reprogramado_aliclik_manual" }),
+    ).toBe("aliclik");
+  });
+
+  it("devuelve null cuando no hubo reprogramación registrada", () => {
+    expect(reprogramCourierOf({ courier: "aliclik", reroute_outcome: null })).toBeNull();
+    expect(reprogramCourierOf({ courier: "aliclik", reroute_outcome: "sin_cobertura" })).toBeNull();
+    expect(reprogramCourierOf({})).toBeNull();
   });
 });
 

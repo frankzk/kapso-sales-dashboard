@@ -15,12 +15,14 @@ import {
   labelOf,
   matchesAliclikRouteFilter,
   normalizeCity,
+  reprogramCourierOf,
   rescheduleGuideCode,
   SHIPMENT_CLAIM_HEARTBEAT_MS,
   shipmentRequiresCourierResult,
   statusSince,
   type AliclikRescheduleReason,
   type AliclikRouteFilter,
+  type ReprogramCourier,
   type CourierReportResult,
   type RerouteDisposition,
 } from "@/lib/shipments";
@@ -229,6 +231,8 @@ export function ShipmentsBoard({
   const [uncontactedOnly, setUncontactedOnly] = useState(false);
   const [fenixFilter, setFenixFilter] = useState<FenixAvailabilityFilter>("all");
   const [aliclikRouteFilter, setAliclikRouteFilter] = useState<AliclikRouteFilter>("all");
+  // "En ruta"/"Entregado": distinguir guías reprogramadas con Aliclik vs Fénix.
+  const [reprogFilter, setReprogFilter] = useState<"all" | ReprogramCourier>("all");
   const [exportingFenix, setExportingFenix] = useState(false);
   const [fenixExportError, setFenixExportError] = useState<string | null>(null);
 
@@ -260,6 +264,7 @@ export function ShipmentsBoard({
     setUncontactedOnly(false);
     setFenixFilter("all");
     setAliclikRouteFilter("all");
+    setReprogFilter("all");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
@@ -303,6 +308,7 @@ export function ShipmentsBoard({
       (!uncontactedOnly ||
         view !== "pendiente" ||
         isShipmentReadyForContact(s.contact_count, s.next_followup_at)) &&
+      (reprogFilter === "all" || reprogramCourierOf(s) === reprogFilter) &&
       matchesFenixAvailability(s, fenixFilter),
   );
   const aliclikRouteCounts = filteredWithoutAliclikRoute.reduce(
@@ -332,6 +338,20 @@ export function ShipmentsBoard({
   );
   const fenixRowsForExport = filtered.filter(
     (shipment) => shipment.courier === "fenix" && shipment.status_category === "in_route",
+  );
+
+  // "Reprogramado por": conteos sobre la vista cargada (independiente de los
+  // demás filtros) para etiquetar las opciones. Solo tiene sentido donde
+  // conviven guías reprogramadas (En ruta y Entregado).
+  const showReprogFilter = view === "en_ruta" || view === "entregado";
+  const reprogCounts = shipments.reduce(
+    (acc, s) => {
+      const courier = reprogramCourierOf(s);
+      if (courier === "aliclik") acc.aliclik += 1;
+      else if (courier === "fenix") acc.fenix += 1;
+      return acc;
+    },
+    { aliclik: 0, fenix: 0 },
   );
 
   const searchActive = search.trim().length >= 2;
@@ -608,6 +628,27 @@ export function ShipmentsBoard({
                   <option value="sin_cobertura">Fuera de cobertura</option>
                 </select>
               </label>
+              {showReprogFilter && (
+                <label className="flex items-center gap-1.5 text-xs text-slate-400">
+                  Reprogramado por:
+                  <select
+                    value={reprogFilter}
+                    onChange={(e) => setReprogFilter(e.target.value as "all" | ReprogramCourier)}
+                    className={cn(
+                      "rounded-lg border px-2 py-1 text-xs font-medium",
+                      reprogFilter === "aliclik"
+                        ? "border-indigo-300 bg-indigo-50 text-indigo-800"
+                        : reprogFilter === "fenix"
+                          ? "border-violet-300 bg-violet-50 text-violet-800"
+                          : "border-slate-200 bg-white text-slate-700",
+                    )}
+                  >
+                    <option value="all">Aliclik y Fénix</option>
+                    <option value="aliclik">Aliclik ({reprogCounts.aliclik})</option>
+                    <option value="fenix">Fénix ({reprogCounts.fenix})</option>
+                  </select>
+                </label>
+              )}
               <label className="flex items-center gap-1.5 text-xs text-slate-600">
                 <input
                   type="checkbox"
@@ -647,6 +688,7 @@ export function ShipmentsBoard({
                 uncontactedTodayOnly ||
                 uncontactedOnly ||
                 aliclikRouteFilter !== "all" ||
+                reprogFilter !== "all" ||
                 fenixFilter !== "all") && (
                 <button
                   onClick={() => {
@@ -658,6 +700,7 @@ export function ShipmentsBoard({
                     setUncontactedTodayOnly(false);
                     setUncontactedOnly(false);
                     setAliclikRouteFilter("all");
+                    setReprogFilter("all");
                     setFenixFilter("all");
                   }}
                   className="text-xs text-slate-500 hover:underline"

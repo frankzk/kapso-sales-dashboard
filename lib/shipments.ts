@@ -202,6 +202,27 @@ export function matchesAliclikRouteFilter(
   return filter === "aliclik_available" ? decision.eligible : !decision.eligible;
 }
 
+/** Los dos `reroute_outcome` que marcan una reprogramación hecha con Aliclik
+ *  (la misma guía sigue en curso; no se genera una guía hija Fénix). */
+export const ALICLIK_REPROGRAM_OUTCOMES = ["reprogramado_aliclik", "reprogramado_aliclik_manual"];
+
+export type ReprogramCourier = "fenix" | "aliclik";
+
+/** Con qué courier se reprogramó una guía — insumo del filtro "En ruta":
+ *  Fénix → se generó una guía hija (`courier='fenix'`); Aliclik → la misma guía
+ *  quedó con un `reroute_outcome` de reprogramación Aliclik. `null` = ni una ni
+ *  otra (p. ej. una guía que pasó a En ruta sin reprogramación registrada). */
+export function reprogramCourierOf(input: {
+  courier?: string | null;
+  reroute_outcome?: string | null;
+}): ReprogramCourier | null {
+  if ((input.courier ?? "").toLowerCase() === "fenix") return "fenix";
+  if (input.reroute_outcome && ALICLIK_REPROGRAM_OUTCOMES.includes(input.reroute_outcome)) {
+    return "aliclik";
+  }
+  return null;
+}
+
 function selectedUtcDateKey(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const date = new Date(iso);
