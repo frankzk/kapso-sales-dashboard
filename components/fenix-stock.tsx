@@ -8,10 +8,13 @@ import type { DemandRow } from "@/lib/fenix-demand";
 import type { FenixStockRowDb, StoreSummary } from "@/lib/types";
 import {
   deleteFenixStock,
+  getFenixStockMovements,
   recomputeFenixEligibility,
+  recordFenixStockMovement,
   searchStockProducts,
   upsertFenixStock,
 } from "@/app/dashboard/envios/actions";
+import { STOCK_MOVEMENT_LABEL, type StockMovementKind } from "@/lib/fenix-ledger";
 
 type ProductResult = Awaited<ReturnType<typeof searchStockProducts>>[number];
 
@@ -35,6 +38,7 @@ export function FenixStockEditor({
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const [cityFilter, setCityFilter] = useState<string | null>(null); // null = todas
+  const [kardexRow, setKardexRow] = useState<FenixStockRowDb | null>(null);
 
   // Provincias presentes en el inventario, para el filtro.
   const cityOptions = Array.from(new Set(rows.map((r) => r.city))).sort((a, b) => a.localeCompare(b));
@@ -218,8 +222,8 @@ export function FenixStockEditor({
                 <tr className="border-b border-slate-200 text-xs text-slate-500">
                   <th className="px-4 py-2.5 text-left font-medium">Ciudad</th>
                   <th className="px-4 py-2.5 text-left font-medium">Producto</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Cantidad</th>
-                  {canEdit && <th className="px-4 py-2.5"></th>}
+                  <th className="px-4 py-2.5 text-right font-medium">Saldo</th>
+                  <th className="px-4 py-2.5"></th>
                 </tr>
               </thead>
               <tbody>
@@ -227,18 +231,33 @@ export function FenixStockEditor({
                   <tr key={r.id} className="border-b border-slate-100 last:border-0">
                     <td className="px-4 py-2.5 capitalize text-slate-700">{r.city}</td>
                     <td className="px-4 py-2.5 text-slate-700">{r.product}</td>
-                    <td className="px-4 py-2.5 text-right text-slate-700">{r.quantity}</td>
-                    {canEdit && (
-                      <td className="px-4 py-2.5 text-right">
+                    <td
+                      className={cn(
+                        "px-4 py-2.5 text-right font-medium tabular-nums",
+                        r.quantity < 0 ? "text-rose-600" : "text-slate-700",
+                      )}
+                    >
+                      {r.quantity}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <div className="flex justify-end gap-3">
                         <button
-                          onClick={() => remove(r.id)}
-                          disabled={pending}
-                          className="text-xs text-rose-600 hover:underline"
+                          onClick={() => setKardexRow(r)}
+                          className="text-xs text-brand-700 hover:underline"
                         >
-                          Eliminar
+                          Movimientos
                         </button>
-                      </td>
-                    )}
+                        {canEdit && (
+                          <button
+                            onClick={() => remove(r.id)}
+                            disabled={pending}
+                            className="text-xs text-rose-600 hover:underline"
+                          >
+                            Eliminar
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -247,6 +266,10 @@ export function FenixStockEditor({
           </>
         )}
       </Card>
+
+      {kardexRow && (
+        <StockKardexModal row={kardexRow} canEdit={canEdit} onClose={() => setKardexRow(null)} onChanged={() => router.refresh()} />
+      )}
     </div>
   );
 }
@@ -435,6 +458,186 @@ function ProductCombobox({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+const MOVEMENT_TONE: Record<string, string> = {
+  entrada: "text-emerald-700",
+  salida_entrega: "text-slate-600",
+  salida_merma: "text-rose-600",
+  ajuste: "text-sky-700",
+};
+
+type KardexMovement = {
+  id: string;
+  kind: StockMovementKind;
+  delta: number;
+  balance_after: number;
+  note: string | null;
+  shipment_id: string | null;
+  created_at: string;
+  by: string | null;
+};
+
+/**
+ * Kardex de un producto: historial de movimientos + formularios de Entrada /
+ * Merma / Ajuste (conteo Fénix). Las salidas por entrega aparecen en el
+ * historial pero se registran solas al entregar cada guía.
+ */
+function StockKardexModal({
+  row,
+  canEdit,
+  onClose,
+  onChanged,
+}: {
+  row: FenixStockRowDb;
+  canEdit: boolean;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [moves, setMoves] = useState<KardexMovement[] | null>(null);
+  const [kind, setKind] = useState<"entrada" | "salida_merma" | "ajuste">("entrada");
+  const [qty, setQty] = useState("");
+  const [note, setNote] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+
+  const reload = () =>
+    getFenixStockMovements(row.id).then((m) => setMoves(m as KardexMovement[]));
+  useEffect(() => {
+    let alive = true;
+    getFenixStockMovements(row.id).then((m) => {
+      if (alive) setMoves(m as KardexMovement[]);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [row.id]);
+
+  function submit() {
+    const n = Number(qty);
+    if (!Number.isFinite(n)) {
+      setMsg(kind === "ajuste" ? "Ingresa el conteo real de Fénix." : "Ingresa la cantidad.");
+      return;
+    }
+    start(async () => {
+      const r = await recordFenixStockMovement({ stockId: row.id, kind, quantity: n, note });
+      setMsg(r.error ?? r.notice ?? null);
+      if (!r.error) {
+        setQty("");
+        setNote("");
+        await reload();
+        onChanged();
+      }
+    });
+  }
+
+  const qtyLabel =
+    kind === "ajuste" ? "Conteo real de Fénix" : kind === "salida_merma" ? "Unidades que salieron" : "Unidades que llegaron";
+
+  return (
+    <div className="fixed inset-0 z-30 grid place-items-center bg-slate-900/30 p-4" onClick={onClose}>
+      <div
+        className="max-h-[85vh] w-full max-w-lg overflow-auto rounded-2xl bg-white p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-1 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Movimientos de stock</h2>
+            <p className="text-xs text-slate-500 capitalize">
+              {row.city} · <span className="normal-case">{row.product}</span>
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            ✕
+          </button>
+        </div>
+
+        {canEdit && (
+          <div className="mt-3 space-y-2 rounded-xl border border-slate-200 p-3">
+            <div className="flex flex-wrap gap-1.5">
+              {(["entrada", "salida_merma", "ajuste"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setKind(k)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-xs font-medium transition",
+                    kind === k
+                      ? "border-brand-200 bg-brand-50 text-brand-700"
+                      : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+                  )}
+                >
+                  {STOCK_MOVEMENT_LABEL[k]}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-end gap-2">
+              <div>
+                <label className="block text-xs text-slate-400">{qtyLabel}</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={qty}
+                  onChange={(e) => setQty(e.target.value)}
+                  className="w-40 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                />
+              </div>
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder={kind === "salida_merma" ? "Motivo (obligatorio)" : "Nota (opcional)"}
+                className="min-w-[10rem] flex-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+              />
+              <button
+                onClick={submit}
+                disabled={pending}
+                className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+              >
+                Registrar
+              </button>
+            </div>
+            {kind === "ajuste" && (
+              <p className="text-[11px] text-slate-400">
+                El sistema calcula la diferencia contra el saldo actual y la deja registrada como ajuste.
+              </p>
+            )}
+            {msg && <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-sm text-slate-700">{msg}</p>}
+          </div>
+        )}
+
+        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-400 uppercase">Historial</p>
+        {moves === null ? (
+          <p className="text-sm text-slate-400">Cargando…</p>
+        ) : moves.length === 0 ? (
+          <p className="text-sm text-slate-400">Sin movimientos todavía.</p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {moves.map((m) => (
+              <li key={m.id} className="flex items-baseline gap-2 py-1.5 text-sm">
+                <span className={cn("w-40 shrink-0 font-medium", MOVEMENT_TONE[m.kind] ?? "text-slate-600")}>
+                  {STOCK_MOVEMENT_LABEL[m.kind]}
+                </span>
+                <span className={cn("w-12 shrink-0 text-right tabular-nums", m.delta < 0 ? "text-rose-600" : "text-emerald-700")}>
+                  {m.delta > 0 ? `+${m.delta}` : m.delta}
+                </span>
+                <span className="w-16 shrink-0 text-right tabular-nums text-slate-500">= {m.balance_after}</span>
+                <span className="min-w-0 flex-1 truncate text-xs text-slate-400">
+                  {new Date(m.created_at).toLocaleString("es-PE", {
+                    day: "2-digit",
+                    month: "short",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                  {m.by ? ` · ${m.by}` : ""}
+                  {m.note ? ` · ${m.note}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
