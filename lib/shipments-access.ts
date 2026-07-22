@@ -714,7 +714,7 @@ export async function getReproTodayByAgent(storeIds: string[]): Promise<ReproDay
   for (let from = 0; from < MAX_LIST * 4; from += PAGE) {
     const { data, error } = await sb
       .from("shipment_calls")
-      .select("agent, kind, shipment_id")
+      .select("agent, kind, new_status, shipment_id")
       .in("store_id", storeIds)
       .not("agent", "is", null)
       .gte("occurred_at", startIso)
@@ -722,8 +722,11 @@ export async function getReproTodayByAgent(storeIds: string[]): Promise<ReproDay
       .order("id", { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) break;
-    const batch = (data as { agent: string | null; kind: string; shipment_id: string | null }[]) ?? [];
-    for (const r of batch) calls.push({ agent: r.agent, kind: r.kind, shipmentId: r.shipment_id });
+    const batch =
+      (data as { agent: string | null; kind: string; new_status: string | null; shipment_id: string | null }[]) ?? [];
+    for (const r of batch) {
+      calls.push({ agent: r.agent, kind: r.kind, newStatus: r.new_status, shipmentId: r.shipment_id });
+    }
     if (batch.length < PAGE) break;
   }
 

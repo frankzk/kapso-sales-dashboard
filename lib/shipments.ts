@@ -724,25 +724,35 @@ export function rescheduleGuideCode(
 export interface ReproDayCall {
   agent: string | null;
   kind: string;
+  newStatus: string | null; // resultado de la gestión (delivery_status resultante)
   shipmentId: string | null;
 }
 
 export interface ReproDayAgentCount {
   agent: string; // user id
   gestiones: number; // acciones de gestión (call + reroute)
-  reprogramadas: number; // de esas, confirmadas → En ruta (reroute)
+  // Resultados del día (por new_status de la gestión):
+  reprogramadas: number; // confirmadas → En ruta
+  anuladas: number; // cliente canceló → Anulado
+  entregadas: number; // marcadas Entregado en la gestión
   guias: number; // guías distintas tocadas hoy
 }
 
-/** Agrega las llamadas del día por asesor. Pure (ordena por gestiones desc). */
+/** Agrega las gestiones del día por asesor con el desglose de resultados.
+ *  Pure (ordena por gestiones desc). */
 export function aggregateReproDay(calls: ReproDayCall[]): ReproDayAgentCount[] {
-  const map = new Map<string, { gestiones: number; reprogramadas: number; guias: Set<string> }>();
+  type Acc = { gestiones: number; reprogramadas: number; anuladas: number; entregadas: number; guias: Set<string> };
+  const map = new Map<string, Acc>();
   for (const c of calls) {
     if (!c.agent) continue;
     if (c.kind !== "call" && c.kind !== "reroute") continue;
-    const e = map.get(c.agent) ?? { gestiones: 0, reprogramadas: 0, guias: new Set<string>() };
+    const e =
+      map.get(c.agent) ??
+      { gestiones: 0, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: new Set<string>() };
     e.gestiones += 1;
-    if (c.kind === "reroute") e.reprogramadas += 1;
+    if (c.newStatus === "en_ruta") e.reprogramadas += 1;
+    else if (c.newStatus === "anulado") e.anuladas += 1;
+    else if (c.newStatus === "entregado") e.entregadas += 1;
     if (c.shipmentId) e.guias.add(c.shipmentId);
     map.set(c.agent, e);
   }
@@ -751,6 +761,8 @@ export function aggregateReproDay(calls: ReproDayCall[]): ReproDayAgentCount[] {
       agent,
       gestiones: e.gestiones,
       reprogramadas: e.reprogramadas,
+      anuladas: e.anuladas,
+      entregadas: e.entregadas,
       guias: e.guias.size,
     }))
     .sort(
