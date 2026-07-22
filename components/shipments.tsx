@@ -110,6 +110,21 @@ function fmtAliclikDate(date: string | null | undefined): string {
   });
 }
 
+/** Última gestión de nuestro equipo: fecha (Lima) + cuántos días lleva sin
+ *  tocarse. days=null cuando nunca se gestionó. */
+function fmtLastGestion(iso: string | null | undefined): { label: string; days: number | null } {
+  if (!iso) return { label: "Sin gestión", days: null };
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return { label: "—", days: null };
+  const label = new Date(t).toLocaleDateString("es-PE", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "America/Lima",
+  });
+  const days = Math.max(0, Math.floor((Date.now() - t) / 86_400_000));
+  return { label, days };
+}
+
 function shipmentHistoryLabel(call: ShipmentCallRow): string {
   if (call.kind === "call" && !call.new_status && call.next_followup_at) {
     return "Llamada programada";
@@ -804,7 +819,8 @@ function ShipmentTable({
             <SortableShipmentHeader label="Producto" sortKey="product" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Distrito / Ciudad" sortKey="location" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Estado" sortKey="status" sort={sort} onSort={toggleSort} />
-            <SortableShipmentHeader label="Última entrega" sortKey="lastDelivery" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Última entrega Aliclik" sortKey="lastDelivery" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Última gestión" sortKey="lastGestion" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Reprogramación" sortKey="reprogramming" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Ruta sugerida" sortKey="route" sort={sort} onSort={toggleSort} />
           </tr>
@@ -855,6 +871,28 @@ function ShipmentTable({
               </td>
               <td className="px-4 py-2.5 whitespace-nowrap text-slate-700 tabular-nums">
                 {fmtAliclikDate(s.aliclik_service_date)}
+              </td>
+              <td className="px-4 py-2.5 whitespace-nowrap tabular-nums">
+                {(() => {
+                  const g = fmtLastGestion(s.last_gestion_at);
+                  return (
+                    <>
+                      <span className={g.days == null ? "text-slate-400" : "text-slate-700"}>
+                        {g.label}
+                      </span>
+                      {g.days != null && (
+                        <span
+                          className={cn(
+                            "block text-[10px]",
+                            g.days >= 7 ? "font-semibold text-amber-600" : "text-slate-400",
+                          )}
+                        >
+                          {g.days === 0 ? "hoy" : `hace ${g.days} d`}
+                        </span>
+                      )}
+                    </>
+                  );
+                })()}
               </td>
               <td className="px-4 py-2.5 text-slate-600">
                 {fmtReprogram(s.next_followup_at)}
