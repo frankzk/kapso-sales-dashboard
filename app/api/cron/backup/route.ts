@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
 import { runStorageBackup, formatBackupSummary } from "@/lib/backup";
-import { sendTelegramMessage } from "@/lib/telegram";
+import { parseTelegramChatIds, sendTelegramMessage } from "@/lib/telegram";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -43,9 +43,14 @@ async function run(req: NextRequest) {
     for (const s of (data ?? []) as { id: string }[]) {
       const creds = await getStoreCreds(s.id, admin);
       if (!creds?.telegram_bot_token || !creds.telegram_chat_id) continue;
-      if (sentTo.has(creds.telegram_chat_id)) continue;
-      sentTo.add(creds.telegram_chat_id);
-      await sendTelegramMessage(creds.telegram_bot_token, creds.telegram_chat_id, text);
+      // Un campo de chat id puede listar varios destinatarios; dedup por chat
+      // individual para no repetir el mismo aviso a un chat compartido entre
+      // tiendas.
+      for (const chatId of parseTelegramChatIds(creds.telegram_chat_id)) {
+        if (sentTo.has(chatId)) continue;
+        sentTo.add(chatId);
+        await sendTelegramMessage(creds.telegram_bot_token, chatId, text);
+      }
     }
   } catch {
     /* ignore — notifying is best-effort */

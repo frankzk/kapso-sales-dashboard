@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
 import { buildStoreDailySummary, formatDailySummary, limaDayBounds } from "@/lib/daily-summary";
-import { sendTelegramMessage } from "@/lib/telegram";
+import { sendTelegramToAll } from "@/lib/telegram";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -55,8 +55,15 @@ async function run(req: NextRequest) {
       }
       const summary = await buildStoreDailySummary(admin, id, startIso, endIso, TZ);
       const text = formatDailySummary(creds.name, label, summary, creds.currency);
-      const res = await sendTelegramMessage(creds.telegram_bot_token, creds.telegram_chat_id, text);
-      reports.push({ storeId: id, sent: res.ok, error: res.ok ? undefined : res.error, orders: summary.totalOrders });
+      const res = await sendTelegramToAll(creds.telegram_bot_token, creds.telegram_chat_id, text);
+      const failed = res.results.filter((r) => !r.ok);
+      reports.push({
+        storeId: id,
+        sent: res.sent,
+        recipients: res.total,
+        error: failed.length ? failed.map((r) => `${r.chatId}: ${r.error}`).join("; ") : undefined,
+        orders: summary.totalOrders,
+      });
     } catch (e) {
       reports.push({ storeId: id, error: e instanceof Error ? e.message : String(e) });
     }
