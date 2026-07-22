@@ -34,7 +34,7 @@ import type {
   ShipmentRow,
   StoreSummary,
 } from "@/lib/types";
-import { SHIPMENT_VIEWS, type ShipmentView } from "@/lib/shipments-access";
+import { SHIPMENT_VIEWS, type ShipmentView, type ReproDayAgentNamed } from "@/lib/shipments-access";
 import {
   sortShipmentRows,
   type ShipmentSortDirection,
@@ -226,12 +226,14 @@ export function ShipmentsBoard({
   counts,
   shipments,
   reprogram,
+  todayByAgent,
 }: {
   stores: StoreSummary[];
   view: ShipmentView;
   counts: Record<ShipmentView, number>;
   shipments: ShipmentRow[];
   reprogram?: ReprogramStats;
+  todayByAgent?: ReproDayAgentNamed[];
 }) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(null);
@@ -483,6 +485,8 @@ export function ShipmentsBoard({
       </div>
 
       {reprogram && <ReprogramStrip stats={reprogram} stores={stores} />}
+
+      {todayByAgent && <TodayByAgentPanel rows={todayByAgent} />}
 
       {searchActive ? (
         <Card className="p-0">
@@ -2308,6 +2312,89 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
 
 function pctLabel(tasa: number | null): string | null {
   return tasa == null ? null : `${Math.round(tasa * 100)}%`;
+}
+
+/** Snapshot de fin de día: productividad de hoy por asesora en Repro Provincia,
+ *  para que cada persona mande una "foto" de su trabajo. Colapsable. */
+function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
+  const [open, setOpen] = useState(true);
+  const hoy = new Date().toLocaleDateString("es-PE", {
+    weekday: "long",
+    day: "2-digit",
+    month: "short",
+    timeZone: "America/Lima",
+  });
+  const totals = rows.reduce(
+    (acc, r) => {
+      acc.gestiones += r.gestiones;
+      acc.reprogramadas += r.reprogramadas;
+      acc.guias += r.guias;
+      return acc;
+    },
+    { gestiones: 0, reprogramadas: 0, guias: 0 },
+  );
+  const label = (name: string) => name.split("@")[0] || name;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-xs"
+      >
+        <span className="font-semibold text-slate-800">📸 Hoy por asesora</span>
+        <span className="capitalize text-slate-400">{hoy}</span>
+        {!open && rows.length > 0 && (
+          <span className="text-slate-500">
+            · {rows.length} asesora{rows.length === 1 ? "" : "s"} · {totals.gestiones} gestiones
+          </span>
+        )}
+        <span className="ml-auto text-slate-400">{open ? "▲" : "▼"}</span>
+      </button>
+      {open &&
+        (rows.length === 0 ? (
+          <p className="px-3 pb-3 text-xs text-slate-400">Aún no hay gestión registrada hoy.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-t border-slate-100 text-[11px] text-slate-500">
+                  <th className="px-3 py-1.5 text-left font-medium">Asesora</th>
+                  <th className="px-3 py-1.5 text-right font-medium" title="Acciones de gestión hoy (llamadas + reprogramaciones)">
+                    Gestiones
+                  </th>
+                  <th className="px-3 py-1.5 text-right font-medium" title="De esas, confirmadas → En ruta">
+                    Reprogramadas
+                  </th>
+                  <th className="px-3 py-1.5 text-right font-medium" title="Guías distintas tocadas hoy">
+                    Guías
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.agent} className="border-t border-slate-100">
+                    <td className="px-3 py-1.5 text-slate-700">{label(r.name)}</td>
+                    <td className="px-3 py-1.5 text-right font-semibold text-slate-800 tabular-nums">
+                      {r.gestiones}
+                    </td>
+                    <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{r.reprogramadas}</td>
+                    <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{r.guias}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-slate-200 text-slate-600">
+                  <td className="px-3 py-1.5 text-left font-medium">Total equipo</td>
+                  <td className="px-3 py-1.5 text-right font-semibold tabular-nums">{totals.gestiones}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{totals.reprogramadas}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{totals.guias}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        ))}
+    </div>
+  );
 }
 
 /** Franja compacta bajo el encabezado: la tasa de entrega de lo reprogramado en

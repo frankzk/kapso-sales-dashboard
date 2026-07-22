@@ -714,6 +714,54 @@ export function rescheduleGuideCode(
   return autoFenixGuideCode(orderName, date);
 }
 
+// ── Productividad del día por asesora (Repro Provincia) ──────────────────────
+// Snapshot de fin de día: cuánto gestionó hoy cada persona en el módulo, para
+// que puedan mandar una "foto" de su trabajo. Se arma desde shipment_calls del
+// día (hora Lima). Los dos caminos de reprogramación (Aliclik y Fénix) registran
+// kind='reroute'; las demás disposiciones (no contesta, cancela, programar)
+// registran kind='call'. Gestiones = ambas; Reprogramadas = solo las reroute.
+
+export interface ReproDayCall {
+  agent: string | null;
+  kind: string;
+  shipmentId: string | null;
+}
+
+export interface ReproDayAgentCount {
+  agent: string; // user id
+  gestiones: number; // acciones de gestión (call + reroute)
+  reprogramadas: number; // de esas, confirmadas → En ruta (reroute)
+  guias: number; // guías distintas tocadas hoy
+}
+
+/** Agrega las llamadas del día por asesor. Pure (ordena por gestiones desc). */
+export function aggregateReproDay(calls: ReproDayCall[]): ReproDayAgentCount[] {
+  const map = new Map<string, { gestiones: number; reprogramadas: number; guias: Set<string> }>();
+  for (const c of calls) {
+    if (!c.agent) continue;
+    if (c.kind !== "call" && c.kind !== "reroute") continue;
+    const e = map.get(c.agent) ?? { gestiones: 0, reprogramadas: 0, guias: new Set<string>() };
+    e.gestiones += 1;
+    if (c.kind === "reroute") e.reprogramadas += 1;
+    if (c.shipmentId) e.guias.add(c.shipmentId);
+    map.set(c.agent, e);
+  }
+  return [...map.entries()]
+    .map(([agent, e]) => ({
+      agent,
+      gestiones: e.gestiones,
+      reprogramadas: e.reprogramadas,
+      guias: e.guias.size,
+    }))
+    .sort(
+      (a, b) =>
+        b.gestiones - a.gestiones ||
+        b.reprogramadas - a.reprogramadas ||
+        b.guias - a.guias ||
+        a.agent.localeCompare(b.agent),
+    );
+}
+
 // ── Métricas de reprogramación (guías Fénix hijas creadas desde el dashboard) ─
 // El universo es EXACTO por construcción: cada reprogramación confirmada en el
 // dashboard genera una guía Fénix nueva vinculada a la guía Aliclik original
