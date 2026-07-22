@@ -30,6 +30,7 @@ import {
   MAX_INTENTOS,
   FENIX_CITIES,
   reconcileDeliveryStatus,
+  maxDeliveryDate,
   autoFenixGuideCode,
   rescheduleGuideCode,
   shipmentRequiresCourierResult,
@@ -414,6 +415,23 @@ describe("reconcileDeliveryStatus (re-import merge)", () => {
   it("takes the incoming status for a brand-new guide (no existing)", () => {
     expect(reconcileDeliveryStatus(null, "pendiente")).toBe("pendiente");
     expect(reconcileDeliveryStatus(undefined, "entregado")).toBe("entregado");
+  });
+});
+
+describe("maxDeliveryDate (última fecha de entrega, no retrocede)", () => {
+  it("se queda con la fecha más reciente sin importar el orden de los args", () => {
+    expect(maxDeliveryDate("2026-07-05", "2026-07-21")).toBe("2026-07-21");
+    expect(maxDeliveryDate("2026-07-21", "2026-07-05")).toBe("2026-07-21");
+  });
+  it("un reporte viejo NO retrocede la fecha ya guardada", () => {
+    // existente 21/07, entra un reporte con 05/07 → conserva 21/07
+    expect(maxDeliveryDate("2026-07-05", "2026-07-21")).toBe("2026-07-21");
+  });
+  it("usa la que exista cuando la otra es null/undefined/vacía", () => {
+    expect(maxDeliveryDate("2026-07-10", null)).toBe("2026-07-10");
+    expect(maxDeliveryDate(null, "2026-07-10")).toBe("2026-07-10");
+    expect(maxDeliveryDate("  ", "2026-07-10")).toBe("2026-07-10");
+    expect(maxDeliveryDate(null, undefined)).toBeNull();
   });
 });
 

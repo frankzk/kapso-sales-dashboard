@@ -8,7 +8,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ParsedShipmentRow } from "./aliclik-import";
 import { parseAliclikReport } from "./aliclik-import";
 import { matchShipment, type MatchResult, type OrderCandidate } from "./shipment-match";
-import { categoryOf, isPending, reconcileDeliveryStatus } from "./shipments";
+import { categoryOf, isPending, maxDeliveryDate, reconcileDeliveryStatus } from "./shipments";
 import { evaluateFenix, type FenixStockRow } from "./fenix";
 
 // Existing shipment fields we need to reconcile a re-import against (so we don't
@@ -211,7 +211,9 @@ export async function ingestAliclikReport(
       delivered_source,
       fenix_eligible: fenix,
       aliclik_attempts: inc.row.aliclik_attempts ?? existing?.aliclik_attempts ?? null,
-      aliclik_service_date: inc.row.aliclik_service_date ?? existing?.aliclik_service_date ?? null,
+      // Última fecha de entrega: la MÁS RECIENTE vista (no retrocede si se sube
+      // un reporte viejo fuera de orden).
+      aliclik_service_date: maxDeliveryDate(inc.row.aliclik_service_date, existing?.aliclik_service_date),
       source_batch_id: batchId,
       last_report_at,
     });

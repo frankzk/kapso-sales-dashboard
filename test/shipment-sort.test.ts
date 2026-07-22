@@ -71,6 +71,26 @@ describe("sortShipmentRows", () => {
     ]);
   });
 
+  it("ordena por última fecha de entrega (más reciente arriba en desc), vacías al final", () => {
+    const rows = [
+      shipment("sin"),
+      shipment("nueva", { aliclik_service_date: "2026-07-21" }),
+      shipment("vieja", { aliclik_service_date: "2026-07-05" }),
+    ];
+    // desc = prioriza las más frescas
+    expect(sortShipmentRows(rows, "lastDelivery", "desc", storeName).map((r) => r.id)).toEqual([
+      "nueva",
+      "vieja",
+      "sin",
+    ]);
+    // las sin fecha SIEMPRE al final, aun en asc
+    expect(sortShipmentRows(rows, "lastDelivery", "asc", storeName).map((r) => r.id)).toEqual([
+      "vieja",
+      "nueva",
+      "sin",
+    ]);
+  });
+
   it("uses natural numeric ordering for guide and order codes", () => {
     const rows = [
       shipment("b", { guide_code: "#KP10", order_name: "#KP20" }),
