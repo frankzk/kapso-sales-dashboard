@@ -731,9 +731,14 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
               id="telegram_chat_id"
               name="telegram_chat_id"
               defaultValue={s.telegram_chat_id ?? ""}
-              placeholder="-1001234567890"
+              placeholder="-1001234567890, 8844863582"
               className={inputCls}
             />
+            <p className="mt-1 text-xs text-slate-400">
+              Puedes poner <strong>varios</strong> chat id separados por coma para que todas las
+              notificaciones lleguen a cada uno. Cada persona debe haber abierto el bot y pulsado{" "}
+              <strong>Iniciar</strong> antes de poder recibir mensajes.
+            </p>
           </div>
         </fieldset>
 

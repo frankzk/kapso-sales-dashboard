@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sendTelegramMessage } from "@/lib/telegram";
+import { parseTelegramChatIds, sendTelegramMessage, sendTelegramToAll } from "@/lib/telegram";
 import { formatDailySummary, limaDayBounds, type StoreDailySummary } from "@/lib/daily-summary";
 import { emptyPorFuente } from "@/lib/productivity";
 
@@ -36,6 +36,65 @@ describe("sendTelegramMessage", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain("chat not found");
+  });
+});
+
+describe("parseTelegramChatIds", () => {
+  it("splits a multi-recipient field on commas / spaces / newlines and dedupes", () => {
+    expect(parseTelegramChatIds("1482632450, 8844863582")).toEqual(["1482632450", "8844863582"]);
+    expect(parseTelegramChatIds("1482632450\n 8844863582;1482632450")).toEqual([
+      "1482632450",
+      "8844863582",
+    ]);
+  });
+
+  it("accepts numeric ids (incl. negative groups) and @usernames, drops junk", () => {
+    expect(parseTelegramChatIds("-1001234567890 @canal_ventas foo bar")).toEqual([
+      "-1001234567890",
+      "@canal_ventas",
+    ]);
+  });
+
+  it("returns an empty list for null/blank", () => {
+    expect(parseTelegramChatIds(null)).toEqual([]);
+    expect(parseTelegramChatIds("   ")).toEqual([]);
+  });
+});
+
+describe("sendTelegramToAll", () => {
+  it("sends to every recipient and counts successes", async () => {
+    const seen: string[] = [];
+    const res = await sendTelegramToAll("123:ABC", "111, 222", "hola", {
+      fetchImpl: fakeFetch(200, { ok: true, result: {} }, (_url, init) => {
+        seen.push(JSON.parse(init.body).chat_id);
+      }),
+    });
+    expect(seen).toEqual(["111", "222"]);
+    expect(res.sent).toBe(2);
+    expect(res.total).toBe(2);
+  });
+
+  it("keeps going when one recipient fails and reports it", async () => {
+    let call = 0;
+    const fetchImpl = (async (_url: string, _init: any) => {
+      call += 1;
+      const ok = call === 1; // first ok, second rejected
+      return {
+        ok,
+        status: ok ? 200 : 403,
+        json: async () => (ok ? { ok: true } : { ok: false, description: "bot was blocked" }),
+        text: async () => "",
+      };
+    }) as unknown as typeof fetch;
+    const res = await sendTelegramToAll("t", "111, 222", "hi", { fetchImpl });
+    expect(res.sent).toBe(1);
+    expect(res.total).toBe(2);
+    expect(res.results[1]).toMatchObject({ chatId: "222", ok: false });
+  });
+
+  it("no-ops with zero valid recipients", async () => {
+    const res = await sendTelegramToAll("t", "  ", "hi", { fetchImpl: fakeFetch(200, { ok: true }) });
+    expect(res).toEqual({ sent: 0, total: 0, results: [] });
   });
 });
 

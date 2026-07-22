@@ -9,7 +9,7 @@ import { buildStoreUpdate } from "@/lib/store-settings";
 import { getStoreCreds, runStoreSync } from "@/lib/ingest";
 import { registerOrderWebhooks } from "@/lib/shopify";
 import { buildStoreDailySummary, formatDailySummary, limaDayBounds } from "@/lib/daily-summary";
-import { sendTelegramMessage } from "@/lib/telegram";
+import { sendTelegramToAll } from "@/lib/telegram";
 import { listMetaAdAccounts, type MetaAdAccount, type StoreMetaAdAccount } from "@/lib/meta-marketing";
 import { env } from "@/lib/env";
 
@@ -252,9 +252,18 @@ export async function sendTelegramTest(
     const { date, startIso, endIso, label } = limaDayBounds(null);
     const summary = await buildStoreDailySummary(ctx.admin, storeId, startIso, endIso, "America/Lima");
     const text = formatDailySummary(creds.name, label, summary, creds.currency);
-    const res = await sendTelegramMessage(creds.telegram_bot_token, creds.telegram_chat_id, text);
-    if (!res.ok) return { error: `Telegram rechazó el envío: ${res.error}` };
-    return { notice: `Resumen de ${date} enviado a Telegram ✓ (${summary.totalOrders} pedidos).` };
+    const res = await sendTelegramToAll(creds.telegram_bot_token, creds.telegram_chat_id, text);
+    if (!res.sent) {
+      const why = res.results.find((r) => !r.ok)?.error ?? "sin chat id válido";
+      return { error: `Telegram rechazó el envío: ${why}` };
+    }
+    const failed = res.results.filter((r) => !r.ok);
+    const extra = failed.length
+      ? ` (falló para ${failed.map((r) => r.chatId).join(", ")}: revisa que cada uno haya iniciado el bot)`
+      : "";
+    return {
+      notice: `Resumen de ${date} enviado a Telegram ✓ — ${res.sent}/${res.total} destinatario(s), ${summary.totalOrders} pedidos${extra}.`,
+    };
   } catch (e) {
     return { error: errMsg(e) };
   }

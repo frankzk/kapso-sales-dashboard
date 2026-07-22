@@ -7,7 +7,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { CLAIM_TTL_MINUTES } from "@/lib/leads";
 import { getStoreCreds } from "@/lib/ingest";
-import { sendTelegramMessage } from "@/lib/telegram";
+import { sendTelegramToAll } from "@/lib/telegram";
 
 export const YAPE_PENDING_MIN = 10; // sin tomar por > este tiempo → alerta
 export const YAPE_REALERT_MIN = 180; // re-alerta a lo más cada 3h mientras siga pendiente
@@ -92,8 +92,10 @@ export async function alertUnattendedYapes(
   if (!due.length) return { alerted: 0 };
 
   const text = formatUnattendedYapeAlert(creds.name, due, nowMs);
-  const res = await sendTelegramMessage(creds.telegram_bot_token, creds.telegram_chat_id, text);
-  if (!res.ok) return { alerted: 0, skipped: res.error };
+  const res = await sendTelegramToAll(creds.telegram_bot_token, creds.telegram_chat_id, text);
+  // Solo marcamos como avisadas si al menos un destinatario recibió la alerta;
+  // si ninguno llegó, se reintenta en el próximo ciclo.
+  if (!res.sent) return { alerted: 0, skipped: res.results[0]?.error ?? "sin destinatarios" };
 
   await admin
     .from("leads")
