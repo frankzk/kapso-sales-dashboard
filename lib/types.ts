@@ -272,6 +272,10 @@ export interface ShipmentRow {
   contact_count?: number;
   /** Number of calls logged today in Lima, across the whole team. */
   today_contact_count?: number;
+  /** ISO time of the most recent gestión our team logged for this guide OR its
+   *  linked chain (reprogramación origin ↔ Fenix child). Added at read time to
+   *  show how long a shipment has gone without our attention. */
+  last_gestion_at?: string | null;
   reroute_outcome: string | null;
   claimed_by: string | null;
   claimed_at: string | null;

@@ -85,9 +85,78 @@ function withEnhancementDefaults(row: Partial<ShipmentRow>): ShipmentRow {
     address_updated_by: null,
     aliclik_attempts: null,
     aliclik_service_date: null,
+    last_gestion_at: null,
     ...row,
     province: row.province ?? row.region ?? null,
   } as ShipmentRow;
+}
+
+/** Attach the date of the last gestión our team logged for each row, considering
+ *  the reprogramación chain (the guide, its Fenix child, and — if the row IS a
+ *  Fenix child — its Aliclik parent), so the value matches the "Historial desde
+ *  el origen" the drawer shows. Only calls made by a team member (agent not null)
+ *  count; the Aliclik report imports are not gestión. Best-effort: on error the
+ *  rows keep their default null. */
+async function withLastGestion(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  rows: ShipmentRow[],
+  storeIds: string[],
+): Promise<ShipmentRow[]> {
+  if (!rows.length) return rows;
+  const ownIds = rows.map((r) => r.id);
+
+  // Map a row that is a Fenix child → its Aliclik parent id (parent.fenix_shipment_id = child.id).
+  const parentByChild = new Map<string, string>();
+  for (const part of chunk(ownIds, 300)) {
+    const { data, error } = await sb
+      .from("shipments")
+      .select("id, fenix_shipment_id")
+      .in("fenix_shipment_id", part);
+    if (error) break;
+    for (const p of (data as { id: string; fenix_shipment_id: string | null }[]) ?? []) {
+      if (p.fenix_shipment_id) parentByChild.set(p.fenix_shipment_id, p.id);
+    }
+  }
+
+  const relevant = new Set<string>(ownIds);
+  for (const r of rows) if (r.fenix_shipment_id) relevant.add(r.fenix_shipment_id);
+  for (const parentId of parentByChild.values()) relevant.add(parentId);
+
+  // Latest team gestión per shipment id (rows come back newest-first; keep the first).
+  const latestById = new Map<string, string>();
+  for (const part of chunk(Array.from(relevant), 300)) {
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await sb
+        .from("shipment_calls")
+        .select("shipment_id, occurred_at")
+        .in("shipment_id", part)
+        .not("agent", "is", null)
+        .not("occurred_at", "is", null)
+        .order("occurred_at", { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error) break;
+      const calls = (data as { shipment_id: string; occurred_at: string }[]) ?? [];
+      for (const c of calls) {
+        if (!latestById.has(c.shipment_id)) latestById.set(c.shipment_id, c.occurred_at);
+      }
+      if (calls.length < PAGE) break;
+    }
+  }
+
+  const maxIso = (...vals: (string | undefined)[]): string | null => {
+    let best: string | null = null;
+    for (const v of vals) if (v && (!best || v > best)) best = v;
+    return best;
+  };
+
+  return rows.map((row) => ({
+    ...row,
+    last_gestion_at: maxIso(
+      latestById.get(row.id),
+      row.fenix_shipment_id ? latestById.get(row.fenix_shipment_id) : undefined,
+      parentByChild.has(row.id) ? latestById.get(parentByChild.get(row.id)!) : undefined,
+    ),
+  }));
 }
 
 /** Attach today's team-wide call count to each queue row. This is deliberately
@@ -269,13 +338,16 @@ export async function getStoreShipments(
     out.push(...rows);
     if (rows.length < PAGE) break;
   }
-  if (view !== "pendiente") return out;
+  // "Última gestión" applies to every view (how long a guide has gone without
+  // our team touching it).
+  const out2 = await withLastGestion(sb, out, storeIds);
+  if (view !== "pendiente") return out2;
 
   // Today's contacts and current Fenix eligibility are independent enrichments.
   // Run them together, then merge the one field produced by the stock read.
   const [withTodayCalls, withEligibility] = await Promise.all([
-    withTodayContactCount(sb, out, storeIds),
-    withCurrentFenixEligibility(sb, out),
+    withTodayContactCount(sb, out2, storeIds),
+    withCurrentFenixEligibility(sb, out2),
   ]);
   const eligibilityById = new Map(
     withEligibility.map((shipment) => [shipment.id, {

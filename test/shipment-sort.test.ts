@@ -91,6 +91,25 @@ describe("sortShipmentRows", () => {
     ]);
   });
 
+  it("ordena por última gestión del equipo, sin gestión al final", () => {
+    const rows = [
+      shipment("sin"),
+      shipment("hoy", { last_gestion_at: "2026-07-22T14:00:00.000Z" }),
+      shipment("antigua", { last_gestion_at: "2026-07-10T09:00:00.000Z" }),
+    ];
+    // asc = las más antiguas primero (las que llevan más sin gestión)
+    expect(sortShipmentRows(rows, "lastGestion", "asc", storeName).map((r) => r.id)).toEqual([
+      "antigua",
+      "hoy",
+      "sin",
+    ]);
+    expect(sortShipmentRows(rows, "lastGestion", "desc", storeName).map((r) => r.id)).toEqual([
+      "hoy",
+      "antigua",
+      "sin",
+    ]);
+  });
+
   it("uses natural numeric ordering for guide and order codes", () => {
     const rows = [
       shipment("b", { guide_code: "#KP10", order_name: "#KP20" }),
