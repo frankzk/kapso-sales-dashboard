@@ -804,6 +804,7 @@ function ShipmentTable({
             <SortableShipmentHeader label="Producto" sortKey="product" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Distrito / Ciudad" sortKey="location" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Estado" sortKey="status" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Última entrega" sortKey="lastDelivery" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Reprogramación" sortKey="reprogramming" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Ruta sugerida" sortKey="route" sort={sort} onSort={toggleSort} />
           </tr>
@@ -851,6 +852,9 @@ function ShipmentTable({
               </td>
               <td className="px-4 py-2.5">
                 <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
+              </td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-slate-700 tabular-nums">
+                {fmtAliclikDate(s.aliclik_service_date)}
               </td>
               <td className="px-4 py-2.5 text-slate-600">
                 {fmtReprogram(s.next_followup_at)}

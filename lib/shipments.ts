@@ -653,6 +653,24 @@ export function reconcileDeliveryStatus(existing: string | null | undefined, inc
 }
 
 /**
+ * "Última fecha de entrega": al re-importar una guía, conserva la fecha de
+ * entrega MÁS RECIENTE vista (nunca retrocede). Las fechas son ISO 'YYYY-MM-DD',
+ * que ordenan cronológicamente como texto, así que el máximo léxico es el más
+ * reciente. Protege contra subir un reporte viejo fuera de orden: la fecha
+ * agendada por Aliclik solo avanza. Devuelve null solo si ninguna existe.
+ */
+export function maxDeliveryDate(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): string | null {
+  const x = a?.trim() || null;
+  const y = b?.trim() || null;
+  if (!x) return y;
+  if (!y) return x;
+  return x >= y ? x : y;
+}
+
+/**
  * Suggest a Fenix guide code from the linked Shopify order + today's date
  * (DDMMYYYY), e.g. order "#KP118847" on 2026-07-01 → "#KP11884701072026".
  * Just a starting point the operator can edit before creating the guide —

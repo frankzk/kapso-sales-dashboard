@@ -9,6 +9,7 @@ export type ShipmentSortKey =
   | "product"
   | "location"
   | "status"
+  | "lastDelivery"
   | "reprogramming"
   | "route";
 
@@ -46,6 +47,10 @@ function sortValue(
       return [shipment.district, normalizeCity(shipment.city)].filter(Boolean).join(" ");
     case "status":
       return labelOf(shipment.delivery_status);
+    case "lastDelivery":
+      // Última fecha de entrega agendada por Aliclik (más reciente arriba en desc);
+      // sin fecha → null, que el sort manda al final en cualquier dirección.
+      return shipment.aliclik_service_date ? Date.parse(shipment.aliclik_service_date) : null;
     case "reprogramming":
       return shipment.next_followup_at ? Date.parse(shipment.next_followup_at) : null;
     case "route":
