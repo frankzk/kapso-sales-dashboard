@@ -1370,6 +1370,37 @@ describe("sendSeguimientoDrip · envío y registro", () => {
     expect(isTierLimitError(undefined, null)).toBe(false);
   });
 
+  it("sanitizeTemplateParam colapsa saltos/espacios y recorta (blindaje #132018)", async () => {
+    const { sanitizeTemplateParam } = await import("@/lib/leads-ingest");
+    expect(sanitizeTemplateParam("  Ana\n  María  ")).toBe("Ana María");
+    expect(sanitizeTemplateParam("a\t\tb   c")).toBe("a b c");
+    expect(sanitizeTemplateParam(null)).toBe("");
+    expect(sanitizeTemplateParam("x".repeat(200))).toHaveLength(120);
+  });
+
+  it("isSendablePhone acepta 51+9 dígitos y rechaza malformados", async () => {
+    const { isSendablePhone } = await import("@/lib/leads-ingest");
+    expect(isSendablePhone("51999888777")).toBe(true);
+    expect(isSendablePhone("1999757903")).toBe(false); // le falta el prefijo (caso real de prod)
+    expect(isSendablePhone("51999")).toBe(false);
+    expect(isSendablePhone("+51999888777")).toBe(false);
+    expect(isSendablePhone(null)).toBe(false);
+  });
+
+  it("el drip salta un teléfono destino malformado sin consumir toque", async () => {
+    const { sendSeguimientoDrip } = await import("@/lib/leads-ingest");
+    const fake = new FakeSupabase(makeStoreRow());
+    fake.dripLeads = [
+      dripLead({ id: "L1", phone: "1999757903" }), // malformado → se salta
+      dripLead({ id: "L2", phone: "51999888777" }), // válido → sale
+    ];
+    const { fn, calls } = spyTemplate();
+    const r = await sendSeguimientoDrip(fake as any, "store-1", dripCreds(), fn, DRIP_NOW);
+    expect(r.sent).toBe(1);
+    expect(calls.map((c) => c.params.to)).toEqual(["51999888777"]);
+    expect(fake.leadPatches).toHaveLength(1); // solo el válido consumió toque
+  });
+
   it("con la secuencia de carritos activa, el drip cede los carritos (solo envía a no-carrito)", async () => {
     const { sendSeguimientoDrip } = await import("@/lib/leads-ingest");
     const fake = new FakeSupabase(makeStoreRow());

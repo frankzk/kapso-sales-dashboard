@@ -16,7 +16,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { StoreCreds } from "@/lib/ingest";
-import { isTierLimitError } from "@/lib/leads-ingest";
+import { isSendablePhone, isTierLimitError, sanitizeTemplateParam } from "@/lib/leads-ingest";
 import { sendWhatsappTemplate } from "@/lib/kapso";
 import { tzParts } from "@/lib/metrics";
 
@@ -123,15 +123,18 @@ export function cartAddressLabel(
 /**
  * Las 4 variables de las plantillas (formato de la automatización ya en
  * producción): {{1}} nombre, {{2}} producto(s) x cantidad, {{3}} precio,
- * {{4}} dirección registrada. Devuelve null si falta cualquiera — Meta
- * rechaza plantillas con variables vacías, así que ese lead se omite SIN
- * consumir toque (reintenta cuando el dato llegue por el sync).
+ * {{4}} dirección registrada. Cada una pasa por `sanitizeTemplateParam`
+ * (colapsa saltos/espacios y recorta) porque un salto de línea o un texto
+ * gigante en la dirección/producto gatilla `#132018 issue with the parameters`
+ * y Meta rechaza el envío. Devuelve null si alguna queda vacía — Meta rechaza
+ * variables vacías, así que ese lead se omite SIN consumir toque (reintenta
+ * cuando el dato llegue por el sync).
  */
 export function cartTemplateParams(l: CartSeqLead, snap: CartSnapshot | null): string[] | null {
-  const name = (l.name ?? "").trim();
-  const product = cartProductLabel(snap?.line_items, l.cart_summary);
-  const price = cartPriceLabel(snap?.total_amount ?? l.cart_value, snap?.currency);
-  const address = cartAddressLabel(snap ?? {}, l);
+  const name = sanitizeTemplateParam(l.name);
+  const product = sanitizeTemplateParam(cartProductLabel(snap?.line_items, l.cart_summary));
+  const price = sanitizeTemplateParam(cartPriceLabel(snap?.total_amount ?? l.cart_value, snap?.currency));
+  const address = sanitizeTemplateParam(cartAddressLabel(snap ?? {}, l));
   if (!name || !product || !price || !address) return null;
   return [name, product, price, address];
 }
@@ -282,9 +285,11 @@ export async function runCartSequence(
       cartSeqSkipReason(l, snapByGid.get(l.draft_order_gid!)?.created_at ?? null, nowMs, cfg) ===
       null,
   );
-  // La plantilla del toque debe estar configurada, las 4 variables completas
-  // y debe haber número desde dónde enviar. Fuera del lote SIN consumir toque.
+  // La plantilla del toque debe estar configurada, las 4 variables completas,
+  // un número desde dónde enviar Y un teléfono destino válido (un número
+  // malformado va a la nada). Fuera del lote SIN consumir toque.
   const sendable = eligible.filter((l) => {
+    if (!isSendablePhone(l.phone)) return false;
     const touch = cartSeqTouchesFor(l) + 1;
     const template = touch === 1 ? creds.cart_seq_template_1_name : creds.cart_seq_template_2_name;
     if (!template || !(l.wa_phone_number_id || creds.whatsapp_phone_number_id)) return false;
