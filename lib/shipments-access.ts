@@ -12,8 +12,11 @@ import type {
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
 import {
   ALICLIK_REPROGRAM_OUTCOMES,
+  aggregateReproDay,
   computeReprogramStats,
   limaCalendarDayBounds,
+  type ReproDayAgentCount,
+  type ReproDayCall,
   type ReprogramChildRow,
   type ReprogramStats,
 } from "@/lib/shipments";
@@ -696,6 +699,38 @@ export async function getReprogramStats(storeIds: string[]): Promise<ReprogramSt
   const stats = computeReprogramStats(rows, Date.now());
   stats.asesorNames = asesorNames;
   return stats;
+}
+
+export type ReproDayAgentNamed = ReproDayAgentCount & { name: string };
+
+/** Productividad de hoy (día calendario Lima) por asesora en Repro Provincia:
+ *  gestiones, reprogramaciones y guías distintas tocadas. Snapshot de fin de día. */
+export async function getReproTodayByAgent(storeIds: string[]): Promise<ReproDayAgentNamed[]> {
+  if (!storeIds.length) return [];
+  const sb = await createServerSupabase();
+  const { startIso, endIso } = limaCalendarDayBounds();
+
+  const calls: ReproDayCall[] = [];
+  for (let from = 0; from < MAX_LIST * 4; from += PAGE) {
+    const { data, error } = await sb
+      .from("shipment_calls")
+      .select("agent, kind, shipment_id")
+      .in("store_id", storeIds)
+      .not("agent", "is", null)
+      .gte("occurred_at", startIso)
+      .lt("occurred_at", endIso)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    const batch = (data as { agent: string | null; kind: string; shipment_id: string | null }[]) ?? [];
+    for (const r of batch) calls.push({ agent: r.agent, kind: r.kind, shipmentId: r.shipment_id });
+    if (batch.length < PAGE) break;
+  }
+
+  const counts = aggregateReproDay(calls);
+  if (!counts.length) return [];
+  const emails = await resolveEmails(counts.map((c) => c.agent));
+  return counts.map((c) => ({ ...c, name: emails.get(c.agent) ?? c.agent }));
 }
 
 async function buildReprogramRows(

@@ -9,6 +9,7 @@ import {
   getFenixDeliverySchedule,
   matchesAliclikRouteFilter,
   reprogramCourierOf,
+  aggregateReproDay,
   type ReprogramChildRow,
   categoryOf,
   isCallable,
@@ -233,6 +234,33 @@ describe("reprogramCourierOf (filtro Aliclik vs Fénix en 'En ruta')", () => {
     expect(reprogramCourierOf({ courier: "aliclik", reroute_outcome: null })).toBeNull();
     expect(reprogramCourierOf({ courier: "aliclik", reroute_outcome: "sin_cobertura" })).toBeNull();
     expect(reprogramCourierOf({})).toBeNull();
+  });
+});
+
+describe("aggregateReproDay (productividad de hoy por asesora)", () => {
+  it("cuenta gestiones (call+reroute), reprogramadas (reroute) y guías distintas", () => {
+    const out = aggregateReproDay([
+      { agent: "u1", kind: "call", shipmentId: "g1" },
+      { agent: "u1", kind: "call", shipmentId: "g1" }, // misma guía → 1 guía
+      { agent: "u1", kind: "reroute", shipmentId: "g2" },
+      { agent: "u2", kind: "call", shipmentId: "g3" },
+      { agent: null, kind: "call", shipmentId: "g9" }, // sin agente → ignorado
+      { agent: "u1", kind: "system", shipmentId: "g4" }, // kind no-gestión → ignorado
+    ]);
+    expect(out).toEqual([
+      { agent: "u1", gestiones: 3, reprogramadas: 1, guias: 2 },
+      { agent: "u2", gestiones: 1, reprogramadas: 0, guias: 1 },
+    ]);
+  });
+
+  it("ordena por gestiones desc y devuelve [] sin datos", () => {
+    expect(aggregateReproDay([])).toEqual([]);
+    const out = aggregateReproDay([
+      { agent: "a", kind: "call", shipmentId: "x" },
+      { agent: "b", kind: "call", shipmentId: "y" },
+      { agent: "b", kind: "reroute", shipmentId: "z" },
+    ]);
+    expect(out.map((r) => r.agent)).toEqual(["b", "a"]);
   });
 });
 
