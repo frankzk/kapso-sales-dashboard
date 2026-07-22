@@ -238,27 +238,28 @@ describe("reprogramCourierOf (filtro Aliclik vs Fénix en 'En ruta')", () => {
 });
 
 describe("aggregateReproDay (productividad de hoy por asesora)", () => {
-  it("cuenta gestiones (call+reroute), reprogramadas (reroute) y guías distintas", () => {
+  it("cuenta gestiones (call+reroute) y desglosa resultados por new_status", () => {
     const out = aggregateReproDay([
-      { agent: "u1", kind: "call", shipmentId: "g1" },
-      { agent: "u1", kind: "call", shipmentId: "g1" }, // misma guía → 1 guía
-      { agent: "u1", kind: "reroute", shipmentId: "g2" },
-      { agent: "u2", kind: "call", shipmentId: "g3" },
-      { agent: null, kind: "call", shipmentId: "g9" }, // sin agente → ignorado
-      { agent: "u1", kind: "system", shipmentId: "g4" }, // kind no-gestión → ignorado
+      { agent: "u1", kind: "reroute", newStatus: "en_ruta", shipmentId: "g1" }, // confirmada
+      { agent: "u1", kind: "call", newStatus: "pendiente", shipmentId: "g1" }, // no contesta, misma guía
+      { agent: "u1", kind: "call", newStatus: "anulado", shipmentId: "g2" }, // cancela
+      { agent: "u1", kind: "call", newStatus: "entregado", shipmentId: "g3" }, // entregado
+      { agent: "u2", kind: "call", newStatus: null, shipmentId: "g4" }, // programar (sin cierre)
+      { agent: null, kind: "call", newStatus: "en_ruta", shipmentId: "g9" }, // sin agente → ignorado
+      { agent: "u1", kind: "system", newStatus: null, shipmentId: "g5" }, // kind no-gestión → ignorado
     ]);
     expect(out).toEqual([
-      { agent: "u1", gestiones: 3, reprogramadas: 1, guias: 2 },
-      { agent: "u2", gestiones: 1, reprogramadas: 0, guias: 1 },
+      { agent: "u1", gestiones: 4, reprogramadas: 1, anuladas: 1, entregadas: 1, guias: 3 },
+      { agent: "u2", gestiones: 1, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: 1 },
     ]);
   });
 
   it("ordena por gestiones desc y devuelve [] sin datos", () => {
     expect(aggregateReproDay([])).toEqual([]);
     const out = aggregateReproDay([
-      { agent: "a", kind: "call", shipmentId: "x" },
-      { agent: "b", kind: "call", shipmentId: "y" },
-      { agent: "b", kind: "reroute", shipmentId: "z" },
+      { agent: "a", kind: "call", newStatus: "pendiente", shipmentId: "x" },
+      { agent: "b", kind: "call", newStatus: "pendiente", shipmentId: "y" },
+      { agent: "b", kind: "reroute", newStatus: "en_ruta", shipmentId: "z" },
     ]);
     expect(out.map((r) => r.agent)).toEqual(["b", "a"]);
   });

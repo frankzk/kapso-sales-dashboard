@@ -214,10 +214,12 @@ function StatusBadge({
 }
 
 const SIN_DISTRITO = "(sin distrito)";
-const SIN_PROVINCIA = "(sin provincia)";
+const SIN_DEPARTAMENTO = "(sin departamento)";
 
-function shipmentProvince(shipment: Pick<ShipmentRow, "province" | "region">): string {
-  return shipment.province?.trim() || shipment.region?.trim() || SIN_PROVINCIA;
+// Departamento del reporte de Aliclik (columna DEPARTAMENTO → region). Se usa el
+// departamento, no la provincia, para agrupar el filtro superior.
+function shipmentDepartment(shipment: Pick<ShipmentRow, "region">): string {
+  return shipment.region?.trim() || SIN_DEPARTAMENTO;
 }
 
 export function ShipmentsBoard({
@@ -240,7 +242,7 @@ export function ShipmentsBoard({
 
   // client-side filters over the loaded view. Empty set = "all".
   const [storeFilter, setStoreFilter] = useState<Set<string>>(new Set());
-  const [provinceFilter, setProvinceFilter] = useState<Set<string>>(new Set());
+  const [departmentFilter, setDepartmentFilter] = useState<Set<string>>(new Set());
   const [districtFilter, setDistrictFilter] = useState<Set<string>>(new Set());
   const [dateFilter, setDateFilter] = useState(""); // YYYY-MM-DD on next_followup_at
   const [unmatchedOnly, setUnmatchedOnly] = useState(false);
@@ -264,8 +266,8 @@ export function ShipmentsBoard({
 
   // Province is imported from Aliclik. Keep it separate from `city`, which is
   // the normalized Fenix coverage key and can intentionally contain a district.
-  const provinceOptions = Array.from(
-    new Set(shipments.map(shipmentProvince)),
+  const departmentOptions = Array.from(
+    new Set(shipments.map(shipmentDepartment)),
   ).sort((a, b) => a.localeCompare(b));
   const districtOptions = Array.from(
     new Set(shipments.map((s) => s.district || SIN_DISTRITO)),
@@ -273,7 +275,7 @@ export function ShipmentsBoard({
 
   // Every view opens without province or district restrictions.
   useEffect(() => {
-    setProvinceFilter(new Set());
+    setDepartmentFilter(new Set());
     setDistrictFilter(new Set());
     setDateFilter("");
     setUnmatchedOnly(false);
@@ -315,7 +317,7 @@ export function ShipmentsBoard({
   const filteredWithoutAliclikRoute = shipments.filter(
     (s) =>
       (storeFilter.size === 0 || storeFilter.has(s.store_id)) &&
-      (provinceFilter.size === 0 || provinceFilter.has(shipmentProvince(s))) &&
+      (departmentFilter.size === 0 || departmentFilter.has(shipmentDepartment(s))) &&
       (districtFilter.size === 0 || districtFilter.has(s.district || SIN_DISTRITO)) &&
       (!dateFilter || (s.next_followup_at ? s.next_followup_at.slice(0, 10) === dateFilter : false)) &&
       (!unmatchedOnly || !s.matched) &&
@@ -556,12 +558,12 @@ export function ShipmentsBoard({
                   })}
                 </div>
               )}
-              {provinceOptions.length > 1 && (
+              {departmentOptions.length > 1 && (
                 <ChecklistFilter
-                  label="Provincia"
-                  options={provinceOptions}
-                  selected={provinceFilter}
-                  onChange={setProvinceFilter}
+                  label="Departamento"
+                  options={departmentOptions}
+                  selected={departmentFilter}
+                  onChange={setDepartmentFilter}
                 />
               )}
               {districtOptions.length > 1 && (
@@ -636,7 +638,7 @@ export function ShipmentsBoard({
                     const next = e.target.value as FenixAvailabilityFilter;
                     setFenixFilter(next);
                     if (next === "sin_stock" || next === "sin_cobertura") {
-                      setProvinceFilter(new Set());
+                      setDepartmentFilter(new Set());
                     }
                   }}
                   className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
@@ -700,7 +702,7 @@ export function ShipmentsBoard({
                 </>
               )}
               {(storeFilter.size > 0 ||
-                provinceFilter.size > 0 ||
+                departmentFilter.size > 0 ||
                 districtFilter.size > 0 ||
                 dateFilter ||
                 unmatchedOnly ||
@@ -712,7 +714,7 @@ export function ShipmentsBoard({
                 <button
                   onClick={() => {
                     setStoreFilter(new Set());
-                    setProvinceFilter(new Set());
+                    setDepartmentFilter(new Set());
                     setDistrictFilter(new Set());
                     setDateFilter("");
                     setUnmatchedOnly(false);
@@ -2314,10 +2316,10 @@ function pctLabel(tasa: number | null): string | null {
   return tasa == null ? null : `${Math.round(tasa * 100)}%`;
 }
 
-/** Snapshot de fin de día: productividad de hoy por asesora en Repro Provincia,
- *  para que cada persona mande una "foto" de su trabajo. Colapsable. */
+/** Snapshot SIEMPRE visible: productividad de hoy por asesora en Repro Provincia
+ *  (gestiones + resultados del día), para que cada persona mande una "foto" de su
+ *  trabajo al final del día. */
 function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
-  const [open, setOpen] = useState(true);
   const hoy = new Date().toLocaleDateString("es-PE", {
     weekday: "long",
     day: "2-digit",
@@ -2328,71 +2330,74 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
     (acc, r) => {
       acc.gestiones += r.gestiones;
       acc.reprogramadas += r.reprogramadas;
+      acc.anuladas += r.anuladas;
+      acc.entregadas += r.entregadas;
       acc.guias += r.guias;
       return acc;
     },
-    { gestiones: 0, reprogramadas: 0, guias: 0 },
+    { gestiones: 0, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: 0 },
   );
   const label = (name: string) => name.split("@")[0] || name;
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-xs"
-      >
+      <div className="flex items-center gap-2 px-3 py-2 text-xs">
         <span className="font-semibold text-slate-800">📸 Hoy por asesora</span>
         <span className="capitalize text-slate-400">{hoy}</span>
-        {!open && rows.length > 0 && (
-          <span className="text-slate-500">
-            · {rows.length} asesora{rows.length === 1 ? "" : "s"} · {totals.gestiones} gestiones
-          </span>
-        )}
-        <span className="ml-auto text-slate-400">{open ? "▲" : "▼"}</span>
-      </button>
-      {open &&
-        (rows.length === 0 ? (
-          <p className="px-3 pb-3 text-xs text-slate-400">Aún no hay gestión registrada hoy.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-t border-slate-100 text-[11px] text-slate-500">
-                  <th className="px-3 py-1.5 text-left font-medium">Asesora</th>
-                  <th className="px-3 py-1.5 text-right font-medium" title="Acciones de gestión hoy (llamadas + reprogramaciones)">
-                    Gestiones
-                  </th>
-                  <th className="px-3 py-1.5 text-right font-medium" title="De esas, confirmadas → En ruta">
-                    Reprogramadas
-                  </th>
-                  <th className="px-3 py-1.5 text-right font-medium" title="Guías distintas tocadas hoy">
-                    Guías
-                  </th>
+        <span className="ml-auto text-slate-400">Gestión de hoy en Repro Provincia</span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="px-3 pb-3 text-xs text-slate-400">Aún no hay gestión registrada hoy.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-t border-slate-100 text-[11px] text-slate-500">
+                <th className="px-3 py-1.5 text-left font-medium">Asesora</th>
+                <th className="px-3 py-1.5 text-right font-medium" title="Acciones de gestión hoy (llamadas + reprogramaciones)">
+                  Gestiones
+                </th>
+                <th className="px-3 py-1.5 text-right font-medium" title="Confirmadas → En ruta">
+                  Reprogram.
+                </th>
+                <th className="px-3 py-1.5 text-right font-medium" title="Cliente canceló → Anulado">
+                  Anuladas
+                </th>
+                <th className="px-3 py-1.5 text-right font-medium" title="Marcadas Entregado en la gestión">
+                  Entregadas
+                </th>
+                <th className="px-3 py-1.5 text-right font-medium" title="Guías distintas tocadas hoy">
+                  Guías
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.agent} className="border-t border-slate-100">
+                  <td className="px-3 py-1.5 text-slate-700">{label(r.name)}</td>
+                  <td className="px-3 py-1.5 text-right font-semibold text-slate-800 tabular-nums">
+                    {r.gestiones}
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-violet-700 tabular-nums">{r.reprogramadas}</td>
+                  <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{r.anuladas}</td>
+                  <td className="px-3 py-1.5 text-right text-emerald-700 tabular-nums">{r.entregadas}</td>
+                  <td className="px-3 py-1.5 text-right text-slate-600 tabular-nums">{r.guias}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.agent} className="border-t border-slate-100">
-                    <td className="px-3 py-1.5 text-slate-700">{label(r.name)}</td>
-                    <td className="px-3 py-1.5 text-right font-semibold text-slate-800 tabular-nums">
-                      {r.gestiones}
-                    </td>
-                    <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{r.reprogramadas}</td>
-                    <td className="px-3 py-1.5 text-right text-slate-700 tabular-nums">{r.guias}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="border-t border-slate-200 text-slate-600">
-                  <td className="px-3 py-1.5 text-left font-medium">Total equipo</td>
-                  <td className="px-3 py-1.5 text-right font-semibold tabular-nums">{totals.gestiones}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{totals.reprogramadas}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{totals.guias}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        ))}
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-slate-200 text-slate-600">
+                <td className="px-3 py-1.5 text-left font-medium">Total equipo</td>
+                <td className="px-3 py-1.5 text-right font-semibold tabular-nums">{totals.gestiones}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums">{totals.reprogramadas}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums">{totals.anuladas}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums">{totals.entregadas}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums">{totals.guias}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
