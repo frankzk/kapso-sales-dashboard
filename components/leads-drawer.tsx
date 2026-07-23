@@ -1935,9 +1935,13 @@ function OrderFormPanel({
   const [discountValue, setDiscountValue] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
+  const [generatedOrder, setGeneratedOrder] = useState<NonNullable<LeadActionState["generatedOrder"]> | null>(null);
+  const [copiedOrder, setCopiedOrder] = useState(false);
 
   useEffect(() => {
     let alive = true;
+    setGeneratedOrder(null);
+    setCopiedOrder(false);
     loadOrderDraft(leadId).then((res) => {
       if (!alive) return;
       if ("error" in res) {
@@ -1983,6 +1987,8 @@ function OrderFormPanel({
       return;
     }
     setMsg(null);
+    setGeneratedOrder(null);
+    setCopiedOrder(false);
     startTransition(async () => {
       const res = await generateOrder(leadId, {
         lineItems: items.map((it) => ({
@@ -2011,8 +2017,30 @@ function OrderFormPanel({
         return;
       }
       setMsg(res.notice ?? "Pedido generado.");
+      setGeneratedOrder(
+        res.generatedOrder ?? {
+          id: "",
+          name: "Pedido generado",
+          total,
+          currency,
+          adminUrl: null,
+          confirmationSent: sendConfirm,
+        },
+      );
       onRegistered();
     });
+  }
+
+  async function copyGeneratedOrder() {
+    if (!generatedOrder) return;
+    try {
+      const label = generatedOrder.name || generatedOrder.id || "Pedido generado";
+      await navigator.clipboard.writeText(label);
+      setCopiedOrder(true);
+      setTimeout(() => setCopiedOrder(false), 1400);
+    } catch {
+      /* clipboard no disponible */
+    }
   }
 
   return (
@@ -2267,29 +2295,78 @@ function OrderFormPanel({
             )}
           </div>
 
-          <p className="text-xs text-emerald-700/80">
-            Pago contraentrega → queda como <span className="font-medium">pago pendiente</span> y sube como pedido
-            real a Shopify. Marca el lead <span className="font-medium">Ganado</span> y suma a tu productividad.
-          </p>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={submit}
-              disabled={pending || !valid}
-              className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-            >
-              {pending ? "Generando…" : "Generar pedido"}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={pending}
-              className="text-sm text-slate-500 hover:underline disabled:opacity-60"
-            >
-              Cancelar
-            </button>
-            {msg && <span className="text-xs text-slate-600">{msg}</span>}
-          </div>
+          {!generatedOrder && (
+            <p className="text-xs text-emerald-700/80">
+              Pago contraentrega → queda como <span className="font-medium">pago pendiente</span> y sube como pedido
+              real a Shopify. Marca el lead <span className="font-medium">Ganado</span> y suma a tu productividad.
+            </p>
+          )}
+
+          {generatedOrder && (
+            <div className="space-y-2">
+              <div className="flex items-start gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-3 py-2.5 text-white shadow-sm shadow-emerald-900/10">
+                <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/20 text-base font-bold">
+                  ✓
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold leading-tight">Pedido generado correctamente</p>
+                  <p className="mt-0.5 text-xs leading-snug text-emerald-50">
+                    {generatedOrder.currency} {generatedOrder.total.toFixed(2)}
+                    {generatedOrder.confirmationSent ? " · confirmación enviada por WhatsApp" : " · sin confirmación por WhatsApp"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-emerald-200 bg-white px-3 py-2">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-lg font-semibold text-emerald-700">
+                  ✓
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-emerald-900">Pedido generado</p>
+                  <p className="truncate text-xs text-slate-500">{generatedOrder.name || generatedOrder.id || msg}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={copyGeneratedOrder}
+                  className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                >
+                  {copiedOrder ? "Copiado" : "Copiar pedido"}
+                </button>
+                {generatedOrder.adminUrl && (
+                  <a
+                    href={generatedOrder.adminUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                  >
+                    Ver en Shopify
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {!generatedOrder && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={submit}
+                disabled={pending || !valid}
+                className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {pending ? "Generando..." : "Generar pedido"}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={pending}
+                className="text-sm text-slate-500 hover:underline disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              {msg && <span className="text-xs text-slate-600">{msg}</span>}
+            </div>
+          )}
         </>
       )}
     </section>

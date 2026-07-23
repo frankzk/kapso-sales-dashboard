@@ -55,6 +55,7 @@ import {
   normalizeWhatsappStatus,
   type WhatsappOutboxRow,
 } from "@/lib/whatsapp-outbox";
+import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 
 // Process-level cache of vendedora id → display name (emails ~never change).
 const agentNameCache = new Map<string, string>();
@@ -89,6 +90,14 @@ export interface LeadActionState {
     Pick<LeadRow, "status" | "category" | "needs_attention" | "next_followup_at" | "last_interaction_at">
   >;
   sentMessage?: LeadConversationMessage;
+  generatedOrder?: {
+    id: string;
+    name: string;
+    total: number;
+    currency: string;
+    adminUrl: string | null;
+    confirmationSent: boolean;
+  };
 }
 
 /** Load the analytical panel after the queue is interactive. Keeping these
@@ -2052,7 +2061,20 @@ export async function generateOrder(
     }
   }
 
+  const notice = `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}`;
+  const confirmationSent = confirmNote.toLowerCase().includes("enviada");
+
   revalidatePath("/dashboard/leads");
   revalidatePath("/dashboard");
-  return { notice: `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}` };
+  return {
+    notice,
+    generatedOrder: {
+      id: shopifyOrderId,
+      name: completed.orderName ?? `PED-${shopifyOrderId.slice(-6).toUpperCase()}`,
+      total: amount,
+      currency,
+      adminUrl: realOrderId ? shopifyOrderAdminUrl(creds.shopify_domain, realOrderId) : null,
+      confirmationSent,
+    },
+  };
 }
