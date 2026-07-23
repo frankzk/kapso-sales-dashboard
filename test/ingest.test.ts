@@ -500,6 +500,19 @@ describe("shouldReopenWonCart (open cart vs a sticky `won` lead)", () => {
     ).toBe(true);
   });
 
+  it("does NOT reopen a lead explicitly confirmed as won", async () => {
+    const { shouldReopenWonCart } = await import("@/lib/leads-ingest");
+    expect(
+      shouldReopenWonCart({
+        category: "won",
+        status: "ya_tiene_pedido",
+        draftCreatedAt: "2026-06-30T18:33:41Z",
+        lastOrderAt: "2026-06-01T10:00:00Z",
+        lastDispositionAt: null,
+      }),
+    ).toBe(false);
+  });
+
   it("does NOT reopen when the active order is newer than the cart (real, fresh win)", async () => {
     const { shouldReopenWonCart } = await import("@/lib/leads-ingest");
     expect(

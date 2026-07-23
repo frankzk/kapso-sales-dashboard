@@ -653,11 +653,13 @@ export function eventOverridesDisposition(
  */
 export function shouldReopenWonCart(opts: {
   category: string | undefined;
+  status?: string | null | undefined;
   draftCreatedAt: string | null;
   lastOrderAt: string | null | undefined; // latest NON-cancelled order for the phone
   lastDispositionAt: string | null | undefined;
 }): boolean {
   if (opts.category !== "won") return false;
+  if (opts.status === "pedido_generado" || opts.status === "ya_tiene_pedido") return false;
   const cartBeatsOrder =
     !opts.lastOrderAt || (!!opts.draftCreatedAt && opts.draftCreatedAt > opts.lastOrderAt);
   return cartBeatsOrder && eventOverridesDisposition(opts.draftCreatedAt, opts.lastDispositionAt);
@@ -1640,15 +1642,17 @@ export async function linkDraftOrdersToLeads(
   // repeat cart should reopen).
   const phones = [...new Set(eligible.map((d) => d.customer_phone as string))];
   const existingCategory = new Map<string, string>();
+  const existingStatus = new Map<string, string>();
   const existingSource = new Map<string, string | null>();
   {
     const { data } = await admin
       .from("leads")
-      .select("phone, category, source")
+      .select("phone, status, category, source")
       .eq("store_id", storeId)
       .in("phone", phones);
-    for (const l of (data as { phone: string; category: string; source: string | null }[]) ?? []) {
+    for (const l of (data as { phone: string; status: string; category: string; source: string | null }[]) ?? []) {
       existingCategory.set(l.phone, l.category);
+      existingStatus.set(l.phone, l.status);
       existingSource.set(l.phone, l.source);
     }
   }
@@ -1701,6 +1705,7 @@ export async function linkDraftOrdersToLeads(
     const reopen =
       shouldReopenWonCart({
         category,
+        status: existingStatus.get(phone),
         draftCreatedAt: d.created_at,
         lastOrderAt: orderCreatedAt.get(phone),
         lastDispositionAt,

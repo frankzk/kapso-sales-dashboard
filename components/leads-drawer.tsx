@@ -760,8 +760,8 @@ export function LeadDrawer({
                     type="button"
                     onClick={() =>
                       startConfirmWon(async () => {
-                        await confirmLeadWon(lead.id);
-                        onRegistered();
+                        const res = await confirmLeadWon(lead.id);
+                        onRegistered({ leadPatch: res.leadPatch, refreshList: true });
                       })
                     }
                     disabled={confirmingWon}

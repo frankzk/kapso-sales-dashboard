@@ -329,13 +329,9 @@ describe("nextLeadState", () => {
   it("new lead → nuevo", () => {
     expect(nextLeadState(null, {})).toEqual({ status: "nuevo", category: "open", needsAttention: false });
   });
-  it("repeat customer: order + newer cart → reopens (not won)", () => {
-    // hasRecentIntent = a new cart created after the won order → actionable again.
-    expect(nextLeadState({ status: "pedido_generado" }, { hasOrder: true, hasRecentIntent: true })).toEqual({
-      status: "nuevo",
-      category: "open",
-      needsAttention: false,
-    });
+  it("keeps an already-won lead sticky even when a cart signal arrives", () => {
+    expect(nextLeadState({ status: "pedido_generado" }, { hasOrder: true, hasRecentIntent: true })).toBeNull();
+    expect(nextLeadState({ status: "ya_tiene_pedido" }, { hasOrder: true, hasRecentIntent: true })).toBeNull();
   });
   it("order without a newer cart still wins", () => {
     expect(nextLeadState(null, { hasOrder: true, hasRecentIntent: false })).toMatchObject({

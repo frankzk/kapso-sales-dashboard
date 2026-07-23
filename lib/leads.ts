@@ -176,6 +176,9 @@ export function nextLeadState(
   existing: LeadStateSnapshot | null,
   sig: { hasOrder?: boolean; hasRecentIntent?: boolean },
 ): AutoState | null {
+  if (sig.hasOrder && existing && categoryOf(existing.status) === "won") {
+    return null;
+  }
   // A prior order wins the lead — UNLESS there's a newer buying signal (a fresh
   // open cart created after that order): a repeat customer working a NEW purchase.
   // Then we fall through and re-derive an actionable state instead of staying won.

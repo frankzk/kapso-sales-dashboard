@@ -695,15 +695,13 @@ export async function confirmLeadWon(leadId: string): Promise<LeadActionState> {
   }
 
   const nowIso = new Date().toISOString();
-  await admin
-    .from("leads")
-    .update({
-      status: "ya_tiene_pedido",
-      category: "won",
-      needs_attention: false,
-      last_interaction_at: nowIso,
-    })
-    .eq("id", leadId);
+  const patch = {
+    status: "ya_tiene_pedido",
+    category: "won",
+    needs_attention: false,
+    last_interaction_at: nowIso,
+  };
+  await admin.from("leads").update(patch).eq("id", leadId);
   await admin.from("lead_calls").insert({
     lead_id: leadId,
     store_id: ctx.storeId,
@@ -714,7 +712,7 @@ export async function confirmLeadWon(leadId: string): Promise<LeadActionState> {
   });
 
   revalidatePath("/dashboard/leads");
-  return { notice: `Marcado como ganado${o.name ? ` · ${o.name}` : ""}.` };
+  return { notice: `Marcado como ganado${o.name ? ` · ${o.name}` : ""}.`, leadPatch: patch };
 }
 
 /**
