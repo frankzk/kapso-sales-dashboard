@@ -39,6 +39,7 @@ import {
   applyHandoff,
   archiveStaleLeads,
   eventOverridesDisposition,
+  expireColdHandoffs,
   flagCartAttentionWaves,
   flagOverdueFollowups,
   ingestConversationEvent,
@@ -945,6 +946,17 @@ export async function runStoreSync(
     report.requeued = await flagCartAttentionWaves(admin, storeId);
   } catch (e: any) {
     report.errors.push(`waves: ${e.message}`);
+  }
+
+  // 2c.7) Expira handoffs FRÍOS: los que el bot derivó, nadie atendió y el
+  //       cliente abandonó (>24h sin escribir) salen de "Atender ahora" y bajan
+  //       a la cola normal. Es el reductor automático que evita que esa cola
+  //       solo crezca. Va DESPUÉS de las olas para no pisar una atención de ola
+  //       recién puesta. Best-effort.
+  try {
+    await expireColdHandoffs(admin, storeId);
+  } catch (e: any) {
+    report.errors.push(`handoffs: ${e.message}`);
   }
 
   // 2d) Auto-archivar leads vencidos viejos (sin interacción > STALE_LEAD_DAYS)

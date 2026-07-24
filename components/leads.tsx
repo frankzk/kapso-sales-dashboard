@@ -37,6 +37,7 @@ import {
   loadLeadsInsightsPanel,
   openLeadDrawer,
   releaseLead,
+  resolveHandoff,
   searchLeads,
 } from "@/app/dashboard/leads/actions";
 import { cn } from "@/components/ui";
@@ -917,6 +918,18 @@ export function LeadsBoard({
               <span className="font-semibold text-slate-800">{counts.sin_llamar} sin llamar</span>
               {" · "}
               <span className="text-slate-600">{counts.por_llamar - counts.sin_llamar} en seguimiento</span>
+              {counts.handoff > 0 && (
+                <>
+                  {" · "}
+                  <button
+                    type="button"
+                    onClick={() => navigateToView("handoff")}
+                    className="font-semibold text-amber-600 hover:underline"
+                  >
+                    ⚡ {counts.handoff} atender ahora
+                  </button>
+                </>
+              )}
               {counts.yape > 0 && (
                 <>
                   {" · "}
@@ -1362,7 +1375,23 @@ export function LeadsBoard({
                     {locked ? (
                       <span className="text-[11px] whitespace-nowrap text-slate-400">en curso</span>
                     ) : (
-                      <div className="flex gap-1.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                      <div className="flex items-center gap-1.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                        {view === "handoff" && (
+                          <button
+                            type="button"
+                            title="Sacar de Atender ahora (handoff resuelto)"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startRouteTransition(async () => {
+                                await resolveHandoff(lead.id);
+                                router.refresh();
+                              });
+                            }}
+                            className="inline-flex h-[30px] items-center rounded-md border border-emerald-300 bg-emerald-50 px-2 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                          >
+                            ✓ Resuelto
+                          </button>
+                        )}
                         <a
                           title="Llamar"
                           href={`tel:+${lead.phone}`}
@@ -1393,9 +1422,11 @@ export function LeadsBoard({
                   ? searching
                     ? "Buscando…"
                     : `Sin resultados para «${query.trim()}».`
-                  : leads.length
-                    ? "No hay leads de esta fuente en la vista."
-                    : "No hay leads en esta vista."}
+                  : view === "handoff" && !leads.length
+                    ? "🎉 Cola en cero — no hay handoffs esperando. Buen trabajo."
+                    : leads.length
+                      ? "No hay leads de esta fuente en la vista."
+                      : "No hay leads en esta vista."}
               </div>
             )}
           </div>

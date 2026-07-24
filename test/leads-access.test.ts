@@ -8,7 +8,16 @@ vi.mock("@/lib/db", () => ({
   createServerSupabase: createServerSupabaseMock,
 }));
 
-import { getStoreLeads } from "@/lib/leads-access";
+import { getStoreLeads, handoffFreshCutoffIso, HANDOFF_FRESH_HOURS } from "@/lib/leads-access";
+
+describe("handoffFreshCutoffIso (frescura de la cola Atender ahora)", () => {
+  it("devuelve now − HANDOFF_FRESH_HOURS en ISO (borde compartido vista/cron)", () => {
+    const now = Date.parse("2026-07-22T12:00:00.000Z");
+    expect(handoffFreshCutoffIso(now)).toBe("2026-07-21T12:00:00.000Z");
+    expect(handoffFreshCutoffIso(now)).toBe(new Date(now - HANDOFF_FRESH_HOURS * 3_600_000).toISOString());
+    expect(HANDOFF_FRESH_HOURS).toBe(24);
+  });
+});
 
 describe("getStoreLeads pagination", () => {
   beforeEach(() => {
