@@ -199,7 +199,9 @@ function avatarInitial(name: string): string {
   return (name.trim()[0] ?? "?").toUpperCase();
 }
 
-/** Today's per-advisor productivity: contactos (llamadas) + pedidos (cierres).
+/** Today's per-advisor productivity: leads trabajados + llamadas + pedidos.
+ *  El % es el de cierre (pedidos / leads trabajados) — el MISMO que la página de
+ *  Productividad, para que ambas vistas cuenten la misma historia.
  *  El ⓘ junto a "pedidos" lista QUÉ pedidos generó (código #… + fecha): se abre
  *  con hover en desktop y con tap/click se fija (otro tap o clic afuera cierra). */
 function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
@@ -210,7 +212,7 @@ function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
   return (
     <div className="space-y-2.5">
       {rows.map((r) => {
-        const conv = r.contactos > 0 ? Math.round((r.pedidos / r.contactos) * 100) : null;
+        const conv = r.leads > 0 ? Math.min(100, Math.round((r.pedidos / r.leads) * 100)) : null;
         return (
           <div key={r.name} className="flex items-center gap-2">
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-100 text-[10px] font-semibold text-brand-700">
@@ -223,7 +225,7 @@ function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
                 </span>
                 <span
                   className="shrink-0 text-xs font-semibold text-slate-700"
-                  title={conv != null ? `${r.pedidos} pedidos / ${r.contactos} contactos` : undefined}
+                  title={conv != null ? `${r.pedidos} pedidos / ${r.leads} leads trabajados` : undefined}
                 >
                   {conv != null ? `${conv}%` : "—"}
                 </span>
@@ -233,7 +235,8 @@ function ProductivityToday({ rows }: { rows: LeadsInsights["productivity"] }) {
                 <div className="h-full rounded-full bg-emerald-500" style={{ width: `${conv ?? 0}%` }} />
               </div>
               <p className="mt-0.5 text-[10px] text-slate-400">
-                <span className="text-slate-500">{r.contactos}</span> contactos ·{" "}
+                <span className="text-slate-500">{r.leads}</span> leads ·{" "}
+                <span className="text-slate-500">{r.llamadas}</span> llamadas ·{" "}
                 <span className="text-emerald-700">{r.pedidos}</span> pedidos
                 {r.pedidosDetalle.length > 0 && (
                   <span className="group relative inline-block">
