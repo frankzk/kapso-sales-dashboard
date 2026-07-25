@@ -317,6 +317,9 @@ export interface ShipmentCallRow {
   next_followup_at: string | null;
   occurred_at?: string;
   agent_name?: string | null; // resolved display name (UI only)
+  note_edited_at?: string | null; // set when the note was edited after the fact
+  note_edited_by?: string | null; // user id who last edited the note
+  note_editor_name?: string | null; // resolved display name of the editor (UI only)
 }
 
 export interface FenixStockRowDb {

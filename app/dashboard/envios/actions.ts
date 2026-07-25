@@ -160,20 +160,23 @@ export async function loadShipmentDetail(
   if (!detail) return { error: "No encontrado." };
   const admin = createAdminSupabase();
   const historyCalls = detail.guideHistory.flatMap((guide) => guide.calls);
-  const ids = [...new Set(historyCalls.map((c) => c.agent).filter(Boolean))] as string[];
+  const ids = [
+    ...new Set(
+      historyCalls.flatMap((c) => [c.agent, c.note_edited_by]).filter(Boolean),
+    ),
+  ] as string[];
   if (ids.length) {
     await Promise.all(ids.map((id) => resolveAgentName(id, admin)));
   }
-  const calls = detail.calls.map((c) => ({
+  const withNames = (c: ShipmentCallRow): ShipmentCallRow => ({
     ...c,
     agent_name: c.agent ? (agentNameCache.get(c.agent) ?? null) : null,
-  }));
+    note_editor_name: c.note_edited_by ? (agentNameCache.get(c.note_edited_by) ?? null) : null,
+  });
+  const calls = detail.calls.map(withNames);
   const guideHistory = detail.guideHistory.map((guide) => ({
     ...guide,
-    calls: guide.calls.map((call) => ({
-      ...call,
-      agent_name: call.agent ? (agentNameCache.get(call.agent) ?? null) : null,
-    })),
+    calls: guide.calls.map(withNames),
   }));
   let order = detail.order;
   // If the local order came from an older no-phone Shopify fallback, its raw
@@ -217,6 +220,46 @@ export async function loadShipmentDetail(
     order,
     linkedFenixShipment: detail.linkedFenixShipment,
   };
+}
+
+/** Editar la nota (texto libre) de una gestión del historial. Cualquiera con
+ *  acceso a la guía puede editarla; deja traza de quién y cuándo la modificó.
+ *  Solo cambia la nota — nunca el estado, la fecha ni el tipo de gestión. */
+export async function updateShipmentCallNote(
+  callId: string,
+  note: string,
+): Promise<ShipmentActionState> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  // RLS: solo se resuelve si el usuario puede ver esa gestión.
+  const { data: call } = await sb
+    .from("shipment_calls")
+    .select("id,shipment_id")
+    .eq("id", callId)
+    .maybeSingle();
+  if (!call) return { error: "No se encontró la gestión o no tienes acceso." };
+
+  const ctx = await authorizeShipment((call as { shipment_id: string }).shipment_id);
+  if (!ctx) return { error: "Sin acceso a este envío." };
+
+  const trimmed = note.trim();
+  const admin = createAdminSupabase();
+  const { error } = await admin
+    .from("shipment_calls")
+    .update({
+      note: trimmed || null,
+      note_edited_at: new Date().toISOString(),
+      note_edited_by: ctx.userId,
+    })
+    .eq("id", callId);
+  if (error) return { error: error.message };
+
+  revalidatePath("/dashboard/envios");
+  return { notice: "Nota actualizada." };
 }
 
 /** Global search (guía / pedido / guía Fenix / celular), RLS-scoped. */

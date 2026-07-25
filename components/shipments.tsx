@@ -60,6 +60,7 @@ import {
   releaseShipment,
   renewShipmentClaim,
   searchShipments,
+  updateShipmentCallNote,
   updateShipmentDeliveryAddress,
   type ShipmentAddressInput,
 } from "@/app/dashboard/envios/actions";
@@ -1991,7 +1992,7 @@ function ShipmentDrawer({
 
             </fieldset>
 
-            <ShipmentGuideHistory guides={detail.guideHistory} />
+            <ShipmentGuideHistory guides={detail.guideHistory} onSaved={refresh} />
           </div>
         )}
       </div>
@@ -1999,7 +2000,13 @@ function ShipmentDrawer({
   );
 }
 
-function ShipmentGuideHistory({ guides }: { guides: ShipmentHistoryGuide[] }) {
+function ShipmentGuideHistory({
+  guides,
+  onSaved,
+}: {
+  guides: ShipmentHistoryGuide[];
+  onSaved: () => void;
+}) {
   return (
     <section className="space-y-2.5 rounded-xl border border-violet-200 bg-violet-50/45 p-2.5">
       <div className="flex items-center justify-between gap-3">
@@ -2073,34 +2080,13 @@ function ShipmentGuideHistory({ guides }: { guides: ShipmentHistoryGuide[] }) {
                 <p className="px-3 py-2.5 text-xs text-slate-400">Sin gestiones registradas en esta guía.</p>
               ) : (
                 <ul className="divide-y divide-slate-100">
-                  {guide.calls.map((call, callIndex) => {
-                    const occurredAt = fmtStatusSince(call.occurred_at ?? null);
-                    return (
-                      <li key={call.id ?? `${guide.id}-${callIndex}`} className="px-3 py-2 text-xs text-slate-600">
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="font-medium text-slate-700">
-                            {shipmentHistoryLabel(call)}
-                            {call.new_status ? ` → ${labelOf(call.new_status)}` : ""}
-                          </span>
-                          <span className="shrink-0 text-right text-[10px] leading-tight text-slate-400">
-                            {occurredAt && <span className="block">{occurredAt}</span>}
-                            {call.agent_name && <span className="block">{call.agent_name}</span>}
-                          </span>
-                        </div>
-                        {call.note && <p className="mt-0.5 leading-relaxed text-slate-600">{call.note}</p>}
-                        {call.next_followup_at && (
-                          <p className="mt-0.5 text-slate-500">
-                            {call.new_status === "en_ruta"
-                              ? "Fecha de reprogramación"
-                              : call.new_status
-                                ? "Próximo intento"
-                                : "Próxima llamada"}
-                            : {fmtReprogram(call.next_followup_at)}
-                          </p>
-                        )}
-                      </li>
-                    );
-                  })}
+                  {guide.calls.map((call, callIndex) => (
+                    <HistoryCallItem
+                      key={call.id ?? `${guide.id}-${callIndex}`}
+                      call={call}
+                      onSaved={onSaved}
+                    />
+                  ))}
                 </ul>
               )}
             </article>
@@ -2108,6 +2094,117 @@ function ShipmentGuideHistory({ guides }: { guides: ShipmentHistoryGuide[] }) {
         ))}
       </div>
     </section>
+  );
+}
+
+/** Una gestión del historial con su nota editable (cualquiera con acceso puede
+ *  corregirla; queda marcada como "editada" con quién y cuándo). */
+function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(call.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const occurredAt = fmtStatusSince(call.occurred_at ?? null);
+  const editedAt = fmtStatusSince(call.note_edited_at ?? null);
+
+  async function save() {
+    if (!call.id) return;
+    setSaving(true);
+    setError(null);
+    const res = await updateShipmentCallNote(call.id, draft);
+    setSaving(false);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    setEditing(false);
+    onSaved();
+  }
+
+  return (
+    <li className="px-3 py-2 text-xs text-slate-600">
+      <div className="flex items-start justify-between gap-3">
+        <span className="font-medium text-slate-700">
+          {shipmentHistoryLabel(call)}
+          {call.new_status ? ` → ${labelOf(call.new_status)}` : ""}
+        </span>
+        <span className="shrink-0 text-right text-[10px] leading-tight text-slate-400">
+          {occurredAt && <span className="block">{occurredAt}</span>}
+          {call.agent_name && <span className="block">{call.agent_name}</span>}
+        </span>
+      </div>
+
+      {editing ? (
+        <div className="mt-1 space-y-1">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={2}
+            autoFocus
+            className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 focus:border-violet-400 focus:outline-none"
+            placeholder="Nota de la gestión…"
+          />
+          {error && <p className="text-[10px] text-red-600">{error}</p>}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={save}
+              disabled={saving}
+              className="rounded-md bg-violet-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+            >
+              {saving ? "Guardando…" : "Guardar"}
+            </button>
+            <button
+              onClick={() => {
+                setEditing(false);
+                setDraft(call.note ?? "");
+                setError(null);
+              }}
+              disabled={saving}
+              className="text-[11px] text-slate-500 hover:underline"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-0.5 flex items-start justify-between gap-2">
+          <p className="leading-relaxed text-slate-600">
+            {call.note || <span className="italic text-slate-400">Sin nota</span>}
+          </p>
+          {call.id && (
+            <button
+              onClick={() => {
+                setDraft(call.note ?? "");
+                setEditing(true);
+              }}
+              className="shrink-0 text-[10px] font-medium text-violet-600 hover:underline"
+              title="Editar nota"
+            >
+              ✏️ Editar
+            </button>
+          )}
+        </div>
+      )}
+
+      {call.note_edited_at && !editing && (
+        <p className="mt-0.5 text-[10px] italic text-slate-400">
+          editada
+          {call.note_editor_name ? ` por ${call.note_editor_name}` : ""}
+          {editedAt ? ` · ${editedAt}` : ""}
+        </p>
+      )}
+
+      {call.next_followup_at && (
+        <p className="mt-0.5 text-slate-500">
+          {call.new_status === "en_ruta"
+            ? "Fecha de reprogramación"
+            : call.new_status
+              ? "Próximo intento"
+              : "Próxima llamada"}
+          : {fmtReprogram(call.next_followup_at)}
+        </p>
+      )}
+    </li>
   );
 }
 

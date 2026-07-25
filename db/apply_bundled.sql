@@ -1704,3 +1704,8 @@ create policy fenix_stock_movements_write on fenix_stock_movements for all to au
 
 grant select, insert on fenix_stock_movements to authenticated;
 grant all privileges on fenix_stock_movements to service_role;
+
+-- ── 0042_shipment_call_note_edit ─────────────────────────────────────────────
+-- Editar la nota de una gestión del historial con traza mínima (quién/cuándo).
+alter table shipment_calls add column if not exists note_edited_at timestamptz;
+alter table shipment_calls add column if not exists note_edited_by uuid references auth.users(id) on delete set null;
