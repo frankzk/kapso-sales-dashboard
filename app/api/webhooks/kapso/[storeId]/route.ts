@@ -11,11 +11,15 @@ export const dynamic = "force-dynamic";
 // Configure the URL in Kapso as:
 //   {SITE}/api/webhooks/kapso/<storeId>?secret=<STORE_WEBHOOK_SECRET>
 //
-// Auth is PER-STORE: the `secret` query param is matched (constant-time) against
-// the store's own `kapso_webhook_secret` (set in Ajustes → "Rotar credenciales").
-// This keeps one store owner from POSTing leads into another store. Stores that
-// have not set a per-store secret yet fall back to the shared CRON_SECRET (see
-// lib/ingest.ts → authorizeKapsoWebhook).
+// Auth is PER-STORE: the secret is matched (constant-time) against the store's
+// own `kapso_webhook_secret` (set in Ajustes → "Rotar credenciales"). It can
+// arrive either in the `?secret=` query param (Kapso's built-in webhooks) OR in
+// an `X-Webhook-Secret` header (custom workflow tools like notify-team, which
+// keep the secret out of the URL/logs). This keeps one store owner from POSTing
+// leads into another store. Stores that have not set a per-store secret yet fall
+// back to the shared CRON_SECRET (see lib/ingest.ts → authorizeKapsoWebhook).
+const readSecret = (req: NextRequest): string | null =>
+  req.nextUrl.searchParams.get("secret") ?? req.headers.get("x-webhook-secret");
 
 export async function POST(
   req: NextRequest,
@@ -33,7 +37,7 @@ export async function POST(
   try {
     const result = await processKapsoWebhook({
       storeId,
-      providedSecret: req.nextUrl.searchParams.get("secret"),
+      providedSecret: readSecret(req),
       eventHeader: req.headers.get("x-webhook-event"),
       body,
     });
@@ -53,7 +57,7 @@ export async function POST(
 // per-store way so the ping doubles as a "did I paste the right secret?" check.
 export async function GET(req: NextRequest, ctx: { params: Promise<{ storeId: string }> }) {
   const { storeId } = await ctx.params;
-  const creds = await authorizeKapsoRequest(storeId, req.nextUrl.searchParams.get("secret"));
+  const creds = await authorizeKapsoRequest(storeId, readSecret(req));
   if (!creds) return new NextResponse("unauthorized", { status: 401 });
   return NextResponse.json({ ok: true });
 }
