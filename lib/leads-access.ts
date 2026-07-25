@@ -4,15 +4,25 @@ import { createServerSupabase } from "@/lib/db";
 import { shopifyOrderAdminUrl } from "@/lib/shopify";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 
-export type LeadView = "por_llamar" | "yape" | "seguimientos" | "ganados" | "perdidos";
+export type LeadView = "por_llamar" | "handoff" | "yape" | "seguimientos" | "ganados" | "perdidos";
 
 export const LEAD_VIEWS: { key: LeadView; label: string }[] = [
   { key: "por_llamar", label: "Por llamar" },
+  { key: "handoff", label: "⚡ Atender ahora" },
   { key: "yape", label: "🔥 Yape/Shalom" },
   { key: "seguimientos", label: "Seguimientos" },
   { key: "ganados", label: "Ganados" },
   { key: "perdidos", label: "Perdidos" },
 ];
+
+/** Ventana de "frescura" de un handoff: si el cliente no escribe hace más de
+ *  esto, sale de "Atender ahora" (el cron lo devuelve a la cola normal). */
+export const HANDOFF_FRESH_HOURS = 24;
+
+/** ISO del corte de frescura de handoffs (now − HANDOFF_FRESH_HOURS). */
+export function handoffFreshCutoffIso(nowMs = Date.now()): string {
+  return new Date(nowMs - HANDOFF_FRESH_HOURS * 3_600_000).toISOString();
+}
 
 const LEADS_PAGE_SIZE = 1000;
 const LEADS_PAGE_CAP = 20_000;
@@ -28,6 +38,7 @@ const LEAD_BOARD_SELECT = [
   "kapso_conversation_id",
   "handoff_reason",
   "handoff_context",
+  "handoff_at",
   "category",
   "status",
   "has_order",
@@ -70,6 +81,19 @@ export async function getStoreLeads(
           .order("needs_attention", { ascending: false })
           .order("last_interaction_at", { ascending: false })
           .order("id", { ascending: true }); // stable pagination tie-breaker
+        break;
+      case "handoff":
+        // "Atender ahora": handoffs del bot aún sin gestionar (needs_attention),
+        // con el cliente activo en las últimas HANDOFF_FRESH_HOURS. El más
+        // antiguo primero (el que más espera arriba). Sale de la cola al
+        // dispositionar (needs_attention=false), al marcar resuelto, o cuando
+        // el cron lo expira por silencio del cliente.
+        q = q
+          .not("handoff_at", "is", null)
+          .eq("needs_attention", true)
+          .gte("last_inbound_at", handoffFreshCutoffIso())
+          .order("handoff_at", { ascending: true })
+          .order("id", { ascending: true });
         break;
       case "yape":
         q = q
@@ -220,8 +244,12 @@ export async function getLeadCounts(storeId: string): Promise<LeadCounts> {
   const sb = await createServerSupabase();
   const head = () => sb.from("leads").select("*", { count: "exact", head: true }).eq("store_id", storeId);
   const nowIso = new Date().toISOString();
-  const [porLlamar, yape, seguimientos, ganados, perdidos, sinLlamar] = await Promise.all([
+  const [porLlamar, handoff, yape, seguimientos, ganados, perdidos, sinLlamar] = await Promise.all([
     head().in("category", ["open", "hot"]).neq("status", "yape_por_verificar"),
+    head()
+      .not("handoff_at", "is", null)
+      .eq("needs_attention", true)
+      .gte("last_inbound_at", handoffFreshCutoffIso()), // "Atender ahora"
     head().eq("status", "yape_por_verificar"),
     head().not("next_followup_at", "is", null).lte("next_followup_at", nowIso),
     head().eq("category", "won"),
@@ -230,6 +258,7 @@ export async function getLeadCounts(storeId: string): Promise<LeadCounts> {
   ]);
   return {
     por_llamar: porLlamar.count ?? 0,
+    handoff: handoff.count ?? 0,
     yape: yape.count ?? 0,
     seguimientos: seguimientos.count ?? 0,
     ganados: ganados.count ?? 0,

@@ -661,6 +661,36 @@ export async function registerCall(
 }
 
 /**
+ * Saca un handoff de la cola "Atender ahora" sin registrar una disposición:
+ * apaga `needs_attention` (el único filtro de la cola además de handoff_at +
+ * frescura) y deja una nota en el timeline. NO cambia status/category — el lead
+ * sigue donde estaba, solo deja de ser urgente. Se usa para handoffs que no
+ * llevan a nada (spam, ya respondió el cliente, consulta boba). En la Fase 2,
+ * este mismo botón además devolverá la conversación al bot vía la API de Kapso.
+ */
+export async function resolveHandoff(leadId: string): Promise<LeadActionState> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+
+  const admin = createAdminSupabase();
+  const patch = { needs_attention: false };
+  const [leadRes] = await Promise.all([
+    admin.from("leads").update(patch).eq("id", leadId),
+    admin.from("lead_calls").insert({
+      lead_id: leadId,
+      store_id: ctx.storeId,
+      vendedora: ctx.userId,
+      kind: "system",
+      note: "✅ Handoff resuelto (sacado de Atender ahora)",
+    }),
+  ]);
+  if (leadRes.error) return { error: `No se pudo resolver: ${leadRes.error.message}` };
+
+  revalidatePath("/dashboard/leads");
+  return { notice: "Handoff resuelto ✓", leadPatch: patch };
+}
+
+/**
  * Confirm a lead as won when it already carries an ACTIVE order but wasn't
  * auto-marked (the bot/Shopify order was linked with win=false because a later
  * call disposition took precedence — see linkOrderToLead). Only flips
