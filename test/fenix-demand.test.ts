@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFenixDemand, type DemandShipment } from "@/lib/fenix-demand";
+import { buildFenixDemand, demandDepartment, type DemandShipment } from "@/lib/fenix-demand";
 import type { FenixStockRow } from "@/lib/fenix";
 
 const stock: FenixStockRow[] = [
@@ -56,5 +56,17 @@ describe("buildFenixDemand", () => {
   it("stock with no current demand shows OK, zero shortfall", () => {
     const rows = buildFenixDemand(stock, []);
     expect(rows.every((r) => r.status === "ok" && r.shortfall === 0)).toBe(true);
+  });
+
+  it("etiqueta el departamento de cada ciudad (Juliaca y Puno → Puno)", () => {
+    expect(demandDepartment("juliaca")).toBe("Puno");
+    expect(demandDepartment("puno")).toBe("Puno");
+    expect(demandDepartment("arequipa")).toBe("Arequipa");
+    expect(demandDepartment("huancayo")).toBe("Junín");
+    expect(demandDepartment("trujillo")).toBe("La Libertad");
+    // ciudad no mapeada → capitaliza
+    expect(demandDepartment("ilo")).toBe("Ilo");
+    const rows = buildFenixDemand(stock, []);
+    expect(rows.find((r) => r.city === "cusco")!.department).toBe("Cusco");
   });
 });
