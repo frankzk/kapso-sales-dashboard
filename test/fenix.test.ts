@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   currentFenixReason,
+  evaluateDirectFenixStock,
   evaluateFenix,
   fenixStockCityKey,
   matchesFenixAvailability,
@@ -141,5 +142,79 @@ describe("Fenix availability filters", () => {
   it("classifies legacy false rows by known Fenix coverage", () => {
     expect(currentFenixReason({ city: "Arequipa", fenix_eligible: false })).toBe("sin_stock");
     expect(currentFenixReason({ city: "Piura", fenix_eligible: false })).toBe("sin_cobertura");
+  });
+});
+
+describe("evaluateDirectFenixStock (gate de guía directa: TODOS los ítems)", () => {
+  const stock: FenixStockRow[] = [
+    { city: "arequipa", product: "8 en 1 Ultra SuperHuman", sku: "SH-8EN1", quantity: 2 },
+    { city: "arequipa", product: "Mushroom Coffee", sku: null, quantity: 1 },
+    { city: "arequipa", product: "Colágeno Hidrolizado", sku: "SH-COL", quantity: 0 },
+    { city: "juliaca", product: "Pulsera Magnética", sku: "PULSERA", quantity: 3 },
+  ];
+
+  it("ok cuando todos los line items tienen stock en la ciudad", () => {
+    const r = evaluateDirectFenixStock("Arequipa", stock, [
+      { title: "8 en 1 Ultra - Cápsulas SuperHuman™", sku: "SH-8EN1", quantity: 1 },
+      { title: "Mushroom Coffee 180g", sku: null, quantity: 2 },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(r.city).toBe("arequipa");
+    expect(r.uncovered).toEqual([]);
+  });
+
+  it("sin_stock si CUALQUIER ítem no tiene stock (aunque otro sí) y lista cuál", () => {
+    const r = evaluateDirectFenixStock("Arequipa", stock, [
+      { title: "Mushroom Coffee", sku: null, quantity: 1 },
+      { title: "Producto inexistente", sku: null, quantity: 1 },
+    ]);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("sin_stock");
+    expect(r.uncovered).toEqual(["Producto inexistente"]);
+  });
+
+  it("un renglón con saldo 0 no cubre (Colágeno agotado)", () => {
+    const r = evaluateDirectFenixStock("Arequipa", stock, [
+      { title: "Colágeno Hidrolizado", sku: "SH-COL", quantity: 1 },
+    ]);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("sin_stock");
+    expect(r.uncovered).toEqual(["Colágeno Hidrolizado"]);
+  });
+
+  it("prefiere el match por SKU exacto sobre el difuso por título", () => {
+    const r = evaluateDirectFenixStock("Arequipa", stock, [
+      { title: "nombre que no matchea nada", sku: "SH-8EN1", quantity: 1 },
+    ]);
+    expect(r.ok).toBe(true);
+  });
+
+  it("destino Puno valida contra stock de Juliaca (almacén compartido)", () => {
+    const r = evaluateDirectFenixStock("Puno", stock, [
+      { title: "Pulsera Magnética", sku: "PULSERA", quantity: 1 },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(r.city).toBe("puno");
+  });
+
+  it("sin_cobertura para una ciudad desconocida sin renglones de stock", () => {
+    const r = evaluateDirectFenixStock("Miraflores", stock, [
+      { title: "Mushroom Coffee", sku: null, quantity: 1 },
+    ]);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("sin_cobertura");
+  });
+
+  it("sin_cobertura cuando no hay distrito/ciudad en el pedido", () => {
+    const r = evaluateDirectFenixStock(null, stock, [{ title: "Mushroom Coffee", quantity: 1 }]);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("sin_cobertura");
+  });
+
+  it("pedido sin line items se valida con un ítem vacío (no pasa sin match)", () => {
+    const r = evaluateDirectFenixStock("Arequipa", stock, []);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("sin_stock");
+    expect(r.uncovered).toEqual(["(producto sin nombre)"]);
   });
 });

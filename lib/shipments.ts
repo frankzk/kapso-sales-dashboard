@@ -303,6 +303,22 @@ export function isFenixCity(city: string | null | undefined): boolean {
   return FENIX_CITIES.includes(normalizeCity(city));
 }
 
+/**
+ * Coverage key of a destination given its raw address parts, the same rule the
+ * Aliclik import and the address editor apply: scan the combined
+ * distrito + provincia/departamento label for a known Fenix city token; when
+ * none is present fall back to the normalized district (an uncovered key).
+ * In Shopify's Peru convention `district` = shippingAddress.city and
+ * `province` = shippingAddress.province (departamento). Pure.
+ */
+export function deriveFenixCoverageCity(
+  district: string | null | undefined,
+  province: string | null | undefined,
+): string {
+  const combined = normalizeCity([district, province].filter(Boolean).join(" "));
+  return isFenixCity(combined) ? combined : normalizeCity(district);
+}
+
 // The specific districts Fenix serves within each covered city. Used to
 // pre-select the district filter by default (the "routable" districts). City
 // (cercado) forms are stored bare so a district cell of just "Arequipa" matches.

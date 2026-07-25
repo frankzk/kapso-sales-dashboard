@@ -65,6 +65,7 @@ import {
   type ShipmentAddressInput,
 } from "@/app/dashboard/envios/actions";
 import { OrderLinkPicker } from "@/components/order-link-picker";
+import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import {
   currentFenixReason,
   matchesFenixAvailability,
@@ -255,6 +256,7 @@ export function ShipmentsBoard({
   const [reprogFilter, setReprogFilter] = useState<"all" | ReprogramCourier>("all");
   const [exportingFenix, setExportingFenix] = useState(false);
   const [fenixExportError, setFenixExportError] = useState<string | null>(null);
+  const [directGuideOpen, setDirectGuideOpen] = useState(false);
 
   // global search (across all tabs, server-side)
   const [search, setSearch] = useState("");
@@ -478,6 +480,12 @@ export function ShipmentsBoard({
           >
             Importar reporte
           </a>
+          <button
+            onClick={() => setDirectGuideOpen(true)}
+            className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-1.5 text-sm font-medium text-orange-800 hover:bg-orange-100"
+          >
+            Guía Fenix directa
+          </button>
           <a
             href="/dashboard/envios/stock"
             className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
@@ -779,6 +787,13 @@ export function ShipmentsBoard({
           onShipmentUpdated={handleShipmentUpdated}
         />
       )}
+
+      {directGuideOpen && (
+        <DirectFenixGuideModal
+          onClose={() => setDirectGuideOpen(false)}
+          onCreated={() => router.refresh()}
+        />
+      )}
     </div>
   );
 }
@@ -846,6 +861,9 @@ function ShipmentTable({
                 {s.guide_code}
                 {s.courier === "fenix" && (
                   <span className="ml-1 rounded bg-orange-50 px-1 text-[10px] text-orange-700">Fenix</span>
+                )}
+                {s.created_via === "fenix_directo" && (
+                  <span className="ml-1 rounded bg-indigo-50 px-1 text-[10px] text-indigo-700">Directa</span>
                 )}
               </td>
               {stores.length > 1 && (
@@ -1273,6 +1291,14 @@ function ShipmentDrawer({
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="font-mono text-sm font-semibold text-slate-800">{detail.shipment.guide_code}</p>
+                  {detail.shipment.created_via === "fenix_directo" && (
+                    <span
+                      className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700"
+                      title="Guía Fenix directa: creada desde el pedido, sin guía Aliclik previa"
+                    >
+                      Directa
+                    </span>
+                  )}
                   <StatusBadge
                     category={detail.shipment.status_category}
                     status={detail.shipment.delivery_status}
@@ -2061,7 +2087,11 @@ function ShipmentGuideHistory({
                           : "bg-sky-100 text-sky-700",
                       )}
                     >
-                      {guide.courier === "fenix" ? "Fenix" : "Aliclik"}
+                      {guide.courier === "fenix"
+                        ? guide.created_via === "fenix_directo"
+                          ? "Fenix directa"
+                          : "Fenix"
+                        : "Aliclik"}
                     </span>
                     {guide.is_current && (
                       <span className="rounded-full bg-brand-600 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">

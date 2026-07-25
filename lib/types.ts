@@ -262,6 +262,8 @@ export interface ShipmentRow {
   /** Current stock evaluation, added at read time for the Envios UI. */
   fenix_reason?: "ok" | "sin_stock" | "sin_cobertura";
   fenix_shipment_id: string | null;
+  /** 'fenix_directo' = guía creada desde un pedido, sin guía Aliclik madre. */
+  created_via?: string | null;
   delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado
   /** Delivery attempts reported by Aliclik's daily Excel (NRO. INTENTOS). */
   aliclik_attempts: number | null;
@@ -301,6 +303,7 @@ export interface LinkedShipmentSummary {
 
 export interface ShipmentHistoryGuide extends LinkedShipmentSummary {
   fenix_shipment_id: string | null;
+  created_via?: string | null;
   created_at: string | null;
   is_current: boolean;
   calls: ShipmentCallRow[];
