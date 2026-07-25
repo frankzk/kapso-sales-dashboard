@@ -673,7 +673,14 @@ export async function resolveHandoff(leadId: string): Promise<LeadActionState> {
   if (!ctx) return { error: "Sin acceso a este lead." };
 
   const admin = createAdminSupabase();
-  const patch = { needs_attention: false };
+  // Apagamos needs_attention Y limpiamos handoff_at: el lead sale de "Atender
+  // ahora" de forma PERMANENTE. Si solo apagáramos needs_attention, un cron que
+  // lo vuelva a marcar por otro motivo (un seguimiento vencido en
+  // flagOverdueFollowups, una ola de carrito) dentro de la ventana de 24h lo
+  // haría reaparecer aunque ya lo resolviste. handoff_at solo lo usa esta faceta
+  // (y el expirador), no las métricas, así que limpiarlo es seguro. Un handoff
+  // NUEVO del bot vuelve a poblar handoff_at y reaparece, que es lo correcto.
+  const patch = { needs_attention: false, handoff_at: null };
   const [leadRes] = await Promise.all([
     admin.from("leads").update(patch).eq("id", leadId),
     admin.from("lead_calls").insert({
