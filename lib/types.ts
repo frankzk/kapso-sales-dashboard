@@ -199,6 +199,8 @@ export interface LeadRow {
   address1?: string | null; // shippingAddress.address1 (calle) — 0032
   ship_name?: string | null; // shipping recipient (draft customer_name) — 0032
   inbound_count?: number | null;
+  /** First message the customer wrote — opener context for the advisor (0044). */
+  first_inbound_text?: string | null;
   // Source / channel attribution (0008). 'meta_ad' = structured Click-to-WhatsApp
   // referral (real ad_id); 'fb_web' = reached WhatsApp via a Facebook/IG web link
   // (utm_source=facebook/fbclid, no ad_id); 'cod_cart'/'abandoned_browse' = flows;
