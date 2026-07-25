@@ -257,6 +257,7 @@ export function ShipmentsBoard({
   const [exportingFenix, setExportingFenix] = useState(false);
   const [fenixExportError, setFenixExportError] = useState<string | null>(null);
   const [directGuideOpen, setDirectGuideOpen] = useState(false);
+  const [directGuideCreatedId, setDirectGuideCreatedId] = useState<string | null>(null);
 
   // global search (across all tabs, server-side)
   const [search, setSearch] = useState("");
@@ -411,6 +412,41 @@ export function ShipmentsBoard({
     updatedRowTimerRef.current = setTimeout(() => {
       setRecentlyUpdatedId((current) => current === id ? null : current);
     }, 2400);
+  }
+
+  /**
+   * Al cerrar el modal de guía directa, lleva a la pestaña donde la guía
+   * realmente nació (En ruta) y la resalta. Sin esto, crearla desde Pendiente
+   * parece no hacer nada: el refresco ocurre, pero la guía nueva no pertenece a
+   * esa lista. Limpia además los filtros del cliente (fecha, tienda, distrito…)
+   * que podrían esconderla.
+   */
+  function handleDirectGuideModalClosed() {
+    setDirectGuideOpen(false);
+    const createdId = directGuideCreatedId;
+    if (!createdId) return;
+    setDirectGuideCreatedId(null);
+
+    setStoreFilter(new Set());
+    setDepartmentFilter(new Set());
+    setDistrictFilter(new Set());
+    setDateFilter("");
+    setUnmatchedOnly(false);
+    setUncontactedTodayOnly(false);
+    setUncontactedOnly(false);
+    setFenixFilter("all");
+    setAliclikRouteFilter("all");
+    setReprogFilter("all");
+    setSearch("");
+
+    if (view !== "en_ruta") go({ view: "en_ruta" });
+    router.refresh();
+
+    setRecentlyUpdatedId(createdId);
+    if (updatedRowTimerRef.current) clearTimeout(updatedRowTimerRef.current);
+    updatedRowTimerRef.current = setTimeout(() => {
+      setRecentlyUpdatedId((current) => (current === createdId ? null : current));
+    }, 6000);
   }
 
   async function downloadFenixProgrammingWorkbook() {
@@ -790,8 +826,13 @@ export function ShipmentsBoard({
 
       {directGuideOpen && (
         <DirectFenixGuideModal
-          onClose={() => setDirectGuideOpen(false)}
-          onCreated={() => router.refresh()}
+          onClose={handleDirectGuideModalClosed}
+          onCreated={(shipmentId) => {
+            // Refresca ya (contadores/pestañas) y recuerda la guía para saltar a
+            // "En ruta" y resaltarla cuando se cierre el modal.
+            setDirectGuideCreatedId(shipmentId ?? null);
+            router.refresh();
+          }}
         />
       )}
     </div>
