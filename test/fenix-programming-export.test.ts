@@ -10,6 +10,8 @@ import { parseSheet } from "@/lib/xlsx";
 
 const shipment: FenixProgrammingShipment = {
   id: "shipment-1",
+  store_id: "store-1",
+  guide_code: "#KP12184218072026",
   order_id: "order-1",
   order_name: "#KP121842",
   customer_name: "Fernando Fernando",
@@ -66,7 +68,9 @@ describe("Fenix programming export", () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      orderName: "#KP121842",
+      // La columna #PEDIDO lleva el código de guía (pedido + fecha), que es con
+      // el que Fenix identifica el despacho.
+      orderName: "#KP12184218072026",
       product: "Pulsera Magnética de Cobre | Estuche de regalo",
       quantity: 3,
       amount: 189,
@@ -77,6 +81,69 @@ describe("Fenix programming export", () => {
       notes: "Entregar en horario de oficina | Cliente confirma sábado de 9 a 10 am",
       gpsUrl: `https://www.google.com/maps?q=${shipment.latitude},${shipment.longitude}`,
     });
+  });
+
+  it("recupera la dirección del carrito COD cuando la guía y Shopify no la traen", () => {
+    // Caso real: el reporte Aliclik solo informó REFERENCIA, y el pedido de
+    // Shopify no trae shippingAddress — pero el formulario COD sí guardó la
+    // dirección en el carrito.
+    const sinDireccion: FenixProgrammingShipment = {
+      ...shipment,
+      delivery_address: null,
+      delivery_reference: "a media cuadra del bcp.",
+    };
+    const sinAddressEnShopify: FenixProgrammingOrder = { ...order, raw: { note: "" } };
+
+    const rows = buildFenixProgrammingRows(
+      [sinDireccion],
+      new Map([[order.id, sinAddressEnShopify]]),
+      new Map(),
+      new Map([["order-1", { address1: "Jr Túpac Amaru cdra 12", reference: null }]]),
+    );
+
+    expect(rows[0]?.address).toBe("Jr Túpac Amaru cdra 12");
+    expect(rows[0]?.reference).toBe("a media cuadra del bcp."); // la de la guía manda
+  });
+
+  it("la dirección de la guía tiene prioridad sobre el respaldo del carrito", () => {
+    const rows = buildFenixProgrammingRows(
+      [shipment],
+      new Map([[order.id, order]]),
+      new Map(),
+      new Map([["order-1", { address1: "Dirección del carrito", reference: "Ref carrito" }]]),
+    );
+
+    expect(rows[0]?.address).toBe("JR PARRA DEL RIEGO 1498");
+    expect(rows[0]?.reference).toBe("Parra y Sucre");
+  });
+
+  it("deja la dirección vacía cuando no existe en ninguna fuente", () => {
+    const sinNada: FenixProgrammingShipment = {
+      ...shipment,
+      delivery_address: null,
+      delivery_reference: null,
+    };
+    const rows = buildFenixProgrammingRows(
+      [sinNada],
+      new Map([[order.id, { ...order, raw: { note: "" } }]]),
+    );
+
+    expect(rows[0]?.address).toBe("");
+    expect(rows[0]?.reference).toBe("");
+  });
+
+  it("exporta una guía directa (sin GPS) con la celda de ubicación vacía", () => {
+    const directa: FenixProgrammingShipment = {
+      ...shipment,
+      guide_code: "#KP12415825072026",
+      latitude: null,
+      longitude: null,
+    };
+    const rows = buildFenixProgrammingRows([directa], new Map([[order.id, order]]));
+
+    expect(rows[0]?.orderName).toBe("#KP12415825072026");
+    expect(rows[0]?.gpsUrl).toBeNull();
+    expect(rows[0]?.address).toBe("JR PARRA DEL RIEGO 1498");
   });
 
   it("creates an XLSX with the exact Fenix column order and typed values", async () => {
@@ -100,7 +167,7 @@ describe("Fenix programming export", () => {
       "UBICACIÓN GPS",
     ]);
     expect(parsed[0]).toMatchObject({
-      "#PEDIDO": "#KP121842",
+      "#PEDIDO": "#KP12184218072026",
       PRODUCTO: "Pulsera Magnética de Cobre | Estuche de regalo",
       CANTIDAD: "3",
       COBRAR: "189",
