@@ -586,13 +586,25 @@ export async function getShipmentWithCalls(
   const shipmentRow = withEnhancementDefaults(shipment as Partial<ShipmentRow>);
   const lineage = await getShipmentLineage(sb, shipmentRow);
   const lineageIds = lineage.map((guide) => guide.id);
-  const { data: historyCalls } = await sb
-    .from("shipment_calls")
-    .select("id,shipment_id,store_id,agent,kind,new_status,note,next_followup_at,occurred_at")
-    .in("shipment_id", lineageIds)
-    .order("occurred_at", { ascending: true });
+  // Deploy safety: the app may ship before 0042 is applied. Fall back to the
+  // pre-0042 column set so the history keeps loading (just without the edit mark).
+  const fetchCalls = (columns: string) =>
+    sb
+      .from("shipment_calls")
+      .select(columns)
+      .in("shipment_id", lineageIds)
+      .order("occurred_at", { ascending: true });
+  let historyResult = await fetchCalls(
+    "id,shipment_id,store_id,agent,kind,new_status,note,next_followup_at,occurred_at,note_edited_at,note_edited_by",
+  );
+  if (historyResult.error) {
+    historyResult = await fetchCalls(
+      "id,shipment_id,store_id,agent,kind,new_status,note,next_followup_at,occurred_at",
+    );
+  }
+  const historyCalls = historyResult.data;
   const callsByShipment = new Map<string, ShipmentCallRow[]>();
-  for (const call of (historyCalls as ShipmentCallRow[]) ?? []) {
+  for (const call of (historyCalls as unknown as ShipmentCallRow[]) ?? []) {
     const guideCalls = callsByShipment.get(call.shipment_id) ?? [];
     guideCalls.push(call);
     callsByShipment.set(call.shipment_id, guideCalls);
