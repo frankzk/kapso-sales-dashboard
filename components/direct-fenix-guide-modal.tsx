@@ -31,7 +31,8 @@ export function DirectFenixGuideModal({
   onCreated,
 }: {
   onClose: () => void;
-  onCreated: () => void;
+  /** Recibe el id de la guía creada para que el tablero salte a "En ruta" y la resalte. */
+  onCreated: (shipmentId?: string) => void;
 }) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<OrderLinkCandidate[] | null>(null);
@@ -121,7 +122,7 @@ export function DirectFenixGuideModal({
       }
       setMsg(null);
       setCreatedNotice(r.notice ?? "Guía Fenix directa creada.");
-      onCreated();
+      onCreated(r.shipmentId);
     });
   }
 
@@ -161,14 +162,14 @@ export function DirectFenixGuideModal({
               {createdNotice}
             </p>
             <p className="text-xs text-slate-500">
-              La guía está en la pestaña <b>En ruta</b>. Para enviarla a Fenix, filtra por su fecha de
-              despacho y descarga el Excel de programación.
+              Al cerrar te llevamos a la pestaña <b>En ruta</b>, donde queda la guía. Para enviarla a
+              Fenix, filtra por su fecha de despacho y descarga el Excel de programación.
             </p>
             <button
               onClick={onClose}
               className="w-full rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
             >
-              Listo
+              Ver la guía en En ruta
             </button>
           </div>
         ) : !preview ? (

@@ -1406,7 +1406,7 @@ export async function createDirectFenixGuide(input: {
   dispatchDateIso: string;
   guideCode?: string;
   note?: string;
-}): Promise<ShipmentActionState> {
+}): Promise<ShipmentActionState & { shipmentId?: string }> {
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -1564,7 +1564,13 @@ export async function createDirectFenixGuide(input: {
     month: "short",
     timeZone: "UTC",
   });
-  return { notice: `Guía Fenix directa ${code} creada — En ruta, despacho ${fecha}.` };
+  // El id vuelve al cliente para que el tablero salte a "En ruta" —donde nace la
+  // guía— y la resalte: creándola desde "Pendiente" el refresco no muestra nada
+  // porque la guía nueva no pertenece a esa lista.
+  return {
+    notice: `Guía Fenix directa ${code} creada — En ruta, despacho ${fecha}.`,
+    shipmentId: childId,
+  };
 }
 
 function labelOfStatus(status: string): string {
