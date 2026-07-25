@@ -579,19 +579,19 @@ export async function flagOverdueFollowups(admin: SupabaseClient, storeId: strin
   return (data as { id: string }[] | null)?.length ?? 0;
 }
 
-/** Horas de silencio del cliente tras las que un handoff sin atender sale de
- *  "Atender ahora". Debe coincidir con HANDOFF_FRESH_HOURS de la vista (la
- *  faceta muestra frescos <24h; el cron expira los >24h — mismo borde). */
+/** Horas desde el handoff tras las que, sin atender, sale de "Atender ahora".
+ *  Debe coincidir con HANDOFF_FRESH_HOURS de la vista (la faceta muestra los de
+ *  <24h; el cron expira los >24h — mismo borde, ambos sobre handoff_at). */
 export const HANDOFF_EXPIRE_HOURS = 24;
 
-/** Expira handoffs FRÍOS: el bot derivó, nadie lo atendió y el cliente lleva
- *  >HANDOFF_EXPIRE_HOURS sin escribir → apaga `needs_attention` para que salga
- *  de "Atender ahora" y baje a la cola normal (Sin llamar), ya sin urgencia. Es
- *  el reductor automático que evita que la cola solo crezca con los que el
- *  cliente abandonó. Solo toca handoffs PUROS nunca gestionados: excluye los que
- *  tienen una ola de reencolado (attention_waves>0) o un seguimiento agendado
- *  (next_followup_at) — esa atención es legítima y de otra fuente, no del
- *  handoff. Idempotente (tras apagarse dejan de calzar el filtro). */
+/** Expira handoffs viejos: el bot derivó hace >HANDOFF_EXPIRE_HOURS y nadie lo
+ *  atendió → apaga `needs_attention` para que salga de "Atender ahora" y baje a
+ *  la cola normal (Sin llamar), ya sin urgencia. Es el reductor automático que
+ *  evita que la cola solo crezca con los que nunca se atendieron. Se mide por
+ *  handoff_at (no last_inbound_at, que applyHandoff no puebla). Solo toca
+ *  handoffs PUROS nunca gestionados: excluye los que tienen una ola de
+ *  reencolado (attention_waves>0) o un seguimiento agendado (next_followup_at)
+ *  — esa atención es legítima y de otra fuente. Idempotente. */
 export async function expireColdHandoffs(
   admin: SupabaseClient,
   storeId: string,
@@ -602,10 +602,9 @@ export async function expireColdHandoffs(
     .from("leads")
     .update({ needs_attention: false })
     .eq("store_id", storeId)
-    .not("handoff_at", "is", null)
     .eq("needs_attention", true)
     .is("next_followup_at", null)
-    .lt("last_inbound_at", cutoff)
+    .lt("handoff_at", cutoff)
     .or("attention_waves.is.null,attention_waves.eq.0")
     .select("id");
   return (data as { id: string }[] | null)?.length ?? 0;

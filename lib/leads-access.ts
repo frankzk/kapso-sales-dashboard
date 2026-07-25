@@ -83,15 +83,16 @@ export async function getStoreLeads(
           .order("id", { ascending: true }); // stable pagination tie-breaker
         break;
       case "handoff":
-        // "Atender ahora": handoffs del bot aún sin gestionar (needs_attention),
-        // con el cliente activo en las últimas HANDOFF_FRESH_HOURS. El más
-        // antiguo primero (el que más espera arriba). Sale de la cola al
-        // dispositionar (needs_attention=false), al marcar resuelto, o cuando
-        // el cron lo expira por silencio del cliente.
+        // "Atender ahora": handoffs del bot ocurridos en las últimas
+        // HANDOFF_FRESH_HOURS y aún sin gestionar (needs_attention). El más
+        // antiguo primero (el que más espera arriba). Se filtra por handoff_at
+        // (siempre seteado por applyHandoff), NO por last_inbound_at — que
+        // applyHandoff no puebla y dejaría la cola vacía. Sale al dispositionar
+        // (needs_attention=false), al marcar resuelto, o cuando el cron lo
+        // expira por antigüedad.
         q = q
-          .not("handoff_at", "is", null)
           .eq("needs_attention", true)
-          .gte("last_inbound_at", handoffFreshCutoffIso())
+          .gte("handoff_at", handoffFreshCutoffIso())
           .order("handoff_at", { ascending: true })
           .order("id", { ascending: true });
         break;
@@ -246,10 +247,7 @@ export async function getLeadCounts(storeId: string): Promise<LeadCounts> {
   const nowIso = new Date().toISOString();
   const [porLlamar, handoff, yape, seguimientos, ganados, perdidos, sinLlamar] = await Promise.all([
     head().in("category", ["open", "hot"]).neq("status", "yape_por_verificar"),
-    head()
-      .not("handoff_at", "is", null)
-      .eq("needs_attention", true)
-      .gte("last_inbound_at", handoffFreshCutoffIso()), // "Atender ahora"
+    head().eq("needs_attention", true).gte("handoff_at", handoffFreshCutoffIso()), // "Atender ahora"
     head().eq("status", "yape_por_verificar"),
     head().not("next_followup_at", "is", null).lte("next_followup_at", nowIso),
     head().eq("category", "won"),
