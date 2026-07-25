@@ -55,6 +55,7 @@ const LEAD_BOARD_SELECT = [
   "address1",
   "ship_name",
   "inbound_count",
+  "first_inbound_text",
   "source",
   "ad_id",
   "ad_headline",
@@ -65,14 +66,20 @@ const LEAD_BOARD_SELECT = [
   "claimed_at",
 ].join(",");
 
+// Deployment safety: the app can ship before 0043 is applied. Without this the
+// whole select errors and the board renders EMPTY (not just missing the hook).
+const LEAD_BOARD_SELECT_LEGACY = LEAD_BOARD_SELECT.split(",")
+  .filter((c) => c !== "first_inbound_text")
+  .join(",");
+
 export async function getStoreLeads(
   storeId: string,
   view: LeadView,
   limit: number | null = 200,
 ): Promise<LeadRow[]> {
   const sb = await createServerSupabase();
-  const buildQuery = () => {
-    let q = sb.from("leads").select(LEAD_BOARD_SELECT).eq("store_id", storeId);
+  const buildQuery = (select: string = LEAD_BOARD_SELECT) => {
+    let q = sb.from("leads").select(select).eq("store_id", storeId);
     switch (view) {
       case "por_llamar":
         q = q
@@ -126,18 +133,24 @@ export async function getStoreLeads(
   };
 
   if (limit !== null) {
-    const { data } = await buildQuery().limit(limit);
-    return (data as unknown as LeadRow[]) ?? [];
+    let res = await buildQuery().limit(limit);
+    if (res.error) res = await buildQuery(LEAD_BOARD_SELECT_LEGACY).limit(limit);
+    return (res.data as unknown as LeadRow[]) ?? [];
   }
 
   // PostgREST caps one response at ~1000 rows even when `.limit()` asks for
   // more. The queue's facets and chart drill-downs run client-side, so they must
   // receive the same complete universe that the paginated insights query uses.
   const rows: LeadRow[] = [];
+  let select = LEAD_BOARD_SELECT;
   for (let from = 0; from < LEADS_PAGE_CAP; from += LEADS_PAGE_SIZE) {
-    const { data, error } = await buildQuery().range(from, from + LEADS_PAGE_SIZE - 1);
-    if (error) break;
-    const batch = (data as unknown as LeadRow[] | null) ?? [];
+    let res = await buildQuery(select).range(from, from + LEADS_PAGE_SIZE - 1);
+    if (res.error && select !== LEAD_BOARD_SELECT_LEGACY) {
+      select = LEAD_BOARD_SELECT_LEGACY;
+      res = await buildQuery(select).range(from, from + LEADS_PAGE_SIZE - 1);
+    }
+    if (res.error) break;
+    const batch = (res.data as unknown as LeadRow[] | null) ?? [];
     rows.push(...batch);
     if (batch.length < LEADS_PAGE_SIZE) break;
   }

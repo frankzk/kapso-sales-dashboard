@@ -232,6 +232,75 @@ export function isLeadSegment(v: string | undefined | null): v is LeadSegment {
   return !!v && LEAD_SEGMENTS.some((s) => s.key === v);
 }
 
+// ---------------------------------------------------------------------------
+// "Anzuelo" — the opener context an advisor needs before calling. Without it a
+// cold lead reads as a blank name and nobody knows how to start the call, so it
+// never gets worked. Every signal below is already captured at ingest; this only
+// picks the most actionable one. Pure.
+// ---------------------------------------------------------------------------
+
+export type LeadHookKind = "producto" | "anuncio" | "mensaje";
+
+export interface LeadHook {
+  kind: LeadHookKind;
+  /** Ready-to-render text (already trimmed; never a bare greeting). */
+  text: string;
+}
+
+export interface LeadHookSignals {
+  cart_summary?: string | null;
+  ad_headline?: string | null;
+  first_inbound_text?: string | null;
+}
+
+/** Openers that carry no intent — showing them as a "hook" is worse than showing
+ *  nothing, because it looks like context when there is none. */
+const BARE_OPENERS = new Set([
+  "hola", "ola", "holi", "holis", "hla", "buenas", "buenas tardes", "buenas noches",
+  "buenos dias", "buen dia", "hi", "hello", "hey", "alo", "si", "ok", "okey",
+  "gracias", "buenas dias", "que tal", "hola buenas", "hola buenos dias",
+  "hola buenas tardes", "hola buenas noches", "holaa", "buenass",
+]);
+
+/** lowercase, strip accents/punctuation/emoji, collapse spaces, and squeeze runs
+ *  of a repeated letter ("holaaa" → "hola") so padded greetings still match. */
+function normalizeOpener(raw: string): string {
+  return raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/([a-z])\1{2,}/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** True when the customer's first message says nothing actionable. */
+export function isBareOpener(raw: string | null | undefined): boolean {
+  const n = normalizeOpener(raw ?? "");
+  if (n.length < 3) return true; // "", "ho", "k", a lone emoji…
+  return BARE_OPENERS.has(n);
+}
+
+/**
+ * Best available opener context for a lead, most actionable first: the product
+ * they were actually looking at, then the ad promise that brought them, then
+ * their own words. Returns null when there is genuinely nothing to say — the UI
+ * must not invent context.
+ */
+export function leadHook(lead: LeadHookSignals): LeadHook | null {
+  const cart = (lead.cart_summary ?? "").trim();
+  if (cart) return { kind: "producto", text: cart };
+
+  const ad = (lead.ad_headline ?? "").trim();
+  if (ad) return { kind: "anuncio", text: ad };
+
+  const msg = (lead.first_inbound_text ?? "").trim();
+  if (msg && !isBareOpener(msg)) return { kind: "mensaje", text: msg };
+
+  return null;
+}
+
 /** Tally a list of "Por llamar" leads into the sub-segment buckets. */
 export function countLeadSegments(leads: LeadSegmentSignals[]): Record<LeadSegment, number> {
   const out: Record<LeadSegment, number> = {

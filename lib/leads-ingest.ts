@@ -511,6 +511,20 @@ async function enrichLeadsFromConversations(
         .is("draft_order_gid", null);
     }
 
+    // Opener context: what the customer wrote FIRST, so the advisor has a hook
+    // instead of a blank "hola". Write-once (`is null`) — the first message never
+    // changes, so a later page that can't read it must never blank it. Its own
+    // statement (not the patch above) because the draft-order guard there is
+    // about cart/district ownership and would skip leads that have a draft.
+    if ((sig.first_inbound_text ?? "").trim()) {
+      await admin
+        .from("leads")
+        .update({ first_inbound_text: sig.first_inbound_text })
+        .eq("store_id", storeId)
+        .eq("kapso_conversation_id", convId)
+        .is("first_inbound_text", null);
+    }
+
     // Source attribution: a Click-to-WhatsApp ad referral on the conversation's
     // first inbound message → stamp the lead's source (first-touch, sticky via
     // `is("source", null)`). Separate, self-contained write so a pending 0008

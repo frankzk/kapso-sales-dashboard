@@ -1043,9 +1043,16 @@ export function collectVoucherCandidates(msgs: ParsedMsg[]): VoucherCandidate[] 
   return out;
 }
 
+/** Cap for the stored first-message snippet — it's an opener hint for the
+ *  advisor, not a transcript. */
+export const FIRST_INBOUND_TEXT_MAX = 240;
+
 export interface ConversationSignals extends OrderSignals {
   inbound_count: number;
   first_response_seconds: number | null;
+  /** What the customer actually wrote first (text or media caption), trimmed.
+   *  Null when the opener carried no words (e.g. a bare image). */
+  first_inbound_text: string | null;
   yape: boolean;
   referral: LeadReferral | null;
   // Inbound images (post voucher-request) the text detector did not confirm — a
@@ -1112,6 +1119,7 @@ export async function fetchConversationSignals(
   return {
     inbound_count,
     first_response_seconds,
+    first_inbound_text: (firstInbound?.text ?? "").trim().slice(0, FIRST_INBOUND_TEXT_MAX) || null,
     yape: detectYapePayment(msgs),
     referral,
     voucherCandidates: collectVoucherCandidates(msgs),

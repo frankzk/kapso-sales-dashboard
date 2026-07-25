@@ -1717,3 +1717,7 @@ alter table shipment_calls add column if not exists note_edited_by uuid referenc
 alter table shipments add column if not exists created_via text; -- 'fenix_directo' | null
 create index if not exists shipments_created_via_idx
   on shipments(created_via) where created_via is not null;
+
+-- ── 0044_lead_first_inbound_text ─────────────────────────────────────────────
+-- Primer mensaje del cliente, como contexto de apertura para la asesora.
+alter table leads add column if not exists first_inbound_text text;

@@ -12,6 +12,8 @@ import {
   mapExcelStatus,
   CLAIM_TTL_MINUTES,
   LEAD_SEGMENTS,
+  leadHook,
+  isBareOpener,
   leadSegment,
   isLeadSegment,
   countLeadSegments,
@@ -101,6 +103,54 @@ describe("gestionOf / countGestiones (call-state buckets)", () => {
       "contactados",
       "sin_stock",
     ]);
+  });
+});
+
+describe("leadHook (anzuelo para abrir la llamada)", () => {
+  it("prioriza el producto, luego el anuncio, luego las palabras del cliente", () => {
+    expect(
+      leadHook({
+        cart_summary: "Aceite de orégano",
+        ad_headline: "2x1 hoy",
+        first_inbound_text: "cuánto cuesta?",
+      }),
+    ).toEqual({ kind: "producto", text: "Aceite de orégano" });
+
+    expect(leadHook({ ad_headline: "2x1 hoy", first_inbound_text: "cuánto cuesta?" })).toEqual({
+      kind: "anuncio",
+      text: "2x1 hoy",
+    });
+
+    expect(leadHook({ first_inbound_text: "cuánto cuesta el aceite?" })).toEqual({
+      kind: "mensaje",
+      text: "cuánto cuesta el aceite?",
+    });
+  });
+
+  it("no inventa contexto: sin señales o con un saludo pelado devuelve null", () => {
+    expect(leadHook({})).toBeNull();
+    expect(leadHook({ cart_summary: "   ", ad_headline: "", first_inbound_text: null })).toBeNull();
+    expect(leadHook({ first_inbound_text: "hola" })).toBeNull();
+    expect(leadHook({ first_inbound_text: "Buenas tardes!!" })).toBeNull();
+    expect(leadHook({ first_inbound_text: "holaaaa 👋" })).toBeNull();
+  });
+
+  it("un saludo CON pregunta sí es anzuelo", () => {
+    expect(leadHook({ first_inbound_text: "hola, tienen delivery a Cusco?" })).toEqual({
+      kind: "mensaje",
+      text: "hola, tienen delivery a Cusco?",
+    });
+  });
+
+  it("isBareOpener detecta saludos y ruido corto", () => {
+    expect(isBareOpener("hola")).toBe(true);
+    expect(isBareOpener("HOLA!!!")).toBe(true);
+    expect(isBareOpener("buenos días")).toBe(true);
+    expect(isBareOpener("👋")).toBe(true);
+    expect(isBareOpener("")).toBe(true);
+    expect(isBareOpener(null)).toBe(true);
+    expect(isBareOpener("precio?")).toBe(false);
+    expect(isBareOpener("me interesa el producto")).toBe(false);
   });
 });
 

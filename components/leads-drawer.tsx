@@ -535,6 +535,19 @@ export function LeadDrawer({
           {/* Derecha · acción (scroll propio; el formulario de pedido la cubre al abrirse) */}
           <div className="relative min-h-0 flex-1 @min-[720px]:w-1/2">
             <div className="h-full space-y-4 overflow-y-auto p-5">
+              {/* Con qué abrir: las palabras exactas del cliente. En el detalle
+                  se muestra siempre que exista (incluso un "hola" pelado), que
+                  ya le dice a la asesora que no hay más contexto que trabajar.
+                  En la lista se filtran los saludos vacíos para no llenarla. */}
+              {(lead.first_inbound_text ?? "").trim() && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
+                  <p className="mb-0.5 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                    💬 Escribió primero
+                  </p>
+                  <p className="italic text-slate-800">“{lead.first_inbound_text}”</p>
+                </div>
+              )}
+
               {/* Contexto: carrito/producto visto + entrega */}
               {(lead.cart_item_count || lead.district || lead.draft_order_gid || lead.cart_summary) && (
                 <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">

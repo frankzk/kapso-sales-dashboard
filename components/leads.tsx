@@ -19,6 +19,7 @@ import {
   gestionOf,
   isClaimActive,
   labelOf,
+  leadHook,
   leadSegment,
   matchesLeadInteractionDate,
   leadWindowInfo,
@@ -26,6 +27,7 @@ import {
   yapeKind,
   type LeadGestion,
   type LeadInteractionDateFilter,
+  type LeadHookKind,
   type LeadSegment,
   type LeadWindow,
   type QueueState,
@@ -430,6 +432,30 @@ function SourceChip({ source }: { source: string | null | undefined }) {
     >
       {s.glyph}
     </span>
+  );
+}
+
+// El "anzuelo": con qué abrir la llamada. Sin esto un lead frío es solo un
+// nombre y nadie sabe cómo empezar, así que nunca se trabaja. Se muestra el
+// producto que miraba, o el anuncio que lo trajo, o sus propias palabras.
+const HOOK_DISPLAY: Record<LeadHookKind, { icon: string; title: string; cls: string }> = {
+  producto: { icon: "🛒", title: "Producto que miraba / agregó al carrito", cls: "text-emerald-700" },
+  anuncio: { icon: "📣", title: "Anuncio por el que llegó", cls: "text-violet-700" },
+  mensaje: { icon: "💬", title: "Primer mensaje que escribió el cliente", cls: "text-slate-500" },
+};
+
+function LeadHookLine({ lead }: { lead: LeadRow }) {
+  const hook = leadHook(lead);
+  if (!hook) return null;
+  const d = HOOK_DISPLAY[hook.kind];
+  return (
+    <p
+      title={`${d.title}: ${hook.text}`}
+      className={cn("mt-0.5 truncate text-[11px] leading-tight", d.cls)}
+    >
+      <span aria-hidden="true">{d.icon}</span>{" "}
+      {hook.kind === "mensaje" ? `“${hook.text}”` : hook.text}
+    </p>
   );
 }
 
@@ -1319,7 +1345,8 @@ export function LeadsBoard({
                   </span>
 
                   {/* Col 2 · lead (en móvil ocupa la 1ª línea; gestión/ventana bajan) */}
-                  <div className="flex min-w-0 flex-1 items-center gap-1.5 md:flex-none">
+                  <div className="min-w-0 flex-1 md:flex-none">
+                  <div className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate text-sm font-semibold text-slate-900">{lead.name || lead.phone}</span>
                     {isYape && <span aria-hidden="true">🔥</span>}
                     <SourceChip source={lead.source} />
@@ -1363,6 +1390,8 @@ export function LeadsBoard({
                           waLabel(waNumbers?.[lead.wa_phone_number_id], lead.wa_phone_number_id)}
                       </span>
                     )}
+                  </div>
+                  <LeadHookLine lead={lead} />
                   </div>
 
                   {/* Col 3 · última gestión */}
