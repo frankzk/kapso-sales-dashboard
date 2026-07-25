@@ -26,6 +26,7 @@ import {
   normalizeCity,
   isFenixCity,
   isFenixDistrict,
+  deriveFenixCoverageCity,
   nextShipmentTransition,
   courierReportTransition,
   MAX_INTENTOS,
@@ -285,6 +286,22 @@ describe("normalizeCity", () => {
     expect(isFenixDistrict("Jose Luis Bustamante")).toBe(true); // shorter than "… y Rivero"
     expect(isFenixDistrict("Miraflores")).toBe(false); // Lima district, not served
     expect(isFenixDistrict(null)).toBe(false);
+  });
+});
+
+describe("deriveFenixCoverageCity (destino de un pedido Shopify)", () => {
+  it("encuentra la ciudad de cobertura en distrito + departamento", () => {
+    // Shopify Perú: city = distrito, province = departamento
+    expect(deriveFenixCoverageCity("Cerro Colorado", "Arequipa")).toBe("arequipa");
+    expect(deriveFenixCoverageCity("Wanchaq", "Cusco")).toBe("cusco");
+    expect(deriveFenixCoverageCity("Juliaca", "Puno")).toBe("juliaca");
+  });
+  it("cae al distrito normalizado cuando no hay ciudad Fenix en el combinado", () => {
+    expect(deriveFenixCoverageCity("Miraflores", "Lima")).toBe("miraflores");
+  });
+  it("vacío cuando el pedido no tiene distrito ni departamento", () => {
+    expect(deriveFenixCoverageCity(null, null)).toBe("");
+    expect(deriveFenixCoverageCity("", "")).toBe("");
   });
 });
 

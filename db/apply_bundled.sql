@@ -1709,3 +1709,11 @@ grant all privileges on fenix_stock_movements to service_role;
 -- Editar la nota de una gestión del historial con traza mínima (quién/cuándo).
 alter table shipment_calls add column if not exists note_edited_at timestamptz;
 alter table shipment_calls add column if not exists note_edited_by uuid references auth.users(id) on delete set null;
+
+-- ── 0043_fenix_direct_guides ─────────────────────────────────────────────────
+-- Guías Fenix directas (pedido Shopify sin guía Aliclik madre): marcador de
+-- origen. El stock no se reserva al crear; se valida al crear y se descuenta
+-- al entregar (salida_entrega), como toda guía Fénix.
+alter table shipments add column if not exists created_via text; -- 'fenix_directo' | null
+create index if not exists shipments_created_via_idx
+  on shipments(created_via) where created_via is not null;
