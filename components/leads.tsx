@@ -510,6 +510,11 @@ const ICON_PHONE =
   "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3.1-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8.1 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z";
 const ICON_CHAT = "M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z";
 
+// Cada cuánto se revalida la página en vivo (soft-refresh de datos del servidor).
+// Mismo espíritu que ONLINE_POLL_MS de Productividad, un poco más ágil porque
+// "Atender ahora" es una cola que se trabaja al momento.
+const LEADS_LIVE_POLL_MS = 30_000;
+
 export function LeadsBoard({
   stores,
   storeId,
@@ -635,6 +640,25 @@ export function LeadsBoard({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialOpenId, leads]);
+
+  // Refresco en vivo: revalida los datos del servidor (lista + contadores, incl.
+  // "⚡ Atender ahora") cada LEADS_LIVE_POLL_MS mientras la pestaña está visible, y
+  // al instante al volver a ella. Así un handoff nuevo aparece solo, sin recargar
+  // la página. router.refresh() es un soft-refresh: conserva filtros, scroll,
+  // búsqueda y el drawer abierto (no remonta el componente).
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!document.hidden) router.refresh();
+    }, LEADS_LIVE_POLL_MS);
+    const onVisible = () => {
+      if (!document.hidden) router.refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [router]);
 
   function changeStore(nextStore: string) {
     startRouteTransition(() => {
