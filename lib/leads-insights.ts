@@ -33,7 +33,11 @@ export interface TrendPoint {
 
 export interface AdvisorToday {
   name: string;
-  contactos: number; // calls logged today
+  /** Leads distintos tocados hoy por CUALQUIER acción (llamada, mensaje, cambio
+   *  de estado, "generar pedido"). Es el denominador del % de cierre — el mismo
+   *  que usa la página de Productividad, para que ambas vistas coincidan. */
+  leads: number;
+  llamadas: number; // solo kind="call" registradas hoy (subconjunto de `leads`)
   pedidos: number; // wins attributed today (last-touch)
   pedidosDetalle: { code: string | null; fecha: string | null }[]; // "#AUR1091" + "05/07/26"
 }
@@ -407,20 +411,24 @@ export async function getLeadsInsights(
   const { trend, saldoInicio } = buildTrend({ days, pendingNow, entranByDate, cierranByDate });
 
   // Today's per-advisor productivity — reuses the Productividad aggregation
-  // (RLS-scoped, team-visible, resolves names). contactos = calls; pedidos =
-  // wins attributed by last-touch. Best-effort: never block the board.
+  // (RLS-scoped, team-visible, resolves names). pedidos = wins attributed by
+  // last-touch. El % se calcula sobre `leads` (leads trabajados), NO sobre
+  // llamadas: un pedido no requiere una llamada registrada (se puede cerrar por
+  // WhatsApp o con "Generar pedido"), así que pedidos/llamadas daba >100% y no
+  // cuadraba con el "% cierre" de Productividad. Best-effort: never block the board.
   let productivity: AdvisorToday[] = [];
   try {
     const rows = await getAdvisorProductivity([storeId], { from: todayDate, to: todayDate }, null, tz);
     productivity = rows
       .map((r) => ({
         name: r.email.includes("@") ? r.email.split("@")[0]! : r.email,
-        contactos: r.llamadas,
+        leads: r.leadsTrabajados,
+        llamadas: r.llamadas,
         pedidos: r.cerrados,
         pedidosDetalle: r.cerradosDetalle.map((o) => ({ code: o.name, fecha: shortLocalDate(o.at, tz) })),
       }))
-      .filter((r) => r.contactos > 0 || r.pedidos > 0)
-      .sort((a, b) => b.pedidos - a.pedidos || b.contactos - a.contactos);
+      .filter((r) => r.leads > 0 || r.pedidos > 0)
+      .sort((a, b) => b.pedidos - a.pedidos || b.leads - a.leads);
   } catch {
     /* best-effort */
   }
