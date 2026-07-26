@@ -1,5 +1,6 @@
 "use client";
 
+import { mergeConversationMessages } from "@/lib/conversation-merge";
 import { type ReactNode, useActionState, useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { CallQr } from "@/components/call-qr";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
@@ -900,7 +901,10 @@ function WhatsappChat({
         setState({ status: "loading" });
       }
       let firstPaintPending = !opts?.silent;
-      const apply = (res: Awaited<ReturnType<typeof loadLeadConversation>>) => {
+      const apply = (
+        res: Awaited<ReturnType<typeof loadLeadConversation>>,
+        applyOpts?: { merge?: boolean },
+      ) => {
         if (requestRef.current !== requestId) return;
         activeIdRef.current = res.activeConversationId;
         setState((current) => {
@@ -908,9 +912,21 @@ function WhatsappChat({
             current.status === "ready"
               ? current.messages.filter((message) => message.id?.startsWith("local-") && message.status === "sending")
               : [];
+          // El poll solo trae la sesión ACTIVA. Si reemplazara, borraría las
+          // sesiones viejas ya fundidas (el hilo "se ocultaba" a los 20s), así
+          // que se funde con lo que ya hay. Solo aplica dentro del MISMO hilo:
+          // al cambiar de número hay que reemplazar, no acumular los dos.
+          const prior =
+            applyOpts?.merge &&
+            current.status === "ready" &&
+            current.activeId === res.activeConversationId
+              ? current.messages.filter(
+                  (message) => !(message.id?.startsWith("local-") && message.status === "sending"),
+                )
+              : [];
           return {
             status: "ready",
-            messages: [...res.messages, ...localMessages],
+            messages: [...mergeConversationMessages(prior, res.messages), ...localMessages],
             reason: res.reason,
             threads: res.threads,
             activeId: res.activeConversationId,
@@ -925,9 +941,11 @@ function WhatsappChat({
       // First paint reads only the active session. Older sessions are merged in
       // a silent follow-up, while 20s polls remain cheap and active-session only.
       loadLeadConversation(leadId, opts?.conversationId, false).then((res) => {
-        apply(res);
+        apply(res, { merge: !!opts?.silent });
         if (!opts?.silent && res.activeConversationId) {
-          void loadLeadConversation(leadId, res.activeConversationId, true).then(apply);
+          // El segundo pase trae el hilo completo (sesiones viejas incluidas):
+          // es un superconjunto, así que reemplaza sin merge.
+          void loadLeadConversation(leadId, res.activeConversationId, true).then((full) => apply(full));
         }
       });
     },
