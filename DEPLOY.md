@@ -355,9 +355,13 @@ de couriers, intentos y comentarios.
 
   **Las métricas no se mueven**: `recompute_daily_rollups` y
   `lib/access.ts:getOrders` siguen filtrando por `tag:kapso`, y los rollups y el
-  vínculo con el lead solo se disparan para pedidos del bot. Tras el deploy, el
-  histórico no-kapso entra solo: la primera corrida del cron arranca sin cursor
-  en `shopify_all` y va paginando hacia atrás.
+  vínculo con el lead solo se disparan para pedidos del bot.
+- **`ORDERS_SYNC_FROM` acota el histórico** (por defecto `2026-06-01`). La pasada
+  nueva solo trae pedidos **creados** a partir de esa fecha, así que no arrastra
+  años de pedidos cerrados. Se filtra por `created_at` y no por `updated_at`, para
+  que un pedido viejo que alguien edite hoy no vuelva a entrar. Para ampliar el
+  histórico basta mover la variable en Vercel y borrar el cursor:
+  `delete from sync_state where source = 'shopify_all';`
 - **El Master se rellena solo.** `runStoreSync` termina con un barrido de
   reconciliación (`reconcileOrderMaster`) que crea o refresca las filas que
   falten, así que no hace falta ningún backfill manual. Las acciones de Repro
@@ -492,6 +496,26 @@ especiales), **costos de producto** (unitario, por tienda, proveedor y lote) y
   retorno físico); uno **devuelto** sí.
 - **Escritura solo para administradores** de la organización (RLS, mismo patrón
   que `fenix_stock`), con el permiso `costs.manage`.
+
+## 5l. Clave de Anthropic por tienda
+
+La lectura de comprobantes Yape usaba una única `ANTHROPIC_API_KEY` de entorno, así
+que el gasto de las dos tiendas caía en la misma cuenta. Ahora **cada tienda tiene
+su propia clave** y paga lo suyo.
+
+- **Needs migration 0052** (`stores.anthropic_api_key_enc`, `stores.anthropic_model`).
+- Se configura en **Ajustes de la tienda → Lectura de comprobantes Yape**. La clave
+  se guarda **cifrada** (AES-256-GCM, misma `ENCRYPTION_KEY` que el resto de
+  secretos) y en blanco significa "no la cambies", como los demás secretos.
+- El **modelo también es por tienda**: se puede abaratar una sin tocar la otra ni
+  redesplegar.
+- `ANTHROPIC_API_KEY` del entorno **sigue funcionando como respaldo** para las
+  tiendas sin clave propia, así que nada deja de funcionar al aplicar la migración.
+- Afecta a los dos usos de visión: la alerta de *Yape/Shalom por verificar* en Leads
+  y la transcripción del comprobante en el Master.
+- Sin clave (ni de tienda ni de entorno) la detección se queda solo en el texto del
+  mensaje y el equipo escribe a mano el nº de operación — que sigue siendo
+  obligatorio para poder validar un pago.
 
 ## 7. Post-deploy verification
 

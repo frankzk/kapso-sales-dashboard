@@ -224,8 +224,22 @@ const EMPTY_INSPECTION: VoucherInspection = {
 async function inspectVoucher(
   admin: ReturnType<typeof createAdminSupabase>,
   path: string | null,
+  storeId: string,
 ): Promise<VoucherInspection> {
   if (!path) return EMPTY_INSPECTION;
+  // Clave de visión de ESTA tienda (0052): el gasto cae en su propia cuenta de
+  // Anthropic. Si no tiene clave propia se usa la del entorno.
+  const { data: store } = await admin
+    .from("stores")
+    .select("anthropic_api_key_enc,anthropic_model")
+    .eq("id", storeId)
+    .maybeSingle();
+  const storeCreds = {
+    anthropicApiKey: decryptOrNull(
+      (store as { anthropic_api_key_enc?: string | null } | null)?.anthropic_api_key_enc ?? null,
+    ),
+    anthropicModel: (store as { anthropic_model?: string | null } | null)?.anthropic_model ?? null,
+  };
   try {
     const { data, error } = await admin.storage.from(VOUCHER_BUCKET).download(path);
     if (error || !data) return EMPTY_INSPECTION;
@@ -238,8 +252,8 @@ async function inspectVoucher(
     // dice?". La segunda es la que evita teclear el nº de operación a mano —y es
     // el nº de operación lo que hace posible detectar el mismo Yape recortado.
     const [verdict, extracted] = await Promise.all([
-      analyzeYapeVoucherFromEnv(base64, data.type),
-      extractYapeVoucherFromEnv(base64, data.type),
+      analyzeYapeVoucherFromEnv(base64, data.type, storeCreds),
+      extractYapeVoucherFromEnv(base64, data.type, storeCreds),
     ]);
     return {
       ok: verdict.ok,
@@ -304,7 +318,7 @@ export async function registerPayment(
   // Se lee la imagen ANTES de buscar duplicados: si el operador no tecleó el nº
   // de operación pero la imagen lo trae, ese dato entra en la comprobación. Sin
   // él, un mismo Yape recortado podría colarse en dos pedidos.
-  const vision = await inspectVoucher(admin, input.path);
+  const vision = await inspectVoucher(admin, input.path, ctx.storeId);
   const operation =
     normalizeOperationNumber(input.operationNumber) ??
     normalizeOperationNumber(vision.fields.operationNumber);

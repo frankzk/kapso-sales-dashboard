@@ -217,18 +217,42 @@ export async function analyzeYapeVoucher(
   }
 }
 
+/** Clave y modelo de visión de una tienda concreta; vacíos = los del entorno. */
+export interface StoreVisionCreds {
+  anthropicApiKey?: string | null;
+  anthropicModel?: string | null;
+}
+
 /**
- * Convenience wrapper reading key + model from env. Returns a non-voucher
- * verdict when no ANTHROPIC_API_KEY is configured (vision disabled). Never throws.
+ * Resuelve qué credenciales usar. La clave de la TIENDA manda sobre la del
+ * entorno, para que el gasto de visión de cada tienda caiga en su propia cuenta
+ * de Anthropic (0052); el entorno queda como respaldo.
+ */
+export function resolveVisionCreds(store: StoreVisionCreds = {}): {
+  apiKey: string;
+  model: string;
+  apiBase: string;
+} {
+  return {
+    apiKey: store.anthropicApiKey || env.anthropicApiKey(),
+    model: store.anthropicModel || env.yapeVisionModel(),
+    apiBase: env.anthropicApiBase(),
+  };
+}
+
+/**
+ * Convenience wrapper reading key + model from the store (falling back to env).
+ * Returns a non-voucher verdict when no key is configured at all (vision
+ * disabled). Never throws.
  */
 export async function analyzeYapeVoucherFromEnv(
   imageBase64: string,
   contentType: string | null | undefined,
+  store: StoreVisionCreds = {},
 ): Promise<YapeVisionResult> {
-  const apiKey = env.anthropicApiKey();
-  const model = env.yapeVisionModel();
+  const { apiKey, model, apiBase } = resolveVisionCreds(store);
   if (!apiKey) return { isVoucher: false, indicators: {}, model, ok: false };
-  return analyzeYapeVoucher(imageBase64, contentType, { apiKey, model, apiBase: env.anthropicApiBase() });
+  return analyzeYapeVoucher(imageBase64, contentType, { apiKey, model, apiBase });
 }
 
 // ---------------------------------------------------------------------------
@@ -443,13 +467,15 @@ export async function extractYapeVoucher(
   }
 }
 
-/** Envoltorio que lee la clave y el modelo del entorno. Nunca lanza. */
+/**
+ * Envoltorio que usa la clave de la tienda y cae a la del entorno. Nunca lanza.
+ */
 export async function extractYapeVoucherFromEnv(
   imageBase64: string,
   contentType: string | null | undefined,
+  store: StoreVisionCreds = {},
 ): Promise<YapeVoucherFields> {
-  const apiKey = env.anthropicApiKey();
-  const model = env.yapeVisionModel();
+  const { apiKey, model, apiBase } = resolveVisionCreds(store);
   if (!apiKey) {
     return {
       operationNumber: null,
@@ -461,9 +487,5 @@ export async function extractYapeVoucherFromEnv(
       model,
     };
   }
-  return extractYapeVoucher(imageBase64, contentType, {
-    apiKey,
-    model,
-    apiBase: env.anthropicApiBase(),
-  });
+  return extractYapeVoucher(imageBase64, contentType, { apiKey, model, apiBase });
 }

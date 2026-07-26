@@ -100,6 +100,9 @@ export interface StoreCreds {
   telegram_bot_token: string | null;
   telegram_chat_id: string | null;
   meta_access_token: string | null;
+  /** API key de Anthropic de ESTA tienda; null = usa la del entorno. */
+  anthropic_api_key: string | null;
+  anthropic_model: string | null;
   meta_ad_accounts: StoreMetaAdAccount[];
 }
 
@@ -152,6 +155,10 @@ export async function getStoreCreds(
     telegram_bot_token: decryptOrNull(data.telegram_bot_token_enc),
     telegram_chat_id: data.telegram_chat_id ?? null,
     meta_access_token: decryptOrNull(data.meta_access_token_enc),
+    // Pre-0052 la columna no existe (select * → undefined) ⇒ se usa la clave del
+    // entorno como respaldo, que es el comportamiento anterior.
+    anthropic_api_key: decryptOrNull(data.anthropic_api_key_enc),
+    anthropic_model: data.anthropic_model ?? null,
     meta_ad_accounts: normalizeMetaAdAccounts(
       data.meta_ad_accounts,
       data.meta_ad_account_id,
@@ -826,12 +833,13 @@ export async function runStoreSync(
   //     con el de la pasada tag:kapso. Trae el resto de pedidos de la tienda —
   //     los del formulario web/COD, los creados a mano — que el Master necesita
   //     y que las métricas siguen sin contar (filtran por tag:kapso).
+  //     Acotada por ORDERS_SYNC_FROM para no arrastrar años de histórico.
   //     try/catch propio: si esta pasada falla, la sincronización del bot y de
   //     los leads sigue funcionando igual.
   if (creds.shopify_token) {
     try {
       const cursor = await getSyncCursor(admin, storeId, "shopify_all");
-      const searchQuery = buildAllOrdersSearchQuery(cursor);
+      const searchQuery = buildAllOrdersSearchQuery(cursor, env.ordersSyncFrom());
       let after: string | null = null;
       let maxUpdatedAt = cursor;
       const touched: string[] = [];

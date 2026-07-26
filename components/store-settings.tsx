@@ -51,6 +51,7 @@ export interface StoreSettingsData {
     cart_seq_hour_start: number;
     cart_seq_hour_end: number;
     telegram_chat_id: string | null;
+    anthropic_model: string | null;
     meta_ad_accounts: StoreMetaAdAccount[];
   };
   has: {
@@ -61,6 +62,7 @@ export interface StoreSettingsData {
     kapsoWebhookSecret: boolean;
     telegramToken: boolean;
     metaToken: boolean;
+    anthropicKey: boolean;
   };
   oauthAvailable: boolean;
   siteUrl: string;
@@ -760,6 +762,41 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
                 ? s.meta_ad_accounts.map((a) => a.name || a.id).join(", ")
                 : "ninguna"}
             </strong>
+          </p>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Lectura de comprobantes Yape
+          </legend>
+          <p className="text-xs text-slate-500">
+            Clave de <strong>Anthropic</strong> de esta tienda. Se usa para dos cosas: decidir si
+            una captura del cliente es un comprobante Yape real (la alerta de{" "}
+            <em>Yape/Shalom por verificar</em>) y <strong>transcribir</strong> el comprobante en el
+            Master de Pedidos —nº de operación, monto, fecha y hora— para que nadie tenga que
+            teclearlo. Cada tienda usa <strong>su propia clave</strong>, así que el gasto de cada una
+            es independiente.
+          </p>
+          <SecretField
+            name="anthropic_api_key"
+            label="API key de Anthropic"
+            set={data.has.anthropicKey}
+          />
+          <label className="block">
+            <span className="text-xs text-slate-500">
+              Modelo (opcional — vacío usa el valor por defecto)
+            </span>
+            <input
+              name="anthropic_model"
+              defaultValue={s.anthropic_model ?? ""}
+              placeholder="claude-opus-4-8"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+          </label>
+          <p className="text-xs text-slate-500">
+            Sin clave, la detección se queda solo en el texto del mensaje (nunca dispara la alerta
+            con una captura cualquiera) y el equipo escribe a mano el nº de operación. Recuerda que{" "}
+            <strong>sin nº de operación un pago no se puede validar</strong>.
           </p>
         </fieldset>
 

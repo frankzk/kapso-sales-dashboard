@@ -496,8 +496,16 @@ export function buildKapsoOrdersSearchQuery(
  */
 export function buildAllOrdersSearchQuery(
   updatedAtCursorIso?: string | null,
+  createdAtFloor?: string | null,
 ): string {
-  return updatedAtCursorIso ? `updated_at:>=${updatedAtCursorIso}` : "";
+  const parts: string[] = [];
+  // El piso por fecha de CREACIÓN acota el histórico: sin él, la primera corrida
+  // paginaría hasta el primer pedido de la tienda, que puede ser de años atrás.
+  // Se filtra por created_at (no por updated_at) para que un pedido viejo que
+  // alguien edite hoy no vuelva a entrar.
+  if (createdAtFloor) parts.push(`created_at:>=${createdAtFloor}`);
+  if (updatedAtCursorIso) parts.push(`updated_at:>=${updatedAtCursorIso}`);
+  return parts.join(" ");
 }
 
 export function buildOrdersQuery(withPhone: boolean): string {

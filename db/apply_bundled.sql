@@ -2361,3 +2361,18 @@ comment on column order_master.geo_source is
 -- `source` distingue lo cargado del INEI de lo aprendido a mano.
 comment on column peru_districts.source is
   'shipments = inferido de los reportes; inei = ubigeo oficial; manual = corregido por el equipo.';
+
+-- ── 0052_store_anthropic_key ─────────────────────────────────────────────────
+-- Clave de Anthropic por tienda (lectura de comprobantes Yape), cifrada. Así el
+-- gasto de cada tienda es independiente. El entorno sigue como respaldo.
+
+alter table stores
+  add column if not exists anthropic_api_key_enc text,
+  -- Modelo por tienda: permite abaratar una tienda sin tocar la otra ni
+  -- redesplegar (p. ej. un modelo más económico para la clasificación simple).
+  add column if not exists anthropic_model        text;
+
+comment on column stores.anthropic_api_key_enc is
+  'enc: API key de Anthropic de ESTA tienda (lectura de comprobantes Yape). Cifrada AES-256-GCM. Respaldo: ANTHROPIC_API_KEY del entorno.';
+comment on column stores.anthropic_model is
+  'Modelo de visión para esta tienda. Vacío = el valor por defecto del entorno.';
