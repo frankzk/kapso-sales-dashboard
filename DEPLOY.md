@@ -374,6 +374,33 @@ de couriers, intentos y comentarios.
   (entregado/anulado/devuelto) exige rol admin y un motivo obligatorio, que queda
   en el historial.
 
+## 5i. Reportes de courier (Aliclik, Shalom, Olva)
+
+La importación deja de ser exclusiva de Aliclik. `/dashboard/envios/import` acepta
+el reporte de **cualquier** courier y reconoce el formato solo (guías AUR5X →
+Aliclik; columnas de agencia/fecha límite → Shalom u Olva); el operador solo
+tiene que elegir el courier cuando el archivo no se reconoce.
+
+- **Needs migration 0047** (campos de gestión y de agencia en `shipments`, más el
+  rollup de agencia en `order_master`) y **0048** (metadatos del reporte en
+  `import_batches`). Antes de correrlas la carga sigue funcionando en el camino
+  de Aliclik; las columnas nuevas simplemente no se escriben (el código aplica
+  *column step-down*).
+- **Los reportes originales se conservan** en el bucket **privado**
+  `courier-reports` (`<storeId>/<courier>/<sha256>-<archivo>`). Se crea solo en
+  la primera carga y se fuerza a privado en cada arranque: llevan nombre,
+  teléfono y dirección de clientes reales. Si el almacenamiento falla, la ingesta
+  continúa —perder la copia no debe costar el reporte.
+- **Re-cargar el mismo archivo no duplica nada**: los estados solo avanzan
+  (`reconcileDeliveryStatus`), y la interfaz avisa si esa huella ya se había
+  subido.
+- **Aliclik conserva su ingesta propia** (reglas de Fenix, dirección editada a
+  mano, fallback de provincia). El endpoint genérico la invoca y le añade los
+  metadatos del reporte; `/api/import/aliclik` sigue existiendo y delega.
+- **Añadir un courier nuevo** es un archivo en `lib/couriers/` y una línea en
+  `lib/couriers/registry.ts`. Los alias de cabecera son amplios a propósito:
+  cuando llegue un formato distinto, basta con añadir el alias.
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle

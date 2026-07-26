@@ -1880,3 +1880,62 @@ where public.geo_key(s.district) is not null
   and public.geo_key(s.province) is not null
 group by public.geo_key(s.district)
 on conflict (district_key) do nothing;
+
+-- ── 0047_shipment_gestion ────────────────────────────────────────────────────
+-- Campos de gestión logística (§8) y de agencia Shalom/Olva (§10) sobre las
+-- guías. Se extiende `shipments` en vez de duplicarla: una gestión logística es
+-- una guía asignada a un courier, que es lo que esa tabla ya modela.
+alter table shipments
+  add column if not exists assigned_at          timestamptz,
+  add column if not exists dispatched_at        timestamptz,
+  add column if not exists out_for_delivery_at  timestamptz,
+  add column if not exists rescheduled_at       timestamptz,
+  add column if not exists closed_at            timestamptz,
+  add column if not exists returned_at          timestamptz,
+  add column if not exists reported_status      text,
+  add column if not exists non_delivery_reason  text,
+  add column if not exists source               text,
+  add column if not exists agency_branch        text,
+  add column if not exists agency_arrived_at    timestamptz,
+  add column if not exists agency_expires_at    timestamptz,
+  add column if not exists pickup_state         text;
+create index if not exists shipments_pickup_state_idx
+  on shipments(store_id, pickup_state) where pickup_state is not null;
+create index if not exists shipments_agency_expiry_idx
+  on shipments(agency_expires_at) where agency_expires_at is not null;
+create index if not exists shipments_returned_idx
+  on shipments(store_id, returned_at) where returned_at is not null;
+update shipments
+   set assigned_at = coalesce(assigned_at, created_at),
+       source      = coalesce(source, courier)
+ where assigned_at is null or source is null;
+alter table order_master
+  add column if not exists pickup_state      text,
+  add column if not exists agency_branch     text,
+  add column if not exists agency_arrived_at timestamptz,
+  add column if not exists agency_expires_at timestamptz;
+create index if not exists order_master_pickup_idx
+  on order_master(store_id, pickup_state) where pickup_state is not null;
+create index if not exists order_master_expiry_idx
+  on order_master(agency_expires_at) where agency_expires_at is not null;
+
+-- ── 0048_courier_reports ─────────────────────────────────────────────────────
+-- Cada carga de información como un reporte independiente, del courier que sea
+-- (§6), conservando el archivo original (§19.8).
+alter table import_batches
+  add column if not exists courier            text,
+  add column if not exists report_date        date,
+  add column if not exists file_path          text,
+  add column if not exists file_type          text,
+  add column if not exists file_sha256        text,
+  add column if not exists found_count        integer not null default 0,
+  add column if not exists updated_count      integer not null default 0,
+  add column if not exists unrecognized_count integer not null default 0,
+  add column if not exists errors             jsonb not null default '[]'::jsonb;
+create index if not exists import_batches_courier_idx
+  on import_batches(store_id, courier, created_at desc);
+create index if not exists import_batches_sha_idx
+  on import_batches(file_sha256) where file_sha256 is not null;
+update import_batches
+   set courier = coalesce(courier, case when kind = 'aliclik_delivery' then 'aliclik' end)
+ where courier is null;

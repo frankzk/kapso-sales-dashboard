@@ -153,6 +153,8 @@ export interface GuideSnapshot {
   returned_at: string | null;
   /** Flujo de agencia (Shalom/Olva): ver OPERATIONAL_STATUSES. */
   pickup_state: string | null;
+  agency_branch: string | null;
+  agency_arrived_at: string | null;
   agency_expires_at: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -201,6 +203,12 @@ export interface ResolvedOrderState {
   deliveredCourier: string | null;
   returnedAt: string | null;
   lastMovementAt: string | null;
+  // Seguimiento de agencia (§10): lo que permite actuar antes de que el paquete
+  // se devuelva por no recogerlo a tiempo.
+  pickupState: string | null;
+  agencyBranch: string | null;
+  agencyArrivedAt: string | null;
+  agencyExpiresAt: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +422,12 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
   const returnProven = Boolean(returnedGuide);
   const returnedAt = returnedGuide?.returned_at ?? null;
 
+  // El dato de agencia sale de la guía vigente si es de agencia; si ya no lo es
+  // (el pedido salió de la agencia y se reasignó), de la última que lo fue.
+  const agencyGuide = isAgencyCourier(current?.courier)
+    ? current
+    : byRecency.find((g) => isAgencyCourier(g.courier)) ?? null;
+
   const rollup = {
     currentCourier: current?.courier ?? null,
     lastCourier: byRecency[0]?.courier ?? null,
@@ -425,6 +439,10 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
     deliveredCourier,
     returnedAt,
     lastMovementAt,
+    pickupState: agencyGuide?.pickup_state ?? null,
+    agencyBranch: agencyGuide?.agency_branch ?? null,
+    agencyArrivedAt: agencyGuide?.agency_arrived_at ?? null,
+    agencyExpiresAt: agencyGuide?.agency_expires_at ?? null,
   };
 
   // ── 0. Override manual: un humano decidió, nada automático lo pisa.
@@ -545,4 +563,27 @@ export function daysInStatus(since: string | null, now: string = new Date().toIS
   const ms = Date.parse(now) - Date.parse(since);
   if (!Number.isFinite(ms)) return null;
   return Math.max(0, Math.floor(ms / 86_400_000));
+}
+
+/**
+ * Días que el paquete lleva disponible en la agencia (§10). Null cuando no
+ * aplica o no consta la fecha de llegada.
+ */
+export function daysInAgency(
+  arrivedAt: string | null,
+  now: string = new Date().toISOString(),
+): number | null {
+  return daysInStatus(arrivedAt, now);
+}
+
+/** ¿Está por vencer el plazo de recojo? `withinDays` de margen. */
+export function isExpiringSoon(
+  expiresAt: string | null,
+  now: string = new Date().toISOString(),
+  withinDays = 3,
+): boolean {
+  if (!expiresAt) return false;
+  const left = Date.parse(expiresAt) - Date.parse(now);
+  if (!Number.isFinite(left)) return false;
+  return left <= withinDays * 86_400_000;
 }

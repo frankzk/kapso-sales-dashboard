@@ -31,6 +31,10 @@ export interface MasterFilters {
   staleDays: number;
   multiCourier: boolean;
   multiAttempt: boolean;
+  /** Sub-estados del flujo de agencia (§10). Vacío = no filtra. */
+  pickupStates: Set<string>;
+  /** Solo pedidos en agencia con el plazo de recojo a punto de vencer. */
+  expiringSoon: boolean;
   /** Búsqueda libre sobre código, cliente, teléfono y guía. */
   search: string;
 }
@@ -57,6 +61,8 @@ export function emptyFilters(): MasterFilters {
     staleDays: 0,
     multiCourier: false,
     multiAttempt: false,
+    pickupStates: new Set(),
+    expiringSoon: false,
     search: "",
   };
 }
@@ -80,9 +86,14 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.staleDays > 0 ||
     f.multiCourier ||
     f.multiAttempt ||
+    f.pickupStates.size > 0 ||
+    f.expiringSoon ||
     f.search.trim().length > 0
   );
 }
+
+/** Margen con el que un recojo se considera "próximo a vencer": 3 días. */
+export const EXPIRING_WINDOW_MS = 3 * 86_400_000;
 
 /** Un conjunto vacío no filtra; si no, la fila debe pertenecer al conjunto. */
 function inSet(set: Set<string>, value: string | null | undefined): boolean {
@@ -138,6 +149,16 @@ export function matchesFilters(
   if (f.withComments && row.comment_count <= 0) return false;
   if (f.multiCourier && row.courier_count <= 1) return false;
   if (f.multiAttempt && row.attempt_count <= 1) return false;
+
+  if (!inSet(f.pickupStates, row.pickup_state)) return false;
+
+  if (f.expiringSoon) {
+    // "Próximo a vencer" es lo que hay que trabajar HOY para que el paquete no
+    // se devuelva: se incluye tanto lo que vence pronto como lo ya vencido.
+    if (!row.agency_expires_at) return false;
+    const left = Date.parse(row.agency_expires_at) - Date.parse(now);
+    if (!Number.isFinite(left) || left > EXPIRING_WINDOW_MS) return false;
+  }
 
   if (f.staleDays > 0) {
     // "Sin movimientos recientes": un pedido que nunca se movió también cuenta —
@@ -209,7 +230,14 @@ export function sortRows(
 /** Valores presentes en las filas, para poblar los selectores multi-opción. */
 export function facetValues(
   rows: readonly OrderMasterRow[],
-  field: "region" | "province" | "district" | "current_courier" | "operational_status",
+  field:
+    | "region"
+    | "province"
+    | "district"
+    | "current_courier"
+    | "operational_status"
+    | "pickup_state"
+    | "agency_branch",
 ): string[] {
   const seen = new Set<string>();
   for (const r of rows) {
@@ -217,4 +245,49 @@ export function facetValues(
     if (typeof v === "string" && v) seen.add(v);
   }
   return [...seen].sort((a, b) => a.localeCompare(b, "es"));
+}
+
+export interface AgencySummary {
+  total: number;
+  disponibles: number;
+  proximosAVencer: number;
+  retornoIniciado: number;
+  devueltos: number;
+}
+
+/**
+ * Resumen del seguimiento de agencia (§10). Es la pantalla que evita la
+ * devolución: entre el 5 % y el 6 % de estos pedidos termina devuelto por no
+ * recogerse a tiempo, y lo que hay que mirar cada día es qué está disponible y
+ * qué está a punto de vencer.
+ */
+export function agencySummary(
+  rows: readonly OrderMasterRow[],
+  now: string = new Date().toISOString(),
+): AgencySummary {
+  const nowMs = Date.parse(now);
+  let total = 0;
+  let disponibles = 0;
+  let proximosAVencer = 0;
+  let retornoIniciado = 0;
+  let devueltos = 0;
+
+  for (const r of rows) {
+    const inAgency = Boolean(r.pickup_state) || r.shipping_mode === "agency";
+    if (!inAgency) continue;
+    total++;
+    if (r.general_status === "devuelto") {
+      devueltos++;
+      continue;
+    }
+    if (r.pickup_state === "retorno_iniciado") retornoIniciado++;
+    if (r.pickup_state === "disponible_para_recojo" || r.pickup_state === "pendiente_de_recojo") {
+      disponibles++;
+    }
+    if (r.agency_expires_at) {
+      const left = Date.parse(r.agency_expires_at) - nowMs;
+      if (Number.isFinite(left) && left <= EXPIRING_WINDOW_MS) proximosAVencer++;
+    }
+  }
+  return { total, disponibles, proximosAVencer, retornoIniciado, devueltos };
 }

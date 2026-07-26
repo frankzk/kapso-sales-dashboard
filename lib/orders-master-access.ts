@@ -40,7 +40,8 @@ const MASTER_COLUMNS =
   "customer_phone,region,province,district,shipping_mode,order_total,general_status," +
   "operational_status,status_since,status_source,status_locked,current_courier,last_courier," +
   "courier_count,attempt_count,guide_code,dispatched_at,delivered_at,delivered_courier," +
-  "returned_at,last_movement_at,comment_count,logistics_cost,recomputed_at,updated_at";
+  "returned_at,last_movement_at,comment_count,logistics_cost,pickup_state,agency_branch," +
+  "agency_arrived_at,agency_expires_at,recomputed_at,updated_at";
 
 // PostgREST corta cada respuesta en `db-max-rows` (1000 en Supabase), así que se
 // pagina con .range() en vez de pedir un .limit() grande.

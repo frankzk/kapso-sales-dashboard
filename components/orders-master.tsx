@@ -21,6 +21,7 @@ import {
   setOrderStatus,
 } from "@/app/dashboard/pedidos/actions";
 import {
+  agencySummary,
   applyFilters,
   emptyFilters,
   facetValues,
@@ -31,6 +32,7 @@ import {
 } from "@/lib/order-master-filters";
 import {
   GENERAL_STATUSES,
+  daysInAgency,
   daysInStatus,
   generalLabel,
   isGeneralStatus,
@@ -164,6 +166,8 @@ export function OrdersMasterBoard({
     return sortRows(filtered, sortKey);
   }, [rows, filters, sortKey]);
 
+  const agency = useMemo(() => agencySummary(rows), [rows]);
+
   const facets = useMemo(
     () => ({
       operational: facetValues(rows, "operational_status"),
@@ -171,6 +175,7 @@ export function OrdersMasterBoard({
       region: facetValues(rows, "region"),
       province: facetValues(rows, "province"),
       district: facetValues(rows, "district"),
+      pickup: facetValues(rows, "pickup_state"),
     }),
     [rows],
   );
@@ -248,6 +253,14 @@ export function OrdersMasterBoard({
         </Card>
       ) : (
         <>
+          {agency.total > 0 && (
+            <AgencyStrip
+              summary={agency}
+              filters={filters}
+              onFilter={(next) => setFilters((f) => ({ ...f, ...next }))}
+            />
+          )}
+
           {/* Pestañas por estado general */}
           <div className="flex flex-wrap gap-1.5">
             {MASTER_VIEWS.map((v) => (
@@ -321,6 +334,15 @@ export function OrdersMasterBoard({
               selected={filters.districts}
               onChange={(districts) => patch({ districts })}
             />
+            {facets.pickup.length > 0 && (
+              <ChecklistFilter
+                label="Agencia"
+                options={facets.pickup}
+                selected={filters.pickupStates}
+                onChange={(pickupStates) => patch({ pickupStates })}
+                capitalize={false}
+              />
+            )}
 
             <button
               onClick={() => setShowMore((v) => !v)}
@@ -470,6 +492,112 @@ export function OrdersMasterBoard({
   );
 }
 
+/**
+ * Tira de seguimiento de agencia (§10). Es lo que evita la devolución: entre el
+ * 5 % y el 6 % de estos pedidos termina devuelto por no recogerse a tiempo, así
+ * que lo accionable es ver cuántos están disponibles y cuántos van a vencer.
+ * Cada bloque es un filtro de un clic.
+ */
+function AgencyStrip({
+  summary,
+  filters,
+  onFilter,
+}: {
+  summary: ReturnType<typeof agencySummary>;
+  filters: MasterFilters;
+  onFilter: (next: Partial<MasterFilters>) => void;
+}) {
+  const disponiblesActive =
+    filters.pickupStates.has("disponible_para_recojo") ||
+    filters.pickupStates.has("pendiente_de_recojo");
+  const retornoActive = filters.pickupStates.has("retorno_iniciado");
+
+  return (
+    <Card className="flex flex-wrap items-center gap-4 p-4">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Envíos por agencia
+        </p>
+        <p className="text-xs text-slate-400">Shalom · Olva — seguimiento del recojo</p>
+      </div>
+      <AgencyStat label="En agencia" value={summary.total} />
+      <AgencyStat
+        label="Disponibles para recojo"
+        value={summary.disponibles}
+        active={disponiblesActive}
+        onClick={() =>
+          onFilter({
+            pickupStates: disponiblesActive
+              ? new Set()
+              : new Set(["disponible_para_recojo", "pendiente_de_recojo"]),
+            expiringSoon: false,
+          })
+        }
+      />
+      <AgencyStat
+        label="Próximos a vencer"
+        value={summary.proximosAVencer}
+        tone={summary.proximosAVencer > 0 ? "warning" : undefined}
+        active={filters.expiringSoon}
+        onClick={() => onFilter({ expiringSoon: !filters.expiringSoon, pickupStates: new Set() })}
+      />
+      <AgencyStat
+        label="Retorno iniciado"
+        value={summary.retornoIniciado}
+        tone={summary.retornoIniciado > 0 ? "warning" : undefined}
+        active={retornoActive}
+        onClick={() =>
+          onFilter({
+            pickupStates: retornoActive ? new Set() : new Set(["retorno_iniciado"]),
+            expiringSoon: false,
+          })
+        }
+      />
+      <AgencyStat label="Devueltos" value={summary.devueltos} tone={summary.devueltos > 0 ? "danger" : undefined} />
+    </Card>
+  );
+}
+
+function AgencyStat({
+  label,
+  value,
+  tone,
+  active,
+  onClick,
+}: {
+  label: string;
+  value: number;
+  tone?: "warning" | "danger";
+  active?: boolean;
+  onClick?: () => void;
+}) {
+  const body = (
+    <>
+      <p
+        className={cn(
+          "text-xl font-semibold",
+          tone === "danger" ? "text-red-700" : tone === "warning" ? "text-amber-700" : "text-slate-900",
+        )}
+      >
+        {value}
+      </p>
+      <p className="text-xs text-slate-500">{label}</p>
+    </>
+  );
+  if (!onClick) return <div className="min-w-[7rem]">{body}</div>;
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "min-w-[7rem] rounded-lg px-2 py-1 text-left transition hover:bg-slate-50",
+        active && "bg-brand-50 ring-1 ring-brand-200",
+      )}
+    >
+      {body}
+    </button>
+  );
+}
+
 function Toggle({
   label,
   checked,
@@ -529,6 +657,28 @@ function DateRange({
 // Tabla (§14)
 // ---------------------------------------------------------------------------
 
+/** Días en agencia, resaltando el vencimiento cercano — el dato accionable. */
+function AgencyDays({
+  arrivedAt,
+  expiresAt,
+}: {
+  arrivedAt: string | null;
+  expiresAt: string | null;
+}) {
+  const days = daysInAgency(arrivedAt);
+  if (days === null && !expiresAt) return <>—</>;
+  const left = expiresAt ? Date.parse(expiresAt) - Date.now() : null;
+  const soon = left !== null && Number.isFinite(left) && left <= 3 * 86_400_000;
+  return (
+    <span
+      className={cn(soon && "font-semibold text-amber-700")}
+      title={expiresAt ? `Vence el ${fmtDate(expiresAt)}` : undefined}
+    >
+      {days === null ? "—" : days}
+    </span>
+  );
+}
+
 function MasterTable({
   rows,
   storeName,
@@ -567,6 +717,10 @@ function MasterTable({
             <th className="px-2 py-2 font-medium">Últ. movimiento</th>
             <th className="px-2 py-2 font-medium">Antigüedad</th>
             <th className="px-2 py-2 font-medium">Guía</th>
+            <th className="px-2 py-2 font-medium">Agencia</th>
+            <th className="px-2 py-2 font-medium" title="Días disponible en agencia">
+              Días ag.
+            </th>
             <th className="px-2 py-2 text-center font-medium">💬</th>
             <th className="px-4 py-2 text-right font-medium">Costo</th>
           </tr>
@@ -610,6 +764,12 @@ function MasterTable({
               <td className="px-2 py-2.5 text-slate-600">{fmtDate(r.last_movement_at)}</td>
               <td className="px-2 py-2.5 text-slate-600">{fmtAge(r.status_since)}</td>
               <td className="px-2 py-2.5 font-mono text-xs text-slate-600">{r.guide_code ?? "—"}</td>
+              <td className="px-2 py-2.5 text-slate-600" title={r.agency_branch ?? undefined}>
+                {r.pickup_state ? operationalLabel(r.pickup_state) : "—"}
+              </td>
+              <td className="px-2 py-2.5 text-slate-600">
+                <AgencyDays arrivedAt={r.agency_arrived_at} expiresAt={r.agency_expires_at} />
+              </td>
               <td className="px-2 py-2.5 text-center text-slate-500">
                 {r.comment_count > 0 ? r.comment_count : ""}
               </td>

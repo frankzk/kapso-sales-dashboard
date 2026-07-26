@@ -41,7 +41,7 @@ const SHIPMENT_BASE_COLUMNS =
   "customer_name,customer_phone,created_at,updated_at";
 const SHIPMENT_GESTION_COLUMNS =
   ",assigned_at,dispatched_at,out_for_delivery_at,rescheduled_at,closed_at," +
-  "returned_at,pickup_state,agency_expires_at";
+  "returned_at,pickup_state,agency_branch,agency_arrived_at,agency_expires_at";
 const SHIPMENT_COLUMN_SETS = [
   SHIPMENT_BASE_COLUMNS + SHIPMENT_GESTION_COLUMNS,
   SHIPMENT_BASE_COLUMNS,
@@ -91,6 +91,8 @@ interface ShipmentRecord {
   closed_at?: string | null;
   returned_at?: string | null;
   pickup_state?: string | null;
+  agency_branch?: string | null;
+  agency_arrived_at?: string | null;
   agency_expires_at?: string | null;
 }
 
@@ -182,6 +184,8 @@ function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot 
     closed_at: s.closed_at ?? derived.closed_at,
     returned_at: s.returned_at ?? null,
     pickup_state: s.pickup_state ?? null,
+    agency_branch: s.agency_branch ?? null,
+    agency_arrived_at: s.agency_arrived_at ?? null,
     agency_expires_at: s.agency_expires_at ?? null,
     created_at: s.created_at,
     // Una gestión registrada por el equipo también es un movimiento del pedido.
@@ -450,6 +454,10 @@ export async function recomputeOrderMaster(
       returned_at: state.returnedAt,
       last_movement_at: state.lastMovementAt,
       comment_count: orderEvents.filter((e) => e.kind === "comment").length,
+      pickup_state: state.pickupState,
+      agency_branch: state.agencyBranch,
+      agency_arrived_at: state.agencyArrivedAt,
+      agency_expires_at: state.agencyExpiresAt,
       recomputed_at: now,
     };
   });

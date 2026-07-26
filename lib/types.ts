@@ -373,6 +373,11 @@ export interface OrderMasterRow {
   last_movement_at: string | null;
   comment_count: number;
   logistics_cost: number | null;
+  /** Seguimiento de agencia (Shalom/Olva): ver §10 de la especificación. */
+  pickup_state: string | null;
+  agency_branch: string | null;
+  agency_arrived_at: string | null;
+  agency_expires_at: string | null;
   recomputed_at?: string;
   updated_at?: string;
 }

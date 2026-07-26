@@ -37,6 +37,8 @@ function guide(id: string, overrides: Partial<GuideSnapshot> = {}): GuideSnapsho
     closed_at: null,
     returned_at: null,
     pickup_state: null,
+    agency_branch: null,
+    agency_arrived_at: null,
     agency_expires_at: null,
     created_at: "2026-07-02T10:00:00.000Z",
     updated_at: "2026-07-02T10:00:00.000Z",

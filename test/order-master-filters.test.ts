@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  agencySummary,
   applyFilters,
   emptyFilters,
   facetValues,
@@ -44,6 +45,10 @@ function row(id: string, overrides: Partial<OrderMasterRow> = {}): OrderMasterRo
     last_movement_at: "2026-07-18T10:00:00.000Z",
     comment_count: 0,
     logistics_cost: null,
+    pickup_state: null,
+    agency_branch: null,
+    agency_arrived_at: null,
+    agency_expires_at: null,
     ...overrides,
   };
 }
@@ -199,5 +204,55 @@ describe("facetValues", () => {
       row("4", { province: null }),
     ];
     expect(facetValues(rows, "province")).toEqual(["Cusco", "Huancayo"]);
+  });
+});
+
+describe("agencia (§10)", () => {
+  function agencyRow(id: string, over: Partial<OrderMasterRow> = {}): OrderMasterRow {
+    return row(id, {
+      shipping_mode: "agency",
+      current_courier: "shalom",
+      last_courier: "shalom",
+      pickup_state: "disponible_para_recojo",
+      agency_branch: "Shalom Huancayo",
+      agency_arrived_at: "2026-07-14T10:00:00.000Z",
+      agency_expires_at: "2026-07-30T10:00:00.000Z",
+      ...over,
+    });
+  }
+
+  it("filtra por sub-estado de agencia", () => {
+    const f = withFilter({ pickupStates: new Set(["retorno_iniciado"]) });
+    expect(matchesFilters(agencyRow("1", { pickup_state: "retorno_iniciado" }), f, NOW)).toBe(true);
+    expect(matchesFilters(agencyRow("2"), f, NOW)).toBe(false);
+  });
+
+  it("próximo a vencer incluye lo que vence dentro de 3 días y lo ya vencido", () => {
+    const f = withFilter({ expiringSoon: true });
+    expect(matchesFilters(agencyRow("1", { agency_expires_at: "2026-07-22T10:00:00.000Z" }), f, NOW)).toBe(true);
+    expect(matchesFilters(agencyRow("2", { agency_expires_at: "2026-07-18T10:00:00.000Z" }), f, NOW)).toBe(true);
+    expect(matchesFilters(agencyRow("3", { agency_expires_at: "2026-07-30T10:00:00.000Z" }), f, NOW)).toBe(false);
+    // Un pedido sin fecha límite no puede estar "por vencer".
+    expect(matchesFilters(agencyRow("4", { agency_expires_at: null }), f, NOW)).toBe(false);
+  });
+
+  it("el resumen cuenta lo accionable y separa los ya devueltos", () => {
+    const summary = agencySummary(
+      [
+        agencyRow("1"),
+        agencyRow("2", { pickup_state: "pendiente_de_recojo", agency_expires_at: "2026-07-21T10:00:00.000Z" }),
+        agencyRow("3", { pickup_state: "retorno_iniciado" }),
+        agencyRow("4", { pickup_state: "devuelto_al_origen", general_status: "devuelto" }),
+        row("5"), // reparto normal: no cuenta
+      ],
+      NOW,
+    );
+    expect(summary).toEqual({
+      total: 4,
+      disponibles: 2,
+      proximosAVencer: 1,
+      retornoIniciado: 1,
+      devueltos: 1,
+    });
   });
 });
