@@ -369,6 +369,17 @@ de couriers, intentos y comentarios.
   `shipments`. Para cubrir los distritos a los que aún no se despachó, cargar el
   ubigeo del INEI en esa tabla; mientras esté vacía, el filtro de provincia solo
   muestra las provincias conocidas.
+- **La ubicación se puede corregir a mano** (needs migration **0051**). La
+  dirección de Shopify sale del formulario que llenó el cliente —Shopify mismo la
+  marca como problemática a menudo— y su punto del mapa suele estar desplazado.
+  Desde el detalle del pedido se corrigen distrito, provincia, región, dirección,
+  referencia y **coordenadas**, y aparece un enlace "Ver mapa" que usa las
+  coordenadas corregidas. La corrección vive en `order_geo_overrides`, **no** en
+  `orders`, así que gana sobre Shopify, sobre los reportes de courier y sobre el
+  ubigeo, y sobrevive a la siguiente sincronización. Al corregir una provincia se
+  ofrece recordarla para los próximos pedidos del mismo distrito, que es la forma
+  barata de ir completando el ubigeo con datos reales. `order_master.geo_source`
+  dice de dónde salió la ubicación vigente.
 - **Permisos**: `viewer` es solo lectura en el Master (consulta, filtra, abre el
   detalle y el historial, pero no modifica). Cambiar un pedido ya cerrado
   (entregado/anulado/devuelto) exige rol admin y un motivo obligatorio, que queda
@@ -436,10 +447,21 @@ se entrega antes de cobrar, el dinero se pierde.
   obligatorio, y queda marcada como tal en el historial.
 - **Bucket privado `yape-vouchers`** para las imágenes, subidas por URL firmada
   (mismo patrón que los adjuntos de Leads).
-- **Opcional**: con `ANTHROPIC_API_KEY` configurada, cada comprobante se pasa por
-  el lector de visión que ya usa la alerta de Leads. Si la imagen no parece un
-  Yape, el pago queda como *información incompleta* — nunca se rechaza solo, y
-  cargar una imagen jamás equivale a validar el pago.
+- **Sin nº de operación no se puede validar un pago.** Es la regla que cierra el
+  hueco de la captura recortada: el índice único no puede actuar sobre un nulo, así
+  que un pago sin ese número queda en *información incompleta* y la acción de
+  validar lo rechaza explicando qué falta. Desde el propio pago se completa a mano
+  (botón *Completar datos*), y al escribirlo se vuelve a comprobar que ese número
+  no pertenezca ya a otro pedido. Un intento de reutilizarlo queda en el historial.
+- **Opcional**: con `ANTHROPIC_API_KEY` configurada, cada comprobante se pasa dos
+  veces por visión: una para decidir si es un Yape real (el lector que ya usa la
+  alerta de Leads) y otra para **transcribir** nº de operación, monto, fecha/hora y
+  pagador. Lo que el operador dejó en blanco se rellena con esa lectura, así que en
+  el caso normal nadie teclea el número. Si la imagen está recortada y el número no
+  se ve, la transcripción devuelve null a propósito —nunca lo adivina— y el pago
+  cae en el flujo de *Completar datos*. Si la imagen no parece un Yape, el pago
+  queda como *información incompleta*: nunca se rechaza solo, y cargar una imagen
+  jamás equivale a validar el pago.
 
 ## 5k. Costos
 

@@ -16,7 +16,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { decryptOrNull, encrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { analyzeYapeVoucherFromEnv } from "@/lib/vision";
+import { analyzeYapeVoucherFromEnv, extractYapeVoucherFromEnv } from "@/lib/vision";
 import { normalizePhone } from "@/lib/phone";
 import {
   canRevealPickupKey,
@@ -201,27 +201,71 @@ export async function createVoucherUpload(
  * lanza: si la visión no está disponible, el comprobante sigue su camino y lo
  * valida una persona.
  */
+interface VoucherInspection {
+  ok: boolean;
+  isVoucher: boolean;
+  /** Datos leídos de la imagen, para rellenar lo que el operador dejó en blanco. */
+  fields: {
+    operationNumber: string | null;
+    amount: number | null;
+    paidAt: string | null;
+    payerName: string | null;
+  };
+  payload: Record<string, unknown>;
+}
+
+const EMPTY_INSPECTION: VoucherInspection = {
+  ok: false,
+  isVoucher: false,
+  fields: { operationNumber: null, amount: null, paidAt: null, payerName: null },
+  payload: {},
+};
+
 async function inspectVoucher(
   admin: ReturnType<typeof createAdminSupabase>,
   path: string | null,
-): Promise<{ ok: boolean; isVoucher: boolean; payload: Record<string, unknown> }> {
-  if (!path) return { ok: false, isVoucher: false, payload: {} };
+): Promise<VoucherInspection> {
+  if (!path) return EMPTY_INSPECTION;
   try {
     const { data, error } = await admin.storage.from(VOUCHER_BUCKET).download(path);
-    if (error || !data) return { ok: false, isVoucher: false, payload: {} };
+    if (error || !data) return EMPTY_INSPECTION;
     const bytes = new Uint8Array(await data.arrayBuffer());
     if (bytes.byteLength > MAX_VOUCHER_BYTES) {
-      return { ok: false, isVoucher: false, payload: { error: "imagen demasiado grande" } };
+      return { ...EMPTY_INSPECTION, payload: { error: "imagen demasiado grande" } };
     }
     const base64 = Buffer.from(bytes).toString("base64");
-    const result = await analyzeYapeVoucherFromEnv(base64, data.type);
+    // Dos preguntas distintas a la misma imagen: "¿es un comprobante?" y "¿qué
+    // dice?". La segunda es la que evita teclear el nº de operación a mano —y es
+    // el nº de operación lo que hace posible detectar el mismo Yape recortado.
+    const [verdict, extracted] = await Promise.all([
+      analyzeYapeVoucherFromEnv(base64, data.type),
+      extractYapeVoucherFromEnv(base64, data.type),
+    ]);
     return {
-      ok: result.ok,
-      isVoucher: result.isVoucher,
-      payload: { indicators: result.indicators, model: result.model, ok: result.ok },
+      ok: verdict.ok,
+      isVoucher: verdict.isVoucher,
+      fields: {
+        operationNumber: extracted.operationNumber,
+        amount: extracted.amount,
+        paidAt: extracted.paidAt,
+        payerName: extracted.payerName,
+      },
+      payload: {
+        indicators: verdict.indicators,
+        model: verdict.model,
+        ok: verdict.ok,
+        extracted: {
+          operation_number: extracted.operationNumber,
+          amount: extracted.amount,
+          paid_at: extracted.paidAt,
+          payer_name: extracted.payerName,
+          recipient_name: extracted.recipientName,
+          ok: extracted.ok,
+        },
+      },
     };
   } catch {
-    return { ok: false, isVoucher: false, payload: {} };
+    return EMPTY_INSPECTION;
   }
 }
 
@@ -257,16 +301,25 @@ export async function registerPayment(
   }
 
   const admin = createAdminSupabase();
-  const operation = normalizeOperationNumber(input.operationNumber);
+  // Se lee la imagen ANTES de buscar duplicados: si el operador no tecleó el nº
+  // de operación pero la imagen lo trae, ese dato entra en la comprobación. Sin
+  // él, un mismo Yape recortado podría colarse en dos pedidos.
+  const vision = await inspectVoucher(admin, input.path);
+  const operation =
+    normalizeOperationNumber(input.operationNumber) ??
+    normalizeOperationNumber(vision.fields.operationNumber);
+  const amount = input.amount ?? vision.fields.amount;
+  const paidAt = input.paidAt ?? vision.fields.paidAt;
+  const payerName = input.payerName ?? vision.fields.payerName;
   const payerPhone = normalizePhone(input.payerPhone);
 
   const candidate = {
     order_id: orderId,
     kind: input.kind,
-    amount: input.amount,
+    amount,
     operation_number: operation,
-    paid_at: input.paidAt,
-    payer_name: input.payerName,
+    paid_at: paidAt,
+    payer_name: payerName,
     payer_phone: payerPhone,
     file_sha256: input.sha256,
   };
@@ -294,8 +347,8 @@ export async function registerPayment(
     const { data } = await admin.from("order_payments").select(COLUMNS).eq("file_sha256", input.sha256);
     push(data);
   }
-  if (input.amount !== null) {
-    const { data } = await admin.from("order_payments").select(COLUMNS).eq("amount", input.amount);
+  if (amount !== null && amount !== undefined) {
+    const { data } = await admin.from("order_payments").select(COLUMNS).eq("amount", amount);
     push(data);
   }
 
@@ -335,20 +388,23 @@ export async function registerPayment(
     };
   }
 
-  const vision = await inspectVoucher(admin, input.path);
-  // Un comprobante que la visión no reconoce no se rechaza solo: se marca como
-  // información incompleta para que una persona lo mire. La imagen por sí sola
-  // nunca vale como pago validado (§"Estados de validación").
-  const status = vision.ok && !vision.isVoucher ? "info_incompleta" : "pendiente_revision";
+  // Un comprobante sin nº de operación NO se puede validar (ver validatePayment):
+  // es el único dato que garantiza que ese Yape no se reutilice en otro pedido.
+  // Entra como "información incompleta" para que alguien lo complete a mano.
+  // Tampoco se rechaza solo un comprobante que la visión no reconoce: la imagen
+  // por sí sola nunca vale como pago validado (§"Estados de validación").
+  const status = !operation || (vision.ok && !vision.isVoucher)
+    ? "info_incompleta"
+    : "pendiente_revision";
 
   const { error } = await admin.from("order_payments").insert({
     store_id: ctx.storeId,
     order_id: orderId,
     kind: input.kind,
-    amount: input.amount,
+    amount,
     operation_number: operation,
-    paid_at: input.paidAt,
-    payer_name: input.payerName,
+    paid_at: paidAt,
+    payer_name: payerName,
     payer_phone: payerPhone,
     file_path: input.path,
     file_sha256: input.sha256,
@@ -376,11 +432,29 @@ export async function registerPayment(
   });
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
+
+  if (!operation) {
+    return {
+      notice:
+        "Comprobante cargado, pero SIN nº de operación: no se puede validar así. " +
+        "Si la captura está recortada, pide al cliente el comprobante completo o " +
+        "escribe el nº de operación a mano en el pago.",
+    };
+  }
+  if (status === "info_incompleta") {
+    return {
+      notice: "Comprobante cargado, pero la imagen no parece un Yape: queda para revisión.",
+    };
+  }
+  const autofilled = [
+    !input.operationNumber && vision.fields.operationNumber && "nº de operación",
+    input.amount === null && vision.fields.amount !== null && "monto",
+    !input.paidAt && vision.fields.paidAt && "fecha y hora",
+  ].filter(Boolean);
   return {
-    notice:
-      status === "info_incompleta"
-        ? "Comprobante cargado, pero la imagen no parece un Yape: queda para revisión."
-        : "Comprobante cargado. Falta validarlo.",
+    notice: autofilled.length
+      ? `Comprobante cargado (se leyó de la imagen: ${autofilled.join(", ")}). Falta validarlo.`
+      : "Comprobante cargado. Falta validarlo.",
   };
 }
 
@@ -392,11 +466,18 @@ async function loadPayment(paymentId: string) {
   const admin = createAdminSupabase();
   const { data } = await admin
     .from("order_payments")
-    .select("id,order_id,store_id,kind,validation_status")
+    .select("id,order_id,store_id,kind,validation_status,operation_number")
     .eq("id", paymentId)
     .maybeSingle();
   return data as
-    | { id: string; order_id: string; store_id: string; kind: string; validation_status: string }
+    | {
+        id: string;
+        order_id: string;
+        store_id: string;
+        kind: string;
+        validation_status: string;
+        operation_number: string | null;
+      }
     | null;
 }
 
@@ -406,6 +487,17 @@ export async function validatePayment(paymentId: string): Promise<PaymentActionS
   if (!perms.can("shalom.validate_payment")) return { error: "Tu rol no permite validar pagos." };
   const payment = await loadPayment(paymentId);
   if (!payment) return { error: "Pago no encontrado." };
+  // Sin nº de operación no hay forma de garantizar que este mismo Yape no se
+  // use en otro pedido: el índice único no puede actuar sobre un nulo. Es la
+  // condición que cierra el hueco de la captura recortada.
+  if (!payment.operation_number) {
+    return {
+      error:
+        "Este pago no tiene nº de operación, así que no se puede validar. " +
+        "Complétalo a mano (o pide el comprobante completo si la captura está recortada) " +
+        "con «Corregir pago».",
+    };
+  }
   const ctx = await authorizeOrder(payment.order_id);
   if (!ctx) return { error: "Sin acceso a este pedido." };
 
@@ -644,6 +736,116 @@ export async function sharePickupKey(
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
   return { notice: "Entrega de la clave registrada." };
+}
+
+/**
+ * Completa los datos que faltaban en un comprobante — típicamente el nº de
+ * operación cuando la captura llegó recortada o la visión no lo pudo leer.
+ *
+ * NO es una excepción de administrador: es trabajo normal del equipo, así que
+ * basta el permiso de registrar pagos. Lo que sí hace es volver a comprobar la
+ * duplicidad con el dato nuevo, porque un nº de operación recién escrito puede
+ * revelar que ese Yape ya se usó en otro pedido.
+ */
+export async function completePaymentData(
+  paymentId: string,
+  input: {
+    operationNumber?: string | null;
+    amount?: number | null;
+    paidAt?: string | null;
+    payerName?: string | null;
+    payerPhone?: string | null;
+  },
+): Promise<PaymentActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("shalom.register_payment")) {
+    return { error: "Tu rol no permite editar pagos." };
+  }
+  const payment = await loadPayment(paymentId);
+  if (!payment) return { error: "Pago no encontrado." };
+  if (payment.validation_status === "validado" && !perms.can("shalom.override_payment_validation")) {
+    return { error: "Este pago ya está validado; solo un administrador puede corregirlo." };
+  }
+  const ctx = await authorizeOrder(payment.order_id);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  const admin = createAdminSupabase();
+  const operation = normalizeOperationNumber(input.operationNumber);
+
+  // El nº de operación es global: antes de escribirlo hay que asegurarse de que
+  // no pertenece ya a otro pago.
+  if (operation) {
+    const { data: clash } = await admin
+      .from("order_payments")
+      .select("id,order_id,kind,validation_status")
+      .eq("operation_number", operation)
+      .neq("id", paymentId);
+    const live = ((clash ?? []) as { id: string; order_id: string; kind: string; validation_status: string }[])
+      .filter((c) => c.validation_status !== "rechazado");
+    if (live.length) {
+      const other = live[0]!;
+      const { data: otherOrder } = await admin
+        .from("order_master")
+        .select("order_name")
+        .eq("order_id", other.order_id)
+        .maybeSingle();
+      const where =
+        other.order_id === payment.order_id
+          ? "este mismo pedido"
+          : ((otherOrder as { order_name: string | null } | null)?.order_name ?? "otro pedido");
+      await admin.from("order_events").insert({
+        store_id: ctx.storeId,
+        order_id: payment.order_id,
+        kind: "payment",
+        actor: ctx.userId,
+        source: "manual",
+        reason: "posible_duplicado",
+        note: `Intento de asignar el nº de operación ${operation}, ya usado como ${other.kind} en ${where}.`,
+      });
+      return {
+        error: `Ese nº de operación ya está registrado como ${other.kind} en ${where}.`,
+        duplicate: { message: `Ya usado en ${where}.`, orderName: where, paymentId: other.id },
+      };
+    }
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (input.operationNumber !== undefined) patch.operation_number = operation;
+  if (input.amount !== undefined) patch.amount = input.amount;
+  if (input.paidAt !== undefined) patch.paid_at = input.paidAt;
+  if (input.payerName !== undefined) patch.payer_name = input.payerName?.trim() || null;
+  if (input.payerPhone !== undefined) patch.payer_phone = normalizePhone(input.payerPhone);
+  if (!Object.keys(patch).length) return { error: "No hay nada que cambiar." };
+
+  // Completar el nº de operación desbloquea la validación: el pago vuelve a la
+  // cola normal en vez de quedarse en "información incompleta".
+  if (operation && payment.validation_status === "info_incompleta") {
+    patch.validation_status = "pendiente_revision";
+  }
+
+  const { error } = await admin.from("order_payments").update(patch).eq("id", paymentId);
+  if (error) {
+    if ((error as { code?: string }).code === "23505") {
+      return { error: "Ese nº de operación ya está en uso." };
+    }
+    return { error: error.message };
+  }
+
+  await admin.from("order_events").insert({
+    store_id: ctx.storeId,
+    order_id: payment.order_id,
+    kind: "payment",
+    actor: ctx.userId,
+    source: "manual",
+    note: `Datos del ${payment.kind} completados a mano${operation ? ` (op. ${operation})` : ""}.`,
+  });
+  await recomputeOrderMasterSafe(admin, [payment.order_id]);
+  revalidatePath(MASTER_PATH);
+  return {
+    notice: operation
+      ? "Datos completados. El pago ya se puede validar."
+      : "Datos actualizados.",
+  };
 }
 
 /**

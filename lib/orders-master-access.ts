@@ -37,7 +37,8 @@ export function isMasterView(v: string | undefined | null): v is MasterView {
 
 const MASTER_COLUMNS =
   "id,store_id,order_id,order_name,shopify_order_id,order_created_at,customer_name," +
-  "customer_phone,region,province,district,shipping_mode,order_total,general_status," +
+  "customer_phone,region,province,district,address,reference,latitude,longitude,geo_source," +
+  "shipping_mode,order_total,general_status," +
   "operational_status,status_since,status_source,status_locked,current_courier,last_courier," +
   "courier_count,attempt_count,guide_code,dispatched_at,delivered_at,delivered_courier," +
   "returned_at,last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +

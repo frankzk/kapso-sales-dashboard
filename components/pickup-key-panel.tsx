@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import {
+  completePaymentData,
   createVoucherUpload,
   loadPaymentPanel,
   registerPayment,
@@ -126,9 +127,11 @@ export function PickupKeyPanel({ orderId, onChanged }: { orderId: string; onChan
       <PaymentList
         payments={panel.payments}
         canValidate={panel.canValidate}
+        canRegister={panel.canRegister}
         pending={pending}
         onValidate={(id) => run(() => validatePayment(id))}
         onReject={(id, reason) => run(() => rejectPayment(id, reason))}
+        onComplete={(id, data) => run(() => completePaymentData(id, data))}
       />
 
       {panel.canRegister && (
@@ -160,15 +163,19 @@ export function PickupKeyPanel({ orderId, onChanged }: { orderId: string; onChan
 function PaymentList({
   payments,
   canValidate,
+  canRegister,
   pending,
   onValidate,
   onReject,
+  onComplete,
 }: {
   payments: PaymentRow[];
   canValidate: boolean;
+  canRegister: boolean;
   pending: boolean;
   onValidate: (id: string) => void;
   onReject: (id: string, reason: string) => void;
+  onComplete: (id: string, data: { operationNumber: string; amount: number | null; paidAt: string | null }) => void;
 }) {
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [reason, setReason] = useState("");
@@ -199,7 +206,18 @@ function PaymentList({
             {p.payer_name ? ` · ${p.payer_name}` : ""}
           </p>
           {p.notes && <p className="text-xs text-slate-500">{p.notes}</p>}
-          {canValidate && p.validation_status !== "validado" && p.validation_status !== "rechazado" && (
+          {!p.operation_number && p.validation_status !== "rechazado" && (
+            <MissingOperation
+              payment={p}
+              canRegister={canRegister}
+              pending={pending}
+              onComplete={onComplete}
+            />
+          )}
+          {canValidate &&
+            p.operation_number &&
+            p.validation_status !== "validado" &&
+            p.validation_status !== "rechazado" && (
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <button
                 disabled={pending}
@@ -242,6 +260,78 @@ function PaymentList({
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Un comprobante sin nº de operación no se puede validar: es el único dato que
+ * garantiza que ese Yape no se reutilice en otro pedido (el índice único no
+ * puede actuar sobre un nulo). Ocurre cuando la captura llega recortada y la
+ * lectura automática no encuentra el número — el camino es completarlo a mano o
+ * pedirle al cliente el comprobante entero.
+ */
+function MissingOperation({
+  payment,
+  canRegister,
+  pending,
+  onComplete,
+}: {
+  payment: PaymentRow;
+  canRegister: boolean;
+  pending: boolean;
+  onComplete: (id: string, data: { operationNumber: string; amount: number | null; paidAt: string | null }) => void;
+}) {
+  const [operation, setOperation] = useState("");
+  const [amount, setAmount] = useState(payment.amount !== null ? String(payment.amount) : "");
+  const [paidAt, setPaidAt] = useState("");
+
+  return (
+    <div className="mt-1.5 space-y-1.5 rounded-lg bg-amber-50 px-2.5 py-2">
+      <p className="text-xs text-amber-900">
+        Sin nº de operación no se puede validar. Si la captura está recortada, pide al cliente el
+        comprobante completo o escribe el número aquí.
+      </p>
+      {canRegister && (
+        <div className="flex flex-wrap gap-1.5">
+          <input
+            value={operation}
+            onChange={(e) => setOperation(e.target.value)}
+            placeholder="Nº de operación"
+            className="w-40 rounded-lg border border-amber-200 px-2 py-1 text-xs"
+          />
+          {payment.amount === null && (
+            <input
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              inputMode="decimal"
+              placeholder="Monto"
+              className="w-24 rounded-lg border border-amber-200 px-2 py-1 text-xs"
+            />
+          )}
+          {!payment.paid_at && (
+            <input
+              type="datetime-local"
+              value={paidAt}
+              onChange={(e) => setPaidAt(e.target.value)}
+              className="rounded-lg border border-amber-200 px-2 py-1 text-xs"
+            />
+          )}
+          <button
+            disabled={pending || !operation.trim()}
+            onClick={() =>
+              onComplete(payment.id, {
+                operationNumber: operation,
+                amount: amount.trim() ? Number(amount) : null,
+                paidAt: paidAt ? new Date(paidAt).toISOString() : null,
+              })
+            }
+            className="rounded-lg bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+          >
+            Completar datos
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -384,6 +474,7 @@ function VoucherForm({
         className="block text-sm text-slate-600"
       />
       <p className="text-xs text-slate-400">
+        Lo que dejes en blanco se intenta leer de la imagen (nº de operación, monto, fecha y hora).
         Cargar la imagen no valida el pago: queda pendiente hasta que alguien lo revise.
       </p>
       <button

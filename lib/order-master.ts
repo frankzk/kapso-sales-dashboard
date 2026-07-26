@@ -40,6 +40,7 @@ const ORDER_COLUMNS =
 const SHIPMENT_BASE_COLUMNS =
   "id,order_id,store_id,courier,guide_code,delivery_status,status_category," +
   "aliclik_attempts,reroute_attempts,delivered_source,district,province,region," +
+  "delivery_address,delivery_reference,latitude,longitude," +
   "customer_name,customer_phone,created_at,updated_at";
 const SHIPMENT_GESTION_COLUMNS =
   ",assigned_at,dispatched_at,out_for_delivery_at,rescheduled_at,closed_at," +
@@ -82,6 +83,10 @@ interface ShipmentRecord {
   district: string | null;
   province: string | null;
   region: string | null;
+  delivery_address: string | null;
+  delivery_reference: string | null;
+  latitude: number | null;
+  longitude: number | null;
   customer_name: string | null;
   customer_phone: string | null;
   created_at: string | null;
@@ -300,28 +305,31 @@ async function fetchGeo(
   return out;
 }
 
+interface DraftAddress {
+  district: string | null;
+  province: string | null;
+  region: string | null;
+  customer_name: string | null;
+  address1: string | null;
+  referencia: string | null;
+}
+
 /** Dirección del pedido para los pedidos sin guía (Lima, sobre todo). */
 async function fetchDraftAddresses(
   admin: SupabaseClient,
   orders: OrderRecord[],
-): Promise<Map<string, { district: string | null; province: string | null; region: string | null; customer_name: string | null }>> {
-  const out = new Map<string, { district: string | null; province: string | null; region: string | null; customer_name: string | null }>();
+): Promise<Map<string, DraftAddress>> {
+  const out = new Map<string, DraftAddress>();
   const gids = orders.map((o) => `gid://shopify/Order/${o.shopify_order_id}`);
   if (!gids.length) return out;
   const byGid = new Map(orders.map((o) => [`gid://shopify/Order/${o.shopify_order_id}`, o.id]));
   for (const batch of chunk(gids, ID_BATCH)) {
     const { data, error } = await admin
       .from("draft_orders")
-      .select("order_gid,district,province,region,customer_name")
+      .select("order_gid,district,province,region,customer_name,address1,referencia")
       .in("order_gid", batch);
     if (error) return out;
-    for (const row of (data ?? []) as {
-      order_gid: string;
-      district: string | null;
-      province: string | null;
-      region: string | null;
-      customer_name: string | null;
-    }[]) {
+    for (const row of (data ?? []) as (DraftAddress & { order_gid: string })[]) {
       const orderId = byGid.get(row.order_gid);
       if (orderId) {
         out.set(orderId, {
@@ -329,6 +337,8 @@ async function fetchDraftAddresses(
           province: row.province,
           region: row.region,
           customer_name: row.customer_name,
+          address1: row.address1,
+          referencia: row.referencia,
         });
       }
     }
@@ -418,6 +428,38 @@ async function fetchTariffs(
   return { tariffs, orgByStore };
 }
 
+interface GeoOverride {
+  order_id: string;
+  region: string | null;
+  province: string | null;
+  district: string | null;
+  address: string | null;
+  reference: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+/**
+ * Correcciones manuales de ubicación (0051). Ganan sobre Shopify, los reportes
+ * de courier y el ubigeo: si alguien del equipo se tomó el trabajo de arreglar
+ * una dirección, ninguna sincronización posterior la vuelve a romper.
+ */
+async function fetchGeoOverrides(
+  admin: SupabaseClient,
+  ids: string[],
+): Promise<Map<string, GeoOverride>> {
+  const out = new Map<string, GeoOverride>();
+  for (const batch of chunk(ids, ID_BATCH)) {
+    const { data, error } = await admin
+      .from("order_geo_overrides")
+      .select("order_id,region,province,district,address,reference,latitude,longitude")
+      .in("order_id", batch);
+    if (error) return out; // la migración puede no estar aplicada todavía
+    for (const row of (data ?? []) as unknown as GeoOverride[]) out.set(row.order_id, row);
+  }
+  return out;
+}
+
 export interface RecomputeResult {
   requested: number;
   written: number;
@@ -443,6 +485,7 @@ export async function recomputeOrderMaster(
   const calls = await fetchCalls(admin, shipments.map((s) => s.id));
   const events = await fetchEvents(admin, ids);
   const drafts = await fetchDraftAddresses(admin, orders);
+  const geoOverrides = await fetchGeoOverrides(admin, ids);
   const signals = await fetchPaymentSignals(admin, ids);
   const { tariffs } = await fetchTariffs(admin, [...new Set(orders.map((o) => o.store_id))]);
 
@@ -459,7 +502,11 @@ export async function recomputeOrderMaster(
     const draft = drafts.get(order.id);
     districtByOrder.set(
       order.id,
-      text(address?.city) ?? guides.find((g) => g.district)?.district ?? draft?.district ?? null,
+      geoOverrides.get(order.id)?.district ??
+        text(address?.city) ??
+        guides.find((g) => g.district)?.district ??
+        draft?.district ??
+        null,
     );
   }
   const geo = await fetchGeo(
@@ -473,19 +520,53 @@ export async function recomputeOrderMaster(
     const address = shopifyShippingAddress(order.raw);
     const draft = drafts.get(order.id);
 
+    const geoOverride = geoOverrides.get(order.id) ?? null;
     const district = districtByOrder.get(order.id) ?? null;
     const geoHit = geo.get(normalizeDistrict(district));
-    // La provincia del Excel de Aliclik es la del operador logístico y manda
-    // sobre la inferida; después la del ubigeo; después la del draft order.
+
+    // Prioridad de la ubicación, de mayor a menor:
+    //   1. corrección manual del equipo (0051),
+    //   2. lo que reportó el courier (conoce la zona mejor que el formulario),
+    //   3. Shopify / el ubigeo / el draft order.
     const province =
-      guides.find((g) => g.province)?.province ?? geoHit?.province ?? draft?.province ?? null;
+      geoOverride?.province ??
+      guides.find((g) => g.province)?.province ??
+      geoHit?.province ??
+      draft?.province ??
+      null;
     // Shopify llama `province` al DEPARTAMENTO (Perú no tiene un tercer nivel).
     const region =
+      geoOverride?.region ??
       text(address?.province) ??
       guides.find((g) => g.region)?.region ??
       geoHit?.department ??
       draft?.region ??
       null;
+    const guideAddress = guides.find((g) => g.delivery_address);
+    const streetAddress =
+      geoOverride?.address ?? text(address?.address1) ?? guideAddress?.delivery_address ?? draft?.address1 ?? null;
+    const reference =
+      geoOverride?.reference ??
+      text(address?.address2) ??
+      guideAddress?.delivery_reference ??
+      draft?.referencia ??
+      null;
+    // El punto del mapa: la corrección manual primero, luego lo que el courier
+    // geolocalizó al ir físicamente. Shopify no entrega coordenadas.
+    const geoPin = guides.find((g) => g.latitude != null && g.longitude != null);
+    const latitude = geoOverride?.latitude ?? geoPin?.latitude ?? null;
+    const longitude = geoOverride?.longitude ?? geoPin?.longitude ?? null;
+    const geoSource = geoOverride
+      ? "manual"
+      : guides.some((g) => g.province || g.district)
+        ? "courier"
+        : geoHit
+          ? "ubigeo"
+          : address
+            ? "shopify"
+            : draft
+              ? "draft"
+              : null;
 
     const eventSnapshots: OrderEventSnapshot[] = orderEvents.map((e) => ({
       kind: e.kind,
@@ -524,6 +605,11 @@ export async function recomputeOrderMaster(
       region,
       province,
       district,
+      address: streetAddress,
+      reference,
+      latitude,
+      longitude,
+      geo_source: geoSource,
       shipping_mode: order.shipping_mode,
       order_total: order.total_amount,
       general_status: state.general,

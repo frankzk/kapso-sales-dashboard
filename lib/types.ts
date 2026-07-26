@@ -354,6 +354,12 @@ export interface OrderMasterRow {
   region: string | null;
   province: string | null;
   district: string | null;
+  address: string | null;
+  reference: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  /** Origen de la ubicación: manual | courier | ubigeo | shopify | draft. */
+  geo_source: string | null;
   shipping_mode: string | null; // cod | agency
   order_total: number | null;
   general_status: string;

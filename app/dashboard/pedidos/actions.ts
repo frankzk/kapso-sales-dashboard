@@ -27,6 +27,7 @@ import {
   isTerminalGeneral,
   type GeneralStatus,
 } from "@/lib/order-status";
+import { normalizeDistrict } from "@/lib/shipments";
 import type { OrderMasterRow } from "@/lib/types";
 
 export interface MasterActionState {
@@ -340,4 +341,172 @@ export async function relinkGuide(
   revalidatePath(MASTER_PATH);
   revalidatePath("/dashboard/envios");
   return { notice: `Guía ${code} vinculada a ${ctx.row.order_name ?? "el pedido"}.` };
+}
+
+// ---------------------------------------------------------------------------
+// Corrección de la ubicación (§11 "corregir información")
+// ---------------------------------------------------------------------------
+
+export interface OrderGeoInput {
+  region?: string | null;
+  province?: string | null;
+  district?: string | null;
+  address?: string | null;
+  reference?: string | null;
+  latitude?: string | number | null;
+  longitude?: string | number | null;
+  note?: string | null;
+  /** Recordar el par distrito→provincia para los próximos pedidos de ese distrito. */
+  rememberDistrict?: boolean;
+}
+
+function coord(value: string | number | null | undefined, max: number): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = typeof value === "number" ? value : Number(String(value).trim());
+  if (!Number.isFinite(n) || Math.abs(n) > max) return null;
+  return n;
+}
+
+function trimmed(value: string | null | undefined): string | null {
+  const v = (value ?? "").trim();
+  return v || null;
+}
+
+/**
+ * Corrige la ubicación de un pedido. La dirección de Shopify sale del formulario
+ * que llenó el cliente y Shopify mismo la marca como problemática a menudo; el
+ * punto del mapa suele estar desplazado y la provincia se infiere del distrito,
+ * que puede venir mal escrito.
+ *
+ * La corrección se guarda APARTE de `orders` (que es el reflejo de Shopify y se
+ * reescribe en cada sincronización) y gana sobre todas las demás fuentes al
+ * recalcular. Mismo criterio que `shipments.address_override`.
+ */
+export async function updateOrderGeo(
+  orderId: string,
+  input: OrderGeoInput,
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) {
+    return { error: "Tu rol no permite corregir la ubicación." };
+  }
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  const latitude = coord(input.latitude, 90);
+  const longitude = coord(input.longitude, 180);
+  if ((input.latitude && latitude === null) || (input.longitude && longitude === null)) {
+    return { error: "Coordenadas inválidas. Usa grados decimales, p. ej. -12.0464, -77.0428." };
+  }
+  // Media coordenada no ubica nada: o las dos o ninguna.
+  if ((latitude === null) !== (longitude === null)) {
+    return { error: "Indica latitud y longitud, o ninguna de las dos." };
+  }
+
+  const patch = {
+    order_id: orderId,
+    store_id: ctx.storeId,
+    region: trimmed(input.region),
+    province: trimmed(input.province),
+    district: trimmed(input.district),
+    address: trimmed(input.address),
+    reference: trimmed(input.reference),
+    latitude,
+    longitude,
+    note: trimmed(input.note),
+    updated_by: ctx.userId,
+    updated_at: new Date().toISOString(),
+  };
+
+  const admin = createAdminSupabase();
+  const { error } = await admin
+    .from("order_geo_overrides")
+    .upsert(patch, { onConflict: "order_id" });
+  if (error) return { error: error.message };
+
+  // Si el equipo arregló la provincia de un distrito, se aprende para los
+  // siguientes pedidos de ese distrito: el ubigeo del INEI no siempre está
+  // cargado y esta es la forma barata de irlo completando con datos reales.
+  let learned = false;
+  if (input.rememberDistrict && patch.district && patch.province) {
+    const key = normalizeDistrict(patch.district);
+    if (key) {
+      const { error: geoError } = await admin.from("peru_districts").upsert(
+        {
+          district_key: key,
+          district: patch.district,
+          province: patch.province,
+          department: patch.region,
+          source: "manual",
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "district_key" },
+      );
+      learned = !geoError;
+    }
+  }
+
+  const detail = [
+    patch.district && `distrito: ${patch.district}`,
+    patch.province && `provincia: ${patch.province}`,
+    patch.region && `región: ${patch.region}`,
+    patch.address && `dirección: ${patch.address}`,
+    latitude !== null && `coordenadas: ${latitude}, ${longitude}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "comment",
+    commentType: "ubicacion",
+    reason: patch.note,
+    note: `Ubicación corregida manualmente. ${detail}`.trim(),
+  });
+  if (eventError) return { error: eventError };
+
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  return {
+    notice: learned
+      ? "Ubicación corregida. La provincia queda recordada para los próximos pedidos de ese distrito."
+      : "Ubicación corregida.",
+  };
+}
+
+/** Devuelve la corrección vigente, para poblar el formulario. */
+export async function loadOrderGeo(
+  orderId: string,
+): Promise<OrderGeoInput & { hasOverride: boolean }> {
+  const sb = await createServerSupabase();
+  const { data } = await sb
+    .from("order_geo_overrides")
+    .select("region,province,district,address,reference,latitude,longitude,note")
+    .eq("order_id", orderId)
+    .maybeSingle();
+  const row = data as (OrderGeoInput & Record<string, unknown>) | null;
+  return { ...(row ?? {}), hasOverride: Boolean(row) };
+}
+
+/**
+ * Quita la corrección manual y devuelve el pedido a lo que digan Shopify, los
+ * reportes y el ubigeo. No borra el rastro: el historial conserva el cambio.
+ */
+export async function clearOrderGeo(orderId: string): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite corregir la ubicación." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  const admin = createAdminSupabase();
+  const { error } = await admin.from("order_geo_overrides").delete().eq("order_id", orderId);
+  if (error) return { error: error.message };
+
+  await recordEvent(admin, ctx, {
+    kind: "comment",
+    commentType: "ubicacion",
+    note: "Corrección manual de ubicación retirada: vuelve a la dirección de origen.",
+  });
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  return { notice: "Corrección retirada." };
 }

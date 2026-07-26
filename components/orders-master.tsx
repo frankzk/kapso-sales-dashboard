@@ -15,11 +15,15 @@ import { ChecklistFilter } from "@/components/filters";
 import { PickupKeyPanel } from "@/components/pickup-key-panel";
 import {
   addOrderComment,
+  clearOrderGeo,
   loadOrderDetail,
+  loadOrderGeo,
   registerReturn,
   relinkGuide,
   searchOrders,
   setOrderStatus,
+  updateOrderGeo,
+  type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import {
   agencySummary,
@@ -940,14 +944,19 @@ function OrderDrawer({
                       : null
                   }
                 />
-                <Field label="Región" value={detail.row.region} />
-                <Field label="Provincia" value={detail.row.province} />
-                <Field label="Distrito" value={detail.row.district} />
-                <Field label="Dirección" value={detail.address?.address1} />
-                <Field label="Referencia" value={detail.address?.address2} />
                 <Field label="Monto" value={fmtMoney(detail.row.order_total)} />
               </dl>
             </section>
+
+            <GeoSection
+              orderId={orderId}
+              row={detail.row}
+              canEdit={canEdit}
+              onSaved={() => {
+                void reload();
+                onSaved();
+              }}
+            />
 
             {detail.lineItems.length > 0 && (
               <section>
@@ -1059,6 +1068,249 @@ function OrderDrawer({
         )}
       </aside>
     </div>
+  );
+}
+
+
+/** Enlace al mapa: por coordenadas si las hay, si no por la dirección escrita. */
+function mapUrl(row: OrderMasterRow): string | null {
+  if (row.latitude != null && row.longitude != null) {
+    return `https://www.google.com/maps/search/?api=1&query=${row.latitude},${row.longitude}`;
+  }
+  const parts = [row.address, row.district, row.province, row.region, "Perú"].filter(Boolean);
+  if (parts.length <= 1) return null;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts.join(", "))}`;
+}
+
+const GEO_SOURCE_LABEL: Record<string, string> = {
+  manual: "corregida por el equipo",
+  courier: "según el reporte del courier",
+  ubigeo: "provincia inferida del distrito",
+  shopify: "según Shopify",
+  draft: "según el formulario COD",
+};
+
+/**
+ * Ubicación del pedido, editable. La dirección de Shopify sale del formulario que
+ * llenó el cliente —Shopify mismo la marca como problemática a menudo— y su punto
+ * del mapa suele estar desplazado. Corregirla aquí no toca `orders`: la
+ * corrección vive aparte y sobrevive a la siguiente sincronización.
+ */
+function GeoSection({
+  orderId,
+  row,
+  canEdit,
+  onSaved,
+}: {
+  orderId: string;
+  row: OrderMasterRow;
+  canEdit: boolean;
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<OrderGeoInput>({});
+  const [hasOverride, setHasOverride] = useState(row.geo_source === "manual");
+  const [remember, setRemember] = useState(true);
+  const [message, setMessage] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  async function open() {
+    const current = await loadOrderGeo(orderId);
+    setHasOverride(current.hasOverride);
+    setForm({
+      region: current.region ?? row.region ?? "",
+      province: current.province ?? row.province ?? "",
+      district: current.district ?? row.district ?? "",
+      address: current.address ?? row.address ?? "",
+      reference: current.reference ?? row.reference ?? "",
+      latitude: current.latitude ?? row.latitude ?? "",
+      longitude: current.longitude ?? row.longitude ?? "",
+      note: "",
+    });
+    setEditing(true);
+  }
+
+  function save() {
+    startTransition(async () => {
+      const res = await updateOrderGeo(orderId, { ...form, rememberDistrict: remember });
+      setMessage(res.error ?? res.notice ?? null);
+      if (!res.error) {
+        setEditing(false);
+        onSaved();
+      }
+    });
+  }
+
+  function clear() {
+    startTransition(async () => {
+      const res = await clearOrderGeo(orderId);
+      setMessage(res.error ?? res.notice ?? null);
+      if (!res.error) {
+        setEditing(false);
+        setHasOverride(false);
+        onSaved();
+      }
+    });
+  }
+
+  const url = mapUrl(row);
+  const set = (patch: Partial<OrderGeoInput>) => setForm((f) => ({ ...f, ...patch }));
+
+  return (
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ubicación</h3>
+        {row.geo_source && (
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+            {GEO_SOURCE_LABEL[row.geo_source] ?? row.geo_source}
+          </span>
+        )}
+        {url && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-brand-700 hover:underline"
+          >
+            Ver mapa ↗
+          </a>
+        )}
+        {canEdit && !editing && (
+          <button onClick={open} className="ml-auto text-xs text-slate-500 hover:underline">
+            {hasOverride ? "Editar corrección" : "Corregir ubicación"}
+          </button>
+        )}
+      </div>
+
+      {message && <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">{message}</p>}
+
+      {!editing ? (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+          <Field label="Región" value={row.region} />
+          <Field label="Provincia" value={row.province} />
+          <Field label="Distrito" value={row.district} />
+          <Field label="Dirección" value={row.address} />
+          <Field label="Referencia" value={row.reference} />
+          <Field
+            label="Coordenadas"
+            value={
+              row.latitude != null && row.longitude != null
+                ? `${row.latitude}, ${row.longitude}`
+                : null
+            }
+          />
+        </dl>
+      ) : (
+        <div className="space-y-2 rounded-lg border border-slate-200 p-3">
+          <p className="text-xs text-slate-500">
+            Deja en blanco lo que no quieras cambiar. Esta corrección gana sobre Shopify, sobre los
+            reportes de los couriers y sobre el ubigeo, y no se pierde al sincronizar.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <LabeledInput label="Región" value={form.region} onChange={(region) => set({ region })} />
+            <LabeledInput
+              label="Provincia"
+              value={form.province}
+              onChange={(province) => set({ province })}
+            />
+            <LabeledInput
+              label="Distrito"
+              value={form.district}
+              onChange={(district) => set({ district })}
+            />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <LabeledInput
+              label="Dirección"
+              value={form.address}
+              onChange={(address) => set({ address })}
+            />
+            <LabeledInput
+              label="Referencia"
+              value={form.reference}
+              onChange={(reference) => set({ reference })}
+            />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <LabeledInput
+              label="Latitud"
+              value={form.latitude}
+              placeholder="-12.0464"
+              onChange={(latitude) => set({ latitude })}
+            />
+            <LabeledInput
+              label="Longitud"
+              value={form.longitude}
+              placeholder="-77.0428"
+              onChange={(longitude) => set({ longitude })}
+            />
+          </div>
+          <LabeledInput
+            label="Motivo / nota"
+            value={form.note}
+            onChange={(note) => set({ note })}
+          />
+          <label className="flex items-center gap-1.5 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            Recordar esta provincia para los próximos pedidos del mismo distrito
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button
+              disabled={pending}
+              onClick={save}
+              className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+            >
+              Guardar ubicación
+            </button>
+            <button
+              disabled={pending}
+              onClick={() => setEditing(false)}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+            {hasOverride && (
+              <button
+                disabled={pending}
+                onClick={clear}
+                className="ml-auto text-xs text-slate-500 hover:underline"
+              >
+                Quitar corrección y volver al origen
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function LabeledInput({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: string | number | null | undefined;
+  placeholder?: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs text-slate-400">{label}</span>
+      <input
+        value={value ?? ""}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-0.5 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+      />
+    </label>
   );
 }
 
