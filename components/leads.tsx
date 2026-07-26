@@ -623,12 +623,22 @@ export function LeadsBoard({
   const isReviewView = view === "seguimientos" || view === "ganados" || view === "perdidos";
   const [more, setMore] = useState<boolean>(isReviewView);
 
+  // Panel de gráficos (burndown, sin-llamar 7d, conversión, productividad). Se
+  // recarga cuando cambia el conteo de la cola — y con el auto-refresco en vivo
+  // eso pasa muy seguido. IMPORTANTE: NO se vacía insightsData antes de recargar;
+  // si se vaciara, los cuatro gráficos parpadearían a esqueleto varios segundos
+  // en CADA recarga. Se deja el panel anterior a la vista y se reemplaza recién
+  // cuando llegan los datos nuevos (el usuario no ve el refetch). Cambiar de
+  // tienda no arrastra datos viejos: la página remonta el board con
+  // key={storeId}:{view}.
   useEffect(() => {
     let alive = true;
-    setInsightsData(insights);
-    if (insights) return () => {
-      alive = false;
-    };
+    if (insights) {
+      setInsightsData(insights);
+      return () => {
+        alive = false;
+      };
+    }
     void loadLeadsInsightsPanel(storeId, timezone, counts.sin_llamar).then((result) => {
       if (alive && !("error" in result)) setInsightsData(result);
     });
