@@ -123,6 +123,8 @@ export interface CourierUploadResult extends ReportIngestResult {
   courier: string;
   /** Otro lote con el mismo archivo, si ya se había cargado antes. */
   duplicateOfBatchId?: string | null;
+  /** Filas que Aliclik aún no gestiona (ESTADO LLAMADA = IMPORTADO) y se omiten. */
+  skippedImportadoCount?: number;
 }
 
 /**
@@ -198,6 +200,7 @@ export async function handleCourierUpload(
       updatedCount: result.matchedCount,
       errorCount: result.errorCount,
       duplicateOfBatchId: (prior as { id: string } | null)?.id ?? null,
+      skippedImportadoCount: result.skippedImportadoCount,
     };
   }
 

@@ -46,6 +46,7 @@ import {
   releaseLead,
   resolveHandoff,
   searchLeads,
+  loadLeadsForAudience,
 } from "@/app/dashboard/leads/actions";
 import { cn } from "@/components/ui";
 import type { LeadDrawerProps, LeadDrawerUpdate } from "@/components/leads-drawer";
@@ -563,6 +564,7 @@ export function LeadsBoard({
   initialInteractionDate,
   initialOpenId,
   currentUserId,
+  leadsComplete = true,
 }: {
   stores: StoreSummary[];
   storeId: string;
@@ -580,6 +582,9 @@ export function LeadsBoard({
   initialInteractionDate?: LeadInteractionDateFilter | null;
   initialOpenId?: string | null; // ?open=<id> → auto-abre ese lead (desde el pop-up de Yapes)
   currentUserId: string;
+  /** false = la página cargó solo un tope de filas para esta vista, así que un
+   *  export debe repedir el universo completo al servidor. */
+  leadsComplete?: boolean;
 }) {
   const router = useRouter();
   const [routePending, startRouteTransition] = useTransition();
@@ -622,13 +627,24 @@ export function LeadsBoard({
   // one so the active view is never hidden.
   const isReviewView = view === "seguimientos" || view === "ganados" || view === "perdidos";
   const [more, setMore] = useState<boolean>(isReviewView);
+  const [exportingAudience, setExportingAudience] = useState(false);
 
+  // Panel de gráficos (burndown, sin-llamar 7d, conversión, productividad). Se
+  // recarga cuando cambia el conteo de la cola — y con el auto-refresco en vivo
+  // eso pasa muy seguido. IMPORTANTE: NO se vacía insightsData antes de recargar;
+  // si se vaciara, los cuatro gráficos parpadearían a esqueleto varios segundos
+  // en CADA recarga. Se deja el panel anterior a la vista y se reemplaza recién
+  // cuando llegan los datos nuevos (el usuario no ve el refetch). Cambiar de
+  // tienda no arrastra datos viejos: la página remonta el board con
+  // key={storeId}:{view}.
   useEffect(() => {
     let alive = true;
-    setInsightsData(insights);
-    if (insights) return () => {
-      alive = false;
-    };
+    if (insights) {
+      setInsightsData(insights);
+      return () => {
+        alive = false;
+      };
+    }
     void loadLeadsInsightsPanel(storeId, timezone, counts.sin_llamar).then((result) => {
       if (alive && !("error" in result)) setInsightsData(result);
     });
@@ -960,22 +976,36 @@ export function LeadsBoard({
   const displayLeads = results ?? shownLeads;
 
   // Exportar la audiencia que estás viendo para subirla a Meta (Custom Audience).
-  // Se genera en el navegador a propósito: así sale EXACTAMENTE el conjunto
-  // filtrado en pantalla (los facets viven en cliente, un endpoint no los
-  // conoce) y no se expone nada nuevo — son las mismas filas ya cargadas.
+  // El CSV se arma en el navegador a propósito: los facets viven en cliente, así
+  // que un endpoint no sabría qué conjunto exportar. Pero la página carga solo un
+  // tope de filas en las vistas que no son la cola, y exportar 200 de 1125 daría
+  // un público incompleto sin avisar — por eso, cuando lo cargado está truncado,
+  // se pide el universo completo al servidor y se le aplican LOS MISMOS facets.
   const audienceRows = buildMetaAudienceRows(shownLeads);
-  function downloadMetaAudience() {
-    const segment = [view, inQueue ? queueState : null, segFilter].filter(Boolean).join(" ");
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: timezone });
-    const csv = buildMetaAudienceCsv(shownLeads);
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = metaAudienceFilename(segment, today);
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+  async function downloadMetaAudience() {
+    if (exportingAudience) return;
+    setExportingAudience(true);
+    try {
+      let rows = shownLeads;
+      if (!leadsComplete) {
+        const all = await loadLeadsForAudience(storeId, view);
+        if (all.length) rows = all.filter((l) => facetKeys.every((k) => FACETS[k](l)));
+      }
+      const segment = [view, inQueue ? queueState : null, segFilter].filter(Boolean).join(" ");
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: timezone });
+      const url = URL.createObjectURL(
+        new Blob([buildMetaAudienceCsv(rows)], { type: "text/csv;charset=utf-8" }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = metaAudienceFilename(segment, today);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExportingAudience(false);
+    }
   }
 
   return (
@@ -1142,17 +1172,22 @@ export function LeadsBoard({
           <button
             type="button"
             onClick={downloadMetaAudience}
-            disabled={!audienceRows.length}
+            disabled={!audienceRows.length || exportingAudience}
             title={
-              audienceRows.length
-                ? `Descarga ${audienceRows.length} celular(es) con el formato de Meta (Públicos personalizados → Lista de clientes). Exporta exactamente los leads filtrados en pantalla.`
-                : "No hay celulares válidos en el filtro actual"
+              !audienceRows.length
+                ? "No hay celulares válidos en el filtro actual"
+                : leadsComplete
+                  ? `Descarga ${audienceRows.length} celular(es) con el formato de Meta (Públicos personalizados → Lista de clientes). Exporta exactamente los leads filtrados en pantalla.`
+                  : "Descarga TODOS los leads del filtro actual (no solo los visibles) con el formato de Meta (Públicos personalizados → Lista de clientes)."
             }
             className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <StrokeIcon d="M12 4v10m0 0-4-4m4 4 4-4M5 19h14" />
-            Audiencia Meta
-            {audienceRows.length > 0 && (
+            {exportingAudience ? "Preparando…" : "Audiencia Meta"}
+            {/* El contador solo se muestra cuando lo cargado ES el universo
+                completo; si no, un "200" haría creer que el público es de 200
+                cuando el export trae todos. */}
+            {!exportingAudience && leadsComplete && audienceRows.length > 0 && (
               <span className="rounded-full bg-slate-200 px-1.5 text-[11px] font-semibold tabular-nums text-slate-700">
                 {audienceRows.length}
               </span>

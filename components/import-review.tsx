@@ -54,7 +54,13 @@ export function ImportReview({
         const dup = json.duplicateOfBatchId
           ? " ⚠️ Este archivo ya se había cargado antes; los estados solo avanzan, así que no se duplicó nada."
           : "";
-        const base = `Reporte de ${json.courier}: ${json.rowCount} filas — ${json.matchedCount} con pedido, ${json.unmatchedCount} a revisión, ${json.errorCount} con error.${dup}`;
+        const skipped = json.skippedImportadoCount ?? 0;
+        const base =
+          `Reporte de ${json.courier}: ${json.rowCount} filas — ${json.matchedCount} con pedido, ${json.unmatchedCount} a revisión, ${json.errorCount} con error.${dup}` +
+          // Se avisa explícitamente para que no parezca que el archivo perdió filas.
+          (skipped > 0
+            ? ` Se omitieron ${skipped} filas con ESTADO LLAMADA = IMPORTADO (Aliclik aún no las gestiona).`
+            : "");
         if (fileRef.current) fileRef.current.value = "";
         // El auto-vínculo contra Shopify en vivo es específico de Aliclik (usa la
         // referencia del campo NOTA); el resto de couriers traen el nº de pedido

@@ -34,9 +34,26 @@ const DIAL_TO_COUNTRY: { prefix: string; country: string }[] = [
   { prefix: "51", country: "pe" },
 ];
 
-/** Shortest plausible international number (country code + subscriber). Guards
- *  against typos and truncated numbers polluting the audience. */
-const MIN_PHONE_DIGITS = 10;
+/** Celular peruano completo: 51 + 9 + 8 dígitos. */
+const PE_MOBILE_RE = /^519\d{8}$/;
+
+// Cualquier número con código de país llega a 11 dígitos como mínimo (US 1+10,
+// Chile 56+9, Bolivia 591+8…) y E.164 tope en 15. Un número fuera de ese rango
+// está truncado o mal tipeado.
+const MIN_INTL_DIGITS = 11;
+const MAX_INTL_DIGITS = 15;
+
+/**
+ * ¿Sirve este número para un público de anuncios? Meta descarta en silencio lo
+ * que no puede cruzar, así que filtrar acá es lo que evita creer que el público
+ * es más grande de lo que es. Perú se valida estrictamente (es el mercado real);
+ * otros prefijos solo se acotan por longitud, porque no podemos validar reglas
+ * de países que no conocemos.
+ */
+export function isExportablePhone(digits: string): boolean {
+  if (digits.startsWith("51")) return PE_MOBILE_RE.test(digits);
+  return digits.length >= MIN_INTL_DIGITS && digits.length <= MAX_INTL_DIGITS;
+}
 
 function countryOf(digits: string): string {
   return DIAL_TO_COUNTRY.find((c) => digits.startsWith(c.prefix))?.country ?? "";
@@ -68,7 +85,7 @@ export function buildMetaAudienceRows(leads: readonly AudienceLead[]): MetaAudie
   const seen = new Set<string>();
   for (const lead of leads) {
     const digits = normalizePhone(lead.phone);
-    if (!digits || digits.length < MIN_PHONE_DIGITS) continue;
+    if (!digits || !isExportablePhone(digits)) continue;
     if (seen.has(digits)) continue;
     seen.add(digits);
     out.push({
