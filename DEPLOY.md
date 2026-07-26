@@ -517,6 +517,55 @@ su propia clave** y paga lo suyo.
   mensaje y el equipo escribe a mano el nº de operación — que sigue siendo
   obligatorio para poder validar un pago.
 
+## 5m. Privilegios por defecto de Supabase (corrección)
+
+**Needs migration 0053.** Es obligatoria si se aplicó cualquiera de la 0045 a la
+0052; no toca datos y es idempotente.
+
+Supabase deja configurado en el esquema `public`:
+
+```sql
+alter default privileges in schema public
+  grant all on tables to anon, authenticated, service_role;
+```
+
+Es decir, **cada tabla nueva nace con todos los privilegios** para los tres
+roles, así que un `grant select, insert ... to service_role` no resta nada: solo
+añade sobre un permiso que ya era total. Dos cosas que las migraciones nuevas
+documentaban no eran ciertas hasta la 0053:
+
+- `order_events` y `pickup_key_views` se declaran **append-only**, pero
+  conservaban UPDATE/DELETE por privilegio. El trigger `reject_mutation` sí los
+  bloqueaba —la inmutabilidad nunca estuvo rota— pero la segunda cerradura, la
+  que el propio comentario de la migración prometía, no existía.
+- `shalom_pickup_keys` se declara ilegible. RLS activo **sin** policy ya deniega
+  a `authenticated`, así que la clave tampoco estuvo expuesta; pero el privilegio
+  de SELECT seguía concedido, o sea a una policy de distancia de exponerla.
+
+La 0053 hace `revoke all` sobre las tablas sensibles y vuelve a conceder solo lo
+necesario. Comprobación en producción (debe dar 0):
+
+```sql
+select count(*) from information_schema.role_table_grants
+ where table_schema = 'public'
+   and ((table_name in ('order_events','pickup_key_views')
+         and grantee in ('anon','authenticated','service_role')
+         and privilege_type in ('UPDATE','DELETE','TRUNCATE'))
+     or (table_name = 'shalom_pickup_keys'
+         and grantee in ('anon','authenticated')));
+```
+
+`postgres` (dueño de las tablas) conserva todo y eso es normal: no es un rol al
+que se llegue desde la API.
+
+**Por qué no lo detectaron las pruebas.** El Postgres desechable de
+`scripts/verify-db.sh` no traía las *default privileges* de Supabase, así que la
+aserción pasaba en CI y fallaba en producción. `scripts/sql/test_prelude.sql`
+ahora las replica, y `append_only_smoke.sql` comprueba los privilegios además de
+los triggers — se verificó quitando la 0053 a propósito y confirmando que el
+smoke falla. **Cualquier tabla nueva en `public` debe revocar explícitamente lo
+que no quiera conceder.**
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle

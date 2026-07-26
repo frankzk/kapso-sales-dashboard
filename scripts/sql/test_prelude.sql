@@ -16,3 +16,13 @@ create or replace function auth.uid() returns uuid language sql stable as $$
 $$;
 grant usage on schema auth to anon, authenticated, service_role;
 grant execute on function auth.uid() to anon, authenticated, service_role;
+
+-- Supabase concede TODOS los privilegios sobre cada tabla nueva del esquema
+-- público a los tres roles. Sin esto, una migración que "olvida" revocar pasaba
+-- la prueba aquí y llegaba a producción con permisos de más — que es
+-- exactamente lo que ocurrió y arregla 0053. Replicarlo hace que la prueba de
+-- privilegios sea fiel al entorno real.
+alter default privileges in schema public
+  grant all on tables to anon, authenticated, service_role;
+alter default privileges in schema public
+  grant all on sequences to anon, authenticated, service_role;

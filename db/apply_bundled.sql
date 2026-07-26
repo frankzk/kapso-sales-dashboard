@@ -2376,3 +2376,51 @@ comment on column stores.anthropic_api_key_enc is
   'enc: API key de Anthropic de ESTA tienda (lectura de comprobantes Yape). Cifrada AES-256-GCM. Respaldo: ANTHROPIC_API_KEY del entorno.';
 comment on column stores.anthropic_model is
   'Modelo de visión para esta tienda. Vacío = el valor por defecto del entorno.';
+
+-- ── 0053_revoke_default_grants ───────────────────────────────────────────────
+-- Supabase deja `alter default privileges ... grant all on tables to anon,
+-- authenticated, service_role` en el esquema public, así que CADA tabla nueva
+-- nace con TODOS los privilegios para los tres roles y un `grant select, insert`
+-- no resta nada. Esto revoca y vuelve a conceder solo lo necesario.
+
+revoke all on order_events     from anon, authenticated, service_role;
+revoke all on pickup_key_views from anon, authenticated, service_role;
+
+grant select         on order_events     to authenticated;
+grant select, insert on order_events     to service_role;
+grant select         on pickup_key_views to authenticated;
+grant select, insert on pickup_key_views to service_role;
+
+revoke all on shalom_pickup_keys from anon, authenticated;
+grant all privileges on shalom_pickup_keys to service_role;
+
+revoke all on order_payments     from anon, authenticated;
+revoke all on pickup_key_shares  from anon, authenticated, service_role;
+grant select on order_payments to authenticated;
+grant all privileges on order_payments to service_role;
+grant select         on pickup_key_shares to authenticated;
+grant select, insert on pickup_key_shares to service_role;
+
+revoke all on order_master from anon, authenticated;
+grant select on order_master to authenticated;
+grant all privileges on order_master to service_role;
+
+revoke all on order_geo_overrides from anon, authenticated;
+grant select on order_geo_overrides to authenticated;
+grant all privileges on order_geo_overrides to service_role;
+
+revoke all on peru_districts from anon, authenticated;
+grant select on peru_districts to authenticated;
+grant all privileges on peru_districts to service_role;
+
+revoke all on user_permissions from anon, authenticated;
+grant select on user_permissions to authenticated;
+grant all privileges on user_permissions to service_role;
+
+revoke all on cost_tariffs     from anon, authenticated;
+revoke all on product_costs    from anon, authenticated;
+revoke all on additional_costs from anon, authenticated;
+grant select, insert, update, delete on cost_tariffs     to authenticated;
+grant select, insert, update, delete on product_costs    to authenticated;
+grant select, insert, update, delete on additional_costs to authenticated;
+grant all privileges on cost_tariffs, product_costs, additional_costs to service_role;
