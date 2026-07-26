@@ -1868,14 +1868,21 @@ export async function applyHandoff(
   // donde cualquier cliente que escribe sin que el bot conteste genera un handoff.
   // EXCEPCIÓN: un handoff de pago/logística (yape_por_verificar) sí manda — es la
   // vía por la que un voucher llega a la pestaña Yape/Shalom.
+  // SIN MOTIVO tampoco se reclasifica nada: un handoff sin `reason` no trae
+  // ninguna señal, y deriveAutoState devolvería "nuevo"/open — o sea que un POST
+  // espurio degradaría a "nuevo" un lead que ya venía trabajado. Pasa de verdad:
+  // el notify-team de Aurela postea también en el flujo de voucher, que no manda
+  // reason. Un lead que NO existe sí se crea con el estado derivado (nuevo), que
+  // es lo correcto.
   const advisorOwns = existing?.status ? statusDef(existing.status)?.source === "manual" : false;
-  const keepAdvisorStatus = advisorOwns && auto.status !== "yape_por_verificar";
+  const keepStatus =
+    existing != null && (!info.reason || (advisorOwns && auto.status !== "yape_por_verificar"));
   const row: any = {
     store_id: storeId,
     phone: info.phone,
     kapso_conversation_id: info.conversationId,
     ...handoffFields,
-    ...(keepAdvisorStatus ? {} : { status: auto.status, category: auto.category }),
+    ...(keepStatus ? {} : { status: auto.status, category: auto.category }),
     needs_attention: auto.needsAttention,
     last_interaction_at: new Date().toISOString(),
   };
@@ -1894,7 +1901,7 @@ export async function applyHandoff(
       lead_id: lead.id,
       store_id: storeId,
       kind: "system",
-      new_status: keepAdvisorStatus ? existing!.status : auto.status,
+      new_status: keepStatus ? existing!.status : auto.status,
       note: info.context,
     });
   }
