@@ -1827,13 +1827,24 @@ export async function applyHandoff(
     handoff_at: new Date().toISOString(),
   };
 
+  const auto = deriveAutoState({ handoffReason: info.reason ?? undefined, handoffContext: info.context });
+
   if (existing?.has_order) {
-    // Already won — keep state, just record the context.
-    await admin.from("leads").update(handoffFields).eq("store_id", storeId).eq("phone", info.phone);
+    // Ya ganado: NO se toca status/category (sigue siendo un pedido generado),
+    // pero SÍ se marca para atención. Un cliente que YA COMPRÓ y está esperando
+    // respuesta necesita atención igual —consulta post-venta, problema con el
+    // envío, quiere agregar algo—, y muchas veces es el más importante. Antes
+    // esta rama solo guardaba el contexto, así que el handoff quedaba registrado
+    // (handoff_at seteado) pero el lead NUNCA aparecía en "Atender ahora": se
+    // perdía en silencio.
+    await admin
+      .from("leads")
+      .update({ ...handoffFields, needs_attention: auto.needsAttention })
+      .eq("store_id", storeId)
+      .eq("phone", info.phone);
     return { ok: true };
   }
 
-  const auto = deriveAutoState({ handoffReason: info.reason ?? undefined, handoffContext: info.context });
   // Un handoff NO debe borrar la disposición que una asesora puso a mano. El lead
   // sube a "Atender ahora" por needs_attention CONSERVANDO su estado; si no, un
   // "Volver a llamar" se degradaría a "casi_cierra" y un "Ya compró en otro lado"

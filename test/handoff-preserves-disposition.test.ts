@@ -140,10 +140,21 @@ describe("applyHandoff: preserva la disposición manual de la asesora", () => {
     expect(row.phone).toBe(PHONE);
   });
 
-  it("un lead ya ganado solo registra el contexto, sin tocar su estado", async () => {
+  // Un cliente que YA COMPRÓ y está esperando respuesta necesita atención igual
+  // (post-venta, problema con el envío, quiere agregar algo). Antes esta rama
+  // guardaba el contexto pero no marcaba needs_attention, así que el handoff
+  // quedaba registrado y el lead nunca aparecía en la cola — se perdía en
+  // silencio. Pasó en producción con leads en `pedido_generado`.
+  it("un lead ya ganado conserva su estado PERO sube a 'Atender ahora'", async () => {
     const { row } = await run({ status: "pedido_generado", has_order: true }, "esperando respuesta");
-    expect(row).not.toHaveProperty("status");
-    expect(row).not.toHaveProperty("needs_attention");
+    expect(row).not.toHaveProperty("status"); // sigue siendo un pedido generado
+    expect(row).not.toHaveProperty("category");
+    expect(row.needs_attention).toBe(true); // …pero alguien lo tiene que atender
     expect(row.handoff_at).toEqual(expect.any(String));
+  });
+
+  it("un lead ya ganado sin motivo de handoff no se marca para atención", async () => {
+    const { row } = await run({ status: "pedido_generado", has_order: true }, "");
+    expect(row.needs_attention).toBe(false);
   });
 });
