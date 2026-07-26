@@ -72,10 +72,21 @@ const LEAD_BOARD_SELECT_LEGACY = LEAD_BOARD_SELECT.split(",")
   .filter((c) => c !== "first_inbound_text")
   .join(",");
 
+/** Cuántas filas carga la página por vista. "Por llamar" se filtra y cuenta en
+ *  cliente (jerarquía de facetas), así que necesita el universo completo; el
+ *  resto se acota para que la carga inicial siga siendo rápida. Compartido para
+ *  que la UI SEPA si lo que tiene en memoria está truncado (p. ej. antes de
+ *  exportar una audiencia completa). */
+export const LEADS_VIEW_LIMIT = 200;
+
+export function leadsViewLimit(view: LeadView): number | null {
+  return view === "por_llamar" ? null : LEADS_VIEW_LIMIT;
+}
+
 export async function getStoreLeads(
   storeId: string,
   view: LeadView,
-  limit: number | null = 200,
+  limit: number | null = LEADS_VIEW_LIMIT,
 ): Promise<LeadRow[]> {
   const sb = await createServerSupabase();
   const buildQuery = (select: string = LEAD_BOARD_SELECT) => {

@@ -5,7 +5,13 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
-import { getCustomerHistory, getLeadWithCalls, type CustomerHistory } from "@/lib/leads-access";
+import {
+  getCustomerHistory,
+  getLeadWithCalls,
+  getStoreLeads,
+  type CustomerHistory,
+  type LeadView,
+} from "@/lib/leads-access";
 import {
   AUTO_FOLLOWUP_STATUSES,
   CLAIM_TTL_MINUTES,
@@ -247,6 +253,22 @@ export async function pollLeadState(
  * search box. Two ILIKE passes (name + phone digits) merged + deduped, most
  * recent first, capped. Returns [] for queries shorter than 2 chars.
  */
+/**
+ * Universo COMPLETO de una vista, para exportar la audiencia sin el tope de
+ * carga de la página (que existe para que la vista abra rápido). Se pide solo
+ * al pulsar "Audiencia Meta": exportar 200 de 1125 daría un público incompleto
+ * y silenciosamente equivocado. RLS-scoped vía getStoreLeads.
+ */
+export async function loadLeadsForAudience(
+  storeId: string,
+  view: LeadView,
+): Promise<LeadRow[]> {
+  const sb = await createServerSupabase();
+  const { data: store } = await sb.from("stores").select("id").eq("id", storeId).maybeSingle();
+  if (!store) return [];
+  return getStoreLeads(storeId, view, null);
+}
+
 export async function searchLeads(storeId: string, query: string): Promise<LeadRow[]> {
   const q = query.trim();
   if (q.length < 2) return [];
