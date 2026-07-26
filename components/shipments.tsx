@@ -1081,6 +1081,7 @@ function ShipmentDrawer({
         shipment: ShipmentRow;
         calls: ShipmentCallRow[];
         guideHistory: ShipmentHistoryGuide[];
+        editableCallId: string | null;
         order: ShipmentOrderDetail | null;
         linkedFenixShipment: LinkedShipmentSummary | null;
       }
@@ -2059,7 +2060,11 @@ function ShipmentDrawer({
 
             </fieldset>
 
-            <ShipmentGuideHistory guides={detail.guideHistory} onSaved={refresh} />
+            <ShipmentGuideHistory
+              guides={detail.guideHistory}
+              editableCallId={detail.editableCallId}
+              onSaved={refresh}
+            />
           </div>
         )}
       </div>
@@ -2069,9 +2074,13 @@ function ShipmentDrawer({
 
 function ShipmentGuideHistory({
   guides,
+  editableCallId,
   onSaved,
 }: {
   guides: ShipmentHistoryGuide[];
+  /** Única gestión corregible: la más reciente de toda la cadena, resuelta en el
+   *  servidor para que el botón coincida con lo que la acción va a aceptar. */
+  editableCallId: string | null;
   onSaved: () => void;
 }) {
   return (
@@ -2155,6 +2164,7 @@ function ShipmentGuideHistory({
                     <HistoryCallItem
                       key={call.id ?? `${guide.id}-${callIndex}`}
                       call={call}
+                      editable={!!call.id && call.id === editableCallId}
                       onSaved={onSaved}
                     />
                   ))}
@@ -2168,9 +2178,18 @@ function ShipmentGuideHistory({
   );
 }
 
-/** Una gestión del historial con su nota editable (cualquiera con acceso puede
- *  corregirla; queda marcada como "editada" con quién y cuándo). */
-function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: () => void }) {
+/** Una gestión del historial. Solo la más reciente de la cadena admite corregir
+ *  la nota (queda marcada como "editada" con quién y cuándo); las anteriores son
+ *  registro cerrado y se muestran sin el botón. */
+function HistoryCallItem({
+  call,
+  editable,
+  onSaved,
+}: {
+  call: ShipmentCallRow;
+  editable: boolean;
+  onSaved: () => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(call.note ?? "");
   const [saving, setSaving] = useState(false);
@@ -2242,7 +2261,7 @@ function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: ()
           <p className="leading-relaxed text-slate-600">
             {call.note || <span className="italic text-slate-400">Sin nota</span>}
           </p>
-          {call.id && (
+          {editable && (
             <button
               onClick={() => {
                 setDraft(call.note ?? "");

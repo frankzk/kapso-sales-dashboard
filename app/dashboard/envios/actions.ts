@@ -7,6 +7,7 @@ import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import {
   getReprogramRows,
   getShipmentWithCalls,
+  latestLineageCallId,
   searchOrdersForLink,
   searchShipmentsQuery,
   type OrderLinkCandidate,
@@ -61,7 +62,7 @@ import {
   type StockMovementRow,
 } from "@/lib/fenix-ledger";
 import { resolveEmails } from "@/lib/productivity";
-import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { hasDeliverableAddress, shopifyShippingAddress } from "@/lib/shopify-address";
 import type {
   LinkedShipmentSummary,
   OrderLineItem,
@@ -161,6 +162,7 @@ export async function loadShipmentDetail(
       shipment: ShipmentRow;
       calls: ShipmentCallRow[];
       guideHistory: ShipmentHistoryGuide[];
+      editableCallId: string | null;
       order: ShipmentOrderDetail | null;
       linkedFenixShipment: LinkedShipmentSummary | null;
     }
@@ -191,10 +193,13 @@ export async function loadShipmentDetail(
     calls: guide.calls.map(withNames),
   }));
   let order = detail.order;
-  // If the local order came from an older no-phone Shopify fallback, its raw
-  // payload can have products but no shippingAddress. Refresh that one order
-  // live, cache the repaired payload, and keep the drawer fast on later opens.
-  if (order && !order.shipping_address && order.shopify_order_id) {
+  // La copia local puede tener productos pero no calle: o le falta el bloque de
+  // envío, o lo trae con solo el teléfono (lo que devolvía Shopify sin acceso a
+  // datos protegidos del cliente). Se pregunta por una dirección despachable —
+  // no por la existencia del bloque — porque un bloque con solo teléfono es
+  // truthy y dejaba sin reparar justo esos pedidos. Se refresca ese pedido en
+  // vivo y se guarda el payload para que las próximas aperturas sean rápidas.
+  if (order && !hasDeliverableAddress(order.shipping_address) && order.shopify_order_id) {
     const creds = await getStoreCreds(ctx.storeId, admin);
     if (creds?.shopify_token) {
       try {
@@ -205,7 +210,9 @@ export async function loadShipmentDetail(
           orderGid: `gid://shopify/Order/${order.shopify_order_id}`,
         });
         const liveAddress = shopifyShippingAddress(liveOrder?.raw);
-        if (liveOrder && liveAddress) {
+        // Solo se pisa la copia local si lo vivo trae calle; si Shopify vuelve a
+        // responder sin ella, se conserva lo que ya había.
+        if (liveOrder && hasDeliverableAddress(liveAddress)) {
           order = {
             name: liveOrder.name,
             shopify_order_id: liveOrder.shopify_order_id,
@@ -229,14 +236,16 @@ export async function loadShipmentDetail(
     shipment: detail.shipment,
     calls,
     guideHistory,
+    editableCallId: detail.editableCallId,
     order,
     linkedFenixShipment: detail.linkedFenixShipment,
   };
 }
 
-/** Editar la nota (texto libre) de una gestión del historial. Cualquiera con
- *  acceso a la guía puede editarla; deja traza de quién y cuándo la modificó.
- *  Solo cambia la nota — nunca el estado, la fecha ni el tipo de gestión. */
+/** Editar la nota (texto libre) de la gestión más reciente del historial.
+ *  Cualquiera con acceso a la guía puede corregirla y queda traza de quién y
+ *  cuándo; las gestiones anteriores son registro cerrado y se rechazan. Solo
+ *  cambia la nota — nunca el estado, la fecha ni el tipo de gestión. */
 export async function updateShipmentCallNote(
   callId: string,
   note: string,
@@ -255,8 +264,17 @@ export async function updateShipmentCallNote(
     .maybeSingle();
   if (!call) return { error: "No se encontró la gestión o no tienes acceso." };
 
-  const ctx = await authorizeShipment((call as { shipment_id: string }).shipment_id);
+  const shipmentId = (call as { shipment_id: string }).shipment_id;
+  const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a este envío." };
+
+  // Solo la gestión más reciente de la cadena es corregible: el historial es el
+  // registro de lo que pasó, y reescribir una gestión anterior lo falsea. El
+  // panel ya oculta el botón en las demás; esto lo hace cumplir igual si la
+  // vista quedó desactualizada tras registrar una gestión nueva.
+  if ((await latestLineageCallId(shipmentId)) !== callId) {
+    return { error: "Solo se puede editar la gestión más reciente del historial." };
+  }
 
   const trimmed = note.trim();
   const admin = createAdminSupabase();

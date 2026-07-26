@@ -3,7 +3,7 @@ import { getAccessibleStores, getCurrentUser, chunk } from "@/lib/access";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
 import { fetchOrderById } from "@/lib/shopify";
-import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { hasDeliverableAddress, shopifyShippingAddress } from "@/lib/shopify-address";
 import {
   buildFenixProgrammingRows,
   createFenixProgrammingWorkbook,
@@ -110,7 +110,7 @@ async function repairMissingAddresses(
     if (shipment.delivery_address?.trim() || !shipment.order_id || seen.has(shipment.order_id)) continue;
     const order = ordersById.get(shipment.order_id);
     if (!order) continue;
-    if (shopifyShippingAddress(order.raw)?.address1?.trim()) continue;
+    if (hasDeliverableAddress(shopifyShippingAddress(order.raw))) continue;
     if (addressFallbackByOrderId.get(shipment.order_id)?.address1?.trim()) continue;
     const shopifyOrderId = (order as { shopify_order_id?: string | null }).shopify_order_id;
     // Las ventas manuales ("manual-…"/"draft-…") no existen en Shopify.
@@ -143,7 +143,7 @@ async function repairMissingAddresses(
             storeId,
             orderGid: `gid://shopify/Order/${shopifyOrderId}`,
           });
-          if (!shopifyShippingAddress(live?.raw)?.address1?.trim()) return;
+          if (!hasDeliverableAddress(shopifyShippingAddress(live?.raw))) return;
           const order = ordersById.get(orderId);
           if (order) ordersById.set(orderId, { ...order, raw: live!.raw });
           // Persistir la reparación: el panel, el tablero y los próximos

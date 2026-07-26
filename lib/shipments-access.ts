@@ -14,6 +14,7 @@ import {
   ALICLIK_REPROGRAM_OUTCOMES,
   aggregateReproDay,
   computeReprogramStats,
+  editableHistoryCallId,
   limaCalendarDayBounds,
   type ReproDayAgentCount,
   type ReproDayCall,
@@ -574,12 +575,45 @@ async function getShipmentLineage(
   return lineage;
 }
 
+/**
+ * Id de la gestión más reciente de toda la cadena de reprogramación a la que
+ * pertenece una guía — la única que el "Historial desde el origen" deja editar.
+ * Se mira la cadena completa, no la guía suelta, porque el historial se muestra
+ * unificado: si se permitiera la última de cada guía, quedarían varias notas
+ * editables a la vez y se podría reescribir el registro de una guía ya cerrada.
+ * Devuelve null si la cadena no tiene gestiones.
+ */
+export async function latestLineageCallId(shipmentId: string): Promise<string | null> {
+  const sb = await createServerSupabase();
+  const fetchShipment = (columns: string) =>
+    sb.from("shipments").select(columns).eq("id", shipmentId).maybeSingle();
+  let shipmentResult = await fetchShipment(SHIPMENT_COLUMNS);
+  if (shipmentResult.error) shipmentResult = await fetchShipment(LEGACY_SHIPMENT_COLUMNS);
+  if (!shipmentResult.data) return null;
+  const lineage = await getShipmentLineage(
+    sb,
+    withEnhancementDefaults(shipmentResult.data as Partial<ShipmentRow>),
+  );
+  // Se desempata por created_at: dos gestiones pueden compartir occurred_at
+  // (misma fecha sin hora), y sin el segundo criterio "la última" sería
+  // arbitraria y podría no coincidir con la que el panel deja editar.
+  const { data } = await sb
+    .from("shipment_calls")
+    .select("id")
+    .in("shipment_id", lineage.map((guide) => guide.id))
+    .order("occurred_at", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(1);
+  return ((data as { id: string }[] | null) ?? [])[0]?.id ?? null;
+}
+
 export async function getShipmentWithCalls(
   shipmentId: string,
 ): Promise<{
   shipment: ShipmentRow;
   calls: ShipmentCallRow[];
   guideHistory: ShipmentHistoryGuide[];
+  editableCallId: string | null;
   order: ShipmentOrderDetail | null;
   linkedFenixShipment: LinkedShipmentSummary | null;
 } | null> {
@@ -598,12 +632,15 @@ export async function getShipmentWithCalls(
   const lineageIds = lineage.map((guide) => guide.id);
   // Deploy safety: the app may ship before 0042 is applied. Fall back to the
   // pre-0042 column set so the history keeps loading (just without the edit mark).
+  // El desempate por created_at debe ser el mismo que usa latestLineageCallId:
+  // el panel deja editar exactamente la gestión que el servidor va a aceptar.
   const fetchCalls = (columns: string) =>
     sb
       .from("shipment_calls")
       .select(columns)
       .in("shipment_id", lineageIds)
-      .order("occurred_at", { ascending: true });
+      .order("occurred_at", { ascending: true })
+      .order("created_at", { ascending: true });
   let historyResult = await fetchCalls(
     "id,shipment_id,store_id,agent,kind,new_status,note,next_followup_at,occurred_at,note_edited_at,note_edited_by",
   );
@@ -631,6 +668,12 @@ export async function getShipmentWithCalls(
     is_current: guide.id === shipmentId,
     calls: callsByShipment.get(guide.id) ?? [],
   }));
+  // Única gestión editable del historial: la más reciente de toda la cadena.
+  // Se deriva de la misma lista ya ordenada que se pinta, así el botón "Editar"
+  // no puede señalar una gestión que el servidor luego rechace.
+  const editableCallId = editableHistoryCallId(
+    (historyCalls as unknown as ShipmentCallRow[]) ?? [],
+  );
   const calls = [...(callsByShipment.get(shipmentId) ?? [])].reverse();
   let order: ShipmentOrderDetail | null = null;
   let linkedFenixShipment: LinkedShipmentSummary | null = null;
@@ -696,6 +739,7 @@ export async function getShipmentWithCalls(
     shipment: currentShipment ?? shipmentRow,
     calls,
     guideHistory,
+    editableCallId,
     order,
     linkedFenixShipment,
   };

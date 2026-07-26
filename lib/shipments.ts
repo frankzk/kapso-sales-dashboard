@@ -961,3 +961,31 @@ export function computeReprogramStats(rows: ReprogramChildRow[], nowMs: number):
   for (const c of Object.values(porAsesor)) finishCounts(c);
   return { historico, last30, porTienda, porAsesor, asesorNames: {}, semanas: [...semanas.values()] };
 }
+
+/**
+ * Cuál de las gestiones del "Historial desde el origen" admite corregir su nota:
+ * la más reciente de toda la cadena de reprogramación. Se recibe la lista ya
+ * ordenada por (occurred_at, created_at) ascendente tal como la devuelve la
+ * base, y se recorre buscando el mayor occurred_at para no depender solo de la
+ * posición. Ante empate gana la última — el mismo criterio que aplica el
+ * servidor al aceptar la edición.
+ *
+ * Las gestiones sin id no son editables (provienen de filas sintéticas del
+ * historial, como la línea de "guía creada"), y las que no tienen occurred_at
+ * solo ganan si no hay ninguna fechada.
+ */
+export function editableHistoryCallId(
+  orderedCalls: { id?: string | null; occurred_at?: string | null }[],
+): string | null {
+  let bestId: string | null = null;
+  let bestAt: string | null = null;
+  for (const call of orderedCalls) {
+    if (!call.id) continue;
+    const at = call.occurred_at ?? null;
+    if (bestId === null || (at !== null && (bestAt === null || at >= bestAt))) {
+      bestId = call.id;
+      bestAt = at;
+    }
+  }
+  return bestId;
+}

@@ -26,3 +26,16 @@ export function shopifyShippingAddress(raw: unknown): OrderShippingAddress | nul
   };
   return Object.values(result).some(Boolean) ? result : null;
 }
+
+/**
+ * ¿Esta dirección sirve para despachar? Mientras la app no tuvo acceso aprobado
+ * a los datos protegidos del cliente, Shopify devolvía el bloque de envío con
+ * SOLO el teléfono: hay objeto, pero no hay calle. Ese objeto es truthy, así que
+ * preguntar por su mera existencia da "sí tengo dirección" y corta la
+ * recuperación en vivo justo en los pedidos que más la necesitan. Quien decida
+ * si vale la pena reconsultar a Shopify debe usar esto, no la presencia del
+ * bloque.
+ */
+export function hasDeliverableAddress(address: OrderShippingAddress | null): boolean {
+  return Boolean(address?.address1?.trim());
+}

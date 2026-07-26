@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  editableHistoryCallId,
   DELIVERY_STATUSES,
   COURIER_REPORT_RESULTS,
   computeReprogramStats,
@@ -680,5 +681,43 @@ describe("reprogramRangeStats + limaRangeBounds · cortes por rango del popup", 
     const semana = limaRangeBounds("2026-07-12", "2026-07-18");
     const r7 = reprogramRangeStats(rows, semana.startMs, semana.endMs, NOW);
     expect(r7.counts.total).toBe(2); // hoy + ayer, no el del 10
+  });
+});
+
+describe("editableHistoryCallId", () => {
+  // El historial es el registro de lo que pasó: solo la gestión más reciente de
+  // toda la cadena se puede corregir. Antes el panel ofrecía "Editar" en todas,
+  // incluidas las de la guía Aliclik original ya transferida.
+  it("elige la más reciente de toda la cadena, no la última de cada guía", () => {
+    expect(
+      editableHistoryCallId([
+        { id: "aliclik-repro", occurred_at: "2026-07-17T21:00:00Z" },
+        { id: "fenix-llamada", occurred_at: "2026-07-17T21:21:00Z" },
+        { id: "fenix-correccion", occurred_at: "2026-07-18T16:02:00Z" },
+        { id: "fenix-reporte", occurred_at: "2026-07-25T12:55:00Z" },
+      ]),
+    ).toBe("fenix-reporte");
+  });
+
+  it("ante empate de fecha gana la última registrada", () => {
+    expect(
+      editableHistoryCallId([
+        { id: "primera", occurred_at: "2026-07-18T00:00:00Z" },
+        { id: "segunda", occurred_at: "2026-07-18T00:00:00Z" },
+      ]),
+    ).toBe("segunda");
+  });
+
+  it("ignora las filas sintéticas sin id", () => {
+    expect(
+      editableHistoryCallId([
+        { id: "real", occurred_at: "2026-07-18T00:00:00Z" },
+        { id: null, occurred_at: "2026-07-25T00:00:00Z" },
+      ]),
+    ).toBe("real");
+  });
+
+  it("sin gestiones no hay nada editable", () => {
+    expect(editableHistoryCallId([])).toBeNull();
   });
 });
