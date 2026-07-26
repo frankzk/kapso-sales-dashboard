@@ -44,7 +44,11 @@ export function ImportReview({
       if (!res.ok) {
         setMsg(json.error ?? "Error al importar.");
       } else {
-        const base = `Importadas ${json.rowCount} filas — ${json.matchedCount} con pedido, ${json.unmatchedCount} a revisión, ${json.errorCount} con error.`;
+        const skipped = json.skippedImportadoCount ?? 0;
+        const base =
+          `Importadas ${json.rowCount} filas — ${json.matchedCount} con pedido, ${json.unmatchedCount} a revisión, ${json.errorCount} con error.` +
+          // Se avisa explícitamente para que no parezca que el archivo perdió filas.
+          (skipped > 0 ? ` Se omitieron ${skipped} filas con ESTADO LLAMADA = IMPORTADO (Aliclik aún no las gestiona).` : "");
         if (fileRef.current) fileRef.current.value = "";
         // Auto-link the fresh review rows against live Shopify (NOTA + phone) so
         // the operator doesn't have to click through them one by one.
