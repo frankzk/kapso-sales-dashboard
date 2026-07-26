@@ -3,6 +3,7 @@ import {
   audienceFirstName,
   buildMetaAudienceCsv,
   buildMetaAudienceRows,
+  isExportablePhone,
   metaAudienceFilename,
 } from "@/lib/meta-audience";
 
@@ -40,6 +41,18 @@ describe("buildMetaAudienceRows", () => {
   it("deja el país en blanco para prefijos que no conocemos (no adivina)", () => {
     const rows = buildMetaAudienceRows([{ phone: "34600123456", name: "Ana" }]);
     expect(rows[0]).toEqual({ phone: "34600123456", fn: "ana", country: "" });
+  });
+
+  it("descarta celulares peruanos malformados (casos reales del export)", () => {
+    expect(
+      buildMetaAudienceRows([
+        { phone: "517971177669", name: "torres" }, // 51 + 10 dígitos (uno de más)
+        { phone: "5953869636", name: "victoria" }, // 10 dígitos, no es peruano
+        { phone: "5114445555", name: "fijo" }, // fijo con prefijo 51, no es celular
+      ]),
+    ).toEqual([]);
+    // el válido de al lado sí pasa
+    expect(buildMetaAudienceRows([{ phone: "51921927993" }])).toHaveLength(1);
   });
 
   it("preserva el orden original para que el archivo sea estable", () => {
@@ -84,6 +97,17 @@ describe("buildMetaAudienceCsv", () => {
     expect(csv).toContain("51980694766");
     expect(csv).not.toContain("'");
     expect(csv).not.toContain("+");
+  });
+});
+
+describe("isExportablePhone", () => {
+  it("valida Perú estricto y acota el resto por longitud E.164", () => {
+    expect(isExportablePhone("51921927993")).toBe(true);
+    expect(isExportablePhone("517971177669")).toBe(false); // un dígito de más
+    expect(isExportablePhone("5114445555")).toBe(false); // fijo, no celular
+    expect(isExportablePhone("5953869636")).toBe(false); // 10 dígitos
+    expect(isExportablePhone("34600123456")).toBe(true); // 11, plausible
+    expect(isExportablePhone("1".repeat(16))).toBe(false); // pasa el tope E.164
   });
 });
 
