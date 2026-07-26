@@ -46,6 +46,8 @@ function row(id: string, overrides: Partial<OrderMasterRow> = {}): OrderMasterRo
     comment_count: 0,
     logistics_cost: null,
     pickup_state: null,
+    payment_state: null,
+    key_state: null,
     agency_branch: null,
     agency_arrived_at: null,
     agency_expires_at: null,

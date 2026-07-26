@@ -401,6 +401,46 @@ tiene que elegir el courier cuando el archivo no se reconoce.
   `lib/couriers/registry.ts`. Los alias de cabecera son amplios a propósito:
   cuando llegue un formato distinto, basta con añadir el alias.
 
+## 5j. Pagos Yape y clave de recojo (Shalom)
+
+Los envíos por Shalom se cobran en dos tiempos: un **Yape de adelanto** para
+despachar y un **Yape de la diferencia** antes de entregar al cliente la clave
+con la que recoge el paquete en la agencia. La clave es la llave del paquete: si
+se entrega antes de cobrar, el dinero se pierde.
+
+- **Needs migration 0049** (`order_payments`, `shalom_pickup_keys`,
+  `pickup_key_views`, `pickup_key_shares`, `user_permissions`, e indicadores de
+  pago/clave en `order_master`). Antes de correrla el panel no aparece y el
+  Master funciona igual.
+- **Requiere `ENCRYPTION_KEY`** (la misma que ya cifra los tokens de tienda): la
+  clave se guarda **cifrada** con AES-256-GCM, nunca en texto plano. Si esa clave
+  cambiara, las claves de recojo existentes dejarían de descifrarse.
+- **La clave no es legible por SQL.** `shalom_pickup_keys` tiene RLS activo y
+  **ninguna** policy, y no concede privilegios a `authenticated`: ni un
+  administrador puede leerla desde la base. Solo sale por el server action, que
+  comprueba permisos y condiciones y **escribe la auditoría antes** de
+  descifrarla. Nunca aparece en el listado ni en exportaciones.
+- **Un comprobante, un pago.** Índices únicos GLOBALES (no por tienda) sobre el
+  nº de operación y sobre el sha256 del archivo, más uno de un solo adelanto y
+  una sola diferencia vivos por pedido. Un comprobante *rechazado* libera su
+  sitio, porque pudo ser un error de carga. Una captura recortada del mismo
+  comprobante se detecta por el **nº de operación**, que `lib/vision.ts` lee de
+  la imagen (el hash perceptual queda fuera de alcance: exigiría decodificar
+  imágenes en el servidor).
+- **`pickup_key_views` es append-only**, como `order_events`: quién vio la clave,
+  cuándo, y con qué pagos validados en ese momento. No se puede borrar.
+- **Permisos** (`lib/permissions.ts`, con excepciones por usuario en
+  `user_permissions`): `owner`/`admin` todo; `vendedora` registra comprobantes
+  pero **no** los valida ni ve la clave; `viewer` nada. Mostrar la clave sin las
+  validaciones completas es una excepción de administrador con motivo
+  obligatorio, y queda marcada como tal en el historial.
+- **Bucket privado `yape-vouchers`** para las imágenes, subidas por URL firmada
+  (mismo patrón que los adjuntos de Leads).
+- **Opcional**: con `ANTHROPIC_API_KEY` configurada, cada comprobante se pasa por
+  el lector de visión que ya usa la alerta de Leads. Si la imagen no parece un
+  Yape, el pago queda como *información incompleta* — nunca se rechaza solo, y
+  cargar una imagen jamás equivale a validar el pago.
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle

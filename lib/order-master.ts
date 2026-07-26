@@ -19,6 +19,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { chunk } from "@/lib/access";
 import { normalizeDistrict } from "@/lib/shipments";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
 import {
   isGeneralStatus,
   isOperationalStatus,
@@ -334,6 +335,55 @@ async function fetchDraftAddresses(
   return out;
 }
 
+interface PaymentSignals {
+  payments: PaymentSnapshot[];
+  hasKey: boolean;
+  shared: boolean;
+}
+
+/**
+ * Señales de cobro y clave por pedido (§"Información visible en el Master").
+ * Se leen aparte porque las tablas de la fase 3 pueden no existir todavía: si
+ * fallan, el Master funciona igual y los indicadores quedan vacíos.
+ */
+async function fetchPaymentSignals(
+  admin: SupabaseClient,
+  ids: string[],
+): Promise<Map<string, PaymentSignals>> {
+  const out = new Map<string, PaymentSignals>();
+  const ensure = (orderId: string): PaymentSignals => {
+    const found = out.get(orderId);
+    if (found) return found;
+    const fresh: PaymentSignals = { payments: [], hasKey: false, shared: false };
+    out.set(orderId, fresh);
+    return fresh;
+  };
+
+  for (const batch of chunk(ids, ID_BATCH)) {
+    const { data, error } = await admin
+      .from("order_payments")
+      .select("order_id,kind,validation_status")
+      .in("order_id", batch);
+    if (error) return out; // la fase 3 aún no está aplicada
+    for (const row of (data ?? []) as { order_id: string; kind: string; validation_status: string }[]) {
+      ensure(row.order_id).payments.push({
+        kind: row.kind,
+        validation_status: row.validation_status,
+        order_id: row.order_id,
+      });
+    }
+  }
+  for (const batch of chunk(ids, ID_BATCH)) {
+    const { data } = await admin.from("shalom_pickup_keys").select("order_id").in("order_id", batch);
+    for (const row of (data ?? []) as { order_id: string }[]) ensure(row.order_id).hasKey = true;
+  }
+  for (const batch of chunk(ids, ID_BATCH)) {
+    const { data } = await admin.from("pickup_key_shares").select("order_id").in("order_id", batch);
+    for (const row of (data ?? []) as { order_id: string }[]) ensure(row.order_id).shared = true;
+  }
+  return out;
+}
+
 export interface RecomputeResult {
   requested: number;
   written: number;
@@ -359,6 +409,7 @@ export async function recomputeOrderMaster(
   const calls = await fetchCalls(admin, shipments.map((s) => s.id));
   const events = await fetchEvents(admin, ids);
   const drafts = await fetchDraftAddresses(admin, orders);
+  const signals = await fetchPaymentSignals(admin, ids);
 
   const shipmentsByOrder = groupBy(shipments, (s) => s.order_id);
   const callsByShipment = groupBy(calls, (c) => c.shipment_id);
@@ -410,6 +461,8 @@ export async function recomputeOrderMaster(
     }));
     const override = latestOverride(orderEvents);
 
+    const paymentSignals = signals.get(order.id) ?? null;
+
     const state = resolveOrderState({
       order: {
         created_at: order.created_at,
@@ -454,6 +507,19 @@ export async function recomputeOrderMaster(
       returned_at: state.returnedAt,
       last_movement_at: state.lastMovementAt,
       comment_count: orderEvents.filter((e) => e.kind === "comment").length,
+      payment_state: paymentSignals
+        ? paymentState(paymentSignals.payments)
+        : null,
+      key_state: paymentSignals
+        ? keyState({
+            orderId: order.id,
+            generalStatus: state.general,
+            pickupState: state.pickupState,
+            payments: paymentSignals.payments,
+            hasKey: paymentSignals.hasKey,
+            shared: paymentSignals.shared,
+          })
+        : null,
       pickup_state: state.pickupState,
       agency_branch: state.agencyBranch,
       agency_arrived_at: state.agencyArrivedAt,

@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card, cn, EmptyState } from "@/components/ui";
 import { ChecklistFilter } from "@/components/filters";
+import { PickupKeyPanel } from "@/components/pickup-key-panel";
 import {
   addOrderComment,
   loadOrderDetail,
@@ -40,6 +41,7 @@ import {
   operationalStatusesFor,
   type GeneralStatus,
 } from "@/lib/order-status";
+import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, usesPickupKeyFlow, type KeyState, type PaymentState } from "@/lib/pickup-key";
 import { MASTER_VIEWS, type MasterCounts, type MasterView, type OrderMasterDetail } from "@/lib/orders-master-access";
 import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 
@@ -657,6 +659,29 @@ function DateRange({
 // Tabla (§14)
 // ---------------------------------------------------------------------------
 
+/**
+ * Indicador de cobro y clave (§"Información visible en el Master"). La clave EN
+ * SÍ nunca aparece en la tabla: solo su estado.
+ */
+function PaymentIndicator({
+  paymentState,
+  keyState,
+}: {
+  paymentState: string | null;
+  keyState: string | null;
+}) {
+  if (!paymentState && !keyState) return <>—</>;
+  const pay = paymentState ? (PAYMENT_STATE_LABEL[paymentState as PaymentState] ?? paymentState) : null;
+  const key = keyState ? (KEY_STATE_LABEL[keyState as KeyState] ?? keyState) : null;
+  const alert = paymentState === "posible_duplicado";
+  return (
+    <span className={cn("text-xs", alert && "font-semibold text-red-700")} title={key ?? undefined}>
+      {pay}
+      {key && key !== "Sin clave" ? ` · ${key}` : ""}
+    </span>
+  );
+}
+
 /** Días en agencia, resaltando el vencimiento cercano — el dato accionable. */
 function AgencyDays({
   arrivedAt,
@@ -721,6 +746,7 @@ function MasterTable({
             <th className="px-2 py-2 font-medium" title="Días disponible en agencia">
               Días ag.
             </th>
+            <th className="px-2 py-2 font-medium">Pago / clave</th>
             <th className="px-2 py-2 text-center font-medium">💬</th>
             <th className="px-4 py-2 text-right font-medium">Costo</th>
           </tr>
@@ -769,6 +795,9 @@ function MasterTable({
               </td>
               <td className="px-2 py-2.5 text-slate-600">
                 <AgencyDays arrivedAt={r.agency_arrived_at} expiresAt={r.agency_expires_at} />
+              </td>
+              <td className="px-2 py-2.5 text-slate-600">
+                <PaymentIndicator paymentState={r.payment_state} keyState={r.key_state} />
               </td>
               <td className="px-2 py-2.5 text-center text-slate-500">
                 {r.comment_count > 0 ? r.comment_count : ""}
@@ -1004,6 +1033,10 @@ function OrderDrawer({
                 </ol>
               )}
             </section>
+
+            {usesPickupKeyFlow(detail.row.current_courier, detail.row.shipping_mode) && (
+              <PickupKeyPanel orderId={orderId} onChanged={onSaved} />
+            )}
 
             {canEdit ? (
               <OrderActions

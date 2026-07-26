@@ -375,6 +375,9 @@ export interface OrderMasterRow {
   logistics_cost: number | null;
   /** Seguimiento de agencia (Shalom/Olva): ver §10 de la especificación. */
   pickup_state: string | null;
+  /** Indicadores del cobro Yape y de la clave de recojo (Shalom). */
+  payment_state: string | null;
+  key_state: string | null;
   agency_branch: string | null;
   agency_arrived_at: string | null;
   agency_expires_at: string | null;

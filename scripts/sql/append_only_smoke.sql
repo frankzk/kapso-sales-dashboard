@@ -77,3 +77,112 @@ begin
   end if;
 end;
 $$;
+
+-- ----------------------------------------------------------------------------
+-- Clave de recojo (0049): la información más sensible del sistema.
+-- ----------------------------------------------------------------------------
+
+-- 5) `shalom_pickup_keys` no es legible por el rol `authenticated`. RLS activo y
+--    SIN policy = denegado; además no se le otorga SELECT. La clave solo sale
+--    por el server action, que comprueba permisos y deja auditoría.
+do $$
+declare has_policy int; has_grant int; rls boolean;
+begin
+  select count(*) into has_policy from pg_policies
+   where schemaname = 'public' and tablename = 'shalom_pickup_keys';
+  if has_policy > 0 then
+    raise exception 'shalom_pickup_keys tiene % policy(s): la clave sería legible', has_policy
+      using errcode = 'ZZ001';
+  end if;
+
+  select count(*) into has_grant from information_schema.role_table_grants
+   where table_schema = 'public' and table_name = 'shalom_pickup_keys'
+     and grantee = 'authenticated';
+  if has_grant > 0 then
+    raise exception 'shalom_pickup_keys concede privilegios a authenticated'
+      using errcode = 'ZZ001';
+  end if;
+
+  select relrowsecurity into rls from pg_class
+   where oid = 'public.shalom_pickup_keys'::regclass;
+  if not rls then
+    raise exception 'shalom_pickup_keys no tiene RLS activo' using errcode = 'ZZ001';
+  end if;
+end;
+$$;
+
+-- 6) El historial de visualizaciones de la clave tampoco se puede reescribir:
+--    "la visualización de la clave no deberá poder eliminarse del historial".
+insert into pickup_key_views(store_id, order_id, user_id, reason)
+values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        'eeeeeeee-0000-0000-0000-00000000000e',
+        null, 'prueba');
+
+do $$
+begin
+  delete from pickup_key_views where order_id = 'eeeeeeee-0000-0000-0000-00000000000e';
+  raise exception 'pickup_key_views aceptó un DELETE: la auditoría no es inmutable'
+    using errcode = 'ZZ001';
+exception
+  when sqlstate 'P0001' then null;
+end;
+$$;
+
+do $$
+declare n int;
+begin
+  select count(*) into n from pickup_key_views
+   where order_id = 'eeeeeeee-0000-0000-0000-00000000000e';
+  if n <> 1 then
+    raise exception 'pickup_key_views perdió el registro (n=%)', n using errcode = 'ZZ001';
+  end if;
+end;
+$$;
+
+-- 7) Unicidad global del comprobante Yape: el mismo nº de operación no puede
+--    usarse en dos pedidos, ni siquiera de tiendas distintas.
+insert into orders(id, store_id, shopify_order_id, name, created_at)
+values ('eeeeeeee-0000-0000-0000-00000000000f',
+        'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        '9000000002', '#APPEND2', now())
+on conflict (store_id, shopify_order_id) do nothing;
+
+insert into order_payments(store_id, order_id, kind, amount, operation_number, validation_status)
+values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        'eeeeeeee-0000-0000-0000-00000000000e',
+        'adelanto', 50, 'OP-DUP-1', 'validado');
+
+do $$
+begin
+  -- Otro pedido, OTRA TIENDA, mismo nº de operación: debe rebotar.
+  insert into order_payments(store_id, order_id, kind, amount, operation_number, validation_status)
+  values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+          'eeeeeeee-0000-0000-0000-00000000000f',
+          'diferencia', 50, 'OP-DUP-1', 'pendiente_revision');
+  raise exception 'order_payments aceptó el mismo nº de operación en dos pedidos'
+    using errcode = 'ZZ001';
+exception
+  when unique_violation then null;
+end;
+$$;
+
+-- 8) Un pago rechazado libera su nº de operación (pudo ser un error de carga).
+update order_payments set validation_status = 'rechazado' where operation_number = 'OP-DUP-1';
+insert into order_payments(store_id, order_id, kind, amount, operation_number, validation_status)
+values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        'eeeeeeee-0000-0000-0000-00000000000f',
+        'diferencia', 50, 'OP-DUP-1', 'pendiente_revision');
+
+-- 9) Un solo adelanto vivo por pedido.
+do $$
+begin
+  insert into order_payments(store_id, order_id, kind, amount, validation_status)
+  values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+          'eeeeeeee-0000-0000-0000-00000000000f',
+          'diferencia', 99, 'pendiente_revision');
+  raise exception 'order_payments aceptó dos diferencias vivas en el mismo pedido'
+    using errcode = 'ZZ001';
+exception
+  when unique_violation then null;
+end;
+$$;

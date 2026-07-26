@@ -95,9 +95,9 @@ echo "  ✅ all migrations apply on a fresh database"
 
 # order_events is the audit trail of the Master de Pedidos: it must be
 # impossible to rewrite history, even for the role the server actions use.
-echo "▶ append-only audit tables"
+echo "▶ auditoría inmutable + clave de recojo + unicidad del Yape"
 $PSQL -f "$ROOT/scripts/sql/append_only_smoke.sql"
-echo "  ✅ order_events rejects UPDATE and DELETE"
+echo "  ✅ auditoría inmutable, clave de recojo sin lectura directa y comprobante Yape único"
 
 echo ""
 echo "✅ DB verification passed."
