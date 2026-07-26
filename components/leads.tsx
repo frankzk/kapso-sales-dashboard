@@ -9,6 +9,11 @@ import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import { type CustomerHistory, type LeadCounts, type LeadView } from "@/lib/leads-access";
 import type { LeadsInsights } from "@/lib/leads-insights";
 import {
+  buildMetaAudienceCsv,
+  buildMetaAudienceRows,
+  metaAudienceFilename,
+} from "@/lib/meta-audience";
+import {
   LEAD_GESTIONES,
   QUEUE_STATES,
   categoryOf,
@@ -954,6 +959,25 @@ export function LeadsBoard({
   const searchMode = results !== null;
   const displayLeads = results ?? shownLeads;
 
+  // Exportar la audiencia que estás viendo para subirla a Meta (Custom Audience).
+  // Se genera en el navegador a propósito: así sale EXACTAMENTE el conjunto
+  // filtrado en pantalla (los facets viven en cliente, un endpoint no los
+  // conoce) y no se expone nada nuevo — son las mismas filas ya cargadas.
+  const audienceRows = buildMetaAudienceRows(shownLeads);
+  function downloadMetaAudience() {
+    const segment = [view, inQueue ? queueState : null, segFilter].filter(Boolean).join(" ");
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: timezone });
+    const csv = buildMetaAudienceCsv(shownLeads);
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = metaAudienceFilename(segment, today);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="space-y-4" aria-busy={routePending}>
       {/* Título "Leads" + tablero de hoy (burndown · sin llamar · productividad). */}
@@ -1112,6 +1136,25 @@ export function LeadsBoard({
             {refinementCount > 0 && (
               <span className="rounded-full bg-brand-600 px-1.5 text-[11px] font-semibold tabular-nums text-white">
                 {refinementCount}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={downloadMetaAudience}
+            disabled={!audienceRows.length}
+            title={
+              audienceRows.length
+                ? `Descarga ${audienceRows.length} celular(es) con el formato de Meta (Públicos personalizados → Lista de clientes). Exporta exactamente los leads filtrados en pantalla.`
+                : "No hay celulares válidos en el filtro actual"
+            }
+            className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <StrokeIcon d="M12 4v10m0 0-4-4m4 4 4-4M5 19h14" />
+            Audiencia Meta
+            {audienceRows.length > 0 && (
+              <span className="rounded-full bg-slate-200 px-1.5 text-[11px] font-semibold tabular-nums text-slate-700">
+                {audienceRows.length}
               </span>
             )}
           </button>
