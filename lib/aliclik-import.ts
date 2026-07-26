@@ -164,6 +164,22 @@ function isDeliveredEntrega(raw: string | null): boolean {
   return stripAccents(raw.trim().toLowerCase()) === "entregado";
 }
 
+// Aliclik marca con ESTADO LLAMADA = IMPORTADO los pedidos que subió a su
+// plataforma pero que TODAVÍA NO gestiona: no tienen despacho ni entrega, así
+// que no son guías reales. Si entran al sistema quedan como envíos "pendiente"
+// fantasma que nadie puede gestionar y ensucian la cola de Repro Provincia
+// (pasó con ~2.300 filas de un reporte, que hubo que borrar a mano). Se omiten
+// al importar. Ojo: la clave normalizada es "estado llamada", distinta del
+// "estado" suelto de ENTREGA_KEYS, así que no se pisan entre sí.
+const ESTADO_LLAMADA_KEYS = ["estado llamada", "estado de llamada"];
+
+/** True cuando la fila viene marcada IMPORTADO en "ESTADO LLAMADA" — Aliclik aún
+ *  no la gestiona, no es una guía real y no debe entrar al sistema. */
+export function isImportadoRow(raw: Record<string, string>): boolean {
+  const value = pick(buildLookup(raw), ESTADO_LLAMADA_KEYS);
+  return value != null && stripAccents(value.toLowerCase()) === "importado";
+}
+
 export function parseAliclikAttempts(raw: string | null | undefined): number | null {
   if (raw == null || String(raw).trim() === "") return null;
   const match = String(raw).trim().match(/\d+/);
@@ -255,7 +271,9 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
 }
 
 /** Parse a whole report. Rows without a guide code are flagged via guide_code=null
- *  (the ingest layer marks them as errors and keeps them for review). */
+ *  (the ingest layer marks them as errors and keeps them for review). Las filas
+ *  con ESTADO LLAMADA = IMPORTADO se DESCARTAN acá (ver isImportadoRow): no son
+ *  guías reales, así que ni siquiera llegan a la capa de ingesta. */
 export function parseAliclikReport(rows: Record<string, string>[]): ParsedShipmentRow[] {
-  return rows.map(parseAliclikRow);
+  return rows.filter((r) => !isImportadoRow(r)).map(parseAliclikRow);
 }

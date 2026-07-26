@@ -42,6 +42,10 @@ export interface IngestResult {
   matchedCount: number;
   unmatchedCount: number;
   errorCount: number;
+  /** Filas descartadas por venir con ESTADO LLAMADA = IMPORTADO (Aliclik aún no
+   *  las gestiona). Se informan para que el operador sepa que el archivo traía
+   *  más filas de las que se importaron, y no parezca que se perdieron. */
+  skippedImportadoCount: number;
 }
 
 const CHUNK = 500;
@@ -53,7 +57,10 @@ export async function ingestAliclikReport(
   rawRows: Record<string, string>[],
   meta: { filename: string | null; uploadedBy: string | null; reportAt: string },
 ): Promise<IngestResult> {
+  // parseAliclikReport ya descarta las filas IMPORTADO; la diferencia contra el
+  // archivo original es cuántas se omitieron.
   const parsed = parseAliclikReport(rawRows);
+  const skippedImportadoCount = rawRows.length - parsed.length;
 
   // 1) batch row
   const { data: batch, error: batchErr } = await admin
@@ -283,7 +290,7 @@ export async function ingestAliclikReport(
     .update({ matched_count: matchedCount, unmatched_count: unmatchedCount, status: "processed" })
     .eq("id", batchId);
 
-  return { batchId, rowCount: parsed.length, matchedCount, unmatchedCount, errorCount };
+  return { batchId, rowCount: parsed.length, matchedCount, unmatchedCount, errorCount, skippedImportadoCount };
 }
 
 async function fetchOrderCandidates(
