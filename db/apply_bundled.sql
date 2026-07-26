@@ -1721,3 +1721,706 @@ create index if not exists shipments_created_via_idx
 -- ── 0044_lead_first_inbound_text ─────────────────────────────────────────────
 -- Primer mensaje del cliente, como contexto de apertura para la asesora.
 alter table leads add column if not exists first_inbound_text text;
+
+-- ── 0045_order_master ────────────────────────────────────────────────────────
+-- Master de Pedidos: order_master (read-model materializado, una fila por
+-- pedido) + order_events (línea de tiempo y auditoría, append-only). Las
+-- gestiones por courier siguen en shipments/shipment_calls; no se duplican.
+create table if not exists order_master (
+  id                 uuid primary key default gen_random_uuid(),
+  store_id           uuid not null references stores(id) on delete cascade,
+  order_id           uuid not null references orders(id) on delete cascade,
+  order_name         text,
+  shopify_order_id   text not null,
+  order_created_at   timestamptz,
+  customer_name      text,
+  customer_phone     text,
+  region             text,
+  province           text,
+  district           text,
+  shipping_mode      text,
+  order_total        numeric(14, 2),
+  general_status     text not null default 'pendiente'
+                       check (general_status in
+                         ('pendiente', 'en_proceso', 'entregado', 'anulado', 'devuelto')),
+  operational_status text not null default 'sin_confirmar',
+  status_since       timestamptz,
+  status_source      text,
+  status_locked      boolean not null default false,
+  current_courier    text,
+  last_courier       text,
+  courier_count      integer not null default 0,
+  attempt_count      integer not null default 0,
+  guide_code         text,
+  dispatched_at      timestamptz,
+  delivered_at       timestamptz,
+  delivered_courier  text,
+  returned_at        timestamptz,
+  last_movement_at   timestamptz,
+  comment_count      integer not null default 0,
+  logistics_cost     numeric(12, 2),
+  recomputed_at      timestamptz not null default now(),
+  updated_at         timestamptz not null default now(),
+  unique (order_id)
+);
+create index if not exists order_master_store_general_idx  on order_master(store_id, general_status);
+create index if not exists order_master_store_oper_idx     on order_master(store_id, operational_status);
+create index if not exists order_master_store_created_idx  on order_master(store_id, order_created_at desc);
+create index if not exists order_master_store_movement_idx on order_master(store_id, last_movement_at desc);
+create index if not exists order_master_store_district_idx on order_master(store_id, district);
+create index if not exists order_master_store_province_idx on order_master(store_id, province);
+create index if not exists order_master_store_region_idx   on order_master(store_id, region);
+create index if not exists order_master_store_courier_idx  on order_master(store_id, current_courier);
+create index if not exists order_master_phone_idx          on order_master(store_id, customer_phone);
+create index if not exists order_master_guide_idx          on order_master(guide_code) where guide_code is not null;
+create index if not exists order_master_multi_courier_idx  on order_master(store_id) where courier_count > 1;
+create index if not exists order_master_multi_attempt_idx  on order_master(store_id) where attempt_count > 1;
+create index if not exists order_master_recomputed_idx     on order_master(recomputed_at);
+alter table order_master enable row level security;
+drop policy if exists order_master_select on order_master;
+create policy order_master_select on order_master for select to authenticated
+  using (store_id in (select auth_store_ids()));
+grant select on order_master to authenticated;
+grant all privileges on order_master to service_role;
+drop trigger if exists order_master_touch on order_master;
+create trigger order_master_touch before update on order_master
+  for each row execute function public.touch_updated_at();
+
+create table if not exists order_events (
+  id                   uuid primary key default gen_random_uuid(),
+  store_id             uuid not null references stores(id) on delete cascade,
+  order_id             uuid not null references orders(id) on delete cascade,
+  kind                 text not null,
+  occurred_at          timestamptz not null default now(),
+  actor                uuid references auth.users(id) on delete set null,
+  source               text not null default 'manual',
+  courier              text,
+  guide_code           text,
+  previous_status      text,
+  new_status           text,
+  previous_operational text,
+  new_operational      text,
+  attempt_number       integer,
+  reason               text,
+  note                 text,
+  comment_type         text,
+  shipment_id          uuid references shipments(id) on delete set null,
+  batch_id             uuid,
+  payload              jsonb not null default '{}'::jsonb,
+  created_at           timestamptz not null default now()
+);
+create index if not exists order_events_order_idx    on order_events(order_id, occurred_at desc);
+create index if not exists order_events_store_idx    on order_events(store_id, occurred_at desc);
+create index if not exists order_events_kind_idx     on order_events(store_id, kind);
+create index if not exists order_events_shipment_idx on order_events(shipment_id) where shipment_id is not null;
+alter table order_events enable row level security;
+drop policy if exists order_events_select on order_events;
+create policy order_events_select on order_events for select to authenticated
+  using (store_id in (select auth_store_ids()));
+grant select on order_events to authenticated;
+grant select, insert on order_events to service_role;
+create or replace function public.reject_mutation()
+returns trigger
+language plpgsql
+as $$
+begin
+  raise exception 'La tabla % es append-only: no admite % (auditoría inmutable).',
+    tg_table_name, tg_op;
+end;
+$$;
+drop trigger if exists order_events_append_only on order_events;
+create trigger order_events_append_only before update or delete on order_events
+  for each row execute function public.reject_mutation();
+
+-- ── 0046_geo_peru ────────────────────────────────────────────────────────────
+-- Distrito → provincia → departamento. Shopify Perú solo entrega distrito
+-- (city) y departamento (province); la provincia intermedia se resuelve aquí.
+create or replace function public.geo_key(raw text)
+returns text
+language sql
+immutable
+as $$
+  select nullif(
+    btrim(
+      regexp_replace(
+        lower(translate(coalesce(raw, ''),
+                        'áéíóúüñÁÉÍÓÚÜÑàèìòùÀÈÌÒÙ',
+                        'aeiouunAEIOUUNaeiouAEIOU')),
+        '\s+', ' ', 'g'
+      )
+    ),
+    ''
+  );
+$$;
+create table if not exists peru_districts (
+  district_key text primary key,
+  district     text not null,
+  province     text not null,
+  department   text,
+  source       text not null default 'shipments',
+  updated_at   timestamptz not null default now()
+);
+create index if not exists peru_districts_province_idx   on peru_districts(province);
+create index if not exists peru_districts_department_idx on peru_districts(department);
+alter table peru_districts enable row level security;
+drop policy if exists peru_districts_select on peru_districts;
+create policy peru_districts_select on peru_districts for select to authenticated
+  using (true);
+grant select on peru_districts to authenticated;
+grant all privileges on peru_districts to service_role;
+insert into peru_districts (district_key, district, province, department, source)
+select
+  public.geo_key(s.district)                as district_key,
+  mode() within group (order by s.district) as district,
+  mode() within group (order by s.province) as province,
+  mode() within group (order by s.region)   as department,
+  'shipments'
+from shipments s
+where public.geo_key(s.district) is not null
+  and public.geo_key(s.province) is not null
+group by public.geo_key(s.district)
+on conflict (district_key) do nothing;
+
+-- ── 0047_shipment_gestion ────────────────────────────────────────────────────
+-- Campos de gestión logística (§8) y de agencia Shalom/Olva (§10) sobre las
+-- guías. Se extiende `shipments` en vez de duplicarla: una gestión logística es
+-- una guía asignada a un courier, que es lo que esa tabla ya modela.
+alter table shipments
+  add column if not exists assigned_at          timestamptz,
+  add column if not exists dispatched_at        timestamptz,
+  add column if not exists out_for_delivery_at  timestamptz,
+  add column if not exists rescheduled_at       timestamptz,
+  add column if not exists closed_at            timestamptz,
+  add column if not exists returned_at          timestamptz,
+  add column if not exists reported_status      text,
+  add column if not exists non_delivery_reason  text,
+  add column if not exists source               text,
+  add column if not exists agency_branch        text,
+  add column if not exists agency_arrived_at    timestamptz,
+  add column if not exists agency_expires_at    timestamptz,
+  add column if not exists pickup_state         text;
+create index if not exists shipments_pickup_state_idx
+  on shipments(store_id, pickup_state) where pickup_state is not null;
+create index if not exists shipments_agency_expiry_idx
+  on shipments(agency_expires_at) where agency_expires_at is not null;
+create index if not exists shipments_returned_idx
+  on shipments(store_id, returned_at) where returned_at is not null;
+update shipments
+   set assigned_at = coalesce(assigned_at, created_at),
+       source      = coalesce(source, courier)
+ where assigned_at is null or source is null;
+alter table order_master
+  add column if not exists pickup_state      text,
+  add column if not exists agency_branch     text,
+  add column if not exists agency_arrived_at timestamptz,
+  add column if not exists agency_expires_at timestamptz;
+create index if not exists order_master_pickup_idx
+  on order_master(store_id, pickup_state) where pickup_state is not null;
+create index if not exists order_master_expiry_idx
+  on order_master(agency_expires_at) where agency_expires_at is not null;
+
+-- ── 0048_courier_reports ─────────────────────────────────────────────────────
+-- Cada carga de información como un reporte independiente, del courier que sea
+-- (§6), conservando el archivo original (§19.8).
+alter table import_batches
+  add column if not exists courier            text,
+  add column if not exists report_date        date,
+  add column if not exists file_path          text,
+  add column if not exists file_type          text,
+  add column if not exists file_sha256        text,
+  add column if not exists found_count        integer not null default 0,
+  add column if not exists updated_count      integer not null default 0,
+  add column if not exists unrecognized_count integer not null default 0,
+  add column if not exists errors             jsonb not null default '[]'::jsonb;
+create index if not exists import_batches_courier_idx
+  on import_batches(store_id, courier, created_at desc);
+create index if not exists import_batches_sha_idx
+  on import_batches(file_sha256) where file_sha256 is not null;
+update import_batches
+   set courier = coalesce(courier, case when kind = 'aliclik_delivery' then 'aliclik' end)
+ where courier is null;
+
+-- ── 0049_yape_payments ───────────────────────────────────────────────────────
+-- Validación de los dos Yapes (adelanto y diferencia) y clave de recojo de los
+-- envíos por Shalom: unicidad global del comprobante, clave cifrada sin lectura
+-- directa, auditoría append-only de cada visualización, y permisos finos.
+
+-- ----------------------------------------------------------------------------
+-- order_payments — un comprobante Yape, atado a UN pedido
+-- ----------------------------------------------------------------------------
+
+create table if not exists order_payments (
+  id                uuid primary key default gen_random_uuid(),
+  store_id          uuid not null references stores(id) on delete cascade,
+  order_id          uuid not null references orders(id) on delete cascade,
+  kind              text not null check (kind in ('adelanto', 'diferencia')),
+  amount            numeric(12, 2),
+  -- Identificador natural del pago. Único en TODO el sistema cuando existe.
+  operation_number  text,
+  -- Fecha y hora exactas del movimiento, tal como aparecen en el comprobante.
+  paid_at           timestamptz,
+  payer_name        text,
+  payer_phone       text,
+  -- Imagen del comprobante en el bucket privado `yape-vouchers`.
+  file_path         text,
+  file_type         text,
+  -- Huella del archivo: detecta la misma imagen re-subida con otro nombre.
+  file_sha256       text,
+  validation_status text not null default 'pendiente_revision'
+                      check (validation_status in (
+                        'pendiente_revision',
+                        'validado',
+                        'rechazado',
+                        'posible_duplicado',
+                        'info_incompleta',
+                        'revision_admin'
+                      )),
+  registered_by     uuid references auth.users(id) on delete set null,
+  registered_at     timestamptz not null default now(),
+  validated_by      uuid references auth.users(id) on delete set null,
+  validated_at      timestamptz,
+  notes             text,
+  -- Qué vio el lector de comprobantes (lib/vision.ts) en la imagen: auditoría de
+  -- por qué el sistema aceptó o dudó del comprobante.
+  vision            jsonb not null default '{}'::jsonb,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+
+-- Un pago rechazado deja de ocupar su sitio: pudo ser un error de carga, y su nº
+-- de operación o su archivo tienen que poder volver a usarse en el pedido
+-- correcto. Por eso los tres índices son PARCIALES.
+create unique index if not exists order_payments_operation_uniq
+  on order_payments(operation_number)
+  where operation_number is not null and validation_status <> 'rechazado';
+
+create unique index if not exists order_payments_file_uniq
+  on order_payments(file_sha256)
+  where file_sha256 is not null and validation_status <> 'rechazado';
+
+-- Un solo adelanto y una sola diferencia vivos por pedido.
+create unique index if not exists order_payments_kind_uniq
+  on order_payments(order_id, kind)
+  where validation_status <> 'rechazado';
+
+create index if not exists order_payments_order_idx on order_payments(order_id);
+create index if not exists order_payments_store_idx on order_payments(store_id, validation_status);
+-- Búsqueda de posibles duplicados por coincidencia difusa (monto + fecha).
+create index if not exists order_payments_fuzzy_idx on order_payments(amount, paid_at);
+
+alter table order_payments enable row level security;
+
+drop policy if exists order_payments_select on order_payments;
+create policy order_payments_select on order_payments for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+grant select on order_payments to authenticated;
+grant all privileges on order_payments to service_role;
+
+drop trigger if exists order_payments_touch on order_payments;
+create trigger order_payments_touch before update on order_payments
+  for each row execute function public.touch_updated_at();
+
+comment on column order_payments.operation_number is
+  'Nº de operación del Yape. Único en todo el sistema: es lo que detecta un mismo comprobante recortado.';
+comment on column order_payments.file_sha256 is
+  'Huella del archivo: detecta la misma imagen re-subida con otro nombre.';
+
+-- ----------------------------------------------------------------------------
+-- shalom_pickup_keys — la clave, cifrada y sin lectura directa
+-- ----------------------------------------------------------------------------
+
+create table if not exists shalom_pickup_keys (
+  order_id     uuid primary key references orders(id) on delete cascade,
+  store_id     uuid not null references stores(id) on delete cascade,
+  -- AES-256-GCM (lib/crypto.ts). NUNCA texto plano.
+  key_enc      text not null,
+  created_by   uuid references auth.users(id) on delete set null,
+  created_at   timestamptz not null default now(),
+  replaced_at  timestamptz,
+  replaced_by  uuid references auth.users(id) on delete set null
+);
+
+alter table shalom_pickup_keys enable row level security;
+
+-- SIN policy de select: RLS activo y sin policy = nadie con rol `authenticated`
+-- puede leer esta tabla, ni siquiera un administrador. La clave solo se obtiene
+-- a través del server action, que comprueba permisos y deja auditoría. Tampoco
+-- se otorga `select` al rol authenticated, por si algún día se añadiera una
+-- policy por error.
+grant all privileges on shalom_pickup_keys to service_role;
+
+-- ----------------------------------------------------------------------------
+-- pickup_key_views — quién vio la clave. APPEND-ONLY.
+-- ----------------------------------------------------------------------------
+
+create table if not exists pickup_key_views (
+  id             uuid primary key default gen_random_uuid(),
+  store_id       uuid not null references stores(id) on delete cascade,
+  order_id       uuid not null references orders(id) on delete cascade,
+  user_id        uuid references auth.users(id) on delete set null,
+  viewed_at      timestamptz not null default now(),
+  ip             text,
+  user_agent     text,
+  reason         text,
+  -- Estado de los dos pagos EN EL MOMENTO de mostrarla: sin esto no se puede
+  -- responder "¿ya estaban ambos validados cuando la vio?".
+  payment_state  jsonb not null default '{}'::jsonb,
+  -- true cuando un administrador la mostró saltándose alguna condición.
+  override       boolean not null default false
+);
+
+create index if not exists pickup_key_views_order_idx on pickup_key_views(order_id, viewed_at desc);
+create index if not exists pickup_key_views_user_idx  on pickup_key_views(user_id, viewed_at desc);
+
+alter table pickup_key_views enable row level security;
+
+drop policy if exists pickup_key_views_select on pickup_key_views;
+create policy pickup_key_views_select on pickup_key_views for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+-- "La visualización de la clave no deberá poder eliminarse del historial."
+grant select on pickup_key_views to authenticated;
+grant select, insert on pickup_key_views to service_role;
+
+drop trigger if exists pickup_key_views_append_only on pickup_key_views;
+create trigger pickup_key_views_append_only before update or delete on pickup_key_views
+  for each row execute function public.reject_mutation();
+
+-- ----------------------------------------------------------------------------
+-- pickup_key_shares — cuándo se le entregó la clave al cliente
+-- ----------------------------------------------------------------------------
+
+create table if not exists pickup_key_shares (
+  id         uuid primary key default gen_random_uuid(),
+  store_id   uuid not null references stores(id) on delete cascade,
+  order_id   uuid not null references orders(id) on delete cascade,
+  shared_by  uuid references auth.users(id) on delete set null,
+  shared_at  timestamptz not null default now(),
+  channel    text not null default 'whatsapp',  -- whatsapp | llamada | mensaje | otro
+  confirmed  boolean not null default false,
+  note       text
+);
+
+create index if not exists pickup_key_shares_order_idx on pickup_key_shares(order_id, shared_at desc);
+
+alter table pickup_key_shares enable row level security;
+
+drop policy if exists pickup_key_shares_select on pickup_key_shares;
+create policy pickup_key_shares_select on pickup_key_shares for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+grant select on pickup_key_shares to authenticated;
+grant select, insert on pickup_key_shares to service_role;
+
+-- ----------------------------------------------------------------------------
+-- user_permissions — concesiones y revocaciones puntuales (§16)
+-- ----------------------------------------------------------------------------
+
+create table if not exists user_permissions (
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  org_id     uuid not null references organizations(id) on delete cascade,
+  permission text not null,
+  -- false = revocado aunque el rol lo conceda. Gana siempre sobre el rol.
+  granted    boolean not null default true,
+  granted_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  primary key (user_id, org_id, permission)
+);
+
+alter table user_permissions enable row level security;
+
+drop policy if exists user_permissions_select on user_permissions;
+create policy user_permissions_select on user_permissions for select to authenticated
+  using (user_id = auth.uid() or org_id in (select auth_admin_org_ids()));
+
+grant select on user_permissions to authenticated;
+grant all privileges on user_permissions to service_role;
+
+-- ----------------------------------------------------------------------------
+-- Indicadores de pago y clave en el Master (§"Información visible en el Master")
+-- ----------------------------------------------------------------------------
+
+alter table order_master
+  -- sin_pago | adelanto_pendiente | adelanto_cargado | adelanto_validado
+  -- | diferencia_pendiente | diferencia_cargada | pago_completo | posible_duplicado
+  add column if not exists payment_state text,
+  -- sin_clave | clave_bloqueada | clave_disponible | clave_enviada
+  add column if not exists key_state     text;
+
+create index if not exists order_master_payment_idx
+  on order_master(store_id, payment_state) where payment_state is not null;
+
+-- ── 0050_costs ───────────────────────────────────────────────────────────────
+-- Módulo de Costos (§17): tarifas logísticas, costos de producto y adicionales,
+-- todos con VIGENCIA — cambiar una tarifa cierra la anterior y abre otra, para
+-- que los cálculos históricos no se muevan.
+
+-- ----------------------------------------------------------------------------
+-- Costos logísticos
+-- ----------------------------------------------------------------------------
+
+create table if not exists cost_tariffs (
+  id             uuid primary key default gen_random_uuid(),
+  org_id         uuid not null references organizations(id) on delete cascade,
+  -- Ámbito. Cuanto más campos rellenos, más específica es la tarifa y antes gana.
+  -- Todos nulos = tarifa general de la organización.
+  store_id       uuid references stores(id) on delete cascade,
+  courier        text,
+  region         text,
+  province       text,
+  district       text,
+  concept        text not null check (concept in (
+                   'primer_intento',
+                   'intento_adicional',
+                   'envio_agencia',
+                   'devolucion',
+                   'especial'
+                 )),
+  amount         numeric(12, 2) not null,
+  currency       text not null default 'PEN',
+  -- Vigencia. `effective_to` nulo = sigue vigente.
+  effective_from date not null default current_date,
+  effective_to   date,
+  note           text,
+  created_by     uuid references auth.users(id) on delete set null,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  -- Una tarifa que termina antes de empezar sería invisible y silenciosa.
+  constraint cost_tariffs_period_valid check (effective_to is null or effective_to >= effective_from)
+);
+
+create index if not exists cost_tariffs_lookup_idx
+  on cost_tariffs(org_id, concept, effective_from desc);
+create index if not exists cost_tariffs_store_idx on cost_tariffs(store_id);
+-- Búsqueda por ámbito geográfico, que es como se consulta en la práctica.
+create index if not exists cost_tariffs_geo_idx on cost_tariffs(org_id, district, province, region);
+
+-- ----------------------------------------------------------------------------
+-- Costos de producto
+-- ----------------------------------------------------------------------------
+
+create table if not exists product_costs (
+  id             uuid primary key default gen_random_uuid(),
+  org_id         uuid not null references organizations(id) on delete cascade,
+  store_id       uuid references stores(id) on delete cascade,
+  sku            text not null,
+  product_name   text,
+  supplier       text,
+  batch          text,
+  unit_cost      numeric(12, 2) not null,
+  currency       text not null default 'PEN',
+  effective_from date not null default current_date,
+  effective_to   date,
+  note           text,
+  created_by     uuid references auth.users(id) on delete set null,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  constraint product_costs_period_valid check (effective_to is null or effective_to >= effective_from)
+);
+
+create index if not exists product_costs_lookup_idx
+  on product_costs(org_id, sku, effective_from desc);
+
+-- ----------------------------------------------------------------------------
+-- Costos adicionales (empaque, materiales, preparación, comisiones…)
+-- ----------------------------------------------------------------------------
+
+create table if not exists additional_costs (
+  id             uuid primary key default gen_random_uuid(),
+  org_id         uuid not null references organizations(id) on delete cascade,
+  store_id       uuid references stores(id) on delete cascade,
+  concept        text not null,          -- empaque | materiales | preparacion | comision | otro
+  label          text,
+  amount         numeric(12, 2) not null,
+  currency       text not null default 'PEN',
+  -- 'pedido' = importe fijo por pedido; 'porcentaje' = % sobre el total.
+  basis          text not null default 'pedido' check (basis in ('pedido', 'porcentaje')),
+  effective_from date not null default current_date,
+  effective_to   date,
+  note           text,
+  created_by     uuid references auth.users(id) on delete set null,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  constraint additional_costs_period_valid check (effective_to is null or effective_to >= effective_from)
+);
+
+create index if not exists additional_costs_lookup_idx
+  on additional_costs(org_id, concept, effective_from desc);
+
+-- ----------------------------------------------------------------------------
+-- RLS: lectura para quien pertenece a la organización; escritura solo admins.
+-- Mismo patrón que fenix_stock (0025).
+-- ----------------------------------------------------------------------------
+
+alter table cost_tariffs     enable row level security;
+alter table product_costs    enable row level security;
+alter table additional_costs enable row level security;
+
+drop policy if exists cost_tariffs_select on cost_tariffs;
+create policy cost_tariffs_select on cost_tariffs for select to authenticated
+  using (org_id in (select auth_org_ids()));
+drop policy if exists cost_tariffs_write on cost_tariffs;
+create policy cost_tariffs_write on cost_tariffs for all to authenticated
+  using (org_id in (select auth_admin_org_ids()))
+  with check (org_id in (select auth_admin_org_ids()));
+
+drop policy if exists product_costs_select on product_costs;
+create policy product_costs_select on product_costs for select to authenticated
+  using (org_id in (select auth_org_ids()));
+drop policy if exists product_costs_write on product_costs;
+create policy product_costs_write on product_costs for all to authenticated
+  using (org_id in (select auth_admin_org_ids()))
+  with check (org_id in (select auth_admin_org_ids()));
+
+drop policy if exists additional_costs_select on additional_costs;
+create policy additional_costs_select on additional_costs for select to authenticated
+  using (org_id in (select auth_org_ids()));
+drop policy if exists additional_costs_write on additional_costs;
+create policy additional_costs_write on additional_costs for all to authenticated
+  using (org_id in (select auth_admin_org_ids()))
+  with check (org_id in (select auth_admin_org_ids()));
+
+grant select on cost_tariffs, product_costs, additional_costs to authenticated;
+grant insert, update, delete on cost_tariffs, product_costs, additional_costs to authenticated;
+grant all privileges on cost_tariffs, product_costs, additional_costs to service_role;
+
+drop trigger if exists cost_tariffs_touch on cost_tariffs;
+create trigger cost_tariffs_touch before update on cost_tariffs
+  for each row execute function public.touch_updated_at();
+drop trigger if exists product_costs_touch on product_costs;
+create trigger product_costs_touch before update on product_costs
+  for each row execute function public.touch_updated_at();
+drop trigger if exists additional_costs_touch on additional_costs;
+create trigger additional_costs_touch before update on additional_costs
+  for each row execute function public.touch_updated_at();
+
+comment on column cost_tariffs.effective_from is
+  'Inicio de vigencia. Cambiar una tarifa NO edita la fila: se cierra la vigente y se abre otra, para que los cálculos históricos no se muevan.';
+
+-- ── 0051_order_geo ───────────────────────────────────────────────────────────
+-- Corrección manual de la ubicación de un pedido (dirección, distrito,
+-- provincia, región y punto del mapa). Gana sobre Shopify, los reportes de
+-- courier y el ubigeo, y sobrevive a la siguiente sincronización.
+
+create table if not exists order_geo_overrides (
+  order_id    uuid primary key references orders(id) on delete cascade,
+  store_id    uuid not null references stores(id) on delete cascade,
+  -- Cada campo es opcional: se corrige solo lo que está mal. Un nulo significa
+  -- "esto no lo toco", no "bórralo".
+  region      text,
+  province    text,
+  district    text,
+  address     text,
+  reference   text,
+  -- Coordenadas corregidas a mano: son las que alimentan el enlace al mapa.
+  latitude    double precision,
+  longitude   double precision,
+  note        text,
+  updated_by  uuid references auth.users(id) on delete set null,
+  updated_at  timestamptz not null default now(),
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists order_geo_overrides_store_idx on order_geo_overrides(store_id);
+
+alter table order_geo_overrides enable row level security;
+
+drop policy if exists order_geo_overrides_select on order_geo_overrides;
+create policy order_geo_overrides_select on order_geo_overrides for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+grant select on order_geo_overrides to authenticated;
+grant all privileges on order_geo_overrides to service_role;
+
+drop trigger if exists order_geo_overrides_touch on order_geo_overrides;
+create trigger order_geo_overrides_touch before update on order_geo_overrides
+  for each row execute function public.touch_updated_at();
+
+comment on table order_geo_overrides is
+  'Corrección manual de la ubicación de un pedido. Gana sobre Shopify, los reportes de courier y el ubigeo al recalcular order_master.';
+
+-- ----------------------------------------------------------------------------
+-- El Master carga la dirección y el punto del mapa en su propia fila, para que
+-- el listado y el detalle no tengan que volver a resolverlos.
+-- ----------------------------------------------------------------------------
+
+alter table order_master
+  add column if not exists address    text,
+  add column if not exists reference  text,
+  add column if not exists latitude   double precision,
+  add column if not exists longitude  double precision,
+  -- De dónde salió la ubicación vigente: manual | shopify | courier | ubigeo | draft
+  add column if not exists geo_source text;
+
+comment on column order_master.geo_source is
+  'Origen de la ubicación vigente. "manual" = corregida por el equipo (order_geo_overrides).';
+
+-- El ubigeo también se puede corregir: cuando el equipo arregla la provincia de
+-- un distrito, se recuerda para los siguientes pedidos de ese distrito.
+-- `source` distingue lo cargado del INEI de lo aprendido a mano.
+comment on column peru_districts.source is
+  'shipments = inferido de los reportes; inei = ubigeo oficial; manual = corregido por el equipo.';
+
+-- ── 0052_store_anthropic_key ─────────────────────────────────────────────────
+-- Clave de Anthropic por tienda (lectura de comprobantes Yape), cifrada. Así el
+-- gasto de cada tienda es independiente. El entorno sigue como respaldo.
+
+alter table stores
+  add column if not exists anthropic_api_key_enc text,
+  -- Modelo por tienda: permite abaratar una tienda sin tocar la otra ni
+  -- redesplegar (p. ej. un modelo más económico para la clasificación simple).
+  add column if not exists anthropic_model        text;
+
+comment on column stores.anthropic_api_key_enc is
+  'enc: API key de Anthropic de ESTA tienda (lectura de comprobantes Yape). Cifrada AES-256-GCM. Respaldo: ANTHROPIC_API_KEY del entorno.';
+comment on column stores.anthropic_model is
+  'Modelo de visión para esta tienda. Vacío = el valor por defecto del entorno.';
+
+-- ── 0053_revoke_default_grants ───────────────────────────────────────────────
+-- Supabase deja `alter default privileges ... grant all on tables to anon,
+-- authenticated, service_role` en el esquema public, así que CADA tabla nueva
+-- nace con TODOS los privilegios para los tres roles y un `grant select, insert`
+-- no resta nada. Esto revoca y vuelve a conceder solo lo necesario.
+
+revoke all on order_events     from anon, authenticated, service_role;
+revoke all on pickup_key_views from anon, authenticated, service_role;
+
+grant select         on order_events     to authenticated;
+grant select, insert on order_events     to service_role;
+grant select         on pickup_key_views to authenticated;
+grant select, insert on pickup_key_views to service_role;
+
+revoke all on shalom_pickup_keys from anon, authenticated;
+grant all privileges on shalom_pickup_keys to service_role;
+
+revoke all on order_payments     from anon, authenticated;
+revoke all on pickup_key_shares  from anon, authenticated, service_role;
+grant select on order_payments to authenticated;
+grant all privileges on order_payments to service_role;
+grant select         on pickup_key_shares to authenticated;
+grant select, insert on pickup_key_shares to service_role;
+
+revoke all on order_master from anon, authenticated;
+grant select on order_master to authenticated;
+grant all privileges on order_master to service_role;
+
+revoke all on order_geo_overrides from anon, authenticated;
+grant select on order_geo_overrides to authenticated;
+grant all privileges on order_geo_overrides to service_role;
+
+revoke all on peru_districts from anon, authenticated;
+grant select on peru_districts to authenticated;
+grant all privileges on peru_districts to service_role;
+
+revoke all on user_permissions from anon, authenticated;
+grant select on user_permissions to authenticated;
+grant all privileges on user_permissions to service_role;
+
+revoke all on cost_tariffs     from anon, authenticated;
+revoke all on product_costs    from anon, authenticated;
+revoke all on additional_costs from anon, authenticated;
+grant select, insert, update, delete on cost_tariffs     to authenticated;
+grant select, insert, update, delete on product_costs    to authenticated;
+grant select, insert, update, delete on additional_costs to authenticated;
+grant all privileges on cost_tariffs, product_costs, additional_costs to service_role;

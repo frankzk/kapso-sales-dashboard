@@ -38,6 +38,8 @@ export interface StoreSettingsInput {
   cart_seq_hour_end?: string;
   // Telegram daily summary: chat id is plain, token is a secret.
   telegram_chat_id?: string;
+  /** Modelo de visión de esta tienda (plain). Vacío = el del entorno. */
+  anthropic_model?: string;
   // Secrets — only applied when non-empty.
   shopify_token?: string;
   shopify_webhook_secret?: string;
@@ -46,6 +48,8 @@ export interface StoreSettingsInput {
   kapso_webhook_secret?: string;
   telegram_bot_token?: string;
   meta_access_token?: string;
+  /** API key de Anthropic de esta tienda (lectura de comprobantes Yape). */
+  anthropic_api_key?: string;
 }
 
 function clean(v: string | undefined): string | null {
@@ -61,7 +65,14 @@ export function buildStoreUpdate(
 ): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
 
-  for (const k of ["name", "currency", "timezone", "whatsapp_phone_number_id", "kapso_project_id"] as const) {
+  for (const k of [
+    "name",
+    "currency",
+    "timezone",
+    "whatsapp_phone_number_id",
+    "kapso_project_id",
+    "anthropic_model",
+  ] as const) {
     const v = clean(input[k]);
     if (v !== null) patch[k] = v;
   }
@@ -150,6 +161,11 @@ export function buildStoreUpdate(
   if (tgToken) patch.telegram_bot_token_enc = encrypt(tgToken, keyOverride);
   const metaTok = clean(input.meta_access_token);
   if (metaTok) patch.meta_access_token_enc = encrypt(metaTok, keyOverride);
+
+  // Clave de Anthropic por tienda (0052): cifrada como el resto de secretos, y
+  // en blanco significa "no la cambies" igual que los demás.
+  const anthropic = clean(input.anthropic_api_key);
+  if (anthropic) patch.anthropic_api_key_enc = encrypt(anthropic, keyOverride);
 
   return patch;
 }

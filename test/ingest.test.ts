@@ -297,8 +297,10 @@ describe("processShopifyWebhook", () => {
   it("ignores a non-Kapso order: status ok, nothing recorded", async () => {
     const { processShopifyWebhook } = await import("@/lib/ingest");
     const fake = new FakeSupabase(makeStoreRow());
-    // Shopify delivers order webhooks shop-wide; an order without the kapso tag
-    // must not be ingested (parity with the tag:kapso data model).
+    // Shopify delivers order webhooks shop-wide. Desde el Master de Pedidos, un
+    // pedido sin el tag `kapso` SÍ se ingesta — el Master debe cubrir todos los
+    // pedidos de la tienda — pero no toca los rollups, que son la base de las
+    // métricas de ventas/embudo y siguen contando solo tag:kapso.
     const body = JSON.stringify({
       id: 9001,
       name: "#2002",
@@ -320,9 +322,9 @@ describe("processShopifyWebhook", () => {
       fake as any,
     );
     expect(res.status).toBe("ok");
-    expect(fake.upsertedOrders).toHaveLength(0); // not ingested
-    expect(fake.insertedWebhookIds.size).toBe(0); // not even recorded
-    expect(fake.recomputeCalls).toHaveLength(0); // no rollup recompute
+    expect(fake.upsertedOrders).toHaveLength(1); // sí se ingesta: lo necesita el Master
+    expect(fake.upsertedOrders[0]).toMatchObject({ shopify_order_id: "9001", name: "#2002" });
+    expect(fake.recomputeCalls).toHaveLength(0); // pero NO mueve las métricas
   });
 
   it("is idempotent: re-delivering the same body does not duplicate the order", async () => {

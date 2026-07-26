@@ -10,6 +10,7 @@ import { parseAliclikReport } from "./aliclik-import";
 import { matchShipment, type MatchResult, type OrderCandidate } from "./shipment-match";
 import { categoryOf, isPending, maxDeliveryDate, reconcileDeliveryStatus } from "./shipments";
 import { evaluateFenix, type FenixStockRow } from "./fenix";
+import { recomputeOrderMasterSafe } from "./order-master";
 
 // Existing shipment fields we need to reconcile a re-import against (so we don't
 // reset progress the team already made). See reconcileDeliveryStatus + the
@@ -290,7 +291,28 @@ export async function ingestAliclikReport(
     .update({ matched_count: matchedCount, unmatched_count: unmatchedCount, status: "processed" })
     .eq("id", batchId);
 
-  return { batchId, rowCount: parsed.length, matchedCount, unmatchedCount, errorCount, skippedImportadoCount };
+  // El reporte acaba de mover el estado logístico de estos pedidos: refresca el
+  // Master para que la consolidación no espere al barrido del cron. Best-effort
+  // — el reporte ya quedó ingestado pase lo que pase con el recálculo.
+  await recomputeOrderMasterSafe(
+    admin,
+    [
+      ...new Set(
+        shipmentRows
+          .map((row) => row.order_id)
+          .filter((id): id is string => typeof id === "string" && id.length > 0),
+      ),
+    ],
+  );
+
+  return {
+    batchId,
+    rowCount: parsed.length,
+    matchedCount,
+    unmatchedCount,
+    errorCount,
+    skippedImportadoCount,
+  };
 }
 
 async function fetchOrderCandidates(

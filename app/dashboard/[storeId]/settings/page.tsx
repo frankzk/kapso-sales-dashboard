@@ -112,6 +112,7 @@ export default async function StoreSettingsPage({
       cart_seq_hour_start: full.cart_seq_hour_start ?? 8,
       cart_seq_hour_end: full.cart_seq_hour_end ?? 21,
       telegram_chat_id: full.telegram_chat_id ?? null,
+      anthropic_model: full.anthropic_model ?? null,
       meta_ad_accounts: normalizeMetaAdAccounts(
         full.meta_ad_accounts,
         full.meta_ad_account_id,
@@ -126,6 +127,7 @@ export default async function StoreSettingsPage({
       kapsoWebhookSecret: Boolean(full.kapso_webhook_secret_enc),
       telegramToken: Boolean(full.telegram_bot_token_enc),
       metaToken: Boolean(full.meta_access_token_enc),
+      anthropicKey: Boolean(full.anthropic_api_key_enc),
     },
     oauthAvailable: env.shopifyOAuthConfigured(),
     siteUrl,

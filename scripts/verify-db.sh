@@ -83,5 +83,21 @@ echo "▶ RLS isolation"
 $PSQL -f "$ROOT/scripts/sql/rls_smoke.sql"
 echo "  ✅ RLS: no cross-store leak; owner sees all; ungranted viewer sees nothing"
 
+# The checks above only need 0001–0006. Everything from 0007 on is applied here,
+# in order, so the whole chain is proven to run on a fresh database — and so the
+# append-only guarantees below can be asserted against the real schema.
+echo "▶ remaining migrations (0007 → latest)"
+for f in $(ls "$ROOT"/db/migrations/*.sql | sort); do
+  case "$(basename "$f")" in 000[1-6]_*) continue ;; esac
+  $PSQL -f "$f" >/dev/null
+done
+echo "  ✅ all migrations apply on a fresh database"
+
+# order_events is the audit trail of the Master de Pedidos: it must be
+# impossible to rewrite history, even for the role the server actions use.
+echo "▶ auditoría inmutable + clave de recojo + unicidad del Yape"
+$PSQL -f "$ROOT/scripts/sql/append_only_smoke.sql"
+echo "  ✅ auditoría inmutable, clave de recojo sin lectura directa y comprobante Yape único"
+
 echo ""
 echo "✅ DB verification passed."

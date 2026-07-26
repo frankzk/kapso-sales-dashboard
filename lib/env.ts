@@ -36,6 +36,15 @@ export const env = {
   anthropicApiBase: () =>
     (process.env.ANTHROPIC_API_BASE ?? "https://api.anthropic.com").replace(/\/$/, ""),
   yapeVisionModel: () => process.env.YAPE_VISION_MODEL ?? "claude-opus-4-8",
+
+  // --- Master de Pedidos: desde qué fecha traer los pedidos de Shopify que no
+  //     son del bot. Sin esto la reconciliación pagina hasta el primer pedido de
+  //     la tienda, que puede ser años atrás. Es una fecha (YYYY-MM-DD) y se
+  //     puede mover sin redesplegar código. ---
+  ordersSyncFrom: () => {
+    const raw = (process.env.ORDERS_SYNC_FROM ?? "2026-06-01").trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : "2026-06-01";
+  },
   yapeVisionEnabled: () => Boolean(process.env.ANTHROPIC_API_KEY),
 
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---

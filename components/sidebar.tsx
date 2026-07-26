@@ -4,7 +4,17 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, type ComponentType, type SVGProps } from "react";
 import { cn } from "@/components/ui";
-import { IconChat, IconGrid, IconHeadset, IconPlug, IconStore, IconTruck, IconUsers } from "@/components/icons";
+import {
+  IconChat,
+  IconClipboard,
+  IconMoney,
+  IconGrid,
+  IconHeadset,
+  IconPlug,
+  IconStore,
+  IconTruck,
+  IconUsers,
+} from "@/components/icons";
 import {
   canBackgroundPrefetch,
   panelPrefetchOrder,
@@ -23,6 +33,7 @@ function navItems(isVendedoraOnly: boolean): NavItem[] {
   if (isVendedoraOnly)
     return [
       { href: "/dashboard/leads", label: "Leads", icon: IconChat },
+      { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
       { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
       // Modo solo: la página filtra server-side a la fila propia — una
       // vendedora nunca ve los resultados del resto del equipo.
@@ -31,9 +42,11 @@ function navItems(isVendedoraOnly: boolean): NavItem[] {
   return [
     { href: "/dashboard", label: "Consolidado", icon: IconGrid },
     { href: "/dashboard/leads", label: "Leads", icon: IconChat },
+    { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
     { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
     { href: "/dashboard/productividad", label: "Productividad", icon: IconHeadset },
     { href: "/dashboard/stores", label: "Tiendas", icon: IconStore },
+    { href: "/dashboard/costos", label: "Costos", icon: IconMoney },
     { href: "/dashboard/team", label: "Equipo", icon: IconUsers },
     { href: "/dashboard/stores/new", label: "Conectar tienda", icon: IconPlug },
   ];

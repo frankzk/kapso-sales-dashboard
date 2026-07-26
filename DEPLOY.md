@@ -332,6 +332,240 @@ saca. Los estados de "sí hablé" (contactado/otros productos) y los cierres
   marcador rojo activo (ola, respuesta nueva, seguimiento vencido) no se
   archiva en silencio — el reloj se reanuda cuando la asesora lo gestiona.
 
+## 5h. Master de Pedidos
+
+Sección nueva (`/dashboard/pedidos`): la vista central de control de la
+operación logística de las dos tiendas. **Consolida** lo que ya producen Repro
+Provincia, los reportes de couriers y Shopify — no los reemplaza. Cada pedido
+tiene UN estado general (`pendiente` / `en_proceso` / `entregado` / `anulado` /
+`devuelto`) y un estado operativo más específico, además del historial completo
+de couriers, intentos y comentarios.
+
+- **Needs migration 0045** (`order_master`, `order_events`) y **0046**
+  (`peru_districts`). Antes de correrlas la sección carga vacía (el listado lee
+  `order_master`); no rompe nada más.
+- **`order_events` es append-only**: `service_role` solo tiene SELECT + INSERT y
+  un trigger rechaza UPDATE/DELETE. La trazabilidad no se puede reescribir.
+  `scripts/verify-db.sh` lo comprueba en cada corrida de CI.
+- **El universo de pedidos se amplía.** Hasta ahora la ingesta solo guardaba los
+  pedidos con `tag:kapso` (los del bot). El Master necesita todos, así que:
+  - el webhook ya no descarta los pedidos sin el tag;
+  - el cron hace una segunda pasada de reconciliación sin filtro, con su propio
+    cursor `sync_state.source = 'shopify_all'`.
+
+  **Las métricas no se mueven**: `recompute_daily_rollups` y
+  `lib/access.ts:getOrders` siguen filtrando por `tag:kapso`, y los rollups y el
+  vínculo con el lead solo se disparan para pedidos del bot.
+- **`ORDERS_SYNC_FROM` acota el histórico** (por defecto `2026-06-01`). La pasada
+  nueva solo trae pedidos **creados** a partir de esa fecha, así que no arrastra
+  años de pedidos cerrados. Se filtra por `created_at` y no por `updated_at`, para
+  que un pedido viejo que alguien edite hoy no vuelva a entrar. Para ampliar el
+  histórico basta mover la variable en Vercel y borrar el cursor:
+  `delete from sync_state where source = 'shopify_all';`
+- **El Master se rellena solo.** `runStoreSync` termina con un barrido de
+  reconciliación (`reconcileOrderMaster`) que crea o refresca las filas que
+  falten, así que no hace falta ningún backfill manual. Las acciones de Repro
+  Provincia y la importación de reportes recalculan al instante los pedidos que
+  tocan; el barrido es la red de seguridad.
+- **Provincia**: Shopify Perú solo entrega distrito (`city`) y departamento
+  (`province`), no el nivel intermedio. `0046` crea `peru_districts` y la siembra
+  con los pares distrito→provincia que los Excel de Aliclik ya dejaron en
+  `shipments`. Para cubrir los distritos a los que aún no se despachó, cargar el
+  ubigeo del INEI en esa tabla; mientras esté vacía, el filtro de provincia solo
+  muestra las provincias conocidas.
+- **La ubicación se puede corregir a mano** (needs migration **0051**). La
+  dirección de Shopify sale del formulario que llenó el cliente —Shopify mismo la
+  marca como problemática a menudo— y su punto del mapa suele estar desplazado.
+  Desde el detalle del pedido se corrigen distrito, provincia, región, dirección,
+  referencia y **coordenadas**, y aparece un enlace "Ver mapa" que usa las
+  coordenadas corregidas. La corrección vive en `order_geo_overrides`, **no** en
+  `orders`, así que gana sobre Shopify, sobre los reportes de courier y sobre el
+  ubigeo, y sobrevive a la siguiente sincronización. Al corregir una provincia se
+  ofrece recordarla para los próximos pedidos del mismo distrito, que es la forma
+  barata de ir completando el ubigeo con datos reales. `order_master.geo_source`
+  dice de dónde salió la ubicación vigente.
+- **Permisos**: `viewer` es solo lectura en el Master (consulta, filtra, abre el
+  detalle y el historial, pero no modifica). Cambiar un pedido ya cerrado
+  (entregado/anulado/devuelto) exige rol admin y un motivo obligatorio, que queda
+  en el historial.
+
+## 5i. Reportes de courier (Aliclik, Shalom, Olva)
+
+La importación deja de ser exclusiva de Aliclik. `/dashboard/envios/import` acepta
+el reporte de **cualquier** courier y reconoce el formato solo (guías AUR5X →
+Aliclik; columnas de agencia/fecha límite → Shalom u Olva); el operador solo
+tiene que elegir el courier cuando el archivo no se reconoce.
+
+- **Needs migration 0047** (campos de gestión y de agencia en `shipments`, más el
+  rollup de agencia en `order_master`) y **0048** (metadatos del reporte en
+  `import_batches`). Antes de correrlas la carga sigue funcionando en el camino
+  de Aliclik; las columnas nuevas simplemente no se escriben (el código aplica
+  *column step-down*).
+- **Los reportes originales se conservan** en el bucket **privado**
+  `courier-reports` (`<storeId>/<courier>/<sha256>-<archivo>`). Se crea solo en
+  la primera carga y se fuerza a privado en cada arranque: llevan nombre,
+  teléfono y dirección de clientes reales. Si el almacenamiento falla, la ingesta
+  continúa —perder la copia no debe costar el reporte.
+- **Re-cargar el mismo archivo no duplica nada**: los estados solo avanzan
+  (`reconcileDeliveryStatus`), y la interfaz avisa si esa huella ya se había
+  subido.
+- **Aliclik conserva su ingesta propia** (reglas de Fenix, dirección editada a
+  mano, fallback de provincia). El endpoint genérico la invoca y le añade los
+  metadatos del reporte; `/api/import/aliclik` sigue existiendo y delega.
+- **Añadir un courier nuevo** es un archivo en `lib/couriers/` y una línea en
+  `lib/couriers/registry.ts`. Los alias de cabecera son amplios a propósito:
+  cuando llegue un formato distinto, basta con añadir el alias.
+
+## 5j. Pagos Yape y clave de recojo (Shalom)
+
+Los envíos por Shalom se cobran en dos tiempos: un **Yape de adelanto** para
+despachar y un **Yape de la diferencia** antes de entregar al cliente la clave
+con la que recoge el paquete en la agencia. La clave es la llave del paquete: si
+se entrega antes de cobrar, el dinero se pierde.
+
+- **Needs migration 0049** (`order_payments`, `shalom_pickup_keys`,
+  `pickup_key_views`, `pickup_key_shares`, `user_permissions`, e indicadores de
+  pago/clave en `order_master`). Antes de correrla el panel no aparece y el
+  Master funciona igual.
+- **Requiere `ENCRYPTION_KEY`** (la misma que ya cifra los tokens de tienda): la
+  clave se guarda **cifrada** con AES-256-GCM, nunca en texto plano. Si esa clave
+  cambiara, las claves de recojo existentes dejarían de descifrarse.
+- **La clave no es legible por SQL.** `shalom_pickup_keys` tiene RLS activo y
+  **ninguna** policy, y no concede privilegios a `authenticated`: ni un
+  administrador puede leerla desde la base. Solo sale por el server action, que
+  comprueba permisos y condiciones y **escribe la auditoría antes** de
+  descifrarla. Nunca aparece en el listado ni en exportaciones.
+- **Un comprobante, un pago.** Índices únicos GLOBALES (no por tienda) sobre el
+  nº de operación y sobre el sha256 del archivo, más uno de un solo adelanto y
+  una sola diferencia vivos por pedido. Un comprobante *rechazado* libera su
+  sitio, porque pudo ser un error de carga. Una captura recortada del mismo
+  comprobante se detecta por el **nº de operación**, que `lib/vision.ts` lee de
+  la imagen (el hash perceptual queda fuera de alcance: exigiría decodificar
+  imágenes en el servidor).
+- **`pickup_key_views` es append-only**, como `order_events`: quién vio la clave,
+  cuándo, y con qué pagos validados en ese momento. No se puede borrar.
+- **Permisos** (`lib/permissions.ts`, con excepciones por usuario en
+  `user_permissions`): `owner`/`admin` todo; `vendedora` registra comprobantes
+  pero **no** los valida ni ve la clave; `viewer` nada. Mostrar la clave sin las
+  validaciones completas es una excepción de administrador con motivo
+  obligatorio, y queda marcada como tal en el historial.
+- **Bucket privado `yape-vouchers`** para las imágenes, subidas por URL firmada
+  (mismo patrón que los adjuntos de Leads).
+- **Sin nº de operación no se puede validar un pago.** Es la regla que cierra el
+  hueco de la captura recortada: el índice único no puede actuar sobre un nulo, así
+  que un pago sin ese número queda en *información incompleta* y la acción de
+  validar lo rechaza explicando qué falta. Desde el propio pago se completa a mano
+  (botón *Completar datos*), y al escribirlo se vuelve a comprobar que ese número
+  no pertenezca ya a otro pedido. Un intento de reutilizarlo queda en el historial.
+- **Opcional**: con `ANTHROPIC_API_KEY` configurada, cada comprobante se pasa dos
+  veces por visión: una para decidir si es un Yape real (el lector que ya usa la
+  alerta de Leads) y otra para **transcribir** nº de operación, monto, fecha/hora y
+  pagador. Lo que el operador dejó en blanco se rellena con esa lectura, así que en
+  el caso normal nadie teclea el número. Si la imagen está recortada y el número no
+  se ve, la transcripción devuelve null a propósito —nunca lo adivina— y el pago
+  cae en el flujo de *Completar datos*. Si la imagen no parece un Yape, el pago
+  queda como *información incompleta*: nunca se rechaza solo, y cargar una imagen
+  jamás equivale a validar el pago.
+
+## 5k. Costos
+
+Sección propia (`/dashboard/costos`), no una pestaña de Ajustes: la
+especificación anticipa que crecerá hacia algo financiero más amplio. Tres
+pestañas: **costos logísticos** (por tienda, courier, región, provincia o
+distrito; primer intento, intentos adicionales, envío por agencia, devolución y
+especiales), **costos de producto** (unitario, por tienda, proveedor y lote) y
+**costos adicionales** (empaque, materiales, preparación, comisiones).
+
+- **Needs migration 0050** (`cost_tariffs`, `product_costs`, `additional_costs`).
+  Antes de correrla la sección no carga y el Master deja el costo en blanco.
+- **Todo lleva vigencia y nada se edita en su sitio.** Registrar una tarifa
+  cierra la anterior (le pone fecha final) y abre otra desde el día indicado, de
+  modo que un cambio de precio hoy **no** reescribe lo que costaron los pedidos
+  de la semana pasada. El histórico se conserva y se ve en la tabla.
+- **La tarifa más específica gana**: distrito &gt; provincia &gt; región &gt;
+  courier &gt; tienda &gt; general. Permite una tarifa base de la organización y
+  solo las excepciones encima. Los pesos están escogidos para que un acuerdo por
+  distrito no lo supere ninguna combinación de criterios más gruesos.
+- **El costo se congela en la fila del Master** durante el recálculo, no se
+  resuelve al pintar: resolverlo en cada lectura haría que cambiar una tarifa
+  moviera cifras históricas.
+- **Un concepto sin tarifa configurada NO cuenta como cero**: se reporta como
+  faltante y el Master muestra el costo en blanco. Un costo ausente y un costo de
+  cero no son lo mismo.
+- Un pedido **anulado** en Lima no genera costo de devolución (§9: allí no hay
+  retorno físico); uno **devuelto** sí.
+- **Escritura solo para administradores** de la organización (RLS, mismo patrón
+  que `fenix_stock`), con el permiso `costs.manage`.
+
+## 5l. Clave de Anthropic por tienda
+
+La lectura de comprobantes Yape usaba una única `ANTHROPIC_API_KEY` de entorno, así
+que el gasto de las dos tiendas caía en la misma cuenta. Ahora **cada tienda tiene
+su propia clave** y paga lo suyo.
+
+- **Needs migration 0052** (`stores.anthropic_api_key_enc`, `stores.anthropic_model`).
+- Se configura en **Ajustes de la tienda → Lectura de comprobantes Yape**. La clave
+  se guarda **cifrada** (AES-256-GCM, misma `ENCRYPTION_KEY` que el resto de
+  secretos) y en blanco significa "no la cambies", como los demás secretos.
+- El **modelo también es por tienda**: se puede abaratar una sin tocar la otra ni
+  redesplegar.
+- `ANTHROPIC_API_KEY` del entorno **sigue funcionando como respaldo** para las
+  tiendas sin clave propia, así que nada deja de funcionar al aplicar la migración.
+- Afecta a los dos usos de visión: la alerta de *Yape/Shalom por verificar* en Leads
+  y la transcripción del comprobante en el Master.
+- Sin clave (ni de tienda ni de entorno) la detección se queda solo en el texto del
+  mensaje y el equipo escribe a mano el nº de operación — que sigue siendo
+  obligatorio para poder validar un pago.
+
+## 5m. Privilegios por defecto de Supabase (corrección)
+
+**Needs migration 0053.** Es obligatoria si se aplicó cualquiera de la 0045 a la
+0052; no toca datos y es idempotente.
+
+Supabase deja configurado en el esquema `public`:
+
+```sql
+alter default privileges in schema public
+  grant all on tables to anon, authenticated, service_role;
+```
+
+Es decir, **cada tabla nueva nace con todos los privilegios** para los tres
+roles, así que un `grant select, insert ... to service_role` no resta nada: solo
+añade sobre un permiso que ya era total. Dos cosas que las migraciones nuevas
+documentaban no eran ciertas hasta la 0053:
+
+- `order_events` y `pickup_key_views` se declaran **append-only**, pero
+  conservaban UPDATE/DELETE por privilegio. El trigger `reject_mutation` sí los
+  bloqueaba —la inmutabilidad nunca estuvo rota— pero la segunda cerradura, la
+  que el propio comentario de la migración prometía, no existía.
+- `shalom_pickup_keys` se declara ilegible. RLS activo **sin** policy ya deniega
+  a `authenticated`, así que la clave tampoco estuvo expuesta; pero el privilegio
+  de SELECT seguía concedido, o sea a una policy de distancia de exponerla.
+
+La 0053 hace `revoke all` sobre las tablas sensibles y vuelve a conceder solo lo
+necesario. Comprobación en producción (debe dar 0):
+
+```sql
+select count(*) from information_schema.role_table_grants
+ where table_schema = 'public'
+   and ((table_name in ('order_events','pickup_key_views')
+         and grantee in ('anon','authenticated','service_role')
+         and privilege_type in ('UPDATE','DELETE','TRUNCATE'))
+     or (table_name = 'shalom_pickup_keys'
+         and grantee in ('anon','authenticated')));
+```
+
+`postgres` (dueño de las tablas) conserva todo y eso es normal: no es un rol al
+que se llegue desde la API.
+
+**Por qué no lo detectaron las pruebas.** El Postgres desechable de
+`scripts/verify-db.sh` no traía las *default privileges* de Supabase, así que la
+aserción pasaba en CI y fallaba en producción. `scripts/sql/test_prelude.sql`
+ahora las replica, y `append_only_smoke.sql` comprueba los privilegios además de
+los triggers — se verificó quitando la 0053 a propósito y confirmando que el
+smoke falla. **Cualquier tabla nueva en `public` debe revocar explícitamente lo
+que no quiera conceder.**
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle
