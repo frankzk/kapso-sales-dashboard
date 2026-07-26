@@ -255,6 +255,9 @@ export function ShipmentsBoard({
   // "En ruta"/"Entregado": distinguir guías reprogramadas con Aliclik vs Fénix.
   const [reprogFilter, setReprogFilter] = useState<"all" | ReprogramCourier>("all");
   const [exportingFenix, setExportingFenix] = useState(false);
+  const [repairingAddresses, setRepairingAddresses] = useState(false);
+  const [repairSummary, setRepairSummary] = useState<string | null>(null);
+  const [repairError, setRepairError] = useState<string | null>(null);
   const [fenixExportError, setFenixExportError] = useState<string | null>(null);
   const [directGuideOpen, setDirectGuideOpen] = useState(false);
   const [directGuideCreatedId, setDirectGuideCreatedId] = useState<string | null>(null);
@@ -449,6 +452,66 @@ export function ShipmentsBoard({
     }, 6000);
   }
 
+  /** Repasa toda la cola (Pendiente y En ruta) recuperando de Shopify las
+   *  direcciones que quedaron guardadas sin calle. Va por tandas con cursor,
+   *  así una cola grande no depende de que una sola petición aguante. */
+  async function repairQueueAddresses() {
+    if (repairingAddresses) return;
+    setRepairingAddresses(true);
+    setRepairSummary(null);
+    setRepairError(null);
+    try {
+      let cursor: string | null = null;
+      let repaired = 0;
+      let withoutAddress = 0;
+      let failed = 0;
+      let reviewed = 0;
+      for (;;) {
+        const response: Response = await fetch("/api/maintenance/repair-addresses", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cursor }),
+        });
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(payload?.error || "No se pudo reparar las direcciones.");
+        }
+        const pass = (await response.json()) as {
+          revisados: number;
+          reparados: number;
+          sinDireccionEnShopify: number;
+          fallidos: number;
+          restantes: number;
+          cursor: string | null;
+        };
+        reviewed += pass.revisados;
+        repaired += pass.reparados;
+        withoutAddress += pass.sinDireccionEnShopify;
+        failed += pass.fallidos;
+        setRepairSummary(
+          `Revisados ${reviewed} · reparados ${repaired} · quedan ${pass.restantes}…`,
+        );
+        if (!pass.restantes || !pass.cursor) break;
+        cursor = pass.cursor;
+      }
+      const detail = [
+        `${repaired} reparados de ${reviewed} revisados`,
+        withoutAddress ? `${withoutAddress} sin dirección en Shopify` : null,
+        failed ? `${failed} fallaron, puedes reintentar` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      setRepairSummary(detail);
+      if (repaired) router.refresh();
+    } catch (error) {
+      setRepairError(
+        error instanceof Error ? error.message : "No se pudo reparar las direcciones.",
+      );
+    } finally {
+      setRepairingAddresses(false);
+    }
+  }
+
   async function downloadFenixProgrammingWorkbook() {
     if (!dateFilter || !fenixRowsForExport.length || exportingFenix) return;
     setExportingFenix(true);
@@ -528,8 +591,24 @@ export function ShipmentsBoard({
           >
             Stock Fenix
           </a>
+          <button
+            onClick={repairQueueAddresses}
+            disabled={repairingAddresses}
+            title="Recupera de Shopify las direcciones que faltan en Pendiente y En ruta"
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          >
+            {repairingAddresses ? "Reparando direcciones…" : "Reparar direcciones"}
+          </button>
         </div>
       </div>
+
+      {(repairSummary || repairError) && (
+        <p
+          className={`text-xs ${repairError ? "text-rose-600" : "text-slate-500"}`}
+        >
+          {repairError ?? repairSummary}
+        </p>
+      )}
 
       {reprogram && <ReprogramStrip stats={reprogram} stores={stores} />}
 

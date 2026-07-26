@@ -1,8 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getAccessibleStores, getCurrentUser, chunk } from "@/lib/access";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
-import { getStoreCreds } from "@/lib/ingest";
-import { fetchOrderById } from "@/lib/shopify";
+import {
+  repairOrderAddresses,
+  isShopifyOrderId,
+  type AddressRepairTarget,
+} from "@/lib/address-repair";
 import { hasDeliverableAddress, shopifyShippingAddress } from "@/lib/shopify-address";
 import {
   buildFenixProgrammingRows,
@@ -19,10 +22,9 @@ export const maxDuration = 60;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_SHIPMENTS = 5_000;
 // Tope de pedidos que el export re-consulta en vivo a Shopify para recuperar
-// una dirección faltante, y cuántos van en paralelo. Un despacho diario son
-// decenas de guías, así que cubre el caso real sin arriesgar el maxDuration.
+// una dirección faltante. Un despacho diario son decenas de guías, así que
+// cubre el caso real sin arriesgar el maxDuration.
 const MAX_ADDRESS_REPAIRS = 150;
-const ADDRESS_REPAIR_CONCURRENCY = 8;
 
 type ExportBody = {
   date?: unknown;
@@ -104,7 +106,7 @@ async function repairMissingAddresses(
   ordersById: Map<string, FenixProgrammingOrder>,
   addressFallbackByOrderId: Map<string, FenixProgrammingAddressFallback>,
 ): Promise<void> {
-  const pending: { orderId: string; storeId: string; shopifyOrderId: string }[] = [];
+  const pending: AddressRepairTarget[] = [];
   const seen = new Set<string>();
   for (const shipment of shipments) {
     if (shipment.delivery_address?.trim() || !shipment.order_id || seen.has(shipment.order_id)) continue;
@@ -113,47 +115,17 @@ async function repairMissingAddresses(
     if (hasDeliverableAddress(shopifyShippingAddress(order.raw))) continue;
     if (addressFallbackByOrderId.get(shipment.order_id)?.address1?.trim()) continue;
     const shopifyOrderId = (order as { shopify_order_id?: string | null }).shopify_order_id;
-    // Las ventas manuales ("manual-…"/"draft-…") no existen en Shopify.
-    if (!shopifyOrderId || !/^\d+$/.test(shopifyOrderId)) continue;
+    if (!isShopifyOrderId(shopifyOrderId)) continue;
     seen.add(shipment.order_id);
     pending.push({ orderId: shipment.order_id, storeId: shipment.store_id, shopifyOrderId });
     if (pending.length >= MAX_ADDRESS_REPAIRS) break;
   }
   if (!pending.length) return;
 
-  const admin = createAdminSupabase();
-  const credsByStore = new Map<string, Awaited<ReturnType<typeof getStoreCreds>>>();
-  for (const storeId of new Set(pending.map((item) => item.storeId))) {
-    try {
-      credsByStore.set(storeId, await getStoreCreds(storeId, admin));
-    } catch {
-      credsByStore.set(storeId, null);
-    }
-  }
-
-  for (const batch of chunk(pending, ADDRESS_REPAIR_CONCURRENCY)) {
-    await Promise.all(
-      batch.map(async ({ orderId, storeId, shopifyOrderId }) => {
-        const creds = credsByStore.get(storeId);
-        if (!creds?.shopify_token) return;
-        try {
-          const live = await fetchOrderById({
-            domain: creds.shopify_domain,
-            token: creds.shopify_token,
-            storeId,
-            orderGid: `gid://shopify/Order/${shopifyOrderId}`,
-          });
-          if (!hasDeliverableAddress(shopifyShippingAddress(live?.raw))) return;
-          const order = ordersById.get(orderId);
-          if (order) ordersById.set(orderId, { ...order, raw: live!.raw });
-          // Persistir la reparación: el panel, el tablero y los próximos
-          // exports ya no necesitan volver a consultarlo.
-          await admin.from("orders").update({ raw: live!.raw }).eq("id", orderId);
-        } catch {
-          // Tienda sin permiso o API caída: la fila sale sin dirección, como antes.
-        }
-      }),
-    );
+  const { rawByOrderId } = await repairOrderAddresses(pending, createAdminSupabase());
+  for (const [orderId, raw] of rawByOrderId) {
+    const order = ordersById.get(orderId);
+    if (order) ordersById.set(orderId, { ...order, raw });
   }
 }
 
