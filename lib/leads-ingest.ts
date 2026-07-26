@@ -18,7 +18,7 @@ import {
 import { env } from "@/lib/env";
 import { analyzeYapeVoucher } from "@/lib/vision";
 import type { StoreCreds } from "@/lib/ingest";
-import { deriveAutoState, nextLeadState } from "@/lib/leads";
+import { deriveAutoState, nextLeadState, statusDef } from "@/lib/leads";
 import { tzParts } from "@/lib/metrics";
 import { normalizePhone } from "@/lib/phone";
 import {
@@ -1834,13 +1834,22 @@ export async function applyHandoff(
   }
 
   const auto = deriveAutoState({ handoffReason: info.reason ?? undefined, handoffContext: info.context });
+  // Un handoff NO debe borrar la disposición que una asesora puso a mano. El lead
+  // sube a "Atender ahora" por needs_attention CONSERVANDO su estado; si no, un
+  // "Volver a llamar" se degradaría a "casi_cierra" y un "Ya compró en otro lado"
+  // (o "Lista negra") se resucitaría como lead caliente. Importa sobre todo con
+  // handoffs de alto volumen (el watchdog de "clientes esperando respuesta"),
+  // donde cualquier cliente que escribe sin que el bot conteste genera un handoff.
+  // EXCEPCIÓN: un handoff de pago/logística (yape_por_verificar) sí manda — es la
+  // vía por la que un voucher llega a la pestaña Yape/Shalom.
+  const advisorOwns = existing?.status ? statusDef(existing.status)?.source === "manual" : false;
+  const keepAdvisorStatus = advisorOwns && auto.status !== "yape_por_verificar";
   const row: any = {
     store_id: storeId,
     phone: info.phone,
     kapso_conversation_id: info.conversationId,
     ...handoffFields,
-    status: auto.status,
-    category: auto.category,
+    ...(keepAdvisorStatus ? {} : { status: auto.status, category: auto.category }),
     needs_attention: auto.needsAttention,
     last_interaction_at: new Date().toISOString(),
   };
@@ -1859,7 +1868,7 @@ export async function applyHandoff(
       lead_id: lead.id,
       store_id: storeId,
       kind: "system",
-      new_status: auto.status,
+      new_status: keepAdvisorStatus ? existing!.status : auto.status,
       note: info.context,
     });
   }
