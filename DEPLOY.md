@@ -332,6 +332,48 @@ saca. Los estados de "sí hablé" (contactado/otros productos) y los cierres
   marcador rojo activo (ola, respuesta nueva, seguimiento vencido) no se
   archiva en silencio — el reloj se reanuda cuando la asesora lo gestiona.
 
+## 5h. Master de Pedidos
+
+Sección nueva (`/dashboard/pedidos`): la vista central de control de la
+operación logística de las dos tiendas. **Consolida** lo que ya producen Repro
+Provincia, los reportes de couriers y Shopify — no los reemplaza. Cada pedido
+tiene UN estado general (`pendiente` / `en_proceso` / `entregado` / `anulado` /
+`devuelto`) y un estado operativo más específico, además del historial completo
+de couriers, intentos y comentarios.
+
+- **Needs migration 0045** (`order_master`, `order_events`) y **0046**
+  (`peru_districts`). Antes de correrlas la sección carga vacía (el listado lee
+  `order_master`); no rompe nada más.
+- **`order_events` es append-only**: `service_role` solo tiene SELECT + INSERT y
+  un trigger rechaza UPDATE/DELETE. La trazabilidad no se puede reescribir.
+  `scripts/verify-db.sh` lo comprueba en cada corrida de CI.
+- **El universo de pedidos se amplía.** Hasta ahora la ingesta solo guardaba los
+  pedidos con `tag:kapso` (los del bot). El Master necesita todos, así que:
+  - el webhook ya no descarta los pedidos sin el tag;
+  - el cron hace una segunda pasada de reconciliación sin filtro, con su propio
+    cursor `sync_state.source = 'shopify_all'`.
+
+  **Las métricas no se mueven**: `recompute_daily_rollups` y
+  `lib/access.ts:getOrders` siguen filtrando por `tag:kapso`, y los rollups y el
+  vínculo con el lead solo se disparan para pedidos del bot. Tras el deploy, el
+  histórico no-kapso entra solo: la primera corrida del cron arranca sin cursor
+  en `shopify_all` y va paginando hacia atrás.
+- **El Master se rellena solo.** `runStoreSync` termina con un barrido de
+  reconciliación (`reconcileOrderMaster`) que crea o refresca las filas que
+  falten, así que no hace falta ningún backfill manual. Las acciones de Repro
+  Provincia y la importación de reportes recalculan al instante los pedidos que
+  tocan; el barrido es la red de seguridad.
+- **Provincia**: Shopify Perú solo entrega distrito (`city`) y departamento
+  (`province`), no el nivel intermedio. `0046` crea `peru_districts` y la siembra
+  con los pares distrito→provincia que los Excel de Aliclik ya dejaron en
+  `shipments`. Para cubrir los distritos a los que aún no se despachó, cargar el
+  ubigeo del INEI en esa tabla; mientras esté vacía, el filtro de provincia solo
+  muestra las provincias conocidas.
+- **Permisos**: `viewer` es solo lectura en el Master (consulta, filtra, abre el
+  detalle y el historial, pero no modifica). Cambiar un pedido ya cerrado
+  (entregado/anulado/devuelto) exige rol admin y un motivo obligatorio, que queda
+  en el historial.
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle

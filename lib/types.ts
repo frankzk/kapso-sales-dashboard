@@ -339,6 +339,71 @@ export interface FenixStockRowDb {
   created_at?: string;
 }
 
+// ── Master de Pedidos ───────────────────────────────────────────────────────
+
+/** Una fila del Master: el read-model materializado en `order_master` (0045). */
+export interface OrderMasterRow {
+  id: string;
+  store_id: string;
+  order_id: string;
+  order_name: string | null;
+  shopify_order_id: string;
+  order_created_at: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  region: string | null;
+  province: string | null;
+  district: string | null;
+  shipping_mode: string | null; // cod | agency
+  order_total: number | null;
+  general_status: string;
+  operational_status: string;
+  status_since: string | null;
+  status_source: string | null;
+  status_locked: boolean;
+  current_courier: string | null;
+  last_courier: string | null;
+  courier_count: number;
+  attempt_count: number;
+  guide_code: string | null;
+  dispatched_at: string | null;
+  delivered_at: string | null;
+  delivered_courier: string | null;
+  returned_at: string | null;
+  last_movement_at: string | null;
+  comment_count: number;
+  logistics_cost: number | null;
+  recomputed_at?: string;
+  updated_at?: string;
+}
+
+/** Un movimiento de la línea de tiempo (`order_events`, append-only). */
+export interface OrderEventRow {
+  id: string;
+  store_id: string;
+  order_id: string;
+  kind: string;
+  occurred_at: string;
+  actor: string | null;
+  source: string;
+  courier: string | null;
+  guide_code: string | null;
+  previous_status: string | null;
+  new_status: string | null;
+  previous_operational: string | null;
+  new_operational: string | null;
+  attempt_number: number | null;
+  reason: string | null;
+  note: string | null;
+  comment_type: string | null;
+  shipment_id: string | null;
+  batch_id: string | null;
+  payload?: Record<string, unknown>;
+  created_at?: string;
+  /** Nombre resuelto de quien lo registró (solo UI). */
+  actor_name?: string | null;
+}
+
 export interface ImportBatchRow {
   id: string;
   store_id: string;

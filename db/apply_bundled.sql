@@ -1721,3 +1721,162 @@ create index if not exists shipments_created_via_idx
 -- ── 0044_lead_first_inbound_text ─────────────────────────────────────────────
 -- Primer mensaje del cliente, como contexto de apertura para la asesora.
 alter table leads add column if not exists first_inbound_text text;
+
+-- ── 0045_order_master ────────────────────────────────────────────────────────
+-- Master de Pedidos: order_master (read-model materializado, una fila por
+-- pedido) + order_events (línea de tiempo y auditoría, append-only). Las
+-- gestiones por courier siguen en shipments/shipment_calls; no se duplican.
+create table if not exists order_master (
+  id                 uuid primary key default gen_random_uuid(),
+  store_id           uuid not null references stores(id) on delete cascade,
+  order_id           uuid not null references orders(id) on delete cascade,
+  order_name         text,
+  shopify_order_id   text not null,
+  order_created_at   timestamptz,
+  customer_name      text,
+  customer_phone     text,
+  region             text,
+  province           text,
+  district           text,
+  shipping_mode      text,
+  order_total        numeric(14, 2),
+  general_status     text not null default 'pendiente'
+                       check (general_status in
+                         ('pendiente', 'en_proceso', 'entregado', 'anulado', 'devuelto')),
+  operational_status text not null default 'sin_confirmar',
+  status_since       timestamptz,
+  status_source      text,
+  status_locked      boolean not null default false,
+  current_courier    text,
+  last_courier       text,
+  courier_count      integer not null default 0,
+  attempt_count      integer not null default 0,
+  guide_code         text,
+  dispatched_at      timestamptz,
+  delivered_at       timestamptz,
+  delivered_courier  text,
+  returned_at        timestamptz,
+  last_movement_at   timestamptz,
+  comment_count      integer not null default 0,
+  logistics_cost     numeric(12, 2),
+  recomputed_at      timestamptz not null default now(),
+  updated_at         timestamptz not null default now(),
+  unique (order_id)
+);
+create index if not exists order_master_store_general_idx  on order_master(store_id, general_status);
+create index if not exists order_master_store_oper_idx     on order_master(store_id, operational_status);
+create index if not exists order_master_store_created_idx  on order_master(store_id, order_created_at desc);
+create index if not exists order_master_store_movement_idx on order_master(store_id, last_movement_at desc);
+create index if not exists order_master_store_district_idx on order_master(store_id, district);
+create index if not exists order_master_store_province_idx on order_master(store_id, province);
+create index if not exists order_master_store_region_idx   on order_master(store_id, region);
+create index if not exists order_master_store_courier_idx  on order_master(store_id, current_courier);
+create index if not exists order_master_phone_idx          on order_master(store_id, customer_phone);
+create index if not exists order_master_guide_idx          on order_master(guide_code) where guide_code is not null;
+create index if not exists order_master_multi_courier_idx  on order_master(store_id) where courier_count > 1;
+create index if not exists order_master_multi_attempt_idx  on order_master(store_id) where attempt_count > 1;
+create index if not exists order_master_recomputed_idx     on order_master(recomputed_at);
+alter table order_master enable row level security;
+drop policy if exists order_master_select on order_master;
+create policy order_master_select on order_master for select to authenticated
+  using (store_id in (select auth_store_ids()));
+grant select on order_master to authenticated;
+grant all privileges on order_master to service_role;
+drop trigger if exists order_master_touch on order_master;
+create trigger order_master_touch before update on order_master
+  for each row execute function public.touch_updated_at();
+
+create table if not exists order_events (
+  id                   uuid primary key default gen_random_uuid(),
+  store_id             uuid not null references stores(id) on delete cascade,
+  order_id             uuid not null references orders(id) on delete cascade,
+  kind                 text not null,
+  occurred_at          timestamptz not null default now(),
+  actor                uuid references auth.users(id) on delete set null,
+  source               text not null default 'manual',
+  courier              text,
+  guide_code           text,
+  previous_status      text,
+  new_status           text,
+  previous_operational text,
+  new_operational      text,
+  attempt_number       integer,
+  reason               text,
+  note                 text,
+  comment_type         text,
+  shipment_id          uuid references shipments(id) on delete set null,
+  batch_id             uuid,
+  payload              jsonb not null default '{}'::jsonb,
+  created_at           timestamptz not null default now()
+);
+create index if not exists order_events_order_idx    on order_events(order_id, occurred_at desc);
+create index if not exists order_events_store_idx    on order_events(store_id, occurred_at desc);
+create index if not exists order_events_kind_idx     on order_events(store_id, kind);
+create index if not exists order_events_shipment_idx on order_events(shipment_id) where shipment_id is not null;
+alter table order_events enable row level security;
+drop policy if exists order_events_select on order_events;
+create policy order_events_select on order_events for select to authenticated
+  using (store_id in (select auth_store_ids()));
+grant select on order_events to authenticated;
+grant select, insert on order_events to service_role;
+create or replace function public.reject_mutation()
+returns trigger
+language plpgsql
+as $$
+begin
+  raise exception 'La tabla % es append-only: no admite % (auditoría inmutable).',
+    tg_table_name, tg_op;
+end;
+$$;
+drop trigger if exists order_events_append_only on order_events;
+create trigger order_events_append_only before update or delete on order_events
+  for each row execute function public.reject_mutation();
+
+-- ── 0046_geo_peru ────────────────────────────────────────────────────────────
+-- Distrito → provincia → departamento. Shopify Perú solo entrega distrito
+-- (city) y departamento (province); la provincia intermedia se resuelve aquí.
+create or replace function public.geo_key(raw text)
+returns text
+language sql
+immutable
+as $$
+  select nullif(
+    btrim(
+      regexp_replace(
+        lower(translate(coalesce(raw, ''),
+                        'áéíóúüñÁÉÍÓÚÜÑàèìòùÀÈÌÒÙ',
+                        'aeiouunAEIOUUNaeiouAEIOU')),
+        '\s+', ' ', 'g'
+      )
+    ),
+    ''
+  );
+$$;
+create table if not exists peru_districts (
+  district_key text primary key,
+  district     text not null,
+  province     text not null,
+  department   text,
+  source       text not null default 'shipments',
+  updated_at   timestamptz not null default now()
+);
+create index if not exists peru_districts_province_idx   on peru_districts(province);
+create index if not exists peru_districts_department_idx on peru_districts(department);
+alter table peru_districts enable row level security;
+drop policy if exists peru_districts_select on peru_districts;
+create policy peru_districts_select on peru_districts for select to authenticated
+  using (true);
+grant select on peru_districts to authenticated;
+grant all privileges on peru_districts to service_role;
+insert into peru_districts (district_key, district, province, department, source)
+select
+  public.geo_key(s.district)                as district_key,
+  mode() within group (order by s.district) as district,
+  mode() within group (order by s.province) as province,
+  mode() within group (order by s.region)   as department,
+  'shipments'
+from shipments s
+where public.geo_key(s.district) is not null
+  and public.geo_key(s.province) is not null
+group by public.geo_key(s.district)
+on conflict (district_key) do nothing;

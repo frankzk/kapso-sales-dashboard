@@ -5,15 +5,21 @@ import { parseClientPerformanceMetric } from "@/lib/performance-metrics";
 describe("panel prefetch", () => {
   it("prioritizes the likely next operational panels without refetching the current one", () => {
     expect(panelPrefetchOrder("/dashboard/leads?store=secret", false)).toEqual([
+      "/dashboard/pedidos",
       "/dashboard/envios",
       "/dashboard/productividad",
-      "/dashboard",
     ]);
-    expect(panelPrefetchOrder("/dashboard/envios", true)).toEqual(["/dashboard/leads"]);
+    // Una vendedora no tiene Consolidado ni Productividad global: solo se
+    // precalientan los paneles que sí puede abrir.
+    expect(panelPrefetchOrder("/dashboard/envios", true)).toEqual([
+      "/dashboard/pedidos",
+      "/dashboard/leads",
+    ]);
   });
 
   it("removes query strings and dynamic ids from reported routes", () => {
     expect(sanitizeDashboardPath("/dashboard/leads?store=private-id")).toBe("/dashboard/leads");
+    expect(sanitizeDashboardPath("/dashboard/pedidos?view=devuelto")).toBe("/dashboard/pedidos");
     expect(sanitizeDashboardPath("/dashboard/4c6522f9-c775/settings")).toBe("/dashboard/other");
   });
 });

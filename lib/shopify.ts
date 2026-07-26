@@ -484,6 +484,22 @@ export function buildKapsoOrdersSearchQuery(
   return updatedAtCursorIso ? `${base} updated_at:>=${updatedAtCursorIso}` : base;
 }
 
+/**
+ * Búsqueda de reconciliación SIN filtro de tag: el Master de Pedidos debe
+ * mostrar todos los pedidos de la tienda, no solo los que generó el bot.
+ *
+ * Convive con `buildKapsoOrdersSearchQuery` a propósito: los KPIs (ventas,
+ * embudo, rollups) siguen contando únicamente `tag:kapso`, tanto en
+ * `recompute_daily_rollups` como en `lib/access.ts:getOrders`, así que traer el
+ * resto de pedidos no mueve ninguna métrica histórica. Cada pasada lleva su
+ * propio cursor en `sync_state` (`shopify` vs `shopify_all`).
+ */
+export function buildAllOrdersSearchQuery(
+  updatedAtCursorIso?: string | null,
+): string {
+  return updatedAtCursorIso ? `updated_at:>=${updatedAtCursorIso}` : "";
+}
+
 export function buildOrdersQuery(withPhone: boolean): string {
   // Order/address phone is "protected customer data" — included only on the
   // first attempt; fetchOrdersPage falls back to the no-phone query if the
