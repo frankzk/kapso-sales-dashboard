@@ -990,7 +990,7 @@ function OrderDrawer({
                           {g.aliclik_attempts ?? g.reroute_attempts} intento(s)
                         </span>
                       )}
-                      {g.id === detail.guides.at(-1)?.id && (
+                      {g.guide_code === detail.row.guide_code && (
                         <span className="ml-auto text-xs text-slate-400">actual</span>
                       )}
                     </li>
