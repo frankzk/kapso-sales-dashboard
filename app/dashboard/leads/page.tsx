@@ -1,6 +1,12 @@
 import { Suspense } from "react";
 import { getAccessibleStores, getAdNames, getCurrentUser, getWaNumbers } from "@/lib/access";
-import { LEAD_VIEWS, getLeadCounts, getStoreLeads, type LeadView } from "@/lib/leads-access";
+import {
+  LEAD_VIEWS,
+  getLeadCounts,
+  getStoreLeads,
+  leadsViewLimit,
+  type LeadView,
+} from "@/lib/leads-access";
 import {
   isLeadGestion,
   isLeadSegment,
@@ -89,7 +95,7 @@ async function LeadsContent({
   // "Por llamar" se filtra/cuenta en cliente (jerarquía de facetas), así que la
   // cola se pagina completa (`null`) para que los conteos y drill-downs usen el
   // mismo universo que el gráfico; las demás vistas mantienen el tope estándar.
-  const leadsPromise = getStoreLeads(storeId, view, view === "por_llamar" ? null : 200);
+  const leadsPromise = getStoreLeads(storeId, view, leadsViewLimit(view));
   const userPromise = getCurrentUser();
   // These lookups depend only on the list, so pipeline them as soon as that
   // promise settles instead of waiting for counts and user first.
@@ -122,6 +128,7 @@ async function LeadsContent({
       initialInteractionDate={initialInteractionDate}
       initialOpenId={typeof sp.open === "string" ? sp.open : null}
       currentUserId={user?.id ?? ""}
+      leadsComplete={leadsViewLimit(view) === null}
     />
   );
 }
