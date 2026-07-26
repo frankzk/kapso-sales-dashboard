@@ -133,6 +133,16 @@ describe("applyHandoff: preserva la disposición manual de la asesora", () => {
     expect(row.category).toBe("hot");
   });
 
+  // El notify-team de Aurela postea también en el flujo de voucher, que no manda
+  // `reason`. Sin motivo no hay señal de clasificación, así que un POST espurio no
+  // debe degradar a "nuevo" un lead que ya venía trabajado.
+  it("un handoff SIN motivo no reclasifica un lead existente", async () => {
+    const { row } = await run({ status: "casi_cierra", has_order: false }, "");
+    expect(row).not.toHaveProperty("status");
+    expect(row).not.toHaveProperty("category");
+    expect(row.needs_attention).toBe(false); // sin motivo tampoco sube a la cola
+  });
+
   it("un lead que no existe se crea con el estado derivado", async () => {
     const { row } = await run(null, "esperando respuesta");
     expect(row.status).toBe("casi_cierra");
