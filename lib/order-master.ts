@@ -20,6 +20,7 @@ import { chunk } from "@/lib/access";
 import { normalizeDistrict } from "@/lib/shipments";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
+import { computeLogisticsCost, costDay, type CostTariff } from "@/lib/costs";
 import {
   isGeneralStatus,
   isOperationalStatus,
@@ -384,6 +385,39 @@ async function fetchPaymentSignals(
   return out;
 }
 
+/**
+ * Tarifas logísticas de las organizaciones implicadas (§17). Se congelan en la
+ * fila del Master durante el recálculo en vez de resolverse en cada render: son
+ * datos con vigencia, y recalcularlos al leer haría que un cambio de tarifa
+ * moviera cifras históricas.
+ */
+async function fetchTariffs(
+  admin: SupabaseClient,
+  storeIds: string[],
+): Promise<{ tariffs: CostTariff[]; orgByStore: Map<string, string> }> {
+  const orgByStore = new Map<string, string>();
+  const tariffs: CostTariff[] = [];
+  if (!storeIds.length) return { tariffs, orgByStore };
+
+  for (const batch of chunk(storeIds, ID_BATCH)) {
+    const { data } = await admin.from("stores").select("id,org_id").in("id", batch);
+    for (const row of (data ?? []) as { id: string; org_id: string }[]) {
+      orgByStore.set(row.id, row.org_id);
+    }
+  }
+  const orgIds = [...new Set(orgByStore.values())];
+  if (!orgIds.length) return { tariffs, orgByStore };
+
+  const { data, error } = await admin
+    .from("cost_tariffs")
+    .select("id,store_id,courier,region,province,district,concept,amount,effective_from,effective_to")
+    .in("org_id", orgIds);
+  // La fase 4 puede no estar aplicada todavía: sin tarifas, el costo queda vacío.
+  if (error) return { tariffs, orgByStore };
+  tariffs.push(...((data ?? []) as unknown as CostTariff[]));
+  return { tariffs, orgByStore };
+}
+
 export interface RecomputeResult {
   requested: number;
   written: number;
@@ -410,6 +444,7 @@ export async function recomputeOrderMaster(
   const events = await fetchEvents(admin, ids);
   const drafts = await fetchDraftAddresses(admin, orders);
   const signals = await fetchPaymentSignals(admin, ids);
+  const { tariffs } = await fetchTariffs(admin, [...new Set(orders.map((o) => o.store_id))]);
 
   const shipmentsByOrder = groupBy(shipments, (s) => s.order_id);
   const callsByShipment = groupBy(calls, (c) => c.shipment_id);
@@ -506,6 +541,24 @@ export async function recomputeOrderMaster(
       delivered_courier: state.deliveredCourier,
       returned_at: state.returnedAt,
       last_movement_at: state.lastMovementAt,
+      logistics_cost: tariffs.length
+        ? computeLogisticsCost(tariffs, {
+            ctx: {
+              storeId: order.store_id,
+              courier: state.currentCourier,
+              region,
+              province,
+              district,
+            },
+            attempts: state.attemptCount,
+            generalStatus: state.general,
+            agency: Boolean(state.pickupState) || order.shipping_mode === "agency",
+            day: costDay({
+              last_movement_at: state.lastMovementAt,
+              order_created_at: order.created_at,
+            }, now),
+          }).total
+        : null,
       comment_count: orderEvents.filter((e) => e.kind === "comment").length,
       payment_state: paymentSignals
         ? paymentState(paymentSignals.payments)

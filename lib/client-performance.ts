@@ -34,7 +34,7 @@ export function sanitizeDashboardPath(value: string): string {
   }
   if (pathname === "/dashboard") return pathname;
   const section = pathname.split("/").filter(Boolean)[1];
-  if (["leads", "pedidos", "envios", "productividad", "stores", "team"].includes(section ?? "")) {
+  if (["leads", "pedidos", "envios", "productividad", "costos", "stores", "team"].includes(section ?? "")) {
     return `/dashboard/${section}`;
   }
   return "/dashboard/other";

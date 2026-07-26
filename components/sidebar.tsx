@@ -7,6 +7,7 @@ import { cn } from "@/components/ui";
 import {
   IconChat,
   IconClipboard,
+  IconMoney,
   IconGrid,
   IconHeadset,
   IconPlug,
@@ -45,6 +46,7 @@ function navItems(isVendedoraOnly: boolean): NavItem[] {
     { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
     { href: "/dashboard/productividad", label: "Productividad", icon: IconHeadset },
     { href: "/dashboard/stores", label: "Tiendas", icon: IconStore },
+    { href: "/dashboard/costos", label: "Costos", icon: IconMoney },
     { href: "/dashboard/team", label: "Equipo", icon: IconUsers },
     { href: "/dashboard/stores/new", label: "Conectar tienda", icon: IconPlug },
   ];

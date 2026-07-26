@@ -441,6 +441,36 @@ se entrega antes de cobrar, el dinero se pierde.
   Yape, el pago queda como *información incompleta* — nunca se rechaza solo, y
   cargar una imagen jamás equivale a validar el pago.
 
+## 5k. Costos
+
+Sección propia (`/dashboard/costos`), no una pestaña de Ajustes: la
+especificación anticipa que crecerá hacia algo financiero más amplio. Tres
+pestañas: **costos logísticos** (por tienda, courier, región, provincia o
+distrito; primer intento, intentos adicionales, envío por agencia, devolución y
+especiales), **costos de producto** (unitario, por tienda, proveedor y lote) y
+**costos adicionales** (empaque, materiales, preparación, comisiones).
+
+- **Needs migration 0050** (`cost_tariffs`, `product_costs`, `additional_costs`).
+  Antes de correrla la sección no carga y el Master deja el costo en blanco.
+- **Todo lleva vigencia y nada se edita en su sitio.** Registrar una tarifa
+  cierra la anterior (le pone fecha final) y abre otra desde el día indicado, de
+  modo que un cambio de precio hoy **no** reescribe lo que costaron los pedidos
+  de la semana pasada. El histórico se conserva y se ve en la tabla.
+- **La tarifa más específica gana**: distrito &gt; provincia &gt; región &gt;
+  courier &gt; tienda &gt; general. Permite una tarifa base de la organización y
+  solo las excepciones encima. Los pesos están escogidos para que un acuerdo por
+  distrito no lo supere ninguna combinación de criterios más gruesos.
+- **El costo se congela en la fila del Master** durante el recálculo, no se
+  resuelve al pintar: resolverlo en cada lectura haría que cambiar una tarifa
+  moviera cifras históricas.
+- **Un concepto sin tarifa configurada NO cuenta como cero**: se reporta como
+  faltante y el Master muestra el costo en blanco. Un costo ausente y un costo de
+  cero no son lo mismo.
+- Un pedido **anulado** en Lima no genera costo de devolución (§9: allí no hay
+  retorno físico); uno **devuelto** sí.
+- **Escritura solo para administradores** de la organización (RLS, mismo patrón
+  que `fenix_stock`), con el permiso `costs.manage`.
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle
