@@ -11,7 +11,11 @@
 //      es la tabla que relaciona guía y pedido.
 //   2. EL Nº DE PEDIDO, con el mismo emparejador que los reportes de courier
 //      (lib/shipment-match.ts), incluida su validación por teléfono.
-//   3. NADA. La línea queda en `match_status = 'review'` y la resuelve una
+//   3. EL NOMBRE DEL CLIENTE, desempatado por distrito y acotado a los días
+//      alrededor de la liquidación. Es el único identificador que trae una hoja
+//      como la de Axel Courier, y por eso existe — pero un nombre NO es un
+//      identificador: solo vincula cuando queda UN candidato.
+//   4. NADA. La línea queda en `match_status = 'review'` y la resuelve una
 //      persona. No se adivina: vincular mal una línea mueve plata de un pedido a
 //      otro y el cuadre deja de significar nada.
 
@@ -37,6 +41,10 @@ export interface IngestSettlementParams {
   fileSha256: string | null;
   note: string | null;
   userId: string | null;
+  /** Courier que emite la hoja (axel…). Nulo = motorizado propio. */
+  courier?: string | null;
+  /** Comisión de POS declarada aparte de las entregas. */
+  posFee?: number;
   lines: readonly ParsedSettlementLine[];
 }
 
@@ -81,6 +89,84 @@ async function fetchGuideLinks(
     }
   }
   return out;
+}
+
+/** Comparación de nombres tolerante: los couriers escriben "Edgard William",
+ *  "EDGARD WILLIAM" y "Edgard  William" para la misma persona. */
+function nameKey(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+/** Candidato para emparejar por nombre y distrito, del Master. */
+interface NameCandidate {
+  order_id: string;
+  store_id: string;
+  customer_name: string | null;
+  district: string | null;
+}
+
+/**
+ * Pedidos del día para emparejar por NOMBRE cuando la hoja no trae guía ni nº de
+ * pedido (el caso de Axel). Se acota al día de la liquidación con un margen de
+ * un día a cada lado: un pedido creado anoche se entrega hoy, y uno de hoy puede
+ * liquidarse mañana. Sin acotar, dos clientes homónimos de meses distintos
+ * competirían por la misma fila.
+ */
+async function fetchNameCandidates(
+  admin: SupabaseClient,
+  storeIds: string[],
+  day: string,
+): Promise<NameCandidate[]> {
+  if (!storeIds.length) return [];
+  const from = new Date(`${day}T00:00:00.000Z`);
+  from.setUTCDate(from.getUTCDate() - 3);
+  const to = new Date(`${day}T00:00:00.000Z`);
+  to.setUTCDate(to.getUTCDate() + 2);
+  const { data } = await admin
+    .from("order_master")
+    .select("order_id,store_id,customer_name,district")
+    .in("store_id", storeIds)
+    .gte("order_created_at", from.toISOString())
+    .lt("order_created_at", to.toISOString())
+    .limit(5000);
+  return (data ?? []) as unknown as NameCandidate[];
+}
+
+/**
+ * Empareja por nombre del cliente, desempatando por distrito.
+ *
+ * Un nombre NO es un identificador, así que esto es deliberadamente estricto:
+ * solo vincula cuando queda UN candidato. Dos pedidos del mismo cliente el mismo
+ * día, o dos homónimos en distritos que la hoja escribe distinto, van a revisión
+ * — que es exactamente donde tienen que ir.
+ */
+export function matchByName(
+  line: { customer_name?: string | null; district?: string | null },
+  candidates: readonly NameCandidate[],
+): string | null {
+  const want = nameKey(line.customer_name);
+  if (!want || want.length < 4) return null;
+
+  let byName = candidates.filter((c) => nameKey(c.customer_name) === want);
+  // Los couriers truncan el nombre a lo que cabe en la celda ("Ana María Cárd").
+  // Si nadie coincide exacto, se acepta que el nombre de la hoja sea prefijo del
+  // del pedido, siempre que siga siendo único.
+  if (!byName.length) {
+    byName = candidates.filter((c) => nameKey(c.customer_name).startsWith(want));
+  }
+  if (byName.length === 1) return byName[0]!.order_id;
+  if (byName.length > 1 && line.district) {
+    const wantDistrict = nameKey(line.district);
+    const byDistrict = byName.filter((c) => nameKey(c.district) === wantDistrict);
+    if (byDistrict.length === 1) return byDistrict[0]!.order_id;
+  }
+  return null;
 }
 
 async function fetchOrderCandidates(
@@ -154,6 +240,8 @@ export async function ingestSettlement(
       file_sha256: params.fileSha256,
       declared_cash: params.declaredCash,
       declared_yape: params.declaredYape,
+      courier: params.courier ?? null,
+      pos_fee: params.posFee ?? 0,
       note: params.note,
       created_by: params.userId,
     })
@@ -184,9 +272,17 @@ export async function ingestSettlement(
     ),
   ];
 
-  const [guideLinks, candidates] = await Promise.all([
+  // Los candidatos por nombre solo se traen si hacen falta: una hoja con guías
+  // no debe pagar una consulta de todos los pedidos del día.
+  const needsNameMatch = params.lines.some(
+    (l) => !l.guide_code && !l.order_name && Boolean(l.customer_name),
+  );
+  const [guideLinks, candidates, nameCandidates] = await Promise.all([
     fetchGuideLinks(admin, storeIds, guides),
     fetchOrderCandidates(admin, storeIds, names),
+    needsNameMatch
+      ? fetchNameCandidates(admin, storeIds, params.settlementDate)
+      : Promise.resolve([] as NameCandidate[]),
   ]);
 
   const rows = params.lines.map((l) => {
@@ -208,6 +304,13 @@ export async function ingestSettlement(
       }
     }
 
+    // Último recurso, para hojas como la de Axel que no traen ningún
+    // identificador: nombre del cliente desempatado por distrito. Solo vincula
+    // cuando queda un único candidato; lo demás va a revisión.
+    if (!orderId && nameCandidates.length) {
+      orderId = matchByName(l, nameCandidates);
+    }
+
     if (orderId) result.linked++;
     else result.review++;
 
@@ -218,6 +321,9 @@ export async function ingestSettlement(
       order_name: normalizeOrderName(l.order_name),
       declared_status: l.declared_status,
       declared_amount: l.declared_amount,
+      declared_fee: l.declared_fee,
+      customer_name: l.customer_name,
+      district: l.district,
       match_status: orderId ? "ok" : "review",
       raw: l.raw,
     };

@@ -354,9 +354,10 @@ function SettlementDetailPanel({
         <table className="w-full min-w-[760px] text-sm">
           <thead className="border-b border-slate-200 text-left text-xs text-slate-500">
             <tr>
-              <th className="px-3 py-2 font-medium">Guía</th>
+              <th className="px-3 py-2 font-medium">Cliente</th>
               <th className="px-3 py-2 font-medium">Pedido</th>
-              <th className="px-3 py-2 font-medium">Declaró</th>
+              <th className="px-3 py-2 font-medium">Cobró</th>
+              <th className="px-3 py-2 font-medium">Comisión</th>
               <th className="px-3 py-2 font-medium">Debía</th>
               <th className="px-3 py-2 font-medium">Diferencia</th>
               <th className="px-3 py-2 font-medium">Cuadre</th>
@@ -366,8 +367,11 @@ function SettlementDetailPanel({
           <tbody>
             {reconciled.lines.map((r) => (
               <tr key={r.line.id} className="border-b border-slate-100">
-                <td className="px-3 py-2 font-mono text-xs text-slate-700">
-                  {r.line.guide_code ?? "—"}
+                <td className="px-3 py-2 text-slate-700">
+                  {r.line.customer_name ?? r.line.guide_code ?? "—"}
+                  {r.line.district && (
+                    <span className="block text-[11px] text-slate-400">{r.line.district}</span>
+                  )}
                 </td>
                 <td className="px-3 py-2 text-slate-700">
                   {r.line.order_id
@@ -375,6 +379,11 @@ function SettlementDetailPanel({
                     : (r.line.order_name ?? "—")}
                 </td>
                 <td className="px-3 py-2 text-slate-700">{money(r.declared)}</td>
+                <td className="px-3 py-2 text-slate-500">
+                  {r.line.declared_fee === null || r.line.declared_fee === undefined
+                    ? "—"
+                    : money(r.line.declared_fee)}
+                </td>
                 <td className="px-3 py-2 text-slate-500">
                   {r.verdict === "sin_pedido" ? "—" : money(r.expected)}
                 </td>
@@ -506,13 +515,15 @@ function TotalsGrid({
   const t = reconciled.totals;
   const cells = useMemo(
     () => [
-      { label: "Declaró cobrar", value: money(t.declaredTotal) },
-      { label: "Debía traer (Master)", value: money(t.expectedTotal) },
+      { label: "Cobró (declarado)", value: money(t.declaredTotal) },
+      { label: "Debía cobrar (Master)", value: money(t.expectedTotal) },
       {
         label: "Diferencia vs. Master",
         value: money(t.difference),
         tone: t.difference < 0 ? "bad" : t.difference > 0 ? "warn" : "good",
       },
+      { label: "Comisión del courier", value: money(t.feeTotal), hint: "se la queda" },
+      { label: "Debía depositar", value: money(t.expectedDeposit), hint: "cobrado − comisión" },
       { label: "Depositó", value: money(t.depositTotal) },
       {
         label: "Diferencia del depósito",
@@ -531,7 +542,7 @@ function TotalsGrid({
   );
 
   return (
-    <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+    <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
       {cells.map((c) => (
         <div key={c.label} className="rounded-lg border border-slate-200 p-2.5">
           <p className="text-[11px] text-slate-500">{c.label}</p>

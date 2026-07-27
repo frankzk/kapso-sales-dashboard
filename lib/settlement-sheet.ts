@@ -19,6 +19,13 @@ export interface ParsedSettlementLine {
   order_name: string | null;
   declared_status: string | null;
   declared_amount: number | null;
+  /** Comisión que el courier se cobra por esta entrega, cuando la hoja la trae
+   *  (la columna GANANCIA de Axel). Se descuenta del depósito esperado. */
+  declared_fee: number | null;
+  /** Nombre y distrito del cliente. Son la ÚNICA pista de emparejamiento cuando
+   *  la hoja no trae guía ni nº de pedido; nunca un identificador. */
+  customer_name: string | null;
+  district: string | null;
   raw: Record<string, string>;
 }
 
@@ -73,6 +80,9 @@ const STATUS_KEYS = [
   "observacion",
   "observaciones",
 ];
+const FEE_KEYS = ["ganancia", "comision", "flete", "tarifa", "costo de envio"];
+const NAME_KEYS = ["nombre", "cliente final", "destinatario", "nombre del cliente"];
+const DISTRICT_KEYS = ["distrito", "distrito de entrega"];
 const RIDER_KEYS = [
   "motorizado",
   "repartidor",
@@ -132,7 +142,13 @@ function isTotalRow(raw: Record<string, string>): boolean {
     .map((v) => headerKey(String(v ?? "")))
     .filter(Boolean);
   if (!values.length) return false;
-  return values.some((v) => /^(total|totales|suma|sumatoria|total general|total recaudado)$/.test(v));
+  // "total cobrado", "recaudado" y "comision" salieron del reporte real de Axel:
+  // si se colaran, duplicarían toda la plata del día en el cuadre.
+  return values.some((v) =>
+    /^(total|totales|suma|sumatoria|total general|total recaudado|total cobrado|recaudado|comision|comisiones)$/.test(
+      v,
+    ),
+  );
 }
 
 /**
@@ -165,6 +181,9 @@ export function parseSettlementSheet(
       order_name: normalizeOrderName(order),
       declared_status: pick(map, STATUS_KEYS),
       declared_amount: parseNumber(pick(map, AMOUNT_KEYS)),
+      declared_fee: parseNumber(pick(map, FEE_KEYS)),
+      customer_name: pick(map, NAME_KEYS),
+      district: pick(map, DISTRICT_KEYS),
       raw,
     });
   }

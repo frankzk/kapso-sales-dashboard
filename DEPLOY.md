@@ -522,10 +522,32 @@ Excel/CSV**, y las dos entran por el mismo sitio.
   **en blanco, nunca en cero**: un monto inventado en una liquidación es plata
   inventada. Si la lectura falla, la carga se rechaza en vez de guardar una
   liquidación vacía dada por buena.
-- **La hoja se lee por alias de cabecera** (`lib/settlement-sheet.ts`), no por
-  courier: cada coordinador arma su Excel a su manera. "N° GUÍA", "Nro. Guia" y
-  "guía" son la misma columna. Añadir una variante es añadir una cadena a la
-  lista. Las filas de TOTAL se descartan para no duplicar la plata del día.
+- **Dos niveles de lectura de hoja.** Adaptadores con nombre en
+  `lib/settlements/` para los formatos conocidos, y un lector genérico por alias
+  de cabecera (`lib/settlement-sheet.ts`) para todo lo demás — así se puede
+  cargar la hoja de un coordinador nuevo sin escribir código. El formato se
+  detecta por contenido; si nadie lo reconoce, se usa el genérico.
+- **Axel Courier** (`lib/settlements/axel.ts`), Lima Metropolitana. Su reporte
+  diario tiene cuatro rarezas que el adaptador conoce: su columna `CLIENTE` es
+  la **tienda** (AURELA), no el cliente; **no trae guía ni nº de pedido**, así
+  que se empareja por nombre y distrito; su `GANANCIA` es la **comisión que Axel
+  se cobra** por entrega (S/ 10 en Lima, S/ 13 en Puente Piedra, S/ 18 en
+  Cajamarquilla), y se la cobran incluso en algunas entregas fallidas
+  (`CAIDA COBRO`, `RECHAZO`); y la hoja trae **varios bloques acumulativos** del
+  mismo día, cada uno con su `TOTAL COBRADO`. Las filas de total, `RECAUDADO` y
+  `COMISION` se descartan — colarlas duplicaría la plata del día — pero la
+  comisión de POS sí se captura, porque también se descuenta del depósito.
+- **El depósito esperado es lo cobrado MENOS la comisión.** Axel cobra
+  S/ 2,219.73, se queda S/ 146.00 y deposita S/ 2,073.73. Sin restar la comisión
+  el cuadre marcaría un faltante todos los días por el importe exacto de lo que
+  legítimamente se quedan. Las comisiones de líneas sin vincular cuentan igual:
+  el courier se las queda, y dejarlas fuera haría que el cuadre del depósito
+  cambiara al vincular una línea.
+- **Emparejar por nombre es el último recurso y es estricto**: solo vincula
+  cuando queda UN candidato, acotado a los días alrededor de la liquidación, y
+  desempatando por distrito. Tolera que el courier trunque el nombre a lo que
+  cabe en la celda ("Ana María Cárd"). Dos homónimos sin distrito que los separe
+  van a revisión — un nombre no es un identificador.
 - **Lo declarado nunca pisa lo real.** El estado de la guía y el monto del
   pedido siguen viniendo del Master; el cuadre solo COMPARA y nombra la
   diferencia. Que la hoja diga "entregado" no marca el pedido como entregado.

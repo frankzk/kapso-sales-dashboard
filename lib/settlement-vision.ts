@@ -65,6 +65,8 @@ function buildPrompt(): string {
     "    {\n" +
     '      "guide": string|null,    // código de guía o seguimiento, tal cual\n' +
     '      "order": string|null,    // nº de pedido (p. ej. KP124158) si aparece\n' +
+    '      "customer": string|null,  // nombre del cliente si aparece\n' +
+    '      "district": string|null,  // distrito de entrega si aparece\n' +
     '      "status": string|null,   // lo escrito: "entregado", "no entregó", "rechazado"…\n' +
     '      "amount": number|null    // soles cobrados; null si la celda está vacía\n' +
     "    }\n" +
@@ -152,20 +154,29 @@ export function parseSettlementVision(text: string): ParsedSettlementSheet | nul
     const order = str(l.order);
     const status = str(l.status);
     const amount = num(l.amount);
+    const customer = str(l.customer);
     // Una fila que no dice absolutamente nada no aporta: no se guarda para que
     // no ensucie la cola de revisión con celdas en blanco de la foto.
-    if (!guide && !order && !status && amount === null) continue;
+    if (!guide && !order && !status && !customer && amount === null) continue;
     lines.push({
       guide_code: guide,
       // El nº de pedido se normaliza en la ingesta, junto con el de las hojas.
       order_name: order,
       declared_status: status,
       declared_amount: amount,
+      // Un cuaderno manuscrito no declara la comisión del courier; el nombre y
+      // el distrito sí aparecen, y son la pista de emparejamiento cuando la hoja
+      // no trae guía.
+      declared_fee: null,
+      customer_name: str(l.customer),
+      district: str(l.district),
       // Se conserva lo que dijo el modelo para poder auditar la transcripción
       // contra la foto cuando alguien discuta un monto.
       raw: {
         guia: guide ?? "",
         pedido: order ?? "",
+        nombre: str(l.customer) ?? "",
+        distrito: str(l.district) ?? "",
         estado: status ?? "",
         monto: amount === null ? "" : String(amount),
         origen: "foto",

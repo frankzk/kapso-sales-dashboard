@@ -4,7 +4,8 @@ import { createAdminSupabase } from "@/lib/db";
 import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { readUpload, UploadError } from "@/lib/courier-upload";
-import { parseSettlementSheet, type ParsedSettlementLine } from "@/lib/settlement-sheet";
+import type { ParsedSettlementLine } from "@/lib/settlement-sheet";
+import { parseSettlementFile } from "@/lib/settlements/registry";
 import { MAX_PHOTO_BYTES, readSettlementPhotoFromEnv } from "@/lib/settlement-vision";
 import { ingestSettlement } from "@/lib/settlement-ingest";
 import { storeVisionCreds } from "@/lib/store-settings";
@@ -88,6 +89,9 @@ export async function POST(req: NextRequest) {
   let source: "foto" | "hoja";
   let sha256: string;
   let filePath: string | null = null;
+  let format = "foto";
+  let posFee = 0;
+  let storeHint: string | null = null;
 
   try {
     if (isImage(file)) {
@@ -130,10 +134,15 @@ export async function POST(req: NextRequest) {
       source = "hoja";
       const upload = await readUpload(file);
       sha256 = upload.sha256;
-      const parsed = parseSettlementSheet(upload.rows);
+      // El formato se detecta por contenido (Axel y los que vengan), y si nadie
+      // lo reconoce se usa el lector genérico por alias de cabecera.
+      const parsed = parseSettlementFile(upload.rows, String(form.get("format") ?? "") || null);
       lines = parsed.lines;
       riderNameRaw = parsed.riderName;
       readDate = parsed.settlementDate;
+      format = parsed.format;
+      posFee = parsed.posFee;
+      storeHint = parsed.storeHint;
 
       try {
         await ensureBucket(admin);
@@ -179,6 +188,8 @@ export async function POST(req: NextRequest) {
     fileSha256: sha256,
     note,
     userId: user.id,
+    courier: format === "generico" || format === "foto" ? null : format,
+    posFee,
     lines,
   });
 
@@ -189,5 +200,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return NextResponse.json({ ok: true, source, ...result });
+  // La hoja de Axel dice a qué tienda pertenece cada fila ("CLIENTE"). Si no
+  // coincide con la elegida se avisa, pero no se cambia por su cuenta: elegir la
+  // tienda es del operador.
+  const storeMismatch =
+    storeHint && !store.name.toUpperCase().includes(storeHint.toUpperCase())
+      ? `La hoja dice "${storeHint}" y cargaste en ${store.name}.`
+      : null;
+
+  return NextResponse.json({ ok: true, source, format, posFee, storeMismatch, ...result });
 }

@@ -65,6 +65,11 @@ export interface SettlementLineInput {
   order_name: string | null;
   declared_status: string | null;
   declared_amount: number | null;
+  /** Comisión que el courier se cobra por esta entrega y descuenta del depósito
+   *  (la columna GANANCIA de Axel). null = la hoja no la declara. */
+  declared_fee?: number | null;
+  customer_name?: string | null;
+  district?: string | null;
   match_status: string;
 }
 
@@ -176,9 +181,18 @@ export interface SettlementTotals {
   expectedTotal: number;
   /** declarado − esperado. Negativo = falta plata. */
   difference: number;
+  /** Comisiones que el courier declara quedarse (por entrega + POS). */
+  feeTotal: number;
+  /**
+   * Lo que debería depositar: lo cobrado MENOS lo que se queda de comisión. Un
+   * courier como Axel cobra S/ 2,219.73, se queda S/ 146.00 y deposita
+   * S/ 2,073.73; sin restar la comisión el cuadre marcaría un faltante todos los
+   * días por el importe exacto de lo que legítimamente se quedan.
+   */
+  expectedDeposit: number;
   /** Lo que dice haber depositado (efectivo + Yape). */
   depositTotal: number;
-  /** depositado − declarado. Negativo = declaró más de lo que entregó. */
+  /** depositado − esperado. Negativo = falta plata en la mano. */
   depositDifference: number;
   deliveredCount: number;
   mismatchCount: number;
@@ -200,7 +214,7 @@ export interface ReconciledSettlement {
 export function reconcileSettlement(
   lines: readonly SettlementLineInput[],
   facts: ReadonlyMap<string, SettlementMasterFacts>,
-  deposit: { cash?: number | null; yape?: number | null } = {},
+  deposit: { cash?: number | null; yape?: number | null; posFee?: number | null } = {},
 ): ReconciledSettlement {
   const reconciled = lines.map((l) =>
     reconcileLine(l, l.order_id ? (facts.get(l.order_id) ?? null) : null),
@@ -208,10 +222,16 @@ export function reconcileSettlement(
 
   const declaredTotal = round2(reconciled.reduce((s, r) => s + r.declared, 0));
   const expectedTotal = round2(reconciled.reduce((s, r) => s + r.expected, 0));
+  // Las comisiones de línea se suman TODAS, estén vinculadas o no: el courier se
+  // las queda igual, y dejar fuera las de las líneas en revisión haría que el
+  // cuadre del depósito cambiara al vincular una línea, que no tiene sentido.
+  const lineFees = reconciled.reduce((s, r) => s + Math.max(0, r.line.declared_fee ?? 0), 0);
+  const feeTotal = round2(lineFees + Math.max(0, deposit.posFee ?? 0));
+  const expectedDeposit = round2(declaredTotal - feeTotal);
   const depositTotal = round2(Math.max(0, deposit.cash ?? 0) + Math.max(0, deposit.yape ?? 0));
   const mismatchCount = reconciled.filter((r) => isMismatch(r.verdict)).length;
   const reviewCount = reconciled.filter((r) => r.verdict === "sin_pedido").length;
-  const depositDifference = round2(depositTotal - declaredTotal);
+  const depositDifference = round2(depositTotal - expectedDeposit);
 
   return {
     lines: reconciled,
@@ -219,6 +239,8 @@ export function reconcileSettlement(
       declaredTotal,
       expectedTotal,
       difference: round2(declaredTotal - expectedTotal),
+      feeTotal,
+      expectedDeposit,
       depositTotal,
       depositDifference,
       deliveredCount: reconciled.filter((r) => r.delivered).length,
