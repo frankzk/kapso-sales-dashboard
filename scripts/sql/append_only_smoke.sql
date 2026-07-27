@@ -186,3 +186,115 @@ exception
   when unique_violation then null;
 end;
 $$;
+
+-- ----------------------------------------------------------------------------
+-- Aliclik (0054-0057). Lo que se prueba aquí no es cosmético: son las dos
+-- garantías que impiden, respectivamente, crear dos pedidos reales en un
+-- courier y que alguien reescriba la bitácora de un webhook que llega SIN FIRMA.
+-- ----------------------------------------------------------------------------
+
+-- 10) Un solo intento vivo de creación por pedido. Es el candado contra el doble
+--     clic, contra dos operadoras a la vez y contra el reintento tras un timeout.
+insert into aliclik_order_requests(store_id, order_id, modality, status)
+values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        'eeeeeeee-0000-0000-0000-00000000000e',
+        'cod', 'pending');
+
+do $$
+begin
+  insert into aliclik_order_requests(store_id, order_id, modality, status)
+  values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+          'eeeeeeee-0000-0000-0000-00000000000e',
+          'cod', 'pending');
+  raise exception 'aliclik_order_requests aceptó dos intentos vivos: se crearían dos guías'
+    using errcode = 'ZZ001';
+exception
+  when unique_violation then null;
+end;
+$$;
+
+-- 11) Un intento FALLIDO sí libera el pedido: si Aliclik rechazó la creación,
+--     hay que poder corregir y reintentar.
+update aliclik_order_requests set status = 'failed'
+ where order_id = 'eeeeeeee-0000-0000-0000-00000000000e';
+insert into aliclik_order_requests(store_id, order_id, modality, status)
+values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        'eeeeeeee-0000-0000-0000-00000000000e',
+        'cod', 'sent');
+
+-- 12) El orderNumber de Aliclik es único por courier, igual que guide_code.
+insert into shipments(store_id, courier, guide_code, external_order_number)
+values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'aliclik', 'ALC000111', 'ALC000111');
+
+do $$
+begin
+  insert into shipments(store_id, courier, guide_code, external_order_number)
+  values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'aliclik', 'ALC000222', 'ALC000111');
+  raise exception 'shipments aceptó dos guías con el mismo orderNumber de Aliclik'
+    using errcode = 'ZZ001';
+exception
+  when unique_violation then null;
+end;
+$$;
+
+-- 13) …pero el índice es PARCIAL: las guías importadas del Excel no lo traen, y
+--     varios nulos no pueden colisionar entre sí.
+insert into shipments(store_id, courier, guide_code)
+values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'aliclik', 'AUR5XSMOKE1'),
+       ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'aliclik', 'AUR5XSMOKE2');
+
+-- 14) La bitácora del webhook es append-only. Importa porque Aliclik NO firma
+--     sus avisos: el registro de lo que llegó es la única forma de investigar
+--     un estado que nadie reconoce.
+insert into aliclik_webhook_events(store_id, order_number, fingerprint, status)
+values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'ALC000111', 'fp-smoke-1', 'PENDING_DELIVERY');
+
+do $$
+begin
+  update aliclik_webhook_events set status = 'DELIVERED' where fingerprint = 'fp-smoke-1';
+  raise exception 'aliclik_webhook_events aceptó un UPDATE: la bitácora no es inmutable'
+    using errcode = 'ZZ001';
+exception
+  when sqlstate 'P0001' then null;
+end;
+$$;
+
+do $$
+begin
+  delete from aliclik_webhook_events where fingerprint = 'fp-smoke-1';
+  raise exception 'aliclik_webhook_events aceptó un DELETE: la bitácora no es inmutable'
+    using errcode = 'ZZ001';
+exception
+  when sqlstate 'P0001' then null;
+end;
+$$;
+
+-- 15) La idempotencia que pide la documentación de Aliclik: el mismo estado
+--     reenviado choca y no vuelve a disparar una lectura de su API.
+do $$
+begin
+  insert into aliclik_webhook_events(store_id, order_number, fingerprint, status)
+  values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'ALC000111', 'fp-smoke-1', 'PENDING_DELIVERY');
+  raise exception 'aliclik_webhook_events aceptó una huella duplicada: no hay idempotencia'
+    using errcode = 'ZZ001';
+exception
+  when unique_violation then null;
+end;
+$$;
+
+-- 16) service_role no puede reescribir la bitácora (segunda cerradura, 0053).
+do $$
+declare bad text;
+begin
+  select string_agg(privilege_type, ',') into bad
+    from information_schema.role_table_grants
+   where table_schema = 'public'
+     and table_name = 'aliclik_webhook_events'
+     and grantee = 'service_role'
+     and privilege_type in ('UPDATE', 'DELETE');
+  if bad is not null then
+    raise exception 'service_role conserva privilegios % sobre aliclik_webhook_events', bad
+      using errcode = 'ZZ001';
+  end if;
+end;
+$$;

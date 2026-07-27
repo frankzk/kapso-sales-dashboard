@@ -113,6 +113,8 @@ export default async function StoreSettingsPage({
       cart_seq_hour_end: full.cart_seq_hour_end ?? 21,
       telegram_chat_id: full.telegram_chat_id ?? null,
       anthropic_model: full.anthropic_model ?? null,
+      // Pre-0054 la columna no existe ⇒ integración apagada.
+      aliclik_enabled: Boolean(full.aliclik_enabled),
       meta_ad_accounts: normalizeMetaAdAccounts(
         full.meta_ad_accounts,
         full.meta_ad_account_id,
@@ -128,6 +130,8 @@ export default async function StoreSettingsPage({
       telegramToken: Boolean(full.telegram_bot_token_enc),
       metaToken: Boolean(full.meta_access_token_enc),
       anthropicKey: Boolean(full.anthropic_api_key_enc),
+      aliclikToken: Boolean(full.aliclik_api_token_enc),
+      aliclikWebhookSecret: Boolean(full.aliclik_webhook_secret_enc),
     },
     oauthAvailable: env.shopifyOAuthConfigured(),
     siteUrl,

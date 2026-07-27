@@ -12,6 +12,14 @@
     {
       "path": "/api/cron/backup",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/aliclik-catalog",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/aliclik-reconcile",
+      "schedule": "*/20 * * * *"
     }
   ]
 }

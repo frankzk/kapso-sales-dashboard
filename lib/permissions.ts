@@ -25,6 +25,12 @@ export const PERMISSIONS = [
   "shalom.override_payment_validation",
   // Costos
   "costs.manage",
+  // Aliclik: crear una guía es una escritura hacia AFUERA e irreversible, con
+  // ventanas de cancelación estrictas. Por eso tiene permiso propio y no cae
+  // bajo `master.edit`.
+  "aliclik.create_guide",
+  "aliclik.cancel_guide",
+  "aliclik.manage_catalog",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -40,13 +46,20 @@ export function isPermission(value: string): value is Permission {
  *  - `vendedora` — opera: registra estados, comentarios y comprobantes. NO
  *    valida pagos ni ve la clave de recojo (§"Acceso restringido a la clave":
  *    la clave es para administradores, y los demás solo pueden pedirla cuando el
- *    pago completo está validado).
+ *    pago completo está validado). Sí crea guías en Aliclik — es su trabajo —
+ *    pero NO las cancela ni toca el catálogo: cancelar tiene ventana y el
+ *    catálogo es dato maestro compartido por todas las tiendas.
  *  - `viewer` — nada.
  */
 const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
   owner: PERMISSIONS,
   admin: PERMISSIONS,
-  vendedora: ["master.edit", "master.import_report", "shalom.register_payment"],
+  vendedora: [
+    "master.edit",
+    "master.import_report",
+    "shalom.register_payment",
+    "aliclik.create_guide",
+  ],
   viewer: [],
 };
 

@@ -57,6 +57,7 @@ async function PedidosContent({
       rows={rows}
       canEdit={!perms.readOnly}
       canOverride={perms.can("master.override_status")}
+      canCreateGuide={perms.can("aliclik.create_guide")}
     />
   );
 }
