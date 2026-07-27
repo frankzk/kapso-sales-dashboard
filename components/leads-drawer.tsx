@@ -637,6 +637,28 @@ export function LeadDrawer({
                   Se muestra en CUALQUIER lead con pedido y sin guía, no solo tras
                   generarlo: si entra una llamada y cierra el drawer, puede volver
                   y terminar aquí en vez de irse al Master a buscar el pedido. */}
+              {/* Guía ya creada: bloque permanente. Antes, en cuanto la guía
+                  existía el panel desaparecía y con él la confirmación, así que
+                  la vendedora la veía dos segundos y se quedaba sin saber qué
+                  código se había generado. Los dos códigos juntos —el pedido de
+                  Shopify y la guía— son los que hay que cruzar si algo se
+                  tuerce, así que se enseñan siempre. */}
+              {history?.currentOrderGuide && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5">
+                  <p className="text-xs font-semibold tracking-wide text-emerald-700 uppercase">
+                    Guía de Aliclik
+                  </p>
+                  <p className="mt-1 font-mono text-sm font-semibold text-emerald-900">
+                    {history.currentOrderGuide}
+                  </p>
+                  {history.currentOrderName && (
+                    <p className="mt-0.5 text-xs text-emerald-800">
+                      Pedido {history.currentOrderName}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {history?.currentOrderId && !history.currentOrderGuide && (
                 <AliclikGuidePanel
                   // `key` = candado de identidad. Sin ella, si la vendedora pulsa
@@ -2406,6 +2428,18 @@ function OrderFormPanel({
                     Ver en Shopify
                   </a>
                 )}
+                {/* La única salida del formulario. Antes, tras generar el pedido
+                    solo quedaban "Copiar" y "Ver en Shopify": el formulario se
+                    quedaba abierto tapando la columna entera con un `absolute
+                    inset-0`, y el panel para crear la guía de Aliclik —que está
+                    justo debajo— era inalcanzable sin recargar la página. */}
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                >
+                  Continuar · crear guía
+                </button>
               </div>
             </div>
           )}
