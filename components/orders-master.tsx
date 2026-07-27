@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 import { Card, cn, EmptyState } from "@/components/ui";
 import { ChecklistFilter } from "@/components/filters";
 import { PickupKeyPanel } from "@/components/pickup-key-panel";
+import { TandersGuideModal } from "@/components/tanders-guide-modal";
 import {
   addOrderComment,
   clearOrderGeo,
@@ -861,6 +862,7 @@ function OrderDrawer({
   const [detail, setDetail] = useState<OrderMasterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [tandersOpen, setTandersOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   const reload = useMemo(
@@ -975,9 +977,19 @@ function OrderDrawer({
             )}
 
             <section>
-              <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Couriers y guías ({detail.guides.length})
-              </h3>
+              <div className="mb-1.5 flex items-center gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Couriers y guías ({detail.guides.length})
+                </h3>
+                {canEdit && (
+                  <button
+                    onClick={() => setTandersOpen(true)}
+                    className="ml-auto rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    + Guía Tanders
+                  </button>
+                )}
+              </div>
               {detail.guides.length === 0 ? (
                 <p className="text-sm text-slate-400">
                   Sin gestión logística registrada todavía.
@@ -1067,6 +1079,17 @@ function OrderDrawer({
           </div>
         )}
       </aside>
+
+      {tandersOpen && (
+        <TandersGuideModal
+          orderId={orderId}
+          onClose={() => setTandersOpen(false)}
+          onCreated={() => {
+            void reload();
+            onSaved();
+          }}
+        />
+      )}
     </div>
   );
 }

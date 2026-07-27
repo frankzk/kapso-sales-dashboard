@@ -566,6 +566,41 @@ los triggers — se verificó quitando la 0053 a propósito y confirmando que el
 smoke falla. **Cualquier tabla nueva en `public` debe revocar explícitamente lo
 que no quiera conceder.**
 
+## 5n. Tanders — crear guías desde el Master
+
+Tanders es un courier de Lima que **convive** con Aliclik, Shalom y Olva; no los
+reemplaza. La diferencia es la dirección del flujo: los otros entran por reporte
+(un Excel que se sube), Tanders **sale** — se le crea el pedido por API desde el
+drawer del Master y devuelve el código de guía.
+
+- **Needs migration 0054** (`stores.tanders_*`, `shipments.label_url`,
+  `shipments.tanders_raw`).
+- Se configura en **Ajustes de la tienda → Tanders**: usuario, contraseña y el
+  almacén de origen (dirección + latitud + longitud). Tanders **no emite API
+  keys**, así que se usa la misma cuenta de su web; la contraseña se guarda
+  cifrada (AES-256-GCM) como el resto de secretos.
+- **Autenticación**: `POST /auth/login` en cada uso. Su access token dura 15
+  minutos, así que cachear un refresh token de 7 días no compensa el estado que
+  habría que persistir y rotar.
+- **Caja XXS y 100 g fijos**, por decisión de la operación: el catálogo no tiene
+  pesos por producto, así que cualquier cálculo sería inventado.
+- **El punto del mapa es obligatorio y no se resuelve solo.** Tanders no acepta
+  una dirección de texto y Shopify no entrega coordenadas. Si el pedido ya tiene
+  un punto (corrección manual de la 0051 o reporte de courier) se pre-llena; si
+  no, el operador pega el enlace de Google Maps y el modal muestra el enlace al
+  punto elegido para verificarlo **antes** de despachar. Esto evita depender de
+  una API key de Google facturada.
+- **El monto a cobrar sale en 0** cuando el pedido ya está pagado
+  (`payment_state = 'pago_completo'`): mandar el total haría que el repartidor le
+  cobre al cliente algo que ya pagó.
+- **Sin reintentos automáticos** salvo un 401. Un timeout o un 500 puede haber
+  creado la guía igual; reintentar a ciegas despacharía dos veces el mismo
+  paquete. El mensaje de error pide verificar en tanders.app antes de reintentar.
+- Si Tanders crea la guía pero falla el insert local, el error **incluye el
+  código** para registrarla a mano: la guía existe y perderla de vista es peor.
+- **Saldo insuficiente**: según la operación, Tanders no deja registrar. Se
+  traduce a un mensaje explícito para el 402/403.
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle
