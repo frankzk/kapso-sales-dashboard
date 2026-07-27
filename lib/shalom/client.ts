@@ -398,9 +398,17 @@ export function describeShalomError(err: unknown): string {
     err.code === "shalom_auth_failed"
       ? " Vuelve a conectar la cuenta de Shalom Pro: el token dura 2 horas."
       : err.code === "unauthorized"
-        ? " Revisa la API key de Shalom en Ajustes → Tienda."
+        ? // El `unauthorized` es SIEMPRE de la API key global del wrapper: las
+          // credenciales de la tienda fallan con `shalom_auth_failed`, que es el
+          // caso de arriba. Decía «revísala en Ajustes → Tienda» y ahí no está
+          // ni puede estar — es de la cuenta de Kapso y sirve para todas las
+          // tiendas. Mandar a un administrador a buscarla en una pantalla donde
+          // no existe es peor que no dar pista ninguna.
+          " Es la API key global del wrapper (SHALOM_API_KEY), que vive en las variables de entorno del despliegue, NO en los ajustes de la tienda. Si se pegó cortada o vencida, hay que corregirla ahí y volver a desplegar."
         : err.code === "rate_limited"
-          ? " Se superaron las 60 llamadas por minuto: espera un momento."
+          ? // El cupo es de la API key, que es una sola para TODAS las tiendas:
+            // se puede agotar sin que esta tienda haya hecho nada.
+            " Se superaron las 60 llamadas por minuto de la API key, que es compartida por todas las tiendas: espera un momento."
           : err.code === "upstream_rejected"
             ? " Es una regla de negocio de Shalom (cuenta sin servicio de cobranza, producto restringido para esa ruta, etc.)."
             : err.code === "conflict"

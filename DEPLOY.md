@@ -850,14 +850,18 @@ creó ninguna guía (sin `--create`). Lo que salió de ahí:
 
 ### Límites conocidos
 
-- **El cupo real es mucho más chico que el documentado.** El proveedor habla de
-  60 requests/minuto, pero las cabeceras `X-RateLimit-*` de la cuenta real
-  mostraron **~15 disponibles**, recuperándose al cambiar de minuto. La búsqueda
-  de agencias rebota 450 ms para no gastarlas tecleando — margen dimensionado
-  contra los 60, así que con 15 conviene no encadenar sondas: dos corridas
-  seguidas pueden chocar contra el techo y fallar como si la key estuviera
-  vencida, que es un síntoma muy confundible. El cupo restante se lee de las
-  cabeceras de cualquier respuesta.
+- **60 requests/minuto por API key, pero el cupo es compartido.** La cabecera
+  `X-RateLimit-Limit` confirma los 60 que documenta el proveedor. Lo que
+  despista es el `remaining`: la primera llamada de una sonda recién arrancada
+  ya mostraba **14 disponibles**, no 59. No es que el techo sea más bajo — es
+  que **la API key es una sola para todas las tiendas** (es de la cuenta de
+  Kapso, ver arriba), así que el contador refleja lo que gasta *todo el mundo*
+  a la vez, no lo que gasta quien mira.
+  Consecuencias prácticas: el cupo que ves no es tuyo, puede estar casi agotado
+  sin que hayas hecho nada, y a medida que entren más tiendas habrá que vigilar
+  esa cabecera. La búsqueda de agencias rebota 450 ms para no gastarlo
+  tecleando. Y conviene no encadenar sondas: agotarlo devuelve un error que se
+  parece bastante al de una key vencida, que es un síntoma muy confundible.
 - **Servicio de cobranza (`collection_service`) no implementado.** Requiere una
   cuenta bancaria registrada en Shalom Pro y en esta operación el cobro va por
   Yape con clave de recojo, que es justamente el flujo que ya existe. `payer`
