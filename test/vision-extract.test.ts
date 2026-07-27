@@ -66,6 +66,17 @@ describe("extractYapeVoucher", () => {
     });
   });
 
+  it("un monto ilegible queda en null, no en S/ 0.00", async () => {
+    // Un cero inventado se registraría como un pago de cero soles con toda
+    // confianza; null obliga a que lo escriba una persona.
+    const out = await extractYapeVoucher("AAAA", "image/jpeg", {
+      ...OPTS,
+      fetchImpl: reply({ operation_number: "999", amount: "ilegible" }),
+    });
+    expect(out.amount).toBeNull();
+    expect(out.operationNumber).toBe("999");
+  });
+
   it("una captura recortada deja en null lo que no se ve", async () => {
     // Este es el caso que importa: sin nº de operación el pago no se podrá
     // validar, y el equipo tendrá que completarlo a mano.

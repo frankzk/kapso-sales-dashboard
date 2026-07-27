@@ -35,6 +35,7 @@ function navItems(isVendedoraOnly: boolean): NavItem[] {
       { href: "/dashboard/leads", label: "Leads", icon: IconChat },
       { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
       { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
+      { href: "/dashboard/liquidaciones", label: "Liquidaciones", icon: IconMoney },
       // Modo solo: la página filtra server-side a la fila propia — una
       // vendedora nunca ve los resultados del resto del equipo.
       { href: "/dashboard/productividad", label: "Mi productividad", icon: IconHeadset },
@@ -49,6 +50,7 @@ function navItems(isVendedoraOnly: boolean): NavItem[] {
     { href: "/dashboard/envios/aliclik", label: "Catálogo Aliclik", icon: IconPlug },
     { href: "/dashboard/productividad", label: "Productividad", icon: IconHeadset },
     { href: "/dashboard/stores", label: "Tiendas", icon: IconStore },
+    { href: "/dashboard/liquidaciones", label: "Liquidaciones", icon: IconMoney },
     { href: "/dashboard/costos", label: "Costos", icon: IconMoney },
     { href: "/dashboard/team", label: "Equipo", icon: IconUsers },
     { href: "/dashboard/stores/new", label: "Conectar tienda", icon: IconPlug },

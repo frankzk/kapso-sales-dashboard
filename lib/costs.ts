@@ -16,7 +16,15 @@ export type CostConcept =
   | "intento_adicional"
   | "envio_agencia"
   | "devolucion"
-  | "especial";
+  | "especial"
+  // Pago AL motorizado (0054). Son costos como cualquier otro — llevan vigencia
+  // y ámbito — así que se resuelven con este mismo motor en vez de duplicarlo.
+  // Los consume lib/settlements.ts al liquidar; `computeLogisticsCost` no los
+  // toca, porque el costo del envío y lo que se le paga al repartidor son cosas
+  // distintas y sumarlas contaría el reparto dos veces.
+  | "motorizado_entrega"
+  | "motorizado_visita"
+  | "motorizado_devolucion";
 
 export const COST_CONCEPTS: { code: CostConcept; label: string }[] = [
   { code: "primer_intento", label: "Primer intento" },
@@ -24,6 +32,9 @@ export const COST_CONCEPTS: { code: CostConcept; label: string }[] = [
   { code: "envio_agencia", label: "Envío por agencia" },
   { code: "devolucion", label: "Devolución" },
   { code: "especial", label: "Costo especial" },
+  { code: "motorizado_entrega", label: "Motorizado · entrega" },
+  { code: "motorizado_visita", label: "Motorizado · visita sin entrega" },
+  { code: "motorizado_devolucion", label: "Motorizado · devolución" },
 ];
 
 export interface CostTariff {

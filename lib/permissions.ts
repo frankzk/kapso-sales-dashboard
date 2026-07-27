@@ -40,6 +40,9 @@ export const PERMISSIONS = [
   // es una escritura hacia afuera y cobrable — mismo criterio que Aliclik y
   // Tanders. Crear la guía NO implica poder ver la clave que la acompaña.
   "shalom.create_guide",
+  // Liquidaciones de motorizados
+  "settlements.manage", // cargar liquidaciones y corregir vínculos
+  "settlements.close", // congelar el pago al motorizado: no se deshace
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -65,6 +68,8 @@ export function isPermission(value: string): value is Permission {
 const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
   owner: PERMISSIONS,
   admin: PERMISSIONS,
+  // La vendedora carga la liquidación y corrige vínculos, pero NO la cierra:
+  // cerrar congela lo que se le paga al motorizado y no se deshace.
   vendedora: [
     "master.edit",
     "master.import_report",
@@ -72,6 +77,7 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "aliclik.create_guide",
     "tanders.create_guide",
     "shalom.create_guide",
+    "settlements.manage",
   ],
   viewer: [],
 };

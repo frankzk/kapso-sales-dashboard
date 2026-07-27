@@ -507,6 +507,51 @@ especiales), **costos de producto** (unitario, por tienda, proveedor y lote) y
 - **Escritura solo para administradores** de la organización (RLS, mismo patrón
   que `fenix_stock`), con el permiso `costs.manage`.
 
+## 5k-bis. Liquidaciones de motorizados
+
+Sección propia (`/dashboard/liquidaciones`). El motorizado entrega contra
+reembolso y al final del día liquida: declara qué guías entregó, cuánta plata
+cobró y deposita lo recaudado. La hoja llega **en foto de cuaderno o en
+Excel/CSV**, y las dos entran por el mismo sitio.
+
+- **Needs migration 0054** (`riders`, `rider_settlements`,
+  `rider_settlement_lines`, más los conceptos `motorizado_*` en `cost_tariffs`).
+  Antes de correrla la sección no carga.
+- **La foto se transcribe con visión** (`lib/settlement-vision.ts`, misma clave
+  por tienda que los comprobantes Yape). Lo que no se lee con claridad queda
+  **en blanco, nunca en cero**: un monto inventado en una liquidación es plata
+  inventada. Si la lectura falla, la carga se rechaza en vez de guardar una
+  liquidación vacía dada por buena.
+- **La hoja se lee por alias de cabecera** (`lib/settlement-sheet.ts`), no por
+  courier: cada coordinador arma su Excel a su manera. "N° GUÍA", "Nro. Guia" y
+  "guía" son la misma columna. Añadir una variante es añadir una cadena a la
+  lista. Las filas de TOTAL se descartan para no duplicar la plata del día.
+- **Lo declarado nunca pisa lo real.** El estado de la guía y el monto del
+  pedido siguen viniendo del Master; el cuadre solo COMPARA y nombra la
+  diferencia. Que la hoja diga "entregado" no marca el pedido como entregado.
+- **Son dos cuadres, no uno**, y se muestran por separado: *¿lo declarado
+  coincide con el Master?* y *¿depositó lo que él mismo declaró?*. Un motorizado
+  puede declarar bien y depositar de menos, o al revés.
+- **Lo que no se puede vincular no se adivina**: una línea sin guía reconocible
+  queda en revisión y la resuelve una persona. Vincular mal mueve plata de un
+  pedido a otro y el cuadre deja de significar nada.
+- **El pago al motorizado usa el motor de Costos**, con sus mismas dos reglas
+  (vigencia y especificidad): conceptos `motorizado_entrega`,
+  `motorizado_visita` y `motorizado_devolucion`, que se configuran en
+  `/dashboard/costos`. **Sin tarifa vigente ese día no se puede cerrar**: un
+  concepto sin tarifa no cuenta como cero.
+- **Descontar el faltante es opcional y explícito.** Por defecto NO se descuenta:
+  que un faltante se cobre o se perdone es decisión de la empresa. Cuando se
+  activa, el pago nunca baja de cero.
+- **Cerrar es irreversible por diseño**: congela `payout_amount`. Si después
+  cambia una tarifa o se corrige una guía, ese número no se reescribe — se abre
+  una liquidación de ajuste. Cerrar con descuadre exige confirmación y queda
+  anotado en la nota.
+- **Permisos**: `settlements.manage` (cargar y corregir vínculos, lo tiene
+  vendedora) y `settlements.close` (congelar el pago, solo admin/owner).
+- Subir dos veces el mismo archivo **no duplica nada**: se corta por hash y
+  devuelve la liquidación que ya existía.
+
 ## 5l. Clave de Anthropic por tienda
 
 La lectura de comprobantes Yape usaba una única `ANTHROPIC_API_KEY` de entorno, así

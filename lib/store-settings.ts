@@ -2,7 +2,8 @@
 // Secret fields are only included when a new value is provided (blank = keep
 // existing), and are encrypted on the way in. Unit-tested.
 
-import { encrypt } from "@/lib/crypto";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { decryptOrNull, encrypt } from "@/lib/crypto";
 
 export const STORE_STATUSES = ["active", "paused", "disabled"] as const;
 export type StoreStatus = (typeof STORE_STATUSES)[number];
@@ -266,4 +267,26 @@ export function buildStoreUpdate(
   if (defaultProduct !== null) patch.shalom_default_product_id = defaultProduct;
 
   return patch;
+}
+
+/**
+ * Credenciales de visión de UNA tienda, ya descifradas (0052). Devuelve los dos
+ * campos vacíos cuando la tienda no tiene clave propia, y quien llama cae a la
+ * del entorno vía `resolveVisionCreds`. Vive aquí, y no en lib/vision.ts, para
+ * que ese módulo siga sin tocar la base de datos.
+ */
+export async function storeVisionCreds(
+  admin: SupabaseClient,
+  storeId: string,
+): Promise<{ anthropicApiKey: string | null; anthropicModel: string | null }> {
+  const { data } = await admin
+    .from("stores")
+    .select("anthropic_api_key_enc,anthropic_model")
+    .eq("id", storeId)
+    .maybeSingle();
+  const row = data as { anthropic_api_key_enc?: string | null; anthropic_model?: string | null } | null;
+  return {
+    anthropicApiKey: decryptOrNull(row?.anthropic_api_key_enc ?? null),
+    anthropicModel: row?.anthropic_model ?? null,
+  };
 }

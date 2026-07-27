@@ -386,7 +386,12 @@ function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | nu
     if (typeof v === "number" && Number.isFinite(v)) return v;
     const s = str(v);
     if (!s) return null;
-    const n = Number(s.replace(/[^\d.,-]/g, "").replace(",", "."));
+    const cleaned = s.replace(/[^\d.,-]/g, "").replace(",", ".");
+    // Sin un dígito no hay número: `Number("")` es 0, así que un monto que el
+    // modelo no pudo leer ("ilegible", "—") se registraría como un S/ 0.00 dicho
+    // con toda confianza en vez de quedar vacío para que lo ponga una persona.
+    if (!/\d/.test(cleaned)) return null;
+    const n = Number(cleaned);
     return Number.isFinite(n) ? n : null;
   };
   const rawOperation = str(o.operation_number);
