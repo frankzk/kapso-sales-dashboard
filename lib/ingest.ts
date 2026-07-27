@@ -8,6 +8,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
 import { chunk } from "@/lib/access";
+import { unlimitedDeadline, type Deadline } from "@/lib/deadline";
 import { recomputeOrderMasterSafe, reconcileOrderMaster } from "@/lib/order-master";
 import { fetchMetaAdMeta, normalizeMetaAdAccounts, type StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
@@ -720,6 +721,11 @@ export interface SyncReport {
   requeued: number; // carritos reencolados con atención (olas, máx 2 por lead)
   orderMaster: number; // filas del Master reconciliadas en esta corrida
   errors: string[];
+  // La corrida se quedó sin presupuesto de tiempo y dejó trabajo para la
+  // siguiente pasada del cron. No es un error: el sync es incremental.
+  partial: boolean;
+  // Etapas que no llegaron a correr por falta de tiempo, en orden.
+  skipped: string[];
 }
 
 // Resolve up to this many new/stale Meta ad_ids per run (drains a backlog over a
@@ -775,10 +781,52 @@ export async function resolveMetaAdNames(
   return rows.length;
 }
 
+// Coste estimado de cada etapa, en ms. No pretende ser exacto: es el margen que
+// se exige ANTES de arrancarla, calibrado con lo que tarda hoy en producción y
+// redondeado hacia arriba. Si no cabe, la etapa se salta y la retoma la corrida
+// siguiente (el cron pasa cada 5 minutos).
+const STAGE_COST_MS = {
+  shopify: 45_000,
+  shopifyAll: 45_000,
+  drafts: 45_000,
+  kapso: 45_000,
+  leads: 60_000,
+  followups: 10_000,
+  drip: 20_000,
+  cartSeq: 20_000,
+  waves: 10_000,
+  handoffs: 10_000,
+  archive: 10_000,
+  metaAds: 25_000,
+  ops: 25_000,
+  waNumbers: 15_000,
+  rollups: 20_000,
+  orderMaster: 30_000,
+} as const;
+
+// Margen exigido para pedir UNA página más a Shopify/Kapso. Cortar la
+// paginación a media es seguro: las búsquedas van ordenadas por `updated_at`
+// ascendente y el cursor se guarda con el máximo ya ingerido, así que la
+// corrida siguiente sigue justo donde esta lo dejó.
+const PAGE_COST_MS = 12_000;
+
+// Tiempo que se aparta SIEMPRE para el cierre de la corrida, antes de repartir
+// nada a la ingesta.
+//
+// El rollup diario no es una etapa saltable como las demás: `affectedDates` solo
+// existe en memoria durante esta corrida. Si se ingieren pedidos y no se
+// recalcula el rollup aquí, la corrida siguiente arranca con su propio conjunto
+// de fechas y nunca vuelve a mirar las de esta — el día se quedaría con métricas
+// viejas y en silencio, que es peor que ir un poco atrasado. Así que no compite
+// por el presupuesto: se le guarda sitio y la ingesta se reparte lo que sobra.
+const TAIL_RESERVE_MS = 50_000;
+
 export async function runStoreSync(
   storeId: string,
   admin: SupabaseClient = createAdminSupabase(),
+  opts?: { deadline?: Deadline },
 ): Promise<SyncReport> {
+  const deadline = opts?.deadline ?? unlimitedDeadline();
   const report: SyncReport = {
     storeId,
     shopifyOrders: 0,
@@ -795,6 +843,8 @@ export async function runStoreSync(
     requeued: 0,
     orderMaster: 0,
     errors: [],
+    partial: false,
+    skipped: [],
   };
   const creds = await getStoreCreds(storeId, admin);
   if (!creds) {
@@ -803,14 +853,46 @@ export async function runStoreSync(
   }
   const affectedDates = new Set<string>();
 
+  /**
+   * ¿Hay margen para esta etapa? Si no lo hay, la anota como saltada y marca la
+   * corrida como parcial, sin lanzar: cada etapa es independiente y reanudable,
+   * así que quedarse sin tiempo difiere trabajo, no lo pierde.
+   */
+  const affords = (stage: string, costMs: number): boolean => {
+    if (deadline.hasRoomFor(costMs + TAIL_RESERVE_MS)) return true;
+    report.skipped.push(stage);
+    report.partial = true;
+    return false;
+  };
+
+  /**
+   * Igual que `affords`, pero para las etapas de cierre: esas ya viven DENTRO de
+   * TAIL_RESERVE_MS, así que piden solo su coste — sumarles la reserva otra vez
+   * las haría saltarse a sí mismas.
+   */
+  const affordsTail = (stage: string, costMs: number): boolean => {
+    if (deadline.hasRoomFor(costMs)) return true;
+    report.skipped.push(stage);
+    report.partial = true;
+    return false;
+  };
+
+  /** ¿Cabe otra página de la API? Marca parcial si obliga a cortar. */
+  const affordsPage = (): boolean => {
+    if (deadline.hasRoomFor(PAGE_COST_MS + TAIL_RESERVE_MS)) return true;
+    report.partial = true;
+    return false;
+  };
+
   // 1) Shopify reconciliation (tag:kapso, bounded by updated_at cursor)
-  if (creds.shopify_token) {
+  if (creds.shopify_token && affords("shopify", STAGE_COST_MS.shopify)) {
     try {
       const cursor = await getSyncCursor(admin, storeId, "shopify");
       const searchQuery = buildKapsoOrdersSearchQuery(cursor);
       let after: string | null = null;
       let maxUpdatedAt = cursor;
       for (let i = 0; i < 50; i++) {
+        if (!affordsPage()) break;
         const page = await fetchOrdersPage({
           domain: creds.shopify_domain,
           token: creds.shopify_token,
@@ -847,7 +929,7 @@ export async function runStoreSync(
   //     Acotada por ORDERS_SYNC_FROM para no arrastrar años de histórico.
   //     try/catch propio: si esta pasada falla, la sincronización del bot y de
   //     los leads sigue funcionando igual.
-  if (creds.shopify_token) {
+  if (creds.shopify_token && affords("shopify_all", STAGE_COST_MS.shopifyAll)) {
     try {
       const cursor = await getSyncCursor(admin, storeId, "shopify_all");
       const searchQuery = buildAllOrdersSearchQuery(cursor, env.ordersSyncFrom());
@@ -855,6 +937,7 @@ export async function runStoreSync(
       let maxUpdatedAt = cursor;
       const touched: string[] = [];
       for (let i = 0; i < 50; i++) {
+        if (!affordsPage()) break;
         const page = await fetchOrdersPage({
           domain: creds.shopify_domain,
           token: creds.shopify_token,
@@ -899,7 +982,7 @@ export async function runStoreSync(
   //     it ages past the grace. The window is small (a couple of days) so a full
   //     rescan is cheap. Own try/catch: a missing read_draft_orders scope just
   //     records an error here and never breaks the orders/Kapso/leads sync.
-  if (creds.shopify_token) {
+  if (creds.shopify_token && affords("shopify_drafts", STAGE_COST_MS.drafts)) {
     try {
       const floor = new Date(Date.now() - DRAFT_OPEN_WINDOW_DAYS * 86_400_000).toISOString();
       let maxUpdatedAt: string | null = null;
@@ -907,6 +990,7 @@ export async function runStoreSync(
         const searchQuery = buildDraftOrdersSearchQuery(status, floor);
         let after: string | null = null;
         for (let i = 0; i < 50; i++) {
+          if (!affordsPage()) break;
           const page = await fetchDraftOrdersPage({
             domain: creds.shopify_domain,
             token: creds.shopify_token,
@@ -940,7 +1024,7 @@ export async function runStoreSync(
   }
 
   // 2) Kapso pull (conversations since last_active cursor)
-  if (creds.kapso_api_key) {
+  if (creds.kapso_api_key && affords("kapso", STAGE_COST_MS.kapso)) {
     try {
       const k = { apiKey: creds.kapso_api_key };
       const cursor = await getSyncCursor(admin, storeId, "kapso");
@@ -957,6 +1041,9 @@ export async function runStoreSync(
       // update so it tolerates the timing columns not existing yet (i.e. if the
       // code deploys before migration 0005 is applied) without breaking sync.
       for (const r of rows.slice(0, KAPSO_TIMING_CAP)) {
+        // Hasta 50 llamadas en serie: es la parte más cara de esta etapa y la
+        // más prescindible (el timing es enriquecimiento, no dato de negocio).
+        if (!affordsPage()) break;
         const t = await fetchConversationSignals(k, r.kapso_conversation_id);
         if (!t) continue;
         const { error: tErr } = await admin
@@ -981,7 +1068,7 @@ export async function runStoreSync(
   }
 
   // 2b) Leads — build/refresh from conversations + order linkage.
-  if (creds.kapso_api_key) {
+  if (creds.kapso_api_key && affords("leads", STAGE_COST_MS.leads)) {
     try {
       const lr = await syncStoreLeads(admin, storeId, {
         kapso_api_key: creds.kapso_api_key,
@@ -995,10 +1082,12 @@ export async function runStoreSync(
   }
 
   // 2c) Bubble overdue follow-ups back up (needs_attention) so they don't slip.
-  try {
-    await flagOverdueFollowups(admin, storeId);
-  } catch (e: any) {
-    report.errors.push(`followups: ${e.message}`);
+  if (affords("followups", STAGE_COST_MS.followups)) {
+    try {
+      await flagOverdueFollowups(admin, storeId);
+    } catch (e: any) {
+      report.errors.push(`followups: ${e.message}`);
+    }
   }
 
   // 2c.5) Drip de seguimiento: plantilla WhatsApp a leads nr/buzón/cuelga sin
@@ -1006,7 +1095,7 @@ export async function runStoreSync(
   //       propósito: un seguimiento manual vencido acaba de ganar
   //       needs_attention=true y el drip lo respeta (la asesora manda sobre el
   //       bot). Gateado por Ajustes; best-effort.
-  if (creds.drip_template_enabled) {
+  if (creds.drip_template_enabled && affords("drip", STAGE_COST_MS.drip)) {
     try {
       const drip = await sendSeguimientoDrip(admin, storeId, creds);
       report.dripSent = drip.sent;
@@ -1021,7 +1110,7 @@ export async function runStoreSync(
   //        independiente del drip y de la gestión humana: solo-envío, nunca
   //        toca status/category (ver lib/cart-sequence.ts). Gateado por
   //        Ajustes; best-effort. Pre-0040 es un no-op (enabled=false).
-  if (creds.cart_seq_enabled) {
+  if (creds.cart_seq_enabled && affords("cart_seq", STAGE_COST_MS.cartSeq)) {
     try {
       const seq = await runCartSequence(admin, storeId, creds);
       report.cartSeqSent = seq.sent;
@@ -1034,10 +1123,12 @@ export async function runStoreSync(
   // 2c.6) Olas de reencolado: carritos en nr/buzón/cuelga quietos 48h suben con
   //       needs_attention (máx 2 olas por lead) para que la llamada de
   //       recontacto no se pase. Pre-0036 es un no-op. Best-effort.
-  try {
-    report.requeued = await flagCartAttentionWaves(admin, storeId);
-  } catch (e: any) {
-    report.errors.push(`waves: ${e.message}`);
+  if (affords("waves", STAGE_COST_MS.waves)) {
+    try {
+      report.requeued = await flagCartAttentionWaves(admin, storeId);
+    } catch (e: any) {
+      report.errors.push(`waves: ${e.message}`);
+    }
   }
 
   // 2c.7) Expira handoffs FRÍOS: los que el bot derivó, nadie atendió y el
@@ -1045,23 +1136,27 @@ export async function runStoreSync(
   //       a la cola normal. Es el reductor automático que evita que esa cola
   //       solo crezca. Va DESPUÉS de las olas para no pisar una atención de ola
   //       recién puesta. Best-effort.
-  try {
-    await expireColdHandoffs(admin, storeId);
-  } catch (e: any) {
-    report.errors.push(`handoffs: ${e.message}`);
+  if (affords("handoffs", STAGE_COST_MS.handoffs)) {
+    try {
+      await expireColdHandoffs(admin, storeId);
+    } catch (e: any) {
+      report.errors.push(`handoffs: ${e.message}`);
+    }
   }
 
   // 2d) Auto-archivar leads vencidos viejos (sin interacción > STALE_LEAD_DAYS)
   //     para que la cola "Por llamar" no se reacumule de backlog. Best-effort.
-  try {
-    report.archived = await archiveStaleLeads(admin, storeId);
-  } catch (e: any) {
-    report.errors.push(`archive: ${e.message}`);
+  if (affords("archive", STAGE_COST_MS.archive)) {
+    try {
+      report.archived = await archiveStaleLeads(admin, storeId);
+    } catch (e: any) {
+      report.errors.push(`archive: ${e.message}`);
+    }
   }
 
   // 2e) Resolver nombres reales de anuncios Meta (meta_ads) para "Rendimiento por
   //     anuncio". Best-effort, gateado por el token de Meta; drena por corrida.
-  if (creds.meta_access_token) {
+  if (creds.meta_access_token && affords("meta_ads", STAGE_COST_MS.metaAds)) {
     try {
       report.metaAdsResolved = await resolveMetaAdNames(admin, storeId, creds.meta_access_token);
     } catch (e: any) {
@@ -1070,7 +1165,7 @@ export async function runStoreSync(
   }
 
   // 3) Operational snapshot (best-effort; never fails the run)
-  if (creds.kapso_api_key) {
+  if (creds.kapso_api_key && affords("ops", STAGE_COST_MS.ops)) {
     try {
       const k = { apiKey: creds.kapso_api_key };
       let health: { status: string; error?: string | null; checks?: Record<string, unknown> | null } | null = null;
@@ -1116,7 +1211,7 @@ export async function runStoreSync(
 
   // 3b) Refresh the WhatsApp number → name lookup from Kapso (best-effort; the
   //     drawer/queue resolve `phone_number_id` → friendly name through it).
-  if (creds.kapso_api_key) {
+  if (creds.kapso_api_key && affords("wa_numbers", STAGE_COST_MS.waNumbers)) {
     try {
       const numbers = await listWhatsappNumbers({ apiKey: creds.kapso_api_key });
       report.whatsappNumbers = await upsertWhatsappNumbers(admin, numbers);
@@ -1126,6 +1221,8 @@ export async function runStoreSync(
   }
 
   // Recompute rollups for every touched day in one range call.
+  // Sin guarda de presupuesto a propósito: ver TAIL_RESERVE_MS. Estas fechas no
+  // sobreviven a la corrida, así que o se recalculan ahora o no se recalculan.
   if (affectedDates.size) {
     const sorted = [...affectedDates].sort();
     try {
@@ -1138,11 +1235,15 @@ export async function runStoreSync(
   // Red de seguridad del Master: cualquier ruta que haya tocado una guía sin
   // recalcular deja aquí su fila al día. También es lo que rellena el Master la
   // primera vez, sin necesidad de un backfill manual.
-  try {
-    const reconciled = await reconcileOrderMaster(admin, [storeId]);
-    report.orderMaster = reconciled.written;
-  } catch (e: any) {
-    report.errors.push(`order_master: ${e.message}`);
+  // A diferencia del rollup, esta sí es diferible: reconcilia leyendo el estado
+  // actual de la base, así que la corrida siguiente la pone al día igual.
+  if (affordsTail("order_master", STAGE_COST_MS.orderMaster)) {
+    try {
+      const reconciled = await reconcileOrderMaster(admin, [storeId]);
+      report.orderMaster = reconciled.written;
+    } catch (e: any) {
+      report.errors.push(`order_master: ${e.message}`);
+    }
   }
 
   return report;
