@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   aliclikErrorMessage,
+  extractRayId,
   isBotChallenge,
   cancelOrder,
   createOrder,
@@ -248,5 +249,31 @@ describe("desafío anti-bot de Cloudflare", () => {
     await listProducts(opts(impl));
     const headers = calls[0]!.init.headers as Record<string, string>;
     expect(headers["User-Agent"]).toContain("kapso-sales-dashboard");
+  });
+});
+
+describe("Ray ID de Cloudflare", () => {
+  // Es lo que permite a Aliclik encontrar ESTE bloqueo en su panel. Sin él, el
+  // reporte es "a veces nos bloquea" y se eterniza.
+  it("lo saca del pie de la página de desafío", () => {
+    expect(extractRayId("<p>Ray ID: 8f1a2b3c4d5e6f70</p>")).toBe("8f1a2b3c4d5e6f70");
+    expect(extractRayId('<span class="ray">Ray ID: 9a0b1c2d3e4f5061</span>')).toBe("9a0b1c2d3e4f5061");
+  });
+
+  it("no inventa uno cuando no está", () => {
+    expect(extractRayId("<html>sin ray</html>")).toBeNull();
+    expect(extractRayId({ message: "x" })).toBeNull();
+  });
+
+  it("prefiere la cabecera cf-ray, que es la fuente fiable", () => {
+    const msg = aliclikErrorMessage(403, "<!DOCTYPE html>Just a moment...", "text/html", "abc123def456");
+    expect(msg).toContain("abc123def456");
+    expect(msg).toContain("Ray ID");
+  });
+
+  it("sigue siendo legible cuando no hay Ray ID", () => {
+    const msg = aliclikErrorMessage(403, "<!DOCTYPE html>Just a moment...", "text/html", null);
+    expect(msg).toContain("Cloudflare");
+    expect(msg).not.toContain("Ray ID");
   });
 });
