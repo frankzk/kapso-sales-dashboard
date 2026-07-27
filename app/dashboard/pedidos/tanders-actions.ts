@@ -17,12 +17,15 @@ import { decrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { parseGeoLink } from "@/lib/geo-link";
-import { extractLabelUrl, TandersClient } from "@/lib/tanders/client";
+import { extractLabelUrl, extractTrackingCode, TandersClient } from "@/lib/tanders/client";
 import {
   buildTandersPayload,
+  composeTandersNote,
   defaultCollectionAmount,
   suggestedDestination,
 } from "@/lib/tanders/draft";
+import { getStoreCreds } from "@/lib/ingest";
+import { fetchOrderById } from "@/lib/shopify";
 import { TandersApiError } from "@/lib/tanders/types";
 import type { OrderMasterRow } from "@/lib/types";
 
@@ -102,6 +105,48 @@ async function activeGuides(
 }
 
 /**
+ * La nota del pedido en Shopify: donde el equipo apunta a mano lo que averiguó
+ * al llamar (el enlace de Google Maps del cliente, un horario, una advertencia).
+ *
+ * Se pide EN VIVO y solo se usa lo sincronizado como respaldo. Es un campo que
+ * un humano edita segundos antes de despachar —a menudo para pegar justamente
+ * la ubicación—, así que leer la copia local se arriesga a mandar la guía sin lo
+ * último que se escribió. Best-effort: si Shopify no responde, se sigue con lo
+ * que haya en `orders.raw` y la guía se puede crear igual.
+ */
+async function shopifyOrderNote(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+): Promise<string | null> {
+  const { data } = await admin
+    .from("orders")
+    .select("store_id,shopify_order_id,raw")
+    .eq("id", orderId)
+    .maybeSingle();
+  const order = data as
+    | { store_id: string; shopify_order_id: string | null; raw: { note?: string | null } | null }
+    | null;
+  if (!order) return null;
+
+  const stored = typeof order.raw?.note === "string" ? order.raw.note : null;
+
+  try {
+    const creds = await getStoreCreds(order.store_id, admin);
+    if (!creds?.shopify_token || !order.shopify_order_id) return stored;
+    const live = await fetchOrderById({
+      domain: creds.shopify_domain,
+      token: creds.shopify_token,
+      storeId: order.store_id,
+      orderGid: `gid://shopify/Order/${order.shopify_order_id}`,
+    });
+    const raw = live?.raw as { note?: string | null } | undefined;
+    return typeof raw?.note === "string" ? raw.note : stored;
+  } catch {
+    return stored;
+  }
+}
+
+/**
  * Todo lo que necesita el modal, ya resuelto en el servidor: qué se va a
  * despachar, a dónde, por cuánto, y qué debería frenar al operador.
  */
@@ -172,7 +217,10 @@ export async function loadTandersDraft(
         paymentState: row.payment_state,
         orderTotal: row.order_total,
       }),
-      note: row.reference ?? "",
+      note: composeTandersNote({
+        reference: row.reference,
+        shopifyNote: await shopifyOrderNote(admin, orderId),
+      }),
       blockers,
       warnings,
     },
@@ -194,7 +242,11 @@ export async function createTandersGuide(
   input: CreateTandersInput,
 ): Promise<{ error?: string; notice?: string; guideCode?: string; labelUrl?: string }> {
   const perms = await getMasterPermissions();
-  if (!perms.can("master.edit")) return { error: "Tu rol no permite crear guías." };
+  // El mismo permiso que gobierna el botón. Comprobarlo SOLO en la interfaz no
+  // protege nada: la acción es invocable directamente.
+  if (!perms.can("tanders.create_guide")) {
+    return { error: "Tu rol no permite crear guías de Tanders." };
+  }
 
   const ctx = await authorize(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
@@ -273,11 +325,15 @@ export async function createTandersGuide(
     };
   }
 
-  const guideCode = String(order?.id ?? "").trim();
+  // El código que se guarda es el N° de seguimiento de su panel, NO el cuid:
+  // es por lo único que el equipo puede buscar el envío en Tanders. El cuid va
+  // aparte porque sigue siendo la clave de su API.
+  const guideCode = extractTrackingCode(order) ?? "";
+  const tandersOrderId = String(order?.id ?? "").trim() || null;
   if (!guideCode) {
     return {
       error:
-        "Tanders respondió sin id de pedido. Revisa en tanders.app si la guía se creó antes de reintentar.",
+        "Tanders respondió sin código de pedido. Revisa en tanders.app si la guía se creó antes de reintentar.",
     };
   }
   const labelUrl = extractLabelUrl(order);
@@ -305,6 +361,7 @@ export async function createTandersGuide(
     delivery_status: "pendiente",
     status_category: "pending",
     label_url: labelUrl,
+    tanders_order_id: tandersOrderId,
     tanders_raw: order as unknown as Record<string, unknown>,
   };
 
@@ -334,6 +391,7 @@ export async function createTandersGuide(
       packageType: built.payload.packageType,
       weightGrams: built.payload.weightGrams,
       collectionAmount: built.payload.collectionAmount,
+      tandersOrderId,
       labelUrl,
     },
   });
@@ -342,7 +400,7 @@ export async function createTandersGuide(
   revalidatePath(MASTER_PATH);
 
   return {
-    notice: `Guía Tanders creada: ${guideCode}${labelUrl ? "" : " (la etiqueta PDF puede tardar en estar lista)"}.`,
+    notice: `Guía Tanders creada: ${guideCode}${labelUrl ? "" : " — la etiqueta PDF se genera después, se descarga desde tanders.app"}.`,
     guideCode,
     labelUrl: labelUrl ?? undefined,
   };

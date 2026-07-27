@@ -39,16 +39,26 @@ export interface TandersOrderPayload {
 }
 
 /**
- * Respuesta de `POST /orders` (201). Del detalle del pedido se confirmó `id`
- * (cuid) y `status` ("Pendiente" en la interfaz). El resto se declara opcional:
- * la etiqueta PDF puede llegar con otro nombre o no venir hasta que el pedido
- * se asigna.
+ * Respuesta de `POST /orders` (201). CONFIRMADA contra guías reales.
+ *
+ * Los dos identificadores no son intercambiables:
+ *  - `id` es un cuid interno. No aparece en su interfaz; sirve para su API.
+ *  - `aliclikOrderNumber` es lo que su panel muestra como "N° SEGUIMIENTO" y lo
+ *    único por lo que se puede buscar un envío. El nombre delata que Tanders
+ *    sincroniza cada pedido hacia Aliclik y adopta el número que este genera.
+ *
+ * La etiqueta NO viene en la respuesta: `labelGeneratedAt` llega en null porque
+ * el pedido nace PENDING y el PDF se genera después.
  */
 export interface TandersOrder {
   id: string;
+  /** N° de seguimiento visible ("TANDER1785…"). */
+  aliclikOrderNumber?: string | null;
+  /** PENDING al crear. */
   status?: string | null;
-  code?: string | null;
-  labelUrl?: string | null;
+  /** Null hasta que el PDF existe. */
+  labelGeneratedAt?: string | null;
+  aliclikSyncStatus?: string | null;
   createdAt?: string | null;
   [k: string]: unknown;
 }

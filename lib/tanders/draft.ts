@@ -140,3 +140,40 @@ export function buildTandersPayload(input: TandersDraftInput): TandersDraftResul
     },
   };
 }
+
+/**
+ * Nota que va en la guía: la referencia de la dirección primero y, a
+ * continuación, la nota que el equipo escribió en el pedido de Shopify.
+ *
+ * Son dos campos distintos y ninguno reemplaza al otro. La referencia viene del
+ * formulario COD ("entre tal y tal avenida"); la nota del pedido es donde el
+ * equipo apunta a mano lo que averiguó al llamar —el enlace de Google Maps del
+ * cliente, un horario, una advertencia—. Mandar solo la primera deja al
+ * repartidor sin la mitad de lo que se sabe del destino.
+ *
+ * Si una repite a la otra se manda una sola vez: en las guías la nota se lee de
+ * un vistazo y el texto duplicado hace perder el dato que importa.
+ */
+export function composeTandersNote(input: {
+  reference: string | null | undefined;
+  shopifyNote: string | null | undefined;
+}): string {
+  const parts = [input.reference, input.shopifyNote]
+    .map((p) => (p ?? "").trim())
+    .filter(Boolean);
+
+  const seen = new Set<string>();
+  const unique = parts.filter((p) => {
+    const key = p.toLowerCase().replace(/\s+/g, " ");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // Una que contenga literalmente a la otra tampoco se repite.
+  const kept = unique.filter(
+    (p, i) => !unique.some((other, j) => j !== i && other.length > p.length && other.includes(p)),
+  );
+
+  return kept.join("\n");
+}
