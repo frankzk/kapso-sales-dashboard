@@ -551,22 +551,39 @@ export async function recomputeOrderMaster(
       guideAddress?.delivery_reference ??
       draft?.referencia ??
       null;
-    // El punto del mapa: la corrección manual primero, luego lo que el courier
-    // geolocalizó al ir físicamente. Shopify no entrega coordenadas.
+    // El punto del mapa, de más fiable a menos:
+    //
+    //   1. La corrección manual del equipo, que gana siempre.
+    //   2. Lo que el courier geolocalizó al ir FÍSICAMENTE a la puerta. Es la
+    //      verdad de campo: alguien estuvo ahí.
+    //   3. Lo que Shopify geocodificó de la dirección escrita. Es una
+    //      estimación a partir de texto, así que va después de las dos
+    //      anteriores — pero llega desde el minuto cero del pedido, mientras
+    //      que las otras dos solo existen después de un intento de entrega o de
+    //      una corrección a mano.
+    //
+    // El punto 3 estuvo en `orders.raw` todo el tiempo sin usarse: la consulta
+    // GraphQL no pedía `latitude`/`longitude`, así que solo lo traían los
+    // pedidos que entraban por webhook. Es la coordenada que Aliclik exige para
+    // cotizar y crear una guía.
     const geoPin = guides.find((g) => g.latitude != null && g.longitude != null);
-    const latitude = geoOverride?.latitude ?? geoPin?.latitude ?? null;
-    const longitude = geoOverride?.longitude ?? geoPin?.longitude ?? null;
+    const latitude = geoOverride?.latitude ?? geoPin?.latitude ?? address?.latitude ?? null;
+    const longitude = geoOverride?.longitude ?? geoPin?.longitude ?? address?.longitude ?? null;
     const geoSource = geoOverride
       ? "manual"
-      : guides.some((g) => g.province || g.district)
+      : geoPin
         ? "courier"
-        : geoHit
-          ? "ubigeo"
-          : address
-            ? "shopify"
-            : draft
-              ? "draft"
-              : null;
+        : address?.latitude != null
+          ? "shopify"
+          : guides.some((g) => g.province || g.district)
+            ? "courier"
+            : geoHit
+              ? "ubigeo"
+              : address
+                ? "shopify"
+                : draft
+                  ? "draft"
+                  : null;
 
     const eventSnapshots: OrderEventSnapshot[] = orderEvents.map((e) => ({
       kind: e.kind,

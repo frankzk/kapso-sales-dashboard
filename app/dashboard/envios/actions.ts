@@ -1136,6 +1136,10 @@ async function resolveDirectGuideAddress(
           province: d.province ?? null,
           name: d.customer_name ?? null,
           phone: d.customer_phone ?? null,
+          // Un carrito abandonado no pasa por el checkout, así que Shopify
+          // nunca llega a geocodificar la dirección.
+          latitude: null,
+          longitude: null,
         },
         source: "carrito",
       };
@@ -1165,6 +1169,9 @@ async function resolveDirectGuideAddress(
         province: l.province ?? l.region ?? null,
         name: l.ship_name ?? null,
         phone: l.phone ?? null,
+        // La dirección de un lead la escribe el equipo a mano: sin geocodificar.
+        latitude: null,
+        longitude: null,
       },
       source: "lead",
     };

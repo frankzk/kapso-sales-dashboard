@@ -668,6 +668,9 @@ export async function getShipmentWithCalls(
             province: draftAddress.province ?? null,
             name: draftAddress.customer_name ?? null,
             phone: draftAddress.customer_phone ?? null,
+            // Un borrador no pasa por el checkout: Shopify no lo geocodifica.
+            latitude: null,
+            longitude: null,
           };
         }
       }

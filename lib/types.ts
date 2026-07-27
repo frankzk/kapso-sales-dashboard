@@ -48,6 +48,14 @@ export interface OrderShippingAddress {
   province: string | null;
   name: string | null;
   phone: string | null;
+  /**
+   * Coordenadas que Shopify geocodifica de la dirección. Llegan en el mismo
+   * `shipping_address` de siempre; durante mucho tiempo no se leyeron porque la
+   * consulta GraphQL no las pedía. Son las que Aliclik exige para cotizar y
+   * crear una guía.
+   */
+  latitude: number | null;
+  longitude: number | null;
 }
 
 export interface ShipmentOrderDetail {

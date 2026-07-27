@@ -38,10 +38,23 @@ import {
 describe("Shopify order destination query", () => {
   it("always requests the delivery address and only drops protected phone fields", () => {
     const query = buildOrdersQuery(true);
-    expect(query).toContain("shippingAddress { address1 address2 city province name phone }");
+    expect(query).toContain(
+      "shippingAddress { address1 address2 city province name latitude longitude phone }",
+    );
     const withoutPhone = buildOrdersQuery(false);
-    expect(withoutPhone).toContain("shippingAddress { address1 address2 city province name }");
+    expect(withoutPhone).toContain(
+      "shippingAddress { address1 address2 city province name latitude longitude }",
+    );
     expect(withoutPhone).not.toContain("billingAddress { phone }");
+  });
+
+  it("pide las coordenadas SIEMPRE, con o sin permiso de teléfono", () => {
+    // Sin esto la integración con Aliclik se queda sin el dato que exige para
+    // cotizar y crear: durante mucho tiempo la consulta no las pedía y solo las
+    // traían los pedidos que entraban por webhook.
+    for (const withPhone of [true, false]) {
+      expect(buildOrdersQuery(withPhone)).toContain("latitude longitude");
+    }
   });
 });
 
