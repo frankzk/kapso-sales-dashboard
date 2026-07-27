@@ -136,6 +136,14 @@ export interface AliclikPreview {
   /** Falta la coordenada: la interfaz debe pedirla antes de seguir. */
   needsCoordinate?: boolean;
   /**
+   * El pedido acaba de crearse y Shopify todavía no nos ha devuelto su
+   * dirección. NO es un error ni hay nada que la operadora deba hacer: el
+   * webhook llega en segundos y trae dirección Y coordenada geocodificada.
+   * Se distingue de `needsCoordinate` a propósito — pedirle un enlace de Maps
+   * aquí sería pedirle trabajo que el sistema va a hacer solo.
+   */
+  notReady?: boolean;
+  /**
    * Por qué NO se podría crear la guía aunque la cotización salga bien.
    *
    * La cotización es de solo lectura, así que se permite siempre; la escritura
@@ -174,6 +182,24 @@ export async function previewAliclikGuide(
 ): Promise<AliclikPreview> {
   const { ctx, error } = await authorize(orderId, "aliclik.create_guide");
   if (!ctx) return { ok: false, error };
+
+  // Pedido recién creado desde Leads: la fila local existe (la acción del botón
+  // verde recalcula el Master), pero la dirección llega con el webhook de
+  // Shopify unos segundos después. Sin dirección no se puede ni cotizar ni
+  // crear, así que se dice que hay que esperar — no que falte una coordenada.
+  // El límite de tiempo importa: pasados unos minutos ya NO es una carrera,
+  // es un pedido roto, y entonces sí hay que enseñar el problema de verdad.
+  if (!ctx.row.address) {
+    const createdAt = Date.parse(ctx.row.order_created_at ?? "");
+    const fresh = Number.isFinite(createdAt) && Date.now() - createdAt < 10 * 60_000;
+    if (fresh) {
+      return {
+        ok: false,
+        notReady: true,
+        error: "Esperando la dirección de Shopify. Tarda unos segundos.",
+      };
+    }
+  }
 
   const modality = input.modality ?? "cod";
   const admin = createAdminSupabase();
