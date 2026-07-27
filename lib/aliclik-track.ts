@@ -114,6 +114,7 @@ export async function applyAliclikSnapshot(
       .update({
         reported_status: aliclikStatusLabel(order),
         last_report_at: updatedAt ?? new Date().toISOString(),
+        ...collectAmountPatch(order),
       })
       .eq("id", shipment.id);
     return { ok: true, outcome: "unchanged", shipmentId: shipment.id, orderId: shipment.order_id };
@@ -127,6 +128,7 @@ export async function applyAliclikSnapshot(
     status_category: categoryOf(next),
     reported_status: aliclikStatusLabel(order),
     last_report_at: updatedAt ?? nowIso,
+    ...collectAmountPatch(order),
   };
   if (mapped.pickupState) patch.pickup_state = mapped.pickupState;
   if (mapped.returned) patch.returned_at = updatedAt ?? nowIso;
@@ -162,6 +164,20 @@ export async function applyAliclikSnapshot(
  * Relee un pedido de Aliclik y aplica lo que diga. Es lo que hacen tanto el
  * webhook (tras registrar el aviso) como el cron.
  */
+/**
+ * Lo que Aliclik declara que cobrará en la puerta.
+ *
+ * Se guarda en CADA pasada, gane o no el mapeo de estados, porque el importe
+ * puede cambiar sin que cambie el estado — es justo lo que pasa cuando alguien
+ * lo corrige a mano en el panel de Aliclik. Si no viene el dato, no se toca la
+ * columna: un `null` accidental borraría la última lectura buena.
+ */
+function collectAmountPatch(order: AliclikOrder): Record<string, unknown> {
+  const total = order.total;
+  if (total == null || !Number.isFinite(total) || total <= 0) return {};
+  return { reported_collect_amount: total };
+}
+
 export async function refreshAliclikOrder(
   orderNumber: string,
   opts: AliclikClientOpts,

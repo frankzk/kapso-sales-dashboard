@@ -170,3 +170,60 @@ export function reconcileToOrderTotal<T extends PricedLine>(
 
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Vigilancia: ¿lo que Aliclik va a cobrar cuadra con el pedido?
+// ---------------------------------------------------------------------------
+
+export type CollectMismatch = null | {
+  kind: "cobra_de_mas" | "cobra_de_menos";
+  /** Diferencia en soles, siempre positiva. */
+  gap: number;
+  message: string;
+};
+
+/**
+ * Compara lo que Aliclik declara que cobrará contra el total real del pedido.
+ *
+ * Las dos direcciones NO son simétricas, y por eso no vale un simple "difieren":
+ *
+ *   * Por ENCIMA del total nunca hay excusa. Un solo céntimo de más significa
+ *     que la clienta va a pagar más de lo que se le dijo, y en contraentrega
+ *     eso se descubre con el paquete delante. Es el fallo de los S/447.
+ *   * Por DEBAJO hay un margen legítimo: Aliclik solo cobra importes enteros y
+ *     con ciertas cantidades el total exacto no es representable, así que
+ *     nosotros mismos bajamos hasta `MAX_ACCEPTABLE_LOSS`. Solo se avisa de lo
+ *     que caiga por debajo de ese suelo.
+ *
+ * Pura: la decisión de qué es un descuadre no depende de la base de datos.
+ */
+export function collectAmountMismatch(
+  reported: number | null | undefined,
+  orderTotal: number | null | undefined,
+  maxLoss: number = MAX_ACCEPTABLE_LOSS,
+): CollectMismatch {
+  if (reported == null || !Number.isFinite(reported) || reported <= 0) return null;
+  if (orderTotal == null || !Number.isFinite(orderTotal) || orderTotal <= 0) return null;
+
+  const diff = round2(reported - orderTotal);
+  if (diff > 0.005) {
+    return {
+      kind: "cobra_de_mas",
+      gap: diff,
+      message:
+        `Aliclik va a cobrar S/ ${reported.toFixed(2)} y el pedido es de S/ ${orderTotal.toFixed(2)}: ` +
+        `S/ ${diff.toFixed(2)} DE MÁS. Corrígelo en el panel de Aliclik antes del reparto.`,
+    };
+  }
+  const short = round2(-diff);
+  if (short > maxLoss + 0.005) {
+    return {
+      kind: "cobra_de_menos",
+      gap: short,
+      message:
+        `Aliclik va a cobrar S/ ${reported.toFixed(2)} y el pedido es de S/ ${orderTotal.toFixed(2)}: ` +
+        `S/ ${short.toFixed(2)} de menos.`,
+    };
+  }
+  return null;
+}
