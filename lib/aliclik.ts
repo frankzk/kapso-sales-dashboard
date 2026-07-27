@@ -273,19 +273,40 @@ export function isBotChallenge(body: unknown, contentType?: string | null): bool
 }
 
 /**
+ * Saca el Ray ID del cuerpo del desafío. Cloudflare lo imprime al pie de su
+ * página ("Ray ID: 8f1a2b3c4d5e6f70") además de mandarlo en la cabecera
+ * `cf-ray`, y de las dos fuentes la cabecera es la fiable — esta es el respaldo.
+ */
+export function extractRayId(body: unknown): string | null {
+  if (typeof body !== "string") return null;
+  const m = body.match(/ray\s*id[":\s]*([0-9a-f]{8,}(?:-[a-z0-9]+)?)/i);
+  return m?.[1] ?? null;
+}
+
+/**
  * Mensaje legible a partir de una respuesta de error. Aliclik responde
  * `{ statusCode, message, error }` y en los 400 el `message` está en español y
  * es accionable — se propaga literal. `message` también puede llegar como array
  * (validaciones de NestJS), en cuyo caso se juntan.
  */
-export function aliclikErrorMessage(status: number, body: unknown, contentType?: string | null): string {
+export function aliclikErrorMessage(
+  status: number,
+  body: unknown,
+  contentType?: string | null,
+  rayId?: string | null,
+): string {
   // Antes que nada: si esto es un muro de Cloudflare, decirlo con todas las
   // letras. Enseñar el HTML mandaría al equipo a revisar el token, que está bien.
   if (isBotChallenge(body, contentType)) {
+    const ray = rayId ?? extractRayId(body);
     return (
       `Cloudflare está bloqueando la conexión con Aliclik (HTTP ${status}): devolvió una página de ` +
       "verificación en vez de la API, así que la petición nunca llegó a su servidor. " +
-      "No es el token. Aliclik tiene que permitir el tráfico de nuestro servidor en su WAF."
+      "No es el token. Aliclik tiene que permitir el tráfico de nuestro servidor en su WAF." +
+      // El Ray ID es lo que permite a Aliclik encontrar ESTE bloqueo concreto en
+      // su panel de Cloudflare. Sin él, el reporte es "a veces nos bloquea" y se
+      // eterniza; con él, su sysadmin ve la regla que disparó en segundos.
+      (ray ? ` · Ray ID de Cloudflare para reportarlo: ${ray} (UTC ${new Date().toISOString()})` : "")
     );
   }
   if (body && typeof body === "object") {
@@ -357,11 +378,12 @@ async function request<T>(
   }
 
   const contentType = res.headers.get("content-type");
+  const rayId = res.headers.get("cf-ray");
 
   if (!res.ok) {
     return {
       ok: false,
-      error: aliclikErrorMessage(res.status, parsed, contentType),
+      error: aliclikErrorMessage(res.status, parsed, contentType, rayId),
       status: res.status,
     };
   }
@@ -371,7 +393,7 @@ async function request<T>(
   if (isBotChallenge(parsed, contentType)) {
     return {
       ok: false,
-      error: aliclikErrorMessage(res.status, parsed, contentType),
+      error: aliclikErrorMessage(res.status, parsed, contentType, rayId),
       status: res.status,
     };
   }
