@@ -654,6 +654,24 @@ drawer del Master y devuelve el código de guía.
 - Cron is protected by `CRON_SECRET`; ingestion writes via the service role.
 - RLS restricts every read to the caller's accessible stores.
 
+## Región de las funciones
+
+`vercel.json` fija `"regions": ["gru1"]` (São Paulo). El motivo es la base de
+datos: el proyecto de Supabase está en `sa-east-1` (São Paulo) y las funciones
+corrían en `iad1` (Virginia), que es el valor por defecto de Vercel — cada
+consulta cruzaba el hemisferio, y el panel hace muchas por pantalla. El equipo
+además opera desde Perú, más cerca de São Paulo.
+
+Contrapartida: Shopify, Kapso y Meta quedan más lejos. Son llamadas menos
+frecuentes y casi siempre en segundo plano (crons, webhooks), así que el saldo
+debería ser positivo. Revertir es borrar la clave `regions`.
+
+> **Cuidado al editar `vercel.json`:** su esquema NO admite claves desconocidas
+> y **tampoco comentarios**. Una clave de más hace que Vercel rechace el fichero
+> y el despliegue falle *antes* de compilar, sin logs de build — y bloquea
+> también los despliegues siguientes de cualquier rama. `test/vercel-config.test.ts`
+> lo comprueba en CI; documenta aquí los porqués, no dentro del JSON.
+
 ## Aliclik — crear guías desde el Master
 
 Permite crear el pedido en Aliclik (contraentrega) desde `/dashboard/pedidos` en
