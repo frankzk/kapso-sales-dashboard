@@ -626,6 +626,14 @@ hay que dejar de subir el Excel.
 
 - **Needs migration 0059** (`stores.shalom_*`, `shipments.shalom_codigo` /
   `shalom_ose_id` / `shalom_order_id` / `shalom_serie` / `shalom_raw`).
+  **Ya aplicada en producción.** Es puramente aditiva, así que se pudo aplicar
+  antes de desplegar el código: las columnas quedan sin que nadie las lea.
+- Los dos secretos nuevos de `stores` heredan la postura del resto de esa tabla
+  (`shopify_token_enc`, `kapso_api_key_enc`, `tanders_password_enc`…): `anon` no
+  llega por RLS, y un usuario autenticado con acceso a la tienda ve el **texto
+  cifrado**, inútil sin `ENCRYPTION_KEY`, que solo existe en el servidor. La
+  clave de recojo NO va ahí: vive en `shalom_pickup_keys`, que es ilegible
+  incluso para un administrador (0049 + 0053).
 - Permiso propio **`shalom.create_guide`**. Ojo con la vecindad: los otros
   `shalom.*` son del flujo de cobro Yape y de la clave de recojo. Crear la guía
   **no** da acceso a ver claves.
