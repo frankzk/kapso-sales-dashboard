@@ -35,14 +35,23 @@ export function isMasterView(v: string | undefined | null): v is MasterView {
   return !!v && MASTER_VIEWS.some((s) => s.key === v);
 }
 
+// Columnas del LISTADO. Deliberadamente más cortas que la fila completa: en un
+// listado de 10.000 pedidos, cada columna se paga 10.000 veces — y no solo su
+// valor, también su NOMBRE repetido en cada objeto JSON. Con las 43 columnas
+// eran 13 MB por carga, de los que la mayor parte eran nombres de campo.
+//
+// Aquí solo van las que la tabla pinta o los filtros usan. Todo lo demás
+// —dirección, referencia, coordenadas, origen de la geo— lo trae el detalle al
+// abrir un pedido (`getOrderMasterDetail`, que sí lee la fila entera), que es
+// exactamente cuando hace falta y para UN pedido, no para diez mil.
 const MASTER_COLUMNS =
-  "id,store_id,order_id,order_name,shopify_order_id,order_created_at,customer_name," +
-  "customer_phone,region,province,district,address,reference,latitude,longitude,geo_source," +
+  "id,store_id,order_id,order_name,order_created_at,customer_name," +
+  "customer_phone,region,province,district," +
   "shipping_mode,order_total,general_status," +
-  "operational_status,status_since,status_source,status_locked,current_courier,last_courier," +
-  "courier_count,attempt_count,guide_code,dispatched_at,delivered_at,delivered_courier," +
-  "returned_at,last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
-  "key_state,agency_branch,agency_arrived_at,agency_expires_at,recomputed_at,updated_at";
+  "operational_status,status_since,status_locked,current_courier,last_courier," +
+  "courier_count,attempt_count,guide_code,dispatched_at,delivered_at," +
+  "last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
+  "key_state,agency_branch,agency_arrived_at,agency_expires_at";
 
 // PostgREST corta cada respuesta en `db-max-rows` (1000 en Supabase), así que se
 // pagina con .range() en vez de pedir un .limit() grande.
