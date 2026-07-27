@@ -78,6 +78,9 @@ export function AliclikGuidePanel({
         transportId,
         coordinate: coordinate || null,
         note: note || null,
+        // Se devuelve el monto que se acaba de ENSEÑAR: el servidor lo recalcula
+        // y aborta si cambió entre cotizar y pulsar.
+        expectedCollectTotal: preview?.collectTotal ?? null,
       });
       if (res.error) setMessage({ kind: "error", text: res.error });
       else {
@@ -182,6 +185,35 @@ export function AliclikGuidePanel({
 
         {preview?.ok ? (
           <div className="space-y-3 border-t border-slate-200 pt-3">
+            {/* SOBRE QUÉ PEDIDO Y POR CUÁNTO. Va lo primero y en grande porque son
+                las dos cosas que, si están mal, no tienen vuelta atrás: la guía
+                queda enganchada al pedido equivocado, o se le cobra de más a la
+                clienta en la puerta. Una clienta puede tener varios pedidos a lo
+                largo del tiempo, así que ver el número concreto es lo único que
+                permite a la operadora darse cuenta antes de pulsar. */}
+            <div className="rounded-lg border border-slate-300 bg-white px-3 py-2.5">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-xs text-slate-500">Pedido</span>
+                <span className="font-mono text-sm font-semibold text-slate-900">
+                  {preview.orderName ?? "—"}
+                </span>
+              </div>
+              <div className="mt-1.5 flex items-baseline justify-between gap-3 border-t border-slate-100 pt-1.5">
+                <span className="text-xs text-slate-500">A cobrar en la puerta</span>
+                <span className="text-base font-semibold text-slate-900">
+                  S/ {(preview.collectTotal ?? 0).toFixed(2)}
+                </span>
+              </div>
+              {preview.orderTotal != null &&
+              Math.abs((preview.collectTotal ?? 0) - preview.orderTotal) > 0.005 ? (
+                <p className="mt-1.5 text-xs text-amber-700">
+                  El total del pedido en Shopify es S/ {preview.orderTotal.toFixed(2)}. La diferencia
+                  es de redondeo: el precio unitario solo admite dos decimales y siempre se ajusta a
+                  la baja, nunca cobrando de más.
+                </p>
+              ) : null}
+            </div>
+
             {/* Ubigeo: el contraste es el detector de pines mal puestos */}
             {preview.aliclikUbigeo ? (
               <div

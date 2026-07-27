@@ -639,6 +639,13 @@ export function LeadDrawer({
                   y terminar aquí en vez de irse al Master a buscar el pedido. */}
               {history?.currentOrderId && !history.currentOrderGuide && (
                 <AliclikGuidePanel
+                  // `key` = candado de identidad. Sin ella, si la vendedora pulsa
+                  // "Generar nuevo pedido" con el panel abierto, React reutiliza
+                  // la instancia: cambia `orderId` pero se queda dentro la
+                  // cotización del pedido ANTERIOR. Crear entonces mandaría a
+                  // Aliclik el courier y el precio de un pedido y el id de otro.
+                  // Con la key el panel se monta de cero para cada pedido.
+                  key={history.currentOrderId}
                   orderId={history.currentOrderId}
                   hasCoordinate={history.currentOrderHasCoordinate}
                   // Sin argumento a propósito: `{refreshList:true}` toma un atajo
