@@ -44,6 +44,9 @@ function navItems(isVendedoraOnly: boolean): NavItem[] {
     { href: "/dashboard/leads", label: "Leads", icon: IconChat },
     { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
     { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
+    // Dato maestro de la integración con Aliclik: se configura una vez por
+    // tienda, no pedido a pedido. Sin el mapeo SKU→EAN no se crea ninguna guía.
+    { href: "/dashboard/envios/aliclik", label: "Catálogo Aliclik", icon: IconPlug },
     { href: "/dashboard/productividad", label: "Productividad", icon: IconHeadset },
     { href: "/dashboard/stores", label: "Tiendas", icon: IconStore },
     { href: "/dashboard/costos", label: "Costos", icon: IconMoney },

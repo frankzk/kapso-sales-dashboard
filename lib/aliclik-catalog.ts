@@ -105,6 +105,44 @@ export function normalizeSku(raw: string | null | undefined): string {
   return (raw ?? "").trim().toUpperCase();
 }
 
+/**
+ * Sufijo de tienda que Aliclik añade al nombre de cada producto de la cuenta,
+ * p. ej. "… (30 mL) - AUR5X". No es parte del producto: es la marca del
+ * proveedor dentro de su catálogo.
+ */
+const STORE_SUFFIX_RE = /\s*[-–—]\s*AUR\d?X?[A-Z0-9]*\s*$/i;
+
+/**
+ * Normaliza el NOMBRE de un producto para poder emparejar Shopify con Aliclik.
+ *
+ * POR QUÉ HACE FALTA. Los SKUs de las dos plataformas no tienen nada que ver
+ * (Shopify usa numéricos como "818531465", Aliclik códigos como "SXOW1"), así
+ * que emparejar por SKU no encuentra nada. El nombre, en cambio, es casi
+ * idéntico — Aliclik solo le añade el sufijo de tienda:
+ *
+ *   Shopify: "FEEL VIRGIN – Gel Íntimo … (30 mL)"
+ *   Aliclik: "FEEL VIRGIN – Gel Íntimo … (30 mL) - AUR5X"
+ *
+ * Se neutraliza todo lo que varía sin cambiar el producto: el sufijo, los
+ * símbolos ™/® (158 de los 337 productos los llevan), los acentos, los guiones
+ * de distinto tipo y los espacios de más.
+ *
+ * NO es una coincidencia difusa: tras normalizar se exige igualdad exacta. Un
+ * emparejamiento por parecido podría mandar el producto equivocado a una
+ * clienta, y eso es peor que dejarlo sin mapear.
+ */
+export function normalizeProductName(raw: string | null | undefined): string {
+  return (raw ?? "")
+    .replace(STORE_SUFFIX_RE, "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "") // acentos
+    .replace(/[™®©]/g, "")
+    .replace(/[–—]/g, "-") // guion largo → corto
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 function label(line: { title: string | null; sku: string | null }): string {
   return line.title?.trim() || line.sku?.trim() || "(sin nombre)";
 }
@@ -415,21 +453,50 @@ export async function syncAliclikCatalog(
     }
   }
 
-  // Siembra automática del mapeo: mismo SKU en Shopify y en Aliclik. `ignoreDuplicates`
-  // es lo que protege las decisiones del equipo — una fila ya existente (manual o
-  // auto) no se toca.
-  const seeds = payload
-    .filter((r) => typeof r.sku === "string" && (r.sku as string).trim())
-    .map((r) => ({
-      store_id: storeId,
-      shopify_sku: normalizeSku(r.sku as string),
-      ean: String(r.ean),
-      source: "auto" as const,
-    }));
-  if (seeds.length) {
-    const { error, count } = await admin
-      .from("aliclik_sku_map")
-      .upsert(seeds, { onConflict: "store_id,shopify_sku", ignoreDuplicates: true, count: "exact" });
+  // Siembra automática del mapeo. Dos señales, en este orden:
+  //
+  //   1. Mismo SKU en ambas plataformas. Es lo ideal, pero en la práctica casi
+  //      nunca ocurre: Shopify usa numéricos ("818531465") y Aliclik códigos
+  //      propios ("SXOW1"), así que por sí sola encuentra casi nada.
+  //   2. Mismo NOMBRE normalizado. Aliclik replica el título del producto y solo
+  //      le añade su sufijo de tienda, así que tras normalizar coinciden exacto.
+  //      Esta es la que realmente hace el trabajo.
+  //
+  // `ignoreDuplicates` protege las decisiones del equipo: una fila que ya existe
+  // (manual o auto) no se toca nunca.
+  const seeds = new Map<string, { shopify_sku: string; ean: string }>();
+
+  for (const r of payload) {
+    const s = typeof r.sku === "string" ? normalizeSku(r.sku) : "";
+    if (s) seeds.set(s, { shopify_sku: s, ean: String(r.ean) });
+  }
+
+  // Por nombre: hace falta el catálogo de Shopify, que aquí se deriva de las
+  // líneas de pedido — es la única fuente de SKU+título que tiene el sistema.
+  const shopifyProducts = await loadShopifySkuNames(storeId, admin);
+  if (shopifyProducts.size) {
+    // Un nombre que apunta a DOS EAN distintos es ambiguo: no se siembra ninguno
+    // y queda para que lo decida una persona.
+    const byName = new Map<string, string | null>();
+    for (const r of payload) {
+      const name = normalizeProductName(r.product_name as string | null);
+      if (!name) continue;
+      const ean = String(r.ean);
+      if (!byName.has(name)) byName.set(name, ean);
+      else if (byName.get(name) !== ean) byName.set(name, null); // ambiguo
+    }
+    for (const [shopifySku, title] of shopifyProducts) {
+      if (seeds.has(shopifySku)) continue; // el SKU ya ganó
+      const ean = byName.get(normalizeProductName(title));
+      if (ean) seeds.set(shopifySku, { shopify_sku: shopifySku, ean });
+    }
+  }
+
+  if (seeds.size) {
+    const { error, count } = await admin.from("aliclik_sku_map").upsert(
+      [...seeds.values()].map((s) => ({ ...s, store_id: storeId, source: "auto" as const })),
+      { onConflict: "store_id,shopify_sku", ignoreDuplicates: true, count: "exact" },
+    );
     if (error) out.errors.push(`Mapeo automático: ${error.message}`);
     else out.autoMapped = count ?? 0;
   }
@@ -482,6 +549,56 @@ export async function syncAliclikCatalog(
     }
   }
 
+  return out;
+}
+
+/**
+ * SKU → título de los productos de Shopify de una tienda.
+ *
+ * El sistema no guarda un catálogo de Shopify: los productos solo existen dentro
+ * de `orders.line_items`. Así que se derivan de ahí, quedándose con el título
+ * más reciente de cada SKU (un producto puede haberse renombrado, y el nombre
+ * que Aliclik tiene es el de ahora).
+ *
+ * Se limita a los pedidos recientes a propósito: un SKU que no se vende desde
+ * hace un año no necesita mapeo, y recorrer la tabla entera para eso sería caro.
+ */
+export async function loadShopifySkuNames(
+  storeId: string,
+  admin: SupabaseClient = createAdminSupabase(),
+  sinceDays = 365,
+): Promise<Map<string, string>> {
+  const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
+  const out = new Map<string, string>();
+  const seenAt = new Map<string, string>();
+
+  // Paginado: PostgREST corta en 1000 filas por respuesta.
+  const PAGE = 1000;
+  for (let from = 0; from < 50_000; from += PAGE) {
+    const { data, error } = await admin
+      .from("orders")
+      .select("created_at,line_items")
+      .eq("store_id", storeId)
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error || !data?.length) break;
+
+    for (const row of data as { created_at: string; line_items: unknown }[]) {
+      const items = Array.isArray(row.line_items) ? row.line_items : [];
+      for (const it of items as { sku?: string | null; title?: string | null }[]) {
+        const sku = normalizeSku(it.sku);
+        const title = (it.title ?? "").trim();
+        if (!sku || !title) continue;
+        const prev = seenAt.get(sku);
+        if (!prev || row.created_at > prev) {
+          seenAt.set(sku, row.created_at);
+          out.set(sku, title);
+        }
+      }
+    }
+    if (data.length < PAGE) break;
+  }
   return out;
 }
 
