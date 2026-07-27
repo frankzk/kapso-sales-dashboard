@@ -227,7 +227,9 @@ export function OrdersMasterBoard({
 }) {
   const router = useRouter();
   const [filters, setFilters] = useState<MasterFilters>(emptyFilters);
-  const [sortKey, setSortKey] = useState<MasterSortKey>("movement");
+  // Por defecto el correlativo corrido (del más nuevo al más viejo): es como se
+  // lee un listado de pedidos. "Último movimiento" queda a un clic en el selector.
+  const [sortKey, setSortKey] = useState<MasterSortKey>("created");
   const [showMore, setShowMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -464,8 +466,8 @@ export function OrdersMasterBoard({
                 onChange={(e) => setSortKey(e.target.value as MasterSortKey)}
                 className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
               >
-                <option value="movement">Último movimiento</option>
                 <option value="created">Fecha de creación</option>
+                <option value="movement">Último movimiento</option>
                 <option value="status_age">Antigüedad en el estado</option>
                 <option value="attempts">Intentos</option>
                 <option value="couriers">Couriers</option>
