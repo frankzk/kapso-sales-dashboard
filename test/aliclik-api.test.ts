@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   aliclikErrorMessage,
+  isBotChallenge,
   cancelOrder,
   createOrder,
   getOrder,
@@ -194,5 +195,58 @@ describe("statusFingerprint", () => {
     const base = { orderNumber: "ALC1", status: "PENDING_DELIVERY", callStatus: "CONFIRMED", dispatchStatus: "TO_PREPARE" };
     const moved = statusFingerprint({ ...base, dispatchStatus: "PICKED" });
     expect(moved).not.toBe(statusFingerprint(base));
+  });
+});
+
+describe("desafío anti-bot de Cloudflare", () => {
+  // api.aliclik-dev.com está detrás de Cloudflare, que puede interponer un
+  // desafío a las peticiones desde centros de datos — que es lo que somos en
+  // Vercel. El síntoma engaña: parece un error de la API cuando es de red.
+  const CHALLENGE =
+    '<!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title>' +
+    '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">';
+
+  it("reconoce la página de desafío por su cuerpo", () => {
+    expect(isBotChallenge(CHALLENGE)).toBe(true);
+    expect(isBotChallenge("<html><body>Attention Required! | Cloudflare</body></html>")).toBe(true);
+  });
+
+  it("lo reconoce también por el content-type", () => {
+    expect(isBotChallenge("cualquier cosa", "text/html; charset=UTF-8")).toBe(true);
+  });
+
+  it("no confunde una respuesta legítima de la API con un desafío", () => {
+    expect(isBotChallenge({ count: 0, result: [] }, "application/json")).toBe(false);
+    expect(isBotChallenge("Pedido cancelado correctamente.")).toBe(false);
+    expect(isBotChallenge(null)).toBe(false);
+  });
+
+  it("explica que NO es el token, en vez de escupir el HTML", async () => {
+    const { impl } = stubFetch([{ status: 403, body: CHALLENGE }]);
+    const res = await listProducts(opts(impl));
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain("Cloudflare");
+    expect(res.error).toContain("No es el token");
+    // Lo que NO debe pasar: enseñar HTML crudo al equipo.
+    expect(res.error).not.toContain("<!DOCTYPE");
+    expect(res.error).not.toContain("<meta");
+  });
+
+  it("un desafío servido con 200 tampoco pasa por éxito", async () => {
+    // Cloudflare sirve algunos desafíos con 200; tratarlo como éxito daría un
+    // catálogo vacío "correcto" y nadie se enteraría.
+    const { impl } = stubFetch([{ status: 200, body: CHALLENGE }]);
+    const res = await listProducts(opts(impl));
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain("Cloudflare");
+  });
+
+  it("manda User-Agent — una petición sin él es la primera que Cloudflare marca", async () => {
+    const { impl, calls } = stubFetch([{ status: 200, body: { count: 0, page: 1, result: [] } }]);
+    await listProducts(opts(impl));
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers["User-Agent"]).toContain("kapso-sales-dashboard");
   });
 });
