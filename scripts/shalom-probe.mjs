@@ -8,6 +8,9 @@
 //
 //   SHALOM_API_KEY='sk_…' node scripts/shalom-probe.mjs
 //
+//   # buscando TU agencia (imprime los id que van a Ajustes de la tienda)
+//   SHALOM_API_KEY='sk_…' SHALOM_AGENCY_Q='breña' node scripts/shalom-probe.mjs
+//
 //   # con la cuenta del cliente, para además listar productos, tarifas y órdenes
 //   SHALOM_API_KEY='sk_…' \
 //   SHALOM_PRO_EMAIL='cliente@empresa.com' \
@@ -39,6 +42,9 @@ const API_KEY = process.env.SHALOM_API_KEY?.trim();
 const EMAIL = process.env.SHALOM_PRO_EMAIL?.trim();
 const PASSWORD = process.env.SHALOM_PRO_PASSWORD?.trim();
 const CREATE = process.argv.includes("--create");
+/** Qué buscar en el directorio de agencias. Es como se consigue el id de la
+ *  agencia de ORIGEN, que después va en Ajustes de la tienda. */
+const AGENCY_Q = process.env.SHALOM_AGENCY_Q?.trim() || "arequipa";
 
 if (!API_KEY) {
   console.error("Falta SHALOM_API_KEY. Uso:\n  SHALOM_API_KEY='sk_…' node scripts/shalom-probe.mjs");
@@ -130,8 +136,24 @@ console.log("\n── Sin credenciales de Shalom Pro ──");
 record(await call("/healthz"));
 record(await call("/readyz"));
 
-const agencies = await call("/v1/agencies/search?q=arequipa");
+const agencies = await call(`/v1/agencies/search?q=${encodeURIComponent(AGENCY_Q)}`);
 record(agencies, { keepBody: true });
+
+// Se imprimen id + nombre en claro a propósito: es un directorio público, y el
+// id es justo lo que hay que copiar a Ajustes → Tienda → agencia de origen.
+{
+  const items = Array.isArray(agencies.body) ? agencies.body : (agencies.body?.items ?? []);
+  if (items.length) {
+    console.log(`\n  Agencias que coinciden con "${AGENCY_Q}":`);
+    for (const a of items.slice(0, 15)) {
+      const donde = [a.departamento, a.provincia, a.distrito].filter(Boolean).join(" · ");
+      console.log(`    id=${String(a.id).padEnd(6)} ${a.nombre}${donde ? `   (${donde})` : ""}`);
+    }
+    console.log("");
+  } else if (!agencies.error && agencies.status === 200) {
+    console.log(`\n  Ninguna agencia coincide con "${AGENCY_Q}". Prueba otro texto con SHALOM_AGENCY_Q.\n`);
+  }
+}
 
 if (agencies.status === 401 || agencies.status === 403) {
   console.error("\nLa API key fue rechazada. Revisa que sea la vigente y que no haya expirado.");
@@ -161,6 +183,12 @@ if (EMAIL && PASSWORD) {
   } else {
     const products = await call("/v1/products", { session, auth: true, timeoutMs: SLOW_MS });
     record(products, { keepBody: true });
+
+    // El catálogo es POR CUENTA: estos ids son los que sirven en tu tienda, y no
+    // tienen por qué coincidir con los de la documentación.
+    for (const prod of products.body?.products ?? []) {
+      console.log(`    id=${String(prod.id).padEnd(6)} ${prod.title}${prod.content ? `   (${prod.content})` : ""}`);
+    }
 
     record(await call("/v1/orders?page=1&per_page=3", { session, auth: true, timeoutMs: SLOW_MS }));
 
