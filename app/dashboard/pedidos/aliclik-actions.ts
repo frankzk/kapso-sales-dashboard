@@ -589,8 +589,51 @@ export async function createAliclikGuide(
     },
   });
 
+  // El mismo hecho, también en el HISTORIAL DEL LEAD.
+  //
+  // `order_events` es la verdad del pedido, pero el drawer de Leads no lo lee:
+  // su historial es `lead_calls`. Sin esto, la vendedora veía la confirmación
+  // unos segundos y desaparecía al recargarse el drawer, sin rastro de qué guía
+  // se había creado. Se anotan los DOS códigos —el pedido de Shopify y la guía—
+  // porque son los que hay que cruzar cuando algo se tuerce.
+  //
+  // Best-effort: un fallo aquí NO puede tumbar una guía que ya existe en
+  // Aliclik. Y no todo pedido viene de un lead (el Master crea guías de pedidos
+  // que nunca pasaron por WhatsApp), así que no encontrar lead es normal.
+  try {
+    const { data: lead } = await admin
+      .from("leads")
+      .select("id")
+      .eq("order_id", orderId)
+      .maybeSingle();
+    const leadId = (lead as { id: string } | null)?.id;
+    if (leadId) {
+      await admin.from("lead_calls").insert({
+        lead_id: leadId,
+        store_id: ctx.storeId,
+        // SIN vendedora, y no por descuido. `computeAdvisorConversionByDay`
+        // atribuye la venta a quien hizo la ÚLTIMA interacción del lead, de
+        // cualquier tipo. Firmar esta nota le robaría la venta a la asesora que
+        // la cerró y se la daría a quien creó la guía — que puede ser otra
+        // persona, o la misma en lote horas después. Quién creó la guía consta
+        // en `order_events`, que es la auditoría de verdad; esto es solo la
+        // anotación en el historial del lead.
+        vendedora: null,
+        kind: "system",
+        new_status: null,
+        note:
+          `Guía de Aliclik creada · ${orderNumber} · pedido ${ctx.row.order_name ?? "—"} · ` +
+          `cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)} · ` +
+          `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}`,
+      });
+    }
+  } catch {
+    /* el historial es una comodidad; la guía ya existe y no se toca */
+  }
+
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
+  revalidatePath("/dashboard/leads");
   return {
     notice:
       `Guía creada en Aliclik para ${ctx.row.order_name ?? "el pedido"}: ${orderNumber} · ` +
