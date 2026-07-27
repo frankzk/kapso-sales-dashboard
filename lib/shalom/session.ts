@@ -10,6 +10,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { decrypt, encrypt } from "@/lib/crypto";
 import { env } from "@/lib/env";
 import { ShalomClient, sessionIsFresh } from "./client";
+import { ShalomApiError } from "./types";
 
 export interface StoreShalom {
   /** Para reutilizar el token entre tiendas de la misma empresa. */
@@ -174,6 +175,51 @@ export async function mintSession(
     .eq("shalom_pro_email", email);
 
   return { expiresAt: session.expires_at, source: "login" };
+}
+
+/**
+ * Corre una LECTURA contra Shalom y, si el token cacheado resulta estar muerto,
+ * lo renueva y reintenta una vez.
+ *
+ * Por qué solo lecturas: `POST /v1/orders` no es idempotente y crea una guía
+ * cobrable, así que ahí un reintento automático puede despachar el paquete dos
+ * veces — esa llamada no pasa por acá y no debe pasar nunca. Buscar una persona,
+ * listar productos o cotizar no comprometen nada: repetirlas es gratis.
+ *
+ * Hace falta porque `expires_at` no es de fiar como única señal. El token puede
+ * morir antes de su hora —Shalom invalida sesiones por su cuenta— y hasta ahora
+ * eso dejaba al operador en un callejón sin salida: el modal le decía «vuelve a
+ * conectar la cuenta» en mitad de armar una guía, cuando el propio panel podía
+ * arreglarlo solo y seguir. El único coste de renovar es el login de ~90 s, que
+ * es justo lo que el operador iba a tener que pagar a mano igualmente.
+ */
+export async function readWithFreshSession<T>(
+  admin: SupabaseClient,
+  storeId: string,
+  store: StoreShalom,
+  run: (client: ShalomClient) => Promise<T>,
+): Promise<T> {
+  const first = clientFor(store);
+  if (first.sessionReady) {
+    try {
+      return await run(first.client);
+    } catch (err) {
+      if (!(err instanceof ShalomApiError) || !err.isShalomAuth) throw err;
+      // Cae al camino de abajo: el token estaba muerto antes de tiempo.
+      await clearSession(admin, storeId);
+    }
+  }
+
+  const minted = await mintSession(admin, storeId, {
+    ...store,
+    shalom_session_token_enc: null,
+    shalom_session_expires_at: null,
+  });
+  if ("error" in minted) throw new ShalomApiError(minted.error, 401, "shalom_auth_failed");
+
+  const refreshed = await loadStoreShalom(admin, storeId);
+  const second = clientFor((refreshed ?? store) as StoreShalom);
+  return run(second.client);
 }
 
 /** Tira el token cacheado. Para cuando Shalom lo rechaza antes de que expire. */

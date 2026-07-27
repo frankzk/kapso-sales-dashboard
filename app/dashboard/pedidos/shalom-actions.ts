@@ -46,6 +46,7 @@ import {
   loadStoreShalom,
   mintSession,
   publicClient,
+  readWithFreshSession,
   type StoreShalom,
 } from "@/lib/shalom/session";
 import {
@@ -282,9 +283,11 @@ export async function loadShalomProducts(
   if (configBlocker) return { error: configBlocker };
 
   try {
-    const { client, sessionReady } = clientFor(store as StoreShalom);
-    if (!sessionReady) return { error: "Conecta la cuenta de Shalom antes de listar productos." };
-    return { products: await client.products() };
+    return {
+      products: await readWithFreshSession(admin, storeId, store as StoreShalom, (client) =>
+        client.products(),
+      ),
+    };
   } catch (err) {
     return { error: describeShalomError(err) };
   }
@@ -310,9 +313,11 @@ export async function lookupShalomPerson(
   if (configBlocker) return { error: configBlocker };
 
   try {
-    const { client, sessionReady } = clientFor(store as StoreShalom);
-    if (!sessionReady) return { error: "Conecta la cuenta de Shalom antes de buscar el documento." };
-    const found = await client.findPerson(document, type);
+    // Lectura: si el token cacheado está muerto se renueva y se reintenta sola,
+    // en vez de echar al operador a «vuelve a conectar» a mitad de la guía.
+    const found = await readWithFreshSession(admin, storeId, store as StoreShalom, (client) =>
+      client.findPerson(document, type),
+    );
     if (!found) return { person: null };
     return {
       person: {
@@ -341,13 +346,14 @@ export async function quoteShalomTariff(
   const s = store as StoreShalom;
 
   try {
-    const { client, sessionReady } = clientFor(s);
-    if (!sessionReady) return { error: "Conecta la cuenta de Shalom antes de cotizar." };
-    const tariff = await client.tariff({
-      origin_terminal_id: s.shalom_origin_terminal_id as number,
-      destiny_terminal_id: input.destinyTerminalId,
-      product_id: input.productId,
-    });
+    // Cotizar no compromete nada, así que también se renueva y reintenta sola.
+    const tariff = await readWithFreshSession(admin, storeId, s, (client) =>
+      client.tariff({
+        origin_terminal_id: s.shalom_origin_terminal_id as number,
+        destiny_terminal_id: input.destinyTerminalId,
+        product_id: input.productId,
+      }),
+    );
     return {
       currency: tariff.currency ?? "PEN",
       price: tariff.product?.price ?? null,
