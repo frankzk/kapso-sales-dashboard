@@ -13,6 +13,7 @@ import {
 } from "@/lib/shalom/draft";
 import {
   describeShalomError,
+  describeShalomProbeFailure,
   findCreatedOrder,
   sessionIsFresh,
   ShalomClient,
@@ -305,6 +306,43 @@ describe("findCreatedOrder", () => {
   it("ante dos coincidencias no adopta ninguna: adoptar la equivocada es peor", () => {
     const ambiguous = [...orders, { id: 4, guia: "444", pickup_code: "2415", receiver: { document: "87654321" } }];
     expect(findCreatedOrder(ambiguous, { document: "87654321", pickupCode: "2415" })).toBeNull();
+  });
+});
+
+describe("describeShalomProbeFailure", () => {
+  const base = "https://api.shalom-api-peru.com";
+
+  // Esto pasó en producción: SHALOM_API_BASE apuntaba mal, Shalom devolvió 404 y
+  // el panel dijo «la API key del wrapper no funciona». Se fue a pedir una key
+  // nueva al proveedor cuando la key estaba perfecta.
+  it("ante un 404 culpa a la URL base y NO a la API key", () => {
+    const msg = describeShalomProbeFailure(new ShalomApiError("404 page not found", 404), base);
+    expect(msg).toMatch(/URL base/i);
+    expect(msg).toMatch(/SHALOM_API_BASE/);
+    expect(msg).not.toMatch(/API key.*(no funciona|rechazada)/i);
+  });
+
+  it("incluye la URL que intentó, que es lo que hace obvio el /v1 de más", () => {
+    const msg = describeShalomProbeFailure(
+      new ShalomApiError("404 page not found", 404),
+      "https://api.shalom-api-peru.com/v1",
+    );
+    expect(msg).toContain("https://api.shalom-api-peru.com/v1/v1/agencies/search");
+  });
+
+  it("un 401 sí es de la key, y lo dice", () => {
+    const msg = describeShalomProbeFailure(
+      new ShalomApiError("key vencida", 401, "unauthorized"),
+      base,
+    );
+    expect(msg).toMatch(/API key.*rechazada/i);
+    expect(msg).not.toMatch(/SHALOM_API_BASE/);
+  });
+
+  it("cualquier otro fallo nombra la base sin acusar a nadie", () => {
+    const msg = describeShalomProbeFailure(new ShalomTimeoutError("sin respuesta"), base);
+    expect(msg).toContain(base);
+    expect(msg).toMatch(/sin respuesta/);
   });
 });
 

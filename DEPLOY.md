@@ -82,7 +82,7 @@ roles and the `auth` schema, so it just works.
    | `ALICLIK_API_BASE` | `https://api.aliclik-dev.com` (optional; **pon la de producción cuando Aliclik la entregue**) |
    | `ALICLIK_WRITE_ENABLED` | `false` por defecto. `true` habilita CREAR guías en Aliclik |
    | `SHALOM_API_KEY` | API key (`sk_…`) del wrapper de Shalom. **Global: una para todas las tiendas.** Sin ella no aparece «+ Guía Shalom» (ver 5ñ) |
-   | `SHALOM_API_BASE` | `https://api.shalom-api-peru.com` (optional) |
+   | `SHALOM_API_BASE` | `https://api.shalom-api-peru.com` (optional). **El host a secas, sin `/v1`**: el cliente ya añade la ruta, y una base con `/v1` produce `/v1/v1/…` → 404. Si no existe la variable, el valor por defecto ya es el correcto |
 
    `DATABASE_URL` is only needed for migrations; you don't have to add it to
    Vercel.
@@ -798,6 +798,14 @@ los ids de la documentación no valen. Al lado hay un buscador de agencias para
 conseguir el **id de la agencia de origen**, que no se puede averiguar de otra
 forma. Probar deja además la sesión caliente: la primera guía después ya no
 espera.
+
+**Si sale un 404, no es la API key.** Un 404 significa que la ruta no existe en
+el host configurado, así que Shalom ni siquiera llegó a mirar la cabecera de
+autenticación: la key puede estar perfecta. Pasó en producción la primera vez que
+se probó — el mensaje decía «la API key del wrapper no funciona» y mandó a pedirle
+una key nueva al proveedor cuando lo que sobraba era un `/v1` en
+`SHALOM_API_BASE`. Ahora el error nombra la URL exacta que intentó y pide revisar
+esa variable; el 401/403 sigue siendo el que sí acusa a la key.
 
 ### La sonda, para cuando no hay despliegue
 
