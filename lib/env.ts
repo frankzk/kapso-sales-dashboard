@@ -49,6 +49,8 @@ export const env = {
   swaypToken: () => required("SWAYP_TOKEN"),
   swaypEmail: () => required("SWAYP_EMAIL"),
   swaypWebhookToken: () => process.env.SWAYP_WEBHOOK_TOKEN ?? "",
+  /** JSON: ciudad de cobertura → datos de la bodega remitente. Ver lib/swayp-guide.ts. */
+  swaypSenders: () => process.env.SWAYP_SENDERS ?? "",
   swaypEnabled: () => Boolean(process.env.SWAYP_TOKEN && process.env.SWAYP_EMAIL),
 
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---

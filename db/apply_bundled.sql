@@ -1721,3 +1721,13 @@ create index if not exists shipments_created_via_idx
 -- ── 0044_lead_first_inbound_text ─────────────────────────────────────────────
 -- Primer mensaje del cliente, como contexto de apertura para la asesora.
 alter table leads add column if not exists first_inbound_text text;
+
+-- ── 0045_swayp_guides ────────────────────────────────────────────────────────
+-- Guías creadas por la API de Swayp (ex-Fenix): número de guía emitido por
+-- ellos, estado crudo 1..12 (delivery_status guarda el mapeo lossy) y sello de
+-- la última notificación recibida.
+alter table shipments add column if not exists swayp_guide text;
+alter table shipments add column if not exists swayp_state smallint;
+alter table shipments add column if not exists swayp_synced_at timestamptz;
+create unique index if not exists shipments_swayp_guide_uniq
+  on shipments(swayp_guide) where swayp_guide is not null;

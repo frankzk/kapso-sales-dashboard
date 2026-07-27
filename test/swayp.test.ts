@@ -94,7 +94,7 @@ describe("auth headers", () => {
 });
 
 describe("createGuide", () => {
-  it("unwraps data and returns the Swayp guide number", async () => {
+  it("unwraps the documented {success, data} shape", async () => {
     const { impl, calls } = fakeFetch([
       { status: 201, body: { success: true, data: { guia: 10000022753, estado: "Generada", idEstado: 1 } } },
     ]);
@@ -103,6 +103,29 @@ describe("createGuide", () => {
     expect(r.idEstado).toBe(1);
     expect(calls[0]?.method).toBe("POST");
     expect(calls[0]?.url).toBe(`${BASE}/v2/guias`);
+  });
+
+  it("also reads the FLAT shape the server actually returns", async () => {
+    // Real response, captured from staging: no {success,data} wrapper, the
+    // guide object comes at the top level and idEstado is a string. Misreading
+    // this made a successful creation look like a failure — and the fallback
+    // would then create a second guide and a second package.
+    const { impl } = fakeFetch([
+      {
+        status: 200,
+        body: {
+          guia: 50000002618,
+          guide: 50000002618,
+          idRemitente: "348",
+          estado: "Generada",
+          idEstado: "1",
+        },
+      },
+    ]);
+    const r = await createGuide(opts(impl), GUIDE);
+    expect(r.guia).toBe(50000002618);
+    expect(r.idEstado).toBe(1);
+    expect(r.estado).toBe("Generada");
   });
 
   it("NEVER retries — a repeated create would duplicate the package", async () => {
@@ -155,16 +178,42 @@ describe("getGuide", () => {
 
 describe("bulk state changes", () => {
   it("requestPickup sends idEstado 3", async () => {
-    const { impl, calls } = fakeFetch([{ body: { results: [] } }]);
+    const { impl, calls } = fakeFetch([{ body: [] }]);
     await requestPickup(opts(impl), ["1", "2"]);
     expect(calls[0]?.url).toBe(`${BASE}/v2/guias/updateMassiveGuides`);
     expect(calls[0]?.body).toEqual({ guias: ["1", "2"], idEstado: "3" });
   });
 
   it("cancelGuides sends idEstado 10", async () => {
-    const { impl, calls } = fakeFetch([{ body: { results: [] } }]);
+    const { impl, calls } = fakeFetch([{ body: [] }]);
     await cancelGuides(opts(impl), ["1"]);
     expect(calls[0]?.body).toEqual({ guias: ["1"], idEstado: "10" });
+  });
+
+  it("normalizes the bare array the server really returns", async () => {
+    // Captured live while cancelling a real test guide — the docs promise
+    // {results:[{guia,success,estado}]}, the server sends this instead.
+    const { impl } = fakeFetch([
+      { body: [{ guia: "50000002618", exito: "Guía Procesada", msg: "Se marco como Cancelada!" }] },
+    ]);
+    const r = await cancelGuides(opts(impl), ["50000002618"]);
+    expect(r).toEqual([
+      { guia: "50000002618", ok: true, message: "Guía Procesada" },
+    ]);
+  });
+
+  it("still understands the documented {results} shape", async () => {
+    const { impl } = fakeFetch([
+      { body: { results: [{ guia: "1", success: true, estado: "Cancelada" }] } },
+    ]);
+    const r = await cancelGuides(opts(impl), ["1"]);
+    expect(r[0]).toMatchObject({ guia: "1", ok: true });
+  });
+
+  it("marks a per-guide failure as not ok", async () => {
+    const { impl } = fakeFetch([{ body: [{ guia: "1", error: "No se puede cancelar" }] }]);
+    const r = await cancelGuides(opts(impl), ["1"]);
+    expect(r[0]).toMatchObject({ guia: "1", ok: false });
   });
 });
 

@@ -204,6 +204,30 @@ export interface SwaypCreatedGuide {
 }
 
 /**
+ * La respuesta real de POST /v2/guias NO es la documentada. La doc promete
+ * `{success:true, data:{guia, estado, idEstado}}`; el servidor devuelve el
+ * objeto de la guía plano (`{guia, guide, idRemitente, …}`) y con `idEstado`
+ * como string. Aceptamos las dos formas: si Swayp alinea la API con su doc,
+ * esto sigue funcionando.
+ *
+ * Importa acertarle: leer mal la respuesta hace creer que la creación falló
+ * cuando la guía SÍ existe — y el fallback crearía una segunda.
+ */
+function normalizeCreated(res: unknown): SwaypCreatedGuide | null {
+  const root = (res ?? {}) as Record<string, unknown>;
+  const payload = (root.data ?? root) as Record<string, unknown>;
+  const raw = payload.guia ?? payload.guide;
+  const guia = Number(raw);
+  if (!Number.isFinite(guia) || guia <= 0) return null;
+  const idEstado = Number(payload.idEstado);
+  return {
+    guia,
+    estado: typeof payload.estado === "string" ? payload.estado : "",
+    idEstado: Number.isFinite(idEstado) ? idEstado : 1,
+  };
+}
+
+/**
  * Crea la guía. Nace en estado 1 (Generada) o 2 (Preparada) según cómo esté
  * configurada la cuenta; NO despacha a nadie hasta llamar `requestPickup`.
  *
@@ -215,38 +239,67 @@ export async function createGuide(
   opts: SwaypClientOpts,
   input: SwaypCreateGuideInput,
 ): Promise<SwaypCreatedGuide> {
-  const res = await swaypFetch<{ success?: boolean; data?: SwaypCreatedGuide; error?: string }>(
-    opts,
-    "POST",
-    "/v2/guias",
-    input,
-  );
-  if (!res?.data?.guia) {
-    throw new SwaypError(200, res?.error ?? JSON.stringify(res ?? {}));
+  const res = await swaypFetch<unknown>(opts, "POST", "/v2/guias", input);
+  const created = normalizeCreated(res);
+  if (!created) {
+    const err = (res as { error?: string } | null)?.error;
+    throw new SwaypError(200, err ?? JSON.stringify(res ?? {}));
   }
-  return res.data;
+  return created;
 }
 
 // ── Cambios de estado en lote ────────────────────────────────────────────────
 
-export interface SwaypBulkResult {
-  results?: Array<{ guia: string; success: boolean; estado?: string; error?: string }>;
+export interface SwaypBulkOutcome {
+  guia: string;
+  ok: boolean;
+  message: string;
+}
+
+/**
+ * updateMassiveGuides tampoco responde lo que dice la doc: no es
+ * `{results:[{guia, success, estado}]}` sino un ARRAY pelado de
+ * `{guia, exito, msg}` (verificado cancelando una guía real). Se normaliza acá
+ * para que el llamador no dependa de la forma cruda.
+ */
+function normalizeBulk(res: unknown): SwaypBulkOutcome[] {
+  const rows = Array.isArray(res)
+    ? res
+    : Array.isArray((res as { results?: unknown } | null)?.results)
+      ? ((res as { results: unknown[] }).results)
+      : [];
+  return rows.map((r) => {
+    const row = (r ?? {}) as Record<string, unknown>;
+    const message = String(row.exito ?? row.msg ?? row.estado ?? row.error ?? "");
+    return {
+      guia: String(row.guia ?? ""),
+      // `exito` presente (y sin `error`) es la señal de éxito de esta API.
+      ok: row.success === true || (row.exito !== undefined && row.error === undefined),
+      message,
+    };
+  });
+}
+
+async function updateMassive(
+  opts: SwaypClientOpts,
+  guias: string[],
+  idEstado: "3" | "10",
+): Promise<SwaypBulkOutcome[]> {
+  const res = await swaypFetch<unknown>(opts, "POST", "/v2/guias/updateMassiveGuides", {
+    guias,
+    idEstado,
+  });
+  return normalizeBulk(res);
 }
 
 /** Pide la recogida (estado 3). Es lo que dispara la notificación al mensajero. */
-export function requestPickup(opts: SwaypClientOpts, guias: string[]): Promise<SwaypBulkResult> {
-  return swaypFetch<SwaypBulkResult>(opts, "POST", "/v2/guias/updateMassiveGuides", {
-    guias,
-    idEstado: "3",
-  });
+export function requestPickup(opts: SwaypClientOpts, guias: string[]): Promise<SwaypBulkOutcome[]> {
+  return updateMassive(opts, guias, "3");
 }
 
 /** Cancela guías. Sólo posible en estado 1 (Generada); después va devolución. */
-export function cancelGuides(opts: SwaypClientOpts, guias: string[]): Promise<SwaypBulkResult> {
-  return swaypFetch<SwaypBulkResult>(opts, "POST", "/v2/guias/updateMassiveGuides", {
-    guias,
-    idEstado: "10",
-  });
+export function cancelGuides(opts: SwaypClientOpts, guias: string[]): Promise<SwaypBulkOutcome[]> {
+  return updateMassive(opts, guias, "10");
 }
 
 // ── Consulta ─────────────────────────────────────────────────────────────────
