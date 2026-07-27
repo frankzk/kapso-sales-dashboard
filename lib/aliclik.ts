@@ -354,11 +354,25 @@ export function aliclikErrorMessage(
   return `Aliclik respondió HTTP ${status}.`;
 }
 
+// Fallos PASAJEROS de Aliclik. Su API devuelve 500 ("Internal server error")
+// de forma intermitente: medido en producción, tres 500 en tres horas sobre
+// cotizaciones idénticas a otras que sí funcionaron minutos antes. Sin
+// reintento, la vendedora ve un error rojo y tiene que volver a intentarlo a
+// mano con la clienta esperando al teléfono.
+//
+// Los 4xx NO se reintentan: un token malo, un EAN inexistente o un pedido
+// duplicado no mejoran solos, y repetirlos solo alarga la espera.
+const ALICLIK_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
+const ALICLIK_MAX_ATTEMPTS = 3;
+const ALICLIK_RETRY_BASE_MS = 400; // 400ms, 800ms → ≤1,2s extra en el peor caso
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function request<T>(
   opts: AliclikClientOpts,
   method: "GET" | "POST",
   path: string,
-  init: { params?: Record<string, unknown>; body?: unknown } = {},
+  init: { params?: Record<string, unknown>; body?: unknown; retry?: boolean } = {},
 ): Promise<AliclikResult<T>> {
   let url: URL;
   try {
@@ -376,6 +390,42 @@ async function request<T>(
   const egress = opts.egress ?? env.aliclikEgress();
   const serialized = init.body === undefined ? undefined : JSON.stringify(init.body);
 
+  // Solo se reintenta lo que quien llama declara SEGURO de repetir. Crear un
+  // pedido no lo es: Aliclik no tiene idempotency key, así que un reintento
+  // puede dejar dos guías reales para el mismo paquete.
+  const attempts = init.retry ? ALICLIK_MAX_ATTEMPTS : 1;
+  let last: AliclikResult<T> | null = null;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) await sleep(ALICLIK_RETRY_BASE_MS * 2 ** (attempt - 1));
+    const out = await attemptRequest<T>(opts, method, url, {
+      doFetch,
+      egress,
+      serialized,
+      timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    });
+    if (out.ok) return out;
+    last = out;
+    // `status: null` es corte de red o timeout: también pasajero.
+    const transient = out.status == null || ALICLIK_RETRY_STATUSES.has(out.status);
+    if (!transient) return out;
+  }
+  return last ?? { ok: false, status: null, error: "Aliclik no respondió." };
+}
+
+/** Un intento suelto. Separado para que el reintento no duplique la lógica. */
+async function attemptRequest<T>(
+  opts: AliclikClientOpts,
+  method: "GET" | "POST",
+  url: URL,
+  ctx: {
+    doFetch: typeof fetch;
+    egress: AliclikEgress;
+    serialized: string | undefined;
+    timeoutMs: number;
+  },
+): Promise<AliclikResult<T>> {
+  const { doFetch, egress, serialized } = ctx;
   let res: Response;
   try {
     if (egress === "edge") {
@@ -397,14 +447,14 @@ async function request<T>(
           method,
           body: serialized ?? null,
         }),
-        signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+        signal: AbortSignal.timeout(ctx.timeoutMs),
       });
     } else {
       res = await doFetch(url.toString(), {
         method,
         headers: headersFor(opts),
         body: serialized,
-        signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+        signal: AbortSignal.timeout(ctx.timeoutMs),
       });
     }
   } catch (e) {
@@ -485,6 +535,7 @@ export function listProducts(
   p: ListProductsParams = {},
 ): Promise<AliclikResult<AliclikProductPage>> {
   return request<AliclikProductPage>(opts, "GET", "/integration/product/public", {
+    retry: true,
     params: {
       page: Math.max(1, p.page ?? 1),
       limit: Math.min(100, Math.max(1, p.limit ?? 100)),
@@ -534,6 +585,7 @@ export function quoteShippingCost(
   p: { warehouseId: number; lat: string; lng: string },
 ): Promise<AliclikResult<AliclikShippingCost>> {
   return request<AliclikShippingCost>(opts, "GET", "/integration/order/shipping/cost", {
+    retry: true,
     params: { warehouseId: p.warehouseId, lat: p.lat, lng: p.lng },
   });
 }
@@ -562,6 +614,7 @@ export function listOrders(
   p: ListOrdersParams = {},
 ): Promise<AliclikResult<AliclikOrderPage>> {
   return request<AliclikOrderPage>(opts, "GET", "/integration/order", {
+    retry: true,
     params: {
       page: Math.max(1, p.page ?? 1),
       limit: Math.min(100, Math.max(1, p.limit ?? 100)),
@@ -606,13 +659,13 @@ export function cancelOrder(
 export function listAgencies(
   opts: AliclikClientOpts,
 ): Promise<AliclikResult<AliclikAgency[]>> {
-  return request<AliclikAgency[]>(opts, "GET", "/integration/order/agencies");
+  return request<AliclikAgency[]>(opts, "GET", "/integration/order/agencies", { retry: true });
 }
 
 export function listPackageSizes(
   opts: AliclikClientOpts,
 ): Promise<AliclikResult<AliclikPackageSize[]>> {
-  return request<AliclikPackageSize[]>(opts, "GET", "/integration/order/package-sizes");
+  return request<AliclikPackageSize[]>(opts, "GET", "/integration/order/package-sizes", { retry: true });
 }
 
 export function createAgencyOrder(
