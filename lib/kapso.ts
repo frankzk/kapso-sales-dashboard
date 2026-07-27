@@ -138,7 +138,10 @@ export async function listConversationsByPhone(
     page = await kapsoGet<KapsoPage<KapsoConversation>>(opts, "/whatsapp/conversations", {
       phone_number: phone,
       phone_number_id: phoneNumberId ?? undefined,
-      limit: 20,
+      // Techo de descubrimiento: acota cuántas sesiones puede fundir el drawer
+      // (MAX_DRAWER_CONVERSATIONS). Con 20 y un cliente que escribió a dos
+      // números, el hilo se quedaba corto antes de llegar a ese tope.
+      limit: 50,
     });
   } catch {
     return [];

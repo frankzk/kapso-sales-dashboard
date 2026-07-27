@@ -1295,11 +1295,15 @@ export async function loadLeadConversation(
       reason: messages.length ? undefined : "No se pudo cargar la conversación de WhatsApp.",
     };
   }
+  // Sesiones VIEJAS: 1 página (100 msgs) en vez de 2. Una ventana de sesión rara
+  // vez pasa de 100 mensajes, y así se puede cubrir el doble de sesiones sin
+  // sumar requests — la sesión ACTIVA sigue leyendo 2 páginas, que es donde de
+  // verdad se acumulan los mensajes.
   const olderMsgs = await Promise.all(
     olderIds.map((id) =>
       id === storedId && storedTranscript
         ? Promise.resolve(storedTranscript)
-        : fetchConversationTranscript({ apiKey }, id, 2).catch(() => [] as ConversationMessage[]),
+        : fetchConversationTranscript({ apiKey }, id, 1).catch(() => [] as ConversationMessage[]),
     ),
   );
   const parsed = mergeTranscripts([activeMsgs, ...olderMsgs]);

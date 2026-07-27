@@ -7,9 +7,14 @@ describe("drawerConversationIds", () => {
   });
 
   it("hydrates older sessions in the background without duplicates or unbounded fan-out", () => {
+    // Siempre más sesiones que el tope, así el test prueba el recorte de verdad
+    // y no se rompe cuando MAX_DRAWER_CONVERSATIONS cambia de valor.
     const ids = drawerConversationIds(
       "active",
-      ["active", ...Array.from({ length: 15 }, (_, index) => `older-${index}`)],
+      [
+        "active",
+        ...Array.from({ length: MAX_DRAWER_CONVERSATIONS + 5 }, (_, index) => `older-${index}`),
+      ],
       true,
     );
     expect(ids[0]).toBe("active");
