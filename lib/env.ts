@@ -72,6 +72,20 @@ export const env = {
   aliclikEgress: (): "direct" | "edge" =>
     process.env.ALICLIK_EGRESS === "direct" ? "direct" : "edge",
 
+  // --- Shalom: wrapper de api.shalom-api-peru.com (crear preguías) ---
+  //     La API key es de la cuenta de Kapso, NO del cliente: una sola sirve para
+  //     todas las tiendas, y por eso vive en el entorno y no en `stores`. Lo que
+  //     sí es por tienda son las credenciales de pro.shalom.pe, que identifican
+  //     la cuenta que emite la guía (y que pueden repetirse entre tiendas).
+  //
+  //     Tiene fecha de vencimiento: cuando caduca, TODAS las tiendas dejan de
+  //     poder crear guías a la vez. Renovarla es cambiar esta variable, sin tocar
+  //     la configuración de ninguna tienda.
+  shalomApiKey: () => process.env.SHALOM_API_KEY ?? "",
+  shalomApiBase: () =>
+    (process.env.SHALOM_API_BASE ?? "https://api.shalom-api-peru.com").replace(/\/$/, ""),
+  shalomConfigured: () => Boolean(process.env.SHALOM_API_KEY),
+
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---
   shopifyAppApiKey: () => process.env.SHOPIFY_APP_API_KEY ?? "",
   shopifyAppApiSecret: () => process.env.SHOPIFY_APP_API_SECRET ?? "",

@@ -16,6 +16,8 @@ import {
   syncAliclikCatalogNow,
   syncNow,
   testAliclikConnection,
+  testShalomConnection,
+  findShalomAgencies,
   updateStore,
   type SettingsState,
 } from "@/app/dashboard/[storeId]/settings/actions";
@@ -60,6 +62,10 @@ export interface StoreSettingsData {
     tanders_origin_address: string | null;
     tanders_origin_lat: number | null;
     tanders_origin_lng: number | null;
+    shalom_pro_email: string | null;
+    shalom_origin_terminal_id: number | null;
+    shalom_origin_terminal_name: string | null;
+    shalom_default_product_id: number | null;
     meta_ad_accounts: StoreMetaAdAccount[];
   };
   has: {
@@ -74,6 +80,7 @@ export interface StoreSettingsData {
     aliclikToken: boolean;
     aliclikWebhookSecret: boolean;
     tandersPassword: boolean;
+    shalomProPassword: boolean;
   };
   oauthAvailable: boolean;
   siteUrl: string;
@@ -175,6 +182,14 @@ export function StoreSettings({
         hasToken={data.has.aliclikToken}
         hasSecret={data.has.aliclikWebhookSecret}
         enabled={s.aliclik_enabled}
+      />
+
+      <ShalomSection
+        storeId={s.id}
+        hasAccount={data.has.shalomProPassword && Boolean(s.shalom_pro_email)}
+        email={s.shalom_pro_email}
+        originTerminalId={s.shalom_origin_terminal_id}
+        originTerminalName={s.shalom_origin_terminal_name}
       />
 
       <SettingsForm data={data} />
@@ -286,6 +301,120 @@ export function StoreSettings({
   );
 }
 
+
+/**
+ * Shalom · crear preguías por API.
+ *
+ * Dos cosas que la interfaz tiene que dejar hacer sin salir de acá, porque si no
+ * hay que irse a una terminal:
+ *
+ *  · **Probar conexión** — comprueba la API key global y la cuenta de la tienda
+ *    por separado, y lista los productos. Es la sonda del repo, en un clic. Da
+ *    aviso de que TARDA: la primera vez son ~90 s de login real contra Shalom.
+ *  · **Buscar agencia** — el id de la agencia de origen se configura abajo y no
+ *    hay otra forma de averiguarlo. Esto lo busca por texto y lo imprime.
+ *
+ * Las dos son de solo lectura: no crean ninguna guía.
+ */
+function ShalomSection({
+  storeId,
+  hasAccount,
+  email,
+  originTerminalId,
+  originTerminalName,
+}: {
+  storeId: string;
+  hasAccount: boolean;
+  email: string | null;
+  originTerminalId: number | null;
+  originTerminalName: string | null;
+}) {
+  const [testState, testAction, testPending] = useActionState(testShalomConnection, initial);
+  const [agencyState, agencyAction, agencyPending] = useActionState(findShalomAgencies, initial);
+
+  return (
+    <Section
+      title="Shalom · crear preguías por API"
+      subtitle="Permite emitir la guía de Shalom desde el Master en vez de cargarla a mano en pro.shalom.pe. No reemplaza la carga del reporte Excel: los envíos creados acá se cruzan con él por número de guía."
+    >
+      <Card>
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm">
+              {hasAccount ? (
+                <span className="font-medium text-emerald-700">✓ Cuenta de Shalom Pro configurada</span>
+              ) : (
+                <span className="font-medium text-amber-700">⚠ Sin cuenta de Shalom Pro</span>
+              )}
+              {email && <span className="ml-3 text-slate-500">{email}</span>}
+              <span className="ml-3 text-slate-500">
+                {originTerminalId
+                  ? `Origen: ${originTerminalName ?? "agencia"} (#${originTerminalId})`
+                  : "Sin agencia de origen"}
+              </span>
+            </p>
+            <form action={testAction}>
+              <input type="hidden" name="store_id" value={storeId} />
+              <button
+                type="submit"
+                disabled={testPending}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {testPending ? "Probando… (hasta 2 min)" : "Probar conexión"}
+              </button>
+            </form>
+          </div>
+
+          <p className="text-xs text-slate-500">
+            La prueba puede tardar <strong>hasta 2 minutos la primera vez</strong>: Shalom hace un
+            inicio de sesión real. Después la sesión queda caliente 2 horas y todo va rápido. Es solo
+            lectura — no crea ninguna guía.
+          </p>
+
+          <ActionResult state={testState} />
+
+          <div className="border-t border-slate-100 pt-4">
+            <form action={agencyAction} className="flex flex-wrap items-end gap-2">
+              <input type="hidden" name="store_id" value={storeId} />
+              <label className="flex-1">
+                <span className="text-xs text-slate-500">
+                  Buscar agencia (para conseguir el id de la de origen)
+                </span>
+                <input
+                  name="shalom_agency_q"
+                  placeholder="breña, arequipa, av parra…"
+                  className={inputCls}
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={agencyPending}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {agencyPending ? "Buscando…" : "Buscar"}
+              </button>
+            </form>
+            <ActionResult state={agencyState} />
+          </div>
+        </div>
+      </Card>
+    </Section>
+  );
+}
+
+/** Resultado de una acción de ajustes, respetando los saltos de línea. */
+function ActionResult({ state }: { state: SettingsState }) {
+  if (!state.error && !state.notice) return null;
+  return (
+    <pre
+      className={`mt-3 overflow-x-auto rounded-lg px-3 py-2 font-sans text-xs whitespace-pre-wrap ${
+        state.error ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800"
+      }`}
+    >
+      {state.error ?? state.notice}
+    </pre>
+  );
+}
 
 /**
  * Aliclik: token de integración, webhook de estados e interruptor de escritura.
@@ -1010,6 +1139,73 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
               />
             </label>
           </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Shalom (crear guías por API)
+          </legend>
+          <p className="text-xs text-slate-500">
+            Cuenta de <strong>pro.shalom.pe</strong> con la que se emiten las guías de esta tienda.
+            La <em>API key</em> del wrapper no va acá: es de la cuenta de Kapso, la misma para todas
+            las tiendas, y se configura una sola vez en el servidor (<code>SHALOM_API_KEY</code>).
+            La contraseña se guarda <strong>cifrada</strong>. Dos tiendas pueden compartir la misma
+            cuenta de Shalom sin problema. Esto no reemplaza la carga del reporte Excel: los envíos
+            creados acá se cruzan con ese reporte por número de guía como cualquier otro.
+          </p>
+          <label className="block">
+            <span className="text-xs text-slate-500">Email de Shalom Pro (pro.shalom.pe)</span>
+            <input
+              name="shalom_pro_email"
+              type="email"
+              defaultValue={s.shalom_pro_email ?? ""}
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+          </label>
+          <SecretField
+            name="shalom_pro_password"
+            label="Contraseña de Shalom Pro"
+            set={data.has.shalomProPassword}
+          />
+          <p className="text-xs text-slate-400">
+            Al cambiar el email o la contraseña se descarta el token de sesión guardado y la próxima
+            guía vuelve a pagar el login (~90 s).
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs text-slate-500">Agencia de origen (ID)</span>
+              <input
+                name="shalom_origin_terminal_id"
+                inputMode="numeric"
+                defaultValue={s.shalom_origin_terminal_id ?? ""}
+                placeholder="404"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs text-slate-500">Agencia de origen (nombre)</span>
+              <input
+                name="shalom_origin_terminal_name"
+                defaultValue={s.shalom_origin_terminal_name ?? ""}
+                placeholder="SALAS ICA"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-xs text-slate-500">Tipo de paquete por defecto (ID de producto)</span>
+            <input
+              name="shalom_default_product_id"
+              inputMode="numeric"
+              defaultValue={s.shalom_default_product_id ?? ""}
+              placeholder="3"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+            <span className="mt-1 block text-xs text-slate-400">
+              El catálogo es por cuenta, así que el id no es universal (en la del ejemplo, 3 =
+              Sobre). El modal lista los productos reales y deja cambiarlo por envío.
+            </span>
+          </label>
         </fieldset>
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">

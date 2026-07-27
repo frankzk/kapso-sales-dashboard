@@ -14,6 +14,8 @@ import { listMetaAdAccounts, type MetaAdAccount, type StoreMetaAdAccount } from 
 import { listProducts } from "@/lib/aliclik";
 import { syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { env } from "@/lib/env";
+import { describeShalomError } from "@/lib/shalom/client";
+import { clientFor, loadStoreShalom, mintSession, publicClient } from "@/lib/shalom/session";
 
 export interface SettingsState {
   error?: string;
@@ -68,6 +70,16 @@ export async function updateStore(
     const v = formData.get(k);
     return v == null ? undefined : String(v);
   };
+
+  // El email de Shalom llega rellenado en cada guardado: hace falta el valor
+  // actual para saber si lo cambiaron de verdad y solo entonces tirar el token
+  // de sesión (ver buildStoreUpdate).
+  const { data: currentStore } = await ctx.admin
+    .from("stores")
+    .select("shalom_pro_email")
+    .eq("id", storeId)
+    .maybeSingle();
+
   const patch = buildStoreUpdate({
     name: get("name"),
     currency: get("currency"),
@@ -108,10 +120,17 @@ export async function updateStore(
     tanders_origin_address: get("tanders_origin_address"),
     tanders_origin_lat: get("tanders_origin_lat"),
     tanders_origin_lng: get("tanders_origin_lng"),
+    shalom_pro_email: get("shalom_pro_email"),
+    shalom_pro_password: get("shalom_pro_password"),
+    shalom_origin_terminal_id: get("shalom_origin_terminal_id"),
+    shalom_origin_terminal_name: get("shalom_origin_terminal_name"),
+    shalom_default_product_id: get("shalom_default_product_id"),
     // Estos dos existían en el formulario pero no se leían acá, así que la
     // clave de Anthropic por tienda (5l del DEPLOY) nunca llegaba a guardarse.
     anthropic_api_key: get("anthropic_api_key"),
     anthropic_model: get("anthropic_model"),
+  }, undefined, {
+    shalom_pro_email: (currentStore as { shalom_pro_email?: string | null } | null)?.shalom_pro_email ?? null,
   });
 
   if (!Object.keys(patch).length) return { notice: "No hay cambios para guardar." };
@@ -384,5 +403,142 @@ export async function sendTelegramTest(
     };
   } catch (e) {
     return { error: errMsg(e) };
+  }
+}
+
+/**
+ * "Probar conexión" de Shalom: la sonda de `scripts/shalom-probe.mjs`, pero
+ * corriendo en el servidor y en un clic.
+ *
+ * Prueba las dos mitades por separado porque fallan por motivos distintos y las
+ * arregla gente distinta:
+ *
+ *   1. La API key global (`SHALOM_API_KEY`) contra el directorio de agencias,
+ *      que no toca la cuenta de nadie. Si esto falla, el problema es del
+ *      despliegue y no hay nada que la tienda pueda hacer.
+ *   2. La cuenta de Shalom Pro de la tienda, pidiendo el token de sesión. ES LA
+ *      PARTE LENTA (~90 s, hasta 2 min): el wrapper entra de verdad al panel.
+ *
+ * Si las dos pasan, se listan los productos de la cuenta — que es de donde sale
+ * el id que hay que poner como producto por defecto, porque el catálogo es por
+ * cuenta y los ids de la documentación no valen.
+ *
+ * Todo son LECTURAS: no crea ninguna guía. Y deja la sesión caliente, así que la
+ * primera guía después de probar ya no espera.
+ */
+export async function testShalomConnection(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+
+  if (!env.shalomConfigured()) {
+    return {
+      error:
+        "Falta SHALOM_API_KEY en el servidor. Es global (una para todas las tiendas), así que se configura en las variables de entorno del despliegue, no acá.",
+    };
+  }
+
+  // ── 1. La API key ─────────────────────────────────────────────────────────
+  const probe = publicClient();
+  try {
+    await probe.searchAgencies({ q: "lima" });
+  } catch (e) {
+    return { error: `La API key del wrapper no funciona: ${describeShalomError(e)}` };
+  }
+  const cupo =
+    probe.rateLimit.remaining != null
+      ? ` (quedan ${probe.rateLimit.remaining}/${probe.rateLimit.limit ?? 60} llamadas este minuto)`
+      : "";
+
+  // ── 2. La cuenta de la tienda ─────────────────────────────────────────────
+  const store = await loadStoreShalom(ctx.admin, storeId);
+  if (!store?.shalom_pro_email || !store.shalom_pro_password_enc) {
+    return {
+      notice: `✓ La API key del wrapper funciona${cupo}. Falta la cuenta de Shalom Pro de esta tienda: cárgala abajo y vuelve a probar.`,
+    };
+  }
+
+  let session: Awaited<ReturnType<typeof mintSession>>;
+  try {
+    session = await mintSession(ctx.admin, storeId, store);
+  } catch (e) {
+    return {
+      error: `La API key funciona, pero la cuenta de Shalom Pro fue rechazada: ${describeShalomError(e)}`,
+    };
+  }
+  if ("error" in session) return { error: session.error };
+
+  const comoLlego =
+    session.source === "login"
+      ? "sesión nueva"
+      : session.source === "shared"
+        ? "reusando la sesión de otra tienda con la misma cuenta"
+        : "sesión que ya estaba activa";
+  const vence = new Date(session.expiresAt).toLocaleString("es-PE", {
+    hour: "2-digit",
+    minute: "2-digit",
+    day: "2-digit",
+    month: "2-digit",
+  });
+
+  // ── 3. El catálogo, que es lo que hace falta para terminar de configurar ──
+  let productos = "";
+  try {
+    const { client } = clientFor(await loadStoreShalom(ctx.admin, storeId) ?? store);
+    const list = await client.products();
+    productos = list.length
+      ? `\nProductos de esta cuenta (el id va abajo, en «tipo de paquete por defecto»):\n${list
+          .map((p) => `  · id ${p.id} — ${p.title}${p.content ? ` (${p.content})` : ""}`)
+          .join("\n")}`
+      : "\nLa cuenta no devolvió productos, lo cual es raro: revísalo en pro.shalom.pe.";
+  } catch (e) {
+    productos = `\nNo se pudo leer el catálogo de productos: ${describeShalomError(e)}`;
+  }
+
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return {
+    notice:
+      `✓ Todo conectado.\n` +
+      `API key del wrapper: OK${cupo}.\n` +
+      `Cuenta ${store.shalom_pro_email}: OK — ${comoLlego}, vence ${vence}.${productos}`,
+  };
+}
+
+/**
+ * Busca agencias desde Ajustes, que es donde hace falta: el id de la agencia de
+ * ORIGEN se configura acá y no hay otra forma de averiguarlo. Solo pide la API
+ * key global, así que responde rápido y funciona aunque la cuenta de la tienda
+ * todavía no esté cargada.
+ */
+export async function findShalomAgencies(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  if (!(await requireStoreAdmin(storeId))) return { error: "Sin permiso." };
+  if (!env.shalomConfigured()) return { error: "Falta SHALOM_API_KEY en el servidor." };
+
+  const q = String(formData.get("shalom_agency_q") ?? "").trim();
+  if (q.length < 2) return { error: "Escribe al menos 2 letras para buscar." };
+
+  try {
+    const found = await publicClient().searchAgencies({ q });
+    if (!found.length) return { notice: `Ninguna agencia coincide con "${q}".` };
+    return {
+      notice:
+        `Agencias que coinciden con "${q}" — copia el id en «agencia de origen»:\n` +
+        found
+          .slice(0, 20)
+          .map((a) => {
+            const donde = [a.departamento, a.provincia, a.distrito].filter(Boolean).join(" · ");
+            return `  · id ${a.id} — ${a.nombre}${donde ? ` (${donde})` : ""}`;
+          })
+          .join("\n"),
+    };
+  } catch (e) {
+    return { error: describeShalomError(e) };
   }
 }

@@ -38,5 +38,6 @@ pnpm-debug.log*
 *.tsbuildinfo
 /coverage
 
-# volcados de la sonda de Tanders (llevan datos de pedidos reales)
+# volcados de las sondas de couriers (llevan datos de pedidos reales)
 scripts/.tanders-probe.json
+scripts/.shalom-probe.json

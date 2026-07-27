@@ -35,6 +35,11 @@ export const PERMISSIONS = [
   // paquete real detrás— pero permiso propio: son couriers distintos y una
   // tienda puede querer habilitar uno sin el otro.
   "tanders.create_guide",
+  // Shalom por API (0061). Ojo con la vecindad: los `shalom.*` de arriba son del
+  // flujo de cobro y de la clave de recojo. Este es el de crear la preguía, que
+  // es una escritura hacia afuera y cobrable — mismo criterio que Aliclik y
+  // Tanders. Crear la guía NO implica poder ver la clave que la acompaña.
+  "shalom.create_guide",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -50,9 +55,11 @@ export function isPermission(value: string): value is Permission {
  *  - `vendedora` — opera: registra estados, comentarios y comprobantes. NO
  *    valida pagos ni ve la clave de recojo (§"Acceso restringido a la clave":
  *    la clave es para administradores, y los demás solo pueden pedirla cuando el
- *    pago completo está validado). Sí crea guías en Aliclik y en Tanders —es su
- *    trabajo— pero NO las cancela ni toca el catálogo: cancelar tiene ventana y
- *    el catálogo es dato maestro compartido por todas las tiendas.
+ *    pago completo está validado). Sí crea guías en Aliclik, Tanders y Shalom
+ *    —es su trabajo— pero NO las cancela ni toca el catálogo: cancelar tiene
+ *    ventana y el catálogo es dato maestro compartido por todas las tiendas.
+ *    Que cree la guía de Shalom no le da acceso a la clave de recojo: la clave
+ *    la genera el servidor y solo se revela por el circuito auditado de pagos.
  *  - `viewer` — nada.
  */
 const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
@@ -64,6 +71,7 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "shalom.register_payment",
     "aliclik.create_guide",
     "tanders.create_guide",
+    "shalom.create_guide",
   ],
   viewer: [],
 };

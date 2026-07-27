@@ -81,6 +81,8 @@ roles and the `auth` schema, so it just works.
    | `KAPSO_API_BASE` | `https://api.kapso.ai/platform/v1` (optional) |
    | `ALICLIK_API_BASE` | `https://api.aliclik-dev.com` (optional; **pon la de producción cuando Aliclik la entregue**) |
    | `ALICLIK_WRITE_ENABLED` | `false` por defecto. `true` habilita CREAR guías en Aliclik |
+   | `SHALOM_API_KEY` | API key (`sk_…`) del wrapper de Shalom. **Global: una para todas las tiendas.** Sin ella no aparece «+ Guía Shalom» (ver 5ñ) |
+   | `SHALOM_API_BASE` | `https://api.shalom-api-peru.com` (optional) |
 
    `DATABASE_URL` is only needed for migrations; you don't have to add it to
    Vercel.
@@ -634,6 +636,205 @@ miles de filas enteras.
   filtros originales uno a uno (`scripts/sql/lead_queue_counts_smoke.sql`). Si
   alguna pestaña mostrara un número que no cuadra con su lista, esa prueba es lo
   primero que hay que mirar.
+
+## 5o. Shalom por API — crear preguías desde el Master
+
+Shalom ya estaba en el sistema, pero **solo de entrada**: su reporte Excel se
+sube y lo parsea el adaptador de agencia (`lib/couriers/agency.ts`). Esto abre la
+dirección contraria — crear la preguía por API antes de que exista ningún
+reporte — a través del wrapper **api.shalom-api-peru.com**, que automatiza
+`pro.shalom.pe`.
+
+Los dos caminos **conviven**: la guía creada acá vive en `shipments` con
+`courier='shalom'` y `guide_code` = la `guia`, así que el reporte del día
+siguiente cruza con ella por número de guía como con cualquier otro envío. No
+hay que dejar de subir el Excel.
+
+- **Needs migration 0061** (`stores.shalom_*`, `shipments.shalom_codigo` /
+  `shalom_ose_id` / `shalom_order_id` / `shalom_serie` / `shalom_raw`).
+  **Ya aplicada en producción**, cuando el fichero se llamaba `0059`: nació en
+  paralelo a la 0059 de Leads y se renumeró al mergear, porque dos migraciones
+  no pueden compartir número. No hay que volver a aplicarla, y si se aplica no
+  pasa nada — es `add column if not exists` de principio a fin. Al ser puramente
+  aditiva se pudo aplicar antes de desplegar el código: las columnas quedan sin
+  que nadie las lea.
+- Los dos secretos nuevos de `stores` heredan la postura del resto de esa tabla
+  (`shopify_token_enc`, `kapso_api_key_enc`, `tanders_password_enc`…): `anon` no
+  llega por RLS, y un usuario autenticado con acceso a la tienda ve el **texto
+  cifrado**, inútil sin `ENCRYPTION_KEY`, que solo existe en el servidor. La
+  clave de recojo NO va ahí: vive en `shalom_pickup_keys`, que es ilegible
+  incluso para un administrador (0049 + 0053).
+- Permiso propio **`shalom.create_guide`**. Ojo con la vecindad: los otros
+  `shalom.*` son del flujo de cobro Yape y de la clave de recojo. Crear la guía
+  **no** da acceso a ver claves.
+
+### Dos credenciales, en dos sitios distintos
+
+1. La **API key del wrapper** (`sk_…`) es de la cuenta de **Kapso**, no del
+   cliente: **una sola sirve para todas las tiendas**. Va en el entorno como
+   `SHALOM_API_KEY` (`SHALOM_API_BASE` para el host). Se pide por WhatsApp al
+   proveedor (948 997 674) y **vence**: cuando caduque, todas las tiendas dejan
+   de poder crear guías a la vez y renovarla es cambiar solo esa variable, sin
+   tocar la configuración de ninguna tienda. Sin ella el botón «+ Guía Shalom»
+   simplemente no aparece.
+2. El **email + password de `pro.shalom.pe`** identifican la cuenta que emite la
+   guía ⇒ van **por tienda**, en Ajustes de la tienda, con la contraseña cifrada
+   AES-256-GCM. **Pueden repetirse entre tiendas**: dos tiendas de la misma
+   empresa suelen despachar con la misma cuenta de Shalom.
+
+Además, por tienda: la **agencia de origen** (`origin_terminal_id`, de
+`GET /v1/agencies`) y opcionalmente el **producto por defecto**. El catálogo de
+productos es por cuenta, así que el id no es universal — el modal lista los
+reales.
+
+Los mensajes de error distinguen de quién es el problema: falta `SHALOM_API_KEY`
+(del servidor) es distinto de falta la cuenta de Shalom Pro (de la tienda).
+
+### La primera llamada tarda ~90 segundos
+
+El wrapper hace un login real contra el panel de Shalom la primera vez de cada
+cuenta: entre 90 s y 2 min. Por eso:
+
+- El token `ssk_…` (TTL **2 horas**) se **cachea cifrado en la tienda**
+  (`shalom_session_token_enc`). En serverless la memoria del proceso no
+  sobrevive entre invocaciones, así que un caché en módulo no serviría de nada.
+- **El token es de la cuenta, no de la tienda.** Cuando varias tiendas de la
+  misma organización comparten la cuenta de Shalom Pro, el login se paga **una
+  sola vez**: al conectar se reutiliza el token fresco de una tienda hermana si
+  existe, y el token recién emitido se guarda en todas las que usan ese mismo
+  email. Acotado a la misma `org_id` — el email ya prueba que es la misma cuenta,
+  pero no hay razón para que un token cruce una frontera de organización.
+- Conectar es un **paso explícito del modal** («Conectar con Shalom»), con su
+  aviso de que puede tardar 2 minutos. Es una *lectura*: se puede reintentar sin
+  riesgo. La segunda guía del día ya no lo paga.
+- `app/dashboard/pedidos/page.tsx` declara **`maxDuration = 300`**; con el
+  límite por defecto esa llamada se cortaría sola.
+- Cambiar el email o la contraseña en Ajustes **invalida el token cacheado** en
+  el acto, en vez de esperar a que la próxima guía falle con un 401.
+
+### Crear la orden no es idempotente — y eso manda sobre el diseño
+
+`POST /v1/orders` crea una guía **real y cobrable**, no hay sandbox y no hay
+clave de idempotencia. En consecuencia:
+
+- **Cero reintentos automáticos**, ni siquiera con un 401 — a diferencia del
+  cliente de Tanders. Si el primer POST llegó, el segundo emite una segunda
+  guía cobrable.
+- Ante un corte se **verifica en lugar de reintentar**: se listan las órdenes
+  recientes (`GET /v1/orders`) y se busca la guía por **documento del
+  destinatario + clave de recojo**. Si aparece exactamente una, se adopta y el
+  aviso dice que se recuperó. Si hay dos coincidencias no se adopta ninguna:
+  adoptar la equivocada es peor que pedir que un humano mire.
+- Si no se puede verificar, el mensaje es explícito: revisar en `pro.shalom.pe`
+  **antes** de reintentar.
+- Si Shalom crea la guía pero falla el insert local, el error **incluye guía y
+  código** para registrarla a mano.
+- Si la guía se creó por error, se borra con `DELETE /v1/orders/{id}` mientras no
+  haya sido recibida en agencia. Ese `{id}` es el de `GET /v1/orders`, **no** el
+  `ose_id` ni la `guia` (por eso hay tres columnas y no una).
+
+### La clave de recojo nace con la guía
+
+`pickup_code` lo elegimos nosotros, así que la clave **se genera en el servidor**
+y se guarda cifrada en `shalom_pickup_keys` (0049) — la misma tabla que antes
+llenaba un administrador copiándola del panel de Shalom. El circuito de Yape →
+validación → revelar la clave **no cambia**: sigue siendo la única vía de verla y
+sigue auditado.
+
+- La clave **no viaja al cliente** ni aparece en la línea de tiempo del pedido,
+  salvo para un rol que ya tiene `shalom.view_pickup_key`.
+- Se evitan las claves que Shalom rechaza (4 dígitos iguales, escaleras
+  ascendentes) y, al generar, también las descendentes.
+
+### El documento del destinatario es manual
+
+Shalom identifica al destinatario por DNI/RUC/CE y **Shopify no lo pide**: es el
+único dato que el operador escribe siempre. `GET /v1/persons/search` autocompleta
+nombre, apellidos y teléfono si el cliente ya envió antes por Shalom. Los
+apellidos se sugieren partiendo el nombre del pedido por la convención peruana
+(los dos últimos tokens), pero quedan editables porque falla con apellidos
+compuestos.
+
+### Probar la conexión
+
+La forma normal es el botón **Probar conexión** en *Ajustes de la tienda →
+Shalom · crear preguías por API*. Corre en el servidor, es solo lectura y prueba
+las dos mitades por separado, que es lo que importa porque las arregla gente
+distinta:
+
+1. La **API key global** contra el directorio de agencias, que no toca la cuenta
+   de nadie. Si falla, el problema es del despliegue.
+2. La **cuenta de Shalom Pro de la tienda**, pidiendo el token. Es la parte lenta
+   (~90 s la primera vez, de ahí el `maxDuration = 300` en la página de ajustes).
+
+Si las dos pasan, lista los **productos de la cuenta con sus ids** — que es de
+donde sale el «tipo de paquete por defecto», porque el catálogo es por cuenta y
+los ids de la documentación no valen. Al lado hay un buscador de agencias para
+conseguir el **id de la agencia de origen**, que no se puede averiguar de otra
+forma. Probar deja además la sesión caliente: la primera guía después ya no
+espera.
+
+### La sonda, para cuando no hay despliegue
+
+`scripts/shalom-probe.mjs` hace lo mismo desde una terminal, y además puede crear
+una guía real. Sirve para validar una API key **antes** de desplegar nada, que es
+justo el caso de una key de prueba a punto de vencer. Es solo lectura salvo que
+se le pase `--create`:
+
+```bash
+# Valida la API key sin tocar la cuenta de ningún cliente
+SHALOM_API_KEY='sk_…' node scripts/shalom-probe.mjs
+
+# Además: sesión, productos, tarifas y órdenes de la cuenta
+SHALOM_API_KEY='sk_…' SHALOM_PRO_EMAIL='…' SHALOM_PRO_PASSWORD='…' \
+  node scripts/shalom-probe.mjs
+```
+
+Con `--create` emite una guía real e imprime el `curl` de borrado. El volcado va
+a `scripts/.shalom-probe.json` (ignorado por git, con secretos enmascarados).
+
+### Probado contra la API real (27/07/2026)
+
+`scripts/shalom-probe.mjs` corrió contra la cuenta real y pasó entero: la API key
+global contra el directorio de agencias, el login de Shalom Pro (**60 s**, dentro
+de la ventana esperada), el catálogo de productos y el listado de órdenes. No se
+creó ninguna guía (sin `--create`). Lo que salió de ahí:
+
+- **Los ids de producto de esta cuenta** son `3` (Sobre), `1096` (Caja Paquete
+  XXS), `1090` (XS), `5` (S), `1093` (M) y `2` (L). No coinciden con los de la
+  documentación del proveedor, que es justo por lo que el catálogo se lista desde
+  la cuenta y no se cablea. **Esta operación despacha siempre con el `1096`**, que
+  es el valor a poner como *tipo de paquete por defecto* en Ajustes.
+- **El catálogo repite un id.** `id=2` viene dos veces: «Caja Paquete L» y «Otra
+  Medida». Como el payload solo lleva `product_id`, la API tampoco puede
+  distinguirlos: elegir «Otra Medida» en el modal manda el mismo `2` que «Caja
+  Paquete L», y el resumen muestra el primero de los dos. No afecta mientras el
+  producto por defecto sea el `1096`; si algún día hay que usar el `2`, hay que
+  aclararlo con el proveedor antes.
+- **`GET /readyz` responde 503** mientras `/healthz` responde 200 y todas las
+  rutas reales responden 200. Parece reflejar la disponibilidad de `pro.shalom.pe`
+  aguas arriba y no la del wrapper. No sirve como semáforo de despliegue.
+
+### Límites conocidos
+
+- **El cupo real es mucho más chico que el documentado.** El proveedor habla de
+  60 requests/minuto, pero las cabeceras `X-RateLimit-*` de la cuenta real
+  mostraron **~15 disponibles**, recuperándose al cambiar de minuto. La búsqueda
+  de agencias rebota 450 ms para no gastarlas tecleando — margen dimensionado
+  contra los 60, así que con 15 conviene no encadenar sondas: dos corridas
+  seguidas pueden chocar contra el techo y fallar como si la key estuviera
+  vencida, que es un síntoma muy confundible. El cupo restante se lee de las
+  cabeceras de cualquier respuesta.
+- **Servicio de cobranza (`collection_service`) no implementado.** Requiere una
+  cuenta bancaria registrada en Shalom Pro y en esta operación el cobro va por
+  Yape con clave de recojo, que es justamente el flujo que ya existe. `payer`
+  (quién paga el flete) sí es elegible, y por defecto es `sender`: el cliente ya
+  pagó el envío junto con el producto.
+- **Carga masiva (`/v1/orders/bulk`) no implementada**: el Master crea guías de a
+  una desde el drawer.
+- `GET /v1/tracking` devuelve `origen`, `destino`, `remitente`, `destinatario` y
+  `comprobante` **vacíos** desde julio de 2026 (el propio proveedor lo avisa). No
+  construir nada sobre esos campos.
 
 ## 7. Post-deploy verification
 

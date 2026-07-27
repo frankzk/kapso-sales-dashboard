@@ -13,6 +13,13 @@ import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Las server actions de esta ruta incluyen `connectShalomSession`, que hace un
+ * login real contra pro.shalom.pe a través del wrapper y tarda hasta 2 minutos
+ * la primera vez de cada cuenta. Con el límite por defecto se cortaría sola.
+ */
+export const maxDuration = 300;
+
 export default function PedidosPage({
   searchParams,
 }: {
@@ -59,6 +66,7 @@ async function PedidosContent({
       canOverride={perms.can("master.override_status")}
       canCreateGuide={perms.can("aliclik.create_guide")}
       canCreateTandersGuide={perms.can("tanders.create_guide")}
+      canCreateShalomGuide={perms.can("shalom.create_guide")}
     />
   );
 }
