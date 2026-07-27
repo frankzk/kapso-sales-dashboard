@@ -93,6 +93,11 @@ function fmtMoney(value: number | null): string {
   return `S/ ${value.toFixed(2)}`;
 }
 
+/** Cuántas filas se pintan de una vez. 150 llena la pantalla con margen de
+ *  sobra; el resto se pide a demanda. El número existe para acotar el DOM, no
+ *  los datos: los filtros y el orden siguen corriendo sobre todos los pedidos. */
+const PAINT_STEP = 150;
+
 const MODE_LABEL: Record<string, string> = {
   cod: "Contraentrega",
   agency: "Agencia",
@@ -231,6 +236,7 @@ export function OrdersMasterBoard({
   // lee un listado de pedidos. "Último movimiento" queda a un clic en el selector.
   const [sortKey, setSortKey] = useState<MasterSortKey>("created");
   const [showMore, setShowMore] = useState(false);
+  const [renderLimit, setRenderLimit] = useState(PAINT_STEP);
   const [openId, setOpenId] = useState<string | null>(null);
 
   // La búsqueda va al servidor: debe encontrar pedidos fuera de la pestaña
@@ -265,6 +271,12 @@ export function OrdersMasterBoard({
     return sortRows(filtered, sortKey);
   }, [rows, filters, sortKey]);
 
+  // Al cambiar filtros, orden o búsqueda se vuelve al primer tramo: si no, un
+  // filtro que deja 12 resultados heredaría un tope de 2.000 y no serviría de nada.
+  useEffect(() => {
+    setRenderLimit(PAINT_STEP);
+  }, [filters, sortKey, search, view]);
+
   const agency = useMemo(() => agencySummary(rows), [rows]);
 
   const facets = useMemo(
@@ -294,6 +306,13 @@ export function OrdersMasterBoard({
 
   const searchActive = search.trim().length >= 2;
   const listed = searchActive ? (results ?? []) : visible;
+
+  // Se PINTAN de a tandas, no todas. El Master carga ~10.000 pedidos y pintarlos
+  // enteros son 150.000 nodos en el DOM: no solo tarda al entrar, sino que deja
+  // lenta cada pulsación después, porque React reconcilia todo eso en cada
+  // cambio de filtro y al abrir el detalle. Filtrar y ordenar sí se hace sobre
+  // TODOS (son milisegundos en memoria); lo caro es dibujarlos.
+  const shown = useMemo(() => listed.slice(0, renderLimit), [listed, renderLimit]);
 
   return (
     <div className="space-y-4">
@@ -345,7 +364,23 @@ export function OrdersMasterBoard({
           {searching ? (
             <p className="p-5 text-sm text-slate-400">Buscando…</p>
           ) : listed.length ? (
-            <MasterTable rows={listed} storeName={storeName} multiStore={stores.length > 1} onOpen={setOpenId} />
+            <>
+              <MasterTable rows={shown} storeName={storeName} multiStore={stores.length > 1} onOpen={setOpenId} />
+              {shown.length < listed.length && (
+                <div className="border-t border-slate-100 p-3 text-center">
+                  <button
+                    onClick={() => setRenderLimit((n) => n + PAINT_STEP)}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Ver {Math.min(PAINT_STEP, listed.length - shown.length)} más
+                  </button>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Mostrando {shown.length} de {listed.length}. Los filtros y el orden se aplican
+                    sobre todos, no solo sobre los visibles.
+                  </p>
+                </div>
+              )}
+            </>
           ) : (
             <p className="p-5 text-sm text-slate-400">Sin coincidencias.</p>
           )}

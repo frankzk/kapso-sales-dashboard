@@ -62,23 +62,48 @@ export async function getOrderMasterRows(
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
   const cap = opts.limit ?? MAX_LIST;
-  const out: OrderMasterRow[] = [];
 
-  for (let from = 0; from < cap; from += PAGE) {
-    let query = sb.from("order_master").select(MASTER_COLUMNS).in("store_id", storeIds);
-    if (view !== "todos") query = query.eq("general_status", view);
-    const { data, error } = await query
+  const base = () => {
+    let q = sb.from("order_master").select(MASTER_COLUMNS).in("store_id", storeIds);
+    if (view !== "todos") q = q.eq("general_status", view);
+    return q
       // Lo que más importa operativamente es qué se movió (o dejó de moverse)
       // hace más tiempo; los que nunca se movieron van primero.
       .order("last_movement_at", { ascending: false, nullsFirst: true })
       .order("order_created_at", { ascending: false })
-      .range(from, from + PAGE - 1);
-    if (error) return out;
-    const page = (data ?? []) as unknown as OrderMasterRow[];
-    out.push(...page);
-    if (page.length < PAGE) break;
-  }
-  return out;
+      // Desempate estable. Entre filas con la misma fecha de movimiento Y de
+      // creación, Postgres no garantiza un orden fijo entre consultas, así que una
+      // podía salir en dos tramos y otra en ninguno. Hoy son 8 filas en toda la
+      // tabla, pero pedir los tramos en paralelo lo vuelve obligatorio: sin un
+      // orden total no hay paginación que valga.
+      .order("id", { ascending: true });
+  };
+
+  // Cuántas hay, para saber cuántos tramos pedir. Es una consulta `head`: no
+  // trae filas.
+  let countQuery = sb
+    .from("order_master")
+    .select("id", { count: "exact", head: true })
+    .in("store_id", storeIds);
+  if (view !== "todos") countQuery = countQuery.eq("general_status", view);
+  const { count, error: countError } = await countQuery;
+  if (countError) return [];
+
+  const total = Math.min(count ?? 0, cap);
+  if (total === 0) return [];
+
+  // EN PARALELO, no en cadena. PostgREST corta cada respuesta en 1.000 filas, así
+  // que 10.000 pedidos son once viajes; encadenados se pagan once latencias de
+  // red seguidas (segundos), y en paralelo se paga una. La base tarda 20 ms por
+  // tramo: lo que se estaba pagando era la ida y vuelta, no el trabajo.
+  const pages = await Promise.all(
+    Array.from({ length: Math.ceil(total / PAGE) }, (_, i) =>
+      base()
+        .range(i * PAGE, i * PAGE + PAGE - 1)
+        .then(({ data, error }) => (error ? [] : ((data ?? []) as unknown as OrderMasterRow[]))),
+    ),
+  );
+  return pages.flat();
 }
 
 export interface MasterCounts {
