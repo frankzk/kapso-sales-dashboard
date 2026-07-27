@@ -1,18 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "//regions": [
-    "São Paulo, no Virginia (que es el valor por defecto de Vercel).",
-    "El motivo principal es la base de datos: el proyecto de Supabase está en",
-    "sa-east-1 (São Paulo) y las funciones corrían en iad1, así que CADA consulta",
-    "cruzaba el hemisferio. El panel hace muchas consultas por pantalla y el",
-    "Master recalcula filas en cada acción, de modo que ese viaje se paga una y",
-    "otra vez. El equipo además opera desde Perú, más cerca de gru1 que de iad1.",
-    "Efecto secundario buscado: salir por un rango de IPs distinto puede cambiar",
-    "cómo puntúa el WAF de Aliclik nuestras peticiones (hoy nos desafía). No es",
-    "la solución de ese bloqueo —eso lo tiene que abrir Aliclik— pero es gratis",
-    "probarlo cuando el cambio ya se justifica solo.",
-    "Revertir es borrar la clave `regions`."
-  ],
   "regions": ["gru1"],
   "crons": [
     {
