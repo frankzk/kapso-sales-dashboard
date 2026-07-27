@@ -239,7 +239,37 @@ function headersFor(opts: AliclikClientOpts): Record<string, string> {
     "Content-Type": "application/json",
     "x-aliclik-origin": "aliclik-web",
     Accept: "application/json",
+    // `fetch` de Node no manda User-Agent, y una petición sin él es de las
+    // primeras que Cloudflare marca como bot. No garantiza pasar el desafío
+    // —eso depende de la configuración del WAF de Aliclik— pero quita el motivo
+    // más tonto para que nos bloqueen.
+    "User-Agent": "kapso-sales-dashboard/1.0 (+integracion-aliclik)",
   };
+}
+
+/**
+ * ¿La respuesta es una página de desafío anti-bot en vez de la API?
+ *
+ * `api.aliclik-dev.com` está detrás de Cloudflare, y Cloudflare puede
+ * interponer un desafío ("Just a moment…") a las peticiones que vienen de
+ * centros de datos — que es exactamente lo que somos desde Vercel. Cuando eso
+ * pasa la API nunca llega a ver la petición: da igual que el token sea correcto.
+ *
+ * Detectarlo importa porque el síntoma es engañoso. Sin esto, el HTML del
+ * desafío se cuela como "mensaje de error de Aliclik" y parece un problema de
+ * credenciales o de payload, cuando es de red.
+ */
+export function isBotChallenge(body: unknown, contentType?: string | null): boolean {
+  if (contentType?.toLowerCase().includes("text/html")) return true;
+  if (typeof body !== "string") return false;
+  const s = body.slice(0, 2000).toLowerCase();
+  return (
+    s.includes("<!doctype html") ||
+    s.includes("just a moment") ||
+    s.includes("cf-browser-verification") ||
+    s.includes("attention required") ||
+    s.includes("cloudflare")
+  );
 }
 
 /**
@@ -248,7 +278,16 @@ function headersFor(opts: AliclikClientOpts): Record<string, string> {
  * es accionable — se propaga literal. `message` también puede llegar como array
  * (validaciones de NestJS), en cuyo caso se juntan.
  */
-export function aliclikErrorMessage(status: number, body: unknown): string {
+export function aliclikErrorMessage(status: number, body: unknown, contentType?: string | null): string {
+  // Antes que nada: si esto es un muro de Cloudflare, decirlo con todas las
+  // letras. Enseñar el HTML mandaría al equipo a revisar el token, que está bien.
+  if (isBotChallenge(body, contentType)) {
+    return (
+      `Cloudflare está bloqueando la conexión con Aliclik (HTTP ${status}): devolvió una página de ` +
+      "verificación en vez de la API, así que la petición nunca llegó a su servidor. " +
+      "No es el token. Aliclik tiene que permitir el tráfico de nuestro servidor en su WAF."
+    );
+  }
   if (body && typeof body === "object") {
     const msg = (body as { message?: unknown }).message;
     if (typeof msg === "string" && msg.trim()) return msg.trim();
@@ -317,9 +356,26 @@ async function request<T>(
     }
   }
 
+  const contentType = res.headers.get("content-type");
+
   if (!res.ok) {
-    return { ok: false, error: aliclikErrorMessage(res.status, parsed), status: res.status };
+    return {
+      ok: false,
+      error: aliclikErrorMessage(res.status, parsed, contentType),
+      status: res.status,
+    };
   }
+
+  // Un 200 con HTML tampoco es la API: Cloudflare sirve algunos desafíos con
+  // código 200, y tratarlo como éxito produciría un catálogo vacío "correcto".
+  if (isBotChallenge(parsed, contentType)) {
+    return {
+      ok: false,
+      error: aliclikErrorMessage(res.status, parsed, contentType),
+      status: res.status,
+    };
+  }
+
   return { ok: true, data: (parsed ?? {}) as T };
 }
 
