@@ -42,13 +42,25 @@ export function AliclikGuidePanel({
   const [pending, startTransition] = useTransition();
   /** Cuántas veces se ha reintentado por "pedido todavía sin dirección". */
   const [retries, setRetries] = useState(0);
+  /**
+   * CUÁL de las dos acciones está corriendo, no solo "hay algo corriendo".
+   *
+   * Las dos compartían el `pending` de un único `useTransition`, así que
+   * recotizar un pedido ya cotizado ponía el botón de crear en "Creando…" — la
+   * asesora leía que se estaba creando una guía que nadie pidió, sobre una
+   * acción que el propio panel describe como irreversible. Susto gratis.
+   */
+  const [busy, setBusy] = useState<null | "quote" | "create">(null);
 
   const shortened = isShortenedMapsLink(coordinate);
   const waiting = Boolean(preview?.notReady);
+  const creating = busy === "create";
 
   const quote = () => {
     setMessage(null);
+    setBusy("quote");
     startTransition(async () => {
+      try {
       const res = await previewAliclikGuide(orderId, { coordinate: coordinate || null });
       setPreview(res);
       // Pedido recién creado desde Leads: la dirección viene del webhook de
@@ -67,13 +79,18 @@ export function AliclikGuidePanel({
         .sort((a, b) => a.deliveryCost - b.deliveryCost)[0];
       setTransportId(cheapest?.transportId ?? null);
       if (!res.ok && res.error) setMessage({ kind: "error", text: res.error });
+      } finally {
+        setBusy(null);
+      }
     });
   };
 
   const create = () => {
     if (transportId === null) return;
     setMessage(null);
+    setBusy("create");
     startTransition(async () => {
+      try {
       const res = await createAliclikGuide(orderId, {
         transportId,
         coordinate: coordinate || null,
@@ -88,8 +105,21 @@ export function AliclikGuidePanel({
         setPreview(null);
         onCreated();
       }
+      } finally {
+        setBusy(null);
+      }
     });
   };
+
+  // Cerrar la pestaña mientras se crea NO cancela nada: la petición ya va de
+  // camino a Aliclik y la guía se creará igual, solo que la asesora no verá el
+  // código y creerá que no se hizo. El aviso del navegador evita ese descuadre.
+  useEffect(() => {
+    if (!creating) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [creating]);
 
   // Reintento acotado mientras Shopify nos devuelve la dirección. Se para a los
   // 6 intentos (~30 s): si a esas alturas sigue sin llegar, ya no es la carrera
@@ -164,10 +194,11 @@ export function AliclikGuidePanel({
           <button
             type="button"
             onClick={quote}
-            disabled={pending}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            disabled={busy !== null}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            {pending ? "Cotizando…" : "Cotizar envío"}
+            {busy === "quote" ? <Spinner /> : null}
+            {busy === "quote" ? "Cotizando…" : "Cotizar envío"}
           </button>
         </div>
 
@@ -312,11 +343,23 @@ export function AliclikGuidePanel({
             <button
               type="button"
               onClick={create}
-              disabled={pending || transportId === null || Boolean(preview.writeBlocked)}
-              className="w-full rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50"
+              disabled={busy !== null || transportId === null || Boolean(preview.writeBlocked)}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-70"
             >
-              {pending ? "Creando…" : "Crear guía en Aliclik"}
+              {creating ? <Spinner /> : null}
+              {creating ? "Creando la guía…" : "Crear guía en Aliclik"}
             </button>
+            {/* Mientras se crea, la espera puede pasar de unos segundos: Aliclik
+                va lento a ratos y el cliente reintenta hasta tres veces. Un botón
+                gris y quieto se lee como "se colgó", y la reacción natural es
+                recargar o volver a pulsar — sobre una acción irreversible. Se
+                dice explícitamente qué está pasando y qué no hay que hacer. */}
+            {creating ? (
+              <p className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-center text-xs text-brand-800">
+                Enviando el pedido a Aliclik. Puede tardar unos segundos si su
+                servidor va lento. <strong>No cierres ni recargues esta pantalla.</strong>
+              </p>
+            ) : null}
             {/* El servidor vuelve a comprobar las dos llaves antes de escribir:
                 esto es aviso, no seguridad. Pero evita que alguien pulse un
                 botón irreversible para descubrir que estaba cerrado. */}
@@ -328,5 +371,24 @@ export function AliclikGuidePanel({
         ) : null}
       </div>
     </Card>
+  );
+}
+
+/**
+ * Indicador de actividad. Existe porque un botón deshabilitado y quieto no
+ * distingue "trabajando" de "roto", y aquí la espera puede pasar de unos
+ * segundos: Aliclik va lento a ratos y el cliente reintenta hasta tres veces.
+ */
+function Spinner() {
+  return (
+    <svg
+      className="h-3.5 w-3.5 animate-spin"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.25" />
+      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
+    </svg>
   );
 }
