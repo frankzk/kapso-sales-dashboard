@@ -20,9 +20,12 @@ import { parseGeoLink } from "@/lib/geo-link";
 import { extractLabelUrl, extractTrackingCode, TandersClient } from "@/lib/tanders/client";
 import {
   buildTandersPayload,
+  composeTandersNote,
   defaultCollectionAmount,
   suggestedDestination,
 } from "@/lib/tanders/draft";
+import { getStoreCreds } from "@/lib/ingest";
+import { fetchOrderById } from "@/lib/shopify";
 import { TandersApiError } from "@/lib/tanders/types";
 import type { OrderMasterRow } from "@/lib/types";
 
@@ -102,6 +105,48 @@ async function activeGuides(
 }
 
 /**
+ * La nota del pedido en Shopify: donde el equipo apunta a mano lo que averiguó
+ * al llamar (el enlace de Google Maps del cliente, un horario, una advertencia).
+ *
+ * Se pide EN VIVO y solo se usa lo sincronizado como respaldo. Es un campo que
+ * un humano edita segundos antes de despachar —a menudo para pegar justamente
+ * la ubicación—, así que leer la copia local se arriesga a mandar la guía sin lo
+ * último que se escribió. Best-effort: si Shopify no responde, se sigue con lo
+ * que haya en `orders.raw` y la guía se puede crear igual.
+ */
+async function shopifyOrderNote(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+): Promise<string | null> {
+  const { data } = await admin
+    .from("orders")
+    .select("store_id,shopify_order_id,raw")
+    .eq("id", orderId)
+    .maybeSingle();
+  const order = data as
+    | { store_id: string; shopify_order_id: string | null; raw: { note?: string | null } | null }
+    | null;
+  if (!order) return null;
+
+  const stored = typeof order.raw?.note === "string" ? order.raw.note : null;
+
+  try {
+    const creds = await getStoreCreds(order.store_id, admin);
+    if (!creds?.shopify_token || !order.shopify_order_id) return stored;
+    const live = await fetchOrderById({
+      domain: creds.shopify_domain,
+      token: creds.shopify_token,
+      storeId: order.store_id,
+      orderGid: `gid://shopify/Order/${order.shopify_order_id}`,
+    });
+    const raw = live?.raw as { note?: string | null } | undefined;
+    return typeof raw?.note === "string" ? raw.note : stored;
+  } catch {
+    return stored;
+  }
+}
+
+/**
  * Todo lo que necesita el modal, ya resuelto en el servidor: qué se va a
  * despachar, a dónde, por cuánto, y qué debería frenar al operador.
  */
@@ -172,7 +217,10 @@ export async function loadTandersDraft(
         paymentState: row.payment_state,
         orderTotal: row.order_total,
       }),
-      note: row.reference ?? "",
+      note: composeTandersNote({
+        reference: row.reference,
+        shopifyNote: await shopifyOrderNote(admin, orderId),
+      }),
       blockers,
       warnings,
     },

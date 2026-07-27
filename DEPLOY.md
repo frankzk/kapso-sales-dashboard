@@ -611,6 +611,17 @@ drawer del Master y devuelve el código de guía.
   no, el operador pega el enlace de Google Maps y el modal muestra el enlace al
   punto elegido para verificarlo **antes** de despachar. Esto evita depender de
   una API key de Google facturada.
+- **La nota lleva la referencia Y la nota del pedido de Shopify**, en ese orden.
+  Son dos campos distintos: la referencia viene del formulario COD ("entre tal y
+  tal avenida") y la nota del pedido es donde el equipo apunta a mano lo que
+  averiguó al llamar —el enlace de Google Maps del cliente, un horario, una
+  advertencia—. Se pide **en vivo** a Shopify al abrir el modal, porque es un
+  campo que un humano edita segundos antes de despachar; la copia sincronizada
+  queda de respaldo si Shopify no responde. Si una repite a la otra se manda una
+  sola vez.
+- La consulta GraphQL de pedidos **no pedía `note`**, así que ese campo no
+  existía en `orders.raw` para ningún pedido. Ahora se pide, y los pedidos van
+  incorporándolo a medida que se sincronizan.
 - **El monto a cobrar sale en 0** cuando el pedido ya está pagado
   (`payment_state = 'pago_completo'`): mandar el total haría que el repartidor le
   cobre al cliente algo que ya pagó.

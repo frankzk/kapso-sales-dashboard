@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTandersPayload,
+  composeTandersNote,
   defaultCollectionAmount,
   suggestedDestination,
   tandersPhone,
@@ -144,6 +145,38 @@ describe("suggestedDestination", () => {
       suggestedDestination({ address: "Ramiro Priale 392", district: "Ate", region: "Lima" }),
     ).toBe("Ramiro Priale 392, Ate, Lima, Perú");
     expect(suggestedDestination({ address: null, district: "Ate", region: null })).toBe("Ate, Perú");
+  });
+});
+
+describe("composeTandersNote", () => {
+  it("manda la referencia Y la nota del pedido, en ese orden", () => {
+    expect(
+      composeTandersNote({
+        reference: "Entre av.el bosque y av.santa rosa",
+        shopifyNote: "https://maps.app.goo.gl/7qzEm3PQCMCb6w7j9",
+      }),
+    ).toBe("Entre av.el bosque y av.santa rosa\nhttps://maps.app.goo.gl/7qzEm3PQCMCb6w7j9");
+  });
+
+  it("funciona con una sola de las dos", () => {
+    expect(composeTandersNote({ reference: "Portón azul", shopifyNote: null })).toBe("Portón azul");
+    expect(composeTandersNote({ reference: null, shopifyNote: "Llamar antes" })).toBe("Llamar antes");
+    expect(composeTandersNote({ reference: "  ", shopifyNote: "" })).toBe("");
+  });
+
+  it("no repite el mismo texto dos veces", () => {
+    expect(
+      composeTandersNote({ reference: "Llamar antes", shopifyNote: "  llamar  antes " }),
+    ).toBe("Llamar antes");
+  });
+
+  it("omite la parte que ya está contenida en la otra", () => {
+    expect(
+      composeTandersNote({
+        reference: "Portón azul",
+        shopifyNote: "Portón azul, tocar el timbre dos veces",
+      }),
+    ).toBe("Portón azul, tocar el timbre dos veces");
   });
 });
 

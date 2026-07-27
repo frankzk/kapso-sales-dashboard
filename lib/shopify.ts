@@ -532,6 +532,7 @@ export function buildOrdersQuery(withPhone: boolean): string {
           currentTotalPriceSet { shopMoney { amount currencyCode } }
           totalRefundedSet { shopMoney { amount } }
           tags
+          note
           discountCodes
           customAttributes { key value }${orderPhone}
           shippingAddress { address1 address2 city province name latitude longitude${shippingPhone} }${billingPhone}
@@ -637,6 +638,7 @@ function buildOrderByIdQuery(withPhone: boolean): string {
       currentTotalPriceSet { shopMoney { amount currencyCode } }
       totalRefundedSet { shopMoney { amount } }
       tags
+      note
       discountCodes
       customAttributes { key value }${orderPhone}
       shippingAddress { address1 address2 city province name latitude longitude${shippingPhone} }${billingPhone}

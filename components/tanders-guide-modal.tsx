@@ -241,7 +241,10 @@ export function TandersGuideModal({
                   />
                 </Field>
 
-                <Field label="Nota interna" hint="Referencia para el repartidor.">
+                <Field
+                  label="Nota interna"
+                  hint="Referencia de la dirección + la nota del pedido en Shopify, traída al abrir."
+                >
                   <textarea
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
