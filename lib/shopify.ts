@@ -534,7 +534,7 @@ export function buildOrdersQuery(withPhone: boolean): string {
           tags
           discountCodes
           customAttributes { key value }${orderPhone}
-          shippingAddress { address1 address2 city province name${shippingPhone} }${billingPhone}
+          shippingAddress { address1 address2 city province name latitude longitude${shippingPhone} }${billingPhone}
           lineItems(first: 100) {
             edges {
               node {
@@ -639,7 +639,7 @@ function buildOrderByIdQuery(withPhone: boolean): string {
       tags
       discountCodes
       customAttributes { key value }${orderPhone}
-      shippingAddress { address1 address2 city province name${shippingPhone} }${billingPhone}
+      shippingAddress { address1 address2 city province name latitude longitude${shippingPhone} }${billingPhone}
       lineItems(first: 100) {
         edges { node { title quantity sku originalUnitPriceSet { shopMoney { amount } } } }
       }
@@ -813,7 +813,7 @@ export function buildDraftOrdersQuery(withPhone: boolean): string {
           tags${draftPhone}
           totalPriceSet { shopMoney { amount currencyCode } }
           customer { displayName }
-          shippingAddress { city province address1 address2 name${shipPhone} }
+          shippingAddress { city province address1 address2 name latitude longitude${shipPhone} }
           order { id }
           lineItems(first: 100) {
             edges {
@@ -1372,7 +1372,7 @@ const DRAFT_ORDER_GET_QUERY = /* GraphQL */ `
     draftOrder(id: $id) {
       id
       name
-      shippingAddress { address1 address2 city province name }
+      shippingAddress { address1 address2 city province name latitude longitude }
       lineItems(first: 50) {
         edges {
           node {
