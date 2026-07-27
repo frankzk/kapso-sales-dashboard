@@ -15,11 +15,11 @@ import { getAccessibleStores } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import {
+  loadAllAliclikSkus,
   loadShopifySkuNames,
   normalizeProductName,
   normalizeSku,
   syncAliclikCatalog,
-  type AliclikSkuRow,
 } from "@/lib/aliclik-catalog";
 
 const PATH = "/dashboard/envios/aliclik";
@@ -142,11 +142,18 @@ export interface CatalogRow {
 
 export interface CatalogView {
   rows: CatalogRow[];
-  aliclikSkus: { ean: string; label: string }[];
   mapped: number;
   unmapped: number;
   catalogSize: number;
   syncedAt: string | null;
+}
+
+/** Una opción del buscador de productos de Aliclik. */
+export interface AliclikSkuOption {
+  ean: string;
+  label: string;
+  warehouseName: string | null;
+  stockVirtual: number | null;
 }
 
 /**
@@ -157,21 +164,15 @@ export interface CatalogView {
 export async function loadCatalogView(storeId: string): Promise<CatalogView> {
   const admin = createAdminSupabase();
 
-  const [shopify, skusRes, mapRes] = await Promise.all([
+  // `loadAllAliclikSkus` PAGINA. Sin eso se leían solo los primeros 1000 de los
+  // ~3.700 del catálogo (PostgREST corta ahí), y dos tercios de los productos
+  // aparecían "sin candidato automático" cuando su candidato sí existía.
+  const [shopify, skus, mapRes] = await Promise.all([
     loadShopifySkuNames(storeId, admin),
-    admin
-      .from("aliclik_skus")
-      .select(
-        "ean,sku,product_name,sku_name,stock_virtual,warehouse_id,warehouse_name,format_time_agency,shalom_origin_in,is_agency_eligible,synced_at",
-      )
-      .eq("store_id", storeId),
+    loadAllAliclikSkus(storeId, admin),
     admin.from("aliclik_sku_map").select("shopify_sku,ean,source").eq("store_id", storeId),
   ]);
 
-  const skus = (skusRes.data ?? []) as (AliclikSkuRow & {
-    sku_name: string | null;
-    synced_at: string;
-  })[];
   const byEan = new Map(skus.map((s) => [s.ean, s]));
   const mapping = new Map(
     ((mapRes.data ?? []) as { shopify_sku: string; ean: string; source: string }[]).map((m) => [
@@ -219,15 +220,58 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
 
   return {
     rows,
-    aliclikSkus: skus
-      .map((s) => ({
-        ean: s.ean,
-        label: `${s.product_name ?? s.sku_name ?? s.ean}${s.sku ? ` · ${s.sku}` : ""} (stock ${s.stock_virtual ?? 0})`,
-      }))
-      .sort((a, b) => a.label.localeCompare(b.label, "es")),
     mapped: rows.filter((r) => r.ean).length,
     unmapped: rows.filter((r) => !r.ean).length,
     catalogSize: skus.length,
     syncedAt: skus[0]?.synced_at ?? null,
   };
+}
+
+/**
+ * Busca productos en el catálogo de Aliclik.
+ *
+ * En el SERVIDOR y no en el cliente, a propósito: el catálogo pasa de 3.600
+ * SKUs, y mandarlos todos al navegador son cientos de kilobytes que alguien
+ * acaba descargando con datos móviles para elegir UN producto. Además, un
+ * `<select>` nativo con miles de opciones es inmanejable en el móvil — que es
+ * justo desde donde se está usando esta pantalla.
+ */
+export async function searchAliclikSkus(
+  storeId: string,
+  query: string,
+): Promise<AliclikSkuOption[]> {
+  const ctx = await authorize(storeId);
+  if (!ctx) return [];
+
+  let sel = ctx.admin
+    .from("aliclik_skus")
+    .select("ean,sku,product_name,sku_name,stock_virtual,warehouse_name")
+    .eq("store_id", storeId);
+
+  // Se busca por nombre, por SKU y por EAN: quien mapea a mano tiene a la vista
+  // cualquiera de los tres, según de dónde venga mirando.
+  const safe = query.trim().replace(/[%,()]/g, " ").trim();
+  if (safe) {
+    sel = sel.or(
+      `product_name.ilike.%${safe}%,sku_name.ilike.%${safe}%,sku.ilike.%${safe}%,ean.ilike.%${safe}%`,
+    );
+  }
+
+  const { data } = await sel.order("product_name", { ascending: true }).limit(40);
+
+  return (
+    (data ?? []) as {
+      ean: string;
+      sku: string | null;
+      product_name: string | null;
+      sku_name: string | null;
+      stock_virtual: number | null;
+      warehouse_name: string | null;
+    }[]
+  ).map((s) => ({
+    ean: s.ean,
+    label: `${s.product_name ?? s.sku_name ?? s.ean}${s.sku ? ` · ${s.sku}` : ""}`,
+    warehouseName: s.warehouse_name,
+    stockVirtual: s.stock_virtual,
+  }));
 }

@@ -10,12 +10,14 @@
 // La cola de trabajo son los productos SIN mapear, así que salen primero y el
 // filtro abre en ellos.
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Card, EmptyState } from "@/components/ui";
 import {
   mapSku,
+  searchAliclikSkus,
   syncCatalog,
   unmapSku,
+  type AliclikSkuOption,
   type CatalogRow,
   type CatalogView,
 } from "@/app/dashboard/envios/aliclik/actions";
@@ -140,7 +142,6 @@ export function AliclikCatalog({
             <CatalogRowCard
               key={r.shopifySku}
               row={r}
-              options={view.aliclikSkus}
               storeId={storeId}
               canManage={canManage}
               pending={pending}
@@ -156,7 +157,6 @@ export function AliclikCatalog({
 
 function CatalogRowCard({
   row,
-  options,
   storeId,
   canManage,
   pending,
@@ -164,7 +164,6 @@ function CatalogRowCard({
   onUnmap,
 }: {
   row: CatalogRow;
-  options: { ean: string; label: string }[];
   storeId: string;
   canManage: boolean;
   pending: boolean;
@@ -228,21 +227,15 @@ function CatalogRowCard({
                   fd.set("shopify_sku", row.shopifySku);
                   onMap(fd);
                 }}
-                className="flex items-center gap-2"
+                className="flex flex-col gap-2"
               >
-                <select
-                  name="ean"
+                <input type="hidden" name="ean" value={choice} />
+                <SkuPicker
+                  storeId={storeId}
                   value={choice}
-                  onChange={(e) => setChoice(e.target.value)}
-                  className="w-72 rounded-lg border border-slate-300 px-2 py-2 text-sm"
-                >
-                  <option value="">Elegir producto de Aliclik…</option>
-                  {options.map((o) => (
-                    <option key={o.ean} value={o.ean}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
+                  suggestion={row.suggestion}
+                  onPick={setChoice}
+                />
                 <button
                   type="submit"
                   disabled={pending || !choice}
@@ -256,5 +249,147 @@ function CatalogRowCard({
         )}
       </div>
     </Card>
+  );
+}
+
+/**
+ * Buscador de productos de Aliclik.
+ *
+ * Reemplaza a un `<select>` con miles de opciones. El catálogo pasa de 3.600
+ * SKUs: en el móvil ese desplegable abre una lista alfabética interminable por
+ * la que hay que desplazarse a ciegas, sin forma de filtrar. Y mandar las 3.600
+ * opciones al navegador son cientos de kilobytes por cada carga de la página.
+ *
+ * Así que la búsqueda ocurre en el SERVIDOR y devuelve como mucho 40
+ * resultados. Se escribe, se ve, se elige.
+ */
+function SkuPicker({
+  storeId,
+  value,
+  suggestion,
+  onPick,
+}: {
+  storeId: string;
+  value: string;
+  suggestion: { ean: string; name: string } | null;
+  onPick: (ean: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [options, setOptions] = useState<AliclikSkuOption[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const picked = useRef<AliclikSkuOption | null>(null);
+
+  // Búsqueda con freno: sin esto cada tecla dispara una consulta y las
+  // respuestas pueden llegar desordenadas, pintando resultados de una búsqueda
+  // vieja sobre la nueva. `cancelled` cierra esa carrera.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    const t = setTimeout(async () => {
+      const res = await searchAliclikSkus(storeId, query);
+      if (cancelled) return;
+      setOptions(res);
+      setLoading(false);
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query, open, storeId]);
+
+  const chosen = picked.current && picked.current.ean === value ? picked.current : null;
+
+  if (value && chosen) {
+    return (
+      <div className="flex items-start gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm">
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium text-emerald-900">{chosen.label}</span>
+          <span className="text-xs text-emerald-700">
+            EAN {chosen.ean}
+            {chosen.warehouseName ? ` · ${chosen.warehouseName}` : ""}
+            {chosen.stockVirtual != null ? ` · stock ${chosen.stockVirtual}` : ""}
+          </span>
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            picked.current = null;
+            onPick("");
+            setOpen(true);
+          }}
+          className="shrink-0 text-xs text-emerald-800 underline"
+        >
+          Cambiar
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full sm:w-96">
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onFocus={() => setOpen(true)}
+        placeholder="Buscar producto de Aliclik por nombre, SKU o EAN…"
+        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+      />
+
+      {/* El candidato por nombre, a un toque. Es el caso mayoritario cuando lo
+          hay, y obligar a buscar lo que ya sabemos sería trabajo de más. */}
+      {suggestion && !query ? (
+        <button
+          type="button"
+          onClick={() => {
+            picked.current = {
+              ean: suggestion.ean,
+              label: suggestion.name,
+              warehouseName: null,
+              stockVirtual: null,
+            };
+            onPick(suggestion.ean);
+            setOpen(false);
+          }}
+          className="mt-1 block w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-xs text-amber-900"
+        >
+          Usar el candidato por nombre: <span className="font-medium">{suggestion.name}</span>
+        </button>
+      ) : null}
+
+      {open ? (
+        <div className="mt-1 max-h-64 overflow-y-auto rounded-lg border border-slate-200 bg-white">
+          {loading ? (
+            <p className="px-3 py-2 text-xs text-slate-500">Buscando…</p>
+          ) : options.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-slate-500">
+              {query ? "Sin resultados. Prueba con menos palabras." : "Escribe para buscar."}
+            </p>
+          ) : (
+            options.map((o) => (
+              <button
+                key={o.ean}
+                type="button"
+                onClick={() => {
+                  picked.current = o;
+                  onPick(o.ean);
+                  setOpen(false);
+                  setQuery("");
+                }}
+                className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm last:border-0 hover:bg-slate-50"
+              >
+                <span className="block truncate text-slate-900">{o.label}</span>
+                <span className="text-xs text-slate-500">
+                  EAN {o.ean}
+                  {o.warehouseName ? ` · ${o.warehouseName}` : ""}
+                  {o.stockVirtual != null ? ` · stock ${o.stockVirtual}` : ""}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
