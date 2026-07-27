@@ -29,16 +29,25 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
-import { decrypt, encrypt } from "@/lib/crypto";
-import { env } from "@/lib/env";
+import { encrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
   describeShalomError,
   findCreatedOrder,
-  ShalomClient,
   sessionIsFresh,
+  type ShalomClient,
 } from "@/lib/shalom/client";
+import {
+  clearSession,
+  clientFor,
+  configurationBlocker,
+  isConfigured,
+  loadStoreShalom,
+  mintSession,
+  publicClient,
+  type StoreShalom,
+} from "@/lib/shalom/session";
 import {
   buildShalomOrderPayload,
   generatePickupCode,
@@ -62,22 +71,6 @@ const MASTER_PATH = "/dashboard/pedidos";
 
 /** Guías que ya cubren el pedido: crear otra encima duplica el despacho. */
 const ACTIVE_STATUSES = new Set(["pendiente", "en_ruta", "por_preparar"]);
-
-interface StoreShalom {
-  /** Para reutilizar el token entre tiendas de la misma empresa. */
-  org_id: string;
-  shalom_pro_email: string | null;
-  shalom_pro_password_enc: string | null;
-  shalom_origin_terminal_id: number | null;
-  shalom_origin_terminal_name: string | null;
-  shalom_default_product_id: number | null;
-  shalom_session_token_enc: string | null;
-  shalom_session_expires_at: string | null;
-}
-
-const STORE_COLUMNS =
-  "org_id,shalom_pro_email,shalom_pro_password_enc,shalom_origin_terminal_id," +
-  "shalom_origin_terminal_name,shalom_default_product_id,shalom_session_token_enc,shalom_session_expires_at";
 
 export interface ShalomDraftView {
   orderId: string;
@@ -126,41 +119,6 @@ async function authorizeStore(storeId: string): Promise<boolean> {
   return Boolean(data);
 }
 
-async function loadStoreShalom(
-  admin: ReturnType<typeof createAdminSupabase>,
-  storeId: string,
-): Promise<StoreShalom | null> {
-  const { data } = await admin.from("stores").select(STORE_COLUMNS).eq("id", storeId).maybeSingle();
-  return (data as StoreShalom | null) ?? null;
-}
-
-/**
- * ¿Se puede crear una guía para esta tienda? Hacen falta las DOS mitades: la API
- * key global del wrapper (entorno) y la cuenta de Shalom Pro de la tienda.
- */
-function isConfigured(store: StoreShalom | null): boolean {
-  return Boolean(
-    env.shalomConfigured() &&
-      store?.shalom_pro_email &&
-      store?.shalom_pro_password_enc &&
-      store?.shalom_origin_terminal_id,
-  );
-}
-
-/** Por qué NO se puede, distinguiendo de quién es el problema. */
-function configurationBlocker(store: StoreShalom | null): string | null {
-  if (!env.shalomConfigured()) {
-    return "Shalom no está habilitado en este servidor: falta la variable SHALOM_API_KEY. Es global, no de la tienda.";
-  }
-  if (!store?.shalom_pro_email || !store?.shalom_pro_password_enc) {
-    return "Esta tienda no tiene cuenta de Shalom Pro. Cárgala en Ajustes → Tienda → Shalom.";
-  }
-  if (!store?.shalom_origin_terminal_id) {
-    return "Falta la agencia de origen de esta tienda (Ajustes → Tienda → Shalom).";
-  }
-  return null;
-}
-
 /** Guías vivas del pedido, para no despachar dos veces lo mismo. */
 async function activeGuides(
   admin: ReturnType<typeof createAdminSupabase>,
@@ -172,25 +130,6 @@ async function activeGuides(
     .eq("order_id", orderId);
   const rows = (data as { courier: string; guide_code: string; delivery_status: string }[]) ?? [];
   return rows.filter((g) => ACTIVE_STATUSES.has(g.delivery_status));
-}
-
-/**
- * Cliente listo para llamar, con el token cacheado si sigue vivo. NO crea la
- * sesión: eso es explícito (`connectShalomSession`) porque tarda ~90 s y nadie
- * quiere pagarlo dentro de la llamada que crea la guía.
- */
-function clientFor(store: StoreShalom): { client: ShalomClient; sessionReady: boolean } {
-  const fresh = sessionIsFresh(store.shalom_session_expires_at);
-  const sessionToken =
-    fresh && store.shalom_session_token_enc ? decrypt(store.shalom_session_token_enc) : null;
-  return {
-    client: new ShalomClient({
-      apiKey: env.shalomApiKey(),
-      baseUrl: env.shalomApiBase(),
-      sessionToken,
-    }),
-    sessionReady: Boolean(sessionToken),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -217,70 +156,9 @@ export async function connectShalomSession(
   if (blocker) return { error: blocker };
   const s = store as StoreShalom;
 
-  // Si ya hay una sesión viva no se vuelve a pagar el login.
-  if (sessionIsFresh(s.shalom_session_expires_at) && s.shalom_session_token_enc) {
-    return { expiresAt: s.shalom_session_expires_at as string };
-  }
-
-  // Dos tiendas de la misma empresa suelen despachar con LA MISMA cuenta de
-  // Shalom. El token es de la cuenta, no de la tienda: si otra tienda ya pagó el
-  // login, se copia su token en vez de esperar 90 s otra vez.
-  //
-  // Acotado a la misma organización aunque el email ya sea prueba suficiente de
-  // que es la misma cuenta: no hay razón para que un token cruce una frontera de
-  // organización, y el coste de la restricción es cero.
-  const shared = await admin
-    .from("stores")
-    .select("shalom_session_token_enc,shalom_session_expires_at")
-    .eq("org_id", s.org_id)
-    .eq("shalom_pro_email", s.shalom_pro_email as string)
-    .neq("id", storeId)
-    .not("shalom_session_token_enc", "is", null)
-    .order("shalom_session_expires_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const reusable = shared.data as
-    | { shalom_session_token_enc: string | null; shalom_session_expires_at: string | null }
-    | null;
-
-  if (reusable?.shalom_session_token_enc && sessionIsFresh(reusable.shalom_session_expires_at)) {
-    await admin
-      .from("stores")
-      .update({
-        shalom_session_token_enc: reusable.shalom_session_token_enc,
-        shalom_session_expires_at: reusable.shalom_session_expires_at,
-      })
-      .eq("id", storeId);
-    return { expiresAt: reusable.shalom_session_expires_at as string };
-  }
-
-  let password: string;
   try {
-    password = decrypt(s.shalom_pro_password_enc as string);
-  } catch {
-    return { error: "No se pudo descifrar la contraseña de Shalom. Vuelve a cargarla en Ajustes." };
-  }
-
-  try {
-    const session = await new ShalomClient({
-      apiKey: env.shalomApiKey(),
-      baseUrl: env.shalomApiBase(),
-    }).createSession(s.shalom_pro_email as string, password);
-
-    // El token se guarda en TODAS las tiendas de la organización que usan esta
-    // misma cuenta: el login ya se pagó, y que la segunda tienda lo vuelva a
-    // pagar sería tirar 90 s por nada.
-    await admin
-      .from("stores")
-      .update({
-        shalom_session_token_enc: encrypt(session.session_token),
-        shalom_session_expires_at: session.expires_at,
-      })
-      .eq("org_id", s.org_id)
-      .eq("shalom_pro_email", s.shalom_pro_email as string);
-
-    return { expiresAt: session.expires_at };
+    const res = await mintSession(admin, storeId, s);
+    return "error" in res ? { error: res.error } : { expiresAt: res.expiresAt };
   } catch (err) {
     return { error: describeShalomError(err) };
   }
@@ -379,18 +257,15 @@ export async function searchShalomAgencies(
   const query = q.trim();
   if (query.length < 2) return { agencies: [] };
 
-  if (!env.shalomConfigured()) {
-    return { error: "Shalom no está habilitado en este servidor (falta SHALOM_API_KEY)." };
-  }
+  const admin = createAdminSupabase();
+  const store = await loadStoreShalom(admin, storeId);
+  const blocker = configurationBlocker(store);
+  // Solo importa que la API key global exista: el directorio de agencias no toca
+  // la cuenta del cliente, así que se puede buscar antes de conectar.
+  if (blocker && !store?.shalom_pro_email) return { error: blocker };
 
   try {
-    // El directorio de agencias solo pide la API key: se puede buscar antes de
-    // conectar la cuenta, que es lo lento.
-    const client = new ShalomClient({
-      apiKey: env.shalomApiKey(),
-      baseUrl: env.shalomApiBase(),
-    });
-    return { agencies: (await client.searchAgencies({ q: query })).slice(0, 25) };
+    return { agencies: (await publicClient().searchAgencies({ q: query })).slice(0, 25) };
   } catch (err) {
     return { error: describeShalomError(err) };
   }
@@ -619,12 +494,7 @@ export async function createShalomGuide(
       const shalomErr = err instanceof ShalomApiError ? err : null;
       // Un token vencido no es un fallo de datos: se limpia la caché para que
       // el siguiente intento vuelva a conectar en vez de repetir el 401.
-      if (shalomErr?.isShalomAuth) {
-        await admin
-          .from("stores")
-          .update({ shalom_session_token_enc: null, shalom_session_expires_at: null })
-          .eq("id", row.store_id);
-      }
+      if (shalomErr?.isShalomAuth) await clearSession(admin, row.store_id);
       return { error: describeShalomError(err) };
     }
   }

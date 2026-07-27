@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildShalomOrderPayload,
   documentError,
@@ -18,6 +18,7 @@ import {
   ShalomClient,
 } from "@/lib/shalom/client";
 import { ShalomApiError, ShalomTimeoutError } from "@/lib/shalom/types";
+import { configurationBlocker, isConfigured } from "@/lib/shalom/session";
 import { buildStoreUpdate } from "@/lib/store-settings";
 import { PERMISSIONS, permissionsFor } from "@/lib/permissions";
 
@@ -542,6 +543,49 @@ describe("ajustes de tienda — Shalom", () => {
   it("un secreto en blanco no borra el guardado", () => {
     const patch = buildStoreUpdate({ shalom_pro_password: "" }, KEY);
     expect(patch).not.toHaveProperty("shalom_pro_password_enc");
+  });
+});
+
+describe("configurationBlocker — a quién manda a arreglar el problema", () => {
+  const account = {
+    org_id: "org-1",
+    shalom_pro_email: "cliente@empresa.com",
+    shalom_pro_password_enc: "v1:xxx",
+    shalom_origin_terminal_id: 404,
+    shalom_origin_terminal_name: "SALAS ICA",
+    shalom_default_product_id: 3,
+    shalom_session_token_enc: null,
+    shalom_session_expires_at: null,
+  };
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("sin SHALOM_API_KEY culpa al servidor, no a la tienda", () => {
+    vi.stubEnv("SHALOM_API_KEY", "");
+    const msg = configurationBlocker(account);
+    expect(msg).toMatch(/SHALOM_API_KEY/);
+    expect(msg).toMatch(/global/i);
+    expect(isConfigured(account)).toBe(false);
+  });
+
+  it("con la key puesta, señala lo que le falta a la tienda", () => {
+    vi.stubEnv("SHALOM_API_KEY", "sk_test");
+    expect(configurationBlocker({ ...account, shalom_pro_email: null })).toMatch(/cuenta de Shalom Pro/);
+    expect(configurationBlocker({ ...account, shalom_origin_terminal_id: null })).toMatch(
+      /agencia de origen/,
+    );
+  });
+
+  it("con las dos mitades no bloquea nada", () => {
+    vi.stubEnv("SHALOM_API_KEY", "sk_test");
+    expect(configurationBlocker(account)).toBeNull();
+    expect(isConfigured(account)).toBe(true);
+  });
+
+  it("una tienda inexistente no revienta", () => {
+    vi.stubEnv("SHALOM_API_KEY", "sk_test");
+    expect(configurationBlocker(null)).toMatch(/cuenta de Shalom Pro/);
+    expect(isConfigured(null)).toBe(false);
   });
 });
 

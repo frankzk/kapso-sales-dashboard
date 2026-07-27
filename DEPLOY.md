@@ -717,11 +717,31 @@ apellidos se sugieren partiendo el nombre del pedido por la convención peruana
 (los dos últimos tokens), pero quedan editables porque falla con apellidos
 compuestos.
 
-### Probar antes de pedir la API key definitiva
+### Probar la conexión
 
-`scripts/shalom-probe.mjs` se corre **en tu máquina** (el entorno de Claude tiene
-bloqueado el dominio por política de egress). Es solo lectura salvo que se le
-pase `--create`:
+La forma normal es el botón **Probar conexión** en *Ajustes de la tienda →
+Shalom · crear preguías por API*. Corre en el servidor, es solo lectura y prueba
+las dos mitades por separado, que es lo que importa porque las arregla gente
+distinta:
+
+1. La **API key global** contra el directorio de agencias, que no toca la cuenta
+   de nadie. Si falla, el problema es del despliegue.
+2. La **cuenta de Shalom Pro de la tienda**, pidiendo el token. Es la parte lenta
+   (~90 s la primera vez, de ahí el `maxDuration = 300` en la página de ajustes).
+
+Si las dos pasan, lista los **productos de la cuenta con sus ids** — que es de
+donde sale el «tipo de paquete por defecto», porque el catálogo es por cuenta y
+los ids de la documentación no valen. Al lado hay un buscador de agencias para
+conseguir el **id de la agencia de origen**, que no se puede averiguar de otra
+forma. Probar deja además la sesión caliente: la primera guía después ya no
+espera.
+
+### La sonda, para cuando no hay despliegue
+
+`scripts/shalom-probe.mjs` hace lo mismo desde una terminal, y además puede crear
+una guía real. Sirve para validar una API key **antes** de desplegar nada, que es
+justo el caso de una key de prueba a punto de vencer. Es solo lectura salvo que
+se le pase `--create`:
 
 ```bash
 # Valida la API key sin tocar la cuenta de ningún cliente

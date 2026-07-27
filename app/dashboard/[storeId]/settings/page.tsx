@@ -10,6 +10,13 @@ import { StoreSettings, type StoreSettingsData } from "@/components/store-settin
 
 export const dynamic = "force-dynamic";
 
+/**
+ * "Probar conexión" de Shalom pide el token de sesión, y esa llamada hace un
+ * login real contra pro.shalom.pe: hasta 2 minutos la primera vez de cada
+ * cuenta. Con el límite por defecto el botón se cortaría solo.
+ */
+export const maxDuration = 300;
+
 const SHOPIFY_ERRORS: Record<string, string> = {
   "oauth-no-config": "OAuth de Shopify no está configurado en el servidor.",
   "parametros-invalidos": "Parámetros de OAuth inválidos.",
