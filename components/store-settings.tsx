@@ -60,6 +60,10 @@ export interface StoreSettingsData {
     tanders_origin_address: string | null;
     tanders_origin_lat: number | null;
     tanders_origin_lng: number | null;
+    shalom_pro_email: string | null;
+    shalom_origin_terminal_id: number | null;
+    shalom_origin_terminal_name: string | null;
+    shalom_default_product_id: number | null;
     meta_ad_accounts: StoreMetaAdAccount[];
   };
   has: {
@@ -74,6 +78,8 @@ export interface StoreSettingsData {
     aliclikToken: boolean;
     aliclikWebhookSecret: boolean;
     tandersPassword: boolean;
+    shalomApiKey: boolean;
+    shalomProPassword: boolean;
   };
   oauthAvailable: boolean;
   siteUrl: string;
@@ -999,6 +1005,75 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
               />
             </label>
           </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Shalom (crear guías por API)
+          </legend>
+          <p className="text-xs text-slate-500">
+            Para crear preguías de Shalom desde el Master. Son <strong>dos credenciales
+            distintas</strong>: la <em>API key</em> del wrapper{" "}
+            <strong>api.shalom-api-peru.com</strong> (formato <code>sk_…</code>, se pide por
+            WhatsApp al proveedor) y la cuenta de <strong>pro.shalom.pe</strong> del cliente, que es
+            la que emite las guías. Las dos se guardan <strong>cifradas</strong>. Esto no reemplaza
+            la carga del reporte Excel de Shalom: los envíos creados acá se cruzan con ese reporte
+            por número de guía como cualquier otro.
+          </p>
+          <SecretField name="shalom_api_key" label="API key del wrapper (sk_…)" set={data.has.shalomApiKey} />
+          <label className="block">
+            <span className="text-xs text-slate-500">Email de Shalom Pro (pro.shalom.pe)</span>
+            <input
+              name="shalom_pro_email"
+              type="email"
+              defaultValue={s.shalom_pro_email ?? ""}
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+          </label>
+          <SecretField
+            name="shalom_pro_password"
+            label="Contraseña de Shalom Pro"
+            set={data.has.shalomProPassword}
+          />
+          <p className="text-xs text-slate-400">
+            Al cambiar el email o la contraseña se descarta el token de sesión guardado y la próxima
+            guía vuelve a pagar el login (~90 s).
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs text-slate-500">Agencia de origen (ID)</span>
+              <input
+                name="shalom_origin_terminal_id"
+                inputMode="numeric"
+                defaultValue={s.shalom_origin_terminal_id ?? ""}
+                placeholder="404"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs text-slate-500">Agencia de origen (nombre)</span>
+              <input
+                name="shalom_origin_terminal_name"
+                defaultValue={s.shalom_origin_terminal_name ?? ""}
+                placeholder="SALAS ICA"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-xs text-slate-500">Tipo de paquete por defecto (ID de producto)</span>
+            <input
+              name="shalom_default_product_id"
+              inputMode="numeric"
+              defaultValue={s.shalom_default_product_id ?? ""}
+              placeholder="3"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+            <span className="mt-1 block text-xs text-slate-400">
+              El catálogo es por cuenta, así que el id no es universal (en la del ejemplo, 3 =
+              Sobre). El modal lista los productos reales y deja cambiarlo por envío.
+            </span>
+          </label>
         </fieldset>
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">

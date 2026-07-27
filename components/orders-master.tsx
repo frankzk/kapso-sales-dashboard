@@ -15,6 +15,7 @@ import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { ChecklistFilter } from "@/components/filters";
 import { PickupKeyPanel } from "@/components/pickup-key-panel";
 import { TandersGuideModal } from "@/components/tanders-guide-modal";
+import { ShalomGuideModal } from "@/components/shalom-guide-modal";
 import {
   addOrderComment,
   clearOrderGeo,
@@ -130,6 +131,7 @@ export function OrdersMasterBoard({
   canOverride,
   canCreateGuide,
   canCreateTandersGuide,
+  canCreateShalomGuide,
 }: {
   stores: StoreSummary[];
   view: MasterView;
@@ -139,6 +141,7 @@ export function OrdersMasterBoard({
   canOverride: boolean;
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
+  canCreateShalomGuide: boolean;
 }) {
   const router = useRouter();
   const [filters, setFilters] = useState<MasterFilters>(emptyFilters);
@@ -497,6 +500,7 @@ export function OrdersMasterBoard({
           canOverride={canOverride}
           canCreateGuide={canCreateGuide}
           canCreateTandersGuide={canCreateTandersGuide}
+          canCreateShalomGuide={canCreateShalomGuide}
           storeName={storeName}
           onClose={() => setOpenId(null)}
           onSaved={() => router.refresh()}
@@ -857,6 +861,7 @@ function OrderDrawer({
   canOverride,
   canCreateGuide,
   canCreateTandersGuide,
+  canCreateShalomGuide,
   storeName,
   onClose,
   onSaved,
@@ -866,6 +871,7 @@ function OrderDrawer({
   canOverride: boolean;
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
+  canCreateShalomGuide: boolean;
   storeName: (id: string) => string;
   onClose: () => void;
   onSaved: () => void;
@@ -874,6 +880,7 @@ function OrderDrawer({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [tandersOpen, setTandersOpen] = useState(false);
+  const [shalomOpen, setShalomOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   const reload = useMemo(
@@ -992,13 +999,27 @@ function OrderDrawer({
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Couriers y guías ({detail.guides.length})
                 </h3>
-                {canCreateTandersGuide && !detail.row.guide_code && (
-                  <button
-                    onClick={() => setTandersOpen(true)}
-                    className="ml-auto rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    + Guía Tanders
-                  </button>
+                {/* Solo se ofrece crear guía si el pedido no tiene una: dos guías
+                    para un mismo paquete es despacharlo dos veces. */}
+                {!detail.row.guide_code && (
+                  <div className="ml-auto flex gap-2">
+                    {canCreateTandersGuide && (
+                      <button
+                        onClick={() => setTandersOpen(true)}
+                        className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        + Guía Tanders
+                      </button>
+                    )}
+                    {canCreateShalomGuide && (
+                      <button
+                        onClick={() => setShalomOpen(true)}
+                        className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        + Guía Shalom
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
               {detail.guides.length === 0 ? (
@@ -1108,6 +1129,17 @@ function OrderDrawer({
         <TandersGuideModal
           orderId={orderId}
           onClose={() => setTandersOpen(false)}
+          onCreated={() => {
+            void reload();
+            onSaved();
+          }}
+        />
+      )}
+
+      {shalomOpen && (
+        <ShalomGuideModal
+          orderId={orderId}
+          onClose={() => setShalomOpen(false)}
           onCreated={() => {
             void reload();
             onSaved();

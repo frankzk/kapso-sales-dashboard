@@ -609,6 +609,131 @@ drawer del Master y devuelve el código de guía.
 - **Saldo insuficiente**: según la operación, Tanders no deja registrar. Se
   traduce a un mensaje explícito para el 402/403.
 
+## 5ñ. Shalom por API — crear preguías desde el Master
+
+Shalom ya estaba en el sistema, pero **solo de entrada**: su reporte Excel se
+sube y lo parsea el adaptador de agencia (`lib/couriers/agency.ts`). Esto abre la
+dirección contraria — crear la preguía por API antes de que exista ningún
+reporte — a través del wrapper **api.shalom-api-peru.com**, que automatiza
+`pro.shalom.pe`.
+
+Los dos caminos **conviven**: la guía creada acá vive en `shipments` con
+`courier='shalom'` y `guide_code` = la `guia`, así que el reporte del día
+siguiente cruza con ella por número de guía como con cualquier otro envío. No
+hay que dejar de subir el Excel.
+
+- **Needs migration 0059** (`stores.shalom_*`, `shipments.shalom_codigo` /
+  `shalom_ose_id` / `shalom_order_id` / `shalom_serie` / `shalom_raw`).
+- Permiso propio **`shalom.create_guide`**. Ojo con la vecindad: los otros
+  `shalom.*` son del flujo de cobro Yape y de la clave de recojo. Crear la guía
+  **no** da acceso a ver claves.
+
+### Dos credenciales, no una
+
+Se configuran en **Ajustes de la tienda → Shalom**, ambas cifradas AES-256-GCM:
+
+1. La **API key del wrapper** (`sk_…`), que es de la cuenta de Kapso y se pide
+   por WhatsApp al proveedor (948 997 674). Tiene fecha de vencimiento.
+2. El **email + password de `pro.shalom.pe` del cliente**, que es la cuenta que
+   emite las guías de verdad. El wrapper los canjea por un token.
+
+Además: la **agencia de origen** (`origin_terminal_id`, de `GET /v1/agencies`) y
+opcionalmente el **producto por defecto**. El catálogo de productos es por
+cuenta, así que el id no es universal — el modal lista los reales.
+
+### La primera llamada tarda ~90 segundos
+
+El wrapper hace un login real contra el panel de Shalom la primera vez de cada
+cuenta: entre 90 s y 2 min. Por eso:
+
+- El token `ssk_…` (TTL **2 horas**) se **cachea cifrado en la tienda**
+  (`shalom_session_token_enc`). En serverless la memoria del proceso no
+  sobrevive entre invocaciones, así que un caché en módulo no serviría de nada.
+- Conectar es un **paso explícito del modal** («Conectar con Shalom»), con su
+  aviso de que puede tardar 2 minutos. Es una *lectura*: se puede reintentar sin
+  riesgo. La segunda guía del día ya no lo paga.
+- `app/dashboard/pedidos/page.tsx` declara **`maxDuration = 300`**; con el
+  límite por defecto esa llamada se cortaría sola.
+- Cambiar el email o la contraseña en Ajustes **invalida el token cacheado** en
+  el acto, en vez de esperar a que la próxima guía falle con un 401.
+
+### Crear la orden no es idempotente — y eso manda sobre el diseño
+
+`POST /v1/orders` crea una guía **real y cobrable**, no hay sandbox y no hay
+clave de idempotencia. En consecuencia:
+
+- **Cero reintentos automáticos**, ni siquiera con un 401 — a diferencia del
+  cliente de Tanders. Si el primer POST llegó, el segundo emite una segunda
+  guía cobrable.
+- Ante un corte se **verifica en lugar de reintentar**: se listan las órdenes
+  recientes (`GET /v1/orders`) y se busca la guía por **documento del
+  destinatario + clave de recojo**. Si aparece exactamente una, se adopta y el
+  aviso dice que se recuperó. Si hay dos coincidencias no se adopta ninguna:
+  adoptar la equivocada es peor que pedir que un humano mire.
+- Si no se puede verificar, el mensaje es explícito: revisar en `pro.shalom.pe`
+  **antes** de reintentar.
+- Si Shalom crea la guía pero falla el insert local, el error **incluye guía y
+  código** para registrarla a mano.
+- Si la guía se creó por error, se borra con `DELETE /v1/orders/{id}` mientras no
+  haya sido recibida en agencia. Ese `{id}` es el de `GET /v1/orders`, **no** el
+  `ose_id` ni la `guia` (por eso hay tres columnas y no una).
+
+### La clave de recojo nace con la guía
+
+`pickup_code` lo elegimos nosotros, así que la clave **se genera en el servidor**
+y se guarda cifrada en `shalom_pickup_keys` (0049) — la misma tabla que antes
+llenaba un administrador copiándola del panel de Shalom. El circuito de Yape →
+validación → revelar la clave **no cambia**: sigue siendo la única vía de verla y
+sigue auditado.
+
+- La clave **no viaja al cliente** ni aparece en la línea de tiempo del pedido,
+  salvo para un rol que ya tiene `shalom.view_pickup_key`.
+- Se evitan las claves que Shalom rechaza (4 dígitos iguales, escaleras
+  ascendentes) y, al generar, también las descendentes.
+
+### El documento del destinatario es manual
+
+Shalom identifica al destinatario por DNI/RUC/CE y **Shopify no lo pide**: es el
+único dato que el operador escribe siempre. `GET /v1/persons/search` autocompleta
+nombre, apellidos y teléfono si el cliente ya envió antes por Shalom. Los
+apellidos se sugieren partiendo el nombre del pedido por la convención peruana
+(los dos últimos tokens), pero quedan editables porque falla con apellidos
+compuestos.
+
+### Probar antes de pedir la API key definitiva
+
+`scripts/shalom-probe.mjs` se corre **en tu máquina** (el entorno de Claude tiene
+bloqueado el dominio por política de egress). Es solo lectura salvo que se le
+pase `--create`:
+
+```bash
+# Valida la API key sin tocar la cuenta del cliente
+SHALOM_API_KEY='sk_…' node scripts/shalom-probe.mjs
+
+# Además: sesión, productos, tarifas y órdenes de la cuenta
+SHALOM_API_KEY='sk_…' SHALOM_PRO_EMAIL='…' SHALOM_PRO_PASSWORD='…' \
+  node scripts/shalom-probe.mjs
+```
+
+Con `--create` emite una guía real e imprime el `curl` de borrado. El volcado va
+a `scripts/.shalom-probe.json` (ignorado por git, con secretos enmascarados).
+
+### Límites conocidos
+
+- **60 requests/minuto** por API key. La búsqueda de agencias rebota 450 ms para
+  no gastarlas tecleando; el cupo restante se lee de las cabeceras
+  `X-RateLimit-*` de cualquier respuesta.
+- **Servicio de cobranza (`collection_service`) no implementado.** Requiere una
+  cuenta bancaria registrada en Shalom Pro y en esta operación el cobro va por
+  Yape con clave de recojo, que es justamente el flujo que ya existe. `payer`
+  (quién paga el flete) sí es elegible, y por defecto es `sender`: el cliente ya
+  pagó el envío junto con el producto.
+- **Carga masiva (`/v1/orders/bulk`) no implementada**: el Master crea guías de a
+  una desde el drawer.
+- `GET /v1/tracking` devuelve `origen`, `destino`, `remitente`, `destinatario` y
+  `comprobante` **vacíos** desde julio de 2026 (el propio proveedor lo avisa). No
+  construir nada sobre esos campos.
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle

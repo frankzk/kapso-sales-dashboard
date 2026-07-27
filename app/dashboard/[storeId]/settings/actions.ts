@@ -68,6 +68,16 @@ export async function updateStore(
     const v = formData.get(k);
     return v == null ? undefined : String(v);
   };
+
+  // El email de Shalom llega rellenado en cada guardado: hace falta el valor
+  // actual para saber si lo cambiaron de verdad y solo entonces tirar el token
+  // de sesión (ver buildStoreUpdate).
+  const { data: currentStore } = await ctx.admin
+    .from("stores")
+    .select("shalom_pro_email")
+    .eq("id", storeId)
+    .maybeSingle();
+
   const patch = buildStoreUpdate({
     name: get("name"),
     currency: get("currency"),
@@ -108,10 +118,18 @@ export async function updateStore(
     tanders_origin_address: get("tanders_origin_address"),
     tanders_origin_lat: get("tanders_origin_lat"),
     tanders_origin_lng: get("tanders_origin_lng"),
+    shalom_api_key: get("shalom_api_key"),
+    shalom_pro_email: get("shalom_pro_email"),
+    shalom_pro_password: get("shalom_pro_password"),
+    shalom_origin_terminal_id: get("shalom_origin_terminal_id"),
+    shalom_origin_terminal_name: get("shalom_origin_terminal_name"),
+    shalom_default_product_id: get("shalom_default_product_id"),
     // Estos dos existían en el formulario pero no se leían acá, así que la
     // clave de Anthropic por tienda (5l del DEPLOY) nunca llegaba a guardarse.
     anthropic_api_key: get("anthropic_api_key"),
     anthropic_model: get("anthropic_model"),
+  }, undefined, {
+    shalom_pro_email: (currentStore as { shalom_pro_email?: string | null } | null)?.shalom_pro_email ?? null,
   });
 
   if (!Object.keys(patch).length) return { notice: "No hay cambios para guardar." };
