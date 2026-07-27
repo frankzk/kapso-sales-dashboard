@@ -254,3 +254,88 @@ export function stopsToSettlementLines(
       },
     }));
 }
+
+// ---------------------------------------------------------------------------
+// Qué le pasa al PEDIDO cuando se cierra la ruta.
+// ---------------------------------------------------------------------------
+
+/**
+ * Efecto de una parada sobre el estado del pedido en el Master.
+ *
+ * Con un courier externo el estado real lo trae su reporte; con motorizado
+ * propio no viene nadie detrás, así que el cierre de la ruta es el único
+ * momento en que el Master puede enterarse. Sin esto, un pedido entregado por
+ * un motorizado propio se quedaría "pendiente" para siempre y el cuadre lo
+ * marcaría como "cobro sin entrega" en todas y cada una de sus paradas.
+ *
+ * `null` = no se toca el pedido. Es la respuesta correcta para casi todos los
+ * motivos de no entrega: que hoy no contestara no cambia nada del pedido, solo
+ * significa que hay que volver. Cerrarlo sería perder una venta viva.
+ */
+export type StopEffect = "entregado" | "anulado" | null;
+
+/** Motivos por los que el pedido SÍ se cierra. Deliberadamente cortos: cerrar
+ *  un pedido por error cuesta una venta, y dejarlo abierto solo cuesta otra
+ *  visita. Ante la duda, no se cierra. */
+const CLOSING_REASONS: Record<string, StopEffect> = {
+  // El cliente lo vio y no lo quiso: eso sí es el final del pedido.
+  rechazado: "anulado",
+};
+
+export function stopEffect(stop: {
+  status: StopStatus;
+  outcome_reason?: string | null;
+}): StopEffect {
+  if (stop.status === "entregado") return "entregado";
+  if (stop.status !== "no_entregado") return null;
+  return CLOSING_REASONS[stop.outcome_reason ?? ""] ?? null;
+}
+
+export interface MasterEffect {
+  order_id: string;
+  target: Exclude<StopEffect, null>;
+  reason: string;
+}
+
+/**
+ * Los cambios que el cierre de una ruta debe aplicar al Master. Puro: quien
+ * llama los escribe. Se devuelve la razón para que quede en el historial del
+ * pedido y se entienda de dónde salió el cambio meses después.
+ */
+export function masterEffects(
+  stops: readonly {
+    order_id: string;
+    status: StopStatus;
+    outcome_reason?: string | null;
+  }[],
+): MasterEffect[] {
+  const out: MasterEffect[] = [];
+  for (const s of stops) {
+    const target = stopEffect(s);
+    if (!target) continue;
+    out.push({
+      order_id: s.order_id,
+      target,
+      reason:
+        target === "entregado"
+          ? "Entregado por el motorizado y confirmado al cerrar la ruta."
+          : "El cliente rechazó el pedido; reportado por el motorizado.",
+    });
+  }
+  return out;
+}
+
+/** Agrupa las paradas por tienda: una ruta mixta produce una liquidación por
+ *  cada tienda, porque el dinero y el cuadre son por tienda. */
+export function groupByStore<T extends { store_id: string | null }>(
+  stops: readonly T[],
+): Map<string, T[]> {
+  const out = new Map<string, T[]>();
+  for (const s of stops) {
+    if (!s.store_id) continue;
+    const list = out.get(s.store_id);
+    if (list) list.push(s);
+    else out.set(s.store_id, [s]);
+  }
+  return out;
+}

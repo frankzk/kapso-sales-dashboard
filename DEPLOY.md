@@ -617,6 +617,28 @@ al cerrar. La carga por foto/Excel sigue viva para los couriers externos.
   hay tarifa `motorizado_visita` configurada — no tenerla es una postura válida.
 - **Fotos en bucket privado** (`delivery-proofs`), subidas aparte del reporte
   para que una caída de red no le borre el formulario.
+- **Needs migration 0057** además de la 0056. Corrige dos cosas que solo se ven
+  al contrastar el diseño con cómo se reparte de verdad:
+  - **La ruta es del motorizado y del día, no de la tienda.** Sale con paquetes
+    de Aurela y de Kenku en la misma vuelta; con una ruta por tienda vería dos
+    listas para un solo viaje. La tienda vive en cada parada
+    (`delivery_stops.store_id`, que viene del pedido) y **cerrar una ruta mixta
+    produce una liquidación por cada tienda**, porque el dinero se cuadra por
+    separado. Un viaje, varias cuentas.
+  - **Cerrar la ruta mueve el Master.** Con un courier externo el estado real lo
+    trae su reporte; con motorizado propio no viene nadie detrás, así que sin
+    esto un pedido entregado se quedaba "pendiente" para siempre y el cuadre lo
+    marcaba como *cobro sin entrega* en TODAS sus paradas. Al cerrar, las
+    entregas pasan a `entregado` por el camino de siempre (`order_events` +
+    recálculo), con un humano revisando antes de que sea oficial.
+- **Qué pasa con lo no entregado, según el motivo.** Solo `rechazado` cierra el
+  pedido (a `anulado`): el cliente lo vio y no lo quiso. Los demás motivos
+  —no contesta, no estaba, reprogramado, sin dinero, dirección errada— **no
+  tocan el pedido**, que sigue vivo para reintentarlo otro día. Cerrar un pedido
+  por error cuesta una venta; dejarlo abierto solo cuesta otra visita.
+- **Los pedidos ya asignados no reaparecen**: al armar una ruta se excluyen los
+  que ya van en la de otro motorizado ese día, mirando TODAS las rutas del día
+  y no solo las de una tienda — si no, dos saldrían con el mismo paquete.
 
 ## 5l. Clave de Anthropic por tienda
 

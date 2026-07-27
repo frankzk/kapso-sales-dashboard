@@ -26,6 +26,9 @@ export interface RouteRow {
 /** Una parada con lo que el motorizado necesita ver para tocar el timbre. */
 export interface StopWithOrder extends RouteStop {
   seq: number;
+  /** Tienda del pedido (0057). Es lo que agrupa las liquidaciones cuando una
+   *  ruta mezcla tiendas en el mismo viaje. */
+  store_id: string | null;
   outcome_reason: string | null;
   note: string | null;
   photo_path: string | null;
@@ -48,7 +51,7 @@ export interface StopWithOrder extends RouteStop {
 const ROUTE_COLUMNS =
   "id,store_id,rider_id,route_date,status,settlement_id,note,started_at,closed_at";
 const STOP_COLUMNS =
-  "id,order_id,seq,status,payment_method,collected_amount,outcome_reason,note," +
+  "id,order_id,store_id,seq,status,payment_method,collected_amount,outcome_reason,note," +
   "photo_path,voucher_path,reported_at";
 
 /** La ficha del motorizado que corresponde al usuario de la petición, si la hay. */
@@ -156,6 +159,7 @@ export async function getAssignableOrders(
 ): Promise<
   {
     order_id: string;
+    store_id: string;
     order_name: string | null;
     customer_name: string | null;
     district: string | null;
@@ -168,7 +172,7 @@ export async function getAssignableOrders(
 
   let q = sb
     .from("order_master")
-    .select("order_id,order_name,customer_name,district,address,order_total")
+    .select("order_id,store_id,order_name,customer_name,district,address,order_total")
     .in("store_id", storeIds)
     .in("general_status", ["pendiente", "en_proceso"]);
   if (opts.district) q = q.eq("district", opts.district);
@@ -179,6 +183,7 @@ export async function getAssignableOrders(
   if (error) return [];
   const candidates = (data ?? []) as unknown as {
     order_id: string;
+    store_id: string;
     order_name: string | null;
     customer_name: string | null;
     district: string | null;
@@ -188,11 +193,14 @@ export async function getAssignableOrders(
   if (!candidates.length) return [];
 
   // Los que ya están asignados ese día, en cualquier ruta que el usuario vea.
+  // NO se filtra por la tienda de la RUTA: desde 0057 una ruta mezcla tiendas y
+  // su `store_id` es meramente informativo. Filtrar por él dejaría reaparecer
+  // como asignable un pedido que ya va en la ruta de otro motorizado, y dos
+  // saldrían con el mismo paquete. RLS ya acota las rutas a la organización.
   const { data: routeRows } = await sb
     .from("delivery_routes")
     .select("id")
-    .eq("route_date", day)
-    .in("store_id", storeIds);
+    .eq("route_date", day);
   const routeIds = ((routeRows ?? []) as { id: string }[]).map((r) => r.id);
   if (!routeIds.length) return candidates;
 

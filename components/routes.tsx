@@ -30,6 +30,7 @@ interface StoreOpt {
 
 interface Assignable {
   order_id: string;
+  store_id: string;
   order_name: string | null;
   customer_name: string | null;
   district: string | null;
@@ -83,6 +84,9 @@ export function RoutesBoard({
     });
 
   const riderName = (id: string) => riders.find((r) => r.id === id)?.full_name ?? "—";
+  // Una ruta mezcla tiendas (0057), así que cada parada y cada pedido asignable
+  // dicen de cuál son: sin eso el coordinador no sabe qué está cargando.
+  const storeName = (id: string | null) => stores.find((s) => s.id === id)?.name ?? "—";
 
   return (
     <div className="space-y-6">
@@ -158,6 +162,7 @@ export function RoutesBoard({
           detail={detail}
           assignable={assignable}
           riderName={riderName(detail.route.rider_id)}
+          storeName={storeName}
           disabled={pending}
           onRun={run}
         />
@@ -187,6 +192,10 @@ function NewRoute({
   return (
     <Card className="space-y-3 p-4">
       <h3 className="text-sm font-semibold text-slate-800">Armar la ruta del día</h3>
+      <p className="text-xs text-slate-500">
+        Una ruta por motorizado y día. Puede llevar pedidos de varias tiendas en el mismo viaje: al
+        cerrarla sale una liquidación por cada tienda, porque el dinero se cuadra por separado.
+      </p>
       {riders.length === 0 ? (
         <p className="text-sm text-slate-500">
           Primero da de alta a tus motorizados en Liquidaciones; luego aquí les armas la ruta.
@@ -305,12 +314,14 @@ function RouteDetail({
   detail,
   assignable,
   riderName,
+  storeName,
   disabled,
   onRun,
 }: {
   detail: { route: RouteRow; stops: StopWithOrder[] };
   assignable: Assignable[];
   riderName: string;
+  storeName: (id: string | null) => string;
   disabled: boolean;
   onRun: (fn: () => Promise<{ ok: boolean; error?: string; message?: string }>) => void;
 }) {
@@ -394,6 +405,7 @@ function RouteDetail({
             <tr>
               <th className="px-3 py-2 font-medium">#</th>
               <th className="px-3 py-2 font-medium">Cliente</th>
+              <th className="px-3 py-2 font-medium">Tienda</th>
               <th className="px-3 py-2 font-medium">Distrito</th>
               <th className="px-3 py-2 font-medium">Pedido</th>
               <th className="px-3 py-2 font-medium">Resultado</th>
@@ -407,6 +419,7 @@ function RouteDetail({
               <tr key={s.id} className="border-b border-slate-100">
                 <td className="px-3 py-2 text-slate-400">{s.seq}</td>
                 <td className="px-3 py-2 text-slate-700">{s.order?.customer_name ?? "—"}</td>
+                <td className="px-3 py-2 text-slate-500">{storeName(s.store_id)}</td>
                 <td className="px-3 py-2 text-slate-500">{s.order?.district ?? "—"}</td>
                 <td className="px-3 py-2 text-slate-500">{s.order?.name ?? "—"}</td>
                 <td className="px-3 py-2">
@@ -444,7 +457,7 @@ function RouteDetail({
             ))}
             {stops.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-500">
+                <td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-500">
                   Esta ruta no tiene paradas. Añádelas abajo.
                 </td>
               </tr>
@@ -501,7 +514,7 @@ function RouteDetail({
                 <span className="flex-1 truncate text-slate-700">
                   {o.customer_name ?? "Sin nombre"}
                   <span className="ml-1.5 text-xs text-slate-400">
-                    {o.district ?? "—"} · {o.order_name ?? "—"}
+                    {storeName(o.store_id)} · {o.district ?? "—"} · {o.order_name ?? "—"}
                   </span>
                 </span>
                 <span className="text-slate-600">{money(o.order_total)}</span>

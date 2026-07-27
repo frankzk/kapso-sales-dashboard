@@ -13,7 +13,15 @@ import { createAdminSupabase } from "@/lib/db";
 import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getRouteDetail, getRouteTariffs } from "@/lib/routes-access";
-import { computeRoutePayout, routeTotals, stopsToSettlementLines } from "@/lib/routes";
+import {
+  computeRoutePayout,
+  groupByStore,
+  masterEffects,
+  routeTotals,
+  stopsToSettlementLines,
+} from "@/lib/routes";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { defaultOperationalFor } from "@/lib/order-status";
 
 export interface RouteActionResult {
   ok: boolean;
@@ -49,10 +57,13 @@ export async function ensureRoute(input: {
   const store = stores.find((s) => s.id === input.storeId);
   if (!store) return { ok: false, error: "Tienda inválida o sin acceso." };
 
+  // Desde 0057 la ruta es del MOTORIZADO y del DÍA: si ya tiene una, se le
+  // añaden paradas a esa, mezcle las tiendas que mezcle. Buscarla por tienda
+  // crearía una segunda ruta que el índice único rechaza.
   const { data: existing } = await g.admin
     .from("delivery_routes")
     .select("id")
-    .eq("store_id", input.storeId)
+    .eq("org_id", store.org_id)
     .eq("rider_id", input.riderId)
     .eq("route_date", input.routeDate)
     .maybeSingle();
@@ -102,7 +113,26 @@ export async function addStops(routeId: string, orderIds: string[]): Promise<Rou
     .maybeSingle();
   let seq = ((last as { seq?: number } | null)?.seq ?? 0) + 1;
 
-  const rows = orderIds.map((orderId) => ({ route_id: routeId, order_id: orderId, seq: seq++ }));
+  // La tienda de la parada sale del PEDIDO, no de la ruta: una ruta puede
+  // mezclar tiendas (0057) y es lo que luego agrupa las liquidaciones.
+  const { data: orderRows } = await g.admin
+    .from("orders")
+    .select("id,store_id")
+    .in("id", orderIds);
+  const storeOf = new Map(
+    ((orderRows ?? []) as { id: string; store_id: string }[]).map((o) => [o.id, o.store_id]),
+  );
+  const unknown = orderIds.filter((id) => !storeOf.has(id));
+  if (unknown.length) {
+    return { ok: false, error: `${unknown.length} pedido(s) no existen o no son accesibles.` };
+  }
+
+  const rows = orderIds.map((orderId) => ({
+    route_id: routeId,
+    order_id: orderId,
+    store_id: storeOf.get(orderId)!,
+    seq: seq++,
+  }));
   // `upsert` con ignoreDuplicates: reasignar un pedido que ya estaba en la ruta
   // no debe romper la operación entera ni reiniciar su estado.
   const { error } = await g.admin
@@ -192,99 +222,148 @@ export async function closeRoute(
   }
 
   const stores = await getAccessibleStores();
-  const store = stores.find((s) => s.id === route.store_id);
-  if (!store) return { ok: false, error: "Sin acceso a la tienda de la ruta." };
-
   const { data: rider } = await g.admin
     .from("riders")
     .select("full_name")
     .eq("id", route.rider_id)
     .maybeSingle();
+  const riderName = (rider as { full_name?: string } | null)?.full_name ?? null;
 
-  // 1) La liquidación, con lo que el motorizado declaró cobrar por método.
-  const { data: created, error: createErr } = await g.admin
-    .from("rider_settlements")
-    .insert({
-      org_id: store.org_id,
-      store_id: route.store_id,
-      rider_id: route.rider_id,
-      rider_name_raw: (rider as { full_name?: string } | null)?.full_name ?? null,
-      settlement_date: route.route_date,
-      source: "ruta",
-      declared_cash: totals.efectivo,
-      declared_yape: totals.yape,
-      // El POS no pasa por las manos del motorizado: lo cobra el terminal y cae
-      // a la cuenta. No es plata que él tenga que depositar.
-      note: totals.pos > 0 ? `Incluye S/ ${totals.pos.toFixed(2)} cobrados por POS.` : null,
-      created_by: g.user.id,
-    })
-    .select("id")
-    .single();
-  if (createErr || !created?.id) {
-    return { ok: false, error: createErr?.message ?? "No se pudo crear la liquidación." };
+  // Una ruta puede mezclar tiendas (0057): el viaje es uno, pero el dinero y el
+  // cuadre son por tienda, así que sale una liquidación por cada una.
+  const byStore = groupByStore(stops);
+  if (byStore.size === 0) {
+    return { ok: false, error: "Las paradas no tienen tienda asignada." };
   }
-  const settlementId = created.id as string;
 
-  // 2) Las líneas, ya vinculadas: sin cola de revisión.
-  const lines = stopsToSettlementLines(stops).map((l) => ({
-    settlement_id: settlementId,
-    order_id: l.order_id,
-    guide_code: null,
-    order_name: null,
-    declared_status: l.declared_status,
-    declared_amount: l.declared_amount,
-    declared_fee: null,
-    customer_name: null,
-    district: null,
-    match_status: l.match_status,
-    raw: l.raw,
-  }));
-  if (lines.length) {
-    const { error: linesErr } = await g.admin.from("rider_settlement_lines").insert(lines);
-    if (linesErr) {
-      // Sin líneas la liquidación mentiría (parecería un día sin entregas), así
-      // que se deshace en vez de dejar una cabecera vacía.
-      await g.admin.from("rider_settlements").delete().eq("id", settlementId);
-      return { ok: false, error: `No se pudieron guardar las líneas: ${linesErr.message}` };
+  const created: string[] = [];
+  const problems: string[] = [];
+
+  for (const [storeId, storeStops] of byStore) {
+    const store = stores.find((s) => s.id === storeId);
+    if (!store) {
+      problems.push("Hay paradas de una tienda a la que no tienes acceso; quedaron sin liquidar.");
+      continue;
+    }
+    const t = routeTotals(storeStops);
+
+    const { data: head, error: headErr } = await g.admin
+      .from("rider_settlements")
+      .insert({
+        org_id: store.org_id,
+        store_id: storeId,
+        rider_id: route.rider_id,
+        rider_name_raw: riderName,
+        settlement_date: route.route_date,
+        source: "ruta",
+        route_id: routeId,
+        declared_cash: t.efectivo,
+        declared_yape: t.yape,
+        // El POS no pasa por sus manos: lo cobra el terminal y cae a la cuenta.
+        // No es plata que él tenga que depositar.
+        note: t.pos > 0 ? `Incluye S/ ${t.pos.toFixed(2)} cobrados por POS.` : null,
+        created_by: g.user.id,
+      })
+      .select("id")
+      .single();
+    if (headErr || !head?.id) {
+      problems.push(`${store.name}: ${headErr?.message ?? "no se pudo crear la liquidación"}`);
+      continue;
+    }
+    const settlementId = head.id as string;
+
+    const lines = stopsToSettlementLines(storeStops).map((l) => ({
+      settlement_id: settlementId,
+      order_id: l.order_id,
+      guide_code: null,
+      order_name: null,
+      declared_status: l.declared_status,
+      declared_amount: l.declared_amount,
+      declared_fee: null,
+      customer_name: null,
+      district: null,
+      match_status: l.match_status,
+      raw: l.raw,
+    }));
+    if (lines.length) {
+      const { error: linesErr } = await g.admin.from("rider_settlement_lines").insert(lines);
+      if (linesErr) {
+        // Sin líneas la liquidación mentiría (parecería un día sin entregas), así
+        // que se deshace en vez de dejar una cabecera vacía.
+        await g.admin.from("rider_settlements").delete().eq("id", settlementId);
+        problems.push(`${store.name}: no se pudieron guardar las líneas (${linesErr.message}).`);
+        continue;
+      }
+    }
+    created.push(store.name);
+  }
+
+  if (!created.length) {
+    return { ok: false, error: problems.join(" ") || "No se pudo crear ninguna liquidación." };
+  }
+
+  // El Master, por el camino de siempre: un evento por pedido y recálculo. Es
+  // el único momento en que el Master se entera de lo que hizo un motorizado
+  // propio, porque detrás no viene el reporte de ningún courier.
+  const effects = masterEffects(stops);
+  let applied = 0;
+  if (effects.length) {
+    const storeOf = new Map(stops.map((s) => [s.order_id, s.store_id]));
+    const events = effects.map((e) => ({
+      store_id: storeOf.get(e.order_id) ?? null,
+      order_id: e.order_id,
+      kind: "status_override",
+      occurred_at: new Date().toISOString(),
+      actor: g.user.id,
+      source: "ruta",
+      new_status: e.target,
+      new_operational: defaultOperationalFor(e.target),
+      reason: e.reason,
+      payload: { route_id: routeId },
+    }));
+    const { error: evErr } = await g.admin.from("order_events").insert(events);
+    if (evErr) problems.push(`No se pudo actualizar el Master: ${evErr.message}`);
+    else {
+      applied = effects.length;
+      await recomputeOrderMasterSafe(
+        g.admin,
+        effects.map((e) => e.order_id),
+      );
     }
   }
-
-  // 3) El pago del día, con la tarifa vigente ESE día.
-  const tariffs = await getRouteTariffs();
-  const payout = computeRoutePayout(
-    stops,
-    tariffs,
-    {
-      storeId: route.store_id,
-      courier: null,
-      region: null,
-      province: null,
-      district: null,
-    },
-    route.route_date,
-  );
 
   await g.admin
     .from("delivery_routes")
     .update({
       status: "cerrada",
-      settlement_id: settlementId,
       closed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
     .eq("id", routeId);
 
+  const tariffs = await getRouteTariffs();
+  const payout = computeRoutePayout(
+    stops,
+    tariffs,
+    { storeId: byStore.keys().next().value as string, courier: null, region: null, province: null, district: null },
+    route.route_date,
+  );
+
   revalidatePath("/dashboard/rutas");
   revalidatePath("/dashboard/liquidaciones");
+  revalidatePath("/dashboard/pedidos");
 
-  const aviso =
+  const pago =
     payout.missingTariffs > 0
       ? " Falta definir la tarifa de entrega del motorizado en Costos para poder fijar su pago."
       : ` Le corresponden S/ ${payout.amount.toFixed(2)} por ${payout.entregas} entrega(s).`;
 
   return {
     ok: true,
-    message: `Ruta cerrada y liquidación creada con ${lines.length} línea(s).${aviso}`,
+    message:
+      `Ruta cerrada. ${created.length} liquidación(es) creada(s) (${created.join(", ")}). ` +
+      `${applied} pedido(s) actualizados en el Master.${pago}` +
+      (problems.length ? ` Ojo: ${problems.join(" ")}` : ""),
   };
 }
 

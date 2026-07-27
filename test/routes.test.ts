@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   computeRoutePayout,
+  groupByStore,
+  masterEffects,
+  stopEffect,
   routeTotals,
   stopsToSettlementLines,
   validateStopReport,
@@ -241,5 +244,65 @@ describe("stopsToSettlementLines", () => {
   it("las paradas sin reportar no entran en la liquidación", () => {
     const lines = stopsToSettlementLines([stop({ status: "pendiente" })]);
     expect(lines).toHaveLength(0);
+  });
+});
+
+describe("stopEffect y masterEffects", () => {
+  it("una entrega mueve el pedido a entregado", () => {
+    // Es el hueco que esto tapa: con motorizado propio no viene detrás el
+    // reporte de ningún courier, así que sin esto el pedido se quedaría
+    // "pendiente" y el cuadre lo marcaría como "cobro sin entrega".
+    expect(stopEffect({ status: "entregado" })).toBe("entregado");
+  });
+
+  it("solo el rechazo cierra el pedido", () => {
+    expect(stopEffect({ status: "no_entregado", outcome_reason: "rechazado" })).toBe("anulado");
+  });
+
+  it("los motivos de reintento NO tocan el pedido", () => {
+    // Cerrar un pedido por error cuesta una venta; dejarlo abierto solo cuesta
+    // otra visita. Ante la duda, no se cierra.
+    for (const reason of ["no_contesta", "no_estaba", "reprogramado", "sin_dinero", "direccion_errada", "otro"]) {
+      expect(stopEffect({ status: "no_entregado", outcome_reason: reason })).toBeNull();
+    }
+    expect(stopEffect({ status: "no_entregado", outcome_reason: null })).toBeNull();
+  });
+
+  it("una parada sin reportar no toca nada", () => {
+    expect(stopEffect({ status: "pendiente" })).toBeNull();
+  });
+
+  it("masterEffects devuelve solo lo que cambia, con su motivo", () => {
+    const effects = masterEffects([
+      { order_id: "o1", status: "entregado" },
+      { order_id: "o2", status: "no_entregado", outcome_reason: "rechazado" },
+      { order_id: "o3", status: "no_entregado", outcome_reason: "no_contesta" },
+      { order_id: "o4", status: "pendiente" },
+    ]);
+    expect(effects).toHaveLength(2);
+    expect(effects[0]).toMatchObject({ order_id: "o1", target: "entregado" });
+    expect(effects[1]).toMatchObject({ order_id: "o2", target: "anulado" });
+    expect(effects.every((e) => e.reason.length > 0)).toBe(true);
+  });
+});
+
+describe("groupByStore", () => {
+  it("una ruta mixta se parte por tienda", () => {
+    // El viaje es uno, pero el dinero y el cuadre son por tienda: cerrarla
+    // produce una liquidación por cada una.
+    const grouped = groupByStore([
+      { store_id: "aurela", id: "a" },
+      { store_id: "kenku", id: "b" },
+      { store_id: "aurela", id: "c" },
+    ]);
+    expect([...grouped.keys()].sort()).toEqual(["aurela", "kenku"]);
+    expect(grouped.get("aurela")).toHaveLength(2);
+    expect(grouped.get("kenku")).toHaveLength(1);
+  });
+
+  it("una parada sin tienda no se pierde en un grupo falso", () => {
+    const grouped = groupByStore([{ store_id: null, id: "a" }, { store_id: "kenku", id: "b" }]);
+    expect(grouped.size).toBe(1);
+    expect(grouped.has("kenku")).toBe(true);
   });
 });
