@@ -46,7 +46,7 @@ import {
   resolveAliclikItems,
   type ResolvedItem,
 } from "@/lib/aliclik-catalog";
-import { reconcileToOrderTotal } from "@/lib/aliclik-money";
+import { MAX_ACCEPTABLE_LOSS, reconcileToOrderTotal } from "@/lib/aliclik-money";
 import {
   canScheduleExpress,
   limaTimeHHMM,
@@ -241,11 +241,17 @@ export async function previewAliclikGuide(
   //        cobró S/447 en un pedido de S/298. Se cuadran contra el total real.
   const money = reconcileToOrderTotal(resolved.items, ctx.row.order_total);
   if (!money) {
+    const total = ctx.row.order_total;
+    const units = resolved.items.reduce((s, i) => s + i.quantity, 0);
     return {
       ok: false,
       error:
-        "No se puede determinar cuánto hay que cobrarle a la clienta: el pedido no tiene un total válido. " +
-        "No se crea la guía a ciegas, porque Aliclik cobraría el precio de lista sin descuentos.",
+        total == null || total <= 0
+          ? "No se puede determinar cuánto hay que cobrarle a la clienta: el pedido no tiene un total válido. " +
+            "No se crea la guía a ciegas, porque Aliclik cobraría el precio de lista sin descuentos."
+          : `Aliclik solo cobra importes enteros, y con ${units} unidad(es) no hay ninguno que se acerque a ` +
+            `S/ ${Number(total).toFixed(2)} sin dejar de cobrar más de S/ ${MAX_ACCEPTABLE_LOSS.toFixed(2)}. ` +
+            "Crea esta guía desde el panel de Aliclik, o ajusta el pedido para que el total sea alcanzable.",
     };
   }
   const priced = { ...resolved, items: money.items };

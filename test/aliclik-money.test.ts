@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { linesTotal, reconcileToOrderTotal } from "@/lib/aliclik-money";
+import { MAX_ACCEPTABLE_LOSS, linesTotal, reconcileToOrderTotal } from "@/lib/aliclik-money";
 
 describe("reconcileToOrderTotal", () => {
   it("arregla el caso real: 3× S/149 con S/149 de descuento", () => {
@@ -113,5 +113,37 @@ describe("reconcileToOrderTotal", () => {
 
   it("linesTotal calcula como Aliclik: suma de precio × cantidad", () => {
     expect(linesTotal([{ quantity: 3, price: 149 }])).toBe(447);
+  });
+});
+
+describe("reconcileToOrderTotal · tope de pérdida aceptable", () => {
+  it("bloquea cuando habría que dejar de cobrar más del margen", () => {
+    // 3 unidades y total 302: los alcanzables son múltiplos de 3 (300), así que
+    // se perderían S/2. Por encima del tope ⇒ no se crea la guía.
+    expect(reconcileToOrderTotal([{ quantity: 3, price: 149 }], 302)).toBeNull();
+  });
+
+  it("deja pasar lo que cabe justo en el margen", () => {
+    // 298 con 3 unidades pierde S/1: cabe en S/1,20.
+    const r = reconcileToOrderTotal([{ quantity: 3, price: 149 }], 298);
+    expect(r!.total).toBe(297);
+    expect(r!.drift).toBe(-1);
+  });
+
+  it("el margen es configurable para poder medir escenarios", () => {
+    const r = reconcileToOrderTotal([{ quantity: 3, price: 149 }], 302, 3);
+    expect(r!.total).toBe(300);
+    expect(r!.drift).toBe(-2);
+  });
+
+  it("ninguna guía creada pierde más del margen, con ningún total ni cantidad", () => {
+    for (let total = 1; total <= 900; total += 3) {
+      for (const qty of [1, 2, 3, 4, 5, 6, 7, 8, 10, 15]) {
+        const r = reconcileToOrderTotal([{ quantity: qty, price: 149 }], total);
+        if (!r) continue; // bloqueado: correcto
+        expect(-r.drift).toBeLessThanOrEqual(MAX_ACCEPTABLE_LOSS + 1e-9);
+        expect(Number.isInteger(r.total)).toBe(true);
+      }
+    }
   });
 });
