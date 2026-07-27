@@ -81,10 +81,18 @@ export const env = {
   //     Tiene fecha de vencimiento: cuando caduca, TODAS las tiendas dejan de
   //     poder crear guías a la vez. Renovarla es cambiar esta variable, sin tocar
   //     la configuración de ninguna tienda.
-  shalomApiKey: () => process.env.SHALOM_API_KEY ?? "",
+  //
+  //     Se recorta el valor: pegar un secreto en el panel de Vercel arrastra un
+  //     espacio o un salto de línea con muchísima facilidad, y Vercel no los
+  //     limpia. Sin el trim ese blanco viaja dentro de la cabecera y Shalom
+  //     responde «api key inválida» — un 401 idéntico al de una key caducada,
+  //     que manda a pedirle una nueva al proveedor para arreglar un espacio.
+  //     Pasó en producción, y despistó justamente porque la sonda del repo sí
+  //     recortaba: la misma key funcionaba desde la terminal y fallaba aquí.
+  shalomApiKey: () => (process.env.SHALOM_API_KEY ?? "").trim(),
   shalomApiBase: () =>
-    (process.env.SHALOM_API_BASE ?? "https://api.shalom-api-peru.com").replace(/\/$/, ""),
-  shalomConfigured: () => Boolean(process.env.SHALOM_API_KEY),
+    (process.env.SHALOM_API_BASE ?? "https://api.shalom-api-peru.com").trim().replace(/\/$/, ""),
+  shalomConfigured: () => Boolean((process.env.SHALOM_API_KEY ?? "").trim()),
 
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---
   shopifyAppApiKey: () => process.env.SHOPIFY_APP_API_KEY ?? "",
