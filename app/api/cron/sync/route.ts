@@ -4,7 +4,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { runStoreSync } from "@/lib/ingest";
 import { alertUnattendedYapes } from "@/lib/yape-alert-telegram";
 import { createDeadline } from "@/lib/deadline";
-import { mapWithConcurrency, orderByStaleness } from "@/lib/sync-schedule";
+import { mapWithConcurrency, orderByStaleness, summarizeRun, logRunSummary } from "@/lib/sync-schedule";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -51,6 +51,7 @@ async function run(req: NextRequest) {
     return new NextResponse("unauthorized", { status: 401 });
   }
   const admin = createAdminSupabase();
+  const startedAt = Date.now();
   const deadline = createDeadline(RUN_BUDGET_MS);
 
   // Optionally target one store (?storeId=...), else sync all active stores.
@@ -61,6 +62,18 @@ async function run(req: NextRequest) {
   } else {
     const { data, error } = await admin.from("stores").select("id").eq("status", "active");
     if (error) {
+      // También se resume: una corrida que ni llegó a listar tiendas tiene que
+      // dejar rastro en los logs, no solo un 500 mudo.
+      logRunSummary(
+        summarizeRun({
+          budgetMs: RUN_BUDGET_MS,
+          elapsedMs: Date.now() - startedAt,
+          remainingMs: deadline.remainingMs(),
+          stores: 0,
+          yapeAlerts: 0,
+          reports: [{ storeId: "-", error: error.message }],
+        }),
+      );
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
     storeIds = await orderByStaleness(admin, (data ?? []).map((s: { id: string }) => s.id));
@@ -93,7 +106,19 @@ async function run(req: NextRequest) {
     }
   }
 
-  const partial = reports.some((r) => "partial" in r && r.partial);
+  // El resumen va a los logs de ejecución, que es donde SÍ se puede consultar
+  // después: el cuerpo de la respuesta de un cron no lo guarda nadie.
+  const summary = summarizeRun({
+    budgetMs: RUN_BUDGET_MS,
+    elapsedMs: Date.now() - startedAt,
+    remainingMs: deadline.remainingMs(),
+    stores: storeIds.length,
+    yapeAlerts,
+    reports,
+  });
+  logRunSummary(summary);
+
+  const partial = summary.partial;
   return NextResponse.json({
     ok: true,
     stores: storeIds.length,

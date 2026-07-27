@@ -34,6 +34,100 @@ export async function mapWithConcurrency<T, R>(
   return out;
 }
 
+/** Lo que el resumen necesita de cada reporte de tienda. */
+export interface RunReportLike {
+  storeId: string;
+  partial?: boolean;
+  skipped?: readonly string[];
+  errors?: readonly string[];
+  /** Las tiendas que reventaron entran con esto en vez de un reporte completo. */
+  error?: string;
+}
+
+export interface RunSummary {
+  tag: "cron/sync";
+  elapsedMs: number;
+  remainingMs: number;
+  /** Cuánto del presupuesto sobró, en %. Es LA métrica: 0% es rozar el techo. */
+  headroomPct: number;
+  stores: number;
+  partial: boolean;
+  yapeAlerts: number;
+  /** Etapas saltadas por falta de tiempo, sin repetir, de todas las tiendas. */
+  skipped: string[];
+  errors: string[];
+  perStore: { store: string; partial: boolean; skipped: string[]; errors: string[] }[];
+}
+
+// Un error largo (una traza de Shopify, un HTML de error) puede ocupar la línea
+// entera y hacerla ilegible. Se recorta: para saber QUÉ falló sobra con el
+// principio, y el mensaje completo sigue estando en el cuerpo de la respuesta.
+const MAX_ERROR_CHARS = 200;
+const MAX_ERRORS_PER_STORE = 5;
+
+function trimErrors(errors: readonly string[]): string[] {
+  return errors
+    .slice(0, MAX_ERRORS_PER_STORE)
+    .map((e) => (e.length > MAX_ERROR_CHARS ? `${e.slice(0, MAX_ERROR_CHARS)}…` : e));
+}
+
+/**
+ * Resumen de una corrida del cron, pensado para imprimirse en UNA línea.
+ *
+ * POR QUÉ EXISTE. `partial` y `remainingMs` ya viajaban en el cuerpo de la
+ * respuesta, y el cuerpo de la respuesta de un cron no lo lee nadie: de una
+ * invocación programada Vercel guarda el código de estado y la duración, no el
+ * JSON que devolvió. Sin esta línea, la única señal observable de que el
+ * presupuesto está funcionando es la AUSENCIA de timeouts — y a ~0,7 timeouts
+ * al día eso tarda una semana o dos en decir algo. `headroomPct` lo dice en
+ * horas: si sobra la mitad del presupuesto, no hay nada cerca del techo.
+ *
+ * Su ausencia también informa. Se imprime al final de la corrida, así que si
+ * Vercel mata la función el resumen no llega a salir: una invocación sin línea
+ * de resumen es, por definición, una corrida muerta.
+ */
+export function summarizeRun(input: {
+  budgetMs: number;
+  elapsedMs: number;
+  remainingMs: number;
+  stores: number;
+  yapeAlerts: number;
+  reports: readonly RunReportLike[];
+}): RunSummary {
+  const perStore = input.reports.map((r) => ({
+    store: r.storeId,
+    partial: r.partial === true,
+    skipped: [...(r.skipped ?? [])],
+    // Una tienda que lanzó llega con `error` suelto; una que terminó, con la
+    // lista `errors`. Para el resumen las dos cosas son lo mismo: qué falló.
+    errors: trimErrors(r.error ? [r.error, ...(r.errors ?? [])] : (r.errors ?? [])),
+  }));
+  return {
+    tag: "cron/sync",
+    elapsedMs: input.elapsedMs,
+    remainingMs: input.remainingMs,
+    headroomPct: input.budgetMs > 0 ? Math.round((input.remainingMs / input.budgetMs) * 100) : 0,
+    stores: input.stores,
+    partial: perStore.some((s) => s.partial),
+    yapeAlerts: input.yapeAlerts,
+    skipped: [...new Set(perStore.flatMap((s) => s.skipped))],
+    errors: [...new Set(perStore.flatMap((s) => s.errors))],
+    perStore,
+  };
+}
+
+/**
+ * Imprime el resumen. Nunca lanza: un fallo escribiendo un log jamás puede
+ * tumbar una corrida que ya terminó bien.
+ */
+export function logRunSummary(summary: RunSummary): void {
+  try {
+    console.log(JSON.stringify(summary));
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
  * Ordena las tiendas por antigüedad de su última sincronización, la más atrasada
  * primero.

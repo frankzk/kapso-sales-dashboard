@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createDeadline, unlimitedDeadline } from "@/lib/deadline";
-import { mapWithConcurrency, orderByStaleness } from "@/lib/sync-schedule";
+import { mapWithConcurrency, orderByStaleness, summarizeRun, logRunSummary } from "@/lib/sync-schedule";
 import { runStoreSync } from "@/lib/ingest";
 import { encrypt, generateEncryptionKey } from "@/lib/crypto";
 
@@ -124,6 +124,81 @@ describe("mapWithConcurrency", () => {
 
   it("no se cuelga con la lista vacía", async () => {
     expect(await mapWithConcurrency([], 4, async () => 1)).toEqual([]);
+  });
+});
+
+describe("summarizeRun · la línea que deja rastro en los logs", () => {
+  // El resumen es la ÚNICA señal observable de que el presupuesto funciona:
+  // `partial` y `remainingMs` van en el cuerpo de la respuesta, y de un cron
+  // Vercel solo guarda estado y duración. Si esta línea se rompe, volvemos a
+  // quedarnos esperando a que aparezca (o no) un timeout, que tarda semanas.
+  const ok = { storeId: "a", partial: false, skipped: [], errors: [] };
+  const summary = (over: Partial<Parameters<typeof summarizeRun>[0]> = {}) =>
+    summarizeRun({
+      budgetMs: 280_000,
+      elapsedMs: 0,
+      remainingMs: 280_000,
+      stores: 1,
+      yapeAlerts: 0,
+      reports: [ok],
+      ...over,
+    });
+
+  it("headroomPct dice cuánto margen sobró — 0% es rozar el techo", () => {
+    expect(summary({ elapsedMs: 140_000, remainingMs: 140_000 }).headroomPct).toBe(50);
+    expect(summary({ elapsedMs: 280_000, remainingMs: 0 }).headroomPct).toBe(0);
+  });
+
+  it("junta las etapas saltadas de todas las tiendas, sin repetir", () => {
+    const s = summary({
+      stores: 2,
+      remainingMs: 5_000,
+      reports: [
+        { storeId: "a", partial: true, skipped: ["leads", "metaAds"], errors: [] },
+        { storeId: "b", partial: true, skipped: ["leads"], errors: [] },
+      ],
+    });
+    expect(s.skipped).toEqual(["leads", "metaAds"]);
+    expect(s.partial).toBe(true);
+    // El detalle por tienda se conserva: sin él no se sabe A QUIÉN le falta tiempo.
+    expect(s.perStore.map((p) => p.store)).toEqual(["a", "b"]);
+  });
+
+  it("una tienda que revienta cuenta como error aunque no traiga reporte", () => {
+    // `mapWithConcurrency` devuelve `{ storeId, error }` para las que lanzaron.
+    const s = summary({ reports: [{ storeId: "a", error: "boom" }] });
+    expect(s.errors).toEqual(["boom"]);
+    expect(s.partial).toBe(false);
+  });
+
+  it("recorta los errores largos para que la línea siga siendo legible", () => {
+    const s = summary({ reports: [{ storeId: "a", errors: ["x".repeat(5_000)] }] });
+    expect(s.errors[0]!.length).toBe(201); // 200 + el carácter de recorte
+  });
+
+  it("sale en una sola línea de JSON: los logs se filtran, no se leen a ojo", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      logRunSummary(summary());
+      const line = spy.mock.calls[0]![0] as string;
+      expect(line).not.toContain("\n");
+      expect(JSON.parse(line).tag).toBe("cron/sync");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("un fallo escribiendo el log no tumba la corrida", () => {
+    // La corrida ya terminó bien cuando se llama a esto. Perder el log es malo;
+    // convertir un éxito en un 500 por un log es peor.
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {
+      throw new Error("stdout roto");
+    });
+    try {
+      expect(() => logRunSummary(summary())).not.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
