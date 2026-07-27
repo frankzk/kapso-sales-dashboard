@@ -197,10 +197,39 @@ export async function testAliclikConnection(
   const creds = await getStoreCreds(storeId, ctx.admin);
   if (!creds?.aliclik_api_token) return { error: "Esta tienda no tiene token de Aliclik." };
 
-  const res = await listProducts({ apiToken: creds.aliclik_api_token }, { limit: 1 });
-  if (!res.ok) return { error: `Aliclik: ${res.error}` };
+  // Se prueban las DOS salidas en un solo clic, a propósito.
+  //
+  // Hoy la directa recibe un 403 de Cloudflare. La de Edge sale por otra red y
+  // es la hipótesis que queda por descartar. Probar ambas de una vez convierte
+  // este botón en el diagnóstico completo: sea cual sea el resultado, se
+  // aprende algo — y quien lo pulsa puede estar en el móvil, sin manera de
+  // cambiar variables de entorno ni de repetir la prueba con otra config.
+  const token = creds.aliclik_api_token;
+  const [direct, edge] = await Promise.all([
+    listProducts({ apiToken: token, egress: "direct" }, { limit: 1 }),
+    listProducts({ apiToken: token, egress: "edge" }, { limit: 1 }),
+  ]);
+
+  const base = env.aliclikApiBase();
+  const label = (r: typeof direct) => (r.ok ? `OK (${r.data.count ?? 0} productos)` : r.error);
+
+  if (direct.ok || edge.ok) {
+    const via = direct.ok ? "salida directa" : "salida por Edge";
+    const count = direct.ok ? direct.data.count : edge.ok ? edge.data.count : 0;
+    const extra = direct.ok && !edge.ok ? " (la salida por Edge no; se usará la directa)" : "";
+    const flag =
+      !direct.ok && edge.ok
+        ? " Para que TODO el panel use esta ruta, hay que poner ALICLIK_EGRESS=edge en el entorno."
+        : "";
+    return {
+      notice: `Conexión correcta con ${base} vía ${via} — el catálogo tiene ${count ?? 0} productos.${extra}${flag}`,
+    };
+  }
+
+  // Las dos fallaron: se informan ambas, porque el par de mensajes es lo que
+  // dice si el bloqueo depende de la red de salida o no.
   return {
-    notice: `Conexión correcta con ${env.aliclikApiBase()} — el catálogo tiene ${res.data.count ?? 0} productos.`,
+    error: `Ninguna de las dos salidas llegó a ${base}.\n· Directa (AWS): ${label(direct)}\n· Edge (otra red): ${label(edge)}`,
   };
 }
 

@@ -29,12 +29,29 @@
 
 import { env } from "@/lib/env";
 
+/**
+ * Por dónde sale la petición hacia Aliclik.
+ *
+ *  - `direct` — desde la función Node, es decir desde AWS. Lo natural.
+ *  - `edge`   — a través de una ruta interna en el runtime Edge de Vercel, que
+ *               corre en otra red. Existe porque Cloudflare desafía nuestras
+ *               peticiones directas (403) y la clase de IP es la hipótesis que
+ *               queda por descartar. Ver app/api/internal/aliclik-egress/route.ts.
+ */
+export type AliclikEgress = "direct" | "edge";
+
 export interface AliclikClientOpts {
   apiToken: string;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   /** Milisegundos antes de abortar. Por defecto 20 s. */
   timeoutMs?: number;
+  /** Por defecto, lo que diga `env.aliclikEgress()`. */
+  egress?: AliclikEgress;
+  /** URL propia, para construir la llamada interna en modo `edge`. */
+  siteUrl?: string;
+  /** Secreto interno del proxy Edge. Por defecto `env.cronSecret()`. */
+  internalSecret?: string;
 }
 
 export type AliclikResult<T> =
@@ -345,14 +362,40 @@ async function request<T>(
   }
 
   const doFetch = opts.fetchImpl ?? fetch;
+  const egress = opts.egress ?? env.aliclikEgress();
+  const serialized = init.body === undefined ? undefined : JSON.stringify(init.body);
+
   let res: Response;
   try {
-    res = await doFetch(url.toString(), {
-      method,
-      headers: headersFor(opts),
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
-      signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-    });
+    if (egress === "edge") {
+      // Se manda la ruta CON su query string; el proxy le antepone el host de
+      // la configuración. Nunca viaja el host en la petición: ver la cabecera
+      // de app/api/internal/aliclik-egress/route.ts.
+      const site = (opts.siteUrl ?? env.siteUrl()).replace(/\/$/, "");
+      res = await doFetch(`${site}/api/internal/aliclik-egress`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-internal-secret": opts.internalSecret ?? env.cronSecret(),
+          // El token de Aliclik va en una cabecera propia para no confundirlo
+          // con la autenticación de esta ruta interna.
+          "x-aliclik-authorization": `Bearer ${opts.apiToken}`,
+        },
+        body: JSON.stringify({
+          path: url.pathname + url.search,
+          method,
+          body: serialized ?? null,
+        }),
+        signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      });
+    } else {
+      res = await doFetch(url.toString(), {
+        method,
+        headers: headersFor(opts),
+        body: serialized,
+        signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      });
+    }
   } catch (e) {
     // Un timeout NO es "no se creó". Quien llama debe poder distinguirlo.
     const timedOut =
@@ -379,6 +422,17 @@ async function request<T>(
 
   const contentType = res.headers.get("content-type");
   const rayId = res.headers.get("cf-ray");
+
+  // Un fallo del PROXY no es un fallo de Aliclik. Distinguirlo evita el peor
+  // desenlace de este experimento: creer que Aliclik rechaza algo cuando en
+  // realidad la petición nunca salió de nuestra propia infraestructura.
+  if (parsed && typeof parsed === "object" && "egressError" in parsed) {
+    return {
+      ok: false,
+      status: res.status,
+      error: `Salida por Edge no disponible: ${String((parsed as { egressError: unknown }).egressError)}`,
+    };
+  }
 
   if (!res.ok) {
     return {

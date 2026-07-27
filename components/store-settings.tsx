@@ -363,8 +363,15 @@ function AliclikSection({
             </div>
           </div>
 
-          {testState.error ? <p className="text-sm text-rose-600">{testState.error}</p> : null}
-          {testState.notice ? <p className="text-sm text-emerald-700">{testState.notice}</p> : null}
+          {/* `whitespace-pre-line`: el resultado de la prueba compara las dos
+              salidas en líneas separadas, y sin esto se leería como un párrafo
+              corrido justo cuando importa distinguirlas. */}
+          {testState.error ? (
+            <p className="whitespace-pre-line text-sm text-rose-600">{testState.error}</p>
+          ) : null}
+          {testState.notice ? (
+            <p className="whitespace-pre-line text-sm text-emerald-700">{testState.notice}</p>
+          ) : null}
           {syncState.error ? <p className="text-sm text-rose-600">{syncState.error}</p> : null}
           {syncState.notice ? <p className="text-sm text-emerald-700">{syncState.notice}</p> : null}
 
