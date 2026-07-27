@@ -118,7 +118,6 @@ export async function updateStore(
     tanders_origin_address: get("tanders_origin_address"),
     tanders_origin_lat: get("tanders_origin_lat"),
     tanders_origin_lng: get("tanders_origin_lng"),
-    shalom_api_key: get("shalom_api_key"),
     shalom_pro_email: get("shalom_pro_email"),
     shalom_pro_password: get("shalom_pro_password"),
     shalom_origin_terminal_id: get("shalom_origin_terminal_id"),

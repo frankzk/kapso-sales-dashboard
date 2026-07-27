@@ -141,7 +141,6 @@ export default async function StoreSettingsPage({
       aliclikToken: Boolean(full.aliclik_api_token_enc),
       aliclikWebhookSecret: Boolean(full.aliclik_webhook_secret_enc),
       tandersPassword: Boolean(full.tanders_password_enc),
-      shalomApiKey: Boolean(full.shalom_api_key_enc),
       shalomProPassword: Boolean(full.shalom_pro_password_enc),
     },
     oauthAvailable: env.shopifyOAuthConfigured(),

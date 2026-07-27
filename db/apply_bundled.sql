@@ -2492,17 +2492,19 @@ comment on column shipments.tanders_raw is
 -- courier='shalom' y se cruzan con el reporte del día siguiente por `guide_code`
 -- como cualquier otra. No hay tabla nueva de envíos.
 --
--- DOS credenciales por tienda, no una:
---   * la API key del wrapper (sk_…), que es de la cuenta de Kapso;
---   * el email + password de pro.shalom.pe DEL CLIENTE, que es lo que el
---     wrapper usa para entrar a su panel.
--- Ambas cifradas con AES-256-GCM (lib/crypto.ts), como el resto de secretos.
+-- DOS credenciales, en DOS sitios distintos y a propósito:
+--   * la API key del wrapper (sk_…) es de la cuenta de Kapso y una sola sirve
+--     para todas las tiendas ⇒ va en el entorno (SHALOM_API_KEY), no acá. Vence,
+--     y renovarla no debe obligar a tocar la configuración de N tiendas.
+--   * el email + password de pro.shalom.pe DEL CLIENTE identifican la cuenta que
+--     emite la guía ⇒ van por tienda, acá, cifrados con AES-256-GCM. Pueden
+--     repetirse entre tiendas: dos tiendas de la misma empresa suelen despachar
+--     con la misma cuenta de Shalom.
 --
 -- Aplicar DESPUÉS de supabase/policies.sql.
 -- ============================================================================
 
 alter table stores
-  add column if not exists shalom_api_key_enc         text,
   add column if not exists shalom_pro_email           text,
   add column if not exists shalom_pro_password_enc    text,
   -- Agencia desde la que despacha esta tienda. Shalom la pide como
@@ -2518,11 +2520,13 @@ alter table stores
   -- hasta 2 min. El token `ssk_…` dura 2 horas, así que guardarlo evita pagar
   -- ese login en cada guía. En serverless la memoria del proceso no sobrevive
   -- entre invocaciones — por eso va en la base y no en un módulo.
+  --
+  -- Es por tienda aunque el token sea de la CUENTA de Shalom: cuando dos tiendas
+  -- comparten cuenta, la segunda reutiliza el token de la primera en vez de
+  -- volver a pagar el login (ver connectShalomSession).
   add column if not exists shalom_session_token_enc   text,
   add column if not exists shalom_session_expires_at  timestamptz;
 
-comment on column stores.shalom_api_key_enc is
-  'enc: API key (sk_…) de api.shalom-api-peru.com. Cifrada AES-256-GCM.';
 comment on column stores.shalom_pro_password_enc is
   'enc: password de la cuenta pro.shalom.pe del cliente. El wrapper la canjea por un token de sesión.';
 comment on column stores.shalom_origin_terminal_id is

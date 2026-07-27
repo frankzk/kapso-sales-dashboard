@@ -78,7 +78,6 @@ export interface StoreSettingsData {
     aliclikToken: boolean;
     aliclikWebhookSecret: boolean;
     tandersPassword: boolean;
-    shalomApiKey: boolean;
     shalomProPassword: boolean;
   };
   oauthAvailable: boolean;
@@ -1012,15 +1011,13 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
             Shalom (crear guías por API)
           </legend>
           <p className="text-xs text-slate-500">
-            Para crear preguías de Shalom desde el Master. Son <strong>dos credenciales
-            distintas</strong>: la <em>API key</em> del wrapper{" "}
-            <strong>api.shalom-api-peru.com</strong> (formato <code>sk_…</code>, se pide por
-            WhatsApp al proveedor) y la cuenta de <strong>pro.shalom.pe</strong> del cliente, que es
-            la que emite las guías. Las dos se guardan <strong>cifradas</strong>. Esto no reemplaza
-            la carga del reporte Excel de Shalom: los envíos creados acá se cruzan con ese reporte
-            por número de guía como cualquier otro.
+            Cuenta de <strong>pro.shalom.pe</strong> con la que se emiten las guías de esta tienda.
+            La <em>API key</em> del wrapper no va acá: es de la cuenta de Kapso, la misma para todas
+            las tiendas, y se configura una sola vez en el servidor (<code>SHALOM_API_KEY</code>).
+            La contraseña se guarda <strong>cifrada</strong>. Dos tiendas pueden compartir la misma
+            cuenta de Shalom sin problema. Esto no reemplaza la carga del reporte Excel: los envíos
+            creados acá se cruzan con ese reporte por número de guía como cualquier otro.
           </p>
-          <SecretField name="shalom_api_key" label="API key del wrapper (sk_…)" set={data.has.shalomApiKey} />
           <label className="block">
             <span className="text-xs text-slate-500">Email de Shalom Pro (pro.shalom.pe)</span>
             <input

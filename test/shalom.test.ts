@@ -466,10 +466,9 @@ describe("ShalomClient", () => {
 describe("ajustes de tienda — Shalom", () => {
   const KEY = Buffer.alloc(32, 7).toString("base64");
 
-  it("cifra los dos secretos y guarda el resto en claro", () => {
+  it("cifra la contraseña y guarda el resto en claro", () => {
     const patch = buildStoreUpdate(
       {
-        shalom_api_key: "sk_abc",
         shalom_pro_email: "cliente@empresa.com",
         shalom_pro_password: "secreto",
         shalom_origin_terminal_id: "404",
@@ -477,12 +476,19 @@ describe("ajustes de tienda — Shalom", () => {
       },
       KEY,
     );
-    expect(patch.shalom_api_key_enc).toMatch(/^v1:/);
     expect(patch.shalom_pro_password_enc).toMatch(/^v1:/);
     expect(JSON.stringify(patch)).not.toContain("secreto");
     expect(patch.shalom_pro_email).toBe("cliente@empresa.com");
     expect(patch.shalom_origin_terminal_id).toBe(404);
     expect(patch.shalom_default_product_id).toBe(3);
+  });
+
+  it("la API key del wrapper NO se guarda por tienda: es global (SHALOM_API_KEY)", () => {
+    const patch = buildStoreUpdate(
+      { shalom_pro_email: "cliente@empresa.com" } as Record<string, string>,
+      KEY,
+    );
+    expect(patch).not.toHaveProperty("shalom_api_key_enc");
   });
 
   it("cambiar de email invalida el token cacheado en vez de esperar al 401", () => {
@@ -534,8 +540,8 @@ describe("ajustes de tienda — Shalom", () => {
   });
 
   it("un secreto en blanco no borra el guardado", () => {
-    const patch = buildStoreUpdate({ shalom_api_key: "" }, KEY);
-    expect(patch).not.toHaveProperty("shalom_api_key_enc");
+    const patch = buildStoreUpdate({ shalom_pro_password: "" }, KEY);
+    expect(patch).not.toHaveProperty("shalom_pro_password_enc");
   });
 });
 

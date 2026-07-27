@@ -63,9 +63,10 @@ export interface StoreSettingsInput {
   tanders_origin_address?: string;
   tanders_origin_lat?: string;
   tanders_origin_lng?: string;
-  // Shalom por API (0059). Son DOS credenciales distintas: la API key del
-  // wrapper y la cuenta de pro.shalom.pe del cliente. Las dos son secretos.
-  shalom_api_key?: string;
+  // Shalom por API (0059). La API key del wrapper NO está acá: es de la cuenta
+  // de Kapso, una sola sirve para todas las tiendas y vive en el entorno
+  // (SHALOM_API_KEY). Lo de acá es la cuenta de pro.shalom.pe del cliente, que
+  // es lo único que cambia de una tienda a otra.
   shalom_pro_email?: string;
   shalom_pro_password?: string;
   shalom_origin_terminal_id?: string;
@@ -241,8 +242,6 @@ export function buildStoreUpdate(
   // pagar de nuevo el login de ~90 s cada vez que alguien toca cualquier ajuste
   // de la tienda. El password sí es señal por sí solo: el campo de secreto
   // llega vacío salvo que lo estén cambiando.
-  const shalomKey = clean(input.shalom_api_key);
-  if (shalomKey) patch.shalom_api_key_enc = encrypt(shalomKey, keyOverride);
   const shalomEmail = clean(input.shalom_pro_email);
   const shalomPass = clean(input.shalom_pro_password);
   if (shalomEmail !== null) patch.shalom_pro_email = shalomEmail;

@@ -81,6 +81,8 @@ roles and the `auth` schema, so it just works.
    | `KAPSO_API_BASE` | `https://api.kapso.ai/platform/v1` (optional) |
    | `ALICLIK_API_BASE` | `https://api.aliclik-dev.com` (optional; **pon la de producción cuando Aliclik la entregue**) |
    | `ALICLIK_WRITE_ENABLED` | `false` por defecto. `true` habilita CREAR guías en Aliclik |
+   | `SHALOM_API_KEY` | API key (`sk_…`) del wrapper de Shalom. **Global: una para todas las tiendas.** Sin ella no aparece «+ Guía Shalom» (ver 5ñ) |
+   | `SHALOM_API_BASE` | `https://api.shalom-api-peru.com` (optional) |
 
    `DATABASE_URL` is only needed for migrations; you don't have to add it to
    Vercel.
@@ -628,18 +630,27 @@ hay que dejar de subir el Excel.
   `shalom.*` son del flujo de cobro Yape y de la clave de recojo. Crear la guía
   **no** da acceso a ver claves.
 
-### Dos credenciales, no una
+### Dos credenciales, en dos sitios distintos
 
-Se configuran en **Ajustes de la tienda → Shalom**, ambas cifradas AES-256-GCM:
+1. La **API key del wrapper** (`sk_…`) es de la cuenta de **Kapso**, no del
+   cliente: **una sola sirve para todas las tiendas**. Va en el entorno como
+   `SHALOM_API_KEY` (`SHALOM_API_BASE` para el host). Se pide por WhatsApp al
+   proveedor (948 997 674) y **vence**: cuando caduque, todas las tiendas dejan
+   de poder crear guías a la vez y renovarla es cambiar solo esa variable, sin
+   tocar la configuración de ninguna tienda. Sin ella el botón «+ Guía Shalom»
+   simplemente no aparece.
+2. El **email + password de `pro.shalom.pe`** identifican la cuenta que emite la
+   guía ⇒ van **por tienda**, en Ajustes de la tienda, con la contraseña cifrada
+   AES-256-GCM. **Pueden repetirse entre tiendas**: dos tiendas de la misma
+   empresa suelen despachar con la misma cuenta de Shalom.
 
-1. La **API key del wrapper** (`sk_…`), que es de la cuenta de Kapso y se pide
-   por WhatsApp al proveedor (948 997 674). Tiene fecha de vencimiento.
-2. El **email + password de `pro.shalom.pe` del cliente**, que es la cuenta que
-   emite las guías de verdad. El wrapper los canjea por un token.
+Además, por tienda: la **agencia de origen** (`origin_terminal_id`, de
+`GET /v1/agencies`) y opcionalmente el **producto por defecto**. El catálogo de
+productos es por cuenta, así que el id no es universal — el modal lista los
+reales.
 
-Además: la **agencia de origen** (`origin_terminal_id`, de `GET /v1/agencies`) y
-opcionalmente el **producto por defecto**. El catálogo de productos es por
-cuenta, así que el id no es universal — el modal lista los reales.
+Los mensajes de error distinguen de quién es el problema: falta `SHALOM_API_KEY`
+(del servidor) es distinto de falta la cuenta de Shalom Pro (de la tienda).
 
 ### La primera llamada tarda ~90 segundos
 
@@ -649,6 +660,12 @@ cuenta: entre 90 s y 2 min. Por eso:
 - El token `ssk_…` (TTL **2 horas**) se **cachea cifrado en la tienda**
   (`shalom_session_token_enc`). En serverless la memoria del proceso no
   sobrevive entre invocaciones, así que un caché en módulo no serviría de nada.
+- **El token es de la cuenta, no de la tienda.** Cuando varias tiendas de la
+  misma organización comparten la cuenta de Shalom Pro, el login se paga **una
+  sola vez**: al conectar se reutiliza el token fresco de una tienda hermana si
+  existe, y el token recién emitido se guarda en todas las que usan ese mismo
+  email. Acotado a la misma `org_id` — el email ya prueba que es la misma cuenta,
+  pero no hay razón para que un token cruce una frontera de organización.
 - Conectar es un **paso explícito del modal** («Conectar con Shalom»), con su
   aviso de que puede tardar 2 minutos. Es una *lectura*: se puede reintentar sin
   riesgo. La segunda guía del día ya no lo paga.
@@ -707,7 +724,7 @@ bloqueado el dominio por política de egress). Es solo lectura salvo que se le
 pase `--create`:
 
 ```bash
-# Valida la API key sin tocar la cuenta del cliente
+# Valida la API key sin tocar la cuenta de ningún cliente
 SHALOM_API_KEY='sk_…' node scripts/shalom-probe.mjs
 
 # Además: sesión, productos, tarifas y órdenes de la cuenta

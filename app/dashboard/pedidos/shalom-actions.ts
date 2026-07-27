@@ -30,6 +30,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { decrypt, encrypt } from "@/lib/crypto";
+import { env } from "@/lib/env";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
@@ -63,7 +64,8 @@ const MASTER_PATH = "/dashboard/pedidos";
 const ACTIVE_STATUSES = new Set(["pendiente", "en_ruta", "por_preparar"]);
 
 interface StoreShalom {
-  shalom_api_key_enc: string | null;
+  /** Para reutilizar el token entre tiendas de la misma empresa. */
+  org_id: string;
   shalom_pro_email: string | null;
   shalom_pro_password_enc: string | null;
   shalom_origin_terminal_id: number | null;
@@ -74,7 +76,7 @@ interface StoreShalom {
 }
 
 const STORE_COLUMNS =
-  "shalom_api_key_enc,shalom_pro_email,shalom_pro_password_enc,shalom_origin_terminal_id," +
+  "org_id,shalom_pro_email,shalom_pro_password_enc,shalom_origin_terminal_id," +
   "shalom_origin_terminal_name,shalom_default_product_id,shalom_session_token_enc,shalom_session_expires_at";
 
 export interface ShalomDraftView {
@@ -132,13 +134,31 @@ async function loadStoreShalom(
   return (data as StoreShalom | null) ?? null;
 }
 
+/**
+ * ¿Se puede crear una guía para esta tienda? Hacen falta las DOS mitades: la API
+ * key global del wrapper (entorno) y la cuenta de Shalom Pro de la tienda.
+ */
 function isConfigured(store: StoreShalom | null): boolean {
   return Boolean(
-    store?.shalom_api_key_enc &&
+    env.shalomConfigured() &&
       store?.shalom_pro_email &&
       store?.shalom_pro_password_enc &&
       store?.shalom_origin_terminal_id,
   );
+}
+
+/** Por qué NO se puede, distinguiendo de quién es el problema. */
+function configurationBlocker(store: StoreShalom | null): string | null {
+  if (!env.shalomConfigured()) {
+    return "Shalom no está habilitado en este servidor: falta la variable SHALOM_API_KEY. Es global, no de la tienda.";
+  }
+  if (!store?.shalom_pro_email || !store?.shalom_pro_password_enc) {
+    return "Esta tienda no tiene cuenta de Shalom Pro. Cárgala en Ajustes → Tienda → Shalom.";
+  }
+  if (!store?.shalom_origin_terminal_id) {
+    return "Falta la agencia de origen de esta tienda (Ajustes → Tienda → Shalom).";
+  }
+  return null;
 }
 
 /** Guías vivas del pedido, para no despachar dos veces lo mismo. */
@@ -160,11 +180,17 @@ async function activeGuides(
  * quiere pagarlo dentro de la llamada que crea la guía.
  */
 function clientFor(store: StoreShalom): { client: ShalomClient; sessionReady: boolean } {
-  const apiKey = decrypt(store.shalom_api_key_enc as string);
   const fresh = sessionIsFresh(store.shalom_session_expires_at);
   const sessionToken =
     fresh && store.shalom_session_token_enc ? decrypt(store.shalom_session_token_enc) : null;
-  return { client: new ShalomClient({ apiKey, sessionToken }), sessionReady: Boolean(sessionToken) };
+  return {
+    client: new ShalomClient({
+      apiKey: env.shalomApiKey(),
+      baseUrl: env.shalomApiBase(),
+      sessionToken,
+    }),
+    sessionReady: Boolean(sessionToken),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -187,9 +213,8 @@ export async function connectShalomSession(
 
   const admin = createAdminSupabase();
   const store = await loadStoreShalom(admin, storeId);
-  if (!isConfigured(store)) {
-    return { error: "Faltan las credenciales de Shalom en Ajustes → Tienda." };
-  }
+  const blocker = configurationBlocker(store);
+  if (blocker) return { error: blocker };
   const s = store as StoreShalom;
 
   // Si ya hay una sesión viva no se vuelve a pagar el login.
@@ -197,27 +222,64 @@ export async function connectShalomSession(
     return { expiresAt: s.shalom_session_expires_at as string };
   }
 
-  let apiKey: string;
+  // Dos tiendas de la misma empresa suelen despachar con LA MISMA cuenta de
+  // Shalom. El token es de la cuenta, no de la tienda: si otra tienda ya pagó el
+  // login, se copia su token en vez de esperar 90 s otra vez.
+  //
+  // Acotado a la misma organización aunque el email ya sea prueba suficiente de
+  // que es la misma cuenta: no hay razón para que un token cruce una frontera de
+  // organización, y el coste de la restricción es cero.
+  const shared = await admin
+    .from("stores")
+    .select("shalom_session_token_enc,shalom_session_expires_at")
+    .eq("org_id", s.org_id)
+    .eq("shalom_pro_email", s.shalom_pro_email as string)
+    .neq("id", storeId)
+    .not("shalom_session_token_enc", "is", null)
+    .order("shalom_session_expires_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const reusable = shared.data as
+    | { shalom_session_token_enc: string | null; shalom_session_expires_at: string | null }
+    | null;
+
+  if (reusable?.shalom_session_token_enc && sessionIsFresh(reusable.shalom_session_expires_at)) {
+    await admin
+      .from("stores")
+      .update({
+        shalom_session_token_enc: reusable.shalom_session_token_enc,
+        shalom_session_expires_at: reusable.shalom_session_expires_at,
+      })
+      .eq("id", storeId);
+    return { expiresAt: reusable.shalom_session_expires_at as string };
+  }
+
   let password: string;
   try {
-    apiKey = decrypt(s.shalom_api_key_enc as string);
     password = decrypt(s.shalom_pro_password_enc as string);
   } catch {
-    return { error: "No se pudieron descifrar las credenciales de Shalom. Vuelve a cargarlas en Ajustes." };
+    return { error: "No se pudo descifrar la contraseña de Shalom. Vuelve a cargarla en Ajustes." };
   }
 
   try {
-    const session = await new ShalomClient({ apiKey }).createSession(
-      s.shalom_pro_email as string,
-      password,
-    );
+    const session = await new ShalomClient({
+      apiKey: env.shalomApiKey(),
+      baseUrl: env.shalomApiBase(),
+    }).createSession(s.shalom_pro_email as string, password);
+
+    // El token se guarda en TODAS las tiendas de la organización que usan esta
+    // misma cuenta: el login ya se pagó, y que la segunda tienda lo vuelva a
+    // pagar sería tirar 90 s por nada.
     await admin
       .from("stores")
       .update({
         shalom_session_token_enc: encrypt(session.session_token),
         shalom_session_expires_at: session.expires_at,
       })
-      .eq("id", storeId);
+      .eq("org_id", s.org_id)
+      .eq("shalom_pro_email", s.shalom_pro_email as string);
+
     return { expiresAt: session.expires_at };
   } catch (err) {
     return { error: describeShalomError(err) };
@@ -247,11 +309,8 @@ export async function loadShalomDraft(
   const blockers: string[] = [];
   const warnings: string[] = [];
 
-  if (!configured) {
-    blockers.push(
-      "Esta tienda no tiene Shalom configurado. Carga la API key, la cuenta de Shalom Pro y la agencia de origen en Ajustes → Tienda.",
-    );
-  }
+  const configBlocker = configurationBlocker(store);
+  if (configBlocker) blockers.push(configBlocker);
 
   for (const g of await activeGuides(admin, orderId)) {
     blockers.push(
@@ -320,12 +379,17 @@ export async function searchShalomAgencies(
   const query = q.trim();
   if (query.length < 2) return { agencies: [] };
 
-  const admin = createAdminSupabase();
-  const store = await loadStoreShalom(admin, storeId);
-  if (!store?.shalom_api_key_enc) return { error: "Falta la API key de Shalom en Ajustes." };
+  if (!env.shalomConfigured()) {
+    return { error: "Shalom no está habilitado en este servidor (falta SHALOM_API_KEY)." };
+  }
 
   try {
-    const client = new ShalomClient({ apiKey: decrypt(store.shalom_api_key_enc) });
+    // El directorio de agencias solo pide la API key: se puede buscar antes de
+    // conectar la cuenta, que es lo lento.
+    const client = new ShalomClient({
+      apiKey: env.shalomApiKey(),
+      baseUrl: env.shalomApiBase(),
+    });
     return { agencies: (await client.searchAgencies({ q: query })).slice(0, 25) };
   } catch (err) {
     return { error: describeShalomError(err) };
@@ -339,7 +403,8 @@ export async function loadShalomProducts(
   if (!(await authorizeStore(storeId))) return { error: "Sin acceso a esta tienda." };
   const admin = createAdminSupabase();
   const store = await loadStoreShalom(admin, storeId);
-  if (!isConfigured(store)) return { error: "Shalom no está configurado para esta tienda." };
+  const configBlocker = configurationBlocker(store);
+  if (configBlocker) return { error: configBlocker };
 
   try {
     const { client, sessionReady } = clientFor(store as StoreShalom);
@@ -366,7 +431,8 @@ export async function lookupShalomPerson(
   if (!(await authorizeStore(storeId))) return { error: "Sin acceso a esta tienda." };
   const admin = createAdminSupabase();
   const store = await loadStoreShalom(admin, storeId);
-  if (!isConfigured(store)) return { error: "Shalom no está configurado para esta tienda." };
+  const configBlocker = configurationBlocker(store);
+  if (configBlocker) return { error: configBlocker };
 
   try {
     const { client, sessionReady } = clientFor(store as StoreShalom);
@@ -395,7 +461,8 @@ export async function quoteShalomTariff(
   if (!(await authorizeStore(storeId))) return { error: "Sin acceso a esta tienda." };
   const admin = createAdminSupabase();
   const store = await loadStoreShalom(admin, storeId);
-  if (!isConfigured(store)) return { error: "Shalom no está configurado para esta tienda." };
+  const configBlocker = configurationBlocker(store);
+  if (configBlocker) return { error: configBlocker };
   const s = store as StoreShalom;
 
   try {
@@ -466,9 +533,8 @@ export async function createShalomGuide(
   }
 
   const store = await loadStoreShalom(admin, row.store_id);
-  if (!isConfigured(store)) {
-    return { error: "Esta tienda no tiene Shalom configurado (Ajustes → Tienda)." };
-  }
+  const configBlocker = configurationBlocker(store);
+  if (configBlocker) return { error: configBlocker };
   const s = store as StoreShalom;
 
   // La clave sale del servidor salvo que la haya escrito un rol autorizado: no
