@@ -44,24 +44,35 @@ function fakeAdmin(row: ReturnType<typeof store>) {
   return { from: () => q } as any;
 }
 
+// El fake de arriba devuelve la MISMA fila para la tienda y para la búsqueda de
+// una hermana con la misma cuenta, que es justo el escenario que rompió en
+// producción: al renovar, el atajo `shared` copiaba de vuelta el token que
+// Shalom acababa de rechazar —porque lo juzga por `expires_at`, que miente— y el
+// reintento repetía el fallo idéntico. `force` salta ese atajo.
+
 describe("readWithFreshSession", () => {
-  it("renueva y reintenta cuando el token cacheado está muerto", async () => {
+  it("NO readopta el token que acaban de rechazar: pide uno de verdad", async () => {
     const row = store();
-    let intentos = 0;
     const run = vi.fn(async () => {
-      intentos += 1;
-      if (intentos === 1) {
-        throw new ShalomApiError("token vencido", 401, "shalom_auth_failed");
-      }
-      return { ok: true };
+      throw new ShalomApiError("token vencido", 401, "shalom_auth_failed");
     });
 
-    // El re-login pasa por el camino `shared`: la fila que devuelve el fake ya
-    // trae un token fresco, así que no hace falta salir a la red.
-    await expect(readWithFreshSession(fakeAdmin(row), "store-1", row as any, run)).resolves.toEqual({
-      ok: true,
+    // La fila trae un `expires_at` en el futuro y un token cifrado, así que los
+    // dos atajos de `mintSession` lo darían por bueno. Si el reintento los
+    // usara, no habría ninguna llamada a `/v1/shalom/sessions` y volvería a
+    // fallar con el mismo token — que es lo que pasaba.
+    const createSession = vi.fn(async () => {
+      throw new Error("login intentado");
     });
-    expect(run).toHaveBeenCalledTimes(2);
+    const { ShalomClient } = await import("@/lib/shalom/client");
+    const spy = vi.spyOn(ShalomClient.prototype, "createSession").mockImplementation(createSession);
+
+    await expect(
+      readWithFreshSession(fakeAdmin(row), "store-1", row as any, run),
+    ).rejects.toBeTruthy();
+
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
   });
 
   it("no reintenta un fallo que no es de sesión: lo propaga tal cual", async () => {
@@ -82,9 +93,20 @@ describe("readWithFreshSession", () => {
       throw new ShalomApiError("token vencido", 401, "shalom_auth_failed");
     });
 
+    // Login que sí devuelve un token: así el segundo intento llega a ocurrir y
+    // se puede comprobar que NO hay un tercero. Sin este tope, cada lectura de
+    // una cuenta con problemas encadenaría logins de 90 s.
+    const { ShalomClient } = await import("@/lib/shalom/client");
+    const spy = vi.spyOn(ShalomClient.prototype, "createSession").mockResolvedValue({
+      session_token: "ssk_nuevo",
+      expires_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+    } as any);
+
     await expect(
       readWithFreshSession(fakeAdmin(row), "store-1", row as any, run),
     ).rejects.toBeInstanceOf(ShalomApiError);
     expect(run).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
   });
 });

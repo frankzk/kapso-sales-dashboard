@@ -122,8 +122,17 @@ export async function mintSession(
   admin: SupabaseClient,
   storeId: string,
   store: StoreShalom,
+  opts: { force?: boolean } = {},
 ): Promise<MintResult> {
-  if (sessionIsFresh(store.shalom_session_expires_at) && store.shalom_session_token_enc) {
+  // `force` salta los dos atajos y va derecho al login. Se usa cuando Shalom
+  // acaba de RECHAZAR un token: en ese momento los dos atajos son trampas,
+  // porque ambos deciden si un token sirve mirando `expires_at` — y acabamos de
+  // comprobar que ese campo miente. El atajo `shared` es el peligroso de los
+  // dos: copia el token de una tienda hermana, que suele ser exactamente el
+  // mismo que nos acaban de rechazar, así que el "reintento" repetía el fallo
+  // idéntico. Pagar los ~90 s del login es el único modo de tener un token que
+  // sabemos vivo.
+  if (!opts.force && sessionIsFresh(store.shalom_session_expires_at) && store.shalom_session_token_enc) {
     return { expiresAt: store.shalom_session_expires_at as string, source: "cache" };
   }
 
@@ -145,7 +154,7 @@ export async function mintSession(
     shalom_session_expires_at: string | null;
   } | null;
 
-  if (reusable?.shalom_session_token_enc && sessionIsFresh(reusable.shalom_session_expires_at)) {
+  if (!opts.force && reusable?.shalom_session_token_enc && sessionIsFresh(reusable.shalom_session_expires_at)) {
     await admin
       .from("stores")
       .update({
@@ -210,11 +219,10 @@ export async function readWithFreshSession<T>(
     }
   }
 
-  const minted = await mintSession(admin, storeId, {
-    ...store,
-    shalom_session_token_enc: null,
-    shalom_session_expires_at: null,
-  });
+  // `force`: Shalom acaba de rechazar un token, así que no vale ni el caché ni
+  // el de una tienda hermana — los dos se juzgan por `expires_at` y el de la
+  // hermana suele ser el mismo que nos rechazaron. Login de verdad o nada.
+  const minted = await mintSession(admin, storeId, store, { force: true });
   if ("error" in minted) throw new ShalomApiError(minted.error, 401, "shalom_auth_failed");
 
   const refreshed = await loadStoreShalom(admin, storeId);
