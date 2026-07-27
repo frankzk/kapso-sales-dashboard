@@ -630,6 +630,19 @@ drawer del Master y devuelve el código de guía.
   paquete. El mensaje de error pide verificar en tanders.app antes de reintentar.
 - Si Tanders crea la guía pero falla el insert local, el error **incluye el
   código** para registrarla a mano: la guía existe y perderla de vista es peor.
+- **El rótulo lo componemos nosotros.** Tanders NO tiene endpoint de PDF: su
+  panel arma el rótulo en el navegador y lo descarga. Su API solo ofrece
+  `GET /external/generate-qr?text=…` (otro host, sin auth) y
+  `PATCH /orders/me/{id}/label {generated:true}`, que enciende el "✓ Rótulo
+  generado" de su interfaz. La página `/dashboard/pedidos/rotulos?ids=a,b,c`
+  arma los rótulos —una hoja por envío, Ctrl+P para PDF— con el QR generado en
+  local (el QR codifica literalmente el N° de seguimiento, así que no hace falta
+  su endpoint) y los datos de `tanders_raw`, que es lo que Tanders tiene de
+  verdad. **Needs migration 0063** (`shipments.label_generated_at`).
+- Al abrir el rótulo se llama a su `PATCH` para que su panel quede marcado: es el
+  único guardarraíl contra imprimir dos etiquetas del mismo paquete, y solo sirve
+  si los dos sistemas coinciden. Es best-effort — si su API falla, el rótulo se
+  imprime igual y el aviso dice qué guías quedaron sin marcar allá.
 - **La etiqueta PDF no viene al crear**: `labelGeneratedAt` llega en null porque
   el pedido nace PENDING y el PDF se genera después. Se descarga desde
   tanders.app.

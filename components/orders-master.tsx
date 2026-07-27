@@ -15,6 +15,7 @@ import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { ChecklistFilter } from "@/components/filters";
 import { PickupKeyPanel } from "@/components/pickup-key-panel";
 import { TandersGuideModal } from "@/components/tanders-guide-modal";
+import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actions";
 import { ShalomGuideModal } from "@/components/shalom-guide-modal";
 import {
   addOrderComment,
@@ -1042,6 +1043,21 @@ function OrderDrawer({
                         <span className="text-xs text-amber-700">
                           {g.aliclik_attempts ?? g.reroute_attempts} intento(s)
                         </span>
+                      )}
+                      {g.courier === "tanders" && (
+                        // Navegación real (no window.open tras un await): así el
+                        // bloqueador de ventanas emergentes no se la come. El
+                        // marcado en Tanders sale en paralelo, sin frenar la
+                        // impresión — el rótulo ya está compuesto de nuestro lado.
+                        <a
+                          href={`/dashboard/pedidos/rotulos?ids=${g.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={() => void markTandersLabelGenerated([g.id])}
+                          className="text-xs font-medium text-brand-700 hover:underline"
+                        >
+                          Rótulo ↗
+                        </a>
                       )}
                       {g.guide_code === detail.row.guide_code && (
                         <span className="ml-auto text-xs text-slate-400">actual</span>

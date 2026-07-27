@@ -429,3 +429,82 @@ export async function loadTandersCapacity(
     return { error: err instanceof Error ? err.message : "No se pudo leer el cupo de Tanders." };
   }
 }
+
+/**
+ * Deja constancia de que el rótulo se compuso: acá y en Tanders.
+ *
+ * Su panel enciende "✓ Rótulo generado" con opción de liberarlo, y es el único
+ * guardarraíl contra imprimir dos etiquetas del mismo paquete. Si solo lo
+ * anotáramos de nuestro lado, el guardarraíl dejaría de servir.
+ *
+ * Best-effort hacia Tanders: si su API no responde, el rótulo ya está impreso y
+ * negarlo no ayuda a nadie — se registra local y se dice que su panel quedó sin
+ * marcar, para que alguien lo mire.
+ */
+export async function markTandersLabelGenerated(
+  shipmentIds: string[],
+): Promise<{ error?: string; notice?: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("tanders.create_guide")) return { error: "Tu rol no permite generar rótulos." };
+
+  const sb = await createServerSupabase();
+  // RLS: solo los envíos de las tiendas a las que el usuario tiene acceso.
+  const { data } = await sb
+    .from("shipments")
+    .select("id,store_id,guide_code,tanders_order_id")
+    .eq("courier", "tanders")
+    .in("id", shipmentIds);
+  const rows =
+    (data as { id: string; store_id: string; guide_code: string; tanders_order_id: string | null }[]) ??
+    [];
+  if (!rows.length) return { error: "Sin envíos que marcar." };
+
+  const admin = createAdminSupabase();
+  await admin
+    .from("shipments")
+    .update({ label_generated_at: new Date().toISOString() })
+    .in(
+      "id",
+      rows.map((r) => r.id),
+    );
+
+  // Una sesión por tienda: el cliente cachea su token entre llamadas.
+  const failed: string[] = [];
+  const byStore = new Map<string, typeof rows>();
+  for (const r of rows) byStore.set(r.store_id, [...(byStore.get(r.store_id) ?? []), r]);
+
+  for (const [storeId, storeRows] of byStore) {
+    const store = await loadStoreTanders(admin, storeId);
+    if (!store?.tanders_email || !store.tanders_password_enc) {
+      failed.push(...storeRows.map((r) => r.guide_code));
+      continue;
+    }
+    try {
+      const client = new TandersClient({
+        email: store.tanders_email,
+        password: decrypt(store.tanders_password_enc),
+      });
+      for (const r of storeRows) {
+        if (!r.tanders_order_id) {
+          failed.push(r.guide_code);
+          continue;
+        }
+        try {
+          await client.markLabelGenerated(r.tanders_order_id);
+        } catch {
+          failed.push(r.guide_code);
+        }
+      }
+    } catch {
+      failed.push(...storeRows.map((r) => r.guide_code));
+    }
+  }
+
+  revalidatePath(MASTER_PATH);
+  if (failed.length) {
+    return {
+      notice: `Rótulo listo. No se pudo marcar en Tanders: ${failed.join(", ")} — márcalos ahí si vas a imprimir otra vez.`,
+    };
+  }
+  return { notice: "Rótulo listo y marcado como generado en Tanders." };
+}
