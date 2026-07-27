@@ -351,7 +351,11 @@ describe("describeShalomError", () => {
     expect(describeShalomError(new ShalomApiError("token vencido", 401, "shalom_auth_failed"))).toMatch(
       /volver a conectar|Vuelve a conectar/i,
     );
-    expect(describeShalomError(new ShalomApiError("key mala", 401, "unauthorized"))).toMatch(/API key/);
+    // El `unauthorized` es de la key global, que vive en el entorno. Decía
+    // «Ajustes → Tienda», donde esa key no está ni puede estar.
+    const globalKey = describeShalomError(new ShalomApiError("key mala", 401, "unauthorized"));
+    expect(globalKey).toMatch(/SHALOM_API_KEY/);
+    expect(globalKey).not.toMatch(/Ajustes → Tienda/);
     expect(describeShalomError(new ShalomApiError("regla", 422, "upstream_rejected"))).toMatch(
       /regla de negocio/i,
     );
