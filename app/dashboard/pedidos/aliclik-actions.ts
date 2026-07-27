@@ -135,6 +135,23 @@ export interface AliclikPreview {
   coordinate?: { lat: string; lng: string };
   /** Falta la coordenada: la interfaz debe pedirla antes de seguir. */
   needsCoordinate?: boolean;
+  /**
+   * Por qué NO se podría crear la guía aunque la cotización salga bien.
+   *
+   * La cotización es de solo lectura, así que se permite siempre; la escritura
+   * exige además las dos llaves. Sin este dato el panel enseñaba el botón
+   * "Crear guía" en azul y la operadora descubría el bloqueo DESPUÉS de pulsar
+   * un botón que el propio panel describe como irreversible. Se decide en el
+   * servidor porque `ALICLIK_WRITE_ENABLED` no existe en el navegador.
+   */
+  writeBlocked?: string;
+}
+
+/** Motivo por el que la escritura está cerrada, o null si está abierta. */
+function writeBlockedReason(): string | null {
+  return env.aliclikWriteEnabled()
+    ? null
+    : "La escritura hacia Aliclik está desactivada en este entorno (ALICLIK_WRITE_ENABLED). Puedes cotizar, pero no crear la guía.";
 }
 
 const norm = (v: string | null | undefined) =>
@@ -273,6 +290,7 @@ export async function previewAliclikGuide(
     ubigeoMismatch,
     couriers: annotated,
     coordinate: { lat, lng },
+    writeBlocked: writeBlockedReason() ?? undefined,
   };
 }
 

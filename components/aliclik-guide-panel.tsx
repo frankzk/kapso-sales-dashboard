@@ -228,14 +228,17 @@ export function AliclikGuidePanel({
             <button
               type="button"
               onClick={create}
-              disabled={pending || transportId === null}
+              disabled={pending || transportId === null || Boolean(preview.writeBlocked)}
               className="w-full rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50"
             >
               {pending ? "Creando…" : "Crear guía en Aliclik"}
             </button>
+            {/* El servidor vuelve a comprobar las dos llaves antes de escribir:
+                esto es aviso, no seguridad. Pero evita que alguien pulse un
+                botón irreversible para descubrir que estaba cerrado. */}
             <p className="text-center text-xs text-slate-500">
-              Crear el pedido en Aliclik es irreversible y solo se puede cancelar en una ventana
-              corta.
+              {preview.writeBlocked ??
+                "Crear el pedido en Aliclik es irreversible y solo se puede cancelar en una ventana corta."}
             </p>
           </div>
         ) : null}
