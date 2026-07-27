@@ -31,10 +31,15 @@ function stubFetch(responses: { status: number; body: unknown }[]) {
   return { impl, calls };
 }
 
+// `egress: "direct"` explícito: este bloque prueba el transporte directo
+// (cabeceras, parseo de errores, paginación), así que no debe depender de cuál
+// sea la salida por defecto — que hoy es `edge`, porque la directa la bloquea
+// Cloudflare. El valor por defecto se fija aparte, en test/env-aliclik.test.ts.
 const opts = (fetchImpl: typeof fetch): AliclikClientOpts => ({
   apiToken: "tok_123",
   baseUrl: BASE,
   fetchImpl,
+  egress: "direct",
 });
 
 describe("cabeceras y autenticación", () => {
@@ -357,9 +362,10 @@ describe("salida por Edge", () => {
     expect(res.error).toContain("Cloudflare");
   });
 
-  it("por defecto NO usa Edge: la salida directa sigue siendo la normal", async () => {
+  it("una opción explícita manda sobre el valor por defecto", async () => {
+    // `direct` es la vía de escape para el día en que Aliclik ajuste su WAF.
     const { impl, calls } = stubFetch([{ status: 200, body: { count: 0, page: 1, result: [] } }]);
-    await listProducts(opts(impl));
+    await listProducts({ ...edgeOpts(impl), egress: "direct" });
     expect(calls[0]!.url.startsWith(BASE)).toBe(true);
     expect(calls[0]!.url).not.toContain("aliclik-egress");
   });
