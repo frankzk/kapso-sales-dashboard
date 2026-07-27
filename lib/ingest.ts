@@ -103,6 +103,12 @@ export interface StoreCreds {
   /** API key de Anthropic de ESTA tienda; null = usa la del entorno. */
   anthropic_api_key: string | null;
   anthropic_model: string | null;
+  /** Token de la API de integración de Aliclik (0054). */
+  aliclik_api_token: string | null;
+  /** Secreto del webhook de Aliclik: su API no firma las notificaciones. */
+  aliclik_webhook_secret: string | null;
+  /** Interruptor por tienda de la creación de guías. */
+  aliclik_enabled: boolean;
   meta_ad_accounts: StoreMetaAdAccount[];
 }
 
@@ -159,6 +165,11 @@ export async function getStoreCreds(
     // entorno como respaldo, que es el comportamiento anterior.
     anthropic_api_key: decryptOrNull(data.anthropic_api_key_enc),
     anthropic_model: data.anthropic_model ?? null,
+    // Pre-0054 las columnas no existen (select * → undefined) ⇒ integración
+    // apagada, que es exactamente el comportamiento anterior.
+    aliclik_api_token: decryptOrNull(data.aliclik_api_token_enc),
+    aliclik_webhook_secret: decryptOrNull(data.aliclik_webhook_secret_enc),
+    aliclik_enabled: data.aliclik_enabled ?? false,
     meta_ad_accounts: normalizeMetaAdAccounts(
       data.meta_ad_accounts,
       data.meta_ad_account_id,

@@ -11,6 +11,8 @@ import { registerOrderWebhooks } from "@/lib/shopify";
 import { buildStoreDailySummary, formatDailySummary, limaDayBounds } from "@/lib/daily-summary";
 import { sendTelegramToAll } from "@/lib/telegram";
 import { listMetaAdAccounts, type MetaAdAccount, type StoreMetaAdAccount } from "@/lib/meta-marketing";
+import { listProducts } from "@/lib/aliclik";
+import { syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { env } from "@/lib/env";
 
 export interface SettingsState {
@@ -19,6 +21,8 @@ export interface SettingsState {
   /** One-time reveal of a freshly generated Kapso webhook secret. Never stored
    *  in plaintext, so it is only ever returned here, once, right after minting. */
   kapsoSecret?: string;
+  /** Igual que `kapsoSecret`, para el webhook de Aliclik (0054). */
+  aliclikSecret?: string;
 }
 
 async function requireStoreAdmin(
@@ -97,6 +101,8 @@ export async function updateStore(
     telegram_chat_id: get("telegram_chat_id"),
     telegram_bot_token: get("telegram_bot_token"),
     meta_access_token: get("meta_access_token"),
+    aliclik_api_token: get("aliclik_api_token"),
+    aliclik_enabled: get("aliclik_enabled"),
   });
 
   if (!Object.keys(patch).length) return { notice: "No hay cambios para guardar." };
@@ -135,6 +141,80 @@ export async function generateKapsoWebhookSecret(
   return {
     notice: "Secreto de webhook de Kapso generado. Cópialo ahora: no se vuelve a mostrar.",
     kapsoSecret: secret,
+  };
+}
+
+/**
+ * Acuña el secreto del webhook de Aliclik.
+ *
+ * Aliclik NO firma sus notificaciones —su documentación no define ni HMAC ni
+ * cabecera de autenticación— así que este secreto en la URL es la única barrera
+ * entre su webhook y cualquiera que descubra el endpoint. Mismo patrón que el de
+ * Kapso: hex (URL-safe), y el texto plano se revela UNA vez.
+ */
+export async function generateAliclikWebhookSecret(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso para editar esta tienda." };
+
+  const secret = randomBytes(32).toString("hex");
+  const patch = buildStoreUpdate({ aliclik_webhook_secret: secret });
+  const { error } = await ctx.admin.from("stores").update(patch).eq("id", storeId);
+  if (error) return { error: error.message };
+
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return {
+    notice: "Secreto de webhook de Aliclik generado. Cópialo ahora: no se vuelve a mostrar.",
+    aliclikSecret: secret,
+  };
+}
+
+/**
+ * Comprueba el token de Aliclik contra su API. Solo LECTURA: pide una página de
+ * catálogo. Sirve para saber que el token es válido y que el host configurado
+ * responde, sin arriesgar ninguna escritura.
+ */
+export async function testAliclikConnection(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+
+  const creds = await getStoreCreds(storeId, ctx.admin);
+  if (!creds?.aliclik_api_token) return { error: "Esta tienda no tiene token de Aliclik." };
+
+  const res = await listProducts({ apiToken: creds.aliclik_api_token }, { limit: 1 });
+  if (!res.ok) return { error: `Aliclik: ${res.error}` };
+  return {
+    notice: `Conexión correcta con ${env.aliclikApiBase()} — el catálogo tiene ${res.data.count ?? 0} productos.`,
+  };
+}
+
+/** Sincroniza el catálogo de Aliclik bajo demanda (además del cron diario). */
+export async function syncAliclikCatalogNow(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+
+  const creds = await getStoreCreds(storeId, ctx.admin);
+  if (!creds?.aliclik_api_token) return { error: "Esta tienda no tiene token de Aliclik." };
+
+  const report = await syncAliclikCatalog(storeId, { apiToken: creds.aliclik_api_token }, ctx.admin);
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  if (!report.ok) return { error: report.errors.join("; ") || "No se pudo sincronizar." };
+  const detail = `${report.skus} SKUs, ${report.agencies} agencias, ${report.autoMapped} mapeos automáticos`;
+  return {
+    notice: report.errors.length
+      ? `Catálogo sincronizado (${detail}), con avisos: ${report.errors.join("; ")}`
+      : `Catálogo sincronizado: ${detail}.`,
   };
 }
 
