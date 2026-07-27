@@ -38,6 +38,19 @@ export const env = {
   yapeVisionModel: () => process.env.YAPE_VISION_MODEL ?? "claude-opus-4-8",
   yapeVisionEnabled: () => Boolean(process.env.ANTHROPIC_API_KEY),
 
+  // --- Swayp (ex-Fenix) last-mile API. The token is issued by hand per
+  //     integrator and there is NO login endpoint, so it can't be refreshed
+  //     programmatically: when it stops working a human has to request a new
+  //     one. `swaypEnabled` gates the whole integration so the manual guide
+  //     flow keeps working untouched while this is unconfigured. ---
+  swaypApiBase: () =>
+    (process.env.SWAYP_API_BASE ?? "https://us-central1-swayp-staging.cloudfunctions.net/api")
+      .replace(/\/$/, ""),
+  swaypToken: () => required("SWAYP_TOKEN"),
+  swaypEmail: () => required("SWAYP_EMAIL"),
+  swaypWebhookToken: () => process.env.SWAYP_WEBHOOK_TOKEN ?? "",
+  swaypEnabled: () => Boolean(process.env.SWAYP_TOKEN && process.env.SWAYP_EMAIL),
+
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---
   shopifyAppApiKey: () => process.env.SHOPIFY_APP_API_KEY ?? "",
   shopifyAppApiSecret: () => process.env.SHOPIFY_APP_API_SECRET ?? "",
