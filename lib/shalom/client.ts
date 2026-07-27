@@ -406,7 +406,9 @@ export function describeShalomError(err: unknown): string {
           // no existe es peor que no dar pista ninguna.
           " Es la API key global del wrapper (SHALOM_API_KEY), que vive en las variables de entorno del despliegue, NO en los ajustes de la tienda. Si se pegó cortada o vencida, hay que corregirla ahí y volver a desplegar."
         : err.code === "rate_limited"
-          ? " Se superaron las 60 llamadas por minuto: espera un momento."
+          ? // El cupo es de la API key, que es una sola para TODAS las tiendas:
+            // se puede agotar sin que esta tienda haya hecho nada.
+            " Se superaron las 60 llamadas por minuto de la API key, que es compartida por todas las tiendas: espera un momento."
           : err.code === "upstream_rejected"
             ? " Es una regla de negocio de Shalom (cuenta sin servicio de cobranza, producto restringido para esa ruta, etc.)."
             : err.code === "conflict"
