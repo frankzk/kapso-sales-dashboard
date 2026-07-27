@@ -118,22 +118,44 @@ describe("reconcileToOrderTotal", () => {
 
 describe("reconcileToOrderTotal · tope de pérdida aceptable", () => {
   it("bloquea cuando habría que dejar de cobrar más del margen", () => {
-    // 3 unidades y total 302: los alcanzables son múltiplos de 3 (300), así que
-    // se perderían S/2. Por encima del tope ⇒ no se crea la guía.
-    expect(reconcileToOrderTotal([{ quantity: 3, price: 149 }], 302)).toBeNull();
+    // 6 unidades y total 302,40: los alcanzables son múltiplos de 3 (300), así
+    // que se perderían S/2,40. Por encima del techo ⇒ no se crea la guía. Es el
+    // único caso de los 6.541 pedidos pendientes que queda bloqueado.
+    expect(reconcileToOrderTotal([{ quantity: 6, price: 100 }], 302.4)).toBeNull();
   });
 
-  it("deja pasar lo que cabe justo en el margen", () => {
-    // 298 con 3 unidades pierde S/1: cabe en S/1,20.
-    const r = reconcileToOrderTotal([{ quantity: 3, price: 149 }], 298);
-    expect(r!.total).toBe(297);
-    expect(r!.drift).toBe(-1);
+  it("deja pasar los S/2 justos, que es el peor caso aceptado", () => {
+    const r = reconcileToOrderTotal([{ quantity: 3, price: 149 }], 302);
+    expect(r!.total).toBe(300);
+    expect(r!.drift).toBe(-2);
   });
 
   it("el margen es configurable para poder medir escenarios", () => {
-    const r = reconcileToOrderTotal([{ quantity: 3, price: 149 }], 302, 3);
+    const r = reconcileToOrderTotal([{ quantity: 6, price: 100 }], 302.4, 3);
     expect(r!.total).toBe(300);
-    expect(r!.drift).toBe(-2);
+    expect(r!.drift).toBe(-2.4);
+  });
+
+  it("minimiza: se queda con el PRIMER importe representable, no con uno cualquiera", () => {
+    // Con 3 unidades y total 299, los múltiplos de 3 por debajo son 297, 294,
+    // 291… Tiene que elegir 297 (pierde S/2), nunca uno más bajo.
+    const r = reconcileToOrderTotal([{ quantity: 3, price: 100 }], 299);
+    expect(r!.total).toBe(297);
+  });
+
+  it("no se rinde en multi-línea: ajusta otra línea para cuadrar sin bajar el total", () => {
+    // 2 y 3 unidades: el reparto proporcional inicial no tiene por qué dejar un
+    // resto divisible entre 3, pero quitando céntimos a la línea de 2 sí cuadra.
+    // Sin ese ajuste el algoritmo bajaba un sol y perdía dinero de más.
+    const r = reconcileToOrderTotal(
+      [
+        { quantity: 2, price: 100 },
+        { quantity: 3, price: 100 },
+      ],
+      499,
+    );
+    expect(r!.total).toBe(499);
+    expect(r!.drift).toBe(0);
   });
 
   it("ninguna guía creada pierde más del margen, con ningún total ni cantidad", () => {
@@ -145,5 +167,44 @@ describe("reconcileToOrderTotal · tope de pérdida aceptable", () => {
         expect(Number.isInteger(r.total)).toBe(true);
       }
     }
+  });
+});
+
+describe("reconcileToOrderTotal · minimiza de verdad", () => {
+  const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+
+  // Un total entero T es alcanzable si y solo si 100·T es divisible por el MCD
+  // de las cantidades: los importes que se pueden formar son las combinaciones
+  // enteras de `precio_en_céntimos × cantidad`. Esta prueba afirma que SIEMPRE
+  // que sea alcanzable, el algoritmo lo encuentra — o sea, que nunca se pierde
+  // dinero por rendirse antes de tiempo, solo cuando es inevitable.
+  it("cuando el total exacto es alcanzable, lo encuentra", () => {
+    let checked = 0;
+    for (const q1 of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      for (const q2 of [1, 2, 3, 4, 5, 6, 7, 8]) {
+        for (let total = 60; total <= 500; total += 7) {
+          if ((100 * total) % gcd(q1, q2) !== 0) continue;
+          checked++;
+          const r = reconcileToOrderTotal(
+            [
+              { quantity: q1, price: 100 },
+              { quantity: q2, price: 60 },
+            ],
+            total,
+            99,
+          );
+          expect(r, `q=[${q1},${q2}] total=${total}`).not.toBeNull();
+          expect(r!.drift, `q=[${q1},${q2}] total=${total}`).toBe(0);
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(3000);
+  });
+
+  it("una sola línea da el múltiplo más alto que cabe, no uno cualquiera", () => {
+    // Con 3 unidades solo hay múltiplos de 3: de 299 el mejor es 297.
+    expect(reconcileToOrderTotal([{ quantity: 3, price: 100 }], 299)!.total).toBe(297);
+    expect(reconcileToOrderTotal([{ quantity: 3, price: 100 }], 300)!.total).toBe(300);
+    expect(reconcileToOrderTotal([{ quantity: 3, price: 100 }], 301)!.total).toBe(300);
   });
 });

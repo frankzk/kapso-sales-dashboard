@@ -54,12 +54,22 @@ export function linesTotal(lines: readonly PricedLine[]): number {
  * Lo máximo que el negocio acepta dejar de cobrar por un pedido, en soles.
  *
  * Decisión del dueño, no técnica. Medido sobre los 6.541 pedidos pendientes:
- * el 70 % no pierde nada, el 99 % pierde S/1,20 o menos, y el 1 % restante
- * llega hasta S/2,40 — casi todos cantidad 3 con un total dos soles por encima
- * de un múltiplo de 3. Esos NO se crean: es preferible que una persona los mire
- * a que el sistema regale dos soles en silencio.
+ * el 70 % no pierde nada, el 99 % pierde S/1,20 o menos, y el resto llega hasta
+ * S/2,40 — casi todos cantidad 3 con un total dos soles por encima de un
+ * múltiplo de 3. Con el tope en S/2,00 queda UN pedido bloqueado de 6.541.
+ *
+ * Es un TECHO, no un objetivo: la búsqueda va del total hacia abajo y se queda
+ * con el primer importe representable, así que la pérdida real es siempre la
+ * mínima posible. El techo solo decide cuándo rendirse.
+ *
+ * Se descartó redondear hacia ARRIBA aunque el desvío medio sería la mitad
+ * (S/1,01 frente a S/1,99): en contraentrega la clienta tiene el paquete
+ * delante y le dijimos otro precio por WhatsApp, así que un sol de más es
+ * motivo para rechazarlo. Una devolución cuesta S/10,50 más la venta perdida;
+ * dos rechazos se comen los S/195 que separan las dos políticas en todo el
+ * backlog.
  */
-export const MAX_ACCEPTABLE_LOSS = 1.2;
+export const MAX_ACCEPTABLE_LOSS = 2.0;
 
 /** Cuántos soles enteros por debajo del total se permite bajar buscando uno representable. */
 const MAX_STEPS_DOWN = 30;
@@ -115,9 +125,31 @@ export function reconcileToOrderTotal<T extends PricedLine>(
         cents[i] = Math.max(MIN_CENTS, Math.floor((target * weight(l)) / l.quantity));
         used += cents[i]! * l.quantity;
       }
-      const rest = target - used;
       const q = lines[absorber]!.quantity;
-      // La línea absorbente tiene que poder tragarse el resto EXACTO.
+      let rest = target - used;
+
+      // La línea absorbente tiene que tragarse el resto EXACTO. Si no le cuadra,
+      // se le quitan unos céntimos a OTRA línea: bajar `k` céntimos ahí libera
+      // `k × cantidad` para la absorbente, y con eso el resto suele volverse
+      // divisible. Sin este ajuste el algoritmo se rendía y probaba un total un
+      // sol más bajo — perdiendo dinero por no buscar lo suficiente.
+      if (rest > 0 && rest % q !== 0) {
+        outer: for (let i = 0; i < lines.length; i++) {
+          if (i === absorber) continue;
+          const qi = lines[i]!.quantity;
+          // Basta explorar `q` pasos: a partir de ahí los restos se repiten.
+          for (let k = 1; k <= q; k++) {
+            if (cents[i]! - k < MIN_CENTS) break;
+            const candidate = rest + k * qi;
+            if (candidate % q === 0 && candidate / q >= MIN_CENTS) {
+              cents[i] = cents[i]! - k;
+              rest = candidate;
+              break outer;
+            }
+          }
+        }
+      }
+
       if (rest <= 0 || rest % q !== 0) continue;
       const unit = rest / q;
       if (unit < MIN_CENTS) continue;
