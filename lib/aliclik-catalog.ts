@@ -602,22 +602,62 @@ export async function loadShopifySkuNames(
   return out;
 }
 
+/** Columnas del espejo que necesita el resolutor. */
+const SKU_COLUMNS =
+  "ean,sku,product_name,sku_name,stock_virtual,warehouse_id,warehouse_name," +
+  "format_time_agency,shalom_origin_in,is_agency_eligible,synced_at";
+
+/** PostgREST corta cada respuesta en `db-max-rows` (1000 en Supabase). */
+const PAGE = 1000;
+
+/**
+ * Lee TODAS las filas de una tabla del catálogo, paginando.
+ *
+ * Sin esto se leen solo las primeras 1000. Con un catálogo de 3.666 SKUs eso
+ * significaba que el resolutor daba "ean_desconocido" para mapeos correctos, y
+ * que la pantalla no ofrecía dos tercios de los productos — un fallo silencioso
+ * y de los peores, porque el sistema parece funcionar y simplemente miente.
+ */
+async function readAll<T>(
+  admin: SupabaseClient,
+  table: string,
+  columns: string,
+  storeId: string,
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await admin
+      .from(table)
+      .select(columns)
+      .eq("store_id", storeId)
+      .order("ean", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error || !data?.length) break;
+    out.push(...(data as T[]));
+    if (data.length < PAGE) break;
+    // Tope de seguridad: 50.000 filas es mucho más de lo que cabe esperar y
+    // evita un bucle infinito si el orden no fuera estable.
+    if (out.length >= 50_000) break;
+  }
+  return out;
+}
+
 /** Carga el catálogo y el mapeo de una tienda (para el resolutor). */
 export async function loadCatalogFor(
   storeId: string,
   admin: SupabaseClient = createAdminSupabase(),
 ): Promise<{ skus: AliclikSkuRow[]; mapping: AliclikSkuMapRow[] }> {
-  const [skusRes, mapRes] = await Promise.all([
-    admin
-      .from("aliclik_skus")
-      .select(
-        "ean,sku,product_name,stock_virtual,warehouse_id,warehouse_name,format_time_agency,shalom_origin_in,is_agency_eligible",
-      )
-      .eq("store_id", storeId),
-    admin.from("aliclik_sku_map").select("shopify_sku,ean").eq("store_id", storeId),
+  const [skus, mapping] = await Promise.all([
+    readAll<AliclikSkuRow>(admin, "aliclik_skus", SKU_COLUMNS, storeId),
+    readAll<AliclikSkuMapRow>(admin, "aliclik_sku_map", "shopify_sku,ean", storeId),
   ]);
-  return {
-    skus: (skusRes.data ?? []) as AliclikSkuRow[],
-    mapping: (mapRes.data ?? []) as AliclikSkuMapRow[],
-  };
+  return { skus, mapping };
+}
+
+/** Igual que `loadCatalogFor`, pero con las columnas que la pantalla muestra. */
+export async function loadAllAliclikSkus(
+  storeId: string,
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<(AliclikSkuRow & { sku_name: string | null; synced_at: string })[]> {
+  return readAll(admin, "aliclik_skus", SKU_COLUMNS, storeId);
 }
