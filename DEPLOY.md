@@ -763,11 +763,38 @@ SHALOM_API_KEY='sk_…' SHALOM_PRO_EMAIL='…' SHALOM_PRO_PASSWORD='…' \
 Con `--create` emite una guía real e imprime el `curl` de borrado. El volcado va
 a `scripts/.shalom-probe.json` (ignorado por git, con secretos enmascarados).
 
+### Probado contra la API real (27/07/2026)
+
+`scripts/shalom-probe.mjs` corrió contra la cuenta real y pasó entero: la API key
+global contra el directorio de agencias, el login de Shalom Pro (**60 s**, dentro
+de la ventana esperada), el catálogo de productos y el listado de órdenes. No se
+creó ninguna guía (sin `--create`). Lo que salió de ahí:
+
+- **Los ids de producto de esta cuenta** son `3` (Sobre), `1096` (Caja Paquete
+  XXS), `1090` (XS), `5` (S), `1093` (M) y `2` (L). No coinciden con los de la
+  documentación del proveedor, que es justo por lo que el catálogo se lista desde
+  la cuenta y no se cablea. **Esta operación despacha siempre con el `1096`**, que
+  es el valor a poner como *tipo de paquete por defecto* en Ajustes.
+- **El catálogo repite un id.** `id=2` viene dos veces: «Caja Paquete L» y «Otra
+  Medida». Como el payload solo lleva `product_id`, la API tampoco puede
+  distinguirlos: elegir «Otra Medida» en el modal manda el mismo `2` que «Caja
+  Paquete L», y el resumen muestra el primero de los dos. No afecta mientras el
+  producto por defecto sea el `1096`; si algún día hay que usar el `2`, hay que
+  aclararlo con el proveedor antes.
+- **`GET /readyz` responde 503** mientras `/healthz` responde 200 y todas las
+  rutas reales responden 200. Parece reflejar la disponibilidad de `pro.shalom.pe`
+  aguas arriba y no la del wrapper. No sirve como semáforo de despliegue.
+
 ### Límites conocidos
 
-- **60 requests/minuto** por API key. La búsqueda de agencias rebota 450 ms para
-  no gastarlas tecleando; el cupo restante se lee de las cabeceras
-  `X-RateLimit-*` de cualquier respuesta.
+- **El cupo real es mucho más chico que el documentado.** El proveedor habla de
+  60 requests/minuto, pero las cabeceras `X-RateLimit-*` de la cuenta real
+  mostraron **~15 disponibles**, recuperándose al cambiar de minuto. La búsqueda
+  de agencias rebota 450 ms para no gastarlas tecleando — margen dimensionado
+  contra los 60, así que con 15 conviene no encadenar sondas: dos corridas
+  seguidas pueden chocar contra el techo y fallar como si la key estuviera
+  vencida, que es un síntoma muy confundible. El cupo restante se lee de las
+  cabeceras de cualquier respuesta.
 - **Servicio de cobranza (`collection_service`) no implementado.** Requiere una
   cuenta bancaria registrada en Shalom Pro y en esta operación el cobro va por
   Yape con clave de recojo, que es justamente el flujo que ya existe. `payer`

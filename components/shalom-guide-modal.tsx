@@ -508,8 +508,11 @@ export function ShalomGuideModal({
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                       >
                         <option value="">— elegir —</option>
-                        {products.map((p) => (
-                          <option key={p.id} value={p.id}>
+                        {/* El catálogo de la cuenta repite ids: Shalom devuelve
+                            id=2 para «Caja Paquete L» y para «Otra Medida». El
+                            id no sirve como clave. */}
+                        {products.map((p, i) => (
+                          <option key={`${p.id}-${i}`} value={p.id}>
                             {p.title}
                             {p.content ? ` — ${p.content}` : ""}
                           </option>
