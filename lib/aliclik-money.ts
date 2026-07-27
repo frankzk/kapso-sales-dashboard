@@ -8,9 +8,20 @@
 // cobre S/447 cuando la clienta debe pagar S/298. Pasó de verdad, en la primera
 // guía creada por API.
 //
+// LAS DOS REGLAS DE ALICLIK:
+//   1. El precio unitario admite céntimos.
+//   2. El TOTAL a cobrar tiene que ser un número ENTERO de soles. Es una
+//      restricción de caja: el motorizado cobra en efectivo y no lleva monedas.
+//
+// La segunda regla es más dura de lo que parece. Con una línea de 3 unidades y
+// precios de 2 decimales, los totales alcanzables son múltiplos de 0,03 — y
+// ningún múltiplo de 0,03 con parte decimal cero existe salvo cuando el precio
+// unitario es entero. Es decir: con 3 unidades, el total solo puede ser múltiplo
+// de 3. Para un pedido de S/298 lo más cerca sin pasarse es S/297.
+//
 // La verdad de cuánto se cobra es `orders.total_amount` (el Total de Shopify,
-// ya con descuentos e impuestos). Aquí se ajustan los precios unitarios para que
-// su suma dé exactamente ese total.
+// ya con descuentos e impuestos). Aquí se busca el ENTERO más alto que no lo
+// supere y que sea representable con las cantidades del pedido.
 
 /** Lo mínimo que hace falta de cada línea para repartir el dinero. */
 export interface PricedLine {
@@ -21,12 +32,13 @@ export interface PricedLine {
 export interface ReconcileResult<T> {
   /** Las líneas con el precio unitario ajustado. */
   items: T[];
-  /** Lo que Aliclik va a cobrar con esos precios. Se enseña ANTES de crear. */
+  /** Lo que Aliclik va a cobrar. SIEMPRE un entero de soles. */
   total: number;
   /**
-   * Diferencia contra el total del pedido, en soles. Cero casi siempre; puede
-   * quedar 1 céntimo cuando el total no es divisible entre las unidades (3×
-   * S/99,3333…). No se oculta: se enseña.
+   * Diferencia contra el total del pedido, en soles. Nunca positiva: jamás se
+   * cobra de más. Puede llegar a un par de soles cuando las cantidades no
+   * permiten representar el total exacto. No se oculta: se enseña antes de
+   * crear la guía.
    */
   drift: number;
 }
@@ -38,21 +50,23 @@ export function linesTotal(lines: readonly PricedLine[]): number {
   return round2(lines.reduce((s, l) => s + l.price * l.quantity, 0));
 }
 
+/** Cuántos soles enteros por debajo del total se permite bajar buscando uno representable. */
+const MAX_STEPS_DOWN = 30;
+
 /**
- * Reparte `orderTotal` entre las líneas, proporcionalmente a lo que pesa cada
- * una en el subtotal sin descuento.
+ * Reparte el total del pedido entre las líneas cumpliendo las dos reglas de
+ * Aliclik: precios unitarios con céntimos, total entero.
  *
- * El reparto es proporcional y no a partes iguales para que un pedido con dos
- * productos de precios distintos no acabe con el barato costando lo mismo que
- * el caro — cosa que la clienta ve en la boleta y que descuadra la contabilidad
- * por producto.
- *
- * El céntimo que sobra tras redondear se le echa a la línea más cara, que es
- * donde menos se nota en porcentaje.
+ * ESTRATEGIA. Se prueban totales enteros desde `floor(orderTotal)` hacia abajo.
+ * Para cada candidato se reparte proporcionalmente —para que un producto caro y
+ * uno barato no acaben costando lo mismo, cosa que la clienta ve en la boleta—
+ * y se deja que UNA línea absorba el resto exacto. Se prueba cada línea como
+ * absorbente porque el resto tiene que ser divisible entre su cantidad. El
+ * primer candidato que cuadra gana, así que la pérdida es siempre la mínima.
  *
  * Devuelve `null` si no hay nada que repartir (total desconocido o no positivo,
- * o líneas sin cantidad). Quien llama DEBE bloquear en ese caso: mandar el
- * precio de Shopify tal cual es exactamente el fallo que esto arregla.
+ * líneas sin cantidad, o ningún entero representable). Quien llama DEBE
+ * bloquear: mandar el precio de Shopify tal cual es el fallo que esto arregla.
  */
 export function reconcileToOrderTotal<T extends PricedLine>(
   lines: readonly T[],
@@ -60,42 +74,51 @@ export function reconcileToOrderTotal<T extends PricedLine>(
 ): ReconcileResult<T> | null {
   if (orderTotal == null || !Number.isFinite(orderTotal) || orderTotal <= 0) return null;
   if (!lines.length) return null;
-  const units = lines.reduce((s, l) => s + l.quantity, 0);
-  if (units <= 0) return null;
+  if (lines.some((l) => !Number.isInteger(l.quantity) || l.quantity <= 0)) return null;
 
   const subtotal = linesTotal(lines);
-  // Sin subtotal utilizable no hay proporción posible: se reparte por unidades.
-  const weight = (l: PricedLine) => (subtotal > 0 ? (l.price * l.quantity) / subtotal : l.quantity / units);
+  const units = lines.reduce((s, l) => s + l.quantity, 0);
+  // Peso de cada línea en el reparto. Si no hay subtotal utilizable (todo a
+  // cero), se reparte por unidades.
+  const weight = (l: PricedLine) =>
+    subtotal > 0 ? (l.price * l.quantity) / subtotal : l.quantity / units;
 
-  // Un céntimo es el precio mínimo: un producto a 0 en la boleta de la clienta
-  // parece un regalo y descuadra la devolución si hay que reembolsar.
-  const MIN = 0.01;
-  if (round2(units * MIN) > orderTotal) return null;
+  // Todo en CÉNTIMOS enteros: en soles, 0,1 + 0,2 no da 0,3 y el cuadre se
+  // rompería por un error de coma flotante justo en el sitio donde importa.
+  const MIN_CENTS = 1;
 
-  // Se trunca hacia abajo, no se redondea al más cercano. El redondeo normal
-  // puede pasarse del total (66,6667 → 66,67 × 3 = 200,01) y COBRAR DE MÁS, que
-  // es exactamente el fallo que este archivo existe para impedir. Truncando, el
-  // error solo puede ir a favor de la clienta.
-  const floor2 = (n: number) => Math.floor(round2(n * 100)) / 100;
-  const items = lines.map((l) => ({
-    ...l,
-    price: l.quantity > 0 ? Math.max(MIN, floor2((orderTotal * weight(l)) / l.quantity)) : 0,
-  }));
+  for (let step = 0; step <= MAX_STEPS_DOWN; step++) {
+    const soles = Math.floor(orderTotal) - step;
+    if (soles <= 0) break;
+    const target = soles * 100;
 
-  // Truncar deja céntimos sin repartir. Se devuelven de la línea más cara hacia
-  // abajo, y solo mientras quepan: subir un céntimo el precio unitario cuesta
-  // `quantity` céntimos en el total, así que una línea de 3 unidades no puede
-  // absorber un resto de 1 o 2. Lo que no quepa se queda como `drift`, a la
-  // baja, y la interfaz lo enseña antes de crear la guía.
-  const order = items.map((_, i) => i).sort((a, b) => items[b]!.price - items[a]!.price);
-  for (const i of order) {
-    const line = items[i]!;
-    if (line.quantity <= 0) continue;
-    while (round2(linesTotal(items) + line.quantity * 0.01) <= orderTotal) {
-      items[i] = { ...items[i]!, price: round2(items[i]!.price + 0.01) };
+    for (let absorber = 0; absorber < lines.length; absorber++) {
+      // Precio base de cada línea salvo la absorbente, truncado hacia abajo
+      // para que siempre quede resto que la absorbente pueda tragarse.
+      const cents = new Array<number>(lines.length).fill(MIN_CENTS);
+      let used = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (i === absorber) continue;
+        const l = lines[i]!;
+        cents[i] = Math.max(MIN_CENTS, Math.floor((target * weight(l)) / l.quantity));
+        used += cents[i]! * l.quantity;
+      }
+      const rest = target - used;
+      const q = lines[absorber]!.quantity;
+      // La línea absorbente tiene que poder tragarse el resto EXACTO.
+      if (rest <= 0 || rest % q !== 0) continue;
+      const unit = rest / q;
+      if (unit < MIN_CENTS) continue;
+      cents[absorber] = unit;
+
+      const items = lines.map((l, i) => ({ ...l, price: cents[i]! / 100 }));
+      const total = linesTotal(items);
+      // Cinturón: si por lo que sea no cuadra exacto o se pasa, se descarta este
+      // candidato en vez de crear una guía con el importe mal.
+      if (total !== soles || total > orderTotal) continue;
+      return { items, total, drift: round2(total - orderTotal) };
     }
   }
 
-  const total = linesTotal(items);
-  return { items, total, drift: round2(total - orderTotal) };
+  return null;
 }

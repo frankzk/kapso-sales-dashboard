@@ -207,9 +207,15 @@ export function AliclikGuidePanel({
               {preview.orderTotal != null &&
               Math.abs((preview.collectTotal ?? 0) - preview.orderTotal) > 0.005 ? (
                 <p className="mt-1.5 text-xs text-amber-700">
-                  El total del pedido en Shopify es S/ {preview.orderTotal.toFixed(2)}. La diferencia
-                  es de redondeo: el precio unitario solo admite dos decimales y siempre se ajusta a
-                  la baja, nunca cobrando de más.
+                  En Shopify el pedido son S/ {preview.orderTotal.toFixed(2)}. Aliclik solo cobra
+                  importes enteros, y con esta cantidad de unidades el total exacto no se puede
+                  formar, así que se cobra{" "}
+                  <strong>
+                    S/ {Math.abs((preview.orderTotal ?? 0) - (preview.collectTotal ?? 0)).toFixed(2)}{" "}
+                    menos
+                  </strong>
+                  . Nunca de más. Si quieres cobrar el importe exacto, ajústalo en el panel de
+                  Aliclik después de crear la guía.
                 </p>
               ) : null}
             </div>
