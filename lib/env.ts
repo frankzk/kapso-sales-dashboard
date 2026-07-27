@@ -58,6 +58,13 @@ export const env = {
   //     así que hacen falta dos llaves deliberadas (esta y stores.aliclik_enabled)
   //     para que salga una sola petición.
   aliclikWriteEnabled: () => process.env.ALICLIK_WRITE_ENABLED === "true",
+  //     Por dónde salen las peticiones a Aliclik. `direct` (por defecto) es
+  //     desde la función Node, o sea desde AWS. `edge` las hace pasar por una
+  //     ruta interna en el runtime Edge de Vercel, que sale por otra red — la
+  //     hipótesis para el 403 de Cloudflare, que es lo único que hoy impide
+  //     usar su API. Ver app/api/internal/aliclik-egress/route.ts.
+  aliclikEgress: (): "direct" | "edge" =>
+    process.env.ALICLIK_EGRESS === "edge" ? "edge" : "direct",
 
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---
   shopifyAppApiKey: () => process.env.SHOPIFY_APP_API_KEY ?? "",

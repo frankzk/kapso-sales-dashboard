@@ -277,3 +277,90 @@ describe("Ray ID de Cloudflare", () => {
     expect(msg).not.toContain("Ray ID");
   });
 });
+
+describe("salida por Edge", () => {
+  // Existe porque Cloudflare desafía nuestras peticiones directas (403). El
+  // runtime Edge de Vercel sale por otra red, y esa es la hipótesis que queda.
+  const edgeOpts = (fetchImpl: typeof fetch): AliclikClientOpts => ({
+    apiToken: "tok_123",
+    baseUrl: BASE,
+    fetchImpl,
+    egress: "edge",
+    siteUrl: "https://panel.example",
+    internalSecret: "secreto_interno",
+  });
+
+  it("llama a la ruta interna, no a Aliclik", async () => {
+    const { impl, calls } = stubFetch([{ status: 200, body: { count: 7, page: 1, result: [] } }]);
+    await listProducts(edgeOpts(impl), { limit: 1 });
+    expect(calls[0]!.url).toBe("https://panel.example/api/internal/aliclik-egress");
+    expect(calls[0]!.init.method).toBe("POST");
+  });
+
+  it("manda la ruta con su query, NUNCA el host", async () => {
+    const { impl, calls } = stubFetch([{ status: 200, body: { count: 0, page: 1, result: [] } }]);
+    await listProducts(edgeOpts(impl), { limit: 1, search: "laptop" });
+    const body = JSON.parse(String(calls[0]!.init.body)) as { path: string; method: string };
+    expect(body.path.startsWith("/integration/product/public?")).toBe(true);
+    expect(body.path).toContain("search=laptop");
+    expect(body.method).toBe("GET");
+    // El host se decide en el proxy: si viajara aquí, tendríamos un proxy abierto.
+    expect(body.path).not.toContain(BASE);
+    expect(body.path).not.toContain("http");
+  });
+
+  it("separa el token de Aliclik del secreto de la ruta interna", async () => {
+    const { impl, calls } = stubFetch([{ status: 200, body: { count: 0, page: 1, result: [] } }]);
+    await listProducts(edgeOpts(impl));
+    const h = calls[0]!.init.headers as Record<string, string>;
+    expect(h["x-internal-secret"]).toBe("secreto_interno");
+    expect(h["x-aliclik-authorization"]).toBe("Bearer tok_123");
+    // El token de Aliclik NO debe ir en Authorization: esa cabecera autentica
+    // contra nuestra propia ruta, y confundirlas filtraría el token.
+    expect(h.Authorization).toBeUndefined();
+  });
+
+  it("reenvía el cuerpo de un POST", async () => {
+    const { impl, calls } = stubFetch([{ status: 201, body: { message: "ok" } }]);
+    await cancelOrder(edgeOpts(impl), "ALC1");
+    const body = JSON.parse(String(calls[0]!.init.body)) as { method: string; body: string };
+    expect(body.method).toBe("POST");
+    expect(JSON.parse(body.body)).toEqual({ orderNumber: "ALC1" });
+  });
+
+  it("devuelve los datos de Aliclik igual que la salida directa", async () => {
+    const { impl } = stubFetch([{ status: 200, body: { count: 42, page: 1, result: [] } }]);
+    const res = await listProducts(edgeOpts(impl));
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.count).toBe(42);
+  });
+
+  it("un fallo del PROXY no se confunde con un fallo de Aliclik", async () => {
+    // Lo peor que podría pasar con este experimento: creer que Aliclik rechaza
+    // algo cuando la petición ni salió de nuestra infraestructura.
+    const { impl } = stubFetch([{ status: 401, body: { egressError: "no autorizado" } }]);
+    const res = await listProducts(edgeOpts(impl));
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain("Edge no disponible");
+    expect(res.error).not.toContain("Token de Aliclik");
+  });
+
+  it("sigue reconociendo el muro de Cloudflare a través del proxy", async () => {
+    const { impl } = stubFetch([
+      { status: 403, body: '<!DOCTYPE html><html><title>Just a moment...</title>' },
+    ]);
+    const res = await listProducts(edgeOpts(impl));
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain("Cloudflare");
+  });
+
+  it("por defecto NO usa Edge: la salida directa sigue siendo la normal", async () => {
+    const { impl, calls } = stubFetch([{ status: 200, body: { count: 0, page: 1, result: [] } }]);
+    await listProducts(opts(impl));
+    expect(calls[0]!.url.startsWith(BASE)).toBe(true);
+    expect(calls[0]!.url).not.toContain("aliclik-egress");
+  });
+});

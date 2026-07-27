@@ -722,6 +722,30 @@ ventanas de cancelación estrictas. Sin ambas, el panel cotiza pero no crea.
   en timeout **no la reintentes**: el pedido pudo haberse creado y el cron de
   reconciliación lo vincula solo.
 
+### Si Cloudflare bloquea la conexión
+
+`api.aliclik-dev.com` está detrás de Cloudflare y desafía las peticiones de
+servidor (HTTP 403 con la página "Just a moment"), así que la API nunca llega a
+verlas. Se probó desde `iad1` y desde `gru1` con el mismo resultado.
+
+Queda una hipótesis por descartar: la **clase** de IP. Las dos pruebas salieron
+de centros de datos de AWS, que es lo que Cloudflare puntúa peor. Por eso existe
+`app/api/internal/aliclik-egress/route.ts`, una ruta en runtime **Edge** —otra
+red— por la que se pueden encaminar las llamadas:
+
+- **"Probar conexión"** (Ajustes → Aliclik) prueba **las dos salidas** de un
+  clic y dice cuál funcionó. Es el diagnóstico completo desde el móvil.
+- Si solo funciona la de Edge, poner `ALICLIK_EGRESS=edge` en el entorno para
+  que todo el panel (catálogo, cotización, creación, crons) la use.
+
+La ruta interna **no es un proxy abierto**: el host de destino sale de la
+configuración y nunca de la petición, solo admite rutas `/integration/*`, y
+exige el secreto interno (`CRON_SECRET`). Sin esa última cerradura estaríamos
+ofreciendo a cualquiera un relé para saltarse su propio bloqueo.
+
+Esto no evade nada: no se falsifica ninguna huella ni se resuelve ningún
+desafío. Solo cambia desde qué red sale la petición, igual que elegir la región.
+
 ### Pendiente de confirmar con Aliclik
 
 - URL de **producción** (la documentación solo publica el host de desarrollo) y
