@@ -309,6 +309,54 @@ async function setSyncState(
   );
 }
 
+// Rango de días con rollup pendiente de recalcular, guardado en `sync_state`
+// bajo una fuente sintética (no hace falta migración: la tabla ya está indexada
+// por store_id + source).
+//
+// POR QUÉ HACE FALTA. Las fechas afectadas por una corrida vivían solo en
+// memoria (`affectedDates`). Mientras el cursor de Shopify se guardaba de una
+// vez al final del bucle, eso era seguro por accidente: si la corrida moría a
+// media, el cursor no había avanzado, la siguiente volvía a traer los mismos
+// pedidos y las fechas se recalculaban solas.
+//
+// Al guardar el cursor página a página esa red desaparece: el cursor avanza,
+// pero si la corrida muere antes de llegar al rollup, esos días se quedan con
+// métricas viejas y nadie los vuelve a mirar. Así que las fechas pendientes
+// pasan a ser durables, igual que el cursor.
+const ROLLUP_PENDING_SOURCE = "rollup_pending";
+
+/** Serializa/parsea el rango como `desde..hasta` (dos fechas `YYYY-MM-DD`). */
+export function parseRollupPending(cursor: string | null): { from: string; to: string } | null {
+  if (!cursor) return null;
+  const [from, to] = cursor.split("..");
+  return from && to ? { from, to } : null;
+}
+
+/** Une un conjunto de fechas con el rango pendiente y devuelve el rango nuevo. */
+export function widenRollupPending(
+  current: { from: string; to: string } | null,
+  dates: string[],
+): { from: string; to: string } | null {
+  const all = [...dates, ...(current ? [current.from, current.to] : [])].filter(Boolean).sort();
+  if (!all.length) return null;
+  return { from: all[0]!, to: all[all.length - 1]! };
+}
+
+async function getRollupPending(
+  admin: SupabaseClient,
+  storeId: string,
+): Promise<{ from: string; to: string } | null> {
+  return parseRollupPending(await getSyncCursor(admin, storeId, ROLLUP_PENDING_SOURCE));
+}
+
+async function setRollupPending(
+  admin: SupabaseClient,
+  storeId: string,
+  range: { from: string; to: string } | null,
+): Promise<void> {
+  await setSyncState(admin, storeId, ROLLUP_PENDING_SOURCE, range ? `${range.from}..${range.to}` : null, "ok");
+}
+
 // ---------------------------------------------------------------------------
 // Webhook processing (HMAC + idempotency)
 // ---------------------------------------------------------------------------
@@ -886,11 +934,13 @@ export async function runStoreSync(
 
   // 1) Shopify reconciliation (tag:kapso, bounded by updated_at cursor)
   if (creds.shopify_token && affords("shopify", STAGE_COST_MS.shopify)) {
+    // Fuera del try: el catch necesita saber hasta dónde se llegó para no tirar
+    // el avance (ver abajo).
+    let maxUpdatedAt = await getSyncCursor(admin, storeId, "shopify");
     try {
-      const cursor = await getSyncCursor(admin, storeId, "shopify");
-      const searchQuery = buildKapsoOrdersSearchQuery(cursor);
+      const searchQuery = buildKapsoOrdersSearchQuery(maxUpdatedAt);
       let after: string | null = null;
-      let maxUpdatedAt = cursor;
+      let pending = await getRollupPending(admin, storeId);
       for (let i = 0; i < 50; i++) {
         if (!affordsPage()) break;
         const page = await fetchOrdersPage({
@@ -900,24 +950,43 @@ export async function runStoreSync(
           searchQuery,
           after,
         });
+        const pageDates: string[] = [];
         if (page.orders.length) {
           await upsertOrders(admin, page.orders);
           await linkOrdersToLeads(admin, storeId, page.orders); // order → lead (won)
           report.shopifyOrders += page.orders.length;
           for (const o of page.orders) {
-            if (o.created_at) affectedDates.add(tzParts(o.created_at, creds.timezone).date);
+            if (!o.created_at) continue;
+            const d = tzParts(o.created_at, creds.timezone).date;
+            affectedDates.add(d);
+            pageDates.push(d);
           }
         }
         if (page.maxUpdatedAt && (!maxUpdatedAt || page.maxUpdatedAt > maxUpdatedAt)) {
           maxUpdatedAt = page.maxUpdatedAt;
         }
+
+        // Punto de guardado de la página. El orden importa y es este a
+        // propósito: los pedidos ya están escritos (upsert idempotente), luego
+        // se anota el rollup pendiente y solo al final avanza el cursor. Morir
+        // entre medias siempre deja trabajo repetido, nunca trabajo perdido.
+        const widened = widenRollupPending(pending, pageDates);
+        if (widened && (widened.from !== pending?.from || widened.to !== pending?.to)) {
+          await setRollupPending(admin, storeId, widened);
+          pending = widened;
+        }
+        await setSyncState(admin, storeId, "shopify", maxUpdatedAt, "ok");
+
         if (!page.hasNextPage) break;
         after = page.endCursor;
       }
-      await setSyncState(admin, storeId, "shopify", maxUpdatedAt, "ok");
     } catch (e: any) {
       report.errors.push(`shopify: ${e.message}`);
-      await setSyncState(admin, storeId, "shopify", null, "error", e.message);
+      // Se conserva el cursor, NO se pone a null. Ponerlo a null convertía
+      // cualquier error pasajero de Shopify en un re-escaneo completo del
+      // histórico con tag:kapso en la corrida siguiente — lento, y capaz de
+      // dejar sin tiempo a todo lo demás.
+      await setSyncState(admin, storeId, "shopify", maxUpdatedAt, "error", e.message);
     }
   }
 
@@ -930,11 +999,11 @@ export async function runStoreSync(
   //     try/catch propio: si esta pasada falla, la sincronización del bot y de
   //     los leads sigue funcionando igual.
   if (creds.shopify_token && affords("shopify_all", STAGE_COST_MS.shopifyAll)) {
+    // Fuera del try, igual que en la pasada anterior: el catch conserva el avance.
+    let maxUpdatedAt = await getSyncCursor(admin, storeId, "shopify_all");
     try {
-      const cursor = await getSyncCursor(admin, storeId, "shopify_all");
-      const searchQuery = buildAllOrdersSearchQuery(cursor, env.ordersSyncFrom());
+      const searchQuery = buildAllOrdersSearchQuery(maxUpdatedAt, env.ordersSyncFrom());
       let after: string | null = null;
-      let maxUpdatedAt = cursor;
       const touched: string[] = [];
       for (let i = 0; i < 50; i++) {
         if (!affordsPage()) break;
@@ -953,10 +1022,12 @@ export async function runStoreSync(
         if (page.maxUpdatedAt && (!maxUpdatedAt || page.maxUpdatedAt > maxUpdatedAt)) {
           maxUpdatedAt = page.maxUpdatedAt;
         }
+        // Esta pasada no alimenta rollups (solo el Master, que se reconcilia
+        // leyendo la base), así que el punto de guardado es solo el cursor.
+        await setSyncState(admin, storeId, "shopify_all", maxUpdatedAt, "ok");
         if (!page.hasNextPage) break;
         after = page.endCursor;
       }
-      await setSyncState(admin, storeId, "shopify_all", maxUpdatedAt, "ok");
       // Refresca el Master para los pedidos que acaba de tocar esta pasada.
       for (const batch of chunk(touched, 200)) {
         const { data } = await admin
@@ -971,7 +1042,10 @@ export async function runStoreSync(
       }
     } catch (e: any) {
       report.errors.push(`shopify_all: ${e.message}`);
-      await setSyncState(admin, storeId, "shopify_all", null, "error", e.message);
+      // Se conserva el cursor: ver la nota de la pasada tag:kapso. Aquí importa
+      // aún más, porque sin cursor la búsqueda arranca en ORDERS_SYNC_FROM y
+      // arrastra todo el histórico de la tienda.
+      await setSyncState(admin, storeId, "shopify_all", maxUpdatedAt, "error", e.message);
     }
   }
 
@@ -986,6 +1060,7 @@ export async function runStoreSync(
     try {
       const floor = new Date(Date.now() - DRAFT_OPEN_WINDOW_DAYS * 86_400_000).toISOString();
       let maxUpdatedAt: string | null = null;
+      let pending = await getRollupPending(admin, storeId);
       for (const status of ["open", "completed"] as const) {
         const searchQuery = buildDraftOrdersSearchQuery(status, floor);
         let after: string | null = null;
@@ -998,6 +1073,7 @@ export async function runStoreSync(
             searchQuery,
             after,
           });
+          const pageDates: string[] = [];
           if (page.draftOrders.length) {
             await upsertDraftOrders(admin, page.draftOrders);
             // Capture COD-recovered orders (not tag:kapso) so their revenue counts;
@@ -1006,11 +1082,26 @@ export async function runStoreSync(
               domain: creds.shopify_domain,
               token: creds.shopify_token,
             });
-            for (const iso of recovered) affectedDates.add(tzParts(iso, creds.timezone).date);
+            for (const iso of recovered) {
+              const d = tzParts(iso, creds.timezone).date;
+              affectedDates.add(d);
+              pageDates.push(d);
+            }
             report.draftOrders += page.draftOrders.length;
           }
           if (page.maxUpdatedAt && (!maxUpdatedAt || page.maxUpdatedAt > maxUpdatedAt)) {
             maxUpdatedAt = page.maxUpdatedAt;
+          }
+          // Estas fechas se anotan como pendientes aunque esta pasada reescanee
+          // la ventana entera: un borrador ya enlazado NO vuelve a salir en
+          // `recovered`, así que si la corrida muere antes del rollup, un
+          // reescaneo no las recupera. El cursor de esta pasada, en cambio, no
+          // se guarda por página porque no se usa como filtro (la búsqueda va
+          // por `floor`): guardarlo antes no adelantaría nada.
+          const widened = widenRollupPending(pending, pageDates);
+          if (widened && (widened.from !== pending?.from || widened.to !== pending?.to)) {
+            await setRollupPending(admin, storeId, widened);
+            pending = widened;
           }
           if (!page.hasNextPage) break;
           after = page.endCursor;
@@ -1025,9 +1116,11 @@ export async function runStoreSync(
 
   // 2) Kapso pull (conversations since last_active cursor)
   if (creds.kapso_api_key && affords("kapso", STAGE_COST_MS.kapso)) {
+    // Fuera del try: el catch conserva el avance en vez de tirarlo.
+    let maxTs = await getSyncCursor(admin, storeId, "kapso");
     try {
       const k = { apiKey: creds.kapso_api_key };
-      const cursor = await getSyncCursor(admin, storeId, "kapso");
+      const cursor = maxTs;
       const convs = await listAllConversations(k, {
         // All of the store's WhatsApp numbers (not just the send-from number) —
         // see the note in syncStoreLeads. Keeps both API + Business numbers synced.
@@ -1054,16 +1147,27 @@ export async function runStoreSync(
         if (tErr) break; // columns missing (migration pending) or transient — stop this run
       }
 
-      let maxTs = cursor;
+      const convDates: string[] = [];
       for (const r of rows) {
         const ts = r.last_message_at ?? r.started_at;
         if (ts && (!maxTs || ts > maxTs)) maxTs = ts;
-        if (r.started_at) affectedDates.add(tzParts(r.started_at, creds.timezone).date);
+        if (r.started_at) {
+          const d = tzParts(r.started_at, creds.timezone).date;
+          affectedDates.add(d);
+          convDates.push(d);
+        }
       }
+      // Durable antes de avanzar el cursor, por el mismo motivo que en Shopify:
+      // pasado este punto, morir antes del rollup dejaría estos días sin
+      // recalcular y sin nadie que vuelva a mirarlos.
+      const widened = widenRollupPending(await getRollupPending(admin, storeId), convDates);
+      if (widened) await setRollupPending(admin, storeId, widened);
       await setSyncState(admin, storeId, "kapso", maxTs, "ok");
     } catch (e: any) {
       report.errors.push(`kapso: ${e.message}`);
-      await setSyncState(admin, storeId, "kapso", null, "error", e.message);
+      // Se conserva el cursor: sin él, `lastActiveAfter` queda vacío y la
+      // corrida siguiente se trae TODAS las conversaciones de la tienda.
+      await setSyncState(admin, storeId, "kapso", maxTs, "error", e.message);
     }
   }
 
@@ -1221,12 +1325,20 @@ export async function runStoreSync(
   }
 
   // Recompute rollups for every touched day in one range call.
-  // Sin guarda de presupuesto a propósito: ver TAIL_RESERVE_MS. Estas fechas no
-  // sobreviven a la corrida, así que o se recalculan ahora o no se recalculan.
-  if (affectedDates.size) {
-    const sorted = [...affectedDates].sort();
+  //
+  // Sin guarda de presupuesto a propósito: ver TAIL_RESERVE_MS.
+  //
+  // El rango cubre las fechas de ESTA corrida más las que dejó pendientes una
+  // corrida anterior que murió antes de llegar aquí. Es lo que hace que guardar
+  // el cursor página a página sea seguro: el avance del cursor y la deuda de
+  // rollup son ahora igual de durables, así que una no puede adelantar a la
+  // otra.
+  const rollupRange = widenRollupPending(await getRollupPending(admin, storeId), [...affectedDates]);
+  if (rollupRange) {
     try {
-      await recomputeRollups(admin, storeId, sorted[0]!, sorted[sorted.length - 1]!);
+      await recomputeRollups(admin, storeId, rollupRange.from, rollupRange.to);
+      // Solo se salda la deuda si el recálculo salió bien.
+      await setRollupPending(admin, storeId, null);
     } catch (e: any) {
       report.errors.push(`rollups: ${e.message}`);
     }

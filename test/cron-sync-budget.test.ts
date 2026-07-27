@@ -139,14 +139,24 @@ describe("runStoreSync · corrida sin presupuesto", () => {
     timezone: "America/Lima",
   };
 
+  // Fake mínimo pero completo: además de la tienda tiene que servir la lectura
+  // de `sync_state`, porque el cierre de la corrida consulta la deuda de rollup
+  // aunque no se haya ingerido nada — una corrida sin presupuesto todavía debe
+  // poder saldar lo que dejó pendiente una anterior.
   const admin = {
-    from: (table: string) => ({
-      select: () => ({
-        eq: () => ({
-          single: async () => (table === "stores" ? { data: storeRow, error: null } : { data: null, error: null }),
-        }),
-      }),
-    }),
+    from: (table: string) => {
+      const chain: Record<string, unknown> = {};
+      const self = () => chain;
+      Object.assign(chain, {
+        select: self,
+        eq: self,
+        match: self,
+        upsert: self,
+        single: async () => (table === "stores" ? { data: storeRow, error: null } : { data: null, error: null }),
+        maybeSingle: async () => ({ data: null, error: null }),
+      });
+      return chain;
+    },
   } as any;
 
   it("sale ordenada: anota las etapas, marca parcial y NO toca la red", async () => {
