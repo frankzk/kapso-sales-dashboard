@@ -50,7 +50,13 @@ export interface StoreSettingsInput {
   meta_access_token?: string;
   /** API key de Anthropic de esta tienda (lectura de comprobantes Yape). */
   anthropic_api_key?: string;
-  // Tanders (0054): usuario + contraseña de la cuenta y almacén de origen. La
+  /** Bearer token de la API de integración de Aliclik. */
+  aliclik_api_token?: string;
+  /** Secreto propio del webhook de Aliclik (su API no firma sus avisos). */
+  aliclik_webhook_secret?: string;
+  /** Interruptor por tienda de la creación de guías en Aliclik. */
+  aliclik_enabled?: string | boolean;
+  // Tanders (0058): usuario + contraseña de la cuenta y almacén de origen. La
   // contraseña es un secreto; el resto es configuración normal.
   tanders_email?: string;
   tanders_password?: string;
@@ -174,7 +180,19 @@ export function buildStoreUpdate(
   const anthropic = clean(input.anthropic_api_key);
   if (anthropic) patch.anthropic_api_key_enc = encrypt(anthropic, keyOverride);
 
-  // Tanders (0054). Las coordenadas del origen solo se aplican si parsean a un
+  // Aliclik (0054): token y secreto de webhook siguen la convención de secretos
+  // (en blanco = no lo cambies). El interruptor es un toggle real, como
+  // `browse_template_enabled`, porque tiene que poder APAGARSE.
+  const aliclikToken = clean(input.aliclik_api_token);
+  if (aliclikToken) patch.aliclik_api_token_enc = encrypt(aliclikToken, keyOverride);
+  const aliclikWebhook = clean(input.aliclik_webhook_secret);
+  if (aliclikWebhook) patch.aliclik_webhook_secret_enc = encrypt(aliclikWebhook, keyOverride);
+  if (input.aliclik_enabled !== undefined) {
+    patch.aliclik_enabled =
+      input.aliclik_enabled === true || input.aliclik_enabled === "true";
+  }
+
+  // Tanders (0058). Las coordenadas del origen solo se aplican si parsean a un
   // número válido: una coordenada rota mandaría a todos los repartidores a
   // recoger el paquete a otro lado.
   const tandersEmail = clean(input.tanders_email);

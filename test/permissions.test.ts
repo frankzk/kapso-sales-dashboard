@@ -82,3 +82,35 @@ describe("hasPermission / roleLabel", () => {
     expect(roleLabel([])).toBe("Equipo");
   });
 });
+
+describe("permisos de Aliclik", () => {
+  it("owner y admin pueden crear, cancelar y gestionar el catálogo", () => {
+    for (const role of ["owner", "admin"]) {
+      const perms = permissionsFor([role]);
+      expect(perms.has("aliclik.create_guide")).toBe(true);
+      expect(perms.has("aliclik.cancel_guide")).toBe(true);
+      expect(perms.has("aliclik.manage_catalog")).toBe(true);
+    }
+  });
+
+  it("vendedora crea guías pero NO cancela ni toca el catálogo", () => {
+    const perms = permissionsFor(["vendedora"]);
+    // Crear guías es su trabajo.
+    expect(perms.has("aliclik.create_guide")).toBe(true);
+    // Cancelar tiene ventana y el catálogo es dato maestro compartido.
+    expect(perms.has("aliclik.cancel_guide")).toBe(false);
+    expect(perms.has("aliclik.manage_catalog")).toBe(false);
+  });
+
+  it("viewer no crea guías", () => {
+    expect(permissionsFor(["viewer"]).has("aliclik.create_guide")).toBe(false);
+  });
+
+  it("se le puede revocar a una vendedora concreta sin tocar su rol", () => {
+    const perms = permissionsFor(["vendedora"], [
+      { permission: "aliclik.create_guide", granted: false },
+    ]);
+    expect(perms.has("aliclik.create_guide")).toBe(false);
+    expect(perms.has("master.edit")).toBe(true);
+  });
+});

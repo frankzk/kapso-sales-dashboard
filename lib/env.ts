@@ -47,6 +47,18 @@ export const env = {
   },
   yapeVisionEnabled: () => Boolean(process.env.ANTHROPIC_API_KEY),
 
+  // --- Aliclik: API de integración (crear guías desde el Master) ---
+  //     La documentación solo publica el host de DESARROLLO, así que la base es
+  //     obligatoriamente configurable: pasar a producción no puede exigir un
+  //     redespliegue de código.
+  aliclikApiBase: () =>
+    (process.env.ALICLIK_API_BASE ?? "https://api.aliclik-dev.com").replace(/\/$/, ""),
+  //     Interruptor global de ESCRITURA hacia Aliclik. Apagado por defecto:
+  //     crear una guía es irreversible y con ventanas de cancelación estrictas,
+  //     así que hacen falta dos llaves deliberadas (esta y stores.aliclik_enabled)
+  //     para que salga una sola petición.
+  aliclikWriteEnabled: () => process.env.ALICLIK_WRITE_ENABLED === "true",
+
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---
   shopifyAppApiKey: () => process.env.SHOPIFY_APP_API_KEY ?? "",
   shopifyAppApiSecret: () => process.env.SHOPIFY_APP_API_SECRET ?? "",

@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card, cn, EmptyState } from "@/components/ui";
+import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { ChecklistFilter } from "@/components/filters";
 import { PickupKeyPanel } from "@/components/pickup-key-panel";
 import { TandersGuideModal } from "@/components/tanders-guide-modal";
@@ -127,6 +128,8 @@ export function OrdersMasterBoard({
   rows,
   canEdit,
   canOverride,
+  canCreateGuide,
+  canCreateTandersGuide,
 }: {
   stores: StoreSummary[];
   view: MasterView;
@@ -134,6 +137,8 @@ export function OrdersMasterBoard({
   rows: OrderMasterRow[];
   canEdit: boolean;
   canOverride: boolean;
+  canCreateGuide: boolean;
+  canCreateTandersGuide: boolean;
 }) {
   const router = useRouter();
   const [filters, setFilters] = useState<MasterFilters>(emptyFilters);
@@ -490,6 +495,8 @@ export function OrdersMasterBoard({
           orderId={openId}
           canEdit={canEdit}
           canOverride={canOverride}
+          canCreateGuide={canCreateGuide}
+          canCreateTandersGuide={canCreateTandersGuide}
           storeName={storeName}
           onClose={() => setOpenId(null)}
           onSaved={() => router.refresh()}
@@ -848,6 +855,8 @@ function OrderDrawer({
   orderId,
   canEdit,
   canOverride,
+  canCreateGuide,
+  canCreateTandersGuide,
   storeName,
   onClose,
   onSaved,
@@ -855,6 +864,8 @@ function OrderDrawer({
   orderId: string;
   canEdit: boolean;
   canOverride: boolean;
+  canCreateGuide: boolean;
+  canCreateTandersGuide: boolean;
   storeName: (id: string) => string;
   onClose: () => void;
   onSaved: () => void;
@@ -981,7 +992,7 @@ function OrderDrawer({
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Couriers y guías ({detail.guides.length})
                 </h3>
-                {canEdit && (
+                {canCreateTandersGuide && !detail.row.guide_code && (
                   <button
                     onClick={() => setTandersOpen(true)}
                     className="ml-auto rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
@@ -1057,6 +1068,19 @@ function OrderDrawer({
 
             {usesPickupKeyFlow(detail.row.current_courier, detail.row.shipping_mode) && (
               <PickupKeyPanel orderId={orderId} onChanged={onSaved} />
+            )}
+
+            {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
+                una. En cuanto existe, el seguimiento vive en Envíos. */}
+            {canCreateGuide && !detail.row.guide_code && (
+              <AliclikGuidePanel
+                orderId={orderId}
+                hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
+                onCreated={() => {
+                  void reload();
+                  onSaved();
+                }}
+              />
             )}
 
             {canEdit ? (

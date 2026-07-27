@@ -2425,7 +2425,7 @@ grant select, insert, update, delete on product_costs    to authenticated;
 grant select, insert, update, delete on additional_costs to authenticated;
 grant all privileges on cost_tariffs, product_costs, additional_costs to service_role;
 
--- ---- 0054 ----
+-- ---- 0058 ----
 -- ============================================================================
 -- 0054_tanders.sql — Tanders como courier propio de Lima.
 --

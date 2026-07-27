@@ -79,6 +79,8 @@ roles and the `auth` schema, so it just works.
    | `NEXT_PUBLIC_SITE_URL` | `https://<your-vercel-domain>` |
    | `SHOPIFY_API_VERSION` | `2025-01` (optional) |
    | `KAPSO_API_BASE` | `https://api.kapso.ai/platform/v1` (optional) |
+   | `ALICLIK_API_BASE` | `https://api.aliclik-dev.com` (optional; **pon la de producción cuando Aliclik la entregue**) |
+   | `ALICLIK_WRITE_ENABLED` | `false` por defecto. `true` habilita CREAR guías en Aliclik |
 
    `DATABASE_URL` is only needed for migrations; you don't have to add it to
    Vercel.
@@ -86,6 +88,12 @@ roles and the `auth` schema, so it just works.
    `Authorization: Bearer $CRON_SECRET`:
    - `/api/cron/sync` — every 5 min (reconciliation + ops snapshots).
    - `/api/cron/telegram-summary` — daily 13:00 UTC (per-store daily summary).
+   - `/api/cron/aliclik-catalog` — diario 09:00 UTC. Refresca el espejo del
+     catálogo de Aliclik (EAN, stock por almacén, agencias Shalom). Solo lectura.
+   - `/api/cron/aliclik-reconcile` — cada 20 min. Red de seguridad del webhook de
+     Aliclik, que llega **sin firma y sin garantía de entrega**: relee los
+     pedidos de los últimos 14 días y resuelve las creaciones que se fueron en
+     timeout. Si el webhook falla, un estado tarda como mucho un ciclo.
    - `/api/cron/backup` — daily 08:00 UTC (~03:00 Lima). Snapshots the
      dashboard-native tables (`leads`, `lead_calls`, `shipment_calls`) to CSV in
      the private Supabase Storage bucket `db-backups` (auto-created, keeps the
@@ -573,7 +581,7 @@ reemplaza. La diferencia es la dirección del flujo: los otros entran por report
 (un Excel que se sube), Tanders **sale** — se le crea el pedido por API desde el
 drawer del Master y devuelve el código de guía.
 
-- **Needs migration 0054** (`stores.tanders_*`, `shipments.label_url`,
+- **Needs migration 0058** (`stores.tanders_*`, `shipments.label_url`,
   `shipments.tanders_raw`).
 - Se configura en **Ajustes de la tienda → Tanders**: usuario, contraseña y el
   almacén de origen (dirección + latitud + longitud). Tanders **no emite API
@@ -645,3 +653,62 @@ drawer del Master y devuelve el código de guía.
   third-party store owners.**
 - Cron is protected by `CRON_SECRET`; ingestion writes via the service role.
 - RLS restricts every read to the caller's accessible stores.
+
+## Aliclik — crear guías desde el Master
+
+Permite crear el pedido en Aliclik (contraentrega) desde `/dashboard/pedidos` en
+vez de cargarlo a mano en su panel, y recibir sus cambios de estado.
+
+**Alta.** Aliclik entrega el token tras un proceso de alta por correo (ver su
+documentación). Es un Bearer token por integración.
+
+**Configuración**, en Ajustes → «Aliclik · crear guías por API»:
+
+1. Pega el token en «Rotar credenciales» → *Token de integración de Aliclik*.
+2. «Probar conexión» — solo lectura, confirma token y host.
+3. «Sincronizar catálogo» — trae EAN, stock y almacén, y auto-mapea los SKU de
+   Shopify que coinciden exactamente. Los que no, se mapean a mano.
+4. Genera el secreto de webhook y pega la URL resultante en «Webhook de
+   notificaciones» del panel de Aliclik.
+5. Pon el interruptor «Crear guías en Aliclik» en *Habilitado*.
+6. En el entorno, `ALICLIK_WRITE_ENABLED=true`.
+
+**Hacen falta las dos llaves (5 y 6)**: crear una guía es irreversible y con
+ventanas de cancelación estrictas. Sin ambas, el panel cotiza pero no crea.
+
+### Lo que hay que saber antes de encenderlo
+
+- **Las coordenadas son el cuello de botella.** Aliclik exige `lat`/`lng` para
+  cotizar y crear, y Shopify no las entrega. En la base de producción, **ninguno**
+  de los pedidos pendientes sin guía tenía coordenada. El panel las pide pegando
+  el enlace de Google Maps que manda la clienta. Un enlace acortado
+  (`maps.app.goo.gl`) no sirve: hay que abrirlo y copiar la URL larga.
+- **La cotización detecta direcciones mal ubicadas.** Muestra el distrito que
+  Aliclik deduce del pin junto al nuestro; si no coinciden, el reparto irá donde
+  apunta el pin. Cotizar es gratis y no escribe nada: conviene hacerlo en lote
+  antes de encender la creación, para medir cuántos pedidos son creables.
+- **Cancelar tiene una trampa.** `POST /order/cancel` responde 201 aunque NO
+  cancele: si el pedido no está confirmado, Aliclik solo le añade una nota. El
+  panel lo distingue y lo muestra en ámbar, nunca como éxito.
+- **El webhook no viene firmado.** Aliclik no define HMAC ni cabecera de
+  autenticación, así que el secreto de la URL es la única barrera. Además, el
+  aviso se trata como disparador y no como dato: al recibirlo se relee el estado
+  con `GET /integration/order`, cuyo `updatedAt` protege del desorden que la
+  propia documentación advierte.
+- **Dos identificadores por envío.** La API devuelve `ALC000…` y el Excel trae
+  `AUR5X…` para el mismo paquete. La guía se crea con el `ALC…` provisional y
+  adopta el `AUR5X…` cuando llega el reporte, sobre la misma fila. Por eso no
+  aparecen guías duplicadas.
+- **Un intento vivo por pedido.** Un doble clic, dos operadoras o un reintento
+  chocan contra un índice único antes de llegar a Aliclik. Si una creación se va
+  en timeout **no la reintentes**: el pedido pudo haberse creado y el cron de
+  reconciliación lo vincula solo.
+
+### Pendiente de confirmar con Aliclik
+
+- URL de **producción** (la documentación solo publica el host de desarrollo) y
+  si el token difiere entre entornos.
+- Si `GET /integration/order` o el Excel exponen el código `AUR5X` de un pedido
+  creado por API: hoy la reconciliación se apoya en teléfono + nº de pedido.
+- Si `products[].price` es unitario o subtotal de línea.
+- Límites de cuota, y si el webhook admite firma o IPs fijas.

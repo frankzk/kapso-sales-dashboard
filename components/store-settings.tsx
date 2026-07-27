@@ -7,12 +7,15 @@ import { Card, Section, SimpleTable } from "@/components/ui";
 import { STORE_STATUSES } from "@/lib/store-settings";
 import type { MetaAdAccount, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
+  generateAliclikWebhookSecret,
   generateKapsoWebhookSecret,
   listStoreMetaAdAccounts,
   reRegisterWebhooks,
   saveMetaAdAccounts,
   sendTelegramTest,
+  syncAliclikCatalogNow,
   syncNow,
+  testAliclikConnection,
   updateStore,
   type SettingsState,
 } from "@/app/dashboard/[storeId]/settings/actions";
@@ -52,6 +55,7 @@ export interface StoreSettingsData {
     cart_seq_hour_end: number;
     telegram_chat_id: string | null;
     anthropic_model: string | null;
+    aliclik_enabled: boolean;
     tanders_email: string | null;
     tanders_origin_address: string | null;
     tanders_origin_lat: number | null;
@@ -67,6 +71,8 @@ export interface StoreSettingsData {
     telegramToken: boolean;
     metaToken: boolean;
     anthropicKey: boolean;
+    aliclikToken: boolean;
+    aliclikWebhookSecret: boolean;
     tandersPassword: boolean;
   };
   oauthAvailable: boolean;
@@ -162,6 +168,14 @@ export function StoreSettings({
       </Section>
 
       <KapsoWebhookSection siteUrl={data.siteUrl} storeId={s.id} hasSecret={data.has.kapsoWebhookSecret} />
+
+      <AliclikSection
+        siteUrl={data.siteUrl}
+        storeId={s.id}
+        hasToken={data.has.aliclikToken}
+        hasSecret={data.has.aliclikWebhookSecret}
+        enabled={s.aliclik_enabled}
+      />
 
       <SettingsForm data={data} />
 
@@ -269,6 +283,161 @@ export function StoreSettings({
         </Card>
       </Section>
     </div>
+  );
+}
+
+
+/**
+ * Aliclik: token de integración, webhook de estados e interruptor de escritura.
+ *
+ * El webhook de Aliclik NO viene firmado —su documentación no define ni HMAC ni
+ * cabecera de autenticación— así que el secreto en la URL es la única barrera.
+ * De ahí que se acuñe igual que el de Kapso y se revele una sola vez.
+ */
+function AliclikSection({
+  siteUrl,
+  storeId,
+  hasToken,
+  hasSecret,
+  enabled,
+}: {
+  siteUrl: string;
+  storeId: string;
+  hasToken: boolean;
+  hasSecret: boolean;
+  enabled: boolean;
+}) {
+  const [secretState, secretAction, secretPending] = useActionState(
+    generateAliclikWebhookSecret,
+    initial,
+  );
+  const [testState, testAction, testPending] = useActionState(testAliclikConnection, initial);
+  const [syncState, syncAction, syncPending] = useActionState(syncAliclikCatalogNow, initial);
+  const revealed = secretState.aliclikSecret ?? null;
+  const url = revealed
+    ? `${siteUrl}/api/webhooks/aliclik/${storeId}?secret=${revealed}`
+    : `${siteUrl}/api/webhooks/aliclik/${storeId}?secret=${
+        hasSecret ? "<TU_SECRETO_DE_ESTA_TIENDA>" : "<GENERA_EL_SECRETO_ABAJO>"
+      }`;
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <Section
+      title="Aliclik · crear guías por API"
+      subtitle="Permite crear el pedido en Aliclik desde el Master, en vez de cargarlo a mano en su panel. El token lo entrega el equipo de Aliclik tras el alta como integrador."
+    >
+      <Card>
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm">
+              {hasToken ? (
+                <span className="font-medium text-emerald-700">✓ Token configurado</span>
+              ) : (
+                <span className="font-medium text-amber-700">⚠ Sin token de Aliclik</span>
+              )}
+              <span className="ml-3 text-slate-500">
+                {enabled ? "Creación de guías ACTIVADA" : "Creación de guías desactivada"}
+              </span>
+            </p>
+            <div className="flex gap-2">
+              <form action={testAction}>
+                <input type="hidden" name="store_id" value={storeId} />
+                <button
+                  type="submit"
+                  disabled={testPending || !hasToken}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {testPending ? "Probando…" : "Probar conexión"}
+                </button>
+              </form>
+              <form action={syncAction}>
+                <input type="hidden" name="store_id" value={storeId} />
+                <button
+                  type="submit"
+                  disabled={syncPending || !hasToken}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {syncPending ? "Sincronizando…" : "Sincronizar catálogo"}
+                </button>
+              </form>
+            </div>
+          </div>
+
+          {testState.error ? <p className="text-sm text-rose-600">{testState.error}</p> : null}
+          {testState.notice ? <p className="text-sm text-emerald-700">{testState.notice}</p> : null}
+          {syncState.error ? <p className="text-sm text-rose-600">{syncState.error}</p> : null}
+          {syncState.notice ? <p className="text-sm text-emerald-700">{syncState.notice}</p> : null}
+
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+            <p className="font-medium text-slate-700">Dos llaves para escribir en Aliclik</p>
+            <p className="mt-1">
+              Crear una guía es irreversible y con ventanas de cancelación estrictas, así que hacen
+              falta las dos: el interruptor de esta tienda (abajo, en «Rotar credenciales») y la
+              variable de entorno <code>ALICLIK_WRITE_ENABLED=true</code>. Sin ambas, el panel cotiza
+              pero no crea.
+            </p>
+          </div>
+
+          <div className="border-t border-slate-200 pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm">
+                {hasSecret ? (
+                  <span className="font-medium text-emerald-700">✓ Webhook con secreto propio</span>
+                ) : (
+                  <span className="font-medium text-amber-700">
+                    ⚠ Sin secreto de webhook — genera uno antes de pegar la URL en Aliclik
+                  </span>
+                )}
+              </p>
+              <form action={secretAction}>
+                <input type="hidden" name="store_id" value={storeId} />
+                <button
+                  type="submit"
+                  disabled={secretPending}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {secretPending ? "Generando…" : hasSecret ? "Regenerar secreto" : "Generar secreto"}
+                </button>
+              </form>
+            </div>
+
+            {secretState.error ? (
+              <p className="mt-2 text-sm text-rose-600">{secretState.error}</p>
+            ) : null}
+
+            {revealed ? (
+              <div className="mt-3 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-900">
+                <p className="font-semibold">Secreto generado. Cópialo ahora — no se vuelve a mostrar.</p>
+                <code className="mt-1 block break-all rounded bg-white px-2 py-1 text-emerald-800">
+                  {revealed}
+                </code>
+              </div>
+            ) : null}
+
+            <div className="mt-3 flex flex-wrap items-stretch gap-2">
+              <code className="min-w-0 flex-1 break-all rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                {url}
+              </code>
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard.writeText(url);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1500);
+                }}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                {copied ? "Copiado" : "Copiar"}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              Pégala en «Webhook de notificaciones» del panel de Aliclik. Aliclik no firma sus avisos,
+              así que este secreto es lo único que impide que un tercero inyecte cambios de estado.
+            </p>
+          </div>
+        </div>
+      </Card>
+    </Section>
   );
 }
 
@@ -837,6 +1006,24 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
             teclearlo. Cada tienda usa <strong>su propia clave</strong>, así que el gasto de cada una
             es independiente.
           </p>
+          <SecretField name="aliclik_api_token" label="Token de integración de Aliclik" set={data.has.aliclikToken} />
+          <div>
+            <label className={labelCls} htmlFor="aliclik_enabled">
+              Crear guías en Aliclik
+              <span className="ml-1 text-xs text-slate-500">
+                · necesita además ALICLIK_WRITE_ENABLED
+              </span>
+            </label>
+            <select
+              id="aliclik_enabled"
+              name="aliclik_enabled"
+              defaultValue={s.aliclik_enabled ? "true" : "false"}
+              className={inputCls}
+            >
+              <option value="false">Deshabilitado</option>
+              <option value="true">Habilitado</option>
+            </select>
+          </div>
           <SecretField
             name="anthropic_api_key"
             label="API key de Anthropic"

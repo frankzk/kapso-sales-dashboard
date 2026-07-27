@@ -11,6 +11,12 @@ import { matchShipment, type MatchResult, type OrderCandidate } from "./shipment
 import { categoryOf, isPending, maxDeliveryDate, reconcileDeliveryStatus } from "./shipments";
 import { evaluateFenix, type FenixStockRow } from "./fenix";
 import { recomputeOrderMasterSafe } from "./order-master";
+import {
+  isProvisionalGuideCode,
+  reconcileAliclikApiGuides,
+  type ApiCreatedGuide,
+  type IncomingReportRow,
+} from "./aliclik-reconcile";
 
 // Existing shipment fields we need to reconcile a re-import against (so we don't
 // reset progress the team already made). See reconcileDeliveryStatus + the
@@ -125,6 +131,21 @@ export async function ingestAliclikReport(
       parsed: row,
     });
   }
+
+  // 4a-bis) PROMOCIÓN DE GUÍAS CREADAS POR API.
+  //
+  // Una guía creada desde el Master (0054) lleva de momento el `orderNumber` de
+  // Aliclik ("ALC000…") como `guide_code`, porque al crearla es el único código
+  // que existe. Este mismo envío aparece ahora en el reporte con su código
+  // definitivo "AUR5X…". Sin este paso, el upsert por (courier, guide_code)
+  // crearía una SEGUNDA fila: dos guías para un solo envío, y el Master contando
+  // dos couriers y dos intentos para el mismo pedido.
+  //
+  // Renombrar ANTES del upsert hace que `fetchExistingShipments` encuentre la
+  // fila bajo su código nuevo y la FUSIONE, conservando sus llamadas, su vínculo
+  // al pedido, su reclamación y su historial. El UPDATE no puede chocar porque
+  // la fila AUR5X todavía no existe.
+  await promoteApiCreatedGuides(admin, accessibleStoreIds, incomingByGuide);
 
   // 4b) read existing shipments for these guides, then build merged payloads.
   //   - delivery_status: reconciled (only ever moves forward; ENTREGADO/DEVUELTO
@@ -349,6 +370,71 @@ async function fetchOrderCandidates(
     push(data as OrderCandidate[] | null);
   }
   return out;
+}
+
+/**
+ * Renombra las guías creadas por API que este reporte trae ya con su código
+ * definitivo. La DECISIÓN es pura y vive en lib/aliclik-reconcile.ts; aquí solo
+ * se leen candidatas y se aplican las promociones que aquella autoriza.
+ *
+ * Deliberadamente silencioso ante un fallo: no poder promover produce, como
+ * mucho, una guía duplicada que el equipo puede unir a mano — y eso es mucho
+ * menos grave que abortar la importación entera de un reporte.
+ */
+async function promoteApiCreatedGuides(
+  admin: SupabaseClient,
+  storeIds: string[],
+  incoming: Map<string, { row: ParsedShipmentRow }>,
+): Promise<void> {
+  if (!incoming.size || !storeIds.length) return;
+
+  const { data, error } = await admin
+    .from("shipments")
+    .select("id,store_id,guide_code,external_order_number,order_id,order_name,customer_phone,delivery_status,created_at")
+    .eq("courier", "aliclik")
+    .eq("created_via", "aliclik_api")
+    .in("store_id", storeIds)
+    .not("external_order_number", "is", null);
+  // Pre-0054 las columnas no existen: no hay nada que promover.
+  if (error || !data?.length) return;
+
+  // Solo las que siguen con el código provisional; una ya promovida no se toca.
+  const apiGuides = (data as ApiCreatedGuide[]).filter((g) => isProvisionalGuideCode(g.guide_code));
+  if (!apiGuides.length) return;
+
+  const rows: IncomingReportRow[] = [...incoming.values()].map((i) => ({
+    guide_code: i.row.guide_code,
+    order_name: i.row.order_name,
+    customer_phone: i.row.customer_phone,
+  }));
+
+  // Códigos AUR5X del reporte que YA existen como guía: ese envío se ingestó
+  // antes por Excel, así que no hay nada que renombrar — sería fusionar dos
+  // envíos distintos.
+  const already: string[] = [];
+  for (const chunk of chunked([...incoming.keys()], 200)) {
+    const { data: taken } = await admin
+      .from("shipments")
+      .select("guide_code")
+      .eq("courier", "aliclik")
+      .in("guide_code", chunk);
+    for (const t of (taken as { guide_code: string }[]) ?? []) already.push(t.guide_code);
+  }
+
+  const { promotions } = reconcileAliclikApiGuides(rows, apiGuides, {
+    existingGuideCodes: already,
+  });
+
+  for (const p of promotions) {
+    const { error: upErr } = await admin
+      .from("shipments")
+      .update({ guide_code: p.toCode })
+      .eq("id", p.shipmentId)
+      // Guarda contra una carrera: si otra importación ya lo renombró, este
+      // UPDATE no encuentra fila y no pisa nada.
+      .eq("guide_code", p.fromCode);
+    if (upErr) continue;
+  }
 }
 
 /** Read existing aliclik shipments for the given guide codes (to merge on re-import). */
