@@ -14,7 +14,7 @@ import { listMetaAdAccounts, type MetaAdAccount, type StoreMetaAdAccount } from 
 import { listProducts } from "@/lib/aliclik";
 import { syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { env } from "@/lib/env";
-import { describeShalomError } from "@/lib/shalom/client";
+import { describeShalomError, describeShalomProbeFailure } from "@/lib/shalom/client";
 import { clientFor, loadStoreShalom, mintSession, publicClient } from "@/lib/shalom/session";
 
 export interface SettingsState {
@@ -446,7 +446,7 @@ export async function testShalomConnection(
   try {
     await probe.searchAgencies({ q: "lima" });
   } catch (e) {
-    return { error: `La API key del wrapper no funciona: ${describeShalomError(e)}` };
+    return { error: describeShalomProbeFailure(e, env.shalomApiBase()) };
   }
   const cupo =
     probe.rateLimit.remaining != null
@@ -539,6 +539,8 @@ export async function findShalomAgencies(
           .join("\n"),
     };
   } catch (e) {
-    return { error: describeShalomError(e) };
+    // Misma lógica que en «Probar conexión»: esta búsqueda solo usa la API key,
+    // así que un 404 también apunta a la URL base y no a la agencia buscada.
+    return { error: describeShalomProbeFailure(e, env.shalomApiBase()) };
   }
 }

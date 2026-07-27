@@ -355,6 +355,37 @@ export function sessionIsFresh(expiresAt: string | null | undefined, skewMs = 12
 }
 
 /**
+ * Por qué falló la prueba de la API key global, que es la primera mitad de
+ * «Probar conexión».
+ *
+ * Va aparte de `describeShalomError` porque acá un **404 no dice nada de la
+ * key**: si la ruta no existe, Shalom ni siquiera llegó a mirar la cabecera de
+ * autenticación. Llamarlo «la API key no funciona» —que es lo que hacía— manda
+ * a pedir una key nueva al proveedor cuando lo que está mal es la URL base del
+ * despliegue, y eso puede costar días de ida y vuelta por WhatsApp.
+ *
+ * Por eso el mensaje incluye la URL exacta que se intentó: con verla al lado del
+ * host correcto, el `/v1` de más salta a la vista.
+ */
+export function describeShalomProbeFailure(err: unknown, baseUrl: string): string {
+  if (err instanceof ShalomApiError && err.status === 404) {
+    return (
+      `La URL base de Shalom no responde donde se espera (404): se intentó ` +
+      `${baseUrl}/v1/agencies/search.\n\n` +
+      `La ruta es correcta, así que lo que sobra o falta está en la base. Revisa ` +
+      `SHALOM_API_BASE en las variables del despliegue: tiene que ser el host a ` +
+      `secas — https://api.shalom-api-peru.com — sin /v1 ni ninguna otra ruta ` +
+      `detrás, porque el cliente ya la añade. Si la variable no existe, el valor ` +
+      `por defecto ya es el bueno: borrarla también arregla esto.`
+    );
+  }
+  if (err instanceof ShalomApiError && (err.status === 401 || err.status === 403)) {
+    return `La API key del wrapper fue rechazada (${err.status}): ${describeShalomError(err)}`;
+  }
+  return `No se pudo probar la API key contra ${baseUrl}: ${describeShalomError(err)}`;
+}
+
+/**
  * Traduce un fallo de la API a algo accionable para el operador. Los códigos
  * salen de la tabla de errores de la documentación.
  */
