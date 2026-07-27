@@ -46,6 +46,7 @@ import {
   resolveAliclikItems,
   type ResolvedItem,
 } from "@/lib/aliclik-catalog";
+import { reconcileToOrderTotal } from "@/lib/aliclik-money";
 import {
   canScheduleExpress,
   limaTimeHHMM,
@@ -132,6 +133,12 @@ export interface AliclikPreview {
   ourUbigeo?: { region: string | null; province: string | null; district: string | null };
   ubigeoMismatch?: boolean;
   couriers?: (AliclikCourierQuote & { selectable: boolean; reason?: string })[];
+  /** Nombre del pedido (#KP…). La operadora tiene que VER sobre cuál crea. */
+  orderName?: string | null;
+  /** Lo que Aliclik cobrará en la puerta. Es la cifra que hay que enseñar. */
+  collectTotal?: number;
+  /** Total del pedido en Shopify. Si difiere de `collectTotal`, se avisa. */
+  orderTotal?: number | null;
   coordinate?: { lat: string; lng: string };
   /** Falta la coordenada: la interfaz debe pedirla antes de seguir. */
   needsCoordinate?: boolean;
@@ -228,6 +235,21 @@ export async function previewAliclikGuide(
     };
   }
 
+  // 1-bis. EL DINERO. Aliclik cobra la suma de `precio × cantidad` y no tiene
+  //        campo de descuento, pero los precios de Shopify son los de LISTA
+  //        (`originalUnitPriceSet`, antes de descuentos). Mandarlos tal cual
+  //        cobró S/447 en un pedido de S/298. Se cuadran contra el total real.
+  const money = reconcileToOrderTotal(resolved.items, ctx.row.order_total);
+  if (!money) {
+    return {
+      ok: false,
+      error:
+        "No se puede determinar cuánto hay que cobrarle a la clienta: el pedido no tiene un total válido. " +
+        "No se crea la guía a ciegas, porque Aliclik cobraría el precio de lista sin descuentos.",
+    };
+  }
+  const priced = { ...resolved, items: money.items };
+
   // 2. La coordenada. Es el cuello de botella real: Shopify no la entrega, así
   //    que casi siempre hay que pedirla. Se acepta lo que la operadora pegue
   //    (par suelto o enlace de Google Maps).
@@ -243,7 +265,10 @@ export async function previewAliclikGuide(
       needsCoordinate: true,
       warehouseId: resolved.warehouseId,
       warehouseName: resolved.warehouseName,
-      items: resolved.items,
+      items: priced.items,
+      orderName: ctx.row.order_name,
+      collectTotal: money.total,
+      orderTotal: ctx.row.order_total,
       error:
         "Este pedido no tiene coordenada, y Aliclik la exige para cotizar y crear. Pega el enlace de Google Maps que mandó la clienta.",
     };
@@ -310,7 +335,10 @@ export async function previewAliclikGuide(
     warnings: resolved.warnings,
     warehouseId: resolved.warehouseId,
     warehouseName: resolved.warehouseName,
-    items: resolved.items,
+    items: priced.items,
+    orderName: ctx.row.order_name,
+    collectTotal: money.total,
+    orderTotal: ctx.row.order_total,
     aliclikUbigeo,
     ourUbigeo,
     ubigeoMismatch,
@@ -330,6 +358,16 @@ export interface CreateGuideInput {
   /** Coordenada confirmada por la operadora (par o enlace de Maps). */
   coordinate?: string | null;
   note?: string | null;
+  /**
+   * El monto que la operadora VIO en el preview. El servidor lo recalcula y
+   * aborta si no coincide.
+   *
+   * No es paranoia: entre cotizar y pulsar, alguien pudo editar el pedido en
+   * Shopify (quitar un descuento, cambiar una cantidad) y la guía saldría con
+   * un importe distinto del que se aprobó. Cobrar mal en la puerta es
+   * irreversible y lo paga la clienta.
+   */
+  expectedCollectTotal?: number | null;
 }
 
 export async function createAliclikGuide(
@@ -364,6 +402,19 @@ export async function createAliclikGuide(
   const preview = await previewAliclikGuide(orderId, { coordinate: input.coordinate, modality: "cod" });
   if (!preview.ok || !preview.items || !preview.coordinate || !preview.warehouseId) {
     return { error: preview.error ?? "No se pudo validar el pedido." };
+  }
+
+  // El dinero que se va a cobrar tiene que ser EL MISMO que se aprobó.
+  if (
+    input.expectedCollectTotal != null &&
+    preview.collectTotal != null &&
+    Math.abs(preview.collectTotal - input.expectedCollectTotal) > 0.005
+  ) {
+    return {
+      error:
+        `El monto a cobrar cambió desde que cotizaste (ahora S/ ${preview.collectTotal.toFixed(2)}, ` +
+        `antes S/ ${input.expectedCollectTotal.toFixed(2)}). No se creó la guía. Vuelve a cotizar y revísalo.`,
+    };
   }
 
   const courier = preview.couriers?.find((c) => c.transportId === input.transportId);
@@ -541,7 +592,10 @@ export async function createAliclikGuide(
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
   return {
-    notice: `Guía creada en Aliclik: ${orderNumber} (${courierBlock.transportName ?? "courier"}, S/ ${courierBlock.deliveryCost}).`,
+    notice:
+      `Guía creada en Aliclik para ${ctx.row.order_name ?? "el pedido"}: ${orderNumber} · ` +
+      `cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)} · ` +
+      `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}.`,
   };
 }
 
