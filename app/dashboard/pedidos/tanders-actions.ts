@@ -17,7 +17,7 @@ import { decrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { parseGeoLink } from "@/lib/geo-link";
-import { extractLabelUrl, TandersClient } from "@/lib/tanders/client";
+import { extractLabelUrl, extractTrackingCode, TandersClient } from "@/lib/tanders/client";
 import {
   buildTandersPayload,
   defaultCollectionAmount,
@@ -194,7 +194,11 @@ export async function createTandersGuide(
   input: CreateTandersInput,
 ): Promise<{ error?: string; notice?: string; guideCode?: string; labelUrl?: string }> {
   const perms = await getMasterPermissions();
-  if (!perms.can("master.edit")) return { error: "Tu rol no permite crear guías." };
+  // El mismo permiso que gobierna el botón. Comprobarlo SOLO en la interfaz no
+  // protege nada: la acción es invocable directamente.
+  if (!perms.can("tanders.create_guide")) {
+    return { error: "Tu rol no permite crear guías de Tanders." };
+  }
 
   const ctx = await authorize(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
@@ -273,11 +277,15 @@ export async function createTandersGuide(
     };
   }
 
-  const guideCode = String(order?.id ?? "").trim();
+  // El código que se guarda es el N° de seguimiento de su panel, NO el cuid:
+  // es por lo único que el equipo puede buscar el envío en Tanders. El cuid va
+  // aparte porque sigue siendo la clave de su API.
+  const guideCode = extractTrackingCode(order) ?? "";
+  const tandersOrderId = String(order?.id ?? "").trim() || null;
   if (!guideCode) {
     return {
       error:
-        "Tanders respondió sin id de pedido. Revisa en tanders.app si la guía se creó antes de reintentar.",
+        "Tanders respondió sin código de pedido. Revisa en tanders.app si la guía se creó antes de reintentar.",
     };
   }
   const labelUrl = extractLabelUrl(order);
@@ -305,6 +313,7 @@ export async function createTandersGuide(
     delivery_status: "pendiente",
     status_category: "pending",
     label_url: labelUrl,
+    tanders_order_id: tandersOrderId,
     tanders_raw: order as unknown as Record<string, unknown>,
   };
 
@@ -334,6 +343,7 @@ export async function createTandersGuide(
       packageType: built.payload.packageType,
       weightGrams: built.payload.weightGrams,
       collectionAmount: built.payload.collectionAmount,
+      tandersOrderId,
       labelUrl,
     },
   });
@@ -342,7 +352,7 @@ export async function createTandersGuide(
   revalidatePath(MASTER_PATH);
 
   return {
-    notice: `Guía Tanders creada: ${guideCode}${labelUrl ? "" : " (la etiqueta PDF puede tardar en estar lista)"}.`,
+    notice: `Guía Tanders creada: ${guideCode}${labelUrl ? "" : " — la etiqueta PDF se genera después, se descarga desde tanders.app"}.`,
     guideCode,
     labelUrl: labelUrl ?? undefined,
   };

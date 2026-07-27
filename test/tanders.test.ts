@@ -5,7 +5,13 @@ import {
   suggestedDestination,
   tandersPhone,
 } from "@/lib/tanders/draft";
-import { extractLabelUrl, extractTokens, jwtExpiry, TandersClient } from "@/lib/tanders/client";
+import {
+  extractLabelUrl,
+  extractTokens,
+  extractTrackingCode,
+  jwtExpiry,
+  TandersClient,
+} from "@/lib/tanders/client";
 import { TandersApiError } from "@/lib/tanders/types";
 import { parseGeoLink } from "@/lib/geo-link";
 
@@ -208,7 +214,41 @@ describe("extractTokens", () => {
   });
 });
 
+describe("extractTrackingCode", () => {
+  // Respuesta real de una guía creada el 27/07/2026.
+  const real = {
+    id: "cms3ov8db00080mxdbvigryzy",
+    status: "PENDING",
+    aliclikOrderNumber: "TANDER17851846826402032",
+    aliclikSyncStatus: "SYNCED",
+    labelGeneratedAt: null,
+  };
+
+  it("devuelve el N° de seguimiento, no el cuid interno", () => {
+    expect(extractTrackingCode(real)).toBe("TANDER17851846826402032");
+  });
+
+  it("cae al cuid si la sincronización todavía no dio número", () => {
+    expect(extractTrackingCode({ id: "cms3ov8db00080mxdbvigryzy" })).toBe(
+      "cms3ov8db00080mxdbvigryzy",
+    );
+    expect(extractTrackingCode({ id: "abc", aliclikOrderNumber: "  " })).toBe("abc");
+  });
+
+  it("devuelve null cuando no hay ningún identificador utilizable", () => {
+    expect(extractTrackingCode({ id: "" })).toBeNull();
+    expect(extractTrackingCode(null)).toBeNull();
+  });
+});
+
 describe("extractLabelUrl", () => {
+  it("no inventa etiqueta en la respuesta real de creación", () => {
+    // labelGeneratedAt viene null: el PDF se genera después de crear el pedido.
+    expect(
+      extractLabelUrl({ id: "x", status: "PENDING", labelGeneratedAt: null }),
+    ).toBeNull();
+  });
+
   it("encuentra el PDF bajo cualquiera de los nombres candidatos", () => {
     expect(extractLabelUrl({ id: "1", labelUrl: "https://x/a.pdf" })).toBe("https://x/a.pdf");
     expect(extractLabelUrl({ id: "1", pdf_url: "https://x/b.pdf" })).toBe("https://x/b.pdf");

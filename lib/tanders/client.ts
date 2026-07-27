@@ -177,9 +177,29 @@ export class TandersClient {
 }
 
 /**
- * URL de la etiqueta dentro de la respuesta. Igual que con los tokens: el nombre
- * del campo no está confirmado, así que se prueban los candidatos y se acepta
- * que no exista todavía — la guía nace "Pendiente" y la etiqueta puede tardar.
+ * Código con el que se identifica el envío en todos lados MENOS en su API: el
+ * "N° SEGUIMIENTO" de su panel, que es lo que el equipo copia y lo que el
+ * cliente recibe.
+ *
+ * Viene en `aliclikOrderNumber` porque Tanders sincroniza sus pedidos hacia
+ * Aliclik y adopta el número que este le asigna. Si algún día llegara vacío
+ * (sincronización pendiente), se cae al cuid: un código raro es mejor que una
+ * guía creada que no se puede registrar.
+ */
+export function extractTrackingCode(order: TandersOrder | null | undefined): string | null {
+  if (!order) return null;
+  for (const key of ["aliclikOrderNumber", "trackingCode", "trackingNumber", "code"]) {
+    const v = order[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  const id = typeof order.id === "string" ? order.id.trim() : "";
+  return id || null;
+}
+
+/**
+ * URL de la etiqueta dentro de la respuesta. Al crear nunca viene —
+ * `labelGeneratedAt` llega en null porque el PDF se genera después—, así que
+ * esto solo encuentra algo al releer un pedido ya despachado.
  */
 export function extractLabelUrl(order: TandersOrder | null | undefined): string | null {
   if (!order) return null;
