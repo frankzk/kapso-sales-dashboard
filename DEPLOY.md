@@ -640,6 +640,39 @@ al cerrar. La carga por foto/Excel sigue viva para los couriers externos.
   que ya van en la de otro motorizado ese día, mirando TODAS las rutas del día
   y no solo las de una tienda — si no, dos saldrían con el mismo paquete.
 
+## 5k-quater. Reintentos y tasa de entrega
+
+Lo que ataca el dolor real: los pedidos que no llegan a entregarse. Vive dentro
+de `/dashboard/rutas`, al armar la ruta del día.
+
+- **Needs migration 0058** (`rider_settlements.direct_collected`).
+- **Trae los no entregados solo.** Un pedido que ayer no contestó aparece como
+  candidato a reintento, con cuántas veces falló y por qué la última. Sin esto
+  se queda esperando a que alguien se acuerde, y nadie se acuerda.
+- **Dos preguntas distintas, y confundirlas sale caro** (`lib/retries.ts`):
+  *¿este pedido merece otra visita?* (depende del motivo) y *¿este cliente
+  recibe alguna vez?* (se mide por teléfono, a través de TODOS sus pedidos).
+- **Lo que NO se reintenta tal cual**: `direccion_errada` (volver al mismo sitio
+  equivocado cuesta otro flete y falla igual — hay que corregir la dirección
+  antes) y `rechazado` (no es un reintento, es una venta perdida).
+- **Riesgo alto** a los 3 intentos, o cuando el cliente acumula 2+ pedidos y
+  **ninguno** llegó a entregarse. Un cliente que sí recibió alguna vez **nunca**
+  sube a riesgo alto por su historial: sabemos que la dirección existe y que
+  abre la puerta, así que bloquearlo costaría una venta buena.
+- **Marca, ordena y avisa; no decide.** Lo bloqueado sale arriba, luego el
+  riesgo alto, y "Traer los N sin pendientes" añade de golpe solo los limpios.
+  Despachar lo marcado siempre es una decisión de una persona.
+- **La liquidación de un courier también mueve el Master** (botón "Aplicar al
+  Master"). Sin esto las entregas de Axel — todo Lima Metropolitana — se
+  quedaban en "pendiente" para siempre y el cuadre las marcaba como *cobro sin
+  entrega*. Solo `EFECTIVO`/`PAGO POS` marcan entregado y `RECHAZO` anula; lo
+  demás deja el pedido vivo. No reescribe lo que el Master ya sabe.
+- **El Yape y el POS del cliente NO son deuda del motorizado.** Caen a la cuenta
+  de la empresa y nunca pasan por sus manos. Se guardan aparte
+  (`direct_collected`) y se descuentan de lo que debe depositar; contarlos le
+  habría sacado un faltante inventado todos los días, por el importe exacto de
+  lo que cobró por esos canales.
+
 ## 5l. Clave de Anthropic por tienda
 
 La lectura de comprobantes Yape usaba una única `ANTHROPIC_API_KEY` de entorno, así

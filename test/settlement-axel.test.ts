@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { axelDelivered, parseAxelSheet, scoreAxelSheet } from "@/lib/settlements/axel";
 import { parseSettlementFile } from "@/lib/settlements/registry";
 import { matchByName } from "@/lib/settlement-ingest";
-import { reconcileSettlement, type SettlementMasterFacts } from "@/lib/settlements";
+import {
+  lineEffect,
+  reconcileSettlement,
+  settlementMasterEffects,
+  type SettlementMasterFacts,
+} from "@/lib/settlements";
 
 /** Filas tal como salen del reporte diario de Axel Courier del 25/07/2026. */
 function axelRows(): Record<string, string>[] {
@@ -271,5 +276,112 @@ describe("matchByName", () => {
   it("un nombre demasiado corto no empareja nunca", () => {
     expect(matchByName({ customer_name: "Ana" }, candidates)).toBeNull();
     expect(matchByName({ customer_name: null }, candidates)).toBeNull();
+  });
+});
+
+describe("lo cobrado directo a la empresa no es deuda del motorizado", () => {
+  const facts = (id: string, total: number): [string, SettlementMasterFacts] => [
+    id,
+    {
+      order_id: id,
+      general_status: "entregado",
+      order_total: total,
+      current_courier: null,
+      region: "Lima",
+      province: "Lima",
+      district: "Lince",
+      store_id: "s1",
+    },
+  ];
+  const line = (id: string, orderId: string, amount: number) => ({
+    id,
+    order_id: orderId,
+    guide_code: null,
+    order_name: null,
+    declared_status: "entregado",
+    declared_amount: amount,
+    declared_fee: null,
+    customer_name: null,
+    district: null,
+    match_status: "ok",
+  });
+
+  it("solo debe el efectivo: el Yape y el POS ya están en casa", () => {
+    // Cobra 1,000 en efectivo, 200 por Yape a la cuenta de la empresa y 100 por
+    // POS. Entrega 1,000 en la mano y cuadra: los otros 300 nunca fueron suyos.
+    const res = reconcileSettlement(
+      [line("a", "o1", 1000), line("b", "o2", 200), line("c", "o3", 100)],
+      new Map([facts("o1", 1000), facts("o2", 200), facts("o3", 100)]),
+      { cash: 1000, directCollected: 300 },
+    );
+    expect(res.totals.declaredTotal).toBe(1300);
+    expect(res.totals.directCollected).toBe(300);
+    expect(res.totals.expectedDeposit).toBe(1000);
+    expect(res.totals.depositDifference).toBe(0);
+    expect(res.totals.balanced).toBe(true);
+  });
+
+  it("sin la resta saldría un faltante inventado por ese mismo importe", () => {
+    // Es el bug que esto corrige: mismo día, sin declarar lo directo.
+    const res = reconcileSettlement(
+      [line("a", "o1", 1000), line("b", "o2", 200), line("c", "o3", 100)],
+      new Map([facts("o1", 1000), facts("o2", 200), facts("o3", 100)]),
+      { cash: 1000 },
+    );
+    expect(res.totals.depositDifference).toBe(-300);
+  });
+
+  it("convive con la comisión del courier sin pisarse", () => {
+    const res = reconcileSettlement(
+      [{ ...line("a", "o1", 1000), declared_fee: 50 }],
+      new Map([facts("o1", 1000)]),
+      { cash: 750, directCollected: 200 },
+    );
+    // 1,000 cobrados − 50 de comisión − 200 directos = 750 en la mano.
+    expect(res.totals.expectedDeposit).toBe(750);
+    expect(res.totals.balanced).toBe(true);
+  });
+});
+
+describe("de la liquidación al Master", () => {
+  const line = (over: Record<string, unknown> = {}) => ({
+    id: "l1",
+    order_id: "o1",
+    guide_code: null,
+    order_name: null,
+    declared_status: "EFECTIVO",
+    declared_amount: 100,
+    declared_fee: null,
+    customer_name: null,
+    district: null,
+    match_status: "ok",
+    ...over,
+  });
+
+  it("los estados de Axel que SÍ son entrega mueven el pedido", () => {
+    expect(lineEffect(line({ declared_status: "EFECTIVO" }))).toBe("entregado");
+    expect(lineEffect(line({ declared_status: "PAGO POS" }))).toBe("entregado");
+  });
+
+  it("solo el rechazo anula; los demás fallos dejan el pedido vivo", () => {
+    expect(lineEffect(line({ declared_status: "RECHAZO" }))).toBe("anulado");
+    for (const st of ["CAIDA", "NO CONTESTO", "LUNES", "CAIDA COBRO"]) {
+      expect(lineEffect(line({ declared_status: st }))).toBeNull();
+    }
+  });
+
+  it("una línea sin vincular no mueve nada", () => {
+    expect(lineEffect(line({ match_status: "review" }))).toBeNull();
+    expect(lineEffect(line({ order_id: null }))).toBeNull();
+  });
+
+  it("no repite el mismo pedido dos veces", () => {
+    const effects = settlementMasterEffects([
+      line({ id: "a", order_id: "o1" }),
+      line({ id: "b", order_id: "o1" }),
+      line({ id: "c", order_id: "o2", declared_status: "RECHAZO" }),
+    ]);
+    expect(effects).toHaveLength(2);
+    expect(effects.map((e) => e.target)).toEqual(["entregado", "anulado"]);
   });
 });

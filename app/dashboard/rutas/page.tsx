@@ -1,7 +1,13 @@
 import { Suspense } from "react";
 import { getAccessibleStores } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
-import { getAssignableOrders, getRouteDetail, getRoutes } from "@/lib/routes-access";
+import {
+  getAssignableOrders,
+  getRetryCandidates,
+  getRouteDetail,
+  getRoutes,
+} from "@/lib/routes-access";
+import { assessRisk, sortByAttention } from "@/lib/retries";
 import { getRiders } from "@/lib/settlements-access";
 import { EmptyState } from "@/components/ui";
 import { RoutesBoard } from "@/components/routes";
@@ -46,9 +52,19 @@ async function RutasContent({
   const openId = sp.id && routes.some((r) => r.id === sp.id) ? sp.id : null;
   // Los pedidos asignables solo se consultan al abrir una ruta: es la consulta
   // más cara de la pantalla y en el listado no se usa.
-  const [detail, assignable] = openId
-    ? await Promise.all([getRouteDetail(openId), getAssignableOrders(storeIds, day)])
-    : [null, []];
+  const [detail, assignable, retryRaw] = openId
+    ? await Promise.all([
+        getRouteDetail(openId),
+        getAssignableOrders(storeIds, day),
+        getRetryCandidates(storeIds),
+      ])
+    : [null, [], []];
+
+  // El riesgo se evalúa en el servidor (puro y probado) y baja ya calculado:
+  // así la pantalla solo pinta, y la regla vive en un solo sitio.
+  const retries = sortByAttention(
+    retryRaw.map((c) => ({ ...c, risk: assessRisk(c) })),
+  );
 
   return (
     <RoutesBoard
@@ -57,6 +73,7 @@ async function RutasContent({
       routes={routes}
       detail={detail}
       assignable={assignable}
+      retries={retries}
       day={day}
     />
   );

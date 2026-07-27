@@ -15,6 +15,7 @@ import { VERDICT_LABELS, type ReconciledSettlement, type SettlementVerdict } fro
 import type { RiderPayout } from "@/lib/settlements";
 import type { RiderRow, SettlementDetail, SettlementRow } from "@/lib/settlements-access";
 import {
+  applySettlementToMaster,
   closeSettlement,
   createRider,
   recheckSettlement,
@@ -446,6 +447,14 @@ function SettlementDetailPanel({
           />
           <button
             disabled={pending}
+            onClick={() => run(() => applySettlementToMaster(settlement.id))}
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            title="Marca en el Master las entregas y rechazos que declara esta liquidación"
+          >
+            Aplicar al Master
+          </button>
+          <button
+            disabled={pending}
             onClick={() => run(() => recheckSettlement(settlement.id))}
             className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
@@ -523,6 +532,11 @@ function TotalsGrid({
         tone: t.difference < 0 ? "bad" : t.difference > 0 ? "warn" : "good",
       },
       { label: "Comisión del courier", value: money(t.feeTotal), hint: "se la queda" },
+      {
+        label: "Cobrado directo",
+        value: money(t.directCollected),
+        hint: "Yape/POS a la empresa",
+      },
       { label: "Debía depositar", value: money(t.expectedDeposit), hint: "cobrado − comisión" },
       { label: "Depositó", value: money(t.depositTotal) },
       {

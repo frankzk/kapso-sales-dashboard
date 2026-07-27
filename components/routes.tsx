@@ -12,6 +12,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card, EmptyState, Section, cn } from "@/components/ui";
 import { NON_DELIVERY_REASONS, PAYMENT_METHODS, routeTotals } from "@/lib/routes";
+import { RISK_LABELS, type RiskAssessment } from "@/lib/retries";
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import type { RiderRow } from "@/lib/settlements-access";
 import {
@@ -38,6 +39,25 @@ interface Assignable {
   order_total: number | null;
 }
 
+export interface RetryItem {
+  order_id: string;
+  store_id: string;
+  order_name: string | null;
+  customer_name: string | null;
+  district: string | null;
+  order_total: number | null;
+  attempts: number;
+  lastReason: string | null;
+  lastTriedAt: string | null;
+  risk: RiskAssessment;
+}
+
+const RISK_STYLE: Record<string, string> = {
+  ok: "bg-slate-100 text-slate-600",
+  vigilar: "bg-amber-50 text-amber-700",
+  alto: "bg-red-50 text-red-700",
+};
+
 const money = (n: number | null | undefined) =>
   n === null || n === undefined ? "—" : `S/ ${n.toFixed(2)}`;
 
@@ -58,6 +78,7 @@ export function RoutesBoard({
   routes,
   detail,
   assignable,
+  retries,
   day,
 }: {
   stores: StoreOpt[];
@@ -65,6 +86,7 @@ export function RoutesBoard({
   routes: RouteRow[];
   detail: { route: RouteRow; stops: StopWithOrder[] } | null;
   assignable: Assignable[];
+  retries: RetryItem[];
   day: string;
 }) {
   const router = useRouter();
@@ -161,6 +183,7 @@ export function RoutesBoard({
         <RouteDetail
           detail={detail}
           assignable={assignable}
+          retries={retries}
           riderName={riderName(detail.route.rider_id)}
           storeName={storeName}
           disabled={pending}
@@ -313,6 +336,7 @@ function RidersAccess({
 function RouteDetail({
   detail,
   assignable,
+  retries,
   riderName,
   storeName,
   disabled,
@@ -320,6 +344,7 @@ function RouteDetail({
 }: {
   detail: { route: RouteRow; stops: StopWithOrder[] };
   assignable: Assignable[];
+  retries: RetryItem[];
   riderName: string;
   storeName: (id: string | null) => string;
   disabled: boolean;
@@ -466,10 +491,19 @@ function RouteDetail({
         </table>
       </div>
 
+      {!closed && retries.length > 0 && (
+        <RetryPanel
+          retries={retries}
+          storeName={storeName}
+          disabled={disabled}
+          onAdd={(ids) => onRun(() => addStops(route.id, ids))}
+        />
+      )}
+
       {!closed && (
         <div className="space-y-2 border-t border-slate-100 pt-3">
           <div className="flex flex-wrap items-center gap-2">
-            <h4 className="text-sm font-medium text-slate-700">Añadir paradas</h4>
+            <h4 className="text-sm font-medium text-slate-700">Añadir paradas nuevas</h4>
             <input
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
@@ -549,6 +583,124 @@ function Tile({ label, value, tone }: { label: string; value: string; tone?: "go
       >
         {value}
       </p>
+    </div>
+  );
+}
+
+/**
+ * Los que ya se intentaron y no llegaron. Es la pantalla que ataca la tasa de
+ * entrega: sin esto, un pedido que ayer no contestó se queda esperando a que
+ * alguien se acuerde, y nadie se acuerda.
+ *
+ * Lo bloqueado y lo de riesgo alto salen arriba, con el motivo escrito, para que
+ * la decisión se tome mirando y no adivinando. Nada se despacha solo.
+ */
+function RetryPanel({
+  retries,
+  storeName,
+  disabled,
+  onAdd,
+}: {
+  retries: RetryItem[];
+  storeName: (id: string | null) => string;
+  disabled: boolean;
+  onAdd: (orderIds: string[]) => void;
+}) {
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [showBlocked, setShowBlocked] = useState(false);
+
+  const visible = showBlocked ? retries : retries.filter((r) => r.risk.retryable);
+  const blocked = retries.length - retries.filter((r) => r.risk.retryable).length;
+  const sanos = retries.filter((r) => r.risk.retryable && r.risk.level === "ok");
+
+  return (
+    <div className="space-y-2 border-t border-slate-100 pt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h4 className="text-sm font-medium text-slate-700">
+          Reintentos pendientes ({retries.length})
+        </h4>
+        {sanos.length > 0 && (
+          <button
+            disabled={disabled}
+            onClick={() => onAdd(sanos.map((r) => r.order_id))}
+            className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            title="Añade los que no tienen nada raro; los marcados los decides tú"
+          >
+            Traer los {sanos.length} sin pendientes
+          </button>
+        )}
+        <button
+          disabled={disabled || picked.size === 0}
+          onClick={() => {
+            onAdd([...picked]);
+            setPicked(new Set());
+          }}
+          className="rounded-lg bg-brand-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+        >
+          Añadir seleccionados {picked.size > 0 ? `(${picked.size})` : ""}
+        </button>
+        {blocked > 0 && (
+          <button
+            onClick={() => setShowBlocked(!showBlocked)}
+            className="ml-auto text-xs text-slate-500 underline hover:text-slate-700"
+          >
+            {showBlocked ? "Ocultar" : `Ver ${blocked} que no se pueden reintentar tal cual`}
+          </button>
+        )}
+      </div>
+
+      <div className="max-h-80 overflow-y-auto rounded-lg border border-slate-200">
+        {visible.map((r) => (
+          <div
+            key={r.order_id}
+            className="flex items-start gap-2 border-b border-slate-100 px-3 py-2 text-sm last:border-0"
+          >
+            <input
+              type="checkbox"
+              className="mt-1"
+              disabled={!r.risk.retryable}
+              checked={picked.has(r.order_id)}
+              onChange={(e) => {
+                const next = new Set(picked);
+                if (e.target.checked) next.add(r.order_id);
+                else next.delete(r.order_id);
+                setPicked(next);
+              }}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="truncate font-medium text-slate-800">
+                  {r.customer_name ?? "Sin nombre"}
+                </span>
+                <span
+                  className={cn(
+                    "rounded-full px-1.5 py-0.5 text-[11px] font-medium",
+                    RISK_STYLE[r.risk.level],
+                  )}
+                >
+                  {RISK_LABELS[r.risk.level]}
+                </span>
+                <span className="text-xs text-slate-400">
+                  {storeName(r.store_id)} · {r.district ?? "—"} · {r.order_name ?? "—"}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                {r.attempts} intento(s) · último: {reasonLabel(r.lastReason)}
+                {r.lastTriedAt && ` · ${r.lastTriedAt.slice(0, 10)}`}
+              </p>
+              {r.risk.level !== "ok" && (
+                <p className="text-[11px] text-slate-500">{r.risk.reasons.join(" ")}</p>
+              )}
+            </div>
+            <span className="shrink-0 text-slate-600">{money(r.order_total)}</span>
+          </div>
+        ))}
+        {visible.length === 0 && (
+          <p className="p-4 text-center text-sm text-slate-500">
+            Nada que reintentar ahora mismo.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

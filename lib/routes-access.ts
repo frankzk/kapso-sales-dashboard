@@ -214,3 +214,144 @@ export async function getAssignableOrders(
   }
   return candidates.filter((c) => !taken.has(c.order_id));
 }
+
+/**
+ * Candidatos a reintento: pedidos que un motorizado ya intentó y no pudo
+ * entregar, que siguen vivos y no están ya en una ruta.
+ *
+ * Es lo que ataca la tasa de entrega, que es el dolor real: sin esto, un pedido
+ * que ayer no contestó se queda esperando a que alguien se acuerde de él, y
+ * nadie se acuerda. Cada candidato viene con lo que hace falta para decidir sin
+ * abrir el pedido: cuántas veces falló, por qué la última vez, y si ESE CLIENTE
+ * ha recibido alguna vez algo.
+ */
+export interface RetryCandidate {
+  order_id: string;
+  store_id: string;
+  order_name: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  district: string | null;
+  address: string | null;
+  order_total: number | null;
+  attempts: number;
+  lastReason: string | null;
+  lastTriedAt: string | null;
+  customerFailed: number;
+  customerDelivered: number;
+}
+
+export async function getRetryCandidates(
+  storeIds: string[],
+  opts: { limit?: number } = {},
+): Promise<RetryCandidate[]> {
+  if (!storeIds.length) return [];
+  const sb = await createServerSupabase();
+
+  // 1) Paradas no entregadas, de más reciente a más antigua.
+  const { data: stopRows } = await sb
+    .from("delivery_stops")
+    .select("order_id,store_id,outcome_reason,reported_at,status")
+    .in("store_id", storeIds)
+    .eq("status", "no_entregado")
+    .order("reported_at", { ascending: false })
+    .limit(2000);
+  const stops = (stopRows ?? []) as unknown as {
+    order_id: string;
+    store_id: string;
+    outcome_reason: string | null;
+    reported_at: string | null;
+  }[];
+  if (!stops.length) return [];
+
+  // Intentos por pedido, conservando el motivo del MÁS RECIENTE (vienen
+  // ordenados, así que el primero que se ve de cada pedido es el último).
+  const byOrder = new Map<string, { attempts: number; lastReason: string | null; lastTriedAt: string | null }>();
+  for (const s of stops) {
+    const prev = byOrder.get(s.order_id);
+    if (prev) prev.attempts++;
+    else
+      byOrder.set(s.order_id, {
+        attempts: 1,
+        lastReason: s.outcome_reason,
+        lastTriedAt: s.reported_at,
+      });
+  }
+
+  // 2) Los que ya están en una ruta abierta no vuelven a ofrecerse: ya van.
+  const { data: openRoutes } = await sb
+    .from("delivery_routes")
+    .select("id")
+    .in("status", ["planificada", "en_curso"]);
+  const openIds = ((openRoutes ?? []) as { id: string }[]).map((r) => r.id);
+  const alreadyRouted = new Set<string>();
+  for (const batch of chunk(openIds, 100)) {
+    const { data } = await sb.from("delivery_stops").select("order_id").in("route_id", batch);
+    for (const r of (data ?? []) as { order_id: string }[]) alreadyRouted.add(r.order_id);
+  }
+
+  // 3) Solo los que siguen VIVOS: un pedido ya entregado o anulado no se
+  //    reintenta, por más veces que fallara antes.
+  const ids = [...byOrder.keys()].filter((id) => !alreadyRouted.has(id));
+  if (!ids.length) return [];
+  const rows: RetryCandidate[] = [];
+  const phones = new Set<string>();
+
+  for (const batch of chunk(ids, 200)) {
+    const { data } = await sb
+      .from("order_master")
+      .select(
+        "order_id,store_id,order_name,customer_name,customer_phone,district,address,order_total,general_status",
+      )
+      .in("order_id", batch)
+      .in("general_status", ["pendiente", "en_proceso"]);
+    for (const r of (data ?? []) as unknown as Record<string, unknown>[]) {
+      const agg = byOrder.get(String(r.order_id))!;
+      const phone = (r.customer_phone as string) ?? null;
+      if (phone) phones.add(phone);
+      rows.push({
+        order_id: String(r.order_id),
+        store_id: String(r.store_id),
+        order_name: (r.order_name as string) ?? null,
+        customer_name: (r.customer_name as string) ?? null,
+        customer_phone: phone,
+        district: (r.district as string) ?? null,
+        address: (r.address as string) ?? null,
+        order_total: (r.order_total as number) ?? null,
+        attempts: agg.attempts,
+        lastReason: agg.lastReason,
+        lastTriedAt: agg.lastTriedAt,
+        customerFailed: 0,
+        customerDelivered: 0,
+      });
+    }
+  }
+  if (!rows.length) return rows;
+
+  // 4) El historial del CLIENTE, por teléfono y a través de TODOS sus pedidos.
+  //    Es lo que distingue "mala suerte" de "este cliente nunca recibe".
+  const history = new Map<string, { failed: number; delivered: number }>();
+  for (const batch of chunk([...phones], 200)) {
+    const { data } = await sb
+      .from("order_master")
+      .select("customer_phone,general_status")
+      .in("store_id", storeIds)
+      .in("customer_phone", batch);
+    for (const r of (data ?? []) as { customer_phone: string | null; general_status: string }[]) {
+      if (!r.customer_phone) continue;
+      const h = history.get(r.customer_phone) ?? { failed: 0, delivered: 0 };
+      if (r.general_status === "entregado") h.delivered++;
+      else if (r.general_status === "anulado" || r.general_status === "devuelto") h.failed++;
+      history.set(r.customer_phone, h);
+    }
+  }
+  for (const row of rows) {
+    const h = row.customer_phone ? history.get(row.customer_phone) : null;
+    if (h) {
+      row.customerFailed = h.failed;
+      row.customerDelivered = h.delivered;
+    }
+  }
+
+  return rows.slice(0, opts.limit ?? 200);
+}

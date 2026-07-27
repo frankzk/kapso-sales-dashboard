@@ -104,7 +104,17 @@ export interface ReconciledLine {
  *  palabras completas porque en un cuaderno aparece "entregado", "entregada",
  *  "entregué", "entrego" y "entrega" indistintamente, y todas quieren decir lo
  *  mismo. Las negaciones se descartan antes de llegar aquí. */
-const DELIVERED_STEMS = ["entreg", "cobrad", "cobre", "pagad", "ok", "conforme"];
+const DELIVERED_STEMS = [
+  "entreg",
+  "cobrad",
+  "cobre",
+  "pag", // "pagado", "pago", "PAGO POS" (Axel)
+  "efectiv", // "EFECTIVO" (Axel)
+  "ok",
+  "conforme",
+];
+// Ojo con "cobr" a secas: "CAIDA COBRO" de Axel es un fallo por el que igual
+// cobran el flete, NO una entrega. Por eso las raíces son "cobrad"/"cobre".
 
 function normalize(value: string | null): string {
   return (value ?? "")
@@ -183,11 +193,19 @@ export interface SettlementTotals {
   difference: number;
   /** Comisiones que el courier declara quedarse (por entrega + POS). */
   feeTotal: number;
+  /** Cobrado que fue DIRECTO a la empresa (Yape a su cuenta, POS) y nunca pasó
+   *  por las manos de quien liquida. No es plata que tenga que devolver. */
+  directCollected: number;
   /**
-   * Lo que debería depositar: lo cobrado MENOS lo que se queda de comisión. Un
-   * courier como Axel cobra S/ 2,219.73, se queda S/ 146.00 y deposita
-   * S/ 2,073.73; sin restar la comisión el cuadre marcaría un faltante todos los
-   * días por el importe exacto de lo que legítimamente se quedan.
+   * Lo que debería depositar: lo cobrado MENOS lo que se queda de comisión y
+   * MENOS lo que ya entró directo a la empresa.
+   *
+   * Las dos restas nacen del mismo error: contar como deuda plata que quien
+   * liquida nunca tuvo. Axel cobra S/ 2,219.73, se queda S/ 146.00 y deposita
+   * S/ 2,073.73. Un motorizado propio que cobra S/ 1,000 en efectivo, S/ 200 por
+   * Yape a la cuenta de la empresa y S/ 100 por POS entrega S/ 1,000 en la mano:
+   * los otros S/ 300 ya están en casa. Sin estas restas el cuadre marcaría un
+   * faltante todos los días, y se lo reclamaría a alguien que no hizo nada mal.
    */
   expectedDeposit: number;
   /** Lo que dice haber depositado (efectivo + Yape). */
@@ -214,7 +232,12 @@ export interface ReconciledSettlement {
 export function reconcileSettlement(
   lines: readonly SettlementLineInput[],
   facts: ReadonlyMap<string, SettlementMasterFacts>,
-  deposit: { cash?: number | null; yape?: number | null; posFee?: number | null } = {},
+  deposit: {
+    cash?: number | null;
+    yape?: number | null;
+    posFee?: number | null;
+    directCollected?: number | null;
+  } = {},
 ): ReconciledSettlement {
   const reconciled = lines.map((l) =>
     reconcileLine(l, l.order_id ? (facts.get(l.order_id) ?? null) : null),
@@ -227,7 +250,8 @@ export function reconcileSettlement(
   // cuadre del depósito cambiara al vincular una línea, que no tiene sentido.
   const lineFees = reconciled.reduce((s, r) => s + Math.max(0, r.line.declared_fee ?? 0), 0);
   const feeTotal = round2(lineFees + Math.max(0, deposit.posFee ?? 0));
-  const expectedDeposit = round2(declaredTotal - feeTotal);
+  const directCollected = round2(Math.max(0, deposit.directCollected ?? 0));
+  const expectedDeposit = round2(declaredTotal - feeTotal - directCollected);
   const depositTotal = round2(Math.max(0, deposit.cash ?? 0) + Math.max(0, deposit.yape ?? 0));
   const mismatchCount = reconciled.filter((r) => isMismatch(r.verdict)).length;
   const reviewCount = reconciled.filter((r) => r.verdict === "sin_pedido").length;
@@ -240,6 +264,7 @@ export function reconcileSettlement(
       expectedTotal,
       difference: round2(declaredTotal - expectedTotal),
       feeTotal,
+      directCollected,
       expectedDeposit,
       depositTotal,
       depositDifference,
@@ -360,4 +385,66 @@ export function computeRiderPayout(
  *  "cerrada": cerrar es un acto de una persona, no una consecuencia. */
 export function settlementStatus(totals: SettlementTotals): "cuadrada" | "con_descuadre" {
   return totals.balanced ? "cuadrada" : "con_descuadre";
+}
+
+
+// ---------------------------------------------------------------------------
+// De la liquidación al Master.
+// ---------------------------------------------------------------------------
+
+/** Lo que una línea de liquidación implica para el estado del pedido. */
+export type LineEffect = "entregado" | "anulado" | null;
+
+/**
+ * Qué le pasa al pedido según lo que declara la hoja del courier.
+ *
+ * Existe por el mismo motivo que el equivalente de las rutas: detrás de una
+ * liquidación de Axel no viene ningún otro reporte que mueva el Master, así que
+ * si esto no lo hace, sus entregas —todo Lima Metropolitana— se quedan en
+ * "pendiente" para siempre y el cuadre las marca como "cobro sin entrega".
+ *
+ * Solo dos resultados mueven el pedido. Todo lo demás lo deja vivo, porque son
+ * reintentos: cerrar un pedido por error cuesta una venta, dejarlo abierto
+ * cuesta otra visita.
+ */
+export function lineEffect(line: {
+  declared_status: string | null;
+  match_status: string;
+  order_id: string | null;
+}): LineEffect {
+  if (line.match_status !== "ok" || !line.order_id) return null;
+  const s = normalize(line.declared_status);
+  if (!s) return null;
+  // El rechazo se mira ANTES: "rechazado" no debe caer en ninguna raíz de
+  // entrega, y es el único fallo que cierra el pedido.
+  if (s.includes("rechaz")) return "anulado";
+  return declaresDelivered(line.declared_status) ? "entregado" : null;
+}
+
+export interface SettlementMasterEffect {
+  order_id: string;
+  target: Exclude<LineEffect, null>;
+  reason: string;
+}
+
+/** Los cambios que aplicar al Master desde una liquidación ya revisada. */
+export function settlementMasterEffects(
+  lines: readonly SettlementLineInput[],
+): SettlementMasterEffect[] {
+  const out: SettlementMasterEffect[] = [];
+  const seen = new Set<string>();
+  for (const l of lines) {
+    const target = lineEffect(l);
+    if (!target || !l.order_id || seen.has(l.order_id)) continue;
+    seen.add(l.order_id);
+    out.push({
+      order_id: l.order_id,
+      target,
+      reason:
+        target === "entregado"
+          ? `Entregado según la liquidación del courier (${l.declared_status ?? "sin detalle"}).`
+          : `El cliente rechazó el pedido, según la liquidación del courier.`,
+    });
+  }
+  return out;
 }

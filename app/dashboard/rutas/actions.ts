@@ -30,6 +30,10 @@ export interface RouteActionResult {
   routeId?: string;
 }
 
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 async function guard() {
   const user = await getCurrentUser();
   if (!user) return { error: "No autenticado." as const };
@@ -257,11 +261,18 @@ export async function closeRoute(
         settlement_date: route.route_date,
         source: "ruta",
         route_id: routeId,
+        // Solo el EFECTIVO pasa por sus manos y es lo que tiene que entregar.
+        // El Yape cae a la cuenta de la empresa y el POS lo cobra el terminal:
+        // contarlos como depósito suyo le sacaría un faltante inventado todos
+        // los días, por el importe exacto de lo que cobró por esos canales.
         declared_cash: t.efectivo,
-        declared_yape: t.yape,
-        // El POS no pasa por sus manos: lo cobra el terminal y cae a la cuenta.
-        // No es plata que él tenga que depositar.
-        note: t.pos > 0 ? `Incluye S/ ${t.pos.toFixed(2)} cobrados por POS.` : null,
+        declared_yape: 0,
+        direct_collected: round2(t.yape + t.pos),
+        note:
+          t.yape + t.pos > 0
+            ? `Cobrado directo a la empresa: S/ ${(t.yape + t.pos).toFixed(2)} ` +
+              `(Yape S/ ${t.yape.toFixed(2)}, POS S/ ${t.pos.toFixed(2)}).`
+            : null,
         created_by: g.user.id,
       })
       .select("id")

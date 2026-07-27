@@ -33,6 +33,7 @@ export interface SettlementRow {
   file_path: string | null;
   declared_cash: number;
   declared_yape: number;
+  direct_collected: number;
   status: string;
   courier: string | null;
   pos_fee: number;
@@ -44,7 +45,7 @@ export interface SettlementRow {
 
 const SETTLEMENT_COLUMNS =
   "id,store_id,rider_id,rider_name_raw,settlement_date,source,file_path," +
-  "declared_cash,declared_yape,status,courier,pos_fee,payout_amount,note,created_at,closed_at";
+  "declared_cash,declared_yape,direct_collected,status,courier,pos_fee,payout_amount,note,created_at,closed_at";
 
 const LINE_COLUMNS =
   "id,order_id,guide_code,order_name,declared_status,declared_amount," +
@@ -134,6 +135,7 @@ export async function getSettlementDetail(id: string): Promise<SettlementDetail 
       cash: settlement.declared_cash,
       yape: settlement.declared_yape,
       posFee: settlement.pos_fee,
+      directCollected: settlement.direct_collected,
     }),
     orderNames,
   };

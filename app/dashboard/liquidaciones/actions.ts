@@ -16,7 +16,9 @@ import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { relinkSettlementLine } from "@/lib/settlement-ingest";
 import { getRiderTariffs, getSettlementDetail } from "@/lib/settlements-access";
-import { computeRiderPayout, settlementStatus } from "@/lib/settlements";
+import { computeRiderPayout, settlementMasterEffects, settlementStatus } from "@/lib/settlements";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { defaultOperationalFor } from "@/lib/order-status";
 
 export interface ActionResult {
   ok: boolean;
@@ -261,4 +263,80 @@ export async function closeSettlement(
 
   revalidatePath("/dashboard/liquidaciones");
   return { ok: true, message: `Cerrada. Pago al motorizado: S/ ${payout.net.toFixed(2)}.` };
+}
+
+/**
+ * Aplica al Master lo que dice una liquidación ya revisada.
+ *
+ * Detrás de la liquidación de un courier no viene ningún otro reporte que mueva
+ * el Master, así que sin esto las entregas de Axel —todo Lima Metropolitana— se
+ * quedan en "pendiente" para siempre y el cuadre las marca como "cobro sin
+ * entrega". Es el mismo enganche que hace el cierre de una ruta, pero disparado
+ * por una persona, porque aquí lo que se aplica viene de un tercero.
+ *
+ * Solo toca los pedidos VINCULADOS: una línea en revisión no mueve nada.
+ */
+export async function applySettlementToMaster(settlementId: string): Promise<ActionResult> {
+  const g = await guard("settlements.manage");
+  if ("error" in g) return { ok: false, error: g.error };
+
+  const reach = await assertReachable(g.admin, settlementId);
+  if ("error" in reach) return { ok: false, error: reach.error };
+
+  const detail = await getSettlementDetail(settlementId);
+  if (!detail) return { ok: false, error: "Liquidación inexistente." };
+
+  const effects = settlementMasterEffects(detail.reconciled.lines.map((r) => r.line));
+  if (!effects.length) {
+    return {
+      ok: false,
+      error:
+        "No hay nada que aplicar: ninguna línea vinculada declara una entrega o un rechazo.",
+    };
+  }
+
+  // Lo que el Master YA sabe no se vuelve a escribir: repetir el evento
+  // ensuciaría el historial del pedido con cambios que no cambiaron nada.
+  const current = new Map(
+    detail.reconciled.lines
+      .filter((r) => r.facts)
+      .map((r) => [r.facts!.order_id, r.facts!.general_status]),
+  );
+  const pending = effects.filter((e) => current.get(e.order_id) !== e.target);
+  if (!pending.length) {
+    return { ok: true, message: "El Master ya estaba al día con esta liquidación." };
+  }
+
+  const events = pending.map((e) => ({
+    store_id: reach.storeId,
+    order_id: e.order_id,
+    kind: "status_override",
+    occurred_at: new Date().toISOString(),
+    actor: g.user.id,
+    source: "liquidacion",
+    new_status: e.target,
+    new_operational: defaultOperationalFor(e.target),
+    reason: e.reason,
+    payload: { settlement_id: settlementId },
+  }));
+
+  const { error } = await g.admin.from("order_events").insert(events);
+  if (error) return { ok: false, error: error.message };
+
+  await recomputeOrderMasterSafe(
+    g.admin,
+    pending.map((e) => e.order_id),
+  );
+
+  revalidatePath("/dashboard/liquidaciones");
+  revalidatePath("/dashboard/pedidos");
+
+  const entregados = pending.filter((e) => e.target === "entregado").length;
+  const anulados = pending.length - entregados;
+  return {
+    ok: true,
+    message:
+      `Master actualizado: ${entregados} entregado(s)` +
+      (anulados ? `, ${anulados} anulado(s) por rechazo` : "") + ".",
+  };
 }
