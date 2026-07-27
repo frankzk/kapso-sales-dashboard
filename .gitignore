@@ -37,3 +37,6 @@ pnpm-debug.log*
 # typescript / test
 *.tsbuildinfo
 /coverage
+
+# volcados de la sonda de Tanders (llevan datos de pedidos reales)
+scripts/.tanders-probe.json

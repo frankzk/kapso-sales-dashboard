@@ -115,6 +115,10 @@ export default async function StoreSettingsPage({
       anthropic_model: full.anthropic_model ?? null,
       // Pre-0054 la columna no existe ⇒ integración apagada.
       aliclik_enabled: Boolean(full.aliclik_enabled),
+      tanders_email: full.tanders_email ?? null,
+      tanders_origin_address: full.tanders_origin_address ?? null,
+      tanders_origin_lat: full.tanders_origin_lat ?? null,
+      tanders_origin_lng: full.tanders_origin_lng ?? null,
       meta_ad_accounts: normalizeMetaAdAccounts(
         full.meta_ad_accounts,
         full.meta_ad_account_id,
@@ -132,6 +136,7 @@ export default async function StoreSettingsPage({
       anthropicKey: Boolean(full.anthropic_api_key_enc),
       aliclikToken: Boolean(full.aliclik_api_token_enc),
       aliclikWebhookSecret: Boolean(full.aliclik_webhook_secret_enc),
+      tandersPassword: Boolean(full.tanders_password_enc),
     },
     oauthAvailable: env.shopifyOAuthConfigured(),
     siteUrl,

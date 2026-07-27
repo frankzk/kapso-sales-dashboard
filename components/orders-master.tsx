@@ -14,6 +14,7 @@ import { Card, cn, EmptyState } from "@/components/ui";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { ChecklistFilter } from "@/components/filters";
 import { PickupKeyPanel } from "@/components/pickup-key-panel";
+import { TandersGuideModal } from "@/components/tanders-guide-modal";
 import {
   addOrderComment,
   clearOrderGeo,
@@ -128,6 +129,7 @@ export function OrdersMasterBoard({
   canEdit,
   canOverride,
   canCreateGuide,
+  canCreateTandersGuide,
 }: {
   stores: StoreSummary[];
   view: MasterView;
@@ -136,6 +138,7 @@ export function OrdersMasterBoard({
   canEdit: boolean;
   canOverride: boolean;
   canCreateGuide: boolean;
+  canCreateTandersGuide: boolean;
 }) {
   const router = useRouter();
   const [filters, setFilters] = useState<MasterFilters>(emptyFilters);
@@ -493,6 +496,7 @@ export function OrdersMasterBoard({
           canEdit={canEdit}
           canOverride={canOverride}
           canCreateGuide={canCreateGuide}
+          canCreateTandersGuide={canCreateTandersGuide}
           storeName={storeName}
           onClose={() => setOpenId(null)}
           onSaved={() => router.refresh()}
@@ -852,6 +856,7 @@ function OrderDrawer({
   canEdit,
   canOverride,
   canCreateGuide,
+  canCreateTandersGuide,
   storeName,
   onClose,
   onSaved,
@@ -860,6 +865,7 @@ function OrderDrawer({
   canEdit: boolean;
   canOverride: boolean;
   canCreateGuide: boolean;
+  canCreateTandersGuide: boolean;
   storeName: (id: string) => string;
   onClose: () => void;
   onSaved: () => void;
@@ -867,6 +873,7 @@ function OrderDrawer({
   const [detail, setDetail] = useState<OrderMasterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [tandersOpen, setTandersOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   const reload = useMemo(
@@ -981,9 +988,19 @@ function OrderDrawer({
             )}
 
             <section>
-              <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Couriers y guías ({detail.guides.length})
-              </h3>
+              <div className="mb-1.5 flex items-center gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Couriers y guías ({detail.guides.length})
+                </h3>
+                {canCreateTandersGuide && !detail.row.guide_code && (
+                  <button
+                    onClick={() => setTandersOpen(true)}
+                    className="ml-auto rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    + Guía Tanders
+                  </button>
+                )}
+              </div>
               {detail.guides.length === 0 ? (
                 <p className="text-sm text-slate-400">
                   Sin gestión logística registrada todavía.
@@ -1086,6 +1103,17 @@ function OrderDrawer({
           </div>
         )}
       </aside>
+
+      {tandersOpen && (
+        <TandersGuideModal
+          orderId={orderId}
+          onClose={() => setTandersOpen(false)}
+          onCreated={() => {
+            void reload();
+            onSaved();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -31,6 +31,10 @@ export const PERMISSIONS = [
   "aliclik.create_guide",
   "aliclik.cancel_guide",
   "aliclik.manage_catalog",
+  // Tanders: mismo razonamiento que Aliclik —escritura hacia afuera, con un
+  // paquete real detrás— pero permiso propio: son couriers distintos y una
+  // tienda puede querer habilitar uno sin el otro.
+  "tanders.create_guide",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -46,9 +50,9 @@ export function isPermission(value: string): value is Permission {
  *  - `vendedora` — opera: registra estados, comentarios y comprobantes. NO
  *    valida pagos ni ve la clave de recojo (§"Acceso restringido a la clave":
  *    la clave es para administradores, y los demás solo pueden pedirla cuando el
- *    pago completo está validado). Sí crea guías en Aliclik — es su trabajo —
- *    pero NO las cancela ni toca el catálogo: cancelar tiene ventana y el
- *    catálogo es dato maestro compartido por todas las tiendas.
+ *    pago completo está validado). Sí crea guías en Aliclik y en Tanders —es su
+ *    trabajo— pero NO las cancela ni toca el catálogo: cancelar tiene ventana y
+ *    el catálogo es dato maestro compartido por todas las tiendas.
  *  - `viewer` — nada.
  */
 const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
@@ -59,6 +63,7 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "master.import_report",
     "shalom.register_payment",
     "aliclik.create_guide",
+    "tanders.create_guide",
   ],
   viewer: [],
 };

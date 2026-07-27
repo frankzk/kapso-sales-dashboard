@@ -56,6 +56,13 @@ export interface StoreSettingsInput {
   aliclik_webhook_secret?: string;
   /** Interruptor por tienda de la creación de guías en Aliclik. */
   aliclik_enabled?: string | boolean;
+  // Tanders (0058): usuario + contraseña de la cuenta y almacén de origen. La
+  // contraseña es un secreto; el resto es configuración normal.
+  tanders_email?: string;
+  tanders_password?: string;
+  tanders_origin_address?: string;
+  tanders_origin_lat?: string;
+  tanders_origin_lng?: string;
 }
 
 function clean(v: string | undefined): string | null {
@@ -184,6 +191,26 @@ export function buildStoreUpdate(
     patch.aliclik_enabled =
       input.aliclik_enabled === true || input.aliclik_enabled === "true";
   }
+
+  // Tanders (0058). Las coordenadas del origen solo se aplican si parsean a un
+  // número válido: una coordenada rota mandaría a todos los repartidores a
+  // recoger el paquete a otro lado.
+  const tandersEmail = clean(input.tanders_email);
+  if (tandersEmail !== null) patch.tanders_email = tandersEmail;
+  const tandersOrigin = clean(input.tanders_origin_address);
+  if (tandersOrigin !== null) patch.tanders_origin_address = tandersOrigin;
+  const coord = (raw: string | undefined, max: number): number | null => {
+    const v = clean(raw);
+    if (v === null) return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n !== 0 && Math.abs(n) <= max ? n : null;
+  };
+  const oLat = coord(input.tanders_origin_lat, 90);
+  if (oLat !== null) patch.tanders_origin_lat = oLat;
+  const oLng = coord(input.tanders_origin_lng, 180);
+  if (oLng !== null) patch.tanders_origin_lng = oLng;
+  const tandersPass = clean(input.tanders_password);
+  if (tandersPass) patch.tanders_password_enc = encrypt(tandersPass, keyOverride);
 
   return patch;
 }

@@ -103,6 +103,15 @@ export async function updateStore(
     meta_access_token: get("meta_access_token"),
     aliclik_api_token: get("aliclik_api_token"),
     aliclik_enabled: get("aliclik_enabled"),
+    tanders_email: get("tanders_email"),
+    tanders_password: get("tanders_password"),
+    tanders_origin_address: get("tanders_origin_address"),
+    tanders_origin_lat: get("tanders_origin_lat"),
+    tanders_origin_lng: get("tanders_origin_lng"),
+    // Estos dos existían en el formulario pero no se leían acá, así que la
+    // clave de Anthropic por tienda (5l del DEPLOY) nunca llegaba a guardarse.
+    anthropic_api_key: get("anthropic_api_key"),
+    anthropic_model: get("anthropic_model"),
   });
 
   if (!Object.keys(patch).length) return { notice: "No hay cambios para guardar." };

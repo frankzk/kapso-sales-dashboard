@@ -56,6 +56,10 @@ export interface StoreSettingsData {
     telegram_chat_id: string | null;
     anthropic_model: string | null;
     aliclik_enabled: boolean;
+    tanders_email: string | null;
+    tanders_origin_address: string | null;
+    tanders_origin_lat: number | null;
+    tanders_origin_lng: number | null;
     meta_ad_accounts: StoreMetaAdAccount[];
   };
   has: {
@@ -69,6 +73,7 @@ export interface StoreSettingsData {
     anthropicKey: boolean;
     aliclikToken: boolean;
     aliclikWebhookSecret: boolean;
+    tandersPassword: boolean;
   };
   oauthAvailable: boolean;
   siteUrl: string;
@@ -932,6 +937,61 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
                 : "ninguna"}
             </strong>
           </p>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Tanders (courier Lima)
+          </legend>
+          <p className="text-xs text-slate-500">
+            Cuenta de <strong>tanders.app</strong> con la que se crean las guías desde el Master de
+            Pedidos. Tanders no emite API keys: se usa el mismo usuario y contraseña de su web, y la
+            contraseña se guarda <strong>cifrada</strong>. El origen es el almacén desde el que sale
+            el paquete; sus coordenadas se sacan del enlace de Google Maps del almacén.
+          </p>
+          <label className="block">
+            <span className="text-xs text-slate-500">Usuario (email)</span>
+            <input
+              name="tanders_email"
+              type="email"
+              defaultValue={s.tanders_email ?? ""}
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+          </label>
+          <SecretField
+            name="tanders_password"
+            label="Contraseña de Tanders"
+            set={data.has.tandersPassword}
+          />
+          <label className="block">
+            <span className="text-xs text-slate-500">Dirección del almacén de origen</span>
+            <input
+              name="tanders_origin_address"
+              defaultValue={s.tanders_origin_address ?? ""}
+              placeholder="Jr. Restauración 525, Breña 15083, Perú"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs text-slate-500">Latitud del origen</span>
+              <input
+                name="tanders_origin_lat"
+                defaultValue={s.tanders_origin_lat ?? ""}
+                placeholder="-12.0626834"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs text-slate-500">Longitud del origen</span>
+              <input
+                name="tanders_origin_lng"
+                defaultValue={s.tanders_origin_lng ?? ""}
+                placeholder="-77.0510333"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
         </fieldset>
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
