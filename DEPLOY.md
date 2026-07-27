@@ -771,6 +771,24 @@ clave de idempotencia. En consecuencia:
   haya sido recibida en agencia. Ese `{id}` es el de `GET /v1/orders`, **no** el
   `ose_id` ni la `guia` (por eso hay tres columnas y no una).
 
+### El rótulo y el código corto
+
+Shalom identifica cada envío con **dos** cosas, y su panel muestra las dos: el
+número de orden (`89861708`, que es lo que guardamos como `guide_code`) y un
+**código corto** (`77PH`). Con solo el número largo hay que abrir cada envío en
+`pro.shalom.pe` para saber cuál es cuál, así que el corto (`shalom_codigo`) se
+arrastra hasta el drawer y se muestra al lado.
+
+El **rótulo** se sirve desde el propio panel: `/api/shalom/label/{shipmentId}`
+pide el PDF a Shalom y lo devuelve, así que se imprime sin entrar a su web. La
+ruta autoriza por RLS —solo lo ve quien ya puede ver ese envío— y es una lectura,
+así que renueva la sesión y reintenta sola si el token murió.
+
+Ojo: **solo las guías creadas por API tienen rótulo aquí.** Las que llegaron por
+el reporte Excel no tienen `shalom_ose_id` —nacieron en el panel de Shalom— y su
+rótulo hay que bajarlo de allá. El enlace no aparece para esas, y si alguien
+llega a la ruta a mano, responde diciendo exactamente eso.
+
 ### La clave de recojo nace con la guía
 
 `pickup_code` lo elegimos nosotros, así que la clave **se genera en el servidor**

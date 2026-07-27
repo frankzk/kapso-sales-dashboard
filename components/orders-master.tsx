@@ -1036,6 +1036,14 @@ function OrderDrawer({
                     >
                       <span className="font-medium capitalize text-slate-800">{g.courier}</span>
                       <span className="font-mono text-xs text-slate-500">{g.guide_code}</span>
+                      {/* Shalom muestra en su panel el nº de orden Y un código
+                          corto. Sin el corto hay que abrir cada envío allá para
+                          saber cuál es cuál. */}
+                      {g.shalom_codigo && (
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs font-medium text-slate-700">
+                          {g.shalom_codigo}
+                        </span>
+                      )}
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
                         {g.delivery_status}
                       </span>
@@ -1054,6 +1062,20 @@ function OrderDrawer({
                           target="_blank"
                           rel="noreferrer"
                           onClick={() => void markTandersLabelGenerated([g.id])}
+                          className="text-xs font-medium text-brand-700 hover:underline"
+                        >
+                          Rótulo ↗
+                        </a>
+                      )}
+                      {/* El rótulo de Shalom lo compone ELLOS, no nosotros: se
+                          pide a su API y se sirve como PDF. Solo existe para las
+                          guías creadas por API — las que llegaron por el Excel
+                          no tienen `ose_id` y hay que bajarlas de su panel. */}
+                      {g.courier === "shalom" && g.shalom_ose_id && (
+                        <a
+                          href={`/api/shalom/label/${g.id}`}
+                          target="_blank"
+                          rel="noreferrer"
                           className="text-xs font-medium text-brand-700 hover:underline"
                         >
                           Rótulo ↗

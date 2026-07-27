@@ -275,6 +275,15 @@ export interface ShipmentRow {
   /** 'fenix_directo' = guía creada desde un pedido, sin guía Aliclik madre. */
   created_via?: string | null;
   delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado
+  /**
+   * Shalom identifica un envío con DOS cosas en su panel: el nº de orden
+   * (`guide_code`) y un código corto (`77PH`). Sin el corto hay que abrir cada
+   * envío en pro.shalom.pe para saber cuál es cuál. Nulo en las guías que
+   * llegaron por el reporte Excel; solo lo traen las creadas por API (0061).
+   */
+  shalom_codigo?: string | null;
+  /** Id con el que Shalom sirve el rótulo PDF. Solo en las creadas por API. */
+  shalom_ose_id?: number | null;
   /** Delivery attempts reported by Aliclik's daily Excel (NRO. INTENTOS). */
   aliclik_attempts: number | null;
   /** Operative delivery date reported by Aliclik, as YYYY-MM-DD. */
