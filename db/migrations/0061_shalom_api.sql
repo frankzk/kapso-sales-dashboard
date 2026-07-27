@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0059_shalom_api.sql — crear guías de Shalom por API desde el Master.
+-- 0061_shalom_api.sql — crear guías de Shalom por API desde el Master.
 --
 -- Shalom ya estaba en el sistema, pero solo de ENTRADA: sus reportes Excel se
 -- suben y los parsea el adaptador de agencia (lib/couriers/agency.ts). Esta

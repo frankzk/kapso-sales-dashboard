@@ -35,7 +35,7 @@ export const PERMISSIONS = [
   // paquete real detrás— pero permiso propio: son couriers distintos y una
   // tienda puede querer habilitar uno sin el otro.
   "tanders.create_guide",
-  // Shalom por API (0059). Ojo con la vecindad: los `shalom.*` de arriba son del
+  // Shalom por API (0061). Ojo con la vecindad: los `shalom.*` de arriba son del
   // flujo de cobro y de la clave de recojo. Este es el de crear la preguía, que
   // es una escritura hacia afuera y cobrable — mismo criterio que Aliclik y
   // Tanders. Crear la guía NO implica poder ver la clave que la acompaña.

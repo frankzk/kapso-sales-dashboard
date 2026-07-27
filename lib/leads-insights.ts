@@ -193,17 +193,24 @@ async function fetchQueueLeavers(sb: Sb, storeId: string, windowStartIso: string
   }
   // Un lead con gestión previa a la ventana ya había salido de la cola: fuera.
   // Chunk corto (150) para que ni un lead muy re-tocado acerque la respuesta
-  // del lookup al tope de filas.
-  for (const part of chunk([...firstInWindow.keys()], 150)) {
-    const { data } = await sb
-      .from("lead_calls")
-      .select("lead_id")
-      .eq("store_id", storeId)
-      .not("new_status", "is", null)
-      .neq("new_status", "nuevo")
-      .lt("occurred_at", windowStartIso)
-      .in("lead_id", part);
-    for (const r of (data as { lead_id: string }[]) ?? []) firstInWindow.delete(r.lead_id);
+  // del lookup al tope de filas. Los trozos NO dependen entre sí: se preguntan
+  // todos a la vez. En serie, una tienda con miles de gestiones en la semana
+  // encadenaba una decena de viajes y el panel de gráficos tardaba en aparecer.
+  const parts = chunk([...firstInWindow.keys()], 150);
+  const previous = await Promise.all(
+    parts.map((part) =>
+      sb
+        .from("lead_calls")
+        .select("lead_id")
+        .eq("store_id", storeId)
+        .not("new_status", "is", null)
+        .neq("new_status", "nuevo")
+        .lt("occurred_at", windowStartIso)
+        .in("lead_id", part),
+    ),
+  );
+  for (const { data } of previous) {
+    for (const r of (data as { lead_id: string }[] | null) ?? []) firstInWindow.delete(r.lead_id);
   }
   return [...firstInWindow.values()];
 }

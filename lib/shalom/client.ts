@@ -13,7 +13,7 @@
 //
 //  1. LA PRIMERA LLAMADA DE CADA CUENTA TARDA ~90 s (hasta 2 min): el wrapper
 //     hace un login real contra pro.shalom.pe. Por eso el token de sesión se
-//     saca aparte y se guarda en la tienda (0059): `POST /v1/shalom/sessions`
+//     saca aparte y se guarda en la tienda (0061): `POST /v1/shalom/sessions`
 //     es una LECTURA, reintentable sin riesgo, y concentra ahí toda la lentitud.
 //
 //  2. `POST /v1/orders` NO ES IDEMPOTENTE y crea una guía real y cobrable. No

@@ -73,6 +73,21 @@ describe("errores", () => {
     );
   });
 
+  it("atribuye a Aliclik los fallos 5xx, que llegan en inglés y genéricos", () => {
+    // Su "Internal server error" pelado se lee como un fallo NUESTRO y manda al
+    // equipo a revisar el dashboard, que está bien.
+    const msg = aliclikErrorMessage(500, { message: "Internal server error" });
+    expect(msg).toContain("Internal server error");
+    expect(msg).toContain("500");
+    expect(msg).toContain("no en el dashboard");
+  });
+
+  it("deja intactos los mensajes 4xx, que sí son accionables", () => {
+    expect(aliclikErrorMessage(400, { message: "El número de pedido ya existe." })).toBe(
+      "El número de pedido ya existe.",
+    );
+  });
+
   it("da un mensaje útil cuando el cuerpo no trae ninguno", () => {
     expect(aliclikErrorMessage(401, {})).toContain("Token");
     expect(aliclikErrorMessage(502, {})).toContain("Shalom");
@@ -368,5 +383,81 @@ describe("salida por Edge", () => {
     await listProducts({ ...edgeOpts(impl), egress: "direct" });
     expect(calls[0]!.url.startsWith(BASE)).toBe(true);
     expect(calls[0]!.url).not.toContain("aliclik-egress");
+  });
+});
+
+describe("reintento ante fallos pasajeros de Aliclik", () => {
+  const opts = (fetchImpl: typeof fetch) =>
+    ({ apiToken: "t", egress: "direct" as const, fetchImpl });
+
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+
+  it("reintenta un 500 de la cotización y devuelve el resultado bueno", async () => {
+    // Medido en producción: su API devuelve 500 de forma intermitente sobre
+    // cotizaciones idénticas a otras que funcionan minutos después.
+    let calls = 0;
+    const res = await quoteShippingCost(
+      opts(async () => {
+        calls += 1;
+        return calls === 1
+          ? json(500, { message: "Internal server error" })
+          : json(200, { couriers: [{ transportId: 1, deliveryCost: 16.5, returnCost: 10.5, addDays: 3, flagDeliveryExpress: false }] });
+      }),
+      { warehouseId: 1, lat: "-16.3", lng: "-71.5" },
+    );
+    expect(calls).toBe(2);
+    expect(res.ok).toBe(true);
+  });
+
+  it("NO reintenta un 400: un dato malo no mejora solo", async () => {
+    let calls = 0;
+    const res = await quoteShippingCost(
+      opts(async () => {
+        calls += 1;
+        return json(400, { message: "lat y lng son requeridos" });
+      }),
+      { warehouseId: 1, lat: "", lng: "" },
+    );
+    expect(calls).toBe(1);
+    expect(res.ok).toBe(false);
+  });
+
+  it("NUNCA reintenta crear un pedido: duplicaría una guía real", async () => {
+    // Aliclik no tiene idempotency key, así que un segundo POST puede dejar dos
+    // guías para el mismo paquete. Se prefiere el error a la duplicación.
+    let calls = 0;
+    const res = await createOrder(
+      opts(async () => {
+        calls += 1;
+        return json(500, { message: "Internal server error" });
+      }),
+      {
+        delivery: 16.5,
+        customer: { name: "X", phone: "51999999999" },
+        shipping: { address1: "A", lat: "-16.3", lng: "-71.5" },
+        products: [{ ean: "1", quantity: 1, price: 99 }],
+        courier: { transportId: 1, deliveryCost: 16.5, returnCost: 10.5, addDays: 3, flagDeliveryExpress: false },
+      },
+    );
+    expect(calls).toBe(1);
+    expect(res.ok).toBe(false);
+  });
+
+  it("se rinde tras tres intentos y devuelve el error atribuido", async () => {
+    let calls = 0;
+    const res = await quoteShippingCost(
+      opts(async () => {
+        calls += 1;
+        return json(500, { message: "Internal server error" });
+      }),
+      { warehouseId: 1, lat: "-16.3", lng: "-71.5" },
+    );
+    expect(calls).toBe(3);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain("no en el dashboard");
   });
 });

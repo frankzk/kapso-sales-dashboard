@@ -611,7 +611,33 @@ drawer del Master y devuelve el código de guía.
 - **Saldo insuficiente**: según la operación, Tanders no deja registrar. Se
   traduce a un mensaje explícito para el 402/403.
 
-## 5ñ. Shalom por API — crear preguías desde el Master
+## 5ñ. Leads — que la cola cargue rápido
+
+El panel de Leads se sentía lento sin que ninguna consulta fuera lenta por sí
+sola: era el goteo. Cada carga —y cada refresco en vivo, que iba cada 30 s por
+cada asesora con la pestaña abierta— lanzaba siete `count(*)` exactos sobre
+`leads` más el recorrido completo de la cola, y el navegador volvía a montar las
+miles de filas enteras.
+
+- **Needs migration 0059** (`lead_queue_counts` + tres índices sobre `leads`).
+  Es aditiva: no toca datos y los índices tardan milisegundos a este tamaño de
+  tabla. **La app funciona sin ella**: si la función no existe, los contadores
+  caen solos al camino anterior (los siete conteos) — solo se pierde la mejora,
+  no la pestaña. Aplicarla igualmente, que es de donde sale la mayor parte del
+  ahorro.
+- **El refresco en vivo ya no recarga a ciegas.** Pregunta primero por la firma
+  de la cola (`total` + `last_change`) y solo recarga si cambió. Con la cola
+  quieta, una pestaña abierta pasa de recargar 120 veces por hora a ninguna, y
+  aun así se refresca sola cada 5 minutos como red de seguridad.
+- **La lista se pinta por tramos** (60 filas y más al bajar). Los contadores, el
+  gráfico y la exportación de audiencia siguen calculándose sobre el universo
+  completo: lo que cambia es cuántas filas existen en el DOM, no los números.
+- **Verificación**: `bash scripts/verify-db.sh` compara la función con los siete
+  filtros originales uno a uno (`scripts/sql/lead_queue_counts_smoke.sql`). Si
+  alguna pestaña mostrara un número que no cuadra con su lista, esa prueba es lo
+  primero que hay que mirar.
+
+## 5o. Shalom por API — crear preguías desde el Master
 
 Shalom ya estaba en el sistema, pero **solo de entrada**: su reporte Excel se
 sube y lo parsea el adaptador de agencia (`lib/couriers/agency.ts`). Esto abre la
@@ -624,10 +650,14 @@ Los dos caminos **conviven**: la guía creada acá vive en `shipments` con
 siguiente cruza con ella por número de guía como con cualquier otro envío. No
 hay que dejar de subir el Excel.
 
-- **Needs migration 0059** (`stores.shalom_*`, `shipments.shalom_codigo` /
+- **Needs migration 0061** (`stores.shalom_*`, `shipments.shalom_codigo` /
   `shalom_ose_id` / `shalom_order_id` / `shalom_serie` / `shalom_raw`).
-  **Ya aplicada en producción.** Es puramente aditiva, así que se pudo aplicar
-  antes de desplegar el código: las columnas quedan sin que nadie las lea.
+  **Ya aplicada en producción**, cuando el fichero se llamaba `0059`: nació en
+  paralelo a la 0059 de Leads y se renumeró al mergear, porque dos migraciones
+  no pueden compartir número. No hay que volver a aplicarla, y si se aplica no
+  pasa nada — es `add column if not exists` de principio a fin. Al ser puramente
+  aditiva se pudo aplicar antes de desplegar el código: las columnas quedan sin
+  que nadie las lea.
 - Los dos secretos nuevos de `stores` heredan la postura del resto de esa tabla
   (`shopify_token_enc`, `kapso_api_key_enc`, `tanders_password_enc`…): `anon` no
   llega por RLS, y un usuario autenticado con acceso a la tienda ve el **texto

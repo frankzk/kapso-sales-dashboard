@@ -707,9 +707,20 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
     if (state.notice === "Tienda actualizada.") router.refresh();
   }, [router, state]);
 
+  // El `router.refresh()` de arriba no bastaba. React 19 resetea el formulario
+  // al terminar la acción, y un campo NO controlado vuelve al `defaultValue`
+  // que tenía AL MONTARSE: cambiar la prop no mueve la selección del DOM. Con
+  // eso, "Crear guías en Aliclik" se guardaba como `true` en la base y acto
+  // seguido la pantalla volvía a pintar "Deshabilitado" — el usuario veía un
+  // fallo donde no lo había. La `key` cambia solo cuando cambia lo PERSISTIDO,
+  // así que el formulario se vuelve a montar tras guardar (y solo entonces) y
+  // cada `defaultValue` se aplica de nuevo. Vale para todos los selectores de
+  // la pantalla, no solo el de Aliclik: todos tenían el mismo fallo latente.
+  const persistedKey = JSON.stringify([data.store, data.has]);
+
   return (
     <Card>
-      <form action={action} className="space-y-5">
+      <form key={persistedKey} action={action} className="space-y-5">
         <input type="hidden" name="store_id" value={s.id} />
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -1199,17 +1210,19 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
           <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
-            Lectura de comprobantes Yape
+            Integración Aliclik
           </legend>
           <p className="text-xs text-slate-500">
-            Clave de <strong>Anthropic</strong> de esta tienda. Se usa para dos cosas: decidir si
-            una captura del cliente es un comprobante Yape real (la alerta de{" "}
-            <em>Yape/Shalom por verificar</em>) y <strong>transcribir</strong> el comprobante en el
-            Master de Pedidos —nº de operación, monto, fecha y hora— para que nadie tenga que
-            teclearlo. Cada tienda usa <strong>su propia clave</strong>, así que el gasto de cada una
-            es independiente.
+            Token de la API de <strong>Aliclik</strong>, para leer el catálogo y crear guías de
+            contraentrega desde el Master de Pedidos. Crear guías necesita <strong>dos</strong>{" "}
+            llaves: este interruptor por tienda y la variable <code>ALICLIK_WRITE_ENABLED</code> del
+            servidor. Con una sola, no se escribe nada en Aliclik.
           </p>
-          <SecretField name="aliclik_api_token" label="Token de integración de Aliclik" set={data.has.aliclikToken} />
+          <SecretField
+            name="aliclik_api_token"
+            label="Token de integración de Aliclik"
+            set={data.has.aliclikToken}
+          />
           <div>
             <label className={labelCls} htmlFor="aliclik_enabled">
               Crear guías en Aliclik
@@ -1227,6 +1240,20 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
               <option value="true">Habilitado</option>
             </select>
           </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Lectura de comprobantes Yape
+          </legend>
+          <p className="text-xs text-slate-500">
+            Clave de <strong>Anthropic</strong> de esta tienda. Se usa para dos cosas: decidir si
+            una captura del cliente es un comprobante Yape real (la alerta de{" "}
+            <em>Yape/Shalom por verificar</em>) y <strong>transcribir</strong> el comprobante en el
+            Master de Pedidos —nº de operación, monto, fecha y hora— para que nadie tenga que
+            teclearlo. Cada tienda usa <strong>su propia clave</strong>, así que el gasto de cada una
+            es independiente.
+          </p>
           <SecretField
             name="anthropic_api_key"
             label="API key de Anthropic"

@@ -46,6 +46,7 @@ import {
   resolveAliclikItems,
   type ResolvedItem,
 } from "@/lib/aliclik-catalog";
+import { MAX_ACCEPTABLE_LOSS, reconcileToOrderTotal } from "@/lib/aliclik-money";
 import {
   canScheduleExpress,
   limaTimeHHMM,
@@ -132,9 +133,40 @@ export interface AliclikPreview {
   ourUbigeo?: { region: string | null; province: string | null; district: string | null };
   ubigeoMismatch?: boolean;
   couriers?: (AliclikCourierQuote & { selectable: boolean; reason?: string })[];
+  /** Nombre del pedido (#KP…). La operadora tiene que VER sobre cuál crea. */
+  orderName?: string | null;
+  /** Lo que Aliclik cobrará en la puerta. Es la cifra que hay que enseñar. */
+  collectTotal?: number;
+  /** Total del pedido en Shopify. Si difiere de `collectTotal`, se avisa. */
+  orderTotal?: number | null;
   coordinate?: { lat: string; lng: string };
   /** Falta la coordenada: la interfaz debe pedirla antes de seguir. */
   needsCoordinate?: boolean;
+  /**
+   * El pedido acaba de crearse y Shopify todavía no nos ha devuelto su
+   * dirección. NO es un error ni hay nada que la operadora deba hacer: el
+   * webhook llega en segundos y trae dirección Y coordenada geocodificada.
+   * Se distingue de `needsCoordinate` a propósito — pedirle un enlace de Maps
+   * aquí sería pedirle trabajo que el sistema va a hacer solo.
+   */
+  notReady?: boolean;
+  /**
+   * Por qué NO se podría crear la guía aunque la cotización salga bien.
+   *
+   * La cotización es de solo lectura, así que se permite siempre; la escritura
+   * exige además las dos llaves. Sin este dato el panel enseñaba el botón
+   * "Crear guía" en azul y la operadora descubría el bloqueo DESPUÉS de pulsar
+   * un botón que el propio panel describe como irreversible. Se decide en el
+   * servidor porque `ALICLIK_WRITE_ENABLED` no existe en el navegador.
+   */
+  writeBlocked?: string;
+}
+
+/** Motivo por el que la escritura está cerrada, o null si está abierta. */
+function writeBlockedReason(): string | null {
+  return env.aliclikWriteEnabled()
+    ? null
+    : "La escritura hacia Aliclik está desactivada en este entorno (ALICLIK_WRITE_ENABLED). Puedes cotizar, pero no crear la guía.";
 }
 
 const norm = (v: string | null | undefined) =>
@@ -157,6 +189,24 @@ export async function previewAliclikGuide(
 ): Promise<AliclikPreview> {
   const { ctx, error } = await authorize(orderId, "aliclik.create_guide");
   if (!ctx) return { ok: false, error };
+
+  // Pedido recién creado desde Leads: la fila local existe (la acción del botón
+  // verde recalcula el Master), pero la dirección llega con el webhook de
+  // Shopify unos segundos después. Sin dirección no se puede ni cotizar ni
+  // crear, así que se dice que hay que esperar — no que falte una coordenada.
+  // El límite de tiempo importa: pasados unos minutos ya NO es una carrera,
+  // es un pedido roto, y entonces sí hay que enseñar el problema de verdad.
+  if (!ctx.row.address) {
+    const createdAt = Date.parse(ctx.row.order_created_at ?? "");
+    const fresh = Number.isFinite(createdAt) && Date.now() - createdAt < 10 * 60_000;
+    if (fresh) {
+      return {
+        ok: false,
+        notReady: true,
+        error: "Esperando la dirección de Shopify. Tarda unos segundos.",
+      };
+    }
+  }
 
   const modality = input.modality ?? "cod";
   const admin = createAdminSupabase();
@@ -185,6 +235,27 @@ export async function previewAliclikGuide(
     };
   }
 
+  // 1-bis. EL DINERO. Aliclik cobra la suma de `precio × cantidad` y no tiene
+  //        campo de descuento, pero los precios de Shopify son los de LISTA
+  //        (`originalUnitPriceSet`, antes de descuentos). Mandarlos tal cual
+  //        cobró S/447 en un pedido de S/298. Se cuadran contra el total real.
+  const money = reconcileToOrderTotal(resolved.items, ctx.row.order_total);
+  if (!money) {
+    const total = ctx.row.order_total;
+    const units = resolved.items.reduce((s, i) => s + i.quantity, 0);
+    return {
+      ok: false,
+      error:
+        total == null || total <= 0
+          ? "No se puede determinar cuánto hay que cobrarle a la clienta: el pedido no tiene un total válido. " +
+            "No se crea la guía a ciegas, porque Aliclik cobraría el precio de lista sin descuentos."
+          : `Aliclik solo cobra importes enteros, y con ${units} unidad(es) no hay ninguno que se acerque a ` +
+            `S/ ${Number(total).toFixed(2)} sin dejar de cobrar más de S/ ${MAX_ACCEPTABLE_LOSS.toFixed(2)}. ` +
+            "Crea esta guía desde el panel de Aliclik, o ajusta el pedido para que el total sea alcanzable.",
+    };
+  }
+  const priced = { ...resolved, items: money.items };
+
   // 2. La coordenada. Es el cuello de botella real: Shopify no la entrega, así
   //    que casi siempre hay que pedirla. Se acepta lo que la operadora pegue
   //    (par suelto o enlace de Google Maps).
@@ -200,7 +271,10 @@ export async function previewAliclikGuide(
       needsCoordinate: true,
       warehouseId: resolved.warehouseId,
       warehouseName: resolved.warehouseName,
-      items: resolved.items,
+      items: priced.items,
+      orderName: ctx.row.order_name,
+      collectTotal: money.total,
+      orderTotal: ctx.row.order_total,
       error:
         "Este pedido no tiene coordenada, y Aliclik la exige para cotizar y crear. Pega el enlace de Google Maps que mandó la clienta.",
     };
@@ -267,12 +341,16 @@ export async function previewAliclikGuide(
     warnings: resolved.warnings,
     warehouseId: resolved.warehouseId,
     warehouseName: resolved.warehouseName,
-    items: resolved.items,
+    items: priced.items,
+    orderName: ctx.row.order_name,
+    collectTotal: money.total,
+    orderTotal: ctx.row.order_total,
     aliclikUbigeo,
     ourUbigeo,
     ubigeoMismatch,
     couriers: annotated,
     coordinate: { lat, lng },
+    writeBlocked: writeBlockedReason() ?? undefined,
   };
 }
 
@@ -286,6 +364,16 @@ export interface CreateGuideInput {
   /** Coordenada confirmada por la operadora (par o enlace de Maps). */
   coordinate?: string | null;
   note?: string | null;
+  /**
+   * El monto que la operadora VIO en el preview. El servidor lo recalcula y
+   * aborta si no coincide.
+   *
+   * No es paranoia: entre cotizar y pulsar, alguien pudo editar el pedido en
+   * Shopify (quitar un descuento, cambiar una cantidad) y la guía saldría con
+   * un importe distinto del que se aprobó. Cobrar mal en la puerta es
+   * irreversible y lo paga la clienta.
+   */
+  expectedCollectTotal?: number | null;
 }
 
 export async function createAliclikGuide(
@@ -320,6 +408,19 @@ export async function createAliclikGuide(
   const preview = await previewAliclikGuide(orderId, { coordinate: input.coordinate, modality: "cod" });
   if (!preview.ok || !preview.items || !preview.coordinate || !preview.warehouseId) {
     return { error: preview.error ?? "No se pudo validar el pedido." };
+  }
+
+  // El dinero que se va a cobrar tiene que ser EL MISMO que se aprobó.
+  if (
+    input.expectedCollectTotal != null &&
+    preview.collectTotal != null &&
+    Math.abs(preview.collectTotal - input.expectedCollectTotal) > 0.005
+  ) {
+    return {
+      error:
+        `El monto a cobrar cambió desde que cotizaste (ahora S/ ${preview.collectTotal.toFixed(2)}, ` +
+        `antes S/ ${input.expectedCollectTotal.toFixed(2)}). No se creó la guía. Vuelve a cotizar y revísalo.`,
+    };
   }
 
   const courier = preview.couriers?.find((c) => c.transportId === input.transportId);
@@ -494,10 +595,56 @@ export async function createAliclikGuide(
     },
   });
 
+  // El mismo hecho, también en el HISTORIAL DEL LEAD.
+  //
+  // `order_events` es la verdad del pedido, pero el drawer de Leads no lo lee:
+  // su historial es `lead_calls`. Sin esto, la vendedora veía la confirmación
+  // unos segundos y desaparecía al recargarse el drawer, sin rastro de qué guía
+  // se había creado. Se anotan los DOS códigos —el pedido de Shopify y la guía—
+  // porque son los que hay que cruzar cuando algo se tuerce.
+  //
+  // Best-effort: un fallo aquí NO puede tumbar una guía que ya existe en
+  // Aliclik. Y no todo pedido viene de un lead (el Master crea guías de pedidos
+  // que nunca pasaron por WhatsApp), así que no encontrar lead es normal.
+  try {
+    const { data: lead } = await admin
+      .from("leads")
+      .select("id")
+      .eq("order_id", orderId)
+      .maybeSingle();
+    const leadId = (lead as { id: string } | null)?.id;
+    if (leadId) {
+      await admin.from("lead_calls").insert({
+        lead_id: leadId,
+        store_id: ctx.storeId,
+        // SIN vendedora, y no por descuido. `computeAdvisorConversionByDay`
+        // atribuye la venta a quien hizo la ÚLTIMA interacción del lead, de
+        // cualquier tipo. Firmar esta nota le robaría la venta a la asesora que
+        // la cerró y se la daría a quien creó la guía — que puede ser otra
+        // persona, o la misma en lote horas después. Quién creó la guía consta
+        // en `order_events`, que es la auditoría de verdad; esto es solo la
+        // anotación en el historial del lead.
+        vendedora: null,
+        kind: "system",
+        new_status: null,
+        note:
+          `Guía de Aliclik creada · ${orderNumber} · pedido ${ctx.row.order_name ?? "—"} · ` +
+          `cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)} · ` +
+          `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}`,
+      });
+    }
+  } catch {
+    /* el historial es una comodidad; la guía ya existe y no se toca */
+  }
+
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
+  revalidatePath("/dashboard/leads");
   return {
-    notice: `Guía creada en Aliclik: ${orderNumber} (${courierBlock.transportName ?? "courier"}, S/ ${courierBlock.deliveryCost}).`,
+    notice:
+      `Guía creada en Aliclik para ${ctx.row.order_name ?? "el pedido"}: ${orderNumber} · ` +
+      `cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)} · ` +
+      `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}.`,
   };
 }
 

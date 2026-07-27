@@ -63,7 +63,7 @@ export interface StoreSettingsInput {
   tanders_origin_address?: string;
   tanders_origin_lat?: string;
   tanders_origin_lng?: string;
-  // Shalom por API (0059). La API key del wrapper NO está acá: es de la cuenta
+  // Shalom por API (0061). La API key del wrapper NO está acá: es de la cuenta
   // de Kapso, una sola sirve para todas las tiendas y vive en el entorno
   // (SHALOM_API_KEY). Lo de acá es la cuenta de pro.shalom.pe del cliente, que
   // es lo único que cambia de una tienda a otra.
@@ -233,7 +233,7 @@ export function buildStoreUpdate(
   const tandersPass = clean(input.tanders_password);
   if (tandersPass) patch.tanders_password_enc = encrypt(tandersPass, keyOverride);
 
-  // Shalom por API (0059). Cambiar de cuenta invalida el token de sesión
+  // Shalom por API (0061). Cambiar de cuenta invalida el token de sesión
   // cacheado: se limpia acá en vez de esperar a que la próxima guía falle con
   // un 401 contra la cuenta anterior.
   //
