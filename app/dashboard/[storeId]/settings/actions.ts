@@ -25,6 +25,14 @@ export interface SettingsState {
   kapsoSecret?: string;
   /** Igual que `kapsoSecret`, para el webhook de Aliclik (0054). */
   aliclikSecret?: string;
+  /**
+   * Catálogo de la cuenta de Shalom, tal como lo devolvió «Probar conexión».
+   * Sirve para que «tipo de paquete por defecto» sea un desplegable: los ids son
+   * POR CUENTA (los de la documentación no valen) y el catálogo llega a repetir
+   * uno — esta cuenta devuelve `id=2` para «Caja Paquete L» y «Otra Medida» —
+   * así que escribirlo a mano es justo donde se cuela el error.
+   */
+  shalomProducts?: { id: number; title: string; content: string | null }[];
 }
 
 async function requireStoreAdmin(
@@ -485,21 +493,33 @@ export async function testShalomConnection(
   });
 
   // ── 3. El catálogo, que es lo que hace falta para terminar de configurar ──
+  //
+  // Se devuelve además EN CRUDO (`shalomProducts`), no solo como texto: es lo
+  // que convierte el «tipo de paquete por defecto» en un desplegable en vez de
+  // un id a mano. Leerlo exige la sesión de Shalom Pro —los ~90 s de login— así
+  // que no se puede pedir al abrir Ajustes sin volver la página inservible;
+  // colgarlo de esta prueba, que ya paga esa sesión, es lo único que sale
+  // gratis. Mientras no se pruebe la conexión, el campo sigue aceptando el id.
   let productos = "";
+  let shalomProducts: SettingsState["shalomProducts"];
   try {
     const { client } = clientFor(await loadStoreShalom(ctx.admin, storeId) ?? store);
     const list = await client.products();
-    productos = list.length
-      ? `\nProductos de esta cuenta (el id va abajo, en «tipo de paquete por defecto»):\n${list
-          .map((p) => `  · id ${p.id} — ${p.title}${p.content ? ` (${p.content})` : ""}`)
-          .join("\n")}`
-      : "\nLa cuenta no devolvió productos, lo cual es raro: revísalo en pro.shalom.pe.";
+    if (list.length) {
+      shalomProducts = list.map((p) => ({ id: p.id, title: p.title, content: p.content ?? null }));
+      productos = `\nProductos de esta cuenta (ya cargados en el desplegable de «tipo de paquete por defecto»):\n${list
+        .map((p) => `  · id ${p.id} — ${p.title}${p.content ? ` (${p.content})` : ""}`)
+        .join("\n")}`;
+    } else {
+      productos = "\nLa cuenta no devolvió productos, lo cual es raro: revísalo en pro.shalom.pe.";
+    }
   } catch (e) {
     productos = `\nNo se pudo leer el catálogo de productos: ${describeShalomError(e)}`;
   }
 
   revalidatePath(`/dashboard/${storeId}/settings`);
   return {
+    shalomProducts,
     notice:
       `✓ Todo conectado.\n` +
       `API key del wrapper: OK${cupo}.\n` +

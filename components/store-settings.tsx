@@ -121,6 +121,13 @@ export function StoreSettings({
   banner?: { kind: "ok" | "error"; msg: string } | null;
 }) {
   const s = data.store;
+  // El estado de «Probar conexión» vive acá y no dentro de ShalomSection porque
+  // lo necesitan los dos hermanos: la sección lo muestra, y el formulario de
+  // abajo saca de ahí el catálogo para el desplegable de «tipo de paquete».
+  const [shalomTest, shalomTestAction, shalomTestPending] = useActionState(
+    testShalomConnection,
+    initial,
+  );
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -190,9 +197,12 @@ export function StoreSettings({
         email={s.shalom_pro_email}
         originTerminalId={s.shalom_origin_terminal_id}
         originTerminalName={s.shalom_origin_terminal_name}
+        testState={shalomTest}
+        testAction={shalomTestAction}
+        testPending={shalomTestPending}
       />
 
-      <SettingsForm data={data} />
+      <SettingsForm data={data} shalomProducts={shalomTest.shalomProducts} />
 
       <div className="-mt-2">
         <ActionButton
@@ -322,14 +332,19 @@ function ShalomSection({
   email,
   originTerminalId,
   originTerminalName,
+  testState,
+  testAction,
+  testPending,
 }: {
   storeId: string;
   hasAccount: boolean;
   email: string | null;
   originTerminalId: number | null;
   originTerminalName: string | null;
+  testState: SettingsState;
+  testAction: (fd: FormData) => void;
+  testPending: boolean;
 }) {
-  const [testState, testAction, testPending] = useActionState(testShalomConnection, initial);
   const [agencyState, agencyAction, agencyPending] = useActionState(findShalomAgencies, initial);
 
   return (
@@ -695,7 +710,13 @@ function KapsoWebhookSection({
   );
 }
 
-function SettingsForm({ data }: { data: StoreSettingsData }) {
+function SettingsForm({
+  data,
+  shalomProducts,
+}: {
+  data: StoreSettingsData;
+  shalomProducts?: SettingsState["shalomProducts"];
+}) {
   const [state, action, pending] = useActionState(updateStore, initial);
   const router = useRouter();
   const s = data.store;
@@ -1173,7 +1194,10 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
           </p>
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
-              <span className="text-xs text-slate-500">Agencia de origen (ID)</span>
+              <span className="text-xs text-slate-500">
+                Agencia de origen (ID)
+                <SavedMark set={s.shalom_origin_terminal_id != null} />
+              </span>
               <input
                 name="shalom_origin_terminal_id"
                 inputMode="numeric"
@@ -1183,7 +1207,10 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
               />
             </label>
             <label className="block">
-              <span className="text-xs text-slate-500">Agencia de origen (nombre)</span>
+              <span className="text-xs text-slate-500">
+                Agencia de origen (nombre)
+                <SavedMark set={Boolean(s.shalom_origin_terminal_name)} />
+              </span>
               <input
                 name="shalom_origin_terminal_name"
                 defaultValue={s.shalom_origin_terminal_name ?? ""}
@@ -1193,17 +1220,45 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
             </label>
           </div>
           <label className="block">
-            <span className="text-xs text-slate-500">Tipo de paquete por defecto (ID de producto)</span>
-            <input
-              name="shalom_default_product_id"
-              inputMode="numeric"
-              defaultValue={s.shalom_default_product_id ?? ""}
-              placeholder="3"
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            />
+            <span className="text-xs text-slate-500">
+              Tipo de paquete por defecto
+              <SavedMark set={s.shalom_default_product_id != null} />
+            </span>
+            {/* Desplegable en cuanto «Probar conexión» haya traído el catálogo.
+                No se puede cargar al abrir Ajustes: leerlo exige la sesión de
+                Shalom Pro, que la primera vez son ~90 s. Sin catálogo el campo
+                sigue aceptando el id a mano, que es como se configuró hasta
+                ahora y como se sale del paso si la cuenta no responde. */}
+            {shalomProducts?.length ? (
+              <select
+                name="shalom_default_product_id"
+                defaultValue={s.shalom_default_product_id ?? ""}
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              >
+                <option value="">— sin definir —</option>
+                {/* El catálogo repite ids (esta cuenta manda `id=2` para «Caja
+                    Paquete L» y para «Otra Medida»), así que el id no sirve de
+                    clave. */}
+                {shalomProducts.map((p, i) => (
+                  <option key={`${p.id}-${i}`} value={p.id}>
+                    {p.title}
+                    {p.content ? ` — ${p.content}` : ""} (id {p.id})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                name="shalom_default_product_id"
+                inputMode="numeric"
+                defaultValue={s.shalom_default_product_id ?? ""}
+                placeholder="1096"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            )}
             <span className="mt-1 block text-xs text-slate-400">
-              El catálogo es por cuenta, así que el id no es universal (en la del ejemplo, 3 =
-              Sobre). El modal lista los productos reales y deja cambiarlo por envío.
+              {shalomProducts?.length
+                ? "Productos reales de esta cuenta, traídos por «Probar conexión». El modal deja cambiarlo por envío."
+                : "El catálogo es por cuenta, así que el id no es universal y los de la documentación no valen. Pulsa «Probar conexión» arriba y este campo pasa a ser una lista."}
             </span>
           </label>
         </fieldset>
@@ -1290,6 +1345,24 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
         </div>
       </form>
     </Card>
+  );
+}
+
+/**
+ * «· guardado» para un campo normal, con el mismo lenguaje que usa
+ * `SecretField` para los cifrados.
+ *
+ * Existe porque un `<input>` con un valor dentro no distingue entre «esto está
+ * guardado en la base» y «esto es texto que escribí y todavía no he guardado» —
+ * y el que configura una tienda necesita saberlo antes de irse de la pantalla.
+ * Marca lo que hay EN LA BASE, así que sigue diciendo «guardado» mientras
+ * editas encima; lo que confirma el guardado es el aviso del botón.
+ */
+function SavedMark({ set }: { set: boolean }) {
+  return (
+    <span className={`ml-1 text-xs ${set ? "text-emerald-600" : "text-slate-400"}`}>
+      {set ? "· guardado" : "· sin definir"}
+    </span>
   );
 }
 
