@@ -73,6 +73,21 @@ describe("errores", () => {
     );
   });
 
+  it("atribuye a Aliclik los fallos 5xx, que llegan en inglés y genéricos", () => {
+    // Su "Internal server error" pelado se lee como un fallo NUESTRO y manda al
+    // equipo a revisar el dashboard, que está bien.
+    const msg = aliclikErrorMessage(500, { message: "Internal server error" });
+    expect(msg).toContain("Internal server error");
+    expect(msg).toContain("500");
+    expect(msg).toContain("no en el dashboard");
+  });
+
+  it("deja intactos los mensajes 4xx, que sí son accionables", () => {
+    expect(aliclikErrorMessage(400, { message: "El número de pedido ya existe." })).toBe(
+      "El número de pedido ya existe.",
+    );
+  });
+
   it("da un mensaje útil cuando el cuerpo no trae ninguno", () => {
     expect(aliclikErrorMessage(401, {})).toContain("Token");
     expect(aliclikErrorMessage(502, {})).toContain("Shalom");

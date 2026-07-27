@@ -13,6 +13,7 @@ import {
 } from "@/lib/meta-ads";
 import { waKindLabel, type WaNumber } from "@/lib/wa-numbers";
 import type { CustomerHistory } from "@/lib/leads-access";
+import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import {
   MANUAL_STATUSES,
   categoryOf,
@@ -621,6 +622,30 @@ export function LeadDrawer({
               {/* Asignar Yape (solo admins; se auto-oculta para vendedoras) */}
               {lead.status === "yape_por_verificar" && (
                 <YapeAssign leadId={lead.id} storeId={lead.store_id} onAssigned={onRegistered} />
+              )}
+
+              {/* Crear guía en Aliclik. Es EL MISMO componente que usa el Master de
+                  Pedidos, con las mismas server actions: crear desde aquí o desde
+                  allí escribe la misma fila de `shipments`, porque las dos cuelgan
+                  del id interno del pedido. No hay una versión "de Leads".
+
+                  Va en esta columna y no en un modal a propósito: la vendedora
+                  necesita seguir viendo la conversación de WhatsApp mientras crea
+                  la guía —de ahí sale la ubicación cuando Shopify no la trae— y un
+                  modal taparía justo lo que tiene que mirar.
+
+                  Se muestra en CUALQUIER lead con pedido y sin guía, no solo tras
+                  generarlo: si entra una llamada y cierra el drawer, puede volver
+                  y terminar aquí en vez de irse al Master a buscar el pedido. */}
+              {history?.currentOrderId && !history.currentOrderGuide && (
+                <AliclikGuidePanel
+                  orderId={history.currentOrderId}
+                  hasCoordinate={history.currentOrderHasCoordinate}
+                  // Sin argumento a propósito: `{refreshList:true}` toma un atajo
+                  // que NO recarga el historial, y el panel se quedaría visible
+                  // ofreciendo crear una guía que ya existe.
+                  onCreated={() => onRegistered()}
+                />
               )}
 
               {/* Pedidos anteriores: últimos 3 pedidos de Shopify de este cliente */}
@@ -2051,6 +2076,7 @@ function OrderFormPanel({
       setGeneratedOrder(
         res.generatedOrder ?? {
           id: "",
+          orderId: "",
           name: "Pedido generado",
           total,
           currency,

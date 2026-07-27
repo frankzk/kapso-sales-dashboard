@@ -16,7 +16,7 @@
 // entrega, así que casi ningún pedido las tiene. El campo acepta lo que la
 // operadora ya tiene a mano: el enlace de Google Maps que mandó la clienta.
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { Card } from "@/components/ui";
 import {
   createAliclikGuide,
@@ -40,14 +40,26 @@ export function AliclikGuidePanel({
   const [note, setNote] = useState("");
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
+  /** Cuántas veces se ha reintentado por "pedido todavía sin dirección". */
+  const [retries, setRetries] = useState(0);
 
   const shortened = isShortenedMapsLink(coordinate);
+  const waiting = Boolean(preview?.notReady);
 
   const quote = () => {
     setMessage(null);
     startTransition(async () => {
       const res = await previewAliclikGuide(orderId, { coordinate: coordinate || null });
       setPreview(res);
+      // Pedido recién creado desde Leads: la dirección viene del webhook de
+      // Shopify unos segundos después. Se reintenta solo en vez de dejar a la
+      // vendedora pulsando "Cotizar" a ciegas, y sin tocar `message` para no
+      // pintar en rojo algo que no es un fallo.
+      if (res.notReady) {
+        setRetries((n) => n + 1);
+        return;
+      }
+      setRetries(0);
       // Preselecciona el courier más barato entre los seleccionables: es lo que
       // la operadora elige el 90 % de las veces.
       const cheapest = (res.couriers ?? [])
@@ -76,6 +88,18 @@ export function AliclikGuidePanel({
     });
   };
 
+  // Reintento acotado mientras Shopify nos devuelve la dirección. Se para a los
+  // 6 intentos (~30 s): si a esas alturas sigue sin llegar, ya no es la carrera
+  // normal y hay que dejar de girar en vacío y que alguien lo mire.
+  const MAX_RETRIES = 6;
+  const quoteRef = useRef(quote);
+  quoteRef.current = quote;
+  useEffect(() => {
+    if (!waiting || retries === 0 || retries > MAX_RETRIES) return;
+    const t = setTimeout(() => quoteRef.current(), 5000);
+    return () => clearTimeout(t);
+  }, [waiting, retries]);
+
   return (
     <Card>
       <div className="space-y-4">
@@ -86,8 +110,30 @@ export function AliclikGuidePanel({
           </p>
         </div>
 
+        {/* Esperando a Shopify: ni campo de coordenada ni botón de cotizar. Ambos
+            pedirían a la vendedora un trabajo que el webhook hace solo. */}
+        {waiting ? (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-600">
+            <p className="font-medium text-slate-700">Preparando el pedido…</p>
+            <p className="mt-0.5 text-xs">
+              Shopify todavía no nos ha devuelto la dirección. Tarda unos segundos y no hay que hacer
+              nada.
+            </p>
+            {retries > MAX_RETRIES ? (
+              <button
+                type="button"
+                onClick={quote}
+                disabled={pending}
+                className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {pending ? "Comprobando…" : "Está tardando más de lo normal · reintentar"}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
         {/* Coordenada */}
-        <div>
+        <div className={waiting ? "hidden" : undefined}>
           <label className="mb-1 block text-xs font-medium text-slate-600" htmlFor="alc-coord">
             Ubicación{" "}
             {hasCoordinate ? (
@@ -111,7 +157,7 @@ export function AliclikGuidePanel({
           ) : null}
         </div>
 
-        <div className="flex gap-2">
+        <div className={waiting ? "hidden" : "flex gap-2"}>
           <button
             type="button"
             onClick={quote}
@@ -228,14 +274,17 @@ export function AliclikGuidePanel({
             <button
               type="button"
               onClick={create}
-              disabled={pending || transportId === null}
+              disabled={pending || transportId === null || Boolean(preview.writeBlocked)}
               className="w-full rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50"
             >
               {pending ? "Creando…" : "Crear guía en Aliclik"}
             </button>
+            {/* El servidor vuelve a comprobar las dos llaves antes de escribir:
+                esto es aviso, no seguridad. Pero evita que alguien pulse un
+                botón irreversible para descubrir que estaba cerrado. */}
             <p className="text-center text-xs text-slate-500">
-              Crear el pedido en Aliclik es irreversible y solo se puede cancelar en una ventana
-              corta.
+              {preview.writeBlocked ??
+                "Crear el pedido en Aliclik es irreversible y solo se puede cancelar en una ventana corta."}
             </p>
           </div>
         ) : null}

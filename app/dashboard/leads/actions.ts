@@ -25,6 +25,8 @@ import { OFFER_TTL_MS, planYapeOffers, type RoutingLead } from "@/lib/yape-routi
 import { onlineVendedorasForStore } from "@/lib/presence";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { getMasterPermissions } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import {
   completeDraftOrder,
@@ -97,7 +99,14 @@ export interface LeadActionState {
   >;
   sentMessage?: LeadConversationMessage;
   generatedOrder?: {
+    /** Id de SHOPIFY. Sirve para enlazar a su panel, no para nada interno. */
     id: string;
+    /**
+     * Id INTERNO (`orders.id`). Es el que usan `order_master`, `shipments` y el
+     * panel de guías de Aliclik: crear la guía desde Leads o desde el Master
+     * escribe la MISMA fila porque ambas cuelgan de este id.
+     */
+    orderId: string;
     name: string;
     total: number;
     currency: string;
@@ -225,6 +234,16 @@ export async function loadLeadCustomerHistory(
       /* best-effort recovery — never break the drawer */
     }
   }
+  // Candado del panel de guías: el drawer lo renderiza si hay `currentOrderId`,
+  // así que quien no puede crear guías no debe recibirlo. Se cierra aquí, en el
+  // servidor, y no en el componente: un `viewer` vería el panel y solo
+  // descubriría el bloqueo al pulsar "Cotizar". Las server actions vuelven a
+  // comprobar el permiso antes de escribir — esto es la puerta, no la cerradura.
+  if (customerHistory?.currentOrderId) {
+    const perms = await getMasterPermissions();
+    if (!perms.can("aliclik.create_guide")) customerHistory.currentOrderId = null;
+  }
+
   return { customerHistory, cartSummary };
 }
 
@@ -2046,13 +2065,22 @@ export async function generateOrder(
   if (orderErr || !order) {
     return { error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr?.message ?? "error"}` };
   }
+  const internalOrderId = (order as { id: string }).id;
+
+  // `order_master` NO es una vista: es una tabla derivada que alguien tiene que
+  // rellenar. Hasta ahora esta acción escribía en `orders` y la fila del Master
+  // aparecía segundos después, cuando el webhook de Shopify ingestaba el pedido.
+  // Eso basta para el Master —nadie lo mira en ese instante— pero no para crear
+  // la guía de Aliclik aquí mismo: el panel arranca buscando en `order_master` y
+  // sin fila respondería "Sin acceso a este pedido", que es un error falso.
+  await recomputeOrderMasterSafe(admin, [internalOrderId]);
 
   // 3) Lead won + draft mirror.
   await admin
     .from("leads")
     .update({
       has_order: true,
-      order_id: (order as { id: string }).id,
+      order_id: internalOrderId,
       status: "pedido_generado",
       category: "won",
       needs_attention: false,
@@ -2131,6 +2159,7 @@ export async function generateOrder(
     notice,
     generatedOrder: {
       id: shopifyOrderId,
+      orderId: internalOrderId,
       name: completed.orderName ?? `PED-${shopifyOrderId.slice(-6).toUpperCase()}`,
       total: amount,
       currency,

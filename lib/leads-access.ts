@@ -196,6 +196,16 @@ export interface CustomerHistory {
   lastOrderAt: string | null;
   lastProduct: string | null;
   currentOrderName: string | null; // Shopify name (#AUR…) of the lead's OWN current order
+  /**
+   * Id INTERNO (`orders.id`) del pedido propio del lead — no el de Shopify.
+   * Es la clave con la que trabaja todo lo interno (`order_master`, `shipments`,
+   * `order_events`), y por tanto la que necesita el panel de guías de Aliclik.
+   */
+  currentOrderId: string | null;
+  /** Guía ya creada para ese pedido, si la hay. Con guía no se ofrece crear otra. */
+  currentOrderGuide: string | null;
+  /** Si ese pedido ya tiene punto en el mapa (casi siempre, vía Shopify). */
+  currentOrderHasCoordinate: boolean;
   recentOrders: PriorOrder[]; // last 3 prior orders (excl. own), newest first
 }
 
@@ -211,16 +221,43 @@ export async function getCustomerHistory(
   excludeOrderId?: string | null,
   shopDomain?: string | null,
 ): Promise<CustomerHistory | null> {
-  if (!phone) return null;
   const sb = await createServerSupabase();
 
   // The lead's own current order name (#AUR…) — resolved by id so it's reliable
-  // regardless of phone formatting.
+  // regardless of phone formatting. Junto con él, si ese pedido YA tiene guía:
+  // el drawer usa las dos cosas para decidir si ofrecer crear una en Aliclik.
   let currentOrderName: string | null = null;
+  let currentOrderGuide: string | null = null;
+  let currentOrderHasCoordinate = false;
   if (excludeOrderId) {
-    const { data: cur } = await sb.from("orders").select("name").eq("id", excludeOrderId).maybeSingle();
-    currentOrderName = (cur as { name: string | null } | null)?.name ?? null;
+    const [cur, master] = await Promise.all([
+      sb.from("orders").select("name").eq("id", excludeOrderId).maybeSingle(),
+      sb
+        .from("order_master")
+        .select("guide_code,latitude,longitude")
+        .eq("order_id", excludeOrderId)
+        .maybeSingle(),
+    ]);
+    currentOrderName = (cur.data as { name: string | null } | null)?.name ?? null;
+    const m = master.data as {
+      guide_code: string | null;
+      latitude: number | null;
+      longitude: number | null;
+    } | null;
+    currentOrderGuide = m?.guide_code ?? null;
+    currentOrderHasCoordinate = m?.latitude != null && m?.longitude != null;
   }
+  const own = {
+    currentOrderName,
+    currentOrderId: excludeOrderId ?? null,
+    currentOrderGuide,
+    currentOrderHasCoordinate,
+  };
+
+  // Sin teléfono no hay historial de compras que buscar, pero el pedido propio sí
+  // existe. Antes se salía aquí devolviendo null y el drawer se quedaba sin saber
+  // que el lead tenía un pedido sin guía.
+  if (!phone) return { ...emptyPrior, ...own, recentOrders: [] };
 
   const { data } = await sb
     .from("orders")
@@ -241,8 +278,7 @@ export async function getCustomerHistory(
       line_items: unknown;
     }[]) ?? [];
   if (excludeOrderId) rows = rows.filter((r) => r.id !== excludeOrderId);
-  const empty = { orderCount: 0, lastOrderName: null, lastOrderAt: null, lastProduct: null };
-  if (!rows.length) return { ...empty, currentOrderName, recentOrders: [] };
+  if (!rows.length) return { ...emptyPrior, ...own, recentOrders: [] };
   const last = rows[0]!;
   const items = Array.isArray(last.line_items) ? (last.line_items as { title?: string }[]) : [];
   const lastProduct = items.length ? String(items[0]?.title ?? "").trim() || null : null;
@@ -257,10 +293,18 @@ export async function getCustomerHistory(
     lastOrderName: last.name,
     lastOrderAt: last.created_at,
     lastProduct,
-    currentOrderName,
+    ...own,
     recentOrders,
   };
 }
+
+/** Valores neutros del bloque "cliente recurrente" cuando no hay compras previas. */
+const emptyPrior = {
+  orderCount: 0,
+  lastOrderName: null,
+  lastOrderAt: null,
+  lastProduct: null,
+} as const;
 
 /** View counts + `sin_llamar` (status `nuevo`), the default queue tab + burndown anchor. */
 export type LeadCounts = Record<LeadView, number> & { sin_llamar: number };
