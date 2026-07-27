@@ -722,21 +722,23 @@ ventanas de cancelación estrictas. Sin ambas, el panel cotiza pero no crea.
   en timeout **no la reintentes**: el pedido pudo haberse creado y el cron de
   reconciliación lo vincula solo.
 
-### Si Cloudflare bloquea la conexión
+### Por qué las llamadas a Aliclik salen por Edge
 
-`api.aliclik-dev.com` está detrás de Cloudflare y desafía las peticiones de
-servidor (HTTP 403 con la página "Just a moment"), así que la API nunca llega a
-verlas. Se probó desde `iad1` y desde `gru1` con el mismo resultado.
+**`api.aliclik-dev.com` no es alcanzable desde las funciones Node.** Cloudflare
+desafía las peticiones que salen de IPs de centro de datos de AWS y responde 403
+con su página "Just a moment"; la API de Aliclik nunca llega a verlas. Se
+comprobó desde `iad1` (Virginia) y desde `gru1` (São Paulo): mismo 403.
 
-Queda una hipótesis por descartar: la **clase** de IP. Las dos pruebas salieron
-de centros de datos de AWS, que es lo que Cloudflare puntúa peor. Por eso existe
-`app/api/internal/aliclik-egress/route.ts`, una ruta en runtime **Edge** —otra
-red— por la que se pueden encaminar las llamadas:
+Lo que sí funciona es salir por el runtime **Edge** de Vercel, que corre en otra
+red. La misma petición, con el mismo token, responde 200. Por eso existe
+`app/api/internal/aliclik-egress/route.ts` y por eso `env.aliclikEgress()`
+devuelve `edge` **por defecto**: no es una preferencia, es la única vía que
+llega.
 
 - **"Probar conexión"** (Ajustes → Aliclik) prueba **las dos salidas** de un
-  clic y dice cuál funcionó. Es el diagnóstico completo desde el móvil.
-- Si solo funciona la de Edge, poner `ALICLIK_EGRESS=edge` en el entorno para
-  que todo el panel (catálogo, cotización, creación, crons) la use.
+  clic y reporta ambas. Sirve para saber si la directa vuelve a funcionar.
+- `ALICLIK_EGRESS=direct` vuelve a la salida directa, para el día en que Aliclik
+  ajuste su WAF y se quiera quitar el salto intermedio.
 
 La ruta interna **no es un proxy abierto**: el host de destino sale de la
 configuración y nunca de la petición, solo admite rutas `/integration/*`, y
