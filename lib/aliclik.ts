@@ -326,17 +326,28 @@ export function aliclikErrorMessage(
       (ray ? ` · Ray ID de Cloudflare para reportarlo: ${ray} (UTC ${new Date().toISOString()})` : "")
     );
   }
+  // Un 5xx es un fallo DE ELLOS, y su mensaje suele venir en inglés y genérico
+  // ("Internal server error"). Enseñarlo pelado hace que se lea como un fallo
+  // nuestro y manda al equipo a revisar el dashboard, que está bien. Se atribuye
+  // siempre. Los 4xx se dejan tal cual: ésos sí son accionables y su texto es la
+  // información útil ("El número de pedido … ya existe").
+  const attribute = (msg: string) =>
+    status >= 500
+      ? `Aliclik respondió HTTP ${status}: «${msg}». Es un fallo en el servidor de Aliclik, no en el ` +
+        "dashboard. Reintenta en unos minutos; si sigue igual, repórtaselo."
+      : msg;
+
   if (body && typeof body === "object") {
     const msg = (body as { message?: unknown }).message;
-    if (typeof msg === "string" && msg.trim()) return msg.trim();
+    if (typeof msg === "string" && msg.trim()) return attribute(msg.trim());
     if (Array.isArray(msg)) {
       const joined = msg.filter((m) => typeof m === "string").join("; ").trim();
-      if (joined) return joined;
+      if (joined) return attribute(joined);
     }
     const err = (body as { error?: unknown }).error;
-    if (typeof err === "string" && err.trim()) return err.trim();
+    if (typeof err === "string" && err.trim()) return attribute(err.trim());
   }
-  if (typeof body === "string" && body.trim()) return body.trim().slice(0, 300);
+  if (typeof body === "string" && body.trim()) return attribute(body.trim().slice(0, 300));
   if (status === 401) return "Token de Aliclik inválido o ausente.";
   if (status === 404) return "Aliclik no encontró el recurso.";
   if (status === 502) return "Aliclik no pudo consultar el origen (Shalom). Reintenta más tarde.";
