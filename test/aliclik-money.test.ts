@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MAX_ACCEPTABLE_LOSS, linesTotal, reconcileToOrderTotal } from "@/lib/aliclik-money";
+import {
+  MAX_ACCEPTABLE_LOSS,
+  collectAmountMismatch,
+  linesTotal,
+  reconcileToOrderTotal,
+} from "@/lib/aliclik-money";
 
 describe("reconcileToOrderTotal", () => {
   it("arregla el caso real: 3× S/149 con S/149 de descuento", () => {
@@ -206,5 +211,45 @@ describe("reconcileToOrderTotal · minimiza de verdad", () => {
     expect(reconcileToOrderTotal([{ quantity: 3, price: 100 }], 299)!.total).toBe(297);
     expect(reconcileToOrderTotal([{ quantity: 3, price: 100 }], 300)!.total).toBe(300);
     expect(reconcileToOrderTotal([{ quantity: 3, price: 100 }], 301)!.total).toBe(300);
+  });
+});
+
+describe("collectAmountMismatch", () => {
+  it("avisa cuando Aliclik cobra de MÁS, aunque sea poco", () => {
+    // El fallo original: guía a S/447 sobre un pedido de S/298.
+    const m = collectAmountMismatch(447, 298);
+    expect(m?.kind).toBe("cobra_de_mas");
+    expect(m?.gap).toBe(149);
+    expect(m?.message).toContain("DE MÁS");
+  });
+
+  it("un solo céntimo de más ya es un descuadre", () => {
+    // Por encima del total no hay excusa: la clienta paga más de lo que se le
+    // dijo, y en contraentrega lo descubre con el paquete delante.
+    expect(collectAmountMismatch(298.01, 298)?.kind).toBe("cobra_de_mas");
+  });
+
+  it("no avisa por la diferencia que nosotros mismos generamos al redondear", () => {
+    // Aliclik solo cobra enteros: bajar hasta S/2 es nuestro comportamiento
+    // normal, no un fallo que merezca alerta.
+    expect(collectAmountMismatch(297, 298)).toBeNull();
+    expect(collectAmountMismatch(296, 298)).toBeNull();
+  });
+
+  it("avisa cuando cobra MENOS de lo que el redondeo puede explicar", () => {
+    const m = collectAmountMismatch(290, 298);
+    expect(m?.kind).toBe("cobra_de_menos");
+    expect(m?.gap).toBe(8);
+  });
+
+  it("cuadra exacto no es descuadre", () => {
+    expect(collectAmountMismatch(298, 298)).toBeNull();
+  });
+
+  it("sin dato de Aliclik o sin total del pedido, no inventa una alerta", () => {
+    expect(collectAmountMismatch(null, 298)).toBeNull();
+    expect(collectAmountMismatch(298, null)).toBeNull();
+    expect(collectAmountMismatch(0, 298)).toBeNull();
+    expect(collectAmountMismatch(298, 0)).toBeNull();
   });
 });
