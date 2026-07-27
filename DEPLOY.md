@@ -584,7 +584,18 @@ reemplaza. La diferencia es la dirección del flujo: los otros entran por report
 drawer del Master y devuelve el código de guía.
 
 - **Needs migration 0058** (`stores.tanders_*`, `shipments.label_url`,
-  `shipments.tanders_raw`).
+  `shipments.tanders_raw`) y **0062** (`shipments.tanders_order_id`).
+- **El código de guía es el N° de seguimiento, no el id de su API.** Tanders
+  devuelve dos identificadores y solo uno sirve para buscar: `id` es un cuid
+  interno que no aparece en ninguna pantalla suya, y `aliclikOrderNumber`
+  ("TANDER1785…") es lo que su panel muestra como *N° SEGUIMIENTO*. El segundo va
+  en `guide_code`; el cuid, en `tanders_order_id`, porque es la clave de su API.
+- El nombre del campo no es casualidad: **Tanders sincroniza cada pedido hacia
+  Aliclik** (`aliclikSyncStatus: "SYNCED"`) y adopta el número que este genera.
+  La reconciliación de guías Aliclik está acotada a `created_via = 'aliclik_api'`,
+  así que no toca las guías Tanders — pero si esos envíos aparecieran en los
+  reportes de Aliclik de la tienda, la ingesta crearía una **segunda fila** para
+  el mismo paquete. Conviene comprobarlo tras la primera importación.
 - Se configura en **Ajustes de la tienda → Tanders**: usuario, contraseña y el
   almacén de origen (dirección + latitud + longitud). Tanders **no emite API
   keys**, así que se usa la misma cuenta de su web; la contraseña se guarda
@@ -608,6 +619,9 @@ drawer del Master y devuelve el código de guía.
   paquete. El mensaje de error pide verificar en tanders.app antes de reintentar.
 - Si Tanders crea la guía pero falla el insert local, el error **incluye el
   código** para registrarla a mano: la guía existe y perderla de vista es peor.
+- **La etiqueta PDF no viene al crear**: `labelGeneratedAt` llega en null porque
+  el pedido nace PENDING y el PDF se genera después. Se descarga desde
+  tanders.app.
 - **Saldo insuficiente**: según la operación, Tanders no deja registrar. Se
   traduce a un mensaje explícito para el 402/403.
 
