@@ -574,6 +574,50 @@ Excel/CSV**, y las dos entran por el mismo sitio.
 - Subir dos veces el mismo archivo **no duplica nada**: se corta por hash y
   devuelve la liquidación que ya existía.
 
+## 5k-ter. Rutas de reparto (motorizados propios)
+
+Sección propia (`/dashboard/rutas`) para el coordinador y una pantalla aparte
+(`/reparto`) para el motorizado, pensada para un teléfono con una mano y mala
+señal. Invierte la dirección del módulo anterior: en vez de RECONSTRUIR el día
+leyendo una hoja, la entrega se DECLARA en el momento y la liquidación cae sola
+al cerrar. La carga por foto/Excel sigue viva para los couriers externos.
+
+- **Needs migration 0056** (`delivery_routes`, `delivery_stops`,
+  `delivery_stop_events`, rol `motorizado`, `riders.user_id`).
+- **El motorizado es un usuario de verdad**, con el mismo correo y enlace mágico
+  que el equipo. No hay una segunda autenticación casera que mantener. Se le da
+  acceso con un botón desde Rutas, que crea el usuario, lo hace `motorizado` de
+  la organización y lo ata a su ficha — en un solo paso, para que no quede
+  nunca un usuario sin ficha entrando a una pantalla vacía.
+- **Solo ve sus paradas, y lo garantiza la base.** Las políticas filtran por
+  `riders.user_id = auth.uid()`; no existe una consulta que le devuelva la ruta
+  de otro, aunque alguien manipule la petición. Y solo ve la ruta cuando ya se
+  le entregó: una que se está armando no le aparece a medio hacer.
+- **Tres estados con una razón cada uno**: `planificada` (no la ve; se añaden y
+  quitan paradas), `en_curso` (está en su teléfono; lo reportado ya no se
+  borra), `cerrada` (generó su liquidación).
+- **Lo que reporta es una declaración, no la verdad.** Escribe en la parada, NO
+  en el Master: que marque "entregado" no cierra el pedido. El cuadre compara
+  ambas versiones, igual que con la hoja de un courier.
+- **Validación compartida.** `validateStopReport` corre en el móvil (aviso
+  inmediato, sin gastarle datos) y en el servidor (la que manda). Una entrega
+  exige método de cobro, monto y foto; cobrar por Yape exige la captura; una no
+  entrega exige motivo del catálogo; y declarar dinero en una no-entrega se
+  rechaza por contradictorio.
+- **Una parada reportada se corrige, no se reescribe**: cada reporte deja su
+  rastro en `delivery_stop_events`, con autor y hora. Es dinero.
+- **Cerrar la ruta crea la liquidación** con las líneas YA vinculadas a su
+  pedido — sin cola de revisión, porque no hay que adivinar de quién es cada
+  fila. El efectivo declarado sale de lo que reportó cobrar; si al contar el
+  dinero sale otra cosa, esa diferencia es justo lo que el cuadre del depósito
+  enseña. El POS no cuenta como plata a depositar: lo cobra el terminal.
+- **El pago usa el motor de Costos.** Una tarifa plana de S/ 8.50 es una tarifa
+  `motorizado_entrega` sin ámbito: se configura una vez, lleva vigencia, y si
+  sube no reescribe lo que se pagó antes. Las visitas fallidas se pagan solo si
+  hay tarifa `motorizado_visita` configurada — no tenerla es una postura válida.
+- **Fotos en bucket privado** (`delivery-proofs`), subidas aparte del reporte
+  para que una caída de red no le borre el formulario.
+
 ## 5l. Clave de Anthropic por tienda
 
 La lectura de comprobantes Yape usaba una única `ANTHROPIC_API_KEY` de entorno, así

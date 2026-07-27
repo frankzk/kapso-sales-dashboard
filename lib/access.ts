@@ -101,12 +101,20 @@ export async function getAdminOrgs(): Promise<{ org_id: string; role: string }[]
  * vendedora. Used to gate the financial pages and tailor the nav: a
  * vendedora-only user sees just the Leads board.
  */
-async function getUserRoleSummaryUncached(): Promise<{ roles: string[]; isVendedoraOnly: boolean }> {
+async function getUserRoleSummaryUncached(): Promise<{
+  roles: string[];
+  isVendedoraOnly: boolean;
+  isRiderOnly: boolean;
+}> {
   const sb = await createServerSupabase();
   const { data } = await sb.from("memberships").select("role");
   const roles = ((data as { role: string }[]) ?? []).map((m) => m.role);
   const isVendedoraOnly = roles.length > 0 && roles.every((r) => r === "vendedora");
-  return { roles, isVendedoraOnly };
+  // Un motorizado no es un usuario del panel: su sitio es /reparto. El layout
+  // del dashboard lo redirige, y RLS ya le impide leer nada de allí de todos
+  // modos — la redirección es para que no vea una pantalla vacía y confusa.
+  const isRiderOnly = roles.length > 0 && roles.every((r) => r === "motorizado");
+  return { roles, isVendedoraOnly, isRiderOnly };
 }
 
 export const getUserRoleSummary = cache(getUserRoleSummaryUncached);
