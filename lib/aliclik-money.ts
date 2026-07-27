@@ -50,6 +50,17 @@ export function linesTotal(lines: readonly PricedLine[]): number {
   return round2(lines.reduce((s, l) => s + l.price * l.quantity, 0));
 }
 
+/**
+ * Lo máximo que el negocio acepta dejar de cobrar por un pedido, en soles.
+ *
+ * Decisión del dueño, no técnica. Medido sobre los 6.541 pedidos pendientes:
+ * el 70 % no pierde nada, el 99 % pierde S/1,20 o menos, y el 1 % restante
+ * llega hasta S/2,40 — casi todos cantidad 3 con un total dos soles por encima
+ * de un múltiplo de 3. Esos NO se crean: es preferible que una persona los mire
+ * a que el sistema regale dos soles en silencio.
+ */
+export const MAX_ACCEPTABLE_LOSS = 1.2;
+
 /** Cuántos soles enteros por debajo del total se permite bajar buscando uno representable. */
 const MAX_STEPS_DOWN = 30;
 
@@ -71,6 +82,7 @@ const MAX_STEPS_DOWN = 30;
 export function reconcileToOrderTotal<T extends PricedLine>(
   lines: readonly T[],
   orderTotal: number | null | undefined,
+  maxLoss: number = MAX_ACCEPTABLE_LOSS,
 ): ReconcileResult<T> | null {
   if (orderTotal == null || !Number.isFinite(orderTotal) || orderTotal <= 0) return null;
   if (!lines.length) return null;
@@ -116,7 +128,11 @@ export function reconcileToOrderTotal<T extends PricedLine>(
       // Cinturón: si por lo que sea no cuadra exacto o se pasa, se descarta este
       // candidato en vez de crear una guía con el importe mal.
       if (total !== soles || total > orderTotal) continue;
-      return { items, total, drift: round2(total - orderTotal) };
+      const drift = round2(total - orderTotal);
+      // Se acabó la búsqueda: los candidatos van de mayor a menor, así que si
+      // este ya se pasa del margen, ninguno de los siguientes va a caber.
+      if (-drift > maxLoss + 1e-9) return null;
+      return { items, total, drift };
     }
   }
 
