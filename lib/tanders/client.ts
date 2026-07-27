@@ -169,6 +169,25 @@ export class TandersClient {
     return this.request<TandersCapacity>("/orders/me/capacity", { token: await this.accessToken() });
   }
 
+  /**
+   * Marca el rótulo como generado, igual que su panel al descargar el PDF.
+   *
+   * Su interfaz muestra entonces "✓ Rótulo generado" con la opción de liberarlo.
+   * Es el único guardarraíl contra imprimir dos etiquetas del mismo paquete, así
+   * que se llama al componer el rótulo aunque el PDF lo armemos nosotros: si los
+   * dos sistemas no coinciden, el guardarraíl no sirve para nada.
+   *
+   * Devuelve 204 sin cuerpo. Best-effort en la capa de arriba: el rótulo se
+   * imprime igual si esto falla.
+   */
+  async markLabelGenerated(orderId: string): Promise<void> {
+    await this.request<void>(`/orders/me/${encodeURIComponent(orderId)}/label`, {
+      method: "PATCH",
+      body: { generated: true },
+      token: await this.accessToken(),
+    });
+  }
+
   async getOrder(id: string): Promise<TandersOrder> {
     return this.request<TandersOrder>(`/orders/${encodeURIComponent(id)}`, {
       token: await this.accessToken(),
