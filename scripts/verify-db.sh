@@ -99,5 +99,11 @@ echo "▶ auditoría inmutable + clave de recojo + unicidad del Yape"
 $PSQL -f "$ROOT/scripts/sql/append_only_smoke.sql"
 echo "  ✅ auditoría inmutable, clave de recojo sin lectura directa y comprobante Yape único"
 
+# Los conteos de las pestañas de Leads viven ahora en SQL (0059) y en ningún
+# sitio más: esta prueba compara la función con los filtros originales, uno a uno.
+echo "▶ paridad de los conteos de la cola de Leads"
+$PSQL -f "$ROOT/scripts/sql/lead_queue_counts_smoke.sql"
+echo "  ✅ lead_queue_counts == los siete filtros originales, y la firma se mueve al tocar un lead"
+
 echo ""
 echo "✅ DB verification passed."

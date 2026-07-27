@@ -7,6 +7,7 @@ import { after } from "next/server";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import {
   getCustomerHistory,
+  getLeadQueueSnapshot,
   getLeadWithCalls,
   getStoreLeads,
   type CustomerHistory,
@@ -127,6 +128,27 @@ export async function loadLeadsInsightsPanel(
     return await getLeadsInsights(storeId, timezone, pendingNow);
   } catch {
     return { error: "No se pudo cargar el tablero." };
+  }
+}
+
+/**
+ * Firma de la cola para el refresco en vivo. Es DELIBERADAMENTE lo más barato
+ * que existe en este módulo: un recorrido de `leads` acotado a la tienda que
+ * devuelve "cuántos hay + cuándo se tocó el último".
+ *
+ * El board la pide cada 30 s y solo recarga la página cuando cambió. Antes
+ * recargaba siempre: cada asesora con Leads abierto pedía los ~2.500 leads de
+ * la cola, los siete conteos y el panel de gráficos DOS VECES POR MINUTO,
+ * hubiera pasado algo o no. Ese era el goteo constante que ponía lento no solo
+ * el panel, sino todo lo demás que compite por la misma base de datos.
+ *
+ * RLS-scoped: una tienda que no puedes ver devuelve la firma vacía.
+ */
+export async function pollLeadsQueueSignature(storeId: string): Promise<string | null> {
+  try {
+    return (await getLeadQueueSnapshot(storeId)).signature;
+  } catch {
+    return null; // el board se queda con la firma que tenía y reintenta luego
   }
 }
 
@@ -2076,7 +2098,7 @@ export async function generateOrder(
   await recomputeOrderMasterSafe(admin, [internalOrderId]);
 
   // 3) Lead won + draft mirror.
-  await admin
+  const leadUpdate = admin
     .from("leads")
     .update({
       has_order: true,
@@ -2088,13 +2110,14 @@ export async function generateOrder(
       ...(isCart ? { draft_order_status: "completed" } : {}),
     })
     .eq("id", leadId);
-  if (isCart && draftGid) {
-    await admin
-      .from("draft_orders")
-      .update({ status: "completed", completed_at: nowIso, order_gid: completed.orderGid })
-      .eq("store_id", ctx.storeId)
-      .eq("draft_order_gid", draftGid);
-  }
+  const draftMirror =
+    isCart && draftGid
+      ? admin
+          .from("draft_orders")
+          .update({ status: "completed", completed_at: nowIso, order_gid: completed.orderGid })
+          .eq("store_id", ctx.storeId)
+          .eq("draft_order_gid", draftGid)
+      : null;
 
   // 4) Log the sale (credits the advisor in Productividad).
   const discLabel =
@@ -2108,7 +2131,10 @@ export async function generateOrder(
     `Productos: ${products.map((p) => `${p.quantity}× ${p.title}`).join(", ")}`,
     `Entrega: ${district}${address.address2 ? " · " + address.address2 : ""}`,
   ].join(" · ");
-  await admin.from("lead_calls").insert({
+  // Las tres escrituras (lead ganado, espejo del borrador, registro de la venta)
+  // son independientes entre sí: encadenarlas solo sumaba viajes a la base
+  // mientras la asesora miraba el botón en "Generando…".
+  const saleLog = admin.from("lead_calls").insert({
     lead_id: leadId,
     store_id: ctx.storeId,
     vendedora: ctx.userId,
@@ -2116,14 +2142,20 @@ export async function generateOrder(
     new_status: "pedido_generado",
     note,
   });
+  await Promise.all([leadUpdate, draftMirror, saleLog].filter(Boolean));
 
-  // 5) Recompute today's rollups so revenue/COD reflect it now.
-  try {
-    const day = nowIso.slice(0, 10);
-    await admin.rpc("recompute_daily_rollups", { p_store_id: ctx.storeId, p_from: day, p_to: day });
-  } catch {
-    /* next sync recomputes */
-  }
+  // 5) Recompute today's rollups so revenue/COD reflect it now — DESPUÉS de
+  // responder. Es el paso más caro de toda la acción (recorre el día entero de
+  // la tienda) y nadie lo está esperando: alimenta el consolidado, no el drawer.
+  // Si fallara, el siguiente sync lo recalcula igual.
+  after(async () => {
+    try {
+      const day = nowIso.slice(0, 10);
+      await admin.rpc("recompute_daily_rollups", { p_store_id: ctx.storeId, p_from: day, p_to: day });
+    } catch {
+      /* next sync recomputes */
+    }
+  });
 
   // 6) Confirmation WhatsApp (best-effort; only if asked + a number is set).
   let confirmNote = "";

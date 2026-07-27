@@ -609,6 +609,32 @@ drawer del Master y devuelve el código de guía.
 - **Saldo insuficiente**: según la operación, Tanders no deja registrar. Se
   traduce a un mensaje explícito para el 402/403.
 
+## 5ñ. Leads — que la cola cargue rápido
+
+El panel de Leads se sentía lento sin que ninguna consulta fuera lenta por sí
+sola: era el goteo. Cada carga —y cada refresco en vivo, que iba cada 30 s por
+cada asesora con la pestaña abierta— lanzaba siete `count(*)` exactos sobre
+`leads` más el recorrido completo de la cola, y el navegador volvía a montar las
+miles de filas enteras.
+
+- **Needs migration 0059** (`lead_queue_counts` + tres índices sobre `leads`).
+  Es aditiva: no toca datos y los índices tardan milisegundos a este tamaño de
+  tabla. **La app funciona sin ella**: si la función no existe, los contadores
+  caen solos al camino anterior (los siete conteos) — solo se pierde la mejora,
+  no la pestaña. Aplicarla igualmente, que es de donde sale la mayor parte del
+  ahorro.
+- **El refresco en vivo ya no recarga a ciegas.** Pregunta primero por la firma
+  de la cola (`total` + `last_change`) y solo recarga si cambió. Con la cola
+  quieta, una pestaña abierta pasa de recargar 120 veces por hora a ninguna, y
+  aun así se refresca sola cada 5 minutos como red de seguridad.
+- **La lista se pinta por tramos** (60 filas y más al bajar). Los contadores, el
+  gráfico y la exportación de audiencia siguen calculándose sobre el universo
+  completo: lo que cambia es cuántas filas existen en el DOM, no los números.
+- **Verificación**: `bash scripts/verify-db.sh` compara la función con los siete
+  filtros originales uno a uno (`scripts/sql/lead_queue_counts_smoke.sql`). Si
+  alguna pestaña mostrara un número que no cuadra con su lista, esa prueba es lo
+  primero que hay que mirar.
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle
