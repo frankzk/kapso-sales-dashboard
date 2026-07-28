@@ -45,10 +45,22 @@ const SHIPMENT_BASE_COLUMNS =
 const SHIPMENT_GESTION_COLUMNS =
   ",assigned_at,dispatched_at,out_for_delivery_at,rescheduled_at,closed_at," +
   "returned_at,pickup_state,agency_branch,agency_arrived_at,agency_expires_at";
+// Lo que Aliclik cotizó para esta guía concreta (0054). Va en su propio escalón
+// porque el costo real solo lo tienen las guías creadas por API: si la columna
+// aún no existe, el cálculo sigue funcionando con las tarifas de siempre.
+const SHIPMENT_COST_COLUMNS = ",quoted_delivery_cost,quoted_return_cost,created_via";
 const SHIPMENT_COLUMN_SETS = [
+  SHIPMENT_BASE_COLUMNS + SHIPMENT_GESTION_COLUMNS + SHIPMENT_COST_COLUMNS,
   SHIPMENT_BASE_COLUMNS + SHIPMENT_GESTION_COLUMNS,
   SHIPMENT_BASE_COLUMNS,
 ];
+
+/** Numérico utilizable, o null. Supabase devuelve los `numeric` como string. */
+function num(v: unknown): number | null {
+  if (v == null) return null;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
 
 /** PostgREST corta la respuesta en 1000 filas; se pagina siempre. */
 const PAGE = 1000;
@@ -101,6 +113,9 @@ interface ShipmentRecord {
   agency_branch?: string | null;
   agency_arrived_at?: string | null;
   agency_expires_at?: string | null;
+  quoted_delivery_cost?: number | null;
+  quoted_return_cost?: number | null;
+  created_via?: string | null;
 }
 
 interface CallRecord {
@@ -609,6 +624,26 @@ export async function recomputeOrderMaster(
       now,
     });
 
+    // El costo REAL del envío, cuando el courier nos lo dijo. Solo lo tienen las
+    // guías creadas por API: al cotizar, Aliclik devuelve lo que va a cobrar por
+    // ESE destino concreto, y se guardó en la guía. Se usa el de la guía VIGENTE
+    // —no la primera ni la más barata— porque es la que está entregando.
+    //
+    // Las tarifas de `cost_tariffs` son una aproximación por distrito que existe
+    // porque históricamente el courier no nos daba el precio de cada guía; un
+    // precio exacto siempre le gana, y además el margen deja de depender de que
+    // alguien mantenga la tabla al día.
+    const activeGuide = state.guideCode
+      ? guides.find((g) => g.guide_code === state.guideCode)
+      : undefined;
+    const actualCost =
+      activeGuide?.created_via === "aliclik_api"
+        ? {
+            delivery: num(activeGuide.quoted_delivery_cost),
+            return: num(activeGuide.quoted_return_cost),
+          }
+        : null;
+
     return {
       store_id: order.store_id,
       order_id: order.id,
@@ -644,7 +679,7 @@ export async function recomputeOrderMaster(
       delivered_courier: state.deliveredCourier,
       returned_at: state.returnedAt,
       last_movement_at: state.lastMovementAt,
-      logistics_cost: tariffs.length
+      logistics_cost: tariffs.length || actualCost
         ? computeLogisticsCost(tariffs, {
             ctx: {
               storeId: order.store_id,
@@ -660,6 +695,7 @@ export async function recomputeOrderMaster(
               last_movement_at: state.lastMovementAt,
               order_created_at: order.created_at,
             }, now),
+            actual: actualCost ?? undefined,
           }).total
         : null,
       comment_count: orderEvents.filter((e) => e.kind === "comment").length,
