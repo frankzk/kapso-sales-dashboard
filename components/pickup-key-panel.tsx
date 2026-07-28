@@ -206,6 +206,25 @@ function PaymentList({
             {p.payer_name ? ` · ${p.payer_name}` : ""}
           </p>
           {p.notes && <p className="text-xs text-slate-500">{p.notes}</p>}
+          {/* El comprobante se guardaba y no se podía ver: quien validaba tenía
+              que fiarse de los campos transcritos, que es justo lo que la imagen
+              sirve para contrastar. La miniatura abre el original en pestaña. */}
+          {p.file_path && (
+            <a
+              href={`/api/payments/${p.id}/voucher`}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 inline-block"
+              title="Ver el comprobante en grande"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={`/api/payments/${p.id}/voucher`}
+                alt="Comprobante de Yape"
+                className="max-h-32 rounded-lg border border-slate-200 object-contain"
+              />
+            </a>
+          )}
           {!p.operation_number && p.validation_status !== "rechazado" && (
             <MissingOperation
               payment={p}
@@ -270,6 +289,106 @@ function PaymentList({
  * lectura automática no encuentra el número — el camino es completarlo a mano o
  * pedirle al cliente el comprobante entero.
  */
+/**
+ * Elegir el comprobante: clic, arrastrar o **pegar**.
+ *
+ * Pegar es lo que más se usa y lo que faltaba: el comprobante de Yape llega por
+ * WhatsApp y se copia con Ctrl+C. Obligar a guardarlo en Descargas para luego
+ * buscarlo en un diálogo de archivos es trabajo inventado.
+ *
+ * La previsualización tampoco es adorno: la imagen se sube y la lee una visión
+ * que rellena los campos en blanco, así que subir la equivocada se descubría al
+ * revisar el pago, no al cargarlo. Con la miniatura delante, el error se ve
+ * antes de registrar nada.
+ *
+ * El `accept` va explícito además del `image/*` porque algunos navegadores en
+ * Windows filtran de más con el comodín y esconden los .webp — que es
+ * exactamente el formato en el que Chrome guarda muchas capturas.
+ */
+function VoucherPicker({ file, onPick }: { file: File | null; onPick: (f: File | null) => void }) {
+  const [over, setOver] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!file) {
+      setPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    // Sin esto cada imagen elegida deja su blob retenido en memoria.
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  // El pegado se escucha en toda la ventana: pedirle a alguien que "haga foco en
+  // la zona de subida" antes de Ctrl+V es pedirle que sepa algo que no se ve.
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      const img = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith("image/"));
+      if (!img) return;
+      const f = img.getAsFile();
+      if (f) {
+        e.preventDefault();
+        onPick(f);
+      }
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [onPick]);
+
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith("image/"));
+        if (f) onPick(f);
+      }}
+      className={cn(
+        "rounded-lg border border-dashed px-3 py-3 transition",
+        over ? "border-brand-500 bg-brand-50" : "border-slate-300",
+      )}
+    >
+      {preview ? (
+        <div className="flex flex-wrap items-start gap-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={preview}
+            alt="Comprobante por subir"
+            className="max-h-32 rounded-lg border border-slate-200 object-contain"
+          />
+          <div className="space-y-1 text-xs text-slate-600">
+            <p className="font-medium text-slate-800">{file?.name}</p>
+            <p>{file ? `${Math.round(file.size / 1024)} KB · ${file.type || "imagen"}` : ""}</p>
+            <button
+              type="button"
+              onClick={() => onPick(null)}
+              className="font-medium text-red-700 hover:underline"
+            >
+              Quitar
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-slate-500">
+          Arrastra el comprobante aquí, <strong>pégalo con Ctrl+V</strong> o elígelo:
+        </p>
+      )}
+      <input
+        type="file"
+        accept="image/*,image/webp,image/heic,image/heif,.webp,.heic,.heif"
+        onChange={(e) => onPick(e.target.files?.[0] ?? null)}
+        className="mt-2 block text-sm text-slate-600"
+      />
+    </div>
+  );
+}
+
 function MissingOperation({
   payment,
   canRegister,
@@ -467,12 +586,7 @@ function VoucherForm({
           className="w-40 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
         />
       </div>
-      <input
-        type="file"
-        accept="image/*"
-        onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        className="block text-sm text-slate-600"
-      />
+      <VoucherPicker file={file} onPick={setFile} />
       <p className="text-xs text-slate-400">
         Lo que dejes en blanco se intenta leer de la imagen (nº de operación, monto, fecha y hora).
         Cargar la imagen no valida el pago: queda pendiente hasta que alguien lo revise.
