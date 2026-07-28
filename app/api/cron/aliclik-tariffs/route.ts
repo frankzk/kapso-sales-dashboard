@@ -2,7 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
-import { syncAliclikTariffs, type DistrictProbe } from "@/lib/aliclik-tariffs";
+import {
+  syncAliclikTariffs,
+  syncTariffsFromReports,
+  type DistrictProbe,
+} from "@/lib/aliclik-tariffs";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -25,6 +29,15 @@ export const maxDuration = 300;
 
 /** Distritos por pasada. Con el cron diario, cubre los 661 en ~11 días. */
 const BATCH = 60;
+
+/**
+ * Ventana de los reportes que se considera vigente.
+ *
+ * Los precios de Aliclik se revisan: Arequipa pasó de S/15,50 en junio a S/16,50
+ * en julio. Mirar más atrás mezclaría tarifas de dos épocas y la moda podría
+ * devolver un precio que ya no se cobra.
+ */
+const REPORT_DAYS = 30;
 
 function secretEquals(provided: string | null, expected: string): boolean {
   if (!provided) return false;
@@ -79,6 +92,13 @@ async function run(req: NextRequest) {
     : await admin.from("stores").select("id,org_id").eq("status", "active");
 
   const today = new Date().toISOString().slice(0, 10);
+
+  // PRIMERO los reportes ya importados: es el costo realizado, cubre más
+  // distritos, trae `intento_adicional` —que la cotización no da— y no depende
+  // de que la API de Aliclik responda. La cotización queda para los distritos
+  // sin histórico, que son justo los que esto no puede cubrir.
+  const fromReports = await syncTariffsFromReports(REPORT_DAYS, today, admin);
+
   const reports = [];
   for (const s of (stores ?? []) as { id: string; org_id: string }[]) {
     const creds = await getStoreCreds(s.id, admin);
@@ -109,7 +129,7 @@ async function run(req: NextRequest) {
     reports.push({ storeId: s.id, districts: probes.length, ...res });
   }
 
-  return NextResponse.json({ ok: true, reports });
+  return NextResponse.json({ ok: true, fromReports, reports });
 }
 
 export async function GET(req: NextRequest) {
