@@ -447,6 +447,18 @@ export async function registerPayment(
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
 
+  // `vision.ok === false` NO significa "la imagen no se entiende": significa que
+  // el lector no llegó a correr — clave de Anthropic ausente o inválida, modelo
+  // mal escrito, o la API caída. Culpar a la captura en ese caso manda al equipo
+  // a perseguir al cliente por una foto que estaba perfecta.
+  if (!vision.ok) {
+    return {
+      notice:
+        "Comprobante cargado, pero NO se pudo leer la imagen automáticamente: " +
+        "revisa la API key de Anthropic en Ajustes de la tienda. " +
+        "Mientras tanto, escribe el nº de operación y el monto a mano.",
+    };
+  }
   if (!operation) {
     return {
       notice:
