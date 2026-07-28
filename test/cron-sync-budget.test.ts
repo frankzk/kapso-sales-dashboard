@@ -3,6 +3,7 @@ import { createDeadline, unlimitedDeadline } from "@/lib/deadline";
 import { mapWithConcurrency, orderByStaleness, summarizeRun, logRunSummary } from "@/lib/sync-schedule";
 import { runStoreSync } from "@/lib/ingest";
 import { encrypt, generateEncryptionKey } from "@/lib/crypto";
+import { makeFakeAdmin } from "./helpers/fake-supabase";
 
 // Guarda del presupuesto de tiempo del cron de sincronización.
 //
@@ -283,5 +284,70 @@ describe("runStoreSync · corrida sin presupuesto", () => {
     } as any);
     expect(report.partial).toBe(false);
     expect(report.skipped).toEqual([]);
+  });
+});
+
+describe("runStoreSync · el reparto del presupuesto cuando alcanza para algo", () => {
+  // Los dos extremos ya están cubiertos arriba (presupuesto cero) y en las otras
+  // rutas (sin presupuesto). Lo que se fija aquí es el medio, que es lo que de
+  // verdad pasa en producción: alcanza para unas etapas y no para otras.
+  //
+  // Sin Kapso ni Meta en la tienda: así el reparto se ve solo entre las pasadas
+  // caras de Shopify y las baratas del cierre, sin simular más red.
+  const storeRow = {
+    id: "store-1",
+    org_id: "org-1",
+    name: "Tienda",
+    shopify_domain: "t.myshopify.com",
+    shopify_token_enc: encrypt("shpat_token"),
+    status: "active",
+    timezone: "America/Lima",
+  };
+
+  // Reloj congelado: el presupuesto vale lo mismo en todas las guardas, así que
+  // qué etapa cabe y cuál no lo decide su coste y nada más.
+  const frozen = (budgetMs: number) => createDeadline(budgetMs, () => 0);
+
+  it("las etapas caras caen primero; las baratas del cierre sobreviven", async () => {
+    // 62 s: por encima de los 60 s que pide una etapa de 10 s (coste + reserva
+    // de cierre), por debajo de los 95 s que pide una pasada de Shopify.
+    const { admin, rpcCalls } = makeFakeAdmin(storeRow);
+    const report = await runStoreSync("store-1", admin as never, { deadline: frozen(62_000) });
+
+    expect(report.partial).toBe(true);
+    expect(report.skipped).toEqual(["shopify", "shopify_all", "shopify_drafts"]);
+    // Y lo que NO está en `skipped` es la otra mitad de la afirmación: las
+    // etapas baratas y el cierre del Master sí corrieron.
+    expect(report.skipped).not.toContain("order_master");
+    expect(rpcCalls.some((c) => c.fn === "recompute_daily_rollups")).toBe(false); // nada que recalcular
+  });
+
+  it("con el presupuesto casi agotado se salta TODO menos el rollup", async () => {
+    // Esta es la propiedad que sostiene el diseño entero. El rollup es la única
+    // etapa sin guarda: tiene sitio reservado en TAIL_RESERVE_MS porque las
+    // fechas afectadas no sobreviven a la corrida. Si alguien le añade un
+    // `affords`, esos días se quedan con métricas viejas y en silencio — este
+    // test es lo que lo impide.
+    const { admin, writes, rpcCalls, cursors } = makeFakeAdmin(storeRow);
+    // Deuda que dejó una corrida anterior que murió antes de llegar al rollup.
+    cursors.set("rollup_pending", "2026-07-01..2026-07-02");
+
+    // 25 s: no llega ni para la etapa más barata (10 s + 50 s de reserva) ni
+    // para el cierre del Master (30 s).
+    const report = await runStoreSync("store-1", admin as never, { deadline: frozen(25_000) });
+
+    expect(report.partial).toBe(true);
+    expect(report.skipped).toContain("order_master");
+    expect(report.skipped).toEqual(
+      expect.arrayContaining(["shopify", "shopify_drafts", "followups", "waves", "handoffs", "archive"]),
+    );
+
+    // Pero la deuda heredada SÍ se salda: el rollup corre igual y se limpia.
+    expect(rpcCalls).toContainEqual({
+      fn: "recompute_daily_rollups",
+      args: { p_store_id: "store-1", p_from: "2026-07-01", p_to: "2026-07-02" },
+    });
+    const debts = writes.filter((w) => w.source === "rollup_pending");
+    expect(debts[debts.length - 1]!.cursor).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { parseRollupPending, widenRollupPending } from "@/lib/ingest";
 import { encrypt, generateEncryptionKey } from "@/lib/crypto";
+import { makeFakeAdmin, order } from "./helpers/fake-supabase";
 
 process.env.ENCRYPTION_KEY = generateEncryptionKey();
 
@@ -61,109 +62,6 @@ describe("parseRollupPending", () => {
     expect(parseRollupPending("")).toBeNull();
     expect(parseRollupPending("2026-07-01")).toBeNull();
   });
-});
-
-// --- Fake permisivo de Supabase: recuerda cursores y apunta cada escritura ---
-
-interface Recorded {
-  source: string;
-  cursor: string | null;
-  status: string;
-}
-
-function makeFakeAdmin(storeRow: Record<string, unknown>) {
-  const cursors = new Map<string, string | null>();
-  const writes: Recorded[] = [];
-  const rpcCalls: { fn: string; args: Record<string, unknown> }[] = [];
-
-  class Builder {
-    filters: Record<string, unknown> = {};
-    constructor(public table: string) {}
-    select() {
-      return this;
-    }
-    eq(k: string, v: unknown) {
-      this.filters[k] = v;
-      return this;
-    }
-    match(m: Record<string, unknown>) {
-      Object.assign(this.filters, m);
-      return this;
-    }
-    in() {
-      return this;
-    }
-    is() {
-      return this;
-    }
-    not() {
-      return this;
-    }
-    limit() {
-      return this;
-    }
-    order() {
-      return this;
-    }
-    lt() {
-      return this;
-    }
-    gte() {
-      return this;
-    }
-    update() {
-      return this;
-    }
-    insert() {
-      return this;
-    }
-    delete() {
-      return this;
-    }
-    upsert(payload: Record<string, unknown>) {
-      if (this.table === "sync_state") {
-        const source = payload.source as string;
-        cursors.set(source, (payload.cursor as string | null) ?? null);
-        writes.push({
-          source,
-          cursor: (payload.cursor as string | null) ?? null,
-          status: payload.status as string,
-        });
-      }
-      return this;
-    }
-    async single() {
-      return this.table === "stores" ? { data: storeRow, error: null } : { data: null, error: null };
-    }
-    async maybeSingle() {
-      if (this.table === "sync_state") {
-        const source = this.filters.source as string;
-        return { data: { cursor: cursors.get(source) ?? null }, error: null };
-      }
-      return { data: null, error: null };
-    }
-    then(resolve: (v: { data: unknown[]; error: null }) => unknown) {
-      return Promise.resolve({ data: [], error: null }).then(resolve);
-    }
-  }
-
-  const admin = {
-    from: (table: string) => new Builder(table),
-    rpc: async (fn: string, args: Record<string, unknown>) => {
-      rpcCalls.push({ fn, args });
-      return { data: null, error: null };
-    },
-  };
-  return { admin, writes, rpcCalls, cursors };
-}
-
-const order = (id: string, createdAt: string, updatedAt: string) => ({
-  store_id: "store-1",
-  shopify_order_id: id,
-  created_at: createdAt,
-  updated_at: updatedAt,
-  currency: "PEN",
-  total_price: 100,
 });
 
 // Solo se simula la capa de red de Shopify; todo lo demás corre de verdad
