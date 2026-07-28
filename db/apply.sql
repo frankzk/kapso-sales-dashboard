@@ -143,4 +143,6 @@
 \ir migrations/0068_direct_collected.sql
 \echo 'Applying 0069_master_search_trigram.sql'
 \ir migrations/0069_master_search_trigram.sql
+\echo 'Applying 0070_cost_tariffs_source.sql'
+\ir migrations/0070_cost_tariffs_source.sql
 \echo 'Done.'
