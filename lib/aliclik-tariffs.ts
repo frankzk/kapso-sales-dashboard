@@ -30,8 +30,12 @@ import { toAliclikCoord } from "@/lib/aliclik-geo";
 /** Marca de procedencia. El cron solo toca lo suyo. */
 export const ALICLIK_TARIFF_SOURCE = "aliclik";
 
-/** Conceptos que Aliclik cotiza. Los intentos adicionales no los da su API. */
-export type QuotedConcept = "primer_intento" | "devolucion";
+/**
+ * Conceptos con tarifa automática. `intento_adicional` NO sale de la
+ * cotización —su API no lo devuelve— sino de los reportes Excel, que sí traen
+ * `COSTO ENTREGA ADICIONAL`.
+ */
+export type QuotedConcept = "primer_intento" | "devolucion" | "intento_adicional";
 
 /** Una tarifa vigente tal y como está guardada. */
 export interface ExistingTariff {
@@ -220,5 +224,107 @@ export async function syncAliclikTariffs(
     }
   }
   out.changed = plan.insert.length;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Derivar tarifas de los reportes Excel ya importados
+// ---------------------------------------------------------------------------
+
+/**
+ * Escribe las tarifas que salen de los Excel de Repro Provincia.
+ *
+ * ES LA FUENTE PREFERENTE, por delante de cotizar contra su API:
+ *
+ *   * es el costo REALIZADO —lo que Aliclik cobró— y no una estimación;
+ *   * cubre 80 distritos de golpe en vez de 60 por día;
+ *   * no depende de que su API responda, que hoy mismo estuvo caída 45 minutos;
+ *   * incluye `intento_adicional`, que su cotización no devuelve.
+ *
+ * La agregación vive en `aliclik_tariffs_from_reports` (SQL) porque parte de
+ * ~20.000 filas: traerlas para agrupar en JavaScript sería mover megabytes por
+ * la red para quedarse con 183 números.
+ *
+ * La cotización NO se retira: sigue siendo la única vía para distritos donde
+ * todavía no se ha enviado nada, que son justo los que no tienen histórico.
+ */
+export async function syncTariffsFromReports(
+  days: number,
+  today: string,
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<{ ok: boolean; observed: number; changed: number; errors: string[] }> {
+  const out = { ok: true, observed: 0, changed: 0, errors: [] as string[] };
+
+  const { data, error } = await admin.rpc("aliclik_tariffs_from_reports", { p_days: days });
+  if (error) return { ...out, ok: false, errors: [error.message] };
+
+  const rows = (data ?? []) as {
+    org_id: string;
+    district: string;
+    concept: string;
+    amount: number | string;
+  }[];
+  out.observed = rows.length;
+  if (!rows.length) return out;
+
+  // Las tarifas son por organización, así que el plan se calcula por separado
+  // para cada una: mezclarlas cerraría filas de una org con datos de otra.
+  const byOrg = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const list = byOrg.get(r.org_id) ?? [];
+    list.push(r);
+    byOrg.set(r.org_id, list);
+  }
+
+  for (const [orgId, orgRows] of byOrg) {
+    const districts = [...new Set(orgRows.map((r) => r.district))];
+    const { data: existing, error: exErr } = await admin
+      .from("cost_tariffs")
+      .select("id,concept,district,amount,effective_from")
+      .eq("org_id", orgId)
+      .eq("source", ALICLIK_TARIFF_SOURCE)
+      .is("effective_to", null)
+      .in("district", districts);
+    if (exErr) {
+      out.ok = false;
+      out.errors.push(`Tarifas vigentes (${orgId}): ${exErr.message}`);
+      continue;
+    }
+
+    const plan = planTariffUpdates(
+      orgRows.map((r) => ({
+        district: r.district,
+        concept: r.concept as QuotedConcept,
+        amount: Number(r.amount),
+      })),
+      ((existing ?? []) as ExistingTariff[]).map((t) => ({ ...t, amount: Number(t.amount) })),
+      today,
+    );
+
+    for (const c of plan.close) {
+      await admin.from("cost_tariffs").update({ effective_to: c.effectiveTo }).eq("id", c.id);
+    }
+    if (plan.remove.length) await admin.from("cost_tariffs").delete().in("id", plan.remove);
+    if (plan.insert.length) {
+      const { error: insErr } = await admin.from("cost_tariffs").insert(
+        plan.insert.map((i) => ({
+          org_id: orgId,
+          courier: "aliclik",
+          district: i.district,
+          concept: i.concept,
+          amount: i.amount,
+          effective_from: i.effectiveFrom,
+          source: ALICLIK_TARIFF_SOURCE,
+          note: `Derivado de los reportes de Aliclik (últimos ${days} días)`,
+        })),
+      );
+      if (insErr) {
+        out.ok = false;
+        out.errors.push(`Insertar (${orgId}): ${insErr.message}`);
+        continue;
+      }
+    }
+    out.changed += plan.insert.length;
+  }
   return out;
 }
