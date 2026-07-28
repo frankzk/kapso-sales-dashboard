@@ -7,6 +7,8 @@ const PAGE_LIMIT = 100;
 const UPSERT_CHUNK = 500;
 const ACCOUNT_CONCURRENCY = 2;
 const BACKFILL_CHUNK_DAYS = 30;
+const RETRY_BACKFILL_CHUNK_DAYS = 7;
+const TRANSIENT_FETCH_ATTEMPTS = 3;
 
 export interface MetaDailyInsight {
   account_id: string;
@@ -221,6 +223,23 @@ function chunks<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+async function fetchMetaDailyInsightsWithRetry(
+  token: string,
+  accountId: string,
+  range: { from: string; to: string },
+  opts?: { fetchImpl?: typeof fetch; baseUrl?: string; timeoutMs?: number },
+): Promise<MetaInsightsFetchResult> {
+  let latest: MetaInsightsFetchResult = { ok: false, rows: [], error: "Meta no respondió." };
+  for (let attempt = 0; attempt < TRANSIENT_FETCH_ATTEMPTS; attempt++) {
+    latest = await fetchMetaDailyInsights(token, accountId, range, opts);
+    if (latest.ok) return latest;
+    if (attempt < TRANSIENT_FETCH_ATTEMPTS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
+    }
+  }
+  return latest;
+}
+
 /** Fetch, persist and audit one store's Meta history for the supplied range. */
 export async function syncMetaInsightsHistory(
   admin: SupabaseClient,
@@ -241,6 +260,9 @@ export async function syncMetaInsightsHistory(
     errors: [],
   };
   const seenAds = new Set<string>();
+  const dateChunkDays = accounts.length <= 2
+    ? RETRY_BACKFILL_CHUNK_DAYS
+    : BACKFILL_CHUNK_DAYS;
   // Tres cuentas simultáneas mantienen el backfill de tiendas grandes dentro
   // de los 300 s de Vercel sin disparar todas las cuentas contra Meta a la vez.
   for (const accountBatch of chunks(accounts, ACCOUNT_CONCURRENCY)) {
@@ -249,8 +271,8 @@ export async function syncMetaInsightsHistory(
       const adIds = new Set<string>();
       let persistedRows = 0;
       const fetchedRows: MetaDailyInsight[] = [];
-      for (const dateChunk of splitMetaInsightsRange(range)) {
-        const fetched = await fetchMetaDailyInsights(token, account.id, dateChunk, opts);
+      for (const dateChunk of splitMetaInsightsRange(range, dateChunkDays)) {
+        const fetched = await fetchMetaDailyInsightsWithRetry(token, account.id, dateChunk, opts);
         if (!fetched.ok) {
           return {
             accountOk: false,
