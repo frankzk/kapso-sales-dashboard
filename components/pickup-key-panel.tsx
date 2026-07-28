@@ -22,9 +22,15 @@ import {
   type PaymentRow,
   type PickupKeyPanel as PanelData,
 } from "@/app/dashboard/pedidos/payment-actions";
-import { saveShalomOrderDraft } from "@/app/dashboard/pedidos/shalom-actions";
+import {
+  lookupShalomPerson,
+  saveShalomOrderDraft,
+  searchShalomAgencies,
+} from "@/app/dashboard/pedidos/shalom-actions";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { PAYMENT_STATE_LABEL, type PaymentState } from "@/lib/pickup-key";
+import { documentError } from "@/lib/shalom/draft";
+import type { ShalomAgency, ShalomDocumentType } from "@/lib/shalom/types";
 
 const VOUCHER_BUCKET = "yape-vouchers";
 
@@ -138,6 +144,7 @@ export function PickupKeyPanel({ orderId, onChanged }: { orderId: string; onChan
       {panel.canRegister && (
         <VoucherForm
           orderId={orderId}
+          storeId={panel.storeId}
           existing={panel.payments}
           pending={pending}
           onRegistered={() => {
@@ -479,6 +486,7 @@ function MissingOperation({
 
 function VoucherForm({
   orderId,
+  storeId,
   existing,
   pending,
   onRegistered,
@@ -486,6 +494,7 @@ function VoucherForm({
   onNotice,
 }: {
   orderId: string;
+  storeId: string;
   existing: PaymentRow[];
   pending: boolean;
   onRegistered: () => void;
@@ -509,9 +518,73 @@ function VoucherForm({
   // condicionan el pago — bloquear un cobro por falta de un DNI sería peor que
   // el problema que resuelve.
   const [shalomDoc, setShalomDoc] = useState("");
-  const [shalomDocType, setShalomDocType] = useState("DNI");
-  const [shalomAgencyId, setShalomAgencyId] = useState("");
-  const [shalomAgencyName, setShalomAgencyName] = useState("");
+  const [shalomDocType, setShalomDocType] = useState<ShalomDocumentType>("DNI");
+  const [documentChecking, setDocumentChecking] = useState(false);
+  const [documentNotice, setDocumentNotice] = useState<string | null>(null);
+  const [shalomAgencyQuery, setShalomAgencyQuery] = useState("");
+  const [shalomAgency, setShalomAgency] = useState<ShalomAgency | null>(null);
+  const [shalomAgencies, setShalomAgencies] = useState<ShalomAgency[]>([]);
+  const [agencySearching, setAgencySearching] = useState(false);
+  const [agencyError, setAgencyError] = useState<string | null>(null);
+  const agencyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const shalomDocumentProblem = shalomDoc.trim()
+    ? documentError(shalomDocType, shalomDoc)
+    : null;
+
+  useEffect(() => {
+    if (shalomAgency) return;
+    const query = shalomAgencyQuery.trim();
+    if (query.length < 2) {
+      setShalomAgencies([]);
+      setAgencyError(null);
+      return;
+    }
+    if (agencyTimer.current) clearTimeout(agencyTimer.current);
+    agencyTimer.current = setTimeout(() => {
+      setAgencySearching(true);
+      setAgencyError(null);
+      void searchShalomAgencies(storeId, query).then((res) => {
+        setAgencySearching(false);
+        if ("error" in res) {
+          setShalomAgencies([]);
+          setAgencyError(res.error);
+          return;
+        }
+        setShalomAgencies(res.agencies);
+      });
+    }, 450);
+    return () => {
+      if (agencyTimer.current) clearTimeout(agencyTimer.current);
+    };
+  }, [shalomAgencyQuery, shalomAgency, storeId]);
+
+  function changeDocument(value: string) {
+    const normalized =
+      shalomDocType === "CE"
+        ? value.toUpperCase().replace(/[^A-Z0-9]/g, "")
+        : value.replace(/\D/g, "");
+    setShalomDoc(normalized);
+    setDocumentNotice(null);
+  }
+
+  function validateDocument() {
+    if (!shalomDoc.trim() || shalomDocumentProblem) return;
+    setDocumentChecking(true);
+    setDocumentNotice(null);
+    void lookupShalomPerson(storeId, shalomDoc.trim(), shalomDocType).then((res) => {
+      setDocumentChecking(false);
+      if ("error" in res) {
+        setDocumentNotice(res.error);
+        return;
+      }
+      setDocumentNotice(
+        res.person
+          ? `Documento encontrado en Shalom Pro: ${[res.person.name, res.person.lastName, res.person.surName].filter(Boolean).join(" ")}.`
+          : "Formato válido. El documento todavía no figura en Shalom Pro.",
+      );
+    });
+  }
 
   async function submit() {
     setBusy(true);
@@ -557,12 +630,12 @@ function VoucherForm({
       }
       // Se guarda DESPUÉS del pago y sin condicionarlo: si esto fallara, el
       // cobro ya quedó registrado, que es lo que no puede perderse.
-      if (shalomDoc.trim() || shalomAgencyId.trim()) {
+      if (shalomDoc.trim() || shalomAgency) {
         const pre = await saveShalomOrderDraft(orderId, {
-          documentType: shalomDocType as "DNI" | "RUC" | "CE",
+          documentType: shalomDocType,
           document: shalomDoc.trim() || null,
-          destinyTerminalId: shalomAgencyId.trim() ? Number(shalomAgencyId) : null,
-          destinyTerminalName: shalomAgencyName.trim() || null,
+          destinyTerminalId: shalomAgency?.id ?? null,
+          destinyTerminalName: shalomAgency?.nombre ?? null,
         });
         if ("error" in pre) onError(`El pago se registró, pero los datos de Shalom no: ${pre.error}`);
       }
@@ -574,6 +647,11 @@ function VoucherForm({
       setPayer("");
       setPhone("");
       setFile(null);
+      setShalomDoc("");
+      setDocumentNotice(null);
+      setShalomAgencyQuery("");
+      setShalomAgency(null);
+      setShalomAgencies([]);
       onRegistered();
     } finally {
       setBusy(false);
@@ -646,34 +724,134 @@ function VoucherForm({
         <div className="mt-2 flex flex-wrap gap-2">
           <select
             value={shalomDocType}
-            onChange={(e) => setShalomDocType(e.target.value)}
+            onChange={(e) => {
+              setShalomDocType(e.target.value as ShalomDocumentType);
+              setShalomDoc("");
+              setDocumentNotice(null);
+            }}
             className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
           >
             <option value="DNI">DNI</option>
             <option value="RUC">RUC</option>
             <option value="CE">CE</option>
           </select>
-          <input
-            value={shalomDoc}
-            onChange={(e) => setShalomDoc(e.target.value)}
-            placeholder="Documento del destinatario"
-            className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-          />
+          <div className="min-w-[260px] flex-1">
+            <div className="flex gap-2">
+              <input
+                value={shalomDoc}
+                onChange={(e) => changeDocument(e.target.value)}
+                inputMode={shalomDocType === "CE" ? "text" : "numeric"}
+                maxLength={shalomDocType === "DNI" ? 8 : shalomDocType === "RUC" ? 11 : 20}
+                placeholder={
+                  shalomDocType === "DNI"
+                    ? "DNI de 8 dígitos"
+                    : shalomDocType === "RUC"
+                      ? "RUC de 11 dígitos"
+                      : "Carné de extranjería"
+                }
+                aria-invalid={Boolean(shalomDocumentProblem)}
+                className={cn(
+                  "min-w-0 flex-1 rounded-lg border px-2 py-1.5 text-sm outline-none focus:ring-2",
+                  shalomDocumentProblem
+                    ? "border-red-300 focus:border-red-400 focus:ring-red-100"
+                    : shalomDoc
+                      ? "border-emerald-300 focus:border-emerald-400 focus:ring-emerald-100"
+                      : "border-slate-200 focus:border-brand-400 focus:ring-brand-100",
+                )}
+              />
+              <button
+                type="button"
+                onClick={validateDocument}
+                disabled={documentChecking || !shalomDoc.trim() || Boolean(shalomDocumentProblem)}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+              >
+                {documentChecking ? "Validando…" : "Validar"}
+              </button>
+            </div>
+            {shalomDocumentProblem && (
+              <p className="mt-1 text-xs font-medium text-red-600">{shalomDocumentProblem}</p>
+            )}
+            {!shalomDocumentProblem && shalomDoc && !documentNotice && (
+              <p className="mt-1 text-xs font-medium text-emerald-600">
+                ✓ Formato válido
+              </p>
+            )}
+            {documentNotice && (
+              <p className="mt-1 text-xs text-slate-600">{documentNotice}</p>
+            )}
+          </div>
         </div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <input
-            value={shalomAgencyId}
-            onChange={(e) => setShalomAgencyId(e.target.value)}
-            inputMode="numeric"
-            placeholder="ID de agencia de destino"
-            className="w-44 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-          />
-          <input
-            value={shalomAgencyName}
-            onChange={(e) => setShalomAgencyName(e.target.value)}
-            placeholder="Nombre de la agencia"
-            className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-          />
+        <div className="relative mt-2">
+          {shalomAgency ? (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-emerald-900">
+                  ✓ {shalomAgency.nombre}
+                </p>
+                <p className="truncate text-xs text-emerald-700">
+                  #{shalomAgency.id} · {[shalomAgency.departamento, shalomAgency.provincia, shalomAgency.distrito]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShalomAgency(null);
+                  setShalomAgencyQuery("");
+                }}
+                className="shrink-0 text-xs font-medium text-emerald-800 underline"
+              >
+                Cambiar
+              </button>
+            </div>
+          ) : (
+            <>
+              <input
+                value={shalomAgencyQuery}
+                onChange={(e) => setShalomAgencyQuery(e.target.value)}
+                placeholder="Buscar agencia por ciudad, distrito o nombre"
+                autoComplete="off"
+                role="combobox"
+                aria-expanded={shalomAgencies.length > 0}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+              />
+              {agencySearching && <p className="mt-1 text-xs text-slate-400">Buscando agencias…</p>}
+              {agencyError && <p className="mt-1 text-xs font-medium text-red-600">{agencyError}</p>}
+              {!agencySearching && !agencyError && shalomAgencyQuery.trim().length >= 2 && shalomAgencies.length === 0 && (
+                <p className="mt-1 text-xs text-slate-500">No encontramos agencias con ese texto.</p>
+              )}
+              {shalomAgencies.length > 0 && (
+                <ul
+                  role="listbox"
+                  className="absolute z-30 mt-1 max-h-52 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl shadow-slate-900/10"
+                >
+                  {shalomAgencies.map((agency) => (
+                    <li key={agency.id} role="option" aria-selected="false">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShalomAgency(agency);
+                          setShalomAgencyQuery(agency.nombre);
+                          setShalomAgencies([]);
+                        }}
+                        className="block w-full rounded-lg px-3 py-2 text-left hover:bg-brand-50"
+                      >
+                        <span className="text-sm font-semibold text-slate-800">{agency.nombre}</span>{" "}
+                        <span className="text-xs text-slate-400">#{agency.id}</span>
+                        <span className="block text-xs text-slate-500">
+                          {[agency.departamento, agency.provincia, agency.distrito].filter(Boolean).join(" · ")}
+                        </span>
+                        {agency.direccion && (
+                          <span className="block truncate text-[11px] text-slate-400">{agency.direccion}</span>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
         </div>
       </details>
       <p className="text-xs text-slate-400">
