@@ -10,7 +10,13 @@ import { getStoreCreds, runStoreSync } from "@/lib/ingest";
 import { registerOrderWebhooks } from "@/lib/shopify";
 import { buildStoreDailySummary, formatDailySummary, limaDayBounds } from "@/lib/daily-summary";
 import { sendTelegramToAll } from "@/lib/telegram";
-import { listMetaAdAccounts, type MetaAdAccount, type StoreMetaAdAccount } from "@/lib/meta-marketing";
+import {
+  listMetaAdAccounts,
+  probeMetaConnection,
+  type MetaAdAccount,
+  type MetaConnectionProbe,
+  type StoreMetaAdAccount,
+} from "@/lib/meta-marketing";
 import { listProducts } from "@/lib/aliclik";
 import { syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { env } from "@/lib/env";
@@ -347,6 +353,33 @@ export async function listStoreMetaAdAccounts(
   const res = await listMetaAdAccounts(creds.meta_access_token);
   if (!res.ok) return { error: `Meta rechazó la consulta: ${res.error}` };
   return { accounts: res.accounts };
+}
+
+/** Validate the saved Meta token, selected accounts and a real Insights query. */
+export async function testStoreMetaConnection(
+  storeId: string,
+): Promise<{ result: MetaConnectionProbe } | { error: string }> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const creds = await getStoreCreds(storeId, ctx.admin);
+  if (!creds?.meta_access_token) {
+    return { error: "Primero pega el access token de Meta arriba y guarda los cambios." };
+  }
+  const limaDate = (offsetDays: number) => {
+    const date = new Date(Date.now() + offsetDays * 86_400_000);
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Lima",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date);
+  };
+  const result = await probeMetaConnection(
+    creds.meta_access_token,
+    creds.meta_ad_accounts,
+    { from: limaDate(-6), to: limaDate(0) },
+  );
+  return { result };
 }
 
 /** Persist the SELECTED Meta ad accounts (several per store) — their combined
