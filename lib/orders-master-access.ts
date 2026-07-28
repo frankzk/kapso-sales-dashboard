@@ -19,6 +19,7 @@ import type {
   ShipmentRow,
 } from "@/lib/types";
 import type { GeneralStatus } from "@/lib/order-status";
+import type { MasterFilters, MasterSortKey } from "@/lib/order-master-filters";
 
 export type MasterView = "todos" | GeneralStatus;
 
@@ -316,5 +317,191 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     timeline,
     lineItems: orderRow?.line_items ?? [],
     address: shopifyShippingAddress(orderRow?.raw),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Listado paginado, con los filtros aplicados en la BASE.
+// ---------------------------------------------------------------------------
+
+/** Filas por página. 100 llena la pantalla y pesa ~100 KB, frente a los 9,5 MB
+ *  que costaba bajar la tabla entera. */
+export const MASTER_PAGE_SIZE = 100;
+
+export interface MasterPage {
+  rows: OrderMasterRow[];
+  /** Cuántos hay en total con esos filtros, para paginar y para el contador. */
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** Columna por la que ordena cada opción del selector, y si va descendente. */
+const SORT_COLUMN: Record<MasterSortKey, { column: string; ascending: boolean }> = {
+  created: { column: "order_created_at", ascending: false },
+  movement: { column: "last_movement_at", ascending: false },
+  status_age: { column: "status_since", ascending: true },
+  attempts: { column: "attempt_count", ascending: false },
+  couriers: { column: "courier_count", ascending: false },
+  total: { column: "order_total", ascending: false },
+};
+
+/**
+ * Traduce los filtros a la consulta. Cada uno se apoya en un índice que ya
+ * existe (`order_master_store_district_idx`, `..._store_courier_idx`, los
+ * parciales de multi_courier y multi_attempt…), así que filtrar en la base sale
+ * más barato que traérselo todo y filtrarlo en el navegador — que es lo que se
+ * hacía antes.
+ *
+ * `now` se pasa desde fuera para que "vence pronto" y "sin movimiento" sean
+ * reproducibles y no dependan del reloj del servidor a mitad de una petición.
+ */
+function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
+  // El tipo del query builder de PostgREST es encadenado; se trabaja sobre una
+  // referencia suelta para no pelearse con los genéricos en cada línea.
+  let q = query as any;
+
+  if (f.stores.size) q = q.in("store_id", [...f.stores]);
+  if (f.generalStatuses.size) q = q.in("general_status", [...f.generalStatuses]);
+  if (f.operationalStatuses.size) q = q.in("operational_status", [...f.operationalStatuses]);
+  if (f.shippingModes.size) q = q.in("shipping_mode", [...f.shippingModes]);
+  if (f.regions.size) q = q.in("region", [...f.regions]);
+  if (f.provinces.size) q = q.in("province", [...f.provinces]);
+  if (f.districts.size) q = q.in("district", [...f.districts]);
+  if (f.pickupStates.size) q = q.in("pickup_state", [...f.pickupStates]);
+
+  // El courier mira el actual Y el último: buscar "los que tocó Fenix" no debe
+  // perder los que ya pasaron a otra guía. Es la misma regla que tenía el filtro
+  // en cliente, escrita como un OR de PostgREST.
+  if (f.couriers.size) {
+    const list = [...f.couriers].map((c) => `"${c.replace(/"/g, '""')}"`).join(",");
+    q = q.or(`current_courier.in.(${list}),last_courier.in.(${list})`);
+  }
+
+  const range = (column: string, from: string, to: string) => {
+    if (from) q = q.gte(column, `${from}T00:00:00.000Z`);
+    // Extremo superior inclusive: el usuario que escribe "hasta el 24" espera
+    // que entren los del 24, no que se corten a medianoche del 23.
+    if (to) q = q.lte(column, `${to}T23:59:59.999Z`);
+  };
+  range("order_created_at", f.createdFrom, f.createdTo);
+  range("dispatched_at", f.dispatchedFrom, f.dispatchedTo);
+  range("last_movement_at", f.movementFrom, f.movementTo);
+  range("delivered_at", f.deliveredFrom, f.deliveredTo);
+
+  if (f.withComments) q = q.gt("comment_count", 0);
+  if (f.multiCourier) q = q.gt("courier_count", 1);
+  if (f.multiAttempt) q = q.gt("attempt_count", 1);
+
+  if (f.expiringSoon) {
+    // Incluye lo ya vencido: es justamente lo que hay que trabajar hoy para que
+    // el paquete no se devuelva.
+    const limit = new Date(now.getTime() + 2 * 86_400_000).toISOString();
+    q = q.not("agency_expires_at", "is", null).lte("agency_expires_at", limit);
+  }
+
+  if (f.staleDays > 0) {
+    // "Sin movimientos recientes". Un pedido que NUNCA se movió también cuenta:
+    // es justamente el que nadie está mirando, así que se incluyen los nulos.
+    const cutoff = new Date(now.getTime() - f.staleDays * 86_400_000).toISOString();
+    q = q.or(`last_movement_at.is.null,last_movement_at.lte.${cutoff}`);
+  }
+
+  const term = f.search.trim().replace(/^#/, "");
+  if (term) {
+    const like = `*${term.replace(/[*,()]/g, "")}*`;
+    q = q.or(
+      `order_name.ilike.${like},guide_code.ilike.${like},customer_phone.ilike.${like},customer_name.ilike.${like}`,
+    );
+  }
+
+  return q as T;
+}
+
+/**
+ * Una página del Master, filtrada y ordenada en la base.
+ *
+ * Reemplaza al listado completo: antes se bajaban las ~10.000 filas al navegador
+ * (13 MB, y otra vez enteras en cada cambio de pestaña) para filtrarlas en
+ * memoria. Ahora viaja lo que se ve.
+ */
+export async function getOrderMasterPage(
+  storeIds: string[],
+  params: {
+    view?: MasterView;
+    filters: MasterFilters;
+    sortKey: MasterSortKey;
+    page: number;
+    pageSize?: number;
+    now?: Date;
+  },
+): Promise<MasterPage> {
+  const pageSize = params.pageSize ?? MASTER_PAGE_SIZE;
+  const empty: MasterPage = { rows: [], total: 0, page: 1, pageSize };
+  if (!storeIds.length) return empty;
+
+  const sb = await createServerSupabase();
+  const view = params.view ?? "todos";
+  const now = params.now ?? new Date();
+  const sort = SORT_COLUMN[params.sortKey] ?? SORT_COLUMN.created;
+
+  const build = (select: string, opts?: { count: "exact"; head: true }) => {
+    let q = opts
+      ? sb.from("order_master").select(select, opts)
+      : sb.from("order_master").select(select);
+    q = q.in("store_id", storeIds) as typeof q;
+    if (view !== "todos") q = q.eq("general_status", view) as typeof q;
+    return applyServerFilters(q, params.filters, now);
+  };
+
+  // El conteo va en paralelo con la página: es una consulta `head`, no trae
+  // filas, y hace falta para poder paginar.
+  const [countRes, rowsRes] = await Promise.all([
+    build("id", { count: "exact", head: true }),
+    (() => {
+      const q = build(MASTER_COLUMNS) as any;
+      const from = Math.max(0, (params.page - 1) * pageSize);
+      return q
+        .order(sort.column, { ascending: sort.ascending, nullsFirst: false })
+        // Desempate estable: sin un orden total, dos páginas pueden repetir o
+        // saltarse una fila.
+        .order("id", { ascending: true })
+        .range(from, from + pageSize - 1);
+    })(),
+  ]);
+
+  if (rowsRes.error) return empty;
+  return {
+    rows: (rowsRes.data ?? []) as unknown as OrderMasterRow[],
+    total: countRes.count ?? 0,
+    page: params.page,
+    pageSize,
+  };
+}
+
+/** Opciones de los desplegables, calculadas en la base (0059). Unos kilobytes
+ *  en vez de las 10.000 filas que hacían falta para deducirlas en el navegador. */
+export async function getMasterFacets(storeIds: string[]): Promise<{
+  operational: string[];
+  courier: string[];
+  region: string[];
+  province: string[];
+  district: string[];
+  pickup: string[];
+}> {
+  const empty = { operational: [], courier: [], region: [], province: [], district: [], pickup: [] };
+  if (!storeIds.length) return empty;
+  const sb = await createServerSupabase();
+  const { data, error } = await sb.rpc("master_facets", { p_store_ids: storeIds });
+  if (error || !data) return empty;
+  const d = data as Record<string, string[] | null>;
+  const list = (k: string) => [...(d[k] ?? [])].sort((a, b) => a.localeCompare(b, "es"));
+  return {
+    operational: list("operational"),
+    courier: list("courier"),
+    region: list("region"),
+    province: list("province"),
+    district: list("district"),
+    pickup: list("pickup"),
   };
 }
