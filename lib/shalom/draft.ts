@@ -347,6 +347,6 @@ export const MIN_OVERRIDE_REASON = 10;
 export function shalomSoftBlockers(paymentState: string | null): string[] {
   if (paymentState !== "sin_pago") return [];
   return [
-    "No hay ningún comprobante de adelanto cargado. El envío por Shalom se cobra con adelanto: registra el Yape en «Pagos Yape y clave de recojo», o crea la guía igual explicando por qué.",
+    "No hay ningún comprobante de adelanto cargado. El envío por Shalom se cobra con adelanto: regístralo en la pestaña «Pagos y clave» de este mismo pedido, o crea la guía igual explicando por qué.",
   ];
 }
