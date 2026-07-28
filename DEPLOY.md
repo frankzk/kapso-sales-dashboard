@@ -771,6 +771,46 @@ clave de idempotencia. En consecuencia:
   haya sido recibida en agencia. Ese `{id}` es el de `GET /v1/orders`, **no** el
   `ose_id` ni la `guia` (por eso hay tres columnas y no una).
 
+### Los estados: `/api/cron/shalom-reconcile`, cada 30 min
+
+Shalom **no tiene webhook**, y la vía de entrada por reporte Excel —que existe y
+funciona— **nunca se usó para Shalom en esta operación**: se comprobó en la base,
+0 guías de Shalom ingeridas por reporte frente a ~3.000 de Aliclik. Sin nada que
+las alimentara, las guías creadas por API se quedaban congeladas en el estado con
+el que nacían, y el Master decía «pendiente» para siempre — que no es un dato
+sino un vacío disfrazado.
+
+Lo que lo hace barato es que **el «modo estado» del rastreo se contenta con la
+API key global**: no pide credenciales de Shalom Pro, así que no hay login de
+~90 s, no hay sesión que renovar y **una sola llamada cubre guías de cualquier
+tienda a la vez**. Y `POST /v1/tracking/batch` acepta 50 guías por request con un
+`custom_id` que devuelve verbatim, así que se manda el id del envío y el
+resultado se correlaciona sin adivinar.
+
+El mapeo de los siete hitos vive en `lib/shalom/tracking.ts`, puro y testeado.
+**Gana el hito más avanzado**, no el último que traiga fecha: un envío entregado
+sigue trayendo `registrado`, así que leerlos como banderas sueltas daría el
+estado más atrasado. Dos decisiones que no son obvias:
+
+- **`destino` no es entregado.** Llegar a la agencia de destino deja la guía
+  `disponible_para_recojo` y **viva** (`pendiente`): el paquete espera al
+  cliente. Es el mismo criterio que ya usaba el adaptador de reportes.
+- **`reparto` gana a `destino`**, porque solo puede ocurrir después. En una
+  entrega en agencia es `null` para siempre.
+
+Solo se escribe cuando el estado cambia de verdad. Sin esa comparación, cada
+pasada tocaría cada fila, ensuciaría el `updated_at` que el Master usa para
+ordenar por movimiento y llenaría la línea de tiempo de eventos idénticos.
+
+Las guías terminales dejan de consultarse, y el techo por pasada son 20 batches
+(1.000 guías) para no comerse el cupo de 60 req/min, que es **compartido entre
+todas las tiendas**.
+
+> `GET /v1/tracking` también tiene modo detallado con `order`, pero sus bloques
+> `origen`, `destino`, `remitente`, `destinatario` y `comprobante` llegan vacíos
+> desde julio de 2026 — lo avisa el propio proveedor. No se pide: el estado sale
+> entero de `status`.
+
 ### Anular una guía
 
 Crear emite una guía real y cobrable de un clic, así que deshacerlo no puede ser

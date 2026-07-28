@@ -33,6 +33,7 @@ import {
   type ShalomOrderResult,
   type ShalomPerson,
   type ShalomProduct,
+  type ShalomTrackResult,
   type ShalomSession,
   type ShalomTariff,
 } from "./types";
@@ -312,6 +313,29 @@ export class ShalomClient {
       { shalomAuth: true, timeoutMs: SLOW_TIMEOUT_MS },
     );
     return body?.orders ?? [];
+  }
+
+  /**
+   * Rastrea hasta 50 guías de una vez.
+   *
+   * NO pide `shalomAuth`, y eso es lo que la hace viable en un cron: el «modo
+   * estado» del rastreo se contenta con la API key global, así que no hay que
+   * pagar el login de ~90 s ni tener credenciales de ninguna tienda. Basta el
+   * `numero` de guía. El modo detallado añadiría `order`, pero sus bloques útiles
+   * llegan vacíos desde julio de 2026 — no hay razón para pedirlo.
+   *
+   * Un item que falla NO tumba el batch: viene con `ok:false` y su error, y el
+   * HTTP sigue siendo 200. Por eso el llamador itera resultados en vez de
+   * confiar en que la ausencia de excepción signifique que todo salió bien.
+   */
+  async trackBatch(
+    items: { custom_id: string; numero: string }[],
+  ): Promise<ShalomTrackResult[]> {
+    const body = await this.request<{ results?: ShalomTrackResult[] }>("/v1/tracking/batch", {
+      method: "POST",
+      body: { items },
+    });
+    return body?.results ?? [];
   }
 
   async deleteOrder(id: number): Promise<void> {
