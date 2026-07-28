@@ -66,6 +66,11 @@ export default async function StoreSettingsPage({
       .from("sync_state")
       .select("source, status, last_run_at, cursor, error")
       .eq("store_id", storeId)
+      // `rollup_pending` no es una fuente de sincronización: es la anotación
+      // interna de qué días le faltan por recalcular al rollup. Esta tabla
+      // lista fuentes, así que se queda fuera — si no, sale una fila con
+      // "cursor" 2026-07-20..2026-07-27 que no le dice nada a nadie.
+      .neq("source", "rollup_pending")
       .order("source"),
     admin
       .from("ops_snapshots")

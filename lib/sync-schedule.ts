@@ -55,7 +55,14 @@ export interface RunSummary {
   yapeAlerts: number;
   /** Etapas saltadas por falta de tiempo, sin repetir, de todas las tiendas. */
   skipped: string[];
-  errors: string[];
+  /**
+   * Cuántos errores hubo en total. Es un CONTADOR y no la lista: el texto vive
+   * en `perStore`, que además dice de qué tienda es. Repetirlo aquí engordaba
+   * la línea hasta el doble justo en el caso peor (varias tiendas fallando a la
+   * vez), y una línea que la plataforma corta a la mitad deja de ser JSON
+   * válido — se pierde entera justo cuando más falta hace.
+   */
+  errorCount: number;
   perStore: { store: string; partial: boolean; skipped: string[]; errors: string[] }[];
 }
 
@@ -111,7 +118,7 @@ export function summarizeRun(input: {
     partial: perStore.some((s) => s.partial),
     yapeAlerts: input.yapeAlerts,
     skipped: [...new Set(perStore.flatMap((s) => s.skipped))],
-    errors: [...new Set(perStore.flatMap((s) => s.errors))],
+    errorCount: perStore.reduce((n, s) => n + s.errors.length, 0),
     perStore,
   };
 }

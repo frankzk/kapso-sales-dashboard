@@ -848,7 +848,8 @@ const STAGE_COST_MS = {
   metaAds: 25_000,
   ops: 25_000,
   waNumbers: 15_000,
-  rollups: 20_000,
+  // Ojo: el rollup diario NO está aquí a propósito. No se le pregunta si cabe
+  // — tiene sitio reservado en TAIL_RESERVE_MS. Ver la nota de esa constante.
   orderMaster: 30_000,
 } as const;
 

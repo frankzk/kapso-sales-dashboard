@@ -167,13 +167,28 @@ describe("summarizeRun · la línea que deja rastro en los logs", () => {
   it("una tienda que revienta cuenta como error aunque no traiga reporte", () => {
     // `mapWithConcurrency` devuelve `{ storeId, error }` para las que lanzaron.
     const s = summary({ reports: [{ storeId: "a", error: "boom" }] });
-    expect(s.errors).toEqual(["boom"]);
+    expect(s.errorCount).toBe(1);
+    expect(s.perStore[0]!.errors).toEqual(["boom"]);
     expect(s.partial).toBe(false);
   });
 
   it("recorta los errores largos para que la línea siga siendo legible", () => {
     const s = summary({ reports: [{ storeId: "a", errors: ["x".repeat(5_000)] }] });
-    expect(s.errors[0]!.length).toBe(201); // 200 + el carácter de recorte
+    expect(s.perStore[0]!.errors[0]!.length).toBe(201); // 200 + el carácter de recorte
+  });
+
+  it("el texto de los errores NO se repite fuera de perStore", () => {
+    // Una línea de log que la plataforma corta a la mitad deja de ser JSON
+    // parseable. El contador arriba, el texto una sola vez abajo.
+    const s = summary({
+      stores: 2,
+      reports: [
+        { storeId: "a", errors: ["y".repeat(5_000)] },
+        { storeId: "b", errors: ["y".repeat(5_000)] },
+      ],
+    });
+    expect(s.errorCount).toBe(2);
+    expect(JSON.stringify(s).length).toBeLessThan(1_000);
   });
 
   it("sale en una sola línea de JSON: los logs se filtran, no se leen a ojo", () => {

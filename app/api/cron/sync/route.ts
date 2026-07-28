@@ -18,7 +18,10 @@ export const maxDuration = 300;
 // en qué tienda ni en qué etapa. Esta corrida se lo pone a sí misma más bajo
 // para terminar por su cuenta y responder, que es lo que deja rastro.
 const RESPONSE_RESERVE_MS = 20_000;
-const RUN_BUDGET_MS = 300_000 - RESPONSE_RESERVE_MS;
+// Derivado de `maxDuration`, no un 300_000 a mano: si alguien sube el techo de
+// la función y el presupuesto se queda en el número viejo, la corrida se frena
+// antes de tiempo sin que nada lo delate.
+const RUN_BUDGET_MS = maxDuration * 1_000 - RESPONSE_RESERVE_MS;
 
 // Cuántas tiendas se sincronizan a la vez. Cada tienda habla con SU Shopify y SU
 // Kapso, con credenciales distintas, así que solapar dos no comparte cupo de
