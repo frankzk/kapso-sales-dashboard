@@ -320,6 +320,21 @@ export interface CampaignDeliveryOutcome {
   createdAt: string | null;
 }
 
+/** Aggregated historical Meta Insights for one ad in the selected date range. */
+export interface MetaAdPerformance {
+  adId: string;
+  accountId: string | null;
+  currency: string | null;
+  spend: number;
+  impressions: number;
+  reach: number;
+  clicks: number;
+  inlineLinkClicks: number;
+  activeDays: number;
+  firstDate: string | null;
+  lastDate: string | null;
+}
+
 /** Minimal linked-guide identity used to move from a frozen source guide to
  * the active Fenix guide without leaving the drawer. */
 export interface LinkedShipmentSummary {

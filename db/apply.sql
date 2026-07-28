@@ -153,4 +153,6 @@
 \ir migrations/0073_shalom_order_draft.sql
 \echo 'Applying 0074_meta_ad_insights_daily.sql'
 \ir migrations/0074_meta_ad_insights_daily.sql
+\echo 'Applying 0075_meta_ad_performance.sql'
+\ir migrations/0075_meta_ad_performance.sql
 \echo 'Done.'

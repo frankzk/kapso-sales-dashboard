@@ -13,6 +13,7 @@ import type {
   ConversationRow,
   DailyRollupRow,
   LeadRow,
+  MetaAdPerformance,
   OrderRow,
 } from "@/lib/types";
 import { prettyAdName, type AdMeta } from "@/lib/meta-ads";
@@ -820,6 +821,22 @@ export interface CampaignStat {
   deliveredRevenue: number;
   revenuePerLead: number;
   avgTicket: number;
+  metaCurrency: string | null;
+  spend: number;
+  impressions: number;
+  reach: number;
+  clicks: number;
+  inlineLinkClicks: number;
+  activeDays: number;
+  cpm: number | null;
+  frequency: number | null;
+  ctr: number | null;
+  cpc: number | null;
+  cpl: number | null;
+  cpa: number | null;
+  deliveredCpa: number | null;
+  roas: number | null;
+  deliveredRoas: number | null;
   decision: CampaignDecision;
   productMix: Array<{ title: string; sku: string | null; orders: number; units: number }>;
   orders: CampaignOrderDetail[];
@@ -832,7 +849,8 @@ export type CampaignDecision =
   | "promising"
   | "review_close"
   | "misaligned"
-  | "operational";
+  | "operational"
+  | "no_attribution";
 
 export interface CampaignOrderDetail {
   orderId: string;
@@ -883,11 +901,13 @@ export function campaignBreakdown(
   orders: OrderRow[],
   names: Record<string, AdMeta> = {},
   deliveries: CampaignDeliveryOutcome[] = [],
+  performance: MetaAdPerformance[] = [],
 ): CampaignStat[] {
   const adLeads = leads.filter((l) => l.source === "meta_ad" && (l.ad_id || l.ad_headline));
-  if (!adLeads.length) return [];
+  if (!adLeads.length && !performance.length) return [];
   const activeById = new Map(activeOrders(orders).filter((o) => o.id).map((o) => [o.id!, o]));
   const deliveryByOrder = new Map(deliveries.map((outcome) => [outcome.orderId, outcome]));
+  const performanceByAd = new Map(performance.map((row) => [row.adId, row]));
   const m = new Map<string, { headline: string | null; adId: string | null; leads: LeadRow[] }>();
   for (const l of adLeads) {
     const key = l.ad_id || l.ad_headline!;
@@ -897,8 +917,15 @@ export function campaignBreakdown(
     b.leads.push(l);
     m.set(key, b);
   }
+  for (const insight of performance) {
+    if (insight.spend <= 0 && insight.impressions <= 0) continue;
+    if (!m.has(insight.adId)) {
+      m.set(insight.adId, { headline: null, adId: insight.adId, leads: [] });
+    }
+  }
   const rows = [...m.entries()].map(([adId, b]) => {
       const meta = names[adId] ?? null;
+      const insight = performanceByAd.get(adId);
       const promotedProductName = meta?.promotedProductName?.trim() || null;
       const promotedSkus = [...new Set((meta?.promotedSkus ?? []).map((sku) => sku.trim().toUpperCase()).filter(Boolean))];
       const details: CampaignOrderDetail[] = [];
@@ -948,6 +975,11 @@ export function campaignBreakdown(
       const shipmentKnown = details.filter((order) => !!order.deliveryStatus || !!order.statusCategory).length;
       const pedidos = details.length;
       const conversion = b.leads.length ? pedidos / b.leads.length : 0;
+      const spend = round2(insight?.spend ?? 0);
+      const impressions = insight?.impressions ?? 0;
+      const reach = insight?.reach ?? 0;
+      const clicks = insight?.clicks ?? 0;
+      const inlineLinkClicks = insight?.inlineLinkClicks ?? 0;
       return {
         adId,
         metaAdId: b.adId,
@@ -974,6 +1006,22 @@ export function campaignBreakdown(
         deliveredRevenue: round2(deliveredRevenue),
         revenuePerLead: b.leads.length ? round2(ingresos / b.leads.length) : 0,
         avgTicket: pedidos ? round2(ingresos / pedidos) : 0,
+        metaCurrency: insight?.currency ?? null,
+        spend,
+        impressions,
+        reach,
+        clicks,
+        inlineLinkClicks,
+        activeDays: insight?.activeDays ?? 0,
+        cpm: insight && impressions ? round2((spend / impressions) * 1_000) : null,
+        frequency: insight && reach ? round2(impressions / reach) : null,
+        ctr: insight && impressions ? clicks / impressions : null,
+        cpc: insight && clicks ? round2(spend / clicks) : null,
+        cpl: insight && b.leads.length ? round2(spend / b.leads.length) : null,
+        cpa: insight && pedidos ? round2(spend / pedidos) : null,
+        deliveredCpa: insight && deliveredOrders ? round2(spend / deliveredOrders) : null,
+        roas: insight && spend ? round2(ingresos / spend) : null,
+        deliveredRoas: insight && spend ? round2(deliveredRevenue / spend) : null,
         decision: "insufficient" as CampaignDecision,
         productMix: [...mix.values()].sort((a, b) => b.orders - a.orders || b.units - a.units),
         orders: details.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
@@ -982,7 +1030,8 @@ export function campaignBreakdown(
   const totalLeads = rows.reduce((sum, row) => sum + row.leads, 0);
   const baseline = totalLeads ? rows.reduce((sum, row) => sum + row.pedidos, 0) / totalLeads : 0;
   for (const row of rows) {
-    if (row.leads < 20) row.decision = "insufficient";
+    if (row.spend > 0 && row.leads === 0) row.decision = "no_attribution";
+    else if (row.leads < 20) row.decision = "insufficient";
     else if (row.productMatchRate != null && row.pedidos >= 5 && row.productMatchRate < 0.5) row.decision = "misaligned";
     else if (row.deliveryRate != null && row.shipmentKnown >= 5 && row.deliveryRate < 0.5) row.decision = "operational";
     else if (row.conversion >= Math.max(0.15, baseline * 1.25)) row.decision = "scale";

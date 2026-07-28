@@ -374,12 +374,44 @@ export async function getMetaSpend(storeId: string, range: DateRange): Promise<n
   }
 }
 
+/** Historical Meta totals by ad. The database aggregates the daily rows and
+ * preserves their RLS; missing migration/data degrades to an empty result. */
+export async function getMetaAdPerformance(
+  storeId: string,
+  range: DateRange,
+): Promise<import("@/lib/types").MetaAdPerformance[]> {
+  const sb = await createServerSupabase();
+  const { data, error } = await sb.rpc("meta_ad_performance", {
+    p_store_id: storeId,
+    p_from: range.from,
+    p_to: range.to,
+  });
+  if (error || !Array.isArray(data)) return [];
+  const finite = (value: unknown) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  return (data as Array<Record<string, unknown>>)
+    .filter((row) => typeof row.ad_id === "string" && row.ad_id)
+    .map((row) => ({
+      adId: String(row.ad_id),
+      accountId: typeof row.account_id === "string" ? row.account_id : null,
+      currency: typeof row.currency === "string" ? row.currency.toUpperCase() : null,
+      spend: finite(row.spend),
+      impressions: Math.trunc(finite(row.impressions)),
+      reach: Math.trunc(finite(row.reach)),
+      clicks: Math.trunc(finite(row.clicks)),
+      inlineLinkClicks: Math.trunc(finite(row.inline_link_clicks)),
+      activeDays: Math.trunc(finite(row.active_days)),
+      firstDate: typeof row.first_date === "string" ? row.first_date : null,
+      lastDate: typeof row.last_date === "string" ? row.last_date : null,
+    }));
+}
+
 /**
  * Resolve Meta `ad_id`s → attribution (real ad / adset / campaign names,
- * objective, status, owning account) from the `meta_ads` lookup. Keyed by the
- * globally-unique ad_id, so it is not store-scoped. Returns {} when no ids are
- * given or the table/rows are absent — callers then degrade to the captured
- * CTWA headline. Never throws (the rest of the dashboard must render regardless).
+ * objective, status, owning account) from the `meta_ads` lookup. Large sets are
+ * chunked because the historical report can include thousands of active ads.
  */
 export async function getAdNames(
   adIds: (string | null | undefined)[],
@@ -391,25 +423,28 @@ export async function getAdNames(
   // resolving their labels via the service-role client leaks nothing: you can
   // only look up ads your own leads reference.
   const admin = createAdminSupabase();
-  const richResult = await admin
-    .from("meta_ads")
-    .select(
-      "ad_id,account_id,campaign_id,campaign_name,objective,adset_id,adset_name,ad_name,status,fetched_at,promoted_product_name,promoted_skus,promoted_product_updated_at",
-    )
-    .in("ad_id", ids);
-  let data: Array<Record<string, unknown>> | null = richResult.data as Array<Record<string, unknown>> | null;
-  let error = richResult.error;
-  if (error) {
-    const fallback = await admin
+  const batches = await Promise.all(chunk(ids, 300).map(async (idBatch) => {
+    const richResult = await admin
       .from("meta_ads")
-      .select("ad_id,account_id,campaign_id,campaign_name,objective,adset_id,adset_name,ad_name,status,fetched_at")
-      .in("ad_id", ids);
-    data = fallback.data as Array<Record<string, unknown>> | null;
-    error = fallback.error;
-  }
-  if (error || !data) return {}; // table not applied yet, or no rows — degrade gracefully
+      .select(
+        "ad_id,account_id,campaign_id,campaign_name,objective,adset_id,adset_name,ad_name,status,fetched_at,promoted_product_name,promoted_skus,promoted_product_updated_at",
+      )
+      .in("ad_id", idBatch);
+    let data = richResult.data as Array<Record<string, unknown>> | null;
+    let error = richResult.error;
+    if (error) {
+      const fallback = await admin
+        .from("meta_ads")
+        .select("ad_id,account_id,campaign_id,campaign_name,objective,adset_id,adset_name,ad_name,status,fetched_at")
+        .in("ad_id", idBatch);
+      data = fallback.data as Array<Record<string, unknown>> | null;
+      error = fallback.error;
+    }
+    return error || !data ? [] : data;
+  }));
+  const rows = batches.flat();
   const out: Record<string, AdMeta> = {};
-  for (const r of data) {
+  for (const r of rows) {
     const adId = typeof r.ad_id === "string" ? r.ad_id : null;
     if (!adId) continue;
     out[adId] = {
