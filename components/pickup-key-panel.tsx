@@ -22,6 +22,7 @@ import {
   type PaymentRow,
   type PickupKeyPanel as PanelData,
 } from "@/app/dashboard/pedidos/payment-actions";
+import { saveShalomOrderDraft } from "@/app/dashboard/pedidos/shalom-actions";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { PAYMENT_STATE_LABEL, type PaymentState } from "@/lib/pickup-key";
 
@@ -504,6 +505,13 @@ function VoucherForm({
   const [phone, setPhone] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  // Datos de Shalom que se pueden adelantar acá (0073). OPCIONALES: no
+  // condicionan el pago — bloquear un cobro por falta de un DNI sería peor que
+  // el problema que resuelve.
+  const [shalomDoc, setShalomDoc] = useState("");
+  const [shalomDocType, setShalomDocType] = useState("DNI");
+  const [shalomAgencyId, setShalomAgencyId] = useState("");
+  const [shalomAgencyName, setShalomAgencyName] = useState("");
 
   async function submit() {
     setBusy(true);
@@ -547,6 +555,18 @@ function VoucherForm({
         onError(res.error);
         return;
       }
+      // Se guarda DESPUÉS del pago y sin condicionarlo: si esto fallara, el
+      // cobro ya quedó registrado, que es lo que no puede perderse.
+      if (shalomDoc.trim() || shalomAgencyId.trim()) {
+        const pre = await saveShalomOrderDraft(orderId, {
+          documentType: shalomDocType as "DNI" | "RUC" | "CE",
+          document: shalomDoc.trim() || null,
+          destinyTerminalId: shalomAgencyId.trim() ? Number(shalomAgencyId) : null,
+          destinyTerminalName: shalomAgencyName.trim() || null,
+        });
+        if ("error" in pre) onError(`El pago se registró, pero los datos de Shalom no: ${pre.error}`);
+      }
+
       onNotice(res.notice ?? null);
       setAmount("");
       setOperation("");
@@ -609,6 +629,53 @@ function VoucherForm({
         />
       </div>
       <VoucherPicker file={file} onPick={setFile} />
+
+      {/* Datos de Shalom, adelantados y OPCIONALES (0073).
+          Van aquí porque quien registra el Yape acaba de hablar con la clienta y
+          tiene el DNI a mano; quien crea la guía suele ser otra persona en otro
+          momento, y hoy tiene que volver a pedirlo. Nada de esto condiciona el
+          pago: un cobro no puede quedarse esperando a un DNI. */}
+      <details className="rounded-lg border border-slate-200 px-3 py-2">
+        <summary className="cursor-pointer text-xs font-medium text-slate-600">
+          Adelantar datos para la guía Shalom (opcional)
+        </summary>
+        <p className="mt-2 text-xs text-slate-400">
+          Si ya tienes el documento del cliente o sabes a qué agencia va, apúntalo acá y quien cree
+          la guía se lo encontrará puesto: solo tendrá que cotizar y crear.
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <select
+            value={shalomDocType}
+            onChange={(e) => setShalomDocType(e.target.value)}
+            className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+          >
+            <option value="DNI">DNI</option>
+            <option value="RUC">RUC</option>
+            <option value="CE">CE</option>
+          </select>
+          <input
+            value={shalomDoc}
+            onChange={(e) => setShalomDoc(e.target.value)}
+            placeholder="Documento del destinatario"
+            className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+          />
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <input
+            value={shalomAgencyId}
+            onChange={(e) => setShalomAgencyId(e.target.value)}
+            inputMode="numeric"
+            placeholder="ID de agencia de destino"
+            className="w-44 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+          />
+          <input
+            value={shalomAgencyName}
+            onChange={(e) => setShalomAgencyName(e.target.value)}
+            placeholder="Nombre de la agencia"
+            className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+          />
+        </div>
+      </details>
       <p className="text-xs text-slate-400">
         Lo que dejes en blanco se intenta leer de la imagen (nº de operación, monto, fecha y hora).
         Cargar la imagen no valida el pago: queda pendiente hasta que alguien lo revise.

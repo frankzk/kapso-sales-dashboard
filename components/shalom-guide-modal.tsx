@@ -114,6 +114,24 @@ export function ShalomGuideModal({
       setPhone(d.receiverPhone ?? "");
       setProductId(d.defaultProductId);
       if (d.pickupCode) setPickupCode(d.pickupCode);
+
+      // Lo apuntado al registrar el pago (0073). Es el punto de todo esto: quien
+      // cobró tenía a la clienta al teléfono; quien crea la guía, no. Puede venir
+      // a medias —el DNI sí y la agencia no—, así que cada campo se rellena por
+      // separado y todos quedan editables: es un adelanto, no una imposición.
+      if (d.prefilledDocument) {
+        setDocumentValue(d.prefilledDocument);
+        if (d.prefilledDocumentType) setDocumentType(d.prefilledDocumentType);
+      }
+      if (d.prefilledTerminalId) {
+        setAgency({
+          id: d.prefilledTerminalId,
+          nombre: d.prefilledTerminalName ?? `Agencia ${d.prefilledTerminalId}`,
+        });
+        // Con la agencia ya elegida no hace falta gastar una búsqueda del cupo
+        // compartido solo para volver a encontrar lo que ya sabemos.
+        setAgencyQuery("");
+      }
     })();
     return () => {
       alive = false;

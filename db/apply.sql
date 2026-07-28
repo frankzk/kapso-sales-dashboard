@@ -149,4 +149,6 @@
 \ir migrations/0071_meta_ad_product_mapping.sql
 \echo 'Applying 0072_aliclik_tariffs_from_reports.sql'
 \ir migrations/0072_aliclik_tariffs_from_reports.sql
+\echo 'Applying 0073_shalom_order_draft.sql'
+\ir migrations/0073_shalom_order_draft.sql
 \echo 'Done.'
