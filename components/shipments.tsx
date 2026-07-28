@@ -55,6 +55,7 @@ import {
   createFenixGuide,
   loadReprogramData,
   loadShipmentDetail,
+  reprogramCancelledShipmentException,
   registerCourierReportResult,
   registerRerouteCall,
   releaseShipment,
@@ -1056,6 +1057,9 @@ function ShipmentDrawer({
   const [addressLongitude, setAddressLongitude] = useState("");
   const [reprogramProvider, setReprogramProvider] = useState<"aliclik" | "fenix">("fenix");
   const [forceAliclik, setForceAliclik] = useState(false);
+  const [showCancelledException, setShowCancelledException] = useState(false);
+  const [cancelledExceptionDate, setCancelledExceptionDate] = useState("");
+  const [cancelledExceptionNote, setCancelledExceptionNote] = useState("");
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -1123,6 +1127,9 @@ function ShipmentDrawer({
         setCourierDate("");
         setCourierNote("");
         setShowCourierCorrection(false);
+        setShowCancelledException(false);
+        setCancelledExceptionDate("");
+        setCancelledExceptionNote("");
         setMsg(null);
         const decision = evaluateAliclikReschedule({
           courier: d.shipment.courier,
@@ -1255,6 +1262,20 @@ function ShipmentDrawer({
     shipmentRequiresCourierResult(shipment?.courier, shipment?.delivery_status);
   const fenixReadyForCustomerManagement =
     shipment?.courier === "fenix" && shipment.delivery_status === "pendiente";
+  const cancelledExceptionGuide = shipment
+    ? rescheduleGuideCode(
+        shipment.order_name,
+        cancelledExceptionDate ? new Date(cancelledExceptionDate).toISOString() : null,
+      )
+    : "";
+  const cancelledExceptionDateInvalid =
+    !cancelledExceptionDate || cancelledExceptionDate <= localDateInputValue();
+  const cancelledExceptionUnavailable = fenixReason !== "ok";
+  const cancelledExceptionReady =
+    !!cancelledExceptionGuide &&
+    !cancelledExceptionDateInvalid &&
+    !!cancelledExceptionNote.trim() &&
+    !cancelledExceptionUnavailable;
 
   return (
     <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={handleClose}>
@@ -1586,9 +1607,113 @@ function ShipmentDrawer({
 
             {msg && <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-sm text-slate-700">{msg}</p>}
 
+            {detail.shipment.delivery_status === "anulado" && (
+              <section className="space-y-2.5 rounded-xl border border-rose-200 bg-rose-50/60 p-3 shadow-[0_1px_0_rgba(244,63,94,0.08)]">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-rose-700">
+                      Excepción auditada
+                    </p>
+                    <p className="mt-0.5 text-sm font-semibold text-rose-950">
+                      Reprogramar un pedido anulado
+                    </p>
+                  </div>
+                  {!showCancelledException && (
+                    <button
+                      type="button"
+                      onClick={() => setShowCancelledException(true)}
+                      className="shrink-0 rounded-lg border border-rose-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                    >
+                      Crear excepción
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs leading-relaxed text-rose-800">
+                  No se borrará la anulación. Esta guía quedará como madre transferida y se creará una nueva guía Fenix con la fecha acordada.
+                </p>
+
+                {showCancelledException && (
+                  <div className="space-y-2 rounded-lg border border-rose-200 bg-white p-2.5">
+                    <label className="block text-xs font-medium text-slate-600">
+                      Nueva fecha de entrega
+                      <input
+                        type="date"
+                        value={cancelledExceptionDate}
+                        min={tomorrowDateInputValue()}
+                        onChange={(e) => setCancelledExceptionDate(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-rose-200 px-2.5 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block text-xs font-medium text-slate-600">
+                      Motivo de la excepción
+                      <textarea
+                        value={cancelledExceptionNote}
+                        onChange={(e) => setCancelledExceptionNote(e.target.value)}
+                        rows={2}
+                        placeholder="Ej.: cliente confirmó hoy entrega para el lunes con Marianny…"
+                        className="mt-1 w-full rounded-lg border border-rose-200 px-2.5 py-2 text-sm"
+                      />
+                    </label>
+
+                    {cancelledExceptionGuide ? (
+                      <p className="rounded-md bg-slate-50 px-2 py-1.5 text-[11px] text-slate-600">
+                        Nueva guía: <b className="font-mono text-slate-800">{cancelledExceptionGuide}</b>
+                      </p>
+                    ) : (
+                      <p className="rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+                        Falta vincular un N° de pedido para autogenerar la guía Fenix.
+                      </p>
+                    )}
+
+                    {cancelledExceptionUnavailable && (
+                      <p className="rounded-md bg-orange-50 px-2 py-1.5 text-[11px] text-orange-800">
+                        {fenixReason === "sin_stock"
+                          ? `Fenix no tiene stock para este pedido en ${detail.shipment.city ?? "la ciudad indicada"}.`
+                          : `Fenix no tiene cobertura en ${detail.shipment.city ?? "la ciudad indicada"}.`}
+                      </p>
+                    )}
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowCancelledException(false);
+                          setCancelledExceptionDate("");
+                          setCancelledExceptionNote("");
+                        }}
+                        className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          run(
+                            () => reprogramCancelledShipmentException(shipmentId, {
+                              nextFollowupAt: new Date(cancelledExceptionDate).toISOString(),
+                              note: cancelledExceptionNote,
+                            }),
+                            () => {
+                              setShowCancelledException(false);
+                              setCancelledExceptionDate("");
+                              setCancelledExceptionNote("");
+                            },
+                          )
+                        }
+                        disabled={pending || !cancelledExceptionReady}
+                        className="flex-1 rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                      >
+                        {pending ? "Creando…" : "Crear nueva guía Fenix"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
+
             {/* Step 1 for active Fenix deliveries: process the courier outcome
                 before any customer call or reprogramming can be registered. */}
-            {detail.shipment.courier === "fenix" && (
+            {detail.shipment.courier === "fenix" && detail.shipment.delivery_status !== "anulado" && (
               detail.shipment.delivery_status === "transferido" ? (
                 <section className="space-y-2 rounded-xl border border-sky-200 bg-sky-50 p-3">
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600">Guía reemplazada</p>

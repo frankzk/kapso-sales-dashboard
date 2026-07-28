@@ -1816,11 +1816,13 @@ function defaultConfirmation(o: {
   currency: string;
   district: string;
   address1: string;
+  orderCode: string | null;
 }): string {
   const items = o.products.map((p) => `• ${p.quantity}× ${p.title}`).join("\n");
   const hi = o.name ? ` ${o.name.split(/\s+/)[0]}` : "";
+  const orderLine = o.orderCode ? `Código de pedido: ${o.orderCode}\n` : "";
   return (
-    `¡Hola${hi}! 🎉 Tu pedido quedó confirmado:\n${items}\n` +
+    `¡Hola${hi}! 🎉 Tu pedido quedó confirmado:\n${orderLine}${items}\n` +
     `Total: ${o.currency} ${o.amount.toFixed(2)} (pago contraentrega)\n` +
     `Entrega: ${o.address1}, ${o.district}\n¡Gracias por tu compra! 📦`
   );
@@ -1897,8 +1899,22 @@ export async function generateOrder(
     country: "Peru",
   };
   const sclient = { domain: creds.shopify_domain, token: creds.shopify_token };
-  const isCart = !!l.draft_order_gid;
-  let draftGid = l.draft_order_gid;
+  const sourceDraftGid = l.draft_order_gid;
+  let reuseExistingDraft = false;
+
+  // "Generar nuevo pedido" is explicit: never mutate/re-complete the previous
+  // draft. In the normal cart flow, only reuse it when Shopify confirms it is
+  // still active. A completed/paid (or unverifiable) draft becomes prefill/history,
+  // while this sale gets a fresh draft and therefore a genuinely new order.
+  if (sourceDraftGid && !input.allowExisting) {
+    try {
+      const liveDraft = await getDraftOrderForEdit({ ...sclient, gid: sourceDraftGid });
+      reuseExistingDraft = liveDraft?.status === "open" || liveDraft?.status === "invoice_sent";
+    } catch {
+      reuseExistingDraft = false;
+    }
+  }
+  let draftGid: string | null = reuseExistingDraft ? sourceDraftGid : null;
 
   // Build+run the draft (create for a new sale, update for a cart). withPhone=false
   // is the retry path when Shopify rejects the phone ("Phone is invalid") — a bad
@@ -1906,13 +1922,13 @@ export async function generateOrder(
   const runDraft = async (withPhone: boolean): Promise<string> => {
     const addr = { ...address, phone: withPhone ? phone : null };
     const ph = withPhone ? phone : null;
-    if (isCart && l.draft_order_gid) {
+    if (reuseExistingDraft && sourceDraftGid) {
       await updateDraftOrder({
         ...sclient,
-        gid: l.draft_order_gid,
+        gid: sourceDraftGid,
         input: { lineItems: lineItemsInput, address: addr, phone: ph, note: input.note ?? null, appliedDiscount },
       });
-      return l.draft_order_gid;
+      return sourceDraftGid;
     }
     const created = await createDraftOrder({
       ...sclient,
@@ -1969,7 +1985,7 @@ export async function generateOrder(
         financial_status: "pending",
         cancelled_at: null,
         customer_phone: phone,
-        tags: isCart ? ["kapso", "carrito_recuperado"] : ["kapso", "venta_manual"],
+        tags: reuseExistingDraft ? ["kapso", "carrito_recuperado"] : ["kapso", "venta_manual"],
         promo_applied: false,
         stock_por_validar: false,
         shipping_mode: "cod",
@@ -1994,10 +2010,10 @@ export async function generateOrder(
       category: "won",
       needs_attention: false,
       last_interaction_at: nowIso,
-      ...(isCart ? { draft_order_status: "completed" } : {}),
+      ...(reuseExistingDraft ? { draft_order_status: "completed" } : {}),
     })
     .eq("id", leadId);
-  if (isCart && draftGid) {
+  if (reuseExistingDraft && draftGid) {
     await admin
       .from("draft_orders")
       .update({ status: "completed", completed_at: nowIso, order_gid: completed.orderGid })
@@ -2013,7 +2029,7 @@ export async function generateOrder(
         : ` · desc. ${currency} ${discountAmount.toFixed(2)}`
       : "";
   const note = [
-    `${isCart ? "Carrito recuperado" : "Venta nueva"} · pedido generado en Shopify · ${currency} ${amount.toFixed(2)}${discLabel} · contraentrega`,
+    `${reuseExistingDraft ? "Carrito recuperado" : "Venta nueva"} · pedido generado en Shopify · ${currency} ${amount.toFixed(2)}${discLabel} · contraentrega`,
     `Productos: ${products.map((p) => `${p.quantity}× ${p.title}`).join(", ")}`,
     `Entrega: ${district}${address.address2 ? " · " + address.address2 : ""}`,
   ].join(" · ");
@@ -2039,9 +2055,13 @@ export async function generateOrder(
   if (input.sendConfirmation && phone) {
     const pnId = l.wa_phone_number_id ?? creds.whatsapp_phone_number_id;
     if (creds.kapso_api_key && pnId) {
-      const body =
-        (input.confirmationText ?? "").trim() ||
-        defaultConfirmation({ name: address.name, products, amount, currency, district, address1 });
+      const orderCode = completed.orderName?.trim() || null;
+      const customBody = (input.confirmationText ?? "").trim();
+      const body = customBody
+        ? orderCode && !customBody.includes(orderCode)
+          ? `${customBody}\nCódigo de pedido: ${orderCode}`
+          : customBody
+        : defaultConfirmation({ name: address.name, products, amount, currency, district, address1, orderCode });
       const res = await sendWhatsappText({ apiKey: creds.kapso_api_key }, { phoneNumberId: pnId, to: phone, body });
       if (res.ok) {
         await admin.from("lead_calls").insert({

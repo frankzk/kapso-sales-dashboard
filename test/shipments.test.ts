@@ -35,6 +35,7 @@ import {
   autoFenixGuideCode,
   rescheduleGuideCode,
   shipmentRequiresCourierResult,
+  shipmentSearchTerms,
   CLAIM_TTL_MINUTES,
   SHIPMENT_CLAIM_HEARTBEAT_MS,
   statusSince,
@@ -44,6 +45,26 @@ describe("shipment drawer reservation", () => {
   it("renews before the claim can expire", () => {
     expect(SHIPMENT_CLAIM_HEARTBEAT_MS).toBeGreaterThan(0);
     expect(SHIPMENT_CLAIM_HEARTBEAT_MS).toBeLessThan(CLAIM_TTL_MINUTES * 60_000);
+  });
+});
+
+describe("shipmentSearchTerms", () => {
+  it("finds the same phone with local and Peru country-code formats", () => {
+    expect(shipmentSearchTerms("980 123 456").phoneTerms).toEqual([
+      "980123456",
+      "51980123456",
+    ]);
+    expect(shipmentSearchTerms("+51 980-123-456").phoneTerms).toEqual([
+      "51980123456",
+      "980123456",
+    ]);
+  });
+
+  it("keeps guide and order searches unchanged", () => {
+    expect(shipmentSearchTerms("  #KP122570  ")).toEqual({
+      text: "#KP122570",
+      phoneTerms: [],
+    });
   });
 });
 
