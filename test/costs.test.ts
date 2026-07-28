@@ -262,3 +262,89 @@ describe("costDay", () => {
     );
   });
 });
+
+describe("computeLogisticsCost · el costo real del courier gana", () => {
+  const ctx = { storeId: "s1", courier: "aliclik", region: "Arequipa", province: "Arequipa", district: "Cayma" };
+  const tarifa = (concept: string, amount: number) => ({
+    id: concept,
+    store_id: null,
+    concept: concept as never,
+    courier: null,
+    region: null,
+    province: null,
+    district: null,
+    amount,
+    effective_from: "2026-01-01",
+    effective_to: null,
+  });
+
+  it("usa lo que Aliclik cotizó en vez de la tarifa por distrito", () => {
+    // La tarifa dice S/8,50 pero Aliclik cobró S/16,50 por ESTE envío.
+    const r = computeLogisticsCost([tarifa("primer_intento", 8.5)], {
+      ctx,
+      attempts: 1,
+      generalStatus: "entregado",
+      agency: false,
+      day: "2026-07-28",
+      actual: { delivery: 16.5 },
+    });
+    expect(r.total).toBe(16.5);
+    expect(r.lines[0]?.source).toBe("courier");
+  });
+
+  it("con costo real no reclama que falte la tarifa", () => {
+    // Sin tarifas configuradas, el concepto NO puede salir en `missing`: no
+    // falta configurar nada, se sabe exactamente lo que costó.
+    const r = computeLogisticsCost([], {
+      ctx,
+      attempts: 1,
+      generalStatus: "entregado",
+      agency: false,
+      day: "2026-07-28",
+      actual: { delivery: 16.5 },
+    });
+    expect(r.total).toBe(16.5);
+    expect(r.missing).not.toContain("primer_intento");
+  });
+
+  it("los intentos adicionales siguen saliendo de la tarifa", () => {
+    // La cotización es del ENVÍO, no de cuántas veces se tocó la puerta.
+    const r = computeLogisticsCost(
+      [tarifa("primer_intento", 8.5), tarifa("intento_adicional", 5)],
+      {
+        ctx,
+        attempts: 3,
+        generalStatus: "entregado",
+        agency: false,
+        day: "2026-07-28",
+        actual: { delivery: 16.5 },
+      },
+    );
+    expect(r.total).toBe(26.5); // 16,50 real + 2 × 5 de tarifa
+    expect(r.lines.find((l) => l.concept === "intento_adicional")?.source).toBe("tarifa");
+  });
+
+  it("la devolución real también gana cuando el pedido se devolvió", () => {
+    const r = computeLogisticsCost([tarifa("primer_intento", 8.5), tarifa("devolucion", 4)], {
+      ctx,
+      attempts: 1,
+      generalStatus: "devuelto",
+      agency: false,
+      day: "2026-07-28",
+      actual: { delivery: 16.5, return: 10.5 },
+    });
+    expect(r.total).toBe(27);
+  });
+
+  it("sin costo real se comporta exactamente como antes", () => {
+    const r = computeLogisticsCost([tarifa("primer_intento", 8.5)], {
+      ctx,
+      attempts: 1,
+      generalStatus: "entregado",
+      agency: false,
+      day: "2026-07-28",
+    });
+    expect(r.total).toBe(8.5);
+    expect(r.lines[0]?.source).toBe("tarifa");
+  });
+});
