@@ -188,6 +188,18 @@ export class TandersClient {
     });
   }
 
+  /**
+   * Evidencias del pedido: la foto de la entrega y el comprobante del pago.
+   *
+   * Devuelve la respuesta CRUDA. Separar una de otra es responsabilidad de
+   * `extractPaymentEvidence`, que falla cerrada — ver el porqué allí.
+   */
+  async evidences(orderId: string): Promise<unknown> {
+    return this.request<unknown>(`/orders/me/${encodeURIComponent(orderId)}/aliclik/evidences`, {
+      token: await this.accessToken(),
+    });
+  }
+
   async getOrder(id: string): Promise<TandersOrder> {
     return this.request<TandersOrder>(`/orders/${encodeURIComponent(id)}`, {
       token: await this.accessToken(),
@@ -227,4 +239,68 @@ export function extractLabelUrl(order: TandersOrder | null | undefined): string 
     if (typeof v === "string" && /^https?:\/\//.test(v)) return v;
   }
   return null;
+}
+
+/** Una constancia de pago localizada dentro de la respuesta de evidencias. */
+export interface TandersPaymentEvidence {
+  imageUrl: string;
+  /** Lo que Tanders dice del pago; no reemplaza la lectura de la imagen. */
+  status?: string | null;
+  amount?: number | null;
+  method?: string | null;
+  at?: string | null;
+}
+
+const PAYMENT_KEYS = ["payments", "pagos", "paymentEvidences"];
+const IMAGE_KEYS = ["imageUrl", "image_url", "url", "photoUrl", "photo", "evidenceUrl", "file"];
+
+function firstUrl(obj: Record<string, unknown>): string | null {
+  for (const k of IMAGE_KEYS) {
+    const v = obj[k];
+    if (typeof v === "string" && /^https?:\/\//.test(v)) return v;
+  }
+  return null;
+}
+
+function num(v: unknown): number | null {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Saca SOLO las constancias de pago de la respuesta de evidencias.
+ *
+ * Falla cerrada a propósito. Tanders devuelve dos clases de evidencia —la foto
+ * del paquete entregado y el comprobante del pago— y confundirlas significaría
+ * pasar una foto de un paquete por el lector de comprobantes y decidir un cobro
+ * con el resultado. Así que solo se acepta lo que está bajo una clave que dice
+ * "pagos" de forma inequívoca: si su API cambia de forma, esto devuelve vacío y
+ * la comprobación queda PENDIENTE (que bloquea sin acusar), en vez de adivinar.
+ */
+export function extractPaymentEvidence(body: unknown): TandersPaymentEvidence[] {
+  const root = (body ?? {}) as Record<string, unknown>;
+  const scopes = [root, (root.data ?? {}) as Record<string, unknown>];
+
+  for (const scope of scopes) {
+    for (const key of PAYMENT_KEYS) {
+      const list = scope[key];
+      if (!Array.isArray(list)) continue;
+      const found: TandersPaymentEvidence[] = [];
+      for (const item of list) {
+        if (!item || typeof item !== "object") continue;
+        const obj = item as Record<string, unknown>;
+        const imageUrl = firstUrl(obj);
+        if (!imageUrl) continue;
+        found.push({
+          imageUrl,
+          status: typeof obj.status === "string" ? obj.status : null,
+          amount: num(obj.amount ?? obj.monto),
+          method: typeof obj.method === "string" ? obj.method : null,
+          at: typeof obj.createdAt === "string" ? obj.createdAt : null,
+        });
+      }
+      if (found.length) return found;
+    }
+  }
+  return [];
 }

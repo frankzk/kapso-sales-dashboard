@@ -40,6 +40,11 @@ export const PERMISSIONS = [
   // es una escritura hacia afuera y cobrable — mismo criterio que Aliclik y
   // Tanders. Crear la guía NO implica poder ver la clave que la acompaña.
   "shalom.create_guide",
+  // Dar por bueno un cobro que el lector de comprobantes rechazó. Es la única
+  // forma de levantar el bloqueo, así que NO cae bajo `master.edit`: quien
+  // revisa un posible Yape a otra cuenta no puede ser cualquiera que pueda
+  // tocar el pedido. Solo owner/admin.
+  "tanders.review_payment",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
