@@ -145,4 +145,6 @@
 \ir migrations/0069_master_search_trigram.sql
 \echo 'Applying 0070_cost_tariffs_source.sql'
 \ir migrations/0070_cost_tariffs_source.sql
+\echo 'Applying 0071_meta_ad_product_mapping.sql'
+\ir migrations/0071_meta_ad_product_mapping.sql
 \echo 'Done.'

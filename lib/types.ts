@@ -67,6 +67,8 @@ export interface ShipmentOrderDetail {
 
 /** A row ready to be upserted into the `orders` table. */
 export interface OrderRow {
+  /** Internal Supabase UUID. Leads.order_id and shipments.order_id point here. */
+  id?: string;
   store_id: string;
   shopify_order_id: string;
   name: string | null;
@@ -308,6 +310,14 @@ export interface ShipmentRow {
   suggested_order_name: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+/** Latest logistics outcome for one Shopify order, used by campaign attribution. */
+export interface CampaignDeliveryOutcome {
+  orderId: string;
+  deliveryStatus: string | null;
+  statusCategory: string | null;
+  createdAt: string | null;
 }
 
 /** Minimal linked-guide identity used to move from a frozen source guide to

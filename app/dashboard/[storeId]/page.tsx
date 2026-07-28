@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import {
   getAccessibleStores,
   getAdNames,
+  getCampaignDeliveryOutcomes,
   getAttributionInputs,
   getConversations,
   getLatestOps,
@@ -48,11 +49,12 @@ export default async function StorePage({
   // Resolve Meta ad names + WhatsApp-number labels for the breakdowns, the
   // per-phone attribution signals (source / advisor touches / winback sends,
   // keyed off the period's orders), and Meta ad spend for ROAS. All best-effort.
-  const [adNames, waNumbers, attributionInputs, metaSpend] = await Promise.all([
+  const [adNames, waNumbers, attributionInputs, metaSpend, campaignDeliveries] = await Promise.all([
     getAdNames(leads.map((l) => l.ad_id)),
     getWaNumbers(leads.map((l) => l.wa_phone_number_id)),
     getAttributionInputs([storeId], orders),
     getMetaSpend(storeId, range),
+    getCampaignDeliveryOutcomes(leads.map((l) => l.order_id)),
   ]);
   // Compute attribution server-side so only plain, serializable objects cross to
   // the client (the inputs are Maps keyed by phone).
@@ -76,6 +78,7 @@ export default async function StorePage({
       waNumbers={waNumbers}
       attribution={attribution}
       metaSpend={metaSpend}
+      campaignDeliveries={campaignDeliveries}
     />
   );
 }

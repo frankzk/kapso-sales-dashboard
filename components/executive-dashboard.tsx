@@ -157,6 +157,7 @@ export function ExecutiveDashboard({
   waNumbers,
   attribution,
   metaSpend,
+  campaignDeliveries,
 }: {
   stores: StoreSummary[];
   scope: "all" | string;
@@ -174,6 +175,7 @@ export function ExecutiveDashboard({
   waNumbers?: Record<string, WaNumber>;
   attribution?: SalesAttribution;
   metaSpend?: number | null;
+  campaignDeliveries?: import("@/lib/types").CampaignDeliveryOutcome[];
 }) {
   const names: Record<string, string> = Object.fromEntries(stores.map((s) => [s.id, s.name]));
   const totals = aggregateRollups(rollups);
@@ -215,7 +217,7 @@ export function ExecutiveDashboard({
   const lostRev = lostRevenueByReason(loss, totals.aov);
   const channels = botVsAdvisor(orders);
   const cartStats = cartRecovery(leadList, orders);
-  const campaignStats = campaignBreakdown(leadList, orders, adNames ?? {});
+  const campaignStats = campaignBreakdown(leadList, orders, adNames ?? {}, campaignDeliveries ?? []);
   const campaignTrend = campaignDailyTrend(leadList, adNames ?? {}, timezone);
   const waStats = leadsByWaNumber(leadList, orders);
   const funnelStages = conversationalFunnel({
@@ -395,7 +397,7 @@ export function ExecutiveDashboard({
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
           <Module
             title="Rendimiento por anuncio (Meta)"
-            subtitle="Una fila por anuncio (ad id) · clic en una columna para ordenar · el nombre del anuncio abre Meta Ads Manager · el ROAS se completa al sumar el gasto"
+            subtitle="Atribución exacta por pedido · abre una fila para auditar producto, entrega y detalle de ventas · el ROAS se habilitará al conectar Marketing API"
             info
             className="lg:col-span-12"
           >
