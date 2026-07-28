@@ -64,11 +64,26 @@ async function authorizeOrder(orderId: string): Promise<OrderContext | null> {
 }
 
 let bucketReady = false;
-async function ensureVoucherBucket(admin: ReturnType<typeof createAdminSupabase>): Promise<void> {
-  if (bucketReady) return;
-  await admin.storage.createBucket(VOUCHER_BUCKET, { public: false }).catch(() => {});
-  await admin.storage.updateBucket(VOUCHER_BUCKET, { public: false }).catch(() => {});
+/**
+ * Se asegura de que el bucket exista. Devuelve un mensaje si NO se pudo crear,
+ * en vez de tragarse el error.
+ *
+ * Antes esto era un `.catch(() => {})` y el fallo se manifestaba tres líneas
+ * después como un críptico "no se pudo preparar la subida": el bucket no existía
+ * y nadie lo sabía. Un error que se esconde aquí reaparece disfrazado allá.
+ */
+async function ensureVoucherBucket(
+  admin: ReturnType<typeof createAdminSupabase>,
+): Promise<string | null> {
+  if (bucketReady) return null;
+  const { error } = await admin.storage.createBucket(VOUCHER_BUCKET, { public: false });
+  // "ya existe" es el caso normal a partir de la segunda vez, no un fallo.
+  const exists = error?.message?.toLowerCase().includes("already exists");
+  if (error && !exists) {
+    return `No se pudo preparar el almacén de comprobantes: ${error.message}`;
+  }
   bucketReady = true;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,7 +202,8 @@ export async function createVoucherUpload(
   if (!contentType.startsWith("image/")) return { error: "El comprobante debe ser una imagen." };
 
   const admin = createAdminSupabase();
-  await ensureVoucherBucket(admin);
+  const bucketError = await ensureVoucherBucket(admin);
+  if (bucketError) return { error: bucketError };
   const ext = (filename.split(".").pop() ?? "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
   const path = `${ctx.storeId}/${orderId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   const { data, error } = await admin.storage.from(VOUCHER_BUCKET).createSignedUploadUrl(path);
