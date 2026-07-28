@@ -147,4 +147,6 @@
 \ir migrations/0070_cost_tariffs_source.sql
 \echo 'Applying 0071_meta_ad_product_mapping.sql'
 \ir migrations/0071_meta_ad_product_mapping.sql
+\echo 'Applying 0072_aliclik_tariffs_from_reports.sql'
+\ir migrations/0072_aliclik_tariffs_from_reports.sql
 \echo 'Done.'
