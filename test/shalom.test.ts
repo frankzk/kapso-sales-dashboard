@@ -10,6 +10,7 @@ import {
   shalomPhone,
   splitReceiverName,
   suggestedAgencyQuery,
+  shalomGuideIsCancelable,
 } from "@/lib/shalom/draft";
 import {
   describeShalomError,
@@ -646,5 +647,49 @@ describe("permiso shalom.create_guide", () => {
 
   it("un viewer no crea guías", () => {
     expect(permissionsFor(["viewer"]).has("shalom.create_guide")).toBe(false);
+  });
+});
+
+describe("shalomGuideIsCancelable", () => {
+  const base = {
+    courier: "shalom",
+    delivery_status: "pendiente",
+    pickup_state: "pendiente_de_envio" as string | null,
+    shalom_order_id: 12345 as number | null,
+  };
+
+  it("deja anular mientras el paquete siga pendiente de envío", () => {
+    expect(shalomGuideIsCancelable(base)).toBe(true);
+    expect(shalomGuideIsCancelable({ ...base, pickup_state: null })).toBe(true);
+  });
+
+  // Este es el límite que pidió la operación: en cuanto Shalom tiene el paquete
+  // físicamente, borrar la orden por API deja de ser posible y de tener sentido.
+  it("bloquea en cuanto el paquete llegó a la agencia", () => {
+    for (const estado of [
+      "enviado_a_agencia",
+      "registrado_en_agencia",
+      "en_transito",
+      "disponible_para_recojo",
+      "pendiente_de_recojo",
+    ]) {
+      expect(shalomGuideIsCancelable({ ...base, pickup_state: estado })).toBe(false);
+    }
+  });
+
+  it("bloquea si la guía ya no está pendiente", () => {
+    expect(shalomGuideIsCancelable({ ...base, delivery_status: "en_ruta" })).toBe(false);
+    expect(shalomGuideIsCancelable({ ...base, delivery_status: "entregado" })).toBe(false);
+    expect(shalomGuideIsCancelable({ ...base, delivery_status: "anulado" })).toBe(false);
+  });
+
+  // Sin `shalom_order_id` la guía llegó por el reporte Excel: nació en el panel
+  // de Shalom y su vida la gobierna ese panel, no nosotros.
+  it("bloquea las guías que no se crearon por API", () => {
+    expect(shalomGuideIsCancelable({ ...base, shalom_order_id: null })).toBe(false);
+  });
+
+  it("no toca guías de otro courier", () => {
+    expect(shalomGuideIsCancelable({ ...base, courier: "aliclik" })).toBe(false);
   });
 });

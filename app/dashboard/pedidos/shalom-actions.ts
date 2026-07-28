@@ -54,6 +54,7 @@ import {
   generatePickupCode,
   splitReceiverName,
   suggestedAgencyQuery,
+  shalomGuideIsCancelable,
   DEFAULT_DECLARACION,
   DEFAULT_PAYER,
 } from "@/lib/shalom/draft";
@@ -620,5 +621,117 @@ export async function createShalomGuide(
     guideCode,
     codigo: result?.codigo ?? null,
     recovered,
+  };
+}
+
+/**
+ * Anula en Shalom una guía creada por API y la marca anulada acá.
+ *
+ * Es la simétrica de crear, y por eso tiene su misma cautela: crear emite una
+ * guía cobrable de un clic, así que deshacer no puede ser un clic más al lado.
+ * La confirmación explícita vive en el modal; acá se revalida todo, porque un
+ * botón deshabilitado no es una autorización.
+ *
+ * El `{id}` del borrado es el de `GET /v1/orders` (`shalom_order_id`), NO el
+ * `ose_id` ni la guía. Es exactamente el motivo de que haya tres columnas.
+ */
+export async function cancelShalomGuide(
+  shipmentId: string,
+): Promise<{ notice: string } | { error: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("shalom.create_guide")) return { error: "Tu rol no permite anular guías Shalom." };
+
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  const admin = createAdminSupabase();
+  const { data: shipmentRow } = await admin
+    .from("shipments")
+    .select("id,store_id,order_id,courier,guide_code,delivery_status,pickup_state,shalom_order_id,shalom_codigo")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (!shipmentRow) return { error: "No se encontró la guía." };
+
+  const guide = shipmentRow as {
+    id: string;
+    store_id: string;
+    order_id: string | null;
+    courier: string;
+    guide_code: string | null;
+    delivery_status: string;
+    pickup_state: string | null;
+    shalom_order_id: number | null;
+    shalom_codigo: string | null;
+  };
+  if (!(await authorizeStore(guide.store_id))) return { error: "Sin acceso a esta tienda." };
+
+  if (guide.courier !== "shalom") return { error: "Esta guía no es de Shalom." };
+  if (!guide.shalom_order_id) {
+    return {
+      error:
+        "Esta guía no se creó por API (llegó por el reporte), así que anularla hay que hacerlo en pro.shalom.pe.",
+    };
+  }
+  if (!shalomGuideIsCancelable(guide)) {
+    return {
+      error:
+        "Shalom ya no deja borrar esta guía: el paquete dejó de estar pendiente de envío. Si hay que anularla igual, se gestiona en agencia.",
+    };
+  }
+
+  const store = await loadStoreShalom(admin, guide.store_id);
+  const blocker = configurationBlocker(store);
+  if (blocker) return { error: blocker };
+
+  try {
+    // Anular SÍ puede renovar sesión y reintentar, a diferencia de crear: borrar
+    // es idempotente —borrar dos veces deja el mismo estado— mientras que un
+    // segundo POST /v1/orders sería una segunda guía cobrable.
+    await readWithFreshSession(admin, guide.store_id, store as StoreShalom, (client) =>
+      client.deleteOrder(guide.shalom_order_id as number),
+    );
+  } catch (err) {
+    return { error: `Shalom no anuló la guía: ${describeShalomError(err)}` };
+  }
+
+  // Solo se marca acá DESPUÉS de que Shalom confirme: al revés dejaría una guía
+  // viva en Shalom y anulada en el panel, que es la peor de las dos mentiras.
+  const updated = await admin
+    .from("shipments")
+    .update({
+      delivery_status: "anulado",
+      status_category: "closed",
+      pickup_state: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", guide.id);
+  if (updated.error) {
+    return {
+      error: `La guía SÍ se anuló en Shalom (${guide.guide_code ?? guide.shalom_order_id}) pero no se pudo marcar acá: ${updated.error.message}. Anótalo y corrígelo a mano.`,
+    };
+  }
+
+  if (guide.order_id) {
+    await admin.from("order_events").insert({
+      store_id: guide.store_id,
+      order_id: guide.order_id,
+      kind: "guide_cancelled",
+      occurred_at: new Date().toISOString(),
+      actor: user.id,
+      source: "shalom",
+      courier: "shalom",
+      guide_code: guide.guide_code,
+      note: `Guía Shalom anulada${guide.shalom_codigo ? ` (código ${guide.shalom_codigo})` : ""}.`,
+      payload: { shalom_order_id: guide.shalom_order_id, codigo: guide.shalom_codigo },
+    });
+    await recomputeOrderMasterSafe(admin, [guide.order_id]);
+  }
+  revalidatePath(MASTER_PATH);
+
+  return {
+    notice: `Guía Shalom anulada: ${guide.guide_code ?? guide.shalom_order_id}. La clave de recojo deja de tener paquete detrás.`,
   };
 }

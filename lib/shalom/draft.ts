@@ -303,3 +303,29 @@ export function buildShalomOrderPayload(input: ShalomDraftInput): ShalomDraftRes
 export function needsCustomDimensions(productTitle: string | null | undefined): boolean {
   return /otra\s*medida/i.test(productTitle ?? "");
 }
+/**
+ * Estados en los que Shalom todavía deja borrar la orden: mientras el paquete no
+ * haya llegado físicamente a la agencia.
+ *
+ * Se comprueba con NUESTRO estado antes de llamar, para no gastar una llamada ni
+ * ofrecer un botón que va a fallar. Pero la palabra final es de Shalom: si su
+ * reporte va con retraso, el paquete puede estar recibido sin que acá se sepa —
+ * por eso el error de la API se muestra tal cual en vez de traducirlo a algo
+ * tranquilizador.
+ */
+const CANCELABLE_PICKUP_STATES = new Set(["pendiente_de_envio"]);
+
+export function shalomGuideIsCancelable(guide: {
+  courier: string;
+  delivery_status: string;
+  pickup_state?: string | null;
+  shalom_order_id?: number | null;
+}): boolean {
+  if (guide.courier !== "shalom") return false;
+  // Sin `shalom_order_id` no hay nada que borrar por API: la guía llegó por el
+  // reporte Excel y su vida la gobierna el panel de Shalom.
+  if (!guide.shalom_order_id) return false;
+  if (guide.delivery_status !== "pendiente") return false;
+  return guide.pickup_state == null || CANCELABLE_PICKUP_STATES.has(guide.pickup_state);
+}
+

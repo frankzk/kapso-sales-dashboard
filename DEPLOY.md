@@ -771,6 +771,30 @@ clave de idempotencia. En consecuencia:
   haya sido recibida en agencia. Ese `{id}` es el de `GET /v1/orders`, **no** el
   `ose_id` ni la `guia` (por eso hay tres columnas y no una).
 
+### Anular una guía
+
+Crear emite una guía real y cobrable de un clic, así que deshacerlo no puede ser
+otro clic a su lado. El botón **Anular**, junto a la guía en el drawer, va en dos
+pasos: el primero cambia el botón por una pregunta con el número de guía delante,
+y solo el segundo llama a Shalom.
+
+Solo aparece mientras Shalom todavía deja borrar — guía creada por API,
+`delivery_status = pendiente` y el paquete aún en `pendiente_de_envio`. En cuanto
+llegó a la agencia, el botón desaparece: a partir de ahí se gestiona allá. Esa
+comprobación es cortesía de interfaz y **el servidor la revalida entera**, porque
+un botón que no se pinta no es una autorización.
+
+Tres detalles que importan:
+
+- El `{id}` del borrado es el de `GET /v1/orders` (`shalom_order_id`), **no** el
+  `ose_id` ni la guía. Es el motivo de que haya tres columnas y no una.
+- Anular **sí** renueva la sesión y reintenta, a diferencia de crear: borrar es
+  idempotente, y un segundo `POST /v1/orders` sería una segunda guía cobrable.
+- Se marca anulada acá **después** de que Shalom confirme. Al revés dejaría una
+  guía viva en Shalom y anulada en el panel, que es la peor de las dos mentiras.
+  Si Shalom borra y el update local falla, el error lleva la guía para corregirlo
+  a mano.
+
 ### El rótulo y el código corto
 
 Shalom identifica cada envío con **dos** cosas, y su panel muestra las dos: el
