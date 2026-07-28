@@ -1406,7 +1406,17 @@ function OrderDrawer({
               )}
             </section>
 
-            {usesPickupKeyFlow(detail.row.current_courier, detail.row.shipping_mode) && (
+            {/* El panel de pagos aparece cuando el pedido YA va por agencia
+                (`usesPickupKeyFlow`) y también cuando TODAVÍA PUEDE ir: si desde
+                acá se ofrece «+ Guía Shalom», desde acá tiene que poder
+                registrarse su adelanto.
+
+                Sin la segunda condición había un callejón sin salida: el panel
+                solo salía con `courier='shalom'`, que no existe hasta que la
+                guía está creada, y crear la guía exige el adelanto. Para
+                registrar el pago hacía falta la guía, y para la guía el pago. */}
+            {(usesPickupKeyFlow(detail.row.current_courier, detail.row.shipping_mode) ||
+              (canCreateShalomGuide && !detail.row.guide_code)) && (
               <div data-drawer-section="pagos">
                 <PickupKeyPanel orderId={orderId} onChanged={onSaved} />
               </div>

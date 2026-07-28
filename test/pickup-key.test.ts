@@ -137,4 +137,17 @@ describe("usesPickupKeyFlow", () => {
     expect(usesPickupKeyFlow("aliclik", "cod")).toBe(false);
     expect(usesPickupKeyFlow(null, null)).toBe(false);
   });
+
+  // Un pedido sin courier y sin modalidad da `false`, y eso ESTÁ BIEN acá: la
+  // función responde "¿este pedido ya va por agencia?", no "¿podría ir?".
+  //
+  // Lo que no puede es ser la única condición para enseñar el panel de pagos.
+  // `current_courier` no vale 'shalom' hasta que la guía existe, y crear la guía
+  // exige el adelanto: si el panel dependiera solo de esto, para registrar el
+  // pago haría falta la guía y para la guía el pago. El drawer añade por eso la
+  // condición de "todavía puede ir por Shalom" (sin guía y con permiso).
+  it("un pedido sin decidir no cuenta como de agencia — el drawer lo compensa aparte", () => {
+    expect(usesPickupKeyFlow(null, null)).toBe(false);
+    expect(usesPickupKeyFlow(null, "cod")).toBe(false);
+  });
 });
