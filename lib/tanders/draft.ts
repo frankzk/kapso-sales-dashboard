@@ -67,10 +67,13 @@ export function defaultCollectionAmount(input: {
 }
 
 /** Dirección de destino sugerida cuando el equipo todavía no confirmó una. */
+// `address` es opcional a propósito: el LISTADO del Master no la trae (solo el
+// detalle), así que el tipo de fila la declara opcional. El cuerpo ya tolera
+// ausente igual que vacía, y así el llamador no tiene que fingir un null.
 export function suggestedDestination(row: {
-  address: string | null;
-  district: string | null;
-  region: string | null;
+  address?: string | null;
+  district?: string | null;
+  region?: string | null;
 }): string {
   return [row.address, row.district, row.region, "Perú"]
     .map((p) => (p ?? "").trim())

@@ -274,6 +274,26 @@ export function isFutureShipmentFollowup(
   return !!selected && selected > dateKeyInTimeZone(now, "America/Lima");
 }
 
+/** Build equivalent phone tokens for the Envíos global search. Shipment phones
+ * are normally stored as 51 + 9 digits, but operators commonly paste the local
+ * number or a formatted WhatsApp number. */
+export function shipmentSearchTerms(query: string): {
+  text: string;
+  phoneTerms: string[];
+} {
+  const text = query.trim().replace(/[,()*%]/g, "").replace(/\s+/g, " ");
+  const digits = query.replace(/\D/g, "");
+  const phoneTerms = new Set<string>();
+
+  if (digits.length >= 6 && !/[a-z]/i.test(query)) {
+    phoneTerms.add(digits);
+    if (digits.length === 9) phoneTerms.add(`51${digits}`);
+    if (digits.startsWith("51") && digits.length === 11) phoneTerms.add(digits.slice(2));
+  }
+
+  return { text, phoneTerms: [...phoneTerms] };
+}
+
 function stripAccents(s: string): string {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }

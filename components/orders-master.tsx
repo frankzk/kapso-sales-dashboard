@@ -2,14 +2,22 @@
 
 // Master de Pedidos — la vista central de control de la operación logística.
 //
-// Estructura, igual que el board de Repro Provincia: el servidor carga TODAS las
-// tiendas accesibles para la pestaña activa y aquí se filtra en cliente, porque
-// los filtros son combinables y multi-selección (§13). La lógica de qué fila
-// entra y en qué orden vive en lib/order-master-filters.ts, testeada aparte;
-// este archivo solo compone estado y pinta.
+// FILTRA LA BASE, NO ESTA PANTALLA. Antes se bajaban las ~10.000 filas al
+// navegador y se filtraban en memoria: 13 MB por carga, otra vez enteras en cada
+// cambio de pestaña, y unos diez segundos mirando el esqueleto. Ahora llega UNA
+// página de 100 filas ya filtrada y ordenada (~100 KB).
+//
+// Los filtros viven en la URL, que es lo que permite que el servidor sepa qué
+// traer. De ahí salen gratis dos cosas: una vista filtrada se puede compartir
+// por enlace, y atrás/adelante del navegador funcionan.
+//
+// El coste, para que quede dicho: cada clic en un filtro es un viaje al
+// servidor en vez de ser instantáneo. Se disimula con `useTransition`, que
+// mantiene el listado anterior en pantalla mientras llega el nuevo en vez de
+// parpadear a vacío.
 
-import { useEffect, useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { Card, cn, EmptyState } from "@/components/ui";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { ChecklistFilter } from "@/components/filters";
@@ -26,21 +34,18 @@ import {
   loadOrderGeo,
   registerReturn,
   relinkGuide,
-  searchOrders,
   setOrderStatus,
   updateOrderGeo,
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import {
-  agencySummary,
-  applyFilters,
   emptyFilters,
-  facetValues,
   hasActiveFilters,
-  sortRows,
+  type AgencySummary,
   type MasterFilters,
   type MasterSortKey,
 } from "@/lib/order-master-filters";
+import { buildMasterQuery } from "@/lib/master-query";
 import {
   GENERAL_STATUSES,
   daysInAgency,
@@ -209,6 +214,13 @@ export function OrdersMasterBoard({
   view,
   counts,
   rows,
+  total,
+  page,
+  pageSize,
+  filters,
+  sortKey,
+  facets,
+  agency,
   canEdit,
   canOverride,
   canCreateGuide,
@@ -218,7 +230,26 @@ export function OrdersMasterBoard({
   stores: StoreSummary[];
   view: MasterView;
   counts: MasterCounts;
+  /** UNA página ya filtrada y ordenada por la base. Antes llegaban las ~10.000
+   *  filas y se filtraba aquí: eran 13 MB por carga y ~10 s de espera. */
   rows: OrderMasterRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Filtros vigentes, leídos de la URL en el servidor. Aquí solo se pintan y
+   *  se reescriben; quien filtra es la base. */
+  filters: MasterFilters;
+  sortKey: MasterSortKey;
+  facets: {
+    operational: string[];
+    courier: string[];
+    region: string[];
+    province: string[];
+    district: string[];
+    pickup: string[];
+  };
+  /** Contado en la base: sobre una página daría números falsos sin avisar. */
+  agency: AgencySummary;
   canEdit: boolean;
   canOverride: boolean;
   canCreateGuide: boolean;
@@ -226,72 +257,74 @@ export function OrdersMasterBoard({
   canCreateShalomGuide: boolean;
 }) {
   const router = useRouter();
-  const [filters, setFilters] = useState<MasterFilters>(emptyFilters);
-  const [sortKey, setSortKey] = useState<MasterSortKey>("movement");
+  const pathname = usePathname();
+  const [navigating, startNav] = useTransition();
   const [showMore, setShowMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
 
-  // La búsqueda va al servidor: debe encontrar pedidos fuera de la pestaña
-  // activa, no solo entre los ya cargados.
-  const [search, setSearch] = useState("");
-  const [results, setResults] = useState<OrderMasterRow[] | null>(null);
-  const [searching, setSearching] = useState(false);
+  /**
+   * Cambiar un filtro es reescribir la URL y dejar que el servidor traiga la
+   * página. Suena a más trabajo que filtrar en memoria, pero baja ~100 KB en vez
+   * de 9,5 MB, así que en la práctica es lo que hace que la pantalla responda.
+   *
+   * `useTransition` mantiene visible el listado anterior mientras llega el
+   * nuevo, en vez de parpadear a vacío en cada clic.
+   */
+  const navigate = (next: { filters?: Partial<MasterFilters>; sortKey?: MasterSortKey; page?: number }) => {
+    const merged: MasterFilters = { ...filters, ...(next.filters ?? {}) };
+    const qs = buildMasterQuery({
+      filters: merged,
+      sortKey: next.sortKey ?? sortKey,
+      // Cualquier cambio de filtro u orden vuelve a la página 1: quedarse en la
+      // 7 del resultado anterior es una pantalla en blanco sin explicación.
+      page: next.page ?? (next.filters || next.sortKey ? 1 : page),
+    });
+    if (view !== "todos") qs.set("view", view);
+    startNav(() => router.replace(`${pathname}?${qs.toString()}`, { scroll: false }));
+  };
+
+  const setFilters = (updater: (f: MasterFilters) => MasterFilters) =>
+    navigate({ filters: updater(filters) });
+
+  // La búsqueda es un filtro más y la resuelve la base. El input mantiene su
+  // propio estado para que escribir sea instantáneo, y solo al parar de teclear
+  // se reescribe la URL — si no, cada letra sería un viaje al servidor.
+  const [search, setSearch] = useState(filters.search);
+  const searching = navigating;
 
   useEffect(() => {
-    const q = search.trim();
-    if (q.length < 2) {
-      setResults(null);
-      setSearching(false);
-      return;
-    }
-    setSearching(true);
-    const timer = setTimeout(async () => {
-      const found = await searchOrders(q);
-      setResults(found);
-      setSearching(false);
-    }, 300);
+    setSearch(filters.search);
+  }, [filters.search]);
+
+  useEffect(() => {
+    if (search.trim() === filters.search.trim()) return;
+    const timer = setTimeout(() => navigate({ filters: { search: search.trim() } }), 350);
     return () => clearTimeout(timer);
-  }, [search]);
+    // `navigate` se rehace en cada render; depender de él relanzaría el temporizador.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, filters.search]);
 
   const storeName = useMemo(() => {
     const map = new Map(stores.map((s) => [s.id, s.name]));
     return (id: string) => map.get(id) ?? "—";
   }, [stores]);
 
-  const visible = useMemo(() => {
-    const filtered = applyFilters(rows, filters);
-    return sortRows(filtered, sortKey);
-  }, [rows, filters, sortKey]);
-
-  const agency = useMemo(() => agencySummary(rows), [rows]);
-
-  const facets = useMemo(
-    () => ({
-      operational: facetValues(rows, "operational_status"),
-      courier: facetValues(rows, "current_courier"),
-      region: facetValues(rows, "region"),
-      province: facetValues(rows, "province"),
-      district: facetValues(rows, "district"),
-      pickup: facetValues(rows, "pickup_state"),
-    }),
-    [rows],
-  );
-
   function patch(next: Partial<MasterFilters>) {
-    setFilters((f) => ({ ...f, ...next }));
+    navigate({ filters: next });
   }
 
   function toggleStore(id: string) {
-    setFilters((f) => {
-      const next = new Set(f.stores);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return { ...f, stores: next };
-    });
+    const next = new Set(filters.stores);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    navigate({ filters: { stores: next } });
   }
 
-  const searchActive = search.trim().length >= 2;
-  const listed = searchActive ? (results ?? []) : visible;
+  const searchActive = filters.search.trim().length >= 2;
+  // La página llega filtrada y ordenada; aquí ya no se recorta nada.
+  const listed = rows;
+  const shown = rows;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
     <div className="space-y-4">
@@ -334,7 +367,7 @@ export function OrdersMasterBoard({
         <Card className="p-0">
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
             <p className="text-sm font-medium text-slate-800">
-              Resultados de búsqueda {results ? `(${results.length})` : ""}
+              Resultados de búsqueda ({total})
             </p>
             <button onClick={() => setSearch("")} className="text-xs text-slate-500 hover:underline">
               Limpiar búsqueda
@@ -343,7 +376,17 @@ export function OrdersMasterBoard({
           {searching ? (
             <p className="p-5 text-sm text-slate-400">Buscando…</p>
           ) : listed.length ? (
-            <MasterTable rows={listed} storeName={storeName} multiStore={stores.length > 1} onOpen={setOpenId} />
+            <>
+              <MasterTable rows={shown} storeName={storeName} multiStore={stores.length > 1} onOpen={setOpenId} />
+              <Pager
+                page={page}
+                totalPages={totalPages}
+                total={total}
+                shown={shown.length}
+                busy={navigating}
+                onPage={(p) => navigate({ page: p })}
+              />
+            </>
           ) : (
             <p className="p-5 text-sm text-slate-400">Sin coincidencias.</p>
           )}
@@ -354,7 +397,7 @@ export function OrdersMasterBoard({
             <AgencyStrip
               summary={agency}
               filters={filters}
-              onFilter={(next) => setFilters((f) => ({ ...f, ...next }))}
+              onFilter={(next) => patch(next)}
             />
           )}
 
@@ -363,10 +406,19 @@ export function OrdersMasterBoard({
             {MASTER_VIEWS.map((v) => (
               <button
                 key={v.key}
-                onClick={() => router.push(`/dashboard/pedidos?view=${v.key}`)}
+                onClick={() => {
+                  // Cambiar de pestaña conserva lo que ya estaba filtrado: el
+                  // estado general es un filtro más, no un borrón y cuenta nueva.
+                  const qs = buildMasterQuery({ filters, sortKey, page: 1 });
+                  if (v.key !== "todos") qs.set("view", v.key);
+                  startNav(() =>
+                    router.replace(`${pathname}?${qs.toString()}`, { scroll: false }),
+                  );
+                }}
                 className={cn(
                   "rounded-lg px-3 py-1.5 text-sm font-medium transition",
                   v.key === view ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50",
+                  navigating && "opacity-60",
                 )}
               >
                 {v.label}
@@ -450,7 +502,7 @@ export function OrdersMasterBoard({
 
             {hasActiveFilters(filters) && (
               <button
-                onClick={() => setFilters(emptyFilters())}
+                onClick={() => navigate({ filters: emptyFilters() })}
                 className="text-xs text-slate-500 hover:underline"
               >
                 Limpiar filtros
@@ -461,11 +513,11 @@ export function OrdersMasterBoard({
               Ordenar por:
               <select
                 value={sortKey}
-                onChange={(e) => setSortKey(e.target.value as MasterSortKey)}
+                onChange={(e) => navigate({ sortKey: e.target.value as MasterSortKey })}
                 className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
               >
-                <option value="movement">Último movimiento</option>
                 <option value="created">Fecha de creación</option>
+                <option value="movement">Último movimiento</option>
                 <option value="status_age">Antigüedad en el estado</option>
                 <option value="attempts">Intentos</option>
                 <option value="couriers">Couriers</option>
@@ -603,7 +655,7 @@ function AgencyStrip({
   filters,
   onFilter,
 }: {
-  summary: ReturnType<typeof agencySummary>;
+  summary: AgencySummary;
   filters: MasterFilters;
   onFilter: (next: Partial<MasterFilters>) => void;
 }) {
@@ -937,6 +989,18 @@ const TIMELINE_LABEL: Record<string, string> = {
   system: "Automático",
 };
 
+/** Secciones a las que se puede saltar desde la cabecera del drawer. El orden
+ *  es el de la pantalla, para que la fila de atajos y el contenido cuenten la
+ *  misma historia. */
+const DRAWER_SECTIONS = [
+  { id: "productos", label: "Productos" },
+  { id: "guias", label: "Guías" },
+  { id: "pagos", label: "Pagos y clave" },
+  { id: "ubicacion", label: "Ubicación" },
+  { id: "acciones", label: "Acciones" },
+  { id: "historial", label: "Historial" },
+] as const;
+
 function OrderDrawer({
   orderId,
   canEdit,
@@ -960,6 +1024,31 @@ function OrderDrawer({
 }) {
   const [detail, setDetail] = useState<OrderMasterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLElement>(null);
+
+  /** Lleva el panel a una sección. `scrollIntoView` dentro del propio panel, que
+   *  es el que scrollea — no la página de detrás. */
+  const jumpTo = (id: string) => {
+    scrollRef.current
+      ?.querySelector(`[data-drawer-section="${id}"]`)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  // Escape cierra, y el fondo deja de scrollear mientras el panel está abierto:
+  // sin esto, rodar dentro del drawer arrastraba el listado de atrás y al cerrar
+  // habías perdido tu sitio en la tabla.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [onClose]);
   const [notice, setNotice] = useState<string | null>(null);
   const [tandersOpen, setTandersOpen] = useState(false);
   const [shalomOpen, setShalomOpen] = useState(false);
@@ -996,32 +1085,128 @@ function OrderDrawer({
   const row = detail?.row;
 
   return (
-    <div className="fixed inset-0 z-30 flex justify-end bg-slate-900/30" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-30 flex justify-end bg-slate-900/40 backdrop-blur-[1px]"
+      onClick={onClose}
+    >
       <aside
+        ref={scrollRef}
         onClick={(e) => e.stopPropagation()}
-        className="h-full w-full max-w-2xl overflow-y-auto bg-white shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Pedido ${row?.order_name ?? ""}`}
+        className="h-full w-full max-w-3xl overflow-y-auto bg-white shadow-2xl"
       >
-        <div className="sticky top-0 flex items-center justify-between border-b border-slate-200 bg-white px-5 py-3">
-          <div>
-            <p className="text-sm font-semibold text-slate-900">{row?.order_name ?? "Pedido"}</p>
-            {row && (
-              <p className="text-xs text-slate-500">
-                {storeName(row.store_id)} · creado el {fmtDate(row.order_created_at)}
-              </p>
-            )}
+        {/* La cabecera lleva lo que hay que tener SIEMPRE a la vista: qué pedido
+            es, en qué estado está y cuánto vale. Antes había que subir hasta
+            arriba para recordar el estado, y el monto quedaba enterrado entre
+            los datos del cliente. */}
+        <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur">
+          <div className="flex items-start justify-between gap-3 px-5 py-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-base font-semibold text-slate-900">
+                  {row?.order_name ?? "Pedido"}
+                </p>
+                {detail && (
+                  <StatusBadge
+                    status={detail.row.general_status}
+                    locked={detail.row.status_locked}
+                  />
+                )}
+                {detail && (
+                  <span className="text-sm font-semibold text-slate-700">
+                    {fmtMoney(detail.row.order_total)}
+                  </span>
+                )}
+              </div>
+              {row && (
+                <p className="truncate text-xs text-slate-500">
+                  {storeName(row.store_id)} · creado el {fmtDate(row.order_created_at)}
+                  {detail?.row.customer_name ? ` · ${detail.row.customer_name}` : ""}
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              {detail?.row.customer_phone && (
+                <>
+                  <a
+                    href={`tel:${detail.row.customer_phone}`}
+                    className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    title="Llamar al cliente"
+                  >
+                    Llamar
+                  </a>
+                  <a
+                    href={`https://wa.me/${detail.row.customer_phone.replace(/\D/g, "")}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    title="Abrir WhatsApp"
+                  >
+                    WhatsApp
+                  </a>
+                </>
+              )}
+              <button
+                onClick={onClose}
+                aria-label="Cerrar"
+                className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                  <path
+                    d="M4 4l8 8M12 4l-8 8"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700">
-            ✕
-          </button>
+
+          {/* Saltar a una sección en vez de rodar el dedo por todo el panel. */}
+          {detail && (
+            <div className="flex gap-1 overflow-x-auto px-4 pb-2">
+              {DRAWER_SECTIONS.map((sec) => (
+                <button
+                  key={sec.id}
+                  onClick={() => jumpTo(sec.id)}
+                  className="whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                >
+                  {sec.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        {error && <p className="mx-5 mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        {/* Pegados bajo la cabecera: un error que se pierde al scrollear es un
+            error que nadie lee, y estas acciones mueven dinero y estados. */}
+        {error && (
+          <div className="sticky top-[104px] z-10 mx-5 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </div>
+        )}
         {notice && (
-          <p className="mx-5 mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</p>
+          <div className="sticky top-[104px] z-10 mx-5 mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            {notice}
+          </div>
         )}
 
         {!detail ? (
-          <p className="p-5 text-sm text-slate-400">Cargando…</p>
+          // Un "Cargando…" suelto no dice nada; un esqueleto con la forma del
+          // contenido evita que la pantalla salte cuando llega.
+          <div className="space-y-4 p-5" aria-busy="true">
+            <div className="h-6 w-2/3 animate-pulse rounded bg-slate-100" />
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {[0, 1, 2, 3, 4, 5].map((i) => (
+                <div key={i} className="h-10 animate-pulse rounded bg-slate-100" />
+              ))}
+            </div>
+            <div className="h-24 animate-pulse rounded bg-slate-100" />
+            <div className="h-40 animate-pulse rounded bg-slate-100" />
+          </div>
         ) : (
           <div className="space-y-5 p-5">
             <section className="space-y-2">
@@ -1062,7 +1247,7 @@ function OrderDrawer({
 
             {detail.lineItems.length > 0 && (
               <section>
-                <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <h3 data-drawer-section="productos" className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Productos
                 </h3>
                 <ul className="space-y-1 text-sm text-slate-700">
@@ -1078,7 +1263,10 @@ function OrderDrawer({
 
             <section>
               <div className="mb-1.5 flex items-center gap-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <h3
+                  data-drawer-section="guias"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
                   Couriers y guías ({detail.guides.length})
                 </h3>
                 {/* Solo se ofrece crear guía si el pedido no tiene una: dos guías
@@ -1184,7 +1372,7 @@ function OrderDrawer({
             </section>
 
             <section>
-              <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <h3 data-drawer-section="historial" className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Línea de tiempo ({detail.timeline.length})
               </h3>
               {detail.timeline.length === 0 ? (
@@ -1219,7 +1407,9 @@ function OrderDrawer({
             </section>
 
             {usesPickupKeyFlow(detail.row.current_courier, detail.row.shipping_mode) && (
-              <PickupKeyPanel orderId={orderId} onChanged={onSaved} />
+              <div data-drawer-section="pagos">
+                <PickupKeyPanel orderId={orderId} onChanged={onSaved} />
+              </div>
             )}
 
             {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
@@ -1369,7 +1559,7 @@ function GeoSection({
   return (
     <section className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ubicación</h3>
+        <h3 data-drawer-section="ubicacion" className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ubicación</h3>
         {row.geo_source && (
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
             {GEO_SOURCE_LABEL[row.geo_source] ?? row.geo_source}
@@ -1575,7 +1765,7 @@ function OrderActions({
   return (
     <section className="space-y-4 border-t border-slate-200 pt-4">
       <div className="space-y-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        <h3 data-drawer-section="acciones" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
           Registrar estado
         </h3>
         <div className="flex flex-wrap gap-2">
@@ -1709,5 +1899,59 @@ function OrderActions({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Paginación. Existe porque el listado dejó de traerse entero: antes eran ~10.000
+ * filas y 9,5 MB por carga, ahora son 100 filas por página. Enseña el total real
+ * (contado en la base, no las visibles) para que nadie confunda "hay 100" con
+ * "hay 100 en total".
+ */
+function Pager({
+  page,
+  totalPages,
+  total,
+  shown,
+  busy,
+  onPage,
+}: {
+  page: number;
+  totalPages: number;
+  total: number;
+  shown: number;
+  busy: boolean;
+  onPage: (page: number) => void;
+}) {
+  if (total === 0) return null;
+  const from = (page - 1) * 100 + 1;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3">
+      <p className="text-xs text-slate-500">
+        {from}–{from + shown - 1} de {total.toLocaleString("es-PE")}
+        {busy && <span className="ml-2 text-slate-400">actualizando…</span>}
+      </p>
+      {totalPages > 1 && (
+        <div className="flex items-center gap-1.5">
+          <button
+            disabled={busy || page <= 1}
+            onClick={() => onPage(page - 1)}
+            className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          >
+            Anterior
+          </button>
+          <span className="px-1 text-xs text-slate-500">
+            {page} / {totalPages}
+          </span>
+          <button
+            disabled={busy || page >= totalPages}
+            onClick={() => onPage(page + 1)}
+            className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          >
+            Siguiente
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

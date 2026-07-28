@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import {
   getAccessibleStores,
   getAdNames,
+  getCampaignDeliveryOutcomes,
   getConversations,
   getLatestOps,
   getLeadsForDashboard,
@@ -65,7 +66,10 @@ async function ConsolidatedContent({
   const waNumbersPromise = leadsPromise.then((leads) =>
     getWaNumbers(leads.map((l) => l.wa_phone_number_id)),
   );
-  const [rollups, prevRollups, orders, conversations, leads, ops, adNames, waNumbers] =
+  const campaignDeliveriesPromise = leadsPromise.then((leads) =>
+    getCampaignDeliveryOutcomes(leads.map((l) => l.order_id)),
+  );
+  const [rollups, prevRollups, orders, conversations, leads, ops, adNames, waNumbers, campaignDeliveries] =
     await Promise.all([
       getRollups(storeIds, range),
       getRollups(storeIds, prev),
@@ -75,6 +79,7 @@ async function ConsolidatedContent({
       getLatestOps(storeIds),
       adNamesPromise,
       waNumbersPromise,
+      campaignDeliveriesPromise,
     ]);
 
   const first = stores[0]!;
@@ -95,6 +100,7 @@ async function ConsolidatedContent({
       timezone={first.timezone}
       adNames={adNames}
       waNumbers={waNumbers}
+      campaignDeliveries={campaignDeliveries}
     />
   );
 }

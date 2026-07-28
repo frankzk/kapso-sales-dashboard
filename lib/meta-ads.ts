@@ -17,6 +17,11 @@ export interface AdMeta {
   adName: string | null; // the real creative name ("mochila viral 81 9:16")
   status: string | null; // ad effective_status snapshot (ACTIVE/PAUSED/…)
   fetchedAt: string | null; // when this row was resolved (the snapshot is "as of")
+  /** Manual mapping used until Marketing API supplies creative/product metadata. */
+  promotedProductName?: string | null;
+  /** One ad can legitimately promote a bundle or several accepted Shopify SKUs. */
+  promotedSkus?: string[];
+  promotedProductUpdatedAt?: string | null;
 }
 
 /** Deep link to a specific ad in Meta Ads Manager (needs the owning account). */

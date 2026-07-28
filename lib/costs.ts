@@ -16,7 +16,15 @@ export type CostConcept =
   | "intento_adicional"
   | "envio_agencia"
   | "devolucion"
-  | "especial";
+  | "especial"
+  // Pago AL motorizado (0054). Son costos como cualquier otro — llevan vigencia
+  // y ámbito — así que se resuelven con este mismo motor en vez de duplicarlo.
+  // Los consume lib/settlements.ts al liquidar; `computeLogisticsCost` no los
+  // toca, porque el costo del envío y lo que se le paga al repartidor son cosas
+  // distintas y sumarlas contaría el reparto dos veces.
+  | "motorizado_entrega"
+  | "motorizado_visita"
+  | "motorizado_devolucion";
 
 export const COST_CONCEPTS: { code: CostConcept; label: string }[] = [
   { code: "primer_intento", label: "Primer intento" },
@@ -24,6 +32,9 @@ export const COST_CONCEPTS: { code: CostConcept; label: string }[] = [
   { code: "envio_agencia", label: "Envío por agencia" },
   { code: "devolucion", label: "Devolución" },
   { code: "especial", label: "Costo especial" },
+  { code: "motorizado_entrega", label: "Motorizado · entrega" },
+  { code: "motorizado_visita", label: "Motorizado · visita sin entrega" },
+  { code: "motorizado_devolucion", label: "Motorizado · devolución" },
 ];
 
 export interface CostTariff {
@@ -138,11 +149,32 @@ export interface LogisticsCostInput {
   agency: boolean;
   /** Día al que se imputa el costo (YYYY-MM-DD): el del último movimiento. */
   day: string;
+  /**
+   * Lo que el courier cobró DE VERDAD por este envío concreto, cuando lo sabemos.
+   *
+   * Las tarifas de `cost_tariffs` son una aproximación por ámbito geográfico:
+   * existen porque históricamente el courier no nos decía el precio de cada
+   * guía. Aliclik sí lo dice al cotizar, y ese número se guarda en la guía. Un
+   * precio exacto siempre le gana a una tarifa por distrito — y además hace que
+   * el margen del pedido deje de depender de que alguien mantenga la tabla al
+   * día.
+   *
+   * Solo sustituye los conceptos que el courier cotiza: la entrega y la
+   * devolución. Los intentos adicionales siguen saliendo de la tarifa, porque
+   * la cotización es del envío, no de cuántas veces se tocó la puerta.
+   */
+  actual?: { delivery?: number | null; return?: number | null };
 }
 
 export interface LogisticsCostBreakdown {
   total: number;
-  lines: { concept: CostConcept; amount: number; quantity: number }[];
+  lines: {
+    concept: CostConcept;
+    amount: number;
+    quantity: number;
+    /** De dónde salió el importe: la tarifa configurada o el courier. */
+    source?: "tarifa" | "courier";
+  }[];
   /** Conceptos que no tienen tarifa configurada para este pedido. */
   missing: CostConcept[];
 }
@@ -165,14 +197,24 @@ export function computeLogisticsCost(
   const lines: LogisticsCostBreakdown["lines"] = [];
   const missing: CostConcept[] = [];
 
-  const add = (concept: CostConcept, quantity: number) => {
+  const real = (v: number | null | undefined): number | null =>
+    v != null && Number.isFinite(v) && v >= 0 ? v : null;
+
+  const add = (concept: CostConcept, quantity: number, actual?: number | null) => {
     if (quantity <= 0) return;
+    // El precio real del courier gana. Y cuando lo hay, el concepto NO puede
+    // figurar en `missing`: no falta configurar nada, se sabe lo que costó.
+    const exact = real(actual);
+    if (exact !== null) {
+      lines.push({ concept, amount: round2(exact * quantity), quantity, source: "courier" });
+      return;
+    }
     const tariff = resolveTariff(tariffs, concept, input.ctx, input.day);
     if (!tariff) {
       missing.push(concept);
       return;
     }
-    lines.push({ concept, amount: tariff.amount * quantity, quantity });
+    lines.push({ concept, amount: tariff.amount * quantity, quantity, source: "tarifa" });
   };
 
   if (input.agency) {
@@ -180,11 +222,11 @@ export function computeLogisticsCost(
   } else {
     // Sin intentos reportados se asume uno: el pedido salió a reparto.
     const attempts = Math.max(1, input.attempts);
-    add("primer_intento", 1);
+    add("primer_intento", 1, input.actual?.delivery);
     add("intento_adicional", attempts - 1);
   }
 
-  if (input.generalStatus === "devuelto") add("devolucion", 1);
+  if (input.generalStatus === "devuelto") add("devolucion", 1, input.actual?.return);
 
   const total = lines.reduce((sum, l) => sum + l.amount, 0);
   return { total: round2(total), lines, missing };

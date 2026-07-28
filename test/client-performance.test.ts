@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { panelPrefetchOrder, sanitizeDashboardPath } from "@/lib/client-performance";
-import { parseClientPerformanceMetric } from "@/lib/performance-metrics";
+import {
+  DASHBOARD_SECTIONS,
+  parseClientPerformanceMetric,
+} from "@/lib/performance-metrics";
 
 describe("panel prefetch", () => {
   it("prioritizes the likely next operational panels without refetching the current one", () => {
@@ -21,6 +24,30 @@ describe("panel prefetch", () => {
     expect(sanitizeDashboardPath("/dashboard/leads?store=private-id")).toBe("/dashboard/leads");
     expect(sanitizeDashboardPath("/dashboard/pedidos?view=devuelto")).toBe("/dashboard/pedidos");
     expect(sanitizeDashboardPath("/dashboard/4c6522f9-c775/settings")).toBe("/dashboard/other");
+  });
+
+  // La regresión que esto cierra: el cliente reducía a `/dashboard/pedidos` y el
+  // servidor no lo tenía en su lista, así que descartaba la medición con un 400.
+  // El panel más pesado era el único sin datos, y nada falló para avisarlo.
+  it("every route the browser can emit is accepted by the endpoint", () => {
+    const emitted = ["/dashboard", "/dashboard/other", ...DASHBOARD_SECTIONS.map((s) => `/dashboard/${s}`)];
+    for (const route of emitted) {
+      expect(sanitizeDashboardPath(route), `${route} no sobrevive al saneado`).toBe(route);
+      expect(
+        parseClientPerformanceMetric({ name: "dashboard:navigation", durationMs: 10, from: "/dashboard", to: route }),
+        `el endpoint rechaza ${route}`,
+      ).not.toBeNull();
+    }
+  });
+
+  it("still refuses a section that is not in the list", () => {
+    expect(
+      parseClientPerformanceMetric({
+        name: "dashboard:navigation",
+        durationMs: 10,
+        to: "/dashboard/4c6522f9-c775-4be3-95b0-160a3c16d27a",
+      }),
+    ).toBeNull();
   });
 });
 

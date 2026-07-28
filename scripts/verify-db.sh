@@ -105,5 +105,21 @@ echo "▶ paridad de los conteos de la cola de Leads"
 $PSQL -f "$ROOT/scripts/sql/lead_queue_counts_smoke.sql"
 echo "  ✅ lead_queue_counts == los siete filtros originales, y la firma se mueve al tocar un lead"
 
+# db/apply_bundled.sql es lo que se pega en el SQL Editor de Supabase para
+# levantar el esquema entero de cero. Se generaba a mano y llevaba meses
+# derivando —le faltaba más de la mitad de las migraciones— porque nada lo
+# comprobaba. Estas dos comprobaciones son las que faltaban: que esté al día
+# respecto a db/migrations/, y que de verdad aplique sobre una base VACÍA.
+echo "▶ db/apply.sql y db/apply_bundled.sql al día"
+( cd "$ROOT" && node scripts/gen-apply.mjs --check )
+
+echo "▶ el bundle aplica sobre una base limpia"
+$PSQL -c "drop database if exists bundle_check" >/dev/null
+$PSQL -c "create database bundle_check" >/dev/null
+$PSQL -d bundle_check -f "$ROOT/scripts/sql/test_prelude.sql" >/dev/null
+$PSQL -d bundle_check -f "$ROOT/db/apply_bundled.sql" >/dev/null
+$PSQL -c "drop database bundle_check" >/dev/null
+echo "  ✅ apply_bundled.sql levanta el esquema completo desde cero"
+
 echo ""
 echo "✅ DB verification passed."

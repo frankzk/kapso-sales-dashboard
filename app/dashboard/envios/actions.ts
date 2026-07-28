@@ -930,6 +930,102 @@ export async function setShipmentStatus(
 }
 
 /**
+ * Audited exception for a customer who re-confirms after a guide was cancelled.
+ * The cancelled guide is never silently reopened: it becomes the transferred
+ * parent and a brand-new active Fenix guide is created with the requested date.
+ */
+export async function reprogramCancelledShipmentException(
+  shipmentId: string,
+  input: { nextFollowupAt?: string | null; note?: string | null },
+): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a esta guía." };
+
+  const note = input.note?.trim() ?? "";
+  if (!note) {
+    return { error: "Explica por qué se autoriza reprogramar esta guía anulada." };
+  }
+  if (!isFutureShipmentFollowup(input.nextFollowupAt)) {
+    return { error: "Elige una fecha futura para la nueva entrega." };
+  }
+
+  const admin = createAdminSupabase();
+  const { data: shipment, error: shipmentError } = await admin
+    .from("shipments")
+    .select("id,courier,guide_code,delivery_status,order_id,order_name,city,product,fenix_eligible,fenix_shipment_id")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (shipmentError || !shipment) {
+    return { error: shipmentError?.message ?? "Guía no encontrada." };
+  }
+
+  const current = shipment as {
+    guide_code: string;
+    delivery_status: string;
+    order_id: string | null;
+    order_name: string | null;
+    city: string | null;
+    product: string | null;
+    fenix_eligible: boolean;
+    fenix_shipment_id: string | null;
+  };
+  if (current.delivery_status !== "anulado") {
+    return { error: "La guía ya cambió de estado. Actualiza el panel antes de continuar." };
+  }
+  if (current.fenix_shipment_id) {
+    return { error: "Esta guía anulada ya tiene una guía Fenix de reemplazo." };
+  }
+
+  const guideCode = rescheduleGuideCode(current.order_name, input.nextFollowupAt);
+  if (!guideCode) {
+    return { error: "Este envío no tiene N° de pedido para generar automáticamente la nueva guía Fenix." };
+  }
+
+  // Never use the cached flag for this exception: inventory may have changed
+  // since the Excel import or since the drawer was opened.
+  const currentFenix = await resolveCurrentFenixEligibility(admin, ctx.storeId, current);
+  if ("error" in currentFenix) {
+    return { error: `No se pudo validar el stock Fenix: ${currentFenix.error}` };
+  }
+  if (currentFenix.eligible !== current.fenix_eligible) {
+    await admin
+      .from("shipments")
+      .update({ fenix_eligible: currentFenix.eligible })
+      .eq("id", shipmentId);
+  }
+  if (!currentFenix.eligible) {
+    return {
+      error: currentFenix.reason === "sin_stock"
+        ? `Fenix no tiene stock disponible para este pedido en ${current.city ?? "la ciudad indicada"}.`
+        : `Fenix no tiene cobertura en ${current.city ?? "la ciudad indicada"}.`,
+    };
+  }
+
+  const auditNote = `Excepción sobre guía anulada ${current.guide_code}. Motivo: ${note}`;
+  const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
+    childNextFollowupAt: input.nextFollowupAt,
+    expectedSourceStatus: "anulado",
+    parentAuditNote: `${auditNote}. Nueva guía Fenix: ${guideCode}.`,
+  });
+  if ("error" in spun) return { error: spun.error };
+
+  await admin.from("shipment_calls").insert({
+    shipment_id: spun.childId,
+    store_id: ctx.storeId,
+    agent: ctx.userId,
+    kind: "reroute",
+    new_status: "en_ruta",
+    note: `${auditNote}. Esta es la nueva guía activa.`,
+    next_followup_at: input.nextFollowupAt,
+  });
+
+  revalidatePath("/dashboard/envios");
+  return {
+    notice: `Excepción registrada. La guía anulada quedó en el historial y se creó ${spun.guideCode} para la nueva fecha.`,
+  };
+}
+
+/**
  * Spin off a Fenix sub-guide from a shipment: insert a second shipments row
  * (courier='fenix', En ruta) carrying the order snapshot, then freeze the source
  * shipment as `transferido` (the Fenix guide is the active shipment going
@@ -943,7 +1039,11 @@ async function spinOffFenixGuide(
   ctx: { userId: string; storeId: string },
   shipmentId: string,
   guideCode: string,
-  opts: { childNextFollowupAt?: string | null } = {},
+  opts: {
+    childNextFollowupAt?: string | null;
+    expectedSourceStatus?: string;
+    parentAuditNote?: string;
+  } = {},
 ): Promise<{ error: string } | { childId: string; guideCode: string }> {
   const code = guideCode.trim().toUpperCase();
   if (!code) return { error: "Ingresa el número de guía de Fenix." };
@@ -973,6 +1073,9 @@ async function spinOffFenixGuide(
   }
   if (source.fenix_shipment_id) {
     return { error: "Este envío ya tiene una guía Fenix." };
+  }
+  if (opts.expectedSourceStatus && source.delivery_status !== opts.expectedSourceStatus) {
+    return { error: "La guía cambió de estado antes de guardar. Actualiza el panel y vuelve a revisarla." };
   }
 
   const p = parent as unknown as Record<string, unknown>;
@@ -1020,7 +1123,7 @@ async function spinOffFenixGuide(
   // fenix_shipment_id is still null, so two concurrent spin-offs can't both
   // transfer the same parent (each would otherwise leave an orphan En ruta
   // child). If we lost the race, roll back the child we just inserted.
-  const { data: transferred, error: updErr } = await admin
+  let transferQuery = admin
     .from("shipments")
     .update({
       fenix_shipment_id: child.id,
@@ -1031,7 +1134,11 @@ async function spinOffFenixGuide(
       claimed_at: null,
     })
     .eq("id", shipmentId)
-    .is("fenix_shipment_id", null)
+    .is("fenix_shipment_id", null);
+  if (opts.expectedSourceStatus) {
+    transferQuery = transferQuery.eq("delivery_status", opts.expectedSourceStatus);
+  }
+  const { data: transferred, error: updErr } = await transferQuery
     .select("id")
     .maybeSingle();
   if (updErr || !transferred) {
@@ -1043,7 +1150,8 @@ async function spinOffFenixGuide(
     store_id: ctx.storeId,
     agent: ctx.userId,
     kind: "reroute",
-    note: `Guía Fenix creada: ${code}`,
+    new_status: "transferido",
+    note: opts.parentAuditNote ?? `Guía Fenix creada: ${code}`,
   });
 
   return { childId: child.id as string, guideCode: code };

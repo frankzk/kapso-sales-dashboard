@@ -7,7 +7,7 @@
 // solo aparece cuando el servidor ya dijo que se puede — y aun así el servidor
 // lo vuelve a comprobar antes de descifrar nada.
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import {
   completePaymentData,
@@ -306,6 +306,7 @@ function PaymentList({
  * exactamente el formato en el que Chrome guarda muchas capturas.
  */
 function VoucherPicker({ file, onPick }: { file: File | null; onPick: (f: File | null) => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
 
@@ -365,26 +366,47 @@ function VoucherPicker({ file, onPick }: { file: File | null; onPick: (f: File |
           <div className="space-y-1 text-xs text-slate-600">
             <p className="font-medium text-slate-800">{file?.name}</p>
             <p>{file ? `${Math.round(file.size / 1024)} KB · ${file.type || "imagen"}` : ""}</p>
-            <button
-              type="button"
-              onClick={() => onPick(null)}
-              className="font-medium text-red-700 hover:underline"
-            >
-              Quitar
-            </button>
           </div>
         </div>
       ) : (
         <p className="text-xs text-slate-500">
-          Arrastra el comprobante aquí, <strong>pégalo con Ctrl+V</strong> o elígelo:
+          Arrastra el comprobante aquí, <strong>pégalo con Ctrl+V</strong> o elígelo con el botón.
         </p>
       )}
-      <input
-        type="file"
-        accept="image/*,image/webp,image/heic,image/heif,.webp,.heic,.heif"
-        onChange={(e) => onPick(e.target.files?.[0] ?? null)}
-        className="mt-2 block text-sm text-slate-600"
-      />
+      {/* El input nativo se pintaba como texto suelto ("Seleccionar archivo /
+          Ningún archivo seleccionado") y no se leía como algo pulsable. Se
+          esconde y se pone un botón de verdad. */}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          {file ? "Cambiar imagen" : "Elegir imagen del Yape"}
+        </button>
+        {file && (
+          <button
+            type="button"
+            onClick={() => {
+              onPick(null);
+              if (inputRef.current) inputRef.current.value = "";
+            }}
+            className="text-xs text-slate-500 underline hover:text-slate-700"
+          >
+            Quitar
+          </button>
+        )}
+        <input
+          ref={inputRef}
+          type="file"
+          // El comodín basta en el servidor, pero algunos navegadores en Windows
+          // filtran de más con él y esconden los .webp — justo el formato en que
+          // Chrome guarda muchas capturas. Por eso van nombrados.
+          accept="image/*,image/webp,image/heic,image/heif,.webp,.heic,.heif"
+          className="hidden"
+          onChange={(e) => onPick(e.target.files?.[0] ?? null)}
+        />
+      </div>
     </div>
   );
 }
@@ -592,12 +614,19 @@ function VoucherForm({
         Cargar la imagen no valida el pago: queda pendiente hasta que alguien lo revise.
       </p>
       <button
-        disabled={busy || pending}
+        // Sin imagen y sin nº de operación no hay nada que registrar: dejar el
+        // botón activo solo consigue que parezca que no hace nada.
+        disabled={busy || pending || (!file && !operation.trim())}
         onClick={submit}
         className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
       >
         {busy ? "Registrando…" : "Registrar pago"}
       </button>
+      {!file && !operation.trim() && (
+        <p className="text-xs text-slate-400">
+          Elige la imagen del Yape, o escribe el nº de operación si lo vas a cargar a mano.
+        </p>
+      )}
     </div>
   );
 }

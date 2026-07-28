@@ -28,6 +28,42 @@ export async function signOut() {
   redirect("/login");
 }
 
+export async function saveAdPromotedProduct(input: {
+  adId: string;
+  productName: string;
+  skus: string[];
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireUser();
+  const adId = input.adId.trim();
+  const productName = input.productName.trim();
+  const skus = [...new Set(input.skus.map((sku) => sku.trim().toUpperCase()).filter(Boolean))];
+  if (!adId || !productName) return { ok: false, error: "Indica el anuncio y el producto promovido." };
+
+  // Authorization is established through a lead visible under the caller's RLS.
+  const sb = await createServerSupabase();
+  const { data: visibleLead } = await sb.from("leads").select("id").eq("ad_id", adId).limit(1).maybeSingle();
+  if (!visibleLead) return { ok: false, error: "No tienes acceso a este anuncio." };
+
+  const admin = createAdminSupabase();
+  const { error } = await admin.from("meta_ads").upsert(
+    {
+      ad_id: adId,
+      promoted_product_name: productName,
+      promoted_skus: skus,
+      promoted_product_updated_at: new Date().toISOString(),
+    },
+    { onConflict: "ad_id" },
+  );
+  if (error) {
+    const migrationHint = /promoted_product/i.test(error.message)
+      ? " Falta aplicar la migración 0071."
+      : "";
+    return { ok: false, error: `No se pudo guardar el producto.${migrationHint}` };
+  }
+  revalidatePath("/dashboard");
+  return { ok: true };
+}
+
 /** Bootstrap: create an organization and make the current user its owner. */
 export async function createOrganization(
   _prev: ActionState,

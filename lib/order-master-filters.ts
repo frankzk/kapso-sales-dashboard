@@ -191,9 +191,10 @@ export type MasterSortKey =
   | "total";
 
 /**
- * Orden del listado. Por defecto "último movimiento", que es lo que el equipo
- * necesita para detectar lo que se quedó quieto. Los nulos van siempre al final:
- * un pedido sin fecha no debe encabezar la tabla por accidente.
+ * Orden del listado. El Master abre por "fecha de creación", que deja el
+ * correlativo corrido; "último movimiento" está a un clic para detectar lo que
+ * se quedó quieto. Los nulos van siempre al final: un pedido sin fecha no debe
+ * encabezar la tabla por accidente.
  */
 export function sortRows(
   rows: readonly OrderMasterRow[],
