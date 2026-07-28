@@ -10,8 +10,14 @@
 //
 // LAS DOS REGLAS DE ALICLIK:
 //   1. El precio unitario admite céntimos.
-//   2. El TOTAL a cobrar tiene que ser un número ENTERO de soles. Es una
-//      restricción de caja: el motorizado cobra en efectivo y no lleva monedas.
+//   2. El TOTAL a cobrar tiene que ser un número ENTERO de soles.
+//
+//      OJO CON EL PORQUÉ, porque invita a "optimizarlo": NO es una limitación
+//      de su API. Aliclik acepta y almacena importes con céntimos — la guía
+//      AUR5X424217799313 está registrada con S/297,99. Es una INDICACIÓN
+//      COMERCIAL de la casa: el precio que se cobra en la puerta va siempre en
+//      número redondo. Así que no se quita porque un día se descubra que "sí se
+//      podía": se quita el día que Comercial diga que se puede.
 //
 // La segunda regla es más dura de lo que parece. Con una línea de 3 unidades y
 // precios de 2 decimales, los totales alcanzables son múltiplos de 0,03 — y
