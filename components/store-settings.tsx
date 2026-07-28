@@ -7,6 +7,7 @@ import { Card, Section, SimpleTable } from "@/components/ui";
 import { STORE_STATUSES } from "@/lib/store-settings";
 import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
+  backfillStoreMetaInsights,
   generateAliclikWebhookSecret,
   generateKapsoWebhookSecret,
   listStoreMetaAdAccounts,
@@ -1423,6 +1424,7 @@ function MetaAdAccountPicker({ storeId, current }: { storeId: string; current: S
   const [testResult, setTestResult] = useState<MetaConnectionProbe | null>(null);
   const [pending, startTransition] = useTransition();
   const [testing, startTesting] = useTransition();
+  const [backfilling, startBackfill] = useTransition();
 
   function fetchAccounts() {
     setMsg(null);
@@ -1477,6 +1479,14 @@ function MetaAdAccountPicker({ storeId, current }: { storeId: string; current: S
     });
   }
 
+  function backfill() {
+    setMsg(null);
+    startBackfill(async () => {
+      const res = await backfillStoreMetaInsights(storeId);
+      setMsg("error" in res ? { error: res.error } : { notice: res.notice });
+    });
+  }
+
   const dirty =
     accounts != null &&
     (selected.size !== saved.length || saved.some((a) => !selected.has(a.id)));
@@ -1509,12 +1519,24 @@ function MetaAdAccountPicker({ storeId, current }: { storeId: string; current: S
           <button
             type="button"
             onClick={testConnection}
-            disabled={pending || testing || !saved.length}
+            disabled={pending || testing || backfilling || !saved.length}
             className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
           >
             {testing ? "Probando Meta…" : "Probar conexión Meta"}
           </button>
+          <button
+            type="button"
+            onClick={backfill}
+            disabled={pending || testing || backfilling || !saved.length}
+            className="rounded-lg border border-brand-300 bg-brand-50 px-4 py-2 text-sm font-medium text-brand-800 hover:bg-brand-100 disabled:opacity-50"
+          >
+            {backfilling ? "Cargando 90 días…" : "Sincronizar histórico (90 días)"}
+          </button>
         </div>
+        <p className="text-xs text-slate-400">
+          Después del backfill inicial, Meta se actualizará automáticamente cada día y reescribirá
+          los últimos 3 días para incorporar ajustes tardíos.
+        </p>
         {accounts && accounts.length > 0 && (
           <>
             <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">

@@ -151,4 +151,6 @@
 \ir migrations/0072_aliclik_tariffs_from_reports.sql
 \echo 'Applying 0073_shalom_order_draft.sql'
 \ir migrations/0073_shalom_order_draft.sql
+\echo 'Applying 0074_meta_ad_insights_daily.sql'
+\ir migrations/0074_meta_ad_insights_daily.sql
 \echo 'Done.'
