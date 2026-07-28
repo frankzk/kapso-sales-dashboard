@@ -329,3 +329,24 @@ export function shalomGuideIsCancelable(guide: {
   return guide.pickup_state == null || CANCELABLE_PICKUP_STATES.has(guide.pickup_state);
 }
 
+/** Mínimo de un motivo de excepción. Corto de más es "ok" o ".", que no explica nada. */
+export const MIN_OVERRIDE_REASON = 10;
+
+/**
+ * Frenos BLANDOS: deshabilitan el botón pero se pueden saltar dejando un motivo
+ * escrito. No son `blockers` —esos son imposibles, como que el pedido ya tenga
+ * guía— sino reglas de la operación que casi siempre valen y a veces no.
+ *
+ * El envío por Shalom se cobra con adelanto, así que sin comprobante cargado no
+ * debería salir el paquete. Pero un bloqueo duro deja parado el caso legítimo
+ * raro —el cliente que pagó completo de una, el adelanto que entró por otro
+ * canal— y eso se nota el mismo día. El motivo escrito corta el descuido sin
+ * cortar la excepción, y de paso mide cuántas veces pasa de verdad: si en un mes
+ * no lo usa nadie, esto sube a bloqueo duro con datos en la mano.
+ */
+export function shalomSoftBlockers(paymentState: string | null): string[] {
+  if (paymentState !== "sin_pago") return [];
+  return [
+    "No hay ningún comprobante de adelanto cargado. El envío por Shalom se cobra con adelanto: registra el Yape en «Pagos Yape y clave de recojo», o crea la guía igual explicando por qué.",
+  ];
+}

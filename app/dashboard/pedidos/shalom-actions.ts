@@ -53,6 +53,8 @@ import {
   buildShalomOrderPayload,
   documentError,
   generatePickupCode,
+  shalomSoftBlockers,
+  MIN_OVERRIDE_REASON,
   normalizeDocument,
   splitReceiverName,
   suggestedAgencyQuery,
@@ -104,11 +106,18 @@ export interface ShalomDraftView {
   prefilledTerminalName: string | null;
   /** Clave de recojo generada en el servidor. Solo viaja si el rol puede verla. */
   pickupCode: string | null;
-  /** Motivos para NO crear la guía todavía. */
+  /** Motivos para NO crear la guía todavía. Imposibles: no se saltan. */
   blockers: string[];
+  /**
+   * Frenos que SÍ se pueden saltar, dejando un motivo escrito que queda en la
+   * línea de tiempo con el nombre de quien lo escribió.
+   */
+  softBlockers: string[];
   /** Cosas que el operador debería mirar antes de confirmar. */
   warnings: string[];
 }
+
+
 
 async function authorize(
   orderId: string,
@@ -218,17 +227,10 @@ export async function loadShalomDraft(
     "Shalom exige el documento del destinatario y el pedido no lo trae: pídeselo al cliente antes de crear la guía.",
   );
 
-  // El adelanto es la condición del envío por agencia: sin él no debería salir
-  // el paquete. NO se bloquea todavía —el equipo está migrando al panel y una
-  // regla dura dejaría envíos legítimos parados— pero se dice primero y claro,
-  // separando los dos casos: no haber cargado nada es un olvido; haberlo cargado
-  // y estar sin validar es un trámite pendiente. Mezclarlos hacía que el aviso
-  // de verdad se leyera como el de siempre.
-  if (row.payment_state === "sin_pago") {
-    warnings.push(
-      "SIN ADELANTO: no se ha cargado ningún comprobante. El envío por Shalom se cobra con adelanto, así que registra el Yape en «Pagos Yape y clave de recojo» antes de despachar. La guía se puede crear igual, pero quedará un paquete en camino sin cobro registrado.",
-    );
-  } else if (row.payment_state !== "pago_completo") {
+  // Faltar el adelanto frena de forma blanda (ver `shalomSoftBlockers`); tenerlo
+  // cargado pero sin validar es solo un trámite pendiente y se queda en aviso.
+  const softBlockers = shalomSoftBlockers(row.payment_state);
+  if (row.payment_state !== "sin_pago" && row.payment_state !== "pago_completo") {
     warnings.push(
       "El pedido todavía no tiene el pago completo validado. La guía se puede crear igual, pero la clave de recojo seguirá bloqueada hasta que se valide.",
     );
@@ -286,6 +288,7 @@ export async function loadShalomDraft(
       prefilledTerminalName: prefilled?.destiny_terminal_name ?? null,
       pickupCode: perms.can("shalom.view_pickup_key") ? pickupCode : null,
       blockers,
+      softBlockers,
       warnings,
     },
   };
@@ -431,6 +434,11 @@ export interface CreateShalomInput {
   dimensions?: { weight_kg: number; height_m: number; length_m: number; width_m: number } | null;
   /** Solo lo manda un rol que puede ver la clave; si no, la genera el servidor. */
   pickupCode?: string;
+  /**
+   * Motivo para saltarse un freno blando (hoy: crear sin adelanto cargado).
+   * Se exige solo si de verdad hay freno, y queda escrito en la línea de tiempo.
+   */
+  overrideReason?: string | null;
 }
 
 export async function createShalomGuide(
@@ -457,6 +465,17 @@ export async function createShalomGuide(
   const [active] = await activeGuides(admin, orderId);
   if (active) {
     return { error: `El pedido ya tiene una guía activa: ${active.guide_code} (${active.courier}).` };
+  }
+
+  // Se revalida el freno blando ACÁ, no solo en el modal: un botón deshabilitado
+  // no es una autorización, y entre abrir el modal y confirmar pudo cargarse (o
+  // borrarse) el comprobante. El motivo se exige solo si el freno sigue vivo.
+  const soft = shalomSoftBlockers(row.payment_state);
+  const overrideReason = (input.overrideReason ?? "").trim();
+  if (soft.length && overrideReason.length < MIN_OVERRIDE_REASON) {
+    return {
+      error: `${soft.join(" ")} Para crearla igual hace falta un motivo de al menos ${MIN_OVERRIDE_REASON} caracteres: queda registrado con tu nombre en la línea de tiempo del pedido.`,
+    };
   }
 
   const store = await loadStoreShalom(admin, row.store_id);
@@ -632,7 +651,11 @@ export async function createShalomGuide(
     note:
       `Guía Shalom creada${recovered ? " (recuperada tras un corte de conexión)" : ""}.` +
       ` Destino: ${input.destinyTerminalName ?? input.destinyTerminalId}.` +
-      ` Paga: ${built.payload.payer === "sender" ? "remitente" : "destinatario"}.`,
+      ` Paga: ${built.payload.payer === "sender" ? "remitente" : "destinatario"}.` +
+      // El motivo va en la NOTA, no solo en el payload: la línea de tiempo se
+      // lee, el payload se consulta. Si alguien despachó sin cobro, tiene que
+      // verse al abrir el pedido, no al escarbar.
+      (soft.length ? ` CREADA SIN ADELANTO — motivo: ${overrideReason}` : ""),
     // La clave de recojo NO va en el evento: la línea de tiempo la ve cualquiera
     // con acceso al pedido, y la clave es la llave del paquete.
     payload: {
@@ -646,6 +669,7 @@ export async function createShalomGuide(
       payer: built.payload.payer,
       declaracion_jurada: built.payload.declaracion_jurada,
       recovered,
+      ...(soft.length ? { override_reason: overrideReason, override_of: soft } : {}),
     },
   });
 

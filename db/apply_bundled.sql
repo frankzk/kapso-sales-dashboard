@@ -4659,6 +4659,11 @@ create policy shalom_order_drafts_select on shalom_order_drafts
   for select to authenticated
   using (store_id in (select auth_store_ids()));
 
-revoke all on shalom_order_drafts from public, anon;
+-- Se revoca también a `authenticated`, no solo a `anon`: Supabase concede ALL a
+-- ese rol en cada tabla nueva del esquema public, así que sin este revoke la
+-- tabla nacería con permiso de escritura para cualquier usuario logueado. RLS lo
+-- taparía —no hay policy de insert— pero el privilegio sobra igual, y es el
+-- mismo criterio de 0053.
+revoke all on shalom_order_drafts from public, anon, authenticated;
 grant select on shalom_order_drafts to authenticated;
 grant all privileges on shalom_order_drafts to service_role;

@@ -238,13 +238,19 @@ export function ShalomGuideModal({
     [products, productId],
   );
   const wantsDims = needsCustomDimensions(selectedProduct?.title);
+  const [overrideReason, setOverrideReason] = useState("");
   const canSeeKey = Boolean(draft?.pickupCode);
   const keyErr = canSeeKey && pickupCode ? pickupCodeError(pickupCode) : null;
 
   const blocked = (draft?.blockers.length ?? 0) > 0;
+  // Freno blando: deshabilita, pero se levanta escribiendo un motivo. El mínimo
+  // existe porque "ok" o "." no explican nada a quien lea esto en un mes.
+  const soft = draft?.softBlockers ?? [];
+  const softHeld = soft.length > 0 && overrideReason.trim().length < 10;
   const canSubmit = Boolean(
     draft &&
       !blocked &&
+      !softHeld &&
       sessionReady &&
       agency &&
       productId &&
@@ -283,6 +289,7 @@ export function ShalomGuideModal({
         lastName: lastName.trim(),
         surName: surName.trim(),
         phone: phone.trim(),
+        overrideReason: overrideReason.trim() || null,
         dimensions: parsedDims,
         ...(canSeeKey && pickupCode ? { pickupCode } : {}),
       });
@@ -341,6 +348,36 @@ export function ShalomGuideModal({
                 {w}
               </p>
             ))}
+
+            {/* Freno blando: no es un aviso más ni un muro. Se explica, se pide
+                el motivo, y el motivo queda con nombre en la línea de tiempo.
+                El servidor exige lo mismo: el botón solo es la cortesía. */}
+            {soft.length > 0 && !created && (
+              <div className="space-y-2 rounded-lg border border-red-200 bg-red-50 px-3 py-3">
+                {soft.map((b) => (
+                  <p key={b} className="text-sm text-red-800">
+                    {b}
+                  </p>
+                ))}
+                <label className="block">
+                  <span className="text-xs font-medium text-red-800">
+                    Motivo para crearla igual (queda registrado con tu nombre)
+                  </span>
+                  <textarea
+                    value={overrideReason}
+                    onChange={(e) => setOverrideReason(e.target.value)}
+                    rows={2}
+                    placeholder="Ej.: la clienta pagó completo por transferencia, comprobante en el grupo"
+                    className="mt-1 w-full rounded-lg border border-red-300 px-3 py-2 text-sm"
+                  />
+                  {softHeld && (
+                    <span className="mt-1 block text-xs text-red-700">
+                      Escribe al menos 10 caracteres para poder crear la guía.
+                    </span>
+                  )}
+                </label>
+              </div>
+            )}
 
             {created ? (
               <div className="space-y-2 rounded-lg bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
