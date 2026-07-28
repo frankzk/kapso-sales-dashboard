@@ -19,7 +19,7 @@ import type {
   ShipmentRow,
 } from "@/lib/types";
 import type { GeneralStatus } from "@/lib/order-status";
-import type { MasterFilters, MasterSortKey } from "@/lib/order-master-filters";
+import type { AgencySummary, MasterFilters, MasterSortKey } from "@/lib/order-master-filters";
 
 export type MasterView = "todos" | GeneralStatus;
 
@@ -64,57 +64,10 @@ const MAX_LIST = 20_000;
  * consulta abarca TODAS las tiendas accesibles y el filtro por tienda se aplica
  * en el board (es multi-selección y se combina con el resto).
  */
-export async function getOrderMasterRows(
-  storeIds: string[],
-  view: MasterView = "todos",
-  opts: { limit?: number } = {},
-): Promise<OrderMasterRow[]> {
-  if (!storeIds.length) return [];
-  const sb = await createServerSupabase();
-  const cap = opts.limit ?? MAX_LIST;
-
-  const base = () => {
-    let q = sb.from("order_master").select(MASTER_COLUMNS).in("store_id", storeIds);
-    if (view !== "todos") q = q.eq("general_status", view);
-    return q
-      // Lo que más importa operativamente es qué se movió (o dejó de moverse)
-      // hace más tiempo; los que nunca se movieron van primero.
-      .order("last_movement_at", { ascending: false, nullsFirst: true })
-      .order("order_created_at", { ascending: false })
-      // Desempate estable. Entre filas con la misma fecha de movimiento Y de
-      // creación, Postgres no garantiza un orden fijo entre consultas, así que una
-      // podía salir en dos tramos y otra en ninguno. Hoy son 8 filas en toda la
-      // tabla, pero pedir los tramos en paralelo lo vuelve obligatorio: sin un
-      // orden total no hay paginación que valga.
-      .order("id", { ascending: true });
-  };
-
-  // Cuántas hay, para saber cuántos tramos pedir. Es una consulta `head`: no
-  // trae filas.
-  let countQuery = sb
-    .from("order_master")
-    .select("id", { count: "exact", head: true })
-    .in("store_id", storeIds);
-  if (view !== "todos") countQuery = countQuery.eq("general_status", view);
-  const { count, error: countError } = await countQuery;
-  if (countError) return [];
-
-  const total = Math.min(count ?? 0, cap);
-  if (total === 0) return [];
-
-  // EN PARALELO, no en cadena. PostgREST corta cada respuesta en 1.000 filas, así
-  // que 10.000 pedidos son once viajes; encadenados se pagan once latencias de
-  // red seguidas (segundos), y en paralelo se paga una. La base tarda 20 ms por
-  // tramo: lo que se estaba pagando era la ida y vuelta, no el trabajo.
-  const pages = await Promise.all(
-    Array.from({ length: Math.ceil(total / PAGE) }, (_, i) =>
-      base()
-        .range(i * PAGE, i * PAGE + PAGE - 1)
-        .then(({ data, error }) => (error ? [] : ((data ?? []) as unknown as OrderMasterRow[]))),
-    ),
-  );
-  return pages.flat();
-}
+// `getOrderMasterRows` (el cargador de la tabla ENTERA) se retiró al paginar en
+// el servidor: bajaba ~10.000 filas y 13 MB por carga. Si algún día hace falta
+// un volcado completo, que sea para exportar y con su propia función, no para
+// pintar una pantalla.
 
 export interface MasterCounts {
   todos: number;
@@ -504,4 +457,53 @@ export async function getMasterFacets(storeIds: string[]): Promise<{
     district: list("district"),
     pickup: list("pickup"),
   };
+}
+
+/**
+ * Resumen de agencia contando en la BASE, no sobre las filas cargadas.
+ *
+ * Antes se calculaba sobre las ~10.000 filas que el navegador tenía en memoria.
+ * Con el listado paginado eso pasaría a contar solo las 100 visibles y daría
+ * números falsos SIN AVISAR — que es peor que no mostrarlos. Son cinco conteos
+ * `head`: no traen filas.
+ */
+export async function getAgencySummary(
+  storeIds: string[],
+  now: Date = new Date(),
+): Promise<AgencySummary> {
+  const empty: AgencySummary = {
+    total: 0,
+    disponibles: 0,
+    proximosAVencer: 0,
+    retornoIniciado: 0,
+    devueltos: 0,
+  };
+  if (!storeIds.length) return empty;
+  const sb = await createServerSupabase();
+
+  const count = async (build: (q: any) => any): Promise<number> => {
+    const base = sb
+      .from("order_master")
+      .select("id", { count: "exact", head: true })
+      .in("store_id", storeIds);
+    const { count: n, error } = await build(base);
+    return error ? 0 : (n ?? 0);
+  };
+
+  // "En agencia" es tener sub-estado de recojo o ir por modo agencia, la misma
+  // regla que usaba `agencySummary` en cliente.
+  const inAgency = (q: any) => q.or("pickup_state.not.is.null,shipping_mode.eq.agency");
+  const soon = new Date(now.getTime() + 2 * 86_400_000).toISOString();
+
+  const [total, disponibles, proximosAVencer, retornoIniciado, devueltos] = await Promise.all([
+    count(inAgency),
+    count((q) => q.eq("pickup_state", "disponible")),
+    count((q) =>
+      inAgency(q).not("agency_expires_at", "is", null).lte("agency_expires_at", soon),
+    ),
+    count((q) => q.eq("pickup_state", "retorno_iniciado")),
+    count((q) => q.eq("pickup_state", "devuelto")),
+  ]);
+
+  return { total, disponibles, proximosAVencer, retornoIniciado, devueltos };
 }

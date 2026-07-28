@@ -2,14 +2,22 @@
 
 // Master de Pedidos — la vista central de control de la operación logística.
 //
-// Estructura, igual que el board de Repro Provincia: el servidor carga TODAS las
-// tiendas accesibles para la pestaña activa y aquí se filtra en cliente, porque
-// los filtros son combinables y multi-selección (§13). La lógica de qué fila
-// entra y en qué orden vive en lib/order-master-filters.ts, testeada aparte;
-// este archivo solo compone estado y pinta.
+// FILTRA LA BASE, NO ESTA PANTALLA. Antes se bajaban las ~10.000 filas al
+// navegador y se filtraban en memoria: 13 MB por carga, otra vez enteras en cada
+// cambio de pestaña, y unos diez segundos mirando el esqueleto. Ahora llega UNA
+// página de 100 filas ya filtrada y ordenada (~100 KB).
+//
+// Los filtros viven en la URL, que es lo que permite que el servidor sepa qué
+// traer. De ahí salen gratis dos cosas: una vista filtrada se puede compartir
+// por enlace, y atrás/adelante del navegador funcionan.
+//
+// El coste, para que quede dicho: cada clic en un filtro es un viaje al
+// servidor en vez de ser instantáneo. Se disimula con `useTransition`, que
+// mantiene el listado anterior en pantalla mientras llega el nuevo en vez de
+// parpadear a vacío.
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Card, cn, EmptyState } from "@/components/ui";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { ChecklistFilter } from "@/components/filters";
@@ -26,21 +34,18 @@ import {
   loadOrderGeo,
   registerReturn,
   relinkGuide,
-  searchOrders,
   setOrderStatus,
   updateOrderGeo,
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import {
-  agencySummary,
-  applyFilters,
   emptyFilters,
-  facetValues,
   hasActiveFilters,
-  sortRows,
+  type AgencySummary,
   type MasterFilters,
   type MasterSortKey,
 } from "@/lib/order-master-filters";
+import { buildMasterQuery } from "@/lib/master-query";
 import {
   GENERAL_STATUSES,
   daysInAgency,
@@ -92,11 +97,6 @@ function fmtMoney(value: number | null): string {
   if (value === null || value === undefined) return "—";
   return `S/ ${value.toFixed(2)}`;
 }
-
-/** Cuántas filas se pintan de una vez. 150 llena la pantalla con margen de
- *  sobra; el resto se pide a demanda. El número existe para acotar el DOM, no
- *  los datos: los filtros y el orden siguen corriendo sobre todos los pedidos. */
-const PAINT_STEP = 150;
 
 const MODE_LABEL: Record<string, string> = {
   cod: "Contraentrega",
@@ -214,6 +214,13 @@ export function OrdersMasterBoard({
   view,
   counts,
   rows,
+  total,
+  page,
+  pageSize,
+  filters,
+  sortKey,
+  facets,
+  agency,
   canEdit,
   canOverride,
   canCreateGuide,
@@ -223,7 +230,26 @@ export function OrdersMasterBoard({
   stores: StoreSummary[];
   view: MasterView;
   counts: MasterCounts;
+  /** UNA página ya filtrada y ordenada por la base. Antes llegaban las ~10.000
+   *  filas y se filtraba aquí: eran 13 MB por carga y ~10 s de espera. */
   rows: OrderMasterRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Filtros vigentes, leídos de la URL en el servidor. Aquí solo se pintan y
+   *  se reescriben; quien filtra es la base. */
+  filters: MasterFilters;
+  sortKey: MasterSortKey;
+  facets: {
+    operational: string[];
+    courier: string[];
+    region: string[];
+    province: string[];
+    district: string[];
+    pickup: string[];
+  };
+  /** Contado en la base: sobre una página daría números falsos sin avisar. */
+  agency: AgencySummary;
   canEdit: boolean;
   canOverride: boolean;
   canCreateGuide: boolean;
@@ -231,88 +257,74 @@ export function OrdersMasterBoard({
   canCreateShalomGuide: boolean;
 }) {
   const router = useRouter();
-  const [filters, setFilters] = useState<MasterFilters>(emptyFilters);
-  // Por defecto el correlativo corrido (del más nuevo al más viejo): es como se
-  // lee un listado de pedidos. "Último movimiento" queda a un clic en el selector.
-  const [sortKey, setSortKey] = useState<MasterSortKey>("created");
+  const pathname = usePathname();
+  const [navigating, startNav] = useTransition();
   const [showMore, setShowMore] = useState(false);
-  const [renderLimit, setRenderLimit] = useState(PAINT_STEP);
   const [openId, setOpenId] = useState<string | null>(null);
 
-  // La búsqueda va al servidor: debe encontrar pedidos fuera de la pestaña
-  // activa, no solo entre los ya cargados.
-  const [search, setSearch] = useState("");
-  const [results, setResults] = useState<OrderMasterRow[] | null>(null);
-  const [searching, setSearching] = useState(false);
+  /**
+   * Cambiar un filtro es reescribir la URL y dejar que el servidor traiga la
+   * página. Suena a más trabajo que filtrar en memoria, pero baja ~100 KB en vez
+   * de 9,5 MB, así que en la práctica es lo que hace que la pantalla responda.
+   *
+   * `useTransition` mantiene visible el listado anterior mientras llega el
+   * nuevo, en vez de parpadear a vacío en cada clic.
+   */
+  const navigate = (next: { filters?: Partial<MasterFilters>; sortKey?: MasterSortKey; page?: number }) => {
+    const merged: MasterFilters = { ...filters, ...(next.filters ?? {}) };
+    const qs = buildMasterQuery({
+      filters: merged,
+      sortKey: next.sortKey ?? sortKey,
+      // Cualquier cambio de filtro u orden vuelve a la página 1: quedarse en la
+      // 7 del resultado anterior es una pantalla en blanco sin explicación.
+      page: next.page ?? (next.filters || next.sortKey ? 1 : page),
+    });
+    if (view !== "todos") qs.set("view", view);
+    startNav(() => router.replace(`${pathname}?${qs.toString()}`, { scroll: false }));
+  };
+
+  const setFilters = (updater: (f: MasterFilters) => MasterFilters) =>
+    navigate({ filters: updater(filters) });
+
+  // La búsqueda es un filtro más y la resuelve la base. El input mantiene su
+  // propio estado para que escribir sea instantáneo, y solo al parar de teclear
+  // se reescribe la URL — si no, cada letra sería un viaje al servidor.
+  const [search, setSearch] = useState(filters.search);
+  const searching = navigating;
 
   useEffect(() => {
-    const q = search.trim();
-    if (q.length < 2) {
-      setResults(null);
-      setSearching(false);
-      return;
-    }
-    setSearching(true);
-    const timer = setTimeout(async () => {
-      const found = await searchOrders(q);
-      setResults(found);
-      setSearching(false);
-    }, 300);
+    setSearch(filters.search);
+  }, [filters.search]);
+
+  useEffect(() => {
+    if (search.trim() === filters.search.trim()) return;
+    const timer = setTimeout(() => navigate({ filters: { search: search.trim() } }), 350);
     return () => clearTimeout(timer);
-  }, [search]);
+    // `navigate` se rehace en cada render; depender de él relanzaría el temporizador.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, filters.search]);
 
   const storeName = useMemo(() => {
     const map = new Map(stores.map((s) => [s.id, s.name]));
     return (id: string) => map.get(id) ?? "—";
   }, [stores]);
 
-  const visible = useMemo(() => {
-    const filtered = applyFilters(rows, filters);
-    return sortRows(filtered, sortKey);
-  }, [rows, filters, sortKey]);
-
-  // Al cambiar filtros, orden o búsqueda se vuelve al primer tramo: si no, un
-  // filtro que deja 12 resultados heredaría un tope de 2.000 y no serviría de nada.
-  useEffect(() => {
-    setRenderLimit(PAINT_STEP);
-  }, [filters, sortKey, search, view]);
-
-  const agency = useMemo(() => agencySummary(rows), [rows]);
-
-  const facets = useMemo(
-    () => ({
-      operational: facetValues(rows, "operational_status"),
-      courier: facetValues(rows, "current_courier"),
-      region: facetValues(rows, "region"),
-      province: facetValues(rows, "province"),
-      district: facetValues(rows, "district"),
-      pickup: facetValues(rows, "pickup_state"),
-    }),
-    [rows],
-  );
-
   function patch(next: Partial<MasterFilters>) {
-    setFilters((f) => ({ ...f, ...next }));
+    navigate({ filters: next });
   }
 
   function toggleStore(id: string) {
-    setFilters((f) => {
-      const next = new Set(f.stores);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return { ...f, stores: next };
-    });
+    const next = new Set(filters.stores);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    navigate({ filters: { stores: next } });
   }
 
-  const searchActive = search.trim().length >= 2;
-  const listed = searchActive ? (results ?? []) : visible;
-
-  // Se PINTAN de a tandas, no todas. El Master carga ~10.000 pedidos y pintarlos
-  // enteros son 150.000 nodos en el DOM: no solo tarda al entrar, sino que deja
-  // lenta cada pulsación después, porque React reconcilia todo eso en cada
-  // cambio de filtro y al abrir el detalle. Filtrar y ordenar sí se hace sobre
-  // TODOS (son milisegundos en memoria); lo caro es dibujarlos.
-  const shown = useMemo(() => listed.slice(0, renderLimit), [listed, renderLimit]);
+  const searchActive = filters.search.trim().length >= 2;
+  // La página llega filtrada y ordenada; aquí ya no se recorta nada.
+  const listed = rows;
+  const shown = rows;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
     <div className="space-y-4">
@@ -355,7 +367,7 @@ export function OrdersMasterBoard({
         <Card className="p-0">
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
             <p className="text-sm font-medium text-slate-800">
-              Resultados de búsqueda {results ? `(${results.length})` : ""}
+              Resultados de búsqueda ({total})
             </p>
             <button onClick={() => setSearch("")} className="text-xs text-slate-500 hover:underline">
               Limpiar búsqueda
@@ -366,20 +378,14 @@ export function OrdersMasterBoard({
           ) : listed.length ? (
             <>
               <MasterTable rows={shown} storeName={storeName} multiStore={stores.length > 1} onOpen={setOpenId} />
-              {shown.length < listed.length && (
-                <div className="border-t border-slate-100 p-3 text-center">
-                  <button
-                    onClick={() => setRenderLimit((n) => n + PAINT_STEP)}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    Ver {Math.min(PAINT_STEP, listed.length - shown.length)} más
-                  </button>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Mostrando {shown.length} de {listed.length}. Los filtros y el orden se aplican
-                    sobre todos, no solo sobre los visibles.
-                  </p>
-                </div>
-              )}
+              <Pager
+                page={page}
+                totalPages={totalPages}
+                total={total}
+                shown={shown.length}
+                busy={navigating}
+                onPage={(p) => navigate({ page: p })}
+              />
             </>
           ) : (
             <p className="p-5 text-sm text-slate-400">Sin coincidencias.</p>
@@ -391,7 +397,7 @@ export function OrdersMasterBoard({
             <AgencyStrip
               summary={agency}
               filters={filters}
-              onFilter={(next) => setFilters((f) => ({ ...f, ...next }))}
+              onFilter={(next) => patch(next)}
             />
           )}
 
@@ -400,10 +406,19 @@ export function OrdersMasterBoard({
             {MASTER_VIEWS.map((v) => (
               <button
                 key={v.key}
-                onClick={() => router.push(`/dashboard/pedidos?view=${v.key}`)}
+                onClick={() => {
+                  // Cambiar de pestaña conserva lo que ya estaba filtrado: el
+                  // estado general es un filtro más, no un borrón y cuenta nueva.
+                  const qs = buildMasterQuery({ filters, sortKey, page: 1 });
+                  if (v.key !== "todos") qs.set("view", v.key);
+                  startNav(() =>
+                    router.replace(`${pathname}?${qs.toString()}`, { scroll: false }),
+                  );
+                }}
                 className={cn(
                   "rounded-lg px-3 py-1.5 text-sm font-medium transition",
                   v.key === view ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50",
+                  navigating && "opacity-60",
                 )}
               >
                 {v.label}
@@ -487,7 +502,7 @@ export function OrdersMasterBoard({
 
             {hasActiveFilters(filters) && (
               <button
-                onClick={() => setFilters(emptyFilters())}
+                onClick={() => navigate({ filters: emptyFilters() })}
                 className="text-xs text-slate-500 hover:underline"
               >
                 Limpiar filtros
@@ -498,7 +513,7 @@ export function OrdersMasterBoard({
               Ordenar por:
               <select
                 value={sortKey}
-                onChange={(e) => setSortKey(e.target.value as MasterSortKey)}
+                onChange={(e) => navigate({ sortKey: e.target.value as MasterSortKey })}
                 className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
               >
                 <option value="created">Fecha de creación</option>
@@ -640,7 +655,7 @@ function AgencyStrip({
   filters,
   onFilter,
 }: {
-  summary: ReturnType<typeof agencySummary>;
+  summary: AgencySummary;
   filters: MasterFilters;
   onFilter: (next: Partial<MasterFilters>) => void;
 }) {
@@ -1746,5 +1761,59 @@ function OrderActions({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Paginación. Existe porque el listado dejó de traerse entero: antes eran ~10.000
+ * filas y 9,5 MB por carga, ahora son 100 filas por página. Enseña el total real
+ * (contado en la base, no las visibles) para que nadie confunda "hay 100" con
+ * "hay 100 en total".
+ */
+function Pager({
+  page,
+  totalPages,
+  total,
+  shown,
+  busy,
+  onPage,
+}: {
+  page: number;
+  totalPages: number;
+  total: number;
+  shown: number;
+  busy: boolean;
+  onPage: (page: number) => void;
+}) {
+  if (total === 0) return null;
+  const from = (page - 1) * 100 + 1;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3">
+      <p className="text-xs text-slate-500">
+        {from}–{from + shown - 1} de {total.toLocaleString("es-PE")}
+        {busy && <span className="ml-2 text-slate-400">actualizando…</span>}
+      </p>
+      {totalPages > 1 && (
+        <div className="flex items-center gap-1.5">
+          <button
+            disabled={busy || page <= 1}
+            onClick={() => onPage(page - 1)}
+            className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          >
+            Anterior
+          </button>
+          <span className="px-1 text-xs text-slate-500">
+            {page} / {totalPages}
+          </span>
+          <button
+            disabled={busy || page >= totalPages}
+            onClick={() => onPage(page + 1)}
+            className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          >
+            Siguiente
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
