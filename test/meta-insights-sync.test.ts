@@ -3,6 +3,7 @@ import {
   fetchMetaDailyInsights,
   metaInsightsRange,
   normalizeMetaDailyInsight,
+  splitMetaInsightsRange,
 } from "@/lib/meta-insights-sync";
 
 describe("normalizeMetaDailyInsight", () => {
@@ -100,5 +101,13 @@ describe("metaInsightsRange", () => {
       from: "2026-04-30",
       to: "2026-07-28",
     });
+  });
+
+  it("splits a 90-day backfill into bounded inclusive chunks", () => {
+    expect(splitMetaInsightsRange({ from: "2026-04-30", to: "2026-07-28" })).toEqual([
+      { from: "2026-04-30", to: "2026-05-29" },
+      { from: "2026-05-30", to: "2026-06-28" },
+      { from: "2026-06-29", to: "2026-07-28" },
+    ]);
   });
 });

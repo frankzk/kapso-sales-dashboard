@@ -47,7 +47,7 @@ async function run(req: NextRequest) {
     }
     const { data: state } = await admin
       .from("sync_state")
-      .select("cursor,status")
+      .select("cursor,status,error")
       .eq("store_id", storeId)
       .eq("source", "meta_insights")
       .maybeSingle();
@@ -58,12 +58,17 @@ async function run(req: NextRequest) {
       : state?.cursor && state.status === "ok"
         ? 3
         : 90;
+    const failedAccounts = state?.status !== "ok" && state?.error
+      ? creds.meta_ad_accounts.filter((account) =>
+          state.error.includes(`${account.name || account.id}:`))
+      : [];
+    const accounts = failedAccounts.length ? failedAccounts : creds.meta_ad_accounts;
     reports.push(
       await syncMetaInsightsHistory(
         admin,
         storeId,
         creds.meta_access_token,
-        creds.meta_ad_accounts,
+        accounts,
         metaInsightsRange(days),
       ),
     );
