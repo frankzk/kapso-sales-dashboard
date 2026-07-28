@@ -3,8 +3,8 @@ import { getAccessibleStores } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import {
   MASTER_PAGE_SIZE,
-  getAgencySummary,
-  getMasterFacets,
+  getAgencySummaryCached,
+  getMasterFacetsCached,
   getOrderMasterCounts,
   getOrderMasterPage,
   isMasterView,
@@ -65,8 +65,9 @@ async function PedidosContent({
   const [counts, pageData, facets, agency] = await Promise.all([
     getOrderMasterCounts(storeIds),
     getOrderMasterPage(storeIds, { view, filters, sortKey, page }),
-    getMasterFacets(storeIds),
-    getAgencySummary(storeIds),
+    // Cacheadas: no dependen de lo que se esté filtrando ni buscando.
+    getMasterFacetsCached(storeIds),
+    getAgencySummaryCached(storeIds),
   ]);
 
   return (

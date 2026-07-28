@@ -7,7 +7,8 @@
 // TypeScript — son tres consultas pequeñas de un solo pedido, no hacen falta
 // joins (que PostgREST tampoco daría).
 
-import { createServerSupabase } from "@/lib/db";
+import { unstable_cache } from "next/cache";
+import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
@@ -434,6 +435,84 @@ export async function getOrderMasterPage(
 
 /** Opciones de los desplegables, calculadas en la base (0059). Unos kilobytes
  *  en vez de las 10.000 filas que hacían falta para deducirlas en el navegador. */
+/**
+ * Lo que NO depende de lo que el usuario esté filtrando se calcula una vez y se
+ * reutiliza durante un rato.
+ *
+ * Las opciones de los desplegables y el resumen de agencia son iguales escribas
+ * lo que escribas en el buscador, pero se recalculaban en CADA tecla porque
+ * viven en el mismo render de servidor que el listado. Eran ~25 ms de base y un
+ * viaje de red por pulsación, para devolver exactamente lo mismo.
+ *
+ * Se usa el cliente admin y no el de sesión porque `unstable_cache` no puede
+ * leer cookies. El alcance sigue siendo correcto: la clave del caché son las
+ * tiendas, que el llamador ya autorizó antes de llegar aquí.
+ */
+const FACETS_TTL_SECONDS = 120;
+
+async function loadFacets(storeIds: string[]) {
+  const empty = { operational: [], courier: [], region: [], province: [], district: [], pickup: [] };
+  if (!storeIds.length) return empty;
+  const admin = createAdminSupabase();
+  const { data, error } = await admin.rpc("master_facets", { p_store_ids: storeIds });
+  if (error || !data) return empty;
+  const d = data as Record<string, string[] | null>;
+  const list = (k: string) => [...(d[k] ?? [])].sort((a, b) => a.localeCompare(b, "es"));
+  return {
+    operational: list("operational"),
+    courier: list("courier"),
+    region: list("region"),
+    province: list("province"),
+    district: list("district"),
+    pickup: list("pickup"),
+  };
+}
+
+async function loadAgencySummary(storeIds: string[]): Promise<AgencySummary> {
+  const empty: AgencySummary = {
+    total: 0,
+    disponibles: 0,
+    proximosAVencer: 0,
+    retornoIniciado: 0,
+    devueltos: 0,
+  };
+  if (!storeIds.length) return empty;
+  const admin = createAdminSupabase();
+  const now = new Date();
+  const count = async (build: (q: any) => any): Promise<number> => {
+    const base = admin
+      .from("order_master")
+      .select("id", { count: "exact", head: true })
+      .in("store_id", storeIds);
+    const { count: n, error } = await build(base);
+    return error ? 0 : (n ?? 0);
+  };
+  const inAgency = (q: any) => q.or("pickup_state.not.is.null,shipping_mode.eq.agency");
+  const soon = new Date(now.getTime() + 2 * 86_400_000).toISOString();
+  const [total, disponibles, proximosAVencer, retornoIniciado, devueltos] = await Promise.all([
+    count(inAgency),
+    count((q) => q.eq("pickup_state", "disponible")),
+    count((q) => inAgency(q).not("agency_expires_at", "is", null).lte("agency_expires_at", soon)),
+    count((q) => q.eq("pickup_state", "retorno_iniciado")),
+    count((q) => q.eq("pickup_state", "devuelto")),
+  ]);
+  return { total, disponibles, proximosAVencer, retornoIniciado, devueltos };
+}
+
+export const getMasterFacetsCached = (storeIds: string[]) =>
+  unstable_cache(
+    async () => loadFacets(storeIds),
+    ["master-facets", [...storeIds].sort().join(",")],
+    { revalidate: FACETS_TTL_SECONDS },
+  )();
+
+export const getAgencySummaryCached = (storeIds: string[]) =>
+  unstable_cache(
+    async () => loadAgencySummary(storeIds),
+    ["master-agency", [...storeIds].sort().join(",")],
+    { revalidate: FACETS_TTL_SECONDS },
+  )();
+
 export async function getMasterFacets(storeIds: string[]): Promise<{
   operational: string[];
   courier: string[];
