@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { campaignBreakdown, campaignDailyTrend } from "@/lib/metrics";
 import type { AdMeta } from "@/lib/meta-ads";
-import type { LeadRow, OrderRow } from "@/lib/types";
+import type { LeadRow, MetaAdPerformance, OrderRow } from "@/lib/types";
 
 const orders = [
   { id: "order-1", name: "#1001", customer_phone: "51920582451", total_amount: 219, total_refunded: 0, cancelled_at: null, line_items: [{ title: "Mochila viajera", sku: "MOCH-1", quantity: 1 }] },
@@ -91,6 +91,59 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
     expect(cocina.productMatchRate).toBe(0);
     expect(cocina.deliveredOrders).toBe(1);
     expect(cocina.deliveryRate).toBe(1);
+  });
+
+  it("joins historical Meta delivery and derives weighted cost metrics", () => {
+    const performance = [
+      {
+        adId: "999",
+        accountId: "act-1",
+        currency: "USD",
+        spend: 24,
+        impressions: 12_000,
+        reach: 8_000,
+        clicks: 120,
+        inlineLinkClicks: 90,
+        activeDays: 6,
+        firstDate: "2026-07-01",
+        lastDate: "2026-07-06",
+      },
+      {
+        adId: "spent-without-leads",
+        accountId: "act-1",
+        currency: "USD",
+        spend: 10,
+        impressions: 5_000,
+        reach: 4_000,
+        clicks: 30,
+        inlineLinkClicks: 20,
+        activeDays: 3,
+        firstDate: "2026-07-01",
+        lastDate: "2026-07-03",
+      },
+    ] satisfies MetaAdPerformance[];
+    const rows = campaignBreakdown(leads, orders, {}, [
+      { orderId: "order-2", deliveryStatus: "Entregado", statusCategory: "delivered", createdAt: "2026-07-20T00:00:00Z" },
+    ], performance);
+
+    const cocina = rows.find((row) => row.adId === "999")!;
+    expect(cocina).toMatchObject({
+      metaCurrency: "USD",
+      spend: 24,
+      impressions: 12_000,
+      cpm: 2,
+      frequency: 1.5,
+      cpc: 0.2,
+      cpl: 24,
+      cpa: 24,
+      deliveredCpa: 24,
+    });
+    expect(cocina.roas).toBeCloseTo(99 / 24);
+    expect(cocina.deliveredRoas).toBeCloseTo(99 / 24);
+
+    const noSignal = rows.find((row) => row.adId === "spent-without-leads")!;
+    expect(noSignal.leads).toBe(0);
+    expect(noSignal.decision).toBe("no_attribution");
   });
 
   it("campaignDailyTrend buckets leads per day per ad (store tz)", () => {
