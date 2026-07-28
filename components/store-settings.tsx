@@ -1321,7 +1321,7 @@ function SettingsForm({
             <input
               name="anthropic_model"
               defaultValue={s.anthropic_model ?? ""}
-              placeholder="claude-opus-4-8"
+              placeholder="claude-sonnet-5"
               className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
             />
           </label>
