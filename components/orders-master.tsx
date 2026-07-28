@@ -17,6 +17,8 @@ import { PickupKeyPanel } from "@/components/pickup-key-panel";
 import { TandersGuideModal } from "@/components/tanders-guide-modal";
 import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actions";
 import { ShalomGuideModal } from "@/components/shalom-guide-modal";
+import { cancelShalomGuide } from "@/app/dashboard/pedidos/shalom-actions";
+import { shalomGuideIsCancelable } from "@/lib/shalom/draft";
 import {
   addOrderComment,
   clearOrderGeo,
@@ -103,6 +105,85 @@ const STATUS_TONE: Record<string, string> = {
   anulado: "bg-slate-200 text-slate-600",
   devuelto: "bg-red-100 text-red-800",
 };
+
+/**
+ * Anular una guía de Shalom, en dos pasos.
+ *
+ * Crear emite una guía real y cobrable de un solo clic, así que deshacer no
+ * puede ser otro clic a su lado: un resbalón del ratón en una lista de guías
+ * anularía un despacho. El primer clic solo cambia el botón por una pregunta con
+ * el número de guía delante; el segundo es el que llama.
+ *
+ * El botón únicamente aparece mientras Shalom todavía deja borrar (ver
+ * `shalomGuideIsCancelable`), pero eso es cortesía de interfaz: el servidor
+ * revalida las mismas condiciones, porque un botón que no se pinta no es una
+ * autorización.
+ */
+function ShalomCancelButton({
+  shipmentId,
+  guideCode,
+  codigo,
+  onDone,
+}: {
+  shipmentId: string;
+  guideCode: string | null;
+  codigo: string | null;
+  onDone: (notice: string) => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (busy) return <span className="text-xs text-slate-500">Anulando…</span>;
+
+  if (!confirming) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            setError(null);
+            setConfirming(true);
+          }}
+          className="text-xs font-medium text-red-700 hover:underline"
+        >
+          Anular
+        </button>
+        {error && <span className="w-full text-xs text-red-700">{error}</span>}
+      </>
+    );
+  }
+
+  return (
+    <span className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-red-50 px-2 py-1.5">
+      <span className="text-xs text-red-800">
+        ¿Anular la guía <strong>{guideCode ?? "—"}</strong>
+        {codigo ? ` (${codigo})` : ""} en Shalom? No se puede deshacer.
+      </span>
+      <button
+        type="button"
+        onClick={async () => {
+          setBusy(true);
+          const res = await cancelShalomGuide(shipmentId);
+          setBusy(false);
+          setConfirming(false);
+          if ("error" in res) setError(res.error);
+          else onDone(res.notice);
+        }}
+        className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
+      >
+        Sí, anular
+      </button>
+      <button
+        type="button"
+        onClick={() => setConfirming(false)}
+        className="text-xs font-medium text-slate-600 hover:underline"
+      >
+        Cancelar
+      </button>
+    </span>
+  );
+}
 
 function StatusBadge({ status, locked }: { status: string; locked?: boolean }) {
   return (
@@ -1080,6 +1161,18 @@ function OrderDrawer({
                         >
                           Rótulo ↗
                         </a>
+                      )}
+                      {canCreateShalomGuide && shalomGuideIsCancelable(g) && (
+                        <ShalomCancelButton
+                          shipmentId={g.id}
+                          guideCode={g.guide_code}
+                          codigo={g.shalom_codigo ?? null}
+                          onDone={(msg) => {
+                            setNotice(msg);
+                            void reload();
+                            onSaved();
+                          }}
+                        />
                       )}
                       {g.guide_code === detail.row.guide_code && (
                         <span className="ml-auto text-xs text-slate-400">actual</span>
