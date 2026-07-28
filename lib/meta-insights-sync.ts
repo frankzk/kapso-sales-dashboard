@@ -144,7 +144,10 @@ export async function fetchMetaDailyInsights(
   let next: string | null = first.toString();
   for (let page = 0; next && page < PAGE_LIMIT; page++) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), opts?.timeoutMs ?? 20_000);
+    // Los reportes de 90 días de cuentas con muchos anuncios suelen tardar
+    // más de 20 s en Meta. 45 s mantiene una cota segura dentro de la función
+    // de 300 s, sin cortar cuentas válidas a mitad del backfill.
+    const timer = setTimeout(() => ctrl.abort(), opts?.timeoutMs ?? 45_000);
     try {
       const response = await doFetch(next, { headers: { Accept: "application/json" }, signal: ctrl.signal });
       const json = await response.json().catch(() => null) as {

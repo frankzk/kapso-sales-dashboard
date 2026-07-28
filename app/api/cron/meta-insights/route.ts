@@ -47,7 +47,7 @@ async function run(req: NextRequest) {
     }
     const { data: state } = await admin
       .from("sync_state")
-      .select("cursor")
+      .select("cursor,status")
       .eq("store_id", storeId)
       .eq("source", "meta_insights")
       .maybeSingle();
@@ -55,7 +55,7 @@ async function run(req: NextRequest) {
     // capturar atribución tardía y correcciones que Meta hace retroactivamente.
     const days = Number.isFinite(daysParam) && daysParam > 0
       ? Math.min(365, Math.trunc(daysParam))
-      : state?.cursor
+      : state?.cursor && state.status === "ok"
         ? 3
         : 90;
     reports.push(
