@@ -5,6 +5,7 @@ const GRAPH_BASE = "https://graph.facebook.com/v21.0";
 const META_INSIGHTS_SOURCE = "meta_insights";
 const PAGE_LIMIT = 100;
 const UPSERT_CHUNK = 500;
+const ACCOUNT_CONCURRENCY = 3;
 
 export interface MetaDailyInsight {
   account_id: string;
@@ -212,43 +213,60 @@ export async function syncMetaInsightsHistory(
     errors: [],
   };
   const seenAds = new Set<string>();
-  for (const account of accounts) {
-    const fetched = await fetchMetaDailyInsights(token, account.id, range, opts);
-    if (!fetched.ok) {
-      report.errors.push(`${account.name || account.id}: ${fetched.error}`);
-      continue;
-    }
-    report.accountsOk += 1;
-    const syncedAt = new Date().toISOString();
-    for (const batch of chunks(fetched.rows, UPSERT_CHUNK)) {
-      const { error } = await admin.from("meta_ad_insights_daily").upsert(
-        batch.map((row) => ({ store_id: storeId, ...row, synced_at: syncedAt })),
-        { onConflict: "store_id,account_id,ad_id,date" },
-      );
-      if (error) {
-        report.errors.push(`${account.name || account.id}: ${error.message}`);
-        break;
+  // Tres cuentas simultáneas mantienen el backfill de tiendas grandes dentro
+  // de los 300 s de Vercel sin disparar todas las cuentas contra Meta a la vez.
+  for (const accountBatch of chunks(accounts, ACCOUNT_CONCURRENCY)) {
+    const batchResults = await Promise.all(accountBatch.map(async (account) => {
+      const errors: string[] = [];
+      const adIds = new Set<string>();
+      let persistedRows = 0;
+      const fetched = await fetchMetaDailyInsights(token, account.id, range, opts);
+      if (!fetched.ok) {
+        return {
+          accountOk: false,
+          rows: persistedRows,
+          adIds,
+          errors: [`${account.name || account.id}: ${fetched.error}`],
+        };
       }
-      report.rows += batch.length;
-      for (const row of batch) seenAds.add(row.ad_id);
-    }
+      const syncedAt = new Date().toISOString();
+      for (const insightBatch of chunks(fetched.rows, UPSERT_CHUNK)) {
+        const { error } = await admin.from("meta_ad_insights_daily").upsert(
+          insightBatch.map((row) => ({ store_id: storeId, ...row, synced_at: syncedAt })),
+          { onConflict: "store_id,account_id,ad_id,date" },
+        );
+        if (error) {
+          errors.push(`${account.name || account.id}: ${error.message}`);
+          break;
+        }
+        persistedRows += insightBatch.length;
+        for (const row of insightBatch) adIds.add(row.ad_id);
+      }
 
-    const adRows = new Map<string, Record<string, unknown>>();
-    for (const row of fetched.rows) {
-      adRows.set(row.ad_id, {
-        ad_id: row.ad_id,
-        account_id: row.account_id,
-        campaign_id: row.campaign_id,
-        campaign_name: row.campaign_name,
-        adset_id: row.adset_id,
-        adset_name: row.adset_name,
-        ad_name: row.ad_name,
-        fetched_at: syncedAt,
-      });
-    }
-    if (adRows.size) {
-      const { error } = await admin.from("meta_ads").upsert([...adRows.values()], { onConflict: "ad_id" });
-      if (error) report.errors.push(`${account.name || account.id} (nombres): ${error.message}`);
+      const adRows = new Map<string, Record<string, unknown>>();
+      for (const row of fetched.rows) {
+        adRows.set(row.ad_id, {
+          ad_id: row.ad_id,
+          account_id: row.account_id,
+          campaign_id: row.campaign_id,
+          campaign_name: row.campaign_name,
+          adset_id: row.adset_id,
+          adset_name: row.adset_name,
+          ad_name: row.ad_name,
+          fetched_at: syncedAt,
+        });
+      }
+      if (adRows.size) {
+        const { error } = await admin.from("meta_ads").upsert([...adRows.values()], { onConflict: "ad_id" });
+        if (error) errors.push(`${account.name || account.id} (nombres): ${error.message}`);
+      }
+      return { accountOk: true, rows: persistedRows, adIds, errors };
+    }));
+    for (const result of batchResults) {
+      if (result.accountOk) report.accountsOk += 1;
+      report.rows += result.rows;
+      for (const adId of result.adIds) seenAds.add(adId);
+      report.errors.push(...result.errors);
     }
   }
   report.ads = seenAds.size;
