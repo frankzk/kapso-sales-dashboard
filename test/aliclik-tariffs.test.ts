@@ -76,6 +76,42 @@ describe("planTariffUpdates", () => {
     expect(p.insert[0]?.amount).toBe(12);
   });
 
+  it("no toca un distrito que ya tiene tarifa manual", () => {
+    // El cron no puede pisar lo que alguien averiguó y cargó a mano. Y no basta
+    // con no borrarla: al resolver el costo se desempata por `effective_from`
+    // más reciente, así que una fila automática de hoy le ganaría a la manual
+    // de ayer sin haberla tocado.
+    const manual = cur("Miraflores", 8.5, "2026-07-20");
+    const p = planTariffUpdates([obs("Miraflores", 16.5)], [], "2026-07-28", [manual]);
+    expect(p.insert).toHaveLength(0);
+    expect(p.close).toHaveLength(0);
+    expect(p.remove).toHaveLength(0);
+    expect(p.skippedManual).toBe(1);
+  });
+
+  it("el veto manual es por concepto, no por distrito entero", () => {
+    // Que alguien sepa cuánto cuesta entregar en Miraflores no significa que
+    // sepa cuánto cuesta devolver desde ahí.
+    const manual = cur("Miraflores", 8.5, "2026-07-20");
+    const p = planTariffUpdates(
+      [obs("Miraflores", 16.5), obs("Miraflores", 10.5, "devolucion")],
+      [],
+      "2026-07-28",
+      [manual],
+    );
+    expect(p.insert).toHaveLength(1);
+    expect(p.insert[0]?.concept).toBe("devolucion");
+    expect(p.skippedManual).toBe(1);
+  });
+
+  it("el veto manual también ignora los acentos", () => {
+    // Los pedidos traen "Ancón" y los reportes "ANCON": si la comparación fuera
+    // literal el cron duplicaría la tarifa que ya se cargó a mano.
+    const p = planTariffUpdates([obs("ANCON", 16.5)], [], "2026-07-28", [cur("Ancón", 12)]);
+    expect(p.insert).toHaveLength(0);
+    expect(p.skippedManual).toBe(1);
+  });
+
   it("no confunde una tarifa manual sin distrito con una del cron", () => {
     // Las tarifas generales (sin ámbito) no tienen distrito y no deben casar
     // con nada: si casaran, el cron creería que ya cotizó ese distrito.
