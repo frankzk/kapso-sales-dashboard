@@ -13,6 +13,7 @@ import {
   completePaymentData,
   createVoucherUpload,
   loadPaymentPanel,
+  readVoucherFields,
   registerPayment,
   rejectPayment,
   revealPickupKey,
@@ -62,6 +63,23 @@ function fmtDateTime(iso: string | null): string {
         hour: "2-digit",
         minute: "2-digit",
       });
+}
+
+function toDatetimeLocal(iso: string | null): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}T${value.hour}:${value.minute}`;
 }
 
 /** sha256 del archivo, en el navegador: es la huella que detecta la re-subida. */
@@ -514,6 +532,14 @@ function VoucherForm({
   const [phone, setPhone] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [readNotice, setReadNotice] = useState<string | null>(null);
+  const [readWarning, setReadWarning] = useState<string | null>(null);
+  const [uploadedVoucher, setUploadedVoucher] = useState<{
+    fileKey: string;
+    path: string;
+    sha256: string | null;
+  } | null>(null);
   // Datos de Shalom que se pueden adelantar acá (0073). OPCIONALES: no
   // condicionan el pago — bloquear un cobro por falta de un DNI sería peor que
   // el problema que resuelve.
@@ -586,6 +612,70 @@ function VoucherForm({
     });
   }
 
+  function pickVoucher(nextFile: File | null) {
+    setFile(nextFile);
+    setUploadedVoucher(null);
+    setReadNotice(null);
+    setReadWarning(null);
+  }
+
+  async function ensureVoucherUploaded(): Promise<
+    { path: string; sha256: string | null } | { error: string }
+  > {
+    if (!file) return { error: "Primero carga una imagen del comprobante." };
+    const fileKey = `${file.name}:${file.size}:${file.lastModified}`;
+    if (uploadedVoucher?.fileKey === fileKey) {
+      return { path: uploadedVoucher.path, sha256: uploadedVoucher.sha256 };
+    }
+
+    const sha256 = await fileSha256(file);
+    const prep = await createVoucherUpload(orderId, file.type || "image/jpeg", file.name);
+    if ("error" in prep) return prep;
+    const supabase = createBrowserSupabase();
+    const { error } = await supabase.storage
+      .from(VOUCHER_BUCKET)
+      .uploadToSignedUrl(prep.path, prep.token, file, {
+        contentType: file.type || "image/jpeg",
+      });
+    if (error) return { error: `No se pudo subir el comprobante: ${error.message}` };
+
+    setUploadedVoucher({ fileKey, path: prep.path, sha256 });
+    return { path: prep.path, sha256 };
+  }
+
+  async function readAndPrefill() {
+    if (!file) return;
+    setReading(true);
+    setReadNotice(null);
+    setReadWarning(null);
+    onError(null);
+    try {
+      const uploaded = await ensureVoucherUploaded();
+      if ("error" in uploaded) {
+        onError(uploaded.error);
+        return;
+      }
+      const result = await readVoucherFields(orderId, uploaded.path);
+      if ("error" in result) {
+        onError(result.error);
+        return;
+      }
+
+      setOperation((current) => current.trim() || result.fields.operationNumber || "");
+      setAmount((current) =>
+        current.trim() || (result.fields.amount !== null ? String(result.fields.amount) : ""),
+      );
+      setPaidAt((current) => current || toDatetimeLocal(result.fields.paidAt));
+      setPayer((current) => current.trim() || result.fields.payerName || "");
+      setReadNotice(result.notice);
+      if (!result.isVoucher) {
+        setReadWarning("La imagen no parece un comprobante Yape completo. Revísala antes de registrar.");
+      }
+    } finally {
+      setReading(false);
+    }
+  }
+
   async function submit() {
     setBusy(true);
     onError(null);
@@ -594,23 +684,13 @@ function VoucherForm({
       let path: string | null = null;
       let sha256: string | null = null;
       if (file) {
-        sha256 = await fileSha256(file);
-        const prep = await createVoucherUpload(orderId, file.type || "image/jpeg", file.name);
-        if ("error" in prep) {
-          onError(prep.error);
+        const uploaded = await ensureVoucherUploaded();
+        if ("error" in uploaded) {
+          onError(uploaded.error);
           return;
         }
-        const supabase = createBrowserSupabase();
-        const { error } = await supabase.storage
-          .from(VOUCHER_BUCKET)
-          .uploadToSignedUrl(prep.path, prep.token, file, {
-            contentType: file.type || "image/jpeg",
-          });
-        if (error) {
-          onError(`No se pudo subir el comprobante: ${error.message}`);
-          return;
-        }
-        path = prep.path;
+        path = uploaded.path;
+        sha256 = uploaded.sha256;
       }
 
       const res = await registerPayment(orderId, {
@@ -647,6 +727,9 @@ function VoucherForm({
       setPayer("");
       setPhone("");
       setFile(null);
+      setUploadedVoucher(null);
+      setReadNotice(null);
+      setReadWarning(null);
       setShalomDoc("");
       setDocumentNotice(null);
       setShalomAgencyQuery("");
@@ -663,6 +746,31 @@ function VoucherForm({
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
         Cargar comprobante
       </p>
+      <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+        {[
+          ["1", "Imagen", Boolean(file)],
+          ["2", "Leer datos", Boolean(readNotice)],
+          ["3", "Registrar", false],
+        ].map(([step, label, done]) => (
+          <div
+            key={String(step)}
+            className={cn(
+              "flex items-center justify-center gap-1.5 border-r border-slate-200 px-2 py-2 text-[11px] font-semibold last:border-r-0",
+              done ? "bg-emerald-50 text-emerald-700" : "text-slate-500",
+            )}
+          >
+            <span
+              className={cn(
+                "grid size-5 place-items-center rounded-full text-[10px]",
+                done ? "bg-emerald-600 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200",
+              )}
+            >
+              {done ? "✓" : step}
+            </span>
+            {label}
+          </div>
+        ))}
+      </div>
       <div className="flex flex-wrap gap-2">
         <select
           value={kind}
@@ -706,7 +814,37 @@ function VoucherForm({
           className="w-40 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
         />
       </div>
-      <VoucherPicker file={file} onPick={setFile} />
+      <VoucherPicker file={file} onPick={pickVoucher} />
+      {file && (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold text-sky-950">Rellenar desde la imagen</p>
+              <p className="text-xs text-sky-700">
+                Lee monto, operación, fecha, hora y titular; luego podrás corregirlos.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={readAndPrefill}
+              disabled={reading || busy || pending}
+              className="rounded-lg bg-sky-700 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-800 disabled:cursor-wait disabled:opacity-50"
+            >
+              {reading ? "Leyendo imagen…" : readNotice ? "Volver a leer" : "Leer y rellenar"}
+            </button>
+          </div>
+          {readNotice && (
+            <p className="mt-2 rounded-lg bg-white/80 px-2.5 py-2 text-xs font-medium text-emerald-700">
+              ✓ {readNotice}
+            </p>
+          )}
+          {readWarning && (
+            <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-800">
+              ⚠ {readWarning}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Datos de Shalom, adelantados y OPCIONALES (0073).
           Van aquí porque quien registra el Yape acaba de hablar con la clienta y
@@ -854,19 +992,20 @@ function VoucherForm({
           )}
         </div>
       </details>
-      <p className="text-xs text-slate-400">
-        Lo que dejes en blanco se intenta leer de la imagen (nº de operación, monto, fecha y hora).
-        Cargar la imagen no valida el pago: queda pendiente hasta que alguien lo revise.
-      </p>
-      <button
-        // Sin imagen y sin nº de operación no hay nada que registrar: dejar el
-        // botón activo solo consigue que parezca que no hace nada.
-        disabled={busy || pending || (!file && !operation.trim())}
-        onClick={submit}
-        className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-      >
-        {busy ? "Registrando…" : "Registrar pago"}
-      </button>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
+        <p className="max-w-md text-xs text-slate-500">
+          Revisa los datos antes de registrar. La imagen no valida el pago: quedará pendiente de revisión.
+        </p>
+        <button
+          // Sin imagen y sin nº de operación no hay nada que registrar: dejar el
+          // botón activo solo consigue que parezca que no hace nada.
+          disabled={busy || reading || pending || (!file && !operation.trim())}
+          onClick={submit}
+          className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 disabled:opacity-50"
+        >
+          {busy ? "Registrando…" : "Registrar pago"}
+        </button>
+      </div>
       {!file && !operation.trim() && (
         <p className="text-xs text-slate-400">
           Elige la imagen del Yape, o escribe el nº de operación si lo vas a cargar a mano.

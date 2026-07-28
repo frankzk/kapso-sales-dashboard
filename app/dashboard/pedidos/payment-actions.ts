@@ -232,6 +232,13 @@ interface VoucherInspection {
   payload: Record<string, unknown>;
 }
 
+export interface VoucherPrefillFields {
+  operationNumber: string | null;
+  amount: number | null;
+  paidAt: string | null;
+  payerName: string | null;
+}
+
 const EMPTY_INSPECTION: VoucherInspection = {
   ok: false,
   isVoucher: false,
@@ -299,6 +306,53 @@ async function inspectVoucher(
   } catch {
     return EMPTY_INSPECTION;
   }
+}
+
+/**
+ * Lee un comprobante antes de registrarlo para que el operador pueda revisar y
+ * corregir los datos. La ruta debe pertenecer al pedido actual: no aceptamos
+ * una ruta arbitraria del bucket privado enviada desde el navegador.
+ */
+export async function readVoucherFields(
+  orderId: string,
+  path: string,
+): Promise<
+  | { fields: VoucherPrefillFields; isVoucher: boolean; notice: string }
+  | { error: string }
+> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("shalom.register_payment")) {
+    return { error: "Tu rol no permite registrar pagos." };
+  }
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!path.startsWith(`${ctx.storeId}/${orderId}/`)) {
+    return { error: "El comprobante no pertenece a este pedido." };
+  }
+
+  const inspection = await inspectVoucher(createAdminSupabase(), path, ctx.storeId);
+  if (!inspection.ok) {
+    return {
+      error:
+        "No se pudo leer la imagen automáticamente. Revisa la API key de Anthropic " +
+        "o completa los campos manualmente.",
+    };
+  }
+
+  const found = [
+    inspection.fields.operationNumber && "nº de operación",
+    inspection.fields.amount !== null && "monto",
+    inspection.fields.paidAt && "fecha y hora",
+    inspection.fields.payerName && "titular",
+  ].filter(Boolean);
+
+  return {
+    fields: inspection.fields,
+    isVoucher: inspection.isVoucher,
+    notice: found.length
+      ? `Datos encontrados: ${found.join(", ")}. Revísalos antes de registrar.`
+      : "La imagen se leyó, pero no se encontraron datos seguros. Complétalos manualmente.",
+  };
 }
 
 export interface RegisterPaymentInput {
