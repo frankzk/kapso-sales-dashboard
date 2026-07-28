@@ -96,6 +96,7 @@ const KNOWN_DISPATCH = new Set([
  */
 function fromDispatch(
   dispatch: string,
+  isAgency: boolean,
 ): ["pendiente" | "en_ruta", string] | null {
   switch (dispatch) {
     // Aún en el almacén: el pedido no ha salido, sigue siendo "pendiente".
@@ -116,7 +117,16 @@ function fromDispatch(
     case "TO_RETURN":
       return ["en_ruta", "en_proceso_de_retorno"];
     case "IN_AGENCY":
-      return ["en_ruta", "registrado_en_agencia"];
+      // OJO: "agency" aquí NO es Shalom. Es el HUB LOCAL de Aliclik, donde el
+      // paquete espera para salir hacia la provincia y entrar en su reparto.
+      // Etiquetarlo "Registrado en agencia" —que en este sistema pertenece al
+      // flujo de recojo en Shalom— haría que el equipo leyera un pedido a
+      // domicilio como si se hubiera desviado a una agencia, y llamara a la
+      // clienta para que fuera a recogerlo. En un envío que SÍ va por agencia,
+      // en cambio, la etiqueta es la correcta.
+      return isAgency
+        ? ["en_ruta", "registrado_en_agencia"]
+        : ["en_ruta", "en_traslado"];
     default:
       return null;
   }
@@ -194,7 +204,7 @@ export function mapAliclikStatus(input: AliclikStatusInput): AliclikStatusMappin
   }
 
   // 6. Por entregar: el detalle lo pone el despacho.
-  const fromDisp = dispatch ? fromDispatch(dispatch) : null;
+  const fromDisp = dispatch ? fromDispatch(dispatch, isAgency) : null;
   if (fromDisp) {
     const [delivery, operational] = fromDisp;
     return {
