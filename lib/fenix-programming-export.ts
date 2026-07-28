@@ -3,6 +3,8 @@ import type { OrderLineItem } from "./types";
 
 export interface FenixProgrammingShipment {
   id: string;
+  store_id: string;
+  guide_code: string;
   order_id: string | null;
   order_name: string | null;
   customer_name: string | null;
@@ -25,9 +27,18 @@ export interface FenixProgrammingOrder {
   raw: unknown;
 }
 
+/** Dirección recuperada del carrito COD o del lead cuando ni la guía ni el
+ *  pedido Shopify la traen (el reporte Aliclik a veces solo informa referencia). */
+export interface FenixProgrammingAddressFallback {
+  address1: string | null;
+  reference: string | null;
+}
+
 export interface FenixProgrammingRow {
   shipmentId: string;
   shippingDate: Date;
+  /** Va en la columna #PEDIDO: es el código de guía con el que Fenix trabaja
+   *  (lleva el N° de pedido + la fecha, único por despacho). */
   orderName: string;
   product: string;
   quantity: number | null;
@@ -114,6 +125,7 @@ export function buildFenixProgrammingRows(
   shipments: FenixProgrammingShipment[],
   ordersById: Map<string, FenixProgrammingOrder>,
   latestNoteByShipment: Map<string, string> = new Map(),
+  addressFallbackByOrderId: Map<string, FenixProgrammingAddressFallback> = new Map(),
 ): FenixProgrammingRow[] {
   const rows: FenixProgrammingRow[] = [];
   for (const shipment of shipments) {
@@ -123,6 +135,7 @@ export function buildFenixProgrammingRows(
     const order = shipment.order_id ? ordersById.get(shipment.order_id) : undefined;
     const raw = order?.raw;
     const address = shopifyShippingAddress(raw);
+    const fallback = shipment.order_id ? addressFallbackByOrderId.get(shipment.order_id) : undefined;
     const products = productSummary(order?.line_items, shipment.product);
     const latitude = shipment.latitude == null ? null : Number(shipment.latitude);
     const longitude = shipment.longitude == null ? null : Number(shipment.longitude);
@@ -130,7 +143,11 @@ export function buildFenixProgrammingRows(
     rows.push({
       shipmentId: shipment.id,
       shippingDate,
-      orderName: shipment.order_name || order?.name || "",
+      // Fenix trabaja con el código de guía, no con el N° de pedido: es lo que
+      // identifica el despacho en su sistema y lo que hace único cada reenvío
+      // del mismo pedido (lleva la fecha). Mandar el pedido pelado hacía que un
+      // segundo despacho llegara con el mismo identificador que el anterior.
+      orderName: shipment.guide_code || shipment.order_name || order?.name || "",
       product: products.product,
       quantity: products.quantity,
       amount: order?.total_amount == null ? null : Number(order.total_amount),
@@ -138,8 +155,8 @@ export function buildFenixProgrammingRows(
       phone: shipment.customer_phone || text(address.phone),
       province: titleCase(shipment.city || text(address.city) || text(address.province)),
       district: shipment.district || text(address.city),
-      address: shipment.delivery_address || text(address.address1),
-      reference: shipment.delivery_reference || text(address.address2),
+      address: shipment.delivery_address || text(address.address1) || text(fallback?.address1),
+      reference: shipment.delivery_reference || text(address.address2) || text(fallback?.reference),
       notes: uniqueNotes(extractShopifyOrderNote(raw), latestNoteByShipment.get(shipment.id)),
       latitude: hasGps ? latitude : null,
       longitude: hasGps ? longitude : null,

@@ -5,6 +5,8 @@ export interface ShipmentLineageNode {
   delivery_status: string;
   status_category: string;
   fenix_shipment_id: string | null;
+  /** 'fenix_directo' = guía creada desde un pedido, sin guía Aliclik madre. */
+  created_via?: string | null;
   created_at?: string | null;
 }
 

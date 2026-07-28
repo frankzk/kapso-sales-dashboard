@@ -1,5 +1,6 @@
 "use client";
 
+import { mergeConversationMessages } from "@/lib/conversation-merge";
 import { type ReactNode, useActionState, useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { CallQr } from "@/components/call-qr";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
@@ -12,6 +13,7 @@ import {
 } from "@/lib/meta-ads";
 import { waKindLabel, type WaNumber } from "@/lib/wa-numbers";
 import type { CustomerHistory } from "@/lib/leads-access";
+import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import {
   MANUAL_STATUSES,
   categoryOf,
@@ -535,6 +537,19 @@ export function LeadDrawer({
           {/* Derecha · acción (scroll propio; el formulario de pedido la cubre al abrirse) */}
           <div className="relative min-h-0 flex-1 @min-[720px]:w-1/2">
             <div className="h-full space-y-4 overflow-y-auto p-5">
+              {/* Con qué abrir: las palabras exactas del cliente. En el detalle
+                  se muestra siempre que exista (incluso un "hola" pelado), que
+                  ya le dice a la asesora que no hay más contexto que trabajar.
+                  En la lista se filtran los saludos vacíos para no llenarla. */}
+              {(lead.first_inbound_text ?? "").trim() && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
+                  <p className="mb-0.5 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                    💬 Escribió primero
+                  </p>
+                  <p className="italic text-slate-800">“{lead.first_inbound_text}”</p>
+                </div>
+              )}
+
               {/* Contexto: carrito/producto visto + entrega */}
               {(lead.cart_item_count || lead.district || lead.draft_order_gid || lead.cart_summary) && (
                 <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">
@@ -607,6 +622,59 @@ export function LeadDrawer({
               {/* Asignar Yape (solo admins; se auto-oculta para vendedoras) */}
               {lead.status === "yape_por_verificar" && (
                 <YapeAssign leadId={lead.id} storeId={lead.store_id} onAssigned={onRegistered} />
+              )}
+
+              {/* Crear guía en Aliclik. Es EL MISMO componente que usa el Master de
+                  Pedidos, con las mismas server actions: crear desde aquí o desde
+                  allí escribe la misma fila de `shipments`, porque las dos cuelgan
+                  del id interno del pedido. No hay una versión "de Leads".
+
+                  Va en esta columna y no en un modal a propósito: la vendedora
+                  necesita seguir viendo la conversación de WhatsApp mientras crea
+                  la guía —de ahí sale la ubicación cuando Shopify no la trae— y un
+                  modal taparía justo lo que tiene que mirar.
+
+                  Se muestra en CUALQUIER lead con pedido y sin guía, no solo tras
+                  generarlo: si entra una llamada y cierra el drawer, puede volver
+                  y terminar aquí en vez de irse al Master a buscar el pedido. */}
+              {/* Guía ya creada: bloque permanente. Antes, en cuanto la guía
+                  existía el panel desaparecía y con él la confirmación, así que
+                  la vendedora la veía dos segundos y se quedaba sin saber qué
+                  código se había generado. Los dos códigos juntos —el pedido de
+                  Shopify y la guía— son los que hay que cruzar si algo se
+                  tuerce, así que se enseñan siempre. */}
+              {history?.currentOrderGuide && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5">
+                  <p className="text-xs font-semibold tracking-wide text-emerald-700 uppercase">
+                    Guía de Aliclik
+                  </p>
+                  <p className="mt-1 font-mono text-sm font-semibold text-emerald-900">
+                    {history.currentOrderGuide}
+                  </p>
+                  {history.currentOrderName && (
+                    <p className="mt-0.5 text-xs text-emerald-800">
+                      Pedido {history.currentOrderName}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {history?.currentOrderId && !history.currentOrderGuide && (
+                <AliclikGuidePanel
+                  // `key` = candado de identidad. Sin ella, si la vendedora pulsa
+                  // "Generar nuevo pedido" con el panel abierto, React reutiliza
+                  // la instancia: cambia `orderId` pero se queda dentro la
+                  // cotización del pedido ANTERIOR. Crear entonces mandaría a
+                  // Aliclik el courier y el precio de un pedido y el id de otro.
+                  // Con la key el panel se monta de cero para cada pedido.
+                  key={history.currentOrderId}
+                  orderId={history.currentOrderId}
+                  hasCoordinate={history.currentOrderHasCoordinate}
+                  // Sin argumento a propósito: `{refreshList:true}` toma un atajo
+                  // que NO recarga el historial, y el panel se quedaría visible
+                  // ofreciendo crear una guía que ya existe.
+                  onCreated={() => onRegistered()}
+                />
               )}
 
               {/* Pedidos anteriores: últimos 3 pedidos de Shopify de este cliente */}
@@ -887,7 +955,10 @@ function WhatsappChat({
         setState({ status: "loading" });
       }
       let firstPaintPending = !opts?.silent;
-      const apply = (res: Awaited<ReturnType<typeof loadLeadConversation>>) => {
+      const apply = (
+        res: Awaited<ReturnType<typeof loadLeadConversation>>,
+        applyOpts?: { merge?: boolean },
+      ) => {
         if (requestRef.current !== requestId) return;
         activeIdRef.current = res.activeConversationId;
         setState((current) => {
@@ -895,9 +966,21 @@ function WhatsappChat({
             current.status === "ready"
               ? current.messages.filter((message) => message.id?.startsWith("local-") && message.status === "sending")
               : [];
+          // El poll solo trae la sesión ACTIVA. Si reemplazara, borraría las
+          // sesiones viejas ya fundidas (el hilo "se ocultaba" a los 20s), así
+          // que se funde con lo que ya hay. Solo aplica dentro del MISMO hilo:
+          // al cambiar de número hay que reemplazar, no acumular los dos.
+          const prior =
+            applyOpts?.merge &&
+            current.status === "ready" &&
+            current.activeId === res.activeConversationId
+              ? current.messages.filter(
+                  (message) => !(message.id?.startsWith("local-") && message.status === "sending"),
+                )
+              : [];
           return {
             status: "ready",
-            messages: [...res.messages, ...localMessages],
+            messages: [...mergeConversationMessages(prior, res.messages), ...localMessages],
             reason: res.reason,
             threads: res.threads,
             activeId: res.activeConversationId,
@@ -912,9 +995,11 @@ function WhatsappChat({
       // First paint reads only the active session. Older sessions are merged in
       // a silent follow-up, while 20s polls remain cheap and active-session only.
       loadLeadConversation(leadId, opts?.conversationId, false).then((res) => {
-        apply(res);
+        apply(res, { merge: !!opts?.silent });
         if (!opts?.silent && res.activeConversationId) {
-          void loadLeadConversation(leadId, res.activeConversationId, true).then(apply);
+          // El segundo pase trae el hilo completo (sesiones viejas incluidas):
+          // es un superconjunto, así que reemplaza sin merge.
+          void loadLeadConversation(leadId, res.activeConversationId, true).then((full) => apply(full));
         }
       });
     },
@@ -2020,6 +2105,7 @@ function OrderFormPanel({
       setGeneratedOrder(
         res.generatedOrder ?? {
           id: "",
+          orderId: "",
           name: "Pedido generado",
           total,
           currency,
@@ -2342,6 +2428,18 @@ function OrderFormPanel({
                     Ver en Shopify
                   </a>
                 )}
+                {/* La única salida del formulario. Antes, tras generar el pedido
+                    solo quedaban "Copiar" y "Ver en Shopify": el formulario se
+                    quedaba abierto tapando la columna entera con un `absolute
+                    inset-0`, y el panel para crear la guía de Aliclik —que está
+                    justo debajo— era inalcanzable sin recargar la página. */}
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                >
+                  Continuar · crear guía
+                </button>
               </div>
             </div>
           )}

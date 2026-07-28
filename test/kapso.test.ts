@@ -557,6 +557,58 @@ describe("listConversations", () => {
   });
 });
 
+// La app de Kapso vive detrás de Cloudflare: cuando su origen se cae un momento
+// devuelve 502/503/504, y un solo hipo tumbaba el paso entero del sync.
+describe("kapsoGet: reintento ante fallos pasajeros del upstream", () => {
+  const attemptsFor = (statuses: number[]) => {
+    let call = 0;
+    const f = (async () => {
+      const status = statuses[Math.min(call, statuses.length - 1)]!;
+      call += 1;
+      if (status === 200) return new Response(JSON.stringify({ data: [], paging: {} }), { status: 200 });
+      return new Response("Bad gateway", { status });
+    }) as unknown as typeof fetch;
+    return { f, calls: () => call };
+  };
+
+  it("reintenta un 502 y devuelve el resultado del segundo intento", async () => {
+    const { f, calls } = attemptsFor([502, 200]);
+    await expect(listConversations(opts(f), {})).resolves.toBeDefined();
+    expect(calls()).toBe(2);
+  });
+
+  it("reintenta también 429, 503 y 504", async () => {
+    for (const status of [429, 503, 504]) {
+      const { f, calls } = attemptsFor([status, 200]);
+      await expect(listConversations(opts(f), {})).resolves.toBeDefined();
+      expect(calls()).toBe(2);
+    }
+  });
+
+  it("se rinde tras 3 intentos y propaga el último error", async () => {
+    const { f, calls } = attemptsFor([502]);
+    await expect(listConversations(opts(f), {})).rejects.toThrow(/HTTP 502/);
+    expect(calls()).toBe(3);
+  });
+
+  it("NO reintenta un 4xx: una clave mala no se arregla sola", async () => {
+    const { f, calls } = attemptsFor([401]);
+    await expect(listConversations(opts(f), {})).rejects.toThrow(/HTTP 401/);
+    expect(calls()).toBe(1);
+  });
+
+  it("reintenta un corte de red (fetch que lanza)", async () => {
+    let call = 0;
+    const f = (async () => {
+      call += 1;
+      if (call === 1) throw new Error("network error");
+      return new Response(JSON.stringify({ data: [], paging: {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+    await expect(listConversations(opts(f), {})).resolves.toBeDefined();
+    expect(call).toBe(2);
+  });
+});
+
 describe("listAllConversations (cursor pagination)", () => {
   it("follows paging.cursors.after until exhausted", async () => {
     const caps: Capture[] = [];

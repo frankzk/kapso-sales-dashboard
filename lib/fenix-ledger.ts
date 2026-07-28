@@ -4,8 +4,7 @@
 // automáticamente cuando una guía Fénix se entrega. Ver 0041_fenix_stock_movements.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { normalizeCity } from "./shipments";
-import { stockCoversRef, type FenixStockRow, type ProductRef } from "./fenix";
+import { fenixStockCityKey, stockCoversRef, type FenixStockRow, type ProductRef } from "./fenix";
 
 export type StockMovementKind = "entrada" | "salida_entrega" | "salida_merma" | "ajuste";
 
@@ -121,13 +120,16 @@ export async function consumeFenixStockOnDelivery(
   const orgId = (store as { org_id: string } | null)?.org_id;
   if (!orgId) return;
 
-  const city = normalizeCity(s.city);
+  // fenixStockCityKey (no normalizeCity a secas): Puno y Juliaca comparten
+  // almacén, y la elegibilidad ya valida con esa clave — el descuento debe
+  // encontrar el mismo renglón que la validación aprobó.
+  const city = fenixStockCityKey(s.city);
   const { data: stock } = await admin
     .from("fenix_stock")
     .select("id, city, product, sku, quantity")
     .eq("org_id", orgId);
   const cityRows = ((stock as (FenixStockRow & { id: string })[]) ?? []).filter(
-    (r) => normalizeCity(r.city) === city,
+    (r) => fenixStockCityKey(r.city) === city,
   );
   if (!cityRows.length) return;
 

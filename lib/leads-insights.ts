@@ -33,7 +33,11 @@ export interface TrendPoint {
 
 export interface AdvisorToday {
   name: string;
-  contactos: number; // calls logged today
+  /** Leads distintos tocados hoy por CUALQUIER acción (llamada, mensaje, cambio
+   *  de estado, "generar pedido"). Es el denominador del % de cierre — el mismo
+   *  que usa la página de Productividad, para que ambas vistas coincidan. */
+  leads: number;
+  llamadas: number; // solo kind="call" registradas hoy (subconjunto de `leads`)
   pedidos: number; // wins attributed today (last-touch)
   pedidosDetalle: { code: string | null; fecha: string | null }[]; // "#AUR1091" + "05/07/26"
 }
@@ -189,17 +193,24 @@ async function fetchQueueLeavers(sb: Sb, storeId: string, windowStartIso: string
   }
   // Un lead con gestión previa a la ventana ya había salido de la cola: fuera.
   // Chunk corto (150) para que ni un lead muy re-tocado acerque la respuesta
-  // del lookup al tope de filas.
-  for (const part of chunk([...firstInWindow.keys()], 150)) {
-    const { data } = await sb
-      .from("lead_calls")
-      .select("lead_id")
-      .eq("store_id", storeId)
-      .not("new_status", "is", null)
-      .neq("new_status", "nuevo")
-      .lt("occurred_at", windowStartIso)
-      .in("lead_id", part);
-    for (const r of (data as { lead_id: string }[]) ?? []) firstInWindow.delete(r.lead_id);
+  // del lookup al tope de filas. Los trozos NO dependen entre sí: se preguntan
+  // todos a la vez. En serie, una tienda con miles de gestiones en la semana
+  // encadenaba una decena de viajes y el panel de gráficos tardaba en aparecer.
+  const parts = chunk([...firstInWindow.keys()], 150);
+  const previous = await Promise.all(
+    parts.map((part) =>
+      sb
+        .from("lead_calls")
+        .select("lead_id")
+        .eq("store_id", storeId)
+        .not("new_status", "is", null)
+        .neq("new_status", "nuevo")
+        .lt("occurred_at", windowStartIso)
+        .in("lead_id", part),
+    ),
+  );
+  for (const { data } of previous) {
+    for (const r of (data as { lead_id: string }[] | null) ?? []) firstInWindow.delete(r.lead_id);
   }
   return [...firstInWindow.values()];
 }
@@ -407,20 +418,24 @@ export async function getLeadsInsights(
   const { trend, saldoInicio } = buildTrend({ days, pendingNow, entranByDate, cierranByDate });
 
   // Today's per-advisor productivity — reuses the Productividad aggregation
-  // (RLS-scoped, team-visible, resolves names). contactos = calls; pedidos =
-  // wins attributed by last-touch. Best-effort: never block the board.
+  // (RLS-scoped, team-visible, resolves names). pedidos = wins attributed by
+  // last-touch. El % se calcula sobre `leads` (leads trabajados), NO sobre
+  // llamadas: un pedido no requiere una llamada registrada (se puede cerrar por
+  // WhatsApp o con "Generar pedido"), así que pedidos/llamadas daba >100% y no
+  // cuadraba con el "% cierre" de Productividad. Best-effort: never block the board.
   let productivity: AdvisorToday[] = [];
   try {
     const rows = await getAdvisorProductivity([storeId], { from: todayDate, to: todayDate }, null, tz);
     productivity = rows
       .map((r) => ({
         name: r.email.includes("@") ? r.email.split("@")[0]! : r.email,
-        contactos: r.llamadas,
+        leads: r.leadsTrabajados,
+        llamadas: r.llamadas,
         pedidos: r.cerrados,
         pedidosDetalle: r.cerradosDetalle.map((o) => ({ code: o.name, fecha: shortLocalDate(o.at, tz) })),
       }))
-      .filter((r) => r.contactos > 0 || r.pedidos > 0)
-      .sort((a, b) => b.pedidos - a.pedidos || b.contactos - a.contactos);
+      .filter((r) => r.leads > 0 || r.pedidos > 0)
+      .sort((a, b) => b.pedidos - a.pedidos || b.leads - a.leads);
   } catch {
     /* best-effort */
   }

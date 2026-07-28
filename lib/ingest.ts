@@ -7,8 +7,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
+import { chunk } from "@/lib/access";
+import { recomputeOrderMasterSafe, reconcileOrderMaster } from "@/lib/order-master";
 import { fetchMetaAdMeta, normalizeMetaAdAccounts, type StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
+  buildAllOrdersSearchQuery,
   buildDraftOrdersSearchQuery,
   buildKapsoOrdersSearchQuery,
   DRAFT_OPEN_WINDOW_DAYS,
@@ -39,6 +42,7 @@ import {
   applyHandoff,
   archiveStaleLeads,
   eventOverridesDisposition,
+  expireColdHandoffs,
   flagCartAttentionWaves,
   flagOverdueFollowups,
   ingestConversationEvent,
@@ -96,6 +100,15 @@ export interface StoreCreds {
   telegram_bot_token: string | null;
   telegram_chat_id: string | null;
   meta_access_token: string | null;
+  /** API key de Anthropic de ESTA tienda; null = usa la del entorno. */
+  anthropic_api_key: string | null;
+  anthropic_model: string | null;
+  /** Token de la API de integración de Aliclik (0054). */
+  aliclik_api_token: string | null;
+  /** Secreto del webhook de Aliclik: su API no firma las notificaciones. */
+  aliclik_webhook_secret: string | null;
+  /** Interruptor por tienda de la creación de guías. */
+  aliclik_enabled: boolean;
   meta_ad_accounts: StoreMetaAdAccount[];
 }
 
@@ -148,6 +161,15 @@ export async function getStoreCreds(
     telegram_bot_token: decryptOrNull(data.telegram_bot_token_enc),
     telegram_chat_id: data.telegram_chat_id ?? null,
     meta_access_token: decryptOrNull(data.meta_access_token_enc),
+    // Pre-0052 la columna no existe (select * → undefined) ⇒ se usa la clave del
+    // entorno como respaldo, que es el comportamiento anterior.
+    anthropic_api_key: decryptOrNull(data.anthropic_api_key_enc),
+    anthropic_model: data.anthropic_model ?? null,
+    // Pre-0054 las columnas no existen (select * → undefined) ⇒ integración
+    // apagada, que es exactamente el comportamiento anterior.
+    aliclik_api_token: decryptOrNull(data.aliclik_api_token_enc),
+    aliclik_webhook_secret: decryptOrNull(data.aliclik_webhook_secret_enc),
+    aliclik_enabled: data.aliclik_enabled ?? false,
     meta_ad_accounts: normalizeMetaAdAccounts(
       data.meta_ad_accounts,
       data.meta_ad_account_id,
@@ -532,14 +554,16 @@ async function processOrderWebhook(
 ): Promise<WebhookResult> {
   const row = mapRestOrder(payload, params.storeId);
 
-  // Shopify fires order webhooks for the whole shop, but the dashboard must
-  // reflect only Kapso-attributed orders (tag:kapso) — the same set as the
-  // GraphQL reconciliation sync and the Shopify "tag:kapso" view (DEPLOY.md §7).
-  // Drop anything else without recording it; there's nothing for Shopify to
-  // retry, and orders the bot tags after creation arrive via orders/updated.
-  if (!hasKapsoTag(row.tags)) {
-    return { status: "ok" };
-  }
+  // Shopify dispara los webhooks de pedidos para TODA la tienda. El Master de
+  // Pedidos necesita ese universo completo (§1: "todos los pedidos gestionados
+  // por las dos tiendas"), así que ya no se descartan los que no llevan
+  // `tag:kapso` — se ingestan igual.
+  //
+  // Lo que sigue siendo exclusivo de los pedidos del bot son los EFECTOS: los
+  // rollups y el vínculo con el lead. Las métricas de ventas/embudo se calculan
+  // sobre tag:kapso en `recompute_daily_rollups` y en lib/access.ts:getOrders,
+  // así que ampliar la ingesta no mueve ninguna cifra histórica.
+  const isKapsoOrder = hasKapsoTag(row.tags);
 
   const orderId = payload?.id != null ? String(payload.id) : null;
 
@@ -558,13 +582,13 @@ async function processOrderWebhook(
 
   await upsertOrders(admin, [row]);
 
-  if (row.created_at) {
+  if (isKapsoOrder && row.created_at) {
     const { date } = tzParts(row.created_at, creds.timezone);
     await recomputeRollups(admin, params.storeId, date, date);
   }
 
   // Link the order to its lead (won), best-effort.
-  if (row.customer_phone) {
+  if (isKapsoOrder && row.customer_phone) {
     try {
       const { data: ord } = await admin
         .from("orders")
@@ -583,6 +607,20 @@ async function processOrderWebhook(
     } catch {
       /* best-effort */
     }
+  }
+
+  // El pedido acaba de entrar o cambiar (incluida una anulación en Shopify, que
+  // es la fuente principal del estado Anulado — §3.4): refresca su fila del Master.
+  try {
+    const { data: ord } = await admin
+      .from("orders")
+      .select("id")
+      .eq("store_id", params.storeId)
+      .eq("shopify_order_id", row.shopify_order_id)
+      .maybeSingle();
+    if (ord?.id) await recomputeOrderMasterSafe(admin, [ord.id as string]);
+  } catch {
+    /* best-effort: el barrido del cron lo pondrá al día */
   }
 
   await admin
@@ -680,6 +718,7 @@ export interface SyncReport {
   dripSent: number; // plantillas de seguimiento enviadas esta corrida
   cartSeqSent: number; // plantillas de carrito abandonado enviadas esta corrida
   requeued: number; // carritos reencolados con atención (olas, máx 2 por lead)
+  orderMaster: number; // filas del Master reconciliadas en esta corrida
   errors: string[];
 }
 
@@ -754,6 +793,7 @@ export async function runStoreSync(
     dripSent: 0,
     cartSeqSent: 0,
     requeued: 0,
+    orderMaster: 0,
     errors: [],
   };
   const creds = await getStoreCreds(storeId, admin);
@@ -796,6 +836,59 @@ export async function runStoreSync(
     } catch (e: any) {
       report.errors.push(`shopify: ${e.message}`);
       await setSyncState(admin, storeId, "shopify", null, "error", e.message);
+    }
+  }
+
+  // 1a-bis) Reconciliación SIN filtro de tag, para el Master de Pedidos.
+  //     Segunda pasada con su propio cursor (`shopify_all`) para no interferir
+  //     con el de la pasada tag:kapso. Trae el resto de pedidos de la tienda —
+  //     los del formulario web/COD, los creados a mano — que el Master necesita
+  //     y que las métricas siguen sin contar (filtran por tag:kapso).
+  //     Acotada por ORDERS_SYNC_FROM para no arrastrar años de histórico.
+  //     try/catch propio: si esta pasada falla, la sincronización del bot y de
+  //     los leads sigue funcionando igual.
+  if (creds.shopify_token) {
+    try {
+      const cursor = await getSyncCursor(admin, storeId, "shopify_all");
+      const searchQuery = buildAllOrdersSearchQuery(cursor, env.ordersSyncFrom());
+      let after: string | null = null;
+      let maxUpdatedAt = cursor;
+      const touched: string[] = [];
+      for (let i = 0; i < 50; i++) {
+        const page = await fetchOrdersPage({
+          domain: creds.shopify_domain,
+          token: creds.shopify_token,
+          storeId,
+          searchQuery,
+          after,
+        });
+        if (page.orders.length) {
+          await upsertOrders(admin, page.orders);
+          report.shopifyOrders += page.orders.length;
+          for (const o of page.orders) touched.push(o.shopify_order_id);
+        }
+        if (page.maxUpdatedAt && (!maxUpdatedAt || page.maxUpdatedAt > maxUpdatedAt)) {
+          maxUpdatedAt = page.maxUpdatedAt;
+        }
+        if (!page.hasNextPage) break;
+        after = page.endCursor;
+      }
+      await setSyncState(admin, storeId, "shopify_all", maxUpdatedAt, "ok");
+      // Refresca el Master para los pedidos que acaba de tocar esta pasada.
+      for (const batch of chunk(touched, 200)) {
+        const { data } = await admin
+          .from("orders")
+          .select("id")
+          .eq("store_id", storeId)
+          .in("shopify_order_id", batch);
+        await recomputeOrderMasterSafe(
+          admin,
+          ((data ?? []) as { id: string }[]).map((r) => r.id),
+        );
+      }
+    } catch (e: any) {
+      report.errors.push(`shopify_all: ${e.message}`);
+      await setSyncState(admin, storeId, "shopify_all", null, "error", e.message);
     }
   }
 
@@ -947,6 +1040,17 @@ export async function runStoreSync(
     report.errors.push(`waves: ${e.message}`);
   }
 
+  // 2c.7) Expira handoffs FRÍOS: los que el bot derivó, nadie atendió y el
+  //       cliente abandonó (>24h sin escribir) salen de "Atender ahora" y bajan
+  //       a la cola normal. Es el reductor automático que evita que esa cola
+  //       solo crezca. Va DESPUÉS de las olas para no pisar una atención de ola
+  //       recién puesta. Best-effort.
+  try {
+    await expireColdHandoffs(admin, storeId);
+  } catch (e: any) {
+    report.errors.push(`handoffs: ${e.message}`);
+  }
+
   // 2d) Auto-archivar leads vencidos viejos (sin interacción > STALE_LEAD_DAYS)
   //     para que la cola "Por llamar" no se reacumule de backlog. Best-effort.
   try {
@@ -1029,6 +1133,16 @@ export async function runStoreSync(
     } catch (e: any) {
       report.errors.push(`rollups: ${e.message}`);
     }
+  }
+
+  // Red de seguridad del Master: cualquier ruta que haya tocado una guía sin
+  // recalcular deja aquí su fila al día. También es lo que rellena el Master la
+  // primera vez, sin necesidad de un backfill manual.
+  try {
+    const reconciled = await reconcileOrderMaster(admin, [storeId]);
+    report.orderMaster = reconciled.written;
+  } catch (e: any) {
+    report.errors.push(`order_master: ${e.message}`);
   }
 
   return report;

@@ -61,10 +61,13 @@ import {
   releaseShipment,
   renewShipmentClaim,
   searchShipments,
+  updateShipmentCallNote,
   updateShipmentDeliveryAddress,
   type ShipmentAddressInput,
 } from "@/app/dashboard/envios/actions";
+import { ChecklistFilter } from "@/components/filters";
 import { OrderLinkPicker } from "@/components/order-link-picker";
+import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import {
   currentFenixReason,
   matchesFenixAvailability,
@@ -255,6 +258,8 @@ export function ShipmentsBoard({
   const [reprogFilter, setReprogFilter] = useState<"all" | ReprogramCourier>("all");
   const [exportingFenix, setExportingFenix] = useState(false);
   const [fenixExportError, setFenixExportError] = useState<string | null>(null);
+  const [directGuideOpen, setDirectGuideOpen] = useState(false);
+  const [directGuideCreatedId, setDirectGuideCreatedId] = useState<string | null>(null);
 
   // global search (across all tabs, server-side)
   const [search, setSearch] = useState("");
@@ -411,6 +416,41 @@ export function ShipmentsBoard({
     }, 2400);
   }
 
+  /**
+   * Al cerrar el modal de guía directa, lleva a la pestaña donde la guía
+   * realmente nació (En ruta) y la resalta. Sin esto, crearla desde Pendiente
+   * parece no hacer nada: el refresco ocurre, pero la guía nueva no pertenece a
+   * esa lista. Limpia además los filtros del cliente (fecha, tienda, distrito…)
+   * que podrían esconderla.
+   */
+  function handleDirectGuideModalClosed() {
+    setDirectGuideOpen(false);
+    const createdId = directGuideCreatedId;
+    if (!createdId) return;
+    setDirectGuideCreatedId(null);
+
+    setStoreFilter(new Set());
+    setDepartmentFilter(new Set());
+    setDistrictFilter(new Set());
+    setDateFilter("");
+    setUnmatchedOnly(false);
+    setUncontactedTodayOnly(false);
+    setUncontactedOnly(false);
+    setFenixFilter("all");
+    setAliclikRouteFilter("all");
+    setReprogFilter("all");
+    setSearch("");
+
+    if (view !== "en_ruta") go({ view: "en_ruta" });
+    router.refresh();
+
+    setRecentlyUpdatedId(createdId);
+    if (updatedRowTimerRef.current) clearTimeout(updatedRowTimerRef.current);
+    updatedRowTimerRef.current = setTimeout(() => {
+      setRecentlyUpdatedId((current) => (current === createdId ? null : current));
+    }, 6000);
+  }
+
   async function downloadFenixProgrammingWorkbook() {
     if (!dateFilter || !fenixRowsForExport.length || exportingFenix) return;
     setExportingFenix(true);
@@ -478,6 +518,12 @@ export function ShipmentsBoard({
           >
             Importar reporte
           </a>
+          <button
+            onClick={() => setDirectGuideOpen(true)}
+            className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-1.5 text-sm font-medium text-orange-800 hover:bg-orange-100"
+          >
+            Guía Fenix directa
+          </button>
           <a
             href="/dashboard/envios/stock"
             className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
@@ -779,6 +825,18 @@ export function ShipmentsBoard({
           onShipmentUpdated={handleShipmentUpdated}
         />
       )}
+
+      {directGuideOpen && (
+        <DirectFenixGuideModal
+          onClose={handleDirectGuideModalClosed}
+          onCreated={(shipmentId) => {
+            // Refresca ya (contadores/pestañas) y recuerda la guía para saltar a
+            // "En ruta" y resaltarla cuando se cierre el modal.
+            setDirectGuideCreatedId(shipmentId ?? null);
+            router.refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -846,6 +904,9 @@ function ShipmentTable({
                 {s.guide_code}
                 {s.courier === "fenix" && (
                   <span className="ml-1 rounded bg-orange-50 px-1 text-[10px] text-orange-700">Fenix</span>
+                )}
+                {s.created_via === "fenix_directo" && (
+                  <span className="ml-1 rounded bg-indigo-50 px-1 text-[10px] text-indigo-700">Directa</span>
                 )}
               </td>
               {stores.length > 1 && (
@@ -1293,6 +1354,14 @@ function ShipmentDrawer({
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="font-mono text-sm font-semibold text-slate-800">{detail.shipment.guide_code}</p>
+                  {detail.shipment.created_via === "fenix_directo" && (
+                    <span
+                      className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700"
+                      title="Guía Fenix directa: creada desde el pedido, sin guía Aliclik previa"
+                    >
+                      Directa
+                    </span>
+                  )}
                   <StatusBadge
                     category={detail.shipment.status_category}
                     status={detail.shipment.delivery_status}
@@ -2116,7 +2185,7 @@ function ShipmentDrawer({
 
             </fieldset>
 
-            <ShipmentGuideHistory guides={detail.guideHistory} />
+            <ShipmentGuideHistory guides={detail.guideHistory} onSaved={refresh} />
           </div>
         )}
       </div>
@@ -2124,7 +2193,13 @@ function ShipmentDrawer({
   );
 }
 
-function ShipmentGuideHistory({ guides }: { guides: ShipmentHistoryGuide[] }) {
+function ShipmentGuideHistory({
+  guides,
+  onSaved,
+}: {
+  guides: ShipmentHistoryGuide[];
+  onSaved: () => void;
+}) {
   return (
     <section className="space-y-2.5 rounded-xl border border-violet-200 bg-violet-50/45 p-2.5">
       <div className="flex items-center justify-between gap-3">
@@ -2179,7 +2254,11 @@ function ShipmentGuideHistory({ guides }: { guides: ShipmentHistoryGuide[] }) {
                           : "bg-sky-100 text-sky-700",
                       )}
                     >
-                      {guide.courier === "fenix" ? "Fenix" : "Aliclik"}
+                      {guide.courier === "fenix"
+                        ? guide.created_via === "fenix_directo"
+                          ? "Fenix directa"
+                          : "Fenix"
+                        : "Aliclik"}
                     </span>
                     {guide.is_current && (
                       <span className="rounded-full bg-brand-600 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">
@@ -2198,34 +2277,13 @@ function ShipmentGuideHistory({ guides }: { guides: ShipmentHistoryGuide[] }) {
                 <p className="px-3 py-2.5 text-xs text-slate-400">Sin gestiones registradas en esta guía.</p>
               ) : (
                 <ul className="divide-y divide-slate-100">
-                  {guide.calls.map((call, callIndex) => {
-                    const occurredAt = fmtStatusSince(call.occurred_at ?? null);
-                    return (
-                      <li key={call.id ?? `${guide.id}-${callIndex}`} className="px-3 py-2 text-xs text-slate-600">
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="font-medium text-slate-700">
-                            {shipmentHistoryLabel(call)}
-                            {call.new_status ? ` → ${labelOf(call.new_status)}` : ""}
-                          </span>
-                          <span className="shrink-0 text-right text-[10px] leading-tight text-slate-400">
-                            {occurredAt && <span className="block">{occurredAt}</span>}
-                            {call.agent_name && <span className="block">{call.agent_name}</span>}
-                          </span>
-                        </div>
-                        {call.note && <p className="mt-0.5 leading-relaxed text-slate-600">{call.note}</p>}
-                        {call.next_followup_at && (
-                          <p className="mt-0.5 text-slate-500">
-                            {call.new_status === "en_ruta"
-                              ? "Fecha de reprogramación"
-                              : call.new_status
-                                ? "Próximo intento"
-                                : "Próxima llamada"}
-                            : {fmtReprogram(call.next_followup_at)}
-                          </p>
-                        )}
-                      </li>
-                    );
-                  })}
+                  {guide.calls.map((call, callIndex) => (
+                    <HistoryCallItem
+                      key={call.id ?? `${guide.id}-${callIndex}`}
+                      call={call}
+                      onSaved={onSaved}
+                    />
+                  ))}
                 </ul>
               )}
             </article>
@@ -2236,94 +2294,118 @@ function ShipmentGuideHistory({ guides }: { guides: ShipmentHistoryGuide[] }) {
   );
 }
 
-/** Generic checklist filter. Empty selection means no restriction. */
-function ChecklistFilter({
-  label,
-  options,
-  selected,
-  onChange,
-}: {
-  label: string;
-  options: string[];
-  selected: Set<string>;
-  onChange: (next: Set<string>) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [q, setQ] = useState("");
-  const boxRef = useRef<HTMLDivElement>(null);
+/** Una gestión del historial con su nota editable (cualquiera con acceso puede
+ *  corregirla; queda marcada como "editada" con quién y cuándo). */
+function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(call.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const occurredAt = fmtStatusSince(call.occurred_at ?? null);
+  const editedAt = fmtStatusSince(call.note_edited_at ?? null);
 
-  useEffect(() => {
-    function onDoc(e: MouseEvent) {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+  async function save() {
+    if (!call.id) return;
+    setSaving(true);
+    setError(null);
+    const res = await updateShipmentCallNote(call.id, draft);
+    setSaving(false);
+    if (res.error) {
+      setError(res.error);
+      return;
     }
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, []);
-
-  const term = q.trim().toLowerCase();
-  const shown = term ? options.filter((o) => o.toLowerCase().includes(term)) : options;
-
-  function toggle(city: string) {
-    const next = new Set(selected);
-    if (next.has(city)) next.delete(city);
-    else next.add(city);
-    onChange(next);
+    setEditing(false);
+    onSaved();
   }
 
   return (
-    <div ref={boxRef} className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className={cn(
-          "rounded-lg border px-2.5 py-1 text-xs font-medium",
-          selected.size > 0
-            ? "border-brand-200 bg-brand-50 text-brand-700"
-            : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
-        )}
-      >
-        {label}{selected.size > 0 ? ` (${selected.size})` : ""} ▾
-      </button>
-      {open && (
-        <div className="absolute left-0 z-10 mt-1 w-60 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
-          <input
+    <li className="px-3 py-2 text-xs text-slate-600">
+      <div className="flex items-start justify-between gap-3">
+        <span className="font-medium text-slate-700">
+          {shipmentHistoryLabel(call)}
+          {call.new_status ? ` → ${labelOf(call.new_status)}` : ""}
+        </span>
+        <span className="shrink-0 text-right text-[10px] leading-tight text-slate-400">
+          {occurredAt && <span className="block">{occurredAt}</span>}
+          {call.agent_name && <span className="block">{call.agent_name}</span>}
+        </span>
+      </div>
+
+      {editing ? (
+        <div className="mt-1 space-y-1">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={2}
             autoFocus
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder={`Buscar ${label.toLowerCase()}…`}
-            className="mb-2 w-full rounded border border-slate-200 px-2 py-1 text-xs"
+            className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 focus:border-violet-400 focus:outline-none"
+            placeholder="Nota de la gestión…"
           />
-          {selected.size > 0 && (
+          {error && <p className="text-[10px] text-red-600">{error}</p>}
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => onChange(new Set())}
-              className="mb-1 text-xs text-slate-500 hover:underline"
+              onClick={save}
+              disabled={saving}
+              className="rounded-md bg-violet-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
             >
-              Limpiar selección
+              {saving ? "Guardando…" : "Guardar"}
+            </button>
+            <button
+              onClick={() => {
+                setEditing(false);
+                setDraft(call.note ?? "");
+                setError(null);
+              }}
+              disabled={saving}
+              className="text-[11px] text-slate-500 hover:underline"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-0.5 flex items-start justify-between gap-2">
+          <p className="leading-relaxed text-slate-600">
+            {call.note || <span className="italic text-slate-400">Sin nota</span>}
+          </p>
+          {call.id && (
+            <button
+              onClick={() => {
+                setDraft(call.note ?? "");
+                setEditing(true);
+              }}
+              className="shrink-0 text-[10px] font-medium text-violet-600 hover:underline"
+              title="Editar nota"
+            >
+              ✏️ Editar
             </button>
           )}
-          <ul className="max-h-60 overflow-y-auto">
-            {shown.map((city) => (
-              <li key={city}>
-                <label className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-sm capitalize hover:bg-slate-50">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(city)}
-                    onChange={() => toggle(city)}
-                    className="h-3.5 w-3.5"
-                  />
-                  <span className="text-slate-700">{city}</span>
-                </label>
-              </li>
-            ))}
-            {shown.length === 0 && (
-              <li className="px-1.5 py-1 text-xs text-slate-400">Sin coincidencias.</li>
-            )}
-          </ul>
         </div>
       )}
-    </div>
+
+      {call.note_edited_at && !editing && (
+        <p className="mt-0.5 text-[10px] italic text-slate-400">
+          editada
+          {call.note_editor_name ? ` por ${call.note_editor_name}` : ""}
+          {editedAt ? ` · ${editedAt}` : ""}
+        </p>
+      )}
+
+      {call.next_followup_at && (
+        <p className="mt-0.5 text-slate-500">
+          {call.new_status === "en_ruta"
+            ? "Fecha de reprogramación"
+            : call.new_status
+              ? "Próximo intento"
+              : "Próxima llamada"}
+          : {fmtReprogram(call.next_followup_at)}
+        </p>
+      )}
+    </li>
   );
 }
 
+/** Generic checklist filter. Empty selection means no restriction. */
 function Field({
   label,
   value,

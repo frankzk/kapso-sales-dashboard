@@ -18,7 +18,7 @@ import {
 import { env } from "@/lib/env";
 import { analyzeYapeVoucher } from "@/lib/vision";
 import type { StoreCreds } from "@/lib/ingest";
-import { deriveAutoState, nextLeadState } from "@/lib/leads";
+import { deriveAutoState, nextLeadState, statusDef } from "@/lib/leads";
 import { tzParts } from "@/lib/metrics";
 import { normalizePhone } from "@/lib/phone";
 import {
@@ -247,10 +247,20 @@ async function upsertLeadFromSeed(
 export async function syncStoreLeads(
   admin: SupabaseClient,
   storeId: string,
-  creds: { kapso_api_key: string | null; whatsapp_phone_number_id: string | null },
+  creds: {
+    kapso_api_key: string | null;
+    whatsapp_phone_number_id: string | null;
+    /** Clave de visión de esta tienda; vacía = la del entorno (0052). */
+    anthropic_api_key?: string | null;
+    anthropic_model?: string | null;
+  },
 ): Promise<SyncLeadsResult> {
   if (!creds.kapso_api_key) return { touched: 0, enriched: { ...ZERO_ENRICH } };
   const k: KapsoClientOpts = { apiKey: creds.kapso_api_key };
+  const vision = {
+    anthropicApiKey: creds.anthropic_api_key ?? null,
+    anthropicModel: creds.anthropic_model ?? null,
+  };
   const cursor = await getCursor(admin, storeId);
 
   let convs;
@@ -285,7 +295,7 @@ export async function syncStoreLeads(
     // existing open queue (the 66 leads sitting in "Por llamar").
     let enriched: LeadEnrichStats = { ...ZERO_ENRICH };
     try {
-      enriched = await enrichLeadsFromConversations(admin, storeId, k, new Map());
+      enriched = await enrichLeadsFromConversations(admin, storeId, k, new Map(), vision);
     } catch {
       /* best-effort */
     }
@@ -377,7 +387,7 @@ export async function syncStoreLeads(
   // in-chat, there's no Shopify draft order. Best-effort; bounded per run.
   let enriched: LeadEnrichStats = { ...ZERO_ENRICH };
   try {
-    enriched = await enrichLeadsFromConversations(admin, storeId, k, seeds);
+    enriched = await enrichLeadsFromConversations(admin, storeId, k, seeds, vision);
   } catch {
     /* enrichment is best-effort — never blocks the lead sync */
   }
@@ -449,6 +459,8 @@ async function enrichLeadsFromConversations(
   storeId: string,
   k: KapsoClientOpts,
   seeds: Map<string, ReturnType<typeof conversationToLeadSeed>>,
+  /** Clave y modelo de visión de ESTA tienda; vacíos = los del entorno (0052). */
+  vision: { anthropicApiKey?: string | null; anthropicModel?: string | null } = {},
 ): Promise<LeadEnrichStats> {
   const stats: LeadEnrichStats = { ...ZERO_ENRICH };
   const convIds = new Set<string>();
@@ -470,8 +482,11 @@ async function enrichLeadsFromConversations(
 
   // Vision check is opt-in (needs ANTHROPIC_API_KEY); build the analyzer once so
   // the per-conversation gate is cheap. Bounded per run by `visionRemaining`.
-  const visionKey = env.anthropicApiKey();
-  const visionModel = env.yapeVisionModel();
+  // La clave de la TIENDA manda sobre la del entorno: así el gasto de visión de
+  // cada tienda cae en su propia cuenta de Anthropic (0052). El entorno queda
+  // como respaldo para las tiendas que no tengan clave propia.
+  const visionKey = vision.anthropicApiKey || env.anthropicApiKey();
+  const visionModel = vision.anthropicModel || env.yapeVisionModel();
   const visionApiBase = env.anthropicApiBase();
   const visionAnalyze: YapeVisionAnalyzer | null = visionKey
     ? (b64, ct) => analyzeYapeVoucher(b64, ct, { apiKey: visionKey, model: visionModel, apiBase: visionApiBase })
@@ -509,6 +524,20 @@ async function enrichLeadsFromConversations(
         // the draft (linkDraftOrdersToLeads) is the source of truth; this WhatsApp
         // parse is only the fallback for leads that have no draft.
         .is("draft_order_gid", null);
+    }
+
+    // Opener context: what the customer wrote FIRST, so the advisor has a hook
+    // instead of a blank "hola". Write-once (`is null`) — the first message never
+    // changes, so a later page that can't read it must never blank it. Its own
+    // statement (not the patch above) because the draft-order guard there is
+    // about cart/district ownership and would skip leads that have a draft.
+    if ((sig.first_inbound_text ?? "").trim()) {
+      await admin
+        .from("leads")
+        .update({ first_inbound_text: sig.first_inbound_text })
+        .eq("store_id", storeId)
+        .eq("kapso_conversation_id", convId)
+        .is("first_inbound_text", null);
     }
 
     // Source attribution: a Click-to-WhatsApp ad referral on the conversation's
@@ -575,6 +604,37 @@ export async function flagOverdueFollowups(admin: SupabaseClient, storeId: strin
     .not("next_followup_at", "is", null)
     .lte("next_followup_at", new Date().toISOString())
     .eq("needs_attention", false)
+    .select("id");
+  return (data as { id: string }[] | null)?.length ?? 0;
+}
+
+/** Horas desde el handoff tras las que, sin atender, sale de "Atender ahora".
+ *  Debe coincidir con HANDOFF_FRESH_HOURS de la vista (la faceta muestra los de
+ *  <24h; el cron expira los >24h — mismo borde, ambos sobre handoff_at). */
+export const HANDOFF_EXPIRE_HOURS = 24;
+
+/** Expira handoffs viejos: el bot derivó hace >HANDOFF_EXPIRE_HOURS y nadie lo
+ *  atendió → apaga `needs_attention` para que salga de "Atender ahora" y baje a
+ *  la cola normal (Sin llamar), ya sin urgencia. Es el reductor automático que
+ *  evita que la cola solo crezca con los que nunca se atendieron. Se mide por
+ *  handoff_at (no last_inbound_at, que applyHandoff no puebla). Solo toca
+ *  handoffs PUROS nunca gestionados: excluye los que tienen una ola de
+ *  reencolado (attention_waves>0) o un seguimiento agendado (next_followup_at)
+ *  — esa atención es legítima y de otra fuente. Idempotente. */
+export async function expireColdHandoffs(
+  admin: SupabaseClient,
+  storeId: string,
+  nowMs = Date.now(),
+): Promise<number> {
+  const cutoff = new Date(nowMs - HANDOFF_EXPIRE_HOURS * 3_600_000).toISOString();
+  const { data } = await admin
+    .from("leads")
+    .update({ needs_attention: false })
+    .eq("store_id", storeId)
+    .eq("needs_attention", true)
+    .is("next_followup_at", null)
+    .lt("handoff_at", cutoff)
+    .or("attention_waves.is.null,attention_waves.eq.0")
     .select("id");
   return (data as { id: string }[] | null)?.length ?? 0;
 }
@@ -1782,20 +1842,47 @@ export async function applyHandoff(
     handoff_at: new Date().toISOString(),
   };
 
+  const auto = deriveAutoState({ handoffReason: info.reason ?? undefined, handoffContext: info.context });
+
   if (existing?.has_order) {
-    // Already won — keep state, just record the context.
-    await admin.from("leads").update(handoffFields).eq("store_id", storeId).eq("phone", info.phone);
+    // Ya ganado: NO se toca status/category (sigue siendo un pedido generado),
+    // pero SÍ se marca para atención. Un cliente que YA COMPRÓ y está esperando
+    // respuesta necesita atención igual —consulta post-venta, problema con el
+    // envío, quiere agregar algo—, y muchas veces es el más importante. Antes
+    // esta rama solo guardaba el contexto, así que el handoff quedaba registrado
+    // (handoff_at seteado) pero el lead NUNCA aparecía en "Atender ahora": se
+    // perdía en silencio.
+    await admin
+      .from("leads")
+      .update({ ...handoffFields, needs_attention: auto.needsAttention })
+      .eq("store_id", storeId)
+      .eq("phone", info.phone);
     return { ok: true };
   }
 
-  const auto = deriveAutoState({ handoffReason: info.reason ?? undefined, handoffContext: info.context });
+  // Un handoff NO debe borrar la disposición que una asesora puso a mano. El lead
+  // sube a "Atender ahora" por needs_attention CONSERVANDO su estado; si no, un
+  // "Volver a llamar" se degradaría a "casi_cierra" y un "Ya compró en otro lado"
+  // (o "Lista negra") se resucitaría como lead caliente. Importa sobre todo con
+  // handoffs de alto volumen (el watchdog de "clientes esperando respuesta"),
+  // donde cualquier cliente que escribe sin que el bot conteste genera un handoff.
+  // EXCEPCIÓN: un handoff de pago/logística (yape_por_verificar) sí manda — es la
+  // vía por la que un voucher llega a la pestaña Yape/Shalom.
+  // SIN MOTIVO tampoco se reclasifica nada: un handoff sin `reason` no trae
+  // ninguna señal, y deriveAutoState devolvería "nuevo"/open — o sea que un POST
+  // espurio degradaría a "nuevo" un lead que ya venía trabajado. Pasa de verdad:
+  // el notify-team de Aurela postea también en el flujo de voucher, que no manda
+  // reason. Un lead que NO existe sí se crea con el estado derivado (nuevo), que
+  // es lo correcto.
+  const advisorOwns = existing?.status ? statusDef(existing.status)?.source === "manual" : false;
+  const keepStatus =
+    existing != null && (!info.reason || (advisorOwns && auto.status !== "yape_por_verificar"));
   const row: any = {
     store_id: storeId,
     phone: info.phone,
     kapso_conversation_id: info.conversationId,
     ...handoffFields,
-    status: auto.status,
-    category: auto.category,
+    ...(keepStatus ? {} : { status: auto.status, category: auto.category }),
     needs_attention: auto.needsAttention,
     last_interaction_at: new Date().toISOString(),
   };
@@ -1814,7 +1901,7 @@ export async function applyHandoff(
       lead_id: lead.id,
       store_id: storeId,
       kind: "system",
-      new_status: auto.status,
+      new_status: keepStatus ? existing!.status : auto.status,
       note: info.context,
     });
   }

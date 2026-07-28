@@ -48,6 +48,14 @@ export interface OrderShippingAddress {
   province: string | null;
   name: string | null;
   phone: string | null;
+  /**
+   * Coordenadas que Shopify geocodifica de la dirección. Llegan en el mismo
+   * `shipping_address` de siempre; durante mucho tiempo no se leyeron porque la
+   * consulta GraphQL no las pedía. Son las que Aliclik exige para cotizar y
+   * crear una guía.
+   */
+  latitude: number | null;
+  longitude: number | null;
 }
 
 export interface ShipmentOrderDetail {
@@ -199,6 +207,8 @@ export interface LeadRow {
   address1?: string | null; // shippingAddress.address1 (calle) — 0032
   ship_name?: string | null; // shipping recipient (draft customer_name) — 0032
   inbound_count?: number | null;
+  /** First message the customer wrote — opener context for the advisor (0044). */
+  first_inbound_text?: string | null;
   // Source / channel attribution (0008). 'meta_ad' = structured Click-to-WhatsApp
   // referral (real ad_id); 'fb_web' = reached WhatsApp via a Facebook/IG web link
   // (utm_source=facebook/fbclid, no ad_id); 'cod_cart'/'abandoned_browse' = flows;
@@ -262,7 +272,18 @@ export interface ShipmentRow {
   /** Current stock evaluation, added at read time for the Envios UI. */
   fenix_reason?: "ok" | "sin_stock" | "sin_cobertura";
   fenix_shipment_id: string | null;
+  /** 'fenix_directo' = guía creada desde un pedido, sin guía Aliclik madre. */
+  created_via?: string | null;
   delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado
+  /**
+   * Shalom identifica un envío con DOS cosas en su panel: el nº de orden
+   * (`guide_code`) y un código corto (`77PH`). Sin el corto hay que abrir cada
+   * envío en pro.shalom.pe para saber cuál es cuál. Nulo en las guías que
+   * llegaron por el reporte Excel; solo lo traen las creadas por API (0061).
+   */
+  shalom_codigo?: string | null;
+  /** Id con el que Shalom sirve el rótulo PDF. Solo en las creadas por API. */
+  shalom_ose_id?: number | null;
   /** Delivery attempts reported by Aliclik's daily Excel (NRO. INTENTOS). */
   aliclik_attempts: number | null;
   /** Operative delivery date reported by Aliclik, as YYYY-MM-DD. */
@@ -301,6 +322,7 @@ export interface LinkedShipmentSummary {
 
 export interface ShipmentHistoryGuide extends LinkedShipmentSummary {
   fenix_shipment_id: string | null;
+  created_via?: string | null;
   created_at: string | null;
   is_current: boolean;
   calls: ShipmentCallRow[];
@@ -317,6 +339,9 @@ export interface ShipmentCallRow {
   next_followup_at: string | null;
   occurred_at?: string;
   agent_name?: string | null; // resolved display name (UI only)
+  note_edited_at?: string | null; // set when the note was edited after the fact
+  note_edited_by?: string | null; // user id who last edited the note
+  note_editor_name?: string | null; // resolved display name of the editor (UI only)
 }
 
 export interface FenixStockRowDb {
@@ -329,6 +354,91 @@ export interface FenixStockRowDb {
   updated_by: string | null;
   updated_at?: string;
   created_at?: string;
+}
+
+// ── Master de Pedidos ───────────────────────────────────────────────────────
+
+/** Una fila del Master: el read-model materializado en `order_master` (0045). */
+/**
+ * Una fila del Master. Los campos OPCIONALES son los que el listado no manda
+ * (ver MASTER_COLUMNS en lib/orders-master-access.ts): pagar su nombre y su
+ * valor diez mil veces por carga no compensa cuando solo se leen al abrir un
+ * pedido. El detalle sí los trae completos.
+ */
+export interface OrderMasterRow {
+  id: string;
+  store_id: string;
+  order_id: string;
+  order_name: string | null;
+  shopify_order_id?: string;
+  order_created_at: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  region: string | null;
+  province: string | null;
+  district: string | null;
+  address?: string | null;
+  reference?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  /** Origen de la ubicación: manual | courier | ubigeo | shopify | draft. */
+  geo_source?: string | null;
+  shipping_mode: string | null; // cod | agency
+  order_total: number | null;
+  general_status: string;
+  operational_status: string;
+  status_since: string | null;
+  status_source?: string | null;
+  status_locked: boolean;
+  current_courier: string | null;
+  last_courier: string | null;
+  courier_count: number;
+  attempt_count: number;
+  guide_code: string | null;
+  dispatched_at: string | null;
+  delivered_at: string | null;
+  delivered_courier?: string | null;
+  returned_at?: string | null;
+  last_movement_at: string | null;
+  comment_count: number;
+  logistics_cost: number | null;
+  /** Seguimiento de agencia (Shalom/Olva): ver §10 de la especificación. */
+  pickup_state: string | null;
+  /** Indicadores del cobro Yape y de la clave de recojo (Shalom). */
+  payment_state: string | null;
+  key_state: string | null;
+  agency_branch: string | null;
+  agency_arrived_at: string | null;
+  agency_expires_at: string | null;
+  recomputed_at?: string;
+  updated_at?: string;
+}
+
+/** Un movimiento de la línea de tiempo (`order_events`, append-only). */
+export interface OrderEventRow {
+  id: string;
+  store_id: string;
+  order_id: string;
+  kind: string;
+  occurred_at: string;
+  actor: string | null;
+  source: string;
+  courier: string | null;
+  guide_code: string | null;
+  previous_status: string | null;
+  new_status: string | null;
+  previous_operational: string | null;
+  new_operational: string | null;
+  attempt_number: number | null;
+  reason: string | null;
+  note: string | null;
+  comment_type: string | null;
+  shipment_id: string | null;
+  batch_id: string | null;
+  payload?: Record<string, unknown>;
+  created_at?: string;
+  /** Nombre resuelto de quien lo registró (solo UI). */
+  actor_name?: string | null;
 }
 
 export interface ImportBatchRow {

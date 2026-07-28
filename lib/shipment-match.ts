@@ -3,10 +3,21 @@
 // Aliclik guide belongs to. Pure + tested; the DB wrapper lives in
 // lib/aliclik-ingest.ts.
 
-import type { ParsedShipmentRow } from "./aliclik-import";
 import { normalizeOrderName } from "./aliclik-import";
 
 export type MatchMethod = "order_name" | "order_name_phone" | "phone" | "none";
+
+/**
+ * Lo mínimo que hace falta para emparejar una fila de reporte con un pedido.
+ * Se define estructuralmente (en vez de atarlo a `ParsedShipmentRow`) para que
+ * cualquier adaptador de courier —no solo el de Aliclik— pueda usar el mismo
+ * emparejador. `ParsedShipmentRow` y `CanonicalReportRow` lo cumplen tal cual.
+ */
+export interface MatchableRow {
+  order_name: string | null;
+  order_name_confirmed: boolean;
+  customer_phone: string | null;
+}
 
 export interface OrderCandidate {
   id: string;
@@ -39,7 +50,7 @@ export interface MatchResult {
  *   2) by phone — only when exactly one order carries that phone.
  * Ambiguous (multiple) or zero matches → review (no order linked).
  */
-export function matchShipment(row: ParsedShipmentRow, candidates: OrderCandidate[]): MatchResult {
+export function matchShipment(row: MatchableRow, candidates: OrderCandidate[]): MatchResult {
   // 1) order name
   const wantName = normalizeOrderName(row.order_name);
   if (wantName) {

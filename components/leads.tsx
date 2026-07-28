@@ -2,12 +2,18 @@
 
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useEffect, useRef, useState, useTransition } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
 import type { AdMeta } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import { type CustomerHistory, type LeadCounts, type LeadView } from "@/lib/leads-access";
+import { facetItems } from "@/lib/leads-facets";
 import type { LeadsInsights } from "@/lib/leads-insights";
+import {
+  buildMetaAudienceCsv,
+  buildMetaAudienceRows,
+  metaAudienceFilename,
+} from "@/lib/meta-audience";
 import {
   LEAD_GESTIONES,
   QUEUE_STATES,
@@ -19,6 +25,7 @@ import {
   gestionOf,
   isClaimActive,
   labelOf,
+  leadHook,
   leadSegment,
   matchesLeadInteractionDate,
   leadWindowInfo,
@@ -26,6 +33,7 @@ import {
   yapeKind,
   type LeadGestion,
   type LeadInteractionDateFilter,
+  type LeadHookKind,
   type LeadSegment,
   type LeadWindow,
   type QueueState,
@@ -36,8 +44,11 @@ import {
   loadLeadDetail,
   loadLeadsInsightsPanel,
   openLeadDrawer,
+  pollLeadsQueueSignature,
   releaseLead,
+  resolveHandoff,
   searchLeads,
+  loadLeadsForAudience,
 } from "@/app/dashboard/leads/actions";
 import { cn } from "@/components/ui";
 import type { LeadDrawerProps, LeadDrawerUpdate } from "@/components/leads-drawer";
@@ -432,6 +443,30 @@ function SourceChip({ source }: { source: string | null | undefined }) {
   );
 }
 
+// El "anzuelo": con qué abrir la llamada. Sin esto un lead frío es solo un
+// nombre y nadie sabe cómo empezar, así que nunca se trabaja. Se muestra el
+// producto que miraba, o el anuncio que lo trajo, o sus propias palabras.
+const HOOK_DISPLAY: Record<LeadHookKind, { icon: string; title: string; cls: string }> = {
+  producto: { icon: "🛒", title: "Producto que miraba / agregó al carrito", cls: "text-emerald-700" },
+  anuncio: { icon: "📣", title: "Anuncio por el que llegó", cls: "text-violet-700" },
+  mensaje: { icon: "💬", title: "Primer mensaje que escribió el cliente", cls: "text-slate-500" },
+};
+
+function LeadHookLine({ lead }: { lead: LeadRow }) {
+  const hook = leadHook(lead);
+  if (!hook) return null;
+  const d = HOOK_DISPLAY[hook.kind];
+  return (
+    <p
+      title={`${d.title}: ${hook.text}`}
+      className={cn("mt-0.5 truncate text-[11px] leading-tight", d.cls)}
+    >
+      <span aria-hidden="true">{d.icon}</span>{" "}
+      {hook.kind === "mensaje" ? `“${hook.text}”` : hook.text}
+    </p>
+  );
+}
+
 // Gestión (advisor call-state) → label + dot for the "Última gestión" column.
 const GESTION_DISPLAY: Record<LeadGestion, { label: string; dot: string; fg: string; hollow?: boolean }> = {
   sin_llamar: { label: "Sin llamar", dot: "border-[1.5px] border-amber-500", fg: "text-amber-700", hollow: true },
@@ -509,11 +544,27 @@ const ICON_PHONE =
   "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3.1-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8.1 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z";
 const ICON_CHAT = "M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z";
 
+// Cada cuánto se revalida la página en vivo (soft-refresh de datos del servidor).
+// Mismo espíritu que ONLINE_POLL_MS de Productividad, un poco más ágil porque
+// "Atender ahora" es una cola que se trabaja al momento.
+const LEADS_LIVE_POLL_MS = 30_000;
+// Red de seguridad del refresco por firma: aunque la firma diga que nada cambió,
+// se recarga igualmente de vez en cuando. Cubre lo que la firma no ve (una base
+// sin el trigger `leads_touch`, un despliegue sin la migración 0059).
+const LEADS_FORCED_REFRESH_MS = 5 * 60_000;
+// Filas que se pintan de entrada. La cola completa puede traer miles de leads y
+// montarlas TODAS de golpe era el segundo motivo de que el panel se sintiera
+// pesado: miles de nodos por render, y un render por cada tecla del buscador.
+// Se pintan por tramos según se baja; los conteos siguen saliendo del universo
+// completo, así que ningún número cambia.
+const LEADS_RENDER_STEP = 60;
+
 export function LeadsBoard({
   stores,
   storeId,
   view,
   counts,
+  queueSignature,
   leads,
   adNames,
   waNumbers,
@@ -526,11 +577,15 @@ export function LeadsBoard({
   initialInteractionDate,
   initialOpenId,
   currentUserId,
+  leadsComplete = true,
 }: {
   stores: StoreSummary[];
   storeId: string;
   view: LeadView;
   counts: LeadCounts;
+  /** Resumen del estado de la cola en el servidor. El refresco en vivo solo
+   *  recarga cuando esta cadena cambia (ver `getLeadQueueSnapshot`). */
+  queueSignature?: string;
   leads: LeadRow[];
   adNames?: Record<string, AdMeta>;
   waNumbers?: Record<string, WaNumber>;
@@ -543,6 +598,9 @@ export function LeadsBoard({
   initialInteractionDate?: LeadInteractionDateFilter | null;
   initialOpenId?: string | null; // ?open=<id> → auto-abre ese lead (desde el pop-up de Yapes)
   currentUserId: string;
+  /** false = la página cargó solo un tope de filas para esta vista, así que un
+   *  export debe repedir el universo completo al servidor. */
+  leadsComplete?: boolean;
 }) {
   const router = useRouter();
   const [routePending, startRouteTransition] = useTransition();
@@ -585,13 +643,24 @@ export function LeadsBoard({
   // one so the active view is never hidden.
   const isReviewView = view === "seguimientos" || view === "ganados" || view === "perdidos";
   const [more, setMore] = useState<boolean>(isReviewView);
+  const [exportingAudience, setExportingAudience] = useState(false);
 
+  // Panel de gráficos (burndown, sin-llamar 7d, conversión, productividad). Se
+  // recarga cuando cambia el conteo de la cola — y con el auto-refresco en vivo
+  // eso pasa muy seguido. IMPORTANTE: NO se vacía insightsData antes de recargar;
+  // si se vaciara, los cuatro gráficos parpadearían a esqueleto varios segundos
+  // en CADA recarga. Se deja el panel anterior a la vista y se reemplaza recién
+  // cuando llegan los datos nuevos (el usuario no ve el refetch). Cambiar de
+  // tienda no arrastra datos viejos: la página remonta el board con
+  // key={storeId}:{view}.
   useEffect(() => {
     let alive = true;
-    setInsightsData(insights);
-    if (insights) return () => {
-      alive = false;
-    };
+    if (insights) {
+      setInsightsData(insights);
+      return () => {
+        alive = false;
+      };
+    }
     void loadLeadsInsightsPanel(storeId, timezone, counts.sin_llamar).then((result) => {
       if (alive && !("error" in result)) setInsightsData(result);
     });
@@ -634,6 +703,53 @@ export function LeadsBoard({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialOpenId, leads]);
+
+  // Refresco en vivo: revalida los datos del servidor (lista + contadores, incl.
+  // "⚡ Atender ahora") mientras la pestaña está visible, y al instante al volver
+  // a ella. Así un handoff nuevo aparece solo, sin recargar la página.
+  // router.refresh() es un soft-refresh: conserva filtros, scroll, búsqueda y el
+  // drawer abierto (no remonta el componente).
+  //
+  // PERO recargar cuesta caro —los ~2.500 leads de la cola, los siete conteos y
+  // el panel de gráficos— y hasta ahora se pagaba cada 30 s aunque no hubiera
+  // cambiado nada. Ahora primero se pregunta por la FIRMA de la cola (una
+  // consulta barata) y solo se recarga si de verdad hay algo nuevo. Cada tanto
+  // se recarga igual, por si la firma se quedara ciega a algún cambio.
+  const signatureRef = useRef<string | null>(queueSignature ?? null);
+  useEffect(() => {
+    if (queueSignature) signatureRef.current = queueSignature;
+  }, [queueSignature]);
+  useEffect(() => {
+    let alive = true;
+    let lastRefreshAt = Date.now();
+    const check = async () => {
+      if (document.hidden) return;
+      if (Date.now() - lastRefreshAt >= LEADS_FORCED_REFRESH_MS) {
+        lastRefreshAt = Date.now();
+        router.refresh();
+        return;
+      }
+      // Sin firma previa (o sin firma del servidor) no hay nada que comparar:
+      // se comporta como antes y recarga.
+      const next = await pollLeadsQueueSignature(storeId).catch(() => null);
+      if (!alive || document.hidden) return;
+      if (next === null) return; // fallo puntual: se reintenta al siguiente tick
+      if (signatureRef.current !== null && next === signatureRef.current) return;
+      signatureRef.current = next;
+      lastRefreshAt = Date.now();
+      router.refresh();
+    };
+    const timer = setInterval(() => void check(), LEADS_LIVE_POLL_MS);
+    const onVisible = () => {
+      if (!document.hidden) void check();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [router, storeId]);
 
   function changeStore(nextStore: string) {
     startRouteTransition(() => {
@@ -759,7 +875,16 @@ export function LeadsBoard({
     if (leadId) void releaseLead(leadId);
   }
 
-  const now = Date.now();
+  // `now` alimenta el estado de la ventana de 24h (y sus contadores). Antes se
+  // leía el reloj en CADA render, así que ningún cálculo derivado se podía
+  // memoizar: cambiaba el input siempre. Ahora avanza a saltos de un minuto —
+  // la ventana se muestra en horas, así que se ve exactamente igual — y todo lo
+  // que depende de él sí se puede cachear entre renders.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
   const q = query.trim().toLowerCase();
   const qDigits = q.replace(/\D/g, "");
   const inQueue = view === "por_llamar";
@@ -770,104 +895,150 @@ export function LeadsBoard({
   // el propio. Así, al elegir "Con carrito" (18), Gestión/Ventana/Fuente/Número
   // muestran su "Todos" = 18 y sus sub-botones suman ese subconjunto, mientras
   // que cada grupo conserva sus opciones para poder cambiar dentro de él.
-  const matchQuery = (l: LeadRow) => {
-    if (!q) return true;
-    const name = (l.name ?? "").toLowerCase();
-    const phoneDigits = (l.phone ?? "").replace(/\D/g, "");
-    return name.includes(q) || (qDigits.length > 0 && phoneDigits.includes(qDigits));
-  };
-  const matchSrc = (l: LeadRow) => srcFilter.size === 0 || srcFilter.has(leadSourceKey(l.source));
-  const matchNum = (l: LeadRow) => {
-    if (numFilter.size === 0) return true;
-    if (!l.wa_phone_number_id) return numFilter.has("__none__");
-    return numFilter.has(l.wa_phone_number_id);
-  };
-  // Eje 1 (estado) y eje 2 (segmento) son facets independientes que combinan por
-  // AND: el segmento se filtra DENTRO del estado activo (no lo reemplaza).
-  const matchState = (l: LeadRow) => !inQueue || matchesQueueState(l, queueState);
-  const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadSegment(l) === segFilter;
-  const matchGest = (l: LeadRow) => {
-    // En "Sin llamar" todos son nuevos → la gestión no aplica (su panel se oculta).
-    if (!inQueue || queueState === "sin_llamar" || !gestFilter) return true;
-    if (gestFilter === "otros") return gestionOf(l.status) === null; // casi_cierra, repetido, volver_a_llamar…
-    return gestionOf(l.status) === gestFilter;
-  };
-  const matchWin = (l: LeadRow) => {
-    if (!inQueue || winFilter === "all") return true;
-    const { state } = leadWindowInfo(l.last_inbound_at ?? l.last_interaction_at, now);
-    if (winFilter === "fresca") return state === "fresca";
-    if (winFilter === "por_vencer") return state === "por_vencer" || state === "critica";
-    return state === "cerrada";
-  };
-  const matchInteractionDate = (l: LeadRow) =>
-    !inQueue ||
-    queueState !== "sin_llamar" ||
-    matchesLeadInteractionDate(l, interactionDateFilter, timezone);
-  const FACETS = {
-    query: matchQuery,
-    src: matchSrc,
-    num: matchNum,
-    state: matchState,
-    seg: matchSeg,
-    gest: matchGest,
-    win: matchWin,
-    interactionDate: matchInteractionDate,
-  };
-  type Facet = keyof typeof FACETS;
-  const facetKeys = Object.keys(FACETS) as Facet[];
-  // Leads que pasan todos los filtros activos salvo el indicado: la base sobre
-  // la que un grupo cuenta sus badges (un grupo nunca se filtra a sí mismo).
-  const leadsExcept = (skip: Facet) => leads.filter((l) => facetKeys.every((k) => k === skip || FACETS[k](l)));
+  //
+  // Todo el bloque se calcula de una vez y se memoiza: son ocho predicados sobre
+  // la cola entera (que en "Por llamar" son miles de leads) y siete bases
+  // distintas. Rehacerlo en cada render era lo que hacía que escribir en el
+  // buscador se sintiera pegajoso. `facetItems` evalúa los predicados UNA vez
+  // por lead y deriva las bases con máscaras de bits (ver lib/leads-facets.ts).
+  const {
+    facetsMatchAll,
+    srcCounts,
+    hasCampaign,
+    hasFbWeb,
+    hasCart,
+    hasBrowse,
+    segCounts,
+    segTotal,
+    stateCounts,
+    seguimientoAlert,
+    gestCounts,
+    gestTotal,
+    gestOtros,
+    winCounts,
+    winTotal,
+    numTotal,
+    waCounts,
+    numOtros,
+    waIds,
+    hasMultiNumbers,
+    shownLeads,
+  } = useMemo(() => {
+    const matchQuery = (l: LeadRow) => {
+      if (!q) return true;
+      const name = (l.name ?? "").toLowerCase();
+      const phoneDigits = (l.phone ?? "").replace(/\D/g, "");
+      return name.includes(q) || (qDigits.length > 0 && phoneDigits.includes(qDigits));
+    };
+    const matchSrc = (l: LeadRow) => srcFilter.size === 0 || srcFilter.has(leadSourceKey(l.source));
+    const matchNum = (l: LeadRow) => {
+      if (numFilter.size === 0) return true;
+      if (!l.wa_phone_number_id) return numFilter.has("__none__");
+      return numFilter.has(l.wa_phone_number_id);
+    };
+    // Eje 1 (estado) y eje 2 (segmento) son facets independientes que combinan por
+    // AND: el segmento se filtra DENTRO del estado activo (no lo reemplaza).
+    const matchState = (l: LeadRow) => !inQueue || matchesQueueState(l, queueState);
+    const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadSegment(l) === segFilter;
+    const matchGest = (l: LeadRow) => {
+      // En "Sin llamar" todos son nuevos → la gestión no aplica (su panel se oculta).
+      if (!inQueue || queueState === "sin_llamar" || !gestFilter) return true;
+      if (gestFilter === "otros") return gestionOf(l.status) === null; // casi_cierra, repetido, volver_a_llamar…
+      return gestionOf(l.status) === gestFilter;
+    };
+    const matchWin = (l: LeadRow) => {
+      if (!inQueue || winFilter === "all") return true;
+      const { state } = leadWindowInfo(l.last_inbound_at ?? l.last_interaction_at, now);
+      if (winFilter === "fresca") return state === "fresca";
+      if (winFilter === "por_vencer") return state === "por_vencer" || state === "critica";
+      return state === "cerrada";
+    };
+    const matchInteractionDate = (l: LeadRow) =>
+      !inQueue ||
+      queueState !== "sin_llamar" ||
+      matchesLeadInteractionDate(l, interactionDateFilter, timezone);
+    const facets = facetItems(leads, {
+      query: matchQuery,
+      src: matchSrc,
+      num: matchNum,
+      state: matchState,
+      seg: matchSeg,
+      gest: matchGest,
+      win: matchWin,
+      interactionDate: matchInteractionDate,
+    });
 
-  const srcBase = leadsExcept("src");
-  const srcCounts = { meta_ad: 0, fb_web: 0, cod_cart: 0, abandoned_browse: 0, organic: 0 };
-  for (const l of srcBase) srcCounts[leadSourceKey(l.source)] += 1;
-  const hasCampaign = leads.some((l) => l.source === "meta_ad");
-  const hasFbWeb = leads.some((l) => l.source === "fb_web");
-  const hasCart = leads.some((l) => l.source === "cod_cart");
-  const hasBrowse = leads.some((l) => l.source === "abandoned_browse");
+    const srcBase = facets.except("src");
+    const srcCountsAcc = { meta_ad: 0, fb_web: 0, cod_cart: 0, abandoned_browse: 0, organic: 0 };
+    for (const l of srcBase) srcCountsAcc[leadSourceKey(l.source)] += 1;
 
-  // Eje 2 (segmento): conteos SCOPEADOS al estado activo. `leadsExcept("seg")` pasa
-  // el facet de estado, así que los segmentos suman el total del estado (p.ej. 237
-  // en Sin llamar), no los 429. "Todos" = ese total.
-  const segBase = leadsExcept("seg");
-  const segCounts = countLeadSegments(segBase);
-  const segTotal = segBase.length;
-  // Eje 1 (estado): tabs primarios con totales estables (237 / 192). Su base salta
-  // el propio estado Y el segmento, para no encogerse al elegir un segmento.
-  const stateBase = leads.filter((l) => facetKeys.every((k) => k === "state" || k === "seg" || FACETS[k](l)));
-  const stateCounts = countQueueStates(stateBase);
-  // Semáforo del tab "En seguimiento": cuántos piden atención (olas de carrito,
-  // respuestas nuevas, seguimientos vencidos) — visible sin entrar al tab.
-  const seguimientoAlert = stateBase.filter(
-    (l) => matchesQueueState(l, "seguimiento") && l.needs_attention,
-  ).length;
+    // Eje 2 (segmento): conteos SCOPEADOS al estado activo. `except("seg")` pasa
+    // el facet de estado, así que los segmentos suman el total del estado (p.ej. 237
+    // en Sin llamar), no los 429. "Todos" = ese total.
+    const segBase = facets.except("seg");
+    // Eje 1 (estado): tabs primarios con totales estables (237 / 192). Su base salta
+    // el propio estado Y el segmento, para no encogerse al elegir un segmento.
+    const stateBase = facets.except("state", "seg");
+    const gestBase = facets.except("gest");
+    const winBase = facets.except("win");
+    // WhatsApp numbers present in this view (to split the queue by number). The
+    // chip list comes from the full view so picking a number never hides the
+    // others; the counts come from the faceted base.
+    const numBase = facets.except("num");
 
-  const gestBase = leadsExcept("gest");
-  const gestCounts = countGestiones(gestBase);
-  const gestTotal = gestBase.length;
-  // Leads sin bucket de gestión (casi_cierra/repetido/volver_a_llamar): el resto
-  // para que Gestión "Todos" cuadre con la suma de sus chips.
-  const gestOtros = gestTotal - Object.values(gestCounts).reduce((a, b) => a + b, 0);
+    const gestCountsAcc = countGestiones(gestBase);
+    const waCountsAcc = new Map<string, number>();
+    for (const l of numBase) {
+      if (l.wa_phone_number_id)
+        waCountsAcc.set(l.wa_phone_number_id, (waCountsAcc.get(l.wa_phone_number_id) ?? 0) + 1);
+    }
+    const waIdsAcc = [...new Set(leads.map((l) => l.wa_phone_number_id).filter((id): id is string => !!id))];
 
-  const winBase = leadsExcept("win");
-  const winCounts = countLeadWindows(winBase, now);
-  const winTotal = winBase.length;
-
-  // WhatsApp numbers present in this view (to split the queue by number). The
-  // chip list comes from the full view so picking a number never hides the
-  // others; the counts come from the faceted base.
-  const numBase = leadsExcept("num");
-  const numTotal = numBase.length;
-  const waCounts = new Map<string, number>();
-  for (const l of numBase) {
-    if (l.wa_phone_number_id) waCounts.set(l.wa_phone_number_id, (waCounts.get(l.wa_phone_number_id) ?? 0) + 1);
-  }
-  // Leads sin número de WhatsApp asignado (ej. carrito/Shopify): el resto para
-  // que Número "Todos" cuadre con la suma de sus chips.
-  const numOtros = numTotal - [...waCounts.values()].reduce((a, b) => a + b, 0);
-  const waIds = [...new Set(leads.map((l) => l.wa_phone_number_id).filter((id): id is string => !!id))];
-  const hasMultiNumbers = waIds.length >= 2;
+    return {
+      facetsMatchAll: facets.matchesAll,
+      srcCounts: srcCountsAcc,
+      hasCampaign: leads.some((l) => l.source === "meta_ad"),
+      hasFbWeb: leads.some((l) => l.source === "fb_web"),
+      hasCart: leads.some((l) => l.source === "cod_cart"),
+      hasBrowse: leads.some((l) => l.source === "abandoned_browse"),
+      segCounts: countLeadSegments(segBase),
+      segTotal: segBase.length,
+      stateCounts: countQueueStates(stateBase),
+      // Semáforo del tab "En seguimiento": cuántos piden atención (olas de carrito,
+      // respuestas nuevas, seguimientos vencidos) — visible sin entrar al tab.
+      seguimientoAlert: stateBase.filter((l) => matchesQueueState(l, "seguimiento") && l.needs_attention)
+        .length,
+      gestCounts: gestCountsAcc,
+      gestTotal: gestBase.length,
+      // Leads sin bucket de gestión (casi_cierra/repetido/volver_a_llamar): el resto
+      // para que Gestión "Todos" cuadre con la suma de sus chips.
+      gestOtros: gestBase.length - Object.values(gestCountsAcc).reduce((a, b) => a + b, 0),
+      winCounts: countLeadWindows(winBase, now),
+      winTotal: winBase.length,
+      numTotal: numBase.length,
+      waCounts: waCountsAcc,
+      // Leads sin número de WhatsApp asignado (ej. carrito/Shopify): el resto para
+      // que Número "Todos" cuadre con la suma de sus chips.
+      numOtros: numBase.length - [...waCountsAcc.values()].reduce((a, b) => a + b, 0),
+      waIds: waIdsAcc,
+      hasMultiNumbers: waIdsAcc.length >= 2,
+      shownLeads: facets.all,
+    };
+  }, [
+    leads,
+    q,
+    qDigits,
+    srcFilter,
+    numFilter,
+    inQueue,
+    queueState,
+    segFilter,
+    gestFilter,
+    winFilter,
+    interactionDateFilter,
+    timezone,
+    now,
+  ]);
 
   // Gestión solo cuenta como filtro activo donde es visible (no en "Sin llamar",
   // donde su panel se oculta y matchGest la ignora) — así el badge no miente.
@@ -897,11 +1068,81 @@ export function LeadsBoard({
     setNumFilter(new Set());
   }
 
-  const shownLeads = leads.filter((l) => facetKeys.every((k) => FACETS[k](l)));
   // In search mode show the global results (all stages); otherwise the filtered
   // view (already narrowed client-side by the query for instant feedback).
   const searchMode = results !== null;
   const displayLeads = results ?? shownLeads;
+
+  // Render por tramos. La cola completa puede traer miles de filas y montarlas
+  // todas de golpe cuesta decenas de miles de nodos en el primer pintado (y otra
+  // vez en cada refresco). Se pintan LEADS_RENDER_STEP y el resto entra sola al
+  // bajar, antes de llegar al final. Los contadores, el gráfico y el export
+  // siguen usando el universo completo: esto es solo lo que se dibuja.
+  const [visibleCount, setVisibleCount] = useState(LEADS_RENDER_STEP);
+  // Al cambiar de filtro/búsqueda se empieza de nuevo por arriba. Un refresco en
+  // vivo NO reinicia el tramo: si alguien ha bajado 300 filas, la lista no se le
+  // encoge bajo el dedo.
+  useEffect(() => {
+    setVisibleCount(LEADS_RENDER_STEP);
+  }, [view, queueState, segFilter, gestFilter, winFilter, srcFilter, numFilter, interactionDateFilter, q, searchMode]);
+  const moreSentinelRef = useRef<HTMLDivElement | null>(null);
+  const hasMoreRows = displayLeads.length > visibleCount;
+  useEffect(() => {
+    const node = moreSentinelRef.current;
+    if (!node || !hasMoreRows) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisibleCount(Number.MAX_SAFE_INTEGER); // sin observer, se pinta todo (comportamiento previo)
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setVisibleCount((n) => n + LEADS_RENDER_STEP);
+      },
+      { rootMargin: "800px 0px" }, // se adelanta al scroll: nunca se ve el final de la lista
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMoreRows, visibleCount]);
+  const visibleLeads = useMemo(
+    () => (hasMoreRows ? displayLeads.slice(0, visibleCount) : displayLeads),
+    [displayLeads, hasMoreRows, visibleCount],
+  );
+
+  // Exportar la audiencia que estás viendo para subirla a Meta (Custom Audience).
+  // El CSV se arma en el navegador a propósito: los facets viven en cliente, así
+  // que un endpoint no sabría qué conjunto exportar. Pero la página carga solo un
+  // tope de filas en las vistas que no son la cola, y exportar 200 de 1125 daría
+  // un público incompleto sin avisar — por eso, cuando lo cargado está truncado,
+  // se pide el universo completo al servidor y se le aplican LOS MISMOS facets.
+  // Solo se usa para el contador y el `disabled` del botón, pero recorría (y
+  // deduplicaba) toda la lista filtrada en cada render aunque nadie fuera a
+  // exportar nada. Memoizado cuesta lo mismo una vez que ninguna.
+  const audienceRows = useMemo(() => buildMetaAudienceRows(shownLeads), [shownLeads]);
+  async function downloadMetaAudience() {
+    if (exportingAudience) return;
+    setExportingAudience(true);
+    try {
+      let rows = shownLeads;
+      if (!leadsComplete) {
+        const all = await loadLeadsForAudience(storeId, view);
+        if (all.length) rows = all.filter(facetsMatchAll);
+      }
+      const segment = [view, inQueue ? queueState : null, segFilter].filter(Boolean).join(" ");
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: timezone });
+      const url = URL.createObjectURL(
+        new Blob([buildMetaAudienceCsv(rows)], { type: "text/csv;charset=utf-8" }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = metaAudienceFilename(segment, today);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExportingAudience(false);
+    }
+  }
 
   return (
     <div className="space-y-4" aria-busy={routePending}>
@@ -917,6 +1158,18 @@ export function LeadsBoard({
               <span className="font-semibold text-slate-800">{counts.sin_llamar} sin llamar</span>
               {" · "}
               <span className="text-slate-600">{counts.por_llamar - counts.sin_llamar} en seguimiento</span>
+              {counts.handoff > 0 && (
+                <>
+                  {" · "}
+                  <button
+                    type="button"
+                    onClick={() => navigateToView("handoff")}
+                    className="font-semibold text-amber-600 hover:underline"
+                  >
+                    ⚡ {counts.handoff} atender ahora
+                  </button>
+                </>
+              )}
               {counts.yape > 0 && (
                 <>
                   {" · "}
@@ -1049,6 +1302,30 @@ export function LeadsBoard({
             {refinementCount > 0 && (
               <span className="rounded-full bg-brand-600 px-1.5 text-[11px] font-semibold tabular-nums text-white">
                 {refinementCount}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={downloadMetaAudience}
+            disabled={!audienceRows.length || exportingAudience}
+            title={
+              !audienceRows.length
+                ? "No hay celulares válidos en el filtro actual"
+                : leadsComplete
+                  ? `Descarga ${audienceRows.length} celular(es) con el formato de Meta (Públicos personalizados → Lista de clientes). Exporta exactamente los leads filtrados en pantalla.`
+                  : "Descarga TODOS los leads del filtro actual (no solo los visibles) con el formato de Meta (Públicos personalizados → Lista de clientes)."
+            }
+            className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <StrokeIcon d="M12 4v10m0 0-4-4m4 4 4-4M5 19h14" />
+            {exportingAudience ? "Preparando…" : "Audiencia Meta"}
+            {/* El contador solo se muestra cuando lo cargado ES el universo
+                completo; si no, un "200" haría creer que el público es de 200
+                cuando el export trae todos. */}
+            {!exportingAudience && leadsComplete && audienceRows.length > 0 && (
+              <span className="rounded-full bg-slate-200 px-1.5 text-[11px] font-semibold tabular-nums text-slate-700">
+                {audienceRows.length}
               </span>
             )}
           </button>
@@ -1232,7 +1509,7 @@ export function LeadsBoard({
               <span>Ventana</span>
               <span />
             </div>
-            {displayLeads.map((lead) => {
+            {visibleLeads.map((lead) => {
               const locked =
                 !!lead.claimed_by && isClaimActive(lead.claimed_at) && lead.claimed_by !== currentUserId;
               const g = gestionOf(lead.status);
@@ -1282,7 +1559,8 @@ export function LeadsBoard({
                   </span>
 
                   {/* Col 2 · lead (en móvil ocupa la 1ª línea; gestión/ventana bajan) */}
-                  <div className="flex min-w-0 flex-1 items-center gap-1.5 md:flex-none">
+                  <div className="min-w-0 flex-1 md:flex-none">
+                  <div className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate text-sm font-semibold text-slate-900">{lead.name || lead.phone}</span>
                     {isYape && <span aria-hidden="true">🔥</span>}
                     <SourceChip source={lead.source} />
@@ -1327,6 +1605,8 @@ export function LeadsBoard({
                       </span>
                     )}
                   </div>
+                  <LeadHookLine lead={lead} />
+                  </div>
 
                   {/* Col 3 · última gestión */}
                   <div className="min-w-0">
@@ -1362,7 +1642,23 @@ export function LeadsBoard({
                     {locked ? (
                       <span className="text-[11px] whitespace-nowrap text-slate-400">en curso</span>
                     ) : (
-                      <div className="flex gap-1.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                      <div className="flex items-center gap-1.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                        {view === "handoff" && (
+                          <button
+                            type="button"
+                            title="Sacar de Atender ahora (handoff resuelto)"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startRouteTransition(async () => {
+                                await resolveHandoff(lead.id);
+                                router.refresh();
+                              });
+                            }}
+                            className="inline-flex h-[30px] items-center rounded-md border border-emerald-300 bg-emerald-50 px-2 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                          >
+                            ✓ Resuelto
+                          </button>
+                        )}
                         <a
                           title="Llamar"
                           href={`tel:+${lead.phone}`}
@@ -1387,15 +1683,24 @@ export function LeadsBoard({
                 </div>
               );
             })}
+            {hasMoreRows && (
+              // Centinela: al asomarse (con 800px de adelanto) pinta el siguiente
+              // tramo. Se ve como una lista normal que nunca acaba de cargar.
+              <div ref={moreSentinelRef} className="px-[18px] py-4 text-center text-xs text-slate-400">
+                Cargando más leads… ({visibleLeads.length} de {displayLeads.length})
+              </div>
+            )}
             {!displayLeads.length && (
               <div className="px-[18px] py-6 text-sm text-slate-400">
                 {query.trim()
                   ? searching
                     ? "Buscando…"
                     : `Sin resultados para «${query.trim()}».`
-                  : leads.length
-                    ? "No hay leads de esta fuente en la vista."
-                    : "No hay leads en esta vista."}
+                  : view === "handoff" && !leads.length
+                    ? "🎉 Cola en cero — no hay handoffs esperando. Buen trabajo."
+                    : leads.length
+                      ? "No hay leads de esta fuente en la vista."
+                      : "No hay leads en esta vista."}
               </div>
             )}
           </div>

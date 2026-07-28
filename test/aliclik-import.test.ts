@@ -5,6 +5,7 @@ import {
   parseAliclikDate,
   parseAliclikRow,
   parseAliclikReport,
+  isImportadoRow,
   normalizeOrderName,
 } from "@/lib/aliclik-import";
 
@@ -254,5 +255,42 @@ describe("parseAliclikRow", () => {
       { "Guia Aliclik": "AUR5X2", Estado: "Por devolver" },
     ]);
     expect(rows.map((r) => r.delivery_status)).toEqual(["entregado", "pendiente"]);
+  });
+});
+
+// Aliclik marca ESTADO LLAMADA = IMPORTADO en pedidos que subió pero todavía no
+// gestiona. No son guías reales: si entran quedan como envíos "pendiente"
+// fantasma (pasó con ~2.300 filas que hubo que borrar a mano).
+describe("filas IMPORTADO (ESTADO LLAMADA)", () => {
+  it("descarta la fila marcada IMPORTADO y conserva las demás", () => {
+    const rows = parseAliclikReport([
+      { "Guia Aliclik": "AUR5X1", "ESTADO LLAMADA": "CONFIRMADO" },
+      { "Guia Aliclik": "AUR5X2", "ESTADO LLAMADA": "IMPORTADO" },
+      { "Guia Aliclik": "AUR5X3", "ESTADO LLAMADA": "" },
+    ]);
+    expect(rows.map((r) => r.guide_code)).toEqual(["AUR5X1", "AUR5X3"]);
+  });
+
+  it("reconoce el valor sin importar mayúsculas, espacios o acentos", () => {
+    expect(isImportadoRow({ "ESTADO LLAMADA": "IMPORTADO" })).toBe(true);
+    expect(isImportadoRow({ "Estado Llamada": " importado " })).toBe(true);
+    expect(isImportadoRow({ "estado de llamada": "Importado" })).toBe(true);
+  });
+
+  it("no descarta otros estados de llamada", () => {
+    expect(isImportadoRow({ "ESTADO LLAMADA": "CONFIRMADO" })).toBe(false);
+    expect(isImportadoRow({ "ESTADO LLAMADA": "NO CONTESTA" })).toBe(false);
+    expect(isImportadoRow({ "ESTADO LLAMADA": "" })).toBe(false);
+    expect(isImportadoRow({})).toBe(false);
+  });
+
+  it("no confunde la columna con el 'ESTADO' suelto de la entrega", () => {
+    // Un reporte entregado cuyo ESTADO dice "entregado" NO debe descartarse, y
+    // una guía IMPORTADO no debe leerse como estado de entrega.
+    expect(isImportadoRow({ Estado: "Entregado" })).toBe(false);
+    expect(isImportadoRow({ Estado: "Importado" })).toBe(false);
+    const rows = parseAliclikReport([{ "Guia Aliclik": "AUR5X9", Estado: "Entregado" }]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.delivery_status).toBe("entregado");
   });
 });

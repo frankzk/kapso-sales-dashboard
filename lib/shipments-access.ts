@@ -57,7 +57,7 @@ export function isShipmentView(v: string | undefined | null): v is ShipmentView 
 }
 
 const SHIPMENT_COLUMNS =
-  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_eligible,fenix_shipment_id,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
+  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_eligible,fenix_shipment_id,created_via,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
 // Deployment safety: application deploys and database migrations are separate
 // operations in production. Keep queue reads alive while 0038 is being applied;
@@ -90,6 +90,7 @@ function withEnhancementDefaults(row: Partial<ShipmentRow>): ShipmentRow {
     aliclik_attempts: null,
     aliclik_service_date: null,
     last_gestion_at: null,
+    created_via: null,
     ...row,
     province: row.province ?? row.region ?? null,
   } as ShipmentRow;
@@ -491,6 +492,9 @@ export async function searchOrdersForLink(query: string): Promise<OrderLinkCandi
 
 /** A shipment + its call history (RLS-scoped). Drives the drawer. */
 const LINEAGE_COLUMNS =
+  "id,courier,guide_code,delivery_status,status_category,fenix_shipment_id,created_via,created_at";
+// Deploy safety: the app may ship before 0043 (created_via) is applied.
+const LEGACY_LINEAGE_COLUMNS =
   "id,courier,guide_code,delivery_status,status_category,fenix_shipment_id,created_at";
 
 function toLineageNode(shipment: ShipmentRow): ShipmentLineageNode {
@@ -501,6 +505,7 @@ function toLineageNode(shipment: ShipmentRow): ShipmentLineageNode {
     delivery_status: shipment.delivery_status,
     status_category: shipment.status_category,
     fenix_shipment_id: shipment.fenix_shipment_id,
+    created_via: shipment.created_via ?? null,
     created_at: shipment.created_at ?? null,
   };
 }
@@ -509,23 +514,32 @@ async function getShipmentLineage(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,
   shipment: ShipmentRow,
 ): Promise<ShipmentLineageNode[]> {
+  // Try the current column set first and step down while 0043 is being applied.
+  const selectLineage = async (
+    build: (columns: string) => PromiseLike<{ data: unknown; error: unknown }>,
+  ) => {
+    let result = await build(LINEAGE_COLUMNS);
+    if (result.error) result = await build(LEGACY_LINEAGE_COLUMNS);
+    return result;
+  };
+
   let candidates: ShipmentLineageNode[] = [];
   let candidateLookupSucceeded = false;
   if (shipment.order_id) {
-    const { data, error } = await sb
-      .from("shipments")
-      .select(LINEAGE_COLUMNS)
-      .eq("order_id", shipment.order_id)
-      .limit(100);
+    const { data, error } = await selectLineage((columns) =>
+      sb.from("shipments").select(columns).eq("order_id", shipment.order_id).limit(100),
+    );
     candidates = (data as ShipmentLineageNode[]) ?? [];
     candidateLookupSucceeded = !error;
   } else if (shipment.order_name) {
-    const { data, error } = await sb
-      .from("shipments")
-      .select(LINEAGE_COLUMNS)
-      .eq("store_id", shipment.store_id)
-      .eq("order_name", shipment.order_name)
-      .limit(100);
+    const { data, error } = await selectLineage((columns) =>
+      sb
+        .from("shipments")
+        .select(columns)
+        .eq("store_id", shipment.store_id)
+        .eq("order_name", shipment.order_name)
+        .limit(100),
+    );
     candidates = (data as ShipmentLineageNode[]) ?? [];
     candidateLookupSucceeded = !error;
   }
@@ -543,11 +557,9 @@ async function getShipmentLineage(
   const ancestors: ShipmentLineageNode[] = [];
   let childId = shipment.id;
   for (let depth = 0; depth < 29; depth += 1) {
-    const { data } = await sb
-      .from("shipments")
-      .select(LINEAGE_COLUMNS)
-      .eq("fenix_shipment_id", childId)
-      .limit(1);
+    const { data } = await selectLineage((columns) =>
+      sb.from("shipments").select(columns).eq("fenix_shipment_id", childId).limit(1),
+    );
     const parent = ((data as ShipmentLineageNode[]) ?? [])[0];
     if (!parent || seen.has(parent.id)) break;
     ancestors.unshift(parent);
@@ -559,11 +571,9 @@ async function getShipmentLineage(
   let cursor = currentNode;
   for (let depth = 0; depth < 29 - ancestors.length; depth += 1) {
     if (!cursor.fenix_shipment_id || seen.has(cursor.fenix_shipment_id)) break;
-    const { data } = await sb
-      .from("shipments")
-      .select(LINEAGE_COLUMNS)
-      .eq("id", cursor.fenix_shipment_id)
-      .maybeSingle();
+    const { data } = await selectLineage((columns) =>
+      sb.from("shipments").select(columns).eq("id", cursor.fenix_shipment_id!).maybeSingle(),
+    );
     const child = data as ShipmentLineageNode | null;
     if (!child) break;
     descendants.push(child);
@@ -596,13 +606,25 @@ export async function getShipmentWithCalls(
   const shipmentRow = withEnhancementDefaults(shipment as Partial<ShipmentRow>);
   const lineage = await getShipmentLineage(sb, shipmentRow);
   const lineageIds = lineage.map((guide) => guide.id);
-  const { data: historyCalls } = await sb
-    .from("shipment_calls")
-    .select("id,shipment_id,store_id,agent,kind,new_status,note,next_followup_at,occurred_at")
-    .in("shipment_id", lineageIds)
-    .order("occurred_at", { ascending: true });
+  // Deploy safety: the app may ship before 0042 is applied. Fall back to the
+  // pre-0042 column set so the history keeps loading (just without the edit mark).
+  const fetchCalls = (columns: string) =>
+    sb
+      .from("shipment_calls")
+      .select(columns)
+      .in("shipment_id", lineageIds)
+      .order("occurred_at", { ascending: true });
+  let historyResult = await fetchCalls(
+    "id,shipment_id,store_id,agent,kind,new_status,note,next_followup_at,occurred_at,note_edited_at,note_edited_by",
+  );
+  if (historyResult.error) {
+    historyResult = await fetchCalls(
+      "id,shipment_id,store_id,agent,kind,new_status,note,next_followup_at,occurred_at",
+    );
+  }
+  const historyCalls = historyResult.data;
   const callsByShipment = new Map<string, ShipmentCallRow[]>();
-  for (const call of (historyCalls as ShipmentCallRow[]) ?? []) {
+  for (const call of (historyCalls as unknown as ShipmentCallRow[]) ?? []) {
     const guideCalls = callsByShipment.get(call.shipment_id) ?? [];
     guideCalls.push(call);
     callsByShipment.set(call.shipment_id, guideCalls);
@@ -614,6 +636,7 @@ export async function getShipmentWithCalls(
     delivery_status: guide.delivery_status,
     status_category: guide.status_category,
     fenix_shipment_id: guide.fenix_shipment_id,
+    created_via: guide.created_via ?? null,
     created_at: guide.created_at ?? null,
     is_current: guide.id === shipmentId,
     calls: callsByShipment.get(guide.id) ?? [],
@@ -655,6 +678,9 @@ export async function getShipmentWithCalls(
             province: draftAddress.province ?? null,
             name: draftAddress.customer_name ?? null,
             phone: draftAddress.customer_phone ?? null,
+            // Un borrador no pasa por el checkout: Shopify no lo geocodifica.
+            latitude: null,
+            longitude: null,
           };
         }
       }

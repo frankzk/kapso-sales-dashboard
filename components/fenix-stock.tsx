@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Card, cn } from "@/components/ui";
 import { FENIX_CITIES } from "@/lib/shipments";
 import type { DemandRow } from "@/lib/fenix-demand";
@@ -292,14 +292,26 @@ const DEMAND_LABEL: Record<string, string> = {
  * it tracks the queue as order states change.
  */
 function DemandReport({ demand }: { demand: DemandRow[] }) {
-  const toSend = demand.filter((d) => d.shortfall > 0);
+  const [deptFilter, setDeptFilter] = useState<string | null>(null); // null = todos
+
+  // Departamentos presentes, ordenados por faltante desc (los más urgentes primero).
+  const deptOrder = useMemo(() => {
+    const short = new Map<string, number>();
+    for (const d of demand) short.set(d.department, (short.get(d.department) ?? 0) + d.shortfall);
+    return [...new Set(demand.map((d) => d.department))].sort(
+      (a, b) => (short.get(b) ?? 0) - (short.get(a) ?? 0) || a.localeCompare(b),
+    );
+  }, [demand]);
+
+  const rows = deptFilter ? demand.filter((d) => d.department === deptFilter) : demand;
+  const toSend = rows.filter((d) => d.shortfall > 0);
   const cities = new Set(toSend.map((d) => d.city)).size;
   const units = toSend.reduce((n, d) => n + d.shortfall, 0);
 
   return (
     <Card className="p-0">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-5 py-3">
-        <p className="text-sm font-medium text-slate-800">Demanda por ciudad (guías pendientes)</p>
+        <p className="text-sm font-medium text-slate-800">Demanda por departamento (guías pendientes)</p>
         {toSend.length > 0 ? (
           <span className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700">
             ⚠ {toSend.length} producto(s) por reponer · {units} unidad(es) · {cities} ciudad(es)
@@ -310,6 +322,32 @@ function DemandReport({ demand }: { demand: DemandRow[] }) {
           </span>
         )}
       </div>
+      {deptOrder.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-200 px-5 py-2.5">
+          <span className="mr-1 text-xs text-slate-400">Departamento:</span>
+          <button
+            onClick={() => setDeptFilter(null)}
+            className={cn(
+              "rounded-full px-2.5 py-1 text-xs font-medium",
+              deptFilter === null ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+            )}
+          >
+            Todos
+          </button>
+          {deptOrder.map((dept) => (
+            <button
+              key={dept}
+              onClick={() => setDeptFilter(dept)}
+              className={cn(
+                "rounded-full px-2.5 py-1 text-xs font-medium",
+                deptFilter === dept ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+              )}
+            >
+              {dept}
+            </button>
+          ))}
+        </div>
+      )}
       {demand.length === 0 ? (
         <p className="p-5 text-sm text-slate-400">Sin guías pendientes en ciudades Fenix.</p>
       ) : (
@@ -317,6 +355,7 @@ function DemandReport({ demand }: { demand: DemandRow[] }) {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-xs text-slate-500">
+                <th className="px-4 py-2.5 text-left font-medium">Departamento</th>
                 <th className="px-4 py-2.5 text-left font-medium">Ciudad</th>
                 <th className="px-4 py-2.5 text-left font-medium">Producto</th>
                 <th className="px-4 py-2.5 text-right font-medium">Pendientes</th>
@@ -326,8 +365,9 @@ function DemandReport({ demand }: { demand: DemandRow[] }) {
               </tr>
             </thead>
             <tbody>
-              {demand.map((d, i) => (
+              {rows.map((d, i) => (
                 <tr key={`${d.city}-${d.product}-${i}`} className="border-b border-slate-100 last:border-0">
+                  <td className="px-4 py-2.5 text-slate-700">{d.department}</td>
                   <td className="px-4 py-2.5 capitalize text-slate-700">{d.city}</td>
                   <td className="px-4 py-2.5 text-slate-700">{d.product}</td>
                   <td className="px-4 py-2.5 text-right text-slate-700">{d.demand}</td>

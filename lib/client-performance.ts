@@ -1,9 +1,14 @@
 "use client";
 
-import type { ClientPerformanceMetric, ClientPerformanceMetricName } from "@/lib/performance-metrics";
+import {
+  DASHBOARD_SECTIONS,
+  type ClientPerformanceMetric,
+  type ClientPerformanceMetricName,
+} from "@/lib/performance-metrics";
 
 const PRIMARY_PANEL_PATHS = [
   "/dashboard/leads",
+  "/dashboard/pedidos",
   "/dashboard/envios",
   "/dashboard/productividad",
   "/dashboard",
@@ -33,7 +38,9 @@ export function sanitizeDashboardPath(value: string): string {
   }
   if (pathname === "/dashboard") return pathname;
   const section = pathname.split("/").filter(Boolean)[1];
-  if (["leads", "envios", "productividad", "stores", "team"].includes(section ?? "")) {
+  // La lista vive en lib/performance-metrics.ts, que es también la que valida
+  // al recibir: si se mantuvieran por separado volverían a separarse.
+  if ((DASHBOARD_SECTIONS as readonly string[]).includes(section ?? "")) {
     return `/dashboard/${section}`;
   }
   return "/dashboard/other";
@@ -42,12 +49,13 @@ export function sanitizeDashboardPath(value: string): string {
 export function panelPrefetchOrder(currentPath: string, isVendedoraOnly: boolean): string[] {
   const current = sanitizeDashboardPath(currentPath);
   const available = isVendedoraOnly
-    ? ["/dashboard/leads", "/dashboard/envios"]
+    ? ["/dashboard/leads", "/dashboard/pedidos", "/dashboard/envios"]
     : [...PRIMARY_PANEL_PATHS];
   const priority: Record<string, string[]> = {
-    "/dashboard": ["/dashboard/leads", "/dashboard/envios", "/dashboard/productividad"],
-    "/dashboard/leads": ["/dashboard/envios", "/dashboard/productividad", "/dashboard"],
-    "/dashboard/envios": ["/dashboard/leads", "/dashboard/productividad", "/dashboard"],
+    "/dashboard": ["/dashboard/leads", "/dashboard/pedidos", "/dashboard/envios"],
+    "/dashboard/leads": ["/dashboard/pedidos", "/dashboard/envios", "/dashboard/productividad"],
+    "/dashboard/pedidos": ["/dashboard/envios", "/dashboard/leads", "/dashboard"],
+    "/dashboard/envios": ["/dashboard/pedidos", "/dashboard/leads", "/dashboard/productividad"],
     "/dashboard/productividad": ["/dashboard/leads", "/dashboard/envios", "/dashboard"],
   };
   return (priority[current] ?? available).filter((href) => href !== current && available.includes(href));

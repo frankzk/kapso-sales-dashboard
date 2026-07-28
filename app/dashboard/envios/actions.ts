@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
+import { recomputeOrderMasterForShipmentsSafe } from "@/lib/order-master";
 import {
   getReprogramRows,
   getShipmentWithCalls,
@@ -18,16 +19,20 @@ import {
   attemptLabel,
   categoryOf,
   courierReportTransition,
+  deriveFenixCoverageCity,
   evaluateAliclikReschedule,
+  getFenixDeliverySchedule,
   isFutureShipmentFollowup,
   isCallable,
   isFenixCity,
   isValidStatus,
+  limaTodayKey,
   nextShipmentTransition,
   normalizeCity,
   rescheduleGuideCode,
   shipmentRequiresCourierResult,
   type CourierReportResult,
+  type FenixDeliverySchedule,
   type RerouteDisposition,
 } from "@/lib/shipments";
 import { getStoreCreds } from "@/lib/ingest";
@@ -41,7 +46,13 @@ import {
   type ProductVariantResult,
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
-import { evaluateFenix, type FenixEligibility, type FenixStockRow } from "@/lib/fenix";
+import {
+  evaluateDirectFenixStock,
+  evaluateFenix,
+  type FenixEligibility,
+  type FenixStockRow,
+} from "@/lib/fenix";
+import { normalizePhone } from "@/lib/phone";
 import {
   ajusteDelta,
   consumeFenixStockOnDelivery,
@@ -54,6 +65,8 @@ import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import type {
   LinkedShipmentSummary,
+  OrderLineItem,
+  OrderShippingAddress,
   ShipmentCallRow,
   ShipmentHistoryGuide,
   ShipmentOrderDetail,
@@ -128,6 +141,22 @@ async function resolveAgentName(
 }
 
 /** Authorize the caller against a shipment via RLS (must see its store). */
+/**
+ * Refresca el Master de Pedidos tras tocar una guía: lo que cambia aquí cambia
+ * el estado del pedido allá. Best-effort a propósito — si el recálculo falla, la
+ * gestión ya quedó registrada y el barrido del cron pondrá el Master al día.
+ */
+async function syncMasterForShipment(
+  admin: SupabaseClient,
+  ...shipmentIds: (string | null | undefined)[]
+): Promise<void> {
+  await recomputeOrderMasterForShipmentsSafe(
+    admin,
+    shipmentIds.filter((id): id is string => Boolean(id)),
+  );
+  revalidatePath("/dashboard/pedidos");
+}
+
 async function authorizeShipment(
   shipmentId: string,
 ): Promise<{ userId: string; storeId: string } | null> {
@@ -160,20 +189,23 @@ export async function loadShipmentDetail(
   if (!detail) return { error: "No encontrado." };
   const admin = createAdminSupabase();
   const historyCalls = detail.guideHistory.flatMap((guide) => guide.calls);
-  const ids = [...new Set(historyCalls.map((c) => c.agent).filter(Boolean))] as string[];
+  const ids = [
+    ...new Set(
+      historyCalls.flatMap((c) => [c.agent, c.note_edited_by]).filter(Boolean),
+    ),
+  ] as string[];
   if (ids.length) {
     await Promise.all(ids.map((id) => resolveAgentName(id, admin)));
   }
-  const calls = detail.calls.map((c) => ({
+  const withNames = (c: ShipmentCallRow): ShipmentCallRow => ({
     ...c,
     agent_name: c.agent ? (agentNameCache.get(c.agent) ?? null) : null,
-  }));
+    note_editor_name: c.note_edited_by ? (agentNameCache.get(c.note_edited_by) ?? null) : null,
+  });
+  const calls = detail.calls.map(withNames);
   const guideHistory = detail.guideHistory.map((guide) => ({
     ...guide,
-    calls: guide.calls.map((call) => ({
-      ...call,
-      agent_name: call.agent ? (agentNameCache.get(call.agent) ?? null) : null,
-    })),
+    calls: guide.calls.map(withNames),
   }));
   let order = detail.order;
   // If the local order came from an older no-phone Shopify fallback, its raw
@@ -217,6 +249,46 @@ export async function loadShipmentDetail(
     order,
     linkedFenixShipment: detail.linkedFenixShipment,
   };
+}
+
+/** Editar la nota (texto libre) de una gestión del historial. Cualquiera con
+ *  acceso a la guía puede editarla; deja traza de quién y cuándo la modificó.
+ *  Solo cambia la nota — nunca el estado, la fecha ni el tipo de gestión. */
+export async function updateShipmentCallNote(
+  callId: string,
+  note: string,
+): Promise<ShipmentActionState> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  // RLS: solo se resuelve si el usuario puede ver esa gestión.
+  const { data: call } = await sb
+    .from("shipment_calls")
+    .select("id,shipment_id")
+    .eq("id", callId)
+    .maybeSingle();
+  if (!call) return { error: "No se encontró la gestión o no tienes acceso." };
+
+  const ctx = await authorizeShipment((call as { shipment_id: string }).shipment_id);
+  if (!ctx) return { error: "Sin acceso a este envío." };
+
+  const trimmed = note.trim();
+  const admin = createAdminSupabase();
+  const { error } = await admin
+    .from("shipment_calls")
+    .update({
+      note: trimmed || null,
+      note_edited_at: new Date().toISOString(),
+      note_edited_by: ctx.userId,
+    })
+    .eq("id", callId);
+  if (error) return { error: error.message };
+
+  revalidatePath("/dashboard/envios");
+  return { notice: "Nota actualizada." };
 }
 
 /** Global search (guía / pedido / guía Fenix / celular), RLS-scoped. */
@@ -436,6 +508,7 @@ export async function registerRerouteCall(
       note: auditNote,
       next_followup_at: input.nextFollowupAt,
     });
+    await syncMasterForShipment(admin, shipmentId);
     revalidatePath("/dashboard/envios");
     return { notice: `Reprogramado en Aliclik${overrideLabel}; se conserva la guía ${cur.guide_code}.` };
   }
@@ -481,6 +554,7 @@ export async function registerRerouteCall(
         note: input.note?.trim() || null,
         next_followup_at: input.nextFollowupAt,
       });
+      await syncMasterForShipment(admin, shipmentId, spun.childId);
       revalidatePath("/dashboard/envios");
       return { notice: `Confirmado — nueva guía Fenix ${spun.guideCode} (En ruta).` };
     }
@@ -521,6 +595,7 @@ export async function registerRerouteCall(
     await consumeFenixStockOnDelivery(admin, shipmentId).catch(() => {});
   }
 
+  await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   let notice: string;
   if (input.disposition === "programar") {
@@ -710,6 +785,7 @@ export async function updateShipmentDeliveryAddress(
     kind: "address_change",
     note: `Dirección actualizada: ${address}${reference ? ` · Ref.: ${reference}` : ""} · ${input.latitude}, ${input.longitude}`,
   });
+  await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   return {
     notice: isRealShopifyOrder
@@ -815,6 +891,7 @@ export async function registerCourierReportResult(
     await consumeFenixStockOnDelivery(admin, shipmentId).catch(() => {});
   }
 
+  await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   return {
     notice: `Guía ${current.guide_code}: ${definition.label} → ${definition.effect}`,
@@ -847,6 +924,7 @@ export async function setShipmentStatus(
   if (status === "entregado") {
     await consumeFenixStockOnDelivery(admin, shipmentId).catch(() => {});
   }
+  await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   return { notice: "Estado actualizado." };
 }
@@ -1100,8 +1178,545 @@ export async function createFenixGuide(
   });
   if ("error" in r) return { error: r.error };
 
+  await syncMasterForShipment(admin, shipmentId, r.childId);
   revalidatePath("/dashboard/envios");
   return { notice: `Guía Fenix ${r.guideCode} creada.` };
+}
+
+// ── Guía Fenix DIRECTA: desde un pedido, sin guía Aliclik madre ──────────────
+// Urgencias que salen del almacén regional de Fénix sin pasar por Aliclik. La
+// guía nace En ruta con su fecha de despacho (desde mañana) y entra al Excel de
+// programación de ese día como cualquier guía Fénix. Gate de creación: cobertura
+// + stock de TODOS los productos del pedido; el descuento de inventario sigue
+// ocurriendo al entregar (salida_entrega), igual que el resto de guías.
+
+/** Row shape shared by the preview and the create re-validation. */
+interface DirectGuideOrderRecord {
+  id: string;
+  store_id: string;
+  shopify_order_id: string | null;
+  name: string | null;
+  total_amount: number | null;
+  currency: string | null;
+  cancelled_at: string | null;
+  total_refunded: number | null;
+  customer_phone: string | null;
+  line_items: OrderLineItem[] | null;
+  raw?: unknown;
+}
+
+const DIRECT_GUIDE_ORDER_COLUMNS =
+  "id,store_id,shopify_order_id,name,total_amount,currency,cancelled_at,total_refunded,customer_phone,line_items,raw";
+
+/**
+ * Delivery address of an order, best source first: the Shopify payload, the
+ * originating COD draft cart, or the lead that produced a manual sale — manual
+ * orders (venta por llamada) have no Shopify address at all.
+ */
+async function resolveDirectGuideAddress(
+  admin: SupabaseClient,
+  order: DirectGuideOrderRecord,
+): Promise<{ address: OrderShippingAddress | null; source: "shopify" | "carrito" | "lead" | null }> {
+  const fromRaw = shopifyShippingAddress(order.raw);
+  if (fromRaw) return { address: fromRaw, source: "shopify" };
+
+  const isRealShopifyOrder = !!order.shopify_order_id && /^\d+$/.test(order.shopify_order_id);
+  if (isRealShopifyOrder) {
+    const { data: draft } = await admin
+      .from("draft_orders")
+      .select("address1,referencia,district,province,customer_name,customer_phone")
+      .eq("order_gid", `gid://shopify/Order/${order.shopify_order_id}`)
+      .maybeSingle();
+    const d = draft as {
+      address1?: string | null;
+      referencia?: string | null;
+      district?: string | null;
+      province?: string | null;
+      customer_name?: string | null;
+      customer_phone?: string | null;
+    } | null;
+    if (d?.address1 || d?.district) {
+      return {
+        address: {
+          address1: d.address1 ?? null,
+          address2: d.referencia ?? null,
+          city: d.district ?? null,
+          province: d.province ?? null,
+          name: d.customer_name ?? null,
+          phone: d.customer_phone ?? null,
+          // Un carrito abandonado no pasa por el checkout, así que Shopify
+          // nunca llega a geocodificar la dirección.
+          latitude: null,
+          longitude: null,
+        },
+        source: "carrito",
+      };
+    }
+  }
+
+  const { data: lead } = await admin
+    .from("leads")
+    .select("ship_name,address1,referencia,district,province,region,phone")
+    .eq("order_id", order.id)
+    .maybeSingle();
+  const l = lead as {
+    ship_name?: string | null;
+    address1?: string | null;
+    referencia?: string | null;
+    district?: string | null;
+    province?: string | null;
+    region?: string | null;
+    phone?: string | null;
+  } | null;
+  if (l?.address1 || l?.district) {
+    return {
+      address: {
+        address1: l.address1 ?? null,
+        address2: l.referencia ?? null,
+        city: l.district ?? null,
+        province: l.province ?? l.region ?? null,
+        name: l.ship_name ?? null,
+        phone: l.phone ?? null,
+        // La dirección de un lead la escribe el equipo a mano: sin geocodificar.
+        latitude: null,
+        longitude: null,
+      },
+      source: "lead",
+    };
+  }
+  return { address: null, source: null };
+}
+
+interface DirectGuideExisting {
+  id: string;
+  guide_code: string;
+  courier: string;
+  delivery_status: string;
+}
+
+/** Every guide already tied to the order (by FK or by carried order name). */
+async function findGuidesOfOrder(
+  admin: SupabaseClient,
+  order: { id: string; store_id: string; name: string | null },
+): Promise<DirectGuideExisting[]> {
+  const cols = "id,guide_code,courier,delivery_status";
+  const { data: byOrder } = await admin.from("shipments").select(cols).eq("order_id", order.id).limit(50);
+  let byName: DirectGuideExisting[] = [];
+  if (order.name) {
+    const { data } = await admin
+      .from("shipments")
+      .select(cols)
+      .eq("store_id", order.store_id)
+      .eq("order_name", order.name)
+      .limit(50);
+    byName = (data as DirectGuideExisting[]) ?? [];
+  }
+  const merged = new Map<string, DirectGuideExisting>();
+  for (const g of [...((byOrder as DirectGuideExisting[]) ?? []), ...byName]) merged.set(g.id, g);
+  return [...merged.values()];
+}
+
+const DIRECT_GUIDE_ACTIVE_STATUSES = new Set(["pendiente", "en_ruta", "por_preparar"]);
+
+export interface DirectFenixGuidePreview {
+  orderId: string;
+  storeId: string;
+  orderName: string | null;
+  totalAmount: number | null;
+  currency: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
+  cancelled: boolean;
+  refundedTotal: boolean;
+  lineItems: { title: string; quantity: number; sku: string | null }[];
+  address: {
+    address1: string | null;
+    address2: string | null;
+    district: string | null;
+    region: string | null;
+    source: "shopify" | "carrito" | "lead" | null;
+  };
+  city: string;
+  schedule: FenixDeliverySchedule | null;
+  stockOk: boolean;
+  stockReason: "sin_cobertura" | "sin_stock" | null;
+  uncovered: string[];
+  activeGuides: DirectGuideExisting[];
+  closedGuidesCount: number;
+  warnings: string[];
+}
+
+/**
+ * Live Shopify search for the direct-guide modal — same routing as
+ * searchShopifyOrdersLive but without a shipment to authorize against: any
+ * logged-in user searches only the stores they can access (RLS via
+ * getAccessibleStores), which is the same effective scope.
+ */
+export async function searchShopifyOrdersForDirectGuide(
+  query: string,
+): Promise<ShopifyOrderCandidate[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  const stores = await getAccessibleStores();
+  if (!stores.length) return [];
+  const targets = pickStoresForOrderQuery(q, stores);
+  const perStore = await Promise.all(
+    targets.map(async (store) => {
+      const creds = await getStoreCreds(store.id);
+      if (!creds?.shopify_token) return [];
+      try {
+        const orders = await searchOrdersLive({
+          domain: creds.shopify_domain,
+          token: creds.shopify_token,
+          storeId: store.id,
+          query: q,
+          first: 10,
+        });
+        return orders.map((o) => ({
+          gid: (o.raw as { id?: string } | undefined)?.id ?? `gid://shopify/Order/${o.shopify_order_id}`,
+          storeId: store.id,
+          name: o.name,
+          customer_phone: o.customer_phone ?? null,
+          created_at: o.created_at,
+        }));
+      } catch {
+        return []; // missing scope / API error on this store → skip it
+      }
+    }),
+  );
+  return perStore.flat().slice(0, 10);
+}
+
+/**
+ * Everything the modal needs to confirm a direct guide: order + address (with
+ * fallbacks), derived coverage city, per-item stock validation, existing guides
+ * of the order (active ones block) and operational warnings. A live candidate
+ * (orderGid + storeId) is captured into `orders` first — same pattern as
+ * linkShipmentToShopifyOrder — so the create step always works from a local id.
+ */
+export async function previewDirectFenixGuide(input: {
+  orderId?: string;
+  orderGid?: string;
+  storeId?: string;
+}): Promise<DirectFenixGuidePreview | { error: string }> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  const admin = createAdminSupabase();
+  let orderId = input.orderId ?? null;
+
+  if (!orderId) {
+    if (!input.orderGid || !input.storeId) return { error: "Pedido inválido." };
+    // RLS: can the caller see this store?
+    const { data: store } = await sb.from("stores").select("id").eq("id", input.storeId).maybeSingle();
+    if (!store) return { error: "Tienda inválida o sin acceso." };
+    const creds = await getStoreCreds(input.storeId);
+    if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify conectado." };
+    let order;
+    try {
+      order = await fetchOrderById({
+        domain: creds.shopify_domain,
+        token: creds.shopify_token,
+        storeId: input.storeId,
+        orderGid: input.orderGid,
+      });
+    } catch {
+      return { error: "No se pudo obtener el pedido de Shopify." };
+    }
+    if (!order) return { error: "Pedido no encontrado en Shopify." };
+    const { error: upsertErr } = await admin
+      .from("orders")
+      .upsert([order], { onConflict: "store_id,shopify_order_id" });
+    if (upsertErr) return { error: upsertErr.message };
+    const { data: row } = await admin
+      .from("orders")
+      .select("id")
+      .eq("store_id", input.storeId)
+      .eq("shopify_order_id", order.shopify_order_id)
+      .maybeSingle();
+    orderId = (row as { id: string } | null)?.id ?? null;
+    if (!orderId) return { error: "No se pudo registrar el pedido." };
+  }
+
+  // RLS-scoped read: resolves only if the caller can access the order's store.
+  const { data } = await sb
+    .from("orders")
+    .select(DIRECT_GUIDE_ORDER_COLUMNS)
+    .eq("id", orderId)
+    .maybeSingle();
+  const order = data as unknown as DirectGuideOrderRecord | null;
+  if (!order) return { error: "Pedido inválido o sin acceso." };
+
+  const { address, source } = await resolveDirectGuideAddress(admin, order);
+  const district = address?.city ?? null;
+  const region = address?.province ?? null;
+  const city = deriveFenixCoverageCity(district, region);
+
+  const { data: store } = await admin
+    .from("stores")
+    .select("org_id")
+    .eq("id", order.store_id)
+    .maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  if (!orgId) return { error: "No se encontró la organización de la tienda." };
+  const { data: stock, error: stockError } = await admin
+    .from("fenix_stock")
+    .select("city,product,sku,quantity")
+    .eq("org_id", orgId);
+  if (stockError) return { error: `No se pudo consultar el stock Fenix: ${stockError.message}` };
+
+  const lineItems = (order.line_items ?? []).map((li) => ({
+    title: li.title ?? "",
+    quantity: li.quantity ?? 1,
+    sku: li.sku ?? null,
+  }));
+  const check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
+
+  const guides = await findGuidesOfOrder(admin, order);
+  const activeGuides = guides.filter((g) => DIRECT_GUIDE_ACTIVE_STATUSES.has(g.delivery_status));
+  const closedGuidesCount = guides.length - activeGuides.length;
+
+  const totalRefunded = order.total_refunded ?? 0;
+  const refundedTotal = (order.total_amount ?? 0) > 0 && totalRefunded >= (order.total_amount ?? 0);
+  const warnings: string[] = [];
+  if (!address?.address1) {
+    warnings.push(
+      "El pedido no tiene dirección de envío registrada; la guía se creará sin dirección y podrás completarla en el panel del envío.",
+    );
+  }
+  warnings.push("El pedido no tiene coordenadas GPS; el Excel de programación saldrá sin ubicación.");
+  if (!refundedTotal && totalRefunded > 0) {
+    warnings.push("El pedido tiene un reembolso parcial en Shopify; verifica el monto a cobrar.");
+  }
+  if (closedGuidesCount > 0) {
+    warnings.push(
+      `Este pedido ya tuvo ${closedGuidesCount} guía${closedGuidesCount === 1 ? "" : "s"} previa${closedGuidesCount === 1 ? "" : "s"} (cerradas).`,
+    );
+  }
+  warnings.push(
+    "Si más adelante se importa un reporte Aliclik con una guía de este pedido, aparecerá como guía aparte en la cola.",
+  );
+
+  return {
+    orderId: order.id,
+    storeId: order.store_id,
+    orderName: order.name,
+    totalAmount: order.total_amount,
+    currency: order.currency,
+    customerName: address?.name ?? null,
+    customerPhone: order.customer_phone ?? normalizePhone(address?.phone) ?? null,
+    cancelled: !!order.cancelled_at,
+    refundedTotal,
+    lineItems,
+    address: {
+      address1: address?.address1 ?? null,
+      address2: address?.address2 ?? null,
+      district,
+      region,
+      source,
+    },
+    city,
+    schedule: getFenixDeliverySchedule(city, district),
+    stockOk: check.ok,
+    stockReason: check.ok ? null : check.reason ?? null,
+    uncovered: check.uncovered,
+    activeGuides,
+    closedGuidesCount,
+    warnings,
+  };
+}
+
+/**
+ * Create the direct Fenix guide. Never trusts the preview: re-runs every gate
+ * server-side (access → order sanity → destination → duplicates → stock for
+ * every line item → dispatch date → guide code) before inserting the
+ * courier='fenix' row — En ruta, sin guía madre, marcada created_via='fenix_directo'.
+ */
+export async function createDirectFenixGuide(input: {
+  orderId: string;
+  dispatchDateIso: string;
+  guideCode?: string;
+  note?: string;
+}): Promise<ShipmentActionState & { shipmentId?: string }> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  // RLS: the order resolves only for callers with access to its store.
+  const { data } = await sb
+    .from("orders")
+    .select(DIRECT_GUIDE_ORDER_COLUMNS)
+    .eq("id", input.orderId)
+    .maybeSingle();
+  const order = data as unknown as DirectGuideOrderRecord | null;
+  if (!order) return { error: "Pedido inválido o sin acceso." };
+
+  if (order.cancelled_at) {
+    return { error: "El pedido está cancelado en Shopify; no se puede crear la guía." };
+  }
+  const totalRefunded = order.total_refunded ?? 0;
+  if ((order.total_amount ?? 0) > 0 && totalRefunded >= (order.total_amount ?? 0)) {
+    return { error: "El pedido fue reembolsado por completo en Shopify; no se puede crear la guía." };
+  }
+
+  const admin = createAdminSupabase();
+  const { address } = await resolveDirectGuideAddress(admin, order);
+  const district = address?.city ?? null;
+  const region = address?.province ?? null;
+  const city = deriveFenixCoverageCity(district, region);
+  if (!district) {
+    return {
+      error:
+        "El pedido no tiene distrito/ciudad de envío, así que no se puede validar la cobertura ni el stock Fenix. Complétalo en Shopify y reintenta.",
+    };
+  }
+
+  const { data: store } = await admin
+    .from("stores")
+    .select("org_id")
+    .eq("id", order.store_id)
+    .maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  if (!orgId) return { error: "No se encontró la organización de la tienda." };
+
+  // Duplicate gate: an active guide (either courier) already covers this order.
+  const guides = await findGuidesOfOrder(admin, order);
+  const active = guides.find((g) => DIRECT_GUIDE_ACTIVE_STATUSES.has(g.delivery_status));
+  if (active) {
+    const courierLabel = active.courier === "fenix" ? "Fenix" : "Aliclik";
+    return {
+      error: `Este pedido ya tiene una guía activa: ${active.guide_code} (${courierLabel}, ${labelOfStatus(active.delivery_status)}). Gestiónala o anúlala antes de crear una guía directa.`,
+    };
+  }
+
+  // Stock gate: EVERY line item must have stock in the destination city.
+  const { data: stock, error: stockError } = await admin
+    .from("fenix_stock")
+    .select("city,product,sku,quantity")
+    .eq("org_id", orgId);
+  if (stockError) return { error: `No se pudo consultar el stock Fenix: ${stockError.message}` };
+  const lineItems = (order.line_items ?? []).map((li) => ({
+    title: li.title ?? "",
+    quantity: li.quantity ?? 1,
+    sku: li.sku ?? null,
+  }));
+  const check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
+  if (!check.ok) {
+    if (check.reason === "sin_stock") {
+      return {
+        error: `Sin stock Fenix en ${city} para: ${check.uncovered.join(", ")}. Actualiza el inventario en Stock Fenix e intenta de nuevo.`,
+      };
+    }
+    return { error: `Fenix no tiene cobertura en ${district || "el destino del pedido"}.` };
+  }
+
+  // Dispatch date: required, from tomorrow (Lima) onward — the day's Excel is
+  // usually already sent, so a same-day guide would never reach Fenix.
+  const dispatchDay = (input.dispatchDateIso || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dispatchDay) || Number.isNaN(Date.parse(input.dispatchDateIso))) {
+    return { error: "Elige la fecha de despacho." };
+  }
+  if (dispatchDay <= limaTodayKey()) {
+    return { error: "Elige una fecha de despacho desde mañana." };
+  }
+
+  const code = (input.guideCode?.trim().toUpperCase() || rescheduleGuideCode(order.name, input.dispatchDateIso)).trim();
+  if (!code) {
+    return { error: "El pedido no tiene número para autogenerar; ingresa el código de guía manualmente." };
+  }
+
+  const insertRow = {
+    courier: "fenix",
+    guide_code: code,
+    store_id: order.store_id,
+    order_id: order.id,
+    matched: true,
+    match_method: "manual",
+    order_name: order.name,
+    customer_name: address?.name ?? null,
+    customer_phone: order.customer_phone ?? normalizePhone(address?.phone) ?? null,
+    product: lineItems.map((li) => li.title).filter(Boolean).join(" | ") || null,
+    district,
+    province: null,
+    city,
+    region,
+    delivery_address: address?.address1 ?? null,
+    delivery_reference: address?.address2 ?? null,
+    latitude: null,
+    longitude: null,
+    delivery_status: "en_ruta",
+    status_category: "in_route",
+    next_followup_at: input.dispatchDateIso,
+    fenix_eligible: true,
+    created_via: "fenix_directo",
+  };
+  let insertResult = await admin.from("shipments").insert(insertRow).select("id").single();
+  if (
+    insertResult.error &&
+    (insertResult.error.code === "PGRST204" ||
+      insertResult.error.code === "42703" ||
+      insertResult.error.message.toLowerCase().includes("created_via"))
+  ) {
+    // 0043 may land moments after the app deploy — keep the flow alive without
+    // the origin marker rather than failing every direct guide.
+    const { created_via: _createdVia, ...legacyRow } = insertRow;
+    insertResult = await admin.from("shipments").insert(legacyRow).select("id").single();
+  }
+  if (insertResult.error || !insertResult.data) {
+    const dup = insertResult.error?.code === "23505";
+    return {
+      error: dup
+        ? `Ya existe una guía Fenix con el código ${code}. Cambia la fecha o edita el código.`
+        : (insertResult.error?.message ?? "No se pudo crear la guía Fenix."),
+    };
+  }
+  const childId = (insertResult.data as { id: string }).id;
+
+  // Gestión del día de quien la creó (kind reroute + new_status null: cuenta
+  // como gestión sin inflar "reprogramadas", y la guía —sin madre— queda fuera
+  // del universo de Reprogramados en Kapso).
+  await admin.from("shipment_calls").insert({
+    shipment_id: childId,
+    store_id: order.store_id,
+    agent: user.id,
+    kind: "reroute",
+    new_status: null,
+    note: [`Guía Fenix directa creada: ${code} (pedido ${order.name ?? "sin número"}).`, input.note?.trim() || null]
+      .filter(Boolean)
+      .join(" "),
+    next_followup_at: input.dispatchDateIso,
+  });
+
+  await syncMasterForShipment(admin, childId);
+  revalidatePath("/dashboard/envios");
+  const fecha = new Date(input.dispatchDateIso).toLocaleDateString("es-PE", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  });
+  // El id vuelve al cliente para que el tablero salte a "En ruta" —donde nace la
+  // guía— y la resalte: creándola desde "Pendiente" el refresco no muestra nada
+  // porque la guía nueva no pertenece a esa lista.
+  return {
+    notice: `Guía Fenix directa ${code} creada — En ruta, despacho ${fecha}.`,
+    shipmentId: childId,
+  };
+}
+
+function labelOfStatus(status: string): string {
+  return (
+    { pendiente: "Pendiente", en_ruta: "En ruta", por_preparar: "Por preparar" } as Record<string, string>
+  )[status] ?? status;
 }
 
 /**
@@ -1139,6 +1754,7 @@ export async function resolveShipmentMatch(
       })
       .eq("id", shipmentId);
     if (error) return { error: error.message };
+    await syncMasterForShipment(admin, shipmentId);
     revalidatePath("/dashboard/envios");
     return { notice: "Pedido vinculado." };
   }

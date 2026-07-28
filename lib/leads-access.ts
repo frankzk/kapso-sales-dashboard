@@ -4,15 +4,25 @@ import { createServerSupabase } from "@/lib/db";
 import { shopifyOrderAdminUrl } from "@/lib/shopify";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 
-export type LeadView = "por_llamar" | "yape" | "seguimientos" | "ganados" | "perdidos";
+export type LeadView = "por_llamar" | "handoff" | "yape" | "seguimientos" | "ganados" | "perdidos";
 
 export const LEAD_VIEWS: { key: LeadView; label: string }[] = [
   { key: "por_llamar", label: "Por llamar" },
+  { key: "handoff", label: "⚡ Atender ahora" },
   { key: "yape", label: "🔥 Yape/Shalom" },
   { key: "seguimientos", label: "Seguimientos" },
   { key: "ganados", label: "Ganados" },
   { key: "perdidos", label: "Perdidos" },
 ];
+
+/** Ventana de "frescura" de un handoff: si el cliente no escribe hace más de
+ *  esto, sale de "Atender ahora" (el cron lo devuelve a la cola normal). */
+export const HANDOFF_FRESH_HOURS = 24;
+
+/** ISO del corte de frescura de handoffs (now − HANDOFF_FRESH_HOURS). */
+export function handoffFreshCutoffIso(nowMs = Date.now()): string {
+  return new Date(nowMs - HANDOFF_FRESH_HOURS * 3_600_000).toISOString();
+}
 
 const LEADS_PAGE_SIZE = 1000;
 const LEADS_PAGE_CAP = 20_000;
@@ -28,6 +38,7 @@ const LEAD_BOARD_SELECT = [
   "kapso_conversation_id",
   "handoff_reason",
   "handoff_context",
+  "handoff_at",
   "category",
   "status",
   "has_order",
@@ -44,6 +55,7 @@ const LEAD_BOARD_SELECT = [
   "address1",
   "ship_name",
   "inbound_count",
+  "first_inbound_text",
   "source",
   "ad_id",
   "ad_headline",
@@ -54,14 +66,34 @@ const LEAD_BOARD_SELECT = [
   "claimed_at",
 ].join(",");
 
+// Deployment safety: the app can ship before 0043 is applied. Without this the
+// whole select errors and the board renders EMPTY (not just missing the hook).
+const LEAD_BOARD_SELECT_LEGACY = LEAD_BOARD_SELECT.split(",")
+  .filter((c) => c !== "first_inbound_text")
+  .join(",");
+
+/** Cuántas filas carga la página por vista. "Por llamar" se filtra y cuenta en
+ *  cliente (jerarquía de facetas), así que necesita el universo completo; el
+ *  resto se acota para que la carga inicial siga siendo rápida. Compartido para
+ *  que la UI SEPA si lo que tiene en memoria está truncado (p. ej. antes de
+ *  exportar una audiencia completa). */
+export const LEADS_VIEW_LIMIT = 200;
+
+export function leadsViewLimit(view: LeadView): number | null {
+  return view === "por_llamar" ? null : LEADS_VIEW_LIMIT;
+}
+
 export async function getStoreLeads(
   storeId: string,
   view: LeadView,
-  limit: number | null = 200,
+  limit: number | null = LEADS_VIEW_LIMIT,
 ): Promise<LeadRow[]> {
   const sb = await createServerSupabase();
-  const buildQuery = () => {
-    let q = sb.from("leads").select(LEAD_BOARD_SELECT).eq("store_id", storeId);
+  const buildQuery = (select: string = LEAD_BOARD_SELECT, count?: "exact") => {
+    let q = sb
+      .from("leads")
+      .select(select, count ? { count } : undefined)
+      .eq("store_id", storeId);
     switch (view) {
       case "por_llamar":
         q = q
@@ -70,6 +102,20 @@ export async function getStoreLeads(
           .order("needs_attention", { ascending: false })
           .order("last_interaction_at", { ascending: false })
           .order("id", { ascending: true }); // stable pagination tie-breaker
+        break;
+      case "handoff":
+        // "Atender ahora": handoffs del bot ocurridos en las últimas
+        // HANDOFF_FRESH_HOURS y aún sin gestionar (needs_attention). El más
+        // antiguo primero (el que más espera arriba). Se filtra por handoff_at
+        // (siempre seteado por applyHandoff), NO por last_inbound_at — que
+        // applyHandoff no puebla y dejaría la cola vacía. Sale al dispositionar
+        // (needs_attention=false), al marcar resuelto, o cuando el cron lo
+        // expira por antigüedad.
+        q = q
+          .eq("needs_attention", true)
+          .gte("handoff_at", handoffFreshCutoffIso())
+          .order("handoff_at", { ascending: true })
+          .order("id", { ascending: true });
         break;
       case "yape":
         q = q
@@ -101,18 +147,52 @@ export async function getStoreLeads(
   };
 
   if (limit !== null) {
-    const { data } = await buildQuery().limit(limit);
-    return (data as unknown as LeadRow[]) ?? [];
+    let res = await buildQuery().limit(limit);
+    if (res.error) res = await buildQuery(LEAD_BOARD_SELECT_LEGACY).limit(limit);
+    return (res.data as unknown as LeadRow[]) ?? [];
   }
 
   // PostgREST caps one response at ~1000 rows even when `.limit()` asks for
   // more. The queue's facets and chart drill-downs run client-side, so they must
   // receive the same complete universe that the paginated insights query uses.
+  //
+  // La primera página se pide con `count: "exact"`: PostgREST lo resuelve en la
+  // MISMA consulta, así que sale gratis y nos dice cuántas páginas faltan. Con
+  // eso el resto se piden TODAS A LA VEZ en lugar de una tras otra — con 2.500
+  // leads eso pasa de tres viajes encadenados a dos. Si el servidor no devuelve
+  // el total (mock, versión antigua), se cae al drenado secuencial de siempre.
   const rows: LeadRow[] = [];
-  for (let from = 0; from < LEADS_PAGE_CAP; from += LEADS_PAGE_SIZE) {
-    const { data, error } = await buildQuery().range(from, from + LEADS_PAGE_SIZE - 1);
-    if (error) break;
-    const batch = (data as unknown as LeadRow[] | null) ?? [];
+  let select = LEAD_BOARD_SELECT;
+  let first = await buildQuery(select, "exact").range(0, LEADS_PAGE_SIZE - 1);
+  if (first.error && select !== LEAD_BOARD_SELECT_LEGACY) {
+    select = LEAD_BOARD_SELECT_LEGACY;
+    first = await buildQuery(select, "exact").range(0, LEADS_PAGE_SIZE - 1);
+  }
+  if (first.error) return [];
+  const firstBatch = (first.data as unknown as LeadRow[] | null) ?? [];
+  rows.push(...firstBatch);
+  if (firstBatch.length < LEADS_PAGE_SIZE) return rows;
+
+  const total = first.count != null ? Math.min(first.count, LEADS_PAGE_CAP) : null;
+  if (total != null) {
+    const offsets: number[] = [];
+    for (let from = LEADS_PAGE_SIZE; from < total; from += LEADS_PAGE_SIZE) offsets.push(from);
+    const pages = await Promise.all(
+      offsets.map((from) => buildQuery(select).range(from, from + LEADS_PAGE_SIZE - 1)),
+    );
+    for (const page of pages) {
+      // Un fallo a media tanda dejaría un HUECO en la cola (las páginas
+      // siguientes ya no encajan), así que se corta ahí en vez de concatenar.
+      if (page.error) break;
+      rows.push(...((page.data as unknown as LeadRow[] | null) ?? []));
+    }
+    return rows;
+  }
+
+  for (let from = LEADS_PAGE_SIZE; from < LEADS_PAGE_CAP; from += LEADS_PAGE_SIZE) {
+    const res = await buildQuery(select).range(from, from + LEADS_PAGE_SIZE - 1);
+    if (res.error) break;
+    const batch = (res.data as unknown as LeadRow[] | null) ?? [];
     rows.push(...batch);
     if (batch.length < LEADS_PAGE_SIZE) break;
   }
@@ -147,6 +227,16 @@ export interface CustomerHistory {
   lastOrderAt: string | null;
   lastProduct: string | null;
   currentOrderName: string | null; // Shopify name (#AUR…) of the lead's OWN current order
+  /**
+   * Id INTERNO (`orders.id`) del pedido propio del lead — no el de Shopify.
+   * Es la clave con la que trabaja todo lo interno (`order_master`, `shipments`,
+   * `order_events`), y por tanto la que necesita el panel de guías de Aliclik.
+   */
+  currentOrderId: string | null;
+  /** Guía ya creada para ese pedido, si la hay. Con guía no se ofrece crear otra. */
+  currentOrderGuide: string | null;
+  /** Si ese pedido ya tiene punto en el mapa (casi siempre, vía Shopify). */
+  currentOrderHasCoordinate: boolean;
   recentOrders: PriorOrder[]; // last 3 prior orders (excl. own), newest first
 }
 
@@ -162,16 +252,43 @@ export async function getCustomerHistory(
   excludeOrderId?: string | null,
   shopDomain?: string | null,
 ): Promise<CustomerHistory | null> {
-  if (!phone) return null;
   const sb = await createServerSupabase();
 
   // The lead's own current order name (#AUR…) — resolved by id so it's reliable
-  // regardless of phone formatting.
+  // regardless of phone formatting. Junto con él, si ese pedido YA tiene guía:
+  // el drawer usa las dos cosas para decidir si ofrecer crear una en Aliclik.
   let currentOrderName: string | null = null;
+  let currentOrderGuide: string | null = null;
+  let currentOrderHasCoordinate = false;
   if (excludeOrderId) {
-    const { data: cur } = await sb.from("orders").select("name").eq("id", excludeOrderId).maybeSingle();
-    currentOrderName = (cur as { name: string | null } | null)?.name ?? null;
+    const [cur, master] = await Promise.all([
+      sb.from("orders").select("name").eq("id", excludeOrderId).maybeSingle(),
+      sb
+        .from("order_master")
+        .select("guide_code,latitude,longitude")
+        .eq("order_id", excludeOrderId)
+        .maybeSingle(),
+    ]);
+    currentOrderName = (cur.data as { name: string | null } | null)?.name ?? null;
+    const m = master.data as {
+      guide_code: string | null;
+      latitude: number | null;
+      longitude: number | null;
+    } | null;
+    currentOrderGuide = m?.guide_code ?? null;
+    currentOrderHasCoordinate = m?.latitude != null && m?.longitude != null;
   }
+  const own = {
+    currentOrderName,
+    currentOrderId: excludeOrderId ?? null,
+    currentOrderGuide,
+    currentOrderHasCoordinate,
+  };
+
+  // Sin teléfono no hay historial de compras que buscar, pero el pedido propio sí
+  // existe. Antes se salía aquí devolviendo null y el drawer se quedaba sin saber
+  // que el lead tenía un pedido sin guía.
+  if (!phone) return { ...emptyPrior, ...own, recentOrders: [] };
 
   const { data } = await sb
     .from("orders")
@@ -192,8 +309,7 @@ export async function getCustomerHistory(
       line_items: unknown;
     }[]) ?? [];
   if (excludeOrderId) rows = rows.filter((r) => r.id !== excludeOrderId);
-  const empty = { orderCount: 0, lastOrderName: null, lastOrderAt: null, lastProduct: null };
-  if (!rows.length) return { ...empty, currentOrderName, recentOrders: [] };
+  if (!rows.length) return { ...emptyPrior, ...own, recentOrders: [] };
   const last = rows[0]!;
   const items = Array.isArray(last.line_items) ? (last.line_items as { title?: string }[]) : [];
   const lastProduct = items.length ? String(items[0]?.title ?? "").trim() || null : null;
@@ -208,20 +324,88 @@ export async function getCustomerHistory(
     lastOrderName: last.name,
     lastOrderAt: last.created_at,
     lastProduct,
-    currentOrderName,
+    ...own,
     recentOrders,
   };
 }
 
+/** Valores neutros del bloque "cliente recurrente" cuando no hay compras previas. */
+const emptyPrior = {
+  orderCount: 0,
+  lastOrderName: null,
+  lastOrderAt: null,
+  lastProduct: null,
+} as const;
+
 /** View counts + `sin_llamar` (status `nuevo`), the default queue tab + burndown anchor. */
 export type LeadCounts = Record<LeadView, number> & { sin_llamar: number };
 
-export async function getLeadCounts(storeId: string): Promise<LeadCounts> {
+/**
+ * Conteos + FIRMA de la cola de una tienda.
+ *
+ * La firma resume el estado de `leads` para esa tienda en una cadena corta
+ * (cuántos hay + cuándo se tocó el último). El refresco en vivo la compara con
+ * la que ya tiene: si no cambió, no recarga NADA. Antes recargaba la página
+ * entera —los ~2.500 leads de la cola, los siete conteos y el panel de
+ * gráficos— cada 30 segundos aunque no hubiera pasado absolutamente nada.
+ */
+export interface LeadQueueSnapshot {
+  counts: LeadCounts;
+  signature: string;
+}
+
+export async function getLeadQueueSnapshot(storeId: string): Promise<LeadQueueSnapshot> {
   const sb = await createServerSupabase();
-  const head = () => sb.from("leads").select("*", { count: "exact", head: true }).eq("store_id", storeId);
   const nowIso = new Date().toISOString();
-  const [porLlamar, yape, seguimientos, ganados, perdidos, sinLlamar] = await Promise.all([
+
+  // Camino normal (migración 0059): un solo recorrido de la tabla devuelve los
+  // siete conteos y la firma.
+  const rpc = await sb
+    .rpc("lead_queue_counts", {
+      p_store_id: storeId,
+      p_handoff_cutoff: handoffFreshCutoffIso(),
+      p_now: nowIso,
+    })
+    .maybeSingle();
+  const row = rpc.data as Record<string, number | string | null> | null;
+  if (!rpc.error && row) {
+    const n = (key: string) => Number(row[key] ?? 0) || 0;
+    return {
+      counts: {
+        por_llamar: n("por_llamar"),
+        handoff: n("handoff"),
+        yape: n("yape"),
+        seguimientos: n("seguimientos"),
+        ganados: n("ganados"),
+        perdidos: n("perdidos"),
+        sin_llamar: n("sin_llamar"),
+      },
+      signature: `${n("total")}:${String(row.last_change ?? "")}`,
+    };
+  }
+
+  // La app puede desplegarse antes de aplicar 0059. Sin este camino la cola se
+  // quedaría SIN contadores (los siete a cero), que es peor que ir lento.
+  const counts = await legacyLeadCounts(sb, storeId, nowIso);
+  // Sin `last_change` la firma solo capta cambios de pertenencia (entra/sale de
+  // una pestaña). El refresco de seguridad periódico cubre el resto.
+  const signature = `legacy:${Object.values(counts).join(",")}`;
+  return { counts, signature };
+}
+
+export async function getLeadCounts(storeId: string): Promise<LeadCounts> {
+  return (await getLeadQueueSnapshot(storeId)).counts;
+}
+
+async function legacyLeadCounts(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeId: string,
+  nowIso: string,
+): Promise<LeadCounts> {
+  const head = () => sb.from("leads").select("*", { count: "exact", head: true }).eq("store_id", storeId);
+  const [porLlamar, handoff, yape, seguimientos, ganados, perdidos, sinLlamar] = await Promise.all([
     head().in("category", ["open", "hot"]).neq("status", "yape_por_verificar"),
+    head().eq("needs_attention", true).gte("handoff_at", handoffFreshCutoffIso()), // "Atender ahora"
     head().eq("status", "yape_por_verificar"),
     head().not("next_followup_at", "is", null).lte("next_followup_at", nowIso),
     head().eq("category", "won"),
@@ -230,6 +414,7 @@ export async function getLeadCounts(storeId: string): Promise<LeadCounts> {
   ]);
   return {
     por_llamar: porLlamar.count ?? 0,
+    handoff: handoff.count ?? 0,
     yape: yape.count ?? 0,
     seguimientos: seguimientos.count ?? 0,
     ganados: ganados.count ?? 0,

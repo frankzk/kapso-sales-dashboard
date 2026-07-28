@@ -150,3 +150,60 @@ export function evaluateFenix(
   }
   return { eligible: true, reason: "ok", city };
 }
+
+// ── Guías Fenix directas: validación de stock por ítem ──────────────────────
+
+/** A line item to validate against stock (from the Shopify order). */
+export interface DirectStockItem {
+  title?: string | null;
+  sku?: string | null;
+  quantity?: number | null;
+}
+
+export interface DirectFenixStockCheck {
+  ok: boolean;
+  reason?: "sin_cobertura" | "sin_stock";
+  city: string; // normalized destination
+  uncovered: string[]; // titles of items with no stock row covering them
+}
+
+/**
+ * Creation gate for a DIRECT Fenix guide (no Aliclik parent): unlike
+ * evaluateFenix — which passes when ANY product has stock — a direct dispatch
+ * leaves the regional warehouse with the complete order, so EVERY line item
+ * must be covered by a stock row of the destination city with quantity > 0.
+ * Items are matched by exact SKU first (naming-independent), then by the
+ * loose title match. Validation only: the stock itself keeps being consumed
+ * on delivery (salida_entrega), same as every Fenix guide. Pure.
+ */
+export function evaluateDirectFenixStock(
+  city: string | null | undefined,
+  stockRows: FenixStockRow[],
+  items: DirectStockItem[],
+): DirectFenixStockCheck {
+  const normalized = normalizeCity(city);
+  const stockCity = fenixStockCityKey(normalized);
+  const cityRows = stockRows.filter((r) => fenixStockCityKey(r.city) === stockCity);
+  const covered = isFenixCity(normalized) || cityRows.length > 0;
+  if (!normalized || !covered) {
+    return { ok: false, reason: "sin_cobertura", city: normalized, uncovered: [] };
+  }
+
+  const refs: DirectStockItem[] = items.length ? items : [{ title: null, sku: null, quantity: 1 }];
+  const available = cityRows.filter((r) => r.quantity > 0);
+  const uncovered: string[] = [];
+  for (const item of refs) {
+    const ref: ProductRef = { title: item.title ?? null, sku: item.sku ?? null };
+    const bySku = available.find((r) => {
+      const sSku = (r.sku ?? "").trim().toLowerCase();
+      const rSku = (ref.sku ?? "").trim().toLowerCase();
+      return !!sSku && !!rSku && sSku === rSku;
+    });
+    const match = bySku ?? available.find((r) => stockCoversRef(r, ref));
+    if (!match) uncovered.push(item.title?.trim() || "(producto sin nombre)");
+  }
+  if (uncovered.length) {
+    return { ok: false, reason: "sin_stock", city: normalized, uncovered };
+  }
+  return { ok: true, city: normalized, uncovered: [] };
+}

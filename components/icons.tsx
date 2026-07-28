@@ -161,3 +161,13 @@ export function IconTruck(props: IconProps) {
     </svg>
   );
 }
+
+export function IconClipboard(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="5" y="4" width="14" height="17" rx="2" />
+      <path d="M9 4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1.5H9z" />
+      <path d="M8.5 10h7M8.5 13.5h7M8.5 17h4" />
+    </svg>
+  );
+}
