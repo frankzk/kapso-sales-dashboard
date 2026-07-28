@@ -109,6 +109,7 @@ export interface PaymentRow {
 }
 
 export interface PickupKeyPanel {
+  storeId: string;
   payments: PaymentRow[];
   paymentState: string;
   hasKey: boolean;
@@ -166,6 +167,7 @@ export async function loadPaymentPanel(
 
   return {
     panel: {
+      storeId: ctx.storeId,
       payments,
       paymentState: paymentState(snapshots),
       hasKey: Boolean(keyRow),
