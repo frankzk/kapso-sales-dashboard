@@ -1,7 +1,7 @@
--- 0055 — La liquidación también trae la comisión del courier, y a veces no trae guía.
+-- 0065 — La liquidación también trae la comisión del courier, y a veces no trae guía.
 --
 -- Con el primer reporte real en la mano (Axel Courier, Lima Metropolitana) salen
--- dos cosas que 0054 no previó:
+-- dos cosas que 0064 no previó:
 --
 --   1. LA HOJA DECLARA LO QUE EL COURIER SE QUEDA. La columna GANANCIA es la
 --      tarifa que Axel cobra POR ENTREGA y que descuenta del depósito: cobran

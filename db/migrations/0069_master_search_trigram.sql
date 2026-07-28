@@ -1,4 +1,4 @@
--- 0060 — Buscar en el Master deja de escanear la tabla entera.
+-- 0069 — Buscar en el Master deja de escanear la tabla entera.
 --
 -- La búsqueda usa `ilike '%texto%'`: con el comodín al principio NINGÚN índice
 -- corriente sirve, así que Postgres leía las 10.000 filas y descartaba 10.327

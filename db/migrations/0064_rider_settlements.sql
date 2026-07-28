@@ -1,4 +1,4 @@
--- 0054 — Liquidaciones de motorizados.
+-- 0064 — Liquidaciones de motorizados.
 --
 -- El motorizado entrega pedidos contra reembolso y al final del día "liquida":
 -- declara qué guías entregó y cuánta plata recaudó, y deposita lo cobrado. Hasta
@@ -153,7 +153,7 @@ alter table cost_tariffs add constraint cost_tariffs_concept_check
     'envio_agencia',
     'devolucion',
     'especial',
-    -- Pago AL motorizado (0054). Son costos como cualquier otro: llevan fecha de
+    -- Pago AL motorizado (0064). Son costos como cualquier otro: llevan fecha de
     -- vigencia y ámbito, así que viven en la misma tabla en vez de duplicar el
     -- motor de resolución.
     'motorizado_entrega',

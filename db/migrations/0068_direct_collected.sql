@@ -1,4 +1,4 @@
--- 0058 — Separar lo cobrado que NO pasa por las manos de quien liquida.
+-- 0068 — Separar lo cobrado que NO pasa por las manos de quien liquida.
 --
 -- El Yape del cliente cae a la cuenta de la empresa (Grupo GF SAC), y el POS lo
 -- cobra el terminal: ninguna de las dos es plata que el motorizado tenga que

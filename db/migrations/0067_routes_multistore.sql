@@ -1,6 +1,6 @@
--- 0057 — La ruta deja de ser de una tienda, y cerrarla mueve el Master.
+-- 0067 — La ruta deja de ser de una tienda, y cerrarla mueve el Master.
 --
--- Dos correcciones a 0056, ambas descubiertas al contrastar el diseño con cómo
+-- Dos correcciones a 0066, ambas descubiertas al contrastar el diseño con cómo
 -- se reparte de verdad:
 --
 --   1. UN MOTORIZADO MEZCLA TIENDAS EN LA MISMA VUELTA. Sale con paquetes de
@@ -65,10 +65,10 @@ alter table rider_settlements
 create index if not exists rider_settlements_route_idx
   on rider_settlements(route_id) where route_id is not null;
 
--- Se conserva `delivery_routes.settlement_id` de 0056 por compatibilidad, pero
+-- Se conserva `delivery_routes.settlement_id` de 0066 por compatibilidad, pero
 -- deja de ser la fuente: con rutas mixtas no hay UNA liquidación que apuntar.
 comment on column delivery_routes.settlement_id is
-  'OBSOLETO desde 0057: una ruta mixta genera varias liquidaciones. Usa '
+  'OBSOLETO desde 0067: una ruta mixta genera varias liquidaciones. Usa '
   'rider_settlements.route_id.';
 
 -- ----------------------------------------------------------------------------

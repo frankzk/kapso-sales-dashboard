@@ -1,7 +1,7 @@
--- 0056 — Rutas de reparto: el motorizado propio reporta desde su teléfono.
+-- 0066 — Rutas de reparto: el motorizado propio reporta desde su teléfono.
 --
 -- Hasta ahora la liquidación se RECONSTRUÍA a posteriori, leyendo una hoja o un
--- cuaderno (0054/0055). Con motorizados propios se puede hacer al revés: que la
+-- cuaderno (0064/0065). Con motorizados propios se puede hacer al revés: que la
 -- entrega se declare en el momento y la liquidación caiga sola al cerrar el día.
 -- La carga por archivo sigue viva para los couriers externos, que es donde no
 -- hay más remedio.
@@ -34,7 +34,7 @@ alter table memberships drop constraint if exists memberships_role_check;
 alter table memberships add constraint memberships_role_check
   check (role in ('owner', 'admin', 'viewer', 'vendedora', 'motorizado'));
 
--- Ata la ficha del motorizado (0054) con su usuario. Nulo = todavía no tiene
+-- Ata la ficha del motorizado (0064) con su usuario. Nulo = todavía no tiene
 -- acceso a la web; se le da de alta y liquida igual.
 alter table riders
   add column if not exists user_id uuid references auth.users(id) on delete set null;
@@ -60,7 +60,7 @@ create table if not exists delivery_routes (
                  'en_curso',    -- entregada al motorizado, ya reporta
                  'cerrada'      -- terminó el día; generó su liquidación
                )),
-  -- Liquidación que generó al cerrarse. Es el puente con 0054: la ruta cerrada
+  -- Liquidación que generó al cerrarse. Es el puente con 0064: la ruta cerrada
   -- no vuelve a calcularse, se convierte en una liquidación como cualquier otra.
   settlement_id uuid references rider_settlements(id) on delete set null,
   note         text,
