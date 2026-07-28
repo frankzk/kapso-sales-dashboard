@@ -2,9 +2,22 @@
 -- This stubs the Supabase-managed roles + auth schema so our migrations and
 -- RLS policies can be applied and exercised on a vanilla Postgres. It REPLACES
 -- auth.uid() with a GUC-driven version, which would break real auth.
-create role anon nologin;
-create role authenticated nologin;
-create role service_role nologin bypassrls;  -- Supabase sets BYPASSRLS on service_role
+-- Los ROLES son del cluster, no de la base: si el mismo cluster levanta una
+-- segunda base para otra comprobación (verify-db.sh lo hace para probar
+-- db/apply_bundled.sql desde cero), ya existen. Todo lo demás sí es por base y
+-- hay que crearlo cada vez.
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'anon') then
+    create role anon nologin;
+  end if;
+  if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+    create role authenticated nologin;
+  end if;
+  if not exists (select 1 from pg_roles where rolname = 'service_role') then
+    create role service_role nologin bypassrls;  -- Supabase le pone BYPASSRLS
+  end if;
+end $$;
 
 create schema auth;
 create table auth.users (

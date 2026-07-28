@@ -7,7 +7,7 @@
 // solo aparece cuando el servidor ya dijo que se puede — y aun así el servidor
 // lo vuelve a comprobar antes de descifrar nada.
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import {
   completePaymentData,
@@ -362,6 +362,7 @@ function VoucherForm({
   const [payer, setPayer] = useState("");
   const [phone, setPhone] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
 
   async function submit() {
@@ -467,23 +468,59 @@ function VoucherForm({
           className="w-40 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
         />
       </div>
-      <input
-        type="file"
-        accept="image/*"
-        onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        className="block text-sm text-slate-600"
-      />
+      {/* El input nativo se pintaba como texto suelto ("Seleccionar archivo
+          Ningún archivo seleccionado") y no se leía como algo pulsable. Se
+          esconde y se pone un botón de verdad, que además dice qué archivo
+          quedó elegido: sin eso no hay forma de saber si el clic hizo algo. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-slate-300 p-2.5">
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          {file ? "Cambiar imagen" : "Elegir imagen del Yape"}
+        </button>
+        <span className="min-w-0 flex-1 truncate text-xs text-slate-500">
+          {file ? file.name : "Ningún archivo elegido"}
+        </span>
+        {file && (
+          <button
+            type="button"
+            onClick={() => {
+              setFile(null);
+              if (fileRef.current) fileRef.current.value = "";
+            }}
+            className="text-xs text-slate-500 underline hover:text-slate-700"
+          >
+            Quitar
+          </button>
+        )}
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        />
+      </div>
       <p className="text-xs text-slate-400">
         Lo que dejes en blanco se intenta leer de la imagen (nº de operación, monto, fecha y hora).
         Cargar la imagen no valida el pago: queda pendiente hasta que alguien lo revise.
       </p>
       <button
-        disabled={busy || pending}
+        // Sin imagen y sin nº de operación no hay nada que registrar: dejar el
+        // botón activo solo consigue que parezca que no hace nada.
+        disabled={busy || pending || (!file && !operation.trim())}
         onClick={submit}
         className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
       >
         {busy ? "Registrando…" : "Registrar pago"}
       </button>
+      {!file && !operation.trim() && (
+        <p className="text-xs text-slate-400">
+          Elige la imagen del Yape, o escribe el nº de operación si lo vas a cargar a mano.
+        </p>
+      )}
     </div>
   );
 }

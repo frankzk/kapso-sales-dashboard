@@ -18,21 +18,48 @@ export type ClientPerformanceMetric = {
   connection?: string;
 };
 
+/**
+ * Secciones del panel que la telemetría puede nombrar.
+ *
+ * ESTA ES LA ÚNICA LISTA. `sanitizeDashboardPath` (lib/client-performance.ts)
+ * reduce cualquier ruta a una de estas antes de que la métrica salga del
+ * navegador, y `dashboardRoute` de aquí abajo las valida al llegar. Cuando
+ * estaban duplicadas se separaron sin que nada fallara: el cliente mandaba
+ * `/dashboard/pedidos` y el servidor lo rechazaba con 400, así que la página
+ * más pesada del panel era justamente la única sin medir.
+ *
+ * Añadir una sección nueva del panel es añadirla aquí, y nada más.
+ *
+ * Lo que NO va: nada con id dentro (`/dashboard/[storeId]`). Todo lo que no
+ * esté en la lista se reduce a `/dashboard/other`, que es lo que mantiene la
+ * telemetría libre de identificadores.
+ */
+export const DASHBOARD_SECTIONS = [
+  "leads",
+  "pedidos",
+  "envios",
+  "productividad",
+  "costos",
+  "liquidaciones",
+  "rutas",
+  "stores",
+  "team",
+] as const;
+
+/** Rutas exactas que `parseClientPerformanceMetric` acepta en `from` y `to`. */
+export const DASHBOARD_ROUTES: readonly string[] = [
+  "/dashboard",
+  ...DASHBOARD_SECTIONS.map((s) => `/dashboard/${s}`),
+  "/dashboard/other",
+];
+
 const METRIC_NAMES = new Set<string>(CLIENT_PERFORMANCE_METRIC_NAMES);
 const CONNECTIONS = new Set(["slow-2g", "2g", "3g", "4g"]);
-const DASHBOARD_ROUTES = new Set([
-  "/dashboard",
-  "/dashboard/leads",
-  "/dashboard/envios",
-  "/dashboard/productividad",
-  "/dashboard/stores",
-  "/dashboard/team",
-  "/dashboard/other",
-]);
+const DASHBOARD_ROUTE_SET = new Set<string>(DASHBOARD_ROUTES);
 
 function dashboardRoute(value: unknown): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || !DASHBOARD_ROUTES.has(value)) return undefined;
+  if (typeof value !== "string" || !DASHBOARD_ROUTE_SET.has(value)) return undefined;
   return value;
 }
 

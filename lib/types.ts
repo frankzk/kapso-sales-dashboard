@@ -359,30 +359,36 @@ export interface FenixStockRowDb {
 // ── Master de Pedidos ───────────────────────────────────────────────────────
 
 /** Una fila del Master: el read-model materializado en `order_master` (0045). */
+/**
+ * Una fila del Master. Los campos OPCIONALES son los que el listado no manda
+ * (ver MASTER_COLUMNS en lib/orders-master-access.ts): pagar su nombre y su
+ * valor diez mil veces por carga no compensa cuando solo se leen al abrir un
+ * pedido. El detalle sí los trae completos.
+ */
 export interface OrderMasterRow {
   id: string;
   store_id: string;
   order_id: string;
   order_name: string | null;
-  shopify_order_id: string;
+  shopify_order_id?: string;
   order_created_at: string | null;
   customer_name: string | null;
   customer_phone: string | null;
   region: string | null;
   province: string | null;
   district: string | null;
-  address: string | null;
-  reference: string | null;
-  latitude: number | null;
-  longitude: number | null;
+  address?: string | null;
+  reference?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
   /** Origen de la ubicación: manual | courier | ubigeo | shopify | draft. */
-  geo_source: string | null;
+  geo_source?: string | null;
   shipping_mode: string | null; // cod | agency
   order_total: number | null;
   general_status: string;
   operational_status: string;
   status_since: string | null;
-  status_source: string | null;
+  status_source?: string | null;
   status_locked: boolean;
   current_courier: string | null;
   last_courier: string | null;
@@ -391,8 +397,8 @@ export interface OrderMasterRow {
   guide_code: string | null;
   dispatched_at: string | null;
   delivered_at: string | null;
-  delivered_courier: string | null;
-  returned_at: string | null;
+  delivered_courier?: string | null;
+  returned_at?: string | null;
   last_movement_at: string | null;
   comment_count: number;
   logistics_cost: number | null;

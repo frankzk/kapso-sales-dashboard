@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "seed": "tsx scripts/seed.ts"
+    "seed": "tsx scripts/seed.ts",
+    "db:apply": "node scripts/gen-apply.mjs",
+    "db:apply:check": "node scripts/gen-apply.mjs --check"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

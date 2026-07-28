@@ -1,4 +1,4 @@
--- 0061 — De dónde salió cada tarifa logística.
+-- 0070 — De dónde salió cada tarifa logística.
 --
 -- POR QUÉ. El cron de tarifas de Aliclik cotiza cada distrito y escribe lo que
 -- ALIDRIVER cobra allí. Sin marcar la procedencia, esas filas y las que pone una
