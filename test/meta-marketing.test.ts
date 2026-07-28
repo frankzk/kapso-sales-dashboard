@@ -144,8 +144,8 @@ describe("probeMetaConnection", () => {
     );
     expect(result.ok).toBe(false);
     expect(result.tokenValid).toBe(true);
-    expect(result.accounts[0].insightsOk).toBe(true);
-    expect(result.accounts[1].error).toContain("ads_read");
+    expect(result.accounts[0]?.insightsOk).toBe(true);
+    expect(result.accounts[1]?.error).toContain("ads_read");
   });
 
   it("requires at least one saved account after validating the token", async () => {
