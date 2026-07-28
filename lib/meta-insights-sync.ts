@@ -5,7 +5,8 @@ const GRAPH_BASE = "https://graph.facebook.com/v21.0";
 const META_INSIGHTS_SOURCE = "meta_insights";
 const PAGE_LIMIT = 100;
 const UPSERT_CHUNK = 500;
-const ACCOUNT_CONCURRENCY = 3;
+const ACCOUNT_CONCURRENCY = 2;
+const BACKFILL_CHUNK_DAYS = 30;
 
 export interface MetaDailyInsight {
   account_id: string;
@@ -46,6 +47,33 @@ export interface MetaInsightsSyncReport {
   rows: number;
   ads: number;
   errors: string[];
+}
+
+export function splitMetaInsightsRange(
+  range: { from: string; to: string },
+  maxDays = BACKFILL_CHUNK_DAYS,
+): { from: string; to: string }[] {
+  const start = new Date(`${range.from}T00:00:00Z`);
+  const end = new Date(`${range.to}T00:00:00Z`);
+  if (
+    Number.isNaN(start.getTime())
+    || Number.isNaN(end.getTime())
+    || start > end
+  ) return [range];
+  const chunkDays = Math.max(1, Math.trunc(maxDays));
+  const result: { from: string; to: string }[] = [];
+  for (let cursor = start; cursor <= end;) {
+    const chunkEnd = new Date(Math.min(
+      cursor.getTime() + (chunkDays - 1) * 86_400_000,
+      end.getTime(),
+    ));
+    result.push({
+      from: cursor.toISOString().slice(0, 10),
+      to: chunkEnd.toISOString().slice(0, 10),
+    });
+    cursor = new Date(chunkEnd.getTime() + 86_400_000);
+  }
+  return result;
 }
 
 function finite(value: unknown, fallback = 0): number {
@@ -220,17 +248,21 @@ export async function syncMetaInsightsHistory(
       const errors: string[] = [];
       const adIds = new Set<string>();
       let persistedRows = 0;
-      const fetched = await fetchMetaDailyInsights(token, account.id, range, opts);
-      if (!fetched.ok) {
-        return {
-          accountOk: false,
-          rows: persistedRows,
-          adIds,
-          errors: [`${account.name || account.id}: ${fetched.error}`],
-        };
+      const fetchedRows: MetaDailyInsight[] = [];
+      for (const dateChunk of splitMetaInsightsRange(range)) {
+        const fetched = await fetchMetaDailyInsights(token, account.id, dateChunk, opts);
+        if (!fetched.ok) {
+          return {
+            accountOk: false,
+            rows: persistedRows,
+            adIds,
+            errors: [`${account.name || account.id}: ${fetched.error}`],
+          };
+        }
+        fetchedRows.push(...fetched.rows);
       }
       const syncedAt = new Date().toISOString();
-      for (const insightBatch of chunks(fetched.rows, UPSERT_CHUNK)) {
+      for (const insightBatch of chunks(fetchedRows, UPSERT_CHUNK)) {
         const { error } = await admin.from("meta_ad_insights_daily").upsert(
           insightBatch.map((row) => ({ store_id: storeId, ...row, synced_at: syncedAt })),
           { onConflict: "store_id,account_id,ad_id,date" },
@@ -244,7 +276,7 @@ export async function syncMetaInsightsHistory(
       }
 
       const adRows = new Map<string, Record<string, unknown>>();
-      for (const row of fetched.rows) {
+      for (const row of fetchedRows) {
         adRows.set(row.ad_id, {
           ad_id: row.ad_id,
           account_id: row.account_id,
