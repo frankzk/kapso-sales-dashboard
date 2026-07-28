@@ -217,16 +217,275 @@ export async function analyzeYapeVoucher(
   }
 }
 
+/** Clave y modelo de visión de una tienda concreta; vacíos = los del entorno. */
+export interface StoreVisionCreds {
+  anthropicApiKey?: string | null;
+  anthropicModel?: string | null;
+}
+
 /**
- * Convenience wrapper reading key + model from env. Returns a non-voucher
- * verdict when no ANTHROPIC_API_KEY is configured (vision disabled). Never throws.
+ * Resuelve qué credenciales usar. La clave de la TIENDA manda sobre la del
+ * entorno, para que el gasto de visión de cada tienda caiga en su propia cuenta
+ * de Anthropic (0052); el entorno queda como respaldo.
+ */
+export function resolveVisionCreds(store: StoreVisionCreds = {}): {
+  apiKey: string;
+  model: string;
+  apiBase: string;
+} {
+  return {
+    apiKey: store.anthropicApiKey || env.anthropicApiKey(),
+    model: store.anthropicModel || env.yapeVisionModel(),
+    apiBase: env.anthropicApiBase(),
+  };
+}
+
+/**
+ * Convenience wrapper reading key + model from the store (falling back to env).
+ * Returns a non-voucher verdict when no key is configured at all (vision
+ * disabled). Never throws.
  */
 export async function analyzeYapeVoucherFromEnv(
   imageBase64: string,
   contentType: string | null | undefined,
+  store: StoreVisionCreds = {},
 ): Promise<YapeVisionResult> {
-  const apiKey = env.anthropicApiKey();
-  const model = env.yapeVisionModel();
+  const { apiKey, model, apiBase } = resolveVisionCreds(store);
   if (!apiKey) return { isVoucher: false, indicators: {}, model, ok: false };
-  return analyzeYapeVoucher(imageBase64, contentType, { apiKey, model, apiBase: env.anthropicApiBase() });
+  return analyzeYapeVoucher(imageBase64, contentType, { apiKey, model, apiBase });
+}
+
+// ---------------------------------------------------------------------------
+// Extracción de los datos del comprobante
+// ---------------------------------------------------------------------------
+//
+// `analyzeYapeVoucher` responde "¿es un comprobante?". Esto responde "¿qué dice?".
+//
+// Existe por un motivo muy concreto: el nº de operación es el único
+// identificador que permite garantizar que un mismo Yape no se use en dos
+// pedidos — y es lo que sobrevive a que el cliente mande la captura RECORTADA.
+// Pedirle al operador que lo teclee a mano en cada carga es lento y se equivoca;
+// leerlo de la imagen y dejar que solo lo confirme es mucho más fiable.
+//
+// Igual que la función anterior: raw fetch, nunca lanza, y ante la duda devuelve
+// el campo vacío en vez de inventarlo — un nº de operación mal leído sería peor
+// que ninguno, porque bloquearía un pago legítimo o dejaría pasar un duplicado.
+
+export interface YapeVoucherFields {
+  /** Nº de operación tal como aparece, solo dígitos y letras. */
+  operationNumber: string | null;
+  amount: number | null;
+  /** Fecha y hora del movimiento en ISO, cuando ambas se pueden leer. */
+  paidAt: string | null;
+  payerName: string | null;
+  /** A quién se pagó — sirve para detectar un Yape a otra cuenta. */
+  recipientName: string | null;
+  ok: boolean;
+  model: string;
+}
+
+const EXTRACT_SYSTEM_PROMPT =
+  "Eres un lector de comprobantes de pago Yape (billetera móvil peruana). " +
+  "Recibes UNA imagen de un comprobante y transcribes SOLO lo que se ve. " +
+  "Nunca inventes ni completes un dato parcial: si un campo está cortado, " +
+  "borroso o no aparece, devuélvelo como null. Un número de operación mal " +
+  "transcrito es peor que ninguno. Responde ÚNICAMENTE con un objeto JSON.";
+
+function buildExtractPrompt(): string {
+  return (
+    "Transcribe el comprobante y devuelve JSON con esta forma exacta:\n" +
+    "{\n" +
+    '  "operation_number": string|null,  // nº de operación / código de seguridad\n' +
+    '  "amount": number|null,            // monto en soles, solo el número\n' +
+    '  "date": string|null,              // fecha, tal como se ve (p. ej. "10 jul 2026")\n' +
+    '  "time": string|null,              // hora, tal como se ve (p. ej. "02:35 pm")\n' +
+    '  "payer_name": string|null,        // quien paga\n' +
+    '  "recipient_name": string|null     // quien recibe\n' +
+    "}\n" +
+    "Si la imagen está recortada y algún dato no se ve completo, ese campo es null."
+  );
+}
+
+const MONTHS: Record<string, string> = {
+  ene: "01", feb: "02", mar: "03", abr: "04", may: "05", jun: "06",
+  jul: "07", ago: "08", set: "09", sep: "09", oct: "10", nov: "11", dic: "12",
+};
+
+/**
+ * Combina la fecha y la hora que se leyeron por separado en un instante ISO.
+ * Devuelve null en cuanto algo no encaja: la fecha y hora del movimiento son
+ * parte de la detección de duplicados, así que una aproximada es peor que nada.
+ */
+export function parseVoucherInstant(date: string | null, time: string | null): string | null {
+  if (!date) return null;
+  const clean = date
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+  let y: number | null = null;
+  let m: string | null = null;
+  let d: string | null = null;
+
+  const numeric = /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/.exec(clean);
+  const textual = /^(\d{1,2})\s+([a-z]{3,})\.?\s+(\d{4})/.exec(clean);
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(clean);
+  if (iso) {
+    y = Number(iso[1]);
+    m = iso[2]!;
+    d = iso[3]!;
+  } else if (numeric) {
+    d = numeric[1]!.padStart(2, "0");
+    m = numeric[2]!.padStart(2, "0");
+    y = numeric[3]!.length === 2 ? 2000 + Number(numeric[3]) : Number(numeric[3]);
+  } else if (textual) {
+    d = textual[1]!.padStart(2, "0");
+    m = MONTHS[textual[2]!.slice(0, 3)] ?? null;
+    y = Number(textual[3]);
+  }
+  if (!y || !m || !d) return null;
+
+  let hh = "00";
+  let mm = "00";
+  if (time) {
+    const t = /(\d{1,2}):(\d{2})\s*(a\.?m\.?|p\.?m\.?)?/i.exec(time.trim());
+    if (t) {
+      let hour = Number(t[1]);
+      const suffix = (t[3] ?? "").toLowerCase().replace(/\./g, "");
+      if (suffix === "pm" && hour < 12) hour += 12;
+      if (suffix === "am" && hour === 12) hour = 0;
+      if (hour > 23) return null;
+      hh = String(hour).padStart(2, "0");
+      mm = t[2]!;
+    }
+  }
+  // Perú es UTC-5 sin horario de verano; la hora del comprobante es local.
+  const stamp = Date.parse(`${y}-${m}-${d}T${hh}:${mm}:00-05:00`);
+  return Number.isFinite(stamp) ? new Date(stamp).toISOString() : null;
+}
+
+function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  let obj: unknown;
+  try {
+    obj = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!obj || typeof obj !== "object") return null;
+  const o = obj as Record<string, unknown>;
+  const str = (v: unknown): string | null => {
+    if (typeof v !== "string") return null;
+    const t = v.trim();
+    return t && t.toLowerCase() !== "null" ? t : null;
+  };
+  const num = (v: unknown): number | null => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    const s = str(v);
+    if (!s) return null;
+    const n = Number(s.replace(/[^\d.,-]/g, "").replace(",", "."));
+    return Number.isFinite(n) ? n : null;
+  };
+  const rawOperation = str(o.operation_number);
+  return {
+    operationNumber: rawOperation ? rawOperation.toUpperCase().replace(/[^A-Z0-9]/g, "") || null : null,
+    amount: num(o.amount),
+    paidAt: parseVoucherInstant(str(o.date), str(o.time)),
+    payerName: str(o.payer_name),
+    recipientName: str(o.recipient_name),
+  };
+}
+
+/**
+ * Lee los datos de un comprobante Yape. Nunca lanza: ante cualquier fallo
+ * devuelve todos los campos vacíos con `ok: false`, y quien llama debe pedir los
+ * datos a mano en vez de dar el pago por bueno.
+ */
+export async function extractYapeVoucher(
+  imageBase64: string,
+  contentType: string | null | undefined,
+  opts: AnalyzeYapeOpts,
+): Promise<YapeVoucherFields> {
+  const model = opts.model;
+  const empty: YapeVoucherFields = {
+    operationNumber: null,
+    amount: null,
+    paidAt: null,
+    payerName: null,
+    recipientName: null,
+    ok: false,
+    model,
+  };
+  if (!opts.apiKey || !imageBase64) return empty;
+
+  const doFetch = opts.fetchImpl ?? fetch;
+  const base = (opts.apiBase ?? "https://api.anthropic.com").replace(/\/$/, "");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await doFetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": opts.apiKey,
+        "anthropic-version": ANTHROPIC_VERSION,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 500,
+        system: EXTRACT_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: normalizeMediaType(contentType),
+                  data: imageBase64,
+                },
+              },
+              { type: "text", text: buildExtractPrompt() },
+            ],
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return empty;
+    const fields = parseFields(extractText(await res.json()));
+    if (!fields) return empty;
+    return { ...fields, ok: true, model };
+  } catch {
+    return empty;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Envoltorio que usa la clave de la tienda y cae a la del entorno. Nunca lanza.
+ */
+export async function extractYapeVoucherFromEnv(
+  imageBase64: string,
+  contentType: string | null | undefined,
+  store: StoreVisionCreds = {},
+): Promise<YapeVoucherFields> {
+  const { apiKey, model, apiBase } = resolveVisionCreds(store);
+  if (!apiKey) {
+    return {
+      operationNumber: null,
+      amount: null,
+      paidAt: null,
+      payerName: null,
+      recipientName: null,
+      ok: false,
+      model,
+    };
+  }
+  return extractYapeVoucher(imageBase64, contentType, { apiKey, model, apiBase });
 }

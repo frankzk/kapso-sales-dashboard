@@ -10,6 +10,13 @@ import { StoreSettings, type StoreSettingsData } from "@/components/store-settin
 
 export const dynamic = "force-dynamic";
 
+/**
+ * "Probar conexión" de Shalom pide el token de sesión, y esa llamada hace un
+ * login real contra pro.shalom.pe: hasta 2 minutos la primera vez de cada
+ * cuenta. Con el límite por defecto el botón se cortaría solo.
+ */
+export const maxDuration = 300;
+
 const SHOPIFY_ERRORS: Record<string, string> = {
   "oauth-no-config": "OAuth de Shopify no está configurado en el servidor.",
   "parametros-invalidos": "Parámetros de OAuth inválidos.",
@@ -112,6 +119,17 @@ export default async function StoreSettingsPage({
       cart_seq_hour_start: full.cart_seq_hour_start ?? 8,
       cart_seq_hour_end: full.cart_seq_hour_end ?? 21,
       telegram_chat_id: full.telegram_chat_id ?? null,
+      anthropic_model: full.anthropic_model ?? null,
+      // Pre-0054 la columna no existe ⇒ integración apagada.
+      aliclik_enabled: Boolean(full.aliclik_enabled),
+      tanders_email: full.tanders_email ?? null,
+      tanders_origin_address: full.tanders_origin_address ?? null,
+      tanders_origin_lat: full.tanders_origin_lat ?? null,
+      tanders_origin_lng: full.tanders_origin_lng ?? null,
+      shalom_pro_email: full.shalom_pro_email ?? null,
+      shalom_origin_terminal_id: full.shalom_origin_terminal_id ?? null,
+      shalom_origin_terminal_name: full.shalom_origin_terminal_name ?? null,
+      shalom_default_product_id: full.shalom_default_product_id ?? null,
       meta_ad_accounts: normalizeMetaAdAccounts(
         full.meta_ad_accounts,
         full.meta_ad_account_id,
@@ -126,6 +144,11 @@ export default async function StoreSettingsPage({
       kapsoWebhookSecret: Boolean(full.kapso_webhook_secret_enc),
       telegramToken: Boolean(full.telegram_bot_token_enc),
       metaToken: Boolean(full.meta_access_token_enc),
+      anthropicKey: Boolean(full.anthropic_api_key_enc),
+      aliclikToken: Boolean(full.aliclik_api_token_enc),
+      aliclikWebhookSecret: Boolean(full.aliclik_webhook_secret_enc),
+      tandersPassword: Boolean(full.tanders_password_enc),
+      shalomProPassword: Boolean(full.shalom_pro_password_enc),
     },
     oauthAvailable: env.shopifyOAuthConfigured(),
     siteUrl,

@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { getAccessibleStores, getAdNames, getCurrentUser, getWaNumbers } from "@/lib/access";
 import {
   LEAD_VIEWS,
-  getLeadCounts,
+  getLeadQueueSnapshot,
   getStoreLeads,
   leadsViewLimit,
   type LeadView,
@@ -91,7 +91,7 @@ async function LeadsContent({
   const currency = store?.currency ?? "PEN";
   const timezone = store?.timezone ?? "America/Lima";
 
-  const countsPromise = getLeadCounts(storeId);
+  const snapshotPromise = getLeadQueueSnapshot(storeId);
   // "Por llamar" se filtra/cuenta en cliente (jerarquía de facetas), así que la
   // cola se pagina completa (`null`) para que los conteos y drill-downs usen el
   // mismo universo que el gráfico; las demás vistas mantienen el tope estándar.
@@ -101,8 +101,8 @@ async function LeadsContent({
   // promise settles instead of waiting for counts and user first.
   const adNamesPromise = leadsPromise.then((rows) => getAdNames(rows.map((l) => l.ad_id)));
   const waNumbersPromise = leadsPromise.then((rows) => getWaNumbers(rows.map((l) => l.wa_phone_number_id)));
-  const [counts, leads, user, adNames, waNumbers] = await Promise.all([
-    countsPromise,
+  const [snapshot, leads, user, adNames, waNumbers] = await Promise.all([
+    snapshotPromise,
     leadsPromise,
     userPromise,
     adNamesPromise,
@@ -115,7 +115,8 @@ async function LeadsContent({
       stores={stores}
       storeId={storeId}
       view={view}
-      counts={counts}
+      counts={snapshot.counts}
+      queueSignature={snapshot.signature}
       leads={leads}
       adNames={adNames}
       waNumbers={waNumbers}

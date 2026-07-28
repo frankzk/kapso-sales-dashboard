@@ -7,12 +7,17 @@ import { Card, Section, SimpleTable } from "@/components/ui";
 import { STORE_STATUSES } from "@/lib/store-settings";
 import type { MetaAdAccount, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
+  generateAliclikWebhookSecret,
   generateKapsoWebhookSecret,
   listStoreMetaAdAccounts,
   reRegisterWebhooks,
   saveMetaAdAccounts,
   sendTelegramTest,
+  syncAliclikCatalogNow,
   syncNow,
+  testAliclikConnection,
+  testShalomConnection,
+  findShalomAgencies,
   updateStore,
   type SettingsState,
 } from "@/app/dashboard/[storeId]/settings/actions";
@@ -51,6 +56,16 @@ export interface StoreSettingsData {
     cart_seq_hour_start: number;
     cart_seq_hour_end: number;
     telegram_chat_id: string | null;
+    anthropic_model: string | null;
+    aliclik_enabled: boolean;
+    tanders_email: string | null;
+    tanders_origin_address: string | null;
+    tanders_origin_lat: number | null;
+    tanders_origin_lng: number | null;
+    shalom_pro_email: string | null;
+    shalom_origin_terminal_id: number | null;
+    shalom_origin_terminal_name: string | null;
+    shalom_default_product_id: number | null;
     meta_ad_accounts: StoreMetaAdAccount[];
   };
   has: {
@@ -61,6 +76,11 @@ export interface StoreSettingsData {
     kapsoWebhookSecret: boolean;
     telegramToken: boolean;
     metaToken: boolean;
+    anthropicKey: boolean;
+    aliclikToken: boolean;
+    aliclikWebhookSecret: boolean;
+    tandersPassword: boolean;
+    shalomProPassword: boolean;
   };
   oauthAvailable: boolean;
   siteUrl: string;
@@ -101,6 +121,13 @@ export function StoreSettings({
   banner?: { kind: "ok" | "error"; msg: string } | null;
 }) {
   const s = data.store;
+  // El estado de «Probar conexión» vive acá y no dentro de ShalomSection porque
+  // lo necesitan los dos hermanos: la sección lo muestra, y el formulario de
+  // abajo saca de ahí el catálogo para el desplegable de «tipo de paquete».
+  const [shalomTest, shalomTestAction, shalomTestPending] = useActionState(
+    testShalomConnection,
+    initial,
+  );
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -156,7 +183,26 @@ export function StoreSettings({
 
       <KapsoWebhookSection siteUrl={data.siteUrl} storeId={s.id} hasSecret={data.has.kapsoWebhookSecret} />
 
-      <SettingsForm data={data} />
+      <AliclikSection
+        siteUrl={data.siteUrl}
+        storeId={s.id}
+        hasToken={data.has.aliclikToken}
+        hasSecret={data.has.aliclikWebhookSecret}
+        enabled={s.aliclik_enabled}
+      />
+
+      <ShalomSection
+        storeId={s.id}
+        hasAccount={data.has.shalomProPassword && Boolean(s.shalom_pro_email)}
+        email={s.shalom_pro_email}
+        originTerminalId={s.shalom_origin_terminal_id}
+        originTerminalName={s.shalom_origin_terminal_name}
+        testState={shalomTest}
+        testAction={shalomTestAction}
+        testPending={shalomTestPending}
+      />
+
+      <SettingsForm data={data} shalomProducts={shalomTest.shalomProducts} />
 
       <div className="-mt-2">
         <ActionButton
@@ -262,6 +308,287 @@ export function StoreSettings({
         </Card>
       </Section>
     </div>
+  );
+}
+
+
+/**
+ * Shalom · crear preguías por API.
+ *
+ * Dos cosas que la interfaz tiene que dejar hacer sin salir de acá, porque si no
+ * hay que irse a una terminal:
+ *
+ *  · **Probar conexión** — comprueba la API key global y la cuenta de la tienda
+ *    por separado, y lista los productos. Es la sonda del repo, en un clic. Da
+ *    aviso de que TARDA: la primera vez son ~90 s de login real contra Shalom.
+ *  · **Buscar agencia** — el id de la agencia de origen se configura abajo y no
+ *    hay otra forma de averiguarlo. Esto lo busca por texto y lo imprime.
+ *
+ * Las dos son de solo lectura: no crean ninguna guía.
+ */
+function ShalomSection({
+  storeId,
+  hasAccount,
+  email,
+  originTerminalId,
+  originTerminalName,
+  testState,
+  testAction,
+  testPending,
+}: {
+  storeId: string;
+  hasAccount: boolean;
+  email: string | null;
+  originTerminalId: number | null;
+  originTerminalName: string | null;
+  testState: SettingsState;
+  testAction: (fd: FormData) => void;
+  testPending: boolean;
+}) {
+  const [agencyState, agencyAction, agencyPending] = useActionState(findShalomAgencies, initial);
+
+  return (
+    <Section
+      title="Shalom · crear preguías por API"
+      subtitle="Permite emitir la guía de Shalom desde el Master en vez de cargarla a mano en pro.shalom.pe. No reemplaza la carga del reporte Excel: los envíos creados acá se cruzan con él por número de guía."
+    >
+      <Card>
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm">
+              {hasAccount ? (
+                <span className="font-medium text-emerald-700">✓ Cuenta de Shalom Pro configurada</span>
+              ) : (
+                <span className="font-medium text-amber-700">⚠ Sin cuenta de Shalom Pro</span>
+              )}
+              {email && <span className="ml-3 text-slate-500">{email}</span>}
+              <span className="ml-3 text-slate-500">
+                {originTerminalId
+                  ? `Origen: ${originTerminalName ?? "agencia"} (#${originTerminalId})`
+                  : "Sin agencia de origen"}
+              </span>
+            </p>
+            <form action={testAction}>
+              <input type="hidden" name="store_id" value={storeId} />
+              <button
+                type="submit"
+                disabled={testPending}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {testPending ? "Probando… (hasta 2 min)" : "Probar conexión"}
+              </button>
+            </form>
+          </div>
+
+          <p className="text-xs text-slate-500">
+            La prueba puede tardar <strong>hasta 2 minutos la primera vez</strong>: Shalom hace un
+            inicio de sesión real. Después la sesión queda caliente 2 horas y todo va rápido. Es solo
+            lectura — no crea ninguna guía.
+          </p>
+
+          <ActionResult state={testState} />
+
+          <div className="border-t border-slate-100 pt-4">
+            <form action={agencyAction} className="flex flex-wrap items-end gap-2">
+              <input type="hidden" name="store_id" value={storeId} />
+              <label className="flex-1">
+                <span className="text-xs text-slate-500">
+                  Buscar agencia (para conseguir el id de la de origen)
+                </span>
+                <input
+                  name="shalom_agency_q"
+                  placeholder="breña, arequipa, av parra…"
+                  className={inputCls}
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={agencyPending}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {agencyPending ? "Buscando…" : "Buscar"}
+              </button>
+            </form>
+            <ActionResult state={agencyState} />
+          </div>
+        </div>
+      </Card>
+    </Section>
+  );
+}
+
+/** Resultado de una acción de ajustes, respetando los saltos de línea. */
+function ActionResult({ state }: { state: SettingsState }) {
+  if (!state.error && !state.notice) return null;
+  return (
+    <pre
+      className={`mt-3 overflow-x-auto rounded-lg px-3 py-2 font-sans text-xs whitespace-pre-wrap ${
+        state.error ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800"
+      }`}
+    >
+      {state.error ?? state.notice}
+    </pre>
+  );
+}
+
+/**
+ * Aliclik: token de integración, webhook de estados e interruptor de escritura.
+ *
+ * El webhook de Aliclik NO viene firmado —su documentación no define ni HMAC ni
+ * cabecera de autenticación— así que el secreto en la URL es la única barrera.
+ * De ahí que se acuñe igual que el de Kapso y se revele una sola vez.
+ */
+function AliclikSection({
+  siteUrl,
+  storeId,
+  hasToken,
+  hasSecret,
+  enabled,
+}: {
+  siteUrl: string;
+  storeId: string;
+  hasToken: boolean;
+  hasSecret: boolean;
+  enabled: boolean;
+}) {
+  const [secretState, secretAction, secretPending] = useActionState(
+    generateAliclikWebhookSecret,
+    initial,
+  );
+  const [testState, testAction, testPending] = useActionState(testAliclikConnection, initial);
+  const [syncState, syncAction, syncPending] = useActionState(syncAliclikCatalogNow, initial);
+  const revealed = secretState.aliclikSecret ?? null;
+  const url = revealed
+    ? `${siteUrl}/api/webhooks/aliclik/${storeId}?secret=${revealed}`
+    : `${siteUrl}/api/webhooks/aliclik/${storeId}?secret=${
+        hasSecret ? "<TU_SECRETO_DE_ESTA_TIENDA>" : "<GENERA_EL_SECRETO_ABAJO>"
+      }`;
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <Section
+      title="Aliclik · crear guías por API"
+      subtitle="Permite crear el pedido en Aliclik desde el Master, en vez de cargarlo a mano en su panel. El token lo entrega el equipo de Aliclik tras el alta como integrador."
+    >
+      <Card>
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm">
+              {hasToken ? (
+                <span className="font-medium text-emerald-700">✓ Token configurado</span>
+              ) : (
+                <span className="font-medium text-amber-700">⚠ Sin token de Aliclik</span>
+              )}
+              <span className="ml-3 text-slate-500">
+                {enabled ? "Creación de guías ACTIVADA" : "Creación de guías desactivada"}
+              </span>
+            </p>
+            <div className="flex gap-2">
+              <form action={testAction}>
+                <input type="hidden" name="store_id" value={storeId} />
+                <button
+                  type="submit"
+                  disabled={testPending || !hasToken}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {testPending ? "Probando…" : "Probar conexión"}
+                </button>
+              </form>
+              <form action={syncAction}>
+                <input type="hidden" name="store_id" value={storeId} />
+                <button
+                  type="submit"
+                  disabled={syncPending || !hasToken}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {syncPending ? "Sincronizando…" : "Sincronizar catálogo"}
+                </button>
+              </form>
+            </div>
+          </div>
+
+          {/* `whitespace-pre-line`: el resultado de la prueba compara las dos
+              salidas en líneas separadas, y sin esto se leería como un párrafo
+              corrido justo cuando importa distinguirlas. */}
+          {testState.error ? (
+            <p className="whitespace-pre-line text-sm text-rose-600">{testState.error}</p>
+          ) : null}
+          {testState.notice ? (
+            <p className="whitespace-pre-line text-sm text-emerald-700">{testState.notice}</p>
+          ) : null}
+          {syncState.error ? <p className="text-sm text-rose-600">{syncState.error}</p> : null}
+          {syncState.notice ? <p className="text-sm text-emerald-700">{syncState.notice}</p> : null}
+
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+            <p className="font-medium text-slate-700">Dos llaves para escribir en Aliclik</p>
+            <p className="mt-1">
+              Crear una guía es irreversible y con ventanas de cancelación estrictas, así que hacen
+              falta las dos: el interruptor de esta tienda (abajo, en «Rotar credenciales») y la
+              variable de entorno <code>ALICLIK_WRITE_ENABLED=true</code>. Sin ambas, el panel cotiza
+              pero no crea.
+            </p>
+          </div>
+
+          <div className="border-t border-slate-200 pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm">
+                {hasSecret ? (
+                  <span className="font-medium text-emerald-700">✓ Webhook con secreto propio</span>
+                ) : (
+                  <span className="font-medium text-amber-700">
+                    ⚠ Sin secreto de webhook — genera uno antes de pegar la URL en Aliclik
+                  </span>
+                )}
+              </p>
+              <form action={secretAction}>
+                <input type="hidden" name="store_id" value={storeId} />
+                <button
+                  type="submit"
+                  disabled={secretPending}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {secretPending ? "Generando…" : hasSecret ? "Regenerar secreto" : "Generar secreto"}
+                </button>
+              </form>
+            </div>
+
+            {secretState.error ? (
+              <p className="mt-2 text-sm text-rose-600">{secretState.error}</p>
+            ) : null}
+
+            {revealed ? (
+              <div className="mt-3 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-900">
+                <p className="font-semibold">Secreto generado. Cópialo ahora — no se vuelve a mostrar.</p>
+                <code className="mt-1 block break-all rounded bg-white px-2 py-1 text-emerald-800">
+                  {revealed}
+                </code>
+              </div>
+            ) : null}
+
+            <div className="mt-3 flex flex-wrap items-stretch gap-2">
+              <code className="min-w-0 flex-1 break-all rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                {url}
+              </code>
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard.writeText(url);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1500);
+                }}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                {copied ? "Copiado" : "Copiar"}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              Pégala en «Webhook de notificaciones» del panel de Aliclik. Aliclik no firma sus avisos,
+              así que este secreto es lo único que impide que un tercero inyecte cambios de estado.
+            </p>
+          </div>
+        </div>
+      </Card>
+    </Section>
   );
 }
 
@@ -383,7 +710,13 @@ function KapsoWebhookSection({
   );
 }
 
-function SettingsForm({ data }: { data: StoreSettingsData }) {
+function SettingsForm({
+  data,
+  shalomProducts,
+}: {
+  data: StoreSettingsData;
+  shalomProducts?: SettingsState["shalomProducts"];
+}) {
   const [state, action, pending] = useActionState(updateStore, initial);
   const router = useRouter();
   const s = data.store;
@@ -395,9 +728,20 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
     if (state.notice === "Tienda actualizada.") router.refresh();
   }, [router, state]);
 
+  // El `router.refresh()` de arriba no bastaba. React 19 resetea el formulario
+  // al terminar la acción, y un campo NO controlado vuelve al `defaultValue`
+  // que tenía AL MONTARSE: cambiar la prop no mueve la selección del DOM. Con
+  // eso, "Crear guías en Aliclik" se guardaba como `true` en la base y acto
+  // seguido la pantalla volvía a pintar "Deshabilitado" — el usuario veía un
+  // fallo donde no lo había. La `key` cambia solo cuando cambia lo PERSISTIDO,
+  // así que el formulario se vuelve a montar tras guardar (y solo entonces) y
+  // cada `defaultValue` se aplica de nuevo. Vale para todos los selectores de
+  // la pantalla, no solo el de Aliclik: todos tenían el mismo fallo latente.
+  const persistedKey = JSON.stringify([data.store, data.has]);
+
   return (
     <Card>
-      <form action={action} className="space-y-5">
+      <form key={persistedKey} action={action} className="space-y-5">
         <input type="hidden" name="store_id" value={s.id} />
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -763,6 +1107,231 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
           </p>
         </fieldset>
 
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Tanders (courier Lima)
+          </legend>
+          <p className="text-xs text-slate-500">
+            Cuenta de <strong>tanders.app</strong> con la que se crean las guías desde el Master de
+            Pedidos. Tanders no emite API keys: se usa el mismo usuario y contraseña de su web, y la
+            contraseña se guarda <strong>cifrada</strong>. El origen es el almacén desde el que sale
+            el paquete; sus coordenadas se sacan del enlace de Google Maps del almacén.
+          </p>
+          <label className="block">
+            <span className="text-xs text-slate-500">Usuario (email)</span>
+            <input
+              name="tanders_email"
+              type="email"
+              defaultValue={s.tanders_email ?? ""}
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+          </label>
+          <SecretField
+            name="tanders_password"
+            label="Contraseña de Tanders"
+            set={data.has.tandersPassword}
+          />
+          <label className="block">
+            <span className="text-xs text-slate-500">Dirección del almacén de origen</span>
+            <input
+              name="tanders_origin_address"
+              defaultValue={s.tanders_origin_address ?? ""}
+              placeholder="Jr. Restauración 525, Breña 15083, Perú"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs text-slate-500">Latitud del origen</span>
+              <input
+                name="tanders_origin_lat"
+                defaultValue={s.tanders_origin_lat ?? ""}
+                placeholder="-12.0626834"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs text-slate-500">Longitud del origen</span>
+              <input
+                name="tanders_origin_lng"
+                defaultValue={s.tanders_origin_lng ?? ""}
+                placeholder="-77.0510333"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Shalom (crear guías por API)
+          </legend>
+          <p className="text-xs text-slate-500">
+            Cuenta de <strong>pro.shalom.pe</strong> con la que se emiten las guías de esta tienda.
+            La <em>API key</em> del wrapper no va acá: es de la cuenta de Kapso, la misma para todas
+            las tiendas, y se configura una sola vez en el servidor (<code>SHALOM_API_KEY</code>).
+            La contraseña se guarda <strong>cifrada</strong>. Dos tiendas pueden compartir la misma
+            cuenta de Shalom sin problema. Esto no reemplaza la carga del reporte Excel: los envíos
+            creados acá se cruzan con ese reporte por número de guía como cualquier otro.
+          </p>
+          <label className="block">
+            <span className="text-xs text-slate-500">Email de Shalom Pro (pro.shalom.pe)</span>
+            <input
+              name="shalom_pro_email"
+              type="email"
+              defaultValue={s.shalom_pro_email ?? ""}
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+          </label>
+          <SecretField
+            name="shalom_pro_password"
+            label="Contraseña de Shalom Pro"
+            set={data.has.shalomProPassword}
+          />
+          <p className="text-xs text-slate-400">
+            Al cambiar el email o la contraseña se descarta el token de sesión guardado y la próxima
+            guía vuelve a pagar el login (~90 s).
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs text-slate-500">
+                Agencia de origen (ID)
+                <SavedMark set={s.shalom_origin_terminal_id != null} />
+              </span>
+              <input
+                name="shalom_origin_terminal_id"
+                inputMode="numeric"
+                defaultValue={s.shalom_origin_terminal_id ?? ""}
+                placeholder="404"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs text-slate-500">
+                Agencia de origen (nombre)
+                <SavedMark set={Boolean(s.shalom_origin_terminal_name)} />
+              </span>
+              <input
+                name="shalom_origin_terminal_name"
+                defaultValue={s.shalom_origin_terminal_name ?? ""}
+                placeholder="SALAS ICA"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-xs text-slate-500">
+              Tipo de paquete por defecto
+              <SavedMark set={s.shalom_default_product_id != null} />
+            </span>
+            {/* Desplegable en cuanto «Probar conexión» haya traído el catálogo.
+                No se puede cargar al abrir Ajustes: leerlo exige la sesión de
+                Shalom Pro, que la primera vez son ~90 s. Sin catálogo el campo
+                sigue aceptando el id a mano, que es como se configuró hasta
+                ahora y como se sale del paso si la cuenta no responde. */}
+            {shalomProducts?.length ? (
+              <select
+                name="shalom_default_product_id"
+                defaultValue={s.shalom_default_product_id ?? ""}
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              >
+                <option value="">— sin definir —</option>
+                {/* El catálogo repite ids (esta cuenta manda `id=2` para «Caja
+                    Paquete L» y para «Otra Medida»), así que el id no sirve de
+                    clave. */}
+                {shalomProducts.map((p, i) => (
+                  <option key={`${p.id}-${i}`} value={p.id}>
+                    {p.title}
+                    {p.content ? ` — ${p.content}` : ""} (id {p.id})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                name="shalom_default_product_id"
+                inputMode="numeric"
+                defaultValue={s.shalom_default_product_id ?? ""}
+                placeholder="1096"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            )}
+            <span className="mt-1 block text-xs text-slate-400">
+              {shalomProducts?.length
+                ? "Productos reales de esta cuenta, traídos por «Probar conexión». El modal deja cambiarlo por envío."
+                : "El catálogo es por cuenta, así que el id no es universal y los de la documentación no valen. Pulsa «Probar conexión» arriba y este campo pasa a ser una lista."}
+            </span>
+          </label>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Integración Aliclik
+          </legend>
+          <p className="text-xs text-slate-500">
+            Token de la API de <strong>Aliclik</strong>, para leer el catálogo y crear guías de
+            contraentrega desde el Master de Pedidos. Crear guías necesita <strong>dos</strong>{" "}
+            llaves: este interruptor por tienda y la variable <code>ALICLIK_WRITE_ENABLED</code> del
+            servidor. Con una sola, no se escribe nada en Aliclik.
+          </p>
+          <SecretField
+            name="aliclik_api_token"
+            label="Token de integración de Aliclik"
+            set={data.has.aliclikToken}
+          />
+          <div>
+            <label className={labelCls} htmlFor="aliclik_enabled">
+              Crear guías en Aliclik
+              <span className="ml-1 text-xs text-slate-500">
+                · necesita además ALICLIK_WRITE_ENABLED
+              </span>
+            </label>
+            <select
+              id="aliclik_enabled"
+              name="aliclik_enabled"
+              defaultValue={s.aliclik_enabled ? "true" : "false"}
+              className={inputCls}
+            >
+              <option value="false">Deshabilitado</option>
+              <option value="true">Habilitado</option>
+            </select>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Lectura de comprobantes Yape
+          </legend>
+          <p className="text-xs text-slate-500">
+            Clave de <strong>Anthropic</strong> de esta tienda. Se usa para dos cosas: decidir si
+            una captura del cliente es un comprobante Yape real (la alerta de{" "}
+            <em>Yape/Shalom por verificar</em>) y <strong>transcribir</strong> el comprobante en el
+            Master de Pedidos —nº de operación, monto, fecha y hora— para que nadie tenga que
+            teclearlo. Cada tienda usa <strong>su propia clave</strong>, así que el gasto de cada una
+            es independiente.
+          </p>
+          <SecretField
+            name="anthropic_api_key"
+            label="API key de Anthropic"
+            set={data.has.anthropicKey}
+          />
+          <label className="block">
+            <span className="text-xs text-slate-500">
+              Modelo (opcional — vacío usa el valor por defecto)
+            </span>
+            <input
+              name="anthropic_model"
+              defaultValue={s.anthropic_model ?? ""}
+              placeholder="claude-opus-4-8"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+          </label>
+          <p className="text-xs text-slate-500">
+            Sin clave, la detección se queda solo en el texto del mensaje (nunca dispara la alerta
+            con una captura cualquiera) y el equipo escribe a mano el nº de operación. Recuerda que{" "}
+            <strong>sin nº de operación un pago no se puede validar</strong>.
+          </p>
+        </fieldset>
+
         <div className="flex items-center gap-3">
           <button
             type="submit"
@@ -776,6 +1345,24 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
         </div>
       </form>
     </Card>
+  );
+}
+
+/**
+ * «· guardado» para un campo normal, con el mismo lenguaje que usa
+ * `SecretField` para los cifrados.
+ *
+ * Existe porque un `<input>` con un valor dentro no distingue entre «esto está
+ * guardado en la base» y «esto es texto que escribí y todavía no he guardado» —
+ * y el que configura una tienda necesita saberlo antes de irse de la pantalla.
+ * Marca lo que hay EN LA BASE, así que sigue diciendo «guardado» mientras
+ * editas encima; lo que confirma el guardado es el aviso del botón.
+ */
+function SavedMark({ set }: { set: boolean }) {
+  return (
+    <span className={`ml-1 text-xs ${set ? "text-emerald-600" : "text-slate-400"}`}>
+      {set ? "· guardado" : "· sin definir"}
+    </span>
   );
 }
 

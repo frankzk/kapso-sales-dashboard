@@ -5,6 +5,7 @@ import { useRef, useState, useTransition } from "react";
 import { Card } from "@/components/ui";
 import type { ShipmentRow, StoreSummary } from "@/lib/types";
 import { OrderLinkPicker } from "@/components/order-link-picker";
+import { COURIER_ADAPTERS } from "@/lib/couriers/registry";
 import {
   clearShipmentSuggestion,
   linkShipmentToShopifyOrder,
@@ -24,6 +25,10 @@ export function ImportReview({
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [store, setStore] = useState(storeId);
+  // Vacío = detectar el formato por el contenido del archivo. El operador solo
+  // tiene que elegir courier cuando el reporte no se reconoce solo.
+  const [courier, setCourier] = useState("");
+  const [reportDate, setReportDate] = useState("");
   const [uploading, setUploading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -38,21 +43,29 @@ export function ImportReview({
     const fd = new FormData();
     fd.append("file", file);
     fd.append("storeId", store);
+    if (courier) fd.append("courier", courier);
+    if (reportDate) fd.append("reportDate", reportDate);
     try {
-      const res = await fetch("/api/import/aliclik", { method: "POST", body: fd });
+      const res = await fetch("/api/import/courier", { method: "POST", body: fd });
       const json = await res.json();
       if (!res.ok) {
         setMsg(json.error ?? "Error al importar.");
       } else {
+        const dup = json.duplicateOfBatchId
+          ? " ⚠️ Este archivo ya se había cargado antes; los estados solo avanzan, así que no se duplicó nada."
+          : "";
         const skipped = json.skippedImportadoCount ?? 0;
         const base =
-          `Importadas ${json.rowCount} filas — ${json.matchedCount} con pedido, ${json.unmatchedCount} a revisión, ${json.errorCount} con error.` +
+          `Reporte de ${json.courier}: ${json.rowCount} filas — ${json.matchedCount} con pedido, ${json.unmatchedCount} a revisión, ${json.errorCount} con error.${dup}` +
           // Se avisa explícitamente para que no parezca que el archivo perdió filas.
-          (skipped > 0 ? ` Se omitieron ${skipped} filas con ESTADO LLAMADA = IMPORTADO (Aliclik aún no las gestiona).` : "");
+          (skipped > 0
+            ? ` Se omitieron ${skipped} filas con ESTADO LLAMADA = IMPORTADO (Aliclik aún no las gestiona).`
+            : "");
         if (fileRef.current) fileRef.current.value = "";
-        // Auto-link the fresh review rows against live Shopify (NOTA + phone) so
-        // the operator doesn't have to click through them one by one.
-        if (json.unmatchedCount > 0) {
+        // El auto-vínculo contra Shopify en vivo es específico de Aliclik (usa la
+        // referencia del campo NOTA); el resto de couriers traen el nº de pedido
+        // en su propia columna y ya quedan vinculados en la ingesta.
+        if (json.courier === "aliclik" && json.unmatchedCount > 0) {
           setMsg(`${base} Buscando coincidencias…`);
           const r = await runAutoLinkLoop(({ linked }) =>
             setMsg(`${base} Vinculando… (${linked} vinculados)`),
@@ -80,7 +93,7 @@ export function ImportReview({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-900">Importar reporte Aliclik</h1>
+        <h1 className="text-lg font-semibold text-slate-900">Importar reporte de courier</h1>
         <a
           href={`/dashboard/envios?store=${storeId}`}
           className="text-sm text-brand-700 hover:underline"
@@ -91,10 +104,11 @@ export function ImportReview({
 
       <Card className="space-y-3">
         <p className="text-sm text-slate-600">
-          Sube el reporte de entregas de Aliclik (CSV o Excel). Las guías AUR5X se
-          enlazan automáticamente al pedido por número (#KP…) o teléfono; al terminar
-          se buscan las restantes en Shopify y se vinculan solas cuando el número de
-          nota y el teléfono coinciden. Solo lo ambiguo queda abajo para revisión manual.
+          Sube el reporte de cualquier courier (CSV o Excel). El formato se
+          reconoce solo: guías AUR5X para Aliclik, reportes de agencia para
+          Shalom y Olva. Cada registro se enlaza a su pedido por número (#KP…),
+          guía o teléfono; lo ambiguo queda abajo para revisión manual. El
+          archivo original se conserva junto con el registro de la carga.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-sm text-slate-600">Tienda por defecto</label>
@@ -109,6 +123,28 @@ export function ImportReview({
               </option>
             ))}
           </select>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-sm text-slate-600">Courier</label>
+          <select
+            value={courier}
+            onChange={(e) => setCourier(e.target.value)}
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm"
+          >
+            <option value="">Detectar automáticamente</option>
+            {COURIER_ADAPTERS.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.label}
+              </option>
+            ))}
+          </select>
+          <label className="text-sm text-slate-600">Fecha del reporte</label>
+          <input
+            type="date"
+            value={reportDate}
+            onChange={(e) => setReportDate(e.target.value)}
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm"
+          />
         </div>
         <input
           ref={fileRef}

@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
+import { recomputeOrderMasterForShipmentsSafe } from "@/lib/order-master";
 import {
   getReprogramRows,
   getShipmentWithCalls,
@@ -143,6 +144,22 @@ async function resolveAgentName(
 }
 
 /** Authorize the caller against a shipment via RLS (must see its store). */
+/**
+ * Refresca el Master de Pedidos tras tocar una guía: lo que cambia aquí cambia
+ * el estado del pedido allá. Best-effort a propósito — si el recálculo falla, la
+ * gestión ya quedó registrada y el barrido del cron pondrá el Master al día.
+ */
+async function syncMasterForShipment(
+  admin: SupabaseClient,
+  ...shipmentIds: (string | null | undefined)[]
+): Promise<void> {
+  await recomputeOrderMasterForShipmentsSafe(
+    admin,
+    shipmentIds.filter((id): id is string => Boolean(id)),
+  );
+  revalidatePath("/dashboard/pedidos");
+}
+
 async function authorizeShipment(
   shipmentId: string,
 ): Promise<{ userId: string; storeId: string } | null> {
@@ -494,6 +511,7 @@ export async function registerRerouteCall(
       note: auditNote,
       next_followup_at: input.nextFollowupAt,
     });
+    await syncMasterForShipment(admin, shipmentId);
     revalidatePath("/dashboard/envios");
     return { notice: `Reprogramado en Aliclik${overrideLabel}; se conserva la guía ${cur.guide_code}.` };
   }
@@ -539,6 +557,7 @@ export async function registerRerouteCall(
         note: input.note?.trim() || null,
         next_followup_at: input.nextFollowupAt,
       });
+      await syncMasterForShipment(admin, shipmentId, spun.childId);
       revalidatePath("/dashboard/envios");
       return { notice: `Confirmado — nueva guía Fenix ${spun.guideCode} (En ruta).` };
     }
@@ -579,6 +598,7 @@ export async function registerRerouteCall(
     await consumeFenixStockOnDelivery(admin, shipmentId).catch(() => {});
   }
 
+  await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   let notice: string;
   if (input.disposition === "programar") {
@@ -768,6 +788,7 @@ export async function updateShipmentDeliveryAddress(
     kind: "address_change",
     note: `Dirección actualizada: ${address}${reference ? ` · Ref.: ${reference}` : ""} · ${input.latitude}, ${input.longitude}`,
   });
+  await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   return {
     notice: isRealShopifyOrder
@@ -873,6 +894,7 @@ export async function registerCourierReportResult(
     await consumeFenixStockOnDelivery(admin, shipmentId).catch(() => {});
   }
 
+  await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   return {
     notice: `Guía ${current.guide_code}: ${definition.label} → ${definition.effect}`,
@@ -905,6 +927,7 @@ export async function setShipmentStatus(
   if (status === "entregado") {
     await consumeFenixStockOnDelivery(admin, shipmentId).catch(() => {});
   }
+  await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   return { notice: "Estado actualizado." };
 }
@@ -1050,6 +1073,7 @@ export async function createFenixGuide(
   });
   if ("error" in r) return { error: r.error };
 
+  await syncMasterForShipment(admin, shipmentId, r.childId);
   revalidatePath("/dashboard/envios");
   return { notice: `Guía Fenix ${r.guideCode} creada.` };
 }
@@ -1115,6 +1139,10 @@ async function resolveDirectGuideAddress(
           province: d.province ?? null,
           name: d.customer_name ?? null,
           phone: d.customer_phone ?? null,
+          // Un carrito abandonado no pasa por el checkout, así que Shopify
+          // nunca llega a geocodificar la dirección.
+          latitude: null,
+          longitude: null,
         },
         source: "carrito",
       };
@@ -1144,6 +1172,9 @@ async function resolveDirectGuideAddress(
         province: l.province ?? l.region ?? null,
         name: l.ship_name ?? null,
         phone: l.phone ?? null,
+        // La dirección de un lead la escribe el equipo a mano: sin geocodificar.
+        latitude: null,
+        longitude: null,
       },
       source: "lead",
     };
@@ -1648,6 +1679,7 @@ export async function createDirectFenixGuide(input: {
     next_followup_at: input.dispatchDateIso,
   });
 
+  await syncMasterForShipment(admin, childId);
   revalidatePath("/dashboard/envios");
   const fecha = new Date(input.dispatchDateIso).toLocaleDateString("es-PE", {
     day: "2-digit",
@@ -1704,6 +1736,7 @@ export async function resolveShipmentMatch(
       })
       .eq("id", shipmentId);
     if (error) return { error: error.message };
+    await syncMasterForShipment(admin, shipmentId);
     revalidatePath("/dashboard/envios");
     return { notice: "Pedido vinculado." };
   }

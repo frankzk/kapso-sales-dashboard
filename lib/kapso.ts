@@ -68,6 +68,22 @@ function baseFor(opts: KapsoClientOpts): string {
   return (opts.baseUrl ?? env.kapsoApiBase()).replace(/\/$/, "");
 }
 
+// Fallos PASAJEROS del upstream: la app de Kapso está detrás de Cloudflare, que
+// devuelve 502/503/504 cuando el origen se cae un momento o va sobrecargado
+// ("the origin web server returned an invalid or incomplete response"), y 429 al
+// limitar la tasa. Sin reintento, un solo hipo de un segundo tumbaba el paso
+// entero del sync (kapso + leads quedaban en error hasta la corrida siguiente).
+// Los 4xx NO se reintentan: una clave mala o un id inexistente no mejoran solos.
+const KAPSO_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
+const KAPSO_MAX_ATTEMPTS = 3;
+const KAPSO_RETRY_BASE_MS = 400; // 400ms, 800ms → ≤1.2s extra en el peor caso
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** GET a la API de Kapso, con reintento acotado ante fallos pasajeros del
+ *  upstream. Solo para GET: son idempotentes, así que repetirlos no duplica
+ *  nada. Los envíos de WhatsApp (POST) deliberadamente NO reintentan — ver
+ *  postWhatsappMessage, donde un reintento podría duplicar un mensaje. */
 async function kapsoGet<T>(
   opts: KapsoClientOpts,
   path: string,
@@ -82,14 +98,26 @@ async function kapsoGet<T>(
     }
   }
   const doFetch = opts.fetchImpl ?? fetch;
-  const res = await doFetch(url.toString(), {
-    headers: { "X-API-Key": opts.apiKey, Accept: "application/json" },
-  });
-  if (!res.ok) {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < KAPSO_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) await sleep(KAPSO_RETRY_BASE_MS * 2 ** (attempt - 1));
+    let res: Response;
+    try {
+      res = await doFetch(url.toString(), {
+        headers: { "X-API-Key": opts.apiKey, Accept: "application/json" },
+      });
+    } catch (e) {
+      // Corte de red / DNS / timeout: también es pasajero, se reintenta.
+      lastError = e instanceof Error ? e : new Error(String(e));
+      continue;
+    }
+    if (res.ok) return (await res.json()) as T;
     const text = await res.text().catch(() => "");
-    throw new Error(`Kapso API HTTP ${res.status}: ${text.slice(0, 300)}`);
+    const error = new Error(`Kapso API HTTP ${res.status}: ${text.slice(0, 300)}`);
+    if (!KAPSO_RETRY_STATUSES.has(res.status)) throw error; // 4xx → error real, falla ya
+    lastError = error;
   }
-  return (await res.json()) as T;
+  throw lastError ?? new Error("Kapso API: sin respuesta");
 }
 
 export interface ListConversationsParams {
@@ -138,7 +166,10 @@ export async function listConversationsByPhone(
     page = await kapsoGet<KapsoPage<KapsoConversation>>(opts, "/whatsapp/conversations", {
       phone_number: phone,
       phone_number_id: phoneNumberId ?? undefined,
-      limit: 20,
+      // Techo de descubrimiento: acota cuántas sesiones puede fundir el drawer
+      // (MAX_DRAWER_CONVERSATIONS). Con 20 y un cliente que escribió a dos
+      // números, el hilo se quedaba corto antes de llegar a ese tope.
+      limit: 50,
     });
   } catch {
     return [];

@@ -247,10 +247,20 @@ async function upsertLeadFromSeed(
 export async function syncStoreLeads(
   admin: SupabaseClient,
   storeId: string,
-  creds: { kapso_api_key: string | null; whatsapp_phone_number_id: string | null },
+  creds: {
+    kapso_api_key: string | null;
+    whatsapp_phone_number_id: string | null;
+    /** Clave de visión de esta tienda; vacía = la del entorno (0052). */
+    anthropic_api_key?: string | null;
+    anthropic_model?: string | null;
+  },
 ): Promise<SyncLeadsResult> {
   if (!creds.kapso_api_key) return { touched: 0, enriched: { ...ZERO_ENRICH } };
   const k: KapsoClientOpts = { apiKey: creds.kapso_api_key };
+  const vision = {
+    anthropicApiKey: creds.anthropic_api_key ?? null,
+    anthropicModel: creds.anthropic_model ?? null,
+  };
   const cursor = await getCursor(admin, storeId);
 
   let convs;
@@ -285,7 +295,7 @@ export async function syncStoreLeads(
     // existing open queue (the 66 leads sitting in "Por llamar").
     let enriched: LeadEnrichStats = { ...ZERO_ENRICH };
     try {
-      enriched = await enrichLeadsFromConversations(admin, storeId, k, new Map());
+      enriched = await enrichLeadsFromConversations(admin, storeId, k, new Map(), vision);
     } catch {
       /* best-effort */
     }
@@ -377,7 +387,7 @@ export async function syncStoreLeads(
   // in-chat, there's no Shopify draft order. Best-effort; bounded per run.
   let enriched: LeadEnrichStats = { ...ZERO_ENRICH };
   try {
-    enriched = await enrichLeadsFromConversations(admin, storeId, k, seeds);
+    enriched = await enrichLeadsFromConversations(admin, storeId, k, seeds, vision);
   } catch {
     /* enrichment is best-effort — never blocks the lead sync */
   }
@@ -449,6 +459,8 @@ async function enrichLeadsFromConversations(
   storeId: string,
   k: KapsoClientOpts,
   seeds: Map<string, ReturnType<typeof conversationToLeadSeed>>,
+  /** Clave y modelo de visión de ESTA tienda; vacíos = los del entorno (0052). */
+  vision: { anthropicApiKey?: string | null; anthropicModel?: string | null } = {},
 ): Promise<LeadEnrichStats> {
   const stats: LeadEnrichStats = { ...ZERO_ENRICH };
   const convIds = new Set<string>();
@@ -470,8 +482,11 @@ async function enrichLeadsFromConversations(
 
   // Vision check is opt-in (needs ANTHROPIC_API_KEY); build the analyzer once so
   // the per-conversation gate is cheap. Bounded per run by `visionRemaining`.
-  const visionKey = env.anthropicApiKey();
-  const visionModel = env.yapeVisionModel();
+  // La clave de la TIENDA manda sobre la del entorno: así el gasto de visión de
+  // cada tienda cae en su propia cuenta de Anthropic (0052). El entorno queda
+  // como respaldo para las tiendas que no tengan clave propia.
+  const visionKey = vision.anthropicApiKey || env.anthropicApiKey();
+  const visionModel = vision.anthropicModel || env.yapeVisionModel();
   const visionApiBase = env.anthropicApiBase();
   const visionAnalyze: YapeVisionAnalyzer | null = visionKey
     ? (b64, ct) => analyzeYapeVoucher(b64, ct, { apiKey: visionKey, model: visionModel, apiBase: visionApiBase })
@@ -1853,14 +1868,21 @@ export async function applyHandoff(
   // donde cualquier cliente que escribe sin que el bot conteste genera un handoff.
   // EXCEPCIÓN: un handoff de pago/logística (yape_por_verificar) sí manda — es la
   // vía por la que un voucher llega a la pestaña Yape/Shalom.
+  // SIN MOTIVO tampoco se reclasifica nada: un handoff sin `reason` no trae
+  // ninguna señal, y deriveAutoState devolvería "nuevo"/open — o sea que un POST
+  // espurio degradaría a "nuevo" un lead que ya venía trabajado. Pasa de verdad:
+  // el notify-team de Aurela postea también en el flujo de voucher, que no manda
+  // reason. Un lead que NO existe sí se crea con el estado derivado (nuevo), que
+  // es lo correcto.
   const advisorOwns = existing?.status ? statusDef(existing.status)?.source === "manual" : false;
-  const keepAdvisorStatus = advisorOwns && auto.status !== "yape_por_verificar";
+  const keepStatus =
+    existing != null && (!info.reason || (advisorOwns && auto.status !== "yape_por_verificar"));
   const row: any = {
     store_id: storeId,
     phone: info.phone,
     kapso_conversation_id: info.conversationId,
     ...handoffFields,
-    ...(keepAdvisorStatus ? {} : { status: auto.status, category: auto.category }),
+    ...(keepStatus ? {} : { status: auto.status, category: auto.category }),
     needs_attention: auto.needsAttention,
     last_interaction_at: new Date().toISOString(),
   };
@@ -1879,7 +1901,7 @@ export async function applyHandoff(
       lead_id: lead.id,
       store_id: storeId,
       kind: "system",
-      new_status: keepAdvisorStatus ? existing!.status : auto.status,
+      new_status: keepStatus ? existing!.status : auto.status,
       note: info.context,
     });
   }

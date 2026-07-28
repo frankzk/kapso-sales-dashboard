@@ -37,3 +37,7 @@ pnpm-debug.log*
 # typescript / test
 *.tsbuildinfo
 /coverage
+
+# volcados de las sondas de couriers (llevan datos de pedidos reales)
+scripts/.tanders-probe.json
+scripts/.shalom-probe.json
