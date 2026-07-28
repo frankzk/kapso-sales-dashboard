@@ -22,6 +22,7 @@ import {
   type PaymentRow,
   type PickupKeyPanel as PanelData,
 } from "@/app/dashboard/pedidos/payment-actions";
+import { saveShalomOrderDraft } from "@/app/dashboard/pedidos/shalom-actions";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { PAYMENT_STATE_LABEL, type PaymentState } from "@/lib/pickup-key";
 
@@ -206,6 +207,25 @@ function PaymentList({
             {p.payer_name ? ` · ${p.payer_name}` : ""}
           </p>
           {p.notes && <p className="text-xs text-slate-500">{p.notes}</p>}
+          {/* El comprobante se guardaba y no se podía ver: quien validaba tenía
+              que fiarse de los campos transcritos, que es justo lo que la imagen
+              sirve para contrastar. La miniatura abre el original en pestaña. */}
+          {p.file_path && (
+            <a
+              href={`/api/payments/${p.id}/voucher`}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 inline-block"
+              title="Ver el comprobante en grande"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={`/api/payments/${p.id}/voucher`}
+                alt="Comprobante de Yape"
+                className="max-h-32 rounded-lg border border-slate-200 object-contain"
+              />
+            </a>
+          )}
           {!p.operation_number && p.validation_status !== "rechazado" && (
             <MissingOperation
               payment={p}
@@ -270,6 +290,128 @@ function PaymentList({
  * lectura automática no encuentra el número — el camino es completarlo a mano o
  * pedirle al cliente el comprobante entero.
  */
+/**
+ * Elegir el comprobante: clic, arrastrar o **pegar**.
+ *
+ * Pegar es lo que más se usa y lo que faltaba: el comprobante de Yape llega por
+ * WhatsApp y se copia con Ctrl+C. Obligar a guardarlo en Descargas para luego
+ * buscarlo en un diálogo de archivos es trabajo inventado.
+ *
+ * La previsualización tampoco es adorno: la imagen se sube y la lee una visión
+ * que rellena los campos en blanco, así que subir la equivocada se descubría al
+ * revisar el pago, no al cargarlo. Con la miniatura delante, el error se ve
+ * antes de registrar nada.
+ *
+ * El `accept` va explícito además del `image/*` porque algunos navegadores en
+ * Windows filtran de más con el comodín y esconden los .webp — que es
+ * exactamente el formato en el que Chrome guarda muchas capturas.
+ */
+function VoucherPicker({ file, onPick }: { file: File | null; onPick: (f: File | null) => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [over, setOver] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!file) {
+      setPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    // Sin esto cada imagen elegida deja su blob retenido en memoria.
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  // El pegado se escucha en toda la ventana: pedirle a alguien que "haga foco en
+  // la zona de subida" antes de Ctrl+V es pedirle que sepa algo que no se ve.
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      const img = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith("image/"));
+      if (!img) return;
+      const f = img.getAsFile();
+      if (f) {
+        e.preventDefault();
+        onPick(f);
+      }
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [onPick]);
+
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith("image/"));
+        if (f) onPick(f);
+      }}
+      className={cn(
+        "rounded-lg border border-dashed px-3 py-3 transition",
+        over ? "border-brand-500 bg-brand-50" : "border-slate-300",
+      )}
+    >
+      {preview ? (
+        <div className="flex flex-wrap items-start gap-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={preview}
+            alt="Comprobante por subir"
+            className="max-h-32 rounded-lg border border-slate-200 object-contain"
+          />
+          <div className="space-y-1 text-xs text-slate-600">
+            <p className="font-medium text-slate-800">{file?.name}</p>
+            <p>{file ? `${Math.round(file.size / 1024)} KB · ${file.type || "imagen"}` : ""}</p>
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-slate-500">
+          Arrastra el comprobante aquí, <strong>pégalo con Ctrl+V</strong> o elígelo con el botón.
+        </p>
+      )}
+      {/* El input nativo se pintaba como texto suelto ("Seleccionar archivo /
+          Ningún archivo seleccionado") y no se leía como algo pulsable. Se
+          esconde y se pone un botón de verdad. */}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          {file ? "Cambiar imagen" : "Elegir imagen del Yape"}
+        </button>
+        {file && (
+          <button
+            type="button"
+            onClick={() => {
+              onPick(null);
+              if (inputRef.current) inputRef.current.value = "";
+            }}
+            className="text-xs text-slate-500 underline hover:text-slate-700"
+          >
+            Quitar
+          </button>
+        )}
+        <input
+          ref={inputRef}
+          type="file"
+          // El comodín basta en el servidor, pero algunos navegadores en Windows
+          // filtran de más con él y esconden los .webp — justo el formato en que
+          // Chrome guarda muchas capturas. Por eso van nombrados.
+          accept="image/*,image/webp,image/heic,image/heif,.webp,.heic,.heif"
+          className="hidden"
+          onChange={(e) => onPick(e.target.files?.[0] ?? null)}
+        />
+      </div>
+    </div>
+  );
+}
+
 function MissingOperation({
   payment,
   canRegister,
@@ -362,8 +504,14 @@ function VoucherForm({
   const [payer, setPayer] = useState("");
   const [phone, setPhone] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  // Datos de Shalom que se pueden adelantar acá (0073). OPCIONALES: no
+  // condicionan el pago — bloquear un cobro por falta de un DNI sería peor que
+  // el problema que resuelve.
+  const [shalomDoc, setShalomDoc] = useState("");
+  const [shalomDocType, setShalomDocType] = useState("DNI");
+  const [shalomAgencyId, setShalomAgencyId] = useState("");
+  const [shalomAgencyName, setShalomAgencyName] = useState("");
 
   async function submit() {
     setBusy(true);
@@ -407,6 +555,18 @@ function VoucherForm({
         onError(res.error);
         return;
       }
+      // Se guarda DESPUÉS del pago y sin condicionarlo: si esto fallara, el
+      // cobro ya quedó registrado, que es lo que no puede perderse.
+      if (shalomDoc.trim() || shalomAgencyId.trim()) {
+        const pre = await saveShalomOrderDraft(orderId, {
+          documentType: shalomDocType as "DNI" | "RUC" | "CE",
+          document: shalomDoc.trim() || null,
+          destinyTerminalId: shalomAgencyId.trim() ? Number(shalomAgencyId) : null,
+          destinyTerminalName: shalomAgencyName.trim() || null,
+        });
+        if ("error" in pre) onError(`El pago se registró, pero los datos de Shalom no: ${pre.error}`);
+      }
+
       onNotice(res.notice ?? null);
       setAmount("");
       setOperation("");
@@ -468,41 +628,54 @@ function VoucherForm({
           className="w-40 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
         />
       </div>
-      {/* El input nativo se pintaba como texto suelto ("Seleccionar archivo
-          Ningún archivo seleccionado") y no se leía como algo pulsable. Se
-          esconde y se pone un botón de verdad, que además dice qué archivo
-          quedó elegido: sin eso no hay forma de saber si el clic hizo algo. */}
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-slate-300 p-2.5">
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
-          {file ? "Cambiar imagen" : "Elegir imagen del Yape"}
-        </button>
-        <span className="min-w-0 flex-1 truncate text-xs text-slate-500">
-          {file ? file.name : "Ningún archivo elegido"}
-        </span>
-        {file && (
-          <button
-            type="button"
-            onClick={() => {
-              setFile(null);
-              if (fileRef.current) fileRef.current.value = "";
-            }}
-            className="text-xs text-slate-500 underline hover:text-slate-700"
+      <VoucherPicker file={file} onPick={setFile} />
+
+      {/* Datos de Shalom, adelantados y OPCIONALES (0073).
+          Van aquí porque quien registra el Yape acaba de hablar con la clienta y
+          tiene el DNI a mano; quien crea la guía suele ser otra persona en otro
+          momento, y hoy tiene que volver a pedirlo. Nada de esto condiciona el
+          pago: un cobro no puede quedarse esperando a un DNI. */}
+      <details className="rounded-lg border border-slate-200 px-3 py-2">
+        <summary className="cursor-pointer text-xs font-medium text-slate-600">
+          Adelantar datos para la guía Shalom (opcional)
+        </summary>
+        <p className="mt-2 text-xs text-slate-400">
+          Si ya tienes el documento del cliente o sabes a qué agencia va, apúntalo acá y quien cree
+          la guía se lo encontrará puesto: solo tendrá que cotizar y crear.
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <select
+            value={shalomDocType}
+            onChange={(e) => setShalomDocType(e.target.value)}
+            className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
           >
-            Quitar
-          </button>
-        )}
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        />
-      </div>
+            <option value="DNI">DNI</option>
+            <option value="RUC">RUC</option>
+            <option value="CE">CE</option>
+          </select>
+          <input
+            value={shalomDoc}
+            onChange={(e) => setShalomDoc(e.target.value)}
+            placeholder="Documento del destinatario"
+            className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+          />
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <input
+            value={shalomAgencyId}
+            onChange={(e) => setShalomAgencyId(e.target.value)}
+            inputMode="numeric"
+            placeholder="ID de agencia de destino"
+            className="w-44 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+          />
+          <input
+            value={shalomAgencyName}
+            onChange={(e) => setShalomAgencyName(e.target.value)}
+            placeholder="Nombre de la agencia"
+            className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+          />
+        </div>
+      </details>
       <p className="text-xs text-slate-400">
         Lo que dejes en blanco se intenta leer de la imagen (nº de operación, monto, fecha y hora).
         Cargar la imagen no valida el pago: queda pendiente hasta que alguien lo revise.
