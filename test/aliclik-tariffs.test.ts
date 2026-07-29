@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { planTariffUpdates, type ExistingTariff, type ObservedRate } from "@/lib/aliclik-tariffs";
+import {
+  pickTopWarehouse,
+  planTariffUpdates,
+  syncAliclikTariffs,
+  type ExistingTariff,
+  type ObservedRate,
+} from "@/lib/aliclik-tariffs";
 
 const obs = (district: string, amount: number, concept: ObservedRate["concept"] = "primer_intento"): ObservedRate => ({
   district,
@@ -125,5 +131,76 @@ describe("planTariffUpdates", () => {
     const p = planTariffUpdates([obs("Arequipa", 16.5)], [sinDistrito], "2026-07-28");
     expect(p.insert).toHaveLength(1);
     expect(p.close).toHaveLength(0);
+  });
+});
+
+describe("syncAliclikTariffs: la pasada no se pierde por una racha de 5xx", () => {
+  const probe = (district: string) => ({
+    district,
+    lat: -6.7813,
+    lng: -79.842,
+    warehouseId: 133,
+    pending: 5,
+  });
+
+  /** fetch guionizado por número de llamada. */
+  const stub = (status: (call: number) => number) => {
+    let calls = 0;
+    const impl = (async () => {
+      const s = status(++calls);
+      return new Response(JSON.stringify({ message: "Internal server error" }), {
+        status: s,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    return { impl, count: () => calls };
+  };
+
+  // Nunca se llega a tocar la base: sin ninguna cotización buena, `syncAliclikTariffs`
+  // sale antes de cargar las tarifas vigentes. Por eso el admin puede ser un hueco.
+  const noAdmin = null as unknown as Parameters<typeof syncAliclikTariffs>[4];
+
+  it("da una segunda vuelta a los distritos que fallaron con 5xx", async () => {
+    const { impl, count } = stub(() => 500);
+    const res = await syncAliclikTariffs(
+      "org",
+      [probe("Chiclayo"), probe("Trujillo")],
+      { apiToken: "t", baseUrl: "https://api.aliclik-test.local", fetchImpl: impl, egress: "direct" },
+      "2026-07-29",
+      noAdmin,
+    );
+    // 2 distritos × 3 intentos del cliente HTTP × 2 vueltas.
+    expect(count()).toBe(12);
+    expect(res.quoted).toBe(0);
+    expect(res.failed).toBe(2);
+  });
+
+  it("cuenta como fallido un 4xx, pero NO le da segunda vuelta", async () => {
+    // Un dato malo no mejora repitiéndolo: se cuenta y se deja en paz.
+    const { impl, count } = stub(() => 400);
+    const res = await syncAliclikTariffs(
+      "org",
+      [probe("Chiclayo")],
+      { apiToken: "t", baseUrl: "https://api.aliclik-test.local", fetchImpl: impl, egress: "direct" },
+      "2026-07-29",
+      noAdmin,
+    );
+    expect(count()).toBe(1);
+    expect(res.failed).toBe(1);
+  });
+});
+
+describe("pickTopWarehouse", () => {
+  it("elige el almacén con más SKUs, no uno cualquiera", () => {
+    // El caso real: 65 almacenes en el catálogo, uno solo despacha de verdad.
+    expect(pickTopWarehouse(new Map([[183, 85], [133, 724], [15, 2]]))).toBe(133);
+  });
+
+  it("a igualdad elige el id más bajo, para no cambiar de un día para otro", () => {
+    expect(pickTopWarehouse(new Map([[200, 4], [100, 4]]))).toBe(100);
+  });
+
+  it("sin nada que contar no inventa un almacén", () => {
+    expect(pickTopWarehouse(new Map())).toBeUndefined();
   });
 });

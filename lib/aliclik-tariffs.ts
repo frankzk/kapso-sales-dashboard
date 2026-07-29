@@ -38,6 +38,24 @@ export const ALICLIK_TARIFF_SOURCE = "aliclik";
  */
 export type QuotedConcept = "primer_intento" | "devolucion" | "intento_adicional";
 
+/**
+ * El almacén desde el que se cotiza: el más frecuente; a igualdad, el id más
+ * bajo. El desempate mantiene la elección ESTABLE entre pasadas — si cambiara
+ * de un día para otro, las tarifas de distintos distritos dejarían de ser
+ * comparables entre sí, que es justo lo que se quiere evitar.
+ */
+export function pickTopWarehouse(counts: ReadonlyMap<number, number>): number | undefined {
+  let best: number | undefined;
+  let bestCount = -1;
+  for (const [id, n] of counts) {
+    if (n > bestCount || (n === bestCount && best !== undefined && id < best)) {
+      best = id;
+      bestCount = n;
+    }
+  }
+  return best;
+}
+
 /** Una tarifa vigente tal y como está guardada. */
 export interface ExistingTariff {
   id: string;
@@ -160,8 +178,23 @@ export interface TariffSyncResult {
   skipped: number;
   /** Cotizaciones descartadas por respetar una tarifa cargada a mano. */
   skippedManual: number;
+  /**
+   * Distritos que se quedaron sin cotizar porque su API falló, incluso tras la
+   * segunda vuelta. Se cuenta aparte de `errors` porque es EL número que dice
+   * si la pasada sirvió de algo: una donde fallaron 45 de 60 y otra donde no
+   * cambió ningún precio dan las dos `changed: 0`, y no son lo mismo.
+   */
+  failed: number;
   errors: string[];
 }
+
+/**
+ * ¿Merece una segunda vuelta al final de la pasada?
+ *
+ * `status === null` es corte de red o timeout; 5xx es que su servidor reventó.
+ * Un 4xx NO se reintenta: es la petición la que está mal y repetirla da igual.
+ */
+const worthRetrying = (status: number | null) => status === null || status >= 500;
 
 /**
  * Todas las tarifas vigentes por distrito de una organización, separadas por
@@ -228,11 +261,13 @@ export async function syncAliclikTariffs(
     changed: 0,
     skipped: 0,
     skippedManual: 0,
+    failed: 0,
     errors: [],
   };
   const observed: ObservedRate[] = [];
 
-  for (const p of probes) {
+  /** Cotiza un distrito y anota el resultado en `out`. */
+  const attempt = async (p: DistrictProbe): Promise<"ok" | "retry" | "failed"> => {
     const quote = await quoteShippingCost(opts, {
       warehouseId: p.warehouseId,
       lat: toAliclikCoord(p.lat),
@@ -241,7 +276,7 @@ export async function syncAliclikTariffs(
     if (!quote.ok) {
       // Un distrito que falla no puede tumbar la pasada entera: se anota y sigue.
       out.errors.push(`${p.district}: ${quote.error}`);
-      continue;
+      return worthRetrying(quote.status) ? "retry" : "failed";
     }
     out.quoted += 1;
 
@@ -250,11 +285,35 @@ export async function syncAliclikTariffs(
     const courier = (quote.data.couriers ?? [])[0];
     if (!courier) {
       out.skipped += 1;
-      continue;
+      return "ok";
     }
     observed.push({ district: p.district, concept: "primer_intento", amount: courier.deliveryCost });
     if (Number.isFinite(courier.returnCost)) {
       observed.push({ district: p.district, concept: "devolucion", amount: courier.returnCost });
+    }
+    return "ok";
+  };
+
+  const retry: DistrictProbe[] = [];
+  for (const p of probes) {
+    const r = await attempt(p);
+    if (r === "retry") retry.push(p);
+    else if (r === "failed") out.failed += 1;
+  }
+
+  // SEGUNDA VUELTA, y no más reintentos dentro de la primera. Los 5xx de Aliclik
+  // llegan en rachas de minutos —el 29/07 fallaron 136 de 203 peticiones entre
+  // las 09:25 y las 09:45 UTC—, y los tres reintentos que ya hace el cliente HTTP
+  // se agotan en poco más de un segundo, dentro de la misma racha. Volver al
+  // final de la pasada pone minutos de por medio sin dormir el proceso.
+  //
+  // Un distrito que falla tampoco se pierde: al no escribirse ninguna tarifa
+  // sigue con `last_quoted` nulo y `aliclik_tariff_probes` lo devuelve el
+  // primero mañana. Esto solo evita perder la pasada entera.
+  if (retry.length) {
+    out.errors.push(`Segunda vuelta para ${retry.length} distrito(s) que fallaron.`);
+    for (const p of retry) {
+      if ((await attempt(p)) !== "ok") out.failed += 1;
     }
   }
 

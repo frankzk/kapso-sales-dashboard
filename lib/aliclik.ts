@@ -331,10 +331,16 @@ export function aliclikErrorMessage(
   // nuestro y manda al equipo a revisar el dashboard, que está bien. Se atribuye
   // siempre. Los 4xx se dejan tal cual: ésos sí son accionables y su texto es la
   // información útil ("El número de pedido … ya existe").
+  //
+  // El consejo de "reintenta" NO va aquí, sino en `request`, que es quien sabe
+  // si se reintentó: `createOrder` no reintenta a propósito —su API no tiene
+  // clave de idempotencia y repetir deja dos guías reales para el mismo
+  // paquete— y decirle a la operadora que reintente sería el peor consejo
+  // posible justo ahí.
   const attribute = (msg: string) =>
     status >= 500
       ? `Aliclik respondió HTTP ${status}: «${msg}». Es un fallo en el servidor de Aliclik, no en el ` +
-        "dashboard. Reintenta en unos minutos; si sigue igual, repórtaselo."
+        "dashboard."
       : msg;
 
   if (body && typeof body === "object") {
@@ -409,6 +415,14 @@ async function request<T>(
     // `status: null` es corte de red o timeout: también pasajero.
     const transient = out.status == null || ALICLIK_RETRY_STATUSES.has(out.status);
     if (!transient) return out;
+  }
+
+  // Aquí se llega solo con todos los intentos gastados. Decirlo importa: el
+  // mensaje anterior invitaba a "reintentar en unos minutos" como si no se
+  // hubiera intentado nada, y la operadora reintentaba a mano tres veces más
+  // sobre una racha de 5xx que dura minutos. Que sepa que ya se hizo.
+  if (last && !last.ok && attempts > 1) {
+    return { ...last, error: `${last.error} Ya se reintentó ${attempts} veces seguidas.` };
   }
   return last ?? { ok: false, status: null, error: "Aliclik no respondió." };
 }
