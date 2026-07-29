@@ -158,6 +158,8 @@ export function ExecutiveDashboard({
   attribution,
   metaSpend,
   campaignDeliveries,
+  campaignLeads,
+  campaignOrders,
   metaAdPerformance,
 }: {
   stores: StoreSummary[];
@@ -177,6 +179,8 @@ export function ExecutiveDashboard({
   attribution?: SalesAttribution;
   metaSpend?: number | null;
   campaignDeliveries?: import("@/lib/types").CampaignDeliveryOutcome[];
+  campaignLeads?: LeadRow[];
+  campaignOrders?: OrderRow[];
   metaAdPerformance?: import("@/lib/types").MetaAdPerformance[];
 }) {
   const names: Record<string, string> = Object.fromEntries(stores.map((s) => [s.id, s.name]));
@@ -220,13 +224,13 @@ export function ExecutiveDashboard({
   const channels = botVsAdvisor(orders);
   const cartStats = cartRecovery(leadList, orders);
   const campaignStats = campaignBreakdown(
-    leadList,
-    orders,
+    campaignLeads ?? leadList,
+    campaignOrders ?? orders,
     adNames ?? {},
     campaignDeliveries ?? [],
     metaAdPerformance ?? [],
   );
-  const campaignTrend = campaignDailyTrend(leadList, adNames ?? {}, timezone);
+  const campaignTrend = campaignDailyTrend(campaignLeads ?? leadList, adNames ?? {}, timezone);
   const waStats = leadsByWaNumber(leadList, orders);
   const funnelStages = conversationalFunnel({
     conversations,

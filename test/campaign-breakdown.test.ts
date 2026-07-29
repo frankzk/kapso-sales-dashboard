@@ -107,9 +107,11 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
   it("joins historical Meta delivery and derives weighted cost metrics", () => {
     const performance = [
       {
+        storeId: "store-1",
         adId: "999",
         accountId: "act-1",
         currency: "USD",
+        metaConversations: 1,
         spend: 24,
         impressions: 12_000,
         reach: 8_000,
@@ -118,11 +120,14 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
         activeDays: 6,
         firstDate: "2026-07-01",
         lastDate: "2026-07-06",
+        syncedAt: "2026-07-07T00:00:00Z",
       },
       {
+        storeId: "store-1",
         adId: "spent-without-leads",
         accountId: "act-1",
         currency: "USD",
+        metaConversations: 3,
         spend: 10,
         impressions: 5_000,
         reach: 4_000,
@@ -131,6 +136,7 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
         activeDays: 3,
         firstDate: "2026-07-01",
         lastDate: "2026-07-03",
+        syncedAt: "2026-07-07T00:00:00Z",
       },
     ] satisfies MetaAdPerformance[];
     const rows = campaignBreakdown(leads, orders, {}, [
@@ -155,6 +161,63 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
     const noSignal = rows.find((row) => row.adId === "spent-without-leads")!;
     expect(noSignal.leads).toBe(0);
     expect(noSignal.decision).toBe("no_attribution");
+  });
+
+  it("does not recommend scaling without verified spend or five delivered orders", () => {
+    const cohortLeads = Array.from({ length: 25 }, (_, index) => ({
+      id: `lead-${index}`,
+      store_id: "store-1",
+      source: "meta_ad",
+      ad_id: "quality-ad",
+      ad_headline: "Quality",
+      order_id: index < 5 ? `quality-order-${index}` : null,
+    })) as unknown as LeadRow[];
+    const cohortOrders = Array.from({ length: 5 }, (_, index) => ({
+      id: `quality-order-${index}`,
+      name: `#Q${index}`,
+      total_amount: 100,
+      total_refunded: 0,
+      cancelled_at: null,
+      line_items: [{ title: "Producto", sku: "SKU", quantity: 1 }],
+    })) as unknown as OrderRow[];
+
+    const [withoutSpend] = campaignBreakdown(cohortLeads, cohortOrders);
+    expect(withoutSpend?.decision).toBe("data_incomplete");
+
+    const meta = [{
+      storeId: "store-1",
+      adId: "quality-ad",
+      accountId: "act-1",
+      currency: "USD",
+      metaConversations: 30,
+      spend: 50,
+      impressions: 10_000,
+      reach: 8_000,
+      clicks: 100,
+      inlineLinkClicks: 80,
+      activeDays: 7,
+      firstDate: "2026-07-01",
+      lastDate: "2026-07-07",
+      syncedAt: "2026-07-08T00:00:00Z",
+    }] satisfies MetaAdPerformance[];
+    const threeDeliveries = Array.from({ length: 3 }, (_, index) => ({
+      orderId: `quality-order-${index}`,
+      deliveryStatus: "Entregado",
+      statusCategory: "delivered",
+      createdAt: "2026-07-10T00:00:00Z",
+    }));
+    const [immature] = campaignBreakdown(cohortLeads, cohortOrders, {}, threeDeliveries, meta);
+    expect(immature?.decision).toBe("insufficient");
+    expect(immature?.decisionReason).toContain("3/5");
+
+    const fiveDeliveries = Array.from({ length: 5 }, (_, index) => ({
+      orderId: `quality-order-${index}`,
+      deliveryStatus: "Entregado",
+      statusCategory: "delivered",
+      createdAt: "2026-07-10T00:00:00Z",
+    }));
+    const [mature] = campaignBreakdown(cohortLeads, cohortOrders, {}, fiveDeliveries, meta);
+    expect(["scale", "promising"]).toContain(mature?.decision);
   });
 
   it("campaignDailyTrend buckets leads per day per ad (store tz)", () => {

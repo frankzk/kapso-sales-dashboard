@@ -34,6 +34,7 @@ const DECISIONS: Record<CampaignDecision, { label: string; className: string; he
   operational: { label: "Freno operativo", className: "bg-rose-100 text-rose-800", help: "La entrega está deteriorando el resultado comercial." },
   insufficient: { label: "Muestra baja", className: "bg-slate-100 text-slate-600", help: "Se requieren al menos 20 leads para recomendar una acción." },
   no_attribution: { label: "Sin leads atribuidos", className: "bg-rose-100 text-rose-800", help: "Meta registra gasto, pero no hay leads atribuidos a este anuncio en el período." },
+  data_incomplete: { label: "Datos incompletos", className: "bg-slate-100 text-slate-700", help: "No hay gasto con moneda verificable; no se emite una recomendación económica." },
 };
 
 const MATCH: Record<CampaignProductMatch, { label: string; className: string }> = {
@@ -308,7 +309,7 @@ function ExpandedRow({
           <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-4 lg:grid-cols-8">
             <Metric label="Gasto" value={formatMetaMoney(row.spend, row.metaCurrency)} note={`${row.activeDays} días con datos`} />
             <Metric label="Impresiones" value={formatCompact(row.impressions)} note={`${formatCompact(row.reach)} alcance`} />
-            <Metric label="Frecuencia" value={row.frequency == null ? "—" : `${row.frequency.toFixed(2)}×`} />
+            <Metric label="Frec. diaria ponderada" value={row.frequency == null ? "—" : `${row.frequency.toFixed(2)}×`} />
             <Metric label="CPM" value={formatMetaMoney(row.cpm, row.metaCurrency)} />
             <Metric label="Clics" value={formatCompact(row.clicks)} note={row.ctr == null ? undefined : `${formatPct(row.ctr)} CTR`} />
             <Metric label="CPC" value={formatMetaMoney(row.cpc, row.metaCurrency)} />
@@ -318,6 +319,15 @@ function ExpandedRow({
         ) : (
           <p className="text-xs text-slate-400">Este anuncio no tiene histórico de Meta en el período seleccionado.</p>
         )}
+      </div>
+      <div>
+        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Cobertura y calidad del cruce</h4>
+        <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-4">
+          <Metric label="Conversaciones Meta" value={row.metaConversations ? String(row.metaConversations) : "Sin acción disponible"} />
+          <Metric label="Leads internos" value={String(row.leads)} note={row.conversationCoverageRate == null ? "No comparable" : `${formatPct(row.conversationCoverageRate)} de Meta`} />
+          <Metric label="Pedidos exactos" value={String(row.pedidos)} note={`${formatPct(row.conversion)} lead→pedido`} />
+          <Metric label="Seguimiento logístico" value={`${row.shipmentKnown}/${row.pedidos}`} note={row.logisticsCoverageRate == null ? "Sin pedidos" : formatPct(row.logisticsCoverageRate)} />
+        </div>
       </div>
       <div>
         <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Qué terminaron comprando</h4>
@@ -375,18 +385,27 @@ export function CampaignTable({
     const impressions = rows.reduce((sum, row) => sum + row.impressions, 0);
     const reach = rows.reduce((sum, row) => sum + row.reach, 0);
     const shipmentKnown = rows.reduce((sum, row) => sum + row.shipmentKnown, 0);
+    const metaConversations = rows.reduce((sum, row) => sum + row.metaConversations, 0);
+    const leadsCoveredByMeta = rows.filter((row) => row.metaConversations > 0).reduce((sum, row) => sum + row.leads, 0);
     const delivered = rows.reduce((sum, row) => sum + row.deliveredOrders, 0);
     const coveredLeads = rows.filter((row) => row.activeDays > 0).reduce((sum, row) => sum + row.leads, 0);
     const coveredOrders = rows.filter((row) => row.activeDays > 0).reduce((sum, row) => sum + row.pedidos, 0);
     const coveredDelivered = rows.filter((row) => row.activeDays > 0).reduce((sum, row) => sum + row.deliveredOrders, 0);
-    const currencies = [...new Set(rows.filter((row) => row.spend > 0 && row.metaCurrency).map((row) => row.metaCurrency!))];
-    const spendByCurrency = new Map<string, number>();
+    const spendByCurrency = new Map<string, { spend: number; leads: number; orders: number; delivered: number }>();
     for (const row of rows) {
-      if (row.spend <= 0) continue;
-      const key = row.metaCurrency ?? "SIN MONEDA";
-      spendByCurrency.set(key, (spendByCurrency.get(key) ?? 0) + row.spend);
+      if (row.spend <= 0 || !row.metaCurrency || row.currencyConflict) continue;
+      const value = spendByCurrency.get(row.metaCurrency) ?? { spend: 0, leads: 0, orders: 0, delivered: 0 };
+      value.spend += row.spend;
+      value.leads += row.leads;
+      value.orders += row.pedidos;
+      value.delivered += row.deliveredOrders;
+      spendByCurrency.set(row.metaCurrency, value);
     }
-    const metaCurrency = currencies.length === 1 ? currencies[0]! : null;
+    const currencyCosts = [...spendByCurrency.entries()].map(([code, value]) => ({ code, ...value }));
+    const matchingRows = rows.filter((row) => sameCurrency(row.metaCurrency, currency) && row.spend > 0 && !row.currencyConflict);
+    const matchingSpend = matchingRows.reduce((sum, row) => sum + row.spend, 0);
+    const matchingDeliveredRevenue = matchingRows.reduce((sum, row) => sum + row.deliveredRevenue, 0);
+    const syncedAt = rows.map((row) => row.metaSyncedAt).filter((value): value is string => !!value).sort().at(-1) ?? null;
     return {
       leads,
       orders,
@@ -398,11 +417,17 @@ export function CampaignTable({
       coveredLeads,
       coveredOrders,
       coveredDelivered,
-      metaCurrency,
-      spendLabel: [...spendByCurrency.entries()].map(([code, amount]) => formatMetaMoney(amount, code === "SIN MONEDA" ? null : code)).join(" · "),
+      metaConversations,
+      leadsCoveredByMeta,
+      currencyCosts,
+      spendLabel: currencyCosts.map(({ code, spend: amount }) => formatMetaMoney(amount, code)).join(" · "),
       delivery: shipmentKnown ? delivered / shipmentKnown : null,
+      shipmentKnown,
+      matchingSpend,
+      matchingDeliveredRevenue,
+      syncedAt,
     };
-  }, [rows]);
+  }, [rows, currency]);
   const sorted = useMemo(() => [...rows].sort((a, b) => {
     const av = sort.key === "label" ? prettyAdName(a.label) : (a[sort.key] ?? -1);
     const bv = sort.key === "label" ? prettyAdName(b.label) : (b[sort.key] ?? -1);
@@ -415,17 +440,21 @@ export function CampaignTable({
   const columns: Array<{ key: SortKey; label: string }> = [
     { key: "label", label: "Anuncio / producto" },
     { key: "spend", label: "Gasto" },
-    { key: "cpm", label: "CPM / frecuencia" },
-    { key: "leads", label: "Leads / CPL" },
-    { key: "pedidos", label: "Pedidos / CPA" },
-    { key: "productMatchRate", label: "Mismo producto" },
-    { key: "deliveryRate", label: "Entregados / CPA real" },
+    { key: "cpm", label: "CPM / frec. diaria" },
+    { key: "leads", label: "Leads adquiridos / CPL" },
+    { key: "pedidos", label: "Pedidos atribuidos / CPA" },
+    { key: "productMatchRate", label: "Coincidencia producto" },
+    { key: "deliveryRate", label: "Entrega logística / CPA entregado" },
     { key: "deliveredRoas", label: "ROAS entregado" },
   ];
-  const summaryCurrencyMatches = sameCurrency(totals.metaCurrency, currency);
+  const costLabel = (field: "leads" | "orders" | "delivered") =>
+    totals.currencyCosts
+      .filter((item) => item[field] > 0)
+      .map((item) => formatMetaMoney(item.spend / item[field], item.code))
+      .join(" · ") || "—";
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 sm:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 sm:grid-cols-4 xl:grid-cols-8">
         <Metric
           label="Gasto Meta"
           value={totals.spendLabel || "—"}
@@ -434,34 +463,47 @@ export function CampaignTable({
         <Metric
           label="Entrega publicitaria"
           value={`${formatCompact(totals.impressions)} imp.`}
-          note={`${formatCompact(totals.reach)} alcance · ${totals.reach ? (totals.impressions / totals.reach).toFixed(2) : "—"}× frec.`}
+          note={`${formatCompact(totals.reach)} alcance diario acum. · ${totals.reach ? (totals.impressions / totals.reach).toFixed(2) : "—"}× frec. diaria`}
+        />
+        <Metric
+          label="Cobertura Meta → CRM"
+          value={totals.metaConversations ? formatPct(totals.leadsCoveredByMeta / totals.metaConversations) : "Sin acción Meta"}
+          note={`${totals.leadsCoveredByMeta}/${totals.metaConversations} conversaciones`}
         />
         <Metric
           label="Costo por lead"
-          value={totals.metaCurrency && totals.coveredLeads ? formatMetaMoney(totals.spend / totals.coveredLeads, totals.metaCurrency) : "—"}
-          note={`${totals.coveredLeads}/${totals.leads} leads con gasto`}
+          value={costLabel("leads")}
+          note="Separado por moneda"
         />
         <Metric
           label="CPA generado"
-          value={totals.metaCurrency && totals.coveredOrders ? formatMetaMoney(totals.spend / totals.coveredOrders, totals.metaCurrency) : "—"}
-          note={`${totals.coveredOrders}/${totals.orders} pedidos con gasto`}
+          value={costLabel("orders")}
+          note="Pedidos exactos enlazados"
+        />
+        <Metric
+          label="Cobertura logística"
+          value={totals.orders ? formatPct(totals.shipmentKnown / totals.orders) : "—"}
+          note={`${totals.shipmentKnown}/${totals.orders} pedidos seguidos`}
         />
         <Metric
           label="CPA entregado"
-          value={totals.metaCurrency && totals.coveredDelivered ? formatMetaMoney(totals.spend / totals.coveredDelivered, totals.metaCurrency) : "—"}
-          note={`${totals.coveredDelivered}/${totals.delivered} entregados con gasto`}
+          value={costLabel("delivered")}
+          note={`${totals.delivered} entregados conocidos`}
         />
         <Metric
           label="ROAS entregado"
-          value={summaryCurrencyMatches && totals.spend ? `${(totals.coveredDeliveredRevenue / totals.spend).toFixed(2)}×` : "No comparable"}
-          note={summaryCurrencyMatches ? `${formatCurrency(totals.coveredDeliveredRevenue, currency)} entregado con gasto` : `${totals.metaCurrency ?? "Meta"} ≠ ${currency}`}
+          value={totals.matchingSpend ? `${(totals.matchingDeliveredRevenue / totals.matchingSpend).toFixed(2)}×` : "No comparable"}
+          note={totals.matchingSpend ? `Solo gasto y ventas en ${currency}` : `Sin gasto Meta en ${currency}`}
         />
       </div>
-      {!summaryCurrencyMatches && totals.spend > 0 && (
+      {totals.currencyCosts.some((item) => item.code !== currency) && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          El gasto está en {totals.metaCurrency ?? "más de una moneda"} y las ventas en {currency}. CPL y CPA sí son válidos en la moneda de Meta; el ROAS se oculta hasta configurar un tipo de cambio.
+          Los costos se calculan por separado en {totals.currencyCosts.map((item) => item.code).join(" y ")}. El ROAS solo se muestra cuando gasto y ventas comparten moneda; no se convierten ni se suman monedas.
         </div>
       )}
+      <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+        Cohorte: leads cuya primera adquisición ocurrió en el período seleccionado, usando el día local de cada tienda. Los pedidos son enlaces exactos de Shopify y pueden haberse generado después. Histórico Meta actualizado: {totals.syncedAt ? new Date(totals.syncedAt).toLocaleString("es-PE") : "sin sincronización verificable"}.
+      </div>
       <div className="overflow-x-auto rounded-xl border border-slate-200">
         <table className="w-full min-w-[1460px] text-sm">
           <thead><tr className="border-b border-slate-200 bg-white text-xs text-slate-500">
@@ -477,13 +519,13 @@ export function CampaignTable({
             const decision = DECISIONS[row.decision];
             const isOpen = expanded === row.adId;
             return [
-              <tr key={row.adId} onClick={() => setExpanded(isOpen ? null : row.adId)} className="cursor-pointer border-b border-slate-100 bg-white hover:bg-slate-50">
+              <tr key={row.rowKey} onClick={() => setExpanded(isOpen ? null : row.adId)} className="cursor-pointer border-b border-slate-100 bg-white hover:bg-slate-50">
                 <td className="px-3 py-3 text-slate-400">{isOpen ? "▾" : "›"}</td>
                 <td className="px-2 py-3"><LabelCell row={row} /></td>
                 <td className="px-2 py-3 text-right"><p className="font-semibold tabular-nums">{row.activeDays ? formatMetaMoney(row.spend, row.metaCurrency) : "—"}</p><p className="text-[11px] text-slate-400">{row.activeDays ? `${formatCompact(row.impressions)} imp.` : "Sin histórico"}</p></td>
                 <td className="px-2 py-3 text-right"><p className="font-semibold tabular-nums">{formatMetaMoney(row.cpm, row.metaCurrency)}</p><p className="text-[11px] text-slate-400">{row.frequency == null ? "—" : `${row.frequency.toFixed(2)}×`}</p></td>
                 <td className="px-2 py-3 text-right"><p className="font-semibold tabular-nums">{row.leads}</p><p className="text-[11px] text-slate-400">{row.cpl == null ? "CPL —" : `CPL ${formatMetaMoney(row.cpl, row.metaCurrency)}`}</p></td>
-                <td className="px-2 py-3 text-right"><p className="font-semibold tabular-nums">{row.pedidos}</p><p className="text-[11px] text-slate-400">{row.cpa == null ? formatPct(row.conversion) : `CPA ${formatMetaMoney(row.cpa, row.metaCurrency)}`}</p></td>
+                <td className="px-2 py-3 text-right"><p className="font-semibold tabular-nums">{row.pedidos}</p><p className="text-[11px] text-slate-400">{row.cpa == null ? `Conv. lead→pedido ${formatPct(row.conversion)}` : `CPA ${formatMetaMoney(row.cpa, row.metaCurrency)}`}</p></td>
                 <td className="px-2 py-3 text-right">{row.productMatchRate == null ? <span className="text-xs text-amber-600">Por mapear</span> : <><p className="font-semibold">{formatPct(row.productMatchRate)}</p><p className="text-[11px] text-slate-400">{row.exactOrders + row.mixedOrders}/{row.exactOrders + row.mixedOrders + row.crossSellOrders}</p></>}</td>
                 <td className="px-2 py-3 text-right">{row.deliveryRate == null ? <span className="text-xs text-slate-400">Sin datos</span> : <><p className="font-semibold">{formatPct(row.deliveryRate)}</p><p className="text-[11px] text-slate-400">{row.deliveredCpa == null ? `${row.deliveredOrders}/${row.shipmentKnown}` : `CPA ${formatMetaMoney(row.deliveredCpa, row.metaCurrency)}`}</p></>}</td>
                 <td className="px-2 py-3 text-right">
@@ -493,9 +535,9 @@ export function CampaignTable({
                     <><p className="text-xs font-medium text-amber-600">No comparable</p><p className="text-[11px] text-slate-400">{row.metaCurrency ?? "—"} ≠ {currency}</p></>
                   )}
                 </td>
-                <td className="px-3 py-3 text-right"><span title={decision.help} className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-semibold", decision.className)}>{decision.label}</span></td>
+                <td className="px-3 py-3 text-right"><span title={row.decisionReason || decision.help} className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-semibold", decision.className)}>{decision.label}</span></td>
               </tr>,
-              isOpen && <tr key={`${row.adId}-detail`}><td colSpan={10} className="p-0"><ExpandedRow row={row} currency={currency} catalogStoreIds={catalogStoreIds} /></td></tr>,
+              isOpen && <tr key={`${row.rowKey}-detail`}><td colSpan={10} className="p-0"><ExpandedRow row={row} currency={currency} catalogStoreIds={catalogStoreIds} /></td></tr>,
             ];
           })}</tbody>
         </table>
@@ -508,7 +550,7 @@ export function CampaignTable({
           </button>
         </div>
       )}
-      <p className="text-xs text-slate-400">CPM y frecuencia se recalculan desde los totales del período, no promedian días. “Mismo producto” compara el pedido enlazado. CPA real usa únicamente pedidos entregados.</p>
+      <p className="text-xs text-slate-400">CPM se calcula con totales aditivos. La frecuencia es un promedio diario ponderado porque el alcance único entre días no se puede sumar. “Coincidencia producto” compara el producto anunciado con el pedido exacto enlazado. “Conversión lead→pedido” no es CPA. CPA entregado usa únicamente entregas conocidas. Escalar/Prometedor exige gasto verificable y al menos 5 entregas.</p>
     </div>
   );
 }
