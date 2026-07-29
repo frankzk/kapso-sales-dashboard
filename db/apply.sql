@@ -163,4 +163,6 @@
 \ir migrations/0078_order_coverage.sql
 \echo 'Applying 0079_coverage_region_first.sql'
 \ir migrations/0079_coverage_region_first.sql
+\echo 'Applying 0080_swayp_guides.sql'
+\ir migrations/0080_swayp_guides.sql
 \echo 'Done.'

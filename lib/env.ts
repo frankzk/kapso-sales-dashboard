@@ -51,6 +51,21 @@ export const env = {
   },
   yapeVisionEnabled: () => Boolean(process.env.ANTHROPIC_API_KEY),
 
+  // --- Swayp (ex-Fenix) last-mile API. The token is issued by hand per
+  //     integrator and there is NO login endpoint, so it can't be refreshed
+  //     programmatically: when it stops working a human has to request a new
+  //     one. `swaypEnabled` gates the whole integration so the manual guide
+  //     flow keeps working untouched while this is unconfigured. ---
+  swaypApiBase: () =>
+    (process.env.SWAYP_API_BASE ?? "https://us-central1-swayp-staging.cloudfunctions.net/api")
+      .replace(/\/$/, ""),
+  swaypToken: () => required("SWAYP_TOKEN"),
+  swaypEmail: () => required("SWAYP_EMAIL"),
+  swaypWebhookToken: () => process.env.SWAYP_WEBHOOK_TOKEN ?? "",
+  /** JSON: ciudad de cobertura → datos de la bodega remitente. Ver lib/swayp-guide.ts. */
+  swaypSenders: () => process.env.SWAYP_SENDERS ?? "",
+  swaypEnabled: () => Boolean(process.env.SWAYP_TOKEN && process.env.SWAYP_EMAIL),
+
   // --- Aliclik: API de integración (crear guías desde el Master) ---
   //     La documentación solo publica el host de DESARROLLO, así que la base es
   //     obligatoriamente configurable: pasar a producción no puede exigir un
