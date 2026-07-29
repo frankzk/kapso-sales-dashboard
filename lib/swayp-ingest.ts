@@ -67,7 +67,10 @@ export async function processSwaypWebhook(input: {
   now?: Date;
 }): Promise<SwaypWebhookResult> {
   const expected = env.swaypWebhookToken();
-  const provided = typeof input.body?.token === "string" ? input.body.token : "";
+  // También se recorta lo que llega: el token viaja copiado y pegado por dos
+  // equipos distintos, y un blanco al borde no debería costar una tarde de
+  // depuración. No afloja nada — nadie gana acceso por un espacio de más.
+  const provided = typeof input.body?.token === "string" ? input.body.token.trim() : "";
   // Sin token configurado no se puede autenticar a nadie: cerrado por defecto.
   if (!expected) return { status: "unauthorized", reason: "not_configured" };
   if (!constantTimeEquals(provided, expected)) {

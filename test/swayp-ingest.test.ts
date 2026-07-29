@@ -55,6 +55,21 @@ describe("auth", () => {
       .toEqual({ status: "unauthorized", reason: "not_configured" });
   });
 
+  it("survives whitespace on either side of the token", async () => {
+    // Pegar un secreto en el panel de Vercel arrastra un salto de línea con
+    // muchísima facilidad y Vercel no lo limpia. Sin el trim, la comparación
+    // —que filtra por longitud antes de comparar— da 401 SIEMPRE, y del lado de
+    // Swayp es indistinguible de un token mal copiado. Ya pasó con SHALOM_API_KEY.
+    vi.stubEnv("SWAYP_WEBHOOK_TOKEN", `  ${TOKEN}\n`);
+    const { admin, updates } = fakeAdmin({ id: "s1", delivery_status: "en_ruta", swayp_state: 5 });
+    const r = await processSwaypWebhook({
+      body: { token: `${TOKEN} `, guide_number: "1", state: "7" },
+      admin,
+    });
+    expect(r.status).toBe("updated");
+    expect(updates[0]).toMatchObject({ delivery_status: "entregado" });
+  });
+
   it("reports whether the token is configured, without revealing it", async () => {
     expect(swaypWebhookConfigured()).toBe(true);
     vi.stubEnv("SWAYP_WEBHOOK_TOKEN", "");

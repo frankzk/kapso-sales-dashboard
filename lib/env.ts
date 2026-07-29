@@ -59,9 +59,16 @@ export const env = {
   swaypApiBase: () =>
     (process.env.SWAYP_API_BASE ?? "https://us-central1-swayp-staging.cloudfunctions.net/api")
       .replace(/\/$/, ""),
-  swaypToken: () => required("SWAYP_TOKEN"),
-  swaypEmail: () => required("SWAYP_EMAIL"),
-  swaypWebhookToken: () => process.env.SWAYP_WEBHOOK_TOKEN ?? "",
+  //     Se recortan los tres valores, por lo mismo que SHALOM_API_KEY más abajo:
+  //     pegar un secreto en el panel de Vercel arrastra un espacio o un salto de
+  //     línea con muchísima facilidad y Vercel no los limpia. Acá duele el doble,
+  //     porque el webhook compara el token con un filtro de longitud previo: un
+  //     solo carácter invisible da 401 SIEMPRE, y del lado de Swayp es
+  //     indistinguible de haber copiado mal el token. Ya pasó en producción con
+  //     Shalom; no hay razón para repetirlo.
+  swaypToken: () => required("SWAYP_TOKEN").trim(),
+  swaypEmail: () => required("SWAYP_EMAIL").trim(),
+  swaypWebhookToken: () => (process.env.SWAYP_WEBHOOK_TOKEN ?? "").trim(),
   /** JSON: ciudad de cobertura → datos de la bodega remitente. Ver lib/swayp-guide.ts. */
   swaypSenders: () => process.env.SWAYP_SENDERS ?? "",
   swaypEnabled: () => Boolean(process.env.SWAYP_TOKEN && process.env.SWAYP_EMAIL),
