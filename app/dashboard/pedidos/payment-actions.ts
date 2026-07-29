@@ -21,6 +21,7 @@ import { normalizePhone } from "@/lib/phone";
 import {
   canRevealPickupKey,
   describeBlockers,
+  paymentPlanProblem,
   paymentState,
   type PaymentSnapshot,
 } from "@/lib/pickup-key";
@@ -356,7 +357,7 @@ export async function readVoucherFields(
 }
 
 export interface RegisterPaymentInput {
-  kind: "adelanto" | "diferencia";
+  kind: "adelanto" | "diferencia" | "total";
   amount: number | null;
   operationNumber: string | null;
   paidAt: string | null;
@@ -382,7 +383,7 @@ export async function registerPayment(
   if (!perms.can("shalom.register_payment")) return { error: "Tu rol no permite registrar pagos." };
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
-  if (input.kind !== "adelanto" && input.kind !== "diferencia") {
+  if (!["adelanto", "diferencia", "total"].includes(input.kind)) {
     return { error: "Tipo de pago inválido." };
   }
 
@@ -398,6 +399,22 @@ export async function registerPayment(
   const paidAt = input.paidAt ?? vision.fields.paidAt;
   const payerName = input.payerName ?? vision.fields.payerName;
   const payerPhone = normalizePhone(input.payerPhone);
+
+  const { data: currentPayments } = await admin
+    .from("order_payments")
+    .select("kind,validation_status")
+    .eq("order_id", orderId)
+    .neq("validation_status", "rechazado");
+  const liveKinds = new Set(
+    ((currentPayments ?? []) as { kind: string; validation_status: string }[]).map((p) => p.kind),
+  );
+  const planProblem = paymentPlanProblem({
+    kind: input.kind,
+    existingKinds: [...liveKinds],
+    amount: amount ?? null,
+    orderTotal: ctx.row.order_total,
+  });
+  if (planProblem) return { error: planProblem };
 
   const candidate = {
     order_id: orderId,

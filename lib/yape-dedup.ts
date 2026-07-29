@@ -189,6 +189,11 @@ export function describeDuplicate(verdict: DuplicateVerdict): string {
   const where = verdict.sameOrder
     ? "este mismo pedido"
     : (verdict.conflict.order_name ?? "otro pedido");
-  const kind = verdict.conflict.kind === "adelanto" ? "adelanto" : "diferencia";
+  const kind =
+    verdict.conflict.kind === "adelanto"
+      ? "adelanto"
+      : verdict.conflict.kind === "total"
+        ? "pago total"
+        : "diferencia";
   return `Este comprobante ya está registrado como ${kind} en ${where}. Coincide ${matched}.`;
 }

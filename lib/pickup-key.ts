@@ -8,7 +8,45 @@
 
 import type { GeneralStatus } from "@/lib/order-status";
 
-export type PaymentKind = "adelanto" | "diferencia";
+export type PaymentKind = "adelanto" | "diferencia" | "total";
+
+/**
+ * Protege la exclusión entre los dos planes de cobro y, para pago total,
+ * comprueba que el comprobante realmente cancele el pedido completo.
+ */
+export function paymentPlanProblem(input: {
+  kind: PaymentKind;
+  existingKinds: readonly string[];
+  amount: number | null;
+  orderTotal: number | null;
+}): string | null {
+  const existing = new Set(input.existingKinds);
+  if (input.kind === "total" && (existing.has("adelanto") || existing.has("diferencia"))) {
+    return (
+      "Este pedido ya tiene un adelanto o una diferencia registrados. " +
+      "Completa el flujo existente en vez de cargar un pago total."
+    );
+  }
+  if (input.kind !== "total" && existing.has("total")) {
+    return "Este pedido ya tiene un pago total registrado.";
+  }
+  if (input.kind !== "total") return null;
+
+  const orderTotal = Number(input.orderTotal);
+  if (!Number.isFinite(orderTotal) || orderTotal <= 0) {
+    return "El pedido no tiene un total válido contra el cual verificar el pago.";
+  }
+  if (input.amount === null || !Number.isFinite(input.amount)) {
+    return `Indica el monto del pago total. El pedido suma S/ ${orderTotal.toFixed(2)}.`;
+  }
+  if (Math.round(input.amount * 100) !== Math.round(orderTotal * 100)) {
+    return (
+      `El comprobante es por S/ ${input.amount.toFixed(2)}, pero el pedido suma ` +
+      `S/ ${orderTotal.toFixed(2)}. Usa Adelanto/Diferencia o corrige el monto.`
+    );
+  }
+  return null;
+}
 
 export interface PaymentSnapshot {
   kind: string;
@@ -34,6 +72,7 @@ export type PickupBlocker =
   | "adelanto_no_validado"
   | "diferencia_no_registrada"
   | "diferencia_no_validada"
+  | "pago_total_no_validado"
   | "pago_de_otro_pedido"
   | "pedido_cerrado"
   | "paquete_no_disponible";
@@ -44,6 +83,7 @@ export const BLOCKER_LABEL: Record<PickupBlocker, string> = {
   adelanto_no_validado: "El Yape de adelanto está cargado pero sin validar.",
   diferencia_no_registrada: "Falta cargar el Yape de la diferencia.",
   diferencia_no_validada: "El Yape de la diferencia está cargado pero sin validar.",
+  pago_total_no_validado: "El pago total está cargado pero sin validar.",
   pago_de_otro_pedido: "Uno de los comprobantes está asociado a otro pedido.",
   pedido_cerrado: "El pedido está anulado, entregado o devuelto.",
   paquete_no_disponible: "El paquete todavía no está disponible para recojo.",
@@ -89,17 +129,22 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
 
   const adelanto = find(ctx.payments, "adelanto");
   const diferencia = find(ctx.payments, "diferencia");
+  const total = find(ctx.payments, "total");
 
-  if (!adelanto) blockers.push("adelanto_no_registrado");
-  else if (adelanto.validation_status !== "validado") blockers.push("adelanto_no_validado");
+  if (total) {
+    if (total.validation_status !== "validado") blockers.push("pago_total_no_validado");
+  } else {
+    if (!adelanto) blockers.push("adelanto_no_registrado");
+    else if (adelanto.validation_status !== "validado") blockers.push("adelanto_no_validado");
 
-  if (!diferencia) blockers.push("diferencia_no_registrada");
-  else if (diferencia.validation_status !== "validado") blockers.push("diferencia_no_validada");
+    if (!diferencia) blockers.push("diferencia_no_registrada");
+    else if (diferencia.validation_status !== "validado") blockers.push("diferencia_no_validada");
+  }
 
   // Los índices únicos de 0049 impiden que un comprobante se asocie a dos
   // pedidos, pero la comprobación se repite aquí: es barata y protege del caso
   // en que los pagos lleguen ya cargados desde otra ruta.
-  if ([adelanto, diferencia].some((p) => p && p.order_id !== ctx.orderId)) {
+  if ([adelanto, diferencia, total].some((p) => p && p.order_id !== ctx.orderId)) {
     blockers.push("pago_de_otro_pedido");
   }
 
@@ -129,6 +174,7 @@ export type PaymentState =
   | "adelanto_cargado"
   | "adelanto_validado"
   | "diferencia_cargada"
+  | "pago_total_cargado"
   | "pago_completo"
   | "posible_duplicado";
 
@@ -137,6 +183,7 @@ export const PAYMENT_STATE_LABEL: Record<PaymentState, string> = {
   adelanto_cargado: "Adelanto cargado",
   adelanto_validado: "Diferencia pendiente",
   diferencia_cargada: "Diferencia cargada",
+  pago_total_cargado: "Pago total cargado",
   pago_completo: "Pago completo",
   posible_duplicado: "Posible Yape duplicado",
 };
@@ -151,7 +198,11 @@ export function paymentState(payments: readonly PaymentSnapshot[]): PaymentState
 
   const adelanto = find(payments, "adelanto");
   const diferencia = find(payments, "diferencia");
+  const total = find(payments, "total");
 
+  if (total) {
+    return total.validation_status === "validado" ? "pago_completo" : "pago_total_cargado";
+  }
   if (!adelanto) return "sin_pago";
   if (adelanto.validation_status !== "validado") return "adelanto_cargado";
   if (!diferencia) return "adelanto_validado";
