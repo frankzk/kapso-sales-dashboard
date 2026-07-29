@@ -25,16 +25,20 @@ import { resolveVisionCreds, type StoreVisionCreds } from "@/lib/vision";
 import type { ParsedSettlementLine, ParsedSettlementSheet } from "@/lib/settlement-sheet";
 
 const ANTHROPIC_VERSION = "2023-06-01";
-// Más generoso que el de Yape: una hoja puede traer treinta filas manuscritas y
-// el modelo tiene que leerlas una a una.
-const REQUEST_TIMEOUT_MS = 60_000;
-const MAX_TOKENS = 4_000;
+// Una captura de Axel puede traer dos bloques de 25 filas. Cuatro mil tokens
+// truncaban el JSON y 60 segundos cortaban justo antes de terminar la lectura.
+// Dejamos margen dentro de los 120 s de la función de Vercel.
+const REQUEST_TIMEOUT_MS = 105_000;
+const MAX_TOKENS = 8_192;
 const SUPPORTED_MEDIA = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
 export interface SettlementVisionResult extends ParsedSettlementSheet {
   /** false ante cualquier fallo. Quien llama NO debe tratarlo como "hoja vacía". */
   ok: boolean;
   model: string;
+  /** Diagnóstico seguro para logs/UI; nunca incluye credenciales ni la imagen. */
+  failure?: "missing_credentials" | "api_error" | "timeout" | "invalid_response";
+  detail?: string;
 }
 
 export interface SettlementVisionOpts {
@@ -46,9 +50,10 @@ export interface SettlementVisionOpts {
 
 const SYSTEM_PROMPT =
   "Eres un asistente que transcribe hojas de liquidación de motorizados de " +
-  "reparto en Perú. Recibes UNA foto de una hoja — normalmente un cuaderno " +
-  "escrito a mano — donde cada fila es una entrega: un código de guía o número " +
-  "de pedido, el estado de la entrega y el dinero cobrado en soles.\n\n" +
+  "reparto en Perú. Recibes UNA foto de una hoja: puede ser un cuaderno escrito " +
+  "a mano o una captura de una tabla de Excel con uno o varios bloques. Cada " +
+  "fila es una entrega y puede contener tienda, cliente, distrito, efectivo, " +
+  "forma de pago y comisión del courier.\n\n" +
   "Tu única tarea es TRANSCRIBIR lo que ves. No corrijas, no completes y no " +
   "deduzcas. Si un dato está tachado, borroso o ilegible, devuélvelo como null: " +
   "una celda vacía la corrige una persona, un dato inventado se convierte en " +
@@ -67,13 +72,19 @@ function buildPrompt(): string {
     '      "order": string|null,    // nº de pedido (p. ej. KP124158) si aparece\n' +
     '      "customer": string|null,  // nombre del cliente si aparece\n' +
     '      "district": string|null,  // distrito de entrega si aparece\n' +
+    '      "store": string|null,     // tienda de la fila; en Axel está en CLIENTE\n' +
     '      "status": string|null,   // lo escrito: "entregado", "no entregó", "rechazado"…\n' +
-    '      "amount": number|null    // soles cobrados; null si la celda está vacía\n' +
+    '      "payment_method": string|null, // F. PAGO tal cual: EFECTIVO, CAIDA, REPRO…\n' +
+    '      "amount": number|null,   // EFECTIVO de esa fila; null si está vacío\n' +
+    '      "fee": number|null       // GANANCIA/comisión del courier de esa fila\n' +
     "    }\n" +
     "  ]\n" +
     "}\n\n" +
     "Reglas:\n" +
     "- Una fila por entrega. Ignora encabezados y filas de TOTAL.\n" +
+    "- Si hay varios bloques en la misma imagen, transcribe las filas de TODOS.\n" +
+    "- En el reporte de Axel, CLIENTE es la tienda (AURELA/KENKU), NOMBRE es la " +
+    "persona, EFECTIVO es amount, F. PAGO es payment_method y GANANCIA es fee.\n" +
     "- `amount` es solo el dinero de ESA fila, sin acumular.\n" +
     "- Si no distingues un dígito de un código, devuelve el código como null " +
     "en vez de adivinarlo: un vínculo equivocado es peor que uno ausente.\n" +
@@ -119,6 +130,29 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function deliveredPaymentMethod(v: unknown): string | null {
+  const value = str(v);
+  if (!value) return null;
+  const normalized = value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+  return [
+    "efectivo",
+    "pago pos",
+    "pos",
+    "transferencia",
+    "transferencia bancaria",
+    "yape",
+    "plin",
+    "deposito",
+  ].includes(normalized)
+    ? value
+    : null;
+}
+
 /** Solo se acepta una fecha completa y bien formada; media fecha es ninguna. */
 function day(v: unknown): string | null {
   const s = str(v);
@@ -154,7 +188,10 @@ export function parseSettlementVision(text: string): ParsedSettlementSheet | nul
     const order = str(l.order);
     const status = str(l.status);
     const amount = num(l.amount);
+    const fee = num(l.fee);
     const customer = str(l.customer);
+    const store = str(l.store);
+    const paymentMethodRaw = str(l.payment_method);
     // Una fila que no dice absolutamente nada no aporta: no se guarda para que
     // no ensucie la cola de revisión con celdas en blanco de la foto.
     if (!guide && !order && !status && !customer && amount === null) continue;
@@ -167,9 +204,11 @@ export function parseSettlementVision(text: string): ParsedSettlementSheet | nul
       // Un cuaderno manuscrito no declara la comisión del courier; el nombre y
       // el distrito sí aparecen, y son la pista de emparejamiento cuando la hoja
       // no trae guía.
-      declared_fee: null,
+      declared_fee: fee,
       customer_name: str(l.customer),
       district: str(l.district),
+      store_hint: store,
+      payment_method: deliveredPaymentMethod(paymentMethodRaw),
       // Se conserva lo que dijo el modelo para poder auditar la transcripción
       // contra la foto cuando alguien discuta un monto.
       raw: {
@@ -177,8 +216,11 @@ export function parseSettlementVision(text: string): ParsedSettlementSheet | nul
         pedido: order ?? "",
         nombre: str(l.customer) ?? "",
         distrito: str(l.district) ?? "",
+        cliente: store ?? "",
         estado: status ?? "",
+        f_pago: paymentMethodRaw ?? "",
         monto: amount === null ? "" : String(amount),
+        ganancia: fee === null ? "" : String(fee),
         origen: "foto",
       },
     });
@@ -206,7 +248,9 @@ export async function readSettlementPhoto(
     ok: false,
     model,
   };
-  if (!opts.apiKey || !imageBase64) return empty;
+  if (!opts.apiKey || !imageBase64) {
+    return { ...empty, failure: "missing_credentials", detail: "Falta la imagen o la clave de visión." };
+  }
 
   const doFetch = opts.fetchImpl ?? fetch;
   const base = (opts.apiBase ?? "https://api.anthropic.com").replace(/\/$/, "");
@@ -243,12 +287,37 @@ export async function readSettlementPhoto(
       }),
       signal: controller.signal,
     });
-    if (!res.ok) return empty;
-    const parsed = parseSettlementVision(extractText(await res.json()));
-    if (!parsed) return empty;
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      let detail = `Anthropic respondió HTTP ${res.status}.`;
+      try {
+        const error = (JSON.parse(body) as { error?: { type?: string; message?: string } }).error;
+        if (error?.message) detail = `${error.type ?? "api_error"}: ${error.message}`;
+      } catch {
+        // El status basta; no reenviamos cuerpos arbitrarios a logs o UI.
+      }
+      return { ...empty, failure: "api_error", detail };
+    }
+    const json = await res.json();
+    const parsed = parseSettlementVision(extractText(json));
+    if (!parsed) {
+      const stopReason = (json as { stop_reason?: string })?.stop_reason;
+      return {
+        ...empty,
+        failure: "invalid_response",
+        detail: stopReason === "max_tokens"
+          ? "La transcripción quedó truncada por el límite de salida."
+          : "El modelo no devolvió un JSON de liquidación válido.",
+      };
+    }
     return { ...parsed, ok: true, model };
-  } catch {
-    return empty;
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === "AbortError";
+    return {
+      ...empty,
+      failure: timedOut ? "timeout" : "api_error",
+      detail: timedOut ? "La lectura excedió 105 segundos." : "La llamada de visión falló.",
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -261,7 +330,17 @@ export async function readSettlementPhotoFromEnv(
   store: StoreVisionCreds = {},
 ): Promise<SettlementVisionResult> {
   const { apiKey, model, apiBase } = resolveVisionCreds(store);
-  if (!apiKey) return { riderName: null, settlementDate: null, lines: [], ok: false, model };
+  if (!apiKey) {
+    return {
+      riderName: null,
+      settlementDate: null,
+      lines: [],
+      ok: false,
+      model,
+      failure: "missing_credentials",
+      detail: "No hay una clave de visión configurada.",
+    };
+  }
   return readSettlementPhoto(imageBase64, contentType, { apiKey, model, apiBase });
 }
 
