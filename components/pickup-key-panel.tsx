@@ -522,7 +522,7 @@ function VoucherForm({
   const taken = new Set(
     existing.filter((p) => p.validation_status !== "rechazado").map((p) => p.kind),
   );
-  const [kind, setKind] = useState<"adelanto" | "diferencia">(
+  const [kind, setKind] = useState<"adelanto" | "diferencia" | "total">(
     taken.has("adelanto") ? "diferencia" : "adelanto",
   );
   const [amount, setAmount] = useState("");
@@ -774,11 +774,12 @@ function VoucherForm({
       <div className="flex flex-wrap gap-2">
         <select
           value={kind}
-          onChange={(e) => setKind(e.target.value as "adelanto" | "diferencia")}
+          onChange={(e) => setKind(e.target.value as "adelanto" | "diferencia" | "total")}
           className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
         >
           <option value="adelanto">Adelanto</option>
           <option value="diferencia">Diferencia</option>
+          <option value="total">Pago total</option>
         </select>
         <input
           value={amount}

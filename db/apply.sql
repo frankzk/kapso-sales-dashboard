@@ -155,4 +155,6 @@
 \ir migrations/0074_meta_ad_insights_daily.sql
 \echo 'Applying 0075_meta_ad_performance.sql'
 \ir migrations/0075_meta_ad_performance.sql
+\echo 'Applying 0076_payment_total.sql'
+\ir migrations/0076_payment_total.sql
 \echo 'Done.'

@@ -3,6 +3,7 @@ import {
   canRevealPickupKey,
   describeBlockers,
   keyState,
+  paymentPlanProblem,
   paymentState,
   usesPickupKeyFlow,
   type PaymentSnapshot,
@@ -31,6 +32,20 @@ describe("canRevealPickupKey — las seis condiciones", () => {
     const v = canRevealPickupKey(ctx());
     expect(v.allowed).toBe(true);
     expect(v.blockers).toEqual([]);
+  });
+
+  it("un pago total validado reemplaza adelanto + diferencia", () => {
+    const v = canRevealPickupKey(ctx({ payments: [payment("total")] }));
+    expect(v.allowed).toBe(true);
+    expect(v.blockers).toEqual([]);
+  });
+
+  it("un pago total cargado pero sin validar todavía bloquea la clave", () => {
+    const v = canRevealPickupKey(
+      ctx({ payments: [payment("total", "pendiente_revision")] }),
+    );
+    expect(v.allowed).toBe(false);
+    expect(v.blockers).toEqual(["pago_total_no_validado"]);
   });
 
   it("sin clave registrada no hay nada que mostrar", () => {
@@ -112,12 +127,57 @@ describe("paymentState — indicador del Master", () => {
       "diferencia_cargada",
     );
     expect(paymentState([payment("adelanto"), payment("diferencia")])).toBe("pago_completo");
+    expect(paymentState([payment("total", "pendiente_revision")])).toBe("pago_total_cargado");
+    expect(paymentState([payment("total")])).toBe("pago_completo");
   });
 
   it("una posible duplicidad se anuncia por encima de todo", () => {
     expect(
       paymentState([payment("adelanto"), payment("diferencia", "posible_duplicado")]),
     ).toBe("posible_duplicado");
+  });
+});
+
+describe("paymentPlanProblem — pago total", () => {
+  it("acepta un único comprobante que coincide con el total del pedido", () => {
+    expect(
+      paymentPlanProblem({
+        kind: "total",
+        existingKinds: [],
+        amount: 89,
+        orderTotal: 89,
+      }),
+    ).toBeNull();
+  });
+
+  it("rechaza un monto que no cancela el pedido completo", () => {
+    expect(
+      paymentPlanProblem({
+        kind: "total",
+        existingKinds: [],
+        amount: 30,
+        orderTotal: 89,
+      }),
+    ).toContain("pedido suma S/ 89.00");
+  });
+
+  it("no mezcla pago total con adelanto o diferencia", () => {
+    expect(
+      paymentPlanProblem({
+        kind: "total",
+        existingKinds: ["adelanto"],
+        amount: 89,
+        orderTotal: 89,
+      }),
+    ).toContain("ya tiene un adelanto");
+    expect(
+      paymentPlanProblem({
+        kind: "diferencia",
+        existingKinds: ["total"],
+        amount: 30,
+        orderTotal: 89,
+      }),
+    ).toContain("ya tiene un pago total");
   });
 });
 
