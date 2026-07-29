@@ -161,4 +161,6 @@
 \ir migrations/0077_settlement_row_matching.sql
 \echo 'Applying 0078_order_coverage.sql'
 \ir migrations/0078_order_coverage.sql
+\echo 'Applying 0079_meta_campaign_data_quality.sql'
+\ir migrations/0079_meta_campaign_data_quality.sql
 \echo 'Done.'

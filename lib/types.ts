@@ -322,9 +322,11 @@ export interface CampaignDeliveryOutcome {
 
 /** Aggregated historical Meta Insights for one ad in the selected date range. */
 export interface MetaAdPerformance {
+  storeId: string;
   adId: string;
   accountId: string | null;
   currency: string | null;
+  metaConversations: number;
   spend: number;
   impressions: number;
   reach: number;
@@ -333,6 +335,7 @@ export interface MetaAdPerformance {
   activeDays: number;
   firstDate: string | null;
   lastDate: string | null;
+  syncedAt: string | null;
 }
 
 /** Minimal linked-guide identity used to move from a frozen source guide to
