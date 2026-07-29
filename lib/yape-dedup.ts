@@ -75,11 +75,18 @@ function isLive(payment: ExistingPayment): boolean {
   return payment.validation_status !== "rechazado";
 }
 
-/** Normaliza el nº de operación: solo dígitos y letras, en mayúsculas. */
+/**
+ * Normaliza el nº de operación: solo dígitos y letras, en mayúsculas.
+ *
+ * Yape muestra también un código de seguridad de 3 dígitos y, muy cerca, el
+ * monto. Ninguno de esos valores identifica la transacción. El lector visual
+ * puede confundirlos cuando la captura es pequeña, por lo que un valor corto
+ * nunca debe convertirse en una llave global capaz de bloquear otro pago.
+ */
 export function normalizeOperationNumber(value: string | null | undefined): string | null {
   if (!value) return null;
   const cleaned = String(value).toUpperCase().replace(/[^A-Z0-9]/g, "");
-  return cleaned || null;
+  return cleaned.length >= 6 ? cleaned : null;
 }
 
 /** Nombre comparable: minúsculas, sin acentos ni puntuación. */
