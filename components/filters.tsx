@@ -40,8 +40,18 @@ export function ChecklistFilter({
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
+  // Un facet vacío o transitoriamente ausente nunca debe tumbar todo el panel.
+  // La base y la UI evolucionan por despliegues separados; este borde defensivo
+  // mantiene el desplegable operativo mientras llega la lista actualizada.
+  const safeOptions = Array.isArray(options)
+    ? options.filter((option): option is string => typeof option === "string" && option.length > 0)
+    : [];
   const term = q.trim().toLowerCase();
-  const shown = term ? options.filter((o) => o.toLowerCase().includes(term)) : options;
+  const shown = term
+    ? safeOptions.filter((option) =>
+        (optionLabel?.(option) ?? option).toLowerCase().includes(term),
+      )
+    : safeOptions;
 
   function toggle(option: string) {
     const next = new Set(selected);
@@ -53,6 +63,7 @@ export function ChecklistFilter({
   return (
     <div ref={boxRef} className="relative">
       <button
+        type="button"
         onClick={() => setOpen((o) => !o)}
         className={cn(
           "rounded-lg border px-2.5 py-1 text-xs font-medium",
@@ -75,6 +86,7 @@ export function ChecklistFilter({
           />
           {selected.size > 0 && (
             <button
+              type="button"
               onClick={() => onChange(new Set())}
               className="mb-1 text-xs text-slate-500 hover:underline"
             >
