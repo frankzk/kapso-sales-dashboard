@@ -19,6 +19,10 @@ import { getRiderTariffs, getSettlementDetail } from "@/lib/settlements-access";
 import { computeRiderPayout, settlementMasterEffects, settlementStatus } from "@/lib/settlements";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { defaultOperationalFor } from "@/lib/order-status";
+import {
+  scoreSettlementOrderMatch,
+  settlementMatchKey,
+} from "@/lib/settlement-order-match";
 
 export interface ActionResult {
   ok: boolean;
@@ -36,16 +40,7 @@ export interface SettlementOrderCandidate {
   status: string;
   score: number;
   reasons: string[];
-}
-
-function matchKey(value: string | null | undefined): string {
-  return (value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
+  storeMatchesHint: boolean | null;
 }
 
 /** Comprueba permiso y devuelve el cliente admin, o el error listo para devolver. */
@@ -174,15 +169,36 @@ export async function searchSettlementOrders(
   const to = new Date(`${day}T00:00:00.000Z`);
   to.setUTCDate(to.getUTCDate() + 3);
   const storeIds = stores.map((store) => store.id);
-  const { data } = await g.admin
+  const orderSelect =
+    "order_id,order_name,store_id,customer_name,district,order_total,general_status,order_created_at";
+  const wantedQuery = settlementMatchKey(query);
+  const compactQuery = wantedQuery.replace(/\s+/g, "");
+  const looksLikeOrderCode = /^[a-z]{2,5}\d{4,}$/.test(compactQuery);
+
+  const recentQuery = g.admin
     .from("order_master")
-    .select(
-      "order_id,order_name,store_id,customer_name,district,order_total,general_status,order_created_at",
-    )
+    .select(orderSelect)
     .in("store_id", storeIds)
     .gte("order_created_at", from.toISOString())
     .lt("order_created_at", to.toISOString())
     .limit(5000);
+  const exactCodeQuery = looksLikeOrderCode
+    ? g.admin
+        .from("order_master")
+        .select(orderSelect)
+        .in("store_id", storeIds)
+        .ilike("order_name", `%${compactQuery}%`)
+        .limit(50)
+    : null;
+  const [{ data: recentData }, exactResult] = await Promise.all([
+    recentQuery,
+    exactCodeQuery ?? Promise.resolve({ data: [] }),
+  ]);
+  const mergedOrders = new Map<string, Record<string, unknown>>();
+  for (const candidate of [...(recentData ?? []), ...(exactResult.data ?? [])]) {
+    mergedOrders.set(String(candidate.order_id), candidate as Record<string, unknown>);
+  }
+  const data = [...mergedOrders.values()];
 
   const row = line as {
     customer_name: string | null;
@@ -192,10 +208,7 @@ export async function searchSettlementOrders(
     raw: Record<string, unknown> | null;
   };
   const storeNames = new Map(stores.map((store) => [store.id, store.name]));
-  const storeHint = matchKey(row.store_hint ?? String(row.raw?.cliente ?? ""));
-  const wantedName = matchKey(row.customer_name);
-  const wantedDistrict = matchKey(row.district);
-  const wantedQuery = matchKey(query);
+  const storeHint = row.store_hint ?? String(row.raw?.cliente ?? "");
 
   const candidates = ((data ?? []) as {
     order_id: string;
@@ -208,53 +221,23 @@ export async function searchSettlementOrders(
   }[])
     .map((candidate) => {
       const storeName = storeNames.get(candidate.store_id) ?? "";
-      const name = matchKey(candidate.customer_name);
-      const district = matchKey(candidate.district);
-      const orderName = matchKey(candidate.order_name);
-      const reasons: string[] = [];
-      let score = 0;
-
-      if (storeHint) {
-        const store = matchKey(storeName);
-        if (
-          !(
-            store === storeHint ||
-            store.startsWith(storeHint) ||
-            (store.length > 0 && storeHint.startsWith(store))
-          )
-        ) {
-          return null;
-        }
-        score += 35;
-        reasons.push(`tienda ${storeName}`);
-      }
-      if (wantedName && name === wantedName) {
-        score += 45;
-        reasons.push("nombre exacto");
-      } else if (wantedName && (name.startsWith(wantedName) || wantedName.startsWith(name))) {
-        score += 32;
-        reasons.push("nombre similar");
-      }
-      if (wantedDistrict && district === wantedDistrict) {
-        score += 15;
-        reasons.push("mismo distrito");
-      }
-      if (
-        row.declared_amount !== null &&
-        candidate.order_total !== null &&
-        Math.abs(Number(row.declared_amount) - Number(candidate.order_total)) < 0.01
-      ) {
-        score += 15;
-        reasons.push("mismo monto");
-      }
-      if (
-        wantedQuery &&
-        !name.includes(wantedQuery) &&
-        !orderName.includes(wantedQuery) &&
-        !district.includes(wantedQuery)
-      ) {
-        return null;
-      }
+      const match = scoreSettlementOrderMatch(
+        {
+          orderName: candidate.order_name,
+          storeName,
+          customerName: candidate.customer_name,
+          district: candidate.district,
+          total: candidate.order_total,
+        },
+        {
+          storeHint,
+          customerName: row.customer_name,
+          district: row.district,
+          declaredAmount: row.declared_amount,
+          query,
+        },
+      );
+      if (!match) return null;
       return {
         orderId: candidate.order_id,
         orderName: candidate.order_name ?? "Sin código",
@@ -263,8 +246,9 @@ export async function searchSettlementOrders(
         district: candidate.district ?? "Sin distrito",
         total: candidate.order_total === null ? null : Number(candidate.order_total),
         status: candidate.general_status ?? "sin estado",
-        score: Math.min(100, score),
-        reasons,
+        score: match.score,
+        reasons: match.reasons,
+        storeMatchesHint: match.storeMatchesHint,
       } satisfies SettlementOrderCandidate;
     })
     .filter((candidate): candidate is SettlementOrderCandidate => Boolean(candidate))

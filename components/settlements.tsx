@@ -626,6 +626,11 @@ function RowMatchPicker({
             <span className="block text-[11px] text-slate-600">
               {candidate.storeName} · {candidate.customerName} · {candidate.district}
             </span>
+            {candidate.storeMatchesHint === false && (
+              <span className="mt-1 inline-flex rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+                Tienda distinta a la declarada por el courier
+              </span>
+            )}
             <span className="block text-[10px] text-slate-400">
               {candidate.total === null ? "Monto —" : money(candidate.total)} · {candidate.status}
               {candidate.reasons.length ? ` · ${candidate.reasons.join(", ")}` : ""}
