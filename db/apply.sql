@@ -157,4 +157,6 @@
 \ir migrations/0075_meta_ad_performance.sql
 \echo 'Applying 0076_payment_total.sql'
 \ir migrations/0076_payment_total.sql
+\echo 'Applying 0077_settlement_row_matching.sql'
+\ir migrations/0077_settlement_row_matching.sql
 \echo 'Done.'

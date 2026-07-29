@@ -20,7 +20,9 @@ import {
   createRider,
   recheckSettlement,
   relinkLine,
+  searchSettlementOrders,
   updateSettlementHeader,
+  type SettlementOrderCandidate,
 } from "@/app/dashboard/liquidaciones/actions";
 
 interface StoreOpt {
@@ -184,7 +186,7 @@ function UploadPanel({
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [storeId, setStoreId] = useState(stores[0]?.id ?? "");
+  const [storeId, setStoreId] = useState(stores.length > 1 ? "__all__" : (stores[0]?.id ?? ""));
   const [riderId, setRiderId] = useState("");
   const [date, setDate] = useState("");
   const [cash, setCash] = useState("");
@@ -239,6 +241,9 @@ function UploadPanel({
           onChange={(e) => setStoreId(e.target.value)}
           className="rounded-lg border border-slate-300 px-2 py-2 text-sm"
         >
+          {stores.length > 1 && (
+            <option value="__all__">Aurela + Kenku (según CLIENTE)</option>
+          )}
           {stores.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
@@ -285,7 +290,8 @@ function UploadPanel({
       <p className="text-xs text-slate-400">
         Foto del cuaderno o Excel/CSV del courier. La foto se transcribe y lo ilegible queda en
         blanco para que lo completes: nunca se inventa un monto. La fecha que pongas manda sobre la
-        que traiga el archivo.
+        que traiga el archivo. En reportes de Axel, la columna CLIENTE decide si cada fila pertenece
+        a Aurela o Kenku.
       </p>
       {err && <p className="text-sm text-red-600">{err}</p>}
       <button
@@ -373,6 +379,11 @@ function SettlementDetailPanel({
                   {r.line.district && (
                     <span className="block text-[11px] text-slate-400">{r.line.district}</span>
                   )}
+                  {(r.line.store_hint || r.line.declared_status) && (
+                    <span className="block text-[11px] font-medium text-slate-500">
+                      {[r.line.store_hint, r.line.declared_status].filter(Boolean).join(" · ")}
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2 text-slate-700">
                   {r.line.order_id
@@ -407,15 +418,14 @@ function SettlementDetailPanel({
                   </span>
                 </td>
                 {canEdit && !closed && (
-                  <td className="px-3 py-2 text-right">
+                  <td className="min-w-[270px] px-3 py-2 text-right">
                     {r.verdict === "sin_pedido" && r.line.match_status === "review" && (
-                      <button
+                      <RowMatchPicker
+                        settlementId={settlement.id}
+                        lineId={r.line.id}
                         disabled={pending}
-                        onClick={() => run(() => relinkLine(settlement.id, r.line.id, null))}
-                        className="text-xs text-slate-500 underline hover:text-slate-700 disabled:opacity-50"
-                      >
-                        Sin pedido
-                      </button>
+                        onRun={run}
+                      />
                     )}
                   </td>
                 )}
@@ -427,9 +437,9 @@ function SettlementDetailPanel({
 
       {reconciled.totals.reviewCount > 0 && (
         <p className="text-xs text-amber-700">
-          {reconciled.totals.reviewCount} línea(s) no se pudieron vincular con un pedido. Búscalas en
-          el Master por la guía y corrígelas ahí, o márcalas como &quot;sin pedido&quot; si no
-          corresponden a ninguno.
+          {reconciled.totals.reviewCount} línea(s) requieren confirmación. Revisa la tienda,
+          el nombre, el distrito y el monto; asigna el pedido correcto o marca &quot;sin
+          pedido&quot;. No se podrá procesar la liquidación mientras queden pendientes.
         </p>
       )}
 
@@ -511,6 +521,136 @@ function SettlementDetailPanel({
         </p>
       )}
     </Card>
+  );
+}
+
+function RowMatchPicker({
+  settlementId,
+  lineId,
+  disabled,
+  onRun,
+}: {
+  settlementId: string;
+  lineId: string;
+  disabled: boolean;
+  onRun: (fn: () => Promise<{ ok: boolean; error?: string; message?: string }>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [candidates, setCandidates] = useState<SettlementOrderCandidate[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  const search = async () => {
+    setOpen(true);
+    setSearching(true);
+    setSearchError(null);
+    const result = await searchSettlementOrders(settlementId, lineId, query);
+    setSearching(false);
+    if (!result.ok) {
+      setSearchError(result.error ?? "No se pudo buscar.");
+      setCandidates([]);
+      return;
+    }
+    setCandidates(result.candidates ?? []);
+  };
+
+  if (!open) {
+    return (
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={search}
+          className="rounded-md bg-brand-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+        >
+          Cotejar pedido
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onRun(() => relinkLine(settlementId, lineId, null))}
+          className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+        >
+          Sin pedido
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-2 text-left">
+      <div className="flex gap-1.5">
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void search();
+            }
+          }}
+          placeholder="Nombre, pedido o distrito"
+          className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs"
+        />
+        <button
+          type="button"
+          disabled={searching || disabled}
+          onClick={search}
+          className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 disabled:opacity-50"
+        >
+          {searching ? "Buscando…" : "Buscar"}
+        </button>
+      </div>
+      {searchError && <p className="text-[11px] text-red-600">{searchError}</p>}
+      {!searching && candidates.length === 0 && (
+        <p className="text-[11px] text-slate-500">
+          Sin coincidencias seguras. Prueba con el código del pedido o más parte del nombre.
+        </p>
+      )}
+      <div className="max-h-52 space-y-1 overflow-y-auto">
+        {candidates.map((candidate) => (
+          <button
+            key={candidate.orderId}
+            type="button"
+            disabled={disabled}
+            onClick={() => onRun(() => relinkLine(settlementId, lineId, candidate.orderId))}
+            className="block w-full rounded-md border border-slate-200 bg-white p-2 text-left hover:border-brand-300 hover:bg-brand-50 disabled:opacity-50"
+          >
+            <span className="flex items-center justify-between gap-2">
+              <strong className="text-xs text-slate-800">{candidate.orderName}</strong>
+              <span className="text-[10px] font-semibold text-brand-700">
+                {candidate.score} pts
+              </span>
+            </span>
+            <span className="block text-[11px] text-slate-600">
+              {candidate.storeName} · {candidate.customerName} · {candidate.district}
+            </span>
+            <span className="block text-[10px] text-slate-400">
+              {candidate.total === null ? "Monto —" : money(candidate.total)} · {candidate.status}
+              {candidate.reasons.length ? ` · ${candidate.reasons.join(", ")}` : ""}
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className="flex justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="text-[11px] text-slate-500 underline"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onRun(() => relinkLine(settlementId, lineId, null))}
+          className="text-[11px] text-slate-600 underline"
+        >
+          Confirmar que no tiene pedido
+        </button>
+      </div>
+    </div>
   );
 }
 

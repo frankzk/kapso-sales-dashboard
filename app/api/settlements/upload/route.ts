@@ -61,7 +61,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Cuerpo inválido (se esperaba multipart)." }, { status: 400 });
   }
 
-  const storeId = String(form.get("storeId") ?? "");
+  const requestedStoreId = String(form.get("storeId") ?? "");
+  const multiStore = requestedStoreId === "__all__";
+  const storeId = multiStore ? stores[0]!.id : requestedStoreId;
   const store = stores.find((s) => s.id === storeId);
   if (!store) return NextResponse.json({ error: "Tienda inválida o sin acceso." }, { status: 403 });
 
@@ -190,6 +192,15 @@ export async function POST(req: NextRequest) {
     userId: user.id,
     courier: format === "generico" || format === "foto" ? null : format,
     posFee,
+    directCollected:
+      format === "axel"
+        ? lines.reduce((sum, line) => {
+            const method = (line.payment_method ?? "").toLowerCase();
+            return method && method !== "efectivo"
+              ? sum + Math.max(0, Number(line.declared_amount ?? 0))
+              : sum;
+          }, 0)
+        : 0,
     lines,
   });
 
@@ -204,9 +215,17 @@ export async function POST(req: NextRequest) {
   // coincide con la elegida se avisa, pero no se cambia por su cuenta: elegir la
   // tienda es del operador.
   const storeMismatch =
-    storeHint && !store.name.toUpperCase().includes(storeHint.toUpperCase())
+    !multiStore && storeHint && !store.name.toUpperCase().includes(storeHint.toUpperCase())
       ? `La hoja dice "${storeHint}" y cargaste en ${store.name}.`
       : null;
 
-  return NextResponse.json({ ok: true, source, format, posFee, storeMismatch, ...result });
+  return NextResponse.json({
+    ok: true,
+    source,
+    format,
+    posFee,
+    multiStore,
+    storeMismatch,
+    ...result,
+  });
 }

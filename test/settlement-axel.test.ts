@@ -91,6 +91,8 @@ describe("axelDelivered", () => {
   it("solo EFECTIVO y PAGO POS son entregas", () => {
     expect(axelDelivered("EFECTIVO")).toBe(true);
     expect(axelDelivered("PAGO POS")).toBe(true);
+    expect(axelDelivered("TRANSFERENCIA")).toBe(true);
+    expect(axelDelivered("YAPE")).toBe(true);
   });
 
   it("los fallos por los que igual cobran flete NO son entregas", () => {
@@ -122,6 +124,8 @@ describe("parseAxelSheet", () => {
   it("no confunde CLIENTE (la tienda) con el cliente de verdad", () => {
     expect(parsed.storeHint).toBe("AURELA");
     expect(parsed.lines[0]!.customer_name).toBe("Edgard William");
+    expect(parsed.lines[0]!.store_hint).toBe("AURELA");
+    expect(parsed.lines[0]!.payment_method).toBe("EFECTIVO");
   });
 
   it("no inventa guía ni nº de pedido, porque la hoja no los trae", () => {
@@ -245,23 +249,39 @@ describe("cuadre con la comisión del courier", () => {
 
 describe("matchByName", () => {
   const candidates = [
-    { order_id: "o1", store_id: "s1", customer_name: "Edgard William Rojas", district: "San Juan de Lurigancho" },
-    { order_id: "o2", store_id: "s1", customer_name: "Ana María Cárdenas", district: "Chorrillos" },
-    { order_id: "o3", store_id: "s1", customer_name: "Ana María Cárdenas", district: "Los Olivos" },
+    { order_id: "o1", store_id: "s1", store_name: "Aurela", customer_name: "Edgard William Rojas", district: "San Juan de Lurigancho" },
+    { order_id: "o2", store_id: "s1", store_name: "Aurela", customer_name: "Ana María Cárdenas", district: "Chorrillos" },
+    { order_id: "o3", store_id: "s1", store_name: "Aurela", customer_name: "Ana María Cárdenas", district: "Los Olivos" },
+    { order_id: "o4", store_id: "s2", store_name: "Kenku Peru", customer_name: "Edgard William Rojas", district: "San Juan de Lurigancho" },
   ];
 
   it("empareja por prefijo, porque el courier trunca el nombre", () => {
-    expect(matchByName({ customer_name: "Edgard William" }, candidates)).toBe("o1");
+    expect(matchByName({ customer_name: "Edgard William" }, candidates.slice(0, 3))).toBe("o1");
   });
 
   it("no es sensible a mayúsculas ni acentos", () => {
-    expect(matchByName({ customer_name: "EDGARD WILLIAM ROJAS" }, candidates)).toBe("o1");
+    expect(matchByName({ customer_name: "EDGARD WILLIAM ROJAS" }, candidates.slice(0, 3))).toBe("o1");
   });
 
   it("desempata por distrito cuando hay homónimos", () => {
     expect(matchByName({ customer_name: "Ana María Cárd", district: "Los Olivos" }, candidates)).toBe(
       "o3",
     );
+  });
+
+  it("usa CLIENTE como tienda y no mezcla Aurela con Kenku", () => {
+    expect(
+      matchByName(
+        { customer_name: "Edgard William", district: "San Juan de Lurigancho", store_hint: "AURELA" },
+        candidates,
+      ),
+    ).toBe("o1");
+    expect(
+      matchByName(
+        { customer_name: "Edgard William", district: "San Juan de Lurigancho", store_hint: "KENKU" },
+        candidates,
+      ),
+    ).toBe("o4");
   });
 
   it("sin desempate posible NO vincula: va a revisión", () => {
