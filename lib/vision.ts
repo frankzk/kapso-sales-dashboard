@@ -280,8 +280,42 @@ export interface YapeVoucherFields {
   payerName: string | null;
   /** A quién se pagó — sirve para detectar un Yape a otra cuenta. */
   recipientName: string | null;
+  /** Últimos 3 dígitos del celular destino, cuando aparecen en la captura. */
+  recipientPhoneLastDigits: string | null;
   ok: boolean;
   model: string;
+}
+
+export type YapeRecipientCheck = "verified" | "partial" | "mismatch" | "missing";
+
+function comparableRecipientName(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/**
+ * Verifica la cuenta receptora del negocio sin confundir "no se pudo leer" con
+ * una discrepancia real. La cuenta esperada es Grupo GF S.A.C. · ***309.
+ */
+export function checkYapeRecipient(
+  recipientName: string | null | undefined,
+  recipientPhoneLastDigits: string | null | undefined,
+): YapeRecipientCheck {
+  const name = comparableRecipientName(recipientName);
+  const phone = (recipientPhoneLastDigits ?? "").replace(/\D/g, "").slice(-3);
+  const hasName = Boolean(name);
+  const hasPhone = phone.length === 3;
+  const nameMatches = hasName && name.includes("grupo gf") && /\bs\s*a\s*c\b/.test(name);
+  const phoneMatches = hasPhone && phone === "309";
+
+  if ((hasName && !nameMatches) || (hasPhone && !phoneMatches)) return "mismatch";
+  if (nameMatches && phoneMatches) return "verified";
+  if (nameMatches || phoneMatches) return "partial";
+  return "missing";
 }
 
 const EXTRACT_SYSTEM_PROMPT =
@@ -301,7 +335,8 @@ function buildExtractPrompt(): string {
     '  "date": string|null,              // fecha, tal como se ve (p. ej. "10 jul 2026")\n' +
     '  "time": string|null,              // hora, tal como se ve (p. ej. "02:35 pm")\n' +
     '  "payer_name": string|null,        // quien paga\n' +
-    '  "recipient_name": string|null     // quien recibe\n' +
+    '  "recipient_name": string|null,    // quien recibe\n' +
+    '  "recipient_phone_last_digits": string|null // últimos 3 dígitos del Nro. de celular destino\n' +
     "}\n" +
     'IMPORTANTE: "Nro. de operación" y "Código de seguridad" NO son el mismo dato. ' +
     "El número de operación aparece en DATOS DE LA TRANSACCIÓN y normalmente tiene " +
@@ -413,6 +448,10 @@ function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | nu
     paidAt: parseVoucherInstant(str(o.date), str(o.time)),
     payerName: str(o.payer_name),
     recipientName: str(o.recipient_name),
+    recipientPhoneLastDigits: (() => {
+      const digits = (str(o.recipient_phone_last_digits) ?? "").replace(/\D/g, "");
+      return digits.length >= 3 ? digits.slice(-3) : null;
+    })(),
   };
 }
 
@@ -433,6 +472,7 @@ export async function extractYapeVoucher(
     paidAt: null,
     payerName: null,
     recipientName: null,
+    recipientPhoneLastDigits: null,
     ok: false,
     model,
   };
@@ -500,6 +540,7 @@ export async function extractYapeVoucherFromEnv(
       paidAt: null,
       payerName: null,
       recipientName: null,
+      recipientPhoneLastDigits: null,
       ok: false,
       model,
     };

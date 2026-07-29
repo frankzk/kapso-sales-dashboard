@@ -535,6 +535,11 @@ function VoucherForm({
   const [reading, setReading] = useState(false);
   const [readNotice, setReadNotice] = useState<string | null>(null);
   const [readWarning, setReadWarning] = useState<string | null>(null);
+  const [recipientCheck, setRecipientCheck] = useState<{
+    status: "verified" | "partial" | "mismatch" | "missing";
+    name: string | null;
+    phoneLastDigits: string | null;
+  } | null>(null);
   const [uploadedVoucher, setUploadedVoucher] = useState<{
     fileKey: string;
     path: string;
@@ -615,8 +620,16 @@ function VoucherForm({
   function pickVoucher(nextFile: File | null) {
     setFile(nextFile);
     setUploadedVoucher(null);
+    // Cada archivo es una transacción distinta. Nunca conservamos la lectura
+    // anterior: fue la causa del falso duplicado 08615551 / 05510030.
+    setAmount("");
+    setOperation("");
+    setPaidAt("");
+    setPayer("");
+    setPhone("");
     setReadNotice(null);
     setReadWarning(null);
+    setRecipientCheck(null);
   }
 
   async function ensureVoucherUploaded(): Promise<
@@ -661,12 +674,18 @@ function VoucherForm({
         return;
       }
 
-      setOperation((current) => current.trim() || result.fields.operationNumber || "");
-      setAmount((current) =>
-        current.trim() || (result.fields.amount !== null ? String(result.fields.amount) : ""),
-      );
-      setPaidAt((current) => current || toDatetimeLocal(result.fields.paidAt));
-      setPayer((current) => current.trim() || result.fields.payerName || "");
+      // "Leer y rellenar" reemplaza los campos con lo que pertenece a ESTA
+      // imagen. El operador puede corregirlos después de la lectura.
+      setOperation(result.fields.operationNumber || "");
+      setAmount(result.fields.amount !== null ? String(result.fields.amount) : "");
+      setPaidAt(toDatetimeLocal(result.fields.paidAt));
+      setPayer(result.fields.payerName || "");
+      setPhone("");
+      setRecipientCheck({
+        status: result.fields.recipientCheck,
+        name: result.fields.recipientName,
+        phoneLastDigits: result.fields.recipientPhoneLastDigits,
+      });
       setReadNotice(result.notice);
       if (!result.isVoucher) {
         setReadWarning("La imagen no parece un comprobante Yape completo. Revísala antes de registrar.");
@@ -842,6 +861,35 @@ function VoucherForm({
           {readWarning && (
             <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-800">
               ⚠ {readWarning}
+            </p>
+          )}
+          {recipientCheck && (
+            <p
+              className={cn(
+                "mt-2 rounded-lg px-2.5 py-2 text-xs font-semibold",
+                recipientCheck.status === "verified"
+                  ? "bg-emerald-100 text-emerald-800"
+                  : recipientCheck.status === "mismatch"
+                    ? "bg-red-100 text-red-800"
+                    : "bg-amber-100 text-amber-800",
+              )}
+            >
+              {recipientCheck.status === "verified"
+                ? "✓ Receptor verificado: Grupo GF S.A.C. · ***309"
+                : recipientCheck.status === "mismatch"
+                  ? `⚠ Receptor distinto al esperado: ${recipientCheck.name ?? "sin nombre"} · ${
+                      recipientCheck.phoneLastDigits
+                        ? `***${recipientCheck.phoneLastDigits}`
+                        : "sin teléfono"
+                    }. Debe revisarse.`
+                  : `⚠ Receptor parcialmente verificado: ${
+                      recipientCheck.name ?? "Grupo GF no legible"
+                    } · ${
+                      recipientCheck.phoneLastDigits
+                        ? `***${recipientCheck.phoneLastDigits}`
+                        : "teléfono no legible"
+                    }.`
+              }
             </p>
           )}
         </div>

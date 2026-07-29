@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractYapeVoucher, parseVoucherInstant } from "@/lib/vision";
+import {
+  checkYapeRecipient,
+  extractYapeVoucher,
+  parseVoucherInstant,
+} from "@/lib/vision";
 
 /** Respuesta de la Messages API con el JSON que devolvería el modelo. */
 function reply(payload: unknown) {
@@ -54,6 +58,7 @@ describe("extractYapeVoucher", () => {
         time: "02:35 pm",
         payer_name: "Ana Quispe",
         recipient_name: "Grupo GF SAC",
+        recipient_phone_last_digits: "*** *** 309",
       }),
     });
     expect(out).toMatchObject({
@@ -62,6 +67,7 @@ describe("extractYapeVoucher", () => {
       paidAt: "2026-07-10T19:35:00.000Z",
       payerName: "Ana Quispe",
       recipientName: "Grupo GF SAC",
+      recipientPhoneLastDigits: "309",
       ok: true,
     });
   });
@@ -151,5 +157,19 @@ describe("extractYapeVoucher", () => {
         ({ ok: true, json: async () => ({ content: [{ type: "text", text: "no es json" }] }) }) as unknown as Response,
     });
     expect(out.ok).toBe(false);
+  });
+});
+
+describe("checkYapeRecipient", () => {
+  it("verifica Grupo GF S.A.C. y el celular terminado en 309", () => {
+    expect(checkYapeRecipient("Grupo Gf S.a.c.", "309")).toBe("verified");
+  });
+
+  it("distingue una lectura parcial de un receptor incorrecto", () => {
+    expect(checkYapeRecipient("Grupo GF SAC", null)).toBe("partial");
+    expect(checkYapeRecipient(null, "309")).toBe("partial");
+    expect(checkYapeRecipient("Otro comercio", "309")).toBe("mismatch");
+    expect(checkYapeRecipient("Grupo GF SAC", "123")).toBe("mismatch");
+    expect(checkYapeRecipient(null, null)).toBe("missing");
   });
 });
