@@ -18,6 +18,7 @@ export function ChecklistFilter({
   selected,
   onChange,
   capitalize = true,
+  optionLabel,
 }: {
   label: string;
   options: string[];
@@ -25,6 +26,7 @@ export function ChecklistFilter({
   onChange: (next: Set<string>) => void;
   /** Las etiquetas de código (estados) se muestran tal cual, no capitalizadas. */
   capitalize?: boolean;
+  optionLabel?: (option: string) => string;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -94,7 +96,7 @@ export function ChecklistFilter({
                     onChange={() => toggle(option)}
                     className="h-3.5 w-3.5"
                   />
-                  <span className="text-slate-700">{option}</span>
+                  <span className="text-slate-700">{optionLabel?.(option) ?? option}</span>
                 </label>
               </li>
             ))}
