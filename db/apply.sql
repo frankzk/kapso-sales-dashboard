@@ -167,4 +167,6 @@
 \ir migrations/0080_swayp_guides.sql
 \echo 'Applying 0081_coverage_district_aliases.sql'
 \ir migrations/0081_coverage_district_aliases.sql
+\echo 'Applying 0082_meta_campaign_data_quality.sql'
+\ir migrations/0082_meta_campaign_data_quality.sql
 \echo 'Done.'

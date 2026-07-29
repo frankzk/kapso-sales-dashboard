@@ -139,6 +139,55 @@ function rangeBounds(range: DateRange): { startIso: string; endIso: string } {
   return { startIso: `${range.from}T00:00:00Z`, endIso: `${range.to}T23:59:59Z` };
 }
 
+function localMidnightUtc(date: string, timeZone: string): string {
+  const [year, month, day] = date.split("-").map(Number);
+  const target = Date.UTC(year!, month! - 1, day!, 0, 0, 0);
+  let guess = target;
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const parts = Object.fromEntries(
+      formatter.formatToParts(new Date(guess)).map((part) => [part.type, part.value]),
+    );
+    const rendered = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+    );
+    guess += target - rendered;
+  }
+  return new Date(guess).toISOString();
+}
+
+function nextDate(date: string): string {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(Date.UTC(year!, month! - 1, day! + 1)).toISOString().slice(0, 10);
+}
+
+/** Exact local-calendar bounds for acquisition cohorts. Unlike the legacy
+ * operational widgets, campaign acquisition must not move a lead between days
+ * merely because UTC is five hours ahead of Lima. */
+export function acquisitionRangeBounds(
+  range: DateRange,
+  timeZone: string,
+): { startIso: string; endExclusiveIso: string } {
+  return {
+    startIso: localMidnightUtc(range.from, timeZone),
+    endExclusiveIso: localMidnightUtc(nextDate(range.to), timeZone),
+  };
+}
+
 const PAGE_SIZE = 1000;
 const MAX_ROWS = 50_000;
 
@@ -254,6 +303,82 @@ export async function getLeadsForDashboard(
     if (error || !data?.length) break;
     out.push(...(data as unknown as LeadRow[]));
     if (data.length < PAGE_SIZE) break;
+  }
+  return out;
+}
+
+/** Leads acquired for the first time in the selected local-calendar range.
+ * This is intentionally separate from `getLeadsForDashboard`, whose
+ * last-interaction cohort is correct for operational workload but incorrect for
+ * advertising acquisition and conversion. */
+export async function getCampaignLeadsForDashboard(
+  storeId: string,
+  range: DateRange,
+  timeZone: string,
+): Promise<LeadRow[]> {
+  const sb = await createServerSupabase();
+  const { startIso, endExclusiveIso } = acquisitionRangeBounds(range, timeZone);
+  const out: LeadRow[] = [];
+  const BASE_COLS =
+    "id,store_id,phone,wa_id,name,email,first_seen_at,last_interaction_at,kapso_conversation_id,handoff_reason,handoff_at,category,status,needs_attention,order_id,has_order";
+  const COL_SETS = [
+    `${BASE_COLS},source,ad_id,ad_headline,wa_phone_number_id`,
+    `${BASE_COLS},source,ad_id,ad_headline`,
+    BASE_COLS,
+  ];
+  let colIdx = 0;
+  const pageQuery = (select: string, from: number) =>
+    sb
+      .from("leads")
+      .select(select)
+      .eq("store_id", storeId)
+      .eq("source", "meta_ad")
+      .gte("first_seen_at", startIso)
+      .lt("first_seen_at", endExclusiveIso)
+      .order("first_seen_at", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+    let { data, error } = await pageQuery(COL_SETS[colIdx]!, from);
+    while (error && colIdx < COL_SETS.length - 1) {
+      colIdx++;
+      ({ data, error } = await pageQuery(COL_SETS[colIdx]!, from));
+    }
+    if (error) {
+      throw new Error(`No se pudo cargar la cohorte de adquisición Meta: ${error.message}`);
+    }
+    if (!data?.length) break;
+    out.push(...(data as unknown as LeadRow[]));
+    if (data.length < PAGE_SIZE) break;
+  }
+  return out;
+}
+
+/** Exact orders linked from the acquisition cohort, regardless of the order's
+ * creation day. This prevents a lead acquired at the end of a range from losing
+ * its later, exact Shopify conversion. */
+export async function getOrdersByIds(
+  storeIds: string[],
+  orderIds: (string | null | undefined)[],
+): Promise<OrderRow[]> {
+  const ids = [...new Set(orderIds.filter((id): id is string => !!id))];
+  if (!storeIds.length || !ids.length) return [];
+  const sb = await createServerSupabase();
+  const BASE =
+    "id,store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,customer_phone,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items";
+  const out: OrderRow[] = [];
+  for (const batch of chunk(ids, 250)) {
+    const { data, error } = await sb
+      .from("orders")
+      .select(`${BASE},discount_codes`)
+      .in("store_id", storeIds)
+      .in("id", batch);
+    if (error) {
+      throw new Error(`No se pudieron cargar los pedidos atribuidos a Meta: ${error.message}`);
+    }
+    out.push(...((data ?? []) as unknown as OrderRow[]).map((order) => ({
+      ...order,
+      discount_codes: order.discount_codes ?? [],
+    })));
   }
   return out;
 }
@@ -375,7 +500,8 @@ export async function getMetaSpend(storeId: string, range: DateRange): Promise<n
 }
 
 /** Historical Meta totals by ad. The database aggregates the daily rows and
- * preserves their RLS; missing migration/data degrades to an empty result. */
+ * preserves their RLS. Query failures are explicit: a marketing report must
+ * never turn a technical error into a misleading zero-spend result. */
 export async function getMetaAdPerformance(
   storeId: string,
   range: DateRange,
@@ -386,7 +512,12 @@ export async function getMetaAdPerformance(
     p_from: range.from,
     p_to: range.to,
   });
-  if (error || !Array.isArray(data)) return [];
+  if (error) {
+    throw new Error(`No se pudo cargar el histórico de Meta: ${error.message}`);
+  }
+  if (!Array.isArray(data)) {
+    throw new Error("El histórico de Meta devolvió una respuesta inválida.");
+  }
   const finite = (value: unknown) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : 0;
@@ -394,9 +525,11 @@ export async function getMetaAdPerformance(
   return (data as Array<Record<string, unknown>>)
     .filter((row) => typeof row.ad_id === "string" && row.ad_id)
     .map((row) => ({
+      storeId,
       adId: String(row.ad_id),
       accountId: typeof row.account_id === "string" ? row.account_id : null,
       currency: typeof row.currency === "string" ? row.currency.toUpperCase() : null,
+      metaConversations: Math.trunc(finite(row.meta_conversations)),
       spend: finite(row.spend),
       impressions: Math.trunc(finite(row.impressions)),
       reach: Math.trunc(finite(row.reach)),
@@ -405,6 +538,7 @@ export async function getMetaAdPerformance(
       activeDays: Math.trunc(finite(row.active_days)),
       firstDate: typeof row.first_date === "string" ? row.first_date : null,
       lastDate: typeof row.last_date === "string" ? row.last_date : null,
+      syncedAt: typeof row.synced_at === "string" ? row.synced_at : null,
     }));
 }
 

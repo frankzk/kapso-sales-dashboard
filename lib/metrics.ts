@@ -796,6 +796,7 @@ export function cartRecovery(leads: LeadRow[], orders: OrderRow[]): CartRecovery
 }
 
 export interface CampaignStat {
+  rowKey: string;
   adId: string;
   metaAdId: string | null;
   storeIds: string[];
@@ -804,6 +805,8 @@ export interface CampaignStat {
   resolved: boolean;
   meta: AdMeta | null;
   leads: number;
+  metaConversations: number;
+  conversationCoverageRate: number | null;
   pedidos: number;
   conversion: number;
   ingresos: number;
@@ -818,6 +821,7 @@ export interface CampaignStat {
   cancelledOrders: number;
   inRouteOrders: number;
   shipmentKnown: number;
+  logisticsCoverageRate: number | null;
   deliveryRate: number | null;
   deliveredRevenue: number;
   revenuePerLead: number;
@@ -829,6 +833,8 @@ export interface CampaignStat {
   clicks: number;
   inlineLinkClicks: number;
   activeDays: number;
+  metaSyncedAt: string | null;
+  currencyConflict: boolean;
   cpm: number | null;
   frequency: number | null;
   ctr: number | null;
@@ -839,6 +845,7 @@ export interface CampaignStat {
   roas: number | null;
   deliveredRoas: number | null;
   decision: CampaignDecision;
+  decisionReason: string;
   productMix: Array<{ title: string; sku: string | null; orders: number; units: number }>;
   orders: CampaignOrderDetail[];
 }
@@ -851,7 +858,8 @@ export type CampaignDecision =
   | "review_close"
   | "misaligned"
   | "operational"
-  | "no_attribution";
+  | "no_attribution"
+  | "data_incomplete";
 
 export interface CampaignOrderDetail {
   orderId: string;
@@ -906,9 +914,51 @@ export function campaignBreakdown(
 ): CampaignStat[] {
   const adLeads = leads.filter((l) => l.source === "meta_ad" && (l.ad_id || l.ad_headline));
   if (!adLeads.length && !performance.length) return [];
-  const activeById = new Map(activeOrders(orders).filter((o) => o.id).map((o) => [o.id!, o]));
+  const ordersById = new Map(orders.filter((o) => o.id).map((o) => [o.id!, o]));
   const deliveryByOrder = new Map(deliveries.map((outcome) => [outcome.orderId, outcome]));
-  const performanceByAd = new Map(performance.map((row) => [row.adId, row]));
+  const performanceByAd = new Map<string, MetaAdPerformance & { currencyConflict?: boolean }>();
+  for (const insight of performance) {
+    const previous = performanceByAd.get(insight.adId);
+    if (!previous) {
+      performanceByAd.set(insight.adId, { ...insight });
+      continue;
+    }
+    const currencies = new Set([previous.currency, insight.currency].filter(Boolean));
+    performanceByAd.set(insight.adId, {
+      ...previous,
+      storeId: previous.storeId || insight.storeId,
+      accountId: previous.accountId === insight.accountId ? previous.accountId : null,
+      currency: currencies.size === 1 ? [...currencies][0]! : null,
+      currencyConflict: currencies.size > 1,
+      metaConversations: previous.metaConversations + insight.metaConversations,
+      spend: round2(previous.spend + insight.spend),
+      impressions: previous.impressions + insight.impressions,
+      reach: previous.reach + insight.reach,
+      clicks: previous.clicks + insight.clicks,
+      inlineLinkClicks: previous.inlineLinkClicks + insight.inlineLinkClicks,
+      activeDays: previous.activeDays + insight.activeDays,
+      firstDate: [previous.firstDate, insight.firstDate].filter(Boolean).sort()[0] ?? null,
+      lastDate: [previous.lastDate, insight.lastDate].filter(Boolean).sort().at(-1) ?? null,
+      syncedAt: [previous.syncedAt, insight.syncedAt].filter(Boolean).sort().at(-1) ?? null,
+    });
+  }
+  // One Shopify order is credited to one acquired Meta lead. If historical
+  // duplication ever links it to multiple leads, use the most recent eligible
+  // acquisition before the order instead of double-counting revenue.
+  const ownerByOrder = new Map<string, LeadRow>();
+  for (const lead of adLeads) {
+    if (!lead.order_id) continue;
+    const order = ordersById.get(lead.order_id);
+    if (!order) continue;
+    const orderAt = Date.parse(order.created_at ?? "");
+    const leadAt = Date.parse(lead.first_seen_at ?? "");
+    if (Number.isFinite(orderAt) && Number.isFinite(leadAt) && leadAt > orderAt) continue;
+    const current = ownerByOrder.get(lead.order_id);
+    const currentAt = Date.parse(current?.first_seen_at ?? "");
+    if (!current || !Number.isFinite(currentAt) || (Number.isFinite(leadAt) && leadAt > currentAt)) {
+      ownerByOrder.set(lead.order_id, lead);
+    }
+  }
   const m = new Map<string, { headline: string | null; adId: string | null; leads: LeadRow[] }>();
   for (const l of adLeads) {
     const key = l.ad_id || l.ad_headline!;
@@ -935,7 +985,8 @@ export function campaignBreakdown(
       let deliveredRevenue = 0;
       for (const lead of b.leads) {
         if (!lead.order_id) continue;
-        const order = activeById.get(lead.order_id);
+        if (ownerByOrder.get(lead.order_id) !== lead) continue;
+        const order = ordersById.get(lead.order_id);
         if (!order) continue;
         const total = round2(Number(order.total_amount ?? 0) - Number(order.total_refunded ?? 0));
         const outcome = deliveryByOrder.get(lead.order_id);
@@ -977,11 +1028,13 @@ export function campaignBreakdown(
       const pedidos = details.length;
       const conversion = b.leads.length ? pedidos / b.leads.length : 0;
       const spend = round2(insight?.spend ?? 0);
+      const metaConversations = Math.max(0, Math.trunc(insight?.metaConversations ?? 0));
       const impressions = insight?.impressions ?? 0;
       const reach = insight?.reach ?? 0;
       const clicks = insight?.clicks ?? 0;
       const inlineLinkClicks = insight?.inlineLinkClicks ?? 0;
       return {
+        rowKey: `${insight?.storeId ?? b.leads[0]?.store_id ?? "unknown"}:${adId}`,
         adId,
         metaAdId: b.adId,
         storeIds: [...new Set(b.leads.map((lead) => lead.store_id).filter(Boolean))],
@@ -990,6 +1043,8 @@ export function campaignBreakdown(
         resolved: Boolean(meta?.adName),
         meta,
         leads: b.leads.length,
+        metaConversations,
+        conversationCoverageRate: metaConversations ? b.leads.length / metaConversations : null,
         pedidos,
         conversion,
         ingresos: round2(ingresos),
@@ -1004,6 +1059,7 @@ export function campaignBreakdown(
         cancelledOrders,
         inRouteOrders,
         shipmentKnown,
+        logisticsCoverageRate: pedidos ? shipmentKnown / pedidos : null,
         deliveryRate: shipmentKnown ? deliveredOrders / shipmentKnown : null,
         deliveredRevenue: round2(deliveredRevenue),
         revenuePerLead: b.leads.length ? round2(ingresos / b.leads.length) : 0,
@@ -1015,16 +1071,19 @@ export function campaignBreakdown(
         clicks,
         inlineLinkClicks,
         activeDays: insight?.activeDays ?? 0,
-        cpm: insight && impressions ? round2((spend / impressions) * 1_000) : null,
+        metaSyncedAt: insight?.syncedAt ?? null,
+        currencyConflict: Boolean(insight?.currencyConflict),
+        cpm: insight && insight.currency && impressions ? round2((spend / impressions) * 1_000) : null,
         frequency: insight && reach ? round2(impressions / reach) : null,
         ctr: insight && impressions ? clicks / impressions : null,
-        cpc: insight && clicks ? round2(spend / clicks) : null,
-        cpl: insight && b.leads.length ? round2(spend / b.leads.length) : null,
-        cpa: insight && pedidos ? round2(spend / pedidos) : null,
-        deliveredCpa: insight && deliveredOrders ? round2(spend / deliveredOrders) : null,
-        roas: insight && spend ? round2(ingresos / spend) : null,
-        deliveredRoas: insight && spend ? round2(deliveredRevenue / spend) : null,
+        cpc: insight?.currency && clicks ? round2(spend / clicks) : null,
+        cpl: insight?.currency && b.leads.length ? round2(spend / b.leads.length) : null,
+        cpa: insight?.currency && pedidos ? round2(spend / pedidos) : null,
+        deliveredCpa: insight?.currency && deliveredOrders ? round2(spend / deliveredOrders) : null,
+        roas: insight?.currency && spend ? round2(ingresos / spend) : null,
+        deliveredRoas: insight?.currency && spend ? round2(deliveredRevenue / spend) : null,
         decision: "insufficient" as CampaignDecision,
+        decisionReason: "",
         productMix: [...mix.values()].sort((a, b) => b.orders - a.orders || b.units - a.units),
         orders: details.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
       };
@@ -1032,13 +1091,36 @@ export function campaignBreakdown(
   const totalLeads = rows.reduce((sum, row) => sum + row.leads, 0);
   const baseline = totalLeads ? rows.reduce((sum, row) => sum + row.pedidos, 0) / totalLeads : 0;
   for (const row of rows) {
-    if (row.spend > 0 && row.leads === 0) row.decision = "no_attribution";
-    else if (row.leads < 20) row.decision = "insufficient";
-    else if (row.productMatchRate != null && row.pedidos >= 5 && row.productMatchRate < 0.5) row.decision = "misaligned";
-    else if (row.deliveryRate != null && row.shipmentKnown >= 5 && row.deliveryRate < 0.5) row.decision = "operational";
-    else if (row.conversion >= Math.max(0.15, baseline * 1.25)) row.decision = "scale";
-    else if (row.conversion >= baseline) row.decision = "promising";
-    else row.decision = "review_close";
+    if (row.spend > 0 && row.leads === 0) {
+      row.decision = "no_attribution";
+      row.decisionReason = "Meta registra inversión, pero no hay leads internos vinculados al anuncio.";
+    } else if (row.productMatchRate != null && row.pedidos >= 5 && row.productMatchRate < 0.5) {
+      row.decision = "misaligned";
+      row.decisionReason = "Menos de la mitad de los pedidos conocidos contiene el producto anunciado.";
+    } else if (row.deliveryRate != null && row.shipmentKnown >= 5 && row.deliveryRate < 0.5) {
+      row.decision = "operational";
+      row.decisionReason = "Menos de la mitad de los pedidos con seguimiento logístico fue entregado.";
+    } else if (!row.metaCurrency || row.spend <= 0 || row.currencyConflict) {
+      row.decision = "data_incomplete";
+      row.decisionReason = row.currencyConflict
+        ? "El anuncio presenta más de una moneda; no se mezclan costos."
+        : "No hay gasto histórico con moneda verificable para calcular una recomendación económica.";
+    } else if (row.leads < 20) {
+      row.decision = "insufficient";
+      row.decisionReason = `Muestra baja: ${row.leads}/20 leads mínimos.`;
+    } else if (row.deliveredOrders < 5) {
+      row.decision = "insufficient";
+      row.decisionReason = `Entrega aún inmadura: ${row.deliveredOrders}/5 pedidos entregados mínimos.`;
+    } else if (row.conversion >= Math.max(0.15, baseline * 1.25)) {
+      row.decision = "scale";
+      row.decisionReason = "Conversión superior al promedio, gasto verificado y al menos cinco entregas.";
+    } else if (row.conversion >= baseline) {
+      row.decision = "promising";
+      row.decisionReason = "Conversión igual o superior al promedio, gasto verificado y al menos cinco entregas.";
+    } else {
+      row.decision = "review_close";
+      row.decisionReason = "Genera leads, pero convierte por debajo del promedio.";
+    }
   }
   return rows.sort((a, b) => b.ingresos - a.ingresos || b.leads - a.leads);
 }
