@@ -39,6 +39,8 @@ export const COST_CONCEPTS: { code: CostConcept; label: string }[] = [
 
 export interface CostTariff {
   id: string;
+  /** Se usa al resolver coberturas entre varias organizaciones. */
+  org_id?: string;
   store_id: string | null;
   courier: string | null;
   region: string | null;
