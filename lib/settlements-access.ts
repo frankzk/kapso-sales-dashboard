@@ -49,7 +49,7 @@ const SETTLEMENT_COLUMNS =
 
 const LINE_COLUMNS =
   "id,order_id,guide_code,order_name,declared_status,declared_amount," +
-  "declared_fee,customer_name,district,match_status";
+  "declared_fee,customer_name,district,store_hint,payment_method,match_status,raw";
 
 /** Motorizados de las tiendas accesibles, para el desplegable de "¿de quién es
  *  esta hoja?" y para el listado. */
