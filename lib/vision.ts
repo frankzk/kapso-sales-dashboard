@@ -295,13 +295,19 @@ function buildExtractPrompt(): string {
   return (
     "Transcribe el comprobante y devuelve JSON con esta forma exacta:\n" +
     "{\n" +
-    '  "operation_number": string|null,  // nº de operación / código de seguridad\n' +
+    '  "operation_number": string|null,  // valor rotulado exactamente "Nro. de operación"\n' +
+    '  "security_code": string|null,      // código de seguridad de 3 dígitos; dato distinto\n' +
     '  "amount": number|null,            // monto en soles, solo el número\n' +
     '  "date": string|null,              // fecha, tal como se ve (p. ej. "10 jul 2026")\n' +
     '  "time": string|null,              // hora, tal como se ve (p. ej. "02:35 pm")\n' +
     '  "payer_name": string|null,        // quien paga\n' +
     '  "recipient_name": string|null     // quien recibe\n' +
     "}\n" +
+    'IMPORTANTE: "Nro. de operación" y "Código de seguridad" NO son el mismo dato. ' +
+    "El número de operación aparece en DATOS DE LA TRANSACCIÓN y normalmente tiene " +
+    "varios dígitos; nunca uses como operation_number el código de seguridad de 3 " +
+    "dígitos, el monto, el celular ni parte de otro campo. Si no ves claramente la " +
+    'etiqueta "Nro. de operación" junto a su valor completo, operation_number es null. ' +
     "Si la imagen está recortada y algún dato no se ve completo, ese campo es null."
   );
 }
@@ -395,8 +401,14 @@ function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | nu
     return Number.isFinite(n) ? n : null;
   };
   const rawOperation = str(o.operation_number);
+  const cleanedOperation = rawOperation
+    ? rawOperation.toUpperCase().replace(/[^A-Z0-9]/g, "")
+    : "";
   return {
-    operationNumber: rawOperation ? rawOperation.toUpperCase().replace(/[^A-Z0-9]/g, "") || null : null,
+    // El código de seguridad de Yape tiene 3 dígitos. También hemos visto al
+    // modelo devolver aquí el monto ("30"). Un identificador tan corto no es
+    // confiable y se deja vacío para que el operador lo revise.
+    operationNumber: cleanedOperation.length >= 6 ? cleanedOperation : null,
     amount: num(o.amount),
     paidAt: parseVoucherInstant(str(o.date), str(o.time)),
     payerName: str(o.payer_name),

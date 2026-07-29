@@ -71,10 +71,25 @@ describe("extractYapeVoucher", () => {
     // confianza; null obliga a que lo escriba una persona.
     const out = await extractYapeVoucher("AAAA", "image/jpeg", {
       ...OPTS,
-      fetchImpl: reply({ operation_number: "999", amount: "ilegible" }),
+      fetchImpl: reply({ operation_number: "999999", amount: "ilegible" }),
     });
     expect(out.amount).toBeNull();
-    expect(out.operationNumber).toBe("999");
+    expect(out.operationNumber).toBe("999999");
+  });
+
+  it("descarta el monto o el código de seguridad si el modelo los confunde con la operación", async () => {
+    for (const mistakenValue of ["30", "551", "030"]) {
+      const out = await extractYapeVoucher("AAAA", "image/jpeg", {
+        ...OPTS,
+        fetchImpl: reply({
+          operation_number: mistakenValue,
+          security_code: "551",
+          amount: 30,
+        }),
+      });
+      expect(out.operationNumber).toBeNull();
+      expect(out.amount).toBe(30);
+    }
   });
 
   it("una captura recortada deja en null lo que no se ve", async () => {
