@@ -161,4 +161,6 @@
 \ir migrations/0077_settlement_row_matching.sql
 \echo 'Applying 0078_order_coverage.sql'
 \ir migrations/0078_order_coverage.sql
+\echo 'Applying 0079_coverage_region_first.sql'
+\ir migrations/0079_coverage_region_first.sql
 \echo 'Done.'

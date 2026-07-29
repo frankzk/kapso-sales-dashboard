@@ -71,6 +71,28 @@ const CALLAO = new Set(
   ].map(normalizeCoverageLabel),
 );
 
+/**
+ * Distritos de Lima Metropolitana / Callao cuyo NOMBRE se repite en otro
+ * departamento (Independencia está en Lima, en Huaraz y en Pisco; La Victoria
+ * también es Chiclayo; Miraflores también es Arequipa…).
+ *
+ * Solo se consultan cuando el pedido no trae una región utilizable: con región
+ * la decisión ya está tomada y el nombre repetido da igual. Sin región, adivinar
+ * "Independencia = Lima" manda un pedido de Áncash al reparto propio.
+ */
+const AMBIGUOUS_DISTRICTS = new Set(
+  [
+    "bellavista",
+    "independencia",
+    "la victoria",
+    "miraflores",
+    "pueblo libre",
+    "san luis",
+    "san miguel",
+    "santa rosa",
+  ].map(normalizeCoverageLabel),
+);
+
 const NON_COD_COURIERS = new Set(["shalom", "olva", "olva courier"]);
 
 export function normalizeCoverageLabel(value: string | null | undefined): string {
@@ -90,19 +112,90 @@ export interface CoverageLocation {
   district: string | null;
 }
 
-export function isLimaMetropolitanaOrCallao(location: CoverageLocation): boolean {
-  const region = normalizeCoverageLabel(location.region);
-  const province = normalizeCoverageLabel(location.province);
-  const district = normalizeCoverageLabel(location.district);
+/**
+ * Qué dice la REGIÓN del pedido sobre Lima.
+ *
+ * Perú tiene dos subdivisiones distintas que se llaman Lima, y Shopify las
+ * manda con su nombre completo (es lo que termina en `order_master.region`):
+ *
+ *   "Lima (provincia)"     PE-LMA — la provincia de Lima = Lima Metropolitana.
+ *   "Lima (departamento)"  PE-LIM — el resto del departamento: Huaral, Cañete,
+ *                                   Yauyos, Barranca, Huaura, Canta, Oyón…
+ *
+ * Esa diferencia es exactamente la que separa "Lima" de "Provincia" en la
+ * operación, así que la región sola ya decide y no hace falta la provincia del
+ * ubigeo (que Shopify no manda y que la tabla `peru_districts` adivina mal
+ * cuando el nombre del distrito se repite).
+ *
+ *   "metropolitana"  Lima Metropolitana — cobertura Lima.
+ *   "callao"         Callao entero (una sola provincia) — cobertura Lima.
+ *   "departamento"   departamento de Lima sin la metropolitana — nunca Lima.
+ *   "lima"           dice "Lima" a secas y no distingue cuál de las dos: pasa
+ *                    por Excel de Aliclik, ubigeo o carga a mano. Decide el
+ *                    distrito.
+ *   null             no habla de Lima (otra región, o vacío).
+ */
+export type LimaRegionKind = "metropolitana" | "callao" | "departamento" | "lima" | null;
 
-  if (CALLAO.has(district)) {
-    return region.includes("callao") || province.includes("callao");
+export function limaRegionKind(region: string | null | undefined): LimaRegionKind {
+  const r = normalizeCoverageLabel(region);
+  if (!r) return null;
+
+  // Códigos ISO, por si la región llega ya codificada ("PE-LMA", "LMA").
+  if (r === "cal" || r === "pe cal") return "callao";
+  if (r === "lma" || r === "pe lma") return "metropolitana";
+  if (r === "lim" || r === "pe lim") return "departamento";
+
+  if (r.includes("callao")) return "callao";
+  if (!r.includes("lima")) return null;
+
+  // "Lima (provincia)" / "Lima Metropolitana" / "Municipalidad Metropolitana de Lima"
+  if (r.includes("provincia") || r.includes("metropolitan")) return "metropolitana";
+  // "Lima (departamento)" / "Dpto. de Lima" / "Región Lima"
+  if (r.includes("departamento") || r.includes("depto") || r.includes("dpto") || r.includes("region")) {
+    return "departamento";
   }
-  return (
-    LIMA_METROPOLITANA.has(district) &&
-    region === "lima" &&
-    (province === "lima" || province === "lima metropolitana")
-  );
+  return "lima";
+}
+
+/** ¿La PROVINCIA del ubigeo dice por sí sola que es Lima Metropolitana o Callao? */
+function provinceIsLimaOrCallao(province: string | null | undefined): boolean {
+  const p = normalizeCoverageLabel(province);
+  if (!p) return false;
+  return p === "lima" || p === "lima metropolitana" || p.includes("callao");
+}
+
+/**
+ * ¿El pedido va a Lima Metropolitana o Callao?
+ *
+ * Se decide con la primera señal fiable, de más a menos:
+ *   1. La región, cuando distingue metropolitana / departamento / Callao.
+ *   2. La provincia del ubigeo, cuando la región dice "Lima" a secas o falta.
+ *   3. El distrito, si es un nombre que solo existe en Lima Metropolitana.
+ *
+ * Una región que habla de otro departamento CIERRA la puerta: no se mira el
+ * distrito, porque los nombres se repiten por todo el país.
+ */
+export function isLimaMetropolitanaOrCallao(location: CoverageLocation): boolean {
+  const kind = limaRegionKind(location.region);
+  if (kind === "metropolitana" || kind === "callao") return true;
+  if (kind === "departamento") return false;
+
+  const district = normalizeCoverageLabel(location.district);
+  const inLimaDistricts = LIMA_METROPOLITANA.has(district) || CALLAO.has(district);
+
+  // Región "Lima" a secas: el distrito desempata entre la metropolitana y el
+  // resto del departamento (Huaral, Cañete, Yauyos…).
+  if (kind === "lima") return inLimaDistricts;
+
+  // Región de otro departamento: no es Lima, aunque el distrito se llame igual
+  // que uno de Lima (Independencia/Huaraz, La Victoria/Chiclayo…).
+  if (normalizeCoverageLabel(location.region)) return false;
+
+  // Sin región: la provincia manda si es concluyente; si no, solo un distrito
+  // que no se repita fuera de Lima.
+  if (provinceIsLimaOrCallao(location.province) && inLimaDistricts) return true;
+  return inLimaDistricts && !AMBIGUOUS_DISTRICTS.has(district);
 }
 
 /**
@@ -133,13 +226,23 @@ export function hasCodCoverage(
   });
 }
 
+/**
+ * Cobertura operativa del pedido.
+ *
+ * La provincia NO es requisito: Shopify Perú no la manda (solo distrito +
+ * región) y exigirla dejaba en "Por revisar" pedidos cuya región ya decía
+ * "Lima (provincia)". "Por revisar" queda para lo que de verdad no se puede
+ * ubicar: sin región utilizable y sin distrito.
+ */
 export function classifyOrderCoverage(
   location: CoverageLocation,
   tariffs: readonly CostTariff[],
   day: string,
 ): OrderCoverage {
-  if (!location.region || !location.province || !location.district) return "por_revisar";
   if (isLimaMetropolitanaOrCallao(location)) return "lima";
+  // Sin distrito no hay a dónde despachar ni tarifa que consultar; tampoco se
+  // puede afirmar que sea agencia.
+  if (!normalizeCoverageLabel(location.district)) return "por_revisar";
   return hasCodCoverage(tariffs, location, day) ? "provincia_cod" : "agencia";
 }
 

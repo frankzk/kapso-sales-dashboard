@@ -1636,7 +1636,7 @@ function GeoSection({
       {(row.coverage ?? "por_revisar") === "por_revisar" && !editing && (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
           <p className="text-xs text-amber-900">
-            Completa región, provincia y distrito para asignar el flujo correcto.
+            Completa la región y el distrito para asignar el flujo correcto.
           </p>
           {canEdit && (
             <button
