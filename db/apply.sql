@@ -165,4 +165,6 @@
 \ir migrations/0079_coverage_region_first.sql
 \echo 'Applying 0080_swayp_guides.sql'
 \ir migrations/0080_swayp_guides.sql
+\echo 'Applying 0081_coverage_district_aliases.sql'
+\ir migrations/0081_coverage_district_aliases.sql
 \echo 'Done.'

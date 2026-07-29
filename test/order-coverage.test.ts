@@ -3,6 +3,7 @@ import {
   classifyOrderCoverage,
   isLimaMetropolitanaOrCallao,
   limaRegionKind,
+  resolveLimaDistrict,
 } from "@/lib/order-coverage";
 import type { CostTariff } from "@/lib/costs";
 
@@ -165,5 +166,80 @@ describe("región de Shopify", () => {
     expect(
       isLimaMetropolitanaOrCallao({ ...base, region: null, province: "Lima", district: "Independencia" }),
     ).toBe(true);
+  });
+});
+
+// El distrito casi nunca se elige de una lista: lo escribe la clienta o la
+// asesora, y no lo escribe como el INEI.
+describe("distrito escrito a mano", () => {
+  it("resuelve el nombre corto, la sigla y el nombre viejo", () => {
+    expect(resolveLimaDistrict("Surco")).toBe("santiago de surco");
+    expect(resolveLimaDistrict("SJL")).toBe("san juan de lurigancho");
+    expect(resolveLimaDistrict("S.J.M.")).toBe("san juan de miraflores");
+    expect(resolveLimaDistrict("smp")).toBe("san martin de porres");
+    expect(resolveLimaDistrict("Ate Vitarte")).toBe("ate");
+    expect(resolveLimaDistrict("Cercado de Lima")).toBe("lima");
+    expect(resolveLimaDistrict("Huachipa")).toBe("lurigancho");
+    expect(resolveLimaDistrict("Chosica")).toBe("lurigancho");
+    expect(resolveLimaDistrict("Huancayo")).toBe(null);
+  });
+
+  it("encuentra el distrito dentro de una referencia, solo si se lo permite", () => {
+    const frase = "A 2 cuadras del mercado de Magdalena";
+    expect(resolveLimaDistrict(frase)).toBe(null);
+    expect(resolveLimaDistrict(frase, { searchInText: true })).toBe("magdalena del mar");
+    expect(resolveLimaDistrict("Coop universal Santa Anita", { searchInText: true })).toBe("santa anita");
+    expect(resolveLimaDistrict("La victoria en la tarde", { searchInText: true })).toBe("la victoria");
+    expect(resolveLimaDistrict("Santa Maria - San Bartolo", { searchInText: true })).toBe("san bartolo");
+    // "Zárate" es un barrio de SJL: no puede colar "Ate" como distrito.
+    expect(resolveLimaDistrict("Zarate", { searchInText: true })).toBe(null);
+  });
+
+  it('el caso del pedido #AUR174763: región "Lima" + distrito "Surco"', () => {
+    expect(
+      classifyOrderCoverage(
+        { ...base, region: "Lima", province: null, district: "Surco" },
+        [tariff({ district: "Surco" })],
+        "2026-07-28",
+      ),
+    ).toBe("lima");
+  });
+});
+
+// Región y distrito se contradicen dentro del propio departamento de Lima.
+describe('"Lima (departamento)" con distrito metropolitano', () => {
+  it("gana el distrito, que es el que escribe la clienta", () => {
+    for (const district of ["Miraflores", "Los Olivos", "San Isidro", "La Molina", "Surco", "Lima"]) {
+      expect(
+        isLimaMetropolitanaOrCallao({ ...base, region: "Lima (departamento)", province: null, district }),
+      ).toBe(true);
+    }
+  });
+
+  it("las provincias del departamento siguen fuera de Lima", () => {
+    for (const district of ["Cañete", "Huaura", "Barranca", "Huaral", "Yauyos", "Canta", "Oyón"]) {
+      expect(
+        isLimaMetropolitanaOrCallao({ ...base, region: "Lima (departamento)", province: null, district }),
+      ).toBe(false);
+    }
+  });
+
+  it("San Luis no se puede desempatar: también es un distrito de Cañete", () => {
+    expect(
+      isLimaMetropolitanaOrCallao({ ...base, region: "Lima (departamento)", province: null, district: "San Luis" }),
+    ).toBe(false);
+    // Con la región metropolitana no hay nada que desempatar.
+    expect(
+      isLimaMetropolitanaOrCallao({ ...base, region: "Lima (provincia)", province: null, district: "San Luis" }),
+    ).toBe(true);
+  });
+
+  it("un distrito de otro departamento sigue sin colarse", () => {
+    expect(
+      isLimaMetropolitanaOrCallao({ ...base, region: "Áncash", province: null, district: "Independencia" }),
+    ).toBe(false);
+    expect(
+      isLimaMetropolitanaOrCallao({ ...base, region: "Arequipa", province: null, district: "Cerca de Miraflores" }),
+    ).toBe(false);
   });
 });
