@@ -3,6 +3,7 @@
 // cambia.
 
 import type { CourierAdapter } from "./types";
+import { courierName } from "./catalog";
 import { aliclikAdapter } from "./aliclik";
 import { olvaAdapter, shalomAdapter } from "./agency";
 
@@ -18,8 +19,13 @@ export function courierAdapter(id: string | null | undefined): CourierAdapter | 
   return id ? (BY_ID.get(id) ?? null) : null;
 }
 
+/**
+ * Nombre presentable de un courier. Cae al catálogo (lib/couriers/catalog.ts)
+ * cuando no hay adaptador: no mandar reporte no es motivo para pintarse con el
+ * id en crudo, y Axel — que solo manda liquidación — nunca tendrá adaptador.
+ */
 export function courierLabel(id: string | null | undefined): string {
-  return courierAdapter(id)?.label ?? (id ?? "—");
+  return courierAdapter(id)?.label ?? courierName(id);
 }
 
 export function isAgencyAdapter(id: string | null | undefined): boolean {

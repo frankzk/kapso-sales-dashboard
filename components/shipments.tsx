@@ -67,7 +67,8 @@ import {
 } from "@/app/dashboard/envios/actions";
 import { ChecklistFilter } from "@/components/filters";
 import { OrderLinkPicker } from "@/components/order-link-picker";
-import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
+import { DirectGuideModal } from "@/components/direct-guide-modal";
+import { courierName } from "@/lib/couriers/catalog";
 import {
   currentFenixReason,
   matchesFenixAvailability,
@@ -522,7 +523,7 @@ export function ShipmentsBoard({
             onClick={() => setDirectGuideOpen(true)}
             className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-1.5 text-sm font-medium text-orange-800 hover:bg-orange-100"
           >
-            Guía Fenix directa
+            Guía directa
           </button>
           <a
             href="/dashboard/envios/stock"
@@ -827,7 +828,7 @@ export function ShipmentsBoard({
       )}
 
       {directGuideOpen && (
-        <DirectFenixGuideModal
+        <DirectGuideModal
           onClose={handleDirectGuideModalClosed}
           onCreated={(shipmentId) => {
             // Refresca ya (contadores/pestañas) y recuerda la guía para saltar a
@@ -1354,10 +1355,10 @@ function ShipmentDrawer({
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="font-mono text-sm font-semibold text-slate-800">{detail.shipment.guide_code}</p>
-                  {detail.shipment.created_via === "fenix_directo" && (
+                  {detail.shipment.created_via?.endsWith("_directo") && (
                     <span
                       className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700"
-                      title="Guía Fenix directa: creada desde el pedido, sin guía Aliclik previa"
+                      title="Guía directa: creada desde el pedido, sin guía Aliclik previa"
                     >
                       Directa
                     </span>
@@ -2249,16 +2250,13 @@ function ShipmentGuideHistory({
                     <span
                       className={cn(
                         "rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
-                        guide.courier === "fenix"
-                          ? "bg-orange-100 text-orange-700"
-                          : "bg-sky-100 text-sky-700",
+                        guide.courier === "aliclik"
+                          ? "bg-sky-100 text-sky-700"
+                          : "bg-orange-100 text-orange-700",
                       )}
                     >
-                      {guide.courier === "fenix"
-                        ? guide.created_via === "fenix_directo"
-                          ? "Fenix directa"
-                          : "Fenix"
-                        : "Aliclik"}
+                      {courierName(guide.courier)}
+                      {guide.created_via?.endsWith("_directo") ? " directa" : ""}
                     </span>
                     {guide.is_current && (
                       <span className="rounded-full bg-brand-600 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">

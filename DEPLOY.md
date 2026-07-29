@@ -425,6 +425,42 @@ tiene que elegir el courier cuando el archivo no se reconoce.
 - **Añadir un courier nuevo** es un archivo en `lib/couriers/` y una línea en
   `lib/couriers/registry.ts`. Los alias de cabecera son amplios a propósito:
   cuando llegue un formato distinto, basta con añadir el alias.
+- **Quién es cada courier vive aparte del adaptador**, en
+  `lib/couriers/catalog.ts`. Son dos preguntas distintas: *¿existe este courier?*
+  y *¿sabe alguien leer su Excel?*. Axel es el caso que lo obliga — reparte todo
+  Lima Metropolitana y **no manda reporte de guías**, solo su liquidación
+  diaria, así que nunca tendrá adaptador y sin embargo es tan courier como
+  Aliclik. Antes del catálogo, `courierLabel()` solo conocía a los tres con
+  adaptador y los demás se pintaban con su id en crudo ("axel"). El catálogo es
+  también la única fuente de qué courier es de agencia (`lib/order-status.ts`
+  lee de ahí): tenerlo escrito en dos sitios es cómo se desincroniza.
+
+## 5i-bis. Guía directa (Fénix, Axel)
+
+Crear una guía desde un pedido, sin guía Aliclik madre. Nació para las urgencias
+de Fénix y ahora sirve a cualquier courier marcado `direct` en el catálogo.
+
+- **Por qué Axel la necesita para existir.** Es el único courier de Lima
+  Metropolitana y no manda reporte de guías. Si nadie le crea una, sus pedidos
+  no tienen fila en `shipments`, `order_master.current_courier` se queda en NULL
+  y el motor de Costos **no puede resolver su tarifa**: el envío sale con el
+  costo en blanco para siempre. Fénix, en cambio, cubre provincias (Arequipa,
+  La Libertad, Cusco, Puno, Junín) y nunca Lima.
+- **Lo que cambia entre couriers son los gates, no el flujo.** Fénix reparte
+  desde su propio almacén regional, así que se comprueba cobertura y stock de
+  TODOS los productos, y la fecha es **desde mañana** (su Excel de programación
+  del día ya suele estar enviado). Axel recoge de nuestro almacén el mismo día:
+  no hay stock suyo que consultar ni Excel que alcanzar, así que **no tiene gate
+  de inventario** y la fecha admite **hoy**. La regla de la fecha vive en
+  `earliestDispatchDay()` (`lib/shipments.ts`) porque la necesitan los dos
+  lados: el calendario del modal y el servidor, que no se fía de lo que llegue.
+- **El courier se valida en el servidor**, contra el catálogo: es lo que decide
+  qué gates corren, así que aceptar el que llegue del cliente permitiría
+  saltárselos mandando otro id.
+- **`fenix_eligible` solo lo lleva Fénix.** Es la marca de "esta guía entra al
+  Excel de programación"; una guía de Axel colándose ahí se despacharía dos
+  veces.
+- La guía nace **En ruta**, marcada `created_via='<courier>_directo'`.
 
 ## 5j. Pagos Yape y clave de recojo (Shalom)
 
@@ -667,6 +703,16 @@ de `/dashboard/rutas`, al armar la ruta del día.
   quedaban en "pendiente" para siempre y el cuadre las marcaba como *cobro sin
   entrega*. Solo `EFECTIVO`/`PAGO POS` marcan entregado y `RECHAZO` anula; lo
   demás deja el pedido vivo. No reescribe lo que el Master ya sabe.
+- **Y también crea la guía que falta.** Al aplicar una liquidación que declara
+  courier (`axel`…), los pedidos vinculados que no tienen NINGUNA guía reciben
+  una, para que el courier quede escrito en el Master y sus tarifas resuelvan.
+  La condición es `current_courier === null`: si el Master ya conoce una guía no
+  se toca, porque viene de un reporte o de alguien que la creó, y ambas cosas
+  son mejor fuente que una hoja que identifica al cliente por su nombre. El
+  código es determinista (`AXEL-KP114985`), así que reaplicar la liquidación no
+  duplica. Es el **segundo** camino por el que Axel obtiene courier; el primero
+  —y el que hace que el costo exista desde el despacho, no un día después— es la
+  guía directa (§5i-bis).
 - **El Yape y el POS del cliente NO son deuda del motorizado.** Caen a la cuenta
   de la empresa y nunca pasan por sus manos. Se guardan aparte
   (`direct_collected`) y se descuentan de lo que debe depositar; contarlos le

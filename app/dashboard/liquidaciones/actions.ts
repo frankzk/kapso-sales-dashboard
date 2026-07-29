@@ -11,14 +11,23 @@
 // vigencia del módulo de Costos: un número con fecha no se edita hacia atrás.
 
 import { revalidatePath } from "next/cache";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { relinkSettlementLine } from "@/lib/settlement-ingest";
 import { getRiderTariffs, getSettlementDetail } from "@/lib/settlements-access";
-import { computeRiderPayout, settlementMasterEffects, settlementStatus } from "@/lib/settlements";
+import {
+  computeRiderPayout,
+  settlementGuidesToCreate,
+  settlementMasterEffects,
+  settlementStatus,
+  type SettlementLineInput,
+  type SettlementMasterFacts,
+} from "@/lib/settlements";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { defaultOperationalFor } from "@/lib/order-status";
+import { categoryOf } from "@/lib/shipments";
 
 export interface ActionResult {
   ok: boolean;
@@ -323,6 +332,15 @@ export async function applySettlementToMaster(settlementId: string): Promise<Act
   const { error } = await g.admin.from("order_events").insert(events);
   if (error) return { ok: false, error: error.message };
 
+  // Antes de recalcular: los pedidos que llegan aquí sin ninguna guía se
+  // quedarían sin courier y, por tanto, sin costo logístico. Ver
+  // settlementGuidesToCreate().
+  const guidesCreated = await createGuidesFromSettlement(
+    g.admin,
+    detail.settlement.courier,
+    detail.reconciled.lines,
+  );
+
   await recomputeOrderMasterSafe(
     g.admin,
     pending.map((e) => e.order_id),
@@ -337,6 +355,62 @@ export async function applySettlementToMaster(settlementId: string): Promise<Act
     ok: true,
     message:
       `Master actualizado: ${entregados} entregado(s)` +
-      (anulados ? `, ${anulados} anulado(s) por rechazo` : "") + ".",
+      (anulados ? `, ${anulados} anulado(s) por rechazo` : "") +
+      (guidesCreated ? `, ${guidesCreated} guía(s) de courier creada(s)` : "") + ".",
   };
+}
+
+/**
+ * Crea la guía de los pedidos de la liquidación que no tienen ninguna, para que
+ * el courier de la hoja quede escrito en el Master y sus tarifas resuelvan.
+ *
+ * Solo aplica a las hojas que declaran courier (`axel`…): una liquidación de un
+ * motorizado propio no lleva courier, y ahí no hay nada que etiquetar.
+ *
+ * Nunca hace fallar el "Aplicar al Master": el estado del pedido es lo que el
+ * usuario pidió mover, y perderlo porque una guía derivada no se pudo escribir
+ * sería cambiar un dato bueno por un accesorio. Lo que no entre se puede volver
+ * a intentar reaplicando la liquidación — el código de guía es determinista, así
+ * que no se duplica.
+ */
+async function createGuidesFromSettlement(
+  admin: SupabaseClient,
+  courier: string | null,
+  rows: readonly { line: SettlementLineInput; facts: SettlementMasterFacts | null }[],
+): Promise<number> {
+  if (!courier) return 0;
+  const needed = settlementGuidesToCreate(courier, rows);
+  if (!needed.length) return 0;
+
+  const now = new Date().toISOString();
+  const payload = needed.map((n) => ({
+    courier,
+    guide_code: n.guide_code,
+    store_id: n.store_id,
+    order_id: n.order_id,
+    matched: true,
+    match_method: "settlement",
+    order_name: n.order_name,
+    customer_name: n.customer_name,
+    district: n.district,
+    province: n.province,
+    region: n.region,
+    delivery_status: n.delivered ? "entregado" : "anulado",
+    status_category: categoryOf(n.delivered ? "entregado" : "anulado"),
+    // La hoja es de un día concreto y llega después del reparto: la guía nace
+    // ya despachada y cerrada, no "en ruta".
+    dispatched_at: now,
+    closed_at: now,
+    created_via: "liquidacion",
+  }));
+
+  // ignoreDuplicates: reaplicar la misma liquidación no debe reventar por el
+  // único (courier, guide_code) — la guía ya existe y eso es exactamente lo que
+  // se quería.
+  const { data, error } = await admin
+    .from("shipments")
+    .upsert(payload, { onConflict: "courier,guide_code", ignoreDuplicates: true })
+    .select("id");
+  if (error) return 0;
+  return (data ?? []).length;
 }

@@ -3,30 +3,33 @@
 import { useEffect, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import {
-  createDirectFenixGuide,
-  previewDirectFenixGuide,
+  createDirectGuide,
+  previewDirectGuide,
   searchOrdersToLink,
   searchShopifyOrdersForDirectGuide,
-  type DirectFenixGuidePreview,
+  type DirectGuidePreview,
   type ShopifyOrderCandidate,
 } from "@/app/dashboard/envios/actions";
 import type { OrderLinkCandidate } from "@/lib/shipments-access";
-import { limaTodayKey, rescheduleGuideCode } from "@/lib/shipments";
+import { earliestDispatchDay, rescheduleGuideCode } from "@/lib/shipments";
+import { courierName, DIRECT_GUIDE_COURIERS } from "@/lib/couriers/catalog";
 
-/** El despacho más pronto es mañana (Lima): el Excel del día ya suele estar
- *  enviado, así que una guía de hoy nunca llegaría a Fenix. */
-function earliestDispatchDate(): string {
-  return limaTodayKey(new Date(Date.now() + 86_400_000));
-}
+const COURIER_BLURB: Record<string, string> = {
+  fenix: "Despacho urgente desde el almacén regional de Fénix, sin guía Aliclik previa.",
+  axel: "Reparto en Lima Metropolitana y Callao. Axel recoge del almacén el mismo día.",
+};
 
 /**
- * Crear una guía Fenix DIRECTA desde un pedido (sin guía Aliclik madre), para
- * urgencias que salen del almacén regional de Fénix. Buscar pedido (local +
- * Shopify en vivo) → revisar destino/productos/stock/duplicados → fecha de
- * despacho + código autogenerado editable → crear. La guía nace En ruta y entra
- * al Excel de programación de su fecha.
+ * Crear una guía DIRECTA desde un pedido, sin guía Aliclik madre. Buscar pedido
+ * (local + Shopify en vivo) → revisar destino/productos/duplicados —y stock,
+ * cuando el courier reparte desde el suyo— → fecha de despacho + código
+ * autogenerado editable → crear. La guía nace En ruta.
+ *
+ * Es multi-courier porque Axel lo necesita para existir: no manda reporte de
+ * guías, así que si nadie le crea una, sus pedidos se quedan sin courier y sin
+ * costo logístico. Ver el comentario de la sección en envios/actions.ts.
  */
-export function DirectFenixGuideModal({
+export function DirectGuideModal({
   onClose,
   onCreated,
 }: {
@@ -34,16 +37,17 @@ export function DirectFenixGuideModal({
   /** Recibe el id de la guía creada para que el tablero salte a "En ruta" y la resalte. */
   onCreated: (shipmentId?: string) => void;
 }) {
+  const [courier, setCourier] = useState<string>(DIRECT_GUIDE_COURIERS[0]?.id ?? "fenix");
   const [q, setQ] = useState("");
   const [results, setResults] = useState<OrderLinkCandidate[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [shopifyResults, setShopifyResults] = useState<ShopifyOrderCandidate[] | null>(null);
   const [searchingShopify, setSearchingShopify] = useState(false);
 
-  const [preview, setPreview] = useState<DirectFenixGuidePreview | null>(null);
+  const [preview, setPreview] = useState<DirectGuidePreview | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
 
-  const [dispatchDate, setDispatchDate] = useState(earliestDispatchDate());
+  const [dispatchDate, setDispatchDate] = useState(earliestDispatchDay(courier));
   const [guideCode, setGuideCode] = useState("");
   const [codeTouched, setCodeTouched] = useState(false);
   const [note, setNote] = useState("");
@@ -96,7 +100,7 @@ export function DirectFenixGuideModal({
   function loadPreview(input: { orderId?: string; orderGid?: string; storeId?: string }) {
     setLoadingPreview(true);
     setMsg(null);
-    void previewDirectFenixGuide(input).then((r) => {
+    void previewDirectGuide({ ...input, courier }).then((r) => {
       setLoadingPreview(false);
       if ("error" in r) {
         setMsg(r.error);
@@ -107,10 +111,23 @@ export function DirectFenixGuideModal({
     });
   }
 
+  /**
+   * Cambiar de courier descarta la revisión en curso: los gates (stock,
+   * cobertura, fecha mínima) son distintos, así que una revisión hecha para
+   * Fénix no dice nada sobre si el pedido puede salir con Axel.
+   */
+  function changeCourier(next: string) {
+    setCourier(next);
+    setPreview(null);
+    setMsg(null);
+    setDispatchDate((d) => (d < earliestDispatchDay(next) ? earliestDispatchDay(next) : d));
+  }
+
   function create() {
     if (!preview) return;
     start(async () => {
-      const r = await createDirectFenixGuide({
+      const r = await createDirectGuide({
+        courier,
         orderId: preview.orderId,
         dispatchDateIso: new Date(dispatchDate).toISOString(),
         guideCode,
@@ -121,11 +138,14 @@ export function DirectFenixGuideModal({
         return;
       }
       setMsg(null);
-      setCreatedNotice(r.notice ?? "Guía Fenix directa creada.");
+      setCreatedNotice(r.notice ?? `Guía ${courierLabel} directa creada.`);
       onCreated(r.shipmentId);
     });
   }
 
+  const courierLabel =
+    DIRECT_GUIDE_COURIERS.find((c) => c.id === courier)?.label ?? courier;
+  const earliest = preview?.earliestDispatch ?? earliestDispatchDay(courier);
   const blockedByGuide = !!preview && preview.activeGuides.length > 0;
   const blockedByOrder = !!preview && (preview.cancelled || preview.refundedTotal);
   const blockedByStock = !!preview && !preview.stockOk;
@@ -135,7 +155,7 @@ export function DirectFenixGuideModal({
     !blockedByOrder &&
     !blockedByStock &&
     !!dispatchDate &&
-    dispatchDate >= earliestDispatchDate() &&
+    dispatchDate >= earliest &&
     !!guideCode.trim();
 
   return (
@@ -146,9 +166,9 @@ export function DirectFenixGuideModal({
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-2.5">
           <div>
-            <p className="text-sm font-semibold text-slate-900">Guía Fenix directa</p>
+            <p className="text-sm font-semibold text-slate-900">Guía {courierLabel} directa</p>
             <p className="text-xs text-slate-500">
-              Despacho urgente desde el almacén regional de Fénix, sin guía Aliclik previa.
+              {COURIER_BLURB[courier] ?? "Guía creada desde un pedido, sin guía Aliclik previa."}
             </p>
           </div>
           <button onClick={onClose} className="text-sm text-slate-400 hover:text-slate-700">
@@ -156,14 +176,37 @@ export function DirectFenixGuideModal({
           </button>
         </div>
 
+        {!createdNotice && DIRECT_GUIDE_COURIERS.length > 1 && (
+          <div className="flex items-center gap-1.5 pt-2.5">
+            <span className="text-xs text-slate-500">Courier:</span>
+            {DIRECT_GUIDE_COURIERS.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => changeCourier(c.id)}
+                className={cn(
+                  "rounded-lg border px-2.5 py-1 text-xs",
+                  c.id === courier
+                    ? "border-brand-500 bg-brand-50 font-medium text-brand-700"
+                    : "border-slate-200 text-slate-600 hover:bg-slate-50",
+                )}
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {createdNotice ? (
           <div className="space-y-3 pt-3">
             <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
               {createdNotice}
             </p>
             <p className="text-xs text-slate-500">
-              Al cerrar te llevamos a la pestaña <b>En ruta</b>, donde queda la guía. Para enviarla a
-              Fenix, filtra por su fecha de despacho y descarga el Excel de programación.
+              Al cerrar te llevamos a la pestaña <b>En ruta</b>, donde queda la guía.{" "}
+              {courier === "fenix"
+                ? "Para enviarla a Fenix, filtra por su fecha de despacho y descarga el Excel de programación."
+                : `El costo del envío sale de la tarifa de ${courierLabel} para el distrito del pedido; su liquidación diaria confirmará después la entrega y lo cobrado.`}
             </p>
             <button
               onClick={onClose}
@@ -318,7 +361,9 @@ export function DirectFenixGuideModal({
 
             <section className="rounded-xl border border-slate-200">
               <p className="border-b border-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
-                Productos y stock Fenix{preview.city ? ` en ${titleCaseCity(preview.city)}` : ""}
+                {preview.stockChecked
+                  ? `Productos y stock Fenix${preview.city ? ` en ${titleCaseCity(preview.city)}` : ""}`
+                  : "Productos"}
               </p>
               <ul className="divide-y divide-slate-100">
                 {preview.lineItems.length === 0 && (
@@ -334,7 +379,10 @@ export function DirectFenixGuideModal({
                         {li.title || "—"}
                         {li.quantity > 1 && <span className="text-xs text-slate-400"> ×{li.quantity}</span>}
                       </span>
-                      {preview.stockOk ? (
+                      {/* El semáforo de stock es de Fénix: para los demás
+                          couriers el paquete sale de nuestro almacén, así que
+                          un "✓ stock" aquí afirmaría algo que no se comprobó. */}
+                      {!preview.stockChecked ? null : preview.stockOk ? (
                         <span className="text-xs font-medium text-emerald-600">✓ stock</span>
                       ) : missing ? (
                         <span className="text-xs font-medium text-rose-600">✗ sin stock</span>
@@ -347,20 +395,22 @@ export function DirectFenixGuideModal({
                   );
                 })}
               </ul>
-              <p
-                className={cn(
-                  "border-t px-3 py-1.5 text-xs font-medium",
-                  preview.stockOk
-                    ? "border-emerald-100 bg-emerald-50/70 text-emerald-700"
-                    : "border-rose-100 bg-rose-50/70 text-rose-700",
-                )}
-              >
-                {preview.stockOk
-                  ? "Stock Fenix disponible para todo el pedido."
-                  : preview.stockReason === "sin_cobertura"
-                    ? "Fenix no tiene cobertura en este destino."
-                    : "Falta stock Fenix para parte del pedido. Actualiza Stock Fenix e intenta de nuevo."}
-              </p>
+              {preview.stockChecked && (
+                <p
+                  className={cn(
+                    "border-t px-3 py-1.5 text-xs font-medium",
+                    preview.stockOk
+                      ? "border-emerald-100 bg-emerald-50/70 text-emerald-700"
+                      : "border-rose-100 bg-rose-50/70 text-rose-700",
+                  )}
+                >
+                  {preview.stockOk
+                    ? "Stock Fenix disponible para todo el pedido."
+                    : preview.stockReason === "sin_cobertura"
+                      ? "Fenix no tiene cobertura en este destino."
+                      : "Falta stock Fenix para parte del pedido. Actualiza Stock Fenix e intenta de nuevo."}
+                </p>
+              )}
             </section>
 
             {blockedByOrder && (
@@ -377,7 +427,7 @@ export function DirectFenixGuideModal({
                   <p key={g.id} className="mt-0.5 font-mono">
                     {g.guide_code}{" "}
                     <span className="font-sans">
-                      ({g.courier === "fenix" ? "Fenix" : "Aliclik"} · {g.delivery_status})
+                      ({courierName(g.courier)} · {g.delivery_status})
                     </span>
                   </p>
                 ))}
@@ -394,17 +444,17 @@ export function DirectFenixGuideModal({
 
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <label className="block text-xs text-slate-500">
-                Fecha de despacho (desde mañana)
+                Fecha de despacho ({courier === "fenix" ? "desde mañana" : "desde hoy"})
                 <input
                   type="date"
                   value={dispatchDate}
-                  min={earliestDispatchDate()}
+                  min={earliest}
                   onChange={(e) => setDispatchDate(e.target.value)}
                   className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
                 />
               </label>
               <label className="block text-xs text-slate-500">
-                N° de guía Fenix
+                N° de guía {courierLabel}
                 <div className="mt-0.5 flex gap-2">
                   <input
                     value={guideCode}
@@ -448,7 +498,7 @@ export function DirectFenixGuideModal({
               disabled={pending || !canCreate}
               className="w-full rounded-lg border border-orange-300 bg-orange-50 px-3 py-1.5 text-sm font-medium text-orange-800 hover:bg-orange-100 disabled:opacity-50"
             >
-              {pending ? "Creando…" : "Crear guía Fenix directa"}
+              {pending ? "Creando…" : `Crear guía ${courierLabel} directa`}
             </button>
           </div>
         )}

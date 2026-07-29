@@ -427,6 +427,79 @@ export interface SettlementMasterEffect {
   reason: string;
 }
 
+/**
+ * Código de la guía que nace de una liquidación. DETERMINISTA a propósito: el
+ * índice único es (courier, guide_code), así que reaplicar la misma liquidación
+ * choca contra la guía que ya creó en vez de inventar una segunda para el mismo
+ * pedido.
+ */
+export function settlementGuideCode(
+  courier: string,
+  orderName: string | null,
+  orderId: string,
+): string {
+  const base = (orderName ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  return `${courier.toUpperCase()}-${base || orderId.replace(/-/g, "").slice(0, 10).toUpperCase()}`;
+}
+
+/** La guía que hay que crear para que un pedido de la liquidación tenga courier. */
+export interface SettlementGuideNeed {
+  order_id: string;
+  store_id: string;
+  order_name: string | null;
+  customer_name: string | null;
+  district: string | null;
+  province: string | null;
+  region: string | null;
+  guide_code: string;
+  /** true = la hoja declara entrega; false = rechazo. */
+  delivered: boolean;
+}
+
+/**
+ * Pedidos de la liquidación que se quedarían SIN COURIER si nadie hace nada.
+ *
+ * Axel no manda reporte de guías —solo esta hoja—, así que un pedido suyo puede
+ * llegar hasta aquí sin ninguna fila en `shipments`. Y sin guía no hay
+ * `current_courier`, y sin `current_courier` el motor de Costos no puede
+ * resolver la tarifa del courier: el envío sale con el costo en blanco para
+ * siempre. Crear la guía al aplicar la liquidación cierra ese agujero.
+ *
+ * La condición es `current_courier === null`, es decir "el Master no conoce
+ * NINGUNA guía de este pedido". Si ya conoce una, no se toca: lo que sabe el
+ * Master viene de un reporte o de una guía que alguien creó, y ambas cosas son
+ * mejor fuente que una hoja que identifica al cliente por su nombre.
+ */
+export function settlementGuidesToCreate(
+  courier: string,
+  rows: readonly { line: SettlementLineInput; facts: SettlementMasterFacts | null }[],
+): SettlementGuideNeed[] {
+  const out: SettlementGuideNeed[] = [];
+  const seen = new Set<string>();
+  for (const { line, facts } of rows) {
+    const target = lineEffect(line);
+    if (!target || !line.order_id || !facts) continue;
+    if (facts.current_courier !== null) continue;
+    if (seen.has(line.order_id)) continue;
+    seen.add(line.order_id);
+    out.push({
+      order_id: line.order_id,
+      store_id: facts.store_id,
+      order_name: line.order_name,
+      customer_name: line.customer_name ?? null,
+      // El distrito de la hoja es lo que el courier escribió al repartir; el del
+      // Master es el del pedido. Se prefiere el del Master porque es el que usan
+      // las tarifas, y la hoja solo rellena cuando aquél falta.
+      district: facts.district ?? line.district ?? null,
+      province: facts.province,
+      region: facts.region,
+      guide_code: settlementGuideCode(courier, line.order_name, line.order_id),
+      delivered: target === "entregado",
+    });
+  }
+  return out;
+}
+
 /** Los cambios que aplicar al Master desde una liquidación ya revisada. */
 export function settlementMasterEffects(
   lines: readonly SettlementLineInput[],

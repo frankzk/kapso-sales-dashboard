@@ -17,6 +17,8 @@
 //   4. En proceso                — hay gestión logística iniciada sin resultado.
 //   5. Pendiente                 — todavía no arrancó bien el proceso logístico.
 
+import { AGENCY_COURIER_IDS } from "@/lib/couriers/catalog";
+
 export type GeneralStatus =
   | "pendiente"
   | "en_proceso"
@@ -251,7 +253,11 @@ function wasDispatched(g: GuideSnapshot): boolean {
   return Boolean(g.dispatched_at || g.out_for_delivery_at || g.pickup_state);
 }
 
-const AGENCY_COURIERS = new Set(["shalom", "olva"]);
+// Del catálogo, no de una lista suelta: cuál courier entrega en agencia es un
+// hecho sobre el courier, y tenerlo escrito en dos sitios es exactamente cómo
+// se desincronizan (dar de alta una agencia nueva y que aquí siga sin constar
+// deja al pedido con el ciclo de vida de reparto a domicilio, §10).
+const AGENCY_COURIERS = new Set(AGENCY_COURIER_IDS);
 
 export function isAgencyCourier(courier: string | null | undefined): boolean {
   return AGENCY_COURIERS.has((courier ?? "").toLowerCase());

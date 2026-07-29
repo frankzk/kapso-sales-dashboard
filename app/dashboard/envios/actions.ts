@@ -26,6 +26,7 @@ import {
   isCallable,
   isFenixCity,
   isValidStatus,
+  earliestDispatchDay,
   limaTodayKey,
   nextShipmentTransition,
   normalizeCity,
@@ -53,6 +54,8 @@ import {
   type FenixStockRow,
 } from "@/lib/fenix";
 import { normalizePhone } from "@/lib/phone";
+import { isDirectGuideCourier } from "@/lib/couriers/catalog";
+import { courierLabel } from "@/lib/couriers/registry";
 import {
   ajusteDelta,
   consumeFenixStockOnDelivery,
@@ -1183,12 +1186,31 @@ export async function createFenixGuide(
   return { notice: `Guía Fenix ${r.guideCode} creada.` };
 }
 
-// ── Guía Fenix DIRECTA: desde un pedido, sin guía Aliclik madre ──────────────
-// Urgencias que salen del almacén regional de Fénix sin pasar por Aliclik. La
-// guía nace En ruta con su fecha de despacho (desde mañana) y entra al Excel de
-// programación de ese día como cualquier guía Fénix. Gate de creación: cobertura
-// + stock de TODOS los productos del pedido; el descuento de inventario sigue
-// ocurriendo al entregar (salida_entrega), igual que el resto de guías.
+// ── Guía DIRECTA: desde un pedido, sin guía Aliclik madre ────────────────────
+//
+// Nació para Fénix y ahora sirve a cualquier courier del catálogo marcado
+// `direct` (lib/couriers/catalog.ts). Lo que cambia entre uno y otro son los
+// gates, no el flujo:
+//
+//   · FÉNIX reparte provincias desde su propio almacén regional, así que hay que
+//     comprobar cobertura y stock de TODOS los productos antes de prometer el
+//     despacho, y la fecha es desde MAÑANA: el Excel de programación del día ya
+//     suele estar enviado.
+//
+//   · AXEL reparte Lima Metropolitana y Callao recogiendo de nuestro almacén el
+//     mismo día. No hay stock suyo que consultar ni Excel que alcanzar, así que
+//     no tiene gate de inventario y la fecha admite HOY.
+//
+// Por qué existe para Axel: es el único courier de Lima y no manda reporte de
+// guías —solo su liquidación diaria—, así que sin esto sus pedidos no tienen
+// guía, `order_master.current_courier` se queda en NULL y sus tarifas de Costos
+// no resuelven nunca. La liquidación también engancha (ver
+// app/dashboard/liquidaciones/actions.ts), pero llega un día tarde y solo cubre
+// lo que Axel entregó: el despacho es lo que hace que el costo exista desde el
+// minuto uno.
+//
+// El descuento de inventario sigue ocurriendo al entregar (salida_entrega),
+// igual que el resto de guías.
 
 /** Row shape shared by the preview and the create re-validation. */
 interface DirectGuideOrderRecord {
@@ -1318,7 +1340,18 @@ async function findGuidesOfOrder(
 
 const DIRECT_GUIDE_ACTIVE_STATUSES = new Set(["pendiente", "en_ruta", "por_preparar"]);
 
-export interface DirectFenixGuidePreview {
+/**
+ * Courier de una guía directa, validado contra el catálogo. Se resuelve aquí y
+ * no en el cliente: el courier decide qué gates corren, así que aceptar el que
+ * llegue permitiría saltárselos mandando otro id.
+ */
+function resolveDirectCourier(id: string | null | undefined): string | null {
+  const candidate = (id ?? "fenix").trim().toLowerCase();
+  return isDirectGuideCourier(candidate) ? candidate : null;
+}
+
+export interface DirectGuidePreview {
+  courier: string;
   orderId: string;
   storeId: string;
   orderName: string | null;
@@ -1336,11 +1369,16 @@ export interface DirectFenixGuidePreview {
     region: string | null;
     source: "shopify" | "carrito" | "lead" | null;
   };
+  /** Almacén regional de Fénix. Vacío para los couriers sin stock propio. */
   city: string;
   schedule: FenixDeliverySchedule | null;
+  /** true cuando el courier no reparte desde stock suyo (Axel): no hay gate. */
+  stockChecked: boolean;
   stockOk: boolean;
   stockReason: "sin_cobertura" | "sin_stock" | null;
   uncovered: string[];
+  /** Primera fecha de despacho admitida (YYYY-MM-DD), según el courier. */
+  earliestDispatch: string;
   activeGuides: DirectGuideExisting[];
   closedGuidesCount: number;
   warnings: string[];
@@ -1399,16 +1437,20 @@ export async function searchShopifyOrdersForDirectGuide(
  * (orderGid + storeId) is captured into `orders` first — same pattern as
  * linkShipmentToShopifyOrder — so the create step always works from a local id.
  */
-export async function previewDirectFenixGuide(input: {
+export async function previewDirectGuide(input: {
+  courier?: string;
   orderId?: string;
   orderGid?: string;
   storeId?: string;
-}): Promise<DirectFenixGuidePreview | { error: string }> {
+}): Promise<DirectGuidePreview | { error: string }> {
   const sb = await createServerSupabase();
   const {
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
+
+  const courier = resolveDirectCourier(input.courier);
+  if (!courier) return { error: "Courier inválido para una guía directa." };
 
   const admin = createAdminSupabase();
   let orderId = input.orderId ?? null;
@@ -1458,27 +1500,37 @@ export async function previewDirectFenixGuide(input: {
   const { address, source } = await resolveDirectGuideAddress(admin, order);
   const district = address?.city ?? null;
   const region = address?.province ?? null;
-  const city = deriveFenixCoverageCity(district, region);
-
-  const { data: store } = await admin
-    .from("stores")
-    .select("org_id")
-    .eq("id", order.store_id)
-    .maybeSingle();
-  const orgId = (store as { org_id?: string } | null)?.org_id;
-  if (!orgId) return { error: "No se encontró la organización de la tienda." };
-  const { data: stock, error: stockError } = await admin
-    .from("fenix_stock")
-    .select("city,product,sku,quantity")
-    .eq("org_id", orgId);
-  if (stockError) return { error: `No se pudo consultar el stock Fenix: ${stockError.message}` };
+  const stockChecked = courier === "fenix";
+  const city = stockChecked ? deriveFenixCoverageCity(district, region) : "";
 
   const lineItems = (order.line_items ?? []).map((li) => ({
     title: li.title ?? "",
     quantity: li.quantity ?? 1,
     sku: li.sku ?? null,
   }));
-  const check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
+
+  // El stock solo se consulta para el courier que reparte desde SU almacén.
+  // Para Axel el paquete sale del nuestro, así que preguntar por `fenix_stock`
+  // bloquearía la guía por un inventario que no tiene nada que ver con él.
+  let check: { ok: boolean; reason?: "sin_cobertura" | "sin_stock"; uncovered: string[] } = {
+    ok: true,
+    uncovered: [],
+  };
+  if (stockChecked) {
+    const { data: store } = await admin
+      .from("stores")
+      .select("org_id")
+      .eq("id", order.store_id)
+      .maybeSingle();
+    const orgId = (store as { org_id?: string } | null)?.org_id;
+    if (!orgId) return { error: "No se encontró la organización de la tienda." };
+    const { data: stock, error: stockError } = await admin
+      .from("fenix_stock")
+      .select("city,product,sku,quantity")
+      .eq("org_id", orgId);
+    if (stockError) return { error: `No se pudo consultar el stock Fenix: ${stockError.message}` };
+    check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
+  }
 
   const guides = await findGuidesOfOrder(admin, order);
   const activeGuides = guides.filter((g) => DIRECT_GUIDE_ACTIVE_STATUSES.has(g.delivery_status));
@@ -1492,7 +1544,14 @@ export async function previewDirectFenixGuide(input: {
       "El pedido no tiene dirección de envío registrada; la guía se creará sin dirección y podrás completarla en el panel del envío.",
     );
   }
-  warnings.push("El pedido no tiene coordenadas GPS; el Excel de programación saldrá sin ubicación.");
+  if (courier === "fenix") {
+    warnings.push("El pedido no tiene coordenadas GPS; el Excel de programación saldrá sin ubicación.");
+  }
+  if (courier === "axel" && !district) {
+    warnings.push(
+      "El pedido no tiene distrito, así que no se podrá resolver la tarifa de Axel y el costo del envío saldrá como pendiente de configurar.",
+    );
+  }
   if (!refundedTotal && totalRefunded > 0) {
     warnings.push("El pedido tiene un reembolso parcial en Shopify; verifica el monto a cobrar.");
   }
@@ -1506,6 +1565,7 @@ export async function previewDirectFenixGuide(input: {
   );
 
   return {
+    courier,
     orderId: order.id,
     storeId: order.store_id,
     orderName: order.name,
@@ -1524,10 +1584,12 @@ export async function previewDirectFenixGuide(input: {
       source,
     },
     city,
-    schedule: getFenixDeliverySchedule(city, district),
+    schedule: stockChecked ? getFenixDeliverySchedule(city, district) : null,
+    stockChecked,
     stockOk: check.ok,
     stockReason: check.ok ? null : check.reason ?? null,
     uncovered: check.uncovered,
+    earliestDispatch: earliestDispatchDay(courier),
     activeGuides,
     closedGuidesCount,
     warnings,
@@ -1535,12 +1597,14 @@ export async function previewDirectFenixGuide(input: {
 }
 
 /**
- * Create the direct Fenix guide. Never trusts the preview: re-runs every gate
+ * Create the direct guide. Never trusts the preview: re-runs every gate
  * server-side (access → order sanity → destination → duplicates → stock for
- * every line item → dispatch date → guide code) before inserting the
- * courier='fenix' row — En ruta, sin guía madre, marcada created_via='fenix_directo'.
+ * every line item, cuando el courier reparte desde su almacén → dispatch date →
+ * guide code) before inserting the row — En ruta, sin guía madre, marcada
+ * created_via='<courier>_directo'.
  */
-export async function createDirectFenixGuide(input: {
+export async function createDirectGuide(input: {
+  courier?: string;
   orderId: string;
   dispatchDateIso: string;
   guideCode?: string;
@@ -1551,6 +1615,10 @@ export async function createDirectFenixGuide(input: {
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
+
+  const courier = resolveDirectCourier(input.courier);
+  if (!courier) return { error: "Courier inválido para una guía directa." };
+  const courierName = courierLabel(courier);
 
   // RLS: the order resolves only for callers with access to its store.
   const { data } = await sb
@@ -1573,44 +1641,53 @@ export async function createDirectFenixGuide(input: {
   const { address } = await resolveDirectGuideAddress(admin, order);
   const district = address?.city ?? null;
   const region = address?.province ?? null;
-  const city = deriveFenixCoverageCity(district, region);
+  const stockChecked = courier === "fenix";
+  const city = stockChecked ? deriveFenixCoverageCity(district, region) : "";
   if (!district) {
     return {
-      error:
-        "El pedido no tiene distrito/ciudad de envío, así que no se puede validar la cobertura ni el stock Fenix. Complétalo en Shopify y reintenta.",
+      error: stockChecked
+        ? "El pedido no tiene distrito/ciudad de envío, así que no se puede validar la cobertura ni el stock Fenix. Complétalo en Shopify y reintenta."
+        : `El pedido no tiene distrito de envío, así que ${courierName} no sabría a dónde ir. Complétalo en Shopify y reintenta.`,
     };
   }
 
-  const { data: store } = await admin
-    .from("stores")
-    .select("org_id")
-    .eq("id", order.store_id)
-    .maybeSingle();
-  const orgId = (store as { org_id?: string } | null)?.org_id;
-  if (!orgId) return { error: "No se encontró la organización de la tienda." };
-
-  // Duplicate gate: an active guide (either courier) already covers this order.
+  // Duplicate gate: an active guide (any courier) already covers this order.
   const guides = await findGuidesOfOrder(admin, order);
   const active = guides.find((g) => DIRECT_GUIDE_ACTIVE_STATUSES.has(g.delivery_status));
   if (active) {
-    const courierLabel = active.courier === "fenix" ? "Fenix" : "Aliclik";
     return {
-      error: `Este pedido ya tiene una guía activa: ${active.guide_code} (${courierLabel}, ${labelOfStatus(active.delivery_status)}). Gestiónala o anúlala antes de crear una guía directa.`,
+      error: `Este pedido ya tiene una guía activa: ${active.guide_code} (${courierLabel(active.courier)}, ${labelOfStatus(active.delivery_status)}). Gestiónala o anúlala antes de crear una guía directa.`,
     };
   }
 
-  // Stock gate: EVERY line item must have stock in the destination city.
-  const { data: stock, error: stockError } = await admin
-    .from("fenix_stock")
-    .select("city,product,sku,quantity")
-    .eq("org_id", orgId);
-  if (stockError) return { error: `No se pudo consultar el stock Fenix: ${stockError.message}` };
   const lineItems = (order.line_items ?? []).map((li) => ({
     title: li.title ?? "",
     quantity: li.quantity ?? 1,
     sku: li.sku ?? null,
   }));
-  const check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
+
+  // Stock gate: EVERY line item must have stock in the destination city. Solo
+  // para el courier que reparte desde su propio almacén — ver el comentario de
+  // la sección.
+  let check: { ok: boolean; reason?: "sin_cobertura" | "sin_stock"; uncovered: string[] } = {
+    ok: true,
+    uncovered: [],
+  };
+  if (stockChecked) {
+    const { data: store } = await admin
+      .from("stores")
+      .select("org_id")
+      .eq("id", order.store_id)
+      .maybeSingle();
+    const orgId = (store as { org_id?: string } | null)?.org_id;
+    if (!orgId) return { error: "No se encontró la organización de la tienda." };
+    const { data: stock, error: stockError } = await admin
+      .from("fenix_stock")
+      .select("city,product,sku,quantity")
+      .eq("org_id", orgId);
+    if (stockError) return { error: `No se pudo consultar el stock Fenix: ${stockError.message}` };
+    check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
+  }
   if (!check.ok) {
     if (check.reason === "sin_stock") {
       return {
@@ -1620,14 +1697,20 @@ export async function createDirectFenixGuide(input: {
     return { error: `Fenix no tiene cobertura en ${district || "el destino del pedido"}.` };
   }
 
-  // Dispatch date: required, from tomorrow (Lima) onward — the day's Excel is
-  // usually already sent, so a same-day guide would never reach Fenix.
+  // Dispatch date: required. Fénix desde MAÑANA (el Excel del día ya suele estar
+  // enviado, así que una guía de hoy no le llegaría); Axel recoge el mismo día.
   const dispatchDay = (input.dispatchDateIso || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dispatchDay) || Number.isNaN(Date.parse(input.dispatchDateIso))) {
     return { error: "Elige la fecha de despacho." };
   }
-  if (dispatchDay <= limaTodayKey()) {
-    return { error: "Elige una fecha de despacho desde mañana." };
+  const earliest = earliestDispatchDay(courier);
+  if (dispatchDay < earliest) {
+    return {
+      error:
+        courier === "fenix"
+          ? "Elige una fecha de despacho desde mañana."
+          : "La fecha de despacho no puede ser anterior a hoy.",
+    };
   }
 
   const code = (input.guideCode?.trim().toUpperCase() || rescheduleGuideCode(order.name, input.dispatchDateIso)).trim();
@@ -1636,7 +1719,7 @@ export async function createDirectFenixGuide(input: {
   }
 
   const insertRow = {
-    courier: "fenix",
+    courier,
     guide_code: code,
     store_id: order.store_id,
     order_id: order.id,
@@ -1657,8 +1740,10 @@ export async function createDirectFenixGuide(input: {
     delivery_status: "en_ruta",
     status_category: "in_route",
     next_followup_at: input.dispatchDateIso,
-    fenix_eligible: true,
-    created_via: "fenix_directo",
+    // `fenix_eligible` es la marca de "esta guía entra al Excel de programación
+    // de Fénix": una guía de Axel no debe colarse ahí.
+    fenix_eligible: stockChecked,
+    created_via: `${courier}_directo`,
   };
   let insertResult = await admin.from("shipments").insert(insertRow).select("id").single();
   if (
@@ -1676,8 +1761,8 @@ export async function createDirectFenixGuide(input: {
     const dup = insertResult.error?.code === "23505";
     return {
       error: dup
-        ? `Ya existe una guía Fenix con el código ${code}. Cambia la fecha o edita el código.`
-        : (insertResult.error?.message ?? "No se pudo crear la guía Fenix."),
+        ? `Ya existe una guía ${courierName} con el código ${code}. Cambia la fecha o edita el código.`
+        : (insertResult.error?.message ?? `No se pudo crear la guía ${courierName}.`),
     };
   }
   const childId = (insertResult.data as { id: string }).id;
@@ -1691,7 +1776,10 @@ export async function createDirectFenixGuide(input: {
     agent: user.id,
     kind: "reroute",
     new_status: null,
-    note: [`Guía Fenix directa creada: ${code} (pedido ${order.name ?? "sin número"}).`, input.note?.trim() || null]
+    note: [
+      `Guía ${courierName} directa creada: ${code} (pedido ${order.name ?? "sin número"}).`,
+      input.note?.trim() || null,
+    ]
       .filter(Boolean)
       .join(" "),
     next_followup_at: input.dispatchDateIso,
@@ -1708,7 +1796,7 @@ export async function createDirectFenixGuide(input: {
   // guía— y la resalte: creándola desde "Pendiente" el refresco no muestra nada
   // porque la guía nueva no pertenece a esa lista.
   return {
-    notice: `Guía Fenix directa ${code} creada — En ruta, despacho ${fecha}.`,
+    notice: `Guía ${courierName} directa ${code} creada — En ruta, despacho ${fecha}.`,
     shipmentId: childId,
   };
 }

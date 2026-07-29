@@ -942,6 +942,23 @@ export function limaTodayKey(now: Date = new Date()): string {
   return dateKeyInTimeZone(now, "America/Lima");
 }
 
+/**
+ * Primer día en que un courier puede despachar una guía directa ("YYYY-MM-DD",
+ * Lima).
+ *
+ * Fénix necesita un día de margen porque su Excel de programación del día ya
+ * suele estar enviado, así que una guía de hoy no le llegaría. Axel recoge de
+ * nuestro almacén en Lima el mismo día, y obligarle a esperar a mañana le
+ * quitaría un día de reparto a cada pedido.
+ *
+ * Vive aquí, y no en la acción de servidor, porque la regla la necesitan los dos
+ * lados: el calendario del modal para no ofrecer una fecha imposible, y el
+ * servidor para no fiarse de lo que llegue del cliente.
+ */
+export function earliestDispatchDay(courier: string, now: Date = new Date()): string {
+  return courier === "fenix" ? limaTodayKey(new Date(now.getTime() + 86_400_000)) : limaTodayKey(now);
+}
+
 /** Agrega las guías hijas en los cortes del strip/popup. Pure (nowMs inyectable). */
 export function computeReprogramStats(rows: ReprogramChildRow[], nowMs: number): ReprogramStats {
   const last30Cut = nowMs - 30 * 86_400_000;
