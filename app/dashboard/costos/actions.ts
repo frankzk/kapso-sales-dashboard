@@ -15,6 +15,8 @@ import { getAdminOrgs, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { COST_CONCEPTS, type CostConcept } from "@/lib/costs";
 import { refreshOrderCoverage } from "@/lib/order-coverage";
+import { getStoreCreds } from "@/lib/ingest";
+import { searchProductVariants } from "@/lib/shopify";
 
 const COSTS_PATH = "/dashboard/costos";
 
@@ -175,12 +177,125 @@ export interface ProductCostInput {
   effectiveFrom: string;
 }
 
+export interface ProductCatalogItem {
+  key: string;
+  sku: string | null;
+  title: string;
+  storeIds: string[];
+  storeNames: string[];
+  variantIds: string[];
+}
+
+async function loadOrgProductCatalog(orgId: string): Promise<ProductCatalogItem[]> {
+  const admin = createAdminSupabase();
+  const { data: storeRows } = await admin
+    .from("stores")
+    .select("id,name")
+    .eq("org_id", orgId)
+    .eq("status", "active")
+    .order("name");
+  const stores = (storeRows ?? []) as { id: string; name: string }[];
+  const byProduct = new Map<string, ProductCatalogItem>();
+
+  await Promise.all(
+    stores.map(async (store) => {
+      const creds = await getStoreCreds(store.id, admin);
+      if (!creds?.shopify_token) return;
+      try {
+        const variants = await searchProductVariants({
+          domain: creds.shopify_domain,
+          token: creds.shopify_token,
+          query: "",
+          first: 250,
+        });
+        for (const variant of variants) {
+          const sku = variant.sku?.trim() || null;
+          const key = sku
+            ? `sku:${sku.toLowerCase()}`
+            : `variant:${store.id}:${variant.variantId}`;
+          const current = byProduct.get(key);
+          if (current) {
+            if (!current.storeIds.includes(store.id)) {
+              current.storeIds.push(store.id);
+              current.storeNames.push(store.name);
+            }
+            if (!current.variantIds.includes(variant.variantId)) {
+              current.variantIds.push(variant.variantId);
+            }
+          } else {
+            byProduct.set(key, {
+              key,
+              sku,
+              title: variant.title,
+              storeIds: [store.id],
+              storeNames: [store.name],
+              variantIds: [variant.variantId],
+            });
+          }
+        }
+      } catch {
+        // Una tienda sin read_products no debe impedir abrir todo el módulo.
+      }
+    }),
+  );
+
+  return [...byProduct.values()].sort(
+    (a, b) => a.title.localeCompare(b.title) || (a.sku ?? "").localeCompare(b.sku ?? ""),
+  );
+}
+
+async function validateCatalogSku(
+  orgId: string,
+  storeId: string | null | undefined,
+  sku: string,
+): Promise<{ title: string } | { error: string }> {
+  const admin = createAdminSupabase();
+  let storesQuery = admin
+    .from("stores")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("status", "active");
+  if (storeId) storesQuery = storesQuery.eq("id", storeId);
+  const { data: storeRows } = await storesQuery;
+  const stores = (storeRows ?? []) as { id: string }[];
+  if (!stores.length) return { error: "La tienda seleccionada no pertenece a la organización." };
+
+  let catalogAvailable = false;
+  for (const store of stores) {
+    const creds = await getStoreCreds(store.id, admin);
+    if (!creds?.shopify_token) continue;
+    try {
+      const variants = await searchProductVariants({
+        domain: creds.shopify_domain,
+        token: creds.shopify_token,
+        query: `sku:${sku}`,
+        first: 50,
+      });
+      catalogAvailable = true;
+      const exact = variants.find(
+        (variant) => variant.sku?.trim().toLowerCase() === sku.trim().toLowerCase(),
+      );
+      if (exact) return { title: exact.title };
+    } catch {
+      // Probamos las demás tiendas antes de devolver un error de catálogo.
+    }
+  }
+
+  return {
+    error: catalogAvailable
+      ? "Selecciona un producto o variante existente del catálogo de Aurela o Kenku Perú."
+      : "No se pudo validar el catálogo de Shopify. Revisa el permiso read_products.",
+  };
+}
+
 export async function upsertProductCost(input: ProductCostInput): Promise<CostActionState> {
   const auth = await requireCostAdmin(input.orgId);
   if ("error" in auth) return auth;
 
   const sku = input.sku.trim();
   if (!sku) return { error: "Indica el SKU." };
+  const catalogProduct = await validateCatalogSku(input.orgId, input.storeId, sku);
+  if ("error" in catalogProduct) return catalogProduct;
   const unitCost = normalizeAmount(input.unitCost);
   if (unitCost === null || unitCost < 0) return { error: "Costo unitario inválido." };
   if (!DATE_RE.test(input.effectiveFrom)) return { error: "Fecha de vigencia inválida." };
@@ -211,7 +326,7 @@ export async function upsertProductCost(input: ProductCostInput): Promise<CostAc
     org_id: input.orgId,
     store_id: input.storeId || null,
     sku,
-    product_name: input.productName?.trim() || null,
+    product_name: catalogProduct.title,
     supplier: input.supplier?.trim() || null,
     batch: input.batch?.trim() || null,
     unit_cost: unitCost,
@@ -293,19 +408,22 @@ export interface CostsSnapshot {
   tariffs: Record<string, unknown>[];
   productCosts: Record<string, unknown>[];
   additionalCosts: Record<string, unknown>[];
+  productCatalog: ProductCatalogItem[];
 }
 
 /** Todo lo configurado, incluido el histórico cerrado (§17: historial de cambios). */
 export async function loadCosts(orgId: string): Promise<CostsSnapshot> {
   const sb = await createServerSupabase();
-  const [tariffs, productCosts, additionalCosts] = await Promise.all([
+  const [tariffs, productCosts, additionalCosts, productCatalog] = await Promise.all([
     sb.from("cost_tariffs").select("*").eq("org_id", orgId).order("effective_from", { ascending: false }),
     sb.from("product_costs").select("*").eq("org_id", orgId).order("effective_from", { ascending: false }),
     sb.from("additional_costs").select("*").eq("org_id", orgId).order("effective_from", { ascending: false }),
+    loadOrgProductCatalog(orgId),
   ]);
   return {
     tariffs: (tariffs.data ?? []) as Record<string, unknown>[],
     productCosts: (productCosts.data ?? []) as Record<string, unknown>[],
     additionalCosts: (additionalCosts.data ?? []) as Record<string, unknown>[],
+    productCatalog,
   };
 }
