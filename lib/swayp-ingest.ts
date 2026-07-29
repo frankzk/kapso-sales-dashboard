@@ -25,9 +25,22 @@ export interface SwaypWebhookBody {
 }
 
 export type SwaypWebhookResult =
-  | { status: "unauthorized" }
+  /**
+   * `not_configured` se distingue de `bad_token` a propósito. Los dos responden
+   * 401, pero durante la puesta en marcha el integrador de Swayp prueba contra
+   * nuestra URL sin poder ver nuestras variables de entorno: sin esta
+   * distinción, "todavía no cargamos el token" y "el token que mandás está mal"
+   * son el mismo 401 opaco y se pierde media jornada averiguando cuál es.
+   * No filtra nada: que el endpoint aún no esté configurado no es un secreto.
+   */
+  | { status: "unauthorized"; reason: "not_configured" | "bad_token" }
   | { status: "ignored"; reason: "bad_payload" | "unknown_state" | "no_shipment" | "no_change" }
   | { status: "updated"; shipmentId: string; deliveryStatus: string; swaypState: number };
+
+/** ¿Está cargado el token del webhook? Para el health-check, sin revelarlo. */
+export function swaypWebhookConfigured(): boolean {
+  return Boolean(env.swaypWebhookToken());
+}
 
 /** Constant-time compare with an equal-length gate (mirrors lib/ingest.ts). */
 function constantTimeEquals(a: string, b: string): boolean {
@@ -56,8 +69,9 @@ export async function processSwaypWebhook(input: {
   const expected = env.swaypWebhookToken();
   const provided = typeof input.body?.token === "string" ? input.body.token : "";
   // Sin token configurado no se puede autenticar a nadie: cerrado por defecto.
-  if (!expected || !constantTimeEquals(provided, expected)) {
-    return { status: "unauthorized" };
+  if (!expected) return { status: "unauthorized", reason: "not_configured" };
+  if (!constantTimeEquals(provided, expected)) {
+    return { status: "unauthorized", reason: "bad_token" };
   }
 
   const guide = input.body?.guide_number;

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { processSwaypWebhook } from "@/lib/swayp-ingest";
+import { processSwaypWebhook, swaypWebhookConfigured } from "@/lib/swayp-ingest";
 
 /**
  * Minimal Supabase stub: only the chain processSwaypWebhook actually uses —
@@ -41,16 +41,24 @@ describe("auth", () => {
   it("rejects a wrong or missing token", async () => {
     const { admin } = fakeAdmin({ id: "s1", delivery_status: "pendiente", swayp_state: 1 });
     expect(await processSwaypWebhook({ body: { token: "nope", guide_number: "1", state: "7" }, admin }))
-      .toEqual({ status: "unauthorized" });
+      .toEqual({ status: "unauthorized", reason: "bad_token" });
     expect(await processSwaypWebhook({ body: { guide_number: "1", state: "7" }, admin }))
-      .toEqual({ status: "unauthorized" });
+      .toEqual({ status: "unauthorized", reason: "bad_token" });
   });
 
   it("rejects everything when no token is configured (closed by default)", async () => {
     vi.stubEnv("SWAYP_WEBHOOK_TOKEN", "");
     const { admin } = fakeAdmin({ id: "s1", delivery_status: "pendiente", swayp_state: 1 });
-    expect(await processSwaypWebhook({ body: { token: "", guide_number: "1", state: "7" }, admin }))
-      .toEqual({ status: "unauthorized" });
+    // El motivo distingue "falta configurar" de "token equivocado": los dos son
+    // 401, y sin distinguirlos la puesta en marcha con Swayp se vuelve adivinar.
+    expect(await processSwaypWebhook({ body: { token: "x", guide_number: "1", state: "7" }, admin }))
+      .toEqual({ status: "unauthorized", reason: "not_configured" });
+  });
+
+  it("reports whether the token is configured, without revealing it", async () => {
+    expect(swaypWebhookConfigured()).toBe(true);
+    vi.stubEnv("SWAYP_WEBHOOK_TOKEN", "");
+    expect(swaypWebhookConfigured()).toBe(false);
   });
 });
 
