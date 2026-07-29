@@ -54,6 +54,12 @@ const MASTER_COLUMNS =
   "operational_status,status_since,status_locked,current_courier,last_courier," +
   "courier_count,attempt_count,guide_code,dispatched_at,delivered_at," +
   "last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
+  // El panel de Aliclik decide con estas dos si enseña "el pedido ya tiene
+  // coordenada" o "obligatoria, el pedido no la tiene". Sin traerlas llegaban
+  // como `undefined` y el panel decía SIEMPRE que faltaba, también en pedidos
+  // que sí la tenían — con la operadora pegando pines a mano sin necesidad.
+  // La acción del servidor nunca se vio afectada: `authorize` hace `select("*")`.
+  "latitude,longitude," +
   "key_state,agency_branch,agency_arrived_at,agency_expires_at";
 
 // PostgREST corta cada respuesta en `db-max-rows` (1000 en Supabase), así que se
