@@ -61,6 +61,7 @@ import {
   type GeneralStatus,
 } from "@/lib/order-status";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, usesPickupKeyFlow, type KeyState, type PaymentState } from "@/lib/pickup-key";
+import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import { MASTER_VIEWS, type MasterCounts, type MasterView, type OrderMasterDetail } from "@/lib/orders-master-access";
 import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 
@@ -333,6 +334,10 @@ export function OrdersMasterBoard({
   const storeName = useMemo(() => {
     const map = new Map(stores.map((s) => [s.id, s.name]));
     return (id: string) => map.get(id) ?? "—";
+  }, [stores]);
+  const storeDomain = useMemo(() => {
+    const map = new Map(stores.map((s) => [s.id, s.shopify_domain]));
+    return (id: string) => map.get(id) ?? null;
   }, [stores]);
 
   function patch(next: Partial<MasterFilters>) {
@@ -671,6 +676,7 @@ export function OrdersMasterBoard({
           canCreateTandersGuide={canCreateTandersGuide}
           canCreateShalomGuide={canCreateShalomGuide}
           storeName={storeName}
+          storeDomain={storeDomain}
           onClose={() => setOpenId(null)}
           onSaved={() => router.refresh()}
         />
@@ -1046,6 +1052,7 @@ function OrderDrawer({
   canCreateTandersGuide,
   canCreateShalomGuide,
   storeName,
+  storeDomain,
   onClose,
   onSaved,
 }: {
@@ -1056,6 +1063,7 @@ function OrderDrawer({
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
   storeName: (id: string) => string;
+  storeDomain: (id: string) => string | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -1120,6 +1128,9 @@ function OrderDrawer({
   }
 
   const row = detail?.row;
+  const shopifyAdminUrl = row
+    ? shopifyOrderAdminUrl(storeDomain(row.store_id), row.shopify_order_id)
+    : null;
 
   return (
     <div
@@ -1145,6 +1156,32 @@ function OrderDrawer({
                 <p className="text-base font-semibold text-slate-900">
                   {row?.order_name ?? "Pedido"}
                 </p>
+                {shopifyAdminUrl && (
+                  <a
+                    href={shopifyAdminUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`Abrir ${row?.order_name ?? "pedido"} en Shopify`}
+                    title="Abrir pedido en Shopify"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M6 3h7v7M13 3 6.5 9.5M12 9.5V13H3V4h3.5"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </a>
+                )}
                 {detail && (
                   <StatusBadge
                     status={detail.row.general_status}

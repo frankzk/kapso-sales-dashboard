@@ -56,6 +56,11 @@ const MASTER_COLUMNS =
   "last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
   "key_state,agency_branch,agency_arrived_at,agency_expires_at";
 
+// El identificador de Shopify solo hace falta al abrir un pedido (para el
+// enlace directo al Admin). Mantenerlo fuera del listado evita repetirlo en
+// cada una de las 100 filas de la página.
+const MASTER_DETAIL_COLUMNS = `${MASTER_COLUMNS},shopify_order_id`;
+
 // PostgREST corta cada respuesta en `db-max-rows` (1000 en Supabase), así que se
 // pagina con .range() en vez de pedir un .limit() grande.
 const PAGE = 1000;
@@ -185,7 +190,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
 
   const { data: rowData } = await sb
     .from("order_master")
-    .select(MASTER_COLUMNS)
+    .select(MASTER_DETAIL_COLUMNS)
     .eq("order_id", orderId)
     .maybeSingle();
   if (!rowData) return null;

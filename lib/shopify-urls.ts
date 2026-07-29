@@ -22,10 +22,21 @@ function shopifyAdminResourceUrl(
   resource: "orders" | "draft_orders",
   gidOrId: string | number | null | undefined,
 ): string | null {
+  const rawId = gidOrId == null ? "" : String(gidOrId).trim();
+  const gidType = resource === "orders" ? "Order" : "DraftOrder";
+  const isValidId =
+    /^\d+$/.test(rawId) ||
+    new RegExp(`^gid://shopify/${gidType}/\\d+$`).test(rawId);
+  if (!isValidId) return null;
   const id = extractNumericId(gidOrId);
-  if (!domain || !id) return null;
-  const handle = String(domain).trim().toLowerCase().replace(/\.myshopify\.com$/i, "");
-  if (!handle) return null;
+  if (!domain || !/^\d+$/.test(id)) return null;
+  const handle = String(domain)
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "")
+    .replace(/\.myshopify\.com$/i, "");
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(handle)) return null;
   return `https://admin.shopify.com/store/${handle}/${resource}/${id}`;
 }
 
