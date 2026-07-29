@@ -169,4 +169,6 @@
 \ir migrations/0081_coverage_district_aliases.sql
 \echo 'Applying 0082_meta_campaign_data_quality.sql'
 \ir migrations/0082_meta_campaign_data_quality.sql
+\echo 'Applying 0083_coverage_owned_by_db.sql'
+\ir migrations/0083_coverage_owned_by_db.sql
 \echo 'Done.'
