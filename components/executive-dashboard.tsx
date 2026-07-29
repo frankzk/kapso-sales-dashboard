@@ -409,7 +409,11 @@ export function ExecutiveDashboard({
             info
             className="lg:col-span-12"
           >
-            <CampaignTable rows={campaignStats} currency={currency} />
+            <CampaignTable
+              rows={campaignStats}
+              currency={currency}
+              catalogStoreIds={scope === "all" ? stores.map((store) => store.id) : [scope]}
+            />
           </Module>
         </div>
       )}

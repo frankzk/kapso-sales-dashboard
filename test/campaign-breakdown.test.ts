@@ -41,6 +41,17 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
     expect(rows.find((r) => r.adId === "Madera Como Nueva")!.metaAdId).toBeNull(); // "sin ad id"
   });
 
+  it("keeps the attributed stores so the product picker searches the right catalogs", () => {
+    const storeLeads = [
+      { store_id: "store-kenku", source: "meta_ad", ad_id: "shared-ad", ad_headline: "Producto" },
+      { store_id: "store-kenku", source: "meta_ad", ad_id: "shared-ad", ad_headline: "Producto" },
+      { store_id: "store-aurela", source: "meta_ad", ad_id: "shared-ad", ad_headline: "Producto" },
+    ] as unknown as LeadRow[];
+
+    const [row] = campaignBreakdown(storeLeads, []);
+    expect(row?.storeIds).toEqual(["store-kenku", "store-aurela"]);
+  });
+
   it("upgrades the label to the real Meta ad name when resolved, else falls back", () => {
     const names: Record<string, AdMeta> = {
       "120246653255450657": {

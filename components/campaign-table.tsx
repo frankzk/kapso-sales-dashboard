@@ -1,11 +1,15 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { CampaignDecision, CampaignProductMatch, CampaignStat } from "@/lib/metrics";
 import { formatCurrency, formatPct } from "@/lib/metrics";
 import { adObjectiveLabel, adsManagerUrl, prettyAdName } from "@/lib/meta-ads";
-import { saveAdPromotedProduct } from "@/app/dashboard/actions";
+import {
+  saveAdPromotedProduct,
+  searchPromotedProducts,
+  type PromotedProductSuggestion,
+} from "@/app/dashboard/actions";
 import { cn } from "@/components/ui";
 
 type SortKey =
@@ -99,13 +103,72 @@ function LabelCell({ row }: { row: CampaignStat }) {
   );
 }
 
-function ProductEditor({ row }: { row: CampaignStat }) {
+function ProductEditor({ row, fallbackStoreIds }: { row: CampaignStat; fallbackStoreIds: string[] }) {
   const router = useRouter();
   const [product, setProduct] = useState(row.promotedProductName ?? "");
   const [skus, setSkus] = useState(row.promotedSkus.join(", "));
   const [message, setMessage] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<PromotedProductSuggestion[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [resultsOpen, setResultsOpen] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1);
+  const searchVersion = useRef(0);
+  const suppressNextSearch = useRef(false);
   const [pending, startTransition] = useTransition();
   const suggestion = row.productMix[0];
+  const catalogStoreIds = useMemo(
+    () => (row.storeIds.length ? row.storeIds : fallbackStoreIds),
+    [row.storeIds, fallbackStoreIds],
+  );
+
+  useEffect(() => {
+    const q = product.trim();
+    const version = ++searchVersion.current;
+    if (suppressNextSearch.current) {
+      suppressNextSearch.current = false;
+      setSearching(false);
+      return;
+    }
+    if (!row.metaAdId || q.length < 2 || !catalogStoreIds.length) {
+      setSuggestions([]);
+      setSearching(false);
+      setSearchError(null);
+      setResultsOpen(false);
+      return;
+    }
+
+    setSearching(true);
+    setSearchError(null);
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await searchPromotedProducts(catalogStoreIds, q);
+        if (version !== searchVersion.current) return;
+        setSuggestions(result.products);
+        setSearchError(result.error ?? null);
+        setResultsOpen(true);
+        setActiveSuggestion(result.products.length ? 0 : -1);
+      } catch {
+        if (version !== searchVersion.current) return;
+        setSuggestions([]);
+        setSearchError("No se pudo consultar Shopify. Inténtalo nuevamente.");
+        setResultsOpen(true);
+      } finally {
+        if (version === searchVersion.current) setSearching(false);
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [product, catalogStoreIds, row.metaAdId]);
+
+  function chooseProduct(selected: PromotedProductSuggestion) {
+    suppressNextSearch.current = true;
+    setProduct(selected.title);
+    setSkus(selected.skus.join(", "));
+    setSuggestions([]);
+    setResultsOpen(false);
+    setActiveSuggestion(-1);
+    setSearchError(null);
+  }
 
   if (!row.metaAdId) return <p className="text-xs text-slate-500">Meta no envió un ad id para este grupo; no se puede guardar un mapeo estable.</p>;
   return (
@@ -122,7 +185,91 @@ function ProductEditor({ row }: { row: CampaignStat }) {
         )}
       </div>
       <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_220px_auto]">
-        <input value={product} onChange={(e) => setProduct(e.target.value)} placeholder="Nombre del producto promovido" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-brand-400" />
+        <div className="relative">
+          <input
+            value={product}
+            onChange={(event) => {
+              setProduct(event.target.value);
+              setResultsOpen(true);
+            }}
+            onFocus={() => {
+              if (product.trim().length >= 2) setResultsOpen(true);
+            }}
+            onBlur={() => window.setTimeout(() => setResultsOpen(false), 150)}
+            onKeyDown={(event) => {
+              if (!resultsOpen || !suggestions.length) return;
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setActiveSuggestion((current) => (current + 1) % suggestions.length);
+              } else if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setActiveSuggestion((current) => (current <= 0 ? suggestions.length - 1 : current - 1));
+              } else if (event.key === "Enter" && activeSuggestion >= 0) {
+                event.preventDefault();
+                chooseProduct(suggestions[activeSuggestion]!);
+              } else if (event.key === "Escape") {
+                setResultsOpen(false);
+              }
+            }}
+            placeholder="Buscar producto en Shopify"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={resultsOpen}
+            aria-controls={`product-results-${row.adId}`}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 pr-9 text-sm outline-none focus:border-brand-400"
+          />
+          {searching && (
+            <span
+              aria-label="Buscando productos"
+              className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-brand-600"
+            />
+          )}
+          {resultsOpen && product.trim().length >= 2 && (
+            <div
+              id={`product-results-${row.adId}`}
+              role="listbox"
+              className="absolute z-30 mt-1 max-h-72 w-full min-w-[320px] overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl shadow-slate-900/10"
+            >
+              {searching ? (
+                <p className="px-3 py-3 text-xs text-slate-500">Buscando en Shopify…</p>
+              ) : searchError ? (
+                <p className="px-3 py-3 text-xs text-rose-600">{searchError}</p>
+              ) : suggestions.length ? (
+                suggestions.map((item, index) => (
+                  <button
+                    key={`${item.title}-${item.skus.join("-")}`}
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeSuggestion}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => chooseProduct(item)}
+                    className={cn(
+                      "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
+                      index === activeSuggestion ? "bg-brand-50" : "hover:bg-slate-50",
+                    )}
+                  >
+                    {item.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={item.imageUrl} alt="" className="h-9 w-9 shrink-0 rounded-md border border-slate-100 object-cover" />
+                    ) : (
+                      <span aria-hidden className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-slate-100 text-sm">📦</span>
+                    )}
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-slate-800">{item.title}</span>
+                      <span className="block truncate text-[11px] text-slate-400">
+                        {item.skus.length ? `SKU ${item.skus.join(", ")}` : "Sin SKU"} · {item.stores.join(", ")}
+                      </span>
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <p className="px-3 py-3 text-xs text-slate-500">
+                  No encontramos productos activos para “{product.trim()}”.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
         <input value={skus} onChange={(e) => setSkus(e.target.value)} placeholder="SKU, SKU alternativo" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-brand-400" />
         <button
           type="button"
@@ -143,10 +290,18 @@ function ProductEditor({ row }: { row: CampaignStat }) {
   );
 }
 
-function ExpandedRow({ row, currency }: { row: CampaignStat; currency: string }) {
+function ExpandedRow({
+  row,
+  currency,
+  catalogStoreIds,
+}: {
+  row: CampaignStat;
+  currency: string;
+  catalogStoreIds: string[];
+}) {
   return (
     <div className="space-y-4 border-t border-slate-100 bg-slate-50/70 p-4">
-      <ProductEditor row={row} />
+      <ProductEditor row={row} fallbackStoreIds={catalogStoreIds} />
       <div>
         <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Entrega del anuncio en Meta</h4>
         {row.activeDays > 0 ? (
@@ -200,7 +355,15 @@ function ExpandedRow({ row, currency }: { row: CampaignStat; currency: string })
   );
 }
 
-export function CampaignTable({ rows, currency }: { rows: CampaignStat[]; currency: string }) {
+export function CampaignTable({
+  rows,
+  currency,
+  catalogStoreIds,
+}: {
+  rows: CampaignStat[];
+  currency: string;
+  catalogStoreIds: string[];
+}) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(100);
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "spend", dir: "desc" });
@@ -332,7 +495,7 @@ export function CampaignTable({ rows, currency }: { rows: CampaignStat[]; curren
                 </td>
                 <td className="px-3 py-3 text-right"><span title={decision.help} className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-semibold", decision.className)}>{decision.label}</span></td>
               </tr>,
-              isOpen && <tr key={`${row.adId}-detail`}><td colSpan={10} className="p-0"><ExpandedRow row={row} currency={currency} /></td></tr>,
+              isOpen && <tr key={`${row.adId}-detail`}><td colSpan={10} className="p-0"><ExpandedRow row={row} currency={currency} catalogStoreIds={catalogStoreIds} /></td></tr>,
             ];
           })}</tbody>
         </table>
