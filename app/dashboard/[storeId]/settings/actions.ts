@@ -10,7 +10,14 @@ import { getStoreCreds, runStoreSync } from "@/lib/ingest";
 import { registerOrderWebhooks } from "@/lib/shopify";
 import { buildStoreDailySummary, formatDailySummary, limaDayBounds } from "@/lib/daily-summary";
 import { sendTelegramToAll } from "@/lib/telegram";
-import { listMetaAdAccounts, type MetaAdAccount, type StoreMetaAdAccount } from "@/lib/meta-marketing";
+import {
+  listMetaAdAccounts,
+  probeMetaConnection,
+  type MetaAdAccount,
+  type MetaConnectionProbe,
+  type StoreMetaAdAccount,
+} from "@/lib/meta-marketing";
+import { metaInsightsRange, syncMetaInsightsHistory } from "@/lib/meta-insights-sync";
 import { listProducts } from "@/lib/aliclik";
 import { syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { env } from "@/lib/env";
@@ -347,6 +354,66 @@ export async function listStoreMetaAdAccounts(
   const res = await listMetaAdAccounts(creds.meta_access_token);
   if (!res.ok) return { error: `Meta rechazó la consulta: ${res.error}` };
   return { accounts: res.accounts };
+}
+
+/** Validate the saved Meta token, selected accounts and a real Insights query. */
+export async function testStoreMetaConnection(
+  storeId: string,
+): Promise<{ result: MetaConnectionProbe } | { error: string }> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const creds = await getStoreCreds(storeId, ctx.admin);
+  if (!creds?.meta_access_token) {
+    return { error: "Primero pega el access token de Meta arriba y guarda los cambios." };
+  }
+  const limaDate = (offsetDays: number) => {
+    const date = new Date(Date.now() + offsetDays * 86_400_000);
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Lima",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date);
+  };
+  const result = await probeMetaConnection(
+    creds.meta_access_token,
+    creds.meta_ad_accounts,
+    { from: limaDate(-6), to: limaDate(0) },
+  );
+  return { result };
+}
+
+/** Rebuild the auditable daily ad-level history for the last 90 calendar days. */
+export async function backfillStoreMetaInsights(
+  storeId: string,
+): Promise<{ notice: string } | { error: string }> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const creds = await getStoreCreds(storeId, ctx.admin);
+  if (!creds?.meta_access_token) return { error: "Esta tienda no tiene access token de Meta." };
+  if (!creds.meta_ad_accounts.length) return { error: "Selecciona al menos una cuenta publicitaria." };
+
+  const report = await syncMetaInsightsHistory(
+    ctx.admin,
+    storeId,
+    creds.meta_access_token,
+    creds.meta_ad_accounts,
+    metaInsightsRange(90),
+  );
+  revalidatePath(`/dashboard/${storeId}`);
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  const summary =
+    `${report.rows.toLocaleString("es-PE")} filas diarias · ` +
+    `${report.ads.toLocaleString("es-PE")} anuncios · ` +
+    `${report.accountsOk}/${report.accounts} cuentas`;
+  if (!report.accountsOk) {
+    return { error: `No se pudo cargar el histórico: ${report.errors.join("; ")}` };
+  }
+  return {
+    notice: report.errors.length
+      ? `Backfill parcial de 90 días: ${summary}. Avisos: ${report.errors.join("; ")}`
+      : `Histórico de Meta actualizado (90 días): ${summary}.`,
+  };
 }
 
 /** Persist the SELECTED Meta ad accounts (several per store) — their combined

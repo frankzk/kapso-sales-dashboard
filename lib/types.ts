@@ -67,6 +67,8 @@ export interface ShipmentOrderDetail {
 
 /** A row ready to be upserted into the `orders` table. */
 export interface OrderRow {
+  /** Internal Supabase UUID. Leads.order_id and shipments.order_id point here. */
+  id?: string;
   store_id: string;
   shopify_order_id: string;
   name: string | null;
@@ -310,6 +312,29 @@ export interface ShipmentRow {
   updated_at?: string;
 }
 
+/** Latest logistics outcome for one Shopify order, used by campaign attribution. */
+export interface CampaignDeliveryOutcome {
+  orderId: string;
+  deliveryStatus: string | null;
+  statusCategory: string | null;
+  createdAt: string | null;
+}
+
+/** Aggregated historical Meta Insights for one ad in the selected date range. */
+export interface MetaAdPerformance {
+  adId: string;
+  accountId: string | null;
+  currency: string | null;
+  spend: number;
+  impressions: number;
+  reach: number;
+  clicks: number;
+  inlineLinkClicks: number;
+  activeDays: number;
+  firstDate: string | null;
+  lastDate: string | null;
+}
+
 /** Minimal linked-guide identity used to move from a frozen source guide to
  * the active Fenix guide without leaving the drawer. */
 export interface LinkedShipmentSummary {
@@ -359,30 +384,38 @@ export interface FenixStockRowDb {
 // ── Master de Pedidos ───────────────────────────────────────────────────────
 
 /** Una fila del Master: el read-model materializado en `order_master` (0045). */
+/**
+ * Una fila del Master. Los campos OPCIONALES son los que el listado no manda
+ * (ver MASTER_COLUMNS en lib/orders-master-access.ts): pagar su nombre y su
+ * valor diez mil veces por carga no compensa cuando solo se leen al abrir un
+ * pedido. El detalle sí los trae completos.
+ */
 export interface OrderMasterRow {
   id: string;
   store_id: string;
   order_id: string;
   order_name: string | null;
-  shopify_order_id: string;
+  shopify_order_id?: string;
   order_created_at: string | null;
   customer_name: string | null;
   customer_phone: string | null;
   region: string | null;
   province: string | null;
   district: string | null;
-  address: string | null;
-  reference: string | null;
-  latitude: number | null;
-  longitude: number | null;
+  /** Flujo operativo derivado de la ubicación y la cobertura COD vigente. */
+  coverage?: "lima" | "provincia_cod" | "agencia" | "por_revisar" | null;
+  address?: string | null;
+  reference?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
   /** Origen de la ubicación: manual | courier | ubigeo | shopify | draft. */
-  geo_source: string | null;
+  geo_source?: string | null;
   shipping_mode: string | null; // cod | agency
   order_total: number | null;
   general_status: string;
   operational_status: string;
   status_since: string | null;
-  status_source: string | null;
+  status_source?: string | null;
   status_locked: boolean;
   current_courier: string | null;
   last_courier: string | null;
@@ -391,8 +424,8 @@ export interface OrderMasterRow {
   guide_code: string | null;
   dispatched_at: string | null;
   delivered_at: string | null;
-  delivered_courier: string | null;
-  returned_at: string | null;
+  delivered_courier?: string | null;
+  returned_at?: string | null;
   last_movement_at: string | null;
   comment_count: number;
   logistics_cost: number | null;

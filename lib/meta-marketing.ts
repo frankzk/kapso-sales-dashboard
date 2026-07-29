@@ -25,6 +25,29 @@ export interface StoreMetaAdAccount {
   name: string | null;
 }
 
+export interface MetaConnectionProbeAccount {
+  id: string;
+  name: string;
+  currency: string | null;
+  accessible: boolean;
+  insightsOk: boolean;
+  spend: number;
+  impressions: number;
+  reach: number;
+  frequency: number | null;
+  cpm: number | null;
+  error: string | null;
+}
+
+export interface MetaConnectionProbe {
+  ok: boolean;
+  tokenValid: boolean;
+  range: { from: string; to: string };
+  accounts: MetaConnectionProbeAccount[];
+  spendByCurrency: { currency: string; amount: number }[];
+  error: string | null;
+}
+
 /**
  * Normalize the stored `meta_ad_accounts` jsonb into a clean, deduped list.
  * Back-compat: when the array is empty but a legacy single id exists (migration
@@ -85,6 +108,127 @@ export async function listMetaAdAccounts(
     status: typeof a?.account_status === "number" ? a.account_status : null,
   }));
   return { ok: true, accounts };
+}
+
+/**
+ * Read-only end-to-end check for the Marketing API connection. It validates
+ * the token and then requests real account-level Insights for every saved
+ * account, keeping failures isolated and spend separated by currency.
+ */
+export async function probeMetaConnection(
+  token: string,
+  selected: StoreMetaAdAccount[],
+  range: { from: string; to: string },
+  opts?: { fetchImpl?: typeof fetch; baseUrl?: string; timeoutMs?: number },
+): Promise<MetaConnectionProbe> {
+  const listed = await listMetaAdAccounts(token, opts);
+  if (!listed.ok) {
+    return { ok: false, tokenValid: false, range, accounts: [], spendByCurrency: [], error: listed.error };
+  }
+  if (!selected.length) {
+    return {
+      ok: false,
+      tokenValid: true,
+      range,
+      accounts: [],
+      spendByCurrency: [],
+      error: "No hay cuentas publicitarias seleccionadas.",
+    };
+  }
+
+  const base = (opts?.baseUrl ?? GRAPH_BASE).replace(/\/$/, "");
+  const doFetch = opts?.fetchImpl ?? fetch;
+  const timeoutMs = opts?.timeoutMs ?? 8000;
+  const available = new Map(listed.accounts.map((account) => [account.id, account]));
+  const accounts = await Promise.all(
+    selected.map(async (saved): Promise<MetaConnectionProbeAccount> => {
+      const id = saved.id.startsWith("act_") ? saved.id : `act_${saved.id}`;
+      const account = available.get(id);
+      const failed = (error: string, accessible: boolean, currency: string | null = null): MetaConnectionProbeAccount => ({
+        id,
+        name: account?.name || saved.name || id,
+        currency,
+        accessible,
+        insightsOk: false,
+        spend: 0,
+        impressions: 0,
+        reach: 0,
+        frequency: null,
+        cpm: null,
+        error,
+      });
+      if (!account) return failed("La cuenta guardada ya no es accesible con este token.", false);
+
+      const url = new URL(`${base}/${id}/insights`);
+      url.searchParams.set("fields", "spend,impressions,reach,frequency,cpm");
+      url.searchParams.set("level", "account");
+      url.searchParams.set("time_range", JSON.stringify({ since: range.from, until: range.to }));
+      url.searchParams.set("access_token", token.trim());
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const response = await doFetch(url.toString(), {
+          headers: { Accept: "application/json" },
+          signal: ctrl.signal,
+        });
+        const json: any = await response.json().catch(() => null);
+        if (!response.ok || json?.error) {
+          return failed(json?.error?.message ?? `Meta respondió HTTP ${response.status}.`, true, account.currency);
+        }
+        const row = json?.data?.[0] ?? {};
+        const numeric = (value: unknown): number => {
+          const parsed = Number(value);
+          return Number.isFinite(parsed) ? parsed : 0;
+        };
+        const nullableNumeric = (value: unknown): number | null => {
+          if (value == null || value === "") return null;
+          const parsed = Number(value);
+          return Number.isFinite(parsed) ? parsed : null;
+        };
+        return {
+          id,
+          name: account.name,
+          currency: account.currency,
+          accessible: true,
+          insightsOk: true,
+          spend: numeric(row.spend),
+          impressions: numeric(row.impressions),
+          reach: numeric(row.reach),
+          frequency: nullableNumeric(row.frequency),
+          cpm: nullableNumeric(row.cpm),
+          error: null,
+        };
+      } catch (error: any) {
+        return failed(
+          error?.name === "AbortError" ? "La consulta de Insights agotó el tiempo." : error?.message ?? "Error de red.",
+          true,
+          account.currency,
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+    }),
+  );
+
+  const totals = new Map<string, number>();
+  for (const account of accounts) {
+    if (!account.insightsOk) continue;
+    const currency = account.currency || "Sin moneda";
+    totals.set(currency, (totals.get(currency) ?? 0) + account.spend);
+  }
+  const spendByCurrency = [...totals.entries()].map(([currency, amount]) => ({
+    currency,
+    amount: Math.round(amount * 100) / 100,
+  }));
+  const ok = accounts.every((account) => account.accessible && account.insightsOk);
+  return {
+    ok,
+    tokenValid: true,
+    range,
+    accounts,
+    spendByCurrency,
+    error: ok ? null : "Una o más cuentas no pudieron consultar Insights.",
+  };
 }
 
 /** A resolved Meta ad → the row shape stored in `meta_ads` (real names + status). */

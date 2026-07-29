@@ -101,12 +101,20 @@ export async function getAdminOrgs(): Promise<{ org_id: string; role: string }[]
  * vendedora. Used to gate the financial pages and tailor the nav: a
  * vendedora-only user sees just the Leads board.
  */
-async function getUserRoleSummaryUncached(): Promise<{ roles: string[]; isVendedoraOnly: boolean }> {
+async function getUserRoleSummaryUncached(): Promise<{
+  roles: string[];
+  isVendedoraOnly: boolean;
+  isRiderOnly: boolean;
+}> {
   const sb = await createServerSupabase();
   const { data } = await sb.from("memberships").select("role");
   const roles = ((data as { role: string }[]) ?? []).map((m) => m.role);
   const isVendedoraOnly = roles.length > 0 && roles.every((r) => r === "vendedora");
-  return { roles, isVendedoraOnly };
+  // Un motorizado no es un usuario del panel: su sitio es /reparto. El layout
+  // del dashboard lo redirige, y RLS ya le impide leer nada de allí de todos
+  // modos — la redirección es para que no vea una pantalla vacía y confusa.
+  const isRiderOnly = roles.length > 0 && roles.every((r) => r === "motorizado");
+  return { roles, isVendedoraOnly, isRiderOnly };
 }
 
 export const getUserRoleSummary = cache(getUserRoleSummaryUncached);
@@ -142,7 +150,7 @@ export async function getOrders(
   const sb = await createServerSupabase();
   const { startIso, endIso } = rangeBounds(range);
   const BASE =
-    "store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,customer_phone,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items";
+    "id,store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,customer_phone,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items";
   // `discount_codes` is added by 0030; step down to the base set if the column
   // isn't there yet so the dashboard never breaks during the migration window.
   const COL_SETS = [`${BASE},discount_codes`, BASE];
@@ -366,12 +374,44 @@ export async function getMetaSpend(storeId: string, range: DateRange): Promise<n
   }
 }
 
+/** Historical Meta totals by ad. The database aggregates the daily rows and
+ * preserves their RLS; missing migration/data degrades to an empty result. */
+export async function getMetaAdPerformance(
+  storeId: string,
+  range: DateRange,
+): Promise<import("@/lib/types").MetaAdPerformance[]> {
+  const sb = await createServerSupabase();
+  const { data, error } = await sb.rpc("meta_ad_performance", {
+    p_store_id: storeId,
+    p_from: range.from,
+    p_to: range.to,
+  });
+  if (error || !Array.isArray(data)) return [];
+  const finite = (value: unknown) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  return (data as Array<Record<string, unknown>>)
+    .filter((row) => typeof row.ad_id === "string" && row.ad_id)
+    .map((row) => ({
+      adId: String(row.ad_id),
+      accountId: typeof row.account_id === "string" ? row.account_id : null,
+      currency: typeof row.currency === "string" ? row.currency.toUpperCase() : null,
+      spend: finite(row.spend),
+      impressions: Math.trunc(finite(row.impressions)),
+      reach: Math.trunc(finite(row.reach)),
+      clicks: Math.trunc(finite(row.clicks)),
+      inlineLinkClicks: Math.trunc(finite(row.inline_link_clicks)),
+      activeDays: Math.trunc(finite(row.active_days)),
+      firstDate: typeof row.first_date === "string" ? row.first_date : null,
+      lastDate: typeof row.last_date === "string" ? row.last_date : null,
+    }));
+}
+
 /**
  * Resolve Meta `ad_id`s → attribution (real ad / adset / campaign names,
- * objective, status, owning account) from the `meta_ads` lookup. Keyed by the
- * globally-unique ad_id, so it is not store-scoped. Returns {} when no ids are
- * given or the table/rows are absent — callers then degrade to the captured
- * CTWA headline. Never throws (the rest of the dashboard must render regardless).
+ * objective, status, owning account) from the `meta_ads` lookup. Large sets are
+ * chunked because the historical report can include thousands of active ads.
  */
 export async function getAdNames(
   adIds: (string | null | undefined)[],
@@ -383,36 +423,77 @@ export async function getAdNames(
   // resolving their labels via the service-role client leaks nothing: you can
   // only look up ads your own leads reference.
   const admin = createAdminSupabase();
-  const { data, error } = await admin
-    .from("meta_ads")
-    .select(
-      "ad_id,account_id,campaign_id,campaign_name,objective,adset_id,adset_name,ad_name,status,fetched_at",
-    )
-    .in("ad_id", ids);
-  if (error || !data) return {}; // table not applied yet, or no rows — degrade gracefully
+  const batches = await Promise.all(chunk(ids, 300).map(async (idBatch) => {
+    const richResult = await admin
+      .from("meta_ads")
+      .select(
+        "ad_id,account_id,campaign_id,campaign_name,objective,adset_id,adset_name,ad_name,status,fetched_at,promoted_product_name,promoted_skus,promoted_product_updated_at",
+      )
+      .in("ad_id", idBatch);
+    let data = richResult.data as Array<Record<string, unknown>> | null;
+    let error = richResult.error;
+    if (error) {
+      const fallback = await admin
+        .from("meta_ads")
+        .select("ad_id,account_id,campaign_id,campaign_name,objective,adset_id,adset_name,ad_name,status,fetched_at")
+        .in("ad_id", idBatch);
+      data = fallback.data as Array<Record<string, unknown>> | null;
+      error = fallback.error;
+    }
+    return error || !data ? [] : data;
+  }));
+  const rows = batches.flat();
   const out: Record<string, AdMeta> = {};
-  for (const r of data as Record<string, string | null>[]) {
-    if (!r.ad_id) continue;
-    out[r.ad_id] = {
-      accountId: r.account_id ?? null,
-      campaignId: r.campaign_id ?? null,
-      campaignName: r.campaign_name ?? null,
-      objective: r.objective ?? null,
-      adsetId: r.adset_id ?? null,
-      adsetName: r.adset_name ?? null,
-      adName: r.ad_name ?? null,
-      status: r.status ?? null,
-      fetchedAt: r.fetched_at ?? null,
+  for (const r of rows) {
+    const adId = typeof r.ad_id === "string" ? r.ad_id : null;
+    if (!adId) continue;
+    out[adId] = {
+      accountId: typeof r.account_id === "string" ? r.account_id : null,
+      campaignId: typeof r.campaign_id === "string" ? r.campaign_id : null,
+      campaignName: typeof r.campaign_name === "string" ? r.campaign_name : null,
+      objective: typeof r.objective === "string" ? r.objective : null,
+      adsetId: typeof r.adset_id === "string" ? r.adset_id : null,
+      adsetName: typeof r.adset_name === "string" ? r.adset_name : null,
+      adName: typeof r.ad_name === "string" ? r.ad_name : null,
+      status: typeof r.status === "string" ? r.status : null,
+      fetchedAt: typeof r.fetched_at === "string" ? r.fetched_at : null,
+      promotedProductName: typeof r.promoted_product_name === "string" ? r.promoted_product_name : null,
+      promotedSkus: Array.isArray(r.promoted_skus) ? (r.promoted_skus as unknown as string[]) : [],
+      promotedProductUpdatedAt: typeof r.promoted_product_updated_at === "string" ? r.promoted_product_updated_at : null,
     };
   }
   return out;
 }
 
-/**
- * Resolve WhatsApp `phone_number_id`s → friendly labels (name / display phone /
- * kind) from the `whatsapp_numbers` lookup. Returns {} when none given or the
- * table/rows are absent — callers then fall back to the raw id. Never throws.
- */
+/** Latest courier state for the exact orders attributed to Meta leads. */
+export async function getCampaignDeliveryOutcomes(
+  orderIds: (string | null | undefined)[],
+): Promise<import("@/lib/types").CampaignDeliveryOutcome[]> {
+  const ids = [...new Set(orderIds.filter((id): id is string => !!id))];
+  if (!ids.length) return [];
+  const sb = await createServerSupabase();
+  const latest = new Map<string, import("@/lib/types").CampaignDeliveryOutcome>();
+  for (let i = 0; i < ids.length; i += 500) {
+    const { data, error } = await sb
+      .from("shipments")
+      .select("order_id,delivery_status,status_category,created_at")
+      .in("order_id", ids.slice(i, i + 500))
+      .order("created_at", { ascending: false });
+    if (error) continue;
+    for (const row of (data ?? []) as Array<Record<string, string | null>>) {
+      if (!row.order_id || latest.has(row.order_id)) continue;
+      latest.set(row.order_id, {
+        orderId: row.order_id,
+        deliveryStatus: row.delivery_status ?? null,
+        statusCategory: row.status_category ?? null,
+        createdAt: row.created_at ?? null,
+      });
+    }
+  }
+  return [...latest.values()];
+}
+
+/** Friendly labels for WhatsApp business phone numbers referenced by visible leads. */
 export async function getWaNumbers(
   phoneNumberIds: (string | null | undefined)[],
 ): Promise<Record<string, WaNumber>> {

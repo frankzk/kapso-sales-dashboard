@@ -15,6 +15,7 @@ import {
   aggregateReproDay,
   computeReprogramStats,
   limaCalendarDayBounds,
+  shipmentSearchTerms,
   type ReproDayAgentCount,
   type ReproDayCall,
   type ReprogramChildRow,
@@ -214,11 +215,14 @@ async function withTodayContactCount(
 async function withCurrentFenixEligibility(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,
   rows: ShipmentRow[],
+  opts: { includeNonPending?: boolean } = {},
 ): Promise<ShipmentRow[]> {
-  const pending = rows.filter((s) => s.status_category === "pending");
-  if (!pending.length) return rows;
+  const candidates = opts.includeNonPending
+    ? rows
+    : rows.filter((s) => s.status_category === "pending");
+  if (!candidates.length) return rows;
 
-  const storeIds = Array.from(new Set(pending.map((s) => s.store_id)));
+  const storeIds = Array.from(new Set(candidates.map((s) => s.store_id)));
   const { data: stores, error: storesError } = await sb
     .from("stores")
     .select("id,org_id")
@@ -235,7 +239,7 @@ async function withCurrentFenixEligibility(
     .select("org_id,city,product,sku,quantity")
     .in("org_id", orgIds);
   const orderIds = Array.from(
-    new Set(pending.map((s) => s.order_id).filter((id): id is string => !!id)),
+    new Set(candidates.map((s) => s.order_id).filter((id): id is string => !!id)),
   );
   const orderParts = Array.from(
     { length: Math.ceil(orderIds.length / 300) },
@@ -280,7 +284,7 @@ async function withCurrentFenixEligibility(
   }
 
   return rows.map((shipment) => {
-    if (shipment.status_category !== "pending") return shipment;
+    if (!opts.includeNonPending && shipment.status_category !== "pending") return shipment;
     const orgId = orgByStore.get(shipment.store_id);
     const current = evaluateFenix(
       shipment,
@@ -440,14 +444,20 @@ export async function getReviewShipments(storeIds: string[]): Promise<ShipmentRo
 /** Global search across all accessible shipments (RLS-scoped) by guide code
  *  (aliclik OR fenix), order name (#KP…) or customer phone. */
 export async function searchShipmentsQuery(query: string): Promise<ShipmentRow[]> {
-  const q = query.trim().replace(/[,()*%]/g, ""); // strip chars that break the or() filter
+  const { text: q, phoneTerms } = shipmentSearchTerms(query);
   if (q.length < 2) return [];
   const sb = await createServerSupabase();
   const like = `%${q}%`;
+  const filters = [
+    `guide_code.ilike.${like}`,
+    `order_name.ilike.${like}`,
+    `customer_phone.ilike.${like}`,
+    ...phoneTerms.map((phone) => `customer_phone.ilike.%${phone}%`),
+  ];
   const fetchRows = (columns: string) => sb
     .from("shipments")
     .select(columns)
-    .or(`guide_code.ilike.${like},order_name.ilike.${like},customer_phone.ilike.${like}`)
+    .or(filters.join(","))
     .order("updated_at", { ascending: false })
     .limit(50);
   let result = await fetchRows(SHIPMENT_COLUMNS);
@@ -694,7 +704,12 @@ export async function getShipmentWithCalls(
         }
       : null;
   }
-  const [currentShipment] = await withCurrentFenixEligibility(sb, [shipmentRow]);
+  // The queue only recalculates pending rows for performance, but the drawer
+  // must always show a fresh Fenix gate. This matters for audited exceptions on
+  // cancelled guides: stock can be added after the guide was marked Anulado.
+  const [currentShipment] = await withCurrentFenixEligibility(sb, [shipmentRow], {
+    includeNonPending: true,
+  });
   return {
     shipment: currentShipment ?? shipmentRow,
     calls,

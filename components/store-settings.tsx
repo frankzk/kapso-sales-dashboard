@@ -5,8 +5,9 @@ import { useActionState, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card, Section, SimpleTable } from "@/components/ui";
 import { STORE_STATUSES } from "@/lib/store-settings";
-import type { MetaAdAccount, StoreMetaAdAccount } from "@/lib/meta-marketing";
+import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
+  backfillStoreMetaInsights,
   generateAliclikWebhookSecret,
   generateKapsoWebhookSecret,
   listStoreMetaAdAccounts,
@@ -16,6 +17,7 @@ import {
   syncAliclikCatalogNow,
   syncNow,
   testAliclikConnection,
+  testStoreMetaConnection,
   testShalomConnection,
   findShalomAgencies,
   updateStore,
@@ -1321,7 +1323,7 @@ function SettingsForm({
             <input
               name="anthropic_model"
               defaultValue={s.anthropic_model ?? ""}
-              placeholder="claude-opus-4-8"
+              placeholder="claude-sonnet-5"
               className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
             />
           </label>
@@ -1419,10 +1421,14 @@ function MetaAdAccountPicker({ storeId, current }: { storeId: string; current: S
   const [selected, setSelected] = useState<Set<string>>(new Set(current.map((a) => a.id)));
   const [saved, setSaved] = useState<StoreMetaAdAccount[]>(current);
   const [msg, setMsg] = useState<{ error?: string; notice?: string } | null>(null);
+  const [testResult, setTestResult] = useState<MetaConnectionProbe | null>(null);
   const [pending, startTransition] = useTransition();
+  const [testing, startTesting] = useTransition();
+  const [backfilling, startBackfill] = useTransition();
 
   function fetchAccounts() {
     setMsg(null);
+    setTestResult(null);
     startTransition(async () => {
       const res = await listStoreMetaAdAccounts(storeId);
       if ("error" in res) {
@@ -1460,6 +1466,27 @@ function MetaAdAccountPicker({ storeId, current }: { storeId: string; current: S
     });
   }
 
+  function testConnection() {
+    setMsg(null);
+    setTestResult(null);
+    startTesting(async () => {
+      const res = await testStoreMetaConnection(storeId);
+      if ("error" in res) {
+        setMsg({ error: res.error });
+        return;
+      }
+      setTestResult(res.result);
+    });
+  }
+
+  function backfill() {
+    setMsg(null);
+    startBackfill(async () => {
+      const res = await backfillStoreMetaInsights(storeId);
+      setMsg("error" in res ? { error: res.error } : { notice: res.notice });
+    });
+  }
+
   const dirty =
     accounts != null &&
     (selected.size !== saved.length || saved.some((a) => !selected.has(a.id)));
@@ -1480,14 +1507,36 @@ function MetaAdAccountPicker({ storeId, current }: { storeId: string; current: S
             ) : null}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={fetchAccounts}
-          disabled={pending}
-          className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-        >
-          {pending ? "Cargando…" : "Buscar cuentas publicitarias"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={fetchAccounts}
+            disabled={pending || testing}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          >
+            {pending ? "Cargando…" : "Buscar cuentas publicitarias"}
+          </button>
+          <button
+            type="button"
+            onClick={testConnection}
+            disabled={pending || testing || backfilling || !saved.length}
+            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {testing ? "Probando Meta…" : "Probar conexión Meta"}
+          </button>
+          <button
+            type="button"
+            onClick={backfill}
+            disabled={pending || testing || backfilling || !saved.length}
+            className="rounded-lg border border-brand-300 bg-brand-50 px-4 py-2 text-sm font-medium text-brand-800 hover:bg-brand-100 disabled:opacity-50"
+          >
+            {backfilling ? "Cargando 90 días…" : "Sincronizar histórico (90 días)"}
+          </button>
+        </div>
+        <p className="text-xs text-slate-400">
+          Después del backfill inicial, Meta se actualizará automáticamente cada día y reescribirá
+          los últimos 3 días para incorporar ajustes tardíos.
+        </p>
         {accounts && accounts.length > 0 && (
           <>
             <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
@@ -1523,7 +1572,65 @@ function MetaAdAccountPicker({ storeId, current }: { storeId: string; current: S
         )}
         {msg?.error && <p className="text-sm text-red-600">{msg.error}</p>}
         {msg?.notice && <p className="text-sm text-emerald-600">{msg.notice}</p>}
+        {testResult && <MetaConnectionStatus result={testResult} />}
       </div>
     </Card>
+  );
+}
+
+function MetaConnectionStatus({ result }: { result: MetaConnectionProbe }) {
+  const okCount = result.accounts.filter((account) => account.insightsOk).length;
+  const tone = result.ok
+    ? "border-emerald-200 bg-emerald-50 text-emerald-950"
+    : "border-amber-200 bg-amber-50 text-amber-950";
+  return (
+    <div className={`rounded-xl border p-3 ${tone}`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold">
+            {result.ok ? "✓ Conexión completa" : "⚠ Configuración incompleta"}
+          </p>
+          <p className="mt-0.5 text-xs opacity-75">
+            Token {result.tokenValid ? "válido" : "inválido"} · Insights {okCount}/{result.accounts.length} cuentas ·{" "}
+            {result.range.from} al {result.range.to}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {result.spendByCurrency.map((total) => (
+            <span key={total.currency} className="rounded-md bg-white/70 px-2 py-1 text-xs font-semibold tabular-nums">
+              {new Intl.NumberFormat("es-PE", { maximumFractionDigits: 2 }).format(total.amount)} {total.currency}
+            </span>
+          ))}
+        </div>
+      </div>
+      {result.error && <p className="mt-2 text-xs font-medium">{result.error}</p>}
+      {result.accounts.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs font-medium">
+            Ver detalle por cuenta ({result.accounts.length})
+          </summary>
+          <ul className="mt-2 divide-y divide-black/5 rounded-lg bg-white/60 px-2">
+            {result.accounts.map((account) => (
+              <li key={account.id} className="flex items-start justify-between gap-3 py-2 text-xs">
+                <div className="min-w-0">
+                  <p className="truncate font-medium">
+                    <span className={account.insightsOk ? "text-emerald-600" : "text-red-600"}>●</span>{" "}
+                    {account.name}
+                  </p>
+                  <p className="truncate opacity-60">{account.id}</p>
+                  {account.error && <p className="mt-0.5 text-red-700">{account.error}</p>}
+                </div>
+                {account.insightsOk && (
+                  <div className="shrink-0 text-right tabular-nums">
+                    <p className="font-semibold">{account.spend.toFixed(2)} {account.currency || ""}</p>
+                    <p className="opacity-60">{account.impressions.toLocaleString("es-PE")} impresiones</p>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
   );
 }

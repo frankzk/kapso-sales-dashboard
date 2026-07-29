@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, type ComponentType, type SVGProps } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  type ComponentType,
+  type SVGProps,
+} from "react";
 import { cn } from "@/components/ui";
 import {
   IconChat,
@@ -35,6 +42,9 @@ function navItems(isVendedoraOnly: boolean): NavItem[] {
       { href: "/dashboard/leads", label: "Leads", icon: IconChat },
       { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
       { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
+      { href: "/dashboard/rutas", label: "Rutas", icon: IconTruck },
+      { href: "/dashboard/rutas", label: "Rutas", icon: IconTruck },
+    { href: "/dashboard/liquidaciones", label: "Liquidaciones", icon: IconMoney },
       // Modo solo: la página filtra server-side a la fila propia — una
       // vendedora nunca ve los resultados del resto del equipo.
       { href: "/dashboard/productividad", label: "Mi productividad", icon: IconHeadset },
@@ -49,19 +59,22 @@ function navItems(isVendedoraOnly: boolean): NavItem[] {
     { href: "/dashboard/envios/aliclik", label: "Catálogo Aliclik", icon: IconPlug },
     { href: "/dashboard/productividad", label: "Productividad", icon: IconHeadset },
     { href: "/dashboard/stores", label: "Tiendas", icon: IconStore },
+    { href: "/dashboard/liquidaciones", label: "Liquidaciones", icon: IconMoney },
     { href: "/dashboard/costos", label: "Costos", icon: IconMoney },
     { href: "/dashboard/team", label: "Equipo", icon: IconUsers },
     { href: "/dashboard/stores/new", label: "Conectar tienda", icon: IconPlug },
   ];
 }
 
-function Brand() {
+const SIDEBAR_COLLAPSED_KEY = "kapta.sidebar.collapsed";
+
+function Brand({ collapsed = false }: { collapsed?: boolean }) {
   return (
-    <div className="flex items-center gap-2.5">
+    <div className={cn("flex items-center", collapsed ? "justify-center" : "gap-2.5")}>
       <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-white">
         <IconChat className="h-4 w-4" />
       </div>
-      <span className="text-sm font-semibold text-slate-900">Kapso Sales</span>
+      {!collapsed && <span className="text-sm font-semibold text-slate-900">Kapso Sales</span>}
     </div>
   );
 }
@@ -83,9 +96,32 @@ export function Sidebar({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [collapsed, setCollapsed] = useState(false);
   const items = navItems(isVendedoraOnly);
   const pendingPath = pendingHref?.split("?", 1)[0] ?? null;
   const displayPath = pendingPath ?? pathname;
+
+  // Se restaura antes de que el navegador pinte para evitar que el contenido
+  // salte de 240 px a 64 px al recargar.
+  useLayoutEffect(() => {
+    try {
+      setCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true");
+    } catch {
+      // localStorage puede estar bloqueado; el menú simplemente queda abierto.
+    }
+  }, []);
+
+  function toggleCollapsed() {
+    setCollapsed((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
+      } catch {
+        // La preferencia no persiste, pero el control sigue funcionando.
+      }
+      return next;
+    });
+  }
 
   // Longest-prefix match so /dashboard/stores/new highlights "Conectar tienda"
   // (not "Tiendas") and bare /dashboard highlights only "Consolidado".
@@ -146,11 +182,19 @@ export function Sidebar({
   return (
     <>
       {/* Desktop rail */}
-      <aside className="hidden md:sticky md:top-0 md:flex md:h-screen md:w-60 md:shrink-0 md:flex-col md:border-r md:border-slate-200 md:bg-white">
-        <div className="px-5 py-4">
-          <Brand />
+      <aside
+        className={cn(
+          "hidden md:sticky md:top-0 md:flex md:h-screen md:shrink-0 md:flex-col md:border-r md:border-slate-200 md:bg-white md:transition-[width] md:duration-200 md:ease-out",
+          collapsed ? "md:w-16" : "md:w-60",
+        )}
+      >
+        <div className={cn("py-4", collapsed ? "px-2" : "px-5")}>
+          <Brand collapsed={collapsed} />
         </div>
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-2">
+        <nav
+          aria-label="Navegación principal"
+          className={cn("flex-1 space-y-1 overflow-y-auto py-2", collapsed ? "px-2" : "px-3")}
+        >
           {items.map((it) => {
             const active = it.href === activeHref;
             const Ico = it.icon;
@@ -164,32 +208,93 @@ export function Sidebar({
                 onTouchStart={() => prepare(it.href)}
                 onClick={(event) => beginNavigation(event, it.href)}
                 aria-current={active ? "page" : undefined}
+                aria-label={collapsed ? it.label : undefined}
+                title={collapsed ? it.label : undefined}
                 className={cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition",
+                  "flex h-9 items-center rounded-lg text-sm font-medium transition",
+                  collapsed ? "justify-center px-2" : "gap-3 px-3",
                   active
                     ? "bg-brand-50 text-brand-700"
                     : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
                 )}
               >
-                <Ico className="h-[18px] w-[18px]" />
-                {it.label}
+                <Ico className="h-[18px] w-[18px] shrink-0" />
+                {!collapsed && <span className="truncate">{it.label}</span>}
               </Link>
             );
           })}
         </nav>
-        <div className="border-t border-slate-200 px-3 py-3">
-          <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
+
+        <div className={cn("border-t border-slate-200 py-2", collapsed ? "px-2" : "px-3")}>
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? "Desplegar menú lateral" : "Colapsar menú lateral"}
+            title={collapsed ? "Desplegar menú" : "Colapsar menú"}
+            className={cn(
+              "flex h-9 w-full items-center rounded-lg text-sm font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500",
+              collapsed ? "justify-center" : "justify-between px-3",
+            )}
+          >
+            {!collapsed && <span>Colapsar menú</span>}
+            <svg
+              viewBox="0 0 20 20"
+              fill="none"
+              aria-hidden="true"
+              className={cn("h-4 w-4 transition-transform duration-200", collapsed && "rotate-180")}
+            >
+              <path
+                d="m12.5 4.75-5 5.25 5 5.25"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+
+        <div className={cn("border-t border-slate-200 py-3", collapsed ? "px-2" : "px-3")}>
+          <div
+            className={cn(
+              "flex items-center rounded-lg py-1.5",
+              collapsed ? "justify-center" : "gap-2.5 px-2",
+            )}
+            title={collapsed ? `${userEmail ?? "Cuenta"} · ${roleLabel}` : undefined}
+          >
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600">
               {(userEmail ?? "?").slice(0, 1).toUpperCase()}
             </div>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-slate-800">{userEmail ?? "Cuenta"}</p>
-              <p className="text-xs text-slate-400">{roleLabel}</p>
-            </div>
+            {!collapsed && (
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-slate-800">{userEmail ?? "Cuenta"}</p>
+                <p className="text-xs text-slate-400">{roleLabel}</p>
+              </div>
+            )}
           </div>
           <form action={signOut}>
-            <button className="mt-1 w-full rounded-lg px-3 py-2 text-left text-sm text-slate-500 transition hover:bg-slate-50 hover:text-slate-900">
-              Salir
+            <button
+              aria-label="Salir"
+              title={collapsed ? "Salir" : undefined}
+              className={cn(
+                "mt-1 flex h-9 w-full items-center rounded-lg text-sm text-slate-500 transition hover:bg-slate-50 hover:text-slate-900",
+                collapsed ? "justify-center" : "px-3 text-left",
+              )}
+            >
+              {collapsed ? (
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-4 w-4">
+                  <path
+                    d="M8.25 4H5.5A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16h2.75M11 6.5l3.5 3.5-3.5 3.5M7.5 10h7"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              ) : (
+                "Salir"
+              )}
             </button>
           </form>
         </div>

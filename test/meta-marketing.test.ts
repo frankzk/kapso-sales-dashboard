@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { fetchMetaAdMeta, fetchMetaSpend, listMetaAdAccounts, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
+import {
+  fetchMetaAdMeta,
+  fetchMetaSpend,
+  listMetaAdAccounts,
+  normalizeMetaAdAccounts,
+  probeMetaConnection,
+} from "@/lib/meta-marketing";
 
 function fakeFetch(status: number, json: unknown, capture?: (url: string) => void) {
   return (async (url: string) => {
@@ -77,6 +83,81 @@ describe("normalizeMetaAdAccounts (multi-account, with back-compat)", () => {
     expect(normalizeMetaAdAccounts(undefined)).toEqual([]);
     expect(normalizeMetaAdAccounts("nope")).toEqual([]);
     expect(normalizeMetaAdAccounts([{ name: "no id" }])).toEqual([]);
+  });
+});
+
+describe("probeMetaConnection", () => {
+  function probeFetch(options?: { failAccount?: string }) {
+    return (async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/me/adaccounts")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              { id: "act_1", account_id: "1", name: "Kenku Col 1", currency: "COP", account_status: 1 },
+              { id: "act_2", account_id: "2", name: "Kenku Perú", currency: "USD", account_status: 1 },
+            ],
+          }),
+        };
+      }
+      const id = /act_([^/]+)\/insights/.exec(parsed.pathname)?.[1];
+      if (id === options?.failAccount) {
+        return {
+          ok: false,
+          status: 403,
+          json: async () => ({ error: { message: "Missing ads_read permission." } }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [{ spend: id === "1" ? "100" : "25.50", impressions: "1200", reach: "800", frequency: "1.5", cpm: "10" }],
+        }),
+      };
+    }) as unknown as typeof fetch;
+  }
+
+  it("validates selected accounts and keeps spend separated by currency", async () => {
+    const result = await probeMetaConnection(
+      "TOK",
+      [{ id: "act_1", name: "Kenku Col 1" }, { id: "act_2", name: "Kenku Perú" }],
+      { from: "2026-07-22", to: "2026-07-28" },
+      { baseUrl: "https://graph.test/v21.0", fetchImpl: probeFetch() },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.accounts).toHaveLength(2);
+    expect(result.spendByCurrency).toEqual([
+      { currency: "COP", amount: 100 },
+      { currency: "USD", amount: 25.5 },
+    ]);
+  });
+
+  it("reports an Insights permission failure only on the affected account", async () => {
+    const result = await probeMetaConnection(
+      "TOK",
+      [{ id: "act_1", name: "Kenku Col 1" }, { id: "act_2", name: "Kenku Perú" }],
+      { from: "2026-07-22", to: "2026-07-28" },
+      { baseUrl: "https://graph.test/v21.0", fetchImpl: probeFetch({ failAccount: "2" }) },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.tokenValid).toBe(true);
+    expect(result.accounts[0]?.insightsOk).toBe(true);
+    expect(result.accounts[1]?.error).toContain("ads_read");
+  });
+
+  it("requires at least one saved account after validating the token", async () => {
+    const result = await probeMetaConnection(
+      "TOK",
+      [],
+      { from: "2026-07-22", to: "2026-07-28" },
+      { baseUrl: "https://graph.test/v21.0", fetchImpl: probeFetch() },
+    );
+    expect(result.tokenValid).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("No hay cuentas");
   });
 });
 

@@ -25,6 +25,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+      # Barato y sin Postgres: avisa de que db/apply*.sql se quedaron atrás
+      # antes de esperar al job de base de datos.
+      - run: pnpm db:apply:check
       - run: pnpm build
 
   db:

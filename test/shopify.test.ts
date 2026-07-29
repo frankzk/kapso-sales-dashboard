@@ -735,6 +735,7 @@ describe("order form (catalog search + draft create/read)", () => {
         draftOrder: {
           id: "gid://shopify/DraftOrder/7",
           name: "#D7",
+          status: "OPEN",
           shippingAddress: { address1: "Av X 1", address2: "ref", city: "Surco", province: "Lima", name: "Ana" },
           lineItems: {
             edges: [
@@ -745,6 +746,7 @@ describe("order form (catalog search + draft create/read)", () => {
       },
     };
     const d = await getDraftOrderForEdit({ domain: "x.myshopify.com", token: "t", gid: "gid://shopify/DraftOrder/7", fetchImpl: fakeFetch(resp) });
+    expect(d?.status).toBe("open");
     expect(d?.lineItems[0]).toMatchObject({ variantId: "gid://shopify/ProductVariant/11", title: "Mochila", quantity: 2, unitPrice: 60 });
     expect(d?.address).toMatchObject({ address1: "Av X 1", city: "Surco", province: "Lima", address2: "ref", name: "Ana" });
   });

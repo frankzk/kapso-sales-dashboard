@@ -1,22 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { campaignBreakdown, campaignDailyTrend } from "@/lib/metrics";
 import type { AdMeta } from "@/lib/meta-ads";
-import type { LeadRow, OrderRow } from "@/lib/types";
+import type { LeadRow, MetaAdPerformance, OrderRow } from "@/lib/types";
 
 const orders = [
-  { customer_phone: "51920582451", total_amount: 219, total_refunded: 0, cancelled_at: null },
-  { customer_phone: "51933333333", total_amount: 99, total_refunded: 0, cancelled_at: null },
+  { id: "order-1", name: "#1001", customer_phone: "51920582451", total_amount: 219, total_refunded: 0, cancelled_at: null, line_items: [{ title: "Mochila viajera", sku: "MOCH-1", quantity: 1 }] },
+  { id: "order-2", name: "#1002", customer_phone: "51933333333", total_amount: 99, total_refunded: 0, cancelled_at: null, line_items: [{ title: "Set Cocina", sku: "COC-1", quantity: 1 }] },
+  { id: "unrelated", name: "#9999", customer_phone: "51920582451", total_amount: 999, total_refunded: 0, cancelled_at: null, line_items: [] },
 ] as unknown as OrderRow[];
 
 const leads = [
-  { phone: "51920582451", source: "meta_ad", ad_id: "120246653255450657", ad_headline: "✈️ Viaja Sin Maletas", has_order: true },
+  { phone: "51920582451", source: "meta_ad", ad_id: "120246653255450657", ad_headline: "✈️ Viaja Sin Maletas", has_order: true, order_id: "order-1" },
   { phone: "51911111111", source: "meta_ad", ad_id: "120246653255450657", ad_headline: "✈️ Viaja Sin Maletas", has_order: false },
-  { phone: "51933333333", source: "meta_ad", ad_id: "999", ad_headline: "🍳 Set Cocina", has_order: true },
+  { phone: "51933333333", source: "meta_ad", ad_id: "999", ad_headline: "🍳 Set Cocina", has_order: true, order_id: "order-2" },
   { phone: "51944444444", source: null, ad_id: null, ad_headline: null, has_order: true }, // organic — excluded
 ] as unknown as LeadRow[];
 
 describe("campaignBreakdown (revenue half of ROAS)", () => {
-  it("groups meta_ad leads by ad and attributes revenue by phone", () => {
+  it("attributes only the exact linked order, never unrelated orders from the same phone", () => {
     const rows = campaignBreakdown(leads, orders);
     expect(rows).toHaveLength(2);
     const viaja = rows.find((r) => r.adId === "120246653255450657")!;
@@ -40,6 +41,17 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
     expect(rows.find((r) => r.adId === "Madera Como Nueva")!.metaAdId).toBeNull(); // "sin ad id"
   });
 
+  it("keeps the attributed stores so the product picker searches the right catalogs", () => {
+    const storeLeads = [
+      { store_id: "store-kenku", source: "meta_ad", ad_id: "shared-ad", ad_headline: "Producto" },
+      { store_id: "store-kenku", source: "meta_ad", ad_id: "shared-ad", ad_headline: "Producto" },
+      { store_id: "store-aurela", source: "meta_ad", ad_id: "shared-ad", ad_headline: "Producto" },
+    ] as unknown as LeadRow[];
+
+    const [row] = campaignBreakdown(storeLeads, []);
+    expect(row?.storeIds).toEqual(["store-kenku", "store-aurela"]);
+  });
+
   it("upgrades the label to the real Meta ad name when resolved, else falls back", () => {
     const names: Record<string, AdMeta> = {
       "120246653255450657": {
@@ -52,6 +64,9 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
         adName: "mochila viral 31",
         status: "ACTIVE",
         fetchedAt: "2026-06-24T00:00:00Z",
+        promotedProductName: "Mochila viajera",
+        promotedSkus: ["MOCH-1"],
+        promotedProductUpdatedAt: "2026-06-24T00:00:00Z",
       },
     };
     const rows = campaignBreakdown(leads, orders, names);
@@ -62,12 +77,84 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
     expect(viaja.headline).toBe("✈️ Viaja Sin Maletas"); // headline still preserved
     expect(viaja.meta?.campaignName).toBe("CBO Msj | TravelersBackpack | 2306 Campaña");
     expect(viaja.meta?.accountId).toBe("1253056442078246");
+    expect(viaja.productMatchRate).toBe(1);
 
     // The other ad has no lookup entry → degrades to its headline, unresolved.
     const cocina = rows.find((r) => r.adId === "999")!;
     expect(cocina.label).toBe("🍳 Set Cocina");
     expect(cocina.resolved).toBe(false);
     expect(cocina.meta).toBeNull();
+  });
+
+  it("classifies cross-sell and calculates the latest delivery outcome", () => {
+    const names: Record<string, AdMeta> = {
+      "999": {
+        accountId: null, campaignId: null, campaignName: null, objective: null,
+        adsetId: null, adsetName: null, adName: "Cocina", status: null, fetchedAt: null,
+        promotedProductName: "Mochila", promotedSkus: ["MOCH-1"], promotedProductUpdatedAt: null,
+      },
+    };
+    const rows = campaignBreakdown(leads, orders, names, [
+      { orderId: "order-2", deliveryStatus: "Entregado", statusCategory: "delivered", createdAt: "2026-07-20T00:00:00Z" },
+    ]);
+    const cocina = rows.find((row) => row.adId === "999")!;
+    expect(cocina.crossSellOrders).toBe(1);
+    expect(cocina.productMatchRate).toBe(0);
+    expect(cocina.deliveredOrders).toBe(1);
+    expect(cocina.deliveryRate).toBe(1);
+  });
+
+  it("joins historical Meta delivery and derives weighted cost metrics", () => {
+    const performance = [
+      {
+        adId: "999",
+        accountId: "act-1",
+        currency: "USD",
+        spend: 24,
+        impressions: 12_000,
+        reach: 8_000,
+        clicks: 120,
+        inlineLinkClicks: 90,
+        activeDays: 6,
+        firstDate: "2026-07-01",
+        lastDate: "2026-07-06",
+      },
+      {
+        adId: "spent-without-leads",
+        accountId: "act-1",
+        currency: "USD",
+        spend: 10,
+        impressions: 5_000,
+        reach: 4_000,
+        clicks: 30,
+        inlineLinkClicks: 20,
+        activeDays: 3,
+        firstDate: "2026-07-01",
+        lastDate: "2026-07-03",
+      },
+    ] satisfies MetaAdPerformance[];
+    const rows = campaignBreakdown(leads, orders, {}, [
+      { orderId: "order-2", deliveryStatus: "Entregado", statusCategory: "delivered", createdAt: "2026-07-20T00:00:00Z" },
+    ], performance);
+
+    const cocina = rows.find((row) => row.adId === "999")!;
+    expect(cocina).toMatchObject({
+      metaCurrency: "USD",
+      spend: 24,
+      impressions: 12_000,
+      cpm: 2,
+      frequency: 1.5,
+      cpc: 0.2,
+      cpl: 24,
+      cpa: 24,
+      deliveredCpa: 24,
+    });
+    expect(cocina.roas).toBeCloseTo(99 / 24);
+    expect(cocina.deliveredRoas).toBeCloseTo(99 / 24);
+
+    const noSignal = rows.find((row) => row.adId === "spent-without-leads")!;
+    expect(noSignal.leads).toBe(0);
+    expect(noSignal.decision).toBe("no_attribution");
   });
 
   it("campaignDailyTrend buckets leads per day per ad (store tz)", () => {

@@ -7,7 +7,8 @@
 // TypeScript — son tres consultas pequeñas de un solo pedido, no hacen falta
 // joins (que PostgREST tampoco daría).
 
-import { createServerSupabase } from "@/lib/db";
+import { unstable_cache } from "next/cache";
+import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
@@ -19,6 +20,7 @@ import type {
   ShipmentRow,
 } from "@/lib/types";
 import type { GeneralStatus } from "@/lib/order-status";
+import type { AgencySummary, MasterFilters, MasterSortKey } from "@/lib/order-master-filters";
 
 export type MasterView = "todos" | GeneralStatus;
 
@@ -35,14 +37,24 @@ export function isMasterView(v: string | undefined | null): v is MasterView {
   return !!v && MASTER_VIEWS.some((s) => s.key === v);
 }
 
+// Columnas del LISTADO. Deliberadamente más cortas que la fila completa: en un
+// listado de 10.000 pedidos, cada columna se paga 10.000 veces — y no solo su
+// valor, también su NOMBRE repetido en cada objeto JSON. Con las 43 columnas
+// eran 13 MB por carga, de los que la mayor parte eran nombres de campo.
+//
+// Aquí solo van las que la tabla pinta o los filtros usan. Todo lo demás
+// —dirección, referencia, coordenadas, origen de la geo— lo trae el detalle al
+// abrir un pedido (`getOrderMasterDetail`, que sí lee la fila entera), que es
+// exactamente cuando hace falta y para UN pedido, no para diez mil.
 const MASTER_COLUMNS =
-  "id,store_id,order_id,order_name,shopify_order_id,order_created_at,customer_name," +
-  "customer_phone,region,province,district,address,reference,latitude,longitude,geo_source," +
+  "id,store_id,order_id,order_name,order_created_at,customer_name," +
+  "customer_phone,region,province,district," +
+  "coverage," +
   "shipping_mode,order_total,general_status," +
-  "operational_status,status_since,status_source,status_locked,current_courier,last_courier," +
-  "courier_count,attempt_count,guide_code,dispatched_at,delivered_at,delivered_courier," +
-  "returned_at,last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
-  "key_state,agency_branch,agency_arrived_at,agency_expires_at,recomputed_at,updated_at";
+  "operational_status,status_since,status_locked,current_courier,last_courier," +
+  "courier_count,attempt_count,guide_code,dispatched_at,delivered_at," +
+  "last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
+  "key_state,agency_branch,agency_arrived_at,agency_expires_at";
 
 // PostgREST corta cada respuesta en `db-max-rows` (1000 en Supabase), así que se
 // pagina con .range() en vez de pedir un .limit() grande.
@@ -54,32 +66,10 @@ const MAX_LIST = 20_000;
  * consulta abarca TODAS las tiendas accesibles y el filtro por tienda se aplica
  * en el board (es multi-selección y se combina con el resto).
  */
-export async function getOrderMasterRows(
-  storeIds: string[],
-  view: MasterView = "todos",
-  opts: { limit?: number } = {},
-): Promise<OrderMasterRow[]> {
-  if (!storeIds.length) return [];
-  const sb = await createServerSupabase();
-  const cap = opts.limit ?? MAX_LIST;
-  const out: OrderMasterRow[] = [];
-
-  for (let from = 0; from < cap; from += PAGE) {
-    let query = sb.from("order_master").select(MASTER_COLUMNS).in("store_id", storeIds);
-    if (view !== "todos") query = query.eq("general_status", view);
-    const { data, error } = await query
-      // Lo que más importa operativamente es qué se movió (o dejó de moverse)
-      // hace más tiempo; los que nunca se movieron van primero.
-      .order("last_movement_at", { ascending: false, nullsFirst: true })
-      .order("order_created_at", { ascending: false })
-      .range(from, from + PAGE - 1);
-    if (error) return out;
-    const page = (data ?? []) as unknown as OrderMasterRow[];
-    out.push(...page);
-    if (page.length < PAGE) break;
-  }
-  return out;
-}
+// `getOrderMasterRows` (el cargador de la tabla ENTERA) se retiró al paginar en
+// el servidor: bajaba ~10.000 filas y 13 MB por carga. Si algún día hace falta
+// un volcado completo, que sea para exportar y con su propia función, no para
+// pintar una pantalla.
 
 export interface MasterCounts {
   todos: number;
@@ -283,4 +273,321 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     lineItems: orderRow?.line_items ?? [],
     address: shopifyShippingAddress(orderRow?.raw),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Listado paginado, con los filtros aplicados en la BASE.
+// ---------------------------------------------------------------------------
+
+/** Filas por página. 100 llena la pantalla y pesa ~100 KB, frente a los 9,5 MB
+ *  que costaba bajar la tabla entera. */
+export const MASTER_PAGE_SIZE = 100;
+
+export interface MasterPage {
+  rows: OrderMasterRow[];
+  /** Cuántos hay en total con esos filtros, para paginar y para el contador. */
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** Columna por la que ordena cada opción del selector, y si va descendente. */
+const SORT_COLUMN: Record<MasterSortKey, { column: string; ascending: boolean }> = {
+  created: { column: "order_created_at", ascending: false },
+  movement: { column: "last_movement_at", ascending: false },
+  status_age: { column: "status_since", ascending: true },
+  attempts: { column: "attempt_count", ascending: false },
+  couriers: { column: "courier_count", ascending: false },
+  total: { column: "order_total", ascending: false },
+};
+
+/**
+ * Traduce los filtros a la consulta. Cada uno se apoya en un índice que ya
+ * existe (`order_master_store_district_idx`, `..._store_courier_idx`, los
+ * parciales de multi_courier y multi_attempt…), así que filtrar en la base sale
+ * más barato que traérselo todo y filtrarlo en el navegador — que es lo que se
+ * hacía antes.
+ *
+ * `now` se pasa desde fuera para que "vence pronto" y "sin movimiento" sean
+ * reproducibles y no dependan del reloj del servidor a mitad de una petición.
+ */
+function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
+  // El tipo del query builder de PostgREST es encadenado; se trabaja sobre una
+  // referencia suelta para no pelearse con los genéricos en cada línea.
+  let q = query as any;
+
+  if (f.stores.size) q = q.in("store_id", [...f.stores]);
+  if (f.generalStatuses.size) q = q.in("general_status", [...f.generalStatuses]);
+  if (f.operationalStatuses.size) q = q.in("operational_status", [...f.operationalStatuses]);
+  if (f.shippingModes.size) q = q.in("shipping_mode", [...f.shippingModes]);
+  if (f.regions.size) q = q.in("region", [...f.regions]);
+  if (f.provinces.size) q = q.in("province", [...f.provinces]);
+  if (f.districts.size) q = q.in("district", [...f.districts]);
+  if (f.coverages.size) q = q.in("coverage", [...f.coverages]);
+  if (f.pickupStates.size) q = q.in("pickup_state", [...f.pickupStates]);
+
+  // El courier mira el actual Y el último: buscar "los que tocó Fenix" no debe
+  // perder los que ya pasaron a otra guía. Es la misma regla que tenía el filtro
+  // en cliente, escrita como un OR de PostgREST.
+  if (f.couriers.size) {
+    const list = [...f.couriers].map((c) => `"${c.replace(/"/g, '""')}"`).join(",");
+    q = q.or(`current_courier.in.(${list}),last_courier.in.(${list})`);
+  }
+
+  const range = (column: string, from: string, to: string) => {
+    if (from) q = q.gte(column, `${from}T00:00:00.000Z`);
+    // Extremo superior inclusive: el usuario que escribe "hasta el 24" espera
+    // que entren los del 24, no que se corten a medianoche del 23.
+    if (to) q = q.lte(column, `${to}T23:59:59.999Z`);
+  };
+  range("order_created_at", f.createdFrom, f.createdTo);
+  range("dispatched_at", f.dispatchedFrom, f.dispatchedTo);
+  range("last_movement_at", f.movementFrom, f.movementTo);
+  range("delivered_at", f.deliveredFrom, f.deliveredTo);
+
+  if (f.withComments) q = q.gt("comment_count", 0);
+  if (f.multiCourier) q = q.gt("courier_count", 1);
+  if (f.multiAttempt) q = q.gt("attempt_count", 1);
+
+  if (f.expiringSoon) {
+    // Incluye lo ya vencido: es justamente lo que hay que trabajar hoy para que
+    // el paquete no se devuelva.
+    const limit = new Date(now.getTime() + 2 * 86_400_000).toISOString();
+    q = q.not("agency_expires_at", "is", null).lte("agency_expires_at", limit);
+  }
+
+  if (f.staleDays > 0) {
+    // "Sin movimientos recientes". Un pedido que NUNCA se movió también cuenta:
+    // es justamente el que nadie está mirando, así que se incluyen los nulos.
+    const cutoff = new Date(now.getTime() - f.staleDays * 86_400_000).toISOString();
+    q = q.or(`last_movement_at.is.null,last_movement_at.lte.${cutoff}`);
+  }
+
+  const term = f.search.trim().replace(/^#/, "");
+  if (term) {
+    const like = `*${term.replace(/[*,()]/g, "")}*`;
+    q = q.or(
+      `order_name.ilike.${like},guide_code.ilike.${like},customer_phone.ilike.${like},customer_name.ilike.${like}`,
+    );
+  }
+
+  return q as T;
+}
+
+/**
+ * Una página del Master, filtrada y ordenada en la base.
+ *
+ * Reemplaza al listado completo: antes se bajaban las ~10.000 filas al navegador
+ * (13 MB, y otra vez enteras en cada cambio de pestaña) para filtrarlas en
+ * memoria. Ahora viaja lo que se ve.
+ */
+export async function getOrderMasterPage(
+  storeIds: string[],
+  params: {
+    view?: MasterView;
+    filters: MasterFilters;
+    sortKey: MasterSortKey;
+    page: number;
+    pageSize?: number;
+    now?: Date;
+  },
+): Promise<MasterPage> {
+  const pageSize = params.pageSize ?? MASTER_PAGE_SIZE;
+  const empty: MasterPage = { rows: [], total: 0, page: 1, pageSize };
+  if (!storeIds.length) return empty;
+
+  const sb = await createServerSupabase();
+  const view = params.view ?? "todos";
+  const now = params.now ?? new Date();
+  const sort = SORT_COLUMN[params.sortKey] ?? SORT_COLUMN.created;
+
+  const build = (select: string, opts?: { count: "exact"; head: true }) => {
+    let q = opts
+      ? sb.from("order_master").select(select, opts)
+      : sb.from("order_master").select(select);
+    q = q.in("store_id", storeIds) as typeof q;
+    if (view !== "todos") q = q.eq("general_status", view) as typeof q;
+    return applyServerFilters(q, params.filters, now);
+  };
+
+  // El conteo va en paralelo con la página: es una consulta `head`, no trae
+  // filas, y hace falta para poder paginar.
+  const [countRes, rowsRes] = await Promise.all([
+    build("id", { count: "exact", head: true }),
+    (() => {
+      const q = build(MASTER_COLUMNS) as any;
+      const from = Math.max(0, (params.page - 1) * pageSize);
+      return q
+        .order(sort.column, { ascending: sort.ascending, nullsFirst: false })
+        // Desempate estable: sin un orden total, dos páginas pueden repetir o
+        // saltarse una fila.
+        .order("id", { ascending: true })
+        .range(from, from + pageSize - 1);
+    })(),
+  ]);
+
+  if (rowsRes.error) return empty;
+  return {
+    rows: (rowsRes.data ?? []) as unknown as OrderMasterRow[],
+    total: countRes.count ?? 0,
+    page: params.page,
+    pageSize,
+  };
+}
+
+/** Opciones de los desplegables, calculadas en la base (0059). Unos kilobytes
+ *  en vez de las 10.000 filas que hacían falta para deducirlas en el navegador. */
+/**
+ * Lo que NO depende de lo que el usuario esté filtrando se calcula una vez y se
+ * reutiliza durante un rato.
+ *
+ * Las opciones de los desplegables y el resumen de agencia son iguales escribas
+ * lo que escribas en el buscador, pero se recalculaban en CADA tecla porque
+ * viven en el mismo render de servidor que el listado. Eran ~25 ms de base y un
+ * viaje de red por pulsación, para devolver exactamente lo mismo.
+ *
+ * Se usa el cliente admin y no el de sesión porque `unstable_cache` no puede
+ * leer cookies. El alcance sigue siendo correcto: la clave del caché son las
+ * tiendas, que el llamador ya autorizó antes de llegar aquí.
+ */
+const FACETS_TTL_SECONDS = 120;
+
+async function loadFacets(storeIds: string[]) {
+  const empty = { operational: [], courier: [], region: [], province: [], district: [], coverage: [], pickup: [] };
+  if (!storeIds.length) return empty;
+  const admin = createAdminSupabase();
+  const { data, error } = await admin.rpc("master_facets", { p_store_ids: storeIds });
+  if (error || !data) return empty;
+  const d = data as Record<string, string[] | null>;
+  const list = (k: string) => [...(d[k] ?? [])].sort((a, b) => a.localeCompare(b, "es"));
+  return {
+    operational: list("operational"),
+    courier: list("courier"),
+    region: list("region"),
+    province: list("province"),
+    district: list("district"),
+    coverage: list("coverage"),
+    pickup: list("pickup"),
+  };
+}
+
+async function loadAgencySummary(storeIds: string[]): Promise<AgencySummary> {
+  const empty: AgencySummary = {
+    total: 0,
+    disponibles: 0,
+    proximosAVencer: 0,
+    retornoIniciado: 0,
+    devueltos: 0,
+  };
+  if (!storeIds.length) return empty;
+  const admin = createAdminSupabase();
+  const now = new Date();
+  const count = async (build: (q: any) => any): Promise<number> => {
+    const base = admin
+      .from("order_master")
+      .select("id", { count: "exact", head: true })
+      .in("store_id", storeIds);
+    const { count: n, error } = await build(base);
+    return error ? 0 : (n ?? 0);
+  };
+  const inAgency = (q: any) => q.or("pickup_state.not.is.null,shipping_mode.eq.agency");
+  const soon = new Date(now.getTime() + 2 * 86_400_000).toISOString();
+  const [total, disponibles, proximosAVencer, retornoIniciado, devueltos] = await Promise.all([
+    count(inAgency),
+    count((q) => q.eq("pickup_state", "disponible")),
+    count((q) => inAgency(q).not("agency_expires_at", "is", null).lte("agency_expires_at", soon)),
+    count((q) => q.eq("pickup_state", "retorno_iniciado")),
+    count((q) => q.eq("pickup_state", "devuelto")),
+  ]);
+  return { total, disponibles, proximosAVencer, retornoIniciado, devueltos };
+}
+
+export const getMasterFacetsCached = (storeIds: string[]) =>
+  unstable_cache(
+    async () => loadFacets(storeIds),
+    ["master-facets", [...storeIds].sort().join(",")],
+    { revalidate: FACETS_TTL_SECONDS },
+  )();
+
+export const getAgencySummaryCached = (storeIds: string[]) =>
+  unstable_cache(
+    async () => loadAgencySummary(storeIds),
+    ["master-agency", [...storeIds].sort().join(",")],
+    { revalidate: FACETS_TTL_SECONDS },
+  )();
+
+export async function getMasterFacets(storeIds: string[]): Promise<{
+  operational: string[];
+  courier: string[];
+  region: string[];
+  province: string[];
+  district: string[];
+  coverage: string[];
+  pickup: string[];
+}> {
+  const empty = { operational: [], courier: [], region: [], province: [], district: [], coverage: [], pickup: [] };
+  if (!storeIds.length) return empty;
+  const sb = await createServerSupabase();
+  const { data, error } = await sb.rpc("master_facets", { p_store_ids: storeIds });
+  if (error || !data) return empty;
+  const d = data as Record<string, string[] | null>;
+  const list = (k: string) => [...(d[k] ?? [])].sort((a, b) => a.localeCompare(b, "es"));
+  return {
+    operational: list("operational"),
+    courier: list("courier"),
+    region: list("region"),
+    province: list("province"),
+    district: list("district"),
+    coverage: list("coverage"),
+    pickup: list("pickup"),
+  };
+}
+
+/**
+ * Resumen de agencia contando en la BASE, no sobre las filas cargadas.
+ *
+ * Antes se calculaba sobre las ~10.000 filas que el navegador tenía en memoria.
+ * Con el listado paginado eso pasaría a contar solo las 100 visibles y daría
+ * números falsos SIN AVISAR — que es peor que no mostrarlos. Son cinco conteos
+ * `head`: no traen filas.
+ */
+export async function getAgencySummary(
+  storeIds: string[],
+  now: Date = new Date(),
+): Promise<AgencySummary> {
+  const empty: AgencySummary = {
+    total: 0,
+    disponibles: 0,
+    proximosAVencer: 0,
+    retornoIniciado: 0,
+    devueltos: 0,
+  };
+  if (!storeIds.length) return empty;
+  const sb = await createServerSupabase();
+
+  const count = async (build: (q: any) => any): Promise<number> => {
+    const base = sb
+      .from("order_master")
+      .select("id", { count: "exact", head: true })
+      .in("store_id", storeIds);
+    const { count: n, error } = await build(base);
+    return error ? 0 : (n ?? 0);
+  };
+
+  // "En agencia" es tener sub-estado de recojo o ir por modo agencia, la misma
+  // regla que usaba `agencySummary` en cliente.
+  const inAgency = (q: any) => q.or("pickup_state.not.is.null,shipping_mode.eq.agency");
+  const soon = new Date(now.getTime() + 2 * 86_400_000).toISOString();
+
+  const [total, disponibles, proximosAVencer, retornoIniciado, devueltos] = await Promise.all([
+    count(inAgency),
+    count((q) => q.eq("pickup_state", "disponible")),
+    count((q) =>
+      inAgency(q).not("agency_expires_at", "is", null).lte("agency_expires_at", soon),
+    ),
+    count((q) => q.eq("pickup_state", "retorno_iniciado")),
+    count((q) => q.eq("pickup_state", "devuelto")),
+  ]);
+
+  return { total, disponibles, proximosAVencer, retornoIniciado, devueltos };
 }

@@ -157,6 +157,8 @@ export function ExecutiveDashboard({
   waNumbers,
   attribution,
   metaSpend,
+  campaignDeliveries,
+  metaAdPerformance,
 }: {
   stores: StoreSummary[];
   scope: "all" | string;
@@ -174,6 +176,8 @@ export function ExecutiveDashboard({
   waNumbers?: Record<string, WaNumber>;
   attribution?: SalesAttribution;
   metaSpend?: number | null;
+  campaignDeliveries?: import("@/lib/types").CampaignDeliveryOutcome[];
+  metaAdPerformance?: import("@/lib/types").MetaAdPerformance[];
 }) {
   const names: Record<string, string> = Object.fromEntries(stores.map((s) => [s.id, s.name]));
   const totals = aggregateRollups(rollups);
@@ -215,7 +219,13 @@ export function ExecutiveDashboard({
   const lostRev = lostRevenueByReason(loss, totals.aov);
   const channels = botVsAdvisor(orders);
   const cartStats = cartRecovery(leadList, orders);
-  const campaignStats = campaignBreakdown(leadList, orders, adNames ?? {});
+  const campaignStats = campaignBreakdown(
+    leadList,
+    orders,
+    adNames ?? {},
+    campaignDeliveries ?? [],
+    metaAdPerformance ?? [],
+  );
   const campaignTrend = campaignDailyTrend(leadList, adNames ?? {}, timezone);
   const waStats = leadsByWaNumber(leadList, orders);
   const funnelStages = conversationalFunnel({
@@ -395,11 +405,15 @@ export function ExecutiveDashboard({
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
           <Module
             title="Rendimiento por anuncio (Meta)"
-            subtitle="Una fila por anuncio (ad id) · clic en una columna para ordenar · el nombre del anuncio abre Meta Ads Manager · el ROAS se completa al sumar el gasto"
+            subtitle="Gasto e impresiones desde Meta · ventas y entregas desde Shopify y logística · abre una fila para auditar producto y pedidos"
             info
             className="lg:col-span-12"
           >
-            <CampaignTable rows={campaignStats} currency={currency} />
+            <CampaignTable
+              rows={campaignStats}
+              currency={currency}
+              catalogStoreIds={scope === "all" ? stores.map((store) => store.id) : [scope]}
+            />
           </Module>
         </div>
       )}

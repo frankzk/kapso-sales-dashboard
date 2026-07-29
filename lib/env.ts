@@ -35,7 +35,11 @@ export const env = {
   anthropicApiKey: () => process.env.ANTHROPIC_API_KEY ?? "",
   anthropicApiBase: () =>
     (process.env.ANTHROPIC_API_BASE ?? "https://api.anthropic.com").replace(/\/$/, ""),
-  yapeVisionModel: () => process.env.YAPE_VISION_MODEL ?? "claude-opus-4-8",
+  // Modelo de visión (comprobantes Yape y hojas de liquidación fotografiadas).
+  // Sonnet 5 lee una captura o un cuaderno con solvencia y cuesta bastante menos
+  // que Opus, que es lo que importa cuando esto corre una vez por comprobante.
+  // Se puede subir de gama con YAPE_VISION_MODEL sin tocar código.
+  yapeVisionModel: () => process.env.YAPE_VISION_MODEL ?? "claude-sonnet-5",
 
   // --- Master de Pedidos: desde qué fecha traer los pedidos de Shopify que no
   //     son del bot. Sin esto la reconciliación pagina hasta el primer pedido de

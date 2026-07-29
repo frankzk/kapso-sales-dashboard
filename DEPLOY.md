@@ -507,6 +507,172 @@ especiales), **costos de producto** (unitario, por tienda, proveedor y lote) y
 - **Escritura solo para administradores** de la organización (RLS, mismo patrón
   que `fenix_stock`), con el permiso `costs.manage`.
 
+## 5k-bis. Liquidaciones de motorizados
+
+Sección propia (`/dashboard/liquidaciones`). El motorizado entrega contra
+reembolso y al final del día liquida: declara qué guías entregó, cuánta plata
+cobró y deposita lo recaudado. La hoja llega **en foto de cuaderno o en
+Excel/CSV**, y las dos entran por el mismo sitio.
+
+- **Needs migration 0054** (`riders`, `rider_settlements`,
+  `rider_settlement_lines`, más los conceptos `motorizado_*` en `cost_tariffs`).
+  Antes de correrla la sección no carga.
+- **La foto se transcribe con visión** (`lib/settlement-vision.ts`, misma clave
+  por tienda que los comprobantes Yape). Lo que no se lee con claridad queda
+  **en blanco, nunca en cero**: un monto inventado en una liquidación es plata
+  inventada. Si la lectura falla, la carga se rechaza en vez de guardar una
+  liquidación vacía dada por buena.
+- **Dos niveles de lectura de hoja.** Adaptadores con nombre en
+  `lib/settlements/` para los formatos conocidos, y un lector genérico por alias
+  de cabecera (`lib/settlement-sheet.ts`) para todo lo demás — así se puede
+  cargar la hoja de un coordinador nuevo sin escribir código. El formato se
+  detecta por contenido; si nadie lo reconoce, se usa el genérico.
+- **Axel Courier** (`lib/settlements/axel.ts`), Lima Metropolitana. Su reporte
+  diario tiene cuatro rarezas que el adaptador conoce: su columna `CLIENTE` es
+  la **tienda** (AURELA), no el cliente; **no trae guía ni nº de pedido**, así
+  que se empareja por nombre y distrito; su `GANANCIA` es la **comisión que Axel
+  se cobra** por entrega (S/ 10 en Lima, S/ 13 en Puente Piedra, S/ 18 en
+  Cajamarquilla), y se la cobran incluso en algunas entregas fallidas
+  (`CAIDA COBRO`, `RECHAZO`); y la hoja trae **varios bloques acumulativos** del
+  mismo día, cada uno con su `TOTAL COBRADO`. Las filas de total, `RECAUDADO` y
+  `COMISION` se descartan — colarlas duplicaría la plata del día — pero la
+  comisión de POS sí se captura, porque también se descuenta del depósito.
+- **El depósito esperado es lo cobrado MENOS la comisión.** Axel cobra
+  S/ 2,219.73, se queda S/ 146.00 y deposita S/ 2,073.73. Sin restar la comisión
+  el cuadre marcaría un faltante todos los días por el importe exacto de lo que
+  legítimamente se quedan. Las comisiones de líneas sin vincular cuentan igual:
+  el courier se las queda, y dejarlas fuera haría que el cuadre del depósito
+  cambiara al vincular una línea.
+- **Emparejar por nombre es el último recurso y es estricto**: solo vincula
+  cuando queda UN candidato, acotado a los días alrededor de la liquidación, y
+  desempatando por distrito. Tolera que el courier trunque el nombre a lo que
+  cabe en la celda ("Ana María Cárd"). Dos homónimos sin distrito que los separe
+  van a revisión — un nombre no es un identificador.
+- **Lo declarado nunca pisa lo real.** El estado de la guía y el monto del
+  pedido siguen viniendo del Master; el cuadre solo COMPARA y nombra la
+  diferencia. Que la hoja diga "entregado" no marca el pedido como entregado.
+- **Son dos cuadres, no uno**, y se muestran por separado: *¿lo declarado
+  coincide con el Master?* y *¿depositó lo que él mismo declaró?*. Un motorizado
+  puede declarar bien y depositar de menos, o al revés.
+- **Lo que no se puede vincular no se adivina**: una línea sin guía reconocible
+  queda en revisión y la resuelve una persona. Vincular mal mueve plata de un
+  pedido a otro y el cuadre deja de significar nada.
+- **El pago al motorizado usa el motor de Costos**, con sus mismas dos reglas
+  (vigencia y especificidad): conceptos `motorizado_entrega`,
+  `motorizado_visita` y `motorizado_devolucion`, que se configuran en
+  `/dashboard/costos`. **Sin tarifa vigente ese día no se puede cerrar**: un
+  concepto sin tarifa no cuenta como cero.
+- **Descontar el faltante es opcional y explícito.** Por defecto NO se descuenta:
+  que un faltante se cobre o se perdone es decisión de la empresa. Cuando se
+  activa, el pago nunca baja de cero.
+- **Cerrar es irreversible por diseño**: congela `payout_amount`. Si después
+  cambia una tarifa o se corrige una guía, ese número no se reescribe — se abre
+  una liquidación de ajuste. Cerrar con descuadre exige confirmación y queda
+  anotado en la nota.
+- **Permisos**: `settlements.manage` (cargar y corregir vínculos, lo tiene
+  vendedora) y `settlements.close` (congelar el pago, solo admin/owner).
+- Subir dos veces el mismo archivo **no duplica nada**: se corta por hash y
+  devuelve la liquidación que ya existía.
+
+## 5k-ter. Rutas de reparto (motorizados propios)
+
+Sección propia (`/dashboard/rutas`) para el coordinador y una pantalla aparte
+(`/reparto`) para el motorizado, pensada para un teléfono con una mano y mala
+señal. Invierte la dirección del módulo anterior: en vez de RECONSTRUIR el día
+leyendo una hoja, la entrega se DECLARA en el momento y la liquidación cae sola
+al cerrar. La carga por foto/Excel sigue viva para los couriers externos.
+
+- **Needs migration 0056** (`delivery_routes`, `delivery_stops`,
+  `delivery_stop_events`, rol `motorizado`, `riders.user_id`).
+- **El motorizado es un usuario de verdad**, con el mismo correo y enlace mágico
+  que el equipo. No hay una segunda autenticación casera que mantener. Se le da
+  acceso con un botón desde Rutas, que crea el usuario, lo hace `motorizado` de
+  la organización y lo ata a su ficha — en un solo paso, para que no quede
+  nunca un usuario sin ficha entrando a una pantalla vacía.
+- **Solo ve sus paradas, y lo garantiza la base.** Las políticas filtran por
+  `riders.user_id = auth.uid()`; no existe una consulta que le devuelva la ruta
+  de otro, aunque alguien manipule la petición. Y solo ve la ruta cuando ya se
+  le entregó: una que se está armando no le aparece a medio hacer.
+- **Tres estados con una razón cada uno**: `planificada` (no la ve; se añaden y
+  quitan paradas), `en_curso` (está en su teléfono; lo reportado ya no se
+  borra), `cerrada` (generó su liquidación).
+- **Lo que reporta es una declaración, no la verdad.** Escribe en la parada, NO
+  en el Master: que marque "entregado" no cierra el pedido. El cuadre compara
+  ambas versiones, igual que con la hoja de un courier.
+- **Validación compartida.** `validateStopReport` corre en el móvil (aviso
+  inmediato, sin gastarle datos) y en el servidor (la que manda). Una entrega
+  exige método de cobro, monto y foto; cobrar por Yape exige la captura; una no
+  entrega exige motivo del catálogo; y declarar dinero en una no-entrega se
+  rechaza por contradictorio.
+- **Una parada reportada se corrige, no se reescribe**: cada reporte deja su
+  rastro en `delivery_stop_events`, con autor y hora. Es dinero.
+- **Cerrar la ruta crea la liquidación** con las líneas YA vinculadas a su
+  pedido — sin cola de revisión, porque no hay que adivinar de quién es cada
+  fila. El efectivo declarado sale de lo que reportó cobrar; si al contar el
+  dinero sale otra cosa, esa diferencia es justo lo que el cuadre del depósito
+  enseña. El POS no cuenta como plata a depositar: lo cobra el terminal.
+- **El pago usa el motor de Costos.** Una tarifa plana de S/ 8.50 es una tarifa
+  `motorizado_entrega` sin ámbito: se configura una vez, lleva vigencia, y si
+  sube no reescribe lo que se pagó antes. Las visitas fallidas se pagan solo si
+  hay tarifa `motorizado_visita` configurada — no tenerla es una postura válida.
+- **Fotos en bucket privado** (`delivery-proofs`), subidas aparte del reporte
+  para que una caída de red no le borre el formulario.
+- **Needs migration 0057** además de la 0056. Corrige dos cosas que solo se ven
+  al contrastar el diseño con cómo se reparte de verdad:
+  - **La ruta es del motorizado y del día, no de la tienda.** Sale con paquetes
+    de Aurela y de Kenku en la misma vuelta; con una ruta por tienda vería dos
+    listas para un solo viaje. La tienda vive en cada parada
+    (`delivery_stops.store_id`, que viene del pedido) y **cerrar una ruta mixta
+    produce una liquidación por cada tienda**, porque el dinero se cuadra por
+    separado. Un viaje, varias cuentas.
+  - **Cerrar la ruta mueve el Master.** Con un courier externo el estado real lo
+    trae su reporte; con motorizado propio no viene nadie detrás, así que sin
+    esto un pedido entregado se quedaba "pendiente" para siempre y el cuadre lo
+    marcaba como *cobro sin entrega* en TODAS sus paradas. Al cerrar, las
+    entregas pasan a `entregado` por el camino de siempre (`order_events` +
+    recálculo), con un humano revisando antes de que sea oficial.
+- **Qué pasa con lo no entregado, según el motivo.** Solo `rechazado` cierra el
+  pedido (a `anulado`): el cliente lo vio y no lo quiso. Los demás motivos
+  —no contesta, no estaba, reprogramado, sin dinero, dirección errada— **no
+  tocan el pedido**, que sigue vivo para reintentarlo otro día. Cerrar un pedido
+  por error cuesta una venta; dejarlo abierto solo cuesta otra visita.
+- **Los pedidos ya asignados no reaparecen**: al armar una ruta se excluyen los
+  que ya van en la de otro motorizado ese día, mirando TODAS las rutas del día
+  y no solo las de una tienda — si no, dos saldrían con el mismo paquete.
+
+## 5k-quater. Reintentos y tasa de entrega
+
+Lo que ataca el dolor real: los pedidos que no llegan a entregarse. Vive dentro
+de `/dashboard/rutas`, al armar la ruta del día.
+
+- **Needs migration 0058** (`rider_settlements.direct_collected`).
+- **Trae los no entregados solo.** Un pedido que ayer no contestó aparece como
+  candidato a reintento, con cuántas veces falló y por qué la última. Sin esto
+  se queda esperando a que alguien se acuerde, y nadie se acuerda.
+- **Dos preguntas distintas, y confundirlas sale caro** (`lib/retries.ts`):
+  *¿este pedido merece otra visita?* (depende del motivo) y *¿este cliente
+  recibe alguna vez?* (se mide por teléfono, a través de TODOS sus pedidos).
+- **Lo que NO se reintenta tal cual**: `direccion_errada` (volver al mismo sitio
+  equivocado cuesta otro flete y falla igual — hay que corregir la dirección
+  antes) y `rechazado` (no es un reintento, es una venta perdida).
+- **Riesgo alto** a los 3 intentos, o cuando el cliente acumula 2+ pedidos y
+  **ninguno** llegó a entregarse. Un cliente que sí recibió alguna vez **nunca**
+  sube a riesgo alto por su historial: sabemos que la dirección existe y que
+  abre la puerta, así que bloquearlo costaría una venta buena.
+- **Marca, ordena y avisa; no decide.** Lo bloqueado sale arriba, luego el
+  riesgo alto, y "Traer los N sin pendientes" añade de golpe solo los limpios.
+  Despachar lo marcado siempre es una decisión de una persona.
+- **La liquidación de un courier también mueve el Master** (botón "Aplicar al
+  Master"). Sin esto las entregas de Axel — todo Lima Metropolitana — se
+  quedaban en "pendiente" para siempre y el cuadre las marcaba como *cobro sin
+  entrega*. Solo `EFECTIVO`/`PAGO POS` marcan entregado y `RECHAZO` anula; lo
+  demás deja el pedido vivo. No reescribe lo que el Master ya sabe.
+- **El Yape y el POS del cliente NO son deuda del motorizado.** Caen a la cuenta
+  de la empresa y nunca pasan por sus manos. Se guardan aparte
+  (`direct_collected`) y se descuentan de lo que debe depositar; contarlos le
+  habría sacado un faltante inventado todos los días, por el importe exacto de
+  lo que cobró por esos canales.
+
 ## 5l. Clave de Anthropic por tienda
 
 La lectura de comprobantes Yape usaba una única `ANTHROPIC_API_KEY` de entorno, así
@@ -770,6 +936,70 @@ clave de idempotencia. En consecuencia:
 - Si la guía se creó por error, se borra con `DELETE /v1/orders/{id}` mientras no
   haya sido recibida en agencia. Ese `{id}` es el de `GET /v1/orders`, **no** el
   `ose_id` ni la `guia` (por eso hay tres columnas y no una).
+
+### Los estados: `/api/cron/shalom-reconcile`, cada 30 min
+
+Shalom **no tiene webhook**, y la vía de entrada por reporte Excel —que existe y
+funciona— **nunca se usó para Shalom en esta operación**: se comprobó en la base,
+0 guías de Shalom ingeridas por reporte frente a ~3.000 de Aliclik. Sin nada que
+las alimentara, las guías creadas por API se quedaban congeladas en el estado con
+el que nacían, y el Master decía «pendiente» para siempre — que no es un dato
+sino un vacío disfrazado.
+
+Lo que lo hace barato es que **el «modo estado» del rastreo se contenta con la
+API key global**: no pide credenciales de Shalom Pro, así que no hay login de
+~90 s, no hay sesión que renovar y **una sola llamada cubre guías de cualquier
+tienda a la vez**. Y `POST /v1/tracking/batch` acepta 50 guías por request con un
+`custom_id` que devuelve verbatim, así que se manda el id del envío y el
+resultado se correlaciona sin adivinar.
+
+El mapeo de los siete hitos vive en `lib/shalom/tracking.ts`, puro y testeado.
+**Gana el hito más avanzado**, no el último que traiga fecha: un envío entregado
+sigue trayendo `registrado`, así que leerlos como banderas sueltas daría el
+estado más atrasado. Dos decisiones que no son obvias:
+
+- **`destino` no es entregado.** Llegar a la agencia de destino deja la guía
+  `disponible_para_recojo` y **viva** (`pendiente`): el paquete espera al
+  cliente. Es el mismo criterio que ya usaba el adaptador de reportes.
+- **`reparto` gana a `destino`**, porque solo puede ocurrir después. En una
+  entrega en agencia es `null` para siempre.
+
+Solo se escribe cuando el estado cambia de verdad. Sin esa comparación, cada
+pasada tocaría cada fila, ensuciaría el `updated_at` que el Master usa para
+ordenar por movimiento y llenaría la línea de tiempo de eventos idénticos.
+
+Las guías terminales dejan de consultarse, y el techo por pasada son 20 batches
+(1.000 guías) para no comerse el cupo de 60 req/min, que es **compartido entre
+todas las tiendas**.
+
+> `GET /v1/tracking` también tiene modo detallado con `order`, pero sus bloques
+> `origen`, `destino`, `remitente`, `destinatario` y `comprobante` llegan vacíos
+> desde julio de 2026 — lo avisa el propio proveedor. No se pide: el estado sale
+> entero de `status`.
+
+### Anular una guía
+
+Crear emite una guía real y cobrable de un clic, así que deshacerlo no puede ser
+otro clic a su lado. El botón **Anular**, junto a la guía en el drawer, va en dos
+pasos: el primero cambia el botón por una pregunta con el número de guía delante,
+y solo el segundo llama a Shalom.
+
+Solo aparece mientras Shalom todavía deja borrar — guía creada por API,
+`delivery_status = pendiente` y el paquete aún en `pendiente_de_envio`. En cuanto
+llegó a la agencia, el botón desaparece: a partir de ahí se gestiona allá. Esa
+comprobación es cortesía de interfaz y **el servidor la revalida entera**, porque
+un botón que no se pinta no es una autorización.
+
+Tres detalles que importan:
+
+- El `{id}` del borrado es el de `GET /v1/orders` (`shalom_order_id`), **no** el
+  `ose_id` ni la guía. Es el motivo de que haya tres columnas y no una.
+- Anular **sí** renueva la sesión y reintenta, a diferencia de crear: borrar es
+  idempotente, y un segundo `POST /v1/orders` sería una segunda guía cobrable.
+- Se marca anulada acá **después** de que Shalom confirme. Al revés dejaría una
+  guía viva en Shalom y anulada en el panel, que es la peor de las dos mentiras.
+  Si Shalom borra y el update local falla, el error lleva la guía para corregirlo
+  a mano.
 
 ### El rótulo y el código corto
 

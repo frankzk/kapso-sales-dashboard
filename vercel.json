@@ -1,6 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["gru1"],
+  "regions": [
+    "gru1"
+  ],
   "crons": [
     {
       "path": "/api/cron/sync",
@@ -21,6 +23,18 @@
     {
       "path": "/api/cron/aliclik-reconcile",
       "schedule": "*/20 * * * *"
+    },
+    {
+      "path": "/api/cron/shalom-reconcile",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/aliclik-tariffs",
+      "schedule": "30 9 * * *"
+    },
+    {
+      "path": "/api/cron/meta-insights",
+      "schedule": "15 10 * * *"
     }
   ]
 }
