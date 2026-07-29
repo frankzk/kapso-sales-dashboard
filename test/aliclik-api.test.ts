@@ -461,3 +461,32 @@ describe("reintento ante fallos pasajeros de Aliclik", () => {
     if (!res.ok) expect(res.error).toContain("no en el dashboard");
   });
 });
+
+describe("el mensaje no le pide a la operadora lo que ya se hizo", () => {
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+  it("dice que ya se reintentó cuando se gastaron los tres intentos", async () => {
+    // Antes ponía "reintenta en unos minutos" sin más, y la operadora reintentaba
+    // a mano tres veces sobre una racha de 5xx que dura minutos.
+    const res = await quoteShippingCost(
+      opts(async () => json(500, { message: "Internal server error" })),
+      { warehouseId: 133, lat: "-6.781378", lng: "-79.8420078" },
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain("Ya se reintentó 3 veces");
+  });
+
+  it("NO dice nada de reintentar al crear un pedido, que no se reintenta", async () => {
+    // Sería el peor consejo posible: su API no tiene clave de idempotencia.
+    const res = await createOrder(opts(async () => json(500, { message: "Internal server error" })), {
+      delivery: 16.5,
+      customer: { name: "X", phone: "51999999999" },
+      shipping: { address1: "A", lat: "-16.3", lng: "-71.5" },
+      products: [{ ean: "1", quantity: 1, price: 99 }],
+      courier: { transportId: 1, deliveryCost: 16.5, returnCost: 10.5, addDays: 3, flagDeliveryExpress: false },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).not.toMatch(/reintent/i);
+  });
+});
