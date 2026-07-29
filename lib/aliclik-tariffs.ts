@@ -38,6 +38,24 @@ export const ALICLIK_TARIFF_SOURCE = "aliclik";
  */
 export type QuotedConcept = "primer_intento" | "devolucion" | "intento_adicional";
 
+/**
+ * El almacén desde el que se cotiza: el más frecuente; a igualdad, el id más
+ * bajo. El desempate mantiene la elección ESTABLE entre pasadas — si cambiara
+ * de un día para otro, las tarifas de distintos distritos dejarían de ser
+ * comparables entre sí, que es justo lo que se quiere evitar.
+ */
+export function pickTopWarehouse(counts: ReadonlyMap<number, number>): number | undefined {
+  let best: number | undefined;
+  let bestCount = -1;
+  for (const [id, n] of counts) {
+    if (n > bestCount || (n === bestCount && best !== undefined && id < best)) {
+      best = id;
+      bestCount = n;
+    }
+  }
+  return best;
+}
+
 /** Una tarifa vigente tal y como está guardada. */
 export interface ExistingTariff {
   id: string;
@@ -61,9 +79,22 @@ export interface TariffPlan {
   remove: string[];
   /** Tarifas a insertar. */
   insert: { district: string; concept: QuotedConcept; amount: number; effectiveFrom: string }[];
+  /** Distritos que se dejaron intactos porque los lleva una tarifa manual. */
+  skippedManual: number;
 }
 
-const key = (district: string, concept: string) => `${district.trim().toLowerCase()}|${concept}`;
+/**
+ * Clave de comparación. Normaliza acentos y mayúsculas —los pedidos traen
+ * "URUBAMBA", "Urubamba" y "Ancón"/"Ancon" indistintamente— pero NO ortografía:
+ * "Cusco" y "Cuzco" siguen siendo dos distritos distintos, que es justo por lo
+ * que las tarifas van por distrito y no por región.
+ */
+const key = (district: string, concept: string) =>
+  `${district
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()}|${concept}`;
 
 /**
  * Decide qué escribir. PURA: recibe lo observado y lo vigente, devuelve el plan.
@@ -72,25 +103,42 @@ const key = (district: string, concept: string) => `${district.trim().toLowerCas
  * nada. Sin eso, un cron diario generaría 661 filas nuevas cada día y la
  * vigencia de cada tarifa duraría 24 horas, volviendo inservible el propio
  * mecanismo de "al cambiarla se cierra la anterior".
+ *
+ * `manual` son las tarifas vigentes que NO puso el cron —cargadas a mano o
+ * importadas de una planilla— y funcionan como veto: en ese distrito y ese
+ * concepto el robot no escribe. No basta con "que no las pise": al resolver,
+ * `lib/costs.ts` desempata por `effective_from` más reciente, así que una fila
+ * automática insertada hoy le ganaría a la manual de ayer sin haber tocado ni
+ * un byte de ella. La persona que se sentó a averiguar el precio real gana.
  */
 export function planTariffUpdates(
   observed: readonly ObservedRate[],
   existing: readonly ExistingTariff[],
   today: string,
+  manual: readonly ExistingTariff[] = [],
 ): TariffPlan {
   const current = new Map<string, ExistingTariff>();
   for (const t of existing) {
     if (!t.district) continue;
     current.set(key(t.district, t.concept), t);
   }
+  const vetoed = new Set<string>();
+  for (const t of manual) {
+    if (!t.district) continue;
+    vetoed.add(key(t.district, t.concept));
+  }
 
-  const plan: TariffPlan = { close: [], remove: [], insert: [] };
+  const plan: TariffPlan = { close: [], remove: [], insert: [], skippedManual: 0 };
   const previousDay = new Date(Date.parse(`${today}T00:00:00Z`) - 86_400_000)
     .toISOString()
     .slice(0, 10);
 
   for (const o of observed) {
     if (!Number.isFinite(o.amount) || o.amount < 0) continue;
+    if (vetoed.has(key(o.district, o.concept))) {
+      plan.skippedManual += 1;
+      continue;
+    }
     const prev = current.get(key(o.district, o.concept));
     if (prev && Math.abs(prev.amount - o.amount) < 0.005) continue; // sin cambio
 
@@ -128,7 +176,68 @@ export interface TariffSyncResult {
   quoted: number;
   changed: number;
   skipped: number;
+  /** Cotizaciones descartadas por respetar una tarifa cargada a mano. */
+  skippedManual: number;
+  /**
+   * Distritos que se quedaron sin cotizar porque su API falló, incluso tras la
+   * segunda vuelta. Se cuenta aparte de `errors` porque es EL número que dice
+   * si la pasada sirvió de algo: una donde fallaron 45 de 60 y otra donde no
+   * cambió ningún precio dan las dos `changed: 0`, y no son lo mismo.
+   */
+  failed: number;
   errors: string[];
+}
+
+/**
+ * ¿Merece una segunda vuelta al final de la pasada?
+ *
+ * `status === null` es corte de red o timeout; 5xx es que su servidor reventó.
+ * Un 4xx NO se reintenta: es la petición la que está mal y repetirla da igual.
+ */
+const worthRetrying = (status: number | null) => status === null || status >= 500;
+
+/**
+ * Todas las tarifas vigentes por distrito de una organización, separadas por
+ * procedencia.
+ *
+ * Se traen TODAS y no solo las de los distritos observados, a propósito. El
+ * filtro `.in("district", …)` compara texto exacto, así que una tarifa manual
+ * escrita "Ancón" quedaría fuera al observar "Ancon" y el cron creería que ese
+ * distrito está libre. Son unos cientos de filas: la comparación tolerante a
+ * acentos la hace `planTariffUpdates`, aquí solo se trae el material.
+ */
+const TARIFF_PAGE = 1000;
+
+async function loadLiveDistrictTariffs(
+  admin: SupabaseClient,
+  orgId: string,
+): Promise<{ auto: ExistingTariff[]; manual: ExistingTariff[]; error?: string }> {
+  const auto: ExistingTariff[] = [];
+  const manual: ExistingTariff[] = [];
+  for (let from = 0; ; from += TARIFF_PAGE) {
+    const { data, error } = await admin
+      .from("cost_tariffs")
+      .select("id,concept,district,amount,effective_from,source")
+      .eq("org_id", orgId)
+      .not("district", "is", null)
+      .is("effective_to", null)
+      .order("id")
+      .range(from, from + TARIFF_PAGE - 1);
+    if (error) return { auto, manual, error: error.message };
+    const rows = (data ?? []) as (ExistingTariff & { source: string | null })[];
+    for (const r of rows) {
+      const t: ExistingTariff = {
+        id: r.id,
+        concept: r.concept,
+        district: r.district,
+        amount: Number(r.amount),
+        effective_from: r.effective_from,
+      };
+      (r.source === ALICLIK_TARIFF_SOURCE ? auto : manual).push(t);
+    }
+    if (rows.length < TARIFF_PAGE) break;
+  }
+  return { auto, manual };
 }
 
 /**
@@ -146,10 +255,19 @@ export async function syncAliclikTariffs(
   today: string,
   admin: SupabaseClient = createAdminSupabase(),
 ): Promise<TariffSyncResult> {
-  const out: TariffSyncResult = { ok: true, quoted: 0, changed: 0, skipped: 0, errors: [] };
+  const out: TariffSyncResult = {
+    ok: true,
+    quoted: 0,
+    changed: 0,
+    skipped: 0,
+    skippedManual: 0,
+    failed: 0,
+    errors: [],
+  };
   const observed: ObservedRate[] = [];
 
-  for (const p of probes) {
+  /** Cotiza un distrito y anota el resultado en `out`. */
+  const attempt = async (p: DistrictProbe): Promise<"ok" | "retry" | "failed"> => {
     const quote = await quoteShippingCost(opts, {
       warehouseId: p.warehouseId,
       lat: toAliclikCoord(p.lat),
@@ -158,7 +276,7 @@ export async function syncAliclikTariffs(
     if (!quote.ok) {
       // Un distrito que falla no puede tumbar la pasada entera: se anota y sigue.
       out.errors.push(`${p.district}: ${quote.error}`);
-      continue;
+      return worthRetrying(quote.status) ? "retry" : "failed";
     }
     out.quoted += 1;
 
@@ -167,35 +285,49 @@ export async function syncAliclikTariffs(
     const courier = (quote.data.couriers ?? [])[0];
     if (!courier) {
       out.skipped += 1;
-      continue;
+      return "ok";
     }
     observed.push({ district: p.district, concept: "primer_intento", amount: courier.deliveryCost });
     if (Number.isFinite(courier.returnCost)) {
       observed.push({ district: p.district, concept: "devolucion", amount: courier.returnCost });
     }
+    return "ok";
+  };
+
+  const retry: DistrictProbe[] = [];
+  for (const p of probes) {
+    const r = await attempt(p);
+    if (r === "retry") retry.push(p);
+    else if (r === "failed") out.failed += 1;
+  }
+
+  // SEGUNDA VUELTA, y no más reintentos dentro de la primera. Los 5xx de Aliclik
+  // llegan en rachas de minutos —el 29/07 fallaron 136 de 203 peticiones entre
+  // las 09:25 y las 09:45 UTC—, y los tres reintentos que ya hace el cliente HTTP
+  // se agotan en poco más de un segundo, dentro de la misma racha. Volver al
+  // final de la pasada pone minutos de por medio sin dormir el proceso.
+  //
+  // Un distrito que falla tampoco se pierde: al no escribirse ninguna tarifa
+  // sigue con `last_quoted` nulo y `aliclik_tariff_probes` lo devuelve el
+  // primero mañana. Esto solo evita perder la pasada entera.
+  if (retry.length) {
+    out.errors.push(`Segunda vuelta para ${retry.length} distrito(s) que fallaron.`);
+    for (const p of retry) {
+      if ((await attempt(p)) !== "ok") out.failed += 1;
+    }
   }
 
   if (!observed.length) return out;
 
-  const districts = [...new Set(observed.map((o) => o.district))];
-  const { data: existing, error } = await admin
-    .from("cost_tariffs")
-    .select("id,concept,district,amount,effective_from")
-    .eq("org_id", orgId)
-    .eq("source", ALICLIK_TARIFF_SOURCE)
-    .is("effective_to", null)
-    .in("district", districts);
-  if (error) {
+  const live = await loadLiveDistrictTariffs(admin, orgId);
+  if (live.error) {
     out.ok = false;
-    out.errors.push(`Tarifas vigentes: ${error.message}`);
+    out.errors.push(`Tarifas vigentes: ${live.error}`);
     return out;
   }
 
-  const plan = planTariffUpdates(
-    observed,
-    ((existing ?? []) as ExistingTariff[]).map((t) => ({ ...t, amount: Number(t.amount) })),
-    today,
-  );
+  const plan = planTariffUpdates(observed, live.auto, today, live.manual);
+  out.skippedManual = plan.skippedManual;
 
   for (const c of plan.close) {
     await admin.from("cost_tariffs").update({ effective_to: c.effectiveTo }).eq("id", c.id);
@@ -254,8 +386,14 @@ export async function syncTariffsFromReports(
   days: number,
   today: string,
   admin: SupabaseClient = createAdminSupabase(),
-): Promise<{ ok: boolean; observed: number; changed: number; errors: string[] }> {
-  const out = { ok: true, observed: 0, changed: 0, errors: [] as string[] };
+): Promise<{
+  ok: boolean;
+  observed: number;
+  changed: number;
+  skippedManual: number;
+  errors: string[];
+}> {
+  const out = { ok: true, observed: 0, changed: 0, skippedManual: 0, errors: [] as string[] };
 
   const { data, error } = await admin.rpc("aliclik_tariffs_from_reports", { p_days: days });
   if (error) return { ...out, ok: false, errors: [error.message] };
@@ -279,17 +417,10 @@ export async function syncTariffsFromReports(
   }
 
   for (const [orgId, orgRows] of byOrg) {
-    const districts = [...new Set(orgRows.map((r) => r.district))];
-    const { data: existing, error: exErr } = await admin
-      .from("cost_tariffs")
-      .select("id,concept,district,amount,effective_from")
-      .eq("org_id", orgId)
-      .eq("source", ALICLIK_TARIFF_SOURCE)
-      .is("effective_to", null)
-      .in("district", districts);
-    if (exErr) {
+    const live = await loadLiveDistrictTariffs(admin, orgId);
+    if (live.error) {
       out.ok = false;
-      out.errors.push(`Tarifas vigentes (${orgId}): ${exErr.message}`);
+      out.errors.push(`Tarifas vigentes (${orgId}): ${live.error}`);
       continue;
     }
 
@@ -299,9 +430,11 @@ export async function syncTariffsFromReports(
         concept: r.concept as QuotedConcept,
         amount: Number(r.amount),
       })),
-      ((existing ?? []) as ExistingTariff[]).map((t) => ({ ...t, amount: Number(t.amount) })),
+      live.auto,
       today,
+      live.manual,
     );
+    out.skippedManual += plan.skippedManual;
 
     for (const c of plan.close) {
       await admin.from("cost_tariffs").update({ effective_to: c.effectiveTo }).eq("id", c.id);
