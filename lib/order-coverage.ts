@@ -166,27 +166,154 @@ function provinceIsLimaOrCallao(province: string | null | undefined): boolean {
 }
 
 /**
+ * Cómo escribe la gente los distritos de Lima, que no es como los llama el INEI.
+ *
+ * El distrito casi nunca lo elige de una lista: lo escribe la clienta por
+ * WhatsApp o la asesora al armar el pedido. "Surco" (por Santiago de Surco) es
+ * el caso más común —Surco a secas no está en el ubigeo—, y detrás vienen las
+ * siglas (SJL, SMP, VMT), los nombres viejos (Ate Vitarte, Cercado de Lima) y
+ * los centros poblados que la gente nombra como si fueran distrito (Huachipa,
+ * que es Lurigancho).
+ */
+const DISTRICT_ALIASES: Record<string, string> = {
+  agustino: "el agustino",
+  "ate vitarte": "ate",
+  cercado: "lima",
+  "cercado de lima": "lima",
+  "carmen de la legua": "carmen de la legua reynoso",
+  chosica: "lurigancho",
+  colonial: "lima",
+  "el cercado": "lima",
+  huachipa: "lurigancho",
+  jesus: "jesus maria",
+  "la colonial": "lima",
+  "lima cercado": "lima",
+  magdalena: "magdalena del mar",
+  molina: "la molina",
+  "pantanos de villa": "chorrillos",
+  "puente de piedra": "puente piedra",
+  "s j l": "san juan de lurigancho",
+  "s j m": "san juan de miraflores",
+  "s m p": "san martin de porres",
+  "san juan de lurigancho sjl": "san juan de lurigancho",
+  "san martin de porras": "san martin de porres",
+  "sanjuan de lurigancho": "san juan de lurigancho",
+  "sanjuan de miraflores": "san juan de miraflores",
+  "santa beatriz": "lima",
+  "santa maria de huachipa": "lurigancho",
+  sjl: "san juan de lurigancho",
+  sjm: "san juan de miraflores",
+  smp: "san martin de porres",
+  surco: "santiago de surco",
+  "surco viejo": "santiago de surco",
+  ves: "villa el salvador",
+  "villa maria": "villa maria del triunfo",
+  vitarte: "ate",
+  vmt: "villa maria del triunfo",
+};
+
+/**
+ * Términos demasiado genéricos para buscarlos dentro de una frase: aparecen en
+ * cualquier dirección ("Av. Colonial", "casa de Jesús", "Zárate"). Se siguen
+ * resolviendo cuando el distrito es exactamente eso, solo no se buscan sueltos.
+ */
+const TOO_GENERIC_TO_SEARCH = new Set([
+  "ancon",
+  "ate",
+  "brena",
+  "cercado",
+  "comas",
+  "jesus",
+  "lima",
+  "lince",
+  "lurin",
+  "rimac",
+]);
+
+/**
+ * Términos reconocibles dentro de un texto más largo ("A 2 cuadras del mercado
+ * de Magdalena", "Coop. Universal Santa Anita", "La Victoria en la tarde"),
+ * cada uno con el distrito al que apunta.
+ *
+ * De más largo a más corto, para que "san juan de lurigancho" gane antes de que
+ * "lurigancho" —que también está en la lista— se lo lleve.
+ */
+const SEARCHABLE_DISTRICTS: [term: string, district: string][] = [
+  ...[...LIMA_METROPOLITANA, ...CALLAO].map((d): [string, string] => [d, d]),
+  ...Object.entries(DISTRICT_ALIASES),
+]
+  .filter(([term]) => !TOO_GENERIC_TO_SEARCH.has(term))
+  .sort((a, b) => b[0].length - a[0].length);
+
+function containsDistrictWord(haystack: string, district: string): boolean {
+  // `haystack` ya viene normalizado a palabras separadas por un espacio, así que
+  // basta comparar bordes: evita que "zarate" cuente como "ate".
+  return (
+    haystack === district ||
+    haystack.startsWith(`${district} `) ||
+    haystack.endsWith(` ${district}`) ||
+    haystack.includes(` ${district} `)
+  );
+}
+
+/**
+ * El distrito de Lima Metropolitana / Callao al que apunta el texto, o null.
+ *
+ * La búsqueda dentro del texto solo se usa cuando ya sabemos que el pedido es de
+ * Lima por la región: fuera de ahí, "Independencia" o "La Victoria" dentro de
+ * una referencia mandarían un pedido de Áncash o Chiclayo al reparto propio.
+ */
+export function resolveLimaDistrict(
+  raw: string | null | undefined,
+  { searchInText = false }: { searchInText?: boolean } = {},
+): string | null {
+  const d = normalizeCoverageLabel(raw);
+  if (!d) return null;
+  if (LIMA_METROPOLITANA.has(d) || CALLAO.has(d)) return d;
+  const alias = DISTRICT_ALIASES[d];
+  if (alias) return alias;
+  if (!searchInText) return null;
+  return SEARCHABLE_DISTRICTS.find(([term]) => containsDistrictWord(d, term))?.[1] ?? null;
+}
+
+/**
+ * Distritos de Lima Metropolitana que tienen un homónimo DENTRO del propio
+ * departamento de Lima: San Luis es un distrito metropolitano y también uno de
+ * Cañete. Son los únicos que la región "Lima (departamento)" no puede desempatar.
+ */
+const LIMA_DEPT_HOMONYMS = new Set(["san luis"].map(normalizeCoverageLabel));
+
+/**
  * ¿El pedido va a Lima Metropolitana o Callao?
  *
  * Se decide con la primera señal fiable, de más a menos:
- *   1. La región, cuando distingue metropolitana / departamento / Callao.
- *   2. La provincia del ubigeo, cuando la región dice "Lima" a secas o falta.
- *   3. El distrito, si es un nombre que solo existe en Lima Metropolitana.
+ *   1. La región, cuando distingue metropolitana / Callao.
+ *   2. El distrito, cuando la región ya nos sitúa en el departamento de Lima.
+ *   3. La provincia del ubigeo, cuando no hay región.
  *
- * Una región que habla de otro departamento CIERRA la puerta: no se mira el
- * distrito, porque los nombres se repiten por todo el país.
+ * Una región de OTRO departamento cierra la puerta: no se mira el distrito,
+ * porque los nombres se repiten por todo el país.
  */
 export function isLimaMetropolitanaOrCallao(location: CoverageLocation): boolean {
   const kind = limaRegionKind(location.region);
   if (kind === "metropolitana" || kind === "callao") return true;
-  if (kind === "departamento") return false;
 
-  const district = normalizeCoverageLabel(location.district);
-  const inLimaDistricts = LIMA_METROPOLITANA.has(district) || CALLAO.has(district);
+  // Con la región ya dentro del departamento de Lima, el texto del distrito se
+  // puede leer con confianza: no hay otro departamento con el que confundirlo.
+  const inLima = kind !== null;
+  const district = resolveLimaDistrict(location.district, { searchInText: inLima });
+
+  // "Lima (departamento)" con un distrito metropolitano es una contradicción, y
+  // la gana el distrito: en Shopify el desplegable ofrece "Lima (provincia)" y
+  // "Lima (departamento)" sin explicar cuál es cuál, mientras que el distrito lo
+  // escribe la clienta. Miraflores, Los Olivos o San Isidro no existen en el
+  // departamento de Lima fuera de la metropolitana, así que no hay ambigüedad —
+  // salvo por San Luis, que también es un distrito de Cañete.
+  if (kind === "departamento") return district !== null && !LIMA_DEPT_HOMONYMS.has(district);
 
   // Región "Lima" a secas: el distrito desempata entre la metropolitana y el
   // resto del departamento (Huaral, Cañete, Yauyos…).
-  if (kind === "lima") return inLimaDistricts;
+  if (kind === "lima") return district !== null;
 
   // Región de otro departamento: no es Lima, aunque el distrito se llame igual
   // que uno de Lima (Independencia/Huaraz, La Victoria/Chiclayo…).
@@ -194,8 +321,9 @@ export function isLimaMetropolitanaOrCallao(location: CoverageLocation): boolean
 
   // Sin región: la provincia manda si es concluyente; si no, solo un distrito
   // que no se repita fuera de Lima.
-  if (provinceIsLimaOrCallao(location.province) && inLimaDistricts) return true;
-  return inLimaDistricts && !AMBIGUOUS_DISTRICTS.has(district);
+  if (district === null) return false;
+  if (provinceIsLimaOrCallao(location.province)) return true;
+  return !AMBIGUOUS_DISTRICTS.has(district);
 }
 
 /**
