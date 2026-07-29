@@ -798,6 +798,7 @@ export function cartRecovery(leads: LeadRow[], orders: OrderRow[]): CartRecovery
 export interface CampaignStat {
   adId: string;
   metaAdId: string | null;
+  storeIds: string[];
   label: string;
   headline: string | null;
   resolved: boolean;
@@ -983,6 +984,7 @@ export function campaignBreakdown(
       return {
         adId,
         metaAdId: b.adId,
+        storeIds: [...new Set(b.leads.map((lead) => lead.store_id).filter(Boolean))],
         label: meta?.adName || b.headline || adId,
         headline: b.headline,
         resolved: Boolean(meta?.adName),
