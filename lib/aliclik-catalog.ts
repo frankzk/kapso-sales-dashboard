@@ -563,13 +563,24 @@ export async function syncAliclikCatalog(
  * Se limita a los pedidos recientes a propósito: un SKU que no se vende desde
  * hace un año no necesita mapeo, y recorrer la tabla entera para eso sería caro.
  */
-export async function loadShopifySkuNames(
+export interface ShopifySkuDetails {
+  title: string;
+  variantTitle: string | null;
+}
+
+/**
+ * SKU → producto y variante de Shopify.
+ *
+ * La variante forma parte de la identidad del SKU. Dos filas pueden compartir
+ * el producto y diferir solo en talla, color o presentación.
+ */
+export async function loadShopifySkuDetails(
   storeId: string,
   admin: SupabaseClient = createAdminSupabase(),
   sinceDays = 365,
-): Promise<Map<string, string>> {
+): Promise<Map<string, ShopifySkuDetails>> {
   const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
-  const out = new Map<string, string>();
+  const out = new Map<string, ShopifySkuDetails>();
   const seenAt = new Map<string, string>();
 
   // Paginado: PostgREST corta en 1000 filas por respuesta.
@@ -586,20 +597,38 @@ export async function loadShopifySkuNames(
 
     for (const row of data as { created_at: string; line_items: unknown }[]) {
       const items = Array.isArray(row.line_items) ? row.line_items : [];
-      for (const it of items as { sku?: string | null; title?: string | null }[]) {
+      for (const it of items as {
+        sku?: string | null;
+        title?: string | null;
+        variant_title?: string | null;
+        variantTitle?: string | null;
+      }[]) {
         const sku = normalizeSku(it.sku);
         const title = (it.title ?? "").trim();
         if (!sku || !title) continue;
+        const rawVariant = (it.variant_title ?? it.variantTitle ?? "").trim();
+        const variantTitle =
+          rawVariant && rawVariant.toLowerCase() !== "default title" ? rawVariant : null;
         const prev = seenAt.get(sku);
         if (!prev || row.created_at > prev) {
           seenAt.set(sku, row.created_at);
-          out.set(sku, title);
+          out.set(sku, { title, variantTitle });
         }
       }
     }
     if (data.length < PAGE) break;
   }
   return out;
+}
+
+/** Compatibilidad para el mapeo automático, que solo compara nombres. */
+export async function loadShopifySkuNames(
+  storeId: string,
+  admin: SupabaseClient = createAdminSupabase(),
+  sinceDays = 365,
+): Promise<Map<string, string>> {
+  const details = await loadShopifySkuDetails(storeId, admin, sinceDays);
+  return new Map([...details].map(([sku, item]) => [sku, item.title]));
 }
 
 /** Columnas del espejo que necesita el resolutor. */

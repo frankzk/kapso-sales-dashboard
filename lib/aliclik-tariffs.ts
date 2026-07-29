@@ -26,6 +26,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { quoteShippingCost, type AliclikClientOpts } from "@/lib/aliclik";
 import { toAliclikCoord } from "@/lib/aliclik-geo";
+import { refreshOrderCoverage } from "@/lib/order-coverage";
 
 /** Marca de procedencia. El cron solo toca lo suyo. */
 export const ALICLIK_TARIFF_SOURCE = "aliclik";
@@ -224,6 +225,7 @@ export async function syncAliclikTariffs(
     }
   }
   out.changed = plan.insert.length;
+  if (out.changed > 0) await refreshOrderCoverage(admin, orgId);
   return out;
 }
 

@@ -47,6 +47,10 @@ import {
 } from "@/lib/order-master-filters";
 import { buildMasterQuery } from "@/lib/master-query";
 import {
+  ORDER_COVERAGE_LABEL,
+  type OrderCoverage,
+} from "@/lib/order-coverage";
+import {
   GENERAL_STATUSES,
   daysInAgency,
   daysInStatus,
@@ -110,6 +114,27 @@ const STATUS_TONE: Record<string, string> = {
   anulado: "bg-slate-200 text-slate-600",
   devuelto: "bg-red-100 text-red-800",
 };
+
+const COVERAGE_TONE: Record<OrderCoverage, string> = {
+  lima: "border-sky-200 bg-sky-50 text-sky-700",
+  provincia_cod: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  agencia: "border-violet-200 bg-violet-50 text-violet-700",
+  por_revisar: "border-amber-300 bg-amber-50 text-amber-800",
+};
+
+function CoverageBadge({ coverage }: { coverage: OrderMasterRow["coverage"] }) {
+  const value = coverage ?? "por_revisar";
+  return (
+    <span
+      className={cn(
+        "inline-flex whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+        COVERAGE_TONE[value],
+      )}
+    >
+      {ORDER_COVERAGE_LABEL[value]}
+    </span>
+  );
+}
 
 /**
  * Anular una guía de Shalom, en dos pasos.
@@ -246,6 +271,7 @@ export function OrdersMasterBoard({
     region: string[];
     province: string[];
     district: string[];
+    coverage: string[];
     pickup: string[];
   };
   /** Contado en la base: sobre una página daría números falsos sin avisar. */
@@ -482,6 +508,15 @@ export function OrdersMasterBoard({
               options={facets.district}
               selected={filters.districts}
               onChange={(districts) => patch({ districts })}
+            />
+            <ChecklistFilter
+              label="Cobertura"
+              options={facets.coverage}
+              selected={filters.coverages}
+              onChange={(coverages) => patch({ coverages })}
+              optionLabel={(value) =>
+                ORDER_COVERAGE_LABEL[value as OrderCoverage] ?? value
+              }
             />
             {facets.pickup.length > 0 && (
               <ChecklistFilter
@@ -867,7 +902,7 @@ function MasterTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[1500px] text-sm">
+      <table className="w-full min-w-[1600px] text-sm">
         <thead>
           <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
             <th className="px-4 py-2 font-medium">Pedido</th>
@@ -878,6 +913,7 @@ function MasterTable({
             <th className="px-2 py-2 font-medium">Región</th>
             <th className="px-2 py-2 font-medium">Provincia</th>
             <th className="px-2 py-2 font-medium">Distrito</th>
+            <th className="px-2 py-2 font-medium">Cobertura</th>
             <th className="px-2 py-2 font-medium">Modalidad</th>
             <th className="px-2 py-2 font-medium">Courier</th>
             <th className="px-2 py-2 font-medium">Último courier</th>
@@ -918,6 +954,7 @@ function MasterTable({
               <td className="px-2 py-2.5 text-slate-600">{r.region ?? "—"}</td>
               <td className="px-2 py-2.5 text-slate-600">{r.province ?? "—"}</td>
               <td className="px-2 py-2.5 text-slate-600">{r.district ?? "—"}</td>
+              <td className="px-2 py-2.5"><CoverageBadge coverage={r.coverage} /></td>
               <td className="px-2 py-2.5 text-slate-600">
                 {r.shipping_mode ? (MODE_LABEL[r.shipping_mode] ?? r.shipping_mode) : "—"}
               </td>
@@ -1498,6 +1535,7 @@ const GEO_SOURCE_LABEL: Record<string, string> = {
   ubigeo: "provincia inferida del distrito",
   shopify: "según Shopify",
   draft: "según el formulario COD",
+  history: "historial confiable del cliente",
 };
 
 /**
@@ -1570,6 +1608,7 @@ function GeoSection({
     <section className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <h3 data-drawer-section="ubicacion" className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ubicación</h3>
+        <CoverageBadge coverage={row.coverage} />
         {row.geo_source && (
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
             {GEO_SOURCE_LABEL[row.geo_source] ?? row.geo_source}
@@ -1593,6 +1632,23 @@ function GeoSection({
       </div>
 
       {message && <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">{message}</p>}
+
+      {(row.coverage ?? "por_revisar") === "por_revisar" && !editing && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+          <p className="text-xs text-amber-900">
+            Completa la región y el distrito para asignar el flujo correcto.
+          </p>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={open}
+              className="shrink-0 rounded-md bg-amber-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-800"
+            >
+              Completar
+            </button>
+          )}
+        </div>
+      )}
 
       {!editing ? (
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">

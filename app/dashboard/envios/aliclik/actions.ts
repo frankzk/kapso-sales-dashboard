@@ -16,7 +16,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import {
   loadAllAliclikSkus,
-  loadShopifySkuNames,
+  loadShopifySkuDetails,
   normalizeProductName,
   normalizeSku,
   syncAliclikCatalog,
@@ -130,9 +130,11 @@ export async function unmapSku(
 export interface CatalogRow {
   shopifySku: string;
   title: string;
+  variantTitle: string | null;
   ean: string | null;
   source: string | null;
   aliclikName: string | null;
+  aliclikVariant: string | null;
   warehouseName: string | null;
   stockVirtual: number | null;
   agencyEligible: boolean;
@@ -152,6 +154,8 @@ export interface CatalogView {
 export interface AliclikSkuOption {
   ean: string;
   label: string;
+  variantLabel: string | null;
+  sku: string | null;
   warehouseName: string | null;
   stockVirtual: number | null;
 }
@@ -168,7 +172,7 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
   // ~3.700 del catálogo (PostgREST corta ahí), y dos tercios de los productos
   // aparecían "sin candidato automático" cuando su candidato sí existía.
   const [shopify, skus, mapRes] = await Promise.all([
-    loadShopifySkuNames(storeId, admin),
+    loadShopifySkuDetails(storeId, admin),
     loadAllAliclikSkus(storeId, admin),
     admin.from("aliclik_sku_map").select("shopify_sku,ean,source").eq("store_id", storeId),
   ]);
@@ -192,7 +196,8 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
   }
 
   const rows: CatalogRow[] = [...shopify.entries()]
-    .map(([shopifySku, title]) => {
+    .map(([shopifySku, shopifyProduct]) => {
+      const { title, variantTitle } = shopifyProduct;
       const m = mapping.get(shopifySku);
       const hit = m ? byEan.get(m.ean) : undefined;
       const suggestedEan = m ? null : (byName.get(normalizeProductName(title)) ?? null);
@@ -200,9 +205,11 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
       return {
         shopifySku,
         title,
+        variantTitle,
         ean: m?.ean ?? null,
         source: m?.source ?? null,
         aliclikName: hit?.product_name ?? null,
+        aliclikVariant: hit?.sku_name ?? null,
         warehouseName: hit?.warehouse_name ?? null,
         stockVirtual: hit?.stock_virtual ?? null,
         agencyEligible: Boolean(hit?.is_agency_eligible),
@@ -270,7 +277,9 @@ export async function searchAliclikSkus(
     }[]
   ).map((s) => ({
     ean: s.ean,
-    label: `${s.product_name ?? s.sku_name ?? s.ean}${s.sku ? ` · ${s.sku}` : ""}`,
+    label: s.product_name ?? s.sku_name ?? s.ean,
+    variantLabel: s.sku_name && s.sku_name !== s.product_name ? s.sku_name : null,
+    sku: s.sku,
     warehouseName: s.warehouse_name,
     stockVirtual: s.stock_virtual,
   }));

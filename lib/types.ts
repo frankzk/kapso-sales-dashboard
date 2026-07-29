@@ -402,6 +402,8 @@ export interface OrderMasterRow {
   region: string | null;
   province: string | null;
   district: string | null;
+  /** Flujo operativo derivado de la ubicación y la cobertura COD vigente. */
+  coverage?: "lima" | "provincia_cod" | "agencia" | "por_revisar" | null;
   address?: string | null;
   reference?: string | null;
   latitude?: number | null;
