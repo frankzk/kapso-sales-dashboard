@@ -733,6 +733,10 @@ export async function recomputeOrderMaster(
       region,
       province,
       district,
+      // La cobertura la recalcula la base en un trigger (migración 0083) y este
+      // valor se descarta: la columna es derivada y `order_coverage_for` es su
+      // definición canónica. Se sigue mandando para que la fila quede completa
+      // aunque el trigger no esté aplicado todavía.
       coverage: classifyOrderCoverage(
         {
           storeId: order.store_id,
