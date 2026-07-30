@@ -62,6 +62,20 @@ const MASTER_COLUMNS =
   "latitude,longitude," +
   "key_state,agency_branch,agency_arrived_at,agency_expires_at";
 
+// Columnas exclusivas del DRAWER. La tabla las omite por peso, pero el detalle
+// necesita los datos materializados por `order-master.ts` desde Shopify, Aliclik
+// o una corrección manual. Mantener este select separado evita volver a enviar
+// dirección y referencia miles de veces sin dejar el drawer incompleto.
+export const MASTER_DETAIL_EXTRA_COLUMNS = [
+  "shopify_order_id",
+  "address",
+  "reference",
+  "geo_source",
+  "status_source",
+] as const;
+const MASTER_DETAIL_COLUMNS =
+  `${MASTER_COLUMNS},${MASTER_DETAIL_EXTRA_COLUMNS.join(",")}`;
+
 // PostgREST corta cada respuesta en `db-max-rows` (1000 en Supabase), así que se
 // pagina con .range() en vez de pedir un .limit() grande.
 const PAGE = 1000;
@@ -191,7 +205,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
 
   const { data: rowData } = await sb
     .from("order_master")
-    .select(MASTER_COLUMNS)
+    .select(MASTER_DETAIL_COLUMNS)
     .eq("order_id", orderId)
     .maybeSingle();
   if (!rowData) return null;
