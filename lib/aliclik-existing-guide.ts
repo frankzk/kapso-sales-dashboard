@@ -24,6 +24,24 @@ const compact = (value: string | null | undefined) =>
 const samePlace = (a: string | null | undefined, b: string | null | undefined) =>
   Boolean(text(a) && text(b) && text(a) === text(b));
 
+/**
+ * La API oficial solo lista pedidos creados por la integración (ALC…). Las
+ * guías creadas directamente en el portal AURELA/KENKU usan códigos impresos
+ * AUR5X… y no aparecen allí. Para habilitar una excepción auditada sin aceptar
+ * cualquier guía, el tramo numérico del pedido Shopify debe ser el sufijo
+ * exacto del código impreso.
+ */
+export function isCompatibleManualPortalGuide(
+  guideCode: string | null | undefined,
+  orderName: string | null | undefined,
+): boolean {
+  const normalizedGuide = compact(guideCode).toUpperCase();
+  const orderDigits = digits(orderName);
+  if (!normalizedGuide || orderDigits.length < 5) return false;
+  if (/^ALC/i.test(normalizedGuide)) return false;
+  return normalizedGuide.endsWith(orderDigits);
+}
+
 function compactOrderPayload(order: AliclikOrder): string {
   // Aliclik agrega campos a esta respuesta sin incorporarlos siempre a su
   // documentación. JSON.stringify conserva esos campos adicionales en runtime

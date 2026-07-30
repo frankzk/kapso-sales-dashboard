@@ -44,7 +44,10 @@ import {
   type AliclikCourierQuote,
   type AliclikOrder,
 } from "@/lib/aliclik";
-import { selectExistingAliclikOrder } from "@/lib/aliclik-existing-guide";
+import {
+  isCompatibleManualPortalGuide,
+  selectExistingAliclikOrder,
+} from "@/lib/aliclik-existing-guide";
 import { aliclikStatusLabel, mapAliclikStatus } from "@/lib/aliclik-status";
 import {
   loadCatalogFor,
@@ -85,6 +88,10 @@ export interface ExistingAliclikGuidePreview {
   phoneMatches?: boolean | null;
   totalMatches?: boolean | null;
   alreadyLinked?: boolean;
+  verificationMode?: "api" | "manual_portal";
+  expectedOrderName?: string | null;
+  apiCandidateCount?: number;
+  apiMatchSummary?: string;
 }
 
 interface ExistingGuideResolution {
@@ -92,6 +99,27 @@ interface ExistingGuideResolution {
   order: AliclikOrder;
   guideCode: string;
   preview: ExistingAliclikGuidePreview;
+}
+
+function manualPortalOrder(ctx: AliclikContext, guideCode: string): AliclikOrder {
+  return {
+    orderNumber: guideCode,
+    total: ctx.row.order_total,
+    createdAt: ctx.row.order_created_at,
+    customer: {
+      name: ctx.row.customer_name,
+      phone: ctx.row.customer_phone,
+    },
+    shipping: {
+      address1: ctx.row.address,
+      reference: ctx.row.reference,
+      lat: ctx.row.latitude == null ? null : String(ctx.row.latitude),
+      lng: ctx.row.longitude == null ? null : String(ctx.row.longitude),
+      departmentName: ctx.row.region,
+      provinceName: ctx.row.province,
+      districtName: ctx.row.district,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +242,9 @@ async function resolveExistingAliclikGuide(
   const dateKey = (date: Date) => date.toISOString().slice(0, 10);
   let remoteOrder: AliclikOrder | null = null;
   let matchExplanation: string | undefined;
+  let verificationMode: "api" | "manual_portal" = "api";
+  let apiCandidateCount: number | undefined;
+  let apiMatchSummary: string | undefined;
   if (/^ALC/i.test(code)) {
     const errors: string[] = [];
     for (const client of ctx.clients) {
@@ -342,15 +373,23 @@ async function resolveExistingAliclikGuide(
       } else {
         const best = selected.matches[0];
         const matched = best?.reasons.length ? best.reasons.join(", ") : "ningún campo";
-        const missingReference = !best?.reasons.includes("pedido Shopify");
-        return {
-          error:
-            `Aliclik devolvió ${candidates.size} pedido(s), pero ninguno alcanzó una coincidencia segura. ` +
-            `El candidato más cercano coincidió en: ${matched}. ` +
-            (missingReference
-              ? `Falta que la API exponga la referencia Shopify ${ctx.row.order_name}.`
-              : "Falta corroborarlo por teléfono, monto o destino."),
-        };
+        if (!isCompatibleManualPortalGuide(code, ctx.row.order_name)) {
+          return {
+            error:
+              `Aliclik no expone la guía de portal ${code} por la API oficial y el código no corresponde ` +
+              `al pedido ${ctx.row.order_name ?? "actual"}. Verifica el número de guía.`,
+          };
+        }
+
+        // GET /integration/order documenta expresamente que devuelve los
+        // “pedidos de tu integración”. Una guía AUR5X creada en el portal
+        // compartido no forma parte de esos pedidos ALC. Construimos una vista
+        // previa local; la escritura exigirá una confirmación auditada.
+        remoteOrder = manualPortalOrder(ctx, code);
+        verificationMode = "manual_portal";
+        matchExplanation = "sufijo exacto del pedido Shopify";
+        apiCandidateCount = candidates.size;
+        apiMatchSummary = matched;
       }
     }
   }
@@ -449,17 +488,29 @@ async function resolveExistingAliclikGuide(
     customerPhone: remoteOrder.customer?.phone ?? null,
     total,
     productDetail: remoteOrder.productDetail ?? null,
-    statusLabel: aliclikStatusLabel(remoteOrder),
+    statusLabel:
+      verificationMode === "manual_portal"
+        ? "Creada directamente en el portal Aliclik"
+        : aliclikStatusLabel(remoteOrder),
     shippingAddress: remoteOrder.shipping?.address1 ?? null,
     shippingDistrict: remoteOrder.shipping?.districtName ?? null,
     shippingProvince: remoteOrder.shipping?.provinceName ?? null,
     shippingDepartment: remoteOrder.shipping?.departmentName ?? null,
-    phoneMatches: samePhone(remoteOrder.customer?.phone, ctx.row.customer_phone),
+    phoneMatches:
+      verificationMode === "manual_portal"
+        ? null
+        : samePhone(remoteOrder.customer?.phone, ctx.row.customer_phone),
     totalMatches:
       total == null || ctx.row.order_total == null
         ? null
-        : Math.abs(total - ctx.row.order_total) <= 0.01,
+        : verificationMode === "manual_portal"
+          ? null
+          : Math.abs(total - ctx.row.order_total) <= 0.01,
     alreadyLinked: linked?.order_id === orderId,
+    verificationMode,
+    expectedOrderName: ctx.row.order_name,
+    apiCandidateCount,
+    apiMatchSummary,
   };
 
   return { resolution: { ctx, order: remoteOrder, guideCode: code, preview } };
@@ -1104,6 +1155,7 @@ export async function createAliclikGuide(
 export async function linkExistingAliclikGuide(
   orderId: string,
   guideCode: string,
+  manualConfirmation?: { orderName: string; reason: string },
 ): Promise<AliclikActionState> {
   const { resolution, error } = await resolveExistingAliclikGuide(orderId, guideCode);
   if (!resolution) return { error };
@@ -1114,6 +1166,24 @@ export async function linkExistingAliclikGuide(
   }
 
   const { ctx, order, guideCode: resolvedGuideCode, preview } = resolution;
+  if (preview.verificationMode === "manual_portal") {
+    const expected = (ctx.row.order_name ?? "").replace(/^#+/, "").trim().toUpperCase();
+    const provided = (manualConfirmation?.orderName ?? "")
+      .replace(/^#+/, "")
+      .trim()
+      .toUpperCase();
+    const reason = manualConfirmation?.reason?.trim() ?? "";
+    if (!expected || provided !== expected) {
+      return {
+        error: `Para vincular esta guía de portal, confirma el pedido escribiendo ${ctx.row.order_name}.`,
+      };
+    }
+    if (reason.length < 8) {
+      return {
+        error: "Escribe un motivo de al menos 8 caracteres para dejar la excepción auditada.",
+      };
+    }
+  }
   const orderNumber = preview.orderNumber!;
   const mapped = mapAliclikStatus({
     callStatus: order.callStatus,
@@ -1146,12 +1216,17 @@ export async function linkExistingAliclikGuide(
     store_id: ctx.storeId,
     courier: "aliclik",
     guide_code: resolvedGuideCode,
-    external_order_number: orderNumber,
+    // Las guías AUR5X creadas en el portal no tienen un orderNumber ALC
+    // visible por la API. No inventamos uno: guide_code conserva el código
+    // impreso y el importador posterior podrá reconciliarlo.
+    external_order_number:
+      preview.verificationMode === "manual_portal" ? null : orderNumber,
     delivery_status: deliveryStatus,
     status_category: categoryOf(deliveryStatus),
     order_id: orderId,
     matched: true,
-    match_method: "manual_api",
+    match_method:
+      preview.verificationMode === "manual_portal" ? "manual_portal_audited" : "manual_api",
     order_name: ctx.row.order_name,
     customer_name: customerName,
     customer_phone: customerPhone,
@@ -1164,7 +1239,10 @@ export async function linkExistingAliclikGuide(
     delivery_reference: reference,
     latitude: Number.isFinite(latitude) ? latitude : ctx.row.latitude,
     longitude: Number.isFinite(longitude) ? longitude : ctx.row.longitude,
-    created_via: "aliclik_external_link",
+    created_via:
+      preview.verificationMode === "manual_portal"
+        ? "aliclik_external_manual_link"
+        : "aliclik_external_link",
     assigned_at: assignedAt,
     last_report_at: lastReportAt,
     reported_status: aliclikStatusLabel(order),
@@ -1205,8 +1283,12 @@ export async function linkExistingAliclikGuide(
     guide_code: resolvedGuideCode,
     shipment_id: (shipment as { id: string }).id,
     note:
-      `Guía ${resolvedGuideCode} creada fuera de Kapta; pedido ${orderNumber} ` +
-      "validado por la API de Aliclik y vinculado manualmente.",
+      preview.verificationMode === "manual_portal"
+        ? `Guía ${resolvedGuideCode} creada directamente en el portal AURELA/KENKU; ` +
+          `vinculada mediante excepción auditada a ${ctx.row.order_name}. Motivo: ` +
+          `${manualConfirmation?.reason?.trim()}. La API oficial solo expone pedidos ALC de la integración.`
+        : `Guía ${resolvedGuideCode} creada fuera de Kapta; pedido ${orderNumber} ` +
+          "validado por la API de Aliclik y vinculado manualmente.",
     payload: {
       externalLink: true,
       callStatus: order.callStatus,
@@ -1216,6 +1298,11 @@ export async function linkExistingAliclikGuide(
       total: order.total,
       phoneMatches: preview.phoneMatches,
       totalMatches: preview.totalMatches,
+      verificationMode: preview.verificationMode,
+      confirmedOrderName: manualConfirmation?.orderName,
+      manualReason: manualConfirmation?.reason?.trim(),
+      apiCandidateCount: preview.apiCandidateCount,
+      apiMatchSummary: preview.apiMatchSummary,
     },
   });
 

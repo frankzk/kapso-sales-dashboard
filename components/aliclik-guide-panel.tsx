@@ -396,12 +396,16 @@ function ExistingGuideLinkPanel({
   const [guideCode, setGuideCode] = useState("");
   const [preview, setPreview] = useState<ExistingAliclikGuidePreview | null>(null);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [confirmedOrderName, setConfirmedOrderName] = useState("");
+  const [manualReason, setManualReason] = useState("");
   const [busy, setBusy] = useState<null | "validate" | "link">(null);
   const [pending, startTransition] = useTransition();
 
   const validate = () => {
     setMessage(null);
     setPreview(null);
+    setConfirmedOrderName("");
+    setManualReason("");
     setBusy("validate");
     startTransition(async () => {
       try {
@@ -420,7 +424,13 @@ function ExistingGuideLinkPanel({
     setBusy("link");
     startTransition(async () => {
       try {
-        const result = await linkExistingAliclikGuide(orderId, preview.guideCode!);
+        const result = await linkExistingAliclikGuide(
+          orderId,
+          preview.guideCode!,
+          preview.verificationMode === "manual_portal"
+            ? { orderName: confirmedOrderName, reason: manualReason }
+            : undefined,
+        );
         if (result.error) {
           setMessage({ kind: "error", text: result.error });
           return;
@@ -463,6 +473,8 @@ function ExistingGuideLinkPanel({
                 setGuideCode(event.target.value);
                 setPreview(null);
                 setMessage(null);
+                setConfirmedOrderName("");
+                setManualReason("");
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && guideCode.trim() && !pending) validate();
@@ -517,7 +529,11 @@ function ExistingGuideLinkPanel({
 
               <dl className="grid grid-cols-2 gap-x-4 gap-y-2 border-t border-slate-100 pt-2 text-xs">
                 <div>
-                  <dt className="text-slate-500">Cliente en Aliclik</dt>
+                  <dt className="text-slate-500">
+                    {preview.verificationMode === "manual_portal"
+                      ? "Cliente del pedido"
+                      : "Cliente en Aliclik"}
+                  </dt>
                   <dd className="mt-0.5 font-medium text-slate-800">
                     {preview.customerName ?? "No informado"}
                   </dd>
@@ -551,9 +567,54 @@ function ExistingGuideLinkPanel({
 
               {preview.matchExplanation ? (
                 <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
-                  Coincidencia validada por {preview.matchExplanation}. Aliclik no expone el código
-                  impreso AUR5X por API; el pedido técnico mostrado arriba sí fue validado.
+                  {preview.verificationMode === "manual_portal"
+                    ? `El código de guía coincide por ${preview.matchExplanation}.`
+                    : `Coincidencia validada por ${preview.matchExplanation}. Aliclik no expone el código ` +
+                      "impreso AUR5X por API; el pedido técnico mostrado arriba sí fue validado."}
                 </p>
+              ) : null}
+
+              {preview.verificationMode === "manual_portal" ? (
+                <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                  <div>
+                    <p className="font-semibold">Vinculación excepcional auditada</p>
+                    <p className="mt-1 text-xs leading-5">
+                      La API oficial solo lista pedidos creados por la integración con código ALC.
+                      Esta guía creada en el portal AURELA/KENKU no puede aparecer allí. El código
+                      sí termina en el número de {preview.expectedOrderName}; también se comprobará
+                      que no esté vinculado a otro pedido.
+                    </p>
+                    {preview.apiCandidateCount != null ? (
+                      <p className="mt-1 text-xs">
+                        Consulta API: {preview.apiCandidateCount} pedidos ALC revisados
+                        {preview.apiMatchSummary
+                          ? `; mejor coincidencia auxiliar: ${preview.apiMatchSummary}.`
+                          : "."}
+                      </p>
+                    ) : null}
+                  </div>
+                  <label className="block">
+                    <span className="text-xs font-medium">
+                      Confirma el pedido escribiendo {preview.expectedOrderName}
+                    </span>
+                    <input
+                      value={confirmedOrderName}
+                      onChange={(event) => setConfirmedOrderName(event.target.value)}
+                      placeholder={preview.expectedOrderName ?? "Código del pedido"}
+                      className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm uppercase"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-medium">Motivo de la vinculación</span>
+                    <textarea
+                      value={manualReason}
+                      onChange={(event) => setManualReason(event.target.value)}
+                      placeholder="Ej.: Guía creada directamente en el portal Aliclik."
+                      rows={2}
+                      className="mt-1 w-full resize-none rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm"
+                    />
+                  </label>
+                </div>
               ) : null}
 
               {preview.phoneMatches === false || preview.totalMatches === false ? (
@@ -576,7 +637,11 @@ function ExistingGuideLinkPanel({
                 <button
                   type="button"
                   onClick={link}
-                  disabled={pending}
+                  disabled={
+                    pending ||
+                    (preview.verificationMode === "manual_portal" &&
+                      (!confirmedOrderName.trim() || manualReason.trim().length < 8))
+                  }
                   className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-sky-700 px-3 py-2 text-sm font-medium text-white hover:bg-sky-800 disabled:opacity-60"
                 >
                   {busy === "link" ? <Spinner /> : null}

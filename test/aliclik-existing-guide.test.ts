@@ -1,10 +1,27 @@
 import { describe, expect, it } from "vitest";
 import type { AliclikOrder } from "@/lib/aliclik";
-import { selectExistingAliclikOrder } from "@/lib/aliclik-existing-guide";
+import {
+  isCompatibleManualPortalGuide,
+  selectExistingAliclikOrder,
+} from "@/lib/aliclik-existing-guide";
 
 const order = (overrides: Partial<AliclikOrder>): AliclikOrder => ({
   orderNumber: "ALC0001",
   ...overrides,
+});
+
+describe("isCompatibleManualPortalGuide", () => {
+  it("acepta la guía de portal cuyo sufijo identifica al pedido Shopify", () => {
+    expect(isCompatibleManualPortalGuide("AUR5X174797", "#AUR174797")).toBe(true);
+  });
+
+  it("rechaza códigos ALC porque deben validarse por la API", () => {
+    expect(isCompatibleManualPortalGuide("ALC00000174797", "#AUR174797")).toBe(false);
+  });
+
+  it("rechaza una guía de portal que pertenece a otro pedido", () => {
+    expect(isCompatibleManualPortalGuide("AUR5X174798", "#AUR174797")).toBe(false);
+  });
 });
 
 describe("selectExistingAliclikOrder", () => {
