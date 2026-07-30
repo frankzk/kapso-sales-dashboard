@@ -723,7 +723,9 @@ export async function loadShopifySkuDetails(
   for (let from = 0; from < 50_000; from += PAGE) {
     const { data, error } = await admin
       .from("orders")
-      .select("created_at,line_items,raw")
+      .select(
+        "created_at,line_items,raw_line_items:raw->line_items,raw_graphql_line_items:raw->lineItems",
+      )
       .eq("store_id", storeId)
       .gte("created_at", since)
       .order("created_at", { ascending: false })
@@ -731,7 +733,20 @@ export async function loadShopifySkuDetails(
     if (error || !data?.length) break;
 
     collectShopifySkuDetails(
-      data as Array<{ created_at: string; line_items: unknown; raw: unknown }>,
+      (
+        data as Array<{
+          created_at: string;
+          line_items: unknown;
+          raw_line_items: unknown;
+          raw_graphql_line_items: unknown;
+        }>
+      ).map((row) => ({
+        line_items: row.line_items,
+        raw: {
+          line_items: row.raw_line_items,
+          lineItems: row.raw_graphql_line_items,
+        },
+      })),
       out,
     );
     if (data.length < PAGE) break;
