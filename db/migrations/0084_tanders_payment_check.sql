@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0064_tanders_payment_check.sql — validar la constancia de PAGO de cada
+-- 0084_tanders_payment_check.sql — validar la constancia de PAGO de cada
 -- entrega Tanders antes de dar el pedido por cobrado.
 --
 -- Tanders sube dos evidencias por entrega: la foto del paquete y el comprobante

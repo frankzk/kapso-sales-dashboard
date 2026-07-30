@@ -1140,7 +1140,7 @@ Tanders sube dos evidencias por entrega: la foto del paquete y el **comprobante
 del pago**, que el repartidor yapea a Grupo GF SAC. Ese segundo comprobante es el
 que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
 
-- **Needs migration 0064** (`shipments.payment_check_state`, tabla
+- **Needs migration 0084** (`shipments.payment_check_state`, tabla
   `tanders_payment_checks`).
 - **Cron `/api/cron/tanders-payments`**, cada 2 h. Barre las guías Tanders vivas
   de los últimos 8 días: pregunta su estado, y si Tanders la da por entregada
