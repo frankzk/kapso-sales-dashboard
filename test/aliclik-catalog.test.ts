@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  collectShopifySkuDetails,
   flattenCatalog,
   normalizeSku,
   resolveAliclikItems,
@@ -7,6 +8,55 @@ import {
   type AliclikSkuRow,
   type OrderLineInput,
 } from "@/lib/aliclik-catalog";
+
+describe("collectShopifySkuDetails", () => {
+  it("recupera talla y color del payload REST histórico por SKU", () => {
+    const details = collectShopifySkuDetails([
+      {
+        line_items: [
+          { sku: "30647718", title: "CloudSlides", variant_title: null },
+        ],
+        raw: {
+          line_items: [
+            {
+              sku: "30647718",
+              title: "CloudSlides",
+              variant_title: "38-39 / Negro",
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(details.get("30647718")).toEqual({
+      title: "CloudSlides",
+      variantTitle: "38-39 / Negro",
+    });
+  });
+
+  it("no reemplaza una variante conocida por un registro incompleto posterior", () => {
+    const details = collectShopifySkuDetails([
+      {
+        line_items: [
+          {
+            sku: "30647721",
+            title: "CloudSlides",
+            variant_title: "38-39 / Beige",
+          },
+        ],
+        raw: null,
+      },
+      {
+        line_items: [
+          { sku: "30647721", title: "CloudSlides", variant_title: null },
+        ],
+        raw: null,
+      },
+    ]);
+
+    expect(details.get("30647721")?.variantTitle).toBe("38-39 / Beige");
+  });
+});
 
 const sku = (over: Partial<AliclikSkuRow> = {}): AliclikSkuRow => ({
   ean: "1480110110503",

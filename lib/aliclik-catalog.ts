@@ -638,6 +638,72 @@ export interface ShopifySkuDetails {
   variantTitle: string | null;
 }
 
+type ShopifySkuItem = {
+  sku?: string | null;
+  title?: string | null;
+  name?: string | null;
+  variant_title?: string | null;
+  variantTitle?: string | null;
+  variant?: { title?: string | null } | null;
+};
+
+function normalizedVariantTitle(item: ShopifySkuItem): string | null {
+  const value = (
+    item.variant_title ??
+    item.variantTitle ??
+    item.variant?.title ??
+    ""
+  ).trim();
+  return value && value.toLowerCase() !== "default title" ? value : null;
+}
+
+/**
+ * Las sincronizaciones antiguas no copiaban la variante a `line_items`, pero
+ * el webhook original sí quedó completo en `raw`. Se combinan ambas fuentes
+ * para reparar el catálogo histórico sin esperar una venta nueva.
+ */
+function skuItemsFromOrder(lineItems: unknown, raw: unknown): ShopifySkuItem[] {
+  const stored = Array.isArray(lineItems) ? (lineItems as ShopifySkuItem[]) : [];
+  if (!raw || typeof raw !== "object") return stored;
+
+  const payload = raw as {
+    line_items?: unknown;
+    lineItems?: { edges?: Array<{ node?: ShopifySkuItem | null }> } | null;
+  };
+  const rest = Array.isArray(payload.line_items)
+    ? (payload.line_items as ShopifySkuItem[])
+    : [];
+  const graphql = Array.isArray(payload.lineItems?.edges)
+    ? payload.lineItems.edges
+        .map((edge) => edge?.node)
+        .filter((item): item is ShopifySkuItem => Boolean(item))
+    : [];
+
+  return [...stored, ...rest, ...graphql];
+}
+
+export function collectShopifySkuDetails(
+  rows: Array<{ line_items: unknown; raw: unknown }>,
+  out = new Map<string, ShopifySkuDetails>(),
+): Map<string, ShopifySkuDetails> {
+  for (const row of rows) {
+    for (const item of skuItemsFromOrder(row.line_items, row.raw)) {
+      const sku = normalizeSku(item.sku);
+      const title = (item.title ?? item.name ?? "").trim();
+      if (!sku || !title) continue;
+
+      const variantTitle = normalizedVariantTitle(item);
+      const current = out.get(sku);
+      if (!current) {
+        out.set(sku, { title, variantTitle });
+      } else if (!current.variantTitle && variantTitle) {
+        out.set(sku, { ...current, variantTitle });
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * SKU → producto y variante de Shopify.
  *
@@ -651,41 +717,23 @@ export async function loadShopifySkuDetails(
 ): Promise<Map<string, ShopifySkuDetails>> {
   const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
   const out = new Map<string, ShopifySkuDetails>();
-  const seenAt = new Map<string, string>();
 
   // Paginado: PostgREST corta en 1000 filas por respuesta.
   const PAGE = 1000;
   for (let from = 0; from < 50_000; from += PAGE) {
     const { data, error } = await admin
       .from("orders")
-      .select("created_at,line_items")
+      .select("created_at,line_items,raw")
       .eq("store_id", storeId)
       .gte("created_at", since)
       .order("created_at", { ascending: false })
       .range(from, from + PAGE - 1);
     if (error || !data?.length) break;
 
-    for (const row of data as { created_at: string; line_items: unknown }[]) {
-      const items = Array.isArray(row.line_items) ? row.line_items : [];
-      for (const it of items as {
-        sku?: string | null;
-        title?: string | null;
-        variant_title?: string | null;
-        variantTitle?: string | null;
-      }[]) {
-        const sku = normalizeSku(it.sku);
-        const title = (it.title ?? "").trim();
-        if (!sku || !title) continue;
-        const rawVariant = (it.variant_title ?? it.variantTitle ?? "").trim();
-        const variantTitle =
-          rawVariant && rawVariant.toLowerCase() !== "default title" ? rawVariant : null;
-        const prev = seenAt.get(sku);
-        if (!prev || row.created_at > prev) {
-          seenAt.set(sku, row.created_at);
-          out.set(sku, { title, variantTitle });
-        }
-      }
-    }
+    collectShopifySkuDetails(
+      data as Array<{ created_at: string; line_items: unknown; raw: unknown }>,
+      out,
+    );
     if (data.length < PAGE) break;
   }
   return out;

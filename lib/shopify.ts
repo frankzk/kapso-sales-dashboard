@@ -179,6 +179,10 @@ export function mapRestOrder(payload: any, storeId: string): OrderRow {
   const line_items: OrderLineItem[] = Array.isArray(payload?.line_items)
     ? payload.line_items.map((li: any) => ({
         title: String(li?.title ?? li?.name ?? ""),
+        variant_title:
+          li?.variant_title && String(li.variant_title).toLowerCase() !== "default title"
+            ? String(li.variant_title)
+            : null,
         quantity: Number(li?.quantity ?? 0),
         sku: li?.sku ?? null,
         product_id: li?.product_id != null ? String(li.product_id) : null,
@@ -226,9 +230,17 @@ export function mapGraphqlOrder(node: any, storeId: string): OrderRow {
     const n = e?.node ?? {};
     return {
       title: String(n?.title ?? ""),
+      variant_title:
+        n?.variant?.title && String(n.variant.title).toLowerCase() !== "default title"
+          ? String(n.variant.title)
+          : null,
       quantity: Number(n?.quantity ?? 0),
       sku: n?.sku ?? null,
-      product_id: n?.product?.id ? extractNumericId(n.product.id) : null,
+      product_id: n?.variant?.product?.id
+        ? extractNumericId(n.variant.product.id)
+        : n?.product?.id
+          ? extractNumericId(n.product.id)
+          : null,
       variant_id: n?.variant?.id ? extractNumericId(n.variant.id) : null,
       price: toNumber(n?.originalUnitPriceSet?.shopMoney?.amount),
     };
@@ -542,6 +554,7 @@ export function buildOrdersQuery(withPhone: boolean): string {
                 title
                 quantity
                 sku
+                variant { id title product { id } }
                 originalUnitPriceSet { shopMoney { amount } }
               }
             }

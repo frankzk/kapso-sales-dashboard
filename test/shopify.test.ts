@@ -175,7 +175,15 @@ describe("mapRestOrder", () => {
     ],
     customer: { phone: "+51 980 694 766" },
     line_items: [
-      { title: "Polo Aurela", quantity: 2, sku: "POLO-1", product_id: 1, variant_id: 11, price: "59.95" },
+      {
+        title: "Polo Aurela",
+        variant_title: "M / Negro",
+        quantity: 2,
+        sku: "POLO-1",
+        product_id: 1,
+        variant_id: 11,
+        price: "59.95",
+      },
       { title: "Gorro", quantity: 1, sku: "GORRO", product_id: 2, variant_id: 22, price: "80.00" },
     ],
   };
@@ -194,7 +202,12 @@ describe("mapRestOrder", () => {
     expect(row.kapso_conversation_id).toBe("conv_abc");
     expect(row.customer_phone).toBe("51980694766");
     expect(row.line_items).toHaveLength(2);
-    expect(row.line_items[0]).toMatchObject({ title: "Polo Aurela", quantity: 2, price: 59.95 });
+    expect(row.line_items[0]).toMatchObject({
+      title: "Polo Aurela",
+      variant_title: "M / Negro",
+      quantity: 2,
+      price: 59.95,
+    });
     expect(row.discount_codes).toEqual(["AURELA10"]); // REST [{code}] → upper-cased
   });
 
@@ -225,7 +238,11 @@ describe("mapGraphqlOrder", () => {
             quantity: 1,
             sku: "ZAP-1",
             product: { id: "gid://shopify/Product/9" },
-            variant: { id: "gid://shopify/ProductVariant/99" },
+            variant: {
+              id: "gid://shopify/ProductVariant/99",
+              title: "38-39 / Negro",
+              product: { id: "gid://shopify/Product/9" },
+            },
             originalUnitPriceSet: { shopMoney: { amount: "250.00" } },
           },
         },
@@ -245,6 +262,7 @@ describe("mapGraphqlOrder", () => {
     expect(row.discount_codes).toEqual(["AURELA10"]); // GraphQL [String] passthrough
     expect(row.line_items[0]).toMatchObject({
       title: "Zapatos",
+      variant_title: "38-39 / Negro",
       product_id: "9",
       variant_id: "99",
       price: 250,
