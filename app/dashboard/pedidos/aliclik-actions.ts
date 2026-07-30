@@ -1148,14 +1148,13 @@ export async function createAliclikGuide(
 /**
  * Incorpora al seguimiento una guía creada directamente en Aliclik.
  *
- * La consulta y todas las guardas se repiten aquí aunque la operadora ya haya
- * pulsado "Validar": el estado pudo cambiar entre ambos clics. Los índices
- * únicos son la última defensa ante dos vínculos simultáneos.
+ * Buscar, validar y vincular ocurre dentro de esta única acción. Primero se
+ * resuelve la guía y se ejecutan todas las guardas; solo después se inserta.
+ * Los índices únicos son la última defensa ante dos vínculos simultáneos.
  */
 export async function linkExistingAliclikGuide(
   orderId: string,
   guideCode: string,
-  manualConfirmation?: { orderName: string; reason: string },
 ): Promise<AliclikActionState> {
   const { resolution, error } = await resolveExistingAliclikGuide(orderId, guideCode);
   if (!resolution) return { error };
@@ -1166,24 +1165,6 @@ export async function linkExistingAliclikGuide(
   }
 
   const { ctx, order, guideCode: resolvedGuideCode, preview } = resolution;
-  if (preview.verificationMode === "manual_portal") {
-    const expected = (ctx.row.order_name ?? "").replace(/^#+/, "").trim().toUpperCase();
-    const provided = (manualConfirmation?.orderName ?? "")
-      .replace(/^#+/, "")
-      .trim()
-      .toUpperCase();
-    const reason = manualConfirmation?.reason?.trim() ?? "";
-    if (!expected || provided !== expected) {
-      return {
-        error: `Para vincular esta guía de portal, confirma el pedido escribiendo ${ctx.row.order_name}.`,
-      };
-    }
-    if (reason.length < 8) {
-      return {
-        error: "Escribe un motivo de al menos 8 caracteres para dejar la excepción auditada.",
-      };
-    }
-  }
   const orderNumber = preview.orderNumber!;
   const mapped = mapAliclikStatus({
     callStatus: order.callStatus,
@@ -1226,7 +1207,7 @@ export async function linkExistingAliclikGuide(
     order_id: orderId,
     matched: true,
     match_method:
-      preview.verificationMode === "manual_portal" ? "manual_portal_audited" : "manual_api",
+      preview.verificationMode === "manual_portal" ? "portal_code_suffix" : "manual_api",
     order_name: ctx.row.order_name,
     customer_name: customerName,
     customer_phone: customerPhone,
@@ -1241,7 +1222,7 @@ export async function linkExistingAliclikGuide(
     longitude: Number.isFinite(longitude) ? longitude : ctx.row.longitude,
     created_via:
       preview.verificationMode === "manual_portal"
-        ? "aliclik_external_manual_link"
+        ? "aliclik_external_portal_link"
         : "aliclik_external_link",
     assigned_at: assignedAt,
     last_report_at: lastReportAt,
@@ -1285,8 +1266,9 @@ export async function linkExistingAliclikGuide(
     note:
       preview.verificationMode === "manual_portal"
         ? `Guía ${resolvedGuideCode} creada directamente en el portal AURELA/KENKU; ` +
-          `vinculada mediante excepción auditada a ${ctx.row.order_name}. Motivo: ` +
-          `${manualConfirmation?.reason?.trim()}. La API oficial solo expone pedidos ALC de la integración.`
+          `vinculada a ${ctx.row.order_name} por coincidencia exacta del sufijo del pedido, ` +
+          "tras comprobar que no estaba vinculada a otro pedido. La API oficial solo expone " +
+          "pedidos ALC de la integración."
         : `Guía ${resolvedGuideCode} creada fuera de Kapta; pedido ${orderNumber} ` +
           "validado por la API de Aliclik y vinculado manualmente.",
     payload: {
@@ -1299,8 +1281,8 @@ export async function linkExistingAliclikGuide(
       phoneMatches: preview.phoneMatches,
       totalMatches: preview.totalMatches,
       verificationMode: preview.verificationMode,
-      confirmedOrderName: manualConfirmation?.orderName,
-      manualReason: manualConfirmation?.reason?.trim(),
+      expectedOrderName: preview.expectedOrderName,
+      matchExplanation: preview.matchExplanation,
       apiCandidateCount: preview.apiCandidateCount,
       apiMatchSummary: preview.apiMatchSummary,
     },

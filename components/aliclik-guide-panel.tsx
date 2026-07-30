@@ -21,7 +21,6 @@ import { Card } from "@/components/ui";
 import {
   createAliclikGuide,
   linkExistingAliclikGuide,
-  previewExistingAliclikGuide,
   previewAliclikGuide,
   type ExistingAliclikGuidePreview,
   type AliclikPreview,
@@ -394,54 +393,37 @@ function ExistingGuideLinkPanel({
 }) {
   const [open, setOpen] = useState(false);
   const [guideCode, setGuideCode] = useState("");
-  const [preview, setPreview] = useState<ExistingAliclikGuidePreview | null>(null);
+  // Se conserva el tipo del detalle anterior durante la transición al flujo
+  // atómico. Nunca se asigna: el servidor resuelve y vincula en una sola acción.
+  const [preview] = useState<ExistingAliclikGuidePreview | null>(null);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [confirmedOrderName, setConfirmedOrderName] = useState("");
   const [manualReason, setManualReason] = useState("");
-  const [busy, setBusy] = useState<null | "validate" | "link">(null);
+  const [busy, setBusy] = useState(false);
   const [pending, startTransition] = useTransition();
 
-  const validate = () => {
+  const findAndLink = () => {
     setMessage(null);
-    setPreview(null);
-    setConfirmedOrderName("");
-    setManualReason("");
-    setBusy("validate");
+    setBusy(true);
     startTransition(async () => {
       try {
-        const result = await previewExistingAliclikGuide(orderId, guideCode);
-        setPreview(result);
-        if (!result.ok && result.error) setMessage({ kind: "error", text: result.error });
-      } finally {
-        setBusy(null);
-      }
-    });
-  };
-
-  const link = () => {
-    if (!preview?.ok || !preview.guideCode || preview.alreadyLinked) return;
-    setMessage(null);
-    setBusy("link");
-    startTransition(async () => {
-      try {
-        const result = await linkExistingAliclikGuide(
-          orderId,
-          preview.guideCode!,
-          preview.verificationMode === "manual_portal"
-            ? { orderName: confirmedOrderName, reason: manualReason }
-            : undefined,
-        );
+        const result = await linkExistingAliclikGuide(orderId, guideCode);
         if (result.error) {
           setMessage({ kind: "error", text: result.error });
           return;
         }
-        setMessage({ kind: "ok", text: result.notice ?? "Guía vinculada." });
+        setMessage({
+          kind: "ok",
+          text: result.notice ?? "Guía vinculada y seguimiento activado.",
+        });
+        setGuideCode("");
         onLinked();
       } finally {
-        setBusy(null);
+        setBusy(false);
       }
     });
   };
+  const link = findAndLink;
 
   return (
     <div className="rounded-xl border border-sky-200 bg-sky-50/60">
@@ -456,7 +438,7 @@ function ExistingGuideLinkPanel({
             Vincular una guía ya creada en Aliclik
           </span>
           <span className="mt-0.5 block text-xs text-slate-600">
-            La validamos por API antes de incorporarla al seguimiento.
+            La busca, valida duplicados y activa el seguimiento en un solo paso.
           </span>
         </span>
         <span className="text-base text-sky-700" aria-hidden="true">
@@ -471,13 +453,10 @@ function ExistingGuideLinkPanel({
               value={guideCode}
               onChange={(event) => {
                 setGuideCode(event.target.value);
-                setPreview(null);
                 setMessage(null);
-                setConfirmedOrderName("");
-                setManualReason("");
               }}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && guideCode.trim() && !pending) validate();
+                if (event.key === "Enter" && guideCode.trim() && !pending) findAndLink();
               }}
               placeholder="Número de guía Aliclik"
               aria-label="Número de guía Aliclik existente"
@@ -485,14 +464,18 @@ function ExistingGuideLinkPanel({
             />
             <button
               type="button"
-              onClick={validate}
+              onClick={findAndLink}
               disabled={!guideCode.trim() || pending}
-              className="inline-flex items-center gap-2 rounded-lg border border-sky-300 bg-white px-3 py-2 text-sm font-medium text-sky-800 hover:bg-sky-50 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-lg bg-sky-700 px-3 py-2 text-sm font-medium text-white hover:bg-sky-800 disabled:opacity-50"
             >
-              {busy === "validate" ? <Spinner /> : null}
-              {busy === "validate" ? "Validando…" : "Validar guía"}
+              {busy ? <Spinner /> : null}
+              {busy ? "Buscando y vinculando…" : "Buscar y vincular guía"}
             </button>
           </div>
+
+          <p className="text-xs leading-5 text-slate-600">
+            Si no existe, pertenece a otro pedido o ya está vinculada, no se modifica nada.
+          </p>
 
           {message ? (
             <p
@@ -644,8 +627,8 @@ function ExistingGuideLinkPanel({
                   }
                   className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-sky-700 px-3 py-2 text-sm font-medium text-white hover:bg-sky-800 disabled:opacity-60"
                 >
-                  {busy === "link" ? <Spinner /> : null}
-                  {busy === "link" ? "Vinculando…" : "Vincular y activar seguimiento"}
+                  {busy ? <Spinner /> : null}
+                  {busy ? "Vinculando…" : "Vincular y activar seguimiento"}
                 </button>
               )}
             </div>
