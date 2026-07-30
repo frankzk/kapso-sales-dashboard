@@ -653,7 +653,10 @@ export async function getOrder(
 ): Promise<AliclikResult<AliclikOrder | null>> {
   const res = await listOrders(opts, { orderNumber, limit: 100 });
   if (!res.ok) return res;
-  const exact = (res.data.data ?? []).find((o) => o.orderNumber === orderNumber) ?? null;
+  const wanted = orderNumber.trim().toUpperCase();
+  const exact =
+    (res.data.data ?? []).find((o) => (o.orderNumber ?? "").trim().toUpperCase() === wanted) ??
+    null;
   return { ok: true, data: exact };
 }
 
