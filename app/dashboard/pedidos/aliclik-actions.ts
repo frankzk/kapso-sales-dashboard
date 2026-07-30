@@ -103,6 +103,7 @@ interface AliclikContext {
   storeId: string;
   row: OrderMasterRow;
   client: AliclikClientOpts;
+  clients: AliclikClientOpts[];
 }
 
 /**
@@ -129,12 +130,38 @@ async function authorize(
   if (!data) return { error: "Sin acceso a este pedido." };
   const row = data as unknown as OrderMasterRow;
 
-  const creds = await getStoreCreds(row.store_id);
-  if (!creds?.aliclik_api_token) {
-    return { error: "Esta tienda no tiene configurado el token de Aliclik (Ajustes → Aliclik)." };
+  const admin = createAdminSupabase();
+  const creds = await getStoreCreds(row.store_id, admin);
+  if (!creds) return { error: "No se pudo leer la configuración de la tienda." };
+
+  // Aurela y Kenku son tiendas Shopify separadas, pero comparten una sola
+  // tienda Aliclik (AURELA/KENKU). Las lecturas deben poder usar cualquiera de
+  // las credenciales Aliclik habilitadas de la organización.
+  const { data: orgStores, error: orgStoresError } = await admin
+    .from("stores")
+    .select("id")
+    .eq("org_id", creds.org_id)
+    .eq("aliclik_enabled", true);
+  if (orgStoresError) {
+    return { error: "No se pudo leer la configuración compartida de Aliclik." };
   }
-  if (!creds.aliclik_enabled) {
-    return { error: "La integración con Aliclik está desactivada para esta tienda." };
+
+  const siblingCreds = await Promise.all(
+    (orgStores ?? []).map((store) => getStoreCreds(store.id, admin)),
+  );
+  const tokens = [
+    creds.aliclik_enabled ? creds.aliclik_api_token : null,
+    ...siblingCreds.map((candidate) =>
+      candidate?.aliclik_enabled ? candidate.aliclik_api_token : null,
+    ),
+  ].filter((token): token is string => Boolean(token));
+  const clients = [...new Set(tokens)].map((apiToken) => ({ apiToken }));
+  if (!clients.length) {
+    return {
+      error:
+        "La organización no tiene una conexión Aliclik habilitada " +
+        "(Ajustes → Aliclik).",
+    };
   }
 
   return {
@@ -142,7 +169,8 @@ async function authorize(
       userId: user.id,
       storeId: row.store_id,
       row,
-      client: { apiToken: creds.aliclik_api_token },
+      client: clients[0]!,
+      clients,
     },
   };
 }
@@ -187,40 +215,73 @@ async function resolveExistingAliclikGuide(
   let remoteOrder: AliclikOrder | null = null;
   let matchExplanation: string | undefined;
   if (/^ALC/i.test(code)) {
-    const remote = await getOrder(ctx.client, code, {
-      searchTerms: [numericSuffix, customerPhone, customerPhoneLocal],
-      startDate: dateKey(recentStart),
-      endDate: dateKey(new Date(Date.now() + 24 * 60 * 60_000)),
-      maxPagesPerQuery: 10,
-      scanUnfiltered: true,
-    });
-    if (!remote.ok) return { error: `No se pudo consultar Aliclik: ${remote.error}` };
-    remoteOrder = remote.data;
-  } else {
-    const candidates: AliclikOrder[] = [];
-    for (let page = 1; page <= 10; page++) {
-      const result = await listOrders(ctx.client, {
-        page,
-        limit: 100,
+    const errors: string[] = [];
+    for (const client of ctx.clients) {
+      const remote = await getOrder(client, code, {
+        searchTerms: [numericSuffix, customerPhone, customerPhoneLocal],
         startDate: dateKey(recentStart),
         endDate: dateKey(new Date(Date.now() + 24 * 60 * 60_000)),
+        maxPagesPerQuery: 10,
+        scanUnfiltered: true,
       });
-      if (!result.ok) return { error: `No se pudo consultar Aliclik: ${result.error}` };
-      candidates.push(...(result.data.data ?? []));
-      const totalPages = Math.max(1, result.data.pagination?.totalPages ?? 1);
-      if (page >= totalPages || !(result.data.data ?? []).length) break;
+      if (!remote.ok) {
+        errors.push(remote.error);
+        continue;
+      }
+      if (remote.data) {
+        remoteOrder = remote.data;
+        ctx.client = client;
+        break;
+      }
     }
-    const selected = selectExistingAliclikOrder(candidates, {
-      orderName: ctx.row.order_name,
-      customerPhone: ctx.row.customer_phone,
-      orderTotal: ctx.row.order_total,
-      region: ctx.row.region,
-      province: ctx.row.province,
-      district: ctx.row.district,
-    });
+    if (!remoteOrder && errors.length === ctx.clients.length) {
+      return { error: `No se pudo consultar Aliclik: ${errors[0]}` };
+    }
+  } else {
+    const candidates = new Map<
+      string,
+      { order: AliclikOrder; client: AliclikClientOpts }
+    >();
+    const errors: string[] = [];
+    for (const client of ctx.clients) {
+      for (let page = 1; page <= 10; page++) {
+        const result = await listOrders(client, {
+          page,
+          limit: 100,
+          startDate: dateKey(recentStart),
+          endDate: dateKey(new Date(Date.now() + 24 * 60 * 60_000)),
+        });
+        if (!result.ok) {
+          errors.push(result.error);
+          break;
+        }
+        for (const order of result.data.data ?? []) {
+          const key = normalizeExternalGuideCode(order.orderNumber ?? "");
+          if (key && !candidates.has(key)) candidates.set(key, { order, client });
+        }
+        const totalPages = Math.max(1, result.data.pagination?.totalPages ?? 1);
+        if (page >= totalPages || !(result.data.data ?? []).length) break;
+      }
+    }
+    if (!candidates.size && errors.length === ctx.clients.length) {
+      return { error: `No se pudo consultar Aliclik: ${errors[0]}` };
+    }
+    const selected = selectExistingAliclikOrder(
+      [...candidates.values()].map(({ order }) => order),
+      {
+        orderName: ctx.row.order_name,
+        customerPhone: ctx.row.customer_phone,
+        orderTotal: ctx.row.order_total,
+        region: ctx.row.region,
+        province: ctx.row.province,
+        district: ctx.row.district,
+      },
+    );
     if (selected.ok) {
       remoteOrder = selected.match.order;
       matchExplanation = selected.match.reasons.join(", ");
+      const key = normalizeExternalGuideCode(remoteOrder.orderNumber ?? "");
+      if (key) ctx.client = candidates.get(key)?.client ?? ctx.client;
     } else if (selected.reason === "ambiguous") {
       return {
         error:
@@ -233,7 +294,7 @@ async function resolveExistingAliclikGuide(
     return {
       error:
         /^ALC/i.test(code)
-          ? `El pedido ${code} no existe en la cuenta Aliclik de esta tienda.`
+          ? `El pedido ${code} no aparece en la cuenta compartida AURELA/KENKU de Aliclik.`
           : `No pudimos relacionar ${code} con un pedido Aliclik de forma segura. ` +
             "Verifica que tenga el mismo pedido Shopify, teléfono, monto y destino.",
     };
