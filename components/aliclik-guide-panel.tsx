@@ -415,12 +415,12 @@ function ExistingGuideLinkPanel({
   };
 
   const link = () => {
-    if (!preview?.ok || !preview.orderNumber || preview.alreadyLinked) return;
+    if (!preview?.ok || !preview.guideCode || preview.alreadyLinked) return;
     setMessage(null);
     setBusy("link");
     startTransition(async () => {
       try {
-        const result = await linkExistingAliclikGuide(orderId, preview.orderNumber!);
+        const result = await linkExistingAliclikGuide(orderId, preview.guideCode!);
         if (result.error) {
           setMessage({ kind: "error", text: result.error });
           return;
@@ -499,8 +499,13 @@ function ExistingGuideLinkPanel({
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="font-mono text-sm font-semibold text-slate-900">
-                    {preview.orderNumber}
+                    {preview.guideCode}
                   </p>
+                  {preview.orderNumber && preview.orderNumber !== preview.guideCode ? (
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Pedido técnico Aliclik: {preview.orderNumber}
+                    </p>
+                  ) : null}
                   <p className="mt-0.5 text-xs text-slate-500">{preview.statusLabel ?? "Sin estado"}</p>
                 </div>
                 {preview.total != null ? (
@@ -543,6 +548,13 @@ function ExistingGuideLinkPanel({
                   </div>
                 ) : null}
               </dl>
+
+              {preview.matchExplanation ? (
+                <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                  Coincidencia validada por {preview.matchExplanation}. Aliclik no expone el código
+                  impreso AUR5X por API; el pedido técnico mostrado arriba sí fue validado.
+                </p>
+              ) : null}
 
               {preview.phoneMatches === false || preview.totalMatches === false ? (
                 <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">

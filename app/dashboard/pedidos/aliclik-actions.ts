@@ -38,11 +38,13 @@ import {
   createOrder,
   getOrder,
   interpretCancelResponse,
+  listOrders,
   quoteShippingCost,
   type AliclikClientOpts,
   type AliclikCourierQuote,
   type AliclikOrder,
 } from "@/lib/aliclik";
+import { selectExistingAliclikOrder } from "@/lib/aliclik-existing-guide";
 import { aliclikStatusLabel, mapAliclikStatus } from "@/lib/aliclik-status";
 import {
   loadCatalogFor,
@@ -68,7 +70,9 @@ export interface AliclikActionState {
 export interface ExistingAliclikGuidePreview {
   ok: boolean;
   error?: string;
+  guideCode?: string;
   orderNumber?: string;
+  matchExplanation?: string;
   customerName?: string | null;
   customerPhone?: string | null;
   total?: number | null;
@@ -86,6 +90,7 @@ export interface ExistingAliclikGuidePreview {
 interface ExistingGuideResolution {
   ctx: AliclikContext;
   order: AliclikOrder;
+  guideCode: string;
   preview: ExistingAliclikGuidePreview;
 }
 
@@ -179,19 +184,62 @@ async function resolveExistingAliclikGuide(
       : Date.now() - 30 * 24 * 60 * 60_000,
   );
   const dateKey = (date: Date) => date.toISOString().slice(0, 10);
-  const remote = await getOrder(ctx.client, code, {
-    searchTerms: [numericSuffix, customerPhone, customerPhoneLocal],
-    startDate: dateKey(recentStart),
-    endDate: dateKey(new Date(Date.now() + 24 * 60 * 60_000)),
-    maxPagesPerQuery: 10,
-    scanUnfiltered: true,
-  });
-  if (!remote.ok) return { error: `No se pudo consultar Aliclik: ${remote.error}` };
-  if (!remote.data) {
-    return { error: `La guía ${code} no existe en la cuenta Aliclik de esta tienda.` };
+  let remoteOrder: AliclikOrder | null = null;
+  let matchExplanation: string | undefined;
+  if (/^ALC/i.test(code)) {
+    const remote = await getOrder(ctx.client, code, {
+      searchTerms: [numericSuffix, customerPhone, customerPhoneLocal],
+      startDate: dateKey(recentStart),
+      endDate: dateKey(new Date(Date.now() + 24 * 60 * 60_000)),
+      maxPagesPerQuery: 10,
+      scanUnfiltered: true,
+    });
+    if (!remote.ok) return { error: `No se pudo consultar Aliclik: ${remote.error}` };
+    remoteOrder = remote.data;
+  } else {
+    const candidates: AliclikOrder[] = [];
+    for (let page = 1; page <= 10; page++) {
+      const result = await listOrders(ctx.client, {
+        page,
+        limit: 100,
+        startDate: dateKey(recentStart),
+        endDate: dateKey(new Date(Date.now() + 24 * 60 * 60_000)),
+      });
+      if (!result.ok) return { error: `No se pudo consultar Aliclik: ${result.error}` };
+      candidates.push(...(result.data.data ?? []));
+      const totalPages = Math.max(1, result.data.pagination?.totalPages ?? 1);
+      if (page >= totalPages || !(result.data.data ?? []).length) break;
+    }
+    const selected = selectExistingAliclikOrder(candidates, {
+      orderName: ctx.row.order_name,
+      customerPhone: ctx.row.customer_phone,
+      orderTotal: ctx.row.order_total,
+      region: ctx.row.region,
+      province: ctx.row.province,
+      district: ctx.row.district,
+    });
+    if (selected.ok) {
+      remoteOrder = selected.match.order;
+      matchExplanation = selected.match.reasons.join(", ");
+    } else if (selected.reason === "ambiguous") {
+      return {
+        error:
+          `Aliclik no expone el código impreso ${code} por API y encontramos más de un pedido ` +
+          "posible. No se vinculó nada; usa el código ALC del pedido para confirmar cuál corresponde.",
+      };
+    }
+  }
+  if (!remoteOrder) {
+    return {
+      error:
+        /^ALC/i.test(code)
+          ? `El pedido ${code} no existe en la cuenta Aliclik de esta tienda.`
+          : `No pudimos relacionar ${code} con un pedido Aliclik de forma segura. ` +
+            "Verifica que tenga el mismo pedido Shopify, teléfono, monto y destino.",
+    };
   }
 
-  const orderNumber = normalizeExternalGuideCode(remote.data.orderNumber ?? "");
+  const orderNumber = normalizeExternalGuideCode(remoteOrder.orderNumber ?? "");
   if (!orderNumber) return { error: "Aliclik devolvió la guía sin un número identificador válido." };
 
   const admin = createAdminSupabase();
@@ -207,7 +255,7 @@ async function resolveExistingAliclikGuide(
       .from("shipments")
       .select("order_id,order_name")
       .eq("courier", "aliclik")
-      .ilike("guide_code", orderNumber)
+      .ilike("guide_code", code)
       .limit(1)
       .maybeSingle(),
   ]);
@@ -226,7 +274,7 @@ async function resolveExistingAliclikGuide(
   if (linked?.order_id && linked.order_id !== orderId) {
     return {
       error:
-        `La guía ${orderNumber} ya está vinculada a ${linked.order_name ?? "otro pedido"}. ` +
+        `La guía ${code} ya está vinculada a ${linked.order_name ?? "otro pedido"}. ` +
         "No se modificó ningún vínculo.",
     };
   }
@@ -250,7 +298,7 @@ async function resolveExistingAliclikGuide(
     }[]
   ).find(
     (guide) =>
-      guide.guide_code.toUpperCase() !== orderNumber.toUpperCase() &&
+      guide.guide_code.toUpperCase() !== code.toUpperCase() &&
       guide.external_order_number?.toUpperCase() !== orderNumber.toUpperCase(),
   );
   if (activeOther) {
@@ -262,24 +310,26 @@ async function resolveExistingAliclikGuide(
   }
 
   const customerName =
-    [remote.data.customer?.name, remote.data.customer?.lastName]
+    [remoteOrder.customer?.name, remoteOrder.customer?.lastName]
       .filter(Boolean)
       .join(" ")
       .trim() || null;
-  const total = remote.data.total ?? null;
+  const total = remoteOrder.total ?? null;
   const preview: ExistingAliclikGuidePreview = {
     ok: true,
+    guideCode: code,
     orderNumber,
+    matchExplanation,
     customerName,
-    customerPhone: remote.data.customer?.phone ?? null,
+    customerPhone: remoteOrder.customer?.phone ?? null,
     total,
-    productDetail: remote.data.productDetail ?? null,
-    statusLabel: aliclikStatusLabel(remote.data),
-    shippingAddress: remote.data.shipping?.address1 ?? null,
-    shippingDistrict: remote.data.shipping?.districtName ?? null,
-    shippingProvince: remote.data.shipping?.provinceName ?? null,
-    shippingDepartment: remote.data.shipping?.departmentName ?? null,
-    phoneMatches: samePhone(remote.data.customer?.phone, ctx.row.customer_phone),
+    productDetail: remoteOrder.productDetail ?? null,
+    statusLabel: aliclikStatusLabel(remoteOrder),
+    shippingAddress: remoteOrder.shipping?.address1 ?? null,
+    shippingDistrict: remoteOrder.shipping?.districtName ?? null,
+    shippingProvince: remoteOrder.shipping?.provinceName ?? null,
+    shippingDepartment: remoteOrder.shipping?.departmentName ?? null,
+    phoneMatches: samePhone(remoteOrder.customer?.phone, ctx.row.customer_phone),
     totalMatches:
       total == null || ctx.row.order_total == null
         ? null
@@ -287,7 +337,7 @@ async function resolveExistingAliclikGuide(
     alreadyLinked: linked?.order_id === orderId,
   };
 
-  return { resolution: { ctx, order: remote.data, preview } };
+  return { resolution: { ctx, order: remoteOrder, guideCode: code, preview } };
 }
 
 /**
@@ -938,7 +988,7 @@ export async function linkExistingAliclikGuide(
     };
   }
 
-  const { ctx, order, preview } = resolution;
+  const { ctx, order, guideCode: resolvedGuideCode, preview } = resolution;
   const orderNumber = preview.orderNumber!;
   const mapped = mapAliclikStatus({
     callStatus: order.callStatus,
@@ -970,7 +1020,7 @@ export async function linkExistingAliclikGuide(
   const insert: Record<string, unknown> = {
     store_id: ctx.storeId,
     courier: "aliclik",
-    guide_code: orderNumber,
+    guide_code: resolvedGuideCode,
     external_order_number: orderNumber,
     delivery_status: deliveryStatus,
     status_category: categoryOf(deliveryStatus),
@@ -1027,9 +1077,11 @@ export async function linkExistingAliclikGuide(
     actor: ctx.userId,
     source: "aliclik",
     courier: "aliclik",
-    guide_code: orderNumber,
+    guide_code: resolvedGuideCode,
     shipment_id: (shipment as { id: string }).id,
-    note: "Guía creada fuera de Kapta, validada por la API de Aliclik y vinculada manualmente.",
+    note:
+      `Guía ${resolvedGuideCode} creada fuera de Kapta; pedido ${orderNumber} ` +
+      "validado por la API de Aliclik y vinculado manualmente.",
     payload: {
       externalLink: true,
       callStatus: order.callStatus,
