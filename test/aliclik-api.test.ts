@@ -177,6 +177,22 @@ describe("getOrder", () => {
     if (!res.ok) return;
     expect(res.data).toBeNull();
   });
+
+  it("acepta diferencias de mayúsculas y espacios sin confundir coincidencias parciales", async () => {
+    const { impl } = stubFetch([
+      {
+        status: 200,
+        body: {
+          data: [{ orderNumber: "AUR5X1234" }, { orderNumber: "AUR5X123" }],
+          pagination: { totalPages: 1 },
+        },
+      },
+    ]);
+    const res = await getOrder(opts(impl), "  aur5x123 ");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data?.orderNumber).toBe("AUR5X123");
+  });
 });
 
 describe("interpretCancelResponse", () => {
