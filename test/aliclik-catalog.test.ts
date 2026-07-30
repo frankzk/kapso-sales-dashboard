@@ -53,6 +53,33 @@ describe("resolveAliclikItems — camino feliz", () => {
     ]);
   });
 
+  it("prioriza el almacén operativo aunque Postgres entregue primero otro almacén", () => {
+    const mapped = map([
+      ["LAP-14", "1480110110503"],
+      ["MOU-1", "2220000000001"],
+    ]);
+    const res = resolveAliclikItems(
+      [line()],
+      mapped,
+      [
+        sku({ warehouse_id: 183, warehouse_name: "NIBRESMA" }),
+        sku({ warehouse_id: 133, warehouse_name: "GRUPO GF" }),
+        sku({
+          ean: "2220000000001",
+          sku: "MOU-1",
+          warehouse_id: 133,
+          warehouse_name: "GRUPO GF",
+        }),
+      ],
+      { modality: "cod" },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.warehouseId).toBe(133);
+    expect(res.warehouseName).toBe("GRUPO GF");
+  });
+
   it("empareja el SKU sin importar mayúsculas ni espacios", () => {
     const res = resolveAliclikItems(
       [line({ sku: " lap-14 " })],
