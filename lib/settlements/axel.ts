@@ -50,7 +50,16 @@ const ITEM_KEYS = ["item", "n", "nro"];
 export function axelDelivered(method: string | null): boolean {
   const m = headerKey(method ?? "");
   if (!m) return false;
-  return m === "efectivo" || m === "pago pos" || m === "pos";
+  return [
+    "efectivo",
+    "pago pos",
+    "pos",
+    "transferencia",
+    "transferencia bancaria",
+    "yape",
+    "plin",
+    "deposito",
+  ].includes(m);
 }
 
 /** Filas que NO son una entrega: totales, arrastres y comisiones. */
@@ -125,6 +134,7 @@ export function parseAxelSheet(
     const name = pick(map, NAME_KEYS);
     const district = pick(map, DISTRICT_KEYS);
     const method = pick(map, METHOD_KEYS);
+    const rowStore = pick(map, STORE_KEYS);
     const cash = axelMoney(pick(map, CASH_KEYS));
     const fee = axelMoney(pick(map, FEE_KEYS));
 
@@ -132,7 +142,7 @@ export function parseAxelSheet(
     // al 30 que la plantilla deja en blanco), no una entrega.
     if (!name && !method) continue;
 
-    storeHint ??= pick(map, STORE_KEYS);
+    storeHint ??= rowStore;
 
     lines.push({
       // Axel no da ninguno de los dos; la ingesta empareja por nombre y distrito.
@@ -143,6 +153,8 @@ export function parseAxelSheet(
       declared_fee: fee,
       customer_name: name,
       district,
+      store_hint: rowStore,
+      payment_method: axelDelivered(method) ? method : null,
       raw: {
         item: pick(map, ITEM_KEYS) ?? "",
         cliente: pick(map, STORE_KEYS) ?? "",

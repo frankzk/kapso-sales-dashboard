@@ -151,4 +151,24 @@
 \ir migrations/0072_aliclik_tariffs_from_reports.sql
 \echo 'Applying 0073_shalom_order_draft.sql'
 \ir migrations/0073_shalom_order_draft.sql
+\echo 'Applying 0074_meta_ad_insights_daily.sql'
+\ir migrations/0074_meta_ad_insights_daily.sql
+\echo 'Applying 0075_meta_ad_performance.sql'
+\ir migrations/0075_meta_ad_performance.sql
+\echo 'Applying 0076_payment_total.sql'
+\ir migrations/0076_payment_total.sql
+\echo 'Applying 0077_settlement_row_matching.sql'
+\ir migrations/0077_settlement_row_matching.sql
+\echo 'Applying 0078_order_coverage.sql'
+\ir migrations/0078_order_coverage.sql
+\echo 'Applying 0079_coverage_region_first.sql'
+\ir migrations/0079_coverage_region_first.sql
+\echo 'Applying 0080_swayp_guides.sql'
+\ir migrations/0080_swayp_guides.sql
+\echo 'Applying 0081_coverage_district_aliases.sql'
+\ir migrations/0081_coverage_district_aliases.sql
+\echo 'Applying 0082_meta_campaign_data_quality.sql'
+\ir migrations/0082_meta_campaign_data_quality.sql
+\echo 'Applying 0083_coverage_owned_by_db.sql'
+\ir migrations/0083_coverage_owned_by_db.sql
 \echo 'Done.'

@@ -49,10 +49,17 @@ export function isMasterView(v: string | undefined | null): v is MasterView {
 const MASTER_COLUMNS =
   "id,store_id,order_id,order_name,order_created_at,customer_name," +
   "customer_phone,region,province,district," +
+  "coverage," +
   "shipping_mode,order_total,general_status," +
   "operational_status,status_since,status_locked,current_courier,last_courier," +
   "courier_count,attempt_count,guide_code,dispatched_at,delivered_at," +
   "last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
+  // El panel de Aliclik decide con estas dos si enseña "el pedido ya tiene
+  // coordenada" o "obligatoria, el pedido no la tiene". Sin traerlas llegaban
+  // como `undefined` y el panel decía SIEMPRE que faltaba, también en pedidos
+  // que sí la tenían — con la operadora pegando pines a mano sin necesidad.
+  // La acción del servidor nunca se vio afectada: `authorize` hace `select("*")`.
+  "latitude,longitude," +
   "key_state,agency_branch,agency_arrived_at,agency_expires_at";
 
 // PostgREST corta cada respuesta en `db-max-rows` (1000 en Supabase), así que se
@@ -322,6 +329,7 @@ function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
   if (f.regions.size) q = q.in("region", [...f.regions]);
   if (f.provinces.size) q = q.in("province", [...f.provinces]);
   if (f.districts.size) q = q.in("district", [...f.districts]);
+  if (f.coverages.size) q = q.in("coverage", [...f.coverages]);
   if (f.pickupStates.size) q = q.in("pickup_state", [...f.pickupStates]);
 
   // El courier mira el actual Y el último: buscar "los que tocó Fenix" no debe
@@ -451,7 +459,7 @@ export async function getOrderMasterPage(
 const FACETS_TTL_SECONDS = 120;
 
 async function loadFacets(storeIds: string[]) {
-  const empty = { operational: [], courier: [], region: [], province: [], district: [], pickup: [] };
+  const empty = { operational: [], courier: [], region: [], province: [], district: [], coverage: [], pickup: [] };
   if (!storeIds.length) return empty;
   const admin = createAdminSupabase();
   const { data, error } = await admin.rpc("master_facets", { p_store_ids: storeIds });
@@ -464,6 +472,7 @@ async function loadFacets(storeIds: string[]) {
     region: list("region"),
     province: list("province"),
     district: list("district"),
+    coverage: list("coverage"),
     pickup: list("pickup"),
   };
 }
@@ -519,9 +528,10 @@ export async function getMasterFacets(storeIds: string[]): Promise<{
   region: string[];
   province: string[];
   district: string[];
+  coverage: string[];
   pickup: string[];
 }> {
-  const empty = { operational: [], courier: [], region: [], province: [], district: [], pickup: [] };
+  const empty = { operational: [], courier: [], region: [], province: [], district: [], coverage: [], pickup: [] };
   if (!storeIds.length) return empty;
   const sb = await createServerSupabase();
   const { data, error } = await sb.rpc("master_facets", { p_store_ids: storeIds });
@@ -534,6 +544,7 @@ export async function getMasterFacets(storeIds: string[]): Promise<{
     region: list("region"),
     province: list("province"),
     district: list("district"),
+    coverage: list("coverage"),
     pickup: list("pickup"),
   };
 }

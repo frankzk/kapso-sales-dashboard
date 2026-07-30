@@ -4667,3 +4667,978 @@ create policy shalom_order_drafts_select on shalom_order_drafts
 revoke all on shalom_order_drafts from public, anon, authenticated;
 grant select on shalom_order_drafts to authenticated;
 grant all privileges on shalom_order_drafts to service_role;
+
+-- ---- 0074 ----
+-- Histórico diario de Meta Ads por tienda, cuenta y anuncio.
+--
+-- Meta puede ajustar atribución y métricas después del día original, por eso el
+-- sincronizador hace UPSERT de una ventana móvil en lugar de insertar una sola
+-- vez. La clave compuesta evita duplicados incluso al rehacer el backfill.
+create table if not exists public.meta_ad_insights_daily (
+  store_id                 uuid not null references public.stores(id) on delete cascade,
+  account_id               text not null,
+  account_name             text,
+  currency                 text,
+  date                     date not null,
+  campaign_id              text,
+  campaign_name            text,
+  adset_id                 text,
+  adset_name               text,
+  ad_id                    text not null,
+  ad_name                  text,
+  spend                    numeric(16, 4) not null default 0,
+  impressions              bigint not null default 0,
+  reach                    bigint not null default 0,
+  frequency                numeric(12, 6),
+  clicks                    bigint not null default 0,
+  inline_link_clicks        bigint not null default 0,
+  ctr                      numeric(12, 6),
+  cpm                      numeric(16, 6),
+  cpc                      numeric(16, 6),
+  actions                  jsonb not null default '[]'::jsonb,
+  cost_per_action_type     jsonb not null default '[]'::jsonb,
+  synced_at                timestamptz not null default now(),
+  primary key (store_id, account_id, ad_id, date)
+);
+
+create index if not exists meta_ad_insights_store_date_idx
+  on public.meta_ad_insights_daily (store_id, date desc);
+create index if not exists meta_ad_insights_store_ad_date_idx
+  on public.meta_ad_insights_daily (store_id, ad_id, date desc);
+create index if not exists meta_ad_insights_store_campaign_date_idx
+  on public.meta_ad_insights_daily (store_id, campaign_id, date desc);
+
+alter table public.meta_ad_insights_daily enable row level security;
+
+drop policy if exists meta_ad_insights_daily_select on public.meta_ad_insights_daily;
+create policy meta_ad_insights_daily_select
+  on public.meta_ad_insights_daily
+  for select to authenticated
+  using (store_id in (select public.auth_store_ids()));
+
+grant select on public.meta_ad_insights_daily to authenticated;
+grant all privileges on public.meta_ad_insights_daily to service_role;
+
+-- ---- 0075 ----
+-- Aggregated Meta performance for the decision table.
+--
+-- Keeping the aggregation in Postgres avoids downloading tens of thousands of
+-- daily rows on every dashboard request. SECURITY INVOKER is intentional: the
+-- existing RLS policy on meta_ad_insights_daily remains authoritative.
+create or replace function public.meta_ad_performance(
+  p_store_id uuid,
+  p_from date,
+  p_to date
+)
+returns table (
+  ad_id text,
+  account_id text,
+  currency text,
+  spend numeric,
+  impressions bigint,
+  reach bigint,
+  clicks bigint,
+  inline_link_clicks bigint,
+  active_days bigint,
+  first_date date,
+  last_date date
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select
+    i.ad_id,
+    min(i.account_id) as account_id,
+    case when count(distinct nullif(i.currency, '')) = 1 then min(nullif(i.currency, '')) end as currency,
+    coalesce(sum(i.spend), 0) as spend,
+    coalesce(sum(i.impressions), 0)::bigint as impressions,
+    coalesce(sum(i.reach), 0)::bigint as reach,
+    coalesce(sum(i.clicks), 0)::bigint as clicks,
+    coalesce(sum(i.inline_link_clicks), 0)::bigint as inline_link_clicks,
+    count(distinct i.date)::bigint as active_days,
+    min(i.date) as first_date,
+    max(i.date) as last_date
+  from public.meta_ad_insights_daily i
+  where i.store_id = p_store_id
+    and i.date between p_from and p_to
+  group by i.ad_id
+  order by sum(i.spend) desc, i.ad_id;
+$$;
+
+revoke all on function public.meta_ad_performance(uuid, date, date) from public, anon;
+grant execute on function public.meta_ad_performance(uuid, date, date) to authenticated, service_role;
+
+comment on function public.meta_ad_performance(uuid, date, date) is
+  'Meta Ads por anuncio y rango. Totales crudos para calcular CPM y frecuencia ponderados; conserva RLS mediante security invoker.';
+
+-- ---- 0076 ----
+-- 0076_payment_total.sql — permite registrar un único comprobante por el total
+-- del pedido, como alternativa al flujo adelanto + diferencia.
+
+alter table order_payments
+  drop constraint if exists order_payments_kind_check;
+
+alter table order_payments
+  add constraint order_payments_kind_check
+  check (kind in ('adelanto', 'diferencia', 'total'));
+
+comment on column order_payments.kind is
+  'Tipo de pago: adelanto y diferencia forman un flujo parcial; total cancela el pedido en un solo comprobante.';
+
+-- ---- 0077 ----
+-- 0077 — Cotejo multitienda de liquidaciones.
+--
+-- Axel no entrega guía ni código de pedido. Sí entrega la tienda (CLIENTE) y,
+-- cuando hubo entrega, la forma de pago. Se conservan como columnas auditables
+-- para que el cotejo nunca mezcle Aurela con Kenku y para que el resultado
+-- financiero pueda revisarse sin volver a abrir el Excel original.
+
+alter table rider_settlement_lines
+  add column if not exists store_hint text,
+  add column if not exists payment_method text;
+
+comment on column rider_settlement_lines.store_hint is
+  'Tienda declarada por la fila del courier; limita el cotejo automático.';
+
+comment on column rider_settlement_lines.payment_method is
+  'Forma de pago declarada por el courier para una entrega (efectivo, POS, transferencia…).';
+
+-- ---- 0078 ----
+-- 0078 — Clasificación operativa de cobertura en el Master de Pedidos.
+--
+-- Lima significa únicamente Lima Metropolitana y Callao. Las provincias del
+-- departamento de Lima (Huaral, Cañete, Barranca, etc.) siguen la misma regla
+-- que el resto del país: Provincia COD si una tarifa vigente demuestra
+-- cobertura contraentrega; Agencia en caso contrario.
+
+alter table order_master
+  add column if not exists coverage text;
+
+alter table order_master drop constraint if exists order_master_coverage_check;
+alter table order_master
+  add constraint order_master_coverage_check
+  check (coverage in ('lima', 'provincia_cod', 'agencia', 'por_revisar'));
+
+create index if not exists order_master_store_coverage_idx
+  on order_master(store_id, coverage);
+
+create or replace function coverage_norm(value text)
+returns text
+language sql
+immutable
+parallel safe
+as $$
+  select trim(regexp_replace(
+    translate(lower(coalesce(value, '')), 'áéíóúüñ', 'aeiouun'),
+    '[^a-z0-9]+', ' ', 'g'
+  ));
+$$;
+
+create or replace function order_coverage_for(
+  p_store_id uuid,
+  p_region text,
+  p_province text,
+  p_district text,
+  p_day date default current_date
+)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_region text := coverage_norm(p_region);
+  v_province text := coverage_norm(p_province);
+  v_district text := coverage_norm(p_district);
+begin
+  if v_region = '' or v_province = '' or v_district = '' then
+    return 'por_revisar';
+  end if;
+
+  if (
+    v_region = 'lima'
+    and v_province = any(array['lima', 'lima metropolitana'])
+    and v_district = any(array[
+      'ancon','ate','barranco','brena','carabayllo','chaclacayo','chorrillos',
+      'cieneguilla','comas','el agustino','independencia','jesus maria',
+      'la molina','la victoria','lima','lince','los olivos','lurigancho','lurigancho chosica',
+      'lurin','magdalena del mar','miraflores','pachacamac','pucusana',
+      'pueblo libre','puente piedra','punta hermosa','punta negra','rimac',
+      'san bartolo','san borja','san isidro','san juan de lurigancho',
+      'san juan de miraflores','san luis','san martin de porres','san miguel',
+      'santa anita','santa maria del mar','santa rosa','santiago de surco',
+      'surquillo','villa el salvador','villa maria del triunfo'
+    ])
+  ) or (
+    (v_region like '%callao%' or v_province like '%callao%')
+    and v_district = any(array[
+      'bellavista','callao','carmen de la legua reynoso','la perla','la punta',
+      'mi peru','ventanilla'
+    ])
+  ) then
+    return 'lima';
+  end if;
+
+  select org_id into v_org_id from stores where id = p_store_id;
+
+  if exists (
+    select 1
+    from cost_tariffs t
+    where t.org_id = v_org_id
+      and t.concept = 'primer_intento'
+      and t.courier is not null
+      and coverage_norm(t.courier) not in ('shalom', 'olva', 'olva courier')
+      and (t.region is not null or t.province is not null or t.district is not null)
+      and t.effective_from <= p_day
+      and (t.effective_to is null or t.effective_to >= p_day)
+      and (t.store_id is null or t.store_id = p_store_id)
+      and (t.region is null or coverage_norm(t.region) = v_region)
+      and (t.province is null or coverage_norm(t.province) = v_province)
+      and (t.district is null or coverage_norm(t.district) = v_district)
+  ) then
+    return 'provincia_cod';
+  end if;
+
+  return 'agencia';
+end;
+$$;
+
+create or replace function refresh_order_coverage(p_org_id uuid default null)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_count integer;
+begin
+  update order_master om
+  set coverage = order_coverage_for(
+    om.store_id, om.region, om.province, om.district, current_date
+  )
+  where p_org_id is null
+     or exists (
+       select 1 from stores s
+       where s.id = om.store_id and s.org_id = p_org_id
+     );
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+revoke all on function order_coverage_for(uuid, text, text, text, date)
+  from public, anon, authenticated;
+revoke all on function refresh_order_coverage(uuid)
+  from public, anon, authenticated;
+grant execute on function order_coverage_for(uuid, text, text, text, date)
+  to service_role;
+grant execute on function refresh_order_coverage(uuid)
+  to service_role;
+
+-- Autocompletado conservador: solo tienda + teléfono con un único antecedente
+-- geográfico y al menos dos pedidos coincidentes, o una corrección manual.
+with eligible as (
+  select
+    store_id,
+    customer_phone,
+    min(region) as region,
+    min(province) as province,
+    min(district) as district
+  from order_master
+  where customer_phone is not null
+    and region is not null
+    and province is not null
+    and district is not null
+  group by store_id, customer_phone
+  having count(distinct (
+    coverage_norm(region) || '|' ||
+    coverage_norm(province) || '|' ||
+    coverage_norm(district)
+  )) = 1
+  and (count(*) >= 2 or bool_or(geo_source = 'manual'))
+)
+update order_master om
+set
+  region = coalesce(om.region, e.region),
+  province = coalesce(om.province, e.province),
+  district = coalesce(om.district, e.district),
+  geo_source = case
+    when om.region is null or om.province is null or om.district is null
+      then 'history'
+    else om.geo_source
+  end
+from eligible e
+where om.store_id = e.store_id
+  and om.customer_phone = e.customer_phone
+  and (om.region is null or om.province is null or om.district is null);
+
+select refresh_order_coverage(null);
+
+-- Facetas del Master, ahora también con cobertura.
+create or replace function master_facets(p_store_ids uuid[])
+returns jsonb
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select jsonb_build_object(
+    'operational', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct operational_status as v
+        from order_master where store_id = any(p_store_ids) and operational_status is not null
+      ) q
+    ), '[]'::jsonb),
+    'courier', coalesce((
+      select jsonb_agg(v order by v) from (
+        select current_courier as v from order_master
+        where store_id = any(p_store_ids) and current_courier is not null
+        union
+        select last_courier as v from order_master
+        where store_id = any(p_store_ids) and last_courier is not null
+      ) q
+    ), '[]'::jsonb),
+    'region', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct region as v from order_master
+        where store_id = any(p_store_ids) and region is not null
+      ) q
+    ), '[]'::jsonb),
+    'province', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct province as v from order_master
+        where store_id = any(p_store_ids) and province is not null
+      ) q
+    ), '[]'::jsonb),
+    'district', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct district as v from order_master
+        where store_id = any(p_store_ids) and district is not null
+      ) q
+    ), '[]'::jsonb),
+    'coverage', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct coverage as v from order_master
+        where store_id = any(p_store_ids) and coverage is not null
+      ) q
+    ), '[]'::jsonb),
+    'pickup', coalesce((
+      select jsonb_agg(v order by v) from (
+        select distinct pickup_state as v from order_master
+        where store_id = any(p_store_ids) and pickup_state is not null
+      ) q
+    ), '[]'::jsonb)
+  );
+$$;
+
+grant execute on function master_facets(uuid[]) to authenticated;
+
+-- ---- 0079 ----
+-- 0079 — La cobertura se decide por REGIÓN, no por provincia.
+--
+-- Qué estaba mal en la 0078:
+--
+--   1. Perú tiene DOS subdivisiones llamadas Lima y Shopify manda su nombre
+--      completo: "Lima (provincia)" (PE-LMA, = Lima Metropolitana) y
+--      "Lima (departamento)" (PE-LIM, = Huaral, Cañete, Yauyos, Barranca…).
+--      `coverage_norm` las deja en 'lima provincia' y 'lima departamento', y la
+--      regla exigía region = 'lima' exacto: NINGÚN pedido de Lima podía salir
+--      clasificado como Lima. Un pedido Lima (provincia) / Lima / San Isidro
+--      terminaba en "Provincia COD".
+--
+--   2. Exigir las tres columnas mandaba a "Por revisar" pedidos que ya se
+--      sabían: Shopify Perú solo entrega distrito (city) y departamento
+--      (province). La provincia del ubigeo se completa desde `peru_districts`,
+--      que está sembrada solo con lo que dejaron los Excels de Aliclik, así que
+--      para media Lima Metropolitana está vacía → Pueblo Libre y Chorrillos con
+--      región "Lima (provincia)" quedaban Por revisar.
+--
+--   3. `peru_districts` tiene el nombre del distrito como clave primaria, pero
+--      en Perú los nombres se repiten entre departamentos: Independencia existe
+--      en Lima, en Huaraz (Áncash) y en Pisco (Ica). El backfill se queda con
+--      la provincia más frecuente, así que a un pedido de Independencia con
+--      región "Lima (provincia)" le pegaba provincia "Huaraz" y lo clasificaba
+--      Provincia COD contradiciendo su propia región.
+--
+-- Regla nueva, en orden de fiabilidad: región → provincia → distrito. La
+-- provincia deja de ser requisito; solo desempata cuando la región dice "Lima"
+-- a secas. "Por revisar" queda para lo que de verdad no se puede ubicar: sin
+-- región utilizable y sin distrito.
+
+-- Clasifica la región respecto de Lima:
+--   'metropolitana' | 'callao' | 'departamento' | 'lima' (ambigua) | null
+create or replace function lima_region_kind(p_region text)
+returns text
+language sql
+immutable
+parallel safe
+as $$
+  select case
+    when coverage_norm(p_region) = '' then null
+    when coverage_norm(p_region) in ('cal', 'pe cal') then 'callao'
+    when coverage_norm(p_region) in ('lma', 'pe lma') then 'metropolitana'
+    when coverage_norm(p_region) in ('lim', 'pe lim') then 'departamento'
+    when coverage_norm(p_region) like '%callao%' then 'callao'
+    when coverage_norm(p_region) not like '%lima%' then null
+    when coverage_norm(p_region) like '%provincia%'
+      or coverage_norm(p_region) like '%metropolitan%' then 'metropolitana'
+    when coverage_norm(p_region) like '%departamento%'
+      or coverage_norm(p_region) like '%depto%'
+      or coverage_norm(p_region) like '%dpto%'
+      or coverage_norm(p_region) like '%region%' then 'departamento'
+    else 'lima'
+  end;
+$$;
+
+create or replace function is_lima_metropolitana(
+  p_region text,
+  p_province text,
+  p_district text
+)
+returns boolean
+language plpgsql
+immutable
+parallel safe
+as $$
+declare
+  v_kind text := lima_region_kind(p_region);
+  v_province text := coverage_norm(p_province);
+  v_district text := coverage_norm(p_district);
+  v_in_lima boolean;
+begin
+  if v_kind in ('metropolitana', 'callao') then
+    return true;
+  end if;
+  if v_kind = 'departamento' then
+    return false;
+  end if;
+
+  v_in_lima := v_district = any(array[
+    -- Lima Metropolitana (43 distritos)
+    'ancon','ate','barranco','brena','carabayllo','chaclacayo','chorrillos',
+    'cieneguilla','comas','el agustino','independencia','jesus maria',
+    'la molina','la victoria','lima','lince','los olivos','lurigancho','lurigancho chosica',
+    'lurin','magdalena del mar','miraflores','pachacamac','pucusana',
+    'pueblo libre','puente piedra','punta hermosa','punta negra','rimac',
+    'san bartolo','san borja','san isidro','san juan de lurigancho',
+    'san juan de miraflores','san luis','san martin de porres','san miguel',
+    'santa anita','santa maria del mar','santa rosa','santiago de surco',
+    'surquillo','villa el salvador','villa maria del triunfo',
+    -- Callao (7 distritos)
+    'bellavista','callao','carmen de la legua reynoso','la perla','la punta',
+    'mi peru','ventanilla'
+  ]);
+
+  -- Región "Lima" a secas: el distrito desempata entre la metropolitana y el
+  -- resto del departamento.
+  if v_kind = 'lima' then
+    return v_in_lima;
+  end if;
+
+  -- Región de otro departamento: no es Lima aunque el distrito se llame igual
+  -- que uno de Lima (Independencia/Huaraz, La Victoria/Chiclayo…).
+  if coverage_norm(p_region) <> '' then
+    return false;
+  end if;
+
+  -- Sin región: la provincia manda si es concluyente.
+  if (v_province in ('lima', 'lima metropolitana') or v_province like '%callao%') and v_in_lima then
+    return true;
+  end if;
+
+  -- Último recurso: un distrito cuyo nombre NO se repita en otro departamento.
+  return v_in_lima and v_district <> all(array[
+    'bellavista','independencia','la victoria','miraflores','pueblo libre',
+    'san luis','san miguel','santa rosa'
+  ]);
+end;
+$$;
+
+create or replace function order_coverage_for(
+  p_store_id uuid,
+  p_region text,
+  p_province text,
+  p_district text,
+  p_day date default current_date
+)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_region text := coverage_norm(p_region);
+  v_province text := coverage_norm(p_province);
+  v_district text := coverage_norm(p_district);
+begin
+  if is_lima_metropolitana(p_region, p_province, p_district) then
+    return 'lima';
+  end if;
+
+  -- Sin distrito no hay a dónde despachar ni tarifa que consultar.
+  if v_district = '' then
+    return 'por_revisar';
+  end if;
+
+  select org_id into v_org_id from stores where id = p_store_id;
+
+  if exists (
+    select 1
+    from cost_tariffs t
+    where t.org_id = v_org_id
+      and t.concept = 'primer_intento'
+      and t.courier is not null
+      and coverage_norm(t.courier) not in ('shalom', 'olva', 'olva courier')
+      and (t.region is not null or t.province is not null or t.district is not null)
+      and t.effective_from <= p_day
+      and (t.effective_to is null or t.effective_to >= p_day)
+      and (t.store_id is null or t.store_id = p_store_id)
+      and (t.region is null or coverage_norm(t.region) = v_region)
+      and (t.province is null or coverage_norm(t.province) = v_province)
+      and (t.district is null or coverage_norm(t.district) = v_district)
+  ) then
+    return 'provincia_cod';
+  end if;
+
+  return 'agencia';
+end;
+$$;
+
+revoke all on function lima_region_kind(text) from public, anon, authenticated;
+revoke all on function is_lima_metropolitana(text, text, text) from public, anon, authenticated;
+revoke all on function order_coverage_for(uuid, text, text, text, date)
+  from public, anon, authenticated;
+grant execute on function lima_region_kind(text) to service_role;
+grant execute on function is_lima_metropolitana(text, text, text) to service_role;
+grant execute on function order_coverage_for(uuid, text, text, text, date)
+  to service_role;
+
+-- Reclasifica todo lo ya materializado con la regla nueva.
+select refresh_order_coverage(null);
+
+-- ---- 0080 ----
+-- Guías creadas por la API de Swayp (el courier antes llamado Fenix).
+--
+-- `guide_code` sigue siendo el identificador que ve y usa el operador. Estas
+-- columnas guardan lo que aporta la API y que antes no existía:
+--
+--   swayp_guide  — el número de guía que EMITE Swayp (ej. 10000022753). Hasta
+--                  ahora el código de guía se inventaba localmente
+--                  (autoFenixGuideCode); con la API el número lo asigna Swayp y
+--                  es el identificador permanente para consultar, imprimir,
+--                  cancelar y resolver novedades. Único: dos envíos no pueden
+--                  compartir guía, y el webhook busca por acá.
+--
+--   swayp_state  — el estado CRUDO de Swayp (1..12). El modelo de la app tiene
+--                  5 estados y ninguno significa "en devolución", así que
+--                  mapSwaypState() es lossy a propósito. Guardar el original
+--                  evita perder información (p. ej. distinguir 8 Revisión de 6
+--                  Novedad, que mapean ambos a 'pendiente').
+--
+--   swayp_synced_at — cuándo se recibió la última notificación de Swayp. Sirve
+--                  para detectar guías que dejaron de reportar.
+
+alter table shipments add column if not exists swayp_guide text;
+alter table shipments add column if not exists swayp_state smallint;
+alter table shipments add column if not exists swayp_synced_at timestamptz;
+
+-- El webhook llega con {guide_number} y nada más: sin este índice cada
+-- notificación haría un scan de shipments. Único porque una guía de Swayp
+-- pertenece a un solo envío — protege además contra la doble creación que
+-- provocaría un reintento del POST /v2/guias (la API no tiene idempotencia).
+create unique index if not exists shipments_swayp_guide_uniq
+  on shipments(swayp_guide) where swayp_guide is not null;
+
+comment on column shipments.swayp_guide is
+  'Guide number issued by Swayp (permanent id for their API). Null for manual guides.';
+comment on column shipments.swayp_state is
+  'Raw Swayp state id 1..12; delivery_status holds the lossy mapping of it.';
+comment on column shipments.swayp_synced_at is
+  'Last time a Swayp webhook updated this shipment.';
+
+-- ---- 0081 ----
+-- 0081 — El distrito de Lima como lo escribe la gente, no como lo llama el INEI.
+--
+-- Un pedido con región "Lima" y distrito "Surco" salía Provincia COD. La lista
+-- de la 0079 tiene los 43 nombres oficiales, y "Santiago de Surco" es uno de
+-- ellos; "Surco" a secas no existe en el ubigeo. Como el distrito casi nunca se
+-- elige de una lista —lo escribe la clienta por WhatsApp o la asesora al armar
+-- el pedido— llegan siglas (SJL, SMP, VMT), nombres viejos (Ate Vitarte,
+-- Cercado de Lima), centros poblados tratados como distrito (Huachipa, que es
+-- Lurigancho) y referencias enteras ("A 2 cuadras del mercado de Magdalena").
+--
+-- Y un segundo caso, más frecuente todavía: región "Lima (departamento)" con un
+-- distrito de Lima Metropolitana (Miraflores, Los Olivos, San Isidro…). Es una
+-- contradicción, y la gana el distrito: el desplegable de Shopify ofrece
+-- "Lima (provincia)" y "Lima (departamento)" sin explicar cuál es cuál, mientras
+-- que el distrito lo escribe la clienta. Ninguno de esos nombres existe en el
+-- departamento de Lima fuera de la metropolitana — salvo San Luis, que también
+-- es un distrito de Cañete, y por eso queda excluido.
+
+-- Los 43 distritos de Lima Metropolitana + los 7 del Callao, en un solo lugar.
+create or replace function lima_districts()
+returns text[]
+language sql
+immutable
+parallel safe
+as $$
+  select array[
+    'ancon','ate','barranco','brena','carabayllo','chaclacayo','chorrillos',
+    'cieneguilla','comas','el agustino','independencia','jesus maria',
+    'la molina','la victoria','lima','lince','los olivos','lurigancho','lurigancho chosica',
+    'lurin','magdalena del mar','miraflores','pachacamac','pucusana',
+    'pueblo libre','puente piedra','punta hermosa','punta negra','rimac',
+    'san bartolo','san borja','san isidro','san juan de lurigancho',
+    'san juan de miraflores','san luis','san martin de porres','san miguel',
+    'santa anita','santa maria del mar','santa rosa','santiago de surco',
+    'surquillo','villa el salvador','villa maria del triunfo',
+    'bellavista','callao','carmen de la legua reynoso','la perla','la punta',
+    'mi peru','ventanilla'
+  ];
+$$;
+
+-- Cómo escribe la gente cada distrito.
+create or replace function lima_district_aliases()
+returns table(term text, district text)
+language sql
+immutable
+parallel safe
+as $$
+  values
+    ('agustino', 'el agustino'),
+    ('ate vitarte', 'ate'),
+    ('cercado', 'lima'),
+    ('cercado de lima', 'lima'),
+    ('carmen de la legua', 'carmen de la legua reynoso'),
+    ('chosica', 'lurigancho'),
+    ('colonial', 'lima'),
+    ('el cercado', 'lima'),
+    ('huachipa', 'lurigancho'),
+    ('jesus', 'jesus maria'),
+    ('la colonial', 'lima'),
+    ('lima cercado', 'lima'),
+    ('magdalena', 'magdalena del mar'),
+    ('molina', 'la molina'),
+    ('pantanos de villa', 'chorrillos'),
+    ('puente de piedra', 'puente piedra'),
+    ('s j l', 'san juan de lurigancho'),
+    ('s j m', 'san juan de miraflores'),
+    ('s m p', 'san martin de porres'),
+    ('san juan de lurigancho sjl', 'san juan de lurigancho'),
+    ('san martin de porras', 'san martin de porres'),
+    ('sanjuan de lurigancho', 'san juan de lurigancho'),
+    ('sanjuan de miraflores', 'san juan de miraflores'),
+    ('santa beatriz', 'lima'),
+    ('santa maria de huachipa', 'lurigancho'),
+    ('sjl', 'san juan de lurigancho'),
+    ('sjm', 'san juan de miraflores'),
+    ('smp', 'san martin de porres'),
+    ('surco', 'santiago de surco'),
+    ('surco viejo', 'santiago de surco'),
+    ('ves', 'villa el salvador'),
+    ('villa maria', 'villa maria del triunfo'),
+    ('vitarte', 'ate'),
+    ('vmt', 'villa maria del triunfo');
+$$;
+
+/*
+ * Términos reconocibles DENTRO de una frase más larga, del más largo al más
+ * corto para que "san juan de lurigancho" gane antes de que "lurigancho" —que
+ * también está en la lista— se lo lleve.
+ *
+ * Quedan fuera los demasiado genéricos: aparecen en cualquier dirección
+ * ("Av. Colonial", "casa de Jesús", "Zárate"). Como distrito exacto se siguen
+ * resolviendo; solo no se buscan sueltos.
+ */
+create or replace function lima_search_terms()
+returns table(term text, district text)
+language sql
+immutable
+parallel safe
+as $$
+  select t.term, t.district
+  from (
+    select d as term, d as district from unnest(lima_districts()) as d
+    union all
+    select a.term, a.district from lima_district_aliases() a
+  ) t
+  where t.term <> all(array[
+    'ancon','ate','brena','cercado','comas','jesus','lima','lince','lurin','rimac'
+  ])
+  order by length(t.term) desc;
+$$;
+
+/*
+ * El distrito de Lima Metropolitana / Callao al que apunta el texto, o null.
+ *
+ * `p_search_in_text` busca el nombre dentro de una frase y solo se activa cuando
+ * la región ya sitúa el pedido en Lima: fuera de ahí, "Independencia" o
+ * "La Victoria" dentro de una referencia mandarían un pedido de Áncash o de
+ * Chiclayo al reparto propio.
+ */
+create or replace function resolve_lima_district(
+  p_district text,
+  p_search_in_text boolean default false
+)
+returns text
+language plpgsql
+immutable
+parallel safe
+as $$
+declare
+  v_district text := coverage_norm(p_district);
+  v_alias text;
+  v_hit text;
+begin
+  if v_district = '' then
+    return null;
+  end if;
+  if v_district = any(lima_districts()) then
+    return v_district;
+  end if;
+
+  select a.district into v_alias from lima_district_aliases() a where a.term = v_district;
+  if v_alias is not null then
+    return v_alias;
+  end if;
+
+  if not p_search_in_text then
+    return null;
+  end if;
+
+  select s.district into v_hit
+  from lima_search_terms() s
+  where v_district like s.term || ' %'
+     or v_district like '% ' || s.term
+     or v_district like '% ' || s.term || ' %'
+  limit 1;
+
+  return v_hit;
+end;
+$$;
+
+create or replace function is_lima_metropolitana(
+  p_region text,
+  p_province text,
+  p_district text
+)
+returns boolean
+language plpgsql
+immutable
+parallel safe
+as $$
+declare
+  v_kind text := lima_region_kind(p_region);
+  v_province text := coverage_norm(p_province);
+  v_district text;
+begin
+  if v_kind in ('metropolitana', 'callao') then
+    return true;
+  end if;
+
+  -- Con la región ya dentro del departamento de Lima, el texto del distrito se
+  -- puede leer con confianza: no hay otro departamento con el que confundirlo.
+  v_district := resolve_lima_district(p_district, v_kind is not null);
+
+  -- "Lima (departamento)" con un distrito metropolitano: gana el distrito.
+  -- San Luis es la excepción — también es un distrito de Cañete.
+  if v_kind = 'departamento' then
+    return v_district is not null and v_district <> 'san luis';
+  end if;
+
+  -- Región "Lima" a secas: el distrito desempata entre la metropolitana y el
+  -- resto del departamento (Huaral, Cañete, Yauyos…).
+  if v_kind = 'lima' then
+    return v_district is not null;
+  end if;
+
+  -- Región de otro departamento: no es Lima, aunque el distrito se llame igual
+  -- que uno de Lima (Independencia/Huaraz, La Victoria/Chiclayo…).
+  if coverage_norm(p_region) <> '' then
+    return false;
+  end if;
+
+  -- Sin región: la provincia manda si es concluyente; si no, solo un distrito
+  -- cuyo nombre no se repita en otro departamento.
+  if v_district is null then
+    return false;
+  end if;
+  if v_province in ('lima', 'lima metropolitana') or v_province like '%callao%' then
+    return true;
+  end if;
+  return v_district <> all(array[
+    'bellavista','independencia','la victoria','miraflores','pueblo libre',
+    'san luis','san miguel','santa rosa'
+  ]);
+end;
+$$;
+
+revoke all on function lima_districts() from public, anon, authenticated;
+revoke all on function lima_district_aliases() from public, anon, authenticated;
+revoke all on function lima_search_terms() from public, anon, authenticated;
+revoke all on function resolve_lima_district(text, boolean) from public, anon, authenticated;
+revoke all on function is_lima_metropolitana(text, text, text) from public, anon, authenticated;
+grant execute on function lima_districts() to service_role;
+grant execute on function lima_district_aliases() to service_role;
+grant execute on function lima_search_terms() to service_role;
+grant execute on function resolve_lima_district(text, boolean) to service_role;
+grant execute on function is_lima_metropolitana(text, text, text) to service_role;
+
+select refresh_order_coverage(null);
+
+-- ---- 0082 ----
+-- Make the historical Meta report auditable: expose the store, the actual
+-- messaging-conversation action and the freshness of the synchronized rows.
+-- Costs remain grouped by ad inside one store; the application never combines
+-- amounts from different currencies.
+drop function if exists public.meta_ad_performance(uuid, date, date);
+
+create or replace function public.meta_ad_performance(
+  p_store_id uuid,
+  p_from date,
+  p_to date
+)
+returns table (
+  store_id uuid,
+  ad_id text,
+  account_id text,
+  currency text,
+  meta_conversations numeric,
+  spend numeric,
+  impressions bigint,
+  reach bigint,
+  clicks bigint,
+  inline_link_clicks bigint,
+  active_days bigint,
+  first_date date,
+  last_date date,
+  synced_at timestamptz
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with daily as (
+    select
+      i.*,
+      coalesce((
+        select max(
+          case
+            when jsonb_typeof(action -> 'value') = 'number'
+              then (action ->> 'value')::numeric
+            when (action ->> 'value') ~ '^[0-9]+(\.[0-9]+)?$'
+              then (action ->> 'value')::numeric
+            else 0
+          end
+        )
+        from jsonb_array_elements(
+          case when jsonb_typeof(i.actions) = 'array' then i.actions else '[]'::jsonb end
+        ) action
+        where action ->> 'action_type' in (
+          'onsite_conversion.messaging_conversation_started_7d',
+          'messaging_conversation_started_7d',
+          'onsite_conversion.total_messaging_connection'
+        )
+      ), 0) as meta_conversations
+    from public.meta_ad_insights_daily i
+    where i.store_id = p_store_id
+      and i.date between p_from and p_to
+  )
+  select
+    p_store_id as store_id,
+    d.ad_id,
+    min(d.account_id) as account_id,
+    case when count(distinct nullif(d.currency, '')) = 1 then min(nullif(d.currency, '')) end as currency,
+    coalesce(sum(d.meta_conversations), 0) as meta_conversations,
+    coalesce(sum(d.spend), 0) as spend,
+    coalesce(sum(d.impressions), 0)::bigint as impressions,
+    coalesce(sum(d.reach), 0)::bigint as reach,
+    coalesce(sum(d.clicks), 0)::bigint as clicks,
+    coalesce(sum(d.inline_link_clicks), 0)::bigint as inline_link_clicks,
+    count(distinct d.date)::bigint as active_days,
+    min(d.date) as first_date,
+    max(d.date) as last_date,
+    max(d.synced_at) as synced_at
+  from daily d
+  group by d.ad_id
+  order by sum(d.spend) desc, d.ad_id;
+$$;
+
+revoke all on function public.meta_ad_performance(uuid, date, date) from public, anon;
+grant execute on function public.meta_ad_performance(uuid, date, date) to authenticated, service_role;
+
+comment on function public.meta_ad_performance(uuid, date, date) is
+  'Meta Ads por anuncio y rango con conversaciones, moneda y frescura explícitas; conserva RLS mediante security invoker.';
+
+-- ---- 0083 ----
+-- 0083 — La cobertura la decide la BASE, no el build que esté desplegado.
+--
+-- Por qué: `order_master.coverage` la escribía solo la aplicación
+-- (`classifyOrderCoverage` en lib/order-coverage.ts) y la pasada del Master
+-- reescribe la tabla entera cada vez. Eso deja la columna a merced de QUÉ build
+-- está sirviendo producción: un deploy desde una rama vieja —hecho con
+-- `vercel --prod` desde la CLI, sin pasar por main ni por CI— vuelve a la regla
+-- anterior a la 0079, que exigía las tres columnas:
+--
+--     if (!location.region || !location.province || !location.district)
+--       return "por_revisar";
+--
+-- Shopify Perú no manda la provincia (solo distrito y departamento), así que con
+-- esa regla TODO pedido cuya provincia esté vacía cae en "Por revisar": Arequipa
+-- / Camaná, La Libertad / Huamachuco y Lima (provincia) / Chorrillos por igual.
+-- Ha pasado dos veces, y las dos la base tenía la clasificación correcta
+-- mientras la columna materializada decía lo contrario.
+--
+-- Arreglo: `order_coverage_for` ya es la definición canónica y vive aquí, así
+-- que la columna pasa a ser derivada de verdad. Un trigger la recalcula en cada
+-- insert/update y descarta el valor que mande la aplicación. La pasada del
+-- Master sigue enviando su `coverage` —no hace falta cambiarla— pero ya no puede
+-- corromper la columna, venga del build que venga.
+--
+-- No sustituye a desactivar los deploys de CLI a producción; es la red debajo.
+
+create or replace function order_master_set_coverage()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  -- Sin cambios en la geografía ni en la cobertura no hay nada que recalcular:
+  -- la pasada del Master reescribe las ~10k filas cada vez y `order_coverage_for`
+  -- cuesta ~0,3 ms por fila. Si la aplicación manda una cobertura distinta a la
+  -- guardada, sí se recalcula: es justo el caso que esta migración ataja.
+  if tg_op = 'UPDATE'
+    and new.store_id is not distinct from old.store_id
+    and new.region   is not distinct from old.region
+    and new.province is not distinct from old.province
+    and new.district is not distinct from old.district
+    and new.coverage is not distinct from old.coverage
+  then
+    return new;
+  end if;
+
+  new.coverage := order_coverage_for(
+    new.store_id, new.region, new.province, new.district, current_date
+  );
+  return new;
+end;
+$$;
+
+drop trigger if exists order_master_coverage on order_master;
+create trigger order_master_coverage
+  before insert or update on order_master
+  for each row
+  execute function order_master_set_coverage();
+
+revoke all on function order_master_set_coverage() from public, anon, authenticated;
+
+-- Repara lo que el build viejo dejó escrito.
+select refresh_order_coverage(null);

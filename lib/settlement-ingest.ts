@@ -45,6 +45,8 @@ export interface IngestSettlementParams {
   courier?: string | null;
   /** Comisión de POS declarada aparte de las entregas. */
   posFee?: number;
+  /** Cobros que entraron directo a la empresa (POS, Yape, transferencia). */
+  directCollected?: number;
   lines: readonly ParsedSettlementLine[];
 }
 
@@ -107,8 +109,12 @@ function nameKey(value: string | null | undefined): string {
 interface NameCandidate {
   order_id: string;
   store_id: string;
+  store_name?: string | null;
+  order_name?: string | null;
   customer_name: string | null;
   district: string | null;
+  order_total?: number | null;
+  general_status?: string | null;
 }
 
 /**
@@ -128,14 +134,23 @@ async function fetchNameCandidates(
   from.setUTCDate(from.getUTCDate() - 3);
   const to = new Date(`${day}T00:00:00.000Z`);
   to.setUTCDate(to.getUTCDate() + 2);
-  const { data } = await admin
-    .from("order_master")
-    .select("order_id,store_id,customer_name,district")
-    .in("store_id", storeIds)
-    .gte("order_created_at", from.toISOString())
-    .lt("order_created_at", to.toISOString())
-    .limit(5000);
-  return (data ?? []) as unknown as NameCandidate[];
+  const [{ data }, { data: storeRows }] = await Promise.all([
+    admin
+      .from("order_master")
+      .select("order_id,order_name,store_id,customer_name,district,order_total,general_status")
+      .in("store_id", storeIds)
+      .gte("order_created_at", from.toISOString())
+      .lt("order_created_at", to.toISOString())
+      .limit(5000),
+    admin.from("stores").select("id,name").in("id", storeIds),
+  ]);
+  const storeNames = new Map(
+    ((storeRows ?? []) as { id: string; name: string | null }[]).map((s) => [s.id, s.name]),
+  );
+  return ((data ?? []) as unknown as NameCandidate[]).map((candidate) => ({
+    ...candidate,
+    store_name: storeNames.get(candidate.store_id) ?? null,
+  }));
 }
 
 /**
@@ -147,18 +162,34 @@ async function fetchNameCandidates(
  * — que es exactamente donde tienen que ir.
  */
 export function matchByName(
-  line: { customer_name?: string | null; district?: string | null },
+  line: {
+    customer_name?: string | null;
+    district?: string | null;
+    store_hint?: string | null;
+  },
   candidates: readonly NameCandidate[],
 ): string | null {
   const want = nameKey(line.customer_name);
   if (!want || want.length < 4) return null;
 
-  let byName = candidates.filter((c) => nameKey(c.customer_name) === want);
+  const storeHint = nameKey(line.store_hint);
+  const scoped = storeHint
+    ? candidates.filter((c) => {
+        const store = nameKey(c.store_name);
+        return (
+          store === storeHint ||
+          store.startsWith(storeHint) ||
+          (store.length > 0 && storeHint.startsWith(store))
+        );
+      })
+    : candidates;
+
+  let byName = scoped.filter((c) => nameKey(c.customer_name) === want);
   // Los couriers truncan el nombre a lo que cabe en la celda ("Ana María Cárd").
   // Si nadie coincide exacto, se acepta que el nombre de la hoja sea prefijo del
   // del pedido, siempre que siga siendo único.
   if (!byName.length) {
-    byName = candidates.filter((c) => nameKey(c.customer_name).startsWith(want));
+    byName = scoped.filter((c) => nameKey(c.customer_name).startsWith(want));
   }
   if (byName.length === 1) return byName[0]!.order_id;
   if (byName.length > 1 && line.district) {
@@ -242,6 +273,7 @@ export async function ingestSettlement(
       declared_yape: params.declaredYape,
       courier: params.courier ?? null,
       pos_fee: params.posFee ?? 0,
+      direct_collected: params.directCollected ?? 0,
       note: params.note,
       created_by: params.userId,
     })
@@ -324,8 +356,14 @@ export async function ingestSettlement(
       declared_fee: l.declared_fee,
       customer_name: l.customer_name,
       district: l.district,
+      store_hint: l.store_hint ?? l.raw.cliente ?? null,
+      payment_method: l.payment_method ?? null,
       match_status: orderId ? "ok" : "review",
-      raw: l.raw,
+      raw: {
+        ...l.raw,
+        store_hint: l.store_hint ?? l.raw.cliente ?? "",
+        payment_method: l.payment_method ?? "",
+      },
     };
   });
 

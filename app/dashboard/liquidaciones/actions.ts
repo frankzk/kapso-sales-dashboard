@@ -26,6 +26,28 @@ export interface ActionResult {
   message?: string;
 }
 
+export interface SettlementOrderCandidate {
+  orderId: string;
+  orderName: string;
+  storeName: string;
+  customerName: string;
+  district: string;
+  total: number | null;
+  status: string;
+  score: number;
+  reasons: string[];
+}
+
+function matchKey(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
 /** Comprueba permiso y devuelve el cliente admin, o el error listo para devolver. */
 async function guard(permission: "settlements.manage" | "settlements.close") {
   const user = await getCurrentUser();
@@ -86,10 +108,171 @@ export async function relinkLine(
     return { ok: false, error: "La liquidación está cerrada; abre una de ajuste." };
   }
 
+  const { data: line } = await g.admin
+    .from("rider_settlement_lines")
+    .select("settlement_id")
+    .eq("id", lineId)
+    .maybeSingle();
+  if ((line as { settlement_id?: string } | null)?.settlement_id !== settlementId) {
+    return { ok: false, error: "La línea no pertenece a esta liquidación." };
+  }
+
+  if (orderId) {
+    const stores = await getAccessibleStores();
+    const { data: order } = await g.admin
+      .from("orders")
+      .select("id,store_id")
+      .eq("id", orderId)
+      .maybeSingle();
+    const storeId = (order as { store_id?: string } | null)?.store_id;
+    if (!storeId || !stores.some((store) => store.id === storeId)) {
+      return { ok: false, error: "Pedido inexistente o fuera de tus tiendas." };
+    }
+  }
+
   const res = await relinkSettlementLine(g.admin, lineId, orderId);
   if (!res.ok) return { ok: false, error: res.error };
   revalidatePath("/dashboard/liquidaciones");
   return { ok: true, message: orderId ? "Línea vinculada." : "Línea marcada sin pedido." };
+}
+
+/**
+ * Sugiere pedidos para una fila de Axel. La sugerencia nunca modifica nada:
+ * una persona debe confirmarla con `relinkLine`.
+ */
+export async function searchSettlementOrders(
+  settlementId: string,
+  lineId: string,
+  query = "",
+): Promise<{ ok: boolean; error?: string; candidates?: SettlementOrderCandidate[] }> {
+  const g = await guard("settlements.manage");
+  if ("error" in g) return { ok: false, error: g.error };
+
+  const reach = await assertReachable(g.admin, settlementId);
+  if ("error" in reach) return { ok: false, error: reach.error };
+
+  const [{ data: head }, { data: line }, stores] = await Promise.all([
+    g.admin
+      .from("rider_settlements")
+      .select("settlement_date,status")
+      .eq("id", settlementId)
+      .maybeSingle(),
+    g.admin
+      .from("rider_settlement_lines")
+      .select("settlement_id,customer_name,district,declared_amount,store_hint,raw")
+      .eq("id", lineId)
+      .maybeSingle(),
+    getAccessibleStores(),
+  ]);
+  if (!head || !line || (line as { settlement_id: string }).settlement_id !== settlementId) {
+    return { ok: false, error: "Línea inexistente o fuera de esta liquidación." };
+  }
+
+  const day = String((head as { settlement_date: string }).settlement_date);
+  const from = new Date(`${day}T00:00:00.000Z`);
+  from.setUTCDate(from.getUTCDate() - 7);
+  const to = new Date(`${day}T00:00:00.000Z`);
+  to.setUTCDate(to.getUTCDate() + 3);
+  const storeIds = stores.map((store) => store.id);
+  const { data } = await g.admin
+    .from("order_master")
+    .select(
+      "order_id,order_name,store_id,customer_name,district,order_total,general_status,order_created_at",
+    )
+    .in("store_id", storeIds)
+    .gte("order_created_at", from.toISOString())
+    .lt("order_created_at", to.toISOString())
+    .limit(5000);
+
+  const row = line as {
+    customer_name: string | null;
+    district: string | null;
+    declared_amount: number | null;
+    store_hint: string | null;
+    raw: Record<string, unknown> | null;
+  };
+  const storeNames = new Map(stores.map((store) => [store.id, store.name]));
+  const storeHint = matchKey(row.store_hint ?? String(row.raw?.cliente ?? ""));
+  const wantedName = matchKey(row.customer_name);
+  const wantedDistrict = matchKey(row.district);
+  const wantedQuery = matchKey(query);
+
+  const candidates = ((data ?? []) as {
+    order_id: string;
+    order_name: string | null;
+    store_id: string;
+    customer_name: string | null;
+    district: string | null;
+    order_total: number | null;
+    general_status: string | null;
+  }[])
+    .map((candidate) => {
+      const storeName = storeNames.get(candidate.store_id) ?? "";
+      const name = matchKey(candidate.customer_name);
+      const district = matchKey(candidate.district);
+      const orderName = matchKey(candidate.order_name);
+      const reasons: string[] = [];
+      let score = 0;
+
+      if (storeHint) {
+        const store = matchKey(storeName);
+        if (
+          !(
+            store === storeHint ||
+            store.startsWith(storeHint) ||
+            (store.length > 0 && storeHint.startsWith(store))
+          )
+        ) {
+          return null;
+        }
+        score += 35;
+        reasons.push(`tienda ${storeName}`);
+      }
+      if (wantedName && name === wantedName) {
+        score += 45;
+        reasons.push("nombre exacto");
+      } else if (wantedName && (name.startsWith(wantedName) || wantedName.startsWith(name))) {
+        score += 32;
+        reasons.push("nombre similar");
+      }
+      if (wantedDistrict && district === wantedDistrict) {
+        score += 15;
+        reasons.push("mismo distrito");
+      }
+      if (
+        row.declared_amount !== null &&
+        candidate.order_total !== null &&
+        Math.abs(Number(row.declared_amount) - Number(candidate.order_total)) < 0.01
+      ) {
+        score += 15;
+        reasons.push("mismo monto");
+      }
+      if (
+        wantedQuery &&
+        !name.includes(wantedQuery) &&
+        !orderName.includes(wantedQuery) &&
+        !district.includes(wantedQuery)
+      ) {
+        return null;
+      }
+      return {
+        orderId: candidate.order_id,
+        orderName: candidate.order_name ?? "Sin código",
+        storeName,
+        customerName: candidate.customer_name ?? "Sin nombre",
+        district: candidate.district ?? "Sin distrito",
+        total: candidate.order_total === null ? null : Number(candidate.order_total),
+        status: candidate.general_status ?? "sin estado",
+        score: Math.min(100, score),
+        reasons,
+      } satisfies SettlementOrderCandidate;
+    })
+    .filter((candidate): candidate is SettlementOrderCandidate => Boolean(candidate))
+    .filter((candidate) => wantedQuery.length > 0 || candidate.score >= 32)
+    .sort((a, b) => b.score - a.score || a.orderName.localeCompare(b.orderName))
+    .slice(0, 12);
+
+  return { ok: true, candidates };
 }
 
 /** Da de alta un motorizado. */
@@ -286,6 +469,15 @@ export async function applySettlementToMaster(settlementId: string): Promise<Act
   const detail = await getSettlementDetail(settlementId);
   if (!detail) return { ok: false, error: "Liquidación inexistente." };
 
+  if (detail.reconciled.totals.reviewCount > 0) {
+    return {
+      ok: false,
+      error:
+        `Quedan ${detail.reconciled.totals.reviewCount} fila(s) sin cotejar. ` +
+        "Asigna un pedido o márcalas como “sin pedido” antes de procesar.",
+    };
+  }
+
   const effects = settlementMasterEffects(detail.reconciled.lines.map((r) => r.line));
   if (!effects.length) {
     return {
@@ -307,8 +499,13 @@ export async function applySettlementToMaster(settlementId: string): Promise<Act
     return { ok: true, message: "El Master ya estaba al día con esta liquidación." };
   }
 
+  const factStore = new Map(
+    detail.reconciled.lines
+      .filter((line) => line.facts)
+      .map((line) => [line.facts!.order_id, line.facts!.store_id]),
+  );
   const events = pending.map((e) => ({
-    store_id: reach.storeId,
+    store_id: factStore.get(e.order_id) ?? reach.storeId,
     order_id: e.order_id,
     kind: "status_override",
     occurred_at: new Date().toISOString(),

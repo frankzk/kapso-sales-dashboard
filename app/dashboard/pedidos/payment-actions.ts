@@ -16,11 +16,17 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { decryptOrNull, encrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { analyzeYapeVoucherFromEnv, extractYapeVoucherFromEnv } from "@/lib/vision";
+import {
+  analyzeYapeVoucherFromEnv,
+  checkYapeRecipient,
+  extractYapeVoucherFromEnv,
+  type YapeRecipientCheck,
+} from "@/lib/vision";
 import { normalizePhone } from "@/lib/phone";
 import {
   canRevealPickupKey,
   describeBlockers,
+  paymentPlanProblem,
   paymentState,
   type PaymentSnapshot,
 } from "@/lib/pickup-key";
@@ -109,6 +115,7 @@ export interface PaymentRow {
 }
 
 export interface PickupKeyPanel {
+  storeId: string;
   payments: PaymentRow[];
   paymentState: string;
   hasKey: boolean;
@@ -166,6 +173,7 @@ export async function loadPaymentPanel(
 
   return {
     panel: {
+      storeId: ctx.storeId,
       payments,
       paymentState: paymentState(snapshots),
       hasKey: Boolean(keyRow),
@@ -226,14 +234,35 @@ interface VoucherInspection {
     amount: number | null;
     paidAt: string | null;
     payerName: string | null;
+    recipientName: string | null;
+    recipientPhoneLastDigits: string | null;
+    recipientCheck: YapeRecipientCheck;
   };
   payload: Record<string, unknown>;
+}
+
+export interface VoucherPrefillFields {
+  operationNumber: string | null;
+  amount: number | null;
+  paidAt: string | null;
+  payerName: string | null;
+  recipientName: string | null;
+  recipientPhoneLastDigits: string | null;
+  recipientCheck: YapeRecipientCheck;
 }
 
 const EMPTY_INSPECTION: VoucherInspection = {
   ok: false,
   isVoucher: false,
-  fields: { operationNumber: null, amount: null, paidAt: null, payerName: null },
+  fields: {
+    operationNumber: null,
+    amount: null,
+    paidAt: null,
+    payerName: null,
+    recipientName: null,
+    recipientPhoneLastDigits: null,
+    recipientCheck: "missing",
+  },
   payload: {},
 };
 
@@ -271,6 +300,10 @@ async function inspectVoucher(
       analyzeYapeVoucherFromEnv(base64, data.type, storeCreds),
       extractYapeVoucherFromEnv(base64, data.type, storeCreds),
     ]);
+    const recipientCheck = checkYapeRecipient(
+      extracted.recipientName,
+      extracted.recipientPhoneLastDigits,
+    );
     return {
       ok: verdict.ok,
       isVoucher: verdict.isVoucher,
@@ -279,6 +312,9 @@ async function inspectVoucher(
         amount: extracted.amount,
         paidAt: extracted.paidAt,
         payerName: extracted.payerName,
+        recipientName: extracted.recipientName,
+        recipientPhoneLastDigits: extracted.recipientPhoneLastDigits,
+        recipientCheck,
       },
       payload: {
         indicators: verdict.indicators,
@@ -290,6 +326,8 @@ async function inspectVoucher(
           paid_at: extracted.paidAt,
           payer_name: extracted.payerName,
           recipient_name: extracted.recipientName,
+          recipient_phone_last_digits: extracted.recipientPhoneLastDigits,
+          recipient_check: recipientCheck,
           ok: extracted.ok,
         },
       },
@@ -299,8 +337,56 @@ async function inspectVoucher(
   }
 }
 
+/**
+ * Lee un comprobante antes de registrarlo para que el operador pueda revisar y
+ * corregir los datos. La ruta debe pertenecer al pedido actual: no aceptamos
+ * una ruta arbitraria del bucket privado enviada desde el navegador.
+ */
+export async function readVoucherFields(
+  orderId: string,
+  path: string,
+): Promise<
+  | { fields: VoucherPrefillFields; isVoucher: boolean; notice: string }
+  | { error: string }
+> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("shalom.register_payment")) {
+    return { error: "Tu rol no permite registrar pagos." };
+  }
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!path.startsWith(`${ctx.storeId}/${orderId}/`)) {
+    return { error: "El comprobante no pertenece a este pedido." };
+  }
+
+  const inspection = await inspectVoucher(createAdminSupabase(), path, ctx.storeId);
+  if (!inspection.ok) {
+    return {
+      error:
+        "No se pudo leer la imagen automáticamente. Revisa la API key de Anthropic " +
+        "o completa los campos manualmente.",
+    };
+  }
+
+  const found = [
+    inspection.fields.operationNumber && "nº de operación",
+    inspection.fields.amount !== null && "monto",
+    inspection.fields.paidAt && "fecha y hora",
+    inspection.fields.payerName && "titular",
+    inspection.fields.recipientCheck === "verified" && "receptor verificado",
+  ].filter(Boolean);
+
+  return {
+    fields: inspection.fields,
+    isVoucher: inspection.isVoucher,
+    notice: found.length
+      ? `Datos encontrados: ${found.join(", ")}. Revísalos antes de registrar.`
+      : "La imagen se leyó, pero no se encontraron datos seguros. Complétalos manualmente.",
+  };
+}
+
 export interface RegisterPaymentInput {
-  kind: "adelanto" | "diferencia";
+  kind: "adelanto" | "diferencia" | "total";
   amount: number | null;
   operationNumber: string | null;
   paidAt: string | null;
@@ -326,7 +412,7 @@ export async function registerPayment(
   if (!perms.can("shalom.register_payment")) return { error: "Tu rol no permite registrar pagos." };
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
-  if (input.kind !== "adelanto" && input.kind !== "diferencia") {
+  if (!["adelanto", "diferencia", "total"].includes(input.kind)) {
     return { error: "Tipo de pago inválido." };
   }
 
@@ -335,13 +421,44 @@ export async function registerPayment(
   // de operación pero la imagen lo trae, ese dato entra en la comprobación. Sin
   // él, un mismo Yape recortado podría colarse en dos pedidos.
   const vision = await inspectVoucher(admin, input.path, ctx.storeId);
-  const operation =
-    normalizeOperationNumber(input.operationNumber) ??
-    normalizeOperationNumber(vision.fields.operationNumber);
-  const amount = input.amount ?? vision.fields.amount;
-  const paidAt = input.paidAt ?? vision.fields.paidAt;
-  const payerName = input.payerName ?? vision.fields.payerName;
+  const typedOperation = normalizeOperationNumber(input.operationNumber);
+  const readOperation = normalizeOperationNumber(vision.fields.operationNumber);
+  const identityDiscrepancy = Boolean(
+    readOperation && typedOperation && readOperation !== typedOperation,
+  );
+  // Con una imagen legible, la identidad transaccional de la imagen manda.
+  // Esto evita que valores de un comprobante anterior, todavía presentes en el
+  // navegador, contaminen el nuevo pago y provoquen falsos duplicados.
+  const operation = readOperation ?? typedOperation;
+  // En el uso normal se respetan las correcciones humanas posteriores al OCR.
+  // Solo si la operación del formulario pertenece claramente a otra imagen se
+  // descartan también sus campos relacionados y se toma la lectura actual.
+  const amount = identityDiscrepancy
+    ? vision.fields.amount ?? input.amount
+    : input.amount ?? vision.fields.amount;
+  const paidAt = identityDiscrepancy
+    ? vision.fields.paidAt ?? input.paidAt
+    : input.paidAt ?? vision.fields.paidAt;
+  const payerName = identityDiscrepancy
+    ? vision.fields.payerName ?? input.payerName
+    : input.payerName ?? vision.fields.payerName;
   const payerPhone = normalizePhone(input.payerPhone);
+
+  const { data: currentPayments } = await admin
+    .from("order_payments")
+    .select("kind,validation_status")
+    .eq("order_id", orderId)
+    .neq("validation_status", "rechazado");
+  const liveKinds = new Set(
+    ((currentPayments ?? []) as { kind: string; validation_status: string }[]).map((p) => p.kind),
+  );
+  const planProblem = paymentPlanProblem({
+    kind: input.kind,
+    existingKinds: [...liveKinds],
+    amount: amount ?? null,
+    orderTotal: ctx.row.order_total,
+  });
+  if (planProblem) return { error: planProblem };
 
   const candidate = {
     order_id: orderId,
@@ -423,9 +540,12 @@ export async function registerPayment(
   // Entra como "información incompleta" para que alguien lo complete a mano.
   // Tampoco se rechaza solo un comprobante que la visión no reconoce: la imagen
   // por sí sola nunca vale como pago validado (§"Estados de validación").
-  const status = !operation || (vision.ok && !vision.isVoucher)
-    ? "info_incompleta"
-    : "pendiente_revision";
+  const status =
+    vision.fields.recipientCheck === "mismatch" || identityDiscrepancy
+      ? "revision_admin"
+      : !operation || (vision.ok && !vision.isVoucher)
+        ? "info_incompleta"
+        : "pendiente_revision";
 
   const { error } = await admin.from("order_payments").insert({
     store_id: ctx.storeId,
@@ -441,7 +561,15 @@ export async function registerPayment(
     validation_status: status,
     registered_by: ctx.userId,
     notes: input.notes ?? null,
-    vision: vision.payload,
+    vision: {
+      ...vision.payload,
+      reconciliation: {
+        typed_operation: typedOperation,
+        extracted_operation: readOperation,
+        used_operation: operation,
+        discrepancy: identityDiscrepancy,
+      },
+    },
   });
   if (error) {
     // Los índices únicos de 0049 son la última línea: si dos operadores suben el
@@ -486,6 +614,21 @@ export async function registerPayment(
   if (status === "info_incompleta") {
     return {
       notice: "Comprobante cargado, pero la imagen no parece un Yape: queda para revisión.",
+    };
+  }
+  if (vision.fields.recipientCheck === "mismatch") {
+    return {
+      notice:
+        "Comprobante cargado, pero el receptor no coincide con Grupo GF S.A.C. · ***309. " +
+        "Quedó en revisión administrativa y no debe validarse sin revisar la imagen.",
+    };
+  }
+  if (identityDiscrepancy) {
+    return {
+      notice:
+        `Comprobante cargado usando la operación leída en la imagen (${operation}); ` +
+        `se descartó el valor escrito (${typedOperation}) porque no coincidía. ` +
+        "Quedó en revisión administrativa.",
     };
   }
   const autofilled = [

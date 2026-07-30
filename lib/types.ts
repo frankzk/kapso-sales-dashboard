@@ -320,6 +320,24 @@ export interface CampaignDeliveryOutcome {
   createdAt: string | null;
 }
 
+/** Aggregated historical Meta Insights for one ad in the selected date range. */
+export interface MetaAdPerformance {
+  storeId: string;
+  adId: string;
+  accountId: string | null;
+  currency: string | null;
+  metaConversations: number;
+  spend: number;
+  impressions: number;
+  reach: number;
+  clicks: number;
+  inlineLinkClicks: number;
+  activeDays: number;
+  firstDate: string | null;
+  lastDate: string | null;
+  syncedAt: string | null;
+}
+
 /** Minimal linked-guide identity used to move from a frozen source guide to
  * the active Fenix guide without leaving the drawer. */
 export interface LinkedShipmentSummary {
@@ -387,6 +405,8 @@ export interface OrderMasterRow {
   region: string | null;
   province: string | null;
   district: string | null;
+  /** Flujo operativo derivado de la ubicación y la cobertura COD vigente. */
+  coverage?: "lima" | "provincia_cod" | "agencia" | "por_revisar" | null;
   address?: string | null;
   reference?: string | null;
   latitude?: number | null;

@@ -142,4 +142,48 @@ describe("parseSettlementVision", () => {
     expect(res).not.toBeNull();
     expect(res!.lines).toHaveLength(0);
   });
+
+  it("lee las columnas contables de una foto del reporte Axel", () => {
+    const res = parseSettlementVision(
+      JSON.stringify({
+        date: "2026-07-27",
+        lines: [
+          {
+            store: "AURELA",
+            customer: "Elías Abanto",
+            district: "Jicamarca",
+            status: "EFECTIVO",
+            payment_method: "EFECTIVO",
+            amount: 149,
+            fee: 15,
+          },
+          {
+            store: "KENKU",
+            customer: "Remigio",
+            district: "Pariachi",
+            status: "NO CONTESTO",
+            payment_method: "NO CONTESTO",
+            amount: 0,
+            fee: null,
+          },
+        ],
+      }),
+    );
+
+    expect(res!.lines[0]).toMatchObject({
+      store_hint: "AURELA",
+      customer_name: "Elías Abanto",
+      district: "Jicamarca",
+      declared_status: "EFECTIVO",
+      payment_method: "EFECTIVO",
+      declared_amount: 149,
+      declared_fee: 15,
+    });
+    expect(res!.lines[1]).toMatchObject({
+      store_hint: "KENKU",
+      payment_method: null,
+      declared_status: "NO CONTESTO",
+      declared_amount: 0,
+    });
+  });
 });

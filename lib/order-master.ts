@@ -21,6 +21,7 @@ import { normalizeDistrict } from "@/lib/shipments";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
 import { computeLogisticsCost, costDay, type CostTariff } from "@/lib/costs";
+import { classifyOrderCoverage } from "@/lib/order-coverage";
 import {
   isGeneralStatus,
   isOperationalStatus,
@@ -134,6 +135,17 @@ interface EventRecord {
   new_operational: string | null;
 }
 
+interface HistoricalGeoRow {
+  order_id: string;
+  store_id: string;
+  customer_phone: string;
+  region: string;
+  province: string;
+  district: string;
+  geo_source: string | null;
+  order_created_at: string | null;
+}
+
 /** Agrupa por una clave, saltando las filas sin clave. */
 function groupBy<T>(rows: T[], key: (row: T) => string | null): Map<string, T[]> {
   const out = new Map<string, T[]>();
@@ -241,6 +253,62 @@ async function fetchOrders(admin: SupabaseClient, ids: string[]): Promise<OrderR
     out.push(...((data ?? []) as unknown as OrderRecord[]));
   }
   return out;
+}
+
+/**
+ * Antecedentes de ubicación por tienda + teléfono.
+ *
+ * No se toma “el último y listo”: para poblar sin intervención tiene que haber
+ * dos antecedentes completos que coincidan, o una corrección manual previa.
+ * Si hay ubicaciones distintas, no se adivina y el pedido queda Por revisar.
+ */
+async function fetchHistoricalGeo(
+  admin: SupabaseClient,
+  orders: readonly OrderRecord[],
+): Promise<Map<string, HistoricalGeoRow[]>> {
+  const phones = [...new Set(orders.map((o) => o.customer_phone).filter((v): v is string => Boolean(v)))];
+  const stores = [...new Set(orders.map((o) => o.store_id))];
+  const out = new Map<string, HistoricalGeoRow[]>();
+  if (!phones.length || !stores.length) return out;
+
+  for (const phoneBatch of chunk(phones, 50)) {
+    const { data, error } = await admin
+      .from("order_master")
+      .select("order_id,store_id,customer_phone,region,province,district,geo_source,order_created_at")
+      .in("customer_phone", phoneBatch);
+    if (error) return out;
+    for (const row of (data ?? []) as unknown as HistoricalGeoRow[]) {
+      if (!stores.includes(row.store_id)) continue;
+      if (!row.region || !row.province || !row.district) continue;
+      const key = `${row.store_id}|${row.customer_phone}`;
+      const bucket = out.get(key);
+      if (bucket) bucket.push(row);
+      else out.set(key, [row]);
+    }
+  }
+  return out;
+}
+
+function historicalGeoSuggestion(
+  order: OrderRecord,
+  history: Map<string, HistoricalGeoRow[]>,
+): HistoricalGeoRow | null {
+  if (!order.customer_phone) return null;
+  const rows = (history.get(`${order.store_id}|${order.customer_phone}`) ?? []).filter(
+    (row) =>
+      row.order_id !== order.id &&
+      (!order.created_at || !row.order_created_at || row.order_created_at < order.created_at),
+  );
+  if (!rows.length) return null;
+
+  const key = (row: HistoricalGeoRow) =>
+    [row.region, row.province, row.district]
+      .map((v) => normalizeDistrict(v))
+      .join("|");
+  const distinct = new Set(rows.map(key));
+  if (distinct.size !== 1) return null;
+  const manual = rows.find((row) => row.geo_source === "manual");
+  return manual ?? (rows.length >= 2 ? rows[0]! : null);
 }
 
 async function fetchShipments(admin: SupabaseClient, ids: string[]): Promise<ShipmentRecord[]> {
@@ -435,7 +503,7 @@ async function fetchTariffs(
 
   const { data, error } = await admin
     .from("cost_tariffs")
-    .select("id,store_id,courier,region,province,district,concept,amount,effective_from,effective_to")
+    .select("id,org_id,store_id,courier,region,province,district,concept,amount,effective_from,effective_to")
     .in("org_id", orgIds);
   // La fase 4 puede no estar aplicada todavía: sin tarifas, el costo queda vacío.
   if (error) return { tariffs, orgByStore };
@@ -502,7 +570,8 @@ export async function recomputeOrderMaster(
   const drafts = await fetchDraftAddresses(admin, orders);
   const geoOverrides = await fetchGeoOverrides(admin, ids);
   const signals = await fetchPaymentSignals(admin, ids);
-  const { tariffs } = await fetchTariffs(admin, [...new Set(orders.map((o) => o.store_id))]);
+  const { tariffs, orgByStore } = await fetchTariffs(admin, [...new Set(orders.map((o) => o.store_id))]);
+  const historicalGeo = await fetchHistoricalGeo(admin, orders);
 
   const shipmentsByOrder = groupBy(shipments, (s) => s.order_id);
   const callsByShipment = groupBy(calls, (c) => c.shipment_id);
@@ -515,12 +584,14 @@ export async function recomputeOrderMaster(
     const address = shopifyShippingAddress(order.raw);
     const guides = shipmentsByOrder.get(order.id) ?? [];
     const draft = drafts.get(order.id);
+    const historical = historicalGeoSuggestion(order, historicalGeo);
     districtByOrder.set(
       order.id,
       geoOverrides.get(order.id)?.district ??
         text(address?.city) ??
         guides.find((g) => g.district)?.district ??
         draft?.district ??
+        historical?.district ??
         null,
     );
   }
@@ -534,6 +605,7 @@ export async function recomputeOrderMaster(
     const orderEvents = eventsByOrder.get(order.id) ?? [];
     const address = shopifyShippingAddress(order.raw);
     const draft = drafts.get(order.id);
+    const historical = historicalGeoSuggestion(order, historicalGeo);
 
     const geoOverride = geoOverrides.get(order.id) ?? null;
     const district = districtByOrder.get(order.id) ?? null;
@@ -548,6 +620,7 @@ export async function recomputeOrderMaster(
       guides.find((g) => g.province)?.province ??
       geoHit?.province ??
       draft?.province ??
+      historical?.province ??
       null;
     // Shopify llama `province` al DEPARTAMENTO (Perú no tiene un tercer nivel).
     const region =
@@ -556,6 +629,7 @@ export async function recomputeOrderMaster(
       guides.find((g) => g.region)?.region ??
       geoHit?.department ??
       draft?.region ??
+      historical?.region ??
       null;
     const guideAddress = guides.find((g) => g.delivery_address);
     const streetAddress =
@@ -594,6 +668,8 @@ export async function recomputeOrderMaster(
             ? "courier"
             : geoHit
               ? "ubigeo"
+              : historical
+                ? "history"
               : address
                 ? "shopify"
                 : draft
@@ -657,6 +733,21 @@ export async function recomputeOrderMaster(
       region,
       province,
       district,
+      // La cobertura la recalcula la base en un trigger (migración 0083) y este
+      // valor se descarta: la columna es derivada y `order_coverage_for` es su
+      // definición canónica. Se sigue mandando para que la fila quede completa
+      // aunque el trigger no esté aplicado todavía.
+      coverage: classifyOrderCoverage(
+        {
+          storeId: order.store_id,
+          orgId: orgByStore.get(order.store_id) ?? null,
+          region,
+          province,
+          district,
+        },
+        tariffs,
+        now.slice(0, 10),
+      ),
       address: streetAddress,
       reference,
       latitude,

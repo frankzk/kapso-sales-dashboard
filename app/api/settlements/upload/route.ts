@@ -61,7 +61,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Cuerpo inválido (se esperaba multipart)." }, { status: 400 });
   }
 
-  const storeId = String(form.get("storeId") ?? "");
+  const requestedStoreId = String(form.get("storeId") ?? "");
+  const multiStore = requestedStoreId === "__all__";
+  const storeId = multiStore ? stores[0]!.id : requestedStoreId;
   const store = stores.find((s) => s.id === storeId);
   if (!store) return NextResponse.json({ error: "Tienda inválida o sin acceso." }, { status: 403 });
 
@@ -102,7 +104,20 @@ export async function POST(req: NextRequest) {
       const bytes = new Uint8Array(await file.arrayBuffer());
       sha256 = createHash("sha256").update(bytes).digest("hex");
 
-      const creds = await storeVisionCreds(admin, storeId);
+      let creds = await storeVisionCreds(admin, storeId);
+      // En la carga combinada el primer store accesible es solo el ancla
+      // administrativa. Si no tiene visión propia, usa otra clave configurada
+      // de las tiendas incluidas en vez de caer innecesariamente al entorno.
+      if (multiStore && !creds.anthropicApiKey) {
+        for (const candidate of stores) {
+          if (candidate.id === storeId) continue;
+          const candidateCreds = await storeVisionCreds(admin, candidate.id);
+          if (candidateCreds.anthropicApiKey) {
+            creds = candidateCreds;
+            break;
+          }
+        }
+      }
       const read = await readSettlementPhotoFromEnv(
         Buffer.from(bytes).toString("base64"),
         file.type,
@@ -111,14 +126,45 @@ export async function POST(req: NextRequest) {
       // `ok:false` NO es "la hoja está vacía": es que no se pudo leer. Guardar
       // una liquidación vacía por un timeout sería darla por buena.
       if (!read.ok) {
+        console.error("[settlements/upload] No se pudo leer la foto", {
+          storeId,
+          model: read.model,
+          failure: read.failure ?? "unknown",
+          detail: read.detail ?? null,
+          bytes: file.size,
+        });
         return NextResponse.json(
-          { error: "No se pudo leer la foto. Reintenta o carga la liquidación como Excel." },
+          {
+            error:
+              read.failure === "timeout"
+                ? "La foto tiene muchas filas y la lectura agotó el tiempo. Reintenta una vez."
+                : read.failure === "invalid_response"
+                  ? `La lectura de la foto quedó incompleta. ${read.detail ?? "Reintenta una vez."}`
+                  : read.failure === "missing_credentials"
+                    ? "No hay una clave de visión válida configurada para leer la foto."
+                    : "No se pudo leer la foto con el servicio de visión. Revisa la configuración o reintenta.",
+          },
           { status: 502 },
         );
       }
       lines = read.lines;
       riderNameRaw = read.riderName;
       readDate = read.settlementDate;
+      // La foto de Axel conserva su semántica contable igual que el Excel:
+      // CLIENTE restringe la tienda, F. PAGO distingue cobros directos y
+      // GANANCIA es la comisión del courier.
+      if (
+        lines.some(
+          (line) =>
+            line.store_hint ||
+            line.payment_method ||
+            line.declared_fee !== null ||
+            line.raw.f_pago,
+        )
+      ) {
+        format = "axel";
+        storeHint = lines.find((line) => line.store_hint)?.store_hint ?? null;
+      }
 
       try {
         await ensureBucket(admin);
@@ -190,6 +236,15 @@ export async function POST(req: NextRequest) {
     userId: user.id,
     courier: format === "generico" || format === "foto" ? null : format,
     posFee,
+    directCollected:
+      format === "axel"
+        ? lines.reduce((sum, line) => {
+            const method = (line.payment_method ?? "").toLowerCase();
+            return method && method !== "efectivo"
+              ? sum + Math.max(0, Number(line.declared_amount ?? 0))
+              : sum;
+          }, 0)
+        : 0,
     lines,
   });
 
@@ -204,9 +259,17 @@ export async function POST(req: NextRequest) {
   // coincide con la elegida se avisa, pero no se cambia por su cuenta: elegir la
   // tienda es del operador.
   const storeMismatch =
-    storeHint && !store.name.toUpperCase().includes(storeHint.toUpperCase())
+    !multiStore && storeHint && !store.name.toUpperCase().includes(storeHint.toUpperCase())
       ? `La hoja dice "${storeHint}" y cargaste en ${store.name}.`
       : null;
 
-  return NextResponse.json({ ok: true, source, format, posFee, storeMismatch, ...result });
+  return NextResponse.json({
+    ok: true,
+    source,
+    format,
+    posFee,
+    multiStore,
+    storeMismatch,
+    ...result,
+  });
 }

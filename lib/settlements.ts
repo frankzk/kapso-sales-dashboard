@@ -70,6 +70,9 @@ export interface SettlementLineInput {
   declared_fee?: number | null;
   customer_name?: string | null;
   district?: string | null;
+  store_hint?: string | null;
+  payment_method?: string | null;
+  raw?: Record<string, unknown> | null;
   match_status: string;
 }
 
@@ -409,6 +412,7 @@ export type LineEffect = "entregado" | "anulado" | null;
  */
 export function lineEffect(line: {
   declared_status: string | null;
+  payment_method?: string | null;
   match_status: string;
   order_id: string | null;
 }): LineEffect {
@@ -418,6 +422,7 @@ export function lineEffect(line: {
   // El rechazo se mira ANTES: "rechazado" no debe caer en ninguna raíz de
   // entrega, y es el único fallo que cierra el pedido.
   if (s.includes("rechaz")) return "anulado";
+  if (line.payment_method) return "entregado";
   return declaresDelivered(line.declared_status) ? "entregado" : null;
 }
 

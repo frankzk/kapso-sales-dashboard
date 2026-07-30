@@ -14,6 +14,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getAdminOrgs, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { COST_CONCEPTS, type CostConcept } from "@/lib/costs";
+import { refreshOrderCoverage } from "@/lib/order-coverage";
 
 const COSTS_PATH = "/dashboard/costos";
 
@@ -130,7 +131,9 @@ export async function upsertTariff(input: TariffInput): Promise<CostActionState>
   });
   if (error) return { error: error.message };
 
+  await refreshOrderCoverage(admin, input.orgId);
   revalidatePath(COSTS_PATH);
+  revalidatePath("/dashboard/pedidos");
   return { notice: "Tarifa registrada. La anterior queda cerrada, no borrada." };
 }
 
@@ -151,7 +154,9 @@ export async function closeTariff(
     .eq("id", tariffId)
     .eq("org_id", orgId);
   if (error) return { error: error.message };
+  await refreshOrderCoverage(admin, orgId);
   revalidatePath(COSTS_PATH);
+  revalidatePath("/dashboard/pedidos");
   return { notice: "Tarifa cerrada." };
 }
 

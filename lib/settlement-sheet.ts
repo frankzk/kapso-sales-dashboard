@@ -26,6 +26,11 @@ export interface ParsedSettlementLine {
    *  la hoja no trae guía ni nº de pedido; nunca un identificador. */
   customer_name: string | null;
   district: string | null;
+  /** Tienda que declara la propia fila (p. ej. CLIENTE=AURELA en Axel).
+   * Es una restricción de cotejo, no una etiqueta decorativa. */
+  store_hint?: string | null;
+  /** Medio de pago declarado por el courier, cuando es distinto del resultado. */
+  payment_method?: string | null;
   raw: Record<string, string>;
 }
 
@@ -184,6 +189,8 @@ export function parseSettlementSheet(
       declared_fee: parseNumber(pick(map, FEE_KEYS)),
       customer_name: pick(map, NAME_KEYS),
       district: pick(map, DISTRICT_KEYS),
+      store_hint: null,
+      payment_method: null,
       raw,
     });
   }

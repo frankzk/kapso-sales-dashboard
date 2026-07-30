@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { campaignBreakdown, campaignDailyTrend } from "@/lib/metrics";
 import type { AdMeta } from "@/lib/meta-ads";
-import type { LeadRow, OrderRow } from "@/lib/types";
+import type { LeadRow, MetaAdPerformance, OrderRow } from "@/lib/types";
 
 const orders = [
   { id: "order-1", name: "#1001", customer_phone: "51920582451", total_amount: 219, total_refunded: 0, cancelled_at: null, line_items: [{ title: "Mochila viajera", sku: "MOCH-1", quantity: 1 }] },
@@ -39,6 +39,17 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
     expect(rows.find((r) => r.adId === "111")!.metaAdId).toBe("111");
     expect(rows.find((r) => r.adId === "222")!.metaAdId).toBe("222");
     expect(rows.find((r) => r.adId === "Madera Como Nueva")!.metaAdId).toBeNull(); // "sin ad id"
+  });
+
+  it("keeps the attributed stores so the product picker searches the right catalogs", () => {
+    const storeLeads = [
+      { store_id: "store-kenku", source: "meta_ad", ad_id: "shared-ad", ad_headline: "Producto" },
+      { store_id: "store-kenku", source: "meta_ad", ad_id: "shared-ad", ad_headline: "Producto" },
+      { store_id: "store-aurela", source: "meta_ad", ad_id: "shared-ad", ad_headline: "Producto" },
+    ] as unknown as LeadRow[];
+
+    const [row] = campaignBreakdown(storeLeads, []);
+    expect(row?.storeIds).toEqual(["store-kenku", "store-aurela"]);
   });
 
   it("upgrades the label to the real Meta ad name when resolved, else falls back", () => {
@@ -91,6 +102,122 @@ describe("campaignBreakdown (revenue half of ROAS)", () => {
     expect(cocina.productMatchRate).toBe(0);
     expect(cocina.deliveredOrders).toBe(1);
     expect(cocina.deliveryRate).toBe(1);
+  });
+
+  it("joins historical Meta delivery and derives weighted cost metrics", () => {
+    const performance = [
+      {
+        storeId: "store-1",
+        adId: "999",
+        accountId: "act-1",
+        currency: "USD",
+        metaConversations: 1,
+        spend: 24,
+        impressions: 12_000,
+        reach: 8_000,
+        clicks: 120,
+        inlineLinkClicks: 90,
+        activeDays: 6,
+        firstDate: "2026-07-01",
+        lastDate: "2026-07-06",
+        syncedAt: "2026-07-07T00:00:00Z",
+      },
+      {
+        storeId: "store-1",
+        adId: "spent-without-leads",
+        accountId: "act-1",
+        currency: "USD",
+        metaConversations: 3,
+        spend: 10,
+        impressions: 5_000,
+        reach: 4_000,
+        clicks: 30,
+        inlineLinkClicks: 20,
+        activeDays: 3,
+        firstDate: "2026-07-01",
+        lastDate: "2026-07-03",
+        syncedAt: "2026-07-07T00:00:00Z",
+      },
+    ] satisfies MetaAdPerformance[];
+    const rows = campaignBreakdown(leads, orders, {}, [
+      { orderId: "order-2", deliveryStatus: "Entregado", statusCategory: "delivered", createdAt: "2026-07-20T00:00:00Z" },
+    ], performance);
+
+    const cocina = rows.find((row) => row.adId === "999")!;
+    expect(cocina).toMatchObject({
+      metaCurrency: "USD",
+      spend: 24,
+      impressions: 12_000,
+      cpm: 2,
+      frequency: 1.5,
+      cpc: 0.2,
+      cpl: 24,
+      cpa: 24,
+      deliveredCpa: 24,
+    });
+    expect(cocina.roas).toBeCloseTo(99 / 24);
+    expect(cocina.deliveredRoas).toBeCloseTo(99 / 24);
+
+    const noSignal = rows.find((row) => row.adId === "spent-without-leads")!;
+    expect(noSignal.leads).toBe(0);
+    expect(noSignal.decision).toBe("no_attribution");
+  });
+
+  it("does not recommend scaling without verified spend or five delivered orders", () => {
+    const cohortLeads = Array.from({ length: 25 }, (_, index) => ({
+      id: `lead-${index}`,
+      store_id: "store-1",
+      source: "meta_ad",
+      ad_id: "quality-ad",
+      ad_headline: "Quality",
+      order_id: index < 5 ? `quality-order-${index}` : null,
+    })) as unknown as LeadRow[];
+    const cohortOrders = Array.from({ length: 5 }, (_, index) => ({
+      id: `quality-order-${index}`,
+      name: `#Q${index}`,
+      total_amount: 100,
+      total_refunded: 0,
+      cancelled_at: null,
+      line_items: [{ title: "Producto", sku: "SKU", quantity: 1 }],
+    })) as unknown as OrderRow[];
+
+    const [withoutSpend] = campaignBreakdown(cohortLeads, cohortOrders);
+    expect(withoutSpend?.decision).toBe("data_incomplete");
+
+    const meta = [{
+      storeId: "store-1",
+      adId: "quality-ad",
+      accountId: "act-1",
+      currency: "USD",
+      metaConversations: 30,
+      spend: 50,
+      impressions: 10_000,
+      reach: 8_000,
+      clicks: 100,
+      inlineLinkClicks: 80,
+      activeDays: 7,
+      firstDate: "2026-07-01",
+      lastDate: "2026-07-07",
+      syncedAt: "2026-07-08T00:00:00Z",
+    }] satisfies MetaAdPerformance[];
+    const threeDeliveries = Array.from({ length: 3 }, (_, index) => ({
+      orderId: `quality-order-${index}`,
+      deliveryStatus: "Entregado",
+      statusCategory: "delivered",
+      createdAt: "2026-07-10T00:00:00Z",
+    }));
+    const [immature] = campaignBreakdown(cohortLeads, cohortOrders, {}, threeDeliveries, meta);
+    expect(immature?.decision).toBe("insufficient");
+    expect(immature?.decisionReason).toContain("3/5");
+
+    const fiveDeliveries = Array.from({ length: 5 }, (_, index) => ({
+      orderId: `quality-order-${index}`,
+      deliveryStatus: "Entregado",
+      statusCategory: "delivered",
+      createdAt: "2026-07-10T00:00:00Z",
+    }));
+    const [mature] = campaignBreakdown(cohortLeads, cohortOrders, {}, fiveDeliveries, meta);
+    expect(["scale", "promising"]).toContain(mature?.decision);
   });
 
   it("campaignDailyTrend buckets leads per day per ad (store tz)", () => {
