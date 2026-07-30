@@ -319,6 +319,7 @@ async function resolveExistingAliclikGuide(
       const selected = selectExistingAliclikOrder(
         [...candidates.values()].map(({ order }) => order),
         {
+          guideCode: code,
           orderName: ctx.row.order_name,
           customerPhone: ctx.row.customer_phone,
           orderTotal: ctx.row.order_total,

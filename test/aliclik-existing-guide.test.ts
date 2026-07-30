@@ -76,4 +76,53 @@ describe("selectExistingAliclikOrder", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("ambiguous");
   });
+
+  it("reconoce el código impreso en un campo no documentado", () => {
+    const remote = {
+      ...order({
+        orderNumber: "ALC-TECNICO-174797",
+        total: 198,
+        customer: { phone: "51914523073" },
+        shipping: {
+          departmentName: "Piura",
+          provinceName: "Piura",
+          districtName: "Piura",
+        },
+      }),
+      externalGuideCode: "AUR5X174797",
+    } as AliclikOrder;
+    const result = selectExistingAliclikOrder([remote], {
+      guideCode: "AUR5X174797",
+      orderName: "#AUR174797",
+      customerPhone: "51914523073",
+      orderTotal: 198,
+      region: "Piura",
+      province: "Piura",
+      district: "Piura",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.match.order.orderNumber).toBe("ALC-TECNICO-174797");
+      expect(result.match.reasons).toContain("código de guía");
+    }
+  });
+
+  it("reconoce la referencia Shopify en un campo no documentado", () => {
+    const remote = {
+      ...order({
+        orderNumber: "ALC-TECNICO",
+        total: 198,
+        customer: { phone: "51914523073" },
+      }),
+      ecommerceReference: "AUR174797",
+    } as AliclikOrder;
+    const result = selectExistingAliclikOrder([remote], {
+      guideCode: "AUR5X174797",
+      orderName: "#AUR174797",
+      customerPhone: "51914523073",
+      orderTotal: 198,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.match.reasons).toContain("pedido Shopify");
+  });
 });

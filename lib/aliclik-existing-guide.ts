@@ -1,6 +1,7 @@
 import type { AliclikOrder } from "@/lib/aliclik";
 
 export interface AliclikExistingGuideTarget {
+  guideCode?: string | null;
   orderName?: string | null;
   customerPhone?: string | null;
   orderTotal?: number | null;
@@ -18,8 +19,21 @@ export interface AliclikExistingGuideMatch {
 const text = (value: string | null | undefined) =>
   (value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
 const digits = (value: string | null | undefined) => (value ?? "").replace(/\D/g, "");
+const compact = (value: string | null | undefined) =>
+  text(value).replace(/[^a-z0-9]/g, "");
 const samePlace = (a: string | null | undefined, b: string | null | undefined) =>
   Boolean(text(a) && text(b) && text(a) === text(b));
+
+function compactOrderPayload(order: AliclikOrder): string {
+  // Aliclik agrega campos a esta respuesta sin incorporarlos siempre a su
+  // documentación. JSON.stringify conserva esos campos adicionales en runtime
+  // y nos permite reconocer identificadores exactos sin depender de su nombre.
+  try {
+    return compact(JSON.stringify(order));
+  } catch {
+    return "";
+  }
+}
 
 export function scoreExistingAliclikOrder(
   order: AliclikOrder,
@@ -27,8 +41,14 @@ export function scoreExistingAliclikOrder(
 ): AliclikExistingGuideMatch {
   let score = 0;
   const reasons: string[] = [];
+  const payload = compactOrderPayload(order);
+  const guideCode = compact(target.guideCode);
+  if (guideCode && payload.includes(guideCode)) {
+    score += 200;
+    reasons.push("código de guía");
+  }
   const orderRef = digits(target.orderName);
-  if (orderRef && digits(order.note).includes(orderRef)) {
+  if (orderRef && (digits(order.note).includes(orderRef) || payload.includes(orderRef))) {
     score += 100;
     reasons.push("pedido Shopify");
   }
