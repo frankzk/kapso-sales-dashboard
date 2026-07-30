@@ -30,6 +30,13 @@ export const maxDuration = 300;
 //
 // Idempotente: una guía ya entregada y validada no se vuelve a analizar, así que
 // ejecutarlo de más no gasta llamadas al modelo.
+//
+// MODO EN SECO (`?dry=1`). Hace exactamente el mismo recorrido —incluida la
+// lectura de las imágenes— pero NO escribe nada: ni el estado de la guía, ni la
+// fila de la comprobación. Devuelve qué leyó de cada constancia y qué habría
+// hecho. Existe para poder mirar los veredictos ANTES de dejar que un modelo
+// mueva guías a "entregado": con dinero de por medio, la primera pasada la
+// revisa un humano.
 
 const DAY_MS = 86_400_000;
 /** Días hacia atrás. Cubre "también las de esta semana" con margen. */
@@ -74,6 +81,7 @@ export async function GET(req: NextRequest) {
   if (!authorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const dry = req.nextUrl.searchParams.get("dry") === "1";
 
   const admin = createAdminSupabase();
   const since = new Date(Date.now() - LOOKBACK_DAYS * DAY_MS).toISOString();
@@ -104,6 +112,8 @@ export async function GET(req: NextRequest) {
     errores: 0,
   };
   const rejected: string[] = [];
+  /** Detalle por guía. Solo se llena en seco: es lo que se revisa a mano. */
+  const detalle: Record<string, unknown>[] = [];
 
   // Una sesión por tienda: el cliente cachea su token entre guías.
   const clients = new Map<string, TandersClient | null>();
@@ -159,7 +169,15 @@ export async function GET(req: NextRequest) {
       // bloquea igual pero no acusa a nadie. Ver extractPaymentEvidence.
       if (!payments.length) {
         report.pendiente += 1;
-        await admin.from("shipments").update({ payment_check_state: "pendiente" }).eq("id", row.id);
+        if (dry) {
+          detalle.push({
+            guia: row.guide_code,
+            pedido: row.order_name,
+            motivo: "Tanders la da por entregada pero no se encontró constancia de pago",
+          });
+        } else {
+          await admin.from("shipments").update({ payment_check_state: "pendiente" }).eq("id", row.id);
+        }
         continue;
       }
 
@@ -189,6 +207,30 @@ export async function GET(req: NextRequest) {
         },
         expectedAmount: expected,
       });
+
+      if (dry) {
+        report[verdict.state as "validado" | "rechazado" | "pendiente"] += 1;
+        if (verdict.state === "validado") report.entregado += 1;
+        detalle.push({
+          guia: row.guide_code,
+          pedido: row.order_name,
+          cobro_esperado: expected,
+          leido: {
+            es_comprobante: reading.isPaymentProof,
+            medio: reading.method,
+            destinatario: reading.recipientName,
+            monto: reading.amount,
+            operacion: reading.operationNumber,
+            modelo: reading.model,
+          },
+          veredicto: verdict.state,
+          motivos: verdict.reasons,
+          resumen: verdict.summary,
+          haria: verdict.state === "validado" ? "marcar ENTREGADO" : "dejar la guía como está",
+          imagen: evidence.imageUrl,
+        });
+        continue;
+      }
 
       await admin.from("tanders_payment_checks").insert({
         shipment_id: row.id,
@@ -228,5 +270,6 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  if (dry) return NextResponse.json({ ok: true, dry: true, ...report, detalle });
   return NextResponse.json({ ok: true, ...report, rejected });
 }

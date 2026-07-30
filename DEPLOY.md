@@ -945,6 +945,11 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   dos entregas es exactamente lo que esta validación debe atrapar.
 - Idempotente: una guía ya validada no se reanaliza, así que ejecutarlo de más no
   gasta llamadas al modelo.
+- **Modo en seco**: `GET /api/cron/tanders-payments?dry=1&secret=$CRON_SECRET`
+  hace el mismo recorrido —lee las imágenes incluidas— pero **no escribe nada** y
+  devuelve, por guía, qué leyó el modelo y qué habría hecho. Con dinero de por
+  medio, la primera pasada la revisa un humano antes de dejar que el veredicto
+  mueva guías a "entregado".
 
 ## 7. Post-deploy verification
 
