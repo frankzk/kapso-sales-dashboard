@@ -80,6 +80,7 @@ export async function POST(req: NextRequest) {
 
   // Cerradura 1: el host sale de la configuración, jamás de la petición.
   const target = env.aliclikApiBase().replace(/\/$/, "") + path;
+  const requestRef = crypto.randomUUID();
 
   let upstream: Response;
   try {
@@ -104,6 +105,39 @@ export async function POST(req: NextRequest) {
 
   const text = await upstream.text().catch(() => "");
 
+  if (!upstream.ok) {
+    let upstreamMessage: unknown = null;
+    try {
+      const parsed = JSON.parse(text) as { message?: unknown; error?: unknown };
+      upstreamMessage = parsed.message ?? parsed.error ?? null;
+    } catch {
+      // No registramos cuerpos arbitrarios: podrían reflejar datos personales.
+      upstreamMessage = method === "GET" ? text.slice(0, 300) : "respuesta no JSON";
+    }
+    let diagnostic: Record<string, unknown> = {
+      requestRef,
+      method,
+      endpoint: path.split("?")[0],
+      status: upstream.status,
+      cfRay: upstream.headers.get("cf-ray"),
+      upstreamMessage,
+    };
+    if (method === "GET") {
+      const query = new URL(target).searchParams;
+      const approximate = (value: string | null) => {
+        const number = Number(value);
+        return Number.isFinite(number) ? Number(number.toFixed(3)) : null;
+      };
+      diagnostic = {
+        ...diagnostic,
+        warehouseId: query.get("warehouseId"),
+        latApprox: approximate(query.get("lat")),
+        lngApprox: approximate(query.get("lng")),
+      };
+    }
+    console.error("ALICLIK_UPSTREAM_ERROR", JSON.stringify(diagnostic));
+  }
+
   // Se devuelve la respuesta de Aliclik TAL CUAL —mismo estado, mismo cuerpo—
   // para que el cliente la interprete igual que si hubiera salido directo. El
   // cf-ray se propaga porque es lo que identifica el bloqueo si vuelve a haberlo.
@@ -112,6 +146,7 @@ export async function POST(req: NextRequest) {
     // Marca que el tramo hasta Aliclik sí ocurrió: distingue un 401 de Aliclik
     // de un 401 de esta misma ruta.
     "x-egress": "edge",
+    "x-aliclik-request-ref": requestRef,
   });
   const ray = upstream.headers.get("cf-ray");
   if (ray) headers.set("cf-ray", ray);

@@ -40,6 +40,7 @@ const opts = (fetchImpl: typeof fetch): AliclikClientOpts => ({
   baseUrl: BASE,
   fetchImpl,
   egress: "direct",
+  retryBaseMs: 0,
 });
 
 describe("cabeceras y autenticación", () => {
@@ -73,13 +74,12 @@ describe("errores", () => {
     );
   });
 
-  it("atribuye a Aliclik los fallos 5xx, que llegan en inglés y genéricos", () => {
-    // Su "Internal server error" pelado se lee como un fallo NUESTRO y manda al
-    // equipo a revisar el dashboard, que está bien.
+  it("ubica los fallos 5xx en el endpoint remoto sin afirmar más de lo comprobado", () => {
     const msg = aliclikErrorMessage(500, { message: "Internal server error" });
     expect(msg).toContain("Internal server error");
     expect(msg).toContain("500");
-    expect(msg).toContain("no en el dashboard");
+    expect(msg).toContain("endpoint de Aliclik");
+    expect(msg).toContain("su API");
   });
 
   it("deja intactos los mensajes 4xx, que sí son accionables", () => {
@@ -404,7 +404,7 @@ describe("salida por Edge", () => {
 
 describe("reintento ante fallos pasajeros de Aliclik", () => {
   const opts = (fetchImpl: typeof fetch) =>
-    ({ apiToken: "t", egress: "direct" as const, fetchImpl });
+    ({ apiToken: "t", egress: "direct" as const, fetchImpl, retryBaseMs: 0 });
 
   const json = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -474,7 +474,32 @@ describe("reintento ante fallos pasajeros de Aliclik", () => {
     );
     expect(calls).toBe(3);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toContain("no en el dashboard");
+    if (!res.ok) expect(res.error).toContain("endpoint de Aliclik");
+  });
+
+  it("conserva la referencia del intento Edge que falló", async () => {
+    const res = await quoteShippingCost(
+      {
+        apiToken: "t",
+        egress: "edge",
+        siteUrl: "https://panel.example",
+        internalSecret: "secret",
+        retryBaseMs: 0,
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ message: "Internal server error" }), {
+            status: 500,
+            headers: {
+              "content-type": "application/json",
+              "x-aliclik-request-ref": "quote-ref-123",
+            },
+          }),
+      },
+      { warehouseId: 133, lat: "-13.5448679", lng: "-71.9414081" },
+    );
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.requestRef).toBe("quote-ref-123");
+    expect(res.error).toContain("Referencia de diagnóstico: quote-ref-123");
   });
 });
 
@@ -486,7 +511,7 @@ describe("el mensaje no le pide a la operadora lo que ya se hizo", () => {
     // Antes ponía "reintenta en unos minutos" sin más, y la operadora reintentaba
     // a mano tres veces sobre una racha de 5xx que dura minutos.
     const res = await quoteShippingCost(
-      opts(async () => json(500, { message: "Internal server error" })),
+      { ...opts(async () => json(500, { message: "Internal server error" })), retryBaseMs: 0 },
       { warehouseId: 133, lat: "-6.781378", lng: "-79.8420078" },
     );
     expect(res.ok).toBe(false);

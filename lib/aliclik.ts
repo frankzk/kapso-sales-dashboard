@@ -52,11 +52,19 @@ export interface AliclikClientOpts {
   siteUrl?: string;
   /** Secreto interno del proxy Edge. Por defecto `env.cronSecret()`. */
   internalSecret?: string;
+  /** Espera base entre reintentos idempotentes. Se expone para pruebas. */
+  retryBaseMs?: number;
 }
 
 export type AliclikResult<T> =
   | { ok: true; data: T }
-  | { ok: false; error: string; status: number | null; timedOut?: boolean };
+  | {
+      ok: false;
+      error: string;
+      status: number | null;
+      timedOut?: boolean;
+      requestRef?: string;
+    };
 
 // ---------------------------------------------------------------------------
 // Tipos de respuesta (los campos que consumimos; la API puede traer más)
@@ -326,11 +334,10 @@ export function aliclikErrorMessage(
       (ray ? ` · Ray ID de Cloudflare para reportarlo: ${ray} (UTC ${new Date().toISOString()})` : "")
     );
   }
-  // Un 5xx es un fallo DE ELLOS, y su mensaje suele venir en inglés y genérico
-  // ("Internal server error"). Enseñarlo pelado hace que se lea como un fallo
-  // nuestro y manda al equipo a revisar el dashboard, que está bien. Se atribuye
-  // siempre. Los 4xx se dejan tal cual: ésos sí son accionables y su texto es la
-  // información útil ("El número de pedido … ya existe").
+  // Un 5xx viene del endpoint remoto y su mensaje suele ser genérico. Indicamos
+  // con precisión en qué tramo ocurrió, sin afirmar que toda nuestra integración
+  // es ajena al problema hasta contar con la referencia diagnóstica del intento.
+  // Los 4xx se dejan tal cual: ésos sí son accionables.
   //
   // El consejo de "reintenta" NO va aquí, sino en `request`, que es quien sabe
   // si se reintentó: `createOrder` no reintenta a propósito —su API no tiene
@@ -339,8 +346,7 @@ export function aliclikErrorMessage(
   // posible justo ahí.
   const attribute = (msg: string) =>
     status >= 500
-      ? `Aliclik respondió HTTP ${status}: «${msg}». Es un fallo en el servidor de Aliclik, no en el ` +
-        "dashboard."
+      ? `El endpoint de Aliclik respondió HTTP ${status}: «${msg}». La cotización no pudo completarse en su API.`
       : msg;
 
   if (body && typeof body === "object") {
@@ -370,7 +376,7 @@ export function aliclikErrorMessage(
 // duplicado no mejoran solos, y repetirlos solo alarga la espera.
 const ALICLIK_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 const ALICLIK_MAX_ATTEMPTS = 3;
-const ALICLIK_RETRY_BASE_MS = 400; // 400ms, 800ms → ≤1,2s extra en el peor caso
+const ALICLIK_RETRY_BASE_MS = 2_000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -403,7 +409,9 @@ async function request<T>(
   let last: AliclikResult<T> | null = null;
 
   for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await sleep(ALICLIK_RETRY_BASE_MS * 2 ** (attempt - 1));
+    if (attempt > 0) {
+      await sleep((opts.retryBaseMs ?? ALICLIK_RETRY_BASE_MS) * 2 ** (attempt - 1));
+    }
     const out = await attemptRequest<T>(opts, method, url, {
       doFetch,
       egress,
@@ -422,7 +430,11 @@ async function request<T>(
   // hubiera intentado nada, y la operadora reintentaba a mano tres veces más
   // sobre una racha de 5xx que dura minutos. Que sepa que ya se hizo.
   if (last && !last.ok && attempts > 1) {
-    return { ...last, error: `${last.error} Ya se reintentó ${attempts} veces seguidas.` };
+    const reference = last.requestRef ? ` Referencia de diagnóstico: ${last.requestRef}.` : "";
+    return {
+      ...last,
+      error: `${last.error} Ya se reintentó ${attempts} veces seguidas.${reference}`,
+    };
   }
   return last ?? { ok: false, status: null, error: "Aliclik no respondió." };
 }
@@ -497,6 +509,7 @@ async function attemptRequest<T>(
 
   const contentType = res.headers.get("content-type");
   const rayId = res.headers.get("cf-ray");
+  const requestRef = res.headers.get("x-aliclik-request-ref") ?? undefined;
 
   // Un fallo del PROXY no es un fallo de Aliclik. Distinguirlo evita el peor
   // desenlace de este experimento: creer que Aliclik rechaza algo cuando en
@@ -506,6 +519,7 @@ async function attemptRequest<T>(
       ok: false,
       status: res.status,
       error: `Salida por Edge no disponible: ${String((parsed as { egressError: unknown }).egressError)}`,
+      requestRef,
     };
   }
 
@@ -514,6 +528,7 @@ async function attemptRequest<T>(
       ok: false,
       error: aliclikErrorMessage(res.status, parsed, contentType, rayId),
       status: res.status,
+      requestRef,
     };
   }
 
@@ -524,6 +539,7 @@ async function attemptRequest<T>(
       ok: false,
       error: aliclikErrorMessage(res.status, parsed, contentType, rayId),
       status: res.status,
+      requestRef,
     };
   }
 
