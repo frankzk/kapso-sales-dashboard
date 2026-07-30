@@ -33,6 +33,7 @@ import {
 import {
   describeDuplicate,
   findDuplicate,
+  normalizeManualOperationNumber,
   normalizeOperationNumber,
   type ExistingPayment,
 } from "@/lib/yape-dedup";
@@ -421,7 +422,10 @@ export async function registerPayment(
   // de operación pero la imagen lo trae, ese dato entra en la comprobación. Sin
   // él, un mismo Yape recortado podría colarse en dos pedidos.
   const vision = await inspectVoucher(admin, input.path, ctx.storeId);
-  const typedOperation = normalizeOperationNumber(input.operationNumber);
+  // Una operación escrita por una persona puede ser corta (p. ej. 5782).
+  // El OCR mantiene el umbral estricto para no confundir el código de
+  // seguridad de tres dígitos con el nº de operación.
+  const typedOperation = normalizeManualOperationNumber(input.operationNumber);
   const readOperation = normalizeOperationNumber(vision.fields.operationNumber);
   const identityDiscrepancy = Boolean(
     readOperation && typedOperation && readOperation !== typedOperation,
@@ -955,7 +959,14 @@ export async function completePaymentData(
   if (!ctx) return { error: "Sin acceso a este pedido." };
 
   const admin = createAdminSupabase();
-  const operation = normalizeOperationNumber(input.operationNumber);
+  const operation = normalizeManualOperationNumber(input.operationNumber);
+  if (input.operationNumber?.trim() && !operation) {
+    return {
+      error:
+        "El nº de operación debe tener al menos 4 letras o números. " +
+        "Revisa el comprobante y vuelve a escribirlo.",
+    };
+  }
 
   // El nº de operación es global: antes de escribirlo hay que asegurarse de que
   // no pertenece ya a otro pago.

@@ -464,6 +464,7 @@ function MissingOperation({
             value={operation}
             onChange={(e) => setOperation(e.target.value)}
             placeholder="Nº de operación"
+            autoComplete="off"
             className="w-40 rounded-lg border border-amber-200 px-2 py-1 text-xs"
           />
           {payment.amount === null && (
@@ -484,7 +485,7 @@ function MissingOperation({
             />
           )}
           <button
-            disabled={pending || !operation.trim()}
+            disabled={pending || operation.replace(/[^a-z0-9]/gi, "").length < 4}
             onClick={() =>
               onComplete(payment.id, {
                 operationNumber: operation,

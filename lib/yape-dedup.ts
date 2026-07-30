@@ -89,6 +89,21 @@ export function normalizeOperationNumber(value: string | null | undefined): stri
   return cleaned.length >= 6 ? cleaned : null;
 }
 
+/**
+ * Normaliza un número escrito expresamente por una persona.
+ *
+ * Algunos vouchers bancarios que terminan en Yape usan operaciones de solo
+ * cuatro caracteres. No debemos aceptarlas desde OCR —podrían ser el código de
+ * seguridad—, pero sí cuando el operador las transcribe de forma consciente.
+ */
+export function normalizeManualOperationNumber(
+  value: string | null | undefined,
+): string | null {
+  if (!value) return null;
+  const cleaned = String(value).toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return cleaned.length >= 4 ? cleaned : null;
+}
+
 /** Nombre comparable: minúsculas, sin acentos ni puntuación. */
 function normalizeName(value: string | null | undefined): string | null {
   if (!value) return null;
