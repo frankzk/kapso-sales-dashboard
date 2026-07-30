@@ -663,17 +663,68 @@ export function listOrders(
  * que filtrar por igualdad exacta al recibir: pedir "ALC1" podría devolver
  * "ALC12". Devuelve null cuando no existe.
  */
+export interface GetOrderLookupOptions {
+  /**
+   * Consultas alternativas para encontrar el mismo pedido (p. ej. teléfono o
+   * sufijo numérico). Nunca se aceptan como identidad: el orderNumber devuelto
+   * por Aliclik debe seguir coincidiendo exactamente con `orderNumber`.
+   */
+  searchTerms?: Array<string | null | undefined>;
+  startDate?: string;
+  endDate?: string;
+  /** Tope defensivo por consulta. La búsqueda interactiva no barre la cuenta entera. */
+  maxPagesPerQuery?: number;
+  /** Último recurso: recorre páginas recientes sin filtro y exige igualdad exacta. */
+  scanUnfiltered?: boolean;
+}
+
+function normalizedOrderNumber(value: string | null | undefined): string {
+  return (value ?? "").trim().replace(/^#+/, "").replace(/\s+/g, "").toUpperCase();
+}
+
 export async function getOrder(
   opts: AliclikClientOpts,
   orderNumber: string,
+  lookup: GetOrderLookupOptions = {},
 ): Promise<AliclikResult<AliclikOrder | null>> {
-  const res = await listOrders(opts, { orderNumber, limit: 100 });
-  if (!res.ok) return res;
-  const wanted = orderNumber.trim().toUpperCase();
-  const exact =
-    (res.data.data ?? []).find((o) => (o.orderNumber ?? "").trim().toUpperCase() === wanted) ??
-    null;
-  return { ok: true, data: exact };
+  const wanted = normalizedOrderNumber(orderNumber);
+  const maxPages = Math.min(20, Math.max(1, lookup.maxPagesPerQuery ?? 1));
+  const terms = [orderNumber, ...(lookup.searchTerms ?? [])]
+    .map((term) => (term ?? "").trim())
+    .filter(Boolean)
+    .filter((term, index, all) => all.indexOf(term) === index);
+
+  const search = async (
+    term: string | undefined,
+    useDateRange: boolean,
+  ): Promise<AliclikResult<AliclikOrder | null>> => {
+    for (let page = 1; page <= maxPages; page++) {
+      const res = await listOrders(opts, {
+        page,
+        limit: 100,
+        orderNumber: term,
+        startDate: useDateRange ? lookup.startDate : undefined,
+        endDate: useDateRange ? lookup.endDate : undefined,
+      });
+      if (!res.ok) return res;
+      const exact =
+        (res.data.data ?? []).find(
+          (order) => normalizedOrderNumber(order.orderNumber) === wanted,
+        ) ?? null;
+      if (exact) return { ok: true, data: exact };
+
+      const totalPages = Math.max(1, res.data.pagination?.totalPages ?? 1);
+      if (page >= totalPages || !(res.data.data ?? []).length) break;
+    }
+    return { ok: true, data: null };
+  };
+
+  for (const term of terms) {
+    const result = await search(term, false);
+    if (!result.ok || result.data) return result;
+  }
+  if (lookup.scanUnfiltered) return search(undefined, true);
+  return { ok: true, data: null };
 }
 
 export function cancelOrder(

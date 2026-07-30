@@ -193,6 +193,59 @@ describe("getOrder", () => {
     if (!res.ok) return;
     expect(res.data?.orderNumber).toBe("AUR5X123");
   });
+
+  it("encuentra la guía por un término alternativo pero conserva igualdad exacta", async () => {
+    const { impl } = stubFetch([
+      {
+        status: 200,
+        body: { data: [], pagination: { totalPages: 1 } },
+      },
+      {
+        status: 200,
+        body: {
+          data: [
+            { orderNumber: "AUR5X1747970", customer: { phone: "51914523073" } },
+            { orderNumber: "AUR5X174797", customer: { phone: "51914523073" } },
+          ],
+          pagination: { totalPages: 1 },
+        },
+      },
+    ]);
+    const res = await getOrder(opts(impl), "AUR5X174797", {
+      searchTerms: ["914523073"],
+      maxPagesPerQuery: 2,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data?.orderNumber).toBe("AUR5X174797");
+  });
+
+  it("puede recorrer el listado reciente sin aceptar una guía parecida", async () => {
+    const { impl } = stubFetch([
+      {
+        status: 200,
+        body: {
+          data: [{ orderNumber: "AUR5X1747970" }],
+          pagination: { totalPages: 1 },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          data: [{ orderNumber: "AUR5X174797" }],
+          pagination: { totalPages: 1 },
+        },
+      },
+    ]);
+    const res = await getOrder(opts(impl), "AUR5X174797", {
+      scanUnfiltered: true,
+      startDate: "2026-07-28",
+      endDate: "2026-07-31",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data?.orderNumber).toBe("AUR5X174797");
+  });
 });
 
 describe("interpretCancelResponse", () => {

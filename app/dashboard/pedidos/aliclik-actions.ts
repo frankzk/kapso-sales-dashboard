@@ -169,7 +169,23 @@ async function resolveExistingAliclikGuide(
   const { ctx, error } = await authorize(orderId, "aliclik.create_guide");
   if (!ctx) return { error };
 
-  const remote = await getOrder(ctx.client, code);
+  const numericSuffix = code.match(/\d{4,}$/)?.[0] ?? null;
+  const customerPhone = normalizePhone(ctx.row.customer_phone);
+  const customerPhoneLocal = customerPhone?.replace(/\D/g, "").slice(-9) || null;
+  const createdAt = Date.parse(ctx.row.order_created_at ?? "");
+  const recentStart = new Date(
+    Number.isFinite(createdAt)
+      ? Math.max(createdAt - 2 * 24 * 60 * 60_000, Date.now() - 120 * 24 * 60 * 60_000)
+      : Date.now() - 30 * 24 * 60 * 60_000,
+  );
+  const dateKey = (date: Date) => date.toISOString().slice(0, 10);
+  const remote = await getOrder(ctx.client, code, {
+    searchTerms: [numericSuffix, customerPhone, customerPhoneLocal],
+    startDate: dateKey(recentStart),
+    endDate: dateKey(new Date(Date.now() + 24 * 60 * 60_000)),
+    maxPagesPerQuery: 10,
+    scanUnfiltered: true,
+  });
   if (!remote.ok) return { error: `No se pudo consultar Aliclik: ${remote.error}` };
   if (!remote.data) {
     return { error: `La guía ${code} no existe en la cuenta Aliclik de esta tienda.` };
