@@ -87,6 +87,8 @@ export type ResolveResult =
       ok: true;
       warehouseId: number;
       warehouseName: string | null;
+      /** Almacenes que contienen todos los EAN, en orden de preferencia. */
+      warehouseCandidates: { id: number; name: string | null }[];
       items: ResolvedItem[];
       /** Hora de corte del almacén (solo relevante en agencia). */
       formatTimeAgency: string | null;
@@ -252,6 +254,34 @@ export function resolveAliclikItems(
     };
   }
 
+  // El mismo EAN puede existir en varios almacenes. Para un respaldo seguro
+  // necesitamos la INTERSECCIÓN: solo son compatibles los almacenes que
+  // contienen todos los productos del pedido.
+  const uniqueEans = [...new Set(resolved.map((r) => r.ean))];
+  const compatibleIds = uniqueEans.reduce<Set<number> | null>((common, ean) => {
+    const ids = new Set(
+      (byEan.get(ean) ?? [])
+        .filter((row) => opts.modality !== "agency" || row.is_agency_eligible)
+        .map((row) => row.warehouse_id)
+        .filter((id): id is number => id !== null && id !== undefined),
+    );
+    if (common === null) return ids;
+    return new Set([...common].filter((id) => ids.has(id)));
+  }, null);
+  const warehouseNames = new Map<number, string | null>();
+  for (const row of skus) {
+    if (row.warehouse_id != null && !warehouseNames.has(row.warehouse_id)) {
+      warehouseNames.set(row.warehouse_id, row.warehouse_name ?? null);
+    }
+  }
+  const warehouseCandidates = [...(compatibleIds ?? new Set<number>())]
+    .sort((a, b) => {
+      if (a === operationalWarehouseId) return -1;
+      if (b === operationalWarehouseId) return 1;
+      return a - b;
+    })
+    .map((id) => ({ id, name: warehouseNames.get(id) ?? null }));
+
   // 4. Agencia: el SKU tiene que estar habilitado para Shalom.
   if (opts.modality === "agency") {
     const notAgency = resolved.filter((r) => !r.sku!.is_agency_eligible);
@@ -374,7 +404,18 @@ export function resolveAliclikItems(
   const formatTimeAgency =
     resolved.map((r) => r.sku!.format_time_agency).find((t) => t && t.trim()) ?? null;
 
-  return { ok: true, warehouseId, warehouseName, items, formatTimeAgency, warnings };
+  return {
+    ok: true,
+    warehouseId,
+    warehouseName,
+    warehouseCandidates:
+      warehouseCandidates.length > 0
+        ? warehouseCandidates
+        : [{ id: warehouseId, name: warehouseName }],
+    items,
+    formatTimeAgency,
+    warnings,
+  };
 }
 
 // ---------------------------------------------------------------------------

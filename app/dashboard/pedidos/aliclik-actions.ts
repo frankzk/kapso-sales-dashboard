@@ -466,14 +466,84 @@ export async function previewAliclikGuide(
   const lat = toAliclikCoord(coord.lat);
   const lng = toAliclikCoord(coord.lng);
 
-  // 3. Cotización. Doble función: da los couriers Y valida cobertura y ubigeo.
-  const quote = await quoteShippingCost(ctx.client, {
-    warehouseId: resolved.warehouseId,
-    lat,
-    lng,
-  });
-  if (!quote.ok) {
-    return { ok: false, error: quote.error, coordinate: { lat, lng } };
+  // 3. Cotización. El mismo EAN puede existir en varios almacenes y Aliclik
+  // puede fallar para uno aunque otro compatible cotice correctamente. Repetir
+  // tres veces el mismo warehouseId no cubre ese caso: primero probamos una vez
+  // cada almacén que contiene TODOS los EAN. Solo si todos fallan de forma
+  // transitoria se aplican los reintentos sobre el almacén operativo preferido.
+  const candidates = resolved.warehouseCandidates.slice(0, 4);
+  const failures: {
+    warehouseId: number;
+    error: string;
+    status: number | null;
+    requestRef?: string;
+  }[] = [];
+  let quotedWarehouse = candidates[0] ?? {
+    id: resolved.warehouseId,
+    name: resolved.warehouseName,
+  };
+  let quote: Awaited<ReturnType<typeof quoteShippingCost>> | null = null;
+
+  for (const candidate of candidates) {
+    const attempt = await quoteShippingCost(
+      ctx.client,
+      { warehouseId: candidate.id, lat, lng },
+      { retry: false },
+    );
+    if (attempt.ok) {
+      quote = attempt;
+      quotedWarehouse = candidate;
+      break;
+    }
+    failures.push({
+      warehouseId: candidate.id,
+      error: attempt.error,
+      status: attempt.status,
+      requestRef: attempt.requestRef,
+    });
+  }
+
+  if (!quote) {
+    const preferred = candidates[0] ?? quotedWarehouse;
+    const allTransient =
+      failures.length > 0 &&
+      failures.every((failure) => failure.status == null || failure.status >= 500);
+    if (allTransient) {
+      const retried = await quoteShippingCost(ctx.client, {
+        warehouseId: preferred.id,
+        lat,
+        lng,
+      });
+      if (retried.ok) {
+        quote = retried;
+        quotedWarehouse = preferred;
+      } else {
+        failures.push({
+          warehouseId: preferred.id,
+          error: retried.error,
+          status: retried.status,
+          requestRef: retried.requestRef,
+        });
+      }
+    }
+    if (!quote) {
+      const attempted = [...new Set(failures.map((failure) => failure.warehouseId))].join(", ");
+      const refs = [
+        ...new Set(
+          failures
+            .map((failure) => failure.requestRef)
+            .filter((ref): ref is string => Boolean(ref)),
+        ),
+      ].join(", ");
+      return {
+        ok: false,
+        error:
+          `${failures.at(-1)?.error ?? "Aliclik no respondió."} ` +
+          `Almacén(es) compatibles probados: ${attempted || resolved.warehouseId}.` +
+          (refs ? ` Referencia(s): ${refs}.` : ""),
+        coordinate: { lat, lng },
+      };
+    }
   }
 
   const aliclikUbigeo = {
@@ -523,8 +593,8 @@ export async function previewAliclikGuide(
   return {
     ok: true,
     warnings: resolved.warnings,
-    warehouseId: resolved.warehouseId,
-    warehouseName: resolved.warehouseName,
+    warehouseId: quotedWarehouse.id,
+    warehouseName: quotedWarehouse.name,
     items: priced.items,
     orderName: ctx.row.order_name,
     collectTotal: money.total,

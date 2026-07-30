@@ -48,6 +48,7 @@ describe("resolveAliclikItems — camino feliz", () => {
     if (!res.ok) return;
     expect(res.warehouseId).toBe(210);
     expect(res.warehouseName).toBe("Lima Centro");
+    expect(res.warehouseCandidates).toEqual([{ id: 210, name: "Lima Centro" }]);
     expect(res.items).toEqual([
       { ean: "1480110110503", quantity: 1, price: 100, title: "Laptop", stockVirtual: 10 },
     ]);
@@ -78,6 +79,35 @@ describe("resolveAliclikItems — camino feliz", () => {
     if (!res.ok) return;
     expect(res.warehouseId).toBe(133);
     expect(res.warehouseName).toBe("GRUPO GF");
+    expect(res.warehouseCandidates).toEqual([
+      { id: 133, name: "GRUPO GF" },
+      { id: 183, name: "NIBRESMA" },
+    ]);
+  });
+
+  it("solo ofrece almacenes de respaldo que contienen todos los EAN", () => {
+    const res = resolveAliclikItems(
+      [line(), line({ title: "Mouse", sku: "MOU-1" })],
+      map([
+        ["LAP-14", "1480110110503"],
+        ["MOU-1", "2220000000001"],
+      ]),
+      [
+        sku({ warehouse_id: 133, warehouse_name: "GRUPO GF" }),
+        sku({ warehouse_id: 183, warehouse_name: "NIBRESMA" }),
+        sku({
+          ean: "2220000000001",
+          sku: "MOU-1",
+          warehouse_id: 133,
+          warehouse_name: "GRUPO GF",
+        }),
+      ],
+      { modality: "cod" },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.warehouseCandidates).toEqual([{ id: 133, name: "GRUPO GF" }]);
   });
 
   it("empareja el SKU sin importar mayúsculas ni espacios", () => {

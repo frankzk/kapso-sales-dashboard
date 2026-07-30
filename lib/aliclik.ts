@@ -613,9 +613,10 @@ export async function listAllProducts(
 export function quoteShippingCost(
   opts: AliclikClientOpts,
   p: { warehouseId: number; lat: string; lng: string },
+  requestOpts: { retry?: boolean } = {},
 ): Promise<AliclikResult<AliclikShippingCost>> {
   return request<AliclikShippingCost>(opts, "GET", "/integration/order/shipping/cost", {
-    retry: true,
+    retry: requestOpts.retry ?? true,
     params: { warehouseId: p.warehouseId, lat: p.lat, lng: p.lng },
   });
 }
