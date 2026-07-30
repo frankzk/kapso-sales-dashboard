@@ -35,6 +35,10 @@
     {
       "path": "/api/cron/meta-insights",
       "schedule": "15 10 * * *"
+    },
+    {
+      "path": "/api/cron/tanders-payments",
+      "schedule": "0 */2 * * *"
     }
   ]
 }

@@ -26,6 +26,7 @@ import {
 } from "@/lib/tanders/draft";
 import { getStoreCreds } from "@/lib/ingest";
 import { fetchOrderById } from "@/lib/shopify";
+import { sweepTandersPayments, type SweepReport } from "@/lib/tanders/payment-sweep";
 import { TandersApiError } from "@/lib/tanders/types";
 import type { OrderMasterRow } from "@/lib/types";
 
@@ -507,4 +508,94 @@ export async function markTandersLabelGenerated(
     };
   }
   return { notice: "Rótulo listo y marcado como generado en Tanders." };
+}
+
+/**
+ * Un administrador da por bueno un cobro que el lector rechazó.
+ *
+ * Es la única forma de levantar el bloqueo, y por eso exige motivo: el rechazo
+ * dijo por escrito qué no cuadraba, así que la aceptación tiene que decir por
+ * escrito por qué se acepta igual. Queda en la fila de la comprobación, junto a
+ * lo que el lector había leído.
+ */
+export async function reviewTandersPayment(
+  shipmentId: string,
+  note: string,
+): Promise<{ error?: string; notice?: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("tanders.review_payment")) {
+    return { error: "Solo un administrador puede dar por bueno un cobro rechazado." };
+  }
+  const reason = note.trim();
+  if (!reason) return { error: "Describe por qué el cobro es correcto: queda en el historial." };
+
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  // RLS: un envío de otra tienda no aparece.
+  const { data } = await sb
+    .from("shipments")
+    .select("id,store_id,order_id,guide_code")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  const shipment = data as
+    | { id: string; store_id: string; order_id: string | null; guide_code: string }
+    | null;
+  if (!shipment) return { error: "Sin acceso a este envío." };
+
+  const admin = createAdminSupabase();
+  await admin.from("shipments").update({ payment_check_state: "revisado" }).eq("id", shipmentId);
+  await admin
+    .from("tanders_payment_checks")
+    .update({ reviewed_by: user.id, reviewed_at: new Date().toISOString(), review_note: reason })
+    .eq("shipment_id", shipmentId)
+    .is("reviewed_at", null);
+
+  if (shipment.order_id) {
+    await admin.from("order_events").insert({
+      store_id: shipment.store_id,
+      order_id: shipment.order_id,
+      kind: "comment",
+      occurred_at: new Date().toISOString(),
+      actor: user.id,
+      source: "tanders",
+      courier: "tanders",
+      guide_code: shipment.guide_code,
+      note: `Cobro rechazado por el lector y aceptado a mano: ${reason}`,
+    });
+    await recomputeOrderMasterSafe(admin, [shipment.order_id]);
+  }
+
+  revalidatePath(MASTER_PATH);
+  return { notice: "Cobro dado por bueno. Queda registrado quién y por qué." };
+}
+
+/**
+ * Revisión EN SECO de los cobros: lee las constancias y dice qué haría, sin
+ * escribir nada.
+ *
+ * Comparte el código con el cron —es el mismo `sweepTandersPayments`— porque una
+ * revisión que no recorriera el mismo camino no probaría nada sobre lo que hará
+ * el barrido de verdad.
+ *
+ * Vive acá y no detrás del secreto del cron porque ese secreto está marcado como
+ * sensible en Vercel y no se puede leer: pedirle a alguien que lo maneje para
+ * mirar unos veredictos era pedir lo que no hace falta. Con la sesión y el
+ * permiso de revisión alcanza.
+ */
+export async function dryRunTandersPayments(): Promise<
+  { report: SweepReport } | { error: string }
+> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("tanders.review_payment")) {
+    return { error: "Solo un administrador puede revisar los cobros." };
+  }
+  try {
+    return { report: await sweepTandersPayments(createAdminSupabase(), { dry: true }) };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "No se pudo revisar." };
+  }
 }

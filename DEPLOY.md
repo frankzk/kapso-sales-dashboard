@@ -1134,6 +1134,56 @@ creó ninguna guía (sin `--create`). Lo que salió de ahí:
   `comprobante` **vacíos** desde julio de 2026 (el propio proveedor lo avisa). No
   construir nada sobre esos campos.
 
+## 5ñ-bis. Tanders — validar la constancia de pago de cada entrega
+
+Tanders sube dos evidencias por entrega: la foto del paquete y el **comprobante
+del pago**, que el repartidor yapea a Grupo GF SAC. Ese segundo comprobante es el
+que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
+
+- **Needs migration 0084** (`shipments.payment_check_state`, tabla
+  `tanders_payment_checks`).
+- **Cron `/api/cron/tanders-payments`**, cada 2 h. Barre las guías Tanders vivas
+  de los últimos 8 días: pregunta su estado, y si Tanders la da por entregada
+  baja la constancia de pago, la lee y guarda el veredicto.
+- **El orden es la regla del negocio**: que Tanders diga "entregado" NO basta.
+  La guía pasa a `entregado` en el Master **solo si el cobro valida**. Una
+  entrega sin cobro confirmado se queda donde está y espera a que alguien mire.
+- **Se aceptan dos medios**: Yape **o transferencia BCP**, los dos con los que el
+  repartidor remite. El lector de `lib/vision.ts` no sirve acá porque pregunta
+  "¿es un comprobante Yape?" y rechazaría un BCP legítimo; por eso
+  `lib/tanders/payment-vision.ts` tiene su propio prompt.
+- **Es un cron y no un botón** porque la constancia aparece cuando el repartidor
+  entrega, a cualquier hora y sin que nadie mire el Master.
+- **Qué comprueba**: que sea un Yape real, **a Grupo GF SAC**, por el monto de la
+  guía. Un pago a otra cuenta es dinero que no llegó; un monto distinto es un
+  cobro mal hecho. Tolerancia de S/ 0.50 para el redondeo del comprobante.
+- **Bloquea.** Mientras el estado no sea `validado` (o `revisado`), el pedido no
+  se da por cobrado. Solo `tanders.review_payment` —owner/admin— puede darlo por
+  bueno a mano, y **exige motivo**: el rechazo dijo por escrito qué no cuadraba,
+  así que la aceptación tiene que decir por escrito por qué se acepta igual.
+- **`pendiente` y `rechazado` son distintos a propósito.** Pendiente es "todavía
+  no lo sé" (no hay constancia, o el lector falló); rechazado es "esto está mal".
+  Marcar un timeout del modelo como rechazo mandaría al equipo a investigar un
+  fraude que no existe. Los dos bloquean; solo uno acusa.
+- **La separación entrega/pago va por la RUTA de la imagen.** Tanders sube las
+  constancias de pago a `files_payment/<N° seguimiento>/…` y la foto de la
+  entrega a otra carpeta, así que el discriminante no depende de cómo se llamen
+  las claves de su JSON. Si no encuentra ninguna, devuelve vacío y la
+  comprobación queda pendiente: pasar la foto de un paquete por el lector de
+  comprobantes y decidir un cobro con eso sería peor que no decidir.
+- El **nº de operación** se guarda indexado: un mismo comprobante reutilizado en
+  dos entregas es exactamente lo que esta validación debe atrapar.
+- Idempotente: una guía ya validada no se reanaliza, así que ejecutarlo de más no
+  gasta llamadas al modelo.
+- **Revisión en seco**: `/dashboard/pedidos/cobros-tanders` (permiso
+  `tanders.review_payment`). Lee las constancias y muestra la imagen al lado de
+  lo que el modelo leyó de ella, sin escribir nada. Con dinero de por medio, la
+  primera pasada la revisa un humano antes de dejar que el veredicto mueva guías
+  a "entregado".
+- El barrido vive en `lib/tanders/payment-sweep.ts`, **compartido** por el cron y
+  por esa revisión: si fueran dos implementaciones, mirar los veredictos en seco
+  no probaría nada sobre lo que hace el cron de verdad.
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle
