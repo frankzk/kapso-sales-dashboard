@@ -27,6 +27,9 @@ import { createAdminSupabase } from "@/lib/db";
 import { quoteShippingCost, type AliclikClientOpts } from "@/lib/aliclik";
 import { toAliclikCoord } from "@/lib/aliclik-geo";
 import { refreshOrderCoverage } from "@/lib/order-coverage";
+import { pickTopWarehouse } from "@/lib/aliclik-warehouse";
+
+export { pickTopWarehouse } from "@/lib/aliclik-warehouse";
 
 /** Marca de procedencia. El cron solo toca lo suyo. */
 export const ALICLIK_TARIFF_SOURCE = "aliclik";
@@ -44,18 +47,6 @@ export type QuotedConcept = "primer_intento" | "devolucion" | "intento_adicional
  * de un día para otro, las tarifas de distintos distritos dejarían de ser
  * comparables entre sí, que es justo lo que se quiere evitar.
  */
-export function pickTopWarehouse(counts: ReadonlyMap<number, number>): number | undefined {
-  let best: number | undefined;
-  let bestCount = -1;
-  for (const [id, n] of counts) {
-    if (n > bestCount || (n === bestCount && best !== undefined && id < best)) {
-      best = id;
-      bestCount = n;
-    }
-  }
-  return best;
-}
-
 /** Una tarifa vigente tal y como está guardada. */
 export interface ExistingTariff {
   id: string;

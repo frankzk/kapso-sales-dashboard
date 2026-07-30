@@ -15,6 +15,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
+import { pickOperationalWarehouse } from "@/lib/aliclik-warehouse";
 import {
   listAgencies,
   listAllProducts,
@@ -175,7 +176,35 @@ export function resolveAliclikItems(
   }
 
   const bySku = new Map(mapping.map((m) => [normalizeSku(m.shopify_sku), m.ean]));
-  const byEan = new Map(skus.map((s) => [s.ean, s]));
+  const mappedEans = new Set(mapping.map((m) => m.ean));
+  const operationalWarehouseId = pickOperationalWarehouse(skus, mappedEans);
+  const byEan = new Map<string, AliclikSkuRow[]>();
+  for (const row of skus) {
+    const rows = byEan.get(row.ean) ?? [];
+    rows.push(row);
+    byEan.set(row.ean, rows);
+  }
+
+  // El mismo EAN puede existir en varios almacenes. Se prioriza el almacén
+  // operativo de la tienda y se deja un desempate estable para no depender del
+  // orden arbitrario de Postgres.
+  const pickSkuRow = (ean: string): AliclikSkuRow | null => {
+    const rows = byEan.get(ean) ?? [];
+    const eligible =
+      opts.modality === "agency" ? rows.filter((row) => row.is_agency_eligible) : rows;
+    const candidates = eligible.length ? eligible : rows;
+    return (
+      candidates
+        .slice()
+        .sort((a, b) => {
+          const aPreferred = a.warehouse_id === operationalWarehouseId ? 1 : 0;
+          const bPreferred = b.warehouse_id === operationalWarehouseId ? 1 : 0;
+          if (aPreferred !== bPreferred) return bPreferred - aPreferred;
+          return (a.warehouse_id ?? Number.MAX_SAFE_INTEGER) -
+            (b.warehouse_id ?? Number.MAX_SAFE_INTEGER);
+        })[0] ?? null
+    );
+  };
 
   // 1. ¿Todas las líneas traen SKU?
   const noSku = real.filter((l) => !normalizeSku(l.sku));
@@ -208,7 +237,7 @@ export function resolveAliclikItems(
   // 3. ¿El EAN mapeado sigue existiendo en el catálogo?
   const resolved = real.map((l) => {
     const ean = bySku.get(normalizeSku(l.sku))!;
-    return { line: l, ean, sku: byEan.get(ean) ?? null };
+    return { line: l, ean, sku: pickSkuRow(ean) };
   });
   const unknown = resolved.filter((r) => !r.sku);
   if (unknown.length) {
