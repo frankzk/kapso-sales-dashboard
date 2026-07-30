@@ -165,7 +165,13 @@ describe("syncAliclikTariffs: la pasada no se pierde por una racha de 5xx", () =
     const res = await syncAliclikTariffs(
       "org",
       [probe("Chiclayo"), probe("Trujillo")],
-      { apiToken: "t", baseUrl: "https://api.aliclik-test.local", fetchImpl: impl, egress: "direct" },
+      {
+        apiToken: "t",
+        baseUrl: "https://api.aliclik-test.local",
+        fetchImpl: impl,
+        egress: "direct",
+        retryBaseMs: 0,
+      },
       "2026-07-29",
       noAdmin,
     );
@@ -181,7 +187,13 @@ describe("syncAliclikTariffs: la pasada no se pierde por una racha de 5xx", () =
     const res = await syncAliclikTariffs(
       "org",
       [probe("Chiclayo")],
-      { apiToken: "t", baseUrl: "https://api.aliclik-test.local", fetchImpl: impl, egress: "direct" },
+      {
+        apiToken: "t",
+        baseUrl: "https://api.aliclik-test.local",
+        fetchImpl: impl,
+        egress: "direct",
+        retryBaseMs: 0,
+      },
       "2026-07-29",
       noAdmin,
     );
