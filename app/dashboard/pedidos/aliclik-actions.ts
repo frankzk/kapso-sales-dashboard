@@ -244,6 +244,53 @@ async function resolveExistingAliclikGuide(
     >();
     const errors: string[] = [];
     for (const client of ctx.clients) {
+      // Si Aliclik expone el código impreso como `orderNumber`, esa igualdad
+      // exacta es la identidad de la guía. No debe depender además del puntaje
+      // por nota, teléfono o destino: esos campos se enseñan en la vista previa
+      // para que la operadora los corrobore antes de confirmar el vínculo.
+      const exact = await getOrder(client, code, {
+        searchTerms: [numericSuffix, customerPhone, customerPhoneLocal],
+        startDate: dateKey(recentStart),
+        endDate: dateKey(new Date(Date.now() + 24 * 60 * 60_000)),
+        maxPagesPerQuery: 10,
+        scanUnfiltered: true,
+      });
+      if (!exact.ok) {
+        errors.push(exact.error);
+      } else if (exact.data) {
+        remoteOrder = exact.data;
+        matchExplanation = "código de guía exacto";
+        ctx.client = client;
+        break;
+      }
+
+      // El código impreso AUR5X... no siempre es el `orderNumber` técnico que
+      // devuelve la integración. Antes del barrido reciente, aprovechamos la
+      // búsqueda parcial de Aliclik con todas las referencias conocidas.
+      const searchTerms = [
+        code,
+        numericSuffix,
+        ctx.row.order_name?.replace(/^#+/, ""),
+        customerPhone,
+        customerPhoneLocal,
+      ]
+        .filter((term): term is string => Boolean(term))
+        .filter((term, index, all) => all.indexOf(term) === index);
+      for (const term of searchTerms) {
+        const result = await listOrders(client, {
+          page: 1,
+          limit: 100,
+          orderNumber: term,
+        });
+        if (!result.ok) {
+          errors.push(result.error);
+          continue;
+        }
+        for (const order of result.data.data ?? []) {
+          const key = normalizeExternalGuideCode(order.orderNumber ?? "");
+          if (key && !candidates.has(key)) candidates.set(key, { order, client });
+        }
+      }
       for (let page = 1; page <= 10; page++) {
         const result = await listOrders(client, {
           page,
@@ -263,31 +310,47 @@ async function resolveExistingAliclikGuide(
         if (page >= totalPages || !(result.data.data ?? []).length) break;
       }
     }
-    if (!candidates.size && errors.length === ctx.clients.length) {
-      return { error: `No se pudo consultar Aliclik: ${errors[0]}` };
-    }
-    const selected = selectExistingAliclikOrder(
-      [...candidates.values()].map(({ order }) => order),
-      {
-        orderName: ctx.row.order_name,
-        customerPhone: ctx.row.customer_phone,
-        orderTotal: ctx.row.order_total,
-        region: ctx.row.region,
-        province: ctx.row.province,
-        district: ctx.row.district,
-      },
-    );
-    if (selected.ok) {
-      remoteOrder = selected.match.order;
-      matchExplanation = selected.match.reasons.join(", ");
-      const key = normalizeExternalGuideCode(remoteOrder.orderNumber ?? "");
-      if (key) ctx.client = candidates.get(key)?.client ?? ctx.client;
-    } else if (selected.reason === "ambiguous") {
-      return {
-        error:
-          `Aliclik no expone el código impreso ${code} por API y encontramos más de un pedido ` +
-          "posible. No se vinculó nada; usa el código ALC del pedido para confirmar cuál corresponde.",
-      };
+    if (!remoteOrder) {
+      // La igualdad exacta ya resolvió la guía; el heurístico se aplica
+      // únicamente cuando Aliclik oculta el código impreso.
+      if (!candidates.size && errors.length === ctx.clients.length) {
+        return { error: `No se pudo consultar Aliclik: ${errors[0]}` };
+      }
+      const selected = selectExistingAliclikOrder(
+        [...candidates.values()].map(({ order }) => order),
+        {
+          orderName: ctx.row.order_name,
+          customerPhone: ctx.row.customer_phone,
+          orderTotal: ctx.row.order_total,
+          region: ctx.row.region,
+          province: ctx.row.province,
+          district: ctx.row.district,
+        },
+      );
+      if (selected.ok) {
+        remoteOrder = selected.match.order;
+        matchExplanation = selected.match.reasons.join(", ");
+        const key = normalizeExternalGuideCode(remoteOrder.orderNumber ?? "");
+        if (key) ctx.client = candidates.get(key)?.client ?? ctx.client;
+      } else if (selected.reason === "ambiguous") {
+        return {
+          error:
+            `Aliclik no expone el código impreso ${code} por API y encontramos más de un pedido ` +
+            "posible. No se vinculó nada; usa el código ALC del pedido para confirmar cuál corresponde.",
+        };
+      } else {
+        const best = selected.matches[0];
+        const matched = best?.reasons.length ? best.reasons.join(", ") : "ningún campo";
+        const missingReference = !best?.reasons.includes("pedido Shopify");
+        return {
+          error:
+            `Aliclik devolvió ${candidates.size} pedido(s), pero ninguno alcanzó una coincidencia segura. ` +
+            `El candidato más cercano coincidió en: ${matched}. ` +
+            (missingReference
+              ? `Falta que la API exponga la referencia Shopify ${ctx.row.order_name}.`
+              : "Falta corroborarlo por teléfono, monto o destino."),
+        };
+      }
     }
   }
   if (!remoteOrder) {
