@@ -96,6 +96,34 @@ describe("especificidad", () => {
     expect(specificity(tariff({ district: "el tambo" }), CTX)).not.toBeNull();
   });
 
+  it("Ayacucho / Huamanga / Huamanga hereda la tarifa distrital Ayacucho", () => {
+    const ayacucho: CostContext = {
+      storeId: STORE,
+      courier: "Aliclik",
+      region: "Ayacucho",
+      province: "Huamanga",
+      district: "Huamanga",
+    };
+    const tarifaAliclik = tariff({
+      id: "aliclik-ayacucho",
+      courier: "Aliclik",
+      district: "Ayacucho",
+      amount: 16.5,
+    });
+    expect(resolveTariff([tarifaAliclik], "primer_intento", ayacucho, "2026-07-30")?.amount).toBe(16.5);
+  });
+
+  it("el alias Ayacucho no se aplica fuera de Huamanga", () => {
+    const otroAmbito: CostContext = {
+      storeId: STORE,
+      courier: "Aliclik",
+      region: "Ayacucho",
+      province: "Cangallo",
+      district: "Huamanga",
+    };
+    expect(specificity(tariff({ district: "Ayacucho" }), otroAmbito)).toBeNull();
+  });
+
   it("a igual especificidad gana la vigencia más reciente", () => {
     const a = tariff({ id: "a", district: "El Tambo", amount: 15, effective_from: "2026-01-01" });
     const b = tariff({ id: "b", district: "El Tambo", amount: 18, effective_from: "2026-06-01" });

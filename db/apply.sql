@@ -173,4 +173,6 @@
 \ir migrations/0083_coverage_owned_by_db.sql
 \echo 'Applying 0084_tanders_payment_check.sql'
 \ir migrations/0084_tanders_payment_check.sql
+\echo 'Applying 0085_ayacucho_huamanga_tariff_alias.sql'
+\ir migrations/0085_ayacucho_huamanga_tariff_alias.sql
 \echo 'Done.'

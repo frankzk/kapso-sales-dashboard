@@ -73,6 +73,25 @@ function sameLabel(a: string | null, b: string | null): boolean {
   return norm(a) === norm(b);
 }
 
+/**
+ * Algunos tarifarios de Aliclik usan el nombre de la ciudad capital como
+ * distrito, mientras Shopify/ubigeo guarda la división administrativa real.
+ *
+ * La tarifa "Ayacucho" corresponde operativamente a
+ * Ayacucho / Huamanga / Huamanga. La excepción queda deliberadamente acotada
+ * por región y provincia: un distrito Huamanga de otro ámbito nunca heredará
+ * esa tarifa.
+ */
+function sameTariffDistrict(tariffDistrict: string, ctx: CostContext): boolean {
+  if (sameLabel(tariffDistrict, ctx.district)) return true;
+  return (
+    sameLabel(ctx.region, "Ayacucho") &&
+    sameLabel(ctx.province, "Huamanga") &&
+    sameLabel(ctx.district, "Huamanga") &&
+    sameLabel(tariffDistrict, "Ayacucho")
+  );
+}
+
 /** ¿La tarifa estaba vigente en esa fecha? Extremos inclusive. */
 export function isEffectiveOn(tariff: { effective_from: string; effective_to: string | null }, day: string): boolean {
   if (day < tariff.effective_from) return false;
@@ -107,7 +126,7 @@ export function specificity(tariff: CostTariff, ctx: CostContext): number | null
     score += 8;
   }
   if (tariff.district) {
-    if (!sameLabel(tariff.district, ctx.district)) return null;
+    if (!sameTariffDistrict(tariff.district, ctx)) return null;
     score += 16;
   }
   return score;
