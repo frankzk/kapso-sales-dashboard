@@ -1,6 +1,10 @@
 "use client";
 
-import type { ClientPerformanceMetric, ClientPerformanceMetricName } from "@/lib/performance-metrics";
+import {
+  DASHBOARD_SECTIONS,
+  type ClientPerformanceMetric,
+  type ClientPerformanceMetricName,
+} from "@/lib/performance-metrics";
 
 const PRIMARY_PANEL_PATHS = [
   "/dashboard/leads",
@@ -34,7 +38,9 @@ export function sanitizeDashboardPath(value: string): string {
   }
   if (pathname === "/dashboard") return pathname;
   const section = pathname.split("/").filter(Boolean)[1];
-  if (["leads", "pedidos", "envios", "productividad", "costos", "stores", "team"].includes(section ?? "")) {
+  // La lista vive en lib/performance-metrics.ts, que es también la que valida
+  // al recibir: si se mantuvieran por separado volverían a separarse.
+  if ((DASHBOARD_SECTIONS as readonly string[]).includes(section ?? "")) {
     return `/dashboard/${section}`;
   }
   return "/dashboard/other";

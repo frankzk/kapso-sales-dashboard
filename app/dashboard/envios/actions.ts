@@ -63,6 +63,9 @@ import {
 } from "@/lib/fenix-ledger";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { env } from "@/lib/env";
+import { createGuide, isSwaypAuthError, swaypOptsFromEnv } from "@/lib/swayp";
+import { buildSwaypGuideInput, parseSenders } from "@/lib/swayp-guide";
 import type {
   LinkedShipmentSummary,
   OrderLineItem,
@@ -930,6 +933,102 @@ export async function setShipmentStatus(
 }
 
 /**
+ * Audited exception for a customer who re-confirms after a guide was cancelled.
+ * The cancelled guide is never silently reopened: it becomes the transferred
+ * parent and a brand-new active Fenix guide is created with the requested date.
+ */
+export async function reprogramCancelledShipmentException(
+  shipmentId: string,
+  input: { nextFollowupAt?: string | null; note?: string | null },
+): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a esta guía." };
+
+  const note = input.note?.trim() ?? "";
+  if (!note) {
+    return { error: "Explica por qué se autoriza reprogramar esta guía anulada." };
+  }
+  if (!isFutureShipmentFollowup(input.nextFollowupAt)) {
+    return { error: "Elige una fecha futura para la nueva entrega." };
+  }
+
+  const admin = createAdminSupabase();
+  const { data: shipment, error: shipmentError } = await admin
+    .from("shipments")
+    .select("id,courier,guide_code,delivery_status,order_id,order_name,city,product,fenix_eligible,fenix_shipment_id")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (shipmentError || !shipment) {
+    return { error: shipmentError?.message ?? "Guía no encontrada." };
+  }
+
+  const current = shipment as {
+    guide_code: string;
+    delivery_status: string;
+    order_id: string | null;
+    order_name: string | null;
+    city: string | null;
+    product: string | null;
+    fenix_eligible: boolean;
+    fenix_shipment_id: string | null;
+  };
+  if (current.delivery_status !== "anulado") {
+    return { error: "La guía ya cambió de estado. Actualiza el panel antes de continuar." };
+  }
+  if (current.fenix_shipment_id) {
+    return { error: "Esta guía anulada ya tiene una guía Fenix de reemplazo." };
+  }
+
+  const guideCode = rescheduleGuideCode(current.order_name, input.nextFollowupAt);
+  if (!guideCode) {
+    return { error: "Este envío no tiene N° de pedido para generar automáticamente la nueva guía Fenix." };
+  }
+
+  // Never use the cached flag for this exception: inventory may have changed
+  // since the Excel import or since the drawer was opened.
+  const currentFenix = await resolveCurrentFenixEligibility(admin, ctx.storeId, current);
+  if ("error" in currentFenix) {
+    return { error: `No se pudo validar el stock Fenix: ${currentFenix.error}` };
+  }
+  if (currentFenix.eligible !== current.fenix_eligible) {
+    await admin
+      .from("shipments")
+      .update({ fenix_eligible: currentFenix.eligible })
+      .eq("id", shipmentId);
+  }
+  if (!currentFenix.eligible) {
+    return {
+      error: currentFenix.reason === "sin_stock"
+        ? `Fenix no tiene stock disponible para este pedido en ${current.city ?? "la ciudad indicada"}.`
+        : `Fenix no tiene cobertura en ${current.city ?? "la ciudad indicada"}.`,
+    };
+  }
+
+  const auditNote = `Excepción sobre guía anulada ${current.guide_code}. Motivo: ${note}`;
+  const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
+    childNextFollowupAt: input.nextFollowupAt,
+    expectedSourceStatus: "anulado",
+    parentAuditNote: `${auditNote}. Nueva guía Fenix: ${guideCode}.`,
+  });
+  if ("error" in spun) return { error: spun.error };
+
+  await admin.from("shipment_calls").insert({
+    shipment_id: spun.childId,
+    store_id: ctx.storeId,
+    agent: ctx.userId,
+    kind: "reroute",
+    new_status: "en_ruta",
+    note: `${auditNote}. Esta es la nueva guía activa.`,
+    next_followup_at: input.nextFollowupAt,
+  });
+
+  revalidatePath("/dashboard/envios");
+  return {
+    notice: `Excepción registrada. La guía anulada quedó en el historial y se creó ${spun.guideCode} para la nueva fecha.`,
+  };
+}
+
+/**
  * Spin off a Fenix sub-guide from a shipment: insert a second shipments row
  * (courier='fenix', En ruta) carrying the order snapshot, then freeze the source
  * shipment as `transferido` (the Fenix guide is the active shipment going
@@ -943,7 +1042,11 @@ async function spinOffFenixGuide(
   ctx: { userId: string; storeId: string },
   shipmentId: string,
   guideCode: string,
-  opts: { childNextFollowupAt?: string | null } = {},
+  opts: {
+    childNextFollowupAt?: string | null;
+    expectedSourceStatus?: string;
+    parentAuditNote?: string;
+  } = {},
 ): Promise<{ error: string } | { childId: string; guideCode: string }> {
   const code = guideCode.trim().toUpperCase();
   if (!code) return { error: "Ingresa el número de guía de Fenix." };
@@ -973,6 +1076,9 @@ async function spinOffFenixGuide(
   }
   if (source.fenix_shipment_id) {
     return { error: "Este envío ya tiene una guía Fenix." };
+  }
+  if (opts.expectedSourceStatus && source.delivery_status !== opts.expectedSourceStatus) {
+    return { error: "La guía cambió de estado antes de guardar. Actualiza el panel y vuelve a revisarla." };
   }
 
   const p = parent as unknown as Record<string, unknown>;
@@ -1020,7 +1126,7 @@ async function spinOffFenixGuide(
   // fenix_shipment_id is still null, so two concurrent spin-offs can't both
   // transfer the same parent (each would otherwise leave an orphan En ruta
   // child). If we lost the race, roll back the child we just inserted.
-  const { data: transferred, error: updErr } = await admin
+  let transferQuery = admin
     .from("shipments")
     .update({
       fenix_shipment_id: child.id,
@@ -1031,7 +1137,11 @@ async function spinOffFenixGuide(
       claimed_at: null,
     })
     .eq("id", shipmentId)
-    .is("fenix_shipment_id", null)
+    .is("fenix_shipment_id", null);
+  if (opts.expectedSourceStatus) {
+    transferQuery = transferQuery.eq("delivery_status", opts.expectedSourceStatus);
+  }
+  const { data: transferred, error: updErr } = await transferQuery
     .select("id")
     .maybeSingle();
   if (updErr || !transferred) {
@@ -1043,7 +1153,8 @@ async function spinOffFenixGuide(
     store_id: ctx.storeId,
     agent: ctx.userId,
     kind: "reroute",
-    note: `Guía Fenix creada: ${code}`,
+    new_status: "transferido",
+    note: opts.parentAuditNote ?? `Guía Fenix creada: ${code}`,
   });
 
   return { childId: child.id as string, guideCode: code };
@@ -1432,6 +1543,51 @@ export async function previewDirectFenixGuide(input: {
  * every line item → dispatch date → guide code) before inserting the
  * courier='fenix' row — En ruta, sin guía madre, marcada created_via='fenix_directo'.
  */
+/**
+ * Pide la guía a Swayp y devuelve el número que ELLOS emiten — el reemplazo del
+ * código inventado localmente por autoFenixGuideCode/rescheduleGuideCode.
+ *
+ * Nunca lanza: cualquier problema (integración apagada, bodega sin configurar,
+ * dirección inválida, API caída, token muerto) vuelve como `skipped` y el
+ * llamador sigue con el alta manual. Es una operación viva; dejar al operador
+ * bloqueado porque un courier no responde sería peor que una guía manual.
+ *
+ * No reintenta a propósito: la API no acepta clave de idempotencia, así que un
+ * POST repetido tras un timeout crearía una segunda guía y un segundo paquete.
+ */
+async function createFenixGuideViaApi(args: {
+  city: string;
+  district: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
+  address1: string | null;
+  reference: string | null;
+  lineItems: Array<{ title: string; quantity: number }>;
+  codAmount: number;
+  dispatchDateIso?: string | null;
+  observaciones?: string | null;
+}): Promise<{ ok: true; guia: string; idEstado: number } | { ok: false; reason: string }> {
+  if (!env.swaypEnabled()) return { ok: false, reason: "integración Swayp desactivada" };
+
+  const built = buildSwaypGuideInput({ ...args, senders: parseSenders(env.swaypSenders()) });
+  if (!built.ok) return { ok: false, reason: built.error };
+
+  try {
+    const created = await createGuide(swaypOptsFromEnv(), built.input);
+    return { ok: true, guia: String(created.guia), idEstado: created.idEstado };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "error desconocido";
+    // Visible en los logs de Vercel. El motivo también sube al operador en el
+    // aviso de la acción, que es hoy la única señal de que la API dejó de
+    // responder — el token de Swayp no se puede renovar por código.
+    console.error(
+      isSwaypAuthError(e) ? "[swayp] CREDENCIAL INVÁLIDA — pedir token nuevo a Swayp:" : "[swayp] createGuide falló:",
+      msg,
+    );
+    return { ok: false, reason: isSwaypAuthError(e) ? "la credencial de Swayp ya no es válida" : msg };
+  }
+}
+
 export async function createDirectFenixGuide(input: {
   orderId: string;
   dispatchDateIso: string;
@@ -1522,7 +1678,39 @@ export async function createDirectFenixGuide(input: {
     return { error: "Elige una fecha de despacho desde mañana." };
   }
 
-  const code = (input.guideCode?.trim().toUpperCase() || rescheduleGuideCode(order.name, input.dispatchDateIso)).trim();
+  // Guía por API. Sólo cuando el operador NO escribió un código a mano: si lo
+  // escribió es porque la generó él en el sistema de Swayp, y pedir otra
+  // duplicaría el paquete. Cuando Swayp responde, SU número pasa a ser el
+  // guide_code — el punto de todo esto es dejar de inventarlo localmente.
+  let swaypGuide: string | null = null;
+  let swaypState: number | null = null;
+  let swaypNotice = "";
+  if (!input.guideCode?.trim()) {
+    const viaApi = await createFenixGuideViaApi({
+      city,
+      district,
+      customerName: address?.name ?? null,
+      customerPhone: order.customer_phone ?? normalizePhone(address?.phone) ?? null,
+      address1: address?.address1 ?? null,
+      reference: address?.address2 ?? null,
+      lineItems,
+      codAmount: Math.max(0, (order.total_amount ?? 0) - totalRefunded),
+      dispatchDateIso: input.dispatchDateIso,
+      observaciones: input.note?.trim() || null,
+    });
+    if (viaApi.ok) {
+      swaypGuide = viaApi.guia;
+      swaypState = viaApi.idEstado;
+    } else if (env.swaypEnabled()) {
+      // El operador tiene que enterarse de que la guía NO existe en Swayp: es
+      // la única señal de que hay que cargarla a mano allá.
+      swaypNotice = ` Swayp no la emitió (${viaApi.reason}); quedó con código manual.`;
+    }
+  }
+
+  const code =
+    swaypGuide ??
+    (input.guideCode?.trim().toUpperCase() || rescheduleGuideCode(order.name, input.dispatchDateIso)).trim();
   if (!code) {
     return { error: "El pedido no tiene número para autogenerar; ingresa el código de guía manualmente." };
   }
@@ -1530,6 +1718,8 @@ export async function createDirectFenixGuide(input: {
   const insertRow = {
     courier: "fenix",
     guide_code: code,
+    swayp_guide: swaypGuide,
+    swayp_state: swaypState,
     store_id: order.store_id,
     order_id: order.id,
     matched: true,
@@ -1557,11 +1747,19 @@ export async function createDirectFenixGuide(input: {
     insertResult.error &&
     (insertResult.error.code === "PGRST204" ||
       insertResult.error.code === "42703" ||
-      insertResult.error.message.toLowerCase().includes("created_via"))
+      insertResult.error.message.toLowerCase().includes("created_via") ||
+      insertResult.error.message.toLowerCase().includes("swayp"))
   ) {
-    // 0043 may land moments after the app deploy — keep the flow alive without
-    // the origin marker rather than failing every direct guide.
-    const { created_via: _createdVia, ...legacyRow } = insertRow;
+    // 0043/0045 may land moments after the app deploy — keep the flow alive
+    // without the origin marker or the Swayp ids rather than failing every
+    // direct guide. The guide still exists in Swayp; only the local link is
+    // missing until the migration runs.
+    const {
+      created_via: _createdVia,
+      swayp_guide: _swaypGuide,
+      swayp_state: _swaypState,
+      ...legacyRow
+    } = insertRow;
     insertResult = await admin.from("shipments").insert(legacyRow).select("id").single();
   }
   if (insertResult.error || !insertResult.data) {
@@ -1600,7 +1798,7 @@ export async function createDirectFenixGuide(input: {
   // guía— y la resalte: creándola desde "Pendiente" el refresco no muestra nada
   // porque la guía nueva no pertenece a esa lista.
   return {
-    notice: `Guía Fenix directa ${code} creada — En ruta, despacho ${fecha}.`,
+    notice: `Guía Fenix directa ${code} creada — En ruta, despacho ${fecha}.${swaypNotice}`,
     shipmentId: childId,
   };
 }

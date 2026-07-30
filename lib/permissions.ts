@@ -45,6 +45,12 @@ export const PERMISSIONS = [
   // revisa un posible Yape a otra cuenta no puede ser cualquiera que pueda
   // tocar el pedido. Solo owner/admin.
   "tanders.review_payment",
+  // Liquidaciones de motorizados
+  "settlements.manage", // cargar liquidaciones y corregir vínculos
+  "settlements.close", // congelar el pago al motorizado: no se deshace
+  // Rutas de reparto
+  "routes.manage", // armar la ruta del día y asignarla
+  "routes.deliver", // reportar SUS propias paradas desde /reparto
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -70,6 +76,8 @@ export function isPermission(value: string): value is Permission {
 const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
   owner: PERMISSIONS,
   admin: PERMISSIONS,
+  // La vendedora carga la liquidación y corrige vínculos, pero NO la cierra:
+  // cerrar congela lo que se le paga al motorizado y no se deshace.
   vendedora: [
     "master.edit",
     "master.import_report",
@@ -77,8 +85,15 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "aliclik.create_guide",
     "tanders.create_guide",
     "shalom.create_guide",
+    "settlements.manage",
+    // Coordinar el reparto es operativo, no financiero: arma la ruta del día.
+    "routes.manage",
   ],
   viewer: [],
+  // El motorizado NO es un usuario del panel: entra a /reparto, ve solo su ruta
+  // y reporta sus paradas. No lee el Master, no ve pedidos que no sean suyos y
+  // no toca liquidaciones — la suya la cierra el coordinador.
+  motorizado: ["routes.deliver"],
 };
 
 /** Concesión o revocación explícita para un usuario concreto. */
@@ -134,6 +149,7 @@ export function isReadOnly(
 export function roleLabel(roles: readonly string[]): string {
   if (roles.includes("owner") || roles.includes("admin")) return "Administrador";
   if (roles.length && roles.every((r) => r === "vendedora")) return "Vendedora";
+  if (roles.length && roles.every((r) => r === "motorizado")) return "Motorizado";
   if (roles.length && roles.every((r) => r === "viewer")) return "Solo lectura";
   return "Equipo";
 }

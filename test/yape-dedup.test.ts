@@ -54,6 +54,60 @@ describe("findDuplicate — identificadores fuertes", () => {
     expect(normalizeOperationNumber(" 1234-5678 ")).toBe("12345678");
   });
 
+  it("no trata el monto ni el código de seguridad como nº de operación", () => {
+    expect(normalizeOperationNumber("30")).toBeNull();
+    expect(normalizeOperationNumber("551")).toBeNull();
+    expect(normalizeOperationNumber("030")).toBeNull();
+  });
+
+  it("dos Yapes de S/30 con operaciones distintas no son duplicados", () => {
+    const v = findDuplicate(
+      candidate({
+        amount: 30,
+        operation_number: "08615551",
+        paid_at: "2026-07-28T15:30:00.000Z",
+        payer_name: null,
+        payer_phone: null,
+        file_sha256: "captura-kp124914",
+      }),
+      [
+        existing({
+          amount: 30,
+          operation_number: "05510030",
+          paid_at: "2026-07-28T13:41:00.000Z",
+          payer_name: null,
+          payer_phone: null,
+          file_sha256: "captura-kp124905",
+        }),
+      ],
+    );
+    expect(v.duplicate).toBe(false);
+  });
+
+  it("ignora una operación OCR corta que ya quedó guardada por error", () => {
+    const v = findDuplicate(
+      candidate({
+        amount: 30,
+        operation_number: "30",
+        paid_at: "2026-07-28T15:30:00.000Z",
+        payer_name: null,
+        payer_phone: null,
+        file_sha256: "captura-kp124914",
+      }),
+      [
+        existing({
+          amount: 30,
+          operation_number: "30",
+          paid_at: "2026-07-28T13:41:00.000Z",
+          payer_name: null,
+          payer_phone: null,
+          file_sha256: "captura-kp124905",
+        }),
+      ],
+    );
+    expect(v.duplicate).toBe(false);
+  });
+
   it("la misma imagen renombrada se detecta por la huella", () => {
     const v = findDuplicate(
       candidate({ operation_number: null, amount: 99, paid_at: null, payer_name: null, payer_phone: null }),

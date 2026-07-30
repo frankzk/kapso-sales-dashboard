@@ -280,8 +280,42 @@ export interface YapeVoucherFields {
   payerName: string | null;
   /** A quién se pagó — sirve para detectar un Yape a otra cuenta. */
   recipientName: string | null;
+  /** Últimos 3 dígitos del celular destino, cuando aparecen en la captura. */
+  recipientPhoneLastDigits: string | null;
   ok: boolean;
   model: string;
+}
+
+export type YapeRecipientCheck = "verified" | "partial" | "mismatch" | "missing";
+
+function comparableRecipientName(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/**
+ * Verifica la cuenta receptora del negocio sin confundir "no se pudo leer" con
+ * una discrepancia real. La cuenta esperada es Grupo GF S.A.C. · ***309.
+ */
+export function checkYapeRecipient(
+  recipientName: string | null | undefined,
+  recipientPhoneLastDigits: string | null | undefined,
+): YapeRecipientCheck {
+  const name = comparableRecipientName(recipientName);
+  const phone = (recipientPhoneLastDigits ?? "").replace(/\D/g, "").slice(-3);
+  const hasName = Boolean(name);
+  const hasPhone = phone.length === 3;
+  const nameMatches = hasName && name.includes("grupo gf") && /\bs\s*a\s*c\b/.test(name);
+  const phoneMatches = hasPhone && phone === "309";
+
+  if ((hasName && !nameMatches) || (hasPhone && !phoneMatches)) return "mismatch";
+  if (nameMatches && phoneMatches) return "verified";
+  if (nameMatches || phoneMatches) return "partial";
+  return "missing";
 }
 
 const EXTRACT_SYSTEM_PROMPT =
@@ -295,13 +329,20 @@ function buildExtractPrompt(): string {
   return (
     "Transcribe el comprobante y devuelve JSON con esta forma exacta:\n" +
     "{\n" +
-    '  "operation_number": string|null,  // nº de operación / código de seguridad\n' +
+    '  "operation_number": string|null,  // valor rotulado exactamente "Nro. de operación"\n' +
+    '  "security_code": string|null,      // código de seguridad de 3 dígitos; dato distinto\n' +
     '  "amount": number|null,            // monto en soles, solo el número\n' +
     '  "date": string|null,              // fecha, tal como se ve (p. ej. "10 jul 2026")\n' +
     '  "time": string|null,              // hora, tal como se ve (p. ej. "02:35 pm")\n' +
     '  "payer_name": string|null,        // quien paga\n' +
-    '  "recipient_name": string|null     // quien recibe\n' +
+    '  "recipient_name": string|null,    // quien recibe\n' +
+    '  "recipient_phone_last_digits": string|null // últimos 3 dígitos del Nro. de celular destino\n' +
     "}\n" +
+    'IMPORTANTE: "Nro. de operación" y "Código de seguridad" NO son el mismo dato. ' +
+    "El número de operación aparece en DATOS DE LA TRANSACCIÓN y normalmente tiene " +
+    "varios dígitos; nunca uses como operation_number el código de seguridad de 3 " +
+    "dígitos, el monto, el celular ni parte de otro campo. Si no ves claramente la " +
+    'etiqueta "Nro. de operación" junto a su valor completo, operation_number es null. ' +
     "Si la imagen está recortada y algún dato no se ve completo, ese campo es null."
   );
 }
@@ -386,16 +427,31 @@ function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | nu
     if (typeof v === "number" && Number.isFinite(v)) return v;
     const s = str(v);
     if (!s) return null;
-    const n = Number(s.replace(/[^\d.,-]/g, "").replace(",", "."));
+    const cleaned = s.replace(/[^\d.,-]/g, "").replace(",", ".");
+    // Sin un dígito no hay número: `Number("")` es 0, así que un monto que el
+    // modelo no pudo leer ("ilegible", "—") se registraría como un S/ 0.00 dicho
+    // con toda confianza en vez de quedar vacío para que lo ponga una persona.
+    if (!/\d/.test(cleaned)) return null;
+    const n = Number(cleaned);
     return Number.isFinite(n) ? n : null;
   };
   const rawOperation = str(o.operation_number);
+  const cleanedOperation = rawOperation
+    ? rawOperation.toUpperCase().replace(/[^A-Z0-9]/g, "")
+    : "";
   return {
-    operationNumber: rawOperation ? rawOperation.toUpperCase().replace(/[^A-Z0-9]/g, "") || null : null,
+    // El código de seguridad de Yape tiene 3 dígitos. También hemos visto al
+    // modelo devolver aquí el monto ("30"). Un identificador tan corto no es
+    // confiable y se deja vacío para que el operador lo revise.
+    operationNumber: cleanedOperation.length >= 6 ? cleanedOperation : null,
     amount: num(o.amount),
     paidAt: parseVoucherInstant(str(o.date), str(o.time)),
     payerName: str(o.payer_name),
     recipientName: str(o.recipient_name),
+    recipientPhoneLastDigits: (() => {
+      const digits = (str(o.recipient_phone_last_digits) ?? "").replace(/\D/g, "");
+      return digits.length >= 3 ? digits.slice(-3) : null;
+    })(),
   };
 }
 
@@ -416,6 +472,7 @@ export async function extractYapeVoucher(
     paidAt: null,
     payerName: null,
     recipientName: null,
+    recipientPhoneLastDigits: null,
     ok: false,
     model,
   };
@@ -483,6 +540,7 @@ export async function extractYapeVoucherFromEnv(
       paidAt: null,
       payerName: null,
       recipientName: null,
+      recipientPhoneLastDigits: null,
       ok: false,
       model,
     };

@@ -17,6 +17,7 @@ export interface MasterFilters {
   regions: Set<string>;
   provinces: Set<string>;
   districts: Set<string>;
+  coverages: Set<string>;
   /** YYYY-MM-DD; extremos inclusive, vacío = sin límite. */
   createdFrom: string;
   createdTo: string;
@@ -49,6 +50,7 @@ export function emptyFilters(): MasterFilters {
     regions: new Set(),
     provinces: new Set(),
     districts: new Set(),
+    coverages: new Set(),
     createdFrom: "",
     createdTo: "",
     dispatchedFrom: "",
@@ -78,6 +80,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.regions.size > 0 ||
     f.provinces.size > 0 ||
     f.districts.size > 0 ||
+    f.coverages.size > 0 ||
     Boolean(f.createdFrom || f.createdTo) ||
     Boolean(f.dispatchedFrom || f.dispatchedTo) ||
     Boolean(f.movementFrom || f.movementTo) ||
@@ -131,6 +134,7 @@ export function matchesFilters(
   if (!inSet(f.regions, row.region)) return false;
   if (!inSet(f.provinces, row.province)) return false;
   if (!inSet(f.districts, row.district)) return false;
+  if (!inSet(f.coverages, row.coverage)) return false;
 
   // El filtro de courier mira el actual Y el último: buscar "los pedidos que
   // tocó Fenix" no debe perder los que ya pasaron a otra guía.
@@ -191,9 +195,10 @@ export type MasterSortKey =
   | "total";
 
 /**
- * Orden del listado. Por defecto "último movimiento", que es lo que el equipo
- * necesita para detectar lo que se quedó quieto. Los nulos van siempre al final:
- * un pedido sin fecha no debe encabezar la tabla por accidente.
+ * Orden del listado. El Master abre por "fecha de creación", que deja el
+ * correlativo corrido; "último movimiento" está a un clic para detectar lo que
+ * se quedó quieto. Los nulos van siempre al final: un pedido sin fecha no debe
+ * encabezar la tabla por accidente.
  */
 export function sortRows(
   rows: readonly OrderMasterRow[],

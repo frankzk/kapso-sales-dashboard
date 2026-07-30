@@ -4,8 +4,13 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { encryptOrNull } from "@/lib/crypto";
-import { fetchShopInfo, isValidShopDomain, registerOrderWebhooks } from "@/lib/shopify";
-import { runStoreSync } from "@/lib/ingest";
+import {
+  fetchShopInfo,
+  isValidShopDomain,
+  registerOrderWebhooks,
+  searchCatalogProducts,
+} from "@/lib/shopify";
+import { getStoreCreds, runStoreSync } from "@/lib/ingest";
 import { env } from "@/lib/env";
 
 export interface ActionState {
@@ -26,6 +31,124 @@ export async function signOut() {
   const sb = await createServerSupabase();
   await sb.auth.signOut();
   redirect("/login");
+}
+
+export async function saveAdPromotedProduct(input: {
+  adId: string;
+  productName: string;
+  skus: string[];
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireUser();
+  const adId = input.adId.trim();
+  const productName = input.productName.trim();
+  const skus = [...new Set(input.skus.map((sku) => sku.trim().toUpperCase()).filter(Boolean))];
+  if (!adId || !productName) return { ok: false, error: "Indica el anuncio y el producto promovido." };
+
+  // Authorization is established through a lead visible under the caller's RLS.
+  const sb = await createServerSupabase();
+  const { data: visibleLead } = await sb.from("leads").select("id").eq("ad_id", adId).limit(1).maybeSingle();
+  if (!visibleLead) return { ok: false, error: "No tienes acceso a este anuncio." };
+
+  const admin = createAdminSupabase();
+  const { error } = await admin.from("meta_ads").upsert(
+    {
+      ad_id: adId,
+      promoted_product_name: productName,
+      promoted_skus: skus,
+      promoted_product_updated_at: new Date().toISOString(),
+    },
+    { onConflict: "ad_id" },
+  );
+  if (error) {
+    const migrationHint = /promoted_product/i.test(error.message)
+      ? " Falta aplicar la migración 0071."
+      : "";
+    return { ok: false, error: `No se pudo guardar el producto.${migrationHint}` };
+  }
+  revalidatePath("/dashboard");
+  return { ok: true };
+}
+
+export interface PromotedProductSuggestion {
+  title: string;
+  skus: string[];
+  imageUrl: string | null;
+  stores: string[];
+}
+
+/** Search the authorized Shopify catalog(s) attached to an attributed ad. */
+export async function searchPromotedProducts(
+  storeIds: string[],
+  query: string,
+): Promise<{ products: PromotedProductSuggestion[]; error?: string }> {
+  await requireUser();
+  const q = query.trim();
+  const requested = [...new Set(storeIds.map((id) => id.trim()).filter(Boolean))].slice(0, 10);
+  if (q.length < 2 || !requested.length) return { products: [] };
+
+  // RLS is the authorization boundary before service-role credentials are read.
+  const sb = await createServerSupabase();
+  const { data: visibleStores, error } = await sb
+    .from("stores")
+    .select("id, name")
+    .in("id", requested);
+  if (error) return { products: [], error: "No se pudo validar el acceso al catálogo." };
+
+  const allowed = new Map(
+    (visibleStores ?? []).map((store) => [String(store.id), String(store.name ?? "Tienda")]),
+  );
+  if (!allowed.size) {
+    return { products: [], error: "No tienes acceso al catálogo de este anuncio." };
+  }
+
+  const searches = await Promise.all(
+    [...allowed.entries()].map(async ([storeId, storeName]) => {
+      const creds = await getStoreCreds(storeId);
+      if (!creds?.shopify_token) return { storeName, products: [] };
+      try {
+        const products = await searchCatalogProducts({
+          domain: creds.shopify_domain,
+          token: creds.shopify_token,
+          query: q,
+          first: 12,
+        });
+        return { storeName, products };
+      } catch {
+        return { storeName, products: [] };
+      }
+    }),
+  );
+
+  const merged = new Map<string, PromotedProductSuggestion>();
+  for (const result of searches) {
+    for (const product of result.products) {
+      const skus = [
+        ...new Set(
+          product.variants
+            .map((variant) => variant.sku?.trim().toUpperCase())
+            .filter((sku): sku is string => Boolean(sku)),
+        ),
+      ];
+      const key = `${product.title.trim().toLocaleLowerCase("es")}|${skus.join(",")}`;
+      const current = merged.get(key);
+      if (current) {
+        if (!current.stores.includes(result.storeName)) current.stores.push(result.storeName);
+      } else {
+        merged.set(key, {
+          title: product.title.trim(),
+          skus,
+          imageUrl: product.imageUrl,
+          stores: [result.storeName],
+        });
+      }
+    }
+  }
+
+  return {
+    products: [...merged.values()]
+      .sort((a, b) => a.title.localeCompare(b.title, "es"))
+      .slice(0, 20),
+  };
 }
 
 /** Bootstrap: create an organization and make the current user its owner. */

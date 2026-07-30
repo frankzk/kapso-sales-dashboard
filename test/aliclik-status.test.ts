@@ -152,3 +152,32 @@ describe("aliclikStatusLabel", () => {
     expect(aliclikStatusLabel({ status: "DELIVERED" })).toBe("DELIVERED");
   });
 });
+
+describe("IN_AGENCY: hub de Aliclik, no agencia Shalom", () => {
+  // Lo confirmó el dueño mirando su panel: para Aliclik, IN_AGENCY es su HUB
+  // LOCAL, donde el paquete espera para salir hacia la provincia y entrar en su
+  // reparto. No tiene nada que ver con el recojo en Shalom.
+  it("en contraentrega lo llama 'en traslado', no 'registrado en agencia'", () => {
+    const r = mapAliclikStatus({
+      callStatus: "CONFIRMED",
+      status: "PENDING_DELIVERY",
+      dispatchStatus: "IN_AGENCY",
+      isAgency: false,
+    });
+    expect(r.operational).toBe("en_traslado");
+    // Etiquetarlo como agencia haría que el equipo llamara a la clienta para
+    // que fuera a recoger un pedido que va a llegarle a la puerta.
+    expect(r.operational).not.toBe("registrado_en_agencia");
+    expect(r.pickupState).toBeNull();
+  });
+
+  it("en un envío que SÍ va por agencia, la etiqueta sigue siendo la correcta", () => {
+    const r = mapAliclikStatus({
+      callStatus: "CONFIRMED",
+      status: "PENDING_DELIVERY",
+      dispatchStatus: "IN_AGENCY",
+      isAgency: true,
+    });
+    expect(r.operational).toBe("registrado_en_agencia");
+  });
+});

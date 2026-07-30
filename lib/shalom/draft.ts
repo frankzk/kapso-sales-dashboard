@@ -303,3 +303,50 @@ export function buildShalomOrderPayload(input: ShalomDraftInput): ShalomDraftRes
 export function needsCustomDimensions(productTitle: string | null | undefined): boolean {
   return /otra\s*medida/i.test(productTitle ?? "");
 }
+/**
+ * Estados en los que Shalom todavía deja borrar la orden: mientras el paquete no
+ * haya llegado físicamente a la agencia.
+ *
+ * Se comprueba con NUESTRO estado antes de llamar, para no gastar una llamada ni
+ * ofrecer un botón que va a fallar. Pero la palabra final es de Shalom: si su
+ * reporte va con retraso, el paquete puede estar recibido sin que acá se sepa —
+ * por eso el error de la API se muestra tal cual en vez de traducirlo a algo
+ * tranquilizador.
+ */
+const CANCELABLE_PICKUP_STATES = new Set(["pendiente_de_envio"]);
+
+export function shalomGuideIsCancelable(guide: {
+  courier: string;
+  delivery_status: string;
+  pickup_state?: string | null;
+  shalom_order_id?: number | null;
+}): boolean {
+  if (guide.courier !== "shalom") return false;
+  // Sin `shalom_order_id` no hay nada que borrar por API: la guía llegó por el
+  // reporte Excel y su vida la gobierna el panel de Shalom.
+  if (!guide.shalom_order_id) return false;
+  if (guide.delivery_status !== "pendiente") return false;
+  return guide.pickup_state == null || CANCELABLE_PICKUP_STATES.has(guide.pickup_state);
+}
+
+/** Mínimo de un motivo de excepción. Corto de más es "ok" o ".", que no explica nada. */
+export const MIN_OVERRIDE_REASON = 10;
+
+/**
+ * Frenos BLANDOS: deshabilitan el botón pero se pueden saltar dejando un motivo
+ * escrito. No son `blockers` —esos son imposibles, como que el pedido ya tenga
+ * guía— sino reglas de la operación que casi siempre valen y a veces no.
+ *
+ * El envío por Shalom se cobra con adelanto, así que sin comprobante cargado no
+ * debería salir el paquete. Pero un bloqueo duro deja parado el caso legítimo
+ * raro —el cliente que pagó completo de una, el adelanto que entró por otro
+ * canal— y eso se nota el mismo día. El motivo escrito corta el descuido sin
+ * cortar la excepción, y de paso mide cuántas veces pasa de verdad: si en un mes
+ * no lo usa nadie, esto sube a bloqueo duro con datos en la mano.
+ */
+export function shalomSoftBlockers(paymentState: string | null): string[] {
+  if (paymentState !== "sin_pago") return [];
+  return [
+    "No hay ningún comprobante de adelanto cargado. El envío por Shalom se cobra con adelanto: regístralo en la pestaña «Pagos y clave» de este mismo pedido, o crea la guía igual explicando por qué.",
+  ];
+}

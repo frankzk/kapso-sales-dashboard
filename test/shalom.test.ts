@@ -10,6 +10,9 @@ import {
   shalomPhone,
   splitReceiverName,
   suggestedAgencyQuery,
+  shalomGuideIsCancelable,
+  shalomSoftBlockers,
+  MIN_OVERRIDE_REASON,
 } from "@/lib/shalom/draft";
 import {
   describeShalomError,
@@ -646,5 +649,87 @@ describe("permiso shalom.create_guide", () => {
 
   it("un viewer no crea guías", () => {
     expect(permissionsFor(["viewer"]).has("shalom.create_guide")).toBe(false);
+  });
+});
+
+describe("shalomGuideIsCancelable", () => {
+  const base = {
+    courier: "shalom",
+    delivery_status: "pendiente",
+    pickup_state: "pendiente_de_envio" as string | null,
+    shalom_order_id: 12345 as number | null,
+  };
+
+  it("deja anular mientras el paquete siga pendiente de envío", () => {
+    expect(shalomGuideIsCancelable(base)).toBe(true);
+    expect(shalomGuideIsCancelable({ ...base, pickup_state: null })).toBe(true);
+  });
+
+  // Este es el límite que pidió la operación: en cuanto Shalom tiene el paquete
+  // físicamente, borrar la orden por API deja de ser posible y de tener sentido.
+  it("bloquea en cuanto el paquete llegó a la agencia", () => {
+    for (const estado of [
+      "enviado_a_agencia",
+      "registrado_en_agencia",
+      "en_transito",
+      "disponible_para_recojo",
+      "pendiente_de_recojo",
+    ]) {
+      expect(shalomGuideIsCancelable({ ...base, pickup_state: estado })).toBe(false);
+    }
+  });
+
+  it("bloquea si la guía ya no está pendiente", () => {
+    expect(shalomGuideIsCancelable({ ...base, delivery_status: "en_ruta" })).toBe(false);
+    expect(shalomGuideIsCancelable({ ...base, delivery_status: "entregado" })).toBe(false);
+    expect(shalomGuideIsCancelable({ ...base, delivery_status: "anulado" })).toBe(false);
+  });
+
+  // Sin `shalom_order_id` la guía llegó por el reporte Excel: nació en el panel
+  // de Shalom y su vida la gobierna ese panel, no nosotros.
+  it("bloquea las guías que no se crearon por API", () => {
+    expect(shalomGuideIsCancelable({ ...base, shalom_order_id: null })).toBe(false);
+  });
+
+  it("no toca guías de otro courier", () => {
+    expect(shalomGuideIsCancelable({ ...base, courier: "aliclik" })).toBe(false);
+  });
+});
+
+describe("shalomSoftBlockers", () => {
+  // El envío por Shalom se cobra con adelanto: sin comprobante no debería salir
+  // el paquete. Pero se frena BLANDO, no duro — el caso legítimo raro (pagó
+  // completo de una, el adelanto entró por otro canal) existe, y un muro deja a
+  // la operadora parada el mismo día. El motivo escrito corta el descuido sin
+  // cortar la excepción.
+  it("frena cuando no hay ningún comprobante cargado", () => {
+    const soft = shalomSoftBlockers("sin_pago");
+    expect(soft).toHaveLength(1);
+    expect(soft[0]).toMatch(/adelanto/i);
+  });
+
+  it("no frena en cuanto hay algo cargado, aunque falte validarlo", () => {
+    // Cargado-sin-validar es un trámite pendiente, no un despacho sin cobro:
+    // frenar acá castigaría a quien SÍ hizo su parte.
+    for (const estado of [
+      "adelanto_cargado",
+      "adelanto_validado",
+      "diferencia_cargada",
+      "pago_completo",
+      "posible_duplicado",
+    ]) {
+      expect(shalomSoftBlockers(estado)).toHaveLength(0);
+    }
+  });
+
+  it("no frena si el estado de pago no se conoce", () => {
+    // Un pedido sin estado calculado no es un pedido sin cobro. Ante la duda no
+    // se estorba: el aviso ya está, y el freno se reserva para la certeza.
+    expect(shalomSoftBlockers(null)).toHaveLength(0);
+  });
+
+  it("el mínimo del motivo descarta un «ok» pero admite una frase", () => {
+    expect("ok".length).toBeLessThan(MIN_OVERRIDE_REASON);
+    expect("pagó por transferencia".length).toBeGreaterThanOrEqual(MIN_OVERRIDE_REASON);
   });
 });

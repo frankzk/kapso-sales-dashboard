@@ -46,7 +46,11 @@ export function AliclikCatalog({
       if (filter === "sin_mapear" && r.ean) return false;
       if (filter === "mapeados" && !r.ean) return false;
       if (!q) return true;
-      return r.title.toLowerCase().includes(q) || r.shopifySku.toLowerCase().includes(q);
+      return (
+        r.title.toLowerCase().includes(q) ||
+        (r.variantTitle ?? "").toLowerCase().includes(q) ||
+        r.shopifySku.toLowerCase().includes(q)
+      );
     });
   }, [view.rows, filter, search]);
 
@@ -177,6 +181,20 @@ function CatalogRowCard({
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-slate-900">{row.title}</p>
+          <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="font-medium uppercase tracking-wide text-slate-400">
+              Variante Shopify
+            </span>
+            <span
+              className={`rounded px-1.5 py-0.5 ${
+                row.variantTitle
+                  ? "bg-sky-50 font-medium text-sky-800"
+                  : "bg-slate-100 text-slate-500"
+              }`}
+            >
+              {row.variantTitle ?? "Sin variante"}
+            </span>
+          </p>
           <p className="mt-0.5 text-xs text-slate-500">
             SKU Shopify <code className="rounded bg-slate-100 px-1">{row.shopifySku}</code>
           </p>
@@ -185,6 +203,7 @@ function CatalogRowCard({
             <p className="mt-1 text-xs text-emerald-700">
               ✓ EAN {row.ean}
               {row.aliclikName ? ` · ${row.aliclikName}` : ""}
+              {row.aliclikVariant ? ` · Variante Aliclik: ${row.aliclikVariant}` : ""}
               {row.warehouseName ? ` · ${row.warehouseName}` : ""}
               {row.stockVirtual != null ? ` · stock ${row.stockVirtual}` : ""}
               {row.source === "auto" ? (
@@ -306,8 +325,14 @@ function SkuPicker({
       <div className="flex items-start gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm">
         <span className="min-w-0 flex-1">
           <span className="block truncate font-medium text-emerald-900">{chosen.label}</span>
+          {chosen.variantLabel ? (
+            <span className="block text-xs font-medium text-emerald-800">
+              Variante Aliclik: {chosen.variantLabel}
+            </span>
+          ) : null}
           <span className="text-xs text-emerald-700">
             EAN {chosen.ean}
+            {chosen.sku ? ` · SKU ${chosen.sku}` : ""}
             {chosen.warehouseName ? ` · ${chosen.warehouseName}` : ""}
             {chosen.stockVirtual != null ? ` · stock ${chosen.stockVirtual}` : ""}
           </span>
@@ -346,6 +371,8 @@ function SkuPicker({
             picked.current = {
               ean: suggestion.ean,
               label: suggestion.name,
+              variantLabel: null,
+              sku: null,
               warehouseName: null,
               stockVirtual: null,
             };
@@ -380,8 +407,14 @@ function SkuPicker({
                 className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm last:border-0 hover:bg-slate-50"
               >
                 <span className="block truncate text-slate-900">{o.label}</span>
+                {o.variantLabel ? (
+                  <span className="block text-xs font-medium text-sky-700">
+                    Variante Aliclik: {o.variantLabel}
+                  </span>
+                ) : null}
                 <span className="text-xs text-slate-500">
                   EAN {o.ean}
+                  {o.sku ? ` · SKU ${o.sku}` : ""}
                   {o.warehouseName ? ` · ${o.warehouseName}` : ""}
                   {o.stockVirtual != null ? ` · stock ${o.stockVirtual}` : ""}
                 </span>

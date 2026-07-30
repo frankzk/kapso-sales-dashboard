@@ -181,6 +181,18 @@ describe("sortRows", () => {
     expect(sortRows([a, b], "movement", "asc").map((r) => r.id)).toEqual(["1", "2"]);
   });
 
+  it("por fecha de creación deja el correlativo corrido pese al último movimiento", () => {
+    // Caso real: una importación de reporte mueve a la vez pedidos salteados
+    // del correlativo. Ordenando por creación no deben adelantar a sus vecinos.
+    const lote = "2026-07-26T21:11:05.000Z";
+    const c144 = row("144", { order_created_at: "2026-07-24T04:40:00.000Z", last_movement_at: lote });
+    const c145 = row("145", { order_created_at: "2026-07-24T04:50:00.000Z", last_movement_at: "2026-07-24T20:56:00.000Z" });
+    const c146 = row("146", { order_created_at: "2026-07-24T06:10:00.000Z", last_movement_at: lote });
+    expect(sortRows([c144, c145, c146], "created").map((r) => r.id)).toEqual(["146", "145", "144"]);
+    // Por último movimiento sí se agrupan los del lote y el 145 cae al final.
+    expect(sortRows([c144, c145, c146], "movement").map((r) => r.id)).toEqual(["144", "146", "145"]);
+  });
+
   it("los nulos van al final en ambas direcciones", () => {
     const a = row("1", { last_movement_at: null });
     const b = row("2", { last_movement_at: "2026-07-18T10:00:00.000Z" });

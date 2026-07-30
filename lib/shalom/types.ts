@@ -191,3 +191,15 @@ export class ShalomTimeoutError extends Error {
     this.name = "ShalomTimeoutError";
   }
 }
+
+/** Un resultado de `POST /v1/tracking/batch`. */
+export interface ShalomTrackResult {
+  custom_id?: string | null;
+  numero?: string | null;
+  ok: boolean;
+  tracking?: {
+    detailed?: boolean;
+    status?: Record<string, unknown> | null;
+  } | null;
+  error?: { code?: string | null; message?: string | null } | null;
+}

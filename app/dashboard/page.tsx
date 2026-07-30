@@ -4,9 +4,13 @@ import { redirect } from "next/navigation";
 import {
   getAccessibleStores,
   getAdNames,
+  getCampaignDeliveryOutcomes,
+  getCampaignLeadsForDashboard,
   getConversations,
   getLatestOps,
   getLeadsForDashboard,
+  getMetaAdPerformance,
+  getOrdersByIds,
   getOrders,
   getRollups,
   getUserRoleSummary,
@@ -61,11 +65,45 @@ async function ConsolidatedContent({
   const storeIds = stores.map((s) => s.id);
   const prev = previousRange(range);
   const leadsPromise = getLeadsForDashboard(storeIds, range);
-  const adNamesPromise = leadsPromise.then((leads) => getAdNames(leads.map((l) => l.ad_id)));
+  const campaignLeadsPromise = Promise.all(
+    stores.map((store) => getCampaignLeadsForDashboard(store.id, range, store.timezone)),
+  ).then((rows) => rows.flat());
+  // The consolidated dashboard used to omit Meta Insights entirely, so the
+  // campaign table fell back to conversion (for example 4.0%) where CPA should
+  // appear even though every store already had synchronized spend history.
+  const metaAdPerformancePromise = Promise.all(
+    storeIds.map((storeId) => getMetaAdPerformance(storeId, range)),
+  ).then((rows) => rows.flat());
+  const adNamesPromise = Promise.all([campaignLeadsPromise, metaAdPerformancePromise]).then(
+    ([leads, performance]) =>
+      getAdNames([
+        ...leads.map((lead) => lead.ad_id),
+        ...performance.map((row) => row.adId),
+      ]),
+  );
   const waNumbersPromise = leadsPromise.then((leads) =>
     getWaNumbers(leads.map((l) => l.wa_phone_number_id)),
   );
-  const [rollups, prevRollups, orders, conversations, leads, ops, adNames, waNumbers] =
+  const campaignOrdersPromise = campaignLeadsPromise.then((campaignLeads) =>
+    getOrdersByIds(storeIds, campaignLeads.map((lead) => lead.order_id)),
+  );
+  const campaignDeliveriesPromise = campaignLeadsPromise.then((leads) =>
+    getCampaignDeliveryOutcomes(leads.map((l) => l.order_id)),
+  );
+  const [
+    rollups,
+    prevRollups,
+    orders,
+    conversations,
+    leads,
+    ops,
+    adNames,
+    waNumbers,
+    campaignDeliveries,
+    campaignLeads,
+    campaignOrders,
+    metaAdPerformance,
+  ] =
     await Promise.all([
       getRollups(storeIds, range),
       getRollups(storeIds, prev),
@@ -75,6 +113,10 @@ async function ConsolidatedContent({
       getLatestOps(storeIds),
       adNamesPromise,
       waNumbersPromise,
+      campaignDeliveriesPromise,
+      campaignLeadsPromise,
+      campaignOrdersPromise,
+      metaAdPerformancePromise,
     ]);
 
   const first = stores[0]!;
@@ -95,6 +137,10 @@ async function ConsolidatedContent({
       timezone={first.timezone}
       adNames={adNames}
       waNumbers={waNumbers}
+      campaignDeliveries={campaignDeliveries}
+      campaignLeads={campaignLeads}
+      campaignOrders={campaignOrders}
+      metaAdPerformance={metaAdPerformance}
     />
   );
 }

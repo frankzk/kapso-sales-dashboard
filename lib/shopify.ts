@@ -1359,6 +1359,7 @@ export async function updateDraftOrder(
 export interface DraftOrderEdit {
   gid: string;
   name: string | null;
+  status: string | null;
   lineItems: { variantId: string | null; title: string; quantity: number; unitPrice: number | null }[];
   address: {
     name: string | null;
@@ -1374,6 +1375,7 @@ const DRAFT_ORDER_GET_QUERY = /* GraphQL */ `
     draftOrder(id: $id) {
       id
       name
+      status
       shippingAddress { address1 address2 city province name latitude longitude }
       lineItems(first: 50) {
         edges {
@@ -1409,6 +1411,7 @@ export async function getDraftOrderForEdit(
   return {
     gid: String(d.id),
     name: d.name ?? null,
+    status: d.status ? String(d.status).toLowerCase() : null,
     lineItems,
     address: {
       name: a.name ?? null,

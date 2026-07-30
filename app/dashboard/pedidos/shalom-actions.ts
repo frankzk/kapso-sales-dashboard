@@ -51,9 +51,14 @@ import {
 } from "@/lib/shalom/session";
 import {
   buildShalomOrderPayload,
+  documentError,
   generatePickupCode,
+  shalomSoftBlockers,
+  MIN_OVERRIDE_REASON,
+  normalizeDocument,
   splitReceiverName,
   suggestedAgencyQuery,
+  shalomGuideIsCancelable,
   DEFAULT_DECLARACION,
   DEFAULT_PAYER,
 } from "@/lib/shalom/draft";
@@ -91,13 +96,28 @@ export interface ShalomDraftView {
   receiverLastName: string;
   receiverSurName: string;
   receiverPhone: string | null;
+  /**
+   * Lo apuntado por adelantado al registrar el pago (0073). Es opcional y puede
+   * venir a medias: quien cobró tal vez tenía el DNI pero no la agencia.
+   */
+  prefilledDocumentType: ShalomDocumentType | null;
+  prefilledDocument: string | null;
+  prefilledTerminalId: number | null;
+  prefilledTerminalName: string | null;
   /** Clave de recojo generada en el servidor. Solo viaja si el rol puede verla. */
   pickupCode: string | null;
-  /** Motivos para NO crear la guía todavía. */
+  /** Motivos para NO crear la guía todavía. Imposibles: no se saltan. */
   blockers: string[];
+  /**
+   * Frenos que SÍ se pueden saltar, dejando un motivo escrito que queda en la
+   * línea de tiempo con el nombre de quien lo escribió.
+   */
+  softBlockers: string[];
   /** Cosas que el operador debería mirar antes de confirmar. */
   warnings: string[];
 }
+
+
 
 async function authorize(
   orderId: string,
@@ -207,13 +227,37 @@ export async function loadShalomDraft(
     "Shalom exige el documento del destinatario y el pedido no lo trae: pídeselo al cliente antes de crear la guía.",
   );
 
-  if (row.payment_state !== "pago_completo") {
+  // Faltar el adelanto frena de forma blanda (ver `shalomSoftBlockers`); tenerlo
+  // cargado pero sin validar es solo un trámite pendiente y se queda en aviso.
+  const softBlockers = shalomSoftBlockers(row.payment_state);
+  if (row.payment_state !== "sin_pago" && row.payment_state !== "pago_completo") {
     warnings.push(
       "El pedido todavía no tiene el pago completo validado. La guía se puede crear igual, pero la clave de recojo seguirá bloqueada hasta que se valide.",
     );
   }
 
   const split = splitReceiverName(row.customer_name);
+
+  // Lo que alguien dejó apuntado al registrar el pago (0073). Es el punto de todo
+  // el mecanismo: quien cobró tenía a la clienta al teléfono y el DNI a mano;
+  // quien crea la guía, normalmente ni una cosa ni la otra.
+  const { data: pre } = await admin
+    .from("shalom_order_drafts")
+    .select("document_type,document,destiny_terminal_id,destiny_terminal_name")
+    .eq("order_id", orderId)
+    .maybeSingle();
+  const prefilled = (pre ?? null) as {
+    document_type: string | null;
+    document: string | null;
+    destiny_terminal_id: number | null;
+    destiny_terminal_name: string | null;
+  } | null;
+
+  if (prefilled?.document) {
+    warnings.push(
+      `El documento y la agencia venían apuntados desde el registro del pago (${prefilled.document}${prefilled.destiny_terminal_name ? ` · ${prefilled.destiny_terminal_name}` : ""}). Verifícalos antes de crear.`,
+    );
+  }
 
   // La clave se genera en el servidor y NO viaja al cliente salvo que el rol ya
   // tenga permiso de verla: es la llave del paquete. Quien crea la guía no
@@ -238,8 +282,13 @@ export async function loadShalomDraft(
       receiverLastName: split.last_name,
       receiverSurName: split.sur_name,
       receiverPhone: row.customer_phone,
+      prefilledDocumentType: (prefilled?.document_type as ShalomDocumentType | null) ?? null,
+      prefilledDocument: prefilled?.document ?? null,
+      prefilledTerminalId: prefilled?.destiny_terminal_id ?? null,
+      prefilledTerminalName: prefilled?.destiny_terminal_name ?? null,
       pickupCode: perms.can("shalom.view_pickup_key") ? pickupCode : null,
       blockers,
+      softBlockers,
       warnings,
     },
   };
@@ -385,6 +434,11 @@ export interface CreateShalomInput {
   dimensions?: { weight_kg: number; height_m: number; length_m: number; width_m: number } | null;
   /** Solo lo manda un rol que puede ver la clave; si no, la genera el servidor. */
   pickupCode?: string;
+  /**
+   * Motivo para saltarse un freno blando (hoy: crear sin adelanto cargado).
+   * Se exige solo si de verdad hay freno, y queda escrito en la línea de tiempo.
+   */
+  overrideReason?: string | null;
 }
 
 export async function createShalomGuide(
@@ -411,6 +465,17 @@ export async function createShalomGuide(
   const [active] = await activeGuides(admin, orderId);
   if (active) {
     return { error: `El pedido ya tiene una guía activa: ${active.guide_code} (${active.courier}).` };
+  }
+
+  // Se revalida el freno blando ACÁ, no solo en el modal: un botón deshabilitado
+  // no es una autorización, y entre abrir el modal y confirmar pudo cargarse (o
+  // borrarse) el comprobante. El motivo se exige solo si el freno sigue vivo.
+  const soft = shalomSoftBlockers(row.payment_state);
+  const overrideReason = (input.overrideReason ?? "").trim();
+  if (soft.length && overrideReason.length < MIN_OVERRIDE_REASON) {
+    return {
+      error: `${soft.join(" ")} Para crearla igual hace falta un motivo de al menos ${MIN_OVERRIDE_REASON} caracteres: queda registrado con tu nombre en la línea de tiempo del pedido.`,
+    };
   }
 
   const store = await loadStoreShalom(admin, row.store_id);
@@ -586,7 +651,11 @@ export async function createShalomGuide(
     note:
       `Guía Shalom creada${recovered ? " (recuperada tras un corte de conexión)" : ""}.` +
       ` Destino: ${input.destinyTerminalName ?? input.destinyTerminalId}.` +
-      ` Paga: ${built.payload.payer === "sender" ? "remitente" : "destinatario"}.`,
+      ` Paga: ${built.payload.payer === "sender" ? "remitente" : "destinatario"}.` +
+      // El motivo va en la NOTA, no solo en el payload: la línea de tiempo se
+      // lee, el payload se consulta. Si alguien despachó sin cobro, tiene que
+      // verse al abrir el pedido, no al escarbar.
+      (soft.length ? ` CREADA SIN ADELANTO — motivo: ${overrideReason}` : ""),
     // La clave de recojo NO va en el evento: la línea de tiempo la ve cualquiera
     // con acceso al pedido, y la clave es la llave del paquete.
     payload: {
@@ -600,6 +669,7 @@ export async function createShalomGuide(
       payer: built.payload.payer,
       declaracion_jurada: built.payload.declaracion_jurada,
       recovered,
+      ...(soft.length ? { override_reason: overrideReason, override_of: soft } : {}),
     },
   });
 
@@ -620,5 +690,207 @@ export async function createShalomGuide(
     guideCode,
     codigo: result?.codigo ?? null,
     recovered,
+  };
+}
+
+/**
+ * Anula en Shalom una guía creada por API y la marca anulada acá.
+ *
+ * Es la simétrica de crear, y por eso tiene su misma cautela: crear emite una
+ * guía cobrable de un clic, así que deshacer no puede ser un clic más al lado.
+ * La confirmación explícita vive en el modal; acá se revalida todo, porque un
+ * botón deshabilitado no es una autorización.
+ *
+ * El `{id}` del borrado es el de `GET /v1/orders` (`shalom_order_id`), NO el
+ * `ose_id` ni la guía. Es exactamente el motivo de que haya tres columnas.
+ */
+export async function cancelShalomGuide(
+  shipmentId: string,
+): Promise<{ notice: string } | { error: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("shalom.create_guide")) return { error: "Tu rol no permite anular guías Shalom." };
+
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  const admin = createAdminSupabase();
+  const { data: shipmentRow } = await admin
+    .from("shipments")
+    .select("id,store_id,order_id,courier,guide_code,delivery_status,pickup_state,shalom_order_id,shalom_codigo")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (!shipmentRow) return { error: "No se encontró la guía." };
+
+  const guide = shipmentRow as {
+    id: string;
+    store_id: string;
+    order_id: string | null;
+    courier: string;
+    guide_code: string | null;
+    delivery_status: string;
+    pickup_state: string | null;
+    shalom_order_id: number | null;
+    shalom_codigo: string | null;
+  };
+  if (!(await authorizeStore(guide.store_id))) return { error: "Sin acceso a esta tienda." };
+
+  if (guide.courier !== "shalom") return { error: "Esta guía no es de Shalom." };
+  if (!guide.shalom_order_id) {
+    return {
+      error:
+        "Esta guía no se creó por API (llegó por el reporte), así que anularla hay que hacerlo en pro.shalom.pe.",
+    };
+  }
+  if (!shalomGuideIsCancelable(guide)) {
+    return {
+      error:
+        "Shalom ya no deja borrar esta guía: el paquete dejó de estar pendiente de envío. Si hay que anularla igual, se gestiona en agencia.",
+    };
+  }
+
+  const store = await loadStoreShalom(admin, guide.store_id);
+  const blocker = configurationBlocker(store);
+  if (blocker) return { error: blocker };
+
+  try {
+    // Anular SÍ puede renovar sesión y reintentar, a diferencia de crear: borrar
+    // es idempotente —borrar dos veces deja el mismo estado— mientras que un
+    // segundo POST /v1/orders sería una segunda guía cobrable.
+    await readWithFreshSession(admin, guide.store_id, store as StoreShalom, (client) =>
+      client.deleteOrder(guide.shalom_order_id as number),
+    );
+  } catch (err) {
+    return { error: `Shalom no anuló la guía: ${describeShalomError(err)}` };
+  }
+
+  // Solo se marca acá DESPUÉS de que Shalom confirme: al revés dejaría una guía
+  // viva en Shalom y anulada en el panel, que es la peor de las dos mentiras.
+  const updated = await admin
+    .from("shipments")
+    .update({
+      delivery_status: "anulado",
+      status_category: "closed",
+      pickup_state: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", guide.id);
+  if (updated.error) {
+    return {
+      error: `La guía SÍ se anuló en Shalom (${guide.guide_code ?? guide.shalom_order_id}) pero no se pudo marcar acá: ${updated.error.message}. Anótalo y corrígelo a mano.`,
+    };
+  }
+
+  if (guide.order_id) {
+    await admin.from("order_events").insert({
+      store_id: guide.store_id,
+      order_id: guide.order_id,
+      kind: "guide_cancelled",
+      occurred_at: new Date().toISOString(),
+      actor: user.id,
+      source: "shalom",
+      courier: "shalom",
+      guide_code: guide.guide_code,
+      note: `Guía Shalom anulada${guide.shalom_codigo ? ` (código ${guide.shalom_codigo})` : ""}.`,
+      payload: { shalom_order_id: guide.shalom_order_id, codigo: guide.shalom_codigo },
+    });
+    await recomputeOrderMasterSafe(admin, [guide.order_id]);
+  }
+  revalidatePath(MASTER_PATH);
+
+  return {
+    notice: `Guía Shalom anulada: ${guide.guide_code ?? guide.shalom_order_id}. La clave de recojo deja de tener paquete detrás.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Datos adelantados (0073)
+// ---------------------------------------------------------------------------
+
+export interface ShalomOrderDraftInput {
+  documentType?: ShalomDocumentType | null;
+  document?: string | null;
+  destinyTerminalId?: number | null;
+  destinyTerminalName?: string | null;
+}
+
+/**
+ * Apunta por adelantado el destinatario y la agencia de un pedido.
+ *
+ * Se llama desde el panel de PAGOS, no desde el de guías, y a propósito: quien
+ * registra el Yape acaba de hablar con la clienta y tiene el DNI a mano; quien
+ * crea la guía suele ser otra persona y otro momento. Adelantar el dato ahí
+ * ahorra volver a pedirlo.
+ *
+ * TODO es opcional, incluido no llamar a esta acción nunca: un cobro no puede
+ * quedar bloqueado porque falte un DNI. Lo que se manda vacío se limpia, para
+ * que corregir un dato mal puesto sea posible sin tener que borrar la fila.
+ */
+export async function saveShalomOrderDraft(
+  orderId: string,
+  input: ShalomOrderDraftInput,
+): Promise<{ notice: string } | { error: string }> {
+  const ctx = await authorize(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const { row } = ctx;
+
+  const documentType = input.documentType ?? null;
+  const rawDocument = (input.document ?? "").trim();
+  // Se valida con la misma función que usa la creación de la guía: apuntar acá
+  // un documento que Shalom va a rechazar solo mueve el error más tarde, a
+  // manos de alguien que ya no tiene a la clienta al teléfono.
+  if (rawDocument && documentType) {
+    const problem = documentError(documentType, rawDocument);
+    if (problem) return { error: problem };
+  }
+  const document = rawDocument ? normalizeDocument(documentType ?? "DNI", rawDocument) : null;
+
+  const terminalId = Number(input.destinyTerminalId ?? 0);
+  const admin = createAdminSupabase();
+  const { error } = await admin.from("shalom_order_drafts").upsert(
+    {
+      order_id: orderId,
+      store_id: row.store_id,
+      document_type: document ? (documentType ?? "DNI") : null,
+      document,
+      destiny_terminal_id: Number.isFinite(terminalId) && terminalId > 0 ? terminalId : null,
+      destiny_terminal_name: (input.destinyTerminalName ?? "").trim() || null,
+      updated_by: ctx.userId,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "order_id" },
+  );
+  if (error) return { error: error.message };
+
+  revalidatePath(MASTER_PATH);
+  return { notice: "Datos de Shalom guardados para cuando se cree la guía." };
+}
+
+/** Lo apuntado por adelantado, para pintarlo en el panel de pagos. */
+export async function loadShalomOrderDraft(
+  orderId: string,
+): Promise<{ draft: ShalomOrderDraftInput | null } | { error: string }> {
+  const sb = await createServerSupabase();
+  const { data } = await sb
+    .from("shalom_order_drafts")
+    .select("document_type,document,destiny_terminal_id,destiny_terminal_name")
+    .eq("order_id", orderId)
+    .maybeSingle();
+  if (!data) return { draft: null };
+  const row = data as {
+    document_type: string | null;
+    document: string | null;
+    destiny_terminal_id: number | null;
+    destiny_terminal_name: string | null;
+  };
+  return {
+    draft: {
+      documentType: (row.document_type as ShalomDocumentType | null) ?? null,
+      document: row.document,
+      destinyTerminalId: row.destiny_terminal_id,
+      destinyTerminalName: row.destiny_terminal_name,
+    },
   };
 }

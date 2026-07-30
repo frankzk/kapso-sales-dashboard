@@ -21,6 +21,7 @@ import { normalizeDistrict } from "@/lib/shipments";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
 import { computeLogisticsCost, costDay, type CostTariff } from "@/lib/costs";
+import { classifyOrderCoverage } from "@/lib/order-coverage";
 import {
   isGeneralStatus,
   isOperationalStatus,
@@ -45,10 +46,22 @@ const SHIPMENT_BASE_COLUMNS =
 const SHIPMENT_GESTION_COLUMNS =
   ",assigned_at,dispatched_at,out_for_delivery_at,rescheduled_at,closed_at," +
   "returned_at,pickup_state,agency_branch,agency_arrived_at,agency_expires_at";
+// Lo que Aliclik cotizó para esta guía concreta (0054). Va en su propio escalón
+// porque el costo real solo lo tienen las guías creadas por API: si la columna
+// aún no existe, el cálculo sigue funcionando con las tarifas de siempre.
+const SHIPMENT_COST_COLUMNS = ",quoted_delivery_cost,quoted_return_cost,created_via";
 const SHIPMENT_COLUMN_SETS = [
+  SHIPMENT_BASE_COLUMNS + SHIPMENT_GESTION_COLUMNS + SHIPMENT_COST_COLUMNS,
   SHIPMENT_BASE_COLUMNS + SHIPMENT_GESTION_COLUMNS,
   SHIPMENT_BASE_COLUMNS,
 ];
+
+/** Numérico utilizable, o null. Supabase devuelve los `numeric` como string. */
+function num(v: unknown): number | null {
+  if (v == null) return null;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
 
 /** PostgREST corta la respuesta en 1000 filas; se pagina siempre. */
 const PAGE = 1000;
@@ -101,6 +114,9 @@ interface ShipmentRecord {
   agency_branch?: string | null;
   agency_arrived_at?: string | null;
   agency_expires_at?: string | null;
+  quoted_delivery_cost?: number | null;
+  quoted_return_cost?: number | null;
+  created_via?: string | null;
 }
 
 interface CallRecord {
@@ -117,6 +133,17 @@ interface EventRecord {
   courier: string | null;
   new_status: string | null;
   new_operational: string | null;
+}
+
+interface HistoricalGeoRow {
+  order_id: string;
+  store_id: string;
+  customer_phone: string;
+  region: string;
+  province: string;
+  district: string;
+  geo_source: string | null;
+  order_created_at: string | null;
 }
 
 /** Agrupa por una clave, saltando las filas sin clave. */
@@ -226,6 +253,62 @@ async function fetchOrders(admin: SupabaseClient, ids: string[]): Promise<OrderR
     out.push(...((data ?? []) as unknown as OrderRecord[]));
   }
   return out;
+}
+
+/**
+ * Antecedentes de ubicación por tienda + teléfono.
+ *
+ * No se toma “el último y listo”: para poblar sin intervención tiene que haber
+ * dos antecedentes completos que coincidan, o una corrección manual previa.
+ * Si hay ubicaciones distintas, no se adivina y el pedido queda Por revisar.
+ */
+async function fetchHistoricalGeo(
+  admin: SupabaseClient,
+  orders: readonly OrderRecord[],
+): Promise<Map<string, HistoricalGeoRow[]>> {
+  const phones = [...new Set(orders.map((o) => o.customer_phone).filter((v): v is string => Boolean(v)))];
+  const stores = [...new Set(orders.map((o) => o.store_id))];
+  const out = new Map<string, HistoricalGeoRow[]>();
+  if (!phones.length || !stores.length) return out;
+
+  for (const phoneBatch of chunk(phones, 50)) {
+    const { data, error } = await admin
+      .from("order_master")
+      .select("order_id,store_id,customer_phone,region,province,district,geo_source,order_created_at")
+      .in("customer_phone", phoneBatch);
+    if (error) return out;
+    for (const row of (data ?? []) as unknown as HistoricalGeoRow[]) {
+      if (!stores.includes(row.store_id)) continue;
+      if (!row.region || !row.province || !row.district) continue;
+      const key = `${row.store_id}|${row.customer_phone}`;
+      const bucket = out.get(key);
+      if (bucket) bucket.push(row);
+      else out.set(key, [row]);
+    }
+  }
+  return out;
+}
+
+function historicalGeoSuggestion(
+  order: OrderRecord,
+  history: Map<string, HistoricalGeoRow[]>,
+): HistoricalGeoRow | null {
+  if (!order.customer_phone) return null;
+  const rows = (history.get(`${order.store_id}|${order.customer_phone}`) ?? []).filter(
+    (row) =>
+      row.order_id !== order.id &&
+      (!order.created_at || !row.order_created_at || row.order_created_at < order.created_at),
+  );
+  if (!rows.length) return null;
+
+  const key = (row: HistoricalGeoRow) =>
+    [row.region, row.province, row.district]
+      .map((v) => normalizeDistrict(v))
+      .join("|");
+  const distinct = new Set(rows.map(key));
+  if (distinct.size !== 1) return null;
+  const manual = rows.find((row) => row.geo_source === "manual");
+  return manual ?? (rows.length >= 2 ? rows[0]! : null);
 }
 
 async function fetchShipments(admin: SupabaseClient, ids: string[]): Promise<ShipmentRecord[]> {
@@ -420,7 +503,7 @@ async function fetchTariffs(
 
   const { data, error } = await admin
     .from("cost_tariffs")
-    .select("id,store_id,courier,region,province,district,concept,amount,effective_from,effective_to")
+    .select("id,org_id,store_id,courier,region,province,district,concept,amount,effective_from,effective_to")
     .in("org_id", orgIds);
   // La fase 4 puede no estar aplicada todavía: sin tarifas, el costo queda vacío.
   if (error) return { tariffs, orgByStore };
@@ -487,7 +570,8 @@ export async function recomputeOrderMaster(
   const drafts = await fetchDraftAddresses(admin, orders);
   const geoOverrides = await fetchGeoOverrides(admin, ids);
   const signals = await fetchPaymentSignals(admin, ids);
-  const { tariffs } = await fetchTariffs(admin, [...new Set(orders.map((o) => o.store_id))]);
+  const { tariffs, orgByStore } = await fetchTariffs(admin, [...new Set(orders.map((o) => o.store_id))]);
+  const historicalGeo = await fetchHistoricalGeo(admin, orders);
 
   const shipmentsByOrder = groupBy(shipments, (s) => s.order_id);
   const callsByShipment = groupBy(calls, (c) => c.shipment_id);
@@ -500,12 +584,14 @@ export async function recomputeOrderMaster(
     const address = shopifyShippingAddress(order.raw);
     const guides = shipmentsByOrder.get(order.id) ?? [];
     const draft = drafts.get(order.id);
+    const historical = historicalGeoSuggestion(order, historicalGeo);
     districtByOrder.set(
       order.id,
       geoOverrides.get(order.id)?.district ??
         text(address?.city) ??
         guides.find((g) => g.district)?.district ??
         draft?.district ??
+        historical?.district ??
         null,
     );
   }
@@ -519,6 +605,7 @@ export async function recomputeOrderMaster(
     const orderEvents = eventsByOrder.get(order.id) ?? [];
     const address = shopifyShippingAddress(order.raw);
     const draft = drafts.get(order.id);
+    const historical = historicalGeoSuggestion(order, historicalGeo);
 
     const geoOverride = geoOverrides.get(order.id) ?? null;
     const district = districtByOrder.get(order.id) ?? null;
@@ -533,6 +620,7 @@ export async function recomputeOrderMaster(
       guides.find((g) => g.province)?.province ??
       geoHit?.province ??
       draft?.province ??
+      historical?.province ??
       null;
     // Shopify llama `province` al DEPARTAMENTO (Perú no tiene un tercer nivel).
     const region =
@@ -541,6 +629,7 @@ export async function recomputeOrderMaster(
       guides.find((g) => g.region)?.region ??
       geoHit?.department ??
       draft?.region ??
+      historical?.region ??
       null;
     const guideAddress = guides.find((g) => g.delivery_address);
     const streetAddress =
@@ -579,6 +668,8 @@ export async function recomputeOrderMaster(
             ? "courier"
             : geoHit
               ? "ubigeo"
+              : historical
+                ? "history"
               : address
                 ? "shopify"
                 : draft
@@ -609,6 +700,26 @@ export async function recomputeOrderMaster(
       now,
     });
 
+    // El costo REAL del envío, cuando el courier nos lo dijo. Solo lo tienen las
+    // guías creadas por API: al cotizar, Aliclik devuelve lo que va a cobrar por
+    // ESE destino concreto, y se guardó en la guía. Se usa el de la guía VIGENTE
+    // —no la primera ni la más barata— porque es la que está entregando.
+    //
+    // Las tarifas de `cost_tariffs` son una aproximación por distrito que existe
+    // porque históricamente el courier no nos daba el precio de cada guía; un
+    // precio exacto siempre le gana, y además el margen deja de depender de que
+    // alguien mantenga la tabla al día.
+    const activeGuide = state.guideCode
+      ? guides.find((g) => g.guide_code === state.guideCode)
+      : undefined;
+    const actualCost =
+      activeGuide?.created_via === "aliclik_api"
+        ? {
+            delivery: num(activeGuide.quoted_delivery_cost),
+            return: num(activeGuide.quoted_return_cost),
+          }
+        : null;
+
     return {
       store_id: order.store_id,
       order_id: order.id,
@@ -622,6 +733,21 @@ export async function recomputeOrderMaster(
       region,
       province,
       district,
+      // La cobertura la recalcula la base en un trigger (migración 0083) y este
+      // valor se descarta: la columna es derivada y `order_coverage_for` es su
+      // definición canónica. Se sigue mandando para que la fila quede completa
+      // aunque el trigger no esté aplicado todavía.
+      coverage: classifyOrderCoverage(
+        {
+          storeId: order.store_id,
+          orgId: orgByStore.get(order.store_id) ?? null,
+          region,
+          province,
+          district,
+        },
+        tariffs,
+        now.slice(0, 10),
+      ),
       address: streetAddress,
       reference,
       latitude,
@@ -644,7 +770,7 @@ export async function recomputeOrderMaster(
       delivered_courier: state.deliveredCourier,
       returned_at: state.returnedAt,
       last_movement_at: state.lastMovementAt,
-      logistics_cost: tariffs.length
+      logistics_cost: tariffs.length || actualCost
         ? computeLogisticsCost(tariffs, {
             ctx: {
               storeId: order.store_id,
@@ -660,6 +786,7 @@ export async function recomputeOrderMaster(
               last_movement_at: state.lastMovementAt,
               order_created_at: order.created_at,
             }, now),
+            actual: actualCost ?? undefined,
           }).total
         : null,
       comment_count: orderEvents.filter((e) => e.kind === "comment").length,

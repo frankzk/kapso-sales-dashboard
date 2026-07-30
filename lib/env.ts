@@ -35,7 +35,11 @@ export const env = {
   anthropicApiKey: () => process.env.ANTHROPIC_API_KEY ?? "",
   anthropicApiBase: () =>
     (process.env.ANTHROPIC_API_BASE ?? "https://api.anthropic.com").replace(/\/$/, ""),
-  yapeVisionModel: () => process.env.YAPE_VISION_MODEL ?? "claude-opus-4-8",
+  // Modelo de visión (comprobantes Yape y hojas de liquidación fotografiadas).
+  // Sonnet 5 lee una captura o un cuaderno con solvencia y cuesta bastante menos
+  // que Opus, que es lo que importa cuando esto corre una vez por comprobante.
+  // Se puede subir de gama con YAPE_VISION_MODEL sin tocar código.
+  yapeVisionModel: () => process.env.YAPE_VISION_MODEL ?? "claude-sonnet-5",
 
   // --- Master de Pedidos: desde qué fecha traer los pedidos de Shopify que no
   //     son del bot. Sin esto la reconciliación pagina hasta el primer pedido de
@@ -46,6 +50,28 @@ export const env = {
     return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : "2026-06-01";
   },
   yapeVisionEnabled: () => Boolean(process.env.ANTHROPIC_API_KEY),
+
+  // --- Swayp (ex-Fenix) last-mile API. The token is issued by hand per
+  //     integrator and there is NO login endpoint, so it can't be refreshed
+  //     programmatically: when it stops working a human has to request a new
+  //     one. `swaypEnabled` gates the whole integration so the manual guide
+  //     flow keeps working untouched while this is unconfigured. ---
+  swaypApiBase: () =>
+    (process.env.SWAYP_API_BASE ?? "https://us-central1-swayp-staging.cloudfunctions.net/api")
+      .replace(/\/$/, ""),
+  //     Se recortan los tres valores, por lo mismo que SHALOM_API_KEY más abajo:
+  //     pegar un secreto en el panel de Vercel arrastra un espacio o un salto de
+  //     línea con muchísima facilidad y Vercel no los limpia. Acá duele el doble,
+  //     porque el webhook compara el token con un filtro de longitud previo: un
+  //     solo carácter invisible da 401 SIEMPRE, y del lado de Swayp es
+  //     indistinguible de haber copiado mal el token. Ya pasó en producción con
+  //     Shalom; no hay razón para repetirlo.
+  swaypToken: () => required("SWAYP_TOKEN").trim(),
+  swaypEmail: () => required("SWAYP_EMAIL").trim(),
+  swaypWebhookToken: () => (process.env.SWAYP_WEBHOOK_TOKEN ?? "").trim(),
+  /** JSON: ciudad de cobertura → datos de la bodega remitente. Ver lib/swayp-guide.ts. */
+  swaypSenders: () => process.env.SWAYP_SENDERS ?? "",
+  swaypEnabled: () => Boolean(process.env.SWAYP_TOKEN && process.env.SWAYP_EMAIL),
 
   // --- Aliclik: API de integración (crear guías desde el Master) ---
   //     La documentación solo publica el host de DESARROLLO, así que la base es

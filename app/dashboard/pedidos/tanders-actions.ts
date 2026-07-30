@@ -209,9 +209,9 @@ export async function loadTandersDraft(
       configured,
       originAddress: store?.tanders_origin_address ?? null,
       destination: suggestedDestination(row),
-      latitude: row.latitude,
-      longitude: row.longitude,
-      geoSource: row.geo_source,
+      latitude: row.latitude ?? null,
+      longitude: row.longitude ?? null,
+      geoSource: row.geo_source ?? null,
       recipientName: row.customer_name,
       recipientPhone: row.customer_phone,
       collectionAmount: defaultCollectionAmount({
@@ -268,8 +268,8 @@ export async function createTandersGuide(
   }
 
   // El punto: lo que pegó el operador manda sobre lo guardado.
-  let lat = row.latitude;
-  let lng = row.longitude;
+  let lat = row.latitude ?? null;
+  let lng = row.longitude ?? null;
   if (input.mapLink?.trim()) {
     const parsed = parseGeoLink(input.mapLink);
     if (!parsed.ok) return { error: parsed.error };
