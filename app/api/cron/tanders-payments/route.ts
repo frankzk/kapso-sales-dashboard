@@ -1,31 +1,35 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { decrypt } from "@/lib/crypto";
 import { env } from "@/lib/env";
 import { extractPaymentEvidence, TandersClient } from "@/lib/tanders/client";
 import { checkTandersPayment, REASON_LABEL } from "@/lib/tanders/payment-check";
-import { extractYapeVoucherFromEnv, analyzeYapeVoucherFromEnv, normalizeMediaType } from "@/lib/vision";
+import { readTandersPayment } from "@/lib/tanders/payment-vision";
+import { normalizeMediaType } from "@/lib/vision";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// Validación de las constancias de pago de Tanders.
+// Estado y cobro de las guías Tanders, en un solo barrido.
 //
-// POR QUÉ UN CRON Y NO UN BOTÓN. La constancia aparece cuando el repartidor
-// entrega, que es a cualquier hora y sin que nadie esté mirando el Master. Si
-// dependiera de que alguien abra el pedido, los cobros mal hechos se
-// descubrirían tarde o no se descubrirían.
+// EL ORDEN IMPORTA Y ES LA REGLA DEL NEGOCIO: que Tanders diga "entregado" no
+// basta para darlo por entregado acá. Primero se valida la constancia de pago; la
+// guía pasa a `entregado` SOLO si el dinero está confirmado. Una entrega sin
+// cobro validado se queda como está y espera a que alguien mire — que es
+// exactamente lo que no pasaba cuando el estado se copiaba tal cual.
 //
-// QUÉ COMPRUEBA. Que el comprobante sea un Yape real, a Grupo GF SAC, por el
-// monto de la guía. Un pago a otra cuenta es dinero que no llegó.
+// POR QUÉ UN CRON Y NO UN BOTÓN. La entrega y su constancia ocurren a cualquier
+// hora y sin que nadie esté mirando el Master.
 //
-// BLOQUEA. Mientras el resultado no sea `validado` (o un administrador lo dé por
-// bueno a mano), el pedido no cuenta como cobrado.
+// QUÉ SE ACEPTA COMO COBRO. Un comprobante real —Yape o transferencia BCP— a
+// Grupo GF SAC, por el monto de la guía. Un pago a otra cuenta es dinero que no
+// llegó; uno por otro medio no se puede conciliar después.
 //
-// El barrido es idempotente: una guía ya validada no se vuelve a analizar, así
-// que ejecutarlo de más no gasta llamadas al modelo ni dinero.
+// Idempotente: una guía ya entregada y validada no se vuelve a analizar, así que
+// ejecutarlo de más no gasta llamadas al modelo.
 
 const DAY_MS = 86_400_000;
 /** Días hacia atrás. Cubre "también las de esta semana" con margen. */
@@ -74,23 +78,31 @@ export async function GET(req: NextRequest) {
   const admin = createAdminSupabase();
   const since = new Date(Date.now() - LOOKBACK_DAYS * DAY_MS).toISOString();
 
-  // Entregas Tanders recientes que todavía no tienen un veredicto firme. Un
-  // `rechazado` tampoco se reanaliza: ya está esperando a un humano.
+  // Guías vivas: las que todavía no llegaron a un final. Una `rechazado` tampoco
+  // se reanaliza — ya está esperando a un humano.
   const { data, error } = await admin
     .from("shipments")
     .select(
       "id,store_id,guide_code,tanders_order_id,order_id,order_name,payment_check_state,tanders_raw",
     )
     .eq("courier", "tanders")
-    .eq("delivery_status", "entregado")
-    .gte("updated_at", since)
+    .in("delivery_status", ["pendiente", "en_ruta"])
+    .gte("created_at", since)
     .or("payment_check_state.is.null,payment_check_state.eq.pendiente")
     .limit(MAX_PER_RUN);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const candidates = (data as Candidate[]) ?? [];
 
-  const report = { scanned: candidates.length, validado: 0, rechazado: 0, pendiente: 0, errores: 0 };
+  const report = {
+    scanned: candidates.length,
+    en_curso: 0,
+    entregado: 0,
+    validado: 0,
+    rechazado: 0,
+    pendiente: 0,
+    errores: 0,
+  };
   const rejected: string[] = [];
 
   // Una sesión por tienda: el cliente cachea su token entre guías.
@@ -132,6 +144,15 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
+      // 1) ¿Tanders ya la dio por entregada? Si no, no hay nada que validar.
+      const order = await client.getOrder(row.tanders_order_id);
+      const delivered = String(order?.status ?? "").toUpperCase() === "DELIVERED";
+      if (!delivered) {
+        report.en_curso += 1;
+        continue;
+      }
+
+      // 2) La constancia de pago. Solo con ella se decide.
       const raw = await client.evidences(row.tanders_order_id);
       const payments = extractPaymentEvidence(raw);
       // Sin constancia identificable no se decide nada: queda pendiente, que
@@ -154,19 +175,17 @@ export async function GET(req: NextRequest) {
       const mediaType = normalizeMediaType(img.headers.get("content-type"));
 
       const creds = visionCreds.get(row.store_id) ?? {};
-      const [isVoucher, fields] = await Promise.all([
-        analyzeYapeVoucherFromEnv(base64, mediaType, creds),
-        extractYapeVoucherFromEnv(base64, mediaType, creds),
-      ]);
+      const reading = await readTandersPayment(base64, mediaType, creds);
 
       const expected = expectedAmount(row.tanders_raw);
       const verdict = checkTandersPayment({
         voucher: {
-          ok: isVoucher.ok && fields.ok,
-          isVoucher: isVoucher.isVoucher,
-          recipientName: fields.recipientName,
-          amount: fields.amount,
-          operationNumber: fields.operationNumber,
+          ok: reading.ok,
+          isVoucher: reading.isPaymentProof,
+          method: reading.method,
+          recipientName: reading.recipientName,
+          amount: reading.amount,
+          operationNumber: reading.operationNumber,
         },
         expectedAmount: expected,
       });
@@ -177,18 +196,25 @@ export async function GET(req: NextRequest) {
         image_url: evidence.imageUrl,
         state: verdict.state,
         reasons: verdict.reasons,
-        recipient_name: fields.recipientName,
-        amount: fields.amount,
-        operation_number: fields.operationNumber,
+        recipient_name: reading.recipientName,
+        amount: reading.amount,
+        operation_number: reading.operationNumber,
         expected_amount: expected,
-        model: fields.model,
+        model: reading.model,
         raw: raw as Record<string, unknown>,
       });
 
-      await admin
-        .from("shipments")
-        .update({ payment_check_state: verdict.state })
-        .eq("id", row.id);
+      // 3) El estado solo avanza con el cobro validado. Sin eso la guía se
+      //    queda donde está: darla por entregada sería dar por cobrado un
+      //    dinero que nadie confirmó.
+      const patch: Record<string, unknown> = { payment_check_state: verdict.state };
+      if (verdict.state === "validado") {
+        patch.delivery_status = "entregado";
+        patch.status_category = "delivered";
+        report.entregado += 1;
+      }
+      await admin.from("shipments").update(patch).eq("id", row.id);
+      if (row.order_id) await recomputeOrderMasterSafe(admin, [row.order_id]);
 
       report[verdict.state as "validado" | "rechazado" | "pendiente"] += 1;
       if (verdict.state === "rechazado") {

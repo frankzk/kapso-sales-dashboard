@@ -10,6 +10,7 @@ function voucher(over: Partial<Parameters<typeof checkTandersPayment>[0]["vouche
   return {
     ok: true,
     isVoucher: true,
+    method: "yape" as const,
     recipientName: "Grupo GF SAC",
     amount: 89,
     operationNumber: "12345678",
@@ -40,6 +41,21 @@ describe("checkTandersPayment", () => {
     const v = checkTandersPayment({ voucher: voucher(), expectedAmount: 89 });
     expect(v.state).toBe("validado");
     expect(v.reasons).toEqual([]);
+  });
+
+  it("acepta también una transferencia BCP a Grupo GF SAC", () => {
+    const v = checkTandersPayment({
+      voucher: voucher({ method: "bcp" }),
+      expectedAmount: 89,
+    });
+    expect(v.state).toBe("validado");
+    expect(v.summary).toContain("Transferencia BCP");
+  });
+
+  it("rechaza un medio que no es ni Yape ni BCP", () => {
+    const v = checkTandersPayment({ voucher: voucher({ method: "otro" }), expectedAmount: 89 });
+    expect(v.state).toBe("rechazado");
+    expect(v.reasons).toContain("medio_no_aceptado");
   });
 
   it("rechaza un Yape a otra cuenta y dice a quién se pagó", () => {

@@ -252,6 +252,10 @@ export interface TandersPaymentEvidence {
 }
 
 const PAYMENT_KEYS = ["payments", "pagos", "paymentEvidences"];
+/** Tanders guarda las constancias de PAGO bajo esta carpeta; la foto de la
+ *  entrega va en otra. Es el discriminante fiable, y no depende de cómo se
+ *  llamen las claves de su JSON. */
+const PAYMENT_PATH = "files_payment";
 const IMAGE_KEYS = ["imageUrl", "image_url", "url", "photoUrl", "photo", "evidenceUrl", "file"];
 
 function firstUrl(obj: Record<string, unknown>): string | null {
@@ -281,6 +285,37 @@ export function extractPaymentEvidence(body: unknown): TandersPaymentEvidence[] 
   const root = (body ?? {}) as Record<string, unknown>;
   const scopes = [root, (root.data ?? {}) as Record<string, unknown>];
 
+  // 1) Por la RUTA de la imagen. Tanders sube las constancias de pago a
+  //    `files_payment/<N° seguimiento>/…` y la foto de la entrega a otra
+  //    carpeta, así que esto separa las dos sin depender de la forma del JSON.
+  //    Se busca en todo el árbol: da igual bajo qué clave vengan.
+  const byPath: TandersPaymentEvidence[] = [];
+  const seen = new Set<string>();
+  const walk = (node: unknown, depth = 0) => {
+    if (depth > 6 || !node) return;
+    if (Array.isArray(node)) {
+      for (const n of node) walk(n, depth + 1);
+      return;
+    }
+    if (typeof node !== "object") return;
+    const obj = node as Record<string, unknown>;
+    const url = firstUrl(obj);
+    if (url && url.includes(PAYMENT_PATH) && !seen.has(url)) {
+      seen.add(url);
+      byPath.push({
+        imageUrl: url,
+        status: typeof obj.status === "string" ? obj.status : null,
+        amount: num(obj.amount ?? obj.monto),
+        method: typeof obj.method === "string" ? obj.method : null,
+        at: typeof obj.createdAt === "string" ? obj.createdAt : null,
+      });
+    }
+    for (const v of Object.values(obj)) walk(v, depth + 1);
+  };
+  walk(root);
+  if (byPath.length) return byPath;
+
+  // 2) Respaldo: bajo una clave que diga "pagos" de forma inequívoca.
   for (const scope of scopes) {
     for (const key of PAYMENT_KEYS) {
       const list = scope[key];

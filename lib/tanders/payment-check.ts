@@ -4,31 +4,35 @@
 // comprobante del pago. Solo la segunda importa acá — la primera no es un
 // comprobante y pasarla por el lector daría basura.
 //
-// Qué se comprueba: que el comprobante sea un Yape REAL, a Grupo GF SAC, por el
-// monto que la guía dice que había que cobrar. Un pago a otra cuenta es dinero
-// que no llegó; un monto distinto es un cobro mal hecho. Los dos exigen que
-// alguien mire, y hasta entonces el pedido no se da por cobrado.
+// Qué se comprueba: que sea un comprobante REAL —Yape o transferencia BCP, los
+// dos medios con los que el repartidor remite—, a Grupo GF SAC, por el monto que
+// la guía dice que había que cobrar. Un pago a otra cuenta es dinero que no
+// llegó; un monto distinto es un cobro mal hecho; un medio no acordado no se
+// puede conciliar después. Los tres exigen que alguien mire, y hasta entonces la
+// guía NO pasa a entregada.
 //
 // Puro y testeado: acá se decide si un cobro se da por bueno.
 
 /** Estado de la comprobación. El pedido solo se da por cobrado en `validado`. */
 export type PaymentCheckState =
   | "pendiente" // todavía no hay constancia, o no se pudo leer
-  | "validado" // Yape a Grupo GF SAC por el monto correcto
+  | "validado" // comprobante a Grupo GF SAC por el monto correcto
   | "rechazado" // se leyó y NO cuadra: exige revisión de un administrador
   | "revisado"; // un administrador lo miró y lo dio por bueno a mano
 
 /** Por qué se rechazó. Se guardan todos: el revisor ve el cuadro completo. */
 export type PaymentCheckReason =
   | "no_es_comprobante"
+  | "medio_no_aceptado"
   | "destinatario_distinto"
   | "monto_distinto"
   | "sin_destinatario"
   | "sin_monto";
 
 export const REASON_LABEL: Record<PaymentCheckReason, string> = {
-  no_es_comprobante: "La imagen no es un comprobante Yape",
-  destinatario_distinto: "El Yape NO va a Grupo GF SAC",
+  no_es_comprobante: "La imagen no es un comprobante de pago",
+  medio_no_aceptado: "El medio de pago no es Yape ni transferencia BCP",
+  destinatario_distinto: "El pago NO va a Grupo GF SAC",
   monto_distinto: "El monto no coincide con el de la guía",
   sin_destinatario: "No se pudo leer a quién se pagó",
   sin_monto: "No se pudo leer el monto",
@@ -50,6 +54,8 @@ export interface PaymentCheckInput {
     /** false = el modelo no pudo decidir (sin clave, timeout, ilegible). */
     ok: boolean;
     isVoucher: boolean;
+    /** El repartidor remite por Yape o por transferencia BCP: valen los dos. */
+    method: "yape" | "bcp" | "otro";
     recipientName: string | null;
     amount: number | null;
     operationNumber: string | null;
@@ -120,6 +126,10 @@ export function checkTandersPayment(input: PaymentCheckInput): PaymentCheckVerdi
     };
   }
 
+  // Los dos medios que la operación acepta. Cualquier otro exige que alguien
+  // mire: un pago por una vía no acordada no se puede conciliar después.
+  if (voucher.method === "otro") reasons.push("medio_no_aceptado");
+
   if (!voucher.recipientName) reasons.push("sin_destinatario");
   else if (!isExpectedRecipient(voucher.recipientName)) reasons.push("destinatario_distinto");
 
@@ -132,7 +142,9 @@ export function checkTandersPayment(input: PaymentCheckInput): PaymentCheckVerdi
     return {
       state: "validado",
       reasons: [],
-      summary: `Yape a ${EXPECTED_RECIPIENT}${voucher.amount != null ? ` por S/ ${voucher.amount.toFixed(2)}` : ""}.`,
+      summary: `${voucher.method === "bcp" ? "Transferencia BCP" : "Yape"} a ${EXPECTED_RECIPIENT}${
+        voucher.amount != null ? ` por S/ ${voucher.amount.toFixed(2)}` : ""
+      }.`,
     };
   }
 

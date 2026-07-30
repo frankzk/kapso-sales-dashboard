@@ -912,10 +912,16 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
 
 - **Needs migration 0064** (`shipments.payment_check_state`, tabla
   `tanders_payment_checks`).
-- **Cron `/api/cron/tanders-payments`**, cada 2 h. Barre las entregas Tanders de
-  los últimos 8 días sin veredicto firme, baja la constancia de pago, la pasa por
-  el lector de comprobantes que ya existe (`lib/vision.ts`, el mismo de los Yape
-  de adelanto) y guarda qué leyó.
+- **Cron `/api/cron/tanders-payments`**, cada 2 h. Barre las guías Tanders vivas
+  de los últimos 8 días: pregunta su estado, y si Tanders la da por entregada
+  baja la constancia de pago, la lee y guarda el veredicto.
+- **El orden es la regla del negocio**: que Tanders diga "entregado" NO basta.
+  La guía pasa a `entregado` en el Master **solo si el cobro valida**. Una
+  entrega sin cobro confirmado se queda donde está y espera a que alguien mire.
+- **Se aceptan dos medios**: Yape **o transferencia BCP**, los dos con los que el
+  repartidor remite. El lector de `lib/vision.ts` no sirve acá porque pregunta
+  "¿es un comprobante Yape?" y rechazaría un BCP legítimo; por eso
+  `lib/tanders/payment-vision.ts` tiene su propio prompt.
 - **Es un cron y no un botón** porque la constancia aparece cuando el repartidor
   entrega, a cualquier hora y sin que nadie mire el Master.
 - **Qué comprueba**: que sea un Yape real, **a Grupo GF SAC**, por el monto de la
@@ -929,11 +935,12 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   no lo sé" (no hay constancia, o el lector falló); rechazado es "esto está mal".
   Marcar un timeout del modelo como rechazo mandaría al equipo a investigar un
   fraude que no existe. Los dos bloquean; solo uno acusa.
-- **La separación entrega/pago falla cerrada.** `extractPaymentEvidence` solo
-  acepta lo que está bajo una clave que dice "pagos" de forma inequívoca: si su
-  API cambia de forma, devuelve vacío y la comprobación queda pendiente. Pasar la
-  foto de un paquete por el lector de comprobantes y decidir un cobro con eso
-  sería peor que no decidir.
+- **La separación entrega/pago va por la RUTA de la imagen.** Tanders sube las
+  constancias de pago a `files_payment/<N° seguimiento>/…` y la foto de la
+  entrega a otra carpeta, así que el discriminante no depende de cómo se llamen
+  las claves de su JSON. Si no encuentra ninguna, devuelve vacío y la
+  comprobación queda pendiente: pasar la foto de un paquete por el lector de
+  comprobantes y decidir un cobro con eso sería peor que no decidir.
 - El **nº de operación** se guarda indexado: un mismo comprobante reutilizado en
   dos entregas es exactamente lo que esta validación debe atrapar.
 - Idempotente: una guía ya validada no se reanaliza, así que ejecutarlo de más no
