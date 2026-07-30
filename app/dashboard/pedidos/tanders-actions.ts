@@ -26,6 +26,7 @@ import {
 } from "@/lib/tanders/draft";
 import { getStoreCreds } from "@/lib/ingest";
 import { fetchOrderById } from "@/lib/shopify";
+import { sweepTandersPayments, type SweepReport } from "@/lib/tanders/payment-sweep";
 import { TandersApiError } from "@/lib/tanders/types";
 import type { OrderMasterRow } from "@/lib/types";
 
@@ -570,4 +571,31 @@ export async function reviewTandersPayment(
 
   revalidatePath(MASTER_PATH);
   return { notice: "Cobro dado por bueno. Queda registrado quién y por qué." };
+}
+
+/**
+ * Revisión EN SECO de los cobros: lee las constancias y dice qué haría, sin
+ * escribir nada.
+ *
+ * Comparte el código con el cron —es el mismo `sweepTandersPayments`— porque una
+ * revisión que no recorriera el mismo camino no probaría nada sobre lo que hará
+ * el barrido de verdad.
+ *
+ * Vive acá y no detrás del secreto del cron porque ese secreto está marcado como
+ * sensible en Vercel y no se puede leer: pedirle a alguien que lo maneje para
+ * mirar unos veredictos era pedir lo que no hace falta. Con la sesión y el
+ * permiso de revisión alcanza.
+ */
+export async function dryRunTandersPayments(): Promise<
+  { report: SweepReport } | { error: string }
+> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("tanders.review_payment")) {
+    return { error: "Solo un administrador puede revisar los cobros." };
+  }
+  try {
+    return { report: await sweepTandersPayments(createAdminSupabase(), { dry: true }) };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "No se pudo revisar." };
+  }
 }
