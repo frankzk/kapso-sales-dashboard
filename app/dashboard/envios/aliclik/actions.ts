@@ -61,11 +61,18 @@ export async function syncCatalog(
   const creds = await getStoreCreds(storeId, ctx.admin);
   if (!creds?.aliclik_api_token) return { error: "Esta tienda no tiene token de Aliclik." };
 
-  const report = await syncAliclikCatalog(storeId, { apiToken: creds.aliclik_api_token }, ctx.admin);
+  const report = await syncAliclikCatalog(
+    storeId,
+    { apiToken: creds.aliclik_api_token },
+    ctx.admin,
+    creds.shopify_token
+      ? { domain: creds.shopify_domain, token: creds.shopify_token }
+      : undefined,
+  );
   revalidatePath(PATH);
   if (!report.ok) return { error: report.errors.join("; ") || "No se pudo sincronizar." };
   return {
-    notice: `Catálogo actualizado: ${report.skus} SKUs, ${report.agencies} agencias. ${report.autoMapped} mapeos nuevos automáticos.`,
+    notice: `Catálogo actualizado: ${report.shopifySkus} SKUs activos de Shopify, ${report.skus} SKUs de Aliclik, ${report.agencies} agencias. ${report.autoMapped} mapeos nuevos automáticos.`,
   };
 }
 
@@ -167,12 +174,20 @@ export interface AliclikSkuOption {
  */
 export async function loadCatalogView(storeId: string): Promise<CatalogView> {
   const admin = createAdminSupabase();
+  const creds = await getStoreCreds(storeId, admin);
 
   // `loadAllAliclikSkus` PAGINA. Sin eso se leían solo los primeros 1000 de los
   // ~3.700 del catálogo (PostgREST corta ahí), y dos tercios de los productos
   // aparecían "sin candidato automático" cuando su candidato sí existía.
   const [shopify, skus, mapRes] = await Promise.all([
-    loadShopifySkuDetails(storeId, admin),
+    loadShopifySkuDetails(
+      storeId,
+      admin,
+      365,
+      creds?.shopify_token
+        ? { domain: creds.shopify_domain, token: creds.shopify_token }
+        : undefined,
+    ),
     loadAllAliclikSkus(storeId, admin),
     admin.from("aliclik_sku_map").select("shopify_sku,ean,source").eq("store_id", storeId),
   ]);

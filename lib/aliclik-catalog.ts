@@ -23,6 +23,10 @@ import {
   type AliclikClientOpts,
   type AliclikProduct,
 } from "@/lib/aliclik";
+import {
+  listActiveShopifyCatalogVariants,
+  type ShopifyClientOpts,
+} from "@/lib/shopify";
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -457,6 +461,7 @@ export function flattenCatalog(
 export interface CatalogSyncResult {
   ok: boolean;
   skus: number;
+  shopifySkus: number;
   agencySkus: number;
   agencies: number;
   packageSizes: number;
@@ -478,10 +483,12 @@ export async function syncAliclikCatalog(
   storeId: string,
   opts: AliclikClientOpts,
   admin: SupabaseClient = createAdminSupabase(),
+  shopifyOpts?: ShopifyClientOpts,
 ): Promise<CatalogSyncResult> {
   const out: CatalogSyncResult = {
     ok: true,
     skus: 0,
+    shopifySkus: 0,
     agencySkus: 0,
     agencies: 0,
     packageSizes: 0,
@@ -541,9 +548,10 @@ export async function syncAliclikCatalog(
     if (s) seeds.set(s, { shopify_sku: s, ean: String(r.ean) });
   }
 
-  // Por nombre: hace falta el catálogo de Shopify, que aquí se deriva de las
-  // líneas de pedido — es la única fuente de SKU+título que tiene el sistema.
-  const shopifyProducts = await loadShopifySkuNames(storeId, admin);
+  // Para asociar por nombre se usa primero el catálogo activo de Shopify. Los
+  // productos observados en pedidos quedan como respaldo histórico.
+  const shopifyProducts = await loadShopifySkuNames(storeId, admin, 365, shopifyOpts);
+  out.shopifySkus = shopifyProducts.size;
   if (shopifyProducts.size) {
     // Un nombre que apunta a DOS EAN distintos es ambiguo: no se siembra ninguno
     // y queda para que lo decida una persona.
@@ -625,13 +633,9 @@ export async function syncAliclikCatalog(
 /**
  * SKU → título de los productos de Shopify de una tienda.
  *
- * El sistema no guarda un catálogo de Shopify: los productos solo existen dentro
- * de `orders.line_items`. Así que se derivan de ahí, quedándose con el título
- * más reciente de cada SKU (un producto puede haberse renombrado, y el nombre
- * que Aliclik tiene es el de ahora).
- *
- * Se limita a los pedidos recientes a propósito: un SKU que no se vende desde
- * hace un año no necesita mapeo, y recorrer la tabla entera para eso sería caro.
+ * La fuente primaria es el catálogo activo de Shopify, paginado directamente
+ * desde la Admin API. Los `orders.line_items` recientes se conservan como
+ * respaldo para SKUs históricos o productos que ya no estén activos.
  */
 export interface ShopifySkuDetails {
   title: string;
@@ -714,9 +718,25 @@ export async function loadShopifySkuDetails(
   storeId: string,
   admin: SupabaseClient = createAdminSupabase(),
   sinceDays = 365,
+  shopifyOpts?: ShopifyClientOpts,
 ): Promise<Map<string, ShopifySkuDetails>> {
   const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
   const out = new Map<string, ShopifySkuDetails>();
+
+  // Fuente primaria: catálogo activo real. Antes esta pantalla se armaba solo
+  // con productos que ya habían aparecido en `orders.line_items`; por eso un
+  // producto nuevo como Astaxantina era invisible hasta conseguir una venta.
+  if (shopifyOpts) {
+    const variants = await listActiveShopifyCatalogVariants(shopifyOpts);
+    for (const variant of variants) {
+      const sku = normalizeSku(variant.sku);
+      if (!sku || !variant.productTitle) continue;
+      out.set(sku, {
+        title: variant.productTitle,
+        variantTitle: variant.variantTitle,
+      });
+    }
+  }
 
   // Paginado: PostgREST corta en 1000 filas por respuesta.
   const PAGE = 1000;
@@ -759,8 +779,9 @@ export async function loadShopifySkuNames(
   storeId: string,
   admin: SupabaseClient = createAdminSupabase(),
   sinceDays = 365,
+  shopifyOpts?: ShopifyClientOpts,
 ): Promise<Map<string, string>> {
-  const details = await loadShopifySkuDetails(storeId, admin, sinceDays);
+  const details = await loadShopifySkuDetails(storeId, admin, sinceDays, shopifyOpts);
   return new Map([...details].map(([sku, item]) => [sku, item.title]));
 }
 

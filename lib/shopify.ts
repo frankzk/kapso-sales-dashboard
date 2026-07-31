@@ -985,6 +985,76 @@ export interface ProductVariantResult {
   imageUrl: string | null;
 }
 
+export interface ActiveShopifyCatalogVariant {
+  productId: string;
+  productTitle: string;
+  variantId: string;
+  variantTitle: string | null;
+  sku: string | null;
+  inventory: number | null;
+}
+
+const ACTIVE_CATALOG_VARIANTS_QUERY = /* GraphQL */ `
+  query ActiveCatalogVariants($first: Int!, $after: String) {
+    productVariants(first: $first, after: $after, sortKey: ID) {
+      nodes {
+        id
+        title
+        sku
+        inventoryQuantity
+        product { id title status }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+/** Descarga todas las variantes activas. No depende de ventas ni fechas. */
+export async function listActiveShopifyCatalogVariants(
+  opts: ShopifyClientOpts,
+): Promise<ActiveShopifyCatalogVariant[]> {
+  const out: ActiveShopifyCatalogVariant[] = [];
+  let after: string | null = null;
+
+  for (let page = 0; page < 400; page += 1) {
+    const data: any = await shopifyGraphQL<any>({
+      ...opts,
+      query: ACTIVE_CATALOG_VARIANTS_QUERY,
+      variables: { first: 250, after },
+    });
+    const connection: any = data?.productVariants;
+    const nodes = Array.isArray(connection?.nodes) ? connection.nodes : [];
+
+    for (const node of nodes) {
+      const product = node?.product ?? {};
+      if (String(product?.status ?? "").toUpperCase() !== "ACTIVE") continue;
+      const rawVariantTitle = String(node?.title ?? "").trim();
+      out.push({
+        productId: String(product?.id ?? ""),
+        productTitle: String(product?.title ?? "").trim(),
+        variantId: String(node?.id ?? ""),
+        variantTitle:
+          rawVariantTitle && rawVariantTitle.toLowerCase() !== "default title"
+            ? rawVariantTitle
+            : null,
+        sku: typeof node?.sku === "string" && node.sku.trim() ? node.sku.trim() : null,
+        inventory:
+          typeof node?.inventoryQuantity === "number" ? node.inventoryQuantity : null,
+      });
+    }
+
+    const pageInfo: any = connection?.pageInfo;
+    if (!pageInfo?.hasNextPage) break;
+    const next: string = typeof pageInfo?.endCursor === "string" ? pageInfo.endCursor : "";
+    if (!next || next === after) {
+      throw new Error("Shopify devolvió una paginación inválida del catálogo.");
+    }
+    after = next;
+  }
+
+  return out;
+}
+
 const PRODUCT_SEARCH_QUERY = /* GraphQL */ `
   query SearchProducts($q: String!, $first: Int!) {
     products(first: $first, query: $q, sortKey: RELEVANCE) {
