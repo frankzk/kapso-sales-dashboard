@@ -3,12 +3,51 @@ import {
   collectActiveShopifyCatalogDetails,
   collectShopifySkuDetails,
   flattenCatalog,
+  hydrateOrderLineSkusFromCatalog,
   normalizeSku,
   resolveAliclikItems,
   type AliclikSkuMapRow,
   type AliclikSkuRow,
   type OrderLineInput,
 } from "@/lib/aliclik-catalog";
+
+describe("hydrateOrderLineSkusFromCatalog", () => {
+  const astaxantina = {
+    productId: "gid://shopify/Product/100",
+    productTitle: "ASTAXANTINA - Antioxidante De Alta Potencia (120 Cápsulas)",
+    variantId: "gid://shopify/ProductVariant/200",
+    variantTitle: null,
+    sku: "69995815",
+    inventory: 81,
+  };
+
+  it("recupera el SKU actual por variant_id para un pedido histórico", () => {
+    const [result] = hydrateOrderLineSkusFromCatalog(
+      [line({ title: astaxantina.productTitle, sku: null, variantId: "200" })],
+      [astaxantina],
+    );
+    expect(result?.sku).toBe("69995815");
+  });
+
+  it("recupera el SKU de un producto inequívoco aunque el pedido no tenga IDs", () => {
+    const [result] = hydrateOrderLineSkusFromCatalog(
+      [line({ title: astaxantina.productTitle, sku: null })],
+      [astaxantina],
+    );
+    expect(result?.sku).toBe("69995815");
+  });
+
+  it("no adivina cuando dos variantes del mismo producto tienen SKUs distintos", () => {
+    const [result] = hydrateOrderLineSkusFromCatalog(
+      [line({ title: "CloudSlides", sku: null })],
+      [
+        { ...astaxantina, productTitle: "CloudSlides", variantTitle: "Negro", sku: "NEGRO" },
+        { ...astaxantina, variantId: "gid://shopify/ProductVariant/201", productTitle: "CloudSlides", variantTitle: "Beige", sku: "BEIGE" },
+      ],
+    );
+    expect(result?.sku).toBeNull();
+  });
+});
 
 describe("collectActiveShopifyCatalogDetails", () => {
   it("mantiene visible Astaxantina activa aunque Shopify no le haya asignado SKU", () => {

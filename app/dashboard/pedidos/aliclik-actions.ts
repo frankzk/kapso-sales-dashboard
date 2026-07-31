@@ -51,9 +51,12 @@ import {
 import { aliclikStatusLabel, mapAliclikStatus } from "@/lib/aliclik-status";
 import {
   loadCatalogFor,
+  hydrateOrderLineSkusFromCatalog,
   resolveAliclikItems,
+  type OrderLineInput,
   type ResolvedItem,
 } from "@/lib/aliclik-catalog";
+import { listActiveShopifyCatalogVariants, type ShopifyClientOpts } from "@/lib/shopify";
 import { MAX_ACCEPTABLE_LOSS, reconcileToOrderTotal } from "@/lib/aliclik-money";
 import {
   canScheduleExpress,
@@ -132,6 +135,7 @@ interface AliclikContext {
   row: OrderMasterRow;
   client: AliclikClientOpts;
   clients: AliclikClientOpts[];
+  shopify: ShopifyClientOpts | null;
 }
 
 /**
@@ -199,6 +203,10 @@ async function authorize(
       row,
       client: clients[0]!,
       clients,
+      shopify:
+        creds.shopify_token && creds.shopify_domain
+          ? { domain: creds.shopify_domain, token: creds.shopify_token }
+          : null,
     },
   };
 }
@@ -626,13 +634,31 @@ export async function previewAliclikGuide(
   if (!detail) return { ok: false, error: "No se pudo cargar el detalle del pedido." };
 
   const { skus, mapping } = await loadCatalogFor(ctx.storeId, admin);
+  let orderLines: OrderLineInput[] = detail.lineItems.map((line) => ({
+    title: line.title,
+    variantTitle: line.variant_title,
+    sku: line.sku,
+    productId: line.product_id,
+    variantId: line.variant_id,
+    quantity: line.quantity,
+    price: line.price,
+  }));
+
+  // Un pedido conserva el SKU que tenía al crearse. Si en Shopify se asignó
+  // después (caso ASTAXANTINA), la asociación del catálogo ya existe pero la
+  // línea histórica sigue vacía. Solo consultamos el catálogo vivo cuando hace
+  // falta y recuperamos el SKU por IDs estables o una coincidencia inequívoca.
+  if (orderLines.some((line) => !line.sku?.trim()) && ctx.shopify) {
+    try {
+      const activeVariants = await listActiveShopifyCatalogVariants(ctx.shopify);
+      orderLines = hydrateOrderLineSkusFromCatalog(orderLines, activeVariants);
+    } catch {
+      // El resolutor emitirá el bloqueo conservador "sin SKU". No se crea una
+      // guía con una identidad de producto que no se pudo verificar.
+    }
+  }
   const resolved = resolveAliclikItems(
-    detail.lineItems.map((l) => ({
-      title: l.title,
-      sku: l.sku,
-      quantity: l.quantity,
-      price: l.price,
-    })),
+    orderLines,
     mapping,
     skus,
     { modality },

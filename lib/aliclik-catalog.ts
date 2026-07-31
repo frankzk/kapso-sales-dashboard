@@ -54,7 +54,10 @@ export interface AliclikSkuMapRow {
 /** Lo que el resolutor necesita de cada línea del pedido. */
 export interface OrderLineInput {
   title: string | null;
+  variantTitle?: string | null;
   sku: string | null;
+  productId?: string | null;
+  variantId?: string | null;
   quantity: number;
   price: number | null;
 }
@@ -421,6 +424,73 @@ export function resolveAliclikItems(
     formatTimeAgency,
     warnings,
   };
+}
+
+function normalizeShopifyResourceId(raw: string | null | undefined): string {
+  const value = (raw ?? "").trim();
+  return value.match(/([^/]+)$/)?.[1]?.toLowerCase() ?? "";
+}
+
+function uniqueSku(
+  variants: readonly ActiveShopifyCatalogVariant[],
+): string | null {
+  const skus = [
+    ...new Set(variants.map((variant) => normalizeSku(variant.sku)).filter(Boolean)),
+  ];
+  return skus.length === 1 ? skus[0]! : null;
+}
+
+/**
+ * Repara el SKU de una línea histórica usando el catálogo ACTUAL de Shopify.
+ *
+ * Shopify permite asignar el SKU después de haber creado el pedido. En ese
+ * caso `orders.line_items` conserva el SKU vacío para siempre, aunque el
+ * catálogo y el mapeo de Aliclik ya estén correctos. La identidad estable es
+ * la variante (preferida) o, para productos de una sola variante, el producto.
+ * El nombre solo se usa si produce exactamente un SKU; nunca se adivina entre
+ * dos tallas, colores o presentaciones.
+ */
+export function hydrateOrderLineSkusFromCatalog(
+  lines: readonly OrderLineInput[],
+  variants: readonly ActiveShopifyCatalogVariant[],
+): OrderLineInput[] {
+  const usable = variants.filter((variant) => normalizeSku(variant.sku));
+  const byVariantId = new Map<string, ActiveShopifyCatalogVariant[]>();
+  const byProductId = new Map<string, ActiveShopifyCatalogVariant[]>();
+  const byTitle = new Map<string, ActiveShopifyCatalogVariant[]>();
+
+  for (const variant of usable) {
+    const variantId = normalizeShopifyResourceId(variant.variantId);
+    const productId = normalizeShopifyResourceId(variant.productId);
+    const title = normalizeProductName(variant.productTitle);
+    if (variantId) byVariantId.set(variantId, [...(byVariantId.get(variantId) ?? []), variant]);
+    if (productId) byProductId.set(productId, [...(byProductId.get(productId) ?? []), variant]);
+    if (title) byTitle.set(title, [...(byTitle.get(title) ?? []), variant]);
+  }
+
+  return lines.map((line) => {
+    if (normalizeSku(line.sku)) return line;
+
+    const variantId = normalizeShopifyResourceId(line.variantId);
+    const productId = normalizeShopifyResourceId(line.productId);
+    const title = normalizeProductName(line.title);
+    const variantTitle = normalizeProductName(line.variantTitle);
+
+    let sku = variantId ? uniqueSku(byVariantId.get(variantId) ?? []) : null;
+    if (!sku && productId) sku = uniqueSku(byProductId.get(productId) ?? []);
+
+    const titleCandidates = title ? (byTitle.get(title) ?? []) : [];
+    if (!sku && variantTitle) {
+      sku = uniqueSku(
+        titleCandidates.filter(
+          (candidate) => normalizeProductName(candidate.variantTitle) === variantTitle,
+        ),
+      );
+    }
+    if (!sku) sku = uniqueSku(titleCandidates);
+
+    return sku ? { ...line, sku } : line;
+  });
 }
 
 // ---------------------------------------------------------------------------
