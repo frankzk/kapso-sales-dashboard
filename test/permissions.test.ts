@@ -13,6 +13,7 @@ describe("permissionsFor", () => {
       const p = permissionsFor([role]);
       expect(p.has("master.edit")).toBe(true);
       expect(p.has("shalom.view_pickup_key")).toBe(true);
+      expect(p.has("shalom.reveal_pickup_key")).toBe(true);
       expect(p.has("shalom.override_payment_validation")).toBe(true);
       expect(p.has("costs.manage")).toBe(true);
     }
@@ -30,6 +31,7 @@ describe("permissionsFor", () => {
     expect(p.has("shalom.register_payment")).toBe(true);
     expect(p.has("shalom.validate_payment")).toBe(false);
     expect(p.has("shalom.view_pickup_key")).toBe(false);
+    expect(p.has("shalom.reveal_pickup_key")).toBe(true);
     expect(isReadOnly(["vendedora"])).toBe(false);
   });
 

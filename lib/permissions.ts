@@ -21,6 +21,10 @@ export const PERMISSIONS = [
   // Pagos Yape / clave de recojo Shalom
   "shalom.register_payment",
   "shalom.validate_payment",
+  // Ver la clave cuando el cobro cumple las reglas operativas. Es distinto de
+  // administrarla o forzar una excepción: las vendedoras pueden usar este
+  // permiso sin poder registrar/reemplazar claves ni saltarse bloqueos.
+  "shalom.reveal_pickup_key",
   "shalom.view_pickup_key",
   "shalom.override_payment_validation",
   // Costos
@@ -63,10 +67,10 @@ export function isPermission(value: string): value is Permission {
  * Permisos por rol.
  *
  *  - `owner` / `admin` — todo, incluidas las excepciones auditadas.
- *  - `vendedora` — opera: registra estados, comentarios y comprobantes. NO
- *    valida pagos ni ve la clave de recojo (§"Acceso restringido a la clave":
- *    la clave es para administradores, y los demás solo pueden pedirla cuando el
- *    pago completo está validado). Sí crea guías en Aliclik, Tanders y Shalom
+ *  - `vendedora` — opera: registra estados, comentarios y comprobantes. Puede
+ *    revelar la clave solo por el circuito auditado cuando el cobro alcanza el
+ *    total; NO valida pagos, registra/reemplaza claves ni fuerza excepciones.
+ *    Sí crea guías en Aliclik, Tanders y Shalom
  *    —es su trabajo— pero NO las cancela ni toca el catálogo: cancelar tiene
  *    ventana y el catálogo es dato maestro compartido por todas las tiendas.
  *    Que cree la guía de Shalom no le da acceso a la clave de recojo: la clave
@@ -82,6 +86,7 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "master.edit",
     "master.import_report",
     "shalom.register_payment",
+    "shalom.reveal_pickup_key",
     "aliclik.create_guide",
     "tanders.create_guide",
     "shalom.create_guide",

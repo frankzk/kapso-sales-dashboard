@@ -456,14 +456,15 @@ async function fetchPaymentSignals(
   for (const batch of chunk(ids, ID_BATCH)) {
     const { data, error } = await admin
       .from("order_payments")
-      .select("order_id,kind,validation_status")
+      .select("order_id,kind,validation_status,amount")
       .in("order_id", batch);
     if (error) return out; // la fase 3 aún no está aplicada
-    for (const row of (data ?? []) as { order_id: string; kind: string; validation_status: string }[]) {
+    for (const row of (data ?? []) as { order_id: string; kind: string; validation_status: string; amount: number | null }[]) {
       ensure(row.order_id).payments.push({
         kind: row.kind,
         validation_status: row.validation_status,
         order_id: row.order_id,
+        amount: row.amount,
       });
     }
   }
@@ -799,6 +800,7 @@ export async function recomputeOrderMaster(
             generalStatus: state.general,
             pickupState: state.pickupState,
             payments: paymentSignals.payments,
+            orderTotal: order.total_amount,
             hasKey: paymentSignals.hasKey,
             shared: paymentSignals.shared,
           })

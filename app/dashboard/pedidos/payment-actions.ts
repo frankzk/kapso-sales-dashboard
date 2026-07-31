@@ -128,6 +128,7 @@ export interface PickupKeyPanel {
   canRegister: boolean;
   canValidate: boolean;
   canViewKey: boolean;
+  canManageKey: boolean;
   canOverride: boolean;
 }
 
@@ -163,12 +164,14 @@ export async function loadPaymentPanel(
     kind: p.kind,
     validation_status: p.validation_status,
     order_id: p.order_id,
+    amount: p.amount,
   }));
   const verdict = canRevealPickupKey({
     orderId,
     generalStatus: ctx.row.general_status,
     pickupState: ctx.row.pickup_state,
     payments: snapshots,
+    orderTotal: ctx.row.order_total,
     hasKey: Boolean(keyRow),
   });
 
@@ -184,7 +187,8 @@ export async function loadPaymentPanel(
       views: (viewsRes.data ?? []) as PickupKeyPanel["views"],
       canRegister: perms.can("shalom.register_payment"),
       canValidate: perms.can("shalom.validate_payment"),
-      canViewKey: perms.can("shalom.view_pickup_key"),
+      canViewKey: perms.can("shalom.reveal_pickup_key"),
+      canManageKey: perms.can("shalom.view_pickup_key"),
       canOverride: perms.can("shalom.override_payment_validation"),
     },
   };
@@ -820,7 +824,7 @@ export async function revealPickupKey(
   input: { reason?: string; override?: boolean } = {},
 ): Promise<{ key: string } | { error: string }> {
   const perms = await getMasterPermissions();
-  if (!perms.can("shalom.view_pickup_key")) {
+  if (!perms.can("shalom.reveal_pickup_key")) {
     return { error: "Tu rol no permite ver la clave de recojo." };
   }
   const ctx = await authorizeOrder(orderId);
@@ -829,7 +833,7 @@ export async function revealPickupKey(
   const admin = createAdminSupabase();
   const [{ data: keyRow }, { data: paymentRows }] = await Promise.all([
     admin.from("shalom_pickup_keys").select("key_enc").eq("order_id", orderId).maybeSingle(),
-    admin.from("order_payments").select("kind,validation_status,order_id").eq("order_id", orderId),
+    admin.from("order_payments").select("kind,validation_status,order_id,amount").eq("order_id", orderId),
   ]);
 
   const payments = (paymentRows ?? []) as PaymentSnapshot[];
@@ -838,6 +842,7 @@ export async function revealPickupKey(
     generalStatus: ctx.row.general_status,
     pickupState: ctx.row.pickup_state,
     payments,
+    orderTotal: ctx.row.order_total,
     hasKey: Boolean(keyRow),
   });
 
@@ -869,7 +874,9 @@ export async function revealPickupKey(
     override: !verdict.allowed,
     payment_state: {
       state: paymentState(payments),
-      payments: payments.map((p) => ({ kind: p.kind, status: p.validation_status })),
+      orderTotal: ctx.row.order_total,
+      paidTotal: payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
+      payments: payments.map((p) => ({ kind: p.kind, status: p.validation_status, amount: p.amount })),
       blockers: verdict.blockers,
     },
   });
@@ -893,7 +900,7 @@ export async function sharePickupKey(
   input: { channel: string; note?: string | null; confirmed?: boolean },
 ): Promise<PaymentActionState> {
   const perms = await getMasterPermissions();
-  if (!perms.can("shalom.view_pickup_key")) {
+  if (!perms.can("shalom.reveal_pickup_key")) {
     return { error: "Tu rol no permite entregar la clave." };
   }
   const ctx = await authorizeOrder(orderId);

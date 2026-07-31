@@ -1108,7 +1108,7 @@ function KeySection({
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Clave de recojo</p>
 
       {!panel.hasKey ? (
-        panel.canViewKey ? (
+        panel.canManageKey ? (
           <div className="flex gap-2">
             <input
               value={newKey}
