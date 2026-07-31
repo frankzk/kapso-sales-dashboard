@@ -135,7 +135,8 @@ export async function unmapSku(
 // ---------------------------------------------------------------------------
 
 export interface CatalogRow {
-  shopifySku: string;
+  rowKey: string;
+  shopifySku: string | null;
   title: string;
   variantTitle: string | null;
   ean: string | null;
@@ -153,6 +154,7 @@ export interface CatalogView {
   rows: CatalogRow[];
   mapped: number;
   unmapped: number;
+  missingSku: number;
   catalogSize: number;
   syncedAt: string | null;
 }
@@ -211,13 +213,15 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
   }
 
   const rows: CatalogRow[] = [...shopify.entries()]
-    .map(([shopifySku, shopifyProduct]) => {
+    .map(([rowKey, shopifyProduct]) => {
+      const shopifySku = shopifyProduct.shopifySku;
       const { title, variantTitle } = shopifyProduct;
-      const m = mapping.get(shopifySku);
+      const m = shopifySku ? mapping.get(shopifySku) : undefined;
       const hit = m ? byEan.get(m.ean) : undefined;
       const suggestedEan = m ? null : (byName.get(normalizeProductName(title)) ?? null);
       const suggested = suggestedEan ? byEan.get(suggestedEan) : undefined;
       return {
+        rowKey,
         shopifySku,
         title,
         variantTitle,
@@ -244,6 +248,7 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
     rows,
     mapped: rows.filter((r) => r.ean).length,
     unmapped: rows.filter((r) => !r.ean).length,
+    missingSku: rows.filter((r) => !r.shopifySku).length,
     catalogSize: skus.length,
     syncedAt: skus[0]?.synced_at ?? null,
   };

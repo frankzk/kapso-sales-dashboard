@@ -25,6 +25,7 @@ import {
 } from "@/lib/aliclik";
 import {
   listActiveShopifyCatalogVariants,
+  type ActiveShopifyCatalogVariant,
   type ShopifyClientOpts,
 } from "@/lib/shopify";
 
@@ -638,8 +639,38 @@ export async function syncAliclikCatalog(
  * respaldo para SKUs históricos o productos que ya no estén activos.
  */
 export interface ShopifySkuDetails {
+  shopifySku: string | null;
   title: string;
   variantTitle: string | null;
+  productId: string | null;
+  variantId: string | null;
+}
+
+const SHOPIFY_NO_SKU_PREFIX = "__SHOPIFY_NO_SKU__:";
+
+/**
+ * Conserva también las variantes activas que todavía no tienen SKU. No pueden
+ * mapearse a Aliclik, pero deben ser visibles para que el equipo pueda corregir
+ * el dato en Shopify en vez de confundir "sin SKU" con "no sincronizado".
+ */
+export function collectActiveShopifyCatalogDetails(
+  variants: readonly ActiveShopifyCatalogVariant[],
+  out = new Map<string, ShopifySkuDetails>(),
+): Map<string, ShopifySkuDetails> {
+  for (const variant of variants) {
+    const sku = normalizeSku(variant.sku);
+    const title = variant.productTitle.trim();
+    if (!title) continue;
+    const rowKey = sku || `${SHOPIFY_NO_SKU_PREFIX}${variant.variantId || variant.productId}`;
+    out.set(rowKey, {
+      shopifySku: sku || null,
+      title,
+      variantTitle: variant.variantTitle,
+      productId: variant.productId || null,
+      variantId: variant.variantId || null,
+    });
+  }
+  return out;
 }
 
 type ShopifySkuItem = {
@@ -699,7 +730,13 @@ export function collectShopifySkuDetails(
       const variantTitle = normalizedVariantTitle(item);
       const current = out.get(sku);
       if (!current) {
-        out.set(sku, { title, variantTitle });
+        out.set(sku, {
+          shopifySku: sku,
+          title,
+          variantTitle,
+          productId: null,
+          variantId: null,
+        });
       } else if (!current.variantTitle && variantTitle) {
         out.set(sku, { ...current, variantTitle });
       }
@@ -728,14 +765,7 @@ export async function loadShopifySkuDetails(
   // producto nuevo como Astaxantina era invisible hasta conseguir una venta.
   if (shopifyOpts) {
     const variants = await listActiveShopifyCatalogVariants(shopifyOpts);
-    for (const variant of variants) {
-      const sku = normalizeSku(variant.sku);
-      if (!sku || !variant.productTitle) continue;
-      out.set(sku, {
-        title: variant.productTitle,
-        variantTitle: variant.variantTitle,
-      });
-    }
+    collectActiveShopifyCatalogDetails(variants, out);
   }
 
   // Paginado: PostgREST corta en 1000 filas por respuesta.
@@ -782,7 +812,11 @@ export async function loadShopifySkuNames(
   shopifyOpts?: ShopifyClientOpts,
 ): Promise<Map<string, string>> {
   const details = await loadShopifySkuDetails(storeId, admin, sinceDays, shopifyOpts);
-  return new Map([...details].map(([sku, item]) => [sku, item.title]));
+  return new Map(
+    [...details.values()]
+      .filter((item): item is ShopifySkuDetails & { shopifySku: string } => Boolean(item.shopifySku))
+      .map((item) => [item.shopifySku, item.title]),
+  );
 }
 
 /** Columnas del espejo que necesita el resolutor. */

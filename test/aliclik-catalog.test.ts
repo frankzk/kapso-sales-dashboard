@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  collectActiveShopifyCatalogDetails,
   collectShopifySkuDetails,
   flattenCatalog,
   normalizeSku,
@@ -8,6 +9,31 @@ import {
   type AliclikSkuRow,
   type OrderLineInput,
 } from "@/lib/aliclik-catalog";
+
+describe("collectActiveShopifyCatalogDetails", () => {
+  it("mantiene visible Astaxantina activa aunque Shopify no le haya asignado SKU", () => {
+    const details = collectActiveShopifyCatalogDetails([
+      {
+        productId: "gid://shopify/Product/asta",
+        productTitle: "ASTAXANTINA - Antioxidante De Alta Potencia (120 Capsulas)",
+        variantId: "gid://shopify/ProductVariant/asta-default",
+        variantTitle: null,
+        sku: null,
+        inventory: 81,
+      },
+    ]);
+
+    expect([...details.values()]).toEqual([
+      {
+        shopifySku: null,
+        title: "ASTAXANTINA - Antioxidante De Alta Potencia (120 Capsulas)",
+        variantTitle: null,
+        productId: "gid://shopify/Product/asta",
+        variantId: "gid://shopify/ProductVariant/asta-default",
+      },
+    ]);
+  });
+});
 
 describe("collectShopifySkuDetails", () => {
   it("recupera talla y color del payload REST histórico por SKU", () => {
@@ -29,8 +55,11 @@ describe("collectShopifySkuDetails", () => {
     ]);
 
     expect(details.get("30647718")).toEqual({
+      shopifySku: "30647718",
       title: "CloudSlides",
       variantTitle: "38-39 / Negro",
+      productId: null,
+      variantId: null,
     });
   });
 

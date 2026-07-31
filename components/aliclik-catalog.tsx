@@ -49,7 +49,7 @@ export function AliclikCatalog({
       return (
         r.title.toLowerCase().includes(q) ||
         (r.variantTitle ?? "").toLowerCase().includes(q) ||
-        r.shopifySku.toLowerCase().includes(q)
+        (r.shopifySku ?? "").toLowerCase().includes(q)
       );
     });
   }, [view.rows, filter, search]);
@@ -99,6 +99,13 @@ export function AliclikCatalog({
         </div>
       )}
 
+      {view.missingSku > 0 && (
+        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+          <span className="font-medium">{view.missingSku} producto(s) activo(s) no tienen SKU en Shopify.</span>{" "}
+          Ya aparecen en esta pantalla, pero deben recibir un SKU antes de poder asociarlos y crear guías en Aliclik.
+        </div>
+      )}
+
       {msg && (
         <p
           className={`rounded-lg border px-3 py-2 text-sm ${
@@ -144,7 +151,7 @@ export function AliclikCatalog({
         <div className="space-y-2">
           {rows.map((r) => (
             <CatalogRowCard
-              key={r.shopifySku}
+              key={r.rowKey}
               row={r}
               storeId={storeId}
               canManage={canManage}
@@ -196,10 +203,21 @@ function CatalogRowCard({
             </span>
           </p>
           <p className="mt-0.5 text-xs text-slate-500">
-            SKU Shopify <code className="rounded bg-slate-100 px-1">{row.shopifySku}</code>
+            SKU Shopify{" "}
+            {row.shopifySku ? (
+              <code className="rounded bg-slate-100 px-1">{row.shopifySku}</code>
+            ) : (
+              <span className="rounded bg-rose-50 px-1.5 py-0.5 font-medium text-rose-700">
+                Falta SKU en Shopify
+              </span>
+            )}
           </p>
 
-          {row.ean ? (
+          {!row.shopifySku ? (
+            <p className="mt-1 text-xs text-rose-700">
+              Abre este producto en Shopify, asigna un SKU a la variante y vuelve a sincronizar.
+            </p>
+          ) : row.ean ? (
             <p className="mt-1 text-xs text-emerald-700">
               ✓ EAN {row.ean}
               {row.aliclikName ? ` · ${row.aliclikName}` : ""}
@@ -223,11 +241,15 @@ function CatalogRowCard({
 
         {canManage && (
           <div className="flex shrink-0 items-center gap-2">
-            {row.ean ? (
+            {!row.shopifySku ? (
+              <span className="max-w-xs rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                No se puede asociar sin SKU.
+              </span>
+            ) : row.ean ? (
               <form
                 action={(fd) => {
                   fd.set("store_id", storeId);
-                  fd.set("shopify_sku", row.shopifySku);
+                  fd.set("shopify_sku", row.shopifySku!);
                   onUnmap(fd);
                 }}
               >
@@ -243,7 +265,7 @@ function CatalogRowCard({
               <form
                 action={(fd) => {
                   fd.set("store_id", storeId);
-                  fd.set("shopify_sku", row.shopifySku);
+                  fd.set("shopify_sku", row.shopifySku!);
                   onMap(fd);
                 }}
                 className="flex flex-col gap-2"
