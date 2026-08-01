@@ -1,6 +1,6 @@
 # Master Operations Map — Master de Pedidos v1
 
-Estado: Fase 3 implementada; modalidades y mesa de ruta activas en el Master
+Estado: Fase 4 en implementación; Mesa de cierre publicada en el Master
 Propietario del proceso: Frankz  
 Sistema: Kapta (`kapso-sales-dashboard`)  
 Fuente visual: board Miro «Master Operations Map»  
@@ -560,9 +560,9 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
 - Responsables: Daysi para Lima, Akemi para Swayp, Yohalis como responsable
   financiera principal y Frankz para validar depósitos Aliclik.
 
-El módulo de Liquidaciones visible en producción todavía no está presente en la
-rama del repositorio auditada. La Fase 1 deja el contrato de integración, pero
-no duplica sus tablas hasta incorporar el código vigente.
+El módulo de Liquidaciones conserva la conciliación por lote. La Mesa de cierre
+consume su resultado por pedido y no sustituye la regla de que una diferencia
+mantiene observado el lote completo.
 
 ## 15. Responsables actuales
 
@@ -680,6 +680,29 @@ Implementación publicada en `/dashboard/pedidos/despacho`:
 - Indemnizaciones y reembolsos.
 - KPI y resumen diario del owner.
 
+Primer bloque publicado en el drawer del Master:
+
+- La Mesa de cierre aparece en `Por cerrar` y `Finalizado`, muestra todas las
+  obligaciones simultáneas y no confunde el resultado comercial con el cierre.
+- Solicitud y recepción física de retornos por salida; recibir actualiza la
+  custodia del paquete y abre la conciliación de inventario.
+- Reingreso a inventario o cierre como merma por salida física concreta,
+  siempre después de recibir la caja y con nota auditada. Un evento no puede
+  conciliar las demás cajas del mismo pedido.
+- Liquidación observada o conciliada. No se permite conciliar si falta el costo
+  logístico configurado.
+- Apertura y resolución de indemnización Aliclik por salida concreta.
+- Solicitud de reembolso y confirmación posterior; el botón no mueve dinero y
+  solo el rol owner puede confirmar que Frankz ya lo ejecutó.
+- Devolución posterior del cliente sin borrar el resultado Entregado.
+- Finalización y reapertura explícita. Una reapertura queda `Por cerrar` hasta
+  que Frankz o Yohalis la finalicen de nuevo.
+- Permisos separados para retornos, inventario, finanzas, finalización y
+  reembolsos; los permisos puntuales de `user_permissions` siguen prevaleciendo.
+- El resolver quedó versionado como `mom-v1.4`; el cron detecta versiones
+  anteriores y recalcula el histórico por lotes hasta que todo el Master
+  converja, sin necesitar credenciales locales ni detener la sincronización.
+
 ## 19. Compatibilidad y activación
 
 La Fase 1 añadió `macro_stage`, `macro_substage` y `macro_reasons` en modo
@@ -710,17 +733,15 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 - La navegación principal muestra Por confirmar, Preparación, Por despachar,
   En curso, Por cerrar y Finalizado.
 
-## 21. Pendientes que no bloquean la Fase 1
+## 21. Pendientes posteriores
 
-- Respuestas completas de Daysi y Yohalis.
-- Preguntas restantes de Yelitza y Akemi.
 - Regla de repetición de Aliclik.
 - Tratamiento contractual del adelanto de S/30 no recuperado.
 - Flujo Falabella.
 - Significado operativo de «no se puede volver» en ciertas rutas Swayp.
 - Regla exacta para pausar nuevas rutas Swayp por liquidación vencida.
-- Incorporación al repositorio del módulo de Liquidaciones que ya existe en
-  producción.
+- Integración directa del resultado por lote del módulo de Liquidaciones con la
+  obligación financiera por pedido de la Mesa de cierre.
 
 ## 22. Criterios de aceptación de la Fase 2
 
@@ -755,4 +776,23 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 - Desde el Master se accede al panel correcto de Aliclik, Shalom, Tanders,
   Swayp/Reproprovincia o a la creación manual sin volver a buscar el pedido.
 - La interfaz funciona en celular y escritorio, con cámara y entrada manual.
+
+## 24. Criterios de aceptación del primer bloque de la Fase 4
+
+- Una solicitud de retorno conserva la salida concreta, courier, guía, actor,
+  fecha y motivo.
+- Una devolución no puede marcarse recibida sobre una salida que todavía está
+  bajo custodia de la empresa.
+- Inventario o merma no se pueden conciliar antes de recibir físicamente una
+  devolución.
+- Una entrega COD no finaliza hasta registrar su liquidación conciliada.
+- Falta de costo logístico bloquea la conciliación financiera.
+- Una liquidación observada conserva el lote abierto hasta su conciliación.
+- La indemnización formal solo se abre sobre una salida Aliclik.
+- Un administrador puede solicitar un reembolso, pero solo el owner puede
+  confirmar que Frankz ya lo ejecutó y debe indicar el monto.
+- Reabrir un pedido finalizado crea una obligación de validación; las señales
+  históricas no lo vuelven a cerrar automáticamente.
+- Finalizar se bloquea mientras existan salidas activas u otras obligaciones.
+- Todas las acciones se guardan como eventos append-only y recalculan el Master.
 

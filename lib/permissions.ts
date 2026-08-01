@@ -22,6 +22,13 @@ export const PERMISSIONS = [
   "warehouse.prepare", // escanear y dejar una salida lista para despacho
   "dispatch.manage", // crear rutas, cotejar en oficina y retirar paquetes
   "dispatch.pickup", // segundo cotejo del motorizado y transferencia de custodia
+  // Cierre MOM (Fase 4). Se separan porque una persona puede recibir una caja
+  // sin tener permiso para conciliar dinero o ejecutar un reembolso.
+  "closure.return", // solicitar/recibir retornos y devoluciones de cliente
+  "closure.inventory", // reingreso a inventario o cierre como merma
+  "closure.finance", // observar/cerrar liquidaciones e indemnizaciones
+  "closure.finalize", // cerrar o reabrir el expediente operativo
+  "closure.refund", // confirmar que el reembolso externo ya fue ejecutado
   // Pagos Yape / clave de recojo Shalom
   "shalom.register_payment",
   "shalom.validate_payment",
@@ -83,7 +90,9 @@ export function isPermission(value: string): value is Permission {
  */
 const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
   owner: PERMISSIONS,
-  admin: PERMISSIONS,
+  // Solo el owner (Frankz en la operación actual) confirma reembolsos. Un
+  // administrador conserva el resto de facultades de cierre.
+  admin: PERMISSIONS.filter((permission) => permission !== "closure.refund"),
   // La vendedora carga la liquidación y corrige vínculos, pero NO la cierra:
   // cerrar congela lo que se le paga al motorizado y no se deshace.
   vendedora: [
@@ -92,6 +101,8 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "warehouse.prepare",
     "dispatch.manage",
     "dispatch.pickup",
+    "closure.return",
+    "closure.inventory",
     "shalom.register_payment",
     "shalom.reveal_pickup_key",
     "aliclik.create_guide",

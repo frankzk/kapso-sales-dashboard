@@ -501,6 +501,291 @@ export async function registerReturn(
   return { notice: "Devolución registrada." };
 }
 
+// ---------------------------------------------------------------------------
+// Fase 4 — cierre operativo, físico y financiero
+// ---------------------------------------------------------------------------
+
+export type ClosureActionKey =
+  | "return_request"
+  | "return_receive"
+  | "inventory_restock"
+  | "inventory_merma"
+  | "liquidation_observe"
+  | "liquidation_close"
+  | "indemnity_request"
+  | "indemnity_resolve"
+  | "refund_request"
+  | "refund_complete"
+  | "customer_return_start"
+  | "customer_return_resolve"
+  | "finalize"
+  | "reopen";
+
+export interface ClosureActionInput {
+  action: ClosureActionKey;
+  note: string;
+  shipmentId?: string | null;
+  amount?: number | null;
+  reference?: string | null;
+}
+
+const CLOSURE_EVENT: Record<ClosureActionKey, string> = {
+  return_request: "return_requested",
+  return_receive: "return_received",
+  inventory_restock: "inventory_reconciled",
+  inventory_merma: "merma_closed",
+  liquidation_observe: "liquidation_observed",
+  liquidation_close: "liquidation_closed",
+  indemnity_request: "indemnity_requested",
+  indemnity_resolve: "indemnity_resolved",
+  refund_request: "refund_requested",
+  refund_complete: "refund_completed",
+  customer_return_start: "customer_return_started",
+  customer_return_resolve: "customer_return_resolved",
+  finalize: "order_finalized",
+  reopen: "order_reopened",
+};
+
+function workflowIsOpen(
+  events: readonly { kind: string; occurred_at: string; shipment_id?: string | null }[],
+  starts: readonly string[],
+  closes: readonly string[],
+  shipmentId?: string | null,
+): boolean {
+  const scoped = shipmentId
+    ? events.filter((event) => event.shipment_id === shipmentId)
+    : events;
+  const latest = (kinds: readonly string[]) =>
+    scoped
+      .filter((event) => kinds.includes(event.kind))
+      .reduce<{ kind: string; occurred_at: string } | null>(
+        (best, event) => (!best || event.occurred_at > best.occurred_at ? event : best),
+        null,
+      );
+  const opened = latest(starts);
+  const closed = latest(closes);
+  return Boolean(opened && (!closed || closed.occurred_at < opened.occurred_at));
+}
+
+/**
+ * Registra un hecho de cierre sin sobrescribir el pasado. Las acciones sensibles
+ * se autorizan por dimensión y las precondiciones se vuelven a validar en el
+ * servidor; ocultar un botón en el navegador nunca es la única protección.
+ */
+export async function registerClosureAction(
+  orderId: string,
+  input: ClosureActionInput,
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  const action = input.action;
+  if (!Object.prototype.hasOwnProperty.call(CLOSURE_EVENT, action)) {
+    return { error: "La acción de cierre no es válida." };
+  }
+  const canAct =
+    (["return_request", "return_receive", "customer_return_start", "customer_return_resolve"] as ClosureActionKey[])
+      .includes(action)
+      ? perms.can("closure.return")
+      : (["inventory_restock", "inventory_merma"] as ClosureActionKey[]).includes(action)
+        ? perms.can("closure.inventory")
+        : (["liquidation_observe", "liquidation_close", "indemnity_request", "indemnity_resolve", "refund_request"] as ClosureActionKey[])
+            .includes(action)
+          ? perms.can("closure.finance")
+          : action === "refund_complete"
+            ? perms.can("closure.refund")
+            : action === "reopen"
+              ? perms.can("master.override_status") && perms.can("closure.finalize")
+              : perms.can("closure.finalize");
+  if (!canAct) return { error: "Tu rol no permite realizar esta acción de cierre." };
+
+  const note = input.note?.trim() ?? "";
+  const reference = input.reference?.trim() || null;
+  if (!note) return { error: "Escribe una nota breve. El cierre debe quedar auditado." };
+  if (note.length > 2000) return { error: "La nota es demasiado larga (máx. 2000)." };
+  if (reference && reference.length > 500) {
+    return { error: "La referencia o evidencia es demasiado larga (máx. 500)." };
+  }
+  const amount = input.amount == null ? null : Number(input.amount);
+  if (amount != null && (!Number.isFinite(amount) || amount < 0)) {
+    return { error: "El monto no es válido." };
+  }
+
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const admin = createAdminSupabase();
+  const [{ data: guides, error: guidesError }, { data: events, error: eventsError }] = await Promise.all([
+    admin
+      .from("shipments")
+      .select("id,courier,guide_code,delivery_status,custody_state,returned_at")
+      .eq("order_id", orderId),
+    admin
+      .from("order_events")
+      .select("kind,occurred_at,shipment_id")
+      .eq("order_id", orderId)
+      .order("occurred_at", { ascending: true }),
+  ]);
+  if (guidesError) return { error: guidesError.message };
+  if (eventsError) return { error: eventsError.message };
+
+  const shipmentRows = (guides ?? []) as {
+    id: string;
+    courier: string | null;
+    guide_code: string | null;
+    delivery_status: string;
+    custody_state: string | null;
+    returned_at: string | null;
+  }[];
+  const eventRows = (events ?? []) as { kind: string; occurred_at: string; shipment_id: string | null }[];
+  const selectedShipment = input.shipmentId
+    ? shipmentRows.find((shipment) => shipment.id === input.shipmentId)
+    : null;
+  if (input.shipmentId && !selectedShipment) {
+    return { error: "La salida elegida no pertenece a este pedido." };
+  }
+
+  if (
+    [
+      "return_request",
+      "return_receive",
+      "inventory_restock",
+      "inventory_merma",
+      "indemnity_request",
+      "indemnity_resolve",
+    ].includes(action) &&
+    !selectedShipment
+  ) {
+    return { error: "Elige la salida física concreta sobre la que registrarás la acción." };
+  }
+  if (["return_request", "return_receive"].includes(action) && selectedShipment?.custody_state === "empresa") {
+    return { error: "Esta salida todavía figura en la empresa; no existe custodia externa que retornar." };
+  }
+  if (["return_request", "return_receive"].includes(action) && selectedShipment?.delivery_status === "entregado") {
+    return { error: "Una entrega confirmada no se recibe como retorno del courier; abre una devolución del cliente." };
+  }
+  if (action === "return_request" && selectedShipment?.custody_state === "retorno") {
+    return { error: "El retorno de esta salida ya fue solicitado." };
+  }
+  if (
+    ["return_request", "return_receive"].includes(action) &&
+    (selectedShipment?.custody_state === "devuelto" || Boolean(selectedShipment?.returned_at))
+  ) {
+    return { error: "Esta salida ya fue recibida físicamente en almacén." };
+  }
+  const selectedReturnReceived =
+    selectedShipment?.custody_state === "devuelto" || Boolean(selectedShipment?.returned_at);
+  if (["inventory_restock", "inventory_merma"].includes(action) && !selectedReturnReceived) {
+    return { error: "Primero registra la recepción física de la devolución." };
+  }
+  if (
+    ["inventory_restock", "inventory_merma"].includes(action) &&
+    selectedShipment &&
+    eventRows.some(
+      (event) =>
+        event.shipment_id === selectedShipment.id &&
+        ["inventory_reconciled", "merma_closed"].includes(event.kind),
+    )
+  ) {
+    return { error: "Esta salida ya fue conciliada en inventario." };
+  }
+  if (["liquidation_observe", "liquidation_close"].includes(action) && ctx.row.general_status !== "entregado") {
+    return { error: "Solo se puede conciliar una liquidación cuando la entrega ya está confirmada." };
+  }
+  if (action === "liquidation_close" && ctx.row.logistics_cost == null) {
+    return { error: "Falta el costo logístico. Regístralo en Costos antes de cerrar la liquidación." };
+  }
+  if (action === "indemnity_request") {
+    if (selectedShipment?.courier?.toLowerCase() !== "aliclik") {
+      return { error: "La indemnización formal solo aplica a una salida Aliclik." };
+    }
+    if (!amount || amount <= 0) return { error: "Indica el valor del producto reclamado." };
+  }
+  if (
+    action === "indemnity_resolve" &&
+    (selectedShipment?.courier?.toLowerCase() !== "aliclik" ||
+      !workflowIsOpen(
+        eventRows,
+        ["indemnity_requested"],
+        ["indemnity_resolved"],
+        selectedShipment.id,
+      ))
+  ) {
+    return { error: "No hay una indemnización abierta para resolver." };
+  }
+  if (action === "refund_complete") {
+    if (!workflowIsOpen(eventRows, ["refund_requested"], ["refund_completed"])) {
+      return { error: "No hay un reembolso pendiente." };
+    }
+    if (!amount || amount <= 0) return { error: "Indica el monto que Frankz ya reembolsó." };
+  }
+  if (action === "refund_request" && (!amount || amount <= 0)) {
+    return { error: "Indica el monto que se solicita reembolsar." };
+  }
+  if (action === "customer_return_start" && ctx.row.general_status !== "entregado") {
+    return { error: "La devolución del cliente se abre sobre un pedido previamente entregado." };
+  }
+  if (
+    action === "customer_return_resolve" &&
+    !workflowIsOpen(eventRows, ["customer_return_started"], ["customer_return_resolved"])
+  ) {
+    return { error: "No hay una devolución del cliente abierta." };
+  }
+  if (action === "reopen" && ctx.row.macro_stage !== "finalizado") {
+    return { error: "Solo se reabre un pedido que ya está Finalizado." };
+  }
+  if (action === "finalize") {
+    const active = shipmentRows.filter(
+      (shipment) =>
+        shipment.custody_state !== "devuelto" &&
+        ["pendiente", "en_ruta", "por_preparar"].includes(shipment.delivery_status),
+    );
+    if (active.length) return { error: "Todavía existen salidas activas. Cancélalas o recibe su retorno antes de finalizar." };
+    const blockers = (ctx.row.macro_reasons ?? []).filter(
+      (reason) => reason !== "validacion_cierre_pendiente",
+    );
+    if (blockers.length) {
+      return { error: `Resuelve primero: ${blockers.join(", ").replaceAll("_", " ")}.` };
+    }
+  }
+
+  const occurredAt = new Date().toISOString();
+  const eventError = await recordEvent(admin, ctx, {
+    kind: CLOSURE_EVENT[action],
+    source: "manual",
+    courier: selectedShipment?.courier ?? null,
+    guideCode: selectedShipment?.guide_code ?? null,
+    shipmentId: selectedShipment?.id ?? null,
+    reason: note,
+    note,
+    occurredAt,
+    payload: {
+      amount,
+      reference,
+      phase: 4,
+    },
+  });
+  if (eventError) return { error: eventError };
+
+  if (action === "return_request" && selectedShipment) {
+    const { error } = await admin
+      .from("shipments")
+      .update({ custody_state: "retorno", pickup_state: "retorno_solicitado" })
+      .eq("id", selectedShipment.id)
+      .eq("order_id", orderId);
+    if (error) return { error: `La solicitud quedó auditada, pero no se pudo actualizar la salida: ${error.message}` };
+  }
+  if (action === "return_receive" && selectedShipment) {
+    const { error } = await admin
+      .from("shipments")
+      .update({ custody_state: "devuelto", returned_at: occurredAt, pickup_state: "devuelto" })
+      .eq("id", selectedShipment.id)
+      .eq("order_id", orderId);
+    if (error) return { error: `La recepción quedó auditada, pero no se pudo actualizar la salida: ${error.message}` };
+  }
+
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  return { notice: "Acción de cierre registrada. El expediente fue recalculado." };
+}
+
 /**
  * Corrige el vínculo entre una guía y un pedido (§11). Mueve la guía al pedido
  * indicado y recalcula AMBOS: el que la pierde y el que la gana.
