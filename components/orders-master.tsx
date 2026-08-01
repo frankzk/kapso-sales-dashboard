@@ -48,6 +48,11 @@ import {
   operationalStatusesFor,
   type GeneralStatus,
 } from "@/lib/order-status";
+import {
+  MACRO_SUBSTAGES_BY_STAGE,
+  macroStageLabel,
+  macroSubstageLabel,
+} from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, usesPickupKeyFlow, type KeyState, type PaymentState } from "@/lib/pickup-key";
 import { MASTER_VIEWS, type MasterCounts, type MasterView, type OrderMasterDetail } from "@/lib/orders-master-access";
 import type { OrderMasterRow, StoreSummary } from "@/lib/types";
@@ -95,25 +100,24 @@ const MODE_LABEL: Record<string, string> = {
   agency: "Agencia",
 };
 
-const STATUS_TONE: Record<string, string> = {
-  pendiente: "bg-slate-100 text-slate-700",
-  en_proceso: "bg-amber-100 text-amber-800",
-  entregado: "bg-emerald-100 text-emerald-800",
-  anulado: "bg-slate-200 text-slate-600",
-  devuelto: "bg-red-100 text-red-800",
+const MACRO_STAGE_TONE: Record<string, string> = {
+  por_confirmar: "bg-amber-50 text-amber-800 ring-amber-600/20",
+  preparacion: "bg-sky-50 text-sky-800 ring-sky-600/20",
+  por_despachar: "bg-indigo-50 text-indigo-800 ring-indigo-600/20",
+  en_curso: "bg-cyan-50 text-cyan-800 ring-cyan-600/20",
+  por_cerrar: "bg-orange-50 text-orange-800 ring-orange-600/20",
+  finalizado: "bg-emerald-50 text-emerald-800 ring-emerald-600/20",
 };
 
-function StatusBadge({ status, locked }: { status: string; locked?: boolean }) {
+function MacroStageBadge({ stage }: { stage: string | null | undefined }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
-        STATUS_TONE[status] ?? "bg-slate-100 text-slate-700",
+        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset",
+        MACRO_STAGE_TONE[stage ?? ""] ?? "bg-slate-100 text-slate-700 ring-slate-500/20",
       )}
-      title={locked ? "Estado fijado manualmente: el recálculo automático no lo pisa" : undefined}
     >
-      {generalLabel(status)}
-      {locked && <span aria-hidden="true">🔒</span>}
+      {macroStageLabel(stage)}
     </span>
   );
 }
@@ -148,6 +152,11 @@ export function OrdersMasterBoard({
   const [sortKey, setSortKey] = useState<MasterSortKey>("movement");
   const [showMore, setShowMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [selectedSubstage, setSelectedSubstage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedSubstage(null);
+  }, [view]);
 
   // La búsqueda va al servidor: debe encontrar pedidos fuera de la pestaña
   // activa, no solo entre los ya cargados.
@@ -176,10 +185,23 @@ export function OrdersMasterBoard({
     return (id: string) => map.get(id) ?? "—";
   }, [stores]);
 
+  const stageSubstages = view === "todos" ? [] : MACRO_SUBSTAGES_BY_STAGE[view];
+  const substageCounts = useMemo(() => {
+    const tally = new Map<string, number>();
+    for (const row of rows) {
+      const key = row.macro_substage ?? "";
+      tally.set(key, (tally.get(key) ?? 0) + 1);
+    }
+    return tally;
+  }, [rows]);
+
   const visible = useMemo(() => {
-    const filtered = applyFilters(rows, filters);
+    const inSubstage = selectedSubstage
+      ? rows.filter((row) => row.macro_substage === selectedSubstage)
+      : rows;
+    const filtered = applyFilters(inSubstage, filters);
     return sortRows(filtered, sortKey);
-  }, [rows, filters, sortKey]);
+  }, [rows, selectedSubstage, filters, sortKey]);
 
   const agency = useMemo(() => agencySummary(rows), [rows]);
 
@@ -285,22 +307,91 @@ export function OrdersMasterBoard({
             />
           )}
 
-          {/* Pestañas por estado general */}
-          <div className="flex flex-wrap gap-1.5">
-            {MASTER_VIEWS.map((v) => (
-              <button
-                key={v.key}
-                onClick={() => router.push(`/dashboard/pedidos?view=${v.key}`)}
-                className={cn(
-                  "rounded-lg px-3 py-1.5 text-sm font-medium transition",
-                  v.key === view ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50",
-                )}
-              >
-                {v.label}
-                <span className="ml-1.5 text-xs text-slate-400">{counts[v.key]}</span>
-              </button>
-            ))}
-          </div>
+          {/* Navegación principal del MOM: el pedido avanza de izquierda a derecha. */}
+          <section aria-label="Macroetapas del pedido" className="space-y-2">
+            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
+              <div className="grid min-w-[1040px] grid-cols-[112px_repeat(6,minmax(148px,1fr))] gap-1">
+                {MASTER_VIEWS.map((stage, index) => {
+                  const active = stage.key === view;
+                  const isAll = stage.key === "todos";
+                  return (
+                    <button
+                      key={stage.key}
+                      type="button"
+                      aria-current={active ? "page" : undefined}
+                      onClick={() => router.push(`/dashboard/pedidos?view=${stage.key}`)}
+                      className={cn(
+                        "group flex min-h-14 items-center gap-2 rounded-lg px-3 text-left transition",
+                        active
+                          ? "bg-slate-950 text-white shadow-sm"
+                          : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
+                      )}
+                    >
+                      {!isAll && (
+                        <span
+                          className={cn(
+                            "grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold tabular-nums",
+                            active
+                              ? "bg-white/15 text-white"
+                              : "bg-slate-100 text-slate-500 group-hover:bg-white",
+                          )}
+                        >
+                          {String(index).padStart(2, "0")}
+                        </span>
+                      )}
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-semibold">{stage.label}</span>
+                        <span className={cn("block text-xs tabular-nums", active ? "text-white/65" : "text-slate-400")}>
+                          {counts[stage.key].toLocaleString("es-PE")} pedidos
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {view !== "todos" && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-1" aria-label="Subetapas">
+                <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                  Subetapas
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedSubstage(null)}
+                  className={cn(
+                    "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
+                    selectedSubstage === null
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
+                  )}
+                >
+                  Todas · {rows.length.toLocaleString("es-PE")}
+                </button>
+                {stageSubstages.map((substage) => {
+                  const count = substageCounts.get(substage) ?? 0;
+                  const active = selectedSubstage === substage;
+                  return (
+                    <button
+                      key={substage}
+                      type="button"
+                      disabled={count === 0}
+                      onClick={() => setSelectedSubstage(substage)}
+                      className={cn(
+                        "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
+                        active
+                          ? "border-brand-600 bg-brand-50 text-brand-700"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
+                        count === 0 && "cursor-not-allowed opacity-40",
+                      )}
+                    >
+                      {macroSubstageLabel(substage)} · {count.toLocaleString("es-PE")}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
 
           {/* Filtros */}
           <div className="flex flex-wrap items-center gap-2">
@@ -761,8 +852,8 @@ function MasterTable({
             <th className="px-2 py-2 text-right font-medium" title="Intentos de entrega">
               Int.
             </th>
-            <th className="px-2 py-2 font-medium">Estado</th>
-            <th className="px-2 py-2 font-medium">Estado operativo</th>
+            <th className="px-2 py-2 font-medium">Macroetapa</th>
+            <th className="px-2 py-2 font-medium">Subetapa</th>
             <th className="px-2 py-2 font-medium">Últ. movimiento</th>
             <th className="px-2 py-2 font-medium">Antigüedad</th>
             <th className="px-2 py-2 font-medium">Guía</th>
@@ -808,11 +899,11 @@ function MasterTable({
                 </span>
               </td>
               <td className="px-2 py-2.5">
-                <StatusBadge status={r.general_status} locked={r.status_locked} />
+                <MacroStageBadge stage={r.macro_stage} />
               </td>
-              <td className="px-2 py-2.5 text-slate-600">{operationalLabel(r.operational_status)}</td>
+              <td className="px-2 py-2.5 text-slate-600">{macroSubstageLabel(r.macro_substage)}</td>
               <td className="px-2 py-2.5 text-slate-600">{fmtDate(r.last_movement_at)}</td>
-              <td className="px-2 py-2.5 text-slate-600">{fmtAge(r.status_since)}</td>
+              <td className="px-2 py-2.5 text-slate-600">{fmtAge(r.macro_since ?? r.status_since)}</td>
               <td className="px-2 py-2.5 font-mono text-xs text-slate-600">{r.guide_code ?? "—"}</td>
               <td className="px-2 py-2.5 text-slate-600" title={r.agency_branch ?? undefined}>
                 {r.pickup_state ? operationalLabel(r.pickup_state) : "—"}
@@ -949,14 +1040,18 @@ function OrderDrawer({
           <div className="space-y-5 p-5">
             <section className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
-                <StatusBadge status={detail.row.general_status} locked={detail.row.status_locked} />
+                <MacroStageBadge stage={detail.row.macro_stage} />
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                  {operationalLabel(detail.row.operational_status)}
+                  {macroSubstageLabel(detail.row.macro_substage)}
                 </span>
                 <span className="text-xs text-slate-400">
-                  {fmtAge(detail.row.status_since)} en este estado · fuente:{" "}
-                  {detail.row.status_source ?? "—"}
+                  {fmtAge(detail.row.macro_since ?? detail.row.status_since)} en esta macroetapa
                 </span>
+                {detail.row.status_locked && (
+                  <span className="text-xs text-amber-700" title="El estado heredado tiene una corrección manual">
+                    Corrección manual activa
+                  </span>
+                )}
               </div>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
                 <Field label="Cliente" value={detail.row.customer_name} />

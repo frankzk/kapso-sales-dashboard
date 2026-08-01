@@ -18,17 +18,13 @@ import type {
   ShipmentCallRow,
   ShipmentRow,
 } from "@/lib/types";
-import type { GeneralStatus } from "@/lib/order-status";
+import { ORDER_MACRO_STAGES, type OrderMacroStage } from "@/lib/order-macro-stage";
 
-export type MasterView = "todos" | GeneralStatus;
+export type MasterView = "todos" | OrderMacroStage;
 
-export const MASTER_VIEWS: { key: MasterView; label: string }[] = [
+export const MASTER_VIEWS: readonly { key: MasterView; label: string }[] = [
   { key: "todos", label: "Todos" },
-  { key: "pendiente", label: "Pendiente" },
-  { key: "en_proceso", label: "En proceso" },
-  { key: "entregado", label: "Entregado" },
-  { key: "anulado", label: "Anulado" },
-  { key: "devuelto", label: "Devuelto" },
+  ...ORDER_MACRO_STAGES.map((stage) => ({ key: stage.code, label: stage.label })),
 ];
 
 export function isMasterView(v: string | undefined | null): v is MasterView {
@@ -38,8 +34,9 @@ export function isMasterView(v: string | undefined | null): v is MasterView {
 const MASTER_COLUMNS =
   "id,store_id,order_id,order_name,shopify_order_id,order_created_at,customer_name," +
   "customer_phone,region,province,district,address,reference,latitude,longitude,geo_source," +
-  "shipping_mode,order_total,general_status," +
-  "operational_status,status_since,status_source,status_locked,current_courier,last_courier," +
+  "shipping_mode,order_total,general_status,operational_status," +
+  "macro_stage,macro_substage,macro_reasons,macro_operation,macro_version,macro_since," +
+  "status_since,status_source,status_locked,current_courier,last_courier," +
   "courier_count,attempt_count,guide_code,dispatched_at,delivered_at,delivered_courier," +
   "returned_at,last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
   "key_state,agency_branch,agency_arrived_at,agency_expires_at,recomputed_at,updated_at";
@@ -66,7 +63,7 @@ export async function getOrderMasterRows(
 
   for (let from = 0; from < cap; from += PAGE) {
     let query = sb.from("order_master").select(MASTER_COLUMNS).in("store_id", storeIds);
-    if (view !== "todos") query = query.eq("general_status", view);
+    if (view !== "todos") query = query.eq("macro_stage", view);
     const { data, error } = await query
       // Lo que más importa operativamente es qué se movió (o dejó de moverse)
       // hace más tiempo; los que nunca se movieron van primero.
@@ -83,45 +80,48 @@ export async function getOrderMasterRows(
 
 export interface MasterCounts {
   todos: number;
-  pendiente: number;
-  en_proceso: number;
-  entregado: number;
-  anulado: number;
-  devuelto: number;
+  por_confirmar: number;
+  preparacion: number;
+  por_despachar: number;
+  en_curso: number;
+  por_cerrar: number;
+  finalizado: number;
 }
 
 /** Conteos exactos por pestaña, con consultas `head` (no traen filas). */
 export async function getOrderMasterCounts(storeIds: string[]): Promise<MasterCounts> {
   const empty: MasterCounts = {
     todos: 0,
-    pendiente: 0,
-    en_proceso: 0,
-    entregado: 0,
-    anulado: 0,
-    devuelto: 0,
+    por_confirmar: 0,
+    preparacion: 0,
+    por_despachar: 0,
+    en_curso: 0,
+    por_cerrar: 0,
+    finalizado: 0,
   };
   if (!storeIds.length) return empty;
   const sb = await createServerSupabase();
 
-  const countFor = async (status: GeneralStatus | null): Promise<number> => {
+  const countFor = async (stage: OrderMacroStage | null): Promise<number> => {
     let query = sb
       .from("order_master")
       .select("id", { count: "exact", head: true })
       .in("store_id", storeIds);
-    if (status) query = query.eq("general_status", status);
+    if (stage) query = query.eq("macro_stage", stage);
     const { count, error } = await query;
     return error ? 0 : (count ?? 0);
   };
 
-  const [todos, pendiente, en_proceso, entregado, anulado, devuelto] = await Promise.all([
+  const [todos, por_confirmar, preparacion, por_despachar, en_curso, por_cerrar, finalizado] = await Promise.all([
     countFor(null),
-    countFor("pendiente"),
-    countFor("en_proceso"),
-    countFor("entregado"),
-    countFor("anulado"),
-    countFor("devuelto"),
+    countFor("por_confirmar"),
+    countFor("preparacion"),
+    countFor("por_despachar"),
+    countFor("en_curso"),
+    countFor("por_cerrar"),
+    countFor("finalizado"),
   ]);
-  return { todos, pendiente, en_proceso, entregado, anulado, devuelto };
+  return { todos, por_confirmar, preparacion, por_despachar, en_curso, por_cerrar, finalizado };
 }
 
 /** Búsqueda global (código, guía, teléfono, cliente), fuera de la pestaña activa. */

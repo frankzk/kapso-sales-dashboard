@@ -1,8 +1,8 @@
 // MOM v1 — macroetapas calculadas del Master de Pedidos.
 //
-// Este modelo NO reemplaza todavía `general_status` / `operational_status`.
-// Se materializa en paralelo (modo sombra) para comparar el MOM con la operación
-// real antes de convertirlo en las colas principales de Kapta.
+// Es la navegación operativa principal del Master de Pedidos. Los estados
+// `general_status` / `operational_status` se conservan como compatibilidad y
+// evidencia histórica, pero las colas del equipo se organizan con el MOM.
 
 export const MOM_RESOLUTION_VERSION = "mom-v1" as const;
 
@@ -78,6 +78,63 @@ export type MacroSubstage =
   | "devuelto_cerrado"
   | "incidencia_cerrada"
   | "merma_cerrada";
+
+/** Orden canónico de subetapas dentro de cada macroetapa del MOM. */
+export const MACRO_SUBSTAGES_BY_STAGE: Record<
+  OrderMacroStage,
+  readonly MacroSubstage[]
+> = {
+  por_confirmar: [
+    "sin_llamar",
+    "por_confirmar",
+    "volver_a_contactar",
+    "ultimo_intento",
+    "pago_requerido_pendiente",
+  ],
+  preparacion: ["por_generar_rotulo", "por_armar", "incidencia_preparacion"],
+  por_despachar: [
+    "listo_para_asignar",
+    "asignado_a_ruta",
+    "en_cotejo",
+    "cotejo_incompleto",
+    "listo_para_recojo",
+    "retirado_del_manifiesto",
+  ],
+  en_curso: [
+    "recibido_por_courier",
+    "en_transito",
+    "en_destino",
+    "en_reparto",
+    "disponible_para_recojo",
+    "pendiente_pago_diferencia",
+    "por_reprogramar_lima",
+    "gestion_reproprovincia",
+    "salida_swayp_programada",
+    "retorno_solicitado",
+    "en_retorno",
+  ],
+  por_cerrar: [
+    "pendiente_liquidacion",
+    "liquidacion_observada",
+    "salida_adicional_activa",
+    "devolucion_fisica_pendiente",
+    "devolucion_pendiente_inventario",
+    "recogido_sin_pago_completo",
+    "indemnizacion_pendiente",
+    "merma_pendiente",
+    "reembolso_pendiente",
+    "devolucion_cliente",
+    "validacion_cierre_pendiente",
+  ],
+  finalizado: [
+    "entregado_cerrado",
+    "recogido_cerrado",
+    "anulado_cerrado",
+    "devuelto_cerrado",
+    "incidencia_cerrada",
+    "merma_cerrada",
+  ],
+};
 
 export const MACRO_SUBSTAGE_LABEL: Record<MacroSubstage, string> = {
   sin_llamar: "Sin llamar",

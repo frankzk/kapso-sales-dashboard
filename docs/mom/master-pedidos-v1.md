@@ -1,6 +1,6 @@
 # Master Operations Map — Master de Pedidos v1
 
-Estado: especificación funcional aprobada para iniciar la Fase 1  
+Estado: Fase 2 implementada; macroetapas activas en el Master
 Propietario del proceso: Frankz  
 Sistema: Kapta (`kapso-sales-dashboard`)  
 Fuente visual: board Miro «Master Operations Map»  
@@ -18,10 +18,10 @@ Objetivo de producto:
 > Todo el equipo debe poder ejercer sus funciones dentro del Master de Pedidos,
 > y toda acción operativa debe quedar registrada allí.
 
-La implementación debe ser incremental y compatible con la operación actual.
-Las nuevas macroetapas se incorporan primero en **modo sombra**: Kapta las
-calcula y permite compararlas con el estado vigente, pero no reemplaza las
-colas actuales hasta que la operación valide su exactitud.
+La implementación es incremental y compatible con la operación actual. La
+Fase 1 calculó las macroetapas en modo sombra. Desde la Fase 2, las seis
+macroetapas y sus subetapas son la navegación principal del Master; los estados
+heredados continúan disponibles como evidencia y compatibilidad.
 
 ## 2. Principios no negociables
 
@@ -644,18 +644,16 @@ Implementación publicada en `/dashboard/pedidos/despacho`:
 
 ## 19. Compatibilidad y activación
 
-La Fase 1 no reemplaza inicialmente:
+La Fase 1 añadió `macro_stage`, `macro_substage` y `macro_reasons` en modo
+sombra. La Fase 2 activa estas columnas como navegación principal:
 
-- `general_status`.
-- `operational_status`.
-- pestañas Pendiente/En proceso/Entregado/Anulado/Devuelto.
-
-Añade `macro_stage`, `macro_substage` y `macro_reasons`. Durante el modo sombra:
-
-1. Se recalculan junto al Master actual.
-2. Se comparan contra casos reales.
-3. Las diferencias se revisan como reglas, no se corrigen editando filas.
-4. Solo después de validación se habilitan filtros y colas por macroetapa.
+1. El Master se filtra por las seis macroetapas del MOM.
+2. Cada macroetapa expone sus subetapas y conteos reales.
+3. La tabla y el drawer muestran macroetapa y subetapa.
+4. `general_status` y `operational_status` se conservan para compatibilidad,
+   reglas heredadas y correcciones autorizadas; ya no organizan las pestañas.
+5. Las diferencias se corrigen en el resolver o mediante nuevos eventos, nunca
+   editando directamente el read-model.
 
 ## 20. Criterios de aceptación de la Fase 1
 
@@ -671,7 +669,8 @@ Añade `macro_stage`, `macro_substage` y `macro_reasons`. Durante el modo sombra
 - Un pedido cancelado con paquete todavía fuera se calcula como Por cerrar.
 - Un pedido cancelado que nunca salió se calcula como Finalizado.
 - La implementación funciona aunque la migración todavía no esté aplicada.
-- Ninguna pestaña actual cambia durante el modo sombra.
+- La navegación principal muestra Por confirmar, Preparación, Por despachar,
+  En curso, Por cerrar y Finalizado.
 
 ## 21. Pendientes que no bloquean la Fase 1
 
