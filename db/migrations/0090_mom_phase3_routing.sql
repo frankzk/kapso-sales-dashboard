@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0065_mom_phase3_routing.sql — Activación del motor de modalidades del MOM.
+-- 0090_mom_phase3_routing.sql — Activación del motor de modalidades del MOM.
 --
 -- Los pedidos históricos de Shopify no siempre traen `shipping_mode`. Si su
 -- geografía es conocida y no corresponde a Lima/Callao, la operación normal es

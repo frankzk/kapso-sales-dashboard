@@ -21,6 +21,10 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, cn, EmptyState } from "@/components/ui";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
+import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
+import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
+import { OrderClosureDesk } from "@/components/order-closure-desk";
+import { OrderRouteDesk } from "@/components/order-route-desk";
 import { ChecklistFilter } from "@/components/filters";
 import { PickupKeyPanel } from "@/components/pickup-key-panel";
 import { TandersGuideModal } from "@/components/tanders-guide-modal";
@@ -34,6 +38,7 @@ import {
   loadOrderDetail,
   loadOrderGeo,
   registerReturn,
+  registerClosureAction,
   relinkGuide,
   setOrderStatus,
   updateOrderGeo,
@@ -61,8 +66,16 @@ import {
   operationalStatusesFor,
   type GeneralStatus,
 } from "@/lib/order-status";
+import {
+  MACRO_SUBSTAGES_BY_STAGE,
+  macroStageLabel,
+  macroSubstageLabel,
+  type MacroSubstage,
+} from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, usesPickupKeyFlow, type KeyState, type PaymentState } from "@/lib/pickup-key";
 import { MASTER_VIEWS, type MasterCounts, type MasterView, type OrderMasterDetail } from "@/lib/orders-master-access";
+import { outputDisplayCode } from "@/lib/shipment-output";
+import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -231,6 +244,28 @@ function StatusBadge({ status, locked }: { status: string; locked?: boolean }) {
   );
 }
 
+const MACRO_STAGE_TONE: Record<string, string> = {
+  por_confirmar: "bg-amber-50 text-amber-800 ring-amber-600/20",
+  preparacion: "bg-sky-50 text-sky-800 ring-sky-600/20",
+  por_despachar: "bg-indigo-50 text-indigo-800 ring-indigo-600/20",
+  en_curso: "bg-cyan-50 text-cyan-800 ring-cyan-600/20",
+  por_cerrar: "bg-orange-50 text-orange-800 ring-orange-600/20",
+  finalizado: "bg-emerald-50 text-emerald-800 ring-emerald-600/20",
+};
+
+function MacroStageBadge({ stage }: { stage: string | null | undefined }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset",
+        MACRO_STAGE_TONE[stage ?? ""] ?? "bg-slate-100 text-slate-700 ring-slate-500/20",
+      )}
+    >
+      {macroStageLabel(stage)}
+    </span>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Board
 // ---------------------------------------------------------------------------
@@ -238,7 +273,9 @@ function StatusBadge({ status, locked }: { status: string; locked?: boolean }) {
 export function OrdersMasterBoard({
   stores,
   view,
+  substage,
   counts,
+  substageCounts,
   rows,
   total,
   page,
@@ -253,10 +290,13 @@ export function OrdersMasterBoard({
   canCreateTandersGuide,
   canCreateShalomGuide,
   canDispatch,
+  closurePermissions,
 }: {
   stores: StoreSummary[];
   view: MasterView;
+  substage: MacroSubstage | null;
   counts: MasterCounts;
+  substageCounts: Partial<Record<MacroSubstage, number>>;
   /** UNA página ya filtrada y ordenada por la base. Antes llegaban las ~10.000
    *  filas y se filtraba aquí: eran 13 MB por carga y ~10 s de espera. */
   rows: OrderMasterRow[];
@@ -284,6 +324,14 @@ export function OrdersMasterBoard({
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
   canDispatch: boolean;
+  closurePermissions: {
+    canReturn: boolean;
+    canInventory: boolean;
+    canFinance: boolean;
+    canFinalize: boolean;
+    canRefund: boolean;
+    canReopen: boolean;
+  };
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -309,6 +357,14 @@ export function OrdersMasterBoard({
       page: next.page ?? (next.filters || next.sortKey ? 1 : page),
     });
     if (view !== "todos") qs.set("view", view);
+    if (substage) qs.set("substage", substage);
+    startNav(() => router.replace(`${pathname}?${qs.toString()}`, { scroll: false }));
+  };
+
+  const navigateStage = (stage: MasterView, nextSubstage: MacroSubstage | null = null) => {
+    const qs = buildMasterQuery({ filters, sortKey: "created", page: 1 });
+    if (stage !== "todos") qs.set("view", stage);
+    if (nextSubstage) qs.set("substage", nextSubstage);
     startNav(() => router.replace(`${pathname}?${qs.toString()}`, { scroll: false }));
   };
 
@@ -337,6 +393,7 @@ export function OrdersMasterBoard({
     const map = new Map(stores.map((s) => [s.id, s.name]));
     return (id: string) => map.get(id) ?? "—";
   }, [stores]);
+  const stageSubstages = view === "todos" ? [] : MACRO_SUBSTAGES_BY_STAGE[view];
 
   function patch(next: Partial<MasterFilters>) {
     navigate({ filters: next });
@@ -439,31 +496,86 @@ export function OrdersMasterBoard({
             />
           )}
 
-          {/* Pestañas por estado general */}
-          <div className="flex flex-wrap gap-1.5">
-            {MASTER_VIEWS.map((v) => (
-              <button
-                key={v.key}
-                onClick={() => {
-                  // Cambiar de pestaña conserva lo que ya estaba filtrado: el
-                  // estado general es un filtro más, no un borrón y cuenta nueva.
-                  const qs = buildMasterQuery({ filters, sortKey, page: 1 });
-                  if (v.key !== "todos") qs.set("view", v.key);
-                  startNav(() =>
-                    router.replace(`${pathname}?${qs.toString()}`, { scroll: false }),
+          <section aria-label="Macroetapas del pedido" className="space-y-2">
+            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
+              <div className="grid min-w-[1040px] grid-cols-[112px_repeat(6,minmax(148px,1fr))] gap-1">
+                {MASTER_VIEWS.map((stage, index) => {
+                  const active = stage.key === view;
+                  const isAll = stage.key === "todos";
+                  return (
+                    <button
+                      key={stage.key}
+                      type="button"
+                      aria-current={active ? "page" : undefined}
+                      onClick={() => navigateStage(stage.key)}
+                      className={cn(
+                        "group flex min-h-14 items-center gap-2 rounded-lg px-3 text-left transition",
+                        active
+                          ? "bg-slate-950 text-white shadow-sm"
+                          : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
+                        navigating && "opacity-60",
+                      )}
+                    >
+                      {!isAll && (
+                        <span className={cn(
+                          "grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-bold",
+                          active ? "bg-white/15 text-white" : "bg-slate-100 text-slate-500",
+                        )}>
+                          {String(index).padStart(2, "0")}
+                        </span>
+                      )}
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-semibold">{stage.label}</span>
+                        <span className={cn("block text-xs", active ? "text-slate-300" : "text-slate-400")}>
+                          {counts[stage.key].toLocaleString("es-PE")} pedidos
+                        </span>
+                      </span>
+                    </button>
                   );
-                }}
-                className={cn(
-                  "rounded-lg px-3 py-1.5 text-sm font-medium transition",
-                  v.key === view ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50",
-                  navigating && "opacity-60",
-                )}
-              >
-                {v.label}
-                <span className="ml-1.5 text-xs text-slate-400">{counts[v.key]}</span>
-              </button>
-            ))}
-          </div>
+                })}
+              </div>
+            </div>
+
+            {view !== "todos" && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">
+                  Subetapas
+                </span>
+                <button
+                  type="button"
+                  onClick={() => navigateStage(view)}
+                  className={cn(
+                    "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
+                    substage === null
+                      ? "border-slate-950 bg-slate-950 text-white"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
+                  )}
+                >
+                  Todas · {counts[view].toLocaleString("es-PE")}
+                </button>
+                {stageSubstages.map((stageSubstage) => {
+                  const count = substageCounts[stageSubstage] ?? 0;
+                  return (
+                    <button
+                      key={stageSubstage}
+                      type="button"
+                      disabled={count === 0}
+                      onClick={() => navigateStage(view, stageSubstage)}
+                      className={cn(
+                        "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
+                        substage === stageSubstage
+                          ? "border-brand-600 bg-brand-50 text-brand-700"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
+                        count === 0 && "cursor-not-allowed opacity-40",
+                      )}
+                    >
+                      {macroSubstageLabel(stageSubstage)} · {count.toLocaleString("es-PE")}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
 
           {/* Filtros */}
           <div className="flex flex-wrap items-center gap-2">
@@ -556,21 +668,9 @@ export function OrdersMasterBoard({
               </button>
             )}
 
-            <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-400">
-              Ordenar por:
-              <select
-                value={sortKey}
-                onChange={(e) => navigate({ sortKey: e.target.value as MasterSortKey })}
-                className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
-              >
-                <option value="created">Fecha de creación</option>
-                <option value="movement">Último movimiento</option>
-                <option value="status_age">Antigüedad en el estado</option>
-                <option value="attempts">Intentos</option>
-                <option value="couriers">Couriers</option>
-                <option value="total">Monto</option>
-              </select>
-            </label>
+            <span className="ml-auto text-xs text-slate-400">
+              Orden: Fecha de creación · más recientes primero
+            </span>
           </div>
 
           {showMore && (
@@ -682,6 +782,7 @@ export function OrdersMasterBoard({
           canCreateGuide={canCreateGuide}
           canCreateTandersGuide={canCreateTandersGuide}
           canCreateShalomGuide={canCreateShalomGuide}
+          closurePermissions={closurePermissions}
           storeName={storeName}
           onClose={() => setOpenId(null)}
           onSaved={() => router.refresh()}
@@ -935,8 +1036,8 @@ function MasterTable({
             <th className="px-2 py-2 text-right font-medium" title="Intentos de entrega">
               Int.
             </th>
-            <th className="px-2 py-2 font-medium">Estado</th>
-            <th className="px-2 py-2 font-medium">Estado operativo</th>
+            <th className="px-2 py-2 font-medium">Macroetapa</th>
+            <th className="px-2 py-2 font-medium">Subetapa</th>
             <th className="px-2 py-2 font-medium">Últ. movimiento</th>
             <th className="px-2 py-2 font-medium">Antigüedad</th>
             <th className="px-2 py-2 font-medium">Guía</th>
@@ -983,11 +1084,11 @@ function MasterTable({
                 </span>
               </td>
               <td className="px-2 py-2.5">
-                <StatusBadge status={r.general_status} locked={r.status_locked} />
+                <MacroStageBadge stage={r.macro_stage} />
               </td>
-              <td className="px-2 py-2.5 text-slate-600">{operationalLabel(r.operational_status)}</td>
+              <td className="px-2 py-2.5 text-slate-600">{macroSubstageLabel(r.macro_substage)}</td>
               <td className="px-2 py-2.5 text-slate-600">{fmtDate(r.last_movement_at)}</td>
-              <td className="px-2 py-2.5 text-slate-600">{fmtAge(r.status_since)}</td>
+              <td className="px-2 py-2.5 text-slate-600">{fmtAge(r.macro_since ?? r.status_since)}</td>
               <td className="px-2 py-2.5 font-mono text-xs text-slate-600">{r.guide_code ?? "—"}</td>
               <td className="px-2 py-2.5 text-slate-600" title={r.agency_branch ?? undefined}>
                 {r.pickup_state ? operationalLabel(r.pickup_state) : "—"}
@@ -1020,6 +1121,7 @@ const TIMELINE_LABEL: Record<string, string> = {
   cancelled_shopify: "Anulado en Shopify",
   courier_assigned: "Courier asignado",
   guide_registered: "Guía registrada",
+  route_output_created: "Salida y rótulo creados",
   dispatched: "Pedido despachado",
   out_for_delivery: "Salida a reparto",
   attempt_failed: "Intento fallido",
@@ -1029,7 +1131,21 @@ const TIMELINE_LABEL: Record<string, string> = {
   courier_change: "Cambio de courier",
   delivered: "Entrega confirmada",
   return_started: "Retorno iniciado",
+  return_requested: "Retorno solicitado",
+  return_received: "Devolución recibida en almacén",
   returned: "Pedido devuelto",
+  inventory_reconciled: "Producto reingresado a inventario",
+  merma_closed: "Merma cerrada",
+  liquidation_observed: "Liquidación observada",
+  liquidation_closed: "Liquidación conciliada",
+  indemnity_requested: "Indemnización solicitada",
+  indemnity_resolved: "Indemnización resuelta",
+  refund_requested: "Reembolso solicitado",
+  refund_completed: "Reembolso confirmado",
+  customer_return_started: "Devolución del cliente abierta",
+  customer_return_resolved: "Devolución del cliente resuelta",
+  order_finalized: "Expediente finalizado",
+  order_reopened: "Expediente reabierto",
   status_override: "Estado cambiado manualmente",
   import: "Reporte importado",
   call: "Gestión con el cliente",
@@ -1043,9 +1159,11 @@ const TIMELINE_LABEL: Record<string, string> = {
  *  misma historia. */
 const DRAWER_SECTIONS = [
   { id: "productos", label: "Productos" },
+  { id: "rutas", label: "Rutas" },
   { id: "guias", label: "Guías" },
   { id: "pagos", label: "Pagos y clave" },
   { id: "ubicacion", label: "Ubicación" },
+  { id: "cierre", label: "Cierre" },
   { id: "acciones", label: "Acciones" },
   { id: "historial", label: "Historial" },
 ] as const;
@@ -1057,6 +1175,7 @@ function OrderDrawer({
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
+  closurePermissions,
   storeName,
   onClose,
   onSaved,
@@ -1067,6 +1186,14 @@ function OrderDrawer({
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
+  closurePermissions: {
+    canReturn: boolean;
+    canInventory: boolean;
+    canFinance: boolean;
+    canFinalize: boolean;
+    canRefund: boolean;
+    canReopen: boolean;
+  };
   storeName: (id: string) => string;
   onClose: () => void;
   onSaved: () => void;
@@ -1101,6 +1228,8 @@ function OrderDrawer({
   const [notice, setNotice] = useState<string | null>(null);
   const [tandersOpen, setTandersOpen] = useState(false);
   const [shalomOpen, setShalomOpen] = useState(false);
+  const [swaypOpen, setSwaypOpen] = useState(false);
+  const [manualRoute, setManualRoute] = useState<RouteCandidate | null>(null);
   const [pending, startTransition] = useTransition();
 
   const reload = useMemo(
@@ -1119,16 +1248,54 @@ function OrderDrawer({
     void reload();
   }, [reload]);
 
-  function run(action: () => Promise<{ error?: string; notice?: string }>) {
-    startTransition(async () => {
-      const res = await action();
-      setError(res.error ?? null);
-      setNotice(res.notice ?? null);
-      if (!res.error) {
-        await reload();
-        onSaved();
-      }
+  function run(action: () => Promise<{ error?: string; notice?: string }>): Promise<boolean> {
+    return new Promise((resolve) => {
+      startTransition(async () => {
+        try {
+          const res = await action();
+          setError(res.error ?? null);
+          setNotice(res.notice ?? null);
+          if (!res.error) {
+            await reload();
+            onSaved();
+            resolve(true);
+            return;
+          }
+          resolve(false);
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "No se pudo completar la acción.");
+          setNotice(null);
+          resolve(false);
+        }
+      });
     });
+  }
+
+  function routeEnabled(route: RouteCandidate): boolean {
+    if (route.action === "aliclik") return canCreateGuide;
+    if (route.action === "shalom") return canCreateShalomGuide;
+    if (route.action === "tanders") return canCreateTandersGuide;
+    return canEdit;
+  }
+
+  function selectRoute(route: RouteCandidate) {
+    if (route.action === "aliclik") {
+      jumpTo("aliclik");
+      return;
+    }
+    if (route.action === "shalom") {
+      setShalomOpen(true);
+      return;
+    }
+    if (route.action === "tanders") {
+      setTandersOpen(true);
+      return;
+    }
+    if (route.action === "swayp") {
+      setSwaypOpen(true);
+      return;
+    }
+    setManualRoute(route);
   }
 
   const row = detail?.row;
@@ -1260,12 +1427,12 @@ function OrderDrawer({
           <div className="space-y-5 p-5">
             <section className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
-                <StatusBadge status={detail.row.general_status} locked={detail.row.status_locked} />
+                <MacroStageBadge stage={detail.row.macro_stage} />
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                  {operationalLabel(detail.row.operational_status)}
+                  {macroSubstageLabel(detail.row.macro_substage)}
                 </span>
                 <span className="text-xs text-slate-400">
-                  {fmtAge(detail.row.status_since)} en este estado · fuente:{" "}
+                  {fmtAge(detail.row.macro_since ?? detail.row.status_since)} en esta macroetapa · fuente:{" "}
                   {detail.row.status_source ?? "—"}
                 </span>
               </div>
@@ -1310,6 +1477,15 @@ function OrderDrawer({
               </section>
             )}
 
+            <div data-drawer-section="rutas">
+              <OrderRouteDesk
+                plan={detail.routePlan}
+                closed={detail.row.macro_stage === "finalizado"}
+                actionEnabled={routeEnabled}
+                onSelect={selectRoute}
+              />
+            </div>
+
             <section>
               <div className="mb-1.5 flex items-center gap-2">
                 <h3
@@ -1318,28 +1494,6 @@ function OrderDrawer({
                 >
                   Couriers y guías ({detail.guides.length})
                 </h3>
-                {/* Solo se ofrece crear guía si el pedido no tiene una: dos guías
-                    para un mismo paquete es despacharlo dos veces. */}
-                {!detail.row.guide_code && (
-                  <div className="ml-auto flex gap-2">
-                    {canCreateTandersGuide && (
-                      <button
-                        onClick={() => setTandersOpen(true)}
-                        className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        + Guía Tanders
-                      </button>
-                    )}
-                    {canCreateShalomGuide && (
-                      <button
-                        onClick={() => setShalomOpen(true)}
-                        className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        + Guía Shalom
-                      </button>
-                    )}
-                  </div>
-                )}
               </div>
               {detail.guides.length === 0 ? (
                 <p className="text-sm text-slate-400">
@@ -1353,7 +1507,9 @@ function OrderDrawer({
                       className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm"
                     >
                       <span className="font-medium capitalize text-slate-800">{g.courier}</span>
-                      <span className="font-mono text-xs text-slate-500">{g.guide_code}</span>
+                      <span className="font-mono text-xs text-slate-500">
+                        {outputDisplayCode(g.output_code, g.courier) || g.guide_code}
+                      </span>
                       {/* Shalom muestra en su panel el nº de orden Y un código
                           corto. Sin el corto hay que abrir cada envío allá para
                           saber cuál es cuál. */}
@@ -1411,6 +1567,16 @@ function OrderDrawer({
                           }}
                         />
                       )}
+                      {g.qr_token && (
+                        <a
+                          href={`/api/pedidos/rotulo/${g.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          Rótulo interno
+                        </a>
+                      )}
                       {g.guide_code === detail.row.guide_code && (
                         <span className="ml-auto text-xs text-slate-400">actual</span>
                       )}
@@ -1419,6 +1585,18 @@ function OrderDrawer({
                 </ul>
               )}
             </section>
+
+            <div data-drawer-section="cierre">
+              <OrderClosureDesk
+                stage={detail.row.macro_stage}
+                reasons={(detail.row.macro_reasons ?? []) as MacroSubstage[]}
+                generalStatus={detail.row.general_status}
+                guides={detail.guides}
+                permissions={closurePermissions}
+                pending={pending}
+                onAction={(input) => run(() => registerClosureAction(orderId, input))}
+              />
+            </div>
 
             <section>
               <h3 data-drawer-section="historial" className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -1465,7 +1643,8 @@ function OrderDrawer({
                 guía está creada, y crear la guía exige el adelanto. Para
                 registrar el pago hacía falta la guía, y para la guía el pago. */}
             {(usesPickupKeyFlow(detail.row.current_courier, detail.row.shipping_mode) ||
-              (canCreateShalomGuide && !detail.row.guide_code)) && (
+              (canCreateShalomGuide && detail.routePlan.candidates.some((candidate) =>
+                candidate.key === "shalom" || candidate.key === "olva"))) && (
               <div data-drawer-section="pagos">
                 <PickupKeyPanel orderId={orderId} onChanged={onSaved} />
               </div>
@@ -1473,15 +1652,17 @@ function OrderDrawer({
 
             {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
                 una. En cuanto existe, el seguimiento vive en Envíos. */}
-            {canCreateGuide && !detail.row.guide_code && (
-              <AliclikGuidePanel
-                orderId={orderId}
-                hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
-                onCreated={() => {
-                  void reload();
-                  onSaved();
-                }}
-              />
+            {canCreateGuide && (
+              <div data-drawer-section="aliclik">
+                <AliclikGuidePanel
+                  orderId={orderId}
+                  hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
+                  onCreated={() => {
+                    void reload();
+                    onSaved();
+                  }}
+                />
+              </div>
             )}
 
             {canEdit ? (
@@ -1520,6 +1701,28 @@ function OrderDrawer({
         <ShalomGuideModal
           orderId={orderId}
           onClose={() => setShalomOpen(false)}
+          onCreated={() => {
+            void reload();
+            onSaved();
+          }}
+        />
+      )}
+      {swaypOpen && (
+        <DirectFenixGuideModal
+          initialOrderId={orderId}
+          onClose={() => setSwaypOpen(false)}
+          onCreated={() => {
+            void reload();
+            onSaved();
+          }}
+        />
+      )}
+      {manualRoute && ["axel", "urpi", "propio", "olva"].includes(manualRoute.key) && (
+        <ManualRouteOutputModal
+          orderId={orderId}
+          route={manualRoute as RouteCandidate & { key: "axel" | "urpi" | "propio" | "olva" }}
+          activeOutputs={detail?.routePlan.activeOutputCount ?? 0}
+          onClose={() => setManualRoute(null)}
           onCreated={() => {
             void reload();
             onSaved();

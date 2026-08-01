@@ -584,7 +584,15 @@ export async function registerManualShalomGuide(
     keyWarning = " No se ingresó la clave de recojo; regístrala después desde Pagos y clave antes de entregársela al cliente.";
   }
 
-  const advance = await validatedAdvance(admin, row.order_id);
+  const { data: validatedPayments } = await admin
+    .from("order_payments")
+    .select("amount")
+    .eq("order_id", row.order_id)
+    .eq("validation_status", "validado");
+  const advance = (validatedPayments ?? []).reduce(
+    (sum, payment) => sum + (Number(payment.amount) || 0),
+    0,
+  );
   await admin.from("order_events").insert({
     store_id: row.store_id,
     order_id: row.order_id,

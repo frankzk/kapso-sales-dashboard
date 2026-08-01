@@ -1,4 +1,4 @@
--- 0061_mom_macro_navigation.sql
+-- 0088_mom_macro_navigation.sql
 -- Activa el MOM como navegación principal y clasifica una sola vez las filas
 -- históricas que 0059 dejó con el valor inicial de modo sombra. Las fuentes
 -- originales no cambian; los recálculos TypeScript posteriores siguen siendo

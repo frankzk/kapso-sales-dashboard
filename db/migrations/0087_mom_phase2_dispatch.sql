@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0060_mom_phase2_dispatch.sql — Mesa de despacho y transferencia de custodia.
+-- 0087_mom_phase2_dispatch.sql — Mesa de despacho y transferencia de custodia.
 --
 -- Una ruta es un manifiesto de un courier en una fecha. La oficina coteja el
 -- 100 % de los paquetes y el motorizado vuelve a cotejar el 100 %. Crear o

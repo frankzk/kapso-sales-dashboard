@@ -189,6 +189,13 @@ export function ShalomGuideModal({
     void loadShalomProducts(storeId).then((res) => {
       if ("error" in res) return; // No es bloqueante: se puede escribir el id.
       setProducts(res.products);
+      setProductId((current) =>
+        current ??
+        res.products.find(
+          (product) => product.title.trim().toLocaleLowerCase("es-PE") === "caja paquete xxs",
+        )?.id ??
+        null,
+      );
     });
   }, [storeId, sessionReady, products.length]);
 

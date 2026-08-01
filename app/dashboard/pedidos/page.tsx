@@ -5,12 +5,13 @@ import {
   MASTER_PAGE_SIZE,
   getAgencySummaryCached,
   getMasterFacetsCached,
-  getOrderMasterCounts,
+  getOrderMasterMomCounts,
   getOrderMasterPage,
   isMasterView,
   type MasterView,
 } from "@/lib/orders-master-access";
 import { parseMasterQuery } from "@/lib/master-query";
+import { MACRO_SUBSTAGES_BY_STAGE, type MacroSubstage } from "@/lib/order-macro-stage";
 import { EmptyState } from "@/components/ui";
 import { OrdersMasterBoard } from "@/components/orders-master";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
@@ -55,16 +56,22 @@ async function PedidosContent({
   // y unos diez segundos mirando el esqueleto antes de ver nada.
   const flat: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(sp)) flat[k] = Array.isArray(v) ? v[0] : v;
-  const { filters, sortKey, page } = parseMasterQuery(flat);
+  const { filters, page } = parseMasterQuery(flat);
 
   const view: MasterView = isMasterView(flat.view) ? flat.view : "todos";
+  const substage: MacroSubstage | null =
+    view !== "todos" &&
+    !!flat.substage &&
+    MACRO_SUBSTAGES_BY_STAGE[view].includes(flat.substage as MacroSubstage)
+      ? (flat.substage as MacroSubstage)
+      : null;
 
   // El Master es consolidado: se consultan TODAS las tiendas accesibles, y el
   // filtro por tienda es uno más, aplicado también en la base.
   const storeIds = stores.map((s) => s.id);
-  const [counts, pageData, facets, agency] = await Promise.all([
-    getOrderMasterCounts(storeIds),
-    getOrderMasterPage(storeIds, { view, filters, sortKey, page }),
+  const [momCounts, pageData, facets, agency] = await Promise.all([
+    getOrderMasterMomCounts(storeIds),
+    getOrderMasterPage(storeIds, { view, substage, filters, sortKey: "created", page }),
     // Cacheadas: no dependen de lo que se esté filtrando ni buscando.
     getMasterFacetsCached(storeIds),
     getAgencySummaryCached(storeIds),
@@ -74,13 +81,15 @@ async function PedidosContent({
     <OrdersMasterBoard
       stores={stores}
       view={view}
-      counts={counts}
+      substage={substage}
+      counts={momCounts.stages}
+      substageCounts={momCounts.substages}
       rows={pageData.rows}
       total={pageData.total}
       page={pageData.page}
       pageSize={pageData.pageSize || MASTER_PAGE_SIZE}
       filters={filters}
-      sortKey={sortKey}
+      sortKey="created"
       facets={facets}
       agency={agency}
       canEdit={!perms.readOnly}

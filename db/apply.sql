@@ -175,4 +175,14 @@
 \ir migrations/0084_tanders_payment_check.sql
 \echo 'Applying 0085_ayacucho_huamanga_tariff_alias.sql'
 \ir migrations/0085_ayacucho_huamanga_tariff_alias.sql
+\echo 'Applying 0086_mom_phase1.sql'
+\ir migrations/0086_mom_phase1.sql
+\echo 'Applying 0087_mom_phase2_dispatch.sql'
+\ir migrations/0087_mom_phase2_dispatch.sql
+\echo 'Applying 0088_mom_macro_navigation.sql'
+\ir migrations/0088_mom_macro_navigation.sql
+\echo 'Applying 0089_order_master_mom_counts.sql'
+\ir migrations/0089_order_master_mom_counts.sql
+\echo 'Applying 0090_mom_phase3_routing.sql'
+\ir migrations/0090_mom_phase3_routing.sql
 \echo 'Done.'

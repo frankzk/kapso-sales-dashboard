@@ -1185,7 +1185,7 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   no probaría nada sobre lo que hace el cron de verdad.
 ## 5o. MOM Fase 1 — macroetapas sombra e identidad de salidas
 
-- **Requiere migración 0059** antes de activar cualquier interfaz de escaneo.
+- **Requiere migración 0086** antes de activar cualquier interfaz de escaneo.
 - La migración asigna a cada guía vinculada un consecutivo por pedido
   (`KP123-S01`, `KP123-S02`) y un `qr_token` opaco diferente.
 - `general_status` y `operational_status` continúan siendo productivos. Los
@@ -1206,7 +1206,7 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
 
 ## 5p. MOM Fase 2 — mesa de despacho y doble cotejo
 
-- **Requiere migración 0060** antes de abrir `/dashboard/pedidos/despacho`.
+- **Requiere migración 0087** antes de abrir `/dashboard/pedidos/despacho`.
 - La mesa acepta el QR opaco, el código `KP…-S01` o la guía del courier. La
   cámara es opcional: un lector USB o la escritura manual usan el mismo campo.
 - Almacén marca el paquete `listo_despacho`; Daysi/equipo lo incorpora y coteja

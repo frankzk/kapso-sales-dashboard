@@ -5844,3 +5844,667 @@ set coverage = order_coverage_for(
 where coverage_norm(region) = 'ayacucho'
   and coverage_norm(province) = 'huamanga'
   and coverage_norm(district) = 'huamanga';
+
+-- ---- 0086 ----
+-- ============================================================================
+-- 0086_mom_phase1.sql — Fundaciones del Master Operations Map.
+--
+-- Modo sombra: general_status/operational_status siguen siendo las pestañas
+-- productivas. Las macroetapas nuevas se calculan en paralelo para validarlas
+-- antes de promoverlas a navegación principal.
+--
+-- También formaliza que UNA guía es UNA salida física. Cada salida recibe un
+-- consecutivo dentro del pedido y un QR opaco estable. El courier y la fecha son
+-- metadatos: cambiar de courier nunca cambia el token de una salida existente.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Identidad y custodia de cada salida
+-- ----------------------------------------------------------------------------
+
+alter table shipments
+  add column if not exists output_number integer,
+  add column if not exists output_code text,
+  add column if not exists qr_token uuid not null default gen_random_uuid(),
+  -- no_iniciado | rotulo_generado | en_armado | listo_despacho | incidencia
+  add column if not exists preparation_state text not null default 'no_iniciado',
+  -- empresa | courier | retorno | devuelto
+  add column if not exists custody_state text not null default 'empresa',
+  add column if not exists ready_at timestamptz,
+  add column if not exists ready_by uuid references auth.users(id) on delete set null,
+  add column if not exists custody_transferred_at timestamptz,
+  add column if not exists custody_transferred_by uuid references auth.users(id) on delete set null;
+
+comment on column shipments.output_number is
+  'Consecutivo inmutable de la salida física dentro del pedido: 1, 2, 3…';
+comment on column shipments.output_code is
+  'Identidad humana estable de salida, p. ej. KP123-S02. El courier se muestra aparte.';
+comment on column shipments.qr_token is
+  'Token opaco y estable del QR. No incluye pedido, courier, fecha ni datos del cliente.';
+comment on column shipments.preparation_state is
+  'Estado de preparación MOM: no_iniciado, rotulo_generado, en_armado, listo_despacho, incidencia.';
+comment on column shipments.custody_state is
+  'Custodia física MOM: empresa, courier, retorno o devuelto.';
+
+-- Backfill determinista por pedido. En una base ya parcialmente migrada, los
+-- nulos continúan después del máximo existente para no reutilizar consecutivos.
+with existing as (
+  select order_id, coalesce(max(output_number), 0) as max_number
+    from shipments
+   where order_id is not null and output_number is not null
+   group by order_id
+), pending as (
+  select s.id,
+         coalesce(e.max_number, 0) + row_number() over (
+           partition by s.order_id
+           order by coalesce(s.assigned_at, s.created_at), s.created_at, s.id
+         ) as next_number
+    from shipments s
+    left join existing e on e.order_id = s.order_id
+   where s.order_id is not null and s.output_number is null
+)
+update shipments s
+   set output_number = p.next_number
+  from pending p
+ where s.id = p.id;
+
+update shipments s
+   set output_code = concat(
+         regexp_replace(
+           upper(trim(leading '#' from coalesce(nullif(s.order_name, ''), o.name, ''))),
+           '[^A-Z0-9_-]+',
+           '',
+           'g'
+         ),
+         '-S',
+         lpad(s.output_number::text, 2, '0')
+       )
+  from orders o
+ where o.id = s.order_id
+   and s.output_number is not null
+   and s.output_code is null
+   and coalesce(nullif(s.order_name, ''), o.name) is not null;
+
+-- Una guía ya despachada estaba necesariamente armada y fuera de la oficina.
+-- Para guías nuevas, la mera existencia de la guía prueba que el rótulo existe.
+update shipments
+   set preparation_state = case
+         when dispatched_at is not null
+           or out_for_delivery_at is not null
+           or delivery_status in ('en_ruta', 'entregado', 'transferido')
+           then 'listo_despacho'
+         else 'rotulo_generado'
+       end,
+       ready_at = case
+         when dispatched_at is not null
+           or out_for_delivery_at is not null
+           or delivery_status in ('en_ruta', 'entregado', 'transferido')
+           then coalesce(dispatched_at, out_for_delivery_at, assigned_at, created_at)
+         else ready_at
+       end
+ where preparation_state = 'no_iniciado';
+
+update shipments
+   set custody_state = case
+         when returned_at is not null then 'devuelto'
+         when dispatched_at is not null
+           or out_for_delivery_at is not null
+           or delivery_status in ('en_ruta', 'entregado', 'transferido')
+           then 'courier'
+         else custody_state
+       end,
+       custody_transferred_at = case
+         when returned_at is null and (
+           dispatched_at is not null
+           or out_for_delivery_at is not null
+           or delivery_status in ('en_ruta', 'entregado', 'transferido')
+         ) then coalesce(dispatched_at, out_for_delivery_at, assigned_at, created_at)
+         else custody_transferred_at
+       end;
+
+create unique index if not exists shipments_order_output_number_uniq
+  on shipments(order_id, output_number)
+  where order_id is not null and output_number is not null;
+create unique index if not exists shipments_store_output_code_uniq
+  on shipments(store_id, output_code)
+  where output_code is not null;
+create unique index if not exists shipments_qr_token_uniq on shipments(qr_token);
+create index if not exists shipments_preparation_idx
+  on shipments(store_id, preparation_state, created_at);
+create index if not exists shipments_custody_idx
+  on shipments(store_id, custody_state, created_at);
+
+-- Asigna la identidad a toda nueva guía y también cuando una guía sin pedido se
+-- vincula. Una corrección de vínculo conserva el qr_token, pero recalcula el
+-- código humano/consecutivo para el pedido correcto.
+create or replace function public.assign_shipment_output_identity()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  base_code text;
+begin
+  if new.order_id is null then
+    return new;
+  end if;
+
+  if tg_op = 'UPDATE' and new.order_id is distinct from old.order_id then
+    new.output_number := null;
+    new.output_code := null;
+  end if;
+
+  -- Serializa únicamente las asignaciones del mismo pedido. Evita dos S02 si
+  -- dos integraciones crean guías simultáneamente.
+  perform pg_advisory_xact_lock(hashtextextended(new.order_id::text, 0));
+
+  if new.output_number is null then
+    select coalesce(max(s.output_number), 0) + 1
+      into new.output_number
+      from shipments s
+     where s.order_id = new.order_id
+       and s.id is distinct from new.id;
+  end if;
+
+  if new.output_code is null then
+    select regexp_replace(
+             upper(trim(leading '#' from coalesce(nullif(new.order_name, ''), o.name, ''))),
+             '[^A-Z0-9_-]+',
+             '',
+             'g'
+           )
+      into base_code
+      from orders o
+     where o.id = new.order_id;
+    if coalesce(base_code, '') <> '' then
+      new.output_code := concat(base_code, '-S', lpad(new.output_number::text, 2, '0'));
+    end if;
+  end if;
+
+  if new.qr_token is null then
+    new.qr_token := gen_random_uuid();
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists shipments_output_identity on shipments;
+create trigger shipments_output_identity
+before insert or update of order_id, order_name on shipments
+for each row execute function public.assign_shipment_output_identity();
+
+-- ----------------------------------------------------------------------------
+-- Read-model MOM en modo sombra
+-- ----------------------------------------------------------------------------
+
+alter table order_master
+  add column if not exists macro_stage text not null default 'por_confirmar'
+    check (macro_stage in (
+      'por_confirmar', 'preparacion', 'por_despachar',
+      'en_curso', 'por_cerrar', 'finalizado'
+    )),
+  add column if not exists macro_substage text not null default 'sin_llamar',
+  add column if not exists macro_reasons text[] not null default '{}'::text[],
+  add column if not exists macro_operation text,
+  add column if not exists macro_version text not null default 'mom-v1',
+  add column if not exists macro_since timestamptz;
+
+comment on column order_master.macro_stage is
+  'Macroetapa MOM calculada en paralelo a general_status (modo sombra durante Fase 1).';
+comment on column order_master.macro_reasons is
+  'Motivos abiertos, especialmente en Por cerrar; pueden coexistir varios.';
+
+create index if not exists order_master_macro_stage_idx
+  on order_master(store_id, macro_stage, macro_since);
+create index if not exists order_master_macro_substage_idx
+  on order_master(store_id, macro_substage, macro_since);
+create index if not exists order_master_macro_reasons_idx
+  on order_master using gin(macro_reasons);
+
+-- ---- 0087 ----
+-- ============================================================================
+-- 0087_mom_phase2_dispatch.sql — Mesa de despacho y transferencia de custodia.
+--
+-- Una ruta es un manifiesto de un courier en una fecha. La oficina coteja el
+-- 100 % de los paquetes y el motorizado vuelve a cotejar el 100 %. Crear o
+-- enviar la ruta jamás prueba custodia: esta cambia únicamente en la función
+-- atómica finalize_dispatch_manifest().
+-- ============================================================================
+
+create table if not exists dispatch_manifests (
+  id                    uuid primary key default gen_random_uuid(),
+  org_id                uuid not null references organizations(id) on delete cascade,
+  courier               text not null,
+  route_date            date not null default current_date,
+  route_label           text not null,
+  driver_name           text,
+  state                 text not null default 'draft'
+    check (state in (
+      'draft', 'office_check', 'ready_for_pickup',
+      'pickup_check', 'in_custody', 'cancelled'
+    )),
+  created_by            uuid references auth.users(id) on delete set null,
+  office_completed_at   timestamptz,
+  office_completed_by   uuid references auth.users(id) on delete set null,
+  custody_completed_at  timestamptz,
+  custody_completed_by  uuid references auth.users(id) on delete set null,
+  cancelled_at          timestamptz,
+  cancelled_by          uuid references auth.users(id) on delete set null,
+  cancellation_reason   text,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
+  check (length(trim(courier)) > 0),
+  check (length(trim(route_label)) > 0)
+);
+
+create index if not exists dispatch_manifests_active_idx
+  on dispatch_manifests(org_id, route_date desc, state)
+  where state not in ('in_custody', 'cancelled');
+create index if not exists dispatch_manifests_history_idx
+  on dispatch_manifests(org_id, route_date desc, created_at desc);
+create unique index if not exists dispatch_manifest_route_uniq
+  on dispatch_manifests(org_id, route_date, lower(trim(courier)), lower(trim(route_label)))
+  where state <> 'cancelled';
+
+drop trigger if exists dispatch_manifests_touch on dispatch_manifests;
+create trigger dispatch_manifests_touch before update on dispatch_manifests
+  for each row execute function public.touch_updated_at();
+
+create table if not exists dispatch_manifest_items (
+  id                 uuid primary key default gen_random_uuid(),
+  manifest_id        uuid not null references dispatch_manifests(id) on delete cascade,
+  shipment_id        uuid not null references shipments(id) on delete restrict,
+  store_id           uuid not null references stores(id) on delete cascade,
+  added_by           uuid references auth.users(id) on delete set null,
+  added_at           timestamptz not null default now(),
+  office_checked_by  uuid references auth.users(id) on delete set null,
+  office_checked_at  timestamptz,
+  pickup_checked_by  uuid references auth.users(id) on delete set null,
+  pickup_checked_at  timestamptz,
+  removed_by         uuid references auth.users(id) on delete set null,
+  removed_at         timestamptz,
+  removal_reason     text,
+  created_at         timestamptz not null default now(),
+  unique (manifest_id, shipment_id),
+  check (
+    (removed_at is null and removal_reason is null)
+    or (removed_at is not null and length(trim(coalesce(removal_reason, ''))) > 0)
+  )
+);
+
+-- Una salida física no puede estar activa en dos rutas a la vez. Si se retira
+-- expresamente, puede incorporarse a una ruta posterior conservando el rastro.
+create unique index if not exists dispatch_item_active_shipment_uniq
+  on dispatch_manifest_items(shipment_id) where removed_at is null;
+create index if not exists dispatch_items_manifest_idx
+  on dispatch_manifest_items(manifest_id, removed_at, added_at);
+create index if not exists dispatch_items_store_idx
+  on dispatch_manifest_items(store_id, added_at desc);
+
+-- Auditoría propia de la ruta. Es append-only igual que order_events.
+create table if not exists dispatch_events (
+  id           uuid primary key default gen_random_uuid(),
+  org_id       uuid not null references organizations(id) on delete cascade,
+  manifest_id  uuid references dispatch_manifests(id) on delete set null,
+  shipment_id  uuid references shipments(id) on delete set null,
+  actor        uuid references auth.users(id) on delete set null,
+  kind         text not null,
+  payload      jsonb not null default '{}'::jsonb,
+  occurred_at  timestamptz not null default now()
+);
+
+create index if not exists dispatch_events_manifest_idx
+  on dispatch_events(manifest_id, occurred_at desc);
+create index if not exists dispatch_events_org_idx
+  on dispatch_events(org_id, occurred_at desc);
+
+alter table dispatch_manifests enable row level security;
+alter table dispatch_manifest_items enable row level security;
+alter table dispatch_events enable row level security;
+
+drop policy if exists dispatch_manifests_select on dispatch_manifests;
+create policy dispatch_manifests_select on dispatch_manifests for select to authenticated
+  using (org_id in (select auth_org_ids()));
+
+drop policy if exists dispatch_manifest_items_select on dispatch_manifest_items;
+create policy dispatch_manifest_items_select on dispatch_manifest_items for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+drop policy if exists dispatch_events_select on dispatch_events;
+create policy dispatch_events_select on dispatch_events for select to authenticated
+  using (org_id in (select auth_org_ids()));
+
+revoke all on dispatch_manifests, dispatch_manifest_items, dispatch_events
+  from anon, authenticated, service_role;
+grant select on dispatch_manifests, dispatch_manifest_items, dispatch_events
+  to authenticated;
+grant all privileges on dispatch_manifests, dispatch_manifest_items to service_role;
+grant select, insert on dispatch_events to service_role;
+
+drop trigger if exists dispatch_events_append_only on dispatch_events;
+create trigger dispatch_events_append_only before update or delete on dispatch_events
+  for each row execute function public.reject_mutation();
+
+-- Última cerradura: bloquea la ruta, vuelve a comprobar ambos cotejos y mueve
+-- todos sus paquetes en una sola transacción. Devuelve los pedidos afectados
+-- para que el server action refresque el read-model del Master.
+create or replace function public.finalize_dispatch_manifest(
+  p_manifest_id uuid,
+  p_actor uuid
+)
+returns uuid[]
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_manifest dispatch_manifests%rowtype;
+  v_total integer;
+  v_office integer;
+  v_pickup integer;
+  v_order_ids uuid[];
+begin
+  select * into v_manifest
+    from dispatch_manifests
+   where id = p_manifest_id
+   for update;
+
+  if not found then
+    raise exception 'Ruta no encontrada.';
+  end if;
+  if v_manifest.state = 'cancelled' then
+    raise exception 'La ruta está cancelada.';
+  end if;
+  if v_manifest.state = 'in_custody' then
+    return coalesce((
+      select array_agg(distinct s.order_id) filter (where s.order_id is not null)
+        from dispatch_manifest_items i
+        join shipments s on s.id = i.shipment_id
+       where i.manifest_id = p_manifest_id and i.removed_at is null
+    ), '{}'::uuid[]);
+  end if;
+
+  select count(*),
+         count(*) filter (where office_checked_at is not null),
+         count(*) filter (where pickup_checked_at is not null)
+    into v_total, v_office, v_pickup
+    from dispatch_manifest_items
+   where manifest_id = p_manifest_id and removed_at is null;
+
+  if v_total = 0 then
+    raise exception 'La ruta no tiene paquetes activos.';
+  end if;
+  if v_office <> v_total then
+    raise exception 'El cotejo de oficina no está completo (%/%).', v_office, v_total;
+  end if;
+  if v_pickup <> v_total then
+    raise exception 'El cotejo del motorizado no está completo (%/%).', v_pickup, v_total;
+  end if;
+
+  select coalesce(array_agg(distinct s.order_id) filter (where s.order_id is not null), '{}'::uuid[])
+    into v_order_ids
+    from dispatch_manifest_items i
+    join shipments s on s.id = i.shipment_id
+   where i.manifest_id = p_manifest_id and i.removed_at is null;
+
+  update shipments s
+     set custody_state = 'courier',
+         custody_transferred_at = now(),
+         custody_transferred_by = p_actor,
+         dispatched_at = coalesce(s.dispatched_at, now())
+    from dispatch_manifest_items i
+   where i.manifest_id = p_manifest_id
+     and i.removed_at is null
+     and s.id = i.shipment_id;
+
+  update dispatch_manifests
+     set state = 'in_custody',
+         custody_completed_at = now(),
+         custody_completed_by = p_actor
+   where id = p_manifest_id;
+
+  insert into order_events (
+    store_id, order_id, kind, occurred_at, actor, source, courier,
+    guide_code, shipment_id, note, payload
+  )
+  select s.store_id, s.order_id, 'custody_transferred', now(), p_actor,
+         'dispatch', s.courier, s.guide_code, s.id,
+         'Paquete cotejado y recibido por el motorizado.',
+         jsonb_build_object(
+           'manifest_id', p_manifest_id,
+           'route_label', v_manifest.route_label,
+           'route_date', v_manifest.route_date,
+           'driver_name', v_manifest.driver_name
+         )
+    from dispatch_manifest_items i
+    join shipments s on s.id = i.shipment_id
+   where i.manifest_id = p_manifest_id
+     and i.removed_at is null
+     and s.order_id is not null;
+
+  insert into dispatch_events (org_id, manifest_id, actor, kind, payload)
+  values (
+    v_manifest.org_id, p_manifest_id, p_actor, 'custody_transferred',
+    jsonb_build_object('packages', v_total, 'driver_name', v_manifest.driver_name)
+  );
+
+  return v_order_ids;
+end;
+$$;
+
+revoke all on function public.finalize_dispatch_manifest(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.finalize_dispatch_manifest(uuid, uuid)
+  to service_role;
+
+-- ---- 0088 ----
+-- 0088_mom_macro_navigation.sql
+-- Activa el MOM como navegación principal y clasifica una sola vez las filas
+-- históricas que 0059 dejó con el valor inicial de modo sombra. Las fuentes
+-- originales no cambian; los recálculos TypeScript posteriores siguen siendo
+-- la resolución autoritativa y reemplazan esta inferencia conservadora.
+
+with base as (
+  select
+    id,
+    general_status,
+    operational_status,
+    shipping_mode,
+    payment_state,
+    pickup_state,
+    dispatched_at,
+    returned_at,
+    status_since,
+    order_created_at,
+    updated_at,
+    lower(coalesce(region, '')) as region_key,
+    lower(coalesce(province, '')) as province_key
+  from order_master
+  where macro_since is null
+), classified as (
+  select
+    base.*,
+    case
+      when shipping_mode = 'agency' then 'agencia'
+      when region_key in ('lima', 'callao') or province_key in ('lima', 'callao') then 'lima'
+      else 'provincia_cod'
+    end as inferred_operation,
+    case
+      when general_status = 'entregado'
+        and shipping_mode = 'agency'
+        and payment_state = 'pago_completo' then 'finalizado'
+      when general_status = 'entregado' then 'por_cerrar'
+      when general_status = 'anulado' and dispatched_at is null then 'finalizado'
+      when general_status in ('anulado', 'devuelto') then 'por_cerrar'
+      when general_status = 'en_proceso' and operational_status = 'asignado_a_courier'
+        and dispatched_at is null then 'preparacion'
+      when general_status = 'en_proceso' then 'en_curso'
+      when operational_status in ('preparado_sin_despachar', 'sin_asignar_courier', 'nunca_salio_a_reparto')
+        then 'por_despachar'
+      when operational_status in ('confirmado_sin_preparar', 'pendiente_de_envio', 'detenido_sin_informacion')
+        then 'preparacion'
+      when region_key in ('lima', 'callao') or province_key in ('lima', 'callao')
+        then 'preparacion'
+      else 'por_confirmar'
+    end as inferred_stage
+  from base
+), resolved as (
+  select
+    classified.*,
+    case inferred_stage
+      when 'finalizado' then
+        case
+          when general_status = 'entregado' and inferred_operation = 'agencia' then 'recogido_cerrado'
+          when general_status = 'entregado' then 'entregado_cerrado'
+          when general_status = 'devuelto' then 'devuelto_cerrado'
+          else 'anulado_cerrado'
+        end
+      when 'por_cerrar' then
+        case
+          when general_status = 'entregado' and inferred_operation = 'agencia'
+            and payment_state is distinct from 'pago_completo' then 'recogido_sin_pago_completo'
+          when general_status = 'entregado' then 'pendiente_liquidacion'
+          when returned_at is not null then 'devolucion_pendiente_inventario'
+          else 'devolucion_fisica_pendiente'
+        end
+      when 'en_curso' then
+        case
+          when operational_status in ('en_reparto', 'intento_de_entrega') then 'en_reparto'
+          when operational_status in ('disponible_para_recojo', 'cliente_notificado', 'pendiente_de_recojo', 'proximo_a_vencer')
+            and payment_state is distinct from 'pago_completo' then 'pendiente_pago_diferencia'
+          when operational_status in ('disponible_para_recojo', 'cliente_notificado', 'pendiente_de_recojo', 'proximo_a_vencer')
+            then 'disponible_para_recojo'
+          when operational_status in ('pendiente_de_reprogramacion', 'reprogramado', 'pendiente_nuevo_courier', 'espera_respuesta_cliente')
+            and inferred_operation = 'lima' then 'por_reprogramar_lima'
+          when operational_status in ('pendiente_de_reprogramacion', 'reprogramado', 'pendiente_nuevo_courier', 'espera_respuesta_cliente')
+            then 'gestion_reproprovincia'
+          when operational_status in ('retorno_iniciado', 'en_proceso_de_retorno') then 'en_retorno'
+          when operational_status in ('registrado_en_agencia') then 'en_destino'
+          when operational_status in ('en_ruta', 'enviado_a_agencia', 'en_transito', 'en_traslado', 'despachado')
+            then 'en_transito'
+          else 'recibido_por_courier'
+        end
+      when 'por_despachar' then 'listo_para_asignar'
+      when 'preparacion' then
+        case
+          when operational_status = 'detenido_sin_informacion' then 'incidencia_preparacion'
+          when operational_status = 'asignado_a_courier' then 'por_armar'
+          else 'por_generar_rotulo'
+        end
+      else 'sin_llamar'
+    end as inferred_substage
+  from classified
+)
+update order_master as target
+set
+  macro_stage = resolved.inferred_stage,
+  macro_substage = resolved.inferred_substage,
+  macro_reasons = case resolved.inferred_stage
+    when 'por_cerrar' then array[resolved.inferred_substage]::text[]
+    else '{}'::text[]
+  end,
+  macro_operation = resolved.inferred_operation,
+  macro_version = 'mom-v1',
+  macro_since = coalesce(resolved.status_since, resolved.order_created_at, resolved.updated_at, now())
+from resolved
+where target.id = resolved.id;
+
+comment on column order_master.macro_stage is
+  'Macroetapa MOM usada por la navegación principal del Master; general_status se conserva como compatibilidad.';
+
+-- ---- 0089 ----
+-- 0089_order_master_mom_counts.sql
+-- Devuelve todos los conteos del MOM en una sola consulta agrupada. La función
+-- respeta el RLS de order_master porque usa SECURITY INVOKER.
+
+create or replace function public.order_master_mom_counts(p_store_ids uuid[])
+returns table (
+  macro_stage text,
+  macro_substage text,
+  total bigint
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select
+    om.macro_stage,
+    om.macro_substage,
+    count(*)::bigint as total
+  from public.order_master as om
+  where om.store_id = any(p_store_ids)
+  group by om.macro_stage, om.macro_substage;
+$$;
+
+revoke all on function public.order_master_mom_counts(uuid[]) from public, anon;
+grant execute on function public.order_master_mom_counts(uuid[]) to authenticated, service_role;
+
+comment on function public.order_master_mom_counts(uuid[]) is
+  'Conteos agrupados por macroetapa y subetapa del MOM, respetando RLS.';
+
+create or replace function public.order_master_agency_summary(p_store_ids uuid[])
+returns table (
+  total bigint,
+  disponibles bigint,
+  proximos_a_vencer bigint,
+  retorno_iniciado bigint,
+  devueltos bigint
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select
+    count(*)::bigint,
+    count(*) filter (
+      where om.general_status <> 'devuelto'
+        and om.pickup_state in ('disponible_para_recojo', 'pendiente_de_recojo')
+    )::bigint,
+    count(*) filter (
+      where om.general_status <> 'devuelto'
+        and om.agency_expires_at is not null
+        and om.agency_expires_at <= now() + interval '3 days'
+    )::bigint,
+    count(*) filter (
+      where om.general_status <> 'devuelto'
+        and om.pickup_state = 'retorno_iniciado'
+    )::bigint,
+    count(*) filter (where om.general_status = 'devuelto')::bigint
+  from public.order_master as om
+  where om.store_id = any(p_store_ids)
+    and (om.pickup_state is not null or om.shipping_mode = 'agency');
+$$;
+
+revoke all on function public.order_master_agency_summary(uuid[]) from public, anon;
+grant execute on function public.order_master_agency_summary(uuid[]) to authenticated, service_role;
+
+comment on function public.order_master_agency_summary(uuid[]) is
+  'Resumen exacto de pedidos en agencia para el encabezado del Master.';
+
+create index if not exists order_master_mom_stage_movement_idx
+  on public.order_master(store_id, macro_stage, last_movement_at desc nulls first, order_created_at desc);
+
+create index if not exists order_master_mom_substage_movement_idx
+  on public.order_master(store_id, macro_substage, last_movement_at desc nulls first, order_created_at desc);
+
+-- ---- 0090 ----
+-- ============================================================================
+-- 0090_mom_phase3_routing.sql — Activación del motor de modalidades del MOM.
+--
+-- Los pedidos históricos de Shopify no siempre traen `shipping_mode`. Si su
+-- geografía es conocida y no corresponde a Lima/Callao, la operación normal es
+-- Provincia COD. Agencia continúa siendo explícita: la determina shipping_mode
+-- o una salida Shalom/Olva al siguiente recálculo.
+-- ============================================================================
+
+update order_master
+   set macro_operation = 'provincia_cod',
+       macro_version = 'mom-v1',
+       updated_at = now()
+ where coalesce(macro_operation, 'desconocida') = 'desconocida'
+   and nullif(trim(concat_ws(' ', region, province)), '') is not null
+   and lower(concat_ws(' ', region, province)) !~ '(^|[^a-z])(lima|callao)([^a-z]|$)';
+
+comment on column shipments.created_via is
+  'Origen técnico de la salida: integraciones existentes, fenix_directo o mom_manual_route.';

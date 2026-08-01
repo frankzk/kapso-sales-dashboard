@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0059_mom_phase1.sql — Fundaciones del Master Operations Map.
+-- 0086_mom_phase1.sql — Fundaciones del Master Operations Map.
 --
 -- Modo sombra: general_status/operational_status siguen siendo las pestañas
 -- productivas. Las macroetapas nuevas se calculan en paralelo para validarlas

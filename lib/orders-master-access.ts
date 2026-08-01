@@ -12,6 +12,13 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { evaluateDirectFenixStock, type FenixStockRow } from "@/lib/fenix";
+import { deriveFenixCoverageCity } from "@/lib/shipments";
+import {
+  buildOrderRoutePlan,
+  type OrderRoutePlan,
+  type SwaypRouteCheck,
+} from "@/lib/order-route-plan";
 import type {
   OrderEventRow,
   OrderLineItem,
@@ -19,18 +26,20 @@ import type {
   ShipmentCallRow,
   ShipmentRow,
 } from "@/lib/types";
-import type { GeneralStatus } from "@/lib/order-status";
 import type { AgencySummary, MasterFilters, MasterSortKey } from "@/lib/order-master-filters";
+import {
+  ORDER_MACRO_STAGES,
+  classifyOperation,
+  type MacroSubstage,
+  type OperationKind,
+  type OrderMacroStage,
+} from "@/lib/order-macro-stage";
 
-export type MasterView = "todos" | GeneralStatus;
+export type MasterView = "todos" | OrderMacroStage;
 
-export const MASTER_VIEWS: { key: MasterView; label: string }[] = [
+export const MASTER_VIEWS: readonly { key: MasterView; label: string }[] = [
   { key: "todos", label: "Todos" },
-  { key: "pendiente", label: "Pendiente" },
-  { key: "en_proceso", label: "En proceso" },
-  { key: "entregado", label: "Entregado" },
-  { key: "anulado", label: "Anulado" },
-  { key: "devuelto", label: "Devuelto" },
+  ...ORDER_MACRO_STAGES.map((stage) => ({ key: stage.code, label: stage.label })),
 ];
 
 export function isMasterView(v: string | undefined | null): v is MasterView {
@@ -51,8 +60,9 @@ const MASTER_COLUMNS =
   "customer_phone,region,province,district," +
   "coverage," +
   "shipping_mode,order_total,general_status," +
-  "operational_status,status_since,status_locked,current_courier,last_courier," +
-  "courier_count,attempt_count,guide_code,dispatched_at,delivered_at," +
+  "operational_status,macro_stage,macro_substage,macro_reasons,macro_operation,macro_version,macro_since," +
+  "status_since,status_locked,current_courier,last_courier," +
+  "courier_count,attempt_count,guide_code,dispatched_at,delivered_at,delivered_courier,returned_at," +
   "last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
   // El panel de Aliclik decide con estas dos si enseña "el pedido ya tiene
   // coordenada" o "obligatoria, el pedido no la tiene". Sin traerlas llegaban
@@ -93,45 +103,88 @@ const MAX_LIST = 20_000;
 
 export interface MasterCounts {
   todos: number;
-  pendiente: number;
-  en_proceso: number;
-  entregado: number;
-  anulado: number;
-  devuelto: number;
+  por_confirmar: number;
+  preparacion: number;
+  por_despachar: number;
+  en_curso: number;
+  por_cerrar: number;
+  finalizado: number;
+}
+
+export interface MasterMomCounts {
+  stages: MasterCounts;
+  substages: Partial<Record<MacroSubstage, number>>;
+}
+
+interface MasterCountRow {
+  macro_stage: string | null;
+  macro_substage: string | null;
+  total: number | string;
+}
+
+function emptyMasterCounts(): MasterCounts {
+  return {
+    todos: 0,
+    por_confirmar: 0,
+    preparacion: 0,
+    por_despachar: 0,
+    en_curso: 0,
+    por_cerrar: 0,
+    finalizado: 0,
+  };
+}
+
+export function reduceMasterMomCounts(rows: readonly MasterCountRow[]): MasterMomCounts {
+  const stages = emptyMasterCounts();
+  const substages: Partial<Record<MacroSubstage, number>> = {};
+  for (const row of rows) {
+    const total = Number(row.total) || 0;
+    if (row.macro_stage && row.macro_stage in stages && row.macro_stage !== "todos") {
+      stages[row.macro_stage as OrderMacroStage] += total;
+      stages.todos += total;
+    }
+    if (row.macro_substage) {
+      const key = row.macro_substage as MacroSubstage;
+      substages[key] = (substages[key] ?? 0) + total;
+    }
+  }
+  return { stages, substages };
 }
 
 /** Conteos exactos por pestaña, con consultas `head` (no traen filas). */
 export async function getOrderMasterCounts(storeIds: string[]): Promise<MasterCounts> {
-  const empty: MasterCounts = {
-    todos: 0,
-    pendiente: 0,
-    en_proceso: 0,
-    entregado: 0,
-    anulado: 0,
-    devuelto: 0,
-  };
+  const empty = emptyMasterCounts();
   if (!storeIds.length) return empty;
   const sb = await createServerSupabase();
 
-  const countFor = async (status: GeneralStatus | null): Promise<number> => {
+  const countFor = async (stage: OrderMacroStage | null): Promise<number> => {
     let query = sb
       .from("order_master")
       .select("id", { count: "exact", head: true })
       .in("store_id", storeIds);
-    if (status) query = query.eq("general_status", status);
+    if (stage) query = query.eq("macro_stage", stage);
     const { count, error } = await query;
     return error ? 0 : (count ?? 0);
   };
 
-  const [todos, pendiente, en_proceso, entregado, anulado, devuelto] = await Promise.all([
+  const [todos, por_confirmar, preparacion, por_despachar, en_curso, por_cerrar, finalizado] = await Promise.all([
     countFor(null),
-    countFor("pendiente"),
-    countFor("en_proceso"),
-    countFor("entregado"),
-    countFor("anulado"),
-    countFor("devuelto"),
+    countFor("por_confirmar"),
+    countFor("preparacion"),
+    countFor("por_despachar"),
+    countFor("en_curso"),
+    countFor("por_cerrar"),
+    countFor("finalizado"),
   ]);
-  return { todos, pendiente, en_proceso, entregado, anulado, devuelto };
+  return { todos, por_confirmar, preparacion, por_despachar, en_curso, por_cerrar, finalizado };
+}
+
+export async function getOrderMasterMomCounts(storeIds: string[]): Promise<MasterMomCounts> {
+  if (!storeIds.length) return { stages: emptyMasterCounts(), substages: {} };
+  const sb = await createServerSupabase();
+  const { data, error } = await sb.rpc("order_master_mom_counts", { p_store_ids: storeIds });
+  if (!error) return reduceMasterMomCounts((data ?? []) as MasterCountRow[]);
+  return { stages: await getOrderMasterCounts(storeIds), substages: {} };
 }
 
 /** Búsqueda global (código, guía, teléfono, cliente), fuera de la pestaña activa. */
@@ -180,6 +233,7 @@ export interface OrderMasterDetail {
   timeline: TimelineEntry[];
   lineItems: OrderLineItem[];
   address: ReturnType<typeof shopifyShippingAddress>;
+  routePlan: OrderRoutePlan;
 }
 
 const GUIDE_COLUMNS =
@@ -187,14 +241,60 @@ const GUIDE_COLUMNS =
   "match_method,order_name,customer_name,customer_phone,product,district,province,city,region," +
   "delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at," +
   "address_updated_by,fenix_eligible,fenix_shipment_id,created_via,delivered_source," +
+  "shalom_codigo,shalom_ose_id,shalom_order_id,shalom_serie,shalom_raw," +
   "aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at," +
   "next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id," +
   // 0061: el código corto que Shalom muestra junto al nº de orden, y el id con
   // el que sirve el rótulo PDF. Sin ellos el drawer no puede ni identificar el
   // envío en su panel ni ofrecer el rótulo.
   "suggested_order_name,output_number,output_code,qr_token,preparation_state,custody_state," +
-  "ready_at,ready_by,custody_transferred_at,custody_transferred_by,label_url," +
-  "created_at,updated_at,shalom_codigo,shalom_ose_id";
+  "ready_at,ready_by,custody_transferred_at,custody_transferred_by,returned_at,label_url," +
+  "created_at,updated_at";
+
+async function swaypRouteCheck(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  row: OrderMasterRow,
+  lineItems: OrderLineItem[],
+): Promise<SwaypRouteCheck> {
+  const { data: store, error: storeError } = await sb
+    .from("stores")
+    .select("org_id")
+    .eq("id", row.store_id)
+    .maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  if (storeError || !orgId) return { known: false };
+
+  const { data, error } = await sb
+    .from("fenix_stock")
+    .select("city,product,sku,quantity")
+    .eq("org_id", orgId);
+  if (error) return { known: false };
+
+  const city = deriveFenixCoverageCity(row.district, row.region);
+  const check = evaluateDirectFenixStock(
+    city,
+    (data ?? []) as FenixStockRow[],
+    lineItems.map((item) => ({
+      title: item.title,
+      sku: item.sku ?? null,
+      quantity: item.quantity,
+    })),
+  );
+  return {
+    known: true,
+    city: check.city,
+    covered: check.reason !== "sin_cobertura",
+    stockOk: check.ok,
+    uncovered: check.uncovered,
+  };
+}
+
+function operationOf(row: OrderMasterRow, guides: ShipmentRow[]): OperationKind {
+  if (["lima", "provincia_cod", "agencia"].includes(row.macro_operation ?? "")) {
+    return row.macro_operation as OperationKind;
+  }
+  return classifyOperation(row, guides);
+}
 
 /**
  * Detalle de un pedido: su fila del Master, sus guías, la línea de tiempo
@@ -288,12 +388,26 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     .sort((a, b) => (a.occurredAt < b.occurredAt ? -1 : a.occurredAt > b.occurredAt ? 1 : 0));
 
   const orderRow = orderRes.data as { line_items?: OrderLineItem[]; raw?: unknown } | null;
+  const lineItems = orderRow?.line_items ?? [];
+  const swayp = await swaypRouteCheck(sb, row, lineItems);
   return {
     row,
     guides,
     timeline,
-    lineItems: orderRow?.line_items ?? [],
+    lineItems,
     address: shopifyShippingAddress(orderRow?.raw),
+    routePlan: buildOrderRoutePlan({
+      operation: operationOf(row, guides),
+      paymentState: row.payment_state,
+      swayp,
+      outputs: guides.map((guide) => ({
+        id: guide.id,
+        courier: guide.courier,
+        deliveryStatus: guide.delivery_status,
+        custodyState: guide.custody_state,
+        attempts: guide.aliclik_attempts ?? guide.reroute_attempts,
+      })),
+    }),
   };
 }
 
@@ -410,6 +524,7 @@ export async function getOrderMasterPage(
     filters: MasterFilters;
     sortKey: MasterSortKey;
     page: number;
+    substage?: MacroSubstage | null;
     pageSize?: number;
     now?: Date;
   },
@@ -421,14 +536,15 @@ export async function getOrderMasterPage(
   const sb = await createServerSupabase();
   const view = params.view ?? "todos";
   const now = params.now ?? new Date();
-  const sort = SORT_COLUMN[params.sortKey] ?? SORT_COLUMN.created;
+  const sort = SORT_COLUMN.created;
 
   const build = (select: string, opts?: { count: "exact"; head: true }) => {
     let q = opts
       ? sb.from("order_master").select(select, opts)
       : sb.from("order_master").select(select);
     q = q.in("store_id", storeIds) as typeof q;
-    if (view !== "todos") q = q.eq("general_status", view) as typeof q;
+    if (view !== "todos") q = q.eq("macro_stage", view) as typeof q;
+    if (params.substage) q = q.eq("macro_substage", params.substage) as typeof q;
     return applyServerFilters(q, params.filters, now);
   };
 
