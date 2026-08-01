@@ -7,6 +7,7 @@ import type {
   ShalomDocumentType,
   ShalomOrderPayload,
   ShalomPayer,
+  ShalomProduct,
   ShalomReceiver,
 } from "./types";
 
@@ -24,6 +25,23 @@ export const DEFAULT_DECLARACION: DeclaracionJurada = "ropa";
  * flete otra vez en la agencia.
  */
 export const DEFAULT_PAYER: ShalomPayer = "sender";
+
+/**
+ * Tipo de paquete que debe aparecer seleccionado al abrir una guía.
+ *
+ * Algunas tiendas todavía conservan SOBRE como preferencia histórica. La
+ * operación actual usa Caja Paquete XXS como punto de partida para todas las
+ * guías; el selector sigue editable para las excepciones reales.
+ */
+export function preferredShalomProductId(
+  products: readonly ShalomProduct[],
+  fallback: number | null | undefined,
+): number | null {
+  const xxs = products.find(
+    (product) => product.title.trim().toLocaleLowerCase("es-PE") === "caja paquete xxs",
+  );
+  return xxs?.id ?? fallback ?? null;
+}
 
 // ---------------------------------------------------------------------------
 // Clave de recojo

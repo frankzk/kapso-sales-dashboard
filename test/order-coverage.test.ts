@@ -42,6 +42,29 @@ describe("clasificación de cobertura", () => {
     ).toBe("agencia");
   });
 
+  it("fuerza Cañete a Agencia aunque Shopify diga Lima y exista tarifa COD", () => {
+    const location = {
+      ...base,
+      region: "Lima (provincia)",
+      province: "Cañete",
+      district: "San Vicente de Cañete",
+    };
+    expect(isLimaMetropolitanaOrCallao(location)).toBe(false);
+    expect(
+      classifyOrderCoverage(
+        location,
+        [
+          tariff({
+            region: "Lima (provincia)",
+            province: "Cañete",
+            district: "San Vicente de Cañete",
+          }),
+        ],
+        "2026-08-01",
+      ),
+    ).toBe("agencia");
+  });
+
   it("incluye Callao dentro de Lima", () => {
     expect(
       classifyOrderCoverage(

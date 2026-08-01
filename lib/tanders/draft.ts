@@ -3,6 +3,7 @@
 // paquete o un cobro mal hecho.
 
 import type { TandersOrderPayload, TandersPackageType } from "./types";
+import { isLimaMetropolitanaOrCallao } from "@/lib/order-coverage";
 
 /**
  * Caja y peso por defecto. La operación despacha siempre XXS con 100 g
@@ -12,6 +13,21 @@ import type { TandersOrderPayload, TandersPackageType } from "./types";
  */
 export const DEFAULT_PACKAGE_TYPE: TandersPackageType = "XXS";
 export const DEFAULT_WEIGHT_GRAMS = 100;
+
+/** Tanders es una ruta exclusiva de Lima. Cuando la cobertura materializada
+ * existe se usa como fuente de verdad; el cálculo geográfico queda como
+ * respaldo para filas históricas todavía no recalculadas. */
+export function tandersCoverageEligible(input: {
+  coverage?: string | null;
+  storeId: string;
+  orgId?: string | null;
+  region: string | null;
+  province: string | null;
+  district: string | null;
+}): boolean {
+  if (input.coverage) return input.coverage === "lima";
+  return isLimaMetropolitanaOrCallao(input);
+}
 
 export interface TandersOrigin {
   address: string | null;

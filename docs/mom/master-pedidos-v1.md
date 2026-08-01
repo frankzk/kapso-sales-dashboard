@@ -126,6 +126,10 @@ Reglas iniciales:
 - Provincia COD recomienda primero Aliclik.
 - Reproprovincia usa Swayp con stock local después de una salida Aliclik fallida.
 - Agencia recomienda Shalom primero y Olva como alternativa.
+- Tanders es exclusivo de cobertura Lima. No se muestra ni se acepta desde el
+  servidor para Provincia COD o Agencia.
+- Cañete siempre se clasifica como Agencia, aunque Shopify lo etiquete como
+  `Lima (provincia)` o exista una tarifa COD histórica que coincida.
 - Las rutas que no tienen cobertura se ocultan.
 - Las rutas con una condición pendiente, como falta de stock o pago, pueden
   mostrarse bloqueadas con una explicación.
@@ -477,6 +481,10 @@ Horarios Swayp documentados:
 ### Shalom
 
 - Adelanto mínimo: S/30 validado antes de generar rótulo.
+- El formulario abre siempre con `Caja Paquete XXS`; la operadora puede cambiar
+  el tipo de paquete únicamente cuando el envío real lo requiera.
+- La API de creación no exige una fecha de despacho y Kapta no debe pedirla. La
+  fecha operativa nace del escaneo o transferencia real de custodia.
 - Se permiten varios pagos; se libera la clave cuando la suma validada alcanza
   el total exigido.
 - Sin pago completo no se entrega la clave.
@@ -517,6 +525,9 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 ### Pagos
 
 - Cualquier asesor puede subir el comprobante.
+- El comprobante puede registrarse como `Adelanto`, `Diferencia` o `Pago total`.
+  `Pago total` es un camino de captura visible, no una combinación implícita de
+  adelanto y diferencia.
 - Validadores actuales: Milagros, Mildred, Gabriela, Yohalis y Frankz, según la
   cuenta receptora.
 - Hoy existe validación interna por WhatsApp/app bancaria; Kapta debe conservar
@@ -766,6 +777,8 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 - Aliclik fallida + cobertura y stock completo muestra Swayp como siguiente ruta.
 - Swayp sin cobertura o sin stock explica el bloqueo y no crea una salida.
 - Swayp puede repetirse en Reproprovincia; en Lima solo se usa una vez.
+- Tanders solo aparece y puede crear guía en cobertura Lima.
+- Cañete se muestra como Agencia y nunca habilita una guía Tanders.
 - Axel y motorizado propio pueden repetirse sin superar cinco salidas.
 - Shalom y Olva avisan que el adelanto debe validarse antes de crear la guía.
 - Olva no se crea con menos de S/ 30 validados aunque el navegador sea alterado.

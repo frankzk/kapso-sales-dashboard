@@ -11,6 +11,20 @@ describe("motor de rutas MOM Fase 3", () => {
     });
     expect(plan.candidates.find((route) => route.recommended)?.key).toBe("aliclik");
     expect(plan.candidates.find((route) => route.key === "shalom")?.availability).toBe("warning");
+    expect(plan.candidates.some((route) => route.key === "tanders")).toBe(false);
+  });
+
+  it("solo ofrece Tanders dentro de la operación Lima", () => {
+    expect(
+      buildOrderRoutePlan({ operation: "lima", outputs: [] }).candidates.some(
+        (route) => route.key === "tanders",
+      ),
+    ).toBe(true);
+    expect(
+      buildOrderRoutePlan({ operation: "agencia", outputs: [] }).candidates.some(
+        (route) => route.key === "tanders",
+      ),
+    ).toBe(false);
   });
 
   it("prioriza Swayp después de una salida Aliclik fallida si hay stock", () => {

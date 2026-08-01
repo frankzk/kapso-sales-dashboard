@@ -23,6 +23,7 @@ import {
   composeTandersNote,
   defaultCollectionAmount,
   suggestedDestination,
+  tandersCoverageEligible,
 } from "@/lib/tanders/draft";
 import { getStoreCreds } from "@/lib/ingest";
 import { fetchOrderById } from "@/lib/shopify";
@@ -171,6 +172,16 @@ export async function loadTandersDraft(
   const blockers: string[] = [];
   const warnings: string[] = [];
 
+  if (!tandersCoverageEligible({
+    coverage: row.coverage,
+    storeId: row.store_id,
+    region: row.region,
+    province: row.province,
+    district: row.district,
+  })) {
+    blockers.push("Tanders solo está habilitado para pedidos con cobertura Lima.");
+  }
+
   if (!configured) {
     blockers.push(
       "Esta tienda no tiene Tanders configurado. Carga el usuario, la contraseña y el almacén de origen en Ajustes → Tienda.",
@@ -252,6 +263,16 @@ export async function createTandersGuide(
   const ctx = await authorize(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
   const { row, userId } = ctx;
+
+  if (!tandersCoverageEligible({
+    coverage: row.coverage,
+    storeId: row.store_id,
+    region: row.region,
+    province: row.province,
+    district: row.district,
+  })) {
+    return { error: "Tanders solo está habilitado para pedidos con cobertura Lima." };
+  }
 
   const admin = createAdminSupabase();
 

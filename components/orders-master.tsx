@@ -675,7 +675,7 @@ export function OrdersMasterBoard({
 
           {showMore && (
             <Card className="space-y-3 p-4">
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="grid min-w-0 gap-3 md:grid-cols-2 2xl:grid-cols-4">
                 <DateRange
                   label="Creación"
                   from={filters.createdFrom}
@@ -932,24 +932,29 @@ function DateRange({
   onChange: (from: string, to: string) => void;
 }) {
   return (
-    <div className="space-y-1">
-      <p className="text-xs text-slate-400">{label}</p>
-      <div className="flex items-center gap-1">
-        <input
-          type="date"
-          value={from}
-          onChange={(e) => onChange(e.target.value, to)}
-          className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
-        />
-        <span className="text-xs text-slate-400">→</span>
-        <input
-          type="date"
-          value={to}
-          onChange={(e) => onChange(from, e.target.value)}
-          className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
-        />
+    <fieldset className="min-w-0 space-y-1.5">
+      <legend className="text-xs text-slate-500">{label}</legend>
+      <div className="grid min-w-0 grid-cols-2 gap-2">
+        <label className="min-w-0 space-y-1">
+          <span className="block text-[11px] text-slate-400">Desde</span>
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => onChange(e.target.value, to)}
+            className="block min-w-0 w-full max-w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-700"
+          />
+        </label>
+        <label className="min-w-0 space-y-1">
+          <span className="block text-[11px] text-slate-400">Hasta</span>
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => onChange(from, e.target.value)}
+            className="block min-w-0 w-full max-w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-700"
+          />
+        </label>
       </div>
-    </div>
+    </fieldset>
   );
 }
 

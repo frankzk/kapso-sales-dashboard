@@ -7,6 +7,7 @@ import {
   needsCustomDimensions,
   normalizeDocument,
   pickupCodeError,
+  preferredShalomProductId,
   shalomPhone,
   splitReceiverName,
   suggestedAgencyQuery,
@@ -51,6 +52,24 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
     headers: { "content-type": "application/json", ...headers },
   });
 }
+
+describe("preferredShalomProductId", () => {
+  it("selecciona Caja Paquete XXS por encima del default histórico de la tienda", () => {
+    expect(
+      preferredShalomProductId(
+        [
+          { id: 1, title: "SOBRE" },
+          { id: 7, title: "Caja Paquete XXS" },
+        ],
+        1,
+      ),
+    ).toBe(7);
+  });
+
+  it("conserva el fallback si la cuenta no devuelve XXS", () => {
+    expect(preferredShalomProductId([{ id: 1, title: "SOBRE" }], 1)).toBe(1);
+  });
+});
 
 describe("shalomPhone", () => {
   it("quita el 51 que agrega la normalización interna y devuelve un número", () => {

@@ -290,10 +290,14 @@ async function swaypRouteCheck(
 }
 
 function operationOf(row: OrderMasterRow, guides: ShipmentRow[]): OperationKind {
+  // Cobertura y courier son señales vivas. Ganan sobre `macro_operation`, que
+  // puede conservar una clasificación anterior hasta el siguiente recálculo.
+  const classified = classifyOperation(row, guides);
+  if (classified !== "desconocida") return classified;
   if (["lima", "provincia_cod", "agencia"].includes(row.macro_operation ?? "")) {
     return row.macro_operation as OperationKind;
   }
-  return classifyOperation(row, guides);
+  return "desconocida";
 }
 
 /**

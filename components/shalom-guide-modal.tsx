@@ -16,6 +16,7 @@ import {
   documentError,
   needsCustomDimensions,
   pickupCodeError,
+  preferredShalomProductId,
   shalomAirRoute,
   DEFAULT_DECLARACION,
   DEFAULT_PAYER,
@@ -189,13 +190,10 @@ export function ShalomGuideModal({
     void loadShalomProducts(storeId).then((res) => {
       if ("error" in res) return; // No es bloqueante: se puede escribir el id.
       setProducts(res.products);
-      setProductId((current) =>
-        current ??
-        res.products.find(
-          (product) => product.title.trim().toLocaleLowerCase("es-PE") === "caja paquete xxs",
-        )?.id ??
-        null,
-      );
+      // Decisión operativa: Shalom siempre abre en Caja Paquete XXS. La
+      // operadora puede cambiarlo para una excepción, pero no debe heredar
+      // SOBRE ni otra preferencia antigua de la tienda.
+      setProductId((current) => preferredShalomProductId(res.products, current));
     });
   }, [storeId, sessionReady, products.length]);
 

@@ -185,4 +185,6 @@
 \ir migrations/0089_order_master_mom_counts.sql
 \echo 'Applying 0090_mom_phase3_routing.sql'
 \ir migrations/0090_mom_phase3_routing.sql
+\echo 'Applying 0091_canete_agency_coverage.sql'
+\ir migrations/0091_canete_agency_coverage.sql
 \echo 'Done.'
