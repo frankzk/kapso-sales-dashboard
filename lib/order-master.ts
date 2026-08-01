@@ -732,6 +732,17 @@ export async function recomputeOrderMaster(
     const resolvedPaymentState = paymentSignals
       ? paymentState(paymentSignals.payments)
       : null;
+    const resolvedCoverage = classifyOrderCoverage(
+      {
+        storeId: order.store_id,
+        orgId: orgByStore.get(order.store_id) ?? null,
+        region,
+        province,
+        district,
+      },
+      tariffs,
+      now.slice(0, 10),
+    );
 
     const state = resolveOrderState({
       order: {
@@ -751,6 +762,7 @@ export async function recomputeOrderMaster(
         cancelled_at: order.cancelled_at,
         financial_status: order.financial_status,
         shipping_mode: order.shipping_mode,
+        coverage: resolvedCoverage,
         region,
         province,
         district,
@@ -808,17 +820,7 @@ export async function recomputeOrderMaster(
       // valor se descarta: la columna es derivada y `order_coverage_for` es su
       // definición canónica. Se sigue mandando para que la fila quede completa
       // aunque el trigger no esté aplicado todavía.
-      coverage: classifyOrderCoverage(
-        {
-          storeId: order.store_id,
-          orgId: orgByStore.get(order.store_id) ?? null,
-          region,
-          province,
-          district,
-        },
-        tariffs,
-        now.slice(0, 10),
-      ),
+      coverage: resolvedCoverage,
       address: streetAddress,
       reference,
       latitude,

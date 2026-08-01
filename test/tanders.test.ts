@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildTandersPayload,
   composeTandersNote,
+  tandersCoverageEligible,
   defaultCollectionAmount,
   suggestedDestination,
   tandersPhone,
@@ -54,6 +55,33 @@ describe("tandersPhone", () => {
     expect(tandersPhone("013456789")).toBeNull();
     expect(tandersPhone("98153597")).toBeNull();
     expect(tandersPhone(null)).toBeNull();
+  });
+});
+
+describe("tandersCoverageEligible", () => {
+  const location = {
+    storeId: "store-1",
+    region: "Lima (provincia)",
+    province: "Lima",
+    district: "Pueblo Libre",
+  };
+
+  it("solo acepta la cobertura materializada Lima", () => {
+    expect(tandersCoverageEligible({ ...location, coverage: "lima" })).toBe(true);
+    expect(tandersCoverageEligible({ ...location, coverage: "provincia_cod" })).toBe(false);
+    expect(tandersCoverageEligible({ ...location, coverage: "agencia" })).toBe(false);
+  });
+
+  it("usa la geografía únicamente para filas históricas sin cobertura", () => {
+    expect(tandersCoverageEligible({ ...location, coverage: null })).toBe(true);
+    expect(
+      tandersCoverageEligible({
+        ...location,
+        coverage: null,
+        province: "Cañete",
+        district: "San Vicente de Cañete",
+      }),
+    ).toBe(false);
   });
 });
 

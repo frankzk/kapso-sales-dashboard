@@ -96,6 +96,19 @@ describe("classifyOperation", () => {
     expect(classifyOperation(order({ shipping_mode: "agency", region: "Lima" }))).toBe("agencia");
     expect(classifyOperation(order({ region: "Lima" }), [guide({ courier: "shalom" })])).toBe("agencia");
   });
+
+  it("la cobertura canónica gana sobre una geografía histórica equivocada", () => {
+    expect(
+      classifyOperation(
+        order({
+          coverage: "agencia",
+          region: "Lima (provincia)",
+          province: "Cañete",
+          district: "San Vicente de Cañete",
+        }),
+      ),
+    ).toBe("agencia");
+  });
 });
 
 describe("resolveMacroStage — Por confirmar y Preparación", () => {

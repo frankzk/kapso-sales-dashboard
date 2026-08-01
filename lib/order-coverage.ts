@@ -71,6 +71,19 @@ const CALLAO = new Set(
   ].map(normalizeCoverageLabel),
 );
 
+/** Provincias del departamento de Lima que no pertenecen a Lima
+ * Metropolitana. Esta señal corrige pedidos cuyo selector de Shopify quedó en
+ * "Lima (provincia)" aunque la dirección escrita diga Cañete, Huaral, etc. */
+const NON_METRO_LIMA_PROVINCES = new Set(
+  ["barranca", "cajatambo", "canete", "canta", "huaral", "huarochiri", "huaura", "oyon", "yauyos"],
+);
+
+function isCaneteLocation(location: Pick<CoverageLocation, "province" | "district">): boolean {
+  const province = normalizeCoverageLabel(location.province);
+  const district = normalizeCoverageLabel(location.district);
+  return province === "canete" || district === "canete" || district.includes(" canete");
+}
+
 /**
  * Distritos de Lima Metropolitana / Callao cuyo NOMBRE se repite en otro
  * departamento (Independencia está en Lima, en Huaraz y en Pisco; La Victoria
@@ -295,6 +308,11 @@ const LIMA_DEPT_HOMONYMS = new Set(["san luis"].map(normalizeCoverageLabel));
  * porque los nombres se repiten por todo el país.
  */
 export function isLimaMetropolitanaOrCallao(location: CoverageLocation): boolean {
+  const province = normalizeCoverageLabel(location.province);
+  if (NON_METRO_LIMA_PROVINCES.has(province) || isCaneteLocation(location)) {
+    return false;
+  }
+
   const kind = limaRegionKind(location.region);
   if (kind === "metropolitana" || kind === "callao") return true;
 
@@ -367,6 +385,9 @@ export function classifyOrderCoverage(
   tariffs: readonly CostTariff[],
   day: string,
 ): OrderCoverage {
+  // Decisión comercial explícita: Cañete se atiende por agencia, aunque exista
+  // una tarifa histórica de otro courier que accidentalmente coincida.
+  if (isCaneteLocation(location)) return "agencia";
   if (isLimaMetropolitanaOrCallao(location)) return "lima";
   // Sin distrito no hay a dónde despachar ni tarifa que consultar; tampoco se
   // puede afirmar que sea agencia.

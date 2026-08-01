@@ -203,6 +203,8 @@ export interface MacroOrderSnapshot {
   cancelled_at: string | null;
   financial_status: string | null;
   shipping_mode: string | null;
+  /** Clasificación operativa materializada por la matriz de cobertura. */
+  coverage?: string | null;
   region: string | null;
   province: string | null;
   district: string | null;
@@ -271,7 +273,7 @@ const AGENCY_COURIERS = new Set(["shalom", "olva"]);
 /** Clasificación base de modalidad. La decisión concreta del courier pertenece
  * al motor de rutas de Fase 3; aquí solo separamos Lima, Provincia COD y Agencia. */
 export function classifyOperation(
-  order: Pick<MacroOrderSnapshot, "shipping_mode" | "region" | "province">,
+  order: Pick<MacroOrderSnapshot, "shipping_mode" | "coverage" | "region" | "province" | "district">,
   guides: readonly Pick<MacroGuideSnapshot, "courier">[] = [],
 ): OperationKind {
   if (
@@ -280,6 +282,10 @@ export function classifyOperation(
   ) {
     return "agencia";
   }
+  const coverage = normalize(order.coverage);
+  if (coverage === "lima") return "lima";
+  if (coverage === "provincia_cod") return "provincia_cod";
+  if (coverage === "agencia") return "agencia";
   const geo = `${normalize(order.region)} ${normalize(order.province)}`;
   if (/\b(lima|callao)\b/.test(geo)) return "lima";
   if (normalize(order.shipping_mode) === "cod") return "provincia_cod";
