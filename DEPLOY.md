@@ -1183,6 +1183,26 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
 - El barrido vive en `lib/tanders/payment-sweep.ts`, **compartido** por el cron y
   por esa revisión: si fueran dos implementaciones, mirar los veredictos en seco
   no probaría nada sobre lo que hace el cron de verdad.
+## 5o. MOM Fase 1 — macroetapas sombra e identidad de salidas
+
+- **Requiere migración 0059** antes de activar cualquier interfaz de escaneo.
+- La migración asigna a cada guía vinculada un consecutivo por pedido
+  (`KP123-S01`, `KP123-S02`) y un `qr_token` opaco diferente.
+- `general_status` y `operational_status` continúan siendo productivos. Los
+  campos `macro_stage`, `macro_substage` y `macro_reasons` son un cálculo en
+  paralelo para validación; no cambian las pestañas actuales.
+- Código y migración son compatibles en ambos órdenes: si el código se despliega
+  antes, el recálculo omite temporalmente las columnas MOM; si la migración se
+  aplica primero, sus valores por defecto se reemplazan en el siguiente barrido
+  del Master.
+- Después de aplicar 0059, ejecutar/revisar un ciclo de sincronización y
+  comprobar una muestra real:
+  - Lima nuevo → `preparacion / por_generar_rotulo`.
+  - Provincia nuevo → `por_confirmar / sin_llamar`.
+  - Guía sin despacho → `preparacion / por_armar`.
+  - Entregado COD sin liquidación integrada → `por_cerrar / pendiente_liquidacion`.
+- No imprimas todavía el nuevo QR desde producción: la pantalla de doble cotejo
+  y transferencia de custodia pertenece a la Fase 2.
 
 ## 7. Post-deploy verification
 
