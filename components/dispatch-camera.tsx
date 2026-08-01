@@ -33,6 +33,7 @@ export function DispatchCamera({
             if (!result || handledRef.current) return;
             handledRef.current = true;
             controlsRef.current?.stop();
+            window.navigator.vibrate?.(80);
             onScan(result.getText());
             onClose();
           },
@@ -68,4 +69,3 @@ export function DispatchCamera({
     </div>
   );
 }
-
