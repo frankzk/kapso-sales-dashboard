@@ -8,6 +8,7 @@ import {
   previewShalomGuide,
   type ShalomGuidePreview,
 } from "@/app/dashboard/pedidos/shalom-actions";
+import { selectDefaultAgencyPackageSize } from "@/lib/aliclik-agency";
 
 export function ShalomGuidePanel({
   orderId,
@@ -38,7 +39,9 @@ export function ShalomGuidePanel({
     setPreview(result);
     if (result.ok) {
       setAgencyId((value) => value || result.suggestedAgencyId || "");
-      setPackageSize((value) => value || result.packageSizes?.[0] || "");
+      setPackageSize((value) =>
+        value || selectDefaultAgencyPackageSize(result.packageSizes ?? []),
+      );
       setScheduleDate((value) => value || result.scheduleDate || "");
       setReceiverName((value) => value || result.receiverName || "");
       setReceiverPhone((value) => value || result.receiverPhone || "");

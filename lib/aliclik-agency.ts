@@ -7,6 +7,28 @@
 import { limaDateKey, parseHHMM, limaTimeHHMM } from "@/lib/aliclik-geo";
 
 // ---------------------------------------------------------------------------
+// Tamaño predeterminado
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_AGENCY_PACKAGE_SIZE = "Caja Paquete XXS";
+
+/**
+ * Aliclik devuelve los tamaños en su propio orden, que actualmente comienza en
+ * SOBRE. Para la operación de Kapta, la caja XXS es la medida habitual y debe
+ * quedar elegida al abrir el formulario. Se devuelve el texto original del
+ * catálogo para que la validación de Aliclik siga siendo exacta.
+ */
+export function selectDefaultAgencyPackageSize(sizes: readonly string[]): string {
+  const available = sizes.filter((size) => size.trim());
+  const wanted = DEFAULT_AGENCY_PACKAGE_SIZE.toLocaleLowerCase("es-PE");
+  return (
+    available.find((size) => size.trim().toLocaleLowerCase("es-PE") === wanted) ??
+    available[0] ??
+    ""
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Fecha de despacho
 // ---------------------------------------------------------------------------
 

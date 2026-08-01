@@ -6,12 +6,32 @@ import {
   PICKUP_KEY_LENGTH,
   resolveAgencyKeyCode,
   resolveAgencyScheduleDate,
+  selectDefaultAgencyPackageSize,
   splitCustomerName,
   validateAgencyUnits,
 } from "@/lib/aliclik-agency";
 
 // Lima es UTC-5: 15:00Z = 10:00 en Lima, 20:00Z = 15:00 en Lima.
 const limaAt = (dateUtc: string) => new Date(dateUtc);
+
+describe("selectDefaultAgencyPackageSize", () => {
+  it("elige Caja Paquete XXS aunque SOBRE sea la primera opción de Aliclik", () => {
+    expect(
+      selectDefaultAgencyPackageSize(["SOBRE", "Caja Paquete XXS", "Caja Paquete XS"]),
+    ).toBe("Caja Paquete XXS");
+  });
+
+  it("conserva el texto exacto del catálogo y tolera espacios o mayúsculas", () => {
+    expect(selectDefaultAgencyPackageSize(["SOBRE", "  CAJA PAQUETE XXS  "])).toBe(
+      "  CAJA PAQUETE XXS  ",
+    );
+  });
+
+  it("cae a la primera opción válida si XXS no está disponible", () => {
+    expect(selectDefaultAgencyPackageSize(["", "SOBRE", "Caja Paquete XS"])).toBe("SOBRE");
+    expect(selectDefaultAgencyPackageSize([])).toBe("");
+  });
+});
 
 describe("minAgencyScheduleDate", () => {
   it("antes del corte, el despacho puede ser hoy", () => {
