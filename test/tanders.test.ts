@@ -83,6 +83,17 @@ describe("tandersCoverageEligible", () => {
       }),
     ).toBe(false);
   });
+
+  it("bloquea Cañete aunque una fila histórica todavía diga cobertura Lima", () => {
+    expect(
+      tandersCoverageEligible({
+        ...location,
+        coverage: "lima",
+        province: "Cañete",
+        district: "San Vicente de Cañete",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("defaultCollectionAmount", () => {
