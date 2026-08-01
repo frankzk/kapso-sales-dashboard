@@ -625,6 +625,13 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - El comprobante puede registrarse como `Adelanto`, `Diferencia` o `Pago total`.
   `Pago total` es un camino de captura visible, no una combinación implícita de
   adelanto y diferencia.
+- El primer comprobante solo puede ser `Adelanto` o `Pago total`. Si existe un
+  adelanto vivo, todos los comprobantes posteriores se registran como
+  `Diferencia`; pueden existir varias diferencias hasta cubrir el monto total.
+  `Adelanto` y `Pago total` son mutuamente excluyentes.
+- El drawer muestra tres importes distintos: total cargado, total validado y
+  saldo por cargar. El check **Adelanto mínimo validado** aparece únicamente
+  cuando existen al menos S/30 validados, no solo por haber subido una imagen.
 - Validadores actuales: Milagros, Mildred, Gabriela, Yohalis y Frankz, según la
   cuenta receptora.
 - Hoy existe validación interna por WhatsApp/app bancaria; Kapta debe conservar
@@ -641,6 +648,10 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   en revisión y Kapta bloquea su validación también en servidor. Si una señal no
   pudo leerse, se conserva la imagen y se exige contraste manual sin inventar el
   dato faltante.
+- La captura del comprobante permanece grande y visible durante la revisión y
+  puede abrirse a tamaño completo. `Titular/pagador` no es un campo operativo:
+  si la visión lo obtiene, se conserva internamente para trazabilidad y
+  deduplicación, sin pedirle al asesor que lo complete.
 - Si el pago es menor al requerido, la clave permanece bloqueada y se alerta al
   asesor.
 - Solo Frankz ejecuta reembolsos.
@@ -963,10 +974,16 @@ Reglas de interfaz:
   Swayp pueden salir contra entrega: la Mesa de ruta conserva la prioridad y el
   pago anticipado aparece después, rotulado como opcional, aunque Shalom u Olva
   estén disponibles como alternativas.
-- Adelanto, Diferencia y Pago total permanecen como opciones independientes. Los
+- Adelanto, Diferencia y Pago total conservan identidades distintas, pero se
+  presentan según la secuencia de cobro permitida. Los
   datos anticipados de Shalom (documento y agencia) se muestran desplegados por
   defecto para evitar que se olviden durante la llamada, sin volverlos requisito
   para registrar el comprobante.
+- Dentro del cobro por Agencia, el orden de trabajo es fijo: (1) documento y
+  agencia Shalom, si aplica; (2) pegar o subir el comprobante y ejecutar la
+  lectura; (3) cotejar imagen, monto, operación, fecha y cuenta receptora antes
+  de registrar. En el primer pago se muestran únicamente `Adelanto` y
+  `Pago total`; después solo `Diferencia` hasta cubrir el pedido.
 - Cada salida conserva su propia tarjeta, courier, guía, QR, estado y resultado.
 - Historial, devoluciones manuales y corrección de vínculos están plegados por
   defecto: siguen accesibles, pero no compiten con la acción operativa normal.

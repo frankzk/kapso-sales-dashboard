@@ -363,9 +363,14 @@ export const MIN_OVERRIDE_REASON = 10;
  * no lo usa nadie, esto sube a bloqueo duro con datos en la mano.
  */
 export function shalomSoftBlockers(paymentState: string | null): string[] {
-  if (paymentState !== "sin_pago") return [];
+  // Cargar una imagen no confirma que el dinero haya llegado. El rótulo se
+  // habilita cuando el adelanto mínimo ya fue validado; una diferencia cargada
+  // también implica que ese primer adelanto pasó la validación.
+  if (["adelanto_validado", "diferencia_cargada", "pago_completo"].includes(paymentState ?? "")) {
+    return [];
+  }
   return [
-    "No hay ningún comprobante de adelanto cargado. El envío por Shalom se cobra con adelanto: regístralo en la pestaña «Pagos y clave» de este mismo pedido, o crea la guía igual explicando por qué.",
+    "El adelanto mínimo todavía no está validado. El envío por Shalom requiere S/ 30 validados antes de generar la guía, o una excepción con motivo.",
   ];
 }
 

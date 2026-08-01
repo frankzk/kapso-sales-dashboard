@@ -29,7 +29,14 @@ import {
   searchShalomAgencies,
 } from "@/app/dashboard/pedidos/shalom-actions";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
-import { PAYMENT_STATE_LABEL, type PaymentState } from "@/lib/pickup-key";
+import {
+  PAYMENT_STATE_LABEL,
+  SHALOM_MINIMUM_ADVANCE,
+  nextPaymentKinds,
+  paymentProgress,
+  type PaymentKind,
+  type PaymentState,
+} from "@/lib/pickup-key";
 import type { OrderPaymentPanelMode } from "@/lib/order-payment-panel";
 import {
   verifyYapeRecipient,
@@ -165,11 +172,11 @@ export function PickupKeyPanel({
               paymentOptional ? "text-slate-700" : "text-amber-900",
             )}
           >
-            {paymentOptional ? "Pago anticipado (solo si aplica)" : "Pagos y clave de recojo"}
+            {paymentOptional ? "Cobro para envío por agencia" : "Pagos y clave de recojo"}
           </h3>
           <p className="mt-0.5 text-xs text-slate-500">
             {paymentOptional
-              ? "Aliclik y Swayp pueden salir contra entrega. Registra un pago si se eligió Agencia o el historial del cliente exige adelanto."
+              ? "Opcional para Provincia COD. Úsalo si el pedido irá por Agencia o el historial del cliente exige adelanto."
               : "El pago acumulado habilita la guía; el pago completo libera la clave."}
           </p>
         </div>
@@ -182,6 +189,8 @@ export function PickupKeyPanel({
       {notice && (
         <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</p>
       )}
+
+      <PaymentMoneySummary payments={panel.payments} orderTotal={panel.orderTotal} />
 
       <PaymentList
         payments={panel.payments}
@@ -197,6 +206,7 @@ export function PickupKeyPanel({
         <VoucherForm
           orderId={orderId}
           storeId={panel.storeId}
+          orderTotal={panel.orderTotal}
           existing={panel.payments}
           pending={pending}
           onRegistered={() => {
@@ -219,6 +229,59 @@ export function PickupKeyPanel({
         />
       )}
     </section>
+  );
+}
+
+function PaymentMoneySummary({
+  payments,
+  orderTotal,
+}: {
+  payments: PaymentRow[];
+  orderTotal: number | null;
+}) {
+  const progress = paymentProgress(payments, orderTotal);
+  const ratio = progress.orderTotal
+    ? Math.min(100, Math.round((progress.validatedTotal / progress.orderTotal) * 100))
+    : 0;
+  const advanceCopy = progress.advanceValidated
+    ? "Adelanto mínimo validado"
+    : progress.advanceRegistered
+      ? "Adelanto cargado, falta validarlo"
+      : `Faltan S/ ${Math.max(0, SHALOM_MINIMUM_ADVANCE - progress.registeredTotal).toFixed(2)} para el adelanto mínimo`;
+
+  return (
+    <div className="space-y-2 rounded-lg bg-slate-50 px-3 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm">
+        <p className="font-semibold text-slate-900">
+          S/ {progress.validatedTotal.toFixed(2)} validados
+          {progress.orderTotal !== null ? ` de S/ ${progress.orderTotal.toFixed(2)}` : ""}
+        </p>
+        <p className="text-xs text-slate-600">
+          Cargado: <strong className="text-slate-800">S/ {progress.registeredTotal.toFixed(2)}</strong>
+          {progress.registeredRemaining !== null && (
+            <> · Saldo por cargar: <strong className="text-slate-800">S/ {progress.registeredRemaining.toFixed(2)}</strong></>
+          )}
+        </p>
+      </div>
+      {progress.orderTotal !== null && (
+        <div className="h-1.5 overflow-hidden rounded-full bg-slate-200" aria-label={`${ratio}% del pedido validado`}>
+          <div className="h-full rounded-full bg-emerald-600 transition-[width] duration-200" style={{ width: `${ratio}%` }} />
+        </div>
+      )}
+      <p
+        className={cn(
+          "text-xs font-medium",
+          progress.advanceValidated
+            ? "text-emerald-700"
+            : progress.advanceRegistered
+              ? "text-amber-700"
+              : "text-slate-500",
+        )}
+      >
+        {progress.advanceValidated ? "✓ " : progress.advanceRegistered ? "◷ " : ""}
+        {advanceCopy}
+      </p>
+    </div>
   );
 }
 
@@ -277,15 +340,16 @@ function PaymentList({
               href={`/api/payments/${p.id}/voucher`}
               target="_blank"
               rel="noreferrer"
-              className="mt-2 inline-block"
+              className="mt-2 inline-flex flex-col items-start gap-1"
               title="Ver el comprobante en grande"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={`/api/payments/${p.id}/voucher`}
                 alt="Comprobante de Yape"
-                className="max-h-32 rounded-lg border border-slate-200 object-contain"
+                className="max-h-64 max-w-full rounded-lg border border-slate-200 bg-slate-50 object-contain"
               />
+              <span className="text-[11px] font-medium text-brand-700">Abrir a tamaño completo</span>
             </a>
           )}
           {!p.operation_number && p.validation_status !== "rechazado" && (
@@ -456,16 +520,25 @@ function VoucherPicker({ file, onPick }: { file: File | null; onPick: (f: File |
       )}
     >
       {preview ? (
-        <div className="flex flex-wrap items-start gap-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={preview}
-            alt="Comprobante por subir"
-            className="max-h-32 rounded-lg border border-slate-200 object-contain"
-          />
-          <div className="space-y-1 text-xs text-slate-600">
+        <div className="grid gap-3 lg:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.1fr)]">
+          <a
+            href={preview}
+            target="_blank"
+            rel="noreferrer"
+            className="grid min-h-72 place-items-center rounded-lg bg-slate-100 p-3"
+            title="Abrir comprobante a tamaño completo"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={preview}
+              alt="Comprobante por subir"
+              className="max-h-[28rem] w-full rounded-md object-contain"
+            />
+          </a>
+          <div className="space-y-2 self-start text-xs text-slate-600">
             <p className="font-medium text-slate-800">{file?.name}</p>
             <p>{file ? `${Math.round(file.size / 1024)} KB · ${file.type || "imagen"}` : ""}</p>
+            <p>La imagen queda visible mientras cotejas los datos leídos. Haz clic para ampliarla.</p>
           </div>
         </div>
       ) : (
@@ -677,6 +750,7 @@ function RecipientAccountCheck({ reading }: { reading: YapeRecipientReading | nu
 function VoucherForm({
   orderId,
   storeId,
+  orderTotal,
   existing,
   pending,
   onRegistered,
@@ -685,18 +759,22 @@ function VoucherForm({
 }: {
   orderId: string;
   storeId: string;
+  orderTotal: number | null;
   existing: PaymentRow[];
   pending: boolean;
   onRegistered: () => void;
   onError: (msg: string | null) => void;
   onNotice: (msg: string | null) => void;
 }) {
-  const taken = new Set(
-    existing.filter((p) => p.validation_status !== "rechazado").map((p) => p.kind),
+  const availableKinds = useMemo(
+    () => nextPaymentKinds(existing, orderTotal),
+    [existing, orderTotal],
   );
-  const [kind, setKind] = useState<"adelanto" | "diferencia" | "total">(
-    taken.has("adelanto") ? "diferencia" : "adelanto",
+  const progress = useMemo(
+    () => paymentProgress(existing, orderTotal),
+    [existing, orderTotal],
   );
+  const [kind, setKind] = useState<PaymentKind>(availableKinds[0] ?? "diferencia");
   const [amount, setAmount] = useState("");
   const [operation, setOperation] = useState("");
   const [paidAt, setPaidAt] = useState("");
@@ -725,6 +803,13 @@ function VoucherForm({
   const [agencySearching, setAgencySearching] = useState(false);
   const [agencyError, setAgencyError] = useState<string | null>(null);
   const agencyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const nextKind = availableKinds[0];
+    if (nextKind && !availableKinds.includes(kind)) {
+      setKind(nextKind);
+    }
+  }, [availableKinds, kind]);
 
   const shalomDocumentProblem = shalomDoc.trim()
     ? documentError(shalomDocType, shalomDoc)
@@ -929,15 +1014,18 @@ function VoucherForm({
   }
 
   return (
-    <div className="space-y-2 rounded-lg border border-slate-200 p-3">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-        Cargar comprobante
-      </p>
+    <div className="space-y-4 rounded-lg border border-slate-200 p-3">
+      <div>
+        <p className="text-sm font-semibold text-slate-900">Registrar un pago</p>
+        <p className="mt-0.5 text-xs text-slate-500">
+          Prepara el destino, coteja la imagen y registra únicamente los datos que realmente aparecen.
+        </p>
+      </div>
       <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
         {[
-          ["1", "Imagen", Boolean(file)],
-          ["2", "Leer datos", Boolean(readNotice)],
-          ["3", "Registrar", false],
+          ["1", "DNI y agencia", Boolean(shalomDoc || shalomAgency)],
+          ["2", "Comprobante", Boolean(file)],
+          ["3", "Revisar y registrar", Boolean(readNotice)],
         ].map(([step, label, done]) => (
           <div
             key={String(step)}
@@ -958,99 +1046,18 @@ function VoucherForm({
           </div>
         ))}
       </div>
-      <div
-        className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1"
-        role="radiogroup"
-        aria-label="Tipo de pago"
-      >
-        {([
-          ["adelanto", "Adelanto"],
-          ["diferencia", "Diferencia"],
-          ["total", "Pago total"],
-        ] as const).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            role="radio"
-            aria-checked={kind === value}
-            onClick={() => setKind(value)}
-            className={cn(
-              "min-w-0 rounded-md px-2 py-1.5 text-xs font-semibold transition",
-              kind === value
-                ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
-                : "text-slate-500 hover:text-slate-800",
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <input
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          inputMode="decimal"
-          placeholder="Monto"
-          className="w-28 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-        />
-        <input
-          value={operation}
-          onChange={(e) => setOperation(e.target.value)}
-          placeholder="Nº de operación"
-          className="w-40 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-        />
-        <input
-          type="datetime-local"
-          value={paidAt}
-          onChange={(e) => setPaidAt(e.target.value)}
-          className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-        />
-      </div>
-      <RecipientAccountCheck reading={recipientCheck} />
-      <VoucherPicker file={file} onPick={pickVoucher} />
-      {file && (
-        <div className="rounded-xl border border-sky-200 bg-sky-50 p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <p className="text-sm font-semibold text-sky-950">Rellenar desde la imagen</p>
-              <p className="text-xs text-sky-700">
-                Lee monto, operación, fecha, hora y verifica la cuenta receptora.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={readAndPrefill}
-              disabled={reading || busy || pending}
-              className="rounded-lg bg-sky-700 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-800 disabled:cursor-wait disabled:opacity-50"
-            >
-              {reading ? "Leyendo imagen…" : readNotice ? "Volver a leer" : "Leer y rellenar"}
-            </button>
-          </div>
-          {readNotice && (
-            <p className="mt-2 rounded-lg bg-white/80 px-2.5 py-2 text-xs font-medium text-emerald-700">
-              ✓ {readNotice}
-            </p>
-          )}
-          {readWarning && (
-            <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-800">
-              ⚠ {readWarning}
-            </p>
-          )}
-        </div>
-      )}
 
       {/* Datos de Shalom, adelantados y OPCIONALES (0073).
           Van aquí porque quien registra el Yape acaba de hablar con la clienta y
           tiene el DNI a mano; quien crea la guía suele ser otra persona en otro
           momento, y hoy tiene que volver a pedirlo. Nada de esto condiciona el
           pago: un cobro no puede quedarse esperando a un DNI. */}
-      <details open className="rounded-lg border border-slate-200 px-3 py-2">
-        <summary className="cursor-pointer text-xs font-medium text-slate-600">
-          Adelantar datos para la guía Shalom (opcional)
+      <details open className="rounded-lg bg-slate-50 px-3 py-3">
+        <summary className="cursor-pointer text-sm font-semibold text-slate-900">
+          1. DNI y agencia Shalom <span className="font-normal text-slate-500">(opcional)</span>
         </summary>
         <p className="mt-2 text-xs text-slate-400">
-          Si ya tienes el documento del cliente o sabes a qué agencia va, apúntalo acá y quien cree
-          la guía se lo encontrará puesto: solo tendrá que cotizar y crear.
+          Completa primero estos datos si el cliente recogerá por Shalom. Quedarán listos para crear la guía.
         </p>
         <div className="mt-2 flex flex-wrap gap-2">
           <select
@@ -1185,24 +1192,160 @@ function VoucherForm({
           )}
         </div>
       </details>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
-        <p className="max-w-md text-xs text-slate-500">
-          Revisa los datos antes de registrar. La imagen no valida el pago: quedará pendiente de revisión.
-        </p>
-        <button
-          // Sin imagen y sin nº de operación no hay nada que registrar: dejar el
-          // botón activo solo consigue que parezca que no hace nada.
-          disabled={busy || reading || pending || (!file && !operation.trim())}
-          onClick={submit}
-          className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 disabled:opacity-50"
-        >
-          {busy ? "Registrando…" : "Registrar pago"}
-        </button>
-      </div>
-      {!file && !operation.trim() && (
-        <p className="text-xs text-slate-400">
-          Elige la imagen del Yape, o escribe el nº de operación si lo vas a cargar a mano.
-        </p>
+
+      {availableKinds.length > 0 ? (
+        <>
+          <section className="space-y-3">
+            <div>
+              <h4 className="text-sm font-semibold text-slate-900">2. Comprobante de Yape</h4>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Pega o sube la imagen. Permanecerá grande y visible mientras cotejas la lectura.
+              </p>
+            </div>
+            <VoucherPicker file={file} onPick={pickVoucher} />
+            {file && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-sky-50 px-3 py-3">
+                <div>
+                  <p className="text-sm font-semibold text-sky-950">Leer datos del comprobante</p>
+                  <p className="text-xs text-sky-700">
+                    Obtiene monto, operación, fecha y cuenta receptora. Tú confirmas contra la imagen.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={readAndPrefill}
+                  disabled={reading || busy || pending}
+                  className="rounded-lg bg-sky-700 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-800 focus:outline-none focus:ring-2 focus:ring-sky-300 disabled:cursor-wait disabled:opacity-50"
+                >
+                  {reading ? "Leyendo imagen…" : readNotice ? "Volver a leer" : "Leer y rellenar"}
+                </button>
+                {readNotice && (
+                  <p className="basis-full rounded-lg bg-white/80 px-2.5 py-2 text-xs font-medium text-emerald-700">
+                    ✓ {readNotice}
+                  </p>
+                )}
+                {readWarning && (
+                  <p className="basis-full rounded-lg bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-800">
+                    ⚠ {readWarning}
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section className="space-y-3 border-t border-slate-200 pt-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h4 className="text-sm font-semibold text-slate-900">3. Revisa y registra</h4>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {file
+                    ? "Contrasta los datos rellenados con el comprobante visible arriba."
+                    : "También puedes completar los datos manualmente si no tienes una imagen."}
+                </p>
+              </div>
+              {progress.registeredRemaining !== null && (
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                  Saldo por cargar: S/ {progress.registeredRemaining.toFixed(2)}
+                </span>
+              )}
+            </div>
+
+            {availableKinds.length === 1 ? (
+              <div className="flex items-center justify-between rounded-lg bg-indigo-50 px-3 py-2">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-600">Tipo de este pago</p>
+                  <p className="text-sm font-semibold text-indigo-950">Diferencia</p>
+                </div>
+                <span className="text-xs text-indigo-700">El adelanto ya fue registrado</span>
+              </div>
+            ) : (
+              <div
+                className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1"
+                role="radiogroup"
+                aria-label="Tipo del primer pago"
+              >
+                {availableKinds.map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={kind === value}
+                    onClick={() => setKind(value)}
+                    className={cn(
+                      "min-w-0 rounded-md px-2 py-2 text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-brand-300",
+                      kind === value
+                        ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                        : "text-slate-500 hover:text-slate-800",
+                    )}
+                  >
+                    {value === "adelanto" ? "Adelanto" : "Pago total"}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="space-y-1 text-xs font-medium text-slate-600">
+                <span>Monto</span>
+                <input
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  inputMode="decimal"
+                  placeholder={
+                    kind === "adelanto"
+                      ? `Mínimo S/ ${SHALOM_MINIMUM_ADVANCE.toFixed(0)}`
+                      : progress.registeredRemaining !== null
+                        ? `Saldo S/ ${progress.registeredRemaining.toFixed(2)}`
+                        : "Monto leído"
+                  }
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+                />
+              </label>
+              <label className="space-y-1 text-xs font-medium text-slate-600">
+                <span>Nº de operación</span>
+                <input
+                  value={operation}
+                  onChange={(e) => setOperation(e.target.value)}
+                  placeholder="Número del Yape"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+                />
+              </label>
+              <label className="space-y-1 text-xs font-medium text-slate-600">
+                <span>Fecha y hora</span>
+                <input
+                  type="datetime-local"
+                  value={paidAt}
+                  onChange={(e) => setPaidAt(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+                />
+              </label>
+            </div>
+            <RecipientAccountCheck reading={recipientCheck} />
+          </section>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
+            <p className="max-w-md text-xs text-slate-500">
+              La lectura rellena datos, pero no valida el ingreso. El pago quedará pendiente de revisión.
+            </p>
+            <button
+              disabled={busy || reading || pending || (!file && !operation.trim())}
+              onClick={submit}
+              className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-300 disabled:opacity-50"
+            >
+              {busy ? "Registrando…" : `Registrar ${kind === "total" ? "pago total" : kind}`}
+            </button>
+          </div>
+          {!file && !operation.trim() && (
+            <p className="text-xs text-slate-400">
+              Elige la imagen del Yape, o escribe el nº de operación si lo registrarás manualmente.
+            </p>
+          )}
+        </>
+      ) : (
+        <div className="rounded-lg bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
+          <p className="font-semibold">✓ El monto cargado ya cubre el total del pedido.</p>
+          <p className="mt-0.5 text-xs">No corresponde registrar otro comprobante mientras estos pagos sigan vigentes.</p>
+        </div>
       )}
     </div>
   );

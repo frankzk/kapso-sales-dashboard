@@ -187,4 +187,6 @@
 \ir migrations/0090_mom_phase3_routing.sql
 \echo 'Applying 0091_canete_agency_coverage.sql'
 \ir migrations/0091_canete_agency_coverage.sql
+\echo 'Applying 0092_multiple_payment_differences.sql'
+\ir migrations/0092_multiple_payment_differences.sql
 \echo 'Done.'

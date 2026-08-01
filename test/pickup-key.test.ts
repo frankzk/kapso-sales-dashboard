@@ -3,7 +3,9 @@ import {
   canRevealPickupKey,
   describeBlockers,
   keyState,
+  nextPaymentKinds,
   paymentPlanProblem,
+  paymentProgress,
   paymentState,
   usesPickupKeyFlow,
   type PaymentSnapshot,
@@ -109,6 +111,15 @@ describe("canRevealPickupKey — las seis condiciones", () => {
     })).allowed).toBe(true);
   });
 
+  it("suma varias diferencias hasta cubrir el total", () => {
+    const payments = [
+      payment("adelanto", "validado", ORDER, 30),
+      payment("diferencia", "validado", ORDER, 25),
+      payment("diferencia", "pendiente_revision", ORDER, 45),
+    ];
+    expect(canRevealPickupKey(ctx({ payments })).allowed).toBe(true);
+  });
+
   it("bloquea si no se conoce algún monto necesario", () => {
     const v = canRevealPickupKey(ctx({
       payments: [payment("adelanto"), payment("diferencia", "pendiente_revision", ORDER, Number.NaN)],
@@ -163,7 +174,7 @@ describe("paymentState — indicador del Master", () => {
     expect(paymentState([payment("adelanto"), payment("diferencia", "pendiente_revision")])).toBe(
       "diferencia_cargada",
     );
-    expect(paymentState([payment("adelanto"), payment("diferencia")])).toBe("pago_completo");
+    expect(paymentState([payment("adelanto"), payment("diferencia")], 100)).toBe("pago_completo");
     expect(paymentState([payment("total", "pendiente_revision")])).toBe("pago_total_cargado");
     expect(paymentState([payment("total")])).toBe("pago_completo");
   });
@@ -172,6 +183,31 @@ describe("paymentState — indicador del Master", () => {
     expect(
       paymentState([payment("adelanto"), payment("diferencia", "posible_duplicado")]),
     ).toBe("posible_duplicado");
+  });
+
+  it("mantiene saldo pendiente cuando varias diferencias validadas aún no cubren el pedido", () => {
+    expect(
+      paymentState(
+        [payment("adelanto", "validado", ORDER, 30), payment("diferencia", "validado", ORDER, 40)],
+        100,
+      ),
+    ).toBe("adelanto_validado");
+    expect(
+      paymentState(
+        [
+          payment("adelanto", "validado", ORDER, 30),
+          payment("diferencia", "validado", ORDER, 40),
+          payment("diferencia", "validado", ORDER, 30),
+        ],
+        100,
+      ),
+    ).toBe("pago_completo");
+  });
+
+  it("un adelanto validado menor a S/ 30 todavía no habilita la guía", () => {
+    expect(paymentState([payment("adelanto", "validado", ORDER, 20)], 100)).toBe(
+      "adelanto_cargado",
+    );
   });
 });
 
@@ -206,7 +242,7 @@ describe("paymentPlanProblem — pago total", () => {
         amount: 89,
         orderTotal: 89,
       }),
-    ).toContain("ya tiene un adelanto");
+    ).toContain("ya tiene pagos registrados");
     expect(
       paymentPlanProblem({
         kind: "diferencia",
@@ -215,6 +251,72 @@ describe("paymentPlanProblem — pago total", () => {
         orderTotal: 89,
       }),
     ).toContain("ya tiene un pago total");
+  });
+
+  it("solo permite Adelanto o Pago total como primer registro", () => {
+    expect(
+      paymentPlanProblem({
+        kind: "diferencia",
+        existingKinds: [],
+        existingAmount: 0,
+        amount: 30,
+        orderTotal: 89,
+      }),
+    ).toContain("primer pago");
+  });
+
+  it("permite varias diferencias después del adelanto", () => {
+    expect(
+      paymentPlanProblem({
+        kind: "diferencia",
+        existingKinds: ["adelanto", "diferencia"],
+        existingAmount: 55,
+        amount: 34,
+        orderTotal: 89,
+      }),
+    ).toBeNull();
+  });
+
+  it("no acepta otro pago cuando lo ya cargado cubre el pedido", () => {
+    expect(
+      paymentPlanProblem({
+        kind: "diferencia",
+        existingKinds: ["adelanto", "diferencia"],
+        existingAmount: 89,
+        amount: 10,
+        orderTotal: 89,
+      }),
+    ).toContain("ya cubre");
+  });
+});
+
+describe("paymentProgress y siguiente tipo", () => {
+  it("muestra cargado, validado y saldo por separado", () => {
+    const progress = paymentProgress(
+      [
+        payment("adelanto", "validado", ORDER, 30),
+        payment("diferencia", "pendiente_revision", ORDER, 25),
+      ],
+      100,
+    );
+    expect(progress.registeredTotal).toBe(55);
+    expect(progress.validatedTotal).toBe(30);
+    expect(progress.registeredRemaining).toBe(45);
+    expect(progress.validatedRemaining).toBe(70);
+    expect(progress.advanceValidated).toBe(true);
+  });
+
+  it("ofrece Adelanto/Total al inicio y solo Diferencia después", () => {
+    expect(nextPaymentKinds([], 100)).toEqual(["adelanto", "total"]);
+    expect(nextPaymentKinds([payment("adelanto", "validado", ORDER, 30)], 100)).toEqual([
+      "diferencia",
+    ]);
+    expect(
+      nextPaymentKinds(
+        [payment("adelanto", "validado", ORDER, 30), payment("diferencia", "validado", ORDER, 70)],
+        100,
+      ),
+    ).toEqual([]);
   });
 });
 
