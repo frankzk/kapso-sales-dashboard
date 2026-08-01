@@ -394,17 +394,114 @@ promesas de pago incumplidas aumentan el riesgo futuro.
 - Almacén arma todos los pedidos del turno.
 - Seguimiento Lima decide el courier; la asignación automática será inicialmente
   una sugerencia.
-- Horarios conocidos:
-  - Motorizados propios: mismo día hasta 10:30.
-  - Axel Courier: mismo día hasta 12:00.
-  - Swayp: rutas enviadas 16:00–17:00 para el día siguiente.
-  - Tanders: normalmente día siguiente.
 - Un no entregado pasa a `Por reprogramar Lima`.
 - Seguimiento Lima vuelve a llamar, elige otro courier permitido y solicita un
   nuevo armado si el paquete anterior todavía está con el courier.
 - No es obligatorio esperar la devolución anterior para crear otra salida.
 
 Responsable principal: Daysi. Diana apoya rutas y cotejo.
+
+### 9.1 Preparación, corte y capacidad diaria
+
+- Almacén: Yelitza y Matías.
+- El corte operativo actual se realiza aproximadamente hasta las 11:00.
+- Los pedidos de Lima centro se distribuyen principalmente entre los
+  motorizados propios Johnny, Roy y Douglas.
+- Axel Courier es operado por Alexis. Daysi llama y confirma aproximadamente
+  entre 30 y 40 puntos diarios antes de entregarle la ruta.
+- Las entregas de Alexis comienzan normalmente entre 14:00 y 15:00 y continúan
+  durante la tarde.
+- La preferencia de entrega indicada previamente por el cliente en WhatsApp
+  debe formar parte de la sugerencia de ruta.
+
+Los cortes previamente declarados siguen como referencia para automatización:
+
+- Motorizados propios: mismo día hasta 10:30.
+- Axel Courier: mismo día hasta 12:00.
+- Swayp: rutas enviadas 16:00–17:00 para el día siguiente.
+- Tanders: normalmente día siguiente.
+
+La diferencia entre el corte general de almacén (aprox. 11:00) y los cortes de
+cada courier debe modelarse como capacidad/horario de ruta, no como un estado
+del pedido.
+
+### 9.2 Sugerencia de courier en Lima
+
+La decisión final sigue siendo de Seguimiento Lima. La sugerencia actual parte
+de estas reglas observadas por Daysi:
+
+1. Lima centro: Johnny, Roy o Douglas.
+2. Cliente que pidió la tarde o puede recibir desde las 14:00: Axel Courier.
+3. Distritos del sur, incluidos Punta Hermosa y Pachacámac: priorizar Swayp.
+4. Si el cliente no puede recibir en el horario de Axel: Swayp, después Tanders
+   y finalmente Urpi, siempre que cobertura, turno y política de repetición lo
+   permitan.
+5. Urpi tiene dos turnos, mañana y tarde, pero actualmente recibe sobre todo
+   pedidos difíciles o sin respuesta. Daysi procura enviarle como máximo tres o
+   cuatro pedidos nuevos/confirmados por ruta.
+
+Swayp es el nombre vigente de Fénix. Daysi y otras personas todavía lo llaman
+Fénix. `Thunder` y `Tander` en la entrevista se normalizan como **Tanders**.
+
+Estas prioridades son parámetros operativos, no reglas rígidas: el sistema debe
+mostrar la razón de la sugerencia y permitir que Daysi elija otra ruta válida.
+
+### 9.3 Resultado fallido y nueva salida
+
+- Se revisa primero por qué no fue entregado: horario, ausencia, falta de
+  respuesta, producto/color equivocado, rechazo u otro motivo.
+- Si el problema puede resolverse el mismo día y el motorizado conserva el
+  paquete, puede reintentarlo con la misma salida.
+- Si cambia el producto, courier o día de salida, se crea una salida nueva con
+  QR nuevo. Almacén reimprime, arma otra caja y la coloca en la agrupación del
+  nuevo courier.
+- La nueva salida no debe borrar ni cerrar automáticamente la devolución física
+  de la salida anterior.
+- El equipo revisa el courier anterior y el motivo antes de elegir el siguiente.
+  Se mantiene la política aprobada por Frankz: Axel y motorizados propios pueden
+  repetirse; Swayp, Urpi y Tanders solo una vez por pedido en Lima, dentro del
+  máximo global de cinco salidas.
+
+La entrevista menciona como posibilidad volver a enviar por Swayp. Esto queda
+registrado como discrepancia operativa, pero no modifica la política del owner
+hasta que Frankz la cambie expresamente.
+
+### 9.4 Reportes, pagos y devoluciones físicas de Lima
+
+| Operador | Fuente del resultado | Momento observado |
+| --- | --- | --- |
+| Johnny, Roy y Douglas | WhatsApp; `entregado` o `entregado en efectivo`, más evidencia para Yape, Plin, link o POS | Durante/final de ruta |
+| Axel Courier | Cuadro de entregados y devueltos; devolución física normalmente al día siguiente | Día siguiente |
+| Swayp | Excel/plataforma en tiempo real | Durante la ruta |
+| Urpi | Plataforma en tiempo real | Durante la ruta |
+| Tanders | Incidencias por WhatsApp y cierre completo de ruta por la noche | Cotejo al día siguiente |
+
+Estados externos observados: entregado, no responde, rechazado, reprogramado y
+anulado/cancelado por el courier. Un `anulado` en el reporte del courier no
+anula el pedido Shopify; solo la anulación explícita en Shopify cierra la venta.
+
+Devoluciones físicas:
+
+- Motorizados propios: el saldo no entregado se coteja físicamente al día
+  siguiente, pedido por pedido.
+- Axel: Daysi o Diana fotografía y coteja los paquetes devueltos y la fecha.
+- Swayp y Urpi: el recojo de devoluciones ocurre actualmente cada semana o cada
+  quince días; cada salida debe permanecer abierta hasta recibir su caja.
+- Si ya existe otra caja armada para el mismo pedido, la devolución anterior se
+  identifica por su salida/QR; nunca se concilia solo por número de pedido.
+- Los pedidos que el cliente rechazó definitivamente y que fueron anulados en
+  Shopify no se vuelven a armar.
+
+Cobros y liquidación observados:
+
+- Motorizados propios reportan el medio de pago. Efectivo queda en liquidación;
+  Yape, Plin, link o POS requieren evidencia del ingreso directo.
+- Swayp y Urpi cobran al cliente y posteriormente liquidan a la empresa.
+- Tanders puede usar la cuenta de Grupo GF para que el dinero ingrese
+  directamente; Daysi coteja los entregados contra los pagos visibles.
+- Daysi realiza hoy parte de estos cotejos semanalmente por capacidad. Los SLA
+  financieros definidos en la sección de Liquidaciones no cambian: el sistema
+  debe separar `resultado reportado`, `pago verificado` y `lote conciliado`.
 
 ## 10. Provincia COD y Aliclik
 
@@ -580,7 +677,7 @@ mantiene observado el lote completo.
 | Proceso | Rol estable | Persona actual |
 | --- | --- | --- |
 | Confirmación | Confirmación | Milagros |
-| Preparación/almacén | Almacén | Yelitza |
+| Preparación/almacén | Almacén | Yelitza y Matías |
 | Seguimiento Lima | Seguimiento Lima | Daysi |
 | Apoyo Lima/cotejo | Operación Lima | Diana |
 | Reproprovincia | Jefatura Repro | Akemi |
@@ -812,34 +909,50 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 ## 25. User journey del drawer del Master
 
 El drawer no es un formulario largo ni un resumen de tablas. Es la mesa de
-trabajo de un pedido concreto y debe responder, en este orden:
+trabajo de un pedido concreto. La experiencia principal se diseña primero para
+el equipo que opera desde una computadora y se divide en tres espacios estables:
+
+1. **Operar:** muestra macroetapa, subetapa, antigüedad, avance del MOM y una sola
+   próxima acción. Aquí viven pagos requeridos, elección de ruta, rótulos,
+   salidas, cierre y gestión manual, únicamente cuando corresponden al pedido.
+2. **Información:** reúne cliente, monto, tienda, cobertura, ubicación y
+   productos. Shopify es la fuente comercial y Kapta agrega el contexto
+   operativo sin mezclarlo con la acción actual.
+3. **Actividad:** conserva cronológicamente eventos, actores, fuentes, guías,
+   motivos y correcciones. Es evidencia de solo lectura; no compite con el
+   trabajo pendiente.
+
+Dentro de `Operar`, el orden de decisión es:
 
 1. **Dónde está:** macroetapa, subetapa, antigüedad y avance dentro de las seis
    macroetapas del MOM.
-2. **Qué toca hacer ahora:** una sola acción dominante calculada desde la
-   macroetapa y subetapa actuales.
-3. **Qué necesita la acción:** ubicación, cobertura, productos y, si es una
-   operación de agencia, pagos y clave antes de escoger la ruta.
+2. **Qué toca hacer ahora:** una acción dominante calculada desde la macroetapa
+   y subetapa actuales.
+3. **Qué requisito la bloquea:** pago, ubicación, confirmación, stock, retorno u
+   otra obligación explícita.
 4. **Cómo se ejecuta:** ruta, creación del rótulo, salida, QR y transferencia de
    custodia en la Mesa de despacho.
 5. **Qué falta cerrar:** liquidación, retorno, inventario, indemnización,
    reembolso o devolución del cliente como obligaciones independientes.
-6. **Qué evidencia queda:** gestión manual e historial append-only.
 
 Reglas de interfaz:
 
-- Los atajos del encabezado muestran únicamente secciones existentes y siguen
-  exactamente el mismo orden que el contenido.
+- El encabezado conserva siempre pedido, estado comercial, monto, tienda,
+  cliente y accesos de llamada/WhatsApp.
+- La navegación usa las pestañas `Operar`, `Información` y `Actividad`. No se
+  reemplaza por una lista horizontal de enlaces a formularios.
 - La próxima acción nunca se deduce por color ni queda enterrada entre
   formularios; tiene título, explicación y acceso directo a su herramienta.
-- El color separa zonas con significado: índigo para ejecución, ámbar para
-  dinero o bloqueos, verde para seguimiento activo, naranja para cierre y gris
-  para consulta o auditoría.
+- El color refuerza significado sin ser la única señal: ámbar para confirmación
+  o pagos, celeste para preparación, índigo para despacho, cian para seguimiento,
+  naranja para cierre, verde para completado y gris para consulta/auditoría.
 - Pagos y clave aparecen antes que la ruta cuando la operación de agencia los
   exige. No se muestra el panel únicamente por existir una integración.
 - Cada salida conserva su propia tarjeta, courier, guía, QR, estado y resultado.
 - Historial, devoluciones manuales y corrección de vínculos están plegados por
   defecto: siguen accesibles, pero no compiten con la acción operativa normal.
-- El drawer conserva en móvil la misma jerarquía; el avance se adapta a dos
-  filas y las acciones nunca dependen de una tabla horizontal.
+- Se reutilizan patrones familiares de Shopify: identidad y estado fijos,
+  pestañas predecibles, acción contextual y divulgación progresiva.
+- El flujo móvil de escaneo, cotejo y motorizados se diseña aparte. No se debe
+  comprimir el drawer de escritorio y asumir que eso resuelve la operación móvil.
 

@@ -1172,10 +1172,7 @@ type DrawerSectionId =
   | "acciones"
   | "historial";
 
-interface DrawerSectionLink {
-  id: DrawerSectionId;
-  label: string;
-}
+type DrawerWorkspaceView = "operar" | "informacion" | "actividad";
 
 interface DrawerNextAction {
   eyebrow: string;
@@ -1190,6 +1187,21 @@ interface DrawerNextAction {
 const DRAWER_STAGE_ORDER = MASTER_VIEWS.filter(
   (view): view is { key: OrderMacroStage; label: string } => view.key !== "todos",
 );
+
+const DRAWER_STAGE_ACCENT: Record<string, string> = {
+  por_confirmar: "border-amber-500 bg-amber-500 text-white",
+  preparacion: "border-sky-600 bg-sky-600 text-white",
+  por_despachar: "border-indigo-600 bg-indigo-600 text-white",
+  en_curso: "border-cyan-700 bg-cyan-700 text-white",
+  por_cerrar: "border-orange-600 bg-orange-600 text-white",
+  finalizado: "border-emerald-700 bg-emerald-700 text-white",
+};
+
+function workspaceForSection(section: DrawerSectionId): DrawerWorkspaceView {
+  if (section === "ubicacion" || section === "productos") return "informacion";
+  if (section === "historial") return "actividad";
+  return "operar";
+}
 
 const NEXT_ACTION_TONE: Record<DrawerNextAction["tone"], string> = {
   indigo: "border-indigo-200 bg-indigo-50 text-indigo-950",
@@ -1321,23 +1333,49 @@ function drawerNextAction(row: OrderMasterRow, showPayments: boolean): DrawerNex
 function DrawerJourneyRail({ current }: { current: string | null | undefined }) {
   const currentIndex = DRAWER_STAGE_ORDER.findIndex((stage) => stage.key === current);
   return (
-    <ol className="grid grid-cols-3 gap-2 sm:grid-cols-6" aria-label="Avance del pedido en el MOM">
+    <ol className="grid grid-cols-6" aria-label="Avance del pedido en el MOM">
       {DRAWER_STAGE_ORDER.map((stage, index) => {
         const isCurrent = index === currentIndex;
         const isDone = currentIndex >= 0 && index < currentIndex;
         return (
-          <li key={stage.key} className="min-w-0">
-            <div
-              className={cn(
-                "flex min-h-14 flex-col justify-center rounded-lg border px-2 py-2 text-center transition-colors",
-                isCurrent && "border-indigo-600 bg-indigo-600 text-white shadow-sm",
-                isDone && "border-emerald-200 bg-emerald-50 text-emerald-800",
-                !isCurrent && !isDone && "border-slate-200 bg-white text-slate-400",
-              )}
-              aria-current={isCurrent ? "step" : undefined}
-            >
-              <span className="text-[10px] font-bold tabular-nums opacity-70">{String(index + 1).padStart(2, "0")}</span>
-              <span className="mt-0.5 text-[11px] font-semibold leading-tight">{stage.label}</span>
+          <li key={stage.key} className="relative min-w-0 px-1 first:pl-0 last:pr-0">
+            {index > 0 && (
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "absolute left-0 right-1/2 top-3 h-px -translate-y-1/2",
+                  isDone || isCurrent ? "bg-emerald-300" : "bg-slate-200",
+                )}
+              />
+            )}
+            {index < DRAWER_STAGE_ORDER.length - 1 && (
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "absolute left-1/2 right-0 top-3 h-px -translate-y-1/2",
+                  isDone ? "bg-emerald-300" : "bg-slate-200",
+                )}
+              />
+            )}
+            <div className="relative flex min-w-0 flex-col items-center text-center" aria-current={isCurrent ? "step" : undefined}>
+              <span
+                className={cn(
+                  "relative z-[1] grid h-6 w-6 place-items-center rounded-full border text-[10px] font-bold tabular-nums",
+                  isCurrent && (DRAWER_STAGE_ACCENT[stage.key] ?? "border-slate-700 bg-slate-700 text-white"),
+                  isDone && "border-emerald-500 bg-emerald-500 text-white",
+                  !isCurrent && !isDone && "border-slate-200 bg-white text-slate-400",
+                )}
+              >
+                {isDone ? "✓" : index + 1}
+              </span>
+              <span
+                className={cn(
+                  "mt-1.5 max-w-[6.5rem] text-[10px] font-semibold leading-tight",
+                  isCurrent ? "text-slate-900" : isDone ? "text-emerald-700" : "text-slate-400",
+                )}
+              >
+                {stage.label}
+              </span>
             </div>
           </li>
         );
@@ -1421,15 +1459,30 @@ function OrderDrawer({
 }) {
   const [detail, setDetail] = useState<OrderMasterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [workspace, setWorkspace] = useState<DrawerWorkspaceView>("operar");
   const scrollRef = useRef<HTMLElement>(null);
 
-  /** Lleva el panel a una sección. `scrollIntoView` dentro del propio panel, que
-   *  es el que scrollea — no la página de detrás. */
-  const jumpTo = (id: string) => {
-    scrollRef.current
-      ?.querySelector(`[data-drawer-section="${id}"]`)
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  /**
+   * Cambia primero al espacio que contiene la herramienta y después la enfoca.
+   * Antes todos los formularios vivían en una sola columna y los atajos solo
+   * desplazaban cientos de píxeles: técnicamente funcionaba, pero el equipo no
+   * sabía en qué "modo" del pedido estaba trabajando.
+   */
+  const jumpTo = (id: DrawerSectionId) => {
+    setWorkspace(workspaceForSection(id));
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scrollRef.current
+          ?.querySelector(`[data-drawer-section="${id}"]`)
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
   };
+
+  function openWorkspace(next: DrawerWorkspaceView) {
+    setWorkspace(next);
+    requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" }));
+  }
 
   // Escape cierra, y el fondo deja de scrollear mientras el panel está abierto:
   // sin esto, rodar dentro del drawer arrastraba el listado de atrás y al cerrar
@@ -1468,6 +1521,11 @@ function OrderDrawer({
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    setWorkspace("operar");
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [orderId]);
 
   function run(action: () => Promise<{ error?: string; notice?: string }>): Promise<boolean> {
     return new Promise((resolve) => {
@@ -1529,30 +1587,6 @@ function OrderDrawer({
           ))),
   );
   const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel) : null;
-  const drawerSections: DrawerSectionLink[] = detail
-    ? [
-        { id: "resumen", label: "Resumen" },
-        { id: "ubicacion", label: "Ubicación" },
-        ...(detail.lineItems.length > 0
-          ? ([{ id: "productos", label: "Productos" }] as DrawerSectionLink[])
-          : []),
-        ...(showPaymentPanel
-          ? ([{ id: "pagos", label: "Pagos y clave" }] as DrawerSectionLink[])
-          : []),
-        { id: "rutas", label: "Ruta" },
-        ...(canCreateGuide
-          ? ([{ id: "aliclik", label: "Crear Aliclik" }] as DrawerSectionLink[])
-          : []),
-        { id: "guias", label: "Salidas" },
-        ...(["por_cerrar", "finalizado"].includes(detail.row.macro_stage ?? "")
-          ? ([{ id: "cierre", label: "Cierre" }] as DrawerSectionLink[])
-          : []),
-        ...(canEdit
-          ? ([{ id: "acciones", label: "Gestión" }] as DrawerSectionLink[])
-          : []),
-        { id: "historial", label: "Historial" },
-      ]
-    : [];
 
   return (
     <div
@@ -1565,7 +1599,7 @@ function OrderDrawer({
         role="dialog"
         aria-modal="true"
         aria-label={`Pedido ${row?.order_name ?? ""}`}
-        className="h-full w-full max-w-3xl overflow-y-auto bg-white shadow-2xl"
+        className="h-full w-full max-w-[880px] overflow-y-auto bg-white shadow-2xl"
       >
         {/* La cabecera lleva lo que hay que tener SIEMPRE a la vista: qué pedido
             es, en qué estado está y cuánto vale. Antes había que subir hasta
@@ -1635,16 +1669,45 @@ function OrderDrawer({
             </div>
           </div>
 
-          {/* Saltar a una sección en vez de rodar el dedo por todo el panel. */}
+          {/* Tres espacios estables, como en Shopify: hacer el trabajo, consultar
+              el pedido y auditar lo ocurrido. El equipo deja de navegar una
+              lista accidental de formularios. */}
           {detail && (
-            <div className="flex gap-1 overflow-x-auto px-4 pb-2">
-              {drawerSections.map((sec) => (
+            <div className="flex items-center gap-5 px-5" role="tablist" aria-label="Espacios del pedido">
+              {(
+                [
+                  { id: "operar", label: "Operar", meta: "Siguiente acción" },
+                  { id: "informacion", label: "Información", meta: "Cliente y pedido" },
+                  {
+                    id: "actividad",
+                    label: "Actividad",
+                    meta: `${detail.timeline.length} movimiento${detail.timeline.length === 1 ? "" : "s"}`,
+                  },
+                ] as const
+              ).map((tab) => (
                 <button
-                  key={sec.id}
-                  onClick={() => jumpTo(sec.id)}
-                  className="whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={workspace === tab.id}
+                  aria-controls={`pedido-panel-${tab.id}`}
+                  onClick={() => openWorkspace(tab.id)}
+                  className={cn(
+                    "relative flex min-h-11 items-center gap-2 border-b-2 px-0.5 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
+                    workspace === tab.id
+                      ? "border-brand-600 text-slate-950"
+                      : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800",
+                  )}
                 >
-                  {sec.label}
+                  <span>{tab.label}</span>
+                  <span
+                    className={cn(
+                      "hidden rounded-full px-2 py-0.5 text-[10px] font-medium lg:inline",
+                      workspace === tab.id ? "bg-brand-50 text-brand-700" : "bg-slate-100 text-slate-500",
+                    )}
+                  >
+                    {tab.meta}
+                  </span>
                 </button>
               ))}
             </div>
@@ -1654,12 +1717,12 @@ function OrderDrawer({
         {/* Pegados bajo la cabecera: un error que se pierde al scrollear es un
             error que nadie lee, y estas acciones mueven dinero y estados. */}
         {error && (
-          <div className="sticky top-[104px] z-10 mx-5 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <div className="sticky top-[112px] z-10 mx-5 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {error}
           </div>
         )}
         {notice && (
-          <div className="sticky top-[104px] z-10 mx-5 mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          <div className="sticky top-[112px] z-10 mx-5 mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
             {notice}
           </div>
         )}
@@ -1680,6 +1743,10 @@ function OrderDrawer({
         ) : (
           <div className="flex flex-col gap-5 p-5">
             <section
+              id="pedido-panel-operar"
+              role="tabpanel"
+              aria-label="Operar pedido"
+              hidden={workspace !== "operar"}
               data-drawer-section="resumen"
               className="order-1 scroll-mt-28 space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4"
             >
@@ -1700,8 +1767,33 @@ function OrderDrawer({
               </div>
 
               <DrawerJourneyRail current={detail.row.macro_stage} />
+            </section>
 
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4">
+            {nextAction && workspace === "operar" && (
+              <div className="order-2">
+                <DrawerNextActionCard action={nextAction} onJump={jumpTo} />
+              </div>
+            )}
+
+            <section
+              id="pedido-panel-informacion"
+              role="tabpanel"
+              aria-label="Información del pedido"
+              hidden={workspace !== "informacion"}
+              className="order-1 rounded-xl border border-slate-200 bg-slate-50/70 p-4"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                    Pedido y cliente
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Datos comerciales sincronizados desde Shopify y contexto operativo de Kapta.
+                  </p>
+                </div>
+                <CoverageBadge coverage={detail.row.coverage} />
+              </div>
+              <dl className="mt-4 grid grid-cols-2 gap-x-5 gap-y-3 text-sm sm:grid-cols-4">
                 <Field label="Cliente" value={detail.row.customer_name} />
                 <Field label="Teléfono" value={detail.row.customer_phone} />
                 <Field
@@ -1713,12 +1805,14 @@ function OrderDrawer({
                   }
                 />
                 <Field label="Monto" value={fmtMoney(detail.row.order_total)} />
+                <Field label="Tienda" value={storeName(detail.row.store_id)} />
+                <Field label="Creado" value={fmtDateTime(detail.row.order_created_at)} />
+                <Field label="Courier actual" value={detail.row.current_courier} />
+                <Field label="Guía actual" value={detail.row.guide_code} />
               </dl>
-
-              {nextAction && <DrawerNextActionCard action={nextAction} onJump={jumpTo} />}
             </section>
 
-            <div className="order-2 scroll-mt-28">
+            <div hidden={workspace !== "informacion"} className="order-2 scroll-mt-28">
               <GeoSection
                 orderId={orderId}
                 row={detail.row}
@@ -1732,6 +1826,7 @@ function OrderDrawer({
 
             {detail.lineItems.length > 0 && (
               <section
+                hidden={workspace !== "informacion"}
                 data-drawer-section="productos"
                 className="order-3 scroll-mt-28 rounded-xl border border-slate-200 bg-white p-4"
               >
@@ -1751,7 +1846,11 @@ function OrderDrawer({
               </section>
             )}
 
-            <div data-drawer-section="rutas" className="order-5 scroll-mt-28">
+            <div
+              hidden={workspace !== "operar"}
+              data-drawer-section="rutas"
+              className="order-4 scroll-mt-28"
+            >
               <OrderRouteDesk
                 plan={detail.routePlan}
                 closed={detail.row.macro_stage === "finalizado"}
@@ -1761,8 +1860,9 @@ function OrderDrawer({
             </div>
 
             <section
+              hidden={workspace !== "operar"}
               data-drawer-section="guias"
-              className="order-7 scroll-mt-28 rounded-xl border border-sky-200 bg-sky-50/40 p-4"
+              className="order-6 scroll-mt-28 rounded-xl border border-sky-200 bg-sky-50/40 p-4"
             >
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div>
@@ -1869,7 +1969,11 @@ function OrderDrawer({
             </section>
 
             {["por_cerrar", "finalizado"].includes(detail.row.macro_stage ?? "") && (
-              <div data-drawer-section="cierre" className="order-8 scroll-mt-28">
+              <div
+                hidden={workspace !== "operar"}
+                data-drawer-section="cierre"
+                className="order-7 scroll-mt-28"
+              >
                 <OrderClosureDesk
                   stage={detail.row.macro_stage}
                   reasons={(detail.row.macro_reasons ?? []) as MacroSubstage[]}
@@ -1882,29 +1986,46 @@ function OrderDrawer({
               </div>
             )}
 
-            <details
+            <section
+              id="pedido-panel-actividad"
+              role="tabpanel"
+              aria-label="Actividad del pedido"
+              hidden={workspace !== "actividad"}
               data-drawer-section="historial"
-              className="group order-10 scroll-mt-28 overflow-hidden rounded-xl border border-slate-200 bg-white"
+              className="order-1 scroll-mt-28 overflow-hidden rounded-xl border border-slate-200 bg-white"
             >
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 hover:bg-slate-50">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50/70 px-4 py-3">
                 <div>
                   <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">
-                    Historial y auditoría
+                    Actividad y auditoría
                   </h3>
                   <p className="mt-0.5 text-xs text-slate-400">
                     {detail.timeline.length} movimiento{detail.timeline.length === 1 ? "" : "s"} · se conserva indefinidamente
                   </p>
                 </div>
-                <span className="text-sm text-slate-400 transition-transform group-open:rotate-180">⌄</span>
-              </summary>
-              <div className="border-t border-slate-100 px-4 py-4">
+                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+                  Solo lectura
+                </span>
+              </div>
+              <div className="px-4 py-4">
                 {detail.timeline.length === 0 ? (
                   <p className="text-sm text-slate-400">Sin movimientos registrados.</p>
                 ) : (
                   <ol className="space-y-3 border-l border-slate-200 pl-4">
                     {detail.timeline.map((t) => (
                       <li key={t.id} className="relative">
-                        <span className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-slate-300" />
+                        <span
+                          className={cn(
+                            "absolute -left-[21px] top-1.5 h-2 w-2 rounded-full",
+                            /payment|liquidation|entregado/.test(t.kind)
+                              ? "bg-emerald-500"
+                              : /return|refund|merma|anulado/.test(t.kind)
+                                ? "bg-orange-500"
+                                : /guide|dispatch|route|custody/.test(t.kind)
+                                  ? "bg-indigo-500"
+                                  : "bg-slate-400",
+                          )}
+                        />
                         <p className="text-sm font-medium text-slate-800">
                           {TIMELINE_LABEL[t.kind] ?? t.kind}
                           {t.newStatus && (
@@ -1928,7 +2049,7 @@ function OrderDrawer({
                   </ol>
                 )}
               </div>
-            </details>
+            </section>
 
             {/* El panel de pagos aparece cuando el pedido YA va por agencia
                 (`usesPickupKeyFlow`) y también cuando TODAVÍA PUEDE ir: si desde
@@ -1941,8 +2062,9 @@ function OrderDrawer({
                 registrar el pago hacía falta la guía, y para la guía el pago. */}
             {showPaymentPanel && (
               <div
+                hidden={workspace !== "operar"}
                 data-drawer-section="pagos"
-                className="order-4 scroll-mt-28 rounded-xl border border-amber-200 bg-amber-50/30 p-4"
+                className="order-3 scroll-mt-28 rounded-xl border border-amber-200 bg-amber-50/30 p-4"
               >
                 <PickupKeyPanel orderId={orderId} onChanged={onSaved} />
               </div>
@@ -1951,7 +2073,11 @@ function OrderDrawer({
             {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
                 una. En cuanto existe, el seguimiento vive en Envíos. */}
             {canCreateGuide && (
-              <div data-drawer-section="aliclik" className="order-6 scroll-mt-28">
+              <div
+                hidden={workspace !== "operar"}
+                data-drawer-section="aliclik"
+                className="order-5 scroll-mt-28"
+              >
                 <AliclikGuidePanel
                   orderId={orderId}
                   hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
@@ -1964,19 +2090,21 @@ function OrderDrawer({
             )}
 
             {canEdit ? (
-              <OrderActions
-                row={detail.row}
-                canOverride={canOverride}
-                pending={pending}
-                onStatus={(general, operational, reason) =>
-                  run(() => setOrderStatus(orderId, { general, operational, reason }))
-                }
-                onComment={(text, type) => run(() => addOrderComment(orderId, { text, type }))}
-                onReturn={(reason, guideCode) => run(() => registerReturn(orderId, { reason, guideCode }))}
-                onRelink={(guideCode) => run(() => relinkGuide(guideCode, orderId))}
-              />
+              <div hidden={workspace !== "operar"} className="order-8">
+                <OrderActions
+                  row={detail.row}
+                  canOverride={canOverride}
+                  pending={pending}
+                  onStatus={(general, operational, reason) =>
+                    run(() => setOrderStatus(orderId, { general, operational, reason }))
+                  }
+                  onComment={(text, type) => run(() => addOrderComment(orderId, { text, type }))}
+                  onReturn={(reason, guideCode) => run(() => registerReturn(orderId, { reason, guideCode }))}
+                  onRelink={(guideCode) => run(() => relinkGuide(guideCode, orderId))}
+                />
+              </div>
             ) : (
-              <div className="order-9">
+              <div hidden={workspace !== "operar"} className="order-8">
                 <EmptyState title="Solo lectura">
                   Tu rol permite consultar el pedido, sus comentarios y su historial, pero no modificarlo.
                 </EmptyState>
