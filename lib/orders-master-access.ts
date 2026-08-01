@@ -12,6 +12,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { isCaneteLocation } from "@/lib/order-coverage";
 import { evaluateDirectFenixStock, type FenixStockRow } from "@/lib/fenix";
 import { deriveFenixCoverageCity } from "@/lib/shipments";
 import {
@@ -300,6 +301,11 @@ function operationOf(row: OrderMasterRow, guides: ShipmentRow[]): OperationKind 
   return "desconocida";
 }
 
+/** Guard de lectura durante el despliegue de la migración 0091. */
+function withRuntimeCoverage(row: OrderMasterRow): OrderMasterRow {
+  return isCaneteLocation(row) ? { ...row, coverage: "agencia" } : row;
+}
+
 /**
  * Detalle de un pedido: su fila del Master, sus guías, la línea de tiempo
  * cronológica y los productos. La línea de tiempo MEZCLA `order_events` (lo del
@@ -315,7 +321,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     .eq("order_id", orderId)
     .maybeSingle();
   if (!rowData) return null;
-  const row = rowData as unknown as OrderMasterRow;
+  const row = withRuntimeCoverage(rowData as unknown as OrderMasterRow);
 
   const [orderRes, guidesRes, eventsRes] = await Promise.all([
     sb.from("orders").select("line_items,raw").eq("id", orderId).maybeSingle(),
@@ -570,7 +576,7 @@ export async function getOrderMasterPage(
 
   if (rowsRes.error) return empty;
   return {
-    rows: (rowsRes.data ?? []) as unknown as OrderMasterRow[],
+    rows: ((rowsRes.data ?? []) as unknown as OrderMasterRow[]).map(withRuntimeCoverage),
     total: countRes.count ?? 0,
     page: params.page,
     pageSize,

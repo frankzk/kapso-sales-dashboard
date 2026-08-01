@@ -78,7 +78,9 @@ const NON_METRO_LIMA_PROVINCES = new Set(
   ["barranca", "cajatambo", "canete", "canta", "huaral", "huarochiri", "huaura", "oyon", "yauyos"],
 );
 
-function isCaneteLocation(location: Pick<CoverageLocation, "province" | "district">): boolean {
+export function isCaneteLocation(
+  location: Pick<CoverageLocation, "province" | "district">,
+): boolean {
   const province = normalizeCoverageLabel(location.province);
   const district = normalizeCoverageLabel(location.district);
   return province === "canete" || district === "canete" || district.includes(" canete");

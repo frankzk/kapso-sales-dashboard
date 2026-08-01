@@ -7,7 +7,9 @@
 // Cambia cuando una nueva fase altera la precedencia o los motivos de cierre.
 // El cron usa esta versión para recalcular gradualmente todo el histórico sin
 // necesitar un script con credenciales locales.
-export const MOM_RESOLUTION_VERSION = "mom-v1.4" as const;
+import { isCaneteLocation } from "@/lib/order-coverage";
+
+export const MOM_RESOLUTION_VERSION = "mom-v1.5" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -282,6 +284,9 @@ export function classifyOperation(
   ) {
     return "agencia";
   }
+  // Protección inmediata mientras la migración 0091 termina de recalcular el
+  // histórico materializado.
+  if (isCaneteLocation(order)) return "agencia";
   const coverage = normalize(order.coverage);
   if (coverage === "lima") return "lima";
   if (coverage === "provincia_cod") return "provincia_cod";

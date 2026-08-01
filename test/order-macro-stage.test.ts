@@ -109,6 +109,19 @@ describe("classifyOperation", () => {
       ),
     ).toBe("agencia");
   });
+
+  it("Cañete gana aunque una fila histórica todavía diga cobertura Lima", () => {
+    expect(
+      classifyOperation(
+        order({
+          coverage: "lima",
+          region: "Lima (provincia)",
+          province: "Cañete",
+          district: "San Vicente de Cañete",
+        }),
+      ),
+    ).toBe("agencia");
+  });
 });
 
 describe("resolveMacroStage — Por confirmar y Preparación", () => {
