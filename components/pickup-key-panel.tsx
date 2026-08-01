@@ -134,11 +134,16 @@ export function PickupKeyPanel({ orderId, onChanged }: { orderId: string; onChan
   }
 
   return (
-    <section className="space-y-4 border-t border-slate-200 pt-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Pagos Yape y clave de recojo
-        </h3>
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-amber-900">
+            Pagos y clave de recojo
+          </h3>
+          <p className="mt-0.5 text-xs text-slate-500">
+            El pago acumulado habilita la guía; el pago completo libera la clave.
+          </p>
+        </div>
         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
           {PAYMENT_STATE_LABEL[panel.paymentState as PaymentState] ?? panel.paymentState}
         </span>

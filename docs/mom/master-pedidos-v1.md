@@ -809,3 +809,37 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 - Finalizar se bloquea mientras existan salidas activas u otras obligaciones.
 - Todas las acciones se guardan como eventos append-only y recalculan el Master.
 
+## 25. User journey del drawer del Master
+
+El drawer no es un formulario largo ni un resumen de tablas. Es la mesa de
+trabajo de un pedido concreto y debe responder, en este orden:
+
+1. **Dónde está:** macroetapa, subetapa, antigüedad y avance dentro de las seis
+   macroetapas del MOM.
+2. **Qué toca hacer ahora:** una sola acción dominante calculada desde la
+   macroetapa y subetapa actuales.
+3. **Qué necesita la acción:** ubicación, cobertura, productos y, si es una
+   operación de agencia, pagos y clave antes de escoger la ruta.
+4. **Cómo se ejecuta:** ruta, creación del rótulo, salida, QR y transferencia de
+   custodia en la Mesa de despacho.
+5. **Qué falta cerrar:** liquidación, retorno, inventario, indemnización,
+   reembolso o devolución del cliente como obligaciones independientes.
+6. **Qué evidencia queda:** gestión manual e historial append-only.
+
+Reglas de interfaz:
+
+- Los atajos del encabezado muestran únicamente secciones existentes y siguen
+  exactamente el mismo orden que el contenido.
+- La próxima acción nunca se deduce por color ni queda enterrada entre
+  formularios; tiene título, explicación y acceso directo a su herramienta.
+- El color separa zonas con significado: índigo para ejecución, ámbar para
+  dinero o bloqueos, verde para seguimiento activo, naranja para cierre y gris
+  para consulta o auditoría.
+- Pagos y clave aparecen antes que la ruta cuando la operación de agencia los
+  exige. No se muestra el panel únicamente por existir una integración.
+- Cada salida conserva su propia tarjeta, courier, guía, QR, estado y resultado.
+- Historial, devoluciones manuales y corrección de vínculos están plegados por
+  defecto: siguen accesibles, pero no compiten con la acción operativa normal.
+- El drawer conserva en móvil la misma jerarquía; el avance se adapta a dos
+  filas y las acciones nunca dependen de una tabla horizontal.
+
