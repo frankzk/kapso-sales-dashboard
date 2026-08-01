@@ -2,11 +2,14 @@ import { Suspense } from "react";
 import { getAccessibleStores } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import {
-  getOrderMasterCounts,
+  getOrderMasterAgencySummary,
+  getOrderMasterMomCounts,
   getOrderMasterRows,
   isMasterView,
+  MASTER_PAGE_SIZE,
   type MasterView,
 } from "@/lib/orders-master-access";
+import { MACRO_SUBSTAGES_BY_STAGE, type MacroSubstage } from "@/lib/order-macro-stage";
 import { EmptyState } from "@/components/ui";
 import { OrdersMasterBoard } from "@/components/orders-master";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
@@ -16,7 +19,7 @@ export const dynamic = "force-dynamic";
 export default function PedidosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string }>;
+  searchParams: Promise<{ view?: string; substage?: string; page?: string }>;
 }) {
   return (
     <Suspense fallback={<DashboardRouteSkeleton />}>
@@ -28,7 +31,7 @@ export default function PedidosPage({
 async function PedidosContent({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string }>;
+  searchParams: Promise<{ view?: string; substage?: string; page?: string }>;
 }) {
   const [sp, stores, perms] = await Promise.all([
     searchParams,
@@ -40,20 +43,38 @@ async function PedidosContent({
   }
 
   const view: MasterView = isMasterView(sp.view) ? sp.view : "todos";
+  const substage: MacroSubstage | null =
+    view !== "todos" &&
+    !!sp.substage &&
+    MACRO_SUBSTAGES_BY_STAGE[view].includes(sp.substage as MacroSubstage)
+      ? (sp.substage as MacroSubstage)
+      : null;
+  const requestedPage = Number.parseInt(sp.page ?? "1", 10);
+  const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
 
-  // El Master es consolidado: se cargan TODAS las tiendas accesibles y el filtro
-  // por tienda vive en el board, donde se combina con el resto de filtros.
+  // El Master es consolidado, pero solo entrega una página pequeña al navegador.
+  // Los totales del MOM y de agencia se calculan aparte sin transferir las filas.
   const storeIds = stores.map((s) => s.id);
-  const [counts, rows] = await Promise.all([
-    getOrderMasterCounts(storeIds),
-    getOrderMasterRows(storeIds, view),
+  const [momCounts, agencySummary, rows] = await Promise.all([
+    getOrderMasterMomCounts(storeIds),
+    getOrderMasterAgencySummary(storeIds),
+    getOrderMasterRows(storeIds, view, {
+      limit: MASTER_PAGE_SIZE,
+      offset: (page - 1) * MASTER_PAGE_SIZE,
+      substage,
+    }),
   ]);
 
   return (
     <OrdersMasterBoard
       stores={stores}
       view={view}
-      counts={counts}
+      substage={substage}
+      page={page}
+      pageSize={MASTER_PAGE_SIZE}
+      counts={momCounts.stages}
+      substageCounts={momCounts.substages}
+      agency={agencySummary}
       rows={rows}
       canEdit={!perms.readOnly}
       canOverride={perms.can("master.override_status")}
