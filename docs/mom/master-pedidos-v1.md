@@ -1,6 +1,6 @@
 # Master Operations Map — Master de Pedidos v1
 
-Estado: Fase 4 en implementación; Mesa de cierre publicada en el Master
+Estado: Fase 4 implementada; Mesa de cierre y resumen operativo publicados
 Propietario del proceso: Frankz  
 Sistema: Kapta (`kapso-sales-dashboard`)  
 Fuente visual: board Miro «Master Operations Map»  
@@ -742,6 +742,44 @@ Vistas: ayer, últimos 7 días, mes actual y mes anterior.
 
 El negocio se mide por pedido; el desempeño del courier se mide por salida.
 
+### 17.1 Primer tablero diario del owner
+
+El primer tablero operativo de la Fase 4 usa cuatro ventanas fijas en hora de
+Lima: ayer, últimos 7 días, mes actual y mes anterior. Cada porcentaje muestra
+siempre su numerador y denominador; un universo vacío se presenta como `Sin
+datos`, nunca como 0 %.
+
+| Indicador | Cohorte / denominador | Resultado / numerador |
+| --- | --- | --- |
+| Confirmación Provincia COD | Pedidos Shopify creados en la ventana cuya cobertura actual es Provincia COD | Pedido que actualmente conserva evidencia de confirmación mediante evento `confirmed`, generación de rótulo/guía o una salida despachada |
+| Adelanto de Agencia | Pedidos Shopify creados en la ventana cuya cobertura actual es Agencia | Pagos actualmente validados que acumulan al menos S/ 30 para el pedido |
+| Entrega Aliclik | Salidas Aliclik despachadas dentro de la ventana | Salidas de esa cohorte cuyo resultado actual es Entregado |
+| Entrega Lima total | Pedidos Lima con al menos una salida despachada dentro de la ventana | Pedidos de esa cohorte con al menos una de esas salidas Entregada |
+| Pago completo de Agencia | Pedidos con salida Shalom u Olva despachada dentro de la ventana | Pedidos de esa cohorte cuyos pagos validados dentro de la misma ventana cubren el total Shopify |
+
+Las tasas de confirmación y adelanto se miden por pedido. Aliclik se mide por
+salida para no ocultar el desempeño de un courier cuando un pedido tuvo varias
+cajas. Lima y Agencia se deduplican por pedido porque representan el resultado
+del negocio. Los resultados tardíos actualizan la cohorte de la fecha original
+de creación o despacho, excepto el pago completo de Agencia, que conserva la
+regla aprobada de pago y envío dentro de la misma ventana.
+
+Alertas del primer tablero:
+
+- `Recogido sin pago completo`: razón crítica abierta en el Master.
+- `Liquidación vencida`: obligación pendiente u observada que superó el SLA
+  desde la entrega. Aliclik y motorizado propio vencen al día siguiente; Axel y
+  Urpi a los 3 días; Swayp (antes Fénix) a los 4 días. Tanders no genera esta
+  alerta porque el dinero entra directamente a la empresa.
+- `Manifiesto incompleto`: ruta que ya inició el cotejo de oficina o de recojo y
+  todavía no alcanzó el 100 %.
+- `Sin movimiento por 60 días`: pedido no finalizado cuya última señal quedó
+  antes del corte. Las subetapas con una reprogramación explícita vigente se
+  excluyen; cuando la fecha programada venza, vuelven a ser elegibles.
+
+El tablero es de lectura y abre la cola correspondiente del Master o la Mesa de
+despacho. No finaliza, liquida ni corrige pedidos desde el resumen.
+
 Alertas críticas iniciales:
 
 1. Recogido sin pago completo.
@@ -837,6 +875,22 @@ Primer bloque publicado en el drawer del Master:
 - El resolver quedó versionado como `mom-v1.4`; el cron detecta versiones
   anteriores y recalcula el histórico por lotes hasta que todo el Master
   converja, sin necesitar credenciales locales ni detener la sincronización.
+
+Segundo bloque publicado en el Dashboard consolidado:
+
+- El resumen operativo del owner aparece antes del dashboard comercial y usa
+  únicamente hechos accesibles por RLS de `order_master`, salidas, pagos,
+  eventos y manifiestos.
+- Las tasas de Confirmación Provincia COD, Adelanto de Agencia, Entrega Aliclik,
+  Entrega Lima y Pago completo de Agencia muestran porcentaje, numerador y
+  denominador en las cuatro ventanas de la sección 17.1.
+- Las alertas `Recogido sin pago completo`, `Liquidación vencida`, `Manifiesto
+  incompleto` y `Sin movimiento por 60 días` muestran conteos reales y abren la
+  cola correspondiente; el resumen no cambia estados ni ejecuta cierres.
+- Los plazos de liquidación distinguen Aliclik/motorizado propio, Axel/Urpi,
+  Swayp y Tanders, incluyendo Johnny, Roy y Douglas como motorizados propios.
+- Un universo vacío se presenta como `Sin datos`, nunca como una tasa falsa de
+  0 %, y el cálculo conserva la unidad pedido o salida aprobada en el MOM.
 
 ## 19. Compatibilidad y activación
 
