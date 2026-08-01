@@ -946,8 +946,15 @@ Reglas de interfaz:
 - El color refuerza significado sin ser la única señal: ámbar para confirmación
   o pagos, celeste para preparación, índigo para despacho, cian para seguimiento,
   naranja para cierre, verde para completado y gris para consulta/auditoría.
-- Pagos y clave aparecen antes que la ruta cuando la operación de agencia los
-  exige. No se muestra el panel únicamente por existir una integración.
+- Pagos y clave aparecen antes que la ruta únicamente cuando la operación de
+  Agencia o una regla de riesgo exige el cobro. En Provincia COD, Aliclik y
+  Swayp pueden salir contra entrega: la Mesa de ruta conserva la prioridad y el
+  pago anticipado aparece después, rotulado como opcional, aunque Shalom u Olva
+  estén disponibles como alternativas.
+- Adelanto, Diferencia y Pago total permanecen como opciones independientes. Los
+  datos anticipados de Shalom (documento y agencia) se muestran desplegados por
+  defecto para evitar que se olviden durante la llamada, sin volverlos requisito
+  para registrar el comprobante.
 - Cada salida conserva su propia tarjeta, courier, guía, QR, estado y resultado.
 - Historial, devoluciones manuales y corrección de vínculos están plegados por
   defecto: siguen accesibles, pero no compiten con la acción operativa normal.

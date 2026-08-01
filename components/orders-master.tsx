@@ -73,7 +73,8 @@ import {
   type OrderMacroStage,
   type MacroSubstage,
 } from "@/lib/order-macro-stage";
-import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, usesPickupKeyFlow, type KeyState, type PaymentState } from "@/lib/pickup-key";
+import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, type KeyState, type PaymentState } from "@/lib/pickup-key";
+import { orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
 import { MASTER_VIEWS, type MasterCounts, type MasterView, type OrderMasterDetail } from "@/lib/orders-master-access";
 import { outputDisplayCode } from "@/lib/shipment-output";
 import type { RouteCandidate } from "@/lib/order-route-plan";
@@ -1578,14 +1579,21 @@ function OrderDrawer({
   }
 
   const row = detail?.row;
-  const showPaymentPanel = Boolean(
-    detail &&
-      (usesPickupKeyFlow(detail.row.current_courier, detail.row.shipping_mode) ||
-        (canCreateShalomGuide &&
+  const paymentPanel = detail
+    ? orderPaymentPanelPresentation({
+        operation: detail.routePlan.operation,
+        currentCourier: detail.row.current_courier,
+        shippingMode: detail.row.shipping_mode,
+        macroSubstage: detail.row.macro_substage,
+        paymentState: detail.row.payment_state,
+        hasAgencyCandidate:
+          canCreateShalomGuide &&
           detail.routePlan.candidates.some(
             (candidate) => candidate.key === "shalom" || candidate.key === "olva",
-          ))),
-  );
+          ),
+      })
+    : null;
+  const showPaymentPanel = paymentPanel?.show ?? false;
   const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel) : null;
 
   return (
@@ -2051,22 +2059,28 @@ function OrderDrawer({
               </div>
             </section>
 
-            {/* El panel de pagos aparece cuando el pedido YA va por agencia
-                (`usesPickupKeyFlow`) y también cuando TODAVÍA PUEDE ir: si desde
-                acá se ofrece «+ Guía Shalom», desde acá tiene que poder
-                registrarse su adelanto.
-
-                Sin la segunda condición había un callejón sin salida: el panel
-                solo salía con `courier='shalom'`, que no existe hasta que la
-                guía está creada, y crear la guía exige el adelanto. Para
-                registrar el pago hacía falta la guía, y para la guía el pago. */}
-            {showPaymentPanel && (
+            {/* Agencia o una regla de riesgo ponen el pago antes que la ruta.
+                Provincia COD puede salir contra entrega, así que conserva la
+                Mesa de ruta primero y deja el pago anticipado como herramienta
+                opcional debajo. Sigue disponible antes de crear Shalom para no
+                reconstruir el antiguo callejón circular guía ↔ adelanto. */}
+            {showPaymentPanel && paymentPanel && (
               <div
                 hidden={workspace !== "operar"}
                 data-drawer-section="pagos"
-                className="order-3 scroll-mt-28 rounded-xl border border-amber-200 bg-amber-50/30 p-4"
+                className={cn(
+                  "scroll-mt-28 rounded-xl border p-4",
+                  paymentPanel.mode === "required"
+                    ? "order-3 border-amber-200 bg-amber-50/30"
+                    : "order-5 border-slate-200 bg-white",
+                )}
               >
-                <PickupKeyPanel orderId={orderId} onChanged={onSaved} />
+                <PickupKeyPanel
+                  orderId={orderId}
+                  mode={paymentPanel.mode}
+                  showPickupKey={paymentPanel.showPickupKey}
+                  onChanged={onSaved}
+                />
               </div>
             )}
 
