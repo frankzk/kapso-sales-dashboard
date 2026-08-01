@@ -77,6 +77,7 @@ import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, type KeyState, type PaymentState 
 import { orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
 import { MASTER_VIEWS, type MasterCounts, type MasterView, type OrderMasterDetail } from "@/lib/orders-master-access";
 import { outputDisplayCode } from "@/lib/shipment-output";
+import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 
@@ -394,6 +395,10 @@ export function OrdersMasterBoard({
   const storeName = useMemo(() => {
     const map = new Map(stores.map((s) => [s.id, s.name]));
     return (id: string) => map.get(id) ?? "—";
+  }, [stores]);
+  const storeDomain = useMemo(() => {
+    const map = new Map(stores.map((s) => [s.id, s.shopify_domain]));
+    return (id: string) => map.get(id) ?? null;
   }, [stores]);
   const stageSubstages = view === "todos" ? [] : MACRO_SUBSTAGES_BY_STAGE[view];
 
@@ -786,6 +791,7 @@ export function OrdersMasterBoard({
           canCreateShalomGuide={canCreateShalomGuide}
           closurePermissions={closurePermissions}
           storeName={storeName}
+          storeDomain={storeDomain}
           onClose={() => setOpenId(null)}
           onSaved={() => router.refresh()}
         />
@@ -1437,6 +1443,7 @@ function OrderDrawer({
   canCreateShalomGuide,
   closurePermissions,
   storeName,
+  storeDomain,
   onClose,
   onSaved,
 }: {
@@ -1455,6 +1462,7 @@ function OrderDrawer({
     canReopen: boolean;
   };
   storeName: (id: string) => string;
+  storeDomain: (id: string) => string | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -1579,6 +1587,9 @@ function OrderDrawer({
   }
 
   const row = detail?.row;
+  const shopifyUrl = row
+    ? shopifyOrderAdminUrl(storeDomain(row.store_id), row.shopify_order_id)
+    : null;
   const paymentPanel = detail
     ? orderPaymentPanelPresentation({
         operation: detail.routePlan.operation,
@@ -1620,6 +1631,31 @@ function OrderDrawer({
                 <p className="text-base font-semibold text-slate-900">
                   {row?.order_name ?? "Pedido"}
                 </p>
+                {shopifyUrl && (
+                  <a
+                    href={shopifyUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Abrir en Shopify"
+                    aria-label={`Abrir ${row?.order_name ?? "pedido"} en Shopify (nueva pestaña)`}
+                    className="inline-flex shrink-0 items-center justify-center rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-brand-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M7 17 17 7" />
+                      <path d="M8 7h9v9" />
+                    </svg>
+                  </a>
+                )}
                 {detail && (
                   <StatusBadge
                     status={detail.row.general_status}
