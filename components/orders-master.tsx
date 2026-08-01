@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, cn, EmptyState } from "@/components/ui";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
+import { ShalomGuidePanel } from "@/components/shalom-guide-panel";
 import { ChecklistFilter } from "@/components/filters";
 import { PickupKeyPanel } from "@/components/pickup-key-panel";
 import { TandersGuideModal } from "@/components/tanders-guide-modal";
@@ -1245,14 +1246,23 @@ function OrderDrawer({
             {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
                 una. En cuanto existe, el seguimiento vive en Envíos. */}
             {canCreateGuide && !detail.row.guide_code && (
-              <AliclikGuidePanel
-                orderId={orderId}
-                hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
-                onCreated={() => {
-                  void reload();
-                  onSaved();
-                }}
-              />
+              <>
+                <ShalomGuidePanel
+                  orderId={orderId}
+                  onCreated={() => {
+                    void reload();
+                    onSaved();
+                  }}
+                />
+                <AliclikGuidePanel
+                  orderId={orderId}
+                  hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
+                  onCreated={() => {
+                    void reload();
+                    onSaved();
+                  }}
+                />
+              </>
             )}
 
             {canEdit ? (
