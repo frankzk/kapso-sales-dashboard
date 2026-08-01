@@ -26,7 +26,7 @@ import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
 import { OrderClosureDesk } from "@/components/order-closure-desk";
 import { OrderRouteDesk } from "@/components/order-route-desk";
 import { ChecklistFilter } from "@/components/filters";
-import { PickupKeyPanel } from "@/components/pickup-key-panel";
+import { PickupKeyPanel, ShalomPickupKeyPanel } from "@/components/pickup-key-panel";
 import { TandersGuideModal } from "@/components/tanders-guide-modal";
 import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actions";
 import { ShalomGuideModal } from "@/components/shalom-guide-modal";
@@ -1285,7 +1285,7 @@ function drawerNextAction(row: OrderMasterRow, showPayments: boolean): DrawerNex
         eyebrow: "Agencia · pago pendiente",
         title: "Completar el pago antes de liberar la clave",
         description: "La clave de recojo permanece bloqueada hasta validar el monto total acumulado.",
-        cta: "Revisar pagos y clave",
+        cta: "Revisar pagos",
         target: "pagos",
         tone: "amber",
       };
@@ -1974,6 +1974,9 @@ function OrderDrawer({
                   ))}
                 </ul>
               )}
+              {detail.guides.some((guide) => guide.courier === "shalom") && (
+                <ShalomPickupKeyPanel orderId={orderId} onChanged={onSaved} />
+              )}
             </section>
 
             {["por_cerrar", "finalizado"].includes(detail.row.macro_stage ?? "") && (
@@ -2078,7 +2081,6 @@ function OrderDrawer({
                 <PickupKeyPanel
                   orderId={orderId}
                   mode={paymentPanel.mode}
-                  showPickupKey={paymentPanel.showPickupKey}
                   onChanged={onSaved}
                 />
               </div>

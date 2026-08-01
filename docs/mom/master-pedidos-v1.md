@@ -585,6 +585,9 @@ Horarios Swayp documentados:
 - Se permiten varios pagos; se libera la clave cuando la suma validada alcanza
   el total exigido.
 - Sin pago completo no se entrega la clave.
+- La clave pertenece a la salida Shalom: se registra, consulta y entrega desde
+  **Salidas y guías**, no desde el formulario de comprobantes. El pago solo
+  gobierna si la credencial puede revelarse.
 - Seguimiento comienza desde la constancia del adelanto y se intensifica cuando
   el paquete llega a destino.
 - Plazo: 28 días desde que está disponible en agencia destino.
@@ -603,7 +606,8 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
    crea una salida física con QR propio y la deja en
    `Preparación · Por armar` (`rotulo_generado`, custodia de la empresa).
 4. La clave ingresada se cifra y nunca se escribe en la línea de tiempo. Si no
-   se conoce todavía, puede registrarse después en **Pagos y clave**.
+   se conoce todavía, puede registrarse después en la credencial de esa salida,
+   dentro de **Salidas y guías**.
 5. El tracking público se recupera automáticamente por número de guía; no exige
    OSE ID ni sesión de Shalom Pro. OSE ID solo habilita rótulo/comprobante, e ID
    de orden permite una eventual anulación por API.
@@ -969,11 +973,15 @@ Reglas de interfaz:
 - El color refuerza significado sin ser la única señal: ámbar para confirmación
   o pagos, celeste para preparación, índigo para despacho, cian para seguimiento,
   naranja para cierre, verde para completado y gris para consulta/auditoría.
-- Pagos y clave aparecen antes que la ruta únicamente cuando la operación de
+- El panel de pagos aparece antes que la ruta únicamente cuando la operación de
   Agencia o una regla de riesgo exige el cobro. En Provincia COD, Aliclik y
   Swayp pueden salir contra entrega: la Mesa de ruta conserva la prioridad y el
   pago anticipado aparece después, rotulado como opcional, aunque Shalom u Olva
   estén disponibles como alternativas.
+- La credencial de recojo no comparte formulario con el comprobante. Solo
+  aparece cuando ya existe una salida Shalom y vive dentro de **Salidas y
+  guías**. Shalom origina la clave; el pago completo autoriza mostrarla y
+  registrar su entrega al cliente.
 - Adelanto, Diferencia y Pago total conservan identidades distintas, pero se
   presentan según la secuencia de cobro permitida. Los
   datos anticipados de Shalom (documento y agencia) se muestran desplegados por

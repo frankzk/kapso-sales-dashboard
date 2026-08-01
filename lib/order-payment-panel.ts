@@ -6,7 +6,6 @@ export type OrderPaymentPanelMode = "required" | "optional";
 export interface OrderPaymentPanelPresentation {
   show: boolean;
   mode: OrderPaymentPanelMode;
-  showPickupKey: boolean;
 }
 
 interface OrderPaymentPanelInput {
@@ -42,6 +41,5 @@ export function orderPaymentPanelPresentation(
   return {
     show: paymentRequired || hasPaymentActivity || input.hasAgencyCandidate,
     mode: paymentRequired ? "required" : "optional",
-    showPickupKey: pickupKeyFlow || input.operation === "agencia",
   };
 }

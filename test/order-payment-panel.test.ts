@@ -15,7 +15,6 @@ describe("jerarquía de pagos en el drawer", () => {
     expect(orderPaymentPanelPresentation(BASE)).toEqual({
       show: true,
       mode: "optional",
-      showPickupKey: false,
     });
   });
 
@@ -25,16 +24,16 @@ describe("jerarquía de pagos en el drawer", () => {
         ...BASE,
         macroSubstage: "pago_requerido_pendiente",
       }),
-    ).toEqual({ show: true, mode: "required", showPickupKey: false });
+    ).toEqual({ show: true, mode: "required" });
   });
 
-  it("prioriza pago y clave en una operación de Agencia", () => {
+  it("prioriza el cobro en una operación de Agencia", () => {
     expect(
       orderPaymentPanelPresentation({
         ...BASE,
         operation: "agencia",
       }),
-    ).toEqual({ show: true, mode: "required", showPickupKey: true });
+    ).toEqual({ show: true, mode: "required" });
   });
 
   it("mantiene visible un pago ya iniciado aunque no haya ruta de Agencia", () => {
@@ -44,7 +43,7 @@ describe("jerarquía de pagos en el drawer", () => {
         hasAgencyCandidate: false,
         paymentState: "adelanto_cargado",
       }),
-    ).toEqual({ show: true, mode: "optional", showPickupKey: false });
+    ).toEqual({ show: true, mode: "optional" });
   });
 
   it("oculta el panel cuando el pago no corresponde ni tiene actividad", () => {
@@ -53,6 +52,6 @@ describe("jerarquía de pagos en el drawer", () => {
         ...BASE,
         hasAgencyCandidate: false,
       }),
-    ).toEqual({ show: false, mode: "optional", showPickupKey: false });
+    ).toEqual({ show: false, mode: "optional" });
   });
 });
