@@ -1223,8 +1223,16 @@ function OrderDrawer({
                           </span>
                         )}
                       </p>
-                      {(t.note || t.reason) && (
-                        <p className="text-sm text-slate-600">{t.note ?? t.reason}</p>
+                      {t.note && (
+                        <p className="whitespace-pre-wrap text-sm text-slate-600">
+                          {t.note}
+                        </p>
+                      )}
+                      {t.reason && t.reason.trim() !== t.note?.trim() && (
+                        <p className="mt-0.5 whitespace-pre-wrap text-sm text-slate-600">
+                          <span className="font-medium text-slate-700">Motivo:</span>{" "}
+                          {t.reason}
+                        </p>
                       )}
                       <p className="text-xs text-slate-400">
                         {fmtDateTime(t.occurredAt)}
