@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { aliclikStatusLabel, mapAliclikStatus } from "@/lib/aliclik-status";
+import {
+  aliclikStatusLabel,
+  mapAliclikStatus,
+  reconcileAliclikCustodyState,
+  reconcileAliclikPreparationState,
+} from "@/lib/aliclik-status";
 import { reconcileDeliveryStatus } from "@/lib/shipments";
 
 describe("mapAliclikStatus — entrega", () => {
@@ -91,10 +96,42 @@ describe("mapAliclikStatus — en curso", () => {
     expect(m.operational).toBeNull();
   });
 
+  it.each([
+    ["TO_PREPARE", "rotulo_generado", "empresa"],
+    ["PREPARED", "listo_despacho", "empresa"],
+    ["PICKED", "listo_despacho", "courier"],
+  ])("dispatchStatus=%s acredita preparación %s y custodia %s en el MOM", (dispatch, preparation, custody) => {
+    const m = mapAliclikStatus({ status: "PENDING_DELIVERY", dispatchStatus: dispatch });
+    expect(m.preparationState).toBe(preparation);
+    expect(m.custodyState).toBe(custody);
+  });
+
   it("IMPORTED no hace avanzar la guía", () => {
     const m = mapAliclikStatus({ callStatus: "IMPORTED" });
     expect(m.deliveryStatus).toBe("pendiente");
     expect(m.operational).toBe("sin_confirmar");
+  });
+});
+
+describe("reconciliación MOM de Aliclik", () => {
+  it("un PREPARED hace avanzar el rótulo a listo para despacho", () => {
+    expect(reconcileAliclikPreparationState("rotulo_generado", "listo_despacho")).toBe(
+      "listo_despacho",
+    );
+  });
+
+  it("TO_PREPARE no hace retroceder un paquete ya escaneado", () => {
+    expect(reconcileAliclikPreparationState("listo_despacho", "rotulo_generado")).toBe(
+      "listo_despacho",
+    );
+  });
+
+  it("PREPARED no devuelve a la empresa un paquete que ya recogió el courier", () => {
+    expect(reconcileAliclikCustodyState("courier", "empresa")).toBe("courier");
+  });
+
+  it("PICKED transfiere la custodia al courier", () => {
+    expect(reconcileAliclikCustodyState("empresa", "courier")).toBe("courier");
   });
 });
 

@@ -1183,6 +1183,41 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
 - El barrido vive en `lib/tanders/payment-sweep.ts`, **compartido** por el cron y
   por esa revisión: si fueran dos implementaciones, mirar los veredictos en seco
   no probaría nada sobre lo que hace el cron de verdad.
+## 5o. MOM Fase 1 — macroetapas sombra e identidad de salidas
+
+- **Requiere migración 0086** antes de activar cualquier interfaz de escaneo.
+- La migración asigna a cada guía vinculada un consecutivo por pedido
+  (`KP123-S01`, `KP123-S02`) y un `qr_token` opaco diferente.
+- `general_status` y `operational_status` continúan siendo productivos. Los
+  campos `macro_stage`, `macro_substage` y `macro_reasons` son un cálculo en
+  paralelo para validación; no cambian las pestañas actuales.
+- Código y migración son compatibles en ambos órdenes: si el código se despliega
+  antes, el recálculo omite temporalmente las columnas MOM; si la migración se
+  aplica primero, sus valores por defecto se reemplazan en el siguiente barrido
+  del Master.
+- Después de aplicar 0059, ejecutar/revisar un ciclo de sincronización y
+  comprobar una muestra real:
+  - Lima nuevo → `preparacion / por_generar_rotulo`.
+  - Provincia nuevo → `por_confirmar / sin_llamar`.
+  - Guía sin despacho → `preparacion / por_armar`.
+  - Entregado COD sin liquidación integrada → `por_cerrar / pendiente_liquidacion`.
+- No imprimas todavía el nuevo QR desde producción: la pantalla de doble cotejo
+  y transferencia de custodia pertenece a la Fase 2.
+
+## 5p. MOM Fase 2 — mesa de despacho y doble cotejo
+
+- **Requiere migración 0087** antes de abrir `/dashboard/pedidos/despacho`.
+- La mesa acepta el QR opaco, el código `KP…-S01` o la guía del courier. La
+  cámara es opcional: un lector USB o la escritura manual usan el mismo campo.
+- Almacén marca el paquete `listo_despacho`; Daysi/equipo lo incorpora y coteja
+  dentro de una ruta; el motorizado vuelve a escanear todo al recoger.
+- Crear o compartir la ruta no marca despacho. La custodia cambia únicamente al
+  completar el segundo cotejo al 100 %.
+- Si falta una caja se retira expresamente de la ruta con motivo. Los demás
+  paquetes pueden salir solo después de que el manifiesto actualizado vuelva a
+  estar completo.
+- Revisar primero una ruta pequeña en producción y comprobar su historial en el
+  Master antes de usarla con todos los couriers.
 
 ## 7. Post-deploy verification
 

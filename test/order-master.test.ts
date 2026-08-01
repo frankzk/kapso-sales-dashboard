@@ -107,9 +107,33 @@ describe("recomputeOrderMaster — snapshot del pedido", () => {
     const { row } = await recompute({ orders: [ORDER] });
     expect(row.general_status).toBe("pendiente");
     expect(row.operational_status).toBe("sin_confirmar");
+    expect(row.macro_stage).toBe("por_confirmar");
+    expect(row.macro_substage).toBe("sin_llamar");
+    expect(row.macro_version).toBe("mom-v1.4");
     expect(row.courier_count).toBe(0);
     expect(row.attempt_count).toBe(0);
     expect(row.status_locked).toBe(false);
+  });
+
+  it("calcula Lima nuevo como Preparación sin cambiar el estado legado", async () => {
+    const lima = {
+      ...ORDER,
+      raw: {
+        shippingAddress: {
+          address1: "Av. La Marina 123",
+          address2: "Frente al parque",
+          city: "San Miguel",
+          province: "Lima",
+          name: "Ana Quispe",
+          phone: "987654321",
+        },
+      },
+    };
+    const { row } = await recompute({ orders: [lima] });
+    expect(row.general_status).toBe("pendiente");
+    expect(row.operational_status).toBe("sin_confirmar");
+    expect(row.macro_stage).toBe("preparacion");
+    expect(row.macro_substage).toBe("por_generar_rotulo");
   });
 
   it("no escribe nada cuando el pedido no existe", async () => {

@@ -8,7 +8,7 @@ import {
 } from "@/lib/permissions";
 
 describe("permissionsFor", () => {
-  it("owner y admin tienen todos los permisos", () => {
+  it("owner y admin administran el sistema, pero solo owner confirma reembolsos", () => {
     for (const role of ["owner", "admin"]) {
       const p = permissionsFor([role]);
       expect(p.has("master.edit")).toBe(true);
@@ -16,7 +16,10 @@ describe("permissionsFor", () => {
       expect(p.has("shalom.reveal_pickup_key")).toBe(true);
       expect(p.has("shalom.override_payment_validation")).toBe(true);
       expect(p.has("costs.manage")).toBe(true);
+      expect(p.has("closure.finance")).toBe(true);
     }
+    expect(permissionsFor(["owner"]).has("closure.refund")).toBe(true);
+    expect(permissionsFor(["admin"]).has("closure.refund")).toBe(false);
   });
 
   it("viewer no tiene NINGÚN permiso de escritura (§16)", () => {
@@ -32,6 +35,13 @@ describe("permissionsFor", () => {
     expect(p.has("shalom.validate_payment")).toBe(false);
     expect(p.has("shalom.view_pickup_key")).toBe(false);
     expect(p.has("shalom.reveal_pickup_key")).toBe(true);
+    expect(p.has("warehouse.prepare")).toBe(true);
+    expect(p.has("dispatch.manage")).toBe(true);
+    expect(p.has("dispatch.pickup")).toBe(true);
+    expect(p.has("closure.return")).toBe(true);
+    expect(p.has("closure.inventory")).toBe(true);
+    expect(p.has("closure.finance")).toBe(false);
+    expect(p.has("closure.refund")).toBe(false);
     expect(isReadOnly(["vendedora"])).toBe(false);
   });
 

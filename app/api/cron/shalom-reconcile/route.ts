@@ -76,14 +76,15 @@ export async function GET(req: NextRequest) {
   const admin = createAdminSupabase();
 
   // Solo las que pueden cambiar: las terminales ya no se mueven, y preguntarlas
-  // gastaría cupo compartido a cambio de nada. Y solo las creadas por API — las
-  // que llegaran por reporte no tienen por qué tener número rastreable nuestro.
+  // gastaría cupo compartido a cambio de nada. El rastreo público necesita el
+  // número de guía, NO el OSE ID ni una sesión de Shalom Pro. Por eso también
+  // entran las guías creadas fuera de Kapta y vinculadas durante una caída.
   const { data, error } = await admin
     .from("shipments")
     .select("id,store_id,order_id,guide_code,delivery_status,pickup_state")
     .eq("courier", "shalom")
-    .not("shalom_ose_id", "is", null)
     .not("guide_code", "is", null)
+    .not("delivery_status", "in", "(entregado,anulado,transferido)")
     .order("updated_at", { ascending: true })
     .limit(MAX_PER_RUN);
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });

@@ -27,7 +27,10 @@ import {
   isTerminalGeneral,
   type GeneralStatus,
 } from "@/lib/order-status";
-import { normalizeDistrict } from "@/lib/shipments";
+import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
+import { classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
+import { canRepeatCourier, normalizeOrderCode } from "@/lib/shipment-output";
+import type { RouteKey } from "@/lib/order-route-plan";
 import type { OrderMasterRow } from "@/lib/types";
 
 export interface MasterActionState {
@@ -80,6 +83,7 @@ async function recordEvent(
     reason?: string | null;
     note?: string | null;
     commentType?: string | null;
+    shipmentId?: string | null;
     occurredAt?: string;
     payload?: Record<string, unknown>;
   },
@@ -100,6 +104,7 @@ async function recordEvent(
     reason: event.reason ?? null,
     note: event.note ?? null,
     comment_type: event.commentType ?? null,
+    shipment_id: event.shipmentId ?? null,
     payload: event.payload ?? {},
   });
   return error ? error.message : null;
@@ -122,6 +127,215 @@ export async function loadOrderDetail(
 /** Búsqueda global, para encontrar un pedido fuera de la pestaña activa. */
 export async function searchOrders(query: string): Promise<OrderMasterRow[]> {
   return searchOrderMaster(query);
+}
+
+// ---------------------------------------------------------------------------
+// Fase 3 — salidas manuales con rótulo interno y QR
+// ---------------------------------------------------------------------------
+
+const MANUAL_ROUTE_COURIERS = ["axel", "urpi", "propio", "olva"] as const;
+export type ManualRouteCourier = (typeof MANUAL_ROUTE_COURIERS)[number];
+
+const MANUAL_COURIER_LABEL: Record<ManualRouteCourier, string> = {
+  axel: "Axel Courier",
+  urpi: "Urpi",
+  propio: "Motorizado propio",
+  olva: "Olva",
+};
+
+export interface CreateManualRouteOutputInput {
+  courier: RouteKey;
+  dispatchDate: string;
+  note?: string;
+}
+
+export interface CreateManualRouteOutputResult extends MasterActionState {
+  shipmentId?: string;
+  outputCode?: string;
+  labelUrl?: string;
+}
+
+function isManualCourier(courier: RouteKey): courier is ManualRouteCourier {
+  return (MANUAL_ROUTE_COURIERS as readonly string[]).includes(courier);
+}
+
+function routeOperation(row: OrderMasterRow, couriers: string[]): OperationKind {
+  if (["lima", "provincia_cod", "agencia"].includes(row.macro_operation ?? "")) {
+    return row.macro_operation as OperationKind;
+  }
+  return classifyOperation(row, couriers.map((courier) => ({ courier })));
+}
+
+/**
+ * Registra una salida que no tiene API propia. La caja nace en custodia de la
+ * empresa y con rótulo generado; recién la mesa de despacho puede marcarla
+ * lista, cotejarla y transferirla al motorizado.
+ */
+export async function createManualRouteOutput(
+  orderId: string,
+  input: CreateManualRouteOutputInput,
+): Promise<CreateManualRouteOutputResult> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite crear salidas." };
+  if (!isManualCourier(input.courier)) return { error: "Ese courier usa un flujo de guía propio." };
+
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (isTerminalGeneral(ctx.row.general_status)) {
+    return { error: "El pedido está cerrado. Reábrelo antes de crear otra salida." };
+  }
+
+  const dispatchDate = input.dispatchDate.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dispatchDate)) {
+    return { error: "Elige una fecha de salida válida." };
+  }
+  if (dispatchDate < limaTodayKey()) return { error: "La fecha de salida no puede estar en el pasado." };
+
+  const admin = createAdminSupabase();
+  const { data: existing, error: existingError } = await admin
+    .from("shipments")
+    .select("id,courier,delivery_status,custody_state")
+    .eq("order_id", orderId)
+    .order("created_at", { ascending: true });
+  if (existingError) return { error: existingError.message };
+  const outputs = (existing ?? []) as {
+    id: string;
+    courier: string;
+    delivery_status: string;
+    custody_state: string | null;
+  }[];
+  const active = outputs.filter(
+    (output) =>
+      output.custody_state !== "devuelto" &&
+      ["pendiente", "en_ruta", "por_preparar"].includes(output.delivery_status),
+  );
+  const note = input.note?.trim() ?? "";
+  if (active.length > 0 && !note) {
+    return {
+      error: `Este pedido todavía tiene ${active.length} salida${active.length === 1 ? "" : "s"} activa${active.length === 1 ? "" : "s"}. Escribe el motivo de la salida adicional.`,
+    };
+  }
+
+  const operation = input.courier === "olva"
+    ? "agencia"
+    : routeOperation(ctx.row, outputs.map((output) => output.courier));
+  const priorOutputsWithCourier = outputs.filter((output) => {
+    const current = output.courier.trim().toLowerCase();
+    if (input.courier === "axel") return current === "axel" || current === "axel courier";
+    if (input.courier === "propio") return current === "propio" || current === "motorizado propio";
+    return current === input.courier;
+  }).length;
+  const repetition = canRepeatCourier({
+    courier: MANUAL_COURIER_LABEL[input.courier],
+    operation,
+    priorOutputsWithCourier,
+    totalOutputs: outputs.length,
+  });
+  if (!repetition.allowed) {
+    return {
+      error:
+        repetition.reason === "max_outputs"
+          ? "El pedido ya alcanzó el máximo de cinco salidas."
+          : `${MANUAL_COURIER_LABEL[input.courier]} ya fue usado y no puede repetirse en esta modalidad.`,
+    };
+  }
+
+  if (input.courier === "olva") {
+    const { data: payments, error: paymentError } = await admin
+      .from("order_payments")
+      .select("amount")
+      .eq("order_id", orderId)
+      .eq("validation_status", "validado");
+    if (paymentError) return { error: `No se pudo validar el adelanto: ${paymentError.message}` };
+    const validated = (payments ?? []).reduce(
+      (sum, payment) => sum + Number((payment as { amount: number | string | null }).amount ?? 0),
+      0,
+    );
+    if (validated < 30) {
+      return { error: `Olva Agencia requiere al menos S/ 30 validados. Hay S/ ${validated.toFixed(2)}.` };
+    }
+  }
+
+  const { data: order } = await admin
+    .from("orders")
+    .select("line_items")
+    .eq("id", orderId)
+    .maybeSingle();
+  const lineItems = ((order as { line_items?: { title?: string | null; quantity?: number | null }[] } | null)
+    ?.line_items ?? []);
+  const product = lineItems
+    .map((item) => `${item.title ?? "Producto"}${(item.quantity ?? 1) > 1 ? ` ×${item.quantity}` : ""}`)
+    .join(" | ") || null;
+
+  const shipmentId = crypto.randomUUID();
+  const base = normalizeOrderCode(ctx.row.order_name) || orderId.slice(0, 8).toUpperCase();
+  const guideCode = `MOM-${base}-${input.courier.toUpperCase()}-${shipmentId.slice(0, 8).toUpperCase()}`;
+  const labelUrl = `/api/pedidos/rotulo/${shipmentId}`;
+  const assignedAt = new Date().toISOString();
+  const { data: inserted, error: insertError } = await admin
+    .from("shipments")
+    .insert({
+      id: shipmentId,
+      store_id: ctx.storeId,
+      courier: input.courier,
+      guide_code: guideCode,
+      delivery_status: "pendiente",
+      status_category: "pending",
+      order_id: orderId,
+      matched: true,
+      match_method: "manual",
+      order_name: ctx.row.order_name,
+      customer_name: ctx.row.customer_name,
+      customer_phone: ctx.row.customer_phone,
+      product,
+      district: ctx.row.district,
+      province: ctx.row.province,
+      city: ctx.row.district,
+      region: ctx.row.region,
+      delivery_address: ctx.row.address,
+      delivery_reference: ctx.row.reference,
+      latitude: ctx.row.latitude,
+      longitude: ctx.row.longitude,
+      assigned_at: assignedAt,
+      next_followup_at: `${dispatchDate}T12:00:00-05:00`,
+      preparation_state: "rotulo_generado",
+      custody_state: "empresa",
+      created_via: "mom_manual_route",
+      label_url: labelUrl,
+      ...(input.courier === "olva" ? { pickup_state: "pendiente_de_envio" } : {}),
+    })
+    .select("id,output_code")
+    .single();
+  if (insertError || !inserted) {
+    return { error: insertError?.message ?? "No se pudo crear la salida." };
+  }
+
+  const outputCode = (inserted as { output_code?: string | null }).output_code ?? guideCode;
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "route_output_created",
+    source: input.courier === "olva" ? "olva" : "manual",
+    courier: input.courier,
+    guideCode,
+    shipmentId,
+    reason: note || null,
+    note: `${outputCode} creada para ${MANUAL_COURIER_LABEL[input.courier]}; salida prevista ${dispatchDate}.`,
+    payload: {
+      outputCode,
+      dispatchDate,
+      activeOutputsAtCreation: active.map((output) => output.id),
+      labelUrl,
+    },
+  });
+
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  revalidatePath("/dashboard/pedidos/despacho");
+  return {
+    notice: `${outputCode} creada. Imprime el rótulo y entrégala a almacén para el escaneo de preparación.${eventError ? ` Aviso: no se pudo escribir el evento de auditoría (${eventError}).` : ""}`,
+    shipmentId,
+    outputCode,
+    labelUrl,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +499,291 @@ export async function registerReturn(
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
   return { notice: "Devolución registrada." };
+}
+
+// ---------------------------------------------------------------------------
+// Fase 4 — cierre operativo, físico y financiero
+// ---------------------------------------------------------------------------
+
+export type ClosureActionKey =
+  | "return_request"
+  | "return_receive"
+  | "inventory_restock"
+  | "inventory_merma"
+  | "liquidation_observe"
+  | "liquidation_close"
+  | "indemnity_request"
+  | "indemnity_resolve"
+  | "refund_request"
+  | "refund_complete"
+  | "customer_return_start"
+  | "customer_return_resolve"
+  | "finalize"
+  | "reopen";
+
+export interface ClosureActionInput {
+  action: ClosureActionKey;
+  note: string;
+  shipmentId?: string | null;
+  amount?: number | null;
+  reference?: string | null;
+}
+
+const CLOSURE_EVENT: Record<ClosureActionKey, string> = {
+  return_request: "return_requested",
+  return_receive: "return_received",
+  inventory_restock: "inventory_reconciled",
+  inventory_merma: "merma_closed",
+  liquidation_observe: "liquidation_observed",
+  liquidation_close: "liquidation_closed",
+  indemnity_request: "indemnity_requested",
+  indemnity_resolve: "indemnity_resolved",
+  refund_request: "refund_requested",
+  refund_complete: "refund_completed",
+  customer_return_start: "customer_return_started",
+  customer_return_resolve: "customer_return_resolved",
+  finalize: "order_finalized",
+  reopen: "order_reopened",
+};
+
+function workflowIsOpen(
+  events: readonly { kind: string; occurred_at: string; shipment_id?: string | null }[],
+  starts: readonly string[],
+  closes: readonly string[],
+  shipmentId?: string | null,
+): boolean {
+  const scoped = shipmentId
+    ? events.filter((event) => event.shipment_id === shipmentId)
+    : events;
+  const latest = (kinds: readonly string[]) =>
+    scoped
+      .filter((event) => kinds.includes(event.kind))
+      .reduce<{ kind: string; occurred_at: string } | null>(
+        (best, event) => (!best || event.occurred_at > best.occurred_at ? event : best),
+        null,
+      );
+  const opened = latest(starts);
+  const closed = latest(closes);
+  return Boolean(opened && (!closed || closed.occurred_at < opened.occurred_at));
+}
+
+/**
+ * Registra un hecho de cierre sin sobrescribir el pasado. Las acciones sensibles
+ * se autorizan por dimensión y las precondiciones se vuelven a validar en el
+ * servidor; ocultar un botón en el navegador nunca es la única protección.
+ */
+export async function registerClosureAction(
+  orderId: string,
+  input: ClosureActionInput,
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  const action = input.action;
+  if (!Object.prototype.hasOwnProperty.call(CLOSURE_EVENT, action)) {
+    return { error: "La acción de cierre no es válida." };
+  }
+  const canAct =
+    (["return_request", "return_receive", "customer_return_start", "customer_return_resolve"] as ClosureActionKey[])
+      .includes(action)
+      ? perms.can("closure.return")
+      : (["inventory_restock", "inventory_merma"] as ClosureActionKey[]).includes(action)
+        ? perms.can("closure.inventory")
+        : (["liquidation_observe", "liquidation_close", "indemnity_request", "indemnity_resolve", "refund_request"] as ClosureActionKey[])
+            .includes(action)
+          ? perms.can("closure.finance")
+          : action === "refund_complete"
+            ? perms.can("closure.refund")
+            : action === "reopen"
+              ? perms.can("master.override_status") && perms.can("closure.finalize")
+              : perms.can("closure.finalize");
+  if (!canAct) return { error: "Tu rol no permite realizar esta acción de cierre." };
+
+  const note = input.note?.trim() ?? "";
+  const reference = input.reference?.trim() || null;
+  if (!note) return { error: "Escribe una nota breve. El cierre debe quedar auditado." };
+  if (note.length > 2000) return { error: "La nota es demasiado larga (máx. 2000)." };
+  if (reference && reference.length > 500) {
+    return { error: "La referencia o evidencia es demasiado larga (máx. 500)." };
+  }
+  const amount = input.amount == null ? null : Number(input.amount);
+  if (amount != null && (!Number.isFinite(amount) || amount < 0)) {
+    return { error: "El monto no es válido." };
+  }
+
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const admin = createAdminSupabase();
+  const [{ data: guides, error: guidesError }, { data: events, error: eventsError }] = await Promise.all([
+    admin
+      .from("shipments")
+      .select("id,courier,guide_code,delivery_status,custody_state,returned_at")
+      .eq("order_id", orderId),
+    admin
+      .from("order_events")
+      .select("kind,occurred_at,shipment_id")
+      .eq("order_id", orderId)
+      .order("occurred_at", { ascending: true }),
+  ]);
+  if (guidesError) return { error: guidesError.message };
+  if (eventsError) return { error: eventsError.message };
+
+  const shipmentRows = (guides ?? []) as {
+    id: string;
+    courier: string | null;
+    guide_code: string | null;
+    delivery_status: string;
+    custody_state: string | null;
+    returned_at: string | null;
+  }[];
+  const eventRows = (events ?? []) as { kind: string; occurred_at: string; shipment_id: string | null }[];
+  const selectedShipment = input.shipmentId
+    ? shipmentRows.find((shipment) => shipment.id === input.shipmentId)
+    : null;
+  if (input.shipmentId && !selectedShipment) {
+    return { error: "La salida elegida no pertenece a este pedido." };
+  }
+
+  if (
+    [
+      "return_request",
+      "return_receive",
+      "inventory_restock",
+      "inventory_merma",
+      "indemnity_request",
+      "indemnity_resolve",
+    ].includes(action) &&
+    !selectedShipment
+  ) {
+    return { error: "Elige la salida física concreta sobre la que registrarás la acción." };
+  }
+  if (["return_request", "return_receive"].includes(action) && selectedShipment?.custody_state === "empresa") {
+    return { error: "Esta salida todavía figura en la empresa; no existe custodia externa que retornar." };
+  }
+  if (["return_request", "return_receive"].includes(action) && selectedShipment?.delivery_status === "entregado") {
+    return { error: "Una entrega confirmada no se recibe como retorno del courier; abre una devolución del cliente." };
+  }
+  if (action === "return_request" && selectedShipment?.custody_state === "retorno") {
+    return { error: "El retorno de esta salida ya fue solicitado." };
+  }
+  if (
+    ["return_request", "return_receive"].includes(action) &&
+    (selectedShipment?.custody_state === "devuelto" || Boolean(selectedShipment?.returned_at))
+  ) {
+    return { error: "Esta salida ya fue recibida físicamente en almacén." };
+  }
+  const selectedReturnReceived =
+    selectedShipment?.custody_state === "devuelto" || Boolean(selectedShipment?.returned_at);
+  if (["inventory_restock", "inventory_merma"].includes(action) && !selectedReturnReceived) {
+    return { error: "Primero registra la recepción física de la devolución." };
+  }
+  if (
+    ["inventory_restock", "inventory_merma"].includes(action) &&
+    selectedShipment &&
+    eventRows.some(
+      (event) =>
+        event.shipment_id === selectedShipment.id &&
+        ["inventory_reconciled", "merma_closed"].includes(event.kind),
+    )
+  ) {
+    return { error: "Esta salida ya fue conciliada en inventario." };
+  }
+  if (["liquidation_observe", "liquidation_close"].includes(action) && ctx.row.general_status !== "entregado") {
+    return { error: "Solo se puede conciliar una liquidación cuando la entrega ya está confirmada." };
+  }
+  if (action === "liquidation_close" && ctx.row.logistics_cost == null) {
+    return { error: "Falta el costo logístico. Regístralo en Costos antes de cerrar la liquidación." };
+  }
+  if (action === "indemnity_request") {
+    if (selectedShipment?.courier?.toLowerCase() !== "aliclik") {
+      return { error: "La indemnización formal solo aplica a una salida Aliclik." };
+    }
+    if (!amount || amount <= 0) return { error: "Indica el valor del producto reclamado." };
+  }
+  if (
+    action === "indemnity_resolve" &&
+    (selectedShipment?.courier?.toLowerCase() !== "aliclik" ||
+      !workflowIsOpen(
+        eventRows,
+        ["indemnity_requested"],
+        ["indemnity_resolved"],
+        selectedShipment.id,
+      ))
+  ) {
+    return { error: "No hay una indemnización abierta para resolver." };
+  }
+  if (action === "refund_complete") {
+    if (!workflowIsOpen(eventRows, ["refund_requested"], ["refund_completed"])) {
+      return { error: "No hay un reembolso pendiente." };
+    }
+    if (!amount || amount <= 0) return { error: "Indica el monto que Frankz ya reembolsó." };
+  }
+  if (action === "refund_request" && (!amount || amount <= 0)) {
+    return { error: "Indica el monto que se solicita reembolsar." };
+  }
+  if (action === "customer_return_start" && ctx.row.general_status !== "entregado") {
+    return { error: "La devolución del cliente se abre sobre un pedido previamente entregado." };
+  }
+  if (
+    action === "customer_return_resolve" &&
+    !workflowIsOpen(eventRows, ["customer_return_started"], ["customer_return_resolved"])
+  ) {
+    return { error: "No hay una devolución del cliente abierta." };
+  }
+  if (action === "reopen" && ctx.row.macro_stage !== "finalizado") {
+    return { error: "Solo se reabre un pedido que ya está Finalizado." };
+  }
+  if (action === "finalize") {
+    const active = shipmentRows.filter(
+      (shipment) =>
+        shipment.custody_state !== "devuelto" &&
+        ["pendiente", "en_ruta", "por_preparar"].includes(shipment.delivery_status),
+    );
+    if (active.length) return { error: "Todavía existen salidas activas. Cancélalas o recibe su retorno antes de finalizar." };
+    const blockers = (ctx.row.macro_reasons ?? []).filter(
+      (reason) => reason !== "validacion_cierre_pendiente",
+    );
+    if (blockers.length) {
+      return { error: `Resuelve primero: ${blockers.join(", ").replaceAll("_", " ")}.` };
+    }
+  }
+
+  const occurredAt = new Date().toISOString();
+  const eventError = await recordEvent(admin, ctx, {
+    kind: CLOSURE_EVENT[action],
+    source: "manual",
+    courier: selectedShipment?.courier ?? null,
+    guideCode: selectedShipment?.guide_code ?? null,
+    shipmentId: selectedShipment?.id ?? null,
+    reason: note,
+    note,
+    occurredAt,
+    payload: {
+      amount,
+      reference,
+      phase: 4,
+    },
+  });
+  if (eventError) return { error: eventError };
+
+  if (action === "return_request" && selectedShipment) {
+    const { error } = await admin
+      .from("shipments")
+      .update({ custody_state: "retorno", pickup_state: "retorno_solicitado" })
+      .eq("id", selectedShipment.id)
+      .eq("order_id", orderId);
+    if (error) return { error: `La solicitud quedó auditada, pero no se pudo actualizar la salida: ${error.message}` };
+  }
+  if (action === "return_receive" && selectedShipment) {
+    const { error } = await admin
+      .from("shipments")
+      .update({ custody_state: "devuelto", returned_at: occurredAt, pickup_state: "devuelto" })
+      .eq("id", selectedShipment.id)
+      .eq("order_id", orderId);
+    if (error) return { error: `La recepción quedó auditada, pero no se pudo actualizar la salida: ${error.message}` };
+  }
+
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  return { notice: "Acción de cierre registrada. El expediente fue recalculado." };
 }
 
 /**

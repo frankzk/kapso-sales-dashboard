@@ -23,6 +23,11 @@ import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
 import { computeLogisticsCost, costDay, type CostTariff } from "@/lib/costs";
 import { classifyOrderCoverage } from "@/lib/order-coverage";
 import {
+  MOM_RESOLUTION_VERSION,
+  resolveMacroStage,
+  type MacroGuideSnapshot,
+} from "@/lib/order-macro-stage";
+import {
   isGeneralStatus,
   isOperationalStatus,
   resolveOrderState,
@@ -50,8 +55,13 @@ const SHIPMENT_GESTION_COLUMNS =
 // porque el costo real solo lo tienen las guías creadas por API: si la columna
 // aún no existe, el cálculo sigue funcionando con las tarifas de siempre.
 const SHIPMENT_COST_COLUMNS = ",quoted_delivery_cost,quoted_return_cost,created_via";
+const SHIPMENT_MOM_COLUMNS =
+  ",output_number,output_code,qr_token,preparation_state,custody_state," +
+  "ready_at,ready_by,custody_transferred_at,custody_transferred_by";
 const SHIPMENT_COLUMN_SETS = [
+  SHIPMENT_BASE_COLUMNS + SHIPMENT_GESTION_COLUMNS + SHIPMENT_COST_COLUMNS + SHIPMENT_MOM_COLUMNS,
   SHIPMENT_BASE_COLUMNS + SHIPMENT_GESTION_COLUMNS + SHIPMENT_COST_COLUMNS,
+  SHIPMENT_BASE_COLUMNS + SHIPMENT_GESTION_COLUMNS + SHIPMENT_MOM_COLUMNS,
   SHIPMENT_BASE_COLUMNS + SHIPMENT_GESTION_COLUMNS,
   SHIPMENT_BASE_COLUMNS,
 ];
@@ -67,6 +77,8 @@ function num(v: unknown): number | null {
 const PAGE = 1000;
 /** Tamaño de lote para los `.in(...)`: URLs demasiado largas fallan. */
 const ID_BATCH = 200;
+/** Límite del backfill de versión por tienda y cron para no competir con la operación. */
+const VERSION_RECONCILE_PAGE = 250;
 
 interface OrderRecord {
   id: string;
@@ -117,6 +129,15 @@ interface ShipmentRecord {
   quoted_delivery_cost?: number | null;
   quoted_return_cost?: number | null;
   created_via?: string | null;
+  output_number?: number | null;
+  output_code?: string | null;
+  qr_token?: string | null;
+  preparation_state?: string | null;
+  custody_state?: string | null;
+  ready_at?: string | null;
+  ready_by?: string | null;
+  custody_transferred_at?: string | null;
+  custody_transferred_by?: string | null;
 }
 
 interface CallRecord {
@@ -128,11 +149,14 @@ interface CallRecord {
 
 interface EventRecord {
   order_id: string;
+  shipment_id: string | null;
   kind: string;
   occurred_at: string;
   courier: string | null;
   new_status: string | null;
   new_operational: string | null;
+  reason?: string | null;
+  payload?: Record<string, unknown> | null;
 }
 
 interface HistoricalGeoRow {
@@ -227,6 +251,24 @@ function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot 
       derived.lastCallAt && (!s.updated_at || derived.lastCallAt > s.updated_at)
         ? derived.lastCallAt
         : s.updated_at,
+  };
+}
+
+function toMacroGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): MacroGuideSnapshot {
+  const guide = toGuideSnapshot(s, calls);
+  return {
+    id: guide.id,
+    courier: guide.courier,
+    delivery_status: guide.delivery_status,
+    attempts: guide.attempts,
+    assigned_at: guide.assigned_at,
+    dispatched_at: guide.dispatched_at,
+    out_for_delivery_at: guide.out_for_delivery_at,
+    rescheduled_at: guide.rescheduled_at,
+    returned_at: guide.returned_at,
+    pickup_state: guide.pickup_state,
+    preparation_state: s.preparation_state ?? null,
+    custody_state: s.custody_state ?? null,
   };
 }
 
@@ -354,7 +396,7 @@ async function fetchEvents(admin: SupabaseClient, ids: string[]): Promise<EventR
   for (const batch of chunk(ids, ID_BATCH)) {
     const { data, error } = await admin
       .from("order_events")
-      .select("order_id,kind,occurred_at,courier,new_status,new_operational")
+      .select("order_id,shipment_id,kind,occurred_at,courier,new_status,new_operational,reason,payload")
       .in("order_id", batch);
     if (error) throw new Error(`order_master: no se pudieron leer los eventos — ${error.message}`);
     out.push(...((data ?? []) as unknown as EventRecord[]));
@@ -687,6 +729,9 @@ export async function recomputeOrderMaster(
     const override = latestOverride(orderEvents);
 
     const paymentSignals = signals.get(order.id) ?? null;
+    const resolvedPaymentState = paymentSignals
+      ? paymentState(paymentSignals.payments)
+      : null;
 
     const state = resolveOrderState({
       order: {
@@ -699,6 +744,31 @@ export async function recomputeOrderMaster(
       events: eventSnapshots,
       override,
       now,
+    });
+    const macro = resolveMacroStage({
+      order: {
+        created_at: order.created_at,
+        cancelled_at: order.cancelled_at,
+        financial_status: order.financial_status,
+        shipping_mode: order.shipping_mode,
+        region,
+        province,
+        district,
+      },
+      guides: guides.map((s) => toMacroGuideSnapshot(s, callsByShipment.get(s.id) ?? [])),
+      events: orderEvents.map((event) => ({
+        kind: event.kind,
+        occurred_at: event.occurred_at,
+        shipment_id: event.shipment_id,
+        reason: event.reason ?? null,
+        payload: event.payload ?? null,
+      })),
+      legacy: {
+        general: state.general,
+        operational: state.operational,
+        since: state.since,
+      },
+      paymentState: resolvedPaymentState,
     });
 
     // El costo REAL del envío, cuando el courier nos lo dijo. Solo lo tienen las
@@ -758,6 +828,12 @@ export async function recomputeOrderMaster(
       order_total: order.total_amount,
       general_status: state.general,
       operational_status: state.operational,
+      macro_stage: macro.stage,
+      macro_substage: macro.substage,
+      macro_reasons: macro.reasons,
+      macro_operation: macro.operation,
+      macro_version: macro.version,
+      macro_since: macro.since,
       status_since: state.since,
       status_source: state.source,
       status_locked: Boolean(override),
@@ -791,9 +867,7 @@ export async function recomputeOrderMaster(
           }).total
         : null,
       comment_count: orderEvents.filter((e) => e.kind === "comment").length,
-      payment_state: paymentSignals
-        ? paymentState(paymentSignals.payments)
-        : null,
+      payment_state: resolvedPaymentState,
       key_state: paymentSignals
         ? keyState({
             orderId: order.id,
@@ -815,7 +889,23 @@ export async function recomputeOrderMaster(
 
   let written = 0;
   for (const batch of chunk(rows, ID_BATCH)) {
-    const { error } = await admin.from("order_master").upsert(batch, { onConflict: "order_id" });
+    let { error } = await admin.from("order_master").upsert(batch, { onConflict: "order_id" });
+    // Deploy compatible: si el código llega antes que 0059, el Master antiguo
+    // continúa recalculándose. Tras aplicar la migración, el siguiente barrido
+    // llena automáticamente las columnas MOM.
+    if (error && /macro_(stage|substage|reasons|operation|version|since)/i.test(error.message)) {
+      const legacyBatch = batch.map((row) => {
+        const copy = { ...row } as Record<string, unknown>;
+        delete copy.macro_stage;
+        delete copy.macro_substage;
+        delete copy.macro_reasons;
+        delete copy.macro_operation;
+        delete copy.macro_version;
+        delete copy.macro_since;
+        return copy;
+      });
+      ({ error } = await admin.from("order_master").upsert(legacyBatch, { onConflict: "order_id" }));
+    }
     if (error) throw new Error(`order_master: no se pudo escribir — ${error.message}`);
     written += batch.length;
   }
@@ -903,6 +993,41 @@ export async function reconcileOrderMaster(
     }
   }
   const pending = candidateIds.filter((id) => !known.has(id));
+
+  // Una fase nueva puede cambiar el resultado aun cuando ninguna fuente del
+  // pedido haya sido tocada. Recalcula por tandas las filas de versiones
+  // anteriores; al escribir la versión vigente dejan de aparecer en el
+  // siguiente cron. Así el histórico completo converge sin exponer secretos en
+  // un backfill local ni bloquear una sincronización normal.
+  const remaining = Math.min(VERSION_RECONCILE_PAGE, Math.max(0, limit - pending.length));
+  if (remaining > 0) {
+    const staleIds: string[] = [];
+    const { data: nullVersion } = await admin
+      .from("order_master")
+      .select("order_id")
+      .in("store_id", storeIds as string[])
+      .is("macro_version", null)
+      .limit(remaining);
+    staleIds.push(...((nullVersion ?? []) as { order_id: string }[]).map((row) => row.order_id));
+
+    const stillRemaining = remaining - staleIds.length;
+    if (stillRemaining > 0) {
+      const { data: oldVersion } = await admin
+        .from("order_master")
+        .select("order_id")
+        .in("store_id", storeIds as string[])
+        .neq("macro_version", MOM_RESOLUTION_VERSION)
+        .limit(stillRemaining);
+      staleIds.push(...((oldVersion ?? []) as { order_id: string }[]).map((row) => row.order_id));
+    }
+    const seen = new Set(pending);
+    for (const id of staleIds) {
+      if (!seen.has(id)) {
+        pending.push(id);
+        seen.add(id);
+      }
+    }
+  }
   if (!pending.length) return { requested: 0, written: 0 };
   return recomputeOrderMaster(admin, pending);
 }

@@ -251,6 +251,17 @@ export interface ShipmentRow {
   store_id: string;
   courier: string; // aliclik | fenix
   guide_code: string; // AUR5X… (aliclik) or Fenix tracking
+  /** Identidad MOM de la salida física. Opcional durante el despliegue de 0059. */
+  output_number?: number | null;
+  output_code?: string | null;
+  qr_token?: string | null;
+  preparation_state?: string | null;
+  custody_state?: string | null;
+  ready_at?: string | null;
+  ready_by?: string | null;
+  custody_transferred_at?: string | null;
+  custody_transferred_by?: string | null;
+  returned_at?: string | null;
   delivery_status: string; // see lib/shipments.ts
   status_category: string; // pending | in_route | delivered | closed
   order_id: string | null;
@@ -419,6 +430,13 @@ export interface OrderMasterRow {
   order_total: number | null;
   general_status: string;
   operational_status: string;
+  /** Macroetapa MOM v1 usada por la navegación principal; opcional hasta aplicar 0059. */
+  macro_stage?: string | null;
+  macro_substage?: string | null;
+  macro_reasons?: string[] | null;
+  macro_operation?: string | null;
+  macro_version?: string | null;
+  macro_since?: string | null;
   status_since: string | null;
   status_source?: string | null;
   status_locked: boolean;
