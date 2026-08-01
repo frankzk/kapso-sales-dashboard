@@ -33,7 +33,6 @@ export function ShalomGuidePanel({
   const [receiverPhone, setReceiverPhone] = useState("");
   const [documentType, setDocumentType] = useState<"DNI" | "CE">("DNI");
   const [documentNumber, setDocumentNumber] = useState("");
-  const [reference, setReference] = useState("Recoger en agencia");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -97,7 +96,6 @@ export function ShalomGuidePanel({
         receiverPhone,
         documentType,
         documentNumber,
-        reference,
       });
       if (result.error) {
         setMessage({ kind: "error", text: result.error });
@@ -305,15 +303,6 @@ export function ShalomGuidePanel({
                           : documentValidation.message}
                     </p>
                   </div>
-
-                  <label className="sm:col-span-2">
-                    <span className="mb-1 block text-xs font-medium text-slate-600">Referencia para Shalom</span>
-                    <input
-                      value={reference}
-                      onChange={(event) => setReference(event.target.value)}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    />
-                  </label>
 
                 </div>
 

@@ -81,7 +81,6 @@ export interface CreateShalomGuideInput {
   receiverPhone: string;
   documentType: "DNI" | "CE";
   documentNumber: string;
-  reference?: string | null;
 }
 
 export interface ShalomActionState {
@@ -387,7 +386,6 @@ export async function createShalomGuide(
     shipping: {
       agencyName: "SHALOM",
       agencyAddress: agency.address,
-      reference: input.reference?.trim() || "Recoger en agencia",
       keyCode: keyResult.key,
       merchandiseShalom: input.packageSize,
       scheduleDate: schedule.date,
@@ -495,7 +493,6 @@ export async function createShalomGuide(
     province: agency.province,
     region: agency.department,
     delivery_address: agency.address,
-    delivery_reference: input.reference?.trim() || "Recoger en agencia",
     created_via: "aliclik_agency_api",
     source: "aliclik",
     pickup_state: "enviado_a_agencia",
