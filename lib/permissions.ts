@@ -25,8 +25,11 @@ export const PERMISSIONS = [
   // Pagos Yape / clave de recojo Shalom
   "shalom.register_payment",
   "shalom.validate_payment",
+  "shalom.reveal_pickup_key",
   "shalom.view_pickup_key",
   "shalom.override_payment_validation",
+  // Crear una preguía real y cobrable mediante la API directa de Shalom.
+  "shalom.create_guide",
   // Costos
   "costs.manage",
   // Aliclik: crear una guía es una escritura hacia AFUERA e irreversible, con
@@ -69,6 +72,8 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "dispatch.manage",
     "dispatch.pickup",
     "shalom.register_payment",
+    "shalom.reveal_pickup_key",
+    "shalom.create_guide",
     "aliclik.create_guide",
     "tanders.create_guide",
   ],

@@ -15,6 +15,7 @@ import { OrdersMasterBoard } from "@/components/orders-master";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 export default function PedidosPage({
   searchParams,
@@ -79,6 +80,7 @@ async function PedidosContent({
       canEdit={!perms.readOnly}
       canOverride={perms.can("master.override_status")}
       canCreateGuide={perms.can("aliclik.create_guide")}
+      canCreateShalomGuide={perms.can("shalom.create_guide")}
       canCreateTandersGuide={perms.can("tanders.create_guide")}
       canDispatch={perms.can("warehouse.prepare") || perms.can("dispatch.manage") || perms.can("dispatch.pickup")}
     />

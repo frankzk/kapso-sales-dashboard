@@ -21,6 +21,10 @@
     {
       "path": "/api/cron/aliclik-reconcile",
       "schedule": "*/20 * * * *"
+    },
+    {
+      "path": "/api/cron/shalom-reconcile",
+      "schedule": "*/30 * * * *"
     }
   ]
 }

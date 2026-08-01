@@ -63,6 +63,13 @@ export interface StoreSettingsInput {
   tanders_origin_address?: string;
   tanders_origin_lat?: string;
   tanders_origin_lng?: string;
+  // Shalom API directa: la API key es global; estas credenciales/configuración
+  // pertenecen a cada tienda.
+  shalom_pro_email?: string;
+  shalom_pro_password?: string;
+  shalom_origin_terminal_id?: string;
+  shalom_origin_terminal_name?: string;
+  shalom_default_product_id?: string;
 }
 
 function clean(v: string | undefined): string | null {
@@ -71,10 +78,15 @@ function clean(v: string | undefined): string | null {
   return t === "" ? null : t;
 }
 
+export interface StoreSettingsCurrent {
+  shalom_pro_email?: string | null;
+}
+
 /** Build the column patch. Encrypts any provided secret; omits blank fields. */
 export function buildStoreUpdate(
   input: StoreSettingsInput,
   keyOverride?: string,
+  current: StoreSettingsCurrent = {},
 ): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
 
@@ -211,6 +223,29 @@ export function buildStoreUpdate(
   if (oLng !== null) patch.tanders_origin_lng = oLng;
   const tandersPass = clean(input.tanders_password);
   if (tandersPass) patch.tanders_password_enc = encrypt(tandersPass, keyOverride);
+
+  const shalomEmail = clean(input.shalom_pro_email);
+  const shalomPass = clean(input.shalom_pro_password);
+  if (shalomEmail !== null) patch.shalom_pro_email = shalomEmail;
+  if (shalomPass) patch.shalom_pro_password_enc = encrypt(shalomPass, keyOverride);
+  const emailChanged =
+    shalomEmail !== null && shalomEmail !== (clean(current.shalom_pro_email ?? undefined) ?? null);
+  if (emailChanged || shalomPass) {
+    patch.shalom_session_token_enc = null;
+    patch.shalom_session_expires_at = null;
+  }
+  const positiveId = (raw: string | undefined): number | null => {
+    const v = clean(raw);
+    if (v === null) return null;
+    const n = Number(v);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  };
+  const originTerminal = positiveId(input.shalom_origin_terminal_id);
+  if (originTerminal !== null) patch.shalom_origin_terminal_id = originTerminal;
+  const originTerminalName = clean(input.shalom_origin_terminal_name);
+  if (originTerminalName !== null) patch.shalom_origin_terminal_name = originTerminalName;
+  const defaultProduct = positiveId(input.shalom_default_product_id);
+  if (defaultProduct !== null) patch.shalom_default_product_id = defaultProduct;
 
   return patch;
 }

@@ -164,7 +164,7 @@ export async function loadPaymentPanel(
       views: (viewsRes.data ?? []) as PickupKeyPanel["views"],
       canRegister: perms.can("shalom.register_payment"),
       canValidate: perms.can("shalom.validate_payment"),
-      canViewKey: perms.can("shalom.view_pickup_key"),
+      canViewKey: perms.can("shalom.reveal_pickup_key"),
       canOverride: perms.can("shalom.override_payment_validation"),
     },
   };
@@ -768,7 +768,7 @@ export async function revealPickupKey(
   input: { reason?: string; override?: boolean } = {},
 ): Promise<{ key: string } | { error: string }> {
   const perms = await getMasterPermissions();
-  if (!perms.can("shalom.view_pickup_key")) {
+  if (!perms.can("shalom.reveal_pickup_key")) {
     return { error: "Tu rol no permite ver la clave de recojo." };
   }
   const ctx = await authorizeOrder(orderId);
@@ -841,7 +841,7 @@ export async function sharePickupKey(
   input: { channel: string; note?: string | null; confirmed?: boolean },
 ): Promise<PaymentActionState> {
   const perms = await getMasterPermissions();
-  if (!perms.can("shalom.view_pickup_key")) {
+  if (!perms.can("shalom.reveal_pickup_key")) {
     return { error: "Tu rol no permite entregar la clave." };
   }
   const ctx = await authorizeOrder(orderId);

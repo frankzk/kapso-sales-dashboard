@@ -72,6 +72,13 @@ export const env = {
   aliclikEgress: (): "direct" | "edge" =>
     process.env.ALICLIK_EGRESS === "direct" ? "direct" : "edge",
 
+  // --- Shalom: API directa para crear preguías ---
+  // La API key es global; la cuenta de Shalom Pro se configura por tienda.
+  shalomApiKey: () => (process.env.SHALOM_API_KEY ?? "").trim(),
+  shalomApiBase: () =>
+    (process.env.SHALOM_API_BASE ?? "https://api.shalom-api-peru.com").trim().replace(/\/$/, ""),
+  shalomConfigured: () => Boolean((process.env.SHALOM_API_KEY ?? "").trim()),
+
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---
   shopifyAppApiKey: () => process.env.SHOPIFY_APP_API_KEY ?? "",
   shopifyAppApiSecret: () => process.env.SHOPIFY_APP_API_SECRET ?? "",

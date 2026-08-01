@@ -285,6 +285,14 @@ export interface ShipmentRow {
   /** 'fenix_directo' = guía creada desde un pedido, sin guía Aliclik madre. */
   created_via?: string | null;
   delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado
+  /** Código corto que Shalom asigna junto al número de guía. */
+  shalom_codigo?: string | null;
+  /** Id OSE usado para descargar el rótulo PDF y consultar tracking. */
+  shalom_ose_id?: number | null;
+  /** Id de la orden Shalom Pro; es el que permite anularla antes de recepción. */
+  shalom_order_id?: number | null;
+  shalom_serie?: string | null;
+  shalom_raw?: Record<string, unknown> | null;
   /** Delivery attempts reported by Aliclik's daily Excel (NRO. INTENTOS). */
   aliclik_attempts: number | null;
   /** Operative delivery date reported by Aliclik, as YYYY-MM-DD. */
