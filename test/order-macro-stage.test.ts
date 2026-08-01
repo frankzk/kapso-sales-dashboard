@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  MACRO_SUBSTAGES_BY_STAGE,
+  ORDER_MACRO_STAGES,
   classifyOperation,
   resolveMacroStage,
   type MacroEventSnapshot,
@@ -9,6 +11,30 @@ import {
 } from "@/lib/order-macro-stage";
 
 const CREATED = "2026-07-01T10:00:00.000Z";
+
+describe("catálogo navegable del MOM", () => {
+  it("expone las seis macroetapas en el orden operativo acordado", () => {
+    expect(ORDER_MACRO_STAGES.map((stage) => stage.code)).toEqual([
+      "por_confirmar",
+      "preparacion",
+      "por_despachar",
+      "en_curso",
+      "por_cerrar",
+      "finalizado",
+    ]);
+  });
+
+  it("cada macroetapa tiene subetapas navegables sin duplicados", () => {
+    const all = ORDER_MACRO_STAGES.flatMap(
+      (stage) => MACRO_SUBSTAGES_BY_STAGE[stage.code],
+    );
+    expect(all.length).toBeGreaterThan(0);
+    expect(new Set(all).size).toBe(all.length);
+    for (const stage of ORDER_MACRO_STAGES) {
+      expect(MACRO_SUBSTAGES_BY_STAGE[stage.code].length).toBeGreaterThan(0);
+    }
+  });
+});
 
 function order(over: Partial<MacroOrderSnapshot> = {}): MacroOrderSnapshot {
   return {

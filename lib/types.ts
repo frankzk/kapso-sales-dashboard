@@ -429,7 +429,7 @@ export interface OrderMasterRow {
   order_total: number | null;
   general_status: string;
   operational_status: string;
-  /** Macroetapa MOM v1 en modo sombra; opcional hasta aplicar 0059. */
+  /** Macroetapa MOM v1 usada por la navegación principal; opcional hasta aplicar 0059. */
   macro_stage?: string | null;
   macro_substage?: string | null;
   macro_reasons?: string[] | null;
