@@ -25,12 +25,13 @@ import {
   type AliclikAgencyOrderInput,
   type AliclikClientOpts,
 } from "@/lib/aliclik";
-import { loadCatalogFor, resolveAliclikItems, type ResolvedItem } from "@/lib/aliclik-catalog";
+import { loadCatalogFor, resolveAliclikItems } from "@/lib/aliclik-catalog";
 import { reconcileToOrderTotal } from "@/lib/aliclik-money";
 import {
   generatePickupKey,
   resolveAgencyScheduleDate,
   splitCustomerName,
+  validateAgencyDocument,
 } from "@/lib/aliclik-agency";
 import type { OrderMasterRow } from "@/lib/types";
 
@@ -59,8 +60,6 @@ export interface ShalomGuidePreview {
   warnings?: string[];
   orderName?: string | null;
   orderTotal?: number | null;
-  items?: ResolvedItem[];
-  warehouseName?: string | null;
   receiverName?: string;
   receiverPhone?: string;
   agencies?: ShalomAgencyOption[];
@@ -83,7 +82,6 @@ export interface CreateShalomGuideInput {
   documentType: "DNI" | "CE";
   documentNumber: string;
   reference?: string | null;
-  note?: string | null;
 }
 
 export interface ShalomActionState {
@@ -278,8 +276,6 @@ export async function previewShalomGuide(orderId: string): Promise<ShalomGuidePr
     warnings: productResult.resolved.warnings,
     orderName: ctx.row.order_name,
     orderTotal: ctx.row.order_total,
-    items: productResult.items,
-    warehouseName: productResult.resolved.warehouseName,
     receiverName: ctx.row.customer_name?.trim() || "",
     receiverPhone: ctx.row.customer_phone?.trim() || "",
     agencies,
@@ -371,13 +367,9 @@ export async function createShalomGuide(
   });
   const phone = normalizePhone(input.receiverPhone);
   if (!phone) return { error: "Ingresa un numero de celular valido para quien recogera el pedido." };
-  const document = input.documentNumber.replace(/\D/g, "");
-  const validDocument = input.documentType === "DNI"
-    ? /^\d{8}$/.test(document)
-    : /^\d{8,12}$/.test(document);
-  if (!validDocument) {
-    return { error: input.documentType === "DNI" ? "El DNI debe tener 8 digitos." : "El CE no es valido." };
-  }
+  const documentValidation = validateAgencyDocument(input.documentType, input.documentNumber);
+  if (!documentValidation.ok) return { error: documentValidation.message };
+  const document = documentValidation.normalized;
   if (!input.receiverName.trim()) return { error: "Ingresa el nombre de quien recogera el pedido." };
 
   const keyResult = await loadOrCreatePickupKey(ctx);
@@ -385,7 +377,6 @@ export async function createShalomGuide(
   const names = splitCustomerName(input.receiverName);
   const paymentType = advance >= (ctx.row.order_total ?? Number.POSITIVE_INFINITY) ? "C" : "P";
   const body: AliclikAgencyOrderInput = {
-    note: input.note?.trim() || undefined,
     paymentType,
     customer: {
       ...names,
