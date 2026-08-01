@@ -206,6 +206,14 @@ Reglas:
 - Si faltan datos, Yelitza avisa al equipo, no genera guía y no arma.
 - El escaneo del QR confirma que el paquete está armado y lo mueve a
   `Por despachar`.
+- Para Aliclik, el estado autenticado `PREPARED` constituye el evento equivalente
+  a ese escaneo físico y mueve automáticamente la salida a
+  `Por despachar · Listo para asignar`. No se exige un tercer escaneo en Kapta.
+- La equivalencia completa de despacho Aliclik es: `TO_PREPARE` →
+  `Preparación · Por armar`; `PREPARED` → `Por despachar · Listo para asignar`;
+  `PICKED` → `En curso · Recibido por courier`.
+- Estos avances son monotónicos: un reporte atrasado de Aliclik no puede deshacer
+  un escaneo local ni devolver ficticiamente la custodia desde el courier.
 - Debe existir una alternativa manual al escaneo, siempre con actor, fecha y
   motivo registrados.
 - Incidencias mínimas: datos incompletos, producto faltante, rótulo incorrecto,
