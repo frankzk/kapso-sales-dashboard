@@ -30,6 +30,7 @@ import {
 } from "@/app/dashboard/pedidos/shalom-actions";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { PAYMENT_STATE_LABEL, type PaymentState } from "@/lib/pickup-key";
+import type { OrderPaymentPanelMode } from "@/lib/order-payment-panel";
 import { documentError } from "@/lib/shalom/draft";
 import type { ShalomAgency, ShalomDocumentType } from "@/lib/shalom/types";
 
@@ -95,7 +96,17 @@ async function fileSha256(file: File): Promise<string | null> {
   }
 }
 
-export function PickupKeyPanel({ orderId, onChanged }: { orderId: string; onChanged: () => void }) {
+export function PickupKeyPanel({
+  orderId,
+  onChanged,
+  mode = "required",
+  showPickupKey = true,
+}: {
+  orderId: string;
+  onChanged: () => void;
+  mode?: OrderPaymentPanelMode;
+  showPickupKey?: boolean;
+}) {
   const [panel, setPanel] = useState<PanelData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -133,19 +144,32 @@ export function PickupKeyPanel({ orderId, onChanged }: { orderId: string; onChan
     return <p className="text-sm text-slate-400">Cargando pagos…</p>;
   }
 
+  const paymentOptional = mode === "optional";
+  const paymentLabel =
+    paymentOptional && panel.paymentState === "sin_pago"
+      ? "Sin pago requerido"
+      : PAYMENT_STATE_LABEL[panel.paymentState as PaymentState] ?? panel.paymentState;
+
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-amber-900">
-            Pagos y clave de recojo
+          <h3
+            className={cn(
+              "text-xs font-bold uppercase tracking-[0.12em]",
+              paymentOptional ? "text-slate-700" : "text-amber-900",
+            )}
+          >
+            {paymentOptional ? "Pago anticipado (solo si aplica)" : "Pagos y clave de recojo"}
           </h3>
           <p className="mt-0.5 text-xs text-slate-500">
-            El pago acumulado habilita la guía; el pago completo libera la clave.
+            {paymentOptional
+              ? "Aliclik y Swayp pueden salir contra entrega. Registra un pago si se eligió Agencia o el historial del cliente exige adelanto."
+              : "El pago acumulado habilita la guía; el pago completo libera la clave."}
           </p>
         </div>
         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-          {PAYMENT_STATE_LABEL[panel.paymentState as PaymentState] ?? panel.paymentState}
+          {paymentLabel}
         </span>
       </div>
 
@@ -179,14 +203,16 @@ export function PickupKeyPanel({ orderId, onChanged }: { orderId: string; onChan
         />
       )}
 
-      <KeySection
-        panel={panel}
-        orderId={orderId}
-        pending={pending}
-        onSetKey={(key) => run(() => setPickupKey(orderId, key))}
-        onShare={(channel, note) => run(() => sharePickupKey(orderId, { channel, note }))}
-        onError={setError}
-      />
+      {(showPickupKey || panel.hasKey) && (
+        <KeySection
+          panel={panel}
+          orderId={orderId}
+          pending={pending}
+          onSetKey={(key) => run(() => setPickupKey(orderId, key))}
+          onShare={(channel, note) => run(() => sharePickupKey(orderId, { channel, note }))}
+          onError={setError}
+        />
+      )}
     </section>
   );
 }
@@ -924,7 +950,7 @@ function VoucherForm({
           tiene el DNI a mano; quien crea la guía suele ser otra persona en otro
           momento, y hoy tiene que volver a pedirlo. Nada de esto condiciona el
           pago: un cobro no puede quedarse esperando a un DNI. */}
-      <details className="rounded-lg border border-slate-200 px-3 py-2">
+      <details open className="rounded-lg border border-slate-200 px-3 py-2">
         <summary className="cursor-pointer text-xs font-medium text-slate-600">
           Adelantar datos para la guía Shalom (opcional)
         </summary>
