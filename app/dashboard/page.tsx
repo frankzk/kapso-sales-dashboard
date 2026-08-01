@@ -21,6 +21,11 @@ import {
 import { ExecutiveDashboard } from "@/components/executive-dashboard";
 import { EmptyState } from "@/components/ui";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
+import {
+  MomOwnerSummaryPanel,
+  MomOwnerSummarySkeleton,
+} from "@/components/mom-owner-summary";
+import { getMomOwnerSummary } from "@/lib/mom-owner-summary-access";
 
 export const dynamic = "force-dynamic";
 
@@ -123,24 +128,52 @@ async function ConsolidatedContent({
   const currency = stores.every((s) => s.currency === first.currency) ? first.currency : "PEN";
 
   return (
-    <ExecutiveDashboard
-      stores={stores}
-      scope="all"
-      range={range}
-      rollups={rollups}
-      prevRollups={prevRollups}
-      orders={orders}
-      conversations={conversations}
-      leads={leads}
-      ops={ops}
-      currency={currency}
-      timezone={first.timezone}
-      adNames={adNames}
-      waNumbers={waNumbers}
-      campaignDeliveries={campaignDeliveries}
-      campaignLeads={campaignLeads}
-      campaignOrders={campaignOrders}
-      metaAdPerformance={metaAdPerformance}
-    />
+    <div className="space-y-5">
+      <Suspense fallback={<MomOwnerSummarySkeleton />}>
+        <MomOwnerSummaryLoader
+          storeIds={storeIds}
+          orgIds={[...new Set(stores.map((store) => store.org_id))]}
+        />
+      </Suspense>
+      <ExecutiveDashboard
+        stores={stores}
+        scope="all"
+        range={range}
+        rollups={rollups}
+        prevRollups={prevRollups}
+        orders={orders}
+        conversations={conversations}
+        leads={leads}
+        ops={ops}
+        currency={currency}
+        timezone={first.timezone}
+        adNames={adNames}
+        waNumbers={waNumbers}
+        campaignDeliveries={campaignDeliveries}
+        campaignLeads={campaignLeads}
+        campaignOrders={campaignOrders}
+        metaAdPerformance={metaAdPerformance}
+      />
+    </div>
   );
+}
+
+async function MomOwnerSummaryLoader({
+  storeIds,
+  orgIds,
+}: {
+  storeIds: string[];
+  orgIds: string[];
+}) {
+  try {
+    const summary = await getMomOwnerSummary(storeIds, orgIds);
+    return <MomOwnerSummaryPanel summary={summary} />;
+  } catch (error) {
+    console.error("No se pudo cargar el resumen operativo MOM", error);
+    return (
+      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        El resumen operativo no pudo actualizarse. El dashboard comercial y el Master siguen disponibles.
+      </div>
+    );
+  }
 }
