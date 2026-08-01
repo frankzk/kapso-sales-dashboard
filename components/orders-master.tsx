@@ -40,7 +40,6 @@ import {
   sortRows,
   type AgencySummary,
   type MasterFilters,
-  type MasterSortKey,
 } from "@/lib/order-master-filters";
 import {
   GENERAL_STATUSES,
@@ -199,7 +198,6 @@ export function OrdersMasterBoard({
 }) {
   const router = useRouter();
   const [filters, setFilters] = useState<MasterFilters>(emptyFilters);
-  const [sortKey, setSortKey] = useState<MasterSortKey>("movement");
   const [showMore, setShowMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -234,8 +232,10 @@ export function OrdersMasterBoard({
 
   const visible = useMemo(() => {
     const filtered = applyFilters(rows, filters);
-    return sortRows(filtered, sortKey);
-  }, [rows, filters, sortKey]);
+    // Regla del Master: todas las tablas muestran primero el pedido más nuevo.
+    // No depende de la macroetapa, subetapa ni de los filtros aplicados.
+    return sortRows(filtered, "created");
+  }, [rows, filters]);
 
   const facets = useMemo(
     () => ({
@@ -268,7 +268,7 @@ export function OrdersMasterBoard({
   }
 
   const searchActive = search.trim().length >= 2;
-  const listed = searchActive ? (results ?? []) : visible;
+  const listed = searchActive ? sortRows(results ?? [], "created") : visible;
   const activeTotal = substage ? (substageCounts[substage] ?? 0) : counts[view];
   const pageCount = Math.max(1, Math.ceil(activeTotal / pageSize));
 
@@ -539,21 +539,9 @@ export function OrdersMasterBoard({
               </button>
             )}
 
-            <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-400">
-              Ordenar esta página:
-              <select
-                value={sortKey}
-                onChange={(e) => setSortKey(e.target.value as MasterSortKey)}
-                className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
-              >
-                <option value="movement">Último movimiento</option>
-                <option value="created">Fecha de creación</option>
-                <option value="status_age">Antigüedad en el estado</option>
-                <option value="attempts">Intentos</option>
-                <option value="couriers">Couriers</option>
-                <option value="total">Monto</option>
-              </select>
-            </label>
+            <span className="ml-auto text-xs text-slate-400">
+              Orden: Fecha de creación · más recientes primero
+            </span>
           </div>
 
           {showMore && (

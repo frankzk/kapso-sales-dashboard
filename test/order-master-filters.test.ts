@@ -192,6 +192,12 @@ describe("matchesFilters — banderas operativas", () => {
 });
 
 describe("sortRows", () => {
+  it("ordena por fecha de creación descendente para la regla fija del Master", () => {
+    const antiguo = row("1", { order_created_at: "2026-07-10T10:00:00.000Z" });
+    const nuevo = row("2", { order_created_at: "2026-07-18T10:00:00.000Z" });
+    expect(sortRows([antiguo, nuevo], "created").map((r) => r.id)).toEqual(["2", "1"]);
+  });
+
   it("ordena por último movimiento descendente por defecto", () => {
     const a = row("1", { last_movement_at: "2026-07-10T10:00:00.000Z" });
     const b = row("2", { last_movement_at: "2026-07-18T10:00:00.000Z" });

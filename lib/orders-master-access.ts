@@ -77,10 +77,10 @@ export async function getOrderMasterRows(
   if (opts.substage) query = query.eq("macro_substage", opts.substage);
 
   const { data, error } = await query
-    // Lo que más importa operativamente es qué se movió (o dejó de moverse)
-    // hace más tiempo; los que nunca se movieron van primero.
-    .order("last_movement_at", { ascending: false, nullsFirst: true })
+    // Regla única del Master: pedidos más nuevos primero en todas las vistas.
+    // `order_id` desempata para que la paginación no cambie entre consultas.
     .order("order_created_at", { ascending: false })
+    .order("order_id", { ascending: false })
     .range(offset, offset + limit - 1);
   if (error) return [];
   return (data ?? []) as unknown as OrderMasterRow[];
@@ -213,7 +213,8 @@ export async function searchOrderMaster(query: string, limit = 50): Promise<Orde
     .or(
       `order_name.ilike.${like},guide_code.ilike.${like},customer_phone.ilike.${like},customer_name.ilike.${like}`,
     )
-    .order("last_movement_at", { ascending: false })
+    .order("order_created_at", { ascending: false })
+    .order("order_id", { ascending: false })
     .limit(limit);
   if (error) return [];
   return (data ?? []) as unknown as OrderMasterRow[];
