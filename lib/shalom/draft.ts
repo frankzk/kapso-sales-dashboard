@@ -350,3 +350,34 @@ export function shalomSoftBlockers(paymentState: string | null): string[] {
     "No hay ningún comprobante de adelanto cargado. El envío por Shalom se cobra con adelanto: regístralo en la pestaña «Pagos y clave» de este mismo pedido, o crea la guía igual explicando por qué.",
   ];
 }
+
+/**
+ * ¿Se puede pedir vía aérea para esta ruta?
+ *
+ * `aereo` en la agencia dice que ELLA tiene servicio aéreo, no que lo tenga
+ * desde donde despachamos: Shalom publica en `origenes_aereos` la lista de
+ * agencias de origen con vuelo hasta ella, y esa lista es la que manda. Ofrecer
+ * la casilla sin mirarla sería invitar a marcar algo que la API va a rechazar —
+ * o peor, a que el paquete salga por una vía que no existe.
+ *
+ * `unknown` no es un error: la búsqueda de agencias no siempre devuelve esas
+ * listas. En ese caso se deja elegir y no se afirma nada, porque impedirlo por
+ * falta de dato sería bloquear un envío legítimo con una excusa.
+ */
+export type AirRoute =
+  | { offered: false }
+  | { offered: true; fromOrigin: "yes" | "no" | "unknown" };
+
+export function shalomAirRoute(
+  agency: { aereo?: boolean | null; origenes_aereos?: number[] | null } | null | undefined,
+  originTerminalId: number | null | undefined,
+): AirRoute {
+  if (!agency?.aereo) return { offered: false };
+  const origins = agency.origenes_aereos;
+  if (!Array.isArray(origins) || !origins.length) return { offered: true, fromOrigin: "unknown" };
+  if (!positiveInt(originTerminalId)) return { offered: true, fromOrigin: "unknown" };
+  return {
+    offered: true,
+    fromOrigin: origins.includes(originTerminalId as number) ? "yes" : "no",
+  };
+}

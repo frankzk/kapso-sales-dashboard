@@ -15,6 +15,7 @@ import {
   documentError,
   needsCustomDimensions,
   pickupCodeError,
+  shalomAirRoute,
   DEFAULT_DECLARACION,
   DEFAULT_PAYER,
 } from "@/lib/shalom/draft";
@@ -238,7 +239,11 @@ export function ShalomGuideModal({
     [products, productId],
   );
   const wantsDims = needsCustomDimensions(selectedProduct?.title);
+  // `aereo` en la agencia dice que ELLA vuela, no que haya vuelo desde nuestro
+  // origen: eso lo dice `origenes_aereos`. Ver shalomAirRoute.
+  const air = shalomAirRoute(agency, draft?.originTerminalId ?? null);
   const [overrideReason, setOverrideReason] = useState("");
+  const [aereo, setAereo] = useState(false);
   const canSeeKey = Boolean(draft?.pickupCode);
   const keyErr = canSeeKey && pickupCode ? pickupCodeError(pickupCode) : null;
 
@@ -290,6 +295,7 @@ export function ShalomGuideModal({
         surName: surName.trim(),
         phone: phone.trim(),
         overrideReason: overrideReason.trim() || null,
+        aereo: aereo || undefined,
         dimensions: parsedDims,
         ...(canSeeKey && pickupCode ? { pickupCode } : {}),
       });
@@ -422,6 +428,7 @@ export function ShalomGuideModal({
                   hint="Búsqueda por texto sobre el directorio de Shalom (distrito, provincia o nombre de la agencia)."
                 >
                   {agency ? (
+                    <>
                     <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm">
                       <span>
                         <span className="font-medium">{agency.nombre}</span>{" "}
@@ -438,12 +445,58 @@ export function ShalomGuideModal({
                         onClick={() => {
                           setAgency(null);
                           setQuote(null);
+                          setAereo(false);
                         }}
                         className="text-xs text-slate-500 underline"
                       >
                         cambiar
                       </button>
                     </div>
+                    {/* Vía aérea. Explícita a propósito: encarece el envío, así
+                        que la decide quien despacha y no un automatismo. Solo
+                        aparece si la agencia vuela, y se bloquea si no hay ruta
+                        desde nuestro origen — marcarla ahí sería pedir algo que
+                        no existe. */}
+                    {air.offered && (
+                      <div className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
+                        <label className="flex items-start gap-2 text-sm text-sky-900">
+                          <input
+                            type="checkbox"
+                            checked={aereo}
+                            disabled={air.fromOrigin === "no"}
+                            onChange={(e) => setAereo(e.target.checked)}
+                            className="mt-0.5"
+                          />
+                          <span>
+                            Enviar por <strong>vía aérea</strong>
+                            {air.fromOrigin === "yes" && (
+                              <span className="block text-xs text-sky-700">
+                                Hay ruta aérea desde tu agencia de origen.
+                              </span>
+                            )}
+                            {air.fromOrigin === "no" && (
+                              <span className="block text-xs text-red-700">
+                                Esta agencia vuela, pero no desde tu agencia de origen. No se puede
+                                pedir aéreo en esta ruta.
+                              </span>
+                            )}
+                            {air.fromOrigin === "unknown" && (
+                              <span className="block text-xs text-sky-700">
+                                Shalom no informó las rutas aéreas de esta agencia, así que no se
+                                pudo confirmar. Si el destino no tiene acceso por carretera, marca.
+                              </span>
+                            )}
+                            {aereo && (
+                              <span className="block text-xs text-amber-700">
+                                La cotización de abajo puede no incluir el recargo aéreo: Shalom no
+                                acepta la vía al cotizar, solo al crear.
+                              </span>
+                            )}
+                          </span>
+                        </label>
+                      </div>
+                    )}
+                    </>
                   ) : (
                     <>
                       <input

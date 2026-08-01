@@ -166,6 +166,42 @@ curl.exe -s -X POST -H "X-API-Key: $env:SHALOM_API_KEY" `
 
 ---
 
+## Vía aérea
+
+**Se elige al crear la guía**, no eligiendo otra agencia. En el panel de Shalom
+la misma sucursal aparece dos veces en el desplegable —«AV JOSE A. QUIÑONES» y
+«… - AEREO»— pero la API devuelve **una sola agencia** con un campo `aereo: true`.
+Lo que decide la vía es un flag del pedido: `aereo` en el cuerpo de
+`POST /v1/orders`.
+
+Cada agencia trae además dos listas que la búsqueda ya devolvía y que conviene
+mirar antes de ofrecer la opción:
+
+| Campo | Qué es |
+|---|---|
+| `aereo` | La agencia tiene servicio aéreo. **No** dice desde dónde. |
+| `origenes_aereos[]` | Ids de agencias de origen **con vuelo hasta ella**. |
+| `destinos_aereos[]` | Lo simétrico, hacia dónde vuela. |
+| `reparto_habilitado` | `false` → solo recojo en agencia, sin entrega a domicilio. |
+
+`aereo: true` **no** garantiza que haya vuelo desde nuestra agencia de origen:
+eso lo dice `origenes_aereos`. En el modal la casilla solo aparece si la agencia
+vuela, y se bloquea si nuestro origen no está en esa lista — marcarla ahí sería
+pedir una vía que no existe. Si Shalom no devuelve las listas, se deja elegir y
+no se afirma nada: impedirlo por falta de dato bloquearía un envío legítimo.
+
+> ⚠️ **La cotización puede no reflejar el recargo.** `POST /v1/tariff/calculate`
+> no acepta el flag `aereo` en su cuerpo documentado, así que el precio que se ve
+> antes de crear puede no incluirlo. El modal lo avisa cuando la casilla está
+> marcada.
+
+**Ejemplo real.** Iquitos no tiene acceso por carretera y sus seis agencias son
+`aereo: true`. La de *AV JOSE A. QUIÑONES* (San Juan Bautista) es la **594**, y
+en sus `origenes_aereos` figura la **587** (AV Bolívar, Pueblo Libre), así que
+esa ruta es viable. Tiene `reparto_habilitado: false` —solo recojo— y horario de
+lunes a viernes. La **460** (Jr. Bolognesi) es la principal de Iquitos y sí tiene
+reparto a domicilio.
+
 ## El cron que lo aplica
 
 `/api/cron/shalom-reconcile`, cada 30 min (`vercel.json`).
