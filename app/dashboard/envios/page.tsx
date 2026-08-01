@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 export default function EnviosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string }>;
+  searchParams: Promise<{ view?: string; open?: string }>;
 }) {
   return (
     <Suspense fallback={<DashboardRouteSkeleton />}>
@@ -29,7 +29,7 @@ export default function EnviosPage({
 async function EnviosContent({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string }>;
+  searchParams: Promise<{ view?: string; open?: string }>;
 }) {
   const [sp, stores] = await Promise.all([searchParams, getAccessibleStores()]);
   if (!stores.length) {
@@ -56,6 +56,7 @@ async function EnviosContent({
       counts={counts}
       shipments={shipments}
       todayByAgent={todayByAgent}
+      initialOpenId={sp.open ?? null}
     />
   );
 }

@@ -1,10 +1,10 @@
 # Master Operations Map — Master de Pedidos v1
 
-Estado: Fase 2 implementada; macroetapas activas en el Master
+Estado: Fase 3 implementada; modalidades y mesa de ruta activas en el Master
 Propietario del proceso: Frankz  
 Sistema: Kapta (`kapso-sales-dashboard`)  
 Fuente visual: board Miro «Master Operations Map»  
-Última consolidación: 2026-07-31
+Última consolidación: 2026-08-01
 
 ## 1. Propósito
 
@@ -630,10 +630,23 @@ Implementación publicada en `/dashboard/pedidos/despacho`:
 
 ### Fase 3 — Modalidades
 
-- Lima y reprogramaciones.
-- Provincia COD/Aliclik.
-- Reproprovincia/Swayp.
-- Shalom/Olva, pagos y claves.
+- El drawer contiene una mesa de ruta que clasifica Lima COD, Provincia COD y
+  Agencia, explica la recomendación y conserva visibles las alternativas.
+- Lima aplica cortes operativos y políticas de repetición para motorizado
+  propio, Axel, Tanders, Urpi y Swayp.
+- Provincia COD recomienda Aliclik como primera salida; después de un resultado
+  fallido prioriza Swayp cuando la ciudad y todos los productos tienen stock.
+- Reproprovincia abre la guía concreta en la cola existente; una salida Swayp
+  directa valida nuevamente cobertura, stock, pedido y salidas activas.
+- Shalom continúa por su API directa y Olva se registra como salida de agencia;
+  ambas muestran el requisito de adelanto y el servidor exige S/ 30 validados.
+- Axel, Urpi, motorizado propio y Olva generan una salida interna, un consecutivo
+  `Sxx`, un QR opaco y un rótulo imprimible de Kapta.
+- Una salida manual nace como `rotulo_generado`, bajo custodia de la empresa. No
+  pasa a despacho hasta el escaneo de almacén y no pasa al courier hasta el doble
+  cotejo de la Fase 2.
+- Si ya existe una salida activa, una nueva salida manual exige motivo. El
+  límite de cinco y las políticas de repetición se vuelven a validar en servidor.
 
 ### Fase 4 — Cierre
 
@@ -698,5 +711,23 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 - La transferencia actualiza todos los paquetes de la ruta atómicamente.
 - Una ruta cancelada libera sus paquetes y conserva el historial.
 - Cada actor queda registrado con fecha y hora.
+
+## 23. Criterios de aceptación de la Fase 3
+
+- Un pedido no-Lima con geografía conocida y sin modalidad histórica se trata
+  como Provincia COD, no como operación desconocida.
+- Provincia COD nueva muestra Aliclik como primera sugerencia.
+- Aliclik fallida + cobertura y stock completo muestra Swayp como siguiente ruta.
+- Swayp sin cobertura o sin stock explica el bloqueo y no crea una salida.
+- Swayp puede repetirse en Reproprovincia; en Lima solo se usa una vez.
+- Axel y motorizado propio pueden repetirse sin superar cinco salidas.
+- Shalom y Olva avisan que el adelanto debe validarse antes de crear la guía.
+- Olva no se crea con menos de S/ 30 validados aunque el navegador sea alterado.
+- Dos salidas del mismo pedido reciben QR y código `Sxx` diferentes.
+- Con una salida activa, la salida adicional exige una justificación auditada.
+- El rótulo interno contiene pedido, salida, courier, cliente, destino, productos
+  y el QR que consume la mesa de despacho.
+- Desde el Master se accede al panel correcto de Aliclik, Shalom, Tanders,
+  Swayp/Reproprovincia o a la creación manual sin volver a buscar el pedido.
 - La interfaz funciona en celular y escritorio, con cámara y entrada manual.
 

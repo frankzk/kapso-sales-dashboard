@@ -27,7 +27,10 @@ import {
   isTerminalGeneral,
   type GeneralStatus,
 } from "@/lib/order-status";
-import { normalizeDistrict } from "@/lib/shipments";
+import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
+import { classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
+import { canRepeatCourier, normalizeOrderCode } from "@/lib/shipment-output";
+import type { RouteKey } from "@/lib/order-route-plan";
 import type { OrderMasterRow } from "@/lib/types";
 
 export interface MasterActionState {
@@ -80,6 +83,7 @@ async function recordEvent(
     reason?: string | null;
     note?: string | null;
     commentType?: string | null;
+    shipmentId?: string | null;
     occurredAt?: string;
     payload?: Record<string, unknown>;
   },
@@ -100,6 +104,7 @@ async function recordEvent(
     reason: event.reason ?? null,
     note: event.note ?? null,
     comment_type: event.commentType ?? null,
+    shipment_id: event.shipmentId ?? null,
     payload: event.payload ?? {},
   });
   return error ? error.message : null;
@@ -122,6 +127,215 @@ export async function loadOrderDetail(
 /** Búsqueda global, para encontrar un pedido fuera de la pestaña activa. */
 export async function searchOrders(query: string): Promise<OrderMasterRow[]> {
   return searchOrderMaster(query);
+}
+
+// ---------------------------------------------------------------------------
+// Fase 3 — salidas manuales con rótulo interno y QR
+// ---------------------------------------------------------------------------
+
+const MANUAL_ROUTE_COURIERS = ["axel", "urpi", "propio", "olva"] as const;
+export type ManualRouteCourier = (typeof MANUAL_ROUTE_COURIERS)[number];
+
+const MANUAL_COURIER_LABEL: Record<ManualRouteCourier, string> = {
+  axel: "Axel Courier",
+  urpi: "Urpi",
+  propio: "Motorizado propio",
+  olva: "Olva",
+};
+
+export interface CreateManualRouteOutputInput {
+  courier: RouteKey;
+  dispatchDate: string;
+  note?: string;
+}
+
+export interface CreateManualRouteOutputResult extends MasterActionState {
+  shipmentId?: string;
+  outputCode?: string;
+  labelUrl?: string;
+}
+
+function isManualCourier(courier: RouteKey): courier is ManualRouteCourier {
+  return (MANUAL_ROUTE_COURIERS as readonly string[]).includes(courier);
+}
+
+function routeOperation(row: OrderMasterRow, couriers: string[]): OperationKind {
+  if (["lima", "provincia_cod", "agencia"].includes(row.macro_operation ?? "")) {
+    return row.macro_operation as OperationKind;
+  }
+  return classifyOperation(row, couriers.map((courier) => ({ courier })));
+}
+
+/**
+ * Registra una salida que no tiene API propia. La caja nace en custodia de la
+ * empresa y con rótulo generado; recién la mesa de despacho puede marcarla
+ * lista, cotejarla y transferirla al motorizado.
+ */
+export async function createManualRouteOutput(
+  orderId: string,
+  input: CreateManualRouteOutputInput,
+): Promise<CreateManualRouteOutputResult> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite crear salidas." };
+  if (!isManualCourier(input.courier)) return { error: "Ese courier usa un flujo de guía propio." };
+
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (isTerminalGeneral(ctx.row.general_status)) {
+    return { error: "El pedido está cerrado. Reábrelo antes de crear otra salida." };
+  }
+
+  const dispatchDate = input.dispatchDate.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dispatchDate)) {
+    return { error: "Elige una fecha de salida válida." };
+  }
+  if (dispatchDate < limaTodayKey()) return { error: "La fecha de salida no puede estar en el pasado." };
+
+  const admin = createAdminSupabase();
+  const { data: existing, error: existingError } = await admin
+    .from("shipments")
+    .select("id,courier,delivery_status,custody_state")
+    .eq("order_id", orderId)
+    .order("created_at", { ascending: true });
+  if (existingError) return { error: existingError.message };
+  const outputs = (existing ?? []) as {
+    id: string;
+    courier: string;
+    delivery_status: string;
+    custody_state: string | null;
+  }[];
+  const active = outputs.filter(
+    (output) =>
+      output.custody_state !== "devuelto" &&
+      ["pendiente", "en_ruta", "por_preparar"].includes(output.delivery_status),
+  );
+  const note = input.note?.trim() ?? "";
+  if (active.length > 0 && !note) {
+    return {
+      error: `Este pedido todavía tiene ${active.length} salida${active.length === 1 ? "" : "s"} activa${active.length === 1 ? "" : "s"}. Escribe el motivo de la salida adicional.`,
+    };
+  }
+
+  const operation = input.courier === "olva"
+    ? "agencia"
+    : routeOperation(ctx.row, outputs.map((output) => output.courier));
+  const priorOutputsWithCourier = outputs.filter((output) => {
+    const current = output.courier.trim().toLowerCase();
+    if (input.courier === "axel") return current === "axel" || current === "axel courier";
+    if (input.courier === "propio") return current === "propio" || current === "motorizado propio";
+    return current === input.courier;
+  }).length;
+  const repetition = canRepeatCourier({
+    courier: MANUAL_COURIER_LABEL[input.courier],
+    operation,
+    priorOutputsWithCourier,
+    totalOutputs: outputs.length,
+  });
+  if (!repetition.allowed) {
+    return {
+      error:
+        repetition.reason === "max_outputs"
+          ? "El pedido ya alcanzó el máximo de cinco salidas."
+          : `${MANUAL_COURIER_LABEL[input.courier]} ya fue usado y no puede repetirse en esta modalidad.`,
+    };
+  }
+
+  if (input.courier === "olva") {
+    const { data: payments, error: paymentError } = await admin
+      .from("order_payments")
+      .select("amount")
+      .eq("order_id", orderId)
+      .eq("validation_status", "validado");
+    if (paymentError) return { error: `No se pudo validar el adelanto: ${paymentError.message}` };
+    const validated = (payments ?? []).reduce(
+      (sum, payment) => sum + Number((payment as { amount: number | string | null }).amount ?? 0),
+      0,
+    );
+    if (validated < 30) {
+      return { error: `Olva Agencia requiere al menos S/ 30 validados. Hay S/ ${validated.toFixed(2)}.` };
+    }
+  }
+
+  const { data: order } = await admin
+    .from("orders")
+    .select("line_items")
+    .eq("id", orderId)
+    .maybeSingle();
+  const lineItems = ((order as { line_items?: { title?: string | null; quantity?: number | null }[] } | null)
+    ?.line_items ?? []);
+  const product = lineItems
+    .map((item) => `${item.title ?? "Producto"}${(item.quantity ?? 1) > 1 ? ` ×${item.quantity}` : ""}`)
+    .join(" | ") || null;
+
+  const shipmentId = crypto.randomUUID();
+  const base = normalizeOrderCode(ctx.row.order_name) || orderId.slice(0, 8).toUpperCase();
+  const guideCode = `MOM-${base}-${input.courier.toUpperCase()}-${shipmentId.slice(0, 8).toUpperCase()}`;
+  const labelUrl = `/api/pedidos/rotulo/${shipmentId}`;
+  const assignedAt = new Date().toISOString();
+  const { data: inserted, error: insertError } = await admin
+    .from("shipments")
+    .insert({
+      id: shipmentId,
+      store_id: ctx.storeId,
+      courier: input.courier,
+      guide_code: guideCode,
+      delivery_status: "pendiente",
+      status_category: "pending",
+      order_id: orderId,
+      matched: true,
+      match_method: "manual",
+      order_name: ctx.row.order_name,
+      customer_name: ctx.row.customer_name,
+      customer_phone: ctx.row.customer_phone,
+      product,
+      district: ctx.row.district,
+      province: ctx.row.province,
+      city: ctx.row.district,
+      region: ctx.row.region,
+      delivery_address: ctx.row.address,
+      delivery_reference: ctx.row.reference,
+      latitude: ctx.row.latitude,
+      longitude: ctx.row.longitude,
+      assigned_at: assignedAt,
+      next_followup_at: `${dispatchDate}T12:00:00-05:00`,
+      preparation_state: "rotulo_generado",
+      custody_state: "empresa",
+      created_via: "mom_manual_route",
+      label_url: labelUrl,
+      ...(input.courier === "olva" ? { pickup_state: "pendiente_de_envio" } : {}),
+    })
+    .select("id,output_code")
+    .single();
+  if (insertError || !inserted) {
+    return { error: insertError?.message ?? "No se pudo crear la salida." };
+  }
+
+  const outputCode = (inserted as { output_code?: string | null }).output_code ?? guideCode;
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "route_output_created",
+    source: input.courier === "olva" ? "olva" : "manual",
+    courier: input.courier,
+    guideCode,
+    shipmentId,
+    reason: note || null,
+    note: `${outputCode} creada para ${MANUAL_COURIER_LABEL[input.courier]}; salida prevista ${dispatchDate}.`,
+    payload: {
+      outputCode,
+      dispatchDate,
+      activeOutputsAtCreation: active.map((output) => output.id),
+      labelUrl,
+    },
+  });
+
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  revalidatePath("/dashboard/pedidos/despacho");
+  return {
+    notice: `${outputCode} creada. Imprime el rótulo y entrégala a almacén para el escaneo de preparación.${eventError ? ` Aviso: no se pudo escribir el evento de auditoría (${eventError}).` : ""}`,
+    shipmentId,
+    outputCode,
+    labelUrl,
+  };
 }
 
 // ---------------------------------------------------------------------------

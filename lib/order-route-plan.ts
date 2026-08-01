@@ -1,0 +1,338 @@
+import type { OperationKind } from "@/lib/order-macro-stage";
+import { MAX_OUTPUTS_PER_ORDER, canRepeatCourier } from "@/lib/shipment-output";
+
+export type RouteKey =
+  | "aliclik"
+  | "swayp"
+  | "shalom"
+  | "olva"
+  | "tanders"
+  | "axel"
+  | "urpi"
+  | "propio";
+
+export type RouteAction = "aliclik" | "swayp" | "shalom" | "tanders" | "manual";
+export type RouteAvailability = "available" | "warning" | "blocked";
+
+export interface RouteOutputSnapshot {
+  id: string;
+  courier: string;
+  deliveryStatus: string;
+  custodyState?: string | null;
+  attempts?: number | null;
+}
+
+export interface SwaypRouteCheck {
+  known: boolean;
+  city?: string | null;
+  covered?: boolean;
+  stockOk?: boolean;
+  uncovered?: string[];
+}
+
+export interface RouteCandidate {
+  key: RouteKey;
+  label: string;
+  action: RouteAction;
+  recommended: boolean;
+  availability: RouteAvailability;
+  timing: string;
+  reason: string;
+  requiresAdvance: boolean;
+  relatedShipmentId?: string | null;
+}
+
+export interface OrderRoutePlan {
+  operation: OperationKind;
+  operationLabel: string;
+  outputCount: number;
+  activeOutputCount: number;
+  maxOutputs: number;
+  warnings: string[];
+  candidates: RouteCandidate[];
+}
+
+export interface OrderRoutePlanInput {
+  operation: OperationKind;
+  outputs: readonly RouteOutputSnapshot[];
+  paymentState?: string | null;
+  swayp?: SwaypRouteCheck | null;
+  now?: Date;
+}
+
+const LABELS: Record<RouteKey, string> = {
+  aliclik: "Aliclik",
+  swayp: "Swayp (antes Fénix)",
+  shalom: "Shalom",
+  olva: "Olva",
+  tanders: "Tanders",
+  axel: "Axel Courier",
+  urpi: "Urpi",
+  propio: "Motorizado propio",
+};
+
+const ACTIONS: Record<RouteKey, RouteAction> = {
+  aliclik: "aliclik",
+  swayp: "swayp",
+  shalom: "shalom",
+  olva: "manual",
+  tanders: "tanders",
+  axel: "manual",
+  urpi: "manual",
+  propio: "manual",
+};
+
+const OPERATION_LABEL: Record<OperationKind, string> = {
+  lima: "Lima COD",
+  provincia_cod: "Provincia COD",
+  agencia: "Agencia",
+  desconocida: "Ruta por definir",
+};
+
+function courierKey(value: string): RouteKey | null {
+  const courier = value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+  if (courier === "fenix" || courier === "swayp") return "swayp";
+  if (courier === "axel" || courier === "axel courier") return "axel";
+  if (courier === "motorizado propio" || courier === "propio") return "propio";
+  if (courier === "aliclik") return "aliclik";
+  if (courier === "shalom") return "shalom";
+  if (courier === "olva") return "olva";
+  if (courier === "tanders") return "tanders";
+  if (courier === "urpi") return "urpi";
+  return null;
+}
+
+function isActive(output: RouteOutputSnapshot): boolean {
+  if (output.custodyState === "devuelto") return false;
+  return ["pendiente", "en_ruta", "por_preparar"].includes(output.deliveryStatus);
+}
+
+function limaMinute(now: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Lima",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const number = (type: "hour" | "minute") =>
+    Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return number("hour") * 60 + number("minute");
+}
+
+function paymentAllowsAgency(paymentState: string | null | undefined): boolean {
+  return ["adelanto_validado", "diferencia_cargada", "pago_completo"].includes(
+    paymentState ?? "",
+  );
+}
+
+function candidate(
+  key: RouteKey,
+  timing: string,
+  reason: string,
+  overrides: Partial<RouteCandidate> = {},
+): RouteCandidate {
+  return {
+    key,
+    label: LABELS[key],
+    action: ACTIONS[key],
+    recommended: false,
+    availability: "available",
+    timing,
+    reason,
+    requiresAdvance: key === "shalom" || key === "olva",
+    ...overrides,
+  };
+}
+
+function withAgencyPaymentGate(
+  route: RouteCandidate,
+  paymentState: string | null | undefined,
+): RouteCandidate {
+  if (paymentAllowsAgency(paymentState)) return route;
+  return {
+    ...route,
+    availability: "warning",
+    reason: "Primero valida un adelanto acumulado mínimo de S/ 30.",
+  };
+}
+
+function applyOutputPolicy(
+  route: RouteCandidate,
+  input: OrderRoutePlanInput,
+  operation: OperationKind,
+): RouteCandidate {
+  if (route.availability === "blocked") return route;
+  const prior = input.outputs.filter((output) => courierKey(output.courier) === route.key).length;
+  const policy = canRepeatCourier({
+    courier: route.key === "swayp" ? "swayp" : LABELS[route.key],
+    operation,
+    priorOutputsWithCourier: prior,
+    totalOutputs: input.outputs.length,
+  });
+  if (policy.allowed) return route;
+  return {
+    ...route,
+    recommended: false,
+    availability: "blocked",
+    reason:
+      policy.reason === "max_outputs"
+        ? `El pedido ya alcanzó el máximo de ${MAX_OUTPUTS_PER_ORDER} salidas.`
+        : `${route.label} ya fue usado en este pedido y no admite otra salida en esta modalidad.`,
+  };
+}
+
+function swaypCandidate(input: OrderRoutePlanInput, recommended: boolean): RouteCandidate {
+  const check = input.swayp;
+  const related = [...input.outputs]
+    .reverse()
+    .find((output) => courierKey(output.courier) === "swayp") ??
+    [...input.outputs].reverse().find((output) => courierKey(output.courier) === "aliclik");
+  const base = candidate(
+    "swayp",
+    "Programación de lunes a sábado",
+    "Ruta con stock local; requiere validar ciudad, producto y autorización.",
+    { recommended, relatedShipmentId: related?.id ?? null },
+  );
+  if (!check?.known) {
+    return {
+      ...base,
+      recommended: false,
+      availability: "warning",
+      reason: "La disponibilidad se validará con el stock Swayp antes de crear la salida.",
+    };
+  }
+  if (!check.covered) {
+    return {
+      ...base,
+      recommended: false,
+      availability: "blocked",
+      reason: "Swayp no tiene cobertura local en este destino.",
+    };
+  }
+  if (!check.stockOk) {
+    const products = check.uncovered?.filter(Boolean).join(", ");
+    return {
+      ...base,
+      recommended: false,
+      availability: "blocked",
+      reason: products
+        ? `No hay stock Swayp para: ${products}.`
+        : "No hay stock Swayp suficiente para completar este pedido.",
+    };
+  }
+  return {
+    ...base,
+    availability: recommended ? "available" : "warning",
+    reason: recommended
+      ? `Hay cobertura y stock en ${check.city || "la ciudad de destino"}.`
+      : `Hay cobertura y stock en ${check.city || "la ciudad de destino"}; requiere autorización manual como primera salida.`,
+  };
+}
+
+/**
+ * Decisión operativa de Fase 3. No crea guías: ordena y explica las opciones
+ * que luego ejecutan los paneles especializados o la salida manual con QR.
+ */
+export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan {
+  const operation = input.operation;
+  const active = input.outputs.filter(isActive);
+  const warnings: string[] = [];
+  if (active.length > 0) {
+    warnings.push(
+      `${active.length} salida${active.length === 1 ? "" : "s"} sigue${active.length === 1 ? "" : "n"} activa${active.length === 1 ? "" : "s"}. Una salida adicional exige motivo y seguimiento independiente.`,
+    );
+  }
+  if (input.outputs.length >= MAX_OUTPUTS_PER_ORDER) {
+    warnings.push(`Se alcanzó el límite máximo de ${MAX_OUTPUTS_PER_ORDER} salidas por pedido.`);
+  }
+
+  const hasFailedAliclik = input.outputs.some(
+    (output) =>
+      courierKey(output.courier) === "aliclik" &&
+      (["anulado", "transferido"].includes(output.deliveryStatus) || (output.attempts ?? 0) > 0),
+  );
+  let routes: RouteCandidate[];
+
+  if (operation === "lima") {
+    const minute = limaMinute(input.now ?? new Date());
+    const first = minute <= 10 * 60 + 30 ? "propio" : minute <= 12 * 60 ? "axel" : "tanders";
+    routes = [
+      candidate(
+        "propio",
+        minute <= 10 * 60 + 30 ? "Puede salir hoy" : "Siguiente turno disponible",
+        "Entrega con motorizado de la empresa; puede repetirse.",
+        { recommended: first === "propio" },
+      ),
+      candidate(
+        "axel",
+        minute <= 12 * 60 ? "Puede entrar al corte de hoy" : "Programar para el día siguiente",
+        "Axel Courier puede repetirse cuando sea necesario.",
+        { recommended: first === "axel" },
+      ),
+      candidate(
+        "tanders",
+        minute <= 16 * 60 ? "Ruta del día siguiente" : "Siguiente programación",
+        "Integración directa con Tanders y rótulo del courier.",
+        { recommended: first === "tanders" },
+      ),
+      candidate("urpi", "Según recojo coordinado", "Salida manual con rótulo interno de Kapta."),
+      swaypCandidate(input, false),
+    ];
+  } else if (operation === "agencia") {
+    routes = [
+      withAgencyPaymentGate(
+        candidate("shalom", "Despacho a agencia", "Primera sugerencia para recojo en agencia.", {
+          recommended: true,
+        }),
+        input.paymentState,
+      ),
+      withAgencyPaymentGate(
+        candidate("olva", "Despacho a agencia", "Alternativa elegida por el cliente."),
+        input.paymentState,
+      ),
+    ];
+  } else {
+    const swayp = swaypCandidate(input, hasFailedAliclik);
+    routes = [
+      candidate(
+        "aliclik",
+        "Ruta interprovincial",
+        hasFailedAliclik
+          ? "Ya existe una salida Aliclik fallida; prioriza Reproprovincia si hay stock."
+          : "Primera ruta sugerida para Provincia COD.",
+        { recommended: !hasFailedAliclik },
+      ),
+      swayp,
+      withAgencyPaymentGate(
+        candidate("shalom", "Recojo en agencia", "Tercera ruta: requiere adelanto validado."),
+        input.paymentState,
+      ),
+      withAgencyPaymentGate(
+        candidate("olva", "Recojo en agencia", "Alternativa de agencia elegida por el cliente."),
+        input.paymentState,
+      ),
+    ];
+  }
+
+  routes = routes.map((route) => applyOutputPolicy(route, input, operation));
+  if (!routes.some((route) => route.recommended && route.availability !== "blocked")) {
+    const firstAvailable = routes.find((route) => route.availability !== "blocked");
+    if (firstAvailable) {
+      routes = routes.map((route) => ({ ...route, recommended: route.key === firstAvailable.key }));
+    }
+  }
+
+  return {
+    operation,
+    operationLabel: OPERATION_LABEL[operation],
+    outputCount: input.outputs.length,
+    activeOutputCount: active.length,
+    maxOutputs: MAX_OUTPUTS_PER_ORDER,
+    warnings,
+    candidates: routes,
+  };
+}

@@ -88,6 +88,10 @@ describe("classifyOperation", () => {
     expect(classifyOperation(order({ region: "Callao", province: "Callao" }))).toBe("lima");
   });
 
+  it("trata una geografía no-Lima sin modalidad histórica como Provincia COD", () => {
+    expect(classifyOperation(order({ region: "Cusco", province: "Cusco" }))).toBe("provincia_cod");
+  });
+
   it("la modalidad o una guía de agencia ganan sobre la geografía", () => {
     expect(classifyOperation(order({ shipping_mode: "agency", region: "Lima" }))).toBe("agencia");
     expect(classifyOperation(order({ region: "Lima" }), [guide({ courier: "shalom" })])).toBe("agencia");

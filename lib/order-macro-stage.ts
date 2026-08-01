@@ -263,10 +263,8 @@ function normalize(value: string | null | undefined): string {
 
 const AGENCY_COURIERS = new Set(["shalom", "olva"]);
 
-/**
- * Clasificación provisional de Fase 1. El motor de cobertura por distrito la
- * reemplazará en la fase de rutas; mientras tanto evita mandar Lima a confirmar.
- */
+/** Clasificación base de modalidad. La decisión concreta del courier pertenece
+ * al motor de rutas de Fase 3; aquí solo separamos Lima, Provincia COD y Agencia. */
 export function classifyOperation(
   order: Pick<MacroOrderSnapshot, "shipping_mode" | "region" | "province">,
   guides: readonly Pick<MacroGuideSnapshot, "courier">[] = [],
@@ -280,6 +278,10 @@ export function classifyOperation(
   const geo = `${normalize(order.region)} ${normalize(order.province)}`;
   if (/\b(lima|callao)\b/.test(geo)) return "lima";
   if (normalize(order.shipping_mode) === "cod") return "provincia_cod";
+  // Muchos pedidos históricos de Shopify no traen `shipping_mode`. Una
+  // geografía no-Lima sigue siendo Provincia COD; Agencia se vuelve explícita
+  // cuando el equipo elige Shalom u Olva.
+  if (geo.trim()) return "provincia_cod";
   return "desconocida";
 }
 
