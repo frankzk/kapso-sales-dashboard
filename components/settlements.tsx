@@ -615,7 +615,10 @@ function RowMatchPicker({
             type="button"
             disabled={disabled}
             onClick={() => onRun(() => relinkLine(settlementId, lineId, candidate.orderId))}
-            className="block w-full rounded-md border border-slate-200 bg-white p-2 text-left hover:border-brand-300 hover:bg-brand-50 disabled:opacity-50"
+            className={cn(
+              "block w-full rounded-md border bg-white p-2 text-left hover:border-brand-300 hover:bg-brand-50 disabled:opacity-50",
+              candidate.warnings.length ? "border-amber-400" : "border-slate-200",
+            )}
           >
             <span className="flex items-center justify-between gap-2">
               <strong className="text-xs text-slate-800">{candidate.orderName}</strong>
@@ -630,6 +633,11 @@ function RowMatchPicker({
               {candidate.total === null ? "Monto —" : money(candidate.total)} · {candidate.status}
               {candidate.reasons.length ? ` · ${candidate.reasons.join(", ")}` : ""}
             </span>
+            {candidate.warnings.map((warning) => (
+              <span key={warning} className="mt-1 block text-[10px] font-medium text-amber-700">
+                Revisa antes de vincular: {warning}
+              </span>
+            ))}
           </button>
         ))}
       </div>
