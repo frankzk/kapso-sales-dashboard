@@ -31,6 +31,11 @@ import {
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { PAYMENT_STATE_LABEL, type PaymentState } from "@/lib/pickup-key";
 import type { OrderPaymentPanelMode } from "@/lib/order-payment-panel";
+import {
+  verifyYapeRecipient,
+  yapeRecipientReadingFromVision,
+  type YapeRecipientReading,
+} from "@/lib/yape-recipient";
 import { documentError } from "@/lib/shalom/draft";
 import type { ShalomAgency, ShalomDocumentType } from "@/lib/shalom/types";
 
@@ -260,8 +265,9 @@ function PaymentList({
           <p className="text-xs text-slate-500">
             {p.operation_number ? `Op. ${p.operation_number} · ` : ""}
             {fmtDateTime(p.paid_at)}
-            {p.payer_name ? ` · ${p.payer_name}` : ""}
+            {p.payer_name ? ` · Pagó: ${p.payer_name}` : ""}
           </p>
+          <StoredRecipientStatus vision={p.vision} hasVoucher={Boolean(p.file_path)} />
           {p.notes && <p className="text-xs text-slate-500">{p.notes}</p>}
           {/* El comprobante se guardaba y no se podía ver: quien validaba tenía
               que fiarse de los campos transcritos, que es justo lo que la imagen
@@ -296,8 +302,15 @@ function PaymentList({
             p.validation_status !== "rechazado" && (
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <button
-                disabled={pending}
+                disabled={
+                  pending || yapeRecipientReadingFromVision(p.vision).status === "mismatch"
+                }
                 onClick={() => onValidate(p.id)}
+                title={
+                  yapeRecipientReadingFromVision(p.vision).status === "mismatch"
+                    ? "El receptor leído no coincide con la cuenta de Grupo GF"
+                    : "Validar comprobante"
+                }
                 className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
               >
                 Validar
@@ -336,6 +349,36 @@ function PaymentList({
         </li>
       ))}
     </ul>
+  );
+}
+
+function StoredRecipientStatus({ vision, hasVoucher }: { vision: unknown; hasVoucher: boolean }) {
+  const reading = yapeRecipientReadingFromVision(vision);
+  if (!hasVoucher && reading.status === "missing") return null;
+  const label =
+    reading.status === "verified"
+      ? "Cuenta receptora verificada: Grupo GF S.A.C. · ***309"
+      : reading.status === "mismatch"
+        ? `Receptor distinto: ${reading.name ?? "nombre no leído"} · ${
+            reading.phoneLastDigits ? `***${reading.phoneLastDigits}` : "celular no leído"
+          }`
+        : reading.status === "partial"
+          ? "Cuenta receptora parcialmente leída. Contrasta la imagen antes de validar."
+          : "La cuenta receptora no pudo leerse. Contrasta la imagen antes de validar.";
+  return (
+    <p
+      className={cn(
+        "mt-1 text-xs font-medium",
+        reading.status === "verified"
+          ? "text-emerald-700"
+          : reading.status === "mismatch"
+            ? "text-red-700"
+            : "text-amber-700",
+      )}
+    >
+      {reading.status === "verified" ? "✓ " : "⚠ "}
+      {label}
+    </p>
   );
 }
 
@@ -534,6 +577,103 @@ function MissingOperation({
   );
 }
 
+function RecipientSignal({
+  label,
+  value,
+  expected,
+  present,
+  matches,
+}: {
+  label: string;
+  value: string;
+  expected: string;
+  present: boolean;
+  matches: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-lg border bg-white px-3 py-2",
+        !present
+          ? "border-slate-200"
+          : matches
+            ? "border-emerald-300 bg-emerald-50/50"
+            : "border-red-300 bg-red-50/50",
+      )}
+    >
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <div className="mt-1 flex items-center gap-2">
+        <span
+          aria-hidden="true"
+          className={cn(
+            "grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-bold",
+            !present
+              ? "bg-slate-100 text-slate-400"
+              : matches
+                ? "bg-emerald-600 text-white"
+                : "bg-red-600 text-white",
+          )}
+        >
+          {!present ? "·" : matches ? "✓" : "×"}
+        </span>
+        <span className={cn("min-w-0 truncate text-sm font-semibold", present ? "text-slate-900" : "text-slate-400")}>
+          {value}
+        </span>
+      </div>
+      <p className="mt-1 text-[11px] text-slate-500">Debe coincidir con {expected}</p>
+    </div>
+  );
+}
+
+function RecipientAccountCheck({ reading }: { reading: YapeRecipientReading | null }) {
+  const verification = verifyYapeRecipient(reading?.name, reading?.phoneLastDigits);
+  const message =
+    verification.status === "verified"
+      ? "Cuenta receptora verificada. Las dos señales coinciden."
+      : verification.status === "mismatch"
+        ? "El comprobante apunta a otra cuenta. No podrá validarse."
+        : verification.status === "partial"
+          ? "Verificación parcial. Revisa la señal que no pudo leerse antes de validar."
+          : "Se completa automáticamente al pulsar Leer y rellenar.";
+
+  return (
+    <fieldset className="rounded-lg bg-slate-50 p-3" aria-live="polite">
+      <legend className="px-1 text-xs font-semibold text-slate-700">Cuenta receptora del Yape</legend>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <RecipientSignal
+          label="Destinatario leído"
+          value={reading?.name ?? "Pendiente de lectura"}
+          expected="Grupo GF S.A.C."
+          present={verification.hasName}
+          matches={verification.nameMatches}
+        />
+        <RecipientSignal
+          label="Celular receptor"
+          value={reading?.phoneLastDigits ? `*** *** ${reading.phoneLastDigits}` : "Pendiente de lectura"}
+          expected="930 555 309 (o terminación 309)"
+          present={verification.hasPhone}
+          matches={verification.phoneMatches}
+        />
+      </div>
+      <p
+        className={cn(
+          "mt-2 text-xs font-medium",
+          verification.status === "verified"
+            ? "text-emerald-700"
+            : verification.status === "mismatch"
+              ? "text-red-700"
+              : verification.status === "partial"
+                ? "text-amber-700"
+                : "text-slate-500",
+        )}
+      >
+        {verification.status === "verified" ? "✓ " : verification.status === "mismatch" ? "⚠ " : ""}
+        {message}
+      </p>
+    </fieldset>
+  );
+}
+
 function VoucherForm({
   orderId,
   storeId,
@@ -561,17 +701,12 @@ function VoucherForm({
   const [operation, setOperation] = useState("");
   const [paidAt, setPaidAt] = useState("");
   const [payer, setPayer] = useState("");
-  const [phone, setPhone] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState(false);
   const [readNotice, setReadNotice] = useState<string | null>(null);
   const [readWarning, setReadWarning] = useState<string | null>(null);
-  const [recipientCheck, setRecipientCheck] = useState<{
-    status: "verified" | "partial" | "mismatch" | "missing";
-    name: string | null;
-    phoneLastDigits: string | null;
-  } | null>(null);
+  const [recipientCheck, setRecipientCheck] = useState<YapeRecipientReading | null>(null);
   const [uploadedVoucher, setUploadedVoucher] = useState<{
     fileKey: string;
     path: string;
@@ -658,7 +793,6 @@ function VoucherForm({
     setOperation("");
     setPaidAt("");
     setPayer("");
-    setPhone("");
     setReadNotice(null);
     setReadWarning(null);
     setRecipientCheck(null);
@@ -712,7 +846,6 @@ function VoucherForm({
       setAmount(result.fields.amount !== null ? String(result.fields.amount) : "");
       setPaidAt(toDatetimeLocal(result.fields.paidAt));
       setPayer(result.fields.payerName || "");
-      setPhone("");
       setRecipientCheck({
         status: result.fields.recipientCheck,
         name: result.fields.recipientName,
@@ -751,7 +884,10 @@ function VoucherForm({
         // El input datetime-local da hora local; se convierte a instante real.
         paidAt: paidAt ? new Date(paidAt).toISOString() : null,
         payerName: payer.trim() || null,
-        payerPhone: phone.trim() || null,
+        // El celular que aparece en el Yape es el RECEPTOR de Grupo GF, no el
+        // teléfono del pagador. Se conserva en la auditoría de visión y no se
+        // mezcla con `payer_phone`.
+        payerPhone: null,
         path,
         sha256,
       });
@@ -776,11 +912,11 @@ function VoucherForm({
       setOperation("");
       setPaidAt("");
       setPayer("");
-      setPhone("");
       setFile(null);
       setUploadedVoucher(null);
       setReadNotice(null);
       setReadWarning(null);
+      setRecipientCheck(null);
       setShalomDoc("");
       setDocumentNotice(null);
       setShalomAgencyQuery("");
@@ -870,20 +1006,7 @@ function VoucherForm({
           className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
         />
       </div>
-      <div className="flex flex-wrap gap-2">
-        <input
-          value={payer}
-          onChange={(e) => setPayer(e.target.value)}
-          placeholder="Titular / pagador"
-          className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-        />
-        <input
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          placeholder="Teléfono"
-          className="w-40 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-        />
-      </div>
+      <RecipientAccountCheck reading={recipientCheck} />
       <VoucherPicker file={file} onPick={pickVoucher} />
       {file && (
         <div className="rounded-xl border border-sky-200 bg-sky-50 p-3">
@@ -891,7 +1014,7 @@ function VoucherForm({
             <div>
               <p className="text-sm font-semibold text-sky-950">Rellenar desde la imagen</p>
               <p className="text-xs text-sky-700">
-                Lee monto, operación, fecha, hora y titular; luego podrás corregirlos.
+                Lee monto, operación, fecha, hora y verifica la cuenta receptora.
               </p>
             </div>
             <button
@@ -911,35 +1034,6 @@ function VoucherForm({
           {readWarning && (
             <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-800">
               ⚠ {readWarning}
-            </p>
-          )}
-          {recipientCheck && (
-            <p
-              className={cn(
-                "mt-2 rounded-lg px-2.5 py-2 text-xs font-semibold",
-                recipientCheck.status === "verified"
-                  ? "bg-emerald-100 text-emerald-800"
-                  : recipientCheck.status === "mismatch"
-                    ? "bg-red-100 text-red-800"
-                    : "bg-amber-100 text-amber-800",
-              )}
-            >
-              {recipientCheck.status === "verified"
-                ? "✓ Receptor verificado: Grupo GF S.A.C. · ***309"
-                : recipientCheck.status === "mismatch"
-                  ? `⚠ Receptor distinto al esperado: ${recipientCheck.name ?? "sin nombre"} · ${
-                      recipientCheck.phoneLastDigits
-                        ? `***${recipientCheck.phoneLastDigits}`
-                        : "sin teléfono"
-                    }. Debe revisarse.`
-                  : `⚠ Receptor parcialmente verificado: ${
-                      recipientCheck.name ?? "Grupo GF no legible"
-                    } · ${
-                      recipientCheck.phoneLastDigits
-                        ? `***${recipientCheck.phoneLastDigits}`
-                        : "teléfono no legible"
-                    }.`
-              }
             </p>
           )}
         </div>
