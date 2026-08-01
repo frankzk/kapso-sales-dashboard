@@ -63,6 +63,10 @@ import {
   DEFAULT_PAYER,
 } from "@/lib/shalom/draft";
 import {
+  normalizeManualShalomGuide,
+  type ManualShalomGuideInput,
+} from "@/lib/shalom/manual";
+import {
   ShalomApiError,
   ShalomTimeoutError,
   type DeclaracionJurada,
@@ -439,6 +443,186 @@ export interface CreateShalomInput {
    * Se exige solo si de verdad hay freno, y queda escrito en la línea de tiempo.
    */
   overrideReason?: string | null;
+}
+
+/**
+ * Vincula una guía que el operador ya creó directamente en pro.shalom.pe.
+ *
+ * Esta acción es deliberadamente independiente de la sesión y del API de
+ * creación: se usa precisamente cuando ese servicio está caído. No crea ni
+ * reintenta nada fuera de Kapta; registra la salida física, deja su QR propio y
+ * permite que el cron público la siga por número de guía.
+ */
+export async function registerManualShalomGuide(
+  orderId: string,
+  input: ManualShalomGuideInput,
+): Promise<{ error?: string; notice?: string; guideCode?: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("shalom.create_guide")) {
+    return { error: "Tu rol no permite registrar guías Shalom." };
+  }
+
+  const ctx = await authorize(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const { row, userId } = ctx;
+
+  const normalized = normalizeManualShalomGuide(input);
+  if (!normalized.ok) return { error: normalized.error };
+  const guide = normalized.value;
+  const admin = createAdminSupabase();
+
+  // El número impreso identifica una salida real. Nunca puede aparecer en dos
+  // pedidos distintos, incluso si dos personas registran la contingencia al
+  // mismo tiempo (la base además conserva unique(courier, guide_code)).
+  const duplicate = await admin
+    .from("shipments")
+    .select("id,order_id,store_id,guide_code")
+    .eq("courier", "shalom")
+    .eq("guide_code", guide.guideCode)
+    .maybeSingle();
+  if (duplicate.error) return { error: `No se pudo validar la guía: ${duplicate.error.message}` };
+  if (duplicate.data?.order_id && duplicate.data.order_id !== row.order_id) {
+    return {
+      error: `La guía ${guide.guideCode} ya está vinculada a otro pedido. Revisa el número antes de continuar.`,
+    };
+  }
+
+  const now = new Date().toISOString();
+  let shipmentId = duplicate.data?.id ?? null;
+  let alreadyLinked = Boolean(shipmentId);
+
+  if (!shipmentId) {
+    const inserted = await admin
+      .from("shipments")
+      .insert({
+        courier: "shalom",
+        guide_code: guide.guideCode,
+        store_id: row.store_id,
+        order_id: row.order_id,
+        matched: true,
+        match_method: "manual",
+        order_name: row.order_name,
+        customer_name: row.customer_name,
+        customer_phone: row.customer_phone,
+        product: null,
+        district: row.district,
+        province: row.province,
+        city: row.district,
+        region: row.region,
+        delivery_address: null,
+        agency_branch: guide.agencyBranch,
+        delivery_status: "pendiente",
+        status_category: "pending",
+        pickup_state: "pendiente_de_envio",
+        shalom_codigo: guide.codigo,
+        shalom_serie: guide.serie,
+        shalom_ose_id: guide.oseId,
+        shalom_order_id: guide.shalomOrderId,
+        shalom_raw: {
+          source: "shalom_pro_manual",
+          guia: guide.guideCode,
+          codigo: guide.codigo,
+          serie: guide.serie,
+          ose_id: guide.oseId,
+          order_id: guide.shalomOrderId,
+          recorded_at: now,
+          recorded_by: userId,
+        },
+        // Generar la guía equivale a generar el rótulo, pero la caja todavía
+        // sigue físicamente en almacén hasta el doble escaneo de despacho.
+        preparation_state: "rotulo_generado",
+        custody_state: "empresa",
+        assigned_at: now,
+        created_via: "shalom_pro_manual",
+      })
+      .select("id")
+      .single();
+
+    if (inserted.error) {
+      if (inserted.error.code === "23505") {
+        return {
+          error: `La guía ${guide.guideCode} fue registrada por otra persona mientras completabas el formulario. Actualiza el pedido para verla.`,
+        };
+      }
+      return { error: `No se pudo registrar la guía manual: ${inserted.error.message}` };
+    }
+    shipmentId = inserted.data.id;
+  } else {
+    // Un segundo envío del mismo formulario es idempotente. Permite completar
+    // identificadores faltantes, pero nunca cambia de pedido ni crea otro QR.
+    const patch: Record<string, unknown> = { updated_at: now };
+    if (guide.codigo) patch.shalom_codigo = guide.codigo;
+    if (guide.serie) patch.shalom_serie = guide.serie;
+    if (guide.oseId) patch.shalom_ose_id = guide.oseId;
+    if (guide.shalomOrderId) patch.shalom_order_id = guide.shalomOrderId;
+    if (guide.agencyBranch) patch.agency_branch = guide.agencyBranch;
+    const updated = await admin.from("shipments").update(patch).eq("id", shipmentId);
+    if (updated.error) return { error: `La guía ya existe, pero no se pudo actualizar: ${updated.error.message}` };
+  }
+
+  let keyWarning = "";
+  if (guide.pickupCode) {
+    const { data: previousKey } = await admin
+      .from("shalom_pickup_keys")
+      .select("order_id")
+      .eq("order_id", row.order_id)
+      .maybeSingle();
+    const keyWrite = await admin.from("shalom_pickup_keys").upsert(
+      {
+        order_id: row.order_id,
+        store_id: row.store_id,
+        key_enc: encrypt(guide.pickupCode),
+        created_by: userId,
+        ...(previousKey ? { replaced_at: now, replaced_by: userId } : {}),
+      },
+      { onConflict: "order_id" },
+    );
+    if (keyWrite.error) {
+      keyWarning = ` La guía quedó vinculada, pero la clave no pudo guardarse (${keyWrite.error.message}); regístrala desde Pagos y clave.`;
+    }
+  } else {
+    keyWarning = " No se ingresó la clave de recojo; regístrala después desde Pagos y clave antes de entregársela al cliente.";
+  }
+
+  const advance = await validatedAdvance(admin, row.order_id);
+  await admin.from("order_events").insert({
+    store_id: row.store_id,
+    order_id: row.order_id,
+    kind: alreadyLinked ? "guide_link_updated" : "guide_created",
+    occurred_at: now,
+    actor: userId,
+    source: "shalom",
+    courier: "shalom",
+    guide_code: guide.guideCode,
+    note:
+      `Guía Shalom ${alreadyLinked ? "actualizada" : "creada fuera de Kapta y vinculada manualmente"}.` +
+      `${guide.agencyBranch ? ` Destino: ${guide.agencyBranch}.` : ""}` +
+      ` Adelanto validado: S/ ${advance.toFixed(2)}.`,
+    // Nunca se guarda la clave en la línea de tiempo: solo la confirmación de
+    // que fue recibida y cifrada.
+    payload: {
+      source: "shalom_pro_manual",
+      shipment_id: shipmentId,
+      codigo: guide.codigo,
+      serie: guide.serie,
+      ose_id: guide.oseId,
+      shalom_order_id: guide.shalomOrderId,
+      agency_branch: guide.agencyBranch,
+      has_pickup_key: Boolean(guide.pickupCode),
+      validated_advance: advance,
+    },
+  });
+
+  await recomputeOrderMasterSafe(admin, [row.order_id]);
+  revalidatePath(MASTER_PATH);
+
+  return {
+    notice:
+      `${alreadyLinked ? "La guía ya estaba vinculada; se actualizaron sus datos" : "Guía externa vinculada"}: ${guide.guideCode}.` +
+      " El tracking público se hará automáticamente por este número cuando Shalom responda." +
+      keyWarning,
+    guideCode: guide.guideCode,
+  };
 }
 
 export async function createShalomGuide(

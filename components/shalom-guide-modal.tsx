@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import {
   connectShalomSession,
   createShalomGuide,
+  registerManualShalomGuide,
   loadShalomDraft,
   loadShalomProducts,
   lookupShalomPerson,
@@ -95,6 +96,17 @@ export function ShalomGuideModal({
   const [created, setCreated] = useState<{ notice: string; code: string } | null>(null);
   const [pending, start] = useTransition();
 
+  // Contingencia: la guía ya fue creada en pro.shalom.pe y solo se vincula.
+  // Este modo no usa sesión ni llama al API de creación.
+  const [mode, setMode] = useState<"api" | "manual">("api");
+  const [manualGuideCode, setManualGuideCode] = useState("");
+  const [manualCodigo, setManualCodigo] = useState("");
+  const [manualPickupCode, setManualPickupCode] = useState("");
+  const [manualAgency, setManualAgency] = useState("");
+  const [manualSerie, setManualSerie] = useState("");
+  const [manualOseId, setManualOseId] = useState("");
+  const [manualOrderId, setManualOrderId] = useState("");
+
   // ── Carga inicial ─────────────────────────────────────────────────────────
   useEffect(() => {
     let alive = true;
@@ -133,6 +145,7 @@ export function ShalomGuideModal({
         // compartido solo para volver a encontrar lo que ya sabemos.
         setAgencyQuery("");
       }
+      setManualAgency(d.prefilledTerminalName ?? "");
     })();
     return () => {
       alive = false;
@@ -144,7 +157,8 @@ export function ShalomGuideModal({
   // ── Búsqueda de agencias (con rebote: el rate limit son 60/min) ───────────
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!storeId || agency) return;
+    let cancelled = false;
+    if (mode !== "api" || !storeId || agency) return;
     const q = agencyQuery.trim();
     if (q.length < 2) {
       setAgencies([]);
@@ -154,6 +168,7 @@ export function ShalomGuideModal({
     searchTimer.current = setTimeout(() => {
       setAgencySearching(true);
       void searchShalomAgencies(storeId, q).then((res) => {
+        if (cancelled) return;
         setAgencySearching(false);
         if ("error" in res) {
           setError(res.error);
@@ -163,9 +178,10 @@ export function ShalomGuideModal({
       });
     }, 450);
     return () => {
+      cancelled = true;
       if (searchTimer.current) clearTimeout(searchTimer.current);
     };
-  }, [agencyQuery, storeId, agency]);
+  }, [agencyQuery, storeId, agency, mode]);
 
   // ── Productos: en cuanto hay sesión ───────────────────────────────────────
   useEffect(() => {
@@ -309,6 +325,27 @@ export function ShalomGuideModal({
     });
   }
 
+  function submitManual() {
+    start(async () => {
+      const res = await registerManualShalomGuide(orderId, {
+        guideCode: manualGuideCode,
+        codigo: manualCodigo,
+        pickupCode: manualPickupCode,
+        agencyBranch: manualAgency,
+        serie: manualSerie,
+        oseId: manualOseId,
+        shalomOrderId: manualOrderId,
+      });
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      setError(null);
+      setCreated({ notice: res.notice ?? "", code: res.guideCode ?? manualGuideCode.trim() });
+      onCreated();
+    });
+  }
+
   return (
     // El modal se monta DENTRO del drawer, que cierra al hacer click en su
     // fondo: sin frenar la propagación, cerrar el modal cerraría también el
@@ -326,7 +363,7 @@ export function ShalomGuideModal({
       >
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
           <div>
-            <p className="text-sm font-semibold text-slate-900">Crear guía Shalom</p>
+            <p className="text-sm font-semibold text-slate-900">Guía Shalom</p>
             <p className="text-xs text-slate-500">
               {draft?.orderName ?? "Pedido"}
               {draft?.originTerminalName ? ` · desde ${draft.originTerminalName}` : ""}
@@ -344,16 +381,18 @@ export function ShalomGuideModal({
 
         {draft && (
           <div className="space-y-4 p-5">
-            {draft.blockers.map((b) => (
-              <p key={b} className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-                {b}
-              </p>
-            ))}
-            {draft.warnings.map((w) => (
-              <p key={w} className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                {w}
-              </p>
-            ))}
+            {mode === "api" &&
+              draft.blockers.map((b) => (
+                <p key={b} className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {b}
+                </p>
+              ))}
+            {mode === "api" &&
+              draft.warnings.map((w) => (
+                <p key={w} className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  {w}
+                </p>
+              ))}
 
             {/* Freno blando: no es un aviso más ni un muro. Se explica, se pide
                 el motivo, y el motivo queda con nombre en la línea de tiempo.
@@ -388,7 +427,7 @@ export function ShalomGuideModal({
             {created ? (
               <div className="space-y-2 rounded-lg bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
                 <p>
-                  Guía creada: <span className="font-mono">{created.code}</span>
+                  Guía registrada: <span className="font-mono">{created.code}</span>
                 </p>
                 <p className="text-emerald-700">{created.notice}</p>
                 <button onClick={onClose} className="text-emerald-900 underline">
@@ -397,6 +436,159 @@ export function ShalomGuideModal({
               </div>
             ) : (
               <>
+                <div className="grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-xs font-medium">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode("api");
+                      setError(null);
+                    }}
+                    className={`rounded-md px-3 py-2 ${
+                      mode === "api" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
+                    }`}
+                  >
+                    Crear con API
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode("manual");
+                      setError(null);
+                    }}
+                    className={`rounded-md px-3 py-2 ${
+                      mode === "manual" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
+                    }`}
+                  >
+                    Ya la creé en Shalom Pro
+                  </button>
+                </div>
+
+                {mode === "manual" ? (
+                  <div className="space-y-4">
+                    <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-3 text-xs text-sky-900">
+                      <p className="font-semibold">Modo contingencia</p>
+                      <p className="mt-1 text-sky-800">
+                        No crea ni reintenta una guía. Vincula la que ya existe en Shalom Pro,
+                        genera una salida y QR propios en Kapta y la sigue por su número cuando el
+                        tracking de Shalom responda.
+                      </p>
+                    </div>
+
+                    <Field
+                      label="Número de guía Shalom *"
+                      hint="Es el número impreso que se usa para tracking. Debe copiarse exactamente de Shalom Pro."
+                    >
+                      <input
+                        value={manualGuideCode}
+                        onChange={(e) => setManualGuideCode(e.target.value)}
+                        autoComplete="off"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm"
+                        placeholder="Ej. 009989001"
+                      />
+                    </Field>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field
+                        label="Código Shalom"
+                        hint="Código corto que aparece junto a la guía."
+                      >
+                        <input
+                          value={manualCodigo}
+                          onChange={(e) => setManualCodigo(e.target.value)}
+                          autoComplete="off"
+                          className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm"
+                          placeholder="Opcional"
+                        />
+                      </Field>
+                      <Field
+                        label="Clave de recojo"
+                        hint="Se cifra; nunca aparece en la línea de tiempo."
+                      >
+                        <input
+                          value={manualPickupCode}
+                          onChange={(e) => setManualPickupCode(e.target.value.replace(/\D+/g, "").slice(0, 4))}
+                          inputMode="numeric"
+                          autoComplete="off"
+                          className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm"
+                          placeholder="4 dígitos"
+                        />
+                      </Field>
+                    </div>
+
+                    <Field
+                      label="Agencia de destino"
+                      hint="Sirve para identificar dónde debe recoger el cliente; no afecta el tracking."
+                    >
+                      <input
+                        value={manualAgency}
+                        onChange={(e) => setManualAgency(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Ej. REQUE · CHICLAYO"
+                      />
+                    </Field>
+
+                    <details className="rounded-lg border border-slate-200 px-3 py-2">
+                      <summary className="cursor-pointer text-xs font-medium text-slate-600">
+                        Identificadores adicionales (opcionales)
+                      </summary>
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        <Field label="Serie">
+                          <input
+                            value={manualSerie}
+                            onChange={(e) => setManualSerie(e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 px-2 py-2 text-xs"
+                            placeholder="v872"
+                          />
+                        </Field>
+                        <Field label="OSE ID">
+                          <input
+                            value={manualOseId}
+                            onChange={(e) => setManualOseId(e.target.value.replace(/\D+/g, ""))}
+                            inputMode="numeric"
+                            className="w-full rounded-lg border border-slate-300 px-2 py-2 text-xs"
+                          />
+                        </Field>
+                        <Field label="ID orden">
+                          <input
+                            value={manualOrderId}
+                            onChange={(e) => setManualOrderId(e.target.value.replace(/\D+/g, ""))}
+                            inputMode="numeric"
+                            className="w-full rounded-lg border border-slate-300 px-2 py-2 text-xs"
+                          />
+                        </Field>
+                      </div>
+                      <p className="mt-2 text-xs text-slate-400">
+                        OSE ID habilita el rótulo/comprobante; ID orden permite anular por API. No
+                        son necesarios para el seguimiento por número de guía.
+                      </p>
+                    </details>
+
+                    {!manualPickupCode && (
+                      <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        Puedes vincular la guía sin clave, pero tendrás que registrarla después desde
+                        “Pagos y clave” antes de entregársela al cliente.
+                      </p>
+                    )}
+
+                    {error && (
+                      <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+                    )}
+
+                    <div className="flex justify-end gap-2 pt-1">
+                      <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm text-slate-600">
+                        Cancelar
+                      </button>
+                      <button
+                        onClick={submitManual}
+                        disabled={!manualGuideCode.trim() || pending}
+                        className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+                      >
+                        {pending ? "Vinculando…" : "Vincular guía externa"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
                 {/* 1. Sesión */}
                 <div className="rounded-lg border border-slate-200 px-3 py-3">
                   {sessionReady ? (
@@ -746,6 +938,8 @@ export function ShalomGuideModal({
                     {pending ? "Creando…" : "Crear guía"}
                   </button>
                 </div>
+                  </>
+                )}
               </>
             )}
           </div>

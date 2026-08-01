@@ -488,6 +488,23 @@ Horarios Swayp documentados:
 - Si Shalom reporta `Recogido` sin pago completo: conservar el hecho logístico,
   mantener el caso abierto y generar alerta financiera crítica.
 
+Contingencia cuando la creación por API o Shalom Pro está degradada:
+
+1. La operadora crea una sola vez la guía directamente en `pro.shalom.pe`.
+2. En el drawer elige **Ya la creé en Shalom Pro** y registra como mínimo el
+   número de guía. También puede guardar código Shalom, clave de recojo, agencia,
+   serie, OSE ID e ID de orden.
+3. Kapta no vuelve a llamar al endpoint de creación: vincula la guía existente,
+   crea una salida física con QR propio y la deja en
+   `Preparación · Por armar` (`rotulo_generado`, custodia de la empresa).
+4. La clave ingresada se cifra y nunca se escribe en la línea de tiempo. Si no
+   se conoce todavía, puede registrarse después en **Pagos y clave**.
+5. El tracking público se recupera automáticamente por número de guía; no exige
+   OSE ID ni sesión de Shalom Pro. OSE ID solo habilita rótulo/comprobante, e ID
+   de orden permite una eventual anulación por API.
+6. El mismo número de guía no puede vincularse a dos pedidos. Un segundo envío
+   del mismo formulario sobre el mismo pedido actualiza datos sin crear otro QR.
+
 ### Olva
 
 - Regla normal: pago completo.
