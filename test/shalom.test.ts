@@ -20,6 +20,7 @@ import {
   describeShalomProbeFailure,
   findCreatedOrder,
   sessionIsFresh,
+  shalomRetryDelay,
   ShalomClient,
 } from "@/lib/shalom/client";
 import { ShalomApiError, ShalomTimeoutError } from "@/lib/shalom/types";
@@ -768,5 +769,53 @@ describe("shalomAirRoute", () => {
       fromOrigin: "unknown",
     });
     expect(shalomAirRoute(iquitos, null)).toEqual({ offered: true, fromOrigin: "unknown" });
+  });
+});
+
+describe("shalomRetryDelay — el 502 del proveedor", () => {
+  const boot = () =>
+    new ShalomApiError("login-service: el worker no está listo (bootstrap pendiente)", 502);
+
+  // El 502 de su `login-service` arrancando se arregla solo en segundos. El
+  // mensaje ya decía «se puede reintentar» y no lo hacía nadie: lo tenía que
+  // pulsar la operadora.
+  it("reintenta los 5xx de paso, con espera creciente y tope", () => {
+    expect(shalomRetryDelay(boot(), 0)).toBe(2_000);
+    expect(shalomRetryDelay(boot(), 1)).toBe(5_000);
+    expect(shalomRetryDelay(boot(), 2)).toBeNull();
+    for (const status of [503, 504]) {
+      expect(shalomRetryDelay(new ShalomApiError("caído", status), 0)).toBe(2_000);
+    }
+  });
+
+  it("no reintenta lo que reintentar no arregla", () => {
+    // Una credencial mala no mejora por insistir, y un 429 con el cupo agotado
+    // solo empeora gastando más.
+    expect(shalomRetryDelay(new ShalomApiError("clave mala", 401, "unauthorized"), 0)).toBeNull();
+    expect(shalomRetryDelay(new ShalomApiError("sin cupo", 429, "rate_limited"), 0)).toBeNull();
+    expect(shalomRetryDelay(new ShalomApiError("no existe", 404), 0)).toBeNull();
+  });
+
+  // Un timeout ya se comió los ~170 s de presupuesto: encadenar otro se llevaría
+  // por delante el maxDuration de la página y cambiaría un error explicado por
+  // una pantalla colgada.
+  it("NUNCA reintenta un timeout", () => {
+    expect(shalomRetryDelay(new ShalomTimeoutError("sin respuesta"), 0)).toBeNull();
+  });
+});
+
+describe("describeShalomError — culpar a quien corresponde", () => {
+  it("un 502 de su login-service se declara fallo del proveedor", () => {
+    const msg = describeShalomError(
+      new ShalomApiError("login-service: el worker no está listo (bootstrap pendiente)", 502),
+    );
+    expect(msg).toMatch(/FALLO DEL PROVEEDOR/);
+    expect(msg).toMatch(/no de tus credenciales/i);
+  });
+
+  it("un 502 cualquiera no acusa a nadie de más", () => {
+    const msg = describeShalomError(new ShalomApiError("gateway", 502));
+    expect(msg).not.toMatch(/FALLO DEL PROVEEDOR/);
+    expect(msg).toMatch(/se puede volver a intentar/i);
   });
 });

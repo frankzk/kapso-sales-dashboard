@@ -211,15 +211,32 @@ export class ShalomClient {
    * (~90 s a 2 min): es una lectura, así que reintentarla no crea nada.
    */
   async createSession(email: string, password: string): Promise<ShalomSession> {
-    const body = await this.request<ShalomSession>("/v1/shalom/sessions", {
-      method: "POST",
-      body: { email, password },
-      timeoutMs: SLOW_TIMEOUT_MS,
-    });
-    if (!body?.session_token) {
-      throw new ShalomApiError("Shalom no devolvió token de sesión.", 200, null, body);
+    // Reintento acotado para los fallos PASAJEROS del propio proveedor: el 502
+    // «login-service: el worker no está listo (bootstrap pendiente)» sale de su
+    // contenedor de login arrancando, no de las credenciales ni de la llamada.
+    // El mensaje ya decía «se puede reintentar» y no lo hacía nadie: lo tenía
+    // que pulsar la operadora a mano.
+    //
+    // Reintentar acá es seguro: si no hubo token, no hay nada que duplicar ni
+    // que invalidar. Y sale barato porque un 502 vuelve enseguida, a diferencia
+    // del login bueno, que tarda ~90 s.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const body = await this.request<ShalomSession>("/v1/shalom/sessions", {
+          method: "POST",
+          body: { email, password },
+          timeoutMs: SLOW_TIMEOUT_MS,
+        });
+        if (!body?.session_token) {
+          throw new ShalomApiError("Shalom no devolvió token de sesión.", 200, null, body);
+        }
+        return body;
+      } catch (err) {
+        const wait = shalomRetryDelay(err, attempt);
+        if (wait === null) throw err;
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
     }
-    return body;
   }
 
   /** Revoca el token. Idempotente del lado de la API. */
@@ -409,6 +426,27 @@ export function describeShalomProbeFailure(err: unknown, baseUrl: string): strin
   return `No se pudo probar la API key contra ${baseUrl}: ${describeShalomError(err)}`;
 }
 
+/** Espera antes del siguiente intento, o `null` si no hay que reintentar. */
+const SESSION_RETRY_WAITS_MS = [2_000, 5_000];
+
+/**
+ * ¿Merece la pena reintentar este fallo al pedir la sesión?
+ *
+ * Solo los 5xx de PASO: son del proveedor y se arreglan solos en segundos —
+ * típicamente su `login-service` terminando de arrancar. Todo lo demás se
+ * propaga tal cual: un 401 es una credencial mala y reintentarla no la mejora,
+ * y un 429 con el cupo agotado solo empeoraría gastando más.
+ *
+ * NUNCA se reintenta un timeout. Ese ya se comió los ~170 s de presupuesto de la
+ * petición, y encadenar otro se llevaría por delante el `maxDuration` de la
+ * página, cambiando un error explicado por una pantalla colgada.
+ */
+export function shalomRetryDelay(err: unknown, attempt: number): number | null {
+  if (!(err instanceof ShalomApiError)) return null;
+  if (err.status !== 502 && err.status !== 503 && err.status !== 504) return null;
+  return SESSION_RETRY_WAITS_MS[attempt] ?? null;
+}
+
 /**
  * Traduce un fallo de la API a algo accionable para el operador. Los códigos
  * salen de la tabla de errores de la documentación.
@@ -437,8 +475,16 @@ export function describeShalomError(err: unknown): string {
             ? " Es una regla de negocio de Shalom (cuenta sin servicio de cobranza, producto restringido para esa ruta, etc.)."
             : err.code === "conflict"
               ? " Ya hay una persona registrada con ese documento con otros datos."
-              : err.status === 502 || err.status === 504
-                ? " Shalom Pro no respondió; se puede reintentar."
-                : "";
+              : // Un 5xx que menciona su `login-service` es SU contenedor de
+                // inicio de sesión caído o arrancando. No es la cuenta de la
+                // tienda ni la API key ni el despliegue, y decir solo «no
+                // respondió» manda a revisar credenciales que están bien —el
+                // mismo error que ya costó tiempo con el 404 y con el 401.
+                /login-service|bootstrap/i.test(err.message) &&
+                  (err.status === 502 || err.status === 503 || err.status === 504)
+                ? " ES UN FALLO DEL PROVEEDOR, no de tus credenciales ni de la configuración: su servicio de inicio de sesión está caído o arrancando. Ya se reintentó solo; si sigue, avísales con el request_id y usa pro.shalom.pe mientras tanto."
+                : err.status === 502 || err.status === 503 || err.status === 504
+                  ? " Shalom Pro no respondió; ya se reintentó solo y se puede volver a intentar."
+                  : "";
   return `Shalom rechazó la solicitud (${err.status}): ${err.message}.${hint}`;
 }
