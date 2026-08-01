@@ -603,11 +603,30 @@ Alertas críticas iniciales:
 
 ### Fase 2 — Almacén y manifiestos
 
-- Generación de rótulo.
+- Consume la salida/rótulo generado por los paneles actuales de cada courier;
+  la decisión y creación específica del rótulo pertenece a la Fase 3.
 - Escaneo de paquete listo.
 - Agrupación de ruta.
 - Doble cotejo.
 - Transferencia de custodia.
+
+Implementación publicada en `/dashboard/pedidos/despacho`:
+
+- `dispatch_manifests`: una ruta por organización, courier, fecha y nombre.
+- `dispatch_manifest_items`: una salida física por ítem; una salida no puede
+  pertenecer activamente a dos rutas.
+- Primer cotejo: oficina confirma que el paquete completo está físicamente en
+  la caja/agrupación correcta.
+- Segundo cotejo: el propio motorizado confirma todo lo que recibe.
+- Crear, organizar o enviar una ruta no cambia custodia.
+- `finalize_dispatch_manifest()` bloquea la ruta y vuelve a comprobar el 100 %
+  de ambos cotejos dentro de una sola transacción antes de mover todos los
+  paquetes a custodia `courier`.
+- Un faltante se retira expresamente con motivo, persona y hora. No se borra.
+- Cada creación, escaneo, retiro, cancelación y transferencia queda en
+  `dispatch_events`; los movimientos por pedido también llegan a `order_events`.
+- Cámara del celular, lector USB y escritura manual resuelven el mismo token QR,
+  código de salida o código de guía.
 
 ### Fase 3 — Modalidades
 
@@ -665,4 +684,20 @@ Añade `macro_stage`, `macro_substage` y `macro_reasons`. Durante el modo sombra
 - Regla exacta para pausar nuevas rutas Swayp por liquidación vencida.
 - Incorporación al repositorio del módulo de Liquidaciones que ya existe en
   producción.
+
+## 22. Criterios de aceptación de la Fase 2
+
+- Un paquete no puede agregarse a una ruta si no está `listo_despacho` y bajo
+  custodia de la empresa.
+- El courier de la salida debe coincidir con el courier de la ruta.
+- El mismo paquete no puede estar activo en dos manifiestos.
+- El primer escaneo de oficina puede agregar y cotejar el paquete en una sola
+  acción operativa.
+- El segundo cotejo no puede comenzar hasta completar el primero al 100 %.
+- El paquete que falta puede retirarse sin bloquear los demás, pero exige motivo.
+- La ruta solo llega a `in_custody` después del segundo cotejo al 100 %.
+- La transferencia actualiza todos los paquetes de la ruta atómicamente.
+- Una ruta cancelada libera sus paquetes y conserva el historial.
+- Cada actor queda registrado con fecha y hora.
+- La interfaz funciona en celular y escritorio, con cámara y entrada manual.
 

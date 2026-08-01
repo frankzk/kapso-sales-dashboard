@@ -99,5 +99,9 @@ echo "▶ auditoría inmutable + clave de recojo + unicidad del Yape"
 $PSQL -f "$ROOT/scripts/sql/append_only_smoke.sql"
 echo "  ✅ auditoría inmutable, clave de recojo sin lectura directa y comprobante Yape único"
 
+echo "▶ doble cotejo de despacho"
+$PSQL -f "$ROOT/scripts/sql/dispatch_smoke.sql"
+echo "  ✅ la custodia solo cambia después de cotejar el 100 % dos veces"
+
 echo ""
 echo "✅ DB verification passed."
