@@ -179,7 +179,8 @@ const GUIDE_COLUMNS =
   "address_updated_by,fenix_eligible,fenix_shipment_id,created_via,delivered_source," +
   "aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at," +
   "next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id," +
-  "suggested_order_name,created_at,updated_at";
+  "suggested_order_name,output_number,output_code,qr_token,preparation_state,custody_state," +
+  "ready_at,ready_by,custody_transferred_at,custody_transferred_by,label_url,created_at,updated_at";
 
 /**
  * Detalle de un pedido: su fila del Master, sus guías, la línea de tiempo

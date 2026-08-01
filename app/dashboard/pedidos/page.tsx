@@ -59,6 +59,7 @@ async function PedidosContent({
       canOverride={perms.can("master.override_status")}
       canCreateGuide={perms.can("aliclik.create_guide")}
       canCreateTandersGuide={perms.can("tanders.create_guide")}
+      canDispatch={perms.can("warehouse.prepare") || perms.can("dispatch.manage") || perms.can("dispatch.pickup")}
     />
   );
 }
