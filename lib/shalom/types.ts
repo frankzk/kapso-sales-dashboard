@@ -94,7 +94,18 @@ export interface ShalomAgency {
   provincia?: string | null;
   distrito?: string | null;
   direccion?: string | null;
+  /** La agencia tiene servicio aéreo. NO significa que lo tenga desde tu origen. */
   aereo?: boolean | null;
+  /**
+   * Ids de las agencias de ORIGEN desde las que hay vuelo hasta esta. La
+   * respuesta ya los traía; se tipan porque son la única forma de saber, antes
+   * de crear la guía, si la ruta aérea existe desde nuestra agencia.
+   */
+  origenes_aereos?: number[] | null;
+  /** Lo simétrico: destinos alcanzables por aire desde esta agencia. */
+  destinos_aereos?: number[] | null;
+  /** false → solo recojo en agencia; no hay entrega a domicilio. */
+  reparto_habilitado?: boolean | null;
   latitud?: number | null;
   longitud?: number | null;
   [k: string]: unknown;

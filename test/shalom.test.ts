@@ -12,6 +12,7 @@ import {
   suggestedAgencyQuery,
   shalomGuideIsCancelable,
   shalomSoftBlockers,
+  shalomAirRoute,
   MIN_OVERRIDE_REASON,
 } from "@/lib/shalom/draft";
 import {
@@ -732,5 +733,40 @@ describe("shalomSoftBlockers", () => {
   it("el mínimo del motivo descarta un «ok» pero admite una frase", () => {
     expect("ok".length).toBeLessThan(MIN_OVERRIDE_REASON);
     expect("pagó por transferencia".length).toBeGreaterThanOrEqual(MIN_OVERRIDE_REASON);
+  });
+});
+
+describe("shalomAirRoute", () => {
+  // `aereo: true` dice que la AGENCIA tiene servicio aéreo, no que lo tenga
+  // desde donde despachamos. Quien manda es `origenes_aereos`: la lista de
+  // agencias de origen con vuelo hasta ella. Ofrecer la casilla sin mirarla
+  // sería invitar a marcar algo que la API rechaza — o a que el paquete salga
+  // por una vía que no existe.
+  const iquitos = { aereo: true, origenes_aereos: [584, 586, 587, 588, 591] };
+
+  it("no ofrece nada si la agencia no tiene servicio aéreo", () => {
+    expect(shalomAirRoute({ aereo: false }, 587)).toEqual({ offered: false });
+    expect(shalomAirRoute({ aereo: null }, 587)).toEqual({ offered: false });
+    expect(shalomAirRoute(null, 587)).toEqual({ offered: false });
+  });
+
+  it("confirma la ruta cuando nuestro origen está en la lista", () => {
+    expect(shalomAirRoute(iquitos, 587)).toEqual({ offered: true, fromOrigin: "yes" });
+  });
+
+  it("avisa cuando la agencia vuela, pero no desde nuestro origen", () => {
+    expect(shalomAirRoute(iquitos, 999)).toEqual({ offered: true, fromOrigin: "no" });
+  });
+
+  // Que falte el dato no es un error: la búsqueda de agencias no siempre
+  // devuelve esas listas. Impedir el envío por falta de dato sería bloquear algo
+  // legítimo con una excusa, así que se deja elegir y no se afirma nada.
+  it("no afirma nada si falta la lista o el origen", () => {
+    expect(shalomAirRoute({ aereo: true }, 587)).toEqual({ offered: true, fromOrigin: "unknown" });
+    expect(shalomAirRoute({ aereo: true, origenes_aereos: [] }, 587)).toEqual({
+      offered: true,
+      fromOrigin: "unknown",
+    });
+    expect(shalomAirRoute(iquitos, null)).toEqual({ offered: true, fromOrigin: "unknown" });
   });
 });
