@@ -8,7 +8,10 @@ import {
   previewShalomGuide,
   type ShalomGuidePreview,
 } from "@/app/dashboard/pedidos/shalom-actions";
-import { selectDefaultAgencyPackageSize } from "@/lib/aliclik-agency";
+import {
+  selectDefaultAgencyPackageSize,
+  validateAgencyDocument,
+} from "@/lib/aliclik-agency";
 
 export function ShalomGuidePanel({
   orderId,
@@ -31,7 +34,6 @@ export function ShalomGuidePanel({
   const [documentType, setDocumentType] = useState<"DNI" | "CE">("DNI");
   const [documentNumber, setDocumentNumber] = useState("");
   const [reference, setReference] = useState("Recoger en agencia");
-  const [note, setNote] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,6 +69,10 @@ export function ShalomGuidePanel({
   }, [agencySearch, preview?.agencies]);
 
   const chosenAgency = preview?.agencies?.find((agency) => agency.id === agencyId) ?? null;
+  const documentValidation = useMemo(
+    () => validateAgencyDocument(documentType, documentNumber),
+    [documentType, documentNumber],
+  );
   const canCreate = Boolean(
     preview?.ok &&
       preview.advanceReady &&
@@ -76,7 +82,7 @@ export function ShalomGuidePanel({
       scheduleDate &&
       receiverName.trim() &&
       receiverPhone.trim() &&
-      documentNumber.trim(),
+      documentValidation.ok,
   );
 
   function create() {
@@ -92,7 +98,6 @@ export function ShalomGuidePanel({
         documentType,
         documentNumber,
         reference,
-        note,
       });
       if (result.error) {
         setMessage({ kind: "error", text: result.error });
@@ -274,9 +279,31 @@ export function ShalomGuidePanel({
                         onChange={(event) => setDocumentNumber(event.target.value.replace(/\D/g, ""))}
                         maxLength={documentType === "DNI" ? 8 : 12}
                         placeholder={documentType === "DNI" ? "8 dígitos" : "Número de CE"}
-                        className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        aria-invalid={Boolean(documentNumber) && !documentValidation.ok}
+                        className={`min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm ${
+                          documentNumber && !documentValidation.ok
+                            ? "border-rose-300 bg-rose-50"
+                            : documentValidation.ok
+                              ? "border-emerald-300 bg-emerald-50"
+                              : "border-slate-300"
+                        }`}
                       />
                     </div>
+                    <p
+                      className={`mt-1 text-xs ${
+                        !documentNumber
+                          ? "text-slate-500"
+                          : documentValidation.ok
+                            ? "text-emerald-700"
+                            : "text-rose-700"
+                      }`}
+                    >
+                      {!documentNumber
+                        ? "Se comprobará el formato antes de crear la guía; no consulta RENIEC."
+                        : documentValidation.ok
+                          ? `✓ ${documentValidation.message}`
+                          : documentValidation.message}
+                    </p>
                   </div>
 
                   <label className="sm:col-span-2">
@@ -288,22 +315,8 @@ export function ShalomGuidePanel({
                     />
                   </label>
 
-                  <label className="sm:col-span-2">
-                    <span className="mb-1 block text-xs font-medium text-slate-600">Nota interna para Aliclik (opcional)</span>
-                    <input
-                      value={note}
-                      onChange={(event) => setNote(event.target.value)}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    />
-                  </label>
                 </div>
 
-                {preview.warehouseName ? (
-                  <p className="text-xs text-slate-500">
-                    Almacén de salida: <span className="font-medium">{preview.warehouseName}</span>
-                    {preview.items?.length ? ` · ${preview.items.length} producto(s)` : ""}
-                  </p>
-                ) : null}
                 {preview.warnings?.map((warning) => (
                   <p key={warning} className="text-xs text-amber-700">⚠ {warning}</p>
                 ))}

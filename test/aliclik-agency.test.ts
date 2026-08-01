@@ -8,6 +8,7 @@ import {
   resolveAgencyScheduleDate,
   selectDefaultAgencyPackageSize,
   splitCustomerName,
+  validateAgencyDocument,
   validateAgencyUnits,
 } from "@/lib/aliclik-agency";
 
@@ -30,6 +31,26 @@ describe("selectDefaultAgencyPackageSize", () => {
   it("cae a la primera opción válida si XXS no está disponible", () => {
     expect(selectDefaultAgencyPackageSize(["", "SOBRE", "Caja Paquete XS"])).toBe("SOBRE");
     expect(selectDefaultAgencyPackageSize([])).toBe("");
+  });
+});
+
+describe("validateAgencyDocument", () => {
+  it("acepta un DNI de exactamente 8 dígitos", () => {
+    expect(validateAgencyDocument("DNI", "42790910")).toMatchObject({
+      ok: true,
+      normalized: "42790910",
+    });
+    expect(validateAgencyDocument("DNI", "4279091").ok).toBe(false);
+    expect(validateAgencyDocument("DNI", "427909100").ok).toBe(false);
+  });
+
+  it("normaliza separadores y acepta CE de 8 a 12 dígitos", () => {
+    expect(validateAgencyDocument("CE", "001-234-567")).toMatchObject({
+      ok: true,
+      normalized: "001234567",
+    });
+    expect(validateAgencyDocument("CE", "1234567").ok).toBe(false);
+    expect(validateAgencyDocument("CE", "1234567890123").ok).toBe(false);
   });
 });
 

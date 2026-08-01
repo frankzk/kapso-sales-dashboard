@@ -29,6 +29,40 @@ export function selectDefaultAgencyPackageSize(sizes: readonly string[]): string
 }
 
 // ---------------------------------------------------------------------------
+// Documento de quien recoge
+// ---------------------------------------------------------------------------
+
+export type AgencyDocumentType = "DNI" | "CE";
+
+export interface AgencyDocumentValidation {
+  ok: boolean;
+  normalized: string;
+  message: string;
+}
+
+/**
+ * Valida el formato que acepta Aliclik. No consulta RENIEC ni pretende
+ * certificar la identidad de la persona: esa distinción debe ser explícita en
+ * la interfaz para no crear una falsa sensación de verificación oficial.
+ */
+export function validateAgencyDocument(
+  type: AgencyDocumentType,
+  value: string | null | undefined,
+): AgencyDocumentValidation {
+  const normalized = (value ?? "").replace(/\D/g, "");
+  const ok = type === "DNI" ? /^\d{8}$/.test(normalized) : /^\d{8,12}$/.test(normalized);
+  return {
+    ok,
+    normalized,
+    message: ok
+      ? `${type} con formato válido.`
+      : type === "DNI"
+        ? "El DNI debe tener exactamente 8 dígitos."
+        : "El CE debe tener entre 8 y 12 dígitos.",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Fecha de despacho
 // ---------------------------------------------------------------------------
 
