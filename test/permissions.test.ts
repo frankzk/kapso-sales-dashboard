@@ -32,6 +32,9 @@ describe("permissionsFor", () => {
     expect(p.has("shalom.validate_payment")).toBe(false);
     expect(p.has("shalom.view_pickup_key")).toBe(false);
     expect(p.has("shalom.reveal_pickup_key")).toBe(true);
+    expect(p.has("warehouse.prepare")).toBe(true);
+    expect(p.has("dispatch.manage")).toBe(true);
+    expect(p.has("dispatch.pickup")).toBe(true);
     expect(isReadOnly(["vendedora"])).toBe(false);
   });
 

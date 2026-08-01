@@ -1204,6 +1204,21 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
 - No imprimas todavía el nuevo QR desde producción: la pantalla de doble cotejo
   y transferencia de custodia pertenece a la Fase 2.
 
+## 5p. MOM Fase 2 — mesa de despacho y doble cotejo
+
+- **Requiere migración 0060** antes de abrir `/dashboard/pedidos/despacho`.
+- La mesa acepta el QR opaco, el código `KP…-S01` o la guía del courier. La
+  cámara es opcional: un lector USB o la escritura manual usan el mismo campo.
+- Almacén marca el paquete `listo_despacho`; Daysi/equipo lo incorpora y coteja
+  dentro de una ruta; el motorizado vuelve a escanear todo al recoger.
+- Crear o compartir la ruta no marca despacho. La custodia cambia únicamente al
+  completar el segundo cotejo al 100 %.
+- Si falta una caja se retira expresamente de la ruta con motivo. Los demás
+  paquetes pueden salir solo después de que el manifiesto actualizado vuelva a
+  estar completo.
+- Revisar primero una ruta pequeña en producción y comprobar su historial en el
+  Master antes de usarla con todos los couriers.
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle

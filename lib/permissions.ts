@@ -18,6 +18,10 @@ export const PERMISSIONS = [
   "master.edit", // registrar estados, comentarios, devoluciones, corregir vínculos
   "master.override_status", // cambiar el estado de un pedido ya cerrado (entregado/anulado/devuelto)
   "master.import_report", // cargar reportes de couriers
+  // Preparación y despacho físico (MOM Fase 2)
+  "warehouse.prepare", // escanear y dejar una salida lista para despacho
+  "dispatch.manage", // crear rutas, cotejar en oficina y retirar paquetes
+  "dispatch.pickup", // segundo cotejo del motorizado y transferencia de custodia
   // Pagos Yape / clave de recojo Shalom
   "shalom.register_payment",
   "shalom.validate_payment",
@@ -85,6 +89,9 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
   vendedora: [
     "master.edit",
     "master.import_report",
+    "warehouse.prepare",
+    "dispatch.manage",
+    "dispatch.pickup",
     "shalom.register_payment",
     "shalom.reveal_pickup_key",
     "aliclik.create_guide",

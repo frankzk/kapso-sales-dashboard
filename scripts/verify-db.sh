@@ -121,5 +121,9 @@ $PSQL -d bundle_check -f "$ROOT/db/apply_bundled.sql" >/dev/null
 $PSQL -c "drop database bundle_check" >/dev/null
 echo "  ✅ apply_bundled.sql levanta el esquema completo desde cero"
 
+echo "▶ doble cotejo de despacho"
+$PSQL -f "$ROOT/scripts/sql/dispatch_smoke.sql"
+echo "  ✅ la custodia solo cambia después de cotejar el 100 % dos veces"
+
 echo ""
 echo "✅ DB verification passed."

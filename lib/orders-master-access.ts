@@ -192,7 +192,9 @@ const GUIDE_COLUMNS =
   // 0061: el código corto que Shalom muestra junto al nº de orden, y el id con
   // el que sirve el rótulo PDF. Sin ellos el drawer no puede ni identificar el
   // envío en su panel ni ofrecer el rótulo.
-  "suggested_order_name,created_at,updated_at,shalom_codigo,shalom_ose_id";
+  "suggested_order_name,output_number,output_code,qr_token,preparation_state,custody_state," +
+  "ready_at,ready_by,custody_transferred_at,custody_transferred_by,label_url," +
+  "created_at,updated_at,shalom_codigo,shalom_ose_id";
 
 /**
  * Detalle de un pedido: su fila del Master, sus guías, la línea de tiempo

@@ -18,6 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import Link from "next/link";
 import { Card, cn, EmptyState } from "@/components/ui";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { ChecklistFilter } from "@/components/filters";
@@ -251,6 +252,7 @@ export function OrdersMasterBoard({
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
+  canDispatch,
 }: {
   stores: StoreSummary[];
   view: MasterView;
@@ -281,6 +283,7 @@ export function OrdersMasterBoard({
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
+  canDispatch: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -362,6 +365,15 @@ export function OrdersMasterBoard({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {canDispatch && (
+            <Link
+              href="/dashboard/pedidos/despacho"
+              className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-700"
+            >
+              <span aria-hidden="true">▦</span>
+              Mesa de despacho
+            </Link>
+          )}
           <div className="relative">
             <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400">
               🔍
