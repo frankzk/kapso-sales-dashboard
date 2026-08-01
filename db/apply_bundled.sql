@@ -5642,3 +5642,205 @@ revoke all on function order_master_set_coverage() from public, anon, authentica
 
 -- Repara lo que el build viejo dejó escrito.
 select refresh_order_coverage(null);
+
+-- ---- 0084 ----
+-- ============================================================================
+-- 0084_tanders_payment_check.sql — validar la constancia de PAGO de cada
+-- entrega Tanders antes de dar el pedido por cobrado.
+--
+-- Tanders sube dos evidencias por entrega: la foto del paquete y el comprobante
+-- del pago, que el repartidor yapea a Grupo GF SAC. Ese segundo comprobante es
+-- el que dice si el dinero llegó, y hasta ahora nadie lo miraba una por una.
+--
+-- Se pasa por el lector de comprobantes que ya existe (lib/vision.ts, el mismo
+-- de los Yape de adelanto) y se comprueban dos cosas: que el Yape vaya a Grupo
+-- GF SAC y que el monto sea el de la guía. Un pago a otra cuenta es dinero que
+-- no llegó; un monto distinto es un cobro mal hecho.
+--
+-- El estado BLOQUEA: mientras no sea 'validado' o 'revisado', el pedido no se
+-- da por cobrado. `pendiente` y `rechazado` son distintos a propósito —
+-- pendiente es "todavía no lo sé", rechazado es "esto está mal": marcar un
+-- fallo del lector como rechazo mandaría a investigar un fraude inexistente.
+-- ============================================================================
+
+alter table shipments
+  -- pendiente | validado | rechazado | revisado. Null = no aplica (no es Tanders
+  -- entregado todavía).
+  add column if not exists payment_check_state text;
+
+comment on column shipments.payment_check_state is
+  'Validación de la constancia de pago (Tanders). Solo validado/revisado dan el cobro por bueno.';
+
+create index if not exists shipments_payment_check_idx
+  on shipments(store_id, payment_check_state)
+  where payment_check_state is not null;
+
+-- ----------------------------------------------------------------------------
+-- Cada intento de comprobación, con lo que el lector leyó. Es la evidencia de
+-- POR QUÉ se aceptó o se rechazó un cobro: sin esto, un rechazo es una palabra
+-- sin respaldo y un administrador no puede revisarlo con criterio.
+-- ----------------------------------------------------------------------------
+
+create table if not exists tanders_payment_checks (
+  id               uuid primary key default gen_random_uuid(),
+  shipment_id      uuid not null references shipments(id) on delete cascade,
+  store_id         uuid not null references stores(id) on delete cascade,
+  -- La imagen que se analizó, tal como la sirve Tanders.
+  image_url        text,
+  state            text not null,
+  reasons          text[] not null default '{}',
+  -- Lo que el lector transcribió (para que el revisor no tenga que abrir la
+  -- imagen para entender el veredicto).
+  recipient_name   text,
+  amount           numeric(14, 2),
+  operation_number text,
+  expected_amount  numeric(14, 2),
+  model            text,
+  -- Respuesta cruda de la API de evidencias: su forma no está documentada.
+  raw              jsonb,
+  checked_at       timestamptz not null default now(),
+  -- Revisión manual: quién dio por bueno un rechazo, y por qué.
+  reviewed_by      uuid references auth.users(id) on delete set null,
+  reviewed_at      timestamptz,
+  review_note      text
+);
+
+create index if not exists tanders_payment_checks_shipment_idx
+  on tanders_payment_checks(shipment_id, checked_at desc);
+create index if not exists tanders_payment_checks_store_idx
+  on tanders_payment_checks(store_id, state);
+
+-- Un mismo nº de operación en dos entregas es un comprobante reutilizado: el
+-- índice lo hace barato de detectar.
+create index if not exists tanders_payment_checks_operation_idx
+  on tanders_payment_checks(operation_number)
+  where operation_number is not null;
+
+alter table tanders_payment_checks enable row level security;
+
+drop policy if exists tanders_payment_checks_select on tanders_payment_checks;
+create policy tanders_payment_checks_select on tanders_payment_checks for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+-- Tabla nueva en `public`: revocar explícitamente lo que no se quiere conceder
+-- (ver 5m del DEPLOY — las default privileges de Supabase conceden de más).
+revoke all on tanders_payment_checks from anon, authenticated;
+grant select on tanders_payment_checks to authenticated;
+grant all privileges on tanders_payment_checks to service_role;
+
+comment on table tanders_payment_checks is
+  'Comprobaciones de la constancia de pago de entregas Tanders: qué leyó el lector y por qué se aceptó o rechazó.';
+
+-- ---- 0085 ----
+-- Aliclik registra la tarifa de la capital de Ayacucho con distrito
+-- "Ayacucho", mientras los pedidos de Shopify/ubigeo llegan como:
+--   región Ayacucho / provincia Huamanga / distrito Huamanga.
+--
+-- No se duplica una fila de S/16.50: se declara una equivalencia operativa para
+-- que el pedido herede siempre la tarifa vigente de Aliclik y sus futuros
+-- cambios de precio.
+
+create or replace function cost_tariff_district_matches(
+  p_tariff_district text,
+  p_region text,
+  p_province text,
+  p_district text
+)
+returns boolean
+language sql
+immutable
+set search_path = public
+as $$
+  select
+    coverage_norm(p_tariff_district) = coverage_norm(p_district)
+    or (
+      coverage_norm(p_region) = 'ayacucho'
+      and coverage_norm(p_province) = 'huamanga'
+      and coverage_norm(p_district) = 'huamanga'
+      and coverage_norm(p_tariff_district) = 'ayacucho'
+    );
+$$;
+
+create or replace function order_coverage_for(
+  p_store_id uuid,
+  p_region text,
+  p_province text,
+  p_district text,
+  p_day date default current_date
+)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_region text := coverage_norm(p_region);
+  v_province text := coverage_norm(p_province);
+  v_district text := coverage_norm(p_district);
+begin
+  if is_lima_metropolitana(p_region, p_province, p_district) then
+    return 'lima';
+  end if;
+
+  if v_district = '' then
+    return 'por_revisar';
+  end if;
+
+  select org_id into v_org_id from stores where id = p_store_id;
+
+  if exists (
+    select 1
+    from cost_tariffs t
+    where t.org_id = v_org_id
+      and t.concept = 'primer_intento'
+      and t.courier is not null
+      and coverage_norm(t.courier) not in ('shalom', 'olva', 'olva courier')
+      and (t.region is not null or t.province is not null or t.district is not null)
+      and t.effective_from <= p_day
+      and (t.effective_to is null or t.effective_to >= p_day)
+      and (t.store_id is null or t.store_id = p_store_id)
+      and (t.region is null or coverage_norm(t.region) = v_region)
+      and (t.province is null or coverage_norm(t.province) = v_province)
+      and (
+        t.district is null
+        or cost_tariff_district_matches(
+          t.district,
+          p_region,
+          p_province,
+          p_district
+        )
+      )
+  ) then
+    return 'provincia_cod';
+  end if;
+
+  return 'agencia';
+end;
+$$;
+
+revoke all on function cost_tariff_district_matches(text, text, text, text)
+  from public, anon, authenticated;
+grant execute on function cost_tariff_district_matches(text, text, text, text)
+  to service_role;
+
+revoke all on function order_coverage_for(uuid, text, text, text, date)
+  from public, anon, authenticated;
+grant execute on function order_coverage_for(uuid, text, text, text, date)
+  to service_role;
+
+-- Corrige solo los pedidos afectados. Evita recalcular todo el histórico
+-- durante la migración; el trigger de 0083 conservará la clasificación en
+-- las sincronizaciones siguientes.
+update order_master
+set coverage = order_coverage_for(
+  store_id,
+  region,
+  province,
+  district,
+  current_date
+)
+where coverage_norm(region) = 'ayacucho'
+  and coverage_norm(province) = 'huamanga'
+  and coverage_norm(district) = 'huamanga';

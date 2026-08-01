@@ -12,8 +12,13 @@ import {
 
 const ORDER = "order-1";
 
-function payment(kind: string, status = "validado", orderId = ORDER): PaymentSnapshot {
-  return { kind, validation_status: status, order_id: orderId };
+function payment(
+  kind: string,
+  status = "validado",
+  orderId = ORDER,
+  amount = kind === "adelanto" ? 30 : kind === "diferencia" ? 70 : 100,
+): PaymentSnapshot {
+  return { kind, validation_status: status, order_id: orderId, amount };
 }
 
 function ctx(over: Partial<PickupKeyContext> = {}): PickupKeyContext {
@@ -22,6 +27,7 @@ function ctx(over: Partial<PickupKeyContext> = {}): PickupKeyContext {
     generalStatus: "en_proceso",
     pickupState: "disponible_para_recojo",
     payments: [payment("adelanto"), payment("diferencia")],
+    orderTotal: 100,
     hasKey: true,
     ...over,
   };
@@ -40,12 +46,12 @@ describe("canRevealPickupKey — las seis condiciones", () => {
     expect(v.blockers).toEqual([]);
   });
 
-  it("un pago total cargado pero sin validar todavía bloquea la clave", () => {
+  it("un pago total cargado y pendiente de revisión permite abrir la clave", () => {
     const v = canRevealPickupKey(
       ctx({ payments: [payment("total", "pendiente_revision")] }),
     );
-    expect(v.allowed).toBe(false);
-    expect(v.blockers).toEqual(["pago_total_no_validado"]);
+    expect(v.allowed).toBe(true);
+    expect(v.blockers).toEqual([]);
   });
 
   it("sin clave registrada no hay nada que mostrar", () => {
@@ -58,10 +64,10 @@ describe("canRevealPickupKey — las seis condiciones", () => {
     expect(v.blockers).toContain("adelanto_no_registrado");
   });
 
-  it("adelanto cargado pero sin validar: una imagen no basta", () => {
+  it("adelanto cargado pero pendiente de revisión cuenta para la suma", () => {
     const v = canRevealPickupKey(ctx({ payments: [payment("adelanto", "pendiente_revision"), payment("diferencia")] }));
-    expect(v.allowed).toBe(false);
-    expect(v.blockers).toContain("adelanto_no_validado");
+    expect(v.allowed).toBe(true);
+    expect(v.blockers).toEqual([]);
   });
 
   it("sin diferencia cargada", () => {
@@ -69,14 +75,45 @@ describe("canRevealPickupKey — las seis condiciones", () => {
     expect(v.blockers).toContain("diferencia_no_registrada");
   });
 
-  it("diferencia sin validar", () => {
+  it("diferencia pendiente de revisión cuenta para la suma", () => {
     const v = canRevealPickupKey(ctx({ payments: [payment("adelanto"), payment("diferencia", "pendiente_revision")] }));
-    expect(v.blockers).toContain("diferencia_no_validada");
+    expect(v.allowed).toBe(true);
+    expect(v.blockers).toEqual([]);
   });
 
   it("un comprobante rechazado cuenta como no registrado", () => {
     const v = canRevealPickupKey(ctx({ payments: [payment("adelanto"), payment("diferencia", "rechazado")] }));
     expect(v.blockers).toContain("diferencia_no_registrada");
+  });
+
+  it("un posible duplicado no permite abrir la clave", () => {
+    const v = canRevealPickupKey(ctx({
+      payments: [payment("adelanto"), payment("diferencia", "posible_duplicado")],
+    }));
+    expect(v.blockers).toContain("pago_observado");
+  });
+
+  it("bloquea cuando adelanto + diferencia no alcanzan el total", () => {
+    const v = canRevealPickupKey(ctx({
+      payments: [payment("adelanto", "pendiente_revision", ORDER, 30), payment("diferencia", "pendiente_revision", ORDER, 60)],
+    }));
+    expect(v.blockers).toContain("monto_insuficiente");
+  });
+
+  it("permite cuando adelanto + diferencia igualan o exceden el total", () => {
+    expect(canRevealPickupKey(ctx({
+      payments: [payment("adelanto", "pendiente_revision", ORDER, 30), payment("diferencia", "pendiente_revision", ORDER, 70)],
+    })).allowed).toBe(true);
+    expect(canRevealPickupKey(ctx({
+      payments: [payment("adelanto", "pendiente_revision", ORDER, 30), payment("diferencia", "pendiente_revision", ORDER, 75)],
+    })).allowed).toBe(true);
+  });
+
+  it("bloquea si no se conoce algún monto necesario", () => {
+    const v = canRevealPickupKey(ctx({
+      payments: [payment("adelanto"), payment("diferencia", "pendiente_revision", ORDER, Number.NaN)],
+    }));
+    expect(v.blockers).toContain("monto_no_informado");
   });
 
   it("un pago asociado a otro pedido bloquea", () => {

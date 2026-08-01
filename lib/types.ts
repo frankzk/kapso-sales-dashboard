@@ -33,6 +33,8 @@ export const BROWSE_SOURCE = "abandoned_browse";
 
 export interface OrderLineItem {
   title: string;
+  /** Shopify option combination, e.g. "38-39 / Negro". */
+  variant_title?: string | null;
   quantity: number;
   sku: string | null;
   product_id: string | null;

@@ -27,6 +27,7 @@ import {
   fetchOrdersPage,
   searchProductVariants,
   searchCatalogProducts,
+  listActiveShopifyCatalogVariants,
   createDraftOrder,
   getDraftOrderForEdit,
   resolveOrderDiscount,
@@ -175,7 +176,15 @@ describe("mapRestOrder", () => {
     ],
     customer: { phone: "+51 980 694 766" },
     line_items: [
-      { title: "Polo Aurela", quantity: 2, sku: "POLO-1", product_id: 1, variant_id: 11, price: "59.95" },
+      {
+        title: "Polo Aurela",
+        variant_title: "M / Negro",
+        quantity: 2,
+        sku: "POLO-1",
+        product_id: 1,
+        variant_id: 11,
+        price: "59.95",
+      },
       { title: "Gorro", quantity: 1, sku: "GORRO", product_id: 2, variant_id: 22, price: "80.00" },
     ],
   };
@@ -194,7 +203,12 @@ describe("mapRestOrder", () => {
     expect(row.kapso_conversation_id).toBe("conv_abc");
     expect(row.customer_phone).toBe("51980694766");
     expect(row.line_items).toHaveLength(2);
-    expect(row.line_items[0]).toMatchObject({ title: "Polo Aurela", quantity: 2, price: 59.95 });
+    expect(row.line_items[0]).toMatchObject({
+      title: "Polo Aurela",
+      variant_title: "M / Negro",
+      quantity: 2,
+      price: 59.95,
+    });
     expect(row.discount_codes).toEqual(["AURELA10"]); // REST [{code}] → upper-cased
   });
 
@@ -225,7 +239,11 @@ describe("mapGraphqlOrder", () => {
             quantity: 1,
             sku: "ZAP-1",
             product: { id: "gid://shopify/Product/9" },
-            variant: { id: "gid://shopify/ProductVariant/99" },
+            variant: {
+              id: "gid://shopify/ProductVariant/99",
+              title: "38-39 / Negro",
+              product: { id: "gid://shopify/Product/9" },
+            },
             originalUnitPriceSet: { shopMoney: { amount: "250.00" } },
           },
         },
@@ -245,6 +263,7 @@ describe("mapGraphqlOrder", () => {
     expect(row.discount_codes).toEqual(["AURELA10"]); // GraphQL [String] passthrough
     expect(row.line_items[0]).toMatchObject({
       title: "Zapatos",
+      variant_title: "38-39 / Negro",
       product_id: "9",
       variant_id: "99",
       price: 250,
@@ -629,6 +648,82 @@ describe("order form (catalog search + draft create/read)", () => {
         text: async () => JSON.stringify(payload),
       }) as Response) as unknown as typeof fetch;
   }
+
+  it("listActiveShopifyCatalogVariants pagina el catálogo activo completo", async () => {
+    const pages = [
+      {
+        data: {
+          productVariants: {
+            nodes: [
+              {
+                id: "gid://shopify/ProductVariant/11",
+                title: "Default Title",
+                sku: "ASTA-120",
+                inventoryQuantity: 81,
+                product: {
+                  id: "gid://shopify/Product/1",
+                  title: "ASTAXANTINA - Antioxidante",
+                  status: "ACTIVE",
+                },
+              },
+            ],
+            pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+          },
+        },
+      },
+      {
+        data: {
+          productVariants: {
+            nodes: [
+              {
+                id: "gid://shopify/ProductVariant/22",
+                title: "38-39 / Negro",
+                sku: "CLOUD-3839-N",
+                inventoryQuantity: 3,
+                product: {
+                  id: "gid://shopify/Product/2",
+                  title: "CloudSlides",
+                  status: "ACTIVE",
+                },
+              },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    ];
+    let call = 0;
+    const fetchImpl = (async () => {
+      const payload = pages[call++];
+      return {
+        ok: true,
+        status: 200,
+        json: async () => payload,
+        text: async () => JSON.stringify(payload),
+      } as Response;
+    }) as typeof fetch;
+
+    const out = await listActiveShopifyCatalogVariants({
+      domain: "x.myshopify.com",
+      token: "t",
+      fetchImpl,
+    });
+
+    expect(call).toBe(2);
+    expect(out).toEqual([
+      expect.objectContaining({
+        productTitle: "ASTAXANTINA - Antioxidante",
+        variantTitle: null,
+        sku: "ASTA-120",
+        inventory: 81,
+      }),
+      expect.objectContaining({
+        productTitle: "CloudSlides",
+        variantTitle: "38-39 / Negro",
+        sku: "CLOUD-3839-N",
+      }),
+    ]);
+  });
 
   it("searchProductVariants flattens variants with price + stock", async () => {
     const resp = {

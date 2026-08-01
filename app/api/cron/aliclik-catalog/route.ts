@@ -53,7 +53,14 @@ async function run(req: NextRequest) {
     // Una tienda sin token no es un error: la mayoría no usará Aliclik.
     if (!creds?.aliclik_api_token) continue;
     try {
-      const report = await syncAliclikCatalog(storeId, { apiToken: creds.aliclik_api_token }, admin);
+      const report = await syncAliclikCatalog(
+        storeId,
+        { apiToken: creds.aliclik_api_token },
+        admin,
+        creds.shopify_token
+          ? { domain: creds.shopify_domain, token: creds.shopify_token }
+          : undefined,
+      );
       reports.push({ storeId, ...report });
     } catch (e) {
       reports.push({ storeId, ok: false, error: e instanceof Error ? e.message : String(e) });

@@ -646,6 +646,7 @@ describe("permiso shalom.create_guide", () => {
     const vendedora = permissionsFor(["vendedora"]);
     expect(vendedora.has("shalom.create_guide")).toBe(true);
     expect(vendedora.has("shalom.view_pickup_key")).toBe(false);
+    expect(vendedora.has("shalom.reveal_pickup_key")).toBe(true);
   });
 
   it("un viewer no crea guías", () => {

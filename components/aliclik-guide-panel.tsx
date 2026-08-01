@@ -20,7 +20,9 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { Card } from "@/components/ui";
 import {
   createAliclikGuide,
+  linkExistingAliclikGuide,
   previewAliclikGuide,
+  type ExistingAliclikGuidePreview,
   type AliclikPreview,
 } from "@/app/dashboard/pedidos/aliclik-actions";
 import { isShortenedMapsLink } from "@/lib/aliclik-geo";
@@ -136,9 +138,11 @@ export function AliclikGuidePanel({
   return (
     <Card>
       <div className="space-y-4">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-900">Crear guía en Aliclik</h3>
-          <p className="mt-1 text-xs text-slate-500">
+        <ExistingGuideLinkPanel orderId={orderId} onLinked={onCreated} />
+        <div className="border-t border-slate-200 pt-4">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">Crear guía en Aliclik</h3>
+            <p className="mt-1 text-xs text-slate-500">
             Cotiza primero: la cotización no crea nada y sirve para confirmar cobertura y ubicación.
           </p>
         </div>
@@ -369,6 +373,7 @@ export function AliclikGuidePanel({
             </p>
           </div>
         ) : null}
+        </div>
       </div>
     </Card>
   );
@@ -379,6 +384,261 @@ export function AliclikGuidePanel({
  * distingue "trabajando" de "roto", y aquí la espera puede pasar de unos
  * segundos: Aliclik va lento a ratos y el cliente reintenta hasta tres veces.
  */
+function ExistingGuideLinkPanel({
+  orderId,
+  onLinked,
+}: {
+  orderId: string;
+  onLinked: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [guideCode, setGuideCode] = useState("");
+  // Se conserva el tipo del detalle anterior durante la transición al flujo
+  // atómico. Nunca se asigna: el servidor resuelve y vincula en una sola acción.
+  const [preview] = useState<ExistingAliclikGuidePreview | null>(null);
+  const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [confirmedOrderName, setConfirmedOrderName] = useState("");
+  const [manualReason, setManualReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [pending, startTransition] = useTransition();
+
+  const findAndLink = () => {
+    setMessage(null);
+    setBusy(true);
+    startTransition(async () => {
+      try {
+        const result = await linkExistingAliclikGuide(orderId, guideCode);
+        if (result.error) {
+          setMessage({ kind: "error", text: result.error });
+          return;
+        }
+        setMessage({
+          kind: "ok",
+          text: result.notice ?? "Guía vinculada y seguimiento activado.",
+        });
+        setGuideCode("");
+        onLinked();
+      } finally {
+        setBusy(false);
+      }
+    });
+  };
+  const link = findAndLink;
+
+  return (
+    <div className="rounded-xl border border-sky-200 bg-sky-50/60">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center justify-between gap-4 px-3 py-3 text-left"
+        aria-expanded={open}
+      >
+        <span>
+          <span className="block text-sm font-semibold text-slate-900">
+            Vincular una guía ya creada en Aliclik
+          </span>
+          <span className="mt-0.5 block text-xs text-slate-600">
+            La busca, valida duplicados y activa el seguimiento en un solo paso.
+          </span>
+        </span>
+        <span className="text-base text-sky-700" aria-hidden="true">
+          {open ? "−" : "+"}
+        </span>
+      </button>
+
+      {open ? (
+        <div className="space-y-3 border-t border-sky-200 px-3 py-3">
+          <div className="flex gap-2">
+            <input
+              value={guideCode}
+              onChange={(event) => {
+                setGuideCode(event.target.value);
+                setMessage(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && guideCode.trim() && !pending) findAndLink();
+              }}
+              placeholder="Número de guía Aliclik"
+              aria-label="Número de guía Aliclik existente"
+              className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm uppercase"
+            />
+            <button
+              type="button"
+              onClick={findAndLink}
+              disabled={!guideCode.trim() || pending}
+              className="inline-flex items-center gap-2 rounded-lg bg-sky-700 px-3 py-2 text-sm font-medium text-white hover:bg-sky-800 disabled:opacity-50"
+            >
+              {busy ? <Spinner /> : null}
+              {busy ? "Buscando y vinculando…" : "Buscar y vincular guía"}
+            </button>
+          </div>
+
+          <p className="text-xs leading-5 text-slate-600">
+            Si no existe, pertenece a otro pedido o ya está vinculada, no se modifica nada.
+          </p>
+
+          {message ? (
+            <p
+              className={`rounded-lg border px-3 py-2 text-sm ${
+                message.kind === "ok"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-rose-200 bg-rose-50 text-rose-700"
+              }`}
+            >
+              {message.text}
+            </p>
+          ) : null}
+
+          {preview?.ok ? (
+            <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-mono text-sm font-semibold text-slate-900">
+                    {preview.guideCode}
+                  </p>
+                  {preview.orderNumber && preview.orderNumber !== preview.guideCode ? (
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Pedido técnico Aliclik: {preview.orderNumber}
+                    </p>
+                  ) : null}
+                  <p className="mt-0.5 text-xs text-slate-500">{preview.statusLabel ?? "Sin estado"}</p>
+                </div>
+                {preview.total != null ? (
+                  <p className="text-sm font-semibold text-slate-900">
+                    S/ {preview.total.toFixed(2)}
+                  </p>
+                ) : null}
+              </div>
+
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 border-t border-slate-100 pt-2 text-xs">
+                <div>
+                  <dt className="text-slate-500">
+                    {preview.verificationMode === "manual_portal"
+                      ? "Cliente del pedido"
+                      : "Cliente en Aliclik"}
+                  </dt>
+                  <dd className="mt-0.5 font-medium text-slate-800">
+                    {preview.customerName ?? "No informado"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-slate-500">Teléfono</dt>
+                  <dd className="mt-0.5 font-medium text-slate-800">
+                    {preview.customerPhone ?? "No informado"}
+                  </dd>
+                </div>
+                <div className="col-span-2">
+                  <dt className="text-slate-500">Destino</dt>
+                  <dd className="mt-0.5 text-slate-800">
+                    {[
+                      preview.shippingAddress,
+                      preview.shippingDistrict,
+                      preview.shippingProvince,
+                      preview.shippingDepartment,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "No informado"}
+                  </dd>
+                </div>
+                {preview.productDetail ? (
+                  <div className="col-span-2">
+                    <dt className="text-slate-500">Producto</dt>
+                    <dd className="mt-0.5 text-slate-800">{preview.productDetail}</dd>
+                  </div>
+                ) : null}
+              </dl>
+
+              {preview.matchExplanation ? (
+                <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                  {preview.verificationMode === "manual_portal"
+                    ? `El código de guía coincide por ${preview.matchExplanation}.`
+                    : `Coincidencia validada por ${preview.matchExplanation}. Aliclik no expone el código ` +
+                      "impreso AUR5X por API; el pedido técnico mostrado arriba sí fue validado."}
+                </p>
+              ) : null}
+
+              {preview.verificationMode === "manual_portal" ? (
+                <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                  <div>
+                    <p className="font-semibold">Vinculación excepcional auditada</p>
+                    <p className="mt-1 text-xs leading-5">
+                      La API oficial solo lista pedidos creados por la integración con código ALC.
+                      Esta guía creada en el portal AURELA/KENKU no puede aparecer allí. El código
+                      sí termina en el número de {preview.expectedOrderName}; también se comprobará
+                      que no esté vinculado a otro pedido.
+                    </p>
+                    {preview.apiCandidateCount != null ? (
+                      <p className="mt-1 text-xs">
+                        Consulta API: {preview.apiCandidateCount} pedidos ALC revisados
+                        {preview.apiMatchSummary
+                          ? `; mejor coincidencia auxiliar: ${preview.apiMatchSummary}.`
+                          : "."}
+                      </p>
+                    ) : null}
+                  </div>
+                  <label className="block">
+                    <span className="text-xs font-medium">
+                      Confirma el pedido escribiendo {preview.expectedOrderName}
+                    </span>
+                    <input
+                      value={confirmedOrderName}
+                      onChange={(event) => setConfirmedOrderName(event.target.value)}
+                      placeholder={preview.expectedOrderName ?? "Código del pedido"}
+                      className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm uppercase"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-medium">Motivo de la vinculación</span>
+                    <textarea
+                      value={manualReason}
+                      onChange={(event) => setManualReason(event.target.value)}
+                      placeholder="Ej.: Guía creada directamente en el portal Aliclik."
+                      rows={2}
+                      className="mt-1 w-full resize-none rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm"
+                    />
+                  </label>
+                </div>
+              ) : null}
+
+              {preview.phoneMatches === false || preview.totalMatches === false ? (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  <p className="font-semibold">Revisa antes de vincular</p>
+                  {preview.phoneMatches === false ? (
+                    <p className="mt-0.5">El teléfono de Aliclik no coincide con el del pedido.</p>
+                  ) : null}
+                  {preview.totalMatches === false ? (
+                    <p className="mt-0.5">El monto de Aliclik no coincide con el total del pedido.</p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {preview.alreadyLinked ? (
+                <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                  Esta guía ya está vinculada a este pedido y su seguimiento está activo.
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  onClick={link}
+                  disabled={
+                    pending ||
+                    (preview.verificationMode === "manual_portal" &&
+                      (!confirmedOrderName.trim() || manualReason.trim().length < 8))
+                  }
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-sky-700 px-3 py-2 text-sm font-medium text-white hover:bg-sky-800 disabled:opacity-60"
+                >
+                  {busy ? <Spinner /> : null}
+                  {busy ? "Vinculando…" : "Vincular y activar seguimiento"}
+                </button>
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function Spinner() {
   return (
     <svg

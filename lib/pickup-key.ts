@@ -52,6 +52,7 @@ export interface PaymentSnapshot {
   kind: string;
   validation_status: string;
   order_id: string;
+  amount: number | null;
 }
 
 export interface PickupKeyContext {
@@ -61,6 +62,8 @@ export interface PickupKeyContext {
   /** Sub-estado de agencia, cuando se conoce (§10). */
   pickupState: string | null;
   payments: readonly PaymentSnapshot[];
+  /** Total que debe quedar cubierto antes de entregar la clave. */
+  orderTotal: number | null;
   /** ¿Existe una clave registrada para este pedido? */
   hasKey: boolean;
 }
@@ -69,10 +72,10 @@ export interface PickupKeyContext {
 export type PickupBlocker =
   | "sin_clave"
   | "adelanto_no_registrado"
-  | "adelanto_no_validado"
   | "diferencia_no_registrada"
-  | "diferencia_no_validada"
-  | "pago_total_no_validado"
+  | "monto_no_informado"
+  | "monto_insuficiente"
+  | "pago_observado"
   | "pago_de_otro_pedido"
   | "pedido_cerrado"
   | "paquete_no_disponible";
@@ -80,10 +83,10 @@ export type PickupBlocker =
 export const BLOCKER_LABEL: Record<PickupBlocker, string> = {
   sin_clave: "Todavía no se ha registrado la clave de recojo.",
   adelanto_no_registrado: "Falta cargar el Yape de adelanto.",
-  adelanto_no_validado: "El Yape de adelanto está cargado pero sin validar.",
   diferencia_no_registrada: "Falta cargar el Yape de la diferencia.",
-  diferencia_no_validada: "El Yape de la diferencia está cargado pero sin validar.",
-  pago_total_no_validado: "El pago total está cargado pero sin validar.",
+  monto_no_informado: "Falta informar el monto de uno de los pagos o el total del pedido.",
+  monto_insuficiente: "La suma de los pagos todavía no cubre el total del pedido.",
+  pago_observado: "Uno de los comprobantes está rechazado o marcado como posible duplicado.",
   pago_de_otro_pedido: "Uno de los comprobantes está asociado a otro pedido.",
   pedido_cerrado: "El pedido está anulado, entregado o devuelto.",
   paquete_no_disponible: "El paquete todavía no está disponible para recojo.",
@@ -105,8 +108,12 @@ const AVAILABLE_PICKUP_STATES: readonly string[] = [
 ];
 
 function find(payments: readonly PaymentSnapshot[], kind: PaymentKind): PaymentSnapshot | undefined {
-  // Un comprobante rechazado no cuenta como registrado: hay que volver a subirlo.
   return payments.find((p) => p.kind === kind && p.validation_status !== "rechazado");
+}
+
+function amountInCents(payment: PaymentSnapshot | undefined): number | null {
+  const amount = Number(payment?.amount);
+  return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) : null;
 }
 
 /**
@@ -115,8 +122,9 @@ function find(payments: readonly PaymentSnapshot[], kind: PaymentKind): PaymentS
  * descubrirlo de uno en uno.
  *
  * Condiciones (de la especificación):
- *   - el adelanto registrado y validado;
- *   - la diferencia registrada y validada;
+ *   - el adelanto y la diferencia cargados (no hace falta revisión admin);
+ *   - o un pago total cargado;
+ *   - la suma registrada alcanza o supera el total del pedido;
  *   - ambos pagos del mismo pedido;
  *   - ningún comprobante asociado a otro pedido;
  *   - el pedido no anulado, entregado ni devuelto;
@@ -132,13 +140,28 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
   const total = find(ctx.payments, "total");
 
   if (total) {
-    if (total.validation_status !== "validado") blockers.push("pago_total_no_validado");
+    if (total.validation_status === "posible_duplicado") blockers.push("pago_observado");
   } else {
     if (!adelanto) blockers.push("adelanto_no_registrado");
-    else if (adelanto.validation_status !== "validado") blockers.push("adelanto_no_validado");
-
     if (!diferencia) blockers.push("diferencia_no_registrada");
-    else if (diferencia.validation_status !== "validado") blockers.push("diferencia_no_validada");
+    if ([adelanto, diferencia].some((p) => p?.validation_status === "posible_duplicado")) {
+      blockers.push("pago_observado");
+    }
+  }
+
+  const hasRequiredPayments = Boolean(total || (adelanto && diferencia));
+  if (hasRequiredPayments) {
+    const orderTotal = Number(ctx.orderTotal);
+    const requiredCents = Number.isFinite(orderTotal) && orderTotal > 0
+      ? Math.round(orderTotal * 100)
+      : null;
+    const selectedPayments = total ? [total] : [adelanto, diferencia];
+    const amounts = selectedPayments.map(amountInCents);
+    if (requiredCents === null || amounts.some((amount) => amount === null)) {
+      blockers.push("monto_no_informado");
+    } else if (amounts.reduce<number>((sum, amount) => sum + (amount ?? 0), 0) < requiredCents) {
+      blockers.push("monto_insuficiente");
+    }
   }
 
   // Los índices únicos de 0049 impiden que un comprobante se asocie a dos

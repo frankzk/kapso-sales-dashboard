@@ -15,6 +15,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
+import { pickOperationalWarehouse } from "@/lib/aliclik-warehouse";
 import {
   listAgencies,
   listAllProducts,
@@ -22,6 +23,11 @@ import {
   type AliclikClientOpts,
   type AliclikProduct,
 } from "@/lib/aliclik";
+import {
+  listActiveShopifyCatalogVariants,
+  type ActiveShopifyCatalogVariant,
+  type ShopifyClientOpts,
+} from "@/lib/shopify";
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -48,7 +54,10 @@ export interface AliclikSkuMapRow {
 /** Lo que el resolutor necesita de cada línea del pedido. */
 export interface OrderLineInput {
   title: string | null;
+  variantTitle?: string | null;
   sku: string | null;
+  productId?: string | null;
+  variantId?: string | null;
   quantity: number;
   price: number | null;
 }
@@ -86,6 +95,8 @@ export type ResolveResult =
       ok: true;
       warehouseId: number;
       warehouseName: string | null;
+      /** Almacenes que contienen todos los EAN, en orden de preferencia. */
+      warehouseCandidates: { id: number; name: string | null }[];
       items: ResolvedItem[];
       /** Hora de corte del almacén (solo relevante en agencia). */
       formatTimeAgency: string | null;
@@ -175,7 +186,35 @@ export function resolveAliclikItems(
   }
 
   const bySku = new Map(mapping.map((m) => [normalizeSku(m.shopify_sku), m.ean]));
-  const byEan = new Map(skus.map((s) => [s.ean, s]));
+  const mappedEans = new Set(mapping.map((m) => m.ean));
+  const operationalWarehouseId = pickOperationalWarehouse(skus, mappedEans);
+  const byEan = new Map<string, AliclikSkuRow[]>();
+  for (const row of skus) {
+    const rows = byEan.get(row.ean) ?? [];
+    rows.push(row);
+    byEan.set(row.ean, rows);
+  }
+
+  // El mismo EAN puede existir en varios almacenes. Se prioriza el almacén
+  // operativo de la tienda y se deja un desempate estable para no depender del
+  // orden arbitrario de Postgres.
+  const pickSkuRow = (ean: string): AliclikSkuRow | null => {
+    const rows = byEan.get(ean) ?? [];
+    const eligible =
+      opts.modality === "agency" ? rows.filter((row) => row.is_agency_eligible) : rows;
+    const candidates = eligible.length ? eligible : rows;
+    return (
+      candidates
+        .slice()
+        .sort((a, b) => {
+          const aPreferred = a.warehouse_id === operationalWarehouseId ? 1 : 0;
+          const bPreferred = b.warehouse_id === operationalWarehouseId ? 1 : 0;
+          if (aPreferred !== bPreferred) return bPreferred - aPreferred;
+          return (a.warehouse_id ?? Number.MAX_SAFE_INTEGER) -
+            (b.warehouse_id ?? Number.MAX_SAFE_INTEGER);
+        })[0] ?? null
+    );
+  };
 
   // 1. ¿Todas las líneas traen SKU?
   const noSku = real.filter((l) => !normalizeSku(l.sku));
@@ -208,7 +247,7 @@ export function resolveAliclikItems(
   // 3. ¿El EAN mapeado sigue existiendo en el catálogo?
   const resolved = real.map((l) => {
     const ean = bySku.get(normalizeSku(l.sku))!;
-    return { line: l, ean, sku: byEan.get(ean) ?? null };
+    return { line: l, ean, sku: pickSkuRow(ean) };
   });
   const unknown = resolved.filter((r) => !r.sku);
   if (unknown.length) {
@@ -222,6 +261,34 @@ export function resolveAliclikItems(
       },
     };
   }
+
+  // El mismo EAN puede existir en varios almacenes. Para un respaldo seguro
+  // necesitamos la INTERSECCIÓN: solo son compatibles los almacenes que
+  // contienen todos los productos del pedido.
+  const uniqueEans = [...new Set(resolved.map((r) => r.ean))];
+  const compatibleIds = uniqueEans.reduce<Set<number> | null>((common, ean) => {
+    const ids = new Set(
+      (byEan.get(ean) ?? [])
+        .filter((row) => opts.modality !== "agency" || row.is_agency_eligible)
+        .map((row) => row.warehouse_id)
+        .filter((id): id is number => id !== null && id !== undefined),
+    );
+    if (common === null) return ids;
+    return new Set([...common].filter((id) => ids.has(id)));
+  }, null);
+  const warehouseNames = new Map<number, string | null>();
+  for (const row of skus) {
+    if (row.warehouse_id != null && !warehouseNames.has(row.warehouse_id)) {
+      warehouseNames.set(row.warehouse_id, row.warehouse_name ?? null);
+    }
+  }
+  const warehouseCandidates = [...(compatibleIds ?? new Set<number>())]
+    .sort((a, b) => {
+      if (a === operationalWarehouseId) return -1;
+      if (b === operationalWarehouseId) return 1;
+      return a - b;
+    })
+    .map((id) => ({ id, name: warehouseNames.get(id) ?? null }));
 
   // 4. Agencia: el SKU tiene que estar habilitado para Shalom.
   if (opts.modality === "agency") {
@@ -345,7 +412,85 @@ export function resolveAliclikItems(
   const formatTimeAgency =
     resolved.map((r) => r.sku!.format_time_agency).find((t) => t && t.trim()) ?? null;
 
-  return { ok: true, warehouseId, warehouseName, items, formatTimeAgency, warnings };
+  return {
+    ok: true,
+    warehouseId,
+    warehouseName,
+    warehouseCandidates:
+      warehouseCandidates.length > 0
+        ? warehouseCandidates
+        : [{ id: warehouseId, name: warehouseName }],
+    items,
+    formatTimeAgency,
+    warnings,
+  };
+}
+
+function normalizeShopifyResourceId(raw: string | null | undefined): string {
+  const value = (raw ?? "").trim();
+  return value.match(/([^/]+)$/)?.[1]?.toLowerCase() ?? "";
+}
+
+function uniqueSku(
+  variants: readonly ActiveShopifyCatalogVariant[],
+): string | null {
+  const skus = [
+    ...new Set(variants.map((variant) => normalizeSku(variant.sku)).filter(Boolean)),
+  ];
+  return skus.length === 1 ? skus[0]! : null;
+}
+
+/**
+ * Repara el SKU de una línea histórica usando el catálogo ACTUAL de Shopify.
+ *
+ * Shopify permite asignar el SKU después de haber creado el pedido. En ese
+ * caso `orders.line_items` conserva el SKU vacío para siempre, aunque el
+ * catálogo y el mapeo de Aliclik ya estén correctos. La identidad estable es
+ * la variante (preferida) o, para productos de una sola variante, el producto.
+ * El nombre solo se usa si produce exactamente un SKU; nunca se adivina entre
+ * dos tallas, colores o presentaciones.
+ */
+export function hydrateOrderLineSkusFromCatalog(
+  lines: readonly OrderLineInput[],
+  variants: readonly ActiveShopifyCatalogVariant[],
+): OrderLineInput[] {
+  const usable = variants.filter((variant) => normalizeSku(variant.sku));
+  const byVariantId = new Map<string, ActiveShopifyCatalogVariant[]>();
+  const byProductId = new Map<string, ActiveShopifyCatalogVariant[]>();
+  const byTitle = new Map<string, ActiveShopifyCatalogVariant[]>();
+
+  for (const variant of usable) {
+    const variantId = normalizeShopifyResourceId(variant.variantId);
+    const productId = normalizeShopifyResourceId(variant.productId);
+    const title = normalizeProductName(variant.productTitle);
+    if (variantId) byVariantId.set(variantId, [...(byVariantId.get(variantId) ?? []), variant]);
+    if (productId) byProductId.set(productId, [...(byProductId.get(productId) ?? []), variant]);
+    if (title) byTitle.set(title, [...(byTitle.get(title) ?? []), variant]);
+  }
+
+  return lines.map((line) => {
+    if (normalizeSku(line.sku)) return line;
+
+    const variantId = normalizeShopifyResourceId(line.variantId);
+    const productId = normalizeShopifyResourceId(line.productId);
+    const title = normalizeProductName(line.title);
+    const variantTitle = normalizeProductName(line.variantTitle);
+
+    let sku = variantId ? uniqueSku(byVariantId.get(variantId) ?? []) : null;
+    if (!sku && productId) sku = uniqueSku(byProductId.get(productId) ?? []);
+
+    const titleCandidates = title ? (byTitle.get(title) ?? []) : [];
+    if (!sku && variantTitle) {
+      sku = uniqueSku(
+        titleCandidates.filter(
+          (candidate) => normalizeProductName(candidate.variantTitle) === variantTitle,
+        ),
+      );
+    }
+    if (!sku) sku = uniqueSku(titleCandidates);
+
+    return sku ? { ...line, sku } : line;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +532,7 @@ export function flattenCatalog(
 export interface CatalogSyncResult {
   ok: boolean;
   skus: number;
+  shopifySkus: number;
   agencySkus: number;
   agencies: number;
   packageSizes: number;
@@ -408,10 +554,12 @@ export async function syncAliclikCatalog(
   storeId: string,
   opts: AliclikClientOpts,
   admin: SupabaseClient = createAdminSupabase(),
+  shopifyOpts?: ShopifyClientOpts,
 ): Promise<CatalogSyncResult> {
   const out: CatalogSyncResult = {
     ok: true,
     skus: 0,
+    shopifySkus: 0,
     agencySkus: 0,
     agencies: 0,
     packageSizes: 0,
@@ -471,9 +619,10 @@ export async function syncAliclikCatalog(
     if (s) seeds.set(s, { shopify_sku: s, ean: String(r.ean) });
   }
 
-  // Por nombre: hace falta el catálogo de Shopify, que aquí se deriva de las
-  // líneas de pedido — es la única fuente de SKU+título que tiene el sistema.
-  const shopifyProducts = await loadShopifySkuNames(storeId, admin);
+  // Para asociar por nombre se usa primero el catálogo activo de Shopify. Los
+  // productos observados en pedidos quedan como respaldo histórico.
+  const shopifyProducts = await loadShopifySkuNames(storeId, admin, 365, shopifyOpts);
+  out.shopifySkus = shopifyProducts.size;
   if (shopifyProducts.size) {
     // Un nombre que apunta a DOS EAN distintos es ambiguo: no se siembra ninguno
     // y queda para que lo decida una persona.
@@ -555,17 +704,115 @@ export async function syncAliclikCatalog(
 /**
  * SKU → título de los productos de Shopify de una tienda.
  *
- * El sistema no guarda un catálogo de Shopify: los productos solo existen dentro
- * de `orders.line_items`. Así que se derivan de ahí, quedándose con el título
- * más reciente de cada SKU (un producto puede haberse renombrado, y el nombre
- * que Aliclik tiene es el de ahora).
- *
- * Se limita a los pedidos recientes a propósito: un SKU que no se vende desde
- * hace un año no necesita mapeo, y recorrer la tabla entera para eso sería caro.
+ * La fuente primaria es el catálogo activo de Shopify, paginado directamente
+ * desde la Admin API. Los `orders.line_items` recientes se conservan como
+ * respaldo para SKUs históricos o productos que ya no estén activos.
  */
 export interface ShopifySkuDetails {
+  shopifySku: string | null;
   title: string;
   variantTitle: string | null;
+  productId: string | null;
+  variantId: string | null;
+}
+
+const SHOPIFY_NO_SKU_PREFIX = "__SHOPIFY_NO_SKU__:";
+
+/**
+ * Conserva también las variantes activas que todavía no tienen SKU. No pueden
+ * mapearse a Aliclik, pero deben ser visibles para que el equipo pueda corregir
+ * el dato en Shopify en vez de confundir "sin SKU" con "no sincronizado".
+ */
+export function collectActiveShopifyCatalogDetails(
+  variants: readonly ActiveShopifyCatalogVariant[],
+  out = new Map<string, ShopifySkuDetails>(),
+): Map<string, ShopifySkuDetails> {
+  for (const variant of variants) {
+    const sku = normalizeSku(variant.sku);
+    const title = variant.productTitle.trim();
+    if (!title) continue;
+    const rowKey = sku || `${SHOPIFY_NO_SKU_PREFIX}${variant.variantId || variant.productId}`;
+    out.set(rowKey, {
+      shopifySku: sku || null,
+      title,
+      variantTitle: variant.variantTitle,
+      productId: variant.productId || null,
+      variantId: variant.variantId || null,
+    });
+  }
+  return out;
+}
+
+type ShopifySkuItem = {
+  sku?: string | null;
+  title?: string | null;
+  name?: string | null;
+  variant_title?: string | null;
+  variantTitle?: string | null;
+  variant?: { title?: string | null } | null;
+};
+
+function normalizedVariantTitle(item: ShopifySkuItem): string | null {
+  const value = (
+    item.variant_title ??
+    item.variantTitle ??
+    item.variant?.title ??
+    ""
+  ).trim();
+  return value && value.toLowerCase() !== "default title" ? value : null;
+}
+
+/**
+ * Las sincronizaciones antiguas no copiaban la variante a `line_items`, pero
+ * el webhook original sí quedó completo en `raw`. Se combinan ambas fuentes
+ * para reparar el catálogo histórico sin esperar una venta nueva.
+ */
+function skuItemsFromOrder(lineItems: unknown, raw: unknown): ShopifySkuItem[] {
+  const stored = Array.isArray(lineItems) ? (lineItems as ShopifySkuItem[]) : [];
+  if (!raw || typeof raw !== "object") return stored;
+
+  const payload = raw as {
+    line_items?: unknown;
+    lineItems?: { edges?: Array<{ node?: ShopifySkuItem | null }> } | null;
+  };
+  const rest = Array.isArray(payload.line_items)
+    ? (payload.line_items as ShopifySkuItem[])
+    : [];
+  const graphql = Array.isArray(payload.lineItems?.edges)
+    ? payload.lineItems.edges
+        .map((edge) => edge?.node)
+        .filter((item): item is ShopifySkuItem => Boolean(item))
+    : [];
+
+  return [...stored, ...rest, ...graphql];
+}
+
+export function collectShopifySkuDetails(
+  rows: Array<{ line_items: unknown; raw: unknown }>,
+  out = new Map<string, ShopifySkuDetails>(),
+): Map<string, ShopifySkuDetails> {
+  for (const row of rows) {
+    for (const item of skuItemsFromOrder(row.line_items, row.raw)) {
+      const sku = normalizeSku(item.sku);
+      const title = (item.title ?? item.name ?? "").trim();
+      if (!sku || !title) continue;
+
+      const variantTitle = normalizedVariantTitle(item);
+      const current = out.get(sku);
+      if (!current) {
+        out.set(sku, {
+          shopifySku: sku,
+          title,
+          variantTitle,
+          productId: null,
+          variantId: null,
+        });
+      } else if (!current.variantTitle && variantTitle) {
+        out.set(sku, { ...current, variantTitle });
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -578,44 +825,50 @@ export async function loadShopifySkuDetails(
   storeId: string,
   admin: SupabaseClient = createAdminSupabase(),
   sinceDays = 365,
+  shopifyOpts?: ShopifyClientOpts,
 ): Promise<Map<string, ShopifySkuDetails>> {
   const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
   const out = new Map<string, ShopifySkuDetails>();
-  const seenAt = new Map<string, string>();
+
+  // Fuente primaria: catálogo activo real. Antes esta pantalla se armaba solo
+  // con productos que ya habían aparecido en `orders.line_items`; por eso un
+  // producto nuevo como Astaxantina era invisible hasta conseguir una venta.
+  if (shopifyOpts) {
+    const variants = await listActiveShopifyCatalogVariants(shopifyOpts);
+    collectActiveShopifyCatalogDetails(variants, out);
+  }
 
   // Paginado: PostgREST corta en 1000 filas por respuesta.
   const PAGE = 1000;
   for (let from = 0; from < 50_000; from += PAGE) {
     const { data, error } = await admin
       .from("orders")
-      .select("created_at,line_items")
+      .select(
+        "created_at,line_items,raw_line_items:raw->line_items,raw_graphql_line_items:raw->lineItems",
+      )
       .eq("store_id", storeId)
       .gte("created_at", since)
       .order("created_at", { ascending: false })
       .range(from, from + PAGE - 1);
     if (error || !data?.length) break;
 
-    for (const row of data as { created_at: string; line_items: unknown }[]) {
-      const items = Array.isArray(row.line_items) ? row.line_items : [];
-      for (const it of items as {
-        sku?: string | null;
-        title?: string | null;
-        variant_title?: string | null;
-        variantTitle?: string | null;
-      }[]) {
-        const sku = normalizeSku(it.sku);
-        const title = (it.title ?? "").trim();
-        if (!sku || !title) continue;
-        const rawVariant = (it.variant_title ?? it.variantTitle ?? "").trim();
-        const variantTitle =
-          rawVariant && rawVariant.toLowerCase() !== "default title" ? rawVariant : null;
-        const prev = seenAt.get(sku);
-        if (!prev || row.created_at > prev) {
-          seenAt.set(sku, row.created_at);
-          out.set(sku, { title, variantTitle });
-        }
-      }
-    }
+    collectShopifySkuDetails(
+      (
+        data as Array<{
+          created_at: string;
+          line_items: unknown;
+          raw_line_items: unknown;
+          raw_graphql_line_items: unknown;
+        }>
+      ).map((row) => ({
+        line_items: row.line_items,
+        raw: {
+          line_items: row.raw_line_items,
+          lineItems: row.raw_graphql_line_items,
+        },
+      })),
+      out,
+    );
     if (data.length < PAGE) break;
   }
   return out;
@@ -626,9 +879,14 @@ export async function loadShopifySkuNames(
   storeId: string,
   admin: SupabaseClient = createAdminSupabase(),
   sinceDays = 365,
+  shopifyOpts?: ShopifyClientOpts,
 ): Promise<Map<string, string>> {
-  const details = await loadShopifySkuDetails(storeId, admin, sinceDays);
-  return new Map([...details].map(([sku, item]) => [sku, item.title]));
+  const details = await loadShopifySkuDetails(storeId, admin, sinceDays, shopifyOpts);
+  return new Map(
+    [...details.values()]
+      .filter((item): item is ShopifySkuDetails & { shopifySku: string } => Boolean(item.shopifySku))
+      .map((item) => [item.shopifySku, item.title]),
+  );
 }
 
 /** Columnas del espejo que necesita el resolutor. */

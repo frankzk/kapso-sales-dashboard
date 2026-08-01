@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   describeDuplicate,
   findDuplicate,
+  normalizeManualOperationNumber,
   normalizeOperationNumber,
   type CandidatePayment,
   type ExistingPayment,
@@ -58,6 +59,12 @@ describe("findDuplicate — identificadores fuertes", () => {
     expect(normalizeOperationNumber("30")).toBeNull();
     expect(normalizeOperationNumber("551")).toBeNull();
     expect(normalizeOperationNumber("030")).toBeNull();
+  });
+
+  it("acepta una operación bancaria corta solo cuando se transcribe manualmente", () => {
+    expect(normalizeOperationNumber("5782")).toBeNull();
+    expect(normalizeManualOperationNumber(" 57-82 ")).toBe("5782");
+    expect(normalizeManualOperationNumber("030")).toBeNull();
   });
 
   it("dos Yapes de S/30 con operaciones distintas no son duplicados", () => {

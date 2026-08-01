@@ -52,11 +52,19 @@ export interface AliclikClientOpts {
   siteUrl?: string;
   /** Secreto interno del proxy Edge. Por defecto `env.cronSecret()`. */
   internalSecret?: string;
+  /** Espera base entre reintentos idempotentes. Se expone para pruebas. */
+  retryBaseMs?: number;
 }
 
 export type AliclikResult<T> =
   | { ok: true; data: T }
-  | { ok: false; error: string; status: number | null; timedOut?: boolean };
+  | {
+      ok: false;
+      error: string;
+      status: number | null;
+      timedOut?: boolean;
+      requestRef?: string;
+    };
 
 // ---------------------------------------------------------------------------
 // Tipos de respuesta (los campos que consumimos; la API puede traer más)
@@ -326,11 +334,10 @@ export function aliclikErrorMessage(
       (ray ? ` · Ray ID de Cloudflare para reportarlo: ${ray} (UTC ${new Date().toISOString()})` : "")
     );
   }
-  // Un 5xx es un fallo DE ELLOS, y su mensaje suele venir en inglés y genérico
-  // ("Internal server error"). Enseñarlo pelado hace que se lea como un fallo
-  // nuestro y manda al equipo a revisar el dashboard, que está bien. Se atribuye
-  // siempre. Los 4xx se dejan tal cual: ésos sí son accionables y su texto es la
-  // información útil ("El número de pedido … ya existe").
+  // Un 5xx viene del endpoint remoto y su mensaje suele ser genérico. Indicamos
+  // con precisión en qué tramo ocurrió, sin afirmar que toda nuestra integración
+  // es ajena al problema hasta contar con la referencia diagnóstica del intento.
+  // Los 4xx se dejan tal cual: ésos sí son accionables.
   //
   // El consejo de "reintenta" NO va aquí, sino en `request`, que es quien sabe
   // si se reintentó: `createOrder` no reintenta a propósito —su API no tiene
@@ -339,8 +346,7 @@ export function aliclikErrorMessage(
   // posible justo ahí.
   const attribute = (msg: string) =>
     status >= 500
-      ? `Aliclik respondió HTTP ${status}: «${msg}». Es un fallo en el servidor de Aliclik, no en el ` +
-        "dashboard."
+      ? `El endpoint de Aliclik respondió HTTP ${status}: «${msg}». La cotización no pudo completarse en su API.`
       : msg;
 
   if (body && typeof body === "object") {
@@ -370,7 +376,7 @@ export function aliclikErrorMessage(
 // duplicado no mejoran solos, y repetirlos solo alarga la espera.
 const ALICLIK_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 const ALICLIK_MAX_ATTEMPTS = 3;
-const ALICLIK_RETRY_BASE_MS = 400; // 400ms, 800ms → ≤1,2s extra en el peor caso
+const ALICLIK_RETRY_BASE_MS = 2_000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -403,7 +409,9 @@ async function request<T>(
   let last: AliclikResult<T> | null = null;
 
   for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await sleep(ALICLIK_RETRY_BASE_MS * 2 ** (attempt - 1));
+    if (attempt > 0) {
+      await sleep((opts.retryBaseMs ?? ALICLIK_RETRY_BASE_MS) * 2 ** (attempt - 1));
+    }
     const out = await attemptRequest<T>(opts, method, url, {
       doFetch,
       egress,
@@ -422,7 +430,11 @@ async function request<T>(
   // hubiera intentado nada, y la operadora reintentaba a mano tres veces más
   // sobre una racha de 5xx que dura minutos. Que sepa que ya se hizo.
   if (last && !last.ok && attempts > 1) {
-    return { ...last, error: `${last.error} Ya se reintentó ${attempts} veces seguidas.` };
+    const reference = last.requestRef ? ` Referencia de diagnóstico: ${last.requestRef}.` : "";
+    return {
+      ...last,
+      error: `${last.error} Ya se reintentó ${attempts} veces seguidas.${reference}`,
+    };
   }
   return last ?? { ok: false, status: null, error: "Aliclik no respondió." };
 }
@@ -497,6 +509,7 @@ async function attemptRequest<T>(
 
   const contentType = res.headers.get("content-type");
   const rayId = res.headers.get("cf-ray");
+  const requestRef = res.headers.get("x-aliclik-request-ref") ?? undefined;
 
   // Un fallo del PROXY no es un fallo de Aliclik. Distinguirlo evita el peor
   // desenlace de este experimento: creer que Aliclik rechaza algo cuando en
@@ -506,6 +519,7 @@ async function attemptRequest<T>(
       ok: false,
       status: res.status,
       error: `Salida por Edge no disponible: ${String((parsed as { egressError: unknown }).egressError)}`,
+      requestRef,
     };
   }
 
@@ -514,6 +528,7 @@ async function attemptRequest<T>(
       ok: false,
       error: aliclikErrorMessage(res.status, parsed, contentType, rayId),
       status: res.status,
+      requestRef,
     };
   }
 
@@ -524,6 +539,7 @@ async function attemptRequest<T>(
       ok: false,
       error: aliclikErrorMessage(res.status, parsed, contentType, rayId),
       status: res.status,
+      requestRef,
     };
   }
 
@@ -597,9 +613,10 @@ export async function listAllProducts(
 export function quoteShippingCost(
   opts: AliclikClientOpts,
   p: { warehouseId: number; lat: string; lng: string },
+  requestOpts: { retry?: boolean } = {},
 ): Promise<AliclikResult<AliclikShippingCost>> {
   return request<AliclikShippingCost>(opts, "GET", "/integration/order/shipping/cost", {
-    retry: true,
+    retry: requestOpts.retry ?? true,
     params: { warehouseId: p.warehouseId, lat: p.lat, lng: p.lng },
   });
 }
@@ -647,14 +664,68 @@ export function listOrders(
  * que filtrar por igualdad exacta al recibir: pedir "ALC1" podría devolver
  * "ALC12". Devuelve null cuando no existe.
  */
+export interface GetOrderLookupOptions {
+  /**
+   * Consultas alternativas para encontrar el mismo pedido (p. ej. teléfono o
+   * sufijo numérico). Nunca se aceptan como identidad: el orderNumber devuelto
+   * por Aliclik debe seguir coincidiendo exactamente con `orderNumber`.
+   */
+  searchTerms?: Array<string | null | undefined>;
+  startDate?: string;
+  endDate?: string;
+  /** Tope defensivo por consulta. La búsqueda interactiva no barre la cuenta entera. */
+  maxPagesPerQuery?: number;
+  /** Último recurso: recorre páginas recientes sin filtro y exige igualdad exacta. */
+  scanUnfiltered?: boolean;
+}
+
+function normalizedOrderNumber(value: string | null | undefined): string {
+  return (value ?? "").trim().replace(/^#+/, "").replace(/\s+/g, "").toUpperCase();
+}
+
 export async function getOrder(
   opts: AliclikClientOpts,
   orderNumber: string,
+  lookup: GetOrderLookupOptions = {},
 ): Promise<AliclikResult<AliclikOrder | null>> {
-  const res = await listOrders(opts, { orderNumber, limit: 100 });
-  if (!res.ok) return res;
-  const exact = (res.data.data ?? []).find((o) => o.orderNumber === orderNumber) ?? null;
-  return { ok: true, data: exact };
+  const wanted = normalizedOrderNumber(orderNumber);
+  const maxPages = Math.min(20, Math.max(1, lookup.maxPagesPerQuery ?? 1));
+  const terms = [orderNumber, ...(lookup.searchTerms ?? [])]
+    .map((term) => (term ?? "").trim())
+    .filter(Boolean)
+    .filter((term, index, all) => all.indexOf(term) === index);
+
+  const search = async (
+    term: string | undefined,
+    useDateRange: boolean,
+  ): Promise<AliclikResult<AliclikOrder | null>> => {
+    for (let page = 1; page <= maxPages; page++) {
+      const res = await listOrders(opts, {
+        page,
+        limit: 100,
+        orderNumber: term,
+        startDate: useDateRange ? lookup.startDate : undefined,
+        endDate: useDateRange ? lookup.endDate : undefined,
+      });
+      if (!res.ok) return res;
+      const exact =
+        (res.data.data ?? []).find(
+          (order) => normalizedOrderNumber(order.orderNumber) === wanted,
+        ) ?? null;
+      if (exact) return { ok: true, data: exact };
+
+      const totalPages = Math.max(1, res.data.pagination?.totalPages ?? 1);
+      if (page >= totalPages || !(res.data.data ?? []).length) break;
+    }
+    return { ok: true, data: null };
+  };
+
+  for (const term of terms) {
+    const result = await search(term, false);
+    if (!result.ok || result.data) return result;
+  }
+  if (lookup.scanUnfiltered) return search(undefined, true);
+  return { ok: true, data: null };
 }
 
 export function cancelOrder(

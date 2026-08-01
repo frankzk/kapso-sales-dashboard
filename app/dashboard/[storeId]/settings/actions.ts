@@ -279,10 +279,17 @@ export async function syncAliclikCatalogNow(
   const creds = await getStoreCreds(storeId, ctx.admin);
   if (!creds?.aliclik_api_token) return { error: "Esta tienda no tiene token de Aliclik." };
 
-  const report = await syncAliclikCatalog(storeId, { apiToken: creds.aliclik_api_token }, ctx.admin);
+  const report = await syncAliclikCatalog(
+    storeId,
+    { apiToken: creds.aliclik_api_token },
+    ctx.admin,
+    creds.shopify_token
+      ? { domain: creds.shopify_domain, token: creds.shopify_token }
+      : undefined,
+  );
   revalidatePath(`/dashboard/${storeId}/settings`);
   if (!report.ok) return { error: report.errors.join("; ") || "No se pudo sincronizar." };
-  const detail = `${report.skus} SKUs, ${report.agencies} agencias, ${report.autoMapped} mapeos automáticos`;
+  const detail = `${report.shopifySkus} SKUs activos de Shopify, ${report.skus} SKUs de Aliclik, ${report.agencies} agencias, ${report.autoMapped} mapeos automáticos`;
   return {
     notice: report.errors.length
       ? `Catálogo sincronizado (${detail}), con avisos: ${report.errors.join("; ")}`

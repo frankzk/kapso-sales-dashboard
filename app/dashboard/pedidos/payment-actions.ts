@@ -33,6 +33,7 @@ import {
 import {
   describeDuplicate,
   findDuplicate,
+  normalizeManualOperationNumber,
   normalizeOperationNumber,
   type ExistingPayment,
 } from "@/lib/yape-dedup";
@@ -127,6 +128,7 @@ export interface PickupKeyPanel {
   canRegister: boolean;
   canValidate: boolean;
   canViewKey: boolean;
+  canManageKey: boolean;
   canOverride: boolean;
 }
 
@@ -162,12 +164,14 @@ export async function loadPaymentPanel(
     kind: p.kind,
     validation_status: p.validation_status,
     order_id: p.order_id,
+    amount: p.amount,
   }));
   const verdict = canRevealPickupKey({
     orderId,
     generalStatus: ctx.row.general_status,
     pickupState: ctx.row.pickup_state,
     payments: snapshots,
+    orderTotal: ctx.row.order_total,
     hasKey: Boolean(keyRow),
   });
 
@@ -183,7 +187,8 @@ export async function loadPaymentPanel(
       views: (viewsRes.data ?? []) as PickupKeyPanel["views"],
       canRegister: perms.can("shalom.register_payment"),
       canValidate: perms.can("shalom.validate_payment"),
-      canViewKey: perms.can("shalom.view_pickup_key"),
+      canViewKey: perms.can("shalom.reveal_pickup_key"),
+      canManageKey: perms.can("shalom.view_pickup_key"),
       canOverride: perms.can("shalom.override_payment_validation"),
     },
   };
@@ -421,7 +426,10 @@ export async function registerPayment(
   // de operación pero la imagen lo trae, ese dato entra en la comprobación. Sin
   // él, un mismo Yape recortado podría colarse en dos pedidos.
   const vision = await inspectVoucher(admin, input.path, ctx.storeId);
-  const typedOperation = normalizeOperationNumber(input.operationNumber);
+  // Una operación escrita por una persona puede ser corta (p. ej. 5782).
+  // El OCR mantiene el umbral estricto para no confundir el código de
+  // seguridad de tres dígitos con el nº de operación.
+  const typedOperation = normalizeManualOperationNumber(input.operationNumber);
   const readOperation = normalizeOperationNumber(vision.fields.operationNumber);
   const identityDiscrepancy = Boolean(
     readOperation && typedOperation && readOperation !== typedOperation,
@@ -816,7 +824,7 @@ export async function revealPickupKey(
   input: { reason?: string; override?: boolean } = {},
 ): Promise<{ key: string } | { error: string }> {
   const perms = await getMasterPermissions();
-  if (!perms.can("shalom.view_pickup_key")) {
+  if (!perms.can("shalom.reveal_pickup_key")) {
     return { error: "Tu rol no permite ver la clave de recojo." };
   }
   const ctx = await authorizeOrder(orderId);
@@ -825,7 +833,7 @@ export async function revealPickupKey(
   const admin = createAdminSupabase();
   const [{ data: keyRow }, { data: paymentRows }] = await Promise.all([
     admin.from("shalom_pickup_keys").select("key_enc").eq("order_id", orderId).maybeSingle(),
-    admin.from("order_payments").select("kind,validation_status,order_id").eq("order_id", orderId),
+    admin.from("order_payments").select("kind,validation_status,order_id,amount").eq("order_id", orderId),
   ]);
 
   const payments = (paymentRows ?? []) as PaymentSnapshot[];
@@ -834,6 +842,7 @@ export async function revealPickupKey(
     generalStatus: ctx.row.general_status,
     pickupState: ctx.row.pickup_state,
     payments,
+    orderTotal: ctx.row.order_total,
     hasKey: Boolean(keyRow),
   });
 
@@ -865,7 +874,9 @@ export async function revealPickupKey(
     override: !verdict.allowed,
     payment_state: {
       state: paymentState(payments),
-      payments: payments.map((p) => ({ kind: p.kind, status: p.validation_status })),
+      orderTotal: ctx.row.order_total,
+      paidTotal: payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
+      payments: payments.map((p) => ({ kind: p.kind, status: p.validation_status, amount: p.amount })),
       blockers: verdict.blockers,
     },
   });
@@ -889,7 +900,7 @@ export async function sharePickupKey(
   input: { channel: string; note?: string | null; confirmed?: boolean },
 ): Promise<PaymentActionState> {
   const perms = await getMasterPermissions();
-  if (!perms.can("shalom.view_pickup_key")) {
+  if (!perms.can("shalom.reveal_pickup_key")) {
     return { error: "Tu rol no permite entregar la clave." };
   }
   const ctx = await authorizeOrder(orderId);
@@ -955,7 +966,14 @@ export async function completePaymentData(
   if (!ctx) return { error: "Sin acceso a este pedido." };
 
   const admin = createAdminSupabase();
-  const operation = normalizeOperationNumber(input.operationNumber);
+  const operation = normalizeManualOperationNumber(input.operationNumber);
+  if (input.operationNumber?.trim() && !operation) {
+    return {
+      error:
+        "El nº de operación debe tener al menos 4 letras o números. " +
+        "Revisa el comprobante y vuelve a escribirlo.",
+    };
+  }
 
   // El nº de operación es global: antes de escribirlo hay que asegurarse de que
   // no pertenece ya a otro pago.
