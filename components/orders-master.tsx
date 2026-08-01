@@ -2,11 +2,10 @@
 
 // Master de Pedidos — la vista central de control de la operación logística.
 //
-// Estructura, igual que el board de Repro Provincia: el servidor carga TODAS las
-// tiendas accesibles para la pestaña activa y aquí se filtra en cliente, porque
-// los filtros son combinables y multi-selección (§13). La lógica de qué fila
-// entra y en qué orden vive en lib/order-master-filters.ts, testeada aparte;
-// este archivo solo compone estado y pinta.
+// El servidor carga solo una página de 100 pedidos para evitar que el navegador
+// tenga que construir miles de filas y decenas de miles de celdas. La búsqueda
+// global sigue consultando al servidor; los filtros rápidos afinan la página
+// visible y la subetapa también se resuelve en servidor.
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -29,12 +28,12 @@ import {
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import {
-  agencySummary,
   applyFilters,
   emptyFilters,
   facetValues,
   hasActiveFilters,
   sortRows,
+  type AgencySummary,
   type MasterFilters,
   type MasterSortKey,
 } from "@/lib/order-master-filters";
@@ -52,6 +51,7 @@ import {
   MACRO_SUBSTAGES_BY_STAGE,
   macroStageLabel,
   macroSubstageLabel,
+  type MacroSubstage,
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, usesPickupKeyFlow, type KeyState, type PaymentState } from "@/lib/pickup-key";
 import { MASTER_VIEWS, type MasterCounts, type MasterView, type OrderMasterDetail } from "@/lib/orders-master-access";
@@ -129,7 +129,12 @@ function MacroStageBadge({ stage }: { stage: string | null | undefined }) {
 export function OrdersMasterBoard({
   stores,
   view,
+  substage,
+  page,
+  pageSize,
   counts,
+  substageCounts,
+  agency,
   rows,
   canEdit,
   canOverride,
@@ -139,7 +144,12 @@ export function OrdersMasterBoard({
 }: {
   stores: StoreSummary[];
   view: MasterView;
+  substage: MacroSubstage | null;
+  page: number;
+  pageSize: number;
   counts: MasterCounts;
+  substageCounts: Partial<Record<MacroSubstage, number>>;
+  agency: AgencySummary;
   rows: OrderMasterRow[];
   canEdit: boolean;
   canOverride: boolean;
@@ -152,11 +162,6 @@ export function OrdersMasterBoard({
   const [sortKey, setSortKey] = useState<MasterSortKey>("movement");
   const [showMore, setShowMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [selectedSubstage, setSelectedSubstage] = useState<string | null>(null);
-
-  useEffect(() => {
-    setSelectedSubstage(null);
-  }, [view]);
 
   // La búsqueda va al servidor: debe encontrar pedidos fuera de la pestaña
   // activa, no solo entre los ya cargados.
@@ -186,24 +191,11 @@ export function OrdersMasterBoard({
   }, [stores]);
 
   const stageSubstages = view === "todos" ? [] : MACRO_SUBSTAGES_BY_STAGE[view];
-  const substageCounts = useMemo(() => {
-    const tally = new Map<string, number>();
-    for (const row of rows) {
-      const key = row.macro_substage ?? "";
-      tally.set(key, (tally.get(key) ?? 0) + 1);
-    }
-    return tally;
-  }, [rows]);
 
   const visible = useMemo(() => {
-    const inSubstage = selectedSubstage
-      ? rows.filter((row) => row.macro_substage === selectedSubstage)
-      : rows;
-    const filtered = applyFilters(inSubstage, filters);
+    const filtered = applyFilters(rows, filters);
     return sortRows(filtered, sortKey);
-  }, [rows, selectedSubstage, filters, sortKey]);
-
-  const agency = useMemo(() => agencySummary(rows), [rows]);
+  }, [rows, filters, sortKey]);
 
   const facets = useMemo(
     () => ({
@@ -232,6 +224,17 @@ export function OrdersMasterBoard({
 
   const searchActive = search.trim().length >= 2;
   const listed = searchActive ? (results ?? []) : visible;
+  const activeTotal = substage ? (substageCounts[substage] ?? 0) : counts[view];
+  const pageCount = Math.max(1, Math.ceil(activeTotal / pageSize));
+
+  function pageHref(nextPage: number): string {
+    const params = new URLSearchParams();
+    if (view !== "todos") params.set("view", view);
+    if (substage) params.set("substage", substage);
+    if (nextPage > 1) params.set("page", String(nextPage));
+    const query = params.toString();
+    return query ? `/dashboard/pedidos?${query}` : "/dashboard/pedidos";
+  }
 
   return (
     <div className="space-y-4">
@@ -319,7 +322,13 @@ export function OrdersMasterBoard({
                       key={stage.key}
                       type="button"
                       aria-current={active ? "page" : undefined}
-                      onClick={() => router.push(`/dashboard/pedidos?view=${stage.key}`)}
+                      onClick={() =>
+                        router.push(
+                          stage.key === "todos"
+                            ? "/dashboard/pedidos"
+                            : `/dashboard/pedidos?view=${stage.key}`,
+                        )
+                      }
                       className={cn(
                         "group flex min-h-14 items-center gap-2 rounded-lg px-3 text-left transition",
                         active
@@ -358,25 +367,27 @@ export function OrdersMasterBoard({
                 </span>
                 <button
                   type="button"
-                  onClick={() => setSelectedSubstage(null)}
+                  onClick={() => router.push(`/dashboard/pedidos?view=${view}`)}
                   className={cn(
                     "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
-                    selectedSubstage === null
+                    substage === null
                       ? "border-slate-900 bg-slate-900 text-white"
                       : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
                   )}
                 >
-                  Todas · {rows.length.toLocaleString("es-PE")}
+                  Todas · {counts[view].toLocaleString("es-PE")}
                 </button>
-                {stageSubstages.map((substage) => {
-                  const count = substageCounts.get(substage) ?? 0;
-                  const active = selectedSubstage === substage;
+                {stageSubstages.map((stageSubstage) => {
+                  const count = substageCounts[stageSubstage] ?? 0;
+                  const active = substage === stageSubstage;
                   return (
                     <button
-                      key={substage}
+                      key={stageSubstage}
                       type="button"
                       disabled={count === 0}
-                      onClick={() => setSelectedSubstage(substage)}
+                      onClick={() =>
+                        router.push(`/dashboard/pedidos?view=${view}&substage=${stageSubstage}`)
+                      }
                       className={cn(
                         "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
                         active
@@ -385,7 +396,7 @@ export function OrdersMasterBoard({
                         count === 0 && "cursor-not-allowed opacity-40",
                       )}
                     >
-                      {macroSubstageLabel(substage)} · {count.toLocaleString("es-PE")}
+                      {macroSubstageLabel(stageSubstage)} · {count.toLocaleString("es-PE")}
                     </button>
                   );
                 })}
@@ -476,7 +487,7 @@ export function OrdersMasterBoard({
             )}
 
             <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-400">
-              Ordenar por:
+              Ordenar esta página:
               <select
                 value={sortKey}
                 onChange={(e) => setSortKey(e.target.value as MasterSortKey)}
@@ -569,13 +580,24 @@ export function OrdersMasterBoard({
           )}
 
           <Card className="p-0">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
-              <p className="text-sm font-medium text-slate-800">
-                {listed.length} {listed.length === 1 ? "pedido" : "pedidos"}
-                {listed.length !== rows.length && (
-                  <span className="ml-1 text-xs font-normal text-slate-400">de {rows.length}</span>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3">
+              <div>
+                <p className="text-sm font-medium text-slate-800">
+                  {hasActiveFilters(filters)
+                    ? `${listed.length} visibles en esta página`
+                    : `Mostrando ${listed.length} de ${activeTotal.toLocaleString("es-PE")} pedidos`}
+                </p>
+                {hasActiveFilters(filters) && (
+                  <p className="mt-0.5 text-xs text-slate-400">
+                    Los filtros rápidos se aplican a los 100 pedidos de esta página.
+                  </p>
                 )}
-              </p>
+              </div>
+              <PaginationControls
+                page={page}
+                pageCount={pageCount}
+                hrefFor={pageHref}
+              />
             </div>
             {listed.length ? (
               <MasterTable
@@ -588,6 +610,15 @@ export function OrdersMasterBoard({
               <p className="p-5 text-sm text-slate-400">
                 {rows.length ? "Ningún pedido cumple los filtros." : "Todavía no hay pedidos aquí."}
               </p>
+            )}
+            {pageCount > 1 && (
+              <div className="flex justify-end border-t border-slate-200 px-5 py-3">
+                <PaginationControls
+                  page={page}
+                  pageCount={pageCount}
+                  hrefFor={pageHref}
+                />
+              </div>
             )}
           </Card>
         </>
@@ -609,6 +640,40 @@ export function OrdersMasterBoard({
   );
 }
 
+function PaginationControls({
+  page,
+  pageCount,
+  hrefFor,
+}: {
+  page: number;
+  pageCount: number;
+  hrefFor: (page: number) => string;
+}) {
+  const controlClass =
+    "inline-flex min-h-8 items-center rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50";
+  return (
+    <nav aria-label="Paginación del Master" className="flex items-center gap-2">
+      {page > 1 ? (
+        <Link href={hrefFor(page - 1)} className={controlClass}>
+          ← Anterior
+        </Link>
+      ) : (
+        <span className={cn(controlClass, "cursor-not-allowed opacity-40")}>← Anterior</span>
+      )}
+      <span className="min-w-24 text-center text-xs tabular-nums text-slate-500">
+        Página {Math.min(page, pageCount)} de {pageCount}
+      </span>
+      {page < pageCount ? (
+        <Link href={hrefFor(page + 1)} className={controlClass}>
+          Siguiente →
+        </Link>
+      ) : (
+        <span className={cn(controlClass, "cursor-not-allowed opacity-40")}>Siguiente →</span>
+      )}
+    </nav>
+  );
+}
+
 /**
  * Tira de seguimiento de agencia (§10). Es lo que evita la devolución: entre el
  * 5 % y el 6 % de estos pedidos termina devuelto por no recogerse a tiempo, así
@@ -620,7 +685,7 @@ function AgencyStrip({
   filters,
   onFilter,
 }: {
-  summary: ReturnType<typeof agencySummary>;
+  summary: AgencySummary;
   filters: MasterFilters;
   onFilter: (next: Partial<MasterFilters>) => void;
 }) {
@@ -871,7 +936,7 @@ function MasterTable({
             <tr
               key={r.id}
               onClick={() => onOpen(r.order_id)}
-              className="cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50"
+              className="cursor-pointer border-b border-slate-100 [contain-intrinsic-size:auto_49px] [content-visibility:auto] last:border-0 hover:bg-slate-50"
             >
               <td className="px-4 py-2.5 font-medium text-slate-900">{r.order_name ?? "—"}</td>
               {multiStore && <td className="px-2 py-2.5 text-slate-600">{storeName(r.store_id)}</td>}

@@ -11,6 +11,7 @@ import { createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import type { AgencySummary } from "@/lib/order-master-filters";
 import type {
   OrderEventRow,
   OrderLineItem,
@@ -18,7 +19,11 @@ import type {
   ShipmentCallRow,
   ShipmentRow,
 } from "@/lib/types";
-import { ORDER_MACRO_STAGES, type OrderMacroStage } from "@/lib/order-macro-stage";
+import {
+  ORDER_MACRO_STAGES,
+  type MacroSubstage,
+  type OrderMacroStage,
+} from "@/lib/order-macro-stage";
 
 export type MasterView = "todos" | OrderMacroStage;
 
@@ -41,10 +46,8 @@ const MASTER_COLUMNS =
   "returned_at,last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
   "key_state,agency_branch,agency_arrived_at,agency_expires_at,recomputed_at,updated_at";
 
-// PostgREST corta cada respuesta en `db-max-rows` (1000 en Supabase), así que se
-// pagina con .range() en vez de pedir un .limit() grande.
-const PAGE = 1000;
-const MAX_LIST = 20_000;
+/** Cantidad máxima que el navegador recibe y renderiza en una sola página. */
+export const MASTER_PAGE_SIZE = 100;
 
 /**
  * Cola del Master para las tiendas accesibles. Igual que en Repro Provincia, la
@@ -54,28 +57,24 @@ const MAX_LIST = 20_000;
 export async function getOrderMasterRows(
   storeIds: string[],
   view: MasterView = "todos",
-  opts: { limit?: number } = {},
+  opts: { limit?: number; offset?: number; substage?: MacroSubstage | null } = {},
 ): Promise<OrderMasterRow[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
-  const cap = opts.limit ?? MAX_LIST;
-  const out: OrderMasterRow[] = [];
+  const limit = Math.max(1, Math.min(opts.limit ?? MASTER_PAGE_SIZE, MASTER_PAGE_SIZE));
+  const offset = Math.max(0, opts.offset ?? 0);
+  let query = sb.from("order_master").select(MASTER_COLUMNS).in("store_id", storeIds);
+  if (view !== "todos") query = query.eq("macro_stage", view);
+  if (opts.substage) query = query.eq("macro_substage", opts.substage);
 
-  for (let from = 0; from < cap; from += PAGE) {
-    let query = sb.from("order_master").select(MASTER_COLUMNS).in("store_id", storeIds);
-    if (view !== "todos") query = query.eq("macro_stage", view);
-    const { data, error } = await query
-      // Lo que más importa operativamente es qué se movió (o dejó de moverse)
-      // hace más tiempo; los que nunca se movieron van primero.
-      .order("last_movement_at", { ascending: false, nullsFirst: true })
-      .order("order_created_at", { ascending: false })
-      .range(from, from + PAGE - 1);
-    if (error) return out;
-    const page = (data ?? []) as unknown as OrderMasterRow[];
-    out.push(...page);
-    if (page.length < PAGE) break;
-  }
-  return out;
+  const { data, error } = await query
+    // Lo que más importa operativamente es qué se movió (o dejó de moverse)
+    // hace más tiempo; los que nunca se movieron van primero.
+    .order("last_movement_at", { ascending: false, nullsFirst: true })
+    .order("order_created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+  if (error) return [];
+  return (data ?? []) as unknown as OrderMasterRow[];
 }
 
 export interface MasterCounts {
@@ -88,9 +87,19 @@ export interface MasterCounts {
   finalizado: number;
 }
 
-/** Conteos exactos por pestaña, con consultas `head` (no traen filas). */
-export async function getOrderMasterCounts(storeIds: string[]): Promise<MasterCounts> {
-  const empty: MasterCounts = {
+export interface MasterMomCounts {
+  stages: MasterCounts;
+  substages: Partial<Record<MacroSubstage, number>>;
+}
+
+interface MasterCountRow {
+  macro_stage: string | null;
+  macro_substage: string | null;
+  total: number | string;
+}
+
+function emptyMasterCounts(): MasterCounts {
+  return {
     todos: 0,
     por_confirmar: 0,
     preparacion: 0,
@@ -99,6 +108,29 @@ export async function getOrderMasterCounts(storeIds: string[]): Promise<MasterCo
     por_cerrar: 0,
     finalizado: 0,
   };
+}
+
+/** Reduce el resultado agrupado del RPC a los contadores que consume la UI. */
+export function reduceMasterMomCounts(rows: readonly MasterCountRow[]): MasterMomCounts {
+  const stages = emptyMasterCounts();
+  const substages: Partial<Record<MacroSubstage, number>> = {};
+  for (const row of rows) {
+    const total = Number(row.total) || 0;
+    if (row.macro_stage && row.macro_stage in stages && row.macro_stage !== "todos") {
+      stages[row.macro_stage as OrderMacroStage] += total;
+      stages.todos += total;
+    }
+    if (row.macro_substage) {
+      const key = row.macro_substage as MacroSubstage;
+      substages[key] = (substages[key] ?? 0) + total;
+    }
+  }
+  return { stages, substages };
+}
+
+/** Conteos exactos por pestaña, con consultas `head` (no traen filas). */
+export async function getOrderMasterCounts(storeIds: string[]): Promise<MasterCounts> {
+  const empty = emptyMasterCounts();
   if (!storeIds.length) return empty;
   const sb = await createServerSupabase();
 
@@ -122,6 +154,42 @@ export async function getOrderMasterCounts(storeIds: string[]): Promise<MasterCo
     countFor("finalizado"),
   ]);
   return { todos, por_confirmar, preparacion, por_despachar, en_curso, por_cerrar, finalizado };
+}
+
+/**
+ * Conteos exactos de todas las macroetapas y subetapas en una sola consulta.
+ * Si la migración todavía no llegó al entorno, conserva los totales principales
+ * con el mecanismo anterior para que el Master no deje de abrir.
+ */
+export async function getOrderMasterMomCounts(storeIds: string[]): Promise<MasterMomCounts> {
+  if (!storeIds.length) return { stages: emptyMasterCounts(), substages: {} };
+  const sb = await createServerSupabase();
+  const { data, error } = await sb.rpc("order_master_mom_counts", { p_store_ids: storeIds });
+  if (!error) return reduceMasterMomCounts((data ?? []) as MasterCountRow[]);
+  return { stages: await getOrderMasterCounts(storeIds), substages: {} };
+}
+
+/** Resumen exacto de agencia, independiente de la página de 100 filas. */
+export async function getOrderMasterAgencySummary(storeIds: string[]): Promise<AgencySummary> {
+  const empty: AgencySummary = {
+    total: 0,
+    disponibles: 0,
+    proximosAVencer: 0,
+    retornoIniciado: 0,
+    devueltos: 0,
+  };
+  if (!storeIds.length) return empty;
+  const sb = await createServerSupabase();
+  const { data, error } = await sb.rpc("order_master_agency_summary", { p_store_ids: storeIds });
+  if (error || !Array.isArray(data) || !data[0]) return empty;
+  const row = data[0] as Record<string, number | string | null>;
+  return {
+    total: Number(row.total) || 0,
+    disponibles: Number(row.disponibles) || 0,
+    proximosAVencer: Number(row.proximos_a_vencer) || 0,
+    retornoIniciado: Number(row.retorno_iniciado) || 0,
+    devueltos: Number(row.devueltos) || 0,
+  };
 }
 
 /** Búsqueda global (código, guía, teléfono, cliente), fuera de la pestaña activa. */
