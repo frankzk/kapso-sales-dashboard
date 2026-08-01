@@ -70,6 +70,7 @@ import {
   MACRO_SUBSTAGES_BY_STAGE,
   macroStageLabel,
   macroSubstageLabel,
+  type OrderMacroStage,
   type MacroSubstage,
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, usesPickupKeyFlow, type KeyState, type PaymentState } from "@/lib/pickup-key";
@@ -1159,19 +1160,234 @@ const TIMELINE_LABEL: Record<string, string> = {
   system: "Automático",
 };
 
-/** Secciones a las que se puede saltar desde la cabecera del drawer. El orden
- *  es el de la pantalla, para que la fila de atajos y el contenido cuenten la
- *  misma historia. */
-const DRAWER_SECTIONS = [
-  { id: "productos", label: "Productos" },
-  { id: "rutas", label: "Rutas" },
-  { id: "guias", label: "Guías" },
-  { id: "pagos", label: "Pagos y clave" },
-  { id: "ubicacion", label: "Ubicación" },
-  { id: "cierre", label: "Cierre" },
-  { id: "acciones", label: "Acciones" },
-  { id: "historial", label: "Historial" },
-] as const;
+type DrawerSectionId =
+  | "resumen"
+  | "ubicacion"
+  | "productos"
+  | "pagos"
+  | "rutas"
+  | "aliclik"
+  | "guias"
+  | "cierre"
+  | "acciones"
+  | "historial";
+
+interface DrawerSectionLink {
+  id: DrawerSectionId;
+  label: string;
+}
+
+interface DrawerNextAction {
+  eyebrow: string;
+  title: string;
+  description: string;
+  cta: string;
+  target?: DrawerSectionId;
+  href?: string;
+  tone: "indigo" | "amber" | "emerald" | "slate";
+}
+
+const DRAWER_STAGE_ORDER = MASTER_VIEWS.filter(
+  (view): view is { key: OrderMacroStage; label: string } => view.key !== "todos",
+);
+
+const NEXT_ACTION_TONE: Record<DrawerNextAction["tone"], string> = {
+  indigo: "border-indigo-200 bg-indigo-50 text-indigo-950",
+  amber: "border-amber-200 bg-amber-50 text-amber-950",
+  emerald: "border-emerald-200 bg-emerald-50 text-emerald-950",
+  slate: "border-slate-200 bg-slate-50 text-slate-950",
+};
+
+/**
+ * La acción dominante del drawer sigue el MOM, no el orden accidental de los
+ * formularios. Debe responder una sola pregunta: «¿qué hago ahora con este
+ * pedido?». Las herramientas secundarias quedan más abajo como evidencia o
+ * corrección.
+ */
+function drawerNextAction(row: OrderMasterRow, showPayments: boolean): DrawerNextAction {
+  const stage = row.macro_stage as OrderMacroStage | null | undefined;
+  const substage = row.macro_substage as MacroSubstage | null | undefined;
+
+  if (stage === "por_confirmar") {
+    if (substage === "pago_requerido_pendiente" && showPayments) {
+      return {
+        eyebrow: "Confirmación · pago requerido",
+        title: "Validar el pago solicitado",
+        description: "Registra y valida el comprobante antes de liberar la preparación del pedido.",
+        cta: "Ir a pagos",
+        target: "pagos",
+        tone: "amber",
+      };
+    }
+    return {
+      eyebrow: "Confirmación",
+      title: substage === "ultimo_intento" ? "Resolver el último intento" : "Contactar y registrar el resultado",
+      description: "Llama o escribe al cliente y deja el resultado en la gestión del pedido.",
+      cta: "Registrar gestión",
+      target: "acciones",
+      tone: substage === "ultimo_intento" ? "amber" : "indigo",
+    };
+  }
+
+  if (stage === "preparacion") {
+    if (substage === "incidencia_preparacion") {
+      return {
+        eyebrow: "Preparación · incidencia",
+        title: "Resolver el bloqueo de almacén",
+        description: "Corrige el dato o documenta la incidencia antes de volver a imprimir y armar.",
+        cta: "Registrar resolución",
+        target: "acciones",
+        tone: "amber",
+      };
+    }
+    return {
+      eyebrow: "Preparación",
+      title: substage === "por_armar" ? "Completar el armado y escanear el rótulo" : "Elegir ruta y generar el rótulo",
+      description:
+        substage === "por_armar"
+          ? "El paquete debe quedar completo y listo antes de incorporarlo a una ruta."
+          : "La ruta define qué rótulo se genera y qué validaciones debe cumplir el pedido.",
+      cta: substage === "por_armar" ? "Ir a despacho" : "Revisar rutas",
+      ...(substage === "por_armar"
+        ? { href: "/dashboard/pedidos/despacho" }
+        : { target: "rutas" as const }),
+      tone: "indigo",
+    };
+  }
+
+  if (stage === "por_despachar") {
+    return {
+      eyebrow: "Despacho",
+      title: "Cotejar la ruta y transferir la custodia",
+      description: "Oficina y motorizado deben escanear el 100 % de los paquetes antes de salir.",
+      cta: "Abrir Mesa de despacho",
+      href: "/dashboard/pedidos/despacho",
+      tone: "indigo",
+    };
+  }
+
+  if (stage === "en_curso") {
+    if (substage === "pendiente_pago_diferencia" && showPayments) {
+      return {
+        eyebrow: "Agencia · pago pendiente",
+        title: "Completar el pago antes de liberar la clave",
+        description: "La clave de recojo permanece bloqueada hasta validar el monto total acumulado.",
+        cta: "Revisar pagos y clave",
+        target: "pagos",
+        tone: "amber",
+      };
+    }
+    if (substage === "por_reprogramar_lima" || substage === "gestion_reproprovincia") {
+      return {
+        eyebrow: "Seguimiento",
+        title: "Volver a confirmar con el cliente",
+        description: "Registra el contacto antes de crear una salida nueva con su propio QR.",
+        cta: "Registrar seguimiento",
+        target: "acciones",
+        tone: "amber",
+      };
+    }
+    return {
+      eyebrow: "Seguimiento",
+      title: "Revisar la salida activa",
+      description: "Confirma el último estado del courier y atiende cualquier intento o retorno pendiente.",
+      cta: "Ver salidas y guías",
+      target: "guias",
+      tone: "emerald",
+    };
+  }
+
+  if (stage === "por_cerrar") {
+    return {
+      eyebrow: "Cierre",
+      title: "Resolver las obligaciones abiertas",
+      description: "Liquidación, devolución, inventario y reembolso se cierran como hechos independientes.",
+      cta: "Abrir Mesa de cierre",
+      target: "cierre",
+      tone: "amber",
+    };
+  }
+
+  return {
+    eyebrow: "Expediente finalizado",
+    title: "Pedido cerrado sin acciones pendientes",
+    description: "Consulta la trazabilidad completa o reabre únicamente si aparece una incidencia nueva.",
+    cta: "Ver historial",
+    target: "historial",
+    tone: "slate",
+  };
+}
+
+function DrawerJourneyRail({ current }: { current: string | null | undefined }) {
+  const currentIndex = DRAWER_STAGE_ORDER.findIndex((stage) => stage.key === current);
+  return (
+    <ol className="grid grid-cols-3 gap-2 sm:grid-cols-6" aria-label="Avance del pedido en el MOM">
+      {DRAWER_STAGE_ORDER.map((stage, index) => {
+        const isCurrent = index === currentIndex;
+        const isDone = currentIndex >= 0 && index < currentIndex;
+        return (
+          <li key={stage.key} className="min-w-0">
+            <div
+              className={cn(
+                "flex min-h-14 flex-col justify-center rounded-lg border px-2 py-2 text-center transition-colors",
+                isCurrent && "border-indigo-600 bg-indigo-600 text-white shadow-sm",
+                isDone && "border-emerald-200 bg-emerald-50 text-emerald-800",
+                !isCurrent && !isDone && "border-slate-200 bg-white text-slate-400",
+              )}
+              aria-current={isCurrent ? "step" : undefined}
+            >
+              <span className="text-[10px] font-bold tabular-nums opacity-70">{String(index + 1).padStart(2, "0")}</span>
+              <span className="mt-0.5 text-[11px] font-semibold leading-tight">{stage.label}</span>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function DrawerNextActionCard({
+  action,
+  onJump,
+}: {
+  action: DrawerNextAction;
+  onJump: (target: DrawerSectionId) => void;
+}) {
+  const buttonClass = cn(
+    "inline-flex min-h-9 items-center justify-center rounded-lg px-3 py-2 text-xs font-bold transition focus:outline-none focus:ring-2 focus:ring-offset-2",
+    action.tone === "indigo" && "bg-indigo-700 text-white hover:bg-indigo-800 focus:ring-indigo-600",
+    action.tone === "amber" && "bg-amber-800 text-white hover:bg-amber-900 focus:ring-amber-700",
+    action.tone === "emerald" && "bg-emerald-800 text-white hover:bg-emerald-900 focus:ring-emerald-700",
+    action.tone === "slate" && "bg-slate-900 text-white hover:bg-slate-800 focus:ring-slate-700",
+  );
+
+  return (
+    <section className={cn("rounded-xl border p-4", NEXT_ACTION_TONE[action.tone])}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-[11px] font-bold uppercase tracking-[0.14em] opacity-65">
+            Próxima acción · {action.eyebrow}
+          </p>
+          <h3 className="mt-1 text-base font-semibold leading-tight">{action.title}</h3>
+          <p className="mt-1 max-w-xl text-sm leading-5 opacity-75">{action.description}</p>
+        </div>
+        {action.href ? (
+          <Link href={action.href} className={cn(buttonClass, "shrink-0")}>
+            {action.cta} →
+          </Link>
+        ) : action.target ? (
+          <button
+            type="button"
+            onClick={() => onJump(action.target!)}
+            className={cn(buttonClass, "shrink-0")}
+          >
+            {action.cta} ↓
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
 
 function OrderDrawer({
   orderId,
@@ -1304,6 +1520,39 @@ function OrderDrawer({
   }
 
   const row = detail?.row;
+  const showPaymentPanel = Boolean(
+    detail &&
+      (usesPickupKeyFlow(detail.row.current_courier, detail.row.shipping_mode) ||
+        (canCreateShalomGuide &&
+          detail.routePlan.candidates.some(
+            (candidate) => candidate.key === "shalom" || candidate.key === "olva",
+          ))),
+  );
+  const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel) : null;
+  const drawerSections: DrawerSectionLink[] = detail
+    ? [
+        { id: "resumen", label: "Resumen" },
+        { id: "ubicacion", label: "Ubicación" },
+        ...(detail.lineItems.length > 0
+          ? ([{ id: "productos", label: "Productos" }] as DrawerSectionLink[])
+          : []),
+        ...(showPaymentPanel
+          ? ([{ id: "pagos", label: "Pagos y clave" }] as DrawerSectionLink[])
+          : []),
+        { id: "rutas", label: "Ruta" },
+        ...(canCreateGuide
+          ? ([{ id: "aliclik", label: "Crear Aliclik" }] as DrawerSectionLink[])
+          : []),
+        { id: "guias", label: "Salidas" },
+        ...(["por_cerrar", "finalizado"].includes(detail.row.macro_stage ?? "")
+          ? ([{ id: "cierre", label: "Cierre" }] as DrawerSectionLink[])
+          : []),
+        ...(canEdit
+          ? ([{ id: "acciones", label: "Gestión" }] as DrawerSectionLink[])
+          : []),
+        { id: "historial", label: "Historial" },
+      ]
+    : [];
 
   return (
     <div
@@ -1389,7 +1638,7 @@ function OrderDrawer({
           {/* Saltar a una sección en vez de rodar el dedo por todo el panel. */}
           {detail && (
             <div className="flex gap-1 overflow-x-auto px-4 pb-2">
-              {DRAWER_SECTIONS.map((sec) => (
+              {drawerSections.map((sec) => (
                 <button
                   key={sec.id}
                   onClick={() => jumpTo(sec.id)}
@@ -1429,19 +1678,30 @@ function OrderDrawer({
             <div className="h-40 animate-pulse rounded bg-slate-100" />
           </div>
         ) : (
-          <div className="space-y-5 p-5">
-            <section className="space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <MacroStageBadge stage={detail.row.macro_stage} />
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                  {macroSubstageLabel(detail.row.macro_substage)}
-                </span>
-                <span className="text-xs text-slate-400">
-                  {fmtAge(detail.row.macro_since ?? detail.row.status_since)} en esta macroetapa · fuente:{" "}
-                  {detail.row.status_source ?? "—"}
-                </span>
+          <div className="flex flex-col gap-5 p-5">
+            <section
+              data-drawer-section="resumen"
+              className="order-1 scroll-mt-28 space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4"
+            >
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                  Situación del pedido
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <MacroStageBadge stage={detail.row.macro_stage} />
+                  <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-600 ring-1 ring-slate-200">
+                    {macroSubstageLabel(detail.row.macro_substage)}
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    {fmtAge(detail.row.macro_since ?? detail.row.status_since)} en esta macroetapa · fuente:{" "}
+                    {detail.row.status_source ?? "—"}
+                  </span>
+                </div>
               </div>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+
+              <DrawerJourneyRail current={detail.row.macro_stage} />
+
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4">
                 <Field label="Cliente" value={detail.row.customer_name} />
                 <Field label="Teléfono" value={detail.row.customer_phone} />
                 <Field
@@ -1454,35 +1714,44 @@ function OrderDrawer({
                 />
                 <Field label="Monto" value={fmtMoney(detail.row.order_total)} />
               </dl>
+
+              {nextAction && <DrawerNextActionCard action={nextAction} onJump={jumpTo} />}
             </section>
 
-            <GeoSection
-              orderId={orderId}
-              row={detail.row}
-              canEdit={canEdit}
-              onSaved={() => {
-                void reload();
-                onSaved();
-              }}
-            />
+            <div className="order-2 scroll-mt-28">
+              <GeoSection
+                orderId={orderId}
+                row={detail.row}
+                canEdit={canEdit}
+                onSaved={() => {
+                  void reload();
+                  onSaved();
+                }}
+              />
+            </div>
 
             {detail.lineItems.length > 0 && (
-              <section>
-                <h3 data-drawer-section="productos" className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <section
+                data-drawer-section="productos"
+                className="order-3 scroll-mt-28 rounded-xl border border-slate-200 bg-white p-4"
+              >
+                <h3 className="mb-2 text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
                   Productos
                 </h3>
-                <ul className="space-y-1 text-sm text-slate-700">
+                <ul className="divide-y divide-slate-100 text-sm text-slate-700">
                   {detail.lineItems.map((li, i) => (
-                    <li key={i} className="flex justify-between gap-3">
-                      <span className="truncate">{li.title}</span>
-                      <span className="shrink-0 text-slate-500">×{li.quantity}</span>
+                    <li key={i} className="flex justify-between gap-3 py-2 first:pt-0 last:pb-0">
+                      <span className="min-w-0">{li.title}</span>
+                      <span className="shrink-0 rounded-md bg-slate-100 px-2 py-0.5 font-medium text-slate-600">
+                        ×{li.quantity}
+                      </span>
                     </li>
                   ))}
                 </ul>
               </section>
             )}
 
-            <div data-drawer-section="rutas">
+            <div data-drawer-section="rutas" className="order-5 scroll-mt-28">
               <OrderRouteDesk
                 plan={detail.routePlan}
                 closed={detail.row.macro_stage === "finalizado"}
@@ -1491,14 +1760,22 @@ function OrderDrawer({
               />
             </div>
 
-            <section>
-              <div className="mb-1.5 flex items-center gap-2">
-                <h3
-                  data-drawer-section="guias"
-                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                >
-                  Couriers y guías ({detail.guides.length})
-                </h3>
+            <section
+              data-drawer-section="guias"
+              className="order-7 scroll-mt-28 rounded-xl border border-sky-200 bg-sky-50/40 p-4"
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-sky-900">
+                    Salidas y guías
+                  </h3>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Cada salida conserva su courier, rótulo, QR y resultado independiente.
+                  </p>
+                </div>
+                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-sky-800 ring-1 ring-sky-200">
+                  {detail.guides.length}
+                </span>
               </div>
               {detail.guides.length === 0 ? (
                 <p className="text-sm text-slate-400">
@@ -1509,7 +1786,7 @@ function OrderDrawer({
                   {detail.guides.map((g) => (
                     <li
                       key={g.id}
-                      className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-100 bg-white px-3 py-2 text-sm shadow-sm"
                     >
                       <span className="font-medium capitalize text-slate-800">{g.courier}</span>
                       <span className="font-mono text-xs text-slate-500">
@@ -1591,52 +1868,67 @@ function OrderDrawer({
               )}
             </section>
 
-            <div data-drawer-section="cierre">
-              <OrderClosureDesk
-                stage={detail.row.macro_stage}
-                reasons={(detail.row.macro_reasons ?? []) as MacroSubstage[]}
-                generalStatus={detail.row.general_status}
-                guides={detail.guides}
-                permissions={closurePermissions}
-                pending={pending}
-                onAction={(input) => run(() => registerClosureAction(orderId, input))}
-              />
-            </div>
+            {["por_cerrar", "finalizado"].includes(detail.row.macro_stage ?? "") && (
+              <div data-drawer-section="cierre" className="order-8 scroll-mt-28">
+                <OrderClosureDesk
+                  stage={detail.row.macro_stage}
+                  reasons={(detail.row.macro_reasons ?? []) as MacroSubstage[]}
+                  generalStatus={detail.row.general_status}
+                  guides={detail.guides}
+                  permissions={closurePermissions}
+                  pending={pending}
+                  onAction={(input) => run(() => registerClosureAction(orderId, input))}
+                />
+              </div>
+            )}
 
-            <section>
-              <h3 data-drawer-section="historial" className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Línea de tiempo ({detail.timeline.length})
-              </h3>
-              {detail.timeline.length === 0 ? (
-                <p className="text-sm text-slate-400">Sin movimientos registrados.</p>
-              ) : (
-                <ol className="space-y-2 border-l border-slate-200 pl-4">
-                  {detail.timeline.map((t) => (
-                    <li key={t.id} className="relative">
-                      <span className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-slate-300" />
-                      <p className="text-sm text-slate-800">
-                        {TIMELINE_LABEL[t.kind] ?? t.kind}
-                        {t.newStatus && (
-                          <span className="ml-1 text-slate-500">
-                            → {generalLabel(t.newStatus)}
-                          </span>
+            <details
+              data-drawer-section="historial"
+              className="group order-10 scroll-mt-28 overflow-hidden rounded-xl border border-slate-200 bg-white"
+            >
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 hover:bg-slate-50">
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">
+                    Historial y auditoría
+                  </h3>
+                  <p className="mt-0.5 text-xs text-slate-400">
+                    {detail.timeline.length} movimiento{detail.timeline.length === 1 ? "" : "s"} · se conserva indefinidamente
+                  </p>
+                </div>
+                <span className="text-sm text-slate-400 transition-transform group-open:rotate-180">⌄</span>
+              </summary>
+              <div className="border-t border-slate-100 px-4 py-4">
+                {detail.timeline.length === 0 ? (
+                  <p className="text-sm text-slate-400">Sin movimientos registrados.</p>
+                ) : (
+                  <ol className="space-y-3 border-l border-slate-200 pl-4">
+                    {detail.timeline.map((t) => (
+                      <li key={t.id} className="relative">
+                        <span className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-slate-300" />
+                        <p className="text-sm font-medium text-slate-800">
+                          {TIMELINE_LABEL[t.kind] ?? t.kind}
+                          {t.newStatus && (
+                            <span className="ml-1 font-normal text-slate-500">
+                              → {generalLabel(t.newStatus)}
+                            </span>
+                          )}
+                        </p>
+                        {(t.note || t.reason) && (
+                          <p className="mt-0.5 text-sm leading-5 text-slate-600">{t.note ?? t.reason}</p>
                         )}
-                      </p>
-                      {(t.note || t.reason) && (
-                        <p className="text-sm text-slate-600">{t.note ?? t.reason}</p>
-                      )}
-                      <p className="text-xs text-slate-400">
-                        {fmtDateTime(t.occurredAt)}
-                        {t.actorName ? ` · ${t.actorName}` : ""}
-                        {t.courier ? ` · ${t.courier}` : ""}
-                        {t.guideCode ? ` · ${t.guideCode}` : ""}
-                        {` · ${t.origin === "gestion" ? "Repro Provincia" : t.source}`}
-                      </p>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </section>
+                        <p className="mt-0.5 text-xs text-slate-400">
+                          {fmtDateTime(t.occurredAt)}
+                          {t.actorName ? ` · ${t.actorName}` : ""}
+                          {t.courier ? ` · ${t.courier}` : ""}
+                          {t.guideCode ? ` · ${t.guideCode}` : ""}
+                          {` · ${t.origin === "gestion" ? "Repro Provincia" : t.source}`}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            </details>
 
             {/* El panel de pagos aparece cuando el pedido YA va por agencia
                 (`usesPickupKeyFlow`) y también cuando TODAVÍA PUEDE ir: si desde
@@ -1647,10 +1939,11 @@ function OrderDrawer({
                 solo salía con `courier='shalom'`, que no existe hasta que la
                 guía está creada, y crear la guía exige el adelanto. Para
                 registrar el pago hacía falta la guía, y para la guía el pago. */}
-            {(usesPickupKeyFlow(detail.row.current_courier, detail.row.shipping_mode) ||
-              (canCreateShalomGuide && detail.routePlan.candidates.some((candidate) =>
-                candidate.key === "shalom" || candidate.key === "olva"))) && (
-              <div data-drawer-section="pagos">
+            {showPaymentPanel && (
+              <div
+                data-drawer-section="pagos"
+                className="order-4 scroll-mt-28 rounded-xl border border-amber-200 bg-amber-50/30 p-4"
+              >
                 <PickupKeyPanel orderId={orderId} onChanged={onSaved} />
               </div>
             )}
@@ -1658,7 +1951,7 @@ function OrderDrawer({
             {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
                 una. En cuanto existe, el seguimiento vive en Envíos. */}
             {canCreateGuide && (
-              <div data-drawer-section="aliclik">
+              <div data-drawer-section="aliclik" className="order-6 scroll-mt-28">
                 <AliclikGuidePanel
                   orderId={orderId}
                   hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
@@ -1683,9 +1976,11 @@ function OrderDrawer({
                 onRelink={(guideCode) => run(() => relinkGuide(guideCode, orderId))}
               />
             ) : (
-              <EmptyState title="Solo lectura">
-                Tu rol permite consultar el pedido, sus comentarios y su historial, pero no modificarlo.
-              </EmptyState>
+              <div className="order-9">
+                <EmptyState title="Solo lectura">
+                  Tu rol permite consultar el pedido, sus comentarios y su historial, pero no modificarlo.
+                </EmptyState>
+              </div>
             )}
           </div>
         )}
@@ -1825,9 +2120,12 @@ function GeoSection({
   const set = (patch: Partial<OrderGeoInput>) => setForm((f) => ({ ...f, ...patch }));
 
   return (
-    <section className="space-y-2">
+    <section
+      data-drawer-section="ubicacion"
+      className="scroll-mt-28 space-y-3 rounded-xl border border-slate-200 bg-white p-4"
+    >
       <div className="flex flex-wrap items-center gap-2">
-        <h3 data-drawer-section="ubicacion" className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ubicación</h3>
+        <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Ubicación y cobertura</h3>
         <CoverageBadge coverage={row.coverage} />
         {row.geo_source && (
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
@@ -2049,11 +2347,22 @@ function OrderActions({
   }, [general, options, operational]);
 
   return (
-    <section className="space-y-4 border-t border-slate-200 pt-4">
-      <div className="space-y-2">
-        <h3 data-drawer-section="acciones" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Registrar estado
+    <section
+      data-drawer-section="acciones"
+      className="order-9 scroll-mt-28 space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4"
+    >
+      <div>
+        <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">
+          Gestión manual
         </h3>
+        <p className="mt-1 text-xs leading-5 text-slate-500">
+          Registra el resultado operativo o deja una nota. Las correcciones excepcionales están separadas al final.
+        </p>
+      </div>
+      <div className="space-y-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Registrar estado
+        </h4>
         <div className="flex flex-wrap gap-2">
           <select
             value={general}
@@ -2130,60 +2439,68 @@ function OrderActions({
         </div>
       </div>
 
-      <div className="space-y-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Registrar devolución
-        </h3>
-        <p className="text-xs text-slate-400">
-          Solo se marca como devuelto si consta el despacho y la guía; si no, queda como retorno en
-          curso.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <input
-            value={returnGuide}
-            onChange={(e) => setReturnGuide(e.target.value)}
-            placeholder="Guía"
-            className="w-40 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-          />
-          <input
-            value={returnReason}
-            onChange={(e) => setReturnReason(e.target.value)}
-            placeholder="Motivo de la devolución"
-            className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-          />
-          <button
-            disabled={pending || !returnReason.trim()}
-            onClick={() => onReturn(returnReason, returnGuide)}
-            className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-white disabled:text-slate-400"
-          >
-            Registrar
-          </button>
-        </div>
-      </div>
+      <details className="group overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+          Devoluciones y correcciones avanzadas
+          <span className="text-slate-400 transition-transform group-open:rotate-180">⌄</span>
+        </summary>
+        <div className="space-y-4 border-t border-slate-100 p-3">
+          <div className="space-y-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-rose-700">
+              Registrar devolución
+            </h4>
+            <p className="text-xs text-slate-500">
+              Solo se marca como devuelto si consta el despacho y la guía; si no, queda como retorno en
+              curso.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <input
+                value={returnGuide}
+                onChange={(e) => setReturnGuide(e.target.value)}
+                placeholder="Guía"
+                className="w-40 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+              />
+              <input
+                value={returnReason}
+                onChange={(e) => setReturnReason(e.target.value)}
+                placeholder="Motivo de la devolución"
+                className="min-w-44 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+              />
+              <button
+                disabled={pending || !returnReason.trim()}
+                onClick={() => onReturn(returnReason, returnGuide)}
+                className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-white disabled:text-slate-400"
+              >
+                Registrar
+              </button>
+            </div>
+          </div>
 
-      <div className="space-y-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Corregir vínculo de guía
-        </h3>
-        <div className="flex gap-2">
-          <input
-            value={relinkCode}
-            onChange={(e) => setRelinkCode(e.target.value)}
-            placeholder="Código de guía a vincular a este pedido"
-            className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-          />
-          <button
-            disabled={pending || !relinkCode.trim()}
-            onClick={() => {
-              onRelink(relinkCode);
-              setRelinkCode("");
-            }}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
-          >
-            Vincular
-          </button>
+          <div className="space-y-2 border-t border-slate-100 pt-4">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Corregir vínculo de guía
+            </h4>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                value={relinkCode}
+                onChange={(e) => setRelinkCode(e.target.value)}
+                placeholder="Código de guía a vincular a este pedido"
+                className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+              />
+              <button
+                disabled={pending || !relinkCode.trim()}
+                onClick={() => {
+                  onRelink(relinkCode);
+                  setRelinkCode("");
+                }}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+              >
+                Vincular
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      </details>
     </section>
   );
 }
