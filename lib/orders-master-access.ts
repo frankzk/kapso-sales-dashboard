@@ -11,6 +11,13 @@ import { createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { evaluateDirectFenixStock, type FenixStockRow } from "@/lib/fenix";
+import { deriveFenixCoverageCity } from "@/lib/shipments";
+import {
+  buildOrderRoutePlan,
+  type OrderRoutePlan,
+  type SwaypRouteCheck,
+} from "@/lib/order-route-plan";
 import type { AgencySummary } from "@/lib/order-master-filters";
 import type {
   OrderEventRow,
@@ -21,7 +28,9 @@ import type {
 } from "@/lib/types";
 import {
   ORDER_MACRO_STAGES,
+  classifyOperation,
   type MacroSubstage,
+  type OperationKind,
   type OrderMacroStage,
 } from "@/lib/order-macro-stage";
 
@@ -238,6 +247,7 @@ export interface OrderMasterDetail {
   timeline: TimelineEntry[];
   lineItems: OrderLineItem[];
   address: ReturnType<typeof shopifyShippingAddress>;
+  routePlan: OrderRoutePlan;
 }
 
 const GUIDE_COLUMNS =
@@ -250,6 +260,51 @@ const GUIDE_COLUMNS =
   "next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id," +
   "suggested_order_name,output_number,output_code,qr_token,preparation_state,custody_state," +
   "ready_at,ready_by,custody_transferred_at,custody_transferred_by,label_url,created_at,updated_at";
+
+async function swaypRouteCheck(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  row: OrderMasterRow,
+  lineItems: OrderLineItem[],
+): Promise<SwaypRouteCheck> {
+  const { data: store, error: storeError } = await sb
+    .from("stores")
+    .select("org_id")
+    .eq("id", row.store_id)
+    .maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  if (storeError || !orgId) return { known: false };
+
+  const { data, error } = await sb
+    .from("fenix_stock")
+    .select("city,product,sku,quantity")
+    .eq("org_id", orgId);
+  if (error) return { known: false };
+
+  const city = deriveFenixCoverageCity(row.district, row.region);
+  const check = evaluateDirectFenixStock(
+    city,
+    ((data ?? []) as FenixStockRow[]),
+    lineItems.map((item) => ({
+      title: item.title,
+      sku: item.sku ?? null,
+      quantity: item.quantity,
+    })),
+  );
+  return {
+    known: true,
+    city: check.city,
+    covered: check.reason !== "sin_cobertura",
+    stockOk: check.ok,
+    uncovered: check.uncovered,
+  };
+}
+
+function operationOf(row: OrderMasterRow, guides: ShipmentRow[]): OperationKind {
+  if (["lima", "provincia_cod", "agencia"].includes(row.macro_operation ?? "")) {
+    return row.macro_operation as OperationKind;
+  }
+  return classifyOperation(row, guides);
+}
 
 /**
  * Detalle de un pedido: su fila del Master, sus guías, la línea de tiempo
@@ -343,11 +398,25 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     .sort((a, b) => (a.occurredAt < b.occurredAt ? -1 : a.occurredAt > b.occurredAt ? 1 : 0));
 
   const orderRow = orderRes.data as { line_items?: OrderLineItem[]; raw?: unknown } | null;
+  const lineItems = orderRow?.line_items ?? [];
+  const swayp = await swaypRouteCheck(sb, row, lineItems);
   return {
     row,
     guides,
     timeline,
-    lineItems: orderRow?.line_items ?? [],
+    lineItems,
     address: shopifyShippingAddress(orderRow?.raw),
+    routePlan: buildOrderRoutePlan({
+      operation: operationOf(row, guides),
+      paymentState: row.payment_state,
+      swayp,
+      outputs: guides.map((guide) => ({
+        id: guide.id,
+        courier: guide.courier,
+        deliveryStatus: guide.delivery_status,
+        custodyState: guide.custody_state,
+        attempts: guide.aliclik_attempts ?? guide.reroute_attempts,
+      })),
+    }),
   };
 }

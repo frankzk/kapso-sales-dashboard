@@ -27,9 +27,12 @@ function earliestDispatchDate(): string {
  * al Excel de programación de su fecha.
  */
 export function DirectFenixGuideModal({
+  initialOrderId,
   onClose,
   onCreated,
 }: {
+  /** Abre desde el Master sin volver a buscar el pedido. */
+  initialOrderId?: string;
   onClose: () => void;
   /** Recibe el id de la guía creada para que el tablero salte a "En ruta" y la resalte. */
   onCreated: (shipmentId?: string) => void;
@@ -50,6 +53,19 @@ export function DirectFenixGuideModal({
   const [msg, setMsg] = useState<string | null>(null);
   const [createdNotice, setCreatedNotice] = useState<string | null>(null);
   const [pending, start] = useTransition();
+
+  useEffect(() => {
+    if (!initialOrderId) return;
+    setLoadingPreview(true);
+    void previewDirectFenixGuide({ orderId: initialOrderId }).then((result) => {
+      setLoadingPreview(false);
+      if ("error" in result) setMsg(result.error);
+      else {
+        setPreview(result);
+        setCodeTouched(false);
+      }
+    });
+  }, [initialOrderId]);
 
   // debounced local search (mirror of OrderLinkPicker)
   useEffect(() => {
@@ -121,7 +137,7 @@ export function DirectFenixGuideModal({
         return;
       }
       setMsg(null);
-      setCreatedNotice(r.notice ?? "Guía Fenix directa creada.");
+      setCreatedNotice(r.notice ?? "Guía Swayp directa creada.");
       onCreated(r.shipmentId);
     });
   }
@@ -146,9 +162,9 @@ export function DirectFenixGuideModal({
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-2.5">
           <div>
-            <p className="text-sm font-semibold text-slate-900">Guía Fenix directa</p>
+            <p className="text-sm font-semibold text-slate-900">Guía Swayp directa</p>
             <p className="text-xs text-slate-500">
-              Despacho urgente desde el almacén regional de Fénix, sin guía Aliclik previa.
+              Despacho desde el stock regional de Swayp (antes Fénix), sin guía Aliclik previa.
             </p>
           </div>
           <button onClick={onClose} className="text-sm text-slate-400 hover:text-slate-700">
@@ -163,7 +179,7 @@ export function DirectFenixGuideModal({
             </p>
             <p className="text-xs text-slate-500">
               Al cerrar te llevamos a la pestaña <b>En ruta</b>, donde queda la guía. Para enviarla a
-              Fenix, filtra por su fecha de despacho y descarga el Excel de programación.
+              Swayp, filtra por su fecha de despacho y descarga el Excel de programación.
             </p>
             <button
               onClick={onClose}
@@ -171,6 +187,11 @@ export function DirectFenixGuideModal({
             >
               Ver la guía en En ruta
             </button>
+          </div>
+        ) : !preview && initialOrderId ? (
+          <div className="pt-4">
+            <p className="text-sm text-slate-500">Validando cobertura y stock Swayp…</p>
+            {msg && <p className="mt-3 rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">{msg}</p>}
           </div>
         ) : !preview ? (
           <div className="space-y-2 pt-3">
@@ -310,7 +331,7 @@ export function DirectFenixGuideModal({
               </dl>
               {preview.schedule && (
                 <p className="border-t border-amber-100 bg-amber-50/70 px-3 py-1.5 text-xs text-amber-800">
-                  Horario Fenix: {preview.schedule.hours}
+                  Horario Swayp: {preview.schedule.hours}
                   {preview.schedule.note ? ` · ${preview.schedule.note}` : ""}
                 </p>
               )}
@@ -318,7 +339,7 @@ export function DirectFenixGuideModal({
 
             <section className="rounded-xl border border-slate-200">
               <p className="border-b border-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
-                Productos y stock Fenix{preview.city ? ` en ${titleCaseCity(preview.city)}` : ""}
+                Productos y stock Swayp{preview.city ? ` en ${titleCaseCity(preview.city)}` : ""}
               </p>
               <ul className="divide-y divide-slate-100">
                 {preview.lineItems.length === 0 && (
@@ -356,10 +377,10 @@ export function DirectFenixGuideModal({
                 )}
               >
                 {preview.stockOk
-                  ? "Stock Fenix disponible para todo el pedido."
+                  ? "Stock Swayp disponible para todo el pedido."
                   : preview.stockReason === "sin_cobertura"
-                    ? "Fenix no tiene cobertura en este destino."
-                    : "Falta stock Fenix para parte del pedido. Actualiza Stock Fenix e intenta de nuevo."}
+                    ? "Swayp no tiene cobertura en este destino."
+                    : "Falta stock Swayp para parte del pedido. Actualiza Stock Swayp e intenta de nuevo."}
               </p>
             </section>
 
@@ -377,7 +398,7 @@ export function DirectFenixGuideModal({
                   <p key={g.id} className="mt-0.5 font-mono">
                     {g.guide_code}{" "}
                     <span className="font-sans">
-                      ({g.courier === "fenix" ? "Fenix" : "Aliclik"} · {g.delivery_status})
+                      ({g.courier === "fenix" ? "Swayp" : "Aliclik"} · {g.delivery_status})
                     </span>
                   </p>
                 ))}
@@ -404,7 +425,7 @@ export function DirectFenixGuideModal({
                 />
               </label>
               <label className="block text-xs text-slate-500">
-                N° de guía Fenix
+                N° de guía Swayp
                 <div className="mt-0.5 flex gap-2">
                   <input
                     value={guideCode}
@@ -448,7 +469,7 @@ export function DirectFenixGuideModal({
               disabled={pending || !canCreate}
               className="w-full rounded-lg border border-orange-300 bg-orange-50 px-3 py-1.5 text-sm font-medium text-orange-800 hover:bg-orange-100 disabled:opacity-50"
             >
-              {pending ? "Creando…" : "Crear guía Fenix directa"}
+              {pending ? "Creando…" : "Crear guía Swayp directa"}
             </button>
           </div>
         )}

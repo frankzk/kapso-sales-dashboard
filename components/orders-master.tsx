@@ -13,6 +13,9 @@ import Link from "next/link";
 import { Card, cn, EmptyState } from "@/components/ui";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { ShalomGuidePanel } from "@/components/shalom-guide-panel";
+import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
+import { OrderRouteDesk } from "@/components/order-route-desk";
+import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
 import { ChecklistFilter } from "@/components/filters";
 import { PickupKeyPanel } from "@/components/pickup-key-panel";
 import { TandersGuideModal } from "@/components/tanders-guide-modal";
@@ -56,6 +59,8 @@ import {
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, usesPickupKeyFlow, type KeyState, type PaymentState } from "@/lib/pickup-key";
 import { MASTER_VIEWS, type MasterCounts, type MasterView, type OrderMasterDetail } from "@/lib/orders-master-access";
+import { outputDisplayCode } from "@/lib/shipment-output";
+import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -1005,6 +1010,7 @@ const TIMELINE_LABEL: Record<string, string> = {
   cancelled_shopify: "Anulado en Shopify",
   courier_assigned: "Courier asignado",
   guide_registered: "Guía registrada",
+  route_output_created: "Salida y rótulo creados",
   dispatched: "Pedido despachado",
   out_for_delivery: "Salida a reparto",
   attempt_failed: "Intento fallido",
@@ -1044,10 +1050,15 @@ function OrderDrawer({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const router = useRouter();
   const [detail, setDetail] = useState<OrderMasterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [tandersOpen, setTandersOpen] = useState(false);
+  const [swaypOpen, setSwaypOpen] = useState(false);
+  const [selectedPanel, setSelectedPanel] = useState<"aliclik" | "shalom" | null>(null);
+  const [manualRoute, setManualRoute] = useState<RouteCandidate | null>(null);
+  const [agencyPaymentOpen, setAgencyPaymentOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   const reload = useMemo(
@@ -1076,6 +1087,41 @@ function OrderDrawer({
         onSaved();
       }
     });
+  }
+
+  function routeEnabled(route: RouteCandidate): boolean {
+    if (route.action === "aliclik") return canCreateGuide;
+    if (route.action === "shalom") return canCreateShalomGuide;
+    if (route.action === "tanders") return canCreateTandersGuide;
+    return canEdit;
+  }
+
+  function selectRoute(route: RouteCandidate) {
+    setError(null);
+    setNotice(null);
+    if (route.action === "manual") {
+      if (route.key === "olva") setAgencyPaymentOpen(true);
+      setManualRoute(route);
+      return;
+    }
+    if (route.action === "tanders") {
+      setTandersOpen(true);
+      return;
+    }
+    if (route.action === "swayp") {
+      if (route.relatedShipmentId) {
+        router.push(`/dashboard/envios?view=pendiente&open=${route.relatedShipmentId}`);
+      } else {
+        setSwaypOpen(true);
+      }
+      return;
+    }
+    if (route.action === "shalom") setAgencyPaymentOpen(true);
+    setSelectedPanel(route.action);
+    setTimeout(
+      () => document.getElementById(`route-panel-${route.action}`)?.scrollIntoView({ behavior: "smooth" }),
+      50,
+    );
   }
 
   const row = detail?.row;
@@ -1165,19 +1211,18 @@ function OrderDrawer({
               </section>
             )}
 
+            <OrderRouteDesk
+              plan={detail.routePlan}
+              closed={["entregado", "anulado", "devuelto"].includes(detail.row.general_status)}
+              actionEnabled={routeEnabled}
+              onSelect={selectRoute}
+            />
+
             <section>
               <div className="mb-1.5 flex items-center gap-2">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Couriers y guías ({detail.guides.length})
                 </h3>
-                {canCreateTandersGuide && !detail.row.guide_code && (
-                  <button
-                    onClick={() => setTandersOpen(true)}
-                    className="ml-auto rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    + Guía Tanders
-                  </button>
-                )}
               </div>
               {detail.guides.length === 0 ? (
                 <p className="text-sm text-slate-400">
@@ -1191,7 +1236,9 @@ function OrderDrawer({
                       className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm"
                     >
                       <span className="font-medium capitalize text-slate-800">{g.courier}</span>
-                      <span className="font-mono text-xs text-slate-500">{g.guide_code}</span>
+                      <span className="font-mono text-xs text-slate-500">
+                        {outputDisplayCode(g.output_code, g.courier) || g.guide_code}
+                      </span>
                       {g.courier.toLowerCase() === "shalom" && g.shalom_codigo ? (
                         <span className="font-mono text-xs text-slate-500">· {g.shalom_codigo}</span>
                       ) : null}
@@ -1211,6 +1258,16 @@ function OrderDrawer({
                           className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
                         >
                           Rótulo PDF
+                        </a>
+                      ) : null}
+                      {g.qr_token ? (
+                        <a
+                          href={`/api/pedidos/rotulo/${g.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          Rótulo interno
                         </a>
                       ) : null}
                       {g.guide_code === detail.row.guide_code && (
@@ -1265,22 +1322,24 @@ function OrderDrawer({
               )}
             </section>
 
-            {usesPickupKeyFlow(detail.row.current_courier, detail.row.shipping_mode) && (
+            {(usesPickupKeyFlow(detail.row.current_courier, detail.row.shipping_mode) ||
+              agencyPaymentOpen) && (
               <PickupKeyPanel orderId={orderId} onChanged={onSaved} />
             )}
 
-            {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
-                una. En cuanto existe, el seguimiento vive en Envíos. */}
-            {canCreateShalomGuide && !detail.row.guide_code && (
-              <ShalomGuidePanel
-                orderId={orderId}
-                onCreated={() => {
-                  void reload();
-                  onSaved();
-                }}
-              />
+            {selectedPanel === "shalom" && canCreateShalomGuide && (
+              <div id="route-panel-shalom">
+                <ShalomGuidePanel
+                  orderId={orderId}
+                  onCreated={() => {
+                    void reload();
+                    onSaved();
+                  }}
+                />
+              </div>
             )}
-            {canCreateGuide && !detail.row.guide_code && (
+            {selectedPanel === "aliclik" && canCreateGuide && (
+              <div id="route-panel-aliclik">
                 <AliclikGuidePanel
                   orderId={orderId}
                   hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
@@ -1289,6 +1348,7 @@ function OrderDrawer({
                     onSaved();
                   }}
                 />
+              </div>
             )}
 
             {canEdit ? (
@@ -1316,6 +1376,28 @@ function OrderDrawer({
         <TandersGuideModal
           orderId={orderId}
           onClose={() => setTandersOpen(false)}
+          onCreated={() => {
+            void reload();
+            onSaved();
+          }}
+        />
+      )}
+      {swaypOpen && (
+        <DirectFenixGuideModal
+          initialOrderId={orderId}
+          onClose={() => setSwaypOpen(false)}
+          onCreated={() => {
+            void reload();
+            onSaved();
+          }}
+        />
+      )}
+      {manualRoute && ["axel", "urpi", "propio", "olva"].includes(manualRoute.key) && (
+        <ManualRouteOutputModal
+          orderId={orderId}
+          route={manualRoute as RouteCandidate & { key: "axel" | "urpi" | "propio" | "olva" }}
+          activeOutputs={detail?.routePlan.activeOutputCount ?? 0}
+          onClose={() => setManualRoute(null)}
           onCreated={() => {
             void reload();
             onSaved();

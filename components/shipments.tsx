@@ -232,6 +232,7 @@ export function ShipmentsBoard({
   shipments,
   reprogram,
   todayByAgent,
+  initialOpenId,
 }: {
   stores: StoreSummary[];
   view: ShipmentView;
@@ -239,9 +240,10 @@ export function ShipmentsBoard({
   shipments: ShipmentRow[];
   reprogram?: ReprogramStats;
   todayByAgent?: ReproDayAgentNamed[];
+  initialOpenId?: string | null;
 }) {
   const router = useRouter();
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(initialOpenId ?? null);
 
   // client-side filters over the loaded view. Empty set = "all".
   const [storeFilter, setStoreFilter] = useState<Set<string>>(new Set());
