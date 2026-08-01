@@ -121,6 +121,7 @@ export interface PaymentRow {
 
 export interface PickupKeyPanel {
   storeId: string;
+  orderTotal: number | null;
   payments: PaymentRow[];
   paymentState: string;
   hasKey: boolean;
@@ -182,8 +183,9 @@ export async function loadPaymentPanel(
   return {
     panel: {
       storeId: ctx.storeId,
+      orderTotal: ctx.row.order_total,
       payments,
-      paymentState: paymentState(snapshots),
+      paymentState: paymentState(snapshots, ctx.row.order_total),
       hasKey: Boolean(keyRow),
       canReveal: verdict.allowed,
       blockers: describeBlockers(verdict),
@@ -461,15 +463,20 @@ export async function registerPayment(
 
   const { data: currentPayments } = await admin
     .from("order_payments")
-    .select("kind,validation_status")
+    .select("kind,validation_status,amount")
     .eq("order_id", orderId)
     .neq("validation_status", "rechazado");
   const liveKinds = new Set(
-    ((currentPayments ?? []) as { kind: string; validation_status: string }[]).map((p) => p.kind),
+    ((currentPayments ?? []) as { kind: string; validation_status: string; amount: number | null }[])
+      .map((p) => p.kind),
   );
+  const existingAmount = (
+    (currentPayments ?? []) as { kind: string; validation_status: string; amount: number | null }[]
+  ).reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
   const planProblem = paymentPlanProblem({
     kind: input.kind,
     existingKinds: [...liveKinds],
+    existingAmount,
     amount: amount ?? null,
     orderTotal: ctx.row.order_total,
   });
@@ -889,7 +896,7 @@ export async function revealPickupKey(
     reason: input.reason?.trim() || null,
     override: !verdict.allowed,
     payment_state: {
-      state: paymentState(payments),
+      state: paymentState(payments, ctx.row.order_total),
       orderTotal: ctx.row.order_total,
       paidTotal: payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
       payments: payments.map((p) => ({ kind: p.kind, status: p.validation_status, amount: p.amount })),

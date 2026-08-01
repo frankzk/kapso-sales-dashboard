@@ -730,7 +730,7 @@ export async function recomputeOrderMaster(
 
     const paymentSignals = signals.get(order.id) ?? null;
     const resolvedPaymentState = paymentSignals
-      ? paymentState(paymentSignals.payments)
+      ? paymentState(paymentSignals.payments, order.total_amount)
       : null;
     const resolvedCoverage = classifyOrderCoverage(
       {

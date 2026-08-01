@@ -9,6 +9,84 @@
 import type { GeneralStatus } from "@/lib/order-status";
 
 export type PaymentKind = "adelanto" | "diferencia" | "total";
+export const SHALOM_MINIMUM_ADVANCE = 30;
+
+function isLive(payment: PaymentSnapshot): boolean {
+  return payment.validation_status !== "rechazado";
+}
+
+function inCents(value: number | null | undefined): number | null {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) : null;
+}
+
+export interface PaymentProgress {
+  orderTotal: number | null;
+  registeredTotal: number;
+  validatedTotal: number;
+  registeredRemaining: number | null;
+  validatedRemaining: number | null;
+  advanceRegistered: boolean;
+  advanceValidated: boolean;
+  completeRegistered: boolean;
+  completeValidated: boolean;
+}
+
+/** Resumen monetario único para el drawer, el Master y las reglas de clave. */
+export function paymentProgress(
+  payments: readonly PaymentSnapshot[],
+  orderTotal: number | null,
+): PaymentProgress {
+  const live = payments.filter(isLive);
+  const registeredCents = live.reduce((sum, payment) => sum + (inCents(payment.amount) ?? 0), 0);
+  const validatedCents = live
+    .filter((payment) => payment.validation_status === "validado")
+    .reduce((sum, payment) => sum + (inCents(payment.amount) ?? 0), 0);
+  const advanceRegisteredCents = live
+    .filter((payment) => payment.kind === "adelanto" || payment.kind === "total")
+    .reduce((sum, payment) => sum + (inCents(payment.amount) ?? 0), 0);
+  const advanceValidatedCents = live
+    .filter(
+      (payment) =>
+        payment.validation_status === "validado" &&
+        (payment.kind === "adelanto" || payment.kind === "total"),
+    )
+    .reduce((sum, payment) => sum + (inCents(payment.amount) ?? 0), 0);
+  const hasTotalRegistered = live.some((payment) => payment.kind === "total");
+  const hasTotalValidated = live.some(
+    (payment) => payment.kind === "total" && payment.validation_status === "validado",
+  );
+  const totalCents = inCents(orderTotal);
+  const validOrderTotal = totalCents !== null && totalCents > 0 ? totalCents : null;
+
+  return {
+    orderTotal: validOrderTotal === null ? null : validOrderTotal / 100,
+    registeredTotal: registeredCents / 100,
+    validatedTotal: validatedCents / 100,
+    registeredRemaining:
+      validOrderTotal === null ? null : Math.max(0, validOrderTotal - registeredCents) / 100,
+    validatedRemaining:
+      validOrderTotal === null ? null : Math.max(0, validOrderTotal - validatedCents) / 100,
+    advanceRegistered:
+      hasTotalRegistered || advanceRegisteredCents >= SHALOM_MINIMUM_ADVANCE * 100,
+    advanceValidated:
+      hasTotalValidated || advanceValidatedCents >= SHALOM_MINIMUM_ADVANCE * 100,
+    completeRegistered: validOrderTotal !== null && registeredCents >= validOrderTotal,
+    completeValidated: validOrderTotal !== null && validatedCents >= validOrderTotal,
+  };
+}
+
+/** Tipos que corresponden al siguiente comprobante, no una lista fija de tres. */
+export function nextPaymentKinds(
+  payments: readonly PaymentSnapshot[],
+  orderTotal: number | null,
+): PaymentKind[] {
+  const live = payments.filter(isLive);
+  const kinds = new Set(live.map((payment) => payment.kind));
+  if (kinds.has("total") || paymentProgress(live, orderTotal).completeRegistered) return [];
+  if (kinds.has("adelanto") || kinds.has("diferencia")) return ["diferencia"];
+  return ["adelanto", "total"];
+}
 
 /**
  * Protege la exclusión entre los dos planes de cobro y, para pago total,
@@ -17,22 +95,39 @@ export type PaymentKind = "adelanto" | "diferencia" | "total";
 export function paymentPlanProblem(input: {
   kind: PaymentKind;
   existingKinds: readonly string[];
+  existingAmount?: number;
   amount: number | null;
   orderTotal: number | null;
 }): string | null {
   const existing = new Set(input.existingKinds);
-  if (input.kind === "total" && (existing.has("adelanto") || existing.has("diferencia"))) {
+  if (input.kind === "total" && existing.size > 0) {
     return (
-      "Este pedido ya tiene un adelanto o una diferencia registrados. " +
-      "Completa el flujo existente en vez de cargar un pago total."
+      "Este pedido ya tiene pagos registrados. " +
+      "Completa el saldo con Diferencia en vez de cargar un Pago total."
     );
   }
   if (input.kind !== "total" && existing.has("total")) {
     return "Este pedido ya tiene un pago total registrado.";
   }
+  if (input.kind === "adelanto" && existing.size > 0) {
+    return "El adelanto solo puede ser el primer pago del pedido.";
+  }
+  if (input.kind === "diferencia" && !existing.has("adelanto")) {
+    return "El primer pago debe registrarse como Adelanto o Pago total.";
+  }
+  const orderTotal = Number(input.orderTotal);
+  const existingAmount = Number(input.existingAmount ?? 0);
+  if (
+    input.kind === "diferencia" &&
+    Number.isFinite(orderTotal) &&
+    orderTotal > 0 &&
+    Number.isFinite(existingAmount) &&
+    existingAmount >= orderTotal
+  ) {
+    return "El monto cargado ya cubre el total del pedido.";
+  }
   if (input.kind !== "total") return null;
 
-  const orderTotal = Number(input.orderTotal);
   if (!Number.isFinite(orderTotal) || orderTotal <= 0) {
     return "El pedido no tiene un total válido contra el cual verificar el pago.";
   }
@@ -108,12 +203,11 @@ const AVAILABLE_PICKUP_STATES: readonly string[] = [
 ];
 
 function find(payments: readonly PaymentSnapshot[], kind: PaymentKind): PaymentSnapshot | undefined {
-  return payments.find((p) => p.kind === kind && p.validation_status !== "rechazado");
+  return payments.find((p) => p.kind === kind && isLive(p));
 }
 
-function amountInCents(payment: PaymentSnapshot | undefined): number | null {
-  const amount = Number(payment?.amount);
-  return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) : null;
+function findAll(payments: readonly PaymentSnapshot[], kind: PaymentKind): PaymentSnapshot[] {
+  return payments.filter((payment) => payment.kind === kind && isLive(payment));
 }
 
 /**
@@ -136,27 +230,27 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
   if (!ctx.hasKey) blockers.push("sin_clave");
 
   const adelanto = find(ctx.payments, "adelanto");
-  const diferencia = find(ctx.payments, "diferencia");
+  const diferencias = findAll(ctx.payments, "diferencia");
   const total = find(ctx.payments, "total");
 
   if (total) {
     if (total.validation_status === "posible_duplicado") blockers.push("pago_observado");
   } else {
     if (!adelanto) blockers.push("adelanto_no_registrado");
-    if (!diferencia) blockers.push("diferencia_no_registrada");
-    if ([adelanto, diferencia].some((p) => p?.validation_status === "posible_duplicado")) {
+    if (!diferencias.length) blockers.push("diferencia_no_registrada");
+    if ([adelanto, ...diferencias].some((p) => p?.validation_status === "posible_duplicado")) {
       blockers.push("pago_observado");
     }
   }
 
-  const hasRequiredPayments = Boolean(total || (adelanto && diferencia));
+  const hasRequiredPayments = Boolean(total || (adelanto && diferencias.length));
   if (hasRequiredPayments) {
     const orderTotal = Number(ctx.orderTotal);
     const requiredCents = Number.isFinite(orderTotal) && orderTotal > 0
       ? Math.round(orderTotal * 100)
       : null;
-    const selectedPayments = total ? [total] : [adelanto, diferencia];
-    const amounts = selectedPayments.map(amountInCents);
+    const selectedPayments = total ? [total] : [adelanto, ...diferencias];
+    const amounts = selectedPayments.map((payment) => inCents(payment?.amount));
     if (requiredCents === null || amounts.some((amount) => amount === null)) {
       blockers.push("monto_no_informado");
     } else if (amounts.reduce<number>((sum, amount) => sum + (amount ?? 0), 0) < requiredCents) {
@@ -167,7 +261,7 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
   // Los índices únicos de 0049 impiden que un comprobante se asocie a dos
   // pedidos, pero la comprobación se repite aquí: es barata y protege del caso
   // en que los pagos lleguen ya cargados desde otra ruta.
-  if ([adelanto, diferencia, total].some((p) => p && p.order_id !== ctx.orderId)) {
+  if ([adelanto, ...diferencias, total].some((p) => p && p.order_id !== ctx.orderId)) {
     blockers.push("pago_de_otro_pedido");
   }
 
@@ -216,11 +310,14 @@ export const PAYMENT_STATE_LABEL: Record<PaymentState, string> = {
  * una posible duplicidad se anuncia por encima de todo lo demás, porque es lo
  * único que exige que alguien intervenga.
  */
-export function paymentState(payments: readonly PaymentSnapshot[]): PaymentState {
+export function paymentState(
+  payments: readonly PaymentSnapshot[],
+  orderTotal: number | null = null,
+): PaymentState {
   if (payments.some((p) => p.validation_status === "posible_duplicado")) return "posible_duplicado";
 
   const adelanto = find(payments, "adelanto");
-  const diferencia = find(payments, "diferencia");
+  const diferencias = findAll(payments, "diferencia");
   const total = find(payments, "total");
 
   if (total) {
@@ -228,8 +325,13 @@ export function paymentState(payments: readonly PaymentSnapshot[]): PaymentState
   }
   if (!adelanto) return "sin_pago";
   if (adelanto.validation_status !== "validado") return "adelanto_cargado";
-  if (!diferencia) return "adelanto_validado";
-  if (diferencia.validation_status !== "validado") return "diferencia_cargada";
+  if (!paymentProgress([adelanto], orderTotal).advanceValidated) return "adelanto_cargado";
+  if (!diferencias.length) return "adelanto_validado";
+  if (diferencias.some((payment) => payment.validation_status !== "validado")) {
+    return "diferencia_cargada";
+  }
+  const progress = paymentProgress([adelanto, ...diferencias], orderTotal);
+  if (progress.orderTotal !== null && !progress.completeValidated) return "adelanto_validado";
   return "pago_completo";
 }
 

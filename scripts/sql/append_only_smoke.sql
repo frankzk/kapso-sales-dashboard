@@ -173,14 +173,25 @@ values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
         'eeeeeeee-0000-0000-0000-00000000000f',
         'diferencia', 50, 'OP-DUP-1', 'pendiente_revision');
 
--- 9) Un solo adelanto vivo por pedido.
+-- 9) Se permiten varias diferencias vivas por pedido.
+insert into order_payments(store_id, order_id, kind, amount, validation_status)
+values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        'eeeeeeee-0000-0000-0000-00000000000f',
+        'diferencia', 49, 'pendiente_revision');
+
+-- 10) Adelanto y pago total compiten por el único primer pago vivo.
+insert into order_payments(store_id, order_id, kind, amount, validation_status)
+values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        'eeeeeeee-0000-0000-0000-00000000000f',
+        'adelanto', 30, 'pendiente_revision');
+
 do $$
 begin
   insert into order_payments(store_id, order_id, kind, amount, validation_status)
   values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
           'eeeeeeee-0000-0000-0000-00000000000f',
-          'diferencia', 99, 'pendiente_revision');
-  raise exception 'order_payments aceptó dos diferencias vivas en el mismo pedido'
+          'total', 99, 'pendiente_revision');
+  raise exception 'order_payments aceptó adelanto y pago total vivos en el mismo pedido'
     using errcode = 'ZZ001';
 exception
   when unique_violation then null;

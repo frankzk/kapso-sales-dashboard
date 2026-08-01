@@ -730,24 +730,13 @@ describe("shalomSoftBlockers", () => {
     expect(soft[0]).toMatch(/adelanto/i);
   });
 
-  it("no frena en cuanto hay algo cargado, aunque falte validarlo", () => {
-    // Cargado-sin-validar es un trámite pendiente, no un despacho sin cobro:
-    // frenar acá castigaría a quien SÍ hizo su parte.
-    for (const estado of [
-      "adelanto_cargado",
-      "adelanto_validado",
-      "diferencia_cargada",
-      "pago_completo",
-      "posible_duplicado",
-    ]) {
+  it("solo deja avanzar cuando el adelanto mínimo ya fue validado", () => {
+    for (const estado of ["adelanto_validado", "diferencia_cargada", "pago_completo"]) {
       expect(shalomSoftBlockers(estado)).toHaveLength(0);
     }
-  });
-
-  it("no frena si el estado de pago no se conoce", () => {
-    // Un pedido sin estado calculado no es un pedido sin cobro. Ante la duda no
-    // se estorba: el aviso ya está, y el freno se reserva para la certeza.
-    expect(shalomSoftBlockers(null)).toHaveLength(0);
+    for (const estado of ["adelanto_cargado", "posible_duplicado", null]) {
+      expect(shalomSoftBlockers(estado)).toHaveLength(1);
+    }
   });
 
   it("el mínimo del motivo descarta un «ok» pero admite una frase", () => {
