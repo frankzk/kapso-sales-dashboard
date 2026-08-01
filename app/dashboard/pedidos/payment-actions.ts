@@ -18,10 +18,13 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
   analyzeYapeVoucherFromEnv,
-  checkYapeRecipient,
   extractYapeVoucherFromEnv,
-  type YapeRecipientCheck,
 } from "@/lib/vision";
+import {
+  checkYapeRecipient,
+  yapeRecipientReadingFromVision,
+  type YapeRecipientCheck,
+} from "@/lib/yape-recipient";
 import { normalizePhone } from "@/lib/phone";
 import {
   canRevealPickupKey,
@@ -111,6 +114,7 @@ export interface PaymentRow {
   registered_at: string;
   validated_at: string | null;
   notes: string | null;
+  vision: unknown;
   registered_by_name?: string | null;
   validated_by_name?: string | null;
 }
@@ -377,7 +381,10 @@ export async function readVoucherFields(
     inspection.fields.operationNumber && "nº de operación",
     inspection.fields.amount !== null && "monto",
     inspection.fields.paidAt && "fecha y hora",
-    inspection.fields.payerName && "titular",
+    // El titular que devuelve Yape es quien PAGÓ. No se presenta como señal de
+    // la cuenta receptora porque eso confundiría al operador: la validación de
+    // Grupo GF usa exclusivamente recipientName + recipientPhoneLastDigits.
+    inspection.fields.payerName && "nombre del pagador",
     inspection.fields.recipientCheck === "verified" && "receptor verificado",
   ].filter(Boolean);
 
@@ -659,7 +666,7 @@ async function loadPayment(paymentId: string) {
   const admin = createAdminSupabase();
   const { data } = await admin
     .from("order_payments")
-    .select("id,order_id,store_id,kind,validation_status,operation_number")
+    .select("id,order_id,store_id,kind,validation_status,operation_number,vision")
     .eq("id", paymentId)
     .maybeSingle();
   return data as
@@ -670,6 +677,7 @@ async function loadPayment(paymentId: string) {
         kind: string;
         validation_status: string;
         operation_number: string | null;
+        vision: unknown;
       }
     | null;
 }
@@ -689,6 +697,14 @@ export async function validatePayment(paymentId: string): Promise<PaymentActionS
         "Este pago no tiene nº de operación, así que no se puede validar. " +
         "Complétalo a mano (o pide el comprobante completo si la captura está recortada) " +
         "con «Corregir pago».",
+    };
+  }
+  const recipient = yapeRecipientReadingFromVision(payment.vision);
+  if (recipient.status === "mismatch") {
+    return {
+      error:
+        "No se puede validar: el destinatario o el celular receptor leído no coincide con " +
+        "Grupo GF S.A.C. · 930 555 309. Revisa la imagen y rechaza el comprobante si fue enviado a otra cuenta.",
     };
   }
   const ctx = await authorizeOrder(payment.order_id);

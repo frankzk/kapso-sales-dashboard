@@ -17,6 +17,9 @@
 // verdict so the alert stays conservative. Timeout-bounded via AbortController.
 
 import { env } from "@/lib/env";
+import { checkYapeRecipient, type YapeRecipientCheck } from "@/lib/yape-recipient";
+export { checkYapeRecipient } from "@/lib/yape-recipient";
+export type { YapeRecipientCheck } from "@/lib/yape-recipient";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -284,38 +287,6 @@ export interface YapeVoucherFields {
   recipientPhoneLastDigits: string | null;
   ok: boolean;
   model: string;
-}
-
-export type YapeRecipientCheck = "verified" | "partial" | "mismatch" | "missing";
-
-function comparableRecipientName(value: string | null | undefined): string {
-  return (value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-/**
- * Verifica la cuenta receptora del negocio sin confundir "no se pudo leer" con
- * una discrepancia real. La cuenta esperada es Grupo GF S.A.C. · ***309.
- */
-export function checkYapeRecipient(
-  recipientName: string | null | undefined,
-  recipientPhoneLastDigits: string | null | undefined,
-): YapeRecipientCheck {
-  const name = comparableRecipientName(recipientName);
-  const phone = (recipientPhoneLastDigits ?? "").replace(/\D/g, "").slice(-3);
-  const hasName = Boolean(name);
-  const hasPhone = phone.length === 3;
-  const nameMatches = hasName && name.includes("grupo gf") && /\bs\s*a\s*c\b/.test(name);
-  const phoneMatches = hasPhone && phone === "309";
-
-  if ((hasName && !nameMatches) || (hasPhone && !phoneMatches)) return "mismatch";
-  if (nameMatches && phoneMatches) return "verified";
-  if (nameMatches || phoneMatches) return "partial";
-  return "missing";
 }
 
 const EXTRACT_SYSTEM_PROMPT =

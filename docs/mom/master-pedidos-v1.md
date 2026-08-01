@@ -629,6 +629,18 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   cuenta receptora.
 - Hoy existe validación interna por WhatsApp/app bancaria; Kapta debe conservar
   quién cargó y quién validó.
+- Al pulsar **Leer y rellenar**, Kapta separa dos identidades del comprobante:
+  el pagador o remitente se conserva internamente para trazabilidad y detección
+  de duplicados; la interfaz valida la **cuenta receptora**.
+- La cuenta receptora se comprueba con dos señales independientes y visibles:
+  el destinatario debe coincidir con `Grupo GF S.A.C.` y el celular debe ser
+  `930 555 309` o conservar de forma legible la terminación `309`. Cada señal
+  muestra su propio check verde; la cuenta solo queda `verificada` cuando ambas
+  coinciden.
+- Si cualquiera de las dos señales leídas pertenece a otra cuenta, el pago queda
+  en revisión y Kapta bloquea su validación también en servidor. Si una señal no
+  pudo leerse, se conserva la imagen y se exige contraste manual sin inventar el
+  dato faltante.
 - Si el pago es menor al requerido, la clave permanece bloqueada y se alerta al
   asesor.
 - Solo Frankz ejecuta reembolsos.
