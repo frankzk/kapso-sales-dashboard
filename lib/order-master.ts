@@ -22,6 +22,10 @@ import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
 import { computeLogisticsCost, costDay, type CostTariff } from "@/lib/costs";
 import {
+  resolveMacroStage,
+  type MacroGuideSnapshot,
+} from "@/lib/order-macro-stage";
+import {
   isGeneralStatus,
   isOperationalStatus,
   resolveOrderState,
@@ -45,7 +49,11 @@ const SHIPMENT_BASE_COLUMNS =
 const SHIPMENT_GESTION_COLUMNS =
   ",assigned_at,dispatched_at,out_for_delivery_at,rescheduled_at,closed_at," +
   "returned_at,pickup_state,agency_branch,agency_arrived_at,agency_expires_at";
+const SHIPMENT_MOM_COLUMNS =
+  ",output_number,output_code,qr_token,preparation_state,custody_state," +
+  "ready_at,ready_by,custody_transferred_at,custody_transferred_by";
 const SHIPMENT_COLUMN_SETS = [
+  SHIPMENT_BASE_COLUMNS + SHIPMENT_GESTION_COLUMNS + SHIPMENT_MOM_COLUMNS,
   SHIPMENT_BASE_COLUMNS + SHIPMENT_GESTION_COLUMNS,
   SHIPMENT_BASE_COLUMNS,
 ];
@@ -101,6 +109,15 @@ interface ShipmentRecord {
   agency_branch?: string | null;
   agency_arrived_at?: string | null;
   agency_expires_at?: string | null;
+  output_number?: number | null;
+  output_code?: string | null;
+  qr_token?: string | null;
+  preparation_state?: string | null;
+  custody_state?: string | null;
+  ready_at?: string | null;
+  ready_by?: string | null;
+  custody_transferred_at?: string | null;
+  custody_transferred_by?: string | null;
 }
 
 interface CallRecord {
@@ -117,6 +134,8 @@ interface EventRecord {
   courier: string | null;
   new_status: string | null;
   new_operational: string | null;
+  reason?: string | null;
+  payload?: Record<string, unknown> | null;
 }
 
 /** Agrupa por una clave, saltando las filas sin clave. */
@@ -203,6 +222,24 @@ function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot 
   };
 }
 
+function toMacroGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): MacroGuideSnapshot {
+  const guide = toGuideSnapshot(s, calls);
+  return {
+    id: guide.id,
+    courier: guide.courier,
+    delivery_status: guide.delivery_status,
+    attempts: guide.attempts,
+    assigned_at: guide.assigned_at,
+    dispatched_at: guide.dispatched_at,
+    out_for_delivery_at: guide.out_for_delivery_at,
+    rescheduled_at: guide.rescheduled_at,
+    returned_at: guide.returned_at,
+    pickup_state: guide.pickup_state,
+    preparation_state: s.preparation_state ?? null,
+    custody_state: s.custody_state ?? null,
+  };
+}
+
 /** El último override manual: congela el estado frente al recálculo automático. */
 function latestOverride(events: EventRecord[]): StatusOverride | null {
   let best: EventRecord | null = null;
@@ -271,7 +308,7 @@ async function fetchEvents(admin: SupabaseClient, ids: string[]): Promise<EventR
   for (const batch of chunk(ids, ID_BATCH)) {
     const { data, error } = await admin
       .from("order_events")
-      .select("order_id,kind,occurred_at,courier,new_status,new_operational")
+      .select("order_id,kind,occurred_at,courier,new_status,new_operational,reason,payload")
       .in("order_id", batch);
     if (error) throw new Error(`order_master: no se pudieron leer los eventos — ${error.message}`);
     out.push(...((data ?? []) as unknown as EventRecord[]));
@@ -595,6 +632,9 @@ export async function recomputeOrderMaster(
     const override = latestOverride(orderEvents);
 
     const paymentSignals = signals.get(order.id) ?? null;
+    const resolvedPaymentState = paymentSignals
+      ? paymentState(paymentSignals.payments)
+      : null;
 
     const state = resolveOrderState({
       order: {
@@ -607,6 +647,30 @@ export async function recomputeOrderMaster(
       events: eventSnapshots,
       override,
       now,
+    });
+    const macro = resolveMacroStage({
+      order: {
+        created_at: order.created_at,
+        cancelled_at: order.cancelled_at,
+        financial_status: order.financial_status,
+        shipping_mode: order.shipping_mode,
+        region,
+        province,
+        district,
+      },
+      guides: guides.map((s) => toMacroGuideSnapshot(s, callsByShipment.get(s.id) ?? [])),
+      events: orderEvents.map((event) => ({
+        kind: event.kind,
+        occurred_at: event.occurred_at,
+        reason: event.reason ?? null,
+        payload: event.payload ?? null,
+      })),
+      legacy: {
+        general: state.general,
+        operational: state.operational,
+        since: state.since,
+      },
+      paymentState: resolvedPaymentState,
     });
 
     return {
@@ -631,6 +695,12 @@ export async function recomputeOrderMaster(
       order_total: order.total_amount,
       general_status: state.general,
       operational_status: state.operational,
+      macro_stage: macro.stage,
+      macro_substage: macro.substage,
+      macro_reasons: macro.reasons,
+      macro_operation: macro.operation,
+      macro_version: macro.version,
+      macro_since: macro.since,
       status_since: state.since,
       status_source: state.source,
       status_locked: Boolean(override),
@@ -663,9 +733,7 @@ export async function recomputeOrderMaster(
           }).total
         : null,
       comment_count: orderEvents.filter((e) => e.kind === "comment").length,
-      payment_state: paymentSignals
-        ? paymentState(paymentSignals.payments)
-        : null,
+      payment_state: resolvedPaymentState,
       key_state: paymentSignals
         ? keyState({
             orderId: order.id,
@@ -686,7 +754,23 @@ export async function recomputeOrderMaster(
 
   let written = 0;
   for (const batch of chunk(rows, ID_BATCH)) {
-    const { error } = await admin.from("order_master").upsert(batch, { onConflict: "order_id" });
+    let { error } = await admin.from("order_master").upsert(batch, { onConflict: "order_id" });
+    // Deploy compatible: si el código llega antes que 0059, el Master antiguo
+    // continúa recalculándose. Tras aplicar la migración, el siguiente barrido
+    // llena automáticamente las columnas MOM.
+    if (error && /macro_(stage|substage|reasons|operation|version|since)/i.test(error.message)) {
+      const legacyBatch = batch.map((row) => {
+        const copy = { ...row } as Record<string, unknown>;
+        delete copy.macro_stage;
+        delete copy.macro_substage;
+        delete copy.macro_reasons;
+        delete copy.macro_operation;
+        delete copy.macro_version;
+        delete copy.macro_since;
+        return copy;
+      });
+      ({ error } = await admin.from("order_master").upsert(legacyBatch, { onConflict: "order_id" }));
+    }
     if (error) throw new Error(`order_master: no se pudo escribir — ${error.message}`);
     written += batch.length;
   }
