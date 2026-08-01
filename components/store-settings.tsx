@@ -60,6 +60,10 @@ export interface StoreSettingsData {
     tanders_origin_address: string | null;
     tanders_origin_lat: number | null;
     tanders_origin_lng: number | null;
+    shalom_pro_email: string | null;
+    shalom_origin_terminal_id: number | null;
+    shalom_origin_terminal_name: string | null;
+    shalom_default_product_id: number | null;
     meta_ad_accounts: StoreMetaAdAccount[];
   };
   has: {
@@ -74,6 +78,7 @@ export interface StoreSettingsData {
     aliclikToken: boolean;
     aliclikWebhookSecret: boolean;
     tandersPassword: boolean;
+    shalomProPassword: boolean;
   };
   oauthAvailable: boolean;
   siteUrl: string;
@@ -644,6 +649,61 @@ function SettingsForm({ data }: { data: StoreSettingsData }) {
           <SecretField name="kapso_api_key" label="Kapso API key" set={data.has.kapsoKey} />
           <SecretField name="flow_webhook_secret" label="Secreto webhook de Shopify Flow (búsquedas)" set={data.has.flowSecret} />
           <SecretField name="kapso_webhook_secret" label="Secreto webhook de Kapso (leads)" set={data.has.kapsoWebhookSecret} />
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Shalom · API directa
+          </legend>
+          <p className="text-xs text-slate-500">
+            Cuenta de <strong>Shalom Pro</strong> que emite las preguías. La contraseña se guarda
+            cifrada. La agencia de origen y el paquete predeterminado son ids del directorio y
+            catálogo de Shalom; el formulario de la guía buscará destinos directamente en Shalom.
+          </p>
+          <label className="block">
+            <span className="text-xs text-slate-500">Usuario de Shalom Pro</span>
+            <input
+              name="shalom_pro_email"
+              type="email"
+              defaultValue={s.shalom_pro_email ?? ""}
+              className={inputCls}
+            />
+          </label>
+          <SecretField
+            name="shalom_pro_password"
+            label="Contraseña de Shalom Pro"
+            set={data.has.shalomProPassword}
+          />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="text-xs text-slate-500">Id de agencia de origen</span>
+              <input
+                name="shalom_origin_terminal_id"
+                inputMode="numeric"
+                defaultValue={s.shalom_origin_terminal_id ?? ""}
+                className={inputCls}
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs text-slate-500">Nombre de agencia de origen</span>
+              <input
+                name="shalom_origin_terminal_name"
+                defaultValue={s.shalom_origin_terminal_name ?? ""}
+                placeholder="AV. BOLÍVAR · PUEBLO LIBRE"
+                className={inputCls}
+              />
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-xs text-slate-500">Id de paquete por defecto (opcional)</span>
+            <input
+              name="shalom_default_product_id"
+              inputMode="numeric"
+              defaultValue={s.shalom_default_product_id ?? ""}
+              placeholder="Se elegirá Caja Paquete XXS si está disponible"
+              className={inputCls}
+            />
+          </label>
         </fieldset>
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">

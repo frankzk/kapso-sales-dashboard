@@ -65,9 +65,10 @@ describe("vercel.json", () => {
     expect(cfg.regions).toEqual(["gru1"]);
   });
 
-  it("mantiene los cinco crons con expresiones válidas de 5 campos", () => {
+  it("mantiene los seis crons con expresiones válidas de 5 campos", () => {
     const crons = cfg.crons as { path: string; schedule: string }[];
-    expect(crons).toHaveLength(5);
+    expect(crons).toHaveLength(6);
+    expect(crons.some((cron) => cron.path === "/api/cron/shalom-reconcile")).toBe(true);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

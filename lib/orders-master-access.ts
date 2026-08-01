@@ -245,6 +245,7 @@ const GUIDE_COLUMNS =
   "match_method,order_name,customer_name,customer_phone,product,district,province,city,region," +
   "delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at," +
   "address_updated_by,fenix_eligible,fenix_shipment_id,created_via,delivered_source," +
+  "shalom_codigo,shalom_ose_id,shalom_order_id,shalom_serie,shalom_raw," +
   "aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at," +
   "next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id," +
   "suggested_order_name,output_number,output_code,qr_token,preparation_state,custody_state," +

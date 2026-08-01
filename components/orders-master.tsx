@@ -140,6 +140,7 @@ export function OrdersMasterBoard({
   canEdit,
   canOverride,
   canCreateGuide,
+  canCreateShalomGuide,
   canCreateTandersGuide,
   canDispatch,
 }: {
@@ -155,6 +156,7 @@ export function OrdersMasterBoard({
   canEdit: boolean;
   canOverride: boolean;
   canCreateGuide: boolean;
+  canCreateShalomGuide: boolean;
   canCreateTandersGuide: boolean;
   canDispatch: boolean;
 }) {
@@ -631,6 +633,7 @@ export function OrdersMasterBoard({
           canEdit={canEdit}
           canOverride={canOverride}
           canCreateGuide={canCreateGuide}
+          canCreateShalomGuide={canCreateShalomGuide}
           canCreateTandersGuide={canCreateTandersGuide}
           storeName={storeName}
           onClose={() => setOpenId(null)}
@@ -1025,6 +1028,7 @@ function OrderDrawer({
   canEdit,
   canOverride,
   canCreateGuide,
+  canCreateShalomGuide,
   canCreateTandersGuide,
   storeName,
   onClose,
@@ -1034,6 +1038,7 @@ function OrderDrawer({
   canEdit: boolean;
   canOverride: boolean;
   canCreateGuide: boolean;
+  canCreateShalomGuide: boolean;
   canCreateTandersGuide: boolean;
   storeName: (id: string) => string;
   onClose: () => void;
@@ -1187,6 +1192,9 @@ function OrderDrawer({
                     >
                       <span className="font-medium capitalize text-slate-800">{g.courier}</span>
                       <span className="font-mono text-xs text-slate-500">{g.guide_code}</span>
+                      {g.courier.toLowerCase() === "shalom" && g.shalom_codigo ? (
+                        <span className="font-mono text-xs text-slate-500">· {g.shalom_codigo}</span>
+                      ) : null}
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
                         {g.delivery_status}
                       </span>
@@ -1195,6 +1203,16 @@ function OrderDrawer({
                           {g.aliclik_attempts ?? g.reroute_attempts} intento(s)
                         </span>
                       )}
+                      {g.courier.toLowerCase() === "shalom" && g.shalom_ose_id ? (
+                        <a
+                          href={`/api/shalom/label/${g.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          Rótulo PDF
+                        </a>
+                      ) : null}
                       {g.guide_code === detail.row.guide_code && (
                         <span className="ml-auto text-xs text-slate-400">actual</span>
                       )}
@@ -1253,15 +1271,16 @@ function OrderDrawer({
 
             {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
                 una. En cuanto existe, el seguimiento vive en Envíos. */}
+            {canCreateShalomGuide && !detail.row.guide_code && (
+              <ShalomGuidePanel
+                orderId={orderId}
+                onCreated={() => {
+                  void reload();
+                  onSaved();
+                }}
+              />
+            )}
             {canCreateGuide && !detail.row.guide_code && (
-              <>
-                <ShalomGuidePanel
-                  orderId={orderId}
-                  onCreated={() => {
-                    void reload();
-                    onSaved();
-                  }}
-                />
                 <AliclikGuidePanel
                   orderId={orderId}
                   hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
@@ -1270,7 +1289,6 @@ function OrderDrawer({
                     onSaved();
                   }}
                 />
-              </>
             )}
 
             {canEdit ? (
