@@ -18,7 +18,12 @@ import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { getOrder, type AliclikClientOpts, type AliclikOrder } from "@/lib/aliclik";
-import { mapAliclikStatus, aliclikStatusLabel } from "@/lib/aliclik-status";
+import {
+  aliclikStatusLabel,
+  mapAliclikStatus,
+  reconcileAliclikCustodyState,
+  reconcileAliclikPreparationState,
+} from "@/lib/aliclik-status";
 import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 
@@ -57,6 +62,10 @@ interface TrackedShipment {
   delivery_status: string;
   last_report_at: string | null;
   external_order_number: string | null;
+  preparation_state: string | null;
+  custody_state: string | null;
+  ready_at: string | null;
+  custody_transferred_at: string | null;
 }
 
 /**
@@ -81,7 +90,10 @@ export async function applyAliclikSnapshot(
 
   const { data, error } = await admin
     .from("shipments")
-    .select("id,store_id,order_id,delivery_status,last_report_at,external_order_number")
+    .select(
+      "id,store_id,order_id,delivery_status,last_report_at,external_order_number," +
+      "preparation_state,custody_state,ready_at,custody_transferred_at",
+    )
     .eq("external_order_number", orderNumber)
     .limit(1)
     .maybeSingle();
@@ -136,6 +148,29 @@ export async function applyAliclikSnapshot(
   }
   if (next === "en_ruta" && shipment.delivery_status === "pendiente") {
     patch.dispatched_at = updatedAt ?? nowIso;
+  }
+
+  // Aliclik ya hace el cotejo físico de esta modalidad. Su PREPARED equivale al
+  // escaneo de almacén del MOM y PICKED equivale a transferencia de custodia.
+  // Las reconciliaciones son monotónicas para que un snapshot retrasado no
+  // deshaga un escaneo local ni haga volver un paquete desde el courier.
+  const nextPreparation = reconcileAliclikPreparationState(
+    shipment.preparation_state,
+    mapped.preparationState,
+  );
+  if (nextPreparation && nextPreparation !== shipment.preparation_state) {
+    patch.preparation_state = nextPreparation;
+    if (nextPreparation === "listo_despacho" && !shipment.ready_at) {
+      patch.ready_at = updatedAt ?? nowIso;
+    }
+  }
+
+  const nextCustody = reconcileAliclikCustodyState(shipment.custody_state, mapped.custodyState);
+  if (nextCustody && nextCustody !== shipment.custody_state) {
+    patch.custody_state = nextCustody;
+    if (nextCustody === "courier" && !shipment.custody_transferred_at) {
+      patch.custody_transferred_at = updatedAt ?? nowIso;
+    }
   }
 
   const { error: upErr } = await admin.from("shipments").update(patch).eq("id", shipment.id);

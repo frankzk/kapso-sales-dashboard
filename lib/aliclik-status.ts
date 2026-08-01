@@ -43,6 +43,10 @@ export interface AliclikStatusMapping {
   terminal: boolean;
   /** Valores de enum que no reconocimos, para registrar y revisar. */
   unknown: string[];
+  /** Estado físico MOM que Aliclik puede acreditar con su propio cotejo. */
+  preparationState: "rotulo_generado" | "listo_despacho" | null;
+  /** Custodia física MOM acreditada por el estado de despacho de Aliclik. */
+  custodyState: "empresa" | "courier" | "devuelto" | null;
 }
 
 const norm = (v: string | null | undefined): string => (v ?? "").trim().toUpperCase();
@@ -90,6 +94,72 @@ const KNOWN_DISPATCH = new Set([
   "REMAINING_IN_TRANSIT",
 ]);
 
+type AliclikMomState = Pick<AliclikStatusMapping, "preparationState" | "custodyState">;
+
+/**
+ * Equivalencia entre el cotejo de Aliclik y el MOM.
+ *
+ * PREPARED no es solo una guía creada: en la operación de Aliclik es el
+ * resultado del escaneo/cotejo físico. PICKED acredita además que el courier ya
+ * recibió el paquete. Los estados posteriores conservan ambas verdades.
+ */
+function momStateFromDispatch(dispatch: string): AliclikMomState {
+  switch (dispatch) {
+    case "TO_PREPARE":
+      return { preparationState: "rotulo_generado", custodyState: "empresa" };
+    case "PREPARED":
+      return { preparationState: "listo_despacho", custodyState: "empresa" };
+    case "PICKED":
+    case "IN_TRANSIT":
+    case "REMAINING_IN_TRANSIT":
+    case "STORE_CENTRAL":
+    case "TO_RETURN":
+    case "IN_AGENCY":
+      return { preparationState: "listo_despacho", custodyState: "courier" };
+    case "RETURNED":
+      return { preparationState: "listo_despacho", custodyState: "devuelto" };
+    default:
+      return { preparationState: null, custodyState: null };
+  }
+}
+
+const PREPARATION_RANK: Record<string, number> = {
+  no_iniciado: 0,
+  rotulo_generado: 1,
+  en_armado: 2,
+  listo_despacho: 3,
+};
+
+/** Aliclik puede hacer avanzar la preparación, nunca borrar un avance local. */
+export function reconcileAliclikPreparationState(
+  current: string | null | undefined,
+  incoming: AliclikStatusMapping["preparationState"],
+): string | null {
+  if (!incoming) return current ?? null;
+  if (current === "incidencia") return current;
+  const currentRank = PREPARATION_RANK[current ?? "no_iniciado"] ?? 0;
+  const incomingRank = PREPARATION_RANK[incoming] ?? 0;
+  return currentRank >= incomingRank ? (current ?? incoming) : incoming;
+}
+
+const CUSTODY_RANK: Record<string, number> = {
+  empresa: 0,
+  courier: 1,
+  retorno: 2,
+  devuelto: 3,
+};
+
+/** Un snapshot antiguo no puede devolver ficticiamente el paquete a la empresa. */
+export function reconcileAliclikCustodyState(
+  current: string | null | undefined,
+  incoming: AliclikStatusMapping["custodyState"],
+): string | null {
+  if (!incoming) return current ?? null;
+  const currentRank = CUSTODY_RANK[current ?? "empresa"] ?? 0;
+  const incomingRank = CUSTODY_RANK[incoming] ?? 0;
+  return currentRank >= incomingRank ? (current ?? incoming) : incoming;
+}
+
 /**
  * Detalle operativo dentro de "todavía por entregar", según dónde está el
  * paquete. Devuelve [deliveryStatus, operational].
@@ -134,6 +204,7 @@ export function mapAliclikStatus(input: AliclikStatusInput): AliclikStatusMappin
   const status = norm(input.status);
   const dispatch = norm(input.dispatchStatus);
   const isAgency = Boolean(input.isAgency);
+  const momState = momStateFromDispatch(dispatch);
 
   const unknown: string[] = [];
   if (call && !CANCELLING_CALL.has(call) && !LIVE_CALL.has(call)) unknown.push(`callStatus=${call}`);
@@ -147,6 +218,7 @@ export function mapAliclikStatus(input: AliclikStatusInput): AliclikStatusMappin
     returned: false,
     terminal: false,
     unknown,
+    ...momState,
   };
 
   // 1. Entregado gana sobre todo lo demás. En agencia, "entregado" significa que
@@ -157,6 +229,8 @@ export function mapAliclikStatus(input: AliclikStatusInput): AliclikStatusMappin
       deliveryStatus: "entregado",
       operational: isAgency ? "recogido" : "entregado",
       terminal: true,
+      preparationState: "listo_despacho",
+      custodyState: "courier",
     };
   }
 
@@ -187,10 +261,22 @@ export function mapAliclikStatus(input: AliclikStatusInput): AliclikStatusMappin
 
   // 5. Intentos fallidos y reprogramaciones: el paquete sigue vivo y en calle.
   if (status === "RESCHEDULED") {
-    return { ...base, deliveryStatus: "en_ruta", operational: "reprogramado" };
+    return {
+      ...base,
+      deliveryStatus: "en_ruta",
+      operational: "reprogramado",
+      preparationState: "listo_despacho",
+      custodyState: "courier",
+    };
   }
   if (status === "REFUSED" || status === "NOT_RESPOND") {
-    return { ...base, deliveryStatus: "en_ruta", operational: "intento_de_entrega" };
+    return {
+      ...base,
+      deliveryStatus: "en_ruta",
+      operational: "intento_de_entrega",
+      preparationState: "listo_despacho",
+      custodyState: "courier",
+    };
   }
 
   // 6. Por entregar: el detalle lo pone el despacho.
