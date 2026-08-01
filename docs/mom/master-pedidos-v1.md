@@ -687,6 +687,11 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
 - Los couriers descuentan el costo de envío antes de depositar.
 - Neto esperado: cobrado menos costo logístico aplicable.
 - Conciliación: guía y pedido Shopify, con nombre/teléfono como apoyo.
+- En la corrección manual, una búsqueda por código Shopify exacto consulta todas
+  las tiendas accesibles y no queda oculta por la ventana de fechas ni por una
+  pista de tienda, nombre o distrito del reporte. Las discrepancias se muestran
+  como advertencia y una persona debe confirmar el vínculo; nunca se corrige de
+  forma automática.
 - No existe liquidación parcial por guía.
 - Si una fila no cuadra, todo el lote queda Observado.
 - Causas: pago faltante, importe menor o pedido no incluido.

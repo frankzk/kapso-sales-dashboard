@@ -19,6 +19,11 @@ import { getRiderTariffs, getSettlementDetail } from "@/lib/settlements-access";
 import { computeRiderPayout, settlementMasterEffects, settlementStatus } from "@/lib/settlements";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { defaultOperationalFor } from "@/lib/order-status";
+import {
+  directOrderSearchTerm,
+  evaluateSettlementCandidateScope,
+  settlementMatchKey,
+} from "@/lib/settlement-order-search";
 
 export interface ActionResult {
   ok: boolean;
@@ -36,16 +41,7 @@ export interface SettlementOrderCandidate {
   status: string;
   score: number;
   reasons: string[];
-}
-
-function matchKey(value: string | null | undefined): string {
-  return (value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
+  warnings: string[];
 }
 
 /** Comprueba permiso y devuelve el cliente admin, o el error listo para devolver. */
@@ -174,15 +170,35 @@ export async function searchSettlementOrders(
   const to = new Date(`${day}T00:00:00.000Z`);
   to.setUTCDate(to.getUTCDate() + 3);
   const storeIds = stores.map((store) => store.id);
-  const { data } = await g.admin
-    .from("order_master")
-    .select(
-      "order_id,order_name,store_id,customer_name,district,order_total,general_status,order_created_at",
-    )
-    .in("store_id", storeIds)
-    .gte("order_created_at", from.toISOString())
-    .lt("order_created_at", to.toISOString())
-    .limit(5000);
+  const selectedFields =
+    "order_id,order_name,store_id,customer_name,district,order_total,general_status,order_created_at";
+  const directTerm = directOrderSearchTerm(query);
+  const [windowResult, directResult] = await Promise.all([
+    g.admin
+      .from("order_master")
+      .select(selectedFields)
+      .in("store_id", storeIds)
+      .gte("order_created_at", from.toISOString())
+      .lt("order_created_at", to.toISOString())
+      .limit(5000),
+    directTerm
+      ? g.admin
+          .from("order_master")
+          .select(selectedFields)
+          .in("store_id", storeIds)
+          .ilike("order_name", `%${directTerm}%`)
+          .limit(25)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  // La ventana de fechas protege la búsqueda difusa. La consulta directa se
+  // combina aparte para que un código Shopify exacto no desaparezca porque el
+  // courier liquidó tarde o escribió una tienda equivocada en su reporte.
+  const orderRows = new Map<string, Record<string, unknown>>();
+  for (const candidate of [...(windowResult.data ?? []), ...(directResult.data ?? [])]) {
+    const orderId = String((candidate as { order_id?: string }).order_id ?? "");
+    if (orderId) orderRows.set(orderId, candidate as Record<string, unknown>);
+  }
 
   const row = line as {
     customer_name: string | null;
@@ -192,12 +208,13 @@ export async function searchSettlementOrders(
     raw: Record<string, unknown> | null;
   };
   const storeNames = new Map(stores.map((store) => [store.id, store.name]));
-  const storeHint = matchKey(row.store_hint ?? String(row.raw?.cliente ?? ""));
-  const wantedName = matchKey(row.customer_name);
-  const wantedDistrict = matchKey(row.district);
-  const wantedQuery = matchKey(query);
+  const storeHintRaw = row.store_hint ?? String(row.raw?.cliente ?? "");
+  const storeHint = settlementMatchKey(storeHintRaw);
+  const wantedName = settlementMatchKey(row.customer_name);
+  const wantedDistrict = settlementMatchKey(row.district);
+  const wantedQuery = settlementMatchKey(query);
 
-  const candidates = ((data ?? []) as {
+  const candidates = (Array.from(orderRows.values()) as unknown as {
     order_id: string;
     order_name: string | null;
     store_id: string;
@@ -208,25 +225,31 @@ export async function searchSettlementOrders(
   }[])
     .map((candidate) => {
       const storeName = storeNames.get(candidate.store_id) ?? "";
-      const name = matchKey(candidate.customer_name);
-      const district = matchKey(candidate.district);
-      const orderName = matchKey(candidate.order_name);
+      const name = settlementMatchKey(candidate.customer_name);
+      const district = settlementMatchKey(candidate.district);
+      const orderName = settlementMatchKey(candidate.order_name);
       const reasons: string[] = [];
+      const warnings: string[] = [];
       let score = 0;
 
+      const scope = evaluateSettlementCandidateScope({
+        orderName: candidate.order_name,
+        storeName,
+        storeHint: storeHintRaw,
+        query,
+      });
+      if (!scope.allowed) return null;
+      if (scope.exactOrderCode) {
+        score += 100;
+        reasons.push("código Shopify exacto");
+      }
+      if (scope.warning) warnings.push(scope.warning);
+
       if (storeHint) {
-        const store = matchKey(storeName);
-        if (
-          !(
-            store === storeHint ||
-            store.startsWith(storeHint) ||
-            (store.length > 0 && storeHint.startsWith(store))
-          )
-        ) {
-          return null;
+        if (scope.storeMatches) {
+          score += 35;
+          reasons.push(`tienda ${storeName}`);
         }
-        score += 35;
-        reasons.push(`tienda ${storeName}`);
       }
       if (wantedName && name === wantedName) {
         score += 45;
@@ -265,6 +288,7 @@ export async function searchSettlementOrders(
         status: candidate.general_status ?? "sin estado",
         score: Math.min(100, score),
         reasons,
+        warnings,
       } satisfies SettlementOrderCandidate;
     })
     .filter((candidate): candidate is SettlementOrderCandidate => Boolean(candidate))
