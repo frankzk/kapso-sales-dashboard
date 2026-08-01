@@ -16,7 +16,11 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { decryptOrNull, encrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { analyzeYapeVoucherFromEnv, extractYapeVoucherFromEnv } from "@/lib/vision";
+import {
+  analyzeYapeVoucherFromEnv,
+  extractYapeVoucherFromEnv,
+  resolveVisionCreds,
+} from "@/lib/vision";
 import { normalizePhone } from "@/lib/phone";
 import {
   canRevealPickupKey,
@@ -201,8 +205,9 @@ export async function createVoucherUpload(
  * lanza: si la visión no está disponible, el comprobante sigue su camino y lo
  * valida una persona.
  */
-interface VoucherInspection {
+export interface VoucherInspection {
   ok: boolean;
+  extractionOk: boolean;
   isVoucher: boolean;
   /** Datos leídos de la imagen, para rellenar lo que el operador dejó en blanco. */
   fields: {
@@ -216,6 +221,7 @@ interface VoucherInspection {
 
 const EMPTY_INSPECTION: VoucherInspection = {
   ok: false,
+  extractionOk: false,
   isVoucher: false,
   fields: { operationNumber: null, amount: null, paidAt: null, payerName: null },
   payload: {},
@@ -240,6 +246,9 @@ async function inspectVoucher(
     ),
     anthropicModel: (store as { anthropic_model?: string | null } | null)?.anthropic_model ?? null,
   };
+  if (!resolveVisionCreds(storeCreds).apiKey) {
+    return { ...EMPTY_INSPECTION, payload: { error: "anthropic_not_configured" } };
+  }
   try {
     const { data, error } = await admin.storage.from(VOUCHER_BUCKET).download(path);
     if (error || !data) return EMPTY_INSPECTION;
@@ -257,6 +266,7 @@ async function inspectVoucher(
     ]);
     return {
       ok: verdict.ok,
+      extractionOk: extracted.ok,
       isVoucher: verdict.isVoucher,
       fields: {
         operationNumber: extracted.operationNumber,
@@ -283,6 +293,115 @@ async function inspectVoucher(
   }
 }
 
+const VOUCHER_ANALYSIS_TOKEN_TTL_MS = 60 * 60 * 1000;
+
+interface VoucherAnalysisToken {
+  version: 1;
+  orderId: string;
+  storeId: string;
+  path: string;
+  issuedAt: number;
+  inspection: VoucherInspection;
+}
+
+export interface VoucherAnalysisResult {
+  analysisToken: string;
+  fields: VoucherInspection["fields"];
+  isVoucher: boolean;
+  notice: string;
+}
+
+function voucherPathBelongsToOrder(path: string, ctx: OrderContext): boolean {
+  return path.startsWith(`${ctx.storeId}/${ctx.row.order_id}/`) && !path.includes("..");
+}
+
+function inspectionFromToken(
+  token: string | null | undefined,
+  path: string | null,
+  ctx: OrderContext,
+): VoucherInspection | null {
+  if (!token || !path) return null;
+  try {
+    const decoded = JSON.parse(decryptOrNull(token) ?? "null") as VoucherAnalysisToken | null;
+    if (
+      !decoded ||
+      decoded.version !== 1 ||
+      decoded.orderId !== ctx.row.order_id ||
+      decoded.storeId !== ctx.storeId ||
+      decoded.path !== path ||
+      Date.now() - decoded.issuedAt > VOUCHER_ANALYSIS_TOKEN_TTL_MS ||
+      Date.now() < decoded.issuedAt
+    ) {
+      return null;
+    }
+    return decoded.inspection;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Analiza un comprobante ya subido y devuelve los campos para prellenar el
+ * formulario. El token cifrado permite reutilizar esta misma lectura al
+ * registrar el pago, sin cobrarle dos veces la imagen a Anthropic ni confiar en
+ * datos de visión modificables desde el navegador.
+ */
+export async function analyzeVoucherImage(
+  orderId: string,
+  path: string,
+): Promise<VoucherAnalysisResult | { error: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("shalom.register_payment")) {
+    return { error: "Tu rol no permite analizar comprobantes." };
+  }
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!voucherPathBelongsToOrder(path, ctx)) {
+    return { error: "La imagen no pertenece a este pedido." };
+  }
+
+  const inspection = await inspectVoucher(createAdminSupabase(), path, ctx.storeId);
+  const inspectionError = inspection.payload.error;
+  if (inspectionError === "anthropic_not_configured") {
+    return { error: "No hay una API key de Anthropic configurada para analizar comprobantes." };
+  }
+  if (inspectionError === "imagen demasiado grande") {
+    return { error: "La imagen supera el límite de 6 MB." };
+  }
+  if (!inspection.ok && !inspection.extractionOk) {
+    return {
+      error:
+        "Anthropic no pudo analizar la imagen. Revisa la API key o intenta con una captura más clara.",
+    };
+  }
+
+  const fieldsRead = [
+    inspection.fields.operationNumber && "nº de operación",
+    inspection.fields.amount !== null && "monto",
+    inspection.fields.paidAt && "fecha y hora",
+    inspection.fields.payerName && "pagador",
+  ].filter(Boolean);
+  const payload: VoucherAnalysisToken = {
+    version: 1,
+    orderId,
+    storeId: ctx.storeId,
+    path,
+    issuedAt: Date.now(),
+    inspection,
+  };
+
+  return {
+    analysisToken: encrypt(JSON.stringify(payload)),
+    fields: inspection.fields,
+    isVoucher: inspection.isVoucher,
+    notice: inspection.isVoucher
+      ? fieldsRead.length
+        ? `Imagen analizada. Se leyó: ${fieldsRead.join(", ")}. Revisa los datos antes de registrar.`
+        : "La imagen parece un comprobante, pero no se pudieron leer sus datos. Complétalos a mano."
+      : "La imagen fue analizada, pero no parece un comprobante Yape. Revisa antes de registrar.",
+  };
+}
+
 export interface RegisterPaymentInput {
   kind: "adelanto" | "diferencia";
   amount: number | null;
@@ -294,6 +413,8 @@ export interface RegisterPaymentInput {
   path: string | null;
   /** sha256 del archivo, calculado en el navegador. */
   sha256: string | null;
+  /** Lectura cifrada devuelta por analyzeVoucherImage; evita analizar dos veces. */
+  analysisToken?: string | null;
   notes?: string | null;
 }
 
@@ -318,7 +439,9 @@ export async function registerPayment(
   // Se lee la imagen ANTES de buscar duplicados: si el operador no tecleó el nº
   // de operación pero la imagen lo trae, ese dato entra en la comprobación. Sin
   // él, un mismo Yape recortado podría colarse en dos pedidos.
-  const vision = await inspectVoucher(admin, input.path, ctx.storeId);
+  const vision =
+    inspectionFromToken(input.analysisToken, input.path, ctx) ??
+    (await inspectVoucher(admin, input.path, ctx.storeId));
   const operation =
     normalizeOperationNumber(input.operationNumber) ??
     normalizeOperationNumber(vision.fields.operationNumber);

@@ -7,10 +7,11 @@
 // solo aparece cuando el servidor ya dijo que se puede — y aun así el servidor
 // lo vuelve a comprobar antes de descifrar nada.
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition, type ClipboardEvent } from "react";
 import { cn } from "@/components/ui";
 import {
   completePaymentData,
+  analyzeVoucherImage,
   createVoucherUpload,
   loadPaymentPanel,
   registerPayment,
@@ -68,6 +69,15 @@ async function fileSha256(file: File): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** Convierte un instante ISO al formato local que espera datetime-local. */
+function toDateTimeLocal(iso: string | null): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(+date)) return "";
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 export function PickupKeyPanel({ orderId, onChanged }: { orderId: string; onChanged: () => void }) {
@@ -362,34 +372,113 @@ function VoucherForm({
   const [payer, setPayer] = useState("");
   const [phone, setPhone] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [uploaded, setUploaded] = useState<{
+    file: File;
+    path: string;
+    sha256: string | null;
+  } | null>(null);
+  const [analysisToken, setAnalysisToken] = useState<string | null>(null);
+  const [analysisNotice, setAnalysisNotice] = useState<string | null>(null);
+  const [analysisIsVoucher, setAnalysisIsVoucher] = useState<boolean | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<"analyze" | "register" | null>(null);
+  const fileInputId = `voucher-${orderId}`;
+
+  useEffect(() => {
+    if (!file) {
+      setPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  function chooseFile(next: File | null) {
+    if (next && !next.type.startsWith("image/")) {
+      onError("El comprobante debe ser una imagen.");
+      return;
+    }
+    setFile(next);
+    setUploaded(null);
+    setAnalysisToken(null);
+    setAnalysisNotice(null);
+    setAnalysisIsVoucher(null);
+    onError(null);
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
+    const item = Array.from(event.clipboardData.items).find(
+      (candidate) => candidate.kind === "file" && candidate.type.startsWith("image/"),
+    );
+    const pasted = item?.getAsFile() ??
+      Array.from(event.clipboardData.files).find((candidate) => candidate.type.startsWith("image/")) ??
+      null;
+    if (!pasted) return;
+    event.preventDefault();
+    chooseFile(pasted);
+  }
+
+  async function ensureUploaded() {
+    if (!file) return null;
+    if (uploaded?.file === file) return uploaded;
+
+    const sha256 = await fileSha256(file);
+    const prep = await createVoucherUpload(orderId, file.type || "image/jpeg", file.name || "comprobante.png");
+    if ("error" in prep) {
+      onError(prep.error);
+      return null;
+    }
+    const supabase = createBrowserSupabase();
+    const { error } = await supabase.storage
+      .from(VOUCHER_BUCKET)
+      .uploadToSignedUrl(prep.path, prep.token, file, {
+        contentType: file.type || "image/jpeg",
+      });
+    if (error) {
+      onError(`No se pudo subir el comprobante: ${error.message}`);
+      return null;
+    }
+    const ready = { file, path: prep.path, sha256 };
+    setUploaded(ready);
+    return ready;
+  }
+
+  async function analyze() {
+    if (!file) return;
+    setBusyAction("analyze");
+    onError(null);
+    onNotice(null);
+    setAnalysisNotice(null);
+    try {
+      const ready = await ensureUploaded();
+      if (!ready) return;
+      const result = await analyzeVoucherImage(orderId, ready.path);
+      if ("error" in result) {
+        onError(result.error);
+        return;
+      }
+      setAnalysisToken(result.analysisToken);
+      setAnalysisIsVoucher(result.isVoucher);
+      setAnalysisNotice(result.notice);
+      setOperation((current) => current.trim() || result.fields.operationNumber || "");
+      setAmount((current) =>
+        current.trim() || (result.fields.amount !== null ? String(result.fields.amount) : ""),
+      );
+      setPaidAt((current) => current || toDateTimeLocal(result.fields.paidAt));
+      setPayer((current) => current.trim() || result.fields.payerName || "");
+    } finally {
+      setBusyAction(null);
+    }
+  }
 
   async function submit() {
-    setBusy(true);
+    setBusyAction("register");
     onError(null);
     onNotice(null);
     try {
-      let path: string | null = null;
-      let sha256: string | null = null;
-      if (file) {
-        sha256 = await fileSha256(file);
-        const prep = await createVoucherUpload(orderId, file.type || "image/jpeg", file.name);
-        if ("error" in prep) {
-          onError(prep.error);
-          return;
-        }
-        const supabase = createBrowserSupabase();
-        const { error } = await supabase.storage
-          .from(VOUCHER_BUCKET)
-          .uploadToSignedUrl(prep.path, prep.token, file, {
-            contentType: file.type || "image/jpeg",
-          });
-        if (error) {
-          onError(`No se pudo subir el comprobante: ${error.message}`);
-          return;
-        }
-        path = prep.path;
-      }
+      const ready = file ? await ensureUploaded() : null;
+      if (file && !ready) return;
 
       const res = await registerPayment(orderId, {
         kind,
@@ -399,8 +488,9 @@ function VoucherForm({
         paidAt: paidAt ? new Date(paidAt).toISOString() : null,
         payerName: payer.trim() || null,
         payerPhone: phone.trim() || null,
-        path,
-        sha256,
+        path: ready?.path ?? null,
+        sha256: ready?.sha256 ?? null,
+        analysisToken,
       });
       if (res.error) {
         onError(res.error);
@@ -413,14 +503,21 @@ function VoucherForm({
       setPayer("");
       setPhone("");
       setFile(null);
+      setUploaded(null);
+      setAnalysisToken(null);
+      setAnalysisNotice(null);
+      setAnalysisIsVoucher(null);
       onRegistered();
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   }
 
   return (
-    <div className="space-y-2 rounded-lg border border-slate-200 p-3">
+    <div
+      className="space-y-3 rounded-lg border border-slate-200 p-3 focus-within:border-slate-300"
+      onPaste={handlePaste}
+    >
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
         Cargar comprobante
       </p>
@@ -467,22 +564,79 @@ function VoucherForm({
           className="w-40 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
         />
       </div>
-      <input
-        type="file"
-        accept="image/*"
-        onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        className="block text-sm text-slate-600"
-      />
+      <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-2.5">
+        <div className="flex items-center gap-3">
+          {previewUrl && (
+            // La fuente es un blob local seleccionado por el operador.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={previewUrl}
+              alt="Vista previa del comprobante"
+              className="h-16 w-16 shrink-0 rounded-md border border-slate-200 bg-white object-cover"
+            />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <label
+                htmlFor={fileInputId}
+                className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              >
+                {file ? "Cambiar imagen" : "Seleccionar imagen"}
+              </label>
+              <input
+                id={fileInputId}
+                type="file"
+                accept="image/*"
+                onChange={(event) => chooseFile(event.target.files?.[0] ?? null)}
+                className="sr-only"
+              />
+              {file && (
+                <button
+                  type="button"
+                  onClick={() => chooseFile(null)}
+                  className="text-xs font-medium text-slate-500 hover:text-slate-800"
+                >
+                  Quitar
+                </button>
+              )}
+            </div>
+            <p className="mt-1 truncate text-xs text-slate-500">
+              {file ? file.name || "Imagen pegada desde el portapapeles" : "También puedes copiar una captura y pegarla aquí con Ctrl+V."}
+            </p>
+          </div>
+          {file && (
+            <button
+              type="button"
+              disabled={busyAction !== null || pending}
+              onClick={analyze}
+              className="shrink-0 rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+            >
+              {busyAction === "analyze" ? "Analizando…" : analysisToken ? "Analizar otra vez" : "Analizar imagen"}
+            </button>
+          )}
+        </div>
+      </div>
+      {analysisNotice && (
+        <p
+          className={cn(
+            "rounded-lg px-3 py-2 text-sm",
+            analysisIsVoucher ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800",
+          )}
+        >
+          {analysisNotice}
+        </p>
+      )}
       <p className="text-xs text-slate-400">
-        Lo que dejes en blanco se intenta leer de la imagen (nº de operación, monto, fecha y hora).
-        Cargar la imagen no valida el pago: queda pendiente hasta que alguien lo revise.
+        Analizar rellena los campos que Claude puede leer sin reemplazar lo que ya escribiste. Si no
+        analizas primero, se intentará leer la imagen al registrar. El pago siempre queda pendiente de revisión.
       </p>
       <button
-        disabled={busy || pending}
+        type="button"
+        disabled={busyAction !== null || pending}
         onClick={submit}
         className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
       >
-        {busy ? "Registrando…" : "Registrar pago"}
+        {busyAction === "register" ? "Registrando…" : "Registrar pago"}
       </button>
     </div>
   );
@@ -504,6 +658,7 @@ function KeySection({
   onError: (msg: string | null) => void;
 }) {
   const [newKey, setNewKey] = useState("");
+  const [manualKeyMode, setManualKeyMode] = useState(false);
   const [revealed, setRevealed] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [channel, setChannel] = useState("whatsapp");
@@ -532,23 +687,51 @@ function KeySection({
 
       {!panel.hasKey ? (
         panel.canViewKey ? (
-          <div className="flex gap-2">
-            <input
-              value={newKey}
-              onChange={(e) => setNewKey(e.target.value)}
-              placeholder="Clave que entrega la agencia"
-              className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-            />
-            <button
-              disabled={pending || !newKey.trim()}
-              onClick={() => {
-                onSetKey(newKey);
-                setNewKey("");
-              }}
-              className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-            >
-              Registrar clave
-            </button>
+          <div className="space-y-2">
+            <p className="rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">
+              La clave se generará automáticamente cuando crees la guía Shalom. No necesitas
+              escribirla.
+            </p>
+            {!manualKeyMode ? (
+              <button
+                type="button"
+                onClick={() => setManualKeyMode(true)}
+                className="text-xs font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-800"
+              >
+                Registrar una clave externa manualmente
+              </button>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <input
+                  value={newKey}
+                  onChange={(e) => setNewKey(e.target.value)}
+                  placeholder="Clave externa entregada por la agencia"
+                  className="min-w-56 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                />
+                <button
+                  type="button"
+                  disabled={pending || !newKey.trim()}
+                  onClick={() => {
+                    onSetKey(newKey);
+                    setNewKey("");
+                    setManualKeyMode(false);
+                  }}
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Registrar clave
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewKey("");
+                    setManualKeyMode(false);
+                  }}
+                  className="px-2 py-1.5 text-sm text-slate-500 hover:text-slate-800"
+                >
+                  Cancelar
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           <p className="text-sm text-slate-400">Todavía no se ha registrado la clave.</p>
