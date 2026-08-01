@@ -109,7 +109,7 @@ describe("recomputeOrderMaster — snapshot del pedido", () => {
     expect(row.operational_status).toBe("sin_confirmar");
     expect(row.macro_stage).toBe("por_confirmar");
     expect(row.macro_substage).toBe("sin_llamar");
-    expect(row.macro_version).toBe("mom-v1");
+    expect(row.macro_version).toBe("mom-v1.4");
     expect(row.courier_count).toBe(0);
     expect(row.attempt_count).toBe(0);
     expect(row.status_locked).toBe(false);

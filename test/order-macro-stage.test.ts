@@ -292,11 +292,90 @@ describe("resolveMacroStage — Por cerrar y Finalizado", () => {
     });
     const after = resolve({
       guides: [guide({ delivery_status: "anulado", custody_state: "devuelto", returned_at: returnedAt })],
-      events: [event("inventory_reconciled", "2026-07-08T11:00:00.000Z")],
+      events: [{
+        ...event("inventory_reconciled", "2026-07-08T11:00:00.000Z"),
+        shipment_id: "shipment-1",
+      }],
       legacy: { general: "devuelto", operational: "devuelto_al_origen", since: returnedAt },
     });
     expect(before).toMatchObject({ stage: "por_cerrar", substage: "devolucion_pendiente_inventario" });
     expect(after).toMatchObject({ stage: "finalizado", substage: "devuelto_cerrado" });
+  });
+
+  it("exige conciliar cada salida devuelta antes de finalizar", () => {
+    const returnedAt = "2026-07-08T10:00:00.000Z";
+    const guides = [
+      guide({ id: "s1", delivery_status: "anulado", custody_state: "devuelto", returned_at: returnedAt }),
+      guide({ id: "s2", courier: "axel", delivery_status: "anulado", custody_state: "devuelto", returned_at: returnedAt }),
+    ];
+    const oneClosed = resolve({
+      guides,
+      events: [{ ...event("inventory_reconciled", "2026-07-08T11:00:00.000Z"), shipment_id: "s1" }],
+      legacy: { general: "devuelto", operational: "devuelto_al_origen", since: returnedAt },
+    });
+    const bothClosed = resolve({
+      guides,
+      events: [
+        { ...event("inventory_reconciled", "2026-07-08T11:00:00.000Z"), shipment_id: "s1" },
+        { ...event("merma_closed", "2026-07-08T12:00:00.000Z"), shipment_id: "s2" },
+      ],
+      legacy: { general: "devuelto", operational: "devuelto_al_origen", since: returnedAt },
+    });
+    expect(oneClosed).toMatchObject({ stage: "por_cerrar", substage: "devolucion_pendiente_inventario" });
+    expect(bothClosed).toMatchObject({ stage: "finalizado", substage: "devuelto_cerrado" });
+  });
+
+  it("mantiene cada indemnización Aliclik abierta por su propia salida", () => {
+    const guides = [
+      guide({ id: "s1", delivery_status: "anulado", custody_state: "devuelto", returned_at: CREATED }),
+      guide({ id: "s2", delivery_status: "anulado", custody_state: "devuelto", returned_at: CREATED }),
+    ];
+    const state = resolve({
+      guides,
+      events: [
+        { ...event("inventory_reconciled", "2026-07-08T09:00:00.000Z"), shipment_id: "s1" },
+        { ...event("inventory_reconciled", "2026-07-08T09:00:00.000Z"), shipment_id: "s2" },
+        { ...event("indemnity_requested", "2026-07-08T10:00:00.000Z"), shipment_id: "s1" },
+        { ...event("indemnity_requested", "2026-07-08T11:00:00.000Z"), shipment_id: "s2" },
+        { ...event("indemnity_resolved", "2026-07-08T12:00:00.000Z"), shipment_id: "s2" },
+      ],
+      legacy: { general: "devuelto", operational: "devuelto_al_origen", since: CREATED },
+    });
+    expect(state.stage).toBe("por_cerrar");
+    expect(state.reasons).toContain("indemnizacion_pendiente");
+  });
+
+  it("un retorno solicitado mantiene visible la devolución física pendiente", () => {
+    const state = resolve({
+      guides: [guide({ delivery_status: "anulado", custody_state: "retorno" })],
+      events: [event("return_requested", "2026-07-08T10:00:00.000Z")],
+      legacy: { general: "anulado", operational: "anulado", since: CREATED },
+    });
+    expect(state.stage).toBe("por_cerrar");
+    expect(state.reasons).toContain("devolucion_fisica_pendiente");
+  });
+
+  it("una reapertura permanece Por cerrar hasta un nuevo cierre explícito", () => {
+    const reopened = resolve({
+      guides: [guide({ delivery_status: "entregado", custody_state: "courier" })],
+      events: [
+        event("liquidation_closed", "2026-07-08T10:00:00.000Z"),
+        event("order_finalized", "2026-07-08T11:00:00.000Z"),
+        event("order_reopened", "2026-07-08T12:00:00.000Z"),
+      ],
+      legacy: { general: "entregado", operational: "entregado", since: CREATED },
+    });
+    const closedAgain = resolve({
+      guides: [guide({ delivery_status: "entregado", custody_state: "courier" })],
+      events: [
+        event("liquidation_closed", "2026-07-08T10:00:00.000Z"),
+        event("order_reopened", "2026-07-08T12:00:00.000Z"),
+        event("order_finalized", "2026-07-08T13:00:00.000Z"),
+      ],
+      legacy: { general: "entregado", operational: "entregado", since: CREATED },
+    });
+    expect(reopened).toMatchObject({ stage: "por_cerrar", substage: "validacion_cierre_pendiente" });
+    expect(closedAgain).toMatchObject({ stage: "finalizado", substage: "entregado_cerrado" });
   });
 });
 

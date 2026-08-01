@@ -22,6 +22,7 @@ import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
 import { computeLogisticsCost, costDay, type CostTariff } from "@/lib/costs";
 import {
+  MOM_RESOLUTION_VERSION,
   resolveMacroStage,
   type MacroGuideSnapshot,
 } from "@/lib/order-macro-stage";
@@ -62,6 +63,8 @@ const SHIPMENT_COLUMN_SETS = [
 const PAGE = 1000;
 /** Tamaño de lote para los `.in(...)`: URLs demasiado largas fallan. */
 const ID_BATCH = 200;
+/** Límite del backfill de versión por tienda y cron para no competir con la operación. */
+const VERSION_RECONCILE_PAGE = 250;
 
 interface OrderRecord {
   id: string;
@@ -129,6 +132,7 @@ interface CallRecord {
 
 interface EventRecord {
   order_id: string;
+  shipment_id: string | null;
   kind: string;
   occurred_at: string;
   courier: string | null;
@@ -308,7 +312,7 @@ async function fetchEvents(admin: SupabaseClient, ids: string[]): Promise<EventR
   for (const batch of chunk(ids, ID_BATCH)) {
     const { data, error } = await admin
       .from("order_events")
-      .select("order_id,kind,occurred_at,courier,new_status,new_operational,reason,payload")
+      .select("order_id,shipment_id,kind,occurred_at,courier,new_status,new_operational,reason,payload")
       .in("order_id", batch);
     if (error) throw new Error(`order_master: no se pudieron leer los eventos — ${error.message}`);
     out.push(...((data ?? []) as unknown as EventRecord[]));
@@ -662,6 +666,7 @@ export async function recomputeOrderMaster(
       events: orderEvents.map((event) => ({
         kind: event.kind,
         occurred_at: event.occurred_at,
+        shipment_id: event.shipment_id,
         reason: event.reason ?? null,
         payload: event.payload ?? null,
       })),
@@ -858,6 +863,41 @@ export async function reconcileOrderMaster(
     }
   }
   const pending = candidateIds.filter((id) => !known.has(id));
+
+  // Una fase nueva puede cambiar el resultado aun cuando ninguna fuente del
+  // pedido haya sido tocada. Recalcula por tandas las filas de versiones
+  // anteriores; al escribir la versión vigente dejan de aparecer en el
+  // siguiente cron. Así el histórico completo converge sin exponer secretos en
+  // un backfill local ni bloquear una sincronización normal.
+  const remaining = Math.min(VERSION_RECONCILE_PAGE, Math.max(0, limit - pending.length));
+  if (remaining > 0) {
+    const staleIds: string[] = [];
+    const { data: nullVersion } = await admin
+      .from("order_master")
+      .select("order_id")
+      .in("store_id", storeIds as string[])
+      .is("macro_version", null)
+      .limit(remaining);
+    staleIds.push(...((nullVersion ?? []) as { order_id: string }[]).map((row) => row.order_id));
+
+    const stillRemaining = remaining - staleIds.length;
+    if (stillRemaining > 0) {
+      const { data: oldVersion } = await admin
+        .from("order_master")
+        .select("order_id")
+        .in("store_id", storeIds as string[])
+        .neq("macro_version", MOM_RESOLUTION_VERSION)
+        .limit(stillRemaining);
+      staleIds.push(...((oldVersion ?? []) as { order_id: string }[]).map((row) => row.order_id));
+    }
+    const seen = new Set(pending);
+    for (const id of staleIds) {
+      if (!seen.has(id)) {
+        pending.push(id);
+        seen.add(id);
+      }
+    }
+  }
   if (!pending.length) return { requested: 0, written: 0 };
   return recomputeOrderMaster(admin, pending);
 }

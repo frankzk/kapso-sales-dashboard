@@ -257,6 +257,7 @@ export interface ShipmentRow {
   ready_by?: string | null;
   custody_transferred_at?: string | null;
   custody_transferred_by?: string | null;
+  returned_at?: string | null;
   delivery_status: string; // see lib/shipments.ts
   status_category: string; // pending | in_route | delivered | closed
   order_id: string | null;

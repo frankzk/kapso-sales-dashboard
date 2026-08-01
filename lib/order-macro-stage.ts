@@ -4,7 +4,10 @@
 // `general_status` / `operational_status` se conservan como compatibilidad y
 // evidencia histórica, pero las colas del equipo se organizan con el MOM.
 
-export const MOM_RESOLUTION_VERSION = "mom-v1" as const;
+// Cambia cuando una nueva fase altera la precedencia o los motivos de cierre.
+// El cron usa esta versión para recalcular gradualmente todo el histórico sin
+// necesitar un script con credenciales locales.
+export const MOM_RESOLUTION_VERSION = "mom-v1.4" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -225,6 +228,8 @@ export interface MacroGuideSnapshot {
 export interface MacroEventSnapshot {
   kind: string;
   occurred_at: string;
+  /** Salida física concreta a la que pertenece el hecho, cuando aplica. */
+  shipment_id?: string | null;
   reason?: string | null;
   payload?: Record<string, unknown> | null;
 }
@@ -309,6 +314,66 @@ function isWorkflowOpen(
   return !closed || closed.occurred_at < opened.occurred_at;
 }
 
+function isShipmentWorkflowOpen(
+  events: readonly MacroEventSnapshot[],
+  shipmentId: string,
+  starts: readonly string[],
+  closes: readonly string[],
+): boolean {
+  return isWorkflowOpen(
+    events.filter((event) => event.shipment_id === shipmentId),
+    starts,
+    closes,
+  );
+}
+
+function isAnyShipmentWorkflowOpen(
+  events: readonly MacroEventSnapshot[],
+  starts: readonly string[],
+  closes: readonly string[],
+): boolean {
+  const shipmentIds = [
+    ...new Set(
+      events
+        .filter((event) => starts.includes(event.kind) && event.shipment_id)
+        .map((event) => event.shipment_id as string),
+    ),
+  ];
+  // Compatibilidad con hechos antiguos que todavía no estaban vinculados a
+  // una salida. Los hechos nuevos siempre deben llevar shipment_id.
+  if (!shipmentIds.length) return isWorkflowOpen(events, starts, closes);
+  return shipmentIds.some((shipmentId) =>
+    isShipmentWorkflowOpen(events, shipmentId, starts, closes),
+  );
+}
+
+function latestShipmentEvent(
+  events: readonly MacroEventSnapshot[],
+  shipmentId: string,
+  kinds: readonly string[],
+): MacroEventSnapshot | null {
+  const allowed = new Set(kinds);
+  let latest: MacroEventSnapshot | null = null;
+  for (const event of events) {
+    if (event.shipment_id !== shipmentId || !allowed.has(event.kind)) continue;
+    if (!latest || event.occurred_at > latest.occurred_at) latest = event;
+  }
+  return latest;
+}
+
+function inventoryResolvedForGuide(
+  guide: MacroGuideSnapshot,
+  events: readonly MacroEventSnapshot[],
+): boolean {
+  const resolution = latestShipmentEvent(
+    events,
+    guide.id,
+    ["inventory_reconciled", "merma_closed"],
+  );
+  if (!resolution) return false;
+  return !guide.returned_at || resolution.occurred_at >= guide.returned_at;
+}
+
 function maxIso(...values: (string | null | undefined)[]): string | null {
   let best: string | null = null;
   for (const value of values) {
@@ -380,9 +445,7 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
       !hasReturned(guide) &&
       guide.delivery_status !== "entregado",
   );
-  const returned = guides.some(hasReturned);
-  const returnedAt = maxIso(...guides.map((guide) => guide.returned_at));
-  const inventoryReconciled = latestEvent(events, ["inventory_reconciled", "merma_closed"]);
+  const returnedGuides = guides.filter(hasReturned);
 
   if (legacy.general === "entregado" && active.length) reasons.push("salida_adicional_activa");
   if (
@@ -399,9 +462,9 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
     reasons.push("devolucion_fisica_pendiente");
   }
   if (
-    returned &&
+    returnedGuides.length > 0 &&
     ["anulado", "devuelto"].includes(legacy.general) &&
-    (!inventoryReconciled || Boolean(returnedAt && inventoryReconciled.occurred_at < returnedAt))
+    returnedGuides.some((guide) => !inventoryResolvedForGuide(guide, events))
   ) {
     reasons.push("devolucion_pendiente_inventario");
   }
@@ -411,7 +474,7 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   if (isWorkflowOpen(events, ["refund_requested"], ["refund_completed"])) {
     reasons.push("reembolso_pendiente");
   }
-  if (isWorkflowOpen(events, ["indemnity_requested"], ["indemnity_resolved"])) {
+  if (isAnyShipmentWorkflowOpen(events, ["indemnity_requested"], ["indemnity_resolved"])) {
     reasons.push("indemnizacion_pendiente");
   }
   if (isWorkflowOpen(events, ["merma_pending"], ["merma_closed"])) {
@@ -437,9 +500,17 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   // todavía no haya `returned_at` en la guía.
   if (
     ["anulado", "entregado", "devuelto"].includes(legacy.general) &&
-    isWorkflowOpen(events, ["return_started"], ["returned", "return_received"])
+    isAnyShipmentWorkflowOpen(events, ["return_started", "return_requested"], ["returned", "return_received"])
   ) {
     reasons.push("devolucion_fisica_pendiente");
+  }
+
+  // Reabrir no debe cerrarse de inmediato por las mismas señales terminales
+  // históricas. El expediente queda en validación hasta un nuevo cierre humano.
+  const reopened = latestEvent(events, ["order_reopened"]);
+  const finalized = latestEvent(events, ["order_finalized"]);
+  if (reopened && (!finalized || reopened.occurred_at > finalized.occurred_at)) {
+    reasons.push("validacion_cierre_pendiente");
   }
 
   // `delivered` puede venir de order_events aun sin guía entregada; se conserva
@@ -496,7 +567,12 @@ function inCourseSubstage(
   if (
     current.custody_state === "retorno" ||
     current.pickup_state === "retorno_iniciado" ||
-    isWorkflowOpen(input.events, ["return_started", "return_requested"], ["returned", "return_received"])
+    isShipmentWorkflowOpen(
+      input.events,
+      current.id,
+      ["return_started", "return_requested"],
+      ["returned", "return_received"],
+    )
   ) {
     return "en_retorno";
   }
@@ -585,18 +661,26 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
     if (input.legacy.general === "anulado" && !everDispatched) {
       return result("finalizado", "anulado_cerrado", input.legacy.since, operation);
     }
-    const returnedAt = maxIso(...input.guides.map((guide) => guide.returned_at));
-    const inventoryClosed = latestEvent(input.events, ["inventory_reconciled", "merma_closed"]);
+    const returnedGuides = input.guides.filter(hasReturned);
+    const inventoryClosedAt = maxIso(
+      ...returnedGuides.map((guide) =>
+        latestShipmentEvent(
+          input.events,
+          guide.id,
+          ["inventory_reconciled", "merma_closed"],
+        )?.occurred_at,
+      ),
+    );
     if (
       ["anulado", "devuelto"].includes(input.legacy.general) &&
-      returnedAt &&
-      inventoryClosed &&
-      inventoryClosed.occurred_at >= returnedAt
+      returnedGuides.length > 0 &&
+      returnedGuides.every((guide) => inventoryResolvedForGuide(guide, input.events)) &&
+      inventoryClosedAt
     ) {
       return result(
         "finalizado",
         input.legacy.general === "devuelto" ? "devuelto_cerrado" : "anulado_cerrado",
-        inventoryClosed.occurred_at,
+        inventoryClosedAt,
         operation,
       );
     }

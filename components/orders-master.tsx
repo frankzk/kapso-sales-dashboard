@@ -15,6 +15,7 @@ import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { ShalomGuidePanel } from "@/components/shalom-guide-panel";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { OrderRouteDesk } from "@/components/order-route-desk";
+import { OrderClosureDesk } from "@/components/order-closure-desk";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
 import { ChecklistFilter } from "@/components/filters";
 import { PickupKeyPanel } from "@/components/pickup-key-panel";
@@ -25,6 +26,7 @@ import {
   loadOrderDetail,
   loadOrderGeo,
   registerReturn,
+  registerClosureAction,
   relinkGuide,
   searchOrders,
   setOrderStatus,
@@ -179,6 +181,7 @@ export function OrdersMasterBoard({
   canCreateShalomGuide,
   canCreateTandersGuide,
   canDispatch,
+  closurePermissions,
 }: {
   stores: StoreSummary[];
   view: MasterView;
@@ -195,6 +198,14 @@ export function OrdersMasterBoard({
   canCreateShalomGuide: boolean;
   canCreateTandersGuide: boolean;
   canDispatch: boolean;
+  closurePermissions: {
+    canReturn: boolean;
+    canInventory: boolean;
+    canFinance: boolean;
+    canFinalize: boolean;
+    canRefund: boolean;
+    canReopen: boolean;
+  };
 }) {
   const router = useRouter();
   const [filters, setFilters] = useState<MasterFilters>(emptyFilters);
@@ -673,6 +684,7 @@ export function OrdersMasterBoard({
           canCreateGuide={canCreateGuide}
           canCreateShalomGuide={canCreateShalomGuide}
           canCreateTandersGuide={canCreateTandersGuide}
+          closurePermissions={closurePermissions}
           storeName={storeName}
           onClose={() => setOpenId(null)}
           onSaved={() => router.refresh()}
@@ -1057,7 +1069,21 @@ const TIMELINE_LABEL: Record<string, string> = {
   courier_change: "Cambio de courier",
   delivered: "Entrega confirmada",
   return_started: "Retorno iniciado",
+  return_requested: "Retorno solicitado",
+  return_received: "Devolución recibida en almacén",
   returned: "Pedido devuelto",
+  inventory_reconciled: "Producto reingresado a inventario",
+  merma_closed: "Merma cerrada",
+  liquidation_observed: "Liquidación observada",
+  liquidation_closed: "Liquidación conciliada",
+  indemnity_requested: "Indemnización solicitada",
+  indemnity_resolved: "Indemnización resuelta",
+  refund_requested: "Reembolso solicitado",
+  refund_completed: "Reembolso confirmado",
+  customer_return_started: "Devolución del cliente abierta",
+  customer_return_resolved: "Devolución del cliente resuelta",
+  order_finalized: "Expediente finalizado",
+  order_reopened: "Expediente reabierto",
   status_override: "Estado cambiado manualmente",
   import: "Reporte importado",
   call: "Gestión con el cliente",
@@ -1073,6 +1099,7 @@ function OrderDrawer({
   canCreateGuide,
   canCreateShalomGuide,
   canCreateTandersGuide,
+  closurePermissions,
   storeName,
   onClose,
   onSaved,
@@ -1083,6 +1110,14 @@ function OrderDrawer({
   canCreateGuide: boolean;
   canCreateShalomGuide: boolean;
   canCreateTandersGuide: boolean;
+  closurePermissions: {
+    canReturn: boolean;
+    canInventory: boolean;
+    canFinance: boolean;
+    canFinalize: boolean;
+    canRefund: boolean;
+    canReopen: boolean;
+  };
   storeName: (id: string) => string;
   onClose: () => void;
   onSaved: () => void;
@@ -1114,15 +1149,26 @@ function OrderDrawer({
     void reload();
   }, [reload]);
 
-  function run(action: () => Promise<{ error?: string; notice?: string }>) {
-    startTransition(async () => {
-      const res = await action();
-      setError(res.error ?? null);
-      setNotice(res.notice ?? null);
-      if (!res.error) {
-        await reload();
-        onSaved();
-      }
+  function run(action: () => Promise<{ error?: string; notice?: string }>): Promise<boolean> {
+    return new Promise((resolve) => {
+      startTransition(async () => {
+        try {
+          const res = await action();
+          setError(res.error ?? null);
+          setNotice(res.notice ?? null);
+          if (!res.error) {
+            await reload();
+            onSaved();
+            resolve(true);
+            return;
+          }
+          resolve(false);
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "No se pudo completar la acción.");
+          setNotice(null);
+          resolve(false);
+        }
+      });
     });
   }
 
@@ -1316,6 +1362,16 @@ function OrderDrawer({
                 </ul>
               )}
             </section>
+
+            <OrderClosureDesk
+              stage={detail.row.macro_stage}
+              reasons={(detail.row.macro_reasons ?? []) as MacroSubstage[]}
+              generalStatus={detail.row.general_status}
+              guides={detail.guides}
+              permissions={closurePermissions}
+              pending={pending}
+              onAction={(input) => run(() => registerClosureAction(orderId, input))}
+            />
 
             <section>
               <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">

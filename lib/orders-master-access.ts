@@ -260,7 +260,7 @@ const GUIDE_COLUMNS =
   "aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at," +
   "next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id," +
   "suggested_order_name,output_number,output_code,qr_token,preparation_state,custody_state," +
-  "ready_at,ready_by,custody_transferred_at,custody_transferred_by,label_url,created_at,updated_at";
+  "ready_at,ready_by,custody_transferred_at,custody_transferred_by,returned_at,label_url,created_at,updated_at";
 
 async function swaypRouteCheck(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,

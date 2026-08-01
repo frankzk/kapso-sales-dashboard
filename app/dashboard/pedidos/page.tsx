@@ -83,6 +83,14 @@ async function PedidosContent({
       canCreateShalomGuide={perms.can("shalom.create_guide")}
       canCreateTandersGuide={perms.can("tanders.create_guide")}
       canDispatch={perms.can("warehouse.prepare") || perms.can("dispatch.manage") || perms.can("dispatch.pickup")}
+      closurePermissions={{
+        canReturn: perms.can("closure.return"),
+        canInventory: perms.can("closure.inventory"),
+        canFinance: perms.can("closure.finance"),
+        canFinalize: perms.can("closure.finalize"),
+        canRefund: perms.can("closure.refund"),
+        canReopen: perms.can("master.override_status") && perms.can("closure.finalize"),
+      }}
     />
   );
 }
