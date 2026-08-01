@@ -107,7 +107,7 @@ export function AliclikGuidePanel({
     <Card>
       <div className="space-y-4">
         <div>
-          <h3 className="text-sm font-semibold text-slate-900">Crear guía en Aliclik</h3>
+          <h3 className="text-sm font-semibold text-slate-900">Aliclik contraentrega</h3>
           <p className="mt-1 text-xs text-slate-500">
             Cotiza primero: la cotización no crea nada y sirve para confirmar cobertura y ubicación.
           </p>
@@ -309,7 +309,7 @@ export function AliclikGuidePanel({
               disabled={pending || transportId === null || Boolean(preview.writeBlocked)}
               className="w-full rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50"
             >
-              {pending ? "Creando…" : "Crear guía en Aliclik"}
+              {pending ? "Creando…" : "Crear guía Aliclik contraentrega"}
             </button>
             {/* El servidor vuelve a comprobar las dos llaves antes de escribir:
                 esto es aviso, no seguridad. Pero evita que alguien pulse un
