@@ -1,6 +1,6 @@
 "use client";
 
-// Panel de pagos Yape y clave de recojo, dentro del detalle del pedido.
+// Panel de pagos Yape y gestión de la credencial Shalom dentro del pedido.
 //
 // La clave NUNCA aparece en el listado ni en exportaciones: solo aquí, tras una
 // acción explícita, y cada visualización queda registrada. El botón de mostrar
@@ -112,12 +112,10 @@ export function PickupKeyPanel({
   orderId,
   onChanged,
   mode = "required",
-  showPickupKey = true,
 }: {
   orderId: string;
   onChanged: () => void;
   mode?: OrderPaymentPanelMode;
-  showPickupKey?: boolean;
 }) {
   const [panel, setPanel] = useState<PanelData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -172,12 +170,12 @@ export function PickupKeyPanel({
               paymentOptional ? "text-slate-700" : "text-amber-900",
             )}
           >
-            {paymentOptional ? "Cobro para envío por agencia" : "Pagos y clave de recojo"}
+            Cobro para envío por agencia
           </h3>
           <p className="mt-0.5 text-xs text-slate-500">
             {paymentOptional
               ? "Opcional para Provincia COD. Úsalo si el pedido irá por Agencia o el historial del cliente exige adelanto."
-              : "El pago acumulado habilita la guía; el pago completo libera la clave."}
+              : "El pago acumulado habilita la guía; el pago completo permite entregar la clave desde la salida Shalom."}
           </p>
         </div>
         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
@@ -218,17 +216,79 @@ export function PickupKeyPanel({
         />
       )}
 
-      {(showPickupKey || panel.hasKey) && (
-        <KeySection
-          panel={panel}
-          orderId={orderId}
-          pending={pending}
-          onSetKey={(key) => run(() => setPickupKey(orderId, key))}
-          onShare={(channel, note) => run(() => sharePickupKey(orderId, { channel, note }))}
-          onError={setError}
-        />
-      )}
     </section>
+  );
+}
+
+/**
+ * Credencial ligada a la salida Shalom. Se renderiza dentro de "Salidas y
+ * guías", nunca dentro del formulario que registra comprobantes. El pago
+ * completo sigue siendo la compuerta que autoriza revelarla o entregarla.
+ */
+export function ShalomPickupKeyPanel({
+  orderId,
+  onChanged,
+}: {
+  orderId: string;
+  onChanged: () => void;
+}) {
+  const [panel, setPanel] = useState<PanelData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const reload = useMemo(
+    () => async () => {
+      const res = await loadPaymentPanel(orderId);
+      if ("error" in res) setError(res.error);
+      else {
+        setPanel(res.panel);
+        setError(null);
+      }
+    },
+    [orderId],
+  );
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  function run(action: () => Promise<{ error?: string; notice?: string }>) {
+    startTransition(async () => {
+      const res = await action();
+      setError(res.error ?? null);
+      setNotice(res.notice ?? null);
+      if (!res.error) {
+        await reload();
+        onChanged();
+      }
+    });
+  }
+
+  if (!panel) {
+    return (
+      <p className="border-t border-sky-100 pt-3 text-sm text-slate-400">
+        Cargando credencial Shalom…
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-3 border-t border-sky-100 pt-3">
+      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      {notice && (
+        <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</p>
+      )}
+      <KeySection
+        panel={panel}
+        orderId={orderId}
+        pending={pending}
+        embedded
+        onSetKey={(key) => run(() => setPickupKey(orderId, key))}
+        onShare={(channel, note) => run(() => sharePickupKey(orderId, { channel, note }))}
+        onError={setError}
+      />
+    </div>
   );
 }
 
@@ -1355,6 +1415,7 @@ function KeySection({
   panel,
   orderId,
   pending,
+  embedded = false,
   onSetKey,
   onShare,
   onError,
@@ -1362,6 +1423,7 @@ function KeySection({
   panel: PanelData;
   orderId: string;
   pending: boolean;
+  embedded?: boolean;
   onSetKey: (key: string) => void;
   onShare: (channel: string, note: string) => void;
   onError: (msg: string | null) => void;
@@ -1390,8 +1452,15 @@ function KeySection({
   }
 
   return (
-    <div className="space-y-2 rounded-lg border border-slate-200 p-3">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Clave de recojo</p>
+    <div className={cn("space-y-2", !embedded && "rounded-lg border border-slate-200 p-3")}>
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-sky-900">
+          Credencial de recojo Shalom
+        </p>
+        <p className="mt-0.5 text-xs text-slate-500">
+          Pertenece a la salida Shalom. El pago completo controla cuándo puede mostrarse y entregarse.
+        </p>
+      </div>
 
       {!panel.hasKey ? (
         panel.canManageKey ? (
@@ -1399,7 +1468,7 @@ function KeySection({
             <input
               value={newKey}
               onChange={(e) => setNewKey(e.target.value)}
-              placeholder="Clave que entrega la agencia"
+              placeholder="Clave emitida por Shalom"
               className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
             />
             <button

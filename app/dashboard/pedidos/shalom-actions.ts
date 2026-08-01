@@ -265,7 +265,7 @@ export async function loadShalomDraft(
 
   // La clave se genera en el servidor y NO viaja al cliente salvo que el rol ya
   // tenga permiso de verla: es la llave del paquete. Quien crea la guía no
-  // necesita conocerla — se revela por el panel de pagos, con auditoría.
+  // necesita conocerla — se revela desde la salida Shalom, con auditoría.
   const pickupCode = generatePickupCode();
 
   return {
@@ -578,10 +578,10 @@ export async function registerManualShalomGuide(
       { onConflict: "order_id" },
     );
     if (keyWrite.error) {
-      keyWarning = ` La guía quedó vinculada, pero la clave no pudo guardarse (${keyWrite.error.message}); regístrala desde Pagos y clave.`;
+      keyWarning = ` La guía quedó vinculada, pero la clave no pudo guardarse (${keyWrite.error.message}); regístrala desde la salida Shalom en Salidas y guías.`;
     }
   } else {
-    keyWarning = " No se ingresó la clave de recojo; regístrala después desde Pagos y clave antes de entregársela al cliente.";
+    keyWarning = " No se ingresó la clave de recojo; regístrala después desde la salida Shalom en Salidas y guías.";
   }
 
   const { data: validatedPayments } = await admin
@@ -869,7 +869,7 @@ export async function createShalomGuide(
   revalidatePath(MASTER_PATH);
 
   const keyWarning = keyWrite.error
-    ? ` ATENCIÓN: la clave de recojo NO se pudo guardar (${keyWrite.error.message}); regístrala a mano desde el panel de pagos.`
+    ? ` ATENCIÓN: la clave de recojo NO se pudo guardar (${keyWrite.error.message}); regístrala a mano desde la salida Shalom en Salidas y guías.`
     : "";
 
   return {
@@ -878,7 +878,7 @@ export async function createShalomGuide(
       (recovered
         ? " Se recuperó de un corte de conexión: la guía ya existía en Shalom y no se duplicó."
         : "") +
-      (keyWarning || " La clave de recojo quedó registrada y se revela desde el panel de pagos cuando el cobro esté validado."),
+      (keyWarning || " La clave de recojo quedó registrada y se revela desde la salida Shalom cuando el cobro esté validado."),
     guideCode,
     codigo: result?.codigo ?? null,
     recovered,

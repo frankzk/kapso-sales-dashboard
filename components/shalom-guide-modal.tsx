@@ -48,7 +48,7 @@ import {
  *
  * La clave de recojo NO se pide ni se muestra: la genera el servidor y va
  * cifrada a la tabla de siempre. Quien crea la guía no necesita verla — se
- * revela desde el panel de pagos cuando el cobro está validado, con auditoría.
+ * revela desde la salida Shalom cuando el cobro está validado, con auditoría.
  * Solo un rol que ya puede ver claves la ve acá.
  */
 export function ShalomGuideModal({
@@ -570,8 +570,8 @@ export function ShalomGuideModal({
 
                     {!manualPickupCode && (
                       <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                        Puedes vincular la guía sin clave, pero tendrás que registrarla después desde
-                        “Pagos y clave” antes de entregársela al cliente.
+                        Puedes vincular la guía sin clave, pero tendrás que registrarla después en
+                        la credencial de esta salida, dentro de “Salidas y guías”.
                       </p>
                     )}
 
@@ -905,8 +905,8 @@ export function ShalomGuideModal({
                   </Field>
                 ) : (
                   <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                    La clave de recojo se genera sola y queda cifrada. Se entrega al cliente desde el
-                    panel de pagos, cuando el cobro esté validado.
+                    La clave de recojo se genera sola y queda cifrada. Se gestiona desde la salida
+                    Shalom y solo se entrega cuando el cobro esté validado.
                   </p>
                 )}
 
