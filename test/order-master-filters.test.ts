@@ -5,6 +5,7 @@ import {
   emptyFilters,
   facetValues,
   hasActiveFilters,
+  masterOperation,
   matchesFilters,
   sortRows,
   type MasterFilters,
@@ -103,6 +104,23 @@ describe("matchesFilters — dimensiones multi-selección", () => {
     });
     expect(matchesFilters(row("1", { general_status: "entregado", operational_status: "recogido" }), f, NOW)).toBe(true);
     expect(matchesFilters(row("2", { general_status: "entregado", operational_status: "entregado" }), f, NOW)).toBe(false);
+  });
+
+  it("filtra por cobertura MOM y resuelve el histórico sin backfill", () => {
+    const lima = row("1", { region: "Lima", province: "Lima", macro_operation: null });
+    const provincia = row("2", {
+      region: "Arequipa",
+      province: "Arequipa",
+      macro_operation: "provincia_cod",
+    });
+    const agencia = row("3", {
+      shipping_mode: "agency",
+      current_courier: "shalom",
+      macro_operation: "agencia",
+    });
+    const f = withFilter({ operations: new Set(["lima", "agencia"]) });
+    expect(masterOperation(lima)).toBe("lima");
+    expect(applyFilters([lima, provincia, agencia], f, NOW).map((item) => item.id)).toEqual(["1", "3"]);
   });
 });
 
@@ -211,6 +229,15 @@ describe("facetValues", () => {
       row("4", { province: null }),
     ];
     expect(facetValues(rows, "province")).toEqual(["Cusco", "Huancayo"]);
+  });
+
+  it("deriva la cobertura aunque macro_operation todavía sea nulo", () => {
+    const rows = [
+      row("1", { region: "Lima", province: "Lima", macro_operation: null }),
+      row("2", { region: "Cusco", province: "Cusco", macro_operation: null }),
+      row("3", { shipping_mode: "agency", current_courier: "shalom", macro_operation: null }),
+    ];
+    expect(facetValues(rows, "macro_operation")).toEqual(["agencia", "lima", "provincia_cod"]);
   });
 });
 

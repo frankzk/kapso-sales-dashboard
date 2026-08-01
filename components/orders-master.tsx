@@ -36,6 +36,7 @@ import {
   emptyFilters,
   facetValues,
   hasActiveFilters,
+  masterOperation,
   sortRows,
   type AgencySummary,
   type MasterFilters,
@@ -105,6 +106,37 @@ const MODE_LABEL: Record<string, string> = {
   cod: "Contraentrega",
   agency: "Agencia",
 };
+
+const COVERAGE_LABEL: Record<string, string> = {
+  lima: "Lima",
+  provincia_cod: "Provincia COD",
+  agencia: "Agencia",
+  desconocida: "Por revisar",
+};
+
+const COVERAGE_TONE: Record<string, string> = {
+  lima: "bg-sky-50 text-sky-700 ring-sky-600/20",
+  provincia_cod: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+  agencia: "bg-amber-50 text-amber-800 ring-amber-600/20",
+  desconocida: "bg-slate-100 text-slate-600 ring-slate-500/20",
+};
+
+function coverageLabel(operation: string): string {
+  return COVERAGE_LABEL[operation] ?? operation;
+}
+
+function CoverageBadge({ operation }: { operation: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset",
+        COVERAGE_TONE[operation] ?? COVERAGE_TONE.desconocida,
+      )}
+    >
+      {coverageLabel(operation)}
+    </span>
+  );
+}
 
 const MACRO_STAGE_TONE: Record<string, string> = {
   por_confirmar: "bg-amber-50 text-amber-800 ring-amber-600/20",
@@ -212,6 +244,11 @@ export function OrdersMasterBoard({
       region: facetValues(rows, "region"),
       province: facetValues(rows, "province"),
       district: facetValues(rows, "district"),
+      coverage: facetValues(rows, "macro_operation").sort(
+        (a, b) =>
+          ["lima", "provincia_cod", "agencia", "desconocida"].indexOf(a) -
+          ["lima", "provincia_cod", "agencia", "desconocida"].indexOf(b),
+      ),
       pickup: facetValues(rows, "pickup_state"),
     }),
     [rows],
@@ -437,6 +474,14 @@ export function OrdersMasterBoard({
               </div>
             )}
 
+            <ChecklistFilter
+              label="Cobertura"
+              options={facets.coverage}
+              selected={filters.operations}
+              onChange={(operations) => patch({ operations })}
+              capitalize={false}
+              formatOption={coverageLabel}
+            />
             <ChecklistFilter
               label="Estado operativo"
               options={facets.operational}
@@ -906,7 +951,7 @@ function MasterTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[1500px] text-sm">
+      <table className="w-full min-w-[1620px] text-sm">
         <thead>
           <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
             <th className="px-4 py-2 font-medium">Pedido</th>
@@ -917,6 +962,7 @@ function MasterTable({
             <th className="px-2 py-2 font-medium">Región</th>
             <th className="px-2 py-2 font-medium">Provincia</th>
             <th className="px-2 py-2 font-medium">Distrito</th>
+            <th className="px-2 py-2 font-medium">Cobertura</th>
             <th className="px-2 py-2 font-medium">Modalidad</th>
             <th className="px-2 py-2 font-medium">Courier</th>
             <th className="px-2 py-2 font-medium">Último courier</th>
@@ -957,6 +1003,9 @@ function MasterTable({
               <td className="px-2 py-2.5 text-slate-600">{r.region ?? "—"}</td>
               <td className="px-2 py-2.5 text-slate-600">{r.province ?? "—"}</td>
               <td className="px-2 py-2.5 text-slate-600">{r.district ?? "—"}</td>
+              <td className="px-2 py-2.5">
+                <CoverageBadge operation={masterOperation(r)} />
+              </td>
               <td className="px-2 py-2.5 text-slate-600">
                 {r.shipping_mode ? (MODE_LABEL[r.shipping_mode] ?? r.shipping_mode) : "—"}
               </td>
@@ -1173,6 +1222,7 @@ function OrderDrawer({
               <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
                 <Field label="Cliente" value={detail.row.customer_name} />
                 <Field label="Teléfono" value={detail.row.customer_phone} />
+                <Field label="Cobertura" value={coverageLabel(masterOperation(detail.row))} />
                 <Field
                   label="Modalidad"
                   value={

@@ -18,6 +18,7 @@ export function ChecklistFilter({
   selected,
   onChange,
   capitalize = true,
+  formatOption = (option) => option,
 }: {
   label: string;
   options: string[];
@@ -25,6 +26,8 @@ export function ChecklistFilter({
   onChange: (next: Set<string>) => void;
   /** Las etiquetas de código (estados) se muestran tal cual, no capitalizadas. */
   capitalize?: boolean;
+  /** Conserva el valor interno y permite mostrar una etiqueta de negocio. */
+  formatOption?: (option: string) => string;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -39,7 +42,12 @@ export function ChecklistFilter({
   }, []);
 
   const term = q.trim().toLowerCase();
-  const shown = term ? options.filter((o) => o.toLowerCase().includes(term)) : options;
+  const shown = term
+    ? options.filter(
+        (option) =>
+          option.toLowerCase().includes(term) || formatOption(option).toLowerCase().includes(term),
+      )
+    : options;
 
   function toggle(option: string) {
     const next = new Set(selected);
@@ -94,7 +102,7 @@ export function ChecklistFilter({
                     onChange={() => toggle(option)}
                     className="h-3.5 w-3.5"
                   />
-                  <span className="text-slate-700">{option}</span>
+                  <span className="text-slate-700">{formatOption(option)}</span>
                 </label>
               </li>
             ))}

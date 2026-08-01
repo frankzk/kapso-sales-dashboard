@@ -7,6 +7,7 @@
 // un conjunto VACÍO significa "todas", nunca "ninguna".
 
 import type { OrderMasterRow } from "@/lib/types";
+import { classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 
 export interface MasterFilters {
   stores: Set<string>;
@@ -14,6 +15,8 @@ export interface MasterFilters {
   operationalStatuses: Set<string>;
   couriers: Set<string>;
   shippingModes: Set<string>;
+  /** Cobertura operativa del MOM: Lima, Provincia COD o Agencia. */
+  operations: Set<string>;
   regions: Set<string>;
   provinces: Set<string>;
   districts: Set<string>;
@@ -46,6 +49,7 @@ export function emptyFilters(): MasterFilters {
     operationalStatuses: new Set(),
     couriers: new Set(),
     shippingModes: new Set(),
+    operations: new Set(),
     regions: new Set(),
     provinces: new Set(),
     districts: new Set(),
@@ -75,6 +79,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.operationalStatuses.size > 0 ||
     f.couriers.size > 0 ||
     f.shippingModes.size > 0 ||
+    f.operations.size > 0 ||
     f.regions.size > 0 ||
     f.provinces.size > 0 ||
     f.districts.size > 0 ||
@@ -119,6 +124,21 @@ function haystack(row: OrderMasterRow): string {
     .toLowerCase();
 }
 
+/**
+ * Cobertura visible del Master. Prefiere el read-model y conserva un fallback
+ * puro para que la columna nunca quede vacía mientras el backfill histórico
+ * converge a la versión vigente del MOM.
+ */
+export function masterOperation(row: OrderMasterRow): OperationKind {
+  if (["lima", "provincia_cod", "agencia"].includes(row.macro_operation ?? "")) {
+    return row.macro_operation as OperationKind;
+  }
+  const guides = [row.current_courier, row.last_courier]
+    .filter((courier): courier is string => Boolean(courier))
+    .map((courier) => ({ courier }));
+  return classifyOperation(row, guides);
+}
+
 export function matchesFilters(
   row: OrderMasterRow,
   f: MasterFilters,
@@ -128,6 +148,7 @@ export function matchesFilters(
   if (!inSet(f.generalStatuses, row.general_status)) return false;
   if (!inSet(f.operationalStatuses, row.operational_status)) return false;
   if (!inSet(f.shippingModes, row.shipping_mode)) return false;
+  if (!inSet(f.operations, masterOperation(row))) return false;
   if (!inSet(f.regions, row.region)) return false;
   if (!inSet(f.provinces, row.province)) return false;
   if (!inSet(f.districts, row.district)) return false;
@@ -237,11 +258,12 @@ export function facetValues(
     | "current_courier"
     | "operational_status"
     | "pickup_state"
-    | "agency_branch",
+    | "agency_branch"
+    | "macro_operation",
 ): string[] {
   const seen = new Set<string>();
   for (const r of rows) {
-    const v = r[field];
+    const v = field === "macro_operation" ? masterOperation(r) : r[field];
     if (typeof v === "string" && v) seen.add(v);
   }
   return [...seen].sort((a, b) => a.localeCompare(b, "es"));
