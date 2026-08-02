@@ -10,6 +10,28 @@ export const DISPATCH_MANIFEST_STATES = [
 export type DispatchManifestState = (typeof DISPATCH_MANIFEST_STATES)[number];
 export type DispatchScanStage = "office" | "pickup";
 
+/**
+ * Los dos tipos de ruta.
+ *
+ * - `reparto`: la caja se le entrega a un motorizado que sale a repartir. Doble
+ *   cotejo: oficina arma la caja y el motorizado confirma lo que recibe.
+ * - `entrega_courier`: Aliclik recoge, o la caja se lleva a la agencia. Hay
+ *   cotejo de oficina, pero el segundo no existe porque nadie del otro lado
+ *   escanea; se cierra anotando quién recogió.
+ */
+export const DISPATCH_ROUTE_KINDS = ["reparto", "entrega_courier"] as const;
+export type DispatchRouteKind = (typeof DISPATCH_ROUTE_KINDS)[number];
+
+export const ROUTE_KIND_LABELS: Record<DispatchRouteKind, string> = {
+  reparto: "Ruta de reparto",
+  entrega_courier: "Entrega al courier",
+};
+
+/** ¿Esta ruta termina con el cotejo del motorizado? */
+export function needsRiderCheck(kind: DispatchRouteKind): boolean {
+  return kind === "reparto";
+}
+
 export interface DispatchProgressItem {
   removed_at?: string | null;
   office_checked_at?: string | null;
@@ -44,15 +66,25 @@ export function dispatchProgress(items: readonly DispatchProgressItem[]): Dispat
   };
 }
 
-/** Estado derivado de la ruta. `in_custody` solo llega desde la confirmación atómica del servidor. */
+/**
+ * Estado derivado de la ruta. `in_custody` solo llega desde la confirmación
+ * atómica del servidor.
+ *
+ * En una `entrega_courier` no hay segundo cotejo —Aliclik recoge, o la caja se
+ * lleva a la agencia, y nadie del otro lado escanea—, así que la ruta se queda
+ * en «Listo para recojo» hasta que se cierra anotando quién recogió. Sin esta
+ * distinción esas rutas esperaban para siempre un cotejo imposible.
+ */
 export function deriveDispatchManifestState(
   items: readonly DispatchProgressItem[],
   current: DispatchManifestState,
+  kind: DispatchRouteKind = "reparto",
 ): DispatchManifestState {
   if (current === "cancelled" || current === "in_custody") return current;
   const progress = dispatchProgress(items);
   if (!progress.total) return "draft";
   if (!progress.officeComplete) return "office_check";
+  if (!needsRiderCheck(kind)) return "ready_for_pickup";
   if (progress.pickupChecked === 0) return "ready_for_pickup";
   return "pickup_check";
 }

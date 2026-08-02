@@ -195,4 +195,6 @@
 \ir migrations/0094_org_shopify_products.sql
 \echo 'Applying 0095_dispatch_manifest_rider.sql'
 \ir migrations/0095_dispatch_manifest_rider.sql
+\echo 'Applying 0096_dispatch_route_kind.sql'
+\ir migrations/0096_dispatch_route_kind.sql
 \echo 'Done.'
