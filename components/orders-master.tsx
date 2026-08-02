@@ -827,23 +827,40 @@ export function OrdersMasterBoard({
 
           <Card className="w-fit min-w-full p-0">
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+              {/* El contador dice el TOTAL de la macroetapa, no las 100 de la
+                  página: "100 pedidos" a secas hacía creer que no había más. */}
               <p className="text-sm font-medium text-slate-800">
-                {listed.length} {listed.length === 1 ? "pedido" : "pedidos"}
-                {listed.length !== rows.length && (
-                  <span className="ml-1 text-xs font-normal text-slate-400">de {rows.length}</span>
+                {total.toLocaleString("es-PE")} {total === 1 ? "pedido" : "pedidos"}
+                {total > listed.length && (
+                  <span className="ml-1 text-xs font-normal text-slate-400">
+                    · se muestran {listed.length}
+                  </span>
                 )}
               </p>
             </div>
             {listed.length ? (
-              <MasterTable
-                rows={listed}
-                storeName={storeName}
-                multiStore={stores.length > 1}
-                onOpen={setOpenId}
-                selected={selectedIds}
-                onToggleRow={toggleRow}
-                onToggleAll={toggleAll}
-              />
+              <>
+                <MasterTable
+                  rows={listed}
+                  storeName={storeName}
+                  multiStore={stores.length > 1}
+                  onOpen={setOpenId}
+                  selected={selectedIds}
+                  onToggleRow={toggleRow}
+                  onToggleAll={toggleAll}
+                />
+                {/* Las vistas por macroetapa nunca tuvieron paginador: se veían
+                    las primeras 100 de miles y no había forma de llegar al
+                    resto. El paginador solo existía en la vista de búsqueda. */}
+                <Pager
+                  page={page}
+                  totalPages={totalPages}
+                  total={total}
+                  shown={listed.length}
+                  busy={navigating}
+                  onPage={(p) => navigate({ page: p })}
+                />
+              </>
             ) : (
               <p className="p-5 text-sm text-slate-400">
                 {rows.length ? "Ningún pedido cumple los filtros." : "Todavía no hay pedidos aquí."}

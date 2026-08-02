@@ -1112,6 +1112,11 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 
 ## 25. User journey del drawer del Master
 
+El Master trae **una página de 100 pedidos**, no la lista entera. El contador
+dice el total de la macroetapa y el paginador aparece en **todas** las vistas, no
+solo en la de búsqueda: enseñar 100 de 2.976 sin forma de llegar al resto es
+esconder el trabajo pendiente.
+
 **La tabla del Master es para barrer; el drawer es para trabajar un pedido.** La
 tabla solo lleva lo que sirve para localizar y priorizar: quién, dónde, en qué
 macroetapa y desde cuándo. El detalle de un pedido —modalidad, courier actual,
