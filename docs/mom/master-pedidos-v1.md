@@ -1203,6 +1203,26 @@ rótulos.
   (§6.3). El contenido del rótulo se lee bajo RLS: una salida de otra tienda no
   aparece aunque se manipule la URL.
 
+### Pedir el rótulo crea la salida
+
+El almacén no pide «una salida»: pide **el rótulo**. La salida es la
+consecuencia interna de rotular, y por eso descargar los rótulos de una tanda la
+crea cuando hace falta, sin preguntar courier ni fecha (§4).
+
+Por cada pedido seleccionado:
+
+| Situación | Qué ocurre |
+| --- | --- |
+| Ya tiene una salida en custodia de la empresa | Se **reimprime esa**; no se crea otra |
+| No tiene ninguna salida | Se **crea** una sin courier decidido |
+| Su última salida fue **devuelta** | Se **crea** una nueva: rearmar es reprogramación normal, no una salida simultánea |
+| Tiene una salida **todavía en la calle** | No se crea nada: una salida adicional exige justificación auditada (§23) y se hace desde el pedido |
+
+- **Reusar gana a crear**: pedir el rótulo dos veces no puede consumir el límite
+  de cinco salidas del pedido.
+- Reimprimir el rótulo de una salida concreta —papel perdido o dañado— se hace
+  desde el pedido, que lista cada salida con su rótulo.
+
 ### Crear salidas en lote
 
 Para que `por_generar_rotulo` se pueda resolver de una tanda, el Master permite

@@ -37,6 +37,7 @@ import {
   clearOrderGeo,
   createManualRouteOutputsBulk,
   loadOrderDetail,
+  resolveLabelsForOrders,
   loadOrderGeo,
   registerReturn,
   registerClosureAction,
@@ -851,10 +852,9 @@ export function OrdersMasterBoard({
         orderNames={orderNames}
         canEdit={canEdit}
         onClear={() => setSelectedIds(new Set())}
-        onCreated={() => {
-          setSelectedIds(new Set());
-          router.refresh();
-        }}
+        // Solo refresca: limpiar la selección desmontaría la barra y con ella el
+        // resumen de lo que acaba de pasar (incluidos los pedidos bloqueados).
+        onCreated={() => router.refresh()}
       />
     </div>
   );
@@ -1145,17 +1145,29 @@ function BulkBar({
     setFailures([]);
   };
 
+  // Pedir el rótulo ES el gesto: si el pedido todavía no tiene salida, se crea
+  // aquí (sin courier, se decide en despacho) y si ya tiene una con nosotros, se
+  // reimprime esa. El operador no tiene que saber que existe el concepto
+  // "salida" para imprimir la tanda del día.
   const download = async () => {
     setBusy(true);
     reset();
     try {
-      const result = await downloadRotulos(`orders=${Array.from(selectedIds).join(",")}`);
-      if (result.error) setError(result.error);
-      else if (result.missing > 0) {
-        setNotice(
-          `Se descargaron ${count - result.missing} rótulos. ${result.missing} pedido${result.missing === 1 ? "" : "s"} todavía no tiene${result.missing === 1 ? "" : "n"} salida creada — créala abajo.`,
-        );
+      const resolved = await resolveLabelsForOrders(Array.from(selectedIds));
+      setFailures(resolved.blocked.map((b) => ({ orderId: b.orderId, error: b.error })));
+      if (!resolved.shipmentIds.length) {
+        setError(resolved.error ?? "No hay rótulos que imprimir.");
+        return;
       }
+      const pdf = await downloadRotulos(`ids=${resolved.shipmentIds.join(",")}`);
+      if (pdf.error) {
+        setError(pdf.error);
+        return;
+      }
+      setNotice(
+        [resolved.notice, "Rótulos descargados."].filter(Boolean).join(" · "),
+      );
+      if (resolved.created > 0) onCreated();
     } catch {
       setError("No se pudieron generar los rótulos.");
     } finally {
@@ -1218,7 +1230,7 @@ function BulkBar({
             disabled={busy}
             className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
           >
-            {showCreate ? "Cancelar" : "Crear salidas…"}
+            {showCreate ? "Cancelar" : "Forzar courier…"}
           </button>
         )}
         <button onClick={onClear} className="text-xs text-slate-300 hover:underline">
@@ -1228,6 +1240,11 @@ function BulkBar({
 
       {showCreate && (
         <div className="flex flex-wrap items-end gap-2 border-t border-slate-700 pt-2">
+          <p className="w-full text-[11px] text-slate-400">
+            Normalmente no hace falta: «Descargar rótulos» ya crea la salida y el courier se fija
+            en despacho. Usa esto para forzar un courier concreto (Olva valida su adelanto) o para
+            crear una salida adicional con motivo.
+          </p>
           <label className="text-[11px] text-slate-300">
             Courier
             <select
