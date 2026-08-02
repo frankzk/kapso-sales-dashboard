@@ -1196,3 +1196,20 @@ rótulos.
   (§6.3). El contenido del rótulo se lee bajo RLS: una salida de otra tienda no
   aparece aunque se manipule la URL.
 
+### Crear salidas en lote
+
+Para que `por_generar_rotulo` se pueda resolver de una tanda, el Master permite
+crear la salida de varios pedidos a la vez, con un solo courier y una sola fecha
+—el caso real del almacén: «todos estos salen hoy con motorizado propio».
+
+- Solo couriers de rótulo interno: motorizado propio, Axel, Urpi y Olva. Los que
+  tienen API propia (Aliclik, Shalom, Tanders) conservan su flujo.
+- **Las reglas no cambian por ser un lote**: se siguen aplicando el máximo de
+  cinco salidas (§4), el motivo obligatorio cuando el pedido ya tiene una salida
+  activa, la política de repetición por modalidad y el adelanto validado de
+  Olva (§12). El lote reutiliza la misma operación que la salida individual para
+  que no existan dos verdades sobre cuándo se puede crear una salida.
+- Un pedido que no cumple **no detiene a los demás**: la tanda informa cuál falló
+  y por qué, pedido por pedido.
+- Al terminar se descargan los rótulos de las salidas creadas en el mismo gesto.
+
