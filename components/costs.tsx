@@ -10,7 +10,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Card, cn } from "@/components/ui";
+import { Card, cn, STICKY_HEAD, TABLE_WRAP } from "@/components/ui";
 import { COST_CONCEPTS, buildProductCostViews, type ProductCostRow } from "@/lib/costs";
 import {
   closeTariff,
@@ -293,10 +293,10 @@ function LogisticsTab({
       )}
 
       <Card className="p-0">
-        <div className="overflow-x-auto">
+        <div className={TABLE_WRAP}>
           <table className="w-full min-w-[900px] text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+            <thead className={STICKY_HEAD}>
+              <tr className="text-left text-xs text-slate-500">
                 <th className="px-4 py-2 font-medium">Concepto</th>
                 <th className="px-2 py-2 font-medium">Tienda</th>
                 <th className="px-2 py-2 font-medium">Courier</th>
@@ -434,10 +434,10 @@ function ProductsTab({
       </Card>
 
       <Card className="p-0">
-        <div className="overflow-x-auto">
+        <div className={TABLE_WRAP}>
           <table className="w-full min-w-[820px] text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+            <thead className={STICKY_HEAD}>
+              <tr className="text-left text-xs text-slate-500">
                 <th className="px-4 py-2 font-medium">Producto</th>
                 <th className="px-2 py-2 font-medium">SKU</th>
                 <th className="px-2 py-2 text-right font-medium">Pedidos</th>
@@ -721,10 +721,10 @@ function AdditionalTab({
       )}
 
       <Card className="p-0">
-        <div className="overflow-x-auto">
+        <div className={TABLE_WRAP}>
           <table className="w-full min-w-[600px] text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+            <thead className={STICKY_HEAD}>
+              <tr className="text-left text-xs text-slate-500">
                 <th className="px-4 py-2 font-medium">Concepto</th>
                 <th className="px-2 py-2 text-right font-medium">Importe</th>
                 <th className="px-2 py-2 font-medium">Base</th>

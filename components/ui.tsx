@@ -4,6 +4,32 @@ export function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
 
+// ── Tabla larga: encabezado fijo al scrollear ────────────────────────────────
+// Dos piezas que SOLO funcionan juntas; por eso viven acá y no sueltas en cada
+// módulo.
+//
+// 1) El contenedor NO puede ser scrollport: cualquier `overflow` distinto de
+//    visible lo convierte en uno (el navegador activa el eje Y aunque solo
+//    declares el X) y ahí el sticky pierde contra qué pegarse. En escritorio va
+//    `visible` para que se pegue a la ventana — scrollea la página y lo de
+//    arriba se oculta. En móvil se conserva el scroll horizontal (la tabla no
+//    entra) a costa del sticky, que es el intercambio correcto en pantalla
+//    chica.
+// 2) El separador es una SOMBRA INTERNA, no un `border-b`: Tailwind fuerza
+//    `border-collapse: collapse` y con bordes colapsados el borde le pertenece
+//    a la tabla, no a la celda, así que no viaja con la celda fija y la línea
+//    desaparece al bajar. La sombra sí se pinta con la celda.
+//
+// Se aplica sobre el <thead> (o su <tr>) y alcanza a todas sus celdas, porque
+// cada módulo pone las clases en un nivel distinto.
+
+/** Contenedor de una tabla ancha. Acompaña a STICKY_HEAD. */
+export const TABLE_WRAP = "overflow-x-auto md:overflow-x-visible";
+
+/** Encabezado que queda fijo al tope de la ventana al scrollear la página. */
+export const STICKY_HEAD =
+  "[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-slate-50 [&_th]:shadow-[inset_0_-1px_0_#cbd5e1]";
+
 export function Card({
   children,
   className,

@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { Card, cn } from "@/components/ui";
+import { Card, cn, STICKY_HEAD, TABLE_WRAP } from "@/components/ui";
 import { FENIX_CITIES } from "@/lib/shipments";
 import type { DemandRow } from "@/lib/fenix-demand";
 import type { FenixStockRowDb, StoreSummary } from "@/lib/types";
@@ -216,10 +216,10 @@ export function FenixStockEditor({
                 </span>
               </div>
             )}
-          <div className="overflow-x-auto">
+          <div className={TABLE_WRAP}>
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-xs text-slate-500">
+              <thead className={STICKY_HEAD}>
+                <tr className="text-xs text-slate-500">
                   <th className="px-4 py-2.5 text-left font-medium">Ciudad</th>
                   <th className="px-4 py-2.5 text-left font-medium">Producto</th>
                   <th className="px-4 py-2.5 text-right font-medium">Saldo</th>
@@ -351,10 +351,10 @@ function DemandReport({ demand }: { demand: DemandRow[] }) {
       {demand.length === 0 ? (
         <p className="p-5 text-sm text-slate-400">Sin guías pendientes en ciudades Fenix.</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className={TABLE_WRAP}>
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-xs text-slate-500">
+            <thead className={STICKY_HEAD}>
+              <tr className="text-xs text-slate-500">
                 <th className="px-4 py-2.5 text-left font-medium">Departamento</th>
                 <th className="px-4 py-2.5 text-left font-medium">Ciudad</th>
                 <th className="px-4 py-2.5 text-left font-medium">Producto</th>
