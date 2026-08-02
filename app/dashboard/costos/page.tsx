@@ -5,7 +5,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { EmptyState } from "@/components/ui";
 import { CostsBoard } from "@/components/costs";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
-import { loadCosts } from "./actions";
+import { loadCosts, loadShopifyProducts } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -35,13 +35,17 @@ async function CostosContent() {
     );
   }
 
-  const costs = await loadCosts(adminOrg.org_id);
+  const [costs, products] = await Promise.all([
+    loadCosts(adminOrg.org_id),
+    loadShopifyProducts(adminOrg.org_id),
+  ]);
 
   return (
     <CostsBoard
       orgId={adminOrg.org_id}
       stores={stores}
       costs={costs}
+      products={products}
       canEdit={perms.can("costs.manage")}
     />
   );

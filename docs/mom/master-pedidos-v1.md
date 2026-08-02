@@ -1080,3 +1080,54 @@ Reglas de interfaz:
 - El flujo móvil de escaneo, cotejo y motorizados se diseña aparte. No se debe
   comprimir el drawer de escritorio y asumir que eso resuelve la operación móvil.
 
+## 26. Costo de producto (COGS)
+
+El módulo de Costos tiene tres ámbitos: costo logístico (§14), costo de producto
+y costos adicionales. Esta sección define el costo de producto, que alimenta la
+rentabilidad (§17) y es distinto del costo logístico de la conciliación (§14).
+
+### Principios
+
+1. **Kapta no crea productos** (principios 1 y 3): el producto es siempre el de
+   Shopify. Costos de productos asigna un costo a lo que ya existe; nunca da de
+   alta un producto.
+2. **La identidad del producto es el SKU de Shopify**, tal como llega en
+   `orders.line_items[].sku`. No hay tabla de catálogo propia: la lista de
+   productos se deriva de los pedidos (`org_shopify_products`, 0094).
+3. **Vigencia append-only** (principio 6): un costo es un número con fecha de
+   inicio. Un cambio abre un periodo nuevo y cierra el anterior; nada se
+   reescribe ni se borra.
+
+### Comportamiento de la pestaña
+
+- Lista los productos vistos en pedidos de Shopify, con su SKU en solo lectura,
+  el número de pedidos y el estado del costo (asignado o sin asignar).
+- No hay alta manual de productos ni de SKU. `Proveedor` y `Lote` son metadatos
+  opcionales del costo, no la identidad del producto.
+- El ámbito puede ser general (todas las tiendas) o una tienda concreta; la
+  tarifa por tienda gana a la general al resolver (`resolveProductCost`).
+- También muestra SKU que tienen costo pero ya no aparecen en Shopify, marcados
+  como fuera de Shopify, para no ocultar nada configurado.
+- Escritura solo para administradores (`costs.manage`), bajo el mismo patrón del
+  resto del módulo de Costos.
+
+### Cambios de costo en el tiempo
+
+- Cada punto de cambio es una fecha de inicio de vigencia que cierra el periodo
+  anterior y abre otro; el pedido usa el costo **vigente en su fecha**, no el
+  último registrado (`resolveProductCost` resuelve por día).
+- Se puede fechar un cambio hacia adelante o corregir el pasado con un registro
+  nuevo; un periodo pasado nunca se reescribe.
+- La pestaña muestra, por producto, la línea de tiempo de sus costos: cada
+  periodo con su costo unitario, su fecha de inicio y, si cerró, su fecha de fin.
+
+### Criterios de aceptación
+
+- La pestaña muestra los SKU presentes en pedidos de Shopify sin teclearlos.
+- Un producto sin costo vigente aparece como «sin asignar».
+- Registrar un costo cierra la vigencia anterior del mismo SKU y abre otra desde
+  la fecha indicada, sin alterar los costos ya aplicados a pedidos pasados.
+- No es posible crear un producto que no exista en Shopify.
+- El costo de producto nunca sustituye al costo logístico en la conciliación de
+  liquidaciones.
+
