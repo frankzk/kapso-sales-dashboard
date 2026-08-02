@@ -6,6 +6,7 @@ import { z } from "zod";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { isCourierTbd } from "@/lib/shipment-output";
 import {
   courierKey,
   deriveDispatchManifestState,
@@ -243,7 +244,11 @@ export async function addShipmentToManifest(manifestId: string, code: string): P
   if (["in_custody", "cancelled"].includes(manifest.state)) return { error: "Esa ruta ya está cerrada." };
   if (shipment.preparation_state !== "listo_despacho") return { error: "El paquete aún no fue marcado como listo para despacho." };
   if (shipment.custody_state !== "empresa") return { error: "El paquete ya no está en custodia de la empresa." };
-  if (courierKey(shipment.courier) !== courierKey(manifest.courier)) {
+  // Una salida «por definir» adopta el courier de la ruta: el almacén arma y
+  // rotula antes de saber con quién sale, y la decisión ocurre justo aquí, al
+  // meter la caja en la agrupación de un courier concreto (MOM §4).
+  const adoptsCourier = isCourierTbd(shipment.courier);
+  if (!adoptsCourier && courierKey(shipment.courier) !== courierKey(manifest.courier)) {
     return { error: `La salida pertenece a ${shipment.courier}, no a ${manifest.courier}.` };
   }
   if ((await orgForStore(shipment.store_id)) !== manifest.org_id) return { error: "La salida pertenece a otra organización." };
@@ -280,13 +285,36 @@ export async function addShipmentToManifest(manifestId: string, code: string): P
       });
   const { error } = await mutation;
   if (error) return { error: error.code === "23505" ? "Ese paquete ya está activo en otra ruta." : error.message };
+
+  // Fijar el courier es lo último: si algo falló antes, la salida sigue «por
+  // definir» y se puede reintentar en la ruta correcta.
+  let adopted: string | null = null;
+  if (adoptsCourier) {
+    const { error: adoptError } = await admin
+      .from("shipments")
+      .update({ courier: manifest.courier })
+      .eq("id", shipment.id);
+    if (adoptError) return { error: `No se pudo fijar el courier de la salida: ${adoptError.message}` };
+    adopted = manifest.courier;
+    shipment.courier = manifest.courier;
+    if (shipment.order_id) await recomputeOrderMasterSafe(admin, [shipment.order_id]);
+  }
+
   await recalculateManifest(manifestId, user.id);
   await auditDispatch({
     orgId: manifest.org_id, manifestId, shipment, actor: user.id, kind: "package_added",
-    orderNote: `Paquete agregado a la ruta ${manifest.route_label}.`,
+    orderNote: adopted
+      ? `Paquete agregado a la ruta ${manifest.route_label}; courier fijado en ${adopted}.`
+      : `Paquete agregado a la ruta ${manifest.route_label}.`,
   });
   revalidatePath(DISPATCH_PATH);
-  return { notice: `${shipment.output_code ?? shipment.guide_code} agregado a la ruta.`, shipment };
+  revalidatePath("/dashboard/pedidos");
+  return {
+    notice: adopted
+      ? `${shipment.output_code ?? shipment.guide_code} agregado a la ruta. Courier fijado: ${adopted}.`
+      : `${shipment.output_code ?? shipment.guide_code} agregado a la ruta.`,
+    shipment,
+  };
 }
 
 export async function scanManifestItem(

@@ -4,6 +4,21 @@
 
 export const MAX_OUTPUTS_PER_ORDER = 5;
 
+/**
+ * Courier de una salida que todavía no se decidió (MOM §4).
+ *
+ * La identidad de una salida es `pedido + consecutivo` (`KP123-S02`) y el QR es
+ * un token opaco: el courier es un **metadato visible**, no parte de la
+ * identidad. Por eso el almacén puede armar y rotular el paquete antes de saber
+ * con quién sale, y el courier se fija cuando la caja entra a la ruta de un
+ * courier concreto — que es cuando la decisión ocurre de verdad.
+ */
+export const COURIER_TBD = "por_definir";
+
+export function isCourierTbd(courier: string | null | undefined): boolean {
+  return (courier ?? "").trim().toLowerCase() === COURIER_TBD;
+}
+
 /** `#KP123` → `KP123`; conserva letras/números/guiones y elimina ruido. */
 export function normalizeOrderCode(orderName: string | null | undefined): string {
   return (orderName ?? "")
@@ -25,13 +40,19 @@ export function buildOutputCode(
   return `${order}-S${String(number).padStart(2, "0")}`;
 }
 
-/** Etiqueta operativa: `KP123-S02-SWAYP`. No es el payload del QR. */
+/**
+ * Etiqueta operativa: `KP123-S02-SWAYP`. No es el payload del QR.
+ *
+ * Una salida sin courier decidido se queda en `KP123-S02`: añadir un sufijo
+ * "POR-DEFINIR" ensuciaría el código con algo que además va a cambiar.
+ */
 export function outputDisplayCode(
   outputCode: string | null | undefined,
   courier: string | null | undefined,
 ): string {
   const base = (outputCode ?? "").trim().toUpperCase();
   if (!base) return "";
+  if (isCourierTbd(courier)) return base;
   const courierCode = (courier ?? "")
     .trim()
     .toUpperCase()

@@ -48,6 +48,7 @@ import {
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import { limaTodayKey } from "@/lib/shipments";
+import { COURIER_TBD } from "@/lib/shipment-output";
 import {
   emptyFilters,
   hasActiveFilters,
@@ -1082,7 +1083,10 @@ function AgencyDays({
  * error (por ejemplo, pedidos que aún no tienen salida), esa respuesta es JSON y
  * no se descarga, así que se comprueba antes con una petición corta.
  */
+// «Sin definir» va primero y es lo predeterminado: el almacén arma y rotula
+// antes de saber con quién sale, y el courier se fija al entrar a la ruta (§4).
 const BULK_COURIERS: { key: ManualRouteCourier; label: string }[] = [
+  { key: COURIER_TBD, label: "Sin definir (se decide en despacho)" },
   { key: "propio", label: "Motorizado propio" },
   { key: "axel", label: "Axel Courier" },
   { key: "urpi", label: "Urpi" },
@@ -1128,7 +1132,7 @@ function BulkBar({
   const [notice, setNotice] = useState<string | null>(null);
   const [failures, setFailures] = useState<BulkRouteOutputFailure[]>([]);
   const [showCreate, setShowCreate] = useState(false);
-  const [courier, setCourier] = useState<ManualRouteCourier>("propio");
+  const [courier, setCourier] = useState<ManualRouteCourier>(COURIER_TBD);
   const [dispatchDate, setDispatchDate] = useState(limaTodayKey());
   const [note, setNote] = useState("");
 

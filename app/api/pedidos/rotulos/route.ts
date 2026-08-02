@@ -11,7 +11,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import QRCode from "qrcode";
 import { createServerSupabase } from "@/lib/db";
-import { outputDisplayCode } from "@/lib/shipment-output";
+import { isCourierTbd, outputDisplayCode } from "@/lib/shipment-output";
 import { buildRotulosPdf, type RotuloData } from "@/lib/labels/rotulo-pdf";
 import { selectLabelsForOrders, type ShipmentForLabel } from "@/lib/labels/pick-shipment";
 
@@ -105,7 +105,9 @@ export async function GET(request: NextRequest) {
       const payload = row.qr_token || row.output_code || row.guide_code;
       return {
         code: outputDisplayCode(row.output_code, row.courier) || row.guide_code,
-        courier: row.courier,
+        // Una salida sin courier decidido lo dice en el rótulo: el operador ve
+        // que ese paquete todavía puede ir a cualquier ruta.
+        courier: isCourierTbd(row.courier) ? "Por definir" : row.courier,
         orderName: row.order_name,
         customerName: row.customer_name,
         customerPhone: row.customer_phone,

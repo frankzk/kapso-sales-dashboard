@@ -89,6 +89,13 @@ Reglas:
 
 - El consecutivo se asigna dentro del pedido y no se reutiliza.
 - Cambiar de courier después de existir custodia genera una salida nueva.
+- Una salida puede nacer **sin courier decidido** (`por definir`). El almacén
+  arma y rotula antes de saber con quién sale —que es el orden real del trabajo—
+  y el courier se fija cuando la caja entra a la ruta de un courier concreto en
+  la mesa de despacho. Hasta entonces la etiqueta visible es solo
+  `pedido + consecutivo` y el rótulo dice `Por definir`.
+- La regla de repetición por modalidad se evalúa cuando el courier se conoce; el
+  máximo de cinco salidas rige siempre, porque no depende del courier.
 - Cada salida nueva genera un QR nuevo.
 - El courier y la fecha son metadatos visibles; no forman parte del token QR.
 - El código de guía externa se conserva separado.
