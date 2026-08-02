@@ -893,11 +893,15 @@ tres sean «motorizados propios»—; **sin motorizado**, uno por courier y día
 es el caso de Aliclik, las agencias y las rutas «Sin asignar».
 
 **Una ruta se identifica por quién se la lleva y qué día**: «Roy · 03/08». El
-nombre de la zona («Surco», «San Isidro») es solo una referencia de turno o área
-— no distingue nada, porque dos rutas del mismo día pueden cubrir la misma zona.
-Por eso el motorizado es el título de la tarjeta, el nombre de la ruta es
-opcional al crearla (sin él se usa el del motorizado) y solo hace falta
-escribirlo cuando no hay persona a quien nombrar.
+nombre de zona no existe como dato que nadie escriba: la ruta se llama como el
+motorizado, o como el courier cuando no hay persona.
+
+Crear una ruta son **dos campos**: con quién sale y la fecha. Un solo desplegable
+lista los **motorizados propios por su nombre**, agrupados bajo su cabecera, y
+debajo los **couriers**. Elegir courier y después motorizado era decir una sola
+cosa en dos pasos, y el segundo desplegable solo tenía sentido para los propios:
+en Aliclik, Urpi o Tanders la ruta **es** el courier y quién conduce ni se sabe
+ni hace falta.
 
 **A qué ruta se está trabajando no se puede deducir.** El destino se repite
 pegado a la acción —no solo en la lista lateral, que en el celular queda debajo y
@@ -1259,9 +1263,9 @@ separada del usuario de acceso.
 - El courier de la ruta se elige de una lista (Aliclik, Swayp, Shalom, Tanders,
   Axel, Urpi, Olva, propios). Swayp se guarda con el token legado `fenix` para
   que calce con `shipments.courier`, pero se muestra como «Swayp (antes Fénix)».
-- El motorizado se elige de una lista **filtrada por el courier** y solo con
-  fichas activas. Siempre existe «Sin asignar» (p. ej. Urpi, Swayp o Tanders
-  cuando no se conoce al conductor).
+- Los motorizados propios se eligen **por su nombre**, en el mismo desplegable
+  que los couriers y bajo su propia cabecera. No hay un segundo desplegable de
+  motorizado: en los couriers externos la ruta es el courier.
 - El manifiesto guarda `rider_id` y **copia el nombre** en `driver_name` al
   crear la ruta. Si después se renombra o desactiva la ficha, las rutas ya
   creadas no cambian: conservan a quién recibió físicamente los paquetes (§6.3).

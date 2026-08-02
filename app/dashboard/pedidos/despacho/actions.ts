@@ -207,9 +207,8 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
 const createManifestSchema = z.object({
   courier: z.string().trim().min(1).max(80),
   routeDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  // Opcional: lo que identifica una ruta es quién se lleva la caja y qué día,
-  // así que sin nombre se usa el del motorizado. Solo hace falta escribirlo
-  // cuando no hay a quién nombrar.
+  // La interfaz ya no lo pide: una ruta se identifica por quién se la lleva y
+  // qué día. Se conserva opcional para no romper enlaces o llamadas antiguas.
   routeLabel: z.string().trim().max(120).optional(),
   riderId: z.string().uuid().optional(),
   driverName: z.string().trim().max(120).optional(),
@@ -246,19 +245,17 @@ export async function createDispatchManifest(input: z.input<typeof createManifes
   // quien recoge en vez de con un segundo escaneo (MOM §5).
   const kind = routeKindForCourier(parsed.data.courier);
 
-  // Sin nombre escrito, la ruta se llama como quien se la lleva. Si tampoco hay
-  // persona no queda nada que la identifique, y ahí sí hace falta escribirlo.
-  const routeLabel = parsed.data.routeLabel || driverName;
-  if (!routeLabel) {
-    return { error: "Elige un motorizado o escribe un nombre para la ruta." };
-  }
+  // La ruta se llama como quien se la lleva: el motorizado, o el courier cuando
+  // no hay persona. `route_label` sigue siendo obligatorio en la base, pero ya
+  // no es un dato que nadie tenga que escribir.
+  const routeLabel = parsed.data.routeLabel || driverName || courierLabelFor(parsed.data.courier);
 
   // Un motorizado tiene UNA ruta al día, y un courier también. La base lo impide
   // con dos índices (0097); aquí se comprueba antes solo para poder decir CUÁL
   // es la ruta que ya existe, en vez de un choque de clave duplicada.
   const clash = admin
     .from("dispatch_manifests")
-    .select("id,route_label,driver_name")
+    .select("id,driver_name")
     .eq("org_id", store.org_id)
     .eq("route_date", parsed.data.routeDate)
     .neq("state", "cancelled");
@@ -268,7 +265,7 @@ export async function createDispatchManifest(input: z.input<typeof createManifes
   if (existing) {
     const who = riderId ? driverName : courierLabelFor(parsed.data.courier);
     return {
-      error: `${who} ya tiene una ruta ese día («${existing.route_label}»). Agrega los paquetes ahí en vez de crear otra.`,
+      error: `${who} ya tiene una ruta ese día. Agrega los paquetes ahí en vez de crear otra.`,
       manifestId: existing.id as string,
     };
   }

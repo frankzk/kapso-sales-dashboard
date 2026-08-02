@@ -3,6 +3,8 @@ import {
   courierLabelFor,
   courierOptionByKey,
   ridersForCourier,
+  routeChoiceByValue,
+  routeChoices,
 } from "@/lib/couriers/catalog";
 
 const riders = [
@@ -28,6 +30,48 @@ describe("ridersForCourier", () => {
   });
   it("sin courier elegido → lista vacía", () => {
     expect(ridersForCourier(riders, null)).toEqual([]);
+  });
+});
+
+describe("routeChoices (el desplegable único de «Nueva ruta»)", () => {
+  it("los motorizados propios van por nombre, y guardan courier propio", () => {
+    const { own } = routeChoices(riders);
+    expect(own.map((c) => c.label).sort()).toEqual(["Johnny", "Roy"]);
+    for (const choice of own) {
+      expect(choice.courier).toBe("propio");
+      expect(choice.riderId).toBeTruthy();
+    }
+  });
+
+  it("los couriers van sin motorizado: la ruta ES el courier", () => {
+    const { couriers } = routeChoices(riders);
+    expect(couriers.every((c) => c.riderId === null)).toBe(true);
+    // «Motorizados propios» ya no aparece como courier suelto: sus rutas se
+    // eligen por el nombre de la persona.
+    expect(couriers.map((c) => c.label)).not.toContain("Motorizados propios");
+    expect(couriers.find((c) => c.label.startsWith("Swayp"))?.courier).toBe("fenix");
+  });
+
+  it("los motorizados de un courier externo NO son opciones sueltas", () => {
+    // Ana (Aliclik) o Caro (Axel) no abren una ruta propia: la ruta es del
+    // courier, y quién conduce no se conoce ni hace falta.
+    const { own, couriers } = routeChoices(riders);
+    const labels = [...own, ...couriers].map((c) => c.label);
+    expect(labels).not.toContain("Ana");
+    expect(labels).not.toContain("Caro");
+  });
+
+  it("sin fichas propias registradas el grupo no queda vacío", () => {
+    const { own } = routeChoices([{ id: "9", full_name: "Ana", courier: "Aliclik" }]);
+    expect(own).toHaveLength(1);
+    expect(own[0]!.riderId).toBeNull();
+    expect(own[0]!.courier).toBe("propio");
+  });
+
+  it("routeChoiceByValue devuelve exactamente lo elegido", () => {
+    expect(routeChoiceByValue(riders, "rider:2")).toMatchObject({ label: "Roy", riderId: "2", courier: "propio" });
+    expect(routeChoiceByValue(riders, "courier:aliclik")).toMatchObject({ courier: "aliclik", riderId: null });
+    expect(routeChoiceByValue(riders, "no-existe")).toBeNull();
   });
 });
 
