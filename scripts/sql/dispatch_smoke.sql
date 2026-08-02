@@ -181,3 +181,67 @@ begin
   end if;
 end;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- Una ruta por motorizado y día; una por courier y día (0097).
+--
+-- Partir la carga de alguien en dos rutas el mismo día deja los paquetes en dos
+-- manifiestos y ningún cotejo cuadra.
+-- ---------------------------------------------------------------------------
+
+insert into riders (id, org_id, full_name)
+values (
+  '60000000-0000-0000-0000-00000000000a',
+  '60000000-0000-0000-0000-000000000001',
+  'Roy Smoke'
+);
+
+insert into dispatch_manifests (id, org_id, courier, route_date, route_label, rider_id)
+values (
+  '60000000-0000-0000-0000-00000000000b',
+  '60000000-0000-0000-0000-000000000001',
+  'propio',
+  current_date,
+  'Roy Smoke',
+  '60000000-0000-0000-0000-00000000000a'
+);
+
+do $$
+begin
+  -- Mismo motorizado, mismo día, OTRO nombre: el nombre ya no identifica nada,
+  -- así que escribir "Roy tarde" no puede colar una segunda ruta.
+  begin
+    insert into dispatch_manifests (org_id, courier, route_date, route_label, rider_id)
+    values (
+      '60000000-0000-0000-0000-000000000001', 'propio', current_date, 'Roy tarde',
+      '60000000-0000-0000-0000-00000000000a'
+    );
+    raise exception 'se creo una segunda ruta para el mismo motorizado el mismo dia';
+  exception when unique_violation then
+    null;
+  end;
+
+  -- Otro motorizado del MISMO courier sí puede: Johnny, Roy y Douglas son todos
+  -- "motorizados propios" y cada uno lleva su ruta.
+  insert into riders (id, org_id, full_name)
+  values (
+    '60000000-0000-0000-0000-00000000000c',
+    '60000000-0000-0000-0000-000000000001',
+    'Yhoni Smoke'
+  );
+  insert into dispatch_manifests (org_id, courier, route_date, route_label, rider_id)
+  values (
+    '60000000-0000-0000-0000-000000000001', 'propio', current_date, 'Yhoni Smoke',
+    '60000000-0000-0000-0000-00000000000c'
+  );
+
+  -- Sin motorizado, el courier es la identidad: una sola al día.
+  begin
+    insert into dispatch_manifests (org_id, courier, route_date, route_label)
+    values ('60000000-0000-0000-0000-000000000001', 'aliclik', current_date, 'Segundo recojo');
+    raise exception 'se creo una segunda ruta para el mismo courier el mismo dia';
+  exception when unique_violation then
+    null;
+  end;
+end;
+$$;
