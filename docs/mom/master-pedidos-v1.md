@@ -882,6 +882,16 @@ cotejo agregaba el paquete a la ruta. Además de impedir planificar, hacía que 
 escaneo distraído metiera una caja ajena a la ruta y la diera por cotejada en el
 mismo movimiento.
 
+**Un motorizado tiene UNA ruta al día, y un courier también.** Partir la carga de
+alguien en dos rutas el mismo día no ocurre en la operación, y cuando aparece una
+segunda es un error: los paquetes quedan repartidos entre dos manifiestos y el
+cotejo de ninguno cuadra. Lo impide la base, no solo la interfaz.
+
+La unicidad sigue a la identidad de la ruta: **con motorizado**, uno por
+motorizado y día —así Johnny, Roy y Douglas tienen cada uno la suya aunque los
+tres sean «motorizados propios»—; **sin motorizado**, uno por courier y día, que
+es el caso de Aliclik, las agencias y las rutas «Sin asignar».
+
 **Una ruta se identifica por quién se la lleva y qué día**: «Roy · 03/08». El
 nombre de la zona («Surco», «San Isidro») es solo una referencia de turno o área
 — no distingue nada, porque dos rutas del mismo día pueden cubrir la misma zona.

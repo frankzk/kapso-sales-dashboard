@@ -17,6 +17,7 @@ import {
   type DispatchScanStage,
 } from "@/lib/dispatch";
 import { operationFitsCourier, routeKindForCourier } from "@/lib/dispatch-routing";
+import { courierLabelFor } from "@/lib/couriers/catalog";
 import type { OperationKind } from "@/lib/order-macro-stage";
 import {
   DISPATCH_SHIPMENT_COLUMNS,
@@ -252,6 +253,26 @@ export async function createDispatchManifest(input: z.input<typeof createManifes
     return { error: "Elige un motorizado o escribe un nombre para la ruta." };
   }
 
+  // Un motorizado tiene UNA ruta al día, y un courier también. La base lo impide
+  // con dos índices (0097); aquí se comprueba antes solo para poder decir CUÁL
+  // es la ruta que ya existe, en vez de un choque de clave duplicada.
+  const clash = admin
+    .from("dispatch_manifests")
+    .select("id,route_label,driver_name")
+    .eq("org_id", store.org_id)
+    .eq("route_date", parsed.data.routeDate)
+    .neq("state", "cancelled");
+  const { data: existing } = riderId
+    ? await clash.eq("rider_id", riderId).maybeSingle()
+    : await clash.is("rider_id", null).ilike("courier", parsed.data.courier).maybeSingle();
+  if (existing) {
+    const who = riderId ? driverName : courierLabelFor(parsed.data.courier);
+    return {
+      error: `${who} ya tiene una ruta ese día («${existing.route_label}»). Agrega los paquetes ahí en vez de crear otra.`,
+      manifestId: existing.id as string,
+    };
+  }
+
   const { data, error } = await admin.from("dispatch_manifests").insert({
     org_id: store.org_id,
     courier: parsed.data.courier,
@@ -262,7 +283,14 @@ export async function createDispatchManifest(input: z.input<typeof createManifes
     driver_name: driverName,
     created_by: user.id,
   }).select("id").single();
-  if (error) return { error: error.code === "23505" ? "Ya existe una ruta con ese nombre, courier y fecha." : error.message };
+  if (error) {
+    return {
+      error:
+        error.code === "23505"
+          ? "Ya existe una ruta para ese motorizado (o ese courier) en esa fecha."
+          : error.message,
+    };
+  }
   await auditDispatch({
     orgId: store.org_id,
     manifestId: data.id,

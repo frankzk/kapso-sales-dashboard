@@ -197,4 +197,6 @@
 \ir migrations/0095_dispatch_manifest_rider.sql
 \echo 'Applying 0096_dispatch_route_kind.sql'
 \ir migrations/0096_dispatch_route_kind.sql
+\echo 'Applying 0097_dispatch_one_route_per_day.sql'
+\ir migrations/0097_dispatch_one_route_per_day.sql
 \echo 'Done.'
