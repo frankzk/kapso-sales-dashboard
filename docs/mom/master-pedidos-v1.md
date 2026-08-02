@@ -916,6 +916,30 @@ destino nuevo es exactamente el cruce que hay que evitar.
 listas de armados, de paquetes sin ruta y de paquetes dentro de una ruta se
 buscan por código de salida, guía, pedido, cliente o distrito.
 
+#### El Excel de Urpi
+
+Urpi no recibe una lista nuestra: carga los pedidos en **su** sistema desde **su**
+formato de Excel. Una ruta de Urpi trae un botón que descarga ese archivo listo
+para copiar y pegar, con sus quince columnas en su orden — incluida la cuarta,
+que no tiene encabezado y va vacía: omitirla corre todo lo demás una columna.
+
+Las conversiones que exige su formato:
+
+- El **teléfono sin el prefijo del país**: guardamos `51991467077`, su sistema
+  espera `991467077`.
+- La **tienda** como su desplegable la nombra: `KENKU`, `AURELA`.
+- La **fecha** en `dd/mm/aaaa`, y el monto a cobrar como número.
+- «N DE REF (CANTIDAD)» son las **unidades totales** del pedido, no las líneas.
+  Sin productos queda **vacía, no en cero**: un cero se lee como «no lleva
+  nada», y lo que pasa es que falta el dato.
+- «OBSERVACIONES» lleva la **nota del pedido en Shopify**.
+
+El archivo exporta lo que la ruta tiene **en ese momento**, no lo planificado: un
+paquete retirado en el cotejo no puede seguir en la lista que Urpi carga, o
+quedarían esperando una caja que nunca sale. Por eso el botón vive junto a la
+ruta —visible al asignar, al cotejar y al recibir— y avisa cuando el cotejo de
+oficina todavía no está completo, en vez de esconderse hasta entonces.
+
 #### Los dos tipos de ruta
 
 El tipo lo decide el **courier**, no quien crea la ruta:

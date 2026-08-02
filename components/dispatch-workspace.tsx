@@ -332,6 +332,10 @@ function RouteTarget({
 }) {
   const rider = needsRiderCheck(manifest.kind);
   const { title, subtitle } = routeHeading(manifest);
+  const progress = dispatchProgress(manifest.items);
+  const packages = progress.total;
+  const officeChecked = progress.officeChecked;
+  const officeComplete = progress.officeComplete;
   return (
     <div className="mt-5 rounded-2xl bg-slate-950 p-4 text-white sm:p-5">
       <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
@@ -346,6 +350,27 @@ function RouteTarget({
         </span>
       </div>
       <p className="mt-1 text-sm text-slate-300">{subtitle}</p>
+
+      {/* Urpi carga los pedidos en SU sistema desde SU Excel. El archivo sale de
+          aquí para no volver a escribir a mano lo que ya está en la ruta.
+          Exporta lo que la ruta tiene AHORA: si el cotejo retira un paquete,
+          Urpi no puede quedarse esperando una caja que no sale. */}
+      {courierKey(manifest.courier) === "urpi" && packages > 0 && (
+        <div className="mt-3">
+          <a
+            href={`/api/despacho/${manifest.id}/urpi`}
+            className="inline-flex min-h-10 items-center rounded-xl bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-100"
+          >
+            Excel para Urpi ({packages})
+          </a>
+          {!officeComplete && (
+            <p className="mt-1.5 text-xs text-amber-300">
+              El cotejo de oficina va {officeChecked} de {packages}: el archivo puede cambiar si
+              se retira algún paquete.
+            </p>
+          )}
+        </div>
+      )}
       {manifests.length > 1 && (
         <label className="mt-3 block">
           <span className="sr-only">Cambiar de ruta</span>
