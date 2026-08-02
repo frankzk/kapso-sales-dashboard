@@ -843,18 +843,74 @@ Implementación publicada en `/dashboard/pedidos/despacho`:
 - `dispatch_manifests`: una ruta por organización, courier, fecha y nombre.
 - `dispatch_manifest_items`: una salida física por ítem; una salida no puede
   pertenecer activamente a dos rutas.
+- **Asignar es un paso propio y anterior al cotejo** (ver «Los cuatro pasos»).
 - Primer cotejo: oficina confirma que el paquete completo está físicamente en
-  la caja/agrupación correcta.
-- Segundo cotejo: el propio motorizado confirma todo lo que recibe.
+  la caja/agrupación correcta. **Solo confirma lo asignado**: un código que no
+  pertenece a la ruta se avisa, nunca se agrega.
+- Segundo cotejo: el propio motorizado confirma todo lo que recibe. **Solo
+  existe en las rutas de reparto** (ver «Los dos tipos de ruta»).
 - Crear, organizar o enviar una ruta no cambia custodia.
-- `finalize_dispatch_manifest()` bloquea la ruta y vuelve a comprobar el 100 %
-  de ambos cotejos dentro de una sola transacción antes de mover todos los
-  paquetes a custodia `courier`.
+- `finalize_dispatch_manifest()` bloquea la ruta y vuelve a comprobar dentro de
+  una sola transacción el 100 % de los cotejos que correspondan a su tipo, antes
+  de mover todos los paquetes a custodia `courier`.
 - Un faltante se retira expresamente con motivo, persona y hora. No se borra.
 - Cada creación, escaneo, retiro, cancelación y transferencia queda en
   `dispatch_events`; los movimientos por pedido también llegan a `order_events`.
 - Cámara del celular, lector USB y escritura manual resuelven el mismo token QR,
   código de salida o código de guía.
+
+#### Los cuatro pasos del despacho
+
+El orden es el de la operación real, y cada paso lo hace una persona distinta:
+
+1. **Armar en almacén.** Almacén escanea cuando el pedido está completo,
+   rotulado y dentro de su caja.
+2. **Asignar a ruta.** Seguimiento decide en la computadora qué va con quién,
+   **seleccionando pedidos, sin escanear**.
+3. **Cotejo de oficina.** El encargado escanea cada bolsa que entra en la caja
+   del motorizado y confirma que está lo asignado.
+4. **Cotejo del motorizado.** El motorizado escanea lo que recibe.
+
+Los pasos 1 y 2 son **independientes**: la ruta se planifica antes de que
+almacén termine de armar. Por eso asignar **no exige** el escaneo de almacén —
+ese escaneo se muestra como indicador («armado» / «almacén aún no lo escaneó»),
+no como candado. Lo que ningún paquete puede saltarse es el cotejo de oficina,
+que es el que prueba que la caja existe y entró donde debía.
+
+Asignar y cotejar fueron el mismo gesto durante un tiempo: cada escaneo del
+cotejo agregaba el paquete a la ruta. Además de impedir planificar, hacía que un
+escaneo distraído metiera una caja ajena a la ruta y la diera por cotejada en el
+mismo movimiento.
+
+#### Los dos tipos de ruta
+
+El tipo lo decide el **courier**, no quien crea la ruta:
+
+| Tipo | Couriers | Cómo cierra |
+| --- | --- | --- |
+| **Ruta de reparto** | Motorizados propios, Axel, Urpi, Tanders, Swayp | Cotejo del motorizado al 100 % |
+| **Entrega al courier** | Aliclik, Shalom, Olva | Cotejo de oficina al 100 % **+ el nombre de quien recoge** |
+
+En una entrega al courier **no hay segundo cotejo**: Aliclik recoge y a las
+agencias se les lleva la caja; nadie del otro lado escanea. Exigírselo dejaba
+esas rutas trabadas para siempre esperando algo imposible, y la custodia no
+pasaba nunca. Su prueba de entrega es el nombre de quien se llevó las cajas, y
+sin él el servidor no cierra la ruta: sin nombre no hay a quién reclamarle una
+caja que no llegó.
+
+#### Qué puede entrar en cada ruta
+
+Una ruta acepta solo las operaciones (§5) que su courier atiende:
+
+- Motorizados propios, Axel y Urpi: Lima.
+- **Tanders: Lima y solo Lima**, también desde el servidor (§5).
+- Swayp: Lima y Provincia COD (Reproprovincia, §11).
+- Aliclik: Provincia COD. Shalom y Olva: Agencia.
+
+Un pedido de provincia en la caja de un motorizado de Lima se rechaza con el
+motivo. Una operación **sin clasificar no bloquea**: el dato falta, y negarle el
+despacho a una caja que existe físicamente es peor que dejarla pasar; lo que se
+bloquea es la contradicción explícita.
 
 ### Fase 3 — Modalidades
 

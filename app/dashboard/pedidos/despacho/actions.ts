@@ -10,10 +10,14 @@ import { isCourierTbd } from "@/lib/shipment-output";
 import {
   courierKey,
   deriveDispatchManifestState,
+  needsRiderCheck,
   normalizeDispatchScan,
   type DispatchManifestState,
+  type DispatchRouteKind,
   type DispatchScanStage,
 } from "@/lib/dispatch";
+import { operationFitsCourier, routeKindForCourier } from "@/lib/dispatch-routing";
+import type { OperationKind } from "@/lib/order-macro-stage";
 import {
   DISPATCH_SHIPMENT_COLUMNS,
   getDispatchWorkspaceData,
@@ -24,6 +28,9 @@ import {
 } from "@/lib/dispatch-access";
 
 const DISPATCH_PATH = "/dashboard/pedidos/despacho";
+
+/** Tope defensivo al armar una ruta de golpe: una tanda real son decenas. */
+const MAX_ROUTE_BATCH = 100;
 
 export interface DispatchActionResult {
   error?: string;
@@ -116,17 +123,33 @@ async function orgForStore(storeId: string): Promise<string | null> {
   return (data?.org_id as string | undefined) ?? null;
 }
 
+/** Operación del pedido (Lima / Provincia COD / Agencia), para validar la ruta. */
+async function operationForOrder(orderId: string | null): Promise<OperationKind | null> {
+  if (!orderId) return null;
+  const admin = createAdminSupabase();
+  const { data } = await admin
+    .from("order_master")
+    .select("macro_operation")
+    .eq("order_id", orderId)
+    .maybeSingle();
+  const value = (data?.macro_operation as string | undefined) ?? null;
+  return value && ["lima", "provincia_cod", "agencia", "desconocida"].includes(value)
+    ? (value as OperationKind)
+    : null;
+}
+
 async function recalculateManifest(manifestId: string, actor?: string): Promise<DispatchManifestState> {
   const admin = createAdminSupabase();
   const [{ data: manifest }, { data: items }] = await Promise.all([
-    admin.from("dispatch_manifests").select("state").eq("id", manifestId).single(),
+    admin.from("dispatch_manifests").select("state,kind").eq("id", manifestId).single(),
     admin
       .from("dispatch_manifest_items")
       .select("removed_at,office_checked_at,pickup_checked_at")
       .eq("manifest_id", manifestId),
   ]);
   const current = (manifest?.state ?? "draft") as DispatchManifestState;
-  const next = deriveDispatchManifestState(items ?? [], current);
+  const kind = (manifest?.kind ?? "reparto") as DispatchRouteKind;
+  const next = deriveDispatchManifestState(items ?? [], current, kind);
   const active = (items ?? []).filter((item) => !item.removed_at);
   const officeComplete = active.length > 0 && active.every((item) => !!item.office_checked_at);
   await admin
@@ -214,9 +237,14 @@ export async function createDispatchManifest(input: z.input<typeof createManifes
     driverName = rider.full_name;
   }
 
+  // El tipo lo decide el courier, no quien crea la ruta: Aliclik y las agencias
+  // no tienen motorizado que coteje, así que su ruta se cierra con el nombre de
+  // quien recoge en vez de con un segundo escaneo (MOM §5).
+  const kind = routeKindForCourier(parsed.data.courier);
   const { data, error } = await admin.from("dispatch_manifests").insert({
     org_id: store.org_id,
     courier: parsed.data.courier,
+    kind,
     route_date: parsed.data.routeDate,
     route_label: parsed.data.routeLabel,
     rider_id: riderId,
@@ -242,8 +270,13 @@ export async function addShipmentToManifest(manifestId: string, code: string): P
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
   if (!shipment) return { error: "No encontramos una salida con ese QR o guía." };
   if (["in_custody", "cancelled"].includes(manifest.state)) return { error: "Esa ruta ya está cerrada." };
-  if (shipment.preparation_state !== "listo_despacho") return { error: "El paquete aún no fue marcado como listo para despacho." };
   if (shipment.custody_state !== "empresa") return { error: "El paquete ya no está en custodia de la empresa." };
+  // La ruta se ARMA antes de que almacén termine: primero se decide qué va con
+  // quién y después se coteja lo que físicamente entró en la caja. El escaneo de
+  // almacén dejó de ser un candado y es un indicador («5 de 8 armados»); lo que
+  // ningún paquete puede saltarse es el cotejo de oficina.
+  const fit = operationFitsCourier(manifest.courier, await operationForOrder(shipment.order_id));
+  if (!fit.ok) return { error: fit.reason };
   // Una salida «por definir» adopta el courier de la ruta: el almacén arma y
   // rotula antes de saber con quién sale, y la decisión ocurre justo aquí, al
   // meter la caja en la agrupación de un courier concreto (MOM §4).
@@ -317,6 +350,117 @@ export async function addShipmentToManifest(manifestId: string, code: string): P
   };
 }
 
+/**
+ * Arma la ruta sin escanear: el paso que faltaba.
+ *
+ * Antes la ruta se CONSTRUÍA escaneando en el cotejo de oficina, así que no
+ * existía forma de decidir en la computadora qué va con quién y después
+ * verificar. Peor: un escaneo distraído metía un paquete ajeno a la ruta y lo
+ * daba por cotejado en el mismo gesto.
+ *
+ * Ahora son dos momentos. Aquí se decide; el cotejo solo confirma lo decidido.
+ */
+export async function addShipmentsToManifest(
+  manifestId: string,
+  shipmentIds: string[],
+): Promise<DispatchActionResult & { added: number; failed: { id: string; error: string }[] }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("dispatch.manage")) {
+    return { error: "No tienes permiso para organizar rutas.", added: 0, failed: [] };
+  }
+  const unique = Array.from(new Set(shipmentIds.filter(Boolean)));
+  if (!unique.length) return { error: "No hay paquetes seleccionados.", added: 0, failed: [] };
+  if (unique.length > MAX_ROUTE_BATCH) {
+    return {
+      error: `Demasiados paquetes de una vez (máximo ${MAX_ROUTE_BATCH}).`,
+      added: 0,
+      failed: [],
+    };
+  }
+
+  const admin = createAdminSupabase();
+  const { data: rows } = await admin
+    .from("shipments")
+    .select("id,qr_token,output_code,guide_code")
+    .in("id", unique);
+  const codeById = new Map(
+    ((rows ?? []) as { id: string; qr_token: string | null; output_code: string | null; guide_code: string }[]).map(
+      (row) => [row.id, row.qr_token || row.output_code || row.guide_code],
+    ),
+  );
+
+  // Se reutiliza la acción de a uno para que TODAS las reglas —courier, custodia,
+  // operación, organización, ruta duplicada— vivan en un solo sitio.
+  let added = 0;
+  const failed: { id: string; error: string }[] = [];
+  for (const id of unique) {
+    const code = codeById.get(id);
+    if (!code) {
+      failed.push({ id, error: "Paquete no encontrado." });
+      continue;
+    }
+    const result = await addShipmentToManifest(manifestId, code);
+    if (result.error) failed.push({ id, error: result.error });
+    else added += 1;
+  }
+
+  const notice = added
+    ? `${added} paquete${added === 1 ? "" : "s"} agregado${added === 1 ? "" : "s"} a la ruta.${
+        failed.length ? ` ${failed.length} no se pudo agregar.` : ""
+      }`
+    : undefined;
+  return { notice, error: added ? undefined : failed[0]?.error, added, failed };
+}
+
+/**
+ * Cierra una entrega al courier anotando quién recogió.
+ *
+ * Es el equivalente del segundo cotejo para las rutas sin motorizado: como nadie
+ * del otro lado escanea, la única prueba de la entrega es el nombre de quien se
+ * llevó las cajas. El servidor vuelve a comprobar el 100 % del cotejo de oficina
+ * dentro de la misma transacción que mueve la custodia.
+ */
+export async function handOverToCourier(
+  manifestId: string,
+  receivedBy: string,
+): Promise<DispatchActionResult> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("dispatch.manage")) return { error: "No tienes permiso para cerrar rutas." };
+  const name = receivedBy.trim();
+  if (name.length < 3) return { error: "Escribe el nombre de quien recoge." };
+  const manifest = await visibleManifest(manifestId);
+  if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
+  if (needsRiderCheck(manifest.kind)) {
+    return { error: "Esta ruta la cierra el cotejo del motorizado." };
+  }
+  if (["in_custody", "cancelled"].includes(manifest.state)) return { error: "Esa ruta ya está cerrada." };
+
+  const { user } = await currentUser();
+  const admin = createAdminSupabase();
+  const { error: nameError } = await admin
+    .from("dispatch_manifests")
+    .update({ received_by: name })
+    .eq("id", manifestId);
+  if (nameError) return { error: nameError.message };
+
+  const { data: orderIds, error } = await admin.rpc("finalize_dispatch_manifest", {
+    p_manifest_id: manifestId,
+    p_actor: user.id,
+  });
+  if (error) return { error: error.message };
+  await recomputeOrderMasterSafe(admin, (orderIds ?? []) as string[]);
+  await auditDispatch({
+    orgId: manifest.org_id,
+    manifestId,
+    actor: user.id,
+    kind: "handed_to_courier",
+    payload: { received_by: name },
+  });
+  revalidatePath(DISPATCH_PATH);
+  revalidatePath("/dashboard/pedidos");
+  return { notice: `Entrega cerrada: ${name} recogió los paquetes.` };
+}
+
 export async function scanManifestItem(
   manifestId: string,
   code: string,
@@ -329,6 +473,9 @@ export async function scanManifestItem(
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
   if (!shipment) return { error: "No encontramos una salida con ese QR o guía." };
   if (["in_custody", "cancelled"].includes(manifest.state)) return { error: "Esa ruta ya está cerrada." };
+  if (stage === "pickup" && !needsRiderCheck(manifest.kind)) {
+    return { error: "Esta ruta no tiene motorizado que coteje: se cierra anotando quién recoge." };
+  }
   const admin = createAdminSupabase();
   const { data: item } = await admin
     .from("dispatch_manifest_items")
@@ -359,6 +506,17 @@ export async function scanManifestItem(
     .update({ [checkedAtColumn]: new Date().toISOString(), [checkedByColumn]: user.id })
     .eq("id", item.id);
   if (error) return { error: error.message };
+
+  // Cotejar en oficina es ver la caja entrar: si almacén no alcanzó a
+  // escanearla, ese escaneo ya no va a llegar nunca. Sin esto el paquete se
+  // despachaba arrastrando un «por armar» que nadie iba a corregir.
+  if (stage === "office" && shipment.preparation_state !== "listo_despacho") {
+    await admin
+      .from("shipments")
+      .update({ preparation_state: "listo_despacho", ready_at: new Date().toISOString(), ready_by: user.id })
+      .eq("id", shipment.id)
+      .eq("custody_state", "empresa");
+  }
 
   const state = await recalculateManifest(manifestId, user.id);
   await auditDispatch({

@@ -1,5 +1,5 @@
 import { createServerSupabase } from "@/lib/db";
-import type { DispatchManifestState } from "@/lib/dispatch";
+import type { DispatchManifestState, DispatchRouteKind } from "@/lib/dispatch";
 
 export interface DispatchShipment {
   id: string;
@@ -42,9 +42,13 @@ export interface DispatchManifest {
   id: string;
   org_id: string;
   courier: string;
+  /** `reparto` (motorizado, doble cotejo) o `entrega_courier` (Aliclik/agencia). */
+  kind: DispatchRouteKind;
   route_date: string;
   route_label: string;
   driver_name: string | null;
+  /** Quién recogió, en las rutas sin motorizado que coteje. */
+  received_by: string | null;
   state: DispatchManifestState;
   created_by: string | null;
   office_completed_at: string | null;
@@ -56,7 +60,12 @@ export interface DispatchManifest {
 
 export interface DispatchWorkspaceData {
   manifests: DispatchManifest[];
-  readyShipments: DispatchShipment[];
+  /**
+   * Paquetes en custodia de la empresa que no están en ninguna ruta activa.
+   * Incluye los que almacén todavía no escaneó: la ruta se ARMA antes de que la
+   * caja esté cerrada, y el escaneo se muestra como indicador.
+   */
+  assignableShipments: DispatchShipment[];
 }
 
 export const DISPATCH_SHIPMENT_COLUMNS =
@@ -65,7 +74,7 @@ export const DISPATCH_SHIPMENT_COLUMNS =
   "customer_phone,district,province,product";
 
 const MANIFEST_COLUMNS =
-  "id,org_id,courier,route_date,route_label,driver_name,state,created_by," +
+  "id,org_id,courier,kind,route_date,route_label,driver_name,received_by,state,created_by," +
   "office_completed_at,custody_completed_at,cancellation_reason,created_at";
 
 const ITEM_COLUMNS =
@@ -89,13 +98,20 @@ export async function getDispatchWorkspaceData(): Promise<DispatchWorkspaceData>
       .order("route_date", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(20),
+    // Todo lo que sigue en la empresa y no está en una ruta: para ARMAR la ruta
+    // hace falta ver también lo que almacén todavía no escaneó, porque la ruta
+    // se decide antes de que la caja esté cerrada. El escaneo de almacén se
+    // muestra como indicador (`preparation_state`), no como filtro.
     sb
       .from("shipments")
       .select(DISPATCH_SHIPMENT_COLUMNS)
-      .eq("preparation_state", "listo_despacho")
       .eq("custody_state", "empresa")
-      .order("ready_at", { ascending: false })
-      .limit(300),
+      // `rotulo_generado` ya es un paquete planificable: existe la salida y su
+      // rótulo. Se excluye `no_iniciado` (todavía no hay nada físico) e
+      // `incidencia` (está detenido, no se despacha).
+      .in("preparation_state", ["rotulo_generado", "en_armado", "listo_despacho"])
+      .order("ready_at", { ascending: false, nullsFirst: false })
+      .limit(400),
   ]);
 
   const rawManifests = [
@@ -142,7 +158,7 @@ export async function getDispatchWorkspaceData(): Promise<DispatchWorkspaceData>
       ...manifest,
       items: itemsByManifest.get(manifest.id) ?? [],
     })),
-    readyShipments: ((readyRes.data ?? []) as unknown as DispatchShipment[]).filter(
+    assignableShipments: ((readyRes.data ?? []) as unknown as DispatchShipment[]).filter(
       (shipment) => !activeShipmentIds.has(shipment.id),
     ),
   };
