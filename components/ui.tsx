@@ -63,6 +63,21 @@ export const TABLE_WRAP_FROM = {
 export const STICKY_HEAD =
   "[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-slate-50 [&_th]:shadow-[inset_0_-1px_0_#cbd5e1]";
 
+/**
+ * Capa de cualquier desplegable que se abra SOBRE una tabla.
+ *
+ * POR QUÉ EXISTE. Los popovers de filtro usaban `z-10`, el mismo que las celdas
+ * de `STICKY_HEAD`. A igual z-index gana el último en el DOM, y la tabla va
+ * después de los filtros: el encabezado fijo tapaba la lista de opciones justo
+ * al desplegarla. Hay que quedar por encima también de la esquina congelada del
+ * Master, que usa z-20 en línea.
+ *
+ * Todo desplegable que conviva con una tabla usa esta constante, no un número
+ * suelto: el número correcto depende de otras dos capas y no se adivina desde
+ * el sitio donde se escribe el popover.
+ */
+export const OVER_TABLE_Z = "z-30";
+
 export function Card({
   children,
   className,

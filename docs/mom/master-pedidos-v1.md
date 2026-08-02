@@ -1284,8 +1284,14 @@ rótulos.
 - Un pedido en `por_generar_rotulo` **todavía no tiene salida**, así que no
   aporta rótulo. La interfaz informa cuántos quedaron fuera por ese motivo en vez
   de fallar en silencio.
-- La selección alcanza solo a los pedidos visibles en la página actual: el Master
-  pagina en el servidor y no expone los identificadores del filtro completo.
+- **La selección sobrevive a las búsquedas.** La tanda del día se arma buscando
+  pedido por pedido, así que vaciarla en cada búsqueda obligaba a imprimir de a
+  uno. Lo que no puede pasar es imprimir a ciegas: la barra avisa cuántos
+  seleccionados no están en la búsqueda actual y deja ver la lista completa con
+  su nombre, sacando cualquiera de un clic.
+- **«Seleccionar todos» alcanza solo la página visible**: el Master pagina en el
+  servidor y no expone los identificadores del filtro completo, así que prometer
+  «todos los resultados» sería mentir.
 - El QR impreso identifica la salida y es el que se escanea en ambos cotejos
   (§6.3). El contenido del rótulo se lee bajo RLS: una salida de otra tienda no
   aparece aunque se manipule la URL.

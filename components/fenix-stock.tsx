@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { Card, cn, STICKY_HEAD, TABLE_WRAP } from "@/components/ui";
+import { Card, cn, OVER_TABLE_Z, STICKY_HEAD, TABLE_WRAP } from "@/components/ui";
 import { FENIX_CITIES } from "@/lib/shipments";
 import type { DemandRow } from "@/lib/fenix-demand";
 import type { FenixStockRowDb, StoreSummary } from "@/lib/types";
@@ -463,7 +463,7 @@ function ProductCombobox({
         className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
       />
       {open && (results !== null || searching) && (
-        <div className="absolute z-10 mt-1 w-full rounded-lg border border-slate-200 bg-white shadow-lg">
+        <div className={cn("absolute mt-1 w-full rounded-lg border border-slate-200 bg-white shadow-lg", OVER_TABLE_Z)}>
           {searching && <p className="px-2.5 py-1.5 text-xs text-slate-400">Buscando…</p>}
           {results && results.length === 0 && !searching && (
             <p className="px-2.5 py-1.5 text-xs text-slate-400">
