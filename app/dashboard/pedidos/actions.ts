@@ -35,6 +35,10 @@ import {
   canRepeatCourier,
   normalizeOrderCode,
 } from "@/lib/shipment-output";
+import {
+  decideLabelAction,
+  type OutputForDecision,
+} from "@/lib/labels/resolve-output";
 import type { RouteKey } from "@/lib/order-route-plan";
 import type { OrderMasterRow } from "@/lib/types";
 
@@ -360,6 +364,106 @@ export async function createManualRouteOutput(
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// Rótulos: resolver la salida de cada pedido (crear si hace falta)
+// ---------------------------------------------------------------------------
+
+export interface ResolveLabelsResult extends MasterActionState {
+  /** Salidas a imprimir, en el orden en que se pidieron los pedidos. */
+  shipmentIds: string[];
+  created: number;
+  reused: number;
+  /** Pedidos que exigen una salida adicional justificada (§23). */
+  blocked: { orderId: string; error: string }[];
+}
+
+/**
+ * Prepara los rótulos de una tanda: por cada pedido, reusa la salida que sigue
+ * en la empresa o crea una nueva sin courier decidido.
+ *
+ * El almacén pide "el rótulo", no "una salida": crear la salida es el efecto
+ * interno de rotular. Por eso este paso no pregunta courier ni fecha — el
+ * courier se fija cuando la caja entra a una ruta (§4).
+ *
+ * Reusar gana a crear: pulsar el botón dos veces no puede quemar el límite de
+ * cinco salidas del pedido.
+ */
+export async function resolveLabelsForOrders(orderIds: string[]): Promise<ResolveLabelsResult> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) {
+    return { error: "Tu rol no permite crear salidas.", shipmentIds: [], created: 0, reused: 0, blocked: [] };
+  }
+  const unique = Array.from(new Set(orderIds.filter(Boolean)));
+  if (!unique.length) {
+    return { error: "No hay pedidos seleccionados.", shipmentIds: [], created: 0, reused: 0, blocked: [] };
+  }
+  if (unique.length > MAX_BULK_OUTPUTS) {
+    return {
+      error: `Demasiados pedidos de una vez (máximo ${MAX_BULK_OUTPUTS}).`,
+      shipmentIds: [], created: 0, reused: 0, blocked: [],
+    };
+  }
+
+  const admin = createAdminSupabase();
+  const { data: shipmentRows } = await admin
+    .from("shipments")
+    .select("id,order_id,custody_state,delivery_status,created_at,output_number")
+    .in("order_id", unique);
+
+  const byOrder = new Map<string, OutputForDecision[]>();
+  for (const row of (shipmentRows ?? []) as (OutputForDecision & { order_id: string | null })[]) {
+    if (!row.order_id) continue;
+    const list = byOrder.get(row.order_id) ?? [];
+    list.push(row);
+    byOrder.set(row.order_id, list);
+  }
+
+  const shipmentIds: string[] = [];
+  const blocked: ResolveLabelsResult["blocked"] = [];
+  let created = 0;
+  let reused = 0;
+
+  for (const orderId of unique) {
+    const decision = decideLabelAction(byOrder.get(orderId) ?? []);
+    if (decision.kind === "reuse") {
+      shipmentIds.push(decision.shipmentId);
+      reused += 1;
+      continue;
+    }
+    if (decision.kind === "needs_justification") {
+      blocked.push({
+        orderId,
+        error: `Tiene ${decision.activeOutputs} salida${decision.activeOutputs === 1 ? "" : "s"} todavía en la calle. Una salida adicional exige justificación: créala desde el pedido.`,
+      });
+      continue;
+    }
+    // La fecha prevista es solo seguimiento; hoy es la estimación honesta
+    // mientras no exista la ruta que la fije de verdad.
+    const result = await createManualRouteOutput(orderId, {
+      courier: COURIER_TBD,
+      dispatchDate: limaTodayKey(),
+    });
+    if (result.error || !result.shipmentId) {
+      blocked.push({ orderId, error: result.error ?? "No se pudo crear la salida." });
+      continue;
+    }
+    shipmentIds.push(result.shipmentId);
+    created += 1;
+  }
+
+  const parts: string[] = [];
+  if (created) parts.push(`${created} salida${created === 1 ? "" : "s"} creada${created === 1 ? "" : "s"}`);
+  if (reused) parts.push(`${reused} rótulo${reused === 1 ? "" : "s"} reimpreso${reused === 1 ? "" : "s"}`);
+  return {
+    shipmentIds,
+    created,
+    reused,
+    blocked,
+    notice: parts.length ? parts.join(" · ") : undefined,
+    error: shipmentIds.length ? undefined : "Ningún pedido tiene un rótulo que imprimir.",
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Salidas en lote
