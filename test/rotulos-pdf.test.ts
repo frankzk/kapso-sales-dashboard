@@ -248,6 +248,7 @@ describe("buildRotulosPdf", () => {
       destination: "Surco / Lima / Lima",
       address: "Av. Siempre Viva 742",
       reference: "Portón azul",
+      note: null,
       qrPayload: "tok-1",
       qrPng,
     };
@@ -293,6 +294,7 @@ describe("buildRotulosPdf", () => {
           "Avenida Próceres de la Independencia 3450, Urbanización Las Flores de Lurigancho, Manzana J Lote 14, tercer piso",
         reference:
           "A media cuadra del grifo Primax, casa de tres pisos con reja verde y portón corredizo, tocar el timbre de arriba",
+        note: "Enviar con Tanders antes de la 1 y 30. Llamar al llegar, el timbre no suena.",
         qrPayload: "c4d5e6f7-9999-8888-7777-666655554444",
         qrPng,
       },
@@ -317,6 +319,7 @@ describe("buildRotulosPdf", () => {
       destination: "Surco",
       address: "Av. 1",
       reference: null,
+      note: null,
       qrPayload: "q",
       qrPng,
     };
@@ -354,6 +357,7 @@ describe("buildRotulosPdf", () => {
         destination: "Surco",
         address: "Av. 1",
         reference: null,
+        note: null,
         qrPayload: "t",
         qrPng,
       },
@@ -386,11 +390,69 @@ describe("buildRotulosPdf", () => {
         destination: null,
         address: null,
         reference: null,
+        note: null,
         qrPayload: "u",
         qrPng,
       },
     ]);
     expect((await PDFDocument.load(pdf)).getPageCount()).toBe(1);
+  });
+
+  it("la nota del pedido se imprime junto al QR, y la leyenda queda al pie", async () => {
+    // La nota es donde el asesor escribe las instrucciones reales («enviar con
+    // Tanders», «antes de la 1 y 30»). Quien arma la caja no las tenía en
+    // ninguna parte del papel: había que abrir Shopify.
+    const qrPng = new Uint8Array(await QRCode.toBuffer("n1", { type: "png", width: 120 }));
+    const pdf = await buildRotulosPdf([
+      {
+        code: "KP1-S01",
+        storeName: "Kenku Peru",
+        orderName: "#KP1",
+        customerName: "Ana",
+        customerPhone: "519",
+        items: [{ quantity: 1, name: "Producto", variant: null }],
+        collectAmount: 99,
+        currency: "PEN",
+        destination: "Surco / Lima",
+        address: "Av. 1",
+        reference: null,
+        note: "enviar tander antes de las 1 y 30",
+        qrPayload: "n1",
+        qrPng,
+      },
+    ]);
+
+    const drawn = textWithSizes(pdf);
+    const note = drawn.find((d) => d.text.includes("enviar tander"));
+    const legend = drawn.find((d) => d.text.startsWith("Escanear en cada cotejo"));
+    expect(note, "la nota tiene que estar impresa").toBeTruthy();
+    expect(legend).toBeTruthy();
+    // La leyenda es lo más chico del rótulo y va debajo de la nota.
+    expect(legend!.size).toBeLessThan(note!.size);
+    expect(legend!.y).toBeLessThan(note!.y);
+  });
+
+  it("sin nota lo dice, en vez de dejar el hueco mudo", async () => {
+    const qrPng = new Uint8Array(await QRCode.toBuffer("n2", { type: "png", width: 120 }));
+    const pdf = await buildRotulosPdf([
+      {
+        code: "KP1-S01",
+        storeName: "Kenku Peru",
+        orderName: "#KP1",
+        customerName: "Ana",
+        customerPhone: "519",
+        items: [],
+        collectAmount: null,
+        currency: null,
+        destination: null,
+        address: null,
+        reference: null,
+        note: null,
+        qrPayload: "n2",
+        qrPng,
+      },
+    ]);
+    expect(textWithSizes(pdf).map((d) => d.text)).toContain("Sin notas");
   });
 
   it("el monto a cobrar es el texto MÁS GRANDE del rótulo", async () => {
@@ -410,6 +472,7 @@ describe("buildRotulosPdf", () => {
         destination: "Surco",
         address: "Av. 1",
         reference: null,
+        note: null,
         qrPayload: "m",
         qrPng,
       },
@@ -438,6 +501,7 @@ describe("buildRotulosPdf", () => {
         destination: "Surco",
         address: "Av. 1",
         reference: null,
+        note: null,
         qrPayload: "n",
         qrPng,
       },
@@ -465,14 +529,15 @@ describe("buildRotulosPdf", () => {
         destination: "Surco",
         address: "Av. 1",
         reference: "Reja azul",
+        note: null,
         qrPayload: "g",
         qrPng,
       },
     ]);
 
     const drawn = textWithSizes(pdf);
-    // La leyenda del QR se dibuja a 9 pt y es lo primero del pie.
-    const footer = drawn.find((d) => d.text === "Escanear en cada cotejo");
+    // El pie empieza en el bloque de notas, a la derecha del QR.
+    const footer = drawn.find((d) => d.text === "NOTAS DEL PEDIDO");
     const producto = drawn.find((d) => d.text === "Uno");
     expect(footer && producto).toBeTruthy();
 
@@ -496,6 +561,7 @@ describe("buildRotulosPdf", () => {
         destination: null,
         address: null,
         reference: null,
+        note: null,
         qrPayload: "x",
         qrPng,
       },

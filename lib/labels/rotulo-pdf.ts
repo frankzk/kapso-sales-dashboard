@@ -47,6 +47,8 @@ export interface RotuloData {
   destination: string | null;
   address: string | null;
   reference: string | null;
+  /** Nota del pedido en Shopify: instrucciones que escribió quien lo tomó. */
+  note: string | null;
   /** Contenido del QR: identifica la SALIDA, no el pedido. */
   qrPayload: string;
   /** PNG del QR ya renderizado. */
@@ -449,8 +451,8 @@ function drawCollectBand(
   return bottom - 4.5 * MM;
 }
 
-/** Los seis bloques de datos, en orden, tal como se dibujan. */
-const FIELD_BLOCKS = 6;
+/** Los cinco bloques de datos, en orden, tal como se dibujan. */
+const FIELD_BLOCKS = 5;
 
 /** Aire extra que puede repartirse entre bloques cuando sobra sitio. */
 const MAX_EXTRA_GAP = 5 * MM;
@@ -486,8 +488,7 @@ function planFields(
   };
 
   const height = () =>
-    fieldHeight(1, 9.5) + // pedido + celular, en dos columnas
-    fieldHeight(1, 9.5) + // cliente
+    fieldHeight(1, 9.5) + // cliente + celular, en dos columnas
     fieldHeight(plan.address, 11) +
     (plan.destination > 0 ? fieldHeight(plan.destination, 9.5) : 0) +
     (plan.reference > 0 ? fieldHeight(plan.reference, 9.5) : 0) +
@@ -534,12 +535,28 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     color: INK,
   });
 
-  // Sin nada a la derecha, el código puede usar el ancho completo.
+  // El pedido de Shopify va AL COSTADO del código de salida, no como un campo
+  // aparte: son el mismo dato leído de dos formas, y gastar una fila entera del
+  // rótulo en repetir "#KP124122" debajo de "KP124122-S01" era desperdiciarla.
   const code = sanitizeWinAnsi(data.code) || "-";
+  const orderName = sanitizeWinAnsi(data.orderName);
+  const orderSize = 10;
+  const orderW = orderName ? fonts.bold.widthOfTextAtSize(orderName, orderSize) + 3 * MM : 0;
   let codeSize = 17;
-  while (codeSize > 9 && fonts.bold.widthOfTextAtSize(code, codeSize) > innerW) codeSize -= 0.5;
+  while (codeSize > 9 && fonts.bold.widthOfTextAtSize(code, codeSize) > innerW - orderW) {
+    codeSize -= 0.5;
+  }
   y -= 8 + 4 * MM;
   page.drawText(code, { x: PAD, y: y - codeSize, size: codeSize, font: fonts.bold, color: INK });
+  if (orderName) {
+    page.drawText(orderName, {
+      x: PAGE_W - PAD - fonts.bold.widthOfTextAtSize(orderName, orderSize),
+      y: y - codeSize,
+      size: orderSize,
+      font: fonts.bold,
+      color: MUTED,
+    });
+  }
 
   y -= codeSize + 3 * MM;
   page.drawLine({
@@ -563,7 +580,11 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
   // tengan en el mismo sitio, aunque los datos de arriba varíen de alto. Los
   // campos de arriba nunca pueden bajar de `fieldsFloor`.
   const qrSize = 26 * MM;
-  const footerTop = PAD + qrSize + 5 * MM;
+  // La leyenda del QR baja a pie de página, en chico: se lee una vez en la vida
+  // y estaba ocupando el mejor espacio del rótulo — el que ahora usan las NOTAS.
+  const legendH = 4.5 * MM;
+  const qrBottom = PAD + legendH;
+  const footerTop = qrBottom + qrSize + 5 * MM;
   const fieldsFloor = footerTop + 3 * MM;
 
   // Se mide todo antes de escribir nada: así el aire sobrante se reparte entre
@@ -571,22 +592,25 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
   const plan = planFields(fonts, data, innerW, y - fieldsFloor);
   const gap = plan.gap;
 
-  // Dos columnas arriba, ancho completo abajo (igual que el rótulo HTML).
-  const colW = (innerW - 4 * MM) / 2;
+  // Cliente y celular comparten fila, pero NO a mitades: un celular son once
+  // dígitos y un nombre completo no entra en media etiqueta —"Maria Fernanda de
+  // lo..." no sirve para preguntar por nadie en la puerta.
+  const phoneW = 26 * MM;
+  const clientW = innerW - phoneW - 4 * MM;
   const leftAfter = drawField(page, fonts, {
     x: PAD,
     y,
-    width: colW,
-    label: "Pedido Shopify",
-    value: data.orderName,
+    width: clientW,
+    label: "Cliente",
+    value: data.customerName,
     maxLines: 1,
     minY: fieldsFloor,
     gap,
   });
   const rightAfter = drawField(page, fonts, {
-    x: PAD + colW + 4 * MM,
+    x: PAD + clientW + 4 * MM,
     y,
-    width: colW,
+    width: phoneW,
     label: "Celular",
     value: data.customerPhone,
     maxLines: 1,
@@ -595,16 +619,6 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
   });
   y = Math.min(leftAfter, rightAfter);
 
-  y = drawField(page, fonts, {
-    x: PAD,
-    y,
-    width: innerW,
-    label: "Cliente",
-    value: data.customerName,
-    maxLines: 1,
-    minY: fieldsFloor,
-    gap,
-  });
   // La dirección es lo que decide si el paquete llega: va más grande y es la
   // última en ceder líneas cuando el rótulo va apretado.
   y = drawField(page, fonts, {
@@ -623,7 +637,7 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
       x: PAD,
       y,
       width: innerW,
-      label: "Distrito / Provincia / Region",
+      label: "Distrito / Provincia",
       value: data.destination,
       maxLines: plan.destination,
       minY: fieldsFloor,
@@ -657,32 +671,54 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     color: INK,
   });
 
-  page.drawImage(qr as never, { x: PAD, y: PAD, width: qrSize, height: qrSize });
+  page.drawImage(qr as never, { x: PAD, y: qrBottom, width: qrSize, height: qrSize });
 
-  const copyX = PAD + qrSize + 5 * MM;
-  const copyW = PAGE_W - PAD - copyX;
-  page.drawText("Escanear en cada cotejo", {
-    x: copyX,
-    y: PAD + qrSize - 9,
-    size: 9,
+  // A la derecha del QR, LA NOTA DEL PEDIDO. Es lo que escribió quien lo tomó
+  // —"enviar con Tanders", "antes de la 1:30"— y quien arma la caja no la tenía
+  // en ninguna parte del papel: había que abrir Shopify para enterarse.
+  const noteX = PAD + qrSize + 5 * MM;
+  const noteW = PAGE_W - PAD - noteX;
+  const noteTop = qrBottom + qrSize - 7;
+  page.drawText("NOTAS DEL PEDIDO", {
+    x: noteX,
+    y: noteTop,
+    size: 6.5,
     font: fonts.bold,
-    color: INK,
+    color: MUTED,
   });
-  let copyY = PAD + qrSize - 9 - 4.5 * MM;
-  for (const line of wrapText(
-    "Este QR identifica esta salida, no el pedido completo.",
-    fonts.regular,
-    6.5,
-    copyW,
-    3,
-  )) {
-    page.drawText(line, { x: copyX, y: copyY, size: 6.5, font: fonts.regular, color: MUTED });
-    copyY -= 8;
+
+  const noteSize = 8.5;
+  const noteLineH = noteSize + 1.6;
+  // Cuántas líneas caben junto al QR sin bajar de su base.
+  const noteRoom = Math.floor((noteTop - 3.5 * MM - qrBottom) / noteLineH + 1e-9);
+  const noteLines = wrapText(data.note ?? "", fonts.bold, noteSize, noteW, Math.max(0, noteRoom));
+  let noteY = noteTop - 3.5 * MM;
+  if (noteLines.length) {
+    for (const line of noteLines) {
+      page.drawText(line, { x: noteX, y: noteY, size: noteSize, font: fonts.bold, color: INK });
+      noteY -= noteLineH;
+    }
+  } else {
+    page.drawText("Sin notas", {
+      x: noteX,
+      y: noteY,
+      size: noteSize - 1,
+      font: fonts.regular,
+      color: MUTED,
+    });
   }
-  for (const line of wrapText(data.qrPayload, fonts.regular, 5.5, copyW, 3)) {
-    page.drawText(line, { x: copyX, y: copyY, size: 5.5, font: fonts.regular, color: MUTED });
-    copyY -= 6.5;
-  }
+
+  // Pie: la instrucción del QR y su token, en el tamaño más chico del rótulo.
+  const legend = `Escanear en cada cotejo - ${sanitizeWinAnsi(data.qrPayload)}`;
+  const legendLine =
+    wrapText(legend, fonts.regular, 5.5, innerW, 1)[0] ?? "Escanear en cada cotejo";
+  page.drawText(legendLine, {
+    x: PAD,
+    y: PAD,
+    size: 5.5,
+    font: fonts.regular,
+    color: MUTED,
+  });
 }
 
 /** Un PDF con una página por rótulo, en el orden recibido. */

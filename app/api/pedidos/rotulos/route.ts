@@ -109,23 +109,29 @@ export async function GET(request: NextRequest) {
   // la misma consulta: es el dato más caro de equivocar del rótulo.
   const lineItemsByOrder = new Map<string, unknown>();
   const moneyByOrder = new Map<string, { total: number | null; currency: string | null }>();
+  const noteByOrder = new Map<string, string | null>();
   const selectedOrderIds = Array.from(
     new Set(selected.map((row) => row.order_id).filter(Boolean) as string[]),
   );
   if (selectedOrderIds.length) {
+    // `shopify_note` es una columna generada sobre el JSON crudo (0098): se lee
+    // como cualquier otra, sin traerse el `raw` entero —decenas de KB por
+    // pedido— para sacarle una línea.
     const { data: orderRows } = await sb
       .from("orders")
-      .select("id,line_items,total_amount,currency")
+      .select("id,line_items,total_amount,currency,shopify_note")
       .in("id", selectedOrderIds);
     type OrderRow = {
       id: string;
       line_items: unknown;
       total_amount: number | null;
       currency: string | null;
+      shopify_note: string | null;
     };
     for (const order of (orderRows as OrderRow[] | null) ?? []) {
       lineItemsByOrder.set(order.id, order.line_items);
       moneyByOrder.set(order.id, { total: order.total_amount, currency: order.currency });
+      noteByOrder.set(order.id, order.shopify_note);
     }
   }
 
@@ -156,7 +162,10 @@ export async function GET(request: NextRequest) {
         ),
         collectAmount: money?.total ?? null,
         currency: money?.currency ?? null,
-        destination: [row.district, row.province, row.region].filter(Boolean).join(" / "),
+        note: row.order_id ? (noteByOrder.get(row.order_id) ?? null) : null,
+        // Sin la región: repite la provincia en casi todo el país y gastaba una
+        // línea del rótulo sin decir nada que el motorizado no supiera.
+        destination: [row.district, row.province].filter(Boolean).join(" / "),
         address: row.delivery_address,
         reference: row.delivery_reference,
         qrPayload: payload,
