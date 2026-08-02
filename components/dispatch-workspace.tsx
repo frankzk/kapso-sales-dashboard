@@ -321,25 +321,23 @@ function RouteTarget({
   return (
     <div className="mt-5 rounded-2xl bg-slate-950 p-4 text-white sm:p-5">
       <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-        Estás trabajando en
+        {rider ? "Estás asignando a la ruta de" : "Estás preparando la entrega de"}
       </p>
+      {/* El motorizado y la fecha son el título: es lo único que distingue dos
+          rutas del mismo día y courier. La zona va debajo, como referencia. */}
       <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-lg font-semibold sm:text-xl">{manifest.route_label}</span>
+        <span className="text-xl font-semibold sm:text-2xl">
+          {who ?? (rider ? "Motorizado sin asignar" : ROUTE_KIND_LABELS[manifest.kind])}
+        </span>
+        <span className="text-lg font-semibold tabular-nums text-slate-300">
+          {routeDay(manifest.route_date)}
+        </span>
+      </div>
+      <p className="mt-1 flex flex-wrap items-center gap-x-2 text-sm text-slate-300">
         <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-semibold">
           {courierLabelFor(manifest.courier)}
         </span>
-        <span className="text-sm tabular-nums text-slate-300">{routeDay(manifest.route_date)}</span>
-      </div>
-      <p className="mt-1 text-sm text-slate-300">
-        {who ? (
-          <>
-            {rider ? "Motorizado" : "Recoge"}: <strong className="font-semibold text-white">{who}</strong>
-          </>
-        ) : rider ? (
-          "Motorizado sin asignar"
-        ) : (
-          ROUTE_KIND_LABELS[manifest.kind]
-        )}
+        <span>{manifest.route_label}</span>
       </p>
       {manifests.length > 1 && (
         <label className="mt-3 block">
@@ -351,8 +349,7 @@ function RouteTarget({
           >
             {manifests.map((option) => (
               <option key={option.id} value={option.id} className="text-slate-950">
-                {option.route_label} · {routeDay(option.route_date)}
-                {option.driver_name ? ` · ${option.driver_name}` : ""}
+                {routeName(option)} · {option.route_label}
               </option>
             ))}
           </select>
@@ -403,7 +400,7 @@ function ManifestCard({ manifest, active, onClick }: { manifest: DispatchManifes
   const percent = progress.total ? Math.round((completed / progress.total) * 100) : 0;
   // Quién se lleva la caja: es lo primero que se busca al mirar la lista de rutas.
   const who = manifest.received_by ?? manifest.driver_name;
-  return <button onClick={onClick} className={cn("w-full rounded-2xl border p-4 text-left transition", active ? "border-slate-950 bg-slate-950 text-white shadow-lg" : "border-slate-200 bg-white hover:border-slate-400")}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className={cn("text-xs font-semibold uppercase tracking-wide", active ? "text-slate-300" : "text-slate-500")}>{courierLabelFor(manifest.courier)}</p><p className="truncate font-semibold">{manifest.route_label}</p></div><span className={cn("text-xs tabular-nums", active ? "text-slate-300" : "text-slate-500")}>{routeDay(manifest.route_date)}</span></div><p className={cn("mt-1 truncate text-xs", active ? "text-slate-300" : "text-slate-500")}>{who ? `${rider ? "Motorizado" : "Recoge"}: ${who}` : rider ? "Motorizado sin asignar" : ROUTE_KIND_LABELS[manifest.kind]}</p><div className={cn("mt-3 h-1.5 overflow-hidden rounded-full", active ? "bg-white/15" : "bg-slate-100")}><div className={cn("h-full rounded-full", active ? "bg-emerald-400" : "bg-slate-950")} style={{ width: `${manifest.state === "in_custody" ? 100 : percent}%` }} /></div><div className={cn("mt-2 flex items-center justify-between text-xs", active ? "text-slate-300" : "text-slate-500")}><span>{DISPATCH_STATE_LABELS[manifest.state]}</span><span>{completed}/{progress.total}</span></div></button>;
+  return <button onClick={onClick} className={cn("w-full rounded-2xl border p-4 text-left transition", active ? "border-slate-950 bg-slate-950 text-white shadow-lg" : "border-slate-200 bg-white hover:border-slate-400")}><div className="flex items-start justify-between gap-2"><p className="min-w-0 truncate text-base font-semibold">{who ?? (rider ? "Sin motorizado" : ROUTE_KIND_LABELS[manifest.kind])}</p><span className={cn("shrink-0 text-sm font-semibold tabular-nums", active ? "text-slate-300" : "text-slate-500")}>{routeDay(manifest.route_date)}</span></div><p className={cn("mt-0.5 truncate text-xs", active ? "text-slate-300" : "text-slate-500")}>{courierLabelFor(manifest.courier)} · {manifest.route_label}</p><div className={cn("mt-3 h-1.5 overflow-hidden rounded-full", active ? "bg-white/15" : "bg-slate-100")}><div className={cn("h-full rounded-full", active ? "bg-emerald-400" : "bg-slate-950")} style={{ width: `${manifest.state === "in_custody" ? 100 : percent}%` }} /></div><div className={cn("mt-2 flex items-center justify-between text-xs", active ? "text-slate-300" : "text-slate-500")}><span>{DISPATCH_STATE_LABELS[manifest.state]}</span><span>{completed}/{progress.total}</span></div></button>;
 }
 
 function ReadyQueue({ shipments, storeName }: { shipments: DispatchShipment[]; storeName: Map<string, string> }) {
@@ -693,6 +690,7 @@ function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchR
 
   const option = courierSel ? courierOptionByKey(courierSel) : null;
   const riderOptions = useMemo(() => ridersForCourier(riders, option), [riders, option]);
+  const riderName = riderOptions.find((r) => r.id === riderId)?.full_name ?? "";
 
   return (
     <div className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-950/50 p-0 sm:items-center sm:p-6">
@@ -743,8 +741,9 @@ function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchR
             <input required type="date" value={routeDate} onChange={(e) => setRouteDate(e.target.value)} className="h-11 w-full rounded-xl border border-slate-200 px-3" />
           </Field>
           <div className="sm:col-span-2">
-            <Field label="Nombre de la ruta">
-              <input required value={routeLabel} onChange={(e) => setRouteLabel(e.target.value)} placeholder="Ej. Lima Norte · tarde" className="h-11 w-full rounded-xl border border-slate-200 px-3" />
+            <Field label="Nombre de la ruta (opcional)">
+              <input value={routeLabel} onChange={(e) => setRouteLabel(e.target.value)} placeholder={riderName ? `Por defecto: ${riderName}` : "Ej. Lima Norte · tarde"} className="h-11 w-full rounded-xl border border-slate-200 px-3" />
+              <p className="mt-1 text-xs text-slate-400">Lo que identifica la ruta es quién se la lleva y qué día. El nombre solo sirve como referencia de zona o turno.</p>
             </Field>
           </div>
           <div className="sm:col-span-2">
@@ -777,7 +776,7 @@ function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchR
               : "Entrega al courier: no hay motorizado que coteje, así que se cierra anotando quién recoge las cajas."}
           </p>
         )}
-        <button disabled={busy || !option} className="mt-6 h-12 w-full rounded-xl bg-slate-950 font-semibold text-white disabled:opacity-50">
+        <button disabled={busy || !option || (!riderId && !routeLabel.trim())} className="mt-6 h-12 w-full rounded-xl bg-slate-950 font-semibold text-white disabled:opacity-50">
           {busy ? "Creando…" : "Crear ruta"}
         </button>
       </form>

@@ -38,11 +38,16 @@ export function routeDay(routeDate: string): string {
 }
 
 /**
- * Cómo se nombra una ruta dentro de una frase: «Roy · Surco · 03/08».
+ * Cómo se nombra una ruta dentro de una frase: «Roy · 03/08».
  *
- * Es el texto de la confirmación antes de asignar, así que empieza por la
- * PERSONA: dos rutas del mismo día y courier se distinguen por quién se lleva
- * la caja, y confundirlas es mandar los paquetes de Roy con Yhoni.
+ * Es el texto de la confirmación antes de asignar, y lo que identifica una ruta
+ * es **quién se lleva la caja y qué día**. El nombre de la zona («Surco», «San
+ * Isidro») se omite a propósito: no distingue nada —dos rutas del mismo día
+ * pueden cubrir la misma zona— y alargar la frase resta fuerza a lo único que
+ * importa no confundir, que es la persona.
+ *
+ * Sin persona asignada sí se cae al nombre de la ruta: una fecha sola no
+ * identifica nada.
  */
 export function routeName(manifest: {
   driver_name?: string | null;
@@ -51,7 +56,7 @@ export function routeName(manifest: {
   route_date: string;
 }): string {
   const who = manifest.received_by ?? manifest.driver_name;
-  return [who, manifest.route_label, routeDay(manifest.route_date)].filter(Boolean).join(" · ");
+  return [who || manifest.route_label, routeDay(manifest.route_date)].filter(Boolean).join(" · ");
 }
 
 export interface DispatchProgressItem {
