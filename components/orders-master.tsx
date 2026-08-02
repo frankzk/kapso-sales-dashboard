@@ -1327,12 +1327,48 @@ function MasterTable({
 }) {
   const pageIds = rows.map((r) => r.order_id);
   const allChecked = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+
+  // Columnas congeladas: con 26 columnas la tabla es más ancha que la pantalla,
+  // así que al ir a la derecha se perdía de vista de QUÉ pedido es cada fila.
+  // Estas se quedan pegadas a la izquierda.
+  //
+  // Necesitan ancho fijo porque el desplazamiento de cada una es la suma de las
+  // anteriores: con anchos automáticos los offsets no cuadrarían y las columnas
+  // se superpondrían. Se calculan acá (y no como clases) porque "Tienda" solo
+  // existe en multitienda y correría todo lo que viene después.
+  const FROZEN_W = { check: 40, pedido: 132, tienda: 96, creado: 88, cliente: 190 };
+  const left: Record<string, number> = {};
+  {
+    let x = 0;
+    for (const k of ["check", "pedido", ...(multiStore ? ["tienda"] : []), "creado", "cliente"]) {
+      left[k] = x;
+      x += FROZEN_W[k as keyof typeof FROZEN_W];
+    }
+  }
+  /** Props de una celda congelada. El fondo se HEREDA de la fila: así sigue el
+   *  hover y el resaltado de selección, que en un color fijo se perderían. */
+  //
+  // El z-index va EN LÍNEA a propósito: STICKY_HEAD aplica su z-10 con un
+  // selector descendiente (`.clase th`), que tiene más especificidad que una
+  // clase suelta como `z-20`; ganaría el z-10 y las celdas congeladas del
+  // cuerpo taparían al encabezado en la esquina. El estilo en línea gana
+  // siempre. Cuerpo < encabezado normal (z-10) < esquina congelada.
+  const frozen = (key: keyof typeof FROZEN_W, header = false) => ({
+    className: cn("sticky", header ? "bg-slate-50" : "bg-inherit"),
+    style: {
+      left: left[key],
+      width: FROZEN_W[key],
+      minWidth: FROZEN_W[key],
+      zIndex: header ? 30 : 5,
+    },
+  });
+
   return (
     <div className={TABLE_WRAP_PAGE_X}>
       <table className="w-full min-w-[1640px] text-sm">
         <thead className={STICKY_HEAD}>
           <tr className="text-left text-xs text-slate-500">
-            <th className="w-9 px-2 py-2">
+            <th {...frozen("check", true)} className={cn(frozen("check", true).className, "px-2 py-2")}>
               <input
                 type="checkbox"
                 checked={allChecked}
@@ -1341,10 +1377,10 @@ function MasterTable({
                 className="h-4 w-4 cursor-pointer align-middle"
               />
             </th>
-            <th className="px-4 py-2 font-medium">Pedido</th>
-            {multiStore && <th className="px-2 py-2 font-medium">Tienda</th>}
-            <th className="px-2 py-2 font-medium">Creado</th>
-            <th className="px-2 py-2 font-medium">Cliente</th>
+            <th {...frozen("pedido", true)} className={cn(frozen("pedido", true).className, "px-4 py-2 font-medium")}>Pedido</th>
+            {multiStore && <th {...frozen("tienda", true)} className={cn(frozen("tienda", true).className, "px-2 py-2 font-medium")}>Tienda</th>}
+            <th {...frozen("creado", true)} className={cn(frozen("creado", true).className, "px-2 py-2 font-medium")}>Creado</th>
+            <th {...frozen("cliente", true)} className={cn(frozen("cliente", true).className, "px-2 py-2 font-medium")}>Cliente</th>
             <th className="px-2 py-2 font-medium">Teléfono</th>
             <th className="px-2 py-2 font-medium">Región</th>
             <th className="px-2 py-2 font-medium">Provincia</th>
@@ -1380,11 +1416,17 @@ function MasterTable({
               onClick={() => onOpen(r.order_id)}
               className={cn(
                 "cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50",
-                selected.has(r.order_id) && "bg-brand-50/60",
+                // La fila necesita fondo propio: las celdas congeladas lo
+                // HEREDAN, y sin él se transparentarían dejando ver el
+                // contenido que pasa por debajo. Excluyente con el resaltado de
+                // selección: dos clases de fondo a la vez y no manda el orden
+                // del atributo sino el del CSS, así que el resaltado podría
+                // perder contra el blanco.
+                selected.has(r.order_id) ? "bg-brand-50/60" : "bg-white",
               )}
             >
               {/* stopPropagation: marcar la fila no debe abrir el drawer. */}
-              <td className="px-2 py-2.5" onClick={(e) => e.stopPropagation()}>
+              <td {...frozen("check")} className={cn(frozen("check").className, "px-2 py-2.5")} onClick={(e) => e.stopPropagation()}>
                 <input
                   type="checkbox"
                   checked={selected.has(r.order_id)}
@@ -1393,10 +1435,10 @@ function MasterTable({
                   className="h-4 w-4 cursor-pointer align-middle"
                 />
               </td>
-              <td className="px-4 py-2.5 font-medium text-slate-900">{r.order_name ?? "—"}</td>
-              {multiStore && <td className="px-2 py-2.5 text-slate-600">{storeName(r.store_id)}</td>}
-              <td className="px-2 py-2.5 text-slate-600">{fmtDate(r.order_created_at)}</td>
-              <td className="max-w-[180px] truncate px-2 py-2.5 text-slate-700" title={r.customer_name ?? ""}>
+              <td {...frozen("pedido")} className={cn(frozen("pedido").className, "px-4 py-2.5 font-medium text-slate-900")}>{r.order_name ?? "—"}</td>
+              {multiStore && <td {...frozen("tienda")} className={cn(frozen("tienda").className, "px-2 py-2.5 text-slate-600")}>{storeName(r.store_id)}</td>}
+              <td {...frozen("creado")} className={cn(frozen("creado").className, "px-2 py-2.5 text-slate-600")}>{fmtDate(r.order_created_at)}</td>
+              <td {...frozen("cliente")} className={cn(frozen("cliente").className, "truncate px-2 py-2.5 text-slate-700")} title={r.customer_name ?? ""}>
                 {r.customer_name ?? "—"}
               </td>
               <td className="px-2 py-2.5 text-slate-600">{r.customer_phone ?? "—"}</td>
