@@ -193,4 +193,6 @@
 \ir migrations/0093_settlement_line_corrections.sql
 \echo 'Applying 0094_org_shopify_products.sql'
 \ir migrations/0094_org_shopify_products.sql
+\echo 'Applying 0095_dispatch_manifest_rider.sql'
+\ir migrations/0095_dispatch_manifest_rider.sql
 \echo 'Done.'

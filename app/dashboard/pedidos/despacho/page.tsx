@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getAccessibleStores } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
-import { getDispatchWorkspaceData } from "@/lib/dispatch-access";
+import { getDispatchWorkspaceData, getDispatchRiders } from "@/lib/dispatch-access";
 import { EmptyState } from "@/components/ui";
 import { DispatchWorkspace } from "@/components/dispatch-workspace";
 
@@ -20,11 +20,12 @@ export default async function DispatchPage() {
       </EmptyState>
     );
   }
-  const data = await getDispatchWorkspaceData();
+  const [data, riders] = await Promise.all([getDispatchWorkspaceData(), getDispatchRiders()]);
   return (
     <DispatchWorkspace
       initialData={data}
       stores={stores}
+      riders={riders}
       canPrepare={canPrepare}
       canManage={canManage}
       canPickup={canPickup}

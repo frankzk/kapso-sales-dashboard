@@ -23,9 +23,16 @@ import {
 import type {
   DispatchManifest,
   DispatchManifestItem,
+  DispatchRider,
   DispatchShipment,
   DispatchWorkspaceData,
 } from "@/lib/dispatch-access";
+import {
+  DISPATCH_COURIERS,
+  courierLabelFor,
+  courierOptionByKey,
+  ridersForCourier,
+} from "@/lib/couriers/catalog";
 import type { StoreSummary } from "@/lib/types";
 
 type Mode = "prepare" | "office" | "pickup";
@@ -66,12 +73,14 @@ function fmtTime(iso: string | null | undefined): string {
 export function DispatchWorkspace({
   initialData,
   stores,
+  riders,
   canPrepare,
   canManage,
   canPickup,
 }: {
   initialData: DispatchWorkspaceData;
   stores: StoreSummary[];
+  riders: DispatchRider[];
   canPrepare: boolean;
   canManage: boolean;
   canPickup: boolean;
@@ -236,7 +245,7 @@ export function DispatchWorkspace({
       </div>
 
       <DispatchCamera open={cameraOpen} onClose={() => setCameraOpen(false)} onScan={onCameraScan} />
-      {showCreate && <CreateManifestModal onClose={() => setShowCreate(false)} onCreated={async (result) => { showResult(result); if (result.manifestId) { await refresh(result.manifestId); setSelectedId(result.manifestId); setMode("office"); } setShowCreate(false); }} />}
+      {showCreate && <CreateManifestModal riders={riders} onClose={() => setShowCreate(false)} onCreated={async (result) => { showResult(result); if (result.manifestId) { await refresh(result.manifestId); setSelectedId(result.manifestId); setMode("office"); } setShowCreate(false); }} />}
     </div>
   );
 }
@@ -257,7 +266,7 @@ function StateBadge({ state }: { state: DispatchManifestState }) {
 function ManifestCard({ manifest, active, onClick }: { manifest: DispatchManifest; active: boolean; onClick: () => void }) {
   const progress = dispatchProgress(manifest.items);
   const completed = manifest.state === "in_custody" ? progress.total : progress.pickupChecked;
-  return <button onClick={onClick} className={cn("w-full rounded-2xl border p-4 text-left transition", active ? "border-slate-950 bg-slate-950 text-white shadow-lg" : "border-slate-200 bg-white hover:border-slate-400")}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className={cn("text-xs font-semibold uppercase tracking-wide", active ? "text-slate-300" : "text-slate-500")}>{manifest.courier}</p><p className="truncate font-semibold">{manifest.route_label}</p></div><span className={cn("text-xs tabular-nums", active ? "text-slate-300" : "text-slate-500")}>{manifest.route_date.slice(5).split("-").reverse().join("/")}</span></div><div className={cn("mt-4 h-1.5 overflow-hidden rounded-full", active ? "bg-white/15" : "bg-slate-100")}><div className={cn("h-full rounded-full", active ? "bg-emerald-400" : "bg-slate-950")} style={{ width: `${manifest.state === "in_custody" ? 100 : progress.percent}%` }} /></div><div className={cn("mt-2 flex items-center justify-between text-xs", active ? "text-slate-300" : "text-slate-500")}><span>{DISPATCH_STATE_LABELS[manifest.state]}</span><span>{completed}/{progress.total}</span></div></button>;
+  return <button onClick={onClick} className={cn("w-full rounded-2xl border p-4 text-left transition", active ? "border-slate-950 bg-slate-950 text-white shadow-lg" : "border-slate-200 bg-white hover:border-slate-400")}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className={cn("text-xs font-semibold uppercase tracking-wide", active ? "text-slate-300" : "text-slate-500")}>{courierLabelFor(manifest.courier)}</p><p className="truncate font-semibold">{manifest.route_label}</p></div><span className={cn("text-xs tabular-nums", active ? "text-slate-300" : "text-slate-500")}>{manifest.route_date.slice(5).split("-").reverse().join("/")}</span></div><div className={cn("mt-4 h-1.5 overflow-hidden rounded-full", active ? "bg-white/15" : "bg-slate-100")}><div className={cn("h-full rounded-full", active ? "bg-emerald-400" : "bg-slate-950")} style={{ width: `${manifest.state === "in_custody" ? 100 : progress.percent}%` }} /></div><div className={cn("mt-2 flex items-center justify-between text-xs", active ? "text-slate-300" : "text-slate-500")}><span>{DISPATCH_STATE_LABELS[manifest.state]}</span><span>{completed}/{progress.total}</span></div></button>;
 }
 
 function ReadyQueue({ shipments, storeName }: { shipments: DispatchShipment[]; storeName: Map<string, string> }) {
@@ -277,13 +286,98 @@ function PackageRow({ item, mode, canRemove, onRemoved }: { item: DispatchManife
   return <div className={cn("flex items-center gap-3 rounded-2xl border p-3.5", checked ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-white")}><span className={cn("grid size-9 shrink-0 place-items-center rounded-full text-sm font-bold", checked ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-400")}>{checked ? "✓" : "·"}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-baseline gap-x-2"><p className="font-semibold text-slate-950">{packageCode(item.shipment)}</p><span className="text-[11px] font-semibold uppercase text-slate-400">{item.shipment?.courier}</span></div><p className="truncate text-xs text-slate-500">{item.shipment?.customer_name ?? "Cliente"} · {item.shipment?.district ?? item.shipment?.province ?? "Sin distrito"}</p></div>{canRemove && <button onClick={async () => { const reason = window.prompt("¿Por qué se retira este paquete de la ruta?"); if (reason) await onRemoved(reason); }} className="shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50">Retirar</button>}</div>;
 }
 
-function CreateManifestModal({ onClose, onCreated }: { onClose: () => void; onCreated: (result: DispatchActionResult) => void }) {
-  const [courier, setCourier] = useState("");
+function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchRider[]; onClose: () => void; onCreated: (result: DispatchActionResult) => void }) {
+  const [courierSel, setCourierSel] = useState("");
   const [routeDate, setRouteDate] = useState(todayLima());
   const [routeLabel, setRouteLabel] = useState("");
-  const [driverName, setDriverName] = useState("");
+  const [riderId, setRiderId] = useState("");
   const [busy, setBusy] = useState(false);
-  return <div className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-950/50 p-0 sm:items-center sm:p-6"><form onSubmit={async (event) => { event.preventDefault(); setBusy(true); onCreated(await createDispatchManifest({ courier, routeDate, routeLabel, driverName })); setBusy(false); }} className="w-full rounded-t-3xl bg-white p-6 shadow-2xl sm:max-w-lg sm:rounded-3xl"><div className="flex items-center justify-between"><div><h2 className="text-xl font-semibold text-slate-950">Nueva ruta</h2><p className="text-sm text-slate-500">Una caja o agrupación distinta por courier y ruta.</p></div><button type="button" onClick={onClose} className="grid size-10 place-items-center rounded-full bg-slate-100 text-lg">×</button></div><div className="mt-6 grid gap-4 sm:grid-cols-2"><Field label="Courier"><input required value={courier} onChange={(e) => setCourier(e.target.value)} placeholder="Ej. Axel Courier" className="h-11 w-full rounded-xl border border-slate-200 px-3" /></Field><Field label="Fecha"><input required type="date" value={routeDate} onChange={(e) => setRouteDate(e.target.value)} className="h-11 w-full rounded-xl border border-slate-200 px-3" /></Field><div className="sm:col-span-2"><Field label="Nombre de la ruta"><input required value={routeLabel} onChange={(e) => setRouteLabel(e.target.value)} placeholder="Ej. Lima Norte · tarde" className="h-11 w-full rounded-xl border border-slate-200 px-3" /></Field></div><div className="sm:col-span-2"><Field label="Motorizado (opcional)"><input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Nombre de quien recoge" className="h-11 w-full rounded-xl border border-slate-200 px-3" /></Field></div></div><button disabled={busy} className="mt-6 h-12 w-full rounded-xl bg-slate-950 font-semibold text-white disabled:opacity-50">{busy ? "Creando…" : "Crear ruta"}</button></form></div>;
+
+  const option = courierSel ? courierOptionByKey(courierSel) : null;
+  const riderOptions = useMemo(() => ridersForCourier(riders, option), [riders, option]);
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-950/50 p-0 sm:items-center sm:p-6">
+      <form
+        onSubmit={async (event) => {
+          event.preventDefault();
+          if (!option) return;
+          setBusy(true);
+          onCreated(
+            await createDispatchManifest({
+              courier: option.value,
+              routeDate,
+              routeLabel,
+              riderId: riderId || undefined,
+            }),
+          );
+          setBusy(false);
+        }}
+        className="w-full rounded-t-3xl bg-white p-6 shadow-2xl sm:max-w-lg sm:rounded-3xl"
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-950">Nueva ruta</h2>
+            <p className="text-sm text-slate-500">Una caja o agrupación distinta por courier y ruta.</p>
+          </div>
+          <button type="button" onClick={onClose} className="grid size-10 place-items-center rounded-full bg-slate-100 text-lg">×</button>
+        </div>
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <Field label="Courier">
+            <select
+              required
+              value={courierSel}
+              onChange={(e) => {
+                setCourierSel(e.target.value);
+                setRiderId("");
+              }}
+              className="h-11 w-full rounded-xl border border-slate-200 px-3"
+            >
+              <option value="">Elige un courier</option>
+              {DISPATCH_COURIERS.map((c) => (
+                <option key={c.key} value={c.key}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Fecha">
+            <input required type="date" value={routeDate} onChange={(e) => setRouteDate(e.target.value)} className="h-11 w-full rounded-xl border border-slate-200 px-3" />
+          </Field>
+          <div className="sm:col-span-2">
+            <Field label="Nombre de la ruta">
+              <input required value={routeLabel} onChange={(e) => setRouteLabel(e.target.value)} placeholder="Ej. Lima Norte · tarde" className="h-11 w-full rounded-xl border border-slate-200 px-3" />
+            </Field>
+          </div>
+          <div className="sm:col-span-2">
+            <Field label="Motorizado">
+              <select
+                value={riderId}
+                onChange={(e) => setRiderId(e.target.value)}
+                disabled={!option}
+                className="h-11 w-full rounded-xl border border-slate-200 px-3 disabled:bg-slate-50"
+              >
+                <option value="">Sin asignar</option>
+                {riderOptions.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.full_name}
+                  </option>
+                ))}
+              </select>
+              {option && riderOptions.length === 0 && (
+                <p className="mt-1 text-xs text-slate-400">
+                  No hay motorizados de {option.label} registrados. Deja «Sin asignar» o agrégalos en Equipo → Motorizados.
+                </p>
+              )}
+            </Field>
+          </div>
+        </div>
+        <button disabled={busy || !option} className="mt-6 h-12 w-full rounded-xl bg-slate-950 font-semibold text-white disabled:opacity-50">
+          {busy ? "Creando…" : "Crear ruta"}
+        </button>
+      </form>
+    </div>
+  );
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

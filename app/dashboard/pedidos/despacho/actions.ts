@@ -183,6 +183,7 @@ const createManifestSchema = z.object({
   courier: z.string().trim().min(1).max(80),
   routeDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   routeLabel: z.string().trim().min(1).max(120),
+  riderId: z.string().uuid().optional(),
   driverName: z.string().trim().max(120).optional(),
 });
 
@@ -195,12 +196,30 @@ export async function createDispatchManifest(input: z.input<typeof createManifes
   const { data: store } = await sb.from("stores").select("org_id").limit(1).maybeSingle();
   if (!store?.org_id) return { error: "No tienes una organización disponible." };
   const admin = createAdminSupabase();
+
+  // El motorizado se elige de la lista de fichas (0064/0095). Guardamos su id y
+  // COPIAMOS su nombre en driver_name: si luego se renombra o desactiva la ficha,
+  // las rutas ya creadas conservan a quién recibió los paquetes (MOM §6.3, §27).
+  let riderId: string | null = null;
+  let driverName: string | null = parsed.data.driverName || null;
+  if (parsed.data.riderId) {
+    const { data: rider } = await admin
+      .from("riders")
+      .select("id, full_name, org_id")
+      .eq("id", parsed.data.riderId)
+      .maybeSingle();
+    if (!rider || rider.org_id !== store.org_id) return { error: "Motorizado no válido." };
+    riderId = rider.id;
+    driverName = rider.full_name;
+  }
+
   const { data, error } = await admin.from("dispatch_manifests").insert({
     org_id: store.org_id,
     courier: parsed.data.courier,
     route_date: parsed.data.routeDate,
     route_label: parsed.data.routeLabel,
-    driver_name: parsed.data.driverName || null,
+    rider_id: riderId,
+    driver_name: driverName,
     created_by: user.id,
   }).select("id").single();
   if (error) return { error: error.code === "23505" ? "Ya existe una ruta con ese nombre, courier y fecha." : error.message };
