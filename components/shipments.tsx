@@ -2,8 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { cn } from "@/components/ui";
-import { Card } from "@/components/ui";
+import { cn, Card, STICKY_HEAD, TABLE_WRAP } from "@/components/ui";
 import {
   COURIER_REPORT_RESULTS,
   attemptLabel,
@@ -874,18 +873,10 @@ function ShipmentTable({
   }
 
   return (
-    // Scrollea la PÁGINA (no un contenedor interno): lo de arriba se va y el
-    // encabezado queda pegado al tope, como en Shopify.
-    //
-    // Por eso en escritorio el eje X va `visible`: cualquier `overflow` que no
-    // sea visible convierte a este div en scrollport — el navegador pasa el eje
-    // Y a `auto` aunque solo declares el X — y ahí el sticky pierde contra qué
-    // pegarse. En móvil se conserva el scroll horizontal (la tabla no entra) a
-    // costa del sticky, que es el intercambio correcto en pantalla chica.
-    <div className="overflow-x-auto md:overflow-x-visible">
+    <div className={TABLE_WRAP}>
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-xs text-slate-500">
+          <tr className={cn(STICKY_HEAD, "text-xs text-slate-500")}>
             <SortableShipmentHeader label="Guía" sortKey="guide" sort={sort} onSort={toggleSort} />
             {stores.length > 1 && (
               <SortableShipmentHeader label="Tienda" sortKey="store" sort={sort} onSort={toggleSort} />
@@ -1002,19 +993,8 @@ function SortableShipmentHeader({
   const active = sort?.key === sortKey;
   const ariaSort = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
   return (
-    // Fondo gris y separador van en la CELDA, que es lo único que queda fijo:
-    // puestos en el <tr> se irían con el scroll y las filas se verían por
-    // debajo del encabezado.
-    //
-    // La línea es una sombra interna, NO un `border-b`: Tailwind fuerza
-    // `border-collapse: collapse`, y con bordes colapsados el borde le
-    // pertenece a la tabla y no a la celda, así que no viaja con la celda fija
-    // y el separador desaparece al bajar. La sombra sí se pinta con la celda.
-    <th
-      scope="col"
-      aria-sort={ariaSort}
-      className="sticky top-0 z-10 bg-slate-100 px-2 py-1 text-left font-medium shadow-[inset_0_-1px_0_#cbd5e1] first:pl-4 last:pr-4"
-    >
+    // El fondo/sticky/separador los pone STICKY_HEAD desde el <tr> (ver ui.tsx).
+    <th scope="col" aria-sort={ariaSort} className="px-2 py-1 text-left font-medium first:pl-4 last:pr-4">
       <button
         type="button"
         onClick={() => onSort(sortKey)}
@@ -1022,7 +1002,7 @@ function SortableShipmentHeader({
         className={cn(
           // hover un tono por encima del fondo del encabezado (slate-100), que
           // si no el estado no se notaría.
-          "group inline-flex min-h-8 w-full items-center gap-1 rounded-md px-2 text-left transition hover:bg-slate-200 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
+          "group inline-flex min-h-8 w-full items-center gap-1 rounded-md px-2 text-left transition hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
           active && "bg-brand-50 text-brand-700",
         )}
       >

@@ -10,7 +10,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Card, EmptyState, Section, cn } from "@/components/ui";
+import { Card, EmptyState, Section, cn, STICKY_HEAD, TABLE_WRAP } from "@/components/ui";
 import { NON_DELIVERY_REASONS, PAYMENT_METHODS, routeTotals } from "@/lib/routes";
 import { RISK_LABELS, type RiskAssessment } from "@/lib/retries";
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
@@ -127,9 +127,9 @@ export function RoutesBoard({
       <RidersAccess riders={riders} disabled={pending} onRun={run} />
 
       <Card className="p-0">
-        <div className="overflow-x-auto">
+        <div className={TABLE_WRAP}>
           <table className="w-full min-w-[640px] text-sm">
-            <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs text-slate-500">
+            <thead className={cn(STICKY_HEAD, "bg-slate-50 text-left text-xs text-slate-500")}>
               <tr>
                 <th className="px-4 py-2.5 font-medium">Fecha</th>
                 <th className="px-4 py-2.5 font-medium">Motorizado</th>
