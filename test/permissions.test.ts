@@ -126,3 +126,16 @@ describe("permisos de Aliclik", () => {
     expect(perms.has("master.edit")).toBe(true);
   });
 });
+
+describe("riders.manage (registro de motorizados)", () => {
+  it("lo tienen owner y admin, no vendedora/motorizado/viewer", () => {
+    expect(permissionsFor(["owner"]).has("riders.manage")).toBe(true);
+    expect(permissionsFor(["admin"]).has("riders.manage")).toBe(true);
+    expect(permissionsFor(["vendedora"]).has("riders.manage")).toBe(false);
+    expect(permissionsFor(["motorizado"]).has("riders.manage")).toBe(false);
+    expect(permissionsFor(["viewer"]).has("riders.manage")).toBe(false);
+  });
+  it("es un permiso válido del catálogo", () => {
+    expect(isPermission("riders.manage")).toBe(true);
+  });
+});
