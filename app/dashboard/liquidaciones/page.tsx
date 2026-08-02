@@ -53,7 +53,7 @@ async function LiquidacionesContent({
   // El pago se PREVISUALIZA con las tarifas de hoy; al cerrar se vuelve a
   // calcular y se congela. Si falta una tarifa, se ve antes de intentar cerrar.
   const payout =
-    detail && detail.settlement.status !== "cerrada"
+    detail && detail.settlement.status !== "cerrada" && !detail.settlement.courier
       ? computeRiderPayout(detail.reconciled.lines, tariffs, detail.settlement.settlement_date)
       : null;
 

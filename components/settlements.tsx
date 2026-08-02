@@ -8,7 +8,7 @@
 // cerrar se niega mientras queden líneas sin vincular, salvo que alguien con
 // permiso decida cerrarlo a conciencia.
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card, EmptyState, Section, cn } from "@/components/ui";
 import { VERDICT_LABELS, type ReconciledSettlement, type SettlementVerdict } from "@/lib/settlements";
@@ -17,6 +17,7 @@ import type { RiderRow, SettlementDetail, SettlementRow } from "@/lib/settlement
 import {
   applySettlementToMaster,
   closeSettlement,
+  correctSettlementLineValues,
   createRider,
   recheckSettlement,
   relinkLine,
@@ -41,10 +42,23 @@ const STATUS_STYLE: Record<string, string> = {
 };
 const STATUS_LABEL: Record<string, string> = {
   borrador: "Borrador",
-  cuadrada: "Cuadrada",
-  con_descuadre: "Con descuadre",
+  cuadrada: "Sin diferencias",
+  con_descuadre: "Revisión necesaria",
   cerrada: "Cerrada",
 };
+
+const SETTLEMENT_COURIERS = [
+  { id: "axel", label: "Axel Courier" },
+  { id: "aliclik", label: "Aliclik" },
+  { id: "swayp", label: "Swayp (antes Fénix)" },
+  { id: "urpi", label: "Urpi" },
+  { id: "tanders", label: "Tanders" },
+] as const;
+
+function courierLabel(id: string | null | undefined): string | null {
+  if (!id) return null;
+  return SETTLEMENT_COURIERS.find((courier) => courier.id === id.toLowerCase())?.label ?? id;
+}
 
 const VERDICT_STYLE: Record<SettlementVerdict, string> = {
   conforme: "bg-emerald-50 text-emerald-700",
@@ -75,18 +89,20 @@ export function SettlementsBoard({
   const router = useRouter();
   const [msg, setMsg] = useState<string | null>(null);
 
-  const riderName = (id: string | null, raw: string | null) =>
-    riders.find((r) => r.id === id)?.full_name ?? raw ?? "Sin asignar";
+  const responsibilityName = (settlement: SettlementRow) =>
+    courierLabel(settlement.courier) ??
+    riders.find((r) => r.id === settlement.rider_id)?.full_name ??
+    settlement.rider_name_raw ??
+    "Sin responsable";
 
   return (
     <div className="space-y-6">
-      <Section title="Liquidaciones de motorizados">
+      <Section title="Liquidaciones de couriers y motorizados">
         <p className="text-sm text-slate-500">
-          Sube la hoja del motorizado —{" "}
-          <strong className="font-medium text-slate-700">foto del cuaderno</strong> o{" "}
-          <strong className="font-medium text-slate-700">Excel/CSV</strong> — y se cruza con el
-          Master: qué guías entregó de verdad y cuánta plata debía traer. Lo que no cuadre se
-          muestra línea por línea; nada se corrige solo.
+          Sube una <strong className="font-medium text-slate-700">foto</strong> o un{" "}
+          <strong className="font-medium text-slate-700">Excel/CSV</strong>. Kapta conserva lo
+          reportado y lo compara con el Master. Las diferencias quedan visibles y toda corrección
+          manual guarda historial.
         </p>
       </Section>
 
@@ -102,10 +118,10 @@ export function SettlementsBoard({
             <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs text-slate-500">
               <tr>
                 <th className="px-4 py-2.5 font-medium">Fecha</th>
-                <th className="px-4 py-2.5 font-medium">Motorizado</th>
+                <th className="px-4 py-2.5 font-medium">Responsable del lote</th>
                 <th className="px-4 py-2.5 font-medium">Origen</th>
-                <th className="px-4 py-2.5 font-medium">Declarado</th>
-                <th className="px-4 py-2.5 font-medium">Pago</th>
+                <th className="px-4 py-2.5 font-medium">Depósito registrado</th>
+                <th className="px-4 py-2.5 font-medium">Pago motorizado</th>
                 <th className="px-4 py-2.5 font-medium">Estado</th>
               </tr>
             </thead>
@@ -134,7 +150,7 @@ export function SettlementsBoard({
                   >
                     <td className="px-4 py-2.5 font-medium text-slate-800">{s.settlement_date}</td>
                     <td className="px-4 py-2.5 text-slate-700">
-                      {riderName(s.rider_id, s.rider_name_raw)}
+                      {responsibilityName(s)}
                     </td>
                     <td className="px-4 py-2.5 text-slate-500">
                       {s.source === "foto" ? "📷 Foto" : s.source === "hoja" ? "📄 Hoja" : "✍️ Manual"}
@@ -187,7 +203,7 @@ function UploadPanel({
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [storeId, setStoreId] = useState(stores.length > 1 ? "__all__" : (stores[0]?.id ?? ""));
-  const [riderId, setRiderId] = useState("");
+  const [responsibility, setResponsibility] = useState("");
   const [date, setDate] = useState("");
   const [cash, setCash] = useState("");
   const [yape, setYape] = useState("");
@@ -205,7 +221,12 @@ function UploadPanel({
     const fd = new FormData();
     fd.append("file", file);
     fd.append("storeId", storeId);
-    if (riderId) fd.append("riderId", riderId);
+    if (responsibility.startsWith("courier:")) {
+      fd.append("courier", responsibility.slice("courier:".length));
+    }
+    if (responsibility.startsWith("rider:")) {
+      fd.append("riderId", responsibility.slice("rider:".length));
+    }
     if (date) fd.append("settlementDate", date);
     if (cash) fd.append("declaredCash", cash);
     if (yape) fd.append("declaredYape", yape);
@@ -251,16 +272,25 @@ function UploadPanel({
           ))}
         </select>
         <select
-          value={riderId}
-          onChange={(e) => setRiderId(e.target.value)}
+          value={responsibility}
+          onChange={(e) => setResponsibility(e.target.value)}
           className="rounded-lg border border-slate-300 px-2 py-2 text-sm"
         >
-          <option value="">Motorizado (se puede asignar después)</option>
-          {riders.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.full_name}
-            </option>
-          ))}
+          <option value="">Courier o motorizado (asignar después)</option>
+          <optgroup label="Couriers">
+            {SETTLEMENT_COURIERS.map((courier) => (
+              <option key={courier.id} value={`courier:${courier.id}`}>
+                {courier.label}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="Motorizados propios">
+            {riders.map((r) => (
+              <option key={r.id} value={`rider:${r.id}`}>
+                {r.full_name}
+              </option>
+            ))}
+          </optgroup>
         </select>
         <input
           type="date"
@@ -353,7 +383,11 @@ function SettlementDetailPanel({
         </button>
       </div>
 
-      <TotalsGrid reconciled={reconciled} payout={payout} />
+      <TotalsGrid
+        reconciled={reconciled}
+        payout={payout}
+        courier={settlement.courier}
+      />
 
       {err && <p className="text-sm text-red-600">{err}</p>}
 
@@ -363,11 +397,11 @@ function SettlementDetailPanel({
             <tr>
               <th className="px-3 py-2 font-medium">Cliente</th>
               <th className="px-3 py-2 font-medium">Pedido</th>
-              <th className="px-3 py-2 font-medium">Cobró</th>
-              <th className="px-3 py-2 font-medium">Comisión</th>
-              <th className="px-3 py-2 font-medium">Debía</th>
+              <th className="px-3 py-2 font-medium">Reportado cobrado</th>
+              <th className="px-3 py-2 font-medium">Comisión reportada</th>
+              <th className="px-3 py-2 font-medium">Esperado según Kapta</th>
               <th className="px-3 py-2 font-medium">Diferencia</th>
-              <th className="px-3 py-2 font-medium">Cuadre</th>
+              <th className="min-w-[220px] px-3 py-2 font-medium">Resultado de validación</th>
               {canEdit && !closed && <th className="px-3 py-2 font-medium" />}
             </tr>
           </thead>
@@ -418,15 +452,25 @@ function SettlementDetailPanel({
                   </span>
                 </td>
                 {canEdit && !closed && (
-                  <td className="min-w-[270px] px-3 py-2 text-right">
-                    {r.verdict === "sin_pedido" && r.line.match_status === "review" && (
-                      <RowMatchPicker
+                  <td className="min-w-[300px] px-3 py-2 text-right">
+                    <div className="flex flex-col items-end gap-2">
+                      {r.verdict === "sin_pedido" && r.line.match_status === "review" && (
+                        <RowMatchPicker
+                          settlementId={settlement.id}
+                          lineId={r.line.id}
+                          disabled={pending}
+                          onRun={run}
+                        />
+                      )}
+                      <LineCorrectionForm
                         settlementId={settlement.id}
                         lineId={r.line.id}
+                        declaredAmount={r.line.declared_amount}
+                        declaredFee={r.line.declared_fee ?? null}
                         disabled={pending}
                         onRun={run}
                       />
-                    )}
+                    </div>
                   </td>
                 )}
               </tr>
@@ -445,10 +489,11 @@ function SettlementDetailPanel({
 
       {canEdit && !closed && (
         <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-          <RiderPicker
+          <SettlementResponsibilityPicker
             settlementId={settlement.id}
             riders={riders}
-            current={settlement.rider_id}
+            currentRider={settlement.rider_id}
+            currentCourier={settlement.courier}
             cash={Number(settlement.declared_cash)}
             yape={Number(settlement.declared_yape)}
             note={settlement.note}
@@ -468,18 +513,20 @@ function SettlementDetailPanel({
             onClick={() => run(() => recheckSettlement(settlement.id))}
             className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            Recalcular cuadre
+            Actualizar validación
           </button>
           {canClose && (
             <>
-              <label className="flex items-center gap-1.5 text-xs text-slate-600">
-                <input
-                  type="checkbox"
-                  checked={deduct}
-                  onChange={(e) => setDeduct(e.target.checked)}
-                />
-                Descontar el faltante del pago
-              </label>
+              {!settlement.courier && (
+                <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={deduct}
+                    onChange={(e) => setDeduct(e.target.checked)}
+                  />
+                  Descontar el faltante del pago
+                </label>
+              )}
               <button
                 disabled={pending}
                 onClick={() =>
@@ -487,27 +534,8 @@ function SettlementDetailPanel({
                 }
                 className="rounded-lg bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-900 disabled:opacity-50"
               >
-                Cerrar y fijar el pago
+                {settlement.courier ? "Cerrar lote" : "Cerrar y fijar el pago"}
               </button>
-              {!reconciled.totals.balanced && (
-                <button
-                  disabled={pending}
-                  onClick={() => {
-                    if (
-                      !confirm(
-                        "Vas a cerrar una liquidación que NO cuadra. El pago quedará congelado y el descuadre anotado. ¿Seguro?",
-                      )
-                    )
-                      return;
-                    run(() =>
-                      closeSettlement(settlement.id, { deductShortfall: deduct, force: true }),
-                    );
-                  }}
-                  className="text-xs text-red-600 underline hover:text-red-700 disabled:opacity-50"
-                >
-                  Cerrar con descuadre
-                </button>
-              )}
             </>
           )}
         </div>
@@ -515,9 +543,16 @@ function SettlementDetailPanel({
 
       {closed && (
         <p className="border-t border-slate-100 pt-3 text-xs text-slate-500">
-          Cerrada el {settlement.closed_at?.slice(0, 10)}. Pago congelado en{" "}
-          <strong className="text-slate-700">{money(settlement.payout_amount)}</strong>. Si hay que
-          corregir algo, abre una liquidación de ajuste: este número ya no se reescribe.
+          Cerrada el {settlement.closed_at?.slice(0, 10)}.{" "}
+          {settlement.courier ? (
+            <>La comisión del courier quedó fijada con los valores revisados.</>
+          ) : (
+            <>
+              Pago congelado en{" "}
+              <strong className="text-slate-700">{money(settlement.payout_amount)}</strong>.
+            </>
+          )}{" "}
+          Si hay que corregir algo, abre una liquidación de ajuste.
         </p>
       )}
     </Card>
@@ -662,71 +697,247 @@ function RowMatchPicker({
   );
 }
 
-function TotalsGrid({
-  reconciled,
-  payout,
+function LineCorrectionForm({
+  settlementId,
+  lineId,
+  declaredAmount,
+  declaredFee,
+  disabled,
+  onRun,
 }: {
-  reconciled: ReconciledSettlement;
-  payout: RiderPayout | null;
+  settlementId: string;
+  lineId: string;
+  declaredAmount: number | null;
+  declaredFee: number | null;
+  disabled: boolean;
+  onRun: (fn: () => Promise<{ ok: boolean; error?: string; message?: string }>) => void;
 }) {
-  const t = reconciled.totals;
-  const cells = useMemo(
-    () => [
-      { label: "Cobró (declarado)", value: money(t.declaredTotal) },
-      { label: "Debía cobrar (Master)", value: money(t.expectedTotal) },
-      {
-        label: "Diferencia vs. Master",
-        value: money(t.difference),
-        tone: t.difference < 0 ? "bad" : t.difference > 0 ? "warn" : "good",
-      },
-      { label: "Comisión del courier", value: money(t.feeTotal), hint: "se la queda" },
-      {
-        label: "Cobrado directo",
-        value: money(t.directCollected),
-        hint: "Yape/POS a la empresa",
-      },
-      { label: "Debía depositar", value: money(t.expectedDeposit), hint: "cobrado − comisión" },
-      { label: "Depositó", value: money(t.depositTotal) },
-      {
-        label: "Diferencia del depósito",
-        value: money(t.depositDifference),
-        tone: t.depositDifference < 0 ? "bad" : t.depositDifference > 0 ? "warn" : "good",
-      },
-      {
-        label: "Pago al motorizado",
-        value: payout ? money(payout.net) : "—",
-        hint: payout?.missingTariffs
-          ? `faltan ${payout.missingTariffs} tarifa(s)`
-          : `${t.deliveredCount} entrega(s)`,
-      },
-    ],
-    [t, payout],
-  );
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState(declaredAmount === null ? "" : String(declaredAmount));
+  const [fee, setFee] = useState(declaredFee === null ? "" : String(declaredFee));
+  const [reason, setReason] = useState("");
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+        className="text-xs font-medium text-slate-600 underline decoration-slate-300 underline-offset-4 hover:text-slate-900 disabled:opacity-50"
+      >
+        Corregir monto o comisión
+      </button>
+    );
+  }
+
+  const parseMoney = (value: string): number | null => {
+    if (!value.trim()) return null;
+    const parsed = Number(value.replace(",", "."));
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  };
+  const amountValue = parseMoney(amount);
+  const feeValue = parseMoney(fee);
+  const invalid =
+    !reason.trim() ||
+    (amountValue !== null && (!Number.isFinite(amountValue) || amountValue < 0)) ||
+    (feeValue !== null && (!Number.isFinite(feeValue) || feeValue < 0));
 
   return (
-    <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
-      {cells.map((c) => (
-        <div key={c.label} className="rounded-lg border border-slate-200 p-2.5">
-          <p className="text-[11px] text-slate-500">{c.label}</p>
-          <p
-            className={cn(
-              "mt-0.5 text-sm font-semibold",
-              c.tone === "bad" ? "text-red-600" : c.tone === "warn" ? "text-sky-700" : "text-slate-800",
-            )}
-          >
-            {c.value}
-          </p>
-          {c.hint && <p className="text-[11px] text-slate-400">{c.hint}</p>}
-        </div>
-      ))}
+    <div className="w-full space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-left">
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-[11px] font-medium text-slate-600">
+          Monto reportado
+          <input
+            inputMode="decimal"
+            value={amount}
+            onChange={(event) => setAmount(event.target.value)}
+            placeholder="Sin lectura"
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800"
+          />
+        </label>
+        <label className="text-[11px] font-medium text-slate-600">
+          Comisión reportada
+          <input
+            inputMode="decimal"
+            value={fee}
+            onChange={(event) => setFee(event.target.value)}
+            placeholder="Sin lectura"
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800"
+          />
+        </label>
+      </div>
+      <label className="block text-[11px] font-medium text-slate-600">
+        Motivo de la corrección
+        <input
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder="Ej. La foto muestra comisión S/ 10"
+          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800"
+        />
+      </label>
+      <p className="text-[10px] leading-4 text-slate-500">
+        La imagen original no cambia. Kapta guardará el valor anterior, el nuevo y quién lo corrigió.
+      </p>
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="text-xs text-slate-500 hover:text-slate-800"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          disabled={disabled || invalid}
+          onClick={() => {
+            setOpen(false);
+            onRun(() =>
+              correctSettlementLineValues(settlementId, lineId, {
+                declaredAmount: amountValue,
+                declaredFee: feeValue,
+                reason,
+              }),
+            );
+          }}
+          className="rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-40"
+        >
+          Guardar corrección
+        </button>
+      </div>
     </div>
   );
 }
 
-function RiderPicker({
+function TotalsGrid({
+  reconciled,
+  payout,
+  courier,
+}: {
+  reconciled: ReconciledSettlement;
+  payout: RiderPayout | null;
+  courier: string | null;
+}) {
+  const t = reconciled.totals;
+  const pendingLinks = t.reviewCount;
+  const differentRows = Math.max(0, t.mismatchCount - t.reviewCount);
+  const issues: string[] = [];
+  if (pendingLinks) issues.push(`${pendingLinks} fila(s) sin pedido confirmado`);
+  if (differentRows) issues.push(`${differentRows} fila(s) difieren del Master`);
+  if (t.depositDifference < -0.005) {
+    issues.push(`falta registrar o depositar ${money(-t.depositDifference)}`);
+  }
+  if (t.depositDifference > 0.005) {
+    issues.push(`hay un excedente de depósito de ${money(t.depositDifference)}`);
+  }
+  if (payout?.missingTariffs) {
+    issues.push(`${payout.missingTariffs} tarifa(s) de motorizado sin configurar`);
+  }
+
+  type ReviewMetric = {
+    label: string;
+    value: string;
+    hint: string;
+    tone?: "bad" | "warn" | "good";
+  };
+  const reported: ReviewMetric[] = [
+    { label: "Cobrado total", value: money(t.declaredTotal), hint: "Suma de las filas del reporte" },
+    {
+      label: courier ? "Comisión retenida" : "Costos declarados",
+      value: money(t.feeTotal),
+      hint: courier ? "Lo que el courier descuenta" : "Incluye comisiones registradas",
+    },
+    { label: "Cobro directo a la empresa", value: money(t.directCollected), hint: "Yape, POS o transferencia" },
+    { label: "Neto que debe depositar", value: money(t.expectedDeposit), hint: "Cobrado menos comisión y cobro directo" },
+  ];
+  const kapta: ReviewMetric[] = [
+    { label: "Entregas según el Master", value: money(t.expectedTotal), hint: `${t.deliveredCount} pedido(s) entregado(s)` },
+    {
+      label: "Diferencia courier vs. Kapta",
+      value: money(t.difference),
+      tone: Math.abs(t.difference) > 0.005 ? "warn" : "good",
+      hint: "Reportado menos esperado",
+    },
+    { label: "Depósito registrado", value: money(t.depositTotal), hint: "Efectivo más Yape registrado" },
+    {
+      label: "Saldo del depósito",
+      value:
+        Math.abs(t.depositDifference) <= 0.005
+          ? "S/ 0.00"
+          : t.depositDifference < 0
+            ? `Falta ${money(-t.depositDifference)}`
+            : `Excede ${money(t.depositDifference)}`,
+      tone: Math.abs(t.depositDifference) > 0.005 ? "bad" : "good",
+      hint: "Depósito registrado menos neto esperado",
+    },
+  ];
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-slate-200" aria-label="Validación del lote">
+      <div
+        className={cn(
+          "flex flex-wrap items-start justify-between gap-3 px-4 py-3",
+          issues.length ? "bg-amber-50 text-amber-950" : "bg-emerald-50 text-emerald-950",
+        )}
+      >
+        <div>
+          <p className="text-sm font-semibold">
+            {issues.length ? "Revisión necesaria antes de cerrar" : "Todo coincide"}
+          </p>
+          <p className="mt-0.5 text-xs opacity-80">
+            {issues.length ? issues.join("; ") : "El reporte, el Master y el depósito no muestran diferencias."}
+          </p>
+        </div>
+        <span className="rounded-full bg-white/70 px-2.5 py-1 text-xs font-medium">
+          {courierLabel(courier) ?? "Motorizado propio"}
+        </span>
+      </div>
+
+      <div className="grid lg:grid-cols-2 lg:divide-x lg:divide-slate-200">
+        {[
+          { title: courier ? "Reportado por el courier" : "Reportado por el motorizado", items: reported },
+          { title: "Validación de Kapta", items: kapta },
+        ].map((group) => (
+          <div key={group.title} className="p-4">
+            <h4 className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+              {group.title}
+            </h4>
+            <dl className="mt-3 grid grid-cols-2 gap-x-5 gap-y-4">
+              {group.items.map((item) => (
+                <div key={item.label}>
+                  <dt className="text-[11px] leading-4 text-slate-500">{item.label}</dt>
+                  <dd
+                    className={cn(
+                      "mt-0.5 text-sm font-semibold tabular-nums text-slate-900",
+                      item.tone === "bad" && "text-red-700",
+                      item.tone === "warn" && "text-amber-700",
+                      item.tone === "good" && "text-emerald-700",
+                    )}
+                  >
+                    {item.value}
+                  </dd>
+                  <p className="mt-0.5 text-[10px] leading-4 text-slate-400">{item.hint}</p>
+                </div>
+              ))}
+            </dl>
+          </div>
+        ))}
+      </div>
+
+      {!courier && payout && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+          <span className="text-slate-600">Pago calculado al motorizado propio</span>
+          <strong className="tabular-nums text-slate-900">{money(payout.net)}</strong>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SettlementResponsibilityPicker({
   settlementId,
   riders,
-  current,
+  currentRider,
+  currentCourier,
   cash,
   yape,
   note,
@@ -735,61 +946,153 @@ function RiderPicker({
 }: {
   settlementId: string;
   riders: RiderRow[];
-  current: string | null;
+  currentRider: string | null;
+  currentCourier: string | null;
   cash: number;
   yape: number;
   note: string | null;
   disabled: boolean;
   onRun: (fn: () => Promise<{ ok: boolean; error?: string; message?: string }>) => void;
 }) {
-  const [riderId, setRiderId] = useState(current ?? "");
+  const [responsibility, setResponsibility] = useState(
+    currentCourier
+      ? `courier:${currentCourier}`
+      : currentRider
+        ? `rider:${currentRider}`
+        : "",
+  );
   const [newName, setNewName] = useState("");
+  const [cashValue, setCashValue] = useState(String(cash));
+  const [yapeValue, setYapeValue] = useState(String(yape));
+  const [noteValue, setNoteValue] = useState(note ?? "");
+  const knownCourier = SETTLEMENT_COURIERS.some((courier) => courier.id === currentCourier);
+
+  function saveHeader() {
+    const courier = responsibility.startsWith("courier:")
+      ? responsibility.slice("courier:".length)
+      : null;
+    const riderId = responsibility.startsWith("rider:")
+      ? responsibility.slice("rider:".length)
+      : null;
+    onRun(() =>
+      updateSettlementHeader(settlementId, {
+        riderId,
+        courier,
+        declaredCash: Number(cashValue) || 0,
+        declaredYape: Number(yapeValue) || 0,
+        note: noteValue,
+      }),
+    );
+  }
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <select
-        value={riderId}
-        onChange={(e) => {
-          const v = e.target.value;
-          setRiderId(v);
-          onRun(() =>
-            updateSettlementHeader(settlementId, {
-              riderId: v || null,
-              declaredCash: cash,
-              declaredYape: yape,
-              note,
-            }),
-          );
-        }}
-        disabled={disabled}
-        className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-      >
-        <option value="">Sin motorizado asignado</option>
-        {riders.map((r) => (
-          <option key={r.id} value={r.id}>
-            {r.full_name}
-          </option>
-        ))}
-      </select>
-      <input
-        value={newName}
-        onChange={(e) => setNewName(e.target.value)}
-        placeholder="Alta rápida: nombre"
-        className="w-44 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-      />
-      <button
-        disabled={disabled || !newName.trim()}
-        onClick={() => {
-          const name = newName.trim();
-          setNewName("");
-          onRun(() =>
-            createRider({ storeId: null, fullName: name, docNumber: null, phone: null, courier: null }),
-          );
-        }}
-        className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-      >
-        Dar de alta
-      </button>
+    <div className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">Datos del lote</p>
+          <p className="text-[11px] text-slate-500">
+            Asigna quién reportó la ruta y registra lo que realmente ingresó a la empresa.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={saveHeader}
+          className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          Guardar datos del lote
+        </button>
+      </div>
+
+      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+        <label className="text-xs font-medium text-slate-600">
+          Responsable del lote
+          <select
+            value={responsibility}
+            onChange={(e) => setResponsibility(e.target.value)}
+            disabled={disabled}
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+          >
+            <option value="">Sin responsable asignado</option>
+            <optgroup label="Couriers">
+              {!knownCourier && currentCourier && (
+                <option value={`courier:${currentCourier}`}>{courierLabel(currentCourier)}</option>
+              )}
+              {SETTLEMENT_COURIERS.map((courier) => (
+                <option key={courier.id} value={`courier:${courier.id}`}>
+                  {courier.label}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Motorizados propios">
+              {riders.map((r) => (
+                <option key={r.id} value={`rider:${r.id}`}>
+                  {r.full_name}
+                </option>
+              ))}
+            </optgroup>
+          </select>
+        </label>
+        <label className="text-xs font-medium text-slate-600">
+          Efectivo depositado a la empresa
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={cashValue}
+            onChange={(e) => setCashValue(e.target.value)}
+            disabled={disabled}
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+          />
+        </label>
+        <label className="text-xs font-medium text-slate-600">
+          Yape / POS depositado a la empresa
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={yapeValue}
+            onChange={(e) => setYapeValue(e.target.value)}
+            disabled={disabled}
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+          />
+        </label>
+        <label className="text-xs font-medium text-slate-600">
+          Nota del lote
+          <input
+            value={noteValue}
+            onChange={(e) => setNoteValue(e.target.value)}
+            disabled={disabled}
+            placeholder="Observación opcional"
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+          />
+        </label>
+      </div>
+
+      <details className="mt-2 text-xs text-slate-600">
+        <summary className="cursor-pointer select-none font-medium">Dar de alta un motorizado propio</summary>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Nombre del motorizado"
+            className="w-56 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
+          />
+          <button
+            disabled={disabled || !newName.trim()}
+            onClick={() => {
+              const name = newName.trim();
+              setNewName("");
+              onRun(() =>
+                createRider({ storeId: null, fullName: name, docNumber: null, phone: null, courier: null }),
+              );
+            }}
+            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+          >
+            Crear motorizado
+          </button>
+        </div>
+      </details>
     </div>
   );
 }
