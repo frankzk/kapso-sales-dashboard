@@ -29,7 +29,12 @@ import {
 } from "@/lib/order-status";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
 import { classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
-import { canRepeatCourier, normalizeOrderCode } from "@/lib/shipment-output";
+import {
+  COURIER_TBD,
+  MAX_OUTPUTS_PER_ORDER,
+  canRepeatCourier,
+  normalizeOrderCode,
+} from "@/lib/shipment-output";
 import type { RouteKey } from "@/lib/order-route-plan";
 import type { OrderMasterRow } from "@/lib/types";
 
@@ -133,7 +138,9 @@ export async function searchOrders(query: string): Promise<OrderMasterRow[]> {
 // Fase 3 — salidas manuales con rótulo interno y QR
 // ---------------------------------------------------------------------------
 
-const MANUAL_ROUTE_COURIERS = ["axel", "urpi", "propio", "olva"] as const;
+// `por_definir` es una salida rotulada sin courier decidido: el almacén arma y
+// pega el rótulo, y el courier se fija cuando la caja entra a una ruta (§4).
+const MANUAL_ROUTE_COURIERS = ["axel", "urpi", "propio", "olva", COURIER_TBD] as const;
 export type ManualRouteCourier = (typeof MANUAL_ROUTE_COURIERS)[number];
 
 const MANUAL_COURIER_LABEL: Record<ManualRouteCourier, string> = {
@@ -141,10 +148,12 @@ const MANUAL_COURIER_LABEL: Record<ManualRouteCourier, string> = {
   urpi: "Urpi",
   propio: "Motorizado propio",
   olva: "Olva",
+  [COURIER_TBD]: "Sin courier definido",
 };
 
 export interface CreateManualRouteOutputInput {
-  courier: RouteKey;
+  /** Courier manual, o `por_definir` para decidirlo al entrar a la ruta (§4). */
+  courier: RouteKey | ManualRouteCourier;
   dispatchDate: string;
   note?: string;
 }
@@ -155,7 +164,7 @@ export interface CreateManualRouteOutputResult extends MasterActionState {
   labelUrl?: string;
 }
 
-function isManualCourier(courier: RouteKey): courier is ManualRouteCourier {
+function isManualCourier(courier: string): courier is ManualRouteCourier {
   return (MANUAL_ROUTE_COURIERS as readonly string[]).includes(courier);
 }
 
@@ -216,28 +225,39 @@ export async function createManualRouteOutput(
     };
   }
 
+  // Sin courier decidido no se puede juzgar la repetición por modalidad (§4):
+  // esa regla se aplica cuando la salida adopta un courier al entrar a la ruta.
+  // El máximo de cinco salidas sí rige siempre, porque no depende del courier.
+  const courier: ManualRouteCourier = input.courier;
+  const tbd = courier === COURIER_TBD;
   const operation = input.courier === "olva"
     ? "agencia"
     : routeOperation(ctx.row, outputs.map((output) => output.courier));
-  const priorOutputsWithCourier = outputs.filter((output) => {
-    const current = output.courier.trim().toLowerCase();
-    if (input.courier === "axel") return current === "axel" || current === "axel courier";
-    if (input.courier === "propio") return current === "propio" || current === "motorizado propio";
-    return current === input.courier;
-  }).length;
-  const repetition = canRepeatCourier({
-    courier: MANUAL_COURIER_LABEL[input.courier],
-    operation,
-    priorOutputsWithCourier,
-    totalOutputs: outputs.length,
-  });
-  if (!repetition.allowed) {
-    return {
-      error:
-        repetition.reason === "max_outputs"
-          ? "El pedido ya alcanzó el máximo de cinco salidas."
-          : `${MANUAL_COURIER_LABEL[input.courier]} ya fue usado y no puede repetirse en esta modalidad.`,
-    };
+  if (tbd) {
+    if (outputs.length >= MAX_OUTPUTS_PER_ORDER) {
+      return { error: "El pedido ya alcanzó el máximo de cinco salidas." };
+    }
+  } else {
+    const priorOutputsWithCourier = outputs.filter((output) => {
+      const current = output.courier.trim().toLowerCase();
+      if (input.courier === "axel") return current === "axel" || current === "axel courier";
+      if (input.courier === "propio") return current === "propio" || current === "motorizado propio";
+      return current === input.courier;
+    }).length;
+    const repetition = canRepeatCourier({
+      courier: MANUAL_COURIER_LABEL[input.courier],
+      operation,
+      priorOutputsWithCourier,
+      totalOutputs: outputs.length,
+    });
+    if (!repetition.allowed) {
+      return {
+        error:
+          repetition.reason === "max_outputs"
+            ? "El pedido ya alcanzó el máximo de cinco salidas."
+            : `${MANUAL_COURIER_LABEL[input.courier]} ya fue usado y no puede repetirse en esta modalidad.`,
+      };
+    }
   }
 
   if (input.courier === "olva") {
@@ -318,7 +338,9 @@ export async function createManualRouteOutput(
     guideCode,
     shipmentId,
     reason: note || null,
-    note: `${outputCode} creada para ${MANUAL_COURIER_LABEL[input.courier]}; salida prevista ${dispatchDate}.`,
+    note: tbd
+      ? `${outputCode} creada sin courier definido; se fijará al entrar a una ruta. Salida prevista ${dispatchDate}.`
+      : `${outputCode} creada para ${MANUAL_COURIER_LABEL[input.courier]}; salida prevista ${dispatchDate}.`,
     payload: {
       outputCode,
       dispatchDate,
@@ -331,7 +353,7 @@ export async function createManualRouteOutput(
   revalidatePath(MASTER_PATH);
   revalidatePath("/dashboard/pedidos/despacho");
   return {
-    notice: `${outputCode} creada. Imprime el rótulo y entrégala a almacén para el escaneo de preparación.${eventError ? ` Aviso: no se pudo escribir el evento de auditoría (${eventError}).` : ""}`,
+    notice: `${outputCode} creada. Imprime el rótulo y entrégala a almacén para el escaneo de preparación.${tbd ? " El courier se fija cuando la caja entre a una ruta en la mesa de despacho." : ""}${eventError ? ` Aviso: no se pudo escribir el evento de auditoría (${eventError}).` : ""}`,
     shipmentId,
     outputCode,
     labelUrl,

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import QRCode from "qrcode";
 import { createServerSupabase } from "@/lib/db";
-import { outputDisplayCode } from "@/lib/shipment-output";
+import { isCourierTbd, outputDisplayCode } from "@/lib/shipment-output";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,6 +60,9 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ sh
     delivery_reference: string | null;
   };
   const visibleCode = outputDisplayCode(row.output_code, row.courier) || row.guide_code;
+  // Sin courier decidido, el rótulo lo dice: ese paquete todavía puede ir a
+  // cualquier ruta, y el courier se fija al entrar a una (MOM §4).
+  const courierLabel = isCourierTbd(row.courier) ? "Por definir" : row.courier;
   const payload = row.qr_token || row.output_code || row.guide_code;
   const destination = [row.district, row.province, row.region].filter(Boolean).join(" · ");
 
@@ -81,7 +84,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ sh
 <body>
   <div class="toolbar"><button type="button" onclick="window.print()">Imprimir rótulo</button></div>
   <main class="label">
-    <header class="top"><div><div class="brand">Kapta · salida física</div><div class="code">${escapeHtml(visibleCode)}</div></div><div class="courier">${escapeHtml(row.courier)}</div></header>
+    <header class="top"><div><div class="brand">Kapta · salida física</div><div class="code">${escapeHtml(visibleCode)}</div></div><div class="courier">${escapeHtml(courierLabel)}</div></header>
     <section class="grid">
       <div class="field"><div class="k">Pedido Shopify</div><div class="v">${escapeHtml(row.order_name || "—")}</div></div>
       <div class="field"><div class="k">Celular</div><div class="v">${escapeHtml(row.customer_phone || "—")}</div></div>
