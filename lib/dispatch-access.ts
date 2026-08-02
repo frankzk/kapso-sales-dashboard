@@ -147,3 +147,22 @@ export async function getDispatchWorkspaceData(): Promise<DispatchWorkspaceData>
     ),
   };
 }
+
+// Motorizados activos visibles para el usuario (RLS acota por organización).
+// Alimenta el desplegable de motorizado en "Nueva ruta" de la Mesa de despacho.
+export interface DispatchRider {
+  id: string;
+  full_name: string;
+  courier: string | null;
+  store_id: string | null;
+}
+
+export async function getDispatchRiders(): Promise<DispatchRider[]> {
+  const sb = await createServerSupabase();
+  const { data } = await sb
+    .from("riders")
+    .select("id, full_name, courier, store_id")
+    .eq("active", true)
+    .order("full_name");
+  return (data as DispatchRider[]) ?? [];
+}

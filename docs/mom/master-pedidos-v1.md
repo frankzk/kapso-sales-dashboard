@@ -1164,3 +1164,15 @@ separada del usuario de acceso.
 - Gestionar motorizados en Equipo: owner/admin (`riders.manage`). El alta rápida
   por nombre desde Liquidaciones sigue disponible bajo `settlements.manage`.
 
+### En la Mesa de despacho
+
+- El courier de la ruta se elige de una lista (Aliclik, Swayp, Shalom, Tanders,
+  Axel, Urpi, Olva, propios). Swayp se guarda con el token legado `fenix` para
+  que calce con `shipments.courier`, pero se muestra como «Swayp (antes Fénix)».
+- El motorizado se elige de una lista **filtrada por el courier** y solo con
+  fichas activas. Siempre existe «Sin asignar» (p. ej. Urpi, Swayp o Tanders
+  cuando no se conoce al conductor).
+- El manifiesto guarda `rider_id` y **copia el nombre** en `driver_name` al
+  crear la ruta. Si después se renombra o desactiva la ficha, las rutas ya
+  creadas no cambian: conservan a quién recibió físicamente los paquetes (§6.3).
+
