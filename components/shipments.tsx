@@ -1002,20 +1002,27 @@ function SortableShipmentHeader({
   const active = sort?.key === sortKey;
   const ariaSort = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
   return (
-    // El borde y el fondo van en la CELDA, no en la fila: al quedar fija solo
-    // la celda, un borde puesto en el <tr> se iría con el scroll y las filas se
-    // verían por debajo del encabezado.
+    // Fondo gris y separador van en la CELDA, que es lo único que queda fijo:
+    // puestos en el <tr> se irían con el scroll y las filas se verían por
+    // debajo del encabezado.
+    //
+    // La línea es una sombra interna, NO un `border-b`: Tailwind fuerza
+    // `border-collapse: collapse`, y con bordes colapsados el borde le
+    // pertenece a la tabla y no a la celda, así que no viaja con la celda fija
+    // y el separador desaparece al bajar. La sombra sí se pinta con la celda.
     <th
       scope="col"
       aria-sort={ariaSort}
-      className="sticky top-0 z-10 border-b border-slate-200 bg-white px-2 py-1 text-left font-medium first:pl-4 last:pr-4"
+      className="sticky top-0 z-10 bg-slate-100 px-2 py-1 text-left font-medium shadow-[inset_0_-1px_0_#cbd5e1] first:pl-4 last:pr-4"
     >
       <button
         type="button"
         onClick={() => onSort(sortKey)}
         title={`Ordenar por ${label}`}
         className={cn(
-          "group inline-flex min-h-8 w-full items-center gap-1 rounded-md px-2 text-left transition hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
+          // hover un tono por encima del fondo del encabezado (slate-100), que
+          // si no el estado no se notaría.
+          "group inline-flex min-h-8 w-full items-center gap-1 rounded-md px-2 text-left transition hover:bg-slate-200 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
           active && "bg-brand-50 text-brand-700",
         )}
       >
