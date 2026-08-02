@@ -206,7 +206,10 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
 const createManifestSchema = z.object({
   courier: z.string().trim().min(1).max(80),
   routeDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  routeLabel: z.string().trim().min(1).max(120),
+  // Opcional: lo que identifica una ruta es quién se lleva la caja y qué día,
+  // así que sin nombre se usa el del motorizado. Solo hace falta escribirlo
+  // cuando no hay a quién nombrar.
+  routeLabel: z.string().trim().max(120).optional(),
   riderId: z.string().uuid().optional(),
   driverName: z.string().trim().max(120).optional(),
 });
@@ -215,7 +218,7 @@ export async function createDispatchManifest(input: z.input<typeof createManifes
   const perms = await getMasterPermissions();
   if (!perms.can("dispatch.manage")) return { error: "No tienes permiso para crear rutas." };
   const parsed = createManifestSchema.safeParse(input);
-  if (!parsed.success) return { error: "Completa courier, fecha y nombre de la ruta." };
+  if (!parsed.success) return { error: "Completa el courier y la fecha de la ruta." };
   const { sb, user } = await currentUser();
   const { data: store } = await sb.from("stores").select("org_id").limit(1).maybeSingle();
   if (!store?.org_id) return { error: "No tienes una organización disponible." };
@@ -241,12 +244,20 @@ export async function createDispatchManifest(input: z.input<typeof createManifes
   // no tienen motorizado que coteje, así que su ruta se cierra con el nombre de
   // quien recoge en vez de con un segundo escaneo (MOM §5).
   const kind = routeKindForCourier(parsed.data.courier);
+
+  // Sin nombre escrito, la ruta se llama como quien se la lleva. Si tampoco hay
+  // persona no queda nada que la identifique, y ahí sí hace falta escribirlo.
+  const routeLabel = parsed.data.routeLabel || driverName;
+  if (!routeLabel) {
+    return { error: "Elige un motorizado o escribe un nombre para la ruta." };
+  }
+
   const { data, error } = await admin.from("dispatch_manifests").insert({
     org_id: store.org_id,
     courier: parsed.data.courier,
     kind,
     route_date: parsed.data.routeDate,
-    route_label: parsed.data.routeLabel,
+    route_label: routeLabel,
     rider_id: riderId,
     driver_name: driverName,
     created_by: user.id,

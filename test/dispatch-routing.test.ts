@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { operationFitsCourier, routeKindForCourier } from "@/lib/dispatch-routing";
-import { deriveDispatchManifestState, needsRiderCheck } from "@/lib/dispatch";
+import { deriveDispatchManifestState, needsRiderCheck, routeDay, routeName } from "@/lib/dispatch";
 
 describe("routeKindForCourier", () => {
   it("los que reparten con motorizado son rutas de reparto", () => {
@@ -66,6 +66,33 @@ describe("operationFitsCourier", () => {
 
   it("un courier fuera del catálogo no inventa restricciones", () => {
     expect(operationFitsCourier("courier nuevo", "provincia_cod").ok).toBe(true);
+  });
+});
+
+describe("routeName (el texto que evita mandar los paquetes con el motorizado equivocado)", () => {
+  it("es la persona y la fecha; la zona NO entra", () => {
+    // "Surco" o "San Isidro" no distinguen nada —dos rutas del mismo día pueden
+    // cubrir la misma zona— y alargar la frase le resta fuerza a lo único que no
+    // se puede confundir, que es quién se lleva la caja.
+    expect(
+      routeName({ driver_name: "Roy", received_by: null, route_label: "Surco", route_date: "2026-08-03" }),
+    ).toBe("Roy · 03/08");
+  });
+
+  it("en una entrega al courier nombra a quien recogió", () => {
+    expect(
+      routeName({ driver_name: null, received_by: "Rosa (Aliclik)", route_label: "Recojo", route_date: "2026-08-03" }),
+    ).toBe("Rosa (Aliclik) · 03/08");
+  });
+
+  it("sin persona cae al nombre de la ruta: una fecha sola no identifica nada", () => {
+    expect(
+      routeName({ driver_name: null, received_by: null, route_label: "Surco", route_date: "2026-08-03" }),
+    ).toBe("Surco · 03/08");
+  });
+
+  it("la fecha se lee como en la tarjeta", () => {
+    expect(routeDay("2026-12-25")).toBe("25/12");
   });
 });
 

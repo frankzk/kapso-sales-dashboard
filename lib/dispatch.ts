@@ -32,6 +32,33 @@ export function needsRiderCheck(kind: DispatchRouteKind): boolean {
   return kind === "reparto";
 }
 
+/** Fecha corta de una ruta, como se lee en su tarjeta: `03/08`. */
+export function routeDay(routeDate: string): string {
+  return routeDate.slice(5).split("-").reverse().join("/");
+}
+
+/**
+ * Cómo se nombra una ruta dentro de una frase: «Roy · 03/08».
+ *
+ * Es el texto de la confirmación antes de asignar, y lo que identifica una ruta
+ * es **quién se lleva la caja y qué día**. El nombre de la zona («Surco», «San
+ * Isidro») se omite a propósito: no distingue nada —dos rutas del mismo día
+ * pueden cubrir la misma zona— y alargar la frase resta fuerza a lo único que
+ * importa no confundir, que es la persona.
+ *
+ * Sin persona asignada sí se cae al nombre de la ruta: una fecha sola no
+ * identifica nada.
+ */
+export function routeName(manifest: {
+  driver_name?: string | null;
+  received_by?: string | null;
+  route_label: string;
+  route_date: string;
+}): string {
+  const who = manifest.received_by ?? manifest.driver_name;
+  return [who || manifest.route_label, routeDay(manifest.route_date)].filter(Boolean).join(" · ");
+}
+
 export interface DispatchProgressItem {
   removed_at?: string | null;
   office_checked_at?: string | null;
