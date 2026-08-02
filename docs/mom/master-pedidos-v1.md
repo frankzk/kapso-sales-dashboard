@@ -1112,6 +1112,11 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 
 ## 25. User journey del drawer del Master
 
+El Master trae **una página de 100 pedidos**, no la lista entera. El contador
+dice el total de la macroetapa y el paginador aparece en **todas** las vistas, no
+solo en la de búsqueda: enseñar 100 de 2.976 sin forma de llegar al resto es
+esconder el trabajo pendiente.
+
 **La tabla del Master es para barrer; el drawer es para trabajar un pedido.** La
 tabla solo lleva lo que sirve para localizar y priorizar: quién, dónde, en qué
 macroetapa y desde cuándo. El detalle de un pedido —modalidad, courier actual,
@@ -1308,6 +1313,17 @@ rótulos.
 - El QR impreso identifica la salida y es el que se escanea en ambos cotejos
   (§6.3). El contenido del rótulo se lee bajo RLS: una salida de otra tienda no
   aparece aunque se manipule la URL.
+
+### La cabecera del rótulo
+
+Arriba va **el nombre de la tienda** —Kenku Perú, Aurela— y debajo el código de
+salida. La tienda es la marca que el cliente reconoce; «Kapta» no le dice nada a
+quien recibe la caja.
+
+El courier **no** se imprime en la cabecera: cuando está decidido ya viaja dentro
+del código (`KP123-S01-ALICLIK`), y cuando no lo está, un «POR DEFINIR» grande en
+la etiqueta es ruido — quién lo decide es la Mesa de despacho, no quien lee el
+rótulo.
 
 ### El monto a cobrar
 

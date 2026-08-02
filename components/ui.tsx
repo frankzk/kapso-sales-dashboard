@@ -64,18 +64,33 @@ export const STICKY_HEAD =
   "[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-slate-50 [&_th]:shadow-[inset_0_-1px_0_#cbd5e1]";
 
 /**
- * Capa de cualquier desplegable que se abra SOBRE una tabla.
+ * La escalera de capas de una tabla, de abajo hacia arriba y en un solo sitio.
  *
- * POR QUÉ EXISTE. Los popovers de filtro usaban `z-10`, el mismo que las celdas
- * de `STICKY_HEAD`. A igual z-index gana el último en el DOM, y la tabla va
- * después de los filtros: el encabezado fijo tapaba la lista de opciones justo
- * al desplegarla. Hay que quedar por encima también de la esquina congelada del
- * Master, que usa z-20 en línea.
+ * POR QUÉ EXISTE. Son cuatro capas repartidas entre un `class` compartido, dos
+ * estilos en línea y los popovers de cada módulo. Cada vez que se tocó una
+ * suelta apareció el mismo defecto: dos capas con el MISMO número, y a igual
+ * z-index gana el último en el DOM — que es siempre la tabla, porque va después
+ * de los filtros. Primero el encabezado fijo tapó los desplegables; al
+ * arreglarlo con z-30, la esquina congelada del Master (que ya estaba en 30)
+ * los siguió tapando, pero solo los de la izquierda. Escrita entera, la
+ * escalera se lee de un vistazo y los empates saltan a la vista.
  *
- * Todo desplegable que conviva con una tabla usa esta constante, no un número
- * suelto: el número correcto depende de otras dos capas y no se adivina desde
- * el sitio donde se escribe el popover.
+ * El z-index de las celdas congeladas va EN LÍNEA a propósito: `STICKY_HEAD`
+ * aplica su z con un selector descendiente (`.clase th`), de más especificidad
+ * que una clase suelta, y ganaría.
  */
+export const TABLE_LAYER = {
+  /** Celda congelada del cuerpo: por debajo de cualquier encabezado. */
+  frozenCell: 5,
+  /** Encabezado fijo (lo pone `STICKY_HEAD` como clase). */
+  head: 10,
+  /** Esquina congelada: encabezado Y columna fija a la vez. */
+  frozenHead: 20,
+  /** Desplegables abiertos sobre la tabla. */
+  popover: 30,
+} as const;
+
+/** Capa de cualquier desplegable que se abra SOBRE una tabla. Ver `TABLE_LAYER`. */
 export const OVER_TABLE_Z = "z-30";
 
 export function Card({

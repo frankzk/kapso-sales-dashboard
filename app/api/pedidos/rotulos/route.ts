@@ -11,7 +11,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import QRCode from "qrcode";
 import { createServerSupabase } from "@/lib/db";
-import { isCourierTbd, outputDisplayCode } from "@/lib/shipment-output";
+import { outputDisplayCode } from "@/lib/shipment-output";
 import { buildRotulosPdf, type RotuloData } from "@/lib/labels/rotulo-pdf";
 import { selectLabelsForOrders, type ShipmentForLabel } from "@/lib/labels/pick-shipment";
 import { labelItemsFor } from "@/lib/labels/line-items";
@@ -23,10 +23,11 @@ export const dynamic = "force-dynamic";
 const MAX_LABELS = 200;
 
 const LABEL_COLUMNS =
-  "id,order_id,courier,guide_code,output_code,output_number,qr_token,custody_state,created_at," +
+  "id,order_id,store_id,courier,guide_code,output_code,output_number,qr_token,custody_state,created_at," +
   "order_name,customer_name,customer_phone,product,district,province,region,delivery_address,delivery_reference";
 
 type LabelRow = ShipmentForLabel & {
+  store_id: string;
   order_name: string | null;
   customer_name: string | null;
   customer_phone: string | null;
@@ -128,15 +129,24 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // La tienda es la marca que el cliente reconoce; "Kapta" no le dice nada a
+  // nadie. Va en la cabecera del rótulo, sobre el código de salida.
+  const storeNames = new Map<string, string>();
+  const storeIds = Array.from(new Set(selected.map((row) => row.store_id).filter(Boolean)));
+  if (storeIds.length) {
+    const { data: storeRows } = await sb.from("stores").select("id,name").in("id", storeIds);
+    for (const store of (storeRows as { id: string; name: string | null }[] | null) ?? []) {
+      if (store.name) storeNames.set(store.id, store.name);
+    }
+  }
+
   const labels: RotuloData[] = await Promise.all(
     selected.map(async (row) => {
       const payload = row.qr_token || row.output_code || row.guide_code;
       const money = row.order_id ? moneyByOrder.get(row.order_id) : undefined;
       return {
         code: outputDisplayCode(row.output_code, row.courier) || row.guide_code,
-        // Una salida sin courier decidido lo dice en el rótulo: el operador ve
-        // que ese paquete todavía puede ir a cualquier ruta.
-        courier: isCourierTbd(row.courier) ? "Por definir" : row.courier,
+        storeName: storeNames.get(row.store_id) ?? null,
         orderName: row.order_name,
         customerName: row.customer_name,
         customerPhone: row.customer_phone,

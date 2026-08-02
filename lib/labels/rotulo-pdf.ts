@@ -33,7 +33,8 @@ const LINE = rgb(0.8, 0.84, 0.88); // slate-300
 export interface RotuloData {
   /** Código visible de la salida (output_code o guide_code). */
   code: string;
-  courier: string;
+  /** Tienda del pedido: es la marca que el cliente reconoce, no "Kapta". */
+  storeName: string | null;
   orderName: string | null;
   customerName: string | null;
   customerPhone: string | null;
@@ -517,31 +518,27 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
   const innerW = PAGE_W - PAD * 2;
   let y = PAGE_H - PAD;
 
-  // Cabecera: marca + código grande a la izquierda, courier a la derecha.
-  page.drawText("KAPTA - SALIDA FISICA", {
+  // Cabecera: la TIENDA sobre el código de salida.
+  //
+  // Antes decía "KAPTA - SALIDA FISICA" —que no le dice nada a nadie: quien
+  // recibe la caja no conoce a Kapta— y el courier arriba a la derecha. El
+  // courier ya viaja dentro del código cuando está decidido (KP123-S01-ALICLIK)
+  // y, cuando no lo está, un "POR DEFINIR" grande en el rótulo es ruido: quien
+  // lo decide es la Mesa de despacho, no quien lee la etiqueta.
+  const store = sanitizeWinAnsi(data.storeName).toUpperCase();
+  page.drawText(store || "-", {
     x: PAD,
-    y: y - 7,
-    size: 6.5,
-    font: fonts.bold,
-    color: MUTED,
-  });
-
-  const courier = sanitizeWinAnsi(data.courier).toUpperCase();
-  const courierSize = 11;
-  page.drawText(courier, {
-    x: PAGE_W - PAD - fonts.bold.widthOfTextAtSize(courier, courierSize),
-    y: y - 9,
-    size: courierSize,
+    y: y - 8,
+    size: 8.5,
     font: fonts.bold,
     color: INK,
   });
 
-  // El código se achica si es largo, para no invadir el courier.
+  // Sin nada a la derecha, el código puede usar el ancho completo.
   const code = sanitizeWinAnsi(data.code) || "-";
   let codeSize = 17;
-  const codeMax = innerW * 0.62;
-  while (codeSize > 9 && fonts.bold.widthOfTextAtSize(code, codeSize) > codeMax) codeSize -= 0.5;
-  y -= 7 + 4.5 * MM;
+  while (codeSize > 9 && fonts.bold.widthOfTextAtSize(code, codeSize) > innerW) codeSize -= 0.5;
+  y -= 8 + 4 * MM;
   page.drawText(code, { x: PAD, y: y - codeSize, size: codeSize, font: fonts.bold, color: INK });
 
   y -= codeSize + 3 * MM;
