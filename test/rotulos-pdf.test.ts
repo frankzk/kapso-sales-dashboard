@@ -139,7 +139,7 @@ describe("buildRotulosPdf", () => {
       orderName: "#KP1",
       customerName: "Ana Pérez",
       customerPhone: "51999",
-      product: "Colágeno x2",
+      items: [{ quantity: 2, name: "Colágeno", variant: null }],
       destination: "Surco / Lima / Lima",
       address: "Av. Siempre Viva 742",
       reference: "Portón azul",
@@ -174,8 +174,13 @@ describe("buildRotulosPdf", () => {
         orderName: "#KP999999999",
         customerName: "María Fernanda de los Ángeles Rodríguez Villavicencio",
         customerPhone: "51999888777",
-        product:
-          "Colágeno Hidrolizado 300g x3, Magnesio Quelado 120 cápsulas x2, Omega 3 1000mg x4, Vitamina D3 K2 x1, Multivitamínico x2",
+        items: [
+          { quantity: 3, name: "Colágeno Hidrolizado 300g", variant: null },
+          { quantity: 2, name: "Magnesio Quelado 120 cápsulas", variant: "Sabor naranja" },
+          { quantity: 4, name: "Omega 3 1000mg", variant: null },
+          { quantity: 1, name: "Vitamina D3 K2", variant: null },
+          { quantity: 2, name: "Multivitamínico", variant: null },
+        ],
         destination: "San Juan de Lurigancho / Lima / Lima Metropolitana",
         address:
           "Avenida Próceres de la Independencia 3450, Urbanización Las Flores de Lurigancho, Manzana J Lote 14, tercer piso",
@@ -189,6 +194,35 @@ describe("buildRotulosPdf", () => {
     expect(parsed.getPageCount()).toBe(1);
   });
 
+
+  it("una cantidad mayor a 1 se imprime más grande que la de 1 unidad", async () => {
+    // Empacar una unidad cuando iban dos es un reenvío completo: el número tiene
+    // que saltar a la vista, no leerse igual que el resto de la línea.
+    const qrPng = new Uint8Array(await QRCode.toBuffer("q", { type: "png", width: 120 }));
+    const base = {
+      code: "KP1-S01",
+      courier: "propio",
+      orderName: "#KP1",
+      customerName: "Ana",
+      customerPhone: "519",
+      destination: "Surco",
+      address: "Av. 1",
+      reference: null,
+      qrPayload: "q",
+      qrPng,
+    };
+    const uno = await buildRotulosPdf([
+      { ...base, items: [{ quantity: 1, name: "Producto", variant: null }] },
+    ]);
+    const dos = await buildRotulosPdf([
+      { ...base, items: [{ quantity: 2, name: "Producto", variant: null }] },
+    ]);
+    // El PDF con la cantidad destacada usa un tamaño de fuente extra, así que
+    // referencia una fuente más que el de una sola unidad.
+    expect(dos.byteLength).not.toBe(uno.byteLength);
+    expect((await PDFDocument.load(dos)).getPageCount()).toBe(1);
+  });
+
   it("no falla con datos vacíos ni con texto fuera de WinAnsi", async () => {
     const qrPng = new Uint8Array(await QRCode.toBuffer("x", { type: "png", width: 120 }));
     const pdf = await buildRotulosPdf([
@@ -198,7 +232,7 @@ describe("buildRotulosPdf", () => {
         orderName: null,
         customerName: "🙂 Cliente",
         customerPhone: null,
-        product: null,
+        items: [],
         destination: null,
         address: null,
         reference: null,

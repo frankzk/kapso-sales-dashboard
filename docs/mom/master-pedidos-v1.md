@@ -1203,6 +1203,24 @@ rótulos.
   (§6.3). El contenido del rótulo se lee bajo RLS: una salida de otra tienda no
   aparece aunque se manipule la URL.
 
+### Los productos del rótulo
+
+El rótulo lo lee quien arma la caja, así que la lista de productos responde dos
+cosas de un vistazo: **cuántos** y **cuál**.
+
+- Va en dos columnas: **cantidad** y **producto**.
+- Una cantidad **mayor a uno se imprime más grande** que una de una unidad.
+  Empacar una unidad cuando iban dos es un reenvío completo, así que el número
+  no puede leerse igual que el resto de la línea.
+- La **variante** (talla, color, presentación) va en su propia línea. Hay
+  pedidos con varias líneas del mismo título que solo se distinguen por ahí, y
+  sin ella el almacén no sabe qué empacar.
+- Las líneas salen del pedido de Shopify, que es la fuente de la cantidad y de
+  la variante. El texto guardado en la salida solo se usa cuando la salida no
+  está vinculada a un pedido.
+- Si no caben todas las líneas se indica cuántas faltan: el rótulo nunca calla
+  que hay más producto del que muestra.
+
 ### Pedir el rótulo crea la salida
 
 El almacén no pide «una salida»: pide **el rótulo**. La salida es la
