@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Card, cn, EmptyState, STICKY_HEAD, TABLE_WRAP_PAGE_X } from "@/components/ui";
+import { Card, cn, EmptyState, STICKY_HEAD, TABLE_LAYER, TABLE_WRAP_PAGE_X } from "@/components/ui";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
@@ -1429,18 +1429,16 @@ function MasterTable({
   /** Props de una celda congelada. El fondo se HEREDA de la fila: así sigue el
    *  hover y el resaltado de selección, que en un color fijo se perderían. */
   //
-  // El z-index va EN LÍNEA a propósito: STICKY_HEAD aplica su z-10 con un
-  // selector descendiente (`.clase th`), que tiene más especificidad que una
-  // clase suelta como `z-20`; ganaría el z-10 y las celdas congeladas del
-  // cuerpo taparían al encabezado en la esquina. El estilo en línea gana
-  // siempre. Cuerpo < encabezado normal (z-10) < esquina congelada.
+  // Las capas salen de TABLE_LAYER, no de números sueltos: la esquina congelada
+  // estaba en 30, empatada con los desplegables de filtro, y los tapaba — pero
+  // solo los de la izquierda, que son los que caen encima de ella.
   const frozen = (key: keyof typeof FROZEN_W, header = false) => ({
     className: cn("sticky", header ? "bg-slate-50" : "bg-inherit"),
     style: {
       left: left[key],
       width: FROZEN_W[key],
       minWidth: FROZEN_W[key],
-      zIndex: header ? 30 : 5,
+      zIndex: header ? TABLE_LAYER.frozenHead : TABLE_LAYER.frozenCell,
     },
   });
 
