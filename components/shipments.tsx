@@ -874,15 +874,15 @@ function ShipmentTable({
   }
 
   return (
-    // El encabezado va sticky. Para que se pegue hace falta que ESTE div sea el
-    // contenedor de scroll: con solo `overflow-x-auto` el navegador convierte el
-    // eje Y a `auto` igual, el div se vuelve scrollport sin altura propia y el
-    // sticky deja de tener contra qué pegarse (queda inerte y el encabezado se
-    // va de pantalla). Acotando la altura, el hilo scrollea acá dentro y el
-    // encabezado queda fijo — y de paso los filtros de arriba siguen visibles.
-    // `rounded-2xl` acompaña al de la Card: al scrollear acá dentro, el
-    // contenido se recorta con el mismo radio y no cuadra las esquinas.
-    <div className="max-h-[70vh] overflow-auto rounded-2xl">
+    // Scrollea la PÁGINA (no un contenedor interno): lo de arriba se va y el
+    // encabezado queda pegado al tope, como en Shopify.
+    //
+    // Por eso en escritorio el eje X va `visible`: cualquier `overflow` que no
+    // sea visible convierte a este div en scrollport — el navegador pasa el eje
+    // Y a `auto` aunque solo declares el X — y ahí el sticky pierde contra qué
+    // pegarse. En móvil se conserva el scroll horizontal (la tabla no entra) a
+    // costa del sticky, que es el intercambio correcto en pantalla chica.
+    <div className="overflow-x-auto md:overflow-x-visible">
       <table className="w-full text-sm">
         <thead>
           <tr className="text-xs text-slate-500">
