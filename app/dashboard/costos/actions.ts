@@ -309,3 +309,34 @@ export async function loadCosts(orgId: string): Promise<CostsSnapshot> {
     additionalCosts: (additionalCosts.data ?? []) as Record<string, unknown>[],
   };
 }
+
+// ---------------------------------------------------------------------------
+// Catálogo de productos de Shopify
+// ---------------------------------------------------------------------------
+
+export interface ShopifyProduct {
+  sku: string;
+  productName: string | null;
+  orderCount: number;
+}
+
+/**
+ * Productos vistos en los pedidos de Shopify de la organización (Kapta no crea
+ * productos; ver 0094_org_shopify_products). Se lee con service role porque
+ * agrega entre todas las tiendas de la org; por eso se exige rol de
+ * administrador de esa organización antes de invocar la función.
+ */
+export async function loadShopifyProducts(orgId: string): Promise<ShopifyProduct[]> {
+  const orgs = await getAdminOrgs();
+  const membership = orgs.find((m) => m.org_id === orgId);
+  if (!membership || (membership.role !== "owner" && membership.role !== "admin")) return [];
+
+  const admin = createAdminSupabase();
+  const { data, error } = await admin.rpc("org_shopify_products", { p_org_id: orgId });
+  if (error || !data) return [];
+  return (data as { sku: string; product_name: string | null; order_count: number }[]).map((r) => ({
+    sku: r.sku,
+    productName: r.product_name,
+    orderCount: Number(r.order_count) || 0,
+  }));
+}

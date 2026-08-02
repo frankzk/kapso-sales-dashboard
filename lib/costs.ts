@@ -332,3 +332,123 @@ export function costDay(
 ): string {
   return (row.last_movement_at ?? row.order_created_at ?? fallback).slice(0, 10);
 }
+
+// ---------------------------------------------------------------------------
+// Costos de producto: vista por producto para la pestaña «Costos de productos»
+// ---------------------------------------------------------------------------
+//
+// Kapta no crea productos: la lista viene de Shopify (orders.line_items). Esta
+// función cruza ese catálogo con los `product_costs` configurados y arma, por
+// producto, su costo vigente y la línea de tiempo de cambios. Es pura para poder
+// probarla; la UI solo la renderiza.
+
+/** Fila de `product_costs` tal como la lee la pantalla. */
+export interface ProductCostRow {
+  id: string;
+  store_id: string | null;
+  sku: string;
+  product_name: string | null;
+  supplier: string | null;
+  batch: string | null;
+  unit_cost: number;
+  effective_from: string;
+  effective_to: string | null;
+}
+
+/** Producto tal como aparece en los pedidos de Shopify. */
+export interface ShopifyProductEntry {
+  sku: string;
+  productName: string | null;
+  orderCount: number;
+}
+
+export interface ProductCostView {
+  /** SKU representativo (el de Shopify si existe; si no, el del costo). */
+  sku: string;
+  productName: string | null;
+  /** ¿El SKU aparece hoy en pedidos de Shopify? */
+  fromShopify: boolean;
+  orderCount: number;
+  /** Costo unitario vigente (periodo sin fecha de fin) para el ámbito pedido. */
+  currentCost: number | null;
+  /** Periodos de costo del ámbito, del más reciente al más antiguo. */
+  history: ProductCostRow[];
+}
+
+/** Clave de agrupación de SKU: sin acentos, sin espacios extremos, minúsculas. */
+export function skuKey(sku: string | null | undefined): string {
+  return (sku ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Cruza el catálogo de Shopify con los costos configurados y arma una vista por
+ * producto para un ámbito de tienda (`storeId` null = tarifa general).
+ *
+ * - Solo considera los costos del ámbito pedido (misma tienda, o generales).
+ * - Incluye también SKU que tienen costo pero ya no aparecen en Shopify, para no
+ *   ocultar nada configurado.
+ * - El costo vigente es el periodo abierto (`effective_to` null) más reciente.
+ * - Los productos de Shopify sin costo aparecen con `currentCost` null.
+ */
+export function buildProductCostViews(
+  catalog: readonly ShopifyProductEntry[],
+  costs: readonly ProductCostRow[],
+  storeId: string | null,
+): ProductCostView[] {
+  const scope = storeId ?? null;
+  const inScope = costs.filter((c) => (c.store_id ?? null) === scope);
+
+  const historyByKey = new Map<string, ProductCostRow[]>();
+  for (const row of inScope) {
+    const key = skuKey(row.sku);
+    const list = historyByKey.get(key) ?? [];
+    list.push(row);
+    historyByKey.set(key, list);
+  }
+  for (const list of historyByKey.values()) {
+    list.sort((a, b) => (a.effective_from < b.effective_from ? 1 : -1));
+  }
+
+  const catalogByKey = new Map<string, ShopifyProductEntry>();
+  for (const p of catalog) {
+    const key = skuKey(p.sku);
+    if (!key) continue;
+    const prev = catalogByKey.get(key);
+    if (!prev || p.orderCount > prev.orderCount) catalogByKey.set(key, p);
+  }
+
+  const keys = new Set<string>([...catalogByKey.keys(), ...historyByKey.keys()]);
+  const views: ProductCostView[] = [];
+
+  for (const key of keys) {
+    if (!key) continue;
+    const catalogEntry = catalogByKey.get(key) ?? null;
+    const history = historyByKey.get(key) ?? [];
+    const open = history.filter((r) => !r.effective_to);
+    const current = open.length ? open[0]! : null;
+    const nameFromCost = history.find((r) => r.product_name)?.product_name ?? null;
+
+    views.push({
+      sku: catalogEntry?.sku ?? history[0]?.sku ?? key,
+      productName: catalogEntry?.productName ?? nameFromCost,
+      fromShopify: catalogEntry !== null,
+      orderCount: catalogEntry?.orderCount ?? 0,
+      currentCost: current ? current.unit_cost : null,
+      history,
+    });
+  }
+
+  // Primero los productos de Shopify (por volumen de pedidos), luego los SKU
+  // que solo existen como costo huérfano; dentro de cada grupo, alfabético.
+  views.sort((a, b) => {
+    if (a.fromShopify !== b.fromShopify) return a.fromShopify ? -1 : 1;
+    if (a.orderCount !== b.orderCount) return b.orderCount - a.orderCount;
+    return a.sku.localeCompare(b.sku);
+  });
+
+  return views;
+}
