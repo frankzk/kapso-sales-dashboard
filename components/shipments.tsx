@@ -874,10 +874,18 @@ function ShipmentTable({
   }
 
   return (
-    <div className="overflow-x-auto">
+    // El encabezado va sticky. Para que se pegue hace falta que ESTE div sea el
+    // contenedor de scroll: con solo `overflow-x-auto` el navegador convierte el
+    // eje Y a `auto` igual, el div se vuelve scrollport sin altura propia y el
+    // sticky deja de tener contra qué pegarse (queda inerte y el encabezado se
+    // va de pantalla). Acotando la altura, el hilo scrollea acá dentro y el
+    // encabezado queda fijo — y de paso los filtros de arriba siguen visibles.
+    // `rounded-2xl` acompaña al de la Card: al scrollear acá dentro, el
+    // contenido se recorta con el mismo radio y no cuadra las esquinas.
+    <div className="max-h-[70vh] overflow-auto rounded-2xl">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-slate-200 text-xs text-slate-500">
+          <tr className="text-xs text-slate-500">
             <SortableShipmentHeader label="Guía" sortKey="guide" sort={sort} onSort={toggleSort} />
             {stores.length > 1 && (
               <SortableShipmentHeader label="Tienda" sortKey="store" sort={sort} onSort={toggleSort} />
@@ -994,7 +1002,14 @@ function SortableShipmentHeader({
   const active = sort?.key === sortKey;
   const ariaSort = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
   return (
-    <th scope="col" aria-sort={ariaSort} className="px-2 py-1 text-left font-medium first:pl-4 last:pr-4">
+    // El borde y el fondo van en la CELDA, no en la fila: al quedar fija solo
+    // la celda, un borde puesto en el <tr> se iría con el scroll y las filas se
+    // verían por debajo del encabezado.
+    <th
+      scope="col"
+      aria-sort={ariaSort}
+      className="sticky top-0 z-10 border-b border-slate-200 bg-white px-2 py-1 text-left font-medium first:pl-4 last:pr-4"
+    >
       <button
         type="button"
         onClick={() => onSort(sortKey)}
