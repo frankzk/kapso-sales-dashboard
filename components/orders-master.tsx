@@ -35,6 +35,7 @@ import { shalomGuideIsCancelable } from "@/lib/shalom/draft";
 import {
   addOrderComment,
   clearOrderGeo,
+  createManualRouteOutputsBulk,
   loadOrderDetail,
   loadOrderGeo,
   registerReturn,
@@ -42,8 +43,11 @@ import {
   relinkGuide,
   setOrderStatus,
   updateOrderGeo,
+  type BulkRouteOutputFailure,
+  type ManualRouteCourier,
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
+import { limaTodayKey } from "@/lib/shipments";
 import {
   emptyFilters,
   hasActiveFilters,
@@ -444,6 +448,12 @@ export function OrdersMasterBoard({
   // La página llega filtrada y ordenada; aquí ya no se recorta nada.
   const listed = rows;
   const shown = rows;
+  // Para poder nombrar los pedidos en el reporte de una acción en lote: la
+  // acción devuelve ids, y "#KP125756 falló" es accionable, "un uuid" no.
+  const orderNames = useMemo(
+    () => new Map(rows.map((r) => [r.order_id, r.order_name ?? r.order_id])),
+    [rows],
+  );
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -835,7 +845,16 @@ export function OrdersMasterBoard({
         />
       )}
 
-      <BulkBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} />
+      <BulkBar
+        selectedIds={selectedIds}
+        orderNames={orderNames}
+        canEdit={canEdit}
+        onClear={() => setSelectedIds(new Set())}
+        onCreated={() => {
+          setSelectedIds(new Set());
+          router.refresh();
+        }}
+      />
     </div>
   );
 }
@@ -1063,49 +1082,111 @@ function AgencyDays({
  * error (por ejemplo, pedidos que aún no tienen salida), esa respuesta es JSON y
  * no se descarga, así que se comprueba antes con una petición corta.
  */
+const BULK_COURIERS: { key: ManualRouteCourier; label: string }[] = [
+  { key: "propio", label: "Motorizado propio" },
+  { key: "axel", label: "Axel Courier" },
+  { key: "urpi", label: "Urpi" },
+  { key: "olva", label: "Olva (agencia)" },
+];
+
+/** Descarga el PDF que devuelve el endpoint, o el mensaje de error si no hay rótulos. */
+async function downloadRotulos(query: string): Promise<{ error?: string; missing: number }> {
+  const response = await fetch(`/api/pedidos/rotulos?${query}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    return { error: body?.error ?? "No se pudieron generar los rótulos.", missing: 0 };
+  }
+  const missing = Number(response.headers.get("x-rotulos-missing") ?? "0");
+  const blob = await response.blob();
+  const href = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = href;
+  anchor.download =
+    response.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "rotulos.pdf";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(href);
+  return { missing };
+}
+
 function BulkBar({
   selectedIds,
+  orderNames,
+  canEdit,
   onClear,
+  onCreated,
 }: {
   selectedIds: Set<string>;
+  orderNames: Map<string, string>;
+  canEdit: boolean;
   onClear: () => void;
+  onCreated: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [failures, setFailures] = useState<BulkRouteOutputFailure[]>([]);
+  const [showCreate, setShowCreate] = useState(false);
+  const [courier, setCourier] = useState<ManualRouteCourier>("propio");
+  const [dispatchDate, setDispatchDate] = useState(limaTodayKey());
+  const [note, setNote] = useState("");
+
   const count = selectedIds.size;
   if (!count) return null;
 
+  const reset = () => {
+    setError(null);
+    setNotice(null);
+    setFailures([]);
+  };
+
   const download = async () => {
     setBusy(true);
-    setError(null);
+    reset();
     try {
-      const url = `/api/pedidos/rotulos?orders=${Array.from(selectedIds).join(",")}`;
-      const response = await fetch(url);
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        setError(body?.error ?? "No se pudieron generar los rótulos.");
-        return;
-      }
-      const missing = Number(response.headers.get("x-rotulos-missing") ?? "0");
-      const blob = await response.blob();
-      const href = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = href;
-      anchor.download =
-        response.headers
-          .get("content-disposition")
-          ?.match(/filename="([^"]+)"/)?.[1] ?? "rotulos.pdf";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(href);
-      if (missing > 0) {
-        setError(
-          `Se descargaron ${count - missing} rótulos. ${missing} pedido${missing === 1 ? "" : "s"} todavía no tiene${missing === 1 ? "" : "n"} salida creada.`,
+      const result = await downloadRotulos(`orders=${Array.from(selectedIds).join(",")}`);
+      if (result.error) setError(result.error);
+      else if (result.missing > 0) {
+        setNotice(
+          `Se descargaron ${count - result.missing} rótulos. ${result.missing} pedido${result.missing === 1 ? "" : "s"} todavía no tiene${result.missing === 1 ? "" : "n"} salida creada — créala abajo.`,
         );
       }
     } catch {
       setError("No se pudieron generar los rótulos.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Crear salidas y, si salió alguna, bajar sus rótulos en el mismo gesto: es el
+  // flujo real del almacén (elegir la tanda, generarla, imprimirla).
+  const createOutputs = async () => {
+    setBusy(true);
+    reset();
+    try {
+      const result = await createManualRouteOutputsBulk(Array.from(selectedIds), {
+        courier,
+        dispatchDate,
+        note: note.trim() || undefined,
+      });
+      setFailures(result.failed);
+      if (result.error && !result.created.length) {
+        setError(result.error);
+        return;
+      }
+      let message = result.notice ?? "";
+      if (result.created.length) {
+        const pdf = await downloadRotulos(
+          `ids=${result.created.map((c) => c.shipmentId).join(",")}`,
+        );
+        message += pdf.error ? ` No se pudo bajar el PDF: ${pdf.error}` : " Rótulos descargados.";
+      }
+      setNotice(message.trim());
+      setShowCreate(false);
+      onCreated();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudieron crear las salidas.");
     } finally {
       setBusy(false);
     }
@@ -1122,13 +1203,86 @@ function BulkBar({
           disabled={busy}
           className="rounded-lg bg-white px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-slate-100 disabled:opacity-50"
         >
-          {busy ? "Generando…" : "Descargar rótulos (PDF)"}
+          {busy ? "Trabajando…" : "Descargar rótulos (PDF)"}
         </button>
+        {canEdit && (
+          <button
+            onClick={() => {
+              reset();
+              setShowCreate((v) => !v);
+            }}
+            disabled={busy}
+            className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {showCreate ? "Cancelar" : "Crear salidas…"}
+          </button>
+        )}
         <button onClick={onClear} className="text-xs text-slate-300 hover:underline">
           Limpiar
         </button>
       </div>
-      {error && <p className="max-w-md text-xs text-amber-300">{error}</p>}
+
+      {showCreate && (
+        <div className="flex flex-wrap items-end gap-2 border-t border-slate-700 pt-2">
+          <label className="text-[11px] text-slate-300">
+            Courier
+            <select
+              value={courier}
+              onChange={(e) => setCourier(e.target.value as ManualRouteCourier)}
+              className="mt-0.5 block rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+            >
+              {BULK_COURIERS.map((c) => (
+                <option key={c.key} value={c.key}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-[11px] text-slate-300">
+            Sale el
+            <input
+              type="date"
+              value={dispatchDate}
+              onChange={(e) => setDispatchDate(e.target.value)}
+              className="mt-0.5 block rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+            />
+          </label>
+          <label className="text-[11px] text-slate-300">
+            Motivo (si el pedido ya tiene una salida activa)
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Opcional"
+              className="mt-0.5 block w-56 rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+            />
+          </label>
+          <button
+            onClick={createOutputs}
+            disabled={busy}
+            className="rounded-lg bg-white px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-slate-100 disabled:opacity-50"
+          >
+            {busy ? "Creando…" : `Crear ${count} salida${count === 1 ? "" : "s"} e imprimir`}
+          </button>
+        </div>
+      )}
+
+      {error && <p className="max-w-lg text-xs text-red-300">{error}</p>}
+      {notice && <p className="max-w-lg text-xs text-emerald-300">{notice}</p>}
+      {failures.length > 0 && (
+        <details className="max-w-lg text-xs text-amber-300">
+          <summary className="cursor-pointer">
+            {failures.length} pedido{failures.length === 1 ? "" : "s"} sin salida — ver por qué
+          </summary>
+          <ul className="mt-1 space-y-0.5">
+            {failures.map((f) => (
+              <li key={f.orderId}>
+                <span className="font-medium">{orderNames.get(f.orderId) ?? f.orderId}</span>:{" "}
+                {f.error}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }

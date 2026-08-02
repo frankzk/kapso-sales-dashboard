@@ -338,6 +338,92 @@ export async function createManualRouteOutput(
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// Salidas en lote
+// ---------------------------------------------------------------------------
+
+export interface BulkRouteOutputFailure {
+  orderId: string;
+  error: string;
+}
+
+export interface BulkRouteOutputResult extends MasterActionState {
+  /** Salidas creadas, en el orden en que se pidieron los pedidos. */
+  created: { orderId: string; shipmentId: string; outputCode: string }[];
+  /** Pedidos que no pudieron crear su salida, con el motivo exacto de cada uno. */
+  failed: BulkRouteOutputFailure[];
+}
+
+// Cuántos pedidos se procesan por tanda: evita agotar el tiempo del servidor.
+// No se exporta: en un módulo "use server" solo pueden salir funciones async.
+const MAX_BULK_OUTPUTS = 50;
+
+/**
+ * Crea la salida de varios pedidos con el mismo courier y fecha —el caso real
+ * del almacén: "todos estos salen hoy con motorizado propio".
+ *
+ * Reutiliza `createManualRouteOutput` pedido por pedido a propósito: las reglas
+ * (máximo de cinco salidas, motivo obligatorio si ya hay una activa, adelanto de
+ * Olva) son de negocio y no pueden divergir entre la versión individual y la de
+ * lote. El precio es una tanda más lenta; el beneficio, que no existan dos
+ * verdades sobre cuándo se puede crear una salida.
+ *
+ * Un pedido que falla NO detiene a los demás: el resultado dice exactamente cuál
+ * falló y por qué, porque en una tanda de cuarenta el operador necesita saber
+ * qué le quedó pendiente, no un "hubo un error".
+ */
+export async function createManualRouteOutputsBulk(
+  orderIds: string[],
+  input: CreateManualRouteOutputInput,
+): Promise<BulkRouteOutputResult> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) {
+    return { error: "Tu rol no permite crear salidas.", created: [], failed: [] };
+  }
+  const unique = Array.from(new Set(orderIds.filter(Boolean)));
+  if (!unique.length) return { error: "No hay pedidos seleccionados.", created: [], failed: [] };
+  if (unique.length > MAX_BULK_OUTPUTS) {
+    return {
+      error: `Demasiados pedidos de una vez (máximo ${MAX_BULK_OUTPUTS}).`,
+      created: [],
+      failed: [],
+    };
+  }
+
+  const created: BulkRouteOutputResult["created"] = [];
+  const failed: BulkRouteOutputFailure[] = [];
+
+  // Secuencial: cada salida lee y escribe las salidas previas de SU pedido, y
+  // una tanda de cuarenta no justifica pelear por conexiones de base de datos.
+  for (const orderId of unique) {
+    try {
+      const result = await createManualRouteOutput(orderId, input);
+      if (result.error || !result.shipmentId) {
+        failed.push({ orderId, error: result.error ?? "No se pudo crear la salida." });
+        continue;
+      }
+      created.push({
+        orderId,
+        shipmentId: result.shipmentId,
+        outputCode: result.outputCode ?? result.shipmentId,
+      });
+    } catch (error) {
+      failed.push({ orderId, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  const notice = created.length
+    ? `${created.length} salida${created.length === 1 ? "" : "s"} creada${created.length === 1 ? "" : "s"}.${failed.length ? ` ${failed.length} sin crear.` : ""}`
+    : undefined;
+  return {
+    created,
+    failed,
+    notice,
+    error: created.length ? undefined : "Ningún pedido pudo crear su salida.",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Escrituras
 // ---------------------------------------------------------------------------
