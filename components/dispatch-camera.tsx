@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { cameraErrorMessage } from "@/lib/camera-error";
 
 export function DispatchCamera({
   open,
@@ -38,8 +39,12 @@ export function DispatchCamera({
             onClose();
           },
         );
-      } catch {
-        setError("No pudimos abrir la cámara. Revisa el permiso o usa el campo manual.");
+      } catch (err) {
+        if (cancelled) return;
+        // El error crudo va a la consola: es lo único que distingue un permiso
+        // denegado a mano de uno bloqueado por la Permissions-Policy del server.
+        console.error("[dispatch-camera] getUserMedia falló", err);
+        setError(cameraErrorMessage(err, window.isSecureContext));
       }
     })();
     return () => {

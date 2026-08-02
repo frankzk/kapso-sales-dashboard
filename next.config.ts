@@ -23,7 +23,14 @@ const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), browsing-topics=()" },
+  // `camera=(self)`, no `camera=()`: la lista vacía deniega la cámara también a
+  // nuestro propio origen, y el navegador NI SIQUIERA pregunta — rechaza
+  // getUserMedia en el acto. Eso dejaba muerto el lector de QR del cotejo de
+  // oficina. El resto sigue cerrado; nada en la app usa micrófono ni ubicación.
+  {
+    key: "Permissions-Policy",
+    value: "camera=(self), microphone=(), geolocation=(), browsing-topics=()",
+  },
   { key: "Content-Security-Policy", value: CSP },
 ];
 
