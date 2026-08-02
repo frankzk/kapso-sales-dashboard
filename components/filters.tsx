@@ -5,7 +5,7 @@
 // al necesitarlos en dos sitios, sin cambiar su comportamiento.
 
 import { useEffect, useRef, useState } from "react";
-import { cn } from "@/components/ui";
+import { cn, OVER_TABLE_Z } from "@/components/ui";
 
 /**
  * Desplegable de selección múltiple con buscador. Un conjunto VACÍO significa
@@ -76,7 +76,7 @@ export function ChecklistFilter({
         {selected.size > 0 ? ` (${selected.size})` : ""} ▾
       </button>
       {open && (
-        <div className="absolute left-0 z-10 mt-1 w-60 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+        <div className={cn("absolute left-0 mt-1 w-60 rounded-lg border border-slate-200 bg-white p-2 shadow-lg", OVER_TABLE_Z)}>
           <input
             autoFocus
             value={q}

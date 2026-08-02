@@ -347,9 +347,16 @@ export function OrdersMasterBoard({
   const [navigating, startNav] = useTransition();
   const [showMore, setShowMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
-  // Selección para acciones en lote (hoy: imprimir rótulos). Solo alcanza la
-  // página visible: el Master pagina en servidor y no expone los ids del filtro
-  // completo, así que prometer "todos los 4.000" sería mentir.
+  // Selección para acciones en lote (hoy: imprimir rótulos).
+  //
+  // SOBREVIVE A LAS BÚSQUEDAS. La tanda de rótulos del día se arma buscando
+  // pedido por pedido, así que vaciarla en cada búsqueda obligaba a imprimir de
+  // a uno. Lo que no puede pasar es imprimir a ciegas, y para eso la barra lista
+  // los pedidos elegidos con su nombre y permite sacar cualquiera.
+  //
+  // "Seleccionar todos" sigue alcanzando solo la página visible: el Master
+  // pagina en servidor y no expone los ids del filtro completo, así que prometer
+  // "todos los 4.000" sería mentir.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const toggleRow = (orderId: string) => {
@@ -390,9 +397,6 @@ export function OrdersMasterBoard({
     });
     if (view !== "todos") qs.set("view", view);
     if (substage) qs.set("substage", substage);
-    // Otra página u otro filtro = otras filas: mantener marcados pedidos que ya
-    // no se ven llevaría a imprimir una tanda que el operador no revisó.
-    setSelectedIds(new Set());
     startNav(() => router.replace(`${pathname}?${qs.toString()}`, { scroll: false }));
   };
 
@@ -400,7 +404,6 @@ export function OrdersMasterBoard({
     const qs = buildMasterQuery({ filters, sortKey: "created", page: 1 });
     if (stage !== "todos") qs.set("view", stage);
     if (nextSubstage) qs.set("substage", nextSubstage);
-    setSelectedIds(new Set());
     startNav(() => router.replace(`${pathname}?${qs.toString()}`, { scroll: false }));
   };
 
@@ -452,10 +455,29 @@ export function OrdersMasterBoard({
   const shown = rows;
   // Para poder nombrar los pedidos en el reporte de una acción en lote: la
   // acción devuelve ids, y "#KP125756 falló" es accionable, "un uuid" no.
-  const orderNames = useMemo(
-    () => new Map(rows.map((r) => [r.order_id, r.order_name ?? r.order_id])),
-    [rows],
-  );
+  // Se acumulan entre páginas: un pedido elegido en otra búsqueda ya no está en
+  // `rows`, y la barra tiene que poder nombrarlo. "#KP125756 falló" es
+  // accionable; un uuid no.
+  const [seenNames, setSeenNames] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    setSeenNames((prev) => {
+      const next = new Map(prev);
+      let changed = false;
+      for (const row of rows) {
+        const name = row.order_name ?? row.order_id;
+        if (next.get(row.order_id) !== name) {
+          next.set(row.order_id, name);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [rows]);
+  const orderNames = useMemo(() => {
+    const map = new Map(seenNames);
+    for (const row of rows) map.set(row.order_id, row.order_name ?? row.order_id);
+    return map;
+  }, [seenNames, rows]);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -850,6 +872,8 @@ export function OrdersMasterBoard({
       <BulkBar
         selectedIds={selectedIds}
         orderNames={orderNames}
+        visibleIds={rows.map((r) => r.order_id)}
+        onToggleRow={toggleRow}
         canEdit={canEdit}
         onClear={() => setSelectedIds(new Set())}
         // Solo refresca: limpiar la selección desmontaría la barra y con ella el
@@ -1117,14 +1141,19 @@ async function downloadRotulos(query: string): Promise<{ error?: string; missing
 function BulkBar({
   selectedIds,
   orderNames,
+  visibleIds,
   canEdit,
   onClear,
+  onToggleRow,
   onCreated,
 }: {
   selectedIds: Set<string>;
   orderNames: Map<string, string>;
+  /** Ids de la página visible, para avisar de lo elegido que no se ve. */
+  visibleIds: string[];
   canEdit: boolean;
   onClear: () => void;
+  onToggleRow: (orderId: string) => void;
   onCreated: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -1136,7 +1165,11 @@ function BulkBar({
   const [dispatchDate, setDispatchDate] = useState(limaTodayKey());
   const [note, setNote] = useState("");
 
+  const [showPicked, setShowPicked] = useState(false);
+
   const count = selectedIds.size;
+  const onPage = new Set(visibleIds);
+  const offscreen = Array.from(selectedIds).filter((id) => !onPage.has(id)).length;
   if (!count) return null;
 
   const reset = () => {
@@ -1233,10 +1266,41 @@ function BulkBar({
             {showCreate ? "Cancelar" : "Forzar courier…"}
           </button>
         )}
+        <button
+          onClick={() => setShowPicked((v) => !v)}
+          className="text-xs text-slate-300 hover:underline"
+        >
+          {showPicked ? "Ocultar" : "Ver"} selección
+        </button>
         <button onClick={onClear} className="text-xs text-slate-300 hover:underline">
           Limpiar
         </button>
       </div>
+
+      {/* La selección sobrevive a las búsquedas, así que casi siempre habrá
+          pedidos elegidos que no están en pantalla. Poder verlos y sacar
+          cualquiera es lo que impide imprimir una tanda a ciegas. */}
+      {offscreen > 0 && !showPicked && (
+        <p className="text-[11px] text-slate-400">
+          {offscreen} de los seleccionados {offscreen === 1 ? "no está" : "no están"} en esta
+          búsqueda. Siguen contando para el PDF.
+        </p>
+      )}
+      {showPicked && (
+        <div className="flex flex-wrap gap-1.5 border-t border-slate-700 pt-2">
+          {Array.from(selectedIds).map((orderId) => (
+            <button
+              key={orderId}
+              onClick={() => onToggleRow(orderId)}
+              title="Quitar de la selección"
+              className="inline-flex items-center gap-1.5 rounded-full bg-slate-800 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-slate-700"
+            >
+              {orderNames.get(orderId) ?? orderId}
+              <span aria-hidden className="text-slate-400">×</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {showCreate && (
         <div className="flex flex-wrap items-end gap-2 border-t border-slate-700 pt-2">

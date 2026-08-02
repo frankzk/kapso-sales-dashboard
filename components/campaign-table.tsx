@@ -10,7 +10,7 @@ import {
   searchPromotedProducts,
   type PromotedProductSuggestion,
 } from "@/app/dashboard/actions";
-import { cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
+import { cn, OVER_TABLE_Z, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 
 type SortKey =
   | "label"
@@ -229,7 +229,7 @@ function ProductEditor({ row, fallbackStoreIds }: { row: CampaignStat; fallbackS
             <div
               id={`product-results-${row.adId}`}
               role="listbox"
-              className="absolute z-30 mt-1 max-h-72 w-full min-w-[320px] overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl shadow-slate-900/10"
+              className={cn("absolute mt-1 max-h-72 w-full min-w-[320px] overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl shadow-slate-900/10", OVER_TABLE_Z)}
             >
               {searching ? (
                 <p className="px-3 py-3 text-xs text-slate-500">Buscando en Shopify…</p>
