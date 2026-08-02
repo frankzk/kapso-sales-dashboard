@@ -894,7 +894,10 @@ es el caso de Aliclik, las agencias y las rutas «Sin asignar».
 
 **Una ruta se identifica por quién se la lleva y qué día**: «Roy · 03/08». El
 nombre de zona no existe como dato que nadie escriba: la ruta se llama como el
-motorizado, o como el courier cuando no hay persona.
+motorizado, o como el courier cuando no hay persona — porque ahí **quien se lleva
+la caja ES el courier**. Una ruta de Urpi se titula «Urpi» con «Courier» de
+subtítulo, nunca «Sin motorizado»: eso no nombra nada y deja la tarjeta sin
+identidad justo donde hay que elegir entre varias rutas.
 
 Crear una ruta son **dos campos**: con quién sale y la fecha. Un solo desplegable
 lista los **motorizados propios por su nombre**, agrupados bajo su cabecera, y
@@ -1058,8 +1061,8 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
   custodia de la empresa.
 - El courier de la salida debe coincidir con el courier de la ruta.
 - El mismo paquete no puede estar activo en dos manifiestos.
-- El primer escaneo de oficina puede agregar y cotejar el paquete en una sola
-  acción operativa.
+- El escaneo del cotejo de oficina SOLO confirma lo ya asignado: un código que
+  no pertenece a la ruta se avisa, nunca se agrega.
 - El segundo cotejo no puede comenzar hasta completar el primero al 100 %.
 - El paquete que falta puede retirarse sin bloquear los demás, pero exige motivo.
 - La ruta solo llega a `in_custody` después del segundo cotejo al 100 %.
@@ -1108,6 +1111,16 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 - Todas las acciones se guardan como eventos append-only y recalculan el Master.
 
 ## 25. User journey del drawer del Master
+
+**La tabla del Master es para barrer; el drawer es para trabajar un pedido.** La
+tabla solo lleva lo que sirve para localizar y priorizar: quién, dónde, en qué
+macroetapa y desde cuándo. El detalle de un pedido —modalidad, courier actual,
+guía, agencia y sus días, pago y clave, costo logístico— vive en el drawer, que
+es donde se mira uno por uno. Sumarlo todo a la tabla la volvía tan ancha que
+había que scrollear en horizontal para leer la fila que se estaba mirando.
+
+Nada se elimina al sacarlo de la tabla: si un dato deja de tener columna, tiene
+que aparecer en el drawer en el mismo cambio.
 
 El drawer no es un formulario largo ni un resumen de tablas. Es la mesa de
 trabajo de un pedido concreto. La experiencia principal se diseña primero para

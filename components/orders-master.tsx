@@ -1392,7 +1392,7 @@ function MasterTable({
   const pageIds = rows.map((r) => r.order_id);
   const allChecked = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
 
-  // Columnas congeladas: con 26 columnas la tabla es más ancha que la pantalla,
+  // Columnas congeladas: la tabla sigue siendo más ancha que la pantalla,
   // así que al ir a la derecha se perdía de vista de QUÉ pedido es cada fila.
   // Estas se quedan pegadas a la izquierda.
   //
@@ -1429,7 +1429,7 @@ function MasterTable({
 
   return (
     <div className={TABLE_WRAP_PAGE_X}>
-      <table className="w-full min-w-[1640px] text-sm">
+      <table className="w-full min-w-[1180px] text-sm">
         <thead className={STICKY_HEAD}>
           <tr className="text-left text-xs text-slate-500">
             <th {...frozen("check", true)} className={cn(frozen("check", true).className, "px-2 py-2")}>
@@ -1450,8 +1450,6 @@ function MasterTable({
             <th className="px-2 py-2 font-medium">Provincia</th>
             <th className="px-2 py-2 font-medium">Distrito</th>
             <th className="px-2 py-2 font-medium">Cobertura</th>
-            <th className="px-2 py-2 font-medium">Modalidad</th>
-            <th className="px-2 py-2 font-medium">Courier</th>
             <th className="px-2 py-2 font-medium">Último courier</th>
             <th className="px-2 py-2 text-right font-medium" title="Couriers que gestionaron el pedido">
               Cour.
@@ -1462,15 +1460,7 @@ function MasterTable({
             <th className="px-2 py-2 font-medium">Macroetapa</th>
             <th className="px-2 py-2 font-medium">Subetapa</th>
             <th className="px-2 py-2 font-medium">Últ. movimiento</th>
-            <th className="px-2 py-2 font-medium">Antigüedad</th>
-            <th className="px-2 py-2 font-medium">Guía</th>
-            <th className="px-2 py-2 font-medium">Agencia</th>
-            <th className="px-2 py-2 font-medium" title="Días disponible en agencia">
-              Días ag.
-            </th>
-            <th className="px-2 py-2 font-medium">Pago / clave</th>
-            <th className="px-2 py-2 text-center font-medium">💬</th>
-            <th className="px-4 py-2 text-right font-medium">Costo</th>
+            <th className="px-4 py-2 font-medium">Antigüedad</th>
           </tr>
         </thead>
         <tbody>
@@ -1510,10 +1500,6 @@ function MasterTable({
               <td className="px-2 py-2.5 text-slate-600">{r.province ?? "—"}</td>
               <td className="px-2 py-2.5 text-slate-600">{r.district ?? "—"}</td>
               <td className="px-2 py-2.5"><CoverageBadge coverage={r.coverage} /></td>
-              <td className="px-2 py-2.5 text-slate-600">
-                {r.shipping_mode ? (MODE_LABEL[r.shipping_mode] ?? r.shipping_mode) : "—"}
-              </td>
-              <td className="px-2 py-2.5 capitalize text-slate-700">{r.current_courier ?? "—"}</td>
               <td className="px-2 py-2.5 capitalize text-slate-500">{r.last_courier ?? "—"}</td>
               <td className="px-2 py-2.5 text-right text-slate-700">
                 <span className={cn(r.courier_count > 1 && "font-semibold text-amber-700")}>
@@ -1530,21 +1516,7 @@ function MasterTable({
               </td>
               <td className="px-2 py-2.5 text-slate-600">{macroSubstageLabel(r.macro_substage)}</td>
               <td className="px-2 py-2.5 text-slate-600">{fmtDate(r.last_movement_at)}</td>
-              <td className="px-2 py-2.5 text-slate-600">{fmtAge(r.macro_since ?? r.status_since)}</td>
-              <td className="px-2 py-2.5 font-mono text-xs text-slate-600">{r.guide_code ?? "—"}</td>
-              <td className="px-2 py-2.5 text-slate-600" title={r.agency_branch ?? undefined}>
-                {r.pickup_state ? operationalLabel(r.pickup_state) : "—"}
-              </td>
-              <td className="px-2 py-2.5 text-slate-600">
-                <AgencyDays arrivedAt={r.agency_arrived_at} expiresAt={r.agency_expires_at} />
-              </td>
-              <td className="px-2 py-2.5 text-slate-600">
-                <PaymentIndicator paymentState={r.payment_state} keyState={r.key_state} />
-              </td>
-              <td className="px-2 py-2.5 text-center text-slate-500">
-                {r.comment_count > 0 ? r.comment_count : ""}
-              </td>
-              <td className="px-4 py-2.5 text-right text-slate-600">{fmtMoney(r.logistics_cost)}</td>
+              <td className="px-4 py-2.5 text-slate-600">{fmtAge(r.macro_since ?? r.status_since)}</td>
             </tr>
           ))}
         </tbody>
@@ -2282,6 +2254,40 @@ function OrderDrawer({
                 <Field label="Creado" value={fmtDateTime(detail.row.order_created_at)} />
                 <Field label="Courier actual" value={detail.row.current_courier} />
                 <Field label="Guía actual" value={detail.row.guide_code} />
+                {/* Estos cuatro vivían solo en la tabla. Al sacar sus columnas
+                    del Master —para que quepa lo que se mira todos los días—
+                    tienen que estar aquí, o el dato desaparecería del sistema. */}
+                {detail.row.pickup_state && (
+                  <>
+                    <Field
+                      label="Agencia"
+                      value={
+                        [operationalLabel(detail.row.pickup_state), detail.row.agency_branch]
+                          .filter(Boolean)
+                          .join(" · ") || null
+                      }
+                    />
+                    <div>
+                      <dt className="text-xs text-slate-400">Días en agencia</dt>
+                      <dd className="text-slate-700">
+                        <AgencyDays
+                          arrivedAt={detail.row.agency_arrived_at}
+                          expiresAt={detail.row.agency_expires_at}
+                        />
+                      </dd>
+                    </div>
+                  </>
+                )}
+                <div>
+                  <dt className="text-xs text-slate-400">Pago / clave</dt>
+                  <dd className="text-slate-700">
+                    <PaymentIndicator
+                      paymentState={detail.row.payment_state}
+                      keyState={detail.row.key_state}
+                    />
+                  </dd>
+                </div>
+                <Field label="Costo logístico" value={fmtMoney(detail.row.logistics_cost)} />
               </dl>
             </section>
 
