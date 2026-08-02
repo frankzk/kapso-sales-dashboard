@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Card, cn, EmptyState, STICKY_HEAD, TABLE_WRAP } from "@/components/ui";
+import { Card, cn, EmptyState, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
@@ -1328,7 +1328,7 @@ function MasterTable({
   const pageIds = rows.map((r) => r.order_id);
   const allChecked = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
   return (
-    <div className={TABLE_WRAP}>
+    <div className={TABLE_WRAP_FROM[1980]}>
       <table className="w-full min-w-[1640px] text-sm">
         <thead className={STICKY_HEAD}>
           <tr className="text-left text-xs text-slate-500">

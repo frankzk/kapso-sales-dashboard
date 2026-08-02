@@ -10,7 +10,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Card, EmptyState, Section, cn, STICKY_HEAD, TABLE_WRAP } from "@/components/ui";
+import { Card, EmptyState, Section, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { VERDICT_LABELS, type ReconciledSettlement, type SettlementVerdict } from "@/lib/settlements";
 import type { RiderPayout } from "@/lib/settlements";
 import type { RiderRow, SettlementDetail, SettlementRow } from "@/lib/settlements-access";
@@ -113,7 +113,7 @@ export function SettlementsBoard({
       {canEdit && <UploadPanel stores={stores} riders={riders} onDone={setMsg} />}
 
       <Card className="p-0">
-        <div className={TABLE_WRAP}>
+        <div className={TABLE_WRAP_FROM[1060]}>
           <table className="w-full min-w-[720px] text-sm">
             <thead className={cn(STICKY_HEAD, "bg-slate-50 text-left text-xs text-slate-500")}>
               <tr>

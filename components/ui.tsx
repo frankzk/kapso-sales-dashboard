@@ -23,8 +23,31 @@ export function cn(...parts: Array<string | false | null | undefined>): string {
 // Se aplica sobre el <thead> (o su <tr>) y alcanza a todas sus celdas, porque
 // cada módulo pone las clases en un nivel distinto.
 
-/** Contenedor de una tabla ancha. Acompaña a STICKY_HEAD. */
+/** Contenedor de una tabla que ENTRA en pantalla. Acompaña a STICKY_HEAD. */
 export const TABLE_WRAP = "overflow-x-auto md:overflow-x-visible";
+
+/**
+ * Contenedor de una tabla con ancho mínimo propio (`min-w-[Npx]`).
+ *
+ * No se puede soltar el scroll horizontal en `md` sin más: una tabla de, por
+ * ejemplo, 1640px desbordaría la página y aparecería scroll horizontal de
+ * documento (con la barra lateral yéndose de lado). Acá el sticky se habilita
+ * recién desde el ancho en que la tabla entra de verdad; por debajo manda el
+ * scroll horizontal y no hay encabezado fijo, que es el intercambio correcto.
+ *
+ * Las clases son literales a propósito: Tailwind escanea el código fuente, así
+ * que un breakpoint armado en runtime no se generaría.
+ * Regla del pulgar: ancho de la tabla + ~340px (barra lateral + paddings).
+ */
+export const TABLE_WRAP_FROM = {
+  980: "overflow-x-auto min-[980px]:overflow-x-visible",
+  1060: "overflow-x-auto min-[1060px]:overflow-x-visible",
+  1110: "overflow-x-auto min-[1110px]:overflow-x-visible",
+  1160: "overflow-x-auto min-[1160px]:overflow-x-visible",
+  1240: "overflow-x-auto min-[1240px]:overflow-x-visible",
+  1800: "overflow-x-auto min-[1800px]:overflow-x-visible",
+  1980: "overflow-x-auto min-[1980px]:overflow-x-visible",
+} as const;
 
 /** Encabezado que queda fijo al tope de la ventana al scrollear la página. */
 export const STICKY_HEAD =

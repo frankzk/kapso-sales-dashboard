@@ -10,7 +10,7 @@ import {
   searchPromotedProducts,
   type PromotedProductSuggestion,
 } from "@/app/dashboard/actions";
-import { cn } from "@/components/ui";
+import { cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 
 type SortKey =
   | "label"
@@ -340,9 +340,9 @@ function ExpandedRow({
         </div>
       </div>
       {!!row.orders.length && (
-        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+        <div className={cn(TABLE_WRAP_FROM[1110], "rounded-lg border border-slate-200 bg-white")}>
           <table className="w-full min-w-[760px] text-xs">
-            <thead><tr className="border-b border-slate-200 bg-slate-50 text-left text-slate-500">
+            <thead><tr className={cn(STICKY_HEAD, "bg-slate-50 text-left text-slate-500")}>
               <th className="px-3 py-2 font-medium">Pedido</th><th className="px-3 py-2 font-medium">Cliente / fecha</th>
               <th className="px-3 py-2 font-medium">Producto realmente comprado</th><th className="px-3 py-2 font-medium">Coincidencia</th>
               <th className="px-3 py-2 font-medium">Entrega</th><th className="px-3 py-2 text-right font-medium">Total</th>
@@ -504,9 +504,9 @@ export function CampaignTable({
       <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
         Cohorte: leads cuya primera adquisición ocurrió en el período seleccionado, usando el día local de cada tienda. Los pedidos son enlaces exactos de Shopify y pueden haberse generado después. Histórico Meta actualizado: {totals.syncedAt ? new Date(totals.syncedAt).toLocaleString("es-PE") : "sin sincronización verificable"}.
       </div>
-      <div className="overflow-x-auto rounded-xl border border-slate-200">
+      <div className={cn(TABLE_WRAP_FROM[1800], "rounded-xl border border-slate-200")}>
         <table className="w-full min-w-[1460px] text-sm">
-          <thead><tr className="border-b border-slate-200 bg-white text-xs text-slate-500">
+          <thead><tr className={cn(STICKY_HEAD, "bg-white text-xs text-slate-500")}>
             <th className="w-9 px-2 py-3" />
             {columns.map((column) => <th key={column.key} className={cn("px-2 py-3 font-medium", column.key === "label" ? "text-left" : "text-right")}>
               <button type="button" onClick={() => setSort((current) => ({ key: column.key, dir: current.key === column.key && current.dir === "desc" ? "asc" : "desc" }))} className="hover:text-slate-800">
