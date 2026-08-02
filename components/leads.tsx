@@ -8,6 +8,7 @@ import type { AdMeta } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import { type CustomerHistory, type LeadCounts, type LeadView } from "@/lib/leads-access";
 import { facetItems } from "@/lib/leads-facets";
+import { segmentWeightsFor, sortLeadsByPriority } from "@/lib/lead-priority";
 import type { LeadsInsights } from "@/lib/leads-insights";
 import {
   buildMetaAudienceCsv,
@@ -226,9 +227,14 @@ function SegmentBadge({ lead }: { lead: LeadRow }) {
     );
   }
   const seg = leadSegment(lead);
+  // El monto del carrito va en el propio chip: con la cola ordenada por
+  // prioridad, entre dos carritos el ticket es lo que decide a cuál llamar
+  // primero, y hasta ahora había que abrir el drawer para verlo.
+  const cartValue = seg === "carrito" ? Number(lead.cart_value ?? 0) : 0;
   return (
     <span className={cn("whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", SEGMENT_BADGE[seg])}>
       {SEG_PILL_LABEL[seg]}
+      {cartValue > 0 && <span className="ml-1 font-semibold">S/ {Math.round(cartValue)}</span>}
     </span>
   );
 }
@@ -643,6 +649,9 @@ export function LeadsBoard({
   // one so the active view is never hidden.
   const isReviewView = view === "seguimientos" || view === "ganados" || view === "perdidos";
   const [more, setMore] = useState<boolean>(isReviewView);
+  // Orden de la cola. "prioridad" (por defecto) pone arriba lo que más cierra;
+  // "reciente" es el orden viejo, por si alguien quiere barrer por hora de llegada.
+  const [sortMode, setSortMode] = useState<"prioridad" | "reciente">("prioridad");
   const [exportingAudience, setExportingAudience] = useState(false);
 
   // Panel de gráficos (burndown, sin-llamar 7d, conversión, productividad). Se
@@ -1071,7 +1080,20 @@ export function LeadsBoard({
   // In search mode show the global results (all stages); otherwise the filtered
   // view (already narrowed client-side by the query for instant feedback).
   const searchMode = results !== null;
-  const displayLeads = results ?? shownLeads;
+  const baseLeads = results ?? shownLeads;
+  // Orden de la cola "Sin llamar" por probabilidad de cierre (ver lib/lead-priority).
+  // Solo ahí: en "En seguimiento" la llamada tiene fecha comprometida con el
+  // cliente y eso manda sobre cualquier puntaje; en una búsqueda el orden lo pone
+  // la búsqueda. Se ordena en cliente porque esta vista ya trae el universo
+  // completo paginado (getStoreLeads con limit null), así que no hace falta que
+  // Postgres sepa del puntaje.
+  const priorityOn =
+    sortMode === "prioridad" && !searchMode && view === "por_llamar" && queueState === "sin_llamar";
+  const storeName = stores.find((s) => s.id === storeId)?.name ?? null;
+  const displayLeads = useMemo(
+    () => (priorityOn ? sortLeadsByPriority(baseLeads, segmentWeightsFor(storeName)) : baseLeads),
+    [priorityOn, baseLeads, storeName],
+  );
 
   // Render por tramos. La cola completa puede traer miles de filas y montarlas
   // todas de golpe cuesta decenas de miles de nodos en el primer pintado (y otra
@@ -1381,6 +1403,19 @@ export function LeadsBoard({
                 ]}
               />
             )}
+            {view === "por_llamar" && queueState === "sin_llamar" && !searchMode && (
+              <label className="flex items-center gap-2 text-xs text-slate-500">
+                Orden
+                <select
+                  value={sortMode}
+                  onChange={(event) => setSortMode(event.currentTarget.value as typeof sortMode)}
+                  className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                >
+                  <option value="prioridad">Prioridad (lo que más cierra)</option>
+                  <option value="reciente">Más recientes</option>
+                </select>
+              </label>
+            )}
             {view === "por_llamar" && queueState === "sin_llamar" && (
               <label className="flex items-center gap-2 text-xs text-slate-500">
                 Última interacción
@@ -1485,6 +1520,20 @@ export function LeadsBoard({
       {banner && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
           {banner}
+        </div>
+      )}
+
+      {/* Llamar fríos es, con los datos en la mano, casi tirar el tiempo: en 60
+          días Aurela hizo 700 llamadas a fríos y cerró 1 venta. Los fríos que sí
+          compran los cierra el bot solo (424 de 426 cierres en Kenku fueron sin
+          llamada). Se avisa al entrar al filtro, no se bloquea: la decisión es
+          de quien llama. */}
+      {view === "por_llamar" && queueState === "sin_llamar" && segFilter === "frio" && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
+          ⚠️ <span className="font-semibold">Llamar fríos casi no cierra.</span> En los últimos 60
+          días, 1.000 llamadas a leads fríos dejaron 3 pedidos (0,1–0,7%). Un lead con carrito cierra{" "}
+          <span className="font-semibold">14–20%</span> — unas 20 veces más por la misma llamada. A
+          los fríos ya los trabaja el bot con las plantillas.
         </div>
       )}
 
