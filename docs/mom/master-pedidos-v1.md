@@ -1317,13 +1317,30 @@ rótulos.
 ### La cabecera del rótulo
 
 Arriba va **el nombre de la tienda** —Kenku Perú, Aurela— y debajo el código de
-salida. La tienda es la marca que el cliente reconoce; «Kapta» no le dice nada a
-quien recibe la caja.
+salida, con el **pedido de Shopify a su costado**. La tienda es la marca que el
+cliente reconoce; «Kapta» no le dice nada a quien recibe la caja. El pedido y la
+salida son el mismo dato leído de dos formas, así que comparten línea en vez de
+gastar una fila entera del rótulo.
 
 El courier **no** se imprime en la cabecera: cuando está decidido ya viaja dentro
 del código (`KP123-S01-ALICLIK`), y cuando no lo está, un «POR DEFINIR» grande en
 la etiqueta es ruido — quién lo decide es la Mesa de despacho, no quien lee el
 rótulo.
+
+### Las notas del pedido
+
+La **nota de Shopify** va impresa a la derecha del QR. Es donde el asesor escribe
+las instrucciones reales —«enviar con Tanders», «antes de la 1 y 30», el DNI para
+una agencia— y quien arma la caja no las tenía en ninguna parte del papel: había
+que abrir Shopify para enterarse. Las trae aproximadamente la mitad de los
+pedidos, así que no es un caso marginal.
+
+La instrucción del QR y su token bajan a **pie de página, en el tamaño más chico
+del rótulo**: se leen una vez en la vida y estaban ocupando el mejor espacio.
+
+Del destino se imprimen **distrito y provincia**. La región repite la provincia
+en casi todo el país y gastaba una línea sin decir nada que el motorizado no
+supiera.
 
 ### El monto a cobrar
 

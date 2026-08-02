@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { operationFitsCourier, routeKindForCourier } from "@/lib/dispatch-routing";
-import { deriveDispatchManifestState, needsRiderCheck, routeDay, routeName } from "@/lib/dispatch";
+import {
+  deriveDispatchManifestState,
+  needsRiderCheck,
+  routeDay,
+  routeDayLong,
+  routeName,
+  routeNameLong,
+} from "@/lib/dispatch";
 
 describe("routeKindForCourier", () => {
   it("los que reparten con motorizado son rutas de reparto", () => {
@@ -93,6 +100,47 @@ describe("routeName (el texto que evita mandar los paquetes con el motorizado eq
 
   it("la fecha se lee como en la tarjeta", () => {
     expect(routeDay("2026-12-25")).toBe("25/12");
+  });
+});
+
+describe("routeDayLong (el día que se dice en voz alta)", () => {
+  it("nombra el día de la semana", () => {
+    // 2026-08-03 es lunes.
+    expect(routeDayLong("2026-08-03")).toBe("lunes 03/08");
+    expect(routeDayLong("2026-08-02")).toBe("domingo 02/08");
+  });
+
+  it("NO se corre un día por la zona horaria", () => {
+    // `route_date` es una fecha sin hora. Interpretarla en la zona local la
+    // convertiría en el día anterior en cualquier huso al oeste de Greenwich —
+    // Lima incluida—, y la ruta del lunes aparecería como domingo.
+    const original = process.env.TZ;
+    try {
+      process.env.TZ = "America/Lima";
+      expect(routeDayLong("2026-08-03")).toBe("lunes 03/08");
+      process.env.TZ = "Pacific/Kiritimati";
+      expect(routeDayLong("2026-08-03")).toBe("lunes 03/08");
+    } finally {
+      process.env.TZ = original;
+    }
+  });
+
+  it("una fecha ilegible se devuelve tal cual, no recortada a un dato inventado", () => {
+    // Recortar a ciegas convertía "sin-fecha" en "echa", que parece un dato
+    // válido. Mejor que se vea el valor crudo.
+    expect(routeDayLong("sin-fecha")).toBe("sin-fecha");
+    expect(routeDay("sin-fecha")).toBe("sin-fecha");
+  });
+
+  it("routeNameLong es la persona y el día completo", () => {
+    expect(
+      routeNameLong({
+        driver_name: null,
+        received_by: null,
+        route_label: "Urpi",
+        route_date: "2026-08-03",
+      }),
+    ).toBe("Urpi · lunes 03/08");
   });
 });
 
