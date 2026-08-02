@@ -13,6 +13,7 @@
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import type { LabelLineItem } from "@/lib/labels/line-items";
+import { formatCollectAmount } from "@/lib/labels/amount";
 
 /** 1 mm en puntos PostScript (72 dpi). */
 const MM = 72 / 25.4;
@@ -34,6 +35,10 @@ export interface RotuloData {
   customerPhone: string | null;
   /** Líneas del pedido: cantidad, producto y variante. */
   items: LabelLineItem[];
+  /** Total del pedido = lo que se cobra en la puerta. `null` si no se conoce. */
+  collectAmount: number | null;
+  /** Moneda del pedido; por defecto PEN. */
+  currency: string | null;
   destination: string | null;
   address: string | null;
   reference: string | null;
@@ -119,9 +124,15 @@ interface Fonts {
   bold: PDFFont;
 }
 
-/** Alto que consume un campo de `lines` líneas, incluido su separador. */
+/**
+ * Alto que consume un campo de `lines` líneas, incluido su separador.
+ *
+ * Los márgenes son ajustados a propósito: en 100 × 150 mm compiten el monto a
+ * cobrar, la dirección, los productos y el QR, y el aire entre campos es lo
+ * primero que se sacrifica para que ninguno de esos cuatro desaparezca.
+ */
 export function fieldHeight(lines: number, valueSize: number): number {
-  return 1.4 * MM + lines * (valueSize + 1.2) + 1.5 * MM + 2.6 * MM;
+  return 1.2 * MM + lines * (valueSize + 1.2) + 1.2 * MM + 1.8 * MM;
 }
 
 /**
@@ -178,20 +189,20 @@ function drawField(
   });
 
   const lines = wrapText(opts.value || "-", fonts.bold, valueSize, opts.width, maxLines);
-  let cursor = opts.y - valueSize - 1.4 * MM;
+  let cursor = opts.y - valueSize - 1.2 * MM;
   for (const line of lines.length ? lines : ["-"]) {
     page.drawText(line, { x: opts.x, y: cursor, size: valueSize, font: fonts.bold, color: INK });
     cursor -= valueSize + 1.2;
   }
 
-  const bottom = cursor + valueSize - 1.5 * MM;
+  const bottom = cursor + valueSize - 1.2 * MM;
   page.drawLine({
     start: { x: opts.x, y: bottom },
     end: { x: opts.x + opts.width, y: bottom },
     thickness: 0.5,
     color: LINE,
   });
-  return bottom - 2.6 * MM;
+  return bottom - 1.8 * MM;
 }
 
 /**
@@ -202,16 +213,37 @@ function drawField(
  * VARIANTE (talla, color) va en su propia línea porque es lo que distingue dos
  * líneas del mismo producto —y empacar la talla equivocada es un reenvío.
  */
+/** Tamaño base de la tabla de productos y alto de cada línea suya. */
+const PRODUCT_SIZE = 8.5;
+const PRODUCT_LINE_H = PRODUCT_SIZE + 1.4;
+
+/**
+ * Espacio que hay que guardarle a los productos, en puntos.
+ *
+ * Se calcula ANTES de dibujar la referencia para poder restárselo: cuando los
+ * dos no caben, quien cede es la referencia. El almacén no puede empacar lo que
+ * no ve escrito, mientras que la referencia es una ayuda para encontrar la
+ * puerta que el motorizado también tiene en la app. El tope de `cap` filas
+ * impide que un pedido de quince líneas se coma el rótulo entero.
+ */
+export function productsReservedHeight(items: readonly LabelLineItem[], cap = 4): number {
+  if (!items.length) return 0;
+  let lines = 0;
+  for (const item of items.slice(0, cap)) lines += item.variant ? 2 : 1;
+  // Cabecera del bloque + filas + el separador que cierra.
+  return PRODUCT_SIZE + 1.2 * MM + lines * PRODUCT_LINE_H + 1.8 * MM;
+}
+
 function drawProducts(
   page: PDFPage,
   fonts: Fonts,
   opts: { x: number; y: number; width: number; items: readonly LabelLineItem[]; minY: number },
 ): number {
-  const size = 8.5;
+  const size = PRODUCT_SIZE;
   const qtyW = 9 * MM;
   const nameX = opts.x + qtyW;
   const nameW = opts.width - qtyW;
-  const lineH = size + 1.4;
+  const lineH = PRODUCT_LINE_H;
 
   page.drawText("PRODUCTOS", {
     x: opts.x,
@@ -221,7 +253,7 @@ function drawProducts(
     color: MUTED,
   });
 
-  let cursor = opts.y - size - 1.4 * MM;
+  let cursor = opts.y - size - 1.2 * MM;
   let shown = 0;
 
   for (const item of opts.items) {
@@ -283,14 +315,72 @@ function drawProducts(
     cursor -= lineH;
   }
 
-  const bottom = cursor + size - 1.5 * MM;
+  const bottom = cursor + size - 1.2 * MM;
   page.drawLine({
     start: { x: opts.x, y: bottom },
     end: { x: opts.x + opts.width, y: bottom },
     thickness: 0.5,
     color: LINE,
   });
-  return bottom - 2.6 * MM;
+  return bottom - 1.8 * MM;
+}
+
+/** Alto de la banda del monto a cobrar. */
+const AMOUNT_BAND_H = 12.5 * MM;
+
+/**
+ * La banda del monto a cobrar: lo más grande del rótulo.
+ *
+ * Es el dato que más caro sale equivocar —cobrar de menos es plata perdida,
+ * cobrar de más es una devolución— y quien lo lee lo hace en la puerta, de pie y
+ * con el paquete en la mano. Por eso ocupa el ancho completo, va en recuadro y
+ * la cifra se dibuja al mayor tamaño que quepa, no a uno fijo.
+ *
+ * Sin monto conocido NO se escribe cero: un cero manda a entregar sin cobrar.
+ * Se manda a mirar el pedido, que es lo que un motorizado puede hacer.
+ */
+function drawCollectBand(
+  page: PDFPage,
+  fonts: Fonts,
+  opts: { x: number; y: number; width: number; amount: number | null; currency: string | null },
+): number {
+  const top = opts.y;
+  const bottom = top - AMOUNT_BAND_H;
+
+  page.drawRectangle({
+    x: opts.x,
+    y: bottom,
+    width: opts.width,
+    height: AMOUNT_BAND_H,
+    borderColor: INK,
+    borderWidth: 1.4,
+  });
+
+  page.drawText("COBRAR EN LA ENTREGA", {
+    x: opts.x + 2.5 * MM,
+    y: top - 3.4 * MM,
+    size: 7,
+    font: fonts.bold,
+    color: MUTED,
+  });
+
+  const text = formatCollectAmount(opts.amount, opts.currency);
+  // Sin cifra el mensaje es una instrucción, no un importe: va más pequeño para
+  // que nadie lo confunda de lejos con un monto real.
+  const value = sanitizeWinAnsi(text ?? "VER PEDIDO");
+  let size = text ? 27 : 14;
+  const maxW = opts.width - 5 * MM;
+  while (size > 8 && fonts.bold.widthOfTextAtSize(value, size) > maxW) size -= 0.5;
+
+  page.drawText(value, {
+    x: opts.x + (opts.width - fonts.bold.widthOfTextAtSize(value, size)) / 2,
+    y: bottom + 2.2 * MM,
+    size,
+    font: fonts.bold,
+    color: INK,
+  });
+
+  return bottom - 4 * MM;
 }
 
 /** Dibuja un rótulo completo en su propia página. */
@@ -333,12 +423,21 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     thickness: 1.4,
     color: INK,
   });
-  y -= 5 * MM;
+  y -= 4 * MM;
+
+  // Lo más importante, arriba del todo y en recuadro: el monto a cobrar.
+  y = drawCollectBand(page, fonts, {
+    x: PAD,
+    y,
+    width: innerW,
+    amount: data.collectAmount,
+    currency: data.currency,
+  });
 
   // Pie fijo: QR + leyenda. Se ancla abajo para que todas las etiquetas lo
   // tengan en el mismo sitio, aunque los datos de arriba varíen de alto. Los
   // campos de arriba nunca pueden bajar de `fieldsFloor`.
-  const qrSize = 30 * MM;
+  const qrSize = 26 * MM;
   const footerTop = PAD + qrSize + 4 * MM;
   const fieldsFloor = footerTop + 2 * MM;
 
@@ -385,6 +484,11 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     maxLines: 3,
     minY: fieldsFloor,
   });
+  // Distrito y referencia se dibujan sobre un suelo elevado: el hueco que los
+  // productos ya tienen apartado. Sin esto, una dirección y una referencia
+  // largas dejaban la tabla de productos en "+ 2 productos mas" — justo lo que
+  // el rótulo existe para evitar.
+  const productsFloor = fieldsFloor + productsReservedHeight(data.items);
   y = drawField(page, fonts, {
     x: PAD,
     y,
@@ -392,7 +496,7 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     label: "Distrito / Provincia / Region",
     value: data.destination,
     maxLines: 2,
-    minY: fieldsFloor,
+    minY: productsFloor,
   });
   y = drawField(page, fonts, {
     x: PAD,
@@ -401,7 +505,7 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     label: "Referencia",
     value: data.reference,
     maxLines: 2,
-    minY: fieldsFloor,
+    minY: productsFloor,
   });
   y = drawProducts(page, fonts, {
     x: PAD,

@@ -104,23 +104,34 @@ export async function GET(request: NextRequest) {
   // Las líneas del pedido son la fuente real de cantidad y variante: el texto
   // guardado en la salida no distingue tallas, y hay pedidos con tres líneas del
   // mismo producto que solo se diferencian por ahí.
+  // El total del pedido es además lo que se cobra en la puerta, así que viaja en
+  // la misma consulta: es el dato más caro de equivocar del rótulo.
   const lineItemsByOrder = new Map<string, unknown>();
+  const moneyByOrder = new Map<string, { total: number | null; currency: string | null }>();
   const selectedOrderIds = Array.from(
     new Set(selected.map((row) => row.order_id).filter(Boolean) as string[]),
   );
   if (selectedOrderIds.length) {
     const { data: orderRows } = await sb
       .from("orders")
-      .select("id,line_items")
+      .select("id,line_items,total_amount,currency")
       .in("id", selectedOrderIds);
-    for (const order of (orderRows as { id: string; line_items: unknown }[] | null) ?? []) {
+    type OrderRow = {
+      id: string;
+      line_items: unknown;
+      total_amount: number | null;
+      currency: string | null;
+    };
+    for (const order of (orderRows as OrderRow[] | null) ?? []) {
       lineItemsByOrder.set(order.id, order.line_items);
+      moneyByOrder.set(order.id, { total: order.total_amount, currency: order.currency });
     }
   }
 
   const labels: RotuloData[] = await Promise.all(
     selected.map(async (row) => {
       const payload = row.qr_token || row.output_code || row.guide_code;
+      const money = row.order_id ? moneyByOrder.get(row.order_id) : undefined;
       return {
         code: outputDisplayCode(row.output_code, row.courier) || row.guide_code,
         // Una salida sin courier decidido lo dice en el rótulo: el operador ve
@@ -133,6 +144,8 @@ export async function GET(request: NextRequest) {
           row.order_id ? lineItemsByOrder.get(row.order_id) : null,
           row.product,
         ),
+        collectAmount: money?.total ?? null,
+        currency: money?.currency ?? null,
         destination: [row.district, row.province, row.region].filter(Boolean).join(" / "),
         address: row.delivery_address,
         reference: row.delivery_reference,

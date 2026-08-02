@@ -5,10 +5,45 @@ import {
   buildRotulosPdf,
   fieldHeight,
   linesThatFit,
+  productsReservedHeight,
   sanitizeWinAnsi,
   wrapText,
 } from "@/lib/labels/rotulo-pdf";
 import { PDFDocument, StandardFonts } from "pdf-lib";
+import { inflateSync } from "node:zlib";
+
+/**
+ * Cada texto dibujado en el PDF con su tamaño de fuente.
+ *
+ * Lee los content streams de verdad: comprobar que el PDF "no explota" no dice
+ * nada sobre si el monto se ve. pdf-lib escribe el texto como `<hex> Tj` después
+ * de un `/Fuente TAMAÑO Tf`.
+ */
+function textWithSizes(pdf: Uint8Array): { text: string; size: number }[] {
+  const raw = Buffer.from(pdf).toString("latin1");
+  const out: { text: string; size: number }[] = [];
+  const streams = /stream\r?\n/g;
+  let match: RegExpExecArray | null;
+  while ((match = streams.exec(raw))) {
+    const start = match.index + match[0].length;
+    const end = raw.indexOf("endstream", start);
+    if (end < 0) continue;
+    let content: string;
+    try {
+      content = inflateSync(Buffer.from(raw.slice(start, end), "latin1")).toString("latin1");
+    } catch {
+      continue; // imágenes y otros streams no comprimidos con deflate
+    }
+    let size = 0;
+    for (const line of content.split("\n")) {
+      const tf = line.match(/\/\S+\s+([\d.]+)\s+Tf/);
+      if (tf) size = Number(tf[1]);
+      const tj = line.match(/<([0-9A-Fa-f]+)>\s*Tj/);
+      if (tj) out.push({ text: Buffer.from(tj[1]!, "hex").toString("latin1"), size });
+    }
+  }
+  return out;
+}
 
 function ship(over: Partial<Parameters<typeof pickShipmentForLabel>[0][number]> & { id: string }) {
   return {
@@ -131,6 +166,28 @@ describe("linesThatFit (tope que protege el QR)", () => {
   });
 });
 
+describe("productsReservedHeight (los productos ganan a la referencia)", () => {
+  it("sin productos no reserva nada", () => {
+    expect(productsReservedHeight([])).toBe(0);
+  });
+
+  it("una variante cuesta una línea extra", () => {
+    const sin = productsReservedHeight([{ quantity: 1, name: "A", variant: null }]);
+    const con = productsReservedHeight([{ quantity: 1, name: "A", variant: "M" }]);
+    expect(con).toBeGreaterThan(sin);
+  });
+
+  it("un pedido de quince líneas no se come el rótulo entero", () => {
+    const muchos = Array.from({ length: 15 }, (_, i) => ({
+      quantity: 1,
+      name: `P${i}`,
+      variant: null,
+    }));
+    const cuatro = muchos.slice(0, 4);
+    expect(productsReservedHeight(muchos)).toBe(productsReservedHeight(cuatro));
+  });
+});
+
 describe("buildRotulosPdf", () => {
   it("genera un PDF con una página por rótulo", async () => {
     const qrPng = new Uint8Array(await QRCode.toBuffer("tok-1", { type: "png", width: 120 }));
@@ -140,6 +197,8 @@ describe("buildRotulosPdf", () => {
       customerName: "Ana Pérez",
       customerPhone: "51999",
       items: [{ quantity: 2, name: "Colágeno", variant: null }],
+      collectAmount: 298,
+      currency: "PEN",
       destination: "Surco / Lima / Lima",
       address: "Av. Siempre Viva 742",
       reference: "Portón azul",
@@ -181,6 +240,8 @@ describe("buildRotulosPdf", () => {
           { quantity: 1, name: "Vitamina D3 K2", variant: null },
           { quantity: 2, name: "Multivitamínico", variant: null },
         ],
+        collectAmount: 1299.5,
+        currency: "PEN",
         destination: "San Juan de Lurigancho / Lima / Lima Metropolitana",
         address:
           "Avenida Próceres de la Independencia 3450, Urbanización Las Flores de Lurigancho, Manzana J Lote 14, tercer piso",
@@ -205,6 +266,8 @@ describe("buildRotulosPdf", () => {
       orderName: "#KP1",
       customerName: "Ana",
       customerPhone: "519",
+      collectAmount: 149,
+      currency: "PEN",
       destination: "Surco",
       address: "Av. 1",
       reference: null,
@@ -223,6 +286,60 @@ describe("buildRotulosPdf", () => {
     expect((await PDFDocument.load(dos)).getPageCount()).toBe(1);
   });
 
+  it("el monto a cobrar es el texto MÁS GRANDE del rótulo", async () => {
+    // Es el dato que más caro sale equivocar y se lee de pie, en la puerta. Si
+    // algún día otro campo lo supera en tamaño, este test lo dice.
+    const qrPng = new Uint8Array(await QRCode.toBuffer("m", { type: "png", width: 120 }));
+    const pdf = await buildRotulosPdf([
+      {
+        code: "KP1-S01",
+        courier: "propio",
+        orderName: "#KP1",
+        customerName: "Ana",
+        customerPhone: "519",
+        items: [{ quantity: 1, name: "Producto", variant: null }],
+        collectAmount: 298,
+        currency: "PEN",
+        destination: "Surco",
+        address: "Av. 1",
+        reference: null,
+        qrPayload: "m",
+        qrPng,
+      },
+    ]);
+
+    const drawn = textWithSizes(pdf);
+    const amount = drawn.find((d) => d.text === "S/ 298");
+    expect(amount, "el monto tiene que estar impreso").toBeTruthy();
+    const biggest = Math.max(...drawn.map((d) => d.size));
+    expect(amount!.size).toBe(biggest);
+  });
+
+  it("sin total no imprime cero: manda a mirar el pedido", async () => {
+    // Un "S/ 0" grande hace que el motorizado entregue sin cobrar.
+    const qrPng = new Uint8Array(await QRCode.toBuffer("n", { type: "png", width: 120 }));
+    const pdf = await buildRotulosPdf([
+      {
+        code: "KP2-S01",
+        courier: "propio",
+        orderName: "#KP2",
+        customerName: "Ana",
+        customerPhone: "519",
+        items: [],
+        collectAmount: null,
+        currency: null,
+        destination: "Surco",
+        address: "Av. 1",
+        reference: null,
+        qrPayload: "n",
+        qrPng,
+      },
+    ]);
+    const drawn = textWithSizes(pdf).map((d) => d.text);
+    expect(drawn).toContain("VER PEDIDO");
+    expect(drawn.some((t) => /^S\/\s*0$/.test(t))).toBe(false);
+  });
+
   it("no falla con datos vacíos ni con texto fuera de WinAnsi", async () => {
     const qrPng = new Uint8Array(await QRCode.toBuffer("x", { type: "png", width: 120 }));
     const pdf = await buildRotulosPdf([
@@ -233,6 +350,8 @@ describe("buildRotulosPdf", () => {
         customerName: "🙂 Cliente",
         customerPhone: null,
         items: [],
+        collectAmount: null,
+        currency: null,
         destination: null,
         address: null,
         reference: null,

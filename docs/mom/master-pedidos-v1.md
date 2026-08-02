@@ -1203,6 +1203,33 @@ rótulos.
   (§6.3). El contenido del rótulo se lee bajo RLS: una salida de otra tienda no
   aparece aunque se manipule la URL.
 
+### El monto a cobrar
+
+Lo que hay que cobrar en la puerta es **el dato más importante del rótulo**:
+cobrar de menos es plata perdida y cobrar de más es una devolución con el cliente
+molesto. Por eso se imprime en un recuadro de ancho completo, arriba de todo, y
+es **el texto más grande de la etiqueta** — más que el código de salida, más que
+la dirección.
+
+- La cifra es el **total del pedido** (`orders.total_amount`), el mismo importe
+  que ya usan la ruta del motorizado y el cálculo de lo que cobra Aliclik.
+- Cuando no se conoce el total —una salida sin pedido vinculado— el recuadro dice
+  **«VER PEDIDO»**, nunca «S/ 0». Un cero impreso manda a entregar sin cobrar.
+- El importe se dibuja al mayor tamaño que quepa en el recuadro, así que un
+  monto de cuatro cifras se ve igual de bien que uno de tres.
+
+### El rótulo se imprime en PDF, no en HTML
+
+**Existe un solo rótulo**, y es el PDF de 100 × 150 mm: el del lote y el de la
+reimpresión individual son el mismo archivo. Pedir el rótulo de una salida
+concreta lleva al mismo generador.
+
+La razón es doble. Una página HTML se imprime a la medida que supone el
+navegador —A4—, y el rótulo salía diminuto en una esquina de la hoja. Y un
+segundo renderizador se queda atrás: el HTML se había quedado sin la tabla de
+productos, sin la variante y sin el monto a cobrar. Dos rótulos distintos para el
+mismo paquete son una fuente permanente de errores de almacén.
+
 ### Los productos del rótulo
 
 El rótulo lo lee quien arma la caja, así que la lista de productos responde dos
@@ -1220,6 +1247,9 @@ cosas de un vistazo: **cuántos** y **cuál**.
   está vinculada a un pedido.
 - Si no caben todas las líneas se indica cuántas faltan: el rótulo nunca calla
   que hay más producto del que muestra.
+- Cuando los productos y la **referencia** no caben juntos, cede la referencia.
+  El almacén no puede empacar lo que no ve escrito, mientras que la referencia es
+  una ayuda para encontrar la puerta que el motorizado también tiene en la app.
 
 ### Pedir el rótulo crea la salida
 

@@ -294,7 +294,9 @@ export async function createManualRouteOutput(
   const shipmentId = crypto.randomUUID();
   const base = normalizeOrderCode(ctx.row.order_name) || orderId.slice(0, 8).toUpperCase();
   const guideCode = `MOM-${base}-${input.courier.toUpperCase()}-${shipmentId.slice(0, 8).toUpperCase()}`;
-  const labelUrl = `/api/pedidos/rotulo/${shipmentId}`;
+  // El rótulo es un PDF de 100 × 150 mm: el HTML imprimía a tamaño A4 y salía
+  // diminuto en una esquina de la hoja.
+  const labelUrl = `/api/pedidos/rotulos?ids=${shipmentId}`;
   const assignedAt = new Date().toISOString();
   const { data: inserted, error: insertError } = await admin
     .from("shipments")
