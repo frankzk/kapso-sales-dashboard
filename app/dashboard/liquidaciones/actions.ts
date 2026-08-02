@@ -31,6 +31,8 @@ export interface ActionResult {
   message?: string;
 }
 
+const SETTLEMENT_COURIERS = new Set(["aliclik", "swayp", "axel", "urpi", "tanders"]);
+
 export interface SettlementOrderCandidate {
   orderId: string;
   orderName: string;
@@ -130,6 +132,51 @@ export async function relinkLine(
   if (!res.ok) return { ok: false, error: res.error };
   revalidatePath("/dashboard/liquidaciones");
   return { ok: true, message: orderId ? "Línea vinculada." : "Línea marcada sin pedido." };
+}
+
+/** Corrige una transcripción sin tocar la evidencia original y deja auditoría. */
+export async function correctSettlementLineValues(
+  settlementId: string,
+  lineId: string,
+  input: {
+    declaredAmount: number | null;
+    declaredFee: number | null;
+    reason: string;
+  },
+): Promise<ActionResult> {
+  const g = await guard("settlements.manage");
+  if ("error" in g) return { ok: false, error: g.error };
+
+  const reach = await assertReachable(g.admin, settlementId);
+  if ("error" in reach) return { ok: false, error: reach.error };
+
+  const reason = input.reason.trim();
+  if (reason.length < 3) {
+    return { ok: false, error: "Escribe un motivo breve para la corrección." };
+  }
+  for (const [label, value] of [
+    ["El monto reportado", input.declaredAmount],
+    ["La comisión", input.declaredFee],
+  ] as const) {
+    if (value !== null && (!Number.isFinite(value) || value < 0)) {
+      return { ok: false, error: `${label} debe ser un número igual o mayor a cero.` };
+    }
+  }
+
+  const { data, error } = await g.admin.rpc("correct_rider_settlement_line_values", {
+    p_settlement_id: settlementId,
+    p_line_id: lineId,
+    p_declared_amount: input.declaredAmount,
+    p_declared_fee: input.declaredFee,
+    p_reason: reason,
+    p_actor: g.user.id,
+  });
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/dashboard/liquidaciones");
+  return Number(data ?? 0) > 0
+    ? { ok: true, message: "Fila corregida. El valor anterior quedó en el historial." }
+    : { ok: true, message: "No había cambios que guardar." };
 }
 
 /**
@@ -344,7 +391,13 @@ export async function createRider(input: {
 /** Actualiza la cabecera: quién liquida, cuánto declaró depositar y la nota. */
 export async function updateSettlementHeader(
   settlementId: string,
-  input: { riderId: string | null; declaredCash: number; declaredYape: number; note: string | null },
+  input: {
+    riderId: string | null;
+    courier: string | null;
+    declaredCash: number;
+    declaredYape: number;
+    note: string | null;
+  },
 ): Promise<ActionResult> {
   const g = await guard("settlements.manage");
   if ("error" in g) return { ok: false, error: g.error };
@@ -361,10 +414,19 @@ export async function updateSettlementHeader(
     return { ok: false, error: "La liquidación está cerrada." };
   }
 
+  const courier = input.courier?.trim().toLowerCase() || null;
+  if (courier && !SETTLEMENT_COURIERS.has(courier)) {
+    return { ok: false, error: "Selecciona un courier válido." };
+  }
+  if (courier && input.riderId) {
+    return { ok: false, error: "El lote pertenece a un courier o a un motorizado propio, no a ambos." };
+  }
+
   const { error } = await g.admin
     .from("rider_settlements")
     .update({
       rider_id: input.riderId,
+      courier,
       declared_cash: Math.max(0, input.declaredCash),
       declared_yape: Math.max(0, input.declaredYape),
       note: input.note?.trim() || null,
@@ -403,16 +465,10 @@ export async function recheckSettlement(settlementId: string): Promise<ActionRes
   };
 }
 
-/**
- * Cierra la liquidación y congela el pago al motorizado.
- *
- * Exige que el cuadre esté limpio salvo que se pase `force` — un descuadre
- * cerrado a conciencia es una decisión de la empresa, pero tiene que ser
- * explícita y queda anotada.
- */
+/** Cierra la liquidación únicamente cuando todas sus líneas ya coinciden. */
 export async function closeSettlement(
   settlementId: string,
-  opts: { deductShortfall?: boolean; force?: boolean } = {},
+  opts: { deductShortfall?: boolean } = {},
 ): Promise<ActionResult> {
   const g = await guard("settlements.close");
   if ("error" in g) return { ok: false, error: g.error };
@@ -427,40 +483,38 @@ export async function closeSettlement(
   }
 
   const { totals } = detail.reconciled;
-  if (!totals.balanced && !opts.force) {
+  if (!totals.balanced) {
     return {
       ok: false,
       error:
         totals.reviewCount > 0
-          ? `Quedan ${totals.reviewCount} línea(s) sin vincular. Resuélvelas o cierra con descuadre a conciencia.`
-          : `Hay ${totals.mismatchCount} descuadre(s). Revísalos o cierra con descuadre a conciencia.`,
+          ? `Quedan ${totals.reviewCount} línea(s) sin vincular. Todo el lote seguirá observado hasta resolverlas.`
+          : `Hay ${totals.mismatchCount} diferencia(s). Todo el lote seguirá observado hasta resolverlas.`,
     };
   }
 
-  const tariffs = await getRiderTariffs();
-  const payout = computeRiderPayout(
-    detail.reconciled.lines,
-    tariffs,
-    detail.settlement.settlement_date,
-    { deductShortfall: opts.deductShortfall },
-  );
-  if (payout.missingTariffs > 0) {
+  const isCourierBatch = Boolean(detail.settlement.courier);
+  const payout = isCourierBatch
+    ? null
+    : computeRiderPayout(
+        detail.reconciled.lines,
+        await getRiderTariffs(),
+        detail.settlement.settlement_date,
+        { deductShortfall: opts.deductShortfall },
+      );
+  if (payout && payout.missingTariffs > 0) {
     return {
       ok: false,
       error: `Faltan ${payout.missingTariffs} tarifa(s) de motorizado vigentes ese día. Defínelas en Costos antes de cerrar.`,
     };
   }
 
-  const forcedNote = !totals.balanced
-    ? `${detail.settlement.note ? detail.settlement.note + " · " : ""}Cerrada con descuadre de S/ ${totals.difference.toFixed(2)}.`
-    : detail.settlement.note;
-
   const { error } = await g.admin
     .from("rider_settlements")
     .update({
       status: "cerrada",
-      payout_amount: payout.net,
-      note: forcedNote,
+      payout_amount: payout?.net ?? null,
+      note: detail.settlement.note,
       closed_at: new Date().toISOString(),
       closed_by: g.user.id,
       updated_at: new Date().toISOString(),
@@ -469,7 +523,12 @@ export async function closeSettlement(
   if (error) return { ok: false, error: error.message };
 
   revalidatePath("/dashboard/liquidaciones");
-  return { ok: true, message: `Cerrada. Pago al motorizado: S/ ${payout.net.toFixed(2)}.` };
+  return {
+    ok: true,
+    message: payout
+      ? `Cerrada. Pago al motorizado: S/ ${payout.net.toFixed(2)}.`
+      : `Lote de courier cerrado. Comisión retenida: S/ ${totals.feeTotal.toFixed(2)}.`,
+  };
 }
 
 /**

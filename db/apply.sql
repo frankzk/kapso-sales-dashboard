@@ -189,4 +189,6 @@
 \ir migrations/0091_canete_agency_coverage.sql
 \echo 'Applying 0092_multiple_payment_differences.sql'
 \ir migrations/0092_multiple_payment_differences.sql
+\echo 'Applying 0093_settlement_line_corrections.sql'
+\ir migrations/0093_settlement_line_corrections.sql
 \echo 'Done.'

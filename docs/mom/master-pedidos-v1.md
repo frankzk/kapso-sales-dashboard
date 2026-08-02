@@ -686,6 +686,11 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
   la empresa.
 - Los couriers descuentan el costo de envío antes de depositar.
 - Neto esperado: cobrado menos costo logístico aplicable.
+- La cabecera distingue el emisor del lote de una persona repartidora: Axel,
+  Aliclik, Swayp y Urpi se asignan como **courier**. El campo motorizado se usa
+  únicamente cuando la liquidación corresponde a Johnny, Roy, Douglas u otro
+  motorizado propio. Un lote de Axel no exige crear a «Axel Courier» como
+  usuario ni calcularle tarifas de motorizado propio.
 - Conciliación: guía y pedido Shopify, con nombre/teléfono como apoyo.
 - En la corrección manual, una búsqueda por código Shopify exacto consulta todas
   las tiendas accesibles y no queda oculta por la ventana de fechas ni por una
@@ -695,6 +700,19 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
 - No existe liquidación parcial por guía.
 - Si una fila no cuadra, todo el lote queda Observado.
 - Causas: pago faltante, importe menor o pedido no incluido.
+- Antes del cierre, un rol con `settlements.manage` puede corregir una comisión
+  o monto transcrito de una fila. La corrección exige motivo y conserva en un
+  historial inmutable la liquidación, fila, campo, valor anterior, valor nuevo,
+  actor y fecha. La imagen y el contenido original de `raw` no se sobrescriben.
+- La revisión debe mostrar por separado **lo reportado por el courier** y **lo
+  esperado según Kapta**. Por fila se presentan monto reportado, comisión
+  reportada, monto esperado, diferencia y resultado de validación. En la
+  cabecera se resumen las anomalías del lote, el total cobrado reportado, la
+  comisión retenida, el neto que debe depositar, el depósito registrado y el
+  saldo pendiente o excedente.
+- «Coincide» significa que la fila concuerda con el Master. «Courier reporta
+  cobro, Kapta aún no registra entrega» indica que primero debe aplicarse o
+  validar el resultado operativo; no implica automáticamente fraude ni cierre.
 - El costo faltante bloquea el cierre.
 - Swayp vence a los cuatro días; Axel y Urpi a los tres días.
 - Responsables: Daysi para Lima, Akemi para Swayp, Yohalis como responsable
@@ -869,6 +887,9 @@ Primer bloque publicado en el drawer del Master:
   conciliar las demás cajas del mismo pedido.
 - Liquidación observada o conciliada. No se permite conciliar si falta el costo
   logístico configurado.
+- El módulo de Liquidaciones permite corregir transcripciones por fila con
+  auditoría append-only, asigna courier y motorizado como conceptos distintos y
+  muestra un resumen explícito de anomalías antes de permitir el cierre del lote.
 - Apertura y resolución de indemnización Aliclik por salida concreta.
 - Solicitud de reembolso y confirmación posterior; el botón no mueve dinero y
   solo el rol owner puede confirmar que Frankz ya lo ejecutó.

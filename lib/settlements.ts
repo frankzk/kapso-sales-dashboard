@@ -44,12 +44,12 @@ export type SettlementVerdict =
   | "sin_pedido";
 
 export const VERDICT_LABELS: Record<SettlementVerdict, string> = {
-  conforme: "Conforme",
-  cobro_de_mas: "Cobró de más",
-  cobro_de_menos: "Cobró de menos",
-  entregado_sin_cobro: "Entregado sin cobro",
-  cobro_sin_entrega: "Cobro sin entrega",
-  sin_pedido: "Sin pedido",
+  conforme: "Coincide",
+  cobro_de_mas: "Reportó más de lo esperado",
+  cobro_de_menos: "Reportó menos de lo esperado",
+  entregado_sin_cobro: "Kapta registra entrega; courier no reporta cobro",
+  cobro_sin_entrega: "Courier reporta cobro; Kapta aún no registra entrega",
+  sin_pedido: "Pedido pendiente de vincular",
 };
 
 /** Un veredicto que exige que alguien lo mire antes de cerrar. */

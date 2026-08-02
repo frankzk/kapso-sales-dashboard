@@ -240,6 +240,26 @@ describe("cuadre con la comisión del courier", () => {
     expect(res.totals.depositDifference).toBe(0);
   });
 
+  it("recalcula el neto cuando una comisión omitida por visión se corrige", () => {
+    const base = {
+      id: "l1",
+      order_id: null,
+      guide_code: null,
+      order_name: "#KP124721",
+      declared_status: "SOLO DEJAR",
+      declared_amount: 0,
+      customer_name: "Daniel Italo Lau",
+      district: "San Martín de Porres",
+      match_status: "review",
+    };
+    const before = reconcileSettlement([{ ...base, declared_fee: null }], new Map());
+    const corrected = reconcileSettlement([{ ...base, declared_fee: 10 }], new Map());
+
+    expect(before.totals.feeTotal).toBe(0);
+    expect(corrected.totals.feeTotal).toBe(10);
+    expect(corrected.totals.expectedDeposit).toBe(-10);
+  });
+
   it("la comisión de POS se descuenta como cualquier otra", () => {
     const res = reconcileSettlement([], new Map(), { cash: 0, posFee: 8 });
     expect(res.totals.feeTotal).toBe(8);

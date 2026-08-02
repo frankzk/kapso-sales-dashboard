@@ -19,6 +19,7 @@ export const maxDuration = 120;
 const BUCKET = "rider-settlements";
 
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp", "image/jpg"]);
+const SETTLEMENT_COURIERS = new Set(["aliclik", "swayp", "axel", "urpi", "tanders"]);
 
 function isImage(file: File): boolean {
   if (IMAGE_TYPES.has((file.type ?? "").toLowerCase())) return true;
@@ -76,6 +77,16 @@ export async function POST(req: NextRequest) {
   const rawDate = String(form.get("settlementDate") ?? "").trim();
   const askedDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null;
   const riderId = String(form.get("riderId") ?? "").trim() || null;
+  const requestedCourier = String(form.get("courier") ?? "").trim().toLowerCase() || null;
+  if (requestedCourier && !SETTLEMENT_COURIERS.has(requestedCourier)) {
+    return NextResponse.json({ error: "Courier inválido." }, { status: 400 });
+  }
+  if (requestedCourier && riderId) {
+    return NextResponse.json(
+      { error: "Selecciona un courier o un motorizado propio, no ambos." },
+      { status: 400 },
+    );
+  }
   const note = String(form.get("note") ?? "").trim() || null;
   const money = (key: string): number => {
     const n = Number(String(form.get(key) ?? "").replace(",", "."));
@@ -234,7 +245,9 @@ export async function POST(req: NextRequest) {
     fileSha256: sha256,
     note,
     userId: user.id,
-    courier: format === "generico" || format === "foto" ? null : format,
+    courier: riderId
+      ? null
+      : requestedCourier ?? (format === "generico" || format === "foto" ? null : format),
     posFee,
     directCollected:
       format === "axel"
