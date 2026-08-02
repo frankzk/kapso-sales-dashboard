@@ -505,7 +505,7 @@ export function OrdersMasterBoard({
       </div>
 
       {searchActive ? (
-        <Card className="p-0">
+        <Card className="w-fit min-w-full p-0">
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
             <p className="text-sm font-medium text-slate-800">
               Resultados de búsqueda ({total})
@@ -803,7 +803,7 @@ export function OrdersMasterBoard({
             </Card>
           )}
 
-          <Card className="p-0">
+          <Card className="w-fit min-w-full p-0">
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
               <p className="text-sm font-medium text-slate-800">
                 {listed.length} {listed.length === 1 ? "pedido" : "pedidos"}
