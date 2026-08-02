@@ -20,10 +20,24 @@ export default async function TeamPage({
   } = await sb.auth.getUser();
 
   // Organizations where the current user is owner/admin (can manage the team).
-  const { data: memberships } = await sb.from("memberships").select("org_id, role, organizations(name)");
-  const adminOrgs = (memberships ?? [])
-    .filter((m: any) => m.role === "owner" || m.role === "admin")
-    .map((m: any) => ({ id: m.org_id as string, name: (m.organizations?.name as string) ?? m.org_id, role: m.role as Role }));
+  // Scope to the current user's own memberships: RLS lets an owner/admin read
+  // every membership row in their org, so without this filter each org would
+  // repeat once per admin. Dedupe by org id as a further guard against duplicate
+  // membership rows.
+  const { data: memberships } = await sb
+    .from("memberships")
+    .select("org_id, role, organizations(name)")
+    .eq("user_id", user?.id ?? "");
+  const adminOrgs = Array.from(
+    new Map(
+      (memberships ?? [])
+        .filter((m: any) => m.role === "owner" || m.role === "admin")
+        .map((m: any) => [
+          m.org_id as string,
+          { id: m.org_id as string, name: (m.organizations?.name as string) ?? m.org_id, role: m.role as Role },
+        ]),
+    ).values(),
+  );
 
   if (!adminOrgs.length) {
     return (
