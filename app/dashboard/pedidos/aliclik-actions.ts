@@ -32,7 +32,7 @@ import { getStoreCreds } from "@/lib/ingest";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { getOrderMasterDetail } from "@/lib/orders-master-access";
 import { normalizePhone } from "@/lib/phone";
-import { categoryOf } from "@/lib/shipments";
+import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
 import {
   cancelOrder,
   createOrder,
@@ -57,6 +57,7 @@ import {
   type ResolvedItem,
 } from "@/lib/aliclik-catalog";
 import { listActiveShopifyCatalogVariants, type ShopifyClientOpts } from "@/lib/shopify";
+import { canAdoptExistingGuide } from "@/lib/aliclik-orphans";
 import { MAX_ACCEPTABLE_LOSS, reconcileToOrderTotal } from "@/lib/aliclik-money";
 import {
   canScheduleExpress,
@@ -1263,20 +1264,77 @@ export async function linkExistingAliclikGuide(
   }
   if (mapped.returned) insert.returned_at = lastReportAt;
 
-  const { data: shipment, error: shipErr } = await admin
+  // ADOPTAR ANTES DE INSERTAR. La guía puede existir YA en `shipments` sin estar
+  // enganchada a ningún pedido: es el caso de las miles de guías que entraron por
+  // un reporte Excel y el importador no logró casar con su pedido (order_id null,
+  // matched false). Insertar una segunda fila con el mismo `guide_code` choca
+  // contra el índice único y el error se leía como "otra operación la vinculó",
+  // que confundía —nadie la vinculó, ya existía— y dejaba el pedido sin guía y
+  // sin seguimiento. Si la fila existe y está libre (o ya es de este pedido), se
+  // ADOPTA: se le pone el vínculo y NO se pisa su estado, que el reporte ya venía
+  // manteniendo. `reconcileDeliveryStatus` garantiza que el estado solo avance,
+  // así que un "entregado" del reporte nunca retrocede al "pendiente" por defecto.
+  const { data: existingRow } = await admin
     .from("shipments")
-    .insert(insert)
-    .select("id")
-    .single();
-  if (shipErr) {
-    if (shipErr.code === "23505") {
-      return {
-        error:
-          `La guía ${orderNumber} acaba de ser vinculada por otra operación. ` +
-          "Actualiza el pedido para ver dónde quedó.",
-      };
+    .select("id,order_id,delivery_status,last_report_at")
+    .eq("guide_code", resolvedGuideCode)
+    .maybeSingle();
+  const existing = existingRow as {
+    id: string;
+    order_id: string | null;
+    delivery_status: string | null;
+    last_report_at: string | null;
+  } | null;
+
+  let shipmentId: string;
+  let adopted = false;
+  if (existing && canAdoptExistingGuide(existing, orderId)) {
+    const reconciled = reconcileDeliveryStatus(existing.delivery_status, deliveryStatus);
+    const patch: Record<string, unknown> = {
+      order_id: orderId,
+      store_id: ctx.storeId,
+      order_name: ctx.row.order_name,
+      matched: true,
+      match_method: insert.match_method,
+      delivery_status: reconciled,
+      status_category: categoryOf(reconciled),
+    };
+    // El reporte ya escribió created_via cuando lo hubo; solo se marca la
+    // procedencia del vínculo si la fila no traía ninguna.
+    if (!existing.last_report_at) {
+      patch.last_report_at = lastReportAt;
+      patch.reported_status = insert.reported_status;
     }
-    return { error: `No se pudo vincular la guía: ${shipErr.message}` };
+    if (reconciled === "entregado" && existing.delivery_status !== "entregado") {
+      patch.closed_at = lastReportAt;
+      patch.delivered_source = insert.delivered_source ?? "aliclik_api";
+    }
+    const { error: adoptErr } = await admin
+      .from("shipments")
+      .update(patch)
+      .eq("id", existing.id);
+    if (adoptErr) return { error: `No se pudo vincular la guía: ${adoptErr.message}` };
+    shipmentId = existing.id;
+    adopted = true;
+  } else {
+    const { data: shipment, error: shipErr } = await admin
+      .from("shipments")
+      .insert(insert)
+      .select("id")
+      .single();
+    if (shipErr) {
+      // Con la adopción previa, un 23505 aquí ya solo puede ser una carrera real:
+      // otra operación insertó la MISMA guía entre el SELECT y este INSERT.
+      if (shipErr.code === "23505") {
+        return {
+          error:
+            `La guía ${orderNumber} acaba de ser vinculada por otra operación. ` +
+            "Actualiza el pedido para ver dónde quedó.",
+        };
+      }
+      return { error: `No se pudo vincular la guía: ${shipErr.message}` };
+    }
+    shipmentId = (shipment as { id: string }).id;
   }
 
   await admin.from("order_events").insert({
@@ -1288,7 +1346,7 @@ export async function linkExistingAliclikGuide(
     source: "aliclik",
     courier: "aliclik",
     guide_code: resolvedGuideCode,
-    shipment_id: (shipment as { id: string }).id,
+    shipment_id: shipmentId,
     note:
       preview.verificationMode === "manual_portal"
         ? `Guía ${resolvedGuideCode} creada directamente en el portal AURELA/KENKU; ` +
@@ -1341,10 +1399,13 @@ export async function linkExistingAliclikGuide(
   revalidatePath(MASTER_PATH);
   revalidatePath("/dashboard/envios");
   revalidatePath("/dashboard/leads");
+  const target = ctx.row.order_name ?? "este pedido";
   return {
-    notice:
-      `Guía ${orderNumber} verificada en Aliclik y vinculada a ` +
-      `${ctx.row.order_name ?? "este pedido"}. El seguimiento automático ya está activo.`,
+    notice: adopted
+      ? `Guía ${orderNumber} enganchada a ${target}. Ya estaba en el sistema ` +
+        "por un reporte previo, así que su estado y su seguimiento se conservan."
+      : `Guía ${orderNumber} verificada en Aliclik y vinculada a ${target}. ` +
+        "El seguimiento automático ya está activo.",
   };
 }
 
