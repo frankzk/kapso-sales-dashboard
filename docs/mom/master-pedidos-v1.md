@@ -882,6 +882,18 @@ cotejo agregaba el paquete a la ruta. Además de impedir planificar, hacía que 
 escaneo distraído metiera una caja ajena a la ruta y la diera por cotejada en el
 mismo movimiento.
 
+**A qué ruta se está trabajando no se puede deducir.** Dos rutas del mismo día y
+courier se distinguen por quién se lleva la caja, así que el destino se repite
+pegado a la acción —no solo en la lista lateral, que en el celular queda debajo y
+lejos— y la ruta se nombra empezando por la persona: «Roy · Surco · 03/08».
+Asignar pide una confirmación que la nombra entera, y cambiar de ruta descarta la
+selección pendiente: arrastrarla al destino nuevo es exactamente el cruce que hay
+que evitar.
+
+**Con cientos de paquetes, desplazarse no es una forma de encontrar nada.** Las
+listas de armados, de paquetes sin ruta y de paquetes dentro de una ruta se
+buscan por código de salida, guía, pedido, cliente o distrito.
+
 #### Los dos tipos de ruta
 
 El tipo lo decide el **courier**, no quien crea la ruta:

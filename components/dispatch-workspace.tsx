@@ -23,6 +23,8 @@ import {
   activeDispatchItems,
   dispatchProgress,
   needsRiderCheck,
+  routeDay,
+  routeName,
   type DispatchManifestState,
 } from "@/lib/dispatch";
 import type {
@@ -233,12 +235,16 @@ export function DispatchWorkspace({
             <div className="border-b border-slate-200 p-5 sm:p-7">
               <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-600">{mode === "prepare" ? "Almacén" : selected ? `${courierLabelFor(selected.courier)} · ${selected.route_label}` : "Selecciona una ruta"}</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-600">{mode === "prepare" ? "Almacén" : `Paso ${MODE_STEP[mode]} de 4`}</p>
                   <h2 className="mt-1 text-xl font-semibold text-slate-950">{MODE_TITLES[mode]}</h2>
                   <p className="mt-1 text-sm text-slate-500">{MODE_HINTS[mode]}</p>
                 </div>
                 {selected && mode !== "prepare" && <StateBadge state={selected.state} />}
               </div>
+
+              {mode !== "prepare" && selected && (
+                <RouteTarget manifest={selected} manifests={activeManifests} onSelect={(id) => setSelectedId(id)} />
+              )}
 
               {mode !== "build" && (
               <form onSubmit={submitScan} className="mt-6 flex flex-col gap-3 sm:flex-row">
@@ -267,6 +273,9 @@ export function DispatchWorkspace({
             ) : mode === "build" ? (
               selected ? (
                 <BuildRoute
+                  // Cambiar de ruta descarta la selección: arrastrarla al
+                  // destino nuevo es exactamente el cruce que hay que evitar.
+                  key={selected.id}
                   manifest={selected}
                   shipments={data.assignableShipments}
                   storeName={storeName}
@@ -289,6 +298,71 @@ export function DispatchWorkspace({
     </div>
   );
 }
+
+/**
+ * A qué ruta se está trabajando, imposible de confundir.
+ *
+ * La ruta se elige en una lista lateral que en el celular queda MUY lejos del
+ * botón —y debajo, hay que bajar a buscarla—, así que era fácil asignar los
+ * paquetes de Roy a la ruta de Yhoni sin notarlo. Este bloque repite el destino
+ * pegado a la acción e incluye su propio selector para no depender de la lista.
+ */
+function RouteTarget({
+  manifest,
+  manifests,
+  onSelect,
+}: {
+  manifest: DispatchManifest;
+  manifests: DispatchManifest[];
+  onSelect: (id: string) => void;
+}) {
+  const rider = needsRiderCheck(manifest.kind);
+  const who = manifest.received_by ?? manifest.driver_name;
+  return (
+    <div className="mt-5 rounded-2xl bg-slate-950 p-4 text-white sm:p-5">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+        Estás trabajando en
+      </p>
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="text-lg font-semibold sm:text-xl">{manifest.route_label}</span>
+        <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-semibold">
+          {courierLabelFor(manifest.courier)}
+        </span>
+        <span className="text-sm tabular-nums text-slate-300">{routeDay(manifest.route_date)}</span>
+      </div>
+      <p className="mt-1 text-sm text-slate-300">
+        {who ? (
+          <>
+            {rider ? "Motorizado" : "Recoge"}: <strong className="font-semibold text-white">{who}</strong>
+          </>
+        ) : rider ? (
+          "Motorizado sin asignar"
+        ) : (
+          ROUTE_KIND_LABELS[manifest.kind]
+        )}
+      </p>
+      {manifests.length > 1 && (
+        <label className="mt-3 block">
+          <span className="sr-only">Cambiar de ruta</span>
+          <select
+            value={manifest.id}
+            onChange={(event) => onSelect(event.target.value)}
+            className="h-10 w-full rounded-xl border border-white/20 bg-white/10 px-3 text-sm font-medium text-white outline-none sm:max-w-md"
+          >
+            {manifests.map((option) => (
+              <option key={option.id} value={option.id} className="text-slate-950">
+                {option.route_label} · {routeDay(option.route_date)}
+                {option.driver_name ? ` · ${option.driver_name}` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+    </div>
+  );
+}
+
+const MODE_STEP: Record<Mode, number> = { prepare: 1, build: 2, office: 3, pickup: 4 };
 
 const MODE_TITLES: Record<Mode, string> = {
   prepare: "Dejar paquete listo",
@@ -329,13 +403,22 @@ function ManifestCard({ manifest, active, onClick }: { manifest: DispatchManifes
   const percent = progress.total ? Math.round((completed / progress.total) * 100) : 0;
   // Quién se lleva la caja: es lo primero que se busca al mirar la lista de rutas.
   const who = manifest.received_by ?? manifest.driver_name;
-  return <button onClick={onClick} className={cn("w-full rounded-2xl border p-4 text-left transition", active ? "border-slate-950 bg-slate-950 text-white shadow-lg" : "border-slate-200 bg-white hover:border-slate-400")}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className={cn("text-xs font-semibold uppercase tracking-wide", active ? "text-slate-300" : "text-slate-500")}>{courierLabelFor(manifest.courier)}</p><p className="truncate font-semibold">{manifest.route_label}</p></div><span className={cn("text-xs tabular-nums", active ? "text-slate-300" : "text-slate-500")}>{manifest.route_date.slice(5).split("-").reverse().join("/")}</span></div><p className={cn("mt-1 truncate text-xs", active ? "text-slate-300" : "text-slate-500")}>{who ? `${rider ? "Motorizado" : "Recoge"}: ${who}` : rider ? "Motorizado sin asignar" : ROUTE_KIND_LABELS[manifest.kind]}</p><div className={cn("mt-3 h-1.5 overflow-hidden rounded-full", active ? "bg-white/15" : "bg-slate-100")}><div className={cn("h-full rounded-full", active ? "bg-emerald-400" : "bg-slate-950")} style={{ width: `${manifest.state === "in_custody" ? 100 : percent}%` }} /></div><div className={cn("mt-2 flex items-center justify-between text-xs", active ? "text-slate-300" : "text-slate-500")}><span>{DISPATCH_STATE_LABELS[manifest.state]}</span><span>{completed}/{progress.total}</span></div></button>;
+  return <button onClick={onClick} className={cn("w-full rounded-2xl border p-4 text-left transition", active ? "border-slate-950 bg-slate-950 text-white shadow-lg" : "border-slate-200 bg-white hover:border-slate-400")}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className={cn("text-xs font-semibold uppercase tracking-wide", active ? "text-slate-300" : "text-slate-500")}>{courierLabelFor(manifest.courier)}</p><p className="truncate font-semibold">{manifest.route_label}</p></div><span className={cn("text-xs tabular-nums", active ? "text-slate-300" : "text-slate-500")}>{routeDay(manifest.route_date)}</span></div><p className={cn("mt-1 truncate text-xs", active ? "text-slate-300" : "text-slate-500")}>{who ? `${rider ? "Motorizado" : "Recoge"}: ${who}` : rider ? "Motorizado sin asignar" : ROUTE_KIND_LABELS[manifest.kind]}</p><div className={cn("mt-3 h-1.5 overflow-hidden rounded-full", active ? "bg-white/15" : "bg-slate-100")}><div className={cn("h-full rounded-full", active ? "bg-emerald-400" : "bg-slate-950")} style={{ width: `${manifest.state === "in_custody" ? 100 : percent}%` }} /></div><div className={cn("mt-2 flex items-center justify-between text-xs", active ? "text-slate-300" : "text-slate-500")}><span>{DISPATCH_STATE_LABELS[manifest.state]}</span><span>{completed}/{progress.total}</span></div></button>;
 }
 
 function ReadyQueue({ shipments, storeName }: { shipments: DispatchShipment[]; storeName: Map<string, string> }) {
+  const [query, setQuery] = useState("");
   // Esta vista es la del almacén: solo lo que ya escaneó como armado.
-  const armed = shipments.filter(isArmed);
-  return <div className="p-5 sm:p-7"><div className="mb-4 flex items-center justify-between"><h3 className="font-semibold text-slate-900">Paquetes armados sin ruta</h3><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{armed.length}</span></div>{armed.length ? <div className="grid gap-2 md:grid-cols-2">{armed.slice(0, 24).map((shipment) => <div key={shipment.id} className="rounded-2xl border border-slate-200 p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-semibold text-slate-950">{packageCode(shipment)}</p><p className="text-xs text-slate-500">{shipment.order_name} · {storeName.get(shipment.store_id) ?? "Tienda"}</p></div><span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase text-slate-600">{shipment.courier}</span></div><p className="mt-3 truncate text-sm text-slate-700">{shipment.customer_name ?? "Cliente"} · {shipment.district ?? shipment.province ?? "Sin distrito"}</p><p className="mt-1 text-xs text-slate-400">Listo {fmtTime(shipment.ready_at)}</p></div>)}</div> : <div className="rounded-2xl border border-dashed border-slate-300 py-12 text-center text-sm text-slate-500">Escanea un paquete terminado y aparecerá aquí.</div>}</div>;
+  const all = shipments.filter(isArmed);
+  const needle = query.trim().toLowerCase();
+  const armed = needle
+    ? all.filter((shipment) =>
+        [shipment.output_code, shipment.guide_code, shipment.order_name, shipment.customer_name, shipment.district, shipment.province]
+          .filter(Boolean)
+          .some((field) => String(field).toLowerCase().includes(needle)),
+      )
+    : all;
+  return <div className="p-5 sm:p-7"><div className="mb-4 flex items-center justify-between"><h3 className="font-semibold text-slate-900">Paquetes armados sin ruta</h3><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{armed.length}</span></div>{all.length > 8 && <label className="relative mb-4 block"><span className="sr-only">Buscar paquete armado</span><span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar por código, pedido, cliente o distrito" className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm outline-none focus:border-slate-950 focus:bg-white" /></label>}{armed.length ? <div className="grid gap-2 md:grid-cols-2">{armed.slice(0, 24).map((shipment) => <div key={shipment.id} className="rounded-2xl border border-slate-200 p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-semibold text-slate-950">{packageCode(shipment)}</p><p className="text-xs text-slate-500">{shipment.order_name} · {storeName.get(shipment.store_id) ?? "Tienda"}</p></div><span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase text-slate-600">{shipment.courier}</span></div><p className="mt-3 truncate text-sm text-slate-700">{shipment.customer_name ?? "Cliente"} · {shipment.district ?? shipment.province ?? "Sin distrito"}</p><p className="mt-1 text-xs text-slate-400">Listo {fmtTime(shipment.ready_at)}</p></div>)}</div> : <div className="rounded-2xl border border-dashed border-slate-300 py-12 text-center text-sm text-slate-500">{needle ? `Ningún paquete armado coincide con «${query.trim()}».` : "Escanea un paquete terminado y aparecerá aquí."}</div>}{armed.length > 24 && <p className="mt-3 text-xs text-slate-400">Se muestran 24 de {armed.length}. Usa el buscador para llegar a uno concreto.</p>}</div>;
 }
 
 /**
@@ -359,6 +442,8 @@ function BuildRoute({
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [onlyMatching, setOnlyMatching] = useState(true);
+  const [query, setQuery] = useState("");
+  const [confirming, setConfirming] = useState(false);
 
   const matches = useCallback(
     (shipment: DispatchShipment) =>
@@ -366,12 +451,30 @@ function BuildRoute({
       courierKey(shipment.courier) === courierKey(manifest.courier),
     [manifest.courier],
   );
-  const visible = useMemo(
-    () => (onlyMatching ? shipments.filter(matches) : shipments),
-    [shipments, onlyMatching, matches],
-  );
+  const visible = useMemo(() => {
+    const base = onlyMatching ? shipments.filter(matches) : shipments;
+    const needle = query.trim().toLowerCase();
+    if (!needle) return base;
+    // Se busca por lo que la persona tiene a mano: el código del rótulo, el
+    // pedido, el cliente o el distrito. Con cientos de paquetes, desplazarse
+    // deja de ser una forma de encontrar nada.
+    return base.filter((shipment) =>
+      [
+        shipment.output_code,
+        shipment.guide_code,
+        shipment.order_name,
+        shipment.customer_name,
+        shipment.customer_phone,
+        shipment.district,
+        shipment.province,
+      ]
+        .filter(Boolean)
+        .some((field) => String(field).toLowerCase().includes(needle)),
+    );
+  }, [shipments, onlyMatching, matches, query]);
 
   function toggle(id: string) {
+    setConfirming(false);
     setPicked((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -381,6 +484,8 @@ function BuildRoute({
   }
 
   const closed = ["in_custody", "cancelled"].includes(manifest.state);
+  const shown = visible.slice(0, 60);
+  const allShownPicked = shown.length > 0 && shown.every((s) => picked.has(s.id));
 
   return (
     <div className="p-5 sm:p-7">
@@ -392,12 +497,46 @@ function BuildRoute({
         </label>
       </div>
 
+      {!closed && (
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <label className="relative min-w-0 flex-1">
+            <span className="sr-only">Buscar paquete</span>
+            <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">⌕</span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Buscar por código, pedido, cliente o distrito"
+              className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm outline-none focus:border-slate-950 focus:bg-white"
+            />
+          </label>
+          {shown.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setConfirming(false);
+                setPicked((prev) => {
+                  const next = new Set(prev);
+                  for (const shipment of shown) {
+                    if (allShownPicked) next.delete(shipment.id);
+                    else next.add(shipment.id);
+                  }
+                  return next;
+                });
+              }}
+              className="h-11 shrink-0 rounded-xl border border-slate-300 px-4 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              {allShownPicked ? "Quitar selección" : `Seleccionar ${shown.length}`}
+            </button>
+          )}
+        </div>
+      )}
+
       {closed ? (
         <div className="rounded-2xl border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500">Esta ruta ya está cerrada.</div>
       ) : visible.length ? (
         <>
           <div className="grid gap-2 md:grid-cols-2">
-            {visible.slice(0, 60).map((shipment) => (
+            {shown.map((shipment) => (
               <label
                 key={shipment.id}
                 className={cn(
@@ -422,24 +561,60 @@ function BuildRoute({
               </label>
             ))}
           </div>
-          {visible.length > 60 && <p className="mt-3 text-xs text-slate-400">Se muestran 60 de {visible.length}. Asigna estos y vuelve por el resto.</p>}
-          <button
-            disabled={busy || !picked.size}
-            onClick={async () => {
-              setBusy(true);
-              const result = await addShipmentsToManifest(manifest.id, [...picked]);
-              setPicked(new Set());
-              await onAdded(result);
-              setBusy(false);
-            }}
-            className="mt-5 h-12 w-full rounded-xl bg-slate-950 font-semibold text-white disabled:opacity-40 sm:w-auto sm:px-8"
-          >
-            {busy ? "Asignando…" : `Asignar ${picked.size || ""} a la ruta`.trim()}
-          </button>
+          {visible.length > 60 && <p className="mt-3 text-xs text-slate-400">Se muestran 60 de {visible.length}. Afina la búsqueda o asigna estos y vuelve por el resto.</p>}
+
+          {/* Barra pegada al pie: con la lista larga, el destino y el botón se
+              quedaban arriba y fuera de vista, que es justo cuando uno asigna a
+              la ruta equivocada. */}
+          {picked.size > 0 && (
+            <div className="sticky bottom-4 z-10 mt-5">
+              {confirming ? (
+                <div className="rounded-2xl border-2 border-slate-950 bg-white p-4 shadow-xl">
+                  <p className="text-sm text-slate-700">
+                    Vas a asignar <strong className="font-semibold text-slate-950">{picked.size} paquete{picked.size === 1 ? "" : "s"}</strong> a la ruta{" "}
+                    <strong className="font-semibold text-slate-950">{routeName(manifest)}</strong>.
+                  </p>
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <button
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true);
+                        const result = await addShipmentsToManifest(manifest.id, [...picked]);
+                        setPicked(new Set());
+                        setConfirming(false);
+                        await onAdded(result);
+                        setBusy(false);
+                      }}
+                      className="h-12 rounded-xl bg-slate-950 px-6 font-semibold text-white disabled:opacity-40"
+                    >
+                      {busy ? "Asignando…" : "Sí, asignar"}
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() => setConfirming(false)}
+                      className="h-12 rounded-xl border border-slate-300 px-6 font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirming(true)}
+                  className="h-14 w-full rounded-2xl bg-slate-950 px-6 text-left font-semibold text-white shadow-xl"
+                >
+                  <span className="block text-base">Asignar {picked.size} paquete{picked.size === 1 ? "" : "s"}</span>
+                  <span className="block truncate text-xs font-normal text-slate-300">a la ruta {routeName(manifest)}</span>
+                </button>
+              )}
+            </div>
+          )}
         </>
       ) : (
         <div className="rounded-2xl border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500">
-          No hay paquetes libres {onlyMatching ? `para ${courierLabelFor(manifest.courier)}` : ""}.
+          {query.trim()
+            ? `Ningún paquete coincide con «${query.trim()}».`
+            : `No hay paquetes libres ${onlyMatching ? `para ${courierLabelFor(manifest.courier)}` : ""}.`}
         </div>
       )}
     </div>
@@ -479,11 +654,29 @@ function HandOverPanel({ manifest, onDone }: { manifest: DispatchManifest; onDon
 }
 
 function ManifestDetail({ manifest, mode, canManage, onChanged, showResult }: { manifest: DispatchManifest; mode: Mode; canManage: boolean; onChanged: () => Promise<void>; showResult: (r: DispatchActionResult) => void }) {
+  const [query, setQuery] = useState("");
   const active = activeDispatchItems(manifest.items);
   const removed = manifest.items.filter((item) => !!item.removed_at);
   const progress = dispatchProgress(manifest.items);
   const checked = mode === "office" ? progress.officeChecked : progress.pickupChecked;
-  return <div className="p-5 sm:p-7"><div className="grid gap-3 sm:grid-cols-[1fr_auto]"><div><div className="flex items-end justify-between text-sm"><span className="font-medium text-slate-700">{mode === "office" ? "Cotejo de oficina" : "Recepción del motorizado"}</span><span className="font-semibold tabular-nums text-slate-950">{checked} de {progress.total}</span></div><div className="mt-2 h-3 overflow-hidden rounded-full bg-slate-100"><div className={cn("h-full rounded-full transition-all", mode === "office" ? "bg-blue-600" : "bg-emerald-600")} style={{ width: `${progress.total ? (checked / progress.total) * 100 : 0}%` }} /></div></div>{manifest.driver_name && <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm"><span className="text-slate-500">{needsRiderCheck(manifest.kind) ? "Motorizado" : "Contacto"}</span><p className="font-semibold text-slate-900">{manifest.driver_name}</p></div>}</div>{!needsRiderCheck(manifest.kind) && manifest.state !== "in_custody" && canManage && <HandOverPanel manifest={manifest} onDone={async (r) => { showResult(r); await onChanged(); }} />}<div className="mt-6 space-y-2">{active.length ? active.map((item) => <PackageRow key={item.id} item={item} mode={mode} canRemove={canManage && manifest.state !== "in_custody"} onRemoved={async (reason) => { showResult(await removeManifestItem(manifest.id, item.shipment_id, reason)); await onChanged(); }} />) : <div className="rounded-2xl border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500">Escanea el primer paquete para incorporarlo a esta ruta.</div>}</div>{removed.length > 0 && <details className="mt-5 rounded-2xl bg-slate-50 p-4"><summary className="cursor-pointer text-sm font-medium text-slate-600">Retirados de esta ruta ({removed.length})</summary><div className="mt-3 space-y-2">{removed.map((item) => <div key={item.id} className="flex justify-between gap-3 text-xs text-slate-500"><span>{packageCode(item.shipment)}</span><span>{item.removal_reason}</span></div>)}</div></details>}{canManage && !["in_custody", "cancelled"].includes(manifest.state) && <button onClick={async () => { const reason = window.prompt("Motivo de cancelación de la ruta"); if (!reason) return; showResult(await cancelDispatchManifest(manifest.id, reason)); await onChanged(); }} className="mt-6 text-xs font-medium text-red-600 hover:underline">Cancelar esta ruta</button>}</div>;
+  // Una ruta de cien paquetes no se revisa desplazándose. El buscador sirve
+  // sobre todo para el final del cotejo: encontrar los pocos que faltan.
+  const needle = query.trim().toLowerCase();
+  const shownItems = needle
+    ? active.filter((item) =>
+        [
+          item.shipment?.output_code,
+          item.shipment?.guide_code,
+          item.shipment?.order_name,
+          item.shipment?.customer_name,
+          item.shipment?.district,
+          item.shipment?.province,
+        ]
+          .filter(Boolean)
+          .some((field) => String(field).toLowerCase().includes(needle)),
+      )
+    : active;
+  return <div className="p-5 sm:p-7"><div className="grid gap-3 sm:grid-cols-[1fr_auto]"><div><div className="flex items-end justify-between text-sm"><span className="font-medium text-slate-700">{mode === "office" ? "Cotejo de oficina" : "Recepción del motorizado"}</span><span className="font-semibold tabular-nums text-slate-950">{checked} de {progress.total}</span></div><div className="mt-2 h-3 overflow-hidden rounded-full bg-slate-100"><div className={cn("h-full rounded-full transition-all", mode === "office" ? "bg-blue-600" : "bg-emerald-600")} style={{ width: `${progress.total ? (checked / progress.total) * 100 : 0}%` }} /></div></div>{manifest.driver_name && <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm"><span className="text-slate-500">{needsRiderCheck(manifest.kind) ? "Motorizado" : "Contacto"}</span><p className="font-semibold text-slate-900">{manifest.driver_name}</p></div>}</div>{!needsRiderCheck(manifest.kind) && manifest.state !== "in_custody" && canManage && <HandOverPanel manifest={manifest} onDone={async (r) => { showResult(r); await onChanged(); }} />}{active.length > 8 && <label className="relative mt-6 block"><span className="sr-only">Buscar en la ruta</span><span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar en esta ruta por código, pedido, cliente o distrito" className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm outline-none focus:border-slate-950 focus:bg-white" /></label>}<div className="mt-6 space-y-2">{shownItems.length ? shownItems.map((item) => <PackageRow key={item.id} item={item} mode={mode} canRemove={canManage && manifest.state !== "in_custody"} onRemoved={async (reason) => { showResult(await removeManifestItem(manifest.id, item.shipment_id, reason)); await onChanged(); }} />) : <div className="rounded-2xl border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500">{needle ? `Ningún paquete de esta ruta coincide con «${query.trim()}».` : "Aún no hay paquetes asignados. Vuelve al paso 2 para asignarlos."}</div>}</div>{removed.length > 0 && <details className="mt-5 rounded-2xl bg-slate-50 p-4"><summary className="cursor-pointer text-sm font-medium text-slate-600">Retirados de esta ruta ({removed.length})</summary><div className="mt-3 space-y-2">{removed.map((item) => <div key={item.id} className="flex justify-between gap-3 text-xs text-slate-500"><span>{packageCode(item.shipment)}</span><span>{item.removal_reason}</span></div>)}</div></details>}{canManage && !["in_custody", "cancelled"].includes(manifest.state) && <button onClick={async () => { const reason = window.prompt("Motivo de cancelación de la ruta"); if (!reason) return; showResult(await cancelDispatchManifest(manifest.id, reason)); await onChanged(); }} className="mt-6 text-xs font-medium text-red-600 hover:underline">Cancelar esta ruta</button>}</div>;
 }
 
 function PackageRow({ item, mode, canRemove, onRemoved }: { item: DispatchManifestItem; mode: Mode; canRemove: boolean; onRemoved: (reason: string) => Promise<void> }) {
