@@ -10,7 +10,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Card, cn, STICKY_HEAD, TABLE_WRAP } from "@/components/ui";
+import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { COST_CONCEPTS, buildProductCostViews, type ProductCostRow } from "@/lib/costs";
 import {
   closeTariff,
@@ -293,7 +293,7 @@ function LogisticsTab({
       )}
 
       <Card className="p-0">
-        <div className={TABLE_WRAP}>
+        <div className={TABLE_WRAP_FROM[1240]}>
           <table className="w-full min-w-[900px] text-sm">
             <thead className={STICKY_HEAD}>
               <tr className="text-left text-xs text-slate-500">
@@ -434,7 +434,7 @@ function ProductsTab({
       </Card>
 
       <Card className="p-0">
-        <div className={TABLE_WRAP}>
+        <div className={TABLE_WRAP_FROM[1160]}>
           <table className="w-full min-w-[820px] text-sm">
             <thead className={STICKY_HEAD}>
               <tr className="text-left text-xs text-slate-500">
@@ -721,7 +721,7 @@ function AdditionalTab({
       )}
 
       <Card className="p-0">
-        <div className={TABLE_WRAP}>
+        <div className={TABLE_WRAP_FROM[980]}>
           <table className="w-full min-w-[600px] text-sm">
             <thead className={STICKY_HEAD}>
               <tr className="text-left text-xs text-slate-500">

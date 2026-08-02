@@ -16,7 +16,7 @@ import {
   unlinkRiderUser,
   type TeamActionState,
 } from "@/app/dashboard/team/actions";
-import { Card } from "@/components/ui";
+import { Card, cn, STICKY_HEAD, TABLE_WRAP, TABLE_WRAP_FROM } from "@/components/ui";
 
 const initial: TeamActionState = {};
 
@@ -138,10 +138,10 @@ export function TeamManager({
         <>
           <AddMemberForm orgId={org.id} myRole={myRole} />
           <Card>
-            <div className="overflow-x-auto">
+            <div className={TABLE_WRAP}>
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-slate-200 text-xs text-slate-500">
+                  <tr className={cn(STICKY_HEAD, "text-xs text-slate-500")}>
                     <th className="py-2 text-left font-medium">Miembro</th>
                     <th className="py-2 text-left font-medium">Rol</th>
                     <th className="py-2 text-left font-medium">Acceso a tiendas</th>
@@ -444,10 +444,10 @@ function RidersTab({
       <RiderForm orgId={orgId} stores={stores} pending={pending} onSubmit={(input) => run(() => saveRider(input))} />
 
       <Card className="p-0">
-        <div className="overflow-x-auto">
+        <div className={TABLE_WRAP_FROM[1160]}>
           <table className="w-full min-w-[820px] text-sm">
             <thead>
-              <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+              <tr className={cn(STICKY_HEAD, "text-left text-xs text-slate-500")}>
                 <th className="px-4 py-2 font-medium">Motorizado</th>
                 <th className="px-2 py-2 font-medium">Transportadora</th>
                 <th className="px-2 py-2 font-medium">Tienda</th>
