@@ -530,11 +530,19 @@ export function OrdersMasterBoard({
         <Card className="w-fit min-w-full p-0">
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
             <p className="text-sm font-medium text-slate-800">
-              Resultados de búsqueda ({total})
+              Resultados de búsqueda ({total.toLocaleString("es-PE")})
             </p>
-            <button onClick={() => setSearch("")} className="text-xs text-slate-500 hover:underline">
-              Limpiar búsqueda
-            </button>
+            <div className="flex items-center gap-3">
+              <PagerControls
+                page={page}
+                totalPages={totalPages}
+                busy={navigating}
+                onPage={(p) => navigate({ page: p })}
+              />
+              <button onClick={() => setSearch("")} className="text-xs text-slate-500 hover:underline">
+                Limpiar búsqueda
+              </button>
+            </div>
           </div>
           {searching ? (
             <p className="p-5 text-sm text-slate-400">Buscando…</p>
@@ -837,6 +845,12 @@ export function OrdersMasterBoard({
                   </span>
                 )}
               </p>
+              <PagerControls
+                page={page}
+                totalPages={totalPages}
+                busy={navigating}
+                onPage={(p) => navigate({ page: p })}
+              />
             </div>
             {listed.length ? (
               <>
@@ -3141,6 +3155,45 @@ function OrderActions({
  * (contado en la base, no las visibles) para que nadie confunda "hay 100" con
  * "hay 100 en total".
  */
+/**
+ * Anterior / Siguiente. Va arriba Y abajo de la tabla: con 100 filas, tener los
+ * controles solo al pie obliga a recorrer la página entera para cambiarla.
+ */
+function PagerControls({
+  page,
+  totalPages,
+  busy,
+  onPage,
+}: {
+  page: number;
+  totalPages: number;
+  busy: boolean;
+  onPage: (page: number) => void;
+}) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex shrink-0 items-center gap-1.5">
+      <button
+        disabled={busy || page <= 1}
+        onClick={() => onPage(page - 1)}
+        className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+      >
+        Anterior
+      </button>
+      <span className="px-1 text-xs tabular-nums text-slate-500">
+        {page} / {totalPages}
+      </span>
+      <button
+        disabled={busy || page >= totalPages}
+        onClick={() => onPage(page + 1)}
+        className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+      >
+        Siguiente
+      </button>
+    </div>
+  );
+}
+
 function Pager({
   page,
   totalPages,
@@ -3164,27 +3217,7 @@ function Pager({
         {from}–{from + shown - 1} de {total.toLocaleString("es-PE")}
         {busy && <span className="ml-2 text-slate-400">actualizando…</span>}
       </p>
-      {totalPages > 1 && (
-        <div className="flex items-center gap-1.5">
-          <button
-            disabled={busy || page <= 1}
-            onClick={() => onPage(page - 1)}
-            className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-          >
-            Anterior
-          </button>
-          <span className="px-1 text-xs text-slate-500">
-            {page} / {totalPages}
-          </span>
-          <button
-            disabled={busy || page >= totalPages}
-            onClick={() => onPage(page + 1)}
-            className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-          >
-            Siguiente
-          </button>
-        </div>
-      )}
+      <PagerControls page={page} totalPages={totalPages} busy={busy} onPage={onPage} />
     </div>
   );
 }

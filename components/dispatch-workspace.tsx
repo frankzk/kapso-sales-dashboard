@@ -23,7 +23,9 @@ import {
   dispatchProgress,
   needsRiderCheck,
   routeDay,
+  routeDayLong,
   routeName,
+  routeNameLong,
   type DispatchManifestState,
 } from "@/lib/dispatch";
 import type {
@@ -339,8 +341,8 @@ function RouteTarget({
           del mismo día. Debajo, de qué se trata esa ruta. */}
       <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="text-xl font-semibold sm:text-2xl">{title}</span>
-        <span className="text-lg font-semibold tabular-nums text-slate-300">
-          {routeDay(manifest.route_date)}
+        <span className="text-lg font-semibold text-slate-300">
+          {routeDayLong(manifest.route_date)}
         </span>
       </div>
       <p className="mt-1 text-sm text-slate-300">{subtitle}</p>
@@ -574,9 +576,13 @@ function BuildRoute({
             <div className="sticky bottom-4 z-10 mt-5">
               {confirming ? (
                 <div className="rounded-2xl border-2 border-slate-950 bg-white p-4 shadow-xl">
-                  <p className="text-sm text-slate-700">
-                    Vas a asignar <strong className="font-semibold text-slate-950">{picked.size} paquete{picked.size === 1 ? "" : "s"}</strong> a la ruta{" "}
-                    <strong className="font-semibold text-slate-950">{routeName(manifest)}</strong>.
+                  <p className="text-base text-slate-700 sm:text-lg">
+                    Vas a asignar{" "}
+                    <strong className="font-semibold text-slate-950">
+                      {picked.size} paquete{picked.size === 1 ? "" : "s"}
+                    </strong>{" "}
+                    a la ruta de{" "}
+                    <strong className="font-semibold text-slate-950">{routeNameLong(manifest)}</strong>.
                   </p>
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                     <button
@@ -605,10 +611,10 @@ function BuildRoute({
               ) : (
                 <button
                   onClick={() => setConfirming(true)}
-                  className="h-14 w-full rounded-2xl bg-slate-950 px-6 text-left font-semibold text-white shadow-xl"
+                  className="w-full rounded-2xl bg-slate-950 px-6 py-4 text-lg font-semibold text-white shadow-xl sm:text-xl"
                 >
-                  <span className="block text-base">Asignar {picked.size} paquete{picked.size === 1 ? "" : "s"}</span>
-                  <span className="block truncate text-xs font-normal text-slate-300">a la ruta {routeName(manifest)}</span>
+                  Asignar {picked.size} paquete{picked.size === 1 ? "" : "s"} a la ruta de{" "}
+                  {routeNameLong(manifest)}
                 </button>
               )}
             </div>

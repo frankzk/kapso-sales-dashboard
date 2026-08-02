@@ -32,9 +32,37 @@ export function needsRiderCheck(kind: DispatchRouteKind): boolean {
   return kind === "reparto";
 }
 
-/** Fecha corta de una ruta, como se lee en su tarjeta: `03/08`. */
+/**
+ * Fecha corta de una ruta, como se lee en su tarjeta: `03/08`.
+ *
+ * Lo que no tenga forma de fecha se devuelve tal cual. Antes se recortaba a
+ * ciegas: `"sin-fecha"` salía como `"echa"`, un dato inventado con pinta de
+ * válido — peor que mostrar el valor crudo y que se note.
+ */
 export function routeDay(routeDate: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(routeDate)) return routeDate;
   return routeDate.slice(5).split("-").reverse().join("/");
+}
+
+const WEEKDAYS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+
+/**
+ * Fecha con el día de la semana: `lunes 03/08`.
+ *
+ * El nombre del día es lo que se dice en voz alta al organizar el despacho («la
+ * de Urpi del lunes»), y distingue de un vistazo la ruta de hoy de la de ayer
+ * mejor que dos números.
+ *
+ * Se arma con `Date.UTC` y una tabla propia a propósito: `route_date` es una
+ * fecha sin hora, y dejar que el navegador la interprete en la zona local
+ * convertiría el 03/08 en domingo 02/08 en cualquier huso al oeste de Greenwich
+ * — Lima incluida.
+ */
+export function routeDayLong(routeDate: string): string {
+  const [year, month, day] = routeDate.split("-").map(Number);
+  if (!year || !month || !day) return routeDay(routeDate);
+  const weekday = WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+  return weekday ? `${weekday} ${routeDay(routeDate)}` : routeDay(routeDate);
 }
 
 /**
@@ -57,6 +85,19 @@ export function routeName(manifest: {
 }): string {
   const who = manifest.received_by ?? manifest.driver_name;
   return [who || manifest.route_label, routeDay(manifest.route_date)].filter(Boolean).join(" · ");
+}
+
+/** Igual que `routeName`, con el día de la semana: «Urpi · lunes 03/08». */
+export function routeNameLong(manifest: {
+  driver_name?: string | null;
+  received_by?: string | null;
+  route_label: string;
+  route_date: string;
+}): string {
+  const who = manifest.received_by ?? manifest.driver_name;
+  return [who || manifest.route_label, routeDayLong(manifest.route_date)]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 export interface DispatchProgressItem {
