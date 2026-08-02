@@ -2318,7 +2318,7 @@ function OrderDrawer({
                       )}
                       {g.qr_token && (
                         <a
-                          href={`/api/pedidos/rotulo/${g.id}`}
+                          href={`/api/pedidos/rotulos?ids=${g.id}`}
                           target="_blank"
                           rel="noreferrer"
                           className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
