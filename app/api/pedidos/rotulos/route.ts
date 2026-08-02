@@ -14,6 +14,7 @@ import { createServerSupabase } from "@/lib/db";
 import { isCourierTbd, outputDisplayCode } from "@/lib/shipment-output";
 import { buildRotulosPdf, type RotuloData } from "@/lib/labels/rotulo-pdf";
 import { selectLabelsForOrders, type ShipmentForLabel } from "@/lib/labels/pick-shipment";
+import { labelItemsFor } from "@/lib/labels/line-items";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -100,6 +101,23 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // Las líneas del pedido son la fuente real de cantidad y variante: el texto
+  // guardado en la salida no distingue tallas, y hay pedidos con tres líneas del
+  // mismo producto que solo se diferencian por ahí.
+  const lineItemsByOrder = new Map<string, unknown>();
+  const selectedOrderIds = Array.from(
+    new Set(selected.map((row) => row.order_id).filter(Boolean) as string[]),
+  );
+  if (selectedOrderIds.length) {
+    const { data: orderRows } = await sb
+      .from("orders")
+      .select("id,line_items")
+      .in("id", selectedOrderIds);
+    for (const order of (orderRows as { id: string; line_items: unknown }[] | null) ?? []) {
+      lineItemsByOrder.set(order.id, order.line_items);
+    }
+  }
+
   const labels: RotuloData[] = await Promise.all(
     selected.map(async (row) => {
       const payload = row.qr_token || row.output_code || row.guide_code;
@@ -111,7 +129,10 @@ export async function GET(request: NextRequest) {
         orderName: row.order_name,
         customerName: row.customer_name,
         customerPhone: row.customer_phone,
-        product: row.product,
+        items: labelItemsFor(
+          row.order_id ? lineItemsByOrder.get(row.order_id) : null,
+          row.product,
+        ),
         destination: [row.district, row.province, row.region].filter(Boolean).join(" / "),
         address: row.delivery_address,
         reference: row.delivery_reference,

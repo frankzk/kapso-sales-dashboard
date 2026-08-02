@@ -12,6 +12,7 @@
 // sin depender de un navegador headless.
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import type { LabelLineItem } from "@/lib/labels/line-items";
 
 /** 1 mm en puntos PostScript (72 dpi). */
 const MM = 72 / 25.4;
@@ -31,7 +32,8 @@ export interface RotuloData {
   orderName: string | null;
   customerName: string | null;
   customerPhone: string | null;
-  product: string | null;
+  /** Líneas del pedido: cantidad, producto y variante. */
+  items: LabelLineItem[];
   destination: string | null;
   address: string | null;
   reference: string | null;
@@ -192,6 +194,105 @@ function drawField(
   return bottom - 2.6 * MM;
 }
 
+/**
+ * Tabla de productos: una fila por producto, con la cantidad a la izquierda.
+ *
+ * Quien arma la caja necesita CUÁNTOS y CUÁL. El título de Shopify puede traer
+ * 200 caracteres de copy publicitario, así que se recorta a una línea; la
+ * VARIANTE (talla, color) va en su propia línea porque es lo que distingue dos
+ * líneas del mismo producto —y empacar la talla equivocada es un reenvío.
+ */
+function drawProducts(
+  page: PDFPage,
+  fonts: Fonts,
+  opts: { x: number; y: number; width: number; items: readonly LabelLineItem[]; minY: number },
+): number {
+  const size = 8.5;
+  const qtyW = 9 * MM;
+  const nameX = opts.x + qtyW;
+  const nameW = opts.width - qtyW;
+  const lineH = size + 1.4;
+
+  page.drawText("PRODUCTOS", {
+    x: opts.x,
+    y: opts.y,
+    size: 6,
+    font: fonts.bold,
+    color: MUTED,
+  });
+
+  let cursor = opts.y - size - 1.4 * MM;
+  let shown = 0;
+
+  for (const item of opts.items) {
+    // Cada fila necesita su línea de nombre; la de variante solo si hay.
+    const rowLines = item.variant ? 2 : 1;
+    if (cursor - rowLines * lineH < opts.minY) break;
+
+    // Más de una unidad se imprime más grande. Empacar una sola cuando iban dos
+    // es un reenvío completo, así que la cantidad tiene que saltar a la vista y
+    // no depender de que alguien lea un número del mismo tamaño que el resto.
+    const qty = `${item.quantity}`;
+    const qtySize = item.quantity > 1 ? size + 2.5 : size;
+    page.drawText(qty, { x: opts.x, y: cursor, size: qtySize, font: fonts.bold, color: INK });
+    page.drawText("x", {
+      x: opts.x + fonts.bold.widthOfTextAtSize(qty, qtySize) + 1.5,
+      y: cursor,
+      size: size - 2,
+      font: fonts.regular,
+      color: MUTED,
+    });
+
+    const [nameLine] = wrapText(item.name, fonts.bold, size, nameW, 1);
+    page.drawText(nameLine ?? "Producto", {
+      x: nameX,
+      y: cursor,
+      size,
+      font: fonts.bold,
+      color: INK,
+    });
+    cursor -= lineH;
+
+    if (item.variant) {
+      const [variantLine] = wrapText(item.variant, fonts.bold, size, nameW, 1);
+      page.drawText(variantLine ?? "", {
+        x: nameX,
+        y: cursor,
+        size,
+        font: fonts.bold,
+        color: INK,
+      });
+      cursor -= lineH;
+    }
+    shown += 1;
+  }
+
+  if (!shown) {
+    page.drawText("-", { x: opts.x, y: cursor, size, font: fonts.bold, color: INK });
+    cursor -= lineH;
+  } else if (shown < opts.items.length) {
+    // Nunca callar lo que no cupo: el almacén tiene que saber que faltan líneas.
+    const rest = opts.items.length - shown;
+    page.drawText(`+ ${rest} producto${rest === 1 ? "" : "s"} mas (ver el pedido)`, {
+      x: opts.x,
+      y: cursor,
+      size: 7,
+      font: fonts.regular,
+      color: MUTED,
+    });
+    cursor -= lineH;
+  }
+
+  const bottom = cursor + size - 1.5 * MM;
+  page.drawLine({
+    start: { x: opts.x, y: bottom },
+    end: { x: opts.x + opts.width, y: bottom },
+    thickness: 0.5,
+    color: LINE,
+  });
+  return bottom - 2.6 * MM;
+}
+
 /** Dibuja un rótulo completo en su propia página. */
 function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknown): void {
   const page = doc.addPage([PAGE_W, PAGE_H]);
@@ -237,7 +338,7 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
   // Pie fijo: QR + leyenda. Se ancla abajo para que todas las etiquetas lo
   // tengan en el mismo sitio, aunque los datos de arriba varíen de alto. Los
   // campos de arriba nunca pueden bajar de `fieldsFloor`.
-  const qrSize = 34 * MM;
+  const qrSize = 30 * MM;
   const footerTop = PAD + qrSize + 4 * MM;
   const fieldsFloor = footerTop + 2 * MM;
 
@@ -302,13 +403,11 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     maxLines: 2,
     minY: fieldsFloor,
   });
-  y = drawField(page, fonts, {
+  y = drawProducts(page, fonts, {
     x: PAD,
     y,
     width: innerW,
-    label: "Productos",
-    value: data.product,
-    maxLines: 3,
+    items: data.items,
     minY: fieldsFloor,
   });
   page.drawLine({
