@@ -238,7 +238,7 @@ describe("buildRotulosPdf", () => {
   it("genera un PDF con una página por rótulo", async () => {
     const qrPng = new Uint8Array(await QRCode.toBuffer("tok-1", { type: "png", width: 120 }));
     const base = {
-      courier: "propio",
+      storeName: "Kenku Peru",
       orderName: "#KP1",
       customerName: "Ana Pérez",
       customerPhone: "51999",
@@ -275,7 +275,7 @@ describe("buildRotulosPdf", () => {
     const pdf = await buildRotulosPdf([
       {
         code: "KP999999999-S05-MOTORIZADO-PROPIO",
-        courier: "motorizado propio",
+        storeName: "Kenku Peru",
         orderName: "#KP999999999",
         customerName: "María Fernanda de los Ángeles Rodríguez Villavicencio",
         customerPhone: "51999888777",
@@ -308,7 +308,7 @@ describe("buildRotulosPdf", () => {
     const qrPng = new Uint8Array(await QRCode.toBuffer("q", { type: "png", width: 120 }));
     const base = {
       code: "KP1-S01",
-      courier: "propio",
+      storeName: "Kenku Peru",
       orderName: "#KP1",
       customerName: "Ana",
       customerPhone: "519",
@@ -336,6 +336,63 @@ describe("buildRotulosPdf", () => {
     expect((await PDFDocument.load(dos)).getPageCount()).toBe(1);
   });
 
+  it("la cabecera es la tienda sobre el código, sin marca interna ni courier", async () => {
+    // "KAPTA - SALIDA FISICA" no le dice nada a quien recibe la caja, y el
+    // courier ya viaja dentro del código cuando está decidido. Un "POR DEFINIR"
+    // grande era ruido: quien lo decide es la Mesa de despacho.
+    const qrPng = new Uint8Array(await QRCode.toBuffer("t", { type: "png", width: 120 }));
+    const pdf = await buildRotulosPdf([
+      {
+        code: "KP1-S01",
+        storeName: "Kenku Peru",
+        orderName: "#KP1",
+        customerName: "Ana",
+        customerPhone: "519",
+        items: [{ quantity: 1, name: "Producto", variant: null }],
+        collectAmount: 99,
+        currency: "PEN",
+        destination: "Surco",
+        address: "Av. 1",
+        reference: null,
+        qrPayload: "t",
+        qrPng,
+      },
+    ]);
+
+    const drawn = textWithSizes(pdf);
+    const store = drawn.find((d) => d.text === "KENKU PERU");
+    const code = drawn.find((d) => d.text === "KP1-S01");
+    expect(store, "la tienda tiene que estar impresa").toBeTruthy();
+    expect(code).toBeTruthy();
+    // La tienda va ENCIMA del código: mayor `y` es más arriba en un PDF.
+    expect(store!.y).toBeGreaterThan(code!.y);
+    const texts = drawn.map((d) => d.text);
+    expect(texts.some((t) => t.includes("KAPTA"))).toBe(false);
+    expect(texts.some((t) => t.includes("POR DEFINIR"))).toBe(false);
+  });
+
+  it("sin tienda conocida no rompe la cabecera", async () => {
+    const qrPng = new Uint8Array(await QRCode.toBuffer("u", { type: "png", width: 120 }));
+    const pdf = await buildRotulosPdf([
+      {
+        code: "KP1-S01",
+        storeName: null,
+        orderName: "#KP1",
+        customerName: "Ana",
+        customerPhone: "519",
+        items: [],
+        collectAmount: null,
+        currency: null,
+        destination: null,
+        address: null,
+        reference: null,
+        qrPayload: "u",
+        qrPng,
+      },
+    ]);
+    expect((await PDFDocument.load(pdf)).getPageCount()).toBe(1);
+  });
+
   it("el monto a cobrar es el texto MÁS GRANDE del rótulo", async () => {
     // Es el dato que más caro sale equivocar y se lee de pie, en la puerta. Si
     // algún día otro campo lo supera en tamaño, este test lo dice.
@@ -343,7 +400,7 @@ describe("buildRotulosPdf", () => {
     const pdf = await buildRotulosPdf([
       {
         code: "KP1-S01",
-        courier: "propio",
+        storeName: "Kenku Peru",
         orderName: "#KP1",
         customerName: "Ana",
         customerPhone: "519",
@@ -371,7 +428,7 @@ describe("buildRotulosPdf", () => {
     const pdf = await buildRotulosPdf([
       {
         code: "KP2-S01",
-        courier: "propio",
+        storeName: "Kenku Peru",
         orderName: "#KP2",
         customerName: "Ana",
         customerPhone: "519",
@@ -398,7 +455,7 @@ describe("buildRotulosPdf", () => {
     const pdf = await buildRotulosPdf([
       {
         code: "KP1-S01",
-        courier: "propio",
+        storeName: "Kenku Peru",
         orderName: "#KP1",
         customerName: "Ana",
         customerPhone: "519",
@@ -429,7 +486,7 @@ describe("buildRotulosPdf", () => {
     const pdf = await buildRotulosPdf([
       {
         code: "",
-        courier: "aliclik",
+        storeName: "Kenku Peru",
         orderName: null,
         customerName: "🙂 Cliente",
         customerPhone: null,

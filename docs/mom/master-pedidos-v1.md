@@ -1314,6 +1314,17 @@ rótulos.
   (§6.3). El contenido del rótulo se lee bajo RLS: una salida de otra tienda no
   aparece aunque se manipule la URL.
 
+### La cabecera del rótulo
+
+Arriba va **el nombre de la tienda** —Kenku Perú, Aurela— y debajo el código de
+salida. La tienda es la marca que el cliente reconoce; «Kapta» no le dice nada a
+quien recibe la caja.
+
+El courier **no** se imprime en la cabecera: cuando está decidido ya viaja dentro
+del código (`KP123-S01-ALICLIK`), y cuando no lo está, un «POR DEFINIR» grande en
+la etiqueta es ruido — quién lo decide es la Mesa de despacho, no quien lee el
+rótulo.
+
 ### El monto a cobrar
 
 Lo que hay que cobrar en la puerta es **el dato más importante del rótulo**:
