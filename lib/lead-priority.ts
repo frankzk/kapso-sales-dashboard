@@ -21,6 +21,17 @@
 // Los leads que nadie llamó cierran mucho más (hasta 96%) porque el bot cierra
 // los fáciles solo y a la asesora le llega lo que el bot no pudo — la tasa global
 // mezcla las dos poblaciones y sugiere lo contrario de lo que hay que hacer.
+//
+// ADVERTENCIA sobre el peso de `frio`: está SUBESTIMADO y no sirve para concluir
+// que no convenga llamar fríos. El segmento se calcula con el estado de HOY, y
+// una llamada exitosa a un frío hace que el cliente dé su distrito o genere el
+// pedido — con lo cual el lead deja de ser frío y su éxito se le atribuye a otro
+// segmento. El balde "frío" es, por construcción, el de los casos donde llamar
+// NO funcionó. El sesgo golpea solo a frío: un carrito que cierra sigue teniendo
+// carrito, así que su 14–20% sí es sólido.
+// Para el ORDEN esto no cambia nada (ningún ajuste razonable pone al frío por
+// encima del carrito). Para decidir si vale la pena llamarlos hace falta otra
+// medición: el segmento AL MOMENTO de la llamada, o un A/B sobre fríos nuevos.
 
 import { leadSegment, type LeadSegment } from "@/lib/leads";
 
