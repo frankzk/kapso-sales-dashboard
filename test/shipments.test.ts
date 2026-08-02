@@ -27,6 +27,7 @@ import {
   isFenixCity,
   isFenixDistrict,
   deriveFenixCoverageCity,
+  localityMismatch,
   nextShipmentTransition,
   courierReportTransition,
   MAX_INTENTOS,
@@ -302,6 +303,35 @@ describe("deriveFenixCoverageCity (destino de un pedido Shopify)", () => {
   it("vacío cuando el pedido no tiene distrito ni departamento", () => {
     expect(deriveFenixCoverageCity(null, null)).toBe("");
     expect(deriveFenixCoverageCity("", "")).toBe("");
+  });
+});
+
+// El Excel del courier manda sobre city/district, pero a dónde va el paquete lo
+// decide la dirección de Shopify. Caso real: la guía decía "cusco" y el cliente
+// vivía en Juliaca (Puno) — el envío iba a salir a otra ciudad.
+describe("localityMismatch (courier vs dirección de Shopify)", () => {
+  it("marca el caso real: courier cusco, Shopify Juliaca · Puno", () => {
+    expect(localityMismatch("cusco", "Juliaca", "Puno")).toBe(true);
+  });
+
+  it("no marca cuando ambos lados resuelven a la misma ciudad de cobertura", () => {
+    // El courier ya guarda la clave; Shopify manda distrito + departamento.
+    expect(localityMismatch("cusco", "Wanchaq", "Cusco")).toBe(false);
+    expect(localityMismatch("arequipa", "Cerro Colorado", "Arequipa")).toBe(false);
+  });
+
+  it("tolera que una contenga a la otra, sin gritar por la forma", () => {
+    expect(localityMismatch("juliaca", "Juliaca San Roman", "Puno")).toBe(false);
+  });
+
+  it("no marca cuando falta el dato de algún lado", () => {
+    expect(localityMismatch(null, "Juliaca", "Puno")).toBe(false);
+    expect(localityMismatch("cusco", null, null)).toBe(false);
+    expect(localityMismatch("", "", "")).toBe(false);
+  });
+
+  it("también marca fuera de las ciudades Fenix", () => {
+    expect(localityMismatch("miraflores", "Tarma", "Junin")).toBe(true);
   });
 });
 
