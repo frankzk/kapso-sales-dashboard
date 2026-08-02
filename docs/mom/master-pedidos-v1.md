@@ -1176,3 +1176,23 @@ separada del usuario de acceso.
   crear la ruta. Si después se renombra o desactiva la ficha, las rutas ya
   creadas no cambian: conservan a quién recibió físicamente los paquetes (§6.3).
 
+## 28. Rótulos en lote
+
+El almacén no imprime de a uno: prepara la tanda del día (§6.2). Desde el Master
+se seleccionan varios pedidos y se descarga **un solo PDF** con todos sus
+rótulos.
+
+- Una página de **100 × 150 mm por rótulo**, el mismo formato del rótulo
+  individual, para no reconfigurar la impresora de etiquetas.
+- El rótulo pertenece a la **salida**, no al pedido: cada pedido aporta la salida
+  que sigue bajo custodia de la empresa (la que se va a preparar) y, si no hay
+  ninguna, la más reciente.
+- Un pedido en `por_generar_rotulo` **todavía no tiene salida**, así que no
+  aporta rótulo. La interfaz informa cuántos quedaron fuera por ese motivo en vez
+  de fallar en silencio.
+- La selección alcanza solo a los pedidos visibles en la página actual: el Master
+  pagina en el servidor y no expone los identificadores del filtro completo.
+- El QR impreso identifica la salida y es el que se escanea en ambos cotejos
+  (§6.3). El contenido del rótulo se lee bajo RLS: una salida de otra tienda no
+  aparece aunque se manipule la URL.
+

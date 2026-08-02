@@ -341,6 +341,29 @@ export function OrdersMasterBoard({
   const [navigating, startNav] = useTransition();
   const [showMore, setShowMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  // Selección para acciones en lote (hoy: imprimir rótulos). Solo alcanza la
+  // página visible: el Master pagina en servidor y no expone los ids del filtro
+  // completo, así que prometer "todos los 4.000" sería mentir.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const toggleRow = (orderId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  };
+  const toggleAll = (orderIds: string[], checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of orderIds) {
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  };
 
   /**
    * Cambiar un filtro es reescribir la URL y dejar que el servidor traiga la
@@ -361,6 +384,9 @@ export function OrdersMasterBoard({
     });
     if (view !== "todos") qs.set("view", view);
     if (substage) qs.set("substage", substage);
+    // Otra página u otro filtro = otras filas: mantener marcados pedidos que ya
+    // no se ven llevaría a imprimir una tanda que el operador no revisó.
+    setSelectedIds(new Set());
     startNav(() => router.replace(`${pathname}?${qs.toString()}`, { scroll: false }));
   };
 
@@ -368,6 +394,7 @@ export function OrdersMasterBoard({
     const qs = buildMasterQuery({ filters, sortKey: "created", page: 1 });
     if (stage !== "todos") qs.set("view", stage);
     if (nextSubstage) qs.set("substage", nextSubstage);
+    setSelectedIds(new Set());
     startNav(() => router.replace(`${pathname}?${qs.toString()}`, { scroll: false }));
   };
 
@@ -479,7 +506,15 @@ export function OrdersMasterBoard({
             <p className="p-5 text-sm text-slate-400">Buscando…</p>
           ) : listed.length ? (
             <>
-              <MasterTable rows={shown} storeName={storeName} multiStore={stores.length > 1} onOpen={setOpenId} />
+              <MasterTable
+                rows={shown}
+                storeName={storeName}
+                multiStore={stores.length > 1}
+                onOpen={setOpenId}
+                selected={selectedIds}
+                onToggleRow={toggleRow}
+                onToggleAll={toggleAll}
+              />
               <Pager
                 page={page}
                 totalPages={totalPages}
@@ -771,6 +806,9 @@ export function OrdersMasterBoard({
                 storeName={storeName}
                 multiStore={stores.length > 1}
                 onOpen={setOpenId}
+                selected={selectedIds}
+                onToggleRow={toggleRow}
+                onToggleAll={toggleAll}
               />
             ) : (
               <p className="p-5 text-sm text-slate-400">
@@ -796,6 +834,8 @@ export function OrdersMasterBoard({
           onSaved={() => router.refresh()}
         />
       )}
+
+      <BulkBar selectedIds={selectedIds} onClear={() => setSelectedIds(new Set())} />
     </div>
   );
 }
@@ -1015,22 +1055,117 @@ function AgencyDays({
   );
 }
 
+/**
+ * Barra de acciones en lote. Aparece solo cuando hay pedidos marcados.
+ *
+ * Descargar rótulos es una NAVEGACIÓN, no un fetch: el navegador recibe el PDF
+ * con `content-disposition: attachment` y lo guarda. Si el endpoint responde un
+ * error (por ejemplo, pedidos que aún no tienen salida), esa respuesta es JSON y
+ * no se descarga, así que se comprueba antes con una petición corta.
+ */
+function BulkBar({
+  selectedIds,
+  onClear,
+}: {
+  selectedIds: Set<string>;
+  onClear: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const count = selectedIds.size;
+  if (!count) return null;
+
+  const download = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const url = `/api/pedidos/rotulos?orders=${Array.from(selectedIds).join(",")}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        setError(body?.error ?? "No se pudieron generar los rótulos.");
+        return;
+      }
+      const missing = Number(response.headers.get("x-rotulos-missing") ?? "0");
+      const blob = await response.blob();
+      const href = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.download =
+        response.headers
+          .get("content-disposition")
+          ?.match(/filename="([^"]+)"/)?.[1] ?? "rotulos.pdf";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(href);
+      if (missing > 0) {
+        setError(
+          `Se descargaron ${count - missing} rótulos. ${missing} pedido${missing === 1 ? "" : "s"} todavía no tiene${missing === 1 ? "" : "n"} salida creada.`,
+        );
+      }
+    } catch {
+      setError("No se pudieron generar los rótulos.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="sticky bottom-4 z-30 mx-auto flex w-fit max-w-full flex-col gap-2 rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-white shadow-xl">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-sm font-semibold">
+          {count} {count === 1 ? "pedido seleccionado" : "pedidos seleccionados"}
+        </span>
+        <button
+          onClick={download}
+          disabled={busy}
+          className="rounded-lg bg-white px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-slate-100 disabled:opacity-50"
+        >
+          {busy ? "Generando…" : "Descargar rótulos (PDF)"}
+        </button>
+        <button onClick={onClear} className="text-xs text-slate-300 hover:underline">
+          Limpiar
+        </button>
+      </div>
+      {error && <p className="max-w-md text-xs text-amber-300">{error}</p>}
+    </div>
+  );
+}
+
 function MasterTable({
   rows,
   storeName,
   multiStore,
   onOpen,
+  selected,
+  onToggleRow,
+  onToggleAll,
 }: {
   rows: OrderMasterRow[];
   storeName: (id: string) => string;
   multiStore: boolean;
   onOpen: (orderId: string) => void;
+  selected: Set<string>;
+  onToggleRow: (orderId: string) => void;
+  onToggleAll: (orderIds: string[], checked: boolean) => void;
 }) {
+  const pageIds = rows.map((r) => r.order_id);
+  const allChecked = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[1600px] text-sm">
+      <table className="w-full min-w-[1640px] text-sm">
         <thead>
           <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+            <th className="w-9 px-2 py-2">
+              <input
+                type="checkbox"
+                checked={allChecked}
+                onChange={(e) => onToggleAll(pageIds, e.target.checked)}
+                aria-label="Seleccionar todos los pedidos de esta página"
+                className="h-4 w-4 cursor-pointer align-middle"
+              />
+            </th>
             <th className="px-4 py-2 font-medium">Pedido</th>
             {multiStore && <th className="px-2 py-2 font-medium">Tienda</th>}
             <th className="px-2 py-2 font-medium">Creado</th>
@@ -1068,8 +1203,21 @@ function MasterTable({
             <tr
               key={r.id}
               onClick={() => onOpen(r.order_id)}
-              className="cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50"
+              className={cn(
+                "cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50",
+                selected.has(r.order_id) && "bg-brand-50/60",
+              )}
             >
+              {/* stopPropagation: marcar la fila no debe abrir el drawer. */}
+              <td className="px-2 py-2.5" onClick={(e) => e.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  checked={selected.has(r.order_id)}
+                  onChange={() => onToggleRow(r.order_id)}
+                  aria-label={`Seleccionar ${r.order_name ?? "pedido"}`}
+                  className="h-4 w-4 cursor-pointer align-middle"
+                />
+              </td>
               <td className="px-4 py-2.5 font-medium text-slate-900">{r.order_name ?? "—"}</td>
               {multiStore && <td className="px-2 py-2.5 text-slate-600">{storeName(r.store_id)}</td>}
               <td className="px-2 py-2.5 text-slate-600">{fmtDate(r.order_created_at)}</td>
