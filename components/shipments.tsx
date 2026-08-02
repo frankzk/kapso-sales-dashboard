@@ -45,6 +45,7 @@ import {
   REPROGRAM_UNASSIGNED,
   limaRangeBounds,
   limaTodayKey,
+  localityMismatch,
   reprogramRangeStats,
   type ReprogramChildRow,
   type ReprogramCounts,
@@ -1266,6 +1267,15 @@ function ShipmentDrawer({
   const deliveryLocality = !shipment?.delivery_address
     ? [shopifyAddress?.city, shopifyAddress?.province].filter(Boolean).join(" · ") || null
     : null;
+  // El Excel del courier manda sobre city/district, pero a dónde va el paquete lo
+  // decide la dirección de Shopify. Cuando se contradicen (courier "cusco" vs
+  // Shopify "Juliaca · Puno") el envío sale a la ciudad equivocada y la cobertura
+  // Fenix se evalúa con el dato malo — antes solo se cazaba a ojo. Si ya se
+  // corrigió a mano (address_override) no hay nada que avisar.
+  const localityConflict =
+    !!shipment &&
+    !shipment.address_override &&
+    localityMismatch(shipment.city, shopifyAddress?.city, shopifyAddress?.province);
   const deliverySource = shipment?.address_override
     ? "Modificado en Kapta · protegido frente al siguiente Excel"
     : shipment?.delivery_address
@@ -1424,6 +1434,17 @@ function ShipmentDrawer({
                 <Field label="Teléfono" value={detail.shipment.customer_phone} />
                 <Field label="Ciudad" value={detail.shipment.city} />
                 <Field label="Distrito" value={detail.shipment.district} />
+                {localityConflict && (
+                  <p className="col-span-2 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs leading-snug text-amber-900">
+                    ⚠️ <span className="font-semibold">Revisa el destino antes de despachar.</span> El
+                    courier dice <span className="font-semibold">{detail.shipment.city}</span>, pero la
+                    dirección de Shopify es{" "}
+                    <span className="font-semibold">
+                      {[shopifyAddress?.city, shopifyAddress?.province].filter(Boolean).join(" · ")}
+                    </span>
+                    . Corrígelo con “Modificar destino” para que quede fijo.
+                  </p>
+                )}
                 <div className="col-span-2 border-t border-slate-100 pt-1.5">
                   <Field label="Producto declarado" value={detail.shipment.product} />
                 </div>

@@ -339,6 +339,29 @@ export function deriveFenixCoverageCity(
   return isFenixCity(combined) ? combined : normalizeCity(district);
 }
 
+/**
+ * ¿La localidad que trajo el courier contradice la dirección que puso el cliente
+ * en Shopify? El Excel de Aliclik manda sobre `city`/`district` del envío, pero
+ * la fuente de verdad de a dónde va el paquete es la dirección de Shopify. Si el
+ * courier dice "cusco" y Shopify dice "Juliaca · Puno", el envío sale a la ciudad
+ * equivocada — y la cobertura Fenix se decide con el dato malo.
+ *
+ * Se compara la CLAVE DE COBERTURA de cada lado, no el texto crudo, para no
+ * gritar por diferencias de forma: "Wanchaq" + "Cusco" y "cusco" dan la misma
+ * clave. Tampoco marca cuando una contiene a la otra ("juliaca" vs
+ * "juliaca san roman"). Sin dato de un lado no hay conflicto que reportar. Pura.
+ */
+export function localityMismatch(
+  shipmentCity: string | null | undefined,
+  shopifyCity: string | null | undefined,
+  shopifyProvince: string | null | undefined,
+): boolean {
+  const courier = normalizeCity(shipmentCity);
+  const shopify = deriveFenixCoverageCity(shopifyCity, shopifyProvince);
+  if (!courier || !shopify || courier === shopify) return false;
+  return !courier.includes(shopify) && !shopify.includes(courier);
+}
+
 // The specific districts Fenix serves within each covered city. Used to
 // pre-select the district filter by default (the "routable" districts). City
 // (cercado) forms are stored bare so a district cell of just "Arequipa" matches.
