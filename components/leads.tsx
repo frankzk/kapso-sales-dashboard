@@ -1523,17 +1523,22 @@ export function LeadsBoard({
         </div>
       )}
 
-      {/* Llamar fríos es, con los datos en la mano, casi tirar el tiempo: en 60
-          días Aurela hizo 700 llamadas a fríos y cerró 1 venta. Los fríos que sí
-          compran los cierra el bot solo (424 de 426 cierres en Kenku fueron sin
-          llamada). Se avisa al entrar al filtro, no se bloquea: la decisión es
-          de quien llama. */}
+      {/* El 14–20% del carrito está bien medido: un carrito que cierra SIGUE
+          teniendo carrito, así que el éxito no cambia su etiqueta. En frío no se
+          puede afirmar lo mismo: si la llamada funciona, el cliente da su
+          distrito o se genera el pedido y el lead DEJA de ser frío. O sea que el
+          balde "frío" es, por construcción, el de los casos donde la llamada NO
+          funcionó, y medir su tasa de cierre es casi una tautología.
+          Por eso acá se informa el costo de oportunidad (dato sólido) y NO se
+          recomienda dejar de llamarlos (eso no lo sabemos). Medirlo bien necesita
+          el segmento AL MOMENTO de la llamada, no el de hoy. */}
       {view === "por_llamar" && queueState === "sin_llamar" && segFilter === "frio" && (
         <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
-          ⚠️ <span className="font-semibold">Llamar fríos casi no cierra.</span> En los últimos 60
-          días, 1.000 llamadas a leads fríos dejaron 3 pedidos (0,1–0,7%). Un lead con carrito cierra{" "}
-          <span className="font-semibold">14–20%</span> — unas 20 veces más por la misma llamada. A
-          los fríos ya los trabaja el bot con las plantillas.
+          ⚠️ <span className="font-semibold">Ojo con el costo de oportunidad.</span> Un lead con
+          carrito cierra <span className="font-semibold">14–20%</span> de las veces que se llama; si
+          quedan carritos sin llamar, rinde más ir por ellos primero. Cuánto rinde llamar a un frío
+          todavía no lo sabemos: cuando la llamada funciona, el lead da distrito o genera pedido y{" "}
+          <span className="font-semibold">deja de contarse como frío</span>.
         </div>
       )}
 
