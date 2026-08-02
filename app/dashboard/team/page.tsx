@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { getUserRoleSummary } from "@/lib/access";
 import { EmptyState } from "@/components/ui";
-import { TeamManager, type TeamMember } from "@/components/team";
+import { TeamManager, type TeamMember, type RiderRow } from "@/components/team";
 import type { Role } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -51,9 +51,15 @@ export default async function TeamPage({
   const selected = adminOrgs.find((o) => o.id === sp.org) ?? adminOrgs[0]!;
   const admin = createAdminSupabase();
 
-  const [{ data: memberRows }, { data: storeRows }] = await Promise.all([
+  const [{ data: memberRows }, { data: storeRows }, { data: riderRows }] = await Promise.all([
     admin.from("memberships").select("user_id, role").eq("org_id", selected.id),
     admin.from("stores").select("id, name").eq("org_id", selected.id).order("name"),
+    admin
+      .from("riders")
+      .select("id, store_id, courier, full_name, doc_number, phone, active, note, user_id")
+      .eq("org_id", selected.id)
+      .order("active", { ascending: false })
+      .order("full_name"),
   ]);
 
   const stores = (storeRows as { id: string; name: string }[]) ?? [];
@@ -88,6 +94,13 @@ export default async function TeamPage({
     }))
     .sort((a, b) => a.email.localeCompare(b.email));
 
+  const riders: RiderRow[] = (
+    (riderRows as Omit<RiderRow, "user_email">[]) ?? []
+  ).map((r) => ({
+    ...r,
+    user_email: r.user_id ? (emailById.get(r.user_id) ?? r.user_id) : null,
+  }));
+
   return (
     <TeamManager
       org={{ id: selected.id, name: selected.name }}
@@ -96,6 +109,7 @@ export default async function TeamPage({
       currentUserId={user?.id ?? ""}
       stores={stores}
       members={members}
+      riders={riders}
     />
   );
 }

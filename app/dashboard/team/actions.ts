@@ -203,3 +203,128 @@ export async function setStoreAccess(
   revalidatePath("/dashboard/team");
   return { notice: "Acceso actualizado." };
 }
+
+// ---------------------------------------------------------------------------
+// Motorizados (riders). Vive en Equipo, solo owner/admin. La ficha es distinta
+// del usuario: un motorizado puede existir sin login; se le vincula un usuario
+// solo si va a entrar a /reparto (segundo cotejo desde su celular).
+// ---------------------------------------------------------------------------
+
+export interface RiderInput {
+  orgId: string;
+  id?: string | null;
+  storeId?: string | null;
+  courier?: string | null; // vacío = motorizado propio
+  fullName: string;
+  docNumber?: string | null;
+  phone?: string | null;
+  note?: string | null;
+}
+
+function cleanText(v: string | null | undefined): string | null {
+  const s = (v ?? "").trim();
+  return s || null;
+}
+
+/** Crea o actualiza la ficha de un motorizado (nunca la borra). */
+export async function saveRider(input: RiderInput): Promise<TeamActionState> {
+  const auth = await requireOrgAdmin(input.orgId);
+  if (!auth) return { error: "Sin acceso a esta organización." };
+
+  const fullName = (input.fullName ?? "").trim();
+  if (fullName.length < 2) return { error: "Indica el nombre del motorizado." };
+
+  const admin = createAdminSupabase();
+  const fields = {
+    store_id: input.storeId || null,
+    courier: cleanText(input.courier),
+    full_name: fullName,
+    doc_number: cleanText(input.docNumber),
+    phone: cleanText(input.phone),
+    note: cleanText(input.note),
+  };
+
+  try {
+    if (input.id) {
+      const { error } = await admin
+        .from("riders")
+        .update(fields)
+        .eq("id", input.id)
+        .eq("org_id", input.orgId);
+      if (error) throw error;
+    } else {
+      const { error } = await admin
+        .from("riders")
+        .insert({ org_id: input.orgId, ...fields, created_by: auth.userId });
+      if (error) throw error;
+    }
+  } catch (e) {
+    const msg = errMsg(e);
+    if (/riders_doc_idx/.test(msg)) {
+      return { error: "Ya existe un motorizado con ese DNI en esta organización." };
+    }
+    return { error: msg };
+  }
+  revalidatePath("/dashboard/team");
+  return { notice: input.id ? "Motorizado actualizado." : "Motorizado registrado." };
+}
+
+/** Activa o desactiva sin borrar: las rutas pasadas conservan su motorizado. */
+export async function setRiderActive(
+  orgId: string,
+  riderId: string,
+  active: boolean,
+): Promise<TeamActionState> {
+  const auth = await requireOrgAdmin(orgId);
+  if (!auth) return { error: "Sin acceso a esta organización." };
+  const admin = createAdminSupabase();
+  const { error } = await admin.from("riders").update({ active }).eq("id", riderId).eq("org_id", orgId);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard/team");
+  return { notice: active ? "Motorizado activado." : "Motorizado desactivado." };
+}
+
+/** Vincula un usuario ya miembro de la org, para darle acceso a /reparto. */
+export async function linkRiderUser(
+  orgId: string,
+  riderId: string,
+  email: string,
+): Promise<TeamActionState> {
+  const auth = await requireOrgAdmin(orgId);
+  if (!auth) return { error: "Sin acceso a esta organización." };
+  const clean = (email ?? "").trim().toLowerCase();
+  if (!clean) return { error: "Indica el correo del usuario." };
+
+  const admin = createAdminSupabase();
+  const userId = await findUserIdByEmail(admin, clean);
+  if (!userId) {
+    return { error: "No hay ningún usuario con ese correo. Invítalo primero en Usuarios y accesos." };
+  }
+  const { data: mem } = await admin
+    .from("memberships")
+    .select("user_id")
+    .eq("org_id", orgId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!mem) return { error: "Ese usuario no es miembro de la organización. Invítalo primero." };
+
+  const { error } = await admin.from("riders").update({ user_id: userId }).eq("id", riderId).eq("org_id", orgId);
+  if (error) {
+    if (/riders_user_idx/.test(error.message)) {
+      return { error: "Ese usuario ya está vinculado a otro motorizado." };
+    }
+    return { error: error.message };
+  }
+  revalidatePath("/dashboard/team");
+  return { notice: "Usuario vinculado. Ya puede entrar a /reparto." };
+}
+
+export async function unlinkRiderUser(orgId: string, riderId: string): Promise<TeamActionState> {
+  const auth = await requireOrgAdmin(orgId);
+  if (!auth) return { error: "Sin acceso a esta organización." };
+  const admin = createAdminSupabase();
+  const { error } = await admin.from("riders").update({ user_id: null }).eq("id", riderId).eq("org_id", orgId);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard/team");
+  return { notice: "Usuario desvinculado." };
+}

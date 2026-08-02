@@ -66,6 +66,10 @@ export const PERMISSIONS = [
   // Rutas de reparto
   "routes.manage", // armar la ruta del día y asignarla
   "routes.deliver", // reportar SUS propias paradas desde /reparto
+  // Registro de motorizados: alta/edición de la ficha y vínculo con un usuario
+  // para dar acceso a /reparto. Vive en Equipo (owner/admin). El alta rápida por
+  // nombre desde Liquidaciones sigue bajo settlements.manage.
+  "riders.manage",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];

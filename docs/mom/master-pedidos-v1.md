@@ -1131,3 +1131,36 @@ rentabilidad (§17) y es distinto del costo logístico de la conciliación (§14
 - El costo de producto nunca sustituye al costo logístico en la conciliación de
   liquidaciones.
 
+## 27. Registro de motorizados
+
+El motorizado es un actor operativo (§9, §14): recoge, entrega, hace el segundo
+cotejo y liquida. Su ficha se gestiona en **Equipo**, en una pestaña propia,
+separada del usuario de acceso.
+
+### Principios
+
+1. **La ficha del motorizado es distinta de su usuario.** Un motorizado puede
+   existir sin login: se necesita para asignarlo en despacho y liquidar. Solo se
+   le vincula un usuario si va a entrar a `/reparto` a cotejar y reportar sus
+   paradas desde el celular.
+2. **Se conserva, no se borra.** Un motorizado se activa o desactiva; nunca se
+   elimina. Las rutas y liquidaciones pasadas conservan al motorizado que las
+   ejecutó (principio 5 y 6).
+3. **Propio o de transportadora.** La transportadora vacía marca un motorizado
+   propio; con transportadora (Axel, Urpi, Swayp, Tanders, u otra) pertenece a
+   ese courier.
+
+### Ficha
+
+- Nombre, celular, DNI, transportadora, tienda (o todas), activo/inactivo, nota
+  y un usuario vinculado opcional.
+- El DNI es único por organización.
+- Vincular un usuario exige que ya sea miembro de la organización; un usuario se
+  vincula a lo sumo a un motorizado. El vínculo es lo único que habilita
+  `/reparto` (lo acota la RLS por `auth_rider_id()`), sin necesitar rol especial.
+
+### Permisos
+
+- Gestionar motorizados en Equipo: owner/admin (`riders.manage`). El alta rápida
+  por nombre desde Liquidaciones sigue disponible bajo `settlements.manage`.
+
