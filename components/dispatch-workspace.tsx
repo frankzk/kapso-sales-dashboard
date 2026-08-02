@@ -35,10 +35,9 @@ import type {
   DispatchWorkspaceData,
 } from "@/lib/dispatch-access";
 import {
-  DISPATCH_COURIERS,
   courierLabelFor,
-  courierOptionByKey,
-  ridersForCourier,
+  routeChoiceByValue,
+  routeChoices,
 } from "@/lib/couriers/catalog";
 import { routeKindForCourier } from "@/lib/dispatch-routing";
 import type { StoreSummary } from "@/lib/types";
@@ -337,7 +336,6 @@ function RouteTarget({
         <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-semibold">
           {courierLabelFor(manifest.courier)}
         </span>
-        <span>{manifest.route_label}</span>
       </p>
       {manifests.length > 1 && (
         <label className="mt-3 block">
@@ -349,7 +347,7 @@ function RouteTarget({
           >
             {manifests.map((option) => (
               <option key={option.id} value={option.id} className="text-slate-950">
-                {routeName(option)} · {option.route_label}
+                {routeName(option)}
               </option>
             ))}
           </select>
@@ -400,7 +398,7 @@ function ManifestCard({ manifest, active, onClick }: { manifest: DispatchManifes
   const percent = progress.total ? Math.round((completed / progress.total) * 100) : 0;
   // Quién se lleva la caja: es lo primero que se busca al mirar la lista de rutas.
   const who = manifest.received_by ?? manifest.driver_name;
-  return <button onClick={onClick} className={cn("w-full rounded-2xl border p-4 text-left transition", active ? "border-slate-950 bg-slate-950 text-white shadow-lg" : "border-slate-200 bg-white hover:border-slate-400")}><div className="flex items-start justify-between gap-2"><p className="min-w-0 truncate text-base font-semibold">{who ?? (rider ? "Sin motorizado" : ROUTE_KIND_LABELS[manifest.kind])}</p><span className={cn("shrink-0 text-sm font-semibold tabular-nums", active ? "text-slate-300" : "text-slate-500")}>{routeDay(manifest.route_date)}</span></div><p className={cn("mt-0.5 truncate text-xs", active ? "text-slate-300" : "text-slate-500")}>{courierLabelFor(manifest.courier)} · {manifest.route_label}</p><div className={cn("mt-3 h-1.5 overflow-hidden rounded-full", active ? "bg-white/15" : "bg-slate-100")}><div className={cn("h-full rounded-full", active ? "bg-emerald-400" : "bg-slate-950")} style={{ width: `${manifest.state === "in_custody" ? 100 : percent}%` }} /></div><div className={cn("mt-2 flex items-center justify-between text-xs", active ? "text-slate-300" : "text-slate-500")}><span>{DISPATCH_STATE_LABELS[manifest.state]}</span><span>{completed}/{progress.total}</span></div></button>;
+  return <button onClick={onClick} className={cn("w-full rounded-2xl border p-4 text-left transition", active ? "border-slate-950 bg-slate-950 text-white shadow-lg" : "border-slate-200 bg-white hover:border-slate-400")}><div className="flex items-start justify-between gap-2"><p className="min-w-0 truncate text-base font-semibold">{who ?? (rider ? "Sin motorizado" : ROUTE_KIND_LABELS[manifest.kind])}</p><span className={cn("shrink-0 text-sm font-semibold tabular-nums", active ? "text-slate-300" : "text-slate-500")}>{routeDay(manifest.route_date)}</span></div><p className={cn("mt-0.5 truncate text-xs", active ? "text-slate-300" : "text-slate-500")}>{courierLabelFor(manifest.courier)}</p><div className={cn("mt-3 h-1.5 overflow-hidden rounded-full", active ? "bg-white/15" : "bg-slate-100")}><div className={cn("h-full rounded-full", active ? "bg-emerald-400" : "bg-slate-950")} style={{ width: `${manifest.state === "in_custody" ? 100 : percent}%` }} /></div><div className={cn("mt-2 flex items-center justify-between text-xs", active ? "text-slate-300" : "text-slate-500")}><span>{DISPATCH_STATE_LABELS[manifest.state]}</span><span>{completed}/{progress.total}</span></div></button>;
 }
 
 function ReadyQueue({ shipments, storeName }: { shipments: DispatchShipment[]; storeName: Map<string, string> }) {
@@ -682,29 +680,25 @@ function PackageRow({ item, mode, canRemove, onRemoved }: { item: DispatchManife
 }
 
 function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchRider[]; onClose: () => void; onCreated: (result: DispatchActionResult) => void }) {
-  const [courierSel, setCourierSel] = useState("");
+  const [selection, setSelection] = useState("");
   const [routeDate, setRouteDate] = useState(todayLima());
-  const [routeLabel, setRouteLabel] = useState("");
-  const [riderId, setRiderId] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const option = courierSel ? courierOptionByKey(courierSel) : null;
-  const riderOptions = useMemo(() => ridersForCourier(riders, option), [riders, option]);
-  const riderName = riderOptions.find((r) => r.id === riderId)?.full_name ?? "";
+  const { own, couriers } = useMemo(() => routeChoices(riders), [riders]);
+  const choice = useMemo(() => routeChoiceByValue(riders, selection), [riders, selection]);
 
   return (
     <div className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-950/50 p-0 sm:items-center sm:p-6">
       <form
         onSubmit={async (event) => {
           event.preventDefault();
-          if (!option) return;
+          if (!choice) return;
           setBusy(true);
           onCreated(
             await createDispatchManifest({
-              courier: option.value,
+              courier: choice.courier,
               routeDate,
-              routeLabel,
-              riderId: riderId || undefined,
+              riderId: choice.riderId ?? undefined,
             }),
           );
           setBusy(false);
@@ -714,69 +708,54 @@ function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchR
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-xl font-semibold text-slate-950">Nueva ruta</h2>
-            <p className="text-sm text-slate-500">Una caja o agrupación distinta por courier y ruta.</p>
+            <p className="text-sm text-slate-500">Una ruta al día por motorizado, y una por courier.</p>
           </div>
           <button type="button" onClick={onClose} className="grid size-10 place-items-center rounded-full bg-slate-100 text-lg">×</button>
         </div>
         <div className="mt-6 grid gap-4 sm:grid-cols-2">
-          <Field label="Courier">
-            <select
-              required
-              value={courierSel}
-              onChange={(e) => {
-                setCourierSel(e.target.value);
-                setRiderId("");
-              }}
-              className="h-11 w-full rounded-xl border border-slate-200 px-3"
-            >
-              <option value="">Elige un courier</option>
-              {DISPATCH_COURIERS.map((c) => (
-                <option key={c.key} value={c.key}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Fecha">
-            <input required type="date" value={routeDate} onChange={(e) => setRouteDate(e.target.value)} className="h-11 w-full rounded-xl border border-slate-200 px-3" />
-          </Field>
           <div className="sm:col-span-2">
-            <Field label="Nombre de la ruta (opcional)">
-              <input value={routeLabel} onChange={(e) => setRouteLabel(e.target.value)} placeholder={riderName ? `Por defecto: ${riderName}` : "Ej. Lima Norte · tarde"} className="h-11 w-full rounded-xl border border-slate-200 px-3" />
-              <p className="mt-1 text-xs text-slate-400">Lo que identifica la ruta es quién se la lleva y qué día. El nombre solo sirve como referencia de zona o turno.</p>
+            {/* Un solo desplegable: los motorizados propios agrupados bajo su
+                cabecera y, debajo, los couriers. Elegir dos veces —courier y
+                luego motorizado— era decir una sola cosa en dos pasos. */}
+            <Field label="Sale con">
+              <select
+                required
+                value={selection}
+                onChange={(event) => setSelection(event.target.value)}
+                className="h-11 w-full rounded-xl border border-slate-200 px-3"
+              >
+                <option value="">Elige con quién sale</option>
+                <optgroup label="Motorizados propios">
+                  {own.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Couriers">
+                  {couriers.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
             </Field>
           </div>
           <div className="sm:col-span-2">
-            <Field label={option && !needsRiderCheck(routeKindForCourier(option.value)) ? "Contacto del courier (opcional)" : "Motorizado"}>
-              <select
-                value={riderId}
-                onChange={(e) => setRiderId(e.target.value)}
-                disabled={!option}
-                className="h-11 w-full rounded-xl border border-slate-200 px-3 disabled:bg-slate-50"
-              >
-                <option value="">Sin asignar</option>
-                {riderOptions.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.full_name}
-                  </option>
-                ))}
-              </select>
-              {option && riderOptions.length === 0 && (
-                <p className="mt-1 text-xs text-slate-400">
-                  No hay motorizados de {option.label} registrados. Deja «Sin asignar» o agrégalos en Equipo → Motorizados.
-                </p>
-              )}
+            <Field label="Fecha de la ruta">
+              <input required type="date" value={routeDate} onChange={(e) => setRouteDate(e.target.value)} className="h-11 w-full rounded-xl border border-slate-200 px-3" />
             </Field>
           </div>
         </div>
-        {option && (
+        {choice && (
           <p className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-600">
-            {needsRiderCheck(routeKindForCourier(option.value))
+            {needsRiderCheck(routeKindForCourier(choice.courier))
               ? "Ruta de reparto: la cierra el cotejo del motorizado, escaneando lo que recibe."
               : "Entrega al courier: no hay motorizado que coteje, así que se cierra anotando quién recoge las cajas."}
           </p>
         )}
-        <button disabled={busy || !option || (!riderId && !routeLabel.trim())} className="mt-6 h-12 w-full rounded-xl bg-slate-950 font-semibold text-white disabled:opacity-50">
+        <button disabled={busy || !choice} className="mt-6 h-12 w-full rounded-xl bg-slate-950 font-semibold text-white disabled:opacity-50">
           {busy ? "Creando…" : "Crear ruta"}
         </button>
       </form>

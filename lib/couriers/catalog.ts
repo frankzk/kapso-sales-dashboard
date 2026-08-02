@@ -49,6 +49,63 @@ export function courierLabelFor(value: string | null | undefined): string {
  * "Axel" calza con "Axel Courier"). El llamador siempre ofrece además
  * «Sin asignar», así que una lista vacía no bloquea crear la ruta.
  */
+/**
+ * Una opción del desplegable de "Nueva ruta": o un motorizado propio concreto,
+ * o un courier.
+ */
+export interface RouteChoice {
+  /** Valor del `<option>`; codifica de cuál de los dos casos se trata. */
+  value: string;
+  label: string;
+  /** Token que se guarda en `dispatch_manifests.courier`. */
+  courier: string;
+  riderId: string | null;
+}
+
+/**
+ * Las opciones de "Nueva ruta", en un solo desplegable.
+ *
+ * POR QUÉ UN SOLO DESPLEGABLE. Antes eran dos —courier y luego motorizado—, y el
+ * segundo solo tenía sentido para los motorizados propios: para Aliclik, Urpi o
+ * Tanders la ruta ES el courier y no se sabe quién conduce. Elegir dos veces
+ * para decir una sola cosa invitaba a dejar «Sin asignar» sin querer.
+ *
+ * Los motorizados propios van agrupados bajo su propia cabecera, así que la
+ * lista se lee como lo que es: «con quién sale la caja».
+ */
+export function routeChoices<T extends { id: string; full_name: string; courier: string | null }>(
+  riders: readonly T[],
+): { own: RouteChoice[]; couriers: RouteChoice[] } {
+  const ownRiders = riders.filter((rider) => !rider.courier || !rider.courier.trim());
+  const own: RouteChoice[] = ownRiders.map((rider) => ({
+    value: `rider:${rider.id}`,
+    label: rider.full_name,
+    courier: "propio",
+    riderId: rider.id,
+  }));
+  // Sin fichas registradas, la opción genérica evita dejar el grupo vacío y
+  // bloquear el alta de una ruta propia.
+  if (!own.length) {
+    own.push({ value: "courier:propios", label: "Sin asignar", courier: "propio", riderId: null });
+  }
+  const couriers = DISPATCH_COURIERS.filter((option) => option.key !== "propios").map((option) => ({
+    value: `courier:${option.key}`,
+    label: option.label,
+    courier: option.value,
+    riderId: null,
+  }));
+  return { own, couriers };
+}
+
+/** Busca la opción elegida entre todas las del desplegable. */
+export function routeChoiceByValue<T extends { id: string; full_name: string; courier: string | null }>(
+  riders: readonly T[],
+  value: string,
+): RouteChoice | null {
+  const { own, couriers } = routeChoices(riders);
+  return [...own, ...couriers].find((choice) => choice.value === value) ?? null;
+}
+
 export function ridersForCourier<T extends { courier: string | null }>(
   riders: readonly T[],
   option: CourierOption | null,
