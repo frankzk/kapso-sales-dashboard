@@ -19,7 +19,6 @@ import {
 } from "@/app/dashboard/pedidos/despacho/actions";
 import {
   DISPATCH_STATE_LABELS,
-  ROUTE_KIND_LABELS,
   activeDispatchItems,
   dispatchProgress,
   needsRiderCheck,
@@ -54,6 +53,20 @@ type Mode = "prepare" | "build" | "office" | "pickup";
 /** ¿El paquete ya pasó por el escaneo de almacén? */
 function isArmed(shipment: { preparation_state: string } | null | undefined): boolean {
   return shipment?.preparation_state === "listo_despacho";
+}
+
+/**
+ * Título y subtítulo de una ruta.
+ *
+ * El título es QUIÉN se lleva la caja. Cuando no hay una persona concreta —Urpi,
+ * Aliclik, una agencia— quien se la lleva ES el courier, y el subtítulo lo dice.
+ * La versión anterior ponía "Sin motorizado" de título: no nombraba nada y
+ * dejaba la tarjeta sin identidad justo donde se elige entre varias rutas.
+ */
+function routeHeading(manifest: DispatchManifest): { title: string; subtitle: string } {
+  const who = manifest.received_by ?? manifest.driver_name;
+  const courier = courierLabelFor(manifest.courier);
+  return who ? { title: who, subtitle: courier } : { title: courier, subtitle: "Courier" };
 }
 
 /** En qué paso conviene abrir una ruta según cómo esté. */
@@ -316,27 +329,21 @@ function RouteTarget({
   onSelect: (id: string) => void;
 }) {
   const rider = needsRiderCheck(manifest.kind);
-  const who = manifest.received_by ?? manifest.driver_name;
+  const { title, subtitle } = routeHeading(manifest);
   return (
     <div className="mt-5 rounded-2xl bg-slate-950 p-4 text-white sm:p-5">
       <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
         {rider ? "Estás asignando a la ruta de" : "Estás preparando la entrega de"}
       </p>
-      {/* El motorizado y la fecha son el título: es lo único que distingue dos
-          rutas del mismo día y courier. La zona va debajo, como referencia. */}
+      {/* Quién se lleva la caja y qué día: es lo único que distingue dos rutas
+          del mismo día. Debajo, de qué se trata esa ruta. */}
       <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-xl font-semibold sm:text-2xl">
-          {who ?? (rider ? "Motorizado sin asignar" : ROUTE_KIND_LABELS[manifest.kind])}
-        </span>
+        <span className="text-xl font-semibold sm:text-2xl">{title}</span>
         <span className="text-lg font-semibold tabular-nums text-slate-300">
           {routeDay(manifest.route_date)}
         </span>
       </div>
-      <p className="mt-1 flex flex-wrap items-center gap-x-2 text-sm text-slate-300">
-        <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-semibold">
-          {courierLabelFor(manifest.courier)}
-        </span>
-      </p>
+      <p className="mt-1 text-sm text-slate-300">{subtitle}</p>
       {manifests.length > 1 && (
         <label className="mt-3 block">
           <span className="sr-only">Cambiar de ruta</span>
@@ -396,9 +403,11 @@ function ManifestCard({ manifest, active, onClick }: { manifest: DispatchManifes
     ? progress.total
     : rider ? progress.pickupChecked : progress.officeChecked;
   const percent = progress.total ? Math.round((completed / progress.total) * 100) : 0;
-  // Quién se lleva la caja: es lo primero que se busca al mirar la lista de rutas.
-  const who = manifest.received_by ?? manifest.driver_name;
-  return <button onClick={onClick} className={cn("w-full rounded-2xl border p-4 text-left transition", active ? "border-slate-950 bg-slate-950 text-white shadow-lg" : "border-slate-200 bg-white hover:border-slate-400")}><div className="flex items-start justify-between gap-2"><p className="min-w-0 truncate text-base font-semibold">{who ?? (rider ? "Sin motorizado" : ROUTE_KIND_LABELS[manifest.kind])}</p><span className={cn("shrink-0 text-sm font-semibold tabular-nums", active ? "text-slate-300" : "text-slate-500")}>{routeDay(manifest.route_date)}</span></div><p className={cn("mt-0.5 truncate text-xs", active ? "text-slate-300" : "text-slate-500")}>{courierLabelFor(manifest.courier)}</p><div className={cn("mt-3 h-1.5 overflow-hidden rounded-full", active ? "bg-white/15" : "bg-slate-100")}><div className={cn("h-full rounded-full", active ? "bg-emerald-400" : "bg-slate-950")} style={{ width: `${manifest.state === "in_custody" ? 100 : percent}%` }} /></div><div className={cn("mt-2 flex items-center justify-between text-xs", active ? "text-slate-300" : "text-slate-500")}><span>{DISPATCH_STATE_LABELS[manifest.state]}</span><span>{completed}/{progress.total}</span></div></button>;
+  // El título es QUIÉN se lleva la caja, y cuando no hay una persona concreta
+  // —Urpi, Aliclik, una agencia— el courier ES quien se la lleva. Decir
+  // "Sin motorizado" no nombraba nada y dejaba la tarjeta sin identidad.
+  const { title, subtitle } = routeHeading(manifest);
+  return <button onClick={onClick} className={cn("w-full rounded-2xl border p-4 text-left transition", active ? "border-slate-950 bg-slate-950 text-white shadow-lg" : "border-slate-200 bg-white hover:border-slate-400")}><div className="flex items-start justify-between gap-2"><p className="min-w-0 truncate text-base font-semibold">{title}</p><span className={cn("shrink-0 text-sm font-semibold tabular-nums", active ? "text-slate-300" : "text-slate-500")}>{routeDay(manifest.route_date)}</span></div><p className={cn("mt-0.5 truncate text-xs", active ? "text-slate-300" : "text-slate-500")}>{subtitle}</p><div className={cn("mt-3 h-1.5 overflow-hidden rounded-full", active ? "bg-white/15" : "bg-slate-100")}><div className={cn("h-full rounded-full", active ? "bg-emerald-400" : "bg-slate-950")} style={{ width: `${manifest.state === "in_custody" ? 100 : percent}%` }} /></div><div className={cn("mt-2 flex items-center justify-between text-xs", active ? "text-slate-300" : "text-slate-500")}><span>{DISPATCH_STATE_LABELS[manifest.state]}</span><span>{completed}/{progress.total}</span></div></button>;
 }
 
 function ReadyQueue({ shipments, storeName }: { shipments: DispatchShipment[]; storeName: Map<string, string> }) {

@@ -40,8 +40,8 @@ export const TABLE_WRAP = "overflow-x-auto md:overflow-x-visible";
  * Regla del pulgar: ancho de la tabla + ~340px (barra lateral + paddings).
  */
 /**
- * Tabla más ancha que cualquier pantalla razonable (Master de Pedidos: 26
- * columnas, 1640px). Ahí no se puede tener las dos cosas: si el contenedor
+ * Tabla más ancha que la mayoría de pantallas (Master de Pedidos: 1180px de
+ * mínimo, más la barra lateral). Ahí no se puede tener las dos cosas: si el contenedor
  * scrollea en horizontal, el sticky muere. Este alias elige el ENCABEZADO FIJO
  * y acepta que la página scrollee en horizontal (al ir a la derecha, la barra
  * lateral se va de lado). Existe con nombre propio para que quede claro que es
