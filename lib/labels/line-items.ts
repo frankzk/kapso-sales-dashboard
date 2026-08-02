@@ -78,6 +78,34 @@ export function parseLabelItemsFromText(product: string | null | undefined): Lab
     });
 }
 
+/** Un producto del rótulo con todas sus variantes juntas. */
+export interface LabelProductGroup {
+  name: string;
+  variants: { quantity: number; variant: string | null }[];
+}
+
+/**
+ * Agrupa las líneas por título.
+ *
+ * Los títulos de Shopify traen hasta 219 caracteres de copy publicitario, así
+ * que en el rótulo se recortan a una línea. Repetirlo por cada talla gastaba
+ * tres líneas en escribir tres veces el mismo texto truncado —idéntico a la
+ * vista— y dejaba fuera productos por falta de sitio. Escrito una vez, con las
+ * variantes debajo, ocupa menos y además se lee como lo que es: un producto en
+ * tres tallas.
+ */
+export function groupLabelItems(items: readonly LabelLineItem[]): LabelProductGroup[] {
+  const groups = new Map<string, LabelProductGroup>();
+  for (const item of items) {
+    const key = item.name.toLowerCase();
+    const existing = groups.get(key);
+    const variant = { quantity: item.quantity, variant: item.variant };
+    if (existing) existing.variants.push(variant);
+    else groups.set(key, { name: item.name, variants: [variant] });
+  }
+  return [...groups.values()];
+}
+
 /** Las líneas del pedido si existen; si no, lo que se guardó en la salida. */
 export function labelItemsFor(
   lineItems: unknown,

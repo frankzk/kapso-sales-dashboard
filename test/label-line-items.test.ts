@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  groupLabelItems,
   labelItemsFor,
   parseLabelItemsFromText,
   parseLabelLineItems,
@@ -67,6 +68,37 @@ describe("parseLabelItemsFromText (salidas sin pedido vinculado)", () => {
   it("vacío o nulo no produce líneas", () => {
     expect(parseLabelItemsFromText(null)).toEqual([]);
     expect(parseLabelItemsFromText("   ")).toEqual([]);
+  });
+});
+
+describe("groupLabelItems", () => {
+  it("junta las tallas de un mismo producto bajo un solo título", () => {
+    // Repetir el título por talla gastaba tres líneas en escribir tres veces el
+    // mismo texto truncado, idéntico a la vista, y dejaba productos fuera.
+    const grupos = groupLabelItems([
+      { quantity: 1, name: "SoftFlex Plantillas", variant: "37-38" },
+      { quantity: 2, name: "SoftFlex Plantillas", variant: "39-40" },
+      { quantity: 1, name: "Omega 3", variant: null },
+    ]);
+    expect(grupos).toHaveLength(2);
+    expect(grupos[0]!.name).toBe("SoftFlex Plantillas");
+    expect(grupos[0]!.variants).toEqual([
+      { quantity: 1, variant: "37-38" },
+      { quantity: 2, variant: "39-40" },
+    ]);
+    expect(grupos[1]!.variants).toEqual([{ quantity: 1, variant: null }]);
+  });
+
+  it("respeta el orden en que vienen los productos", () => {
+    const grupos = groupLabelItems([
+      { quantity: 1, name: "B", variant: null },
+      { quantity: 1, name: "A", variant: null },
+    ]);
+    expect(grupos.map((g) => g.name)).toEqual(["B", "A"]);
+  });
+
+  it("sin líneas no hay grupos", () => {
+    expect(groupLabelItems([])).toEqual([]);
   });
 });
 

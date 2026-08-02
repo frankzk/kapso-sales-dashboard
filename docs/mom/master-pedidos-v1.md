@@ -1218,6 +1218,18 @@ la dirección.
 - El importe se dibuja al mayor tamaño que quepa en el recuadro, así que un
   monto de cuatro cifras se ve igual de bien que uno de tres.
 
+### El reparto vertical del rótulo
+
+Los datos se **miden antes de dibujarse**. Un rótulo de un solo producto quedaba
+denso arriba y con un hueco grande justo encima del QR: además de feo, engañoso —
+parece que falta información. Sabiendo de antemano cuánto ocupa todo, el espacio
+sobrante se reparte como aire entre bloques.
+
+Cuando en vez de sobrar **falta**, el orden en que se cede está fijado y no
+depende del orden de dibujo: primero la **referencia**, luego el **distrito**,
+después los **productos** y solo al final la **dirección**, que es lo que decide
+si el paquete llega.
+
 ### El rótulo se imprime en PDF, no en HTML
 
 **Existe un solo rótulo**, y es el PDF de 100 × 150 mm: el del lote y el de la
@@ -1239,9 +1251,15 @@ cosas de un vistazo: **cuántos** y **cuál**.
 - Una cantidad **mayor a uno se imprime más grande** que una de una unidad.
   Empacar una unidad cuando iban dos es un reenvío completo, así que el número
   no puede leerse igual que el resto de la línea.
-- La **variante** (talla, color, presentación) va en su propia línea. Hay
-  pedidos con varias líneas del mismo título que solo se distinguen por ahí, y
-  sin ella el almacén no sabe qué empacar.
+- La **variante** (talla, color, presentación) va en su propia línea, con su
+  propia cantidad. Hay pedidos con varias líneas del mismo título que solo se
+  distinguen por ahí, y sin ella el almacén no sabe qué empacar.
+- Las variantes de un mismo producto van **agrupadas bajo un único título**. Los
+  títulos de Shopify se recortan a una línea, así que repetirlo por talla
+  escribía tres veces el mismo texto truncado —idéntico a la vista— y dejaba
+  otros productos fuera del rótulo por falta de sitio.
+- Si hay que recortar, se corta **por producto entero**: media lista de tallas es
+  peor que ninguna, porque parece completa.
 - Las líneas salen del pedido de Shopify, que es la fuente de la cantidad y de
   la variante. El texto guardado en la salida solo se usa cuando la salida no
   está vinculada a un pedido.

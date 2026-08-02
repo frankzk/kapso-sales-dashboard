@@ -4,8 +4,9 @@ import { pickShipmentForLabel, selectLabelsForOrders } from "@/lib/labels/pick-s
 import {
   buildRotulosPdf,
   fieldHeight,
+  fitProducts,
+  groupLines,
   linesThatFit,
-  productsReservedHeight,
   sanitizeWinAnsi,
   wrapText,
 } from "@/lib/labels/rotulo-pdf";
@@ -19,9 +20,9 @@ import { inflateSync } from "node:zlib";
  * nada sobre si el monto se ve. pdf-lib escribe el texto como `<hex> Tj` después
  * de un `/Fuente TAMAÑO Tf`.
  */
-function textWithSizes(pdf: Uint8Array): { text: string; size: number }[] {
+function textWithSizes(pdf: Uint8Array): { text: string; size: number; y: number }[] {
   const raw = Buffer.from(pdf).toString("latin1");
-  const out: { text: string; size: number }[] = [];
+  const out: { text: string; size: number; y: number }[] = [];
   const streams = /stream\r?\n/g;
   let match: RegExpExecArray | null;
   while ((match = streams.exec(raw))) {
@@ -35,11 +36,14 @@ function textWithSizes(pdf: Uint8Array): { text: string; size: number }[] {
       continue; // imágenes y otros streams no comprimidos con deflate
     }
     let size = 0;
+    let y = 0;
     for (const line of content.split("\n")) {
       const tf = line.match(/\/\S+\s+([\d.]+)\s+Tf/);
       if (tf) size = Number(tf[1]);
+      const tm = line.match(/1 0 0 1 [\d.-]+ ([\d.-]+) Tm/);
+      if (tm) y = Number(tm[1]);
       const tj = line.match(/<([0-9A-Fa-f]+)>\s*Tj/);
-      if (tj) out.push({ text: Buffer.from(tj[1]!, "hex").toString("latin1"), size });
+      if (tj) out.push({ text: Buffer.from(tj[1]!, "hex").toString("latin1"), size, y });
     }
   }
   return out;
@@ -166,25 +170,67 @@ describe("linesThatFit (tope que protege el QR)", () => {
   });
 });
 
-describe("productsReservedHeight (los productos ganan a la referencia)", () => {
-  it("sin productos no reserva nada", () => {
-    expect(productsReservedHeight([])).toBe(0);
+describe("groupLines", () => {
+  it("un producto sin variantes ocupa una sola línea", () => {
+    expect(groupLines({ name: "A", variants: [{ quantity: 2, variant: null }] })).toBe(1);
   });
 
-  it("una variante cuesta una línea extra", () => {
-    const sin = productsReservedHeight([{ quantity: 1, name: "A", variant: null }]);
-    const con = productsReservedHeight([{ quantity: 1, name: "A", variant: "M" }]);
-    expect(con).toBeGreaterThan(sin);
+  it("con variantes: el título una vez, y una línea por talla", () => {
+    // Tres tallas del mismo título costaban SEIS líneas (título repetido tres
+    // veces + tres variantes). Agrupadas cuestan cuatro.
+    expect(
+      groupLines({
+        name: "SoftFlex",
+        variants: [
+          { quantity: 1, variant: "37-38" },
+          { quantity: 2, variant: "39-40" },
+          { quantity: 1, variant: "41-42" },
+        ],
+      }),
+    ).toBe(4);
+  });
+});
+
+describe("fitProducts", () => {
+  const grupo = (name: string, n: number) => ({
+    name,
+    variants: Array.from({ length: n }, (_, i) => ({ quantity: 1, variant: `v${i}` })),
   });
 
-  it("un pedido de quince líneas no se come el rótulo entero", () => {
-    const muchos = Array.from({ length: 15 }, (_, i) => ({
-      quantity: 1,
-      name: `P${i}`,
-      variant: null,
-    }));
-    const cuatro = muchos.slice(0, 4);
-    expect(productsReservedHeight(muchos)).toBe(productsReservedHeight(cuatro));
+  it("con sitio de sobra dibuja todo y no oculta nada", () => {
+    const { drawn, hidden } = fitProducts([grupo("A", 1), grupo("B", 1)], 20);
+    expect(drawn).toHaveLength(2);
+    expect(hidden).toBe(0);
+  });
+
+  it("corta por producto entero, no a media lista de tallas", () => {
+    // Media lista de tallas es peor que ninguna: parece completa.
+    const { drawn, hidden } = fitProducts([grupo("A", 3), grupo("B", 3)], 5);
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0]!.name).toBe("A");
+    expect(hidden).toBe(1);
+  });
+
+  it("reserva la línea del aviso antes de decidir", () => {
+    // Tres productos de una línea en dos líneas disponibles: entra uno, y la
+    // segunda línea se gasta en avisar de los dos que faltan. Si no se
+    // reservara, entrarían dos y el aviso se quedaría sin sitio — el rótulo
+    // callaría que hay más producto del que muestra.
+    const simple = (name: string) => ({ name, variants: [{ quantity: 1, variant: null }] });
+    const { drawn, hidden } = fitProducts([simple("A"), simple("B"), simple("C")], 2);
+    expect(drawn).toHaveLength(1);
+    expect(hidden).toBe(2);
+  });
+
+  it("si entran todos no gasta línea en un aviso que sobra", () => {
+    const simple = (name: string) => ({ name, variants: [{ quantity: 1, variant: null }] });
+    const { drawn, hidden } = fitProducts([simple("A"), simple("B")], 2);
+    expect(drawn).toHaveLength(2);
+    expect(hidden).toBe(0);
+  });
+
+  it("sin sitio para nada no dibuja ni inventa", () => {
+    expect(fitProducts([grupo("A", 3)], 0)).toEqual({ drawn: [], hidden: 1 });
   });
 });
 
@@ -280,9 +326,13 @@ describe("buildRotulosPdf", () => {
     const dos = await buildRotulosPdf([
       { ...base, items: [{ quantity: 2, name: "Producto", variant: null }] },
     ]);
-    // El PDF con la cantidad destacada usa un tamaño de fuente extra, así que
-    // referencia una fuente más que el de una sola unidad.
-    expect(dos.byteLength).not.toBe(uno.byteLength);
+
+    const sizeOf = (pdf: Uint8Array, qty: string) =>
+      textWithSizes(pdf).find((d) => d.text === qty)?.size;
+    const unaUnidad = sizeOf(uno, "1");
+    const dosUnidades = sizeOf(dos, "2");
+    expect(unaUnidad, "la cantidad tiene que estar impresa").toBeTruthy();
+    expect(dosUnidades).toBeGreaterThan(unaUnidad!);
     expect((await PDFDocument.load(dos)).getPageCount()).toBe(1);
   });
 
@@ -338,6 +388,40 @@ describe("buildRotulosPdf", () => {
     const drawn = textWithSizes(pdf).map((d) => d.text);
     expect(drawn).toContain("VER PEDIDO");
     expect(drawn.some((t) => /^S\/\s*0$/.test(t))).toBe(false);
+  });
+
+  it("con poco contenido reparte el aire en vez de dejar un hueco sobre el QR", async () => {
+    // El defecto que se vio impreso: los campos apretados arriba y un vacío
+    // grande justo encima del QR. Se mide la distancia entre bloques y la que
+    // queda hasta el pie: ningún salto puede ser desproporcionado.
+    const qrPng = new Uint8Array(await QRCode.toBuffer("g", { type: "png", width: 120 }));
+    const pdf = await buildRotulosPdf([
+      {
+        code: "KP1-S01",
+        courier: "propio",
+        orderName: "#KP1",
+        customerName: "Ana",
+        customerPhone: "519",
+        items: [{ quantity: 1, name: "Uno", variant: null }],
+        collectAmount: 99,
+        currency: "PEN",
+        destination: "Surco",
+        address: "Av. 1",
+        reference: "Reja azul",
+        qrPayload: "g",
+        qrPng,
+      },
+    ]);
+
+    const drawn = textWithSizes(pdf);
+    // La leyenda del QR se dibuja a 9 pt y es lo primero del pie.
+    const footer = drawn.find((d) => d.text === "Escanear en cada cotejo");
+    const producto = drawn.find((d) => d.text === "Uno");
+    expect(footer && producto).toBeTruthy();
+
+    const gap = producto!.y - footer!.y;
+    // 150 mm de alto son 425 pt. Antes del reparto, este hueco pasaba de 60 pt.
+    expect(gap).toBeLessThan(60);
   });
 
   it("no falla con datos vacíos ni con texto fuera de WinAnsi", async () => {

@@ -12,7 +12,11 @@
 // sin depender de un navegador headless.
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
-import type { LabelLineItem } from "@/lib/labels/line-items";
+import {
+  groupLabelItems,
+  type LabelLineItem,
+  type LabelProductGroup,
+} from "@/lib/labels/line-items";
 import { formatCollectAmount } from "@/lib/labels/amount";
 
 /** 1 mm en puntos PostScript (72 dpi). */
@@ -172,6 +176,8 @@ function drawField(
     valueSize?: number;
     maxLines?: number;
     minY: number;
+    /** Aire extra bajo el campo, repartido por el planificador. */
+    gap?: number;
   },
 ): number {
   const valueSize = opts.valueSize ?? 9.5;
@@ -202,42 +208,85 @@ function drawField(
     thickness: 0.5,
     color: LINE,
   });
-  return bottom - 1.8 * MM;
+  return bottom - 1.8 * MM - (opts.gap ?? 0);
 }
 
-/**
- * Tabla de productos: una fila por producto, con la cantidad a la izquierda.
- *
- * Quien arma la caja necesita CUÁNTOS y CUÁL. El título de Shopify puede traer
- * 200 caracteres de copy publicitario, así que se recorta a una línea; la
- * VARIANTE (talla, color) va en su propia línea porque es lo que distingue dos
- * líneas del mismo producto —y empacar la talla equivocada es un reenvío.
- */
 /** Tamaño base de la tabla de productos y alto de cada línea suya. */
 const PRODUCT_SIZE = 8.5;
 const PRODUCT_LINE_H = PRODUCT_SIZE + 1.4;
 
+/** Cuántas líneas ocupa un producto: el título, y una por variante si las tiene. */
+export function groupLines(group: LabelProductGroup): number {
+  const single = group.variants[0];
+  if (group.variants.length === 1 && !single?.variant) return 1;
+  return 1 + group.variants.length;
+}
+
 /**
- * Espacio que hay que guardarle a los productos, en puntos.
+ * Qué productos caben en `maxLines` y cuántos quedan fuera.
  *
- * Se calcula ANTES de dibujar la referencia para poder restárselo: cuando los
- * dos no caben, quien cede es la referencia. El almacén no puede empacar lo que
- * no ve escrito, mientras que la referencia es una ayuda para encontrar la
- * puerta que el motorizado también tiene en la app. El tope de `cap` filas
- * impide que un pedido de quince líneas se coma el rótulo entero.
+ * Se corta por producto entero, nunca a media lista de tallas: media lista es
+ * peor que ninguna, porque parece completa. La línea del aviso se descuenta
+ * antes de decidir, así que "+ N productos mas" siempre tiene dónde escribirse.
  */
-export function productsReservedHeight(items: readonly LabelLineItem[], cap = 4): number {
-  if (!items.length) return 0;
-  let lines = 0;
-  for (const item of items.slice(0, cap)) lines += item.variant ? 2 : 1;
-  // Cabecera del bloque + filas + el separador que cierra.
+export function fitProducts(
+  groups: readonly LabelProductGroup[],
+  maxLines: number,
+): { drawn: LabelProductGroup[]; hidden: number } {
+  const drawn: LabelProductGroup[] = [];
+  let used = 0;
+  for (let i = 0; i < groups.length; i += 1) {
+    const need = groupLines(groups[i]!);
+    const noticeNeeded = i < groups.length - 1 ? 1 : 0;
+    if (used + need + noticeNeeded > maxLines) break;
+    drawn.push(groups[i]!);
+    used += need;
+  }
+  return { drawn, hidden: groups.length - drawn.length };
+}
+
+/**
+ * Alto del bloque de productos cuando se le conceden `maxLines` líneas.
+ *
+ * Lo usa el planificador para saber cuánto sitio pedir antes de dibujar nada.
+ */
+export function productsHeight(items: readonly LabelLineItem[], maxLines: number): number {
+  const groups = groupLabelItems(items);
+  const { drawn, hidden } = fitProducts(groups, maxLines);
+  let lines = drawn.reduce((sum, group) => sum + groupLines(group), 0);
+  if (hidden > 0) lines += 1; // "+ N productos mas"
+  if (!lines) lines = 1; // el guion de "sin productos"
+  // Cabecera del bloque + líneas + el separador que cierra.
   return PRODUCT_SIZE + 1.2 * MM + lines * PRODUCT_LINE_H + 1.8 * MM;
 }
 
+/** Total de líneas que pediría la lista completa, sin recortes. */
+function productsNaturalLines(items: readonly LabelLineItem[]): number {
+  return groupLabelItems(items).reduce((sum, group) => sum + groupLines(group), 0);
+}
+
+/**
+ * Tabla de productos: el título una vez, y debajo una línea por variante.
+ *
+ * Quien arma la caja necesita CUÁNTOS y CUÁL. El título de Shopify puede traer
+ * 200 caracteres de copy publicitario, así que se recorta a una línea — y por
+ * eso NO se repite por talla: tres veces el mismo texto truncado se ve idéntico
+ * y gastaba las líneas que necesitaban los demás productos. La VARIANTE (talla,
+ * color) lleva su propia cantidad, porque empacar la talla equivocada es un
+ * reenvío completo.
+ */
 function drawProducts(
   page: PDFPage,
   fonts: Fonts,
-  opts: { x: number; y: number; width: number; items: readonly LabelLineItem[]; minY: number },
+  opts: {
+    x: number;
+    y: number;
+    width: number;
+    items: readonly LabelLineItem[];
+    minY: number;
+    /** Líneas concedidas por el planificador; lo que no entra va como aviso. */
+    maxLines?: number;
+  },
 ): number {
   const size = PRODUCT_SIZE;
   const qtyW = 9 * MM;
@@ -254,28 +303,44 @@ function drawProducts(
   });
 
   let cursor = opts.y - size - 1.2 * MM;
-  let shown = 0;
 
-  for (const item of opts.items) {
-    // Cada fila necesita su línea de nombre; la de variante solo si hay.
-    const rowLines = item.variant ? 2 : 1;
-    if (cursor - rowLines * lineH < opts.minY) break;
-
-    // Más de una unidad se imprime más grande. Empacar una sola cuando iban dos
-    // es un reenvío completo, así que la cantidad tiene que saltar a la vista y
-    // no depender de que alguien lea un número del mismo tamaño que el resto.
-    const qty = `${item.quantity}`;
-    const qtySize = item.quantity > 1 ? size + 2.5 : size;
-    page.drawText(qty, { x: opts.x, y: cursor, size: qtySize, font: fonts.bold, color: INK });
+  /** Cantidad + "x". Más de una unidad se imprime más grande: empacar una sola
+   * cuando iban dos es un reenvío, así que el número tiene que saltar a la vista. */
+  const drawQty = (quantity: number, y: number) => {
+    const qty = `${quantity}`;
+    const qtySize = quantity > 1 ? size + 2.5 : size;
+    page.drawText(qty, { x: opts.x, y, size: qtySize, font: fonts.bold, color: INK });
     page.drawText("x", {
       x: opts.x + fonts.bold.widthOfTextAtSize(qty, qtySize) + 1.5,
-      y: cursor,
+      y,
       size: size - 2,
       font: fonts.regular,
       color: MUTED,
     });
+  };
 
-    const [nameLine] = wrapText(item.name, fonts.bold, size, nameW, 1);
+  const groups = groupLabelItems(opts.items);
+  const roomLines = Math.floor((cursor - opts.minY) / lineH + 1e-9);
+  const { drawn, hidden } = fitProducts(groups, Math.min(opts.maxLines ?? roomLines, roomLines));
+
+  for (const group of drawn) {
+    const single = group.variants[0]!;
+    const [nameLine] = wrapText(group.name, fonts.bold, size, nameW, 1);
+
+    if (group.variants.length === 1 && !single.variant) {
+      drawQty(single.quantity, cursor);
+      page.drawText(nameLine ?? "Producto", {
+        x: nameX,
+        y: cursor,
+        size,
+        font: fonts.bold,
+        color: INK,
+      });
+      cursor -= lineH;
+      continue;
+    }
+
+    // Varias tallas del mismo producto: el título una vez, las variantes debajo.
     page.drawText(nameLine ?? "Producto", {
       x: nameX,
       y: cursor,
@@ -284,10 +349,10 @@ function drawProducts(
       color: INK,
     });
     cursor -= lineH;
-
-    if (item.variant) {
-      const [variantLine] = wrapText(item.variant, fonts.bold, size, nameW, 1);
-      page.drawText(variantLine ?? "", {
+    for (const variant of group.variants) {
+      drawQty(variant.quantity, cursor);
+      const [variantLine] = wrapText(variant.variant ?? "-", fonts.bold, size, nameW, 1);
+      page.drawText(variantLine ?? "-", {
         x: nameX,
         y: cursor,
         size,
@@ -296,16 +361,14 @@ function drawProducts(
       });
       cursor -= lineH;
     }
-    shown += 1;
   }
 
-  if (!shown) {
+  if (!drawn.length) {
     page.drawText("-", { x: opts.x, y: cursor, size, font: fonts.bold, color: INK });
     cursor -= lineH;
-  } else if (shown < opts.items.length) {
+  } else if (hidden > 0) {
     // Nunca callar lo que no cupo: el almacén tiene que saber que faltan líneas.
-    const rest = opts.items.length - shown;
-    page.drawText(`+ ${rest} producto${rest === 1 ? "" : "s"} mas (ver el pedido)`, {
+    page.drawText(`+ ${hidden} producto${hidden === 1 ? "" : "s"} mas (ver el pedido)`, {
       x: opts.x,
       y: cursor,
       size: 7,
@@ -326,7 +389,7 @@ function drawProducts(
 }
 
 /** Alto de la banda del monto a cobrar. */
-const AMOUNT_BAND_H = 12.5 * MM;
+const AMOUNT_BAND_H = 14 * MM;
 
 /**
  * La banda del monto a cobrar: lo más grande del rótulo.
@@ -353,13 +416,13 @@ function drawCollectBand(
     width: opts.width,
     height: AMOUNT_BAND_H,
     borderColor: INK,
-    borderWidth: 1.4,
+    borderWidth: 1.2,
   });
 
   page.drawText("COBRAR EN LA ENTREGA", {
-    x: opts.x + 2.5 * MM,
-    y: top - 3.4 * MM,
-    size: 7,
+    x: opts.x + 3 * MM,
+    y: top - 3.6 * MM,
+    size: 6.5,
     font: fonts.bold,
     color: MUTED,
   });
@@ -368,19 +431,84 @@ function drawCollectBand(
   // Sin cifra el mensaje es una instrucción, no un importe: va más pequeño para
   // que nadie lo confunda de lejos con un monto real.
   const value = sanitizeWinAnsi(text ?? "VER PEDIDO");
-  let size = text ? 27 : 14;
-  const maxW = opts.width - 5 * MM;
+  let size = text ? 26 : 14;
+  const maxW = opts.width - 6 * MM;
   while (size > 8 && fonts.bold.widthOfTextAtSize(value, size) > maxW) size -= 0.5;
 
+  // La cifra se apoya en la base de la banda, no en su centro: así el aire libre
+  // queda entre el rótulo pequeño y los dígitos, que es donde se leía apretado.
   page.drawText(value, {
     x: opts.x + (opts.width - fonts.bold.widthOfTextAtSize(value, size)) / 2,
-    y: bottom + 2.2 * MM,
+    y: bottom + 2.4 * MM,
     size,
     font: fonts.bold,
     color: INK,
   });
 
-  return bottom - 4 * MM;
+  return bottom - 4.5 * MM;
+}
+
+/** Los seis bloques de datos, en orden, tal como se dibujan. */
+const FIELD_BLOCKS = 6;
+
+/** Aire extra que puede repartirse entre bloques cuando sobra sitio. */
+const MAX_EXTRA_GAP = 5 * MM;
+
+/**
+ * Cuántas líneas recibe cada campo y cuánto aire va entre ellos.
+ *
+ * POR QUÉ SE PLANIFICA ANTES DE DIBUJAR. Con los campos apretados al mínimo, un
+ * rótulo de un solo producto quedaba denso arriba y con un hueco enorme sobre el
+ * QR: feo y, peor, engañoso — parece que falta información. Midiendo primero se
+ * sabe cuánto sobra y se reparte como aire entre bloques.
+ *
+ * Cuando en vez de sobrar FALTA, el orden en que se cede está fijado aquí y no
+ * en el azar del orden de dibujo: primero la referencia, luego el distrito,
+ * después los productos y solo al final la dirección, que es lo que decide si el
+ * paquete llega.
+ */
+function planFields(
+  fonts: Fonts,
+  data: RotuloData,
+  width: number,
+  available: number,
+): { address: number; destination: number; reference: number; productLines: number; gap: number } {
+  const linesOf = (value: string | null, size: number, max: number) =>
+    Math.max(1, wrapText(value || "-", fonts.bold, size, width, max).length);
+
+  const plan = {
+    address: linesOf(data.address, 11, 3),
+    destination: linesOf(data.destination, 9.5, 2),
+    reference: data.reference ? linesOf(data.reference, 9.5, 2) : 1,
+    productLines: productsNaturalLines(data.items),
+    gap: 0,
+  };
+
+  const height = () =>
+    fieldHeight(1, 9.5) + // pedido + celular, en dos columnas
+    fieldHeight(1, 9.5) + // cliente
+    fieldHeight(plan.address, 11) +
+    (plan.destination > 0 ? fieldHeight(plan.destination, 9.5) : 0) +
+    (plan.reference > 0 ? fieldHeight(plan.reference, 9.5) : 0) +
+    productsHeight(data.items, plan.productLines);
+
+  const shrink: (() => boolean)[] = [
+    () => (plan.reference > 1 ? ((plan.reference = 1), true) : false),
+    () => (plan.reference > 0 ? ((plan.reference = 0), true) : false),
+    () => (plan.destination > 1 ? ((plan.destination = 1), true) : false),
+    () => (plan.productLines > 1 ? ((plan.productLines -= 1), true) : false),
+    () => (plan.address > 1 ? ((plan.address -= 1), true) : false),
+  ];
+  for (const step of shrink) {
+    while (height() > available && step()) {
+      /* seguir cediendo por este mismo concepto antes de pasar al siguiente */
+    }
+  }
+
+  const blocks = FIELD_BLOCKS - (plan.destination ? 0 : 1) - (plan.reference ? 0 : 1);
+  const slack = available - height();
+  plan.gap = Math.max(0, Math.min(slack / blocks, MAX_EXTRA_GAP));
+  return plan;
 }
 
 /** Dibuja un rótulo completo en su propia página. */
@@ -438,8 +566,13 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
   // tengan en el mismo sitio, aunque los datos de arriba varíen de alto. Los
   // campos de arriba nunca pueden bajar de `fieldsFloor`.
   const qrSize = 26 * MM;
-  const footerTop = PAD + qrSize + 4 * MM;
-  const fieldsFloor = footerTop + 2 * MM;
+  const footerTop = PAD + qrSize + 5 * MM;
+  const fieldsFloor = footerTop + 3 * MM;
+
+  // Se mide todo antes de escribir nada: así el aire sobrante se reparte entre
+  // los bloques en vez de acumularse en un hueco encima del QR.
+  const plan = planFields(fonts, data, innerW, y - fieldsFloor);
+  const gap = plan.gap;
 
   // Dos columnas arriba, ancho completo abajo (igual que el rótulo HTML).
   const colW = (innerW - 4 * MM) / 2;
@@ -451,6 +584,7 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     value: data.orderName,
     maxLines: 1,
     minY: fieldsFloor,
+    gap,
   });
   const rightAfter = drawField(page, fonts, {
     x: PAD + colW + 4 * MM,
@@ -460,6 +594,7 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     value: data.customerPhone,
     maxLines: 1,
     minY: fieldsFloor,
+    gap,
   });
   y = Math.min(leftAfter, rightAfter);
 
@@ -471,9 +606,10 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     value: data.customerName,
     maxLines: 1,
     minY: fieldsFloor,
+    gap,
   });
-  // La dirección es lo que decide si el paquete llega: va más grande y se lleva
-  // el espacio sobrante antes que los campos de abajo.
+  // La dirección es lo que decide si el paquete llega: va más grande y es la
+  // última en ceder líneas cuando el rótulo va apretado.
   y = drawField(page, fonts, {
     x: PAD,
     y,
@@ -481,37 +617,40 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     label: "Direccion",
     value: data.address,
     valueSize: 11,
-    maxLines: 3,
+    maxLines: plan.address,
     minY: fieldsFloor,
+    gap,
   });
-  // Distrito y referencia se dibujan sobre un suelo elevado: el hueco que los
-  // productos ya tienen apartado. Sin esto, una dirección y una referencia
-  // largas dejaban la tabla de productos en "+ 2 productos mas" — justo lo que
-  // el rótulo existe para evitar.
-  const productsFloor = fieldsFloor + productsReservedHeight(data.items);
-  y = drawField(page, fonts, {
-    x: PAD,
-    y,
-    width: innerW,
-    label: "Distrito / Provincia / Region",
-    value: data.destination,
-    maxLines: 2,
-    minY: productsFloor,
-  });
-  y = drawField(page, fonts, {
-    x: PAD,
-    y,
-    width: innerW,
-    label: "Referencia",
-    value: data.reference,
-    maxLines: 2,
-    minY: productsFloor,
-  });
+  if (plan.destination > 0) {
+    y = drawField(page, fonts, {
+      x: PAD,
+      y,
+      width: innerW,
+      label: "Distrito / Provincia / Region",
+      value: data.destination,
+      maxLines: plan.destination,
+      minY: fieldsFloor,
+      gap,
+    });
+  }
+  if (plan.reference > 0) {
+    y = drawField(page, fonts, {
+      x: PAD,
+      y,
+      width: innerW,
+      label: "Referencia",
+      value: data.reference,
+      maxLines: plan.reference,
+      minY: fieldsFloor,
+      gap,
+    });
+  }
   y = drawProducts(page, fonts, {
     x: PAD,
     y,
     width: innerW,
     items: data.items,
+    maxLines: plan.productLines,
     minY: fieldsFloor,
   });
   page.drawLine({
