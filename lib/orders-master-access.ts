@@ -643,14 +643,28 @@ async function loadAgencySummary(storeIds: string[]): Promise<AgencySummary> {
     const { count: n, error } = await build(base);
     return error ? 0 : (n ?? 0);
   };
+  // "En agencia" es tener sub-estado de recojo o ir por modo agencia, la misma
+  // regla que usa `agencySummary` en cliente.
+  //
+  // OJO AL VOCABULARIO. Esto contaba `pickup_state = 'disponible'` y
+  // `= 'devuelto'`, y NINGUNO DE LOS DOS EXISTE en el catálogo de sub-estados
+  // (`lib/order-status.ts`). Devolvían 0 siempre, sin fallar — que es lo peor:
+  // el panel enseñaba "93 en agencia · 0 disponibles para recojo" con 49
+  // paquetes esperando en destino, y un cero se lee como "no hay nada que
+  // hacer", justo en la pantalla que existe para evitar devoluciones.
+  //
+  // La lista viene de `AGENCY_AVAILABLE_STATES` a propósito: había TRES copias
+  // de este resumen —cliente, esta, y una `getAgencySummary` que ya no llamaba
+  // nadie—, y arreglar la que no se ejecutaba no cambió nada en pantalla.
   const inAgency = (q: any) => q.or("pickup_state.not.is.null,shipping_mode.eq.agency");
   const soon = new Date(now.getTime() + 2 * 86_400_000).toISOString();
   const [total, disponibles, proximosAVencer, retornoIniciado, devueltos] = await Promise.all([
     count(inAgency),
-    count((q) => q.eq("pickup_state", "disponible")),
+    count((q) => q.in("pickup_state", [...AGENCY_AVAILABLE_STATES])),
     count((q) => inAgency(q).not("agency_expires_at", "is", null).lte("agency_expires_at", soon)),
     count((q) => q.eq("pickup_state", "retorno_iniciado")),
-    count((q) => q.eq("pickup_state", "devuelto")),
+    // Devuelto es un estado GENERAL del pedido, no un sub-estado de recojo.
+    count((q) => inAgency(q).eq("general_status", "devuelto")),
   ]);
   return { total, disponibles, proximosAVencer, retornoIniciado, devueltos };
 }
@@ -696,63 +710,3 @@ export async function getMasterFacets(storeIds: string[]): Promise<{
   };
 }
 
-/**
- * Resumen de agencia contando en la BASE, no sobre las filas cargadas.
- *
- * Antes se calculaba sobre las ~10.000 filas que el navegador tenía en memoria.
- * Con el listado paginado eso pasaría a contar solo las 100 visibles y daría
- * números falsos SIN AVISAR — que es peor que no mostrarlos. Son cinco conteos
- * `head`: no traen filas.
- */
-export async function getAgencySummary(
-  storeIds: string[],
-  now: Date = new Date(),
-): Promise<AgencySummary> {
-  const empty: AgencySummary = {
-    total: 0,
-    disponibles: 0,
-    proximosAVencer: 0,
-    retornoIniciado: 0,
-    devueltos: 0,
-  };
-  if (!storeIds.length) return empty;
-  const sb = await createServerSupabase();
-
-  const count = async (build: (q: any) => any): Promise<number> => {
-    const base = sb
-      .from("order_master")
-      .select("id", { count: "exact", head: true })
-      .in("store_id", storeIds);
-    const { count: n, error } = await build(base);
-    return error ? 0 : (n ?? 0);
-  };
-
-  // "En agencia" es tener sub-estado de recojo o ir por modo agencia, la misma
-  // regla que usa `agencySummary` en cliente.
-  //
-  // OJO AL VOCABULARIO. Esta función contaba `pickup_state = 'disponible'` y
-  // `= 'devuelto'`, y NINGUNO DE LOS DOS EXISTE en el catálogo de sub-estados
-  // (`lib/order-status.ts`). Los dos contadores daban 0 siempre — no fallaban,
-  // que es lo peor: el panel enseñaba "93 en agencia · 0 disponibles para
-  // recojo" con 49 paquetes esperando en destino, y eso se lee como "no hay
-  // nada que hacer".
-  //
-  // `agencySummary` en cliente ya tenía la regla buena y está testeada. Acá se
-  // replica con los mismos valores; si vuelven a separarse, el que manda es
-  // aquél.
-  const inAgency = (q: any) => q.or("pickup_state.not.is.null,shipping_mode.eq.agency");
-  const soon = new Date(now.getTime() + 2 * 86_400_000).toISOString();
-
-  const [total, disponibles, proximosAVencer, retornoIniciado, devueltos] = await Promise.all([
-    count(inAgency),
-    count((q) => q.in("pickup_state", [...AGENCY_AVAILABLE_STATES])),
-    count((q) =>
-      inAgency(q).not("agency_expires_at", "is", null).lte("agency_expires_at", soon),
-    ),
-    count((q) => q.eq("pickup_state", "retorno_iniciado")),
-    // Devuelto es un estado GENERAL del pedido, no un sub-estado de recojo.
-    count((q) => inAgency(q).eq("general_status", "devuelto")),
-  ]);
-
-  return { total, disponibles, proximosAVencer, retornoIniciado, devueltos };
-}
