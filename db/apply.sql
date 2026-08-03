@@ -201,4 +201,6 @@
 \ir migrations/0097_dispatch_one_route_per_day.sql
 \echo 'Applying 0098_orders_shopify_note.sql'
 \ir migrations/0098_orders_shopify_note.sql
+\echo 'Applying 0099_merge_payment_required_substage.sql'
+\ir migrations/0099_merge_payment_required_substage.sql
 \echo 'Done.'

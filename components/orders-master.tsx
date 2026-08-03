@@ -39,6 +39,7 @@ import {
   loadOrderDetail,
   resolveLabelsForOrders,
   loadOrderGeo,
+  registerConfirmationAttempt,
   registerReturn,
   registerClosureAction,
   relinkGuide,
@@ -81,7 +82,21 @@ import {
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, type KeyState, type PaymentState } from "@/lib/pickup-key";
 import { orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
-import { MASTER_VIEWS, type MasterCounts, type MasterView, type OrderMasterDetail } from "@/lib/orders-master-access";
+import {
+  CONFIRMATION_CHANNELS,
+  CONFIRMATION_MAX_DAYS,
+  CONFIRMATION_RESULTS,
+  confirmationDays,
+  confirmationResult,
+  limaDayKey,
+} from "@/lib/order-confirmation";
+import {
+  MASTER_VIEWS,
+  type MasterCounts,
+  type MasterView,
+  type OrderMasterDetail,
+  type TimelineEntry,
+} from "@/lib/orders-master-access";
 import { outputDisplayCode } from "@/lib/shipment-output";
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import type { RouteCandidate } from "@/lib/order-route-plan";
@@ -1569,6 +1584,8 @@ const TIMELINE_LABEL: Record<string, string> = {
   out_for_delivery: "Salida a reparto",
   attempt_failed: "Intento fallido",
   comment: "Comentario",
+  confirmation_contact: "Intento de confirmación",
+  confirmation_followup: "Próximo contacto pactado",
   reschedule: "Reprogramación",
   reroute: "Reprogramación",
   courier_change: "Cambio de courier",
@@ -1599,6 +1616,7 @@ const TIMELINE_LABEL: Record<string, string> = {
 
 type DrawerSectionId =
   | "resumen"
+  | "confirmacion"
   | "ubicacion"
   | "productos"
   | "pagos"
@@ -1658,7 +1676,10 @@ function drawerNextAction(row: OrderMasterRow, showPayments: boolean): DrawerNex
   const substage = row.macro_substage as MacroSubstage | null | undefined;
 
   if (stage === "por_confirmar") {
-    if (substage === "pago_requerido_pendiente" && showPayments) {
+    // El abono pendiente ya no es una subetapa sino un motivo: manda sobre la
+    // llamada porque sin él la confirmación no vale, pero deja al pedido
+    // visible en la subetapa que de verdad describe su gestión.
+    if ((row.macro_reasons ?? []).includes("pago_requerido_pendiente") && showPayments) {
       return {
         eyebrow: "Confirmación · pago requerido",
         title: "Validar el pago solicitado",
@@ -1668,13 +1689,27 @@ function drawerNextAction(row: OrderMasterRow, showPayments: boolean): DrawerNex
         tone: "amber",
       };
     }
+    if (substage === "ultimo_intento") {
+      return {
+        eyebrow: "Confirmación · último intento",
+        title: "Se agotaron los siete días de gestión",
+        description:
+          "Resuelve el pedido: si no hay confirmación, la anulación se crea a mano en Shopify. Kapta nunca anula por su cuenta.",
+        cta: "Ver la gestión",
+        target: "confirmacion",
+        tone: "amber",
+      };
+    }
     return {
       eyebrow: "Confirmación",
-      title: substage === "ultimo_intento" ? "Resolver el último intento" : "Contactar y registrar el resultado",
-      description: "Llama o escribe al cliente y deja el resultado en la gestión del pedido.",
-      cta: "Registrar gestión",
-      target: "acciones",
-      tone: substage === "ultimo_intento" ? "amber" : "indigo",
+      title:
+        substage === "volver_a_contactar"
+          ? "Retomar el contacto pactado"
+          : "Contactar y registrar el intento",
+      description: "Llama o escribe al cliente y deja el resultado en la gestión de confirmación.",
+      cta: "Registrar intento",
+      target: "confirmacion",
+      tone: "indigo",
     };
   }
 
@@ -2026,6 +2061,7 @@ function OrderDrawer({
         currentCourier: detail.row.current_courier,
         shippingMode: detail.row.shipping_mode,
         macroSubstage: detail.row.macro_substage,
+        macroReasons: detail.row.macro_reasons,
         paymentState: detail.row.payment_state,
         hasAgencyCandidate:
           canCreateShalomGuide &&
@@ -2233,6 +2269,19 @@ function OrderDrawer({
                   <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-600 ring-1 ring-slate-200">
                     {macroSubstageLabel(detail.row.macro_substage)}
                   </span>
+                  {/* Un motivo dice qué falta, la subetapa dice en qué punto va la
+                      gestión: el pedido se ve entero sin abrir nada. En Por cerrar
+                      los motivos son el trabajo mismo y los lista la mesa de cierre,
+                      así que no se repiten aquí. */}
+                  {detail.row.macro_stage !== "por_cerrar" &&
+                    (detail.row.macro_reasons ?? []).map((reason) => (
+                      <span
+                        key={reason}
+                        className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-900 ring-1 ring-amber-200"
+                      >
+                        {macroSubstageLabel(reason)}
+                      </span>
+                    ))}
                   <span className="text-xs text-slate-400">
                     {fmtAge(detail.row.macro_since ?? detail.row.status_since)} en esta macroetapa · fuente:{" "}
                     {detail.row.status_source ?? "—"}
@@ -2246,6 +2295,26 @@ function OrderDrawer({
             {nextAction && workspace === "operar" && (
               <div className="order-2">
                 <DrawerNextActionCard action={nextAction} onJump={jumpTo} />
+              </div>
+            )}
+
+            {/* La gestión de confirmación va arriba porque en Por confirmar ES
+                el trabajo. Se muestra antes que el panel de pago para que el
+                empate de `order-3` lo resuelva el orden del DOM: en Agencia el
+                abono se pide DURANTE la llamada, no en vez de ella. */}
+            {detail.row.macro_stage === "por_confirmar" && canEdit && (
+              <div
+                hidden={workspace !== "operar"}
+                data-drawer-section="confirmacion"
+                className="order-3 scroll-mt-28"
+              >
+                <ConfirmationDesk
+                  timeline={detail.timeline}
+                  pending={pending}
+                  onAttempt={(payload) =>
+                    run(() => registerConfirmationAttempt(orderId, payload))
+                  }
+                />
               </div>
             )}
 
@@ -2948,6 +3017,186 @@ function Field({ label, value }: { label: string; value: string | null | undefin
       <dt className="text-xs text-slate-400">{label}</dt>
       <dd className="text-slate-700">{value || "—"}</dd>
     </div>
+  );
+}
+
+/**
+ * Mesa de confirmación: donde se registra cada intento de contacto.
+ *
+ * Un solo gesto por intento. Antes esto no existía —el resolvedor leía eventos
+ * que nadie escribía— y los 2.994 pedidos Por confirmar vivían en «Sin llamar»
+ * por más llamadas que hiciera el equipo.
+ *
+ * El contador cuenta DÍAS DISTINTOS con gestión, no días transcurridos: llamar
+ * el 20, el 22, el 25 y el 28 de julio son cuatro días de siete, no nueve. Los
+ * días en que nadie llamó no gastan cupo.
+ */
+function ConfirmationDesk({
+  timeline,
+  pending,
+  onAttempt,
+}: {
+  timeline: TimelineEntry[];
+  pending: boolean;
+  onAttempt: (input: {
+    result: string;
+    channel: string;
+    note?: string;
+    nextContactOn?: string;
+  }) => void;
+}) {
+  const [result, setResult] = useState(CONFIRMATION_RESULTS[0]!.code);
+  const [channel, setChannel] = useState<string>(CONFIRMATION_CHANNELS[0].code);
+  const [nextContactOn, setNextContactOn] = useState("");
+  const [note, setNote] = useState("");
+
+  const events = useMemo(
+    () => timeline.map((entry) => ({ kind: entry.kind, occurred_at: entry.occurredAt })),
+    [timeline],
+  );
+  const days = useMemo(() => confirmationDays(events), [events]);
+  const used = days.length;
+  const today = limaDayKey(new Date().toISOString());
+  // Si ya se llamó hoy, este intento NO abre día nuevo: el MOM cuenta el día,
+  // no la llamada, y decirle al operador que gasta un cupo que no gasta lo
+  // empujaría a no registrar los intentos siguientes.
+  const opensNewDay = !days.includes(today);
+  const projected = Math.min(used + (opensNewDay ? 1 : 0), CONFIRMATION_MAX_DAYS);
+  const lastAttempt = used >= CONFIRMATION_MAX_DAYS;
+
+  const selected = confirmationResult(result);
+  const needsDate = Boolean(selected?.schedulesFollowup);
+  const blocked = pending || (needsDate && !nextContactOn);
+
+  return (
+    <section
+      className={cn(
+        "space-y-4 rounded-xl border p-4",
+        lastAttempt ? "border-amber-300 bg-amber-50/50" : "border-indigo-200 bg-indigo-50/40",
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-indigo-900">
+            Gestión de confirmación
+          </h3>
+          <p className="mt-1 text-xs leading-5 text-slate-600">
+            Un registro por intento. Llamada, WhatsApp y mensaje del mismo día cuentan como un
+            solo día de gestión.
+          </p>
+        </div>
+        <span
+          className={cn(
+            "rounded-full px-2.5 py-1 text-xs font-bold ring-1",
+            lastAttempt
+              ? "bg-white text-amber-900 ring-amber-300"
+              : "bg-white text-indigo-900 ring-indigo-200",
+          )}
+        >
+          Día {used} de {CONFIRMATION_MAX_DAYS}
+        </span>
+      </div>
+
+      {used > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {days.map((day) => (
+            <span
+              key={day}
+              className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-700 ring-1 ring-slate-200"
+            >
+              {day.slice(5).split("-").reverse().join("/")}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {lastAttempt && (
+        <p className="rounded-lg bg-white/70 px-3 py-2 text-xs leading-5 text-amber-900 ring-1 ring-amber-200">
+          <strong>Último intento.</strong> Se agotaron los {CONFIRMATION_MAX_DAYS} días de gestión.
+          La anulación se crea a mano en Shopify — Kapta nunca anula por su cuenta.
+        </p>
+      )}
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="block">
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Canal
+          </span>
+          <select
+            value={channel}
+            onChange={(e) => setChannel(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
+          >
+            {CONFIRMATION_CHANNELS.map((option) => (
+              <option key={option.code} value={option.code}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Resultado
+          </span>
+          <select
+            value={result}
+            onChange={(e) => setResult(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
+          >
+            {CONFIRMATION_RESULTS.map((option) => (
+              <option key={option.code} value={option.code}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {selected && <p className="text-xs text-slate-500">{selected.hint}</p>}
+
+      {needsDate && (
+        <label className="block">
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Próximo contacto
+          </span>
+          <input
+            type="date"
+            value={nextContactOn}
+            min={today}
+            onChange={(e) => setNextContactOn(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm sm:w-52"
+          />
+        </label>
+      )}
+
+      <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        rows={2}
+        placeholder="Qué dijo el cliente (opcional)"
+        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
+      />
+
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          disabled={blocked}
+          onClick={() => {
+            onAttempt({ result, channel, note, nextContactOn });
+            setNote("");
+            setNextContactOn("");
+          }}
+          className="rounded-lg bg-indigo-700 px-3 py-2 text-sm font-bold text-white hover:bg-indigo-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+        >
+          Registrar intento
+        </button>
+        <span className="text-xs text-slate-500">
+          {opensNewDay
+            ? `Abre el día ${projected} de ${CONFIRMATION_MAX_DAYS}.`
+            : "Ya hay gestión de hoy: no consume otro día."}
+        </span>
+      </div>
+    </section>
   );
 }
 
