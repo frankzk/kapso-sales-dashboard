@@ -93,6 +93,14 @@ for f in $(ls "$ROOT"/db/migrations/*.sql | sort); do
 done
 echo "  ✅ all migrations apply on a fresh database"
 
+# La cobertura COD se decide por coordenada además de por nombre (0100). Es
+# lógica geoespacial hecha a mano (haversine, sin PostGIS): esta prueba fija que
+# la cercanía a un punto COD clasifica bien y que las reglas de precedencia y el
+# aislamiento por org se respetan.
+echo "▶ cobertura por coordenada"
+$PSQL -f "$ROOT/scripts/sql/coverage_smoke.sql" >/dev/null
+echo "  ✅ cerca de un punto COD → provincia_cod; lejos → agencia; Cañete y aislamiento por org intactos"
+
 # order_events is the audit trail of the Master de Pedidos: it must be
 # impossible to rewrite history, even for the role the server actions use.
 echo "▶ auditoría inmutable + clave de recojo + unicidad del Yape"
