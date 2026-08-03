@@ -2,7 +2,36 @@
 
 import { createServerSupabase } from "@/lib/db";
 import { shopifyOrderAdminUrl } from "@/lib/shopify";
+import { resolveAliclikHealth, type AliclikHealth } from "@/lib/aliclik-health";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
+
+/** El foco de salud de Aliclik para la org de una tienda. Gris si no se ubica la
+ * org o no hay sonda fresca. Espeja `aliclikHealthFor` de orders-master-access. */
+async function aliclikHealthForStore(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeId: string | null,
+): Promise<AliclikHealth> {
+  if (!storeId) return "sin_monitoreo";
+  const { data: store } = await sb
+    .from("stores")
+    .select("org_id")
+    .eq("id", storeId)
+    .maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  if (!orgId) return "sin_monitoreo";
+  const { data } = await sb
+    .from("aliclik_health_checks")
+    .select("status,checked_at")
+    .eq("org_id", orgId)
+    .order("checked_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const latest = data as { status: string; checked_at: string } | null;
+  return resolveAliclikHealth(
+    latest ? { status: latest.status, checkedAt: latest.checked_at } : null,
+    Date.now(),
+  );
+}
 
 export type LeadView = "por_llamar" | "handoff" | "yape" | "seguimientos" | "ganados" | "perdidos";
 
@@ -237,6 +266,8 @@ export interface CustomerHistory {
   currentOrderGuide: string | null;
   /** Si ese pedido ya tiene punto en el mapa (casi siempre, vía Shopify). */
   currentOrderHasCoordinate: boolean;
+  /** Foco de salud de la API de Aliclik, para el panel de crear guía. */
+  currentOrderAliclikHealth: AliclikHealth;
   recentOrders: PriorOrder[]; // last 3 prior orders (excl. own), newest first
 }
 
@@ -260,12 +291,13 @@ export async function getCustomerHistory(
   let currentOrderName: string | null = null;
   let currentOrderGuide: string | null = null;
   let currentOrderHasCoordinate = false;
+  let currentOrderAliclikHealth: AliclikHealth = "sin_monitoreo";
   if (excludeOrderId) {
     const [cur, master] = await Promise.all([
       sb.from("orders").select("name").eq("id", excludeOrderId).maybeSingle(),
       sb
         .from("order_master")
-        .select("guide_code,latitude,longitude")
+        .select("guide_code,latitude,longitude,store_id")
         .eq("order_id", excludeOrderId)
         .maybeSingle(),
     ]);
@@ -274,15 +306,18 @@ export async function getCustomerHistory(
       guide_code: string | null;
       latitude: number | null;
       longitude: number | null;
+      store_id: string | null;
     } | null;
     currentOrderGuide = m?.guide_code ?? null;
     currentOrderHasCoordinate = m?.latitude != null && m?.longitude != null;
+    currentOrderAliclikHealth = await aliclikHealthForStore(sb, m?.store_id ?? null);
   }
   const own = {
     currentOrderName,
     currentOrderId: excludeOrderId ?? null,
     currentOrderGuide,
     currentOrderHasCoordinate,
+    currentOrderAliclikHealth,
   };
 
   // Sin teléfono no hay historial de compras que buscar, pero el pedido propio sí

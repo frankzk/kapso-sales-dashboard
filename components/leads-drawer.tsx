@@ -670,6 +670,7 @@ export function LeadDrawer({
                   key={history.currentOrderId}
                   orderId={history.currentOrderId}
                   hasCoordinate={history.currentOrderHasCoordinate}
+                  health={history.currentOrderAliclikHealth}
                   // Sin argumento a propósito: `{refreshList:true}` toma un atajo
                   // que NO recarga el historial, y el panel se quedaría visible
                   // ofreciendo crear una guía que ya existe.

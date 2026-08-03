@@ -2871,6 +2871,7 @@ function OrderDrawer({
                 <AliclikGuidePanel
                   orderId={orderId}
                   hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
+                  health={detail.aliclikHealth}
                   onCreated={() => {
                     void reload();
                     onSaved();

@@ -33,6 +33,10 @@
       "schedule": "30 9 * * *"
     },
     {
+      "path": "/api/cron/aliclik-health",
+      "schedule": "*/5 0-3,12-23 * * *"
+    },
+    {
       "path": "/api/cron/meta-insights",
       "schedule": "15 10 * * *"
     },

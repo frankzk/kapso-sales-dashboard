@@ -26,14 +26,42 @@ import {
   type AliclikPreview,
 } from "@/app/dashboard/pedidos/aliclik-actions";
 import { isShortenedMapsLink } from "@/lib/aliclik-geo";
+import type { AliclikHealth } from "@/lib/aliclik-health";
+
+/** El foco de salud de la API de Aliclik. Solo informa; no bloquea el botón —un
+ * pin puntual puede fallar con la API verde y viceversa. */
+function HealthBadge({ health }: { health: AliclikHealth }) {
+  const map = {
+    operativo: { dot: "bg-emerald-500", text: "text-emerald-700", label: "Aliclik operativo" },
+    fallos: { dot: "bg-rose-500", text: "text-rose-700", label: "Aliclik con fallos" },
+    sin_monitoreo: { dot: "bg-slate-300", text: "text-slate-500", label: "Sin monitoreo" },
+  }[health];
+  const title =
+    health === "fallos"
+      ? "Su API de cotización está fallando ahora mismo; conviene reintentar en unos minutos."
+      : health === "sin_monitoreo"
+        ? "Sin sondeo reciente (fuera del horario 7am–11pm, o el monitor no ha corrido)."
+        : "La API de cotización responde normal.";
+  return (
+    <span
+      title={title}
+      className={`inline-flex flex-none items-center gap-1.5 whitespace-nowrap text-[11px] font-medium ${map.text}`}
+    >
+      <span className={`h-2 w-2 flex-none rounded-full ${map.dot}`} aria-hidden />
+      {map.label}
+    </span>
+  );
+}
 
 export function AliclikGuidePanel({
   orderId,
   hasCoordinate,
+  health,
   onCreated,
 }: {
   orderId: string;
   hasCoordinate: boolean;
+  health: AliclikHealth;
   onCreated: () => void;
 }) {
   const [coordinate, setCoordinate] = useState("");
@@ -140,12 +168,15 @@ export function AliclikGuidePanel({
       <div className="space-y-4">
         <ExistingGuideLinkPanel orderId={orderId} onLinked={onCreated} />
         <div className="border-t border-slate-200 pt-4">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-900">Crear guía en Aliclik</h3>
-            <p className="mt-1 text-xs text-slate-500">
-            Cotiza primero: la cotización no crea nada y sirve para confirmar cobertura y ubicación.
-          </p>
-        </div>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">Crear guía en Aliclik</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Cotiza primero: la cotización no crea nada y sirve para confirmar cobertura y ubicación.
+              </p>
+            </div>
+            <HealthBadge health={health} />
+          </div>
 
         {/* Esperando a Shopify: ni campo de coordenada ni botón de cotizar. Ambos
             pedirían a la vendedora un trabajo que el webhook hace solo. */}
