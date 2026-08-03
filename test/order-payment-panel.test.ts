@@ -19,10 +19,14 @@ describe("jerarquía de pagos en el drawer", () => {
   });
 
   it("lo vuelve obligatorio cuando el MOM exige un adelanto", () => {
+    // El abono es un MOTIVO de la macroetapa, no una subetapa: si el panel lo
+    // siguiera buscando en `macro_substage` bajaría a opcional justo en el
+    // pedido que está frenado por el pago.
     expect(
       orderPaymentPanelPresentation({
         ...BASE,
-        macroSubstage: "pago_requerido_pendiente",
+        macroSubstage: "volver_a_contactar",
+        macroReasons: ["pago_requerido_pendiente"],
       }),
     ).toEqual({ show: true, mode: "required" });
   });

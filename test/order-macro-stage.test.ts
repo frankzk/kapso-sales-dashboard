@@ -166,7 +166,7 @@ describe("resolveMacroStage — Por confirmar y Preparación", () => {
     expect(state).toMatchObject({ stage: "preparacion", substage: "por_armar" });
   });
 
-  it("Agencia contactada sin pago validado permanece Por confirmar", () => {
+  it("Agencia contactada sin pago validado permanece Por confirmar, con el pago como motivo", () => {
     const state = resolve({
       order: order({ shipping_mode: "agency" }),
       events: [event("confirmation_contact")],
@@ -174,8 +174,52 @@ describe("resolveMacroStage — Por confirmar y Preparación", () => {
     });
     expect(state).toMatchObject({
       stage: "por_confirmar",
-      substage: "pago_requerido_pendiente",
+      substage: "por_confirmar",
+      reasons: ["pago_requerido_pendiente"],
     });
+  });
+
+  it("agendar el próximo contacto NO borra el pago pendiente", () => {
+    // Era el defecto de tener las dos como subetapas: el pedido saltaba de
+    // «Pago requerido pendiente» a «Volver a contactar» y el abono, que no había
+    // cambiado en nada, desaparecía de la vista.
+    const state = resolve({
+      order: order({ shipping_mode: "agency" }),
+      events: [event("confirmation_contact"), event("confirmation_followup")],
+      paymentState: "sin_pago",
+    });
+    expect(state).toMatchObject({
+      stage: "por_confirmar",
+      substage: "volver_a_contactar",
+      reasons: ["pago_requerido_pendiente"],
+    });
+  });
+
+  it("el séptimo día también arrastra el motivo del abono", () => {
+    const state = resolve({
+      order: order({ shipping_mode: "agency" }),
+      events: [event("confirmation_contact"), event("confirmation_last_attempt")],
+      paymentState: "sin_pago",
+    });
+    expect(state).toMatchObject({ substage: "ultimo_intento", reasons: ["pago_requerido_pendiente"] });
+  });
+
+  it("un pedido de Agencia que nadie llamó todavía no reclama el abono", () => {
+    // Sin un solo contacto no hay a quién pedirle el depósito: marcarlo llenaría
+    // la bandeja de motivos que nadie puede resolver aún.
+    const state = resolve({ order: order({ shipping_mode: "agency" }), paymentState: "sin_pago" });
+    expect(state).toMatchObject({ substage: "sin_llamar", reasons: [] });
+  });
+
+  it("Provincia COD sin pago no inventa un motivo de abono", () => {
+    const state = resolve({ events: [event("confirmation_contact")], paymentState: "sin_pago" });
+    expect(state).toMatchObject({ substage: "por_confirmar", reasons: [] });
+  });
+
+  it("«Pago requerido pendiente» ya no es una subetapa navegable", () => {
+    // Si volviera al catálogo, la interfaz ofrecería otra vez dos casilleros
+    // para el mismo pedido y el conteo se partiría entre ambos.
+    expect(MACRO_SUBSTAGES_BY_STAGE.por_confirmar).not.toContain("pago_requerido_pendiente");
   });
 
   it("Agencia con adelanto validado puede pasar a preparación", () => {

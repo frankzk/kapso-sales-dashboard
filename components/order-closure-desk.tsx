@@ -119,6 +119,11 @@ export function OrderClosureDesk({
   pending: boolean;
   onAction: (input: ClosureActionInput) => Promise<boolean>;
 }) {
+  // Los motivos ya no son exclusivos de Por cerrar: confirmación también los
+  // usa para el abono de Agencia. Esta mesa cierra obligaciones finales, así que
+  // solo cuenta y muestra los suyos; si no, un pedido recién llamado aparecería
+  // con «1 pendiente» en la mesa de cierre.
+  const openReasons = stage === "por_cerrar" ? reasons : [];
   const actions = useMemo(() => {
     const next: ClosureActionKey[] = [];
     if (stage === "finalizado" && permissions.canReopen) next.push("reopen");
@@ -237,13 +242,15 @@ export function OrderClosureDesk({
           </p>
         </div>
         <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-orange-800 ring-1 ring-orange-200">
-          {stage === "finalizado" ? "Cerrado" : `${reasons.length} pendiente${reasons.length === 1 ? "" : "s"}`}
+          {stage === "finalizado"
+            ? "Cerrado"
+            : `${openReasons.length} pendiente${openReasons.length === 1 ? "" : "s"}`}
         </span>
       </div>
 
-      {reasons.length > 0 && (
+      {openReasons.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
-          {reasons.map((reason) => (
+          {openReasons.map((reason) => (
             <span key={reason} className="rounded-full bg-white px-2 py-1 text-xs text-orange-900 ring-1 ring-orange-200">
               {macroSubstageLabel(reason)}
             </span>

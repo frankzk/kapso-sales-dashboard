@@ -1658,7 +1658,10 @@ function drawerNextAction(row: OrderMasterRow, showPayments: boolean): DrawerNex
   const substage = row.macro_substage as MacroSubstage | null | undefined;
 
   if (stage === "por_confirmar") {
-    if (substage === "pago_requerido_pendiente" && showPayments) {
+    // El abono pendiente ya no es una subetapa sino un motivo: manda sobre la
+    // llamada porque sin él la confirmación no vale, pero deja al pedido
+    // visible en la subetapa que de verdad describe su gestión.
+    if ((row.macro_reasons ?? []).includes("pago_requerido_pendiente") && showPayments) {
       return {
         eyebrow: "Confirmación · pago requerido",
         title: "Validar el pago solicitado",
@@ -2026,6 +2029,7 @@ function OrderDrawer({
         currentCourier: detail.row.current_courier,
         shippingMode: detail.row.shipping_mode,
         macroSubstage: detail.row.macro_substage,
+        macroReasons: detail.row.macro_reasons,
         paymentState: detail.row.payment_state,
         hasAgencyCandidate:
           canCreateShalomGuide &&
@@ -2233,6 +2237,19 @@ function OrderDrawer({
                   <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-600 ring-1 ring-slate-200">
                     {macroSubstageLabel(detail.row.macro_substage)}
                   </span>
+                  {/* Un motivo dice qué falta, la subetapa dice en qué punto va la
+                      gestión: el pedido se ve entero sin abrir nada. En Por cerrar
+                      los motivos son el trabajo mismo y los lista la mesa de cierre,
+                      así que no se repiten aquí. */}
+                  {detail.row.macro_stage !== "por_cerrar" &&
+                    (detail.row.macro_reasons ?? []).map((reason) => (
+                      <span
+                        key={reason}
+                        className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-900 ring-1 ring-amber-200"
+                      >
+                        {macroSubstageLabel(reason)}
+                      </span>
+                    ))}
                   <span className="text-xs text-slate-400">
                     {fmtAge(detail.row.macro_since ?? detail.row.status_since)} en esta macroetapa · fuente:{" "}
                     {detail.row.status_source ?? "—"}

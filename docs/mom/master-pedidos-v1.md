@@ -171,10 +171,23 @@ Subetapas:
 - `por_confirmar`: existe al menos un contacto del día.
 - `volver_a_contactar`: existe fecha o compromiso de próximo contacto.
 - `ultimo_intento`: séptimo día de gestión.
+
+Motivos (conviven con la subetapa, no la reemplazan):
+
 - `pago_requerido_pendiente`: Agencia confirmó verbalmente, pero todavía no se
   validó el pago exigido.
 
 Reglas:
+
+- La subetapa dice en qué punto va la gestión; el motivo dice qué falta para
+  avanzar. Un pedido de Agencia con próximo contacto pactado y sin abono
+  validado está en `volver_a_contactar` **con** el motivo
+  `pago_requerido_pendiente`.
+- Si el cliente no abona en la fecha pactada, no cambia de etiqueta: se vuelve a
+  llamar y sigue en confirmación con el mismo motivo abierto hasta que el pago
+  se valide o se agoten los siete días.
+- El motivo se abre a partir del primer contacto registrado: antes no hay a
+  quién pedirle el abono.
 
 - Un pedido que ya tuvo contacto nunca vuelve literalmente a `Sin llamar`.
 - Llamada normal, llamada WhatsApp y mensaje escrito realizados el mismo día

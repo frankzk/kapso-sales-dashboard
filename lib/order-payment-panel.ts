@@ -13,6 +13,8 @@ interface OrderPaymentPanelInput {
   currentCourier: string | null;
   shippingMode: string | null;
   macroSubstage: string | null | undefined;
+  /** Motivos abiertos de la macroetapa; `pago_requerido_pendiente` vive aquí. */
+  macroReasons?: readonly string[] | null;
   paymentState: string | null | undefined;
   hasAgencyCandidate: boolean;
 }
@@ -32,7 +34,10 @@ export function orderPaymentPanelPresentation(
   const paymentRequired =
     pickupKeyFlow ||
     input.operation === "agencia" ||
-    input.macroSubstage === "pago_requerido_pendiente" ||
+    // El pago exigido en confirmación es un motivo, no una subetapa: buscarlo
+    // en `macro_substage` dejaría de encontrarlo y el panel bajaría a opcional
+    // justo en el pedido que está frenado por el abono.
+    (input.macroReasons ?? []).includes("pago_requerido_pendiente") ||
     input.macroSubstage === "pendiente_pago_diferencia";
   const hasPaymentActivity = Boolean(
     input.paymentState && input.paymentState !== "sin_pago",
