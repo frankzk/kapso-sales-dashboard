@@ -44,6 +44,7 @@ import type {
 } from "@/lib/types";
 import {
   AGENCY_AVAILABLE_STATES,
+  emptyFilters,
   type AgencySummary,
   type MasterFilters,
   type MasterSortKey,
@@ -629,13 +630,21 @@ export async function getOrderMasterPage(
   const now = params.now ?? new Date();
   const sort = SORT_COLUMN.created;
 
-  // Buscar es buscar en TODO el Master, no dentro de la pestaña abierta. Quien
-  // teclea "#KP125285" quiere ese pedido, y por definición no sabe en qué etapa
-  // está — si lo supiera no lo buscaría. Acotar por etapa sólo servía para
-  // esconderlo y dejar un "Sin coincidencias" que parecía decir que no existe.
-  // La UI ya lo daba por hecho: al buscar oculta las pestañas y titula
-  // "Resultados de búsqueda". El servidor era el único que seguía acotando.
+  // Buscar es buscar en TODO el Master. Quien teclea "#KP125285" quiere ESE
+  // pedido, y por definición no sabe dónde está — si lo supiera no lo buscaría.
+  // Cualquier recorte previo sólo sirve para esconderlo y dejar un "Sin
+  // coincidencias" que se lee como "ese pedido no existe".
+  //
+  // Se ignoran la pestaña, la subetapa y TODOS los demás filtros, y no por
+  // gusto: mientras hay búsqueda la pantalla oculta las pestañas y la barra de
+  // filtros entera. Un filtro que sigue actuando pero no se ve ni se puede
+  // quitar es una trampa — da igual que lo pusiera el usuario hace un rato.
+  // Lo único que se mantiene es `store_id`, que no es un filtro sino el límite
+  // de lo que esta persona puede ver.
   const searching = searchTerm(params.filters).length > 0;
+  const effectiveFilters = searching
+    ? { ...emptyFilters(), search: params.filters.search }
+    : params.filters;
 
   const build = (select: string, opts?: { count: "exact"; head: true }) => {
     let q = opts
@@ -644,7 +653,7 @@ export async function getOrderMasterPage(
     q = q.in("store_id", storeIds) as typeof q;
     if (!searching && view !== "todos") q = q.eq("macro_stage", view) as typeof q;
     if (!searching && params.substage) q = q.eq("macro_substage", params.substage) as typeof q;
-    return applyServerFilters(q, params.filters, now);
+    return applyServerFilters(q, effectiveFilters, now);
   };
 
   // El conteo va en paralelo con la página: es una consulta `head`, no trae
