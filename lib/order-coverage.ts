@@ -87,6 +87,36 @@ export function isCaneteLocation(
 }
 
 /**
+ * ¿El pedido va a una provincia del departamento de Lima que NO es la
+ * metropolitana? Esas van por agencia, no por reparto propio.
+ *
+ * SE MIRA TAMBIÉN EL DISTRITO, y ahí estaba el fallo. Shopify guarda a menudo el
+ * nombre de la provincia en el campo del distrito: un pedido de Barranca llega
+ * como región "Lima (provincia)" · provincia "Lima (provincia)" · distrito
+ * "Barranca". Comparando solo `province` no casaba nada, el pedido salía como
+ * Lima COD y la mesa de ruta ofrecía motorizado propio para un destino a 200 km
+ * — sin ofrecer Shalom, que es la única vía real.
+ *
+ * Cañete ya se comprobaba en los dos campos y por eso funcionaba; las otras ocho
+ * provincias no. El criterio es el mismo que el código ya aplica en la
+ * contradicción inversa: el desplegable de región de Shopify es confuso, pero el
+ * distrito lo escribe la clienta, así que el distrito gana.
+ *
+ * Se compara por palabras y no por substring para no confundir un distrito
+ * metropolitano que contenga el nombre por casualidad.
+ */
+export function isNonMetroLimaLocation(
+  location: Pick<CoverageLocation, "province" | "district">,
+): boolean {
+  const province = normalizeCoverageLabel(location.province);
+  if (NON_METRO_LIMA_PROVINCES.has(province)) return true;
+  if (isCaneteLocation(location)) return true;
+  const district = normalizeCoverageLabel(location.district);
+  if (NON_METRO_LIMA_PROVINCES.has(district)) return true;
+  return district.split(/\s+/).some((word) => NON_METRO_LIMA_PROVINCES.has(word));
+}
+
+/**
  * Distritos de Lima Metropolitana / Callao cuyo NOMBRE se repite en otro
  * departamento (Independencia está en Lima, en Huaraz y en Pisco; La Victoria
  * también es Chiclayo; Miraflores también es Arequipa…).
@@ -310,10 +340,7 @@ const LIMA_DEPT_HOMONYMS = new Set(["san luis"].map(normalizeCoverageLabel));
  * porque los nombres se repiten por todo el país.
  */
 export function isLimaMetropolitanaOrCallao(location: CoverageLocation): boolean {
-  const province = normalizeCoverageLabel(location.province);
-  if (NON_METRO_LIMA_PROVINCES.has(province) || isCaneteLocation(location)) {
-    return false;
-  }
+  if (isNonMetroLimaLocation(location)) return false;
 
   const kind = limaRegionKind(location.region);
   if (kind === "metropolitana" || kind === "callao") return true;

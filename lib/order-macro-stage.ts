@@ -7,7 +7,7 @@
 // Cambia cuando una nueva fase altera la precedencia o los motivos de cierre.
 // El cron usa esta versión para recalcular gradualmente todo el histórico sin
 // necesitar un script con credenciales locales.
-import { isCaneteLocation } from "@/lib/order-coverage";
+import { isNonMetroLimaLocation } from "@/lib/order-coverage";
 import {
   CONFIRMATION_CONTACT_KINDS,
   CONFIRMATION_FOLLOWUP_KINDS,
@@ -291,9 +291,11 @@ export function classifyOperation(
   ) {
     return "agencia";
   }
-  // Protección inmediata mientras la migración 0091 termina de recalcular el
-  // histórico materializado.
-  if (isCaneteLocation(order)) return "agencia";
+  // Protección inmediata mientras el histórico materializado se recalcula: vale
+  // para las NUEVE provincias no metropolitanas de Lima, no solo para Cañete.
+  // Un pedido de Barranca con `coverage: "lima"` ya guardado seguiría cayendo en
+  // reparto propio si esto se fiara del campo materializado.
+  if (isNonMetroLimaLocation(order)) return "agencia";
   const coverage = normalize(order.coverage);
   if (coverage === "lima") return "lima";
   if (coverage === "provincia_cod") return "provincia_cod";

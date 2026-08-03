@@ -89,6 +89,32 @@ describe("classifyOperation", () => {
     expect(classifyOperation(order({ region: "Callao", province: "Callao" }))).toBe("lima");
   });
 
+  // #KP125633: Shopify guardó "Barranca" en el DISTRITO y la clienta eligió
+  // "Lima (provincia)" en el desplegable de región. Con `coverage: "lima"` ya
+  // materializado, la mesa de ruta ofrecía motorizado propio para un destino a
+  // 200 km y no ofrecía Shalom, que era la única vía real.
+  //
+  // Esto gana sobre `coverage` a propósito: el campo materializado puede
+  // conservar una clasificación vieja, y un pedido mal enrutado no puede esperar
+  // al siguiente recálculo.
+  it("las nueve provincias del departamento de Lima van por agencia, aunque coverage diga lima", () => {
+    for (const district of ["Barranca", "Huaura", "Huaral", "Yauyos", "Canta", "Oyón", "Cajatambo", "Huarochirí", "Cañete"]) {
+      expect(
+        classifyOperation(
+          order({ region: "Lima (provincia)", province: "Lima (provincia)", district, coverage: "lima" }),
+        ),
+      ).toBe("agencia");
+    }
+  });
+
+  it("un distrito metropolitano de verdad sigue siendo Lima", () => {
+    expect(
+      classifyOperation(
+        order({ region: "Lima (provincia)", province: "Lima (provincia)", district: "Barranco", coverage: "lima" }),
+      ),
+    ).toBe("lima");
+  });
+
   it("trata una geografía no-Lima sin modalidad histórica como Provincia COD", () => {
     expect(classifyOperation(order({ region: "Cusco", province: "Cusco" }))).toBe("provincia_cod");
   });

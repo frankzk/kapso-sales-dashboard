@@ -247,6 +247,62 @@ describe('"Lima (departamento)" con distrito metropolitano', () => {
     }
   });
 
+  // El caso real de #KP125633: Shopify guarda el nombre de la PROVINCIA en el
+  // campo del distrito, y la clienta eligió "Lima (provincia)" en el desplegable
+  // —que es el que Shopify usa para la metropolitana—. El pedido salía como Lima
+  // COD y la mesa de ruta ofrecía motorizado propio para Barranca, a 200 km, sin
+  // ofrecer Shalom, que era la única vía real.
+  //
+  // El criterio es el que el propio módulo ya aplica en la contradicción
+  // inversa: el desplegable de región es confuso, el distrito lo escribe la
+  // clienta, y gana el distrito.
+  it("«Lima (provincia)» con una provincia del departamento en el distrito NO es metropolitana", () => {
+    for (const district of ["Barranca", "Huaura", "Huaral", "Yauyos", "Canta", "Oyón", "Cajatambo", "Huarochirí"]) {
+      expect(
+        isLimaMetropolitanaOrCallao({
+          ...base,
+          region: "Lima (provincia)",
+          province: "Lima (provincia)",
+          district,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("también cuando el nombre va acompañado dentro del distrito", () => {
+    expect(
+      isLimaMetropolitanaOrCallao({
+        ...base,
+        region: "Lima (provincia)",
+        province: "Lima (provincia)",
+        district: "San Vicente de Cañete",
+      }),
+    ).toBe(false);
+    expect(
+      isLimaMetropolitanaOrCallao({
+        ...base,
+        region: "Lima (provincia)",
+        province: "Lima (provincia)",
+        district: "Puerto Supe Barranca",
+      }),
+    ).toBe(false);
+  });
+
+  // La comparación es por PALABRAS, no por substring: un distrito metropolitano
+  // que contuviera el nombre por casualidad no debe caerse a agencia.
+  it("un distrito metropolitano de verdad sigue siendo metropolitano", () => {
+    for (const district of ["Miraflores", "San Isidro", "Los Olivos", "Barranco"]) {
+      expect(
+        isLimaMetropolitanaOrCallao({
+          ...base,
+          region: "Lima (provincia)",
+          province: "Lima (provincia)",
+          district,
+        }),
+      ).toBe(true);
+    }
+  });
+
   it("San Luis no se puede desempatar: también es un distrito de Cañete", () => {
     expect(
       isLimaMetropolitanaOrCallao({ ...base, region: "Lima (departamento)", province: null, district: "San Luis" }),
