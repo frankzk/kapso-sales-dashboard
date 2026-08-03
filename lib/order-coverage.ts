@@ -402,6 +402,11 @@ export async function refreshOrderCoverage(
   admin: SupabaseClient,
   orgId: string,
 ): Promise<void> {
-  // Best effort para permitir desplegar código y migración en dos pasos.
+  // Primero el mapa de puntos COD (que la cobertura por coordenada consulta) y
+  // luego la reclasificación. El orden importa: una tarifa nueva puede sumar
+  // envíos COD a un distrito, y esos puntos deben existir antes de reclasificar.
+  // Best effort, y tolerante a que la migración 0100 no esté aún desplegada:
+  // si la función no existe, se sigue con la reclasificación por nombre.
+  await admin.rpc("refresh_aliclik_cod_points", { p_org_id: orgId });
   await admin.rpc("refresh_order_coverage", { p_org_id: orgId });
 }

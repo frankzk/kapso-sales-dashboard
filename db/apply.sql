@@ -203,4 +203,6 @@
 \ir migrations/0098_orders_shopify_note.sql
 \echo 'Applying 0099_merge_payment_required_substage.sql'
 \ir migrations/0099_merge_payment_required_substage.sql
+\echo 'Applying 0100_coverage_by_coordinates.sql'
+\ir migrations/0100_coverage_by_coordinates.sql
 \echo 'Done.'
