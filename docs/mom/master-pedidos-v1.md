@@ -1150,6 +1150,19 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 - Olva no se crea con menos de S/ 30 validados aunque el navegador sea alterado.
 - Dos salidas del mismo pedido reciben QR y código `Sxx` diferentes.
 - Con una salida activa, la salida adicional exige una justificación auditada.
+- Un courier con salida **viva** deja de ofrecerse, y la tarjeta **nombra esa
+  salida**: número del courier, código corto y el estado que el courier reporta.
+  Decir «no disponible» sin decir cuál obliga a bajar a «Salidas y guías» para
+  averiguarlo, y en el panel del courier hay que buscarla por su número.
+- En «Salidas y guías», el número del courier se muestra junto al código interno
+  de Kapta. Son dos identificadores distintos y hacen falta los dos: el interno
+  para el cotejo, el del courier para buscar el envío en su panel.
+- **Con la guía de agencia creada, el destinatario y la agencia de destino dejan
+  de ser editables.** Se apuntan como borrador durante el cobro, pero una vez que
+  la guía existe el courier ya los tiene y los imprimió en su rótulo: cambiarlos
+  en Kapta no cambia el papel que viaja con el paquete, solo hace que digan cosas
+  distintas. Para corregirlos se anula la guía y se crea otra. El servidor
+  ignora el borrador en ese estado; no basta con esconder el formulario.
 - El rótulo interno contiene pedido, salida, courier, cliente, destino, productos
   y el QR que consume la mesa de despacho.
 - Desde el Master se accede al panel correcto de Aliclik, Shalom, Tanders,

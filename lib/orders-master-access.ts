@@ -429,7 +429,11 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
         deliveryStatus: guide.delivery_status,
         custodyState: guide.custody_state,
         attempts: guide.aliclik_attempts ?? guide.reroute_attempts,
+        // Para que la mesa pueda NOMBRAR la salida que bloquea, en vez de
+        // limitarse a decir que hay una.
         guideCode: guide.guide_code,
+        shortCode: guide.shalom_codigo ?? null,
+        pickupState: guide.pickup_state,
       })),
     }),
   };

@@ -1028,6 +1028,31 @@ export async function saveShalomOrderDraft(
   if (!ctx) return { error: "Sin acceso a este pedido." };
   const { row } = ctx;
 
+  // Con la guía ya creada, esto deja de ser un borrador: Shalom tiene el
+  // destinatario y el destino, y los imprimió en su rótulo. Reescribirlo acá no
+  // cambia nada allá — solo hace que Kapta y el papel que viaja con el paquete
+  // digan cosas distintas. El panel ya no ofrece los campos; esto lo sostiene
+  // también desde el servidor, porque esconder un formulario no es una regla.
+  //
+  // Se ignora en vez de fallar: este guardado ocurre DESPUÉS de registrar un
+  // pago y no puede convertir un cobro correcto en un error rojo.
+  const admin = createAdminSupabase();
+  const { data: liveGuides } = await admin
+    .from("shipments")
+    .select("guide_code,delivery_status,custody_state")
+    .eq("order_id", orderId)
+    .eq("courier", "shalom");
+  const live = ((liveGuides as { guide_code: string | null; delivery_status: string; custody_state: string | null }[] | null) ?? []).find(
+    (guide) =>
+      guide.custody_state !== "devuelto" &&
+      ["pendiente", "en_ruta", "por_preparar"].includes(guide.delivery_status),
+  );
+  if (live) {
+    return {
+      notice: `La guía ${live.guide_code ?? "Shalom"} ya lleva el destinatario y el destino; para cambiarlos hay que anularla y crear otra.`,
+    };
+  }
+
   const documentType = input.documentType ?? null;
   const rawDocument = (input.document ?? "").trim();
   // Se valida con la misma función que usa la creación de la guía: apuntar acá
@@ -1040,7 +1065,6 @@ export async function saveShalomOrderDraft(
   const document = rawDocument ? normalizeDocument(documentType ?? "DNI", rawDocument) : null;
 
   const terminalId = Number(input.destinyTerminalId ?? 0);
-  const admin = createAdminSupabase();
   const { error } = await admin.from("shalom_order_drafts").upsert(
     {
       order_id: orderId,

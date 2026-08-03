@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/components/ui";
+import { operationalLabel } from "@/lib/order-status";
 import type { OrderRoutePlan, RouteCandidate, RouteAction } from "@/lib/order-route-plan";
 
 const STATUS_TONE = {
@@ -81,19 +82,45 @@ export function OrderRouteDesk({
                   </span>
                 )}
               </div>
+              {/* Nombrar la salida que bloquea, no solo decir que existe.
+                  «No disponible» a secas obliga a bajar hasta «Salidas y guías»
+                  para saber de cuál se habla, y en el panel del courier hay que
+                  buscarla por su número. Con el número, el código corto y el
+                  estado que el courier reporta, la tarjeta ya contesta las tres
+                  preguntas que uno se hace ahí mismo. */}
+              {route.blockingOutput && (
+                <div className="mt-2 rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-600">
+                    <span className="font-semibold uppercase tracking-wide text-slate-500">
+                      Salida activa
+                    </span>
+                    {route.blockingOutput.guideCode && (
+                      // `select-all`: el número se copia de un clic para pegarlo
+                      // en el buscador del panel del courier, que es lo que se
+                      // hace con él justo después de leerlo.
+                      <span className="select-all font-mono font-semibold text-slate-800">
+                        N° {route.blockingOutput.guideCode}
+                      </span>
+                    )}
+                    {route.blockingOutput.shortCode && (
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono font-medium text-slate-700">
+                        {route.blockingOutput.shortCode}
+                      </span>
+                    )}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    {operationalLabel(
+                      route.blockingOutput.pickupState ?? route.blockingOutput.deliveryStatus,
+                    )}
+                  </p>
+                </div>
+              )}
               <p className={cn(
                 "mt-2 text-xs leading-5",
                 route.availability === "blocked" ? "text-slate-500" : "text-slate-600",
               )}>
                 {route.reason}
               </p>
-              {route.activeGuideCode ? (
-                // El código de la guía activa, junto a la razón del bloqueo, para
-                // ubicarla sin salir de la mesa de ruta (p. ej. la AUR5X… de Aliclik).
-                <p className="mt-1 select-all font-mono text-[11px] font-medium text-slate-600">
-                  Guía: {route.activeGuideCode}
-                </p>
-              ) : null}
               <div className="flex-1" />
               <button
                 type="button"
@@ -110,6 +137,8 @@ export function OrderRouteDesk({
               >
                 {closed
                   ? "Reabrir primero"
+                  : route.blockingOutput
+                  ? "Ya tiene salida activa"
                   : route.availability === "blocked"
                   ? "No disponible"
                   : actionEnabled(route)

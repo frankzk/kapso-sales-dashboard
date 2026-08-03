@@ -299,6 +299,12 @@ export interface ShipmentRow {
   shalom_codigo?: string | null;
   /** Id con el que Shalom sirve el rótulo PDF. Solo en las creadas por API. */
   shalom_ose_id?: number | null;
+  /**
+   * Estado del flujo de agencia de ESTA salida (§10). Es lo que el courier
+   * reporta —«pendiente de envío», «disponible para recojo»— y no coincide con
+   * `delivery_status`, que se queda en «pendiente» todo ese trayecto.
+   */
+  pickup_state?: string | null;
   /** Delivery attempts reported by Aliclik's daily Excel (NRO. INTENTOS). */
   aliclik_attempts: number | null;
   /** Operative delivery date reported by Aliclik, as YYYY-MM-DD. */

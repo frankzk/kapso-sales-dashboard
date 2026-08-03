@@ -20,7 +20,27 @@ export interface RouteOutputSnapshot {
   deliveryStatus: string;
   custodyState?: string | null;
   attempts?: number | null;
+  /** Nº con el que el courier conoce la salida. En Shalom, su «Nº de Orden». */
   guideCode?: string | null;
+  /** Código corto que Shalom imprime junto al número, del estilo `MCMH`. */
+  shortCode?: string | null;
+  /** Estado del flujo de agencia, que es lo que el courier reporta. */
+  pickupState?: string | null;
+}
+
+/**
+ * La salida viva que impide volver a usar ese courier.
+ *
+ * Decir «no disponible» sin nombrarla obliga a bajar hasta «Salidas y guías»
+ * para averiguar de cuál se habla, y en el panel del courier hay que buscar por
+ * su número: por eso viaja con la identidad completa, no solo con un booleano.
+ */
+export interface RouteBlockingOutput {
+  id: string;
+  guideCode: string | null;
+  shortCode: string | null;
+  deliveryStatus: string;
+  pickupState: string | null;
 }
 
 export interface SwaypRouteCheck {
@@ -42,11 +62,12 @@ export interface RouteCandidate {
   requiresAdvance: boolean;
   relatedShipmentId?: string | null;
   /**
-   * Código de la guía ACTIVA que bloquea crear otra con este courier. Se expone
-   * para que la mesa de ruta lo muestre y la operadora pueda ubicarla sin ir a
-   * buscarlo a otra pestaña.
+   * La salida viva que bloquea crear otra con este courier, presente SOLO en ese
+   * caso. Sustituye al `activeGuideCode` que traía únicamente el código: hacían
+   * falta también el código corto de Shalom y el estado que el courier reporta,
+   * y dos campos para el mismo hecho terminan discrepando.
    */
-  activeGuideCode?: string | null;
+  blockingOutput?: RouteBlockingOutput | null;
 }
 
 export interface OrderRoutePlan {
@@ -188,16 +209,23 @@ function applyOutputPolicy(
     (output) => courierKey(output.courier) === route.key && isActive(output),
   );
   if (activeWithCourier.length > 0) {
-    // El código de la guía que bloquea, para enseñarlo en la tarjeta. Se toma la
-    // última activa con guía: si hubiera más de una, la reciente es la relevante.
-    const activeGuideCode =
-      [...activeWithCourier].reverse().find((output) => output.guideCode)?.guideCode ?? null;
+    // Si hubiera varias, la reciente es la relevante. Se prefiere la última que
+    // TENGA número: una salida sin código no sirve para ir a buscarla al panel
+    // del courier, que es para lo que se enseña.
+    const reversed = [...activeWithCourier].reverse();
+    const blocking = reversed.find((output) => output.guideCode) ?? reversed[0]!;
     return {
       ...route,
       recommended: false,
       availability: "blocked",
       reason: `${route.label} ya tiene una salida activa en este pedido. Anúlala o ciérrala antes de crear otra.`,
-      activeGuideCode,
+      blockingOutput: {
+        id: blocking.id,
+        guideCode: blocking.guideCode ?? null,
+        shortCode: blocking.shortCode ?? null,
+        deliveryStatus: blocking.deliveryStatus,
+        pickupState: blocking.pickupState ?? null,
+      },
     };
   }
 
