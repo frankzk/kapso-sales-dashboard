@@ -12,7 +12,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
-import { isCaneteLocation } from "@/lib/order-coverage";
+import { isNonMetroLimaLocation } from "@/lib/order-coverage";
 import { evaluateDirectFenixStock, type FenixStockRow } from "@/lib/fenix";
 import { deriveFenixCoverageCity } from "@/lib/shipments";
 import {
@@ -306,9 +306,17 @@ function operationOf(row: OrderMasterRow, guides: ShipmentRow[]): OperationKind 
   return "desconocida";
 }
 
-/** Guard de lectura durante el despliegue de la migración 0091. */
+/**
+ * Guard de lectura: corrige la cobertura materializada que se quedó vieja.
+ *
+ * Vale para las NUEVE provincias no metropolitanas de Lima, no solo para Cañete.
+ * Con la comprobación limitada a Cañete, un pedido de Barranca enseñaba "Agencia"
+ * en la mesa de ruta —que clasifica en vivo— y "Lima" en la ficha de cobertura,
+ * que lee el campo guardado. Dos respuestas distintas a la misma pregunta en la
+ * misma pantalla, y ninguna forma de saber cuál creer.
+ */
 function withRuntimeCoverage(row: OrderMasterRow): OrderMasterRow {
-  return isCaneteLocation(row) ? { ...row, coverage: "agencia" } : row;
+  return isNonMetroLimaLocation(row) ? { ...row, coverage: "agencia" } : row;
 }
 
 /**
