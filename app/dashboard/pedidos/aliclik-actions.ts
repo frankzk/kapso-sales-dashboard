@@ -31,6 +31,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { getOrderMasterDetail } from "@/lib/orders-master-access";
+import { classifyOperation } from "@/lib/order-macro-stage";
 import { normalizePhone } from "@/lib/phone";
 import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
 import {
@@ -162,6 +163,22 @@ async function authorize(
   const { data } = await sb.from("order_master").select("*").eq("order_id", orderId).maybeSingle();
   if (!data) return { error: "Sin acceso a este pedido." };
   const row = data as unknown as OrderMasterRow;
+
+  // Aliclik no atiende Agencia: esos pedidos van con Shalom u Olva. El plan de
+  // rutas ya no lo ofrece y el drawer ya no dibuja el panel, pero esconder un
+  // botón no es una regla —el mismo criterio que se aplica a Tanders fuera de
+  // Lima—, así que también se rechaza aquí.
+  //
+  // Solo bloquea CREAR y VINCULAR. Anular sigue permitido: un pedido puede
+  // haberse reclasificado después de tener su guía, y dejarlo sin poder cerrarla
+  // sería peor que el problema que esto evita.
+  if (permission === "aliclik.create_guide" && classifyOperation(row) === "agencia") {
+    return {
+      error:
+        "Este pedido tiene cobertura Agencia y va con Shalom u Olva; Aliclik no lo atiende. " +
+        "Si la dirección está mal clasificada, corrígela en Ubicación y cobertura.",
+    };
+  }
 
   const admin = createAdminSupabase();
   const creds = await getStoreCreds(row.store_id, admin);

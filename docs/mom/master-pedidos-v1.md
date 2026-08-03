@@ -133,6 +133,10 @@ Reglas iniciales:
 - Provincia COD recomienda primero Aliclik.
 - Reproprovincia usa Swayp con stock local después de una salida Aliclik fallida.
 - Agencia recomienda Shalom primero y Olva como alternativa.
+- Aliclik no atiende Agencia: no se ofrece como ruta **ni se puede crear o
+  vincular una guía suya** desde un pedido de esa cobertura. Si la clasificación
+  está mal, el camino es corregir la dirección; la cobertura se recalcula a
+  partir de ella y la ruta reaparece sola.
 - Tanders es exclusivo de cobertura Lima. No se muestra ni se acepta desde el
   servidor para Provincia COD o Agencia.
 - Cañete siempre se clasifica como Agencia, aunque Shopify lo etiquete como
