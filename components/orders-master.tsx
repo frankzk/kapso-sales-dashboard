@@ -2826,8 +2826,16 @@ function OrderDrawer({
             {/* Esconderlo sin más dejaría buscando a quien esperaba encontrarlo.
                 La salida es corregir la dirección: la cobertura se recalcula a
                 partir de ella y, si el pedido era Provincia COD mal clasificada,
-                Aliclik vuelve solo. */}
-            {canCreateGuide && !aliclikOffered && detail.routePlan.operation === "agencia" && (
+                Aliclik vuelve solo.
+
+                Pero eso vale mientras la ruta se está DECIDIENDO. Con una salida
+                ya activa la pregunta está contestada: corregir la dirección no va
+                a traer Aliclik de vuelta a un paquete que ya viaja, y el bloque
+                se lee como una opción disponible cuando no lo es. */}
+            {canCreateGuide &&
+              !aliclikOffered &&
+              detail.routePlan.operation === "agencia" &&
+              detail.routePlan.activeOutputCount === 0 && (
               <div
                 hidden={workspace !== "operar"}
                 data-drawer-section="aliclik"
