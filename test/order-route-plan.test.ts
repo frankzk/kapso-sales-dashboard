@@ -102,3 +102,55 @@ describe("motor de rutas MOM Fase 3", () => {
     expect(plan.warnings.join(" ")).toContain("límite máximo");
   });
 });
+
+describe("una salida viva bloquea repetir ese mismo courier", () => {
+  // La regla ya vivía en el sistema, pero solo en el último paso: el modal de
+  // Shalom contesta "el pedido ya tiene una guía activa: …, anúlala antes de
+  // crear otra". Hasta ahí, la mesa seguía enseñando "Abrir Shalom" y encima con
+  // el sello de Sugerido, así que el camino recomendado terminaba en un rechazo.
+  it("Shalom con guía pendiente deja de ofrecerse, y no como sugerido", () => {
+    const plan = buildOrderRoutePlan({
+      operation: "agencia",
+      outputs: [{ id: "g1", courier: "shalom", deliveryStatus: "pendiente" }],
+    });
+    const shalom = plan.candidates.find((route) => route.key === "shalom");
+    expect(shalom?.availability).toBe("blocked");
+    expect(shalom?.recommended).toBe(false);
+    expect(shalom?.reason).toContain("ya tiene una salida activa");
+  });
+
+  // Lo importante del caso: mira ACTIVA, no "ya se usó alguna vez". Bloquear por
+  // haberlo usado condenaría el pedido a no volver a salir nunca por Shalom
+  // después de anular una guía — que es justo lo que manda hacer el modal.
+  it("anulada o entregada NO bloquean: el pedido puede volver a salir", () => {
+    for (const deliveryStatus of ["anulado", "entregado"]) {
+      const plan = buildOrderRoutePlan({
+        operation: "agencia",
+        outputs: [{ id: "g1", courier: "shalom", deliveryStatus }],
+      });
+      expect(plan.candidates.find((route) => route.key === "shalom")?.availability).not.toBe(
+        "blocked",
+      );
+    }
+  });
+
+  it("una salida devuelta tampoco bloquea, aunque su estado siga vivo", () => {
+    const plan = buildOrderRoutePlan({
+      operation: "agencia",
+      outputs: [
+        { id: "g1", courier: "shalom", deliveryStatus: "pendiente", custodyState: "devuelto" },
+      ],
+    });
+    expect(plan.candidates.find((route) => route.key === "shalom")?.availability).not.toBe(
+      "blocked",
+    );
+  });
+
+  it("bloquea el courier ocupado sin arrastrar a los demás", () => {
+    const plan = buildOrderRoutePlan({
+      operation: "agencia",
+      outputs: [{ id: "g1", courier: "shalom", deliveryStatus: "pendiente" }],
+    });
+    expect(plan.candidates.find((route) => route.key === "olva")?.availability).not.toBe("blocked");
+  });
+});

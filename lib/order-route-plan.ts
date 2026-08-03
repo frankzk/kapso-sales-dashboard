@@ -166,6 +166,29 @@ function applyOutputPolicy(
   operation: OperationKind,
 ): RouteCandidate {
   if (route.availability === "blocked") return route;
+
+  // Con una salida VIVA de ese mismo courier, la mesa no debe seguir ofreciéndolo
+  // como siguiente paso —menos aún marcarlo "Sugerido"—. La regla ya existía en
+  // el sistema, pero solo al final del todo: el modal de Shalom contesta "el
+  // pedido ya tiene una guía activa: …, anúlala antes de crear otra". Enseñar el
+  // botón hasta ese momento manda a la operadora a un callejón, y en un pedido ya
+  // entregado en agencia lo pinta encima como la acción recomendada.
+  //
+  // Se mira ACTIVA, no "ya se usó": una guía anulada o entregada no puede
+  // condenar al pedido a no tener nunca otra salida con ese courier. Esa
+  // distinción es justo la que `isActive` ya sabe hacer.
+  const activeWithCourier = input.outputs.filter(
+    (output) => courierKey(output.courier) === route.key && isActive(output),
+  ).length;
+  if (activeWithCourier > 0) {
+    return {
+      ...route,
+      recommended: false,
+      availability: "blocked",
+      reason: `${route.label} ya tiene una salida activa en este pedido. Anúlala o ciérrala antes de crear otra.`,
+    };
+  }
+
   const prior = input.outputs.filter((output) => courierKey(output.courier) === route.key).length;
   const policy = canRepeatCourier({
     courier: route.key === "swayp" ? "swayp" : LABELS[route.key],
