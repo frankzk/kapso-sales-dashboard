@@ -115,12 +115,13 @@ export async function GET(req: NextRequest) {
   };
   if (guia?.shalom_codigo) {
     batch.numero_y_codigo = await attempt(() =>
-      client.trackBatch([{ custom_id: "sonda", numero, codigo: guia.shalom_codigo }]),
+      client.trackBatch([{ custom_id: "sonda", numero, codigo: guia.shalom_codigo! }]),
     );
   }
   if (guia?.shalom_ose_id) {
     batch.solo_ose_id = await attempt(() =>
-      client.trackBatch([{ custom_id: "sonda", ose_id: guia.shalom_ose_id }]),
+      // STRING, no el bigint de la base: como número devuelve 400 y tumba el lote.
+      client.trackBatch([{ custom_id: "sonda", ose_id: String(guia.shalom_ose_id) }]),
     );
   }
 

@@ -129,6 +129,15 @@ romper. El campo `detailed` dice qué esperar.
 
 ### El batch, en detalle
 
+> **`ose_id` va como STRING.** En su documentación el ejemplo es
+> `{ "custom_id": "pedido-002", "ose_id": "584210" }` — entre comillas. En
+> nuestra base es un `bigint`, y mandarlo como número devuelve
+> **`400 body JSON inválido`**.
+>
+> Y ese 400 **tumba el LOTE ENTERO, no el item**: la regla de "un item malo no
+> estropea el batch" solo vale para errores de negocio, no para un envelope
+> malformado. Un tipo mal puesto deja sin rastrear a las 50 guías de la tanda.
+
 - **`custom_id`** es una etiqueta libre que devuelven **verbatim**. Le mandamos
   el id del envío, así que el resultado se correlaciona sin adivinar.
 - **Los errores son por item, no por batch**: una guía inexistente vuelve con
@@ -138,6 +147,36 @@ romper. El campo `detailed` dice qué esperar.
 
 Por eso el llamador **itera resultados** en vez de confiar en que la ausencia de
 excepción signifique que todo salió bien.
+
+---
+
+## Webhooks — la alternativa a este cron
+
+**Shalom SÍ tiene webhooks de rastreo.** Este documento afirmaba lo contrario, y
+sobre esa afirmación se construyó el cron de sondeo. Es falso:
+
+| Endpoint | Para qué |
+|---|---|
+| `PUT /v1/webhooks` | Registra la URL. Devuelve el `signing_secret` **una sola vez** |
+| `POST /v1/tracking/subscriptions` | Suscribe una guía por `numero` + `codigo` |
+| `"track": true` en `POST /v1/orders` | Suscribe la guía al crearla. Best-effort |
+| `DELETE /v1/tracking/subscriptions/{id}` | Desuscribe y libera cupo |
+
+Empujan un POST firmado (`HMAC-SHA256`, header `X-Shalom-Signature`) en cada
+cambio de hito, con el timeline completo — no hace falta volver a llamar al API.
+Eventos: `tracking.updated`, `tracking.delivered` (cierra la suscripción sola) y
+`tracking.expired` (~21 días).
+
+**Lo que hay que mirar antes de migrar:**
+
+- **Cupo de 50 suscripciones activas a la vez** (ajustable por plan). Hoy hay 93
+  guías vivas: no entran. Como las entregadas se auto-desuscriben, el cupo rota,
+  pero 93 > 50 significa que el cron no se puede apagar del todo todavía.
+- **Verificación de propiedad**: al registrar mandan un `webhook.ping` con un
+  `challenge` que hay que devolver en el body. **Se envía UNA sola vez y no lo
+  reintentan** — el endpoint tiene que estar desplegado ANTES del `PUT`.
+- Entrega *at-least-once*: hay que deduplicar por `X-Shalom-Event-Id`.
+- Los estados `devuelto` y `cancelado` **no llegan por este canal**.
 
 ---
 

@@ -371,17 +371,23 @@ export class ShalomClient {
    * detallado añadiría `order`, pero sus bloques útiles llegan vacíos desde julio
    * de 2026 — no hay razón para pedirlo.
    *
-   * CADA ITEM NECESITA `numero` + `codigo`, o `ose_id`. Mandar solo el número
-   * devuelve `upstream_rejected: Ingrese un código de orden` en el 100 % de los
-   * items, con HTTP 200 y sin que nada más falle: es exactamente lo que estuvo
-   * pasando con las 92 guías.
+   * CADA ITEM NECESITA `numero` + `codigo`, o bien `ose_id`. Mandar solo el
+   * número devuelve `upstream_rejected: Ingrese un código de orden` en el 100 %
+   * de los items, con HTTP 200 y sin que nada más falle: es lo que tuvo 93 guías
+   * paradas sin que se notara.
+   *
+   * `ose_id` VA COMO STRING, aunque en nuestra base sea un bigint. Mandarlo como
+   * número devuelve `400 body JSON inválido`, y ese 400 tumba el LOTE ENTERO —no
+   * el item—, así que un tipo mal puesto deja sin rastrear a las 50 guías de la
+   * tanda. Por eso el tipo lo pide string: que no compile es más barato que
+   * descubrirlo en producción.
    *
    * Un item que falla NO tumba el batch: viene con `ok:false` y su error, y el
    * HTTP sigue siendo 200. Por eso el llamador itera resultados en vez de
    * confiar en que la ausencia de excepción signifique que todo salió bien.
    */
   async trackBatch(
-    items: { custom_id: string; numero?: string; codigo?: string | null; ose_id?: number | null }[],
+    items: { custom_id: string; numero?: string; codigo?: string; ose_id?: string }[],
   ): Promise<ShalomTrackResult[]> {
     const body = await this.request<{ results?: ShalomTrackResult[] }>("/v1/tracking/batch", {
       method: "POST",

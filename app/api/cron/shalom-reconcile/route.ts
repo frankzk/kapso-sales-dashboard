@@ -18,7 +18,15 @@ export const maxDuration = 300;
 
 // Estados de las guías de Shalom creadas por API.
 //
-// POR QUÉ HACE FALTA. Shalom no tiene webhook, y la vía de entrada que existía
+// OJO: «Shalom no tiene webhook» ERA FALSO, y sobre eso se justificó este cron.
+// Su API expone `PUT /v1/webhooks` + `POST /v1/tracking/subscriptions`, y un
+// atajo `"track": true` al crear la orden. Empujan el timeline completo firmado.
+//
+// El cron sigue haciendo falta igual, por ahora: el cupo son 50 suscripciones
+// ACTIVAS a la vez y hay 93 guías vivas. Lo suyo es suscribir al crear y dejar
+// esto de red para lo que no quepa o se pierda. Ver docs/shalom-estados-rastreo.md.
+//
+// POR QUÉ HACE FALTA HOY. La vía de entrada que existía
 // —subir su reporte Excel— nunca se usó en esta operación: las guías creadas por
 // API se quedaban congeladas en el estado con el que nacían. El Master decía
 // "pendiente" para siempre, que no es un dato sino un vacío disfrazado.
@@ -110,20 +118,38 @@ export async function GET(req: NextRequest) {
     let results;
     try {
       results = await client.trackBatch(
-        // `numero` NO BASTA. Comprobado contra la API: con solo el número, el
-        // upstream contesta «Ingrese un código de orden» —y con solo el código,
-        // «Ingrese un número de orden»—. Se reclaman el uno al otro, y por
-        // separado los dos mensajes parecen decir "esa guía no existe". Eso tuvo
-        // las 93 guías sin rastrear desde el primer día.
+        // `numero` + `codigo`, Y NADA MÁS.
         //
-        // `ose_id` sí resuelve solo, y va de reserva: las guías creadas por la
-        // API lo tienen, las vinculadas a mano durante una caída puede que no.
-        slice.map((g) => ({
-          custom_id: g.id,
-          numero: String(g.guide_code),
-          codigo: g.shalom_codigo,
-          ose_id: g.shalom_ose_id,
-        })),
+        // `numero` solo no basta: el upstream contesta «Ingrese un código de
+        // orden» —y con solo el código, «Ingrese un número de orden»—. Se
+        // reclaman el uno al otro, y por separado los dos mensajes parecen decir
+        // "esa guía no existe". Eso tuvo las 93 guías sin rastrear desde el
+        // primer día.
+        //
+        // `ose_id` sirve de reserva para la guía que no tenga código —una
+        // vinculada a mano, por ejemplo—, pero VA COMO STRING. Mandarlo como el
+        // bigint que es en la base devuelve `400 body JSON inválido`, y ese 400
+        // tumba el LOTE ENTERO, no el item: 50 guías sin rastrear por un tipo.
+        //
+        // Por lo mismo los campos se omiten cuando no hay valor en vez de ir
+        // como null: un item incompleto falla solo, sin llevarse a los demás.
+        slice.map((g) => {
+          const item: {
+            custom_id: string;
+            numero?: string;
+            codigo?: string;
+            ose_id?: string;
+          } = { custom_id: g.id };
+          if (g.shalom_codigo) {
+            item.numero = String(g.guide_code);
+            item.codigo = g.shalom_codigo;
+          } else if (g.shalom_ose_id) {
+            item.ose_id = String(g.shalom_ose_id);
+          } else {
+            item.numero = String(g.guide_code);
+          }
+          return item;
+        }),
       );
     } catch (err) {
       // Un batch caído no debe tumbar la pasada entera: se anota y se sigue con
