@@ -20,6 +20,27 @@ export interface RouteOutputSnapshot {
   deliveryStatus: string;
   custodyState?: string | null;
   attempts?: number | null;
+  /** Nº con el que el courier conoce la salida. En Shalom, su «Nº de Orden». */
+  guideCode?: string | null;
+  /** Código corto que Shalom imprime junto al número, del estilo `MCMH`. */
+  shortCode?: string | null;
+  /** Estado del flujo de agencia, que es lo que el courier reporta. */
+  pickupState?: string | null;
+}
+
+/**
+ * La salida viva que impide volver a usar ese courier.
+ *
+ * Decir «no disponible» sin nombrarla obliga a bajar hasta «Salidas y guías»
+ * para averiguar de cuál se habla, y en el panel del courier hay que buscar por
+ * su número: por eso viaja con la identidad completa, no solo con un booleano.
+ */
+export interface RouteBlockingOutput {
+  id: string;
+  guideCode: string | null;
+  shortCode: string | null;
+  deliveryStatus: string;
+  pickupState: string | null;
 }
 
 export interface SwaypRouteCheck {
@@ -40,6 +61,8 @@ export interface RouteCandidate {
   reason: string;
   requiresAdvance: boolean;
   relatedShipmentId?: string | null;
+  /** Presente solo cuando lo que bloquea es una salida viva de ese courier. */
+  blockingOutput?: RouteBlockingOutput | null;
 }
 
 export interface OrderRoutePlan {
@@ -179,13 +202,22 @@ function applyOutputPolicy(
   // distinción es justo la que `isActive` ya sabe hacer.
   const activeWithCourier = input.outputs.filter(
     (output) => courierKey(output.courier) === route.key && isActive(output),
-  ).length;
-  if (activeWithCourier > 0) {
+  );
+  if (activeWithCourier.length > 0) {
+    // La más reciente: si hubiera varias, la que se está trabajando es la última.
+    const blocking = activeWithCourier[activeWithCourier.length - 1]!;
     return {
       ...route,
       recommended: false,
       availability: "blocked",
       reason: `${route.label} ya tiene una salida activa en este pedido. Anúlala o ciérrala antes de crear otra.`,
+      blockingOutput: {
+        id: blocking.id,
+        guideCode: blocking.guideCode ?? null,
+        shortCode: blocking.shortCode ?? null,
+        deliveryStatus: blocking.deliveryStatus,
+        pickupState: blocking.pickupState ?? null,
+      },
     };
   }
 

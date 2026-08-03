@@ -44,6 +44,7 @@ import {
   yapeRecipientReadingFromVision,
   type YapeRecipientReading,
 } from "@/lib/yape-recipient";
+import { operationalLabel } from "@/lib/order-status";
 import { documentError } from "@/lib/shalom/draft";
 import type { ShalomAgency, ShalomDocumentType } from "@/lib/shalom/types";
 
@@ -207,6 +208,7 @@ export function PickupKeyPanel({
           storeId={panel.storeId}
           orderTotal={panel.orderTotal}
           existing={panel.payments}
+          shalomGuide={panel.shalomGuide}
           pending={pending}
           onRegistered={() => {
             void reload();
@@ -813,6 +815,7 @@ function VoucherForm({
   storeId,
   orderTotal,
   existing,
+  shalomGuide,
   pending,
   onRegistered,
   onError,
@@ -822,6 +825,7 @@ function VoucherForm({
   storeId: string;
   orderTotal: number | null;
   existing: PaymentRow[];
+  shalomGuide: PanelData["shalomGuide"];
   pending: boolean;
   onRegistered: () => void;
   onError: (msg: string | null) => void;
@@ -1147,6 +1151,53 @@ function VoucherForm({
           tiene el DNI a mano; quien crea la guía suele ser otra persona en otro
           momento, y hoy tiene que volver a pedirlo. Nada de esto condiciona el
           pago: un cobro no puede quedarse esperando a un DNI. */}
+      {/* Con la guía ya creada estos datos dejan de ser un borrador: Shalom los
+          tiene, los imprimió en su rótulo y el paquete viaja con ellos.
+          Editarlos acá no cambia nada allá — solo hace que Kapta y el rótulo
+          físico digan cosas distintas, que es peor que no poder tocarlos. La
+          salida real es anular la guía y crear otra, y eso se dice. */}
+      {shalomGuide ? (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-slate-900">1. DNI y agencia Shalom</p>
+            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+              🔒 Ya en la guía
+            </span>
+          </div>
+          <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
+            <div>
+              <dt className="text-xs text-slate-400">Documento</dt>
+              <dd className="font-medium text-slate-800">
+                {shalomDoc ? `${shalomDocType} ${shalomDoc}` : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-400">Agencia de destino</dt>
+              <dd className="font-medium text-slate-800">{shalomAgency?.nombre ?? "—"}</dd>
+            </div>
+          </dl>
+          <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
+            <span>Guía</span>
+            {shalomGuide.guideCode && (
+              <span className="font-mono font-semibold text-slate-800">
+                N° {shalomGuide.guideCode}
+              </span>
+            )}
+            {shalomGuide.codigo && (
+              <span className="rounded bg-white px-1.5 py-0.5 font-mono font-medium text-slate-700 ring-1 ring-slate-200">
+                {shalomGuide.codigo}
+              </span>
+            )}
+            <span className="text-slate-500">
+              · {operationalLabel(shalomGuide.pickupState ?? shalomGuide.deliveryStatus)}
+            </span>
+          </p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            El destinatario y el destino ya viajan impresos en el rótulo de Shalom. Para cambiarlos
+            hay que anular esa guía —desde «Salidas y guías»— y crear otra.
+          </p>
+        </div>
+      ) : (
       <details open className="rounded-lg bg-slate-50 px-3 py-3">
         <summary className="cursor-pointer text-sm font-semibold text-slate-900">
           1. DNI y agencia Shalom <span className="font-normal text-slate-500">(opcional)</span>
@@ -1297,6 +1348,7 @@ function VoucherForm({
           )}
         </div>
       </details>
+      )}
 
       {availableKinds.length > 0 ? (
         <>

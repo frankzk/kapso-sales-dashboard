@@ -135,6 +135,21 @@ export interface PickupKeyPanel {
   canViewKey: boolean;
   canManageKey: boolean;
   canOverride: boolean;
+  /**
+   * La guía Shalom viva del pedido, si ya existe.
+   *
+   * El DNI y la agencia que se apuntan acá son un BORRADOR para crear esa guía.
+   * Una vez creada, la guía se lleva esos datos y los imprime en su rótulo: el
+   * destinatario y el destino ya están sellados del lado de Shalom. Cambiar el
+   * borrador después no cambia nada allá — solo hace que Kapta y el rótulo
+   * físico digan cosas distintas, que es peor que no poder editarlo.
+   */
+  shalomGuide: {
+    guideCode: string | null;
+    codigo: string | null;
+    deliveryStatus: string;
+    pickupState: string | null;
+  } | null;
 }
 
 /** Estado completo del panel de pagos y clave. NUNCA devuelve la clave. */
@@ -146,11 +161,17 @@ export async function loadPaymentPanel(
   const perms = await getMasterPermissions();
   const sb = await createServerSupabase();
 
-  const [paymentsRes, keyRes, sharesRes, viewsRes] = await Promise.all([
+  const [paymentsRes, keyRes, sharesRes, viewsRes, shalomRes] = await Promise.all([
     sb.from("order_payments").select("*").eq("order_id", orderId).order("registered_at"),
     sb.from("shalom_pickup_keys").select("order_id").eq("order_id", orderId).maybeSingle(),
     sb.from("pickup_key_shares").select("*").eq("order_id", orderId).order("shared_at", { ascending: false }),
     sb.from("pickup_key_views").select("id,viewed_at,reason,override").eq("order_id", orderId).order("viewed_at", { ascending: false }).limit(50),
+    sb
+      .from("shipments")
+      .select("guide_code,shalom_codigo,delivery_status,pickup_state,custody_state,created_at")
+      .eq("order_id", orderId)
+      .eq("courier", "shalom")
+      .order("created_at", { ascending: false }),
   ]);
 
   const payments = (paymentsRes.data ?? []) as unknown as PaymentRow[];
@@ -180,6 +201,30 @@ export async function loadPaymentPanel(
     hasKey: Boolean(keyRow),
   });
 
+  // Solo una guía VIVA sella el borrador. Una anulada no: después de anular hay
+  // que poder corregir el DNI o la agencia y volver a crear, que es exactamente
+  // lo que manda hacer el modal cuando algo salió mal.
+  type ShalomShipmentRow = {
+    guide_code: string | null;
+    shalom_codigo: string | null;
+    delivery_status: string;
+    pickup_state: string | null;
+    custody_state: string | null;
+  };
+  const shalomLive = ((shalomRes.data as ShalomShipmentRow[] | null) ?? []).find(
+    (row) =>
+      row.custody_state !== "devuelto" &&
+      ["pendiente", "en_ruta", "por_preparar"].includes(row.delivery_status),
+  );
+  const shalomGuide: PickupKeyPanel["shalomGuide"] = shalomLive
+    ? {
+        guideCode: shalomLive.guide_code,
+        codigo: shalomLive.shalom_codigo,
+        deliveryStatus: shalomLive.delivery_status,
+        pickupState: shalomLive.pickup_state,
+      }
+    : null;
+
   return {
     panel: {
       storeId: ctx.storeId,
@@ -196,6 +241,7 @@ export async function loadPaymentPanel(
       canViewKey: perms.can("shalom.reveal_pickup_key"),
       canManageKey: perms.can("shalom.view_pickup_key"),
       canOverride: perms.can("shalom.override_payment_validation"),
+      shalomGuide,
     },
   };
 }

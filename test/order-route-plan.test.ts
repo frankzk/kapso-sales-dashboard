@@ -146,6 +146,52 @@ describe("una salida viva bloquea repetir ese mismo courier", () => {
     );
   });
 
+  it("nombra la salida que bloquea, no solo dice que existe", () => {
+    // «No disponible» a secas obliga a bajar hasta «Salidas y guías» para saber
+    // de cuál se habla, y en el panel de Shalom hay que buscarla por su número.
+    const plan = buildOrderRoutePlan({
+      operation: "agencia",
+      outputs: [
+        {
+          id: "g1",
+          courier: "shalom",
+          deliveryStatus: "pendiente",
+          guideCode: "90484166",
+          shortCode: "MCMH",
+          pickupState: "pendiente_de_envio",
+        },
+      ],
+    });
+    expect(plan.candidates.find((route) => route.key === "shalom")?.blockingOutput).toEqual({
+      id: "g1",
+      guideCode: "90484166",
+      shortCode: "MCMH",
+      deliveryStatus: "pendiente",
+      pickupState: "pendiente_de_envio",
+    });
+  });
+
+  it("una ruta libre no arrastra la identidad de otra", () => {
+    // La tarjeta usa `blockingOutput` para decidir si pinta la ficha: si Olva
+    // heredara la de Shalom, diría que ya tiene una salida que no es suya.
+    const plan = buildOrderRoutePlan({
+      operation: "agencia",
+      outputs: [{ id: "g1", courier: "shalom", deliveryStatus: "pendiente", guideCode: "9048" }],
+    });
+    expect(plan.candidates.find((route) => route.key === "olva")?.blockingOutput ?? null).toBeNull();
+  });
+
+  it("un bloqueo por tope de salidas no finge una salida que bloquea", () => {
+    // Ahí no hay una guía concreta que anular: el límite es del pedido entero.
+    const outputs = Array.from({ length: 5 }, (_, index) => ({
+      id: String(index),
+      courier: "axel",
+      deliveryStatus: "anulado",
+    }));
+    const plan = buildOrderRoutePlan({ operation: "lima", outputs });
+    expect(plan.candidates.every((route) => !route.blockingOutput)).toBe(true);
+  });
+
   it("bloquea el courier ocupado sin arrastrar a los demás", () => {
     const plan = buildOrderRoutePlan({
       operation: "agencia",

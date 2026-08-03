@@ -2626,6 +2626,17 @@ function OrderDrawer({
                       <span className="font-mono text-xs text-slate-500">
                         {outputDisplayCode(g.output_code, g.courier) || g.guide_code}
                       </span>
+                      {/* El número con el que el COURIER conoce el envío.
+                          Estaba escondido: en cuanto la salida tenía código
+                          interno, `outputDisplayCode` ganaba y el `guide_code`
+                          no se pintaba nunca. Es justo el dato que hay que
+                          teclear en el panel del courier para buscarla, y el
+                          que el rótulo de Shalom titula «N° de Orden». */}
+                      {g.guide_code && outputDisplayCode(g.output_code, g.courier) && (
+                        <span className="font-mono text-xs font-semibold text-slate-700">
+                          N° {g.guide_code}
+                        </span>
+                      )}
                       {/* Shalom muestra en su panel el nº de orden Y un código
                           corto. Sin el corto hay que abrir cada envío allá para
                           saber cuál es cuál. */}
