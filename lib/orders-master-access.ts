@@ -519,6 +519,16 @@ const SORT_COLUMN: Record<MasterSortKey, { column: string; ascending: boolean }>
 };
 
 /**
+ * El término de búsqueda, normalizado. Vive aparte porque lo miran dos sitios:
+ * quien arma el `or(...ilike...)` y quien decide que buscar ignora la pestaña.
+ * Si cada uno lo normalizara por su cuenta, un día dejarían de coincidir y la
+ * búsqueda volvería a acotarse sola en algún caso raro — el `#` es justo eso.
+ */
+function searchTerm(f: MasterFilters): string {
+  return f.search.trim().replace(/^#/, "");
+}
+
+/**
  * Traduce los filtros a la consulta. Cada uno se apoya en un índice que ya
  * existe (`order_master_store_district_idx`, `..._store_courier_idx`, los
  * parciales de multi_courier y multi_attempt…), así que filtrar en la base sale
@@ -580,7 +590,7 @@ function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
     q = q.or(`last_movement_at.is.null,last_movement_at.lte.${cutoff}`);
   }
 
-  const term = f.search.trim().replace(/^#/, "");
+  const term = searchTerm(f);
   if (term) {
     const like = `*${term.replace(/[*,()]/g, "")}*`;
     q = q.or(
@@ -619,13 +629,21 @@ export async function getOrderMasterPage(
   const now = params.now ?? new Date();
   const sort = SORT_COLUMN.created;
 
+  // Buscar es buscar en TODO el Master, no dentro de la pestaña abierta. Quien
+  // teclea "#KP125285" quiere ese pedido, y por definición no sabe en qué etapa
+  // está — si lo supiera no lo buscaría. Acotar por etapa sólo servía para
+  // esconderlo y dejar un "Sin coincidencias" que parecía decir que no existe.
+  // La UI ya lo daba por hecho: al buscar oculta las pestañas y titula
+  // "Resultados de búsqueda". El servidor era el único que seguía acotando.
+  const searching = searchTerm(params.filters).length > 0;
+
   const build = (select: string, opts?: { count: "exact"; head: true }) => {
     let q = opts
       ? sb.from("order_master").select(select, opts)
       : sb.from("order_master").select(select);
     q = q.in("store_id", storeIds) as typeof q;
-    if (view !== "todos") q = q.eq("macro_stage", view) as typeof q;
-    if (params.substage) q = q.eq("macro_substage", params.substage) as typeof q;
+    if (!searching && view !== "todos") q = q.eq("macro_stage", view) as typeof q;
+    if (!searching && params.substage) q = q.eq("macro_substage", params.substage) as typeof q;
     return applyServerFilters(q, params.filters, now);
   };
 
