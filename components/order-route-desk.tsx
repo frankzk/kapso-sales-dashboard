@@ -82,11 +82,19 @@ export function OrderRouteDesk({
                 )}
               </div>
               <p className={cn(
-                "mt-2 flex-1 text-xs leading-5",
+                "mt-2 text-xs leading-5",
                 route.availability === "blocked" ? "text-slate-500" : "text-slate-600",
               )}>
                 {route.reason}
               </p>
+              {route.activeGuideCode ? (
+                // El código de la guía activa, junto a la razón del bloqueo, para
+                // ubicarla sin salir de la mesa de ruta (p. ej. la AUR5X… de Aliclik).
+                <p className="mt-1 select-all font-mono text-[11px] font-medium text-slate-600">
+                  Guía: {route.activeGuideCode}
+                </p>
+              ) : null}
+              <div className="flex-1" />
               <button
                 type="button"
                 disabled={!enabled}

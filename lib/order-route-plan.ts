@@ -20,6 +20,7 @@ export interface RouteOutputSnapshot {
   deliveryStatus: string;
   custodyState?: string | null;
   attempts?: number | null;
+  guideCode?: string | null;
 }
 
 export interface SwaypRouteCheck {
@@ -40,6 +41,12 @@ export interface RouteCandidate {
   reason: string;
   requiresAdvance: boolean;
   relatedShipmentId?: string | null;
+  /**
+   * Código de la guía ACTIVA que bloquea crear otra con este courier. Se expone
+   * para que la mesa de ruta lo muestre y la operadora pueda ubicarla sin ir a
+   * buscarlo a otra pestaña.
+   */
+  activeGuideCode?: string | null;
 }
 
 export interface OrderRoutePlan {
@@ -179,13 +186,18 @@ function applyOutputPolicy(
   // distinción es justo la que `isActive` ya sabe hacer.
   const activeWithCourier = input.outputs.filter(
     (output) => courierKey(output.courier) === route.key && isActive(output),
-  ).length;
-  if (activeWithCourier > 0) {
+  );
+  if (activeWithCourier.length > 0) {
+    // El código de la guía que bloquea, para enseñarlo en la tarjeta. Se toma la
+    // última activa con guía: si hubiera más de una, la reciente es la relevante.
+    const activeGuideCode =
+      [...activeWithCourier].reverse().find((output) => output.guideCode)?.guideCode ?? null;
     return {
       ...route,
       recommended: false,
       availability: "blocked",
       reason: `${route.label} ya tiene una salida activa en este pedido. Anúlala o ciérrala antes de crear otra.`,
+      activeGuideCode,
     };
   }
 
