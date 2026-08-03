@@ -333,44 +333,55 @@ export class ShalomClient {
   }
 
   /**
-   * Rastrea hasta 50 guías de una vez.
-   *
-   * NO pide `shalomAuth`, y eso es lo que la hace viable en un cron: el «modo
-   * estado» del rastreo se contenta con la API key global, así que no hay que
-   * pagar el login de ~90 s ni tener credenciales de ninguna tienda. Basta el
-   * `numero` de guía. El modo detallado añadiría `order`, pero sus bloques útiles
-   * llegan vacíos desde julio de 2026 — no hay razón para pedirlo.
-   *
-   * Un item que falla NO tumba el batch: viene con `ok:false` y su error, y el
-   * HTTP sigue siendo 200. Por eso el llamador itera resultados en vez de
-   * confiar en que la ausencia de excepción signifique que todo salió bien.
-   */
-  /**
    * Rastrea UNA guía. Mismo «modo estado» que el batch: le basta la API key.
    *
    * Existe aparte del batch para poder comparar los dos caminos con la misma
-   * guía. El batch empezó a devolver `upstream_rejected: Ingrese un código de
-   * orden` en las 92 —un error de campo VACÍO, no de guía inexistente—, y con
-   * solo el batch no hay forma de saber si el número está mal o si es el sobre
-   * del batch el que no llega bien montado.
+   * guía, que es como se encontró que el rastreo pide DOS identificadores.
    */
   async track(numero: string): Promise<unknown> {
     return this.trackBy("numero", numero);
   }
 
   /**
-   * Rastrea por el identificador que se le diga. La documentación de Shalom dice
-   * que `/v1/tracking` acepta `numero`, `codigo` u `ose_id`, y no hay forma de
-   * saber cuál espera de verdad sin probarlos: el upstream contesta el mismo
-   * «Ingrese un código de orden» tanto si el nombre del parámetro no es el que
-   * quiere como si su servicio está caído.
+   * Rastrea por los identificadores que se le pasen.
+   *
+   * `numero` Y `codigo` VAN JUNTOS. Se comprobó contra la API: pedir solo el
+   * número devuelve «Ingrese un código de orden», y pedir solo el código
+   * devuelve «Ingrese un número de orden». Se reclaman el uno al otro, y ninguno
+   * de los dos mensajes deja adivinar eso por separado — parecen «no existe».
+   *
+   * `ose_id` sí resuelve él solo.
    */
-  async trackBy(field: "numero" | "codigo" | "ose_id", value: string): Promise<unknown> {
-    return this.request(`/v1/tracking?${field}=${encodeURIComponent(value)}`);
+  async trackBy(
+    field: "numero" | "codigo" | "ose_id",
+    value: string,
+    codigo?: string | null,
+  ): Promise<unknown> {
+    const qs = new URLSearchParams({ [field]: value });
+    if (field === "numero" && codigo) qs.set("codigo", codigo);
+    return this.request(`/v1/tracking?${qs.toString()}`);
   }
 
+  /**
+   * Rastrea hasta 50 guías de una vez.
+   *
+   * NO pide `shalomAuth`, y eso es lo que la hace viable en un cron: el «modo
+   * estado» del rastreo se contenta con la API key global, así que no hay que
+   * pagar el login de ~90 s ni tener credenciales de ninguna tienda. El modo
+   * detallado añadiría `order`, pero sus bloques útiles llegan vacíos desde julio
+   * de 2026 — no hay razón para pedirlo.
+   *
+   * CADA ITEM NECESITA `numero` + `codigo`, o `ose_id`. Mandar solo el número
+   * devuelve `upstream_rejected: Ingrese un código de orden` en el 100 % de los
+   * items, con HTTP 200 y sin que nada más falle: es exactamente lo que estuvo
+   * pasando con las 92 guías.
+   *
+   * Un item que falla NO tumba el batch: viene con `ok:false` y su error, y el
+   * HTTP sigue siendo 200. Por eso el llamador itera resultados en vez de
+   * confiar en que la ausencia de excepción signifique que todo salió bien.
+   */
   async trackBatch(
-    items: { custom_id: string; numero: string }[],
+    items: { custom_id: string; numero?: string; codigo?: string | null; ose_id?: number | null }[],
   ): Promise<ShalomTrackResult[]> {
     const body = await this.request<{ results?: ShalomTrackResult[] }>("/v1/tracking/batch", {
       method: "POST",
