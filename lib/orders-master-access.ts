@@ -12,7 +12,17 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
-import { isNonMetroLimaLocation } from "@/lib/order-coverage";
+import { codCouriersFor, isNonMetroLimaLocation } from "@/lib/order-coverage";
+import { limaTodayKey } from "@/lib/shipments";
+import type { CostTariff } from "@/lib/costs";
+import {
+  confirmationRisk,
+  duplicateCandidates,
+  summarizeOutcomes,
+  type ConfirmationRisk,
+  type OutcomeCounts,
+  type PriorOrderSnapshot,
+} from "@/lib/order-confirmation-brief";
 import { evaluateDirectFenixStock, type FenixStockRow } from "@/lib/fenix";
 import { deriveFenixCoverageCity } from "@/lib/shipments";
 import {
@@ -738,3 +748,111 @@ export async function getMasterFacets(storeIds: string[]): Promise<{
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// Ficha previa a la llamada (MOM §8)
+// ---------------------------------------------------------------------------
+
+export interface OrderConfirmationBrief {
+  /** Pedidos anteriores del MISMO teléfono, del más nuevo al más viejo. */
+  priors: PriorOrderSnapshot[];
+  counts: OutcomeCounts;
+  risk: ConfirmationRisk;
+  /** Los que siguen abiertos y podrían ser este pedido otra vez. */
+  duplicates: PriorOrderSnapshot[];
+  /** Couriers con tarifa COD vigente para ese destino. Vacío = va por agencia. */
+  codCouriers: string[];
+  coverage: string | null;
+}
+
+/**
+ * Lo que hay que mirar antes de marcar: historial del cliente, duplicados y
+ * cobertura. Hasta ahora eso vivía en tres columnas del Excel y en la cabeza de
+ * quien llamaba; el pedido en Kapta no decía nada de las tres.
+ *
+ * Se lee con el cliente de sesión, así que la RLS decide qué pedidos anteriores
+ * son visibles: el historial de un teléfono nunca cruza a una tienda que quien
+ * mira no puede ver.
+ */
+export async function getOrderConfirmationBrief(
+  orderId: string,
+): Promise<OrderConfirmationBrief | null> {
+  const sb = await createServerSupabase();
+  const { data: rowData } = await sb
+    .from("order_master")
+    .select("order_id,store_id,customer_phone,region,province,district,coverage")
+    .eq("order_id", orderId)
+    .maybeSingle();
+  if (!rowData) return null;
+  const row = rowData as unknown as {
+    order_id: string;
+    store_id: string;
+    customer_phone: string | null;
+    region: string | null;
+    province: string | null;
+    district: string | null;
+    coverage: string | null;
+  };
+
+  // Sin teléfono no hay historial que buscar: el teléfono ES la identidad del
+  // cliente en esta operación (no hay cuenta ni documento en Shopify COD).
+  const phone = (row.customer_phone ?? "").trim();
+  let priors: PriorOrderSnapshot[] = [];
+  if (phone) {
+    const { data } = await sb
+      .from("order_master")
+      .select("order_id,order_name,order_created_at,general_status,macro_stage,order_total")
+      .eq("customer_phone", phone)
+      .neq("order_id", orderId)
+      .order("order_created_at", { ascending: false })
+      .limit(50);
+    priors = ((data ?? []) as unknown as PriorOrderSnapshot[]) ?? [];
+  }
+
+  const counts = summarizeOutcomes(priors);
+
+  // Las tarifas se leen con el service role: `cost_tariffs` es configuración de
+  // la organización, no un dato del pedido, y la cobertura ya se calcula con
+  // ellas en el servidor. Sin tarifas aplicadas, la lista sale vacía y la ficha
+  // simplemente no afirma nada sobre cobertura.
+  let codCouriers: string[] = [];
+  try {
+    const admin = createAdminSupabase();
+    const { data: store } = await admin
+      .from("stores")
+      .select("org_id")
+      .eq("id", row.store_id)
+      .maybeSingle();
+    const orgId = (store as { org_id?: string } | null)?.org_id ?? null;
+    if (orgId) {
+      const { data: tariffs } = await admin
+        .from("cost_tariffs")
+        .select("id,org_id,store_id,courier,region,province,district,concept,amount,effective_from,effective_to")
+        .eq("org_id", orgId);
+      codCouriers = codCouriersFor(
+        (tariffs ?? []) as unknown as CostTariff[],
+        {
+          storeId: row.store_id,
+          orgId,
+          region: row.region,
+          province: row.province,
+          district: row.district,
+        },
+        limaTodayKey(),
+      );
+    }
+  } catch {
+    // La matriz de costos es opcional (Fase 4). Su ausencia no puede tumbar la
+    // ficha entera: el historial y los duplicados siguen sirviendo sin ella.
+    codCouriers = [];
+  }
+
+  return {
+    priors,
+    counts,
+    risk: confirmationRisk(counts),
+    duplicates: duplicateCandidates(priors),
+    codCouriers,
+    coverage: row.coverage,
+  };
+}

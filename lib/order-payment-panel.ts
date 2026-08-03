@@ -1,4 +1,5 @@
 import type { OperationKind } from "@/lib/order-macro-stage";
+import type { PaymentRequirement } from "@/lib/order-confirmation-brief";
 import { usesPickupKeyFlow } from "@/lib/pickup-key";
 
 export type OrderPaymentPanelMode = "required" | "optional";
@@ -17,6 +18,12 @@ interface OrderPaymentPanelInput {
   macroReasons?: readonly string[] | null;
   paymentState: string | null | undefined;
   hasAgencyCandidate: boolean;
+  /**
+   * Lo que la tabla de riesgo del §8 exige por los antecedentes del cliente.
+   * Es el «o una regla de riesgo lo exige» que este archivo nombraba desde el
+   * principio sin tener de dónde leerlo.
+   */
+  riskRequirement?: PaymentRequirement | null;
 }
 
 /**
@@ -38,7 +45,12 @@ export function orderPaymentPanelPresentation(
     // en `macro_substage` dejaría de encontrarlo y el panel bajaría a opcional
     // justo en el pedido que está frenado por el abono.
     (input.macroReasons ?? []).includes("pago_requerido_pendiente") ||
-    input.macroSubstage === "pendiente_pago_diferencia";
+    input.macroSubstage === "pendiente_pago_diferencia" ||
+    // «Sugerir» no manda: es una recomendación para la llamada y forzar el panel
+    // por ella pondría el cobro por encima de la ruta en un COD normal. Exigir
+    // adelanto y pago completo sí, porque sin eso el pedido no debe despacharse.
+    input.riskRequirement === "exigir_adelanto" ||
+    input.riskRequirement === "pago_completo";
   const hasPaymentActivity = Boolean(
     input.paymentState && input.paymentState !== "sin_pago",
   );

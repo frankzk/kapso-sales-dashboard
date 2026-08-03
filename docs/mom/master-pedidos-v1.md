@@ -436,6 +436,32 @@ Riesgo por teléfono y antecedentes de rechazo/devolución:
 Una excepción COD es posible con justificación corta, actor y fecha. Las
 promesas de pago incumplidas aumentan el riesgo futuro.
 
+### 8.1 La ficha previa a la llamada
+
+Kapta arma esa revisión y la muestra dentro de la gestión de confirmación, sin
+que nadie tenga que resumirla a mano:
+
+- **Historial del cliente**: los pedidos anteriores del mismo teléfono,
+  desglosados por desenlace — entregados, en curso, anulados, devueltos y sin
+  confirmar. El teléfono es la identidad del cliente en esta operación: no hay
+  cuenta ni documento en un COD de Shopify.
+- **Antecedentes**: solo cuentan los **anulados y devueltos**, que es lo que la
+  tabla nombra. Un pedido abierto o sin confirmar todavía no es un rechazo.
+- **La regla se aplica plana.** Haber recibido antes no la ablanda: la excepción
+  del §8 exige justificación, actor y fecha, o sea una decisión humana
+  registrada, no un descuento automático. Por eso los entregados se muestran
+  bien visibles — son el argumento de quien decida tomar la excepción.
+- **Duplicados**: los pedidos del mismo teléfono que siguen **abiertos**. Un
+  cliente que ya recibió y vuelve a comprar no es un duplicado, es recurrente.
+- **Cobertura COD**: qué couriers tienen tarifa vigente para ese destino, leído
+  de la misma matriz que clasifica la cobertura del pedido, así que no puede
+  contradecirla. Vacío significa que va por agencia.
+- Con `Exigir adelanto` o `Exigir pago completo`, el panel de cobro pasa a ser
+  dominante también en Provincia COD. `Sugerir` no lo fuerza: es una
+  recomendación para la llamada, y un COD puede salir contra entrega.
+- La ficha se lee bajo RLS: el historial de un teléfono nunca cruza a una tienda
+  que quien mira no puede ver.
+
 ## 9. Lima
 
 - Todos los pedidos entran directamente a Preparación.
