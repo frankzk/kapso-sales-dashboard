@@ -98,6 +98,7 @@ export async function GET(req: NextRequest) {
   const errors: string[] = [];
   let applied = 0;
   let failed = 0;
+  let reported = 0;
 
   for (let i = 0; i < live.length; i += BATCH_SIZE) {
     const slice = live.slice(i, i + BATCH_SIZE);
@@ -113,6 +114,10 @@ export async function GET(req: NextRequest) {
       continue;
     }
 
+    // Guías por las que Shalom SÍ contestó, hayan cambiado o no. Se sella abajo
+    // el `last_report_at` de todas juntas — ver el porqué antes del update.
+    const answered: string[] = [];
+
     for (const r of results) {
       const guide = r.custom_id ? byId.get(r.custom_id) : undefined;
       if (!guide) continue;
@@ -120,6 +125,7 @@ export async function GET(req: NextRequest) {
         failed += 1;
         continue;
       }
+      answered.push(guide.id);
 
       const next = readShalomTracking(r.tracking?.status as ShalomTrackingStatus | null);
       if (!shalomTrackingChanged(guide, next)) continue;
@@ -157,6 +163,27 @@ export async function GET(req: NextRequest) {
         });
       }
     }
+
+    // Sellar que PREGUNTAMOS, aunque nada haya cambiado.
+    //
+    // POR QUÉ. Hasta acá `last_report_at` solo se escribía dentro del update de
+    // una guía que cambiaba. Con todas las guías quietas —lo normal: un paquete
+    // pasa días en el mismo hito— el cron podía correr cada 30 minutos durante
+    // una semana y dejar `last_report_at` en null en las 79. Y entonces null no
+    // distingue «el cron nunca corrió» de «el cron corre y no hay novedad»: son
+    // el mismo dato y piden acciones opuestas (revisar Vercel, o no tocar nada).
+    // Pasó de verdad: dimos por muerto un cron que no teníamos cómo ver vivo.
+    //
+    // Va en un solo update por lote y no uno por guía: son 50 filas por llamada
+    // y esto corre cada media hora.
+    if (answered.length) {
+      const stamp = await admin
+        .from("shipments")
+        .update({ last_report_at: new Date().toISOString() })
+        .in("id", answered);
+      if (stamp.error) errors.push(`sello de rastreo: ${stamp.error.message}`);
+      else reported += answered.length;
+    }
   }
 
   if (touchedOrders.size) await recomputeOrderMasterSafe(admin, [...touchedOrders]);
@@ -164,6 +191,10 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     scanned: live.length,
+    // `reported` = Shalom contestó. `applied` = además cambió algo. Separarlos
+    // es lo que hace legible una corrida a mano: reported>0 y applied=0 significa
+    // "todo bien, sin novedad", que antes se leía igual que "no corrió".
+    reported,
     applied,
     failed,
     ...(errors.length ? { errors: errors.slice(0, 10) } : {}),
