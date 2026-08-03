@@ -99,6 +99,8 @@ export async function GET(req: NextRequest) {
   let applied = 0;
   let failed = 0;
   let reported = 0;
+  /** Motivo de rechazo → cuántas y una guía de muestra para ir a comprobarla. */
+  const rejected = new Map<string, { count: number; ejemplo: string | null }>();
 
   for (let i = 0; i < live.length; i += BATCH_SIZE) {
     const slice = live.slice(i, i + BATCH_SIZE);
@@ -122,7 +124,20 @@ export async function GET(req: NextRequest) {
       const guide = r.custom_id ? byId.get(r.custom_id) : undefined;
       if (!guide) continue;
       if (!r.ok) {
+        // Quedarse solo con el CONTADOR de fallos no sirve para actuar: "92
+        // rechazadas" no distingue "Shalom no conoce todavía estas guías porque
+        // el paquete no se ha entregado en agencia" de "les estamos mandando el
+        // número en un formato que no reconoce". Son diagnósticos opuestos y el
+        // motivo viene en la respuesta, así que tirarlo era perder el dato justo
+        // en el sitio donde se necesita.
         failed += 1;
+        const why =
+          [r.error?.code, r.error?.message].filter(Boolean).join(": ") || "sin motivo declarado";
+        const seen = rejected.get(why);
+        if (seen) seen.count += 1;
+        // Un ejemplo por motivo permite ir a comprobarlo a mano contra
+        // pro.shalom.pe sin tener que volver a lanzar el cron.
+        else rejected.set(why, { count: 1, ejemplo: guide.guide_code });
         continue;
       }
       answered.push(guide.id);
@@ -197,6 +212,15 @@ export async function GET(req: NextRequest) {
     reported,
     applied,
     failed,
+    // Por qué las rechazó, agrupado. Con `failed` a secas no hay nada que hacer;
+    // con el motivo y una guía de muestra se va directo a comprobarlo.
+    ...(rejected.size
+      ? {
+          rechazos: Object.fromEntries(
+            [...rejected.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 5),
+          ),
+        }
+      : {}),
     ...(errors.length ? { errors: errors.slice(0, 10) } : {}),
   });
 }
