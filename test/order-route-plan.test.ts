@@ -27,6 +27,24 @@ describe("motor de rutas MOM Fase 3", () => {
     ).toBe(false);
   });
 
+  it("Agencia no ofrece Aliclik: van Shalom u Olva", () => {
+    // El drawer decide con esto si dibuja el panel de crear guía Aliclik. Si
+    // esta regla se aflojara, volvería a aparecer un formulario para crear una
+    // guía de una ruta que el pedido no puede tomar.
+    const plan = buildOrderRoutePlan({ operation: "agencia", outputs: [] });
+    expect(plan.candidates.some((route) => route.action === "aliclik")).toBe(false);
+    expect(plan.candidates.map((route) => route.key)).toEqual(["shalom", "olva"]);
+  });
+
+  it("Provincia COD y cobertura desconocida sí lo ofrecen", () => {
+    // Sin geografía no se puede afirmar que sea Agencia; cerrarle Aliclik a un
+    // pedido «desconocida» lo dejaría sin ninguna ruta interprovincial.
+    for (const operation of ["provincia_cod", "desconocida"] as const) {
+      const plan = buildOrderRoutePlan({ operation, outputs: [] });
+      expect(plan.candidates.some((route) => route.action === "aliclik")).toBe(true);
+    }
+  });
+
   it("prioriza Swayp después de una salida Aliclik fallida si hay stock", () => {
     const plan = buildOrderRoutePlan({
       operation: "provincia_cod",

@@ -2055,6 +2055,16 @@ function OrderDrawer({
   const shopifyUrl = row
     ? shopifyOrderAdminUrl(storeDomain(row.store_id), row.shopify_order_id)
     : null;
+  // El plan de rutas es quien sabe si Aliclik atiende a este pedido. Se lee de
+  // ahí, no se vuelve a decidir: una segunda regla equivalente es una regla que
+  // tarde o temprano deja de coincidir con la primera. `blocked` también cuenta:
+  // si la ruta está frenada (por ejemplo, tope de salidas), crear la guía por el
+  // panel sería saltarse el mismo límite por la puerta de atrás.
+  const aliclikOffered = Boolean(
+    detail?.routePlan.candidates.some(
+      (candidate) => candidate.action === "aliclik" && candidate.availability !== "blocked",
+    ),
+  );
   const paymentPanel = detail
     ? orderPaymentPanelPresentation({
         operation: detail.routePlan.operation,
@@ -2664,8 +2674,15 @@ function OrderDrawer({
             )}
 
             {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
-                una. En cuanto existe, el seguimiento vive en Envíos. */}
-            {canCreateGuide && (
+                una. En cuanto existe, el seguimiento vive en Envíos.
+
+                Y solo donde Aliclik atiende. El plan de rutas ya no lo ofrece
+                en Agencia —ahí van Shalom u Olva—, pero este panel se dibujaba
+                igual con solo tener el permiso: la pantalla mostraba las dos
+                tarjetas de agencia y, debajo, un formulario para crear una guía
+                de una ruta que ese pedido no puede tomar. Se lee el plan en vez
+                de repetir la regla aquí, que es como se vuelven a separar. */}
+            {canCreateGuide && aliclikOffered && (
               <div
                 hidden={workspace !== "operar"}
                 data-drawer-section="aliclik"
@@ -2679,6 +2696,33 @@ function OrderDrawer({
                     onSaved();
                   }}
                 />
+              </div>
+            )}
+
+            {/* Esconderlo sin más dejaría buscando a quien esperaba encontrarlo.
+                La salida es corregir la dirección: la cobertura se recalcula a
+                partir de ella y, si el pedido era Provincia COD mal clasificada,
+                Aliclik vuelve solo. */}
+            {canCreateGuide && !aliclikOffered && detail.routePlan.operation === "agencia" && (
+              <div
+                hidden={workspace !== "operar"}
+                data-drawer-section="aliclik"
+                className="order-5 scroll-mt-28 rounded-xl border border-slate-200 bg-white p-4"
+              >
+                <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+                  Aliclik
+                </h3>
+                <p className="mt-1 text-sm leading-5 text-slate-600">
+                  Aliclik no atiende pedidos de Agencia; este va con Shalom u Olva. Si la dirección
+                  está mal clasificada, corrígela y la cobertura se recalcula sola.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => jumpTo("ubicacion")}
+                  className="mt-3 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Revisar ubicación y cobertura ↓
+                </button>
               </div>
             )}
 
