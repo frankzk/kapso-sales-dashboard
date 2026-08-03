@@ -258,6 +258,13 @@ export interface AgencySummary {
   proximosAVencer: number;
   retornoIniciado: number;
   devueltos: number;
+  // El recorrido del paquete. Sin esto la tarjeta enseñaba dos números y tres
+  // ceros —"93 en agencia · 49 disponibles"— y no había forma de saber qué eran
+  // los 44 restantes: si estaban viajando, si nunca se despacharon, o si ya se
+  // entregaron. Cada uno de esos tres pide algo distinto.
+  pendienteDeEnvio: number;
+  enTransito: number;
+  entregados: number;
 }
 
 /**
@@ -291,6 +298,9 @@ export function agencySummary(
   let proximosAVencer = 0;
   let retornoIniciado = 0;
   let devueltos = 0;
+  let pendienteDeEnvio = 0;
+  let enTransito = 0;
+  let entregados = 0;
 
   for (const r of rows) {
     const inAgency = Boolean(r.pickup_state) || r.shipping_mode === "agency";
@@ -304,10 +314,13 @@ export function agencySummary(
     if (AGENCY_AVAILABLE_STATES.includes(r.pickup_state as (typeof AGENCY_AVAILABLE_STATES)[number])) {
       disponibles++;
     }
+    if (r.pickup_state === "pendiente_de_envio") pendienteDeEnvio++;
+    if (r.pickup_state === "en_transito") enTransito++;
+    if (r.pickup_state === "recogido" || r.general_status === "entregado") entregados++;
     if (r.agency_expires_at) {
       const left = Date.parse(r.agency_expires_at) - nowMs;
       if (Number.isFinite(left) && left <= EXPIRING_WINDOW_MS) proximosAVencer++;
     }
   }
-  return { total, disponibles, proximosAVencer, retornoIniciado, devueltos };
+  return { total, disponibles, proximosAVencer, retornoIniciado, devueltos, pendienteDeEnvio, enTransito, entregados };
 }

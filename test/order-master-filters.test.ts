@@ -280,7 +280,35 @@ describe("agencia (§10)", () => {
       proximosAVencer: 1,
       retornoIniciado: 1,
       devueltos: 1,
+      pendienteDeEnvio: 0,
+      enTransito: 0,
+      entregados: 0,
     });
+  });
+
+  // El desglose del recorrido. Sin él la tarjeta enseñaba "93 en agencia · 49
+  // disponibles" y tres ceros, y los 44 restantes eran un hueco: no se sabía si
+  // viajaban, si nunca se despacharon o si ya se habían entregado. Cada uno pide
+  // algo distinto, y «pendiente de envío» es el que más engaña — son guías
+  // emitidas cuyo paquete no se dejó nunca en agencia.
+  it("el desglose del recorrido cuadra con el total", () => {
+    const summary = agencySummary(
+      [
+        agencyRow("1", { pickup_state: "pendiente_de_envio" }),
+        agencyRow("2", { pickup_state: "pendiente_de_envio" }),
+        agencyRow("3", { pickup_state: "en_transito" }),
+        agencyRow("4"), // disponible_para_recojo
+        agencyRow("5", { pickup_state: "recogido" }),
+      ],
+      NOW,
+    );
+    expect(summary.pendienteDeEnvio).toBe(2);
+    expect(summary.enTransito).toBe(1);
+    expect(summary.disponibles).toBe(1);
+    expect(summary.entregados).toBe(1);
+    expect(
+      summary.pendienteDeEnvio + summary.enTransito + summary.disponibles + summary.entregados,
+    ).toBe(summary.total);
   });
 });
 
