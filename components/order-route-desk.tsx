@@ -95,7 +95,10 @@ export function OrderRouteDesk({
                       Salida activa
                     </span>
                     {route.blockingOutput.guideCode && (
-                      <span className="font-mono font-semibold text-slate-800">
+                      // `select-all`: el número se copia de un clic para pegarlo
+                      // en el buscador del panel del courier, que es lo que se
+                      // hace con él justo después de leerlo.
+                      <span className="select-all font-mono font-semibold text-slate-800">
                         N° {route.blockingOutput.guideCode}
                       </span>
                     )}
@@ -113,11 +116,12 @@ export function OrderRouteDesk({
                 </div>
               )}
               <p className={cn(
-                "mt-2 flex-1 text-xs leading-5",
+                "mt-2 text-xs leading-5",
                 route.availability === "blocked" ? "text-slate-500" : "text-slate-600",
               )}>
                 {route.reason}
               </p>
+              <div className="flex-1" />
               <button
                 type="button"
                 disabled={!enabled}

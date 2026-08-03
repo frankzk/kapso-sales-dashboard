@@ -61,7 +61,12 @@ export interface RouteCandidate {
   reason: string;
   requiresAdvance: boolean;
   relatedShipmentId?: string | null;
-  /** Presente solo cuando lo que bloquea es una salida viva de ese courier. */
+  /**
+   * La salida viva que bloquea crear otra con este courier, presente SOLO en ese
+   * caso. Sustituye al `activeGuideCode` que traía únicamente el código: hacían
+   * falta también el código corto de Shalom y el estado que el courier reporta,
+   * y dos campos para el mismo hecho terminan discrepando.
+   */
   blockingOutput?: RouteBlockingOutput | null;
 }
 
@@ -204,8 +209,11 @@ function applyOutputPolicy(
     (output) => courierKey(output.courier) === route.key && isActive(output),
   );
   if (activeWithCourier.length > 0) {
-    // La más reciente: si hubiera varias, la que se está trabajando es la última.
-    const blocking = activeWithCourier[activeWithCourier.length - 1]!;
+    // Si hubiera varias, la reciente es la relevante. Se prefiere la última que
+    // TENGA número: una salida sin código no sirve para ir a buscarla al panel
+    // del courier, que es para lo que se enseña.
+    const reversed = [...activeWithCourier].reverse();
+    const blocking = reversed.find((output) => output.guideCode) ?? reversed[0]!;
     return {
       ...route,
       recommended: false,

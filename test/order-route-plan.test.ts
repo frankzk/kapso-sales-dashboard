@@ -119,6 +119,46 @@ describe("una salida viva bloquea repetir ese mismo courier", () => {
     expect(shalom?.reason).toContain("ya tiene una salida activa");
   });
 
+  // La mesa de ruta debe enseñar el CÓDIGO de la guía que bloquea, para ubicarla
+  // sin ir a otra pestaña. Se toma la última guía activa con código.
+  it("expone el código de la guía activa que bloquea el courier", () => {
+    const plan = buildOrderRoutePlan({
+      operation: "provincia_cod",
+      outputs: [
+        { id: "g1", courier: "aliclik", deliveryStatus: "en_ruta", guideCode: "AUR5X040110019435" },
+      ],
+    });
+    const aliclik = plan.candidates.find((route) => route.key === "aliclik");
+    expect(aliclik?.availability).toBe("blocked");
+    expect(aliclik?.blockingOutput?.guideCode).toBe("AUR5X040110019435");
+  });
+
+  it("no inventa código cuando la guía activa no tiene uno", () => {
+    const plan = buildOrderRoutePlan({
+      operation: "agencia",
+      outputs: [{ id: "g1", courier: "shalom", deliveryStatus: "pendiente" }],
+    });
+    const shalom = plan.candidates.find((route) => route.key === "shalom");
+    expect(shalom?.availability).toBe("blocked");
+    // La salida se nombra igual —hay una y bloquea—, pero sin número inventado.
+    expect(shalom?.blockingOutput?.guideCode ?? null).toBeNull();
+  });
+
+  it("entre varias activas prefiere la última que TENGA número", () => {
+    // Una salida sin código no sirve para ir a buscarla al panel del courier,
+    // que es exactamente para lo que se enseña.
+    const plan = buildOrderRoutePlan({
+      operation: "provincia_cod",
+      outputs: [
+        { id: "g1", courier: "aliclik", deliveryStatus: "en_ruta", guideCode: "AUR5X001" },
+        { id: "g2", courier: "aliclik", deliveryStatus: "en_ruta", guideCode: null },
+      ],
+    });
+    expect(
+      plan.candidates.find((route) => route.key === "aliclik")?.blockingOutput?.guideCode,
+    ).toBe("AUR5X001");
+  });
+
   // Lo importante del caso: mira ACTIVA, no "ya se usó alguna vez". Bloquear por
   // haberlo usado condenaría el pedido a no volver a salir nunca por Shalom
   // después de anular una guía — que es justo lo que manda hacer el modal.
