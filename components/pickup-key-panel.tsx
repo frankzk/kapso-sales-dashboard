@@ -24,6 +24,7 @@ import {
   type PickupKeyPanel as PanelData,
 } from "@/app/dashboard/pedidos/payment-actions";
 import {
+  loadShalomOrderDraft,
   lookupShalomPerson,
   saveShalomOrderDraft,
   searchShalomAgencies,
@@ -863,6 +864,39 @@ function VoucherForm({
   const [agencySearching, setAgencySearching] = useState(false);
   const [agencyError, setAgencyError] = useState<string | null>(null);
   const agencyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** La operadora ya tocó los campos de Shalom: no rellenar por encima. */
+  const shalomTouched = useRef(false);
+
+  // Pintar lo que YA se apuntó en un pago anterior.
+  //
+  // `loadShalomOrderDraft` existía desde 0073 —su comentario dice literalmente
+  // "para pintarlo en el panel de pagos"— y nunca se llegó a llamar. El modal de
+  // la guía sí lo leía y lo anunciaba ("el documento y la agencia venían
+  // apuntados desde el registro del pago"), así que el dato estaba guardado y
+  // visible en un sitio pero no en el otro.
+  //
+  // No era solo estético: el paso "1. DNI y agencia" se marcaba pendiente con el
+  // dato ya guardado, y eso invita a reescribirlo. Volver a teclear un DNI que ya
+  // estaba bien solo puede empeorarlo.
+  useEffect(() => {
+    let alive = true;
+    void loadShalomOrderDraft(orderId).then((res) => {
+      if (!alive || "error" in res || !res.draft) return;
+      const draft = res.draft;
+      // Si tecleó mientras cargaba, manda ella: la red no le pisa lo escrito.
+      if (shalomTouched.current) return;
+      if (draft.documentType) setShalomDocType(draft.documentType);
+      if (draft.document) setShalomDoc(draft.document);
+      if (draft.destinyTerminalId && draft.destinyTerminalName) {
+        // El borrador solo guarda id y nombre, que es lo que `ShalomAgency`
+        // exige; el resto son opcionales y solo decoran la ficha.
+        setShalomAgency({ id: draft.destinyTerminalId, nombre: draft.destinyTerminalName });
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [orderId]);
 
   useEffect(() => {
     const nextKind = availableKinds[0];
@@ -903,6 +937,7 @@ function VoucherForm({
   }, [shalomAgencyQuery, shalomAgency, storeId]);
 
   function changeDocument(value: string) {
+    shalomTouched.current = true;
     const normalized =
       shalomDocType === "CE"
         ? value.toUpperCase().replace(/[^A-Z0-9]/g, "")
@@ -1123,6 +1158,7 @@ function VoucherForm({
           <select
             value={shalomDocType}
             onChange={(e) => {
+              shalomTouched.current = true;
               setShalomDocType(e.target.value as ShalomDocumentType);
               setShalomDoc("");
               setDocumentNotice(null);
@@ -1187,7 +1223,14 @@ function VoucherForm({
                   ✓ {shalomAgency.nombre}
                 </p>
                 <p className="truncate text-xs text-emerald-700">
-                  #{shalomAgency.id} · {[shalomAgency.departamento, shalomAgency.provincia, shalomAgency.distrito]
+                  {/* La agencia rescatada del borrador solo trae id y nombre: sin
+                      esto quedaría un "#612 · " con el separador colgando. */}
+                  {[
+                    `#${shalomAgency.id}`,
+                    shalomAgency.departamento,
+                    shalomAgency.provincia,
+                    shalomAgency.distrito,
+                  ]
                     .filter(Boolean)
                     .join(" · ")}
                 </p>
@@ -1195,6 +1238,7 @@ function VoucherForm({
               <button
                 type="button"
                 onClick={() => {
+                  shalomTouched.current = true;
                   setShalomAgency(null);
                   setShalomAgencyQuery("");
                 }}
@@ -1229,6 +1273,7 @@ function VoucherForm({
                       <button
                         type="button"
                         onClick={() => {
+                          shalomTouched.current = true;
                           setShalomAgency(agency);
                           setShalomAgencyQuery(agency.nombre);
                           setShalomAgencies([]);
