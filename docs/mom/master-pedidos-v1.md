@@ -1375,6 +1375,19 @@ rótulos.
 - **«Seleccionar todos» alcanza solo la página visible**: el Master pagina en el
   servidor y no expone los identificadores del filtro completo, así que prometer
   «todos los resultados» sería mentir.
+- La barra también **registra un estado sobre la selección**, con su detalle
+  operativo, motivo y comentario opcionales. Es el mismo gesto de la gestión
+  manual del drawer y **cae en las mismas reglas**: un pedido ya cerrado exige
+  permiso de override y motivo. Existe porque cerrar la tanda de entregados y
+  cobrados de la semana pedido por pedido son dos clics por pedido y ninguna
+  forma de ver cuáles quedaron a medias.
+- Aplicar un estado a la selección es un **cambio manual**, y por tanto congela
+  cada pedido frente al recálculo. La barra lo advierte antes de aplicar: no es
+  una etiqueta más, es sacarlos del seguimiento automático.
+- Si el estado de un pedido falla, **su comentario no se escribe**. Un comentario
+  sobre un pedido que no cambió parece constancia de algo que no ocurrió.
+- Al terminar se informa **cuántos se aplicaron y cuáles no, con el motivo de
+  cada uno**, y la selección se conserva para poder leer ese resumen.
 - El QR impreso identifica la salida y es el que se escanea en ambos cotejos
   (§6.3). El contenido del rótulo se lee bajo RLS: una salida de otra tienda no
   aparece aunque se manipule la URL.

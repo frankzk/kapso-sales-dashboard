@@ -558,6 +558,93 @@ export async function createManualRouteOutputsBulk(
   };
 }
 
+export interface BulkStatusResult extends MasterActionState {
+  /** Pedidos que quedaron en el estado pedido. */
+  applied: string[];
+  /** Los que no, con el motivo exacto de cada uno. */
+  failed: BulkRouteOutputFailure[];
+}
+
+/**
+ * El mismo gesto de «Gestión manual», aplicado a la selección: cerrar de una
+ * tanda los pedidos que ya se entregaron y cobraron.
+ *
+ * Se hacía pedido por pedido, abriendo el drawer de cada uno. Con cincuenta
+ * cerrados de la semana eso son cien clics y ninguna forma de saber cuáles
+ * quedaron a medias.
+ *
+ * Reutiliza `setOrderStatus` y `addOrderComment` uno por uno a propósito: el
+ * permiso para tocar un pedido ya cerrado, el motivo obligatorio y el registro
+ * en el historial son reglas de negocio, y no pueden divergir entre la versión
+ * individual y la de lote. El precio es una tanda más lenta.
+ *
+ * Si el estado falla, el comentario NO se escribe: un «PAGADO» sobre un pedido
+ * que no cambió de estado es peor que no haber hecho nada, porque parece que sí.
+ */
+export async function applyOrderStatusBulk(
+  orderIds: string[],
+  input: { general: string; operational?: string | null; reason?: string; comment?: string },
+): Promise<BulkStatusResult> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) {
+    return { error: "Tu rol no permite modificar pedidos.", applied: [], failed: [] };
+  }
+  if (!isGeneralStatus(input.general)) {
+    return { error: "Estado general inválido.", applied: [], failed: [] };
+  }
+  const comment = input.comment?.trim() ?? "";
+  if (comment.length > 2000) {
+    return { error: "El comentario es demasiado largo (máx. 2000).", applied: [], failed: [] };
+  }
+
+  const unique = Array.from(new Set(orderIds.filter(Boolean)));
+  if (!unique.length) return { error: "No hay pedidos seleccionados.", applied: [], failed: [] };
+  if (unique.length > MAX_BULK_OUTPUTS) {
+    return {
+      error: `Demasiados pedidos de una vez (máximo ${MAX_BULK_OUTPUTS}).`,
+      applied: [],
+      failed: [],
+    };
+  }
+
+  const applied: string[] = [];
+  const failed: BulkRouteOutputFailure[] = [];
+
+  for (const orderId of unique) {
+    try {
+      const status = await setOrderStatus(orderId, {
+        general: input.general,
+        operational: input.operational,
+        reason: input.reason,
+      });
+      if (status.error) {
+        failed.push({ orderId, error: status.error });
+        continue;
+      }
+      if (comment) {
+        const note = await addOrderComment(orderId, { text: comment, type: "lote" });
+        if (note.error) {
+          // El estado SÍ cambió: decirlo fallido escondería un cambio real.
+          failed.push({ orderId, error: `Estado aplicado, comentario no: ${note.error}` });
+        }
+      }
+      applied.push(orderId);
+    } catch (error) {
+      failed.push({ orderId, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  revalidatePath(MASTER_PATH);
+  return {
+    applied,
+    failed,
+    notice: applied.length
+      ? `${applied.length} pedido${applied.length === 1 ? "" : "s"} actualizado${applied.length === 1 ? "" : "s"}.${failed.length ? ` ${failed.length} con problemas.` : ""}`
+      : undefined,
+    error: applied.length ? undefined : "Ningún pedido pudo actualizarse.",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Escrituras
 // ---------------------------------------------------------------------------
