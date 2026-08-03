@@ -429,6 +429,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
         deliveryStatus: guide.delivery_status,
         custodyState: guide.custody_state,
         attempts: guide.aliclik_attempts ?? guide.reroute_attempts,
+        guideCode: guide.guide_code,
       })),
     }),
   };
