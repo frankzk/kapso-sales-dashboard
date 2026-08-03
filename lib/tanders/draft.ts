@@ -3,7 +3,7 @@
 // paquete o un cobro mal hecho.
 
 import type { TandersOrderPayload, TandersPackageType } from "./types";
-import { isCaneteLocation, isLimaMetropolitanaOrCallao } from "@/lib/order-coverage";
+import { isLimaMetropolitanaOrCallao, isNonMetroLimaLocation } from "@/lib/order-coverage";
 
 /**
  * Caja y peso por defecto. La operación despacha siempre XXS con 100 g
@@ -25,7 +25,11 @@ export function tandersCoverageEligible(input: {
   province: string | null;
   district: string | null;
 }): boolean {
-  if (isCaneteLocation(input)) return false;
+  // Antes de mirar `coverage`: las nueve provincias del departamento de Lima no
+  // son Tanders, y el campo materializado puede decir "lima" desde antes de que
+  // se corrigiera la clasificación. Fiarse de él ofrecería reparto de Lima para
+  // Barranca o Huaura.
+  if (isNonMetroLimaLocation(input)) return false;
   if (input.coverage) return input.coverage === "lima";
   return isLimaMetropolitanaOrCallao(input);
 }

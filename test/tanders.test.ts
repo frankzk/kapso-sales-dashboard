@@ -84,6 +84,30 @@ describe("tandersCoverageEligible", () => {
     ).toBe(false);
   });
 
+  // Cañete no era la única: son NUEVE provincias del departamento de Lima, y el
+  // nombre suele llegar en el campo del distrito (Shopify guarda "Lima
+  // (provincia)" en región y provincia). Con la comprobación limitada a Cañete,
+  // un pedido de Barranca con `coverage: "lima"` guardado pasaba el filtro y se
+  // le ofrecía reparto de Lima para un destino a 200 km.
+  it("bloquea las nueve provincias del departamento, con el nombre en el distrito", () => {
+    for (const district of ["Barranca", "Huaura", "Huaral", "Yauyos", "Canta", "Oyón", "Cajatambo", "Huarochirí"]) {
+      expect(
+        tandersCoverageEligible({
+          ...location,
+          province: "Lima (provincia)",
+          district,
+          coverage: "lima",
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("un distrito metropolitano de verdad sigue siendo elegible", () => {
+    expect(
+      tandersCoverageEligible({ ...location, district: "Barranco", coverage: "lima" }),
+    ).toBe(true);
+  });
+
   it("bloquea Cañete aunque una fila histórica todavía diga cobertura Lima", () => {
     expect(
       tandersCoverageEligible({
