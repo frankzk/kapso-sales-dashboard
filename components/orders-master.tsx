@@ -2133,6 +2133,11 @@ function OrderDrawer({
                     {fmtMoney(detail.row.order_total)}
                   </span>
                 )}
+                {/* La cobertura decide TODO lo que sigue —si se confirma, quién
+                    lo lleva, si hay que exigir pago— así que va en la cabecera
+                    fija y no dentro de una pestaña: cualquier decisión que se
+                    tome en Operar la necesita a la vista. */}
+                {detail && <CoverageBadge coverage={detail.row.coverage} />}
               </div>
               {row && (
                 <p className="truncate text-xs text-slate-500">
@@ -2334,7 +2339,10 @@ function OrderDrawer({
                     Datos comerciales sincronizados desde Shopify y contexto operativo de Kapta.
                   </p>
                 </div>
-                <CoverageBadge coverage={detail.row.coverage} />
+                {/* La cobertura vive en la cabecera fija. Repetirla aquí, a dos
+                    dedos y en la misma pantalla, sugería que eran dos datos
+                    distintos. La de «Ubicación y cobertura» sí se queda: ahí es
+                    el sujeto de la sección y lo que se corrige. */}
               </div>
               <dl className="mt-4 grid grid-cols-2 gap-x-5 gap-y-3 text-sm sm:grid-cols-4">
                 <Field label="Cliente" value={detail.row.customer_name} />
