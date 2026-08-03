@@ -345,6 +345,19 @@ export class ShalomClient {
    * HTTP sigue siendo 200. Por eso el llamador itera resultados en vez de
    * confiar en que la ausencia de excepción signifique que todo salió bien.
    */
+  /**
+   * Rastrea UNA guía. Mismo «modo estado» que el batch: le basta la API key.
+   *
+   * Existe aparte del batch para poder comparar los dos caminos con la misma
+   * guía. El batch empezó a devolver `upstream_rejected: Ingrese un código de
+   * orden` en las 92 —un error de campo VACÍO, no de guía inexistente—, y con
+   * solo el batch no hay forma de saber si el número está mal o si es el sobre
+   * del batch el que no llega bien montado.
+   */
+  async track(numero: string): Promise<unknown> {
+    return this.request(`/v1/tracking?numero=${encodeURIComponent(numero)}`);
+  }
+
   async trackBatch(
     items: { custom_id: string; numero: string }[],
   ): Promise<ShalomTrackResult[]> {
