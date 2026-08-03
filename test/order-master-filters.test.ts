@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { OPERATIONAL_STATUSES } from "@/lib/order-status";
 import {
   AGENCY_AVAILABLE_STATES,
+  agencyHasActivity,
   agencySummary,
   applyFilters,
   emptyFilters,
@@ -263,7 +264,7 @@ describe("agencia (§10)", () => {
     expect(matchesFilters(agencyRow("4", { agency_expires_at: null }), f, NOW)).toBe(false);
   });
 
-  it("el resumen cuenta lo accionable y separa los ya devueltos", () => {
+  it("el resumen cuenta lo accionable y deja fuera a los devueltos", () => {
     const summary = agencySummary(
       [
         agencyRow("1"),
@@ -275,41 +276,46 @@ describe("agencia (§10)", () => {
       NOW,
     );
     expect(summary).toEqual({
-      total: 4,
+      pendienteDeEnvio: 0,
+      enTransito: 0,
       disponibles: 2,
       proximosAVencer: 1,
       retornoIniciado: 1,
-      devueltos: 1,
-      pendienteDeEnvio: 0,
-      enTransito: 0,
-      entregados: 0,
     });
   });
 
-  // El desglose del recorrido. Sin él la tarjeta enseñaba "93 en agencia · 49
-  // disponibles" y tres ceros, y los 44 restantes eran un hueco: no se sabía si
-  // viajaban, si nunca se despacharon o si ya se habían entregado. Cada uno pide
-  // algo distinto, y «pendiente de envío» es el que más engaña — son guías
-  // emitidas cuyo paquete no se dejó nunca en agencia.
-  it("el desglose del recorrido cuadra con el total", () => {
+  // El panel es de lo que está EN CURSO: sin total y sin estados terminales.
+  // Un pedido entregado o devuelto ya no pide nada y solo diluye a los que sí.
+  it("el recorrido va en orden físico y no incluye terminales", () => {
     const summary = agencySummary(
       [
         agencyRow("1", { pickup_state: "pendiente_de_envio" }),
         agencyRow("2", { pickup_state: "pendiente_de_envio" }),
         agencyRow("3", { pickup_state: "en_transito" }),
         agencyRow("4"), // disponible_para_recojo
-        agencyRow("5", { pickup_state: "recogido" }),
+        agencyRow("5", { pickup_state: "recogido", general_status: "entregado" }),
       ],
       NOW,
     );
     expect(summary.pendienteDeEnvio).toBe(2);
     expect(summary.enTransito).toBe(1);
     expect(summary.disponibles).toBe(1);
-    expect(summary.entregados).toBe(1);
-    expect(
-      summary.pendienteDeEnvio + summary.enTransito + summary.disponibles + summary.entregados,
-    ).toBe(summary.total);
+    expect(Object.keys(summary)).not.toContain("entregados");
+    expect(Object.keys(summary)).not.toContain("total");
   });
+
+  it("agencyHasActivity dice si la tira tiene algo que enseñar", () => {
+    const vacio = agencySummary([], NOW);
+    expect(agencyHasActivity(vacio)).toBe(false);
+    expect(agencyHasActivity(agencySummary([agencyRow("1")], NOW))).toBe(true);
+    // Un pedido ya entregado no cuenta como actividad.
+    expect(
+      agencyHasActivity(
+        agencySummary([agencyRow("1", { pickup_state: "recogido", general_status: "entregado" })], NOW),
+      ),
+    ).toBe(false);
+  });
+
 });
 
 describe("AGENCY_AVAILABLE_STATES — la lista que comparten los dos resúmenes", () => {
