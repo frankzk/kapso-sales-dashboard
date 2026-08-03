@@ -168,9 +168,9 @@ Aplica a Provincia COD y Agencia. Lima la omite.
 Subetapas:
 
 - `sin_llamar`: cero contactos registrados.
-- `por_confirmar`: existe al menos un contacto del día.
-- `volver_a_contactar`: existe fecha o compromiso de próximo contacto.
-- `ultimo_intento`: séptimo día de gestión.
+- `por_confirmar`: hay al menos un intento y ningún compromiso vigente.
+- `volver_a_contactar`: el intento más reciente dejó pactada una fecha.
+- `ultimo_intento`: séptimo día distinto de gestión.
 
 Motivos (conviven con la subetapa, no la reemplazan):
 
@@ -194,8 +194,21 @@ Reglas:
   constituyen un día de intento.
 - Se gestionan siete días distintos. Dentro de un día puede haber varios
   contactos.
+- **Los siete días se cuentan como días distintos CON gestión, no como días
+  transcurridos desde el primer contacto.** Contactos el 20, 22, 25 y 28 de
+  julio suman cuatro días, no nueve. Los días en que nadie llamó no gastan cupo.
+- El día se corta en el calendario de Lima. Un intento de las 20:00 pertenece a
+  ese día, aunque en UTC ya sea el siguiente.
+- `Último intento` se **deriva** del conteo; no depende de que alguien recuerde
+  marcarlo.
 - El día siete es `Último intento`; después se crea una tarea de anulación
   manual en Shopify. Kapta nunca anula automáticamente.
+- Un intento posterior sin compromiso de fecha devuelve el pedido a
+  `por_confirmar`: el compromiso anterior ya no describe nada. Manda el hecho
+  más reciente.
+- Un pedido que nadie contacta **nunca llega a `Último intento`**: sin gestión no
+  hay días gastados. Queda en `Sin llamar` y su antigüedad es lo que lo delata,
+  no la subetapa.
 - Existe un recordatorio automático una vez transcurridas dos horas laborales
   sin respuesta.
 - Horario laboral: 08:00–22:00, hora de Lima. El reloj se pausa fuera de horario.
@@ -204,6 +217,17 @@ Reglas:
 - Agencia queda confirmada solo cuando el pago exigido ha sido validado.
 - Crear el rótulo implica confirmación; no puede existir rótulo para un pedido
   de Provincia/Agencia sin confirmación válida.
+
+Registro:
+
+- Cada intento se registra en la **mesa de confirmación** del pedido, con canal
+  y resultado. Escribe `confirmation_contact`; si el resultado pacta una fecha
+  escribe además `confirmation_followup`, y si el cliente confirma, `confirmed`.
+- Los comentarios y el cambio manual de estado **no** son registro de gestión.
+  El cambio manual es un override que congela el pedido frente al recálculo:
+  usarlo como bitácora de llamadas lo desconecta del MOM.
+- La subetapa y el conteo de días se derivan de esos hechos. No hay un contador
+  que alguien tenga que mantener.
 
 ### 6.2 Preparación
 

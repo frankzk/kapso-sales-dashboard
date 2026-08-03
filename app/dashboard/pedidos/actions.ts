@@ -28,7 +28,13 @@ import {
   type GeneralStatus,
 } from "@/lib/order-status";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
-import { classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
+import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
+import {
+  CONFIRMATION_MAX_DAYS,
+  confirmationDayCount,
+  confirmationResult,
+  isConfirmationChannel,
+} from "@/lib/order-confirmation";
 import {
   COURIER_TBD,
   MAX_OUTPUTS_PER_ORDER,
@@ -613,6 +619,121 @@ export async function setOrderStatus(
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
   return { notice: `Estado actualizado a ${target.replace("_", " ")}.` };
+}
+
+/**
+ * Un intento de contacto de la gestión de confirmación (§6.1 y §8).
+ *
+ * Hasta ahora no existía dónde registrarlo: el resolvedor de macroetapas leía
+ * `confirmation_contact` y nadie lo escribía nunca, así que el 100 % de los
+ * pedidos vivía en «Sin llamar» por más llamadas que hiciera el equipo. Los
+ * comentarios servían de bitácora pero no mueven nada, y «Guardar estado» es un
+ * override que CONGELA el pedido frente al recálculo: usarlo como registro de
+ * llamadas habría ido clavando pedidos contra el propio MOM.
+ *
+ * Cada gesto escribe un hecho, no un estado. La subetapa y el conteo de días
+ * salen de esos hechos.
+ */
+export async function registerConfirmationAttempt(
+  orderId: string,
+  input: { result: string; channel: string; note?: string; nextContactOn?: string },
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) {
+    return { error: "Tu rol no permite registrar la gestión de confirmación." };
+  }
+
+  const result = confirmationResult(input.result);
+  if (!result) return { error: "Resultado de contacto inválido." };
+  if (!isConfirmationChannel(input.channel)) return { error: "Canal de contacto inválido." };
+
+  const nextContactOn = input.nextContactOn?.trim() ?? "";
+  if (result.schedulesFollowup) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(nextContactOn)) {
+      return { error: "Indica la fecha del próximo contacto." };
+    }
+    // Una fecha ya pasada no es un compromiso: el pedido nacería vencido y la
+    // cola de «Volver a contactar» dejaría de significar algo.
+    if (nextContactOn < limaTodayKey()) {
+      return { error: "La fecha del próximo contacto no puede ser anterior a hoy." };
+    }
+  }
+
+  const note = input.note?.trim() ?? "";
+  if (note.length > 2000) return { error: "La nota es demasiado larga (máx. 2000)." };
+
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  const admin = createAdminSupabase();
+  // El conteo previo es lo que permite decir «día 3 de 7» sin esperar al
+  // recálculo, y avisar cuando este intento agota el cupo.
+  const { data: priorRows } = await admin
+    .from("order_events")
+    .select("kind,occurred_at")
+    .eq("order_id", orderId);
+  const prior = (priorRows as { kind: string; occurred_at: string }[] | null) ?? [];
+
+  const occurredAt = new Date().toISOString();
+  const contactError = await recordEvent(admin, ctx, {
+    kind: "confirmation_contact",
+    occurredAt,
+    note: note || null,
+    payload: {
+      channel: input.channel,
+      result: result.code,
+      next_contact_on: result.schedulesFollowup ? nextContactOn : null,
+    },
+  });
+  if (contactError) return { error: contactError };
+
+  // El seguimiento se graba junto al intento que lo pactó, no antes: si se
+  // guardara primero, un empate de milisegundos lo dejaría por debajo del
+  // contacto y el pedido no llegaría a «Volver a contactar».
+  if (result.schedulesFollowup) {
+    const followupError = await recordEvent(admin, ctx, {
+      kind: "confirmation_followup",
+      occurredAt,
+      reason: `Próximo contacto: ${nextContactOn}`,
+      payload: { channel: input.channel, next_contact_on: nextContactOn },
+    });
+    if (followupError) return { error: followupError };
+  }
+
+  if (result.confirms) {
+    const confirmedError = await recordEvent(admin, ctx, {
+      kind: "confirmed",
+      occurredAt,
+      note: note || null,
+      payload: { channel: input.channel },
+    });
+    if (confirmedError) return { error: confirmedError };
+  }
+
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+
+  const days = confirmationDayCount([...prior, { kind: "confirmation_contact", occurred_at: occurredAt }]);
+  if (result.confirms) {
+    // Agencia no queda confirmada por la palabra del cliente: el pedido sigue en
+    // confirmación hasta que el abono se valide (§6.1). Decir «pasa a
+    // Preparación» aquí mandaría a Milagros a buscarlo donde no está.
+    const paymentReady = agencyPaymentReady(
+      (ctx.row.macro_operation as OperationKind | null) ?? "desconocida",
+      ctx.row.payment_state,
+    );
+    return {
+      notice: paymentReady
+        ? "Pedido confirmado; pasa a Preparación."
+        : "Confirmado de palabra. Sigue en confirmación hasta validar el pago exigido.",
+    };
+  }
+  if (days >= CONFIRMATION_MAX_DAYS) {
+    return {
+      notice: `Día ${days} de ${CONFIRMATION_MAX_DAYS}: último intento. La anulación se crea a mano en Shopify.`,
+    };
+  }
+  return { notice: `Intento registrado — día ${days} de ${CONFIRMATION_MAX_DAYS}.` };
 }
 
 /** Comentario interno del equipo (§12). Complementa al estado, no lo sustituye. */

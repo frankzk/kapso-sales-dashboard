@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MACRO_SUBSTAGES_BY_STAGE,
   ORDER_MACRO_STAGES,
+  agencyPaymentReady,
   classifyOperation,
   resolveMacroStage,
   type MacroEventSnapshot,
@@ -144,6 +145,46 @@ describe("resolveMacroStage — Por confirmar y Preparación", () => {
     expect(resolve({ events: [event("confirmation_last_attempt")] }).substage).toBe("ultimo_intento");
   });
 
+  it("un intento posterior sin compromiso devuelve el pedido a Por confirmar", () => {
+    // El compromiso viejo ya no describe nada: se pactó llamar el martes, se
+    // llamó y no contestó. Antes ganaba el orden de las líneas y el pedido se
+    // quedaba en «Volver a contactar» con una fecha que ya pasó.
+    const state = resolve({
+      events: [
+        event("confirmation_followup", "2026-07-20T15:00:00.000Z"),
+        event("confirmation_contact", "2026-07-22T15:00:00.000Z"),
+      ],
+    });
+    expect(state.substage).toBe("por_confirmar");
+  });
+
+  it("el compromiso pactado en el mismo intento gana el empate", () => {
+    // Se graban con el MISMO instante: si el empate lo ganara el contacto, un
+    // «volver a llamar el viernes» no llegaría nunca a su cola.
+    const state = resolve({
+      events: [
+        event("confirmation_contact", "2026-07-20T15:00:00.000Z"),
+        event("confirmation_followup", "2026-07-20T15:00:00.000Z"),
+      ],
+    });
+    expect(state.substage).toBe("volver_a_contactar");
+  });
+
+  it("siete días DISTINTOS de gestión llevan a Último intento", () => {
+    const seven = Array.from({ length: 7 }, (_, i) =>
+      event("confirmation_contact", `2026-07-${String(10 + i).padStart(2, "0")}T15:00:00.000Z`),
+    );
+    expect(resolve({ events: seven }).substage).toBe("ultimo_intento");
+    expect(resolve({ events: seven.slice(0, 6) }).substage).toBe("por_confirmar");
+  });
+
+  it("insistir muchas veces el mismo día no gasta los siete días", () => {
+    const sameDay = Array.from({ length: 9 }, (_, i) =>
+      event("confirmation_contact", `2026-07-20T1${i % 10}:00:00.000Z`),
+    );
+    expect(resolve({ events: sameDay }).substage).toBe("por_confirmar");
+  });
+
   it("Lima omite confirmación y entra Por generar rótulo", () => {
     const state = resolve({ order: order({ region: "Lima", province: "Lima" }) });
     expect(state).toMatchObject({
@@ -214,6 +255,15 @@ describe("resolveMacroStage — Por confirmar y Preparación", () => {
   it("Provincia COD sin pago no inventa un motivo de abono", () => {
     const state = resolve({ events: [event("confirmation_contact")], paymentState: "sin_pago" });
     expect(state).toMatchObject({ substage: "por_confirmar", reasons: [] });
+  });
+
+  it("el abono solo bloquea a Agencia, y `adelanto_validado` ya alcanza", () => {
+    // Lo usan el resolvedor Y la mesa de confirmación. Si divergieran, la mesa
+    // diría «pasa a Preparación» sobre un pedido que se queda esperando plata.
+    expect(agencyPaymentReady("provincia_cod", "sin_pago")).toBe(true);
+    expect(agencyPaymentReady("agencia", "sin_pago")).toBe(false);
+    expect(agencyPaymentReady("agencia", "adelanto_validado")).toBe(true);
+    expect(agencyPaymentReady("agencia", "pago_completo")).toBe(true);
   });
 
   it("«Pago requerido pendiente» ya no es una subetapa navegable", () => {

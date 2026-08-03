@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { recomputeOrderMaster, recomputeOrderMasterSafe } from "@/lib/order-master";
+import { MOM_RESOLUTION_VERSION } from "@/lib/order-macro-stage";
 
 // Supabase se stubea a mano (convención del repo — ver test/ingest.test.ts): un
 // `from(table)` que devuelve el conjunto de filas preparado para esa tabla y
@@ -109,7 +110,10 @@ describe("recomputeOrderMaster — snapshot del pedido", () => {
     expect(row.operational_status).toBe("sin_confirmar");
     expect(row.macro_stage).toBe("por_confirmar");
     expect(row.macro_substage).toBe("sin_llamar");
-    expect(row.macro_version).toBe("mom-v1.5");
+    // Contra la constante, no contra un literal: lo que importa es que la fila
+    // quede sellada con la versión VIGENTE del resolvedor. Si se escribiera otra,
+    // el cron la volvería a tomar como pendiente en cada pasada, para siempre.
+    expect(row.macro_version).toBe(MOM_RESOLUTION_VERSION);
     expect(row.courier_count).toBe(0);
     expect(row.attempt_count).toBe(0);
     expect(row.status_locked).toBe(false);

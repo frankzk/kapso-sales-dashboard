@@ -8,8 +8,17 @@
 // El cron usa esta versión para recalcular gradualmente todo el histórico sin
 // necesitar un script con credenciales locales.
 import { isCaneteLocation } from "@/lib/order-coverage";
+import {
+  CONFIRMATION_CONTACT_KINDS,
+  CONFIRMATION_FOLLOWUP_KINDS,
+  CONFIRMATION_LAST_ATTEMPT_KINDS,
+  reachedLastAttempt,
+} from "@/lib/order-confirmation";
 
-export const MOM_RESOLUTION_VERSION = "mom-v1.5" as const;
+// v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
+// días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
+// que la versión sube para que el cron las reconcilie.
+export const MOM_RESOLUTION_VERSION = "mom-v1.6" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -416,6 +425,22 @@ function hasPaymentComplete(paymentState: string | null | undefined): boolean {
   return paymentState === "pago_completo";
 }
 
+/**
+ * ¿El abono exigido por Agencia deja pasar al pedido? (§6.1: «Agencia queda
+ * confirmada solo cuando el pago exigido ha sido validado»).
+ *
+ * Se exporta porque quien REGISTRA la confirmación necesita la misma respuesta
+ * que quien la resuelve: si no, la mesa diría «pasa a Preparación» sobre un
+ * pedido que se va a quedar en confirmación esperando el depósito.
+ */
+export function agencyPaymentReady(
+  operation: OperationKind,
+  paymentState: string | null | undefined,
+): boolean {
+  if (operation !== "agencia") return true;
+  return hasPaymentComplete(paymentState) || paymentState === "adelanto_validado";
+}
+
 function finalResultSubstage(legacy: LegacyOrderStateSnapshot, operation: OperationKind): MacroSubstage {
   if (legacy.general === "entregado") {
     return operation === "agencia" ? "recogido_cerrado" : "entregado_cerrado";
@@ -551,17 +576,31 @@ function confirmationSubstage(
   agencyPaymentReady: boolean,
 ): { substage: MacroSubstage; since: string | null; reasons: MacroSubstage[] } {
   const { events, order } = input;
-  const lastAttempt = latestEvent(events, ["confirmation_last_attempt", "last_attempt"]);
-  const followup = latestEvent(events, ["confirmation_followup", "followup_scheduled", "reschedule_contact"]);
-  const contact = latestEvent(events, ["confirmation_contact", "contact_attempt", "call"]);
+  const followup = latestEvent(events, [...CONFIRMATION_FOLLOWUP_KINDS]);
+  const contact = latestEvent(events, [...CONFIRMATION_CONTACT_KINDS]);
 
   // Antes del primer contacto no hay a quién pedirle el abono: marcarlo sería
   // ruido sobre pedidos que todavía nadie llamó.
   const reasons: MacroSubstage[] =
-    !agencyPaymentReady && (lastAttempt || followup || contact) ? ["pago_requerido_pendiente"] : [];
+    !agencyPaymentReady && (followup || contact) ? ["pago_requerido_pendiente"] : [];
 
-  if (lastAttempt) return { substage: "ultimo_intento", since: lastAttempt.occurred_at, reasons };
-  if (followup) return { substage: "volver_a_contactar", since: followup.occurred_at, reasons };
+  // «Último intento» se DERIVA de los siete días distintos con gestión, no de
+  // una marca que alguien tenga que acordarse de poner. Contar días desde el
+  // primer contacto sería otra cosa: si se llamó el 20, el 22, el 25 y el 28,
+  // van cuatro días de siete, no nueve.
+  if (reachedLastAttempt(events)) {
+    const explicit = latestEvent(events, [...CONFIRMATION_LAST_ATTEMPT_KINDS]);
+    const since = explicit?.occurred_at ?? contact?.occurred_at ?? order.created_at;
+    return { substage: "ultimo_intento", since, reasons };
+  }
+
+  // Gana el hecho más reciente, no el orden en que están escritas estas líneas.
+  // Un intento posterior sin compromiso de fecha devuelve el pedido a Por
+  // confirmar: el compromiso viejo ya no describe nada. El empate lo gana el
+  // seguimiento porque se graba junto al intento que lo pactó.
+  if (followup && (!contact || followup.occurred_at >= contact.occurred_at)) {
+    return { substage: "volver_a_contactar", since: followup.occurred_at, reasons };
+  }
   if (contact) return { substage: "por_confirmar", since: contact.occurred_at, reasons };
   return { substage: "sin_llamar", since: order.created_at, reasons };
 }
@@ -775,10 +814,9 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
     input.guides.length > 0 ||
     Boolean(latestEvent(input.events, ["confirmed", "guide_registered", "label_generated"])) ||
     normalize(input.order.financial_status) === "paid";
-  const agencyPaymentReady = operation !== "agencia" || hasPaymentComplete(input.paymentState) ||
-    input.paymentState === "adelanto_validado";
+  const paymentReady = agencyPaymentReady(operation, input.paymentState);
 
-  if (confirmed && agencyPaymentReady) {
+  if (confirmed && paymentReady) {
     const hasLabel =
       input.guides.length > 0 ||
       Boolean(latestEvent(input.events, ["guide_registered", "label_generated"]));
@@ -790,10 +828,10 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
     );
   }
 
-  // Se reusa `agencyPaymentReady`, la MISMA condición que gatea el paso a
-  // Preparación: así el motivo aparece exactamente cuando el abono es lo que
-  // está frenando al pedido, ni antes ni después.
-  const confirmation = confirmationSubstage(input, agencyPaymentReady);
+  // Se reusa `paymentReady`, la MISMA condición que gatea el paso a Preparación:
+  // así el motivo aparece exactamente cuando el abono es lo que está frenando al
+  // pedido, ni antes ni después.
+  const confirmation = confirmationSubstage(input, paymentReady);
   return result(
     "por_confirmar",
     confirmation.substage,
