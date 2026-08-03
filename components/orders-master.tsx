@@ -40,6 +40,7 @@ import {
   resolveLabelsForOrders,
   loadOrderGeo,
   applyOrderStatusBulk,
+  loadConfirmationBrief,
   registerConfirmationAttempt,
   registerReturn,
   registerClosureAction,
@@ -95,9 +96,16 @@ import {
   MASTER_VIEWS,
   type MasterCounts,
   type MasterView,
+  type OrderConfirmationBrief,
   type OrderMasterDetail,
   type TimelineEntry,
 } from "@/lib/orders-master-access";
+import {
+  PAYMENT_REQUIREMENT_LABEL,
+  PRIOR_OUTCOME_LABEL,
+  type PaymentRequirement,
+  type PriorOutcome,
+} from "@/lib/order-confirmation-brief";
 import { outputDisplayCode } from "@/lib/shipment-output";
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import type { RouteCandidate } from "@/lib/order-route-plan";
@@ -2194,6 +2202,26 @@ function OrderDrawer({
   const shopifyUrl = row
     ? shopifyOrderAdminUrl(storeDomain(row.store_id), row.shopify_order_id)
     : null;
+
+  // La ficha del §8 se carga aparte del detalle —recorre el historial del
+  // teléfono y la matriz de tarifas— y SOLO en confirmación, que es donde la
+  // sección se aplica. Cargarla en cada apertura pondría una consulta más sobre
+  // pedidos ya entregados, donde no cambia ninguna decisión.
+  const inConfirmation = detail?.row.macro_stage === "por_confirmar";
+  const [brief, setBrief] = useState<OrderConfirmationBrief | null>(null);
+  useEffect(() => {
+    if (!inConfirmation) {
+      setBrief(null);
+      return;
+    }
+    let alive = true;
+    void loadConfirmationBrief(orderId).then((res) => {
+      if (alive && "brief" in res) setBrief(res.brief);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [orderId, inConfirmation]);
   // El plan de rutas es quien sabe si Aliclik atiende a este pedido. Se lee de
   // ahí, no se vuelve a decidir: una segunda regla equivalente es una regla que
   // tarde o temprano deja de coincidir con la primera. `blocked` también cuenta:
@@ -2211,6 +2239,7 @@ function OrderDrawer({
         shippingMode: detail.row.shipping_mode,
         macroSubstage: detail.row.macro_substage,
         macroReasons: detail.row.macro_reasons,
+        riskRequirement: brief?.risk.requirement ?? null,
         paymentState: detail.row.payment_state,
         hasAgencyCandidate:
           canCreateShalomGuide &&
@@ -2463,6 +2492,7 @@ function OrderDrawer({
                 className="order-3 scroll-mt-28"
               >
                 <ConfirmationDesk
+                  brief={brief}
                   timeline={detail.timeline}
                   pending={pending}
                   onAttempt={(payload) =>
@@ -3241,11 +3271,126 @@ function Field({ label, value }: { label: string; value: string | null | undefin
  * el 20, el 22, el 25 y el 28 de julio son cuatro días de siete, no nueve. Los
  * días en que nadie llamó no gastan cupo.
  */
+const REQUIREMENT_TONE: Record<PaymentRequirement, string> = {
+  ninguno: "border-slate-200 bg-white text-slate-700",
+  sugerir_adelanto: "border-amber-200 bg-amber-50 text-amber-900",
+  exigir_adelanto: "border-orange-300 bg-orange-50 text-orange-900",
+  pago_completo: "border-rose-300 bg-rose-50 text-rose-900",
+};
+
+/**
+ * Lo que el MOM §8 manda revisar ANTES de llamar: historial del cliente,
+ * duplicados y cobertura.
+ *
+ * Hasta ahora esto vivía en tres columnas del Excel —«Métricas», «Duplicado?» y
+ * «Cobertura Aliclick o Dropi?»— resumidas a mano. Sin ellas, la tabla de riesgo
+ * del §8 no se podía aplicar desde Kapta: la regla existe desde siempre en el
+ * papel, pero nadie tenía el número de antecedentes delante al marcar.
+ */
+function ConfirmationBrief({ brief }: { brief: OrderConfirmationBrief }) {
+  const { counts, risk, duplicates, codCouriers } = brief;
+  const known = brief.priors.length;
+  const outcomes = (Object.keys(PRIOR_OUTCOME_LABEL) as PriorOutcome[]).filter(
+    (key) => counts[key] > 0,
+  );
+
+  return (
+    <div className="space-y-2.5 rounded-lg border border-slate-200 bg-white p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-500">
+          Antes de llamar
+        </h4>
+        <span className="text-[11px] text-slate-500">
+          {known === 0
+            ? "Sin pedidos anteriores con este teléfono"
+            : `${known} pedido${known === 1 ? "" : "s"} anterior${known === 1 ? "" : "es"}`}
+        </span>
+      </div>
+
+      {/* El desglose por desenlace, que es lo que la columna «Métricas» resume a
+          mano. Los entregados van primero y bien visibles: son el argumento de
+          quien decida saltarse la regla del §8 con justificación. */}
+      {outcomes.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {outcomes.map((key) => (
+            <span
+              key={key}
+              className={cn(
+                "rounded-full px-2 py-0.5 text-xs font-medium ring-1",
+                key === "entregado"
+                  ? "bg-emerald-50 text-emerald-800 ring-emerald-200"
+                  : key === "anulado" || key === "devuelto"
+                    ? "bg-rose-50 text-rose-800 ring-rose-200"
+                    : "bg-slate-50 text-slate-700 ring-slate-200",
+              )}
+            >
+              {PRIOR_OUTCOME_LABEL[key]}: {counts[key]}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className={cn("rounded-md border px-2.5 py-2", REQUIREMENT_TONE[risk.requirement])}>
+        <p className="text-xs font-bold">
+          {PAYMENT_REQUIREMENT_LABEL[risk.requirement]}
+          {risk.antecedents > 0 && (
+            <span className="font-medium">
+              {" "}
+              · {risk.antecedents} antecedente{risk.antecedents === 1 ? "" : "s"} de rechazo o
+              devolución
+            </span>
+          )}
+        </p>
+        {risk.reasons.length > 0 && (
+          <p className="mt-0.5 text-[11px] leading-4 opacity-90">{risk.reasons.join(" ")}</p>
+        )}
+      </div>
+
+      {/* Un duplicado no visto termina en dos paquetes al mismo destino, y el
+          flete de uno se pierde. Se listan con nombre y fecha: la decisión es
+          humana, la herramienta solo se asegura de que los vea. */}
+      {duplicates.length > 0 && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2">
+          <p className="text-xs font-bold text-amber-900">
+            ⚠ {duplicates.length} pedido{duplicates.length === 1 ? "" : "s"} abierto
+            {duplicates.length === 1 ? "" : "s"} del mismo teléfono
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {duplicates.slice(0, 5).map((row) => (
+              <li key={row.order_id} className="text-[11px] text-amber-900">
+                <span className="font-mono font-medium">{row.order_name ?? row.order_id}</span>
+                {row.order_created_at ? ` · ${fmtDate(row.order_created_at)}` : ""}
+                {row.order_total != null ? ` · ${fmtMoney(row.order_total)}` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* La pregunta de la llamada es «¿sale por Aliclik o va a agencia?». Sale
+          de la misma matriz de tarifas que ya clasifica la cobertura, así que no
+          puede contradecir lo que dice la cabecera del pedido. */}
+      <p className="text-[11px] text-slate-600">
+        <span className="font-semibold text-slate-500">Cobertura COD:</span>{" "}
+        {codCouriers.length > 0 ? (
+          <span className="font-medium text-slate-800">{codCouriers.join(" · ")}</span>
+        ) : (
+          <span className="text-slate-500">
+            sin courier COD con tarifa para este destino; va por agencia
+          </span>
+        )}
+      </p>
+    </div>
+  );
+}
+
 function ConfirmationDesk({
+  brief,
   timeline,
   pending,
   onAttempt,
 }: {
+  brief: OrderConfirmationBrief | null;
   timeline: TimelineEntry[];
   pending: boolean;
   onAttempt: (input: {
@@ -3277,6 +3422,7 @@ function ConfirmationDesk({
   const selected = confirmationResult(result);
   const needsDate = Boolean(selected?.schedulesFollowup);
   const blocked = pending || (needsDate && !nextContactOn);
+
 
   return (
     <section
@@ -3326,6 +3472,8 @@ function ConfirmationDesk({
           La anulación se crea a mano en Shopify — Kapta nunca anula por su cuenta.
         </p>
       )}
+
+      {brief && <ConfirmationBrief brief={brief} />}
 
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="block">

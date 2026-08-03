@@ -402,6 +402,40 @@ export function hasCodCoverage(
 }
 
 /**
+ * QUÉ couriers tienen cobertura COD en ese destino, no solo si alguno la tiene.
+ *
+ * `hasCodCoverage` contesta sí/no y con eso basta para clasificar el pedido.
+ * Pero quien está por llamar necesita el nombre: la pregunta de la llamada es
+ * «¿esto sale por Aliclik o hay que mandarlo a agencia?», y hoy la única forma
+ * de saberlo era cotizar —un paso que vive en la creación de la guía, después
+ * de la llamada—. Sale de la MISMA matriz de tarifas que ya decide la cobertura,
+ * así que no puede contradecirla.
+ */
+export function codCouriersFor(
+  tariffs: readonly CostTariff[],
+  location: CoverageLocation,
+  day: string,
+): string[] {
+  const found = new Set<string>();
+  for (const tariff of tariffs) {
+    if (tariff.org_id && location.orgId && tariff.org_id !== location.orgId) continue;
+    if (tariff.concept !== "primer_intento" || !isEffectiveOn(tariff, day)) continue;
+    const courier = normalizeCoverageLabel(tariff.courier);
+    if (!courier || NON_COD_COURIERS.has(courier)) continue;
+    if (!tariff.region && !tariff.province && !tariff.district) continue;
+    const score = specificity(tariff, {
+      storeId: location.storeId,
+      courier: tariff.courier,
+      region: location.region,
+      province: location.province,
+      district: location.district,
+    });
+    if (score !== null && tariff.courier) found.add(tariff.courier.trim());
+  }
+  return [...found].sort();
+}
+
+/**
  * Cobertura operativa del pedido.
  *
  * La provincia NO es requisito: Shopify Perú no la manda (solo distrito +

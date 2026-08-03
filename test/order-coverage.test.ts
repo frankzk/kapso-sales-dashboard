@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyOrderCoverage,
+  codCouriersFor,
+  hasCodCoverage,
   isLimaMetropolitanaOrCallao,
   limaRegionKind,
   resolveLimaDistrict,
@@ -320,5 +322,49 @@ describe('"Lima (departamento)" con distrito metropolitano', () => {
     expect(
       isLimaMetropolitanaOrCallao({ ...base, region: "Arequipa", province: null, district: "Cerca de Miraflores" }),
     ).toBe(false);
+  });
+});
+
+describe("codCouriersFor — qué courier cubre COD, no solo si alguno cubre", () => {
+  const huancayo = { ...base, region: "Junín", province: "Huancayo", district: "Huancayo" };
+
+  it("nombra los couriers con tarifa vigente en ese destino", () => {
+    // La pregunta de la llamada es «¿esto sale por Aliclik o va a agencia?».
+    // `hasCodCoverage` contesta sí/no y con eso basta para clasificar, pero quien
+    // marca necesita el nombre — hoy lo saca de una columna del Excel.
+    expect(
+      codCouriersFor(
+        [tariff({ courier: "Aliclik" }), tariff({ id: "t2", courier: "Swayp" })],
+        huancayo,
+        "2026-07-28",
+      ),
+    ).toEqual(["Aliclik", "Swayp"]);
+  });
+
+  it("Shalom y Olva no son COD: nunca aparecen", () => {
+    // Son justo lo contrario — la ruta a la que va el pedido cuando NADIE lo
+    // cubre contra entrega. Incluirlos haría que todo destino pareciera cubierto.
+    expect(
+      codCouriersFor([tariff({ courier: "Shalom" }), tariff({ id: "t2", courier: "Olva" })], huancayo, "2026-07-28"),
+    ).toEqual([]);
+  });
+
+  it("una tarifa vencida ya no cubre", () => {
+    expect(
+      codCouriersFor([tariff({ effective_to: "2026-06-30" })], huancayo, "2026-07-28"),
+    ).toEqual([]);
+  });
+
+  it("un destino sin tarifa queda vacío: eso es «va por agencia»", () => {
+    expect(codCouriersFor([tariff()], { ...base, region: "Cusco", province: "Cusco", district: "Cusco" }, "2026-07-28")).toEqual([]);
+  });
+
+  it("coincide con `hasCodCoverage`: no puede decir una cosa y clasificar otra", () => {
+    const tariffs = [tariff({ courier: "Aliclik" })];
+    for (const location of [huancayo, { ...base, district: "Cusco", province: "Cusco", region: "Cusco" }]) {
+      expect(codCouriersFor(tariffs, location, "2026-07-28").length > 0).toBe(
+        hasCodCoverage(tariffs, location, "2026-07-28"),
+      );
+    }
   });
 });

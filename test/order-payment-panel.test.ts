@@ -31,6 +31,25 @@ describe("jerarquía de pagos en el drawer", () => {
     ).toEqual({ show: true, mode: "required" });
   });
 
+  it("la regla de riesgo del §8 vuelve obligatorio el cobro en Provincia COD", () => {
+    // Es el «o una regla de riesgo lo exige» que este archivo nombraba desde el
+    // principio sin tener de dónde leerlo.
+    expect(
+      orderPaymentPanelPresentation({ ...BASE, riskRequirement: "exigir_adelanto" }),
+    ).toEqual({ show: true, mode: "required" });
+    expect(
+      orderPaymentPanelPresentation({ ...BASE, riskRequirement: "pago_completo" }),
+    ).toEqual({ show: true, mode: "required" });
+  });
+
+  it("«sugerir» no fuerza el panel: es una recomendación para la llamada", () => {
+    // Con un solo antecedente el MOM sugiere, no exige. Forzarlo pondría el cobro
+    // por encima de la ruta en un COD que puede salir contra entrega.
+    expect(
+      orderPaymentPanelPresentation({ ...BASE, riskRequirement: "sugerir_adelanto" }),
+    ).toEqual({ show: true, mode: "optional" });
+  });
+
   it("prioriza el cobro en una operación de Agencia", () => {
     expect(
       orderPaymentPanelPresentation({

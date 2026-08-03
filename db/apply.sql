@@ -205,4 +205,6 @@
 \ir migrations/0099_merge_payment_required_substage.sql
 \echo 'Applying 0100_coverage_by_coordinates.sql'
 \ir migrations/0100_coverage_by_coordinates.sql
+\echo 'Applying 0101_order_master_phone_history.sql'
+\ir migrations/0101_order_master_phone_history.sql
 \echo 'Done.'

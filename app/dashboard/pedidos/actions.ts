@@ -16,8 +16,10 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
+  getOrderConfirmationBrief,
   getOrderMasterDetail,
   searchOrderMaster,
+  type OrderConfirmationBrief,
   type OrderMasterDetail,
 } from "@/lib/orders-master-access";
 import {
@@ -706,6 +708,18 @@ export async function setOrderStatus(
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
   return { notice: `Estado actualizado a ${target.replace("_", " ")}.` };
+}
+
+/**
+ * La ficha que se mira antes de marcar (§8): historial del cliente, duplicados
+ * y cobertura. Solo lee; la autorización la impone la RLS de la consulta.
+ */
+export async function loadConfirmationBrief(
+  orderId: string,
+): Promise<{ brief: OrderConfirmationBrief } | { error: string }> {
+  const brief = await getOrderConfirmationBrief(orderId);
+  if (!brief) return { error: "Sin acceso a este pedido." };
+  return { brief };
 }
 
 /**
