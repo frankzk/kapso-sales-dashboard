@@ -39,6 +39,7 @@ import {
   loadOrderDetail,
   resolveLabelsForOrders,
   loadOrderGeo,
+  applyOrderStatusBulk,
   registerConfirmationAttempt,
   registerReturn,
   registerClosureAction,
@@ -1213,6 +1214,19 @@ function BulkBar({
 
   const [showPicked, setShowPicked] = useState(false);
 
+  const [showStatus, setShowStatus] = useState(false);
+  const [bulkGeneral, setBulkGeneral] = useState<GeneralStatus>("entregado");
+  const [bulkOperational, setBulkOperational] = useState("entregado");
+  const [bulkReason, setBulkReason] = useState("");
+  const [bulkComment, setBulkComment] = useState("");
+  const bulkOperationalOptions = operationalStatusesFor(bulkGeneral);
+  useEffect(() => {
+    // Al cambiar el estado general, el operativo elegido puede dejar de aplicar.
+    if (!bulkOperationalOptions.some((o) => o.code === bulkOperational)) {
+      setBulkOperational(bulkOperationalOptions[0]?.code ?? "");
+    }
+  }, [bulkOperationalOptions, bulkOperational]);
+
   const count = selectedIds.size;
   const onPage = new Set(visibleIds);
   const offscreen = Array.from(selectedIds).filter((id) => !onPage.has(id)).length;
@@ -1287,6 +1301,36 @@ function BulkBar({
     }
   };
 
+  // Cerrar de una tanda lo que ya se entregó y cobró. El gesto es el mismo de
+  // «Gestión manual» del drawer; lo único que cambia es que se aplica a la
+  // selección en vez de a un pedido.
+  const applyStatus = async () => {
+    setBusy(true);
+    reset();
+    try {
+      const result = await applyOrderStatusBulk(Array.from(selectedIds), {
+        general: bulkGeneral,
+        operational: bulkOperational,
+        reason: bulkReason.trim() || undefined,
+        comment: bulkComment.trim() || undefined,
+      });
+      setFailures(result.failed);
+      if (result.error && !result.applied.length) {
+        setError(result.error);
+        return;
+      }
+      setNotice(result.notice ?? "");
+      setShowStatus(false);
+      setBulkReason("");
+      setBulkComment("");
+      onCreated();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo aplicar el estado.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="sticky bottom-4 z-30 mx-auto flex w-fit max-w-full flex-col gap-2 rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-white shadow-xl">
       <div className="flex flex-wrap items-center gap-3">
@@ -1310,6 +1354,18 @@ function BulkBar({
             className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
           >
             {showCreate ? "Cancelar" : "Forzar courier…"}
+          </button>
+        )}
+        {canEdit && (
+          <button
+            onClick={() => {
+              reset();
+              setShowStatus((v) => !v);
+            }}
+            disabled={busy}
+            className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {showStatus ? "Cancelar" : "Registrar estado…"}
           </button>
         )}
         <button
@@ -1397,12 +1453,80 @@ function BulkBar({
         </div>
       )}
 
+      {showStatus && (
+        <div className="flex flex-wrap items-end gap-2 border-t border-slate-700 pt-2">
+          {/* El aviso no es decorativo: un override CONGELA el pedido frente al
+              recálculo. Aplicado a cincuenta de golpe, cincuenta pedidos dejan
+              de seguir a su guía, y quien lo hace tiene que saberlo ANTES. */}
+          <p className="w-full max-w-xl text-[11px] leading-4 text-amber-300">
+            Queda como cambio manual y <strong>congela</strong> el pedido: deja de seguir a su guía
+            hasta que alguien lo vuelva a mover a mano. Úsalo en pedidos ya cerrados, no en los que
+            siguen en movimiento.
+          </p>
+          <label className="text-[11px] text-slate-300">
+            Estado
+            <select
+              value={bulkGeneral}
+              onChange={(e) => setBulkGeneral(e.target.value as GeneralStatus)}
+              className="mt-0.5 block rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+            >
+              {GENERAL_STATUSES.map((s) => (
+                <option key={s.code} value={s.code}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-[11px] text-slate-300">
+            Detalle
+            <select
+              value={bulkOperational}
+              onChange={(e) => setBulkOperational(e.target.value)}
+              className="mt-0.5 block rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+            >
+              {bulkOperationalOptions.map((o) => (
+                <option key={o.code} value={o.code}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-[11px] text-slate-300">
+            Motivo (obligatorio si el pedido ya estaba cerrado)
+            <input
+              value={bulkReason}
+              onChange={(e) => setBulkReason(e.target.value)}
+              placeholder="Opcional"
+              className="mt-0.5 block w-56 rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+            />
+          </label>
+          <label className="text-[11px] text-slate-300">
+            Comentario
+            <input
+              value={bulkComment}
+              onChange={(e) => setBulkComment(e.target.value)}
+              placeholder="PAGADO"
+              className="mt-0.5 block w-44 rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+            />
+          </label>
+          <button
+            onClick={applyStatus}
+            disabled={busy}
+            className="rounded-lg bg-white px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-slate-100 disabled:opacity-50"
+          >
+            {busy
+              ? "Aplicando…"
+              : `Aplicar a ${count} pedido${count === 1 ? "" : "s"}`}
+          </button>
+        </div>
+      )}
+
       {error && <p className="max-w-lg text-xs text-red-300">{error}</p>}
       {notice && <p className="max-w-lg text-xs text-emerald-300">{notice}</p>}
       {failures.length > 0 && (
         <details className="max-w-lg text-xs text-amber-300">
           <summary className="cursor-pointer">
-            {failures.length} pedido{failures.length === 1 ? "" : "s"} sin salida — ver por qué
+            {failures.length} pedido{failures.length === 1 ? "" : "s"} con problemas — ver por qué
           </summary>
           <ul className="mt-1 space-y-0.5">
             {failures.map((f) => (
