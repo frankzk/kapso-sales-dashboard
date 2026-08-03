@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { OPERATIONAL_STATUSES } from "@/lib/order-status";
 import {
+  AGENCY_AVAILABLE_STATES,
   agencySummary,
   applyFilters,
   emptyFilters,
@@ -279,5 +281,34 @@ describe("agencia (§10)", () => {
       retornoIniciado: 1,
       devueltos: 1,
     });
+  });
+});
+
+describe("AGENCY_AVAILABLE_STATES — la lista que comparten los dos resúmenes", () => {
+  // El resumen de agencia existe DOS veces: acá en cliente y en
+  // `getAgencySummary` de servidor. Allá se contaba `pickup_state = 'disponible'`
+  // —un valor que no existe en el catálogo—, así que el panel enseñaba
+  // "93 en agencia · 0 disponibles para recojo" con 49 paquetes esperando en
+  // destino. No fallaba, y por eso nadie lo vio: un contador equivocado que
+  // devuelve 0 se lee como "no hay nada que hacer".
+  it("solo contiene sub-estados que existen de verdad", () => {
+    const catalogo = new Set(OPERATIONAL_STATUSES.map((s) => s.code));
+    for (const state of AGENCY_AVAILABLE_STATES) {
+      expect(catalogo.has(state)).toBe(true);
+    }
+  });
+
+  it("«disponible» a secas NO es uno de ellos", () => {
+    expect(AGENCY_AVAILABLE_STATES).not.toContain("disponible");
+  });
+
+  it("el resumen cuenta con esa lista y no con otra", () => {
+    const rows = AGENCY_AVAILABLE_STATES.map((pickup_state, i) => ({
+      id: `a${i}`,
+      pickup_state,
+      shipping_mode: "agency",
+      general_status: "en_proceso",
+    }));
+    expect(agencySummary(rows as never).disponibles).toBe(AGENCY_AVAILABLE_STATES.length);
   });
 });

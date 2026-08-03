@@ -322,6 +322,25 @@ export class ShalomClient {
     });
   }
 
+  /**
+   * ¿Existe esta guía en la cuenta de Shalom Pro? `null` si no aparece.
+   *
+   * Contesta la pregunta que el rastreo deja abierta: un `not_found` del
+   * rastreo puede ser "la borraron", "nunca se emitió" o "el rastreo no la ve
+   * todavía", y son cosas muy distintas. Acá se mira el listado de la CUENTA,
+   * que es lo mismo que haría una persona entrando a pro.shalom.pe.
+   *
+   * Usa el filtro `guia` del propio endpoint —match exacto— en vez de traerse
+   * las órdenes y buscar en memoria: una cuenta con miles pesa megabytes.
+   */
+  async findOrderByGuia(guia: string): Promise<ShalomAccountOrder | null> {
+    const body = await this.request<{ orders?: ShalomAccountOrder[] }>(
+      `/v1/orders?guia=${encodeURIComponent(guia)}&per_page=5`,
+      { shalomAuth: true, timeoutMs: SLOW_TIMEOUT_MS },
+    );
+    return body?.orders?.[0] ?? null;
+  }
+
   /** Últimas órdenes de la cuenta. Paginado SIEMPRE: sin `per_page` una cuenta
    *  grande devuelve megabytes (la documentación avisa: ~3 KB por orden). */
   async recentOrders(perPage = 50): Promise<ShalomAccountOrder[]> {

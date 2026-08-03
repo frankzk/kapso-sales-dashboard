@@ -261,6 +261,21 @@ export interface AgencySummary {
 }
 
 /**
+ * Sub-estados que cuentan como "disponible para recojo" en el resumen.
+ *
+ * SE EXPORTA PARA QUE NO HAYA DOS LISTAS. El resumen existe dos veces —acá en
+ * cliente y en `getAgencySummary` de servidor— y allá se contaba
+ * `pickup_state = 'disponible'`, un valor que no existe en el catálogo. No
+ * fallaba: devolvía 0, y el panel enseñaba "0 disponibles para recojo" con 49
+ * paquetes esperando en destino. Un contador equivocado que no rompe se lee
+ * como "no hay nada que hacer".
+ */
+export const AGENCY_AVAILABLE_STATES = [
+  "disponible_para_recojo",
+  "pendiente_de_recojo",
+] as const;
+
+/**
  * Resumen del seguimiento de agencia (§10). Es la pantalla que evita la
  * devolución: entre el 5 % y el 6 % de estos pedidos termina devuelto por no
  * recogerse a tiempo, y lo que hay que mirar cada día es qué está disponible y
@@ -286,7 +301,7 @@ export function agencySummary(
       continue;
     }
     if (r.pickup_state === "retorno_iniciado") retornoIniciado++;
-    if (r.pickup_state === "disponible_para_recojo" || r.pickup_state === "pendiente_de_recojo") {
+    if (AGENCY_AVAILABLE_STATES.includes(r.pickup_state as (typeof AGENCY_AVAILABLE_STATES)[number])) {
       disponibles++;
     }
     if (r.agency_expires_at) {
