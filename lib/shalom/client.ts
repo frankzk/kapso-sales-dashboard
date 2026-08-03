@@ -355,7 +355,18 @@ export class ShalomClient {
    * del batch el que no llega bien montado.
    */
   async track(numero: string): Promise<unknown> {
-    return this.request(`/v1/tracking?numero=${encodeURIComponent(numero)}`);
+    return this.trackBy("numero", numero);
+  }
+
+  /**
+   * Rastrea por el identificador que se le diga. La documentación de Shalom dice
+   * que `/v1/tracking` acepta `numero`, `codigo` u `ose_id`, y no hay forma de
+   * saber cuál espera de verdad sin probarlos: el upstream contesta el mismo
+   * «Ingrese un código de orden» tanto si el nombre del parámetro no es el que
+   * quiere como si su servicio está caído.
+   */
+  async trackBy(field: "numero" | "codigo" | "ose_id", value: string): Promise<unknown> {
+    return this.request(`/v1/tracking?${field}=${encodeURIComponent(value)}`);
   }
 
   async trackBatch(
