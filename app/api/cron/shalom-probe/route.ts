@@ -62,31 +62,56 @@ export async function GET(req: NextRequest) {
 
   // Sin `numero` se toma una guía real de la base: la gracia de la sonda es que
   // se pueda lanzar desde el navegador sin tener que buscar un número antes.
-  let numero = req.nextUrl.searchParams.get("numero")?.trim() ?? "";
-  if (!numero) {
-    const admin = createAdminSupabase();
-    const { data } = await admin
-      .from("shipments")
-      .select("guide_code")
-      .eq("courier", "shalom")
-      .not("guide_code", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    numero = (data as { guide_code?: string } | null)?.guide_code ?? "";
-  }
+  // Se traen los tres identificadores porque los tres se van a probar.
+  const admin = createAdminSupabase();
+  const pedido = req.nextUrl.searchParams.get("numero")?.trim() ?? "";
+  const query = admin
+    .from("shipments")
+    .select("guide_code,shalom_codigo,shalom_ose_id")
+    .eq("courier", "shalom")
+    .not("guide_code", "is", null);
+  const { data } = pedido
+    ? await query.eq("guide_code", pedido).maybeSingle()
+    : await query.order("created_at", { ascending: false }).limit(1).maybeSingle();
+  const guia = data as {
+    guide_code?: string | null;
+    shalom_codigo?: string | null;
+    shalom_ose_id?: number | null;
+  } | null;
+
+  const numero = guia?.guide_code ?? pedido;
   if (!numero) {
     return NextResponse.json({ ok: false, error: "No hay ninguna guía de Shalom que sondear." });
   }
 
   const client = publicClient();
-  const single = await attempt(() => client.track(numero));
+
+  // Los tres identificadores, uno a uno.
+  //
+  // `single` y `batch` fallaron IGUAL —el mismo 422 «Ingrese un código de
+  // orden»—, así que el sobre del batch queda descartado: no es cómo montamos la
+  // petición. Lo que no se sabe todavía es si `numero` es el parámetro que el
+  // rastreo espera. Probar los tres separa las dos únicas explicaciones que
+  // quedan: si alguno responde, el nuestro estaba mal; si fallan los tres con el
+  // mismo error, es su servicio y no hay nada que arreglar de este lado.
+  const porIdentificador: Record<string, unknown> = {
+    numero: await attempt(() => client.trackBy("numero", numero)),
+  };
+  if (guia?.shalom_codigo) {
+    porIdentificador.codigo = await attempt(() => client.trackBy("codigo", guia.shalom_codigo!));
+  }
+  if (guia?.shalom_ose_id) {
+    porIdentificador.ose_id = await attempt(() =>
+      client.trackBy("ose_id", String(guia.shalom_ose_id)),
+    );
+  }
+
   const batch = await attempt(() => client.trackBatch([{ custom_id: "sonda", numero }]));
 
   return NextResponse.json({
     ok: true,
-    numero,
-    single,
+    guia: { numero, codigo: guia?.shalom_codigo ?? null, ose_id: guia?.shalom_ose_id ?? null },
+    porIdentificador,
     batch,
     cupo: client.rateLimit,
   });
