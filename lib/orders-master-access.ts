@@ -631,6 +631,9 @@ async function loadAgencySummary(storeIds: string[]): Promise<AgencySummary> {
     proximosAVencer: 0,
     retornoIniciado: 0,
     devueltos: 0,
+    pendienteDeEnvio: 0,
+    enTransito: 0,
+    entregados: 0,
   };
   if (!storeIds.length) return empty;
   const admin = createAdminSupabase();
@@ -658,15 +661,27 @@ async function loadAgencySummary(storeIds: string[]): Promise<AgencySummary> {
   // nadie—, y arreglar la que no se ejecutaba no cambió nada en pantalla.
   const inAgency = (q: any) => q.or("pickup_state.not.is.null,shipping_mode.eq.agency");
   const soon = new Date(now.getTime() + 2 * 86_400_000).toISOString();
-  const [total, disponibles, proximosAVencer, retornoIniciado, devueltos] = await Promise.all([
+  const [
+    total,
+    disponibles,
+    proximosAVencer,
+    retornoIniciado,
+    devueltos,
+    pendienteDeEnvio,
+    enTransito,
+    entregados,
+  ] = await Promise.all([
     count(inAgency),
     count((q) => q.in("pickup_state", [...AGENCY_AVAILABLE_STATES])),
     count((q) => inAgency(q).not("agency_expires_at", "is", null).lte("agency_expires_at", soon)),
     count((q) => q.eq("pickup_state", "retorno_iniciado")),
     // Devuelto es un estado GENERAL del pedido, no un sub-estado de recojo.
     count((q) => inAgency(q).eq("general_status", "devuelto")),
+    count((q) => q.eq("pickup_state", "pendiente_de_envio")),
+    count((q) => q.eq("pickup_state", "en_transito")),
+    count((q) => q.eq("pickup_state", "recogido")),
   ]);
-  return { total, disponibles, proximosAVencer, retornoIniciado, devueltos };
+  return { total, disponibles, proximosAVencer, retornoIniciado, devueltos, pendienteDeEnvio, enTransito, entregados };
 }
 
 export const getMasterFacetsCached = (storeIds: string[]) =>

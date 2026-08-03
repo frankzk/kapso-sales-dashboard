@@ -993,6 +993,21 @@ function AgencyStrip({
         }
       />
       <AgencyStat label="Devueltos" value={summary.devueltos} tone={summary.devueltos > 0 ? "danger" : undefined} />
+
+      {/* El recorrido del paquete, separado de lo accionable.
+          Antes la tarjeta era "93 en agencia · 49 disponibles" y tres ceros: no
+          se podía saber qué eran los otros 44 —si viajaban, si nunca se
+          despacharon o si ya se entregaron—, y cada uno pide algo distinto.
+          «Pendiente de envío» es el que más engaña: son guías emitidas cuyo
+          paquete todavía no se dejó en agencia. */}
+      <div className="flex w-full flex-wrap items-center gap-4 border-t border-slate-100 pt-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          Recorrido
+        </p>
+        <AgencyStat label="Pendiente de envío" value={summary.pendienteDeEnvio} />
+        <AgencyStat label="En tránsito" value={summary.enTransito} />
+        <AgencyStat label="Entregados" value={summary.entregados} />
+      </div>
     </Card>
   );
 }
