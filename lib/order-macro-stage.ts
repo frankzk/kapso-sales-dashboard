@@ -15,10 +15,14 @@ import {
   reachedLastAttempt,
 } from "@/lib/order-confirmation";
 
+// v1.7: el sub-estado de agencia prueba custodia. Mueve 54 pedidos que estaban
+// en «Por confirmar» con el paquete ya en manos del courier, así que la versión
+// sube para que el cron los reconcilie.
+//
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.6" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.7" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -402,12 +406,42 @@ function maxIso(...values: (string | null | undefined)[]): string | null {
   return best;
 }
 
+/**
+ * Sub-estados de agencia que solo pueden darse con el paquete YA fuera de la
+ * empresa. `pendiente_de_envio` es el único que queda fuera: es el estado con el
+ * que nace una guía recién emitida, antes de dejar el bulto en la agencia.
+ */
+const PICKUP_STATES_IN_CUSTODY = new Set([
+  "registrado_en_agencia",
+  "en_transito",
+  "disponible_para_recojo",
+  "cliente_notificado",
+  "pendiente_de_recojo",
+  "proximo_a_vencer",
+  "en_reparto",
+  "recogido",
+  "retorno_iniciado",
+  "devuelto_al_origen",
+]);
+
 function hasExternalCustody(guide: MacroGuideSnapshot): boolean {
   return (
     guide.custody_state === "courier" ||
     guide.custody_state === "retorno" ||
     Boolean(guide.dispatched_at || guide.out_for_delivery_at) ||
-    ["en_ruta", "entregado", "transferido"].includes(guide.delivery_status)
+    ["en_ruta", "entregado", "transferido"].includes(guide.delivery_status) ||
+    // EL SUB-ESTADO TAMBIÉN PRUEBA CUSTODIA, y sin esto el MOM se contradecía.
+    //
+    // Una guía de Shalom en la agencia de DESTINO tiene `delivery_status:
+    // "pendiente"` a propósito: sigue viva esperando a que el cliente la
+    // recoja, y así lo exige el flujo de la clave. Pero mirando solo ese campo
+    // no se distingue de una guía que aún no ha salido, y el paquete caía en
+    // «Por confirmar · Sin llamar» —con su guía emitida, en destino y la clave
+    // ya entregada—. Eran 45 de los 50 paquetes esperando en agencia.
+    //
+    // Estas guías tampoco traen `dispatched_at` ni `custody_state: "courier"`:
+    // las crea la API y el rastreo solo escribe estado y sub-estado.
+    PICKUP_STATES_IN_CUSTODY.has(guide.pickup_state ?? "")
   );
 }
 

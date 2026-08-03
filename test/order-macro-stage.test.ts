@@ -525,3 +525,86 @@ describe("resolveMacroStage — Por cerrar y Finalizado", () => {
   });
 });
 
+
+describe("el sub-estado de agencia prueba custodia (v1.7)", () => {
+  // #AUR174766: guía de Shalom emitida el 29/07, el paquete llegó a la agencia
+  // de destino el 01/08 y la clave ya se entregó. El MOM lo tenía en
+  // «Por confirmar · Sin llamar» — 5 días diciendo que había que llamar a una
+  // clienta cuyo paquete ya la estaba esperando.
+  //
+  // La guía de Shalom en destino lleva `delivery_status: "pendiente"` A
+  // PROPÓSITO: sigue viva hasta que el cliente la recoja, y así lo exige el
+  // flujo de la clave. Pero `hasExternalCustody` solo miraba ese campo, y no lo
+  // distinguía de una guía que aún no ha salido. Tampoco hay `dispatched_at` ni
+  // `custody_state: "courier"`: la guía la crea la API y el rastreo solo escribe
+  // estado y sub-estado.
+  const enDestino = () =>
+    guide({
+      courier: "shalom",
+      delivery_status: "pendiente",
+      pickup_state: "disponible_para_recojo",
+      custody_state: "empresa",
+      dispatched_at: null,
+      out_for_delivery_at: null,
+    });
+
+  it("un paquete en la agencia de destino está En curso, no Por confirmar", () => {
+    const state = resolve({
+      order: order({ shipping_mode: "agency" }),
+      guides: [enDestino()],
+      legacy: { general: "en_proceso", operational: "disponible_para_recojo", since: CREATED },
+      paymentState: "adelanto_cargado",
+    });
+    expect(state.stage).toBe("en_curso");
+    expect(state.stage).not.toBe("por_confirmar");
+  });
+
+  // El adelanto sin validar frena el paso a Preparación, y eso está bien: es la
+  // puerta ANTES de despachar. Pero con el paquete ya en destino la puerta ya se
+  // cruzó, y seguir pidiendo la llamada es contradecir la realidad física.
+  it("el adelanto sin validar ya no lo devuelve a Por confirmar", () => {
+    for (const paymentState of ["adelanto_cargado", "sin_pago", null]) {
+      const state = resolve({
+        order: order({ shipping_mode: "agency" }),
+        guides: [enDestino()],
+        legacy: { general: "en_proceso", operational: "disponible_para_recojo", since: CREATED },
+        paymentState,
+      });
+      expect(state.stage).toBe("en_curso");
+    }
+  });
+
+  it("todos los sub-estados posteriores a la salida cuentan como custodia", () => {
+    for (const pickup_state of [
+      "registrado_en_agencia",
+      "en_transito",
+      "disponible_para_recojo",
+      "cliente_notificado",
+      "pendiente_de_recojo",
+      "proximo_a_vencer",
+      "en_reparto",
+    ]) {
+      const state = resolve({
+        order: order({ shipping_mode: "agency" }),
+        guides: [guide({ courier: "shalom", delivery_status: "pendiente", pickup_state })],
+        legacy: { general: "en_proceso", operational: pickup_state, since: CREATED },
+        paymentState: "adelanto_cargado",
+      });
+      expect(state.stage).toBe("en_curso");
+    }
+  });
+
+  // El único que NO prueba custodia: es el estado con el que nace una guía recién
+  // emitida, antes de dejar el bulto en la agencia. Un pedido así todavía tiene
+  // que pasar por el filtro del adelanto.
+  it("«pendiente de envío» NO prueba custodia: la guía existe pero el bulto no salió", () => {
+    const state = resolve({
+      order: order({ shipping_mode: "agency" }),
+      guides: [
+        guide({ courier: "shalom", delivery_status: "pendiente", pickup_state: "pendiente_de_envio" }),
+      ],
+      paymentState: "adelanto_cargado",
+    });
+    expect(state.stage).not.toBe("en_curso");
+  });
+});
