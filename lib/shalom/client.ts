@@ -323,22 +323,24 @@ export class ShalomClient {
   }
 
   /**
-   * ¿Existe esta guía en la cuenta de Shalom Pro? `null` si no aparece.
+   * Órdenes de la cuenta desde una fecha. Para comprobar si unas guías existen.
    *
-   * Contesta la pregunta que el rastreo deja abierta: un `not_found` del
-   * rastreo puede ser "la borraron", "nunca se emitió" o "el rastreo no la ve
-   * todavía", y son cosas muy distintas. Acá se mira el listado de la CUENTA,
-   * que es lo mismo que haría una persona entrando a pro.shalom.pe.
+   * UNA LLAMADA, NO UNA POR GUÍA. Los filtros de este endpoint —`guia`, `from`,
+   * `to`— se aplican en el wrapper, no en Shalom: su propia documentación avisa
+   * de que «recortan la respuesta, pero no reducen la carga contra el upstream».
+   * Así que preguntar guía por guía con `?guia=` hace que Shalom baje la cuenta
+   * ENTERA tantas veces como guías se pregunten. Con dos ya se pasaba de lo que
+   * un navegador aguanta: la petición volvía con ERR_CONNECTION_ABORTED.
    *
-   * Usa el filtro `guia` del propio endpoint —match exacto— en vez de traerse
-   * las órdenes y buscar en memoria: una cuenta con miles pesa megabytes.
+   * El `from` sigue valiendo la pena aunque no aligere el upstream: recorta lo
+   * que viaja hasta nosotros, que a ~3 KB por orden son megabytes.
    */
-  async findOrderByGuia(guia: string): Promise<ShalomAccountOrder | null> {
+  async ordersSince(from: string, perPage = 200): Promise<ShalomAccountOrder[]> {
     const body = await this.request<{ orders?: ShalomAccountOrder[] }>(
-      `/v1/orders?guia=${encodeURIComponent(guia)}&per_page=5`,
+      `/v1/orders?from=${encodeURIComponent(from)}&page=1&per_page=${perPage}`,
       { shalomAuth: true, timeoutMs: SLOW_TIMEOUT_MS },
     );
-    return body?.orders?.[0] ?? null;
+    return body?.orders ?? [];
   }
 
   /** Últimas órdenes de la cuenta. Paginado SIEMPRE: sin `per_page` una cuenta

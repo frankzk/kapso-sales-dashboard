@@ -59,10 +59,17 @@ async function attempt(run: () => Promise<unknown>): Promise<unknown> {
 /**
  * ¿Existen estas guías en la cuenta de Shalom Pro?
  *
- * Cada guía se consulta con las credenciales de SU tienda: son cuentas
- * distintas y preguntar con la equivocada daría un "no existe" que no significa
- * nada. La guía tiene que estar en nuestra base — si no, no sabríamos de qué
- * cuenta preguntar.
+ * UNA LLAMADA POR TIENDA, no una por guía. Los filtros de `GET /v1/orders` se
+ * aplican en el wrapper, no en Shalom —lo dice su documentación: «recortan la
+ * respuesta, pero no reducen la carga contra el upstream»—, así que preguntar
+ * `?guia=` una vez por guía hace que Shalom baje la cuenta entera otras tantas
+ * veces. Con dos guías ya se pasaba de lo que aguanta un navegador y la petición
+ * volvía con ERR_CONNECTION_ABORTED.
+ *
+ * Se agrupa por tienda porque cada una puede tener su propia cuenta de Shalom, y
+ * preguntar con las credenciales equivocadas daría un "no existe" que no
+ * significa nada. La guía tiene que estar en nuestra base — si no, no sabríamos
+ * de qué cuenta preguntar.
  */
 async function buscarEnLaCuenta(
   admin: ReturnType<typeof createAdminSupabase>,
@@ -70,7 +77,7 @@ async function buscarEnLaCuenta(
 ): Promise<NextResponse> {
   const { data } = await admin
     .from("shipments")
-    .select("guide_code,store_id,shalom_codigo,delivery_status")
+    .select("guide_code,store_id,shalom_codigo,delivery_status,created_at")
     .eq("courier", "shalom")
     .in("guide_code", guias);
   const filas = (data ?? []) as {
@@ -78,44 +85,71 @@ async function buscarEnLaCuenta(
     store_id: string;
     shalom_codigo: string | null;
     delivery_status: string;
+    created_at: string;
   }[];
 
   const resultado: Record<string, unknown> = {};
   for (const guia of guias) {
-    const fila = filas.find((f) => f.guide_code === guia);
-    if (!fila) {
+    if (!filas.some((f) => f.guide_code === guia)) {
       resultado[guia] = { enKapta: false, nota: "No está en nuestra base." };
-      continue;
     }
-    const store = await loadStoreShalom(admin, fila.store_id);
+  }
+
+  const porTienda = new Map<string, typeof filas>();
+  for (const fila of filas) {
+    porTienda.set(fila.store_id, [...(porTienda.get(fila.store_id) ?? []), fila]);
+  }
+
+  for (const [storeId, delGrupo] of porTienda) {
+    const store = await loadStoreShalom(admin, storeId);
     if (!store?.shalom_pro_email) {
-      resultado[guia] = { enKapta: true, error: "La tienda no tiene cuenta de Shalom Pro." };
+      for (const f of delGrupo) {
+        resultado[f.guide_code] = { enKapta: true, error: "La tienda no tiene cuenta de Shalom Pro." };
+      }
       continue;
     }
+    // Un día antes de la más vieja: `from` filtra por la fecha de creación en
+    // Shalom, que puede no ser la misma que la nuestra al minuto.
+    const masVieja = delGrupo
+      .map((f) => Date.parse(f.created_at))
+      .filter((n) => Number.isFinite(n))
+      .sort((a, b) => a - b)[0];
+    const desde = new Date((masVieja || Date.now()) - 86_400_000).toISOString().slice(0, 10);
+
     try {
-      const orden = await readWithFreshSession(admin, fila.store_id, store, (client) =>
-        client.findOrderByGuia(guia),
+      const ordenes = await readWithFreshSession(admin, storeId, store, (client) =>
+        client.ordersSince(desde),
       );
-      resultado[guia] = {
-        enKapta: true,
-        codigo: fila.shalom_codigo,
-        estadoEnKapta: fila.delivery_status,
-        // `existe: false` con la consulta hecha de verdad es un dato, no un
-        // hueco: la guía NO está en la cuenta.
-        existeEnShalom: Boolean(orden),
-        orden: orden
-          ? {
-              id: (orden as { id?: number }).id,
-              guia: (orden as { guia?: string }).guia,
-              codigo: (orden as { codigo?: string }).codigo,
-              status: (orden as { status?: number }).status,
-              delivered: (orden as { delivered?: boolean }).delivered,
-              created_at: (orden as { created_at?: string }).created_at,
-            }
-          : null,
+      for (const f of delGrupo) {
+        const orden = ordenes.find((o) => String((o as { guia?: string }).guia) === f.guide_code);
+        resultado[f.guide_code] = {
+          enKapta: true,
+          codigo: f.shalom_codigo,
+          estadoEnKapta: f.delivery_status,
+          // `false` con la consulta hecha de verdad es un dato, no un hueco: la
+          // guía NO está en la cuenta.
+          existeEnShalom: Boolean(orden),
+          orden: orden
+            ? {
+                id: (orden as { id?: number }).id,
+                guia: (orden as { guia?: string }).guia,
+                codigo: (orden as { codigo?: string }).codigo,
+                status: (orden as { status?: number }).status,
+                delivered: (orden as { delivered?: boolean }).delivered,
+                created_at: (orden as { created_at?: string }).created_at,
+              }
+            : null,
+        };
+      }
+      resultado[`_cuenta_${storeId}`] = {
+        tienda: storeId,
+        desde,
+        ordenesRevisadas: ordenes.length,
       };
     } catch (err) {
-      resultado[guia] = { enKapta: true, error: describeShalomError(err) };
+      for (const f of delGrupo) {
+        resultado[f.guide_code] = { enKapta: true, error: describeShalomError(err) };
+      }
     }
   }
   return NextResponse.json({ ok: true, buscadas: guias.length, resultado });
