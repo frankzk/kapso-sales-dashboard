@@ -106,7 +106,23 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const batch = await attempt(() => client.trackBatch([{ custom_id: "sonda", numero }]));
+  // El batch, con las mismas combinaciones. En el endpoint de una sola quedó
+  // claro que `numero` y `codigo` se reclaman el uno al otro y que `ose_id`
+  // resuelve solo; falta confirmar que el batch se comporta igual, porque es el
+  // que usa el cron y el que tuvo las 93 guías paradas.
+  const batch: Record<string, unknown> = {
+    solo_numero: await attempt(() => client.trackBatch([{ custom_id: "sonda", numero }])),
+  };
+  if (guia?.shalom_codigo) {
+    batch.numero_y_codigo = await attempt(() =>
+      client.trackBatch([{ custom_id: "sonda", numero, codigo: guia.shalom_codigo }]),
+    );
+  }
+  if (guia?.shalom_ose_id) {
+    batch.solo_ose_id = await attempt(() =>
+      client.trackBatch([{ custom_id: "sonda", ose_id: guia.shalom_ose_id }]),
+    );
+  }
 
   return NextResponse.json({
     ok: true,

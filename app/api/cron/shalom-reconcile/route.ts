@@ -61,6 +61,9 @@ interface LiveGuide {
   store_id: string;
   order_id: string | null;
   guide_code: string | null;
+  /** Alfanumérico de 4. El rastreo NO resuelve sin él (ver más abajo). */
+  shalom_codigo: string | null;
+  shalom_ose_id: number | null;
   delivery_status: string;
   pickup_state: string | null;
 }
@@ -81,7 +84,7 @@ export async function GET(req: NextRequest) {
   // entran las guías creadas fuera de Kapta y vinculadas durante una caída.
   const { data, error } = await admin
     .from("shipments")
-    .select("id,store_id,order_id,guide_code,delivery_status,pickup_state")
+    .select("id,store_id,order_id,guide_code,shalom_codigo,shalom_ose_id,delivery_status,pickup_state")
     .eq("courier", "shalom")
     .not("guide_code", "is", null)
     .not("delivery_status", "in", "(entregado,anulado,transferido)")
@@ -107,7 +110,20 @@ export async function GET(req: NextRequest) {
     let results;
     try {
       results = await client.trackBatch(
-        slice.map((g) => ({ custom_id: g.id, numero: String(g.guide_code) })),
+        // `numero` NO BASTA. Comprobado contra la API: con solo el número, el
+        // upstream contesta «Ingrese un código de orden» —y con solo el código,
+        // «Ingrese un número de orden»—. Se reclaman el uno al otro, y por
+        // separado los dos mensajes parecen decir "esa guía no existe". Eso tuvo
+        // las 93 guías sin rastrear desde el primer día.
+        //
+        // `ose_id` sí resuelve solo, y va de reserva: las guías creadas por la
+        // API lo tienen, las vinculadas a mano durante una caída puede que no.
+        slice.map((g) => ({
+          custom_id: g.id,
+          numero: String(g.guide_code),
+          codigo: g.shalom_codigo,
+          ose_id: g.shalom_ose_id,
+        })),
       );
     } catch (err) {
       // Un batch caído no debe tumbar la pasada entera: se anota y se sigue con

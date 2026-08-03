@@ -95,7 +95,7 @@ romper. El campo `detailed` dice qué esperar.
 
 | Endpoint | Para qué |
 |---|---|
-| `GET /v1/tracking?numero=…` | Una guía. Acepta `numero`, `codigo` o `ose_id` |
+| `GET /v1/tracking?numero=…&codigo=…` | Una guía. **`numero` y `codigo` van juntos**, o `ose_id` solo |
 | `POST /v1/tracking/batch` | **Hasta 50 guías por llamada.** Lo que usa el cron |
 | `GET /v1/tracking/{ose_id}/events` | Solo el `status`, si ya tienes el `ose_id` |
 | `GET /v1/tracking/{ose_id}/grt?cap_id=…` | Enlace a la Guía de Remisión |
@@ -103,11 +103,27 @@ romper. El campo `detailed` dice qué esperar.
 
 ### Sobre los identificadores
 
+> **`numero` y `codigo` VAN JUNTOS. Ninguno de los dos sirve solo.**
+>
+> Comprobado contra la API el 03/08/2026, con la guía `90484321` / `WWCP`:
+>
+> | Se manda | Contesta |
+> |---|---|
+> | solo `numero` | `422 Ingrese un código de orden` |
+> | solo `codigo` | `422 Ingrese un número de orden` |
+> | solo `ose_id` | **funciona** |
+>
+> Los dos errores se reclaman el uno al otro, pero **por separado cada uno
+> parece decir «esa guía no existe»** — y esa lectura equivocada tuvo las 93
+> guías sin rastrear desde el primer día, con el cron corriendo cada media hora
+> y rechazando el 100 %.
+
 - **`numero`** — la guía, 8 a 10 dígitos (ej. `89980799`). Es lo que guardamos
-  como `guide_code`.
+  como `guide_code`. **Nunca va solo.**
 - **`codigo`** — alfanumérico de 4 (ej. `77PH`). Guardado en `shalom_codigo`.
   **Por sí solo no resuelve el estado**: hay que usarlo junto al `numero`, o con
-  credenciales de Shalom Pro.
+  credenciales de Shalom Pro. Deja de ser un adorno del rótulo: **sin él no hay
+  rastreo**, así que una guía vinculada a mano sin código no se puede seguir.
 - **`ose_id`** — id interno. No se puede averiguar; lo devuelve `POST /v1/orders`
   y lo guardamos en `shalom_ose_id`. Es el handle para eventos, comprobante y GRT.
 
@@ -151,14 +167,16 @@ Una guía:
 
 ```powershell
 curl.exe -s -H "X-API-Key: $env:SHALOM_API_KEY" `
-  "https://api.shalom-api-peru.com/v1/tracking?numero=89980799"
+  "https://api.shalom-api-peru.com/v1/tracking?numero=89980799&codigo=77PH"
 ```
 
 Varias de golpe (hasta 50):
 
 ```powershell
-$g = @("89980799","89980717","89980710")
-$body = @{ items = @($g | % { @{ custom_id = $_; numero = $_ } }) } | ConvertTo-Json -Depth 4
+# Cada item necesita numero + codigo, o bien ose_id a secas.
+$body = @{ items = @(
+  @{ custom_id = "a"; numero = "89980799"; codigo = "77PH" }
+) } | ConvertTo-Json -Depth 4
 curl.exe -s -X POST -H "X-API-Key: $env:SHALOM_API_KEY" `
   -H "content-type: application/json" -d $body `
   "https://api.shalom-api-peru.com/v1/tracking/batch"
