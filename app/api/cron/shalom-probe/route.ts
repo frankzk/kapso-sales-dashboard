@@ -2,12 +2,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
-import { publicClient } from "@/lib/shalom/session";
+import { loadStoreShalom, publicClient, readWithFreshSession } from "@/lib/shalom/session";
 import { describeShalomError } from "@/lib/shalom/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// El modo `?buscar=` consulta la CUENTA, y eso puede pagar el login de ~90 s si
+// la sesión está fría. Con los 60 de antes se cortaba justo en ese caso.
+export const maxDuration = 300;
 
 // Sonda de rastreo: la MISMA guía por los DOS caminos, en una sola petición.
 //
@@ -54,16 +56,96 @@ async function attempt(run: () => Promise<unknown>): Promise<unknown> {
   }
 }
 
+/**
+ * ¿Existen estas guías en la cuenta de Shalom Pro?
+ *
+ * Cada guía se consulta con las credenciales de SU tienda: son cuentas
+ * distintas y preguntar con la equivocada daría un "no existe" que no significa
+ * nada. La guía tiene que estar en nuestra base — si no, no sabríamos de qué
+ * cuenta preguntar.
+ */
+async function buscarEnLaCuenta(
+  admin: ReturnType<typeof createAdminSupabase>,
+  guias: string[],
+): Promise<NextResponse> {
+  const { data } = await admin
+    .from("shipments")
+    .select("guide_code,store_id,shalom_codigo,delivery_status")
+    .eq("courier", "shalom")
+    .in("guide_code", guias);
+  const filas = (data ?? []) as {
+    guide_code: string;
+    store_id: string;
+    shalom_codigo: string | null;
+    delivery_status: string;
+  }[];
+
+  const resultado: Record<string, unknown> = {};
+  for (const guia of guias) {
+    const fila = filas.find((f) => f.guide_code === guia);
+    if (!fila) {
+      resultado[guia] = { enKapta: false, nota: "No está en nuestra base." };
+      continue;
+    }
+    const store = await loadStoreShalom(admin, fila.store_id);
+    if (!store?.shalom_pro_email) {
+      resultado[guia] = { enKapta: true, error: "La tienda no tiene cuenta de Shalom Pro." };
+      continue;
+    }
+    try {
+      const orden = await readWithFreshSession(admin, fila.store_id, store, (client) =>
+        client.findOrderByGuia(guia),
+      );
+      resultado[guia] = {
+        enKapta: true,
+        codigo: fila.shalom_codigo,
+        estadoEnKapta: fila.delivery_status,
+        // `existe: false` con la consulta hecha de verdad es un dato, no un
+        // hueco: la guía NO está en la cuenta.
+        existeEnShalom: Boolean(orden),
+        orden: orden
+          ? {
+              id: (orden as { id?: number }).id,
+              guia: (orden as { guia?: string }).guia,
+              codigo: (orden as { codigo?: string }).codigo,
+              status: (orden as { status?: number }).status,
+              delivered: (orden as { delivered?: boolean }).delivered,
+              created_at: (orden as { created_at?: string }).created_at,
+            }
+          : null,
+      };
+    } catch (err) {
+      resultado[guia] = { enKapta: true, error: describeShalomError(err) };
+    }
+  }
+  return NextResponse.json({ ok: true, buscadas: guias.length, resultado });
+}
+
 export async function GET(req: NextRequest) {
   if (!authorized(req)) return new NextResponse("unauthorized", { status: 401 });
   if (!env.shalomConfigured()) {
     return NextResponse.json({ ok: false, error: "SHALOM_API_KEY no configurada" }, { status: 400 });
   }
 
+  const admin = createAdminSupabase();
+
+  // Modo `?buscar=guia1,guia2`: ¿existen esas guías EN LA CUENTA de Shalom Pro?
+  //
+  // Es la pregunta que el rastreo deja abierta. Un `not_found` del rastreo puede
+  // ser "la borraron", "nunca llegó a emitirse" o "el rastreo todavía no la ve",
+  // y cada una pide una acción distinta: rehacer la guía, buscar el paquete, o
+  // esperar. Consultar el listado de la cuenta es lo mismo que haría una persona
+  // entrando a pro.shalom.pe, y contesta de una.
+  const buscar = (req.nextUrl.searchParams.get("buscar") ?? "")
+    .split(",")
+    .map((g) => g.trim())
+    .filter(Boolean)
+    .slice(0, 10);
+  if (buscar.length) return buscarEnLaCuenta(admin, buscar);
+
   // Sin `numero` se toma una guía real de la base: la gracia de la sonda es que
   // se pueda lanzar desde el navegador sin tener que buscar un número antes.
   // Se traen los tres identificadores porque los tres se van a probar.
-  const admin = createAdminSupabase();
   const pedido = req.nextUrl.searchParams.get("numero")?.trim() ?? "";
   const query = admin
     .from("shipments")

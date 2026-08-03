@@ -27,7 +27,12 @@ import type {
   ShipmentCallRow,
   ShipmentRow,
 } from "@/lib/types";
-import type { AgencySummary, MasterFilters, MasterSortKey } from "@/lib/order-master-filters";
+import {
+  AGENCY_AVAILABLE_STATES,
+  type AgencySummary,
+  type MasterFilters,
+  type MasterSortKey,
+} from "@/lib/order-master-filters";
 import {
   ORDER_MACRO_STAGES,
   classifyOperation,
@@ -723,18 +728,30 @@ export async function getAgencySummary(
   };
 
   // "En agencia" es tener sub-estado de recojo o ir por modo agencia, la misma
-  // regla que usaba `agencySummary` en cliente.
+  // regla que usa `agencySummary` en cliente.
+  //
+  // OJO AL VOCABULARIO. Esta función contaba `pickup_state = 'disponible'` y
+  // `= 'devuelto'`, y NINGUNO DE LOS DOS EXISTE en el catálogo de sub-estados
+  // (`lib/order-status.ts`). Los dos contadores daban 0 siempre — no fallaban,
+  // que es lo peor: el panel enseñaba "93 en agencia · 0 disponibles para
+  // recojo" con 49 paquetes esperando en destino, y eso se lee como "no hay
+  // nada que hacer".
+  //
+  // `agencySummary` en cliente ya tenía la regla buena y está testeada. Acá se
+  // replica con los mismos valores; si vuelven a separarse, el que manda es
+  // aquél.
   const inAgency = (q: any) => q.or("pickup_state.not.is.null,shipping_mode.eq.agency");
   const soon = new Date(now.getTime() + 2 * 86_400_000).toISOString();
 
   const [total, disponibles, proximosAVencer, retornoIniciado, devueltos] = await Promise.all([
     count(inAgency),
-    count((q) => q.eq("pickup_state", "disponible")),
+    count((q) => q.in("pickup_state", [...AGENCY_AVAILABLE_STATES])),
     count((q) =>
       inAgency(q).not("agency_expires_at", "is", null).lte("agency_expires_at", soon),
     ),
     count((q) => q.eq("pickup_state", "retorno_iniciado")),
-    count((q) => q.eq("pickup_state", "devuelto")),
+    // Devuelto es un estado GENERAL del pedido, no un sub-estado de recojo.
+    count((q) => inAgency(q).eq("general_status", "devuelto")),
   ]);
 
   return { total, disponibles, proximosAVencer, retornoIniciado, devueltos };
