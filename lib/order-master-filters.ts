@@ -252,19 +252,20 @@ export function facetValues(
   return [...seen].sort((a, b) => a.localeCompare(b, "es"));
 }
 
+/**
+ * El recorrido EN CURSO de los envíos por agencia, en orden físico.
+ *
+ * No lleva total ni estados terminales a propósito: el panel existe para ver lo
+ * que todavía pide algo. «Entregados» y «Devueltos» ya no piden nada y solo
+ * diluyen a los que sí; el total, con el desglose delante, no añade nada.
+ * Tampoco se calculan: eran tres conteos por carga a cambio de nada.
+ */
 export interface AgencySummary {
-  total: number;
+  pendienteDeEnvio: number;
+  enTransito: number;
   disponibles: number;
   proximosAVencer: number;
   retornoIniciado: number;
-  devueltos: number;
-  // El recorrido del paquete. Sin esto la tarjeta enseñaba dos números y tres
-  // ceros —"93 en agencia · 49 disponibles"— y no había forma de saber qué eran
-  // los 44 restantes: si estaban viajando, si nunca se despacharon, o si ya se
-  // entregaron. Cada uno de esos tres pide algo distinto.
-  pendienteDeEnvio: number;
-  enTransito: number;
-  entregados: number;
 }
 
 /**
@@ -288,39 +289,48 @@ export const AGENCY_AVAILABLE_STATES = [
  * recogerse a tiempo, y lo que hay que mirar cada día es qué está disponible y
  * qué está a punto de vencer.
  */
+/**
+ * ¿Hay algo en curso que enseñar? Sustituye al `total`, que se dejó de calcular.
+ *
+ * No es una suma: «próximos a vencer» se solapa con «disponibles» —un paquete
+ * puede estar en los dos—, así que sumarlos daría un número inflado. Acá solo
+ * interesa si la tira tiene contenido.
+ */
+export function agencyHasActivity(s: AgencySummary): boolean {
+  return (
+    s.pendienteDeEnvio > 0 ||
+    s.enTransito > 0 ||
+    s.disponibles > 0 ||
+    s.proximosAVencer > 0 ||
+    s.retornoIniciado > 0
+  );
+}
+
 export function agencySummary(
   rows: readonly OrderMasterRow[],
   now: string = new Date().toISOString(),
 ): AgencySummary {
   const nowMs = Date.parse(now);
-  let total = 0;
   let disponibles = 0;
   let proximosAVencer = 0;
   let retornoIniciado = 0;
-  let devueltos = 0;
   let pendienteDeEnvio = 0;
   let enTransito = 0;
-  let entregados = 0;
 
   for (const r of rows) {
     const inAgency = Boolean(r.pickup_state) || r.shipping_mode === "agency";
     if (!inAgency) continue;
-    total++;
-    if (r.general_status === "devuelto") {
-      devueltos++;
-      continue;
-    }
+    if (r.general_status === "devuelto") continue;
     if (r.pickup_state === "retorno_iniciado") retornoIniciado++;
     if (AGENCY_AVAILABLE_STATES.includes(r.pickup_state as (typeof AGENCY_AVAILABLE_STATES)[number])) {
       disponibles++;
     }
     if (r.pickup_state === "pendiente_de_envio") pendienteDeEnvio++;
     if (r.pickup_state === "en_transito") enTransito++;
-    if (r.pickup_state === "recogido" || r.general_status === "entregado") entregados++;
     if (r.agency_expires_at) {
       const left = Date.parse(r.agency_expires_at) - nowMs;
       if (Number.isFinite(left) && left <= EXPIRING_WINDOW_MS) proximosAVencer++;
     }
   }
-  return { total, disponibles, proximosAVencer, retornoIniciado, devueltos, pendienteDeEnvio, enTransito, entregados };
+  return { pendienteDeEnvio, enTransito, disponibles, proximosAVencer, retornoIniciado };
 }
