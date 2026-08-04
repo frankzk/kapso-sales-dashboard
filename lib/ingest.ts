@@ -711,6 +711,11 @@ export interface SyncReport {
   kapsoConversations: number;
   leads: number;
   enriched: LeadEnrichStats;
+  /** Conversaciones descartadas por venir sin teléfono (no generan lead). Es el
+   *  disparador de la migración de identidad de WhatsApp: mientras sea 0 no hay
+   *  nada que hacer, y se sabe con certeza en vez de suponerlo. Ver
+   *  SyncLeadsResult.sinTelefono. */
+  leadsSinTelefono: number;
   opsCaptured: boolean;
   whatsappNumbers: number;
   archived: number;
@@ -786,6 +791,7 @@ export async function runStoreSync(
     kapsoConversations: 0,
     leads: 0,
     enriched: { candidates: 0, fetched: 0, inbound: 0, cart: 0, district: 0, yape: 0, visionChecks: 0 },
+    leadsSinTelefono: 0,
     opsCaptured: false,
     whatsappNumbers: 0,
     archived: 0,
@@ -989,6 +995,14 @@ export async function runStoreSync(
       });
       report.leads = lr.touched;
       report.enriched = lr.enriched;
+      report.leadsSinTelefono = lr.sinTelefono;
+      // Visible en los errores del reporte para que no haya que leer un JSON:
+      // el día que Meta empiece a mandar conversaciones sin teléfono, se ve.
+      if (lr.sinTelefono > 0) {
+        report.errors.push(
+          `identidad: ${lr.sinTelefono} conversacion(es) sin telefono — no generaron lead`,
+        );
+      }
     } catch (e: any) {
       report.errors.push(`leads: ${e.message}`);
     }
