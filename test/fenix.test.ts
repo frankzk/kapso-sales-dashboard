@@ -141,7 +141,12 @@ describe("Fenix availability filters", () => {
 
   it("classifies legacy false rows by known Fenix coverage", () => {
     expect(currentFenixReason({ city: "Arequipa", fenix_eligible: false })).toBe("sin_stock");
-    expect(currentFenixReason({ city: "Piura", fenix_eligible: false })).toBe("sin_cobertura");
+    // Piura servía de ejemplo de «fuera de cobertura» hasta que entró al
+    // catálogo. El caso que se prueba es la ciudad que NO está en él, así que
+    // el ejemplo se muda; con Piura adentro, una fila vieja suya pasa a leerse
+    // «sin stock», que es lo correcto ahora.
+    expect(currentFenixReason({ city: "Tacna", fenix_eligible: false })).toBe("sin_cobertura");
+    expect(currentFenixReason({ city: "Piura", fenix_eligible: false })).toBe("sin_stock");
   });
 });
 

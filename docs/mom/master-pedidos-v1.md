@@ -634,7 +634,21 @@ Gestión de contacto: hasta tres llamadas diarias durante siete días. Los siete
 intentos se cuentan por día, no por llamada.
 
 Ciudades con stock/operación conocidas: Arequipa, Huancayo, Juliaca/Puno,
-Cusco, Trujillo.
+Cusco, Trujillo, Ica, Piura, Chimbote, Chiclayo.
+
+Estar en la lista habilita la ciudad para cargarle stock; **no** la vuelve
+elegible por sí sola. La elegibilidad exige cobertura **y** stock del producto
+en esa ciudad, así que una ciudad recién agregada queda en `sin_stock` —no en
+`sin_cobertura`— hasta que alguien cargue existencias. Nada se reencamina solo
+por aparecer acá.
+
+Ica, Piura, Chimbote y Chiclayo están registradas con el ubigeo INEI de su
+cercado únicamente. Swayp identifica el destino por ubigeo, y la creación de
+guía **exige** distrito exacto: mientras no se transcriba el listado INEI
+completo de esas cuatro provincias, una guía a un distrito distinto del cercado
+se rechaza con mensaje explícito en vez de salir con un código aproximado. Es
+una limitación conocida, no un error: un ubigeo equivocado desvía el paquete
+sin avisar.
 
 Una salida Swayp puede coexistir con la devolución Aliclik. En Reproprovincia
 Swayp se puede repetir, siempre con una salida, guía y QR nuevos, dentro del

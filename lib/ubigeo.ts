@@ -115,6 +115,32 @@ export const UBIGEO_BY_CITY: Record<string, Record<string, string>> = {
     "caracoto": "211104",
     "san miguel": "211105",
   },
+  // Las cuatro ciudades nuevas entran SOLO con su cercado, a diferencia de las
+  // seis de arriba que traen la provincia entera.
+  //
+  // El cercado es el único código que se puede afirmar sin la lista INEI
+  // delante: es la capital de provincia y siempre termina en 01 (Ica es la
+  // provincia 01 de Ica → 110101; Santa es la 18 de Áncash → 021801). Los
+  // distritos restantes de cada provincia no se transcriben de memoria a
+  // propósito: `resolveUbigeo` exige `exact` y un distrito ausente hace que
+  // `buildSwaypGuideInput` se niegue con un mensaje claro, mientras que un
+  // código equivocado crea la guía y desvía el paquete sin avisar. Faltar es
+  // recuperable; mentir no.
+  //
+  // Para completar cada provincia hace falta su listado INEI (no RENIEC, que
+  // numera distinto los mismos distritos).
+  ica: {
+    "ica": "110101",
+  },
+  piura: {
+    "piura": "200101",
+  },
+  chimbote: {
+    "chimbote": "021801",
+  },
+  chiclayo: {
+    "chiclayo": "140101",
+  },
   puno: {
     "puno": "210101",
     "acora": "210102",

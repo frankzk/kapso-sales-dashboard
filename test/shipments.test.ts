@@ -301,6 +301,35 @@ describe("normalizeCity", () => {
     expect(isFenixCity("Lima")).toBe(false);
     expect(isFenixCity(null)).toBe(false);
   });
+  it("reconoce las ciudades del norte y del sur chico", () => {
+    expect(normalizeCity("Ica")).toBe("ica");
+    expect(normalizeCity("PIURA")).toBe("piura");
+    expect(normalizeCity("Chimbote")).toBe("chimbote");
+    expect(normalizeCity("Chiclayo")).toBe("chiclayo");
+  });
+  it("«ica» no se come una palabra que solo la contiene", () => {
+    // Es la clave más corta del catálogo y viaja dentro de cadenas combinadas
+    // (distrito + ciudad + departamento). Si machara por subcadena, cualquier
+    // dirección con «república», «bourbonica» o «Vilcabamba» caería en Ica y el
+    // paquete se clasificaría con cobertura de otra ciudad.
+    expect(normalizeCity("Republica")).toBe("republica");
+    expect(normalizeCity("Vilcabamba")).toBe("vilcabamba");
+    expect(isFenixCity("Republica")).toBe(false);
+  });
+  it("las nuevas no le quitan la ciudad a las que ya funcionaban", () => {
+    // Van al final del catálogo a propósito: `normalizeCity` se queda con el
+    // PRIMER token que encuentra, así que insertarlas antes podría cambiar a
+    // qué clave resuelve una dirección que hoy ya resuelve bien.
+    expect(normalizeCity("Juliaca/Puno")).toBe("juliaca");
+    expect(deriveFenixCoverageCity("Cerro Colorado", "Arequipa")).toBe("arequipa");
+    expect(deriveFenixCoverageCity("Wanchaq", "Cusco")).toBe("cusco");
+  });
+  it("un distrito del departamento de Ica resuelve a la ciudad de cobertura", () => {
+    // Misma regla que ya aplicaba a Cusco o Arequipa: el combinado
+    // distrito + departamento decide la clave.
+    expect(deriveFenixCoverageCity("Chincha Alta", "Ica")).toBe("ica");
+    expect(deriveFenixCoverageCity("Chimbote", "Ancash")).toBe("chimbote");
+  });
   it("matches Fenix-served districts tolerantly (accents, (cercado), longer names)", () => {
     expect(isFenixDistrict("Cerro Colorado")).toBe(true);
     expect(isFenixDistrict("San Sebastián")).toBe(true); // accents

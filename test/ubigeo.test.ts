@@ -87,6 +87,26 @@ describe("coverage table", () => {
     }
   });
 
+  it("las ciudades nuevas resuelven su cercado y su bodega", () => {
+    expect(resolveUbigeo("Ica", "Ica")).toEqual({ code: "110101", district: "ica", exact: true });
+    expect(resolveUbigeo("Piura", "Piura")?.code).toBe("200101");
+    expect(resolveUbigeo("Chimbote", "Chimbote")?.code).toBe("021801");
+    expect(resolveUbigeo("Chiclayo", "Chiclayo")?.code).toBe("140101");
+    expect(warehouseUbigeo("Ica")).toBe("110101");
+    expect(warehouseUbigeo("Chiclayo")).toBe("140101");
+  });
+
+  it("un distrito todavía sin transcribir NO se adivina: cae en no-exacto", () => {
+    // Las cuatro nuevas entraron solo con su cercado. Mientras falte el resto
+    // de la provincia, un distrito desconocido tiene que devolver
+    // `exact: false` —lo que hace que la creación de guía se niegue— y no un
+    // código aproximado, que crearía la guía y desviaría el paquete.
+    const tinguina = resolveUbigeo("Ica", "La Tinguiña");
+    expect(tinguina?.exact).toBe(false);
+    expect(resolveUbigeo("Chiclayo", "José Leonardo Ortiz")?.exact).toBe(false);
+    expect(resolveUbigeo("Chimbote", "Nuevo Chimbote")?.exact).toBe(false);
+  });
+
   it("holds only well-formed 6-digit INEI codes, with no duplicates", () => {
     const seen = new Set<string>();
     for (const [city, districts] of Object.entries(UBIGEO_BY_CITY)) {
