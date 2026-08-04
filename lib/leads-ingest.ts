@@ -56,6 +56,16 @@ export interface LeadEnrichStats {
 export interface SyncLeadsResult {
   touched: number;
   enriched: LeadEnrichStats;
+  /** Conversaciones descartadas por no traer teléfono. Una conversación sin
+   *  teléfono NO genera lead (ver conversationToLeadSeed), así que sin este
+   *  contador esos clientes se pierden en silencio.
+   *
+   *  Es el DISPARADOR de la migración de identidad de WhatsApp: Meta está
+   *  moviendo la identidad del teléfono al BSUID, y un cliente que adopte un
+   *  username puede empezar a llegar sin número. Mientras esto sea 0, no hay nada
+   *  que hacer — y se sabe con certeza en vez de suponerlo. Si empieza a subir,
+   *  toca emparejar por (store_id, bsuid) en vez de por teléfono. */
+  sinTelefono: number;
 }
 const ZERO_ENRICH: LeadEnrichStats = {
   candidates: 0,
@@ -214,6 +224,11 @@ async function upsertLeadFromSeed(
   };
   if (seed.name) row.name = seed.name;
   if (seed.wa_id) row.wa_id = seed.wa_id;
+  // Identidad nueva de WhatsApp (ver 0103). Solo se guarda: nada empareja ni
+  // deduplica por acá todavía. Se escribe siempre que venga, para que el día que
+  // haga falta el dato sea nuestro y no haya que reconstruirlo desde Kapso.
+  if (seed.bsuid) row.bsuid = seed.bsuid;
+  if (seed.username) row.username = seed.username;
   if (seed.phone_number_id) row.wa_phone_number_id = seed.phone_number_id;
   if (seed.last_interaction_at) row.last_interaction_at = seed.last_interaction_at;
   if (seed.last_inbound_at) row.last_inbound_at = seed.last_inbound_at;
@@ -227,14 +242,16 @@ async function upsertLeadFromSeed(
     row.has_order = true;
     row.order_id = ctx.orderId ?? null;
   }
-  // Upsert resiliently: wa_phone_number_id (migration 0012) may not be applied
-  // yet. NEVER let that optional attribution column break lead creation — if the
-  // column is absent the upsert errors, so we retry once without it. (This is the
-  // bug that silently stopped ALL new leads: the column was written blindly and
-  // the error swallowed whenever 0012 hadn't been applied.)
+  // Upsert resiliently: estas columnas son OPCIONALES y pueden no existir todavía
+  // si el código sale antes que su migración — wa_phone_number_id (0012), bsuid y
+  // username (0103). NINGUNA puede romper la creación de leads: si falta, el
+  // upsert entero falla, así que se reintenta una vez sin ellas. (Es el bug que
+  // silenciosamente detuvo TODOS los leads nuevos: la columna se escribió a ciegas
+  // y el error se tragó mientras 0012 no estaba aplicada.)
+  const OPTIONAL_COLUMNS = ["wa_phone_number_id", "bsuid", "username"] as const;
   const { error } = await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
-  if (error && "wa_phone_number_id" in row) {
-    delete row.wa_phone_number_id;
+  if (error && OPTIONAL_COLUMNS.some((c) => c in row)) {
+    for (const c of OPTIONAL_COLUMNS) delete row[c];
     await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
   }
 }
@@ -255,7 +272,7 @@ export async function syncStoreLeads(
     anthropic_model?: string | null;
   },
 ): Promise<SyncLeadsResult> {
-  if (!creds.kapso_api_key) return { touched: 0, enriched: { ...ZERO_ENRICH } };
+  if (!creds.kapso_api_key) return { touched: 0, enriched: { ...ZERO_ENRICH }, sinTelefono: 0 };
   const k: KapsoClientOpts = { apiKey: creds.kapso_api_key };
   const vision = {
     anthropicApiKey: creds.anthropic_api_key ?? null,
@@ -276,14 +293,20 @@ export async function syncStoreLeads(
     );
   } catch (e: any) {
     await setCursor(admin, storeId, cursor, "error", e?.message);
-    return { touched: 0, enriched: { ...ZERO_ENRICH } };
+    return { touched: 0, enriched: { ...ZERO_ENRICH }, sinTelefono: 0 };
   }
 
   // Dedup by phone, keeping the most recent conversation.
   const seeds = new Map<string, ReturnType<typeof conversationToLeadSeed>>();
+  // Una conversación sin teléfono no genera lead. Se cuenta en vez de perderla en
+  // silencio: es el disparador de la migración de identidad (ver SyncLeadsResult).
+  let sinTelefono = 0;
   for (const c of convs) {
     const s = conversationToLeadSeed(c);
-    if (!s) continue;
+    if (!s) {
+      sinTelefono += 1;
+      continue;
+    }
     const prev = seeds.get(s.phone);
     if (!prev || (s.last_interaction_at ?? "") > (prev.last_interaction_at ?? "")) {
       seeds.set(s.phone, s);
@@ -305,7 +328,7 @@ export async function syncStoreLeads(
       /* best-effort — backfill won-lead sources even on a quiet run */
     }
     await setCursor(admin, storeId, cursor, "ok");
-    return { touched: 0, enriched };
+    return { touched: 0, enriched, sinTelefono };
   }
 
   // Orders by phone (non-cancelled, keep the most recent) → won linkage.
@@ -398,7 +421,7 @@ export async function syncStoreLeads(
   }
 
   await setCursor(admin, storeId, maxTs, "ok");
-  return { touched: phones.length, enriched };
+  return { touched: phones.length, enriched, sinTelefono };
 }
 
 /**

@@ -1291,6 +1291,10 @@ export async function fetchAllConversationsRich(
 export interface LeadSeed {
   phone: string;
   wa_id: string | null;
+  /** BSUID: identidad de WhatsApp scopeada al portfolio. Ver 0103. Solo se
+   *  guarda; nada empareja por él todavía. */
+  bsuid: string | null;
+  username: string | null;
   name: string | null;
   kapso_conversation_id: string;
   phone_number_id: string | null; // destination WhatsApp business number
@@ -1299,13 +1303,37 @@ export interface LeadSeed {
   last_inbound_at?: string | null;
 }
 
-/** Extract the lead identity from a Kapso conversation (null if no phone). */
+/** Un BSUID es `PE.xxxx…`, con el segmento ENT en la variante "parent". Se valida
+ *  la forma antes de guardarlo para que un teléfono mal ruteado no termine en la
+ *  columna de identidad (ni al revés). */
+const BSUID_RE = /^[A-Za-z]{2}\.(?:ENT\.)?[A-Za-z0-9]{1,128}$/;
+const asBsuid = (v: unknown): string | null => {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s && BSUID_RE.test(s) ? s : null;
+};
+
+/**
+ * Extract the lead identity from a Kapso conversation (null if no phone).
+ *
+ * Devolver null descarta la conversación ENTERA: el lead no se crea. Hoy eso solo
+ * pasa con datos raros, pero es también el escenario del futuro — un cliente que
+ * adopta un username puede llegar sin teléfono. Por eso `syncStoreLeads` cuenta
+ * los descartes en `sinTelefono` en vez de perderlos en silencio.
+ */
 export function conversationToLeadSeed(c: KapsoConversation): LeadSeed | null {
   const phone = normalizePhone((c.phone_number as string) ?? null);
   if (!phone) return null;
   return {
     phone,
+    // OJO: `wa_id` cae al BSUID por compatibilidad histórica, pero son cosas
+    // distintas — uno es telefónico y el otro no. La identidad nueva va en su
+    // propia columna (`bsuid`), que es la que hay que leer.
     wa_id: (c.wa_id as string) ?? (c.business_scoped_user_id as string) ?? null,
+    bsuid: asBsuid(c.business_scoped_user_id) ?? asBsuid(c.kapso?.business_scoped_user_id),
+    username:
+      (typeof c.username === "string" && c.username.trim()) ||
+      (typeof c.kapso?.username === "string" && c.kapso.username.trim()) ||
+      null,
     name: (c.contact_name as string) ?? c.kapso?.contact_name ?? null,
     kapso_conversation_id: String(c.id),
     phone_number_id: (c.phone_number_id as string) ?? null,
