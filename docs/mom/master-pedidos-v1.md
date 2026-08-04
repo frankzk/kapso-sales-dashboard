@@ -245,6 +245,10 @@ Registro:
   confirmación exige el pago validado, no la promesa. No enciende
   `pago_requerido_pendiente`; ese motivo se deriva del estado del pago y no de
   lo que se marque en la mesa.
+- La línea de tiempo del pedido muestra el resultado y el canal de cada intento,
+  no solo que hubo uno. Un intento registrado que no se puede leer después no
+  sirve de historial: quien retoma la gestión necesita saber qué pasó, y la nota
+  es opcional.
 - Los comentarios y el cambio manual de estado **no** son registro de gestión.
   El cambio manual es un override que congela el pedido frente al recálculo:
   usarlo como bitácora de llamadas lo desconecta del MOM.

@@ -88,8 +88,10 @@ import {
   CONFIRMATION_CHANNELS,
   CONFIRMATION_MAX_DAYS,
   CONFIRMATION_RESULTS,
+  confirmationChannelLabel,
   confirmationDays,
   confirmationResult,
+  confirmationResultLabel,
   limaDayKey,
 } from "@/lib/order-confirmation";
 import {
@@ -2806,6 +2808,14 @@ function OrderDrawer({
                         />
                         <p className="text-sm font-medium text-slate-800">
                           {TIMELINE_LABEL[t.kind] ?? t.kind}
+                          {/* El resultado va pegado al título, no en la línea de
+                              la nota: la nota es opcional y sin esto dos
+                              resultados distintos se leían idénticos. */}
+                          {t.confirmation?.result && (
+                            <span className="ml-1 font-normal text-slate-500">
+                              · {confirmationResultLabel(t.confirmation.result)}
+                            </span>
+                          )}
                           {t.newStatus && (
                             <span className="ml-1 font-normal text-slate-500">
                               → {generalLabel(t.newStatus)}
@@ -2818,6 +2828,9 @@ function OrderDrawer({
                         <p className="mt-0.5 text-xs text-slate-400">
                           {fmtDateTime(t.occurredAt)}
                           {t.actorName ? ` · ${t.actorName}` : ""}
+                          {t.confirmation?.channel
+                            ? ` · ${confirmationChannelLabel(t.confirmation.channel)}`
+                            : ""}
                           {t.courier ? ` · ${t.courier}` : ""}
                           {t.guideCode ? ` · ${t.guideCode}` : ""}
                           {` · ${t.origin === "gestion" ? "Repro Provincia" : t.source}`}

@@ -127,6 +127,40 @@ export function confirmationChannelLabel(code: string | null | undefined): strin
 }
 
 /**
+ * El nombre del resultado. Cae al código crudo si algún día se retira uno del
+ * catálogo: los hechos ya escritos no se reescriben (§2.6), así que la línea de
+ * tiempo tiene que poder pintar un resultado que ya no se ofrece.
+ */
+export function confirmationResultLabel(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return confirmationResult(code)?.label ?? code;
+}
+
+/** Canal y resultado tal como se guardaron en el intento. */
+export interface ConfirmationAttemptDetail {
+  channel: string | null;
+  result: string | null;
+}
+
+/**
+ * Lee del payload de un evento el canal y el resultado del intento.
+ *
+ * Se guardaban desde el principio y nunca se leyeron: la línea de tiempo
+ * mostraba «Intento de confirmación» y la nota, de modo que dos resultados
+ * distintos se veían idénticos salvo que alguien escribiera la nota a mano.
+ */
+export function confirmationAttemptDetail(
+  payload: Record<string, unknown> | null | undefined,
+): ConfirmationAttemptDetail | null {
+  if (!payload) return null;
+  const text = (value: unknown) => (typeof value === "string" && value ? value : null);
+  const channel = text(payload.channel);
+  const result = text(payload.result);
+  if (!channel && !result) return null;
+  return { channel, result };
+}
+
+/**
  * El día calendario de Lima al que pertenece un instante.
  *
  * Contar en UTC partiría mal los días: una llamada de las 20:00 de Lima es el

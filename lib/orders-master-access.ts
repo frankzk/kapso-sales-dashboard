@@ -23,6 +23,10 @@ import {
   type OutcomeCounts,
   type PriorOrderSnapshot,
 } from "@/lib/order-confirmation-brief";
+import {
+  confirmationAttemptDetail,
+  type ConfirmationAttemptDetail,
+} from "@/lib/order-confirmation";
 import { evaluateDirectFenixStock, type FenixStockRow } from "@/lib/fenix";
 import { deriveFenixCoverageCity } from "@/lib/shipments";
 import {
@@ -241,6 +245,8 @@ export interface TimelineEntry {
   actorName: string | null;
   /** De dónde salió la entrada: el propio Master o una gestión de Repro Provincia. */
   origin: "master" | "gestion";
+  /** Canal y resultado, cuando la entrada es un intento de confirmación. */
+  confirmation: ConfirmationAttemptDetail | null;
 }
 
 export interface OrderMasterDetail {
@@ -396,6 +402,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     reason: e.reason,
     actorName: e.actor ? (names.get(e.actor) ?? null) : null,
     origin: "master",
+    confirmation: confirmationAttemptDetail(e.payload),
   }));
 
   const fromCalls: TimelineEntry[] = calls.map((c) => {
@@ -413,6 +420,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
       reason: null,
       actorName: c.agent ? (names.get(c.agent) ?? null) : null,
       origin: "gestion",
+      confirmation: null,
     };
   });
 

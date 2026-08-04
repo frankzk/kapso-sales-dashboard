@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   CONFIRMATION_MAX_DAYS,
   CONFIRMATION_RESULTS,
+  confirmationAttemptDetail,
   confirmationDayCount,
   confirmationDays,
   confirmationResult,
+  confirmationResultLabel,
   isConfirmationChannel,
   limaDayKey,
   reachedLastAttempt,
@@ -147,5 +149,45 @@ describe("catálogo de la gestión", () => {
     expect(confirmationResult("lo_que_sea")).toBeNull();
     expect(isConfirmationChannel("paloma_mensajera")).toBe(false);
     expect(isConfirmationChannel("whatsapp")).toBe(true);
+  });
+});
+
+describe("lo que la línea de tiempo muestra del intento", () => {
+  it("saca canal y resultado del payload", () => {
+    expect(
+      confirmationAttemptDetail({ channel: "mensaje", result: "se_deja_mensaje" }),
+    ).toEqual({ channel: "mensaje", result: "se_deja_mensaje" });
+  });
+
+  it("un evento que no es un intento no aporta nada", () => {
+    // El payload de otros eventos lleva sus propias claves. Devolver un objeto
+    // vacío pintaría un «·» suelto en cada entrada de la línea de tiempo.
+    expect(confirmationAttemptDetail(undefined)).toBeNull();
+    expect(confirmationAttemptDetail(null)).toBeNull();
+    expect(confirmationAttemptDetail({})).toBeNull();
+    expect(confirmationAttemptDetail({ next_contact_on: "2026-08-10" })).toBeNull();
+  });
+
+  it("un payload a medias sigue sirviendo para lo que sí trae", () => {
+    expect(confirmationAttemptDetail({ result: "confirmado" })).toEqual({
+      channel: null,
+      result: "confirmado",
+    });
+    expect(confirmationAttemptDetail({ channel: "llamada" })).toEqual({
+      channel: "llamada",
+      result: null,
+    });
+  });
+
+  it("ignora lo que no sea texto", () => {
+    expect(confirmationAttemptDetail({ channel: 7, result: null })).toBeNull();
+  });
+
+  it("nombra el resultado, y si el código ya no está en el catálogo lo muestra igual", () => {
+    // Los hechos no se reescriben (§2.6): un intento guardado con un resultado
+    // que después se retire tiene que seguir siendo legible en el historial.
+    expect(confirmationResultLabel("pendiente_de_abono")).toBe("Pendiente de abono");
+    expect(confirmationResultLabel("resultado_retirado")).toBe("resultado_retirado");
+    expect(confirmationResultLabel(null)).toBeNull();
   });
 });
