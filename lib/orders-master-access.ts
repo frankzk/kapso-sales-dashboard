@@ -12,6 +12,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { resolveAliclikHealth, type AliclikHealth } from "@/lib/aliclik-health";
 import { codCouriersFor, isNonMetroLimaLocation } from "@/lib/order-coverage";
 import { limaTodayKey } from "@/lib/shipments";
 import type { CostTariff } from "@/lib/costs";
@@ -256,6 +257,8 @@ export interface OrderMasterDetail {
   lineItems: OrderLineItem[];
   address: ReturnType<typeof shopifyShippingAddress>;
   routePlan: OrderRoutePlan;
+  /** Foco de salud de la API de Aliclik, para el panel de crear guía. */
+  aliclikHealth: AliclikHealth;
 }
 
 const GUIDE_COLUMNS =
@@ -309,6 +312,34 @@ async function swaypRouteCheck(
     stockOk: check.ok,
     uncovered: check.uncovered,
   };
+}
+
+/** La última sonda de salud de Aliclik para la org del pedido, resuelta a foco.
+ * Gris si la org no se puede ubicar o no hay sonda fresca (de noche, sin monitoreo). */
+async function aliclikHealthFor(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  row: OrderMasterRow,
+): Promise<AliclikHealth> {
+  const { data: store } = await sb
+    .from("stores")
+    .select("org_id")
+    .eq("id", row.store_id)
+    .maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  if (!orgId) return "sin_monitoreo";
+
+  const { data } = await sb
+    .from("aliclik_health_checks")
+    .select("status,checked_at")
+    .eq("org_id", orgId)
+    .order("checked_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const latest = data as { status: string; checked_at: string } | null;
+  return resolveAliclikHealth(
+    latest ? { status: latest.status, checkedAt: latest.checked_at } : null,
+    Date.now(),
+  );
 }
 
 function operationOf(row: OrderMasterRow, guides: ShipmentRow[]): OperationKind {
@@ -430,12 +461,16 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
 
   const orderRow = orderRes.data as { line_items?: OrderLineItem[]; raw?: unknown } | null;
   const lineItems = orderRow?.line_items ?? [];
-  const swayp = await swaypRouteCheck(sb, row, lineItems);
+  const [swayp, aliclikHealth] = await Promise.all([
+    swaypRouteCheck(sb, row, lineItems),
+    aliclikHealthFor(sb, row),
+  ]);
   return {
     row,
     guides,
     timeline,
     lineItems,
+    aliclikHealth,
     address: shopifyShippingAddress(orderRow?.raw),
     routePlan: buildOrderRoutePlan({
       operation: operationOf(row, guides),
@@ -657,14 +692,11 @@ async function loadFacets(storeIds: string[]) {
 
 async function loadAgencySummary(storeIds: string[]): Promise<AgencySummary> {
   const empty: AgencySummary = {
-    total: 0,
+    pendienteDeEnvio: 0,
+    enTransito: 0,
     disponibles: 0,
     proximosAVencer: 0,
     retornoIniciado: 0,
-    devueltos: 0,
-    pendienteDeEnvio: 0,
-    enTransito: 0,
-    entregados: 0,
   };
   if (!storeIds.length) return empty;
   const admin = createAdminSupabase();
@@ -692,27 +724,15 @@ async function loadAgencySummary(storeIds: string[]): Promise<AgencySummary> {
   // nadie—, y arreglar la que no se ejecutaba no cambió nada en pantalla.
   const inAgency = (q: any) => q.or("pickup_state.not.is.null,shipping_mode.eq.agency");
   const soon = new Date(now.getTime() + 2 * 86_400_000).toISOString();
-  const [
-    total,
-    disponibles,
-    proximosAVencer,
-    retornoIniciado,
-    devueltos,
-    pendienteDeEnvio,
-    enTransito,
-    entregados,
-  ] = await Promise.all([
-    count(inAgency),
+  const [disponibles, proximosAVencer, retornoIniciado, pendienteDeEnvio, enTransito] =
+    await Promise.all([
     count((q) => q.in("pickup_state", [...AGENCY_AVAILABLE_STATES])),
     count((q) => inAgency(q).not("agency_expires_at", "is", null).lte("agency_expires_at", soon)),
     count((q) => q.eq("pickup_state", "retorno_iniciado")),
-    // Devuelto es un estado GENERAL del pedido, no un sub-estado de recojo.
-    count((q) => inAgency(q).eq("general_status", "devuelto")),
     count((q) => q.eq("pickup_state", "pendiente_de_envio")),
     count((q) => q.eq("pickup_state", "en_transito")),
-    count((q) => q.eq("pickup_state", "recogido")),
   ]);
-  return { total, disponibles, proximosAVencer, retornoIniciado, devueltos, pendienteDeEnvio, enTransito, entregados };
+  return { pendienteDeEnvio, enTransito, disponibles, proximosAVencer, retornoIniciado };
 }
 
 export const getMasterFacetsCached = (storeIds: string[]) =>

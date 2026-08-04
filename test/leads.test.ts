@@ -15,6 +15,7 @@ import {
   leadHook,
   isBareOpener,
   leadSegment,
+  hasProductLink,
   isLeadSegment,
   countLeadSegments,
   LEAD_GESTIONES,
@@ -178,6 +179,45 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
   it("frio when barely interacted / no signals", () => {
     expect(leadSegment({ status: "nuevo", inbound_count: 1 })).toBe("frio");
     expect(leadSegment({ status: "nuevo" })).toBe("frio");
+  });
+
+  // Quien llega desde la ficha de un producto manda UN mensaje, pero ese mensaje
+  // trae el link: ya dijo qué quiere. Contarlo como "solo saludó" lo hundía al
+  // fondo de la cola junto a quien escribió "hola" y nada más.
+  it("converso con un solo mensaje si trae el link de un producto", () => {
+    expect(
+      leadSegment({
+        status: "nuevo",
+        inbound_count: 1,
+        first_inbound_text:
+          "https://kenku.pe/products/purely-nutrient-ethiopian-black-seed-oil Tengo una consulta",
+      }),
+    ).toBe("converso");
+  });
+
+  it("un saludo suelto sigue siendo frío aunque haya texto", () => {
+    expect(
+      leadSegment({ status: "nuevo", inbound_count: 1, first_inbound_text: "Hola, buenas noches" }),
+    ).toBe("frio");
+    // Un link a la tienda que NO es una ficha de producto no dice qué quiere.
+    expect(
+      leadSegment({ status: "nuevo", inbound_count: 1, first_inbound_text: "https://kenku.pe" }),
+    ).toBe("frio");
+  });
+
+  it("el carrito y el distrito siguen mandando sobre el link", () => {
+    const conLink = { first_inbound_text: "https://kenku.pe/products/x Tengo una consulta" };
+    expect(leadSegment({ status: "nuevo", cart_item_count: 1, ...conLink })).toBe("carrito");
+    expect(leadSegment({ status: "nuevo", district: "Wanchaq", ...conLink })).toBe("distrito");
+  });
+
+  it("hasProductLink tolera mayúsculas y texto alrededor", () => {
+    expect(hasProductLink("HTTPS://KENKU.PE/PRODUCTS/ALGO")).toBe(true);
+    expect(hasProductLink("mirá esto https://aurela.pe/products/abc?variant=1 gracias")).toBe(true);
+    expect(hasProductLink("https://kenku.pe/products/")).toBe(false); // sin handle no dice cuál
+    expect(hasProductLink("")).toBe(false);
+    expect(hasProductLink(null)).toBe(false);
+    expect(hasProductLink("kenku.pe/products/abc")).toBe(false); // sin esquema no es un link pegado
   });
   it("countLeadSegments tallies and isLeadSegment validates", () => {
     const counts = countLeadSegments([

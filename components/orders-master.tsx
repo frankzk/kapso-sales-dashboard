@@ -54,6 +54,7 @@ import {
 import { limaTodayKey } from "@/lib/shipments";
 import { COURIER_TBD } from "@/lib/shipment-output";
 import {
+  agencyHasActivity,
   emptyFilters,
   hasActiveFilters,
   type AgencySummary,
@@ -598,7 +599,7 @@ export function OrdersMasterBoard({
         </Card>
       ) : (
         <>
-          {agency.total > 0 && (
+          {agencyHasActivity(agency) && (
             <AgencyStrip
               summary={agency}
               filters={filters}
@@ -969,7 +970,14 @@ function AgencyStrip({
         </p>
         <p className="text-xs text-slate-400">Shalom · Olva — seguimiento del recojo</p>
       </div>
-      <AgencyStat label="En agencia" value={summary.total} />
+      {/* EL RECORRIDO EN CURSO, EN ORDEN FÍSICO, EN UNA SOLA LÍNEA.
+          Este panel existe para ver lo que está EN CURSO, así que no lleva
+          total ni estados terminales: «Entregados» y «Devueltos» son pedidos
+          que ya no piden nada y solo diluyen los que sí. El orden es el del
+          paquete —sale, viaja, llega, se acerca a vencer, se devuelve— para que
+          se lea como un embudo y no como cinco cifras sueltas. */}
+      <AgencyStat label="Pendiente de envío" value={summary.pendienteDeEnvio} />
+      <AgencyStat label="En tránsito" value={summary.enTransito} />
       <AgencyStat
         label="Disponibles para recojo"
         value={summary.disponibles}
@@ -1002,22 +1010,6 @@ function AgencyStrip({
           })
         }
       />
-      <AgencyStat label="Devueltos" value={summary.devueltos} tone={summary.devueltos > 0 ? "danger" : undefined} />
-
-      {/* El recorrido del paquete, separado de lo accionable.
-          Antes la tarjeta era "93 en agencia · 49 disponibles" y tres ceros: no
-          se podía saber qué eran los otros 44 —si viajaban, si nunca se
-          despacharon o si ya se entregaron—, y cada uno pide algo distinto.
-          «Pendiente de envío» es el que más engaña: son guías emitidas cuyo
-          paquete todavía no se dejó en agencia. */}
-      <div className="flex w-full flex-wrap items-center gap-4 border-t border-slate-100 pt-3">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-          Recorrido
-        </p>
-        <AgencyStat label="Pendiente de envío" value={summary.pendienteDeEnvio} />
-        <AgencyStat label="En tránsito" value={summary.enTransito} />
-        <AgencyStat label="Entregados" value={summary.entregados} />
-      </div>
     </Card>
   );
 }
@@ -2884,6 +2876,7 @@ function OrderDrawer({
                 <AliclikGuidePanel
                   orderId={orderId}
                   hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
+                  health={detail.aliclikHealth}
                   onCreated={() => {
                     void reload();
                     onSaved();

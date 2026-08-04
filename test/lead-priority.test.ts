@@ -1,15 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
+  cartWeightForAge,
   leadPriorityScore,
-  segmentWeightsFor,
+  scoringProfileFor,
   sortLeadsByPriority,
 } from "@/lib/lead-priority";
 
 const NOW = Date.parse("2026-08-02T12:00:00.000Z");
 const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();
 
-const AURELA = segmentWeightsFor("Aurela");
-const KENKU = segmentWeightsFor("Kenku Peru");
+const AURELA = scoringProfileFor("Aurela");
+const KENKU = scoringProfileFor("Kenku Peru");
 
 // Señales mínimas por segmento (misma definición que leadSegment).
 const carrito = (over = {}) => ({ id: "c", cart_item_count: 1, last_interaction_at: daysAgo(0), ...over });
@@ -17,23 +18,23 @@ const distrito = (over = {}) => ({ id: "d", district: "Miraflores", last_interac
 const converso = (over = {}) => ({ id: "v", inbound_count: 3, last_interaction_at: daysAgo(0), ...over });
 const frio = (over = {}) => ({ id: "f", last_interaction_at: daysAgo(0), ...over });
 
-describe("segmentWeightsFor", () => {
+describe("scoringProfileFor", () => {
   it("usa los pesos medidos de cada tienda", () => {
-    expect(AURELA.carrito).toBe(20);
-    expect(AURELA.distrito).toBe(4); // en Aurela llamar al distrito rinde poco (3,7%)
-    expect(KENKU.carrito).toBe(14);
-    expect(KENKU.distrito).toBe(9); // en Kenku sí rinde (9,2%)
+    expect(AURELA.segment.carrito).toBe(20);
+    expect(AURELA.segment.distrito).toBe(4); // en Aurela llamar al distrito rinde poco (3,7%)
+    expect(KENKU.segment.carrito).toBe(14);
+    expect(KENKU.segment.distrito).toBe(9); // en Kenku sí rinde (9,2%)
   });
 
   it("cae a un promedio que conserva el orden en una tienda sin medir", () => {
-    const w = segmentWeightsFor("Tienda Nueva");
+    const w = scoringProfileFor("Tienda Nueva").segment;
     expect(w.carrito).toBeGreaterThan(w.distrito);
     expect(w.distrito).toBeGreaterThan(w.converso);
     expect(w.converso).toBeGreaterThan(w.frio);
   });
 
   it("no depende de mayúsculas ni espacios", () => {
-    expect(segmentWeightsFor("  KENKU PERU ")).toEqual(KENKU);
+    expect(scoringProfileFor("  KENKU PERU ")).toEqual(KENKU);
   });
 });
 
@@ -53,7 +54,8 @@ describe("leadPriorityScore", () => {
 
   it("el bono de ticket está topado: un carrito enorme no aplasta la señal", () => {
     const grande = leadPriorityScore(carrito({ cart_value: 100_000 }), KENKU, NOW);
-    expect(grande).toBeLessThanOrEqual(KENKU.carrito + 10);
+    // El carrito recién llegado usa el tramo <1h (24), no el promedio de la tienda.
+    expect(grande).toBeLessThanOrEqual(24 + 10);
   });
 
   // El desgaste por antigüedad es criterio; los pesos son dato medido. Por eso el
@@ -61,7 +63,8 @@ describe("leadPriorityScore", () => {
   it("la antigüedad nunca hunde un lead por debajo del piso de frescura", () => {
     const antiquisimo = leadPriorityScore(carrito({ last_interaction_at: daysAgo(3650) }), KENKU, NOW);
     expect(antiquisimo).toBeGreaterThan(0);
-    expect(antiquisimo).toBeCloseTo(KENKU.carrito * 0.4, 5);
+    // Tramo +1d de Kenku (9) por el piso de frescura (0,4).
+    expect(antiquisimo).toBeCloseTo(9 * 0.4, 5);
   });
 
   it("castiga la antigüedad", () => {
@@ -80,7 +83,7 @@ describe("leadPriorityScore", () => {
 
   it("sin fecha alguna no revienta ni castiga", () => {
     const sinFecha = leadPriorityScore({ cart_item_count: 1 }, KENKU, NOW);
-    expect(sinFecha).toBe(KENKU.carrito);
+    expect(sinFecha).toBe(KENKU.segment.carrito);
   });
 
   it("una fecha inválida no rompe el puntaje", () => {
@@ -95,13 +98,94 @@ describe("leadPriorityScore", () => {
   });
 });
 
+// Un carrito es un momento perecedero: medido, cae de 44,3% a 13,8% (Aurela) y de
+// 24,1% a 17,0% (Kenku) apenas pasa la primera hora. Con el desgaste diario del
+// resto del puntaje eso era invisible.
+describe("carrito: el peso decae por HORAS", () => {
+  const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
+  const carritoDe = (h: number) => ({
+    id: "c",
+    cart_item_count: 1,
+    first_seen_at: hoursAgo(h),
+    last_interaction_at: hoursAgo(h),
+  });
+
+  it("el carrito recién llegado puntúa mucho más que el de unas horas", () => {
+    const recien = leadPriorityScore(carritoDe(0.2), KENKU, NOW);
+    const pocasHoras = leadPriorityScore(carritoDe(4), KENKU, NOW);
+    expect(recien).toBeGreaterThan(pocasHoras);
+    expect(recien).toBeCloseTo(24, 0); // tramo <1h de Kenku
+  });
+
+  it("baja escalón por escalón según los tramos medidos", () => {
+    const puntajes = [0.5, 3, 12, 48].map((h) => leadPriorityScore(carritoDe(h), KENKU, NOW));
+    // 24 → 17 → 11 → 9, cada uno estrictamente menor que el anterior
+    expect(puntajes[0]!).toBeGreaterThan(puntajes[1]!);
+    expect(puntajes[1]!).toBeGreaterThan(puntajes[2]!);
+    expect(puntajes[2]!).toBeGreaterThan(puntajes[3]!);
+  });
+
+  it("en Aurela la caída de la primera hora es mucho más brusca", () => {
+    const aurelaCae = 44 - 14; // 44,3% → 13,8%
+    const kenkuCae = 24 - 17; // 24,1% → 17,0%
+    const dRecienAurela = leadPriorityScore(carritoDe(0.2), AURELA, NOW);
+    const dLuegoAurela = leadPriorityScore(carritoDe(3), AURELA, NOW);
+    expect(dRecienAurela - dLuegoAurela).toBeGreaterThan(kenkuCae);
+    expect(dRecienAurela - dLuegoAurela).toBeCloseTo(aurelaCae, 0);
+  });
+
+  // El resto de los segmentos no se toca: ahí la medición mostró que llamar
+  // rápido NO cambia nada dentro del primer día.
+  it("distrito, conversó y frío no decaen por horas", () => {
+    const fresco = leadPriorityScore({ district: "Ate", first_seen_at: hoursAgo(0.2) }, KENKU, NOW);
+    const deHoras = leadPriorityScore({ district: "Ate", first_seen_at: hoursAgo(12) }, KENKU, NOW);
+    // Solo el desgaste diario general (~0,1 en 12 h), nada parecido al escalón
+    // del carrito, que en el mismo lapso pierde 13 puntos.
+    expect(Math.abs(fresco - deHoras)).toBeLessThan(0.2);
+  });
+
+  // CONSECUENCIA BUSCADA, no un efecto colateral: en Kenku un carrito de más de
+  // un día cierra 9,2% y un distrito 9,2%. Al usar las tasas medidas como peso,
+  // quedan empatados — y un distrito fresco puede pasar a un carrito de días.
+  // Con el peso plano anterior, el carrito ganaba siempre aunque estuviera muerto.
+  it("un carrito viejo queda cerca de un distrito, que es lo que mide", () => {
+    const carritoViejo = leadPriorityScore(carritoDe(72), KENKU, NOW);
+    const distritoFresco = leadPriorityScore({ district: "Ate", first_seen_at: hoursAgo(1) }, KENKU, NOW);
+    expect(Math.abs(carritoViejo - distritoFresco)).toBeLessThan(2);
+  });
+
+  it("pero un carrito FRESCO sigue muy por encima de cualquier distrito", () => {
+    const carritoFresco = leadPriorityScore(carritoDe(0.2), KENKU, NOW);
+    const distritoFresco = leadPriorityScore({ district: "Ate", first_seen_at: hoursAgo(0.2) }, KENKU, NOW);
+    expect(carritoFresco).toBeGreaterThan(distritoFresco * 2);
+  });
+
+  it("una tienda sin tramos medidos usa su peso promedio, no una curva inventada", () => {
+    const nueva = scoringProfileFor("Tienda Nueva");
+    const recien = leadPriorityScore(carritoDe(0.2), nueva, NOW);
+    const viejo = leadPriorityScore({ cart_item_count: 1, first_seen_at: hoursAgo(12) }, nueva, NOW);
+    // Los dos alrededor del promedio (17): sin tramos medidos no hay escalón.
+    expect(Math.abs(recien - nueva.segment.carrito)).toBeLessThan(0.2);
+    expect(Math.abs(viejo - nueva.segment.carrito)).toBeLessThan(0.2);
+  });
+
+  it("cartWeightForAge: sin tramos o sin antigüedad cae al respaldo", () => {
+    expect(cartWeightForAge(null, 0.5, 14)).toBe(14);
+    expect(cartWeightForAge(KENKU.cartByAge, null, 14)).toBe(14);
+    expect(cartWeightForAge(KENKU.cartByAge, Number.NaN, 14)).toBe(14);
+    expect(cartWeightForAge(KENKU.cartByAge, -5, 14)).toBe(24); // negativo → tramo más fresco
+  });
+});
+
 describe("sortLeadsByPriority", () => {
   it("ordena de mayor a menor prioridad", () => {
+    // Todos del mismo día: así se prueba el orden ENTRE segmentos, sin que se
+    // mezcle el decaimiento horario del carrito (que tiene sus propios tests).
     const rows = [
       { id: "frio", last_interaction_at: daysAgo(0) },
-      { id: "carrito", cart_item_count: 1, last_interaction_at: daysAgo(2) },
+      { id: "carrito", cart_item_count: 1, last_interaction_at: daysAgo(0), first_seen_at: daysAgo(0) },
       { id: "converso", inbound_count: 5, last_interaction_at: daysAgo(0) },
-      { id: "distrito", district: "Wanchaq", last_interaction_at: daysAgo(1) },
+      { id: "distrito", district: "Wanchaq", last_interaction_at: daysAgo(0) },
     ];
     expect(sortLeadsByPriority(rows, KENKU, NOW).map((r) => r.id)).toEqual([
       "carrito",

@@ -216,6 +216,19 @@ export interface LeadSegmentSignals {
   district?: string | null;
   inbound_count?: number | null;
   draft_order_gid?: string | null;
+  first_inbound_text?: string | null;
+}
+
+// Mensaje inicial con el LINK de una ficha de producto — el cliente estaba en esa
+// página y tocó "consultar por WhatsApp", así que el enlace viene prellenado:
+//   "https://kenku.pe/products/purely-nutrient-… Tengo una consulta"
+// Un solo mensaje, pero dice QUÉ producto quiere. Contarlo como "solo saludó" lo
+// hundía al fondo de la cola junto a quien escribió "hola" y nada más.
+const PRODUCT_LINK_RE = /https?:\/\/\S*\/products\/\S/i;
+
+/** ¿El primer mensaje del cliente trae el link de una ficha de producto? Puro. */
+export function hasProductLink(text: string | null | undefined): boolean {
+  return PRODUCT_LINK_RE.test(text ?? "");
 }
 
 /** Assign a "Por llamar" lead to one sub-segment (highest-priority match).
@@ -224,7 +237,9 @@ export function leadSegment(lead: LeadSegmentSignals): LeadSegment {
   // Cart from a real Shopify draft (draft_order_gid) OR parsed from the chat.
   if ((lead.cart_item_count ?? 0) > 0 || (lead.draft_order_gid ?? "").length > 0) return "carrito";
   if ((lead.district ?? "").trim()) return "distrito"; // dio distrito de envío
-  if ((lead.inbound_count ?? 0) >= 2) return "converso"; // conversó (≥2 mensajes)
+  // ≥2 mensajes, o uno solo que ya trae el producto que le interesa. Si el texto
+  // no está cargado (base sin migrar), cae al conteo de mensajes como antes.
+  if ((lead.inbound_count ?? 0) >= 2 || hasProductLink(lead.first_inbound_text)) return "converso";
   return "frio"; // solo saludó / no respondió
 }
 

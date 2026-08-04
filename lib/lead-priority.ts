@@ -37,19 +37,90 @@ import { leadSegment, type LeadSegment } from "@/lib/leads";
 
 export type SegmentWeights = Record<LeadSegment, number>;
 
-/** Tasa de cierre por segmento cuando se llama, por tienda (ver cabecera). */
+/** Tasa de cierre por segmento cuando se llama, por tienda (ver cabecera).
+ *  `carrito` es el valor promedio sobre todas las antigüedades; el peso que se
+ *  usa de verdad sale de CART_WEIGHT_BY_AGE (ver abajo). Se conserva acá como
+ *  respaldo para cuando no se puede calcular la antigüedad. */
 const WEIGHTS_BY_STORE: Record<string, SegmentWeights> = {
   aurela: { carrito: 20, distrito: 4, converso: 3, frio: 0 },
   "kenku peru": { carrito: 14, distrito: 9, converso: 4, frio: 1 },
+};
+
+// Un carrito es un momento PERECEDERO: la misma medición, cortada por horas
+// hasta la primera llamada (solo `cod_cart`, cuya fuente se asigna al ingreso y
+// por lo tanto no la reescribe el cron de atribución):
+//
+//                    Aurela   Kenku
+//   < 1 h             44,3%    24,1%
+//   1–6 h             13,8%    17,0%
+//   6–24 h            11,7%    10,8%
+//   +1 día              —       9,2%
+//
+// Casi toda la caída ocurre en la PRIMERA HORA. Con el desgaste diario del resto
+// del puntaje (2%/día) esto era invisible: un carrito de 20 minutos y uno de 20
+// horas puntuaban casi igual.
+//
+// Los tramos son escalones y no una curva suave a propósito: cada número es una
+// tasa medida. Interpolar entre ellos sería inventar la forma intermedia, que es
+// justamente lo que no queremos.
+//
+// NO se aplica a distrito/converso/frío: ahí la misma medición mostró que llamar
+// rápido NO cambia nada dentro del primer día (Aurela fb_web: 9,5 / 10,4 / 10,2),
+// así que no hay con qué justificar un desgaste horario.
+const CART_WEIGHT_BY_AGE: Record<string, { maxHours: number; weight: number }[]> = {
+  aurela: [
+    { maxHours: 1, weight: 44 },
+    { maxHours: 6, weight: 14 },
+    { maxHours: 24, weight: 12 },
+    { maxHours: Infinity, weight: 12 },
+  ],
+  "kenku peru": [
+    { maxHours: 1, weight: 24 },
+    { maxHours: 6, weight: 17 },
+    { maxHours: 24, weight: 11 },
+    { maxHours: Infinity, weight: 9 },
+  ],
 };
 
 /** Promedio de las tiendas medidas: conserva el orden, que es lo que importa.
  *  Se usa en una tienda nueva, hasta tener historia propia para medirla. */
 const DEFAULT_WEIGHTS: SegmentWeights = { carrito: 17, distrito: 6, converso: 3, frio: 0.5 };
 
-export function segmentWeightsFor(storeName: string | null | undefined): SegmentWeights {
-  const key = (storeName ?? "").trim().toLowerCase();
-  return WEIGHTS_BY_STORE[key] ?? DEFAULT_WEIGHTS;
+const storeKey = (storeName: string | null | undefined) => (storeName ?? "").trim().toLowerCase();
+
+/** Todo lo que el puntaje necesita saber de una tienda. Va junto a propósito: si
+ *  los pesos y los tramos se pidieran por separado, se podría pasar la tienda
+ *  equivocada a uno de los dos y nadie lo notaría. */
+export interface ScoringProfile {
+  segment: SegmentWeights;
+  /** Tramos horarios del carrito; null si la tienda no tiene medición propia. */
+  cartByAge: { maxHours: number; weight: number }[] | null;
+}
+
+export function scoringProfileFor(storeName: string | null | undefined): ScoringProfile {
+  const key = storeKey(storeName);
+  return {
+    segment: WEIGHTS_BY_STORE[key] ?? DEFAULT_WEIGHTS,
+    cartByAge: CART_WEIGHT_BY_AGE[key] ?? null,
+  };
+}
+
+/**
+ * Peso del carrito según su antigüedad en horas. Sin tramos medidos (tienda
+ * nueva) o sin antigüedad calculable, cae al promedio de la tienda — que es
+ * exactamente lo que hacía antes. Mejor el dato viejo que una curva inventada. Puro.
+ */
+export function cartWeightForAge(
+  cartByAge: ScoringProfile["cartByAge"],
+  ageHours: number | null,
+  fallback: number,
+): number {
+  if (!cartByAge || ageHours == null || !Number.isFinite(ageHours)) return fallback;
+  const horas = Math.max(0, ageHours);
+  for (const tramo of cartByAge) {
+    if (horas < tramo.maxHours) return tramo.weight;
+  }
+  return fallback;
 }
 
 /** Entre dos carritos decide el ticket: +1 punto por cada S/50. */
@@ -75,29 +146,54 @@ export interface LeadPriorityInput {
   district?: string | null;
   inbound_count?: number | null;
   draft_order_gid?: string | null;
+  first_inbound_text?: string | null;
   cart_value?: number | null;
   last_interaction_at?: string | null;
   first_seen_at?: string | null;
 }
 
+/** Horas transcurridas desde `iso`, o null si no hay fecha usable. */
+function hoursSince(iso: string | null | undefined, nowMs: number): number | null {
+  if (!iso) return null;
+  const horas = (nowMs - Date.parse(iso)) / 3_600_000;
+  return Number.isFinite(horas) ? Math.max(0, horas) : null;
+}
+
 /**
  * Puntaje de prioridad de un lead. Más alto = llamar antes. Puro.
- *   (tasa de cierre del segmento + bono por ticket) × frescura
+ *   (peso del segmento + bono por ticket) × frescura
+ * En `carrito` el peso depende de la antigüedad (ver CART_WEIGHT_BY_AGE).
  */
 export function leadPriorityScore(
   lead: LeadPriorityInput,
-  weights: SegmentWeights,
+  profile: ScoringProfile,
   nowMs: number = Date.now(),
 ): number {
   // `status` va vacío: leadSegment no lo consulta, solo lo pide el tipo.
-  const base = weights[leadSegment({ status: "", ...lead })];
+  const segment = leadSegment({ status: "", ...lead });
+  // DOS RELOJES distintos, a propósito:
+  //  - el tramo del carrito se mide desde `first_seen_at`, porque así se midió
+  //    (desde que entró el lead hasta la primera llamada);
+  //  - la frescura general usa la última señal de vida del cliente.
+  // Consecuencia conocida: un cliente que entró hace 3 días y volvió a escribir
+  // hoy cuenta como carrito viejo. Intuitivamente debería re-calentarse, pero no
+  // hay medición de eso y no se inventa.
+  const base =
+    segment === "carrito"
+      ? cartWeightForAge(
+          profile.cartByAge,
+          hoursSince(lead.first_seen_at ?? lead.last_interaction_at, nowMs),
+          profile.segment.carrito,
+        )
+      : profile.segment[segment];
   const cartBonus = Math.min(
     CART_VALUE_CAP,
     Math.max(0, (lead.cart_value ?? 0) / CART_VALUE_STEP),
   );
-  // Antigüedad medida desde la última señal de vida del cliente; si nunca
-  // interactuó, desde que entró. Sin fecha usable, se lo trata como fresco: es
-  // mejor mostrarlo de más que esconderlo por un dato que falta.
+  // Sin fecha usable se lo trata como fresco: mejor mostrarlo de más que
+  // esconderlo por un dato que falta. Dentro del primer día esta curva es
+  // ~1,0, así que no duplica el efecto de los tramos horarios del carrito;
+  // solo sigue castigando la cola larga de semanas.
   const ref = lead.last_interaction_at ?? lead.first_seen_at ?? null;
   let freshness = 1;
   if (ref) {
@@ -116,11 +212,11 @@ export function leadPriorityScore(
  */
 export function sortLeadsByPriority<T extends LeadPriorityInput & { id: string }>(
   leads: T[],
-  weights: SegmentWeights,
+  profile: ScoringProfile,
   nowMs: number = Date.now(),
 ): T[] {
   return leads
-    .map((lead) => ({ lead, score: leadPriorityScore(lead, weights, nowMs) }))
+    .map((lead) => ({ lead, score: leadPriorityScore(lead, profile, nowMs) }))
     .sort((a, b) => b.score - a.score || a.lead.id.localeCompare(b.lead.id))
     .map((entry) => entry.lead);
 }
