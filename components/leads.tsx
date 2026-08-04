@@ -8,7 +8,7 @@ import type { AdMeta } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import { type CustomerHistory, type LeadCounts, type LeadView } from "@/lib/leads-access";
 import { facetItems } from "@/lib/leads-facets";
-import { segmentWeightsFor, sortLeadsByPriority } from "@/lib/lead-priority";
+import { scoringProfileFor, sortLeadsByPriority } from "@/lib/lead-priority";
 import type { LeadsInsights } from "@/lib/leads-insights";
 import {
   buildMetaAudienceCsv,
@@ -1091,7 +1091,7 @@ export function LeadsBoard({
     sortMode === "prioridad" && !searchMode && view === "por_llamar" && queueState === "sin_llamar";
   const storeName = stores.find((s) => s.id === storeId)?.name ?? null;
   const displayLeads = useMemo(
-    () => (priorityOn ? sortLeadsByPriority(baseLeads, segmentWeightsFor(storeName)) : baseLeads),
+    () => (priorityOn ? sortLeadsByPriority(baseLeads, scoringProfileFor(storeName)) : baseLeads),
     [priorityOn, baseLeads, storeName],
   );
 
