@@ -64,6 +64,7 @@ export interface LeadPriorityInput {
   district?: string | null;
   inbound_count?: number | null;
   draft_order_gid?: string | null;
+  first_inbound_text?: string | null;
   cart_value?: number | null;
   last_interaction_at?: string | null;
   first_seen_at?: string | null;
