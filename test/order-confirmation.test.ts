@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CONFIRMATION_MAX_DAYS,
+  CONFIRMATION_RESULTS,
   confirmationDayCount,
   confirmationDays,
   confirmationResult,
@@ -105,11 +106,41 @@ describe("reachedLastAttempt", () => {
 });
 
 describe("catálogo de la gestión", () => {
-  it("solo «volver a contactar» pide fecha y solo «confirmado» cierra", () => {
+  it("piden fecha los que pactan algo, y solo «confirmado» cierra", () => {
     expect(confirmationResult("volver_a_contactar")?.schedulesFollowup).toBe(true);
+    expect(confirmationResult("pendiente_de_abono")?.schedulesFollowup).toBe(true);
     expect(confirmationResult("sin_respuesta")?.schedulesFollowup).toBe(false);
+    expect(confirmationResult("se_deja_mensaje")?.schedulesFollowup).toBe(false);
     expect(confirmationResult("confirmado")?.confirms).toBe(true);
     expect(confirmationResult("volver_a_contactar")?.confirms).toBe(false);
+  });
+
+  it("«pendiente de abono» pacta fecha pero NO confirma el pedido", () => {
+    // En Agencia la confirmación exige el pago validado (§6.1). Si esto
+    // confirmara, el pedido saldría a Preparación con la promesa del cliente
+    // como única garantía y el rótulo se podría crear sin un sol abonado.
+    const abono = confirmationResult("pendiente_de_abono");
+    expect(abono?.schedulesFollowup).toBe(true);
+    expect(abono?.confirms).toBe(false);
+  });
+
+  it("«se deja mensaje» se comporta como «no contestó», pero es otro hecho", () => {
+    // Mismo efecto sobre el pedido, código distinto: el intento queda escrito
+    // con lo que de verdad pasó. Si compartieran código no habría forma de
+    // distinguirlos después, que es justo lo que se quiso registrar.
+    const mensaje = confirmationResult("se_deja_mensaje");
+    const sinRespuesta = confirmationResult("sin_respuesta");
+    expect(mensaje?.schedulesFollowup).toBe(sinRespuesta?.schedulesFollowup);
+    expect(mensaje?.confirms).toBe(sinRespuesta?.confirms);
+    expect(mensaje?.code).not.toBe(sinRespuesta?.code);
+  });
+
+  it("«No contestó» sigue siendo el resultado por defecto", () => {
+    // La mesa marca el primero cuando no lo tocan. Si un resultado que pacta
+    // fecha se colara al frente, el formulario abriría exigiendo una fecha que
+    // nadie pactó.
+    expect(CONFIRMATION_RESULTS[0]?.code).toBe("sin_respuesta");
+    expect(CONFIRMATION_RESULTS[0]?.schedulesFollowup).toBe(false);
   });
 
   it("un resultado o un canal inventado no pasa", () => {

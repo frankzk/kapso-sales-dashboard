@@ -227,6 +227,24 @@ Registro:
 - Cada intento se registra en la **mesa de confirmación** del pedido, con canal
   y resultado. Escribe `confirmation_contact`; si el resultado pacta una fecha
   escribe además `confirmation_followup`, y si el cliente confirma, `confirmed`.
+- Resultados del intento:
+
+  | Resultado | Pacta fecha | Confirma | Subetapa resultante |
+  | --- | --- | --- | --- |
+  | `sin_respuesta` — No contestó | No | No | `por_confirmar` |
+  | `se_deja_mensaje` — Se deja mensaje | No | No | `por_confirmar` |
+  | `volver_a_contactar` — Contestó · volver a contactar | Sí | No | `volver_a_contactar` |
+  | `pendiente_de_abono` — Pendiente de abono | Sí | No | `volver_a_contactar` |
+  | `confirmado` — Confirmó el pedido | No | Sí | pasa a Preparación |
+
+- `se_deja_mensaje` gasta día igual que `sin_respuesta`: el §6.1 cuenta el día
+  con gestión, no el día con respuesta. Se distingue porque el cliente quedó
+  preguntado y eso cambia el guion del siguiente intento.
+- `pendiente_de_abono` es el caso ya descrito arriba —aceptó y quedó en
+  abonar—, ahora seleccionable. Pacta fecha y **no** confirma: en Agencia la
+  confirmación exige el pago validado, no la promesa. No enciende
+  `pago_requerido_pendiente`; ese motivo se deriva del estado del pago y no de
+  lo que se marque en la mesa.
 - Los comentarios y el cambio manual de estado **no** son registro de gestión.
   El cambio manual es un override que congela el pedido frente al recálculo:
   usarlo como bitácora de llamadas lo desconecta del MOM.
