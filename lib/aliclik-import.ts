@@ -25,6 +25,11 @@ export interface ParsedShipmentRow {
   latitude: number | null;
   longitude: number | null;
   delivery_status: string; // canonical code
+  // El paquete volvió al origen. Va aparte de delivery_status porque el
+  // vocabulario de guías no tiene código `devuelto`: la guía se cierra como
+  // "anulado" y este flag es lo que la ingesta convierte en `returned_at`, que
+  // es de donde sale el `devuelto` del PEDIDO.
+  returned: boolean;
   store_hint: string | null; // raw "Tienda"/"Canal" value (AURELA / KENKU)
   // Aliclik's own delivery-attempt counter and operative delivery date. These
   // are intentionally separate from reroute_attempts, which counts the team's
@@ -164,6 +169,36 @@ function isDeliveredEntrega(raw: string | null): boolean {
   return stripAccents(raw.trim().toLowerCase()) === "entregado";
 }
 
+// La DEVOLUCIÓN, que es lo único que se lee del despacho.
+//
+// POR QUÉ ESTA COLUMNA Y NO EL RESTO. La clasificación sigue siendo por
+// resultado para la clienta (ver parseAliclikRow): el despacho no decide si una
+// guía está en ruta o pendiente. Pero el retorno no aparece en ninguna otra
+// parte del reporte — "ESTADO ENTREGA" de una guía devuelta dice CANCELADO, NO
+// CONTESTA o RECHAZADO, que es el MOTIVO, no el desenlace. Sin leer el despacho,
+// una devolución entra como "pendiente" y el pedido nunca llega a `devuelto`,
+// que es la entrada a Reproprovincia (MOM §10-§11).
+//
+// El reporte trae el dato por duplicado y en dos idiomas: "ÚLTIMO ESTADO
+// DESPACHO" con el vocabulario de la API (RETURNED) y "ESTADO DESPACHO" con la
+// etiqueta en español (DEVUELTO). Se aceptan ambos porque las cabeceras varían
+// entre exportaciones.
+const DESPACHO_KEYS = ["ultimo estado despacho", "estado despacho"];
+
+/**
+ * True cuando el paquete YA VOLVIÓ al origen.
+ *
+ * Ojo con el estado anterior: TO_RETURN / "POR DEVOLVER" es un paquete que
+ * todavía está viajando de vuelta, no una devolución consumada. Se deja fuera a
+ * propósito —igual que hace el mapeo de la API (lib/aliclik-status.ts)— porque
+ * mientras se mueve la guía sigue viva y el equipo la puede interceptar.
+ */
+export function isReturnedDespacho(raw: string | null): boolean {
+  if (!raw) return false;
+  const value = stripAccents(raw.trim().toLowerCase());
+  return value === "returned" || value === "devuelto";
+}
+
 // Aliclik marca con ESTADO LLAMADA = IMPORTADO los pedidos que subió a su
 // plataforma pero que TODAVÍA NO gestiona: no tienen despacho ni entrega, así
 // que no son guías reales. Si entran al sistema quedan como envíos "pendiente"
@@ -239,11 +274,24 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
   const fenixCity = normalizeCity(combined);
   const city = isFenixCity(fenixCity) ? fenixCity : district ? normalizeCity(district) : null;
 
-  // Classification is customer-outcome centric: only a report that already says
-  // ENTREGADO (in "ESTADO [DE] ENTREGA") is delivered; everything else enters the
-  // gestión queue as "pendiente" (Ingestión). The Aliclik dispatch state is not
-  // used to classify anymore.
-  const delivery_status = isDeliveredEntrega(pick(map, ENTREGA_KEYS)) ? "entregado" : "pendiente";
+  // La clasificación es por resultado para la clienta: solo un reporte que ya
+  // dice ENTREGADO (en "ESTADO [DE] ENTREGA") está entregado, y todo lo demás
+  // entra a la cola de gestión como "pendiente" (Ingestión). El estado de
+  // despacho NO se usa para clasificar; la única excepción es la devolución
+  // consumada, que no se puede leer de ninguna otra columna.
+  //
+  // ENTREGADO gana sobre el despacho, y el orden importa: una guía entregada
+  // trae basura en las columnas de despacho y entrega de la API (PICKED, y
+  // CANCEL o NOT_RESPOND heredados de intentos previos). Si el despacho se
+  // evaluara primero, esas entregas se reclasificarían como anuladas.
+  //
+  // Devuelto = "anulado" para la GUÍA, igual que en el camino por API: el
+  // vocabulario de guías no tiene un código `devuelto`. Ese matiz lo pone
+  // `resolveOrderState` (lib/order-status.ts) leyendo `returned_at`, que es lo
+  // que convierte el PEDIDO en `devuelto`.
+  const delivered = isDeliveredEntrega(pick(map, ENTREGA_KEYS));
+  const returned = !delivered && isReturnedDespacho(pick(map, DESPACHO_KEYS));
+  const delivery_status = delivered ? "entregado" : returned ? "anulado" : "pendiente";
 
   const orderRef = extractOrderReference(map.get("nota"), pick(map, ORDER_KEYS));
 
@@ -263,6 +311,7 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
     latitude: parseAliclikCoordinate(pick(map, LATITUDE_KEYS), "latitude"),
     longitude: parseAliclikCoordinate(pick(map, LONGITUDE_KEYS), "longitude"),
     delivery_status,
+    returned,
     store_hint: pick(map, STORE_KEYS),
     aliclik_attempts: parseAliclikAttempts(pick(map, ALICLIK_ATTEMPT_KEYS)),
     aliclik_service_date: parseAliclikDate(pick(map, ALICLIK_SERVICE_DATE_KEYS)),
