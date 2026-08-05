@@ -304,7 +304,23 @@ function stripAccents(s: string): string {
 // is just the known coverage set (extensible later).
 // ---------------------------------------------------------------------------
 
-export const FENIX_CITIES = ["huancayo", "juliaca", "puno", "cusco", "arequipa", "trujillo"];
+// El orden importa dos veces: es el del desplegable de Stock Fenix y es el que
+// `normalizeCity` recorre para quedarse con el PRIMER token que encuentre. Por
+// eso `juliaca` va antes que `puno` —«Juliaca/Puno» tiene que resolver a
+// juliaca— y por eso las ciudades nuevas se agregan al final: cualquier otro
+// sitio podría cambiar a qué clave resuelve una dirección que hoy ya funciona.
+export const FENIX_CITIES = [
+  "huancayo",
+  "juliaca",
+  "puno",
+  "cusco",
+  "arequipa",
+  "trujillo",
+  "ica",
+  "piura",
+  "chimbote",
+  "chiclayo",
+];
 
 /** Normalize a raw city/district label to a coverage key (lowercase, no accents). */
 export function normalizeCity(raw: string | null | undefined): string {

@@ -227,6 +227,28 @@ Registro:
 - Cada intento se registra en la **mesa de confirmación** del pedido, con canal
   y resultado. Escribe `confirmation_contact`; si el resultado pacta una fecha
   escribe además `confirmation_followup`, y si el cliente confirma, `confirmed`.
+- Resultados del intento:
+
+  | Resultado | Pacta fecha | Confirma | Subetapa resultante |
+  | --- | --- | --- | --- |
+  | `sin_respuesta` — No contestó | No | No | `por_confirmar` |
+  | `se_deja_mensaje` — Se deja mensaje | No | No | `por_confirmar` |
+  | `volver_a_contactar` — Contestó · volver a contactar | Sí | No | `volver_a_contactar` |
+  | `pendiente_de_abono` — Pendiente de abono | Sí | No | `volver_a_contactar` |
+  | `confirmado` — Confirmó el pedido | No | Sí | pasa a Preparación |
+
+- `se_deja_mensaje` gasta día igual que `sin_respuesta`: el §6.1 cuenta el día
+  con gestión, no el día con respuesta. Se distingue porque el cliente quedó
+  preguntado y eso cambia el guion del siguiente intento.
+- `pendiente_de_abono` es el caso ya descrito arriba —aceptó y quedó en
+  abonar—, ahora seleccionable. Pacta fecha y **no** confirma: en Agencia la
+  confirmación exige el pago validado, no la promesa. No enciende
+  `pago_requerido_pendiente`; ese motivo se deriva del estado del pago y no de
+  lo que se marque en la mesa.
+- La línea de tiempo del pedido muestra el resultado y el canal de cada intento,
+  no solo que hubo uno. Un intento registrado que no se puede leer después no
+  sirve de historial: quien retoma la gestión necesita saber qué pasó, y la nota
+  es opcional.
 - Los comentarios y el cambio manual de estado **no** son registro de gestión.
   El cambio manual es un override que congela el pedido frente al recálculo:
   usarlo como bitácora de llamadas lo desconecta del MOM.
@@ -612,7 +634,26 @@ Gestión de contacto: hasta tres llamadas diarias durante siete días. Los siete
 intentos se cuentan por día, no por llamada.
 
 Ciudades con stock/operación conocidas: Arequipa, Huancayo, Juliaca/Puno,
-Cusco, Trujillo.
+Cusco, Trujillo, Ica, Piura, Chimbote, Chiclayo.
+
+Estar en la lista habilita la ciudad para cargarle stock; **no** la vuelve
+elegible por sí sola. La elegibilidad exige cobertura **y** stock del producto
+en esa ciudad, así que una ciudad recién agregada queda en `sin_stock` —no en
+`sin_cobertura`— hasta que alguien cargue existencias. Nada se reencamina solo
+por aparecer acá.
+
+Las nueve ciudades están registradas con el padrón INEI completo de su
+provincia: Ica (14 distritos), Piura (10), Santa/Chimbote (9) y Chiclayo (20)
+se sumaron a las seis anteriores. Swayp identifica el destino por ubigeo y la
+creación de guía **exige** distrito exacto, así que un distrito que no esté en
+la tabla se rechaza con mensaje explícito en vez de salir con un código
+aproximado: un ubigeo equivocado desvía el paquete sin avisar.
+
+Los códigos son INEI, nunca RENIEC — numeran distinto los mismos distritos.
+
+Falta la configuración de bodega Swayp (`senders`) de las cuatro ciudades
+nuevas; sin ella la guía se niega aunque el ubigeo resuelva. Es configuración
+operativa, no código.
 
 Una salida Swayp puede coexistir con la devolución Aliclik. En Reproprovincia
 Swayp se puede repetir, siempre con una salida, guía y QR nuevos, dentro del

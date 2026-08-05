@@ -209,4 +209,6 @@
 \ir migrations/0101_order_master_phone_history.sql
 \echo 'Applying 0102_aliclik_health.sql'
 \ir migrations/0102_aliclik_health.sql
+\echo 'Applying 0103_leads_bsuid_identity.sql'
+\ir migrations/0103_leads_bsuid_identity.sql
 \echo 'Done.'

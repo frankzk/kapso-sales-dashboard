@@ -55,10 +55,30 @@ export interface ConfirmationResultDef {
   hint: string;
 }
 
+/**
+ * El catálogo de resultados. El orden es el del desplegable y el primero es el
+ * que sale marcado por defecto, así que `sin_respuesta` se queda al frente: es
+ * el desenlace más común y el que menos daño hace si alguien no lo cambia.
+ *
+ * Dos resultados distintos pueden mover el pedido igual y aun así valer la pena
+ * por separado: lo que se guarda es el código, no el efecto, y el hecho queda
+ * escrito con el nombre que le puso quien llamó.
+ */
 export const CONFIRMATION_RESULTS: readonly ConfirmationResultDef[] = [
   {
     code: "sin_respuesta",
     label: "No contestó",
+    schedulesFollowup: false,
+    confirms: false,
+    hint: "Suma un día de gestión y el pedido sigue Por confirmar.",
+  },
+  {
+    // Dejar mensaje no es que no contestaran: al buzón o al WhatsApp le queda
+    // una pregunta hecha, y al siguiente que abra el pedido le cambia el guion
+    // de la llamada. Gasta el mismo día porque el §6.1 cuenta el día con
+    // gestión, no el día con respuesta.
+    code: "se_deja_mensaje",
+    label: "Se deja mensaje",
     schedulesFollowup: false,
     confirms: false,
     hint: "Suma un día de gestión y el pedido sigue Por confirmar.",
@@ -69,6 +89,21 @@ export const CONFIRMATION_RESULTS: readonly ConfirmationResultDef[] = [
     schedulesFollowup: true,
     confirms: false,
     hint: "Queda pactada una fecha; el pedido pasa a Volver a contactar.",
+  },
+  {
+    // El caso que el §6.1 ya describía sin poder elegirse: el cliente aceptó y
+    // quedó en abonar. Pacta fecha como «volver a contactar» porque es lo que
+    // es —hay que volver a llamarlo— y el pedido NO queda confirmado: en
+    // Agencia la confirmación exige el pago validado, no la promesa.
+    //
+    // No enciende el motivo `pago_requerido_pendiente`: ese sale del estado del
+    // pago, y hacerlo depender de lo que se marque acá lo volvería un motivo
+    // que alguien puede olvidar, que es justo lo que el MOM evita al derivarlo.
+    code: "pendiente_de_abono",
+    label: "Pendiente de abono",
+    schedulesFollowup: true,
+    confirms: false,
+    hint: "Queda pactada la fecha para verificar el abono; el pedido pasa a Volver a contactar.",
   },
   {
     code: "confirmado",
@@ -89,6 +124,40 @@ export function isConfirmationChannel(code: string): code is ConfirmationChannel
 
 export function confirmationChannelLabel(code: string | null | undefined): string {
   return CONFIRMATION_CHANNELS.find((channel) => channel.code === code)?.label ?? code ?? "—";
+}
+
+/**
+ * El nombre del resultado. Cae al código crudo si algún día se retira uno del
+ * catálogo: los hechos ya escritos no se reescriben (§2.6), así que la línea de
+ * tiempo tiene que poder pintar un resultado que ya no se ofrece.
+ */
+export function confirmationResultLabel(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return confirmationResult(code)?.label ?? code;
+}
+
+/** Canal y resultado tal como se guardaron en el intento. */
+export interface ConfirmationAttemptDetail {
+  channel: string | null;
+  result: string | null;
+}
+
+/**
+ * Lee del payload de un evento el canal y el resultado del intento.
+ *
+ * Se guardaban desde el principio y nunca se leyeron: la línea de tiempo
+ * mostraba «Intento de confirmación» y la nota, de modo que dos resultados
+ * distintos se veían idénticos salvo que alguien escribiera la nota a mano.
+ */
+export function confirmationAttemptDetail(
+  payload: Record<string, unknown> | null | undefined,
+): ConfirmationAttemptDetail | null {
+  if (!payload) return null;
+  const text = (value: unknown) => (typeof value === "string" && value ? value : null);
+  const channel = text(payload.channel);
+  const result = text(payload.result);
+  if (!channel && !result) return null;
+  return { channel, result };
 }
 
 /**

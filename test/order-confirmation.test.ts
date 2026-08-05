@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   CONFIRMATION_MAX_DAYS,
+  CONFIRMATION_RESULTS,
+  confirmationAttemptDetail,
   confirmationDayCount,
   confirmationDays,
   confirmationResult,
+  confirmationResultLabel,
   isConfirmationChannel,
   limaDayKey,
   reachedLastAttempt,
@@ -105,16 +108,86 @@ describe("reachedLastAttempt", () => {
 });
 
 describe("catálogo de la gestión", () => {
-  it("solo «volver a contactar» pide fecha y solo «confirmado» cierra", () => {
+  it("piden fecha los que pactan algo, y solo «confirmado» cierra", () => {
     expect(confirmationResult("volver_a_contactar")?.schedulesFollowup).toBe(true);
+    expect(confirmationResult("pendiente_de_abono")?.schedulesFollowup).toBe(true);
     expect(confirmationResult("sin_respuesta")?.schedulesFollowup).toBe(false);
+    expect(confirmationResult("se_deja_mensaje")?.schedulesFollowup).toBe(false);
     expect(confirmationResult("confirmado")?.confirms).toBe(true);
     expect(confirmationResult("volver_a_contactar")?.confirms).toBe(false);
+  });
+
+  it("«pendiente de abono» pacta fecha pero NO confirma el pedido", () => {
+    // En Agencia la confirmación exige el pago validado (§6.1). Si esto
+    // confirmara, el pedido saldría a Preparación con la promesa del cliente
+    // como única garantía y el rótulo se podría crear sin un sol abonado.
+    const abono = confirmationResult("pendiente_de_abono");
+    expect(abono?.schedulesFollowup).toBe(true);
+    expect(abono?.confirms).toBe(false);
+  });
+
+  it("«se deja mensaje» se comporta como «no contestó», pero es otro hecho", () => {
+    // Mismo efecto sobre el pedido, código distinto: el intento queda escrito
+    // con lo que de verdad pasó. Si compartieran código no habría forma de
+    // distinguirlos después, que es justo lo que se quiso registrar.
+    const mensaje = confirmationResult("se_deja_mensaje");
+    const sinRespuesta = confirmationResult("sin_respuesta");
+    expect(mensaje?.schedulesFollowup).toBe(sinRespuesta?.schedulesFollowup);
+    expect(mensaje?.confirms).toBe(sinRespuesta?.confirms);
+    expect(mensaje?.code).not.toBe(sinRespuesta?.code);
+  });
+
+  it("«No contestó» sigue siendo el resultado por defecto", () => {
+    // La mesa marca el primero cuando no lo tocan. Si un resultado que pacta
+    // fecha se colara al frente, el formulario abriría exigiendo una fecha que
+    // nadie pactó.
+    expect(CONFIRMATION_RESULTS[0]?.code).toBe("sin_respuesta");
+    expect(CONFIRMATION_RESULTS[0]?.schedulesFollowup).toBe(false);
   });
 
   it("un resultado o un canal inventado no pasa", () => {
     expect(confirmationResult("lo_que_sea")).toBeNull();
     expect(isConfirmationChannel("paloma_mensajera")).toBe(false);
     expect(isConfirmationChannel("whatsapp")).toBe(true);
+  });
+});
+
+describe("lo que la línea de tiempo muestra del intento", () => {
+  it("saca canal y resultado del payload", () => {
+    expect(
+      confirmationAttemptDetail({ channel: "mensaje", result: "se_deja_mensaje" }),
+    ).toEqual({ channel: "mensaje", result: "se_deja_mensaje" });
+  });
+
+  it("un evento que no es un intento no aporta nada", () => {
+    // El payload de otros eventos lleva sus propias claves. Devolver un objeto
+    // vacío pintaría un «·» suelto en cada entrada de la línea de tiempo.
+    expect(confirmationAttemptDetail(undefined)).toBeNull();
+    expect(confirmationAttemptDetail(null)).toBeNull();
+    expect(confirmationAttemptDetail({})).toBeNull();
+    expect(confirmationAttemptDetail({ next_contact_on: "2026-08-10" })).toBeNull();
+  });
+
+  it("un payload a medias sigue sirviendo para lo que sí trae", () => {
+    expect(confirmationAttemptDetail({ result: "confirmado" })).toEqual({
+      channel: null,
+      result: "confirmado",
+    });
+    expect(confirmationAttemptDetail({ channel: "llamada" })).toEqual({
+      channel: "llamada",
+      result: null,
+    });
+  });
+
+  it("ignora lo que no sea texto", () => {
+    expect(confirmationAttemptDetail({ channel: 7, result: null })).toBeNull();
+  });
+
+  it("nombra el resultado, y si el código ya no está en el catálogo lo muestra igual", () => {
+    // Los hechos no se reescriben (§2.6): un intento guardado con un resultado
+    // que después se retire tiene que seguir siendo legible en el historial.
+    expect(confirmationResultLabel("pendiente_de_abono")).toBe("Pendiente de abono");
+    expect(confirmationResultLabel("resultado_retirado")).toBe("resultado_retirado");
+    expect(confirmationResultLabel(null)).toBeNull();
   });
 });
