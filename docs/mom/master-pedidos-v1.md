@@ -141,6 +141,14 @@ Reglas iniciales:
   servidor para Provincia COD o Agencia.
 - Cañete siempre se clasifica como Agencia, aunque Shopify lo etiquete como
   `Lima (provincia)` o exista una tarifa COD histórica que coincida.
+- La confirmación tiene UNA sola definición, `hasConfirmationSignal`.
+  Un pedido está confirmado si existe una guía, si hay evento `confirmed`,
+  `guide_registered` o `label_generated`, o si Shopify lo da por pagado —en
+  contraentrega no hay pago previo, así que `paid` significa que se cobró por
+  otra vía—. Responde por la evidencia: la exención de Lima es política de
+  macroetapa y se aplica donde se resuelve la etapa, no dentro de la
+  definición, porque el estado operativo legado sí debe seguir distinguiendo
+  un pedido de Lima que nadie llamó.
 - Las rutas que no tienen cobertura se ocultan.
 - Las rutas con una condición pendiente, como falta de stock o pago, pueden
   mostrarse bloqueadas con una explicación.

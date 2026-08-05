@@ -37,6 +37,46 @@ export const CONFIRMATION_LAST_ATTEMPT_KINDS = [
   "last_attempt",
 ] as const;
 
+/**
+ * Eventos que dan por confirmado el pedido. `confirmed` es la palabra del
+ * asesor; los otros dos son el acto logístico que la da por hecha.
+ */
+export const CONFIRMATION_SIGNAL_KINDS = [
+  "confirmed",
+  "guide_registered",
+  "label_generated",
+] as const;
+
+/**
+ * ¿Hay señal de confirmación sobre el pedido? UNA sola definición, como la
+ * cobertura tiene la suya en `order_coverage_for`.
+ *
+ * Vivía copiada en cuatro sitios y ya habían divergido: `order-status` miraba
+ * solo el evento `confirmed` y el pago de Shopify, así que decía «sin
+ * confirmar» sobre pedidos que el MOM ya había mandado a Preparación por tener
+ * guía. Es la misma forma del bug de cobertura —dos implementaciones libres de
+ * separarse en silencio—, y por eso la respuesta se da una vez.
+ *
+ * Responde por la EVIDENCIA, no por la política: que Lima no necesite
+ * confirmación (MOM §5, «Lima omite confirmación y entra directamente a
+ * Preparación») es una regla de macroetapa y se aplica en su llamador. Meterla
+ * aquí haría que el estado operativo legado diera por confirmados a los pedidos
+ * de Lima que nadie llamó.
+ */
+export function hasConfirmationSignal(input: {
+  /** Una guía existente es el acto logístico que confirma. */
+  hasGuide: boolean;
+  events: readonly { kind: string }[];
+  financialStatus?: string | null;
+}): boolean {
+  if (input.hasGuide) return true;
+  const kinds: readonly string[] = CONFIRMATION_SIGNAL_KINDS;
+  if (input.events.some((event) => kinds.includes(event.kind))) return true;
+  // En contraentrega no hay pago previo, así que `paid` es señal de que el
+  // pedido se cobró por otra vía y ya nadie espera una llamada.
+  return (input.financialStatus ?? "").trim().toLowerCase() === "paid";
+}
+
 export const CONFIRMATION_CHANNELS = [
   { code: "llamada", label: "Llamada" },
   { code: "whatsapp", label: "Llamada WhatsApp" },

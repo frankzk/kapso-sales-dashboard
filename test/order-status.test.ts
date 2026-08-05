@@ -72,6 +72,23 @@ describe("resolveOrderState — pedido sin gestión", () => {
     expect(s.operational).toBe("sin_asignar_courier");
   });
 
+  it("registrar la guía confirma, aunque la fila de guía no exista todavía", () => {
+    // La divergencia que motivó unificar la definición: este archivo miraba
+    // solo `confirmed` y el pago de Shopify, así que dejaba en «sin confirmar»
+    // pedidos que el MOM ya había mandado a Preparación.
+    const s = resolve([], order(), [
+      { kind: "guide_registered", occurred_at: "2026-07-02T09:00:00.000Z", courier: null, new_status: null, new_operational: null },
+    ]);
+    expect(s.operational).toBe("sin_asignar_courier");
+  });
+
+  it("Lima sin señal sigue sin confirmar: la exención es del MOM, no del estado legado", () => {
+    // `hasConfirmationSignal` no sabe de Lima a propósito. Si lo supiera, estos
+    // pedidos —que nadie llamó— se darían por confirmados aquí.
+    const s = resolve([], order({ shipping_mode: "cod" }), []);
+    expect(s.operational).toBe("sin_confirmar");
+  });
+
   it("un pedido de agencia confirmado queda pendiente de envío", () => {
     const s = resolve([], order({ shipping_mode: "agency", financial_status: "paid" }));
     expect(s.operational).toBe("pendiente_de_envio");
