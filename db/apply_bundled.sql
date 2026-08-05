@@ -7561,6 +7561,23 @@ create index if not exists leads_store_bsuid
 -- llegó. Cuando exista `chatby_messages`, se rellena DESDE ACÁ — nada de lo
 -- capturado en el período de aprendizaje se tira.
 --
+-- MEDIDO EN PRODUCCIÓN (2026-08-05): ESTE WEBHOOK NO CUBRE WHATSAPP.
+--
+-- La prueba: con el bot pausado se mandaron dos mensajes ENTRANTES de WhatsApp.
+-- Cero entregas — y en los logs de Vercel no hay NINGUNA petición a esta ruta en
+-- ese minuto. No es un 401 ni un error de configuración: Chatby no lo intentó.
+-- La configuración estaba bien, porque el ping de validación del Save sí llegó y
+-- sí escribió fila con esa misma URL y esa misma cabecera.
+--
+-- O sea que "Live Chat" en Chatby significa su WIDGET WEB, no WhatsApp. Encaja
+-- con el resto de esa zona de ajustes (el Secret Key y `window.$chatbot.setUser`
+-- son del widget del navegador).
+--
+-- LA TABLA Y EL RECEPTOR SE CONSERVAN, y no por optimismo: el paso "External
+-- Request" del flow builder — que sí corre sobre las conversaciones de WhatsApp —
+-- puede POSTear a esta misma ruta con la misma cabecera. El receptor no está
+-- atado a la integración que lo motivó.
+--
 -- OJO CON EL ALCANCE (limitaciones del propio webhook, no nuestras):
 --   · Solo dispara con el bot PAUSADO. La fase en que el bot conversa no llega.
 --   · Solo mensajes ENTRANTES. Los salientes los emitimos nosotros vía
