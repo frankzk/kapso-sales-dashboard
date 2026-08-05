@@ -1241,6 +1241,15 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   y que el secreto ya está cargado (`configured: true`), sin revelarlo. Sin ese
   GET, la única forma de comprobar la configuración sería esperar a que un
   cliente escriba.
+- ⚠️ **Medido en producción (2026-08-05): este webhook NO cubre WhatsApp.** Con
+  el bot pausado se mandaron dos mensajes entrantes de WhatsApp y no hubo
+  ninguna entrega — en los logs de Vercel no aparece **ni una** petición a la
+  ruta en ese minuto. No es configuración: el ping de validación del *Save* sí
+  llegó y sí escribió fila con esa misma URL y cabecera. «Live Chat» en Chatby
+  significa su **widget web**.
+  El receptor se conserva igual porque el paso **External Request** del flow
+  builder, que sí corre sobre WhatsApp, puede POSTear a esta misma ruta con la
+  misma cabecera.
 - **Límites del webhook, no nuestros**: solo manda mensajes **entrantes** y solo
   con el **bot pausado**. La fase en que el bot conversa no llega. Los salientes
   se emiten desde el dashboard vía `POST /subscriber/send-content` con
