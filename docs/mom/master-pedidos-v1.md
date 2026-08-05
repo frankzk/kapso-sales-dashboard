@@ -463,12 +463,36 @@ promesas de pago incumplidas aumentan el riesgo futuro.
 Kapta arma esa revisión y la muestra dentro de la gestión de confirmación, sin
 que nadie tenga que resumirla a mano:
 
-- **Historial del cliente**: los pedidos anteriores del mismo teléfono,
-  desglosados por desenlace — entregados, en curso, anulados, devueltos y sin
-  confirmar. El teléfono es la identidad del cliente en esta operación: no hay
-  cuenta ni documento en un COD de Shopify.
+- **Historial del cliente**: los otros pedidos del mismo teléfono, desglosados
+  por desenlace — entregados, en curso, anulados, devueltos y sin confirmar. El
+  teléfono es la identidad del cliente en esta operación: no hay cuenta ni
+  documento en un COD de Shopify.
+- **El historial se lista pedido a pedido**, no solo como recuento. De cada uno
+  se muestra fecha, antigüedad, estado operativo, qué llevaba y si llegó a
+  salir. El desglose dice cuántos; la lista dice cuáles, que es de donde sale la
+  decisión.
+- **Anterior o posterior.** No todos los pedidos del historial son anteriores al
+  que se está mirando: un pedido que nadie confirmó acumula por debajo los
+  intentos nuevos del mismo cliente. Los posteriores se marcan como tales.
+  Llamarlos a todos «anteriores» invierte la lectura del caso — «tres anulados
+  previos» es un cliente con mal historial, «tres re-pedidos posteriores» es un
+  pedido estancado que el cliente sigue intentando.
+- **Si llegó a costar flete.** Un pedido sin guía no lo recogió nadie: se anuló
+  antes de despacharse y no gastó flete. Uno con guía salió a la calle. La ficha
+  los distingue y muestra courier, guía e intentos de entrega cuando existen.
+- **Qué llevaba cada pedido.** Cuando el historial repite el mismo producto y la
+  misma cantidad, se marca: eso no es un historial de compras variado, es el
+  mismo pedido una y otra vez.
 - **Antecedentes**: solo cuentan los **anulados y devueltos**, que es lo que la
-  tabla nombra. Un pedido abierto o sin confirmar todavía no es un rechazo.
+  tabla nombra. Un pedido abierto o sin confirmar todavía no es un rechazo. Que
+  un anulado se haya despachado o no **no cambia el conteo**: se muestra para
+  informar la excepción humana del §8, no para que la herramienta se ablande la
+  regla sola.
+- **Devoluciones**: hoy Kapta no registra ninguna. `general_status='devuelto'` y
+  `returned_at` están vacíos en toda la base, así que el contador «Devueltos» de
+  la ficha vale siempre 0 y la mitad «o devolución» de la tabla de riesgo no se
+  puede aplicar. Queda pendiente poblar la señal desde la ingesta de courier;
+  hasta entonces los antecedentes son, en la práctica, solo anulados.
 - **La regla se aplica plana.** Haber recibido antes no la ablanda: la excepción
   del §8 exige justificación, actor y fecha, o sea una decisión humana
   registrada, no un descuento automático. Por eso los entregados se muestran

@@ -104,9 +104,17 @@ import {
   type TimelineEntry,
 } from "@/lib/orders-master-access";
 import {
+  DISPATCH_STATE_LABEL,
   PAYMENT_REQUIREMENT_LABEL,
   PRIOR_OUTCOME_LABEL,
+  countLaterOrders,
+  dispatchState,
+  priorCourier,
+  priorOutcome,
+  priorTiming,
+  sameProducts,
   type PaymentRequirement,
+  type PriorOrderSnapshot,
   type PriorOutcome,
 } from "@/lib/order-confirmation-brief";
 import { outputDisplayCode } from "@/lib/shipment-output";
@@ -3293,9 +3301,95 @@ const REQUIREMENT_TONE: Record<PaymentRequirement, string> = {
  * del §8 no se podía aplicar desde Kapta: la regla existe desde siempre en el
  * papel, pero nadie tenía el número de antecedentes delante al marcar.
  */
+/**
+ * Una línea del historial del cliente.
+ *
+ * Cada fila responde cuatro cosas que antes no se veían: cuándo fue, si es
+ * POSTERIOR al pedido que se está mirando, si llegó a costar flete y qué llevaba.
+ * La última importa más de lo que parece: cuatro pedidos del mismo producto y la
+ * misma cantidad no son un historial de compras, son el mismo pedido repetido.
+ */
+function PriorOrderRow({
+  row,
+  referenceCreatedAt,
+  currentProducts,
+}: {
+  row: PriorOrderSnapshot;
+  referenceCreatedAt: string | null;
+  currentProducts: string | null;
+}) {
+  const outcome = priorOutcome(row);
+  const dispatch = dispatchState(row);
+  const courier = priorCourier(row);
+  const later = priorTiming(row, referenceCreatedAt) === "posterior";
+  const repeats = sameProducts(row.products, currentProducts);
+  const attempts = row.attempt_count ?? 0;
+
+  return (
+    <li className="rounded-md border border-slate-200 bg-slate-50/60 px-2 py-1.5">
+      <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+        <span className="font-mono text-[11px] font-medium text-slate-800">
+          {row.order_name ?? row.order_id}
+        </span>
+        <span className="text-[11px] text-slate-500">
+          {fmtDate(row.order_created_at)} · {fmtAge(row.order_created_at)}
+        </span>
+        {/* El pedido abierto que se mira puede ser el MÁS VIEJO del teléfono: sin
+            esta marca, un re-pedido posterior se lee como antecedente previo. */}
+        {later && (
+          <span className="rounded bg-indigo-100 px-1 text-[10px] font-semibold text-indigo-800">
+            posterior a este
+          </span>
+        )}
+        <span
+          className={cn(
+            "ml-auto rounded px-1.5 text-[10px] font-semibold",
+            outcome === "entregado"
+              ? "bg-emerald-100 text-emerald-800"
+              : outcome === "anulado" || outcome === "devuelto"
+                ? "bg-rose-100 text-rose-800"
+                : "bg-slate-200 text-slate-700",
+          )}
+        >
+          {row.operational_status ? operationalLabel(row.operational_status) : PRIOR_OUTCOME_LABEL[outcome]}
+        </span>
+      </div>
+
+      {row.products && (
+        <p
+          className={cn(
+            "mt-0.5 truncate text-[11px]",
+            repeats ? "font-semibold text-amber-800" : "text-slate-600",
+          )}
+          title={row.products}
+        >
+          {row.products}
+          {repeats && " · lo mismo que este pedido"}
+        </p>
+      )}
+
+      {/* Nueve de cada diez anulados nunca llegaron a despacharse. Decirlo evita
+          exigir pago completo por antecedentes que no costaron un solo flete. */}
+      <p className="mt-0.5 text-[10px] text-slate-500">
+        {dispatch === "nunca_despachado" ? (
+          <span className="font-medium text-slate-600">{DISPATCH_STATE_LABEL.nunca_despachado}</span>
+        ) : (
+          <>
+            {courier ?? "courier sin registrar"}
+            {row.guide_code ? ` · guía ${row.guide_code}` : ""}
+            {attempts > 0 ? ` · ${attempts} intento${attempts === 1 ? "" : "s"}` : ""}
+          </>
+        )}
+        {row.order_total != null ? ` · ${fmtMoney(row.order_total)}` : ""}
+      </p>
+    </li>
+  );
+}
+
 function ConfirmationBrief({ brief }: { brief: OrderConfirmationBrief }) {
-  const { counts, risk, duplicates, codCouriers } = brief;
-  const known = brief.priors.length;
+  const { counts, risk, duplicates, codCouriers, priors, orderCreatedAt, products } = brief;
+  const known = priors.length;
+  const later = countLaterOrders(priors, orderCreatedAt);
   const outcomes = (Object.keys(PRIOR_OUTCOME_LABEL) as PriorOutcome[]).filter(
     (key) => counts[key] > 0,
   );
@@ -3308,8 +3402,9 @@ function ConfirmationBrief({ brief }: { brief: OrderConfirmationBrief }) {
         </h4>
         <span className="text-[11px] text-slate-500">
           {known === 0
-            ? "Sin pedidos anteriores con este teléfono"
-            : `${known} pedido${known === 1 ? "" : "s"} anterior${known === 1 ? "" : "es"}`}
+            ? "Sin otros pedidos con este teléfono"
+            : `${known} pedido${known === 1 ? "" : "s"} más con este teléfono` +
+              (later > 0 ? ` · ${later} posterior${later === 1 ? "" : "es"} a este` : "")}
         </span>
       </div>
 
@@ -3371,6 +3466,36 @@ function ConfirmationBrief({ brief }: { brief: OrderConfirmationBrief }) {
             ))}
           </ul>
         </div>
+      )}
+
+      {/* El historial pedido a pedido. El desglose de arriba dice CUÁNTOS; esto
+          dice cuáles, cuándo y si alguno llegó a salir — que es de donde sale la
+          decisión real, y lo que antes había que ir a buscar a Shopify y a
+          Aliclik por separado. */}
+      {priors.length > 0 && (
+        <details className="group" open={priors.length <= 4}>
+          <summary className="cursor-pointer list-none text-[11px] font-semibold text-slate-500 hover:text-slate-700">
+            Historial del cliente
+            <span className="ml-1 font-normal text-slate-400 group-open:hidden">
+              (ver los {priors.length})
+            </span>
+          </summary>
+          <ul className="mt-1.5 space-y-1">
+            {priors.slice(0, 10).map((row) => (
+              <PriorOrderRow
+                key={row.order_id}
+                row={row}
+                referenceCreatedAt={orderCreatedAt}
+                currentProducts={products}
+              />
+            ))}
+          </ul>
+          {priors.length > 10 && (
+            <p className="mt-1 text-[10px] text-slate-400">
+              y {priors.length - 10} más, no mostrados
+            </p>
+          )}
+        </details>
       )}
 
       {/* La pregunta de la llamada es «¿sale por Aliclik o va a agencia?». Sale

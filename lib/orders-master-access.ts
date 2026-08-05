@@ -20,10 +20,12 @@ import {
   confirmationRisk,
   duplicateCandidates,
   summarizeOutcomes,
+  summarizeProducts,
   type ConfirmationRisk,
   type OutcomeCounts,
   type PriorOrderSnapshot,
 } from "@/lib/order-confirmation-brief";
+import { parseLabelLineItems } from "@/lib/labels/line-items";
 import {
   confirmationAttemptDetail,
   type ConfirmationAttemptDetail,
@@ -809,7 +811,7 @@ export async function getMasterFacets(storeIds: string[]): Promise<{
 // ---------------------------------------------------------------------------
 
 export interface OrderConfirmationBrief {
-  /** Pedidos anteriores del MISMO teléfono, del más nuevo al más viejo. */
+  /** Los otros pedidos del MISMO teléfono, del más nuevo al más viejo. */
   priors: PriorOrderSnapshot[];
   counts: OutcomeCounts;
   risk: ConfirmationRisk;
@@ -818,6 +820,13 @@ export interface OrderConfirmationBrief {
   /** Couriers con tarifa COD vigente para ese destino. Vacío = va por agencia. */
   codCouriers: string[];
   coverage: string | null;
+  /**
+   * Cuándo se creó el pedido que se está mirando, para saber cuáles del
+   * historial son POSTERIORES: no todos los que se listan son anteriores.
+   */
+  orderCreatedAt: string | null;
+  /** Qué lleva este pedido, para poder verlo repetido en el historial. */
+  products: string | null;
 }
 
 /**
@@ -835,7 +844,7 @@ export async function getOrderConfirmationBrief(
   const sb = await createServerSupabase();
   const { data: rowData } = await sb
     .from("order_master")
-    .select("order_id,store_id,customer_phone,region,province,district,coverage")
+    .select("order_id,store_id,customer_phone,region,province,district,coverage,order_created_at")
     .eq("order_id", orderId)
     .maybeSingle();
   if (!rowData) return null;
@@ -847,6 +856,7 @@ export async function getOrderConfirmationBrief(
     province: string | null;
     district: string | null;
     coverage: string | null;
+    order_created_at: string | null;
   };
 
   // Sin teléfono no hay historial que buscar: el teléfono ES la identidad del
@@ -856,13 +866,33 @@ export async function getOrderConfirmationBrief(
   if (phone) {
     const { data } = await sb
       .from("order_master")
-      .select("order_id,order_name,order_created_at,general_status,macro_stage,order_total")
+      .select(
+        "order_id,order_name,order_created_at,general_status,operational_status,macro_stage,order_total," +
+          "guide_code,current_courier,last_courier,delivered_courier,attempt_count",
+      )
       .eq("customer_phone", phone)
       .neq("order_id", orderId)
       .order("order_created_at", { ascending: false })
       .limit(50);
     priors = ((data ?? []) as unknown as PriorOrderSnapshot[]) ?? [];
   }
+
+  // Qué lleva cada pedido. Vive en `orders.line_items`, no en el master, así que
+  // es una lectura aparte — bajo el cliente de sesión, igual que el historial,
+  // para que la RLS siga decidiendo qué se ve. Si falla, la ficha se muestra sin
+  // productos: es contexto, no un dato del que dependa ninguna regla.
+  const products = new Map<string, string>();
+  const wanted = [row.order_id, ...priors.map((p) => p.order_id)];
+  try {
+    const { data: lines } = await sb.from("orders").select("id,line_items").in("id", wanted);
+    for (const entry of (lines ?? []) as unknown as { id: string; line_items: unknown }[]) {
+      const summary = summarizeProducts(parseLabelLineItems(entry.line_items));
+      if (summary) products.set(entry.id, summary);
+    }
+  } catch {
+    // Sin productos la ficha sigue sirviendo.
+  }
+  for (const prior of priors) prior.products = products.get(prior.order_id) ?? null;
 
   const counts = summarizeOutcomes(priors);
 
@@ -905,9 +935,11 @@ export async function getOrderConfirmationBrief(
   return {
     priors,
     counts,
-    risk: confirmationRisk(counts),
+    risk: confirmationRisk(counts, priors),
     duplicates: duplicateCandidates(priors),
     codCouriers,
     coverage: row.coverage,
+    orderCreatedAt: row.order_created_at,
+    products: products.get(row.order_id) ?? null,
   };
 }
