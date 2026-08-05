@@ -1354,6 +1354,11 @@ export function conversationToLeadSeed(c: KapsoConversation): LeadSeed | null {
 export interface HandoffInfo {
   conversationId: string | null;
   phone: string | null;
+  /** Identidad alternativa cuando el cliente no comparte su número (0105). Sale
+   *  del MISMO objeto `conversation` del webhook que el teléfono, así que un
+   *  handoff sin número igual llega identificado. */
+  bsuid: string | null;
+  username: string | null;
   name: string | null;
   reason: string | null;
   context: string | null;
@@ -1422,6 +1427,18 @@ export function parseHandoffPayload(body: any): HandoffInfo {
   return {
     conversationId: conv?.id ?? body?.conversation_id ?? exec?.conversation_id ?? null,
     phone: normalizePhone(conv?.phone_number ?? body?.phone_number ?? null),
+    // Mismas rutas y mismo guardián de forma que en conversationToLeadSeed: el
+    // objeto `conversation` del webhook es la misma conversación de Kapso, así
+    // que si el BSUID se leyera distinto en cada sitio el handoff y el sync
+    // terminarían creando DOS leads para la misma persona.
+    bsuid:
+      asBsuid(conv?.business_scoped_user_id) ??
+      asBsuid(conv?.kapso?.business_scoped_user_id) ??
+      asBsuid(body?.business_scoped_user_id),
+    username:
+      (typeof conv?.username === "string" && conv.username.trim()) ||
+      (typeof conv?.kapso?.username === "string" && conv.kapso.username.trim()) ||
+      null,
     name: conv?.contact_name ?? conv?.kapso?.contact_name ?? null,
     reason: reason ? String(reason) : null,
     context: context ? String(context) : null,

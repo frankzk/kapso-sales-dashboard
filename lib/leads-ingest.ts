@@ -1890,23 +1890,34 @@ export async function ingestConversationEvent(
 ): Promise<{ ok: boolean; reason?: string }> {
   const conv = body?.conversation ?? body?.data?.conversation ?? null;
   const seed = conv ? conversationToLeadSeed(conv) : null;
-  if (!seed) return { ok: false, reason: "no-phone" };
+  if (!seed) return { ok: false, reason: "no-identity" };
 
-  // Order by phone (non-cancelled) → won linkage.
-  const { data: order } = await admin
-    .from("orders")
-    .select("id")
-    .eq("store_id", storeId)
-    .eq("customer_phone", seed.phone)
-    .is("cancelled_at", null)
-    .limit(1)
-    .maybeSingle();
+  // Misma identidad que en applyHandoff (0105). Sin esto, `seed.phone` nulo
+  // viajaba a `.eq()` y PostgREST filtraba por la CADENA "null": el lead
+  // existente nunca aparecía, `existing` quedaba en null y `nextLeadState` volvía
+  // a derivar el estado desde cero — pisando la disposición que la asesora había
+  // puesto a mano, que es justo lo que el resto de esta función protege.
+  const idCol = seed.phone ? "phone" : "bsuid";
+  const idVal = (seed.phone ?? seed.bsuid) as string;
+
+  // Order by phone (non-cancelled) → won linkage. Solo con teléfono: los pedidos
+  // de Shopify se indexan por número y no conocen el BSUID.
+  const { data: order } = seed.phone
+    ? await admin
+        .from("orders")
+        .select("id")
+        .eq("store_id", storeId)
+        .eq("customer_phone", seed.phone)
+        .is("cancelled_at", null)
+        .limit(1)
+        .maybeSingle()
+    : { data: null };
 
   const { data: existing } = await admin
     .from("leads")
     .select("phone, status, handoff_reason, has_order")
     .eq("store_id", storeId)
-    .eq("phone", seed.phone)
+    .eq(idCol, idVal)
     .maybeSingle();
 
   await upsertLeadFromSeed(admin, storeId, seed, {
@@ -1924,21 +1935,27 @@ export async function applyHandoff(
   body: any,
 ): Promise<{ ok: boolean; reason?: string }> {
   const info: HandoffInfo = parseHandoffPayload(body);
-  // PENDIENTE (0105): un handoff de un lead SIN TELÉFONO se descarta acá, así que
-  // esos leads existen en la cola normal pero nunca suben a "Atender ahora"
-  // cuando el bot escala. No se arregla en la misma tanda que la migración de
-  // identidad a propósito: esta función empareja por teléfono en CUATRO sitios
-  // (este select, el update de la rama `has_order`, el `onConflict` del upsert y
-  // el select final del log), y es el camino crítico que ya falló en silencio dos
-  // veces. La vía es resolver el lead por `kapso_conversation_id` — que el
-  // payload sí trae — y operar por `id` en vez de por teléfono.
-  if (!info.phone) return { ok: false, reason: "no-phone" };
+  // Hace falta UNA identidad, no el teléfono (0105). Antes esto exigía número, y
+  // desde que Meta empezó a entregar conversaciones sin él esos handoffs se
+  // descartaban: el lead existía en la cola normal pero nunca subía a "Atender
+  // ahora" cuando el bot escalaba — justo el caso más urgente de todos.
+  if (!info.phone && !info.bsuid) return { ok: false, reason: "no-identity" };
+
+  // Por qué columna se busca y se escribe. Se resuelve UNA vez porque esta
+  // función toca `leads` tres veces y las tres tienen que apuntar a la MISMA
+  // fila: si una filtrara por teléfono y otra por BSUID, un handoff crearía un
+  // segundo lead de la misma persona en vez de actualizar el suyo. Es un par
+  // columna/valor y no un helper que envuelva la consulta porque los tipos del
+  // builder de PostgREST son tan profundos que envolverlos hace estallar la
+  // inferencia de TypeScript ("type instantiation is excessively deep").
+  const idCol = info.phone ? "phone" : "bsuid";
+  const idVal = (info.phone ?? info.bsuid) as string;
 
   const { data: existing } = await admin
     .from("leads")
     .select("status, has_order")
     .eq("store_id", storeId)
-    .eq("phone", info.phone)
+    .eq(idCol, idVal)
     .maybeSingle();
 
   const handoffFields = {
@@ -1961,7 +1978,7 @@ export async function applyHandoff(
       .from("leads")
       .update({ ...handoffFields, needs_attention: auto.needsAttention })
       .eq("store_id", storeId)
-      .eq("phone", info.phone);
+      .eq(idCol, idVal);
     return { ok: true };
   }
 
@@ -1984,6 +2001,7 @@ export async function applyHandoff(
     existing != null && (!info.reason || (advisorOwns && auto.status !== "yape_por_verificar"));
   const row: any = {
     store_id: storeId,
+    // Puede ser null (0105): entonces la identidad es `bsuid`, que va más abajo.
     phone: info.phone,
     kapso_conversation_id: info.conversationId,
     ...handoffFields,
@@ -1992,14 +2010,19 @@ export async function applyHandoff(
     last_interaction_at: new Date().toISOString(),
   };
   if (info.name) row.name = info.name;
-  await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
+  // Se escribe la identidad nueva SIEMPRE que venga, no solo cuando falta el
+  // teléfono: si un handoff llega antes que el sync, esta es la fila que crea el
+  // lead, y sin BSUID el CHECK `leads_identidad_presente` la rechazaría.
+  if (info.bsuid) row.bsuid = info.bsuid;
+  if (info.username) row.username = info.username;
+  await admin.from("leads").upsert(row, { onConflict: leadUpsertConflictTarget(info) });
 
   // Activity log entry (system).
   const { data: lead } = await admin
     .from("leads")
     .select("id")
     .eq("store_id", storeId)
-    .eq("phone", info.phone)
+    .eq(idCol, idVal)
     .maybeSingle();
   if (lead?.id) {
     await admin.from("lead_calls").insert({
