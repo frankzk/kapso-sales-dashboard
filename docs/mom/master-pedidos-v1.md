@@ -633,6 +633,21 @@ Cobros y liquidación observados:
 - Si Aliclik no entrega, el pedido puede ingresar a Reproprovincia.
 - Solo Aliclik tiene proceso de indemnización formal.
 
+Seguimiento de una guía hasta que cierra:
+
+- Una guía se sigue consultando **mientras siga viva**, sin importar su edad. El
+  criterio es el estado, no la fecha de creación: el barrido periódico relee una
+  ventana reciente y además persigue de una en una a las guías vivas que esa
+  ventana ya no alcanza.
+- Existe porque la **devolución** es el tramo más lento: un paquete rechazado
+  tarda semanas en volver al origen, mucho más que la ventana del barrido. Si el
+  seguimiento se anclara a la fecha, el `RETURNED` de Aliclik llegaría cuando ya
+  nadie pregunta y la devolución —que es entrada elegible a Reproprovincia
+  (§11)— no se registraría nunca.
+- Se deja de preguntar cuando la guía termina (entregada, anulada o
+  transferida) o tras **60 días sin noticias**. Ese silencio no cierra la guía:
+  solo detiene la consulta.
+
 Indemnización Aliclik:
 
 - Responsable: Yohalis.
