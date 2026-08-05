@@ -7,6 +7,7 @@ import {
   confirmationDays,
   confirmationResult,
   confirmationResultLabel,
+  hasConfirmationSignal,
   isConfirmationChannel,
   limaDayKey,
   reachedLastAttempt,
@@ -189,5 +190,50 @@ describe("lo que la línea de tiempo muestra del intento", () => {
     expect(confirmationResultLabel("pendiente_de_abono")).toBe("Pendiente de abono");
     expect(confirmationResultLabel("resultado_retirado")).toBe("resultado_retirado");
     expect(confirmationResultLabel(null)).toBeNull();
+  });
+});
+
+// La confirmación tenía CUATRO implementaciones y ya habían divergido. Estas
+// pruebas fijan la única definición y la frontera que la mantiene honesta: la
+// evidencia se responde aquí, la política de Lima se aplica en su llamador.
+describe("hasConfirmationSignal", () => {
+  it("una guía existente confirma: es el acto logístico dando la llamada por hecha", () => {
+    expect(hasConfirmationSignal({ hasGuide: true, events: [] })).toBe(true);
+  });
+
+  it("la palabra del asesor confirma", () => {
+    expect(
+      hasConfirmationSignal({ hasGuide: false, events: [{ kind: "confirmed" }] }),
+    ).toBe(true);
+  });
+
+  it("registrar la guía o el rótulo confirma aunque no exista todavía la fila de guía", () => {
+    // Es justo la divergencia que tenía `order-status`: miraba solo `confirmed`
+    // y el pago, así que estos dos eventos lo dejaban en «sin confirmar».
+    for (const kind of ["guide_registered", "label_generated"]) {
+      expect(hasConfirmationSignal({ hasGuide: false, events: [{ kind }] })).toBe(true);
+    }
+  });
+
+  it("un pedido pagado en Shopify no espera llamada", () => {
+    expect(
+      hasConfirmationSignal({ hasGuide: false, events: [], financialStatus: "PAID" }),
+    ).toBe(true);
+  });
+
+  it("sin ninguna señal, no hay confirmación", () => {
+    expect(
+      hasConfirmationSignal({
+        hasGuide: false,
+        events: [{ kind: "confirmation_contact" }],
+        financialStatus: "pending",
+      }),
+    ).toBe(false);
+  });
+
+  it("no sabe nada de Lima: la exención es política de macroetapa, no evidencia", () => {
+    // Si la exención viviera aquí, el estado operativo legado daría por
+    // confirmados a los pedidos de Lima que nadie llamó.
+    expect(hasConfirmationSignal({ hasGuide: false, events: [] })).toBe(false);
   });
 });
