@@ -83,6 +83,7 @@ roles and the `auth` schema, so it just works.
    | `ALICLIK_WRITE_ENABLED` | `false` por defecto. `true` habilita CREAR guías en Aliclik |
    | `SHALOM_API_KEY` | API key (`sk_…`) del wrapper de Shalom. **Global: una para todas las tiendas.** Sin ella no aparece «+ Guía Shalom» (ver 5ñ) |
    | `SHALOM_API_BASE` | `https://api.shalom-api-peru.com` (optional). **El host a secas, sin `/v1`**: el cliente ya añade la ruta, y una base con `/v1` produce `/v1/v1/…` → 404. Si no existe la variable, el valor por defecto ya es el correcto |
+   | `CHATBY_WEBHOOK_SECRET` | Secreto del «Live Chat Webhook» de Chatby. **Lo elegís vos** (`openssl rand -hex 32`), no lo emite Chatby. Va también en Chatby → Integrations → Live Chat Support → Webhook, campo *Custom Header*: `X-Webhook-Secret: <valor>`. Sin él el receptor rechaza todo (ver 5q) |
 
    `DATABASE_URL` is only needed for migrations; you don't have to add it to
    Vercel.
@@ -1218,6 +1219,47 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   estar completo.
 - Revisar primero una ruta pequeña en producción y comprobar su historial en el
   Master antes de usarla con todos los couriers.
+
+## 5q. Chatby — capturar la conversación del Live Chat
+
+- **Requiere migración 0104** antes de activar el webhook.
+- Chatby (white-label de uChat) **no expone lectura de mensajes por API**: sus
+  endpoints de conversación devuelven agregados y el modelo `Subscriber` solo
+  trae `last_message_at`/`last_message_type`. El texto llega únicamente por este
+  webhook, y **no hay forma de pedir el histórico**: lo que no se capture
+  mientras está apagado se pierde para siempre. Por eso conviene activarlo
+  aunque la interfaz que lo consuma todavía no exista.
+- Generá el secreto (`openssl rand -hex 32`), cargalo como `CHATBY_WEBHOOK_SECRET`
+  y en Chatby → **Integrations → Live Chat Support → Webhook**:
+
+  | Campo | Valor |
+  |---|---|
+  | Webhook URL | `{NEXT_PUBLIC_SITE_URL}/api/webhooks/chatby` |
+  | Custom Header | `X-Webhook-Secret: <CHATBY_WEBHOOK_SECRET>` |
+
+- Antes de darle a *Save*, un **GET a la misma URL** confirma que la ruta existe
+  y que el secreto ya está cargado (`configured: true`), sin revelarlo. Sin ese
+  GET, la única forma de comprobar la configuración sería esperar a que un
+  cliente escriba.
+- ⚠️ **Medido en producción (2026-08-05): este webhook NO cubre WhatsApp.** Con
+  el bot pausado se mandaron dos mensajes entrantes de WhatsApp y no hubo
+  ninguna entrega — en los logs de Vercel no aparece **ni una** petición a la
+  ruta en ese minuto. No es configuración: el ping de validación del *Save* sí
+  llegó y sí escribió fila con esa misma URL y cabecera. «Live Chat» en Chatby
+  significa su **widget web**.
+  El receptor se conserva igual porque el paso **External Request** del flow
+  builder, que sí corre sobre WhatsApp, puede POSTear a esta misma ruta con la
+  misma cabecera.
+- **Límites del webhook, no nuestros**: solo manda mensajes **entrantes** y solo
+  con el **bot pausado**. La fase en que el bot conversa no llega. Los salientes
+  se emiten desde el dashboard vía `POST /subscriber/send-content` con
+  `send_as_agent: 1`, y el hilo se arma mezclando las dos mitades.
+- Se configura **por cuenta, no por bot**: un único webhook para Aurela y Kenku.
+  Por eso `chatby_webhook_log` todavía no tiene `store_id` — resolver la tienda
+  exige saber qué trae el payload, y escribirlo a ciegas pondría la conversación
+  en la tienda equivocada.
+- Es una bitácora **append-only y sin pérdida**: guarda el JSON entero tal como
+  llegó, incluso si no es JSON válido. La tabla definitiva se rellena desde acá.
 
 ## 7. Post-deploy verification
 

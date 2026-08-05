@@ -33,6 +33,15 @@ export interface PriorOrderSnapshot {
   general_status: string | null;
   macro_stage: string | null;
   order_total: number | null;
+  /** El estado granular de Kapta: `sin_confirmar`, `en_ruta`, `anulado`… */
+  operational_status?: string | null;
+  guide_code?: string | null;
+  current_courier?: string | null;
+  last_courier?: string | null;
+  delivered_courier?: string | null;
+  attempt_count?: number | null;
+  /** Resumen legible de las líneas del pedido: «Nattokinase ×3». */
+  products?: string | null;
 }
 
 /**
@@ -61,6 +70,112 @@ export function summarizeOutcomes(rows: readonly PriorOrderSnapshot[]): OutcomeC
   const counts = emptyOutcomeCounts();
   for (const row of rows) counts[priorOutcome(row)] += 1;
   return counts;
+}
+
+// ---------------------------------------------------------------------------
+// ¿Llegó a salir? (MOM §8.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Si el pedido llegó a costar flete, que es lo que separa dos anulados que la
+ * ficha hoy cuenta igual.
+ *
+ * Nueve de cada diez anulados se anulan ANTES de despacharse: no salió ningún
+ * paquete y no se perdió flete. El resto se despachó y se cayó en la calle. Para
+ * la llamada son casos opuestos —a uno le sobra con confirmar mejor, al otro hay
+ * que exigirle plata— y hasta ahora se veían idénticos.
+ *
+ * La guía es la prueba: sin `guide_code` nadie recogió nada.
+ */
+export type DispatchState = "entregado" | "despachado" | "nunca_despachado";
+
+export const DISPATCH_STATE_LABEL: Record<DispatchState, string> = {
+  entregado: "entregado",
+  despachado: "se despachó",
+  nunca_despachado: "nunca se despachó",
+};
+
+export function dispatchState(row: PriorOrderSnapshot): DispatchState {
+  if (priorOutcome(row) === "entregado") return "entregado";
+  return (row.guide_code ?? "").trim() ? "despachado" : "nunca_despachado";
+}
+
+/**
+ * El courier que de verdad tocó el pedido.
+ *
+ * Se prefiere el que entregó, luego el que lo tiene ahora, y al final el último
+ * que lo tuvo: un pedido que pasó de Aliclik a agencia tiene los tres, y el que
+ * importa es el que cerró la historia.
+ */
+export function priorCourier(row: PriorOrderSnapshot): string | null {
+  for (const value of [row.delivered_courier, row.current_courier, row.last_courier]) {
+    const text = (value ?? "").trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Antes o después (MOM §8.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Si el pedido del historial es anterior o POSTERIOR al que se está mirando.
+ *
+ * La ficha los llamaba a todos «anteriores» y no siempre lo son: un pedido viejo
+ * que nadie confirmó acumula por debajo los intentos nuevos del mismo cliente.
+ * Visto como «3 pedidos anteriores anulados» parece un cliente con mal
+ * historial; visto en orden real es un pedido de hace cinco semanas que el
+ * cliente ya volvió a pedir tres veces. Se decide distinto.
+ */
+export type PriorTiming = "anterior" | "posterior";
+
+export function priorTiming(
+  row: PriorOrderSnapshot,
+  referenceCreatedAt: string | null,
+): PriorTiming {
+  const own = Date.parse(row.order_created_at ?? "");
+  const reference = Date.parse(referenceCreatedAt ?? "");
+  if (!Number.isFinite(own) || !Number.isFinite(reference)) return "anterior";
+  return own > reference ? "posterior" : "anterior";
+}
+
+export function countLaterOrders(
+  rows: readonly PriorOrderSnapshot[],
+  referenceCreatedAt: string | null,
+): number {
+  return rows.filter((row) => priorTiming(row, referenceCreatedAt) === "posterior").length;
+}
+
+// ---------------------------------------------------------------------------
+// Qué pidió (MOM §8.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Las líneas del pedido en una sola línea de texto: «Nattokinase ×3 · Omega ×1».
+ *
+ * Sirve para ver de un vistazo que los cuatro pedidos del cliente son el mismo
+ * producto y la misma cantidad — o sea, el mismo pedido repetido, no un
+ * historial de compras variado.
+ */
+export function summarizeProducts(
+  items: readonly { quantity: number; name: string }[],
+  maxLines = 3,
+): string | null {
+  if (items.length === 0) return null;
+  const shown = items
+    .slice(0, maxLines)
+    .map((item) => (item.quantity > 1 ? `${item.name} ×${item.quantity}` : item.name))
+    .join(" · ");
+  const rest = items.length - maxLines;
+  return rest > 0 ? `${shown} +${rest}` : shown;
+}
+
+/** Si dos pedidos llevan exactamente lo mismo. */
+export function sameProducts(a: string | null | undefined, b: string | null | undefined): boolean {
+  const left = (a ?? "").trim().toLowerCase();
+  const right = (b ?? "").trim().toLowerCase();
+  return left !== "" && left === right;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,12 +219,33 @@ export interface ConfirmationRisk {
  * visibles: son el argumento de quien decide saltarse la regla, no un motivo
  * para que la regla no se aplique.
  */
-export function confirmationRisk(counts: OutcomeCounts): ConfirmationRisk {
+export function confirmationRisk(
+  counts: OutcomeCounts,
+  priors: readonly PriorOrderSnapshot[] = [],
+): ConfirmationRisk {
   const antecedents = counts.anulado + counts.devuelto;
   const reasons: string[] = [];
 
   if (counts.anulado > 0) {
-    reasons.push(`${counts.anulado} pedido${counts.anulado === 1 ? "" : "s"} anulado${counts.anulado === 1 ? "" : "s"}.`);
+    // Cuántos de esos anulados costaron flete. El número de antecedentes no
+    // cambia —la tabla del §8 los cuenta a todos igual— pero quien llama tiene
+    // que ver la diferencia: exigir pago completo a alguien que nunca hizo
+    // salir un paquete no es lo mismo que exigírselo a quien lo rechazó en la
+    // puerta tres veces.
+    const dispatched = priors.filter(
+      (row) => priorOutcome(row) === "anulado" && dispatchState(row) === "despachado",
+    ).length;
+    const detail =
+      priors.length === 0
+        ? ""
+        : dispatched === 0
+          ? ", ninguno llegó a despacharse"
+          : dispatched === counts.anulado
+            ? ", todos ya despachados"
+            : `, ${dispatched} ya despachado${dispatched === 1 ? "" : "s"}`;
+    reasons.push(
+      `${counts.anulado} pedido${counts.anulado === 1 ? "" : "s"} anulado${counts.anulado === 1 ? "" : "s"}${detail}.`,
+    );
   }
   if (counts.devuelto > 0) {
     reasons.push(`${counts.devuelto} devuelto${counts.devuelto === 1 ? "" : "s"}.`);

@@ -12,6 +12,7 @@ import {
   CONFIRMATION_CONTACT_KINDS,
   CONFIRMATION_FOLLOWUP_KINDS,
   CONFIRMATION_LAST_ATTEMPT_KINDS,
+  hasConfirmationSignal,
   reachedLastAttempt,
 } from "@/lib/order-confirmation";
 
@@ -852,11 +853,15 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
     );
   }
 
+  // Lima omite confirmación (§5) y por eso la política vive aquí; la evidencia
+  // la responde `hasConfirmationSignal`, que es la única definición.
   const confirmed =
     operation === "lima" ||
-    input.guides.length > 0 ||
-    Boolean(latestEvent(input.events, ["confirmed", "guide_registered", "label_generated"])) ||
-    normalize(input.order.financial_status) === "paid";
+    hasConfirmationSignal({
+      hasGuide: input.guides.length > 0,
+      events: input.events,
+      financialStatus: input.order.financial_status,
+    });
   const paymentReady = agencyPaymentReady(operation, input.paymentState);
 
   if (confirmed && paymentReady) {

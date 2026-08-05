@@ -9,6 +9,7 @@ import {
   type MomOwnerShipmentFact,
   type MomOwnerSummary,
 } from "@/lib/mom-owner-summary";
+import { CONFIRMATION_SIGNAL_KINDS } from "@/lib/order-confirmation";
 
 const PAGE_SIZE = 1_000;
 
@@ -213,7 +214,7 @@ export async function getMomOwnerSummary(
           .from("order_events")
           .select("order_id,kind,occurred_at")
           .in("store_id", storeIds)
-          .in("kind", ["confirmed", "guide_registered", "label_generated"])
+          .in("kind", [...CONFIRMATION_SIGNAL_KINDS])
           .gte("occurred_at", earliest)
           .lt("occurred_at", currentEnd)
           .order("occurred_at", { ascending: true })

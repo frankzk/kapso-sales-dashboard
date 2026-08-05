@@ -20,10 +20,12 @@ import {
   confirmationRisk,
   duplicateCandidates,
   summarizeOutcomes,
+  summarizeProducts,
   type ConfirmationRisk,
   type OutcomeCounts,
   type PriorOrderSnapshot,
 } from "@/lib/order-confirmation-brief";
+import { parseLabelLineItems } from "@/lib/labels/line-items";
 import {
   confirmationAttemptDetail,
   type ConfirmationAttemptDetail,
@@ -44,6 +46,7 @@ import type {
 } from "@/lib/types";
 import {
   AGENCY_AVAILABLE_STATES,
+  emptyFilters,
   type AgencySummary,
   type MasterFilters,
   type MasterSortKey,
@@ -519,6 +522,16 @@ const SORT_COLUMN: Record<MasterSortKey, { column: string; ascending: boolean }>
 };
 
 /**
+ * El término de búsqueda, normalizado. Vive aparte porque lo miran dos sitios:
+ * quien arma el `or(...ilike...)` y quien decide que buscar ignora la pestaña.
+ * Si cada uno lo normalizara por su cuenta, un día dejarían de coincidir y la
+ * búsqueda volvería a acotarse sola en algún caso raro — el `#` es justo eso.
+ */
+function searchTerm(f: MasterFilters): string {
+  return f.search.trim().replace(/^#/, "");
+}
+
+/**
  * Traduce los filtros a la consulta. Cada uno se apoya en un índice que ya
  * existe (`order_master_store_district_idx`, `..._store_courier_idx`, los
  * parciales de multi_courier y multi_attempt…), así que filtrar en la base sale
@@ -580,7 +593,7 @@ function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
     q = q.or(`last_movement_at.is.null,last_movement_at.lte.${cutoff}`);
   }
 
-  const term = f.search.trim().replace(/^#/, "");
+  const term = searchTerm(f);
   if (term) {
     const like = `*${term.replace(/[*,()]/g, "")}*`;
     q = q.or(
@@ -619,14 +632,30 @@ export async function getOrderMasterPage(
   const now = params.now ?? new Date();
   const sort = SORT_COLUMN.created;
 
+  // Buscar es buscar en TODO el Master. Quien teclea "#KP125285" quiere ESE
+  // pedido, y por definición no sabe dónde está — si lo supiera no lo buscaría.
+  // Cualquier recorte previo sólo sirve para esconderlo y dejar un "Sin
+  // coincidencias" que se lee como "ese pedido no existe".
+  //
+  // Se ignoran la pestaña, la subetapa y TODOS los demás filtros, y no por
+  // gusto: mientras hay búsqueda la pantalla oculta las pestañas y la barra de
+  // filtros entera. Un filtro que sigue actuando pero no se ve ni se puede
+  // quitar es una trampa — da igual que lo pusiera el usuario hace un rato.
+  // Lo único que se mantiene es `store_id`, que no es un filtro sino el límite
+  // de lo que esta persona puede ver.
+  const searching = searchTerm(params.filters).length > 0;
+  const effectiveFilters = searching
+    ? { ...emptyFilters(), search: params.filters.search }
+    : params.filters;
+
   const build = (select: string, opts?: { count: "exact"; head: true }) => {
     let q = opts
       ? sb.from("order_master").select(select, opts)
       : sb.from("order_master").select(select);
     q = q.in("store_id", storeIds) as typeof q;
-    if (view !== "todos") q = q.eq("macro_stage", view) as typeof q;
-    if (params.substage) q = q.eq("macro_substage", params.substage) as typeof q;
-    return applyServerFilters(q, params.filters, now);
+    if (!searching && view !== "todos") q = q.eq("macro_stage", view) as typeof q;
+    if (!searching && params.substage) q = q.eq("macro_substage", params.substage) as typeof q;
+    return applyServerFilters(q, effectiveFilters, now);
   };
 
   // El conteo va en paralelo con la página: es una consulta `head`, no trae
@@ -782,7 +811,7 @@ export async function getMasterFacets(storeIds: string[]): Promise<{
 // ---------------------------------------------------------------------------
 
 export interface OrderConfirmationBrief {
-  /** Pedidos anteriores del MISMO teléfono, del más nuevo al más viejo. */
+  /** Los otros pedidos del MISMO teléfono, del más nuevo al más viejo. */
   priors: PriorOrderSnapshot[];
   counts: OutcomeCounts;
   risk: ConfirmationRisk;
@@ -791,6 +820,13 @@ export interface OrderConfirmationBrief {
   /** Couriers con tarifa COD vigente para ese destino. Vacío = va por agencia. */
   codCouriers: string[];
   coverage: string | null;
+  /**
+   * Cuándo se creó el pedido que se está mirando, para saber cuáles del
+   * historial son POSTERIORES: no todos los que se listan son anteriores.
+   */
+  orderCreatedAt: string | null;
+  /** Qué lleva este pedido, para poder verlo repetido en el historial. */
+  products: string | null;
 }
 
 /**
@@ -808,7 +844,7 @@ export async function getOrderConfirmationBrief(
   const sb = await createServerSupabase();
   const { data: rowData } = await sb
     .from("order_master")
-    .select("order_id,store_id,customer_phone,region,province,district,coverage")
+    .select("order_id,store_id,customer_phone,region,province,district,coverage,order_created_at")
     .eq("order_id", orderId)
     .maybeSingle();
   if (!rowData) return null;
@@ -820,6 +856,7 @@ export async function getOrderConfirmationBrief(
     province: string | null;
     district: string | null;
     coverage: string | null;
+    order_created_at: string | null;
   };
 
   // Sin teléfono no hay historial que buscar: el teléfono ES la identidad del
@@ -829,13 +866,33 @@ export async function getOrderConfirmationBrief(
   if (phone) {
     const { data } = await sb
       .from("order_master")
-      .select("order_id,order_name,order_created_at,general_status,macro_stage,order_total")
+      .select(
+        "order_id,order_name,order_created_at,general_status,operational_status,macro_stage,order_total," +
+          "guide_code,current_courier,last_courier,delivered_courier,attempt_count",
+      )
       .eq("customer_phone", phone)
       .neq("order_id", orderId)
       .order("order_created_at", { ascending: false })
       .limit(50);
     priors = ((data ?? []) as unknown as PriorOrderSnapshot[]) ?? [];
   }
+
+  // Qué lleva cada pedido. Vive en `orders.line_items`, no en el master, así que
+  // es una lectura aparte — bajo el cliente de sesión, igual que el historial,
+  // para que la RLS siga decidiendo qué se ve. Si falla, la ficha se muestra sin
+  // productos: es contexto, no un dato del que dependa ninguna regla.
+  const products = new Map<string, string>();
+  const wanted = [row.order_id, ...priors.map((p) => p.order_id)];
+  try {
+    const { data: lines } = await sb.from("orders").select("id,line_items").in("id", wanted);
+    for (const entry of (lines ?? []) as unknown as { id: string; line_items: unknown }[]) {
+      const summary = summarizeProducts(parseLabelLineItems(entry.line_items));
+      if (summary) products.set(entry.id, summary);
+    }
+  } catch {
+    // Sin productos la ficha sigue sirviendo.
+  }
+  for (const prior of priors) prior.products = products.get(prior.order_id) ?? null;
 
   const counts = summarizeOutcomes(priors);
 
@@ -878,9 +935,11 @@ export async function getOrderConfirmationBrief(
   return {
     priors,
     counts,
-    risk: confirmationRisk(counts),
+    risk: confirmationRisk(counts, priors),
     duplicates: duplicateCandidates(priors),
     codCouriers,
     coverage: row.coverage,
+    orderCreatedAt: row.order_created_at,
+    products: products.get(row.order_id) ?? null,
   };
 }
