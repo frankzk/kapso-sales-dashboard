@@ -697,6 +697,55 @@ describe("helpers", () => {
       last_interaction_at: "2026-06-22T15:10:45Z",
     });
   });
+
+  // Meta está moviendo la identidad de WhatsApp del teléfono al BSUID. Todavía no
+  // se empareja por él — solo se guarda, para no depender de un tercero el día que
+  // haga falta reconstruir la base.
+  describe("identidad nueva: bsuid y username", () => {
+    const conv = (over: Record<string, unknown>) =>
+      conversationToLeadSeed({ id: "c", phone_number: "51980694766", ...over } as any);
+
+    it("captura el BSUID y el username cuando vienen", () => {
+      expect(
+        conv({ business_scoped_user_id: "PE.13491208655302741918", username: "realsheena" }),
+      ).toMatchObject({ bsuid: "PE.13491208655302741918", username: "realsheena" });
+    });
+
+    it("los lee también en la forma anidada del webhook v2", () => {
+      expect(
+        conv({ kapso: { business_scoped_user_id: "PE.9922551287", username: "sheena2" } }),
+      ).toMatchObject({ bsuid: "PE.9922551287", username: "sheena2" });
+    });
+
+    it("acepta la variante 'parent' (ENT), que es más larga", () => {
+      expect(conv({ business_scoped_user_id: "US.ENT.11815799212886844830" })).toMatchObject({
+        bsuid: "US.ENT.11815799212886844830",
+      });
+    });
+
+    // Guardar un teléfono en la columna de identidad emparejaría con la persona
+    // equivocada más adelante, y sin ningún error de por medio.
+    it("rechaza lo que no tenga forma de BSUID", () => {
+      expect(conv({ business_scoped_user_id: "51980694766" })?.bsuid).toBeNull();
+      expect(conv({ business_scoped_user_id: "" })?.bsuid).toBeNull();
+      expect(conv({ business_scoped_user_id: 12345 })?.bsuid).toBeNull();
+      expect(conv({})?.bsuid).toBeNull();
+    });
+
+    it("un username en blanco no se guarda como cadena vacía", () => {
+      expect(conv({ username: "   " })?.username).toBeNull();
+      expect(conv({})?.username).toBeNull();
+    });
+
+    // El teléfono sigue siendo obligatorio para crear el lead: la clave es
+    // (store_id, phone). Cambiar eso es el paso caro, y no se hace hasta que el
+    // contador `sinTelefono` del sync deje de ser cero.
+    it("sin teléfono sigue descartando, aunque traiga BSUID", () => {
+      expect(
+        conversationToLeadSeed({ id: "c", business_scoped_user_id: "PE.123" } as any),
+      ).toBeNull();
+    });
+  });
 });
 
 describe("classifyKapsoEvent (webhook routing)", () => {
