@@ -115,31 +115,76 @@ export const UBIGEO_BY_CITY: Record<string, Record<string, string>> = {
     "caracoto": "211104",
     "san miguel": "211105",
   },
-  // Las cuatro ciudades nuevas entran SOLO con su cercado, a diferencia de las
-  // seis de arriba que traen la provincia entera.
+  // Las cuatro provincias de abajo se transcribieron del padrón INEI completo
+  // (2095 filas: 25 departamentos + 196 provincias + 1874 distritos), no de
+  // memoria. El padrón se validó primero contra las 100 entradas que ya estaban
+  // en esta tabla —incluidas las siete confirmadas en vivo contra la API de
+  // cotización de Swayp— y coincidió código por código y nombre por nombre, lo
+  // que confirma que es la numeración INEI y no la de RENIEC.
   //
-  // El cercado es el único código que se puede afirmar sin la lista INEI
-  // delante: es la capital de provincia y siempre termina en 01 (Ica es la
-  // provincia 01 de Ica → 110101; Santa es la 18 de Áncash → 021801). Los
-  // distritos restantes de cada provincia no se transcriben de memoria a
-  // propósito: `resolveUbigeo` exige `exact` y un distrito ausente hace que
-  // `buildSwaypGuideInput` se niegue con un mensaje claro, mientras que un
-  // código equivocado crea la guía y desvía el paquete sin avisar. Faltar es
-  // recuperable; mentir no.
-  //
-  // Para completar cada provincia hace falta su listado INEI (no RENIEC, que
-  // numera distinto los mismos distritos).
+  // Los saltos no son errores de transcripción: Piura salta 200102, 200103 y
+  // 200106 porque esos distritos pasaron a la provincia de Sechura en 1994.
   ica: {
     "ica": "110101",
+    "la tinguina": "110102",
+    "los aquijes": "110103",
+    "ocucaje": "110104",
+    "pachacutec": "110105",
+    "parcona": "110106",
+    "pueblo nuevo": "110107",
+    "salas": "110108",
+    "san jose de los molinos": "110109",
+    "san juan bautista": "110110",
+    "santiago": "110111",
+    "subtanjalla": "110112",
+    "tate": "110113",
+    "yauca del rosario": "110114",
   },
   piura: {
     "piura": "200101",
+    "castilla": "200104",
+    "catacaos": "200105",
+    "cura mori": "200107",
+    "el tallan": "200108",
+    "la arena": "200109",
+    "la union": "200110",
+    "las lomas": "200111",
+    "tambo grande": "200114",
+    "26 de octubre": "200115",
   },
+  // Chimbote es la capital de la provincia de Santa, no una provincia propia.
   chimbote: {
     "chimbote": "021801",
+    "caceres del peru": "021802",
+    "coishco": "021803",
+    "macate": "021804",
+    "moro": "021805",
+    "nepena": "021806",
+    "samanco": "021807",
+    "santa": "021808",
+    "nuevo chimbote": "021809",
   },
   chiclayo: {
     "chiclayo": "140101",
+    "chongoyape": "140102",
+    "eten": "140103",
+    "eten puerto": "140104",
+    "jose leonardo ortiz": "140105",
+    "la victoria": "140106",
+    "lagunas": "140107",
+    "monsefu": "140108",
+    "nueva arica": "140109",
+    "oyotun": "140110",
+    "picsi": "140111",
+    "pimentel": "140112",
+    "reque": "140113",
+    "santa rosa": "140114",
+    "sana": "140115",
+    "cayalti": "140116",
+    "patapo": "140117",
+    "pomalca": "140118",
+    "pucala": "140119",
+    "tuman": "140120",
   },
   puno: {
     "puno": "210101",
@@ -163,6 +208,25 @@ export const UBIGEO_BY_CITY: Record<string, Record<string, string>> = {
 /** Ayaviri (Melgar, Puno) — served out of the Juliaca warehouse but a different
  *  province, so it isn't in the Juliaca table above. */
 export const UBIGEO_AYAVIRI = "210801";
+
+/**
+ * Distritos que el padrón INEI escribe de una forma y la gente de otra.
+ *
+ * No son códigos alternativos —eso rompería la garantía de «un código, una
+ * entrada»— sino grafías que apuntan a la clave canónica. Sin esto, una
+ * dirección de Shopify que diga «Veintiséis de Octubre» (un distrito de 130 mil
+ * habitantes en Piura) no resuelve y la guía se rechaza, aunque el distrito SÍ
+ * esté en la tabla.
+ *
+ * Solo entran variantes inequívocas: ninguna de estas cadenas es el nombre de
+ * otro distrito del padrón. La búsqueda sigue acotada a la ciudad, así que un
+ * alias solo aplica si esa ciudad tiene la clave.
+ */
+const DISTRICT_ALIASES: Record<string, string> = {
+  "veintiseis de octubre": "26 de octubre", // Piura
+  "puerto eten": "eten puerto", // Chiclayo — el padrón lo invierte
+  "zana": "sana", // Chiclayo — Zaña/Saña
+};
 
 export interface UbigeoMatch {
   /** 6-digit INEI code to send as ciudadRemitente / ciudadDestinatario. */
@@ -222,6 +286,11 @@ export function resolveUbigeo(
   if (!bare) return fallback;
   const byBare = table[bare];
   if (byBare) return { code: byBare, district: bare, exact: true };
+
+  // Una grafía conocida del mismo distrito, antes de intentar por prefijo.
+  const alias = DISTRICT_ALIASES[bare];
+  const byAlias = alias ? table[alias] : undefined;
+  if (alias && byAlias) return { code: byAlias, district: alias, exact: true };
 
   // Ayaviri is served from Juliaca but lives in another province.
   if (bare === "ayaviri" && (cityKey === "juliaca" || cityKey === "puno")) {

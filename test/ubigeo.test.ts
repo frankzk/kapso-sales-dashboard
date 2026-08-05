@@ -96,15 +96,59 @@ describe("coverage table", () => {
     expect(warehouseUbigeo("Chiclayo")).toBe("140101");
   });
 
-  it("un distrito todavía sin transcribir NO se adivina: cae en no-exacto", () => {
-    // Las cuatro nuevas entraron solo con su cercado. Mientras falte el resto
-    // de la provincia, un distrito desconocido tiene que devolver
-    // `exact: false` —lo que hace que la creación de guía se niegue— y no un
-    // código aproximado, que crearía la guía y desviaría el paquete.
-    const tinguina = resolveUbigeo("Ica", "La Tinguiña");
-    expect(tinguina?.exact).toBe(false);
-    expect(resolveUbigeo("Chiclayo", "José Leonardo Ortiz")?.exact).toBe(false);
-    expect(resolveUbigeo("Chimbote", "Nuevo Chimbote")?.exact).toBe(false);
+  it("trae las cuatro provincias completas, no solo el cercado", () => {
+    expect(Object.keys(UBIGEO_BY_CITY.ica!)).toHaveLength(14);
+    expect(Object.keys(UBIGEO_BY_CITY.piura!)).toHaveLength(10);
+    expect(Object.keys(UBIGEO_BY_CITY.chimbote!)).toHaveLength(9);
+    expect(Object.keys(UBIGEO_BY_CITY.chiclayo!)).toHaveLength(20);
+  });
+
+  it("resuelve los distritos grandes de cada provincia nueva", () => {
+    expect(resolveUbigeo("Ica", "La Tinguiña")?.code).toBe("110102");
+    expect(resolveUbigeo("Ica", "Parcona")?.code).toBe("110106");
+    expect(resolveUbigeo("Piura", "Castilla")?.code).toBe("200104");
+    expect(resolveUbigeo("Piura", "Catacaos")?.code).toBe("200105");
+    expect(resolveUbigeo("Chimbote", "Nuevo Chimbote")?.code).toBe("021809");
+    expect(resolveUbigeo("Chiclayo", "José Leonardo Ortiz")?.code).toBe("140105");
+    expect(resolveUbigeo("Chiclayo", "Pimentel")?.code).toBe("140112");
+  });
+
+  it("Piura salta códigos porque esos distritos se fueron a Sechura en 1994", () => {
+    // 200102, 200103 y 200106 no existen en la provincia de Piura. El salto es
+    // del padrón, no una transcripción incompleta: una lista inventada saldría
+    // correlativa.
+    const codes = Object.values(UBIGEO_BY_CITY.piura!);
+    expect(codes).not.toContain("200102");
+    expect(codes).not.toContain("200103");
+    expect(codes).not.toContain("200106");
+    expect(codes).toContain("200115");
+  });
+
+  it("acepta la grafía de la calle cuando el padrón escribe distinto", () => {
+    // Sin estos alias la guía se rechaza aunque el distrito SÍ esté en la
+    // tabla, porque `buildSwaypGuideInput` exige `exact`.
+    expect(resolveUbigeo("Piura", "Veintiséis de Octubre")?.code).toBe("200115");
+    expect(resolveUbigeo("Piura", "26 de Octubre")?.code).toBe("200115");
+    expect(resolveUbigeo("Chiclayo", "Puerto Eten")?.code).toBe("140104");
+    expect(resolveUbigeo("Chiclayo", "Eten Puerto")?.code).toBe("140104");
+    expect(resolveUbigeo("Chiclayo", "Zaña")?.code).toBe("140115");
+    expect(resolveUbigeo("Chiclayo", "Saña")?.code).toBe("140115");
+    // Y siguen siendo exactos: un alias no puede colar un cercado disfrazado.
+    expect(resolveUbigeo("Piura", "Veintiséis de Octubre")?.exact).toBe(true);
+  });
+
+  it("un alias no cruza de ciudad", () => {
+    // «Zaña» es de Chiclayo; pedirlo en Ica no puede resolver a nada exacto.
+    expect(resolveUbigeo("Ica", "Zaña")?.exact).toBe(false);
+  });
+
+  it("el mismo nombre en dos ciudades resuelve por ciudad", () => {
+    // Santiago existe en Cusco (080106) y en Ica (110111).
+    expect(resolveUbigeo("Cusco", "Santiago")?.code).toBe("080106");
+    expect(resolveUbigeo("Ica", "Santiago")?.code).toBe("110111");
+    // Santa Rosa (Chiclayo) y Santa (Chimbote) no se pisan.
+    expect(resolveUbigeo("Chiclayo", "Santa Rosa")?.code).toBe("140114");
+    expect(resolveUbigeo("Chimbote", "Santa")?.code).toBe("021808");
   });
 
   it("holds only well-formed 6-digit INEI codes, with no duplicates", () => {

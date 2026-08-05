@@ -642,13 +642,18 @@ en esa ciudad, así que una ciudad recién agregada queda en `sin_stock` —no e
 `sin_cobertura`— hasta que alguien cargue existencias. Nada se reencamina solo
 por aparecer acá.
 
-Ica, Piura, Chimbote y Chiclayo están registradas con el ubigeo INEI de su
-cercado únicamente. Swayp identifica el destino por ubigeo, y la creación de
-guía **exige** distrito exacto: mientras no se transcriba el listado INEI
-completo de esas cuatro provincias, una guía a un distrito distinto del cercado
-se rechaza con mensaje explícito en vez de salir con un código aproximado. Es
-una limitación conocida, no un error: un ubigeo equivocado desvía el paquete
-sin avisar.
+Las nueve ciudades están registradas con el padrón INEI completo de su
+provincia: Ica (14 distritos), Piura (10), Santa/Chimbote (9) y Chiclayo (20)
+se sumaron a las seis anteriores. Swayp identifica el destino por ubigeo y la
+creación de guía **exige** distrito exacto, así que un distrito que no esté en
+la tabla se rechaza con mensaje explícito en vez de salir con un código
+aproximado: un ubigeo equivocado desvía el paquete sin avisar.
+
+Los códigos son INEI, nunca RENIEC — numeran distinto los mismos distritos.
+
+Falta la configuración de bodega Swayp (`senders`) de las cuatro ciudades
+nuevas; sin ella la guía se niega aunque el ubigeo resuelva. Es configuración
+operativa, no código.
 
 Una salida Swayp puede coexistir con la devolución Aliclik. En Reproprovincia
 Swayp se puede repetir, siempre con una salida, guía y QR nuevos, dentro del
