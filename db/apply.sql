@@ -211,4 +211,6 @@
 \ir migrations/0102_aliclik_health.sql
 \echo 'Applying 0103_leads_bsuid_identity.sql'
 \ir migrations/0103_leads_bsuid_identity.sql
+\echo 'Applying 0104_order_coverage_batch.sql'
+\ir migrations/0104_order_coverage_batch.sql
 \echo 'Done.'
