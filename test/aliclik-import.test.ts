@@ -338,6 +338,26 @@ describe("devolución consumada (estado de despacho)", () => {
     expect(row.returned).toBe(false);
   });
 
+  // Sin fecha de despacho, `resolveOrderState` no da por probada la devolución
+  // (returnProven exige despacho) y el pedido no llega nunca a `devuelto`.
+  it("lee FECHA DESPACHO — la cabecera real, sin 'de'", () => {
+    const row = returned({
+      "ESTADO DESPACHO": "DEVUELTO",
+      "FECHA DESPACHO": "15/06/2026",
+    });
+    expect(row.dispatch_date).toBe("2026-06-15");
+  });
+
+  it("acepta también la variante 'FECHA DE DESPACHO'", () => {
+    expect(returned({ "FECHA DE DESPACHO": "01/07/2026" }).dispatch_date).toBe("2026-07-01");
+  });
+
+  it("sin fecha de despacho legible deja dispatch_date en null", () => {
+    expect(returned({ "FECHA DESPACHO": "" }).dispatch_date).toBeNull();
+    expect(returned({ "FECHA DESPACHO": "no-es-fecha" }).dispatch_date).toBeNull();
+    expect(returned({}).dispatch_date).toBeNull();
+  });
+
   it("sin columnas de despacho no devuelve nada", () => {
     expect(returned({ "ESTADO ENTREGA": "POR ENTREGAR" }).returned).toBe(false);
   });

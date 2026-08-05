@@ -7579,7 +7579,15 @@ with ultima_fila as (
          coalesce(
            nullif(btrim(ir.raw ->> 'ÚLTIMO ESTADO DESPACHO'), ''),
            nullif(btrim(ir.raw ->> 'ESTADO DESPACHO'), '')
-         ) as despacho
+         ) as despacho,
+         -- "FECHA DESPACHO" viene en DD/MM/YYYY. to_date con un valor ilegible
+         -- reventaría la migración entera, así que solo se convierte lo que
+         -- encaja en el formato; el resto queda null y no sella despacho.
+         case
+           when btrim(ir.raw ->> 'FECHA DESPACHO') ~ '^\d{1,2}/\d{1,2}/\d{4}$'
+             then to_date(btrim(ir.raw ->> 'FECHA DESPACHO'), 'DD/MM/YYYY')::timestamptz
+           else null
+         end as fecha_despacho
   from import_rows ir
   where ir.shipment_id is not null
   order by ir.shipment_id, ir.created_at desc, ir.id desc
@@ -7587,7 +7595,7 @@ with ultima_fila as (
 devueltas as (
   -- Solo la devolución CONSUMADA. TO_RETURN / "POR DEVOLVER" es un paquete que
   -- todavía viaja de vuelta: sigue vivo y el equipo lo puede interceptar.
-  select shipment_id, created_at
+  select shipment_id, created_at, fecha_despacho
   from ultima_fila
   where upper(despacho) in ('RETURNED', 'DEVUELTO')
 )
@@ -7595,7 +7603,12 @@ update shipments s
    set returned_at      = coalesce(s.returned_at, s.last_report_at, d.created_at),
        delivery_status  = 'anulado',
        status_category  = 'closed',
-       custody_state    = 'devuelto'
+       custody_state    = 'devuelto',
+       -- Un paquete devuelto SALIÓ: no puede volver si nunca se despachó.
+       -- `resolveOrderState` exige esa evidencia para dar por probada la
+       -- devolución, y el importador nunca la escribía. Sin esto el sello no
+       -- sirve de nada: el pedido no llega a `devuelto`.
+       dispatched_at    = coalesce(s.dispatched_at, d.fecha_despacho)
   from devueltas d
  where s.id = d.shipment_id
    and s.courier = 'aliclik'

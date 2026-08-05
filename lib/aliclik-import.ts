@@ -30,6 +30,10 @@ export interface ParsedShipmentRow {
   // "anulado" y este flag es lo que la ingesta convierte en `returned_at`, que
   // es de donde sale el `devuelto` del PEDIDO.
   returned: boolean;
+  // FECHA DESPACHO del reporte (YYYY-MM-DD). El parser solo informa lo que dice
+  // el fichero; quién y cuándo lo convierte en `dispatched_at` lo decide la
+  // ingesta, porque esa columna alimenta métricas de despacho (MOM §17.1).
+  dispatch_date: string | null;
   store_hint: string | null; // raw "Tienda"/"Canal" value (AURELA / KENKU)
   // Aliclik's own delivery-attempt counter and operative delivery date. These
   // are intentionally separate from reroute_attempts, which counts the team's
@@ -184,6 +188,10 @@ function isDeliveredEntrega(raw: string | null): boolean {
 // etiqueta en español (DEVUELTO). Se aceptan ambos porque las cabeceras varían
 // entre exportaciones.
 const DESPACHO_KEYS = ["ultimo estado despacho", "estado despacho"];
+// La fecha en que el paquete SALIÓ. Ojo con el alias: la cabecera real es
+// "FECHA DESPACHO", sin "de" — ALICLIK_SERVICE_DATE_KEYS solo tenía la variante
+// con "de", así que esta columna no la leía nadie.
+const DISPATCH_DATE_KEYS = ["fecha despacho", "fecha de despacho"];
 
 /**
  * True cuando el paquete YA VOLVIÓ al origen.
@@ -312,6 +320,7 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
     longitude: parseAliclikCoordinate(pick(map, LONGITUDE_KEYS), "longitude"),
     delivery_status,
     returned,
+    dispatch_date: parseAliclikDate(pick(map, DISPATCH_DATE_KEYS)),
     store_hint: pick(map, STORE_KEYS),
     aliclik_attempts: parseAliclikAttempts(pick(map, ALICLIK_ATTEMPT_KEYS)),
     aliclik_service_date: parseAliclikDate(pick(map, ALICLIK_SERVICE_DATE_KEYS)),
