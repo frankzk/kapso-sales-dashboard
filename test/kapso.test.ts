@@ -737,13 +737,29 @@ describe("helpers", () => {
       expect(conv({})?.username).toBeNull();
     });
 
-    // El teléfono sigue siendo obligatorio para crear el lead: la clave es
-    // (store_id, phone). Cambiar eso es el paso caro, y no se hace hasta que el
-    // contador `sinTelefono` del sync deje de ser cero.
-    it("sin teléfono sigue descartando, aunque traiga BSUID", () => {
-      expect(
-        conversationToLeadSeed({ id: "c", business_scoped_user_id: "PE.123" } as any),
-      ).toBeNull();
+    // 0105 — el contador `sinTelefono` dejó de ser cero (0 durante 23 días, luego
+    // 1, 3, 11, 16, 20, 29 al día), así que el teléfono dejó de ser obligatorio:
+    // un cliente que adoptó un username se identifica por BSUID.
+    it("sin teléfono genera lead si trae BSUID", () => {
+      const seed = conversationToLeadSeed({ id: "c", business_scoped_user_id: "PE.123" } as any);
+      expect(seed).not.toBeNull();
+      expect(seed?.phone).toBeNull();
+      expect(seed?.bsuid).toBe("PE.123");
+    });
+
+    it("sin NINGUNA identidad sigue descartando", () => {
+      // Una fila sin teléfono ni BSUID no se puede contactar ni volver a
+      // encontrar en la siguiente sincronización: sería basura irrecuperable.
+      // Es además lo que impide el CHECK `leads_identidad_presente`.
+      expect(conversationToLeadSeed({ id: "c" } as any)).toBeNull();
+      expect(conversationToLeadSeed({ id: "c", phone_number: "" } as any)).toBeNull();
+    });
+
+    it("un BSUID con forma inválida no sirve como identidad", () => {
+      // Si el BSUID no pasa la validación de forma queda null, y entonces no hay
+      // identidad alguna: mejor descartar que crear un lead con una clave que la
+      // base va a rechazar por el CHECK de formato de la 0103.
+      expect(conversationToLeadSeed({ id: "c", business_scoped_user_id: "12345" } as any)).toBeNull();
     });
   });
 });

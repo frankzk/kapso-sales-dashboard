@@ -705,7 +705,7 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
     b.leads += 1;
     if (l.has_order) {
       b.pedidos += 1;
-      b.ingresos += netByPhone.get(l.phone) ?? 0;
+      b.ingresos += (l.phone ? (netByPhone.get(l.phone) ?? 0) : 0);
     }
     buckets.set(key, b);
   }
@@ -774,7 +774,7 @@ export function cartRecovery(leads: LeadRow[], orders: OrderRow[]): CartRecovery
     const recovered = !!l.has_order || l.draft_order_status === "completed";
     if (recovered) {
       recuperados += 1;
-      ingresosRecuperados += netByPhone.get(l.phone) ?? 0;
+      ingresosRecuperados += (l.phone ? (netByPhone.get(l.phone) ?? 0) : 0);
     } else if (l.category === "lost") {
       perdidos += 1;
     } else {
@@ -1213,7 +1213,7 @@ export function leadsByWaNumber(leads: LeadRow[], orders: OrderRow[]): WaNumberS
     b.leads += 1;
     if (l.has_order) {
       b.pedidos += 1;
-      b.ingresos += netByPhone.get(l.phone) ?? 0;
+      b.ingresos += (l.phone ? (netByPhone.get(l.phone) ?? 0) : 0);
     }
     m.set(key, b);
   }

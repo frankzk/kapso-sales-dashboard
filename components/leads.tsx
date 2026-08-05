@@ -39,6 +39,8 @@ import {
   type LeadWindow,
   type QueueState,
   type YapeKind,
+  leadHandle,
+  leadCanCall,
 } from "@/lib/leads";
 import {
   loadLeadCustomerHistory,
@@ -1579,7 +1581,8 @@ export function LeadsBoard({
                   : state === "cerrada"
                     ? "venc."
                     : `${Math.max(1, Math.ceil((msLeft ?? 0) / 3_600_000))}h`;
-              const initial = (lead.name || lead.phone).trim()[0]?.toUpperCase() || "?";
+              const handle = leadHandle(lead);
+              const initial = (lead.name || handle).trim()[0]?.toUpperCase() || "?";
               return (
                 <div
                   key={lead.id}
@@ -1615,7 +1618,7 @@ export function LeadsBoard({
                   {/* Col 2 · lead (en móvil ocupa la 1ª línea; gestión/ventana bajan) */}
                   <div className="min-w-0 flex-1 md:flex-none">
                   <div className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate text-sm font-semibold text-slate-900">{lead.name || lead.phone}</span>
+                    <span className="truncate text-sm font-semibold text-slate-900">{lead.name || handle}</span>
                     {isYape && <span aria-hidden="true">🔥</span>}
                     <SourceChip source={lead.source} />
                     <span className="shrink-0">
@@ -1713,24 +1716,32 @@ export function LeadsBoard({
                             ✓ Resuelto
                           </button>
                         )}
-                        <a
-                          title="Llamar"
-                          href={`tel:+${lead.phone}`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
-                        >
-                          <StrokeIcon d={ICON_PHONE} />
-                        </a>
-                        <a
-                          title="WhatsApp"
-                          href={`https://wa.me/${lead.phone}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
-                        >
-                          <StrokeIcon d={ICON_CHAT} />
-                        </a>
+                        {/* Sin número no se ofrece «Llamar»: un `tel:` vacío abre el
+                            marcador en blanco y la asesora cree que falló el equipo.
+                            Y `wa.me` también necesita número — a estos leads se les
+                            escribe desde el drawer, que los alcanza por BSUID. */}
+                        {leadCanCall(lead) && (
+                          <>
+                            <a
+                              title="Llamar"
+                              href={`tel:+${lead.phone}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+                            >
+                              <StrokeIcon d={ICON_PHONE} />
+                            </a>
+                            <a
+                              title="WhatsApp"
+                              href={`https://wa.me/${lead.phone}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+                            >
+                              <StrokeIcon d={ICON_CHAT} />
+                            </a>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>

@@ -175,8 +175,18 @@ export interface StoreSummary {
 export interface LeadRow {
   id: string;
   store_id: string;
-  phone: string;
+  /** NULLABLE desde la 0105. Un cliente que adoptó un username de WhatsApp llega
+   *  sin número: su identidad es el `bsuid`. Se tipa nullable a propósito para
+   *  que el compilador marque cada sitio que asumía un teléfono — llamar, wa.me,
+   *  el QR de llamada — en vez de descubrirlo con un `.trim()` de null en
+   *  producción. Ver `leadHandle` / `leadCanCall` en lib/leads.ts. */
+  phone: string | null;
   wa_id: string | null;
+  /** Identidad de WhatsApp scopeada al portfolio (0103). Clave alternativa
+   *  cuando no hay teléfono (0105). NO es comparable entre tiendas. */
+  bsuid?: string | null;
+  /** Username público de WhatsApp, si el cliente adoptó uno (0103). */
+  username?: string | null;
   name: string | null;
   email: string | null;
   first_seen_at: string | null;
