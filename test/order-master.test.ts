@@ -14,7 +14,10 @@ interface Tables {
   draft_orders?: any[];
 }
 
-function stubAdmin(tables: Tables, opts: { shipmentColumnError?: boolean } = {}) {
+function stubAdmin(
+  tables: Tables,
+  opts: { shipmentColumnError?: boolean; coverage?: string; coverageError?: boolean } = {},
+) {
   const upserts: any[][] = [];
   let shipmentSelects = 0;
 
@@ -53,6 +56,20 @@ function stubAdmin(tables: Tables, opts: { shipmentColumnError?: boolean } = {})
       };
       return builder;
     },
+    // Cobertura canónica (0104). Sin `opts.coverage` devuelve null por pedido,
+    // que es como se comporta un destino que la base no sabe clasificar: quien
+    // llama cae entonces a la clasificación por nombre.
+    rpc(fn: string, args: any) {
+      if (fn !== "order_coverage_batch") return Promise.resolve({ data: null, error: null });
+      if (opts.coverageError) {
+        return Promise.resolve({ data: null, error: { message: "function does not exist" } });
+      }
+      const rows = ((args?.p_rows ?? []) as any[]).map((probe) => ({
+        order_id: probe.order_id,
+        coverage: opts.coverage ?? null,
+      }));
+      return Promise.resolve({ data: rows, error: null });
+    },
   };
   return { admin: admin as any, upserts, shipmentSelects: () => shipmentSelects };
 }
@@ -82,7 +99,10 @@ const ORDER = {
   },
 };
 
-async function recompute(tables: Tables, opts: { shipmentColumnError?: boolean } = {}) {
+async function recompute(
+  tables: Tables,
+  opts: { shipmentColumnError?: boolean; coverage?: string; coverageError?: boolean } = {},
+) {
   const stub = stubAdmin(tables, opts);
   const result = await recomputeOrderMaster(stub.admin, ["order-1"], { now: NOW });
   return { result, row: stub.upserts[0]?.[0], upserts: stub.upserts, stub };
@@ -117,6 +137,32 @@ describe("recomputeOrderMaster — snapshot del pedido", () => {
     expect(row.courier_count).toBe(0);
     expect(row.attempt_count).toBe(0);
     expect(row.status_locked).toBe(false);
+  });
+
+  // La cobertura la decide `order_coverage_for` en la base, no una segunda
+  // implementación en TypeScript. La de TS solo casa nombres de tarifa, así que
+  // en un destino cubierto por el mapa de puntos COD (0100) —Puerto Maldonado
+  // por Aliclik es el caso real— devolvía `agencia` mientras la columna decía
+  // `provincia_cod`. La fila se contradecía y, como Agencia sí exige abono
+  // validado, el pedido quedaba congelado en «Por confirmar» pese a tener guía.
+  it("toma la cobertura de la base, no de la clasificación por nombre", async () => {
+    const { row } = await recompute(
+      { orders: [ORDER], shipments: [{ id: "s-1", order_id: "order-1", courier: "aliclik" }] },
+      { coverage: "provincia_cod" },
+    );
+    expect(row.macro_operation).toBe("provincia_cod");
+    // Con la operación correcta el abono deja de aplicar y el pedido avanza:
+    // ya tiene guía, así que le toca Preparación.
+    expect(row.macro_stage).toBe("preparacion");
+  });
+
+  it("cae a la clasificación por nombre si la 0104 no está aplicada", async () => {
+    const { row, result } = await recompute(
+      { orders: [ORDER], shipments: [{ id: "s-1", order_id: "order-1", courier: "aliclik" }] },
+      { coverageError: true },
+    );
+    expect(result).toEqual({ requested: 1, written: 1 });
+    expect(row.macro_version).toBe(MOM_RESOLUTION_VERSION);
   });
 
   it("calcula Lima nuevo como Preparación sin cambiar el estado legado", async () => {

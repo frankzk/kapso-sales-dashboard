@@ -141,6 +141,12 @@ Reglas iniciales:
   servidor para Provincia COD o Agencia.
 - Cañete siempre se clasifica como Agencia, aunque Shopify lo etiquete como
   `Lima (provincia)` o exista una tarifa COD histórica que coincida.
+- La cobertura tiene UNA sola definición, `order_coverage_for` en la base. Decide
+  la cobertura COD por tarifa vigente **y** por cercanía a un punto donde Aliclik
+  ya entregó COD, porque el nombre del destino no basta: Shopify guarda
+  «Puerto Maldonado» (la ciudad) y Aliclik factura «Tambopata» (el distrito), y
+  por texto nunca casan. La modalidad del pedido —y con ella la exigencia de
+  abono— se deriva de esa clasificación, así que nada la recalcula por separado.
 - La confirmación tiene UNA sola definición, `hasConfirmationSignal`.
   Un pedido está confirmado si existe una guía, si hay evento `confirmed`,
   `guide_registered` o `label_generated`, o si Shopify lo da por pagado —en
@@ -1175,9 +1181,13 @@ Primer bloque publicado en el drawer del Master:
   que Frankz o Yohalis la finalicen de nuevo.
 - Permisos separados para retornos, inventario, finanzas, finalización y
   reembolsos; los permisos puntuales de `user_permissions` siguen prevaleciendo.
-- El resolver quedó versionado como `mom-v1.4`; el cron detecta versiones
-  anteriores y recalcula el histórico por lotes hasta que todo el Master
-  converja, sin necesitar credenciales locales ni detener la sincronización.
+- El resolver quedó versionado —`mom-v1.4` en este bloque; la versión vigente es
+  siempre `MOM_RESOLUTION_VERSION` en `lib/order-macro-stage.ts`, hoy
+  `mom-v1.8`—; el cron detecta versiones anteriores y recalcula el histórico por
+  lotes hasta que todo el Master converja, sin necesitar credenciales locales ni
+  detener la sincronización. Toda regla que cambie el resultado de filas que
+  nadie tocó debe subir esa constante, o el histórico queda con el veredicto
+  viejo.
 
 Segundo bloque publicado en el Dashboard consolidado:
 

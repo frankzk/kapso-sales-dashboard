@@ -215,4 +215,6 @@
 \ir migrations/0104_chatby_webhook_log.sql
 \echo 'Applying 0105_leads_identity_sin_telefono.sql'
 \ir migrations/0105_leads_identity_sin_telefono.sql
+\echo 'Applying 0106_order_coverage_batch.sql'
+\ir migrations/0106_order_coverage_batch.sql
 \echo 'Done.'
