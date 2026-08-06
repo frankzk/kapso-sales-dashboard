@@ -4,6 +4,13 @@ import { createServerSupabase } from "@/lib/db";
 import { shopifyOrderAdminUrl } from "@/lib/shopify";
 import { resolveAliclikHealth, type AliclikHealth } from "@/lib/aliclik-health";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
+import {
+  buildAnomalyDigest,
+  EMPTY_DIGEST,
+  localDay,
+  type AnomalyDigest,
+  type AnomalyRow,
+} from "@/lib/ingest-anomalies";
 
 /** El foco de salud de Aliclik para la org de una tienda. Gris si no se ubica la
  * org o no hay sonda fresca. Espeja `aliclikHealthFor` de orders-master-access. */
@@ -511,4 +518,32 @@ async function legacyLeadCounts(
     perdidos: perdidos.count ?? 0,
     sin_llamar: sinLlamar.count ?? 0,
   };
+}
+
+/**
+ * Anomalías de ingesta del alcance actual (hoy y ayer). Ver 0107.
+ *
+ * Se leen bajo el cliente de SESIÓN, así que la RLS decide qué tiendas entran —
+ * el mismo criterio que el resto de la cola. Nunca lanza: es un indicador de
+ * salud, y si falla no debe tumbar la página de Leads.
+ */
+export async function getAnomalyDigest(
+  storeIds: StoreScope,
+  timezone = "America/Lima",
+): Promise<AnomalyDigest> {
+  if (!storeIds.length) return EMPTY_DIGEST;
+  const hoy = localDay(timezone, 0);
+  const ayer = localDay(timezone, -1);
+  try {
+    const sb = await createServerSupabase();
+    const { data, error } = await sb
+      .from("ingest_anomalies")
+      .select("store_id,dia,source,reason,count,sample,last_seen_at")
+      .in("store_id", storeIds)
+      .in("dia", [hoy, ayer]);
+    if (error) return EMPTY_DIGEST;
+    return buildAnomalyDigest((data as unknown as AnomalyRow[]) ?? [], hoy, ayer);
+  } catch {
+    return EMPTY_DIGEST;
+  }
 }
