@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0106 — Destrancar las guías Aliclik «pendiente» que el importador viejo
+-- 0107 — Destrancar las guías Aliclik «pendiente» que el importador viejo
 -- congeló, con respaldo para poder revertir.
 --
 -- POR QUÉ. Hasta ahora `lib/aliclik-import.ts` colapsaba el reporte de Aliclik a
@@ -75,7 +75,7 @@
 -- irreversible. Se llena en el MISMO statement que muta (CTE modificadora), de
 -- modo que respaldo y update no pueden divergir.
 -- ----------------------------------------------------------------------------
-create table if not exists shipments_status_backup_0106 (
+create table if not exists shipments_status_backup_0107 (
   shipment_id           uuid primary key references shipments(id) on delete cascade,
   guide_code            text not null,
   prev_delivery_status  text not null,
@@ -87,18 +87,18 @@ create table if not exists shipments_status_backup_0106 (
 
 -- Sin policies a propósito: es un artefacto de operación, no dato de tienda.
 -- RLS activo + cero policies = nadie autenticado lo lee; `service_role` la evita.
-alter table shipments_status_backup_0106 enable row level security;
-grant all privileges on shipments_status_backup_0106 to service_role;
+alter table shipments_status_backup_0107 enable row level security;
+grant all privileges on shipments_status_backup_0107 to service_role;
 
-comment on table shipments_status_backup_0106 is
-  'Pre-imagen de las guías Aliclik mutadas por la migración 0106. Permite revertir el backfill. Se puede borrar una vez verificado.';
+comment on table shipments_status_backup_0107 is
+  'Pre-imagen de las guías Aliclik mutadas por la migración 0107. Permite revertir el backfill. Se puede borrar una vez verificado.';
 
 -- REVERTIR (todo, o filtrando por guide_code):
 --   update shipments s
 --      set delivery_status  = b.prev_delivery_status,
 --          status_category  = b.prev_status_category,
 --          delivered_source = b.prev_delivered_source
---     from shipments_status_backup_0106 b
+--     from shipments_status_backup_0107 b
 --    where s.id = b.shipment_id;
 --   -- y volver a correr scripts/backfill-mom.ts
 
@@ -171,7 +171,7 @@ upd as (
      and f.canonical <> 'pendiente'
   returning f.id, f.guide_code, f.prev_status, f.prev_category, f.prev_source, f.canonical
 )
-insert into shipments_status_backup_0106
+insert into shipments_status_backup_0107
   (shipment_id, guide_code, prev_delivery_status, prev_status_category,
    prev_delivered_source, new_delivery_status)
 select id, guide_code, prev_status, prev_category, prev_source, canonical

@@ -215,8 +215,27 @@ export function sortLeadsByPriority<T extends LeadPriorityInput & { id: string }
   profile: ScoringProfile,
   nowMs: number = Date.now(),
 ): T[] {
+  return sortLeadsByPriorityScoped(leads, () => profile, nowMs);
+}
+
+/**
+ * Igual, pero con un perfil POR LEAD — para la cola combinada de varias tiendas.
+ *
+ * Mezclar dos escalas suena a error y no lo es: los pesos de cada tienda salen
+ * de su conversión medida, así que son la misma unidad (probabilidad de cierre)
+ * y se comparan sin traducción. Un carrito fresco de Aurela cierra 44 % y uno de
+ * Kenku 24 %; ponerlos en ese orden es exactamente lo correcto.
+ *
+ * Lo que sí sería un error es lo que hacía la versión anterior en vista
+ * combinada: aplicarle a TODAS las filas el perfil de la tienda del selector.
+ */
+export function sortLeadsByPriorityScoped<T extends LeadPriorityInput & { id: string }>(
+  leads: T[],
+  profileFor: (lead: T) => ScoringProfile,
+  nowMs: number = Date.now(),
+): T[] {
   return leads
-    .map((lead) => ({ lead, score: leadPriorityScore(lead, profile, nowMs) }))
+    .map((lead) => ({ lead, score: leadPriorityScore(lead, profileFor(lead), nowMs) }))
     .sort((a, b) => b.score - a.score || a.lead.id.localeCompare(b.lead.id))
     .map((entry) => entry.lead);
 }

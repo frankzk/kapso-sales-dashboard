@@ -21,7 +21,7 @@ import { normalizeDistrict } from "@/lib/shipments";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
 import { computeLogisticsCost, costDay, type CostTariff } from "@/lib/costs";
-import { classifyOrderCoverage } from "@/lib/order-coverage";
+import { classifyOrderCoverage, type OrderCoverage } from "@/lib/order-coverage";
 import {
   MOM_RESOLUTION_VERSION,
   resolveMacroStage,
@@ -404,6 +404,49 @@ async function fetchEvents(admin: SupabaseClient, ids: string[]): Promise<EventR
   return out;
 }
 
+interface CoverageProbe {
+  order_id: string;
+  store_id: string;
+  region: string | null;
+  province: string | null;
+  district: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+/**
+ * Cobertura canónica desde la base (0104).
+ *
+ * `order_coverage_for` decide la cobertura COD por nombre de tarifa Y por
+ * cercanía a un punto donde Aliclik ya entregó COD (0100). La versión de
+ * TypeScript solo sabe lo primero, así que reimplementarla aquí producía filas
+ * donde `coverage` decía `provincia_cod` y `macro_operation` decía `agencia`
+ * —y el pedido se quedaba esperando un abono que su modalidad no pide—.
+ *
+ * Devuelve un mapa vacío si la 0104 todavía no está aplicada; quien llama cae
+ * entonces a la clasificación por nombre, que es lo que había hasta ahora.
+ */
+async function fetchCanonicalCoverage(
+  admin: SupabaseClient,
+  probes: CoverageProbe[],
+  day: string,
+): Promise<Map<string, OrderCoverage>> {
+  const out = new Map<string, OrderCoverage>();
+  if (!probes.length) return out;
+  for (const batch of chunk(probes, ID_BATCH)) {
+    const { data, error } = await admin.rpc("order_coverage_batch", {
+      p_rows: batch,
+      p_day: day,
+    });
+    // Sin la migración no hay nada que reconciliar: se sigue con la reserva.
+    if (error) return new Map();
+    for (const row of (data ?? []) as { order_id: string; coverage: string | null }[]) {
+      if (row.coverage) out.set(row.order_id, row.coverage as OrderCoverage);
+    }
+  }
+  return out;
+}
+
 /**
  * Provincia por distrito (tabla de referencia 0046). Shopify Perú no entrega el
  * nivel intermedio del ubigeo, así que sin esto el filtro de provincia (§13)
@@ -643,7 +686,11 @@ export async function recomputeOrderMaster(
     [...new Set([...districtByOrder.values()].map((d) => normalizeDistrict(d)).filter(Boolean))],
   );
 
-  const rows = orders.map((order) => {
+  // Primera pasada: resolver la UBICACIÓN de cada pedido. Se corta aquí porque
+  // la cobertura ya no se calcula en TypeScript —se le pregunta a la base—, y
+  // para preguntarla hacen falta región, provincia, distrito y coordenada ya
+  // resueltas. Ver `fetchCanonicalCoverage`.
+  const geoContexts = orders.map((order) => {
     const guides = shipmentsByOrder.get(order.id) ?? [];
     const orderEvents = eventsByOrder.get(order.id) ?? [];
     const address = shopifyShippingAddress(order.raw);
@@ -719,6 +766,58 @@ export async function recomputeOrderMaster(
                   ? "draft"
                   : null;
 
+    return {
+      order,
+      guides,
+      orderEvents,
+      address,
+      draft,
+      district,
+      province,
+      region,
+      streetAddress,
+      reference,
+      latitude,
+      longitude,
+      geoSource,
+    };
+  });
+
+  // La cobertura la decide `order_coverage_for` en la base, que es su
+  // definición canónica: además del match por nombre de tarifa comprueba si el
+  // pedido cae cerca de un punto donde Aliclik ya entregó COD (0100). Calcularla
+  // aquí en TypeScript dejaba fuera esa regla y contradecía a la columna.
+  const coverageByOrder = await fetchCanonicalCoverage(
+    admin,
+    geoContexts.map((ctx) => ({
+      order_id: ctx.order.id,
+      store_id: ctx.order.store_id,
+      region: ctx.region,
+      province: ctx.province,
+      district: ctx.district,
+      latitude: ctx.latitude,
+      longitude: ctx.longitude,
+    })),
+    now.slice(0, 10),
+  );
+
+  const rows = geoContexts.map((ctx) => {
+    const {
+      order,
+      guides,
+      orderEvents,
+      address,
+      draft,
+      district,
+      province,
+      region,
+      streetAddress,
+      reference,
+      latitude,
+      longitude,
+      geoSource,
+    } = ctx;
+
     const eventSnapshots: OrderEventSnapshot[] = orderEvents.map((e) => ({
       kind: e.kind,
       occurred_at: e.occurred_at,
@@ -732,17 +831,22 @@ export async function recomputeOrderMaster(
     const resolvedPaymentState = paymentSignals
       ? paymentState(paymentSignals.payments, order.total_amount)
       : null;
-    const resolvedCoverage = classifyOrderCoverage(
-      {
-        storeId: order.store_id,
-        orgId: orgByStore.get(order.store_id) ?? null,
-        region,
-        province,
-        district,
-      },
-      tariffs,
-      now.slice(0, 10),
-    );
+    // `classifyOrderCoverage` queda como reserva para el caso en que la 0104 no
+    // esté aplicada todavía: resuelve solo por nombre, así que da el mismo
+    // resultado que la base salvo en los destinos que dependen del mapa COD.
+    const resolvedCoverage =
+      coverageByOrder.get(order.id) ??
+      classifyOrderCoverage(
+        {
+          storeId: order.store_id,
+          orgId: orgByStore.get(order.store_id) ?? null,
+          region,
+          province,
+          district,
+        },
+        tariffs,
+        now.slice(0, 10),
+      );
 
     const state = resolveOrderState({
       order: {

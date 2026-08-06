@@ -16,6 +16,13 @@ import {
   reachedLastAttempt,
 } from "@/lib/order-confirmation";
 
+// v1.8: la cobertura la decide la base (`order_coverage_for`), no una segunda
+// implementación en TypeScript que ignoraba el mapa de puntos COD de la 0100.
+// Corrige 585 filas que se contradecían —`coverage` provincia_cod contra
+// `macro_operation` agencia—, de las cuales 212 estaban congeladas en «Por
+// confirmar» esperando un abono que Provincia COD no exige. La versión sube
+// para que el cron las reconcilie.
+//
 // v1.7: el sub-estado de agencia prueba custodia. Mueve 54 pedidos que estaban
 // en «Por confirmar» con el paquete ya en manos del courier, así que la versión
 // sube para que el cron los reconcilie.
@@ -23,7 +30,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.7" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.8" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
