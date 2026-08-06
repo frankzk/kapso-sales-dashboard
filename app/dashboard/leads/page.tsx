@@ -77,8 +77,14 @@ async function LeadsContent({
   const uniform =
     stores.length > 1 &&
     stores.every((s) => s.currency === fallback.currency && s.timezone === fallback.timezone);
-  const allSelected = uniform && sp.store === ALL_STORES;
-  const storeId = sp.store && stores.some((s) => s.id === sp.store) ? sp.store : fallback.id;
+  // Sin `?store=` la vista arranca COMBINADA cuando se puede: quien abre Leads
+  // sin pedir una tienda quiere ver todo lo que tiene pendiente, no la mitad. Un
+  // `?store=<id>` explícito siempre manda — los enlaces guardados y los que
+  // manda el pop-up de Yapes siguen abriendo su tienda.
+  const explicit =
+    sp.store && (sp.store === ALL_STORES || stores.some((s) => s.id === sp.store)) ? sp.store : null;
+  const allSelected = uniform && (explicit === null || explicit === ALL_STORES);
+  const storeId = explicit && explicit !== ALL_STORES ? explicit : fallback.id;
   // Alcance efectivo de TODA la vista: lista, conteos, gráficos y firma.
   const scope: StoreScope = allSelected ? stores.map((s) => s.id) : [storeId];
   const view: LeadView = isLeadView(sp.view) ? sp.view : "por_llamar";
