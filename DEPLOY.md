@@ -1261,6 +1261,32 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
 - Es una bitácora **append-only y sin pérdida**: guarda el JSON entero tal como
   llegó, incluso si no es JSON válido. La tabla definitiva se rellena desde acá.
 
+## 5r. Anomalías de ingesta — ver lo que se descarta
+
+- **Requiere migración 0107** (`ingest_anomalies` + `note_ingest_anomaly`).
+- Sin ella no se rompe nada: `noteAnomaly` se traga su propio fallo a propósito
+  (el medidor no puede tumbar lo que mide), así que el indicador simplemente no
+  aparece hasta que se aplique.
+- En la cabecera de Leads sale **«⚠ N descartados»** cuando hoy hubo alguno, con
+  el desglose en el tooltip y «(ayer 0)» cuando el día anterior estuvo limpio.
+  **Lo que importa es el salto, no el nivel**: 25 descartes pueden ser lo normal;
+  «ayer 0, hoy 25» es lo que hizo falta para fechar la migración de identidad de
+  Meta al día.
+- Se agrega **por día y por (tienda, camino, motivo)**, no un registro por
+  evento: un log por evento crece sin fin, nadie lo lee y esconde el salto.
+- **Qué cubre**: trabajo DESCARTADO — conversaciones que no generan lead,
+  handoffs rechazados, pasos best-effort que fallan. **Qué no cubre**: un camino
+  que devuelve un resultado equivocado sin descartar nada. Eso lo atrapan los
+  tests, no esta tabla.
+- Consulta directa cuando haga falta el detalle:
+
+  ```sql
+  select dia, source, reason, count, sample, last_seen_at
+  from ingest_anomalies
+  where dia > current_date - 14
+  order by dia desc, count desc;
+  ```
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle

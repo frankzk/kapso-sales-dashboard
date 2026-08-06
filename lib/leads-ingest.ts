@@ -16,6 +16,7 @@ import {
   type VoucherCandidate,
 } from "@/lib/kapso";
 import { env } from "@/lib/env";
+import { noteAnomaly } from "@/lib/ingest-anomalies";
 import { analyzeYapeVoucher } from "@/lib/vision";
 import type { StoreCreds } from "@/lib/ingest";
 import { deriveAutoState, nextLeadState, statusDef } from "@/lib/leads";
@@ -342,11 +343,18 @@ export async function syncStoreLeads(
   // la ADOPCIÓN del username de Meta — la señal que justificó esta migración y la
   // que dirá cuánto crece.
   let sinTelefono = 0;
+  // Descartes de verdad: ni teléfono ni BSUID. Antes de la 0106 esto se perdía
+  // sin dejar rastro; es la clase de fallo que la tabla de anomalías existe para
+  // hacer visible.
+  let sinIdentidad = 0;
   for (const c of convs) {
     const s = conversationToLeadSeed(c);
     // Solo se descarta lo que no tiene NINGUNA identidad: una fila así no se
     // podría contactar ni volver a encontrar en la próxima sincronización.
-    if (!s) continue;
+    if (!s) {
+      sinIdentidad += 1;
+      continue;
+    }
     if (!s.phone) sinTelefono += 1;
     const key = s.phone ? `tel:${s.phone}` : `bsuid:${s.bsuid}`;
     const prev = seeds.get(key);
@@ -354,6 +362,14 @@ export async function syncStoreLeads(
       seeds.set(key, s);
     }
   }
+  await noteAnomaly(admin, {
+    storeId,
+    source: "leads_sync",
+    reason: "conversacion_sin_identidad",
+    count: sinIdentidad,
+    sample: { convs: convs.length },
+  });
+
   // Los cruces por teléfono (pedidos, carritos, disposiciones) solo aplican a los
   // leads QUE TIENEN teléfono: un `in()` con un null no empareja nada y además
   // ensucia la consulta.
@@ -485,13 +501,26 @@ export async function syncStoreLeads(
   let enriched: LeadEnrichStats = { ...ZERO_ENRICH };
   try {
     enriched = await enrichLeadsFromConversations(admin, storeId, k, seeds, vision);
-  } catch {
-    /* enrichment is best-effort — never blocks the lead sync */
+  } catch (e) {
+    // Sigue siendo best-effort — no bloquea el sync — pero deja de ser invisible:
+    // si el enriquecimiento lleva días fallando, la cola pierde distrito, carrito
+    // y conteo de mensajes, y el puntaje de prioridad ordena con datos vacíos.
+    await noteAnomaly(admin, {
+      storeId,
+      source: "lead_enrich",
+      reason: "excepcion",
+      sample: { message: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200) },
+    });
   }
   try {
     await attributeWonLeadSources(admin, storeId, k);
-  } catch {
-    /* source backfill is best-effort — never blocks the lead sync */
+  } catch (e) {
+    await noteAnomaly(admin, {
+      storeId,
+      source: "won_sources",
+      reason: "excepcion",
+      sample: { message: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200) },
+    });
   }
 
   await setCursor(admin, storeId, maxTs, "ok");
@@ -1890,7 +1919,15 @@ export async function ingestConversationEvent(
 ): Promise<{ ok: boolean; reason?: string }> {
   const conv = body?.conversation ?? body?.data?.conversation ?? null;
   const seed = conv ? conversationToLeadSeed(conv) : null;
-  if (!seed) return { ok: false, reason: "no-identity" };
+  if (!seed) {
+    await noteAnomaly(admin, {
+      storeId,
+      source: "conversation_event",
+      reason: "sin_identidad",
+      sample: { conversationId: (conv as { id?: unknown } | null)?.id ?? null },
+    });
+    return { ok: false, reason: "no-identity" };
+  }
 
   // Misma identidad que en applyHandoff (0105). Sin esto, `seed.phone` nulo
   // viajaba a `.eq()` y PostgREST filtraba por la CADENA "null": el lead
@@ -1939,7 +1976,18 @@ export async function applyHandoff(
   // desde que Meta empezó a entregar conversaciones sin él esos handoffs se
   // descartaban: el lead existía en la cola normal pero nunca subía a "Atender
   // ahora" cuando el bot escalaba — justo el caso más urgente de todos.
-  if (!info.phone && !info.bsuid) return { ok: false, reason: "no-identity" };
+  if (!info.phone && !info.bsuid) {
+    // Un handoff rechazado es un cliente esperando que nunca sube a "Atender
+    // ahora". El webhook responde 200 y del lado de Kapso parece entregado, así
+    // que sin esta anotación el rechazo es invisible en los dos extremos.
+    await noteAnomaly(admin, {
+      storeId,
+      source: "handoff",
+      reason: "sin_identidad",
+      sample: { conversationId: info.conversationId, reason: info.reason },
+    });
+    return { ok: false, reason: "no-identity" };
+  }
 
   // Por qué columna se busca y se escribe. Se resuelve UNA vez porque esta
   // función toca `leads` tres veces y las tres tienen que apuntar a la MISMA

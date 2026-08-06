@@ -15,6 +15,7 @@ import {
 } from "@/lib/leads-access";
 import { facetItems } from "@/lib/leads-facets";
 import { scoringProfileFor, sortLeadsByPriorityScoped } from "@/lib/lead-priority";
+import { EMPTY_DIGEST, type AnomalyDigest } from "@/lib/ingest-anomalies";
 import type { LeadsInsights } from "@/lib/leads-insights";
 import {
   buildMetaAudienceCsv,
@@ -594,6 +595,7 @@ export function LeadsBoard({
   leadsComplete = true,
   scope,
   allStoresAvailable = false,
+  anomalies = EMPTY_DIGEST,
 }: {
   stores: StoreSummary[];
   /** Id de la tienda activa, o ALL_STORES cuando la vista es combinada. */
@@ -603,6 +605,8 @@ export function LeadsBoard({
   scope: StoreScope;
   /** ¿Se puede ofrecer "Todas"? Falso si las tiendas no comparten moneda/zona. */
   allStoresAvailable?: boolean;
+  /** Trabajo descartado hoy por la ingesta, con el día anterior para el salto. */
+  anomalies?: AnomalyDigest;
   view: LeadView;
   counts: LeadCounts;
   /** Resumen del estado de la cola en el servidor. El refresco en vivo solo
@@ -1246,6 +1250,30 @@ export function LeadsBoard({
                   >
                     🔥 {counts.yape} en Yape/Shalom
                   </button>
+                </>
+              )}
+              {/* Trabajo que la ingesta DESCARTÓ hoy (ver 0107). Va acá y no en un
+                  panel aparte porque el valor está en verlo sin buscarlo: es una
+                  clase de fallo que hasta ahora solo se encontraba de casualidad.
+                  Se muestra el salto contra ayer, no el nivel — "25" no dice nada
+                  suelto; "ayer 0, hoy 25" es lo que hizo falta para fechar la
+                  migración de identidad de Meta. */}
+              {anomalies.hoy > 0 && (
+                <>
+                  {" · "}
+                  <span
+                    className="font-semibold text-slate-500"
+                    title={
+                      `Trabajo descartado hoy por la ingesta (ayer: ${anomalies.ayer}).\n\n` +
+                      anomalies.detalle
+                        .map((d) => `${d.count} × ${d.source}: ${d.reason}`)
+                        .join("\n") +
+                      "\n\nNo es un error de la cola: son conversaciones o handoffs que no llegaron a crear lead."
+                    }
+                  >
+                    ⚠ {anomalies.hoy} descartado{anomalies.hoy === 1 ? "" : "s"}
+                    {anomalies.ayer === 0 && " (ayer 0)"}
+                  </span>
                 </>
               )}
             </p>
