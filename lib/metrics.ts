@@ -850,6 +850,110 @@ export interface CampaignStat {
   orders: CampaignOrderDetail[];
 }
 
+/**
+ * Clave para agrupar nombres de producto en el filtro del panel de anuncios.
+ *
+ * NO reusa `normalizeProductName` de `lib/aliclik-catalog`: ese vive en un
+ * módulo que importa el cliente admin de Supabase —no puede entrar al bundle
+ * del navegador— y además responde otra pregunta, la de emparejar contra el
+ * catálogo de Aliclik, con su sufijo de tienda. Atar el filtro a esa función
+ * haría que un cambio en el emparejamiento de Aliclik moviera en silencio lo
+ * que el panel agrupa.
+ *
+ * Quita marcas y acentos porque el mismo producto llega escrito de dos formas:
+ * el anunciado lo teclea el equipo («Shampoo Biru Anticaspa») y el vendido sale
+ * de la línea de pedido de Shopify («Shampoo Biru™ Anticaspa»).
+ */
+export function campaignProductKey(raw: string | null | undefined): string {
+  return (raw ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[™®©]/g, "")
+    .replace(/[–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+export interface CampaignProductOption {
+  /** Clave normalizada; es lo que se guarda como filtro seleccionado. */
+  key: string;
+  /** La grafía más frecuente entre los anuncios, para mostrar. */
+  label: string;
+  /** Anuncios que lo promocionan. */
+  promotedAds: number;
+  /** Anuncios cuyos pedidos lo contienen, lo anuncien o no. */
+  soldAds: number;
+}
+
+/**
+ * El catálogo del desplegable. Con `includeSold` en falso solo entran los
+ * productos ANUNCIADOS: si entraran también los vendidos, elegir uno que nadie
+ * anuncia devolvería cero filas sin explicar por qué.
+ */
+export function campaignProductOptions(
+  rows: readonly Pick<CampaignStat, "promotedProductName" | "productMix">[],
+  includeSold: boolean,
+): CampaignProductOption[] {
+  const byKey = new Map<
+    string,
+    { promotedAds: number; soldAds: number; spellings: Map<string, number> }
+  >();
+  const touch = (raw: string | null | undefined, field: "promotedAds" | "soldAds") => {
+    const key = campaignProductKey(raw);
+    if (!key) return;
+    const entry = byKey.get(key) ?? { promotedAds: 0, soldAds: 0, spellings: new Map() };
+    entry[field] += 1;
+    const shown = (raw ?? "").trim();
+    if (shown) entry.spellings.set(shown, (entry.spellings.get(shown) ?? 0) + 1);
+    byKey.set(key, entry);
+  };
+  for (const row of rows) {
+    touch(row.promotedProductName, "promotedAds");
+    // Un anuncio cuenta UNA vez por producto vendido aunque tenga varios
+    // pedidos de ese producto: el desplegable cuenta anuncios, no pedidos.
+    const seen = new Set<string>();
+    for (const item of row.productMix) {
+      const key = campaignProductKey(item.title);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      touch(item.title, "soldAds");
+    }
+  }
+  return [...byKey.entries()]
+    .filter(([, entry]) => includeSold || entry.promotedAds > 0)
+    .map(([key, entry]) => ({
+      key,
+      label:
+        [...entry.spellings.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "es"))[0]?.[0] ?? key,
+      promotedAds: entry.promotedAds,
+      soldAds: entry.soldAds,
+    }))
+    .sort(
+      (a, b) =>
+        b.promotedAds + b.soldAds - (a.promotedAds + a.soldAds) ||
+        a.label.localeCompare(b.label, "es"),
+    );
+}
+
+/**
+ * ¿Esta fila entra con el filtro puesto? Sin clave, entran todas.
+ *
+ * `includeSold` amplía a lo que los pedidos REALMENTE contienen, que es otra
+ * pregunta: «qué anuncios venden este producto» en vez de «qué anuncios lo
+ * anuncian». Es la que destapa que un anuncio esté vendiendo otra cosa.
+ */
+export function campaignMatchesProduct(
+  row: Pick<CampaignStat, "promotedProductName" | "productMix">,
+  key: string,
+  includeSold: boolean,
+): boolean {
+  if (!key) return true;
+  if (campaignProductKey(row.promotedProductName) === key) return true;
+  if (!includeSold) return false;
+  return row.productMix.some((item) => campaignProductKey(item.title) === key);
+}
+
 export type CampaignProductMatch = "exact" | "mixed" | "cross_sell" | "unknown";
 export type CampaignDecision =
   | "insufficient"

@@ -7689,8 +7689,172 @@ create index if not exists leads_store_sin_telefono
   where phone is null;
 
 -- ---- 0106 ----
+-- 0104 — La cobertura del Master se pregunta a la base, no se recalcula en TS.
+--
+-- EL PROBLEMA. La 0100 enseñó a `order_coverage_for` a decidir la cobertura COD
+-- por COORDENADA además de por nombre de tarifa. Arregló la columna
+-- `order_master.coverage` —la escribe el trigger `order_master_coverage`— pero
+-- no a `classifyOrderCoverage` en TypeScript, que siguió resolviendo solo por
+-- nombre. Y ese valor de TS, no la columna, es el que alimenta a
+-- `classifyOperation` y por tanto a `macro_operation`.
+--
+-- El resultado son filas que se contradicen a sí mismas: `coverage` dice
+-- `provincia_cod` y `macro_operation` dice `agencia`. 585 pedidos, 578 de ellos
+-- explicados exactamente por la regla de coordenada que al TS le falta. Como
+-- `agencyPaymentReady` solo exige abono validado cuando la operación es
+-- Agencia, esos pedidos de provincia COD quedaron congelados en «Por confirmar»
+-- esperando un adelanto que su modalidad no pide. 212 estaban ahí, 56 con la
+-- guía ya creada: el caso que lo destapó fue #KP125383, Puerto Maldonado por
+-- Aliclik — la MISMA ciudad que la 0100 nombra como su caso motivador.
+--
+-- LA IDEA. No portar la regla de coordenada a TypeScript: eso deja dos
+-- definiciones vivas y libres de divergir de nuevo, que es precisamente cómo
+-- nació este bug. `order_coverage_for` ya es la definición canónica —así lo
+-- declara el comentario de `recomputeOrderMaster`— así que el recompute pasa a
+-- preguntársela a ella. Esta función es solo el envoltorio por lotes: un ida y
+-- vuelta por tanda en vez de uno por pedido.
+--
+-- Devuelve una fila por elemento del arreglo, en el mismo orden. Las claves
+-- ausentes o nulas llegan como null y `order_coverage_for` ya sabe tratarlas
+-- (sin distrito devuelve `por_revisar`; sin coordenada, se salta el mapa COD).
+
+create or replace function order_coverage_batch(
+  p_rows jsonb,
+  p_day date default current_date
+)
+returns table (order_id uuid, coverage text)
+language sql
+stable
+security definer
+set search_path to 'public'
+as $function$
+  select
+    (r->>'order_id')::uuid,
+    order_coverage_for(
+      (r->>'store_id')::uuid,
+      r->>'region',
+      r->>'province',
+      r->>'district',
+      (r->>'latitude')::double precision,
+      (r->>'longitude')::double precision,
+      p_day
+    )
+  from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) as r;
+$function$;
+
+comment on function order_coverage_batch(jsonb, date) is
+  'Cobertura canónica para una tanda de pedidos. Envoltorio de order_coverage_for '
+  'para que el recompute del Master no reimplemente la clasificación en TypeScript.';
+
+revoke all on function order_coverage_batch(jsonb, date) from public, anon, authenticated;
+grant execute on function order_coverage_batch(jsonb, date) to service_role;
+
+-- ---- 0107 ----
+-- 0107 — Anomalías de ingesta: hacer visible el trabajo que se descarta.
+--
+-- POR QUÉ. El modo de fallo recurrente de este sistema no es el error ruidoso,
+-- es el descarte silencioso. Solo en `lib/` hay 58 `catch` que se tragan la
+-- excepción (35 documentados como "best-effort") más los `return null` de las
+-- rutas de ingesta. Cada uno es un sitio donde se puede perder trabajo sin que
+-- nadie se entere, y en una sola jornada aparecieron dos casos reales: ~25
+-- conversaciones diarias que no generaban lead, y handoffs rechazados por falta
+-- de teléfono que nunca subían a "Atender ahora".
+--
+-- El precedente es `sinTelefono`: el ÚNICO sitio instrumentado. Gracias a él se
+-- pudo fechar al día el inicio de la migración de identidad de Meta (23 días en
+-- cero exacto, luego 1, 3, 11, 16, 20, 29) y decidir con números en vez de
+-- intuición. Esta tabla generaliza ese contador.
+--
+-- ES UN DETECTOR DE CAMBIOS, NO UN LOG. Lo que importa no es "hay 25 descartes"
+-- —eso puede ser lo normal— sino "ayer 0, hoy 25". Por eso se AGREGA por día en
+-- vez de guardar un registro por evento: un log por evento crece sin fin, nadie
+-- lo lee, y esconde justamente el salto que sí importa.
+--
+-- QUÉ NO CUBRE, para no confiarse: solo detecta trabajo DESCARTADO. Un camino
+-- que devuelve un resultado equivocado sin descartar nada (como un filtro que no
+-- empareja y hace re-derivar un estado) no pasa por aquí — eso lo atrapan los
+-- tests, no esta tabla.
+
+create table if not exists ingest_anomalies (
+  id uuid primary key default gen_random_uuid(),
+  store_id uuid not null references stores(id) on delete cascade,
+  -- Día LOCAL de la operación, no UTC: en Lima (UTC-5) el corte UTC cae a las
+  -- 7 de la tarde y partiría en dos la jornada de trabajo, que es justo la
+  -- unidad en la que se compara "ayer vs hoy".
+  dia date not null,
+  -- Qué camino descartó. p. ej. 'leads_sync', 'handoff', 'conversation_event'.
+  source text not null,
+  -- Por qué. p. ej. 'sin_identidad', 'enrich_falló', 'kapso_error'.
+  reason text not null,
+  count integer not null default 1,
+  -- UN ejemplo del día, el primero. Sirve para reproducir sin guardar todo.
+  sample jsonb,
+  first_seen_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  unique (store_id, dia, source, reason)
+);
+
+-- La lectura es siempre "los últimos N días de estas tiendas".
+create index if not exists ingest_anomalies_store_dia
+  on ingest_anomalies (store_id, dia desc);
+
+/**
+ * Anota una anomalía sumando al contador del día.
+ *
+ * Va como función y no como upsert desde el cliente porque PostgREST no sabe
+ * expresar `count = count + n`: sin esto haría falta leer-modificar-escribir, que
+ * con dos procesos del cron solapados pierde cuentas en silencio — el mismo
+ * problema que la tabla viene a resolver.
+ *
+ * `sample` conserva el PRIMERO del día (coalesce sobre el existente): un ejemplo
+ * estable sirve para reproducir; uno que cambia en cada llamada no.
+ */
+create or replace function public.note_ingest_anomaly(
+  p_store_id uuid,
+  p_source text,
+  p_reason text,
+  p_count integer default 1,
+  p_sample jsonb default null
+) returns void
+language sql
+security definer
+set search_path = public
+as $$
+  insert into ingest_anomalies (store_id, dia, source, reason, count, sample)
+  values (
+    p_store_id,
+    (now() at time zone 'America/Lima')::date,
+    p_source,
+    p_reason,
+    greatest(p_count, 1),
+    p_sample
+  )
+  on conflict (store_id, dia, source, reason) do update
+    set count = ingest_anomalies.count + greatest(p_count, 1),
+        last_seen_at = now(),
+        sample = coalesce(ingest_anomalies.sample, excluded.sample);
+$$;
+
+revoke all on function public.note_ingest_anomaly(uuid, text, text, integer, jsonb) from public, anon, authenticated;
+grant execute on function public.note_ingest_anomaly(uuid, text, text, integer, jsonb) to service_role;
+
+revoke all on table ingest_anomalies from public, anon, authenticated;
+grant select on table ingest_anomalies to authenticated;
+grant all on table ingest_anomalies to service_role;
+
+alter table ingest_anomalies enable row level security;
+
+-- Lectura: un miembro ve las anomalías de las tiendas que ya puede ver. No es
+-- dato sensible, pero se cierra con el mismo helper que el resto del esquema.
+-- Escritura: solo el ingestor (service_role, que salta RLS) vía la función.
+drop policy if exists ingest_anomalies_read on ingest_anomalies;
+create policy ingest_anomalies_read on ingest_anomalies
+  for select
+  using (store_id in (select auth_store_ids()));
+
+-- ---- 0108 ----
 -- ============================================================================
--- 0106 — Destrancar las guías Aliclik «pendiente» que el importador viejo
+-- 0108 — Destrancar las guías Aliclik «pendiente» que el importador viejo
 -- congeló, con respaldo para poder revertir.
 --
 -- POR QUÉ. Hasta ahora `lib/aliclik-import.ts` colapsaba el reporte de Aliclik a
@@ -7766,7 +7930,7 @@ create index if not exists leads_store_sin_telefono
 -- irreversible. Se llena en el MISMO statement que muta (CTE modificadora), de
 -- modo que respaldo y update no pueden divergir.
 -- ----------------------------------------------------------------------------
-create table if not exists shipments_status_backup_0106 (
+create table if not exists shipments_status_backup_0108 (
   shipment_id           uuid primary key references shipments(id) on delete cascade,
   guide_code            text not null,
   prev_delivery_status  text not null,
@@ -7778,18 +7942,18 @@ create table if not exists shipments_status_backup_0106 (
 
 -- Sin policies a propósito: es un artefacto de operación, no dato de tienda.
 -- RLS activo + cero policies = nadie autenticado lo lee; `service_role` la evita.
-alter table shipments_status_backup_0106 enable row level security;
-grant all privileges on shipments_status_backup_0106 to service_role;
+alter table shipments_status_backup_0108 enable row level security;
+grant all privileges on shipments_status_backup_0108 to service_role;
 
-comment on table shipments_status_backup_0106 is
-  'Pre-imagen de las guías Aliclik mutadas por la migración 0106. Permite revertir el backfill. Se puede borrar una vez verificado.';
+comment on table shipments_status_backup_0108 is
+  'Pre-imagen de las guías Aliclik mutadas por la migración 0108. Permite revertir el backfill. Se puede borrar una vez verificado.';
 
 -- REVERTIR (todo, o filtrando por guide_code):
 --   update shipments s
 --      set delivery_status  = b.prev_delivery_status,
 --          status_category  = b.prev_status_category,
 --          delivered_source = b.prev_delivered_source
---     from shipments_status_backup_0106 b
+--     from shipments_status_backup_0108 b
 --    where s.id = b.shipment_id;
 --   -- y volver a correr scripts/backfill-mom.ts
 
@@ -7862,7 +8026,7 @@ upd as (
      and f.canonical <> 'pendiente'
   returning f.id, f.guide_code, f.prev_status, f.prev_category, f.prev_source, f.canonical
 )
-insert into shipments_status_backup_0106
+insert into shipments_status_backup_0108
   (shipment_id, guide_code, prev_delivery_status, prev_status_category,
    prev_delivered_source, new_delivery_status)
 select id, guide_code, prev_status, prev_category, prev_source, canonical

@@ -282,12 +282,16 @@ export function LeadsInsightsPanel({
   actionsSlot,
   interactionDateFilter,
   onInteractionDateFilterChange,
+  allStores = false,
 }: {
   data: LeadsInsights | null;
   titleSlot?: ReactNode;
   actionsSlot?: ReactNode;
   interactionDateFilter: LeadInteractionDateFilter | null;
   onInteractionDateFilterChange: (filter: LeadInteractionDateFilter | null) => void;
+  /** Vista combinada de varias tiendas. Solo cambia el aviso de la conversión:
+   *  los demás paneles son conteos y se suman sin ambigüedad. */
+  allStores?: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const landing = data ? ([...data.burndown].reverse().find((p) => p.proy != null)?.proy ?? null) : null;
@@ -369,6 +373,19 @@ export function LeadsInsightsPanel({
                 Del equipo · barra = <span className="font-medium text-slate-700">contactos</span>, relleno ={" "}
                 <span className="font-medium text-emerald-700">pedidos</span> · % encima
               </p>
+              {/* El único panel que se vuelve tramposo al combinar tiendas. Los
+                  otros son conteos y se suman; un PORCENTAJE agregado se mueve
+                  solo porque cambió el reparto de volumen entre tiendas, aunque
+                  ninguna de las dos haya cambiado su conversión. Es la paradoja
+                  de Simpson, y ya nos engañó una vez midiendo la velocidad de
+                  respuesta. Se avisa en vez de esconder el panel: el dato sirve,
+                  lo que no sirve es leerlo como si fuera una sola operación. */}
+              {allStores && (
+                <p className="mb-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+                  Porcentaje combinado: puede subir o bajar solo porque cambió el peso de
+                  cada tienda. Para leer una tendencia real, mírala tienda por tienda.
+                </p>
+              )}
               <ConversionChart data={data.conversion} />
             </div>
 

@@ -3,7 +3,12 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { CampaignDecision, CampaignProductMatch, CampaignStat } from "@/lib/metrics";
-import { formatCurrency, formatPct } from "@/lib/metrics";
+import {
+  campaignMatchesProduct,
+  campaignProductOptions,
+  formatCurrency,
+  formatPct,
+} from "@/lib/metrics";
 import { adObjectiveLabel, adsManagerUrl, prettyAdName } from "@/lib/meta-ads";
 import {
   saveAdPromotedProduct,
@@ -366,7 +371,7 @@ function ExpandedRow({
 }
 
 export function CampaignTable({
-  rows,
+  rows: allRows,
   currency,
   catalogStoreIds,
 }: {
@@ -377,6 +382,23 @@ export function CampaignTable({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(100);
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "spend", dir: "desc" });
+  const [productKey, setProductKey] = useState("");
+  const [includeSold, setIncludeSold] = useState(false);
+
+  const productOptions = useMemo(
+    () => campaignProductOptions(allRows, includeSold),
+    [allRows, includeSold],
+  );
+  // El producto elegido puede dejar de existir al apagar el toggle: si solo lo
+  // vendían y nadie lo anuncia, sale del catálogo. Se conserva la selección y
+  // el vacío lo explica, en vez de resetear en silencio y que parezca un clic
+  // perdido.
+  const selectedOption = productOptions.find((option) => option.key === productKey) ?? null;
+  const rows = useMemo(
+    () => allRows.filter((row) => campaignMatchesProduct(row, productKey, includeSold)),
+    [allRows, productKey, includeSold],
+  );
+
   const totals = useMemo(() => {
     const leads = rows.reduce((sum, row) => sum + row.leads, 0);
     const orders = rows.reduce((sum, row) => sum + row.pedidos, 0);
@@ -436,7 +458,7 @@ export function CampaignTable({
   }), [rows, sort]);
   const visibleRows = sorted.slice(0, visibleCount);
 
-  if (!rows.length) return <p className="text-sm text-slate-400">Sin campañas atribuidas todavía.</p>;
+  if (!allRows.length) return <p className="text-sm text-slate-400">Sin campañas atribuidas todavía.</p>;
   const columns: Array<{ key: SortKey; label: string }> = [
     { key: "label", label: "Anuncio / producto" },
     { key: "spend", label: "Gasto" },
@@ -454,6 +476,54 @@ export function CampaignTable({
       .join(" · ") || "—";
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <label className="flex items-center gap-2 text-xs text-slate-500">
+          Producto
+          <select
+            value={productKey}
+            onChange={(event) => {
+              setProductKey(event.target.value);
+              setVisibleCount(100);
+              setExpanded(null);
+            }}
+            className="max-w-[320px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-700"
+          >
+            <option value="">Todos los productos</option>
+            {productOptions.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label}
+                {includeSold && !option.promotedAds ? " (solo vendido)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-xs text-slate-600">
+          <input
+            type="checkbox"
+            checked={includeSold}
+            onChange={(event) => {
+              setIncludeSold(event.target.checked);
+              setVisibleCount(100);
+              setExpanded(null);
+            }}
+            className="h-3.5 w-3.5 rounded border-slate-300"
+          />
+          Incluir por producto vendido
+        </label>
+        {productKey && (
+          <span className="text-xs text-slate-400">
+            {rows.length} de {allRows.length} anuncios
+          </span>
+        )}
+      </div>
+      {productKey && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          {includeSold
+            ? "Entran los anuncios que promocionan este producto y también aquellos cuyos pedidos lo contienen aunque anuncien otra cosa."
+            : "Entran solo los anuncios que promocionan este producto. Actívalo para ver además los que lo venden sin anunciarlo."}{" "}
+          <strong>Los indicadores de arriba se recalculan sobre este subconjunto</strong>; la señal de cada fila sigue comparándose contra el promedio de todos los anuncios.
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 sm:grid-cols-4 xl:grid-cols-8">
         <Metric
           label="Gasto Meta"
@@ -515,7 +585,14 @@ export function CampaignTable({
             </th>)}
             <th className="px-3 py-3 text-right font-medium">Señal</th>
           </tr></thead>
-          <tbody>{visibleRows.map((row) => {
+          <tbody>{!rows.length && (
+            <tr><td colSpan={10} className="px-3 py-8 text-center text-sm text-slate-400">
+              {selectedOption
+                ? `Ningún anuncio ${includeSold ? "promociona ni vende" : "promociona"} «${selectedOption.label}» en este período.`
+                : "El producto elegido ya no está en la lista: nadie lo anuncia, solo aparece en pedidos. Activa «Incluir por producto vendido» para encontrarlo."}
+            </td></tr>
+          )}
+          {visibleRows.map((row) => {
             const decision = DECISIONS[row.decision];
             const isOpen = expanded === row.adId;
             return [

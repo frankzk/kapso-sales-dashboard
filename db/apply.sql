@@ -215,6 +215,10 @@
 \ir migrations/0104_chatby_webhook_log.sql
 \echo 'Applying 0105_leads_identity_sin_telefono.sql'
 \ir migrations/0105_leads_identity_sin_telefono.sql
-\echo 'Applying 0106_backfill_aliclik_report_status.sql'
-\ir migrations/0106_backfill_aliclik_report_status.sql
+\echo 'Applying 0106_order_coverage_batch.sql'
+\ir migrations/0106_order_coverage_batch.sql
+\echo 'Applying 0107_ingest_anomalies.sql'
+\ir migrations/0107_ingest_anomalies.sql
+\echo 'Applying 0108_backfill_aliclik_report_status.sql'
+\ir migrations/0108_backfill_aliclik_report_status.sql
 \echo 'Done.'
