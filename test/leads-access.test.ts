@@ -74,7 +74,7 @@ describe("getStoreLeads pagination", () => {
     const source = Array.from({ length: 2545 }, (_, index) => ({ id: `lead-${index}` }));
     const { ranges, started, openGate } = mockPagedLeads(source, true);
 
-    const pending = getStoreLeads("kenku-peru", "por_llamar", null);
+    const pending = getStoreLeads(["kenku-peru"], "por_llamar", null);
     // Deja correr el microtask de la primera página y suelta a las siguientes.
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -97,7 +97,7 @@ describe("getStoreLeads pagination", () => {
     const { ranges, openGate } = mockPagedLeads(source, false);
     openGate(); // sin total no hay paralelo que valga: se drena en serie
 
-    const rows = await getStoreLeads("kenku-peru", "por_llamar", null);
+    const rows = await getStoreLeads(["kenku-peru"], "por_llamar", null);
 
     expect(rows).toHaveLength(1167);
     expect(rows.at(-1)).toEqual({ id: "lead-1166" });
@@ -112,7 +112,7 @@ describe("getStoreLeads pagination", () => {
     const { ranges, openGate } = mockPagedLeads(source, true);
     openGate();
 
-    const rows = await getStoreLeads("kenku-peru", "por_llamar", null);
+    const rows = await getStoreLeads(["kenku-peru"], "por_llamar", null);
 
     expect(rows).toHaveLength(42);
     expect(ranges).toEqual([[0, 999]]);
@@ -143,7 +143,7 @@ describe("getLeadQueueSnapshot", () => {
     }));
     createServerSupabaseMock.mockResolvedValue({ rpc, from: () => ({}) });
 
-    const snapshot = await getLeadQueueSnapshot("kenku-peru");
+    const snapshot = await getLeadQueueSnapshot(["kenku-peru"]);
 
     expect(rpc).toHaveBeenCalledTimes(1);
     expect(snapshot.counts).toEqual({
@@ -179,7 +179,7 @@ describe("getLeadQueueSnapshot", () => {
         }),
         from: () => ({}),
       });
-      return (await getLeadQueueSnapshot("kenku-peru")).signature;
+      return (await getLeadQueueSnapshot(["kenku-peru"])).signature;
     };
 
     const base = await snapshotWith(10, "2026-07-27T16:00:00.000Z");
@@ -210,7 +210,7 @@ describe("getLeadQueueSnapshot", () => {
       },
     });
 
-    const snapshot = await getLeadQueueSnapshot("kenku-peru");
+    const snapshot = await getLeadQueueSnapshot(["kenku-peru"]);
 
     expect(snapshot.counts.por_llamar).toBe(1295);
     expect(snapshot.counts.sin_llamar).toBe(1250);

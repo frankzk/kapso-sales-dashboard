@@ -13,6 +13,7 @@ import { chunk } from "@/lib/access";
 import { createServerSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
 import { getAdvisorProductivity } from "@/lib/productivity";
+import type { StoreScope } from "@/lib/leads-access";
 
 export const SHIFT_START = 8;
 export const SHIFT_END = 20;
@@ -103,7 +104,7 @@ export function computeTeamConversionByDay(opts: {
  */
 async function computeTeamConversion(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,
-  storeId: string,
+  storeIds: StoreScope,
   sinceIso: string,
   days: { date: string; label: string }[],
   tz: string,
@@ -115,7 +116,7 @@ async function computeTeamConversion(
     const { data, error } = await sb
       .from("lead_calls")
       .select("lead_id, kind, occurred_at")
-      .eq("store_id", storeId)
+      .in("store_id", storeIds)
       .not("vendedora", "is", null)
       .gte("occurred_at", sinceIso)
       .order("occurred_at", { ascending: false })
@@ -174,12 +175,12 @@ async function pageAll<T>(
  * ventana y el pasado se consulta puntualmente (chunked) para los leads
  * tocados. Devuelve el occurred_at de cada salida.
  */
-async function fetchQueueLeavers(sb: Sb, storeId: string, windowStartIso: string): Promise<string[]> {
+async function fetchQueueLeavers(sb: Sb, storeIds: StoreScope, windowStartIso: string): Promise<string[]> {
   const rows = await pageAll<{ lead_id: string; occurred_at: string | null }>((from, to) =>
     sb
       .from("lead_calls")
       .select("lead_id, occurred_at")
-      .eq("store_id", storeId)
+      .in("store_id", storeIds)
       .not("new_status", "is", null)
       .neq("new_status", "nuevo")
       .gte("occurred_at", windowStartIso)
@@ -202,7 +203,7 @@ async function fetchQueueLeavers(sb: Sb, storeId: string, windowStartIso: string
       sb
         .from("lead_calls")
         .select("lead_id")
-        .eq("store_id", storeId)
+        .in("store_id", storeIds)
         .not("new_status", "is", null)
         .neq("new_status", "nuevo")
         .lt("occurred_at", windowStartIso)
@@ -311,7 +312,7 @@ export function buildTrend(opts: {
  * anchor). RLS-scoped reads; productivity is best-effort.
  */
 export async function getLeadsInsights(
-  storeId: string,
+  storeIds: StoreScope,
   tz: string,
   pendingNow: number,
 ): Promise<LeadsInsights> {
@@ -344,14 +345,14 @@ export async function getLeadsInsights(
       sb
         .from("leads")
         .select("created_at, first_seen_at")
-        .eq("store_id", storeId)
+        .in("store_id", storeIds)
         .or(`first_seen_at.gte.${windowStartIso},and(first_seen_at.is.null,created_at.gte.${windowStartIso})`)
         .order("id", { ascending: true })
         .range(from, to),
     ),
     // "Salió de Sin llamar" = primera gestión del lead dentro de la ventana,
     // excluyendo a los que ya habían salido antes (ver fetchQueueLeavers).
-    fetchQueueLeavers(sb, storeId, windowStartIso),
+    fetchQueueLeavers(sb, storeIds, windowStartIso),
     // "Sin llamar" = en cola (open/hot) y status `nuevo` (nunca lo gestionó un
     // asesor). Los agrupamos por fecha de última interacción para ver qué día
     // se está quedando gente sin llamar.
@@ -359,7 +360,7 @@ export async function getLeadsInsights(
       sb
         .from("leads")
         .select("last_interaction_at, first_seen_at")
-        .eq("store_id", storeId)
+        .in("store_id", storeIds)
         .in("category", ["open", "hot"])
         .eq("status", "nuevo")
         .order("id", { ascending: true })
@@ -409,7 +410,7 @@ export async function getLeadsInsights(
   // mucho volumen se truncaba a un subconjunto y hundía los pedidos del gráfico.
   let conversion: ConversionDay[] = days.map((dd) => ({ dia: dd.label, contactos: 0, pedidos: 0 }));
   try {
-    conversion = await computeTeamConversion(sb, storeId, windowStartIso, days, tz);
+    conversion = await computeTeamConversion(sb, storeIds, windowStartIso, days, tz);
   } catch {
     /* best-effort — deja el gráfico en ceros si falla */
   }
@@ -425,7 +426,7 @@ export async function getLeadsInsights(
   // cuadraba con el "% cierre" de Productividad. Best-effort: never block the board.
   let productivity: AdvisorToday[] = [];
   try {
-    const rows = await getAdvisorProductivity([storeId], { from: todayDate, to: todayDate }, null, tz);
+    const rows = await getAdvisorProductivity(storeIds, { from: todayDate, to: todayDate }, null, tz);
     productivity = rows
       .map((r) => ({
         name: r.email.includes("@") ? r.email.split("@")[0]! : r.email,

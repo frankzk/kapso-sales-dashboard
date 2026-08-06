@@ -12,6 +12,7 @@ import {
   getStoreLeads,
   type CustomerHistory,
   type LeadView,
+  type StoreScope,
 } from "@/lib/leads-access";
 import {
   AUTO_FOLLOWUP_STATUSES,
@@ -52,7 +53,7 @@ import {
   templateProductParam,
   type ConversationMessage,
 } from "@/lib/kapso";
-import { getWaNumbers } from "@/lib/access";
+import { getAccessibleStores, getWaNumbers } from "@/lib/access";
 import { getLeadsInsights, type LeadsInsights } from "@/lib/leads-insights";
 import { drawerConversationIds } from "@/lib/lead-drawer";
 import {
@@ -116,16 +117,32 @@ export interface LeadActionState {
   };
 }
 
+/**
+ * Recorta un alcance pedido por el cliente a las tiendas que quien llama puede
+ * ver de verdad.
+ *
+ * La RLS ya impediría leer una tienda ajena, así que esto no es la única
+ * defensa — pero una acción de servidor es una API pública: cualquiera puede
+ * invocarla con la lista de ids que quiera. Sin este recorte, pedir cien ids
+ * ajenos daría cien consultas que la base tiene que resolver (y descartar) en
+ * cada llamada. Aquí se corta antes de tocar la base, y de paso el alcance que
+ * llega a los conteos y a los gráficos es exactamente el que se ve en pantalla.
+ */
+async function allowedScope(requested: StoreScope): Promise<StoreScope> {
+  const accessible = new Set((await getAccessibleStores()).map((store) => store.id));
+  return requested.filter((id) => accessible.has(id));
+}
+
 /** Load the analytical panel after the queue is interactive. Keeping these
  * heavier aggregates out of the page's critical path makes store/view changes
  * commit as soon as the list is ready. Every query remains RLS-scoped. */
 export async function loadLeadsInsightsPanel(
-  storeId: string,
+  storeIds: StoreScope,
   timezone: string,
   pendingNow: number,
 ): Promise<LeadsInsights | { error: string }> {
   try {
-    return await getLeadsInsights(storeId, timezone, pendingNow);
+    return await getLeadsInsights(await allowedScope(storeIds), timezone, pendingNow);
   } catch {
     return { error: "No se pudo cargar el tablero." };
   }
@@ -144,9 +161,9 @@ export async function loadLeadsInsightsPanel(
  *
  * RLS-scoped: una tienda que no puedes ver devuelve la firma vacía.
  */
-export async function pollLeadsQueueSignature(storeId: string): Promise<string | null> {
+export async function pollLeadsQueueSignature(storeIds: StoreScope): Promise<string | null> {
   try {
-    return (await getLeadQueueSnapshot(storeId)).signature;
+    return (await getLeadQueueSnapshot(await allowedScope(storeIds))).signature;
   } catch {
     return null; // el board se queda con la firma que tenía y reintenta luego
   }
@@ -301,18 +318,23 @@ export async function pollLeadState(
  * y silenciosamente equivocado. RLS-scoped vía getStoreLeads.
  */
 export async function loadLeadsForAudience(
-  storeId: string,
+  storeIds: StoreScope,
   view: LeadView,
 ): Promise<LeadRow[]> {
-  const sb = await createServerSupabase();
-  const { data: store } = await sb.from("stores").select("id").eq("id", storeId).maybeSingle();
-  if (!store) return [];
-  return getStoreLeads(storeId, view, null);
+  // La audiencia de Meta se sube a UNA cuenta publicitaria. Con varias tiendas
+  // el archivo mezclaría públicos de marcas distintas: el público parece más
+  // grande y rinde peor, sin que nada avise. La UI deshabilita el botón; esto lo
+  // vuelve a comprobar acá, porque una acción de servidor es una API pública.
+  const scope = await allowedScope(storeIds);
+  if (scope.length !== 1) return [];
+  return getStoreLeads(scope, view, null);
 }
 
-export async function searchLeads(storeId: string, query: string): Promise<LeadRow[]> {
+export async function searchLeads(storeIds: StoreScope, query: string): Promise<LeadRow[]> {
   const q = query.trim();
   if (q.length < 2) return [];
+  const scope = await allowedScope(storeIds);
+  if (!scope.length) return [];
   const sb = await createServerSupabase();
   const nameLike = `%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`; // escape LIKE wildcards
   const digits = q.replace(/\D/g, "");
@@ -320,7 +342,7 @@ export async function searchLeads(storeId: string, query: string): Promise<LeadR
     sb
       .from("leads")
       .select("*")
-      .eq("store_id", storeId)
+      .in("store_id", scope)
       .ilike("name", nameLike)
       .order("last_interaction_at", { ascending: false })
       .limit(40),
@@ -330,7 +352,7 @@ export async function searchLeads(storeId: string, query: string): Promise<LeadR
       sb
         .from("leads")
         .select("*")
-        .eq("store_id", storeId)
+        .in("store_id", scope)
         .ilike("phone", `%${digits}%`)
         .order("last_interaction_at", { ascending: false })
         .limit(40),

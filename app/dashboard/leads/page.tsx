@@ -1,11 +1,13 @@
 import { Suspense } from "react";
 import { getAccessibleStores, getAdNames, getCurrentUser, getWaNumbers } from "@/lib/access";
 import {
+  ALL_STORES,
   LEAD_VIEWS,
   getLeadQueueSnapshot,
   getStoreLeads,
   leadsViewLimit,
   type LeadView,
+  type StoreScope,
 } from "@/lib/leads-access";
 import {
   isLeadGestion,
@@ -63,7 +65,22 @@ async function LeadsContent({
   }
 
   const fallback = stores[0]!;
+  // `?store=all` = todas las tiendas que ESTE usuario puede ver. Nunca "todas
+  // las de la base": el universo sale de getAccessibleStores, y la RLS lo
+  // respalda por debajo.
+  //
+  // "Todas" solo se ofrece si las tiendas comparten moneda y zona horaria. No es
+  // una limitación técnica sino de significado: la cola muestra montos de
+  // carrito y ventanas de 24 h, y mezclar dos monedas sumaría soles con otra
+  // cosa sin decirlo. Hoy las dos son PEN/Lima, así que se ofrece; el día que
+  // entre una tienda de otro país, el selector deja de mostrarlo solo.
+  const uniform =
+    stores.length > 1 &&
+    stores.every((s) => s.currency === fallback.currency && s.timezone === fallback.timezone);
+  const allSelected = uniform && sp.store === ALL_STORES;
   const storeId = sp.store && stores.some((s) => s.id === sp.store) ? sp.store : fallback.id;
+  // Alcance efectivo de TODA la vista: lista, conteos, gráficos y firma.
+  const scope: StoreScope = allSelected ? stores.map((s) => s.id) : [storeId];
   const view: LeadView = isLeadView(sp.view) ? sp.view : "por_llamar";
   // Pestaña inicial de la cola al llegar por link; dentro de la cola se maneja
   // client-side en el board (cambio instantáneo, sin refetch). Back-compat: un
@@ -87,15 +104,15 @@ async function LeadsContent({
   const initialGest: LeadGestion | null = isLeadGestion(sp.gest) ? sp.gest : null;
   const initialInteractionDate = leadInteractionDateFilterFromParams(sp.last_date, sp.last_before);
 
-  const store = stores.find((s) => s.id === storeId);
+  const store = allSelected ? fallback : stores.find((s) => s.id === storeId);
   const currency = store?.currency ?? "PEN";
   const timezone = store?.timezone ?? "America/Lima";
 
-  const snapshotPromise = getLeadQueueSnapshot(storeId);
+  const snapshotPromise = getLeadQueueSnapshot(scope);
   // "Por llamar" se filtra/cuenta en cliente (jerarquía de facetas), así que la
   // cola se pagina completa (`null`) para que los conteos y drill-downs usen el
   // mismo universo que el gráfico; las demás vistas mantienen el tope estándar.
-  const leadsPromise = getStoreLeads(storeId, view, leadsViewLimit(view));
+  const leadsPromise = getStoreLeads(scope, view, leadsViewLimit(view));
   const userPromise = getCurrentUser();
   // These lookups depend only on the list, so pipeline them as soon as that
   // promise settles instead of waiting for counts and user first.
@@ -111,9 +128,11 @@ async function LeadsContent({
 
   return (
     <LeadsBoard
-      key={`${storeId}:${view}`}
+      key={`${scope.join(",")}:${view}`}
       stores={stores}
-      storeId={storeId}
+      storeId={allSelected ? ALL_STORES : storeId}
+      scope={scope}
+      allStoresAvailable={uniform}
       view={view}
       counts={snapshot.counts}
       queueSignature={snapshot.signature}
