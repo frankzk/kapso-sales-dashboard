@@ -497,6 +497,22 @@ que nadie tenga que resumirla a mano:
 - **Qué llevaba cada pedido.** Cuando el historial repite el mismo producto y la
   misma cantidad, se marca: eso no es un historial de compras variado, es el
   mismo pedido una y otra vez.
+- **Excepción: el cliente sin teléfono.** Desde el 29-jul-2026 Meta empezó a
+  entregar conversaciones sin número — el cliente adoptó un *username* de
+  WhatsApp y su identidad pasó a ser el **BSUID**. Fueron 0 durante 23 días y
+  luego 1, 3, 11, 16, 20, 29 al día (~3,5 % del volumen). Esos leads existen en
+  Kapta desde la migración `0105`, identificados por `(store_id, bsuid)`.
+  Para la confirmación cambian tres cosas, y conviene tenerlas claras:
+  - **No se pueden llamar, y por lo tanto no se confirman por llamada.** La
+    acción es escribirles por WhatsApp pidiéndoles el número.
+  - **No tienen historial ni antecedentes**, porque el historial se arma por
+    teléfono. La regla de riesgo del §8 no se les puede aplicar: no es que den
+    riesgo cero, es que **no hay dato**. Tratarlos como clientes limpios sería
+    leer un vacío como un aval.
+  - **No se les puede crear guía** hasta tener el número: los couriers lo
+    exigen. Un pedido suyo no puede pasar de Preparación sin ese dato.
+  En cuanto el cliente da su número, el lead vuelve a ser uno normal y todo lo
+  anterior aplica sin excepción.
 - **Antecedentes**: solo cuentan los **anulados y devueltos**, que es lo que la
   tabla nombra. Un pedido abierto o sin confirmar todavía no es un rechazo. Que
   un anulado se haya despachado o no **no cambia el conteo**: se muestra para

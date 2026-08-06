@@ -19,6 +19,8 @@ type Row = Record<string, any>;
  *  ("status, has_order" y luego "id"), que se distinguen por las columnas. */
 class FakeSupabase {
   upserts: Row[] = [];
+  /** Opciones del upsert (el `onConflict`), en paralelo a `upserts`. */
+  upsertOpts: any[] = [];
   callNotes: Row[] = [];
   constructor(private existing: Row | null) {}
   from(table: string) {
@@ -32,6 +34,7 @@ class FakeSupabase {
     }
     if (b.table === "leads" && (b.op === "upsert" || b.op === "update")) {
       this.upserts.push(b.payload);
+      this.upsertOpts.push(b.opts ?? null);
       return { data: null, error: null };
     }
     if (b.table === "lead_calls" && b.op === "insert") {
@@ -57,9 +60,11 @@ class FakeBuilder {
     this.payload = p;
     return this;
   }
-  upsert(p: any) {
+  opts: any = null;
+  upsert(p: any, opts?: any) {
     this.op = "upsert";
     this.payload = p;
+    this.opts = opts ?? null;
     return this;
   }
   update(p: any) {
@@ -166,5 +171,91 @@ describe("applyHandoff: preserva la disposición manual de la asesora", () => {
   it("un lead ya ganado sin motivo de handoff no se marca para atención", async () => {
     const { row } = await run({ status: "pedido_generado", has_order: true }, "");
     expect(row.needs_attention).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0105 — el cliente sin teléfono.
+//
+// Meta empezó a entregar conversaciones sin número (el cliente adoptó un
+// username). Antes `applyHandoff` exigía teléfono y devolvía "no-phone", así que
+// esos leads existían en la cola normal pero NUNCA subían a "Atender ahora"
+// cuando el bot escalaba — justo el caso más urgente de todos.
+// ---------------------------------------------------------------------------
+
+const BSUID = "PE.1595605215510035";
+
+/** Payload de handoff tal como llega sin número: la identidad viaja dentro del
+ *  mismo objeto `conversation` que traía el teléfono. */
+const bodySinTelefono = (reason: string) => ({
+  event: "workflow.execution.handoff",
+  conversation: { id: "conv-9", business_scoped_user_id: BSUID, username: "cfloresw13" },
+  reason,
+  context_summary: "el cliente espera respuesta",
+});
+
+describe("applyHandoff: leads sin teléfono (0105)", () => {
+  it("un handoff sin número YA NO se descarta si trae BSUID", async () => {
+    const sb = new FakeSupabase(null);
+    const res = await applyHandoff(sb as any, STORE, bodySinTelefono("esperando respuesta"));
+    expect(res.ok).toBe(true);
+    expect(sb.upserts[0]).toBeTruthy();
+  });
+
+  it("escribe la identidad nueva y deja el teléfono en null", async () => {
+    const sb = new FakeSupabase(null);
+    await applyHandoff(sb as any, STORE, bodySinTelefono("esperando respuesta"));
+    const row = sb.upserts[0]!;
+    expect(row.phone).toBeNull();
+    expect(row.bsuid).toBe(BSUID);
+    expect(row.username).toBe("cfloresw13");
+    // Y sube a la cola, que es el punto de todo esto.
+    expect(row.needs_attention).toBe(true);
+  });
+
+  it("empareja por (store_id, bsuid), no por teléfono", async () => {
+    // Lo importante del cambio. Con `store_id,phone` este upsert no colisionaría
+    // nunca consigo mismo —los NULL son distintos entre sí en Postgres— y cada
+    // handoff del watchdog crearía OTRO lead de la misma persona. El watchdog
+    // dispara cada vez que alguien escribe y el bot no contesta en 3 minutos.
+    const sb = new FakeSupabase(null);
+    await applyHandoff(sb as any, STORE, bodySinTelefono("esperando respuesta"));
+    expect(sb.upsertOpts[0]).toEqual({ onConflict: "store_id,bsuid" });
+  });
+
+  it("con teléfono sigue emparejando por (store_id, phone)", async () => {
+    // Guardia de regresión: el camino de siempre, que es el 96% del volumen.
+    const { sb } = await run(null, "esperando respuesta");
+    expect(sb.upsertOpts[0]).toEqual({ onConflict: "store_id,phone" });
+  });
+
+  it("sin NINGUNA identidad sigue descartando, y sin escribir nada", async () => {
+    const sb = new FakeSupabase(null);
+    const res = await applyHandoff(sb as any, STORE, {
+      event: "workflow.execution.handoff",
+      reason: "esperando respuesta",
+    });
+    expect(res).toEqual({ ok: false, reason: "no-identity" });
+    expect(sb.upserts).toHaveLength(0);
+  });
+
+  it("preserva la disposición manual igual que con teléfono", async () => {
+    // El resguardo ganado con los handoffs de alto volumen no puede depender de
+    // por qué columna se identifique al lead.
+    const sb = new FakeSupabase({ status: "volver_a_llamar", has_order: false });
+    await applyHandoff(sb as any, STORE, bodySinTelefono("esperando respuesta"));
+    const row = sb.upserts[0]!;
+    expect(row).not.toHaveProperty("status");
+    expect(row.needs_attention).toBe(true);
+  });
+
+  it("un lead ya ganado sin teléfono también sube a Atender ahora", async () => {
+    // La rama `has_order` hace un UPDATE, no un upsert: si su filtro se hubiera
+    // quedado en `phone` habría actualizado CERO filas, en silencio.
+    const sb = new FakeSupabase({ status: "pedido_generado", has_order: true });
+    const res = await applyHandoff(sb as any, STORE, bodySinTelefono("consulta"));
+    expect(res.ok).toBe(true);
+    expect(sb.upserts[0]!.needs_attention).toBe(true);
+    expect(sb.upserts[0]).not.toHaveProperty("status");
   });
 });

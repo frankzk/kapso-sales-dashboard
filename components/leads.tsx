@@ -6,9 +6,15 @@ import { type ReactNode, useEffect, useMemo, useRef, useState, useTransition } f
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
 import type { AdMeta } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
-import { type CustomerHistory, type LeadCounts, type LeadView } from "@/lib/leads-access";
+import {
+  ALL_STORES,
+  type CustomerHistory,
+  type LeadCounts,
+  type LeadView,
+  type StoreScope,
+} from "@/lib/leads-access";
 import { facetItems } from "@/lib/leads-facets";
-import { scoringProfileFor, sortLeadsByPriority } from "@/lib/lead-priority";
+import { scoringProfileFor, sortLeadsByPriorityScoped } from "@/lib/lead-priority";
 import type { LeadsInsights } from "@/lib/leads-insights";
 import {
   buildMetaAudienceCsv,
@@ -39,6 +45,8 @@ import {
   type LeadWindow,
   type QueueState,
   type YapeKind,
+  leadHandle,
+  leadCanCall,
 } from "@/lib/leads";
 import {
   loadLeadCustomerHistory,
@@ -584,9 +592,17 @@ export function LeadsBoard({
   initialOpenId,
   currentUserId,
   leadsComplete = true,
+  scope,
+  allStoresAvailable = false,
 }: {
   stores: StoreSummary[];
+  /** Id de la tienda activa, o ALL_STORES cuando la vista es combinada. */
   storeId: string;
+  /** Tiendas que la vista está mirando de verdad. Con una sola es `[storeId]`.
+   *  Todo lo que consulta al servidor usa esto, nunca `storeId`. */
+  scope: StoreScope;
+  /** ¿Se puede ofrecer "Todas"? Falso si las tiendas no comparten moneda/zona. */
+  allStoresAvailable?: boolean;
   view: LeadView;
   counts: LeadCounts;
   /** Resumen del estado de la cola en el servidor. El refresco en vivo solo
@@ -609,6 +625,13 @@ export function LeadsBoard({
   leadsComplete?: boolean;
 }) {
   const router = useRouter();
+  // El alcance es un array y cambia de identidad en cada render, así que no
+  // sirve como dependencia de efectos: usarlo directo relanzaría la carga de
+  // gráficos en bucle. La clave estable es su contenido.
+  const scopeKey = scope.join(",");
+  /** ¿Vista combinada? Decide la insignia de tienda, el perfil de puntaje por
+   *  fila y el bloqueo de la audiencia de Meta. */
+  const allStores = scope.length > 1;
   const [routePending, startRouteTransition] = useTransition();
   const [insightsData, setInsightsData] = useState<LeadsInsights | null>(insights);
   // Only the row being opened is disabled (its claim is in flight) — never the
@@ -670,13 +693,13 @@ export function LeadsBoard({
         alive = false;
       };
     }
-    void loadLeadsInsightsPanel(storeId, timezone, counts.sin_llamar).then((result) => {
+    void loadLeadsInsightsPanel(scope, timezone, counts.sin_llamar).then((result) => {
       if (alive && !("error" in result)) setInsightsData(result);
     });
     return () => {
       alive = false;
     };
-  }, [counts.sin_llamar, insights, storeId, timezone]);
+  }, [counts.sin_llamar, insights, scopeKey, timezone]);
 
   useEffect(() => {
     const q = query.trim();
@@ -688,7 +711,7 @@ export function LeadsBoard({
     setSearching(true);
     let alive = true;
     const t = setTimeout(async () => {
-      const res = await searchLeads(storeId, q);
+      const res = await searchLeads(scope, q);
       if (alive) {
         setResults(res);
         setSearching(false);
@@ -740,7 +763,7 @@ export function LeadsBoard({
       }
       // Sin firma previa (o sin firma del servidor) no hay nada que comparar:
       // se comporta como antes y recarga.
-      const next = await pollLeadsQueueSignature(storeId).catch(() => null);
+      const next = await pollLeadsQueueSignature(scope).catch(() => null);
       if (!alive || document.hidden) return;
       if (next === null) return; // fallo puntual: se reintenta al siguiente tick
       if (signatureRef.current !== null && next === signatureRef.current) return;
@@ -769,6 +792,11 @@ export function LeadsBoard({
   function prefetchOtherStores() {
     for (const store of stores) {
       if (store.id !== storeId) router.prefetch(`/dashboard/leads?store=${store.id}&view=${view}`);
+    }
+    // La combinada también: es la que más tarda (consulta las dos tiendas), así
+    // que es justo la que más gana con precargarse al abrir el selector.
+    if (allStoresAvailable && storeId !== ALL_STORES) {
+      router.prefetch(`/dashboard/leads?store=${ALL_STORES}&view=${view}`);
     }
   }
 
@@ -1089,10 +1117,25 @@ export function LeadsBoard({
   // Postgres sepa del puntaje.
   const priorityOn =
     sortMode === "prioridad" && !searchMode && view === "por_llamar" && queueState === "sin_llamar";
-  const storeName = stores.find((s) => s.id === storeId)?.name ?? null;
+  // El perfil de puntaje sale de la tienda DE CADA FILA, no del selector: en la
+  // vista combinada aplicarle a todo el perfil de una sola tienda ordenaría mal
+  // justo la mitad de la cola.
+  const profileByStore = useMemo(
+    () => new Map(stores.map((s) => [s.id, scoringProfileFor(s.name)])),
+    [stores],
+  );
+  const storeNameById = useMemo(
+    () => new Map(stores.map((s) => [s.id, s.name])),
+    [stores],
+  );
   const displayLeads = useMemo(
-    () => (priorityOn ? sortLeadsByPriority(baseLeads, scoringProfileFor(storeName)) : baseLeads),
-    [priorityOn, baseLeads, storeName],
+    () =>
+      priorityOn
+        ? sortLeadsByPriorityScoped(baseLeads, (lead) =>
+            profileByStore.get(lead.store_id) ?? scoringProfileFor(null),
+          )
+        : baseLeads,
+    [priorityOn, baseLeads, profileByStore],
   );
 
   // Render por tramos. La cola completa puede traer miles de filas y montarlas
@@ -1146,7 +1189,7 @@ export function LeadsBoard({
     try {
       let rows = shownLeads;
       if (!leadsComplete) {
-        const all = await loadLeadsForAudience(storeId, view);
+        const all = await loadLeadsForAudience(scope, view);
         if (all.length) rows = all.filter(facetsMatchAll);
       }
       const segment = [view, inQueue ? queueState : null, segFilter].filter(Boolean).join(" ");
@@ -1171,6 +1214,7 @@ export function LeadsBoard({
       {/* Título "Leads" + tablero de hoy (burndown · sin llamar · productividad). */}
       <LeadsInsightsPanel
         data={insightsData}
+        allStores={allStores}
         interactionDateFilter={interactionDateFilter}
         onInteractionDateFilterChange={changeInteractionDateFilter}
         titleSlot={
@@ -1218,6 +1262,9 @@ export function LeadsBoard({
               aria-label="Tienda"
               className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
             >
+              {allStoresAvailable && (
+                <option value={ALL_STORES}>Todas las tiendas</option>
+              )}
               {stores.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
@@ -1330,13 +1377,15 @@ export function LeadsBoard({
           <button
             type="button"
             onClick={downloadMetaAudience}
-            disabled={!audienceRows.length || exportingAudience}
+            disabled={allStores || !audienceRows.length || exportingAudience}
             title={
-              !audienceRows.length
-                ? "No hay celulares válidos en el filtro actual"
-                : leadsComplete
-                  ? `Descarga ${audienceRows.length} celular(es) con el formato de Meta (Públicos personalizados → Lista de clientes). Exporta exactamente los leads filtrados en pantalla.`
-                  : "Descarga TODOS los leads del filtro actual (no solo los visibles) con el formato de Meta (Públicos personalizados → Lista de clientes)."
+              allStores
+                ? "Elige una tienda para exportar. Un público personalizado se sube a UNA cuenta publicitaria, así que mezclar las dos marcas da un público más grande que rinde peor."
+                : !audienceRows.length
+                  ? "No hay celulares válidos en el filtro actual"
+                  : leadsComplete
+                    ? `Descarga ${audienceRows.length} celular(es) con el formato de Meta (Públicos personalizados → Lista de clientes). Exporta exactamente los leads filtrados en pantalla.`
+                    : "Descarga TODOS los leads del filtro actual (no solo los visibles) con el formato de Meta (Públicos personalizados → Lista de clientes)."
             }
             className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -1579,7 +1628,8 @@ export function LeadsBoard({
                   : state === "cerrada"
                     ? "venc."
                     : `${Math.max(1, Math.ceil((msLeft ?? 0) / 3_600_000))}h`;
-              const initial = (lead.name || lead.phone).trim()[0]?.toUpperCase() || "?";
+              const handle = leadHandle(lead);
+              const initial = (lead.name || handle).trim()[0]?.toUpperCase() || "?";
               return (
                 <div
                   key={lead.id}
@@ -1615,7 +1665,17 @@ export function LeadsBoard({
                   {/* Col 2 · lead (en móvil ocupa la 1ª línea; gestión/ventana bajan) */}
                   <div className="min-w-0 flex-1 md:flex-none">
                   <div className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate text-sm font-semibold text-slate-900">{lead.name || lead.phone}</span>
+                    <span className="truncate text-sm font-semibold text-slate-900">{lead.name || handle}</span>
+                    {/* De qué tienda es esta fila. Solo en vista combinada: con una
+                        sola tienda seleccionada repetiría el mismo texto en cada
+                        fila y no informa nada. Es lo único que hace legible la
+                        cola mezclada — sin esto no se sabe a nombre de qué marca
+                        se está llamando. */}
+                    {allStores && lead.store_id && (
+                      <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                        {storeNameById.get(lead.store_id) ?? "—"}
+                      </span>
+                    )}
                     {isYape && <span aria-hidden="true">🔥</span>}
                     <SourceChip source={lead.source} />
                     <span className="shrink-0">
@@ -1713,24 +1773,32 @@ export function LeadsBoard({
                             ✓ Resuelto
                           </button>
                         )}
-                        <a
-                          title="Llamar"
-                          href={`tel:+${lead.phone}`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
-                        >
-                          <StrokeIcon d={ICON_PHONE} />
-                        </a>
-                        <a
-                          title="WhatsApp"
-                          href={`https://wa.me/${lead.phone}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
-                        >
-                          <StrokeIcon d={ICON_CHAT} />
-                        </a>
+                        {/* Sin número no se ofrece «Llamar»: un `tel:` vacío abre el
+                            marcador en blanco y la asesora cree que falló el equipo.
+                            Y `wa.me` también necesita número — a estos leads se les
+                            escribe desde el drawer, que los alcanza por BSUID. */}
+                        {leadCanCall(lead) && (
+                          <>
+                            <a
+                              title="Llamar"
+                              href={`tel:+${lead.phone}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+                            >
+                              <StrokeIcon d={ICON_PHONE} />
+                            </a>
+                            <a
+                              title="WhatsApp"
+                              href={`https://wa.me/${lead.phone}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+                            >
+                              <StrokeIcon d={ICON_CHAT} />
+                            </a>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>

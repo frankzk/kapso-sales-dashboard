@@ -175,8 +175,25 @@ export async function detectYapeByVision(
   return { voucher, analyzed };
 }
 
+/** Semillas de la corrida, indexadas por identidad (`tel:…` o `bsuid:…`). */
+type LeadSeedMap = Map<string, LeadSeed>;
+
+/**
+ * Qué clave usa el upsert para reconocer un lead que ya existe (0105).
+ *
+ * Es la decisión más delicada de toda la ingesta: elegir mal no da error, da
+ * DUPLICADOS SILENCIOSOS. En Postgres los NULL son distintos entre sí, así que
+ * un lead sin teléfono resuelto por `(store_id, phone)` nunca colisiona consigo
+ * mismo y se vuelve a insertar en CADA corrida del cron — cada cinco minutos.
+ * Por eso vive suelta y con test propio en vez de estar escondida en una línea.
+ */
+export function leadUpsertConflictTarget(seed: Pick<LeadSeed, "phone">): string {
+  return seed.phone ? "store_id,phone" : "store_id,bsuid";
+}
+
 interface ExistingLead {
-  phone: string;
+  /** Nullable desde la 0105: el lead puede identificarse por BSUID. */
+  phone: string | null;
   status: string;
   handoff_reason: string | null;
   has_order: boolean;
@@ -219,7 +236,13 @@ async function upsertLeadFromSeed(
 
   const row: any = {
     store_id: storeId,
-    phone: seed.phone,
+    // Puede ser null (0105): la identidad entonces es `bsuid`, que más abajo se
+    // escribe siempre y actúa de clave. El `|| null` no es adorno: `unique
+    // (store_id, phone)` trata la cadena vacía como un valor REAL, así que un ""
+    // que se colara haría que todos los leads sin número colisionaran entre sí y
+    // se pisaran. Hoy `normalizePhone` nunca devuelve "", pero esta fila es el
+    // único punto por el que entra CADA lead y no debe depender de eso.
+    phone: seed.phone || null,
     kapso_conversation_id: seed.kapso_conversation_id,
   };
   if (seed.name) row.name = seed.name;
@@ -248,11 +271,22 @@ async function upsertLeadFromSeed(
   // upsert entero falla, así que se reintenta una vez sin ellas. (Es el bug que
   // silenciosamente detuvo TODOS los leads nuevos: la columna se escribió a ciegas
   // y el error se tragó mientras 0012 no estaba aplicada.)
+  //
+  // Desde la 0105 hay DOS claves posibles y el árbitro depende de la identidad
+  // que traiga el lead: con teléfono empareja por (store_id, phone); sin
+  // teléfono, por (store_id, bsuid). Usar siempre la primera insertaría un lead
+  // nuevo en cada sincronización para la misma persona sin número, porque en
+  // Postgres los NULL son distintos entre sí y NUNCA colisionan.
   const OPTIONAL_COLUMNS = ["wa_phone_number_id", "bsuid", "username"] as const;
-  const { error } = await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
-  if (error && OPTIONAL_COLUMNS.some((c) => c in row)) {
+  const onConflict = leadUpsertConflictTarget(seed);
+  const { error } = await admin.from("leads").upsert(row, { onConflict });
+  // El reintento sin columnas opcionales NO aplica cuando el BSUID es la clave:
+  // quitarlo dejaría una fila sin ninguna identidad, que el CHECK de la 0105
+  // rechaza — y con razón, porque sería irrecuperable. En ese caso el error real
+  // se propaga en vez de disfrazarse con un segundo intento imposible.
+  if (error && seed.phone && OPTIONAL_COLUMNS.some((c) => c in row)) {
     for (const c of OPTIONAL_COLUMNS) delete row[c];
-    await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
+    await admin.from("leads").upsert(row, { onConflict });
   }
 }
 
@@ -296,24 +330,35 @@ export async function syncStoreLeads(
     return { touched: 0, enriched: { ...ZERO_ENRICH }, sinTelefono: 0 };
   }
 
-  // Dedup by phone, keeping the most recent conversation.
-  const seeds = new Map<string, ReturnType<typeof conversationToLeadSeed>>();
-  // Una conversación sin teléfono no genera lead. Se cuenta en vez de perderla en
-  // silencio: es el disparador de la migración de identidad (ver SyncLeadsResult).
+  // Dedup por IDENTIDAD, quedándose con la conversación más reciente.
+  //
+  // La clave lleva prefijo (`tel:` / `bsuid:`) por higiene, no por miedo a una
+  // colisión: los dos espacios son disjuntos hoy (dígitos vs `PE.…`), pero una
+  // clave que no dice de qué es se vuelve ambigua en cuanto alguien la lee en un
+  // log o la reutiliza para otra cosa.
+  const seeds: LeadSeedMap = new Map();
+  // Conversaciones que llegan SIN teléfono. Desde la 0105 ya no se descartan: se
+  // crean con `bsuid` como identidad. El contador se conserva porque ahora mide
+  // la ADOPCIÓN del username de Meta — la señal que justificó esta migración y la
+  // que dirá cuánto crece.
   let sinTelefono = 0;
   for (const c of convs) {
     const s = conversationToLeadSeed(c);
-    if (!s) {
-      sinTelefono += 1;
-      continue;
-    }
-    const prev = seeds.get(s.phone);
+    // Solo se descarta lo que no tiene NINGUNA identidad: una fila así no se
+    // podría contactar ni volver a encontrar en la próxima sincronización.
+    if (!s) continue;
+    if (!s.phone) sinTelefono += 1;
+    const key = s.phone ? `tel:${s.phone}` : `bsuid:${s.bsuid}`;
+    const prev = seeds.get(key);
     if (!prev || (s.last_interaction_at ?? "") > (prev.last_interaction_at ?? "")) {
-      seeds.set(s.phone, s);
+      seeds.set(key, s);
     }
   }
-  const phones = [...seeds.keys()];
-  if (!phones.length) {
+  // Los cruces por teléfono (pedidos, carritos, disposiciones) solo aplican a los
+  // leads QUE TIENEN teléfono: un `in()` con un null no empareja nada y además
+  // ensucia la consulta.
+  const phones = [...seeds.values()].map((s) => s.phone).filter((p): p is string => !!p);
+  if (!seeds.size) {
     // No active conversations this run, but still backfill enrichment for the
     // existing open queue (the 66 leads sitting in "Por llamar").
     let enriched: LeadEnrichStats = { ...ZERO_ENRICH };
@@ -375,7 +420,30 @@ export async function syncStoreLeads(
       .select("phone, status, handoff_reason, has_order")
       .eq("store_id", storeId)
       .in("phone", phones);
-    for (const l of (data as ExistingLead[]) ?? []) existingByPhone.set(l.phone, l);
+    for (const l of (data as ExistingLead[]) ?? []) {
+      if (l.phone) existingByPhone.set(l.phone, l);
+    }
+  }
+
+  // Y los que ya existen identificados por BSUID (0105). Va en una consulta
+  // aparte y no en un `or(...)` porque son dos claves distintas sobre dos índices
+  // distintos: mezclarlas en un filtro compuesto le impide a Postgres usar
+  // cualquiera de los dos.
+  const existingByBsuid = new Map<string, ExistingLead>();
+  {
+    const bsuids = [...seeds.values()]
+      .filter((s) => !s.phone && s.bsuid)
+      .map((s) => s.bsuid as string);
+    if (bsuids.length) {
+      const { data } = await admin
+        .from("leads")
+        .select("phone, bsuid, status, handoff_reason, has_order")
+        .eq("store_id", storeId)
+        .in("bsuid", bsuids);
+      for (const l of (data as (ExistingLead & { bsuid: string | null })[]) ?? []) {
+        if (l.bsuid) existingByBsuid.set(l.bsuid, l);
+      }
+    }
   }
 
   // Last manual call disposition per phone → a cart only counts as "new intent"
@@ -385,14 +453,20 @@ export async function syncStoreLeads(
   const dispositionByPhone = await lastDispositionAtByPhone(admin, storeId, phones);
 
   let maxTs = cursor;
-  for (const phone of phones) {
-    const seed = seeds.get(phone)!;
-    const existing = existingByPhone.get(phone) ?? null;
-    const order = orderByPhone.get(phone);
-    const cartAt = newestOpenCartAt.get(phone) ?? null;
+  // Se itera sobre las SEMILLAS, no sobre los teléfonos: desde la 0105 hay leads
+  // que no tienen ninguno y quedarían fuera del bucle.
+  for (const seed of seeds.values()) {
+    const phone = seed.phone;
+    // Sin teléfono no hay pedido, ni carrito, ni disposición que cruzar: los tres
+    // se indexan por número en Shopify y en nuestra propia base.
+    const existing = phone
+      ? (existingByPhone.get(phone) ?? null)
+      : (existingByBsuid.get(seed.bsuid as string) ?? null);
+    const order = phone ? orderByPhone.get(phone) : undefined;
+    const cartAt = phone ? (newestOpenCartAt.get(phone) ?? null) : null;
     const hasRecentIntent =
       !!(order?.createdAt && cartAt && cartAt > order.createdAt) &&
-      eventOverridesDisposition(cartAt, dispositionByPhone.get(phone));
+      eventOverridesDisposition(cartAt, phone ? dispositionByPhone.get(phone) : undefined);
     await upsertLeadFromSeed(admin, storeId, seed, {
       hasOrder: !!order,
       orderId: order?.id ?? null,
@@ -481,7 +555,7 @@ async function enrichLeadsFromConversations(
   admin: SupabaseClient,
   storeId: string,
   k: KapsoClientOpts,
-  seeds: Map<string, ReturnType<typeof conversationToLeadSeed>>,
+  seeds: LeadSeedMap,
   /** Clave y modelo de visión de ESTA tienda; vacíos = los del entorno (0052). */
   vision: { anthropicApiKey?: string | null; anthropicModel?: string | null } = {},
 ): Promise<LeadEnrichStats> {
@@ -1816,23 +1890,34 @@ export async function ingestConversationEvent(
 ): Promise<{ ok: boolean; reason?: string }> {
   const conv = body?.conversation ?? body?.data?.conversation ?? null;
   const seed = conv ? conversationToLeadSeed(conv) : null;
-  if (!seed) return { ok: false, reason: "no-phone" };
+  if (!seed) return { ok: false, reason: "no-identity" };
 
-  // Order by phone (non-cancelled) → won linkage.
-  const { data: order } = await admin
-    .from("orders")
-    .select("id")
-    .eq("store_id", storeId)
-    .eq("customer_phone", seed.phone)
-    .is("cancelled_at", null)
-    .limit(1)
-    .maybeSingle();
+  // Misma identidad que en applyHandoff (0105). Sin esto, `seed.phone` nulo
+  // viajaba a `.eq()` y PostgREST filtraba por la CADENA "null": el lead
+  // existente nunca aparecía, `existing` quedaba en null y `nextLeadState` volvía
+  // a derivar el estado desde cero — pisando la disposición que la asesora había
+  // puesto a mano, que es justo lo que el resto de esta función protege.
+  const idCol = seed.phone ? "phone" : "bsuid";
+  const idVal = (seed.phone ?? seed.bsuid) as string;
+
+  // Order by phone (non-cancelled) → won linkage. Solo con teléfono: los pedidos
+  // de Shopify se indexan por número y no conocen el BSUID.
+  const { data: order } = seed.phone
+    ? await admin
+        .from("orders")
+        .select("id")
+        .eq("store_id", storeId)
+        .eq("customer_phone", seed.phone)
+        .is("cancelled_at", null)
+        .limit(1)
+        .maybeSingle()
+    : { data: null };
 
   const { data: existing } = await admin
     .from("leads")
     .select("phone, status, handoff_reason, has_order")
     .eq("store_id", storeId)
-    .eq("phone", seed.phone)
+    .eq(idCol, idVal)
     .maybeSingle();
 
   await upsertLeadFromSeed(admin, storeId, seed, {
@@ -1850,13 +1935,27 @@ export async function applyHandoff(
   body: any,
 ): Promise<{ ok: boolean; reason?: string }> {
   const info: HandoffInfo = parseHandoffPayload(body);
-  if (!info.phone) return { ok: false, reason: "no-phone" };
+  // Hace falta UNA identidad, no el teléfono (0105). Antes esto exigía número, y
+  // desde que Meta empezó a entregar conversaciones sin él esos handoffs se
+  // descartaban: el lead existía en la cola normal pero nunca subía a "Atender
+  // ahora" cuando el bot escalaba — justo el caso más urgente de todos.
+  if (!info.phone && !info.bsuid) return { ok: false, reason: "no-identity" };
+
+  // Por qué columna se busca y se escribe. Se resuelve UNA vez porque esta
+  // función toca `leads` tres veces y las tres tienen que apuntar a la MISMA
+  // fila: si una filtrara por teléfono y otra por BSUID, un handoff crearía un
+  // segundo lead de la misma persona en vez de actualizar el suyo. Es un par
+  // columna/valor y no un helper que envuelva la consulta porque los tipos del
+  // builder de PostgREST son tan profundos que envolverlos hace estallar la
+  // inferencia de TypeScript ("type instantiation is excessively deep").
+  const idCol = info.phone ? "phone" : "bsuid";
+  const idVal = (info.phone ?? info.bsuid) as string;
 
   const { data: existing } = await admin
     .from("leads")
     .select("status, has_order")
     .eq("store_id", storeId)
-    .eq("phone", info.phone)
+    .eq(idCol, idVal)
     .maybeSingle();
 
   const handoffFields = {
@@ -1879,7 +1978,7 @@ export async function applyHandoff(
       .from("leads")
       .update({ ...handoffFields, needs_attention: auto.needsAttention })
       .eq("store_id", storeId)
-      .eq("phone", info.phone);
+      .eq(idCol, idVal);
     return { ok: true };
   }
 
@@ -1902,6 +2001,7 @@ export async function applyHandoff(
     existing != null && (!info.reason || (advisorOwns && auto.status !== "yape_por_verificar"));
   const row: any = {
     store_id: storeId,
+    // Puede ser null (0105): entonces la identidad es `bsuid`, que va más abajo.
     phone: info.phone,
     kapso_conversation_id: info.conversationId,
     ...handoffFields,
@@ -1910,14 +2010,19 @@ export async function applyHandoff(
     last_interaction_at: new Date().toISOString(),
   };
   if (info.name) row.name = info.name;
-  await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
+  // Se escribe la identidad nueva SIEMPRE que venga, no solo cuando falta el
+  // teléfono: si un handoff llega antes que el sync, esta es la fila que crea el
+  // lead, y sin BSUID el CHECK `leads_identidad_presente` la rechazaría.
+  if (info.bsuid) row.bsuid = info.bsuid;
+  if (info.username) row.username = info.username;
+  await admin.from("leads").upsert(row, { onConflict: leadUpsertConflictTarget(info) });
 
   // Activity log entry (system).
   const { data: lead } = await admin
     .from("leads")
     .select("id")
     .eq("store_id", storeId)
-    .eq("phone", info.phone)
+    .eq(idCol, idVal)
     .maybeSingle();
   if (lead?.id) {
     await admin.from("lead_calls").insert({
