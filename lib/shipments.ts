@@ -696,10 +696,14 @@ export function isClaimActive(
 // ---------------------------------------------------------------------------
 // Re-import reconciliation — a re-imported report must NOT reset progress the
 // team already made (a confirmed guide En ruta, an intento advance). We keep the
-// status that is "further along". Import only ever brings `pendiente` (new/being
-// worked) or `entregado` (delivered per the report); the agent-only states
-// (en_ruta, anulado) must not be regressed by a re-import. Terminal outcomes rank
-// highest so they always win / never reopen.
+// status that is "further along". El importador de Aliclik deriva el estado del
+// reporte (ESTADO ENTREGA + DESPACHO), así que ahora puede traer `pendiente`,
+// `en_ruta` (POR ENTREGAR ya despachado, RECHAZADO/NO CONTESTA/REPROGRAMADO),
+// `anulado` (CANCELADO/ANULADO/RECHAZADO/DEVUELTO) o `entregado`. La precedencia
+// sigue protegiendo el trabajo del equipo: un terminal (entregado/anulado) manda
+// y nunca se reabre por un reporte posterior, y `en_ruta` no puede regresar a
+// `pendiente`. La guía madre transferida a una hija Fénix queda en `transferido`
+// (rango máximo), a salvo de un CANCELADO tardío de Aliclik.
 // ---------------------------------------------------------------------------
 
 const STATUS_PRECEDENCE: Record<string, number> = {

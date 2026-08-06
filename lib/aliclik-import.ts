@@ -6,6 +6,7 @@
 
 import { normalizePhone } from "./phone";
 import { isFenixCity, normalizeCity } from "./shipments";
+import { mapAliclikStatus } from "./aliclik-status";
 
 export interface ParsedShipmentRow {
   guide_code: string | null; // AUR5X… (required to be a real row)
@@ -149,19 +150,90 @@ const ADDRESS_KEYS = [
 const REFERENCE_KEYS = ["referencia de entrega", "referencia entrega", "referencia", "ref"];
 const LATITUDE_KEYS = ["latitud", "latitude"];
 const LONGITUDE_KEYS = ["longitud", "longitude", "lng", "lon"];
-// The customer-facing delivery outcome. In Aliclik's "order-delivery-report"
-// the platform column ("ESTADO DESPACHO") tops out at "validado" — a confirmed
-// delivery only ever shows up here, as "ENTREGADO". So we read this column to
-// override the despacho-derived status when the order was actually delivered.
-// Header drifts between exports: "ESTADO ENTREGA" / "ESTADO DE ENTREGA"; a bare
-// "ESTADO" is used as a last-resort fallback (only ever fires when its value is
-// exactly "entregado", so a dispatch-state "ESTADO" won't be misread).
+// The customer-facing delivery outcome ("ESTADO [DE] ENTREGA") and the dispatch
+// column ("ESTADO [DE] DESPACHO"). Both feed the status classification below.
+// Header drifts between exports; a bare "ESTADO" is a last-resort fallback for
+// ENTREGA (only ever fires as "entregado", so a dispatch-state "ESTADO" won't be
+// misread as delivered).
 const ENTREGA_KEYS = ["estado entrega", "estado de entrega", "estado"];
+const DESPACHO_KEYS = ["estado despacho", "estado de despacho"];
 
 /** True when the delivery-outcome cell ("ESTADO [DE] ENTREGA") says delivered. */
 function isDeliveredEntrega(raw: string | null): boolean {
   if (!raw) return false;
   return stripAccents(raw.trim().toLowerCase()) === "entregado";
+}
+
+// ── Estado de la guía desde el reporte de Aliclik ───────────────────────────
+//
+// El Excel trae los estados en ESPAÑOL (ESTADO ENTREGA / DESPACHO / LLAMADA); la
+// API de Aliclik expone esos mismos estados como enums en inglés, y
+// mapAliclikStatus (lib/aliclik-status.ts) ya resuelve el trío al vocabulario
+// canónico (pendiente | en_ruta | entregado | anulado) con toda la precedencia
+// probada: ENTREGADO manda, DEVUELTO y CANCELADO cierran, RECHAZADO/NO CONTESTA/
+// REPROGRAMADO siguen en calle, y el despacho afina el resto. Para no duplicar
+// ese cerebro, aquí solo se TRADUCE español→enum y se delega en él.
+//
+// OJO: las columnas inglesas "ÚLTIMO ESTADO …" del propio Excel NO se usan — son
+// un snapshot rezagado que contradice al español (un pedido ENTREGADO aparece
+// ahí como PENDING_DELIVERY). El español de ESTADO ENTREGA/DESPACHO es la fuente
+// autoritativa del estado actual.
+
+/** Clave de comparación de un enum en español: sin acentos, mayúsculas,
+ *  espacios colapsados ("Remanente en tránsito" → "REMANENTE EN TRANSITO"). */
+function enumKey(v: string | null | undefined): string {
+  return stripAccents(String(v ?? "").trim().toUpperCase()).replace(/\s+/g, " ");
+}
+
+/** ESTADO ENTREGA (español) → `status` de la API. */
+const ENTREGA_TO_STATUS: Record<string, string> = {
+  ENTREGADO: "DELIVERED",
+  "POR ENTREGAR": "PENDING_DELIVERY",
+  CANCELADO: "CANCEL",
+  ANULADO: "ANNULLED",
+  RECHAZADO: "REFUSED",
+  "NO CONTESTA": "NOT_RESPOND",
+  REPROGRAMADO: "RESCHEDULED",
+};
+
+/** ESTADO DESPACHO (español) → `dispatchStatus` de la API. */
+const DESPACHO_TO_DISPATCH: Record<string, string> = {
+  "POR PREPARAR": "TO_PREPARE",
+  VALIDADO: "PREPARED",
+  RECOLECTADO: "PICKED",
+  "EN TRANSITO": "IN_TRANSIT",
+  "REMANENTE EN TRANSITO": "REMAINING_IN_TRANSIT",
+  "ALMACEN CENTRAL": "STORE_CENTRAL",
+  "POR DEVOLVER": "TO_RETURN",
+  DEVUELTO: "RETURNED",
+  "EN AGENCIA": "IN_AGENCY",
+  "DEJADO EN ALMACEN": "LEFT_IN_WAREHOUSE",
+};
+
+/** ESTADO LLAMADA (español) → `callStatus` de la API. */
+const LLAMADA_TO_CALL: Record<string, string> = {
+  CONFIRMADO: "CONFIRMED",
+  IMPORTADO: "IMPORTED",
+};
+
+/**
+ * Estado canónico de la guía a partir de las columnas del reporte de Aliclik.
+ * Traduce español→enum y delega en mapAliclikStatus. Si Aliclik no da ninguna
+ * señal reconocible, cae al binario histórico entregado-vs-pendiente para no
+ * inventar un estado a partir de un valor que no conocemos. Pura.
+ */
+export function deliveryStatusFromReport(
+  entrega: string | null,
+  despacho: string | null,
+  llamada: string | null,
+): string {
+  const mapped = mapAliclikStatus({
+    status: ENTREGA_TO_STATUS[enumKey(entrega)],
+    dispatchStatus: DESPACHO_TO_DISPATCH[enumKey(despacho)],
+    callStatus: LLAMADA_TO_CALL[enumKey(llamada)],
+  });
+  if (mapped.deliveryStatus) return mapped.deliveryStatus;
+  return isDeliveredEntrega(entrega) ? "entregado" : "pendiente";
 }
 
 // Aliclik marca con ESTADO LLAMADA = IMPORTADO los pedidos que subió a su
@@ -239,11 +311,17 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
   const fenixCity = normalizeCity(combined);
   const city = isFenixCity(fenixCity) ? fenixCity : district ? normalizeCity(district) : null;
 
-  // Classification is customer-outcome centric: only a report that already says
-  // ENTREGADO (in "ESTADO [DE] ENTREGA") is delivered; everything else enters the
-  // gestión queue as "pendiente" (Ingestión). The Aliclik dispatch state is not
-  // used to classify anymore.
-  const delivery_status = isDeliveredEntrega(pick(map, ENTREGA_KEYS)) ? "entregado" : "pendiente";
+  // Estado de la guía: se resuelve del trío ENTREGA + DESPACHO + LLAMADA que trae
+  // el reporte (ver deliveryStatusFromReport). Ya no es un binario entregado-vs-
+  // pendiente: CANCELADO/ANULADO/RECHAZADO cierran (anulado), DEVUELTO cierra,
+  // RECOLECTADO/EN TRÁNSITO/POR DEVOLVER/EN AGENCIA y RECHAZADO/NO CONTESTA/
+  // REPROGRAMADO ya salieron (en_ruta), y lo que sigue en almacén (POR PREPARAR/
+  // VALIDADO/DEJADO EN ALMACÉN o POR ENTREGAR sin despacho) queda pendiente.
+  const delivery_status = deliveryStatusFromReport(
+    pick(map, ENTREGA_KEYS),
+    pick(map, DESPACHO_KEYS),
+    pick(map, ESTADO_LLAMADA_KEYS),
+  );
 
   const orderRef = extractOrderReference(map.get("nota"), pick(map, ORDER_KEYS));
 

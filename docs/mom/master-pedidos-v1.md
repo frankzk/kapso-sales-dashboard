@@ -291,11 +291,35 @@ Reglas:
 - Para Aliclik, el estado autenticado `PREPARED` constituye el evento equivalente
   a ese escaneo físico y mueve automáticamente la salida a
   `Por despachar · Listo para asignar`. No se exige un tercer escaneo en Kapta.
-- La equivalencia completa de despacho Aliclik es: `TO_PREPARE` →
-  `Preparación · Por armar`; `PREPARED` → `Por despachar · Listo para asignar`;
-  `PICKED` → `En curso · Recibido por courier`.
+- La equivalencia completa de despacho Aliclik **autenticado** (API/webhook) es:
+  `TO_PREPARE` → `Preparación · Por armar`; `PREPARED` →
+  `Por despachar · Listo para asignar`; `PICKED` → `En curso · Recibido por
+  courier`. Esta vía avanza además la custodia física (`custody_state`) y la
+  preparación (`preparation_state`).
 - Estos avances son monotónicos: un reporte atrasado de Aliclik no puede deshacer
   un escaneo local ni devolver ficticiamente la custodia desde el courier.
+- **Reporte Excel de Aliclik.** Mientras la API no esté conectada, el estado
+  llega por el Excel del panel de Aliclik. El importador deriva el
+  `delivery_status` de la guía combinando las columnas **ESTADO ENTREGA** y
+  **ESTADO DESPACHO** (mismo cerebro que la vía autenticada, `mapAliclikStatus`):
+  - `ENTREGADO` → `entregado` (cierra; manda sobre cualquier despacho).
+  - `CANCELADO` / `ANULADO` → `anulado`; `DEVUELTO` (despacho) → `anulado`.
+  - `RECHAZADO` / `NO CONTESTA` / `REPROGRAMADO` → `en_ruta` (el paquete ya salió
+    y sigue en calle), salvo que el despacho ya diga `DEVUELTO` (→ `anulado`).
+  - Despacho `RECOLECTADO` / `EN TRÁNSITO` / `POR DEVOLVER` / `EN AGENCIA` →
+    `en_ruta`; `POR PREPARAR` / `VALIDADO` / `DEJADO EN ALMACÉN` o `POR ENTREGAR`
+    sin señal de despacho → `pendiente` (sigue en almacén).
+  - Un valor no reconocido no inventa estado: cae al binario histórico
+    entregado-vs-pendiente.
+- A diferencia de la vía autenticada, el Excel **solo** fija `delivery_status`:
+  no avanza `custody_state` ni `preparation_state` (el dato de despacho del Excel
+  es ruidoso — `VALIDADO` persiste incluso en entregados). Por eso un `VALIDADO`
+  del Excel mantiene el pedido en `Preparación · Por armar`, no lo promueve a
+  `Por despachar`; ese ascenso lo hará la vía autenticada.
+- El `anulado` derivado del Excel es de guía, no de venta: un pedido solo pasa a
+  `anulado` general cuando **todas** sus guías están anuladas y ninguna activa
+  (la operación lo dio por perdido), reversible con un override; nunca anula el
+  pedido en Shopify (§3.4, §9.4).
 - Debe existir una alternativa manual al escaneo, siempre con actor, fecha y
   motivo registrados.
 - Incidencias mínimas: datos incompletos, producto faltante, rótulo incorrecto,
