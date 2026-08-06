@@ -1214,6 +1214,7 @@ export function LeadsBoard({
       {/* Título "Leads" + tablero de hoy (burndown · sin llamar · productividad). */}
       <LeadsInsightsPanel
         data={insightsData}
+        allStores={allStores}
         interactionDateFilter={interactionDateFilter}
         onInteractionDateFilterChange={changeInteractionDateFilter}
         titleSlot={
