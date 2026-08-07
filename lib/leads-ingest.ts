@@ -1972,32 +1972,41 @@ export async function applyHandoff(
   body: any,
 ): Promise<{ ok: boolean; reason?: string }> {
   const info: HandoffInfo = parseHandoffPayload(body);
-  // Hace falta UNA identidad, no el teléfono (0105). Antes esto exigía número, y
-  // desde que Meta empezó a entregar conversaciones sin él esos handoffs se
-  // descartaban: el lead existía en la cola normal pero nunca subía a "Atender
-  // ahora" cuando el bot escalaba — justo el caso más urgente de todos.
-  if (!info.phone && !info.bsuid) {
-    // Un handoff rechazado es un cliente esperando que nunca sube a "Atender
-    // ahora". El webhook responde 200 y del lado de Kapso parece entregado, así
-    // que sin esta anotación el rechazo es invisible en los dos extremos.
+  // TRES formas de emparejar, en orden de fuerza. Se resuelve UNA vez porque
+  // esta función toca `leads` tres veces y las tres tienen que apuntar a la
+  // MISMA fila: si una filtrara por teléfono y otra por BSUID, un handoff
+  // crearía un segundo lead de la misma persona en vez de actualizar el suyo.
+  //
+  // La tercera —la conversación— la descubrió la superficie de anomalías el día
+  // que se encendió: un aviso del watchdog ("esperando respuesta") llegó con
+  // `conversationId` pero sin teléfono ni BSUID, y se descartaba. Era un cliente
+  // esperando que nunca subía a "Atender ahora", y del lado de Kapso el webhook
+  // respondía 200 como si se hubiera entregado.
+  //
+  // OJO: la conversación solo sirve para ENCONTRAR un lead que ya existe. No se
+  // puede crear uno cuya identidad sea la conversación, porque el CHECK
+  // `leads_identidad_presente` de la 0105 exige teléfono o BSUID — y con razón:
+  // una fila así no se podría contactar ni volver a encontrar.
+  //
+  // Es un par columna/valor y no un helper que envuelva la consulta porque los
+  // tipos del builder de PostgREST son tan profundos que envolverlos hace
+  // estallar la inferencia de TypeScript ("type instantiation is excessively deep").
+  const idCol = info.phone ? "phone" : info.bsuid ? "bsuid" : "kapso_conversation_id";
+  const idVal = info.phone ?? info.bsuid ?? info.conversationId;
+  /** ¿Alcanza la identidad para CREAR el lead si no existiera? */
+  const canCreate = Boolean(info.phone || info.bsuid);
+
+  if (!idVal) {
+    // Ni teléfono, ni BSUID, ni conversación: no hay absolutamente nada con qué
+    // encontrar a esta persona.
     await noteAnomaly(admin, {
       storeId,
       source: "handoff",
       reason: "sin_identidad",
-      sample: { conversationId: info.conversationId, reason: info.reason },
+      sample: { reason: info.reason },
     });
     return { ok: false, reason: "no-identity" };
   }
-
-  // Por qué columna se busca y se escribe. Se resuelve UNA vez porque esta
-  // función toca `leads` tres veces y las tres tienen que apuntar a la MISMA
-  // fila: si una filtrara por teléfono y otra por BSUID, un handoff crearía un
-  // segundo lead de la misma persona en vez de actualizar el suyo. Es un par
-  // columna/valor y no un helper que envuelva la consulta porque los tipos del
-  // builder de PostgREST son tan profundos que envolverlos hace estallar la
-  // inferencia de TypeScript ("type instantiation is excessively deep").
-  const idCol = info.phone ? "phone" : "bsuid";
-  const idVal = (info.phone ?? info.bsuid) as string;
 
   const { data: existing } = await admin
     .from("leads")
@@ -2005,6 +2014,20 @@ export async function applyHandoff(
     .eq("store_id", storeId)
     .eq(idCol, idVal)
     .maybeSingle();
+
+  if (!canCreate && !existing) {
+    // Se conoce la conversación pero ningún lead la tiene todavía: no hay fila
+    // que marcar y no se puede inventar una. Se separa de `sin_identidad` a
+    // propósito — este caso se arregla esperando al sync (que creará el lead),
+    // aquél no se arregla solo.
+    await noteAnomaly(admin, {
+      storeId,
+      source: "handoff",
+      reason: "conversacion_desconocida",
+      sample: { conversationId: info.conversationId, reason: info.reason },
+    });
+    return { ok: false, reason: "unknown-conversation" };
+  }
 
   const handoffFields = {
     handoff_reason: info.reason,
@@ -2049,21 +2072,34 @@ export async function applyHandoff(
     existing != null && (!info.reason || (advisorOwns && auto.status !== "yape_por_verificar"));
   const row: any = {
     store_id: storeId,
-    // Puede ser null (0105): entonces la identidad es `bsuid`, que va más abajo.
-    phone: info.phone,
-    kapso_conversation_id: info.conversationId,
     ...handoffFields,
     ...(keepStatus ? {} : { status: auto.status, category: auto.category }),
     needs_attention: auto.needsAttention,
     last_interaction_at: new Date().toISOString(),
   };
   if (info.name) row.name = info.name;
+  // NINGÚN campo de identidad se escribe cuando viene vacío, y esto NO es
+  // cosmética: emparejando por conversación, el lead casi siempre YA TIENE
+  // teléfono y el payload no lo trae. Un `phone: null` en ese update le borraría
+  // el número al lead —dejándolo sin poder llamar y sin poder crear guía— y un
+  // `kapso_conversation_id: null` le borraría el hilo al drawer. Escribir un nulo
+  // encima de un dato bueno es la forma más cara de "actualizar".
+  if (info.phone) row.phone = info.phone;
+  if (info.conversationId) row.kapso_conversation_id = info.conversationId;
   // Se escribe la identidad nueva SIEMPRE que venga, no solo cuando falta el
   // teléfono: si un handoff llega antes que el sync, esta es la fila que crea el
   // lead, y sin BSUID el CHECK `leads_identidad_presente` la rechazaría.
   if (info.bsuid) row.bsuid = info.bsuid;
   if (info.username) row.username = info.username;
-  await admin.from("leads").upsert(row, { onConflict: leadUpsertConflictTarget(info) });
+  if (canCreate) {
+    await admin.from("leads").upsert(row, { onConflict: leadUpsertConflictTarget(info) });
+  } else {
+    // Emparejado por conversación: `existing` está garantizado (si no, ya se
+    // habría salido arriba). Va UPDATE y no upsert porque un upsert por
+    // `kapso_conversation_id` no tiene restricción única que le sirva de árbitro
+    // y PostgREST fallaría con "no unique or exclusion constraint matching".
+    await admin.from("leads").update(row).eq("store_id", storeId).eq(idCol, idVal);
+  }
 
   // Activity log entry (system).
   const { data: lead } = await admin
