@@ -46,11 +46,14 @@ async function hmacHex(secret, body) {
 async function postStoreHandoff(config, ctx, payload) {
   const url = config.storeWebhookUrl;
   if (!url) return;
+  // El flujo de voucher no manda `reason`: no es un handoff, no va al dashboard.
+  const reason = String(payload.reason || "").trim();
+  if (!reason) return;
   const body = JSON.stringify({
     event: "workflow.execution.handoff",
     phone_number: ctx.phone || "",
     conversation_id: ctx.convId || "",
-    reason: String(payload.reason || "").trim(),
+    reason,
     context_summary: String(payload.note || payload.context_summary || "").replace(/\s+/g, " ").trim(),
   });
   const headers = { "Content-Type": "application/json" };

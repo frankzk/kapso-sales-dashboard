@@ -7748,3 +7748,221 @@ comment on function order_coverage_batch(jsonb, date) is
 
 revoke all on function order_coverage_batch(jsonb, date) from public, anon, authenticated;
 grant execute on function order_coverage_batch(jsonb, date) to service_role;
+
+-- ---- 0107 ----
+-- 0107 — Anomalías de ingesta: hacer visible el trabajo que se descarta.
+--
+-- POR QUÉ. El modo de fallo recurrente de este sistema no es el error ruidoso,
+-- es el descarte silencioso. Solo en `lib/` hay 58 `catch` que se tragan la
+-- excepción (35 documentados como "best-effort") más los `return null` de las
+-- rutas de ingesta. Cada uno es un sitio donde se puede perder trabajo sin que
+-- nadie se entere, y en una sola jornada aparecieron dos casos reales: ~25
+-- conversaciones diarias que no generaban lead, y handoffs rechazados por falta
+-- de teléfono que nunca subían a "Atender ahora".
+--
+-- El precedente es `sinTelefono`: el ÚNICO sitio instrumentado. Gracias a él se
+-- pudo fechar al día el inicio de la migración de identidad de Meta (23 días en
+-- cero exacto, luego 1, 3, 11, 16, 20, 29) y decidir con números en vez de
+-- intuición. Esta tabla generaliza ese contador.
+--
+-- ES UN DETECTOR DE CAMBIOS, NO UN LOG. Lo que importa no es "hay 25 descartes"
+-- —eso puede ser lo normal— sino "ayer 0, hoy 25". Por eso se AGREGA por día en
+-- vez de guardar un registro por evento: un log por evento crece sin fin, nadie
+-- lo lee, y esconde justamente el salto que sí importa.
+--
+-- QUÉ NO CUBRE, para no confiarse: solo detecta trabajo DESCARTADO. Un camino
+-- que devuelve un resultado equivocado sin descartar nada (como un filtro que no
+-- empareja y hace re-derivar un estado) no pasa por aquí — eso lo atrapan los
+-- tests, no esta tabla.
+
+create table if not exists ingest_anomalies (
+  id uuid primary key default gen_random_uuid(),
+  store_id uuid not null references stores(id) on delete cascade,
+  -- Día LOCAL de la operación, no UTC: en Lima (UTC-5) el corte UTC cae a las
+  -- 7 de la tarde y partiría en dos la jornada de trabajo, que es justo la
+  -- unidad en la que se compara "ayer vs hoy".
+  dia date not null,
+  -- Qué camino descartó. p. ej. 'leads_sync', 'handoff', 'conversation_event'.
+  source text not null,
+  -- Por qué. p. ej. 'sin_identidad', 'enrich_falló', 'kapso_error'.
+  reason text not null,
+  count integer not null default 1,
+  -- UN ejemplo del día, el primero. Sirve para reproducir sin guardar todo.
+  sample jsonb,
+  first_seen_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  unique (store_id, dia, source, reason)
+);
+
+-- La lectura es siempre "los últimos N días de estas tiendas".
+create index if not exists ingest_anomalies_store_dia
+  on ingest_anomalies (store_id, dia desc);
+
+/**
+ * Anota una anomalía sumando al contador del día.
+ *
+ * Va como función y no como upsert desde el cliente porque PostgREST no sabe
+ * expresar `count = count + n`: sin esto haría falta leer-modificar-escribir, que
+ * con dos procesos del cron solapados pierde cuentas en silencio — el mismo
+ * problema que la tabla viene a resolver.
+ *
+ * `sample` conserva el PRIMERO del día (coalesce sobre el existente): un ejemplo
+ * estable sirve para reproducir; uno que cambia en cada llamada no.
+ */
+create or replace function public.note_ingest_anomaly(
+  p_store_id uuid,
+  p_source text,
+  p_reason text,
+  p_count integer default 1,
+  p_sample jsonb default null
+) returns void
+language sql
+security definer
+set search_path = public
+as $$
+  insert into ingest_anomalies (store_id, dia, source, reason, count, sample)
+  values (
+    p_store_id,
+    (now() at time zone 'America/Lima')::date,
+    p_source,
+    p_reason,
+    greatest(p_count, 1),
+    p_sample
+  )
+  on conflict (store_id, dia, source, reason) do update
+    set count = ingest_anomalies.count + greatest(p_count, 1),
+        last_seen_at = now(),
+        sample = coalesce(ingest_anomalies.sample, excluded.sample);
+$$;
+
+revoke all on function public.note_ingest_anomaly(uuid, text, text, integer, jsonb) from public, anon, authenticated;
+grant execute on function public.note_ingest_anomaly(uuid, text, text, integer, jsonb) to service_role;
+
+revoke all on table ingest_anomalies from public, anon, authenticated;
+grant select on table ingest_anomalies to authenticated;
+grant all on table ingest_anomalies to service_role;
+
+alter table ingest_anomalies enable row level security;
+
+-- Lectura: un miembro ve las anomalías de las tiendas que ya puede ver. No es
+-- dato sensible, pero se cierra con el mismo helper que el resto del esquema.
+-- Escritura: solo el ingestor (service_role, que salta RLS) vía la función.
+drop policy if exists ingest_anomalies_read on ingest_anomalies;
+create policy ingest_anomalies_read on ingest_anomalies
+  for select
+  using (store_id in (select auth_store_ids()));
+
+-- ---- 0108 ----
+-- 0108 — `created_via` para las salidas de Shalom: la vía normal no se marcaba.
+--
+-- POR QUÉ. `shipments.created_via` está documentada como "origen técnico de la
+-- salida", y para Shalom no distinguía nada: las 185 guías Shalom en producción
+-- tenían `created_via` nulo, exactamente igual que una guía importada del
+-- reporte Excel. Al mirar la columna, la conclusión inmediata era que el flujo
+-- del drawer no se había usado nunca — y es falso: las registraron cuatro
+-- personas identificadas, cada una con su evento `guide_created` y su actor.
+--
+-- CAUSA. Hay DOS vías en el drawer y solo la rara marcaba su origen. La de
+-- contingencia (copiar a mano una guía ya emitida en pro.shalom.pe) escribía
+-- `created_via = 'shalom_pro_manual'` desde que nació. La vía normal —crear la
+-- guía por `POST /v1/orders`— nunca escribió la columna. El caso frecuente era
+-- justo el que no dejaba rastro, así que el campo solo podía decir "esta salida
+-- es una excepción" y jamás "esta salida es lo habitual".
+--
+-- EL BACKFILL NO ADIVINA. Solo toca filas con la huella inequívoca de la vía
+-- API: `shalom_ose_id` presente (el identificador interno lo devuelve la API al
+-- crear la orden; el reporte Excel no lo trae) y `shalom_raw` sin la clave
+-- `source` (que es la marca que escribe la vía de contingencia). Al escribir
+-- esta migración las 185 filas cumplen las dos condiciones, ninguna tiene
+-- `source_batch_id` —o sea, ninguna vino de una importación— y las 185 tienen
+-- su evento `guide_created` con actor. Una guía futura importada del reporte no
+-- traería `shalom_ose_id` y por eso quedaría fuera.
+--
+-- Es idempotente: al filtrar por `created_via is null` no reescribe nada que ya
+-- tenga origen, así que correrla dos veces no cambia el resultado.
+
+update shipments
+   set created_via = 'shalom_pro_api'
+ where courier = 'shalom'
+   and created_via is null
+   and shalom_ose_id is not null
+   and shalom_raw->>'source' is null;
+
+comment on column shipments.created_via is
+  'Origen técnico de la salida: integraciones existentes, fenix_directo, '
+  'mom_manual_route, shalom_pro_api (guía emitida por la API de Shalom) o '
+  'shalom_pro_manual (guía ya emitida en pro.shalom.pe y copiada a mano). '
+  'Nulo = la salida entró por importación de reporte, no se creó desde Kapta.';
+
+-- ---- 0109 ----
+-- Recupera las devoluciones que el importador de Excel venía descartando.
+--
+-- QUÉ PASABA. El importador clasificaba por resultado para la clienta y solo
+-- reconocía dos desenlaces: ENTREGADO o "pendiente". El estado de despacho no
+-- se leía, así que una guía DEVUELTO / RETURNED entraba como pendiente y su
+-- pedido nunca llegaba a `devuelto` — que es la entrada a Reproprovincia
+-- (MOM §10-§11). El dato SÍ estaba en el reporte; solo no se miraba.
+--
+-- El parseo ya quedó arreglado (lib/aliclik-import.ts), pero eso solo actúa
+-- sobre importaciones futuras. Las guías ya ingestadas siguen en pendiente.
+-- Esta migración las sella releyendo la fila cruda que se guardó en
+-- `import_rows.raw`, igual que hizo 0039 con la provincia.
+--
+-- QUÉ NO TOCA:
+--   * Las guías ya entregadas. ENTREGADO gana sobre el despacho y un terminal
+--     no se reabre; el reporte arrastra ruido en las columnas de despacho.
+--   * Las transferidas a otro courier: marcarlas devueltas se contradiría.
+--   * Un `returned_at` que ya exista (lo puso el camino por API). La devolución
+--     se sella una sola vez.
+--
+-- DESPUÉS DE APLICARLA hay que recalcular el Master, que es una tabla
+-- persistida y no se entera sola:
+--
+--   pnpm exec tsx scripts/backfill-mom.ts
+--
+-- Es idempotente: reconstruye `order_master` desde las guías.
+
+with ultima_fila as (
+  -- La lectura más reciente de cada guía. Una guía se reimporta varias veces y
+  -- solo manda la última: `created_at` es la recencia real del lote, no
+  -- `row_index`, que es la posición dentro del fichero.
+  select distinct on (ir.shipment_id)
+         ir.shipment_id,
+         ir.created_at,
+         coalesce(
+           nullif(btrim(ir.raw ->> 'ÚLTIMO ESTADO DESPACHO'), ''),
+           nullif(btrim(ir.raw ->> 'ESTADO DESPACHO'), '')
+         ) as despacho,
+         -- "FECHA DESPACHO" viene en DD/MM/YYYY. to_date con un valor ilegible
+         -- reventaría la migración entera, así que solo se convierte lo que
+         -- encaja en el formato; el resto queda null y no sella despacho.
+         case
+           when btrim(ir.raw ->> 'FECHA DESPACHO') ~ '^\d{1,2}/\d{1,2}/\d{4}$'
+             then to_date(btrim(ir.raw ->> 'FECHA DESPACHO'), 'DD/MM/YYYY')::timestamptz
+           else null
+         end as fecha_despacho
+  from import_rows ir
+  where ir.shipment_id is not null
+  order by ir.shipment_id, ir.created_at desc, ir.id desc
+),
+devueltas as (
+  -- Solo la devolución CONSUMADA. TO_RETURN / "POR DEVOLVER" es un paquete que
+  -- todavía viaja de vuelta: sigue vivo y el equipo lo puede interceptar.
+  select shipment_id, created_at, fecha_despacho
+  from ultima_fila
+  where upper(despacho) in ('RETURNED', 'DEVUELTO')
+)
+update shipments s
+   set returned_at      = coalesce(s.returned_at, s.last_report_at, d.created_at),
+       delivery_status  = 'anulado',
+       status_category  = 'closed',
+       custody_state    = 'devuelto',
+       -- Un paquete devuelto SALIÓ: no puede volver si nunca se despachó.
+       -- `resolveOrderState` exige esa evidencia para dar por probada la
+       -- devolución, y el importador nunca la escribía. Sin esto el sello no
+       -- sirve de nada: el pedido no llega a `devuelto`.
+       dispatched_at    = coalesce(s.dispatched_at, d.fecha_despacho)
+  from devueltas d
+ where s.id = d.shipment_id
+   and s.courier = 'aliclik'
+   and s.delivery_status not in ('entregado', 'transferido');

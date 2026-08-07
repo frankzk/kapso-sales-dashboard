@@ -22,6 +22,7 @@ import {
   defaultFollowupAt,
   isValidStatus,
   labelOf,
+  leadSearchPasses,
 } from "@/lib/leads";
 import { OFFER_TTL_MS, planYapeOffers, type RoutingLead } from "@/lib/yape-routing";
 import { onlineVendedorasForStore } from "@/lib/presence";
@@ -336,28 +337,19 @@ export async function searchLeads(storeIds: StoreScope, query: string): Promise<
   const scope = await allowedScope(storeIds);
   if (!scope.length) return [];
   const sb = await createServerSupabase();
-  const nameLike = `%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`; // escape LIKE wildcards
-  const digits = q.replace(/\D/g, "");
-  const passes = [
+  const like = (v: string) => `%${v.replace(/[\\%_]/g, (m) => `\\${m}`)}%`; // escape LIKE wildcards
+  const search = (col: string, value: string) =>
     sb
       .from("leads")
       .select("*")
       .in("store_id", scope)
-      .ilike("name", nameLike)
+      .ilike(col, value)
       .order("last_interaction_at", { ascending: false })
-      .limit(40),
-  ];
-  if (digits.length >= 2) {
-    passes.push(
-      sb
-        .from("leads")
-        .select("*")
-        .in("store_id", scope)
-        .ilike("phone", `%${digits}%`)
-        .order("last_interaction_at", { ascending: false })
-        .limit(40),
-    );
-  }
+      .limit(40);
+
+  // Qué columnas se buscan lo decide `leadSearchPasses` (puro y con tests): acá
+  // solo se traduce a consultas.
+  const passes = leadSearchPasses(q).map((p) => search(p.col, like(p.value)));
   const settled = await Promise.all(passes);
   const byId = new Map<string, LeadRow>();
   for (const { data } of settled) {

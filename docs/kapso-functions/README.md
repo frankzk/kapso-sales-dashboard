@@ -24,16 +24,37 @@ de funciones de Kapso.
 
 | Función | Tienda | Estado |
 |---|---|---|
-| `aurela-notify-team.js` | Aurela | ✅ copia del código desplegado |
-| `kenku-notify-team.js` | Kenku Perú | ✅ copia del código desplegado |
-| `check-coverage` (watchdog) | ambas | ❌ **falta** — nunca se capturó |
+| `aurela-notify-team.js` | Aurela | ✅ copia del desplegado, **con el gate de `reason` ya aplicado** |
+| `kenku-notify-team.js` | Kenku Perú | ✅ copia del desplegado |
+| `aurela-check-coverage.js` | Aurela | ✅ copia del desplegado (lock_version 78) |
+| `kenku-check-coverage.js` | Kenku Perú | ✅ copia del desplegado (lock_version 25) |
 
-⚠️ **`check-coverage` es la que más importa y no está acá.** Es la que contiene
-el watchdog de "clientes esperando respuesta" (`maybeRunWatchdog` /
-`watchdogSweep`), que hoy alimenta el grueso de la cola. Para completar el
-respaldo hay que copiar su código desde `app.kapso.ai → Functions →
-check-coverage → Code`, en **las dos** tiendas (están desplegadas por separado y
-usan motivos distintos: Aurela manda `bot_silent`, Kenku `esperando respuesta`).
+Las cuatro funciones tienen copia. **Sigue siendo una copia de referencia, no la
+fuente de verdad**: si alguien edita en la consola, esto queda viejo sin avisar.
+
+## Las dos `check-coverage` DIVERGIERON
+
+No son la misma función con otra configuración: el watchdog se implementó dos
+veces y por caminos distintos. Al tocar una, no asumir que la otra hace lo mismo.
+
+| | Aurela | Kenku |
+|---|---|---|
+| Función que avisa al dashboard | `postWaitingAlert` | `postWaitingToStore` |
+| `event` del POST | `conversation.waiting` | `workflow.execution.handoff` |
+| `reason` | `bot_silent` | `esperando respuesta` |
+| `minutes_waiting` en el POST | sí | no (solo en Telegram) |
+| Barrido mínimo | 10 min | 2 min |
+| Tope de alertas por barrido | 6 | 10 |
+| Números vigilados | 2 | 3 |
+
+Aurela manda un evento propio (`conversation.waiting`) que el dashboard clasifica
+como handoff **por la forma del cuerpo**, no por el nombre; Kenku imita
+directamente el contrato de `notify-team`. Los dos funcionan, pero por motivos
+distintos.
+
+**Ninguna de las dos manda BSUID ni username**, y ninguna exige teléfono: las dos
+hacen `phone: convo.phone_number || ""` sin ningún `continue` que descarte al
+candidato sin número. Ver más abajo.
 
 ## Cómo se conectan con el dashboard
 
@@ -60,22 +81,97 @@ Los secrets son **por función** en Kapso: `STORE_WEBHOOK_URL` y
 `STORE_WEBHOOK_SECRET` hay que cargarlos en cada función que postee (notify-team
 y check-coverage), aunque ya estén en otra.
 
-## Pendiente conocido
+## Cómo llega el watchdog al dashboard (leído del código de Aurela)
 
-**Aurela no tiene el gate de `reason`.** Su `postStoreHandoff` postea también en
-el flujo de voucher, que no manda motivo, y eso ensucia `handoff_at` con eventos
-que no son handoffs (en producción quedaron leads con `handoff_reason` NULL).
-Kenku ya lo tiene. El parche, dentro de `postStoreHandoff` y justo después de
-`if (!url) return;`:
+`postWaitingAlert` postea un cuerpo que **no lleva cabecera `X-Webhook-Event`**:
 
 ```js
-  // El flujo de voucher no manda `reason`: no es un handoff, no va al dashboard.
-  const reason = String(payload.reason || "").trim();
-  if (!reason) return;
+{
+  event: "conversation.waiting",     // ← no es "workflow.execution.handoff"
+  phone_number: c.phone || "",
+  conversation_id: c.id || "",
+  reason: "bot_silent",
+  context_summary: "…",
+  minutes_waiting: 12
+}
 ```
 
-…y usar esa variable en el cuerpo (`reason,` en lugar de volver a leer
-`payload.reason`).
+Ese `event` no coincide con ningún prefijo conocido, así que
+`classifyKapsoEvent` cae a inferir por la FORMA del cuerpo — y como trae
+`reason`, lo clasifica como **handoff**. Va a `applyHandoff`, que es lo correcto.
+Conviene saberlo: el enrutado depende de que el payload traiga `reason`, no del
+nombre del evento.
 
-El dashboard ya está blindado por su lado: un POST sin motivo no reclasifica un
-lead existente. El gate es para no ensuciar el dato de origen.
+### El teléfono puede venir vacío, y ya pasó
+
+En `watchdogSweep` de **las dos** tiendas: `phone: convo.phone_number || ""`.
+**No hay ningún guard que exija teléfono** — si la conversación viene sin
+`phone_number`, se postea la cadena vacía igual. (Kenku además la pasa por
+`.replace(/[^\d]/g, "")`, que sobre una cadena vacía sigue siendo vacía.)
+
+Y eso no es teórico: es exactamente el caso de la migración de identidad de Meta.
+Un cliente que adopta un *username* de WhatsApp deja de compartir su número, así
+que `convo.phone_number` llega ausente. El watchdog postea sin teléfono, y como
+`postWaitingAlert` **tampoco manda el BSUID**, el handoff quedaba sin ninguna
+identidad y el dashboard lo descartaba en silencio.
+
+Lo detectó la superficie de anomalías (migración 0107) el día que se encendió:
+
+```
+source: handoff · reason: sin_identidad
+sample: {"reason":"esperando respuesta","conversationId":"31513f90-…"}
+```
+
+Ese `reason` identifica el origen sin ambigüedad: **`esperando respuesta` es de
+KENKU**. Aurela usa `bot_silent`.
+
+**Ya está cubierto del lado del dashboard**: desde el PR #405, un handoff sin
+teléfono ni BSUID se empareja por `kapso_conversation_id`, que los dos payloads
+sí traen. Mandar el BSUID desde Kapso haría que además funcione cuando el lead
+todavía no existe, pero no es urgente.
+
+⚠️ El comentario de `postWaitingToStore` en Kenku dice *"el dashboard deduplica
+por teléfono"*. **Eso dejó de ser cierto**: desde las migraciones 0105/0107 la
+identidad puede ser el teléfono, el BSUID o la conversación. Es justo la
+suposición que hizo que estos avisos se perdieran.
+
+## Números que el watchdog NO vigila
+
+`WATCHDOG_PHONE_IDS` está **hardcodeado** en las dos funciones. Un número
+conectado que no esté en esa lista no genera alerta: ni Telegram, ni cola
+"Atender ahora". Silencio, sin error.
+
+En Kenku la lista cubre 3 de los 5 números del proyecto —y uno de los 3 es el
+sandbox—, así que quedan fuera dos números **de producción, conectados y con
+`inbound_processing_enabled: true`**:
+
+| Número | phone_number_id |
+|---|---|
+| Kenku 630 | `1241670942359671` |
+| Kenku 600 | `1117623181444547` |
+
+**No es un descuido: están reservados a propósito** para un proceso aparte que
+todavía no arrancó. Medido el 7-ago-2026, cada uno tiene UNA conversación, ambas
+del 9 de julio y con 28 segundos de diferencia — una prueba de conexión, no
+clientes. Ningún cliente real está escribiendo a un número sin vigilar.
+
+⚠️ **Pero cuando ese proceso arranque, ojo con el sync de leads**: `syncStoreLeads`
+llama a `fetchAllConversationsRich` SIN filtro de número, deliberadamente (ver el
+comentario en lib/leads-ingest.ts: filtrar por `phone_number_id` una vez dejó
+fuera leads legítimos). Consecuencia: **toda conversación del proyecto Kapso se
+convierte en lead**, sin importar por qué número entró.
+
+Si el proceso aislado vive en el MISMO proyecto Kapso, sus conversaciones van a
+aparecer en la cola de Leads, contar en "sin llamar", mover el gráfico de
+conversión y entrar en la exportación de Audiencia Meta. Lo limpio es un proyecto
+Kapso aparte; si no se puede, hace falta una lista de EXCLUSIÓN explícita en el
+sync — nunca un filtro positivo, que es lo que ya rompió una vez.
+
+Para volver a medirlo:
+
+```sql
+select phone_number_id, count(*) as conversaciones, max(last_message_at) as ultima
+from conversations
+where started_at > now() - interval '30 days'
+group by 1 order by 2 desc;
+```
