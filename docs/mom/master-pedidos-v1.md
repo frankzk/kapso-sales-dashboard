@@ -1290,6 +1290,15 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
   ignora el borrador en ese estado; no basta con esconder el formulario.
 - El rótulo interno contiene pedido, salida, courier, cliente, destino, productos
   y el QR que consume la mesa de despacho.
+- El rótulo lleva además un **código de barras Code 39 del PEDIDO de Shopify**,
+  sin el sufijo `-Sxx` de la salida. Es un puente de transición: mientras la
+  operación no esté migrada del todo, el almacén pistolea el rótulo contra un
+  Excel cuya clave es el número de pedido, y un código que incluyera la salida
+  obligaría a limpiarlo a mano. **No sustituye al QR**: el QR identifica la
+  salida y es lo único que vale para el cotejo y las transferencias de custodia.
+  Una salida cuyo pedido no se puede determinar se imprime sin código de barras
+  —nunca con el número de guía del courier en su lugar—, porque pistolear una
+  guía dentro de la columna del pedido corrompe el Excel en silencio.
 - Desde el Master se accede al panel correcto de Aliclik, Shalom, Tanders,
   Swayp/Reproprovincia o a la creación manual sin volver a buscar el pedido.
 - La interfaz funciona en celular y escritorio, con cámara y entrada manual.

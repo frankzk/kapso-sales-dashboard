@@ -18,6 +18,8 @@ import {
   type LabelProductGroup,
 } from "@/lib/labels/line-items";
 import { formatCollectAmount } from "@/lib/labels/amount";
+import { code39Layout } from "@/lib/labels/barcode39";
+import { normalizeOrderCode } from "@/lib/shipment-output";
 
 /** 1 mm en puntos PostScript (72 dpi). */
 const MM = 72 / 25.4;
@@ -29,12 +31,16 @@ const PAD = 8 * MM;
 const INK = rgb(0.008, 0.023, 0.09); // slate-950, igual que el HTML
 const MUTED = rgb(0.39, 0.45, 0.55); // slate-500
 const LINE = rgb(0.8, 0.84, 0.88); // slate-300
+// Las barras van en negro puro, no en el gris azulado del texto: el lector
+// decide por contraste, y ahí no se gana nada con un tono de marca.
+const BARCODE_INK = rgb(0, 0, 0);
 
 export interface RotuloData {
   /** Código visible de la salida (output_code o guide_code). */
   code: string;
   /** Tienda del pedido: es la marca que el cliente reconoce, no "Kapta". */
   storeName: string | null;
+  /** Pedido de Shopify (`#KP126875`): es lo que va en el código de barras. */
   orderName: string | null;
   customerName: string | null;
   customerPhone: string | null;
@@ -391,6 +397,34 @@ function drawProducts(
   return bottom - 1.8 * MM;
 }
 
+/** Alto de las barras del código de barras del pedido. */
+const BARCODE_H = 9 * MM;
+
+/**
+ * Qué se codifica en el código de barras: EL PEDIDO DE SHOPIFY, no la salida.
+ *
+ * Mientras la operación no esté migrada del todo, el almacén pistolea el rótulo
+ * contra un Excel cuya clave es el número de pedido de Shopify. Un código de
+ * barras con `KP126875-S01` obligaría a limpiar el sufijo a mano en cada fila —
+ * y a inventar una regla nueva el día que un pedido tenga dos salidas.
+ *
+ * La fuente es `orderName`. Si falta, se acepta derivarlo del código de salida
+ * SOLO cuando este tiene la forma `PEDIDO-Sxx` que construye `buildOutputCode`:
+ * ahí el prefijo es, por construcción, el pedido. Un `guide_code` de courier no
+ * pasa ese filtro y se queda sin código de barras, que es lo correcto —
+ * pistolear un número de guía dentro de la columna del pedido contamina el
+ * Excel en silencio, y eso se descubre tarde y mal.
+ */
+export function orderBarcodeValue(
+  orderName: string | null | undefined,
+  code: string | null | undefined,
+): string {
+  const fromOrder = normalizeOrderCode(orderName);
+  if (fromOrder) return fromOrder;
+  const derived = /^([A-Z0-9-]+?)-S\d{2}(?:-|$)/.exec((code ?? "").trim().toUpperCase());
+  return derived?.[1] ?? "";
+}
+
 /** Alto de la banda del monto a cobrar. */
 const AMOUNT_BAND_H = 14 * MM;
 
@@ -519,46 +553,66 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
   const innerW = PAGE_W - PAD * 2;
   let y = PAGE_H - PAD;
 
-  // Cabecera: la TIENDA sobre el código de salida.
+  // Cabecera: la TIENDA, el código de salida y el código de barras del pedido,
+  // centrados y en ese orden — el mismo bloque que traen las guías de Shopify
+  // que el almacén todavía imprime, para que la mano no cambie de sitio al
+  // pasar de un papel al otro.
   //
   // Antes decía "KAPTA - SALIDA FISICA" —que no le dice nada a nadie: quien
   // recibe la caja no conoce a Kapta— y el courier arriba a la derecha. El
   // courier ya viaja dentro del código cuando está decidido (KP123-S01-ALICLIK)
   // y, cuando no lo está, un "POR DEFINIR" grande en el rótulo es ruido: quien
   // lo decide es la Mesa de despacho, no quien lee la etiqueta.
-  const store = sanitizeWinAnsi(data.storeName).toUpperCase();
-  page.drawText(store || "-", {
-    x: PAD,
-    y: y - 8,
-    size: 8.5,
+  const centered = (text: string, size: number) =>
+    PAD + (innerW - fonts.bold.widthOfTextAtSize(text, size)) / 2;
+
+  const store = sanitizeWinAnsi(data.storeName).toUpperCase() || "-";
+  const storeSize = 10.5;
+  page.drawText(store, {
+    x: centered(store, storeSize),
+    y: y - storeSize,
+    size: storeSize,
     font: fonts.bold,
     color: INK,
   });
+  y -= storeSize + 1.6 * MM;
 
-  // El pedido de Shopify va AL COSTADO del código de salida, no como un campo
-  // aparte: son el mismo dato leído de dos formas, y gastar una fila entera del
-  // rótulo en repetir "#KP124122" debajo de "KP124122-S01" era desperdiciarla.
+  // El código de salida se escribe entero —`KP124122-S01`— y ya no se repite el
+  // pedido al costado: el número de Shopify está debajo, en las barras, y
+  // gastar una fila del rótulo en decirlo tres veces era desperdiciarla.
   const code = sanitizeWinAnsi(data.code) || "-";
-  const orderName = sanitizeWinAnsi(data.orderName);
-  const orderSize = 10;
-  const orderW = orderName ? fonts.bold.widthOfTextAtSize(orderName, orderSize) + 3 * MM : 0;
-  let codeSize = 17;
-  while (codeSize > 9 && fonts.bold.widthOfTextAtSize(code, codeSize) > innerW - orderW) {
-    codeSize -= 0.5;
-  }
-  y -= 8 + 4 * MM;
-  page.drawText(code, { x: PAD, y: y - codeSize, size: codeSize, font: fonts.bold, color: INK });
-  if (orderName) {
-    page.drawText(orderName, {
-      x: PAGE_W - PAD - fonts.bold.widthOfTextAtSize(orderName, orderSize),
-      y: y - codeSize,
-      size: orderSize,
-      font: fonts.bold,
-      color: MUTED,
-    });
+  let codeSize = 16;
+  while (codeSize > 9 && fonts.bold.widthOfTextAtSize(code, codeSize) > innerW) codeSize -= 0.5;
+  page.drawText(code, {
+    x: centered(code, codeSize),
+    y: y - codeSize,
+    size: codeSize,
+    font: fonts.bold,
+    color: INK,
+  });
+  y -= codeSize + 2 * MM;
+
+  // Las barras: el PEDIDO de Shopify, que es la clave del Excel con el que hoy
+  // se cuadra la operación. Sin texto legible debajo —a diferencia del rótulo
+  // de Shopify, que lo trae porque la fuente lo dibuja gratis—: el código de
+  // arriba ya contiene el pedido, y esa línea repetida costaba 3 mm que aquí
+  // los necesita la dirección.
+  const barcode = code39Layout(orderBarcodeValue(data.orderName, data.code), innerW);
+  if (barcode) {
+    const barsX = PAD + (innerW - barcode.width) / 2;
+    for (const bar of barcode.bars) {
+      page.drawRectangle({
+        x: barsX + bar.x,
+        y: y - BARCODE_H,
+        width: bar.width,
+        height: BARCODE_H,
+        color: BARCODE_INK,
+      });
+    }
+    y -= BARCODE_H;
   }
 
-  y -= codeSize + 3 * MM;
+  y -= 2.5 * MM;
   page.drawLine({
     start: { x: PAD, y },
     end: { x: PAGE_W - PAD, y },
@@ -579,13 +633,17 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
   // Pie fijo: QR + leyenda. Se ancla abajo para que todas las etiquetas lo
   // tengan en el mismo sitio, aunque los datos de arriba varíen de alto. Los
   // campos de arriba nunca pueden bajar de `fieldsFloor`.
-  const qrSize = 26 * MM;
+  // 24 mm de QR: el token es un UUID, que a corrección M cabe en 29 módulos —
+  // 0,8 mm por módulo, de sobra para la cámara de un celular. Los 2 mm que se
+  // le quitaron, más el aire de abajo, son los que financian el código de
+  // barras de la cabecera sin que los campos pierdan una línea.
+  const qrSize = 24 * MM;
   // La leyenda del QR baja a pie de página, en chico: se lee una vez en la vida
   // y estaba ocupando el mejor espacio del rótulo — el que ahora usan las NOTAS.
   const legendH = 4.5 * MM;
   const qrBottom = PAD + legendH;
-  const footerTop = qrBottom + qrSize + 5 * MM;
-  const fieldsFloor = footerTop + 3 * MM;
+  const footerTop = qrBottom + qrSize + 4 * MM;
+  const fieldsFloor = footerTop + 2.5 * MM;
 
   // Se mide todo antes de escribir nada: así el aire sobrante se reparte entre
   // los bloques en vez de acumularse en un hueco encima del QR.
