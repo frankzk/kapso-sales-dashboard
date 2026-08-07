@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
-  buildAnomalyDigest,
+  buildAnomalyReport,
   localDay,
   noteAnomaly,
   type AnomalyRow,
@@ -23,62 +23,65 @@ const row = (over: Partial<AnomalyRow>): AnomalyRow => ({
   ...over,
 });
 
-describe("buildAnomalyDigest", () => {
+describe("buildAnomalyReport", () => {
   it("separa hoy de ayer — que es lo único que hace legible el número", () => {
     // "25 descartes" no dice nada suelto: puede ser lo normal. "Ayer 0, hoy 25"
     // es exactamente la señal que permitió fechar la migración de Meta al día.
-    const d = buildAnomalyDigest(
-      [
-        row({ dia: "2026-08-06", count: 25 }),
-        row({ dia: "2026-08-05", count: 0 }),
-      ],
+    const r = buildAnomalyReport(
+      [row({ dia: "2026-08-06", count: 25 }), row({ dia: "2026-08-05", count: 0 })],
       "2026-08-06",
       "2026-08-05",
     );
-    expect(d.hoy).toBe(25);
-    expect(d.ayer).toBe(0);
+    expect(r.hoy).toBe(25);
+    expect(r.ayer).toBe(0);
+    expect(r.filas[0]).toMatchObject({ hoy: 25, ayer: 0 });
   });
 
   it("agrupa el mismo problema de dos tiendas en una sola línea", () => {
-    // Con la cola combinada, el mismo fallo en Aurela y en Kenku es UN problema,
-    // no dos. Verlo partido invita a tratarlos como casos distintos.
-    const d = buildAnomalyDigest(
+    // El mismo fallo en Aurela y en Kenku es UN problema, no dos. Verlo partido
+    // invita a tratarlos como casos distintos.
+    const r = buildAnomalyReport(
+      [row({ store_id: "aurela", count: 3 }), row({ store_id: "kenku", count: 4 })],
+      "2026-08-06",
+      "2026-08-05",
+    );
+    expect(r.filas).toHaveLength(1);
+    expect(r.filas[0]).toMatchObject({ source: "leads_sync", hoy: 7, total: 7 });
+  });
+
+  it("acumula el total del período aunque no sea de hoy", () => {
+    // Distinguir un pico de un goteo constante es justo para lo que sirve la
+    // columna de 7 días: 30 hoy sobre 30 en la semana es nuevo; sobre 200 no.
+    const r = buildAnomalyReport(
       [
-        row({ store_id: "aurela", count: 3 }),
-        row({ store_id: "kenku", count: 4 }),
+        row({ dia: "2026-08-06", count: 2 }),
+        row({ dia: "2026-08-03", count: 40 }),
       ],
       "2026-08-06",
       "2026-08-05",
     );
-    expect(d.detalle).toEqual([
-      { source: "leads_sync", reason: "conversacion_sin_identidad", count: 7 },
-    ]);
+    expect(r.filas[0]).toMatchObject({ hoy: 2, ayer: 0, total: 42 });
   });
 
-  it("ordena el desglose por volumen", () => {
-    const d = buildAnomalyDigest(
+  it("pone primero lo que está pasando HOY, no lo que más acumula", () => {
+    // Un motivo con 200 la semana pasada y 0 hoy ya no es noticia; uno con 3 hoy
+    // sí. Ordenar por total escondería lo que empezó recién debajo del histórico.
+    const r = buildAnomalyReport(
       [
-        row({ source: "handoff", reason: "sin_identidad", count: 2 }),
-        row({ source: "lead_enrich", reason: "excepcion", count: 9 }),
+        row({ source: "won_sources", reason: "excepcion", dia: "2026-08-01", count: 200 }),
+        row({ source: "handoff", reason: "sin_identidad", dia: "2026-08-06", count: 3 }),
       ],
       "2026-08-06",
       "2026-08-05",
     );
-    expect(d.detalle.map((x) => x.source)).toEqual(["lead_enrich", "handoff"]);
+    expect(r.filas.map((f) => f.source)).toEqual(["handoff", "won_sources"]);
   });
 
-  it("ignora días que no son ni hoy ni ayer", () => {
-    // La consulta pide dos días, pero el resumen no debe depender de eso: si un
-    // día viejo se colara, inflaría "hoy" y el salto dejaría de significar nada.
-    const d = buildAnomalyDigest([row({ dia: "2026-07-01", count: 99 })], "2026-08-06", "2026-08-05");
-    expect(d).toEqual({ hoy: 0, ayer: 0, detalle: [] });
-  });
-
-  it("sin filas devuelve el resumen vacío", () => {
-    expect(buildAnomalyDigest([], "2026-08-06", "2026-08-05")).toEqual({
+  it("sin filas devuelve el informe vacío", () => {
+    expect(buildAnomalyReport([], "2026-08-06", "2026-08-05")).toEqual({
       hoy: 0,
       ayer: 0,
-      detalle: [],
+      filas: [],
     });
   });
 });

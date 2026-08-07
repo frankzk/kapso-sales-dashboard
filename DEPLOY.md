@@ -1283,11 +1283,17 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
 - Sin ella no se rompe nada: `noteAnomaly` se traga su propio fallo a propósito
   (el medidor no puede tumbar lo que mide), así que el indicador simplemente no
   aparece hasta que se aplique.
-- En la cabecera de Leads sale **«⚠ N descartados»** cuando hoy hubo alguno, con
-  el desglose en el tooltip y «(ayer 0)» cuando el día anterior estuvo limpio.
+- Se ve en **Tiendas**, como «Anomalías de ingesta · últimos 7 días»: una fila
+  por (camino, motivo) con hoy, ayer y el total del período.
   **Lo que importa es el salto, no el nivel**: 25 descartes pueden ser lo normal;
   «ayer 0, hoy 25» es lo que hizo falta para fechar la migración de identidad de
-  Meta al día.
+  Meta al día. Por eso la tabla ordena por lo que pasa HOY y no por lo que más
+  acumula — un motivo con 200 la semana pasada y 0 hoy ya no es noticia.
+- **No va en la cabecera de Leads**, donde estuvo un día: esa línea la leen las
+  asesoras todo el tiempo buscando trabajo accionable («sin llamar», «atender
+  ahora»), y un contador de diagnóstico ahí es ruido en lo único que miran.
+  Tiendas además ya redirige a las vendedoras, así que queda fuera de su vista
+  sin necesidad de un permiso aparte.
 - Se agrega **por día y por (tienda, camino, motivo)**, no un registro por
   evento: un log por evento crece sin fin, nadie lo lee y esconde el salto.
 - **Qué cubre**: trabajo DESCARTADO — conversaciones que no generan lead,

@@ -3,7 +3,6 @@ import { getAccessibleStores, getAdNames, getCurrentUser, getWaNumbers } from "@
 import {
   ALL_STORES,
   LEAD_VIEWS,
-  getAnomalyDigest,
   getLeadQueueSnapshot,
   getStoreLeads,
   leadsViewLimit,
@@ -116,7 +115,6 @@ async function LeadsContent({
   const timezone = store?.timezone ?? "America/Lima";
 
   const snapshotPromise = getLeadQueueSnapshot(scope);
-  const anomaliesPromise = getAnomalyDigest(scope, timezone);
   // "Por llamar" se filtra/cuenta en cliente (jerarquía de facetas), así que la
   // cola se pagina completa (`null`) para que los conteos y drill-downs usen el
   // mismo universo que el gráfico; las demás vistas mantienen el tope estándar.
@@ -126,13 +124,12 @@ async function LeadsContent({
   // promise settles instead of waiting for counts and user first.
   const adNamesPromise = leadsPromise.then((rows) => getAdNames(rows.map((l) => l.ad_id)));
   const waNumbersPromise = leadsPromise.then((rows) => getWaNumbers(rows.map((l) => l.wa_phone_number_id)));
-  const [snapshot, leads, user, adNames, waNumbers, anomalies] = await Promise.all([
+  const [snapshot, leads, user, adNames, waNumbers] = await Promise.all([
     snapshotPromise,
     leadsPromise,
     userPromise,
     adNamesPromise,
     waNumbersPromise,
-    anomaliesPromise,
   ]);
 
   return (
@@ -142,7 +139,6 @@ async function LeadsContent({
       storeId={allSelected ? ALL_STORES : storeId}
       scope={scope}
       allStoresAvailable={uniform}
-      anomalies={anomalies}
       view={view}
       counts={snapshot.counts}
       queueSignature={snapshot.signature}
