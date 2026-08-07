@@ -1444,3 +1444,52 @@ export function parseHandoffPayload(body: any): HandoffInfo {
     context: context ? String(context) : null,
   };
 }
+
+/**
+ * Qué guardar de un handoff que se descartó por no traer ninguna identidad.
+ *
+ * POR QUÉ existe. El sample anterior era `{ reason }` a secas y no alcanzó: los
+ * 68 descartes del 2026-08-07 (62 en Kenku, 6 en Aurela) llegaron TODOS con
+ * `reason: null`, y ninguna de las cuatro funciones de Kapso puede mandar eso —
+ * las dos `notify-team` cortan con `if (!reason) return;` y las dos
+ * `check-coverage` codifican el motivo a mano (ver docs/kapso-functions). O sea
+ * que el emisor no es ninguna de ellas, y con el motivo vacío no quedaba NADA
+ * con qué identificarlo.
+ *
+ * Las dos hipótesis que esto separa, que llevan a decisiones opuestas:
+ *   a) Un webhook de plataforma suscrito a `workflow.execution.*`: los eventos
+ *      que no son handoff igual caen acá, porque `classifyKapsoEvent` infiere
+ *      "handoff" cuando ve `body.execution`. No se pierde nada; sobra el ruido.
+ *   b) Handoffs de verdad con una forma de cuerpo que `parseHandoffPayload` no
+ *      sabe leer. Serían ~68 clientes al día que no suben a "Atender ahora".
+ *
+ * SE GUARDAN LAS CLAVES, NUNCA LOS VALORES. La forma del cuerpo es lo que
+ * distingue a un emisor de otro, así que los valores no aportan al diagnóstico —
+ * y sí serían un problema: `ingest_anomalies` la lee cualquier miembro de la
+ * tienda por RLS (0107), y un cuerpo de handoff lleva teléfono, nombre y el
+ * resumen de la conversación. La única excepción es el nombre del evento, que es
+ * un identificador acotado y es justo el discriminador que se busca.
+ */
+export function handoffDiscardSample(
+  body: any,
+  info: HandoffInfo,
+  eventHeader?: string | null,
+): Record<string, unknown> {
+  // Un tope por si alguna vez llega un cuerpo enorme: esto va a una tabla que se
+  // lee entera para el informe, no a un log.
+  const keys = (v: unknown): string[] =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.keys(v as Record<string, unknown>).sort().slice(0, 12)
+      : [];
+  const name = eventHeader ?? body?.event ?? body?.type ?? null;
+  return {
+    // Dice si el emisor se anunció como handoff o si lo clasificó la forma del
+    // cuerpo. El header manda sobre el cuerpo, igual que en classifyKapsoEvent.
+    event: name == null ? null : String(name).slice(0, 60),
+    reason: info.reason,
+    claves: keys(body),
+    clavesData: keys(body?.data),
+    clavesExec: keys(body?.execution ?? body?.workflow_execution),
+    clavesConv: keys(body?.conversation ?? body?.data?.conversation),
+  };
+}

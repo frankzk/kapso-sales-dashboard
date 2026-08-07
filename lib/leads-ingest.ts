@@ -8,6 +8,7 @@ import {
   fetchAllConversationsRich,
   fetchConversationSignals,
   fetchKapsoImageBase64,
+  handoffDiscardSample,
   parseHandoffPayload,
   sendWhatsappTemplate,
   type HandoffInfo,
@@ -1970,6 +1971,10 @@ export async function applyHandoff(
   admin: SupabaseClient,
   storeId: string,
   body: any,
+  /** `X-Webhook-Event` tal como llegó. NO se usa para decidir nada — la ruta ya
+   *  la decidió `classifyKapsoEvent` — solo para poder nombrar al emisor cuando
+   *  el handoff se descarta y el cuerpo no trae con qué. */
+  eventHeader?: string | null,
 ): Promise<{ ok: boolean; reason?: string }> {
   const info: HandoffInfo = parseHandoffPayload(body);
   // TRES formas de emparejar, en orden de fuerza. Se resuelve UNA vez porque
@@ -2003,7 +2008,9 @@ export async function applyHandoff(
       storeId,
       source: "handoff",
       reason: "sin_identidad",
-      sample: { reason: info.reason },
+      // La forma del cuerpo, no sus valores: es lo único que puede nombrar al
+      // emisor cuando el motivo viene vacío. Ver handoffDiscardSample.
+      sample: handoffDiscardSample(body, info, eventHeader),
     });
     return { ok: false, reason: "no-identity" };
   }
