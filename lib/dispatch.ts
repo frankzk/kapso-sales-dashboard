@@ -185,6 +185,52 @@ export function normalizeDispatchScan(raw: string): string {
   return value.replace(/^#+/, "").trim();
 }
 
+/**
+ * El rótulo lleva el número de pedido en código de barras, y un pedido puede
+ * tener hasta cinco salidas: un escaneo así designa al pedido, no a la caja.
+ * Elegimos la salida por descarte y, si quedan varias, no adivinamos.
+ */
+export interface DispatchScanCandidate {
+  id: string;
+  custody_state: string;
+  preparation_state: string;
+  output_code: string | null;
+  guide_code: string;
+}
+
+export type DispatchScanPick<T> =
+  | { kind: "unica"; shipment: T }
+  | { kind: "ambigua"; options: T[] }
+  | { kind: "ninguna" };
+
+export function dispatchScanLabel(candidate: DispatchScanCandidate): string {
+  return candidate.output_code ?? candidate.guide_code;
+}
+
+/**
+ * `narrow` es la preferencia de quien escanea (lo pendiente de armar, lo que
+ * pertenece a la ruta). Los filtros son subconjuntos encajados: si el más
+ * estrecho deja exactamente una salida, esa es. Cuando ninguno desempata,
+ * devolvemos las opciones del filtro más estrecho que sí tenía algo, para que
+ * el operador vea entre qué está eligiendo.
+ */
+export function pickDispatchScanTarget<T extends DispatchScanCandidate>(
+  candidates: T[],
+  narrow?: (candidate: T) => boolean,
+): DispatchScanPick<T> {
+  const stages = [
+    narrow ? candidates.filter(narrow) : [],
+    candidates.filter((candidate) => candidate.custody_state === "empresa"),
+    candidates,
+  ].filter((stage) => stage.length > 0);
+  for (const stage of stages) {
+    const only = stage.length === 1 ? stage[0] : undefined;
+    if (only) return { kind: "unica", shipment: only };
+  }
+  const narrowest = stages[0];
+  return narrowest ? { kind: "ambigua", options: narrowest } : { kind: "ninguna" };
+}
+
 export function courierKey(value: string | null | undefined): string {
   return (value ?? "")
     .normalize("NFD")

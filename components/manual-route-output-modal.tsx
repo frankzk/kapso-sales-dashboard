@@ -78,11 +78,13 @@ export function ManualRouteOutputModal({
             >
               Imprimir rótulo con QR
             </a>
+            {/* Recién impreso el rótulo, lo que sigue es armar la caja y
+                escanearla; la ruta se decide después, en la mesa. */}
             <Link
-              href="/dashboard/pedidos/despacho"
+              href="/dashboard/pedidos/almacen"
               className="flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             >
-              Ir a la mesa de despacho
+              Ir al Almacén a escanear
             </Link>
           </div>
         ) : (
