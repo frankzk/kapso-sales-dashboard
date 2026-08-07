@@ -711,7 +711,10 @@ Cómo se clasifica una guía que llega por reporte Excel:
 - ENTREGADO gana sobre el despacho, y el orden importa: una guía entregada
   arrastra valores heredados de intentos previos en las columnas de despacho.
 - `POR DEVOLVER` / `TO_RETURN` **no** es una devolución: el paquete sigue
-  viajando de vuelta y la guía sigue viva, así que permanece en gestión.
+  viajando de vuelta y la guía sigue viva, así que se sigue consultando. Pero
+  tampoco está por armar: **su estado de guía es `en_ruta`** (§6.2), porque ya
+  salió del almacén. En `pendiente` el Master lo dibujaría en
+  `Preparación · Por armar`, que es exactamente lo que no es.
 - La guía devuelta se cierra como `anulado` —el vocabulario de guías no tiene
   código `devuelto`— y es `returned_at` lo que convierte el **pedido** en
   `devuelto`.
