@@ -938,6 +938,22 @@ clave de idempotencia. En consecuencia:
   haya sido recibida en agencia. Ese `{id}` es el de `GET /v1/orders`, **no** el
   `ose_id` ni la `guia` (por eso hay tres columnas y no una).
 
+### De qué vía nació cada salida — **needs migration 0108**
+
+`shipments.created_via` distingue las dos vías del drawer: `shalom_pro_api` (la
+guía la emite la integración, el caso normal) y `shalom_pro_manual` (ya existía
+en `pro.shalom.pe` y se copió a mano). Los valores viven en `lib/shalom/origin.ts`
+y ningún insert debe escribirlos sueltos: `test/shalom-origin.test.ts` exige que
+**toda** inserción de salida de ese fichero declare su origen.
+
+Hizo falta porque durante las primeras 185 guías solo la vía de contingencia
+marcaba la columna y la vía normal no, así que `created_via` quedaba nulo — el
+mismo valor que una guía importada del reporte. Mirando la columna parecía que el
+drawer no se había usado nunca, cuando en realidad lo habían usado cuatro
+personas. La 0108 rellena esas filas y **no adivina**: solo toca las que tienen
+`shalom_ose_id` (identificador que devuelve la API al crear y que el reporte
+Excel no trae) y `shalom_raw` sin la clave `source`. Es idempotente.
+
 ### Los estados: `/api/cron/shalom-reconcile`, cada 30 min
 
 Shalom **no tiene webhook**, y la vía de entrada por reporte Excel —que existe y

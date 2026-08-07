@@ -32,6 +32,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
 import {
   describeShalomError,
   findCreatedOrder,
@@ -519,7 +520,7 @@ export async function registerManualShalomGuide(
         shalom_ose_id: guide.oseId,
         shalom_order_id: guide.shalomOrderId,
         shalom_raw: {
-          source: "shalom_pro_manual",
+          source: SHALOM_ORIGIN.manual,
           guia: guide.guideCode,
           codigo: guide.codigo,
           serie: guide.serie,
@@ -533,7 +534,7 @@ export async function registerManualShalomGuide(
         preparation_state: "rotulo_generado",
         custody_state: "empresa",
         assigned_at: now,
-        created_via: "shalom_pro_manual",
+        created_via: SHALOM_ORIGIN.manual,
       })
       .select("id")
       .single();
@@ -609,7 +610,7 @@ export async function registerManualShalomGuide(
     // Nunca se guarda la clave en la línea de tiempo: solo la confirmación de
     // que fue recibida y cifrada.
     payload: {
-      source: "shalom_pro_manual",
+      source: SHALOM_ORIGIN.manual,
       shipment_id: shipmentId,
       codigo: guide.codigo,
       serie: guide.serie,
@@ -801,6 +802,11 @@ export async function createShalomGuide(
     shalom_serie: result?.serie ?? null,
     shalom_ose_id: oseId,
     shalom_raw: result as unknown as Record<string, unknown>,
+    // La guía la emitió la integración, no un operador copiando de pro.shalom.pe.
+    // Sin esta marca la salida quedaba con `created_via` nulo, igual que una
+    // importada del reporte, y la columna no distinguía la vía normal de ninguna
+    // otra: era el caso frecuente y era justo el que no se registraba.
+    created_via: SHALOM_ORIGIN.api,
   };
 
   const inserted = await admin.from("shipments").insert(insertRow).select("id").single();
@@ -851,6 +857,7 @@ export async function createShalomGuide(
     // La clave de recojo NO va en el evento: la línea de tiempo la ve cualquiera
     // con acceso al pedido, y la clave es la llave del paquete.
     payload: {
+      source: SHALOM_ORIGIN.api,
       codigo: result?.codigo ?? null,
       serie: result?.serie ?? null,
       ose_id: oseId,
