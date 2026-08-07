@@ -293,6 +293,45 @@ export function leadCanCall(lead: LeadIdentity): boolean {
   return Boolean(lead.phone?.trim());
 }
 
+/** Una columna a buscar y el texto con el que compararla (sin escapar). */
+export interface LeadSearchPass {
+  col: "name" | "phone" | "username" | "bsuid";
+  value: string;
+}
+
+/**
+ * Qué columnas se buscan para una consulta dada.
+ *
+ * Vive suelta y pura porque es la decisión que hace que un lead se encuentre o
+ * no, y equivocarse no da error: da "sin resultados" para alguien que está a la
+ * vista en la cola. Pasó exactamente eso — buscar `@vanepey6` no devolvía nada
+ * aunque el lead estuviera en pantalla.
+ */
+export function leadSearchPasses(query: string): LeadSearchPass[] {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const passes: LeadSearchPass[] = [{ col: "name", value: q }];
+
+  // Teléfono: solo los dígitos, para que "999 888 777" y "+51999888777"
+  // encuentren lo mismo. Con menos de dos dígitos el pase no aporta y sí cuesta
+  // una consulta por pulsación.
+  const digits = q.replace(/\D/g, "");
+  if (digits.length >= 2) passes.push({ col: "phone", value: digits });
+
+  // Username: el `@` es como se escribe en WhatsApp y como lo muestra la cola,
+  // así que la asesora lo va a teclear — pero no es parte del valor guardado.
+  // Este pase dejó de ser un lujo con los leads sin teléfono (0105): para ellos
+  // el `@usuario` ES el nombre visible, y sin esto no había forma de buscarlos.
+  const handle = q.replace(/^@+/, "").trim();
+  if (handle.length >= 2) passes.push({ col: "username", value: handle });
+
+  // BSUID solo si lo parece (`PE.…`): nadie lo teclea, se pega. Condicionarlo
+  // evita una consulta inútil en cada pulsación.
+  if (/^[A-Za-z]{2}\./.test(q)) passes.push({ col: "bsuid", value: q });
+
+  return passes;
+}
+
 // ---------------------------------------------------------------------------
 // "Anzuelo" — the opener context an advisor needs before calling. Without it a
 // cold lead reads as a blank name and nobody knows how to start the call, so it
