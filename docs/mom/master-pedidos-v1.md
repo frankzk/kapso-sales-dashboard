@@ -310,11 +310,35 @@ Reglas:
 - Para Aliclik, el estado autenticado `PREPARED` constituye el evento equivalente
   a ese escaneo físico y mueve automáticamente la salida a
   `Por despachar · Listo para asignar`. No se exige un tercer escaneo en Kapta.
-- La equivalencia completa de despacho Aliclik es: `TO_PREPARE` →
-  `Preparación · Por armar`; `PREPARED` → `Por despachar · Listo para asignar`;
-  `PICKED` → `En curso · Recibido por courier`.
+- La equivalencia completa de despacho Aliclik **autenticado** (API/webhook) es:
+  `TO_PREPARE` → `Preparación · Por armar`; `PREPARED` →
+  `Por despachar · Listo para asignar`; `PICKED` → `En curso · Recibido por
+  courier`. Esta vía avanza además la custodia física (`custody_state`) y la
+  preparación (`preparation_state`).
 - Estos avances son monotónicos: un reporte atrasado de Aliclik no puede deshacer
   un escaneo local ni devolver ficticiamente la custodia desde el courier.
+- **Reporte Excel de Aliclik.** Mientras la API no esté conectada, el estado
+  llega por el Excel del panel de Aliclik. El importador deriva el
+  `delivery_status` de la guía combinando las columnas **ESTADO ENTREGA** y
+  **ESTADO DESPACHO** (mismo cerebro que la vía autenticada, `mapAliclikStatus`):
+  - `ENTREGADO` → `entregado` (cierra; manda sobre cualquier despacho).
+  - `CANCELADO` / `ANULADO` → `anulado`; `DEVUELTO` (despacho) → `anulado`.
+  - `RECHAZADO` / `NO CONTESTA` / `REPROGRAMADO` → `en_ruta` (el paquete ya salió
+    y sigue en calle), salvo que el despacho ya diga `DEVUELTO` (→ `anulado`).
+  - Despacho `RECOLECTADO` / `EN TRÁNSITO` / `POR DEVOLVER` / `EN AGENCIA` →
+    `en_ruta`; `POR PREPARAR` / `VALIDADO` / `DEJADO EN ALMACÉN` o `POR ENTREGAR`
+    sin señal de despacho → `pendiente` (sigue en almacén).
+  - Un valor no reconocido no inventa estado: cae al binario histórico
+    entregado-vs-pendiente.
+- A diferencia de la vía autenticada, el Excel **solo** fija `delivery_status`:
+  no avanza `custody_state` ni `preparation_state` (el dato de despacho del Excel
+  es ruidoso — `VALIDADO` persiste incluso en entregados). Por eso un `VALIDADO`
+  del Excel mantiene el pedido en `Preparación · Por armar`, no lo promueve a
+  `Por despachar`; ese ascenso lo hará la vía autenticada.
+- El `anulado` derivado del Excel es de guía, no de venta: un pedido solo pasa a
+  `anulado` general cuando **todas** sus guías están anuladas y ninguna activa
+  (la operación lo dio por perdido), reversible con un override; nunca anula el
+  pedido en Shopify (§3.4, §9.4).
 - Debe existir una alternativa manual al escaneo, siempre con actor, fecha y
   motivo registrados.
 - Incidencias mínimas: datos incompletos, producto faltante, rótulo incorrecto,
@@ -687,12 +711,50 @@ Cómo se clasifica una guía que llega por reporte Excel:
 - ENTREGADO gana sobre el despacho, y el orden importa: una guía entregada
   arrastra valores heredados de intentos previos en las columnas de despacho.
 - `POR DEVOLVER` / `TO_RETURN` **no** es una devolución: el paquete sigue
-  viajando de vuelta y la guía sigue viva, así que permanece en gestión.
+  viajando de vuelta y la guía sigue viva, así que se sigue consultando. Pero
+  tampoco está por armar: **su estado de guía es `en_ruta`** (§6.2), porque ya
+  salió del almacén. En `pendiente` el Master lo dibujaría en
+  `Preparación · Por armar`, que es exactamente lo que no es.
 - La guía devuelta se cierra como `anulado` —el vocabulario de guías no tiene
   código `devuelto`— y es `returned_at` lo que convierte el **pedido** en
   `devuelto`.
 - Si Aliclik no entrega, el pedido puede ingresar a Reproprovincia.
 - Solo Aliclik tiene proceso de indemnización formal.
+
+### 10.1 Qué fuente manda: la API sobre el Excel
+
+El estado de una guía Aliclik llega por dos vías, y **no valen lo mismo**:
+
+| | API (`/integration/order`) | Reporte Excel |
+| --- | --- | --- |
+| Cómo llega | barrido automático cada 20 min | alguien lo exporta y lo sube |
+| Antigüedad | el estado de ahora, con `updatedAt` | la del momento en que se exportó |
+| Consistencia | una respuesta por guía | repite la guía por ítem, con filas que se contradicen |
+
+**Regla: mientras la última lectura de la API siga fresca, el reporte importado
+no cambia `delivery_status`.** El Excel sigue actualizando todo lo demás —
+dirección, producto, intentos, importe a cobrar—; lo único que cede es el estado
+de entrega.
+
+Por qué hizo falta: la precedencia monotónica sola no alcanzaba. Como `anulado`
+tiene rango 3 y `en_ruta` rango 2, un Excel exportado días antes **cerraba** una
+guía que la API acababa de reportar viva. El estado no retrocedía, pero avanzaba
+al lugar equivocado — y un terminal no se reabre.
+
+**La propiedad caduca** (`API_OWNERSHIP_DAYS`, hoy 7 días). Si la API dejara de
+conocer una guía —Aliclik la saca de su retención, o deja de responder— una
+propiedad perpetua la congelaría sin forma de corregirla. Pasada la ventana, el
+Excel vuelve a ser autoridad bajo la precedencia de siempre. Con el barrido cada
+20 minutos, una guía que la API sigue viendo nunca se acerca a ese límite.
+
+La marca vive en `shipments.api_report_at`, que **solo** escribe la vía API.
+`last_report_at` no sirve para esto: lo escriben las dos vías, así que no permite
+saber quién habló último.
+
+Alcance de la API: empareja por `external_order_number` y, si no lo hay, por
+`guide_code` — el `orderNumber` de la API es el mismo código AUR5X… del reporte.
+Sin esa segunda vía la API era ciega a las guías nacidas del Excel, que son la
+mayoría.
 
 Seguimiento de una guía hasta que cierra:
 
@@ -708,6 +770,13 @@ Seguimiento de una guía hasta que cierra:
 - Se deja de preguntar cuando la guía termina (entregada, anulada o
   transferida) o tras **60 días sin noticias**. Ese silencio no cierra la guía:
   solo detiene la consulta.
+- El seguimiento alcanza **también a las guías nacidas del Excel**: pregunta por
+  `external_order_number` si lo hay y por `guide_code` si no. Son el mismo
+  identificador por dos vías, así que limitarlo al primero dejaría fuera a la
+  mayoría de las guías — justo las que se congelan cuando nadie sube un reporte.
+- Una guía que Aliclik ya no reconoce **no se cierra**: se cuenta aparte para
+  revisión humana. Dar por terminada una guía porque una búsqueda vino vacía
+  sería inventar un desenlace.
 
 Indemnización Aliclik:
 

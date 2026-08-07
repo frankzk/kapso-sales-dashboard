@@ -2,10 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
-import { listOrders } from "@/lib/aliclik";
+import { listOrders, type AliclikOrder } from "@/lib/aliclik";
 import { applyAliclikSnapshot, refreshAliclikOrder } from "@/lib/aliclik-track";
-import { selectFollowUpGuides, type FollowUpCandidate } from "@/lib/aliclik-followup";
+import { selectFollowUpGuides, followUpKey, type FollowUpCandidate } from "@/lib/aliclik-followup";
 import { normalizePhone } from "@/lib/phone";
+import { readOrderMarker } from "@/lib/aliclik-reconcile";
+import { categoryOf } from "@/lib/shipments";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -22,9 +24,19 @@ export const maxDuration = 300;
 //
 // ADEMÁS RESUELVE LOS HUÉRFANOS. Cuando una creación se va en timeout, no
 // sabemos si el pedido existe: la intención se queda en 'pending' (y sigue
-// bloqueando un segundo intento, que es lo correcto). Aquí se busca por teléfono
-// entre los pedidos que Aliclik creó en esa ventana y, si aparece, se vincula.
-// Sin esto, un timeout dejaría el pedido bloqueado para siempre.
+// bloqueando un segundo intento, que es lo correcto). Aquí se busca entre los
+// pedidos que Aliclik creó en esa ventana y, si aparece, se registra. Sin esto,
+// un timeout dejaría el pedido bloqueado para siempre.
+//
+// Se empareja por la MARCA que estampamos en la nota al crear, que Aliclik
+// devuelve al listar. El teléfono quedó como respaldo para las intenciones
+// anteriores a la marca, y solo cuando señala a una sola candidata: hay clientes
+// con dos pedidos abiertos a la vez.
+//
+// Y el rescate CREA la guía si no existe. Es lo normal, no la excepción: la fila
+// se inserta después de que Aliclik responde, así que un timeout no deja
+// ninguna. Antes esto era un UPDATE que no encontraba nada, no fallaba, y dejaba
+// la intención marcada como resuelta sin haber registrado la guía.
 //
 // Y PERSIGUE A LAS REZAGADAS. La ventana de fechas cubre el ciclo normal, pero
 // no el retorno: un paquete rechazado tarda semanas en volver, y para cuando
@@ -48,6 +60,17 @@ const FOLLOW_UP_LIMIT = 40;
  * semanas; dos meses de silencio ya es una guía que Aliclik nunca cerró.
  */
 const FOLLOW_UP_MAX_SILENCE_MS = 60 * DAY_MS;
+/**
+ * Techo de filas que se traen para elegir a quién preguntar. No es una decisión
+ * de producto: es el seguro contra el tope de filas de PostgREST, que truncaría
+ * la consulta en silencio y recortaría el universo sin avisar. Se piden las más
+ * calladas primero, así que un recorte se llevaría siempre a las menos urgentes.
+ *
+ * Hoy las guías Aliclik vivas —`pendiente` + `en_ruta`, sumando TODAS las
+ * tiendas— son 583, y este tope se aplica por tienda. Sobra holgura; si alguna
+ * vez dejara de sobrar, `followUpDeferred` lo delataría antes de que importe.
+ */
+const FOLLOW_UP_POOL = 2000;
 
 function secretEquals(provided: string | null, expected: string): boolean {
   if (!provided) return false;
@@ -72,6 +95,10 @@ interface StoreReport {
   applied: number;
   unknown: number;
   orphansLinked: number;
+  /** Guías creadas de cero al rescatar una huérfana. */
+  orphansCreated: number;
+  /** Candidatas descartadas por ambiguas (mismo teléfono, varios pedidos). */
+  orphansAmbiguous: number;
   /** Guías vivas consultadas de una en una tras el barrido por fechas. */
   followUpScanned: number;
   followUpApplied: number;
@@ -79,7 +106,137 @@ interface StoreReport {
   followUpDeferred: number;
   /** Vivas que se dieron por abandonadas por llevar demasiado calladas. */
   followUpAbandoned: number;
+  /** Consultadas que Aliclik ya no reconoce: quedan para revisión humana. */
+  followUpMissing: number;
   errors: string[];
+}
+
+/** El cuerpo que mandamos al crear, tal y como quedó guardado en la intención. */
+interface OrphanRequest {
+  note?: string | null;
+  customer?: { name?: string | null; phone?: string | null; address?: string | null } | null;
+  shipping?: {
+    address1?: string | null;
+    lat?: string | null;
+    lng?: string | null;
+    reference?: string | null;
+  } | null;
+}
+
+interface Orphan {
+  id: string;
+  orderId: string | null;
+  phone: string | null;
+  marker: string | null;
+  request: OrphanRequest;
+}
+
+/**
+ * Qué intención huérfana corresponde a este pedido de Aliclik.
+ *
+ * La marca manda. El teléfono solo desempata cuando hay UNA sola candidata: dos
+ * pedidos del mismo cliente son indistinguibles por teléfono, y vincular la guía
+ * al pedido equivocado deja a los dos mal — uno con una salida que no es suya y
+ * el otro esperando la propia.
+ */
+function matchOrphan(
+  order: AliclikOrder,
+  orphans: Orphan[],
+  report: StoreReport,
+): Orphan | undefined {
+  const marker = readOrderMarker(order.note);
+  if (marker) {
+    const exact = orphans.find((o) => o.marker && o.marker === marker);
+    if (exact) return exact;
+  }
+
+  const phone = normalizePhone(order.customer?.phone ?? null);
+  if (!phone) return undefined;
+  const samePhone = orphans.filter((o) => o.phone && o.phone === phone);
+  if (samePhone.length === 1) return samePhone[0];
+  if (samePhone.length > 1) report.orphansAmbiguous++;
+  return undefined;
+}
+
+/**
+ * Deja la guía huérfana registrada. Devuelve `true` solo si de verdad quedó.
+ *
+ * ANTES ESTO ERA UN UPDATE A SECAS, y ahí estaba el fallo: la fila de la guía se
+ * inserta DESPUÉS de que Aliclik responde, así que tras un timeout no existe
+ * ninguna. El update no encontraba nada, PostgREST no considera error actualizar
+ * cero filas, y el barrido marcaba la intención como resuelta sin haber creado
+ * nada. La guía quedaba invisible para siempre y el registro decía lo contrario.
+ *
+ * Ahora: si la fila existe se enlaza; si no existe se CREA con los datos de la
+ * intención —que son los mismos que mandamos a Aliclik— y se vuelve a aplicar el
+ * snapshot, que ya la encuentra y le escribe estado, custodia y Master.
+ */
+async function rescueOrphanGuide(
+  admin: ReturnType<typeof createAdminSupabase>,
+  order: AliclikOrder,
+  orphan: Orphan,
+  report: StoreReport,
+): Promise<boolean> {
+  const orderNumber = (order.orderNumber ?? "").trim();
+  if (!orderNumber || !orphan.orderId) return false;
+
+  // 1) ¿Ya está registrada? Entonces no hay nada que rescatar.
+  const { data: already } = await admin
+    .from("shipments")
+    .select("id")
+    .eq("external_order_number", orderNumber)
+    .limit(1);
+  if ((already ?? []).length) return true;
+
+  // 2) ¿Hay una guía del pedido todavía sin identificador? Se le pone.
+  const { data: linked, error: linkErr } = await admin
+    .from("shipments")
+    .update({ external_order_number: orderNumber })
+    .eq("order_id", orphan.orderId)
+    .eq("courier", "aliclik")
+    .is("external_order_number", null)
+    .select("id");
+  if (linkErr) {
+    report.errors.push(`huérfana ${orderNumber}: ${linkErr.message}`);
+    return false;
+  }
+  // `.select()` es lo que permite saber si tocó algo. Sin él, cero filas y éxito
+  // son indistinguibles — que es exactamente cómo se perdían estas guías.
+  if ((linked ?? []).length) return true;
+
+  // 3) No existe: se crea desde lo que mandamos.
+  const req = orphan.request;
+  const lat = Number(req.shipping?.lat);
+  const lng = Number(req.shipping?.lng);
+  const { error: insErr } = await admin.from("shipments").insert({
+    store_id: report.storeId,
+    courier: "aliclik",
+    guide_code: orderNumber,
+    external_order_number: orderNumber,
+    delivery_status: "pendiente",
+    status_category: categoryOf("pendiente"),
+    order_id: orphan.orderId,
+    matched: true,
+    match_method: "manual",
+    order_name: orphan.marker,
+    customer_name: req.customer?.name ?? null,
+    customer_phone: orphan.phone,
+    delivery_address: req.shipping?.address1 ?? req.customer?.address ?? null,
+    delivery_reference: req.shipping?.reference ?? null,
+    latitude: Number.isFinite(lat) ? lat : null,
+    longitude: Number.isFinite(lng) ? lng : null,
+    created_via: "aliclik_api",
+  });
+  if (insErr) {
+    report.errors.push(`huérfana ${orderNumber}: ${insErr.message}`);
+    return false;
+  }
+  report.orphansCreated++;
+
+  // Ya existe la fila: el snapshot que acabamos de recibir se aplica sobre ella
+  // y arrastra estado, custodia y recálculo del Master.
+  await applyAliclikSnapshot(order, admin);
+  return true;
 }
 
 const emptyReport = (storeId: string): StoreReport => ({
@@ -88,10 +245,13 @@ const emptyReport = (storeId: string): StoreReport => ({
   applied: 0,
   unknown: 0,
   orphansLinked: 0,
+  orphansCreated: 0,
+  orphansAmbiguous: 0,
   followUpScanned: 0,
   followUpApplied: 0,
   followUpDeferred: 0,
   followUpAbandoned: 0,
+  followUpMissing: 0,
   errors: [],
 });
 
@@ -114,9 +274,17 @@ async function reconcileStore(
     .eq("status", "pending")
     .lt("created_at", new Date(now.getTime() - ORPHAN_MIN_AGE_MS).toISOString());
 
-  const orphans = (pending ?? []).map((p) => {
-    const req = (p.request ?? {}) as { customer?: { phone?: string } };
-    return { id: p.id, orderId: p.order_id, phone: normalizePhone(req.customer?.phone ?? null) };
+  const orphans: Orphan[] = (pending ?? []).map((p) => {
+    const req = (p.request ?? {}) as OrphanRequest;
+    return {
+      id: p.id,
+      orderId: p.order_id,
+      phone: normalizePhone(req.customer?.phone ?? null),
+      // La marca que estampamos en la nota al crear. Es la identidad; el
+      // teléfono queda solo como respaldo para las intenciones anteriores a esto.
+      marker: readOrderMarker(req.note),
+      request: req,
+    };
   });
 
   // Lo que el barrido por fechas alcanza a ver. Sirve para no volver a
@@ -141,19 +309,17 @@ async function reconcileStore(
       else if (applied.outcome === "unknown_order") {
         report.unknown++;
 
-        // ¿Es el pedido de una creación que se fue en timeout? Se empareja por
-        // teléfono, que es el único dato estable que enviamos y que Aliclik
-        // devuelve.
-        const phone = normalizePhone(order.customer?.phone ?? null);
-        const orphan = phone ? orphans.find((o) => o.phone && o.phone === phone) : undefined;
+        // ¿Es el pedido de una creación que se fue en timeout?
+        //
+        // Primero por la MARCA que estampamos en la nota (§ stampOrderMarker):
+        // es identidad, no parecido. El teléfono queda como respaldo para las
+        // intenciones anteriores a la marca, y solo si es inequívoco: hay
+        // clientes con dos pedidos abiertos a la vez, y pegarle la guía al
+        // equivocado es peor que no pegarla.
+        const orphan = matchOrphan(order, orphans, report);
         if (orphan && order.orderNumber) {
-          const { error } = await admin
-            .from("shipments")
-            .update({ external_order_number: order.orderNumber })
-            .eq("order_id", orphan.orderId)
-            .eq("courier", "aliclik")
-            .is("external_order_number", null);
-          if (!error) {
+          const rescued = await rescueOrphanGuide(admin, order, orphan, report);
+          if (rescued) {
             await admin
               .from("aliclik_order_requests")
               .update({
@@ -183,11 +349,27 @@ async function reconcileStore(
 /**
  * Segundo pase: las guías vivas a las que la ventana de fechas ya no llega.
  *
+ * El barrido de arriba relee por rango de fechas, así que una guía que lleva más
+ * de LOOKBACK_DAYS abierta deja de aparecer y su estado se congela: la única
+ * forma de moverla era que alguien subiera un Excel. Eso es exactamente lo que
+ * pasó con las guías en POR DEVOLVER — el reporte amplio que traía DEVUELTO dejó
+ * de subirse el 21-07 y quedaron 131 abiertas, con una mediana de 18 días y
+ * hasta 38.
+ *
  * Se consultan de una en una porque no hay forma de pedirle a Aliclik "estas
- * guías concretas" — solo rangos y búsqueda por número. El coste está acotado
- * por `FOLLOW_UP_LIMIT` y por el propio universo: solo las guías creadas por API
- * tienen `external_order_number`, así que las que entraron por Excel ni entran
- * en la cuenta.
+ * guías concretas" — solo rangos y búsqueda por número. `getOrder` no filtra por
+ * fecha, así que alcanza cualquier antigüedad. El coste está acotado por
+ * `FOLLOW_UP_LIMIT`: a cada pasada le tocan las más calladas, y con el cron cada
+ * 20 minutos el atraso se drena en pocas horas sin castigar la API ni agotar
+ * `maxDuration`.
+ *
+ * ALCANZA TAMBIÉN A LAS DEL EXCEL. El identificador de consulta sale de
+ * `followUpKey`: `external_order_number` si lo hay y `guide_code` si no. Sin ese
+ * respaldo el pase dejaría fuera a 277 de las 583 guías vivas —las que entraron
+ * por importación— que son justo las que se congelan.
+ *
+ * Lo que Aliclik ya no reconoce NO se toca: se cuenta en `followUpMissing`.
+ * Cerrar una guía porque una búsqueda vino vacía sería inventar un desenlace.
  *
  * Un fallo aquí no rompe la pasada: el barrido por fechas ya se aplicó y esto
  * es trabajo extra que puede reintentarse en veinte minutos.
@@ -200,12 +382,19 @@ async function followUpLiveGuides(
   now: Date,
   report: StoreReport,
 ): Promise<void> {
+  // Las vivas se filtran en SQL —y no solo en el selector puro— porque sin ese
+  // filtro la consulta traería las 3.818 guías de la tienda y PostgREST la
+  // truncaría en su tope de filas, recortando el universo en silencio. El
+  // `limit` explícito es el mismo seguro, ordenado por la más callada primero:
+  // hoy las vivas rondan las 250, muy por debajo del tope.
   const { data, error } = await admin
     .from("shipments")
-    .select("id,external_order_number,delivery_status,last_report_at,created_at")
+    .select("id,external_order_number,guide_code,delivery_status,last_report_at,created_at")
     .eq("store_id", storeId)
     .eq("courier", "aliclik")
-    .not("external_order_number", "is", null);
+    .in("delivery_status", ["pendiente", "en_ruta"])
+    .order("last_report_at", { ascending: true, nullsFirst: true })
+    .limit(FOLLOW_UP_POOL);
 
   if (error) {
     report.errors.push(`seguimiento: ${error.message}`);
@@ -222,18 +411,17 @@ async function followUpLiveGuides(
   report.followUpAbandoned = selection.abandoned;
 
   for (const guide of selection.due) {
-    const orderNumber = (guide.external_order_number ?? "").trim();
+    const key = followUpKey(guide);
     report.followUpScanned++;
     try {
-      const res = await refreshAliclikOrder(orderNumber, { apiToken }, admin);
+      const res = await refreshAliclikOrder(key, { apiToken }, admin);
       if (res.outcome === "applied") report.followUpApplied++;
+      else if (res.outcome === "unknown_order") report.followUpMissing++;
       else if (res.outcome === "error" && res.error) {
-        report.errors.push(`seguimiento ${orderNumber}: ${res.error}`);
+        report.errors.push(`seguimiento ${key}: ${res.error}`);
       }
     } catch (e) {
-      report.errors.push(
-        `seguimiento ${orderNumber}: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      report.errors.push(`seguimiento ${key}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 }

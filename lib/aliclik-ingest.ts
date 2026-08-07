@@ -8,7 +8,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ParsedShipmentRow } from "./aliclik-import";
 import { parseAliclikReport } from "./aliclik-import";
 import { matchShipment, type MatchResult, type OrderCandidate } from "./shipment-match";
-import { categoryOf, isPending, maxDeliveryDate, reconcileDeliveryStatus } from "./shipments";
+import {
+  categoryOf,
+  isPending,
+  maxDeliveryDate,
+  reconcileReportedDeliveryStatus,
+} from "./shipments";
 import { evaluateFenix, type FenixStockRow } from "./fenix";
 import { recomputeOrderMasterSafe } from "./order-master";
 import {
@@ -29,6 +34,8 @@ interface ExistingShipment {
   order_id: string | null;
   store_id: string;
   last_report_at: string | null;
+  /** Solo la escribe la vía API; decide si este reporte puede tocar el estado. */
+  api_report_at: string | null;
   returned_at: string | null;
   dispatched_at: string | null;
   delivered_source: string | null;
@@ -159,7 +166,13 @@ export async function ingestAliclikReport(
   const shipmentRows: Record<string, unknown>[] = [];
   for (const [guide, inc] of incomingByGuide) {
     const existing = existingByGuide.get(guide);
-    const mergedStatus = reconcileDeliveryStatus(existing?.delivery_status, inc.row.delivery_status);
+    // La API manda: si su última lectura sigue fresca, el reporte no cambia el
+    // estado (ver reconcileReportedDeliveryStatus en lib/shipments.ts).
+    const mergedStatus = reconcileReportedDeliveryStatus(
+      existing?.delivery_status,
+      inc.row.delivery_status,
+      existing?.api_report_at,
+    );
     const keepManualAddress = existing?.address_override === true;
     const district = keepManualAddress
       ? existing.district
@@ -468,14 +481,14 @@ async function fetchExistingShipments(
   for (const chunk of chunked(guideCodes, 200)) {
     const currentResult = await admin
       .from("shipments")
-      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,returned_at,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,returned_at,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
       .eq("courier", "aliclik")
       .in("guide_code", chunk);
     let data: unknown = currentResult.data;
     if (isMissingProvinceColumn(currentResult.error)) {
       const legacyResult = await admin
         .from("shipments")
-        .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,returned_at,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+        .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,returned_at,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
         .eq("courier", "aliclik")
         .in("guide_code", chunk);
       data = legacyResult.data;

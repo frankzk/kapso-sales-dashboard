@@ -142,7 +142,9 @@ describe("parseAliclikRow", () => {
     expect(row.customer_name).toBe("Perla Guerrero Linares");
     expect(row.customer_phone).toBe("51965956470");
     expect(row.city).toBe("cusco");
-    expect(row.delivery_status).toBe("pendiente"); // not delivered → gestión queue
+    // ESTADO DESPACHO=POR DEVOLVER (TO_RETURN): el paquete ya salió y vuelve al
+    // origen — está en calle, en_ruta (En curso), no en la cola de armado.
+    expect(row.delivery_status).toBe("en_ruta");
     expect(row.store_hint).toBe("KENKU");
   });
 
@@ -176,17 +178,57 @@ describe("parseAliclikRow", () => {
     ).toBe("entregado");
   });
 
-  it("classifies every non-delivered outcome as pendiente (enters gestión)", () => {
-    // CANCELADO / NO CONTESTA / POR ENTREGAR / etc. → pendiente, regardless of despacho
-    for (const entrega of ["CANCELADO", "NO CONTESTA", "POR ENTREGAR", "RECHAZADO"]) {
-      expect(
-        parseAliclikRow({
-          "NRO. PEDIDO": "AUR5X1",
-          "ESTADO DESPACHO": "POR DEVOLVER",
-          "ESTADO ENTREGA": entrega,
-        }).delivery_status,
-      ).toBe("pendiente");
-    }
+  it("resuelve el estado del trío ESTADO ENTREGA + DESPACHO de Aliclik", () => {
+    const status = (entrega: string, despacho?: string) =>
+      parseAliclikRow({
+        "NRO. PEDIDO": "AUR5X1",
+        "ESTADO ENTREGA": entrega,
+        ...(despacho ? { "ESTADO DESPACHO": despacho } : {}),
+      }).delivery_status;
+
+    // Bajas: canceladas/anuladas/rechazadas cierran como anulado.
+    expect(status("CANCELADO", "VALIDADO")).toBe("anulado");
+    expect(status("ANULADO", "POR DEVOLVER")).toBe("anulado");
+    // DEVUELTO (RETURNED) manda: el paquete volvió, se cierra aunque la entrega
+    // diga NO CONTESTA o RECHAZADO.
+    expect(status("NO CONTESTA", "DEVUELTO")).toBe("anulado");
+    expect(status("RECHAZADO", "DEVUELTO")).toBe("anulado");
+
+    // Siguen en calle (En curso): intentos fallidos y reprogramaciones, y todo lo
+    // que ya salió del almacén.
+    expect(status("NO CONTESTA", "POR DEVOLVER")).toBe("en_ruta");
+    expect(status("RECHAZADO", "VALIDADO")).toBe("en_ruta");
+    expect(status("REPROGRAMADO", "VALIDADO")).toBe("en_ruta");
+    expect(status("POR ENTREGAR", "RECOLECTADO")).toBe("en_ruta"); // PICKED
+    expect(status("POR ENTREGAR", "EN AGENCIA")).toBe("en_ruta"); // hub local
+
+    // Aún en almacén → pendiente (Preparación / Por despachar): preparado sin
+    // despachar, por preparar, o por entregar sin señal de despacho.
+    expect(status("POR ENTREGAR", "VALIDADO")).toBe("pendiente"); // PREPARED
+    expect(status("POR ENTREGAR", "POR PREPARAR")).toBe("pendiente"); // TO_PREPARE
+    expect(status("POR ENTREGAR", "DEJADO EN ALMACÉN")).toBe("pendiente");
+    expect(status("POR ENTREGAR")).toBe("pendiente"); // PENDING_DELIVERY sin despacho
+
+    // ENTREGADO cierra por encima de cualquier despacho.
+    expect(status("ENTREGADO", "POR DEVOLVER")).toBe("entregado");
+  });
+
+  it("un despacho reconocible clasifica aunque falte ESTADO ENTREGA", () => {
+    const only = (despacho: string) =>
+      parseAliclikRow({ "NRO. PEDIDO": "AUR5X1", "ESTADO DESPACHO": despacho }).delivery_status;
+    expect(only("RECOLECTADO")).toBe("en_ruta"); // PICKED
+    expect(only("REMANENTE EN TRÁNSITO")).toBe("en_ruta");
+    expect(only("POR PREPARAR")).toBe("pendiente"); // TO_PREPARE
+    expect(only("VALIDADO")).toBe("pendiente"); // PREPARED, aún en almacén
+    expect(only("DEVUELTO")).toBe("anulado"); // RETURNED
+  });
+
+  it("sin ninguna señal reconocible cae al binario histórico (pendiente)", () => {
+    // Un valor que no es ni ENTREGA ni DESPACHO conocido no inventa estado.
+    expect(
+      parseAliclikRow({ "NRO. PEDIDO": "AUR5X1", "ESTADO DE PEDIDO": "cualquier cosa" })
+        .delivery_status,
+    ).toBe("pendiente");
   });
 
   it("extracts a bare-number NOTA token as an unconfirmed candidate (needs phone cross-check)", () => {
@@ -299,11 +341,15 @@ describe("devolución consumada (estado de despacho)", () => {
   );
 
   it("NO da por devuelto un paquete que todavía vuelve (TO_RETURN / POR DEVOLVER)", () => {
-    // Sigue vivo y el equipo lo puede interceptar: se queda en la cola de gestión.
+    // Sigue vivo y el equipo lo puede interceptar, así que `returned` es false y
+    // la guía no se cierra. Pero tampoco está «por armar»: ya salió del almacén y
+    // está físicamente en la calle volviendo, así que su estado es `en_ruta`. En
+    // `pendiente` el Master lo dibujaría en Preparación · Por armar, que es
+    // justamente lo que este cambio corrige.
     for (const value of ["TO_RETURN", "POR DEVOLVER"]) {
       const row = returned({ "ÚLTIMO ESTADO DESPACHO": value, "ESTADO ENTREGA": "NO CONTESTA" });
       expect(row.returned).toBe(false);
-      expect(row.delivery_status).toBe("pendiente");
+      expect(row.delivery_status).toBe("en_ruta");
     }
   });
 

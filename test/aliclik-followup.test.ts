@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   selectFollowUpGuides,
+  followUpKey,
   type FollowUpCandidate,
   type SelectFollowUpOpts,
 } from "@/lib/aliclik-followup";
@@ -13,6 +14,7 @@ const daysAgo = (n: number) => new Date(NOW.getTime() - n * DAY_MS).toISOString(
 const guide = (over: Partial<FollowUpCandidate> = {}): FollowUpCandidate => ({
   id: "s1",
   external_order_number: "ALC000123456789",
+  guide_code: null,
   delivery_status: "en_ruta",
   last_report_at: daysAgo(20),
   created_at: daysAgo(25),
@@ -50,16 +52,55 @@ describe("selectFollowUpGuides — a quién se persigue", () => {
     expect(res.due).toEqual([]);
   });
 
-  // Las guías que entraron por Excel no tienen orderNumber: no hay forma de
-  // preguntarle a Aliclik por ellas, así que no cuentan como pendientes.
-  it("ignora las guías sin external_order_number", () => {
-    const res = selectFollowUpGuides([guide({ external_order_number: null })], opts());
+  // Las guías que entraron por Excel no tienen orderNumber, pero SÍ guide_code, y
+  // es el mismo identificador: se persiguen igual. Son la mayoría del universo.
+  it("persigue una guía del Excel usando su guide_code", () => {
+    const excel = guide({ external_order_number: null, guide_code: "AUR5X836431268256" });
+    const res = selectFollowUpGuides([excel], opts());
+    expect(res.due).toEqual([excel]);
+  });
+
+  it("ignora la guía sin ningún identificador con el que preguntar", () => {
+    const res = selectFollowUpGuides(
+      [guide({ external_order_number: null, guide_code: null })],
+      opts(),
+    );
     expect(res.due).toEqual([]);
     expect(res.deferred).toBe(0);
   });
 
-  it("ignora un external_order_number en blanco", () => {
-    expect(selectFollowUpGuides([guide({ external_order_number: "   " })], opts()).due).toEqual([]);
+  it("ignora identificadores en blanco por ambos campos", () => {
+    const res = selectFollowUpGuides(
+      [guide({ external_order_number: "   ", guide_code: "  " })],
+      opts(),
+    );
+    expect(res.due).toEqual([]);
+  });
+
+  // El barrido por fechas anota lo que ya visitó. Como orderNumber y guide_code
+  // son el mismo valor, una guía del Excel recién barrida no se vuelve a pedir.
+  it("no repite una guía del Excel que el barrido acaba de ver", () => {
+    const excel = guide({ external_order_number: null, guide_code: "AUR5X1" });
+    const res = selectFollowUpGuides([excel], opts({ scanned: new Set(["AUR5X1"]) }));
+    expect(res.due).toEqual([]);
+  });
+});
+
+describe("followUpKey — con qué se pregunta", () => {
+  it("prefiere external_order_number cuando está", () => {
+    expect(followUpKey(guide({ external_order_number: "ALC1", guide_code: "AUR5X1" }))).toBe("ALC1");
+  });
+
+  it("cae a guide_code cuando no hay orderNumber", () => {
+    expect(followUpKey(guide({ external_order_number: null, guide_code: "AUR5X1" }))).toBe("AUR5X1");
+  });
+
+  it("trata el blanco como ausencia y sigue al respaldo", () => {
+    expect(followUpKey(guide({ external_order_number: "  ", guide_code: "AUR5X1" }))).toBe("AUR5X1");
+  });
+
+  it("devuelve cadena vacía cuando no hay ninguno", () => {
+    expect(followUpKey(guide({ external_order_number: null, guide_code: null }))).toBe("");
   });
 });
 

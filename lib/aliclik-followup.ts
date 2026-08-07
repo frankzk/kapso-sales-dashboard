@@ -30,9 +30,27 @@ const TERMINAL = new Set(["entregado", "anulado", "transferido"]);
 export interface FollowUpCandidate {
   id: string;
   external_order_number: string | null;
+  guide_code: string | null;
   delivery_status: string;
   last_report_at: string | null;
   created_at: string | null;
+}
+
+/**
+ * Con qué identificador se le pregunta a Aliclik por esta guía.
+ *
+ * Son el MISMO espacio de nombres: el `orderNumber` que devuelve la API es el
+ * código AUR5X que también trae el reporte, y en las guías que tienen los dos
+ * campos coinciden todas. Por eso `guide_code` sirve de respaldo y no es un
+ * identificador distinto — es el mismo dato por otra vía.
+ *
+ * Importa porque solo las guías que creamos nosotros por API traen
+ * `external_order_number`: 601 de 3.870. Y mirando solo las VIVAS, que son las
+ * que este pase persigue, 277 de 583 no lo tienen — casi la mitad quedaría sin
+ * consultar, y son justo las que se congelan cuando nadie sube un reporte.
+ */
+export function followUpKey(c: FollowUpCandidate): string {
+  return (c.external_order_number ?? "").trim() || (c.guide_code ?? "").trim();
 }
 
 export interface SelectFollowUpOpts {
@@ -68,9 +86,9 @@ function lastSignalAt(c: FollowUpCandidate): string | null {
  * Decide a qué guías vivas hay que preguntarles por su cuenta.
  *
  * Se descarta una guía cuando ya terminó, cuando no tenemos con qué preguntar
- * (sin `external_order_number` no hay consulta posible — las guías que entraron
- * por Excel están en ese caso), cuando el barrido por fechas acaba de verla, o
- * cuando lleva callada más de `maxSilenceMs`.
+ * (ni `external_order_number` ni `guide_code`: sin identificador no hay consulta
+ * posible), cuando el barrido por fechas acaba de verla, o cuando lleva callada
+ * más de `maxSilenceMs`.
  *
  * El resto se ordena por señal más antigua primero. Una guía sin fecha ninguna
  * se trata como la más urgente: es la que más tiempo lleva sin que nadie mire.
@@ -84,9 +102,9 @@ export function selectFollowUpGuides(
 
   const live = candidates.filter((c) => {
     if (TERMINAL.has(c.delivery_status)) return false;
-    const orderNumber = (c.external_order_number ?? "").trim();
-    if (!orderNumber) return false;
-    if (opts.scanned.has(orderNumber)) return false;
+    const key = followUpKey(c);
+    if (!key) return false;
+    if (opts.scanned.has(key)) return false;
 
     const signal = lastSignalAt(c);
     if (signal) {

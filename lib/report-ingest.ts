@@ -15,7 +15,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { chunk } from "@/lib/access";
 import { matchShipment, type MatchResult, type OrderCandidate } from "@/lib/shipment-match";
-import { reconcileDeliveryStatus, categoryOf } from "@/lib/shipments";
+import { reconcileReportedDeliveryStatus, categoryOf } from "@/lib/shipments";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import type { CanonicalReportRow } from "@/lib/couriers/registry";
 
@@ -63,12 +63,14 @@ interface ExistingGuide {
   match_method: string | null;
   order_id: string | null;
   last_report_at: string | null;
+  /** Solo la escribe la vía API; decide si este reporte puede tocar el estado. */
+  api_report_at: string | null;
   pickup_state: string | null;
   returned_at: string | null;
 }
 
 const EXISTING_COLUMNS =
-  "id,guide_code,store_id,delivery_status,matched,match_method,order_id,last_report_at,pickup_state,returned_at";
+  "id,guide_code,store_id,delivery_status,matched,match_method,order_id,last_report_at,api_report_at,pickup_state,returned_at";
 
 async function fetchExisting(
   admin: SupabaseClient,
@@ -130,8 +132,12 @@ async function fetchOrderCandidates(
  * Ingesta un reporte ya parseado a registros canónicos.
  *
  * Reglas que se respetan siempre, vengan del courier que vengan:
- *  - el estado solo AVANZA (`reconcileDeliveryStatus`): un reporte viejo
- *    recargado no puede devolver a "pendiente" una guía ya entregada;
+ *  - la API manda sobre el reporte (`reconcileReportedDeliveryStatus`): si su
+ *    última lectura sigue fresca, el archivo importado no cambia el estado —
+ *    la API describe el presente y el Excel es una foto que alguien subió;
+ *  - fuera de esa ventana el estado solo AVANZA (`reconcileDeliveryStatus`):
+ *    un reporte viejo recargado no puede devolver a "pendiente" una guía ya
+ *    entregada;
  *  - un vínculo manual con un pedido, o un "sin pedido" ya decidido, no se pisa;
  *  - lo que no se pueda vincular queda en la cola de revisión manual, no se
  *    descarta ni se adivina.
@@ -213,7 +219,12 @@ export async function ingestCourierReport(
 
   for (const [guide, inc] of incoming) {
     const existing = existingByGuide.get(guide);
-    const mergedStatus = reconcileDeliveryStatus(existing?.delivery_status, inc.row.delivery_status);
+    // La API manda sobre el Excel mientras su lectura siga fresca.
+    const mergedStatus = reconcileReportedDeliveryStatus(
+      existing?.delivery_status,
+      inc.row.delivery_status,
+      existing?.api_report_at,
+    );
     if (!existing || existing.delivery_status !== mergedStatus) updatedCount++;
 
     // El vínculo con el pedido nunca se degrada.
