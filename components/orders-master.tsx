@@ -334,6 +334,7 @@ export function OrdersMasterBoard({
   canCreateTandersGuide,
   canCreateShalomGuide,
   canDispatch,
+  canWarehouse,
   closurePermissions,
 }: {
   stores: StoreSummary[];
@@ -368,6 +369,7 @@ export function OrdersMasterBoard({
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
   canDispatch: boolean;
+  canWarehouse: boolean;
   closurePermissions: {
     canReturn: boolean;
     canInventory: boolean;
@@ -525,6 +527,15 @@ export function OrdersMasterBoard({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {canWarehouse && (
+            <Link
+              href="/dashboard/pedidos/almacen"
+              className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              <span aria-hidden="true">▣</span>
+              Almacén
+            </Link>
+          )}
           {canDispatch && (
             <Link
               href="/dashboard/pedidos/despacho"
@@ -1880,9 +1891,9 @@ function drawerNextAction(row: OrderMasterRow, showPayments: boolean): DrawerNex
         substage === "por_armar"
           ? "El paquete debe quedar completo y listo antes de incorporarlo a una ruta."
           : "La ruta define qué rótulo se genera y qué validaciones debe cumplir el pedido.",
-      cta: substage === "por_armar" ? "Ir a despacho" : "Revisar rutas",
+      cta: substage === "por_armar" ? "Ir al Almacén" : "Revisar rutas",
       ...(substage === "por_armar"
-        ? { href: "/dashboard/pedidos/despacho" }
+        ? { href: "/dashboard/pedidos/almacen" }
         : { target: "rutas" as const }),
       tone: "indigo",
     };

@@ -31,6 +31,8 @@ import {
 } from "@/lib/dispatch-access";
 
 const DISPATCH_PATH = "/dashboard/pedidos/despacho";
+/** El armado vive en su propia pantalla: la mesa gestiona rutas, no cajas. */
+const WAREHOUSE_PATH = "/dashboard/pedidos/almacen";
 
 /** Tope defensivo al armar una ruta de golpe: una tanda real son decenas. */
 const MAX_ROUTE_BATCH = 100;
@@ -238,9 +240,10 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
     orderNote: "Paquete escaneado y dejado listo para despacho.",
   });
   if (shipment.order_id) await recomputeOrderMasterSafe(admin, [shipment.order_id]);
+  revalidatePath(WAREHOUSE_PATH);
   revalidatePath(DISPATCH_PATH);
   revalidatePath("/dashboard/pedidos");
-  return { notice: `${shipment.output_code ?? shipment.guide_code} quedó listo para despacho.`, shipment };
+  return { notice: `${dispatchScanLabel(shipment)} quedó listo para despacho.`, shipment };
 }
 
 const createManifestSchema = z.object({

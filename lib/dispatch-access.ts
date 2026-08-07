@@ -1,4 +1,6 @@
 import { createServerSupabase } from "@/lib/db";
+import { limaDateKey } from "@/lib/aliclik-geo";
+import { limaDayBounds } from "@/lib/daily-summary";
 import type { DispatchManifestState, DispatchRouteKind } from "@/lib/dispatch";
 
 export interface DispatchShipment {
@@ -161,6 +163,74 @@ export async function getDispatchWorkspaceData(): Promise<DispatchWorkspaceData>
     assignableShipments: ((readyRes.data ?? []) as unknown as DispatchShipment[]).filter(
       (shipment) => !activeShipmentIds.has(shipment.id),
     ),
+  };
+}
+
+/** Una salida pendiente de armar, con la operación que decide su ruta. */
+export interface WarehouseShipment extends DispatchShipment {
+  operation: string | null;
+}
+
+export interface WarehouseStationData {
+  /**
+   * Lo que al almacén le falta armar HOY: salidas en custodia de la empresa sin
+   * escanear, cuyo pedido el Master todavía cuenta en `Preparación · Por armar`.
+   * Filtrar por el pedido y no solo por la salida es lo que deja fuera las
+   * salidas huérfanas —pedidos cancelados o ya despachados por otra caja— que
+   * de otro modo engordarían la cola con trabajo que nadie va a hacer.
+   */
+  pending: WarehouseShipment[];
+  /** Armados de hoy: el acuse de que el escaneo entró. */
+  armedToday: DispatchShipment[];
+  /** Cuántas quedaron fuera del corte, para no fingir que la cola está completa. */
+  pendingOmitted: number;
+}
+
+const WAREHOUSE_PENDING_LIMIT = 300;
+
+export async function getWarehouseStationData(): Promise<WarehouseStationData> {
+  const sb = await createServerSupabase();
+  const today = limaDayBounds(limaDateKey());
+  const [pendingRes, armedRes] = await Promise.all([
+    sb
+      .from("shipments")
+      .select(DISPATCH_SHIPMENT_COLUMNS)
+      .eq("custody_state", "empresa")
+      .in("preparation_state", ["rotulo_generado", "en_armado"])
+      .order("created_at", { ascending: false })
+      .limit(WAREHOUSE_PENDING_LIMIT + 1),
+    sb
+      .from("shipments")
+      .select(DISPATCH_SHIPMENT_COLUMNS)
+      .eq("custody_state", "empresa")
+      .eq("preparation_state", "listo_despacho")
+      .gte("ready_at", today.startIso)
+      .order("ready_at", { ascending: false })
+      .limit(200),
+  ]);
+
+  const rows = (pendingRes.data ?? []) as unknown as DispatchShipment[];
+  const orderIds = [...new Set(rows.map((row) => row.order_id).filter((id): id is string => !!id))];
+  const operationByOrder = new Map<string, string | null>();
+  for (let start = 0; start < orderIds.length; start += 200) {
+    const { data } = await sb
+      .from("order_master")
+      .select("order_id,macro_operation")
+      .eq("macro_substage", "por_armar")
+      .in("order_id", orderIds.slice(start, start + 200));
+    for (const row of (data ?? []) as { order_id: string; macro_operation: string | null }[]) {
+      operationByOrder.set(row.order_id, row.macro_operation);
+    }
+  }
+
+  const pending = rows
+    .filter((row) => !!row.order_id && operationByOrder.has(row.order_id))
+    .map((row) => ({ ...row, operation: operationByOrder.get(row.order_id ?? "") ?? null }));
+
+  return {
+    pending: pending.slice(0, WAREHOUSE_PENDING_LIMIT),
+    armedToday: (armedRes.data ?? []) as unknown as DispatchShipment[],
+    pendingOmitted: Math.max(0, pending.length - WAREHOUSE_PENDING_LIMIT),
   };
 }
 

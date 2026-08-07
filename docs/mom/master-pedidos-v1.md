@@ -294,6 +294,14 @@ Reglas:
 - Si faltan datos, Yelitza avisa al equipo, no genera guía y no arma.
 - El escaneo del QR confirma que el paquete está armado y lo mueve a
   `Por despachar`.
+- El armado ocurre en la pantalla de Almacén (`/dashboard/pedidos/almacen`), no
+  en la Mesa de despacho. Son dos oficios distintos: aquí se cierran cajas y la
+  cola es la de esta fase (`Preparación · Por armar`); allá se decide qué caja
+  va con qué courier. Quien arma no necesita permisos de ruta y ve su pendiente
+  además de lo que ya escaneó.
+- La cola de armado se define por el PEDIDO, no por la salida suelta: una salida
+  cuyo pedido ya no está en `Por armar` —cancelado, o despachado por otra caja—
+  no es trabajo de almacén y no se lista.
 - El escaneo acepta cuatro identificadores del mismo rótulo: el QR, el código de
   salida, la guía del courier y el número de pedido en código de barras. Los tres
   primeros designan una caja; el número de pedido designa al pedido, que puede
@@ -1031,12 +1039,17 @@ Implementación publicada en `/dashboard/pedidos/despacho`:
 El orden es el de la operación real, y cada paso lo hace una persona distinta:
 
 1. **Armar en almacén.** Almacén escanea cuando el pedido está completo,
-   rotulado y dentro de su caja.
+   rotulado y dentro de su caja. Ocurre en la pantalla de **Almacén**, no en la
+   Mesa de despacho.
 2. **Asignar a ruta.** Seguimiento decide en la computadora qué va con quién,
    **seleccionando pedidos, sin escanear**.
 3. **Cotejo de oficina.** El encargado escanea cada bolsa que entra en la caja
    del motorizado y confirma que está lo asignado.
 4. **Cotejo del motorizado.** El motorizado escanea lo que recibe.
+
+La **Mesa de despacho** contiene solo los pasos 2 a 4, que son los de una ruta:
+asignar, cotejar oficina y recibir. El paso 1 tiene pantalla propia porque no es
+trabajo de ruta y su cola es otra —lo que falta armar—, que la mesa nunca mostró.
 
 Los pasos 1 y 2 son **independientes**: la ruta se planifica antes de que
 almacén termine de armar. Por eso asignar **no exige** el escaneo de almacén —
