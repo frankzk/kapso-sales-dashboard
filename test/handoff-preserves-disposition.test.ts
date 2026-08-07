@@ -206,7 +206,10 @@ describe("applyHandoff: leads sin teléfono (0105)", () => {
     const sb = new FakeSupabase(null);
     await applyHandoff(sb as any, STORE, bodySinTelefono("esperando respuesta"));
     const row = sb.upserts[0]!;
-    expect(row.phone).toBeNull();
+    // La columna NO se escribe (antes se mandaba `null` explícito). En un INSERT
+    // el valor por defecto ya es null, y en un UPDATE no tocarla es lo que evita
+    // borrarle el teléfono a un lead que sí lo tenía.
+    expect(row).not.toHaveProperty("phone");
     expect(row.bsuid).toBe(BSUID);
     expect(row.username).toBe("cfloresw13");
     // Y sube a la cola, que es el punto de todo esto.
@@ -257,5 +260,75 @@ describe("applyHandoff: leads sin teléfono (0105)", () => {
     expect(res.ok).toBe(true);
     expect(sb.upserts[0]!.needs_attention).toBe(true);
     expect(sb.upserts[0]).not.toHaveProperty("status");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Emparejar por conversación — el caso que encontró la superficie de anomalías
+// el día que se encendió: un aviso del watchdog ("esperando respuesta") llegó
+// con `conversationId` pero sin teléfono ni BSUID, y se descartaba. Un cliente
+// esperando que nunca subía a "Atender ahora", con el webhook respondiendo 200.
+// ---------------------------------------------------------------------------
+
+const bodySoloConversacion = (reason: string) => ({
+  event: "workflow.execution.handoff",
+  conversation: { id: "31513f90-ffae-4c67" },
+  reason,
+  context_summary: "el cliente espera respuesta",
+});
+
+describe("applyHandoff: emparejar por conversación", () => {
+  it("un lead conocido por su conversación SÍ sube a Atender ahora", async () => {
+    const sb = new FakeSupabase({ status: "volver_a_llamar", has_order: false });
+    const res = await applyHandoff(sb as any, STORE, bodySoloConversacion("esperando respuesta"));
+    expect(res.ok).toBe(true);
+    expect(sb.upserts[0]!.needs_attention).toBe(true);
+  });
+
+  it("NO le borra el teléfono al lead que empareja", async () => {
+    // El riesgo real de este camino. El lead casi siempre TIENE teléfono y el
+    // payload no lo trae; un `phone: null` en el update lo dejaría sin poder
+    // llamar y sin poder crear guía. Lo mismo con el hilo de la conversación.
+    const sb = new FakeSupabase({ status: "nuevo", has_order: false });
+    await applyHandoff(sb as any, STORE, bodySoloConversacion("esperando respuesta"));
+    const row = sb.upserts[0]!;
+    expect(row).not.toHaveProperty("phone");
+    expect(row).not.toHaveProperty("bsuid");
+  });
+
+  it("escribe con UPDATE, no con upsert", async () => {
+    // Un upsert por `kapso_conversation_id` no tiene restricción única que le
+    // sirva de árbitro: PostgREST fallaría con "no unique or exclusion
+    // constraint matching the ON CONFLICT specification", y solo en producción.
+    const sb = new FakeSupabase({ status: "nuevo", has_order: false });
+    await applyHandoff(sb as any, STORE, bodySoloConversacion("esperando respuesta"));
+    expect(sb.upsertOpts[0]).toBeNull(); // un update no lleva onConflict
+  });
+
+  it("una conversación que ningún lead tiene se separa de 'sin identidad'", async () => {
+    // Son dos problemas distintos: este se arregla solo cuando el sync cree el
+    // lead; el otro no se arregla nunca. Mezclarlos en un mismo contador haría
+    // imposible saber cuál de los dos está subiendo.
+    const sb = new FakeSupabase(null);
+    const res = await applyHandoff(sb as any, STORE, bodySoloConversacion("esperando respuesta"));
+    expect(res).toEqual({ ok: false, reason: "unknown-conversation" });
+    expect(sb.upserts).toHaveLength(0);
+  });
+
+  it("sin conversación NI identidad sigue siendo 'no-identity'", async () => {
+    const sb = new FakeSupabase(null);
+    const res = await applyHandoff(sb as any, STORE, {
+      event: "workflow.execution.handoff",
+      reason: "esperando respuesta",
+    });
+    expect(res).toEqual({ ok: false, reason: "no-identity" });
+  });
+
+  it("con teléfono NO usa el camino de la conversación", async () => {
+    // Guardia de regresión: el 96 % del volumen sigue emparejando por número y
+    // creando el lead si no existe.
+    const { sb } = await run(null, "esperando respuesta");
+    expect(sb.upsertOpts[0]).toEqual({ onConflict: "store_id,phone" });
+    expect(sb.upserts[0]!.phone).toBe(PHONE);
   });
 });
