@@ -68,6 +68,13 @@ export interface DispatchWorkspaceData {
    * caja esté cerrada, y el escaneo se muestra como indicador.
    */
   assignableShipments: DispatchShipment[];
+  /**
+   * Lo que al almacén le falta armar, con la MISMA definición que su pantalla:
+   * la mesa informa el pendiente ajeno, no lo redefine. Contarlo aquí sobre
+   * `assignableShipments` daba un número mayor —incluía salidas de pedidos que
+   * ya nadie va a armar— y las dos pantallas se contradecían.
+   */
+  warehousePending: number;
 }
 
 export const DISPATCH_SHIPMENT_COLUMNS =
@@ -85,7 +92,7 @@ const ITEM_COLUMNS =
 
 export async function getDispatchWorkspaceData(): Promise<DispatchWorkspaceData> {
   const sb = await createServerSupabase();
-  const [activeManifestRes, historyManifestRes, readyRes] = await Promise.all([
+  const [activeManifestRes, historyManifestRes, readyRes, warehouse] = await Promise.all([
     sb
       .from("dispatch_manifests")
       .select(MANIFEST_COLUMNS)
@@ -114,6 +121,7 @@ export async function getDispatchWorkspaceData(): Promise<DispatchWorkspaceData>
       .in("preparation_state", ["rotulo_generado", "en_armado", "listo_despacho"])
       .order("ready_at", { ascending: false, nullsFirst: false })
       .limit(400),
+    loadWarehousePending(sb),
   ]);
 
   const rawManifests = [
@@ -163,6 +171,7 @@ export async function getDispatchWorkspaceData(): Promise<DispatchWorkspaceData>
     assignableShipments: ((readyRes.data ?? []) as unknown as DispatchShipment[]).filter(
       (shipment) => !activeShipmentIds.has(shipment.id),
     ),
+    warehousePending: warehouse.pending.length,
   };
 }
 
@@ -182,23 +191,56 @@ export interface WarehouseStationData {
   pending: WarehouseShipment[];
   /** Armados de hoy: el acuse de que el escaneo entró. */
   armedToday: DispatchShipment[];
-  /** Cuántas quedaron fuera del corte, para no fingir que la cola está completa. */
+  /** Pedidos por armar que el tope dejó fuera, para no fingir cola completa. */
   pendingOmitted: number;
 }
 
-const WAREHOUSE_PENDING_LIMIT = 300;
+/** Tope defensivo sobre PEDIDOS por armar: un atraso real son decenas. */
+const WAREHOUSE_ORDER_LIMIT = 1000;
 
-export async function getWarehouseStationData(): Promise<WarehouseStationData> {
-  const sb = await createServerSupabase();
-  const today = limaDayBounds(limaDateKey());
-  const [pendingRes, armedRes] = await Promise.all([
-    sb
+/**
+ * La cola de armado, en una sola definición para toda la aplicación.
+ *
+ * Se parte de los PEDIDOS que el Master cuenta en `Preparación · Por armar` y
+ * se baja a sus salidas. Al revés —barrer salidas y filtrar después— el tope
+ * cae antes de saber cuáles cuentan, así que una salida pendiente antigua se
+ * pierde sin que nadie lo note: el recuento parece completo y no lo está.
+ */
+async function loadWarehousePending(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+): Promise<{ pending: WarehouseShipment[]; omitted: number }> {
+  const { data: orderRows } = await sb
+    .from("order_master")
+    .select("order_id,macro_operation")
+    .eq("macro_substage", "por_armar")
+    .limit(WAREHOUSE_ORDER_LIMIT + 1);
+  const orders = (orderRows ?? []) as { order_id: string; macro_operation: string | null }[];
+  const kept = orders.slice(0, WAREHOUSE_ORDER_LIMIT);
+  if (!kept.length) return { pending: [], omitted: 0 };
+
+  const operationByOrder = new Map(kept.map((row) => [row.order_id, row.macro_operation]));
+  const orderIds = [...operationByOrder.keys()];
+  const pending: WarehouseShipment[] = [];
+  for (let start = 0; start < orderIds.length; start += 200) {
+    const { data } = await sb
       .from("shipments")
       .select(DISPATCH_SHIPMENT_COLUMNS)
       .eq("custody_state", "empresa")
       .in("preparation_state", ["rotulo_generado", "en_armado"])
-      .order("created_at", { ascending: false })
-      .limit(WAREHOUSE_PENDING_LIMIT + 1),
+      .in("order_id", orderIds.slice(start, start + 200))
+      .order("created_at", { ascending: false });
+    for (const row of (data ?? []) as unknown as DispatchShipment[]) {
+      pending.push({ ...row, operation: operationByOrder.get(row.order_id ?? "") ?? null });
+    }
+  }
+  return { pending, omitted: orders.length - kept.length };
+}
+
+export async function getWarehouseStationData(): Promise<WarehouseStationData> {
+  const sb = await createServerSupabase();
+  const today = limaDayBounds(limaDateKey());
+  const [{ pending, omitted }, armedRes] = await Promise.all([
+    loadWarehousePending(sb),
     sb
       .from("shipments")
       .select(DISPATCH_SHIPMENT_COLUMNS)
@@ -209,28 +251,10 @@ export async function getWarehouseStationData(): Promise<WarehouseStationData> {
       .limit(200),
   ]);
 
-  const rows = (pendingRes.data ?? []) as unknown as DispatchShipment[];
-  const orderIds = [...new Set(rows.map((row) => row.order_id).filter((id): id is string => !!id))];
-  const operationByOrder = new Map<string, string | null>();
-  for (let start = 0; start < orderIds.length; start += 200) {
-    const { data } = await sb
-      .from("order_master")
-      .select("order_id,macro_operation")
-      .eq("macro_substage", "por_armar")
-      .in("order_id", orderIds.slice(start, start + 200));
-    for (const row of (data ?? []) as { order_id: string; macro_operation: string | null }[]) {
-      operationByOrder.set(row.order_id, row.macro_operation);
-    }
-  }
-
-  const pending = rows
-    .filter((row) => !!row.order_id && operationByOrder.has(row.order_id))
-    .map((row) => ({ ...row, operation: operationByOrder.get(row.order_id ?? "") ?? null }));
-
   return {
-    pending: pending.slice(0, WAREHOUSE_PENDING_LIMIT),
+    pending,
     armedToday: (armedRes.data ?? []) as unknown as DispatchShipment[],
-    pendingOmitted: Math.max(0, pending.length - WAREHOUSE_PENDING_LIMIT),
+    pendingOmitted: omitted,
   };
 }
 

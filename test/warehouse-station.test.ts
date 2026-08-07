@@ -25,6 +25,9 @@ function supabaseDouble(resolve: (call: Call) => unknown[]) {
   const calls: Call[] = [];
   return {
     calls,
+    /** La consulta que trae las salidas por armar (la que acota por pedido). */
+    pendingCall: () => calls.find((c) => c.table === "shipments" && c.in.some(([col]) => col === "order_id")),
+    armedCall: () => calls.find((c) => c.table === "shipments" && c.gte.length > 0),
     client: {
       from(table: string) {
         const call: Call = { table, eq: [], in: [], gte: [] };
@@ -50,7 +53,7 @@ function supabaseDouble(resolve: (call: Call) => unknown[]) {
   };
 }
 
-const salida = (id: string, orderId: string | null) => ({
+const salida = (id: string, orderId: string) => ({
   id,
   store_id: "store-1",
   courier: "por_definir",
@@ -66,49 +69,55 @@ const salida = (id: string, orderId: string | null) => ({
 });
 
 describe("getWarehouseStationData", () => {
-  it("deja fuera las salidas cuyo pedido ya no está Por armar", async () => {
+  it("baja desde los pedidos Por armar a sus salidas, con la operación de cada uno", async () => {
     const double = supabaseDouble((call) => {
       if (call.table === "order_master") {
-        // Sólo `vivo` sigue contado por el Master como Por armar.
-        return [{ order_id: "pedido-vivo", macro_operation: "lima" }];
+        return [
+          { order_id: "pedido-lima", macro_operation: "lima" },
+          { order_id: "pedido-provincia", macro_operation: "provincia_cod" },
+        ];
       }
-      if (call.eq.some(([col, val]) => col === "preparation_state" && val === "listo_despacho")) {
-        return [{ ...salida("armada", "pedido-vivo"), preparation_state: "listo_despacho", ready_at: "2026-08-07T15:00:00Z" }];
+      if (call.gte.length) {
+        return [{ ...salida("armada", "pedido-lima"), preparation_state: "listo_despacho", ready_at: "2026-08-07T15:00:00Z" }];
       }
-      return [salida("s1", "pedido-vivo"), salida("s2", "pedido-cancelado"), salida("s3", null)];
+      return [salida("s1", "pedido-lima"), salida("s2", "pedido-provincia")];
     });
     createServerSupabaseMock.mockResolvedValue(double.client);
 
     const data = await getWarehouseStationData();
 
-    expect(data.pending.map((s) => s.id)).toEqual(["s1"]);
-    expect(data.pending[0]?.operation).toBe("lima");
+    expect(data.pending.map((s) => s.id)).toEqual(["s1", "s2"]);
+    expect(data.pending.map((s) => s.operation)).toEqual(["lima", "provincia_cod"]);
     expect(data.armedToday.map((s) => s.id)).toEqual(["armada"]);
     expect(data.pendingOmitted).toBe(0);
   });
 
-  it("pide sólo lo que sigue en casa sin armar, y lo armado desde el corte del día", async () => {
-    const double = supabaseDouble(() => []);
+  it("acota las salidas a los pedidos Por armar, en casa y sin escanear", async () => {
+    const double = supabaseDouble((call) =>
+      call.table === "order_master" ? [{ order_id: "pedido-lima", macro_operation: "lima" }] : [],
+    );
     createServerSupabaseMock.mockResolvedValue(double.client);
 
     await getWarehouseStationData();
 
-    const [pendientes, armadas] = double.calls;
-    expect(pendientes?.eq).toContainEqual(["custody_state", "empresa"]);
-    expect(pendientes?.in).toContainEqual(["preparation_state", ["rotulo_generado", "en_armado"]]);
-    expect(armadas?.eq).toContainEqual(["preparation_state", "listo_despacho"]);
+    const pending = double.pendingCall();
+    expect(pending?.in).toContainEqual(["order_id", ["pedido-lima"]]);
+    expect(pending?.eq).toContainEqual(["custody_state", "empresa"]);
+    expect(pending?.in).toContainEqual(["preparation_state", ["rotulo_generado", "en_armado"]]);
+
+    const armed = double.armedCall();
+    expect(armed?.eq).toContainEqual(["preparation_state", "listo_despacho"]);
     // El corte del día de Lima es 05:00Z: sin él, "armados hoy" arrastraría ayer.
-    expect(armadas?.gte[0]?.[0]).toBe("ready_at");
-    expect(String(armadas?.gte[0]?.[1])).toMatch(/T05:00:00\.000Z$/);
+    expect(String(armed?.gte[0]?.[1])).toMatch(/T05:00:00\.000Z$/);
   });
 
-  it("no consulta el Master cuando no hay nada pendiente", async () => {
+  it("no busca salidas cuando ningún pedido está Por armar", async () => {
     const double = supabaseDouble(() => []);
     createServerSupabaseMock.mockResolvedValue(double.client);
 
     const data = await getWarehouseStationData();
 
-    expect(double.calls.some((call) => call.table === "order_master")).toBe(false);
+    expect(double.pendingCall()).toBeUndefined();
     expect(data.pending).toEqual([]);
   });
 });

@@ -193,7 +193,8 @@ export function DispatchWorkspace({
     const active = data.manifests.filter((m) => !["in_custody", "cancelled"].includes(m.state));
     return {
       ready: data.assignableShipments.filter(isArmed).length,
-      pending: data.assignableShipments.filter((s) => !isArmed(s)).length,
+      // El pendiente de almacén lo define el almacén: aquí solo se informa.
+      pending: data.warehousePending,
       routes: active.length,
       officeReady: active.filter((m) => m.state === "ready_for_pickup").length,
       transferred: data.manifests.filter((m) => m.state === "in_custody" && m.route_date === todayLima()).length,
