@@ -515,10 +515,26 @@ async function attemptRequest<T>(
   // desenlace de este experimento: creer que Aliclik rechaza algo cuando en
   // realidad la petición nunca salió de nuestra propia infraestructura.
   if (parsed && typeof parsed === "object" && "egressError" in parsed) {
+    const detail = String((parsed as { egressError: unknown }).egressError);
+    // Un timeout AGUAS ABAJO sigue siendo ambiguo, y hay que decirlo.
+    //
+    // El camino directo distingue el timeout porque lo ve como excepción. Por
+    // Edge no: el proxy responde 200 con el fallo DENTRO del cuerpo, así que
+    // sin mirar el texto todo llegaba como un fallo definitivo. Eso convertía
+    // "no sabemos si se creó" en "no se creó", y la creación seguía por la rama
+    // que marca la intención `failed`: el operador leía «Aliclik rechazó el
+    // pedido», reintentaba, y quedaban DOS guías para un pedido — con la
+    // primera invisible para nosotros, porque su número viajaba en la respuesta
+    // que nunca llegó.
+    //
+    // Pasó 5 veces entre el 30-07 y el 07-08, y explica que `pending` —el
+    // estado que existe justamente para esto— no se haya usado ni una sola vez.
+    const timedOut = /timeout|timed\s*out|aborted|ETIMEDOUT|ESOCKETTIMEDOUT/i.test(detail);
     return {
       ok: false,
       status: res.status,
-      error: `Salida por Edge no disponible: ${String((parsed as { egressError: unknown }).egressError)}`,
+      timedOut,
+      error: `Salida por Edge no disponible: ${detail}`,
       requestRef,
     };
   }
