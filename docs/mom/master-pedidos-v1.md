@@ -294,6 +294,11 @@ Reglas:
 - Si faltan datos, Yelitza avisa al equipo, no genera guía y no arma.
 - El escaneo del QR confirma que el paquete está armado y lo mueve a
   `Por despachar`.
+- El escaneo acepta cuatro identificadores del mismo rótulo: el QR, el código de
+  salida, la guía del courier y el número de pedido en código de barras. Los tres
+  primeros designan una caja; el número de pedido designa al pedido, que puede
+  tener varias salidas. Cuando el pedido tiene más de una salida pendiente, el
+  sistema no elige por el operador: pide el QR o el código de salida.
 - Para Aliclik, el estado autenticado `PREPARED` constituye el evento equivalente
   a ese escaneo físico y mueve automáticamente la salida a
   `Por despachar · Listo para asignar`. No se exige un tercer escaneo en Kapta.

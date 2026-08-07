@@ -10,8 +10,10 @@ import { isCourierTbd } from "@/lib/shipment-output";
 import {
   courierKey,
   deriveDispatchManifestState,
+  dispatchScanLabel,
   needsRiderCheck,
   normalizeDispatchScan,
+  pickDispatchScanTarget,
   type DispatchManifestState,
   type DispatchRouteKind,
   type DispatchScanStage,
@@ -52,9 +54,18 @@ function outputCodeCandidate(value: string): string | null {
   return match?.[1] ?? null;
 }
 
-async function findVisibleShipment(rawCode: string): Promise<DispatchShipment | null> {
+/** Sólo letras, números y guiones: lo que un Code 39 puede llevar como pedido. */
+const ORDER_NAME_SCAN = /^[A-Za-z0-9][A-Za-z0-9-]{2,31}$/;
+
+/**
+ * Devuelve TODAS las salidas que un escaneo puede estar designando. El QR, el
+ * código de salida y la guía identifican una caja concreta; el código de barras
+ * del rótulo lleva el número de pedido (MOM §4), que puede tener varias salidas.
+ * Quien llama decide con `pickDispatchScanTarget` cuál corresponde a su tarea.
+ */
+async function findScanCandidates(rawCode: string): Promise<DispatchShipment[]> {
   const code = normalizeDispatchScan(rawCode);
-  if (!code) return null;
+  if (!code) return [];
   const { sb } = await currentUser();
   const attempts: Array<{ column: string; value: string }> = [];
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(code)) {
@@ -69,9 +80,26 @@ async function findVisibleShipment(rawCode: string): Promise<DispatchShipment | 
     const { data } = attempt.column === "qr_token"
       ? await query.eq(attempt.column, attempt.value)
       : await query.ilike(attempt.column, attempt.value.replace(/[%_]/g, "\\$&"));
-    if (data?.length === 1) return data[0] as unknown as DispatchShipment;
+    if (data?.length === 1) return [data[0] as unknown as DispatchShipment];
   }
-  return null;
+
+  // El rótulo imprime `#KP126875`; el lector entrega `KP126875`. Aceptamos ambas.
+  if (ORDER_NAME_SCAN.test(code)) {
+    const { data } = await sb
+      .from("shipments")
+      .select(DISPATCH_SHIPMENT_COLUMNS)
+      .or(`order_name.ilike.${code},order_name.ilike.#${code}`)
+      .limit(10);
+    if (data?.length) return data as unknown as DispatchShipment[];
+  }
+  return [];
+}
+
+const SCAN_NOT_FOUND = "No encontramos una salida con ese QR, guía o número de pedido.";
+
+function ambiguousScanError(options: DispatchShipment[]): string {
+  const codes = options.map(dispatchScanLabel).join(", ");
+  return `Ese pedido tiene ${options.length} salidas (${codes}). Escanea el QR o el código de la salida.`;
 }
 
 async function visibleManifest(manifestId: string): Promise<DispatchManifest | null> {
@@ -169,16 +197,27 @@ export async function loadDispatchWorkspace(): Promise<DispatchWorkspaceData> {
 }
 
 export async function lookupDispatchShipment(code: string): Promise<DispatchActionResult> {
-  const shipment = await findVisibleShipment(code);
-  return shipment ? { shipment } : { error: "No encontramos una salida con ese QR o guía." };
+  const pick = pickDispatchScanTarget(await findScanCandidates(code));
+  if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };
+  return pick.kind === "unica" ? { shipment: pick.shipment } : { error: SCAN_NOT_FOUND };
 }
 
 export async function markShipmentReady(code: string): Promise<DispatchActionResult> {
   const perms = await getMasterPermissions();
   if (!perms.can("warehouse.prepare")) return { error: "No tienes permiso para preparar paquetes." };
-  const shipment = await findVisibleShipment(code);
-  if (!shipment) return { error: "No encontramos una salida con ese QR o guía." };
+  // Quien arma busca lo que le falta armar: entre las salidas del pedido, esa es
+  // la preferencia que desempata cuando el escaneo trae el número de pedido.
+  const pick = pickDispatchScanTarget(
+    await findScanCandidates(code),
+    (candidate) => candidate.custody_state === "empresa" && candidate.preparation_state !== "listo_despacho",
+  );
+  if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
+  if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };
+  const shipment = pick.shipment;
   if (shipment.custody_state !== "empresa") return { error: "Ese paquete ya no figura en custodia de la empresa." };
+  if (shipment.preparation_state === "listo_despacho") {
+    return { notice: `${dispatchScanLabel(shipment)} ya estaba listo para despacho.`, shipment };
+  }
   const { user } = await currentUser();
   const orgId = await orgForStore(shipment.store_id);
   if (!orgId) return { error: "No pudimos identificar la organización de la salida." };
@@ -302,9 +341,12 @@ export async function createDispatchManifest(input: z.input<typeof createManifes
 export async function addShipmentToManifest(manifestId: string, code: string): Promise<DispatchActionResult> {
   const perms = await getMasterPermissions();
   if (!perms.can("dispatch.manage")) return { error: "No tienes permiso para organizar rutas." };
-  const [manifest, shipment] = await Promise.all([visibleManifest(manifestId), findVisibleShipment(code)]);
+  const [manifest, candidates] = await Promise.all([visibleManifest(manifestId), findScanCandidates(code)]);
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
-  if (!shipment) return { error: "No encontramos una salida con ese QR o guía." };
+  const pick = pickDispatchScanTarget(candidates);
+  if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
+  if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };
+  const shipment = pick.shipment;
   if (["in_custody", "cancelled"].includes(manifest.state)) return { error: "Esa ruta ya está cerrada." };
   if (shipment.custody_state !== "empresa") return { error: "El paquete ya no está en custodia de la empresa." };
   // La ruta se ARMA antes de que almacén termine: primero se decide qué va con
@@ -505,21 +547,28 @@ export async function scanManifestItem(
   const perms = await getMasterPermissions();
   const needed = stage === "office" ? "dispatch.manage" : "dispatch.pickup";
   if (!perms.can(needed)) return { error: "No tienes permiso para realizar este cotejo." };
-  const [manifest, shipment] = await Promise.all([visibleManifest(manifestId), findVisibleShipment(code)]);
+  const [manifest, candidates] = await Promise.all([visibleManifest(manifestId), findScanCandidates(code)]);
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
-  if (!shipment) return { error: "No encontramos una salida con ese QR o guía." };
+  if (!candidates.length) return { error: SCAN_NOT_FOUND };
   if (["in_custody", "cancelled"].includes(manifest.state)) return { error: "Esa ruta ya está cerrada." };
   if (stage === "pickup" && !needsRiderCheck(manifest.kind)) {
     return { error: "Esta ruta no tiene motorizado que coteje: se cierra anotando quién recoge." };
   }
   const admin = createAdminSupabase();
-  const { data: item } = await admin
+  // Cotejar es confirmar lo que entra a ESTA ruta: si el escaneo trae el número
+  // de pedido, la salida que corresponde es la que ya está en el manifiesto.
+  const { data: rows } = await admin
     .from("dispatch_manifest_items")
     .select("*")
     .eq("manifest_id", manifestId)
-    .eq("shipment_id", shipment.id)
-    .is("removed_at", null)
-    .maybeSingle();
+    .in("shipment_id", candidates.map((candidate) => candidate.id))
+    .is("removed_at", null);
+  const inRoute = new Set((rows ?? []).map((row) => row.shipment_id as string));
+  const pick = pickDispatchScanTarget(candidates, (candidate) => inRoute.has(candidate.id));
+  if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };
+  if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
+  const shipment = pick.shipment;
+  const item = (rows ?? []).find((row) => row.shipment_id === shipment.id);
   if (!item) return { error: "Ese paquete no pertenece a esta ruta." };
 
   const { user } = await currentUser();

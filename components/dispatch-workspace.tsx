@@ -263,7 +263,7 @@ export function DispatchWorkspace({
               {mode !== "build" && (
               <form onSubmit={submitScan} className="mt-6 flex flex-col gap-3 sm:flex-row">
                 <label className="relative min-w-0 flex-1">
-                  <span className="sr-only">Código QR o guía</span>
+                  <span className="sr-only">Código QR, guía o número de pedido</span>
                   <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-xl text-slate-400">⌁</span>
                   <input
                     ref={inputRef}
@@ -271,7 +271,7 @@ export function DispatchWorkspace({
                     value={scan}
                     onChange={(event) => setScan(event.target.value)}
                     disabled={busy || (mode !== "prepare" && !selected)}
-                    placeholder="Escanea QR o escribe la guía"
+                    placeholder="Escanea el rótulo o escribe la guía"
                     className="h-14 w-full rounded-2xl border-2 border-slate-200 bg-slate-50 pl-12 pr-4 text-base font-medium outline-none transition focus:border-slate-950 focus:bg-white disabled:opacity-50"
                   />
                 </label>
