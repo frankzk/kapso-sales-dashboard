@@ -150,8 +150,24 @@ sandbox—, así que quedan fuera dos números **de producción, conectados y co
 | Kenku 630 | `1241670942359671` |
 | Kenku 600 | `1117623181444547` |
 
-Para saber si eso importa de verdad, hay que ver si esos números reciben
-tráfico. Se comprueba desde el dashboard, sin tocar Kapso:
+**No es un descuido: están reservados a propósito** para un proceso aparte que
+todavía no arrancó. Medido el 7-ago-2026, cada uno tiene UNA conversación, ambas
+del 9 de julio y con 28 segundos de diferencia — una prueba de conexión, no
+clientes. Ningún cliente real está escribiendo a un número sin vigilar.
+
+⚠️ **Pero cuando ese proceso arranque, ojo con el sync de leads**: `syncStoreLeads`
+llama a `fetchAllConversationsRich` SIN filtro de número, deliberadamente (ver el
+comentario en lib/leads-ingest.ts: filtrar por `phone_number_id` una vez dejó
+fuera leads legítimos). Consecuencia: **toda conversación del proyecto Kapso se
+convierte en lead**, sin importar por qué número entró.
+
+Si el proceso aislado vive en el MISMO proyecto Kapso, sus conversaciones van a
+aparecer en la cola de Leads, contar en "sin llamar", mover el gráfico de
+conversión y entrar en la exportación de Audiencia Meta. Lo limpio es un proyecto
+Kapso aparte; si no se puede, hace falta una lista de EXCLUSIÓN explícita en el
+sync — nunca un filtro positivo, que es lo que ya rompió una vez.
+
+Para volver a medirlo:
 
 ```sql
 select phone_number_id, count(*) as conversaciones, max(last_message_at) as ultima
@@ -159,5 +175,3 @@ from conversations
 where started_at > now() - interval '30 days'
 group by 1 order by 2 desc;
 ```
-
-Si aparecen, hay clientes escribiendo a números que nadie vigila.
