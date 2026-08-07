@@ -5,10 +5,10 @@ import { shopifyOrderAdminUrl } from "@/lib/shopify";
 import { resolveAliclikHealth, type AliclikHealth } from "@/lib/aliclik-health";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import {
-  buildAnomalyDigest,
-  EMPTY_DIGEST,
+  buildAnomalyReport,
+  EMPTY_REPORT,
   localDay,
-  type AnomalyDigest,
+  type AnomalyReport,
   type AnomalyRow,
 } from "@/lib/ingest-anomalies";
 
@@ -521,29 +521,35 @@ async function legacyLeadCounts(
 }
 
 /**
- * Anomalías de ingesta del alcance actual (hoy y ayer). Ver 0107.
+ * Informe de anomalías de ingesta. Ver 0107.
  *
- * Se leen bajo el cliente de SESIÓN, así que la RLS decide qué tiendas entran —
- * el mismo criterio que el resto de la cola. Nunca lanza: es un indicador de
- * salud, y si falla no debe tumbar la página de Leads.
+ * NO va en la cabecera de Leads: ahí las asesoras leen trabajo accionable
+ * ("sin llamar", "atender ahora") y un contador de diagnóstico es ruido en lo
+ * único que miran todo el día. Vive en Tiendas, que además ya redirige a las
+ * vendedoras — o sea que queda invisible para ellas por construcción.
+ *
+ * Se lee bajo el cliente de SESIÓN, así que la RLS decide qué tiendas entran.
+ * Nunca lanza: es un indicador de salud y no debe tumbar la página.
  */
-export async function getAnomalyDigest(
+export async function getAnomalyReport(
   storeIds: StoreScope,
   timezone = "America/Lima",
-): Promise<AnomalyDigest> {
-  if (!storeIds.length) return EMPTY_DIGEST;
+  days = 7,
+): Promise<AnomalyReport> {
+  if (!storeIds.length) return EMPTY_REPORT;
   const hoy = localDay(timezone, 0);
   const ayer = localDay(timezone, -1);
+  const desde = localDay(timezone, -(days - 1));
   try {
     const sb = await createServerSupabase();
     const { data, error } = await sb
       .from("ingest_anomalies")
       .select("store_id,dia,source,reason,count,sample,last_seen_at")
       .in("store_id", storeIds)
-      .in("dia", [hoy, ayer]);
-    if (error) return EMPTY_DIGEST;
-    return buildAnomalyDigest((data as unknown as AnomalyRow[]) ?? [], hoy, ayer);
+      .gte("dia", desde);
+    if (error) return EMPTY_REPORT;
+    return buildAnomalyReport((data as unknown as AnomalyRow[]) ?? [], hoy, ayer);
   } catch {
-    return EMPTY_DIGEST;
+    return EMPTY_REPORT;
   }
 }

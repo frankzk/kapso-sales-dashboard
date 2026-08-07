@@ -68,50 +68,77 @@ export interface AnomalyRow {
   last_seen_at: string;
 }
 
-export interface AnomalyDigest {
-  /** Total de hoy en el alcance mirado. 0 = nada que ver. */
+/** Una fila del informe: un problema concreto, con su tendencia. */
+export interface AnomalyReportRow {
+  source: string;
+  reason: string;
+  /** Hoy y ayer juntos son la señal: el SALTO, no el nivel. Un motivo con 30 hoy
+   *  y 28 ayer es rutina conocida; 30 hoy y 0 ayer es algo que empezó. */
   hoy: number;
-  /** Total del día anterior, para leer el SALTO y no el nivel. Sin esto, "25
-   *  descartes" no dice nada: puede ser lo de siempre o el primer día de un
-   *  problema nuevo. */
   ayer: number;
-  /** Desglose de hoy, de mayor a menor. */
-  detalle: { source: string; reason: string; count: number }[];
+  /** Total del período mirado, para distinguir un pico de un goteo constante. */
+  total: number;
+  ultimaVez: string;
+  sample: Record<string, unknown> | null;
 }
 
-export const EMPTY_DIGEST: AnomalyDigest = { hoy: 0, ayer: 0, detalle: [] };
+export interface AnomalyReport {
+  hoy: number;
+  ayer: number;
+  filas: AnomalyReportRow[];
+}
+
+export const EMPTY_REPORT: AnomalyReport = { hoy: 0, ayer: 0, filas: [] };
 
 /**
- * Arma el resumen a partir de las filas crudas. Puro y testeable: la parte que
+ * Arma el informe a partir de las filas crudas. Puro y testeable: la parte que
  * decide qué se muestra no depende de la base.
+ *
+ * Agrupa por (camino, motivo) SIN la tienda: con varias tiendas, el mismo
+ * problema en las dos es UN problema, no dos.
  */
-export function buildAnomalyDigest(
+export function buildAnomalyReport(
   rows: AnomalyRow[],
   hoyISO: string,
   ayerISO: string,
-): AnomalyDigest {
-  const detalle = new Map<string, { source: string; reason: string; count: number }>();
+): AnomalyReport {
+  const byKey = new Map<string, AnomalyReportRow>();
   let hoy = 0;
   let ayer = 0;
   for (const row of rows) {
     const n = Number(row.count) || 0;
-    if (row.dia === hoyISO) {
-      hoy += n;
-      // Se agrupa por (camino, motivo) SIN la tienda: con varias tiendas, el
-      // mismo problema en las dos es un problema, no dos.
-      const key = `${row.source}|${row.reason}`;
-      const prev = detalle.get(key);
-      if (prev) prev.count += n;
-      else detalle.set(key, { source: row.source, reason: row.reason, count: n });
-    } else if (row.dia === ayerISO) {
-      ayer += n;
-    }
+    if (row.dia === hoyISO) hoy += n;
+    if (row.dia === ayerISO) ayer += n;
+
+    const key = `${row.source}|${row.reason}`;
+    const prev = byKey.get(key);
+    const fila: AnomalyReportRow = prev ?? {
+      source: row.source,
+      reason: row.reason,
+      hoy: 0,
+      ayer: 0,
+      total: 0,
+      ultimaVez: row.last_seen_at,
+      sample: row.sample,
+    };
+    fila.total += n;
+    if (row.dia === hoyISO) fila.hoy += n;
+    if (row.dia === ayerISO) fila.ayer += n;
+    if (row.last_seen_at > fila.ultimaVez) fila.ultimaVez = row.last_seen_at;
+    // Se conserva el primer ejemplo que aparezca: uno estable sirve para
+    // reproducir; uno que cambia en cada render, no.
+    fila.sample = fila.sample ?? row.sample;
+    byKey.set(key, fila);
   }
   return {
     hoy,
     ayer,
-    detalle: [...detalle.values()].sort(
-      (a, b) => b.count - a.count || `${a.source}|${a.reason}`.localeCompare(`${b.source}|${b.reason}`),
+    // Primero lo que está pasando HOY; entre empates, lo que más acumula.
+    filas: [...byKey.values()].sort(
+      (a, b) =>
+        b.hoy - a.hoy ||
+        b.total - a.total ||
+        `${a.source}|${a.reason}`.localeCompare(`${b.source}|${b.reason}`),
     ),
   };
 }
