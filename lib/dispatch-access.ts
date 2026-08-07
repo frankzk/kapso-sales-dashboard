@@ -2,6 +2,7 @@ import { createServerSupabase } from "@/lib/db";
 import { limaDateKey } from "@/lib/aliclik-geo";
 import { limaDayBounds } from "@/lib/daily-summary";
 import type { DispatchManifestState, DispatchRouteKind } from "@/lib/dispatch";
+import { warehouseBlocker } from "@/lib/warehouse-queue";
 
 export interface DispatchShipment {
   id: string;
@@ -178,7 +179,13 @@ export async function getDispatchWorkspaceData(): Promise<DispatchWorkspaceData>
 /** Una salida pendiente de armar, con la operación que decide su ruta. */
 export interface WarehouseShipment extends DispatchShipment {
   operation: string | null;
+  /** Para saber si la guía sigue admitiendo armado (anulada, ya en ruta…). */
+  delivery_status: string | null;
+  /** Antigüedad de la caja: distingue el trabajo del día del atasco. */
+  created_at: string | null;
 }
+
+const WAREHOUSE_SHIPMENT_COLUMNS = `${DISPATCH_SHIPMENT_COLUMNS},delivery_status,created_at`;
 
 export interface WarehouseStationData {
   /**
@@ -189,6 +196,12 @@ export interface WarehouseStationData {
    * de otro modo engordarían la cola con trabajo que nadie va a hacer.
    */
   pending: WarehouseShipment[];
+  /**
+   * Salidas del mismo corte que ya NO se pueden armar: guía anulada o el courier
+   * reportándola en ruta. Se separan en vez de ocultarse, porque el pedido sigue
+   * contado en el Master y esta es la pantalla que debe explicar por qué.
+   */
+  blocked: { shipment: WarehouseShipment; reason: string }[];
   /** Armados de hoy: el acuse de que el escaneo entró. */
   armedToday: DispatchShipment[];
   /** Pedidos por armar que el tope dejó fuera, para no fingir cola completa. */
@@ -208,7 +221,11 @@ const WAREHOUSE_ORDER_LIMIT = 1000;
  */
 async function loadWarehousePending(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,
-): Promise<{ pending: WarehouseShipment[]; omitted: number }> {
+): Promise<{
+  pending: WarehouseShipment[];
+  blocked: { shipment: WarehouseShipment; reason: string }[];
+  omitted: number;
+}> {
   const { data: orderRows } = await sb
     .from("order_master")
     .select("order_id,macro_operation")
@@ -216,30 +233,40 @@ async function loadWarehousePending(
     .limit(WAREHOUSE_ORDER_LIMIT + 1);
   const orders = (orderRows ?? []) as { order_id: string; macro_operation: string | null }[];
   const kept = orders.slice(0, WAREHOUSE_ORDER_LIMIT);
-  if (!kept.length) return { pending: [], omitted: 0 };
+  if (!kept.length) return { pending: [], blocked: [], omitted: 0 };
 
   const operationByOrder = new Map(kept.map((row) => [row.order_id, row.macro_operation]));
   const orderIds = [...operationByOrder.keys()];
   const pending: WarehouseShipment[] = [];
+  const blocked: { shipment: WarehouseShipment; reason: string }[] = [];
   for (let start = 0; start < orderIds.length; start += 200) {
     const { data } = await sb
       .from("shipments")
-      .select(DISPATCH_SHIPMENT_COLUMNS)
+      .select(WAREHOUSE_SHIPMENT_COLUMNS)
       .eq("custody_state", "empresa")
       .in("preparation_state", ["rotulo_generado", "en_armado"])
       .in("order_id", orderIds.slice(start, start + 200))
       .order("created_at", { ascending: false });
-    for (const row of (data ?? []) as unknown as DispatchShipment[]) {
-      pending.push({ ...row, operation: operationByOrder.get(row.order_id ?? "") ?? null });
+    for (const row of (data ?? []) as unknown as Omit<WarehouseShipment, "operation">[]) {
+      const shipment: WarehouseShipment = {
+        ...row,
+        operation: operationByOrder.get(row.order_id ?? "") ?? null,
+      };
+      // Una guía anulada o ya en ruta no es trabajo de armado. Se aparta aquí,
+      // en la MISMA definición de la cola, para que el pendiente que cuenta la
+      // Mesa de despacho y el que ve el almacén sigan siendo el mismo número.
+      const reason = warehouseBlocker(shipment.delivery_status);
+      if (reason) blocked.push({ shipment, reason });
+      else pending.push(shipment);
     }
   }
-  return { pending, omitted: orders.length - kept.length };
+  return { pending, blocked, omitted: orders.length - kept.length };
 }
 
 export async function getWarehouseStationData(): Promise<WarehouseStationData> {
   const sb = await createServerSupabase();
   const today = limaDayBounds(limaDateKey());
-  const [{ pending, omitted }, armedRes] = await Promise.all([
+  const [{ pending, blocked, omitted }, armedRes] = await Promise.all([
     loadWarehousePending(sb),
     sb
       .from("shipments")
@@ -253,6 +280,7 @@ export async function getWarehouseStationData(): Promise<WarehouseStationData> {
 
   return {
     pending,
+    blocked,
     armedToday: (armedRes.data ?? []) as unknown as DispatchShipment[],
     pendingOmitted: omitted,
   };
