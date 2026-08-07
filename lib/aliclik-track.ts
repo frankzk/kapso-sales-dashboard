@@ -183,6 +183,13 @@ export async function applyAliclikSnapshot(
     status_category: categoryOf(next),
     reported_status: aliclikStatusLabel(order),
     last_report_at: updatedAt ?? nowIso,
+    // Sella la lectura de API: mientras siga fresca, un Excel importado no puede
+    // cambiar el estado de esta guía (`reconcileReportedDeliveryStatus`). Va con
+    // la hora REAL de la lectura, no con el `updatedAt` de Aliclik: lo que mide
+    // la propiedad es hace cuánto miramos nosotros, no hace cuánto se movió el
+    // pedido. Una guía quieta desde hace un mes que acabamos de consultar está
+    // fresca; usar `updatedAt` la habría dado por vencida.
+    api_report_at: nowIso,
     ...collectAmountPatch(order),
     ...linkPatch,
   };

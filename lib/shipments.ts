@@ -731,6 +731,65 @@ export function reconcileDeliveryStatus(existing: string | null | undefined, inc
   return statusPrecedence(incoming) > statusPrecedence(existing) ? incoming : existing;
 }
 
+// ---------------------------------------------------------------------------
+// La API manda sobre el Excel.
+//
+// Las dos fuentes describen la misma guía, pero no valen lo mismo. La API se
+// consulta sola cada 20 minutos y devuelve el estado de AHORA con su `updatedAt`.
+// El Excel es una foto que alguien exporta y sube a mano: puede tener horas o
+// días, puede subirse dos veces, y el archivo repite la guía por ítem con filas
+// que se contradicen entre sí. Cuando difieren, la que describe el presente es
+// la API.
+//
+// Solo con la precedencia de `reconcileDeliveryStatus` no alcanzaba: como
+// `anulado` (rango 3) supera a `en_ruta` (rango 2), un Excel viejo podía CERRAR
+// una guía que la API acababa de reportar viva. El estado no retrocedía —pero
+// avanzaba hacia el lugar equivocado, y un terminal no se reabre.
+//
+// LA PROPIEDAD CADUCA, y eso es deliberado. Si la API dejara de conocer una guía
+// —Aliclik la saca de su retención, o deja de responder— una propiedad perpetua
+// la congelaría para siempre sin forma de corregirla. Pasada la ventana, el
+// Excel vuelve a ser autoridad. Con el barrido cada 20 minutos, una guía que la
+// API sigue viendo nunca se acerca a ese límite.
+//
+// El Excel conserva TODO lo demás: dirección, producto, intentos, importe a
+// cobrar. Lo único que cede es el estado de entrega.
+// ---------------------------------------------------------------------------
+
+/** Días que la API conserva la autoridad sobre el estado tras su última lectura. */
+export const API_OWNERSHIP_DAYS = 7;
+
+/** ¿Hay una lectura de API lo bastante reciente como para que mande ella? */
+export function apiOwnsDeliveryStatus(
+  apiReportAt: string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!apiReportAt) return false;
+  const seenAt = Date.parse(apiReportAt);
+  if (Number.isNaN(seenAt)) return false;
+  const age = now.getTime() - seenAt;
+  // Una lectura con fecha futura (reloj desfasado) sigue siendo una lectura:
+  // lo que descalifica es la vejez, no venir del futuro.
+  return age <= API_OWNERSHIP_DAYS * 86_400_000;
+}
+
+/**
+ * Estado que un REPORTE importado puede escribir sobre una guía existente.
+ *
+ * Es el envoltorio de `reconcileDeliveryStatus` para la vía del Excel: si la API
+ * habló hace poco, su estado se respeta tal cual; si no, se aplica la
+ * precedencia monotónica de siempre.
+ */
+export function reconcileReportedDeliveryStatus(
+  existing: string | null | undefined,
+  incoming: string,
+  apiReportAt: string | null | undefined,
+  now: Date = new Date(),
+): string {
+  if (existing && apiOwnsDeliveryStatus(apiReportAt, now)) return existing;
+  return reconcileDeliveryStatus(existing, incoming);
+}
+
 /**
  * "Última fecha de entrega": al re-importar una guía, conserva la fecha de
  * entrega MÁS RECIENTE vista (nunca retrocede). Las fechas son ISO 'YYYY-MM-DD',

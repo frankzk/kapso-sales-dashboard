@@ -221,4 +221,6 @@
 \ir migrations/0107_ingest_anomalies.sql
 \echo 'Applying 0108_backfill_aliclik_report_status.sql'
 \ir migrations/0108_backfill_aliclik_report_status.sql
+\echo 'Applying 0109_api_owns_delivery_status.sql'
+\ir migrations/0109_api_owns_delivery_status.sql
 \echo 'Done.'

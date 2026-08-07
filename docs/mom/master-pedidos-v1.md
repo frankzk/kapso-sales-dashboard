@@ -687,6 +687,41 @@ Cobros y liquidación observados:
 - Si Aliclik no entrega, el pedido puede ingresar a Reproprovincia.
 - Solo Aliclik tiene proceso de indemnización formal.
 
+### 10.1 Qué fuente manda: la API sobre el Excel
+
+El estado de una guía Aliclik llega por dos vías, y **no valen lo mismo**:
+
+| | API (`/integration/order`) | Reporte Excel |
+| --- | --- | --- |
+| Cómo llega | barrido automático cada 20 min | alguien lo exporta y lo sube |
+| Antigüedad | el estado de ahora, con `updatedAt` | la del momento en que se exportó |
+| Consistencia | una respuesta por guía | repite la guía por ítem, con filas que se contradicen |
+
+**Regla: mientras la última lectura de la API siga fresca, el reporte importado
+no cambia `delivery_status`.** El Excel sigue actualizando todo lo demás —
+dirección, producto, intentos, importe a cobrar—; lo único que cede es el estado
+de entrega.
+
+Por qué hizo falta: la precedencia monotónica sola no alcanzaba. Como `anulado`
+tiene rango 3 y `en_ruta` rango 2, un Excel exportado días antes **cerraba** una
+guía que la API acababa de reportar viva. El estado no retrocedía, pero avanzaba
+al lugar equivocado — y un terminal no se reabre.
+
+**La propiedad caduca** (`API_OWNERSHIP_DAYS`, hoy 7 días). Si la API dejara de
+conocer una guía —Aliclik la saca de su retención, o deja de responder— una
+propiedad perpetua la congelaría sin forma de corregirla. Pasada la ventana, el
+Excel vuelve a ser autoridad bajo la precedencia de siempre. Con el barrido cada
+20 minutos, una guía que la API sigue viendo nunca se acerca a ese límite.
+
+La marca vive en `shipments.api_report_at`, que **solo** escribe la vía API.
+`last_report_at` no sirve para esto: lo escriben las dos vías, así que no permite
+saber quién habló último.
+
+Alcance de la API: empareja por `external_order_number` y, si no lo hay, por
+`guide_code` — el `orderNumber` de la API es el mismo código AUR5X… del reporte.
+Sin esa segunda vía la API era ciega a las guías nacidas del Excel, que son la
+mayoría.
+
 Indemnización Aliclik:
 
 - Responsable: Yohalis.
