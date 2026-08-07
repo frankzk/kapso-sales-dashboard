@@ -261,6 +261,108 @@ describe("parseAliclikRow", () => {
 // Aliclik marca ESTADO LLAMADA = IMPORTADO en pedidos que subió pero todavía no
 // gestiona. No son guías reales: si entran quedan como envíos "pendiente"
 // fantasma (pasó con ~2.300 filas que hubo que borrar a mano).
+describe("devolución consumada (estado de despacho)", () => {
+  const returned = (raw: Record<string, string>) =>
+    parseAliclikRow({ "NRO. PEDIDO": "AUR5X1", ...raw });
+
+  it("lee RETURNED de 'ÚLTIMO ESTADO DESPACHO' (vocabulario de la API)", () => {
+    const row = returned({
+      "ÚLTIMO ESTADO DESPACHO": "RETURNED",
+      "ESTADO ENTREGA": "CANCELADO",
+    });
+    expect(row.returned).toBe(true);
+    // La GUÍA se cierra como anulado; el `devuelto` del PEDIDO lo pone
+    // resolveOrderState leyendo returned_at.
+    expect(row.delivery_status).toBe("anulado");
+  });
+
+  it("lee DEVUELTO de 'ESTADO DESPACHO' (etiqueta en español)", () => {
+    const row = returned({ "ESTADO DESPACHO": "DEVUELTO", "ESTADO ENTREGA": "RECHAZADO" });
+    expect(row.returned).toBe(true);
+    expect(row.delivery_status).toBe("anulado");
+  });
+
+  it("tolera acentos, mayúsculas y espacios", () => {
+    expect(returned({ "estado despacho": " devuelto " }).returned).toBe(true);
+    expect(returned({ "Último Estado Despacho": "returned" }).returned).toBe(true);
+  });
+
+  // El motivo de la devolución vive en ESTADO ENTREGA y varía; ninguno de esos
+  // valores debe cambiar el desenlace.
+  it.each(["CANCELADO", "NO CONTESTA", "RECHAZADO", "POR ENTREGAR"])(
+    "devuelve con ESTADO ENTREGA=%s (el motivo no cambia el desenlace)",
+    (entrega) => {
+      const row = returned({ "ÚLTIMO ESTADO DESPACHO": "RETURNED", "ESTADO ENTREGA": entrega });
+      expect(row.returned).toBe(true);
+      expect(row.delivery_status).toBe("anulado");
+    },
+  );
+
+  it("NO da por devuelto un paquete que todavía vuelve (TO_RETURN / POR DEVOLVER)", () => {
+    // Sigue vivo y el equipo lo puede interceptar: se queda en la cola de gestión.
+    for (const value of ["TO_RETURN", "POR DEVOLVER"]) {
+      const row = returned({ "ÚLTIMO ESTADO DESPACHO": value, "ESTADO ENTREGA": "NO CONTESTA" });
+      expect(row.returned).toBe(false);
+      expect(row.delivery_status).toBe("pendiente");
+    }
+  });
+
+  it.each(["PICKED", "VALIDADO", "EN AGENCIA", "-", ""])(
+    "no devuelve con despacho=%s",
+    (value) => {
+      expect(returned({ "ESTADO DESPACHO": value }).returned).toBe(false);
+    },
+  );
+
+  // La guarda que protege la regla existente: una guía entregada arrastra basura
+  // en las columnas de despacho/entrega de la API (PICKED + CANCEL heredado de un
+  // intento previo). ENTREGADO debe seguir ganando.
+  it("ENTREGADO gana sobre cualquier ruido del despacho", () => {
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X1",
+      "ESTADO ENTREGA": "ENTREGADO",
+      "ÚLTIMO ESTADO DESPACHO": "PICKED",
+      "ÚLTIMO ESTADO ENTREGA": "CANCEL",
+    });
+    expect(row.delivery_status).toBe("entregado");
+    expect(row.returned).toBe(false);
+  });
+
+  it("una entrega nunca se marca como devuelta", () => {
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X1",
+      "ESTADO ENTREGA": "ENTREGADO",
+      "ESTADO DESPACHO": "DEVUELTO",
+    });
+    expect(row.delivery_status).toBe("entregado");
+    expect(row.returned).toBe(false);
+  });
+
+  // Sin fecha de despacho, `resolveOrderState` no da por probada la devolución
+  // (returnProven exige despacho) y el pedido no llega nunca a `devuelto`.
+  it("lee FECHA DESPACHO — la cabecera real, sin 'de'", () => {
+    const row = returned({
+      "ESTADO DESPACHO": "DEVUELTO",
+      "FECHA DESPACHO": "15/06/2026",
+    });
+    expect(row.dispatch_date).toBe("2026-06-15");
+  });
+
+  it("acepta también la variante 'FECHA DE DESPACHO'", () => {
+    expect(returned({ "FECHA DE DESPACHO": "01/07/2026" }).dispatch_date).toBe("2026-07-01");
+  });
+
+  it("sin fecha de despacho legible deja dispatch_date en null", () => {
+    expect(returned({ "FECHA DESPACHO": "" }).dispatch_date).toBeNull();
+    expect(returned({ "FECHA DESPACHO": "no-es-fecha" }).dispatch_date).toBeNull();
+    expect(returned({}).dispatch_date).toBeNull();
+  });
+
+  it("sin columnas de despacho no devuelve nada", () => {
+    expect(returned({ "ESTADO ENTREGA": "POR ENTREGAR" }).returned).toBe(false);
+  });
+});
+
 describe("filas IMPORTADO (ESTADO LLAMADA)", () => {
   it("descarta la fila marcada IMPORTADO y conserva las demás", () => {
     const rows = parseAliclikReport([

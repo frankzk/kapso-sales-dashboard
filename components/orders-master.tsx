@@ -421,6 +421,54 @@ export function OrdersMasterBoard({
    * `useTransition` mantiene visible el listado anterior mientras llega el
    * nuevo, en vez de parpadear a vacío en cada clic.
    */
+  // Descarga del listado tal y como está filtrado. La URL se arma con el mismo
+  // `buildMasterQuery` que usa la navegación, así que el fichero no puede salir
+  // con un conjunto distinto del que se está viendo. Sin `page`: se exporta
+  // todo lo filtrado, no la página abierta.
+  const [exporting, setExporting] = useState(false);
+  const [exportNote, setExportNote] = useState<string | null>(null);
+
+  const downloadExcel = async () => {
+    if (exporting) return;
+    setExporting(true);
+    setExportNote(null);
+    let objectUrl: string | null = null;
+    try {
+      const qs = buildMasterQuery({ filters, sortKey, page: 1 });
+      if (view !== "todos") qs.set("view", view);
+      if (substage) qs.set("substage", substage);
+
+      const res = await fetch(`/api/export/pedidos?${qs.toString()}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const blob = await res.blob();
+      objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filenameFromDisposition(res.headers.get("Content-Disposition"));
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      // El servidor corta por encima de su tope. Callarlo dejaría un fichero
+      // incompleto con pinta de completo, que es el peor resultado posible.
+      if (res.headers.get("X-Export-Truncated") === "1") {
+        const rows = Number(res.headers.get("X-Export-Rows") ?? 0);
+        setExportNote(
+          `El listado supera el máximo por descarga: se exportaron las primeras ${rows.toLocaleString("es-PE")} filas. Acota los filtros para bajar el resto.`,
+        );
+      }
+    } catch {
+      setExportNote("No se pudo generar el Excel. Vuelve a intentarlo.");
+    } finally {
+      // Revocar de inmediato cancelaría la descarga en Safari, que lee la URL
+      // después del click.
+      const created = objectUrl;
+      if (created) setTimeout(() => URL.revokeObjectURL(created), 60_000);
+      setExporting(false);
+    }
+  };
+
   const navigate = (next: { filters?: Partial<MasterFilters>; sortKey?: MasterSortKey; page?: number }) => {
     const merged: MasterFilters = { ...filters, ...(next.filters ?? {}) };
     const qs = buildMasterQuery({
@@ -880,13 +928,25 @@ export function OrdersMasterBoard({
                   </span>
                 )}
               </p>
-              <PagerControls
-                page={page}
-                totalPages={totalPages}
-                busy={navigating}
-                onPage={(p) => navigate({ page: p })}
-              />
+              <div className="flex shrink-0 items-center gap-3">
+                <ExportButton
+                  busy={exporting}
+                  total={total}
+                  onClick={() => void downloadExcel()}
+                />
+                <PagerControls
+                  page={page}
+                  totalPages={totalPages}
+                  busy={navigating}
+                  onPage={(p) => navigate({ page: p })}
+                />
+              </div>
             </div>
+            {exportNote && (
+              <p className="border-b border-amber-200 bg-amber-50 px-5 py-2 text-xs text-amber-800">
+                {exportNote}
+              </p>
+            )}
             {listed.length ? (
               <>
                 <MasterTable
@@ -3897,6 +3957,42 @@ function OrderActions({
  * Anterior / Siguiente. Va arriba Y abajo de la tabla: con 100 filas, tener los
  * controles solo al pie obliga a recorrer la página entera para cambiarla.
  */
+/**
+ * El nombre que propone el servidor en `Content-Disposition`. Sin él, el
+ * navegador bautiza el fichero con el nombre de la ruta ("pedidos") y sin
+ * extensión, y Excel no lo abre de doble clic.
+ */
+function filenameFromDisposition(header: string | null): string {
+  const match = header?.match(/filename="([^"]+)"/);
+  return match?.[1] ?? "pedidos.xlsx";
+}
+
+/**
+ * Descargar lo filtrado. Dice cuántas filas van a salir porque no coincide con
+ * lo que se ve: la tabla enseña 100 y el fichero trae las 128 del filtro.
+ */
+function ExportButton({
+  busy,
+  total,
+  onClick,
+}: {
+  busy: boolean;
+  total: number;
+  onClick: () => void;
+}) {
+  if (!total) return null;
+  return (
+    <button
+      onClick={onClick}
+      disabled={busy}
+      title={`Descargar ${total.toLocaleString("es-PE")} ${total === 1 ? "pedido" : "pedidos"} en Excel, con los filtros aplicados`}
+      className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+    >
+      {busy ? "Generando…" : `Descargar Excel (${total.toLocaleString("es-PE")})`}
+    </button>
+  );
+}
+
 function PagerControls({
   page,
   totalPages,

@@ -3,7 +3,8 @@ import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
 import { listOrders } from "@/lib/aliclik";
-import { applyAliclikSnapshot } from "@/lib/aliclik-track";
+import { applyAliclikSnapshot, refreshAliclikOrder } from "@/lib/aliclik-track";
+import { selectFollowUpGuides, type FollowUpCandidate } from "@/lib/aliclik-followup";
 import { normalizePhone } from "@/lib/phone";
 import { env } from "@/lib/env";
 
@@ -24,12 +25,29 @@ export const maxDuration = 300;
 // bloqueando un segundo intento, que es lo correcto). Aquí se busca por teléfono
 // entre los pedidos que Aliclik creó en esa ventana y, si aparece, se vincula.
 // Sin esto, un timeout dejaría el pedido bloqueado para siempre.
+//
+// Y PERSIGUE A LAS REZAGADAS. La ventana de fechas cubre el ciclo normal, pero
+// no el retorno: un paquete rechazado tarda semanas en volver, y para cuando
+// Aliclik lo marca RETURNED su guía ya se cayó del rango. Por eso, tras el
+// barrido, se consulta una por una a las guías que siguen vivas y que el rango
+// no tocó (lib/aliclik-followup.ts). El ancla es el estado, no la fecha.
 
 const DAY_MS = 86_400_000;
 /** Días hacia atrás que se releen. Cubre de sobra un fin de semana caído. */
 const LOOKBACK_DAYS = 14;
 /** Antigüedad mínima de una intención para considerarla huérfana. */
 const ORPHAN_MIN_AGE_MS = 5 * 60_000;
+/**
+ * Consultas individuales por tienda y pasada. Con el cron cada 20 minutos son
+ * ~2.900 turnos al día: de sobra para una cola de rezagadas sana. Si
+ * `followUpDeferred` no vuelve a cero entre pasadas, este tope se quedó corto.
+ */
+const FOLLOW_UP_LIMIT = 40;
+/**
+ * Cuándo se deja de preguntar por una guía que no responde. Un retorno tarda
+ * semanas; dos meses de silencio ya es una guía que Aliclik nunca cerró.
+ */
+const FOLLOW_UP_MAX_SILENCE_MS = 60 * DAY_MS;
 
 function secretEquals(provided: string | null, expected: string): boolean {
   if (!provided) return false;
@@ -54,22 +72,35 @@ interface StoreReport {
   applied: number;
   unknown: number;
   orphansLinked: number;
+  /** Guías vivas consultadas de una en una tras el barrido por fechas. */
+  followUpScanned: number;
+  followUpApplied: number;
+  /** Vivas que no cupieron en el tope de esta pasada; van en la siguiente. */
+  followUpDeferred: number;
+  /** Vivas que se dieron por abandonadas por llevar demasiado calladas. */
+  followUpAbandoned: number;
   errors: string[];
 }
+
+const emptyReport = (storeId: string): StoreReport => ({
+  storeId,
+  scanned: 0,
+  applied: 0,
+  unknown: 0,
+  orphansLinked: 0,
+  followUpScanned: 0,
+  followUpApplied: 0,
+  followUpDeferred: 0,
+  followUpAbandoned: 0,
+  errors: [],
+});
 
 async function reconcileStore(
   storeId: string,
   apiToken: string,
   admin: ReturnType<typeof createAdminSupabase>,
 ): Promise<StoreReport> {
-  const report: StoreReport = {
-    storeId,
-    scanned: 0,
-    applied: 0,
-    unknown: 0,
-    orphansLinked: 0,
-    errors: [],
-  };
+  const report = emptyReport(storeId);
   const now = new Date();
   const startDate = dateKey(new Date(now.getTime() - LOOKBACK_DAYS * DAY_MS));
   const endDate = dateKey(now);
@@ -88,6 +119,10 @@ async function reconcileStore(
     return { id: p.id, orderId: p.order_id, phone: normalizePhone(req.customer?.phone ?? null) };
   });
 
+  // Lo que el barrido por fechas alcanza a ver. Sirve para no volver a
+  // preguntar por ello en el pase de rezagadas.
+  const scanned = new Set<string>();
+
   for (let page = 1; page <= 50; page++) {
     const res = await listOrders({ apiToken }, { page, limit: 100, startDate, endDate });
     if (!res.ok) {
@@ -99,6 +134,8 @@ async function reconcileStore(
 
     for (const order of rows) {
       report.scanned++;
+      const seen = (order.orderNumber ?? "").trim();
+      if (seen) scanned.add(seen);
       const applied = await applyAliclikSnapshot(order, admin);
       if (applied.outcome === "applied") report.applied++;
       else if (applied.outcome === "unknown_order") {
@@ -138,7 +175,67 @@ async function reconcileStore(
     if (page >= (totalPages || 1)) break;
   }
 
+  await followUpLiveGuides(storeId, apiToken, admin, scanned, now, report);
+
   return report;
+}
+
+/**
+ * Segundo pase: las guías vivas a las que la ventana de fechas ya no llega.
+ *
+ * Se consultan de una en una porque no hay forma de pedirle a Aliclik "estas
+ * guías concretas" — solo rangos y búsqueda por número. El coste está acotado
+ * por `FOLLOW_UP_LIMIT` y por el propio universo: solo las guías creadas por API
+ * tienen `external_order_number`, así que las que entraron por Excel ni entran
+ * en la cuenta.
+ *
+ * Un fallo aquí no rompe la pasada: el barrido por fechas ya se aplicó y esto
+ * es trabajo extra que puede reintentarse en veinte minutos.
+ */
+async function followUpLiveGuides(
+  storeId: string,
+  apiToken: string,
+  admin: ReturnType<typeof createAdminSupabase>,
+  scanned: ReadonlySet<string>,
+  now: Date,
+  report: StoreReport,
+): Promise<void> {
+  const { data, error } = await admin
+    .from("shipments")
+    .select("id,external_order_number,delivery_status,last_report_at,created_at")
+    .eq("store_id", storeId)
+    .eq("courier", "aliclik")
+    .not("external_order_number", "is", null);
+
+  if (error) {
+    report.errors.push(`seguimiento: ${error.message}`);
+    return;
+  }
+
+  const selection = selectFollowUpGuides((data ?? []) as FollowUpCandidate[], {
+    scanned,
+    limit: FOLLOW_UP_LIMIT,
+    maxSilenceMs: FOLLOW_UP_MAX_SILENCE_MS,
+    now,
+  });
+  report.followUpDeferred = selection.deferred;
+  report.followUpAbandoned = selection.abandoned;
+
+  for (const guide of selection.due) {
+    const orderNumber = (guide.external_order_number ?? "").trim();
+    report.followUpScanned++;
+    try {
+      const res = await refreshAliclikOrder(orderNumber, { apiToken }, admin);
+      if (res.outcome === "applied") report.followUpApplied++;
+      else if (res.outcome === "error" && res.error) {
+        report.errors.push(`seguimiento ${orderNumber}: ${res.error}`);
+      }
+    } catch (e) {
+      report.errors.push(
+        `seguimiento ${orderNumber}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
 }
 
 async function run(req: NextRequest) {
@@ -164,11 +261,7 @@ async function run(req: NextRequest) {
       reports.push(await reconcileStore(storeId, creds.aliclik_api_token, admin));
     } catch (e) {
       reports.push({
-        storeId,
-        scanned: 0,
-        applied: 0,
-        unknown: 0,
-        orphansLinked: 0,
+        ...emptyReport(storeId),
         errors: [e instanceof Error ? e.message : String(e)],
       });
     }

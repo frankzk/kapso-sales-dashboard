@@ -660,8 +660,41 @@ Cobros y liquidación observados:
   considera señal de confirmación.
 - Estados externos de Aliclik se conservan literalmente y se normalizan sin
   perder el original.
+
+Cómo se clasifica una guía que llega por reporte Excel:
+
+- La clasificación es **por resultado para la clienta**: solo `ESTADO ENTREGA =
+  ENTREGADO` cierra como entregada, y todo lo demás entra a la cola de gestión
+  como pendiente. El estado de despacho no decide si una guía está en ruta.
+- **Única excepción: la devolución consumada.** `ESTADO DESPACHO = DEVUELTO`
+  (o `ÚLTIMO ESTADO DESPACHO = RETURNED`) sella la devolución. Se lee del
+  despacho porque no aparece en ninguna otra columna: el `ESTADO ENTREGA` de
+  una guía devuelta dice CANCELADO, NO CONTESTA o RECHAZADO, que es el
+  **motivo**, no el desenlace.
+- ENTREGADO gana sobre el despacho, y el orden importa: una guía entregada
+  arrastra valores heredados de intentos previos en las columnas de despacho.
+- `POR DEVOLVER` / `TO_RETURN` **no** es una devolución: el paquete sigue
+  viajando de vuelta y la guía sigue viva, así que permanece en gestión.
+- La guía devuelta se cierra como `anulado` —el vocabulario de guías no tiene
+  código `devuelto`— y es `returned_at` lo que convierte el **pedido** en
+  `devuelto`.
 - Si Aliclik no entrega, el pedido puede ingresar a Reproprovincia.
 - Solo Aliclik tiene proceso de indemnización formal.
+
+Seguimiento de una guía hasta que cierra:
+
+- Una guía se sigue consultando **mientras siga viva**, sin importar su edad. El
+  criterio es el estado, no la fecha de creación: el barrido periódico relee una
+  ventana reciente y además persigue de una en una a las guías vivas que esa
+  ventana ya no alcanza.
+- Existe porque la **devolución** es el tramo más lento: un paquete rechazado
+  tarda semanas en volver al origen, mucho más que la ventana del barrido. Si el
+  seguimiento se anclara a la fecha, el `RETURNED` de Aliclik llegaría cuando ya
+  nadie pregunta y la devolución —que es entrada elegible a Reproprovincia
+  (§11)— no se registraría nunca.
+- Se deja de preguntar cuando la guía termina (entregada, anulada o
+  transferida) o tras **60 días sin noticias**. Ese silencio no cierra la guía:
+  solo detiene la consulta.
 
 Indemnización Aliclik:
 
