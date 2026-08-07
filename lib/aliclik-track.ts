@@ -62,6 +62,8 @@ interface TrackedShipment {
   delivery_status: string;
   last_report_at: string | null;
   external_order_number: string | null;
+  /** AUR5X… — el código impreso en el paquete y, además, el `orderNumber` de la API. */
+  guide_code: string | null;
   preparation_state: string | null;
   custody_state: string | null;
   ready_at: string | null;
@@ -88,19 +90,59 @@ export async function applyAliclikSnapshot(
   const orderNumber = (order.orderNumber ?? "").trim();
   if (!orderNumber) return { ok: false, outcome: "error", error: "Snapshot sin orderNumber." };
 
-  const { data, error } = await admin
+  // Dos vías para encontrar la guía, porque hay dos formas de que exista.
+  //
+  //   1. `external_order_number` — la guía la creamos nosotros por API y
+  //      guardamos el identificador que nos devolvió Aliclik.
+  //   2. `guide_code` — la guía entró por el Excel y nunca pasó por la API, así
+  //      que ese campo está vacío. Son la MAYORÍA: 3.268 de 3.818 guías Aliclik.
+  //
+  // Buscar solo por (1) dejaba a la API ciega ante el 86% de las guías: el
+  // barrido las contaba como `unknown_order` y no aplicaba nada, de modo que su
+  // estado dependía por completo de que alguien subiera un Excel.
+  //
+  // Que (2) sea válido no es una suposición: el `orderNumber` que devuelve la
+  // API ES el código AUR5X… del reporte. En las 550 guías que tienen ambos
+  // campos coinciden en las 550, y ninguna usa el formato `ALC…` que describe
+  // el comentario de lib/aliclik-reconcile.ts. `guide_code` además es único por
+  // courier (0022), así que el emparejamiento no es ambiguo.
+  //
+  // Van en dos consultas y no en un `.or(...)`: el valor viene de la API y
+  // PostgREST parsea el filtro `or` como texto, donde una coma o un paréntesis
+  // en el valor cambiaría la consulta. Con `.eq()` el valor viaja como
+  // parámetro y no hay nada que escapar.
+  const COLUMNS =
+    "id,store_id,order_id,delivery_status,last_report_at,external_order_number,guide_code," +
+    "preparation_state,custody_state,ready_at,custody_transferred_at";
+
+  const byExternal = await admin
     .from("shipments")
-    .select(
-      "id,store_id,order_id,delivery_status,last_report_at,external_order_number," +
-      "preparation_state,custody_state,ready_at,custody_transferred_at",
-    )
+    .select(COLUMNS)
     .eq("external_order_number", orderNumber)
     .limit(1)
     .maybeSingle();
+  if (byExternal.error) return { ok: false, outcome: "error", error: byExternal.error.message };
 
-  if (error) return { ok: false, outcome: "error", error: error.message };
-  const shipment = data as TrackedShipment | null;
+  let shipment = byExternal.data as TrackedShipment | null;
+  if (!shipment) {
+    const byGuide = await admin
+      .from("shipments")
+      .select(COLUMNS)
+      .eq("courier", "aliclik")
+      .eq("guide_code", orderNumber)
+      .limit(1)
+      .maybeSingle();
+    if (byGuide.error) return { ok: false, outcome: "error", error: byGuide.error.message };
+    shipment = byGuide.data as TrackedShipment | null;
+  }
   if (!shipment) return { ok: false, outcome: "unknown_order" };
+
+  // Si entró por `guide_code`, se graba el identificador: la próxima pasada usa
+  // la vía rápida y el vínculo queda explícito en la fila en vez de deducirse
+  // otra vez. Solo cuando está vacío — nunca se pisa uno ya grabado.
+  const linkPatch: Record<string, unknown> = shipment.external_order_number
+    ? {}
+    : { external_order_number: orderNumber };
 
   // Guarda monotónica. Sin `updatedAt` se aplica igual: no tener el dato no debe
   // congelar la guía, y la precedencia de estados sigue protegiendo el resultado.
@@ -127,6 +169,7 @@ export async function applyAliclikSnapshot(
         reported_status: aliclikStatusLabel(order),
         last_report_at: updatedAt ?? new Date().toISOString(),
         ...collectAmountPatch(order),
+        ...linkPatch,
       })
       .eq("id", shipment.id);
     return { ok: true, outcome: "unchanged", shipmentId: shipment.id, orderId: shipment.order_id };
@@ -141,6 +184,7 @@ export async function applyAliclikSnapshot(
     reported_status: aliclikStatusLabel(order),
     last_report_at: updatedAt ?? nowIso,
     ...collectAmountPatch(order),
+    ...linkPatch,
   };
   if (mapped.pickupState) patch.pickup_state = mapped.pickupState;
   if (mapped.returned) patch.returned_at = updatedAt ?? nowIso;

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
-import { listOrders } from "@/lib/aliclik";
+import { getOrder, listOrders } from "@/lib/aliclik";
 import { applyAliclikSnapshot } from "@/lib/aliclik-track";
 import { normalizePhone } from "@/lib/phone";
 import { env } from "@/lib/env";
@@ -54,8 +54,16 @@ interface StoreReport {
   applied: number;
   unknown: number;
   orphansLinked: number;
+  /** Guías viejas y abiertas consultadas una a una (ver `sweepStaleGuides`). */
+  staleChecked: number;
+  staleApplied: number;
+  /** Consultadas que Aliclik ya no reconoce: quedan para revisión humana. */
+  staleMissing: number;
   errors: string[];
 }
+
+/** Guías viejas revisadas por corrida. Acota la latencia y el gasto de API. */
+const STALE_BATCH = 40;
 
 async function reconcileStore(
   storeId: string,
@@ -68,6 +76,9 @@ async function reconcileStore(
     applied: 0,
     unknown: 0,
     orphansLinked: 0,
+    staleChecked: 0,
+    staleApplied: 0,
+    staleMissing: 0,
     errors: [],
   };
   const now = new Date();
@@ -138,7 +149,69 @@ async function reconcileStore(
     if (page >= (totalPages || 1)) break;
   }
 
+  await sweepStaleGuides(storeId, apiToken, admin, report, startDate);
   return report;
+}
+
+/**
+ * Guías abiertas MÁS VIEJAS que la ventana del barrido.
+ *
+ * El barrido de arriba relee por rango de fechas, así que una guía que lleva más
+ * de LOOKBACK_DAYS abierta deja de aparecer y su estado se congela: la única
+ * forma de moverla era que alguien subiera un Excel. Eso es exactamente lo que
+ * pasó con las guías en POR DEVOLVER — el reporte amplio que traía DEVUELTO dejó
+ * de subirse el 21-07 y quedaron 131 abiertas, con una mediana de 18 días y
+ * hasta 38.
+ *
+ * `getOrder` busca por `orderNumber` SIN filtro de fecha, así que alcanza
+ * cualquier antigüedad. Se consulta una por una porque no hay endpoint de
+ * consulta múltiple, y por eso va acotado a STALE_BATCH por corrida: a cada
+ * pasada le tocan las más rezagadas, y con el cron cada 20 minutos el atraso se
+ * drena en pocas horas sin castigar la API ni agotar `maxDuration`.
+ *
+ * Lo que Aliclik ya no reconoce NO se toca: se cuenta en `staleMissing`. Cerrar
+ * una guía porque una búsqueda vino vacía sería inventar un desenlace.
+ */
+async function sweepStaleGuides(
+  storeId: string,
+  apiToken: string,
+  admin: ReturnType<typeof createAdminSupabase>,
+  report: StoreReport,
+  windowStart: string,
+): Promise<void> {
+  const { data, error } = await admin
+    .from("shipments")
+    .select("id,guide_code,created_at")
+    .eq("store_id", storeId)
+    .eq("courier", "aliclik")
+    .in("delivery_status", ["pendiente", "en_ruta"])
+    .not("guide_code", "is", null)
+    .lt("created_at", windowStart)
+    // Las más rezagadas primero: la que hace más que no se mira.
+    .order("last_report_at", { ascending: true, nullsFirst: true })
+    .limit(STALE_BATCH);
+
+  if (error) {
+    report.errors.push(`stale: ${error.message}`);
+    return;
+  }
+
+  for (const row of (data ?? []) as { guide_code: string | null }[]) {
+    const guide = (row.guide_code ?? "").trim();
+    if (!guide) continue;
+    report.staleChecked++;
+    const res = await getOrder({ apiToken }, guide);
+    if (!res.ok) {
+      report.errors.push(`stale ${guide}: ${res.error}`);
+      continue;
+    }
+    if (!res.data) {
+      report.staleMissing++;
+      continue;
+    }
+    const applied = await applyAliclikSnapshot(res.data, admin);
+    if (applied.outcome === "applied") report.staleApplied++;
+  }
 }
 
 async function run(req: NextRequest) {
@@ -169,6 +242,9 @@ async function run(req: NextRequest) {
         applied: 0,
         unknown: 0,
         orphansLinked: 0,
+        staleChecked: 0,
+        staleApplied: 0,
+        staleMissing: 0,
         errors: [e instanceof Error ? e.message : String(e)],
       });
     }
