@@ -7542,6 +7542,359 @@ create index if not exists leads_store_bsuid
   where bsuid is not null;
 
 -- ---- 0104 ----
+-- 0104 — Bitácora cruda del "Live Chat Webhook" de Chatby.
+--
+-- POR QUÉ UNA BITÁCORA Y NO LA TABLA DEFINITIVA
+--
+-- La API de Chatby (white-label de uChat) NO expone lectura de mensajes: sus
+-- endpoints de conversación devuelven agregados (`in_messages`, `agent_messages`,
+-- tiempos) y el modelo `Subscriber` solo trae `last_message_at` y
+-- `last_message_type` — nunca el cuerpo. La única fuente del texto es este
+-- webhook, que empuja los mensajes ENTRANTES cuando el bot está pausado.
+--
+-- Como no hay forma de pedir el histórico, TODO lo que no se guarde mientras el
+-- webhook está apagado se pierde para siempre. Por eso esta tabla existe antes
+-- que el diseño definitivo: primero se deja de perder historia, después se
+-- modela con payloads reales en la mano en vez de suposiciones.
+--
+-- Es APPEND-ONLY y SIN PÉRDIDA a propósito: guarda el JSON completo tal como
+-- llegó. Cuando exista `chatby_messages`, se rellena DESDE ACÁ — nada de lo
+-- capturado en el período de aprendizaje se tira.
+--
+-- MEDIDO EN PRODUCCIÓN (2026-08-05): ESTE WEBHOOK NO CUBRE WHATSAPP.
+--
+-- La prueba: con el bot pausado se mandaron dos mensajes ENTRANTES de WhatsApp.
+-- Cero entregas — y en los logs de Vercel no hay NINGUNA petición a esta ruta en
+-- ese minuto. No es un 401 ni un error de configuración: Chatby no lo intentó.
+-- La configuración estaba bien, porque el ping de validación del Save sí llegó y
+-- sí escribió fila con esa misma URL y esa misma cabecera.
+--
+-- O sea que "Live Chat" en Chatby significa su WIDGET WEB, no WhatsApp. Encaja
+-- con el resto de esa zona de ajustes (el Secret Key y `window.$chatbot.setUser`
+-- son del widget del navegador).
+--
+-- LA TABLA Y EL RECEPTOR SE CONSERVAN, y no por optimismo: el paso "External
+-- Request" del flow builder — que sí corre sobre las conversaciones de WhatsApp —
+-- puede POSTear a esta misma ruta con la misma cabecera. El receptor no está
+-- atado a la integración que lo motivó.
+--
+-- OJO CON EL ALCANCE (limitaciones del propio webhook, no nuestras):
+--   · Solo dispara con el bot PAUSADO. La fase en que el bot conversa no llega.
+--   · Solo mensajes ENTRANTES. Los salientes los emitimos nosotros vía
+--     `POST /subscriber/send-content`, y quedan en nuestra outbox.
+--   · Se configura POR CUENTA, no por bot: un solo webhook para Aurela y Kenku.
+--     Por eso NO hay `store_id` todavía — resolver la tienda exige saber qué trae
+--     el payload (¿id de bot?, ¿número de WhatsApp de destino?), que es
+--     justamente lo que esta bitácora viene a averiguar. Escribirlo a ciegas
+--     sería peor que dejarlo nulo: mandaría mensajes a la tienda equivocada.
+
+create table if not exists chatby_webhook_log (
+  id uuid primary key default gen_random_uuid(),
+  received_at timestamptz not null default now(),
+  -- Extracción best-effort: `user_ns` es la clave del subscriber en la API de
+  -- Chatby (aparece en el modelo Subscriber y la piden todos sus endpoints), así
+  -- que buscarla no es adivinar, es su propio vocabulario. Nula si no viene: el
+  -- objetivo es no perder la entrega, nunca rechazarla.
+  user_ns text,
+  -- Nombres de las cabeceras recibidas, SIN valores. Sirve para descubrir si
+  -- Chatby manda alguna firma o id de idempotencia que convenga verificar más
+  -- adelante. Los valores no se guardan nunca: uno de ellos es nuestro secreto.
+  header_names text[] not null default '{}',
+  -- ¿El cuerpo era JSON válido? Si no, `payload` lo conserva como {"_raw": "..."}
+  -- en vez de descartarlo.
+  parsed boolean not null default true,
+  payload jsonb not null
+);
+
+-- El uso es "las últimas N entregas" mientras se diseña, y más adelante "todo lo
+-- de este subscriber" para el backfill.
+create index if not exists chatby_webhook_log_recent
+  on chatby_webhook_log (received_at desc);
+create index if not exists chatby_webhook_log_user_ns
+  on chatby_webhook_log (user_ns, received_at desc)
+  where user_ns is not null;
+
+revoke all on table chatby_webhook_log from public, anon, authenticated;
+grant all on table chatby_webhook_log to service_role;
+
+alter table chatby_webhook_log enable row level security;
+
+-- SIN POLÍTICAS A PROPÓSITO: RLS activo y cero policies = nadie lee salvo
+-- service_role, que salta RLS. Acá hay texto de conversaciones de clientes y
+-- todavía no se puede acotar por organización (no sabemos de qué tienda es cada
+-- fila). Hasta que exista esa columna, cerrado del todo es la única postura
+-- defendible; abrirlo por `authenticated` expondría los mensajes de una tienda a
+-- los usuarios de la otra.
+
+-- ---- 0105 ----
+-- 0105 — Un lead puede existir sin teléfono: identidad por BSUID.
+--
+-- POR QUÉ AHORA. La 0103 dejó escrito que cambiar la clave era "el paso caro y
+-- riesgoso, y no compra nada hasta que exista el primer lead sin teléfono". Ese
+-- día llegó y se puede fechar: durante 23 días seguidos hubo CERO conversaciones
+-- sin teléfono, y a partir del 29-jul-2026 la serie fue 1, 3, 11, 16, 20, 29 —
+-- ~3,5 % del volumen diario. No es un caso raro: es el rollout de identidad de
+-- Meta (BSUID + username) llegando a la operación, y solo sube. Eran ~25 al día
+-- que `conversationToLeadSeed` descartaba en la puerta, invisibles para todos.
+--
+-- CÓMO CONVIVEN LAS DOS IDENTIDADES
+--
+-- `unique (store_id, phone)` SE CONSERVA TAL CUAL, y no por olvido: en Postgres
+-- los NULL son distintos entre sí dentro de un UNIQUE, así que con `phone`
+-- nullable la restricción sigue impidiendo dos leads con el mismo teléfono y a la
+-- vez permite miles de leads sin teléfono. No hace falta índice parcial.
+--
+-- Y NO SE USA UN ÍNDICE PARCIAL A PROPÓSITO — es una trampa real: PostgREST
+-- genera `ON CONFLICT (cols) DO UPDATE` sin cláusula WHERE, y Postgres no puede
+-- inferir un índice único PARCIAL como árbitro sin repetir su predicado. El
+-- upsert fallaría en producción con "no unique or exclusion constraint matching
+-- the ON CONFLICT specification" — y solo ahí, porque nada lo detecta antes.
+-- Por eso `(store_id, bsuid)` va como UNIQUE normal: sus NULL también son
+-- distintos, así que los leads con teléfono y sin BSUID conviven sin estorbarse.
+
+alter table leads
+  alter column phone drop not null;
+
+-- Segunda identidad. Si esto falla por duplicados, hay dos leads de la misma
+-- tienda con el mismo BSUID (misma persona con dos teléfonos). Se encuentran así:
+--
+--   select store_id, bsuid, count(*), array_agg(id)
+--   from leads where bsuid is not null
+--   group by 1,2 having count(*) > 1;
+--
+-- La fusión es una decisión de negocio (cuál conserva el historial de llamadas),
+-- no algo que esta migración deba resolver a ciegas.
+alter table leads
+  drop constraint if exists leads_store_bsuid_key;
+alter table leads
+  add constraint leads_store_bsuid_key unique (store_id, bsuid);
+
+-- El índice parcial de la 0103 queda redundante: el índice que respalda la
+-- restricción de arriba ya sirve la búsqueda por (store_id, bsuid).
+drop index if exists leads_store_bsuid;
+
+-- Un lead sin NINGUNA identidad no se puede contactar ni deduplicar: sería una
+-- fila huérfana que ninguna sincronización posterior podría volver a encontrar.
+alter table leads
+  drop constraint if exists leads_identidad_presente;
+alter table leads
+  add constraint leads_identidad_presente
+  check (phone is not null or bsuid is not null);
+
+-- La cola se sigue ordenando y filtrando igual; lo único nuevo es poder listar
+-- los que no tienen teléfono, que son los que necesitan una acción distinta
+-- (escribir por WhatsApp para pedir el número, en vez de llamar).
+create index if not exists leads_store_sin_telefono
+  on leads (store_id, last_interaction_at desc)
+  where phone is null;
+
+-- ---- 0106 ----
+-- 0104 — La cobertura del Master se pregunta a la base, no se recalcula en TS.
+--
+-- EL PROBLEMA. La 0100 enseñó a `order_coverage_for` a decidir la cobertura COD
+-- por COORDENADA además de por nombre de tarifa. Arregló la columna
+-- `order_master.coverage` —la escribe el trigger `order_master_coverage`— pero
+-- no a `classifyOrderCoverage` en TypeScript, que siguió resolviendo solo por
+-- nombre. Y ese valor de TS, no la columna, es el que alimenta a
+-- `classifyOperation` y por tanto a `macro_operation`.
+--
+-- El resultado son filas que se contradicen a sí mismas: `coverage` dice
+-- `provincia_cod` y `macro_operation` dice `agencia`. 585 pedidos, 578 de ellos
+-- explicados exactamente por la regla de coordenada que al TS le falta. Como
+-- `agencyPaymentReady` solo exige abono validado cuando la operación es
+-- Agencia, esos pedidos de provincia COD quedaron congelados en «Por confirmar»
+-- esperando un adelanto que su modalidad no pide. 212 estaban ahí, 56 con la
+-- guía ya creada: el caso que lo destapó fue #KP125383, Puerto Maldonado por
+-- Aliclik — la MISMA ciudad que la 0100 nombra como su caso motivador.
+--
+-- LA IDEA. No portar la regla de coordenada a TypeScript: eso deja dos
+-- definiciones vivas y libres de divergir de nuevo, que es precisamente cómo
+-- nació este bug. `order_coverage_for` ya es la definición canónica —así lo
+-- declara el comentario de `recomputeOrderMaster`— así que el recompute pasa a
+-- preguntársela a ella. Esta función es solo el envoltorio por lotes: un ida y
+-- vuelta por tanda en vez de uno por pedido.
+--
+-- Devuelve una fila por elemento del arreglo, en el mismo orden. Las claves
+-- ausentes o nulas llegan como null y `order_coverage_for` ya sabe tratarlas
+-- (sin distrito devuelve `por_revisar`; sin coordenada, se salta el mapa COD).
+
+create or replace function order_coverage_batch(
+  p_rows jsonb,
+  p_day date default current_date
+)
+returns table (order_id uuid, coverage text)
+language sql
+stable
+security definer
+set search_path to 'public'
+as $function$
+  select
+    (r->>'order_id')::uuid,
+    order_coverage_for(
+      (r->>'store_id')::uuid,
+      r->>'region',
+      r->>'province',
+      r->>'district',
+      (r->>'latitude')::double precision,
+      (r->>'longitude')::double precision,
+      p_day
+    )
+  from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) as r;
+$function$;
+
+comment on function order_coverage_batch(jsonb, date) is
+  'Cobertura canónica para una tanda de pedidos. Envoltorio de order_coverage_for '
+  'para que el recompute del Master no reimplemente la clasificación en TypeScript.';
+
+revoke all on function order_coverage_batch(jsonb, date) from public, anon, authenticated;
+grant execute on function order_coverage_batch(jsonb, date) to service_role;
+
+-- ---- 0107 ----
+-- 0107 — Anomalías de ingesta: hacer visible el trabajo que se descarta.
+--
+-- POR QUÉ. El modo de fallo recurrente de este sistema no es el error ruidoso,
+-- es el descarte silencioso. Solo en `lib/` hay 58 `catch` que se tragan la
+-- excepción (35 documentados como "best-effort") más los `return null` de las
+-- rutas de ingesta. Cada uno es un sitio donde se puede perder trabajo sin que
+-- nadie se entere, y en una sola jornada aparecieron dos casos reales: ~25
+-- conversaciones diarias que no generaban lead, y handoffs rechazados por falta
+-- de teléfono que nunca subían a "Atender ahora".
+--
+-- El precedente es `sinTelefono`: el ÚNICO sitio instrumentado. Gracias a él se
+-- pudo fechar al día el inicio de la migración de identidad de Meta (23 días en
+-- cero exacto, luego 1, 3, 11, 16, 20, 29) y decidir con números en vez de
+-- intuición. Esta tabla generaliza ese contador.
+--
+-- ES UN DETECTOR DE CAMBIOS, NO UN LOG. Lo que importa no es "hay 25 descartes"
+-- —eso puede ser lo normal— sino "ayer 0, hoy 25". Por eso se AGREGA por día en
+-- vez de guardar un registro por evento: un log por evento crece sin fin, nadie
+-- lo lee, y esconde justamente el salto que sí importa.
+--
+-- QUÉ NO CUBRE, para no confiarse: solo detecta trabajo DESCARTADO. Un camino
+-- que devuelve un resultado equivocado sin descartar nada (como un filtro que no
+-- empareja y hace re-derivar un estado) no pasa por aquí — eso lo atrapan los
+-- tests, no esta tabla.
+
+create table if not exists ingest_anomalies (
+  id uuid primary key default gen_random_uuid(),
+  store_id uuid not null references stores(id) on delete cascade,
+  -- Día LOCAL de la operación, no UTC: en Lima (UTC-5) el corte UTC cae a las
+  -- 7 de la tarde y partiría en dos la jornada de trabajo, que es justo la
+  -- unidad en la que se compara "ayer vs hoy".
+  dia date not null,
+  -- Qué camino descartó. p. ej. 'leads_sync', 'handoff', 'conversation_event'.
+  source text not null,
+  -- Por qué. p. ej. 'sin_identidad', 'enrich_falló', 'kapso_error'.
+  reason text not null,
+  count integer not null default 1,
+  -- UN ejemplo del día, el primero. Sirve para reproducir sin guardar todo.
+  sample jsonb,
+  first_seen_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  unique (store_id, dia, source, reason)
+);
+
+-- La lectura es siempre "los últimos N días de estas tiendas".
+create index if not exists ingest_anomalies_store_dia
+  on ingest_anomalies (store_id, dia desc);
+
+/**
+ * Anota una anomalía sumando al contador del día.
+ *
+ * Va como función y no como upsert desde el cliente porque PostgREST no sabe
+ * expresar `count = count + n`: sin esto haría falta leer-modificar-escribir, que
+ * con dos procesos del cron solapados pierde cuentas en silencio — el mismo
+ * problema que la tabla viene a resolver.
+ *
+ * `sample` conserva el PRIMERO del día (coalesce sobre el existente): un ejemplo
+ * estable sirve para reproducir; uno que cambia en cada llamada no.
+ */
+create or replace function public.note_ingest_anomaly(
+  p_store_id uuid,
+  p_source text,
+  p_reason text,
+  p_count integer default 1,
+  p_sample jsonb default null
+) returns void
+language sql
+security definer
+set search_path = public
+as $$
+  insert into ingest_anomalies (store_id, dia, source, reason, count, sample)
+  values (
+    p_store_id,
+    (now() at time zone 'America/Lima')::date,
+    p_source,
+    p_reason,
+    greatest(p_count, 1),
+    p_sample
+  )
+  on conflict (store_id, dia, source, reason) do update
+    set count = ingest_anomalies.count + greatest(p_count, 1),
+        last_seen_at = now(),
+        sample = coalesce(ingest_anomalies.sample, excluded.sample);
+$$;
+
+revoke all on function public.note_ingest_anomaly(uuid, text, text, integer, jsonb) from public, anon, authenticated;
+grant execute on function public.note_ingest_anomaly(uuid, text, text, integer, jsonb) to service_role;
+
+revoke all on table ingest_anomalies from public, anon, authenticated;
+grant select on table ingest_anomalies to authenticated;
+grant all on table ingest_anomalies to service_role;
+
+alter table ingest_anomalies enable row level security;
+
+-- Lectura: un miembro ve las anomalías de las tiendas que ya puede ver. No es
+-- dato sensible, pero se cierra con el mismo helper que el resto del esquema.
+-- Escritura: solo el ingestor (service_role, que salta RLS) vía la función.
+drop policy if exists ingest_anomalies_read on ingest_anomalies;
+create policy ingest_anomalies_read on ingest_anomalies
+  for select
+  using (store_id in (select auth_store_ids()));
+
+-- ---- 0108 ----
+-- 0108 — `created_via` para las salidas de Shalom: la vía normal no se marcaba.
+--
+-- POR QUÉ. `shipments.created_via` está documentada como "origen técnico de la
+-- salida", y para Shalom no distinguía nada: las 185 guías Shalom en producción
+-- tenían `created_via` nulo, exactamente igual que una guía importada del
+-- reporte Excel. Al mirar la columna, la conclusión inmediata era que el flujo
+-- del drawer no se había usado nunca — y es falso: las registraron cuatro
+-- personas identificadas, cada una con su evento `guide_created` y su actor.
+--
+-- CAUSA. Hay DOS vías en el drawer y solo la rara marcaba su origen. La de
+-- contingencia (copiar a mano una guía ya emitida en pro.shalom.pe) escribía
+-- `created_via = 'shalom_pro_manual'` desde que nació. La vía normal —crear la
+-- guía por `POST /v1/orders`— nunca escribió la columna. El caso frecuente era
+-- justo el que no dejaba rastro, así que el campo solo podía decir "esta salida
+-- es una excepción" y jamás "esta salida es lo habitual".
+--
+-- EL BACKFILL NO ADIVINA. Solo toca filas con la huella inequívoca de la vía
+-- API: `shalom_ose_id` presente (el identificador interno lo devuelve la API al
+-- crear la orden; el reporte Excel no lo trae) y `shalom_raw` sin la clave
+-- `source` (que es la marca que escribe la vía de contingencia). Al escribir
+-- esta migración las 185 filas cumplen las dos condiciones, ninguna tiene
+-- `source_batch_id` —o sea, ninguna vino de una importación— y las 185 tienen
+-- su evento `guide_created` con actor. Una guía futura importada del reporte no
+-- traería `shalom_ose_id` y por eso quedaría fuera.
+--
+-- Es idempotente: al filtrar por `created_via is null` no reescribe nada que ya
+-- tenga origen, así que correrla dos veces no cambia el resultado.
+
+update shipments
+   set created_via = 'shalom_pro_api'
+ where courier = 'shalom'
+   and created_via is null
+   and shalom_ose_id is not null
+   and shalom_raw->>'source' is null;
+
+comment on column shipments.created_via is
+  'Origen técnico de la salida: integraciones existentes, fenix_directo, '
+  'mom_manual_route, shalom_pro_api (guía emitida por la API de Shalom) o '
+  'shalom_pro_manual (guía ya emitida en pro.shalom.pe y copiada a mano). '
+  'Nulo = la salida entró por importación de reporte, no se creó desde Kapta.';
+
+-- ---- 0109 ----
 -- Recupera las devoluciones que el importador de Excel venía descartando.
 --
 -- QUÉ PASABA. El importador clasificaba por resultado para la clienta y solo

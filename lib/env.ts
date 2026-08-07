@@ -120,6 +120,20 @@ export const env = {
     (process.env.SHALOM_API_BASE ?? "https://api.shalom-api-peru.com").trim().replace(/\/$/, ""),
   shalomConfigured: () => Boolean((process.env.SHALOM_API_KEY ?? "").trim()),
 
+  // --- Chatby (white-label de uChat): "Live Chat Webhook" ---
+  //     Secreto compartido que Chatby manda en la cabecera personalizada del
+  //     webhook. Es UNO SOLO para las dos tiendas, y no por descuido: Chatby
+  //     configura este webhook por CUENTA, no por bot, y la cuenta cubre Aurela
+  //     y Kenku. Rompe la convención de secreto-por-tienda del resto de los
+  //     webhooks (Kapso, Shopify), donde existe para que un dueño de tienda no
+  //     pueda inyectar datos en otra. Acá las dos tiendas son del mismo dueño y
+  //     del mismo panel de Chatby, así que ese riesgo no aplica — pero conviene
+  //     que quede escrito, porque la excepción no se ve leyendo la ruta.
+  //
+  //     Se recorta por lo mismo que SHALOM_API_KEY y SWAYP_TOKEN: se pega a mano
+  //     en dos paneles distintos y un blanco invisible da 401 siempre.
+  chatbyWebhookSecret: () => (process.env.CHATBY_WEBHOOK_SECRET ?? "").trim(),
+
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---
   shopifyAppApiKey: () => process.env.SHOPIFY_APP_API_KEY ?? "",
   shopifyAppApiSecret: () => process.env.SHOPIFY_APP_API_SECRET ?? "",

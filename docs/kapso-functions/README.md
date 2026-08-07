@@ -24,16 +24,17 @@ de funciones de Kapso.
 
 | Función | Tienda | Estado |
 |---|---|---|
-| `aurela-notify-team.js` | Aurela | ✅ copia del código desplegado |
-| `kenku-notify-team.js` | Kenku Perú | ✅ copia del código desplegado |
-| `check-coverage` (watchdog) | ambas | ❌ **falta** — nunca se capturó |
+| `aurela-notify-team.js` | Aurela | ✅ copia del desplegado, **con el gate de `reason` ya aplicado** |
+| `kenku-notify-team.js` | Kenku Perú | ✅ copia del desplegado |
+| `aurela-check-coverage.js` | Aurela | ✅ copia del desplegado (lock_version 78) |
+| `check-coverage` | Kenku Perú | ❌ **falta** — otro proyecto, otra API key |
 
-⚠️ **`check-coverage` es la que más importa y no está acá.** Es la que contiene
-el watchdog de "clientes esperando respuesta" (`maybeRunWatchdog` /
-`watchdogSweep`), que hoy alimenta el grueso de la cola. Para completar el
-respaldo hay que copiar su código desde `app.kapso.ai → Functions →
-check-coverage → Code`, en **las dos** tiendas (están desplegadas por separado y
-usan motivos distintos: Aurela manda `bot_silent`, Kenku `esperando respuesta`).
+⚠️ **Falta el `check-coverage` de Kenku.** Está desplegado en un proyecto Kapso
+distinto, con su propia API key. Hay que copiarlo desde `app.kapso.ai →
+(proyecto Kenku) → Functions → check-coverage → Code`. Las dos tiendas usan
+motivos distintos —Aurela manda `bot_silent`; el de Kenku hay que confirmarlo,
+se cree que es `esperando respuesta`— así que la copia de Aurela **no sirve** de
+referencia para la otra.
 
 ## Cómo se conectan con el dashboard
 
@@ -60,22 +61,47 @@ Los secrets son **por función** en Kapso: `STORE_WEBHOOK_URL` y
 `STORE_WEBHOOK_SECRET` hay que cargarlos en cada función que postee (notify-team
 y check-coverage), aunque ya estén en otra.
 
-## Pendiente conocido
+## Cómo llega el watchdog al dashboard (leído del código de Aurela)
 
-**Aurela no tiene el gate de `reason`.** Su `postStoreHandoff` postea también en
-el flujo de voucher, que no manda motivo, y eso ensucia `handoff_at` con eventos
-que no son handoffs (en producción quedaron leads con `handoff_reason` NULL).
-Kenku ya lo tiene. El parche, dentro de `postStoreHandoff` y justo después de
-`if (!url) return;`:
+`postWaitingAlert` postea un cuerpo que **no lleva cabecera `X-Webhook-Event`**:
 
 ```js
-  // El flujo de voucher no manda `reason`: no es un handoff, no va al dashboard.
-  const reason = String(payload.reason || "").trim();
-  if (!reason) return;
+{
+  event: "conversation.waiting",     // ← no es "workflow.execution.handoff"
+  phone_number: c.phone || "",
+  conversation_id: c.id || "",
+  reason: "bot_silent",
+  context_summary: "…",
+  minutes_waiting: 12
+}
 ```
 
-…y usar esa variable en el cuerpo (`reason,` en lugar de volver a leer
-`payload.reason`).
+Ese `event` no coincide con ningún prefijo conocido, así que
+`classifyKapsoEvent` cae a inferir por la FORMA del cuerpo — y como trae
+`reason`, lo clasifica como **handoff**. Va a `applyHandoff`, que es lo correcto.
+Conviene saberlo: el enrutado depende de que el payload traiga `reason`, no del
+nombre del evento.
 
-El dashboard ya está blindado por su lado: un POST sin motivo no reclasifica un
-lead existente. El gate es para no ensuciar el dato de origen.
+### El teléfono puede venir vacío, y ya pasó
+
+En `watchdogSweep`: `phone: convo.phone_number || ""`. **No hay ningún guard que
+exija teléfono** — si la conversación viene sin `phone_number`, se postea
+`phone_number: ""` igual.
+
+Y eso no es teórico: es exactamente el caso de la migración de identidad de Meta.
+Un cliente que adopta un *username* de WhatsApp deja de compartir su número, así
+que `convo.phone_number` llega ausente. El watchdog postea sin teléfono, y como
+`postWaitingAlert` **tampoco manda el BSUID**, el handoff quedaba sin ninguna
+identidad y el dashboard lo descartaba en silencio.
+
+Lo detectó la superficie de anomalías (migración 0107) el día que se encendió:
+
+```
+source: handoff · reason: sin_identidad
+sample: {"reason":"esperando respuesta","conversationId":"31513f90-…"}
+```
+
+**Ya está cubierto del lado del dashboard**: desde el PR #405, un handoff sin
+teléfono ni BSUID se empareja por `kapso_conversation_id`, que este payload sí
+trae. Mejorarlo del lado de Kapso —mandar el BSUID en `postWaitingAlert`— haría
+que además funcione cuando el lead todavía no existe, pero no es urgente.

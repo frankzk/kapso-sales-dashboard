@@ -12,9 +12,17 @@ import {
   CONFIRMATION_CONTACT_KINDS,
   CONFIRMATION_FOLLOWUP_KINDS,
   CONFIRMATION_LAST_ATTEMPT_KINDS,
+  hasConfirmationSignal,
   reachedLastAttempt,
 } from "@/lib/order-confirmation";
 
+// v1.8: la cobertura la decide la base (`order_coverage_for`), no una segunda
+// implementación en TypeScript que ignoraba el mapa de puntos COD de la 0100.
+// Corrige 585 filas que se contradecían —`coverage` provincia_cod contra
+// `macro_operation` agencia—, de las cuales 212 estaban congeladas en «Por
+// confirmar» esperando un abono que Provincia COD no exige. La versión sube
+// para que el cron las reconcilie.
+//
 // v1.7: el sub-estado de agencia prueba custodia. Mueve 54 pedidos que estaban
 // en «Por confirmar» con el paquete ya en manos del courier, así que la versión
 // sube para que el cron los reconcilie.
@@ -22,7 +30,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.7" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.8" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -845,11 +853,15 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
     );
   }
 
+  // Lima omite confirmación (§5) y por eso la política vive aquí; la evidencia
+  // la responde `hasConfirmationSignal`, que es la única definición.
   const confirmed =
     operation === "lima" ||
-    input.guides.length > 0 ||
-    Boolean(latestEvent(input.events, ["confirmed", "guide_registered", "label_generated"])) ||
-    normalize(input.order.financial_status) === "paid";
+    hasConfirmationSignal({
+      hasGuide: input.guides.length > 0,
+      events: input.events,
+      financialStatus: input.order.financial_status,
+    });
   const paymentReady = agencyPaymentReady(operation, input.paymentState);
 
   if (confirmed && paymentReady) {

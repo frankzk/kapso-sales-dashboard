@@ -141,6 +141,20 @@ Reglas iniciales:
   servidor para Provincia COD o Agencia.
 - Cañete siempre se clasifica como Agencia, aunque Shopify lo etiquete como
   `Lima (provincia)` o exista una tarifa COD histórica que coincida.
+- La cobertura tiene UNA sola definición, `order_coverage_for` en la base. Decide
+  la cobertura COD por tarifa vigente **y** por cercanía a un punto donde Aliclik
+  ya entregó COD, porque el nombre del destino no basta: Shopify guarda
+  «Puerto Maldonado» (la ciudad) y Aliclik factura «Tambopata» (el distrito), y
+  por texto nunca casan. La modalidad del pedido —y con ella la exigencia de
+  abono— se deriva de esa clasificación, así que nada la recalcula por separado.
+- La confirmación tiene UNA sola definición, `hasConfirmationSignal`.
+  Un pedido está confirmado si existe una guía, si hay evento `confirmed`,
+  `guide_registered` o `label_generated`, o si Shopify lo da por pagado —en
+  contraentrega no hay pago previo, así que `paid` significa que se cobró por
+  otra vía—. Responde por la evidencia: la exención de Lima es política de
+  macroetapa y se aplica donde se resuelve la etapa, no dentro de la
+  definición, porque el estado operativo legado sí debe seguir distinguiendo
+  un pedido de Lima que nadie llamó.
 - Las rutas que no tienen cobertura se ocultan.
 - Las rutas con una condición pendiente, como falta de stock o pago, pueden
   mostrarse bloqueadas con una explicación.
@@ -483,6 +497,22 @@ que nadie tenga que resumirla a mano:
 - **Qué llevaba cada pedido.** Cuando el historial repite el mismo producto y la
   misma cantidad, se marca: eso no es un historial de compras variado, es el
   mismo pedido una y otra vez.
+- **Excepción: el cliente sin teléfono.** Desde el 29-jul-2026 Meta empezó a
+  entregar conversaciones sin número — el cliente adoptó un *username* de
+  WhatsApp y su identidad pasó a ser el **BSUID**. Fueron 0 durante 23 días y
+  luego 1, 3, 11, 16, 20, 29 al día (~3,5 % del volumen). Esos leads existen en
+  Kapta desde la migración `0105`, identificados por `(store_id, bsuid)`.
+  Para la confirmación cambian tres cosas, y conviene tenerlas claras:
+  - **No se pueden llamar, y por lo tanto no se confirman por llamada.** La
+    acción es escribirles por WhatsApp pidiéndoles el número.
+  - **No tienen historial ni antecedentes**, porque el historial se arma por
+    teléfono. La regla de riesgo del §8 no se les puede aplicar: no es que den
+    riesgo cero, es que **no hay dato**. Tratarlos como clientes limpios sería
+    leer un vacío como un aval.
+  - **No se les puede crear guía** hasta tener el número: los couriers lo
+    exigen. Un pedido suyo no puede pasar de Preparación sin ese dato.
+  En cuanto el cliente da su número, el lead vuelve a ser uno normal y todo lo
+  anterior aplica sin excepción.
 - **Antecedentes**: solo cuentan los **anulados y devueltos**, que es lo que la
   tabla nombra. Un pedido abierto o sin confirmar todavía no es un rechazo. Que
   un anulado se haya despachado o no **no cambia el conteo**: se muestra para
@@ -1184,9 +1214,13 @@ Primer bloque publicado en el drawer del Master:
   que Frankz o Yohalis la finalicen de nuevo.
 - Permisos separados para retornos, inventario, finanzas, finalización y
   reembolsos; los permisos puntuales de `user_permissions` siguen prevaleciendo.
-- El resolver quedó versionado como `mom-v1.4`; el cron detecta versiones
-  anteriores y recalcula el histórico por lotes hasta que todo el Master
-  converja, sin necesitar credenciales locales ni detener la sincronización.
+- El resolver quedó versionado —`mom-v1.4` en este bloque; la versión vigente es
+  siempre `MOM_RESOLUTION_VERSION` en `lib/order-macro-stage.ts`, hoy
+  `mom-v1.8`—; el cron detecta versiones anteriores y recalcula el histórico por
+  lotes hasta que todo el Master converja, sin necesitar credenciales locales ni
+  detener la sincronización. Toda regla que cambie el resultado de filas que
+  nadie tocó debe subir esa constante, o el histórico queda con el veredicto
+  viejo.
 
 Segundo bloque publicado en el Dashboard consolidado:
 

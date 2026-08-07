@@ -1289,10 +1289,12 @@ export async function fetchAllConversationsRich(
 }
 
 export interface LeadSeed {
-  phone: string;
+  /** NULL cuando el cliente adoptó un username y dejó de compartir su número
+   *  (0105). En ese caso la identidad es `bsuid`, que pasa a ser obligatorio. */
+  phone: string | null;
   wa_id: string | null;
-  /** BSUID: identidad de WhatsApp scopeada al portfolio. Ver 0103. Solo se
-   *  guarda; nada empareja por él todavía. */
+  /** BSUID: identidad de WhatsApp scopeada al portfolio. Ver 0103. Desde la 0105
+   *  es la clave ALTERNATIVA cuando no hay teléfono. */
   bsuid: string | null;
   username: string | null;
   name: string | null;
@@ -1315,21 +1317,24 @@ const asBsuid = (v: unknown): string | null => {
 /**
  * Extract the lead identity from a Kapso conversation (null if no phone).
  *
- * Devolver null descarta la conversación ENTERA: el lead no se crea. Hoy eso solo
- * pasa con datos raros, pero es también el escenario del futuro — un cliente que
- * adopta un username puede llegar sin teléfono. Por eso `syncStoreLeads` cuenta
- * los descartes en `sinTelefono` en vez de perderlos en silencio.
+ * Devolver null descarta la conversación ENTERA: el lead no se crea. Desde la
+ * 0105 eso solo pasa cuando NO HAY NINGUNA identidad — ni teléfono ni BSUID —
+ * porque una fila así no se puede contactar ni volver a encontrar en la próxima
+ * sincronización. Un cliente que adoptó un username llega sin teléfono y sí
+ * genera lead, con `bsuid` como clave. `syncStoreLeads` sigue contando los que
+ * vienen sin número en `sinTelefono`, que ahora mide adopción y no pérdida.
  */
 export function conversationToLeadSeed(c: KapsoConversation): LeadSeed | null {
   const phone = normalizePhone((c.phone_number as string) ?? null);
-  if (!phone) return null;
+  const bsuid = asBsuid(c.business_scoped_user_id) ?? asBsuid(c.kapso?.business_scoped_user_id);
+  if (!phone && !bsuid) return null;
   return {
     phone,
     // OJO: `wa_id` cae al BSUID por compatibilidad histórica, pero son cosas
     // distintas — uno es telefónico y el otro no. La identidad nueva va en su
     // propia columna (`bsuid`), que es la que hay que leer.
     wa_id: (c.wa_id as string) ?? (c.business_scoped_user_id as string) ?? null,
-    bsuid: asBsuid(c.business_scoped_user_id) ?? asBsuid(c.kapso?.business_scoped_user_id),
+    bsuid,
     username:
       (typeof c.username === "string" && c.username.trim()) ||
       (typeof c.kapso?.username === "string" && c.kapso.username.trim()) ||
@@ -1349,6 +1354,11 @@ export function conversationToLeadSeed(c: KapsoConversation): LeadSeed | null {
 export interface HandoffInfo {
   conversationId: string | null;
   phone: string | null;
+  /** Identidad alternativa cuando el cliente no comparte su número (0105). Sale
+   *  del MISMO objeto `conversation` del webhook que el teléfono, así que un
+   *  handoff sin número igual llega identificado. */
+  bsuid: string | null;
+  username: string | null;
   name: string | null;
   reason: string | null;
   context: string | null;
@@ -1417,6 +1427,18 @@ export function parseHandoffPayload(body: any): HandoffInfo {
   return {
     conversationId: conv?.id ?? body?.conversation_id ?? exec?.conversation_id ?? null,
     phone: normalizePhone(conv?.phone_number ?? body?.phone_number ?? null),
+    // Mismas rutas y mismo guardián de forma que en conversationToLeadSeed: el
+    // objeto `conversation` del webhook es la misma conversación de Kapso, así
+    // que si el BSUID se leyera distinto en cada sitio el handoff y el sync
+    // terminarían creando DOS leads para la misma persona.
+    bsuid:
+      asBsuid(conv?.business_scoped_user_id) ??
+      asBsuid(conv?.kapso?.business_scoped_user_id) ??
+      asBsuid(body?.business_scoped_user_id),
+    username:
+      (typeof conv?.username === "string" && conv.username.trim()) ||
+      (typeof conv?.kapso?.username === "string" && conv.kapso.username.trim()) ||
+      null,
     name: conv?.contact_name ?? conv?.kapso?.contact_name ?? null,
     reason: reason ? String(reason) : null,
     context: context ? String(context) : null,

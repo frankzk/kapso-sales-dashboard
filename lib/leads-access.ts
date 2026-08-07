@@ -4,6 +4,13 @@ import { createServerSupabase } from "@/lib/db";
 import { shopifyOrderAdminUrl } from "@/lib/shopify";
 import { resolveAliclikHealth, type AliclikHealth } from "@/lib/aliclik-health";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
+import {
+  buildAnomalyDigest,
+  EMPTY_DIGEST,
+  localDay,
+  type AnomalyDigest,
+  type AnomalyRow,
+} from "@/lib/ingest-anomalies";
 
 /** El foco de salud de Aliclik para la org de una tienda. Gris si no se ubica la
  * org o no hay sonda fresca. Espeja `aliclikHealthFor` de orders-master-access. */
@@ -108,21 +115,38 @@ const LEAD_BOARD_SELECT_LEGACY = LEAD_BOARD_SELECT.split(",")
  *  exportar una audiencia completa). */
 export const LEADS_VIEW_LIMIT = 200;
 
+/**
+ * A qué tiendas mira la cola. Una sola, o varias con la opción "Todas".
+ *
+ * Es SIEMPRE un array, incluso para una tienda: `in ("store_id", [x])` usa el
+ * mismo indice `(store_id, ...)` que `eq`, asi que no hay dos caminos que
+ * mantener ni un `if` que se pueda olvidar en una de las siete vistas.
+ *
+ * NO mezcla nada por dentro: cada lead sigue siendo su fila, con su tienda. Lo
+ * unico que cambia es que la consulta deja de acotarse a una. La RLS sigue
+ * decidiendo cuales de esas tiendas puede ver quien mira.
+ */
+export type StoreScope = string[];
+
+/** Valor de `?store=` que significa "todas las que puedo ver". */
+export const ALL_STORES = "all";
+
 export function leadsViewLimit(view: LeadView): number | null {
   return view === "por_llamar" ? null : LEADS_VIEW_LIMIT;
 }
 
 export async function getStoreLeads(
-  storeId: string,
+  storeIds: StoreScope,
   view: LeadView,
   limit: number | null = LEADS_VIEW_LIMIT,
 ): Promise<LeadRow[]> {
+  if (!storeIds.length) return [];
   const sb = await createServerSupabase();
   const buildQuery = (select: string = LEAD_BOARD_SELECT, count?: "exact") => {
     let q = sb
       .from("leads")
       .select(select, count ? { count } : undefined)
-      .eq("store_id", storeId);
+      .in("store_id", storeIds);
     switch (view) {
       case "por_llamar":
         q = q
@@ -389,55 +413,93 @@ export interface LeadQueueSnapshot {
   signature: string;
 }
 
-export async function getLeadQueueSnapshot(storeId: string): Promise<LeadQueueSnapshot> {
+const ZERO_COUNTS: LeadCounts = {
+  por_llamar: 0,
+  handoff: 0,
+  yape: 0,
+  seguimientos: 0,
+  ganados: 0,
+  perdidos: 0,
+  sin_llamar: 0,
+};
+
+/**
+ * Conteos y firma de la cola para el alcance actual.
+ *
+ * El RPC `lead_queue_counts` (0059) recibe UNA tienda, así que con varias se
+ * llama una vez por tienda y se suman. Se hace así, y no cambiando la firma de
+ * la función SQL, porque sumar siete enteros en memoria no se nota y tocar la
+ * función obligaría a una migración que hay que aplicar a mano antes de que el
+ * código salga — un desfase que ya dejó la cola en cero una vez.
+ *
+ * La firma CONCATENA las de cada tienda en orden fijo. Si se sumaran o se usara
+ * solo la de una, un cambio en la tienda B no movería la firma y el refresco
+ * automático se quedaría dormido justo cuando hay trabajo nuevo.
+ */
+export async function getLeadQueueSnapshot(storeIds: StoreScope): Promise<LeadQueueSnapshot> {
+  if (!storeIds.length) return { counts: { ...ZERO_COUNTS }, signature: "empty" };
   const sb = await createServerSupabase();
   const nowIso = new Date().toISOString();
 
-  // Camino normal (migración 0059): un solo recorrido de la tabla devuelve los
-  // siete conteos y la firma.
-  const rpc = await sb
-    .rpc("lead_queue_counts", {
-      p_store_id: storeId,
-      p_handoff_cutoff: handoffFreshCutoffIso(),
-      p_now: nowIso,
-    })
-    .maybeSingle();
-  const row = rpc.data as Record<string, number | string | null> | null;
-  if (!rpc.error && row) {
-    const n = (key: string) => Number(row[key] ?? 0) || 0;
-    return {
-      counts: {
-        por_llamar: n("por_llamar"),
-        handoff: n("handoff"),
-        yape: n("yape"),
-        seguimientos: n("seguimientos"),
-        ganados: n("ganados"),
-        perdidos: n("perdidos"),
-        sin_llamar: n("sin_llamar"),
-      },
-      signature: `${n("total")}:${String(row.last_change ?? "")}`,
-    };
-  }
+  const perStore = await Promise.all(
+    // Orden fijo: la firma es una comparación de cadenas, y con las tiendas en
+    // otro orden parecería que cambió algo en cada recarga.
+    [...storeIds].sort().map(async (storeId) => {
+      // Camino normal (migración 0059): un solo recorrido de la tabla devuelve
+      // los siete conteos y la firma.
+      const rpc = await sb
+        .rpc("lead_queue_counts", {
+          p_store_id: storeId,
+          p_handoff_cutoff: handoffFreshCutoffIso(),
+          p_now: nowIso,
+        })
+        .maybeSingle();
+      const row = rpc.data as Record<string, number | string | null> | null;
+      if (!rpc.error && row) {
+        const n = (key: string) => Number(row[key] ?? 0) || 0;
+        return {
+          counts: {
+            por_llamar: n("por_llamar"),
+            handoff: n("handoff"),
+            yape: n("yape"),
+            seguimientos: n("seguimientos"),
+            ganados: n("ganados"),
+            perdidos: n("perdidos"),
+            sin_llamar: n("sin_llamar"),
+          },
+          signature: `${n("total")}:${String(row.last_change ?? "")}`,
+        };
+      }
 
-  // La app puede desplegarse antes de aplicar 0059. Sin este camino la cola se
-  // quedaría SIN contadores (los siete a cero), que es peor que ir lento.
-  const counts = await legacyLeadCounts(sb, storeId, nowIso);
-  // Sin `last_change` la firma solo capta cambios de pertenencia (entra/sale de
-  // una pestaña). El refresco de seguridad periódico cubre el resto.
-  const signature = `legacy:${Object.values(counts).join(",")}`;
-  return { counts, signature };
+      // La app puede desplegarse antes de aplicar 0059. Sin este camino la cola
+      // se quedaría SIN contadores (los siete a cero), que es peor que ir lento.
+      const counts = await legacyLeadCounts(sb, [storeId], nowIso);
+      // Sin `last_change` la firma solo capta cambios de pertenencia (entra/sale
+      // de una pestaña). El refresco de seguridad periódico cubre el resto.
+      return { counts, signature: `legacy:${Object.values(counts).join(",")}` };
+    }),
+  );
+
+  const counts = { ...ZERO_COUNTS };
+  for (const part of perStore) {
+    for (const key of Object.keys(counts) as (keyof LeadCounts)[]) {
+      counts[key] += part.counts[key];
+    }
+  }
+  return { counts, signature: perStore.map((p) => p.signature).join("|") };
 }
 
-export async function getLeadCounts(storeId: string): Promise<LeadCounts> {
-  return (await getLeadQueueSnapshot(storeId)).counts;
+export async function getLeadCounts(storeIds: StoreScope): Promise<LeadCounts> {
+  return (await getLeadQueueSnapshot(storeIds)).counts;
 }
 
 async function legacyLeadCounts(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,
-  storeId: string,
+  storeIds: StoreScope,
   nowIso: string,
 ): Promise<LeadCounts> {
-  const head = () => sb.from("leads").select("*", { count: "exact", head: true }).eq("store_id", storeId);
+  const head = () =>
+    sb.from("leads").select("*", { count: "exact", head: true }).in("store_id", storeIds);
   const [porLlamar, handoff, yape, seguimientos, ganados, perdidos, sinLlamar] = await Promise.all([
     head().in("category", ["open", "hot"]).neq("status", "yape_por_verificar"),
     head().eq("needs_attention", true).gte("handoff_at", handoffFreshCutoffIso()), // "Atender ahora"
@@ -456,4 +518,32 @@ async function legacyLeadCounts(
     perdidos: perdidos.count ?? 0,
     sin_llamar: sinLlamar.count ?? 0,
   };
+}
+
+/**
+ * Anomalías de ingesta del alcance actual (hoy y ayer). Ver 0107.
+ *
+ * Se leen bajo el cliente de SESIÓN, así que la RLS decide qué tiendas entran —
+ * el mismo criterio que el resto de la cola. Nunca lanza: es un indicador de
+ * salud, y si falla no debe tumbar la página de Leads.
+ */
+export async function getAnomalyDigest(
+  storeIds: StoreScope,
+  timezone = "America/Lima",
+): Promise<AnomalyDigest> {
+  if (!storeIds.length) return EMPTY_DIGEST;
+  const hoy = localDay(timezone, 0);
+  const ayer = localDay(timezone, -1);
+  try {
+    const sb = await createServerSupabase();
+    const { data, error } = await sb
+      .from("ingest_anomalies")
+      .select("store_id,dia,source,reason,count,sample,last_seen_at")
+      .in("store_id", storeIds)
+      .in("dia", [hoy, ayer]);
+    if (error) return EMPTY_DIGEST;
+    return buildAnomalyDigest((data as unknown as AnomalyRow[]) ?? [], hoy, ayer);
+  } catch {
+    return EMPTY_DIGEST;
+  }
 }

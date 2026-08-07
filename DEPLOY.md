@@ -83,6 +83,7 @@ roles and the `auth` schema, so it just works.
    | `ALICLIK_WRITE_ENABLED` | `false` por defecto. `true` habilita CREAR guías en Aliclik |
    | `SHALOM_API_KEY` | API key (`sk_…`) del wrapper de Shalom. **Global: una para todas las tiendas.** Sin ella no aparece «+ Guía Shalom» (ver 5ñ) |
    | `SHALOM_API_BASE` | `https://api.shalom-api-peru.com` (optional). **El host a secas, sin `/v1`**: el cliente ya añade la ruta, y una base con `/v1` produce `/v1/v1/…` → 404. Si no existe la variable, el valor por defecto ya es el correcto |
+   | `CHATBY_WEBHOOK_SECRET` | Secreto del «Live Chat Webhook» de Chatby. **Lo elegís vos** (`openssl rand -hex 32`), no lo emite Chatby. Va también en Chatby → Integrations → Live Chat Support → Webhook, campo *Custom Header*: `X-Webhook-Secret: <valor>`. Sin él el receptor rechaza todo (ver 5q) |
 
    `DATABASE_URL` is only needed for migrations; you don't have to add it to
    Vercel.
@@ -937,6 +938,22 @@ clave de idempotencia. En consecuencia:
   haya sido recibida en agencia. Ese `{id}` es el de `GET /v1/orders`, **no** el
   `ose_id` ni la `guia` (por eso hay tres columnas y no una).
 
+### De qué vía nació cada salida — **needs migration 0108**
+
+`shipments.created_via` distingue las dos vías del drawer: `shalom_pro_api` (la
+guía la emite la integración, el caso normal) y `shalom_pro_manual` (ya existía
+en `pro.shalom.pe` y se copió a mano). Los valores viven en `lib/shalom/origin.ts`
+y ningún insert debe escribirlos sueltos: `test/shalom-origin.test.ts` exige que
+**toda** inserción de salida de ese fichero declare su origen.
+
+Hizo falta porque durante las primeras 185 guías solo la vía de contingencia
+marcaba la columna y la vía normal no, así que `created_via` quedaba nulo — el
+mismo valor que una guía importada del reporte. Mirando la columna parecía que el
+drawer no se había usado nunca, cuando en realidad lo habían usado cuatro
+personas. La 0108 rellena esas filas y **no adivina**: solo toca las que tienen
+`shalom_ose_id` (identificador que devuelve la API al crear y que el reporte
+Excel no trae) y `shalom_raw` sin la clave `source`. Es idempotente.
+
 ### Los estados: `/api/cron/shalom-reconcile`, cada 30 min
 
 Shalom **no tiene webhook**, y la vía de entrada por reporte Excel —que existe y
@@ -1218,6 +1235,73 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   estar completo.
 - Revisar primero una ruta pequeña en producción y comprobar su historial en el
   Master antes de usarla con todos los couriers.
+
+## 5q. Chatby — capturar la conversación del Live Chat
+
+- **Requiere migración 0104** antes de activar el webhook.
+- Chatby (white-label de uChat) **no expone lectura de mensajes por API**: sus
+  endpoints de conversación devuelven agregados y el modelo `Subscriber` solo
+  trae `last_message_at`/`last_message_type`. El texto llega únicamente por este
+  webhook, y **no hay forma de pedir el histórico**: lo que no se capture
+  mientras está apagado se pierde para siempre. Por eso conviene activarlo
+  aunque la interfaz que lo consuma todavía no exista.
+- Generá el secreto (`openssl rand -hex 32`), cargalo como `CHATBY_WEBHOOK_SECRET`
+  y en Chatby → **Integrations → Live Chat Support → Webhook**:
+
+  | Campo | Valor |
+  |---|---|
+  | Webhook URL | `{NEXT_PUBLIC_SITE_URL}/api/webhooks/chatby` |
+  | Custom Header | `X-Webhook-Secret: <CHATBY_WEBHOOK_SECRET>` |
+
+- Antes de darle a *Save*, un **GET a la misma URL** confirma que la ruta existe
+  y que el secreto ya está cargado (`configured: true`), sin revelarlo. Sin ese
+  GET, la única forma de comprobar la configuración sería esperar a que un
+  cliente escriba.
+- ⚠️ **Medido en producción (2026-08-05): este webhook NO cubre WhatsApp.** Con
+  el bot pausado se mandaron dos mensajes entrantes de WhatsApp y no hubo
+  ninguna entrega — en los logs de Vercel no aparece **ni una** petición a la
+  ruta en ese minuto. No es configuración: el ping de validación del *Save* sí
+  llegó y sí escribió fila con esa misma URL y cabecera. «Live Chat» en Chatby
+  significa su **widget web**.
+  El receptor se conserva igual porque el paso **External Request** del flow
+  builder, que sí corre sobre WhatsApp, puede POSTear a esta misma ruta con la
+  misma cabecera.
+- **Límites del webhook, no nuestros**: solo manda mensajes **entrantes** y solo
+  con el **bot pausado**. La fase en que el bot conversa no llega. Los salientes
+  se emiten desde el dashboard vía `POST /subscriber/send-content` con
+  `send_as_agent: 1`, y el hilo se arma mezclando las dos mitades.
+- Se configura **por cuenta, no por bot**: un único webhook para Aurela y Kenku.
+  Por eso `chatby_webhook_log` todavía no tiene `store_id` — resolver la tienda
+  exige saber qué trae el payload, y escribirlo a ciegas pondría la conversación
+  en la tienda equivocada.
+- Es una bitácora **append-only y sin pérdida**: guarda el JSON entero tal como
+  llegó, incluso si no es JSON válido. La tabla definitiva se rellena desde acá.
+
+## 5r. Anomalías de ingesta — ver lo que se descarta
+
+- **Requiere migración 0107** (`ingest_anomalies` + `note_ingest_anomaly`).
+- Sin ella no se rompe nada: `noteAnomaly` se traga su propio fallo a propósito
+  (el medidor no puede tumbar lo que mide), así que el indicador simplemente no
+  aparece hasta que se aplique.
+- En la cabecera de Leads sale **«⚠ N descartados»** cuando hoy hubo alguno, con
+  el desglose en el tooltip y «(ayer 0)» cuando el día anterior estuvo limpio.
+  **Lo que importa es el salto, no el nivel**: 25 descartes pueden ser lo normal;
+  «ayer 0, hoy 25» es lo que hizo falta para fechar la migración de identidad de
+  Meta al día.
+- Se agrega **por día y por (tienda, camino, motivo)**, no un registro por
+  evento: un log por evento crece sin fin, nadie lo lee y esconde el salto.
+- **Qué cubre**: trabajo DESCARTADO — conversaciones que no generan lead,
+  handoffs rechazados, pasos best-effort que fallan. **Qué no cubre**: un camino
+  que devuelve un resultado equivocado sin descartar nada. Eso lo atrapan los
+  tests, no esta tabla.
+- Consulta directa cuando haga falta el detalle:
+
+  ```sql
+  select dia, source, reason, count, sample, last_seen_at
+  from ingest_anomalies
+  where dia > current_date - 14
+  order by dia desc, count desc;
+  ```
 
 ## 7. Post-deploy verification
 

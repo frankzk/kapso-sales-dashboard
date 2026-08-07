@@ -17,6 +17,8 @@
 //   4. En proceso                — hay gestión logística iniciada sin resultado.
 //   5. Pendiente                 — todavía no arrancó bien el proceso logístico.
 
+import { hasConfirmationSignal } from "@/lib/order-confirmation";
+
 export type GeneralStatus =
   | "pendiente"
   | "en_proceso"
@@ -283,18 +285,22 @@ export function currentGuide(guides: GuideSnapshot[]): GuideSnapshot | null {
 
 /**
  * Sub-estado de un pedido que todavía no arrancó su proceso logístico (§3.1).
- * `confirmado` se infiere de una señal explícita (evento 'confirmed') o de que
- * Shopify ya lo dé por pagado — en contraentrega no hay pago previo, así que la
- * mayoría de los COD se quedan en "sin confirmar" hasta que alguien lo registre.
+ * La confirmación se pregunta a `hasConfirmationSignal`, la única definición:
+ * antes se resolvía aquí mirando solo el evento `confirmed` y el pago de
+ * Shopify, y eso decía «sin confirmar» sobre pedidos que el MOM ya daba por
+ * confirmados. En contraentrega no hay pago previo, así que la mayoría de los
+ * COD se quedan en "sin confirmar" hasta que alguien lo registre.
  */
 function pendingOperational(
   order: OrderSnapshot,
   guides: GuideSnapshot[],
   events: OrderEventSnapshot[],
 ): string {
-  const confirmed =
-    events.some((e) => e.kind === "confirmed") ||
-    (order.financial_status ?? "").toLowerCase() === "paid";
+  const confirmed = hasConfirmationSignal({
+    hasGuide: guides.length > 0,
+    events,
+    financialStatus: order.financial_status,
+  });
 
   if (guides.length) {
     // Hay guía pero nunca se despachó: el pedido está preparado y detenido.

@@ -1,3 +1,5 @@
+import { CONFIRMATION_SIGNAL_KINDS } from "@/lib/order-confirmation";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type MomOwnerPeriodKey = "yesterday" | "last7" | "month" | "previous_month";
@@ -230,7 +232,7 @@ const EXPLICIT_REPROGRAM_SUBSTAGES = new Set([
   "salida_swayp_programada",
 ]);
 
-const CONFIRMATION_EVENTS = new Set(["confirmed", "guide_registered", "label_generated"]);
+const CONFIRMATION_EVENTS = new Set<string>(CONFIRMATION_SIGNAL_KINDS);
 
 export function buildMomOwnerSummary(input: BuildMomOwnerSummaryInput): MomOwnerSummary {
   const periods = momOwnerPeriods(input.today);

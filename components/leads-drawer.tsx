@@ -24,6 +24,8 @@ import {
   type LeadSegment,
   type LeadWindow,
   type YapeKind,
+  leadHandle,
+  leadCanCall,
 } from "@/lib/leads";
 import {
   confirmLeadWon,
@@ -417,11 +419,16 @@ export function LeadDrawer({
         ? "Ventana vencida"
         : `${Math.max(1, Math.ceil((msLeft ?? 0) / 3_600_000))}h restantes`;
   const src = SOURCE_CHIP[leadSourceKey(lead.source)];
-  const initial = (lead.name || lead.phone).trim()[0]?.toUpperCase() || "?";
+  // Un lead sin teléfono (0105) se nombra por @username o BSUID. `leadHandle`
+  // es la única fuente de esa decisión, para que la lista y el drawer no puedan
+  // discrepar sobre cómo se llama la misma persona.
+  const handle = leadHandle(lead);
+  const canCall = leadCanCall(lead);
+  const initial = (lead.name || handle).trim()[0]?.toUpperCase() || "?";
 
   async function copyPhone() {
     try {
-      await navigator.clipboard.writeText(`+${lead.phone}`);
+      await navigator.clipboard.writeText(handle);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -446,11 +453,11 @@ export function LeadDrawer({
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-lg font-semibold text-slate-900">{lead.name || lead.phone}</h2>
+                <h2 className="text-lg font-semibold text-slate-900">{lead.name || handle}</h2>
                 {isRecurrent && <Pill className="bg-amber-50 text-amber-700">★ Recurrente</Pill>}
               </div>
               <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm">
-                <span className="tabular-nums text-slate-700">+{lead.phone}</span>
+                <span className="tabular-nums text-slate-700">{handle}</span>
                 <button
                   type="button"
                   onClick={copyPhone}
@@ -462,9 +469,16 @@ export function LeadDrawer({
                   </svg>
                   {copied ? "copiado" : "copiar"}
                 </button>
-                <a href={`tel:+${lead.phone}`} className="text-xs text-slate-400 hover:text-slate-600">
-                  · llamar
-                </a>
+                {canCall ? (
+                  <a href={`tel:+${lead.phone}`} className="text-xs text-slate-400 hover:text-slate-600">
+                    · llamar
+                  </a>
+                ) : (
+                  // Sin número no hay llamada: decirlo es más útil que ofrecer un
+                  // botón que no marca. La acción real es escribirle por WhatsApp
+                  // pidiéndole el teléfono — el hilo ya está a la izquierda.
+                  <span className="text-xs font-medium text-amber-700">· sin número — pídeselo por chat</span>
+                )}
               </div>
               {/* Chips de estado bajo el teléfono: rellenan el alto del QR para
                   que el header quede balanceado, sin el hueco en blanco. */}
@@ -480,9 +494,11 @@ export function LeadDrawer({
             </div>
             {/* QR tel: — solo en panel ancho (desktop): la asesora escanea con
                 su celular y el marcador abre listo. En móvil ya está «llamar». */}
-            <div className="hidden shrink-0 self-start @min-[720px]:block">
-              <CallQr phone={lead.phone} size={72} />
-            </div>
+            {canCall && (
+              <div className="hidden shrink-0 self-start @min-[720px]:block">
+                <CallQr phone={lead.phone as string} size={72} />
+              </div>
+            )}
             <button
               type="button"
               onClick={onClose}
@@ -528,7 +544,7 @@ export function LeadDrawer({
                     <rect x="9" y="9" width="11" height="11" rx="2" />
                     <path d="M5 15V5a2 2 0 0 1 2-2h10" />
                   </svg>
-                  {copied ? "Copiado" : `Copiar +${lead.phone}`}
+                  {copied ? "Copiado" : `Copiar ${handle}`}
                 </button>
               </div>
             )}
