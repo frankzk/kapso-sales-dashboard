@@ -60,6 +60,7 @@ import {
 import { listActiveShopifyCatalogVariants, type ShopifyClientOpts } from "@/lib/shopify";
 import { canAdoptExistingGuide } from "@/lib/aliclik-orphans";
 import { MAX_ACCEPTABLE_LOSS, reconcileToOrderTotal } from "@/lib/aliclik-money";
+import { stampOrderMarker } from "@/lib/aliclik-reconcile";
 import {
   canScheduleExpress,
   limaTimeHHMM,
@@ -966,7 +967,10 @@ export async function createAliclikGuide(
   const { selectable: _s, reason: _r, ...courierBlock } = courier;
 
   const body = {
-    note: (input.note ?? "").trim() || undefined,
+    // La nota lleva la marca del pedido. Es lo que permite reencontrar la guía
+    // si esta creación se va en timeout: Aliclik devuelve `note` al listar, así
+    // que el barrido la reconoce por identidad y no por teléfono.
+    note: stampOrderMarker(input.note, ctx.row.order_name),
     channel: "WHATSAPP",
     delivery: courierBlock.deliveryCost,
     customer: {

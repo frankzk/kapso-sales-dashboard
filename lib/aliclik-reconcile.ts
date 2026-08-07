@@ -210,3 +210,44 @@ export function reconcileAliclikApiGuides(
 export function isProvisionalGuideCode(code: string | null | undefined): boolean {
   return /^ALC\d+/i.test((code ?? "").trim());
 }
+
+// ---------------------------------------------------------------------------
+// La marca del pedido en la nota.
+//
+// PARA QUÉ. Cuando una creación se va en timeout, Aliclik pudo haber creado la
+// guía y su número se perdió con la respuesta. El barrido tiene que reconocerla
+// entre los pedidos de la ventana, y hasta ahora lo hacía POR TELÉFONO — el
+// único dato estable que mandábamos y que Aliclik devuelve. Pero un teléfono no
+// identifica un pedido: hoy mismo hay 7 clientes con dos o más pedidos en los
+// últimos 14 días, así que la guía huérfana podía pegarse al pedido equivocado.
+//
+// `note` es texto libre que mandamos nosotros y que la API DEVUELVE
+// (`AliclikOrder.note`). Estampando ahí el nombre del pedido, el reencuentro
+// deja de ser una heurística y pasa a ser una identidad.
+//
+// La marca va al final y entre corchetes para que se distinga de lo que escribe
+// el operador. Es visible para Aliclik: eso es deseable, porque el mismo dato
+// sirve para rastrear la guía desde su panel.
+// ---------------------------------------------------------------------------
+
+const MARKER_RE = /\[Kapta (#[^\]]{1,40})\]/;
+
+/** Añade la marca a la nota del operador. Idempotente: no la duplica. */
+export function stampOrderMarker(
+  note: string | null | undefined,
+  orderName: string | null | undefined,
+): string | undefined {
+  const base = (note ?? "").trim();
+  const name = (orderName ?? "").trim();
+  // Sin nombre de pedido no hay nada que estampar: se devuelve la nota tal cual.
+  if (!name) return base || undefined;
+  if (readOrderMarker(base) === name) return base;
+  const marker = `[Kapta ${name.startsWith("#") ? name : `#${name}`}]`;
+  return base ? `${base} ${marker}` : marker;
+}
+
+/** Lee la marca de una nota devuelta por Aliclik. `null` si no la lleva. */
+export function readOrderMarker(note: string | null | undefined): string | null {
+  const found = MARKER_RE.exec((note ?? "").trim());
+  return found ? found[1]!.trim() : null;
+}

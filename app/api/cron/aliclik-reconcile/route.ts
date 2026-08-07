@@ -2,9 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
-import { getOrder, listOrders } from "@/lib/aliclik";
+import { getOrder, listOrders, type AliclikOrder } from "@/lib/aliclik";
 import { applyAliclikSnapshot } from "@/lib/aliclik-track";
 import { normalizePhone } from "@/lib/phone";
+import { readOrderMarker } from "@/lib/aliclik-reconcile";
+import { categoryOf } from "@/lib/shipments";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -21,9 +23,19 @@ export const maxDuration = 300;
 //
 // ADEMÁS RESUELVE LOS HUÉRFANOS. Cuando una creación se va en timeout, no
 // sabemos si el pedido existe: la intención se queda en 'pending' (y sigue
-// bloqueando un segundo intento, que es lo correcto). Aquí se busca por teléfono
-// entre los pedidos que Aliclik creó en esa ventana y, si aparece, se vincula.
-// Sin esto, un timeout dejaría el pedido bloqueado para siempre.
+// bloqueando un segundo intento, que es lo correcto). Aquí se busca entre los
+// pedidos que Aliclik creó en esa ventana y, si aparece, se registra. Sin esto,
+// un timeout dejaría el pedido bloqueado para siempre.
+//
+// Se empareja por la MARCA que estampamos en la nota al crear, que Aliclik
+// devuelve al listar. El teléfono quedó como respaldo para las intenciones
+// anteriores a la marca, y solo cuando señala a una sola candidata: hay clientes
+// con dos pedidos abiertos a la vez.
+//
+// Y el rescate CREA la guía si no existe. Es lo normal, no la excepción: la fila
+// se inserta después de que Aliclik responde, así que un timeout no deja
+// ninguna. Antes esto era un UPDATE que no encontraba nada, no fallaba, y dejaba
+// la intención marcada como resuelta sin haber registrado la guía.
 
 const DAY_MS = 86_400_000;
 /** Días hacia atrás que se releen. Cubre de sobra un fin de semana caído. */
@@ -54,6 +66,10 @@ interface StoreReport {
   applied: number;
   unknown: number;
   orphansLinked: number;
+  /** Guías creadas de cero al rescatar una huérfana. */
+  orphansCreated: number;
+  /** Candidatas descartadas por ambiguas (mismo teléfono, varios pedidos). */
+  orphansAmbiguous: number;
   /** Guías viejas y abiertas consultadas una a una (ver `sweepStaleGuides`). */
   staleChecked: number;
   staleApplied: number;
@@ -64,6 +80,134 @@ interface StoreReport {
 
 /** Guías viejas revisadas por corrida. Acota la latencia y el gasto de API. */
 const STALE_BATCH = 40;
+
+/** El cuerpo que mandamos al crear, tal y como quedó guardado en la intención. */
+interface OrphanRequest {
+  note?: string | null;
+  customer?: { name?: string | null; phone?: string | null; address?: string | null } | null;
+  shipping?: {
+    address1?: string | null;
+    lat?: string | null;
+    lng?: string | null;
+    reference?: string | null;
+  } | null;
+}
+
+interface Orphan {
+  id: string;
+  orderId: string | null;
+  phone: string | null;
+  marker: string | null;
+  request: OrphanRequest;
+}
+
+/**
+ * Qué intención huérfana corresponde a este pedido de Aliclik.
+ *
+ * La marca manda. El teléfono solo desempata cuando hay UNA sola candidata: dos
+ * pedidos del mismo cliente son indistinguibles por teléfono, y vincular la guía
+ * al pedido equivocado deja a los dos mal — uno con una salida que no es suya y
+ * el otro esperando la propia.
+ */
+function matchOrphan(
+  order: AliclikOrder,
+  orphans: Orphan[],
+  report: StoreReport,
+): Orphan | undefined {
+  const marker = readOrderMarker(order.note);
+  if (marker) {
+    const exact = orphans.find((o) => o.marker && o.marker === marker);
+    if (exact) return exact;
+  }
+
+  const phone = normalizePhone(order.customer?.phone ?? null);
+  if (!phone) return undefined;
+  const samePhone = orphans.filter((o) => o.phone && o.phone === phone);
+  if (samePhone.length === 1) return samePhone[0];
+  if (samePhone.length > 1) report.orphansAmbiguous++;
+  return undefined;
+}
+
+/**
+ * Deja la guía huérfana registrada. Devuelve `true` solo si de verdad quedó.
+ *
+ * ANTES ESTO ERA UN UPDATE A SECAS, y ahí estaba el fallo: la fila de la guía se
+ * inserta DESPUÉS de que Aliclik responde, así que tras un timeout no existe
+ * ninguna. El update no encontraba nada, PostgREST no considera error actualizar
+ * cero filas, y el barrido marcaba la intención como resuelta sin haber creado
+ * nada. La guía quedaba invisible para siempre y el registro decía lo contrario.
+ *
+ * Ahora: si la fila existe se enlaza; si no existe se CREA con los datos de la
+ * intención —que son los mismos que mandamos a Aliclik— y se vuelve a aplicar el
+ * snapshot, que ya la encuentra y le escribe estado, custodia y Master.
+ */
+async function rescueOrphanGuide(
+  admin: ReturnType<typeof createAdminSupabase>,
+  order: AliclikOrder,
+  orphan: Orphan,
+  report: StoreReport,
+): Promise<boolean> {
+  const orderNumber = (order.orderNumber ?? "").trim();
+  if (!orderNumber || !orphan.orderId) return false;
+
+  // 1) ¿Ya está registrada? Entonces no hay nada que rescatar.
+  const { data: already } = await admin
+    .from("shipments")
+    .select("id")
+    .eq("external_order_number", orderNumber)
+    .limit(1);
+  if ((already ?? []).length) return true;
+
+  // 2) ¿Hay una guía del pedido todavía sin identificador? Se le pone.
+  const { data: linked, error: linkErr } = await admin
+    .from("shipments")
+    .update({ external_order_number: orderNumber })
+    .eq("order_id", orphan.orderId)
+    .eq("courier", "aliclik")
+    .is("external_order_number", null)
+    .select("id");
+  if (linkErr) {
+    report.errors.push(`huérfana ${orderNumber}: ${linkErr.message}`);
+    return false;
+  }
+  // `.select()` es lo que permite saber si tocó algo. Sin él, cero filas y éxito
+  // son indistinguibles — que es exactamente cómo se perdían estas guías.
+  if ((linked ?? []).length) return true;
+
+  // 3) No existe: se crea desde lo que mandamos.
+  const req = orphan.request;
+  const lat = Number(req.shipping?.lat);
+  const lng = Number(req.shipping?.lng);
+  const { error: insErr } = await admin.from("shipments").insert({
+    store_id: report.storeId,
+    courier: "aliclik",
+    guide_code: orderNumber,
+    external_order_number: orderNumber,
+    delivery_status: "pendiente",
+    status_category: categoryOf("pendiente"),
+    order_id: orphan.orderId,
+    matched: true,
+    match_method: "manual",
+    order_name: orphan.marker,
+    customer_name: req.customer?.name ?? null,
+    customer_phone: orphan.phone,
+    delivery_address: req.shipping?.address1 ?? req.customer?.address ?? null,
+    delivery_reference: req.shipping?.reference ?? null,
+    latitude: Number.isFinite(lat) ? lat : null,
+    longitude: Number.isFinite(lng) ? lng : null,
+    created_via: "aliclik_api",
+  });
+  if (insErr) {
+    report.errors.push(`huérfana ${orderNumber}: ${insErr.message}`);
+    return false;
+  }
+  report.orphansCreated++;
+
+  // Ya existe la fila: el snapshot que acabamos de recibir se aplica sobre ella
+  // y arrastra estado, custodia y recálculo del Master.
+  await applyAliclikSnapshot(order, admin);
+  return true;
+}
 
 async function reconcileStore(
   storeId: string,
@@ -76,6 +220,8 @@ async function reconcileStore(
     applied: 0,
     unknown: 0,
     orphansLinked: 0,
+    orphansCreated: 0,
+    orphansAmbiguous: 0,
     staleChecked: 0,
     staleApplied: 0,
     staleMissing: 0,
@@ -94,9 +240,17 @@ async function reconcileStore(
     .eq("status", "pending")
     .lt("created_at", new Date(now.getTime() - ORPHAN_MIN_AGE_MS).toISOString());
 
-  const orphans = (pending ?? []).map((p) => {
-    const req = (p.request ?? {}) as { customer?: { phone?: string } };
-    return { id: p.id, orderId: p.order_id, phone: normalizePhone(req.customer?.phone ?? null) };
+  const orphans: Orphan[] = (pending ?? []).map((p) => {
+    const req = (p.request ?? {}) as OrphanRequest;
+    return {
+      id: p.id,
+      orderId: p.order_id,
+      phone: normalizePhone(req.customer?.phone ?? null),
+      // La marca que estampamos en la nota al crear. Es la identidad; el
+      // teléfono queda solo como respaldo para las intenciones anteriores a esto.
+      marker: readOrderMarker(req.note),
+      request: req,
+    };
   });
 
   for (let page = 1; page <= 50; page++) {
@@ -115,19 +269,17 @@ async function reconcileStore(
       else if (applied.outcome === "unknown_order") {
         report.unknown++;
 
-        // ¿Es el pedido de una creación que se fue en timeout? Se empareja por
-        // teléfono, que es el único dato estable que enviamos y que Aliclik
-        // devuelve.
-        const phone = normalizePhone(order.customer?.phone ?? null);
-        const orphan = phone ? orphans.find((o) => o.phone && o.phone === phone) : undefined;
+        // ¿Es el pedido de una creación que se fue en timeout?
+        //
+        // Primero por la MARCA que estampamos en la nota (§ stampOrderMarker):
+        // es identidad, no parecido. El teléfono queda como respaldo para las
+        // intenciones anteriores a la marca, y solo si es inequívoco: hay
+        // clientes con dos pedidos abiertos a la vez, y pegarle la guía al
+        // equivocado es peor que no pegarla.
+        const orphan = matchOrphan(order, orphans, report);
         if (orphan && order.orderNumber) {
-          const { error } = await admin
-            .from("shipments")
-            .update({ external_order_number: order.orderNumber })
-            .eq("order_id", orphan.orderId)
-            .eq("courier", "aliclik")
-            .is("external_order_number", null);
-          if (!error) {
+          const rescued = await rescueOrphanGuide(admin, order, orphan, report);
+          if (rescued) {
             await admin
               .from("aliclik_order_requests")
               .update({
@@ -242,6 +394,8 @@ async function run(req: NextRequest) {
         applied: 0,
         unknown: 0,
         orphansLinked: 0,
+        orphansCreated: 0,
+        orphansAmbiguous: 0,
         staleChecked: 0,
         staleApplied: 0,
         staleMissing: 0,
