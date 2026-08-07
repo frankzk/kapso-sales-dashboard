@@ -529,7 +529,7 @@ export async function processKapsoWebhook(
 
   const kind = classifyKapsoEvent(params.eventHeader, params.body);
   if (kind === "handoff") {
-    const res = await applyHandoff(admin, params.storeId, params.body);
+    const res = await applyHandoff(admin, params.storeId, params.body, params.eventHeader);
     return { status: "ok", kind, reason: res.reason };
   }
   if (kind === "conversation") {

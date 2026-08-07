@@ -1,7 +1,9 @@
 // COPIA DE RESPALDO — no se ejecuta desde este repo. Ver ./README.md
 // Origen: app.kapso.ai → proyecto Aurela (387343ab-aa79-4641-b56b-fe9cf93e274e)
 //         → Functions → Notify Team → Code
-// PENDIENTE en esta versión: le falta el gate de `reason` (ver README).
+// Con el gate de `reason` YA aplicado y desplegado (ver postStoreHandoff más
+// abajo y el README). Este encabezado decía "PENDIENTE" y quedó viejo al
+// actualizar el archivo: contradecía al código de la misma copia.
 
 // notify-team: alerta interna al equipo por Telegram.
 // Se invoca cuando un cliente envia el voucher/adelanto (flujo Shalom/Olva) y el
