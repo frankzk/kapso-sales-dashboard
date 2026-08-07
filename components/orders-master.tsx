@@ -434,11 +434,21 @@ export function OrdersMasterBoard({
     setExportNote(null);
     let objectUrl: string | null = null;
     try {
+      // Con casillas marcadas manda la SELECCIÓN, no el filtro: quien marca ya
+      // eligió, y bajarle el listado entero sería ignorar lo que acaba de
+      // hacer. Va por POST porque la selección se conserva entre páginas y los
+      // ids no caben en una URL.
       const qs = buildMasterQuery({ filters, sortKey, page: 1 });
       if (view !== "todos") qs.set("view", view);
       if (substage) qs.set("substage", substage);
 
-      const res = await fetch(`/api/export/pedidos?${qs.toString()}`);
+      const res = selectedIds.size
+        ? await fetch("/api/export/pedidos", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: Array.from(selectedIds) }),
+          })
+        : await fetch(`/api/export/pedidos?${qs.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const blob = await res.blob();
@@ -932,6 +942,7 @@ export function OrdersMasterBoard({
                 <ExportButton
                   busy={exporting}
                   total={total}
+                  selected={selectedIds.size}
                   onClick={() => void downloadExcel()}
                 />
                 <PagerControls
@@ -3968,27 +3979,43 @@ function filenameFromDisposition(header: string | null): string {
 }
 
 /**
- * Descargar lo filtrado. Dice cuántas filas van a salir porque no coincide con
- * lo que se ve: la tabla enseña 100 y el fichero trae las 128 del filtro.
+ * Descargar. Un solo botón con dos alcances: si hay casillas marcadas baja la
+ * SELECCIÓN, y si no, todo lo filtrado.
+ *
+ * El número siempre está a la vista porque en los dos casos difiere de lo que
+ * se ve en pantalla: sin selección la tabla enseña 100 y el fichero trae las
+ * 128 del filtro; con selección las marcadas pueden estar en otra página. Y
+ * cuando hay selección se dice la palabra, no solo la cifra: «(100)» a secas se
+ * confundiría con el total del filtro justo cuando ambos valen lo mismo.
  */
 function ExportButton({
   busy,
   total,
+  selected,
   onClick,
 }: {
   busy: boolean;
   total: number;
+  selected: number;
   onClick: () => void;
 }) {
-  if (!total) return null;
+  if (!total && !selected) return null;
+  const count = selected || total;
+  const label = selected
+    ? `Descargar Excel (${selected.toLocaleString("es-PE")} seleccionados)`
+    : `Descargar Excel (${total.toLocaleString("es-PE")})`;
   return (
     <button
       onClick={onClick}
       disabled={busy}
-      title={`Descargar ${total.toLocaleString("es-PE")} ${total === 1 ? "pedido" : "pedidos"} en Excel, con los filtros aplicados`}
+      title={
+        selected
+          ? `Descargar en Excel los ${count.toLocaleString("es-PE")} pedidos seleccionados`
+          : `Descargar ${count.toLocaleString("es-PE")} ${count === 1 ? "pedido" : "pedidos"} en Excel, con los filtros aplicados`
+      }
       className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
     >
-      {busy ? "Generando…" : `Descargar Excel (${total.toLocaleString("es-PE")})`}
+      {busy ? "Generando…" : label}
     </button>
   );
 }

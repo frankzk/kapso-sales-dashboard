@@ -113,11 +113,17 @@ export function toExportRow(
 
 /**
  * El nombre del fichero dice QUÉ se bajó, porque se acumulan en Descargas y a
- * los dos días nadie recuerda cuál era cuál. Lleva la pestaña, si había una, y
- * la fecha.
+ * los dos días nadie recuerda cuál era cuál. Lleva la pestaña, si había una, la
+ * fecha, y si salió de una selección manual — que es la diferencia que más
+ * cuesta reconstruir después mirando el contenido.
  */
-export function exportFilename(view: string | null | undefined, now: Date): string {
+export function exportFilename(
+  view: string | null | undefined,
+  now: Date,
+  fromSelection = false,
+): string {
   const day = now.toISOString().slice(0, 10);
+  if (fromSelection) return `pedidos_seleccion_${day}.xlsx`;
   const stage = view && view !== "todos" ? `_${view}` : "";
   return `pedidos${stage}_${day}.xlsx`;
 }

@@ -17,6 +17,7 @@ import ExcelJS from "exceljs";
 import { getAccessibleStores } from "@/lib/access";
 import {
   getOrderMasterPage,
+  getOrderMasterRowsByIds,
   isMasterView,
   type MasterView,
 } from "@/lib/orders-master-access";
@@ -89,6 +90,49 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  return workbookResponse(rows, stores, now, view, truncated);
+}
+
+/**
+ * La SELECCIÓN del usuario. Va por POST porque las casillas se conservan entre
+ * páginas: pueden ser miles de ids y no caben en una URL.
+ */
+export async function POST(req: NextRequest) {
+  const stores = await getAccessibleStores();
+  if (!stores.length) return new NextResponse("forbidden", { status: 403 });
+
+  let ids: string[] = [];
+  try {
+    const body = (await req.json()) as { ids?: unknown };
+    if (Array.isArray(body.ids)) {
+      ids = body.ids.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+    }
+  } catch {
+    return new NextResponse("bad request", { status: 400 });
+  }
+  // Sin selección no se cae de vuelta al listado completo: sería descargar
+  // 12.000 filas cuando se pidieron unas pocas.
+  if (!ids.length) return new NextResponse("sin seleccion", { status: 400 });
+
+  const now = new Date();
+  const truncated = ids.length > MAX_ROWS;
+  const rows = await getOrderMasterRowsByIds(
+    stores.map((s) => s.id),
+    truncated ? ids.slice(0, MAX_ROWS) : ids,
+  );
+  return workbookResponse(rows, stores, now, null, truncated, true);
+}
+
+/** La hoja. Idéntica venga de un filtro o de una selección: quien la abre no
+ *  tiene por qué notar por dónde se pidió. */
+function workbookResponse(
+  rows: OrderMasterRow[],
+  stores: { id: string; name: string }[],
+  now: Date,
+  view: MasterView | null,
+  truncated: boolean,
+  fromSelection = false,
+): Promise<NextResponse> {
   const ctx: MasterExportContext = {
     storeNames: Object.fromEntries(stores.map((s) => [s.id, s.name])),
     now,
@@ -126,15 +170,19 @@ export async function GET(req: NextRequest) {
     to: { row: 1, column: MASTER_EXPORT_COLUMNS.length },
   };
 
-  const bytes = await workbook.xlsx.writeBuffer();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "Content-Disposition": `attachment; filename="${exportFilename(view, now)}"`,
-    "X-Content-Type-Options": "nosniff",
-    "Cache-Control": "no-store",
-    // El botón lo lee para avisar en pantalla cuando el corte se aplicó.
-    "X-Export-Rows": String(rows.length),
-    "X-Export-Truncated": truncated ? "1" : "0",
-  };
-  return new NextResponse(Buffer.from(bytes), { headers });
+  return workbook.xlsx.writeBuffer().then(
+    (bytes) =>
+      new NextResponse(Buffer.from(bytes), {
+        headers: {
+          "Content-Type":
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "Content-Disposition": `attachment; filename="${exportFilename(view, now, fromSelection)}"`,
+          "X-Content-Type-Options": "nosniff",
+          "Cache-Control": "no-store",
+          // El botón los lee para avisar en pantalla cuando el corte se aplicó.
+          "X-Export-Rows": String(rows.length),
+          "X-Export-Truncated": truncated ? "1" : "0",
+        },
+      }),
+  );
 }
