@@ -36,6 +36,8 @@ interface ExistingShipment {
   last_report_at: string | null;
   /** Solo la escribe la vía API; decide si este reporte puede tocar el estado. */
   api_report_at: string | null;
+  returned_at: string | null;
+  dispatched_at: string | null;
   delivered_source: string | null;
   aliclik_attempts: number | null;
   aliclik_service_date: string | null;
@@ -228,6 +230,23 @@ export async function ingestAliclikReport(
         ? existing.last_report_at
         : meta.reportAt;
 
+    // La devolución se sella una sola vez y no se borra: un reporte posterior
+    // que ya no mencione el retorno no puede deshacerlo, igual que `entregado`
+    // no se reabre. Sin fecha propia en el reporte, vale la del propio reporte.
+    const returned_at = existing?.returned_at ?? (inc.row.returned ? meta.reportAt : null);
+
+    // Un paquete devuelto SALIÓ: no puede volver si nunca se despachó. Esa
+    // evidencia hay que dejarla escrita porque `resolveOrderState` exige
+    // despacho para dar por probada una devolución (returnProven) — sin ella el
+    // pedido se queda a medio camino y nunca llega a `devuelto`.
+    //
+    // Solo se deduce para devoluciones, no para toda guía con FECHA DESPACHO:
+    // `dispatched_at` es el denominador de las métricas de despacho (MOM §17.1)
+    // y rellenarlo en masa las movería. Y nunca pisa un valor existente.
+    const dispatched_at =
+      existing?.dispatched_at ??
+      (inc.row.returned && inc.row.dispatch_date ? `${inc.row.dispatch_date}T00:00:00Z` : null);
+
     shipmentRows.push({
       courier: "aliclik",
       guide_code: guide,
@@ -250,6 +269,8 @@ export async function ingestAliclikReport(
       address_override: keepManualAddress,
       delivery_status: mergedStatus,
       status_category: categoryOf(mergedStatus),
+      returned_at,
+      dispatched_at,
       delivered_source,
       fenix_eligible: fenix,
       aliclik_attempts: inc.row.aliclik_attempts ?? existing?.aliclik_attempts ?? null,
@@ -460,14 +481,14 @@ async function fetchExistingShipments(
   for (const chunk of chunked(guideCodes, 200)) {
     const currentResult = await admin
       .from("shipments")
-      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,delivered_source,aliclik_attempts,aliclik_service_date,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,returned_at,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
       .eq("courier", "aliclik")
       .in("guide_code", chunk);
     let data: unknown = currentResult.data;
     if (isMissingProvinceColumn(currentResult.error)) {
       const legacyResult = await admin
         .from("shipments")
-        .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+        .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,returned_at,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
         .eq("courier", "aliclik")
         .in("guide_code", chunk);
       data = legacyResult.data;

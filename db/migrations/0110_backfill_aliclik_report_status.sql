@@ -1,6 +1,14 @@
 -- ============================================================================
--- 0108 — Destrancar las guías Aliclik «pendiente» que el importador viejo
+-- 0110 — Destrancar las guías Aliclik «pendiente» que el importador viejo
 -- congeló, con respaldo para poder revertir.
+--
+-- OJO CON EL NOMBRE DE LA TABLA DE RESPALDO. Es `shipments_status_backup_0108`
+-- y no `..._0110`: esta migración nació con el número 0108, se aplicó en
+-- producción el 06-08 bajo ese nombre, y la pre-imagen REAL de las 374 guías
+-- vive ahí. Después hubo que renumerarla a 0110 porque main tomó el 0108 y el
+-- 0109. Renombrar la tabla dejaría la receta de revert de abajo apuntando a una
+-- tabla vacía mientras el respaldo bueno quedaba huérfano, así que se conserva
+-- el nombre original a propósito.
 --
 -- POR QUÉ. Hasta ahora `lib/aliclik-import.ts` colapsaba el reporte de Aliclik a
 -- un binario entregado-vs-pendiente: cualquier ESTADO ENTREGA distinto de
@@ -91,7 +99,7 @@ alter table shipments_status_backup_0108 enable row level security;
 grant all privileges on shipments_status_backup_0108 to service_role;
 
 comment on table shipments_status_backup_0108 is
-  'Pre-imagen de las guías Aliclik mutadas por la migración 0108. Permite revertir el backfill. Se puede borrar una vez verificado.';
+  'Pre-imagen de las guías Aliclik mutadas por la migración 0110 (nacida como 0108, ver cabecera). Permite revertir el backfill. Se puede borrar una vez verificado.';
 
 -- REVERTIR (todo, o filtrando por guide_code):
 --   update shipments s

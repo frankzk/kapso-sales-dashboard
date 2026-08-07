@@ -219,8 +219,12 @@
 \ir migrations/0106_order_coverage_batch.sql
 \echo 'Applying 0107_ingest_anomalies.sql'
 \ir migrations/0107_ingest_anomalies.sql
-\echo 'Applying 0108_backfill_aliclik_report_status.sql'
-\ir migrations/0108_backfill_aliclik_report_status.sql
-\echo 'Applying 0109_api_owns_delivery_status.sql'
-\ir migrations/0109_api_owns_delivery_status.sql
+\echo 'Applying 0108_shalom_created_via.sql'
+\ir migrations/0108_shalom_created_via.sql
+\echo 'Applying 0109_aliclik_returned_backfill.sql'
+\ir migrations/0109_aliclik_returned_backfill.sql
+\echo 'Applying 0110_backfill_aliclik_report_status.sql'
+\ir migrations/0110_backfill_aliclik_report_status.sql
+\echo 'Applying 0111_api_owns_delivery_status.sql'
+\ir migrations/0111_api_owns_delivery_status.sql
 \echo 'Done.'

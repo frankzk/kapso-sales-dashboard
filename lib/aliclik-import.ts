@@ -26,6 +26,15 @@ export interface ParsedShipmentRow {
   latitude: number | null;
   longitude: number | null;
   delivery_status: string; // canonical code
+  // El paquete volvió al origen. Va aparte de delivery_status porque el
+  // vocabulario de guías no tiene código `devuelto`: la guía se cierra como
+  // "anulado" y este flag es lo que la ingesta convierte en `returned_at`, que
+  // es de donde sale el `devuelto` del PEDIDO.
+  returned: boolean;
+  // FECHA DESPACHO del reporte (YYYY-MM-DD). El parser solo informa lo que dice
+  // el fichero; quién y cuándo lo convierte en `dispatched_at` lo decide la
+  // ingesta, porque esa columna alimenta métricas de despacho (MOM §17.1).
+  dispatch_date: string | null;
   store_hint: string | null; // raw "Tienda"/"Canal" value (AURELA / KENKU)
   // Aliclik's own delivery-attempt counter and operative delivery date. These
   // are intentionally separate from reroute_attempts, which counts the team's
@@ -156,6 +165,8 @@ const LONGITUDE_KEYS = ["longitud", "longitude", "lng", "lon"];
 // ENTREGA (only ever fires as "entregado", so a dispatch-state "ESTADO" won't be
 // misread as delivered).
 const ENTREGA_KEYS = ["estado entrega", "estado de entrega", "estado"];
+// El despacho EN ESPAÑOL, que es lo que alimenta el mapeo del trío. Ver
+// deliveryStatusFromReport para por qué la variante inglesa queda fuera de aquí.
 const DESPACHO_KEYS = ["estado despacho", "estado de despacho"];
 
 /** True when the delivery-outcome cell ("ESTADO [DE] ENTREGA") says delivered. */
@@ -236,6 +247,42 @@ export function deliveryStatusFromReport(
   return isDeliveredEntrega(entrega) ? "entregado" : "pendiente";
 }
 
+// La DEVOLUCIÓN, que se lee aparte del trío de arriba.
+//
+// POR QUÉ TIENE SU PROPIA SONDA. El mapeo del trío ya resuelve DEVUELTO cuando
+// el reporte trae el despacho en español. Pero el retorno es el único desenlace
+// que también aparece —a veces SOLO aparece— en la columna inglesa "ÚLTIMO
+// ESTADO DESPACHO" (RETURNED), y perderlo tiene consecuencias que ningún otro
+// estado tiene: sin él, `returned_at` no se sella y el pedido nunca llega a
+// `devuelto`, que es la entrada a Reproprovincia (MOM §10-§11). "ESTADO
+// ENTREGA" no sirve de respaldo: en una guía devuelta dice CANCELADO, NO
+// CONTESTA o RECHAZADO, que es el MOTIVO, no el desenlace.
+//
+// Es la única lectura que se hace de las columnas "ÚLTIMO ESTADO …". El resto
+// se ignora a propósito (ver deliveryStatusFromReport): son un snapshot rezagado
+// que contradice al español. Aquí no molesta porque RETURNED es terminal — una
+// guía no deja de estar devuelta —, así que un valor rezagado no puede mentir
+// hacia el lado que importa.
+const DESPACHO_RETURN_KEYS = ["ultimo estado despacho", "estado despacho"];
+// La fecha en que el paquete SALIÓ. Ojo con el alias: la cabecera real es
+// "FECHA DESPACHO", sin "de" — ALICLIK_SERVICE_DATE_KEYS solo tenía la variante
+// con "de", así que esta columna no la leía nadie.
+const DISPATCH_DATE_KEYS = ["fecha despacho", "fecha de despacho"];
+
+/**
+ * True cuando el paquete YA VOLVIÓ al origen.
+ *
+ * Ojo con el estado anterior: TO_RETURN / "POR DEVOLVER" es un paquete que
+ * todavía está viajando de vuelta, no una devolución consumada. Se deja fuera a
+ * propósito —igual que hace el mapeo de la API (lib/aliclik-status.ts)— porque
+ * mientras se mueve la guía sigue viva y el equipo la puede interceptar.
+ */
+export function isReturnedDespacho(raw: string | null): boolean {
+  if (!raw) return false;
+  const value = stripAccents(raw.trim().toLowerCase());
+  return value === "returned" || value === "devuelto";
+}
+
 // Aliclik marca con ESTADO LLAMADA = IMPORTADO los pedidos que subió a su
 // plataforma pero que TODAVÍA NO gestiona: no tienen despacho ni entrega, así
 // que no son guías reales. Si entran al sistema quedan como envíos "pendiente"
@@ -311,17 +358,36 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
   const fenixCity = normalizeCity(combined);
   const city = isFenixCity(fenixCity) ? fenixCity : district ? normalizeCity(district) : null;
 
-  // Estado de la guía: se resuelve del trío ENTREGA + DESPACHO + LLAMADA que trae
-  // el reporte (ver deliveryStatusFromReport). Ya no es un binario entregado-vs-
-  // pendiente: CANCELADO/ANULADO/RECHAZADO cierran (anulado), DEVUELTO cierra,
-  // RECOLECTADO/EN TRÁNSITO/POR DEVOLVER/EN AGENCIA y RECHAZADO/NO CONTESTA/
-  // REPROGRAMADO ya salieron (en_ruta), y lo que sigue en almacén (POR PREPARAR/
-  // VALIDADO/DEJADO EN ALMACÉN o POR ENTREGAR sin despacho) queda pendiente.
-  const delivery_status = deliveryStatusFromReport(
-    pick(map, ENTREGA_KEYS),
-    pick(map, DESPACHO_KEYS),
-    pick(map, ESTADO_LLAMADA_KEYS),
-  );
+  // Estado de la guía, en tres escalones y en este orden.
+  //
+  // 1) ENTREGADO gana sobre todo lo demás, y el orden importa: una guía
+  //    entregada trae basura en las columnas de despacho y entrega (PICKED, y
+  //    CANCEL o NOT_RESPOND heredados de intentos previos). Si el despacho se
+  //    evaluara primero, esas entregas se reclasificarían como anuladas.
+  // 2) La devolución consumada cierra la guía como "anulado". Va antes del
+  //    mapeo del trío porque su sonda lee también la columna inglesa, así que
+  //    atrapa retornos que el español no reporta (ver DESPACHO_RETURN_KEYS).
+  //    Devuelto = "anulado" para la GUÍA, igual que en el camino por API: el
+  //    vocabulario de guías no tiene un código `devuelto`. Ese matiz lo pone
+  //    `resolveOrderState` (lib/order-status.ts) leyendo `returned_at`, que es
+  //    lo que convierte el PEDIDO en `devuelto`.
+  // 3) El resto sale del trío ENTREGA + DESPACHO + LLAMADA (ver
+  //    deliveryStatusFromReport): CANCELADO/ANULADO/RECHAZADO cierran (anulado),
+  //    RECOLECTADO/EN TRÁNSITO/POR DEVOLVER/EN AGENCIA y RECHAZADO/NO CONTESTA/
+  //    REPROGRAMADO ya salieron (en_ruta), y lo que sigue en almacén (POR
+  //    PREPARAR/VALIDADO/DEJADO EN ALMACÉN o POR ENTREGAR sin despacho) queda
+  //    pendiente.
+  const delivered = isDeliveredEntrega(pick(map, ENTREGA_KEYS));
+  const returned = !delivered && isReturnedDespacho(pick(map, DESPACHO_RETURN_KEYS));
+  const delivery_status = delivered
+    ? "entregado"
+    : returned
+      ? "anulado"
+      : deliveryStatusFromReport(
+          pick(map, ENTREGA_KEYS),
+          pick(map, DESPACHO_KEYS),
+          pick(map, ESTADO_LLAMADA_KEYS),
+        );
 
   const orderRef = extractOrderReference(map.get("nota"), pick(map, ORDER_KEYS));
 
@@ -341,6 +407,8 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
     latitude: parseAliclikCoordinate(pick(map, LATITUDE_KEYS), "latitude"),
     longitude: parseAliclikCoordinate(pick(map, LONGITUDE_KEYS), "longitude"),
     delivery_status,
+    returned,
+    dispatch_date: parseAliclikDate(pick(map, DISPATCH_DATE_KEYS)),
     store_hint: pick(map, STORE_KEYS),
     aliclik_attempts: parseAliclikAttempts(pick(map, ALICLIK_ATTEMPT_KEYS)),
     aliclik_service_date: parseAliclikDate(pick(map, ALICLIK_SERVICE_DATE_KEYS)),

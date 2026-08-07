@@ -11,6 +11,7 @@ import {
   wrapText,
 } from "@/lib/labels/rotulo-pdf";
 import { PDFDocument, StandardFonts } from "pdf-lib";
+import { CODE39_PATTERNS } from "@/lib/labels/barcode39";
 import { inflateSync } from "node:zlib";
 
 /**
@@ -47,6 +48,69 @@ function textWithSizes(pdf: Uint8Array): { text: string; size: number; y: number
     }
   }
   return out;
+}
+
+/**
+ * Rectángulos rellenos del PDF. pdf-lib los escribe como un `cm` de traslación
+ * seguido del recorrido del rectángulo y un `f`. La banda del monto se dibuja
+ * solo con borde (`S`), así que no entra: los únicos rellenos son las barras.
+ */
+function filledRects(pdf: Uint8Array): { x: number; y: number; w: number; h: number }[] {
+  const raw = Buffer.from(pdf).toString("latin1");
+  const out: { x: number; y: number; w: number; h: number }[] = [];
+  const streams = /stream\r?\n/g;
+  let match: RegExpExecArray | null;
+  while ((match = streams.exec(raw))) {
+    const start = match.index + match[0].length;
+    const end = raw.indexOf("endstream", start);
+    if (end < 0) continue;
+    let content: string;
+    try {
+      content = inflateSync(Buffer.from(raw.slice(start, end), "latin1")).toString("latin1");
+    } catch {
+      continue;
+    }
+    const rect =
+      /1 0 0 1 ([-\d.]+) ([-\d.]+) cm\s+1 0 0 1 0 0 cm\s+1 0 0 1 0 0 cm\s+0 0 m\s+0 ([-\d.]+) l\s+([-\d.]+) [-\d.]+ l\s+[-\d.]+ 0 l\s+h\s+f/g;
+    let hit: RegExpExecArray | null;
+    while ((hit = rect.exec(content))) {
+      out.push({ x: Number(hit[1]), y: Number(hit[2]), w: Number(hit[4]), h: Number(hit[3]) });
+    }
+  }
+  return out;
+}
+
+/**
+ * Lee las barras como lo haría el pistolete: mide anchos, los clasifica en
+ * ancho/estrecho y los traduce con la tabla del estándar.
+ *
+ * Comprobar que "se dibujaron N rectángulos" no dice nada sobre si el escáner
+ * va a devolver el número de pedido. Esto sí.
+ */
+function decodeCode39(bars: readonly { x: number; w: number }[]): string {
+  const sorted = [...bars].sort((a, b) => a.x - b.x);
+  if (!sorted.length) return "";
+
+  // Barras y espacios, en el orden en que los recorre el lector.
+  const elements: number[] = [];
+  sorted.forEach((bar, index) => {
+    elements.push(bar.w);
+    const next = sorted[index + 1];
+    if (next) elements.push(next.x - (bar.x + bar.w));
+  });
+
+  const narrow = Math.min(...elements);
+  const bits = elements.map((width) => (width > narrow * 1.5 ? "1" : "0"));
+  const reverse = new Map(Object.entries(CODE39_PATTERNS).map(([char, p]) => [p, char]));
+
+  let text = "";
+  for (let i = 0; i < bits.length; i += 10) {
+    // 9 elementos por carácter y, entre uno y otro, un espacio separador.
+    const char = reverse.get(bits.slice(i, i + 9).join(""));
+    if (!char) return `<ilegible en ${i}>`;
+    text += char;
+  }
+  return text;
 }
 
 function ship(over: Partial<Parameters<typeof pickShipmentForLabel>[0][number]> & { id: string }) {
@@ -373,6 +437,138 @@ describe("buildRotulosPdf", () => {
     const texts = drawn.map((d) => d.text);
     expect(texts.some((t) => t.includes("KAPTA"))).toBe(false);
     expect(texts.some((t) => t.includes("POR DEFINIR"))).toBe(false);
+  });
+
+  it("el código de barras decodifica al PEDIDO de Shopify, no a la salida", async () => {
+    // Se pistolea contra el Excel del almacén, cuya clave es el número de
+    // pedido. Un `-S01` dentro del código obligaría a limpiarlo a mano fila por
+    // fila, y a inventar una regla el día que un pedido tenga dos salidas.
+    const qrPng = new Uint8Array(await QRCode.toBuffer("b", { type: "png", width: 120 }));
+    const pdf = await buildRotulosPdf([
+      {
+        code: "KP126875-S01-ALICLIK",
+        storeName: "Kenku Peru",
+        orderName: "#KP126875",
+        customerName: "Ana",
+        customerPhone: "519",
+        items: [{ quantity: 1, name: "Producto", variant: null }],
+        collectAmount: 89,
+        currency: "PEN",
+        destination: "San Borja / Lima",
+        address: "Enrique Pastor 115",
+        reference: null,
+        note: null,
+        qrPayload: "b",
+        qrPng,
+      },
+    ]);
+
+    const bars = filledRects(pdf).map((rect) => ({ x: rect.x, w: rect.w }));
+    expect(bars.length, "las barras tienen que estar impresas").toBeGreaterThan(0);
+    // El lector no entrega los delimitadores `*`; el dato es lo de en medio.
+    expect(decodeCode39(bars)).toBe("*KP126875*");
+  });
+
+  it("las barras van bajo la tienda y el código, y por encima del monto", async () => {
+    const qrPng = new Uint8Array(await QRCode.toBuffer("h", { type: "png", width: 120 }));
+    const pdf = await buildRotulosPdf([
+      {
+        code: "KP126875-S01",
+        storeName: "Kenku Peru",
+        orderName: "#KP126875",
+        customerName: "Ana",
+        customerPhone: "519",
+        items: [{ quantity: 1, name: "Producto", variant: null }],
+        collectAmount: 89,
+        currency: "PEN",
+        destination: "San Borja / Lima",
+        address: "Enrique Pastor 115",
+        reference: null,
+        note: null,
+        qrPayload: "h",
+        qrPng,
+      },
+    ]);
+
+    const drawn = textWithSizes(pdf);
+    const store = drawn.find((d) => d.text === "KENKU PERU")!;
+    const code = drawn.find((d) => d.text === "KP126875-S01")!;
+    const amount = drawn.find((d) => d.text === "S/ 89")!;
+    const bars = filledRects(pdf);
+    const barsTop = Math.max(...bars.map((rect) => rect.y + rect.h));
+    const barsBottom = Math.min(...bars.map((rect) => rect.y));
+
+    expect(store.y).toBeGreaterThan(code.y);
+    expect(code.y).toBeGreaterThan(barsTop);
+    expect(barsBottom).toBeGreaterThan(amount.y);
+    // Zona muda: las barras no pueden pegarse al borde del papel.
+    const left = Math.min(...bars.map((rect) => rect.x));
+    const right = Math.max(...bars.map((rect) => rect.x + rect.w));
+    expect(left).toBeGreaterThan(8);
+    expect(right).toBeLessThan(283.46 - 8);
+  });
+
+  it("el código de barras no le quita campos a un rótulo normal", async () => {
+    // El código de barras se paga con espacio vertical. En un rótulo real
+    // —un producto, una dirección de una línea— no puede costar ni la
+    // referencia ni el distrito: son lo que hace que el paquete llegue.
+    const qrPng = new Uint8Array(await QRCode.toBuffer("r", { type: "png", width: 120 }));
+    const pdf = await buildRotulosPdf([
+      {
+        code: "AUR175061-S01",
+        storeName: "Aurela",
+        orderName: "#AUR175061",
+        customerName: "Gudelia Salcedo Cárdenas",
+        customerPhone: "51998031594",
+        items: [{ quantity: 1, name: "Set de Pelador de Verduras", variant: null }],
+        collectAmount: 89,
+        currency: "PEN",
+        destination: "San Borja / Lima",
+        address: "Enrique Pastor 115",
+        reference: "Espalda hotel Rosa Toro",
+        note: "llamar antes // recibe conserje en efectivo",
+        qrPayload: "r",
+        qrPng,
+      },
+    ]);
+
+    const drawn = textWithSizes(pdf).map((d) => d.text);
+    for (const esperado of [
+      "Enrique Pastor 115",
+      "San Borja / Lima",
+      "Espalda hotel Rosa Toro",
+      "Set de Pelador de Verduras",
+      "S/ 89",
+    ]) {
+      expect(drawn, esperado).toContain(esperado);
+    }
+    expect((await PDFDocument.load(pdf)).getPageCount()).toBe(1);
+  });
+
+  it("una salida sin pedido reconocible se imprime sin barras, no con barras falsas", async () => {
+    // El código es una guía del courier: pistolearla dentro de la columna del
+    // pedido contamina el Excel en silencio.
+    const qrPng = new Uint8Array(await QRCode.toBuffer("s", { type: "png", width: 120 }));
+    const pdf = await buildRotulosPdf([
+      {
+        code: "1234567890",
+        storeName: "Kenku Peru",
+        orderName: null,
+        customerName: "Ana",
+        customerPhone: "519",
+        items: [],
+        collectAmount: null,
+        currency: null,
+        destination: null,
+        address: null,
+        reference: null,
+        note: null,
+        qrPayload: "s",
+        qrPng,
+      },
+    ]);
+    expect(filledRects(pdf)).toHaveLength(0);
+    expect((await PDFDocument.load(pdf)).getPageCount()).toBe(1);
   });
 
   it("sin tienda conocida no rompe la cabecera", async () => {

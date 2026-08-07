@@ -13,10 +13,16 @@ export default async function DispatchPage() {
   const canPrepare = permissions.can("warehouse.prepare");
   const canManage = permissions.can("dispatch.manage");
   const canPickup = permissions.can("dispatch.pickup");
-  if (!canPrepare && !canManage && !canPickup) {
+  // Armar ya no se hace aquí: quien solo prepara paquetes tiene su propia
+  // pantalla y no necesita —ni debería— entrar por la mesa de rutas.
+  if (!canManage && !canPickup) {
     return (
       <EmptyState title="No tienes acceso a la mesa de despacho">
-        <Link href="/dashboard/pedidos" className="text-brand-600 underline">Volver al Master de Pedidos</Link>
+        {canPrepare ? (
+          <Link href="/dashboard/pedidos/almacen" className="text-brand-600 underline">Ir al Almacén</Link>
+        ) : (
+          <Link href="/dashboard/pedidos" className="text-brand-600 underline">Volver al Master de Pedidos</Link>
+        )}
       </EmptyState>
     );
   }
