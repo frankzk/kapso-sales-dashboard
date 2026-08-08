@@ -3,7 +3,9 @@ import {
   buildWarehouseQueue,
   warehouseBlocker,
   warehouseCloser,
+  warehousePanels,
   WAREHOUSE_STALE_DAYS,
+  type WarehousePanel,
 } from "@/lib/warehouse-queue";
 
 const NOW = Date.parse("2026-08-07T18:00:00Z");
@@ -149,5 +151,86 @@ describe("buildWarehouseQueue", () => {
     const primera = entryOf(groupOf(queue, "lima").entries, 0);
     expect(primera.ageDays).toBe(0);
     expect(primera.stalled).toBe(false);
+  });
+});
+
+describe("warehousePanels", () => {
+  /** El panel pedido, o falla. */
+  function panelOf(panels: WarehousePanel[], operation: string): WarehousePanel {
+    const panel = panels.find((candidate) => candidate.operation === operation);
+    if (!panel) throw new Error(`El panel no tiene ${operation}`);
+    return panel;
+  }
+
+  it("enseña las tres operaciones aunque estén vacías, en la prioridad del §6.2", () => {
+    // El cero es el dato: un grupo sin cajas no se dibuja en la lista, así que sin
+    // el panel el almacén no puede saber si Lima ya cerró el turno.
+    const panels = warehousePanels(buildWarehouseQueue([], NOW));
+    expect(panels.map((panel) => panel.operation)).toEqual(["lima", "agencia", "provincia_cod"]);
+    expect(panels.every((panel) => panel.total === 0 && panel.closer === null)).toBe(true);
+  });
+
+  it("cuenta por operación y dice quién cierra cada panel", () => {
+    const panels = warehousePanels(
+      buildWarehouseQueue(
+        [
+          salida({ id: "l1", operation: "lima" }),
+          salida({ id: "l2", operation: "lima" }),
+          salida({ id: "p1", operation: "provincia_cod", courier: "aliclik" }),
+        ],
+        NOW,
+      ),
+    );
+    const lima = panelOf(panels, "lima");
+    expect(lima.total).toBe(2);
+    expect(lima.closer).toBe("escaneo");
+
+    // Provincia COD la cierra el `PREPARED` de Aliclik, no el lector del almacén.
+    const provincia = panelOf(panels, "provincia_cod");
+    expect(provincia.total).toBe(1);
+    expect(provincia.closer).toBe("courier");
+
+    expect(panelOf(panels, "agencia").total).toBe(0);
+  });
+
+  it("marca mixto cuando en la misma operación conviven las dos formas de cerrar", () => {
+    const panels = warehousePanels(
+      buildWarehouseQueue(
+        [
+          salida({ id: "api", operation: "provincia_cod", courier: "aliclik" }),
+          salida({ id: "lector", operation: "provincia_cod", courier: "swayp" }),
+        ],
+        NOW,
+      ),
+    );
+    expect(panelOf(panels, "provincia_cod").closer).toBe("mixto");
+  });
+
+  it("no cuenta en el panel lo que ya no se puede armar", () => {
+    // Una guía anulada no es trabajo pendiente: si sumara, el turno nunca cerraría.
+    const panels = warehousePanels(
+      buildWarehouseQueue(
+        [
+          salida({ id: "viva", operation: "lima" }),
+          salida({ id: "anulada", operation: "lima", delivery_status: "anulado" }),
+        ],
+        NOW,
+      ),
+    );
+    expect(panelOf(panels, "lima").total).toBe(1);
+  });
+
+  it("arrastra las detenidas de cada operación y solo añade Sin clasificar si existe", () => {
+    const panels = warehousePanels(
+      buildWarehouseQueue(
+        [
+          salida({ id: "vieja", operation: "lima", created_at: daysAgo(WAREHOUSE_STALE_DAYS) }),
+          salida({ id: "rara", operation: null }),
+        ],
+        NOW,
+      ),
+    );
+    expect(panelOf(panels, "lima").stalled).toBe(1);
+    expect(panelOf(panels, "desconocida").total).toBe(1);
   });
 });

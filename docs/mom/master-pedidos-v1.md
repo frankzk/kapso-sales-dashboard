@@ -311,6 +311,13 @@ Reglas:
   —Lima, después agencia, después provincia— y dentro de cada grupo lo más
   antiguo va primero. Una lista sola ordenada por fecha entierra las cajas de
   Lima debajo del volumen de provincia, que es el grueso de los días normales.
+- La pantalla encabeza con **un recuadro por operación** —Lima, agencia,
+  provincia— que dice cuánto falta empacar. Los tres se muestran **siempre,
+  incluso en cero**, y el cero se dibuja distinto: es el dato que el almacén
+  necesita para saber si ya cerró lo suyo. Un grupo vacío no se dibuja en la
+  lista, así que sin el recuadro la ausencia de cajas es indistinguible de no
+  haber mirado. El recuadro cuenta la cola completa; el buscador filtra la lista,
+  nunca el recuadro.
 - Cada caja dice **qué hecho la saca de la cola**: el escaneo local, o el reporte
   del courier en los casos con equivalencia documentada (hoy solo Aliclik). El
   almacén empaca las tres operaciones; lo que cambia es quién cierra la caja.
