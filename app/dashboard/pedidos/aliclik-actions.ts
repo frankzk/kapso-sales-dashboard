@@ -50,6 +50,7 @@ import {
   selectExistingAliclikOrder,
 } from "@/lib/aliclik-existing-guide";
 import { aliclikStatusLabel, mapAliclikStatus } from "@/lib/aliclik-status";
+import { lockedIntentMessage, type LockedIntent } from "@/lib/aliclik-orphan-expiry";
 import {
   loadCatalogFor,
   hydrateOrderLineSkusFromCatalog,
@@ -901,6 +902,39 @@ export interface CreateGuideInput {
   expectedCollectTotal?: number | null;
 }
 
+/**
+ * Cuánto aguanta una intención en 'pending' antes de que el barrido la caduque.
+ * Es el mismo valor que aplica el cron; aquí solo sirve para decirle a la
+ * operadora cuánto le queda de espera. Ver lib/aliclik-orphan-expiry.ts.
+ */
+const INTENT_EXPIRY_MS = 90 * 60_000;
+
+/**
+ * Por qué el candado rechazó este intento, en cristiano.
+ *
+ * Se consulta la intención viva en lugar de devolver un texto fijo: el estado
+ * que la bloquea cambia por completo qué debe hacer quien está delante. Si la
+ * consulta falla, se cae al mensaje genérico — no vale perder el aviso.
+ */
+async function describeLockedIntent(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+): Promise<string> {
+  const { data } = await admin
+    .from("aliclik_order_requests")
+    .select("status,order_number,created_at")
+    .eq("order_id", orderId)
+    .neq("status", "failed")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return lockedIntentMessage((data as LockedIntent | null) ?? null, {
+    expiryMs: INTENT_EXPIRY_MS,
+    now: new Date(),
+  });
+}
+
 export async function createAliclikGuide(
   orderId: string,
   input: CreateGuideInput,
@@ -1006,7 +1040,7 @@ export async function createAliclikGuide(
 
   if (intentErr) {
     if (intentErr.code === "23505") {
-      return { error: "Ya hay una creación en curso o completada para este pedido." };
+      return { error: await describeLockedIntent(admin, orderId) };
     }
     return { error: `No se pudo registrar la intención: ${intentErr.message}` };
   }
@@ -1024,7 +1058,8 @@ export async function createAliclikGuide(
       .eq("id", intent.id);
     return {
       error:
-        "Aliclik no respondió a tiempo. El pedido PUEDE haberse creado: no reintentes; se verificará automáticamente en el próximo barrido.",
+        "Aliclik no respondió a tiempo. El pedido PUEDE haberse creado: no reintentes; se verificará " +
+        "automáticamente en el próximo barrido, y si nunca llegó a crearse el pedido se libera solo en ~90 min.",
     };
   }
 
