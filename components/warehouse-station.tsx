@@ -7,7 +7,11 @@ import { cn } from "@/components/ui";
 import { markShipmentReady, type DispatchActionResult } from "@/app/dashboard/pedidos/despacho/actions";
 import { loadWarehouseStation } from "@/app/dashboard/pedidos/almacen/actions";
 import { OPERATION_LABELS } from "@/lib/dispatch-routing";
-import type { OperationKind } from "@/lib/order-macro-stage";
+import {
+  buildWarehouseQueue,
+  type WarehouseQueueEntry,
+  type WarehouseQueueGroup,
+} from "@/lib/warehouse-queue";
 import type {
   DispatchShipment,
   WarehouseShipment,
@@ -65,6 +69,8 @@ export function WarehouseStation({
 
   const needle = query.trim().toLowerCase();
   const pending = needle ? data.pending.filter((s) => matches(s, needle)) : data.pending;
+  const queue = useMemo(() => buildWarehouseQueue(pending), [pending]);
+  const blocked = needle ? data.blocked.filter((b) => matches(b.shipment, needle)) : data.blocked;
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-5 pb-24">
@@ -105,9 +111,12 @@ export function WarehouseStation({
 
         <div className="grid gap-5 p-5 sm:p-7 xl:grid-cols-[minmax(0,1fr)_360px]">
           <div>
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="font-semibold text-slate-900">Por armar</h3>
-              <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">{data.pending.length}</span>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-semibold text-slate-900">Por armar</h3>
+                <p className="mt-0.5 text-xs text-slate-500">En el orden de prioridad del almacén: Lima, agencia y al final provincia.</p>
+              </div>
+              <span className="shrink-0 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">{data.pending.length}</span>
             </div>
             {data.pending.length > 8 && (
               <label className="relative mb-4 block">
@@ -116,10 +125,10 @@ export function WarehouseStation({
                 <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar por código, pedido, cliente o distrito" className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm outline-none focus:border-slate-950 focus:bg-white" />
               </label>
             )}
-            {pending.length ? (
-              <div className="grid gap-2 md:grid-cols-2">
-                {pending.slice(0, 40).map((shipment) => (
-                  <PendingCard key={shipment.id} shipment={shipment} storeName={storeName} />
+            {queue.groups.length ? (
+              <div className="space-y-6">
+                {queue.groups.map((group) => (
+                  <QueueGroup key={group.operation} group={group} storeName={storeName} />
                 ))}
               </div>
             ) : (
@@ -127,8 +136,23 @@ export function WarehouseStation({
                 {needle ? `Nada por armar coincide con «${query.trim()}».` : "No queda nada por armar. Buen trabajo."}
               </div>
             )}
-            {pending.length > 40 && <p className="mt-3 text-xs text-slate-400">Se muestran 40 de {pending.length}. Usa el buscador para llegar a uno concreto.</p>}
             {data.pendingOmitted > 0 && <p className="mt-3 text-xs text-amber-700">Hay {data.pendingOmitted} salidas más por armar fuera de este corte.</p>}
+
+            {blocked.length > 0 && (
+              <div className="mt-8 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <h4 className="text-sm font-semibold text-slate-900">No se pueden armar · {blocked.length}</h4>
+                <p className="mt-1 text-xs text-slate-500">Siguen contadas en el Master porque el pedido sigue vivo, pero esta caja concreta ya no se empaca: necesita una salida nueva o ya salió.</p>
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  {blocked.slice(0, 12).map(({ shipment, reason }) => (
+                    <div key={shipment.id} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                      <p className="truncate text-sm font-semibold text-slate-900">{packageCode(shipment)}</p>
+                      <p className="truncate text-xs text-slate-500">{shipment.order_name} · {reason}</p>
+                    </div>
+                  ))}
+                </div>
+                {blocked.length > 12 && <p className="mt-2 text-xs text-slate-400">y {blocked.length - 12} más.</p>}
+              </div>
+            )}
           </div>
 
           <div className="xl:border-l xl:border-slate-200 xl:pl-5">
@@ -160,23 +184,81 @@ export function WarehouseStation({
   );
 }
 
-function PendingCard({ shipment, storeName }: { shipment: WarehouseShipment; storeName: Map<string, string> }) {
-  const operation = shipment.operation as OperationKind | null;
+const GROUP_LIMIT = 24;
+
+/**
+ * Un bloque por operación, en la prioridad de almacén del MOM §6.2.
+ *
+ * El encabezado dice de una vez cuánto falta y —cuando el grupo no lo cierra el
+ * lector— quién lo cierra. Provincia COD sigue apareciendo porque la caja SÍ se
+ * empaca aquí; lo que cambia es que ya no se lee como pendiente de escanear.
+ */
+function QueueGroup({
+  group,
+  storeName,
+}: {
+  group: WarehouseQueueGroup<WarehouseShipment>;
+  storeName: Map<string, string>;
+}) {
+  const byCourier = group.waitingOnCourier === group.entries.length;
   return (
-    <div className="rounded-2xl border border-slate-200 p-4">
+    <section>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <h4 className="font-semibold text-slate-900">{OPERATION_LABELS[group.operation] ?? group.operation}</h4>
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{group.entries.length}</span>
+        {byCourier && (
+          <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700">Las cierra el courier con su reporte, no tu escaneo</span>
+        )}
+        {group.stalled > 0 && (
+          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">{group.stalled} detenidas</span>
+        )}
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        {group.entries.slice(0, GROUP_LIMIT).map((entry) => (
+          <PendingCard key={entry.shipment.id} entry={entry} storeName={storeName} />
+        ))}
+      </div>
+      {group.entries.length > GROUP_LIMIT && (
+        <p className="mt-3 text-xs text-slate-400">Se muestran {GROUP_LIMIT} de {group.entries.length}. Usa el buscador para llegar a una concreta.</p>
+      )}
+    </section>
+  );
+}
+
+function PendingCard({
+  entry,
+  storeName,
+}: {
+  entry: WarehouseQueueEntry<WarehouseShipment>;
+  storeName: Map<string, string>;
+}) {
+  const { shipment, closer, ageDays, stalled } = entry;
+  return (
+    <div className={cn("rounded-2xl border p-4", stalled ? "border-amber-300 bg-amber-50/40" : "border-slate-200")}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate font-semibold text-slate-950">{packageCode(shipment)}</p>
           <p className="truncate text-xs text-slate-500">{shipment.order_name} · {storeName.get(shipment.store_id) ?? "Tienda"}</p>
         </div>
-        {operation && (
-          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">{OPERATION_LABELS[operation] ?? operation}</span>
-        )}
+        <span className="shrink-0 text-[11px] font-medium tabular-nums text-slate-400">{ageLabel(ageDays)}</span>
       </div>
       <p className="mt-3 truncate text-sm text-slate-700">{shipment.customer_name ?? "Cliente"} · {shipment.district ?? shipment.province ?? "Sin distrito"}</p>
       {shipment.product && <p className="mt-1 truncate text-xs text-slate-400">{shipment.product}</p>}
+      {closer === "courier" && (
+        <p className="mt-2 text-[11px] text-slate-500">Empácala; sale de la cola cuando {courierLabel(shipment.courier)} la reporte preparada.</p>
+      )}
     </div>
   );
+}
+
+function ageLabel(days: number): string {
+  if (days <= 0) return "hoy";
+  if (days === 1) return "ayer";
+  return `hace ${days} días`;
+}
+
+function courierLabel(courier: string | null): string {
+  return courier === "aliclik" ? "Aliclik" : (courier ?? "el courier");
 }
 
 function matches(shipment: WarehouseShipment, needle: string): boolean {

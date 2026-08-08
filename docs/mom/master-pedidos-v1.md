@@ -302,6 +302,23 @@ Reglas:
 - La cola de armado se define por el PEDIDO, no por la salida suelta: una salida
   cuyo pedido ya no está en `Por armar` —cancelado, o despachado por otra caja—
   no es trabajo de almacén y no se lista.
+- Una salida cuya guía está `anulada` o `transferida`, o que el courier ya reporta
+  `en ruta` o `entregada`, tampoco es trabajo de armado: nadie va a empacar esa
+  caja. Se aparta con el motivo a la vista y **no** cuenta en el pendiente. No se
+  oculta: el pedido puede seguir vivo en el Master y esta es la pantalla que debe
+  explicar por qué su caja ya no está en la fila.
+- La cola se agrupa por operación en la prioridad de almacén de este apartado
+  —Lima, después agencia, después provincia— y dentro de cada grupo lo más
+  antiguo va primero. Una lista sola ordenada por fecha entierra las cajas de
+  Lima debajo del volumen de provincia, que es el grueso de los días normales.
+- Cada caja dice **qué hecho la saca de la cola**: el escaneo local, o el reporte
+  del courier en los casos con equivalencia documentada (hoy solo Aliclik). El
+  almacén empaca las tres operaciones; lo que cambia es quién cierra la caja.
+  Sin esa distinción, Provincia COD se lee como pendiente de escanear cuando en
+  realidad espera el `PREPARED` de Aliclik, y la pantalla acusa un atraso que no
+  existe.
+- Una caja pendiente de tres días o más se marca **detenida**. No es el trabajo
+  del día: o el courier nunca reportó, o la caja se quedó sin dueño.
 - El escaneo acepta cuatro identificadores del mismo rótulo: el QR, el código de
   salida, la guía del courier y el número de pedido en código de barras. Los tres
   primeros designan una caja; el número de pedido designa al pedido, que puede
@@ -666,6 +683,22 @@ hasta que Frankz la cambie expresamente.
 Estados externos observados: entregado, no responde, rechazado, reprogramado y
 anulado/cancelado por el courier. Un `anulado` en el reporte del courier no
 anula el pedido Shopify; solo la anulación explícita en Shopify cierra la venta.
+
+Tanders tiene API propia y Kapta relee el estado de cada guía viva desde ella,
+sin tope de antigüedad. Reglas:
+
+- El vocabulario de estados de Tanders **no está documentado por ellos**. Se
+  traduce solo lo confirmado; un estado que no reconocemos se guarda literal en
+  `reported_status` y **no toca la guía**. No se inventan equivalencias.
+- `DELIVERED` acredita que el paquete salió de la empresa —custodia del
+  courier—, no que el dinero esté cobrado. La guía pasa a `entregado` solo con
+  la constancia de pago validada, porque en Tanders cobra el motorizado y el
+  cliente deposita directamente (§14).
+- La custodia solo avanza: un reporte atrasado no devuelve a la empresa un
+  paquete que ya se llevó el motorizado.
+- El WhatsApp y el cierre de ruta de la noche siguen siendo la fuente para las
+  incidencias; la API cubre el estado de la guía, que antes se congelaba en el
+  valor del momento de creación y dejaba cajas detenidas en `Por armar`.
 
 Devoluciones físicas:
 
