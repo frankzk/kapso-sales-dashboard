@@ -141,4 +141,17 @@ describe("exportFilename", () => {
     expect(exportFilename("todos", NOW)).toBe("pedidos_2026-08-07.xlsx");
     expect(exportFilename(null, NOW)).toBe("pedidos_2026-08-07.xlsx");
   });
+
+  // Distinguir la selección importa: es la diferencia que no se puede
+  // reconstruir después mirando el contenido del fichero.
+  it("una selección se nombra como tal, por encima de la pestaña", () => {
+    expect(exportFilename(null, NOW, true)).toBe("pedidos_seleccion_2026-08-07.xlsx");
+    expect(exportFilename("por_confirmar", NOW, true)).toBe("pedidos_seleccion_2026-08-07.xlsx");
+  });
+
+  it("por defecto no es una selección", () => {
+    expect(exportFilename("por_confirmar", NOW, false)).toBe(
+      "pedidos_por_confirmar_2026-08-07.xlsx",
+    );
+  });
 });

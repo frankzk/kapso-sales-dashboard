@@ -778,6 +778,43 @@ export const getAgencySummaryCached = (storeIds: string[]) =>
     { revalidate: FACETS_TTL_SECONDS },
   )();
 
+/**
+ * Las filas de una SELECCIÓN concreta, para exportarla.
+ *
+ * No pasa por los filtros a propósito: quien marca casillas ya eligió: aplicar
+ * encima el filtro de la pantalla podría dejar fuera un pedido que marcó antes
+ * de cambiarlo, y eso es peor que no filtrar. `storeIds` sí se mantiene, porque
+ * no es un filtro sino el límite de lo que esta persona puede ver, y la RLS
+ * vuelve a imponerlo por debajo.
+ *
+ * El orden es el mismo del listado (creación, más recientes primero) para que
+ * la hoja no salga barajada respecto a lo que se estaba mirando.
+ */
+export async function getOrderMasterRowsByIds(
+  storeIds: string[],
+  orderIds: string[],
+): Promise<OrderMasterRow[]> {
+  if (!storeIds.length || !orderIds.length) return [];
+  const sb = await createServerSupabase();
+  const out: OrderMasterRow[] = [];
+  // Por lotes: una lista de miles de ids en un solo `in(...)` desborda la URL
+  // que arma PostgREST.
+  const CHUNK = 500;
+  for (let i = 0; i < orderIds.length; i += CHUNK) {
+    const slice = orderIds.slice(i, i + CHUNK);
+    const { data, error } = await sb
+      .from("order_master")
+      .select(MASTER_COLUMNS)
+      .in("store_id", storeIds)
+      .in("order_id", slice)
+      .order("order_created_at", { ascending: false, nullsFirst: false })
+      .order("id", { ascending: true });
+    if (error) break;
+    out.push(...((data ?? []) as unknown as OrderMasterRow[]).map(withRuntimeCoverage));
+  }
+  return out;
+}
+
 export async function getMasterFacets(storeIds: string[]): Promise<{
   operational: string[];
   courier: string[];
