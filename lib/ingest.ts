@@ -57,6 +57,7 @@ import {
   type LeadEnrichStats,
 } from "@/lib/leads-ingest";
 import { runCartSequence } from "@/lib/cart-sequence";
+import { runReturnRecovery } from "@/lib/return-recovery";
 import type { ConversationRow, DraftOrderRow, OrderRow } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -97,6 +98,16 @@ export interface StoreCreds {
   cart_seq_hours_2: number;
   cart_seq_hour_start: number;
   cart_seq_hour_end: number;
+  /** Recuperación del pedido devuelto (0112). `enabled` habilita la cola y el
+   *  botón; `auto` deja que el cron envíe solo. Ver lib/return-recovery.ts. */
+  return_recovery_enabled: boolean;
+  return_recovery_auto: boolean;
+  return_recovery_template_name: string | null;
+  return_recovery_template_language: string | null;
+  return_recovery_params: string | null;
+  return_recovery_hour_start: number;
+  return_recovery_hour_end: number;
+  return_recovery_max_days: number;
   telegram_bot_token: string | null;
   telegram_chat_id: string | null;
   meta_access_token: string | null;
@@ -158,6 +169,16 @@ export async function getStoreCreds(
     cart_seq_hours_2: data.cart_seq_hours_2 ?? 24,
     cart_seq_hour_start: data.cart_seq_hour_start ?? 8,
     cart_seq_hour_end: data.cart_seq_hour_end ?? 21,
+    // Pre-0112 las columnas no existen (select * → undefined) ⇒ recuperación
+    // apagada, que es exactamente el comportamiento anterior.
+    return_recovery_enabled: data.return_recovery_enabled ?? false,
+    return_recovery_auto: data.return_recovery_auto ?? false,
+    return_recovery_template_name: data.return_recovery_template_name ?? null,
+    return_recovery_template_language: data.return_recovery_template_language ?? null,
+    return_recovery_params: data.return_recovery_params ?? null,
+    return_recovery_hour_start: data.return_recovery_hour_start ?? 8,
+    return_recovery_hour_end: data.return_recovery_hour_end ?? 21,
+    return_recovery_max_days: data.return_recovery_max_days ?? 30,
     telegram_bot_token: decryptOrNull(data.telegram_bot_token_enc),
     telegram_chat_id: data.telegram_chat_id ?? null,
     meta_access_token: decryptOrNull(data.meta_access_token_enc),
@@ -722,6 +743,7 @@ export interface SyncReport {
   metaAdsResolved: number; // Meta ad_ids whose real names we resolved this run
   dripSent: number; // plantillas de seguimiento enviadas esta corrida
   cartSeqSent: number; // plantillas de carrito abandonado enviadas esta corrida
+  returnRecoverySent: number; // plantillas de recuperación de devueltos enviadas
   requeued: number; // carritos reencolados con atención (olas, máx 2 por lead)
   orderMaster: number; // filas del Master reconciliadas en esta corrida
   errors: string[];
@@ -798,6 +820,7 @@ export async function runStoreSync(
     metaAdsResolved: 0,
     dripSent: 0,
     cartSeqSent: 0,
+    returnRecoverySent: 0,
     requeued: 0,
     orderMaster: 0,
     errors: [],
@@ -1042,6 +1065,23 @@ export async function runStoreSync(
       if (seq.failed) report.errors.push(`cart_seq: ${seq.failed} envíos fallidos`);
     } catch (e: any) {
       report.errors.push(`cart_seq: ${e.message}`);
+    }
+  }
+
+  // 2c.57) Recuperación del pedido devuelto: plantilla a las clientas cuya guía
+  //        de provincia volvió al almacén, proponiéndoles el reenvío por
+  //        agencia con adelanto (MOM §11-§12). Doble interruptor a propósito:
+  //        `enabled` habilita la cola y el botón, `auto` es el que deja enviar
+  //        sin que nadie mire — el mensaje pide plata por adelantado. Los que
+  //        rechazaron el producto en la puerta quedan fuera por regla del MOM.
+  //        Best-effort. Pre-0112 es un no-op (auto=false).
+  if (creds.return_recovery_auto) {
+    try {
+      const rec = await runReturnRecovery(admin, storeId, creds);
+      report.returnRecoverySent = rec.sent;
+      if (rec.failed) report.errors.push(`return_recovery: ${rec.failed} envíos fallidos`);
+    } catch (e: any) {
+      report.errors.push(`return_recovery: ${e.message}`);
     }
   }
 

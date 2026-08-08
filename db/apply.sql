@@ -227,4 +227,6 @@
 \ir migrations/0110_backfill_aliclik_report_status.sql
 \echo 'Applying 0111_api_owns_delivery_status.sql'
 \ir migrations/0111_api_owns_delivery_status.sql
+\echo 'Applying 0112_return_recovery.sql'
+\ir migrations/0112_return_recovery.sql
 \echo 'Done.'

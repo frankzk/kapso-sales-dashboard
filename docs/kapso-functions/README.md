@@ -175,3 +175,31 @@ from conversations
 where started_at > now() - interval '30 days'
 group by 1 order by 2 desc;
 ```
+
+## Lo que falta del lado del bot: la cuenta bancaria
+
+La recuperación de pedidos devueltos (MOM §11.1) manda desde el dashboard la
+plantilla `recuperacion_pedido_retornado`, que le propone a la clienta reenviar
+por agencia con adelanto. **Ahí termina lo que hace este repo.** Cuando la
+clienta contesta que sí, quien tiene que mandarle el número de cuenta es el bot
+— y ese paso vive acá, en Kapso, no en el dashboard.
+
+Por qué de este lado:
+
+- La respuesta llega a la conversación que el bot ya sostiene. Meterse en medio
+  desde el dashboard obligaría a clasificar «sí quiero» contra «¿por qué tengo
+  que adelantar?» con el bot contestando en paralelo, cada uno sin saber del
+  otro.
+- El número de cuenta ya lo dice el bot en otros flujos. Duplicarlo en el
+  dashboard crearía dos sitios donde cambiarlo, y el día que cambie se va a
+  cambiar en uno solo.
+
+Qué reconocer: la conversación viene de un mensaje saliente de plantilla con
+`template.name = "recuperacion_pedido_retornado"`, que es lo que la distingue de
+cualquier otra. La cuenta receptora es la de siempre — `Grupo GF S.A.C.`,
+celular terminado en `309` (§12) — porque es la que el circuito de validación de
+comprobantes sabe verificar. Mandar otra deja el pago en revisión y bloquea la
+clave de recojo.
+
+Estado: **pendiente**. Hasta que se agregue, la clienta que responde que sí
+queda esperando en el chat y la atiende una asesora a mano.

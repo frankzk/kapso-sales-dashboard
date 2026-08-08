@@ -38,6 +38,9 @@ describe("permissionsFor", () => {
     expect(p.has("warehouse.prepare")).toBe(true);
     expect(p.has("dispatch.manage")).toBe(true);
     expect(p.has("dispatch.pickup")).toBe(true);
+    // Recuperar una devolución es gestión de venta: la misma persona que
+    // llamaría a esa clienta es la que manda el mensaje.
+    expect(p.has("recovery.contact")).toBe(true);
     expect(p.has("closure.return")).toBe(true);
     expect(p.has("closure.inventory")).toBe(true);
     expect(p.has("closure.finance")).toBe(false);

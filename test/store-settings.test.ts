@@ -34,6 +34,44 @@ describe("buildStoreUpdate", () => {
     expect(decrypt(patch.shopify_token_enc as string, KEY)).toBe("shpat_abc");
   });
 
+  it("guarda la config de recuperación de devueltos, con sus dos interruptores", () => {
+    const patch = buildStoreUpdate(
+      {
+        return_recovery_enabled: "true",
+        return_recovery_auto: "false",
+        return_recovery_template_name: "  recuperacion_pedido_retornado  ",
+        return_recovery_params: "nombre,producto,monto",
+        return_recovery_hour_start: "9",
+        return_recovery_max_days: "45",
+      },
+      KEY,
+    );
+    expect(patch).toMatchObject({
+      return_recovery_enabled: true,
+      // Apagar el automático sin cerrar la cola es la marcha atrás que se
+      // quiere tener a mano: los dos toggles viajan por separado.
+      return_recovery_auto: false,
+      return_recovery_template_name: "recuperacion_pedido_retornado",
+      return_recovery_params: "nombre,producto,monto",
+      return_recovery_hour_start: 9,
+      return_recovery_max_days: 45,
+    });
+  });
+
+  it("descarta horas y ventanas fuera de rango en vez de guardarlas", () => {
+    const patch = buildStoreUpdate(
+      {
+        return_recovery_hour_start: "99",
+        return_recovery_max_days: "0",
+        return_recovery_hour_end: "no",
+      },
+      KEY,
+    );
+    expect(patch.return_recovery_hour_start).toBeUndefined();
+    expect(patch.return_recovery_max_days).toBeUndefined();
+    expect(patch.return_recovery_hour_end).toBeUndefined();
+  });
+
   it("persists browse and winback automatic-send toggles", () => {
     expect(
       buildStoreUpdate({

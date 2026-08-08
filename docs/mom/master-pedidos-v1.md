@@ -842,6 +842,63 @@ Antes de enviar:
 Gestión de contacto: hasta tres llamadas diarias durante siete días. Los siete
 intentos se cuentan por día, no por llamada.
 
+### 11.1 Recuperación del pedido devuelto
+
+La devolución es entrada elegible a Reproprovincia, pero esa puerta solo se abre
+si alguien vuelve a escribirle a la clienta. El primer contacto se automatiza:
+una **plantilla aprobada por Meta** —una devolución tarda semanas, así que la
+ventana de 24 h de WhatsApp lleva mucho tiempo cerrada y fuera de ella no entra
+un mensaje libre—.
+
+Lo que propone el mensaje **no es repetir el contraentrega**: eso apuesta el
+flete otra vez a la misma clienta que ya no respondió. Propone **reenviar por
+agencia con adelanto** (§12). Si acepta, no hay flete en riesgo; si no contesta,
+no costó nada.
+
+Qué guía entra:
+
+- Devolución **consumada** (`returned_at` sellado), no `POR DEVOLVER` (§10).
+- Courier de **contraentrega de provincia**. Una devolución de agencia ya se
+  pagó por adelantado —no hay adelanto que proponer— y una de Lima se gestiona
+  el mismo día por teléfono.
+- **Quien rechazó el producto teniéndolo delante queda fuera**, por la regla de
+  arriba. Es la exclusión que más importa: el mensaje pide plata por adelantado,
+  y pedírsela a quien dijo que no en la puerta invita al reporte por spam — y un
+  reporte le cuesta la plantilla a **toda la tienda**, no solo a ese chat. El
+  motivo se lee del reporte del courier y también del texto libre de quien
+  gestionó, donde aparece conjugado.
+- Con nombre, producto y número de WhatsApp peruano válido: un parámetro vacío
+  lo rechaza Meta, y un «¡Hola !» quema el mensaje.
+- Devuelta hace poco. Una devolución de hace meses ya se reingresó o se dio de
+  baja, y la clienta no recuerda el pedido: el mensaje llega como spam de un
+  desconocido.
+
+Cómo se envía:
+
+- **Dos interruptores por tienda, no uno.** El primero habilita la cola y el
+  botón; el segundo deja que el envío salga solo. Están separados porque el
+  mensaje pide dinero por adelantado: el primer lote de cada tienda se mira
+  antes de soltarlo, y apagar el automático sin cerrar la cola es la marcha
+  atrás que se querría tener a mano.
+- La plantilla y el **orden de sus parámetros se configuran por tienda**. Cada
+  tienda es una WABA distinta con su propia aprobación, así que el cuerpo no es
+  el mismo y compilar el orden obligaría a un despliegue por cada palabra que
+  Meta apruebe distinto.
+- Horario local y tope por corrida, como el resto de automatizaciones de
+  WhatsApp.
+- **Un envío rechazado no marca la guía**: vuelve a la cola y el motivo queda
+  registrado. Al revés que el drip, que quema el toque aunque falle — allá el
+  riesgo es martillar un número cada cinco minutos; acá la cola es corta y
+  perder la única oportunidad de recuperar la venta por un error transitorio es
+  el peor desenlace.
+- Escribirle a la clienta es **permiso propio** (`recovery.contact`), no
+  `master.edit`: es una escritura hacia afuera que no se puede retirar.
+
+Dónde termina: **en el primer mensaje**. La respuesta la atiende el bot de
+WhatsApp, que es quien manda el número de cuenta cuando la clienta acepta —
+Kapta no envía datos bancarios—. De ahí en adelante el circuito de adelanto,
+comprobante y clave de recojo (§12) ya existe y no cambia.
+
 Ciudades con stock/operación conocidas: Arequipa, Huancayo, Juliaca/Puno,
 Cusco, Trujillo, Ica, Piura, Chimbote, Chiclayo.
 
