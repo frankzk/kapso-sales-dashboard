@@ -156,3 +156,56 @@ export function buildWarehouseQueue<T extends WarehouseQueueInput>(
   const stalled = groups.reduce((sum, group) => sum + group.stalled, 0);
   return { groups, blocked, total, stalled };
 }
+
+/** Cuánto falta empacar de una operación, para el panel de cabecera. */
+export interface WarehousePanel {
+  operation: OperationKind;
+  total: number;
+  stalled: number;
+  /**
+   * Quién cierra las cajas de este panel. `null` cuando no queda ninguna, y
+   * `mixto` cuando conviven las dos formas —pasa si un pedido de provincia sale
+   * por un courier sin equivalencia documentada—.
+   */
+  closer: WarehouseCloser | "mixto" | null;
+}
+
+/**
+ * Las tres operaciones que el panel enseña SIEMPRE, aunque estén en cero.
+ *
+ * Que aparezcan vacías es justamente el punto: un almacén que solo ve lo que le
+ * queda no puede saber si Lima ya cerró, porque un grupo sin cajas simplemente
+ * no se dibuja. El cero hay que enseñarlo para poder exigirlo al final del turno.
+ */
+export const WAREHOUSE_PANEL_OPERATIONS: OperationKind[] = ["lima", "agencia", "provincia_cod"];
+
+/**
+ * El resumen por operación.
+ *
+ * Se calcula sobre la cola YA construida para que el panel y la lista no puedan
+ * discrepar: lo apartado —guías anuladas, o que el courier ya reporta en ruta—
+ * queda fuera de los dos, porque nadie va a empacar esas cajas.
+ */
+export function warehousePanels<T extends WarehouseQueueInput>(
+  queue: WarehouseQueue<T>,
+): WarehousePanel[] {
+  const byOperation = new Map(queue.groups.map((group) => [group.operation, group]));
+  // Las fijas primero, y `desconocida` solo si de verdad hay algo sin clasificar:
+  // un panel permanente para lo que no debería existir enseña a ignorarlo.
+  const operations = [...WAREHOUSE_PANEL_OPERATIONS];
+  if (byOperation.has("desconocida")) operations.push("desconocida");
+
+  return operations.map((operation) => {
+    const group = byOperation.get(operation);
+    if (!group?.entries.length) {
+      return { operation, total: 0, stalled: 0, closer: null };
+    }
+    const byCourier = group.waitingOnCourier;
+    return {
+      operation,
+      total: group.entries.length,
+      stalled: group.stalled,
+      closer: byCourier === 0 ? "escaneo" : byCourier === group.entries.length ? "courier" : "mixto",
+    };
+  });
+}

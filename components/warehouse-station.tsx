@@ -9,6 +9,8 @@ import { loadWarehouseStation } from "@/app/dashboard/pedidos/almacen/actions";
 import { OPERATION_LABELS } from "@/lib/dispatch-routing";
 import {
   buildWarehouseQueue,
+  warehousePanels,
+  type WarehousePanel,
   type WarehouseQueueEntry,
   type WarehouseQueueGroup,
 } from "@/lib/warehouse-queue";
@@ -72,6 +74,10 @@ export function WarehouseStation({
   const queue = useMemo(() => buildWarehouseQueue(pending), [pending]);
   const blocked = needle ? data.blocked.filter((b) => matches(b.shipment, needle)) : data.blocked;
 
+  // El panel cuenta SIEMPRE la cola entera: buscar una caja concreta no puede
+  // bajar el número que el turno tiene que dejar en cero.
+  const panels = useMemo(() => warehousePanels(buildWarehouseQueue(data.pending)), [data.pending]);
+
   return (
     <div className="mx-auto max-w-[1500px] space-y-5 pb-24">
       <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
@@ -107,6 +113,18 @@ export function WarehouseStation({
             <button disabled={busy || !scan.trim()} className="h-14 rounded-2xl bg-slate-950 px-7 font-semibold text-white hover:bg-slate-800 disabled:opacity-40">{busy ? "Procesando…" : "Confirmar"}</button>
           </form>
           {message && <div className={cn("mt-4 rounded-xl px-4 py-3 text-sm font-medium", message.tone === "error" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>{message.text}</div>}
+        </div>
+
+        <div className="border-b border-slate-200 bg-slate-50/70 p-5 sm:p-7">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <h3 className="font-semibold text-slate-900">Por empacar</h3>
+            <p className="text-xs text-slate-500">Cuenta la cola completa, no lo que filtre el buscador.</p>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            {panels.map((panel) => (
+              <OperationPanel key={panel.operation} panel={panel} />
+            ))}
+          </div>
         </div>
 
         <div className="grid gap-5 p-5 sm:p-7 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -182,6 +200,49 @@ export function WarehouseStation({
       <DispatchCamera open={cameraOpen} onClose={() => setCameraOpen(false)} onScan={onCameraScan} />
     </div>
   );
+}
+
+/**
+ * Un recuadro por operación: cuánto falta empacar y qué lo cierra.
+ *
+ * El cero se dibuja distinto a propósito. Lo que el almacén necesita ver de un
+ * vistazo al cerrar el turno es si Lima quedó limpia, y eso no se lee bien en un
+ * número más de una lista: se lee en que el recuadro cambie de estado.
+ */
+function OperationPanel({ panel }: { panel: WarehousePanel }) {
+  const done = panel.total === 0;
+  return (
+    <div
+      className={cn(
+        "rounded-2xl border p-4",
+        done ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white",
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <p className={cn("text-sm font-semibold", done ? "text-emerald-900" : "text-slate-700")}>
+          {OPERATION_LABELS[panel.operation] ?? panel.operation}
+        </p>
+        {panel.stalled > 0 && (
+          <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+            {panel.stalled} detenidas
+          </span>
+        )}
+      </div>
+      <p className={cn("mt-2 text-4xl font-semibold tabular-nums", done ? "text-emerald-700" : "text-slate-950")}>
+        {panel.total}
+      </p>
+      <p className={cn("mt-1 text-xs", done ? "text-emerald-700" : "text-slate-500")}>
+        {done ? "En cero. Nada por empacar." : panelHint(panel.closer)}
+      </p>
+    </div>
+  );
+}
+
+/** Qué cierra las cajas que quedan, dicho en una línea. */
+function panelHint(closer: WarehousePanel["closer"]): string {
+  if (closer === "courier") return "Empácalas; las cierra el reporte del courier.";
+  if (closer === "mixto") return "Unas las cierra tu escaneo y otras el courier.";
+  return "Por empacar y escanear aquí.";
 }
 
 const GROUP_LIMIT = 24;
