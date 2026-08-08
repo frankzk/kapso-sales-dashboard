@@ -44,7 +44,7 @@ export const maxDuration = 300;
 // quedaba en 'pending' para siempre y el candado dejaba el pedido inoperable.
 // Tras `ORPHAN_EXPIRY_MS` de barridos sin encontrarla, se cierra como 'failed'
 // con el motivo escrito y el pedido vuelve a admitir un intento
-// (lib/aliclik-orphan-expiry.ts).
+// (MOM §10.2, lib/aliclik-orphan-expiry.ts).
 //
 // Y PERSIGUE A LAS REZAGADAS. La ventana de fechas cubre el ciclo normal, pero
 // no el retorno: un paquete rechazado tarda semanas en volver, y para cuando

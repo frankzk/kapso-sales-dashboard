@@ -1,5 +1,5 @@
 // Caducidad de las intenciones de creación que quedaron en 'pending'.
-// Puro + testeado.
+// Puro + testeado. La regla vive en el MOM §10.2.
 //
 // EL AGUJERO QUE CIERRA. Crear un pedido en Aliclik se protege con un único
 // parcial sobre `aliclik_order_requests` que excluye solo `failed` (ver 0056):
