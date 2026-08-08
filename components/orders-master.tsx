@@ -505,23 +505,11 @@ export function OrdersMasterBoard({
   const setFilters = (updater: (f: MasterFilters) => MasterFilters) =>
     navigate({ filters: updater(filters) });
 
-  // La búsqueda es un filtro más y la resuelve la base. El input mantiene su
-  // propio estado para que escribir sea instantáneo, y solo al parar de teclear
-  // se reescribe la URL — si no, cada letra sería un viaje al servidor.
-  const [search, setSearch] = useState(filters.search);
+  // La búsqueda es un filtro más y la resuelve la base. El estado del input NO
+  // vive aquí: está en `MasterSearchInput`, y el motivo es de rendimiento, no
+  // de orden. Ver el comentario de ese componente.
   const searching = navigating;
-
-  useEffect(() => {
-    setSearch(filters.search);
-  }, [filters.search]);
-
-  useEffect(() => {
-    if (search.trim() === filters.search.trim()) return;
-    const timer = setTimeout(() => navigate({ filters: { search: search.trim() } }), 350);
-    return () => clearTimeout(timer);
-    // `navigate` se rehace en cada render; depender de él relanzaría el temporizador.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, filters.search]);
+  const commitSearch = (next: string) => navigate({ filters: { search: next } });
 
   const storeName = useMemo(() => {
     const map = new Map(stores.map((s) => [s.id, s.name]));
@@ -603,25 +591,7 @@ export function OrdersMasterBoard({
               Mesa de despacho
             </Link>
           )}
-          <div className="relative">
-            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400">
-              🔍
-            </span>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar pedido, cliente, teléfono o guía…"
-              className="w-72 rounded-lg border border-slate-200 py-1.5 pl-8 pr-7 text-sm"
-            />
-            {search && (
-              <button
-                onClick={() => setSearch("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-              >
-                ✕
-              </button>
-            )}
-          </div>
+          <MasterSearchInput value={filters.search} onCommit={commitSearch} />
           {!canEdit && (
             <span className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs text-slate-500">
               Solo lectura
@@ -643,7 +613,7 @@ export function OrdersMasterBoard({
                 busy={navigating}
                 onPage={(p) => navigate({ page: p })}
               />
-              <button onClick={() => setSearch("")} className="text-xs text-slate-500 hover:underline">
+              <button onClick={() => commitSearch("")} className="text-xs text-slate-500 hover:underline">
                 Limpiar búsqueda
               </button>
             </div>
@@ -4028,6 +3998,67 @@ function ExportButton({
     >
       {busy ? "Generando…" : label}
     </button>
+  );
+}
+
+/**
+ * El buscador del Master, con su propio estado.
+ *
+ * POR QUÉ VIVE APARTE. El estado del texto estaba en `OrdersMasterBoard`, que es
+ * el mismo componente que pinta la tabla: 100 filas × 17 columnas, más badges y
+ * botones por celda. Cada pulsación disparaba un render del board entero —unos
+ * dos mil elementos— antes de que la letra llegara a la pantalla, y eso se nota
+ * como que el input se atasca y se come teclas. El debounce no lo arreglaba
+ * porque el coste no estaba en el viaje al servidor sino en el render local.
+ *
+ * Aislado aquí, teclear solo re-renderiza este input. El board se entera una
+ * sola vez, cuando el texto se asienta y `onCommit` reescribe la URL.
+ */
+function MasterSearchInput({
+  value,
+  onCommit,
+}: {
+  value: string;
+  onCommit: (next: string) => void;
+}) {
+  const [text, setText] = useState(value);
+  // `onCommit` se rehace en cada render del padre. Guardarlo en una ref evita
+  // que el temporizador se reinicie por eso y nunca llegue a disparar.
+  const commit = useRef(onCommit);
+  commit.current = onCommit;
+
+  // La URL manda: atrás/adelante del navegador o «limpiar filtros» tienen que
+  // verse reflejados en el input.
+  useEffect(() => {
+    setText(value);
+  }, [value]);
+
+  useEffect(() => {
+    if (text.trim() === value.trim()) return;
+    const timer = setTimeout(() => commit.current(text.trim()), 350);
+    return () => clearTimeout(timer);
+  }, [text, value]);
+
+  return (
+    <div className="relative">
+      <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400">
+        🔍
+      </span>
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Buscar pedido, cliente, teléfono o guía…"
+        className="w-72 rounded-lg border border-slate-200 py-1.5 pl-8 pr-7 text-sm"
+      />
+      {text && (
+        <button
+          onClick={() => setText("")}
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+        >
+          ✕
+        </button>
+      )}
+    </div>
   );
 }
 
