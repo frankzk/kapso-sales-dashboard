@@ -65,12 +65,22 @@ describe("vercel.json", () => {
     expect(cfg.regions).toEqual(["gru1"]);
   });
 
-  it("mantiene los diez crons con expresiones válidas de 5 campos", () => {
+  it("mantiene los once crons con expresiones válidas de 5 campos", () => {
     const crons = cfg.crons as { path: string; schedule: string }[];
-    expect(crons).toHaveLength(10);
+    expect(crons).toHaveLength(11);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);
+    }
+  });
+
+  it("cada cron apunta a una ruta que existe", () => {
+    // Un cron con la ruta mal escrita no falla el despliegue: se ejecuta y
+    // devuelve 404 en silencio, que es la forma más cara de no enterarse.
+    const crons = cfg.crons as { path: string; schedule: string }[];
+    for (const c of crons) {
+      const route = new URL(`../app${c.path}/route.ts`, import.meta.url);
+      expect(() => readFileSync(fileURLToPath(route), "utf8"), c.path).not.toThrow();
     }
   });
 });

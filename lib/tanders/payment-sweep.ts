@@ -90,6 +90,11 @@ export async function sweepTandersPayments(
 
   // Guías vivas: las que todavía no llegaron a un final. Una `rechazado` tampoco
   // se reanaliza — ya está esperando a un humano.
+  //
+  // La ventana mira la creación O el último reporte de su API. Solo por creación,
+  // una guía que Tanders da por entregada más tarde de lo normal caía fuera del
+  // corte antes de que nadie mirara su cobro y se quedaba varada para siempre;
+  // el barrido de estados la vuelve a poner a tiro al releerla.
   const { data, error } = await admin
     .from("shipments")
     .select(
@@ -97,7 +102,7 @@ export async function sweepTandersPayments(
     )
     .eq("courier", "tanders")
     .in("delivery_status", ["pendiente", "en_ruta"])
-    .gte("created_at", since)
+    .or(`created_at.gte.${since},api_report_at.gte.${since}`)
     .or("payment_check_state.is.null,payment_check_state.eq.pendiente")
     .limit(MAX_PER_RUN);
   if (error) throw new Error(error.message);

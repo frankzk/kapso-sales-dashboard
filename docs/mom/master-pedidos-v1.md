@@ -684,6 +684,22 @@ Estados externos observados: entregado, no responde, rechazado, reprogramado y
 anulado/cancelado por el courier. Un `anulado` en el reporte del courier no
 anula el pedido Shopify; solo la anulación explícita en Shopify cierra la venta.
 
+Tanders tiene API propia y Kapta relee el estado de cada guía viva desde ella,
+sin tope de antigüedad. Reglas:
+
+- El vocabulario de estados de Tanders **no está documentado por ellos**. Se
+  traduce solo lo confirmado; un estado que no reconocemos se guarda literal en
+  `reported_status` y **no toca la guía**. No se inventan equivalencias.
+- `DELIVERED` acredita que el paquete salió de la empresa —custodia del
+  courier—, no que el dinero esté cobrado. La guía pasa a `entregado` solo con
+  la constancia de pago validada, porque en Tanders cobra el motorizado y el
+  cliente deposita directamente (§14).
+- La custodia solo avanza: un reporte atrasado no devuelve a la empresa un
+  paquete que ya se llevó el motorizado.
+- El WhatsApp y el cierre de ruta de la noche siguen siendo la fuente para las
+  incidencias; la API cubre el estado de la guía, que antes se congelaba en el
+  valor del momento de creación y dejaba cajas detenidas en `Por armar`.
+
 Devoluciones físicas:
 
 - Motorizados propios: el saldo no entregado se coteja físicamente al día
