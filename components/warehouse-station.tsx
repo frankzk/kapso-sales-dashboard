@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DispatchCamera } from "@/components/dispatch-camera";
 import { cn } from "@/components/ui";
 import { markShipmentReady, type DispatchActionResult } from "@/app/dashboard/pedidos/despacho/actions";
@@ -14,6 +14,13 @@ import {
   type WarehouseQueueEntry,
   type WarehouseQueueGroup,
 } from "@/lib/warehouse-queue";
+import {
+  formatMinutes,
+  shiftTone,
+  warehouseShiftStatus,
+  type ShiftTone,
+  type WarehouseShiftStatus,
+} from "@/lib/warehouse-shift";
 import type {
   DispatchShipment,
   WarehouseShipment,
@@ -78,6 +85,18 @@ export function WarehouseStation({
   // bajar el número que el turno tiene que dejar en cero.
   const panels = useMemo(() => warehousePanels(buildWarehouseQueue(data.pending)), [data.pending]);
 
+  // La hora se resuelve DESPUÉS de montar, nunca al renderizar en servidor: el
+  // corte depende del reloj, y pintarlo en las dos partes daría hidrataciones
+  // distintas. Se refresca cada minuto para que la cuenta atrás no mienta en una
+  // pantalla que pasa el turno entero abierta.
+  const [now, setNow] = useState<Date | null>(null);
+  useEffect(() => {
+    setNow(new Date());
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const shift = useMemo(() => (now ? warehouseShiftStatus(now) : null), [now]);
+
   return (
     <div className="mx-auto max-w-[1500px] space-y-5 pb-24">
       <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
@@ -122,7 +141,11 @@ export function WarehouseStation({
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             {panels.map((panel) => (
-              <OperationPanel key={panel.operation} panel={panel} />
+              <OperationPanel
+                key={panel.operation}
+                panel={panel}
+                shift={panel.operation === "lima" ? shift : null}
+              />
             ))}
           </div>
         </div>
@@ -209,17 +232,33 @@ export function WarehouseStation({
  * vistazo al cerrar el turno es si Lima quedó limpia, y eso no se lee bien en un
  * número más de una lista: se lee en que el recuadro cambie de estado.
  */
-function OperationPanel({ panel }: { panel: WarehousePanel }) {
+function OperationPanel({
+  panel,
+  shift,
+}: {
+  panel: WarehousePanel;
+  /** Solo Lima rinde cuentas al corte del turno; el resto va sin él. */
+  shift: WarehouseShiftStatus | null;
+}) {
   const done = panel.total === 0;
+  const tone = shift ? shiftTone(shift, panel.total) : "normal";
   return (
     <div
       className={cn(
         "rounded-2xl border p-4",
-        done ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white",
+        done && "border-emerald-200 bg-emerald-50",
+        !done && tone === "vencido" && "border-red-300 bg-red-50",
+        !done && tone === "cerca" && "border-amber-300 bg-amber-50",
+        !done && tone === "normal" && "border-slate-200 bg-white",
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <p className={cn("text-sm font-semibold", done ? "text-emerald-900" : "text-slate-700")}>
+        <p
+          className={cn(
+            "text-sm font-semibold",
+            done ? "text-emerald-900" : tone === "vencido" ? "text-red-900" : "text-slate-700",
+          )}
+        >
           {OPERATION_LABELS[panel.operation] ?? panel.operation}
         </p>
         {panel.stalled > 0 && (
@@ -228,12 +267,23 @@ function OperationPanel({ panel }: { panel: WarehousePanel }) {
           </span>
         )}
       </div>
-      <p className={cn("mt-2 text-4xl font-semibold tabular-nums", done ? "text-emerald-700" : "text-slate-950")}>
+      <p
+        className={cn(
+          "mt-2 text-4xl font-semibold tabular-nums",
+          done ? "text-emerald-700" : tone === "vencido" ? "text-red-700" : "text-slate-950",
+        )}
+      >
         {panel.total}
       </p>
-      <p className={cn("mt-1 text-xs", done ? "text-emerald-700" : "text-slate-500")}>
+      <p
+        className={cn(
+          "mt-1 text-xs",
+          done ? "text-emerald-700" : tone === "vencido" ? "text-red-700" : "text-slate-500",
+        )}
+      >
         {done ? "En cero. Nada por empacar." : panelHint(panel.closer)}
       </p>
+      {shift && <p className={cn("mt-2 text-[11px]", shiftLineClass(tone, done))}>{shiftLine(shift, tone, done)}</p>}
     </div>
   );
 }
@@ -243,6 +293,31 @@ function panelHint(closer: WarehousePanel["closer"]): string {
   if (closer === "courier") return "Empácalas; las cierra el reporte del courier.";
   if (closer === "mixto") return "Unas las cierra tu escaneo y otras el courier.";
   return "Por empacar y escanear aquí.";
+}
+
+/**
+ * El renglón del turno.
+ *
+ * Nombra siempre el turno además de la hora: el corte de las 10:20 es del turno
+ * mañana y el de las 21:20 del de noche, y sin decirlo el rojo no señala a nadie.
+ */
+function shiftLine(shift: WarehouseShiftStatus, tone: ShiftTone, done: boolean): string {
+  if (tone === "vencido" && shift.missed) {
+    const { shift: turno, minutes } = shift.missed;
+    return `${turno.label}: el corte de las ${turno.cutoff} pasó hace ${formatMinutes(minutes)}.`;
+  }
+  if (!shift.next) return "";
+  const { shift: turno, minutes } = shift.next;
+  if (done) return `Siguiente corte ${turno.cutoff} · ${turno.label.toLowerCase()}.`;
+  if (tone === "cerca") return `${turno.label}: faltan ${formatMinutes(minutes)} para el corte de las ${turno.cutoff}.`;
+  return `Siguiente corte ${turno.cutoff} · ${turno.label.toLowerCase()}.`;
+}
+
+function shiftLineClass(tone: ShiftTone, done: boolean): string {
+  if (done) return "text-emerald-700";
+  if (tone === "vencido") return "font-semibold text-red-700";
+  if (tone === "cerca") return "font-semibold text-amber-800";
+  return "text-slate-400";
 }
 
 const GROUP_LIMIT = 24;
