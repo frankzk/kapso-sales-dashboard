@@ -37,6 +37,16 @@ export interface StoreSettingsInput {
   cart_seq_hours_2?: string;
   cart_seq_hour_start?: string;
   cart_seq_hour_end?: string;
+  // Recuperación del pedido devuelto (0112). Dos interruptores: `enabled`
+  // habilita la cola y el botón, `auto` deja que el cron envíe solo.
+  return_recovery_enabled?: string | boolean;
+  return_recovery_auto?: string | boolean;
+  return_recovery_template_name?: string;
+  return_recovery_template_language?: string;
+  return_recovery_params?: string;
+  return_recovery_hour_start?: string;
+  return_recovery_hour_end?: string;
+  return_recovery_max_days?: string;
   // Telegram daily summary: chat id is plain, token is a secret.
   telegram_chat_id?: string;
   /** Modelo de visión de esta tienda (plain). Vacío = el del entorno. */
@@ -178,6 +188,31 @@ export function buildStoreUpdate(
   if (hs !== null) patch.cart_seq_hour_start = hs;
   const he = intField(input.cart_seq_hour_end, 1, 24);
   if (he !== null) patch.cart_seq_hour_end = he;
+
+  // Recuperación de devueltos (0112). Los dos toggles son reales —tienen que
+  // poder APAGARSE— y `auto` se guarda aparte de `enabled` a propósito: apagar
+  // el automático sin cerrar la cola es justo la marcha atrás que se querría
+  // tener a mano si la plantilla empieza a recibir reportes.
+  for (const k of ["return_recovery_enabled", "return_recovery_auto"] as const) {
+    if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
+  }
+  for (const k of [
+    "return_recovery_template_name",
+    "return_recovery_template_language",
+    // El orden de los parámetros del cuerpo, por tokens. No se valida acá
+    // contra el catálogo: lib/return-recovery.ts ignora los desconocidos, y una
+    // tienda con la lista vacía queda sin config válida y no envía.
+    "return_recovery_params",
+  ] as const) {
+    const v = clean(input[k]);
+    if (v !== null) patch[k] = v;
+  }
+  const rrStart = intField(input.return_recovery_hour_start, 0, 23);
+  if (rrStart !== null) patch.return_recovery_hour_start = rrStart;
+  const rrEnd = intField(input.return_recovery_hour_end, 1, 24);
+  if (rrEnd !== null) patch.return_recovery_hour_end = rrEnd;
+  const rrDays = intField(input.return_recovery_max_days, 1, 365);
+  if (rrDays !== null) patch.return_recovery_max_days = rrDays;
 
   const tgChat = clean(input.telegram_chat_id);
   if (tgChat !== null) patch.telegram_chat_id = tgChat;

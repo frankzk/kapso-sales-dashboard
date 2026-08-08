@@ -118,6 +118,15 @@ export default async function StoreSettingsPage({
       cart_seq_hours_2: full.cart_seq_hours_2 ?? 24,
       cart_seq_hour_start: full.cart_seq_hour_start ?? 8,
       cart_seq_hour_end: full.cart_seq_hour_end ?? 21,
+      // Pre-0112 las columnas no existen ⇒ recuperación apagada.
+      return_recovery_enabled: full.return_recovery_enabled ?? false,
+      return_recovery_auto: full.return_recovery_auto ?? false,
+      return_recovery_template_name: full.return_recovery_template_name ?? null,
+      return_recovery_template_language: full.return_recovery_template_language ?? null,
+      return_recovery_params: full.return_recovery_params ?? null,
+      return_recovery_hour_start: full.return_recovery_hour_start ?? 8,
+      return_recovery_hour_end: full.return_recovery_hour_end ?? 21,
+      return_recovery_max_days: full.return_recovery_max_days ?? 30,
       telegram_chat_id: full.telegram_chat_id ?? null,
       anthropic_model: full.anthropic_model ?? null,
       // Pre-0054 la columna no existe ⇒ integración apagada.

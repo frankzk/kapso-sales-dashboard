@@ -57,6 +57,14 @@ export interface StoreSettingsData {
     cart_seq_hours_2: number;
     cart_seq_hour_start: number;
     cart_seq_hour_end: number;
+    return_recovery_enabled: boolean;
+    return_recovery_auto: boolean;
+    return_recovery_template_name: string | null;
+    return_recovery_template_language: string | null;
+    return_recovery_params: string | null;
+    return_recovery_hour_start: number;
+    return_recovery_hour_end: number;
+    return_recovery_max_days: number;
     telegram_chat_id: string | null;
     anthropic_model: string | null;
     aliclik_enabled: boolean;
@@ -1054,6 +1062,123 @@ function SettingsForm({
                 name="cart_seq_template_2_language"
                 defaultValue={s.cart_seq_template_2_language ?? ""}
                 placeholder="es"
+                className={inputCls}
+              />
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Recuperar pedidos devueltos
+          </legend>
+          <p className="text-xs text-slate-500">
+            A la clienta cuya guía de <strong>provincia contraentrega</strong> volvió al almacén se
+            le escribe una plantilla proponiéndole <strong>reenviar por agencia con adelanto</strong>.
+            Quien <strong>rechazó el producto teniéndolo delante queda fuera</strong> (MOM §11).
+            Son <strong>dos interruptores</strong>: el primero abre la cola y su botón, el segundo
+            deja que el envío salga solo — el mensaje pide dinero por adelantado, así que conviene
+            mirar el primer lote antes de soltarlo. La respuesta la atiende el bot, que es quien
+            manda el número de cuenta.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelCls} htmlFor="return_recovery_enabled">Cola y botón</label>
+              <select
+                id="return_recovery_enabled"
+                name="return_recovery_enabled"
+                defaultValue={s.return_recovery_enabled ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">Deshabilitado</option>
+                <option value="true">Habilitado</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="return_recovery_auto">Envío automático</label>
+              <select
+                id="return_recovery_auto"
+                name="return_recovery_auto"
+                defaultValue={s.return_recovery_auto ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">A mano</option>
+                <option value="true">Automático</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="return_recovery_max_days">
+                No escribir si volvió hace más de (días)
+              </label>
+              <input
+                id="return_recovery_max_days"
+                name="return_recovery_max_days"
+                type="number"
+                min={1}
+                max={365}
+                defaultValue={s.return_recovery_max_days}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="return_recovery_template_name">Plantilla · nombre</label>
+              <input
+                id="return_recovery_template_name"
+                name="return_recovery_template_name"
+                defaultValue={s.return_recovery_template_name ?? ""}
+                placeholder="recuperacion_pedido_retornado"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="return_recovery_template_language">Plantilla · idioma</label>
+              <input
+                id="return_recovery_template_language"
+                name="return_recovery_template_language"
+                defaultValue={s.return_recovery_template_language ?? ""}
+                placeholder="es"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="return_recovery_params">
+                Orden de las variables
+              </label>
+              <input
+                id="return_recovery_params"
+                name="return_recovery_params"
+                defaultValue={s.return_recovery_params ?? ""}
+                placeholder="nombre,producto,monto"
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Uno por cada {"{{n}}"} de la plantilla, en orden. Disponibles: <code>nombre</code>,{" "}
+                <code>producto</code>, <code>monto</code>, <code>pedido</code>,{" "}
+                <code>distrito</code>, <code>agencia</code>. Tiene que coincidir con la plantilla
+                aprobada en Meta — cada tienda tiene la suya.
+              </p>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="return_recovery_hour_start">Enviar desde (hora local)</label>
+              <input
+                id="return_recovery_hour_start"
+                name="return_recovery_hour_start"
+                type="number"
+                min={0}
+                max={23}
+                defaultValue={s.return_recovery_hour_start}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="return_recovery_hour_end">Enviar hasta (hora local)</label>
+              <input
+                id="return_recovery_hour_end"
+                name="return_recovery_hour_end"
+                type="number"
+                min={1}
+                max={24}
+                defaultValue={s.return_recovery_hour_end}
                 className={inputCls}
               />
             </div>

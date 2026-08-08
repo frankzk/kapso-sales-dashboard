@@ -66,6 +66,13 @@ export const PERMISSIONS = [
   // Rutas de reparto
   "routes.manage", // armar la ruta del día y asignarla
   "routes.deliver", // reportar SUS propias paradas desde /reparto
+  // Recuperación del pedido devuelto (0112): escribirle a la clienta cuya guía
+  // volvió, proponiéndole el reenvío por agencia con adelanto. Permiso propio y
+  // no `master.edit` por el mismo motivo que las guías: es una escritura hacia
+  // AFUERA e irreversible —el mensaje sale del WhatsApp de la tienda y pide
+  // plata por adelantado—, y un envío desafortunado no se retira: se reporta, y
+  // los reportes le cuestan la plantilla a toda la tienda.
+  "recovery.contact",
   // Registro de motorizados: alta/edición de la ficha y vínculo con un usuario
   // para dar acceso a /reparto. Vive en Equipo (owner/admin). El alta rápida por
   // nombre desde Liquidaciones sigue bajo settlements.manage.
@@ -113,6 +120,9 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "tanders.create_guide",
     "shalom.create_guide",
     "settlements.manage",
+    // Recuperar una devolución es gestión de venta, que es su trabajo: la misma
+    // persona que llamaría a esa clienta es la que manda el mensaje.
+    "recovery.contact",
     // Coordinar el reparto es operativo, no financiero: arma la ruta del día.
     "routes.manage",
   ],
