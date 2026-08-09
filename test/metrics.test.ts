@@ -17,7 +17,6 @@ import {
   tzParts,
   lossReasons,
   lostRevenueByReason,
-  botVsAdvisor,
   salesAttribution,
   attributionDailyTrend,
   type AttributionInputs,
@@ -425,17 +424,6 @@ describe("Family 5 — Leads-derived", () => {
     });
   });
 
-  it("botVsAdvisor splits revenue by advisor-closed tags (net of refunds, active only)", () => {
-    const bva = botVsAdvisor([
-      order({ tags: ["kapso", "venta_manual"], total_amount: 100 }),
-      order({ tags: ["kapso", "carrito_recuperado"], total_amount: 200, total_refunded: 50 }),
-      order({ tags: ["kapso"], total_amount: 80 }), // bot / Shopify → no advisor tag
-      order({ tags: ["kapso", "venta_manual"], total_amount: 20, cancelled_at: "2026-06-20T00:00:00Z" }), // ignored
-    ]);
-    expect(bva.advisor).toEqual({ orders: 2, revenue: 250 }); // 100 + (200 − 50)
-    expect(bva.bot).toEqual({ orders: 1, revenue: 80 });
-  });
-
   it("conversationalFunnel builds 6 monotonic stages with step %", () => {
     const stages = conversationalFunnel({
       conversations: [conv(), conv(), conv(), conv()], // 4 convs × 5 msgs = 20 inbound proxy
@@ -528,6 +516,34 @@ describe("salesAttribution (order-centric fuente × cierre, reconciles to revenu
     const sinAttr = a.sources.find((r) => r.key === "sin_atribucion")!;
     expect(sinAttr.orders).toBe(1);
     expect(sinAttr.revenue).toBe(30);
+  });
+
+  it("la operación real: sin etiqueta del dashboard pero con gestión, NO es venta del bot", () => {
+    // El caso que rompía el Consolidado. Su módulo repartía por la ETIQUETA del
+    // pedido (`venta_manual`/`carrito_recuperado`), así que con 12.667 gestiones
+    // en 30 días mostraba «los asesores generaron el 0.2 % de los ingresos»: casi
+    // nadie crea el pedido desde el dashboard, lo normal es convencer por
+    // teléfono y dejar que el checkout lo haga el cliente o el bot.
+    //
+    // Este test fija que el modelo de tres canales describe esa operación. Si
+    // alguien vuelve a repartir por etiqueta, `bot` se lleva los tres pedidos.
+    const inputs = emptyInputs();
+    for (const p of ["p1", "p2", "p3"]) {
+      inputs.sourceByPhone.set(p, "cod_cart");
+      inputs.advisorTouchesByPhone.set(p, ["2026-06-19T10:00:00Z"]);
+    }
+    inputs.sourceByPhone.set("p_frio", "organic"); // nadie lo tocó
+    const orders = [
+      order({ customer_phone: "p1", created_at: "2026-06-20T15:00:00Z", total_amount: 100 }),
+      order({ customer_phone: "p2", created_at: "2026-06-20T15:00:00Z", total_amount: 100 }),
+      order({ customer_phone: "p3", created_at: "2026-06-20T15:00:00Z", total_amount: 100 }),
+      order({ customer_phone: "p_frio", created_at: "2026-06-20T15:00:00Z", total_amount: 100 }),
+    ];
+    const a = salesAttribution(orders, inputs);
+    expect(a.channels.bot_asistido).toEqual({ orders: 3, revenue: 300 });
+    expect(a.channels.bot).toEqual({ orders: 1, revenue: 100 });
+    // Y lo que se ve en pantalla: el bot NO se lleva el 100 % de los ingresos.
+    expect(a.channels.bot.revenue / a.total.revenue).toBeCloseTo(0.25);
   });
 
   it("winback pisa la fuente cuando hay cupón + plantilla ≤30d; sin cupón = halo", () => {

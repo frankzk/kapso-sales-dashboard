@@ -8,7 +8,6 @@ import type {
 import type { DateRange } from "@/lib/access";
 import {
   aggregateRollups,
-  botVsAdvisor,
   businessBreakdown,
   campaignBreakdown,
   campaignDailyTrend,
@@ -176,7 +175,11 @@ export function ExecutiveDashboard({
   leads?: LeadRow[];
   adNames?: Record<string, AdMeta>;
   waNumbers?: Record<string, WaNumber>;
-  attribution?: SalesAttribution;
+  /** OBLIGATORIA a propósito. Era opcional, y el Consolidado simplemente no la
+   *  pasaba: caía a un reparto binario por etiqueta que contaba como BOT todo lo
+   *  que una asesora había trabajado, y encima se quedaba sin el módulo de
+   *  fuente y cierre. Que el tipo lo exija impide que vuelva a pasar en silencio. */
+  attribution: SalesAttribution;
   metaSpend?: number | null;
   campaignDeliveries?: import("@/lib/types").CampaignDeliveryOutcome[];
   campaignLeads?: LeadRow[];
@@ -221,7 +224,10 @@ export function ExecutiveDashboard({
   const leadList = leads ?? [];
   const loss = lossReasons(leadList);
   const lostRev = lostRevenueByReason(loss, totals.aov);
-  const channels = botVsAdvisor(orders);
+  // Los canales salen de la MISMA atribución que alimenta «Ventas por fuente y
+  // cierre». Antes esto se calculaba aparte y las dos tarjetas de la aplicación
+  // podían contradecirse sobre quién cerró la misma venta.
+  const channels = attribution.channels;
   const cartStats = cartRecovery(leadList, orders);
   const campaignStats = campaignBreakdown(
     campaignLeads ?? leadList,
@@ -343,7 +349,7 @@ export function ExecutiveDashboard({
       {/* Row 2b — Ventas por fuente y cierre (order-centric, reconciles to headline
           revenue). Every active order → one source + one closing channel, with a
           per-source drill-down for auditing the assignment. */}
-      {attribution && attribution.total.orders > 0 && (
+      {attribution.total.orders > 0 && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
           <Module
             title="Ventas por fuente y cierre"
@@ -560,7 +566,7 @@ export function ExecutiveDashboard({
       {/* Row 4 — BOT vs Asesores · Tendencia · Salud del embudo */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <Module title="Ventas generadas: BOT vs Asesores" info className="lg:col-span-5">
-          <BotVsAdvisor bot={channels.bot} advisor={channels.advisor} currency={currency} />
+          <BotVsAdvisor channels={channels} currency={currency} />
         </Module>
         <Module
           title="Tendencia de conversión y pedidos"
