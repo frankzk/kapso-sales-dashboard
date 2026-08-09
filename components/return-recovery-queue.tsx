@@ -12,13 +12,15 @@
 // la tienda, así que el envío exige confirmación y no se puede deshacer.
 
 import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { OrderLinkPicker } from "@/components/order-link-picker";
 import { Card, EmptyState } from "@/components/ui";
 import {
   dismissRecoveryAction,
   sendRecoveryAction,
   type RecoveryView,
 } from "@/app/dashboard/envios/recuperacion/actions";
-import type { RecoveryQueueRow } from "@/lib/return-recovery";
+import { RECOVERY_SKIP_NO_ORDER, type RecoveryQueueRow } from "@/lib/return-recovery";
 
 type Tab = "pendientes" | "enviadas" | "descartadas";
 
@@ -52,6 +54,10 @@ export function ReturnRecoveryQueue({
   const [tab, setTab] = useState<Tab>("pendientes");
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
+  // Qué fila tiene el buscador de pedido abierto. Una sola a la vez: son
+  // typeaheads que consultan Shopify en vivo.
+  const [linking, setLinking] = useState<string | null>(null);
+  const router = useRouter();
 
   const groups = useMemo(() => {
     const pendientes: RecoveryQueueRow[] = [];
@@ -193,7 +199,7 @@ export function ReturnRecoveryQueue({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map((r) => (
+                {rows.flatMap((r) => [
                   <tr key={r.id} className={r.skip && tab === "pendientes" ? "bg-slate-50/60" : ""}>
                     <td className="px-3 py-2">
                       <div className="font-medium text-slate-900">{r.customer_name || "—"}</div>
@@ -248,7 +254,22 @@ export function ReturnRecoveryQueue({
                           </button>
                         </div>
                       )}
-                      {tab === "pendientes" && r.skip !== null && (
+                      {/* «Sin pedido» es el único motivo que se arregla desde
+                          esta misma pantalla, así que se ofrece la acción en vez
+                          del texto. El resto —rechazó en la puerta, otro
+                          courier, devuelta hace meses— son explicaciones: no hay
+                          nada que pulsar. */}
+                      {tab === "pendientes" && r.skip === RECOVERY_SKIP_NO_ORDER && (
+                        <button
+                          type="button"
+                          disabled={pending || !canContact}
+                          onClick={() => setLinking(linking === r.id ? null : r.id)}
+                          className="rounded-lg border border-slate-400 px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40"
+                        >
+                          {linking === r.id ? "Cancelar" : "Enlazar pedido"}
+                        </button>
+                      )}
+                      {tab === "pendientes" && r.skip !== null && r.skip !== RECOVERY_SKIP_NO_ORDER && (
                         <span className="text-xs text-slate-500">{r.skip}</span>
                       )}
                       {tab === "enviadas" && (
@@ -257,8 +278,31 @@ export function ReturnRecoveryQueue({
                         </span>
                       )}
                     </td>
-                  </tr>
-                ))}
+                  </tr>,
+                  linking === r.id ? (
+                    <tr key={`${r.id}:link`}>
+                      <td colSpan={6} className="bg-slate-50 px-3 py-3">
+                        <p className="mb-2 text-xs text-slate-600">
+                          Enlaza la guía <code className="font-mono">{r.guide_code}</code> a su
+                          pedido de Shopify. Hasta entonces no se le puede escribir: la plantilla
+                          nombra el pedido, y sin él le llegaría el código del courier.
+                        </p>
+                        <OrderLinkPicker
+                          shipmentId={r.id}
+                          prefill={r.order_name}
+                          customerPhone={r.customer_phone}
+                          onLinked={() => {
+                            setLinking(null);
+                            // La elegibilidad la recalcula el servidor: al volver
+                            // con `order_id`, la fila sale sola de este estado y
+                            // aparecen Enviar/Descartar.
+                            router.refresh();
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  ) : null,
+                ])}
               </tbody>
             </table>
           </div>
