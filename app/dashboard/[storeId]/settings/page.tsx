@@ -67,7 +67,15 @@ export default async function StoreSettingsPage({
   const siteUrl = host ? `${proto}://${host}` : "";
 
   const admin = createAdminSupabase();
-  const [{ data: full }, { data: sync }, { data: ops }, { count }, { data: events }] = await Promise.all([
+  const [
+    { data: full },
+    { data: sync },
+    { data: ops },
+    { count },
+    { data: events },
+    // Pre-0113 la tabla no existe ⇒ `error` y catálogo vacío, sin tumbar Ajustes.
+    { data: replyTemplates },
+  ] = await Promise.all([
     admin.from("stores").select("*").eq("id", storeId).single(),
     admin
       .from("sync_state")
@@ -88,6 +96,12 @@ export default async function StoreSettingsPage({
       .eq("store_id", storeId)
       .order("received_at", { ascending: false })
       .limit(30),
+    admin
+      .from("wa_reply_templates")
+      .select("id, label, template_name, language, body_preview, params, active, sort")
+      .eq("store_id", storeId)
+      .order("sort", { ascending: true })
+      .order("created_at", { ascending: true }),
   ]);
 
   const data: StoreSettingsData = {
@@ -167,6 +181,7 @@ export default async function StoreSettingsPage({
     lastOpsAt: ops?.captured_at ?? null,
     webhookCount: count ?? 0,
     webhookEvents: (events as StoreSettingsData["webhookEvents"]) ?? [],
+    replyTemplates: (replyTemplates as StoreSettingsData["replyTemplates"]) ?? [],
   };
 
   const banner = sp.installed

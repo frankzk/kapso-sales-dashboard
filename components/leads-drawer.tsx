@@ -32,6 +32,7 @@ import {
   createQuickReply,
   deleteQuickReply,
   generateOrder,
+  listLeadTemplates,
   listQuickReplies,
   loadLeadConversation,
   loadOrderDraft,
@@ -41,12 +42,15 @@ import {
   searchStoreProducts,
   sendLeadMedia,
   sendLeadMessage,
+  sendLeadTemplate,
   retryLeadMessage,
   type LeadActionState,
   type LeadConversationMessage,
+  type LeadReplyTemplate,
   type LeadThread,
   type QuickReply,
 } from "@/app/dashboard/leads/actions";
+import { REPLY_TOKEN_LABEL, renderReplyPreview, validateReplyParams } from "@/lib/wa-reply-templates";
 import { shopifyDraftOrderAdminUrl } from "@/lib/shopify-urls";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { cn } from "@/components/ui";
@@ -1591,10 +1595,14 @@ function WhatsappComposer({
   }
   if (!win.open) {
     return (
-      <div className="border-t border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-500">
-        ⏳ {win.reason ?? "El cliente debe escribirte primero."} Solo puedes escribir dentro de las 24h
-        desde su último mensaje.
-      </div>
+      <TemplateComposer
+        leadId={leadId}
+        phoneNumberId={phoneNumberId}
+        reason={win.reason ?? "El cliente debe escribirte primero."}
+        onOptimisticSend={onOptimisticSend}
+        onSendSettled={onSendSettled}
+        onSent={onSent}
+      />
     );
   }
 
@@ -1687,6 +1695,190 @@ function WhatsappComposer({
           >
             ↻ Reintentar
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Lo que reemplaza al texto libre cuando la ventana de 24 h está cerrada: el
+ * catálogo de plantillas aprobadas de la tienda.
+ *
+ * Antes acá solo había un aviso de que no se podía escribir, que es cierto pero
+ * deja al asesor sin salida —se iba a Kapso a mandar la plantilla desde allá—.
+ * El aviso se conserva, porque explica POR QUÉ no hay caja de texto; lo que se
+ * añade es la única acción que Meta sí permite fuera de la ventana.
+ *
+ * Los parámetros llegan pre-rellenados del lead y se dejan editar: el dato
+ * guardado puede estar incompleto o mal escrito, y un parámetro vacío lo rechaza
+ * Meta con un código que no dice nada. El preview se pinta mientras se edita
+ * para que nadie mande a ciegas un mensaje que no puede retirar.
+ */
+function TemplateComposer({
+  leadId,
+  phoneNumberId,
+  reason,
+  onOptimisticSend,
+  onSendSettled,
+  onSent,
+}: {
+  leadId: string;
+  phoneNumberId?: string | null;
+  reason: string;
+  onOptimisticSend: (body: string) => string;
+  onSendSettled: (localId: string, sent: LeadConversationMessage | null) => void;
+  onSent: (leadPatch?: LeadActionState["leadPatch"]) => void;
+}) {
+  const [templates, setTemplates] = useState<LeadReplyTemplate[] | null>(null);
+  const [selectedId, setSelectedId] = useState<string>("");
+  const [values, setValues] = useState<string[]>([]);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  useEffect(() => {
+    let alive = true;
+    setTemplates(null);
+    setSelectedId("");
+    setValues([]);
+    setMsg(null);
+    listLeadTemplates(leadId).then((list) => {
+      if (!alive) return;
+      setTemplates(list);
+      // Con una sola plantilla no se elige nada: se deja lista.
+      if (list.length === 1) {
+        setSelectedId(list[0]!.id);
+        setValues(list[0]!.defaults);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [leadId]);
+
+  const selected = templates?.find((t) => t.id === selectedId) ?? null;
+  const preview = selected ? renderReplyPreview(selected.bodyPreview, values) : "";
+
+  function pick(id: string) {
+    setSelectedId(id);
+    setMsg(null);
+    const t = templates?.find((x) => x.id === id);
+    // Cada plantilla tiene sus propios tokens: los valores de la anterior no se
+    // arrastran, o {{2}} llevaría el distrito donde va el monto.
+    setValues(t ? t.defaults : []);
+  }
+
+  function send() {
+    if (!selected) return;
+    setMsg(null);
+    // Se valida ANTES de la burbuja optimista. El servidor vuelve a validar —es
+    // quien manda—, pero un parámetro vacío es el error más frecuente de esta
+    // pantalla, y hacerlo allá pintaría un mensaje que desaparece medio segundo
+    // después: parece que se envió y se perdió.
+    const invalid = validateReplyParams(selected.tokens, values);
+    if (invalid) {
+      setMsg(invalid);
+      return;
+    }
+    const body = preview || `[plantilla] ${selected.label}`;
+    const localId = onOptimisticSend(body);
+    const clientToken = crypto.randomUUID();
+    startTransition(async () => {
+      const res = await sendLeadTemplate(
+        leadId,
+        selected.id,
+        values,
+        phoneNumberId ?? undefined,
+        clientToken,
+      );
+      if (res.error) {
+        onSendSettled(localId, res.sentMessage ?? null);
+        setMsg(res.error);
+        return;
+      }
+      onSendSettled(localId, res.sentMessage ?? null);
+      setMsg(null);
+      onSent(res.leadPatch);
+    });
+  }
+
+  return (
+    <div className="border-t border-slate-200 bg-white px-3 py-2.5">
+      <p className="text-xs text-slate-500">
+        ⏳ {reason} Fuera de las 24h solo se puede enviar una plantilla aprobada.
+      </p>
+
+      {templates === null ? (
+        <p className="mt-2 text-xs text-slate-400">Buscando plantillas…</p>
+      ) : templates.length === 0 ? (
+        <p className="mt-2 text-xs text-slate-400">
+          Esta tienda todavía no tiene plantillas cargadas. Se configuran en Ajustes → Plantillas de
+          respuesta, con el nombre exacto aprobado en Meta.
+        </p>
+      ) : (
+        <div className="mt-2 space-y-2">
+          <select
+            value={selectedId}
+            onChange={(e) => pick(e.currentTarget.value)}
+            disabled={pending}
+            aria-label="Plantilla"
+            className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-emerald-500"
+          >
+            <option value="">Elige una plantilla…</option>
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+
+          {selected && selected.tokens.length > 0 && (
+            <div className="space-y-1.5">
+              {selected.tokens.map((tok, i) => (
+                <label key={`${selected.id}:${i}`} className="block">
+                  <span className="text-[11px] text-slate-500">
+                    {REPLY_TOKEN_LABEL[tok]} · {`{{${i + 1}}}`}
+                  </span>
+                  <input
+                    value={values[i] ?? ""}
+                    onChange={(e) => {
+                      const next = [...values];
+                      next[i] = e.currentTarget.value;
+                      setValues(next);
+                      setMsg(null);
+                    }}
+                    disabled={pending}
+                    placeholder={REPLY_TOKEN_LABEL[tok]}
+                    className="w-full rounded border border-slate-300 px-2 py-1 text-sm outline-none focus:border-emerald-500"
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+
+          {selected && preview && (
+            <div className="rounded-lg bg-emerald-50 px-2.5 py-2 text-sm leading-snug text-slate-700 whitespace-pre-wrap">
+              {preview}
+            </div>
+          )}
+
+          {selected && !selected.bodyPreview && (
+            <p className="text-[11px] text-amber-700">
+              Esta plantilla no tiene el cuerpo cargado en Ajustes, así que no se puede previsualizar
+              lo que se enviará.
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={send}
+            disabled={pending || !selected}
+            className="w-full rounded-full bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {pending ? "Enviando…" : "Enviar plantilla"}
+          </button>
+
+          {msg && <p className="text-xs text-red-600">{msg}</p>}
         </div>
       )}
     </div>

@@ -7,9 +7,12 @@ import { Card, Section, SimpleTable } from "@/components/ui";
 import { STORE_STATUSES } from "@/lib/store-settings";
 import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
+  addReplyTemplate,
   backfillStoreMetaInsights,
+  deleteReplyTemplate,
   generateAliclikWebhookSecret,
   generateKapsoWebhookSecret,
+  setReplyTemplateActive,
   listStoreMetaAdAccounts,
   reRegisterWebhooks,
   saveMetaAdAccounts,
@@ -111,6 +114,18 @@ export interface StoreSettingsData {
     received_at: string;
     processed: boolean;
     error: string | null;
+  }>;
+  /** Catálogo de plantillas que el asesor puede enviar con la ventana cerrada
+   *  (0113). Vacío mientras la migración no esté aplicada. */
+  replyTemplates: Array<{
+    id: string;
+    label: string;
+    template_name: string;
+    language: string;
+    body_preview: string | null;
+    params: string;
+    active: boolean;
+    sort: number;
   }>;
 }
 
@@ -214,6 +229,8 @@ export function StoreSettings({
       />
 
       <SettingsForm data={data} shalomProducts={shalomTest.shalomProducts} />
+
+      <ReplyTemplatesSection storeId={s.id} rows={data.replyTemplates} />
 
       <div className="-mt-2">
         <ActionButton
@@ -1497,6 +1514,175 @@ function SettingsForm({
         </div>
       </form>
     </Card>
+  );
+}
+
+/**
+ * El catálogo de plantillas que el asesor puede mandar desde el drawer cuando la
+ * ventana de 24 h ya se cerró.
+ *
+ * Va en su propia tarjeta, fuera del formulario grande, por dos razones: son
+ * filas —se agregan y se retiran de a una, no se «guardan» todas juntas— y un
+ * `<form>` no puede anidarse dentro de otro.
+ *
+ * Se configura acá y no en el drawer, al revés que las respuestas rápidas,
+ * porque el nombre tiene que coincidir EXACTO con lo aprobado en Meta: escribirlo
+ * mal no rompe un chat, le baja la calidad a la WABA de toda la tienda.
+ */
+function ReplyTemplatesSection({
+  storeId,
+  rows,
+}: {
+  storeId: string;
+  rows: StoreSettingsData["replyTemplates"];
+}) {
+  const [state, formAction, pending] = useActionState(addReplyTemplate, initial);
+  const [rowPending, startRowTransition] = useTransition();
+  const [rowMsg, setRowMsg] = useState<string | null>(null);
+
+  function toggle(id: string, active: boolean) {
+    startRowTransition(async () => {
+      const res = await setReplyTemplateActive(storeId, id, active);
+      setRowMsg(res.error ?? res.notice ?? null);
+    });
+  }
+  function remove(id: string, label: string) {
+    if (!confirm(`¿Eliminar la plantilla «${label}»?`)) return;
+    startRowTransition(async () => {
+      const res = await deleteReplyTemplate(storeId, id);
+      setRowMsg(res.error ?? res.notice ?? null);
+    });
+  }
+
+  return (
+    <Section
+      title="Plantillas de respuesta"
+      subtitle="Lo único que se puede enviar cuando la ventana de 24h del cliente ya se cerró."
+    >
+      <Card>
+        <p className="text-xs text-slate-500">
+          Fuera de las 24h desde el último mensaje del cliente, WhatsApp no deja mandar texto libre.
+          Lo que se cargue acá es lo que el asesor verá en el chat para poder responder igual. El
+          nombre y el idioma tienen que ser los <strong>aprobados en Meta</strong>: cada tienda es una
+          WABA distinta, así que no se pueden compartir entre tiendas.
+        </p>
+
+        {rows.length > 0 && (
+          <ul className="mt-4 divide-y divide-slate-200 rounded-xl border border-slate-200">
+            {rows.map((t) => (
+              <li key={t.id} className="flex flex-wrap items-start gap-3 px-3 py-2.5">
+                <div className="min-w-0 grow">
+                  <p className="text-sm font-medium text-slate-800">
+                    {t.label}
+                    {!t.active && (
+                      <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
+                        retirada
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    <code>{t.template_name}</code> · {t.language}
+                    {t.params ? ` · ${t.params}` : " · sin variables"}
+                  </p>
+                  {t.body_preview && (
+                    <p className="mt-1 text-xs whitespace-pre-wrap text-slate-600">{t.body_preview}</p>
+                  )}
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => toggle(t.id, !t.active)}
+                    disabled={rowPending}
+                    className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    {t.active ? "Retirar" : "Activar"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => remove(t.id, t.label)}
+                    disabled={rowPending}
+                    className="rounded-lg border border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-60"
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {rowMsg && <p className="mt-2 text-sm text-slate-600">{rowMsg}</p>}
+
+        <form action={formAction} className="mt-4 space-y-4 rounded-xl border border-slate-200 p-4">
+          <input type="hidden" name="store_id" value={storeId} />
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelCls} htmlFor="rt_label">
+                Nombre visible
+              </label>
+              <input id="rt_label" name="label" placeholder="Retomar pedido" className={inputCls} />
+              <p className="mt-1 text-xs text-slate-500">Lo que lee el asesor en el desplegable.</p>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="rt_template_name">
+                Nombre en Meta
+              </label>
+              <input
+                id="rt_template_name"
+                name="template_name"
+                placeholder="retomar_pedido_v1"
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-500">Minúsculas, números y guion bajo.</p>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="rt_language">
+                Idioma
+              </label>
+              <input id="rt_language" name="language" placeholder="es" className={inputCls} />
+            </div>
+          </div>
+          <div>
+            <label className={labelCls} htmlFor="rt_params">
+              Orden de las variables
+            </label>
+            <input id="rt_params" name="params" placeholder="nombre,producto" className={inputCls} />
+            <p className="mt-1 text-xs text-slate-500">
+              Uno por cada {"{{n}}"} de la plantilla, en orden. Disponibles: <code>nombre</code>,{" "}
+              <code>producto</code>, <code>monto</code>, <code>distrito</code>, <code>tienda</code>.
+              Se pre-rellenan con los datos del lead y el asesor puede corregirlos antes de enviar.
+              Déjalo vacío si la plantilla no lleva variables.
+            </p>
+          </div>
+          <div>
+            <label className={labelCls} htmlFor="rt_body_preview">
+              Cuerpo aprobado (opcional)
+            </label>
+            <textarea
+              id="rt_body_preview"
+              name="body_preview"
+              rows={3}
+              placeholder="Hola {{1}}, tu {{2}} sigue disponible…"
+              className={inputCls}
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              Cópialo tal cual de Meta, con los {"{{n}}"} sin reemplazar. No se envía: sirve para que
+              el asesor lea lo que va a mandar en vez de elegir a ciegas por el nombre.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="submit"
+              disabled={pending}
+              className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
+            >
+              {pending ? "Agregando…" : "Agregar plantilla"}
+            </button>
+            {state.error && <span className="text-sm text-red-600">{state.error}</span>}
+            {state.notice && <span className="text-sm text-emerald-600">{state.notice}</span>}
+          </div>
+        </form>
+      </Card>
+    </Section>
   );
 }
 

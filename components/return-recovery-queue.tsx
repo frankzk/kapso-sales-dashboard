@@ -201,8 +201,22 @@ export function ReturnRecoveryQueue({
                         {r.customer_phone || "sin número"}
                         {r.district ? ` · ${r.district}` : ""}
                       </div>
+                      {/* Los DOS identificadores, siempre. Antes era
+                          `order_name || guide_code`, y ese respaldo escondía
+                          cuál de los dos estabas viendo: un renglón con solo
+                          `AUR5X…` parecía un pedido sin número cuando en
+                          realidad era la guía. Quien trabaja esta cola necesita
+                          el pedido para Shopify y la guía para buscar en
+                          Aliclik, así que lo que falte se nombra en vez de
+                          desaparecer. */}
                       <div className="text-xs text-slate-400">
-                        {r.order_name || r.guide_code || "—"}
+                        <span className={r.order_name ? "" : "italic"}>
+                          {r.order_name || "sin pedido"}
+                        </span>
+                        {" · "}
+                        <span className={r.guide_code ? "" : "italic"}>
+                          {r.guide_code || "sin guía"}
+                        </span>
                       </div>
                     </td>
                     <td className="max-w-xs px-3 py-2 text-slate-700">{r.product || "—"}</td>

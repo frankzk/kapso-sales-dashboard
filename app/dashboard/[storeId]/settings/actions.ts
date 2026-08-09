@@ -21,6 +21,7 @@ import { metaInsightsRange, syncMetaInsightsHistory } from "@/lib/meta-insights-
 import { listProducts } from "@/lib/aliclik";
 import { syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { env } from "@/lib/env";
+import { REPLY_TOKENS } from "@/lib/wa-reply-templates";
 import { describeShalomError, describeShalomProbeFailure } from "@/lib/shalom/client";
 import { clientFor, loadStoreShalom, mintSession, publicClient } from "@/lib/shalom/session";
 
@@ -646,4 +647,140 @@ export async function findShalomAgencies(
     // así que un 404 también apunta a la URL base y no a la agencia buscada.
     return { error: describeShalomProbeFailure(e, env.shalomApiBase()) };
   }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Catálogo de plantillas de respuesta manual (0113)
+//
+// Es lo que el asesor puede enviar desde el drawer con la ventana de 24 h
+// cerrada. Vive acá y no en el drawer —a diferencia de las respuestas rápidas,
+// que sí las escribe cualquiera— porque un nombre de plantilla mal escrito no
+// rompe un chat: Meta lo rechaza y le baja la calidad a la WABA entera.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Una fila del catálogo, tal como la edita Ajustes. */
+export interface ReplyTemplateRow {
+  id: string;
+  label: string;
+  template_name: string;
+  language: string;
+  body_preview: string | null;
+  params: string;
+  active: boolean;
+  sort: number;
+}
+
+/** Lee el catálogo. Tolera que la 0113 no esté aplicada todavía: devuelve vacío
+ *  en vez de tumbar la página entera de Ajustes. */
+export async function listReplyTemplates(storeId: string): Promise<ReplyTemplateRow[]> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return [];
+  const { data, error } = await ctx.admin
+    .from("wa_reply_templates")
+    .select("id, label, template_name, language, body_preview, params, active, sort")
+    .eq("store_id", storeId)
+    .order("sort", { ascending: true })
+    .order("created_at", { ascending: true });
+  if (error) return [];
+  return (data as ReplyTemplateRow[] | null) ?? [];
+}
+
+export async function addReplyTemplate(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso para editar esta tienda." };
+
+  const label = String(formData.get("label") ?? "").trim();
+  const templateName = String(formData.get("template_name") ?? "").trim().toLowerCase();
+  const language = String(formData.get("language") ?? "").trim() || "es";
+  const bodyPreview = String(formData.get("body_preview") ?? "").trim();
+  const rawParams = String(formData.get("params") ?? "").trim();
+
+  if (!label) return { error: "Ponle un nombre que el asesor reconozca." };
+  if (label.length > 60) return { error: "El nombre visible es muy largo (máx. 60)." };
+  // Meta solo acepta minúsculas, dígitos y guion bajo. Decirlo acá evita el
+  // 132001 en el envío, que llega como un número sin explicación.
+  if (!/^[a-z0-9_]{1,512}$/.test(templateName)) {
+    return { error: "El nombre en Meta solo lleva minúsculas, números y guion bajo." };
+  }
+  if (!/^[a-z]{2}(_[A-Z]{2})?$/.test(language)) {
+    return { error: "El idioma va como 'es' o 'es_PE'." };
+  }
+
+  // Los tokens desconocidos se RECHAZAN acá, aunque el envío los ignore: este es
+  // el único momento en que alguien puede corregir la config antes de que un
+  // parámetro de menos se convierta en un rechazo de Meta.
+  const tokens = rawParams
+    .split(",")
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+  const unknown = tokens.filter((t) => !(REPLY_TOKENS as readonly string[]).includes(t));
+  if (unknown.length) {
+    return {
+      error: `Token desconocido: ${unknown.join(", ")}. Válidos: ${REPLY_TOKENS.join(", ")}.`,
+    };
+  }
+  // El cuerpo debe declarar tantos {{n}} como tokens configurados, o el envío
+  // sale con parámetros de más o de menos y Meta lo rechaza con #132018.
+  if (bodyPreview) {
+    const highest = [...bodyPreview.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].reduce(
+      (max, m) => Math.max(max, Number(m[1])),
+      0,
+    );
+    if (highest !== tokens.length) {
+      return {
+        error: `El cuerpo usa hasta {{${highest}}} pero configuraste ${tokens.length} parámetro(s).`,
+      };
+    }
+  }
+
+  const { error } = await ctx.admin.from("wa_reply_templates").insert({
+    store_id: storeId,
+    label,
+    template_name: templateName,
+    language,
+    body_preview: bodyPreview || null,
+    params: tokens.join(","),
+  });
+  if (error) {
+    if (error.code === "23505") return { error: "Esa plantilla ya está cargada en este idioma." };
+    return { error: error.message };
+  }
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: `Plantilla «${label}» agregada ✓` };
+}
+
+/** Retirar sin borrar. Meta pausa plantillas y las deja obsoletas; apagarla la
+ *  saca del desplegable del drawer y conserva a qué apuntaba lo ya enviado. */
+export async function setReplyTemplateActive(
+  storeId: string,
+  id: string,
+  active: boolean,
+): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const { error } = await ctx.admin
+    .from("wa_reply_templates")
+    .update({ active })
+    .eq("id", id)
+    .eq("store_id", storeId);
+  if (error) return { error: error.message };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: active ? "Plantilla activada ✓" : "Plantilla retirada ✓" };
+}
+
+export async function deleteReplyTemplate(storeId: string, id: string): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const { error } = await ctx.admin
+    .from("wa_reply_templates")
+    .delete()
+    .eq("id", id)
+    .eq("store_id", storeId);
+  if (error) return { error: error.message };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: "Plantilla eliminada ✓" };
 }
