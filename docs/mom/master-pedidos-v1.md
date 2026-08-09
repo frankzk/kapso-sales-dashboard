@@ -819,9 +819,31 @@ La marca vive en `shipments.api_report_at`, que **solo** escribe la vía API.
 saber quién habló último.
 
 Alcance de la API: empareja por `external_order_number` y, si no lo hay, por
-`guide_code` — el `orderNumber` de la API es el mismo código AUR5X… del reporte.
-Sin esa segunda vía la API era ciega a las guías nacidas del Excel, que son la
-mayoría.
+`guide_code`.
+
+> ⚠️ **La segunda vía no funciona, y esto cambia el alcance real de esta
+> sección.** Se escribió asumiendo que el `orderNumber` de la API es el mismo
+> código AUR5X… del reporte. Medido contra producción el 2026-08-09: de **632**
+> guías actualizadas por API alguna vez, **632 tenían `external_order_number`**
+> —las creadas por nosotros— y **ninguna** se emparejó solo por `guide_code`.
+> Sobre 876 guías perseguibles que únicamente tienen código de Excel, la cifra
+> es cero.
+>
+> El barrido sí las consulta: entran al pool, se pregunta por ellas y Aliclik
+> responde que no las conoce. Como una respuesta vacía **no escribe nada** —y no
+> debe hacerlo: cerrar una guía porque una búsqueda vino vacía sería inventar un
+> desenlace—, el fallo no deja rastro. Por eso pasó desapercibido.
+>
+> Consecuencia: **para una guía nacida del Excel, el Excel es la única fuente**.
+> La regla «la API manda» de arriba solo rige sobre las guías que creamos
+> nosotros por API. Para el resto, esta sección describe una intención, no lo
+> que ocurre.
+>
+> Qué haría falta, y es conversación con Aliclik, no código nuestro: que el
+> reporte traiga una columna con el `orderNumber` (`ALC…`). Con eso cada fila
+> importada quedaría enlazada a la API para siempre y el punto ciego
+> desaparecería entero. La alternativa —un endpoint que acepte el código impreso
+> en el paquete— es la que el equipo usa físicamente, pero hoy no existe.
 
 Seguimiento de una guía hasta que cierra:
 
@@ -829,6 +851,12 @@ Seguimiento de una guía hasta que cierra:
   criterio es el estado, no la fecha de creación: el barrido periódico relee una
   ventana reciente y además persigue de una en una a las guías vivas que esa
   ventana ya no alcanza.
+- **Una guía anulada se sigue mirando tres semanas más.** No es viva, pero
+  tampoco ha terminado: se anula cuando la clienta cancela o se agotan los
+  intentos, y el paquete vuelve **después**. Dejar de mirarla al anularla era
+  perderse el retorno, que es justo lo que abre §11.1. Pasadas las tres semanas
+  ya no va a volver y se deja de preguntar. `entregado` y `transferido` sí
+  cierran: una entregada terminó, y una transferida vive en otra guía.
 - Existe porque la **devolución** es el tramo más lento: un paquete rechazado
   tarda semanas en volver al origen, mucho más que la ventana del barrido. Si el
   seguimiento se anclara a la fecha, el `RETURNED` de Aliclik llegaría cuando ya
@@ -934,6 +962,21 @@ Lo que propone el mensaje **no es repetir el contraentrega**: eso apuesta el
 flete otra vez a la misma clienta que ya no respondió. Propone **reenviar por
 agencia con adelanto** (§12). Si acepta, no hay flete en riesgo; si no contesta,
 no costó nada.
+
+**De qué depende que la cola vea una devolución.** `returned_at` se sella cuando
+una fuente reporta el retorno. Para las guías nacidas del Excel —la mayoría— esa
+fuente es **únicamente el reporte de Aliclik**, porque la API no las reconoce
+(§10.1). Y ese reporte **pierde filas**: una guía cerrada deja de exportarse, así
+que puede volver físicamente al almacén sin que ninguna vía lo cuente.
+
+El síntoma es una caja en la mano que no aparece en esta pantalla. Comprobado el
+2026-08-09 con siete devoluciones recibidas: **ninguna** figuraba en la cola, y
+las siete llevaban entre 8 y 15 días sin noticias, congeladas en el estado
+anterior al retorno.
+
+Mientras Aliclik no dé una vía por guía impresa, **subir el reporte es parte de
+la operación de recuperar**, no una tarea administrativa: si no se sube, la cola
+se queda vacía y parece que no hubo devoluciones.
 
 Qué guía entra:
 
