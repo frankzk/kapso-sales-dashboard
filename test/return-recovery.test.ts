@@ -7,6 +7,7 @@ import {
   recoveryBodyParams,
   recoveryConfig,
   recoverySkipReason,
+  RECOVERY_SKIP_NO_ORDER,
   recoveryWithinHours,
   sendRecoveryTemplate,
   wasRefusedInPerson,
@@ -22,6 +23,9 @@ function candidate(over: Partial<RecoveryCandidate> = {}): RecoveryCandidate {
     courier: "aliclik",
     guide_code: "ALI0115026",
     order_name: "#KP123499",
+    // Enlazada por defecto: sin pedido la guía no es elegible (ver el bloque
+    // "sin pedido enlazado"), y el resto de pruebas mira otras exclusiones.
+    order_id: "ord-1",
     customer_name: "Jose Pio Padilla",
     customer_phone: "51987654321",
     product: "Nails Repairing — Sérum Tea Tree Ginger para Uñas (30ml)",
@@ -176,6 +180,38 @@ describe("buildRecoveryQueue", () => {
     const queue = buildRecoveryQueue(rows, OPTS);
     expect(queue.map((r) => r.id)).toEqual(["fresca", "vieja", "rechazada"]);
     expect(queue[2]!.skip).toBe("la rechazó viendo el producto (MOM §11)");
+  });
+});
+
+describe("sin pedido enlazado", () => {
+  it("no se le escribe: la plantilla nombra el pedido y no habría cuál", () => {
+    // El token `pedido` cae al código de guía cuando falta el nombre, así que a
+    // la clienta le llegaría "por tu pedido AUR5X…", que ella no ha visto nunca.
+    expect(recoverySkipReason(candidate({ order_id: null }), OPTS)).toBe(
+      RECOVERY_SKIP_NO_ORDER,
+    );
+  });
+
+  it("mira el ENLACE, no el texto: un nombre inventado no basta", () => {
+    // Durante meses el importador escribía nombres con el prefijo de otra tienda
+    // (ver 0115). Ese texto pasaría un filtro sobre `order_name`; el enlace no.
+    expect(
+      recoverySkipReason(candidate({ order_id: null, order_name: "#KP115389" }), OPTS),
+    ).toBe(RECOVERY_SKIP_NO_ORDER);
+  });
+
+  it("va la última: una exclusión que no se puede resolver tiene prioridad", () => {
+    // Sin pedido Y rechazada en la puerta → manda el MOM §11, porque enlazar el
+    // pedido no la volvería elegible y ofrecer el botón sería mentir.
+    const r = recoverySkipReason(
+      candidate({ order_id: null, reported_status: "RECHAZADO" }),
+      OPTS,
+    );
+    expect(r).toBe("la rechazó viendo el producto (MOM §11)");
+  });
+
+  it("con pedido enlazado y todo lo demás en orden, es elegible", () => {
+    expect(recoverySkipReason(candidate(), OPTS)).toBeNull();
   });
 });
 

@@ -111,6 +111,10 @@ export interface RecoveryCandidate {
   courier: string;
   guide_code: string | null;
   order_name: string | null;
+  /** El pedido de Shopify REALMENTE enlazado. Es la única señal que no miente:
+   *  `order_name` puede ser una conjetura del importador (ver 0115), así que la
+   *  cola gatea por esto y no por el texto. */
+  order_id: string | null;
   customer_name: string | null;
   customer_phone: string | null;
   product: string | null;
@@ -155,8 +159,26 @@ export function recoverySkipReason(
     const days = (opts.nowMs - returnedMs) / 86_400_000;
     if (days > opts.maxDays) return `devuelta hace más de ${opts.maxDays} días`;
   }
+  // Sin pedido enlazado no se escribe. El token `pedido` de la plantilla cae al
+  // código de guía cuando falta el nombre, así que a la clienta le llegaría
+  // «por tu pedido AUR5X146449144483» — un código interno del courier que ella
+  // no ha visto nunca.
+  //
+  // Se mira `order_id` y NO `order_name`: el nombre puede ser una conjetura del
+  // importador (0115), y durante meses fue una conjetura CON EL PREFIJO DE OTRA
+  // TIENDA. Un texto inventado pasaría este filtro; el enlace no.
+  //
+  // Va la ÚLTIMA de las exclusiones a propósito: es la única que quien mira la
+  // cola puede resolver ahí mismo, así que solo debe aparecer cuando no hay otro
+  // motivo por delante. No tiene sentido ofrecer «enlazar pedido» en una guía
+  // que además está excluida por el MOM §11.
+  if (!c.order_id) return RECOVERY_SKIP_NO_ORDER;
   return null;
 }
+
+/** El motivo que la cola convierte en acción en vez de en explicación: es el
+ *  único que se resuelve desde la propia pantalla. */
+export const RECOVERY_SKIP_NO_ORDER = "sin pedido de Shopify enlazado";
 
 // ── Parámetros de la plantilla ──────────────────────────────────────────────
 //
@@ -247,7 +269,7 @@ export function recoveryWithinHours(
 
 /** Columnas que la cola y el envío leen de `shipments`. */
 export const RECOVERY_COLS =
-  "id, courier, guide_code, order_name, customer_name, customer_phone, product, district, province, reported_collect_amount, returned_at, reported_status, non_delivery_reason, recovery_state, recovery_sent_at";
+  "id, courier, guide_code, order_name, order_id, customer_name, customer_phone, product, district, province, reported_collect_amount, returned_at, reported_status, non_delivery_reason, recovery_state, recovery_sent_at";
 
 export interface RecoveryQueueRow extends RecoveryCandidate {
   /** `null` cuando es elegible; el motivo cuando no. */
