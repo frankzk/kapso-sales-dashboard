@@ -131,6 +131,7 @@ export async function updateStore(
     return_recovery_template_name: get("return_recovery_template_name"),
     return_recovery_template_language: get("return_recovery_template_language"),
     return_recovery_params: get("return_recovery_params"),
+    return_recovery_phone_number_id: get("return_recovery_phone_number_id"),
     return_recovery_hour_start: get("return_recovery_hour_start"),
     return_recovery_hour_end: get("return_recovery_hour_end"),
     return_recovery_max_days: get("return_recovery_max_days"),

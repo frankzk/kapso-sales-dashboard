@@ -231,4 +231,6 @@
 \ir migrations/0112_return_recovery.sql
 \echo 'Applying 0113_wa_reply_templates.sql'
 \ir migrations/0113_wa_reply_templates.sql
+\echo 'Applying 0114_return_recovery_phone.sql'
+\ir migrations/0114_return_recovery_phone.sql
 \echo 'Done.'

@@ -44,6 +44,7 @@ export interface StoreSettingsInput {
   return_recovery_template_name?: string;
   return_recovery_template_language?: string;
   return_recovery_params?: string;
+  return_recovery_phone_number_id?: string;
   return_recovery_hour_start?: string;
   return_recovery_hour_end?: string;
   return_recovery_max_days?: string;
@@ -206,6 +207,13 @@ export function buildStoreUpdate(
   ] as const) {
     const v = clean(input[k]);
     if (v !== null) patch[k] = v;
+  }
+  // El número propio (0114) es VACIABLE, al revés que sus vecinos de arriba.
+  // Con el patrón de ellos —ignorar el vacío— se podría poner un número pero
+  // nunca quitarlo, y volver al de la tienda es justamente la marcha atrás que
+  // hay que poder dar si la línea aparte resulta mala idea. Vacío ⇒ null.
+  if (input.return_recovery_phone_number_id !== undefined) {
+    patch.return_recovery_phone_number_id = clean(input.return_recovery_phone_number_id);
   }
   const rrStart = intField(input.return_recovery_hour_start, 0, 23);
   if (rrStart !== null) patch.return_recovery_hour_start = rrStart;

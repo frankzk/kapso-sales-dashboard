@@ -205,6 +205,41 @@ describe("recoveryConfig", () => {
     // Sin ningún token válido no hay cuerpo que armar.
     expect(recoveryConfig({ ...base, return_recovery_params: "inventado" })).toBeNull();
   });
+
+  // ── Número propio (0114) ──────────────────────────────────────────────────
+  // Solo este envío puede salir de otra línea. El drip y los carritos siguen
+  // usando el de la clienta, y esta columna no los toca.
+
+  it("sin número propio sale del número de la tienda", () => {
+    expect(recoveryConfig(base)).toMatchObject({ phoneNumberId: "123" });
+  });
+
+  it("con número propio sale de ESE, no del de la tienda", () => {
+    expect(
+      recoveryConfig({ ...base, return_recovery_phone_number_id: "630" }),
+    ).toMatchObject({ phoneNumberId: "630" });
+  });
+
+  it("vaciarlo devuelve el envío al número de la tienda: es la marcha atrás", () => {
+    expect(
+      recoveryConfig({ ...base, return_recovery_phone_number_id: "" }),
+    ).toMatchObject({ phoneNumberId: "123" });
+    // Solo espacios cuenta como vacío; si no, un descuido dejaría la config
+    // apuntando a un número inexistente y Meta respondería 132001.
+    expect(
+      recoveryConfig({ ...base, return_recovery_phone_number_id: "   " }),
+    ).toMatchObject({ phoneNumberId: "123" });
+  });
+
+  it("el número propio basta por sí solo, sin número de tienda", () => {
+    expect(
+      recoveryConfig({
+        ...base,
+        whatsapp_phone_number_id: null,
+        return_recovery_phone_number_id: "630",
+      }),
+    ).toMatchObject({ phoneNumberId: "630" });
+  });
 });
 
 // ── El envío ────────────────────────────────────────────────────────────────

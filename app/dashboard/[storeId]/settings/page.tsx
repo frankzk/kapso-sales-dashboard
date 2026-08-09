@@ -138,6 +138,8 @@ export default async function StoreSettingsPage({
       return_recovery_template_name: full.return_recovery_template_name ?? null,
       return_recovery_template_language: full.return_recovery_template_language ?? null,
       return_recovery_params: full.return_recovery_params ?? null,
+      // Pre-0114 la columna no existe ⇒ sale del número de la tienda.
+      return_recovery_phone_number_id: full.return_recovery_phone_number_id ?? null,
       return_recovery_hour_start: full.return_recovery_hour_start ?? 8,
       return_recovery_hour_end: full.return_recovery_hour_end ?? 21,
       return_recovery_max_days: full.return_recovery_max_days ?? 30,

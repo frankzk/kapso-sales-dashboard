@@ -911,6 +911,18 @@ Cómo se envía:
   tienda es una WABA distinta con su propia aprobación, así que el cuerpo no es
   el mismo y compilar el orden obligaría a un despliegue por cada palabra que
   Meta apruebe distinto.
+- **El número desde el que sale también se configura**, y es el único envío del
+  que se puede decir eso. El drip y los carritos salen del número por el que
+  escribió la clienta; lo demás, del número de la tienda. Este puede apuntar a
+  una **línea aparte** porque es el que pide dinero por adelantado: si acumula
+  reportes, la calidad cae en la WABA de esa línea y no en la que sostiene el
+  drip, los carritos y las confirmaciones.
+  Aislarlo solo es sano con **dos condiciones**, y las dos son de operación, no
+  de software: la plantilla tiene que estar aprobada en la WABA de ese número, y
+  esa línea tiene que **atender la respuesta** —la clienta acepta y alguien debe
+  mandarle el número de cuenta—. Un número que dispara y no escucha corta el
+  circuito justo donde empezaba a valer la pena. Sin configurar, sale del número
+  de la tienda.
 - Horario local y tope por corrida, como el resto de automatizaciones de
   WhatsApp.
 - **Un envío rechazado no marca la guía**: vuelve a la cola y el motivo queda
