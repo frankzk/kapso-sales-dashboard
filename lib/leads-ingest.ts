@@ -2036,6 +2036,21 @@ export async function applyHandoff(
     return { ok: false, reason: "unknown-conversation" };
   }
 
+  // El handoff SÍ se aplica —el lead sube a "Atender ahora"—, pero sin motivo la
+  // asesora abre el drawer sin saber para qué la llamaron. Todos los emisores
+  // conocidos mandan uno: las dos `notify-team` cortan con `if (!reason) return;`
+  // y las dos `check-coverage` lo codifican a mano. Así que un motivo vacío
+  // significa que hay un campo del cuerpo que todavía no sabemos leer, y las
+  // claves de `handoff` son la pista para saber cuál. Se anota sin bloquear.
+  if (!info.reason) {
+    await noteAnomaly(admin, {
+      storeId,
+      source: "handoff",
+      reason: "sin_motivo",
+      sample: handoffDiscardSample(body, info, eventHeader),
+    });
+  }
+
   const handoffFields = {
     handoff_reason: info.reason,
     handoff_context: info.context,
