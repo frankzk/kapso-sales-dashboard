@@ -36,6 +36,45 @@ describe("mapAliclikStatus — devolución y anulación", () => {
     expect(m.terminal).toBe(true);
   });
 
+  // ── DEJADO EN ALMACÉN: la misma etiqueta para dos momentos opuestos ───────
+  // Aliclik la usa tanto para el paquete que aún no ha salido como para el que
+  // ya volvió. Se leía siempre como lo primero (`nunca_salio_a_reparto`), así
+  // que una guía despachada, intentada y devuelta se quedaba en `pendiente` y
+  // nunca sellaba `returned_at` — y la cola de recuperación (MOM §11.1) se
+  // quedaba vacía con las cajas físicamente en el almacén.
+
+  it.each(["CANCEL", "ANNULLED", "REFUSED", "NOT_RESPOND", "RESCHEDULED"])(
+    "LEFT_IN_WAREHOUSE con intento fallido (%s) ES devolución",
+    (status) => {
+      const m = mapAliclikStatus({ dispatchStatus: "LEFT_IN_WAREHOUSE", status });
+      expect(m.returned).toBe(true);
+      expect(m.deliveryStatus).toBe("anulado");
+      expect(m.operational).toBe("devuelto_al_origen");
+      // La custodia vuelve a ser nuestra: el paquete está en el almacén.
+      expect(m.custodyState).toBe("devuelto");
+    },
+  );
+
+  it("LEFT_IN_WAREHOUSE sin intento NO es devolución: nunca salió", () => {
+    // Es el sentido original de la etiqueta, y el que hay que preservar: pedirle
+    // un adelanto de S/30 a una clienta cuyo paquete jamás salió sería el peor
+    // desenlace posible de esta regla.
+    const m = mapAliclikStatus({ dispatchStatus: "LEFT_IN_WAREHOUSE", status: "PENDING_DELIVERY" });
+    expect(m.returned).toBe(false);
+    expect(m.deliveryStatus).toBe("pendiente");
+    expect(m.operational).toBe("nunca_salio_a_reparto");
+  });
+
+  it("LEFT_IN_WAREHOUSE sin status tampoco se asume devuelto", () => {
+    expect(mapAliclikStatus({ dispatchStatus: "LEFT_IN_WAREHOUSE" }).returned).toBe(false);
+  });
+
+  it("TO_RETURN sigue sin ser devolución: el paquete aún viaja de vuelta", () => {
+    // Mientras se mueve, la guía sigue viva y el equipo puede interceptarla.
+    const m = mapAliclikStatus({ dispatchStatus: "TO_RETURN", status: "CANCEL" });
+    expect(m.returned).toBe(false);
+  });
+
   it("CANCEL y ANNULLED anulan", () => {
     for (const status of ["CANCEL", "ANNULLED"]) {
       expect(mapAliclikStatus({ status }).deliveryStatus).toBe("anulado");

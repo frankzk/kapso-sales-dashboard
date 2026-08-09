@@ -777,6 +777,21 @@ Cómo se clasifica una guía que llega por reporte Excel:
   **motivo**, no el desenlace.
 - ENTREGADO gana sobre el despacho, y el orden importa: una guía entregada
   arrastra valores heredados de intentos previos en las columnas de despacho.
+- **`DEJADO EN ALMACÉN` / `LEFT_IN_WAREHOUSE` también sella la devolución, pero
+  solo si hubo intento de entrega.** Aliclik usa esa misma etiqueta para dos
+  momentos opuestos del ciclo: el paquete que todavía no ha salido, y el que ya
+  volvió. Lo que los separa es el `ESTADO ENTREGA`: con un **resultado**
+  —CANCELADO, ANULADO, RECHAZADO, NO CONTESTA, REPROGRAMADO— el paquete salió y
+  regresó; con `POR ENTREGAR`, o sin dato, nunca se movió y sigue siendo
+  `pendiente`.
+
+  Es el desenlace con el que Aliclik reporta de verdad la mayoría de las
+  devoluciones — más que `DEVUELTO`. Leerlo solo como «aún no ha salido» dejaba
+  la cola de §11.1 vacía mientras las cajas estaban físicamente en el almacén.
+
+  La exigencia del intento no es un detalle: sin ella se le pediría un adelanto
+  de S/30 a una clienta cuyo paquete jamás salió. El lado barato del error está
+  en exigirlo — como mucho se pierde una recuperación dudosa.
 - `POR DEVOLVER` / `TO_RETURN` **no** es una devolución: el paquete sigue
   viajando de vuelta y la guía sigue viva, así que se sigue consultando. Pero
   tampoco está por armar: **su estado de guía es `en_ruta`** (§6.2), porque ya

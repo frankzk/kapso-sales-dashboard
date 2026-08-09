@@ -293,6 +293,61 @@ describe("parseAliclikRow", () => {
     expect(row.order_name_confirmed).toBe(true);
   });
 
+  // ── DEJADO EN ALMACÉN, por la vía del Excel ──────────────────────────────
+  // El desenlace con el que Aliclik reporta de verdad una devolución en sus
+  // reportes. Sin leerlo, `returned_at` no se sella y la guía nunca llega a la
+  // cola de recuperación (MOM §11.1).
+
+  it.each(["CANCELADO", "ANULADO", "RECHAZADO", "NO CONTESTA", "REPROGRAMADO"])(
+    "DEJADO EN ALMACEN con intento fallido (%s) sella la devolución",
+    (entrega) => {
+      const row = parseAliclikRow({
+        "NRO. PEDIDO": "AUR5X1",
+        "ESTADO ENTREGA": entrega,
+        "ESTADO DESPACHO": "DEJADO EN ALMACEN",
+      });
+      expect(row.returned).toBe(true);
+    },
+  );
+
+  it("DEJADO EN ALMACEN con POR ENTREGAR no es devolución: nunca salió", () => {
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X1",
+      "ESTADO ENTREGA": "POR ENTREGAR",
+      "ESTADO DESPACHO": "DEJADO EN ALMACEN",
+    });
+    expect(row.returned).toBe(false);
+    expect(row.delivery_status).toBe("pendiente");
+  });
+
+  it("DEJADO EN ALMACEN sin ESTADO ENTREGA no se asume devuelto", () => {
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X1",
+      "ESTADO DESPACHO": "DEJADO EN ALMACEN",
+    });
+    expect(row.returned).toBe(false);
+  });
+
+  it("tolera el acento de la cabecera real del reporte", () => {
+    // El fichero trae "DEJADO EN ALMACÉN"; el saneado de claves quita acentos.
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X1",
+      "ESTADO ENTREGA": "CANCELADO",
+      "ESTADO DESPACHO": "DEJADO EN ALMACÉN",
+    });
+    expect(row.returned).toBe(true);
+  });
+
+  it("POR DEVOLVER sigue sin sellar: el paquete todavía viaja de vuelta", () => {
+    const row = parseAliclikRow({
+      "NRO. PEDIDO": "AUR5X1",
+      "ESTADO ENTREGA": "CANCELADO",
+      "ESTADO DESPACHO": "POR DEVOLVER",
+    });
+    expect(row.returned).toBe(false);
+    expect(row.delivery_status).toBe("anulado");
+  });
+
   it("still marks a literal 'KP' token as confirmed", () => {
     const row = parseAliclikRow({
       "NRO. PEDIDO": "AUR5X1",
