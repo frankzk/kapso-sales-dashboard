@@ -5,11 +5,18 @@
 
 ---
 
-## 1. Chat de WhatsApp embebido en el drawer
+## 1. ✅ Chat de WhatsApp embebido en el drawer — IMPLEMENTADO
 
-Ver el plan detallado en [`chat-drawer-plan.md`](./chat-drawer-plan.md): leer la
-conversación de Kapso y responder desde el drawer, multitienda, sync en vivo,
-ventanas de 24h + plantillas.
+> **Implementado (v1, v2 y v3).** El drawer lee el hilo de Kapso en vivo,
+> responde dentro de las 24 h desde el número por el que escribió el cliente, y
+> fuera de la ventana ofrece el catálogo de plantillas aprobadas de la tienda.
+> Ver [`chat-drawer-plan.md`](./chat-drawer-plan.md), que lleva el estado por
+> fase y la razón de que el catálogo se configure en vez de listarse.
+
+Queda **una cosa fuera**: no hay listado en vivo de plantillas desde Kapso, así
+que el catálogo se carga a mano en Ajustes → Plantillas de respuesta. No es
+pereza — Kapso no expone el endpoint y el WABA id que necesitaría el de Meta no
+se guarda en ninguna parte.
 
 ---
 
