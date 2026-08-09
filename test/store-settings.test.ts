@@ -76,6 +76,20 @@ describe("buildStoreUpdate", () => {
     ).not.toHaveProperty("return_recovery_phone_number_id");
   });
 
+  it("normaliza el prefijo del pedido y deja vaciarlo (0115)", () => {
+    // Se guarda sin "#" y en mayúsculas, que es la forma que espera el parser.
+    expect(buildStoreUpdate({ order_prefix: " #aur " }, KEY)).toMatchObject({
+      order_prefix: "AUR",
+    });
+    // Vaciarlo devuelve al estado seguro: sin prefijo NO se adivina el pedido a
+    // partir de un número suelto.
+    expect(buildStoreUpdate({ order_prefix: "" }, KEY)).toMatchObject({
+      order_prefix: null,
+    });
+    // No tocarlo no lo pisa.
+    expect(buildStoreUpdate({ name: "x" }, KEY)).not.toHaveProperty("order_prefix");
+  });
+
   it("descarta horas y ventanas fuera de rango en vez de guardarlas", () => {
     const patch = buildStoreUpdate(
       {

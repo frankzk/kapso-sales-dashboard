@@ -45,6 +45,7 @@ export interface StoreSettingsInput {
   return_recovery_template_language?: string;
   return_recovery_params?: string;
   return_recovery_phone_number_id?: string;
+  order_prefix?: string;
   return_recovery_hour_start?: string;
   return_recovery_hour_end?: string;
   return_recovery_max_days?: string;
@@ -214,6 +215,13 @@ export function buildStoreUpdate(
   // hay que poder dar si la línea aparte resulta mala idea. Vacío ⇒ null.
   if (input.return_recovery_phone_number_id !== undefined) {
     patch.return_recovery_phone_number_id = clean(input.return_recovery_phone_number_id);
+  }
+  // El prefijo del pedido (0115). Vaciable igual que el número propio: sin
+  // prefijo el importador NO adivina, que es el estado seguro y tiene que poder
+  // recuperarse. Se guarda sin "#" y en mayúsculas, como lo espera el parser.
+  if (input.order_prefix !== undefined) {
+    const v = clean(input.order_prefix);
+    patch.order_prefix = v ? v.replace(/^#/, "").toUpperCase() : null;
   }
   const rrStart = intField(input.return_recovery_hour_start, 0, 23);
   if (rrStart !== null) patch.return_recovery_hour_start = rrStart;

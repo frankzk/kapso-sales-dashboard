@@ -232,12 +232,15 @@ describe("parseAliclikRow", () => {
   });
 
   it("extracts a bare-number NOTA token as an unconfirmed candidate (needs phone cross-check)", () => {
-    const row = parseAliclikRow({
-      "NRO. PEDIDO": "AUR5X114314",
-      NOTA: "114314 - referencia",
-      "TELÉFONO": "919006661",
-      "ESTADO DESPACHO": "VALIDADO",
-    });
+    const row = parseAliclikRow(
+      {
+        "NRO. PEDIDO": "AUR5X114314",
+        NOTA: "114314 - referencia",
+        "TELÉFONO": "919006661",
+        "ESTADO DESPACHO": "VALIDADO",
+      },
+      { orderPrefix: "KP" },
+    );
     expect(row.guide_code).toBe("AUR5X114314");
     // no literal "KP" token → best-effort guess from the bare 6-digit run, but
     // NOT confirmed — the matcher must cross-validate it via phone before using it.
@@ -247,12 +250,47 @@ describe("parseAliclikRow", () => {
   });
 
   it("matches the real report's bare-number NOTA case (e.g. '119358 -')", () => {
-    const row = parseAliclikRow({
-      "NRO. PEDIDO": "AUR5X119358",
-      NOTA: "119358 -",
-    });
+    const row = parseAliclikRow(
+      { "NRO. PEDIDO": "AUR5X119358", NOTA: "119358 -" },
+      { orderPrefix: "KP" },
+    );
     expect(row.order_name).toBe("#KP119358");
     expect(row.order_name_confirmed).toBe(false);
+  });
+
+  // ── El prefijo es POR TIENDA (0115) ───────────────────────────────────────
+  // Antes acá había un "#KP" fijo. Para Kenku acertaba de casualidad; para
+  // Aurela fabricaba un pedido inexistente y, peor, desviaba la búsqueda del
+  // auto-match a la otra tienda, porque `pickStoresForOrderQuery` enruta por el
+  // prefijo. De ahí salieron 153 guías de Aurela sin enlazar durante meses.
+
+  it("completa el número pelado con el prefijo de LA TIENDA, no con uno fijo", () => {
+    const nota = { "NRO. PEDIDO": "AUR5X115389", NOTA: "115389 - referencia" };
+    expect(parseAliclikRow(nota, { orderPrefix: "AUR" }).order_name).toBe("#AUR115389");
+    expect(parseAliclikRow(nota, { orderPrefix: "KP" }).order_name).toBe("#KP115389");
+  });
+
+  it("sin prefijo conocido NO adivina: mejor ningún pedido que el de otra tienda", () => {
+    const row = parseAliclikRow({ "NRO. PEDIDO": "AUR5X115389", NOTA: "115389 - referencia" });
+    expect(row.order_name).toBeNull();
+    expect(row.order_name_confirmed).toBe(false);
+  });
+
+  it("tolera que el prefijo venga con '#' o en minúsculas desde Ajustes", () => {
+    const nota = { "NRO. PEDIDO": "AUR5X115389", NOTA: "115389 -" };
+    expect(parseAliclikRow(nota, { orderPrefix: "#aur" }).order_name).toBe("#AUR115389");
+    expect(parseAliclikRow(nota, { orderPrefix: "  " }).order_name).toBeNull();
+  });
+
+  it("un token explícito manda sobre el prefijo configurado", () => {
+    // La NOTA dice "#KP115879" y la tienda es Aurela: el token gana, porque es
+    // una referencia deliberada y no una conjetura.
+    const row = parseAliclikRow(
+      { "NRO. PEDIDO": "AUR5X1", NOTA: "#KP115879 - referencia" },
+      { orderPrefix: "AUR" },
+    );
+    expect(row.order_name).toBe("#KP115879");
+    expect(row.order_name_confirmed).toBe(true);
   });
 
   it("still marks a literal 'KP' token as confirmed", () => {

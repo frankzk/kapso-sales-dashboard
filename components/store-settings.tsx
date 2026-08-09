@@ -42,6 +42,7 @@ export interface StoreSettingsData {
     status: string;
     whatsapp_phone_number_id: string | null;
     kapso_project_id: string | null;
+    order_prefix: string | null;
     browse_template_enabled: boolean;
     browse_template_name: string | null;
     browse_template_language: string | null;
@@ -810,6 +811,22 @@ function SettingsForm({
               defaultValue={s.kapso_project_id ?? ""}
               className={inputCls}
             />
+          </div>
+          <div>
+            <label className={labelCls} htmlFor="order_prefix">Prefijo de los pedidos</label>
+            <input
+              id="order_prefix"
+              name="order_prefix"
+              defaultValue={s.order_prefix ?? ""}
+              placeholder="KP"
+              className={inputCls}
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              Sin el <code>#</code>, como en <code>#KP114985</code> → <code>KP</code>. Cuando el
+              reporte de Aliclik trae el número de pedido pelado en la NOTA, es lo que lo completa —
+              y con eso <strong>en qué tienda se busca</strong> ese pedido. Vacío: no se adivina
+              ningún pedido a partir de un número suelto.
+            </p>
           </div>
         </div>
 

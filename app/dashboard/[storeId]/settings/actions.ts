@@ -102,6 +102,7 @@ export async function updateStore(
     timezone: get("timezone"),
     whatsapp_phone_number_id: get("whatsapp_phone_number_id"),
     kapso_project_id: get("kapso_project_id"),
+    order_prefix: get("order_prefix"),
     status: get("status"),
     shopify_token: get("shopify_token"),
     shopify_webhook_secret: get("shopify_webhook_secret"),

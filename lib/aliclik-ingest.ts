@@ -7,6 +7,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ParsedShipmentRow } from "./aliclik-import";
 import { parseAliclikReport } from "./aliclik-import";
+import { getStoreOrderPrefix } from "./ingest";
 import { matchShipment, type MatchResult, type OrderCandidate } from "./shipment-match";
 import {
   categoryOf,
@@ -75,7 +76,11 @@ export async function ingestAliclikReport(
 ): Promise<IngestResult> {
   // parseAliclikReport ya descarta las filas IMPORTADO; la diferencia contra el
   // archivo original es cuántas se omitieron.
-  const parsed = parseAliclikReport(rawRows);
+  // El prefijo decide cómo se completa un número de pedido pelado de la NOTA, y
+  // con eso en qué tienda lo buscará después el auto-match (0115).
+  const parsed = parseAliclikReport(rawRows, {
+    orderPrefix: await getStoreOrderPrefix(admin, storeId),
+  });
   const skippedImportadoCount = rawRows.length - parsed.length;
 
   // 1) batch row

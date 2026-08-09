@@ -102,7 +102,13 @@ export interface CourierAdapter {
    * Traduce las filas ya leídas del archivo (por lib/xlsx o lib/csv-parse) a
    * registros canónicos. PURA: mismas filas → mismo resultado.
    */
-  parse: (rows: Record<string, string>[]) => CanonicalReportRow[];
+  /** `opts.orderPrefix` es el prefijo de pedido de la tienda que importa
+   *  (`stores.order_prefix`, 0115). Solo lo usa Aliclik, para completar un
+   *  número pelado de la NOTA; los demás adaptadores lo ignoran. */
+  parse: (
+    rows: Record<string, string>[],
+    opts?: { orderPrefix?: string | null },
+  ) => CanonicalReportRow[];
   /**
    * Pista para elegir adaptador cuando el operador no lo indica: cuántas de las
    * primeras filas reconoce como suyas (0 = no es su formato). Permite detectar
