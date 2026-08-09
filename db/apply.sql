@@ -233,4 +233,6 @@
 \ir migrations/0113_wa_reply_templates.sql
 \echo 'Applying 0114_return_recovery_phone.sql'
 \ir migrations/0114_return_recovery_phone.sql
+\echo 'Applying 0115_order_prefix_por_tienda.sql'
+\ir migrations/0115_order_prefix_por_tienda.sql
 \echo 'Done.'

@@ -108,6 +108,8 @@ export interface StoreCreds {
   /** Número propio para este envío (0114). NULL ⇒ el de la tienda. Solo afecta
    *  a la recuperación; el drip y los carritos siguen usando el de la clienta. */
   return_recovery_phone_number_id: string | null;
+  /** Prefijo de los nombres de pedido de esta tienda, sin "#" (0115). */
+  order_prefix: string | null;
   return_recovery_hour_start: number;
   return_recovery_hour_end: number;
   return_recovery_max_days: number;
@@ -124,6 +126,27 @@ export interface StoreCreds {
   /** Interruptor por tienda de la creación de guías. */
   aliclik_enabled: boolean;
   meta_ad_accounts: StoreMetaAdAccount[];
+}
+
+/**
+ * Solo el prefijo de pedido de la tienda (0115). Existe aparte de
+ * `getStoreCreds` porque los importadores de courier no necesitan —ni deben
+ * pagar— el descifrado de todos los secretos de la tienda para completar un
+ * número de pedido.
+ */
+export async function getStoreOrderPrefix(
+  admin: SupabaseClient,
+  storeId: string,
+): Promise<string | null> {
+  const { data, error } = await admin
+    .from("stores")
+    .select("order_prefix")
+    .eq("id", storeId)
+    .maybeSingle();
+  // Pre-0115 la columna no existe: el error se traga y se devuelve null, que
+  // significa "no adivines el pedido", no "falla la importación".
+  if (error || !data) return null;
+  return ((data as { order_prefix?: string | null }).order_prefix ?? null) || null;
 }
 
 /** Load a store row and decrypt its credentials (service-role only). */
@@ -181,6 +204,9 @@ export async function getStoreCreds(
     return_recovery_params: data.return_recovery_params ?? null,
     // Pre-0114 la columna no existe ⇒ null ⇒ sale del número de la tienda.
     return_recovery_phone_number_id: data.return_recovery_phone_number_id ?? null,
+    // Pre-0115 la columna no existe ⇒ null ⇒ no se adivina pedido desde un
+    // número suelto, que es el comportamiento seguro.
+    order_prefix: data.order_prefix ?? null,
     return_recovery_hour_start: data.return_recovery_hour_start ?? 8,
     return_recovery_hour_end: data.return_recovery_hour_end ?? 21,
     return_recovery_max_days: data.return_recovery_max_days ?? 30,

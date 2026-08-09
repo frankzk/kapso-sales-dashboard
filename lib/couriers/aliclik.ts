@@ -44,7 +44,7 @@ export const aliclikAdapter: CourierAdapter = {
   id: "aliclik",
   label: "Aliclik",
   agency: false,
-  parse: (rows) => parseAliclikReport(rows).map(toCanonical),
+  parse: (rows, opts) => parseAliclikReport(rows, opts).map(toCanonical),
   score: (rows) =>
     rows
       .slice(0, 20)

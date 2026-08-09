@@ -2,8 +2,11 @@ import { describe, it, expect } from "vitest";
 import { matchShipment, type OrderCandidate } from "@/lib/shipment-match";
 import { parseAliclikRow } from "@/lib/aliclik-import";
 
-function row(over: Record<string, string>) {
-  return parseAliclikRow({ "Guia Aliclik": "AUR5X1", ...over });
+// Los pedidos del fixture son "#KP…", así que la tienda que importa tiene el
+// prefijo KP (0115). Sin pasarlo, un número pelado de la NOTA ya no se
+// convierte en pedido y estas pruebas dejarían de ejercitar el cruce.
+function row(over: Record<string, string>, orderPrefix: string | null = "KP") {
+  return parseAliclikRow({ "Guia Aliclik": "AUR5X1", ...over }, { orderPrefix });
 }
 
 const orders: OrderCandidate[] = [
@@ -58,6 +61,14 @@ describe("matchShipment", () => {
       // "114314" isn't a real order in this candidate set — a coincidental
       // bare-number match must not be trusted; falls through to phone-only.
       const r = matchShipment(row({ NOTA: "114314 - referencia", CELULAR: "914699634" }), orders);
+      expect(r).toMatchObject({ order_id: "o1", matched: true, method: "phone" });
+    });
+
+    it("sin prefijo de tienda el número pelado no cuenta, y manda el teléfono", () => {
+      // 0115: una tienda sin `order_prefix` no adivina pedidos desde un número
+      // suelto. El cruce por nombre desaparece y queda el teléfono solo — que
+      // acá resuelve, pero por "phone", no por "order_name_phone".
+      const r = matchShipment(row({ NOTA: "114985 - referencia", CELULAR: "914699634" }, null), orders);
       expect(r).toMatchObject({ order_id: "o1", matched: true, method: "phone" });
     });
 

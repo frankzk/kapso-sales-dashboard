@@ -11,6 +11,7 @@ import { parseSheet } from "@/lib/xlsx";
 import { ingestAliclikReport } from "@/lib/aliclik-ingest";
 import { ingestCourierReport, type ReportIngestResult } from "@/lib/report-ingest";
 import { courierAdapter, detectAdapter } from "@/lib/couriers/registry";
+import { getStoreOrderPrefix } from "@/lib/ingest";
 
 /** Un XLSX es un zip: un archivo pequeño puede inflarse a cientos de MB al
  *  parsearlo (zip bomb) → OOM. Se corta ANTES de parsear, como en la ruta de
@@ -208,7 +209,7 @@ export async function handleCourierUpload(
     storeId,
     accessibleStoreIds,
     courier: adapter.id,
-    rows: adapter.parse(upload.rows),
+    rows: adapter.parse(upload.rows, { orderPrefix: await getStoreOrderPrefix(admin, storeId) }),
     meta: {
       filename: upload.filename,
       uploadedBy,

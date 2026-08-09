@@ -106,6 +106,7 @@ interface ExtractedOrderRef {
 function extractOrderReference(
   nota: string | null | undefined,
   orderColumnValue: string | null | undefined,
+  orderPrefix: string | null | undefined,
 ): ExtractedOrderRef {
   for (const v of [nota, orderColumnValue]) {
     if (!v) continue;
@@ -115,9 +116,27 @@ function extractOrderReference(
     const aur = s.match(AUR_ORDER_RE);
     if (aur && aur[1]) return { name: "#" + aur[1].toUpperCase(), confirmed: true };
   }
+  // El número pelado se completa con el prefijo de LA TIENDA que está
+  // importando, no con uno fijo. Antes acá había "#KP" hardcodeado: para Kenku
+  // acertaba de casualidad y para Aurela fabricaba un pedido inexistente que
+  // además desviaba la búsqueda del auto-match a la otra tienda
+  // (`pickStoresForOrderQuery` enruta por el prefijo).
+  //
+  // Sin prefijo conocido NO se adivina. Un nombre sin prefijo no serviría para
+  // enrutar, y ponerle el de otra tienda es peor que no poner nada: convierte
+  // "no sé de quién es" en "es de aquella", que es una respuesta falsa.
+  const prefix = String(orderPrefix ?? "").trim().replace(/^#/, "").toUpperCase();
+  if (!prefix) return { name: null, confirmed: false };
   const m = nota ? String(nota).match(BARE_ORDER_RE) : null;
-  if (m && m[1]) return { name: "#KP" + m[1], confirmed: false };
+  if (m && m[1]) return { name: `#${prefix}${m[1]}`, confirmed: false };
   return { name: null, confirmed: false };
+}
+
+/** De dónde sale el prefijo al parsear. `orderPrefix` es el de
+ *  `stores.order_prefix` (0115); sin él, un número suelto no se convierte en
+ *  pedido. */
+export interface AliclikParseOpts {
+  orderPrefix?: string | null;
 }
 
 /** Normalize a Shopify-style order name to the "#KP114985" form (used by the
@@ -346,7 +365,10 @@ function validDateKey(year: number, month: number, day: number): string | null {
 }
 
 /** Map one report row object → canonical ParsedShipmentRow. */
-export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow {
+export function parseAliclikRow(
+  raw: Record<string, string>,
+  opts: AliclikParseOpts = {},
+): ParsedShipmentRow {
   const map = buildLookup(raw);
 
   const district = pick(map, DISTRICT_KEYS);
@@ -389,7 +411,7 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
           pick(map, ESTADO_LLAMADA_KEYS),
         );
 
-  const orderRef = extractOrderReference(map.get("nota"), pick(map, ORDER_KEYS));
+  const orderRef = extractOrderReference(map.get("nota"), pick(map, ORDER_KEYS), opts.orderPrefix);
 
   return {
     guide_code: findGuideCode(raw),
@@ -420,6 +442,11 @@ export function parseAliclikRow(raw: Record<string, string>): ParsedShipmentRow 
  *  (the ingest layer marks them as errors and keeps them for review). Las filas
  *  con ESTADO LLAMADA = IMPORTADO se DESCARTAN acá (ver isImportadoRow): no son
  *  guías reales, así que ni siquiera llegan a la capa de ingesta. */
-export function parseAliclikReport(rows: Record<string, string>[]): ParsedShipmentRow[] {
-  return rows.filter((r) => !isImportadoRow(r)).map(parseAliclikRow);
+export function parseAliclikReport(
+  rows: Record<string, string>[],
+  opts: AliclikParseOpts = {},
+): ParsedShipmentRow[] {
+  // `.map(parseAliclikRow)` pasaría el índice como segundo argumento, que acá ya
+  // no es inocuo: el segundo parámetro son las opciones.
+  return rows.filter((r) => !isImportadoRow(r)).map((r) => parseAliclikRow(r, opts));
 }
