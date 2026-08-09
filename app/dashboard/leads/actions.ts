@@ -49,11 +49,21 @@ import {
   mergeTranscripts,
   sendWhatsappDocument,
   sendWhatsappImage,
+  sendWhatsappTemplate,
   sendWhatsappText,
   sendWhatsappVideo,
   templateProductParam,
   type ConversationMessage,
 } from "@/lib/kapso";
+import { isSendablePhone, sanitizeTemplateParam } from "@/lib/leads-ingest";
+import {
+  parseReplyParams,
+  renderReplyPreview,
+  resolveReplyParams,
+  validateReplyParams,
+  type ReplyLeadFacts,
+  type ReplyTemplate,
+} from "@/lib/wa-reply-templates";
 import { getAccessibleStores, getWaNumbers } from "@/lib/access";
 import { getLeadsInsights, type LeadsInsights } from "@/lib/leads-insights";
 import { drawerConversationIds } from "@/lib/lead-drawer";
@@ -1773,6 +1783,248 @@ export async function deleteQuickReply(
   const { error } = await admin.from("quick_replies").delete().eq("id", id).eq("store_id", ctx.storeId);
   if (error) return { error: error.message };
   return { replies: await listQuickReplies(leadId) };
+}
+
+// ===========================================================================
+// Plantillas de respuesta manual — lo único que se puede enviar cuando la
+// ventana de 24 h ya se cerró.
+//
+// Es el gemelo manual de las plantillas automáticas (drip, carritos,
+// recuperación de devueltos): el mismo `sendWhatsappTemplate`, pero quien
+// decide es el asesor que está mirando el chat, no el cron. Por eso los
+// parámetros se PRE-RELLENAN y se dejan editar antes de mandar, en vez de
+// abortar el envío cuando el dato falta.
+// ===========================================================================
+
+/** Una plantilla del catálogo, ya con los parámetros pre-rellenados del lead. */
+export interface LeadReplyTemplate extends ReplyTemplate {
+  /** Valores sugeridos, en el orden de `tokens`. Pueden venir con huecos. */
+  defaults: string[];
+}
+
+/**
+ * El catálogo de la tienda con los parámetros ya resueltos contra este lead.
+ * Vacío cuando la tienda no cargó plantillas: el composer lo dice tal cual en
+ * vez de ofrecer un desplegable sin opciones.
+ */
+export async function listLeadTemplates(leadId: string): Promise<LeadReplyTemplate[]> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return [];
+  const admin = createAdminSupabase();
+
+  const [{ data: rows }, { data: lead }, { data: store }] = await Promise.all([
+    admin
+      .from("wa_reply_templates")
+      .select("id, label, template_name, language, body_preview, params")
+      .eq("store_id", ctx.storeId)
+      .eq("active", true)
+      .order("sort", { ascending: true })
+      .order("created_at", { ascending: true }),
+    admin
+      .from("leads")
+      .select("name, cart_summary, cart_value, district, province")
+      .eq("id", leadId)
+      .maybeSingle(),
+    admin.from("stores").select("name").eq("id", ctx.storeId).maybeSingle(),
+  ]);
+  if (!rows?.length) return [];
+
+  const facts: ReplyLeadFacts = {
+    name: (lead?.name as string | null) ?? null,
+    product: (lead?.cart_summary as string | null) ?? null,
+    amount: (lead?.cart_value as number | null) ?? null,
+    district: ((lead?.district ?? lead?.province) as string | null) ?? null,
+    storeName: (store?.name as string | null) ?? null,
+  };
+
+  return (rows as any[]).map((r) => {
+    const tokens = parseReplyParams(r.params as string | null);
+    return {
+      id: r.id as string,
+      label: r.label as string,
+      templateName: r.template_name as string,
+      language: (r.language as string | null) ?? "es",
+      bodyPreview: (r.body_preview as string | null) ?? null,
+      tokens,
+      defaults: resolveReplyParams(tokens, facts),
+    };
+  });
+}
+
+/**
+ * Envía una plantilla del catálogo. A diferencia del texto libre NO comprueba la
+ * ventana de 24 h: la plantilla existe precisamente para atravesarla, y Meta la
+ * acepta dentro y fuera. Quien decide cuándo ofrecerla es el composer.
+ *
+ * El envío se registra en el outbox con `kind='template'` y el cuerpo YA
+ * renderizado, para que la transcripción muestre lo que la clienta va a leer y
+ * no un nombre como `recuperacion_v3` que no le dice nada a nadie.
+ */
+export async function sendLeadTemplate(
+  leadId: string,
+  templateId: string,
+  params: string[],
+  phoneNumberId?: string,
+  clientToken?: string,
+): Promise<LeadActionState> {
+  const ctx = await authorizeLead(leadId);
+  if (!ctx) return { error: "Sin acceso a este lead." };
+  const phone = ctx.phone;
+  if (!phone) return { error: "El lead no tiene teléfono." };
+  // Un número malformado no se rechaza: Meta lo acepta y no lo entrega. Se corta
+  // acá para no gastar una plantilla —y su cupo— en un envío a la nada.
+  if (!isSendablePhone(phone)) return { error: "El número del lead no es un WhatsApp válido." };
+
+  const admin = createAdminSupabase();
+  const { data: row } = await admin
+    .from("wa_reply_templates")
+    .select("id, label, template_name, language, body_preview, params, active")
+    .eq("id", templateId)
+    .eq("store_id", ctx.storeId)
+    .maybeSingle();
+  // Se revalida contra la tienda y contra `active`: el desplegable pudo cargarse
+  // hace rato y la plantilla haberse retirado desde entonces.
+  if (!row || row.active !== true) return { error: "Esa plantilla ya no está disponible." };
+
+  const tokens = parseReplyParams(row.params as string | null);
+  const values = (params ?? []).map((v) => sanitizeTemplateParam(v));
+  const invalid = validateReplyParams(tokens, values);
+  if (invalid) return { error: invalid };
+
+  const creds = await getStoreCreds(ctx.storeId, admin);
+  const pnId = (phoneNumberId && phoneNumberId.trim()) || creds?.whatsapp_phone_number_id;
+  if (!creds?.kapso_api_key || !pnId) {
+    return { error: "La tienda no tiene WhatsApp/Kapso configurado." };
+  }
+
+  // Lo que se guarda y se pinta. Sin cuerpo cargado en Ajustes no hay preview que
+  // renderizar, así que queda la etiqueta — mejor eso que una burbuja vacía.
+  const shown =
+    renderReplyPreview(row.body_preview as string | null, values) || `[plantilla] ${row.label}`;
+
+  const token = (clientToken ?? randomUUID()).trim();
+  if (!token || token.length > 100) return { error: "Identificador de envío inválido." };
+
+  let outbox: WhatsappOutboxRow | null = null;
+  const { data: inserted, error: insertError } = await admin
+    .from("whatsapp_outbox")
+    .insert({
+      store_id: ctx.storeId,
+      lead_id: leadId,
+      client_token: token,
+      phone_number_id: pnId,
+      to_phone: phone,
+      kind: "template",
+      body: shown,
+      status: "pending",
+    })
+    .select("*")
+    .single();
+  if (insertError?.code === "23505") {
+    return { error: "Ese envío ya se registró. Actualiza la conversación." };
+  }
+  if (insertError && !isMissingWhatsappOutbox(insertError)) {
+    return { error: "No se pudo preparar el envío. Intenta nuevamente." };
+  }
+  outbox = inserted ? (inserted as WhatsappOutboxRow) : null;
+
+  const res = await sendWhatsappTemplate(
+    { apiKey: creds.kapso_api_key },
+    {
+      phoneNumberId: pnId,
+      to: phone,
+      templateName: row.template_name as string,
+      language: ((row.language as string | null) ?? "es"),
+      bodyParams: values,
+    },
+  );
+
+  if (!res.ok) {
+    const ambiguous = res.ambiguous === true;
+    const at = new Date().toISOString();
+    if (outbox) {
+      const { data } = await admin
+        .from("whatsapp_outbox")
+        .update({
+          status: ambiguous ? "unknown" : "failed",
+          // Una plantilla rechazada NO se reintenta sola: los 132xxx son de
+          // configuración (nombre, idioma, parámetros) y reintentar el mismo
+          // envío repetiría el mismo rechazo. Se corrige en Ajustes y se vuelve
+          // a elegir a mano.
+          retryable: false,
+          error_code: res.code != null ? String(res.code) : null,
+          error_message: res.error,
+          failed_at: ambiguous ? null : at,
+          updated_at: at,
+        })
+        .eq("id", outbox.id)
+        .eq("store_id", ctx.storeId)
+        .select("*")
+        .single();
+      if (data) outbox = data as WhatsappOutboxRow;
+    }
+    return {
+      error: ambiguous
+        ? "No pudimos confirmar el resultado. No reintentes todavía para evitar duplicarlo; actualiza el chat."
+        : `No se pudo enviar la plantilla: ${res.error}`,
+      sentMessage: outbox
+        ? {
+            id: outbox.provider_message_id ?? `outbox:${outbox.id}`,
+            direction: "outbound",
+            at: outbox.created_at,
+            text: shown,
+            mediaKind: null,
+            mediaUrl: null,
+            status: outbox.status,
+            outboxId: outbox.id,
+            retryable: outbox.retryable,
+            error: outbox.error_message,
+          }
+        : undefined,
+    };
+  }
+
+  const sentAt = new Date().toISOString();
+  if (outbox) {
+    const { data } = await admin
+      .from("whatsapp_outbox")
+      .update({ provider_message_id: res.id, status: "sent", sent_at: sentAt, updated_at: sentAt })
+      .eq("id", outbox.id)
+      .eq("store_id", ctx.storeId)
+      .select("*")
+      .single();
+    if (data) outbox = data as WhatsappOutboxRow;
+  }
+  after(async () => {
+    await Promise.all([
+      admin.from("lead_calls").insert({
+        lead_id: leadId,
+        store_id: ctx.storeId,
+        vendedora: ctx.userId,
+        kind: "message",
+        new_status: null,
+        note: shown,
+      }),
+      admin.from("leads").update({ last_interaction_at: sentAt }).eq("id", leadId),
+    ]);
+    revalidatePath("/dashboard/leads");
+  });
+
+  return {
+    notice: "Plantilla enviada ✓",
+    sentMessage: {
+      id: res.id ?? (outbox ? `outbox:${outbox.id}` : null),
+      direction: "outbound",
+      at: sentAt,
+      text: shown,
+      mediaKind: null,
+      mediaUrl: null,
+      status: outbox?.status ?? "sent",
+      outboxId: outbox?.id,
+      retryable: false,
+      error: null,
+    },
+  };
 }
 
 // ===========================================================================

@@ -1,8 +1,9 @@
 # Plan — Chat de WhatsApp (Kapso) embebido en el drawer de Leads
 
-> **Estado: PLANIFICADO — no implementado.** Documento de referencia para más
-> adelante. La feature de carritos abandonados (draft orders) ya está en
-> producción; esto es el siguiente paso opcional.
+> **Estado: IMPLEMENTADO (v1, v2 y v3).** El drawer lee el hilo, responde dentro
+> de las 24 h desde el número correcto, y fuera de la ventana ofrece el catálogo
+> de plantillas aprobadas de la tienda. Lo de abajo es el diseño original; las
+> notas de cada fase dicen dónde quedó.
 
 ## Objetivo
 
@@ -60,7 +61,13 @@ El composer cambia según `getLeadWindow`:
 
 ## Fases (incrementales, cada una usable por sí sola)
 
-### v1 — Leer el hilo (lo nuevo de mayor valor)
+### v1 — Leer el hilo (lo nuevo de mayor valor) — ✅ IMPLEMENTADO
+
+> `loadLeadConversation` (`app/dashboard/leads/actions.ts`), burbujas y polling en
+> `components/leads-drawer.tsx`, y `mergeConversationMessages`
+> (`lib/conversation-merge.ts`). El drawer se extrajo de `components/leads.tsx` a
+> su propio archivo, así que las rutas de abajo quedaron desfasadas.
+
 - **Server action** `loadConversation(leadId)`: `authorizeLead` → `getStoreCreds(storeId)`
   → `listMessages(kapso, { conversationId: lead.kapso_conversation_id, limit })` →
   normaliza a `{ dir, text, at, image?, mediaUrl?, status }[]` → devuelve.
@@ -70,36 +77,85 @@ El composer cambia según `getLeadWindow`:
   se mantiene el affordance de llamada que ya existe.
 - *Archivos:* `app/dashboard/leads/actions.ts`, `components/leads.tsx`, `lib/kapso.ts` (mapeo).
 
-### v2 — Responder dentro de 24h (casi listo)
+### v2 — Responder dentro de 24h (casi listo) — ✅ IMPLEMENTADO
+
+> Incluida la corrección marcada con ⚠️ arriba: `sendLeadMessage` recibe
+> `phoneNumberId` y responde **desde el número del hilo activo**, con fallback al
+> default de la tienda. Ya no envía desde el default a secas.
+
 - Reusar `sendLeadMessage`, **corrigiendo** el número de envío a
   `lead.wa_phone_number_id` (fallback al default de la tienda).
 - Envío optimista (aparece al instante en el hilo) + confirmación en el siguiente poll.
 - *Archivos:* `actions.ts`, `components/leads.tsx`.
 
-### v3 — Responder en frío con plantillas (lo que falta de cero)
-- `listTemplates(store)` + `sendWhatsappTemplate({ phoneNumberId, to, name, variables })`
-  vía el mismo proxy Meta de Kapso (`POST /meta/whatsapp/v24.0/{phoneNumberId}/messages`
-  con `type: "template"`).
-- Selector de plantilla + variables en el composer cuando la ventana está cerrada.
-- *Archivos:* `lib/kapso.ts` (2 funciones nuevas), `actions.ts`, `components/leads.tsx`.
+### v3 — Responder en frío con plantillas — ✅ IMPLEMENTADO
 
-## A confirmar al construir (no bloquean el diseño)
+Salió **sin `listTemplates(store)`**, que era la mitad del plan. Ver «A confirmar»
+más abajo: no hay de dónde listarlas.
 
-1. **URL de la imagen** en el objeto de mensaje de Kapso (para pintar vouchers):
-   Kapso marca `kapso.has_media` / `media_data.content_type`; falta ver si expone
-   una URL directa o si la media se baja por un endpoint aparte.
-2. **Endpoint de plantillas** de Kapso para listarlas por número (existe el
-   concepto de templates en Kapso; confirmar el listado y el formato de variables).
+- `sendWhatsappTemplate` ya existía en `lib/kapso.ts` y lo usaban las cuatro
+  automatizaciones (drip, carritos, browse/winback, recuperación de devueltos).
+  No hizo falta escribirlo: v3 es el mismo envío con el asesor decidiendo.
+- **El catálogo se configura, no se lista**: tabla `wa_reply_templates` (0113),
+  una fila por plantilla aprobada, administrada en Ajustes → Plantillas de
+  respuesta.
+- Selector + variables editables + preview en el composer cuando la ventana está
+  cerrada, sustituyendo el aviso sin salida que había antes.
+- Los parámetros llegan **pre-rellenados del lead y se dejan corregir**. Es la
+  diferencia con el cron, que aborta cuando un dato falta: acá el que falta lo
+  completa quien está mirando el chat.
+- *Archivos:* `db/migrations/0113_wa_reply_templates.sql`,
+  `lib/wa-reply-templates.ts` (puro, compartido cliente/servidor),
+  `app/dashboard/leads/actions.ts` (`listLeadTemplates` / `sendLeadTemplate`),
+  `components/leads-drawer.tsx` (`TemplateComposer`),
+  `app/dashboard/[storeId]/settings/actions.ts` + `components/store-settings.tsx`.
+
+## A confirmar al construir — resuelto
+
+1. **URL de la imagen** — resuelto en v1: el transcripto se pide con
+   `fields=kapso(default)` y cada mensaje trae su `media_url` estable
+   (`fetchConversationTranscript`).
+2. **Endpoint de plantillas** — **no existe uno usable.** Kapso expone
+   `/whatsapp/phone_numbers`, `/conversations` y `/messages`, más un proxy a Meta
+   acotado a `POST /meta/whatsapp/v24.0/{phoneNumberId}/messages`. Listar
+   plantillas en Meta es `GET /{waba_id}/message_templates`, y **el WABA id no se
+   guarda en ninguna parte** del repo (`KapsoPhoneNumber` no lo trae).
+
+   Consecuencia: el catálogo se escribe a mano en Ajustes contra lo aprobado en
+   Meta. El coste es que un nombre mal escrito solo se descubre al enviar, y por
+   eso Ajustes valida lo que puede sin salir a la red — formato del nombre
+   (minúsculas, dígitos, guion bajo), formato del idioma, tokens conocidos, y que
+   el cuerpo declare tantos `{{n}}` como variables configuradas.
+
+   Si algún día aparece el WABA id o un endpoint de Kapso, esto se cambia por un
+   listado en vivo sin tocar el envío: `sendLeadTemplate` ya recibe el nombre y el
+   idioma de una fila, venga de donde venga.
 
 ## Verificación
 
 - **Unit:** mapeo de mensajes (entrante/saliente/imagen); selección del número de
   envío por `wa_phone_number_id`; gating del composer por ventana de 24h.
+- **Unit (v3):** `test/wa-reply-templates.test.ts` — orden de los tokens (es lo
+  único que ata cada token a su `{{n}}`), pre-relleno con huecos, validación que
+  **nombra el campo que falta** en vez de dejar que Meta responda `#132018`, y
+  render del preview dejando el hueco a la vista cuando el valor falta.
 - **Manual multitienda:** abrir un lead de **Aurela** y otro de **Kenku** → cada
   hilo trae su propia conversación; al responder, el mensaje sale **desde el número
-  correcto de cada tienda**.
+  correcto de cada tienda**. El catálogo de plantillas tampoco se cruza: es por
+  tienda, y son WABAs distintas.
 - **Ventana:** lead con último inbound <24h → texto libre habilitado; >24h → solo
   plantilla.
+
+### Pendiente de probar contra Meta real
+
+El envío de v3 **no se ha ejercitado contra la WABA de producción** en este
+cambio: no hay plantilla cargada todavía en ninguna de las dos tiendas, y mandar
+una de prueba a una clienta real no es una verificación aceptable. Lo que sí está
+probado es todo lo que no sale a la red — resolución, validación y preview.
+
+Al cargar la primera plantilla conviene mirar el primer envío: si Meta devuelve
+`132001` el nombre no coincide, y si devuelve `132018` es el número de parámetros
+lo que no coincide con el cuerpo aprobado.
 
 ## Reuso (no reinventar)
 
