@@ -43,8 +43,49 @@ describe("selectFollowUpGuides — a quién se persigue", () => {
     expect(selectFollowUpGuides([enRetorno], opts()).due).toHaveLength(1);
   });
 
-  it.each(["entregado", "anulado", "transferido"])("no persigue una guía %s", (estado) => {
+  it.each(["entregado", "transferido"])("no persigue una guía %s", (estado) => {
     expect(selectFollowUpGuides([guide({ delivery_status: estado })], opts()).due).toEqual([]);
+  });
+
+  // ── Anuladas que todavía pueden volver ────────────────────────────────────
+  // El paquete vuelve DESPUÉS de anularse, así que dejar de mirarlas al cerrar
+  // era perderse justo el hecho que abre la recuperación (MOM §11). Antes
+  // `anulado` era terminal y estas guías quedaban congeladas: el barrido las
+  // soltaba y el Excel dejaba de traerlas poco después.
+
+  it("SÍ persigue una anulada reciente: el retorno llega después del cierre", () => {
+    const anulada = guide({ delivery_status: "anulado", last_report_at: daysAgo(8) });
+    expect(selectFollowUpGuides([anulada], opts()).due.map((g) => g.id)).toEqual(["s1"]);
+  });
+
+  it("deja de perseguir la anulada que lleva más de tres semanas callada", () => {
+    const vieja = guide({ delivery_status: "anulado", last_report_at: daysAgo(22) });
+    const res = selectFollowUpGuides([vieja], opts());
+    expect(res.due).toEqual([]);
+    // Se cuenta como abandonada, no desaparece en silencio.
+    expect(res.abandoned).toBe(1);
+  });
+
+  it("el borde de las tres semanas todavía cuenta como perseguible", () => {
+    const justo = guide({ delivery_status: "anulado", last_report_at: daysAgo(20) });
+    expect(selectFollowUpGuides([justo], opts()).due).toHaveLength(1);
+  });
+
+  it("una anulada NO hereda los 60 días de silencio de una viva", () => {
+    // Mismo silencio, distinto desenlace: la viva sigue en cola, la anulada ya
+    // no. Es la diferencia que introduce la ventana propia.
+    const silencio = { last_report_at: daysAgo(30) };
+    expect(selectFollowUpGuides([guide({ ...silencio, delivery_status: "en_ruta" })], opts()).due)
+      .toHaveLength(1);
+    expect(selectFollowUpGuides([guide({ ...silencio, delivery_status: "anulado" })], opts()).due)
+      .toEqual([]);
+  });
+
+  it("un maxSilenceMs más corto que la ventana manda sobre ella", () => {
+    // La ventana de retorno acorta, nunca alarga: si la config global es más
+    // estricta, gana la global.
+    const anulada = guide({ delivery_status: "anulado", last_report_at: daysAgo(8) });
+    expect(selectFollowUpGuides([anulada], opts({ maxSilenceMs: 5 * DAY_MS })).due).toEqual([]);
   });
 
   it("no persigue lo que el barrido por fechas acaba de ver", () => {

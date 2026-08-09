@@ -89,6 +89,10 @@ const FOLLOW_UP_MAX_SILENCE_MS = 60 * DAY_MS;
  */
 const FOLLOW_UP_POOL = 2000;
 
+/** Espejo de la ventana de `selectFollowUpGuides` para las anuladas. Acá solo
+ *  recorta el pool; quien decide de verdad es el selector puro. */
+const FOLLOW_UP_RETURN_WINDOW_MS = 21 * DAY_MS;
+
 function secretEquals(provided: string | null, expected: string): boolean {
   if (!provided) return false;
   const a = Buffer.from(provided, "utf8");
@@ -472,7 +476,8 @@ async function expireStaleOrphans(
 }
 
 /**
- * Segundo pase: las guías vivas a las que la ventana de fechas ya no llega.
+ * Segundo pase: las guías que la ventana de fechas ya no alcanza — vivas, y
+ * anuladas que todavía pueden volver.
  *
  * El barrido de arriba relee por rango de fechas, así que una guía que lleva más
  * de LOOKBACK_DAYS abierta deja de aparecer y su estado se congela: la única
@@ -507,6 +512,12 @@ async function followUpLiveGuides(
   now: Date,
   report: StoreReport,
 ): Promise<void> {
+  // ANULADAS INCLUIDAS. Una guía se anula y el paquete vuelve DESPUÉS: sacarla
+  // del seguimiento al cerrarla era perderse el retorno, que es justo lo que
+  // abre la recuperación (MOM §11). Se le da menos cuerda que a una viva —tres
+  // semanas de silencio en vez de sesenta días—, y quien lo decide es
+  // `selectFollowUpGuides`; el filtro de acá solo acota el pool.
+  //
   // Las vivas se filtran en SQL —y no solo en el selector puro— porque sin ese
   // filtro la consulta traería las 3.818 guías de la tienda y PostgREST la
   // truncaría en su tope de filas, recortando el universo en silencio. El
@@ -517,7 +528,17 @@ async function followUpLiveGuides(
     .select("id,external_order_number,guide_code,delivery_status,last_report_at,created_at")
     .eq("store_id", storeId)
     .eq("courier", "aliclik")
-    .in("delivery_status", ["pendiente", "en_ruta"])
+    // `anulado` entra junto a las vivas: el paquete vuelve DESPUÉS de anularse,
+    // así que excluirlas era dejar fuera justo el estado en el que aparece una
+    // devolución. El recorte por antigüedad lo hace `selectFollowUpGuides`, que
+    // le da a una anulada tres semanas de silencio en vez de sesenta días; acá
+    // se acota en SQL para no arrastrar el histórico entero al pool.
+    .in("delivery_status", ["pendiente", "en_ruta", "anulado"])
+    .or(
+      `delivery_status.neq.anulado,last_report_at.gte.${new Date(
+        now.getTime() - FOLLOW_UP_RETURN_WINDOW_MS,
+      ).toISOString()}`,
+    )
     .order("last_report_at", { ascending: true, nullsFirst: true })
     .limit(FOLLOW_UP_POOL);
 

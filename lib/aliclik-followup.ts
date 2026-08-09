@@ -24,7 +24,28 @@
 //     abandonó sin cerrar.
 
 /** Estados en los que la guía ya terminó su vida y no hay nada que preguntar. */
-const TERMINAL = new Set(["entregado", "anulado", "transferido"]);
+const TERMINAL = new Set(["entregado", "transferido"]);
+
+/**
+ * `anulado` NO cierra el seguimiento, aunque lo parezca.
+ *
+ * Una guía se anula cuando la clienta cancela o se agotan los intentos — y el
+ * paquete VUELVE después, no antes. Ese retorno es justo el hecho que abre la
+ * recuperación (MOM §11), y ocurre cuando ya habíamos dejado de mirar: la guía
+ * salía del barrido al anularse, y el Excel dejaba de traerla poco después. El
+ * resultado era una guía congelada en el estado anterior a lo único que
+ * importaba de ella.
+ *
+ * Se sigue mirando, pero con menos paciencia que una viva: una anulada de hace
+ * tres semanas ya no va a volver, y perseguirla es gastar consultas en algo que
+ * no va a cambiar.
+ */
+const RETURN_WINDOW_MS = 21 * 24 * 60 * 60 * 1000;
+
+/** Cuánto silencio se le tolera a una guía según su estado. */
+function silenceBudgetMs(deliveryStatus: string, maxSilenceMs: number): number {
+  return deliveryStatus === "anulado" ? Math.min(RETURN_WINDOW_MS, maxSilenceMs) : maxSilenceMs;
+}
 
 /** La fila de `shipments` que necesita el selector. */
 export interface FollowUpCandidate {
@@ -97,7 +118,6 @@ export function selectFollowUpGuides(
   candidates: readonly FollowUpCandidate[],
   opts: SelectFollowUpOpts,
 ): FollowUpSelection {
-  const floor = opts.now.getTime() - opts.maxSilenceMs;
   let abandoned = 0;
 
   const live = candidates.filter((c) => {
@@ -105,6 +125,7 @@ export function selectFollowUpGuides(
     const key = followUpKey(c);
     if (!key) return false;
     if (opts.scanned.has(key)) return false;
+    const floor = opts.now.getTime() - silenceBudgetMs(c.delivery_status, opts.maxSilenceMs);
 
     const signal = lastSignalAt(c);
     if (signal) {
