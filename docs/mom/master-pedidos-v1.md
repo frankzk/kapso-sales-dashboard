@@ -4,7 +4,7 @@ Estado: Fase 4 implementada; Mesa de cierre y resumen operativo publicados
 Propietario del proceso: Frankz  
 Sistema: Kapta (`kapso-sales-dashboard`)  
 Fuente visual: board Miro «Master Operations Map»  
-Última consolidación: 2026-08-01
+Última consolidación: 2026-08-08
 
 ## 1. Propósito
 
@@ -844,6 +844,59 @@ Seguimiento de una guía hasta que cierra:
 - Una guía que Aliclik ya no reconoce **no se cierra**: se cuenta aparte para
   revisión humana. Dar por terminada una guía porque una búsqueda vino vacía
   sería inventar un desenlace.
+
+### 10.2 Crear una guía en Aliclik: el candado y su caducidad
+
+Crear un pedido en Aliclik es una escritura hacia afuera, irreversible, con
+ventanas de cancelación estrictas, y su API **no tiene idempotency key**. Por eso
+la intención de creación se registra **antes** de llamar a Aliclik y actúa de
+candado.
+
+- **Un pedido no admite dos intenciones vivas.** Un doble clic, dos operadoras
+  sobre el mismo pedido o un reintento chocan contra el candado en lugar de
+  convertirse en dos guías reales.
+- **Un timeout no es un rechazo.** Aliclik pudo haber creado el pedido y
+  habérsenos perdido la respuesta. La intención queda a la espera y **sigue
+  bloqueando** el reintento: reintentar a ciegas es lo que crea el duplicado.
+
+El barrido periódico resuelve esa espera, y tiene que cerrar **las dos** ramas
+posibles:
+
+- **Aliclik sí lo creó** → se busca el pedido huérfano por la marca que se
+  estampa en la nota (identidad, no parecido), se registra la guía y la intención
+  se cierra como completada.
+- **Aliclik nunca lo creó** → no hay huérfano que encontrar. Tras **90 minutos**
+  de barridos sin dar con él, la intención **caduca**: se cierra como fallida con
+  el motivo escrito y el pedido vuelve a admitir un intento.
+
+Sin esa caducidad el candado no tenía salida: la intención quedaba viva para
+siempre y el pedido inoperable hasta que alguien lo desbloqueara a mano. Ocurrió
+el 08-08-2026 con dos pedidos, durante una caída de la API de Aliclik.
+
+**Cuándo NO se caduca**, porque liberar de más cuesta una guía duplicada —dinero
+real y ventana de cancelación corta— mientras que liberar de menos solo cuesta
+esperar:
+
+- **Si el barrido no pudo recorrerse entero, no se caduca nada.** «Buscamos y no
+  está» no es «no pudimos buscar», y es justo durante una caída de Aliclik cuando
+  las dos se confunden: sin esta condición, la misma caída que provoca los
+  timeouts liberaría los candados que protegen de ellos.
+- **Si la ausencia quedó en duda, tampoco.** Una intención cuyo teléfono señalaba
+  a varios pedidos abiertos a la vez queda para revisión humana.
+- **Si la fecha de creación cayó fuera de la ventana del barrido**, la intención
+  caduca igual —lleva demasiado bloqueando—, pero el motivo registra que la
+  ausencia **no** pudo comprobarse, y se cuenta aparte. Antes de reintentar hay
+  que mirar el panel de Aliclik.
+
+El motivo de la caducidad **se añade** al fallo original en vez de sustituirlo:
+el timeout es la mitad del diagnóstico y esa fila es lo que se le presenta al
+soporte de Aliclik cuando hay que reclamar.
+
+Lo que se le dice a la operadora tiene que distinguir los casos: una guía ya
+creada se identifica por su número, y una intención a la espera indica que no
+reintente y **cuándo** se libera sola. Un mensaje único para todos los casos
+—«ya hay una creación en curso o completada»— era falso justo en el caso que
+importa y no ofrecía salida.
 
 Indemnización Aliclik:
 

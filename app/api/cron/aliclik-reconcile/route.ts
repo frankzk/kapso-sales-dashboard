@@ -5,6 +5,7 @@ import { getStoreCreds } from "@/lib/ingest";
 import { listOrders, type AliclikOrder } from "@/lib/aliclik";
 import { applyAliclikSnapshot, refreshAliclikOrder } from "@/lib/aliclik-track";
 import { selectFollowUpGuides, followUpKey, type FollowUpCandidate } from "@/lib/aliclik-followup";
+import { selectExpiredOrphans, type ExpiryCandidate } from "@/lib/aliclik-orphan-expiry";
 import { normalizePhone } from "@/lib/phone";
 import { readOrderMarker } from "@/lib/aliclik-reconcile";
 import { categoryOf } from "@/lib/shipments";
@@ -38,6 +39,13 @@ export const maxDuration = 300;
 // ninguna. Antes esto era un UPDATE que no encontraba nada, no fallaba, y dejaba
 // la intención marcada como resuelta sin haber registrado la guía.
 //
+// Y CADUCA LAS QUE NO EXISTEN. Buscar al huérfano cubre la rama "Aliclik sí lo
+// creó". La otra —nunca llegó a crearlo— no tenía salida: la intención se
+// quedaba en 'pending' para siempre y el candado dejaba el pedido inoperable.
+// Tras `ORPHAN_EXPIRY_MS` de barridos sin encontrarla, se cierra como 'failed'
+// con el motivo escrito y el pedido vuelve a admitir un intento
+// (MOM §10.2, lib/aliclik-orphan-expiry.ts).
+//
 // Y PERSIGUE A LAS REZAGADAS. La ventana de fechas cubre el ciclo normal, pero
 // no el retorno: un paquete rechazado tarda semanas en volver, y para cuando
 // Aliclik lo marca RETURNED su guía ya se cayó del rango. Por eso, tras el
@@ -49,6 +57,15 @@ const DAY_MS = 86_400_000;
 const LOOKBACK_DAYS = 14;
 /** Antigüedad mínima de una intención para considerarla huérfana. */
 const ORPHAN_MIN_AGE_MS = 5 * 60_000;
+/**
+ * Cuándo se da por no creada una intención que el barrido nunca encuentra.
+ *
+ * Con el cron cada 20 minutos son cuatro o cinco pasadas completas buscándola
+ * por su marca antes de soltar el candado. El margen es deliberadamente amplio:
+ * caducar de más crea una guía duplicada —dinero real, ventana de cancelación
+ * corta— y caducar de menos solo cuesta esperar.
+ */
+const ORPHAN_EXPIRY_MS = 90 * 60_000;
 /**
  * Consultas individuales por tienda y pasada. Con el cron cada 20 minutos son
  * ~2.900 turnos al día: de sobra para una cola de rezagadas sana. Si
@@ -99,6 +116,12 @@ interface StoreReport {
   orphansCreated: number;
   /** Candidatas descartadas por ambiguas (mismo teléfono, varios pedidos). */
   orphansAmbiguous: number;
+  /** Intenciones dadas por no creadas: candado liberado, pedido reintentable. */
+  orphansExpired: number;
+  /** Caducadas sin que el barrido cubriera su fecha: piden ojo humano. */
+  orphansExpiredUnverified: number;
+  /** Las que siguen bloqueadas y por qué. Si no baja, hay algo que mirar. */
+  orphansHeld: { tooYoung: number; ambiguous: number; sweepIncomplete: number };
   /** Guías vivas consultadas de una en una tras el barrido por fechas. */
   followUpScanned: number;
   followUpApplied: number;
@@ -128,6 +151,9 @@ interface Orphan {
   orderId: string | null;
   phone: string | null;
   marker: string | null;
+  createdAt: string;
+  /** El fallo que la dejó en 'pending' — casi siempre el timeout de creación. */
+  error: string | null;
   request: OrphanRequest;
 }
 
@@ -138,10 +164,15 @@ interface Orphan {
  * pedidos del mismo cliente son indistinguibles por teléfono, y vincular la guía
  * al pedido equivocado deja a los dos mal — uno con una salida que no es suya y
  * el otro esperando la propia.
+ *
+ * `ambiguous` recoge a las que quedaron en ese empate. Importa más allá del
+ * contador: una intención ahí NO puede caducarse después, porque el barrido vio
+ * un pedido sin registrar que podría ser el suyo. Su ausencia no está probada.
  */
 function matchOrphan(
   order: AliclikOrder,
   orphans: Orphan[],
+  ambiguous: Set<string>,
   report: StoreReport,
 ): Orphan | undefined {
   const marker = readOrderMarker(order.note);
@@ -154,7 +185,10 @@ function matchOrphan(
   if (!phone) return undefined;
   const samePhone = orphans.filter((o) => o.phone && o.phone === phone);
   if (samePhone.length === 1) return samePhone[0];
-  if (samePhone.length > 1) report.orphansAmbiguous++;
+  if (samePhone.length > 1) {
+    report.orphansAmbiguous++;
+    for (const o of samePhone) ambiguous.add(o.id);
+  }
   return undefined;
 }
 
@@ -247,6 +281,9 @@ const emptyReport = (storeId: string): StoreReport => ({
   orphansLinked: 0,
   orphansCreated: 0,
   orphansAmbiguous: 0,
+  orphansExpired: 0,
+  orphansExpiredUnverified: 0,
+  orphansHeld: { tooYoung: 0, ambiguous: 0, sweepIncomplete: 0 },
   followUpScanned: 0,
   followUpApplied: 0,
   followUpDeferred: 0,
@@ -269,7 +306,7 @@ async function reconcileStore(
   // poder emparejarlas con lo que devuelva Aliclik en la misma pasada.
   const { data: pending } = await admin
     .from("aliclik_order_requests")
-    .select("id,order_id,request,created_at")
+    .select("id,order_id,request,created_at,error")
     .eq("store_id", storeId)
     .eq("status", "pending")
     .lt("created_at", new Date(now.getTime() - ORPHAN_MIN_AGE_MS).toISOString());
@@ -283,13 +320,24 @@ async function reconcileStore(
       // La marca que estampamos en la nota al crear. Es la identidad; el
       // teléfono queda solo como respaldo para las intenciones anteriores a esto.
       marker: readOrderMarker(req.note),
+      createdAt: p.created_at,
+      error: p.error,
       request: req,
     };
   });
 
+  // Intenciones que el barrido vio pero no pudo descartar por ambigüedad de
+  // teléfono. Nunca caducan: ver matchOrphan.
+  const ambiguous = new Set<string>();
+
   // Lo que el barrido por fechas alcanza a ver. Sirve para no volver a
   // preguntar por ello en el pase de rezagadas.
   const scanned = new Set<string>();
+
+  // ¿Se llegó a recorrer el listado ENTERO? Solo entonces "no aparece" significa
+  // "no existe", y solo entonces se puede caducar una intención. Un corte por
+  // error de la API —o por el tope de páginas— deja esto en false a propósito.
+  let sweepComplete = false;
 
   for (let page = 1; page <= 50; page++) {
     const res = await listOrders({ apiToken }, { page, limit: 100, startDate, endDate });
@@ -298,7 +346,10 @@ async function reconcileStore(
       break;
     }
     const rows = res.data.data ?? [];
-    if (!rows.length) break;
+    if (!rows.length) {
+      sweepComplete = true;
+      break;
+    }
 
     for (const order of rows) {
       report.scanned++;
@@ -316,7 +367,7 @@ async function reconcileStore(
         // intenciones anteriores a la marca, y solo si es inequívoco: hay
         // clientes con dos pedidos abiertos a la vez, y pegarle la guía al
         // equivocado es peor que no pegarla.
-        const orphan = matchOrphan(order, orphans, report);
+        const orphan = matchOrphan(order, orphans, ambiguous, report);
         if (orphan && order.orderNumber) {
           const rescued = await rescueOrphanGuide(admin, order, orphan, report);
           if (rescued) {
@@ -338,12 +389,86 @@ async function reconcileStore(
     }
 
     const totalPages = res.data.pagination?.totalPages ?? 1;
-    if (page >= (totalPages || 1)) break;
+    if (page >= (totalPages || 1)) {
+      sweepComplete = true;
+      break;
+    }
   }
+
+  // Las que quedan en `orphans` son las que el barrido NO emparejó: las
+  // rescatadas se sacaron del array al cerrarlas como 'sent'.
+  await expireStaleOrphans(admin, orphans, ambiguous, sweepComplete, now, report);
 
   await followUpLiveGuides(storeId, apiToken, admin, scanned, now, report);
 
   return report;
+}
+
+/**
+ * Cierra las intenciones que Aliclik nunca llegó a crear.
+ *
+ * Es la salida que le faltaba al candado. Sin esto, una creación que se va en
+ * timeout SIN que Aliclik cree nada deja la intención en 'pending' para siempre:
+ * el único parcial de 0056 solo excluye 'failed', así que el pedido no vuelve a
+ * admitir un intento y solo un UPDATE a mano lo desbloquea.
+ *
+ * El motivo se escribe en la propia fila y distingue los dos casos —ausencia
+ * comprobada frente a caducidad por antigüedad—, porque quien lo lea después
+ * necesita saber cuál de los dos fue. Se AÑADE al error original en lugar de
+ * pisarlo: el timeout que la dejó aquí es la mitad del diagnóstico, y la fila es
+ * lo que se le manda al soporte de Aliclik cuando hay que reclamar.
+ *
+ * Un fallo al cerrar una no detiene a las demás: cada una es independiente y la
+ * siguiente pasada lo reintenta.
+ */
+async function expireStaleOrphans(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orphans: readonly Orphan[],
+  ambiguous: ReadonlySet<string>,
+  sweepComplete: boolean,
+  now: Date,
+  report: StoreReport,
+): Promise<void> {
+  const selection = selectExpiredOrphans(
+    orphans.map((o): ExpiryCandidate => ({ id: o.id, orderId: o.orderId, createdAt: o.createdAt })),
+    {
+      ambiguous,
+      sweepComplete,
+      expiryMs: ORPHAN_EXPIRY_MS,
+      lookbackMs: LOOKBACK_DAYS * DAY_MS,
+      now,
+    },
+  );
+  report.orphansHeld = selection.held;
+  const causeOf = new Map(orphans.map((o) => [o.id, (o.error ?? "").trim()]));
+
+  for (const decision of selection.expire) {
+    const cause = causeOf.get(decision.id);
+    const reason = cause ? `${cause} — ${decision.reason}` : decision.reason;
+
+    // El `eq('status','pending')` es la guarda contra la carrera con el propio
+    // POST: si la creación terminó bien entre la carga de huérfanas y este
+    // punto, la fila ya está en 'sent' y aquí no se toca nada.
+    const { data, error } = await admin
+      .from("aliclik_order_requests")
+      .update({
+        status: "failed",
+        error: reason,
+        completed_at: now.toISOString(),
+      })
+      .eq("id", decision.id)
+      .eq("status", "pending")
+      .select("id");
+
+    if (error) {
+      report.errors.push(`caducar intención ${decision.id}: ${error.message}`);
+      continue;
+    }
+    if (!(data ?? []).length) continue;
+
+    report.orphansExpired++;
+    if (!decision.verified) report.orphansExpiredUnverified++;
+  }
 }
 
 /**
