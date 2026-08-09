@@ -318,6 +318,33 @@ Reglas:
   lista, así que sin el recuadro la ausencia de cajas es indistinguible de no
   haber mirado. El recuadro cuenta la cola completa; el buscador filtra la lista,
   nunca el recuadro.
+
+**Turnos de almacén y cortes.** El almacén trabaja en dos turnos, cada uno con
+su hora de corte en hora de Lima y su propio calendario:
+
+| Turno  | Corte | Días              |
+| ------ | ----- | ----------------- |
+| Mañana | 10:20 | lunes a viernes   |
+| Noche  | 21:20 | domingo a viernes |
+
+Reglas:
+
+- El corte se le exige **solo a Lima**. Agencia y provincia se muestran con su
+  número, pero sin corte: las cajas de Provincia COD salen de la cola con el
+  `PREPARED` de Aliclik, así que un rojo ahí señalaría al almacén por una demora
+  del courier, que no es suya.
+- El sábado **no tiene corte**: no lo trabaja ninguno de los dos turnos. No es
+  una excepción escrita aparte, sale del calendario de cada turno.
+- El corte vencido se exige durante **4 horas**. Pasado ese plazo la caja sigue
+  pendiente, pero deja de leerse como «el turno no cerró» y pasa a ser atraso,
+  que es lo que ya cuenta el contador de detenidas. Sin ese tope, el corte del
+  viernes por la noche teñiría de rojo todo el sábado.
+- El aviso previo empieza **90 minutos** antes del corte.
+- Sin cajas no hay nada que exigir: el recuadro en cero no se pone en rojo
+  aunque el corte haya pasado.
+- El renglón nombra siempre el turno además de la hora. Un corte sin turno no
+  señala a nadie, y la responsabilidad de las 10:20 y la de las 21:20 son de
+  equipos distintos.
 - Cada caja dice **qué hecho la saca de la cola**: el escaneo local, o el reporte
   del courier en los casos con equivalencia documentada (hoy solo Aliclik). El
   almacén empaca las tres operaciones; lo que cambia es quién cierra la caja.
