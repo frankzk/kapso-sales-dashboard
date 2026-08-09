@@ -1411,21 +1411,54 @@ export function classifyKapsoEvent(event: string | null | undefined, body: any):
   return "skip";
 }
 
-/** Best-effort extraction of a Kapso `workflow.execution.handoff` payload. */
+/**
+ * Best-effort extraction of a Kapso `workflow.execution.handoff` payload.
+ *
+ * Hay DOS emisores con formas distintas y los dos son reales:
+ *
+ *   1. Las funciones propias (`notify-team`, `check-coverage`), que arman el
+ *      cuerpo a mano: `phone_number`, `conversation_id`, `reason` en la raíz.
+ *   2. El webhook NATIVO de plataforma de Kapso, que manda
+ *      `{channel, event, handoff, occurred_at, project_id, status,
+ *        whatsapp_conversation_id, workflow_execution_id, workflow_id}` —
+ *      sin `conversation`, sin `execution` y sin `reason` en la raíz.
+ *
+ * El segundo se descartaba ENTERO: ninguna de las rutas de identidad daba en el
+ * blanco, así que `applyHandoff` no tenía con qué encontrar al cliente y lo
+ * dejaba caer devolviendo 200. Fueron 68 el 2026-08-06 y 39 el 08-07 antes de
+ * que la superficie de anomalías lo hiciera visible.
+ */
 export function parseHandoffPayload(body: any): HandoffInfo {
   const conv = body?.conversation ?? body?.data?.conversation ?? {};
   const exec = body?.execution ?? body?.workflow_execution ?? body?.data ?? {};
+  // El nativo mete el motivo dentro de `handoff`, no en la raíz.
+  const handoff = body?.handoff ?? {};
   const reason =
-    body?.reason ?? exec?.reason ?? exec?.handoff_reason ?? exec?.context?.reason ?? null;
+    body?.reason ??
+    handoff?.reason ??
+    handoff?.handoff_reason ??
+    exec?.reason ??
+    exec?.handoff_reason ??
+    exec?.context?.reason ??
+    null;
   const context =
     body?.context_summary ??
+    handoff?.context_summary ??
+    handoff?.summary ??
     exec?.context_summary ??
     exec?.context?.context_summary ??
     exec?.contextData?.context_summary ??
     exec?.input?.context_summary ??
     null;
   return {
-    conversationId: conv?.id ?? body?.conversation_id ?? exec?.conversation_id ?? null,
+    conversationId:
+      conv?.id ??
+      body?.conversation_id ??
+      // La ÚNICA identidad que trae el webhook nativo. Sin esta ruta no hay
+      // teléfono, ni BSUID, ni conversación: el handoff se pierde entero.
+      body?.whatsapp_conversation_id ??
+      exec?.conversation_id ??
+      null,
     phone: normalizePhone(conv?.phone_number ?? body?.phone_number ?? null),
     // Mismas rutas y mismo guardián de forma que en conversationToLeadSeed: el
     // objeto `conversation` del webhook es la misma conversación de Kapso, así
@@ -1491,5 +1524,8 @@ export function handoffDiscardSample(
     clavesData: keys(body?.data),
     clavesExec: keys(body?.execution ?? body?.workflow_execution),
     clavesConv: keys(body?.conversation ?? body?.data?.conversation),
+    // Faltaba, y era justo donde vivía el motivo del webhook nativo: el primer
+    // informe salió con `reason: null` y sin nada que explicara por qué.
+    clavesHandoff: keys(body?.handoff),
   };
 }
