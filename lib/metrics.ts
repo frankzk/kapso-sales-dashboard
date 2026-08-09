@@ -1384,41 +1384,6 @@ export function lostRevenueByReason(
   return { items, total: round2(items.reduce((s, i) => s + i.estRevenue, 0)) };
 }
 
-export interface ChannelFunnel {
-  orders: number;
-  revenue: number; // net (total_amount − refunds) of the side's active orders
-}
-
-export interface BotVsAdvisor {
-  bot: ChannelFunnel;
-  advisor: ChannelFunnel;
-}
-
-// An order a human advisor closed through the dashboard is tagged this way. The
-// manual-sale, cart-recovery and generate-order flows ALL apply one of these
-// tags AND log a lead_calls kind="sale", so the tag ⇒ "an advisor closed it".
-const ADVISOR_ORDER_TAGS = new Set(["venta_manual", "carrito_recuperado"]);
-
-/**
- * Bot-closed vs advisor-closed SALES — revenue + order count per side. An active
- * order is attributed to the ADVISOR side when a human closed it via the
- * dashboard (tagged `venta_manual`/`carrito_recuperado`); every other active
- * order arrived through the bot / Shopify sync. Revenue is net of refunds.
- */
-export function botVsAdvisor(orders: OrderRow[]): BotVsAdvisor {
-  const bot: ChannelFunnel = { orders: 0, revenue: 0 };
-  const advisor: ChannelFunnel = { orders: 0, revenue: 0 };
-  for (const o of activeOrders(orders)) {
-    const net = (o.total_amount ?? 0) - (o.total_refunded ?? 0);
-    const side = (o.tags ?? []).some((t) => ADVISOR_ORDER_TAGS.has(t)) ? advisor : bot;
-    side.orders += 1;
-    side.revenue += net;
-  }
-  advisor.revenue = round2(advisor.revenue);
-  bot.revenue = round2(bot.revenue);
-  return { bot, advisor };
-}
-
 // ===========================================================================
 // Ventas por FUENTE y CIERRE — order-centric attribution (auditable).
 //
@@ -1500,6 +1465,17 @@ export interface SalesAttribution {
 
 const WINBACK_ATTR_DAYS = 30; // coupon order ≤30d after the template ⇒ recuperación
 const ASSIST_ATTR_DAYS = 7; // advisor touch ≤7d before the order ⇒ bot asistido
+
+// Un pedido que un humano creó DESDE el dashboard queda etiquetado así: los tres
+// flujos (venta manual, recuperación de carrito, generar pedido) ponen una de
+// estas etiquetas y además registran un lead_calls kind="sale".
+//
+// Es condición suficiente para "cerró la asesora", NO necesaria — y confundir
+// las dos cosas fue el bug: durante un tiempo esta constante fue TODO el reparto
+// entre bot y asesor, así que convencer a alguien por teléfono y dejar que el
+// checkout lo hiciera el cliente contaba como venta del bot. Lo que falta lo
+// cubre `bot_asistido` mirando la gestión, no la etiqueta.
+const ADVISOR_ORDER_TAGS = new Set(["venta_manual", "carrito_recuperado"]);
 
 const SOURCE_LABELS: Record<AttributionSource, string> = {
   winback: "🔁 Recuperación 60d",

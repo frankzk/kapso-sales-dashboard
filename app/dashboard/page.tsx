@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import {
   getAccessibleStores,
   getAdNames,
+  getAttributionInputs,
   getCampaignDeliveryOutcomes,
   getCampaignLeadsForDashboard,
   getConversations,
@@ -19,6 +20,7 @@ import {
   previousRange,
 } from "@/lib/access";
 import { ExecutiveDashboard } from "@/components/executive-dashboard";
+import { salesAttribution } from "@/lib/metrics";
 import { EmptyState } from "@/components/ui";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import {
@@ -124,6 +126,15 @@ async function ConsolidatedContent({
       metaAdPerformancePromise,
     ]);
 
+  // Atribución de fuente y canal de cierre, igual que en la página de tienda.
+  // Va después del bloque paralelo porque necesita los pedidos ya resueltos: sus
+  // señales se buscan por el teléfono de cada pedido. Faltaba acá, y esa
+  // ausencia era el bug — el Consolidado repartía las ventas entre BOT y asesor
+  // por la etiqueta del pedido, así que las 12.667 gestiones que las asesoras
+  // registran cada 30 días no contaban salvo que además hubieran creado el
+  // pedido desde el dashboard.
+  const attribution = salesAttribution(orders, await getAttributionInputs(storeIds, orders));
+
   const first = stores[0]!;
   const currency = stores.every((s) => s.currency === first.currency) ? first.currency : "PEN";
 
@@ -149,6 +160,7 @@ async function ConsolidatedContent({
         timezone={first.timezone}
         adNames={adNames}
         waNumbers={waNumbers}
+        attribution={attribution}
         campaignDeliveries={campaignDeliveries}
         campaignLeads={campaignLeads}
         campaignOrders={campaignOrders}
