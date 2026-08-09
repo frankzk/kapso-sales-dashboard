@@ -32,6 +32,10 @@ export interface RecoveryView {
   templateName: string | null;
   auto: boolean;
   maxDays: number;
+  /** Número desde el que sale, solo cuando NO es el de la tienda (0114). Se
+   *  muestra porque con dos líneas posibles «se envió» ya no dice de dónde, y
+   *  el 132001 más caro de diagnosticar es justamente el del número equivocado. */
+  fromPhoneNumberId: string | null;
 }
 
 /** Motivo legible de por qué esta tienda no puede enviar. Se muestra arriba de
@@ -45,8 +49,13 @@ function describeBlocker(creds: Awaited<ReturnType<typeof getStoreCreds>>): stri
   if (!creds.return_recovery_template_name) {
     return "Falta indicar la plantilla aprobada de recuperación (Ajustes).";
   }
-  if (!creds.kapso_api_key || !creds.whatsapp_phone_number_id) {
-    return "Falta la clave de Kapso o el número de WhatsApp de la tienda (Ajustes).";
+  // El número propio (0114) cuenta igual que el de la tienda: exigir el segundo
+  // aquí bloquearía la cola con un motivo falso a una tienda que sí puede enviar
+  // por su línea aparte. La condición tiene que ser la MISMA que la de
+  // `recoveryConfig`, o el botón y el aviso dirían cosas distintas.
+  if (!creds.kapso_api_key) return "Falta la clave de Kapso de la tienda (Ajustes).";
+  if (!creds.return_recovery_phone_number_id?.trim() && !creds.whatsapp_phone_number_id) {
+    return "Falta el número de WhatsApp desde el que enviar (Ajustes).";
   }
   if (!recoveryConfig(creds)) {
     return "La lista de parámetros de la plantilla no tiene ningún token válido (Ajustes).";
@@ -60,7 +69,7 @@ function describeBlocker(creds: Awaited<ReturnType<typeof getStoreCreds>>): stri
 export async function loadRecoveryView(storeId: string): Promise<RecoveryView> {
   const stores = await getAccessibleStores();
   if (!stores.some((s) => s.id === storeId)) {
-    return { rows: [], blocker: "No tienes acceso a esta tienda.", templateName: null, auto: false, maxDays: RECOVERY_DEFAULT_MAX_DAYS };
+    return { rows: [], blocker: "No tienes acceso a esta tienda.", templateName: null, auto: false, maxDays: RECOVERY_DEFAULT_MAX_DAYS, fromPhoneNumberId: null };
   }
 
   const creds = await getStoreCreds(storeId);
@@ -89,6 +98,7 @@ export async function loadRecoveryView(storeId: string): Promise<RecoveryView> {
     templateName: creds?.return_recovery_template_name ?? null,
     auto: creds?.return_recovery_auto ?? false,
     maxDays,
+    fromPhoneNumberId: creds?.return_recovery_phone_number_id?.trim() || null,
   };
 }
 

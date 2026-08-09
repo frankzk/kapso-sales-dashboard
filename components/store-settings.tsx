@@ -62,6 +62,7 @@ export interface StoreSettingsData {
     return_recovery_template_name: string | null;
     return_recovery_template_language: string | null;
     return_recovery_params: string | null;
+    return_recovery_phone_number_id: string | null;
     return_recovery_hour_start: number;
     return_recovery_hour_end: number;
     return_recovery_max_days: number;
@@ -1181,6 +1182,30 @@ function SettingsForm({
                 defaultValue={s.return_recovery_hour_end}
                 className={inputCls}
               />
+            </div>
+            <div className="sm:col-span-3">
+              <label className={labelCls} htmlFor="return_recovery_phone_number_id">
+                Enviar desde otro número (opcional)
+              </label>
+              <input
+                id="return_recovery_phone_number_id"
+                name="return_recovery_phone_number_id"
+                defaultValue={s.return_recovery_phone_number_id ?? ""}
+                placeholder="Vacío = el número de la tienda"
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                <strong>Solo</strong> afecta a este envío: el drip y los carritos siguen saliendo
+                del número por el que escribió cada clienta, y lo demás del número de la tienda.
+                Sirve para aislar el riesgo — este mensaje pide dinero por adelantado, y un reporte
+                le baja la calidad a toda la WABA.
+              </p>
+              <p className="mt-1 text-xs text-amber-700">
+                Dos condiciones: la plantilla tiene que estar <strong>aprobada en la WABA de ese
+                número</strong> (si no, Meta responde <code>132001</code>), y esa línea tiene que{" "}
+                <strong>atender la respuesta</strong> — la clienta acepta y alguien debe mandarle
+                el número de cuenta. Un número que dispara y no escucha corta el circuito.
+              </p>
             </div>
           </div>
         </fieldset>

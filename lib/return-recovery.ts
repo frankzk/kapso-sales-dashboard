@@ -289,14 +289,18 @@ export interface RecoveryConfig {
 export function recoveryConfig(creds: StoreCreds): RecoveryConfig | null {
   if (!creds.return_recovery_enabled) return null;
   if (!creds.return_recovery_template_name) return null;
-  if (!creds.kapso_api_key || !creds.whatsapp_phone_number_id) return null;
+  // El número propio (0114) basta por sí solo: una tienda puede recuperar desde
+  // una línea aparte aunque no tenga número principal configurado.
+  const phoneNumberId =
+    creds.return_recovery_phone_number_id?.trim() || creds.whatsapp_phone_number_id;
+  if (!creds.kapso_api_key || !phoneNumberId) return null;
   const tokens = parseRecoveryParams(creds.return_recovery_params);
   if (!tokens.length) return null;
   return {
     templateName: creds.return_recovery_template_name,
     language: creds.return_recovery_template_language ?? "es",
     tokens,
-    phoneNumberId: creds.whatsapp_phone_number_id,
+    phoneNumberId,
     apiKey: creds.kapso_api_key,
   };
 }

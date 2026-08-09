@@ -58,6 +58,24 @@ describe("buildStoreUpdate", () => {
     });
   });
 
+  it("guarda el número propio de recuperación, y deja vaciarlo (0114)", () => {
+    expect(
+      buildStoreUpdate({ return_recovery_phone_number_id: "  630  " }, KEY),
+    ).toMatchObject({ return_recovery_phone_number_id: "630" });
+
+    // Vaciar el campo tiene que VOLVER al número de la tienda. Con el trato de
+    // sus vecinos —ignorar el vacío— se podría poner un número pero nunca
+    // quitarlo, y esa es justo la marcha atrás que hay que poder dar.
+    expect(buildStoreUpdate({ return_recovery_phone_number_id: "" }, KEY)).toMatchObject({
+      return_recovery_phone_number_id: null,
+    });
+
+    // No tocarlo no lo pisa: el formulario manda muchos campos a la vez.
+    expect(
+      buildStoreUpdate({ return_recovery_template_name: "x" }, KEY),
+    ).not.toHaveProperty("return_recovery_phone_number_id");
+  });
+
   it("descarta horas y ventanas fuera de rango en vez de guardarlas", () => {
     const patch = buildStoreUpdate(
       {

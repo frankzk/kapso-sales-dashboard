@@ -105,6 +105,9 @@ export interface StoreCreds {
   return_recovery_template_name: string | null;
   return_recovery_template_language: string | null;
   return_recovery_params: string | null;
+  /** Número propio para este envío (0114). NULL ⇒ el de la tienda. Solo afecta
+   *  a la recuperación; el drip y los carritos siguen usando el de la clienta. */
+  return_recovery_phone_number_id: string | null;
   return_recovery_hour_start: number;
   return_recovery_hour_end: number;
   return_recovery_max_days: number;
@@ -176,6 +179,8 @@ export async function getStoreCreds(
     return_recovery_template_name: data.return_recovery_template_name ?? null,
     return_recovery_template_language: data.return_recovery_template_language ?? null,
     return_recovery_params: data.return_recovery_params ?? null,
+    // Pre-0114 la columna no existe ⇒ null ⇒ sale del número de la tienda.
+    return_recovery_phone_number_id: data.return_recovery_phone_number_id ?? null,
     return_recovery_hour_start: data.return_recovery_hour_start ?? 8,
     return_recovery_hour_end: data.return_recovery_hour_end ?? 21,
     return_recovery_max_days: data.return_recovery_max_days ?? 30,

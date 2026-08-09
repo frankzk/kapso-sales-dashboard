@@ -115,6 +115,14 @@ export function ReturnRecoveryQueue({
           <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
             Plantilla: <code className="font-mono">{view.templateName}</code>
             {view.auto ? " · envío automático encendido" : " · envío a mano"}
+            {/* Solo cuando sale de una línea aparte. Si es la de la tienda no se
+                dice nada: repetir lo de siempre en cada pantalla es ruido. */}
+            {view.fromPhoneNumberId && (
+              <>
+                {" · desde "}
+                <code className="font-mono">{view.fromPhoneNumberId}</code>
+              </>
+            )}
           </span>
         )}
       </div>
