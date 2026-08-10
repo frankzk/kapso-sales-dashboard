@@ -55,7 +55,40 @@ export interface FollowUpCandidate {
   delivery_status: string;
   last_report_at: string | null;
   created_at: string | null;
+  /** Último estado que reportó Aliclik, tal cual. Solo se usa para detectar la
+   *  guía que va camino de vuelta; puede venir vacío en las nacidas del Excel. */
+  reported_status?: string | null;
 }
+
+/**
+ * La guía que está a un paso de la devolución.
+ *
+ * Dos casos: la que Aliclik dice explícitamente que vuelve (`TO_RETURN` / `POR
+ * DEVOLVER`), y la anulada —cuyo desenlace pendiente es, justamente, si el
+ * paquete regresa—.
+ *
+ * Importan más que las demás porque el estado que les falta es el ÚNICO que
+ * abre la recuperación (MOM §11.1). Una guía viva que se relee tarde solo se ve
+ * desactualizada; una devolución que se lee tarde puede quedar fuera de la
+ * ventana de frescura y perder la venta entera.
+ */
+function esperaDevolucion(c: FollowUpCandidate): boolean {
+  if (c.delivery_status === "anulado") return true;
+  const reported = String(c.reported_status ?? "").toUpperCase();
+  return reported.includes("TO_RETURN") || reported.includes("POR DEVOLVER");
+}
+
+/**
+ * Qué parte de cada pasada se le reserva a esas guías.
+ *
+ * Es una RESERVA, no una precedencia absoluta, y la diferencia importa. Con
+ * orden estricto, las ~850 anuladas se comerían todas las pasadas y las guías
+ * vivas —las entregas en curso, que la operación mira a diario— dejarían de
+ * releerse durante horas. Con la mitad reservada, ninguna de las dos familias
+ * puede matar de hambre a la otra, y la mitad que sobra si un grupo va corto se
+ * la queda el otro.
+ */
+const PRIORITY_SHARE = 0.5;
 
 /**
  * Con qué identificador se le pregunta a Aliclik por esta guía.
@@ -140,19 +173,35 @@ export function selectFollowUpGuides(
     return true;
   });
 
-  live.sort((a, b) => {
+  // Dentro de cada familia manda el mismo criterio de siempre: la más callada
+  // primero. Lo que cambia es que ahora hay dos colas y no una.
+  const porSilencio = (a: FollowUpCandidate, b: FollowUpCandidate) => {
     const sa = lastSignalAt(a);
     const sb = lastSignalAt(b);
     if (sa === sb) return a.id.localeCompare(b.id);
     if (!sa) return -1;
     if (!sb) return 1;
     return sa < sb ? -1 : 1;
-  });
+  };
 
   const limit = Math.max(0, opts.limit);
+  const enDevolucion = live.filter(esperaDevolucion).sort(porSilencio);
+  const resto = live.filter((c) => !esperaDevolucion(c)).sort(porSilencio);
+
+  // La reserva se reparte primero, y lo que un grupo no use lo aprovecha el
+  // otro: si hoy no hay ninguna guía volviendo, la pasada entera es para las
+  // vivas, exactamente como antes de este cambio.
+  const reservado = Math.min(enDevolucion.length, Math.ceil(limit * PRIORITY_SHARE));
+  const due = [
+    ...enDevolucion.slice(0, reservado),
+    ...resto.slice(0, limit - reservado),
+  ];
+  // Si el resto no llenó su parte, se completa con más guías en devolución.
+  if (due.length < limit) due.push(...enDevolucion.slice(reservado, reservado + (limit - due.length)));
+
   return {
-    due: live.slice(0, limit),
-    deferred: Math.max(0, live.length - limit),
+    due,
+    deferred: Math.max(0, live.length - due.length),
     abandoned,
   };
 }

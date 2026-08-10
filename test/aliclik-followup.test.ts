@@ -210,3 +210,74 @@ describe("selectFollowUpGuides — orden de la cola", () => {
     expect(selectFollowUpGuides([a, b], opts()).due.map((g) => g.id)).toEqual(["a", "b"]);
   });
 });
+
+describe("selectFollowUpGuides — prioridad de las que esperan devolución", () => {
+  // El estado que le falta a estas guías es el ÚNICO que abre la recuperación
+  // (MOM §11.1). Una viva releída tarde solo se ve desactualizada; una
+  // devolución leída tarde puede caerse de la ventana de frescura y perder la
+  // venta. Antes competían en igualdad y perdían: al cambiar de estado quedan
+  // entre las MENOS calladas, o sea al final de una cola ordenada por silencio.
+
+  const viva = (id: string, dias: number) =>
+    guide({ id, delivery_status: "en_ruta", last_report_at: daysAgo(dias) });
+  const anulada = (id: string, dias: number) =>
+    guide({ id, delivery_status: "anulado", last_report_at: daysAgo(dias) });
+
+  it("una anulada reciente entra aunque haya vivas mucho más calladas", () => {
+    // Sin reserva, las 10 vivas de 30 días copaban la pasada y la anulada de
+    // ayer —la que puede haber vuelto— se quedaba fuera.
+    const vivas = Array.from({ length: 10 }, (_, i) => viva(`viva${i}`, 30));
+    const res = selectFollowUpGuides([...vivas, anulada("recien", 1)], opts({ limit: 4 }));
+    expect(res.due.map((g) => g.id)).toContain("recien");
+  });
+
+  it("TO_RETURN cuenta como que espera devolución, aunque siga en ruta", () => {
+    const enRetorno = guide({
+      id: "volviendo",
+      delivery_status: "en_ruta",
+      last_report_at: daysAgo(1),
+      reported_status: "CANCEL · TO_RETURN · CONFIRMED",
+    });
+    const vivas = Array.from({ length: 10 }, (_, i) => viva(`v${i}`, 30));
+    const res = selectFollowUpGuides([...vivas, enRetorno], opts({ limit: 4 }));
+    expect(res.due.map((g) => g.id)).toContain("volviendo");
+  });
+
+  it("es una RESERVA, no una precedencia: las vivas nunca se quedan sin turno", () => {
+    // Con orden estricto, 100 anuladas dejarían a las vivas sin releerse
+    // durante horas. La mitad de cada pasada sigue siendo suya.
+    const anuladas = Array.from({ length: 100 }, (_, i) => anulada(`a${i}`, 2));
+    const vivas = Array.from({ length: 100 }, (_, i) => viva(`v${i}`, 40));
+    const res = selectFollowUpGuides([...anuladas, ...vivas], opts({ limit: 10 }));
+    expect(res.due.filter((g) => g.id.startsWith("v"))).toHaveLength(5);
+    expect(res.due.filter((g) => g.id.startsWith("a"))).toHaveLength(5);
+  });
+
+  it("sin guías en devolución la pasada entera es para las vivas", () => {
+    // El comportamiento anterior a este cambio, intacto.
+    const vivas = Array.from({ length: 10 }, (_, i) => viva(`v${i}`, 30));
+    expect(selectFollowUpGuides(vivas, opts({ limit: 4 })).due).toHaveLength(4);
+  });
+
+  it("sin vivas, la reserva sobrante se la quedan las que esperan devolución", () => {
+    const anuladas = Array.from({ length: 10 }, (_, i) => anulada(`a${i}`, 2));
+    expect(selectFollowUpGuides(anuladas, opts({ limit: 4 })).due).toHaveLength(4);
+  });
+
+  it("dentro de cada familia sigue mandando la más callada primero", () => {
+    const res = selectFollowUpGuides(
+      [anulada("nueva", 1), anulada("vieja", 15), viva("viva", 30)],
+      opts({ limit: 2 }),
+    );
+    // La reserva es 1 (ceil(2 * 0.5)) y se la lleva la anulada más callada.
+    expect(res.due.map((g) => g.id)).toEqual(["vieja", "viva"]);
+  });
+
+  it("no se pierde ninguna: lo que no entra queda diferido", () => {
+    const anuladas = Array.from({ length: 6 }, (_, i) => anulada(`a${i}`, 2));
+    const vivas = Array.from({ length: 6 }, (_, i) => viva(`v${i}`, 30));
+    const res = selectFollowUpGuides([...anuladas, ...vivas], opts({ limit: 4 }));
+    expect(res.due).toHaveLength(4);
+    expect(res.deferred).toBe(8);
+  });
+});
