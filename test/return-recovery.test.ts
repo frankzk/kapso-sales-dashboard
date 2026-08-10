@@ -33,6 +33,7 @@ function candidate(over: Partial<RecoveryCandidate> = {}): RecoveryCandidate {
     province: "San Roman",
     reported_collect_amount: 89,
     returned_at: "2026-08-05T12:00:00Z",
+    returned_source: "aliclik_report",
     reported_status: "NO CONTESTA",
     non_delivery_reason: null,
     recovery_state: null,
@@ -74,6 +75,14 @@ describe("recoverySkipReason", () => {
 
   it("no recupera lo que nunca volvió", () => {
     expect(recoverySkipReason(candidate({ returned_at: null }), OPTS)).toBe("la guía no volvió");
+  });
+
+  it("una devolución sellada a mano SÍ entra a la cola (0116)", () => {
+    // El paquete sobre la mesa del almacén es tan real como un CSV. La
+    // procedencia no excluye: se muestra, y quien decide decide. Excluirla
+    // dejaría fuera justamente los casos que Aliclik no reporta, que son los que
+    // obligaron a sellar a mano.
+    expect(recoverySkipReason(candidate({ returned_source: "manual" }), OPTS)).toBeNull();
   });
 
   it("solo recupera contraentrega de provincia", () => {

@@ -1318,7 +1318,11 @@ export async function linkExistingAliclikGuide(
     insert.closed_at = lastReportAt;
     insert.delivered_source = "aliclik_api";
   }
-  if (mapped.returned) insert.returned_at = lastReportAt;
+  if (mapped.returned) {
+    insert.returned_at = lastReportAt;
+    // Lo dice la API de Aliclik, no la persona que pulsó «verificar» (0116).
+    insert.returned_source = "aliclik_api";
+  }
 
   // ADOPTAR ANTES DE INSERTAR. La guía puede existir YA en `shipments` sin estar
   // enganchada a ningún pedido: es el caso de las miles de guías que entraron por

@@ -122,6 +122,11 @@ export interface RecoveryCandidate {
   province: string | null;
   reported_collect_amount: number | null;
   returned_at: string | null;
+  /** Quién dio por devuelta la guía (0116). No excluye a nadie de la cola —un
+   *  paquete recibido a mano es tan real como uno reportado— pero SÍ se muestra:
+   *  quien pulsa «Enviar» le está pidiendo un adelanto a la clienta y tiene
+   *  derecho a saber si detrás hay constancia del courier. */
+  returned_source: string | null;
   reported_status: string | null;
   non_delivery_reason: string | null;
   recovery_state: string | null;
@@ -269,7 +274,7 @@ export function recoveryWithinHours(
 
 /** Columnas que la cola y el envío leen de `shipments`. */
 export const RECOVERY_COLS =
-  "id, courier, guide_code, order_name, order_id, customer_name, customer_phone, product, district, province, reported_collect_amount, returned_at, reported_status, non_delivery_reason, recovery_state, recovery_sent_at";
+  "id, courier, guide_code, order_name, order_id, customer_name, customer_phone, product, district, province, reported_collect_amount, returned_at, returned_source, reported_status, non_delivery_reason, recovery_state, recovery_sent_at";
 
 export interface RecoveryQueueRow extends RecoveryCandidate {
   /** `null` cuando es elegible; el motivo cuando no. */

@@ -272,6 +272,10 @@ export interface ShipmentRow {
   custody_transferred_at?: string | null;
   custody_transferred_by?: string | null;
   returned_at?: string | null;
+  /** Quién dio por devuelta la guía (0116): 'aliclik_api' | '<courier>_report' |
+   *  'manual'. Se sella junto a `returned_at`. */
+  returned_source?: string | null;
+  returned_by?: string | null;
   delivery_status: string; // see lib/shipments.ts
   status_category: string; // pending | in_route | delivered | closed
   order_id: string | null;

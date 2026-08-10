@@ -993,6 +993,26 @@ Mientras Aliclik no dé una vía por guía impresa, **subir el reporte es parte 
 la operación de recuperar**, no una tarea administrativa: si no se sube, la cola
 se queda vacía y parece que no hubo devoluciones.
 
+**Toda devolución se registra con su procedencia** (`returned_source`, 0116). El
+sello lo pueden poner tres manos —la API de Aliclik, su reporte en Excel, o una
+persona recibiendo el paquete en el almacén— y hasta 0116 las tres se veían
+iguales en pantalla: una guía sellada a mano figuraba como «devuelta» sin nada
+que la distinguiera de una con constancia del courier. Sobre este dato se manda
+un mensaje que **pide un adelanto**, así que la cola marca «sellada a mano»
+cuando no hay reporte detrás.
+
+Marcar **no es excluir**: una devolución sellada a mano entra a la cola como
+cualquier otra. El paquete sobre la mesa es un hecho tan real como una fila de un
+CSV, y son justamente los casos que Aliclik no reporta —los que obligan a sellar
+a mano— los que más falta hacen en esta pantalla. Lo que cambia es que quien
+decide lo ve antes de pulsar.
+
+La procedencia **se sella junto a la fecha y no se pisa**, igual que la fecha: un
+reporte posterior del courier no convierte en «reporte de Aliclik» una devolución
+que recibió una persona. Cuando el sello es manual se guarda además **quién**
+(`returned_by`), como ya se hace con el alistamiento y la transferencia de
+custodia (§8).
+
 Qué guía entra:
 
 - Devolución **consumada** (`returned_at` sellado), no `POR DEVOLVER` (§10).

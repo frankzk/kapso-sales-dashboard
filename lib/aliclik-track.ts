@@ -194,7 +194,14 @@ export async function applyAliclikSnapshot(
     ...linkPatch,
   };
   if (mapped.pickupState) patch.pickup_state = mapped.pickupState;
-  if (mapped.returned) patch.returned_at = updatedAt ?? nowIso;
+  // El sello viaja con su procedencia (0116): sobre este dato se decide pedirle
+  // un adelanto a la clienta, y no es lo mismo que lo diga Aliclik a que lo haya
+  // escrito alguien. Acá la constancia es de la API, la más firme de las tres.
+  if (mapped.returned) {
+    patch.returned_at = updatedAt ?? nowIso;
+    patch.returned_source = "aliclik_api";
+    patch.returned_by = null;
+  }
   if (next === "entregado") {
     patch.closed_at = updatedAt ?? nowIso;
     patch.delivered_source = "aliclik_api";

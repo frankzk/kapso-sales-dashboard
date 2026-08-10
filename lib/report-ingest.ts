@@ -67,10 +67,12 @@ interface ExistingGuide {
   api_report_at: string | null;
   pickup_state: string | null;
   returned_at: string | null;
+  /** Procedencia del sello (0116). Acompaña a `returned_at` y no se pisa. */
+  returned_source: string | null;
 }
 
 const EXISTING_COLUMNS =
-  "id,guide_code,store_id,delivery_status,matched,match_method,order_id,last_report_at,api_report_at,pickup_state,returned_at";
+  "id,guide_code,store_id,delivery_status,matched,match_method,order_id,last_report_at,api_report_at,pickup_state,returned_at,returned_source";
 
 async function fetchExisting(
   admin: SupabaseClient,
@@ -279,6 +281,11 @@ export async function ingestCourierReport(
       // Una devolución ya registrada no se borra porque un reporte posterior
       // omita la fecha: la devolución es un hecho físico, no un estado volátil.
       returned_at: inc.row.returned_at ?? existing?.returned_at ?? null,
+      // La procedencia viaja con la fecha (0116) y corre su misma suerte: si se
+      // conserva el sello de antes, se conserva de quién venía.
+      returned_source: inc.row.returned_at
+        ? `${courier}_report`
+        : (existing?.returned_at ? existing.returned_source : null),
       pickup_state: inc.row.pickup_state ?? existing?.pickup_state ?? null,
       agency_branch: inc.row.agency_branch,
       agency_arrived_at: inc.row.agency_arrived_at,

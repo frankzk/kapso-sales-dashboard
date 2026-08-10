@@ -23,6 +23,7 @@ import {
   type ApiCreatedGuide,
   type IncomingReportRow,
 } from "./aliclik-reconcile";
+import { sealReturn } from "./returned-source";
 
 // Existing shipment fields we need to reconcile a re-import against (so we don't
 // reset progress the team already made). See reconcileDeliveryStatus + the
@@ -38,6 +39,8 @@ interface ExistingShipment {
   /** Solo la escribe la vía API; decide si este reporte puede tocar el estado. */
   api_report_at: string | null;
   returned_at: string | null;
+  /** Procedencia del sello (0116). Acompaña a `returned_at` y no se pisa. */
+  returned_source: string | null;
   dispatched_at: string | null;
   delivered_source: string | null;
   aliclik_attempts: number | null;
@@ -235,10 +238,15 @@ export async function ingestAliclikReport(
         ? existing.last_report_at
         : meta.reportAt;
 
-    // La devolución se sella una sola vez y no se borra: un reporte posterior
-    // que ya no mencione el retorno no puede deshacerlo, igual que `entregado`
-    // no se reabre. Sin fecha propia en el reporte, vale la del propio reporte.
-    const returned_at = existing?.returned_at ?? (inc.row.returned ? meta.reportAt : null);
+    // La devolución se sella una sola vez, con su procedencia (0116), y no se
+    // borra: un reporte posterior que ya no mencione el retorno no puede
+    // deshacerlo, igual que `entregado` no se reabre. Sin fecha propia en el
+    // reporte, vale la del propio reporte.
+    const { returned_at, returned_source } = sealReturn(existing, {
+      returned: inc.row.returned,
+      at: meta.reportAt,
+      source: "aliclik_report",
+    });
 
     // Un paquete devuelto SALIÓ: no puede volver si nunca se despachó. Esa
     // evidencia hay que dejarla escrita porque `resolveOrderState` exige
@@ -275,6 +283,7 @@ export async function ingestAliclikReport(
       delivery_status: mergedStatus,
       status_category: categoryOf(mergedStatus),
       returned_at,
+      returned_source,
       dispatched_at,
       delivered_source,
       fenix_eligible: fenix,
@@ -486,14 +495,14 @@ async function fetchExistingShipments(
   for (const chunk of chunked(guideCodes, 200)) {
     const currentResult = await admin
       .from("shipments")
-      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,returned_at,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,returned_at,returned_source,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
       .eq("courier", "aliclik")
       .in("guide_code", chunk);
     let data: unknown = currentResult.data;
     if (isMissingProvinceColumn(currentResult.error)) {
       const legacyResult = await admin
         .from("shipments")
-        .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,returned_at,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+        .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,returned_at,returned_source,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
         .eq("courier", "aliclik")
         .in("guide_code", chunk);
       data = legacyResult.data;

@@ -21,6 +21,7 @@ import {
   type RecoveryView,
 } from "@/app/dashboard/envios/recuperacion/actions";
 import { RECOVERY_SKIP_NO_ORDER, type RecoveryQueueRow } from "@/lib/return-recovery";
+import { isManualReturn } from "@/lib/returned-source";
 
 type Tab = "pendientes" | "enviadas" | "descartadas";
 
@@ -229,7 +230,16 @@ export function ReturnRecoveryQueue({
                     <td className="px-3 py-2 tabular-nums text-slate-700">
                       {money(r.reported_collect_amount)}
                     </td>
-                    <td className="px-3 py-2 text-slate-600">{daysAgo(r.returned_at)}</td>
+                    <td className="px-3 py-2 text-slate-600">
+                      {daysAgo(r.returned_at)}
+                      {/* Sin constancia del courier detrás, el aviso (0116). No
+                          la saca de la cola —el paquete estaba en el almacén,
+                          eso también es un hecho— pero quien va a pedirle un
+                          adelanto a la clienta merece verlo antes de pulsar. */}
+                      {isManualReturn(r.returned_source) && (
+                        <div className="text-xs text-amber-700">sellada a mano</div>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-xs text-slate-500">
                       {r.reported_status || r.non_delivery_reason || "—"}
                     </td>

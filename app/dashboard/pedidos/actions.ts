@@ -1211,7 +1211,16 @@ export async function registerClosureAction(
   if (action === "return_receive" && selectedShipment) {
     const { error } = await admin
       .from("shipments")
-      .update({ custody_state: "devuelto", returned_at: occurredAt, pickup_state: "devuelto" })
+      // Sello de persona, con nombre (0116). Es el único de los tres que no
+      // tiene constancia del courier detrás, y la cola de recuperación lo
+      // muestra distinto por eso: de acá sale un mensaje pidiendo un adelanto.
+      .update({
+        custody_state: "devuelto",
+        returned_at: occurredAt,
+        pickup_state: "devuelto",
+        returned_source: "manual",
+        returned_by: ctx.userId,
+      })
       .eq("id", selectedShipment.id)
       .eq("order_id", orderId);
     if (error) return { error: `La recepción quedó auditada, pero no se pudo actualizar la salida: ${error.message}` };
