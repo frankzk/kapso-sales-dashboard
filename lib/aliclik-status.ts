@@ -161,6 +161,33 @@ export function reconcileAliclikCustodyState(
 }
 
 /**
+ * `LEFT_IN_WAREHOUSE` significa DOS cosas opuestas, y solo el intento de entrega
+ * las distingue.
+ *
+ * Aliclik usa "DEJADO EN ALMACÉN" tanto para el paquete que todavía no ha salido
+ * como para el que ya volvió. Antes se leía siempre como lo primero
+ * —`nunca_salio_a_reparto`—, así que una guía despachada, intentada dos veces y
+ * devuelta al almacén se quedaba en `pendiente` y nunca sellaba `returned_at`.
+ * Ese es el hecho que abre la recuperación (MOM §11.1), así que perderlo dejaba
+ * la cola vacía mientras las cajas estaban físicamente en el almacén.
+ *
+ * Lo que desambigua es el `status`: si hay un RESULTADO de entrega —cancelada,
+ * rechazada, no contesta, reprogramada— el paquete salió y volvió. Si dice
+ * PENDING_DELIVERY, o no dice nada, nunca se movió y sigue siendo lo de antes.
+ *
+ * El lado barato del error está de este lado: con la exigencia del intento, como
+ * mucho se pierde una recuperación dudosa. Sin ella se le pediría un adelanto de
+ * S/30 a una clienta cuyo paquete jamás salió.
+ */
+function returnedFromWarehouse(status: string, dispatch: string): boolean {
+  return dispatch === "LEFT_IN_WAREHOUSE" && ATTEMPTED_DELIVERY.has(status);
+}
+
+/** `status` que acreditan que el paquete SALIÓ y el intento falló. DELIVERED no
+ *  entra: esa guía terminó bien y se resuelve antes. */
+const ATTEMPTED_DELIVERY = new Set(["CANCEL", "ANNULLED", "REFUSED", "NOT_RESPOND", "RESCHEDULED"]);
+
+/**
  * Detalle operativo dentro de "todavía por entregar", según dónde está el
  * paquete. Devuelve [deliveryStatus, operational].
  */
@@ -247,13 +274,17 @@ export function mapAliclikStatus(input: AliclikStatusInput): AliclikStatusMappin
   // 2. Devuelto: la guía se cierra, pero el PEDIDO pasa a "devuelto" — y ese
   //    matiz vive en resolveOrderState (lib/order-status.ts), no aquí, porque el
   //    vocabulario de guías no tiene un código `devuelto`.
-  if (dispatch === "RETURNED") {
+  if (dispatch === "RETURNED" || returnedFromWarehouse(status, dispatch)) {
     return {
       ...base,
       deliveryStatus: "anulado",
       operational: "devuelto_al_origen",
       returned: true,
       terminal: true,
+      // El paquete está de vuelta en el almacén: la custodia deja de ser del
+      // courier aunque la etiqueta no diga RETURNED.
+      custodyState: "devuelto",
+      preparationState: momState.preparationState ?? "listo_despacho",
     };
   }
 

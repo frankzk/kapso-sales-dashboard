@@ -296,11 +296,34 @@ const DISPATCH_DATE_KEYS = ["fecha despacho", "fecha de despacho"];
  * propósito —igual que hace el mapeo de la API (lib/aliclik-status.ts)— porque
  * mientras se mueve la guía sigue viva y el equipo la puede interceptar.
  */
-export function isReturnedDespacho(raw: string | null): boolean {
+export function isReturnedDespacho(raw: string | null, entrega?: string | null): boolean {
   if (!raw) return false;
   const value = stripAccents(raw.trim().toLowerCase());
-  return value === "returned" || value === "devuelto";
+  if (value === "returned" || value === "devuelto") return true;
+  // "DEJADO EN ALMACÉN" es la MISMA etiqueta para el paquete que aún no ha
+  // salido y para el que ya volvió. Lo que las separa es si hubo intento de
+  // entrega: con un resultado en ESTADO ENTREGA —cancelado, rechazado, no
+  // contesta, reprogramado— el paquete salió y regresó. Con POR ENTREGAR, o sin
+  // dato, nunca se movió.
+  //
+  // Sin esta lectura la devolución no se sellaba nunca para las guías cuyo
+  // desenlace Aliclik reporta así, que son muchas: la caja estaba en el almacén
+  // y la cola de recuperación seguía vacía.
+  if (value === "left_in_warehouse" || value === "dejado en almacen") {
+    return ATTEMPTED_ENTREGA.has(enumKey(entrega));
+  }
+  return false;
 }
+
+/** ESTADO ENTREGA que acredita que el paquete SALIÓ y el intento falló.
+ *  ENTREGADO queda fuera: esa guía terminó bien. */
+const ATTEMPTED_ENTREGA = new Set([
+  "CANCELADO",
+  "ANULADO",
+  "RECHAZADO",
+  "NO CONTESTA",
+  "REPROGRAMADO",
+]);
 
 // Aliclik marca con ESTADO LLAMADA = IMPORTADO los pedidos que subió a su
 // plataforma pero que TODAVÍA NO gestiona: no tienen despacho ni entrega, así
@@ -400,7 +423,8 @@ export function parseAliclikRow(
   //    PREPARAR/VALIDADO/DEJADO EN ALMACÉN o POR ENTREGAR sin despacho) queda
   //    pendiente.
   const delivered = isDeliveredEntrega(pick(map, ENTREGA_KEYS));
-  const returned = !delivered && isReturnedDespacho(pick(map, DESPACHO_RETURN_KEYS));
+  const returned =
+    !delivered && isReturnedDespacho(pick(map, DESPACHO_RETURN_KEYS), pick(map, ENTREGA_KEYS));
   const delivery_status = delivered
     ? "entregado"
     : returned
