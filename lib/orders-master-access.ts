@@ -12,7 +12,8 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
-import { resolveAliclikHealth, type AliclikHealth } from "@/lib/aliclik-health";
+import type { AliclikHealthState } from "@/lib/aliclik-health";
+import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import { codCouriersFor, isNonMetroLimaLocation } from "@/lib/order-coverage";
 import { limaTodayKey } from "@/lib/shipments";
 import type { CostTariff } from "@/lib/costs";
@@ -261,7 +262,7 @@ export interface OrderMasterDetail {
   address: ReturnType<typeof shopifyShippingAddress>;
   routePlan: OrderRoutePlan;
   /** Foco de salud de la API de Aliclik, para el panel de crear guía. */
-  aliclikHealth: AliclikHealth;
+  aliclikHealth: AliclikHealthState;
 }
 
 const GUIDE_COLUMNS =
@@ -317,33 +318,6 @@ async function swaypRouteCheck(
   };
 }
 
-/** La última sonda de salud de Aliclik para la org del pedido, resuelta a foco.
- * Gris si la org no se puede ubicar o no hay sonda fresca (de noche, sin monitoreo). */
-async function aliclikHealthFor(
-  sb: Awaited<ReturnType<typeof createServerSupabase>>,
-  row: OrderMasterRow,
-): Promise<AliclikHealth> {
-  const { data: store } = await sb
-    .from("stores")
-    .select("org_id")
-    .eq("id", row.store_id)
-    .maybeSingle();
-  const orgId = (store as { org_id?: string } | null)?.org_id;
-  if (!orgId) return "sin_monitoreo";
-
-  const { data } = await sb
-    .from("aliclik_health_checks")
-    .select("status,checked_at")
-    .eq("org_id", orgId)
-    .order("checked_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const latest = data as { status: string; checked_at: string } | null;
-  return resolveAliclikHealth(
-    latest ? { status: latest.status, checkedAt: latest.checked_at } : null,
-    Date.now(),
-  );
-}
 
 function operationOf(row: OrderMasterRow, guides: ShipmentRow[]): OperationKind {
   // Cobertura y courier son señales vivas. Ganan sobre `macro_operation`, que
@@ -466,7 +440,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
   const lineItems = orderRow?.line_items ?? [];
   const [swayp, aliclikHealth] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
-    aliclikHealthFor(sb, row),
+    loadAliclikHealthState(sb, row.store_id),
   ]);
   return {
     row,
