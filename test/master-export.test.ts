@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   MASTER_EXPORT_COLUMNS,
+  orderCode,
   ageInDays,
   exportFilename,
   toExportRow,
@@ -59,6 +60,21 @@ const cell = (r: OrderMasterRow, header: string) => {
 };
 
 describe("toExportRow — lo que ve el usuario", () => {
+  it("la PRIMERA columna es el código sin almohadilla, y «Pedido» va justo detrás", () => {
+    // El orden importa: la columna A es la que se selecciona entera y se pega en
+    // el portal del courier o en un BUSCARV. Si el código quedara al final, cada
+    // uso obligaría a moverla a mano.
+    expect(MASTER_EXPORT_COLUMNS[0]!.header).toBe("Código");
+    expect(MASTER_EXPORT_COLUMNS[1]!.header).toBe("Pedido");
+    const fila = toExportRow(row({ order_name: "#AUR175172" }), ctx);
+    expect(fila[0]).toBe("AUR175172");
+    expect(fila[1]).toBe("#AUR175172");
+  });
+
+  it("el código sale como texto: un BUSCARV se rompe si Excel se come un cero", () => {
+    expect(MASTER_EXPORT_COLUMNS[0]!.kind).toBe("text");
+  });
+
   it("traduce la tienda a su nombre, no el UUID", () => {
     expect(cell(row(), "Tienda")).toBe("Kenku Peru");
     expect(cell(row({ store_id: "store-2" }), "Tienda")).toBe("Aurela");
@@ -153,5 +169,30 @@ describe("exportFilename", () => {
     expect(exportFilename("por_confirmar", NOW, false)).toBe(
       "pedidos_por_confirmar_2026-08-07.xlsx",
     );
+  });
+});
+
+describe("orderCode", () => {
+  it("quita la almohadilla de delante", () => {
+    expect(orderCode("#KP127298")).toBe("KP127298");
+  });
+
+  it("un nombre que ya viene sin almohadilla no se toca", () => {
+    expect(orderCode("KP127298")).toBe("KP127298");
+  });
+
+  it("solo la de DELANTE: una en medio es parte del código", () => {
+    expect(orderCode("#AUR#175172")).toBe("AUR#175172");
+  });
+
+  it("recorta los espacios antes de decidir", () => {
+    // Un espacio delante dejaría la almohadilla intacta y el pegado fallaría sin
+    // que se vea por qué: en pantalla "#KP1" y " #KP1" son casi idénticos.
+    expect(orderCode("  #KP127298  ")).toBe("KP127298");
+  });
+
+  it("sin nombre devuelve celda vacía, nunca 'null'", () => {
+    expect(orderCode(null)).toBe("");
+    expect(orderCode(undefined)).toBe("");
   });
 });

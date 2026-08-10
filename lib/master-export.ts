@@ -52,7 +52,25 @@ export function ageInDays(row: OrderMasterRow, now: Date): number | null {
 }
 
 /**
+ * El nombre del pedido sin la almohadilla: `#AUR175172` → `AUR175172`.
+ *
+ * Shopify enseña el pedido con `#` y así se guarda, pero casi ningún sistema de
+ * fuera lo acepta con él — los portales de courier, los BUSCARV contra otra hoja
+ * y los pegados en Aliclik esperan el código pelado. Escribirlo a mano fila a
+ * fila es justo el trabajo que un export tiene que ahorrar.
+ *
+ * Solo se quita la de delante: una almohadilla en medio sería parte del código.
+ */
+export function orderCode(orderName: string | null | undefined): string {
+  return (orderName ?? "").trim().replace(/^#/, "");
+}
+
+/**
  * Las columnas, en el orden en que se leen en pantalla de izquierda a derecha.
+ *
+ * Delante va el código sin `#` — la primera columna es la que se selecciona y se
+ * pega en otro sitio, y «Pedido» se conserva justo detrás porque es lo que
+ * aparece en Shopify y en la propia tabla.
  *
  * Al final van cuatro que la tabla NO enseña —guía, despacho, entrega y
  * devolución— porque son justo lo que se busca al bajar el listado a una hoja:
@@ -60,6 +78,9 @@ export function ageInDays(row: OrderMasterRow, now: Date): number | null {
  * evitan tener que pedir otro export distinto.
  */
 export const MASTER_EXPORT_COLUMNS: MasterExportColumn[] = [
+  // Texto, no número: hay códigos que son solo dígitos y Excel les comería el
+  // cero de delante, que es exactamente el fallo que rompe un BUSCARV.
+  { header: "Código", width: 16, kind: "text", value: (r) => orderCode(r.order_name) },
   { header: "Pedido", width: 16, kind: "text", value: (r) => r.order_name ?? "" },
   {
     header: "Tienda",
