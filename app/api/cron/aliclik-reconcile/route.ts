@@ -525,7 +525,9 @@ async function followUpLiveGuides(
   // hoy las vivas rondan las 250, muy por debajo del tope.
   const { data, error } = await admin
     .from("shipments")
-    .select("id,external_order_number,guide_code,delivery_status,last_report_at,created_at")
+    // `reported_status` entra para poder distinguir la guía que ya va camino de
+    // vuelta (TO_RETURN): tiene reserva propia en cada pasada.
+    .select("id,external_order_number,guide_code,delivery_status,last_report_at,created_at,reported_status")
     .eq("store_id", storeId)
     .eq("courier", "aliclik")
     // `anulado` entra junto a las vivas: el paquete vuelve DESPUÉS de anularse,
