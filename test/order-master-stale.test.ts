@@ -3,23 +3,25 @@ import { recomputeInBatches, staleByShipment } from "@/lib/order-master";
 
 // LA CUARTA PUERTA DEL BARRIDO.
 //
-// `order_master` es una foto derivada: si una ruta escribe en `shipments` y no
-// recalcula, el pedido se queda mostrando la etapa anterior para siempre. Pasó
-// el 09-08 — un import movió 1.126 guías, el recálculo posterior falló entero y
-// se lo tragó el `catch`— y no lo arregló nadie porque el barrido solo miraba
-// filas ausentes, `staleBefore` y versiones viejas del MOM. Un pedido con su
-// fila, la versión vigente y una guía recién escrita era invisible por las tres.
+// `order_master` es una foto derivada: si algo escribe en `shipments` y no
+// recalcula, el pedido se queda mostrando la etapa anterior para siempre. El
+// 09-08 se enlazaron 71 guías huérfanas a sus pedidos con SQL a mano contra la
+// base — ninguna ruta de la aplicación intervino, así que no hubo recálculo que
+// pudiera fallar. Pedidos que recibían su PRIMERA guía, algunos ya ENTREGADA,
+// siguieron en «Por confirmar · Sin llamar» durante días.
 //
-// Esta función es la señal que faltaba: guía escrita después del último
-// recálculo. No necesita saber quién escribió, porque todas las rutas que se
-// olvidan de recalcular dejan la misma huella.
+// El barrido no los veía: tenían fila, tenían la versión vigente del MOM, y por
+// antigüedad quedaban fuera de la lista de candidatos. Esta función es la señal
+// que faltaba —guía escrita después del último recálculo— y funciona sin saber
+// quién escribió, que es justo lo que hace falta cuando la escritura vino de
+// fuera de la aplicación.
 
 const master = (order_id: string, recomputed_at: string | null) => ({ order_id, recomputed_at });
 const write = (order_id: string | null, updated_at: string | null) => ({ order_id, updated_at });
 
 describe("staleByShipment — pedidos con la etapa vieja", () => {
   it("señala el pedido cuya guía se escribió después del recálculo", () => {
-    // El caso real: guía tocada por el import del 09-08, Master del 07-08.
+    // El caso real: #AUR173240, enlazada a su pedido el 09-08, Master del 07-08.
     expect(
       staleByShipment(
         [write("AUR173240", "2026-08-09T19:24:01Z")],
@@ -99,9 +101,9 @@ describe("staleByShipment — pedidos con la etapa vieja", () => {
 
 // ── Que un pedido envenenado no congele a los demás ─────────────────────────
 //
-// El otro lado del 09-08: el recálculo se llamó con los 1.126 pedidos de una
-// vez y `Safe` se tragó el fallo entero. La cuenta final fue 1 recalculado y
-// 1.125 congelados, sin rastro en ninguna parte.
+// Endurecimiento, no la causa del 09-08 —aquello fue SQL a mano, que no pasa por
+// aquí—: el import de Aliclik llega a llamar al recálculo con más de mil pedidos
+// de golpe, y un solo pedido que reviente los congelaba a todos sin dejar rastro.
 
 describe("recomputeInBatches — un fallo cuesta un trozo, no la lista", () => {
   it("recalcula todo cuando nada falla", async () => {

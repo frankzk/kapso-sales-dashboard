@@ -81,9 +81,9 @@ const ID_BATCH = 200;
 const VERSION_RECONCILE_PAGE = 250;
 /**
  * Guías tocadas que se miran por pasada para detectar pedidos con la etapa
- * vieja. Cubre de sobra un import grande —el del 09-08 fueron 1.126 guías— sin
- * arrastrar el histórico: las que ya se recalcularon dejan de aparecer, así que
- * un atraso se drena en pasadas sucesivas en vez de repetirse.
+ * vieja. Cubre de sobra una escritura masiva —el backfill del 09-08 tocó 502
+ * guías en una sentencia— sin arrastrar el histórico: las que ya se recalcularon
+ * dejan de aparecer, así que un atraso se drena en pasadas sucesivas.
  */
 const SHIPMENT_STALE_PAGE = 2000;
 
@@ -1091,19 +1091,18 @@ export async function recomputeOrderMasterForShipments(
  * efecto secundario y no debe tumbar la operación principal (una gestión
  * registrada no se pierde porque el Master no se haya podido refrescar).
  *
- * VA POR TANDAS, y no es una optimización: es lo que impide que un pedido
- * envenenado congele a todos los demás. El 09-08 un import de Aliclik llamó
- * aquí con 1.126 pedidos de una vez, algo falló dentro, el `catch` se lo tragó
- * entero y se recalculó UNO. Los otros 1.125 se quedaron con la etapa que
- * tenían: guías entregadas cuyo pedido seguía en «Por confirmar» semanas
- * después. Con tandas, un fallo cuesta `SAFE_BATCH` pedidos; y al reintentar la
- * tanda rota en trozos pequeños, normalmente cuesta `SAFE_RETRY_BATCH`.
+ * VA POR TANDAS. Llamar con mil pedidos de una vez hace que un solo pedido que
+ * reviente cueste los mil: todos se quedan con la etapa que tuvieran, y como el
+ * `catch` no dejaba rastro, nadie se enteraba. Con tandas un fallo cuesta
+ * `SAFE_BATCH`, y al reintentar la tanda rota en trozos pequeños,
+ * `SAFE_RETRY_BATCH`. No es la causa del incidente del 09-08 —aquello fue SQL a
+ * mano, que nunca pasa por aquí— sino el mismo riesgo por otra puerta: el
+ * import de Aliclik llega a llamar con más de mil pedidos de golpe.
  *
- * Y DEVUELVE LA CUENTA. Seguir sin lanzar es correcto —el import ya está
- * ingestado y no se deshace porque el Master falle—, pero tragarse el error
- * SIN DEJAR RASTRO no lo es: nadie podía enterarse de que 1.125 pedidos se
- * habían quedado congelados. Quien llama decide qué hacer con `failed`; el
- * barrido de `reconcileOrderMaster` los recoge igual.
+ * Y DEVUELVE LA CUENTA. Seguir sin lanzar es correcto —lo ya ingestado no se
+ * deshace porque el Master falle—, pero tragarse el error SIN DEJAR RASTRO no lo
+ * es. Quien llama decide qué hacer con `failed`; el barrido de
+ * `reconcileOrderMaster` los recoge igual.
  */
 export interface SafeRecomputeReport {
   requested: number;
@@ -1178,20 +1177,27 @@ export async function recomputeOrderMasterForShipmentsSafe(
  * Es la red de seguridad frente a cualquier ruta que escriba en `shipments` sin
  * recalcular. Se ejecuta desde el cron de sincronización.
  *
- * QUÉ CUENTA COMO «VIEJA». Hasta 0118 eran tres cosas —fila ausente,
- * `recomputed_at` anterior a un `staleBefore` que pasara quien llama, y versión
- * del MOM anticuada—, y ninguna miraba las guías. Un pedido con su fila puesta,
- * la versión vigente y una guía escrita DESPUÉS del último recálculo era
- * invisible por las tres puertas a la vez. Como la lista de candidatos salía
- * además de los pedidos más recientes de la tienda, un pedido viejo que se
- * moviera no tenía ninguna forma de volver a entrar.
+ * QUÉ CUENTA COMO «VIEJA». Eran tres cosas —fila ausente, `recomputed_at`
+ * anterior a un `staleBefore` que pasara quien llama, y versión del MOM
+ * anticuada—, y ninguna miraba las guías. Un pedido con su fila puesta, la
+ * versión vigente y una guía escrita DESPUÉS del último recálculo era invisible
+ * por las tres a la vez. Como la lista de candidatos salía además de los pedidos
+ * más recientes de la tienda, un pedido viejo que se moviera no tenía forma de
+ * volver a entrar.
  *
- * Así se quedaron 69 pedidos con la guía entregada o devuelta mostrando «Por
- * confirmar», 66 de ellos fuera del alcance del barrido por antigüedad, algunos
- * con 48 días en una macroetapa que nunca se recalculó. La cuarta puerta —guía
- * escrita después del último recálculo— es la que los ve, y es la única que
- * ataca la causa: da igual QUÉ ruta escribió sin recalcular, porque el ancla es
- * la escritura, no quién la hizo.
+ * LO QUE LO DESTAPÓ, Y POR QUÉ ESTA PUERTA ES LA QUE IMPORTA. El 09-08 se
+ * enlazaron 71 guías huérfanas a sus pedidos con SQL a mano contra la base (53 a
+ * las 19:24 y 18 a las 21:25, verificado en `pg_stat_statements`). Ninguna ruta
+ * de la aplicación intervino, así que no hubo recálculo que pudiera fallar: esos
+ * pedidos recibieron su PRIMERA guía y su Master siguió respondiendo lo que
+ * habían calculado cuando no tenían ninguna — «Por confirmar · Sin llamar»—,
+ * incluyendo pedidos con la guía ya ENTREGADA.
+ *
+ * Ahí está la lección: no basta con que cada ruta se acuerde de recalcular,
+ * porque la escritura puede venir de fuera de la aplicación. El read-model tiene
+ * que reconciliarse contra los DATOS. Por eso el ancla es el `updated_at` de la
+ * guía y no una llamada: funciona igual si quien escribió fue un import, una
+ * acción manual, un cron o una consola de SQL.
  */
 export async function reconcileOrderMaster(
   admin: SupabaseClient,
