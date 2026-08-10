@@ -388,7 +388,11 @@ describe("recomputeOrderMaster — robustez", () => {
     expect(row.general_status).toBe("pendiente");
   });
 
-  it("recomputeOrderMasterSafe no propaga errores", async () => {
+  it("recomputeOrderMasterSafe no propaga errores, pero los CUENTA", async () => {
+    // Seguir sin lanzar es lo correcto —el import ya está ingestado y no se
+    // deshace porque el Master falle—, pero durante un tiempo eso significó que
+    // nadie se enteraba: el 09-08 se congelaron 1.125 pedidos y el import salió
+    // «procesado». El fallo ya no desaparece: vuelve en `failed` (0118).
     const explodingAdmin = {
       from() {
         return {
@@ -401,6 +405,10 @@ describe("recomputeOrderMaster — robustez", () => {
         };
       },
     } as any;
-    await expect(recomputeOrderMasterSafe(explodingAdmin, ["order-1"])).resolves.toBeUndefined();
+    await expect(recomputeOrderMasterSafe(explodingAdmin, ["order-1"])).resolves.toEqual({
+      requested: 1,
+      written: 0,
+      failed: 1,
+    });
   });
 });

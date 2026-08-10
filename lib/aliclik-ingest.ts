@@ -66,6 +66,9 @@ export interface IngestResult {
    *  las gestiona). Se informan para que el operador sepa que el archivo traía
    *  más filas de las que se importaron, y no parezca que se perdieron. */
   skippedImportadoCount: number;
+  /** Pedidos cuya guía se movió pero cuyo Master no se pudo recalcular. Si no es
+   *  cero, hay pedidos mostrando una etapa que ya no es la suya. */
+  masterStaleCount: number;
 }
 
 const CHUNK = 500;
@@ -363,7 +366,7 @@ export async function ingestAliclikReport(
   // El reporte acaba de mover el estado logístico de estos pedidos: refresca el
   // Master para que la consolidación no espere al barrido del cron. Best-effort
   // — el reporte ya quedó ingestado pase lo que pase con el recálculo.
-  await recomputeOrderMasterSafe(
+  const masterReport = await recomputeOrderMasterSafe(
     admin,
     [
       ...new Set(
@@ -381,6 +384,10 @@ export async function ingestAliclikReport(
     unmatchedCount,
     errorCount,
     skippedImportadoCount,
+    // Pedidos que se quedaron con la etapa vieja pese a haberles movido la guía.
+    // El 09-08 fueron 1.125 de 1.126 y no lo dijo nadie: el import salió
+    // «procesado» mientras el Master se congelaba (0118).
+    masterStaleCount: masterReport.failed,
   };
 }
 

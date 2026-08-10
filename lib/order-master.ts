@@ -79,6 +79,13 @@ const PAGE = 1000;
 const ID_BATCH = 200;
 /** Límite del backfill de versión por tienda y cron para no competir con la operación. */
 const VERSION_RECONCILE_PAGE = 250;
+/**
+ * Guías tocadas que se miran por pasada para detectar pedidos con la etapa
+ * vieja. Cubre de sobra un import grande —el del 09-08 fueron 1.126 guías— sin
+ * arrastrar el histórico: las que ya se recalcularon dejan de aparecer, así que
+ * un atraso se drena en pasadas sucesivas en vez de repetirse.
+ */
+const SHIPMENT_STALE_PAGE = 2000;
 
 interface OrderRecord {
   id: string;
@@ -629,9 +636,52 @@ async function fetchGeoOverrides(
   return out;
 }
 
+/**
+ * Pedidos cuya guía se escribió después del último recálculo de su Master. Pura.
+ *
+ * Es la señal que faltaba, y funciona sin saber QUIÉN escribió: una ruta que
+ * toca `shipments` y no recalcula deja siempre la misma huella —guía nueva,
+ * Master viejo—, así que basta con leerla. Un Master ausente también entra: hay
+ * guía y no hay fila que la refleje.
+ *
+ * La comparación es de cadenas ISO a propósito: vienen de Postgres en UTC con el
+ * mismo formato, y `Date.parse` solo añadiría una forma de equivocarse con las
+ * fechas raras. El empate NO cuenta como viejo — el recálculo que corre justo
+ * después de escribir la guía comparte instante y ya está al día.
+ */
+export function staleByShipment(
+  writes: readonly { order_id: string | null; updated_at: string | null }[],
+  masters: readonly { order_id: string; recomputed_at: string | null }[],
+): string[] {
+  const lastWrite = new Map<string, string>();
+  for (const w of writes) {
+    if (!w.order_id || !w.updated_at) continue;
+    const prev = lastWrite.get(w.order_id);
+    if (!prev || w.updated_at > prev) lastWrite.set(w.order_id, w.updated_at);
+  }
+
+  const recomputed = new Map<string, string | null>();
+  for (const m of masters) recomputed.set(m.order_id, m.recomputed_at);
+
+  const out: string[] = [];
+  for (const [orderId, wroteAt] of lastWrite) {
+    if (!recomputed.has(orderId)) {
+      out.push(orderId);
+      continue;
+    }
+    const at = recomputed.get(orderId);
+    if (!at || wroteAt > at) out.push(orderId);
+  }
+  return out;
+}
+
 export interface RecomputeResult {
   requested: number;
   written: number;
+  /** Pedidos que no se pudieron recalcular. Solo lo llena el barrido, que va por
+   *  tandas y sigue adelante en vez de abortar; si no es cero, quedan etapas
+   *  viejas en pantalla y hay que mirar por qué. */
+  failed?: number;
 }
 
 /**
@@ -1039,18 +1089,77 @@ export async function recomputeOrderMasterForShipments(
 /**
  * Recálculo best-effort: nunca lanza. Para los puntos donde el recálculo es un
  * efecto secundario y no debe tumbar la operación principal (una gestión
- * registrada no se pierde porque el Master no se haya podido refrescar; el
- * barrido del cron lo arreglará).
+ * registrada no se pierde porque el Master no se haya podido refrescar).
+ *
+ * VA POR TANDAS, y no es una optimización: es lo que impide que un pedido
+ * envenenado congele a todos los demás. El 09-08 un import de Aliclik llamó
+ * aquí con 1.126 pedidos de una vez, algo falló dentro, el `catch` se lo tragó
+ * entero y se recalculó UNO. Los otros 1.125 se quedaron con la etapa que
+ * tenían: guías entregadas cuyo pedido seguía en «Por confirmar» semanas
+ * después. Con tandas, un fallo cuesta `SAFE_BATCH` pedidos; y al reintentar la
+ * tanda rota en trozos pequeños, normalmente cuesta `SAFE_RETRY_BATCH`.
+ *
+ * Y DEVUELVE LA CUENTA. Seguir sin lanzar es correcto —el import ya está
+ * ingestado y no se deshace porque el Master falle—, pero tragarse el error
+ * SIN DEJAR RASTRO no lo es: nadie podía enterarse de que 1.125 pedidos se
+ * habían quedado congelados. Quien llama decide qué hacer con `failed`; el
+ * barrido de `reconcileOrderMaster` los recoge igual.
  */
+export interface SafeRecomputeReport {
+  requested: number;
+  written: number;
+  /** Pedidos que se quedaron sin recalcular. Si no es cero, hay etapas viejas. */
+  failed: number;
+}
+
+/** Tamaño de tanda del recálculo best-effort. */
+const SAFE_BATCH = 100;
+/** Trozo del reintento cuando una tanda falla entera. */
+const SAFE_RETRY_BATCH = 10;
+
+/**
+ * Recorre los ids por tandas y aísla los fallos. Separada de su único uso para
+ * poder probarla: lo que hay que demostrar es que un id que revienta cuesta un
+ * trozo y no la lista entera, y eso no se ve pasando por Supabase.
+ */
+export async function recomputeInBatches(
+  ids: readonly string[],
+  run: (batch: string[]) => Promise<number>,
+  opts: { batch?: number; retry?: number } = {},
+): Promise<SafeRecomputeReport> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  const size = opts.batch ?? SAFE_BATCH;
+  const retrySize = opts.retry ?? SAFE_RETRY_BATCH;
+  const report: SafeRecomputeReport = { requested: unique.length, written: 0, failed: 0 };
+
+  for (const batch of chunk(unique, size)) {
+    try {
+      report.written += await run(batch);
+      continue;
+    } catch {
+      // Cae al reintento en trozos: un solo pedido que reviente no debería
+      // llevarse por delante a los otros de su tanda.
+    }
+    for (const small of chunk(batch, retrySize)) {
+      try {
+        report.written += await run(small);
+      } catch {
+        report.failed += small.length;
+      }
+    }
+  }
+
+  return report;
+}
+
 export async function recomputeOrderMasterSafe(
   admin: SupabaseClient,
   orderIds: readonly string[],
-): Promise<void> {
-  try {
-    await recomputeOrderMaster(admin, orderIds);
-  } catch {
-    // silencioso a propósito — ver el docblock
-  }
+): Promise<SafeRecomputeReport> {
+  return recomputeInBatches(
+    orderIds,
+    async (batch) => (await recomputeOrderMaster(admin, batch)).written,
+  );
 }
 
 export async function recomputeOrderMasterForShipmentsSafe(
@@ -1068,6 +1177,21 @@ export async function recomputeOrderMasterForShipmentsSafe(
  * Barrido de reconciliación: pedidos cuya fila del Master falta o quedó vieja.
  * Es la red de seguridad frente a cualquier ruta que escriba en `shipments` sin
  * recalcular. Se ejecuta desde el cron de sincronización.
+ *
+ * QUÉ CUENTA COMO «VIEJA». Hasta 0118 eran tres cosas —fila ausente,
+ * `recomputed_at` anterior a un `staleBefore` que pasara quien llama, y versión
+ * del MOM anticuada—, y ninguna miraba las guías. Un pedido con su fila puesta,
+ * la versión vigente y una guía escrita DESPUÉS del último recálculo era
+ * invisible por las tres puertas a la vez. Como la lista de candidatos salía
+ * además de los pedidos más recientes de la tienda, un pedido viejo que se
+ * moviera no tenía ninguna forma de volver a entrar.
+ *
+ * Así se quedaron 69 pedidos con la guía entregada o devuelta mostrando «Por
+ * confirmar», 66 de ellos fuera del alcance del barrido por antigüedad, algunos
+ * con 48 días en una macroetapa que nunca se recalculó. La cuarta puerta —guía
+ * escrita después del último recálculo— es la que los ve, y es la única que
+ * ataca la causa: da igual QUÉ ruta escribió sin recalcular, porque el ancla es
+ * la escritura, no quién la hizo.
  */
 export async function reconcileOrderMaster(
   admin: SupabaseClient,
@@ -1100,30 +1224,61 @@ export async function reconcileOrderMaster(
   }
   const pending = candidateIds.filter((id) => !known.has(id));
 
+  // CUARTA PUERTA: guías escritas después del último recálculo de su pedido.
+  //
+  // Se ancla en la ESCRITURA de la guía y no en el pedido, que es lo que la hace
+  // funcionar donde las otras tres fallan: alcanza a un pedido de hace tres
+  // meses en cuanto su guía se mueve, sin depender de que esté entre los más
+  // recientes de la tienda. Se piden las guías tocadas más recientemente porque
+  // son las que llevan la etapa equivocada delante de alguien ahora mismo.
+  const seenPending = new Set(pending);
+  const roomForStale = Math.max(0, limit - pending.length);
+  if (roomForStale > 0) {
+    const { data: touched } = await admin
+      .from("shipments")
+      .select("order_id,updated_at")
+      .in("store_id", storeIds as string[])
+      .not("order_id", "is", null)
+      .order("updated_at", { ascending: false })
+      .limit(SHIPMENT_STALE_PAGE);
+
+    const writes = (touched ?? []) as { order_id: string | null; updated_at: string | null }[];
+    const masters: { order_id: string; recomputed_at: string | null }[] = [];
+    const touchedIds = [...new Set(writes.map((w) => w.order_id).filter((v): v is string => Boolean(v)))];
+    for (const batch of chunk(touchedIds, ID_BATCH)) {
+      const { data } = await admin
+        .from("order_master")
+        .select("order_id,recomputed_at")
+        .in("order_id", batch);
+      masters.push(...((data ?? []) as { order_id: string; recomputed_at: string | null }[]));
+    }
+
+    for (const id of staleByShipment(writes, masters)) {
+      if (seenPending.has(id) || pending.length >= limit) continue;
+      pending.push(id);
+      seenPending.add(id);
+    }
+  }
+
   // Una fase nueva puede cambiar el resultado aun cuando ninguna fuente del
   // pedido haya sido tocada. Recalcula por tandas las filas de versiones
   // anteriores; al escribir la versión vigente dejan de aparecer en el
   // siguiente cron. Así el histórico completo converge sin exponer secretos en
   // un backfill local ni bloquear una sincronización normal.
+  // Había aquí una consulta por `macro_version is null` que no podía devolver
+  // nada: la columna es NOT NULL en la base. Se quita en vez de dejarla como
+  // adorno — una puerta que no abre es peor que no tenerla, porque se cuenta
+  // como cobertura cuando se revisa por qué un pedido no se recalculó.
   const remaining = Math.min(VERSION_RECONCILE_PAGE, Math.max(0, limit - pending.length));
   if (remaining > 0) {
     const staleIds: string[] = [];
-    const { data: nullVersion } = await admin
-      .from("order_master")
-      .select("order_id")
-      .in("store_id", storeIds as string[])
-      .is("macro_version", null)
-      .limit(remaining);
-    staleIds.push(...((nullVersion ?? []) as { order_id: string }[]).map((row) => row.order_id));
-
-    const stillRemaining = remaining - staleIds.length;
-    if (stillRemaining > 0) {
+    {
       const { data: oldVersion } = await admin
         .from("order_master")
         .select("order_id")
         .in("store_id", storeIds as string[])
         .neq("macro_version", MOM_RESOLUTION_VERSION)
-        .limit(stillRemaining);
+        .limit(remaining);
       staleIds.push(...((oldVersion ?? []) as { order_id: string }[]).map((row) => row.order_id));
     }
     const seen = new Set(pending);
@@ -1135,5 +1290,9 @@ export async function reconcileOrderMaster(
     }
   }
   if (!pending.length) return { requested: 0, written: 0 };
-  return recomputeOrderMaster(admin, pending);
+  // Por tandas y sin abortar: el barrido es justamente lo que tiene que seguir
+  // funcionando cuando un pedido concreto revienta, y hasta ahora un solo fallo
+  // dejaba sin recalcular a los otros 999 de la pasada.
+  const done = await recomputeOrderMasterSafe(admin, pending);
+  return { requested: pending.length, written: done.written, failed: done.failed };
 }

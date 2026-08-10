@@ -1635,6 +1635,51 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 5. Las diferencias se corrigen en el resolver o mediante nuevos eventos, nunca
    editando directamente el read-model.
 
+### 19.1 La etapa es una foto, y alguien tiene que revelarla
+
+`order_master` no calcula en vivo: guarda el resultado del resolver y lo sirve.
+Eso hace que el listado sea una consulta a una tabla, y trae la contrapartida
+obvia —**una etapa correcta depende de que alguien recalcule cuando cambia una
+guía**— más una menos obvia: cuando el recálculo no ocurre, **no se nota**. La
+pantalla no muestra un error; muestra la etapa de antes, con toda naturalidad.
+
+Pasó el 09-08. Un import de Aliclik movió 1.126 guías y llamó al recálculo con
+los 1.126 pedidos de una sola vez; algo falló dentro y `recomputeOrderMasterSafe`
+—best-effort a propósito, para que un import ya ingestado no se pierda por un
+fallo del Master— se tragó el error entero. Se recalculó **uno**. El síntoma
+apareció días después: #AUR173240, con su guía **entregada**, seguía en «Por
+confirmar · Sin llamar» y decía **48 días en esta macroetapa**, porque
+`macro_since` nunca dejó de ser su fecha de creación. Eran 69 pedidos con la guía
+entregada o devuelta mostrando «Por confirmar», y 985 con el Master más viejo que
+su guía.
+
+Lo que lo dejó pegado no fue el fallo, sino que **nada lo buscaba**. El barrido de
+reconciliación miraba tres cosas, y ninguna miraba las guías:
+
+| Puerta | Por qué no los veía |
+|---|---|
+| Fila ausente en el Master | La tenían |
+| `macro_version` anticuada | Era la vigente (`mom-v1.8`) |
+| `macro_version is null` | **Nunca podía abrir**: la columna es NOT NULL |
+
+Y como la lista de candidatos salía de los **1.000 pedidos más recientes de la
+tienda**, 66 de los 69 quedaban fuera solo por edad. Un pedido viejo que se movía
+no tenía forma de volver a entrar.
+
+Tres reglas, a partir de acá:
+
+1. **La señal de «etapa vieja» son las guías, no el pedido.** El barrido compara
+   el `updated_at` de las guías contra el `recomputed_at` del Master
+   (`staleByShipment`). Sirve sin saber qué ruta escribió, porque todas las que
+   se olvidan de recalcular dejan la misma huella; y alcanza a un pedido de hace
+   tres meses en cuanto su guía se mueve.
+2. **El recálculo va por tandas.** Un pedido que revienta cuesta su trozo, no la
+   lista entera. Llamar con 1.126 ids de golpe convertía cualquier fallo en una
+   congelación masiva.
+3. **Best-effort no es en silencio.** Seguir adelante ante un fallo es correcto;
+   no dejar rastro no lo es. El recálculo devuelve cuántos pedidos se quedaron
+   sin recalcular, y el reporte de sincronización lo dice.
+
 ## 20. Criterios de aceptación de la Fase 1
 
 - Un pedido Shopify sin salidas existe una sola vez en el Master.
