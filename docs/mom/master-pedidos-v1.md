@@ -941,6 +941,23 @@ reintente y **cuándo** se libera sola. Un mensaje único para todos los casos
 —«ya hay una creación en curso o completada»— era falso justo en el caso que
 importa y no ofrecía salida.
 
+**El semáforo cubre los dos caminos.** Cotizar y crear son endpoints distintos y
+se caen por separado: el 10-08-2026 se crearon 15 guías sin un fallo hasta las
+10:44 y a las 11:19 la creación empezó a irse en timeout mientras el sondeo de
+cotización seguía verde. Un solo foco para ambos miente justo cuando más caro
+sale, porque invita a pulsar el botón que deja el pedido bloqueado.
+
+- **Cotizar se sondea**; es una lectura y no cuesta nada repetirla.
+- **Crear NO se sondea.** Es una escritura irreversible con dinero real: no hay
+  forma de probarlo sin crear una guía de verdad. Su salud se **deduce** de los
+  intentos que la operación ya hizo.
+- Se avisa con **dos fallos seguidos** y ningún éxito posterior, dentro de una
+  ventana reciente. Uno solo no basta —pasa con la API sana— y encender el foco
+  por él enseñaría a ignorarlo. El aviso se apaga en cuanto una creación vuelve
+  a funcionar.
+- El aviso nombra la **consecuencia**, no el síntoma: lo que la operadora
+  necesita saber no es que falla, sino que cada intento le bloquea el pedido.
+
 Indemnización Aliclik:
 
 - Responsable: Yohalis.

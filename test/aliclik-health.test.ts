@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveAliclikHealth,
+  resolveAliclikCreateHealth,
+  describeAliclikHealth,
   withinBusinessHoursPeru,
   HEALTH_FRESHNESS_MS,
 } from "@/lib/aliclik-health";
@@ -51,5 +53,97 @@ describe("withinBusinessHoursPeru", () => {
     expect(at("2026-08-03T09:00:00Z")).toBe(false); // 04:00 Perú
     expect(at("2026-08-04T05:00:00Z")).toBe(false); // 00:00 Perú
     expect(at("2026-08-04T04:30:00Z")).toBe(false); // 23:30 Perú
+  });
+});
+
+// ── Salud del camino de CREACIÓN ────────────────────────────────────────────
+// Cotizar y crear son endpoints distintos y se caen por separado. El 10-08
+// cotizar iba 3/3 en ~1 s mientras crear se iba en timeout, y el foco pintaba
+// verde: la asesora pulsaba confiando en él y se llevaba el pedido bloqueado.
+
+const ago = (mins: number) => new Date(NOW - mins * 60_000).toISOString();
+const attempt = (status: string, mins: number, error: string | null = null) => ({
+  status,
+  error,
+  createdAt: ago(mins),
+});
+const TIMEOUT = "Edge no pudo contactar con Aliclik: The operation was aborted due to timeout";
+
+describe("resolveAliclikCreateHealth", () => {
+  it("degradado con dos timeouts seguidos y ningún éxito después (el caso del 10-08)", () => {
+    const attempts = [attempt("pending", 1, TIMEOUT), attempt("pending", 5, TIMEOUT)];
+    expect(resolveAliclikCreateHealth(attempts, NOW)).toBe("degradado");
+  });
+
+  it("un solo fallo NO enciende el aviso: pasa con la API sana y sería ruido", () => {
+    expect(resolveAliclikCreateHealth([attempt("pending", 2, TIMEOUT)], NOW)).toBe("ok");
+  });
+
+  it("se apaga en cuanto una creación vuelve a funcionar, sin esperar a la ventana", () => {
+    const attempts = [
+      attempt("sent", 1),
+      attempt("failed", 4, TIMEOUT),
+      attempt("failed", 6, TIMEOUT),
+    ];
+    expect(resolveAliclikCreateHealth(attempts, NOW)).toBe("ok");
+  });
+
+  it("un 'pending' sin error es una creación EN VUELO, no un fallo", () => {
+    // La fila se escribe antes del POST: contarla como fallo encendería el foco
+    // cada vez que dos asesoras crean a la vez.
+    const attempts = [attempt("pending", 0), attempt("pending", 0), attempt("sent", 3)];
+    expect(resolveAliclikCreateHealth(attempts, NOW)).toBe("ok");
+  });
+
+  it("los fallos viejos no cuentan: fuera de la ventana no describen el presente", () => {
+    const attempts = [attempt("failed", 45, TIMEOUT), attempt("failed", 50, TIMEOUT)];
+    expect(resolveAliclikCreateHealth(attempts, NOW)).toBe("sin_datos");
+  });
+
+  it("sin intentos, sin_datos — callar es más honesto que dar por bueno", () => {
+    expect(resolveAliclikCreateHealth([], NOW)).toBe("sin_datos");
+  });
+
+  it("ordena por fecha aunque lleguen desordenados: la racha es la más reciente", () => {
+    const attempts = [attempt("failed", 8, TIMEOUT), attempt("sent", 1), attempt("failed", 6, TIMEOUT)];
+    expect(resolveAliclikCreateHealth(attempts, NOW)).toBe("ok");
+  });
+
+  it("una fecha ilegible se descarta en vez de mover la racha al azar", () => {
+    const attempts = [
+      { status: "failed", error: TIMEOUT, createdAt: "no-es-fecha" },
+      attempt("failed", 2, TIMEOUT),
+    ];
+    expect(resolveAliclikCreateHealth(attempts, NOW)).toBe("ok");
+  });
+});
+
+describe("describeAliclikHealth", () => {
+  it("cotizar caído gana: si el servidor no responde, no hay nada que crear", () => {
+    const copy = describeAliclikHealth({ quote: "fallos", create: "degradado" });
+    expect(copy.tone).toBe("rojo");
+    expect(copy.label).toBe("Aliclik con fallos");
+  });
+
+  it("cotizar bien + crear degradado ya NO es verde: es el caso caro", () => {
+    const copy = describeAliclikHealth({ quote: "operativo", create: "degradado" });
+    expect(copy.tone).toBe("ambar");
+    expect(copy.label).toBe("Aliclik: crear guías falla");
+    // El aviso tiene que nombrar la consecuencia, no solo el síntoma.
+    expect(copy.hint).toContain("bloqueado");
+  });
+
+  it("verde solo cuando ambos caminos están bien", () => {
+    expect(describeAliclikHealth({ quote: "operativo", create: "ok" }).tone).toBe("verde");
+  });
+
+  it("verde sin creaciones recientes, pero el texto no promete lo que no vio", () => {
+    const copy = describeAliclikHealth({ quote: "operativo", create: "sin_datos" });
+    expect(copy.tone).toBe("verde");
+    expect(copy.hint).toContain("Sin creaciones recientes");
+  });
+
+  it("sin sonda fresca es gris aunque no haya fallos de creación", () => {
+    expect(describeAliclikHealth({ quote: "sin_monitoreo", create: "ok" }).tone).toBe("gris");
   });
 });

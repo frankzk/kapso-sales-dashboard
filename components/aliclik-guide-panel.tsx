@@ -26,29 +26,37 @@ import {
   type AliclikPreview,
 } from "@/app/dashboard/pedidos/aliclik-actions";
 import { isShortenedMapsLink } from "@/lib/aliclik-geo";
-import type { AliclikHealth } from "@/lib/aliclik-health";
+import {
+  describeAliclikHealth,
+  type AliclikHealthState,
+  type HealthTone,
+} from "@/lib/aliclik-health";
 
-/** El foco de salud de la API de Aliclik. Solo informa; no bloquea el botón —un
- * pin puntual puede fallar con la API verde y viceversa. */
-function HealthBadge({ health }: { health: AliclikHealth }) {
-  const map = {
-    operativo: { dot: "bg-emerald-500", text: "text-emerald-700", label: "Aliclik operativo" },
-    fallos: { dot: "bg-rose-500", text: "text-rose-700", label: "Aliclik con fallos" },
-    sin_monitoreo: { dot: "bg-slate-300", text: "text-slate-500", label: "Sin monitoreo" },
-  }[health];
-  const title =
-    health === "fallos"
-      ? "Su API de cotización está fallando ahora mismo; conviene reintentar en unos minutos."
-      : health === "sin_monitoreo"
-        ? "Sin sondeo reciente (fuera del horario 7am–11pm, o el monitor no ha corrido)."
-        : "La API de cotización responde normal.";
+/**
+ * El foco de salud de la API de Aliclik. Solo informa; no bloquea el botón —un
+ * pin puntual puede fallar con la API verde y viceversa.
+ *
+ * Cubre los DOS caminos. Antes solo miraba la sonda de cotización, así que un día
+ * en que cotizar iba fino y crear se caía lo pintaba verde: la asesora pulsaba
+ * confiando en él y se llevaba el pedido bloqueado. El ámbar es ese caso.
+ */
+const TONES: Record<HealthTone, { dot: string; text: string }> = {
+  verde: { dot: "bg-emerald-500", text: "text-emerald-700" },
+  ambar: { dot: "bg-amber-500", text: "text-amber-700" },
+  rojo: { dot: "bg-rose-500", text: "text-rose-700" },
+  gris: { dot: "bg-slate-300", text: "text-slate-500" },
+};
+
+function HealthBadge({ health }: { health: AliclikHealthState }) {
+  const copy = describeAliclikHealth(health);
+  const tone = TONES[copy.tone];
   return (
     <span
-      title={title}
-      className={`inline-flex flex-none items-center gap-1.5 whitespace-nowrap text-[11px] font-medium ${map.text}`}
+      title={copy.hint}
+      className={`inline-flex flex-none items-center gap-1.5 whitespace-nowrap text-[11px] font-medium ${tone.text}`}
     >
-      <span className={`h-2 w-2 flex-none rounded-full ${map.dot}`} aria-hidden />
-      {map.label}
+      <span className={`h-2 w-2 flex-none rounded-full ${tone.dot}`} aria-hidden />
+      {copy.label}
     </span>
   );
 }
@@ -61,7 +69,7 @@ export function AliclikGuidePanel({
 }: {
   orderId: string;
   hasCoordinate: boolean;
-  health: AliclikHealth;
+  health: AliclikHealthState;
   onCreated: () => void;
 }) {
   const [coordinate, setCoordinate] = useState("");
