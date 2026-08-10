@@ -237,4 +237,6 @@
 \ir migrations/0115_order_prefix_por_tienda.sql
 \echo 'Applying 0116_returned_source.sql'
 \ir migrations/0116_returned_source.sql
+\echo 'Applying 0117_reason_probed_at.sql'
+\ir migrations/0117_reason_probed_at.sql
 \echo 'Done.'

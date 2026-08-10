@@ -17,6 +17,7 @@ import { chunk } from "@/lib/access";
 import { matchShipment, type MatchResult, type OrderCandidate } from "@/lib/shipment-match";
 import { reconcileReportedDeliveryStatus, categoryOf } from "@/lib/shipments";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { sealReturn } from "@/lib/returned-source";
 import type { CanonicalReportRow } from "@/lib/couriers/registry";
 
 const BATCH = 500;
@@ -279,13 +280,16 @@ export async function ingestCourierReport(
       rescheduled_at: inc.row.rescheduled_at,
       closed_at: inc.row.closed_at,
       // Una devolución ya registrada no se borra porque un reporte posterior
-      // omita la fecha: la devolución es un hecho físico, no un estado volátil.
-      returned_at: inc.row.returned_at ?? existing?.returned_at ?? null,
-      // La procedencia viaja con la fecha (0116) y corre su misma suerte: si se
-      // conserva el sello de antes, se conserva de quién venía.
-      returned_source: inc.row.returned_at
-        ? `${courier}_report`
-        : (existing?.returned_at ? existing.returned_source : null),
+      // omita la fecha, ni se reescribe porque otro la mencione: es un hecho
+      // físico y se sella una vez, con su procedencia (0116). `sealReturn` es la
+      // misma regla que aplican el Excel de Aliclik y la API — una sola, en un
+      // solo sitio, porque tres copias divergen y la diferencia solo se ve en
+      // producción.
+      ...sealReturn(existing, {
+        returned: Boolean(inc.row.returned_at),
+        at: inc.row.returned_at ?? meta.reportAt,
+        source: `${courier}_report`,
+      }),
       pickup_state: inc.row.pickup_state ?? existing?.pickup_state ?? null,
       agency_branch: inc.row.agency_branch,
       agency_arrived_at: inc.row.agency_arrived_at,

@@ -1011,7 +1011,10 @@ La procedencia **se sella junto a la fecha y no se pisa**, igual que la fecha: u
 reporte posterior del courier no convierte en «reporte de Aliclik» una devolución
 que recibió una persona. Cuando el sello es manual se guarda además **quién**
 (`returned_by`), como ya se hace con el alistamiento y la transferencia de
-custodia (§8).
+custodia (§8). La regla vive en un solo sitio (`sealReturn`) y la aplican las
+tres vías de escritura; con la pasada de motivo de abajo dejó de ser una
+precaución teórica, porque esa pasada consulta la API **justo por las guías ya
+devueltas** y sin la guarda las habría reetiquetado a todas en la primera vuelta.
 
 Qué guía entra:
 
@@ -1025,6 +1028,33 @@ Qué guía entra:
   reporte le cuesta la plantilla a **toda la tienda**, no solo a ese chat. El
   motivo se lee del reporte del courier y también del texto libre de quien
   gestionó, donde aparece conjugado.
+- **Sin motivo del courier, la exclusión de arriba no se aplica: no hay con qué
+  aplicarla.** Y eso no es un detalle de borde, es la mayoría de la cola. De las
+  130 devoluciones candidatas de los últimos 30 días (medido el 2026-08-10),
+  **100 no traen motivo alguno** — guías `anulado` importadas del Excel del 20-07
+  que nunca pasaron por la API. La regla se estaba aplicando de verdad a 27 de
+  127: las otras 100 pasaban por **ausencia de dato**, no por constancia de que
+  la clienta nunca viera el producto.
+
+  Ausencia de motivo **no equivale a recuperable**. Un `false` de la exclusión
+  significa «no consta que lo rechazara», no «consta que no lo rechazó», y la
+  diferencia se paga en la moneda del párrafo anterior. Por eso:
+
+  1. La cola **lo escribe**: donde no hay motivo dice «sin motivo del courier ·
+     no consta si la rechazó en la puerta», y el confirmar del envío lo repite.
+     Un guion se lee «no hay nada que decir»; lo que pasa es otra cosa.
+  2. El cron **sale a buscarlo**. Una tercera pasada consulta a Aliclik por las
+     devoluciones sin motivo dentro de la ventana de recuperación
+     (`fillReturnReasons`). Las dos pasadas anteriores no las alcanzaban: la de
+     fechas se les cayó del rango y la de rezagadas le da a una anulada tres
+     semanas de silencio. Se anota en `reason_probed_at` haya o no respuesta,
+     que es lo único que evita repreguntar en bucle por un dato que Aliclik
+     quizá no tenga.
+
+  **No excluye.** Sacar de la cola a las 100 sería tratar la falta de dato como
+  si fuera un rechazo, el mismo error que se está corrigiendo, y en la dirección
+  que además vacía la pantalla. Se marca y se busca; quien decide, decide viendo
+  lo que no se sabe.
 - Con nombre, producto y número de WhatsApp peruano válido: un parámetro vacío
   lo rechaza Meta, y un «¡Hola !» quema el mensaje.
 - Devuelta hace poco. Una devolución de hace meses ya se reingresó o se dio de

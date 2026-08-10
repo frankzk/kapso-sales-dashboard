@@ -103,7 +103,7 @@ const PRIORITY_SHARE = 0.5;
  * que este pase persigue, 277 de 583 no lo tienen — casi la mitad quedaría sin
  * consultar, y son justo las que se congelan cuando nadie sube un reporte.
  */
-export function followUpKey(c: FollowUpCandidate): string {
+export function followUpKey(c: Pick<FollowUpCandidate, "external_order_number" | "guide_code">): string {
   return (c.external_order_number ?? "").trim() || (c.guide_code ?? "").trim();
 }
 

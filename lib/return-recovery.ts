@@ -105,6 +105,28 @@ export function wasRefusedInPerson(
   return REFUSED_MARKERS.some((m) => haystack.includes(m));
 }
 
+/**
+ * Lo que consta sobre por qué la guía no se entregó, o `null` cuando no consta
+ * nada. `reported_status` es lo que dijo el courier y `non_delivery_reason` lo
+ * que anotó quien gestionó; se prefiere el primero.
+ *
+ * VALE LA PENA MIRARLO APARTE porque `null` no es un caso más: es el caso en el
+ * que el MOM §11 NO SE PUEDE EVALUAR. `wasRefusedInPerson` sobre dos columnas
+ * vacías devuelve `false`, y ese `false` significa «no consta que la rechazara»,
+ * no «consta que no la rechazó». Hasta acá la cola trata igual a las dos —una
+ * devolución sin motivo entra— pero de ahí en adelante no: quien va a pedir un
+ * adelanto ve escrito que no se sabe, y el cron sale a preguntárselo a la API
+ * (0117, `fillReturnReasons`).
+ */
+export function courierReason(
+  c: Pick<RecoveryCandidate, "reported_status" | "non_delivery_reason">,
+): string | null {
+  const reported = String(c.reported_status ?? "").trim();
+  if (reported) return reported;
+  const noted = String(c.non_delivery_reason ?? "").trim();
+  return noted || null;
+}
+
 /** La fila de `shipments` que necesitan la cola y el envío. */
 export interface RecoveryCandidate {
   id: string;
