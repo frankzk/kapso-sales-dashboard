@@ -103,10 +103,36 @@ interface ExtractedOrderRef {
   confirmed: boolean;
 }
 
+/**
+ * El número de pedido que lleva escrito el propio código de guía.
+ *
+ * Aliclik numera `AUR5X` + el número del pedido: AUR5X121336 es de #KP121336 y
+ * AUR5X174316 de #AUR174316 — se cumple en las dos tiendas y en todas las guías
+ * comprobadas. Es la mejor pista que traen estas filas, y no se estaba usando.
+ *
+ * Vuelve SIN CONFIRMAR a propósito, aunque el patrón acierte siempre en los
+ * datos de hoy: es una convención del courier, no una garantía, así que el
+ * emparejador solo la aceptará si el TELÉFONO del cliente también apunta a ese
+ * mismo pedido. Dos señales independientes que coinciden es lo que faltaba —el
+ * respaldo por teléfono a secas amontonó 15 guías en pedidos ajenos, todas de
+ * clientes con más de un pedido, mientras el número correcto venía escrito en el
+ * código de la guía.
+ */
+export function orderNameFromGuideCode(
+  guideCode: string | null | undefined,
+  orderPrefix: string | null | undefined,
+): string | null {
+  const prefix = String(orderPrefix ?? "").trim().replace(/^#/, "").toUpperCase();
+  if (!prefix) return null;
+  const m = String(guideCode ?? "").trim().toUpperCase().match(/^AUR5X(\d{5,})$/);
+  return m && m[1] ? `#${prefix}${m[1]}` : null;
+}
+
 function extractOrderReference(
   nota: string | null | undefined,
   orderColumnValue: string | null | undefined,
   orderPrefix: string | null | undefined,
+  guideCode: string | null | undefined,
 ): ExtractedOrderRef {
   for (const v of [nota, orderColumnValue]) {
     if (!v) continue;
@@ -129,6 +155,12 @@ function extractOrderReference(
   if (!prefix) return { name: null, confirmed: false };
   const m = nota ? String(nota).match(BARE_ORDER_RE) : null;
   if (m && m[1]) return { name: `#${prefix}${m[1]}`, confirmed: false };
+  // Último recurso, y el más fiable de los no confirmados: el número que lleva
+  // el propio código de guía. Va detrás de la NOTA porque ahí el número lo
+  // escribió una persona sobre ESTE envío; el del código es una convención del
+  // courier. Los dos se cotejan contra el teléfono antes de vincular nada.
+  const fromGuide = orderNameFromGuideCode(guideCode, prefix);
+  if (fromGuide) return { name: fromGuide, confirmed: false };
   return { name: null, confirmed: false };
 }
 
@@ -435,10 +467,16 @@ export function parseAliclikRow(
           pick(map, ESTADO_LLAMADA_KEYS),
         );
 
-  const orderRef = extractOrderReference(map.get("nota"), pick(map, ORDER_KEYS), opts.orderPrefix);
+  const guideCode = findGuideCode(raw);
+  const orderRef = extractOrderReference(
+    map.get("nota"),
+    pick(map, ORDER_KEYS),
+    opts.orderPrefix,
+    guideCode,
+  );
 
   return {
-    guide_code: findGuideCode(raw),
+    guide_code: guideCode,
     order_name: orderRef.name,
     order_name_confirmed: orderRef.confirmed,
     customer_name: pick(map, NAME_KEYS),

@@ -1635,6 +1635,44 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 5. Las diferencias se corrigen en el resolver o mediante nuevos eventos, nunca
    editando directamente el read-model.
 
+### 19.0 Un vínculo por teléfono es provisional
+
+Al importar un reporte, el emparejador vincula la guía a un pedido por nombre de
+pedido y, si no lo hay, **por teléfono — solo cuando existe un único pedido con
+ese número**. La regla es correcta en el instante en que corre, y ahí está la
+trampa: **la respuesta caduca**. El pedido bueno puede llegar después.
+
+Pasó con AUR5X121336. Entró el 10-07, cuando `#KP121336` (creado el 06-07) aún no
+se había importado, así que el único pedido con ese teléfono era el ANTERIOR del
+mismo cliente —anulado desde junio— y ahí se quedó. Nadie vuelve a mirar un
+vínculo ya hecho, así que el error es permanente y silencioso: al 10-08 eran
+**15 guías colgando de pedidos ajenos y 15 pedidos legítimos sin ninguna guía**,
+mostrando «Por confirmar» con el paquete entregado. Los pedidos que las recibían
+acumulaban dos y tres guías que no eran suyas.
+
+**La evidencia que faltaba estaba a la vista.** Aliclik numera sus guías `AUR5X` +
+el número del pedido: AUR5X121336 dice `#KP121336` en su propio nombre. Con
+`stores.order_prefix` ese número se convierte en un nombre de pedido real. Dos
+reglas nuevas:
+
+1. **Al importar**, el número del código de guía entra como candidato SIN
+   CONFIRMAR (`orderNameFromGuideCode`). Sin confirmar a propósito: es una
+   convención del courier, no una garantía, así que el emparejador solo lo acepta
+   si el teléfono apunta al MISMO pedido. Dos señales independientes donde antes
+   había una.
+2. **Hacia atrás**, `/api/cron/aliclik-fix-phone-links` devuelve a su sitio las ya
+   enganchadas mal. Solo mueve con las dos señales de acuerdo y cuando el destino
+   **no tiene ninguna guía propia** — el patrón que corrige es «pedido huérfano de
+   su guía»; encimar una guía a un pedido que ya tiene la suya es decisión de una
+   persona, no de un barrido. Ensayo por defecto (`?apply=true` para ejecutar) y
+   fuera de `vercel.json`: mover una guía reescribe a qué venta pertenece un
+   paquete, y de ahí salen el cierre, el costo y la liquidación.
+
+Y para el caso suelto que ninguna regla alcanza, la corrección a mano vive en
+**Gestión manual → correcciones excepcionales → «Corregir vínculo de guía»**: la
+mueve, renumera la salida, deja constancia en los dos historiales y recalcula los
+dos Masters.
+
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 
 `order_master` no calcula en vivo: guarda el resultado del resolver y lo sirve.
