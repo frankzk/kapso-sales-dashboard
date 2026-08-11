@@ -8458,7 +8458,7 @@ update shipments sh
    and upper(substring(sh.order_name from '^#?([A-Za-z]+)'))
        is distinct from upper(s.order_prefix);
 
--- ===== 0116_aliclik_sweep_state.sql =====
+-- ---- 0116 ----
 -- ============================================================================
 -- 0116_aliclik_sweep_state.sql — el barrido de Aliclik deja constancia de sí
 -- mismo, para que el cierre no dependa de terminarlo en la misma invocación.
