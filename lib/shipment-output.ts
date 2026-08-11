@@ -19,6 +19,48 @@ export function isCourierTbd(courier: string | null | undefined): boolean {
   return (courier ?? "").trim().toLowerCase() === COURIER_TBD;
 }
 
+/** `created_via` de las salidas que nacen en el Master sin API de courier. */
+export const MANUAL_ROUTE_CREATED_VIA = "mom_manual_route";
+
+/**
+ * ¿Se puede anular esta salida de ruta manual desde el Master?
+ *
+ * Existe porque el sistema sabía decir "anúlala antes de crear otra" sin tener
+ * dónde anularla: el botón de «Salidas y guías» solo se pintaba para Shalom, y
+ * ningún camino movía a `anulado` una salida de `mom_manual_route`. Una salida
+ * creada por error —o con el courier equivocado— dejaba al pedido sin poder
+ * emitir ninguna otra guía, y el pedido tampoco podía finalizarse, porque el
+ * cierre exige que no queden salidas activas. Callejón sin salida por ambos
+ * lados.
+ *
+ * ANULAR NO ES BORRAR. La fila se queda con su historial y su consecutivo: el
+ * rótulo pudo haberse impreso y estar pegado a una caja, y ese número tiene que
+ * seguir resolviendo —diciendo "anulada"— en vez de dar 404. El consecutivo
+ * tampoco se reutiliza (§4).
+ *
+ * Solo alcanza a las salidas que Kapta creó como ruta manual. Aliclik, Shalom y
+ * Tanders tienen su propia anulación, que además avisa al courier por API:
+ * marcarlas acá dejaría la guía viva del otro lado y muerta en el panel.
+ */
+export function manualOutputIsCancelable(output: {
+  courier: string;
+  created_via?: string | null;
+  delivery_status: string;
+  custody_state?: string | null;
+  custody_transferred_at?: string | null;
+}): boolean {
+  if (output.created_via !== MANUAL_ROUTE_CREATED_VIA) return false;
+  // `pendiente` es el único estado que sigue siendo "esto todavía no pasó". Con
+  // la salida en ruta, entregada o devuelta hay hechos físicos detrás y el
+  // camino correcto es el retorno, no el borrón.
+  if (output.delivery_status !== "pendiente") return false;
+  // Mientras la caja siga en casa, anular corrige un registro. Una vez
+  // transferida al motorizado hay un paquete en la calle: eso se cierra
+  // recibiendo su retorno.
+  if ((output.custody_state ?? "empresa") !== "empresa") return false;
+  return !output.custody_transferred_at;
+}
+
 /** `#KP123` → `KP123`; conserva letras/números/guiones y elimina ruido. */
 export function normalizeOrderCode(orderName: string | null | undefined): string {
   return (orderName ?? "")

@@ -32,8 +32,10 @@ import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actio
 import { ShalomGuideModal } from "@/components/shalom-guide-modal";
 import { cancelShalomGuide } from "@/app/dashboard/pedidos/shalom-actions";
 import { shalomGuideIsCancelable } from "@/lib/shalom/draft";
+import { manualOutputIsCancelable } from "@/lib/shipment-output";
 import {
   addOrderComment,
+  cancelManualRouteOutput,
   clearOrderGeo,
   createManualRouteOutputsBulk,
   loadOrderDetail,
@@ -257,6 +259,81 @@ function ShalomCancelButton({
           setConfirming(false);
           if ("error" in res) setError(res.error);
           else onDone(res.notice);
+        }}
+        className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
+      >
+        Sí, anular
+      </button>
+      <button
+        type="button"
+        onClick={() => setConfirming(false)}
+        className="text-xs font-medium text-slate-600 hover:underline"
+      >
+        Cancelar
+      </button>
+    </span>
+  );
+}
+
+/**
+ * Anular una salida de ruta manual, también en dos pasos.
+ *
+ * Es el botón que faltaba: el modal de Shalom decía "anúlala antes de crear
+ * otra" y no había dónde. Una salida `por definir` creada por error dejaba el
+ * pedido sin poder emitir ninguna guía ni finalizarse.
+ *
+ * No llama a ningún courier —estas salidas no tienen API— así que el texto de
+ * confirmación habla de la caja, que es lo que la operadora tiene delante: si el
+ * paquete ya salió, el camino es el retorno y no esto.
+ */
+function ManualOutputCancelButton({
+  shipmentId,
+  label,
+  onDone,
+}: {
+  shipmentId: string;
+  label: string;
+  onDone: (notice: string) => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (busy) return <span className="text-xs text-slate-500">Anulando…</span>;
+
+  if (!confirming) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            setError(null);
+            setConfirming(true);
+          }}
+          className="text-xs font-medium text-red-700 hover:underline"
+        >
+          Anular salida
+        </button>
+        {error && <span className="w-full text-xs text-red-700">{error}</span>}
+      </>
+    );
+  }
+
+  return (
+    <span className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-red-50 px-2 py-1.5">
+      <span className="text-xs text-red-800">
+        ¿Anular <strong>{label}</strong>? Solo si la caja sigue en almacén; si ya salió con el
+        motorizado, registra su retorno.
+      </span>
+      <button
+        type="button"
+        onClick={async () => {
+          setBusy(true);
+          const res = await cancelManualRouteOutput(shipmentId);
+          setBusy(false);
+          setConfirming(false);
+          if (res.error) setError(res.error);
+          else onDone(res.notice ?? `${label} anulada.`);
         }}
         className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
       >
@@ -1781,6 +1858,7 @@ const TIMELINE_LABEL: Record<string, string> = {
   courier_assigned: "Courier asignado",
   guide_registered: "Guía registrada",
   route_output_created: "Salida y rótulo creados",
+  route_output_cancelled: "Salida anulada",
   dispatched: "Pedido despachado",
   out_for_delivery: "Salida a reparto",
   attempt_failed: "Intento fallido",
@@ -2771,6 +2849,20 @@ function OrderDrawer({
                           shipmentId={g.id}
                           guideCode={g.guide_code}
                           codigo={g.shalom_codigo ?? null}
+                          onDone={(msg) => {
+                            setNotice(msg);
+                            void reload();
+                            onSaved();
+                          }}
+                        />
+                      )}
+                      {/* Las salidas de ruta manual no tienen API a la que
+                          avisar: anularlas es corregir NUESTRO registro, así que
+                          basta el permiso con el que se crearon. */}
+                      {canEdit && manualOutputIsCancelable(g) && (
+                        <ManualOutputCancelButton
+                          shipmentId={g.id}
+                          label={g.output_code ?? g.guide_code ?? "esta salida"}
                           onDone={(msg) => {
                             setNotice(msg);
                             void reload();
