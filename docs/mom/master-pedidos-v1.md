@@ -1196,10 +1196,20 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   `930 555 309` o conservar de forma legible la terminación `309`. Cada señal
   muestra su propio check verde; la cuenta solo queda `verificada` cuando ambas
   coinciden.
-- Si cualquiera de las dos señales leídas pertenece a otra cuenta, el pago queda
-  en revisión y Kapta bloquea su validación también en servidor. Si una señal no
-  pudo leerse, se conserva la imagen y se exige contraste manual sin inventar el
-  dato faltante.
+- Si cualquiera de las dos señales leídas **contradice** la cuenta esperada, el
+  pago queda en revisión y Kapta bloquea su validación también en servidor. Si
+  una señal no pudo leerse, se conserva la imagen y se exige contraste manual
+  sin inventar el dato faltante.
+- Un destinatario leído **a medias** no contradice: el voucher de Yape y el de
+  BCP truncan o enmascaran el nombre por ancho de pantalla («Grupo Gf S»,
+  «Grupo G\*\*\*»). Una lectura que empieza como el nombre esperado y se corta
+  no verifica la cuenta, pero tampoco la acusa: queda como verificación parcial
+  con contraste manual, nunca como *receptor distinto*. La regla se lee por
+  palabras y desde el principio, que es como recorta una pantalla; el celular no
+  admite este matiz, porque leído y sin terminar en `309` es otra cuenta.
+- Esta distinción es de seguridad, no de comodidad: una alarma de desvío que
+  salta casi siempre por un nombre cortado deja de leerse, y tiene que ser
+  creíble el día que el receptor sea de verdad otro.
 - La captura del comprobante permanece grande y visible durante la revisión y
   puede abrirse a tamaño completo. `Titular/pagador` no es un campo operativo:
   si la visión lo obtiene, se conserva internamente para trazabilidad y

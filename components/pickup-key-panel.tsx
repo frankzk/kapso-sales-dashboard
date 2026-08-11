@@ -489,9 +489,14 @@ function StoredRecipientStatus({ vision, hasVoucher }: { vision: unknown; hasVou
         ? `Receptor distinto: ${reading.name ?? "nombre no leído"} · ${
             reading.phoneLastDigits ? `***${reading.phoneLastDigits}` : "celular no leído"
           }`
-        : reading.status === "partial"
-          ? "Cuenta receptora parcialmente leída. Contrasta la imagen antes de validar."
-          : "La cuenta receptora no pudo leerse. Contrasta la imagen antes de validar.";
+        : // El voucher corta el destinatario y esa lectura corta NO acusa a
+          // nadie: se nombra lo leído para que se contraste con la imagen, sin
+          // afirmar que la cuenta sea otra.
+          verifyYapeRecipient(reading.name, reading.phoneLastDigits).nameCutShort
+          ? `Destinatario leído a medias: «${reading.name}». Contrasta la imagen antes de validar.`
+          : reading.status === "partial"
+            ? "Cuenta receptora parcialmente leída. Contrasta la imagen antes de validar."
+            : "La cuenta receptora no pudo leerse. Contrasta la imagen antes de validar.";
   return (
     <p
       className={cn(
@@ -719,22 +724,30 @@ function RecipientSignal({
   expected,
   present,
   matches,
+  // Leído a medias: ni confirma ni desmiente. Sin este tercer estado, un nombre
+  // que la pantalla del banco cortó se pintaba con la misma × roja que un
+  // receptor de verdad distinto.
+  cutShort = false,
 }: {
   label: string;
   value: string;
   expected: string;
   present: boolean;
   matches: boolean;
+  cutShort?: boolean;
 }) {
+  const tone = !present ? "neutral" : matches ? "ok" : cutShort ? "partial" : "bad";
   return (
     <div
       className={cn(
         "rounded-lg border bg-white px-3 py-2",
-        !present
+        tone === "neutral"
           ? "border-slate-200"
-          : matches
+          : tone === "ok"
             ? "border-emerald-300 bg-emerald-50/50"
-            : "border-red-300 bg-red-50/50",
+            : tone === "partial"
+              ? "border-amber-300 bg-amber-50/50"
+              : "border-red-300 bg-red-50/50",
       )}
     >
       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
@@ -743,14 +756,16 @@ function RecipientSignal({
           aria-hidden="true"
           className={cn(
             "grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-bold",
-            !present
+            tone === "neutral"
               ? "bg-slate-100 text-slate-400"
-              : matches
+              : tone === "ok"
                 ? "bg-emerald-600 text-white"
-                : "bg-red-600 text-white",
+                : tone === "partial"
+                  ? "bg-amber-500 text-white"
+                  : "bg-red-600 text-white",
           )}
         >
-          {!present ? "·" : matches ? "✓" : "×"}
+          {tone === "neutral" ? "·" : tone === "ok" ? "✓" : tone === "partial" ? "~" : "×"}
         </span>
         <span className={cn("min-w-0 truncate text-sm font-semibold", present ? "text-slate-900" : "text-slate-400")}>
           {value}
@@ -768,9 +783,11 @@ function RecipientAccountCheck({ reading }: { reading: YapeRecipientReading | nu
       ? "Cuenta receptora verificada. Las dos señales coinciden."
       : verification.status === "mismatch"
         ? "El comprobante apunta a otra cuenta. No podrá validarse."
-        : verification.status === "partial"
-          ? "Verificación parcial. Revisa la señal que no pudo leerse antes de validar."
-          : "Se completa automáticamente al pulsar Leer y rellenar.";
+        : verification.nameCutShort
+          ? "El destinatario se leyó a medias: el voucher lo corta. Empieza como la cuenta esperada, pero confírmalo en la imagen antes de validar."
+          : verification.status === "partial"
+            ? "Verificación parcial. Revisa la señal que no pudo leerse antes de validar."
+            : "Se completa automáticamente al pulsar Leer y rellenar.";
 
   return (
     <fieldset className="rounded-lg bg-slate-50 p-3" aria-live="polite">
@@ -782,6 +799,7 @@ function RecipientAccountCheck({ reading }: { reading: YapeRecipientReading | nu
           expected="Grupo GF S.A.C."
           present={verification.hasName}
           matches={verification.nameMatches}
+          cutShort={verification.nameCutShort}
         />
         <RecipientSignal
           label="Celular receptor"
