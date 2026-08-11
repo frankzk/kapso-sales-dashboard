@@ -82,7 +82,8 @@ const TERMINAL = new Set(["entregado", "anulado", "transferido"]);
  *   2. `order_id` — misma guía, mismo pedido ya vinculado.
  *   3. nombre de pedido + teléfono — ambos deben coincidir. Solo el nombre no
  *      basta: un pedido puede tener varias guías (reprogramaciones, Fenix).
- *   4. teléfono, y solo si hay exactamente UN candidato con ese teléfono.
+ *   4. teléfono, y solo si hay exactamente UN candidato con ese teléfono y
+ *      ninguno de los dos nombres de pedido contradice al otro.
  *
  * NUNCA promueve cuando hay más de un candidato, cuando la guía ya es terminal,
  * o cuando el código de destino ya lo lleva otra guía. En la duda no se toca
@@ -172,9 +173,18 @@ export function reconcileAliclikApiGuides(
       }
     }
 
-    // 3. Solo el teléfono, y solo si es inequívoco.
+    // 3. Solo el teléfono, y solo si es inequívoco. Entra quien no CONTRADIGA
+    //    lo que la fila ya dice: si el reporte trae nombre de pedido y el
+    //    candidato lleva otro, eso no es «no hay evidencia», es evidencia en
+    //    contra. Un candidato todavía sin nombre sí pasa —ahí el silencio es
+    //    real y el teléfono es lo único que hay—, que es el caso para el que
+    //    este paso existe.
     if (wantPhone) {
-      const hit = pool.filter((g) => normalizePhone(g.customer_phone) === wantPhone);
+      const hit = pool.filter(
+        (g) =>
+          normalizePhone(g.customer_phone) === wantPhone &&
+          !(wantName && g.order_name && normalizeOrderName(g.order_name) !== wantName),
+      );
       const only = hit.length === 1 ? hit[0] : undefined;
       if (only) {
         promotions.push({

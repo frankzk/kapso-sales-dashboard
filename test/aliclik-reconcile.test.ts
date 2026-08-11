@@ -68,6 +68,28 @@ describe("reconcileAliclikApiGuides — se niega a adivinar", () => {
     expect(res.ambiguous[0]!.candidateIds).toEqual(["s1", "s2"]);
   });
 
+  it("no le da el código de un pedido a la guía de OTRO pedido del mismo cliente", () => {
+    // El caso de #KP120351 / #KP122767 (17-07-2026): un mismo teléfono con dos
+    // pedidos abiertos. La fila del reporte trae AUR5X122767 y su nombre, pero
+    // la única guía provisional viva con ese teléfono era la del pedido de
+    // junio. El paso 2 no casaba —los nombres difieren—, y el paso 3 la
+    // promovía igual: el pedido de junio se quedó con la guía de julio.
+    const res = reconcileAliclikApiGuides(
+      [row({ guide_code: "AUR5X122767", order_name: "#KP122767" })],
+      [guide({ order_id: "o-junio", order_name: "#KP120351" })],
+    );
+    expect(res.promotions).toHaveLength(0);
+  });
+
+  it("acepta el teléfono cuando el candidato aún no tiene pedido que contradiga", () => {
+    const res = reconcileAliclikApiGuides(
+      [row({ guide_code: "AUR5X122767", order_name: "#KP122767" })],
+      [guide({ order_id: null, order_name: null })],
+    );
+    expect(res.promotions).toHaveLength(1);
+    expect(res.promotions[0]!.method).toBe("phone");
+  });
+
   it("no promueve una guía ya terminal", () => {
     for (const status of ["entregado", "anulado", "transferido"]) {
       const res = reconcileAliclikApiGuides([row()], [guide({ delivery_status: status })]);

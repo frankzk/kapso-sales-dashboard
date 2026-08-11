@@ -896,6 +896,24 @@ Seguimiento de una guía hasta que cierra:
   revisión humana. Dar por terminada una guía porque una búsqueda vino vacía
   sería inventar un desenlace.
 
+**Cuando el reporte trae el código definitivo de una guía nuestra.** Una guía
+creada por API nace con un código provisional (`ALC…`) y el reporte la trae
+después con el impreso (`AUR5X…`). Que son la misma guía se reconoce por, en este
+orden: el `orderNumber` si el reporte lo trae, el pedido ya vinculado, nombre de
+pedido **y** teléfono juntos, y —último— solo el teléfono.
+
+El teléfono a secas existe para la guía que **todavía no tiene pedido**: ahí no
+hay nada más con qué reconocerla. No sirve para ganarle a un nombre que ya está
+escrito y dice otra cosa. Cuando la fila nombra un pedido y el candidato lleva
+otro, eso no es falta de evidencia sino evidencia **en contra**, y no se
+promueve. El teléfono es la identidad del cliente (§8), no la del pedido: el
+17-07-2026 un cliente con dos pedidos abiertos —#KP120351 de junio y #KP122767 de
+julio— terminó con la guía de julio colgada del pedido de junio, porque la única
+guía provisional viva con ese teléfono era la del pedido viejo. Perder la
+promoción no cuesta nada —la guía se ingesta por Excel como cualquier otra—;
+acertarle al pedido equivocado sí: mueve un pedido a despachado y le adjudica el
+desenlace de un paquete que no es suyo.
+
 ### 10.2 Crear una guía en Aliclik: el candado y su caducidad
 
 Crear un pedido en Aliclik es una escritura hacia afuera, irreversible, con
