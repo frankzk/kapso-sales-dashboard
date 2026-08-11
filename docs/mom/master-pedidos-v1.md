@@ -1672,6 +1672,11 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 - Olva no se crea con menos de S/ 30 validados aunque el navegador sea alterado.
 - Dos salidas del mismo pedido reciben QR y código `Sxx` diferentes.
 - Con una salida activa, la salida adicional exige una justificación auditada.
+- La vía de contingencia de Shalom («Ya la creé en Shalom Pro») rechaza el pedido
+  que ya tiene una salida viva, igual que la vía API. Se salta los frenos del
+  API —para eso existe— pero no este: ahí el problema no es la llamada, es que
+  el pedido acabaría con dos paquetes en la calle. Reenviar la **misma** guía
+  para completar identificadores sigue siendo idempotente.
 - Una salida de ruta manual pendiente y en almacén ofrece **Anular salida** en
   «Salidas y guías», con confirmación en dos pasos y evento auditado. Tras
   anularla, el pedido vuelve a poder crear guía de agencia y a finalizarse.

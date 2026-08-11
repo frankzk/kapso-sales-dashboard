@@ -11,6 +11,7 @@ import {
   shalomPhone,
   splitReceiverName,
   suggestedAgencyQuery,
+  blockingActiveGuide,
   shalomGuideIsCancelable,
   shalomSoftBlockers,
   shalomAirRoute,
@@ -715,6 +716,38 @@ describe("shalomGuideIsCancelable", () => {
 
   it("no toca guías de otro courier", () => {
     expect(shalomGuideIsCancelable({ ...base, courier: "aliclik" })).toBe(false);
+  });
+});
+
+describe("blockingActiveGuide — la puerta de atrás de la contingencia", () => {
+  // La pestaña «Ya la creé en Shalom Pro» no pasaba por `blockers` en el modal
+  // ni comprobaba salidas activas en el servidor: era la única vía que dejaba
+  // un pedido con dos paquetes vivos sin decir nada.
+  const viva = { guide_code: "MOM-KP1-POR_DEFINIR-AAAA", courier: "por_definir", delivery_status: "pendiente" };
+
+  it("una salida viva de otro courier bloquea la vinculación", () => {
+    expect(blockingActiveGuide([viva], "009989001")).toEqual(viva);
+  });
+
+  it("sin salidas vivas no bloquea nada", () => {
+    expect(blockingActiveGuide([], "009989001")).toBeNull();
+  });
+
+  it("reenviar la MISMA guía no choca consigo misma", () => {
+    // Completar el código o el ose_id que faltaban es idempotente por diseño.
+    const propia = { guide_code: "009989001", courier: "shalom", delivery_status: "pendiente" };
+    expect(blockingActiveGuide([propia], "009989001")).toBeNull();
+    expect(blockingActiveGuide([propia], " 009989001 ")).toBeNull();
+  });
+
+  it("pero otra guía Shalom viva sí bloquea", () => {
+    const otra = { guide_code: "009989002", courier: "shalom", delivery_status: "en_ruta" };
+    expect(blockingActiveGuide([otra], "009989001")).toEqual(otra);
+  });
+
+  it("una salida sin número no se confunde con la propia", () => {
+    const sinCodigo = { guide_code: null, courier: "por_definir", delivery_status: "pendiente" };
+    expect(blockingActiveGuide([sinCodigo], "009989001")).toEqual(sinCodigo);
   });
 });
 
