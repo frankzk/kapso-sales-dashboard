@@ -17,11 +17,25 @@
 //
 // DOS TOPES, porque "preguntar para siempre" tampoco vale:
 //   * `limit` — cuántas consultas individuales caben en una pasada. Las que no
-//     entren se atienden en la siguiente: el orden es por antigüedad del último
-//     reporte, así que la cola rota y ninguna guía se queda sin turno.
+//     entren se atienden en la siguiente.
 //   * `maxSilenceMs` — cuándo se deja de perseguir una guía muda. Muy por
 //     encima de lo que tarda un retorno; es la red para las que Aliclik
 //     abandonó sin cerrar.
+//
+// LA COLA SE ORDENA POR CUÁNDO SE PREGUNTÓ, NO POR CUÁNDO HABLÓ. Parece un
+// detalle y era un atasco: ordenando por `last_report_at` —la más callada
+// primero— una guía parada se quedaba clavada en cabeza para siempre.
+// Preguntar por ella devuelve un snapshot igual o más viejo que el que tenemos,
+// la guarda monotónica lo descarta sin escribir, `last_report_at` no se mueve, y
+// en la pasada siguiente vuelve a ser la primera. Con cientos de guías vivas y
+// un tope por pasada, las de cabeza se consultaban una y otra vez y las del
+// fondo no llegaban a tener turno nunca — que es exactamente el atasco que este
+// pase existía para deshacer.
+//
+// `aliclik_followup_at` (0116) registra cuándo se PREGUNTÓ, responda lo que
+// responda Aliclik. Es lo único que siempre avanza, así que la rotación queda
+// garantizada. Ordena DENTRO de cada familia: la reserva para las guías que
+// esperan devolución se reparte antes y no la toca.
 
 /** Estados en los que la guía ya terminó su vida y no hay nada que preguntar. */
 const TERMINAL = new Set(["entregado", "transferido"]);
@@ -58,6 +72,10 @@ export interface FollowUpCandidate {
   /** Último estado que reportó Aliclik, tal cual. Solo se usa para detectar la
    *  guía que va camino de vuelta; puede venir vacío en las nacidas del Excel. */
   reported_status?: string | null;
+  /** Cuándo este mismo pase preguntó por ella por última vez. Ordena la cola. */
+  aliclik_followup_at?: string | null;
+  /** Última lectura de API aplicada. Delata a las que el barrido acaba de ver. */
+  api_report_at?: string | null;
 }
 
 /**
@@ -109,10 +127,18 @@ export function followUpKey(c: FollowUpCandidate): string {
 
 export interface SelectFollowUpOpts {
   /**
-   * orderNumbers que el barrido por fechas YA visitó en esta pasada. No se
-   * vuelven a consultar: acaban de aplicarse.
+   * Instante desde el cual una lectura de API cuenta como "recién hecha": las
+   * guías con `api_report_at` posterior no se vuelven a consultar, porque el
+   * barrido por fechas acaba de aplicarles su estado.
+   *
+   * Sustituye al conjunto de orderNumbers que el barrido iba acumulando en
+   * memoria. Tenía que dejar de ser un `Set`: el barrido y este pase ya no
+   * comparten invocación, así que la marca tiene que estar en la propia fila.
+   *
+   * `null` no consulta nada de más — solo renuncia a la exclusión y deja que el
+   * orden de la cola haga el trabajo.
    */
-  scanned: ReadonlySet<string>;
+  refreshedSince: Date | null;
   /** Tope de consultas individuales de esta pasada. */
   limit: number;
   maxSilenceMs: number;
@@ -136,6 +162,14 @@ function lastSignalAt(c: FollowUpCandidate): string | null {
   return c.last_report_at ?? c.created_at;
 }
 
+/** Orden ascendente con los nulos primero: nunca visto es lo más urgente. */
+function byDateAsc(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+  return a < b ? -1 : 1;
+}
+
 /**
  * Decide a qué guías vivas hay que preguntarles por su cuenta.
  *
@@ -153,11 +187,20 @@ export function selectFollowUpGuides(
 ): FollowUpSelection {
   let abandoned = 0;
 
+  const refreshedSince = opts.refreshedSince?.getTime() ?? null;
+
   const live = candidates.filter((c) => {
     if (TERMINAL.has(c.delivery_status)) return false;
     const key = followUpKey(c);
     if (!key) return false;
-    if (opts.scanned.has(key)) return false;
+
+    // El barrido por fechas ya le escribió su estado en esta vuelta. Preguntar
+    // otra vez gastaría un turno que le hace falta a otra.
+    if (refreshedSince !== null && c.api_report_at) {
+      const readAt = new Date(c.api_report_at).getTime();
+      if (Number.isFinite(readAt) && readAt >= refreshedSince) return false;
+    }
+
     const floor = opts.now.getTime() - silenceBudgetMs(c.delivery_status, opts.maxSilenceMs);
 
     const signal = lastSignalAt(c);
@@ -173,20 +216,23 @@ export function selectFollowUpGuides(
     return true;
   });
 
-  // Dentro de cada familia manda el mismo criterio de siempre: la más callada
-  // primero. Lo que cambia es que ahora hay dos colas y no una.
-  const porSilencio = (a: FollowUpCandidate, b: FollowUpCandidate) => {
-    const sa = lastSignalAt(a);
-    const sb = lastSignalAt(b);
-    if (sa === sb) return a.id.localeCompare(b.id);
-    if (!sa) return -1;
-    if (!sb) return 1;
-    return sa < sb ? -1 : 1;
+  // Dentro de cada familia manda el turno: primero a quien hace más que no se le
+  // pregunta. Lo que cambia respecto de ordenar solo por silencio es que el
+  // turno SIEMPRE avanza —se sella al preguntar— mientras que el silencio de una
+  // guía parada no se acorta nunca, y esa era la forma de quedarse clavada en
+  // cabeza pasada tras pasada. Con el turno empatado vuelve a mandar la
+  // urgencia: la más callada primero.
+  const porTurno = (a: FollowUpCandidate, b: FollowUpCandidate) => {
+    const turno = byDateAsc(a.aliclik_followup_at ?? null, b.aliclik_followup_at ?? null);
+    if (turno !== 0) return turno;
+    const señal = byDateAsc(lastSignalAt(a), lastSignalAt(b));
+    if (señal !== 0) return señal;
+    return a.id.localeCompare(b.id);
   };
 
   const limit = Math.max(0, opts.limit);
-  const enDevolucion = live.filter(esperaDevolucion).sort(porSilencio);
-  const resto = live.filter((c) => !esperaDevolucion(c)).sort(porSilencio);
+  const enDevolucion = live.filter(esperaDevolucion).sort(porTurno);
+  const resto = live.filter((c) => !esperaDevolucion(c)).sort(porTurno);
 
   // La reserva se reparte primero, y lo que un grupo no use lo aprovecha el
   // otro: si hoy no hay ninguna guía volviendo, la pasada entera es para las

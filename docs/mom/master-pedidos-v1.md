@@ -880,6 +880,14 @@ Seguimiento de una guía hasta que cierra:
 - Se deja de preguntar cuando la guía termina (entregada, anulada o
   transferida) o tras **60 días sin noticias**. Ese silencio no cierra la guía:
   solo detiene la consulta.
+- **La cola se ordena por a quién hace más que no se le pregunta**, no por quién
+  lleva más callada. Parece lo mismo y no lo es: preguntar por una guía parada
+  devuelve un estado que la guarda monotónica descarta sin escribir, así que su
+  silencio no se acorta y volvía a encabezar la cola en la pasada siguiente,
+  para siempre. Con un tope de consultas por pasada, las de cabeza se repetían y
+  las del fondo no llegaban a tener turno. Lo que ordena es el turno —que
+  siempre avanza porque se sella al preguntar, responda Aliclik lo que responda—
+  y, entre iguales, la más callada primero.
 - El seguimiento alcanza **también a las guías nacidas del Excel**: pregunta por
   `external_order_number` si lo hay y por `guide_code` si no. Son el mismo
   identificador por dos vías, así que limitarlo al primero dejaría fuera a la
@@ -916,16 +924,38 @@ Sin esa caducidad el candado no tenía salida: la intención quedaba viva para
 siempre y el pedido inoperable hasta que alguien lo desbloqueara a mano. Ocurrió
 el 08-08-2026 con dos pedidos, durante una caída de la API de Aliclik.
 
+**Barrer y cerrar son dos trabajos, y corren por separado.** Recorrer el listado
+por fechas es lo largo; caducar candados y perseguir rezagadas es lo corto y lo
+urgente. Mientras compartieron invocación, lo corto dependía de que lo largo
+terminase a tiempo — y dejó de terminar: el recorrido creció hasta agotar el
+límite de ejecución y el 10-08-2026 las nueve pasadas de tres horas seguidas
+murieron dentro del bucle. El barrido parecía sano porque aplicaba estados antes
+de morir, pero **nada de lo que iba después llegó a ejecutarse nunca**. Un
+candado duró más de diez horas y 515 guías vivas acumularon una media de 8 días
+sin noticias. Hoy el cierre tiene su propio cron y su propio presupuesto.
+
+Separarlos obliga a que la prueba de haber buscado **sobreviva a la invocación
+que la produjo**: el barrido deja constancia de sí mismo —cuándo empezó, cuándo
+terminó y qué ventana cubrió— y el cierre la lee. Ninguna de las retenciones de
+abajo se aflojó al mudarse; lo único que cambió es de dónde sale la evidencia.
+
 **Cuándo NO se caduca**, porque liberar de más cuesta una guía duplicada —dinero
 real y ventana de cancelación corta— mientras que liberar de menos solo cuesta
 esperar:
 
-- **Si el barrido no pudo recorrerse entero, no se caduca nada.** «Buscamos y no
-  está» no es «no pudimos buscar», y es justo durante una caída de Aliclik cuando
-  las dos se confunden: sin esta condición, la misma caída que provoca los
-  timeouts liberaría los candados que protegen de ellos.
+- **Si no consta un barrido completo y reciente, no se caduca nada.** «Buscamos y
+  no está» no es «no pudimos buscar», y es justo durante una caída de Aliclik
+  cuando las dos se confunden: sin esta condición, la misma caída que provoca los
+  timeouts liberaría los candados que protegen de ellos. Que la constancia además
+  **caduque** —dos horas, unas seis pasadas— evita lo contrario: dar por buena
+  para siempre la última búsqueda que salió bien.
+- **Si el barrido arrancó antes de que naciera la intención, tampoco.** Pudo
+  pasar de largo por la zona del listado donde estaría el pedido, así que no
+  haberlo visto no dice nada de él.
 - **Si la ausencia quedó en duda, tampoco.** Una intención cuyo teléfono señalaba
-  a varios pedidos abiertos a la vez queda para revisión humana.
+  a varios pedidos abiertos a la vez queda para revisión humana. La duda se
+  anota en la propia intención y vale para el barrido que la vio: si el siguiente
+  barrido completo no la vuelve a marcar, la intención vuelve a ser caducable.
 - **Si la fecha de creación cayó fuera de la ventana del barrido**, la intención
   caduca igual —lleva demasiado bloqueando—, pero el motivo registra que la
   ausencia **no** pudo comprobarse, y se cuenta aparte. Antes de reintentar hay

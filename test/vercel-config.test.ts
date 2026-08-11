@@ -65,13 +65,25 @@ describe("vercel.json", () => {
     expect(cfg.regions).toEqual(["gru1"]);
   });
 
-  it("mantiene los once crons con expresiones válidas de 5 campos", () => {
+  it("mantiene los doce crons con expresiones válidas de 5 campos", () => {
     const crons = cfg.crons as { path: string; schedule: string }[];
-    expect(crons).toHaveLength(11);
+    expect(crons).toHaveLength(12);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);
     }
+  });
+
+  it("el barrido de Aliclik y su cierre no arrancan en el mismo minuto", () => {
+    // Son dos crones justamente porque no caben en una invocación: el barrido
+    // agotaba `maxDuration` y el cierre, que iba detrás, no llegaba a correr
+    // nunca. Lanzarlos a la vez les haría pelearse por la misma ventana de
+    // ejecución y por el mismo cupo de la API de Aliclik. El cierre va al medio,
+    // sobre el barrido ya terminado y con su constancia recién escrita.
+    const crons = cfg.crons as { path: string; schedule: string }[];
+    const at = (path: string) => crons.find((c) => c.path === path)?.schedule;
+    expect(at("/api/cron/aliclik-reconcile")).toBe("*/20 * * * *");
+    expect(at("/api/cron/aliclik-close")).toBe("10,30,50 * * * *");
   });
 
   it("cada cron apunta a una ruta que existe", () => {

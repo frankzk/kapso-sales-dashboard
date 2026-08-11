@@ -22,7 +22,7 @@ const guide = (over: Partial<FollowUpCandidate> = {}): FollowUpCandidate => ({
 });
 
 const opts = (over: Partial<SelectFollowUpOpts> = {}): SelectFollowUpOpts => ({
-  scanned: new Set<string>(),
+  refreshedSince: null,
   limit: 40,
   maxSilenceMs: 60 * DAY_MS,
   now: NOW,
@@ -88,9 +88,26 @@ describe("selectFollowUpGuides — a quién se persigue", () => {
     expect(selectFollowUpGuides([anulada], opts({ maxSilenceMs: 5 * DAY_MS })).due).toEqual([]);
   });
 
+  // El barrido por fechas ya no comparte invocación con este pase, así que no
+  // puede pasarle un `Set` en memoria: la marca de "recién leída" viaja en la
+  // propia fila (`api_report_at`) y el corte es una fecha.
   it("no persigue lo que el barrido por fechas acaba de ver", () => {
-    const res = selectFollowUpGuides([guide()], opts({ scanned: new Set(["ALC000123456789"]) }));
+    const reciénLeída = guide({ api_report_at: daysAgo(0.01) });
+    const res = selectFollowUpGuides([reciénLeída], opts({ refreshedSince: new Date(NOW.getTime() - DAY_MS) }));
     expect(res.due).toEqual([]);
+  });
+
+  it("sí persigue la que el barrido leyó antes del corte", () => {
+    const leídaAntes = guide({ api_report_at: daysAgo(3) });
+    const res = selectFollowUpGuides([leídaAntes], opts({ refreshedSince: new Date(NOW.getTime() - DAY_MS) }));
+    expect(res.due.map((g) => g.id)).toEqual(["s1"]);
+  });
+
+  // Sin corte no se excluye a nadie: se renuncia a la exclusión y decide el
+  // orden de la cola. Nunca consulta de más.
+  it("sin corte no excluye nada por lectura reciente", () => {
+    const res = selectFollowUpGuides([guide({ api_report_at: daysAgo(0.01) })], opts());
+    expect(res.due.map((g) => g.id)).toEqual(["s1"]);
   });
 
   // Las guías que entraron por Excel no tienen orderNumber, pero SÍ guide_code, y
@@ -118,11 +135,11 @@ describe("selectFollowUpGuides — a quién se persigue", () => {
     expect(res.due).toEqual([]);
   });
 
-  // El barrido por fechas anota lo que ya visitó. Como orderNumber y guide_code
-  // son el mismo valor, una guía del Excel recién barrida no se vuelve a pedir.
+  // La exclusión por lectura reciente no mira el identificador, así que vale
+  // igual para las guías del Excel — que son la mayoría del universo.
   it("no repite una guía del Excel que el barrido acaba de ver", () => {
-    const excel = guide({ external_order_number: null, guide_code: "AUR5X1" });
-    const res = selectFollowUpGuides([excel], opts({ scanned: new Set(["AUR5X1"]) }));
+    const excel = guide({ external_order_number: null, guide_code: "AUR5X1", api_report_at: daysAgo(0.01) });
+    const res = selectFollowUpGuides([excel], opts({ refreshedSince: new Date(NOW.getTime() - DAY_MS) }));
     expect(res.due).toEqual([]);
   });
 });
@@ -185,8 +202,50 @@ describe("selectFollowUpGuides — topes", () => {
 });
 
 describe("selectFollowUpGuides — orden de la cola", () => {
-  // El orden es lo que garantiza que la cola rote: si siempre se atendiera a
-  // las mismas, las de la cola nunca resolverían.
+  // EL ATASCO QUE ESTO DESHACE. Ordenando solo por `last_report_at`, una guía
+  // parada se clavaba en cabeza para siempre: preguntar por ella devuelve un
+  // snapshot que la guarda monotónica descarta sin escribir, así que su señal no
+  // avanza y vuelve a ser la primera en la pasada siguiente. Con un tope por
+  // pasada, las del fondo no tenían turno nunca. El turno se ordena por cuándo
+  // se PREGUNTÓ, que es lo único que siempre avanza.
+  it("atiende primero a la que lleva más tiempo sin que se le pregunte", () => {
+    const preguntadaAyer = guide({
+      id: "ayer",
+      external_order_number: "ALC1",
+      last_report_at: daysAgo(40),
+      aliclik_followup_at: daysAgo(1),
+    });
+    const preguntadaHaceUnaHora = guide({
+      id: "reciente",
+      external_order_number: "ALC2",
+      last_report_at: daysAgo(45),
+      aliclik_followup_at: daysAgo(0.04),
+    });
+
+    // La de señal más antigua es "reciente", pero ya tuvo su turno hace una hora.
+    const res = selectFollowUpGuides([preguntadaHaceUnaHora, preguntadaAyer], opts());
+    expect(res.due.map((g) => g.id)).toEqual(["ayer", "reciente"]);
+  });
+
+  it("la que nunca se preguntó va antes que cualquiera ya preguntada", () => {
+    const nunca = guide({
+      id: "nunca",
+      external_order_number: "ALC1",
+      last_report_at: daysAgo(16),
+      aliclik_followup_at: null,
+    });
+    const preguntada = guide({
+      id: "preguntada",
+      external_order_number: "ALC2",
+      last_report_at: daysAgo(40),
+      aliclik_followup_at: daysAgo(5),
+    });
+
+    const res = selectFollowUpGuides([preguntada, nunca], opts());
+    expect(res.due.map((g) => g.id)).toEqual(["nunca", "preguntada"]);
+  });
+
+  // Con el turno empatado vuelve a mandar la urgencia: la más callada primero.
   it("atiende primero a la que lleva más tiempo sin hablar", () => {
     const reciente = guide({ id: "reciente", external_order_number: "ALC1", last_report_at: daysAgo(16) });
     const antigua = guide({ id: "antigua", external_order_number: "ALC2", last_report_at: daysAgo(40) });
