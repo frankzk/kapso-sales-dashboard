@@ -1891,6 +1891,14 @@ const TIMELINE_LABEL: Record<string, string> = {
   state_change: "Cambio de estado",
   note: "Nota",
   system: "Automático",
+  // Cola de Leads (lo de ANTES del pedido). Llevan prefijo porque `note`,
+  // `call` y `system` ya existen arriba con otro significado, y sin él una
+  // gestión de Repro Provincia y una llamada de la asesora se leerían igual.
+  lead_sale: "Venta cerrada por la asesora",
+  lead_call: "Llamada al cliente (Leads)",
+  lead_state_change: "Cambio de estado del lead",
+  lead_note: "Nota de la asesora",
+  lead_system: "Automático (Leads)",
 };
 
 type DrawerSectionId =
@@ -2941,8 +2949,10 @@ function OrderDrawer({
                         <span
                           className={cn(
                             "absolute -left-[21px] top-1.5 h-2 w-2 rounded-full",
-                            /payment|liquidation|entregado/.test(t.kind)
-                              ? "bg-emerald-500"
+                            t.origin === "leads"
+                              ? "bg-violet-500"
+                              : /payment|liquidation|entregado/.test(t.kind)
+                                ? "bg-emerald-500"
                               : /return|refund|merma|anulado/.test(t.kind)
                                 ? "bg-orange-500"
                                 : /guide|dispatch|route|custody/.test(t.kind)
@@ -2960,9 +2970,9 @@ function OrderDrawer({
                               · {confirmationResultLabel(t.confirmation.result)}
                             </span>
                           )}
-                          {t.newStatus && (
+                          {(t.statusLabel ?? (t.newStatus ? generalLabel(t.newStatus) : null)) && (
                             <span className="ml-1 font-normal text-slate-500">
-                              → {generalLabel(t.newStatus)}
+                              → {t.statusLabel ?? generalLabel(t.newStatus!)}
                             </span>
                           )}
                         </p>
@@ -2977,7 +2987,13 @@ function OrderDrawer({
                             : ""}
                           {t.courier ? ` · ${t.courier}` : ""}
                           {t.guideCode ? ` · ${t.guideCode}` : ""}
-                          {` · ${t.origin === "gestion" ? "Repro Provincia" : t.source}`}
+                          {` · ${
+                            t.origin === "gestion"
+                              ? "Repro Provincia"
+                              : t.origin === "leads"
+                                ? "Leads"
+                                : t.source
+                          }`}
                         </p>
                       </li>
                     ))}
