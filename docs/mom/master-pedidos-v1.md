@@ -97,6 +97,19 @@ Reglas:
 - La regla de repetición por modalidad se evalúa cuando el courier se conoce; el
   máximo de cinco salidas rige siempre, porque no depende del courier.
 - Cada salida nueva genera un QR nuevo.
+- Una salida de ruta manual se puede **anular** mientras siga `pendiente` y la
+  caja no haya cambiado de custodia. Anular no borra: la fila conserva su
+  consecutivo y su historial, y el consecutivo no se reutiliza. Es la corrección
+  de un registro —la salida creada por error o con el courier equivocado—, no un
+  hecho logístico. Una vez transferida la custodia al motorizado hay un paquete
+  en la calle y el camino es recibir su retorno, no anular.
+- Anular es obligatorio que exista porque el sistema ya lo exigía: crear una guía
+  de agencia rechaza el pedido con una salida activa, y el cierre no finaliza con
+  salidas activas. Sin la acción, una salida `por definir` creada por error deja
+  al pedido sin poder emitir guía **ni** cerrarse.
+- Las salidas con API propia (Aliclik, Shalom, Tanders) no se anulan por esta
+  vía: tienen la suya, que además avisa al courier. Marcarlas anuladas solo de
+  nuestro lado dejaría la guía viva en el courier.
 - El courier y la fecha son metadatos visibles; no forman parte del token QR.
 - El código de guía externa se conserva separado.
 - El límite global acordado es cinco salidas por pedido.
@@ -1659,6 +1672,17 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 - Olva no se crea con menos de S/ 30 validados aunque el navegador sea alterado.
 - Dos salidas del mismo pedido reciben QR y código `Sxx` diferentes.
 - Con una salida activa, la salida adicional exige una justificación auditada.
+- La vía de contingencia de Shalom («Ya la creé en Shalom Pro») rechaza el pedido
+  que ya tiene una salida viva, igual que la vía API. Se salta los frenos del
+  API —para eso existe— pero no este: ahí el problema no es la llamada, es que
+  el pedido acabaría con dos paquetes en la calle. Reenviar la **misma** guía
+  para completar identificadores sigue siendo idempotente.
+- Una salida de ruta manual pendiente y en almacén ofrece **Anular salida** en
+  «Salidas y guías», con confirmación en dos pasos y evento auditado. Tras
+  anularla, el pedido vuelve a poder crear guía de agencia y a finalizarse.
+- La misma salida ya transferida al motorizado **no** ofrece anular, y el
+  servidor la rechaza aunque se llame a la acción directamente: esa se cierra
+  recibiendo su retorno.
 - Un courier con salida **viva** deja de ofrecerse, y la tarjeta **nombra esa
   salida**: número del courier, código corto y el estado que el courier reporta.
   Decir «no disponible» sin decir cuál obliga a bajar a «Salidas y guías» para

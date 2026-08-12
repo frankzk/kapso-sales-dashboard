@@ -39,8 +39,10 @@ import {
 } from "@/lib/order-confirmation";
 import {
   COURIER_TBD,
+  MANUAL_ROUTE_CREATED_VIA,
   MAX_OUTPUTS_PER_ORDER,
   canRepeatCourier,
+  manualOutputIsCancelable,
   normalizeOrderCode,
 } from "@/lib/shipment-output";
 import {
@@ -334,7 +336,7 @@ export async function createManualRouteOutput(
       next_followup_at: `${dispatchDate}T12:00:00-05:00`,
       preparation_state: "rotulo_generado",
       custody_state: "empresa",
-      created_via: "mom_manual_route",
+      created_via: MANUAL_ROUTE_CREATED_VIA,
       label_url: labelUrl,
       ...(input.courier === "olva" ? { pickup_state: "pendiente_de_envio" } : {}),
     })
@@ -374,6 +376,110 @@ export async function createManualRouteOutput(
   };
 }
 
+
+/**
+ * Anula una salida de ruta manual que todavía no salió de la empresa (§4).
+ *
+ * El sistema ya exigía anular —«el pedido ya tiene una guía activa: …, anúlala
+ * antes de crear otra» en los modales de Shalom y Tanders, «Cancélalas o recibe
+ * su retorno antes de finalizar» en el cierre— pero solo había botón para las
+ * guías de Shalom. Una salida `por_definir` creada por error bloqueaba el pedido
+ * entero sin dar forma de deshacerla.
+ *
+ * Marca `anulado`; no borra. Ver `manualOutputIsCancelable`.
+ */
+export async function cancelManualRouteOutput(
+  shipmentId: string,
+  input: { note?: string } = {},
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  // Mismo permiso que crearla: es una corrección de registro interno, no una
+  // escritura hacia el courier (esas piden permisos propios, ver `permissions`).
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite anular salidas." };
+
+  const admin = createAdminSupabase();
+  const { data: shipmentRow, error: shipmentError } = await admin
+    .from("shipments")
+    .select("id,order_id,courier,guide_code,output_code,delivery_status,custody_state,custody_transferred_at,created_via")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (shipmentError) return { error: `No se pudo leer la salida: ${shipmentError.message}` };
+  if (!shipmentRow) return { error: "No se encontró la salida." };
+  const output = shipmentRow as {
+    id: string;
+    order_id: string | null;
+    courier: string;
+    guide_code: string | null;
+    output_code: string | null;
+    delivery_status: string;
+    custody_state: string | null;
+    custody_transferred_at: string | null;
+    created_via: string | null;
+  };
+  if (!output.order_id) return { error: "Esa salida no está vinculada a ningún pedido." };
+
+  const ctx = await authorizeOrder(output.order_id);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  // Se revalida acá y no solo en la interfaz: un botón que no se pinta no es una
+  // autorización, y entre que se abrió el drawer y se confirmó, la caja pudo
+  // haber pasado al motorizado.
+  if (output.created_via !== MANUAL_ROUTE_CREATED_VIA) {
+    return {
+      error:
+        "Esa salida no es de ruta manual. Las guías de Aliclik, Shalom y Tanders se anulan desde su propio botón, que además avisa al courier.",
+    };
+  }
+  if (!manualOutputIsCancelable(output)) {
+    return {
+      error:
+        output.delivery_status !== "pendiente"
+          ? `La salida está ${output.delivery_status.replace("_", " ")}: ya no es un registro por corregir. Registra su retorno desde el cierre.`
+          : "La caja ya salió con el motorizado. Recibe su retorno en vez de anularla.",
+    };
+  }
+
+  const label = output.output_code ?? output.guide_code ?? shipmentId.slice(0, 8).toUpperCase();
+  const note = input.note?.trim() ?? "";
+  if (note.length > 2000) return { error: "La nota es demasiado larga (máx. 2000)." };
+
+  const occurredAt = new Date().toISOString();
+  const { error: updateError } = await admin
+    .from("shipments")
+    .update({
+      delivery_status: "anulado",
+      status_category: "closed",
+      pickup_state: null,
+      next_followup_at: null,
+      updated_at: occurredAt,
+    })
+    .eq("id", shipmentId)
+    // Vuelve a exigir las condiciones EN LA ESCRITURA: si otra pestaña despachó
+    // la caja entre la lectura de arriba y este update, no la anula igual.
+    .eq("delivery_status", "pendiente")
+    .eq("created_via", MANUAL_ROUTE_CREATED_VIA)
+    .is("custody_transferred_at", null);
+  if (updateError) return { error: `No se pudo anular la salida: ${updateError.message}` };
+
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "route_output_cancelled",
+    source: "manual",
+    courier: output.courier,
+    guideCode: output.guide_code,
+    shipmentId,
+    reason: note || null,
+    note: `${label} anulada; la caja nunca salió de la empresa.${note ? ` Motivo: ${note}` : ""}`,
+    occurredAt,
+    payload: { outputCode: output.output_code, previousStatus: output.delivery_status },
+  });
+
+  await recomputeOrderMasterSafe(admin, [output.order_id]);
+  revalidatePath(MASTER_PATH);
+  revalidatePath("/dashboard/pedidos/despacho");
+  return {
+    notice: `${label} anulada. El pedido ya puede recibir otra salida.${eventError ? ` Aviso: no se pudo escribir el evento de auditoría (${eventError}).` : ""}`,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Rótulos: resolver la salida de cada pedido (crear si hace falta)

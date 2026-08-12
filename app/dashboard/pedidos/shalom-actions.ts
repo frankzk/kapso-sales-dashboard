@@ -51,6 +51,7 @@ import {
   type StoreShalom,
 } from "@/lib/shalom/session";
 import {
+  blockingActiveGuide,
   buildShalomOrderPayload,
   documentError,
   generatePickupCode,
@@ -113,6 +114,16 @@ export interface ShalomDraftView {
   pickupCode: string | null;
   /** Motivos para NO crear la guía todavía. Imposibles: no se saltan. */
   blockers: string[];
+  /**
+   * Los bloqueadores que valen TAMBIÉN para la vía de contingencia.
+   *
+   * `blockers` no sirve para la pestaña «Ya la creé en Shalom Pro»: casi todos
+   * son motivos para no llamar al API —falta configuración, la sesión no
+   * conecta— y esa vía existe precisamente para cuando el API no responde.
+   * Pero una salida ya viva sí la bloquea, porque el problema no es la llamada
+   * sino que el pedido acabaría con dos paquetes en la calle.
+   */
+  contingencyBlockers: string[];
   /**
    * Frenos que SÍ se pueden saltar, dejando un motivo escrito que queda en la
    * línea de tiempo con el nombre de quien lo escribió.
@@ -211,20 +222,24 @@ export async function loadShalomDraft(
   const configured = isConfigured(store);
 
   const blockers: string[] = [];
+  const contingencyBlockers: string[] = [];
   const warnings: string[] = [];
 
   const configBlocker = configurationBlocker(store);
   if (configBlocker) blockers.push(configBlocker);
 
   for (const g of await activeGuides(admin, orderId)) {
-    blockers.push(
+    contingencyBlockers.push(
       `El pedido ya tiene una guía activa: ${g.guide_code} (${g.courier}, ${g.delivery_status}). Anúlala antes de crear otra.`,
     );
   }
 
   if (["entregado", "devuelto", "anulado"].includes(row.general_status)) {
-    blockers.push(`El pedido está ${row.general_status.replace("_", " ")}.`);
+    contingencyBlockers.push(`El pedido está ${row.general_status.replace("_", " ")}.`);
   }
+
+  // Todo lo que impide la contingencia impide con más razón crear por API.
+  blockers.push(...contingencyBlockers);
 
   // Shalom identifica al destinatario por documento y el pedido no lo trae:
   // Shopify no pide DNI. Es el único dato que el operador escribe siempre.
@@ -293,6 +308,7 @@ export async function loadShalomDraft(
       prefilledTerminalName: prefilled?.destiny_terminal_name ?? null,
       pickupCode: perms.can("shalom.view_pickup_key") ? pickupCode : null,
       blockers,
+      contingencyBlockers,
       softBlockers,
       warnings,
     },
@@ -485,6 +501,23 @@ export async function registerManualShalomGuide(
   if (duplicate.data?.order_id && duplicate.data.order_id !== row.order_id) {
     return {
       error: `La guía ${guide.guideCode} ya está vinculada a otro pedido. Revisa el número antes de continuar.`,
+    };
+  }
+
+  // La contingencia registra una salida física igual que la vía API, así que
+  // hereda su misma regla: un pedido no puede quedar con dos salidas vivas. Sin
+  // esto, la pestaña «Ya la creé en Shalom Pro» era la puerta de atrás — no la
+  // frena `blockers` en el modal ni se comprobaba acá— y dejaba al pedido con
+  // dos paquetes que nadie sabe cuál viaja.
+  //
+  // Se excluye ESTA guía: reenviar el formulario para completar identificadores
+  // que faltaban es idempotente por diseño y no debe chocar consigo mismo.
+  const otherActive = blockingActiveGuide(await activeGuides(admin, orderId), guide.guideCode);
+  if (otherActive) {
+    return {
+      error:
+        `El pedido ya tiene una salida activa: ${otherActive.guide_code} (${otherActive.courier}, ${otherActive.delivery_status}). ` +
+        "Anúlala antes de vincular esta guía; si ya salió con el courier, registra primero su retorno.",
     };
   }
 

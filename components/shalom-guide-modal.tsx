@@ -269,6 +269,7 @@ export function ShalomGuideModal({
   const keyErr = canSeeKey && pickupCode ? pickupCodeError(pickupCode) : null;
 
   const blocked = (draft?.blockers.length ?? 0) > 0;
+  const contingencyBlocked = (draft?.contingencyBlockers.length ?? 0) > 0;
   // Freno blando: deshabilita, pero se levanta escribiendo un motivo. El mínimo
   // existe porque "ok" o "." no explican nada a quien lea esto en un mes.
   const soft = draft?.softBlockers ?? [];
@@ -479,6 +480,18 @@ export function ShalomGuideModal({
                       </p>
                     </div>
 
+                    {/* La contingencia se salta los frenos del API —para eso
+                        existe— pero no el de una salida ya viva: ahí el problema
+                        no es la llamada, es que el pedido acabaría con dos
+                        paquetes en la calle. */}
+                    {contingencyBlocked && (
+                      <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                        {draft?.contingencyBlockers.map((b) => (
+                          <p key={b}>{b}</p>
+                        ))}
+                      </div>
+                    )}
+
                     <Field
                       label="Número de guía Shalom *"
                       hint="Es el número impreso que se usa para tracking. Debe copiarse exactamente de Shalom Pro."
@@ -585,7 +598,7 @@ export function ShalomGuideModal({
                       </button>
                       <button
                         onClick={submitManual}
-                        disabled={!manualGuideCode.trim() || pending}
+                        disabled={!manualGuideCode.trim() || pending || contingencyBlocked}
                         className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
                       >
                         {pending ? "Vinculando…" : "Vincular guía externa"}
