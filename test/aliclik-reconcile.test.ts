@@ -69,11 +69,14 @@ describe("reconcileAliclikApiGuides — se niega a adivinar", () => {
   });
 
   it("no le da el código de un pedido a la guía de OTRO pedido del mismo cliente", () => {
-    // El caso de #KP120351 / #KP122767 (17-07-2026): un mismo teléfono con dos
-    // pedidos abiertos. La fila del reporte trae AUR5X122767 y su nombre, pero
-    // la única guía provisional viva con ese teléfono era la del pedido de
-    // junio. El paso 2 no casaba —los nombres difieren—, y el paso 3 la
-    // promovía igual: el pedido de junio se quedó con la guía de julio.
+    // Un mismo teléfono con dos pedidos abiertos. La fila del reporte trae la
+    // guía del pedido de julio y su nombre, pero la única guía provisional viva
+    // con ese teléfono es la del pedido de junio. El paso 2 no casa —los
+    // nombres difieren— y el paso 3 la promovía igual.
+    //
+    // PREVENTIVO: a 11-08-2026 no se ha promovido ninguna guía en producción.
+    // Este agujero nunca llegó a usarse; el daño real de la misma forma de
+    // razonar lo hizo el importador (ver test/shipment-match.test.ts).
     const res = reconcileAliclikApiGuides(
       [row({ guide_code: "AUR5X122767", order_name: "#KP122767" })],
       [guide({ order_id: "o-junio", order_name: "#KP120351" })],

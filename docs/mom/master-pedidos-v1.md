@@ -906,13 +906,48 @@ El teléfono a secas existe para la guía que **todavía no tiene pedido**: ahí
 hay nada más con qué reconocerla. No sirve para ganarle a un nombre que ya está
 escrito y dice otra cosa. Cuando la fila nombra un pedido y el candidato lleva
 otro, eso no es falta de evidencia sino evidencia **en contra**, y no se
-promueve. El teléfono es la identidad del cliente (§8), no la del pedido: el
-17-07-2026 un cliente con dos pedidos abiertos —#KP120351 de junio y #KP122767 de
-julio— terminó con la guía de julio colgada del pedido de junio, porque la única
-guía provisional viva con ese teléfono era la del pedido viejo. Perder la
-promoción no cuesta nada —la guía se ingesta por Excel como cualquier otra—;
-acertarle al pedido equivocado sí: mueve un pedido a despachado y le adjudica el
-desenlace de un paquete que no es suyo.
+promueve. Perder la promoción no cuesta nada —la guía se ingesta por Excel como
+cualquier otra—; acertarle al pedido equivocado sí.
+
+Esta retención es preventiva: a 11-08-2026 **ninguna guía se ha promovido nunca**
+en producción, así que el camino existe pero no se ha usado. No confundirla con
+el emparejamiento del importador, que sí falló y se trata justo debajo.
+
+#### El código impreso nombra a su pedido, y manda sobre el teléfono
+
+Al quitar el prefijo `AUR5X` quedan tres familias de código, y medidas sobre las
+3.976 guías con pedido (11-08-2026) se comportan de forma tajante:
+
+| dígitos | guías | terminan en el nº de su pedido |
+| --- | --- | --- |
+| 12 | 2.841 | 0 |
+| 7 | 12 | 0 |
+| 6 | 1.179 | 1.162 (98,6%) |
+
+Las de doce y siete son identificadores de Aliclik. **La de seis es el número del
+pedido**, tecleado por quien creó la guía en el portal. Por eso solo esa se lee
+como referencia: en las otras dos, leer un pedido ahí dentro sería leer ruido.
+
+**Regla: si el código nombra un pedido, la guía no admite otro.** Los demás
+candidatos se descartan antes de emparejar, y si el nombrado no está entre ellos
+la fila va a revisión.
+
+Lo que evita es un error que el teléfono solo no puede ver. El emparejamiento por
+teléfono exige un único pedido con ese número, y lee ese «uno» como *solo hay
+uno* cuando significa *solo he ingerido uno*: el pedido bueno puede no haber
+llegado aún desde Shopify. Ocurrió **17 veces entre el 01-07 y el 23-07-2026**,
+todas con el mismo perfil —la guía se importó antes que su pedido, el teléfono
+señalaba a un pedido anterior del mismo cliente, y los 17 dueños reales entraron
+en la carga del 26-07—. Nadie volvió a mirar aquellos enlaces, así que 17 pedidos
+cargan el desenlace de un paquete ajeno y otros 17 figuran sin salida.
+
+El teléfono es la identidad del cliente (§8), no la del pedido, y un cliente que
+vuelve a comprar tiene dos. Por eso no basta para elegir entre ellos.
+
+> ⚠️ **Frágil a propósito, y hay que vigilarlo**: la regla distingue las familias
+> por longitud, y hoy los pedidos de la operación son de seis dígitos
+> (106620–127540). El día que lleguen al millón, siete dígitos dejarán de ser
+> «identificador de Aliclik» y habrá que revisar esto.
 
 ### 10.2 Crear una guía en Aliclik: el candado y su caducidad
 
