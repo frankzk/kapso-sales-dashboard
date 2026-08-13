@@ -2752,6 +2752,24 @@ function OrderDrawer({
                           Rótulo ↗
                         </a>
                       )}
+                      {/* Los dos rótulos del paquete en UNA hoja (0120): el de
+                          Tanders arriba y, debajo, el QR de la salida y qué va
+                          dentro de la caja. Se suma a los otros dos en vez de
+                          reemplazarlos mientras se valida en el almacén. Marca
+                          «rótulo generado» igual que el enlace suyo: para
+                          Tanders el paquete quedó rotulado, lo imprimas junto o
+                          por separado. */}
+                      {g.courier === "tanders" && (
+                        <a
+                          href={`/api/pedidos/guia-combinada?ids=${g.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={() => void markTandersLabelGenerated([g.id])}
+                          className="rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-xs font-medium text-brand-700 hover:bg-brand-100"
+                        >
+                          Guía combinada ↗
+                        </a>
+                      )}
                       {/* El rótulo de Shalom lo compone ELLOS, no nosotros: se
                           pide a su API y se sirve como PDF. Solo existe para las
                           guías creadas por API — las que llegaron por el Excel
