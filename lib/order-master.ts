@@ -245,6 +245,9 @@ function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot 
     agency_branch: s.agency_branch ?? null,
     agency_arrived_at: s.agency_arrived_at ?? null,
     agency_expires_at: s.agency_expires_at ?? null,
+    // `custody_transferred_at` es una de las guardas de la corrección de
+    // registro: si la caja llegó a salir, no se toca el estado.
+    custody_transferred_at: s.custody_transferred_at ?? null,
     created_at: s.created_at,
     // Una gestión registrada por el equipo también es un movimiento del pedido.
     updated_at:
@@ -820,6 +823,7 @@ export async function recomputeOrderMaster(
 
     const eventSnapshots: OrderEventSnapshot[] = orderEvents.map((e) => ({
       kind: e.kind,
+      shipment_id: e.shipment_id,
       occurred_at: e.occurred_at,
       courier: e.courier,
       new_status: e.new_status,

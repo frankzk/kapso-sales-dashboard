@@ -254,6 +254,102 @@ describe("resolveOrderState — anulado (§3.4)", () => {
   });
 });
 
+/**
+ * Corregir el courier de un pedido no es darlo por perdido (§4 del MOM).
+ *
+ * Pasó con #KP127639: la única salida se creó «por definir», hubo que anularla
+ * para poder emitir la guía de Tanders, y al anularla el pedido quedó ANULADO —
+ * lo que además bloqueaba la guía nueva, que era el motivo de la corrección.
+ *
+ * LA CORRECCIÓN SE PRUEBA, NO SE DEDUCE. La primera versión la infería de la
+ * FORMA de la salida (ruta manual + nunca despachada + nunca transferida) y en
+ * producción eso capturaba 368 pedidos, de los que solo 2 se habían anulado por
+ * el botón: la mesa de cierre exige que no queden salidas activas, así que
+ * finalizar un pedido deja exactamente esa misma huella. Habría reabierto 336
+ * expedientes cerrados. Por eso la condición es el evento que escribe la acción.
+ */
+const anulada = (id: string, over: Partial<GuideSnapshot> = {}): GuideSnapshot =>
+  guide(id, {
+    courier: "por_definir",
+    delivery_status: "anulado",
+    custody_transferred_at: null,
+    dispatched_at: null,
+    closed_at: "2026-07-05T10:00:00.000Z",
+    ...over,
+  });
+
+/** El evento que deja el botón «Anular salida», nombrando su salida. */
+const eventoCorreccion = (shipmentId: string): OrderEventSnapshot => ({
+  kind: "route_output_cancelled",
+  shipment_id: shipmentId,
+  occurred_at: "2026-07-05T10:00:00.000Z",
+  courier: null,
+  new_status: null,
+  new_operational: null,
+});
+
+describe("resolveOrderState — anular una salida es corregir, no rendirse", () => {
+  it("con el evento del botón, la salida anulada NO anula el pedido", () => {
+    // El caso exacto de #KP127639.
+    const s = resolve([anulada("1")], order(), [eventoCorreccion("1")]);
+    expect(s.general).toBe("pendiente");
+  });
+
+  it("y el pedido queda listo para recibir la guía nueva", () => {
+    // Lo que de verdad importa: `pendiente` es lo que deja pasar el guardián de
+    // Tanders/Aliclik/Shalom, que rechaza entregado, devuelto y anulado.
+    const s = resolve([anulada("1")], order(), [eventoCorreccion("1")]);
+    expect(["entregado", "devuelto", "anulado"]).not.toContain(s.general);
+  });
+
+  it("SIN el evento, la misma salida sigue anulando el pedido", () => {
+    // La guarda que evitó el desastre: 366 pedidos en produccion tienen esta
+    // forma sin haber pasado por el boton, y 336 ya estaban finalizados.
+    const s = resolve([anulada("1")]);
+    expect(s.general).toBe("anulado");
+  });
+
+  it("el evento de OTRA salida no vale para esta", () => {
+    // Un pedido con dos salidas donde solo una se corrigió: la otra decide.
+    const s = resolve([anulada("1"), anulada("2")], order(), [eventoCorreccion("1")]);
+    expect(s.general).toBe("anulado");
+  });
+
+  it("una guía de courier anulada SÍ sigue anulando: ahí la operación se rindió", () => {
+    const s = resolve([guide("1", { delivery_status: "anulado", closed_at: "2026-07-05T10:00:00.000Z" })]);
+    expect(s.general).toBe("anulado");
+  });
+
+  it("una salida que YA salió con el motorizado anula aunque tenga el evento", () => {
+    // Si la caja se fue, anularla no es corregir un registro: hay un hecho
+    // físico detrás, y tratarlo como error escondería un paquete en la calle.
+    const ev = [eventoCorreccion("1")];
+    expect(resolve([anulada("1", { custody_transferred_at: "2026-07-04T09:00:00.000Z" })], order(), ev).general).toBe("anulado");
+    expect(resolve([anulada("1", { dispatched_at: "2026-07-04T09:00:00.000Z" })], order(), ev).general).toBe("anulado");
+  });
+
+  it("la corrección no arrastra a las demás: una guía viva manda", () => {
+    const s = resolve(
+      [anulada("1"), guide("2", { courier: "tanders", delivery_status: "en_ruta" })],
+      order(),
+      [eventoCorreccion("1")],
+    );
+    expect(s.general).toBe("en_proceso");
+  });
+
+  it("una guía de courier anulada junto a una corrección sigue anulando", () => {
+    // La corrección sale del reparto; lo que queda decide. Y la fecha sale de la
+    // guía REAL, no de la corrección.
+    const s = resolve(
+      [anulada("1"), guide("2", { courier: "aliclik", delivery_status: "anulado", closed_at: "2026-07-06T10:00:00.000Z" })],
+      order(),
+      [eventoCorreccion("1")],
+    );
+    expect(s.general).toBe("anulado");
+    expect(s.since).toBe("2026-07-06T10:00:00.000Z");
+  });
+});
+
 describe("resolveOrderState — flujo de agencia (§10)", () => {
   it("disponible para recojo se refleja tal cual", () => {
     const s = resolve([

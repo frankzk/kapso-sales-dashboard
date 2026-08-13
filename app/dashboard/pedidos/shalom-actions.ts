@@ -31,6 +31,8 @@ import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
+import { writeCourierGuide } from "@/lib/route-output-fill";
+import { isFillableRouteOutput } from "@/lib/shipment-output";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
 import {
@@ -51,6 +53,7 @@ import {
   type StoreShalom,
 } from "@/lib/shalom/session";
 import {
+  blockingActiveGuide,
   buildShalomOrderPayload,
   documentError,
   generatePickupCode,
@@ -114,6 +117,16 @@ export interface ShalomDraftView {
   /** Motivos para NO crear la guía todavía. Imposibles: no se saltan. */
   blockers: string[];
   /**
+   * Los bloqueadores que valen TAMBIÉN para la vía de contingencia.
+   *
+   * `blockers` no sirve para la pestaña «Ya la creé en Shalom Pro»: casi todos
+   * son motivos para no llamar al API —falta configuración, la sesión no
+   * conecta— y esa vía existe precisamente para cuando el API no responde.
+   * Pero una salida ya viva sí la bloquea, porque el problema no es la llamada
+   * sino que el pedido acabaría con dos paquetes en la calle.
+   */
+  contingencyBlockers: string[];
+  /**
    * Frenos que SÍ se pueden saltar, dejando un motivo escrito que queda en la
    * línea de tiempo con el nombre de quien lo escribió.
    */
@@ -152,10 +165,22 @@ async function activeGuides(
 ): Promise<{ courier: string; guide_code: string; delivery_status: string }[]> {
   const { data } = await admin
     .from("shipments")
-    .select("courier,guide_code,delivery_status")
+    .select(
+      "courier,guide_code,delivery_status,created_via,custody_state,custody_transferred_at",
+    )
     .eq("order_id", orderId);
-  const rows = (data as { courier: string; guide_code: string; delivery_status: string }[]) ?? [];
-  return rows.filter((g) => ACTIVE_STATUSES.has(g.delivery_status));
+  const rows =
+    (data as {
+      courier: string;
+      guide_code: string;
+      delivery_status: string;
+      created_via: string | null;
+      custody_state: string | null;
+      custody_transferred_at: string | null;
+    }[]) ?? [];
+  // La salida «por definir» no cuenta como guía activa: es ESTA caja esperando
+  // courier, y la guía nueva se escribe encima de ella. Ver lib/route-output-fill.
+  return rows.filter((g) => ACTIVE_STATUSES.has(g.delivery_status) && !isFillableRouteOutput(g));
 }
 
 // ---------------------------------------------------------------------------
@@ -211,20 +236,24 @@ export async function loadShalomDraft(
   const configured = isConfigured(store);
 
   const blockers: string[] = [];
+  const contingencyBlockers: string[] = [];
   const warnings: string[] = [];
 
   const configBlocker = configurationBlocker(store);
   if (configBlocker) blockers.push(configBlocker);
 
   for (const g of await activeGuides(admin, orderId)) {
-    blockers.push(
+    contingencyBlockers.push(
       `El pedido ya tiene una guía activa: ${g.guide_code} (${g.courier}, ${g.delivery_status}). Anúlala antes de crear otra.`,
     );
   }
 
   if (["entregado", "devuelto", "anulado"].includes(row.general_status)) {
-    blockers.push(`El pedido está ${row.general_status.replace("_", " ")}.`);
+    contingencyBlockers.push(`El pedido está ${row.general_status.replace("_", " ")}.`);
   }
+
+  // Todo lo que impide la contingencia impide con más razón crear por API.
+  blockers.push(...contingencyBlockers);
 
   // Shalom identifica al destinatario por documento y el pedido no lo trae:
   // Shopify no pide DNI. Es el único dato que el operador escribe siempre.
@@ -293,6 +322,7 @@ export async function loadShalomDraft(
       prefilledTerminalName: prefilled?.destiny_terminal_name ?? null,
       pickupCode: perms.can("shalom.view_pickup_key") ? pickupCode : null,
       blockers,
+      contingencyBlockers,
       softBlockers,
       warnings,
     },
@@ -485,6 +515,23 @@ export async function registerManualShalomGuide(
   if (duplicate.data?.order_id && duplicate.data.order_id !== row.order_id) {
     return {
       error: `La guía ${guide.guideCode} ya está vinculada a otro pedido. Revisa el número antes de continuar.`,
+    };
+  }
+
+  // La contingencia registra una salida física igual que la vía API, así que
+  // hereda su misma regla: un pedido no puede quedar con dos salidas vivas. Sin
+  // esto, la pestaña «Ya la creé en Shalom Pro» era la puerta de atrás — no la
+  // frena `blockers` en el modal ni se comprobaba acá— y dejaba al pedido con
+  // dos paquetes que nadie sabe cuál viaja.
+  //
+  // Se excluye ESTA guía: reenviar el formulario para completar identificadores
+  // que faltaban es idempotente por diseño y no debe chocar consigo mismo.
+  const otherActive = blockingActiveGuide(await activeGuides(admin, orderId), guide.guideCode);
+  if (otherActive) {
+    return {
+      error:
+        `El pedido ya tiene una salida activa: ${otherActive.guide_code} (${otherActive.courier}, ${otherActive.delivery_status}). ` +
+        "Anúlala antes de vincular esta guía; si ya salió con el courier, registra primero su retorno.",
     };
   }
 
@@ -809,12 +856,14 @@ export async function createShalomGuide(
     created_via: SHALOM_ORIGIN.api,
   };
 
-  const inserted = await admin.from("shipments").insert(insertRow).select("id").single();
-  if (inserted.error) {
+  // Rellena la salida «por definir» del pedido si la hay: es la misma caja, ya
+  // armada y rotulada, a la que se le acaba de decidir el courier.
+  const inserted = await writeCourierGuide(admin, row.order_id, insertRow);
+  if ("error" in inserted) {
     // La guía SÍ existe en Shalom: perderla de vista es peor que el error de
     // base, así que el mensaje lleva los identificadores para registrarla a mano.
     return {
-      error: `La guía se creó en Shalom (${guideCode}${result?.codigo ? ` / ${result.codigo}` : ""}) pero no se pudo guardar acá: ${inserted.error.message}. Anótala y regístrala manualmente.`,
+      error: `La guía se creó en Shalom (${guideCode}${result?.codigo ? ` / ${result.codigo}` : ""}) pero no se pudo guardar acá: ${inserted.error}. Anótala y regístrala manualmente.`,
     };
   }
 

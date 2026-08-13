@@ -96,7 +96,35 @@ Reglas:
   `pedido + consecutivo` y el rótulo dice `Por definir`.
 - La regla de repetición por modalidad se evalúa cuando el courier se conoce; el
   máximo de cinco salidas rige siempre, porque no depende del courier.
+- **Crear la guía de un courier (Tanders, Aliclik, Shalom) RELLENA la salida
+  `por definir` del pedido en vez de abrir una segunda.** Fijar el courier es lo
+  que la salida estaba esperando; es la misma caja, ya armada y rotulada. Se
+  conservan el consecutivo, el `output_code`, el QR, el estado de preparación y
+  el de custodia: el rótulo interno dice `Por definir` y el equipo le pega encima
+  el del courier, así que sigue siendo válido. Solo se rellena si sigue
+  `pendiente`, sin courier decidido, y la caja no cambió de custodia — las mismas
+  condiciones que para anularla, más el courier sin decidir; con courier ya
+  puesto, escribir encima escondería un cambio de courier. Al rellenarla, la vía
+  pasa a ser la del courier, así que deja de ofrecerse «Anular salida»: esa guía
+  ya existe del otro lado y se anula desde su propio botón.
+- **Por lo mismo, una salida `por definir` no cuenta como «guía activa»** para el
+  freno que impide emitir dos guías. No es otro paquete en la calle: es esta caja
+  esperando courier. Contarla obligaba a anular la salida para poder emitir la
+  guía, y anularla arrastraba el pedido a `anulado` — con un solo camino de ida.
 - Cada salida nueva genera un QR nuevo.
+- Una salida de ruta manual se puede **anular** mientras siga `pendiente` y la
+  caja no haya cambiado de custodia. Anular no borra: la fila conserva su
+  consecutivo y su historial, y el consecutivo no se reutiliza. Es la corrección
+  de un registro —la salida creada por error o con el courier equivocado—, no un
+  hecho logístico. Una vez transferida la custodia al motorizado hay un paquete
+  en la calle y el camino es recibir su retorno, no anular.
+- Anular es obligatorio que exista porque el sistema ya lo exigía: crear una guía
+  de agencia rechaza el pedido con una salida activa, y el cierre no finaliza con
+  salidas activas. Sin la acción, una salida `por definir` creada por error deja
+  al pedido sin poder emitir guía **ni** cerrarse.
+- Las salidas con API propia (Aliclik, Shalom, Tanders) no se anulan por esta
+  vía: tienen la suya, que además avisa al courier. Marcarlas anuladas solo de
+  nuestro lado dejaría la guía viva en el courier.
 - El courier y la fecha son metadatos visibles; no forman parte del token QR.
 - El código de guía externa se conserva separado.
 - El límite global acordado es cinco salidas por pedido.
@@ -390,6 +418,26 @@ Reglas:
   `anulado` general cuando **todas** sus guías están anuladas y ninguna activa
   (la operación lo dio por perdido), reversible con un override; nunca anula el
   pedido en Shopify (§3.4, §9.4).
+- **Una corrección de registro no cuenta para esa regla.** La salida anulada
+  **por la acción «Anular salida»** queda FUERA del reparto: no cierra el pedido
+  como anulado ni lo sostiene «en proceso». El §4 ya la define como corregir el
+  courier equivocado, no como un hecho logístico, y una caja que nunca salió de
+  la empresa no puede ser prueba de que nadie se rindió. Sin esta excepción el
+  pedido de una sola salida quedaba anulado al corregirlo —la regla se cumplía
+  por vacío— y encima bloqueaba la guía nueva, que era el motivo de la
+  corrección. La fila anulada sigue visible en «Salidas y guías» con su
+  consecutivo; lo que no hace es decidir el estado. El pedido vuelve a
+  `Preparación · Por armar`: el rótulo ya se generó y la caja pudo quedar
+  armada, así que retroceder más desharía trabajo físico real.
+- **La corrección se PRUEBA por su evento `route_output_cancelled`, que nombra
+  la salida; no se deduce de su forma.** Deducirla de «ruta manual + nunca
+  despachada + nunca transferida» parece equivalente y no lo es: al finalizar un
+  expediente el cierre exige que no queden salidas activas, así que un pedido
+  cerrado normalmente termina con esa misma huella. Medido en producción, esa
+  forma la cumplían 368 pedidos y solo 2 se habían anulado por el botón; 336 ya
+  estaban finalizados. Tratarlos como correcciones habría reabierto expedientes
+  cerrados por S/ 56.216. Si la salida llegó a despacharse o a cambiar de
+  custodia después, la excepción tampoco aplica aunque exista el evento.
 - Debe existir una alternativa manual al escaneo, siempre con actor, fecha y
   motivo registrados.
 - Incidencias mínimas: datos incompletos, producto faltante, rótulo incorrecto,
@@ -1279,10 +1327,20 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   `930 555 309` o conservar de forma legible la terminación `309`. Cada señal
   muestra su propio check verde; la cuenta solo queda `verificada` cuando ambas
   coinciden.
-- Si cualquiera de las dos señales leídas pertenece a otra cuenta, el pago queda
-  en revisión y Kapta bloquea su validación también en servidor. Si una señal no
-  pudo leerse, se conserva la imagen y se exige contraste manual sin inventar el
-  dato faltante.
+- Si cualquiera de las dos señales leídas **contradice** la cuenta esperada, el
+  pago queda en revisión y Kapta bloquea su validación también en servidor. Si
+  una señal no pudo leerse, se conserva la imagen y se exige contraste manual
+  sin inventar el dato faltante.
+- Un destinatario leído **a medias** no contradice: el voucher de Yape y el de
+  BCP truncan o enmascaran el nombre por ancho de pantalla («Grupo Gf S»,
+  «Grupo G\*\*\*»). Una lectura que empieza como el nombre esperado y se corta
+  no verifica la cuenta, pero tampoco la acusa: queda como verificación parcial
+  con contraste manual, nunca como *receptor distinto*. La regla se lee por
+  palabras y desde el principio, que es como recorta una pantalla; el celular no
+  admite este matiz, porque leído y sin terminar en `309` es otra cuenta.
+- Esta distinción es de seguridad, no de comodidad: una alarma de desvío que
+  salta casi siempre por un nombre cortado deja de leerse, y tiene que ser
+  creíble el día que el receptor sea de verdad otro.
 - La captura del comprobante permanece grande y visible durante la revisión y
   puede abrirse a tamaño completo. `Titular/pagador` no es un campo operativo:
   si la visión lo obtiene, se conserva internamente para trazabilidad y
@@ -1742,6 +1800,17 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
 - Olva no se crea con menos de S/ 30 validados aunque el navegador sea alterado.
 - Dos salidas del mismo pedido reciben QR y código `Sxx` diferentes.
 - Con una salida activa, la salida adicional exige una justificación auditada.
+- La vía de contingencia de Shalom («Ya la creé en Shalom Pro») rechaza el pedido
+  que ya tiene una salida viva, igual que la vía API. Se salta los frenos del
+  API —para eso existe— pero no este: ahí el problema no es la llamada, es que
+  el pedido acabaría con dos paquetes en la calle. Reenviar la **misma** guía
+  para completar identificadores sigue siendo idempotente.
+- Una salida de ruta manual pendiente y en almacén ofrece **Anular salida** en
+  «Salidas y guías», con confirmación en dos pasos y evento auditado. Tras
+  anularla, el pedido vuelve a poder crear guía de agencia y a finalizarse.
+- La misma salida ya transferida al motorizado **no** ofrece anular, y el
+  servidor la rechaza aunque se llame a la acción directamente: esa se cierra
+  recibiendo su retorno.
 - Un courier con salida **viva** deja de ofrecerse, y la tarjeta **nombra esa
   salida**: número del courier, código corto y el estado que el courier reporta.
   Decir «no disponible» sin decir cuál obliga a bajar a «Salidas y guías» para

@@ -19,6 +19,170 @@ export function isCourierTbd(courier: string | null | undefined): boolean {
   return (courier ?? "").trim().toLowerCase() === COURIER_TBD;
 }
 
+/** `created_via` de las salidas que nacen en el Master sin API de courier. */
+export const MANUAL_ROUTE_CREATED_VIA = "mom_manual_route";
+
+/**
+ * ¿Se puede anular esta salida de ruta manual desde el Master?
+ *
+ * Existe porque el sistema sabía decir "anúlala antes de crear otra" sin tener
+ * dónde anularla: el botón de «Salidas y guías» solo se pintaba para Shalom, y
+ * ningún camino movía a `anulado` una salida de `mom_manual_route`. Una salida
+ * creada por error —o con el courier equivocado— dejaba al pedido sin poder
+ * emitir ninguna otra guía, y el pedido tampoco podía finalizarse, porque el
+ * cierre exige que no queden salidas activas. Callejón sin salida por ambos
+ * lados.
+ *
+ * ANULAR NO ES BORRAR. La fila se queda con su historial y su consecutivo: el
+ * rótulo pudo haberse impreso y estar pegado a una caja, y ese número tiene que
+ * seguir resolviendo —diciendo "anulada"— en vez de dar 404. El consecutivo
+ * tampoco se reutiliza (§4).
+ *
+ * Solo alcanza a las salidas que Kapta creó como ruta manual. Aliclik, Shalom y
+ * Tanders tienen su propia anulación, que además avisa al courier por API:
+ * marcarlas acá dejaría la guía viva del otro lado y muerta en el panel.
+ */
+export function manualOutputIsCancelable(output: {
+  courier: string;
+  created_via?: string | null;
+  delivery_status: string;
+  custody_state?: string | null;
+  custody_transferred_at?: string | null;
+}): boolean {
+  if (output.created_via !== MANUAL_ROUTE_CREATED_VIA) return false;
+  // `pendiente` es el único estado que sigue siendo "esto todavía no pasó". Con
+  // la salida en ruta, entregada o devuelta hay hechos físicos detrás y el
+  // camino correcto es el retorno, no el borrón.
+  if (output.delivery_status !== "pendiente") return false;
+  // Mientras la caja siga en casa, anular corrige un registro. Una vez
+  // transferida al motorizado hay un paquete en la calle: eso se cierra
+  // recibiendo su retorno.
+  if ((output.custody_state ?? "empresa") !== "empresa") return false;
+  return !output.custody_transferred_at;
+}
+
+/**
+ * ¿Esta salida se puede RELLENAR con la guía de un courier?
+ *
+ * Una salida «por definir» es una caja armada y rotulada esperando a saber quién
+ * la lleva — el MOM dice que el courier «se fijará al entrar a una ruta» y que es
+ * un metadato visible, no parte de la identidad ni del QR. Cuando se crea la guía
+ * en Tanders, Aliclik o Shalom, lo que ocurre físicamente es exactamente eso: se
+ * decidió el courier de ESA caja. Así que la guía se escribe encima de la salida
+ * que ya existe en vez de abrir una segunda.
+ *
+ * POR QUÉ IMPORTA, y no es cosmético:
+ *
+ *   - UNA CAJA, UNA SALIDA. Dos filas para un solo paquete es la duplicidad que
+ *     el MOM persigue en todo el documento.
+ *   - EL TOPE DE CINCO SALIDAS ES UN PRESUPUESTO REAL (§4). Gastar una en «me
+ *     equivoqué de courier» consume un reenvío que después hace falta de verdad.
+ *   - CONSERVA EL CONSECUTIVO, EL QR Y EL ESCANEO. El rótulo interno dice «Por
+ *     definir» y el equipo le pega encima el del courier, así que sigue siendo
+ *     válido; y el `package_ready` de la caja no se pierde.
+ *   - Y evita el rodeo que rompía pedidos: sin esto había que ANULAR la salida
+ *     para poder emitir la guía, y anularla arrastraba al pedido (#KP127639).
+ *
+ * Mismas condiciones que para anularla, más el courier sin decidir: si ya tiene
+ * courier, rellenarla estaría pisando una decisión anterior, y eso es un cambio
+ * de courier — que es otra cosa y tiene su propio camino.
+ */
+export function isFillableRouteOutput(output: {
+  courier: string;
+  created_via?: string | null;
+  delivery_status: string;
+  custody_state?: string | null;
+  custody_transferred_at?: string | null;
+}): boolean {
+  if (!isCourierTbd(output.courier)) return false;
+  return manualOutputIsCancelable(output);
+}
+
+/**
+ * De varias candidatas, la que se rellena.
+ *
+ * El MOM ya advierte que puede haber más de una salida activa y que Kapta debe
+ * alertar; mientras tanto, aquí se elige la de consecutivo MÁS ALTO: es la última
+ * que se creó, y por tanto la caja que el almacén tiene delante. Elegir la más
+ * vieja rellenaría una salida que quizá se dio por perdida.
+ */
+export function pickFillableRouteOutput<
+  T extends {
+    courier: string;
+    created_via?: string | null;
+    delivery_status: string;
+    custody_state?: string | null;
+    custody_transferred_at?: string | null;
+    output_number?: number | null;
+  },
+>(outputs: readonly T[]): T | null {
+  let best: T | null = null;
+  for (const o of outputs) {
+    if (!isFillableRouteOutput(o)) continue;
+    if (!best || (o.output_number ?? 0) > (best.output_number ?? 0)) best = o;
+  }
+  return best;
+}
+
+/** El evento que deja el botón «Anular salida». Es la ÚNICA prueba de que una
+ *  salida se anuló corrigiendo un registro y no por cualquier otro camino. */
+export const ROUTE_OUTPUT_CANCELLED = "route_output_cancelled";
+
+/**
+ * ¿Esta salida anulada es una CORRECCIÓN DE REGISTRO, y no un hecho logístico?
+ *
+ * El MOM lo dice con todas las letras (§4): anular una salida de ruta manual es
+ * «la corrección de un registro —la salida creada por error o con el courier
+ * equivocado—, no un hecho logístico», y «tras anularla, el pedido vuelve a
+ * poder crear guía de agencia y a finalizarse».
+ *
+ * Hacía falta preguntarlo porque `resolveOrderState` cerraba el pedido como
+ * `anulado` en cuanto TODAS sus guías estaban anuladas, sin mirar por qué. Esa
+ * regla se escribió para el Excel del courier —guías que el courier reporta
+ * canceladas tras agotar intentos— y con una sola salida se cumplía por vacío:
+ * corregir el courier anulaba la venta, y encima bloqueaba la guía nueva que
+ * motivaba la corrección. Pasó con #KP127639.
+ *
+ * EXIGE LA PRUEBA, NO LA DEDUCE, y esto no es escrúpulo: deducirla de la FORMA
+ * de la salida (ruta manual + nunca despachada + nunca transferida) capturaba
+ * 368 pedidos en producción, de los que solo 2 se habían anulado por este
+ * botón. Los otros 366 —336 ya finalizados, S/ 56.216— llegan a esa misma forma
+ * por otro camino: la mesa de cierre exige que no queden salidas activas, así
+ * que finalizar un pedido deja su salida manual anulada y sin despachar. Con el
+ * predicado deducido, arreglar el bug habría REABIERTO 336 expedientes cerrados.
+ *
+ * Por eso la condición es el evento `route_output_cancelled` que escribe la
+ * acción, y que nombra la salida. El resto son guardas baratas sobre lo que esa
+ * acción ya exigió al anularla: si la caja llegó a salir después, algo no cuadra
+ * y vale más no tocar el estado.
+ */
+export function cancelledAsRecordCorrection(
+  guide: {
+    id: string;
+    delivery_status: string;
+    dispatched_at?: string | null;
+    custody_transferred_at?: string | null;
+  },
+  /** Ids de salidas con evento `route_output_cancelled`. */
+  correctedShipmentIds: ReadonlySet<string>,
+): boolean {
+  if (guide.delivery_status !== "anulado") return false;
+  if (!correctedShipmentIds.has(guide.id)) return false;
+  if (guide.dispatched_at) return false;
+  return !guide.custody_transferred_at;
+}
+
+/** Las salidas que se anularon por el botón, sacadas de los eventos del pedido. */
+export function correctedShipmentIds(
+  events: readonly { kind: string; shipment_id?: string | null }[],
+): Set<string> {
+  const out = new Set<string>();
+  for (const e of events) {
+    if (e.kind === ROUTE_OUTPUT_CANCELLED && e.shipment_id) out.add(e.shipment_id);
+  }
+  return out;
+}
+
 /** `#KP123` → `KP123`; conserva letras/números/guiones y elimina ruido. */
 export function normalizeOrderCode(orderName: string | null | undefined): string {
   return (orderName ?? "")

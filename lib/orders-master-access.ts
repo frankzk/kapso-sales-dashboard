@@ -27,6 +27,9 @@ import {
   type PriorOrderSnapshot,
 } from "@/lib/order-confirmation-brief";
 import { parseLabelLineItems } from "@/lib/labels/line-items";
+// Las etiquetas de estado de LEAD son otra tabla que las del Master. Se importa
+// la del dominio de Leads para no reescribirla acá y que las dos se separen.
+import { labelOf as leadStatusLabel } from "@/lib/leads";
 import {
   confirmationAttemptDetail,
   type ConfirmationAttemptDetail,
@@ -248,10 +251,67 @@ export interface TimelineEntry {
   note: string | null;
   reason: string | null;
   actorName: string | null;
-  /** De dónde salió la entrada: el propio Master o una gestión de Repro Provincia. */
-  origin: "master" | "gestion";
+  /** De dónde salió: el Master, una gestión de Repro Provincia, o la cola de Leads. */
+  origin: "master" | "gestion" | "leads";
+  /**
+   * Etiqueta ya resuelta del estado, cuando NO es un estado de pedido.
+   *
+   * Las entradas de Leads llevan un estado de LEAD (`pedido_generado`,
+   * `no_responde`…), y pasarlo por `generalLabel` —que solo entiende los
+   * estados del Master— pintaría un código crudo o, peor, la etiqueta de otro
+   * estado que se llame igual. Cuando esto viene informado, la interfaz lo usa
+   * tal cual y no traduce nada.
+   */
+  statusLabel: string | null;
   /** Canal y resultado, cuando la entrada es un intento de confirmación. */
   confirmation: ConfirmationAttemptDetail | null;
+}
+
+/** Lo que hace falta de `lead_calls` para la línea de tiempo del pedido. */
+export interface LeadCallTimelineRow {
+  id: string;
+  lead_id: string;
+  vendedora: string | null;
+  kind: string;
+  new_status: string | null;
+  note: string | null;
+  occurred_at: string | null;
+}
+
+/**
+ * Las gestiones de Leads, como entradas de la línea de tiempo del pedido.
+ *
+ * Puro y exportado para poder probarlo: acá no falla nada ruidosamente, se
+ * etiqueta mal. Un estado de lead traducido con la tabla del Master, o un `note`
+ * de Leads mostrado como si fuera un comentario del Master, se leen como si
+ * fueran ciertos.
+ */
+export function leadCallsToTimeline(
+  rows: LeadCallTimelineRow[],
+  names: Map<string, string>,
+): TimelineEntry[] {
+  return rows.map((c) => ({
+    // Prefijo propio: un id de `lead_calls` puede coincidir con uno de
+    // `order_events` y React colapsaría las dos entradas en una sola.
+    id: `lead:${c.id}`,
+    occurredAt: c.occurred_at ?? "",
+    // Se renombra el tipo para que no choque con los del Master: `note`, `call`
+    // y `system` existen en las dos tablas y significan cosas distintas.
+    kind: `lead_${c.kind}`,
+    source: "leads",
+    courier: null,
+    guideCode: null,
+    previousStatus: null,
+    // Deliberadamente nulo: el estado de un lead no es un estado del Master, y
+    // dejarlo aquí haría que la interfaz lo tradujera con la tabla equivocada.
+    newStatus: null,
+    statusLabel: c.new_status ? leadStatusLabel(c.new_status) : null,
+    note: c.note,
+    reason: null,
+    actorName: c.vendedora ? (names.get(c.vendedora) ?? null) : null,
+    origin: "leads",
+    confirmation: null,
+  }));
 }
 
 export interface OrderMasterDetail {
@@ -373,6 +433,27 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
   const guides = (guidesRes.data ?? []) as unknown as ShipmentRow[];
   const events = (eventsRes.data ?? []) as unknown as OrderEventRow[];
 
+  // La cola de Leads: lo que pasó ANTES de que existiera el pedido. Es donde
+  // queda quién lo generó y con qué nota — «Venta nueva · pedido generado en
+  // Shopify · PEN 149.00 · Productos: …» la escribe `generateOrder`. Sin esto el
+  // Master enseña el pedido como si hubiera aparecido solo, y para saber quién
+  // lo cerró había que ir a Leads y buscar al cliente a mano.
+  //
+  // El vínculo es `leads.order_id`. Se leen todos los que apunten a este pedido
+  // —normalmente uno— porque dos leads del mismo cliente pueden acabar en el
+  // mismo pedido y descartar el segundo escondería trabajo que sí ocurrió.
+  const { data: leadRows } = await sb.from("leads").select("id").eq("order_id", orderId);
+  const leadIds = ((leadRows ?? []) as { id: string }[]).map((l) => l.id);
+  let leadCalls: LeadCallTimelineRow[] = [];
+  if (leadIds.length) {
+    const { data } = await sb
+      .from("lead_calls")
+      .select("id,lead_id,vendedora,kind,new_status,note,occurred_at")
+      .in("lead_id", leadIds)
+      .order("occurred_at", { ascending: true });
+    leadCalls = (data ?? []) as unknown as LeadCallTimelineRow[];
+  }
+
   let calls: ShipmentCallRow[] = [];
   if (guides.length) {
     const ids = guides.map((g) => g.id);
@@ -386,12 +467,14 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     }
   }
 
-  // Un solo mapa de nombres para las dos fuentes de actores.
+  // Un solo mapa de nombres para las TRES fuentes de actores.
   const actorIds = [
     ...new Set(
-      [...events.map((e) => e.actor), ...calls.map((c) => c.agent)].filter(
-        (v): v is string => typeof v === "string" && v.length > 0,
-      ),
+      [
+        ...events.map((e) => e.actor),
+        ...calls.map((c) => c.agent),
+        ...leadCalls.map((c) => c.vendedora),
+      ].filter((v): v is string => typeof v === "string" && v.length > 0),
     ),
   ];
   const names = await resolveEmails(actorIds);
@@ -410,8 +493,11 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     reason: e.reason,
     actorName: e.actor ? (names.get(e.actor) ?? null) : null,
     origin: "master",
+    statusLabel: null,
     confirmation: confirmationAttemptDetail(e.payload),
   }));
+
+  const fromLeads = leadCallsToTimeline(leadCalls, names);
 
   const fromCalls: TimelineEntry[] = calls.map((c) => {
     const guide = guideById.get(c.shipment_id);
@@ -428,11 +514,12 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
       reason: null,
       actorName: c.agent ? (names.get(c.agent) ?? null) : null,
       origin: "gestion",
+      statusLabel: null,
       confirmation: null,
     };
   });
 
-  const timeline = [...fromEvents, ...fromCalls]
+  const timeline = [...fromEvents, ...fromCalls, ...fromLeads]
     .filter((t) => t.occurredAt)
     .sort((a, b) => (a.occurredAt < b.occurredAt ? -1 : a.occurredAt > b.occurredAt ? 1 : 0));
 

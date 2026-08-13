@@ -14,6 +14,8 @@ import {
 import { waKindLabel, type WaNumber } from "@/lib/wa-numbers";
 import type { CustomerHistory } from "@/lib/leads-access";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
+import { EmojiPicker } from "@/components/emoji-picker";
+import { insertAtCursor } from "@/lib/emoji";
 import {
   MANUAL_STATUSES,
   categoryOf,
@@ -1586,6 +1588,28 @@ function WhatsappComposer({
     });
   }
 
+  /**
+   * Mete el emoji DONDE ESTÁ EL CURSOR, no al final. Quien corrige una frase ya
+   * escrita espera que caiga donde tenía el punto de inserción; si saltara al
+   * final, el segundo emoji de un mensaje quedaría en otro sitio que el primero.
+   * Sin el textarea montado se añade al final, que es lo único posible.
+   */
+  function insertEmoji(emoji: string) {
+    const ta = taRef.current;
+    if (!ta) {
+      setText((t) => t + emoji);
+      return;
+    }
+    const { text: next, caret } = insertAtCursor(text, ta.selectionStart, ta.selectionEnd, emoji);
+    setText(next);
+    // Tras el re-render de React: antes, `setSelectionRange` actuaría sobre el
+    // valor viejo del textarea y el cursor acabaría en un sitio arbitrario.
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(caret, caret);
+    });
+  }
+
   if (win.loading) {
     return (
       <div className="border-t border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-400">
@@ -1650,6 +1674,7 @@ function WhatsappComposer({
         >
           📎
         </button>
+        <EmojiPicker disabled={pending} onPick={insertEmoji} />
         <textarea
           ref={taRef}
           value={text}
