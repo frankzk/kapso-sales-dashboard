@@ -403,6 +403,26 @@ Reglas:
   `anulado` general cuando **todas** sus guías están anuladas y ninguna activa
   (la operación lo dio por perdido), reversible con un override; nunca anula el
   pedido en Shopify (§3.4, §9.4).
+- **Una corrección de registro no cuenta para esa regla.** La salida anulada
+  **por la acción «Anular salida»** queda FUERA del reparto: no cierra el pedido
+  como anulado ni lo sostiene «en proceso». El §4 ya la define como corregir el
+  courier equivocado, no como un hecho logístico, y una caja que nunca salió de
+  la empresa no puede ser prueba de que nadie se rindió. Sin esta excepción el
+  pedido de una sola salida quedaba anulado al corregirlo —la regla se cumplía
+  por vacío— y encima bloqueaba la guía nueva, que era el motivo de la
+  corrección. La fila anulada sigue visible en «Salidas y guías» con su
+  consecutivo; lo que no hace es decidir el estado. El pedido vuelve a
+  `Preparación · Por armar`: el rótulo ya se generó y la caja pudo quedar
+  armada, así que retroceder más desharía trabajo físico real.
+- **La corrección se PRUEBA por su evento `route_output_cancelled`, que nombra
+  la salida; no se deduce de su forma.** Deducirla de «ruta manual + nunca
+  despachada + nunca transferida» parece equivalente y no lo es: al finalizar un
+  expediente el cierre exige que no queden salidas activas, así que un pedido
+  cerrado normalmente termina con esa misma huella. Medido en producción, esa
+  forma la cumplían 368 pedidos y solo 2 se habían anulado por el botón; 336 ya
+  estaban finalizados. Tratarlos como correcciones habría reabierto expedientes
+  cerrados por S/ 56.216. Si la salida llegó a despacharse o a cambiar de
+  custodia después, la excepción tampoco aplica aunque exista el evento.
 - Debe existir una alternativa manual al escaneo, siempre con actor, fecha y
   motivo registrados.
 - Incidencias mínimas: datos incompletos, producto faltante, rótulo incorrecto,
