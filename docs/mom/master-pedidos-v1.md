@@ -96,6 +96,21 @@ Reglas:
   `pedido + consecutivo` y el rótulo dice `Por definir`.
 - La regla de repetición por modalidad se evalúa cuando el courier se conoce; el
   máximo de cinco salidas rige siempre, porque no depende del courier.
+- **Crear la guía de un courier (Tanders, Aliclik, Shalom) RELLENA la salida
+  `por definir` del pedido en vez de abrir una segunda.** Fijar el courier es lo
+  que la salida estaba esperando; es la misma caja, ya armada y rotulada. Se
+  conservan el consecutivo, el `output_code`, el QR, el estado de preparación y
+  el de custodia: el rótulo interno dice `Por definir` y el equipo le pega encima
+  el del courier, así que sigue siendo válido. Solo se rellena si sigue
+  `pendiente`, sin courier decidido, y la caja no cambió de custodia — las mismas
+  condiciones que para anularla, más el courier sin decidir; con courier ya
+  puesto, escribir encima escondería un cambio de courier. Al rellenarla, la vía
+  pasa a ser la del courier, así que deja de ofrecerse «Anular salida»: esa guía
+  ya existe del otro lado y se anula desde su propio botón.
+- **Por lo mismo, una salida `por definir` no cuenta como «guía activa»** para el
+  freno que impide emitir dos guías. No es otro paquete en la calle: es esta caja
+  esperando courier. Contarla obligaba a anular la salida para poder emitir la
+  guía, y anularla arrastraba el pedido a `anulado` — con un solo camino de ida.
 - Cada salida nueva genera un QR nuevo.
 - Una salida de ruta manual se puede **anular** mientras siga `pendiente` y la
   caja no haya cambiado de custodia. Anular no borra: la fila conserva su

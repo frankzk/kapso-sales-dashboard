@@ -61,6 +61,69 @@ export function manualOutputIsCancelable(output: {
   return !output.custody_transferred_at;
 }
 
+/**
+ * ¿Esta salida se puede RELLENAR con la guía de un courier?
+ *
+ * Una salida «por definir» es una caja armada y rotulada esperando a saber quién
+ * la lleva — el MOM dice que el courier «se fijará al entrar a una ruta» y que es
+ * un metadato visible, no parte de la identidad ni del QR. Cuando se crea la guía
+ * en Tanders, Aliclik o Shalom, lo que ocurre físicamente es exactamente eso: se
+ * decidió el courier de ESA caja. Así que la guía se escribe encima de la salida
+ * que ya existe en vez de abrir una segunda.
+ *
+ * POR QUÉ IMPORTA, y no es cosmético:
+ *
+ *   - UNA CAJA, UNA SALIDA. Dos filas para un solo paquete es la duplicidad que
+ *     el MOM persigue en todo el documento.
+ *   - EL TOPE DE CINCO SALIDAS ES UN PRESUPUESTO REAL (§4). Gastar una en «me
+ *     equivoqué de courier» consume un reenvío que después hace falta de verdad.
+ *   - CONSERVA EL CONSECUTIVO, EL QR Y EL ESCANEO. El rótulo interno dice «Por
+ *     definir» y el equipo le pega encima el del courier, así que sigue siendo
+ *     válido; y el `package_ready` de la caja no se pierde.
+ *   - Y evita el rodeo que rompía pedidos: sin esto había que ANULAR la salida
+ *     para poder emitir la guía, y anularla arrastraba al pedido (#KP127639).
+ *
+ * Mismas condiciones que para anularla, más el courier sin decidir: si ya tiene
+ * courier, rellenarla estaría pisando una decisión anterior, y eso es un cambio
+ * de courier — que es otra cosa y tiene su propio camino.
+ */
+export function isFillableRouteOutput(output: {
+  courier: string;
+  created_via?: string | null;
+  delivery_status: string;
+  custody_state?: string | null;
+  custody_transferred_at?: string | null;
+}): boolean {
+  if (!isCourierTbd(output.courier)) return false;
+  return manualOutputIsCancelable(output);
+}
+
+/**
+ * De varias candidatas, la que se rellena.
+ *
+ * El MOM ya advierte que puede haber más de una salida activa y que Kapta debe
+ * alertar; mientras tanto, aquí se elige la de consecutivo MÁS ALTO: es la última
+ * que se creó, y por tanto la caja que el almacén tiene delante. Elegir la más
+ * vieja rellenaría una salida que quizá se dio por perdida.
+ */
+export function pickFillableRouteOutput<
+  T extends {
+    courier: string;
+    created_via?: string | null;
+    delivery_status: string;
+    custody_state?: string | null;
+    custody_transferred_at?: string | null;
+    output_number?: number | null;
+  },
+>(outputs: readonly T[]): T | null {
+  let best: T | null = null;
+  for (const o of outputs) {
+    if (!isFillableRouteOutput(o)) continue;
+    if (!best || (o.output_number ?? 0) > (best.output_number ?? 0)) best = o;
+  }
+  return best;
+}
+
 /** El evento que deja el botón «Anular salida». Es la ÚNICA prueba de que una
  *  salida se anuló corrigiendo un registro y no por cualquier otro camino. */
 export const ROUTE_OUTPUT_CANCELLED = "route_output_cancelled";

@@ -26,6 +26,8 @@ import {
   tandersCoverageEligible,
 } from "@/lib/tanders/draft";
 import { getStoreCreds } from "@/lib/ingest";
+import { writeCourierGuide } from "@/lib/route-output-fill";
+import { isFillableRouteOutput } from "@/lib/shipment-output";
 import { fetchOrderById } from "@/lib/shopify";
 import { sweepTandersPayments, type SweepReport } from "@/lib/tanders/payment-sweep";
 import { TandersApiError } from "@/lib/tanders/types";
@@ -93,17 +95,34 @@ async function loadStoreTanders(
   return (data as StoreTanders | null) ?? null;
 }
 
-/** Guías vivas del pedido, para no despachar dos veces lo mismo. */
+/**
+ * Guías vivas del pedido, para no despachar dos veces lo mismo.
+ *
+ * La salida «por definir» NO cuenta: no es otro paquete en la calle, es ESTA
+ * caja esperando a saber quién la lleva, y la guía nueva se va a escribir encima
+ * de ella. Contarla obligaba a anularla para poder emitir la guía — y anularla
+ * arrastraba al pedido a `anulado` (#KP127639).
+ */
 async function activeGuides(
   admin: ReturnType<typeof createAdminSupabase>,
   orderId: string,
 ): Promise<{ courier: string; guide_code: string; delivery_status: string }[]> {
   const { data } = await admin
     .from("shipments")
-    .select("courier,guide_code,delivery_status")
+    .select(
+      "courier,guide_code,delivery_status,created_via,custody_state,custody_transferred_at",
+    )
     .eq("order_id", orderId);
-  const rows = (data as { courier: string; guide_code: string; delivery_status: string }[]) ?? [];
-  return rows.filter((g) => ACTIVE_STATUSES.has(g.delivery_status));
+  const rows =
+    (data as {
+      courier: string;
+      guide_code: string;
+      delivery_status: string;
+      created_via: string | null;
+      custody_state: string | null;
+      custody_transferred_at: string | null;
+    }[]) ?? [];
+  return rows.filter((g) => ACTIVE_STATUSES.has(g.delivery_status) && !isFillableRouteOutput(g));
 }
 
 /**
@@ -392,14 +411,20 @@ export async function createTandersGuide(
     label_url: labelUrl,
     tanders_order_id: tandersOrderId,
     tanders_raw: order as unknown as Record<string, unknown>,
+    // Marca la vía, como Aliclik y Shalom. Además es lo que hace que la salida
+    // rellenada deje de ofrecer «Anular salida»: esta guía ya existe en Tanders
+    // y se anula desde su propio botón, que avisa al courier.
+    created_via: "tanders_api",
   };
 
-  const inserted = await admin.from("shipments").insert(insertRow).select("id").single();
-  if (inserted.error) {
+  // Rellena la salida «por definir» del pedido si la hay: es la misma caja, ya
+  // armada y rotulada, a la que se le acaba de decidir el courier.
+  const written = await writeCourierGuide(admin, row.order_id, insertRow);
+  if ("error" in written) {
     // La guía SÍ existe en Tanders: perderla de vista es peor que el error de
     // base, así que el mensaje lleva el código para registrarla a mano.
     return {
-      error: `La guía se creó en Tanders (${guideCode}) pero no se pudo guardar acá: ${inserted.error.message}. Anótala y regístrala manualmente.`,
+      error: `La guía se creó en Tanders (${guideCode}) pero no se pudo guardar acá: ${written.error}. Anótala y regístrala manualmente.`,
     };
   }
 

@@ -31,6 +31,8 @@ import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
+import { writeCourierGuide } from "@/lib/route-output-fill";
+import { isFillableRouteOutput } from "@/lib/shipment-output";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
 import {
@@ -163,10 +165,22 @@ async function activeGuides(
 ): Promise<{ courier: string; guide_code: string; delivery_status: string }[]> {
   const { data } = await admin
     .from("shipments")
-    .select("courier,guide_code,delivery_status")
+    .select(
+      "courier,guide_code,delivery_status,created_via,custody_state,custody_transferred_at",
+    )
     .eq("order_id", orderId);
-  const rows = (data as { courier: string; guide_code: string; delivery_status: string }[]) ?? [];
-  return rows.filter((g) => ACTIVE_STATUSES.has(g.delivery_status));
+  const rows =
+    (data as {
+      courier: string;
+      guide_code: string;
+      delivery_status: string;
+      created_via: string | null;
+      custody_state: string | null;
+      custody_transferred_at: string | null;
+    }[]) ?? [];
+  // La salida «por definir» no cuenta como guía activa: es ESTA caja esperando
+  // courier, y la guía nueva se escribe encima de ella. Ver lib/route-output-fill.
+  return rows.filter((g) => ACTIVE_STATUSES.has(g.delivery_status) && !isFillableRouteOutput(g));
 }
 
 // ---------------------------------------------------------------------------
@@ -842,12 +856,14 @@ export async function createShalomGuide(
     created_via: SHALOM_ORIGIN.api,
   };
 
-  const inserted = await admin.from("shipments").insert(insertRow).select("id").single();
-  if (inserted.error) {
+  // Rellena la salida «por definir» del pedido si la hay: es la misma caja, ya
+  // armada y rotulada, a la que se le acaba de decidir el courier.
+  const inserted = await writeCourierGuide(admin, row.order_id, insertRow);
+  if ("error" in inserted) {
     // La guía SÍ existe en Shalom: perderla de vista es peor que el error de
     // base, así que el mensaje lleva los identificadores para registrarla a mano.
     return {
-      error: `La guía se creó en Shalom (${guideCode}${result?.codigo ? ` / ${result.codigo}` : ""}) pero no se pudo guardar acá: ${inserted.error.message}. Anótala y regístrala manualmente.`,
+      error: `La guía se creó en Shalom (${guideCode}${result?.codigo ? ` / ${result.codigo}` : ""}) pero no se pudo guardar acá: ${inserted.error}. Anótala y regístrala manualmente.`,
     };
   }
 
