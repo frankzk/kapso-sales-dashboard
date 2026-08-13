@@ -25,6 +25,8 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { writeCourierGuide } from "@/lib/route-output-fill";
+import { isFillableRouteOutput } from "@/lib/shipment-output";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { getMasterPermissions } from "@/lib/permissions-access";
@@ -950,13 +952,25 @@ export async function createAliclikGuide(
   // El pedido no puede tener ya una guía activa. Mismo criterio que
   // `createDirectFenixGuide`: dos guías vivas para un pedido es un paquete
   // duplicado saliendo del almacén.
+  // La salida «por definir» NO cuenta: es ESTA caja esperando courier, y la guía
+  // se va a escribir encima de ella. Contarla obligaba a anularla para poder
+  // emitir la guía — y anularla arrastraba al pedido (#KP127639).
   const { data: live } = await admin
     .from("shipments")
-    .select("id,guide_code,delivery_status")
+    .select(
+      "id,guide_code,delivery_status,courier,created_via,custody_state,custody_transferred_at",
+    )
     .eq("order_id", orderId)
-    .not("delivery_status", "in", "(anulado,transferido)")
-    .limit(1);
-  const activeGuide = live?.[0];
+    .not("delivery_status", "in", "(anulado,transferido)");
+  const activeGuide = ((live ?? []) as {
+    id: string;
+    guide_code: string;
+    delivery_status: string;
+    courier: string;
+    created_via: string | null;
+    custody_state: string | null;
+    custody_transferred_at: string | null;
+  }[]).find((g) => !isFillableRouteOutput(g));
   if (activeGuide) {
     return { error: `Este pedido ya tiene una guía activa (${activeGuide.guide_code}).` };
   }
@@ -1105,7 +1119,9 @@ export async function createAliclikGuide(
   // La guía. `guide_code` lleva el ALC… de forma PROVISIONAL: cuando el Excel
   // traiga el AUR5X definitivo, lib/aliclik-reconcile.ts lo promueve sobre esta
   // misma fila, que conserva llamadas, vínculo e historial (ver 0054).
-  const { error: shipErr } = await admin.from("shipments").insert({
+  // Rellena la salida «por definir» del pedido si la hay: es la misma caja, ya
+  // armada y rotulada, a la que se le acaba de decidir el courier.
+  const written = await writeCourierGuide(admin, orderId, {
     store_id: ctx.storeId,
     courier: "aliclik",
     guide_code: orderNumber,
@@ -1132,11 +1148,11 @@ export async function createAliclikGuide(
     aliclik_transport_name: courierBlock.transportName ?? null,
     assigned_at: new Date().toISOString(),
   });
-  if (shipErr) {
+  if ("error" in written) {
     // El pedido YA existe en Aliclik. Que falle nuestra fila es grave pero no se
     // puede deshacer: se avisa con el número para que se pueda vincular a mano.
     return {
-      error: `El pedido se creó en Aliclik (${orderNumber}) pero no se pudo guardar la guía: ${shipErr.message}`,
+      error: `El pedido se creó en Aliclik (${orderNumber}) pero no se pudo guardar la guía: ${written.error}`,
     };
   }
 
