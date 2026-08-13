@@ -41,16 +41,19 @@ const MARGIN = 10 * MM;
  *  modo que el día que se pase a rollo continuo se recorta y ya está. */
 const BLOCK_W = 100 * MM;
 /**
- * La franja interna, en cambio, usa el ancho útil de la hoja.
+ * La franja interna mide LO MISMO que el rótulo de Tanders.
  *
- * A 100 mm la columna de productos quedaba en 64 mm, y con un título real de
- * Shopify —«BeeWax - Cera de Abeja Natural para el Cuidado y Protección de
- * Muebles 300 gramos», 97 caracteres— se leía «BeeWax - Cera de Abeja Natural
- * para e...». Quien arma la caja no puede trabajar con eso, y al lado había
- * media hoja en blanco. La franja no se pega en el paquete —se lee mientras se
- * empaca—, así que no gana nada por medir lo mismo que la etiqueta.
+ * Se probó ensanchándola al ancho útil de la hoja —cabía más texto por línea— y
+ * se descartó: las dos mitades se cortan como UNA sola pieza, así que un bloque
+ * más ancho que el otro obliga a dos cortes y deja un colgajo. La medida la
+ * manda la etiqueta del courier.
+ *
+ * El texto largo se resuelve con líneas, no con ancho: un título real de Shopify
+ * («BeeWax - Cera de Abeja Natural para el Cuidado y Protección de Muebles 300
+ * gramos», 97 caracteres) entra en tres líneas de la columna de 64 mm, y a lo
+ * alto sobra sitio porque el QR ocupa 26 mm.
  */
-const STRIP_W = PAGE_W - MARGIN * 2;
+const STRIP_W = BLOCK_W;
 const PAD = 3 * MM;
 
 const INK = rgb(0.008, 0.023, 0.09);
@@ -259,9 +262,10 @@ function drawInternoStrip(
       const qty = `${single?.quantity ?? 1} x `;
       page.drawText(qty, { x: colX, y: py - size, size, font: fonts.bold, color: INK });
       const nameX = colX + fonts.bold.widthOfTextAtSize(qty, size);
-      // Dos líneas para el título: en la hoja sobra alto y un producto a medio
-      // nombre es justo lo que esta franja viene a evitar.
-      const lines = wrapText(group.name, fonts.regular, size, colW - (nameX - colX), 2);
+      // Tres líneas para el título. Un producto a medio nombre es justo lo que
+      // esta franja viene a evitar, y el alto lo hay: al lado del QR de 26 mm
+      // caben seis renglones.
+      const lines = wrapText(group.name, fonts.regular, size, colW - (nameX - colX), 3);
       let ny = py;
       for (const line of lines.length ? lines : ["-"]) {
         page.drawText(line, { x: nameX, y: ny - size, size, font: fonts.regular, color: INK });
@@ -270,7 +274,7 @@ function drawInternoStrip(
       py = ny;
       continue;
     }
-    for (const title of wrapText(group.name, fonts.bold, size, colW, 2)) {
+    for (const title of wrapText(group.name, fonts.bold, size, colW, 3)) {
       page.drawText(title, { x: colX, y: py - size, size, font: fonts.bold, color: INK });
       py -= lineH;
     }
