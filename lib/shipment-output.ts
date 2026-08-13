@@ -61,6 +61,65 @@ export function manualOutputIsCancelable(output: {
   return !output.custody_transferred_at;
 }
 
+/** El evento que deja el botón «Anular salida». Es la ÚNICA prueba de que una
+ *  salida se anuló corrigiendo un registro y no por cualquier otro camino. */
+export const ROUTE_OUTPUT_CANCELLED = "route_output_cancelled";
+
+/**
+ * ¿Esta salida anulada es una CORRECCIÓN DE REGISTRO, y no un hecho logístico?
+ *
+ * El MOM lo dice con todas las letras (§4): anular una salida de ruta manual es
+ * «la corrección de un registro —la salida creada por error o con el courier
+ * equivocado—, no un hecho logístico», y «tras anularla, el pedido vuelve a
+ * poder crear guía de agencia y a finalizarse».
+ *
+ * Hacía falta preguntarlo porque `resolveOrderState` cerraba el pedido como
+ * `anulado` en cuanto TODAS sus guías estaban anuladas, sin mirar por qué. Esa
+ * regla se escribió para el Excel del courier —guías que el courier reporta
+ * canceladas tras agotar intentos— y con una sola salida se cumplía por vacío:
+ * corregir el courier anulaba la venta, y encima bloqueaba la guía nueva que
+ * motivaba la corrección. Pasó con #KP127639.
+ *
+ * EXIGE LA PRUEBA, NO LA DEDUCE, y esto no es escrúpulo: deducirla de la FORMA
+ * de la salida (ruta manual + nunca despachada + nunca transferida) capturaba
+ * 368 pedidos en producción, de los que solo 2 se habían anulado por este
+ * botón. Los otros 366 —336 ya finalizados, S/ 56.216— llegan a esa misma forma
+ * por otro camino: la mesa de cierre exige que no queden salidas activas, así
+ * que finalizar un pedido deja su salida manual anulada y sin despachar. Con el
+ * predicado deducido, arreglar el bug habría REABIERTO 336 expedientes cerrados.
+ *
+ * Por eso la condición es el evento `route_output_cancelled` que escribe la
+ * acción, y que nombra la salida. El resto son guardas baratas sobre lo que esa
+ * acción ya exigió al anularla: si la caja llegó a salir después, algo no cuadra
+ * y vale más no tocar el estado.
+ */
+export function cancelledAsRecordCorrection(
+  guide: {
+    id: string;
+    delivery_status: string;
+    dispatched_at?: string | null;
+    custody_transferred_at?: string | null;
+  },
+  /** Ids de salidas con evento `route_output_cancelled`. */
+  correctedShipmentIds: ReadonlySet<string>,
+): boolean {
+  if (guide.delivery_status !== "anulado") return false;
+  if (!correctedShipmentIds.has(guide.id)) return false;
+  if (guide.dispatched_at) return false;
+  return !guide.custody_transferred_at;
+}
+
+/** Las salidas que se anularon por el botón, sacadas de los eventos del pedido. */
+export function correctedShipmentIds(
+  events: readonly { kind: string; shipment_id?: string | null }[],
+): Set<string> {
+  const out = new Set<string>();
+  for (const e of events) {
+    if (e.kind === ROUTE_OUTPUT_CANCELLED && e.shipment_id) out.add(e.shipment_id);
+  }
+  return out;
+}
+
 /** `#KP123` → `KP123`; conserva letras/números/guiones y elimina ruido. */
 export function normalizeOrderCode(orderName: string | null | undefined): string {
   return (orderName ?? "")

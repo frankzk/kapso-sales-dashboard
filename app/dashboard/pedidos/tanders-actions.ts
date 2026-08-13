@@ -195,7 +195,14 @@ export async function loadTandersDraft(
   }
 
   if (["entregado", "devuelto", "anulado"].includes(row.general_status)) {
-    blockers.push(`El pedido está ${row.general_status.replace("_", " ")}.`);
+    // Decir solo «está anulado» deja al operador sin salida: no dice quién lo
+    // anuló ni cómo revertirlo, y el motivo más probable es que él mismo acabe
+    // de anular la salida para poder llegar hasta aquí.
+    blockers.push(
+      row.general_status === "anulado"
+        ? "El pedido está anulado. Si acabas de anular su salida para cambiar de courier, el estado se recalcula solo y vuelve a Preparación; si lo anuló Shopify o el courier, reábrelo desde Estado del pedido antes de crear la guía."
+        : `El pedido está ${row.general_status.replace("_", " ")}.`,
+    );
   }
 
   // El punto no se inventa: si no hay, el operador lo pega. Ver lib/geo-link.ts.

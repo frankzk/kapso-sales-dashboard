@@ -18,6 +18,7 @@
 //   5. Pendiente                 — todavía no arrancó bien el proceso logístico.
 
 import { hasConfirmationSignal } from "@/lib/order-confirmation";
+import { cancelledAsRecordCorrection, correctedShipmentIds } from "@/lib/shipment-output";
 
 export type GeneralStatus =
   | "pendiente"
@@ -158,6 +159,8 @@ export interface GuideSnapshot {
   agency_branch: string | null;
   agency_arrived_at: string | null;
   agency_expires_at: string | null;
+  /** Cuándo la caja pasó al motorizado. Nulo = nunca salió de la empresa. */
+  custody_transferred_at?: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -165,6 +168,9 @@ export interface GuideSnapshot {
 /** Un evento de la línea de tiempo (order_events). */
 export interface OrderEventSnapshot {
   kind: string;
+  /** La salida que nombra el evento, cuando la nombra. Es lo que permite saber
+   *  QUÉ salida se anuló por el botón de corregir. */
+  shipment_id?: string | null;
   occurred_at: string;
   courier: string | null;
   new_status: string | null;
@@ -378,6 +384,15 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
   const { order, guides, events, override } = inputs;
   const now = inputs.now ?? new Date().toISOString();
 
+  // Las salidas anuladas como CORRECCIÓN DE REGISTRO no deciden el estado: el
+  // MOM las define como corregir el courier equivocado, no como un hecho
+  // logístico. Siguen en `guides` —el rollup y «Salidas y guías» tienen que
+  // seguir enseñando la fila con su consecutivo— pero no cuentan ni para dar el
+  // pedido por perdido ni para decir que hay gestión en curso.
+  const corregidas = correctedShipmentIds(events);
+  const real = guides.filter((g) => !cancelledAsRecordCorrection(g, corregidas));
+  const currentReal = currentGuide(real);
+
   // ── Rollup logístico (independiente del estado: se calcula siempre)
   const couriers = [...new Set(guides.map((g) => g.courier).filter(Boolean))];
   const current = currentGuide(guides);
@@ -501,28 +516,37 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
   // Todas las guías cerradas como anuladas y ninguna activa: la operación ya lo
   // dio por perdido aunque todavía no se haya anulado en Shopify (caso Lima,
   // §9). Es reversible con un override.
-  if (guides.length && guides.every((g) => g.delivery_status === "anulado")) {
+  //
+  // Las CORRECCIONES DE REGISTRO quedan fuera del reparto (`real`): una salida
+  // anulada por el botón «Anular salida», sin haber salido de la empresa, no es
+  // prueba de que nadie se rindiera — el MOM la define como corregir el courier
+  // equivocado. Con una sola salida, contarla cerraba la venta al corregirla y
+  // encima bloqueaba la guía nueva que motivaba la corrección (#KP127639).
+  if (real.length && real.every((g) => g.delivery_status === "anulado")) {
     return {
       ...rollup,
       general: "anulado",
       operational: "anulado",
-      since: maxIso(...guides.map((g) => g.closed_at ?? guideMovedAt(g))),
-      source: current?.courier ?? "system",
+      since: maxIso(...real.map((g) => g.closed_at ?? guideMovedAt(g))),
+      source: currentReal?.courier ?? "system",
     };
   }
 
   // ── 4. En proceso — hay gestión logística iniciada
-  if (current) {
+  // `currentReal` y no `current`: con la salida corregida como única guía, la
+  // versión anterior daba el pedido «en proceso» por una gestión que se acababa
+  // de deshacer. Sin gestión viva, el pedido vuelve a Preparación (§4).
+  if (currentReal) {
     // Un retorno reclamado sin evidencia NO cierra el pedido, pero sí se ve.
     const operational = returnClaimed
       ? "en_proceso_de_retorno"
-      : inProgressOperational(guides, current, now);
+      : inProgressOperational(real, currentReal, now);
     return {
       ...rollup,
       general: "en_proceso",
       operational,
-      since: maxIso(current.assigned_at, current.created_at) ?? lastMovementAt,
-      source: current.courier,
+      since: maxIso(currentReal.assigned_at, currentReal.created_at) ?? lastMovementAt,
+      source: currentReal.courier,
     };
   }
 
