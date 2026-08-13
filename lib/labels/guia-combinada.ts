@@ -37,9 +37,20 @@ const PAGE_W = 210 * MM;
 const PAGE_H = 297 * MM;
 /** Margen de hoja. Cualquier láser doméstica imprime dentro de 10 mm. */
 const MARGIN = 10 * MM;
-/** Ancho de los dos bloques. El mismo que la etiqueta de 100 mm, para que el
- *  día que se pase a rollo continuo la maqueta no cambie. */
+/** El bloque de Tanders va a 100 mm: es SU etiqueta y se imprime tal cual, de
+ *  modo que el día que se pase a rollo continuo se recorta y ya está. */
 const BLOCK_W = 100 * MM;
+/**
+ * La franja interna, en cambio, usa el ancho útil de la hoja.
+ *
+ * A 100 mm la columna de productos quedaba en 64 mm, y con un título real de
+ * Shopify —«BeeWax - Cera de Abeja Natural para el Cuidado y Protección de
+ * Muebles 300 gramos», 97 caracteres— se leía «BeeWax - Cera de Abeja Natural
+ * para e...». Quien arma la caja no puede trabajar con eso, y al lado había
+ * media hoja en blanco. La franja no se pega en el paquete —se lee mientras se
+ * empaca—, así que no gana nada por medir lo mismo que la etiqueta.
+ */
+const STRIP_W = PAGE_W - MARGIN * 2;
 const PAD = 3 * MM;
 
 const INK = rgb(0.008, 0.023, 0.09);
@@ -152,7 +163,10 @@ function drawTandersBlock(
     y -= 2 * MM;
     page.drawText("NOTA", { x: x + PAD, y: y - 6, size: 6, font: fonts.bold, color: MUTED });
     y -= 6 + 1.2 * MM;
-    for (const line of wrapText(label.note, fonts.regular, 8, width - PAD * 2, 3)) {
+    // Cinco líneas, no tres: la nota de Tanders termina con los datos de cobro
+    // —Yape y cuenta— y a tres líneas se cortaban a media cuenta bancaria. Es
+    // información que usa quien cobra en la puerta, y en la hoja sobra alto.
+    for (const line of wrapText(label.note, fonts.regular, 8, width - PAD * 2, 5)) {
       page.drawText(line, { x: x + PAD, y: y - 8, size: 8, font: fonts.regular, color: INK });
       y -= 9;
     }
@@ -245,14 +259,21 @@ function drawInternoStrip(
       const qty = `${single?.quantity ?? 1} x `;
       page.drawText(qty, { x: colX, y: py - size, size, font: fonts.bold, color: INK });
       const nameX = colX + fonts.bold.widthOfTextAtSize(qty, size);
-      const [line] = wrapText(group.name, fonts.regular, size, colW - (nameX - colX), 1);
-      page.drawText(line ?? "-", { x: nameX, y: py - size, size, font: fonts.regular, color: INK });
-      py -= lineH;
+      // Dos líneas para el título: en la hoja sobra alto y un producto a medio
+      // nombre es justo lo que esta franja viene a evitar.
+      const lines = wrapText(group.name, fonts.regular, size, colW - (nameX - colX), 2);
+      let ny = py;
+      for (const line of lines.length ? lines : ["-"]) {
+        page.drawText(line, { x: nameX, y: ny - size, size, font: fonts.regular, color: INK });
+        ny -= lineH;
+      }
+      py = ny;
       continue;
     }
-    const [title] = wrapText(group.name, fonts.bold, size, colW, 1);
-    page.drawText(title ?? "-", { x: colX, y: py - size, size, font: fonts.bold, color: INK });
-    py -= lineH;
+    for (const title of wrapText(group.name, fonts.bold, size, colW, 2)) {
+      page.drawText(title, { x: colX, y: py - size, size, font: fonts.bold, color: INK });
+      py -= lineH;
+    }
     for (const v of group.variants) {
       const line = `${v.quantity} x ${text(v.variant) || "-"}`;
       page.drawText(line, { x: colX + 3 * MM, y: py - size, size, font: fonts.regular, color: INK });
@@ -319,20 +340,21 @@ export async function buildGuiaCombinadaPdf(
 
   for (const entry of entries) {
     const page = doc.addPage([PAGE_W, PAGE_H]);
-    const x = (PAGE_W - BLOCK_W) / 2;
+    // Los dos alineados a la izquierda: así el corte de la etiqueta de Tanders
+    // es una línea recta desde el borde y no hay que centrar nada a ojo.
     const afterTanders = drawTandersBlock(
       page,
       fonts,
       entry.tanders,
       await doc.embedPng(entry.tandersQrPng),
-      { x, top: PAGE_H - MARGIN, width: BLOCK_W },
+      { x: MARGIN, top: PAGE_H - MARGIN, width: BLOCK_W },
     );
     const cutY = afterTanders - 5 * MM;
-    drawCutLine(page, fonts, x, cutY, BLOCK_W);
+    drawCutLine(page, fonts, MARGIN, cutY, STRIP_W);
     drawInternoStrip(page, fonts, entry.interno, await doc.embedPng(entry.interno.qrPng), {
-      x,
+      x: MARGIN,
       top: cutY - 5 * MM,
-      width: BLOCK_W,
+      width: STRIP_W,
     });
   }
 
