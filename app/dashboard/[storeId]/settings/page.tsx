@@ -75,6 +75,9 @@ export default async function StoreSettingsPage({
     { data: events },
     // Pre-0113 la tabla no existe ⇒ `error` y catálogo vacío, sin tumbar Ajustes.
     { data: replyTemplates },
+    // Pre-0121 la tabla no existe ⇒ `error` y lista vacía, que es además el
+    // estado normal: la tabla solo guarda excepciones.
+    { data: districtCoverage },
   ] = await Promise.all([
     admin.from("stores").select("*").eq("id", storeId).single(),
     admin
@@ -102,6 +105,11 @@ export default async function StoreSettingsPage({
       .eq("store_id", storeId)
       .order("sort", { ascending: true })
       .order("created_at", { ascending: true }),
+    admin
+      .from("district_coverage")
+      .select("id,store_id,district,coverage,note,updated_at")
+      .or(`store_id.is.null,store_id.eq.${storeId}`)
+      .order("district", { ascending: true }),
   ]);
 
   const data: StoreSettingsData = {
@@ -184,6 +192,7 @@ export default async function StoreSettingsPage({
     webhookCount: count ?? 0,
     webhookEvents: (events as StoreSettingsData["webhookEvents"]) ?? [],
     replyTemplates: (replyTemplates as StoreSettingsData["replyTemplates"]) ?? [],
+    districtCoverage: (districtCoverage as StoreSettingsData["districtCoverage"]) ?? [],
   };
 
   const banner = sp.installed

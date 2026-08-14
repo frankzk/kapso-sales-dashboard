@@ -1673,6 +1673,45 @@ Y para el caso suelto que ninguna regla alcanza, la corrección a mano vive en
 mueve, renumera la salida, deja constancia en los dos historiales y recalcula los
 dos Masters.
 
+### 19.0.1 La cobertura de un distrito es una decisión, no un mapa
+
+La regla general clasifica por geografía: Lima Metropolitana y Callao son
+**Lima**, un destino con tarifa COD vigente es **Provincia COD**, el resto
+**Agencia**. Acierta casi siempre y se queda corta donde la operación manda:
+Pucusana está dentro de la provincia de Lima y el reparto propio no llega, así
+que sale por agencia. Hasta 0121 eso solo se cambiaba tocando código —la lista
+vive en `is_lima_metropolitana`— y cada distrito nuevo era un despliegue.
+
+`district_coverage` guarda esas decisiones y **nace vacía**. No es un catálogo de
+los 1.870 distritos del país ni una copia de la lista de Lima: sembrarla con los
+51 distritos de Lima/Callao crearía una TERCERA copia de algo que ya está en SQL
+y en TypeScript, y este MOM lleva media docena de incidentes causados por dos
+definiciones de lo mismo divergiendo. Vacía, además, el comportamiento del día
+del despliegue es exactamente el anterior.
+
+**La excepción manda sobre todo lo demás.** El orden en `order_coverage_for` es:
+
+1. `district_coverage` — la decisión explícita.
+2. Cañete.
+3. Lima Metropolitana.
+4. Tarifa COD vigente, o punto COD cercano (§10).
+5. Agencia.
+
+Si una excepción no pudiera contradecir a las reglas automáticas no serviría de
+nada: existe justamente para eso. Y vive **en la base**, no en TypeScript, porque
+la definición canónica de la cobertura es `order_coverage_for` (§19.1 y 0104): el
+Master se la pregunta a ella. Una excepción escrita solo en TS no habría tenido
+ningún efecto.
+
+`store_id` nulo vale para todas las tiendas —así está hoy la clasificación— y una
+fila con tienda gana sobre la global, para el día en que dos tiendas difieran en
+un destino.
+
+**Al guardar se reclasifican los pedidos ABIERTOS de ese distrito**, no solo los
+nuevos. Sin eso la excepción sería cierta para el futuro y mentira para lo que ya
+está en pantalla, que es el desfase de §19.1. Los finalizados no se tocan: su
+historia queda como ocurrió.
+
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 
 `order_master` no calcula en vivo: guarda el resultado del resolver y lo sirve.

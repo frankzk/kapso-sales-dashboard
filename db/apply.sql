@@ -239,4 +239,6 @@
 \ir migrations/0116_returned_source.sql
 \echo 'Applying 0117_reason_probed_at.sql'
 \ir migrations/0117_reason_probed_at.sql
+\echo 'Applying 0121_district_coverage.sql'
+\ir migrations/0121_district_coverage.sql
 \echo 'Done.'

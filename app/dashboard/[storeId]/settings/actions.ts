@@ -22,6 +22,8 @@ import { listProducts } from "@/lib/aliclik";
 import { syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { env } from "@/lib/env";
 import { REPLY_TOKENS } from "@/lib/wa-reply-templates";
+import { normalizeDistrictKey } from "@/lib/district-coverage";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { describeShalomError, describeShalomProbeFailure } from "@/lib/shalom/client";
 import { clientFor, loadStoreShalom, mintSession, publicClient } from "@/lib/shalom/session";
 
@@ -784,4 +786,138 @@ export async function deleteReplyTemplate(storeId: string, id: string): Promise<
   if (error) return { error: error.message };
   revalidatePath(`/dashboard/${storeId}/settings`);
   return { notice: "Plantilla eliminada ✓" };
+}
+
+// ---------------------------------------------------------------------------
+// Excepciones de cobertura por distrito (0121)
+// ---------------------------------------------------------------------------
+//
+// La regla general clasifica por geografía: Pucusana está en la provincia de
+// Lima, luego «Lima». Pero a Pucusana el reparto propio no llega y sale por
+// agencia — una decisión de la operación que hasta ahora solo se podía cambiar
+// tocando código. Acá se guardan esas excepciones.
+//
+// Quien decide de verdad es `order_coverage_for` en la base, que consulta esta
+// tabla ANTES que cualquier regla automática. Estas acciones solo la editan y se
+// encargan de lo que la tabla por sí sola no hace: que los pedidos YA abiertos
+// de ese distrito cambien de etapa, en vez de esperar a que alguien los toque.
+
+export interface DistrictCoverageRow {
+  id: string;
+  store_id: string | null;
+  district: string;
+  coverage: string;
+  note: string | null;
+  updated_at: string;
+}
+
+export async function listDistrictCoverage(storeId: string): Promise<DistrictCoverageRow[]> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return [];
+  // Se listan las globales Y las de esta tienda: son las dos que pueden afectar
+  // a sus pedidos, y ocultar las globales haría parecer que no hay ninguna regla.
+  const { data, error } = await ctx.admin
+    .from("district_coverage")
+    .select("id,store_id,district,coverage,note,updated_at")
+    .or(`store_id.is.null,store_id.eq.${storeId}`)
+    .order("district", { ascending: true });
+  if (error) return [];
+  return (data as DistrictCoverageRow[] | null) ?? [];
+}
+
+/**
+ * Recalcula los pedidos abiertos del distrito tocado.
+ *
+ * Sin esto la excepción solo valdría para los pedidos nuevos y los de hoy
+ * seguirían mostrando la cobertura anterior — el mismo desfase del read-model
+ * que costó 69 pedidos congelados en «Por confirmar» (ver MOM §19.1). Se acota a
+ * los NO cerrados: reclasificar un pedido entregado hace dos meses cambiaría su
+ * historia sin que nadie lo haya pedido.
+ */
+async function recomputeDistrictOrders(
+  admin: ReturnType<typeof createAdminSupabase>,
+  storeId: string,
+  district: string,
+  scopeAllStores: boolean,
+): Promise<number> {
+  let q = admin
+    .from("order_master")
+    .select("order_id")
+    .ilike("district", district)
+    .not("macro_stage", "in", "(finalizado)")
+    .limit(2000);
+  if (!scopeAllStores) q = q.eq("store_id", storeId);
+  const { data } = await q;
+  const ids = ((data ?? []) as { order_id: string }[]).map((r) => r.order_id);
+  if (!ids.length) return 0;
+  const done = await recomputeOrderMasterSafe(admin, ids);
+  return done.written;
+}
+
+export async function saveDistrictCoverage(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso para editar esta tienda." };
+
+  const raw = String(formData.get("district") ?? "").trim();
+  const district = normalizeDistrictKey(raw);
+  const coverage = String(formData.get("coverage") ?? "").trim();
+  const note = String(formData.get("note") ?? "").trim() || null;
+  const allStores = String(formData.get("all_stores") ?? "") === "on";
+
+  if (!district) return { error: "Indica el distrito." };
+  if (!["lima", "provincia_cod", "agencia"].includes(coverage)) {
+    return { error: "Cobertura no válida." };
+  }
+
+  const { error } = await ctx.admin.from("district_coverage").upsert(
+    {
+      store_id: allStores ? null : storeId,
+      district,
+      coverage,
+      note,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "store_id,district" },
+  );
+  if (error) return { error: error.message };
+
+  const recomputed = await recomputeDistrictOrders(ctx.admin, storeId, district, allStores);
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  revalidatePath("/dashboard/pedidos");
+  return {
+    notice:
+      `«${raw}» queda como ${coverage === "provincia_cod" ? "Provincia COD" : coverage === "lima" ? "Lima" : "Agencia"}.` +
+      (recomputed ? ` ${recomputed} pedido(s) abiertos reclasificados.` : ""),
+  };
+}
+
+export async function deleteDistrictCoverage(
+  storeId: string,
+  id: string,
+): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso para editar esta tienda." };
+
+  const { data: row } = await ctx.admin
+    .from("district_coverage")
+    .select("district,store_id")
+    .eq("id", id)
+    .maybeSingle();
+  const { error } = await ctx.admin.from("district_coverage").delete().eq("id", id);
+  if (error) return { error: error.message };
+
+  const target = row as { district: string; store_id: string | null } | null;
+  const recomputed = target
+    ? await recomputeDistrictOrders(ctx.admin, storeId, target.district, target.store_id === null)
+    : 0;
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return {
+    notice:
+      "Excepción eliminada; ese distrito vuelve a la regla general." +
+      (recomputed ? ` ${recomputed} pedido(s) abiertos reclasificados.` : ""),
+  };
 }
