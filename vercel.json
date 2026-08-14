@@ -25,6 +25,10 @@
       "schedule": "*/20 * * * *"
     },
     {
+      "path": "/api/cron/aliclik-close",
+      "schedule": "10,30,50 * * * *"
+    },
+    {
       "path": "/api/cron/shalom-reconcile",
       "schedule": "*/30 * * * *"
     },

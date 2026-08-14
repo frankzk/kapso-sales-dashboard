@@ -235,4 +235,6 @@
 \ir migrations/0114_return_recovery_phone.sql
 \echo 'Applying 0115_order_prefix_por_tienda.sql'
 \ir migrations/0115_order_prefix_por_tienda.sql
+\echo 'Applying 0116_aliclik_sweep_state.sql'
+\ir migrations/0116_aliclik_sweep_state.sql
 \echo 'Done.'

@@ -928,6 +928,14 @@ Seguimiento de una guía hasta que cierra:
 - Se deja de preguntar cuando la guía termina (entregada, anulada o
   transferida) o tras **60 días sin noticias**. Ese silencio no cierra la guía:
   solo detiene la consulta.
+- **La cola se ordena por a quién hace más que no se le pregunta**, no por quién
+  lleva más callada. Parece lo mismo y no lo es: preguntar por una guía parada
+  devuelve un estado que la guarda monotónica descarta sin escribir, así que su
+  silencio no se acorta y volvía a encabezar la cola en la pasada siguiente,
+  para siempre. Con un tope de consultas por pasada, las de cabeza se repetían y
+  las del fondo no llegaban a tener turno. Lo que ordena es el turno —que
+  siempre avanza porque se sella al preguntar, responda Aliclik lo que responda—
+  y, entre iguales, la más callada primero.
 - El seguimiento alcanza **también a las guías nacidas del Excel**: pregunta por
   `external_order_number` si lo hay y por `guide_code` si no. Son el mismo
   identificador por dos vías, así que limitarlo al primero dejaría fuera a la
@@ -935,6 +943,59 @@ Seguimiento de una guía hasta que cierra:
 - Una guía que Aliclik ya no reconoce **no se cierra**: se cuenta aparte para
   revisión humana. Dar por terminada una guía porque una búsqueda vino vacía
   sería inventar un desenlace.
+
+**Cuando el reporte trae el código definitivo de una guía nuestra.** Una guía
+creada por API nace con un código provisional (`ALC…`) y el reporte la trae
+después con el impreso (`AUR5X…`). Que son la misma guía se reconoce por, en este
+orden: el `orderNumber` si el reporte lo trae, el pedido ya vinculado, nombre de
+pedido **y** teléfono juntos, y —último— solo el teléfono.
+
+El teléfono a secas existe para la guía que **todavía no tiene pedido**: ahí no
+hay nada más con qué reconocerla. No sirve para ganarle a un nombre que ya está
+escrito y dice otra cosa. Cuando la fila nombra un pedido y el candidato lleva
+otro, eso no es falta de evidencia sino evidencia **en contra**, y no se
+promueve. Perder la promoción no cuesta nada —la guía se ingesta por Excel como
+cualquier otra—; acertarle al pedido equivocado sí.
+
+Esta retención es preventiva: a 11-08-2026 **ninguna guía se ha promovido nunca**
+en producción, así que el camino existe pero no se ha usado. No confundirla con
+el emparejamiento del importador, que sí falló y se trata justo debajo.
+
+#### El código impreso nombra a su pedido, y manda sobre el teléfono
+
+Al quitar el prefijo `AUR5X` quedan tres familias de código, y medidas sobre las
+3.976 guías con pedido (11-08-2026) se comportan de forma tajante:
+
+| dígitos | guías | terminan en el nº de su pedido |
+| --- | --- | --- |
+| 12 | 2.841 | 0 |
+| 7 | 12 | 0 |
+| 6 | 1.179 | 1.162 (98,6%) |
+
+Las de doce y siete son identificadores de Aliclik. **La de seis es el número del
+pedido**, tecleado por quien creó la guía en el portal. Por eso solo esa se lee
+como referencia: en las otras dos, leer un pedido ahí dentro sería leer ruido.
+
+**Regla: si el código nombra un pedido, la guía no admite otro.** Los demás
+candidatos se descartan antes de emparejar, y si el nombrado no está entre ellos
+la fila va a revisión.
+
+Lo que evita es un error que el teléfono solo no puede ver. El emparejamiento por
+teléfono exige un único pedido con ese número, y lee ese «uno» como *solo hay
+uno* cuando significa *solo he ingerido uno*: el pedido bueno puede no haber
+llegado aún desde Shopify. Ocurrió **17 veces entre el 01-07 y el 23-07-2026**,
+todas con el mismo perfil —la guía se importó antes que su pedido, el teléfono
+señalaba a un pedido anterior del mismo cliente, y los 17 dueños reales entraron
+en la carga del 26-07—. Nadie volvió a mirar aquellos enlaces, así que 17 pedidos
+cargan el desenlace de un paquete ajeno y otros 17 figuran sin salida.
+
+El teléfono es la identidad del cliente (§8), no la del pedido, y un cliente que
+vuelve a comprar tiene dos. Por eso no basta para elegir entre ellos.
+
+> ⚠️ **Frágil a propósito, y hay que vigilarlo**: la regla distingue las familias
+> por longitud, y hoy los pedidos de la operación son de seis dígitos
+> (106620–127540). El día que lleguen al millón, siete dígitos dejarán de ser
+> «identificador de Aliclik» y habrá que revisar esto.
 
 ### 10.2 Crear una guía en Aliclik: el candado y su caducidad
 
@@ -964,16 +1025,38 @@ Sin esa caducidad el candado no tenía salida: la intención quedaba viva para
 siempre y el pedido inoperable hasta que alguien lo desbloqueara a mano. Ocurrió
 el 08-08-2026 con dos pedidos, durante una caída de la API de Aliclik.
 
+**Barrer y cerrar son dos trabajos, y corren por separado.** Recorrer el listado
+por fechas es lo largo; caducar candados y perseguir rezagadas es lo corto y lo
+urgente. Mientras compartieron invocación, lo corto dependía de que lo largo
+terminase a tiempo — y dejó de terminar: el recorrido creció hasta agotar el
+límite de ejecución y el 10-08-2026 las nueve pasadas de tres horas seguidas
+murieron dentro del bucle. El barrido parecía sano porque aplicaba estados antes
+de morir, pero **nada de lo que iba después llegó a ejecutarse nunca**. Un
+candado duró más de diez horas y 515 guías vivas acumularon una media de 8 días
+sin noticias. Hoy el cierre tiene su propio cron y su propio presupuesto.
+
+Separarlos obliga a que la prueba de haber buscado **sobreviva a la invocación
+que la produjo**: el barrido deja constancia de sí mismo —cuándo empezó, cuándo
+terminó y qué ventana cubrió— y el cierre la lee. Ninguna de las retenciones de
+abajo se aflojó al mudarse; lo único que cambió es de dónde sale la evidencia.
+
 **Cuándo NO se caduca**, porque liberar de más cuesta una guía duplicada —dinero
 real y ventana de cancelación corta— mientras que liberar de menos solo cuesta
 esperar:
 
-- **Si el barrido no pudo recorrerse entero, no se caduca nada.** «Buscamos y no
-  está» no es «no pudimos buscar», y es justo durante una caída de Aliclik cuando
-  las dos se confunden: sin esta condición, la misma caída que provoca los
-  timeouts liberaría los candados que protegen de ellos.
+- **Si no consta un barrido completo y reciente, no se caduca nada.** «Buscamos y
+  no está» no es «no pudimos buscar», y es justo durante una caída de Aliclik
+  cuando las dos se confunden: sin esta condición, la misma caída que provoca los
+  timeouts liberaría los candados que protegen de ellos. Que la constancia además
+  **caduque** —dos horas, unas seis pasadas— evita lo contrario: dar por buena
+  para siempre la última búsqueda que salió bien.
+- **Si el barrido arrancó antes de que naciera la intención, tampoco.** Pudo
+  pasar de largo por la zona del listado donde estaría el pedido, así que no
+  haberlo visto no dice nada de él.
 - **Si la ausencia quedó en duda, tampoco.** Una intención cuyo teléfono señalaba
-  a varios pedidos abiertos a la vez queda para revisión humana.
+  a varios pedidos abiertos a la vez queda para revisión humana. La duda se
+  anota en la propia intención y vale para el barrido que la vio: si el siguiente
+  barrido completo no la vuelve a marcar, la intención vuelve a ser caducable.
 - **Si la fecha de creación cayó fuera de la ventana del barrido**, la intención
   caduca igual —lleva demasiado bloqueando—, pero el motivo registra que la
   ausencia **no** pudo comprobarse, y se cuenta aparte. Antes de reintentar hay
