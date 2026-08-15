@@ -4,6 +4,7 @@ import {
   apiOwnsDeliveryStatus,
   reconcileDeliveryStatus,
   reconcileReportedDeliveryStatus,
+  reopensForFailedAttempt,
 } from "@/lib/shipments";
 
 // La API manda sobre el Excel mientras su lectura siga fresca.
@@ -111,5 +112,49 @@ describe("reconcileReportedDeliveryStatus — qué puede escribir el Excel", () 
         reconcileDeliveryStatus(existing, incoming),
       );
     }
+  });
+});
+
+describe("reopensForFailedAttempt — un NO CONTESTA devuelve la guía a la cola", () => {
+  const base = {
+    existingStatus: "en_ruta",
+    attemptFailed: true,
+    attemptDate: "2026-08-13",
+    scheduledFor: "2026-08-13T00:00:00+00",
+  };
+
+  it("EL CASO: el courier salió el día agendado y no la encontró", () => {
+    // Chimbote: agendada para el 13-ago, intento del 13-ago fallido. Sin esto se
+    // quedaba En ruta, nadie la volvía a llamar y se devolvía a Lima con flete.
+    expect(reopensForFailedAttempt(base)).toBe(true);
+  });
+
+  it("un intento POSTERIOR al día agendado también la reabre", () => {
+    expect(reopensForFailedAttempt({ ...base, attemptDate: "2026-08-14" })).toBe(true);
+  });
+
+  it("un reporte rezagado NO deshace una reprogramación que aún no le toca", () => {
+    // Intento viejo (13-ago) contra una reprogramación nueva para el 20-ago.
+    expect(
+      reopensForFailedAttempt({ ...base, attemptDate: "2026-08-13", scheduledFor: "2026-08-20T00:00:00+00" }),
+    ).toBe(false);
+  });
+
+  it("sin fecha del intento falla del lado seguro (no reabre)", () => {
+    expect(reopensForFailedAttempt({ ...base, attemptDate: null })).toBe(false);
+  });
+
+  it("sin fecha agendada sí reabre: no hay nada que proteger", () => {
+    expect(reopensForFailedAttempt({ ...base, scheduledFor: null, attemptDate: null })).toBe(true);
+  });
+
+  it("solo aplica a guías En ruta", () => {
+    for (const st of ["pendiente", "entregado", "anulado", "transferido", null]) {
+      expect(reopensForFailedAttempt({ ...base, existingStatus: st })).toBe(false);
+    }
+  });
+
+  it("una entrega normal no reabre nada", () => {
+    expect(reopensForFailedAttempt({ ...base, attemptFailed: false })).toBe(false);
   });
 });

@@ -24,7 +24,7 @@ import {
   reconcileAliclikCustodyState,
   reconcileAliclikPreparationState,
 } from "@/lib/aliclik-status";
-import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
+import { categoryOf, reconcileDeliveryStatus, reopensForFailedAttempt } from "@/lib/shipments";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 
 /**
@@ -68,6 +68,8 @@ interface TrackedShipment {
   custody_state: string | null;
   ready_at: string | null;
   custody_transferred_at: string | null;
+  /** Lo que agendó la asesora: protege una reprogramación que aún no le toca. */
+  next_followup_at: string | null;
 }
 
 /**
@@ -113,7 +115,7 @@ export async function applyAliclikSnapshot(
   // parámetro y no hay nada que escapar.
   const COLUMNS =
     "id,store_id,order_id,delivery_status,last_report_at,external_order_number,guide_code," +
-    "preparation_state,custody_state,ready_at,custody_transferred_at";
+    "preparation_state,custody_state,ready_at,custody_transferred_at,next_followup_at";
 
   const byExternal = await admin
     .from("shipments")
@@ -175,7 +177,21 @@ export async function applyAliclikSnapshot(
     return { ok: true, outcome: "unchanged", shipmentId: shipment.id, orderId: shipment.order_id };
   }
 
-  const next = reconcileDeliveryStatus(shipment.delivery_status, mapped.deliveryStatus);
+  // Un NO CONTESTA consume la reprogramación agendada: la guía vuelve a la cola
+  // de llamadas. Va también acá y no solo en el Excel porque este barrido corre
+  // cada pocos minutos: si solo lo hiciera el import, este la devolvería a "En
+  // ruta" enseguida y la guía quedaría rebotando entre estados.
+  //
+  // El día del intento es HOY: la API está diciendo AHORA que no la encontró.
+  const reopen = reopensForFailedAttempt({
+    existingStatus: shipment.delivery_status,
+    attemptFailed: mapped.attemptFailed,
+    attemptDate: new Date().toISOString().slice(0, 10),
+    scheduledFor: shipment.next_followup_at,
+  });
+  const next = reopen
+    ? "pendiente"
+    : reconcileDeliveryStatus(shipment.delivery_status, mapped.deliveryStatus);
   const nowIso = new Date().toISOString();
 
   const patch: Record<string, unknown> = {

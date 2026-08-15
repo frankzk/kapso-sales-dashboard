@@ -31,6 +31,10 @@ function toCanonical(row: ParsedShipmentRow): CanonicalReportRow {
     // que se pueda auditar por qué se decidió lo que se decidió.
     reported_status: row.raw["ESTADO ENTREGA"] ?? row.raw["ESTADO DE ENTREGA"] ?? row.raw["ESTADO"] ?? null,
     attempts: row.aliclik_attempts,
+    attempt_failed: row.attempt_failed,
+    // Aliclik informa la fecha operativa de entrega: el día en que salió a
+    // repartir, que es justo el día del intento.
+    attempt_date: row.aliclik_service_date,
     // Aliclik informa la fecha operativa de entrega, no la de despacho; se usa
     // como fecha de cierre cuando la guía ya está entregada.
     closed_at: row.delivery_status === "entregado" && row.aliclik_service_date

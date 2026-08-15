@@ -47,6 +47,14 @@ export interface AliclikStatusMapping {
   preparationState: "rotulo_generado" | "listo_despacho" | null;
   /** Custodia física MOM acreditada por el estado de despacho de Aliclik. */
   custodyState: "empresa" | "courier" | "devuelto" | null;
+  /**
+   * El courier SALIÓ y no encontró a la clienta (NO CONTESTA). No es un
+   * desenlace —la guía sigue viva— pero consume la reprogramación agendada: si
+   * nadie vuelve a llamar, se pierde la ventana de Aliclik y el paquete se
+   * devuelve a Lima con flete a cargo nuestro. Lo consumen las DOS vías (Excel
+   * y API) para devolver la guía a la cola de llamadas.
+   */
+  attemptFailed: boolean;
 }
 
 const norm = (v: string | null | undefined): string => (v ?? "").trim().toUpperCase();
@@ -255,6 +263,7 @@ export function mapAliclikStatus(input: AliclikStatusInput): AliclikStatusMappin
     returned: false,
     terminal: false,
     unknown,
+    attemptFailed: status === "NOT_RESPOND",
     ...momState,
   };
 

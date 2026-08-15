@@ -15,7 +15,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { chunk } from "@/lib/access";
 import { matchShipment, type MatchResult, type OrderCandidate } from "@/lib/shipment-match";
-import { reconcileReportedDeliveryStatus, categoryOf } from "@/lib/shipments";
+import { reconcileReportedDeliveryStatus, reopensForFailedAttempt, categoryOf } from "@/lib/shipments";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import type { CanonicalReportRow } from "@/lib/couriers/registry";
 
@@ -67,10 +67,12 @@ interface ExistingGuide {
   api_report_at: string | null;
   pickup_state: string | null;
   returned_at: string | null;
+  /** Lo que agendó la asesora: protege una reprogramación que aún no le toca. */
+  next_followup_at: string | null;
 }
 
 const EXISTING_COLUMNS =
-  "id,guide_code,store_id,delivery_status,matched,match_method,order_id,last_report_at,api_report_at,pickup_state,returned_at";
+  "id,guide_code,store_id,delivery_status,matched,match_method,order_id,last_report_at,api_report_at,pickup_state,returned_at,next_followup_at";
 
 async function fetchExisting(
   admin: SupabaseClient,
@@ -227,7 +229,17 @@ export async function ingestCourierReport(
       new Date(),
       { reportAt: meta.reportAt },
     );
-    if (!existing || existing.delivery_status !== mergedStatus) updatedCount++;
+    // Un NO CONTESTA en el día agendado consume la reprogramación: la guía
+    // vuelve a la cola de llamadas para reprogramarla otra vez antes de que se
+    // agote la ventana de Aliclik (ver reopensForFailedAttempt).
+    const reopen = reopensForFailedAttempt({
+      existingStatus: existing?.delivery_status,
+      attemptFailed: inc.row.attempt_failed === true,
+      attemptDate: inc.row.attempt_date,
+      scheduledFor: existing?.next_followup_at,
+    });
+    const finalStatus = reopen ? "pendiente" : mergedStatus;
+    if (!existing || existing.delivery_status !== finalStatus) updatedCount++;
 
     // El vínculo con el pedido nunca se degrada.
     let order_id: string | null;
@@ -255,8 +267,8 @@ export async function ingestCourierReport(
       courier,
       guide_code: guide,
       store_id: linkStore,
-      delivery_status: mergedStatus,
-      status_category: categoryOf(mergedStatus),
+      delivery_status: finalStatus,
+      status_category: categoryOf(finalStatus),
       order_id,
       matched,
       match_method,
