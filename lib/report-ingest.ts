@@ -224,6 +224,8 @@ export async function ingestCourierReport(
       existing?.delivery_status,
       inc.row.delivery_status,
       existing?.api_report_at,
+      new Date(),
+      { reportAt: meta.reportAt },
     );
     if (!existing || existing.delivery_status !== mergedStatus) updatedCount++;
 

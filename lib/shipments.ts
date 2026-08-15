@@ -773,20 +773,45 @@ export function apiOwnsDeliveryStatus(
   return age <= API_OWNERSHIP_DAYS * 86_400_000;
 }
 
+/** ¿El reporte observó la guía DESPUÉS que la última lectura de la API? */
+export function reportSeenAfterApi(
+  reportAt: string | null | undefined,
+  apiReportAt: string | null | undefined,
+): boolean {
+  if (!reportAt || !apiReportAt) return false;
+  const r = Date.parse(reportAt);
+  const a = Date.parse(apiReportAt);
+  if (Number.isNaN(r) || Number.isNaN(a)) return false;
+  return r > a;
+}
+
 /**
  * Estado que un REPORTE importado puede escribir sobre una guía existente.
  *
  * Es el envoltorio de `reconcileDeliveryStatus` para la vía del Excel: si la API
  * habló hace poco, su estado se respeta tal cual; si no, se aplica la
  * precedencia monotónica de siempre.
+ *
+ * SALVO que el reporte sea MÁS RECIENTE que esa lectura. La ventana de 7 días
+ * asumía que la API sigue mirando la guía, pero deja de leer algunas y entonces
+ * congelaba el estado: la API mandaba con un dato viejo y el Excel —que sí vio
+ * la entrega— no podía corregirlo hasta que caducara la ventana. Se veía como
+ * una guía ENTREGADA en Aliclik atascada en "En ruta" mientras el resto de sus
+ * campos (fecha, dirección, intentos) sí se actualizaban.
+ *
+ * La regla real no es "la API es mejor fuente", sino "manda quien vio la guía
+ * más tarde".
  */
 export function reconcileReportedDeliveryStatus(
   existing: string | null | undefined,
   incoming: string,
   apiReportAt: string | null | undefined,
   now: Date = new Date(),
+  opts: { reportAt?: string | null } = {},
 ): string {
-  if (existing && apiOwnsDeliveryStatus(apiReportAt, now)) return existing;
+  const apiManda =
+    apiOwnsDeliveryStatus(apiReportAt, now) && !reportSeenAfterApi(opts.reportAt, apiReportAt);
+  if (existing && apiManda) return existing;
   return reconcileDeliveryStatus(existing, incoming);
 }
 

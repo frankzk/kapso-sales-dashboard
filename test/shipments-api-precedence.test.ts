@@ -58,6 +58,39 @@ describe("reconcileReportedDeliveryStatus — qué puede escribir el Excel", () 
     ).toBe("anulado");
   });
 
+  it("EL CASO REAL: si el reporte es POSTERIOR a la lectura de API, manda el reporte", () => {
+    // Guía de Cusco: la API la leyó el 12-ago y dejó de mirarla; el Excel del
+    // 15-ago la trae ENTREGADA. Antes quedaba congelada en "En ruta" hasta que
+    // caducara la ventana de 7 días.
+    expect(
+      reconcileReportedDeliveryStatus("en_ruta", "entregado", hace(3), NOW, {
+        reportAt: new Date(NOW.getTime() - 1 * 3600_000).toISOString(),
+      }),
+    ).toBe("entregado");
+  });
+
+  it("un reporte ANTERIOR a la lectura de API sigue sin poder tocar el estado", () => {
+    expect(
+      reconcileReportedDeliveryStatus("en_ruta", "entregado", hace(1), NOW, {
+        reportAt: new Date(NOW.getTime() - 5 * 86_400_000).toISOString(),
+      }),
+    ).toBe("en_ruta");
+  });
+
+  it("sin fecha de reporte se comporta como antes (la API manda)", () => {
+    expect(
+      reconcileReportedDeliveryStatus("en_ruta", "entregado", hace(1), NOW, { reportAt: null }),
+    ).toBe("en_ruta");
+  });
+
+  it("ganar por recencia no rompe la monotonía: no reabre un terminal", () => {
+    expect(
+      reconcileReportedDeliveryStatus("entregado", "pendiente", hace(3), NOW, {
+        reportAt: new Date(NOW.getTime() - 1 * 3600_000).toISOString(),
+      }),
+    ).toBe("entregado");
+  });
+
   it("una guía que no existe se crea con lo que diga el reporte", () => {
     expect(reconcileReportedDeliveryStatus(null, "pendiente", hace(0), NOW)).toBe("pendiente");
   });
