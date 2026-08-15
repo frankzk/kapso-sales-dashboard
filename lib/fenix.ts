@@ -3,7 +3,7 @@
 // product in that city. Real stock comes from the fenix_stock table; this module
 // decides eligibility from a shipment + the relevant stock rows.
 
-import { isFenixCity, normalizeCity } from "./shipments";
+import { fenixWarehouseKey, isFenixCity, normalizeCity } from "./shipments";
 
 export interface FenixStockRow {
   city: string; // normalized coverage key
@@ -28,11 +28,12 @@ export interface FenixEligibility {
 export type FenixAvailabilityFilter = "all" | "ok" | "sin_stock" | "sin_cobertura";
 
 /** Puno and Juliaca are distinct delivery locations but draw inventory from
- * the same Fenix warehouse. Keep the visible city untouched and only collapse
- * the key used to compare stock rows. */
+ * the same Fenix warehouse — igual que Chupaca desde Huancayo. Keep the visible
+ * city untouched and only collapse the key used to compare stock rows. La tabla
+ * de equivalencias vive junto a `FENIX_CITIES` (`FENIX_CITY_ALIASES`), para que
+ * cobertura y stock no puedan discrepar. */
 export function fenixStockCityKey(city: string | null | undefined): string {
-  const normalized = normalizeCity(city);
-  return normalized === "puno" ? "juliaca" : normalized;
+  return fenixWarehouseKey(city);
 }
 
 /** Resolves the UI status, including a safe fallback for legacy rows that were

@@ -24,6 +24,7 @@ import {
   isShipmentReadyForContactToday,
   limaCalendarDayBounds,
   normalizeCity,
+  fenixWarehouseKey,
   isFenixCity,
   isFenixDistrict,
   deriveFenixCoverageCity,
@@ -315,6 +316,36 @@ describe("normalizeCity", () => {
     expect(normalizeCity("Republica")).toBe("republica");
     expect(normalizeCity("Vilcabamba")).toBe("vilcabamba");
     expect(isFenixCity("Republica")).toBe(false);
+  });
+  it("las satélite resuelven a su almacén sin cambiar la ciudad visible", () => {
+    // `normalizeCity` sigue devolviendo el destino —el paquete va a Chupaca, no
+    // a Huancayo—; quien traduce al almacén es `fenixWarehouseKey`.
+    expect(normalizeCity("Chupaca")).toBe("chupaca");
+    expect(fenixWarehouseKey("Chupaca")).toBe("huancayo");
+    expect(isFenixCity("Chupaca")).toBe(true);
+    expect(normalizeCity("San Román")).toBe("san roman");
+    expect(fenixWarehouseKey("San Román")).toBe("juliaca");
+    expect(isFenixCity("San Román")).toBe(true);
+  });
+  it("el catálogo de ciudades gana a los alias en una etiqueta que nombre a las dos", () => {
+    // «Juliaca, San Román» es la ciudad y su provincia: tiene que quedarse con
+    // Juliaca. Por eso los alias se recorren DESPUÉS de FENIX_CITIES.
+    expect(normalizeCity("Juliaca, San Román")).toBe("juliaca");
+    expect(normalizeCity("Huancayo - Chupaca")).toBe("huancayo");
+  });
+  it("un distrito dentro de una satélite también encuentra su almacén", () => {
+    expect(deriveFenixCoverageCity("Yanacancha", "Chupaca")).toBe("chupaca");
+    expect(isFenixCity(deriveFenixCoverageCity("Yanacancha", "Chupaca"))).toBe(true);
+  });
+  it("lo que la operación descartó no entra por parecido ni por cercanía", () => {
+    for (const c of ["Jauja", "Chepén", "Chala", "Lima", "Tacna"]) {
+      expect(isFenixCity(c)).toBe(false);
+    }
+  });
+  it("puno sigue exactamente como estaba al mudarse a la tabla de alias", () => {
+    expect(normalizeCity("Puno")).toBe("puno");
+    expect(fenixWarehouseKey("Puno")).toBe("juliaca");
+    expect(isFenixCity("Puno")).toBe(true);
   });
   it("las nuevas no le quitan la ciudad a las que ya funcionaban", () => {
     // Van al final del catálogo a propósito: `normalizeCity` se queda con el

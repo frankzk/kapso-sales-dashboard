@@ -322,6 +322,32 @@ export const FENIX_CITIES = [
   "chiclayo",
 ];
 
+/**
+ * Localidades que Fenix SÍ atiende pero desde el almacén de otra ciudad.
+ *
+ * No son ciudades de `FENIX_CITIES` —no hay stock propio ahí— sino destinos que
+ * el reparto cubre desde el almacén al que apuntan. Sin esta tabla el envío cae
+ * a su propia clave (`chupaca`), que no existe en `fenix_stock`, y la guía sale
+ * como «Fuera de cobertura» aunque Fenix llegue perfectamente: el almacén que la
+ * atiende está en la lista, pero nada lo conectaba con el destino.
+ *
+ * La ciudad VISIBLE no se toca: el paquete va a Chupaca, no a Huancayo. Esto
+ * solo resuelve contra qué stock se compara y si hay cobertura.
+ *
+ * `puno → juliaca` vivía suelto en `fenixStockCityKey` y es el mismo caso, así
+ * que se muda aquí. Diferencia: `puno` además está en `FENIX_CITIES`, mientras
+ * que las localidades nuevas solo existen como alias.
+ *
+ * Para ampliarla hace falta saber qué reparte Fenix desde cada almacén; no se
+ * deduce de la distancia. Confirmado con la operación (2026-08-15): Jauja,
+ * Chepén y Chala NO tienen cobertura, pese a estar cerca de un almacén.
+ */
+export const FENIX_CITY_ALIASES: Record<string, string> = {
+  puno: "juliaca",
+  chupaca: "huancayo",
+  "san roman": "juliaca",
+};
+
 /** Normalize a raw city/district label to a coverage key (lowercase, no accents). */
 export function normalizeCity(raw: string | null | undefined): string {
   if (!raw) return "";
@@ -331,12 +357,29 @@ export function normalizeCity(raw: string | null | undefined): string {
   for (const city of FENIX_CITIES) {
     if (s === city || new RegExp(`(^|[^a-z])${city}([^a-z]|$)`).test(s)) return city;
   }
+  // Y después las localidades satélite, para que «Yanacancha, Chupaca» resuelva
+  // igual que «Chupaca» a secas. Van DESPUÉS a propósito: una etiqueta que
+  // nombre a las dos —«Juliaca, San Román»— tiene que quedarse con la ciudad
+  // real, no con la provincia.
+  for (const alias of Object.keys(FENIX_CITY_ALIASES)) {
+    if (s === alias || new RegExp(`(^|[^a-z])${alias}([^a-z]|$)`).test(s)) return alias;
+  }
   return s;
+}
+
+/**
+ * Almacén del que tira una localidad. Es la clave con la que se compara el
+ * stock y con la que se decide la cobertura; la ciudad visible sigue siendo la
+ * del destino.
+ */
+export function fenixWarehouseKey(city: string | null | undefined): string {
+  const normalized = normalizeCity(city);
+  return FENIX_CITY_ALIASES[normalized] ?? normalized;
 }
 
 /** Is this (normalized) city in the Fenix coverage set? */
 export function isFenixCity(city: string | null | undefined): boolean {
-  return FENIX_CITIES.includes(normalizeCity(city));
+  return FENIX_CITIES.includes(fenixWarehouseKey(city));
 }
 
 /**

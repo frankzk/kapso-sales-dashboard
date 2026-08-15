@@ -40,6 +40,51 @@ describe("evaluateFenix", () => {
     expect(r.reason).toBe("sin_stock");
   });
 
+  // Localidades satélite: Fenix llega, pero el stock está en el almacén de al
+  // lado. Sin la tabla de alias caían a su propia clave —que no existe en
+  // fenix_stock— y salían como «Fuera de cobertura» aunque el reparto las
+  // cubriera. El caso real: AUR5X221995919245, Chupaca (Junín).
+  it("EL CASO: Chupaca tira del almacén de Huancayo", () => {
+    const h: FenixStockRow[] = [{ city: "huancayo", product: "Black Seed Oil", quantity: 4 }];
+    const r = evaluateFenix({ city: "Chupaca", product: "Black Seed Oil" }, h);
+    expect(r.eligible).toBe(true);
+    expect(r.reason).toBe("ok");
+  });
+
+  it("una satélite sin stock en su almacén dice sin_stock, no sin_cobertura", () => {
+    // El matiz importa en la UI: «sin stock» se resuelve reponiendo; «fuera de
+    // cobertura» dice que ni vale la pena intentarlo.
+    const h: FenixStockRow[] = [{ city: "huancayo", product: "Otro", quantity: 4 }];
+    expect(evaluateFenix({ city: "Chupaca", product: "Black Seed Oil" }, h).reason).toBe("sin_stock");
+  });
+
+  it("San Román tira del almacén de Juliaca", () => {
+    const j: FenixStockRow[] = [{ city: "juliaca", product: "X", quantity: 2 }];
+    expect(evaluateFenix({ city: "San Román", product: "X" }, j).eligible).toBe(true);
+    expect(evaluateFenix({ city: "San Roman", product: "X" }, j).eligible).toBe(true);
+  });
+
+  it("una localidad satélite sale del stock de su almacén, no de una propia", () => {
+    // Cargar stock a nombre de la satélite lo pone donde no está: el almacén es
+    // el de Huancayo y es ahí donde se compara.
+    const enChupaca: FenixStockRow[] = [{ city: "chupaca", product: "X", quantity: 9 }];
+    expect(evaluateFenix({ city: "Huancayo", product: "X" }, enChupaca).eligible).toBe(true);
+  });
+
+  it("las que la operación descartó siguen fuera de cobertura", () => {
+    // Jauja, Chepén y Chala están cerca de un almacén y aun así Fenix no las
+    // reparte. La cercanía no es el criterio; la tabla solo crece con lo que
+    // confirme la operación.
+    const todo: FenixStockRow[] = [
+      { city: "huancayo", product: "X", quantity: 9 },
+      { city: "trujillo", product: "X", quantity: 9 },
+      { city: "arequipa", product: "X", quantity: 9 },
+    ];
+    for (const c of ["Jauja", "Chepén", "Chala"]) {
+      expect(evaluateFenix({ city: c, product: "X" }, todo).reason).toBe("sin_cobertura");
+    }
+  });
+
   it("handles Juliaca/Puno normalization", () => {
     const j: FenixStockRow[] = [{ city: "juliaca", product: "X", quantity: 2 }];
     expect(evaluateFenix({ city: "Juliaca/Puno", product: "X" }, j).eligible).toBe(true);
