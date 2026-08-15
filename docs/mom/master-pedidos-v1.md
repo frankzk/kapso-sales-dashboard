@@ -409,6 +409,19 @@ Reglas:
     sin señal de despacho → `pendiente` (sigue en almacén).
   - Un valor no reconocido no inventa estado: cae al binario histórico
     entregado-vs-pendiente.
+- **Excepción — un `NO CONTESTA` devuelve la guía a `pendiente`.** Es la única
+  transición que RETROCEDE, así que se decide aparte de la precedencia
+  monotónica (`reopensForFailedAttempt`) y solo si el intento ocurrió **en o
+  después** del día agendado (`next_followup_at`): un reporte rezagado con un
+  "no contesta" viejo no deshace una reprogramación que todavía no le toca. Sin
+  fecha del intento no reabre (falla del lado seguro); sin fecha agendada sí,
+  porque no hay nada que proteger. Motivo operativo: si la guía se queda `en
+  ruta` nadie la vuelve a llamar, se agota la ventana de reprogramación de
+  Aliclik y el paquete se devuelve a Lima con el flete a cargo nuestro.
+  La regla vive en **las tres** vías que escriben estado —el barrido de la API
+  (`aliclik-track`), el Excel de Aliclik (`aliclik-ingest`) y el Excel de los
+  demás couriers (`report-ingest`)—; en una sola no sirve, porque la otra
+  devolvería la guía a `en_ruta` en el siguiente barrido.
 - A diferencia de la vía autenticada, el Excel **solo** fija `delivery_status`:
   no avanza `custody_state` ni `preparation_state` (el dato de despacho del Excel
   es ruidoso — `VALIDADO` persiste incluso en entregados). Por eso un `VALIDADO`

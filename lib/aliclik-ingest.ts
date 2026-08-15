@@ -14,6 +14,7 @@ import {
   isPending,
   maxDeliveryDate,
   reconcileReportedDeliveryStatus,
+  reopensForFailedAttempt,
 } from "./shipments";
 import { evaluateFenix, type FenixStockRow } from "./fenix";
 import { recomputeOrderMasterSafe } from "./order-master";
@@ -37,6 +38,9 @@ interface ExistingShipment {
   last_report_at: string | null;
   /** Solo la escribe la vía API; decide si este reporte puede tocar el estado. */
   api_report_at: string | null;
+  /** Día para el que el equipo reprogramó la entrega; protege una reprogramación
+   *  futura de un intento fallido viejo (ver reopensForFailedAttempt). */
+  next_followup_at: string | null;
   returned_at: string | null;
   dispatched_at: string | null;
   delivered_source: string | null;
@@ -180,6 +184,17 @@ export async function ingestAliclikReport(
       new Date(),
       { reportAt: meta.reportAt },
     );
+    // Un NO CONTESTA del día agendado devuelve la guía a nuestra cola de
+    // llamadas: es la única transición hacia atrás. Si se queda En ruta nadie
+    // la vuelve a llamar, se agota la ventana de reprogramación con Aliclik y
+    // el paquete se devuelve a Lima con flete a cargo nuestro.
+    const reopen = reopensForFailedAttempt({
+      existingStatus: existing?.delivery_status,
+      attemptFailed: inc.row.attempt_failed === true,
+      attemptDate: inc.row.aliclik_service_date,
+      scheduledFor: existing?.next_followup_at,
+    });
+    const finalStatus = reopen ? "pendiente" : mergedStatus;
     const keepManualAddress = existing?.address_override === true;
     const district = keepManualAddress
       ? existing.district
@@ -203,13 +218,13 @@ export async function ingestAliclikReport(
       : (inc.row.longitude ?? existing?.longitude ?? null);
     // Fenix coverage/stock is evaluated for every managed (pendiente) guide — the
     // UI splits Pendiente vs "Sin cobertura" by this flag.
-    const fenix = isPending(mergedStatus)
+    const fenix = isPending(finalStatus)
       ? evaluateFenix({ city, product: inc.row.product }, stockRows).eligible
       : false;
     // delivered_source: keep an existing source; a delivery that comes from the
     // report (not from agent gestión) is "aliclik".
     let delivered_source = existing?.delivered_source ?? null;
-    if (mergedStatus === "entregado" && !delivered_source) delivered_source = "aliclik";
+    if (finalStatus === "entregado" && !delivered_source) delivered_source = "aliclik";
 
     // linkage: never downgrade an established link or a dismissal
     let order_id: string | null;
@@ -274,8 +289,8 @@ export async function ingestAliclikReport(
       latitude,
       longitude,
       address_override: keepManualAddress,
-      delivery_status: mergedStatus,
-      status_category: categoryOf(mergedStatus),
+      delivery_status: finalStatus,
+      status_category: categoryOf(finalStatus),
       returned_at,
       dispatched_at,
       delivered_source,
@@ -488,14 +503,14 @@ async function fetchExistingShipments(
   for (const chunk of chunked(guideCodes, 200)) {
     const currentResult = await admin
       .from("shipments")
-      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,returned_at,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,next_followup_at,returned_at,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
       .eq("courier", "aliclik")
       .in("guide_code", chunk);
     let data: unknown = currentResult.data;
     if (isMissingProvinceColumn(currentResult.error)) {
       const legacyResult = await admin
         .from("shipments")
-        .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,returned_at,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+        .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,next_followup_at,returned_at,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
         .eq("courier", "aliclik")
         .in("guide_code", chunk);
       data = legacyResult.data;
