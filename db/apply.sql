@@ -237,4 +237,6 @@
 \ir migrations/0115_order_prefix_por_tienda.sql
 \echo 'Applying 0116_aliclik_sweep_state.sql'
 \ir migrations/0116_aliclik_sweep_state.sql
+\echo 'Applying 0117_aliclik_api_updated_at.sql'
+\ir migrations/0117_aliclik_api_updated_at.sql
 \echo 'Done.'
