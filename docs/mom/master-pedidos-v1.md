@@ -894,6 +894,19 @@ La marca vive en `shipments.api_report_at`, que **solo** escribe la vía API.
 `last_report_at` no sirve para esto: lo escriben las dos vías, así que no permite
 saber quién habló último.
 
+**La guarda monotónica del barrido tiene el mismo problema, y por eso también
+tiene su propia marca** (`api_updated_at`, 0117). El barrido descarta un snapshot
+de Aliclik más viejo que el último que aplicó; para saberlo compara el `updatedAt`
+de la API contra esa marca, **nunca** contra `last_report_at`. Son dos relojes
+distintos: `updatedAt` dice cuándo se movió el pedido en Aliclik y
+`last_report_at` cuándo miramos nosotros —y el Excel lo pone en la hora de la
+subida—. Compararlos entre sí hacía que cada reporte importado dejara la marca en
+«ahora» para todas las guías del archivo y, desde ese instante, el barrido las
+diera por rezagadas y no volviera a tocarlas hasta que Aliclik moviera el pedido:
+la vía automática se apagaba justo sobre las guías que más se miran. Sin marca
+previa no hay guarda —una guía nunca leída por la API se aplica y queda sellada
+para la próxima—, así que la columna no necesita backfill.
+
 Alcance de la API: empareja por `external_order_number` y, si no lo hay, por
 `guide_code`.
 
