@@ -41,6 +41,9 @@ export interface ParsedShipmentRow {
   // calls inside the dashboard.
   aliclik_attempts: number | null;
   aliclik_service_date: string | null; // YYYY-MM-DD
+  /** El courier salió y no encontró a la clienta (NO CONTESTA): consume la
+   *  reprogramación agendada y devuelve la guía a la cola de llamadas. */
+  attempt_failed: boolean;
   raw: Record<string, string>;
 }
 
@@ -252,6 +255,20 @@ const LLAMADA_TO_CALL: Record<string, string> = {
  * señal reconocible, cae al binario histórico entregado-vs-pendiente para no
  * inventar un estado a partir de un valor que no conocemos. Pura.
  */
+/** ¿El reporte acredita un intento fallido (NO CONTESTA)? Misma lectura que usa
+ *  la vía API: el mapeo compartido resuelve las dos. */
+export function reportAttemptFailed(
+  entrega: string | null,
+  despacho: string | null,
+  llamada: string | null,
+): boolean {
+  return mapAliclikStatus({
+    status: ENTREGA_TO_STATUS[enumKey(entrega)],
+    dispatchStatus: DESPACHO_TO_DISPATCH[enumKey(despacho)],
+    callStatus: LLAMADA_TO_CALL[enumKey(llamada)],
+  }).attemptFailed;
+}
+
 export function deliveryStatusFromReport(
   entrega: string | null,
   despacho: string | null,
@@ -458,6 +475,11 @@ export function parseAliclikRow(
     store_hint: pick(map, STORE_KEYS),
     aliclik_attempts: parseAliclikAttempts(pick(map, ALICLIK_ATTEMPT_KEYS)),
     aliclik_service_date: parseAliclikDate(pick(map, ALICLIK_SERVICE_DATE_KEYS)),
+    attempt_failed: reportAttemptFailed(
+      pick(map, ENTREGA_KEYS),
+      pick(map, DESPACHO_KEYS),
+      pick(map, ESTADO_LLAMADA_KEYS),
+    ),
     raw,
   };
 }
