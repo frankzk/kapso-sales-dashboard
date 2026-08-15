@@ -2830,19 +2830,38 @@ function OrderDrawer({
                           Rótulo ↗
                         </a>
                       )}
-                      {/* El rótulo de Shalom lo compone ELLOS, no nosotros: se
-                          pide a su API y se sirve como PDF. Solo existe para las
-                          guías creadas por API — las que llegaron por el Excel
-                          no tienen `ose_id` y hay que bajarlas de su panel. */}
+                      {/* Un solo papel para la caja de agencia: la etiqueta de
+                          Shalom —que la compone ELLOS y se pide a su API—
+                          arriba, y debajo nuestra banda con el QR de la salida
+                          y los productos. Antes eran dos impresiones, y para
+                          conseguir la segunda el almacén acababa creando una
+                          salida `por definir` que después bloquea la guía.
+
+                          Solo existe para las guías creadas por API: las que
+                          llegaron por el Excel no tienen `ose_id` y su rótulo se
+                          baja del panel de Shalom. */}
                       {g.courier === "shalom" && g.shalom_ose_id && (
-                        <a
-                          href={`/api/shalom/label/${g.id}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-xs font-medium text-brand-700 hover:underline"
-                        >
-                          Rótulo ↗
-                        </a>
+                        <>
+                          <a
+                            href={`/api/shalom/rotulo/${g.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs font-medium text-brand-700 hover:underline"
+                          >
+                            Rótulo ↗
+                          </a>
+                          {/* El suelto se conserva a un clic de distancia: si la
+                              composición falla, el mostrador de Shalom sigue
+                              necesitando su papel. */}
+                          <a
+                            href={`/api/shalom/label/${g.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-slate-500 hover:underline"
+                          >
+                            solo Shalom
+                          </a>
+                        </>
                       )}
                       {canCreateShalomGuide && shalomGuideIsCancelable(g) && (
                         <ShalomCancelButton

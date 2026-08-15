@@ -97,6 +97,13 @@ Reglas:
 - La regla de repetición por modalidad se evalúa cuando el courier se conoce; el
   máximo de cinco salidas rige siempre, porque no depende del courier.
 - Cada salida nueva genera un QR nuevo.
+- Una salida de **agencia** se imprime en UN solo papel: la etiqueta del courier
+  arriba —incrustada tal cual desde su API, nunca redibujada— y debajo la banda
+  de Kapta con el QR de la salida, el pedido, la guía y los productos con su
+  cantidad. El papel cuelga de la salida del courier, que ya trae su propio QR,
+  así que el almacén no necesita crear una salida `por definir` para tener algo
+  que escanear. La medida de la página del courier no se da por supuesta: se
+  escala conservando la proporción contra lo que devuelva su API.
 - Una salida de ruta manual se puede **anular** mientras siga `pendiente` y la
   caja no haya cambiado de custodia. Anular no borra: la fila conserva su
   consecutivo y su historial, y el consecutivo no se reutiliza. Es la corrección
