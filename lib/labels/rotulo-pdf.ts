@@ -22,15 +22,15 @@ import { code39Layout } from "@/lib/labels/barcode39";
 import { normalizeOrderCode } from "@/lib/shipment-output";
 
 /** 1 mm en puntos PostScript (72 dpi). */
-const MM = 72 / 25.4;
+export const MM = 72 / 25.4;
 
-const PAGE_W = 100 * MM;
-const PAGE_H = 150 * MM;
-const PAD = 8 * MM;
+export const PAGE_W = 100 * MM;
+export const PAGE_H = 150 * MM;
+export const PAD = 8 * MM;
 
-const INK = rgb(0.008, 0.023, 0.09); // slate-950, igual que el HTML
-const MUTED = rgb(0.39, 0.45, 0.55); // slate-500
-const LINE = rgb(0.8, 0.84, 0.88); // slate-300
+export const INK = rgb(0.008, 0.023, 0.09); // slate-950, igual que el HTML
+export const MUTED = rgb(0.39, 0.45, 0.55); // slate-500
+export const LINE = rgb(0.8, 0.84, 0.88); // slate-300
 // Las barras van en negro puro, no en el gris azulado del texto: el lector
 // decide por contraste, y ahí no se gana nada con un tono de marca.
 const BARCODE_INK = rgb(0, 0, 0);
@@ -132,7 +132,7 @@ export function wrapText(
   return trimmed;
 }
 
-interface Fonts {
+export interface Fonts {
   regular: PDFFont;
   bold: PDFFont;
 }
@@ -284,7 +284,7 @@ function productsNaturalLines(items: readonly LabelLineItem[]): number {
  * color) lleva su propia cantidad, porque empacar la talla equivocada es un
  * reenvío completo.
  */
-function drawProducts(
+export function drawProducts(
   page: PDFPage,
   fonts: Fonts,
   opts: {
