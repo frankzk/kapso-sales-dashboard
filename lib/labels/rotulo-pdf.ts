@@ -221,8 +221,8 @@ function drawField(
 }
 
 /** Tamaño base de la tabla de productos y alto de cada línea suya. */
-const PRODUCT_SIZE = 8.5;
-const PRODUCT_LINE_H = PRODUCT_SIZE + 1.4;
+export const PRODUCT_SIZE = 8.5;
+export const PRODUCT_LINE_H = PRODUCT_SIZE + 1.4;
 
 /** Cuántas líneas ocupa un producto: el título, y una por variante si las tiene. */
 export function groupLines(group: LabelProductGroup): number {

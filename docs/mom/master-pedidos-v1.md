@@ -118,7 +118,10 @@ Reglas:
   cantidad. El papel cuelga de la salida del courier, que ya trae su propio QR,
   así que el almacén no necesita crear una salida `por definir` para tener algo
   que escanear. La medida de la página del courier no se da por supuesta: se
-  escala conservando la proporción contra lo que devuelva su API.
+  escala conservando la proporción contra lo que devuelva su API, y **la banda
+  arranca donde termina su etiqueta**, no a una altura fija — un reparto fijo
+  solo acierta con una proporción, y la de cada courier es la suya. El sitio que
+  sobra se reparte en QR más grande y más líneas de producto, no en margen.
 - Una salida de ruta manual se puede **anular** mientras siga `pendiente` y la
   caja no haya cambiado de custodia. Anular no borra: la fila conserva su
   consecutivo y su historial, y el consecutivo no se reutiliza. Es la corrección

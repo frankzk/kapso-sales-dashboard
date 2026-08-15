@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { PDFDocument } from "pdf-lib";
-import { buildAgencyRotuloPdf, courierBoxHeight, fitScale } from "@/lib/labels/agency-rotulo";
+import {
+  bandHeight,
+  buildAgencyRotuloPdf,
+  courierDrawHeight,
+  fitScale,
+  maxCourierHeight,
+} from "@/lib/labels/agency-rotulo";
 import { MM, PAGE_H, PAGE_W } from "@/lib/labels/rotulo-pdf";
 
 // Un PNG 1×1 válido: el QR real lo pinta `qrcode`, acá solo hace falta que
@@ -40,7 +46,7 @@ describe("la medida del rótulo del courier no se supone", () => {
   // rehagan su plantilla. Un número medido de una muestra habría fallado en
   // silencio —rótulo deformado o cortado, no un error— la primera vez.
   const boxW = PAGE_W - 8 * MM * 2;
-  const boxH = courierBoxHeight();
+  const boxH = maxCourierHeight();
 
   it("una página A4 se reduce hasta caber entera", () => {
     const scale = fitScale(210 * MM, 297 * MM, boxW, boxH);
@@ -87,7 +93,7 @@ describe("rótulo compuesto de agencia", () => {
 
   it("la banda nuestra deja sitio de sobra al papel del courier", () => {
     // Quien lee en el mostrador es una persona: la mayor parte del alto es suya.
-    expect(courierBoxHeight()).toBeGreaterThan((PAGE_H - 16 * MM) * 0.6);
+    expect(maxCourierHeight()).toBeGreaterThan((PAGE_H - 16 * MM) * 0.6);
   });
 
   it("si el courier manda varias páginas se queda con la primera", async () => {
@@ -128,5 +134,40 @@ describe("rótulo compuesto de agencia", () => {
       items: [{ quantity: 1, name: "Polo 🔥 edición", variant: "M" }],
     });
     expect((await PDFDocument.load(pdf)).getPageCount()).toBe(1);
+  });
+});
+
+describe("la banda arranca donde termina su etiqueta, no en una altura fija", () => {
+  // El fallo que se vio impreso: la primera versión partía la hoja en 88 mm
+  // arriba y 46 abajo. El rótulo de Shalom es APAISADO —a todo el ancho ocupa
+  // unos 45 mm— así que quedaban ~43 mm de aire muerto en mitad de la etiqueta.
+  const SHALOM = { w: 185, h: 100 }; // proporción medida del rótulo real
+
+  it("un rótulo apaisado no llena la caja que se le concedía", () => {
+    const alto = courierDrawHeight(SHALOM.w * MM, SHALOM.h * MM);
+    expect(alto).toBeLessThan(maxCourierHeight());
+    // Y lo que sobra es mucho: justo el hueco que se veía en el papel.
+    expect(maxCourierHeight() - alto).toBeGreaterThan(20 * MM);
+  });
+
+  it("ese sobrante se lo queda la banda en vez de quedar en blanco", () => {
+    // Suma exacta: nada se pierde entre las dos piezas.
+    const usable = PAGE_H - 8 * MM * 2;
+    const alto = courierDrawHeight(SHALOM.w * MM, SHALOM.h * MM);
+    expect(alto + bandHeight(SHALOM.w * MM, SHALOM.h * MM)).toBeCloseTo(usable - 3 * MM, 6);
+  });
+
+  it("cuanto más baja su etiqueta, más banda — sin excepción", () => {
+    // La relación es monótona: no hay proporción que rompa el reparto.
+    const alturas = [40, 60, 100, 150, 297];
+    const bandas = alturas.map((h) => bandHeight(210 * MM, h * MM));
+    for (let i = 1; i < bandas.length; i += 1) {
+      expect(bandas[i]!).toBeLessThanOrEqual(bandas[i - 1]! + 0.001);
+    }
+  });
+
+  it("una etiqueta muy alta no deja la banda por debajo de su mínimo", () => {
+    // A4 vertical es el peor caso: aun así la banda conserva su suelo.
+    expect(bandHeight(210 * MM, 297 * MM)).toBeGreaterThanOrEqual(34 * MM - 0.001);
   });
 });
