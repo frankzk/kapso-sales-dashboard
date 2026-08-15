@@ -177,6 +177,8 @@ export async function ingestAliclikReport(
       existing?.delivery_status,
       inc.row.delivery_status,
       existing?.api_report_at,
+      new Date(),
+      { reportAt: meta.reportAt },
     );
     const keepManualAddress = existing?.address_override === true;
     const district = keepManualAddress
