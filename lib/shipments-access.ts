@@ -349,28 +349,21 @@ export async function getStoreShipments(
   // "Última gestión" applies to every view (how long a guide has gone without
   // our team touching it).
   const out2 = await withLastGestion(sb, out, storeIds);
-  if (view !== "pendiente") return out2;
 
-  // Today's contacts and current Fenix eligibility are independent enrichments.
-  // Run them together, then merge the one field produced by the stock read.
-  const [withTodayCalls, withEligibility] = await Promise.all([
-    withTodayContactCount(sb, out2, storeIds),
-    withCurrentFenixEligibility(sb, out2),
-  ]);
-  const eligibilityById = new Map(
-    withEligibility.map((shipment) => [shipment.id, {
-      eligible: shipment.fenix_eligible,
-      reason: shipment.fenix_reason,
-    }]),
-  );
-  return withTodayCalls.map((shipment) => {
-    const eligibility = eligibilityById.get(shipment.id);
-    return {
-      ...shipment,
-      fenix_eligible: eligibility?.eligible ?? shipment.fenix_eligible,
-      fenix_reason: eligibility?.reason,
-    };
+  // La elegibilidad Fenix se recalcula en TODAS las vistas, no solo en
+  // Pendiente. Antes las demás devolvían el flag GUARDADO, que envejece en
+  // cuanto entra o sale stock: una guía En ruta se listaba como "Sin stock
+  // Fenix" mientras el drawer —que sí recalcula— decía "Fenix ok" para esa
+  // misma guía. Dos respuestas distintas para la misma pregunta.
+  const withEligibility = await withCurrentFenixEligibility(sb, out2, {
+    includeNonPending: true,
   });
+  if (view !== "pendiente") return withEligibility;
+
+  // "Contactos de hoy" sí es exclusivo de la cola de Pendiente. Va encadenado
+  // (no en paralelo) sobre las filas ya recalculadas, así que arrastra la
+  // elegibilidad fresca y no hace falta volver a fusionarla.
+  return withTodayContactCount(sb, withEligibility, storeIds);
 }
 
 /** Count of shipments matching a category set (exact, not row-capped). */
