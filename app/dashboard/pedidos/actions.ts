@@ -42,6 +42,7 @@ import {
   MANUAL_ROUTE_CREATED_VIA,
   MAX_OUTPUTS_PER_ORDER,
   canRepeatCourier,
+  manualRouteGuideCode,
   manualOutputIsCancelable,
   normalizeOrderCode,
 } from "@/lib/shipment-output";
@@ -302,8 +303,10 @@ export async function createManualRouteOutput(
     .join(" | ") || null;
 
   const shipmentId = crypto.randomUUID();
-  const base = normalizeOrderCode(ctx.row.order_name) || orderId.slice(0, 8).toUpperCase();
-  const guideCode = `MOM-${base}-${input.courier.toUpperCase()}-${shipmentId.slice(0, 8).toUpperCase()}`;
+  // El mismo generador que usa la restauración al deshacer un relleno: si las
+  // dos fórmulas divergieran, devolver una salida a «por definir» le pondría un
+  // código distinto del que tuvo, y el rótulo pegado a la caja dejaría de casar.
+  const guideCode = manualRouteGuideCode(ctx.row.order_name, shipmentId, input.courier);
   // El rótulo es un PDF de 100 × 150 mm: el HTML imprimía a tamaño A4 y salía
   // diminuto en una esquina de la hoja.
   const labelUrl = `/api/pedidos/rotulos?ids=${shipmentId}`;

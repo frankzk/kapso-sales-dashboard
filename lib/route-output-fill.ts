@@ -13,15 +13,17 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   MANUAL_ROUTE_CREATED_VIA,
   COURIER_TBD,
+  ROUTE_OUTPUT_FILLED,
   pickFillableRouteOutput,
 } from "@/lib/shipment-output";
 
 /** Lo que hace falta para decidir si una salida se puede rellenar. */
 const CANDIDATE_COLUMNS =
-  "id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,output_code";
+  "id,store_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,output_code";
 
 interface Candidate {
   id: string;
+  store_id: string;
   courier: string;
   created_via: string | null;
   delivery_status: string;
@@ -78,6 +80,22 @@ export async function writeCourierGuide(
       .select("id")
       .maybeSingle();
     if (!error && data) {
+      // EL RASTRO. Sin él, deshacer el relleno más tarde obligaría a deducir de
+      // la FORMA de la fila que un día fue «por definir», y esa deducción es
+      // justo la que `cancelledAsRecordCorrection` documenta como peligrosa.
+      // Va después del UPDATE: un evento sin relleno detrás mentiría.
+      await admin.from("order_events").insert({
+        store_id: target.store_id,
+        order_id: orderId,
+        kind: ROUTE_OUTPUT_FILLED,
+        occurred_at: new Date().toISOString(),
+        source: "manual",
+        courier: typeof row.courier === "string" ? row.courier : null,
+        guide_code: typeof row.guide_code === "string" ? row.guide_code : null,
+        shipment_id: target.id,
+        note: `${target.output_code ?? "La salida"} tenia courier por definir; se le escribio la guia del courier encima.`,
+        payload: { outputCode: target.output_code, previousCourier: target.courier },
+      });
       return { shipmentId: (data as { id: string }).id, filled: true, outputCode: target.output_code };
     }
     // Sin fila devuelta la carrera la ganó otro: se sigue por el camino normal.

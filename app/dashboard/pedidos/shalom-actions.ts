@@ -32,7 +32,12 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { writeCourierGuide } from "@/lib/route-output-fill";
-import { isFillableRouteOutput } from "@/lib/shipment-output";
+import {
+  filledShipmentIds,
+  isFillableRouteOutput,
+  restoredRouteOutputPatch,
+  ROUTE_OUTPUT_FILLED,
+} from "@/lib/shipment-output";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
 import {
@@ -156,6 +161,28 @@ async function authorizeStore(storeId: string): Promise<boolean> {
   const sb = await createServerSupabase();
   const { data } = await sb.from("stores").select("id").eq("id", storeId).maybeSingle();
   return Boolean(data);
+}
+
+/**
+ * ¿La guía se escribió encima de una salida que ya existía?
+ *
+ * Se pregunta por el EVENTO que dejó `writeCourierGuide`, no por la forma de la
+ * fila. Deducirlo de la forma es lo que `cancelledAsRecordCorrection` documenta
+ * como peligroso: una fila rellenada y una creada de cero acaban idénticas.
+ */
+async function outputWasFilled(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+  shipmentId: string,
+): Promise<boolean> {
+  const { data } = await admin
+    .from("order_events")
+    .select("kind,shipment_id")
+    .eq("order_id", orderId)
+    .eq("kind", ROUTE_OUTPUT_FILLED);
+  return filledShipmentIds((data ?? []) as { kind: string; shipment_id: string | null }[]).has(
+    shipmentId,
+  );
 }
 
 /** Guías vivas del pedido, para no despachar dos veces lo mismo. */
@@ -973,7 +1000,7 @@ export async function cancelShalomGuide(
   const admin = createAdminSupabase();
   const { data: shipmentRow } = await admin
     .from("shipments")
-    .select("id,store_id,order_id,courier,guide_code,delivery_status,pickup_state,shalom_order_id,shalom_codigo")
+    .select("id,store_id,order_id,order_name,courier,guide_code,delivery_status,pickup_state,shalom_order_id,shalom_codigo")
     .eq("id", shipmentId)
     .maybeSingle();
   if (!shipmentRow) return { error: "No se encontró la guía." };
@@ -982,6 +1009,7 @@ export async function cancelShalomGuide(
     id: string;
     store_id: string;
     order_id: string | null;
+    order_name: string | null;
     courier: string;
     guide_code: string | null;
     delivery_status: string;
@@ -1020,16 +1048,38 @@ export async function cancelShalomGuide(
     return { error: `Shalom no anuló la guía: ${describeShalomError(err)}` };
   }
 
+  // ¿Esta fila fue antes una salida «por definir»? Si la guía se escribió encima
+  // de una caja que ya existía, anularla no puede borrar la caja: sigue armada,
+  // rotulada y en el almacén. Se deshace el relleno en vez de anular. Ver
+  // `restoredRouteOutputPatch` — y se pregunta por el EVENTO, no por la forma.
+  const wasFilled = guide.order_id
+    ? await outputWasFilled(admin, guide.order_id, guide.id)
+    : false;
+
   // Solo se marca acá DESPUÉS de que Shalom confirme: al revés dejaría una guía
   // viva en Shalom y anulada en el panel, que es la peor de las dos mentiras.
   const updated = await admin
     .from("shipments")
-    .update({
-      delivery_status: "anulado",
-      status_category: "closed",
-      pickup_state: null,
-      updated_at: new Date().toISOString(),
-    })
+    .update(
+      wasFilled
+        ? {
+            ...restoredRouteOutputPatch(guide.order_name, guide.id),
+            // Los del courier los limpia quien los escribió: si quedaran, la
+            // salida diría que tiene guía de Shalom sin tenerla.
+            shalom_codigo: null,
+            shalom_serie: null,
+            shalom_ose_id: null,
+            shalom_order_id: null,
+            shalom_raw: null,
+            updated_at: new Date().toISOString(),
+          }
+        : {
+            delivery_status: "anulado",
+            status_category: "closed",
+            pickup_state: null,
+            updated_at: new Date().toISOString(),
+          },
+    )
     .eq("id", guide.id);
   if (updated.error) {
     return {
@@ -1047,8 +1097,14 @@ export async function cancelShalomGuide(
       source: "shalom",
       courier: "shalom",
       guide_code: guide.guide_code,
-      note: `Guía Shalom anulada${guide.shalom_codigo ? ` (código ${guide.shalom_codigo})` : ""}.`,
-      payload: { shalom_order_id: guide.shalom_order_id, codigo: guide.shalom_codigo },
+      note:
+        `Guía Shalom anulada${guide.shalom_codigo ? ` (código ${guide.shalom_codigo})` : ""}.` +
+        (wasFilled ? " La salida vuelve a quedar sin courier definido; la caja no se movió." : ""),
+      payload: {
+        shalom_order_id: guide.shalom_order_id,
+        codigo: guide.shalom_codigo,
+        restoredToTbd: wasFilled,
+      },
     });
     await recomputeOrderMasterSafe(admin, [guide.order_id]);
   }

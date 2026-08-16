@@ -1859,6 +1859,7 @@ const TIMELINE_LABEL: Record<string, string> = {
   guide_registered: "Guía registrada",
   route_output_created: "Salida y rótulo creados",
   route_output_cancelled: "Salida anulada",
+  route_output_filled: "Courier decidido sobre la salida",
   dispatched: "Pedido despachado",
   out_for_delivery: "Salida a reparto",
   attempt_failed: "Intento fallido",
