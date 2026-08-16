@@ -101,9 +101,39 @@ async function findFillable(admin: SupabaseClient, orderId: string): Promise<Can
   return pickFillableRouteOutput((data ?? []) as unknown as Candidate[]);
 }
 
-/** `store_id` y `order_id` no se reescriben: es la misma fila del mismo pedido,
- *  y mandarlos en un UPDATE solo abre la puerta a moverla por error. */
-function stripKeys(row: Record<string, unknown>): Record<string, unknown> {
-  const { store_id: _s, order_id: _o, ...rest } = row;
+/**
+ * Lo que describe LA CAJA, no la guía, y por tanto no se pisa al rellenar.
+ *
+ * Rellenar decide el courier de un bulto que ya existe: quién lo lleva es dato
+ * nuevo, pero el trabajo que el almacén ya hizo sobre él no. Mandar
+ * `preparation_state` en la fila haría retroceder a «rótulo generado» una caja
+ * escaneada como «listo despacho» —borrar un escaneo real para registrar una
+ * guía—, y mandar `qr_token` u `output_number` le cambiaría la identidad a mitad
+ * de camino, con el rótulo ya pegado.
+ *
+ * Hoy ninguno de los llamadores manda estos campos, así que esto no cambia nada:
+ * está para que el siguiente que escriba una fila no tenga que saberlo. Es la
+ * misma razón por la que `store_id` y `order_id` tampoco se reescriben — es la
+ * misma fila del mismo pedido, y mandarlos solo abre la puerta a moverla.
+ */
+const BOX_OWNED_COLUMNS = [
+  "store_id",
+  "order_id",
+  "preparation_state",
+  "custody_state",
+  "custody_transferred_at",
+  "custody_transferred_by",
+  "ready_at",
+  "ready_by",
+  "qr_token",
+  "output_number",
+  "output_code",
+] as const;
+
+export function stripKeys(row: Record<string, unknown>): Record<string, unknown> {
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (!(BOX_OWNED_COLUMNS as readonly string[]).includes(key)) rest[key] = value;
+  }
   return rest;
 }

@@ -538,63 +538,65 @@ export async function registerManualShalomGuide(
   const now = new Date().toISOString();
   let shipmentId = duplicate.data?.id ?? null;
   let alreadyLinked = Boolean(shipmentId);
+  let filledOutput: string | null = null;
 
   if (!shipmentId) {
-    const inserted = await admin
-      .from("shipments")
-      .insert({
-        courier: "shalom",
-        guide_code: guide.guideCode,
-        store_id: row.store_id,
-        order_id: row.order_id,
-        matched: true,
-        match_method: "manual",
-        order_name: row.order_name,
-        customer_name: row.customer_name,
-        customer_phone: row.customer_phone,
-        product: null,
-        district: row.district,
-        province: row.province,
-        city: row.district,
-        region: row.region,
-        delivery_address: null,
-        agency_branch: guide.agencyBranch,
-        delivery_status: "pendiente",
-        status_category: "pending",
-        pickup_state: "pendiente_de_envio",
-        shalom_codigo: guide.codigo,
-        shalom_serie: guide.serie,
-        shalom_ose_id: guide.oseId,
-        shalom_order_id: guide.shalomOrderId,
-        shalom_raw: {
-          source: SHALOM_ORIGIN.manual,
-          guia: guide.guideCode,
-          codigo: guide.codigo,
-          serie: guide.serie,
-          ose_id: guide.oseId,
-          order_id: guide.shalomOrderId,
-          recorded_at: now,
-          recorded_by: userId,
-        },
-        // Generar la guía equivale a generar el rótulo, pero la caja todavía
-        // sigue físicamente en almacén hasta el doble escaneo de despacho.
-        preparation_state: "rotulo_generado",
-        custody_state: "empresa",
-        assigned_at: now,
-        created_via: SHALOM_ORIGIN.manual,
-      })
-      .select("id")
-      .single();
+    const written = await writeCourierGuide(admin, row.order_id, {
+      courier: "shalom",
+      guide_code: guide.guideCode,
+      store_id: row.store_id,
+      order_id: row.order_id,
+      matched: true,
+      match_method: "manual",
+      order_name: row.order_name,
+      customer_name: row.customer_name,
+      customer_phone: row.customer_phone,
+      product: null,
+      district: row.district,
+      province: row.province,
+      city: row.district,
+      region: row.region,
+      delivery_address: null,
+      agency_branch: guide.agencyBranch,
+      delivery_status: "pendiente",
+      status_category: "pending",
+      pickup_state: "pendiente_de_envio",
+      shalom_codigo: guide.codigo,
+      shalom_serie: guide.serie,
+      shalom_ose_id: guide.oseId,
+      shalom_order_id: guide.shalomOrderId,
+      shalom_raw: {
+        source: SHALOM_ORIGIN.manual,
+        guia: guide.guideCode,
+        codigo: guide.codigo,
+        serie: guide.serie,
+        ose_id: guide.oseId,
+        order_id: guide.shalomOrderId,
+        recorded_at: now,
+        recorded_by: userId,
+      },
+      // `preparation_state`, `custody_state` y `assigned_at` NO viajan aquí, y
+      // es deliberado: esta fila también se usa como UPDATE cuando rellena una
+      // salida que ya existía. Mandarlos haría retroceder a `rotulo_generado`
+      // una caja que el almacén ya escaneó como `listo_despacho` — borrar el
+      // trabajo hecho para registrar una guía. Al insertar de cero, la base
+      // pone `no_iniciado` y `empresa` por defecto, que es exactamente lo que
+      // hace la vía API con una guía recién creada.
+      created_via: SHALOM_ORIGIN.manual,
+    });
 
-    if (inserted.error) {
-      if (inserted.error.code === "23505") {
+    if ("error" in written) {
+      // La guía EXISTE en Shalom —la creó una persona en su panel—, así que el
+      // mensaje tiene que dejarla anotada en vez de sugerir reintentar.
+      if (/duplicate key|23505/i.test(written.error)) {
         return {
           error: `La guía ${guide.guideCode} fue registrada por otra persona mientras completabas el formulario. Actualiza el pedido para verla.`,
         };
       }
-      return { error: `No se pudo registrar la guía manual: ${inserted.error.message}` };
+      return { error: `No se pudo registrar la guía manual: ${written.error}` };
     }
-    shipmentId = inserted.data.id;
+    shipmentId = written.shipmentId;
+    filledOutput = written.filled ? written.outputCode : null;
   } else {
     // Un segundo envío del mismo formulario es idempotente. Permite completar
     // identificadores faltantes, pero nunca cambia de pedido ni crea otro QR.
@@ -675,6 +677,10 @@ export async function registerManualShalomGuide(
   return {
     notice:
       `${alreadyLinked ? "La guía ya estaba vinculada; se actualizaron sus datos" : "Guía externa vinculada"}: ${guide.guideCode}.` +
+      // Se dice cuando REUSA la salida existente: el operador venía a vincular
+      // una guía y podría esperar una fila nueva. Saber que la caja rotulada
+      // como `KP123-S01` es esta evita que busque un segundo bulto.
+      (filledOutput ? ` Se usó la salida ${filledOutput}, que ya estaba armada y rotulada.` : "") +
       " El tracking público se hará automáticamente por este número cuando Shalom responda." +
       keyWarning,
     guideCode: guide.guideCode,
