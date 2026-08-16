@@ -183,6 +183,71 @@ export function correctedShipmentIds(
   return out;
 }
 
+/** El evento que deja `writeCourierGuide` al escribir sobre una salida que ya
+ *  existía. Es la ÚNICA prueba de que esa fila fue antes una «por definir». */
+export const ROUTE_OUTPUT_FILLED = "route_output_filled";
+
+/** Las salidas que nacieron «por definir» y recibieron después la guía. */
+export function filledShipmentIds(
+  events: readonly { kind: string; shipment_id?: string | null }[],
+): Set<string> {
+  const out = new Set<string>();
+  for (const e of events) {
+    if (e.kind === ROUTE_OUTPUT_FILLED && e.shipment_id) out.add(e.shipment_id);
+  }
+  return out;
+}
+
+/**
+ * El código de guía interno de una salida sin courier: `MOM-KP123-POR_DEFINIR-7F1EA6F4`.
+ *
+ * Se calcula, no se guarda, y eso es lo que permite DESHACER un relleno: cuando
+ * la guía del courier se escribió encima, el código interno original se perdió
+ * —lo pisó el número del courier—, pero es una función pura del pedido y del id
+ * de la fila, así que se reconstruye idéntico. Lo comparten quien crea la salida
+ * y quien la devuelve a «por definir», para que no puedan divergir.
+ */
+export function manualRouteGuideCode(
+  orderName: string | null | undefined,
+  shipmentId: string,
+  courier: string = COURIER_TBD,
+): string {
+  const base = normalizeOrderCode(orderName) || shipmentId.slice(0, 8).toUpperCase();
+  return `MOM-${base}-${courier.toUpperCase()}-${shipmentId.slice(0, 8).toUpperCase()}`;
+}
+
+/**
+ * Devolver una salida rellenada a «por definir».
+ *
+ * Anular la guía de un courier sobre una salida RELLENADA no puede significar lo
+ * mismo que anular una salida cualquiera: la caja no desaparece: sigue armada,
+ * rotulada y en el almacén, y lo único que dejó de ser cierto es quién la lleva.
+ * Con una sola salida, marcarla `anulado` cerraba la venta entera —el pedido
+ * pasa a `anulado` cuando todas sus guías lo están— y encima bloqueaba la guía
+ * nueva que motivaba la corrección. Es la misma forma de #KP127639 llegando por
+ * la puerta del courier en vez de por la del botón «Anular salida».
+ *
+ * Así que se deshace el relleno en lugar de anular: vuelve a `por definir`,
+ * `pendiente`, con su código interno reconstruido. El consecutivo, el QR y el
+ * avance de preparación ni se tocan — nunca dejaron de ser de esta caja.
+ *
+ * Los campos del courier los limpia quien llama: son suyos y solo él los conoce.
+ */
+export function restoredRouteOutputPatch(
+  orderName: string | null | undefined,
+  shipmentId: string,
+): Record<string, unknown> {
+  return {
+    courier: COURIER_TBD,
+    created_via: MANUAL_ROUTE_CREATED_VIA,
+    guide_code: manualRouteGuideCode(orderName, shipmentId),
+    delivery_status: "pendiente",
+    status_category: "pending",
+    pickup_state: null,
+    agency_branch: null,
+  };
+}
+
 /** `#KP123` → `KP123`; conserva letras/números/guiones y elimina ruido. */
 export function normalizeOrderCode(orderName: string | null | undefined): string {
   return (orderName ?? "")

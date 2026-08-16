@@ -5,6 +5,10 @@ import {
   manualOutputIsCancelable,
   COURIER_TBD,
   MANUAL_ROUTE_CREATED_VIA,
+  ROUTE_OUTPUT_FILLED,
+  filledShipmentIds,
+  manualRouteGuideCode,
+  restoredRouteOutputPatch,
 } from "@/lib/shipment-output";
 import { stripKeys } from "@/lib/route-output-fill";
 
@@ -163,5 +167,81 @@ describe("rellenar decide el courier, no deshace el trabajo del almacén", () =>
   it("una fila que solo trae guía pasa entera", () => {
     const minima = { courier: "tanders", guide_code: "T-1", created_via: "tanders_api" };
     expect(stripKeys(minima)).toEqual(minima);
+  });
+});
+
+describe("deshacer el relleno cuando se anula la guía del courier", () => {
+  // Anular la guía de Shalom sobre una salida RELLENADA no puede significar lo
+  // mismo que anular una salida cualquiera: la caja sigue armada y en almacén.
+  // Con una sola salida, marcarla `anulado` cerraba la venta entera — la misma
+  // forma de #KP127639 llegando por la puerta del courier.
+
+  it("saber que fue rellenada sale del EVENTO, no de la forma de la fila", () => {
+    // Una fila rellenada y una creada de cero acaban idénticas: courier del
+    // courier, `created_via` del courier, `pendiente`. No hay forma que las
+    // distinga, y deducirlo fue el error que documenta cancelledAsRecordCorrection.
+    const eventos = [
+      { kind: ROUTE_OUTPUT_FILLED, shipment_id: "rellenada" },
+      { kind: "guide_created", shipment_id: "nueva" },
+      { kind: "route_output_cancelled", shipment_id: "otra" },
+    ];
+    const ids = filledShipmentIds(eventos);
+    expect(ids.has("rellenada")).toBe(true);
+    expect(ids.has("nueva")).toBe(false);
+    expect(ids.has("otra")).toBe(false);
+  });
+
+  it("un evento sin salida no ensucia el conjunto", () => {
+    expect(filledShipmentIds([{ kind: ROUTE_OUTPUT_FILLED, shipment_id: null }]).size).toBe(0);
+  });
+
+  it("la salida vuelve a «por definir» y a pendiente, no a anulada", () => {
+    const patch = restoredRouteOutputPatch("#KP128169", "a053a4fa-6130-4ac1-adbe-dc9a6d161d2e");
+    expect(patch.courier).toBe(COURIER_TBD);
+    expect(patch.created_via).toBe(MANUAL_ROUTE_CREATED_VIA);
+    expect(patch.delivery_status).toBe("pendiente");
+    expect(patch.status_category).toBe("pending");
+    // La agencia y el sub-estado eran del courier que acaba de irse.
+    expect(patch.pickup_state).toBeNull();
+    expect(patch.agency_branch).toBeNull();
+  });
+
+  it("no toca la identidad ni el avance de la caja", () => {
+    // El consecutivo, el QR y el escaneo nunca dejaron de ser de esta caja.
+    const patch = restoredRouteOutputPatch("#KP128169", "a053a4fa");
+    for (const k of [
+      "output_code",
+      "output_number",
+      "qr_token",
+      "preparation_state",
+      "custody_state",
+      "ready_at",
+    ]) {
+      expect(patch).not.toHaveProperty(k);
+    }
+  });
+
+  it("el código interno se reconstruye idéntico al que tuvo", () => {
+    // Se perdió cuando el número del courier lo pisó, pero es función pura del
+    // pedido y del id de la fila. Si las dos fórmulas divergieran, la caja
+    // quedaría con un rótulo pegado que ya no casa con su fila.
+    const id = "7f1ea6f4-3581-40f6-9d22-37541aaddf55";
+    expect(manualRouteGuideCode("#KP127579", id)).toBe("MOM-KP127579-POR_DEFINIR-7F1EA6F4");
+    expect(restoredRouteOutputPatch("#KP127579", id).guide_code).toBe(
+      "MOM-KP127579-POR_DEFINIR-7F1EA6F4",
+    );
+  });
+
+  it("el mismo generador sirve para los couriers manuales", () => {
+    // Lo comparte quien CREA la salida, para que las dos fórmulas no diverjan.
+    expect(manualRouteGuideCode("#KP1", "abcdef12-0000-0000-0000-000000000000", "olva")).toBe(
+      "MOM-KP1-OLVA-ABCDEF12",
+    );
+  });
+
+  it("sin nombre de pedido sigue dando un código utilizable", () => {
+    expect(manualRouteGuideCode(null, "abcdef12-0000-0000-0000-000000000000")).toBe(
+      "MOM-ABCDEF12-POR_DEFINIR-ABCDEF12",
+    );
   });
 });

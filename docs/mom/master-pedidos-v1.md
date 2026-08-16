@@ -1883,6 +1883,13 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
   preparación, la custodia ni la identidad de la salida (QR, consecutivo,
   código). Escribir «rótulo generado» sobre una caja ya escaneada como «listo
   despacho» sería borrar un escaneo real para registrar una guía.
+- **Anular la guía de un courier sobre una salida rellenada la devuelve a «por
+  definir», no a anulada.** La caja no desaparece: sigue armada, rotulada y en el
+  almacén, y lo único que dejó de ser cierto es quién la lleva. Marcarla anulada
+  cerraba la venta entera cuando era la única salida —el pedido pasa a `anulado`
+  con todas sus guías anuladas— y encima bloqueaba la guía nueva que motivaba la
+  corrección. Que una salida fue rellenada se sabe por su **evento**, no por su
+  forma: una fila rellenada y una creada de cero acaban idénticas.
 - Una salida de ruta manual pendiente y en almacén ofrece **Anular salida** en
   «Salidas y guías», con confirmación en dos pasos y evento auditado. Tras
   anularla, el pedido vuelve a poder crear guía de agencia y a finalizarse.
