@@ -6,6 +6,7 @@ import {
   COURIER_TBD,
   MANUAL_ROUTE_CREATED_VIA,
 } from "@/lib/shipment-output";
+import { stripKeys } from "@/lib/route-output-fill";
 
 /**
  * Rellenar la salida «por definir» con la guía del courier.
@@ -103,5 +104,64 @@ describe("pickFillableRouteOutput", () => {
       salida({ output_number: 1 }),
     ]);
     expect(elegida?.output_number).toBe(1);
+  });
+});
+
+describe("rellenar decide el courier, no deshace el trabajo del almacén", () => {
+  // La caja ya existe: lo nuevo es quién la lleva. Lo que el almacén hizo sobre
+  // ella —y la identidad con la que se rotuló— sobrevive al relleno.
+  const fila = {
+    courier: "shalom",
+    guide_code: "92084077",
+    created_via: "shalom_pro_manual",
+    delivery_status: "pendiente",
+    // Lo que NO debe viajar en el UPDATE:
+    store_id: "st-1",
+    order_id: "or-1",
+    preparation_state: "rotulo_generado",
+    custody_state: "empresa",
+    custody_transferred_at: null,
+    ready_at: null,
+    qr_token: "token-nuevo",
+    output_number: 9,
+    output_code: "KP1-S09",
+  };
+
+  it("la guía sí se escribe", () => {
+    const out = stripKeys(fila);
+    expect(out.courier).toBe("shalom");
+    expect(out.guide_code).toBe("92084077");
+    expect(out.created_via).toBe("shalom_pro_manual");
+    expect(out.delivery_status).toBe("pendiente");
+  });
+
+  it("el avance de preparación NO se pisa", () => {
+    // Mandar `rotulo_generado` haría retroceder una caja ya escaneada como
+    // `listo_despacho`: borrar un escaneo real para registrar una guía.
+    const out = stripKeys(fila);
+    expect(out).not.toHaveProperty("preparation_state");
+    expect(out).not.toHaveProperty("custody_state");
+    expect(out).not.toHaveProperty("custody_transferred_at");
+    expect(out).not.toHaveProperty("ready_at");
+  });
+
+  it("la identidad de la salida NO se pisa", () => {
+    // El rótulo ya está pegado a la caja: cambiarle el QR o el consecutivo a
+    // mitad de camino deja un papel que apunta a otra cosa.
+    const out = stripKeys(fila);
+    expect(out).not.toHaveProperty("qr_token");
+    expect(out).not.toHaveProperty("output_number");
+    expect(out).not.toHaveProperty("output_code");
+  });
+
+  it("tampoco se mueve de tienda ni de pedido", () => {
+    const out = stripKeys(fila);
+    expect(out).not.toHaveProperty("store_id");
+    expect(out).not.toHaveProperty("order_id");
+  });
+
+  it("una fila que solo trae guía pasa entera", () => {
+    const minima = { courier: "tanders", guide_code: "T-1", created_via: "tanders_api" };
+    expect(stripKeys(minima)).toEqual(minima);
   });
 });

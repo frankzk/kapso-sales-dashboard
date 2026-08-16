@@ -1840,7 +1840,12 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
   que ya tiene una salida viva, igual que la vía API. Se salta los frenos del
   API —para eso existe— pero no este: ahí el problema no es la llamada, es que
   el pedido acabaría con dos paquetes en la calle. Reenviar la **misma** guía
-  para completar identificadores sigue siendo idempotente.
+  para completar identificadores sigue siendo idempotente. Y como cualquier otra
+  vía de guía, **rellena** la salida «por definir» si la hay en vez de abrir otra.
+- Rellenar decide el **courier** de una caja que ya existe: no toca el avance de
+  preparación, la custodia ni la identidad de la salida (QR, consecutivo,
+  código). Escribir «rótulo generado» sobre una caja ya escaneada como «listo
+  despacho» sería borrar un escaneo real para registrar una guía.
 - Una salida de ruta manual pendiente y en almacén ofrece **Anular salida** en
   «Salidas y guías», con confirmación en dos pasos y evento auditado. Tras
   anularla, el pedido vuelve a poder crear guía de agencia y a finalizarse.
