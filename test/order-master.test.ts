@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { recomputeOrderMaster, recomputeOrderMasterSafe } from "@/lib/order-master";
+import {
+  describeRecompute,
+  recomputeFellShort,
+  recomputeOrderMaster,
+  recomputeOrderMasterSafe,
+} from "@/lib/order-master";
 import { MOM_RESOLUTION_VERSION } from "@/lib/order-macro-stage";
 
 // Supabase se stubea a mano (convención del repo — ver test/ingest.test.ts): un
@@ -388,7 +393,7 @@ describe("recomputeOrderMaster — robustez", () => {
     expect(row.general_status).toBe("pendiente");
   });
 
-  it("recomputeOrderMasterSafe no propaga errores", async () => {
+  it("recomputeOrderMasterSafe no propaga errores, pero los devuelve", async () => {
     const explodingAdmin = {
       from() {
         return {
@@ -401,6 +406,29 @@ describe("recomputeOrderMaster — robustez", () => {
         };
       },
     } as any;
-    await expect(recomputeOrderMasterSafe(explodingAdmin, ["order-1"])).resolves.toBeUndefined();
+    // Sigue sin lanzar: el recálculo es un efecto secundario y no debe tumbar la
+    // operación principal. Lo que cambia es que el fallo ya no desaparece.
+    const outcome = await recomputeOrderMasterSafe(explodingAdmin, ["order-1"]);
+    expect(outcome).toMatchObject({ requested: 1, written: 0 });
+    expect(outcome.error).toContain("boom");
+    expect(describeRecompute(outcome)).toContain("boom");
+  });
+
+  it("un recálculo que escribe de menos también deja rastro, sin haber lanzado", async () => {
+    // La otra mitad del desperfecto, y la que un try/catch no ve: el pedido ya
+    // no está, nadie lanza, y su fila del Master se queda con el estado viejo.
+    const stub = stubAdmin({ orders: [] });
+    const outcome = await recomputeOrderMasterSafe(stub.admin, ["order-1", "order-2"]);
+    expect(outcome).toMatchObject({ requested: 2, written: 0, error: null });
+    expect(describeRecompute(outcome)).toBe(
+      "order_master: 2 de 2 pedido(s) no se refrescaron",
+    );
+  });
+
+  it("no inventa un aviso cuando el recálculo hizo su trabajo", () => {
+    expect(describeRecompute({ requested: 3, written: 3, error: null })).toBe(null);
+    expect(recomputeFellShort({ requested: 3, written: 3, error: null })).toBe(false);
+    // Ni siquiera con cero pedidos que recalcular, que es lo normal.
+    expect(describeRecompute({ requested: 0, written: 0, error: null })).toBe(null);
   });
 });

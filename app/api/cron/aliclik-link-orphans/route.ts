@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
-import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { describeRecompute, recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
   planOrphanLinks,
   type MasterOrder,
@@ -118,8 +118,19 @@ async function run(req: NextRequest) {
 
   // 5. Recalcular el Master de los pedidos tocados (por tandas: la función lee
   //    las guías de cada pedido y reescribe su fila denormalizada).
+  //
+  //    Se cuenta lo ESCRITO, no lo pedido. Antes se informaba
+  //    `recomputed: affectedOrders.length`, que es la lista de entrada: salía
+  //    igual tanto si el recálculo funcionaba como si se caía entero, y una
+  //    guía enganchada a un pedido cuyo Master no se refresca deja el pedido
+  //    enseñando que nunca salió.
+  let recomputed = 0;
+  const masterFailures: string[] = [];
   for (const batch of chunk(affectedOrders, 200)) {
-    await recomputeOrderMasterSafe(admin, batch);
+    const outcome = await recomputeOrderMasterSafe(admin, batch);
+    recomputed += outcome.written;
+    const trace = describeRecompute(outcome);
+    if (trace) masterFailures.push(trace);
   }
 
   return NextResponse.json({
@@ -127,7 +138,9 @@ async function run(req: NextRequest) {
     dryRun: false,
     scanned: orphans.length,
     linked,
-    recomputed: affectedOrders.length,
+    recomputeRequested: affectedOrders.length,
+    recomputed,
+    masterFailures: masterFailures.slice(0, 20),
     skipped: plan.skipped,
     failures: failures.slice(0, 20),
     failureCount: failures.length,

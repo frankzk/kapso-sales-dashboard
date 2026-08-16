@@ -612,6 +612,43 @@ Ejemplos:
 | Shopify anulado, paquete aún con courier | Por cerrar | Devolución física pendiente |
 | Shopify anulado, nunca se despachó | Finalizado | Anulado cerrado |
 
+### 7.1 La macroetapa es una foto, y hay que revelarla
+
+Esta precedencia no se evalúa al mirar el Master: se evalúa al **recalcular**, y
+el resultado se guarda en `order_master`. Lo que la operación ve es la última
+foto revelada, no el estado de ahora. Por eso el cajón de un pedido puede
+enseñar dos verdades a la vez —«SALIDAS Y GUÍAS» lee las guías en vivo, la
+cabecera y la macroetapa leen la foto— y esa contradicción es siempre el mismo
+síntoma: **el recálculo no llegó a correr**.
+
+El recálculo es best-effort en casi todos los puntos que lo disparan, y con
+razón: una gestión registrada no se pierde porque el Master no se haya podido
+refrescar. **Pero best-effort no es sin rastro.** Un `catch` vacío se tragó el
+refresco de 42 pedidos de Aurela entregados entre el 19-06 y el 27-07-2026: sus
+guías decían «entregado» y su Master seguía en «Por confirmar», así que la cola
+de confirmación siguió pidiendo llamar a clientes que ya tenían el paquete en
+casa. Dos meses sin que nadie lo viera, porque no había nada que ver.
+
+Reglas que salen de ahí:
+
+- **Un recálculo que no se completa deja constancia**, y en el sitio donde
+  alguien vaya a mirar: la fila del lote de importación (`import_batches.errors`)
+  cuando lo dispara un reporte, la respuesta del cron cuando lo dispara un cron,
+  y los logs de ejecución siempre.
+- **Se cuenta lo escrito, no lo pedido.** Informar el tamaño de la lista de
+  entrada da la misma cifra tanto si el recálculo funcionó como si se cayó
+  entero.
+- **Fallar y escribir de menos cuentan igual.** El recálculo puede no lanzar y
+  aun así refrescar menos pedidos de los pedidos; para quien mira el Master el
+  resultado es idéntico, una fila con el estado viejo.
+- Cuando el Master y las guías se contradicen, **la fuente de verdad son las
+  guías**: la foto está vieja, no equivocada. Se arregla recalculando
+  (`scripts/backfill-mom.ts` es idempotente), nunca editando la foto a mano.
+
+Un estado congelado por un humano (`status_source = 'manual'`) **no** es una foto
+vieja: es una decisión, el recálculo no la pisa (§4) y no cuenta como
+desperfecto aunque contradiga a las guías.
+
 ## 8. Confirmación y riesgo del cliente
 
 Responsables actuales: Milagros, con apoyo de Mildred, Gabriela, Yohalis y

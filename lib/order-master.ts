@@ -1040,31 +1040,95 @@ export async function recomputeOrderMasterForShipments(
   return recomputeOrderMaster(admin, orderIds);
 }
 
+/** Qué pasó con un recálculo best-effort. */
+export interface RecomputeOutcome {
+  requested: number;
+  written: number;
+  /** El mensaje del fallo si el recálculo lanzó; null si no lanzó. */
+  error: string | null;
+}
+
+/**
+ * ¿Quedaron pedidos sin refrescar?
+ *
+ * Las dos formas del desperfecto cuentan igual, y por eso no basta con mirar la
+ * excepción: el recálculo puede **no lanzar** y aun así escribir menos filas de
+ * las pedidas —un pedido que ya no está, una tanda que se quedó a medias— y el
+ * resultado para quien mira el Master es idéntico: una fila con el estado viejo.
+ */
+export function recomputeFellShort(outcome: RecomputeOutcome): boolean {
+  return Boolean(outcome.error) || outcome.written < outcome.requested;
+}
+
+/** La huella que se escribe cuando el recálculo se quedó corto. */
+export function describeRecompute(outcome: RecomputeOutcome): string | null {
+  if (!recomputeFellShort(outcome)) return null;
+  if (outcome.error) {
+    return `order_master: el recálculo falló para ${outcome.requested} pedido(s) — ${outcome.error}`;
+  }
+  const missing = outcome.requested - outcome.written;
+  return `order_master: ${missing} de ${outcome.requested} pedido(s) no se refrescaron`;
+}
+
 /**
  * Recálculo best-effort: nunca lanza. Para los puntos donde el recálculo es un
  * efecto secundario y no debe tumbar la operación principal (una gestión
  * registrada no se pierde porque el Master no se haya podido refrescar; el
  * barrido del cron lo arreglará).
+ *
+ * BEST-EFFORT NO ES SIN RASTRO, y la diferencia costó dos meses. Este `catch`
+ * vacío se tragó el recálculo de 42 pedidos de Aurela entregados entre el 19-06
+ * y el 27-07-2026: sus guías decían «entregado» y su Master seguía en «Por
+ * confirmar», así que la cola de llamadas siguió pidiendo confirmar pedidos que
+ * el cliente ya tenía en casa. No hubo log, ni contador, ni fila que mirar.
+ *
+ * Sigue sin lanzar —esa parte era correcta— pero ahora DEVUELVE lo que pasó, y
+ * quien lo llame decide dónde dejarlo escrito. `console.error` es el mínimo:
+ * que el fallo llegue al menos a los logs de ejecución.
  */
 export async function recomputeOrderMasterSafe(
   admin: SupabaseClient,
   orderIds: readonly string[],
-): Promise<void> {
+): Promise<RecomputeOutcome> {
+  const requested = new Set(orderIds.filter(Boolean)).size;
   try {
-    await recomputeOrderMaster(admin, orderIds);
-  } catch {
-    // silencioso a propósito — ver el docblock
+    const { written } = await recomputeOrderMaster(admin, orderIds);
+    const outcome = { requested, written, error: null };
+    const trace = describeRecompute(outcome);
+    if (trace) console.error(trace);
+    return outcome;
+  } catch (error) {
+    const outcome = {
+      requested,
+      written: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    console.error(describeRecompute(outcome));
+    return outcome;
   }
 }
 
 export async function recomputeOrderMasterForShipmentsSafe(
   admin: SupabaseClient,
   shipmentIds: readonly string[],
-): Promise<void> {
+): Promise<RecomputeOutcome> {
+  const requested = new Set(shipmentIds.filter(Boolean)).size;
   try {
-    await recomputeOrderMasterForShipments(admin, shipmentIds);
-  } catch {
-    // silencioso a propósito — ver recomputeOrderMasterSafe
+    const { requested: asked, written } = await recomputeOrderMasterForShipments(admin, shipmentIds);
+    // `requested` aquí son GUÍAS y `asked` son los PEDIDOS a los que apuntan:
+    // no son comparables, así que la cuenta que vale es la de pedidos.
+    const outcome = { requested: asked, written, error: null };
+    const trace = describeRecompute(outcome);
+    if (trace) console.error(trace);
+    return outcome;
+  } catch (error) {
+    const outcome = {
+      requested,
+      written: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    console.error(describeRecompute(outcome));
+    return outcome;
   }
 }
 

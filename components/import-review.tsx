@@ -55,12 +55,19 @@ export function ImportReview({
           ? " ⚠️ Este archivo ya se había cargado antes; los estados solo avanzan, así que no se duplicó nada."
           : "";
         const skipped = json.skippedImportadoCount ?? 0;
+        // El reporte se ingestó igual; lo que avisa es que la consolidación va
+        // con retraso. Se enseña porque quien acaba de subir el archivo es quien
+        // puede notar que un pedido entregado sigue apareciendo por confirmar.
+        const master = json.masterWarning
+          ? ` ⚠️ El Master no se refrescó del todo (${json.masterWarning}); los estados pueden tardar en verse.`
+          : "";
         const base =
           `Reporte de ${json.courier}: ${json.rowCount} filas — ${json.matchedCount} con pedido, ${json.unmatchedCount} a revisión, ${json.errorCount} con error.${dup}` +
           // Se avisa explícitamente para que no parezca que el archivo perdió filas.
           (skipped > 0
             ? ` Se omitieron ${skipped} filas con ESTADO LLAMADA = IMPORTADO (Aliclik aún no las gestiona).`
-            : "");
+            : "") +
+          master;
         if (fileRef.current) fileRef.current.value = "";
         // El auto-vínculo contra Shopify en vivo es específico de Aliclik (usa la
         // referencia del campo NOTA); el resto de couriers traen el nº de pedido
