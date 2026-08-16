@@ -17,7 +17,7 @@ import {
   reopensForFailedAttempt,
 } from "./shipments";
 import { evaluateFenix, type FenixStockRow } from "./fenix";
-import { recomputeOrderMasterSafe } from "./order-master";
+import { describeRecompute, recomputeOrderMasterSafe, type RecomputeOutcome } from "./order-master";
 import {
   isProvisionalGuideCode,
   reconcileAliclikApiGuides,
@@ -67,6 +67,10 @@ export interface IngestResult {
    *  las gestiona). Se informan para que el operador sepa que el archivo traía
    *  más filas de las que se importaron, y no parezca que se perdieron. */
   skippedImportadoCount: number;
+  /** Qué pasó al refrescar el Master. Se informa aunque el reporte se ingestara
+   *  bien: un recálculo corto deja el Master mintiendo, y el operador que acaba
+   *  de subir el archivo es quien puede notarlo. */
+  master: RecomputeOutcome;
 }
 
 const CHUNK = 500;
@@ -363,15 +367,16 @@ export async function ingestAliclikReport(
   const unmatchedCount = rowMetas.filter((r) => r.matchStatus === "review").length;
   const errorCount = rowMetas.filter((r) => r.matchStatus === "error").length;
 
-  await admin
-    .from("import_batches")
-    .update({ matched_count: matchedCount, unmatched_count: unmatchedCount, status: "processed" })
-    .eq("id", batchId);
-
   // El reporte acaba de mover el estado logístico de estos pedidos: refresca el
   // Master para que la consolidación no espere al barrido del cron. Best-effort
   // — el reporte ya quedó ingestado pase lo que pase con el recálculo.
-  await recomputeOrderMasterSafe(
+  //
+  // Va ANTES de cerrar el lote a propósito: si se quedó corto, esa constancia
+  // entra en la misma fila que el resto del resultado. Un recálculo que falla en
+  // silencio deja el Master enseñando el estado viejo, y sin huella nadie lo
+  // descubre hasta que un pedido entregado lleva dos meses en la cola de
+  // llamadas (Aurela, junio-julio 2026).
+  const master = await recomputeOrderMasterSafe(
     admin,
     [
       ...new Set(
@@ -381,6 +386,17 @@ export async function ingestAliclikReport(
       ),
     ],
   );
+  const masterTrace = describeRecompute(master);
+
+  await admin
+    .from("import_batches")
+    .update({
+      matched_count: matchedCount,
+      unmatched_count: unmatchedCount,
+      status: "processed",
+      ...(masterTrace ? { errors: [masterTrace] } : {}),
+    })
+    .eq("id", batchId);
 
   return {
     batchId,
@@ -389,6 +405,7 @@ export async function ingestAliclikReport(
     unmatchedCount,
     errorCount,
     skippedImportadoCount,
+    master,
   };
 }
 
