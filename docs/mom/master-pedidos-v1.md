@@ -122,6 +122,11 @@ Reglas:
   arranca donde termina su etiqueta**, no a una altura fija — un reparto fijo
   solo acierta con una proporción, y la de cada courier es la suya. El sitio que
   sobra se reparte en QR más grande y más líneas de producto, no en margen.
+- El PDF del courier **se guarda la primera vez** y se pide adelantado al crear
+  la guía. Ese documento es inmutable una vez emitida —se indexa por su
+  identificador de envío, no por el pedido— y pedirlo cuesta unos 45 segundos,
+  al filo del tiempo máximo de espera: sin caché, un día lento no da un rótulo
+  tarde, deja al almacén sin papel. Un fallo de la caché nunca impide imprimir.
 - Una salida de ruta manual se puede **anular** mientras siga `pendiente` y la
   caja no haya cambiado de custodia. Anular no borra: la fila conserva su
   consecutivo y su historial, y el consecutivo no se reutiliza. Es la corrección

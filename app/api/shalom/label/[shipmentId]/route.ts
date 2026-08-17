@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { describeShalomError } from "@/lib/shalom/client";
-import { loadStoreShalom, readWithFreshSession, type StoreShalom } from "@/lib/shalom/session";
+import { loadStoreShalom, type StoreShalom } from "@/lib/shalom/session";
+import { shalomLabelPdf } from "@/lib/shalom/label-cache";
 
 // Sirve el rótulo PDF de una guía de Shalom a través del panel, para que la
 // operadora no tenga que entrar a pro.shalom.pe a buscar el envío y bajarlo.
@@ -54,12 +55,14 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ shipmentId
     return new NextResponse("La tienda no tiene cuenta de Shalom Pro configurada.", { status: 409 });
   }
 
-  let pdf: ArrayBuffer;
+  let pdf: Uint8Array;
   try {
-    // Lectura: si el token está muerto se renueva y reintenta sola. Bajar el
-    // rótulo no crea ni modifica nada, así que repetirlo es gratis.
-    pdf = await readWithFreshSession(admin, row.store_id, store as StoreShalom, (client) =>
-      client.label(row.shalom_ose_id as number),
+    // Misma caché que el rótulo compuesto: el documento es el mismo.
+    pdf = await shalomLabelPdf(
+      admin,
+      row.store_id,
+      store as StoreShalom,
+      row.shalom_ose_id as number,
     );
   } catch (err) {
     return new NextResponse(describeShalomError(err), { status: 502 });
@@ -69,7 +72,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ shipmentId
     return new NextResponse("el rótulo llegó con un tamaño inesperado", { status: 502 });
   }
 
-  return new NextResponse(pdf, {
+  return new NextResponse(pdf as unknown as BodyInit, {
     status: 200,
     headers: {
       "content-type": "application/pdf",
