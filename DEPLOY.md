@@ -117,13 +117,35 @@ roles and the `auth` schema, so it just works.
      project gone". **Restore:** download the CSV from the bucket and `COPY`/
      import it back into the table.
 
-> **Cron on Vercel Hobby**: the Hobby plan runs cron jobs only ~once/day. If you
-> need the 5-min cadence without Pro, use the included GitHub Actions fallback
-> (`.github/workflows/cron-sync.yml`): add repo **secrets** `APP_URL`
-> (your deployed URL) and `CRON_SECRET`, and make sure the workflow is on the
-> repo's **default branch** (scheduled workflows only run there). Webhooks ingest
-> orders in real time regardless; the cron only handles reconciliation, the Kapso
-> pull and ops snapshots.
+> **Cron on Vercel Hobby**: the Hobby plan runs cron jobs only ~once/day, and
+> caps them at two. This project declares **twelve**, nine of them sub-hourly, so
+> `vercel.json` as it stands only deploys on **Pro** — where Vercel runs each one
+> at its declared cadence and no external scheduler is needed.
+>
+> There used to be a GitHub Actions fallback here (`cron-sync.yml`) that called
+> `/api/cron/sync` every five minutes for the Hobby case. **It was deleted on
+> 2026-08-17, and the reason is worth keeping**: its one step began with
+>
+> ```bash
+> if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then echo "…skipping"; exit 0; fi
+> ```
+>
+> and neither secret was ever set. So it ran on schedule, never touched
+> production, and **reported success every single time**. Months of green ticks
+> for a job that did nothing — a check that cannot fail carries no information,
+> and is worse than no check, because the row in Actions reads as coverage. It is
+> the same defect as the `macro_version is null` query removed in #453: a door
+> that cannot open still gets counted as a door.
+>
+> **If you ever drop to Hobby** and need the cadence back, re-add a scheduled
+> workflow that POSTs to `/api/cron/sync` with `Authorization: Bearer
+> $CRON_SECRET` — but make a missing secret **fail the job**, never skip it, and
+> put it on the repo's **default branch** (scheduled workflows only run there).
+> Note also that GitHub's scheduler does not honour `*/5` on a busy repo: the
+> observed spacing was 20–40 minutes.
+>
+> Webhooks ingest orders in real time regardless; the cron only handles
+> reconciliation, the Kapso pull and ops snapshots.
 
 ## 5. First login + connect a store
 
