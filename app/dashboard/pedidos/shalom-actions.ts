@@ -31,6 +31,13 @@ import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
+import { writeCourierGuide } from "@/lib/route-output-fill";
+import {
+  filledShipmentIds,
+  isFillableRouteOutput,
+  restoredRouteOutputPatch,
+  ROUTE_OUTPUT_FILLED,
+} from "@/lib/shipment-output";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
 import {
@@ -51,6 +58,7 @@ import {
   type StoreShalom,
 } from "@/lib/shalom/session";
 import {
+  blockingActiveGuide,
   buildShalomOrderPayload,
   documentError,
   generatePickupCode,
@@ -114,6 +122,16 @@ export interface ShalomDraftView {
   /** Motivos para NO crear la guía todavía. Imposibles: no se saltan. */
   blockers: string[];
   /**
+   * Los bloqueadores que valen TAMBIÉN para la vía de contingencia.
+   *
+   * `blockers` no sirve para la pestaña «Ya la creé en Shalom Pro»: casi todos
+   * son motivos para no llamar al API —falta configuración, la sesión no
+   * conecta— y esa vía existe precisamente para cuando el API no responde.
+   * Pero una salida ya viva sí la bloquea, porque el problema no es la llamada
+   * sino que el pedido acabaría con dos paquetes en la calle.
+   */
+  contingencyBlockers: string[];
+  /**
    * Frenos que SÍ se pueden saltar, dejando un motivo escrito que queda en la
    * línea de tiempo con el nombre de quien lo escribió.
    */
@@ -145,6 +163,28 @@ async function authorizeStore(storeId: string): Promise<boolean> {
   return Boolean(data);
 }
 
+/**
+ * ¿La guía se escribió encima de una salida que ya existía?
+ *
+ * Se pregunta por el EVENTO que dejó `writeCourierGuide`, no por la forma de la
+ * fila. Deducirlo de la forma es lo que `cancelledAsRecordCorrection` documenta
+ * como peligroso: una fila rellenada y una creada de cero acaban idénticas.
+ */
+async function outputWasFilled(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+  shipmentId: string,
+): Promise<boolean> {
+  const { data } = await admin
+    .from("order_events")
+    .select("kind,shipment_id")
+    .eq("order_id", orderId)
+    .eq("kind", ROUTE_OUTPUT_FILLED);
+  return filledShipmentIds((data ?? []) as { kind: string; shipment_id: string | null }[]).has(
+    shipmentId,
+  );
+}
+
 /** Guías vivas del pedido, para no despachar dos veces lo mismo. */
 async function activeGuides(
   admin: ReturnType<typeof createAdminSupabase>,
@@ -152,10 +192,22 @@ async function activeGuides(
 ): Promise<{ courier: string; guide_code: string; delivery_status: string }[]> {
   const { data } = await admin
     .from("shipments")
-    .select("courier,guide_code,delivery_status")
+    .select(
+      "courier,guide_code,delivery_status,created_via,custody_state,custody_transferred_at",
+    )
     .eq("order_id", orderId);
-  const rows = (data as { courier: string; guide_code: string; delivery_status: string }[]) ?? [];
-  return rows.filter((g) => ACTIVE_STATUSES.has(g.delivery_status));
+  const rows =
+    (data as {
+      courier: string;
+      guide_code: string;
+      delivery_status: string;
+      created_via: string | null;
+      custody_state: string | null;
+      custody_transferred_at: string | null;
+    }[]) ?? [];
+  // La salida «por definir» no cuenta como guía activa: es ESTA caja esperando
+  // courier, y la guía nueva se escribe encima de ella. Ver lib/route-output-fill.
+  return rows.filter((g) => ACTIVE_STATUSES.has(g.delivery_status) && !isFillableRouteOutput(g));
 }
 
 // ---------------------------------------------------------------------------
@@ -211,20 +263,24 @@ export async function loadShalomDraft(
   const configured = isConfigured(store);
 
   const blockers: string[] = [];
+  const contingencyBlockers: string[] = [];
   const warnings: string[] = [];
 
   const configBlocker = configurationBlocker(store);
   if (configBlocker) blockers.push(configBlocker);
 
   for (const g of await activeGuides(admin, orderId)) {
-    blockers.push(
+    contingencyBlockers.push(
       `El pedido ya tiene una guía activa: ${g.guide_code} (${g.courier}, ${g.delivery_status}). Anúlala antes de crear otra.`,
     );
   }
 
   if (["entregado", "devuelto", "anulado"].includes(row.general_status)) {
-    blockers.push(`El pedido está ${row.general_status.replace("_", " ")}.`);
+    contingencyBlockers.push(`El pedido está ${row.general_status.replace("_", " ")}.`);
   }
+
+  // Todo lo que impide la contingencia impide con más razón crear por API.
+  blockers.push(...contingencyBlockers);
 
   // Shalom identifica al destinatario por documento y el pedido no lo trae:
   // Shopify no pide DNI. Es el único dato que el operador escribe siempre.
@@ -293,6 +349,7 @@ export async function loadShalomDraft(
       prefilledTerminalName: prefilled?.destiny_terminal_name ?? null,
       pickupCode: perms.can("shalom.view_pickup_key") ? pickupCode : null,
       blockers,
+      contingencyBlockers,
       softBlockers,
       warnings,
     },
@@ -488,66 +545,85 @@ export async function registerManualShalomGuide(
     };
   }
 
+  // La contingencia registra una salida física igual que la vía API, así que
+  // hereda su misma regla: un pedido no puede quedar con dos salidas vivas. Sin
+  // esto, la pestaña «Ya la creé en Shalom Pro» era la puerta de atrás — no la
+  // frena `blockers` en el modal ni se comprobaba acá— y dejaba al pedido con
+  // dos paquetes que nadie sabe cuál viaja.
+  //
+  // Se excluye ESTA guía: reenviar el formulario para completar identificadores
+  // que faltaban es idempotente por diseño y no debe chocar consigo mismo.
+  const otherActive = blockingActiveGuide(await activeGuides(admin, orderId), guide.guideCode);
+  if (otherActive) {
+    return {
+      error:
+        `El pedido ya tiene una salida activa: ${otherActive.guide_code} (${otherActive.courier}, ${otherActive.delivery_status}). ` +
+        "Anúlala antes de vincular esta guía; si ya salió con el courier, registra primero su retorno.",
+    };
+  }
+
   const now = new Date().toISOString();
   let shipmentId = duplicate.data?.id ?? null;
   let alreadyLinked = Boolean(shipmentId);
+  let filledOutput: string | null = null;
 
   if (!shipmentId) {
-    const inserted = await admin
-      .from("shipments")
-      .insert({
-        courier: "shalom",
-        guide_code: guide.guideCode,
-        store_id: row.store_id,
-        order_id: row.order_id,
-        matched: true,
-        match_method: "manual",
-        order_name: row.order_name,
-        customer_name: row.customer_name,
-        customer_phone: row.customer_phone,
-        product: null,
-        district: row.district,
-        province: row.province,
-        city: row.district,
-        region: row.region,
-        delivery_address: null,
-        agency_branch: guide.agencyBranch,
-        delivery_status: "pendiente",
-        status_category: "pending",
-        pickup_state: "pendiente_de_envio",
-        shalom_codigo: guide.codigo,
-        shalom_serie: guide.serie,
-        shalom_ose_id: guide.oseId,
-        shalom_order_id: guide.shalomOrderId,
-        shalom_raw: {
-          source: SHALOM_ORIGIN.manual,
-          guia: guide.guideCode,
-          codigo: guide.codigo,
-          serie: guide.serie,
-          ose_id: guide.oseId,
-          order_id: guide.shalomOrderId,
-          recorded_at: now,
-          recorded_by: userId,
-        },
-        // Generar la guía equivale a generar el rótulo, pero la caja todavía
-        // sigue físicamente en almacén hasta el doble escaneo de despacho.
-        preparation_state: "rotulo_generado",
-        custody_state: "empresa",
-        assigned_at: now,
-        created_via: SHALOM_ORIGIN.manual,
-      })
-      .select("id")
-      .single();
+    const written = await writeCourierGuide(admin, row.order_id, {
+      courier: "shalom",
+      guide_code: guide.guideCode,
+      store_id: row.store_id,
+      order_id: row.order_id,
+      matched: true,
+      match_method: "manual",
+      order_name: row.order_name,
+      customer_name: row.customer_name,
+      customer_phone: row.customer_phone,
+      product: null,
+      district: row.district,
+      province: row.province,
+      city: row.district,
+      region: row.region,
+      delivery_address: null,
+      agency_branch: guide.agencyBranch,
+      delivery_status: "pendiente",
+      status_category: "pending",
+      pickup_state: "pendiente_de_envio",
+      shalom_codigo: guide.codigo,
+      shalom_serie: guide.serie,
+      shalom_ose_id: guide.oseId,
+      shalom_order_id: guide.shalomOrderId,
+      shalom_raw: {
+        source: SHALOM_ORIGIN.manual,
+        guia: guide.guideCode,
+        codigo: guide.codigo,
+        serie: guide.serie,
+        ose_id: guide.oseId,
+        order_id: guide.shalomOrderId,
+        recorded_at: now,
+        recorded_by: userId,
+      },
+      // `preparation_state`, `custody_state` y `assigned_at` NO viajan aquí, y
+      // es deliberado: esta fila también se usa como UPDATE cuando rellena una
+      // salida que ya existía. Mandarlos haría retroceder a `rotulo_generado`
+      // una caja que el almacén ya escaneó como `listo_despacho` — borrar el
+      // trabajo hecho para registrar una guía. Al insertar de cero, la base
+      // pone `no_iniciado` y `empresa` por defecto, que es exactamente lo que
+      // hace la vía API con una guía recién creada.
+      created_via: SHALOM_ORIGIN.manual,
+    });
 
-    if (inserted.error) {
-      if (inserted.error.code === "23505") {
+    if ("error" in written) {
+      // La guía EXISTE en Shalom —la creó una persona en su panel—, así que el
+      // mensaje tiene que dejarla anotada en vez de sugerir reintentar.
+      if (/duplicate key|23505/i.test(written.error)) {
         return {
           error: `La guía ${guide.guideCode} fue registrada por otra persona mientras completabas el formulario. Actualiza el pedido para verla.`,
         };
       }
-      return { error: `No se pudo registrar la guía manual: ${inserted.error.message}` };
+      return { error: `No se pudo registrar la guía manual: ${written.error}` };
     }
-    shipmentId = inserted.data.id;
+    shipmentId = written.shipmentId;
+    filledOutput = written.filled ? written.outputCode : null;
   } else {
     // Un segundo envío del mismo formulario es idempotente. Permite completar
     // identificadores faltantes, pero nunca cambia de pedido ni crea otro QR.
@@ -628,6 +704,10 @@ export async function registerManualShalomGuide(
   return {
     notice:
       `${alreadyLinked ? "La guía ya estaba vinculada; se actualizaron sus datos" : "Guía externa vinculada"}: ${guide.guideCode}.` +
+      // Se dice cuando REUSA la salida existente: el operador venía a vincular
+      // una guía y podría esperar una fila nueva. Saber que la caja rotulada
+      // como `KP123-S01` es esta evita que busque un segundo bulto.
+      (filledOutput ? ` Se usó la salida ${filledOutput}, que ya estaba armada y rotulada.` : "") +
       " El tracking público se hará automáticamente por este número cuando Shalom responda." +
       keyWarning,
     guideCode: guide.guideCode,
@@ -809,12 +889,14 @@ export async function createShalomGuide(
     created_via: SHALOM_ORIGIN.api,
   };
 
-  const inserted = await admin.from("shipments").insert(insertRow).select("id").single();
-  if (inserted.error) {
+  // Rellena la salida «por definir» del pedido si la hay: es la misma caja, ya
+  // armada y rotulada, a la que se le acaba de decidir el courier.
+  const inserted = await writeCourierGuide(admin, row.order_id, insertRow);
+  if ("error" in inserted) {
     // La guía SÍ existe en Shalom: perderla de vista es peor que el error de
     // base, así que el mensaje lleva los identificadores para registrarla a mano.
     return {
-      error: `La guía se creó en Shalom (${guideCode}${result?.codigo ? ` / ${result.codigo}` : ""}) pero no se pudo guardar acá: ${inserted.error.message}. Anótala y regístrala manualmente.`,
+      error: `La guía se creó en Shalom (${guideCode}${result?.codigo ? ` / ${result.codigo}` : ""}) pero no se pudo guardar acá: ${inserted.error}. Anótala y regístrala manualmente.`,
     };
   }
 
@@ -918,7 +1000,7 @@ export async function cancelShalomGuide(
   const admin = createAdminSupabase();
   const { data: shipmentRow } = await admin
     .from("shipments")
-    .select("id,store_id,order_id,courier,guide_code,delivery_status,pickup_state,shalom_order_id,shalom_codigo")
+    .select("id,store_id,order_id,order_name,courier,guide_code,delivery_status,pickup_state,shalom_order_id,shalom_codigo")
     .eq("id", shipmentId)
     .maybeSingle();
   if (!shipmentRow) return { error: "No se encontró la guía." };
@@ -927,6 +1009,7 @@ export async function cancelShalomGuide(
     id: string;
     store_id: string;
     order_id: string | null;
+    order_name: string | null;
     courier: string;
     guide_code: string | null;
     delivery_status: string;
@@ -965,16 +1048,38 @@ export async function cancelShalomGuide(
     return { error: `Shalom no anuló la guía: ${describeShalomError(err)}` };
   }
 
+  // ¿Esta fila fue antes una salida «por definir»? Si la guía se escribió encima
+  // de una caja que ya existía, anularla no puede borrar la caja: sigue armada,
+  // rotulada y en el almacén. Se deshace el relleno en vez de anular. Ver
+  // `restoredRouteOutputPatch` — y se pregunta por el EVENTO, no por la forma.
+  const wasFilled = guide.order_id
+    ? await outputWasFilled(admin, guide.order_id, guide.id)
+    : false;
+
   // Solo se marca acá DESPUÉS de que Shalom confirme: al revés dejaría una guía
   // viva en Shalom y anulada en el panel, que es la peor de las dos mentiras.
   const updated = await admin
     .from("shipments")
-    .update({
-      delivery_status: "anulado",
-      status_category: "closed",
-      pickup_state: null,
-      updated_at: new Date().toISOString(),
-    })
+    .update(
+      wasFilled
+        ? {
+            ...restoredRouteOutputPatch(guide.order_name, guide.id),
+            // Los del courier los limpia quien los escribió: si quedaran, la
+            // salida diría que tiene guía de Shalom sin tenerla.
+            shalom_codigo: null,
+            shalom_serie: null,
+            shalom_ose_id: null,
+            shalom_order_id: null,
+            shalom_raw: null,
+            updated_at: new Date().toISOString(),
+          }
+        : {
+            delivery_status: "anulado",
+            status_category: "closed",
+            pickup_state: null,
+            updated_at: new Date().toISOString(),
+          },
+    )
     .eq("id", guide.id);
   if (updated.error) {
     return {
@@ -992,8 +1097,14 @@ export async function cancelShalomGuide(
       source: "shalom",
       courier: "shalom",
       guide_code: guide.guide_code,
-      note: `Guía Shalom anulada${guide.shalom_codigo ? ` (código ${guide.shalom_codigo})` : ""}.`,
-      payload: { shalom_order_id: guide.shalom_order_id, codigo: guide.shalom_codigo },
+      note:
+        `Guía Shalom anulada${guide.shalom_codigo ? ` (código ${guide.shalom_codigo})` : ""}.` +
+        (wasFilled ? " La salida vuelve a quedar sin courier definido; la caja no se movió." : ""),
+      payload: {
+        shalom_order_id: guide.shalom_order_id,
+        codigo: guide.shalom_codigo,
+        restoredToTbd: wasFilled,
+      },
     });
     await recomputeOrderMasterSafe(admin, [guide.order_id]);
   }

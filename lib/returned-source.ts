@@ -1,4 +1,4 @@
-// Procedencia del sello de devolución (0116).
+// Procedencia del sello de devolución (0118).
 //
 // `returned_at` abre la cola de recuperación (MOM §11.1), y desde esa cola sale
 // un mensaje que le pide un adelanto a la clienta. Antes de pulsar «Enviar» hace
@@ -52,7 +52,7 @@ const COURIER_LABEL: Record<string, string> = {
 
 /**
  * Cómo se nombra la procedencia en pantalla, o `null` cuando no hay nada que
- * decir. `null` NO se traduce a «courier»: las guías selladas antes de 0116 sin
+ * decir. `null` NO se traduce a «courier»: las guías selladas antes de 0118 sin
  * rastro se quedan sin etiqueta en vez de recibir una inventada.
  */
 export function returnedSourceLabel(source: string | null | undefined): string | null {

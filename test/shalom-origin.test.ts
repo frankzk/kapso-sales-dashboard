@@ -17,16 +17,28 @@ describe("origen de las salidas de Shalom", () => {
     expect(SHALOM_ORIGIN.api).not.toBe(SHALOM_ORIGIN.manual);
   });
 
-  it("toda inserción de salida declara su origen", () => {
+  it("toda escritura de salida declara su origen", () => {
     // ESTA es la regresión: durante 185 guías la vía API insertaba sin
     // `created_via` mientras la de contingencia sí lo escribía, así que la
     // columna no distinguía la vía normal de una guía importada del reporte.
+    //
+    // Se cuentan las dos formas de escribir una salida, porque la vía API dejó
+    // de insertar directamente: ahora pasa por `writeCourierGuide`, que rellena
+    // la salida «por definir» del pedido si la hay. Contar solo los `.insert`
+    // dejaría de vigilar justamente la vía que se olvidó del origen.
+    //
+    // Y el origen se cuenta como ASIGNACIÓN (`created_via: SHALOM_ORIGIN.…`), no
+    // como aparición del nombre: el fichero también lo declara como tipo al leer
+    // las salidas, y eso no escribe nada.
     const source = read(ACTIONS);
-    const inserts = source.match(/from\("shipments"\)\s*\.insert/g) ?? [];
-    const origins = source.match(/created_via:/g) ?? [];
+    const writes = [
+      ...(source.match(/from\("shipments"\)\s*\.insert/g) ?? []),
+      ...(source.match(/writeCourierGuide\(/g) ?? []),
+    ];
+    const origins = source.match(/created_via:\s*SHALOM_ORIGIN\./g) ?? [];
 
-    expect(inserts.length).toBeGreaterThan(0);
-    expect(origins.length).toBe(inserts.length);
+    expect(writes.length).toBeGreaterThan(0);
+    expect(origins.length).toBe(writes.length);
   });
 
   it("la server action no repite los literales a mano", () => {

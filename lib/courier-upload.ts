@@ -12,6 +12,7 @@ import { ingestAliclikReport } from "@/lib/aliclik-ingest";
 import { ingestCourierReport, type ReportIngestResult } from "@/lib/report-ingest";
 import { courierAdapter, detectAdapter } from "@/lib/couriers/registry";
 import { getStoreOrderPrefix } from "@/lib/ingest";
+import { describeRecompute } from "@/lib/order-master";
 
 /** Un XLSX es un zip: un archivo pequeño puede inflarse a cientos de MB al
  *  parsearlo (zip bomb) → OOM. Se corta ANTES de parsear, como en la ruta de
@@ -126,6 +127,10 @@ export interface CourierUploadResult extends ReportIngestResult {
   duplicateOfBatchId?: string | null;
   /** Filas que Aliclik aún no gestiona (ESTADO LLAMADA = IMPORTADO) y se omiten. */
   skippedImportadoCount?: number;
+  /** Presente solo si el refresco del Master se quedó corto. El reporte SÍ se
+   *  ingestó: lo que avisa es que la consolidación puede ir con retraso, que es
+   *  justo lo que antes no se veía por ninguna parte. */
+  masterWarning?: string | null;
 }
 
 /**
@@ -202,6 +207,7 @@ export async function handleCourierUpload(
       errorCount: result.errorCount,
       duplicateOfBatchId: (prior as { id: string } | null)?.id ?? null,
       skippedImportadoCount: result.skippedImportadoCount,
+      masterWarning: describeRecompute(result.master),
     };
   }
 

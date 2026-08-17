@@ -1,4 +1,4 @@
-// Reparación de vínculos hechos SOLO por teléfono (0119).
+// Reparación de vínculos hechos SOLO por teléfono.
 //
 // EL PROBLEMA. `matchShipment` vincula por teléfono cuando hay exactamente un
 // pedido con ese número. La regla es correcta en el instante en que se aplica,
@@ -22,6 +22,30 @@
 // es reescribir a qué venta pertenece un paquete —y de ahí salen el cierre, el
 // costo y la liquidación—, así que ante la duda se deja como está y se informa.
 
+import { orderRefInGuideCode } from "@/lib/shipment-match";
+
+/**
+ * El nombre del pedido que nombra el código impreso, con el prefijo de su tienda.
+ *
+ * Quién decide QUÉ nombra un código es `orderRefInGuideCode`, y se le pregunta a
+ * él en vez de repetir el patrón acá: esa función lleva medida la familia de seis
+ * dígitos sobre las 3.976 guías con pedido, y es la misma con la que el
+ * emparejador veta candidatos al importar. Dos lecturas distintas del mismo
+ * código darían dos dueños distintos para el mismo paquete — que es justo el
+ * desperfecto que este barrido viene a limpiar.
+ *
+ * El prefijo sale de `stores.order_prefix` (0115). Sin prefijo no se responde:
+ * ponerle el de otra tienda convertiría «no sé de quién es» en «es de aquella».
+ */
+export function derivedOrderName(
+  guideCode: string | null | undefined,
+  orderPrefix: string | null | undefined,
+): string | null {
+  const ref = orderRefInGuideCode(guideCode);
+  const prefix = String(orderPrefix ?? "").trim().replace(/^#/, "").toUpperCase();
+  return ref && prefix ? `#${prefix}${ref}` : null;
+}
+
 /** La guía tal como la necesita el planificador. */
 export interface PhoneLinkedGuide {
   id: string;
@@ -30,7 +54,7 @@ export interface PhoneLinkedGuide {
   order_id: string | null;
   customer_phone: string | null;
   /** El nombre del pedido que lleva escrito el código de guía, ya derivado con
-   *  el prefijo de la tienda (`orderNameFromGuideCode`). */
+   *  el prefijo de la tienda (`derivedOrderName`). */
   derived_order_name: string | null;
 }
 

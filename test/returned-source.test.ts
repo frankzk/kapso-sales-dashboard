@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { isManualReturn, returnedSourceLabel, sealReturn } from "@/lib/returned-source";
 
-describe("procedencia del sello de devolución (0116)", () => {
+describe("procedencia del sello de devolución (0118)", () => {
   it("distingue el sello de una persona del reporte del courier", () => {
     expect(isManualReturn("manual")).toBe(true);
     expect(isManualReturn("MANUAL")).toBe(true);
@@ -10,7 +10,7 @@ describe("procedencia del sello de devolución (0116)", () => {
   });
 
   it("una guía vieja SIN procedencia no cuenta como sellada a mano", () => {
-    // Antes de 0116 nadie guardaba esto. Suponer «manual» pondría un aviso de
+    // Antes de 0118 nadie guardaba esto. Suponer «manual» pondría un aviso de
     // desconfianza sobre 300 devoluciones que sí reportó el courier.
     expect(isManualReturn(null)).toBe(false);
     expect(isManualReturn("")).toBe(false);
@@ -65,7 +65,7 @@ describe("sealReturn — la devolución se sella una vez, con su procedencia", (
     });
   });
 
-  it("un sello viejo sin procedencia (pre-0116) se conserva tal cual", () => {
+  it("un sello viejo sin procedencia (pre-0118) se conserva tal cual", () => {
     const legado = { returned_at: "2026-07-01T10:00:00Z", returned_source: null };
     expect(sealReturn(legado, REPORTE)).toEqual(legado);
   });

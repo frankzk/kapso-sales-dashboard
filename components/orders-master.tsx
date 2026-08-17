@@ -32,8 +32,10 @@ import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actio
 import { ShalomGuideModal } from "@/components/shalom-guide-modal";
 import { cancelShalomGuide } from "@/app/dashboard/pedidos/shalom-actions";
 import { shalomGuideIsCancelable } from "@/lib/shalom/draft";
+import { manualOutputIsCancelable } from "@/lib/shipment-output";
 import {
   addOrderComment,
+  cancelManualRouteOutput,
   clearOrderGeo,
   createManualRouteOutputsBulk,
   loadOrderDetail,
@@ -257,6 +259,81 @@ function ShalomCancelButton({
           setConfirming(false);
           if ("error" in res) setError(res.error);
           else onDone(res.notice);
+        }}
+        className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
+      >
+        Sí, anular
+      </button>
+      <button
+        type="button"
+        onClick={() => setConfirming(false)}
+        className="text-xs font-medium text-slate-600 hover:underline"
+      >
+        Cancelar
+      </button>
+    </span>
+  );
+}
+
+/**
+ * Anular una salida de ruta manual, también en dos pasos.
+ *
+ * Es el botón que faltaba: el modal de Shalom decía "anúlala antes de crear
+ * otra" y no había dónde. Una salida `por definir` creada por error dejaba el
+ * pedido sin poder emitir ninguna guía ni finalizarse.
+ *
+ * No llama a ningún courier —estas salidas no tienen API— así que el texto de
+ * confirmación habla de la caja, que es lo que la operadora tiene delante: si el
+ * paquete ya salió, el camino es el retorno y no esto.
+ */
+function ManualOutputCancelButton({
+  shipmentId,
+  label,
+  onDone,
+}: {
+  shipmentId: string;
+  label: string;
+  onDone: (notice: string) => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (busy) return <span className="text-xs text-slate-500">Anulando…</span>;
+
+  if (!confirming) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            setError(null);
+            setConfirming(true);
+          }}
+          className="text-xs font-medium text-red-700 hover:underline"
+        >
+          Anular salida
+        </button>
+        {error && <span className="w-full text-xs text-red-700">{error}</span>}
+      </>
+    );
+  }
+
+  return (
+    <span className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-red-50 px-2 py-1.5">
+      <span className="text-xs text-red-800">
+        ¿Anular <strong>{label}</strong>? Solo si la caja sigue en almacén; si ya salió con el
+        motorizado, registra su retorno.
+      </span>
+      <button
+        type="button"
+        onClick={async () => {
+          setBusy(true);
+          const res = await cancelManualRouteOutput(shipmentId);
+          setBusy(false);
+          setConfirming(false);
+          if (res.error) setError(res.error);
+          else onDone(res.notice ?? `${label} anulada.`);
         }}
         className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
       >
@@ -1781,6 +1858,8 @@ const TIMELINE_LABEL: Record<string, string> = {
   courier_assigned: "Courier asignado",
   guide_registered: "Guía registrada",
   route_output_created: "Salida y rótulo creados",
+  route_output_cancelled: "Salida anulada",
+  route_output_filled: "Courier decidido sobre la salida",
   dispatched: "Pedido despachado",
   out_for_delivery: "Salida a reparto",
   attempt_failed: "Intento fallido",
@@ -1813,6 +1892,14 @@ const TIMELINE_LABEL: Record<string, string> = {
   state_change: "Cambio de estado",
   note: "Nota",
   system: "Automático",
+  // Cola de Leads (lo de ANTES del pedido). Llevan prefijo porque `note`,
+  // `call` y `system` ya existen arriba con otro significado, y sin él una
+  // gestión de Repro Provincia y una llamada de la asesora se leerían igual.
+  lead_sale: "Venta cerrada por la asesora",
+  lead_call: "Llamada al cliente (Leads)",
+  lead_state_change: "Cambio de estado del lead",
+  lead_note: "Nota de la asesora",
+  lead_system: "Automático (Leads)",
 };
 
 type DrawerSectionId =
@@ -2752,7 +2839,7 @@ function OrderDrawer({
                           Rótulo ↗
                         </a>
                       )}
-                      {/* Los dos rótulos del paquete en UNA hoja (0120): el de
+                      {/* Los dos rótulos del paquete en UNA hoja: el de
                           Tanders arriba y, debajo, el QR de la salida y qué va
                           dentro de la caja. Se suma a los otros dos en vez de
                           reemplazarlos mientras se valida en el almacén. Marca
@@ -2770,25 +2857,58 @@ function OrderDrawer({
                           Guía combinada ↗
                         </a>
                       )}
-                      {/* El rótulo de Shalom lo compone ELLOS, no nosotros: se
-                          pide a su API y se sirve como PDF. Solo existe para las
-                          guías creadas por API — las que llegaron por el Excel
-                          no tienen `ose_id` y hay que bajarlas de su panel. */}
+                      {/* Un solo papel para la caja de agencia: la etiqueta de
+                          Shalom —que la compone ELLOS y se pide a su API—
+                          arriba, y debajo nuestra banda con el QR de la salida
+                          y los productos. Antes eran dos impresiones, y para
+                          conseguir la segunda el almacén acababa creando una
+                          salida `por definir` que después bloquea la guía.
+
+                          Solo existe para las guías creadas por API: las que
+                          llegaron por el Excel no tienen `ose_id` y su rótulo se
+                          baja del panel de Shalom. */}
                       {g.courier === "shalom" && g.shalom_ose_id && (
-                        <a
-                          href={`/api/shalom/label/${g.id}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-xs font-medium text-brand-700 hover:underline"
-                        >
-                          Rótulo ↗
-                        </a>
+                        <>
+                          <a
+                            href={`/api/shalom/rotulo/${g.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs font-medium text-brand-700 hover:underline"
+                          >
+                            Rótulo ↗
+                          </a>
+                          {/* El suelto se conserva a un clic de distancia: si la
+                              composición falla, el mostrador de Shalom sigue
+                              necesitando su papel. */}
+                          <a
+                            href={`/api/shalom/label/${g.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-slate-500 hover:underline"
+                          >
+                            solo Shalom
+                          </a>
+                        </>
                       )}
                       {canCreateShalomGuide && shalomGuideIsCancelable(g) && (
                         <ShalomCancelButton
                           shipmentId={g.id}
                           guideCode={g.guide_code}
                           codigo={g.shalom_codigo ?? null}
+                          onDone={(msg) => {
+                            setNotice(msg);
+                            void reload();
+                            onSaved();
+                          }}
+                        />
+                      )}
+                      {/* Las salidas de ruta manual no tienen API a la que
+                          avisar: anularlas es corregir NUESTRO registro, así que
+                          basta el permiso con el que se crearon. */}
+                      {canEdit && manualOutputIsCancelable(g) && (
+                        <ManualOutputCancelButton
+                          shipmentId={g.id}
+                          label={g.output_code ?? g.guide_code ?? "esta salida"}
                           onDone={(msg) => {
                             setNotice(msg);
                             void reload();
@@ -2867,8 +2987,10 @@ function OrderDrawer({
                         <span
                           className={cn(
                             "absolute -left-[21px] top-1.5 h-2 w-2 rounded-full",
-                            /payment|liquidation|entregado/.test(t.kind)
-                              ? "bg-emerald-500"
+                            t.origin === "leads"
+                              ? "bg-violet-500"
+                              : /payment|liquidation|entregado/.test(t.kind)
+                                ? "bg-emerald-500"
                               : /return|refund|merma|anulado/.test(t.kind)
                                 ? "bg-orange-500"
                                 : /guide|dispatch|route|custody/.test(t.kind)
@@ -2886,9 +3008,9 @@ function OrderDrawer({
                               · {confirmationResultLabel(t.confirmation.result)}
                             </span>
                           )}
-                          {t.newStatus && (
+                          {(t.statusLabel ?? (t.newStatus ? generalLabel(t.newStatus) : null)) && (
                             <span className="ml-1 font-normal text-slate-500">
-                              → {generalLabel(t.newStatus)}
+                              → {t.statusLabel ?? generalLabel(t.newStatus!)}
                             </span>
                           )}
                         </p>
@@ -2903,7 +3025,13 @@ function OrderDrawer({
                             : ""}
                           {t.courier ? ` · ${t.courier}` : ""}
                           {t.guideCode ? ` · ${t.guideCode}` : ""}
-                          {` · ${t.origin === "gestion" ? "Repro Provincia" : t.source}`}
+                          {` · ${
+                            t.origin === "gestion"
+                              ? "Repro Provincia"
+                              : t.origin === "leads"
+                                ? "Leads"
+                                : t.source
+                          }`}
                         </p>
                       </li>
                     ))}

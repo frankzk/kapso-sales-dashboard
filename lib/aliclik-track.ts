@@ -24,7 +24,7 @@ import {
   reconcileAliclikCustodyState,
   reconcileAliclikPreparationState,
 } from "@/lib/aliclik-status";
-import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
+import { categoryOf, reconcileDeliveryStatus, reopensForFailedAttempt } from "@/lib/shipments";
 import { sealReturn } from "@/lib/returned-source";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 
@@ -45,6 +45,32 @@ export function statusFingerprint(p: {
   return createHash("sha256").update(raw).digest("hex");
 }
 
+/**
+ * ¿Este snapshot de Aliclik es más viejo que el último que ya aplicamos? Pura.
+ *
+ * Se compara contra `api_updated_at` —el `updatedAt` que vio la propia API— y
+ * NUNCA contra `last_report_at`, que también escribe el importador de Excel con
+ * la hora de la subida. Son dos relojes distintos: uno mide cuándo se movió el
+ * pedido en Aliclik, el otro cuándo miramos nosotros. Compararlos entre sí hacía
+ * que cada reporte importado dejara `last_report_at = ahora` en todas las guías
+ * del archivo y, con eso, que el barrido las diera por rezagadas y no volviera a
+ * tocarlas hasta que Aliclik moviera el pedido (0117).
+ *
+ * Sin marca previa no hay guarda: una guía nunca leída por la API se aplica y
+ * queda sellada para la próxima. Y una fecha ilegible no bloquea: no tener el
+ * dato no debe congelar la guía, que para eso está la precedencia monotónica.
+ */
+export function apiSnapshotIsStale(
+  updatedAt: string | null | undefined,
+  apiUpdatedAt: string | null | undefined,
+): boolean {
+  if (!updatedAt || !apiUpdatedAt) return false;
+  const seen = Date.parse(updatedAt);
+  const applied = Date.parse(apiUpdatedAt);
+  if (Number.isNaN(seen) || Number.isNaN(applied)) return false;
+  return seen < applied;
+}
+
 export interface ApplySnapshotResult {
   ok: boolean;
   outcome: "applied" | "unchanged" | "unknown_order" | "error";
@@ -62,6 +88,8 @@ interface TrackedShipment {
   order_id: string | null;
   delivery_status: string;
   last_report_at: string | null;
+  /** El `updatedAt` de Aliclik que vio la última lectura de la API (0117). */
+  api_updated_at: string | null;
   external_order_number: string | null;
   /** AUR5X… — el código impreso en el paquete y, además, el `orderNumber` de la API. */
   guide_code: string | null;
@@ -70,10 +98,12 @@ interface TrackedShipment {
   ready_at: string | null;
   custody_transferred_at: string | null;
   /** El sello de devolución que ya tenga la guía. Entra para poder RESPETARLO
-   *  (0116): la API relee guías ya devueltas —es lo que llena el motivo del
-   *  courier, 0117— y sin esto cada relectura reescribiría el sello. */
+   *  (0118): la API relee guías ya devueltas —es lo que llena el motivo del
+   *  courier, 0119— y sin esto cada relectura reescribiría el sello. */
   returned_at: string | null;
   returned_source: string | null;
+  /** Lo que agendó la asesora: protege una reprogramación que aún no le toca. */
+  next_followup_at: string | null;
 }
 
 /**
@@ -83,9 +113,11 @@ interface TrackedShipment {
  *   1. Si no conocemos el orderNumber, no se inventa una guía: se informa
  *      `unknown_order`. Crear filas a partir de un webhook sin firma sería
  *      dejar que cualquiera nos llene la base.
- *   2. `updatedAt` de Aliclik contra `last_report_at`: un snapshot más viejo que
+ *   2. `updatedAt` de Aliclik contra `api_updated_at`: un snapshot más viejo que
  *      el último que aplicamos se descarta. Es la protección real contra el
- *      desorden que la propia documentación anuncia.
+ *      desorden que la propia documentación anuncia. Contra `api_updated_at` y
+ *      no contra `last_report_at`, que el Excel también escribe: ver
+ *      `apiSnapshotIsStale`.
  *   3. `reconcileDeliveryStatus` (lib/shipments.ts): un estado solo avanza. Un
  *      `entregado` no se reabre y el trabajo del equipo no se pisa.
  */
@@ -118,8 +150,9 @@ export async function applyAliclikSnapshot(
   // en el valor cambiaría la consulta. Con `.eq()` el valor viaja como
   // parámetro y no hay nada que escapar.
   const COLUMNS =
-    "id,store_id,order_id,delivery_status,last_report_at,external_order_number,guide_code," +
-    "preparation_state,custody_state,ready_at,custody_transferred_at,returned_at,returned_source";
+    "id,store_id,order_id,delivery_status,last_report_at,api_updated_at,external_order_number,guide_code," +
+    "preparation_state,custody_state,ready_at,custody_transferred_at,next_followup_at," +
+    "returned_at,returned_source";
 
   const byExternal = await admin
     .from("shipments")
@@ -153,9 +186,13 @@ export async function applyAliclikSnapshot(
   // Guarda monotónica. Sin `updatedAt` se aplica igual: no tener el dato no debe
   // congelar la guía, y la precedencia de estados sigue protegiendo el resultado.
   const updatedAt = order.updatedAt ? new Date(order.updatedAt).toISOString() : null;
-  if (updatedAt && shipment.last_report_at && updatedAt < shipment.last_report_at) {
+  if (apiSnapshotIsStale(updatedAt, shipment.api_updated_at)) {
     return { ok: true, outcome: "unchanged", shipmentId: shipment.id, orderId: shipment.order_id };
   }
+  // Sella el snapshot aplicado, para que el de la próxima pasada se ordene
+  // contra él. Solo cuando Aliclik dio la fecha: sin ella no hay nada que
+  // sellar y borrar la marca anterior sería perder la guarda.
+  const seenPatch: Record<string, unknown> = updatedAt ? { api_updated_at: updatedAt } : {};
 
   const isAgency = Boolean(order.shipping?.reference?.toLowerCase().includes("agencia"));
   const mapped = mapAliclikStatus({
@@ -174,6 +211,7 @@ export async function applyAliclikSnapshot(
       .update({
         ...reportedStatusPatch(order),
         last_report_at: updatedAt ?? new Date().toISOString(),
+        ...seenPatch,
         ...collectAmountPatch(order),
         ...linkPatch,
       })
@@ -181,7 +219,21 @@ export async function applyAliclikSnapshot(
     return { ok: true, outcome: "unchanged", shipmentId: shipment.id, orderId: shipment.order_id };
   }
 
-  const next = reconcileDeliveryStatus(shipment.delivery_status, mapped.deliveryStatus);
+  // Un NO CONTESTA consume la reprogramación agendada: la guía vuelve a la cola
+  // de llamadas. Va también acá y no solo en el Excel porque este barrido corre
+  // cada pocos minutos: si solo lo hiciera el import, este la devolvería a "En
+  // ruta" enseguida y la guía quedaría rebotando entre estados.
+  //
+  // El día del intento es HOY: la API está diciendo AHORA que no la encontró.
+  const reopen = reopensForFailedAttempt({
+    existingStatus: shipment.delivery_status,
+    attemptFailed: mapped.attemptFailed,
+    attemptDate: new Date().toISOString().slice(0, 10),
+    scheduledFor: shipment.next_followup_at,
+  });
+  const next = reopen
+    ? "pendiente"
+    : reconcileDeliveryStatus(shipment.delivery_status, mapped.deliveryStatus);
   const nowIso = new Date().toISOString();
 
   const patch: Record<string, unknown> = {
@@ -196,13 +248,14 @@ export async function applyAliclikSnapshot(
     // pedido. Una guía quieta desde hace un mes que acabamos de consultar está
     // fresca; usar `updatedAt` la habría dado por vencida.
     api_report_at: nowIso,
+    ...seenPatch,
     ...collectAmountPatch(order),
     ...linkPatch,
   };
   if (mapped.pickupState) patch.pickup_state = mapped.pickupState;
-  // El sello viaja con su procedencia (0116) y se pone UNA VEZ. La regla vive en
+  // El sello viaja con su procedencia (0118) y se pone UNA VEZ. La regla vive en
   // `sealReturn` y acá importa más que en ningún otro camino: la pasada de motivo
-  // (0117) relee justo las guías ya devueltas, así que sin esta guarda cada
+  // (0119) relee justo las guías ya devueltas, así que sin esta guarda cada
   // consulta a la API convertiría en «API de Aliclik» un paquete que recibió una
   // persona en el almacén, borrando de paso su nombre de `returned_by`. Escribir
   // solo cuando el sello CAMBIA deja intacto lo que ya estaba.
@@ -286,7 +339,7 @@ export async function applyAliclikSnapshot(
  * tres campos y devuelve cadena vacía si los tres vienen vacíos. Escribirla
  * borraba un motivo que otra vía ya había registrado, y dejaba la columna con
  * dos formas de decir «no sé» —`''` y `null`— que cada consulta tenía que
- * distinguir a mano (así entraron las 5 vacías que limpia 0117).
+ * distinguir a mano (así entraron las 5 vacías que limpia 0119).
  *
  * Importa más de lo que parece: sobre esta columna se evalúa el MOM §11
  * (lib/return-recovery.ts). Un motivo perdido no es un dato cosmético que falta,

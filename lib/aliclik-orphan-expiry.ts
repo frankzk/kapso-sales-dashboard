@@ -22,46 +22,69 @@
 // como `failed` con el motivo escrito, y el candado se suelta. La operadora
 // reintenta desde el drawer, sin que nadie toque SQL.
 //
-// LAS TRES RETENCIONES, porque soltar el candado de más cuesta dinero — una guía
-// duplicada es una escritura real con ventana de cancelación corta:
+// LAS CUATRO RETENCIONES, porque soltar el candado de más cuesta dinero — una
+// guía duplicada es una escritura real con ventana de cancelación corta:
 //
-//   * `sweepComplete` — si la consulta a Aliclik falló, NO se caduca nada. No es
-//     lo mismo "buscamos y no está" que "no pudimos buscar", y es justo durante
-//     una caída de Aliclik cuando ambas cosas se confunden. Sin esta condición,
-//     la misma caída que genera los timeouts liberaría los candados que protegen
-//     de ellos.
-//   * `ambiguous` — intenciones que el barrido no pudo descartar porque su
+//   * `sweep` ausente o rancio — si no consta un barrido COMPLETO y reciente, NO
+//     se caduca nada. No es lo mismo "buscamos y no está" que "no pudimos
+//     buscar", y es justo durante una caída de Aliclik cuando ambas cosas se
+//     confunden. Sin esta condición, la misma caída que genera los timeouts
+//     liberaría los candados que protegen de ellos.
+//   * `startedAt` anterior a la intención — un barrido que arrancó antes de que
+//     la intención existiera pudo pasar de largo por la zona del listado donde
+//     estaría. Su ausencia ahí no prueba nada.
+//   * `ambiguousAt` — intenciones que el barrido no pudo descartar porque su
 //     teléfono señalaba a varios pedidos abiertos a la vez. Ahí no sabemos si el
 //     pedido existe; se quedan para revisión humana.
 //   * `expiryMs` — margen para que el rescate normal haga su trabajo. Con el
 //     cron cada 20 minutos, 90 minutos son cuatro o cinco barridos fallidos
 //     seguidos antes de dar por buena la ausencia.
+//
+// LA EVIDENCIA VIENE DE FUERA, Y NO ES UN DETALLE. Antes esto se decidía dentro
+// de la misma invocación que acababa de recorrer el listado, con un booleano
+// local. Esa invocación empezó a morir por `maxDuration` dentro del bucle, y con
+// ella murió la caducidad entera: el candado de `#KP127355` duró más de diez
+// horas el 10-08-2026. Ahora el barrido deja constancia de sí mismo en
+// `aliclik_sweep_state` (0116) y el cierre la lee, así que una pasada lenta ya
+// no se lleva por delante al cierre. Lo que NO cambia es la exigencia: sigue
+// haciendo falta un barrido completo, y ahora además reciente.
 
 /** La intención huérfana que el barrido no consiguió emparejar. */
 export interface ExpiryCandidate {
   id: string;
   orderId: string | null;
   createdAt: string;
+  /**
+   * Cuándo un barrido dejó esta intención en duda por teléfono ambiguo. Vale
+   * para el barrido que la marcó, no para siempre: se compara contra el inicio
+   * del último barrido completo.
+   */
+  ambiguousAt?: string | null;
+}
+
+/** Lo que el último barrido COMPLETO dejó anotado sobre sí mismo. */
+export interface SweepEvidence {
+  /** Cuándo arrancó. Una intención posterior no fue buscada por él. */
+  startedAt: string;
+  /** Cuándo terminó de recorrer el listado entero. */
+  completedAt: string;
+  /** Borde antiguo de la ventana de fechas que consultó. */
+  windowFrom: string;
 }
 
 export interface SelectExpiredOpts {
   /**
-   * ids de intenciones cuya ausencia NO quedó demostrada: el barrido vio un
-   * pedido sin registrar cuyo teléfono coincidía con varias candidatas.
+   * El último barrido completo del que hay constancia. `null` cuando no hay
+   * ninguno: no se caduca nada.
    */
-  ambiguous: ReadonlySet<string>;
-  /**
-   * ¿Se pudo recorrer entero el listado de Aliclik en esta pasada? Con `false`
-   * no se caduca nada: no hubo búsqueda que valga.
-   */
-  sweepComplete: boolean;
+  sweep: SweepEvidence | null;
   /** Antigüedad a partir de la cual se da por no creada. */
   expiryMs: number;
   /**
-   * Ventana de fechas que cubrió el barrido. Una intención más antigua que esto
-   * ya no es verificable: su fecha de creación se cayó del rango consultado.
+   * Cuánto vale la constancia de un barrido antes de quedar rancia. Pasado esto
+   * volvemos a estar a ciegas, y a ciegas no se suelta ningún candado.
    */
-  lookbackMs: number;
+  sweepMaxAgeMs: number;
   now: Date;
 }
 
@@ -81,13 +104,14 @@ export interface ExpiryDecision {
 export interface ExpirySelection {
   expire: ExpiryDecision[];
   /** Por qué NO se caducó el resto. Se reporta para que un atasco se vea. */
-  held: { tooYoung: number; ambiguous: number; sweepIncomplete: number };
+  held: { tooYoung: number; ambiguous: number; noSweep: number; notSearched: number };
 }
 
-function ageMs(candidate: ExpiryCandidate, now: Date): number | null {
-  const at = new Date(candidate.createdAt).getTime();
-  if (!Number.isFinite(at)) return null;
-  return now.getTime() - at;
+/** `null` si la fecha no se puede leer, que nunca es lo mismo que cero. */
+function msOf(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const at = new Date(value).getTime();
+  return Number.isFinite(at) ? at : null;
 }
 
 /**
@@ -96,37 +120,58 @@ function ageMs(candidate: ExpiryCandidate, now: Date): number | null {
  * Recibe SOLO las que el barrido no consiguió emparejar: las rescatadas ya se
  * cerraron como `sent` y no llegan hasta aquí.
  *
- * Una fecha ilegible retiene la intención en lugar de caducarla. No poder medir
- * la antigüedad no es haber comprobado nada, y el sesgo seguro apunta a no
- * soltar el candado.
+ * Toda fecha ilegible retiene la intención en lugar de caducarla. No poder medir
+ * no es haber comprobado, y el sesgo seguro apunta a no soltar el candado.
  */
 export function selectExpiredOrphans(
   candidates: readonly ExpiryCandidate[],
   opts: SelectExpiredOpts,
 ): ExpirySelection {
-  const held = { tooYoung: 0, ambiguous: 0, sweepIncomplete: 0 };
+  const held = { tooYoung: 0, ambiguous: 0, noSweep: 0, notSearched: 0 };
+  const nowMs = opts.now.getTime();
 
-  // Aliclik no respondió del todo: esta pasada no demuestra ninguna ausencia.
-  if (!opts.sweepComplete) {
-    held.sweepIncomplete = candidates.length;
+  // No consta un barrido completo, o el que consta es viejo o ilegible: esta
+  // pasada no demuestra ninguna ausencia.
+  const startedAt = msOf(opts.sweep?.startedAt);
+  const completedAt = msOf(opts.sweep?.completedAt);
+  if (startedAt === null || completedAt === null || nowMs - completedAt > opts.sweepMaxAgeMs) {
+    held.noSweep = candidates.length;
     return { expire: [], held };
   }
+  // Sin borde de ventana legible no se puede distinguir la ausencia comprobada
+  // de la caducidad a secas. `null` degrada a "no verificada", que es el lado
+  // que pide mirar el panel antes de reintentar.
+  const windowFrom = msOf(opts.sweep?.windowFrom);
 
   const expire: ExpiryDecision[] = [];
 
   for (const candidate of candidates) {
-    const age = ageMs(candidate, opts.now);
-    if (age === null || age < opts.expiryMs) {
+    const createdAt = msOf(candidate.createdAt);
+    if (createdAt === null || nowMs - createdAt < opts.expiryMs) {
       held.tooYoung++;
       continue;
     }
-    if (opts.ambiguous.has(candidate.id)) {
-      held.ambiguous++;
+
+    // El barrido tiene que haber arrancado DESPUÉS de que la intención
+    // existiera. Uno anterior pudo pasar de largo por la zona del listado donde
+    // estaría el pedido, y entonces su ausencia no dice nada.
+    if (startedAt < createdAt) {
+      held.notSearched++;
       continue;
     }
 
-    const minutes = Math.round(age / 60_000);
-    const verified = age <= opts.lookbackMs;
+    // La duda por teléfono ambiguo solo retiene si la marcó el mismo barrido del
+    // que estamos usando la evidencia. Una duda anterior ya quedó atrás.
+    if (candidate.ambiguousAt) {
+      const ambiguousAt = msOf(candidate.ambiguousAt);
+      if (ambiguousAt === null || ambiguousAt >= startedAt) {
+        held.ambiguous++;
+        continue;
+      }
+    }
+
+    const minutes = Math.round((nowMs - createdAt) / 60_000);
+    const verified = windowFrom !== null && createdAt >= windowFrom;
     expire.push({
       id: candidate.id,
       orderId: candidate.orderId,

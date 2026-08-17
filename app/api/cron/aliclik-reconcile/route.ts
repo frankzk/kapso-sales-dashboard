@@ -3,13 +3,11 @@ import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
 import { listOrders, type AliclikOrder } from "@/lib/aliclik";
-import { applyAliclikSnapshot, refreshAliclikOrder } from "@/lib/aliclik-track";
-import { selectFollowUpGuides, followUpKey, type FollowUpCandidate } from "@/lib/aliclik-followup";
-import { selectExpiredOrphans, type ExpiryCandidate } from "@/lib/aliclik-orphan-expiry";
+import { applyAliclikSnapshot } from "@/lib/aliclik-track";
 import { normalizePhone } from "@/lib/phone";
 import { readOrderMarker } from "@/lib/aliclik-reconcile";
+import { recordSweep } from "@/lib/aliclik-sweep-state";
 import { categoryOf } from "@/lib/shipments";
-import { courierReason, RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -40,18 +38,19 @@ export const maxDuration = 300;
 // ninguna. Antes esto era un UPDATE que no encontraba nada, no fallaba, y dejaba
 // la intención marcada como resuelta sin haber registrado la guía.
 //
-// Y CADUCA LAS QUE NO EXISTEN. Buscar al huérfano cubre la rama "Aliclik sí lo
-// creó". La otra —nunca llegó a crearlo— no tenía salida: la intención se
-// quedaba en 'pending' para siempre y el candado dejaba el pedido inoperable.
-// Tras `ORPHAN_EXPIRY_MS` de barridos sin encontrarla, se cierra como 'failed'
-// con el motivo escrito y el pedido vuelve a admitir un intento
-// (MOM §10.2, lib/aliclik-orphan-expiry.ts).
+// LO QUE ESTA RUTA YA NO HACE, Y POR QUÉ. Caducar los candados y perseguir a las
+// guías rezagadas vivían aquí, detrás del bucle. El bucle creció hasta agotar
+// `maxDuration` y la invocación empezó a morir dentro de él: las nueve pasadas
+// de las tres horas previas al 10-08-2026 22:00 terminaron en 504. Todo lo que
+// iba después del bucle dejó de ejecutarse siempre — un candado quedó diez horas
+// puesto y 515 guías `en_ruta` acumularon una media de 8 días sin noticias.
 //
-// Y PERSIGUE A LAS REZAGADAS. La ventana de fechas cubre el ciclo normal, pero
-// no el retorno: un paquete rechazado tarda semanas en volver, y para cuando
-// Aliclik lo marca RETURNED su guía ya se cayó del rango. Por eso, tras el
-// barrido, se consulta una por una a las guías que siguen vivas y que el rango
-// no tocó (lib/aliclik-followup.ts). El ancla es el estado, no la fecha.
+// Un trabajo cuya ejecución depende de que otro más largo termine a tiempo no es
+// un trabajo: es una apuesta. Ahora ese cierre vive en `/api/cron/aliclik-close`
+// con su propio presupuesto, y esta ruta se limita a barrer y a DEJAR CONSTANCIA
+// de lo que barrió (`aliclik_sweep_state`, 0116). La condición de seguridad no se
+// aflojó al mudarse: sigue haciendo falta un recorrido completo para caducar
+// nada, solo que ahora se lee de una fila en vez de una variable local.
 
 const DAY_MS = 86_400_000;
 /** Días hacia atrás que se releen. Cubre de sobra un fin de semana caído. */
@@ -59,49 +58,18 @@ const LOOKBACK_DAYS = 14;
 /** Antigüedad mínima de una intención para considerarla huérfana. */
 const ORPHAN_MIN_AGE_MS = 5 * 60_000;
 /**
- * Cuándo se da por no creada una intención que el barrido nunca encuentra.
+ * Cuánto tiempo se le deja al recorrido antes de cortarlo por las buenas.
  *
- * Con el cron cada 20 minutos son cuatro o cinco pasadas completas buscándola
- * por su marca antes de soltar el candado. El margen es deliberadamente amplio:
- * caducar de más crea una guía duplicada —dinero real, ventana de cancelación
- * corta— y caducar de menos solo cuesta esperar.
+ * Por debajo de `maxDuration` a propósito: el corte tiene que ser NUESTRO. Una
+ * pasada que se pasa de 300 s muere en 504 sin escribir el informe, sin anotar
+ * su intento y sin dejar dicho hasta dónde llegó — que es como este barrido
+ * estuvo fallando en silencio, contado como "el cron corre" porque cada pasada
+ * sí aplicaba estados antes de morir. Cortando aquí, una pasada larga termina
+ * siendo una pasada incompleta declarada, y el cierre sabe no fiarse de ella.
  */
-const ORPHAN_EXPIRY_MS = 90 * 60_000;
-/**
- * Consultas individuales por tienda y pasada. Con el cron cada 20 minutos son
- * ~2.900 turnos al día: de sobra para una cola de rezagadas sana. Si
- * `followUpDeferred` no vuelve a cero entre pasadas, este tope se quedó corto.
- */
-const FOLLOW_UP_LIMIT = 40;
-/**
- * Cuándo se deja de preguntar por una guía que no responde. Un retorno tarda
- * semanas; dos meses de silencio ya es una guía que Aliclik nunca cerró.
- */
-const FOLLOW_UP_MAX_SILENCE_MS = 60 * DAY_MS;
-/**
- * Techo de filas que se traen para elegir a quién preguntar. No es una decisión
- * de producto: es el seguro contra el tope de filas de PostgREST, que truncaría
- * la consulta en silencio y recortaría el universo sin avisar. Se piden las más
- * calladas primero, así que un recorte se llevaría siempre a las menos urgentes.
- *
- * Hoy las guías Aliclik vivas —`pendiente` + `en_ruta`, sumando TODAS las
- * tiendas— son 583, y este tope se aplica por tienda. Sobra holgura; si alguna
- * vez dejara de sobrar, `followUpDeferred` lo delataría antes de que importe.
- */
-const FOLLOW_UP_POOL = 2000;
-
-/** Espejo de la ventana de `selectFollowUpGuides` para las anuladas. Acá solo
- *  recorta el pool; quien decide de verdad es el selector puro. */
-const FOLLOW_UP_RETURN_WINDOW_MS = 21 * DAY_MS;
-
-/** Consultas por pasada de la tercera vuelta (el motivo del courier, 0117). Con
- *  el cron cada 20 minutos, el atraso de ~100 guías se drena en poco más de una
- *  hora sin competir con el barrido por el `maxDuration`. */
-const REASON_PROBE_LIMIT = 30;
-/** Cada cuánto se vuelve a preguntar por una guía que sigue sin motivo. Aliclik
- *  puede escribirlo tarde; repreguntar cada veinte minutos sería castigar a la
- *  API por un dato que casi nunca cambia. */
-const REASON_PROBE_COOLDOWN_MS = 7 * DAY_MS;
+const SWEEP_BUDGET_MS = 230_000;
+/** Páginas de 100 que se leen como mucho. La ventana de 14 días son ~11. */
+const MAX_PAGES = 50;
 
 function secretEquals(provided: string | null, expected: string): boolean {
   if (!provided) return false;
@@ -124,34 +92,28 @@ interface StoreReport {
   storeId: string;
   scanned: number;
   applied: number;
+  /**
+   * Snapshots que no traían nada nuevo y se saltaron sin consultar la guía. Es
+   * la mayoría en régimen normal, y saberlo importa: si esto cae a cero, el
+   * prefiltro dejó de filtrar y la pasada volvió a costar lo que costaba.
+   */
+  unchanged: number;
   unknown: number;
   orphansLinked: number;
   /** Guías creadas de cero al rescatar una huérfana. */
   orphansCreated: number;
   /** Candidatas descartadas por ambiguas (mismo teléfono, varios pedidos). */
   orphansAmbiguous: number;
-  /** Intenciones dadas por no creadas: candado liberado, pedido reintentable. */
-  orphansExpired: number;
-  /** Caducadas sin que el barrido cubriera su fecha: piden ojo humano. */
-  orphansExpiredUnverified: number;
-  /** Las que siguen bloqueadas y por qué. Si no baja, hay algo que mirar. */
-  orphansHeld: { tooYoung: number; ambiguous: number; sweepIncomplete: number };
-  /** Guías vivas consultadas de una en una tras el barrido por fechas. */
-  followUpScanned: number;
-  followUpApplied: number;
-  /** Vivas que no cupieron en el tope de esta pasada; van en la siguiente. */
-  followUpDeferred: number;
-  /** Vivas que se dieron por abandonadas por llevar demasiado calladas. */
-  followUpAbandoned: number;
-  /** Consultadas que Aliclik ya no reconoce: quedan para revisión humana. */
-  followUpMissing: number;
-  /** Devoluciones sin motivo a las que se les preguntó por el motivo (0117). */
-  reasonProbed: number;
-  /** De esas, cuántas volvieron CON motivo: el MOM §11 ya se puede evaluar. */
-  reasonFound: number;
-  /** Las que ni así lo tienen. Si este número no baja, el dato no está en
-   *  Aliclik y esas decisiones se seguirán tomando a ciegas. */
-  reasonStillBlind: number;
+  /** Páginas del listado que se llegaron a leer. */
+  pages: number;
+  /**
+   * ¿Se recorrió el listado ENTERO? Es lo único de esta pasada que el cierre
+   * mira, y por eso se reporta: una racha de `false` explica un candado que no
+   * se suelta sin tener que mirar los logs.
+   */
+  sweepComplete: boolean;
+  /** Por qué se cortó, cuando se cortó. Vacío si terminó el recorrido. */
+  stoppedBy: "" | "api_error" | "budget" | "max_pages";
   errors: string[];
 }
 
@@ -189,6 +151,8 @@ interface Orphan {
  * `ambiguous` recoge a las que quedaron en ese empate. Importa más allá del
  * contador: una intención ahí NO puede caducarse después, porque el barrido vio
  * un pedido sin registrar que podría ser el suyo. Su ausencia no está probada.
+ * Por eso la duda se estampa luego en la fila (`ambiguous_at`) en vez de morir
+ * con la invocación: quien caduca ya no es este cron.
  */
 function matchOrphan(
   order: AliclikOrder,
@@ -294,25 +258,98 @@ async function rescueOrphanGuide(
   return true;
 }
 
+/**
+ * Lo que ya sabemos de las guías de esta página, en dos consultas en vez de 200.
+ *
+ * DE DÓNDE SALE EL COSTE. `applyAliclikSnapshot` empieza buscando la guía por
+ * `external_order_number` y, si no la encuentra, por `guide_code`: una o dos
+ * consultas por pedido. Con ~1.100 pedidos en la ventana son más de dos mil
+ * viajes a la base, en serie, y la inmensa mayoría para descubrir que el
+ * snapshot no traía nada nuevo. Eso es lo que agotaba `maxDuration`.
+ *
+ * QUÉ SE SALTA Y QUÉ NO. Solo se saltan los casos en los que el aplicador habría
+ * salido sin escribir una sola fila:
+ *   * la guía no existe → `unknown_order`, que aquí se atiende igual (es la vía
+ *     de rescate de huérfanas);
+ *   * el snapshot es más viejo que nuestra última lectura → la guarda monotónica
+ *     lo descarta.
+ * Cualquier otro caso baja al aplicador de siempre, que sigue siendo la única
+ * vía de escritura. El prefiltro decide a quién NO preguntar, nunca qué escribir.
+ *
+ * Los identificadores raros se dejan fuera del filtro `in` y caen al camino de
+ * una en una: el valor viene de la API, y PostgREST parsea la lista como texto
+ * donde una coma o una comilla cambiarían la consulta. Con `.eq()` viaja como
+ * parámetro y no hay nada que escapar — el mismo motivo por el que el aplicador
+ * evita `.or(...)`.
+ */
+const SAFE_ID = /^[A-Za-z0-9_-]+$/;
+
+interface KnownGuide {
+  last_report_at: string | null;
+}
+
+async function prefetchKnownGuides(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderNumbers: readonly string[],
+  report: StoreReport,
+): Promise<Map<string, KnownGuide>> {
+  const known = new Map<string, KnownGuide>();
+  const safe = orderNumbers.filter((n) => SAFE_ID.test(n));
+  if (!safe.length) return known;
+
+  // Por `guide_code` primero y por `external_order_number` después, para que el
+  // segundo pise al primero: es el mismo orden de preferencia que aplica el
+  // aplicador cuando una guía se puede encontrar por las dos vías.
+  const byGuide = await admin
+    .from("shipments")
+    .select("guide_code,last_report_at")
+    .eq("courier", "aliclik")
+    .in("guide_code", safe);
+  if (byGuide.error) {
+    report.errors.push(`prefiltro (guide_code): ${byGuide.error.message}`);
+    return known;
+  }
+  for (const row of byGuide.data ?? []) {
+    const code = (row.guide_code ?? "").trim();
+    if (code) known.set(code, { last_report_at: row.last_report_at });
+  }
+
+  const byExternal = await admin
+    .from("shipments")
+    .select("external_order_number,last_report_at")
+    .in("external_order_number", safe);
+  if (byExternal.error) {
+    report.errors.push(`prefiltro (external_order_number): ${byExternal.error.message}`);
+    return known;
+  }
+  for (const row of byExternal.data ?? []) {
+    const code = (row.external_order_number ?? "").trim();
+    if (code) known.set(code, { last_report_at: row.last_report_at });
+  }
+
+  return known;
+}
+
+/** ¿El snapshot es más viejo que lo último que aplicamos? Entonces no aporta. */
+function isStale(order: AliclikOrder, guide: KnownGuide): boolean {
+  if (!order.updatedAt || !guide.last_report_at) return false;
+  const updatedAt = new Date(order.updatedAt);
+  if (!Number.isFinite(updatedAt.getTime())) return false;
+  return updatedAt.toISOString() < guide.last_report_at;
+}
+
 const emptyReport = (storeId: string): StoreReport => ({
   storeId,
   scanned: 0,
   applied: 0,
+  unchanged: 0,
   unknown: 0,
   orphansLinked: 0,
   orphansCreated: 0,
   orphansAmbiguous: 0,
-  orphansExpired: 0,
-  orphansExpiredUnverified: 0,
-  orphansHeld: { tooYoung: 0, ambiguous: 0, sweepIncomplete: 0 },
-  followUpScanned: 0,
-  followUpApplied: 0,
-  followUpDeferred: 0,
-  followUpAbandoned: 0,
-  followUpMissing: 0,
-  reasonProbed: 0,
-  reasonFound: 0,
-  reasonStillBlind: 0,
+  pages: 0,
+  sweepComplete: false,
+  stoppedBy: "",
   errors: [],
 });
 
@@ -320,11 +357,13 @@ async function reconcileStore(
   storeId: string,
   apiToken: string,
   admin: ReturnType<typeof createAdminSupabase>,
+  deadline: number,
 ): Promise<StoreReport> {
   const report = emptyReport(storeId);
-  const now = new Date();
-  const startDate = dateKey(new Date(now.getTime() - LOOKBACK_DAYS * DAY_MS));
-  const endDate = dateKey(now);
+  const startedAt = new Date();
+  const windowFrom = new Date(startedAt.getTime() - LOOKBACK_DAYS * DAY_MS);
+  const startDate = dateKey(windowFrom);
+  const endDate = dateKey(startedAt);
 
   // Intenciones que se quedaron sin respuesta. Se cargan ANTES del barrido para
   // poder emparejarlas con lo que devuelva Aliclik en la misma pasada.
@@ -333,7 +372,7 @@ async function reconcileStore(
     .select("id,order_id,request,created_at,error")
     .eq("store_id", storeId)
     .eq("status", "pending")
-    .lt("created_at", new Date(now.getTime() - ORPHAN_MIN_AGE_MS).toISOString());
+    .lt("created_at", new Date(startedAt.getTime() - ORPHAN_MIN_AGE_MS).toISOString());
 
   const orphans: Orphan[] = (pending ?? []).map((p) => {
     const req = (p.request ?? {}) as OrphanRequest;
@@ -351,63 +390,91 @@ async function reconcileStore(
   });
 
   // Intenciones que el barrido vio pero no pudo descartar por ambigüedad de
-  // teléfono. Nunca caducan: ver matchOrphan.
+  // teléfono. Nunca caducan mientras la duda siga en pie: ver matchOrphan.
   const ambiguous = new Set<string>();
 
-  // Lo que el barrido por fechas alcanza a ver. Sirve para no volver a
-  // preguntar por ello en el pase de rezagadas.
-  const scanned = new Set<string>();
-
   // ¿Se llegó a recorrer el listado ENTERO? Solo entonces "no aparece" significa
-  // "no existe", y solo entonces se puede caducar una intención. Un corte por
-  // error de la API —o por el tope de páginas— deja esto en false a propósito.
+  // "no existe", y solo entonces el cierre podrá caducar una intención. Un corte
+  // por error de la API, por el tope de páginas o por agotar el presupuesto de
+  // tiempo deja esto en false a propósito.
   let sweepComplete = false;
 
-  for (let page = 1; page <= 50; page++) {
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    if (Date.now() > deadline) {
+      report.stoppedBy = "budget";
+      break;
+    }
+
     const res = await listOrders({ apiToken }, { page, limit: 100, startDate, endDate });
     if (!res.ok) {
       report.errors.push(res.error);
+      report.stoppedBy = "api_error";
       break;
     }
+    report.pages = page;
     const rows = res.data.data ?? [];
     if (!rows.length) {
       sweepComplete = true;
       break;
     }
 
+    const known = await prefetchKnownGuides(
+      admin,
+      rows.map((o) => (o.orderNumber ?? "").trim()).filter(Boolean),
+      report,
+    );
+
     for (const order of rows) {
       report.scanned++;
-      const seen = (order.orderNumber ?? "").trim();
-      if (seen) scanned.add(seen);
-      const applied = await applyAliclikSnapshot(order, admin);
-      if (applied.outcome === "applied") report.applied++;
-      else if (applied.outcome === "unknown_order") {
-        report.unknown++;
+      const orderNumber = (order.orderNumber ?? "").trim();
+      // Un identificador que el prefiltro no pudo consultar no es una guía
+      // desconocida: es una guía sin averiguar. Baja al aplicador, que la busca
+      // con `.eq()` igual que siempre.
+      const prefiltered = Boolean(orderNumber) && SAFE_ID.test(orderNumber);
+      const guide = prefiltered ? known.get(orderNumber) : undefined;
 
-        // ¿Es el pedido de una creación que se fue en timeout?
-        //
-        // Primero por la MARCA que estampamos en la nota (§ stampOrderMarker):
-        // es identidad, no parecido. El teléfono queda como respaldo para las
-        // intenciones anteriores a la marca, y solo si es inequívoco: hay
-        // clientes con dos pedidos abiertos a la vez, y pegarle la guía al
-        // equivocado es peor que no pegarla.
-        const orphan = matchOrphan(order, orphans, ambiguous, report);
-        if (orphan && order.orderNumber) {
-          const rescued = await rescueOrphanGuide(admin, order, orphan, report);
-          if (rescued) {
-            await admin
-              .from("aliclik_order_requests")
-              .update({
-                status: "sent",
-                order_number: order.orderNumber,
-                completed_at: new Date().toISOString(),
-                error: "Vinculado por el barrido tras un timeout de creación.",
-              })
-              .eq("id", orphan.id);
-            report.orphansLinked++;
-            // Ya no está huérfana: no volver a usarla en esta pasada.
-            orphans.splice(orphans.indexOf(orphan), 1);
-          }
+      // Conocida y sin novedad: el aplicador habría salido sin escribir nada.
+      if (guide && isStale(order, guide)) {
+        report.unchanged++;
+        continue;
+      }
+
+      let missing = true;
+      if (guide || !prefiltered) {
+        const applied = await applyAliclikSnapshot(order, admin);
+        missing = applied.outcome === "unknown_order";
+        if (applied.outcome === "applied") report.applied++;
+        else if (applied.outcome === "unchanged") report.unchanged++;
+        else if (applied.outcome === "error" && applied.error) {
+          report.errors.push(`snapshot ${orderNumber || "(sin número)"}: ${applied.error}`);
+        }
+      }
+      if (!missing) continue;
+
+      // No la conocemos. ¿Es el pedido de una creación que se fue en timeout?
+      //
+      // Primero por la MARCA que estampamos en la nota (§ stampOrderMarker):
+      // es identidad, no parecido. El teléfono queda como respaldo para las
+      // intenciones anteriores a la marca, y solo si es inequívoco: hay
+      // clientes con dos pedidos abiertos a la vez, y pegarle la guía al
+      // equivocado es peor que no pegarla.
+      report.unknown++;
+      const orphan = matchOrphan(order, orphans, ambiguous, report);
+      if (orphan && order.orderNumber) {
+        const rescued = await rescueOrphanGuide(admin, order, orphan, report);
+        if (rescued) {
+          await admin
+            .from("aliclik_order_requests")
+            .update({
+              status: "sent",
+              order_number: order.orderNumber,
+              completed_at: new Date().toISOString(),
+              error: "Vinculado por el barrido tras un timeout de creación.",
+            })
+            .eq("id", orphan.id);
+          report.orphansLinked++;
+          // Ya no está huérfana: no volver a usarla en esta pasada.
+          orphans.splice(orphans.indexOf(orphan), 1);
         }
       }
     }
@@ -417,290 +484,34 @@ async function reconcileStore(
       sweepComplete = true;
       break;
     }
+    if (page === MAX_PAGES) report.stoppedBy = "max_pages";
   }
 
-  // Las que quedan en `orphans` son las que el barrido NO emparejó: las
-  // rescatadas se sacaron del array al cerrarlas como 'sent'.
-  await expireStaleOrphans(admin, orphans, ambiguous, sweepComplete, now, report);
+  report.sweepComplete = sweepComplete;
+  if (sweepComplete) report.stoppedBy = "";
 
-  await followUpLiveGuides(storeId, apiToken, admin, scanned, now, report);
-  await fillReturnReasons(storeId, apiToken, admin, scanned, now, report);
+  // La duda por ambigüedad se estampa en la propia intención. Antes vivía en el
+  // Set de arriba y le bastaba, porque quien caducaba era esta misma invocación;
+  // ahora quien caduca es otro cron y el hecho tiene que sobrevivir al proceso.
+  if (ambiguous.size) {
+    const { error } = await admin
+      .from("aliclik_order_requests")
+      .update({ ambiguous_at: startedAt.toISOString() })
+      .in("id", [...ambiguous]);
+    if (error) report.errors.push(`marcar ambiguas: ${error.message}`);
+  }
+
+  // La constancia va SIEMPRE, complete o no: una pasada truncada solo anota el
+  // intento y deja intactas las marcas del último barrido bueno.
+  const stateErr = await recordSweep(admin, storeId, {
+    startedAt,
+    finishedAt: new Date(),
+    windowFrom,
+    complete: sweepComplete,
+  });
+  if (stateErr) report.errors.push(`constancia del barrido: ${stateErr}`);
 
   return report;
-}
-
-/**
- * Cierra las intenciones que Aliclik nunca llegó a crear.
- *
- * Es la salida que le faltaba al candado. Sin esto, una creación que se va en
- * timeout SIN que Aliclik cree nada deja la intención en 'pending' para siempre:
- * el único parcial de 0056 solo excluye 'failed', así que el pedido no vuelve a
- * admitir un intento y solo un UPDATE a mano lo desbloquea.
- *
- * El motivo se escribe en la propia fila y distingue los dos casos —ausencia
- * comprobada frente a caducidad por antigüedad—, porque quien lo lea después
- * necesita saber cuál de los dos fue. Se AÑADE al error original en lugar de
- * pisarlo: el timeout que la dejó aquí es la mitad del diagnóstico, y la fila es
- * lo que se le manda al soporte de Aliclik cuando hay que reclamar.
- *
- * Un fallo al cerrar una no detiene a las demás: cada una es independiente y la
- * siguiente pasada lo reintenta.
- */
-async function expireStaleOrphans(
-  admin: ReturnType<typeof createAdminSupabase>,
-  orphans: readonly Orphan[],
-  ambiguous: ReadonlySet<string>,
-  sweepComplete: boolean,
-  now: Date,
-  report: StoreReport,
-): Promise<void> {
-  const selection = selectExpiredOrphans(
-    orphans.map((o): ExpiryCandidate => ({ id: o.id, orderId: o.orderId, createdAt: o.createdAt })),
-    {
-      ambiguous,
-      sweepComplete,
-      expiryMs: ORPHAN_EXPIRY_MS,
-      lookbackMs: LOOKBACK_DAYS * DAY_MS,
-      now,
-    },
-  );
-  report.orphansHeld = selection.held;
-  const causeOf = new Map(orphans.map((o) => [o.id, (o.error ?? "").trim()]));
-
-  for (const decision of selection.expire) {
-    const cause = causeOf.get(decision.id);
-    const reason = cause ? `${cause} — ${decision.reason}` : decision.reason;
-
-    // El `eq('status','pending')` es la guarda contra la carrera con el propio
-    // POST: si la creación terminó bien entre la carga de huérfanas y este
-    // punto, la fila ya está en 'sent' y aquí no se toca nada.
-    const { data, error } = await admin
-      .from("aliclik_order_requests")
-      .update({
-        status: "failed",
-        error: reason,
-        completed_at: now.toISOString(),
-      })
-      .eq("id", decision.id)
-      .eq("status", "pending")
-      .select("id");
-
-    if (error) {
-      report.errors.push(`caducar intención ${decision.id}: ${error.message}`);
-      continue;
-    }
-    if (!(data ?? []).length) continue;
-
-    report.orphansExpired++;
-    if (!decision.verified) report.orphansExpiredUnverified++;
-  }
-}
-
-/**
- * Segundo pase: las guías que la ventana de fechas ya no alcanza — vivas, y
- * anuladas que todavía pueden volver.
- *
- * El barrido de arriba relee por rango de fechas, así que una guía que lleva más
- * de LOOKBACK_DAYS abierta deja de aparecer y su estado se congela: la única
- * forma de moverla era que alguien subiera un Excel. Eso es exactamente lo que
- * pasó con las guías en POR DEVOLVER — el reporte amplio que traía DEVUELTO dejó
- * de subirse el 21-07 y quedaron 131 abiertas, con una mediana de 18 días y
- * hasta 38.
- *
- * Se consultan de una en una porque no hay forma de pedirle a Aliclik "estas
- * guías concretas" — solo rangos y búsqueda por número. `getOrder` no filtra por
- * fecha, así que alcanza cualquier antigüedad. El coste está acotado por
- * `FOLLOW_UP_LIMIT`: a cada pasada le tocan las más calladas, y con el cron cada
- * 20 minutos el atraso se drena en pocas horas sin castigar la API ni agotar
- * `maxDuration`.
- *
- * ALCANZA TAMBIÉN A LAS DEL EXCEL. El identificador de consulta sale de
- * `followUpKey`: `external_order_number` si lo hay y `guide_code` si no. Sin ese
- * respaldo el pase dejaría fuera a 277 de las 583 guías vivas —las que entraron
- * por importación— que son justo las que se congelan.
- *
- * Lo que Aliclik ya no reconoce NO se toca: se cuenta en `followUpMissing`.
- * Cerrar una guía porque una búsqueda vino vacía sería inventar un desenlace.
- *
- * Un fallo aquí no rompe la pasada: el barrido por fechas ya se aplicó y esto
- * es trabajo extra que puede reintentarse en veinte minutos.
- */
-async function followUpLiveGuides(
-  storeId: string,
-  apiToken: string,
-  admin: ReturnType<typeof createAdminSupabase>,
-  scanned: ReadonlySet<string>,
-  now: Date,
-  report: StoreReport,
-): Promise<void> {
-  // ANULADAS INCLUIDAS. Una guía se anula y el paquete vuelve DESPUÉS: sacarla
-  // del seguimiento al cerrarla era perderse el retorno, que es justo lo que
-  // abre la recuperación (MOM §11). Se le da menos cuerda que a una viva —tres
-  // semanas de silencio en vez de sesenta días—, y quien lo decide es
-  // `selectFollowUpGuides`; el filtro de acá solo acota el pool.
-  //
-  // Las vivas se filtran en SQL —y no solo en el selector puro— porque sin ese
-  // filtro la consulta traería las 3.818 guías de la tienda y PostgREST la
-  // truncaría en su tope de filas, recortando el universo en silencio. El
-  // `limit` explícito es el mismo seguro, ordenado por la más callada primero:
-  // hoy las vivas rondan las 250, muy por debajo del tope.
-  const { data, error } = await admin
-    .from("shipments")
-    // `reported_status` entra para poder distinguir la guía que ya va camino de
-    // vuelta (TO_RETURN): tiene reserva propia en cada pasada.
-    .select("id,external_order_number,guide_code,delivery_status,last_report_at,created_at,reported_status")
-    .eq("store_id", storeId)
-    .eq("courier", "aliclik")
-    // `anulado` entra junto a las vivas: el paquete vuelve DESPUÉS de anularse,
-    // así que excluirlas era dejar fuera justo el estado en el que aparece una
-    // devolución. El recorte por antigüedad lo hace `selectFollowUpGuides`, que
-    // le da a una anulada tres semanas de silencio en vez de sesenta días; acá
-    // se acota en SQL para no arrastrar el histórico entero al pool.
-    .in("delivery_status", ["pendiente", "en_ruta", "anulado"])
-    .or(
-      `delivery_status.neq.anulado,last_report_at.gte.${new Date(
-        now.getTime() - FOLLOW_UP_RETURN_WINDOW_MS,
-      ).toISOString()}`,
-    )
-    .order("last_report_at", { ascending: true, nullsFirst: true })
-    .limit(FOLLOW_UP_POOL);
-
-  if (error) {
-    report.errors.push(`seguimiento: ${error.message}`);
-    return;
-  }
-
-  const selection = selectFollowUpGuides((data ?? []) as FollowUpCandidate[], {
-    scanned,
-    limit: FOLLOW_UP_LIMIT,
-    maxSilenceMs: FOLLOW_UP_MAX_SILENCE_MS,
-    now,
-  });
-  report.followUpDeferred = selection.deferred;
-  report.followUpAbandoned = selection.abandoned;
-
-  for (const guide of selection.due) {
-    const key = followUpKey(guide);
-    report.followUpScanned++;
-    try {
-      const res = await refreshAliclikOrder(key, { apiToken }, admin);
-      if (res.outcome === "applied") report.followUpApplied++;
-      else if (res.outcome === "unknown_order") report.followUpMissing++;
-      else if (res.outcome === "error" && res.error) {
-        report.errors.push(`seguimiento ${key}: ${res.error}`);
-      }
-    } catch (e) {
-      report.errors.push(`seguimiento ${key}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-}
-
-/** Lo que necesita la pasada de motivo: con qué preguntar y qué mirar después. */
-interface ReasonProbeCandidate {
-  id: string;
-  external_order_number: string | null;
-  guide_code: string | null;
-  reported_status: string | null;
-  non_delivery_reason: string | null;
-}
-
-/**
- * Tercera vuelta: el MOTIVO de las devoluciones que volvieron sin él (0117).
- *
- * POR QUÉ ES UNA PASADA APARTE. Las dos anteriores persiguen el ESTADO de la
- * guía, y para estas el estado ya está resuelto: volvieron, están `anulado`, no
- * hay nada más que esperar. Lo que falta es el motivo — y el motivo no es un
- * adorno del estado, es el dato con el que se aplica el MOM §11 en
- * lib/return-recovery.ts. Con las dos columnas vacías `wasRefusedInPerson`
- * devuelve `false` y la guía entra a la cola de recuperación, desde donde sale
- * un mensaje pidiéndole un adelanto a una clienta que, por lo que consta, bien
- * pudo haber rechazado el paquete en la puerta.
- *
- * Eran 100 de 130 candidatas: guías importadas del Excel del 20-07 que nunca
- * pasaron por la API. El barrido por fechas ya no las alcanza y el segundo pase
- * tampoco —a una anulada le da tres semanas de silencio y estas llevan más—, así
- * que el ancla acá no es el estado ni la fecha del reporte, sino la PREGUNTA sin
- * responder.
- *
- * Se acota a la ventana de recuperación (`RECOVERY_DEFAULT_MAX_DAYS`): fuera de
- * ella no se le escribe a nadie, así que preguntar sería gastar llamadas en una
- * decisión que ya no se va a tomar. Y se anota en `reason_probed_at` HAYA O NO
- * respuesta, que es lo único que evita repreguntar en bucle cada veinte minutos
- * por un dato que Aliclik quizá no tenga.
- *
- * Un fallo acá no rompe la pasada, igual que el seguimiento: son consultas extra
- * sobre un estado ya aplicado, y se reintentan en el siguiente ciclo.
- */
-async function fillReturnReasons(
-  storeId: string,
-  apiToken: string,
-  admin: ReturnType<typeof createAdminSupabase>,
-  scanned: ReadonlySet<string>,
-  now: Date,
-  report: StoreReport,
-): Promise<void> {
-  const windowStart = new Date(now.getTime() - RECOVERY_DEFAULT_MAX_DAYS * DAY_MS).toISOString();
-  const cooldown = new Date(now.getTime() - REASON_PROBE_COOLDOWN_MS).toISOString();
-
-  const { data, error } = await admin
-    .from("shipments")
-    .select("id,external_order_number,guide_code,reported_status,non_delivery_reason")
-    .eq("store_id", storeId)
-    .eq("courier", "aliclik")
-    .not("returned_at", "is", null)
-    .gte("returned_at", windowStart)
-    // `is null` a secas alcanza porque 0117 dejó una sola forma del vacío y
-    // `reportedStatusPatch` ya no escribe cadenas vacías.
-    .is("reported_status", null)
-    .is("non_delivery_reason", null)
-    .or(`reason_probed_at.is.null,reason_probed_at.lt.${cooldown}`)
-    // Las devueltas más recientes primero: son las que la cola va a trabajar hoy
-    // y las que más lejos están de caerse de la ventana.
-    .order("returned_at", { ascending: false })
-    .limit(REASON_PROBE_LIMIT);
-
-  if (error) {
-    report.errors.push(`motivo: ${error.message}`);
-    return;
-  }
-
-  for (const guide of (data ?? []) as ReasonProbeCandidate[]) {
-    const key = followUpKey(guide);
-    // Ya la releyó el barrido por fechas en esta misma pasada: preguntar otra vez
-    // por lo mismo no cambiaría la respuesta.
-    if (scanned.has(key)) continue;
-
-    report.reasonProbed++;
-    try {
-      const res = await refreshAliclikOrder(key, { apiToken }, admin);
-      if (res.outcome === "error" && res.error) {
-        report.errors.push(`motivo ${key}: ${res.error}`);
-      }
-    } catch (e) {
-      report.errors.push(`motivo ${key}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // Se relee la guía en vez de deducirlo del resultado: `applyAliclikSnapshot`
-    // informa de si aplicó un ESTADO, y acá lo que importa es otra cosa —si la
-    // columna del motivo quedó escrita—. Una guía puede volver `unchanged`
-    // porque el snapshot era más viejo que el último reporte y seguir sin motivo.
-    const { data: after } = await admin
-      .from("shipments")
-      .select("reported_status,non_delivery_reason")
-      .eq("id", guide.id)
-      .maybeSingle();
-
-    if (after && courierReason(after as Pick<ReasonProbeCandidate, "reported_status" | "non_delivery_reason">)) {
-      report.reasonFound++;
-    } else {
-      report.reasonStillBlind++;
-    }
-
-    await admin
-      .from("shipments")
-      .update({ reason_probed_at: new Date().toISOString() })
-      .eq("id", guide.id);
-  }
 }
 
 async function run(req: NextRequest) {
@@ -708,6 +519,7 @@ async function run(req: NextRequest) {
 
   const admin = createAdminSupabase();
   const single = req.nextUrl.searchParams.get("storeId");
+  const deadline = Date.now() + SWEEP_BUDGET_MS;
 
   let storeIds: string[];
   if (single) {
@@ -723,7 +535,13 @@ async function run(req: NextRequest) {
     const creds = await getStoreCreds(storeId, admin);
     if (!creds?.aliclik_api_token) continue;
     try {
-      reports.push(await reconcileStore(storeId, creds.aliclik_api_token, admin));
+      // El presupuesto se reparte entre las tiendas que quedan por barrer. Sin
+      // esto, la primera podría gastárselo entero y las siguientes no llegarían
+      // a leer ni una página — que es la forma silenciosa de que una tienda deje
+      // de reconciliarse sin que nadie lo note.
+      const remaining = storeIds.length - reports.length;
+      const share = Math.max(0, deadline - Date.now()) / Math.max(1, remaining);
+      reports.push(await reconcileStore(storeId, creds.aliclik_api_token, admin, Date.now() + share));
     } catch (e) {
       reports.push({
         ...emptyReport(storeId),

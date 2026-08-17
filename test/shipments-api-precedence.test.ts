@@ -4,6 +4,7 @@ import {
   apiOwnsDeliveryStatus,
   reconcileDeliveryStatus,
   reconcileReportedDeliveryStatus,
+  reopensForFailedAttempt,
 } from "@/lib/shipments";
 
 // La API manda sobre el Excel mientras su lectura siga fresca.
@@ -58,6 +59,39 @@ describe("reconcileReportedDeliveryStatus — qué puede escribir el Excel", () 
     ).toBe("anulado");
   });
 
+  it("EL CASO REAL: si el reporte es POSTERIOR a la lectura de API, manda el reporte", () => {
+    // Guía de Cusco: la API la leyó el 12-ago y dejó de mirarla; el Excel del
+    // 15-ago la trae ENTREGADA. Antes quedaba congelada en "En ruta" hasta que
+    // caducara la ventana de 7 días.
+    expect(
+      reconcileReportedDeliveryStatus("en_ruta", "entregado", hace(3), NOW, {
+        reportAt: new Date(NOW.getTime() - 1 * 3600_000).toISOString(),
+      }),
+    ).toBe("entregado");
+  });
+
+  it("un reporte ANTERIOR a la lectura de API sigue sin poder tocar el estado", () => {
+    expect(
+      reconcileReportedDeliveryStatus("en_ruta", "entregado", hace(1), NOW, {
+        reportAt: new Date(NOW.getTime() - 5 * 86_400_000).toISOString(),
+      }),
+    ).toBe("en_ruta");
+  });
+
+  it("sin fecha de reporte se comporta como antes (la API manda)", () => {
+    expect(
+      reconcileReportedDeliveryStatus("en_ruta", "entregado", hace(1), NOW, { reportAt: null }),
+    ).toBe("en_ruta");
+  });
+
+  it("ganar por recencia no rompe la monotonía: no reabre un terminal", () => {
+    expect(
+      reconcileReportedDeliveryStatus("entregado", "pendiente", hace(3), NOW, {
+        reportAt: new Date(NOW.getTime() - 1 * 3600_000).toISOString(),
+      }),
+    ).toBe("entregado");
+  });
+
   it("una guía que no existe se crea con lo que diga el reporte", () => {
     expect(reconcileReportedDeliveryStatus(null, "pendiente", hace(0), NOW)).toBe("pendiente");
   });
@@ -78,5 +112,49 @@ describe("reconcileReportedDeliveryStatus — qué puede escribir el Excel", () 
         reconcileDeliveryStatus(existing, incoming),
       );
     }
+  });
+});
+
+describe("reopensForFailedAttempt — un NO CONTESTA devuelve la guía a la cola", () => {
+  const base = {
+    existingStatus: "en_ruta",
+    attemptFailed: true,
+    attemptDate: "2026-08-13",
+    scheduledFor: "2026-08-13T00:00:00+00",
+  };
+
+  it("EL CASO: el courier salió el día agendado y no la encontró", () => {
+    // Chimbote: agendada para el 13-ago, intento del 13-ago fallido. Sin esto se
+    // quedaba En ruta, nadie la volvía a llamar y se devolvía a Lima con flete.
+    expect(reopensForFailedAttempt(base)).toBe(true);
+  });
+
+  it("un intento POSTERIOR al día agendado también la reabre", () => {
+    expect(reopensForFailedAttempt({ ...base, attemptDate: "2026-08-14" })).toBe(true);
+  });
+
+  it("un reporte rezagado NO deshace una reprogramación que aún no le toca", () => {
+    // Intento viejo (13-ago) contra una reprogramación nueva para el 20-ago.
+    expect(
+      reopensForFailedAttempt({ ...base, attemptDate: "2026-08-13", scheduledFor: "2026-08-20T00:00:00+00" }),
+    ).toBe(false);
+  });
+
+  it("sin fecha del intento falla del lado seguro (no reabre)", () => {
+    expect(reopensForFailedAttempt({ ...base, attemptDate: null })).toBe(false);
+  });
+
+  it("sin fecha agendada sí reabre: no hay nada que proteger", () => {
+    expect(reopensForFailedAttempt({ ...base, scheduledFor: null, attemptDate: null })).toBe(true);
+  });
+
+  it("solo aplica a guías En ruta", () => {
+    for (const st of ["pendiente", "entregado", "anulado", "transferido", null]) {
+      expect(reopensForFailedAttempt({ ...base, existingStatus: st })).toBe(false);
+    }
+  });
+
+  it("una entrega normal no reabre nada", () => {
+    expect(reopensForFailedAttempt({ ...base, attemptFailed: false })).toBe(false);
   });
 });

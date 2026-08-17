@@ -208,21 +208,27 @@ async function withTodayContactCount(
   }));
 }
 
-/** Resolve eligibility from current stock for every returned pending guide.
- * The database flag remains useful as a cache, but reads must not show a stale
- * “Elegible” after stock reaches zero or is deleted. Stock is grouped by org so
- * users with access to more than one organization never cross-match inventory. */
+/**
+ * Resuelve la elegibilidad Fenix con el stock ACTUAL para TODAS las filas.
+ *
+ * El flag guardado sirve de caché, pero envejece en cuanto entra o sale stock, y
+ * una lectura no puede mostrar un "Elegible" que ya no es cierto —ni al revés,
+ * un "Sin stock" en una guía que sí lo tiene.
+ *
+ * Antes esto era opcional (`includeNonPending`) y por defecto solo recalculaba
+ * las pendientes, por ahorro. Salió caro: cada llamador que olvidaba la opción
+ * mostraba el flag viejo, y el listado llegó a contradecir al drawer para la
+ * MISMA guía. Un ahorro que hay que acordarse de pedir es una trampa, así que
+ * ya no se puede no pedirlo. El stock se agrupa por organización para que quien
+ * ve varias nunca cruce inventarios.
+ */
 async function withCurrentFenixEligibility(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,
   rows: ShipmentRow[],
-  opts: { includeNonPending?: boolean } = {},
 ): Promise<ShipmentRow[]> {
-  const candidates = opts.includeNonPending
-    ? rows
-    : rows.filter((s) => s.status_category === "pending");
-  if (!candidates.length) return rows;
+  if (!rows.length) return rows;
 
-  const storeIds = Array.from(new Set(candidates.map((s) => s.store_id)));
+  const storeIds = Array.from(new Set(rows.map((s) => s.store_id)));
   const { data: stores, error: storesError } = await sb
     .from("stores")
     .select("id,org_id")
@@ -239,7 +245,7 @@ async function withCurrentFenixEligibility(
     .select("org_id,city,product,sku,quantity")
     .in("org_id", orgIds);
   const orderIds = Array.from(
-    new Set(candidates.map((s) => s.order_id).filter((id): id is string => !!id)),
+    new Set(rows.map((s) => s.order_id).filter((id): id is string => !!id)),
   );
   const orderParts = Array.from(
     { length: Math.ceil(orderIds.length / 300) },
@@ -284,7 +290,6 @@ async function withCurrentFenixEligibility(
   }
 
   return rows.map((shipment) => {
-    if (!opts.includeNonPending && shipment.status_category !== "pending") return shipment;
     const orgId = orgByStore.get(shipment.store_id);
     const current = evaluateFenix(
       shipment,
@@ -349,28 +354,19 @@ export async function getStoreShipments(
   // "Última gestión" applies to every view (how long a guide has gone without
   // our team touching it).
   const out2 = await withLastGestion(sb, out, storeIds);
-  if (view !== "pendiente") return out2;
 
-  // Today's contacts and current Fenix eligibility are independent enrichments.
-  // Run them together, then merge the one field produced by the stock read.
-  const [withTodayCalls, withEligibility] = await Promise.all([
-    withTodayContactCount(sb, out2, storeIds),
-    withCurrentFenixEligibility(sb, out2),
-  ]);
-  const eligibilityById = new Map(
-    withEligibility.map((shipment) => [shipment.id, {
-      eligible: shipment.fenix_eligible,
-      reason: shipment.fenix_reason,
-    }]),
-  );
-  return withTodayCalls.map((shipment) => {
-    const eligibility = eligibilityById.get(shipment.id);
-    return {
-      ...shipment,
-      fenix_eligible: eligibility?.eligible ?? shipment.fenix_eligible,
-      fenix_reason: eligibility?.reason,
-    };
-  });
+  // La elegibilidad Fenix se recalcula en TODAS las vistas, no solo en
+  // Pendiente. Antes las demás devolvían el flag GUARDADO, que envejece en
+  // cuanto entra o sale stock: una guía En ruta se listaba como "Sin stock
+  // Fenix" mientras el drawer —que sí recalcula— decía "Fenix ok" para esa
+  // misma guía. Dos respuestas distintas para la misma pregunta.
+  const withEligibility = await withCurrentFenixEligibility(sb, out2);
+  if (view !== "pendiente") return withEligibility;
+
+  // "Contactos de hoy" sí es exclusivo de la cola de Pendiente. Va encadenado
+  // (no en paralelo) sobre las filas ya recalculadas, así que arrastra la
+  // elegibilidad fresca y no hace falta volver a fusionarla.
+  return withTodayContactCount(sb, withEligibility, storeIds);
 }
 
 /** Count of shipments matching a category set (exact, not row-capped). */
@@ -707,9 +703,7 @@ export async function getShipmentWithCalls(
   // The queue only recalculates pending rows for performance, but the drawer
   // must always show a fresh Fenix gate. This matters for audited exceptions on
   // cancelled guides: stock can be added after the guide was marked Anulado.
-  const [currentShipment] = await withCurrentFenixEligibility(sb, [shipmentRow], {
-    includeNonPending: true,
-  });
+  const [currentShipment] = await withCurrentFenixEligibility(sb, [shipmentRow]);
   return {
     shipment: currentShipment ?? shipmentRow,
     calls,

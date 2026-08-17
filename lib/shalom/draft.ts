@@ -347,6 +347,23 @@ export function shalomGuideIsCancelable(guide: {
   return guide.pickup_state == null || CANCELABLE_PICKUP_STATES.has(guide.pickup_state);
 }
 
+/**
+ * De las salidas vivas del pedido, ¿cuál impide vincular esta guía externa?
+ *
+ * La vía de contingencia hereda la regla de la vía API —un pedido no puede
+ * quedar con dos salidas vivas—, pero con un matiz que la vía API no tiene: el
+ * formulario se puede reenviar para completar identificadores que faltaban, y
+ * ese reenvío es idempotente por diseño. Si no se excluyera a sí misma, la
+ * segunda pasada chocaría con la salida que ella misma creó.
+ */
+export function blockingActiveGuide<T extends { guide_code: string | null }>(
+  active: readonly T[],
+  guideCode: string,
+): T | null {
+  const own = guideCode.trim().toUpperCase();
+  return active.find((g) => (g.guide_code ?? "").trim().toUpperCase() !== own) ?? null;
+}
+
 /** Mínimo de un motivo de excepción. Corto de más es "ok" o ".", que no explica nada. */
 export const MIN_OVERRIDE_REASON = 10;
 

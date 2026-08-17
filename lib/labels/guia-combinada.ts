@@ -1,4 +1,10 @@
-// Guía combinada: el rótulo del courier y el interno en una sola hoja (0120).
+// Guía combinada: el rótulo de Tanders y el interno en una sola hoja.
+//
+// HERMANA DE `agency-rotulo.ts`, no copia suya. Aquella resuelve el mismo
+// problema para agencia EMBEBIENDO el PDF que sirve Shalom; acá no hay PDF que
+// embeber —Tanders no expone uno— así que su etiqueta se dibuja campo por campo.
+// Las REGLAS de contenido son las mismas y salen de `rotulo-pdf.ts` para las dos;
+// lo que cada archivo tiene propio es la geometría.
 //
 // EL PROBLEMA. Un paquete de Tanders necesita dos papeles: SU rótulo —el que
 // lee el repartidor y el que escanean ellos— y el nuestro —el QR de la salida y

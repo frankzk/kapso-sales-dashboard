@@ -116,7 +116,7 @@ describe("recomputeInBatches — un fallo cuesta un trozo, no la lista", () => {
       },
       { batch: 2, retry: 1 },
     );
-    expect(r).toEqual({ requested: 5, written: 5, failed: 0 });
+    expect(r).toEqual({ requested: 5, written: 5, failed: 0, error: null });
     expect(vistos).toEqual([["a", "b"], ["c", "d"], ["e"]]);
   });
 
@@ -130,7 +130,7 @@ describe("recomputeInBatches — un fallo cuesta un trozo, no la lista", () => {
       { batch: 4, retry: 1 },
     );
     // La tanda de 4 falla, se reintenta de uno en uno: 3 salvados, 1 perdido.
-    expect(r).toEqual({ requested: 4, written: 3, failed: 1 });
+    expect(r).toEqual({ requested: 4, written: 3, failed: 1, error: "boom" });
   });
 
   it("cuenta los perdidos cuando el trozo entero sigue fallando", async () => {
@@ -141,7 +141,7 @@ describe("recomputeInBatches — un fallo cuesta un trozo, no la lista", () => {
       },
       { batch: 4, retry: 2 },
     );
-    expect(r).toEqual({ requested: 4, written: 0, failed: 4 });
+    expect(r).toEqual({ requested: 4, written: 0, failed: 4, error: "Supabase caído" });
   });
 
   it("no pregunta dos veces por el mismo pedido", async () => {

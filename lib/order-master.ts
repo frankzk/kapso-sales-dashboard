@@ -252,6 +252,9 @@ function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot 
     agency_branch: s.agency_branch ?? null,
     agency_arrived_at: s.agency_arrived_at ?? null,
     agency_expires_at: s.agency_expires_at ?? null,
+    // `custody_transferred_at` es una de las guardas de la corrección de
+    // registro: si la caja llegó a salir, no se toca el estado.
+    custody_transferred_at: s.custody_transferred_at ?? null,
     created_at: s.created_at,
     // Una gestión registrada por el equipo también es un movimiento del pedido.
     updated_at:
@@ -870,6 +873,7 @@ export async function recomputeOrderMaster(
 
     const eventSnapshots: OrderEventSnapshot[] = orderEvents.map((e) => ({
       kind: e.kind,
+      shipment_id: e.shipment_id,
       occurred_at: e.occurred_at,
       courier: e.courier,
       new_status: e.new_status,
@@ -1086,29 +1090,66 @@ export async function recomputeOrderMasterForShipments(
   return recomputeOrderMaster(admin, orderIds);
 }
 
+/** Qué pasó con un recálculo best-effort. */
+export interface RecomputeOutcome {
+  requested: number;
+  written: number;
+  /** El mensaje del fallo si el recálculo lanzó; null si no lanzó. */
+  error: string | null;
+}
+
+/**
+ * ¿Quedaron pedidos sin refrescar?
+ *
+ * Las dos formas del desperfecto cuentan igual, y por eso no basta con mirar la
+ * excepción: el recálculo puede **no lanzar** y aun así escribir menos filas de
+ * las pedidas —un pedido que ya no está, una tanda que se quedó a medias— y el
+ * resultado para quien mira el Master es idéntico: una fila con el estado viejo.
+ */
+export function recomputeFellShort(outcome: RecomputeOutcome): boolean {
+  return Boolean(outcome.error) || outcome.written < outcome.requested;
+}
+
+/** La huella que se escribe cuando el recálculo se quedó corto. */
+export function describeRecompute(outcome: RecomputeOutcome): string | null {
+  if (!recomputeFellShort(outcome)) return null;
+  if (outcome.error) {
+    return `order_master: el recálculo falló para ${outcome.requested} pedido(s) — ${outcome.error}`;
+  }
+  const missing = outcome.requested - outcome.written;
+  return `order_master: ${missing} de ${outcome.requested} pedido(s) no se refrescaron`;
+}
+
 /**
  * Recálculo best-effort: nunca lanza. Para los puntos donde el recálculo es un
  * efecto secundario y no debe tumbar la operación principal (una gestión
- * registrada no se pierde porque el Master no se haya podido refrescar).
+ * registrada no se pierde porque el Master no se haya podido refrescar; el
+ * barrido del cron lo arreglará).
  *
- * VA POR TANDAS. Llamar con mil pedidos de una vez hace que un solo pedido que
- * reviente cueste los mil: todos se quedan con la etapa que tuvieran, y como el
- * `catch` no dejaba rastro, nadie se enteraba. Con tandas un fallo cuesta
- * `SAFE_BATCH`, y al reintentar la tanda rota en trozos pequeños,
- * `SAFE_RETRY_BATCH`. No es la causa del incidente del 09-08 —aquello fue SQL a
- * mano, que nunca pasa por aquí— sino el mismo riesgo por otra puerta: el
- * import de Aliclik llega a llamar con más de mil pedidos de golpe.
+ * BEST-EFFORT NO ES SIN RASTRO, y la diferencia costó dos meses. Este `catch`
+ * vacío se tragó el recálculo de 42 pedidos de Aurela entregados entre el 19-06
+ * y el 27-07-2026: sus guías decían «entregado» y su Master seguía en «Por
+ * confirmar», así que la cola de llamadas siguió pidiendo confirmar pedidos que
+ * el cliente ya tenía en casa. No hubo log, ni contador, ni fila que mirar.
  *
- * Y DEVUELVE LA CUENTA. Seguir sin lanzar es correcto —lo ya ingestado no se
- * deshace porque el Master falle—, pero tragarse el error SIN DEJAR RASTRO no lo
- * es. Quien llama decide qué hacer con `failed`; el barrido de
- * `reconcileOrderMaster` los recoge igual.
+ * Sigue sin lanzar —esa parte era correcta— pero ahora DEVUELVE lo que pasó, y
+ * quien lo llame decide dónde dejarlo escrito. `console.error` es el mínimo:
+ * que el fallo llegue al menos a los logs de ejecución.
+ *
+ * Y VA POR TANDAS. Llamar con mil pedidos de una vez hace que uno solo que
+ * reviente cueste los mil: todos se quedan con la etapa que tuvieran. Con tandas
+ * un fallo cuesta `SAFE_BATCH`, y al reintentar la tanda rota en trozos
+ * pequeños, `SAFE_RETRY_BATCH`. No es la causa del incidente del 09-08 —aquello
+ * fue SQL a mano, que nunca pasa por aquí— sino el mismo riesgo por otra puerta:
+ * el import de Aliclik llega a llamar con más de mil pedidos de golpe.
  */
 export interface SafeRecomputeReport {
   requested: number;
   written: number;
   /** Pedidos que se quedaron sin recalcular. Si no es cero, hay etapas viejas. */
   failed: number;
+  /** El primer fallo, para que el rastro diga POR QUÉ y no solo cuántos. */
+  error: string | null;
 }
 
 /** Tamaño de tanda del recálculo best-effort. */
@@ -1129,20 +1170,32 @@ export async function recomputeInBatches(
   const unique = [...new Set(ids.filter(Boolean))];
   const size = opts.batch ?? SAFE_BATCH;
   const retrySize = opts.retry ?? SAFE_RETRY_BATCH;
-  const report: SafeRecomputeReport = { requested: unique.length, written: 0, failed: 0 };
+  const report: SafeRecomputeReport = {
+    requested: unique.length,
+    written: 0,
+    failed: 0,
+    error: null,
+  };
+  const note = (error: unknown) => {
+    if (report.error === null) {
+      report.error = error instanceof Error ? error.message : String(error);
+    }
+  };
 
   for (const batch of chunk(unique, size)) {
     try {
       report.written += await run(batch);
       continue;
-    } catch {
+    } catch (error) {
       // Cae al reintento en trozos: un solo pedido que reviente no debería
       // llevarse por delante a los otros de su tanda.
+      note(error);
     }
     for (const small of chunk(batch, retrySize)) {
       try {
         report.written += await run(small);
-      } catch {
+      } catch (error) {
+        note(error);
         report.failed += small.length;
       }
     }
@@ -1154,21 +1207,45 @@ export async function recomputeInBatches(
 export async function recomputeOrderMasterSafe(
   admin: SupabaseClient,
   orderIds: readonly string[],
-): Promise<SafeRecomputeReport> {
-  return recomputeInBatches(
+): Promise<RecomputeOutcome> {
+  const report = await recomputeInBatches(
     orderIds,
     async (batch) => (await recomputeOrderMaster(admin, batch)).written,
   );
+  // `failed` no necesita viajar aparte: quien llama ya se entera por
+  // `written < requested`, que es la misma pregunta —¿quedaron etapas viejas?—
+  // y la que entienden `recomputeFellShort` y `describeRecompute`.
+  const outcome: RecomputeOutcome = {
+    requested: report.requested,
+    written: report.written,
+    error: report.error,
+  };
+  const trace = describeRecompute(outcome);
+  if (trace) console.error(trace);
+  return outcome;
 }
 
 export async function recomputeOrderMasterForShipmentsSafe(
   admin: SupabaseClient,
   shipmentIds: readonly string[],
-): Promise<void> {
+): Promise<RecomputeOutcome> {
+  const requested = new Set(shipmentIds.filter(Boolean)).size;
   try {
-    await recomputeOrderMasterForShipments(admin, shipmentIds);
-  } catch {
-    // silencioso a propósito — ver recomputeOrderMasterSafe
+    const { requested: asked, written } = await recomputeOrderMasterForShipments(admin, shipmentIds);
+    // `requested` aquí son GUÍAS y `asked` son los PEDIDOS a los que apuntan:
+    // no son comparables, así que la cuenta que vale es la de pedidos.
+    const outcome = { requested: asked, written, error: null };
+    const trace = describeRecompute(outcome);
+    if (trace) console.error(trace);
+    return outcome;
+  } catch (error) {
+    const outcome = {
+      requested,
+      written: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    console.error(describeRecompute(outcome));
+    return outcome;
   }
 }
 
@@ -1299,6 +1376,15 @@ export async function reconcileOrderMaster(
   // Por tandas y sin abortar: el barrido es justamente lo que tiene que seguir
   // funcionando cuando un pedido concreto revienta, y hasta ahora un solo fallo
   // dejaba sin recalcular a los otros 999 de la pasada.
-  const done = await recomputeOrderMasterSafe(admin, pending);
+  const done = await recomputeInBatches(
+    pending,
+    async (batch) => (await recomputeOrderMaster(admin, batch)).written,
+  );
+  const trace = describeRecompute({
+    requested: done.requested,
+    written: done.written,
+    error: done.error,
+  });
+  if (trace) console.error(trace);
   return { requested: pending.length, written: done.written, failed: done.failed };
 }

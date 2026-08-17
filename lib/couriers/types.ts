@@ -40,6 +40,11 @@ export interface CanonicalReportRow {
   /** Sub-estado de agencia (§10), del catálogo de lib/order-status.ts. */
   pickup_state: string | null;
   attempts: number | null;
+  /** El courier salió y NO encontró a la clienta. No es desenlace: la guía sigue
+   *  viva, pero consume la reprogramación agendada. */
+  attempt_failed: boolean;
+  /** Día del intento ('YYYY-MM-DD'), para poder compararlo con lo agendado. */
+  attempt_date: string | null;
   non_delivery_reason: string | null;
   assigned_at: string | null;
   dispatched_at: string | null;
@@ -79,6 +84,8 @@ export function emptyReportRow(raw: Record<string, string> = {}): CanonicalRepor
     non_delivery_reason: null,
     assigned_at: null,
     dispatched_at: null,
+    attempt_failed: false,
+    attempt_date: null,
     out_for_delivery_at: null,
     rescheduled_at: null,
     closed_at: null,

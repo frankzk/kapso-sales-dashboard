@@ -774,19 +774,83 @@ export function apiOwnsDeliveryStatus(
 }
 
 /**
+ * Un intento fallido (NO CONTESTA) devuelve la guía a la cola de llamadas.
+ *
+ * POR QUÉ EXISTE. Una guía que reprogramamos queda "En ruta". Si el courier
+ * sale ese día y no encuentra a la clienta, sin esta regla se quedaría En ruta
+ * para siempre: nadie la vuelve a llamar, se agota la ventana de reprogramación
+ * de Aliclik y el paquete se devuelve a Lima con el flete a cargo nuestro. Es la
+ * única transición que RETROCEDE, y por eso no puede vivir en la precedencia
+ * monotónica: se decide aquí, con la fecha.
+ *
+ * LA GUARDA DE FECHA es lo que la hace segura. Solo reabre si el intento ocurrió
+ * EN O DESPUÉS del día que agendamos: así un reporte rezagado —que trae el
+ * "no contesta" del intento viejo, anterior a la reprogramación— no deshace una
+ * reprogramación que todavía no le toca. Sin fecha del intento no se reabre
+ * (falla del lado seguro); sin fecha agendada sí, porque no hay nada que
+ * proteger.
+ *
+ * Pure.
+ */
+export function reopensForFailedAttempt(input: {
+  existingStatus: string | null | undefined;
+  attemptFailed: boolean;
+  /** Día del intento, 'YYYY-MM-DD'. */
+  attemptDate: string | null | undefined;
+  /** Lo que agendamos nosotros (`next_followup_at`, ISO). */
+  scheduledFor: string | null | undefined;
+}): boolean {
+  if (!input.attemptFailed) return false;
+  // Solo las que ESTÁN en reparto: una pendiente ya está en la cola, y una
+  // terminal (entregada/anulada/transferida) no se reabre por un intento.
+  if (input.existingStatus !== "en_ruta") return false;
+
+  const scheduled = input.scheduledFor?.slice(0, 10) || null;
+  if (!scheduled) return true;
+  const attempt = input.attemptDate?.slice(0, 10) || null;
+  if (!attempt) return false;
+  return attempt >= scheduled;
+}
+
+/** ¿El reporte observó la guía DESPUÉS que la última lectura de la API? */
+export function reportSeenAfterApi(
+  reportAt: string | null | undefined,
+  apiReportAt: string | null | undefined,
+): boolean {
+  if (!reportAt || !apiReportAt) return false;
+  const r = Date.parse(reportAt);
+  const a = Date.parse(apiReportAt);
+  if (Number.isNaN(r) || Number.isNaN(a)) return false;
+  return r > a;
+}
+
+/**
  * Estado que un REPORTE importado puede escribir sobre una guía existente.
  *
  * Es el envoltorio de `reconcileDeliveryStatus` para la vía del Excel: si la API
  * habló hace poco, su estado se respeta tal cual; si no, se aplica la
  * precedencia monotónica de siempre.
+ *
+ * SALVO que el reporte sea MÁS RECIENTE que esa lectura. La ventana de 7 días
+ * asumía que la API sigue mirando la guía, pero deja de leer algunas y entonces
+ * congelaba el estado: la API mandaba con un dato viejo y el Excel —que sí vio
+ * la entrega— no podía corregirlo hasta que caducara la ventana. Se veía como
+ * una guía ENTREGADA en Aliclik atascada en "En ruta" mientras el resto de sus
+ * campos (fecha, dirección, intentos) sí se actualizaban.
+ *
+ * La regla real no es "la API es mejor fuente", sino "manda quien vio la guía
+ * más tarde".
  */
 export function reconcileReportedDeliveryStatus(
   existing: string | null | undefined,
   incoming: string,
   apiReportAt: string | null | undefined,
   now: Date = new Date(),
+  opts: { reportAt?: string | null } = {},
 ): string {
-  if (existing && apiOwnsDeliveryStatus(apiReportAt, now)) return existing;
+  const apiManda =
+    apiOwnsDeliveryStatus(apiReportAt, now) && !reportSeenAfterApi(opts.reportAt, apiReportAt);
+  if (existing && apiManda) return existing;
   return reconcileDeliveryStatus(existing, incoming);
 }
 

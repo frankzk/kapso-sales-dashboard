@@ -31,7 +31,7 @@ describe("courierReason — qué consta sobre la no entrega", () => {
   it("es null cuando no consta nada, venga como venga el vacío", () => {
     expect(courierReason({ reported_status: null, non_delivery_reason: null })).toBeNull();
     // `aliclikStatusLabel` devolvía cadena vacía al unir tres campos vacíos, así
-    // que la columna llegó a tener dos formas del mismo vacío (0117).
+    // que la columna llegó a tener dos formas del mismo vacío (0119).
     expect(courierReason({ reported_status: "", non_delivery_reason: "" })).toBeNull();
     expect(courierReason({ reported_status: "   ", non_delivery_reason: null })).toBeNull();
   });
@@ -57,7 +57,7 @@ describe("MOM §11 sobre una devolución sin motivo", () => {
 
 // ── El sello de devolución frente a una relectura de la API ─────────────────
 //
-// Importa ahora más que nunca: la pasada de motivo del cron (0117) consulta a
+// Importa ahora más que nunca: la pasada de motivo del cron (0119) consulta a
 // Aliclik justo por las guías YA devueltas. Sin la guarda de `sealReturn`, cada
 // consulta convertiría en «API de Aliclik» un paquete que recibió una persona en
 // el almacén, y de paso borraría su nombre de `returned_by`. La columna que se

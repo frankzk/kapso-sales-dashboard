@@ -1,4 +1,4 @@
-// Guía combinada: el rótulo de Tanders y el interno en una hoja A4 (0120).
+// Guía combinada: el rótulo de Tanders y el interno en una hoja A4.
 //
 // Ver la cabecera de lib/labels/guia-combinada.ts para el porqué del formato.
 // Acá solo se reúnen los datos: la ficha que Tanders tiene de la salida

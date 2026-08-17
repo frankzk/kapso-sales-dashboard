@@ -96,7 +96,45 @@ Reglas:
   `pedido + consecutivo` y el rótulo dice `Por definir`.
 - La regla de repetición por modalidad se evalúa cuando el courier se conoce; el
   máximo de cinco salidas rige siempre, porque no depende del courier.
+- **Crear la guía de un courier (Tanders, Aliclik, Shalom) RELLENA la salida
+  `por definir` del pedido en vez de abrir una segunda.** Fijar el courier es lo
+  que la salida estaba esperando; es la misma caja, ya armada y rotulada. Se
+  conservan el consecutivo, el `output_code`, el QR, el estado de preparación y
+  el de custodia: el rótulo interno dice `Por definir` y el equipo le pega encima
+  el del courier, así que sigue siendo válido. Solo se rellena si sigue
+  `pendiente`, sin courier decidido, y la caja no cambió de custodia — las mismas
+  condiciones que para anularla, más el courier sin decidir; con courier ya
+  puesto, escribir encima escondería un cambio de courier. Al rellenarla, la vía
+  pasa a ser la del courier, así que deja de ofrecerse «Anular salida»: esa guía
+  ya existe del otro lado y se anula desde su propio botón.
+- **Por lo mismo, una salida `por definir` no cuenta como «guía activa»** para el
+  freno que impide emitir dos guías. No es otro paquete en la calle: es esta caja
+  esperando courier. Contarla obligaba a anular la salida para poder emitir la
+  guía, y anularla arrastraba el pedido a `anulado` — con un solo camino de ida.
 - Cada salida nueva genera un QR nuevo.
+- Una salida de **agencia** se imprime en UN solo papel: la etiqueta del courier
+  arriba —incrustada tal cual desde su API, nunca redibujada— y debajo la banda
+  de Kapta con el QR de la salida, el pedido, la guía y los productos con su
+  cantidad. El papel cuelga de la salida del courier, que ya trae su propio QR,
+  así que el almacén no necesita crear una salida `por definir` para tener algo
+  que escanear. La medida de la página del courier no se da por supuesta: se
+  escala conservando la proporción contra lo que devuelva su API, y **la banda
+  arranca donde termina su etiqueta**, no a una altura fija — un reparto fijo
+  solo acierta con una proporción, y la de cada courier es la suya. El sitio que
+  sobra se reparte en QR más grande y más líneas de producto, no en margen.
+- Una salida de ruta manual se puede **anular** mientras siga `pendiente` y la
+  caja no haya cambiado de custodia. Anular no borra: la fila conserva su
+  consecutivo y su historial, y el consecutivo no se reutiliza. Es la corrección
+  de un registro —la salida creada por error o con el courier equivocado—, no un
+  hecho logístico. Una vez transferida la custodia al motorizado hay un paquete
+  en la calle y el camino es recibir su retorno, no anular.
+- Anular es obligatorio que exista porque el sistema ya lo exigía: crear una guía
+  de agencia rechaza el pedido con una salida activa, y el cierre no finaliza con
+  salidas activas. Sin la acción, una salida `por definir` creada por error deja
+  al pedido sin poder emitir guía **ni** cerrarse.
+- Las salidas con API propia (Aliclik, Shalom, Tanders) no se anulan por esta
+  vía: tienen la suya, que además avisa al courier. Marcarlas anuladas solo de
+  nuestro lado dejaría la guía viva en el courier.
 - El courier y la fecha son metadatos visibles; no forman parte del token QR.
 - El código de guía externa se conserva separado.
 - El límite global acordado es cinco salidas por pedido.
@@ -381,6 +419,19 @@ Reglas:
     sin señal de despacho → `pendiente` (sigue en almacén).
   - Un valor no reconocido no inventa estado: cae al binario histórico
     entregado-vs-pendiente.
+- **Excepción — un `NO CONTESTA` devuelve la guía a `pendiente`.** Es la única
+  transición que RETROCEDE, así que se decide aparte de la precedencia
+  monotónica (`reopensForFailedAttempt`) y solo si el intento ocurrió **en o
+  después** del día agendado (`next_followup_at`): un reporte rezagado con un
+  "no contesta" viejo no deshace una reprogramación que todavía no le toca. Sin
+  fecha del intento no reabre (falla del lado seguro); sin fecha agendada sí,
+  porque no hay nada que proteger. Motivo operativo: si la guía se queda `en
+  ruta` nadie la vuelve a llamar, se agota la ventana de reprogramación de
+  Aliclik y el paquete se devuelve a Lima con el flete a cargo nuestro.
+  La regla vive en **las tres** vías que escriben estado —el barrido de la API
+  (`aliclik-track`), el Excel de Aliclik (`aliclik-ingest`) y el Excel de los
+  demás couriers (`report-ingest`)—; en una sola no sirve, porque la otra
+  devolvería la guía a `en_ruta` en el siguiente barrido.
 - A diferencia de la vía autenticada, el Excel **solo** fija `delivery_status`:
   no avanza `custody_state` ni `preparation_state` (el dato de despacho del Excel
   es ruidoso — `VALIDADO` persiste incluso en entregados). Por eso un `VALIDADO`
@@ -390,6 +441,26 @@ Reglas:
   `anulado` general cuando **todas** sus guías están anuladas y ninguna activa
   (la operación lo dio por perdido), reversible con un override; nunca anula el
   pedido en Shopify (§3.4, §9.4).
+- **Una corrección de registro no cuenta para esa regla.** La salida anulada
+  **por la acción «Anular salida»** queda FUERA del reparto: no cierra el pedido
+  como anulado ni lo sostiene «en proceso». El §4 ya la define como corregir el
+  courier equivocado, no como un hecho logístico, y una caja que nunca salió de
+  la empresa no puede ser prueba de que nadie se rindió. Sin esta excepción el
+  pedido de una sola salida quedaba anulado al corregirlo —la regla se cumplía
+  por vacío— y encima bloqueaba la guía nueva, que era el motivo de la
+  corrección. La fila anulada sigue visible en «Salidas y guías» con su
+  consecutivo; lo que no hace es decidir el estado. El pedido vuelve a
+  `Preparación · Por armar`: el rótulo ya se generó y la caja pudo quedar
+  armada, así que retroceder más desharía trabajo físico real.
+- **La corrección se PRUEBA por su evento `route_output_cancelled`, que nombra
+  la salida; no se deduce de su forma.** Deducirla de «ruta manual + nunca
+  despachada + nunca transferida» parece equivalente y no lo es: al finalizar un
+  expediente el cierre exige que no queden salidas activas, así que un pedido
+  cerrado normalmente termina con esa misma huella. Medido en producción, esa
+  forma la cumplían 368 pedidos y solo 2 se habían anulado por el botón; 336 ya
+  estaban finalizados. Tratarlos como correcciones habría reabierto expedientes
+  cerrados por S/ 56.216. Si la salida llegó a despacharse o a cambiar de
+  custodia después, la excepción tampoco aplica aunque exista el evento.
 - Debe existir una alternativa manual al escaneo, siempre con actor, fecha y
   motivo registrados.
 - Incidencias mínimas: datos incompletos, producto faltante, rótulo incorrecto,
@@ -540,6 +611,43 @@ Ejemplos:
 | Entregado, courier aún no liquidó | Por cerrar | Pendiente de liquidación |
 | Shopify anulado, paquete aún con courier | Por cerrar | Devolución física pendiente |
 | Shopify anulado, nunca se despachó | Finalizado | Anulado cerrado |
+
+### 7.1 La macroetapa es una foto, y hay que revelarla
+
+Esta precedencia no se evalúa al mirar el Master: se evalúa al **recalcular**, y
+el resultado se guarda en `order_master`. Lo que la operación ve es la última
+foto revelada, no el estado de ahora. Por eso el cajón de un pedido puede
+enseñar dos verdades a la vez —«SALIDAS Y GUÍAS» lee las guías en vivo, la
+cabecera y la macroetapa leen la foto— y esa contradicción es siempre el mismo
+síntoma: **el recálculo no llegó a correr**.
+
+El recálculo es best-effort en casi todos los puntos que lo disparan, y con
+razón: una gestión registrada no se pierde porque el Master no se haya podido
+refrescar. **Pero best-effort no es sin rastro.** Un `catch` vacío se tragó el
+refresco de 42 pedidos de Aurela entregados entre el 19-06 y el 27-07-2026: sus
+guías decían «entregado» y su Master seguía en «Por confirmar», así que la cola
+de confirmación siguió pidiendo llamar a clientes que ya tenían el paquete en
+casa. Dos meses sin que nadie lo viera, porque no había nada que ver.
+
+Reglas que salen de ahí:
+
+- **Un recálculo que no se completa deja constancia**, y en el sitio donde
+  alguien vaya a mirar: la fila del lote de importación (`import_batches.errors`)
+  cuando lo dispara un reporte, la respuesta del cron cuando lo dispara un cron,
+  y los logs de ejecución siempre.
+- **Se cuenta lo escrito, no lo pedido.** Informar el tamaño de la lista de
+  entrada da la misma cifra tanto si el recálculo funcionó como si se cayó
+  entero.
+- **Fallar y escribir de menos cuentan igual.** El recálculo puede no lanzar y
+  aun así refrescar menos pedidos de los pedidos; para quien mira el Master el
+  resultado es idéntico, una fila con el estado viejo.
+- Cuando el Master y las guías se contradicen, **la fuente de verdad son las
+  guías**: la foto está vieja, no equivocada. Se arregla recalculando
+  (`scripts/backfill-mom.ts` es idempotente), nunca editando la foto a mano.
+
+Un estado congelado por un humano (`status_source = 'manual'`) **no** es una foto
+vieja: es una decisión, el recálculo no la pisa (§4) y no cuenta como
+desperfecto aunque contradiga a las guías.
 
 ## 8. Confirmación y riesgo del cliente
 
@@ -833,6 +941,19 @@ La marca vive en `shipments.api_report_at`, que **solo** escribe la vía API.
 `last_report_at` no sirve para esto: lo escriben las dos vías, así que no permite
 saber quién habló último.
 
+**La guarda monotónica del barrido tiene el mismo problema, y por eso también
+tiene su propia marca** (`api_updated_at`, 0117). El barrido descarta un snapshot
+de Aliclik más viejo que el último que aplicó; para saberlo compara el `updatedAt`
+de la API contra esa marca, **nunca** contra `last_report_at`. Son dos relojes
+distintos: `updatedAt` dice cuándo se movió el pedido en Aliclik y
+`last_report_at` cuándo miramos nosotros —y el Excel lo pone en la hora de la
+subida—. Compararlos entre sí hacía que cada reporte importado dejara la marca en
+«ahora» para todas las guías del archivo y, desde ese instante, el barrido las
+diera por rezagadas y no volviera a tocarlas hasta que Aliclik moviera el pedido:
+la vía automática se apagaba justo sobre las guías que más se miran. Sin marca
+previa no hay guarda —una guía nunca leída por la API se aplica y queda sellada
+para la próxima—, así que la columna no necesita backfill.
+
 Alcance de la API: empareja por `external_order_number` y, si no lo hay, por
 `guide_code`.
 
@@ -880,6 +1001,14 @@ Seguimiento de una guía hasta que cierra:
 - Se deja de preguntar cuando la guía termina (entregada, anulada o
   transferida) o tras **60 días sin noticias**. Ese silencio no cierra la guía:
   solo detiene la consulta.
+- **La cola se ordena por a quién hace más que no se le pregunta**, no por quién
+  lleva más callada. Parece lo mismo y no lo es: preguntar por una guía parada
+  devuelve un estado que la guarda monotónica descarta sin escribir, así que su
+  silencio no se acorta y volvía a encabezar la cola en la pasada siguiente,
+  para siempre. Con un tope de consultas por pasada, las de cabeza se repetían y
+  las del fondo no llegaban a tener turno. Lo que ordena es el turno —que
+  siempre avanza porque se sella al preguntar, responda Aliclik lo que responda—
+  y, entre iguales, la más callada primero.
 - El seguimiento alcanza **también a las guías nacidas del Excel**: pregunta por
   `external_order_number` si lo hay y por `guide_code` si no. Son el mismo
   identificador por dos vías, así que limitarlo al primero dejaría fuera a la
@@ -887,6 +1016,59 @@ Seguimiento de una guía hasta que cierra:
 - Una guía que Aliclik ya no reconoce **no se cierra**: se cuenta aparte para
   revisión humana. Dar por terminada una guía porque una búsqueda vino vacía
   sería inventar un desenlace.
+
+**Cuando el reporte trae el código definitivo de una guía nuestra.** Una guía
+creada por API nace con un código provisional (`ALC…`) y el reporte la trae
+después con el impreso (`AUR5X…`). Que son la misma guía se reconoce por, en este
+orden: el `orderNumber` si el reporte lo trae, el pedido ya vinculado, nombre de
+pedido **y** teléfono juntos, y —último— solo el teléfono.
+
+El teléfono a secas existe para la guía que **todavía no tiene pedido**: ahí no
+hay nada más con qué reconocerla. No sirve para ganarle a un nombre que ya está
+escrito y dice otra cosa. Cuando la fila nombra un pedido y el candidato lleva
+otro, eso no es falta de evidencia sino evidencia **en contra**, y no se
+promueve. Perder la promoción no cuesta nada —la guía se ingesta por Excel como
+cualquier otra—; acertarle al pedido equivocado sí.
+
+Esta retención es preventiva: a 11-08-2026 **ninguna guía se ha promovido nunca**
+en producción, así que el camino existe pero no se ha usado. No confundirla con
+el emparejamiento del importador, que sí falló y se trata justo debajo.
+
+#### El código impreso nombra a su pedido, y manda sobre el teléfono
+
+Al quitar el prefijo `AUR5X` quedan tres familias de código, y medidas sobre las
+3.976 guías con pedido (11-08-2026) se comportan de forma tajante:
+
+| dígitos | guías | terminan en el nº de su pedido |
+| --- | --- | --- |
+| 12 | 2.841 | 0 |
+| 7 | 12 | 0 |
+| 6 | 1.179 | 1.162 (98,6%) |
+
+Las de doce y siete son identificadores de Aliclik. **La de seis es el número del
+pedido**, tecleado por quien creó la guía en el portal. Por eso solo esa se lee
+como referencia: en las otras dos, leer un pedido ahí dentro sería leer ruido.
+
+**Regla: si el código nombra un pedido, la guía no admite otro.** Los demás
+candidatos se descartan antes de emparejar, y si el nombrado no está entre ellos
+la fila va a revisión.
+
+Lo que evita es un error que el teléfono solo no puede ver. El emparejamiento por
+teléfono exige un único pedido con ese número, y lee ese «uno» como *solo hay
+uno* cuando significa *solo he ingerido uno*: el pedido bueno puede no haber
+llegado aún desde Shopify. Ocurrió **17 veces entre el 01-07 y el 23-07-2026**,
+todas con el mismo perfil —la guía se importó antes que su pedido, el teléfono
+señalaba a un pedido anterior del mismo cliente, y los 17 dueños reales entraron
+en la carga del 26-07—. Nadie volvió a mirar aquellos enlaces, así que 17 pedidos
+cargan el desenlace de un paquete ajeno y otros 17 figuran sin salida.
+
+El teléfono es la identidad del cliente (§8), no la del pedido, y un cliente que
+vuelve a comprar tiene dos. Por eso no basta para elegir entre ellos.
+
+> ⚠️ **Frágil a propósito, y hay que vigilarlo**: la regla distingue las familias
+> por longitud, y hoy los pedidos de la operación son de seis dígitos
+> (106620–127540). El día que lleguen al millón, siete dígitos dejarán de ser
+> «identificador de Aliclik» y habrá que revisar esto.
 
 ### 10.2 Crear una guía en Aliclik: el candado y su caducidad
 
@@ -916,16 +1098,38 @@ Sin esa caducidad el candado no tenía salida: la intención quedaba viva para
 siempre y el pedido inoperable hasta que alguien lo desbloqueara a mano. Ocurrió
 el 08-08-2026 con dos pedidos, durante una caída de la API de Aliclik.
 
+**Barrer y cerrar son dos trabajos, y corren por separado.** Recorrer el listado
+por fechas es lo largo; caducar candados y perseguir rezagadas es lo corto y lo
+urgente. Mientras compartieron invocación, lo corto dependía de que lo largo
+terminase a tiempo — y dejó de terminar: el recorrido creció hasta agotar el
+límite de ejecución y el 10-08-2026 las nueve pasadas de tres horas seguidas
+murieron dentro del bucle. El barrido parecía sano porque aplicaba estados antes
+de morir, pero **nada de lo que iba después llegó a ejecutarse nunca**. Un
+candado duró más de diez horas y 515 guías vivas acumularon una media de 8 días
+sin noticias. Hoy el cierre tiene su propio cron y su propio presupuesto.
+
+Separarlos obliga a que la prueba de haber buscado **sobreviva a la invocación
+que la produjo**: el barrido deja constancia de sí mismo —cuándo empezó, cuándo
+terminó y qué ventana cubrió— y el cierre la lee. Ninguna de las retenciones de
+abajo se aflojó al mudarse; lo único que cambió es de dónde sale la evidencia.
+
 **Cuándo NO se caduca**, porque liberar de más cuesta una guía duplicada —dinero
 real y ventana de cancelación corta— mientras que liberar de menos solo cuesta
 esperar:
 
-- **Si el barrido no pudo recorrerse entero, no se caduca nada.** «Buscamos y no
-  está» no es «no pudimos buscar», y es justo durante una caída de Aliclik cuando
-  las dos se confunden: sin esta condición, la misma caída que provoca los
-  timeouts liberaría los candados que protegen de ellos.
+- **Si no consta un barrido completo y reciente, no se caduca nada.** «Buscamos y
+  no está» no es «no pudimos buscar», y es justo durante una caída de Aliclik
+  cuando las dos se confunden: sin esta condición, la misma caída que provoca los
+  timeouts liberaría los candados que protegen de ellos. Que la constancia además
+  **caduque** —dos horas, unas seis pasadas— evita lo contrario: dar por buena
+  para siempre la última búsqueda que salió bien.
+- **Si el barrido arrancó antes de que naciera la intención, tampoco.** Pudo
+  pasar de largo por la zona del listado donde estaría el pedido, así que no
+  haberlo visto no dice nada de él.
 - **Si la ausencia quedó en duda, tampoco.** Una intención cuyo teléfono señalaba
-  a varios pedidos abiertos a la vez queda para revisión humana.
+  a varios pedidos abiertos a la vez queda para revisión humana. La duda se
+  anota en la propia intención y vale para el barrido que la vio: si el siguiente
+  barrido completo no la vuelve a marcar, la intención vuelve a ser caducable.
 - **Si la fecha de creación cayó fuera de la ventana del barrido**, la intención
   caduca igual —lleva demasiado bloqueando—, pero el motivo registra que la
   ausencia **no** pudo comprobarse, y se cuenta aparte. Antes de reintentar hay
@@ -940,6 +1144,23 @@ creada se identifica por su número, y una intención a la espera indica que no
 reintente y **cuándo** se libera sola. Un mensaje único para todos los casos
 —«ya hay una creación en curso o completada»— era falso justo en el caso que
 importa y no ofrecía salida.
+
+**El semáforo cubre los dos caminos.** Cotizar y crear son endpoints distintos y
+se caen por separado: el 10-08-2026 se crearon 15 guías sin un fallo hasta las
+10:44 y a las 11:19 la creación empezó a irse en timeout mientras el sondeo de
+cotización seguía verde. Un solo foco para ambos miente justo cuando más caro
+sale, porque invita a pulsar el botón que deja el pedido bloqueado.
+
+- **Cotizar se sondea**; es una lectura y no cuesta nada repetirla.
+- **Crear NO se sondea.** Es una escritura irreversible con dinero real: no hay
+  forma de probarlo sin crear una guía de verdad. Su salud se **deduce** de los
+  intentos que la operación ya hizo.
+- Se avisa con **dos fallos seguidos** y ningún éxito posterior, dentro de una
+  ventana reciente. Uno solo no basta —pasa con la API sana— y encender el foco
+  por él enseñaría a ignorarlo. El aviso se apaga en cuanto una creación vuelve
+  a funcionar.
+- El aviso nombra la **consecuencia**, no el síntoma: lo que la operadora
+  necesita saber no es que falla, sino que cada intento le bloquea el pedido.
 
 Indemnización Aliclik:
 
@@ -993,9 +1214,9 @@ Mientras Aliclik no dé una vía por guía impresa, **subir el reporte es parte 
 la operación de recuperar**, no una tarea administrativa: si no se sube, la cola
 se queda vacía y parece que no hubo devoluciones.
 
-**Toda devolución se registra con su procedencia** (`returned_source`, 0116). El
+**Toda devolución se registra con su procedencia** (`returned_source`, 0118). El
 sello lo pueden poner tres manos —la API de Aliclik, su reporte en Excel, o una
-persona recibiendo el paquete en el almacén— y hasta 0116 las tres se veían
+persona recibiendo el paquete en el almacén— y hasta 0118 las tres se veían
 iguales en pantalla: una guía sellada a mano figuraba como «devuelta» sin nada
 que la distinguiera de una con constancia del courier. Sobre este dato se manda
 un mensaje que **pide un adelanto**, así que la cola marca «sellada a mano»
@@ -1043,13 +1264,19 @@ Qué guía entra:
   1. La cola **lo escribe**: donde no hay motivo dice «sin motivo del courier ·
      no consta si la rechazó en la puerta», y el confirmar del envío lo repite.
      Un guion se lee «no hay nada que decir»; lo que pasa es otra cosa.
-  2. El cron **sale a buscarlo**. Una tercera pasada consulta a Aliclik por las
-     devoluciones sin motivo dentro de la ventana de recuperación
-     (`fillReturnReasons`). Las dos pasadas anteriores no las alcanzaban: la de
-     fechas se les cayó del rango y la de rezagadas le da a una anulada tres
-     semanas de silencio. Se anota en `reason_probed_at` haya o no respuesta,
-     que es lo único que evita repreguntar en bucle por un dato que Aliclik
-     quizá no tenga.
+  2. El cron **sale a buscarlo**. Una tercera pasada del cron de cierre
+     (`/api/cron/aliclik-close`, `fillReturnReasons`) consulta a Aliclik por las
+     devoluciones sin motivo dentro de la ventana de recuperación. Va ahí y no
+     en el barrido por dos razones: es donde ya vive la persecución de guías una
+     a una, y es la que tiene presupuesto propio (§10.2) — colgada del final del
+     barrido correría el mismo riesgo de no ejecutarse nunca. Con lo que le
+     sobre del reloj, además: persigue un dato que ya llegó tarde, mientras la
+     de rezagadas persigue estados que aún se pueden mover.
+
+     Las otras dos pasadas no las alcanzaban: la de fechas se les cayó del rango
+     y la de rezagadas le da a una anulada tres semanas de silencio. Se anota en
+     `reason_probed_at` haya o no respuesta, que es lo único que evita
+     repreguntar en bucle por un dato que Aliclik quizá no tenga.
 
   **No excluye.** Sacar de la cola a las 100 sería tratar la falta de dato como
   si fuera un rechazo, el mismo error que se está corrigiendo, y en la dirección
@@ -1229,10 +1456,20 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   `930 555 309` o conservar de forma legible la terminación `309`. Cada señal
   muestra su propio check verde; la cuenta solo queda `verificada` cuando ambas
   coinciden.
-- Si cualquiera de las dos señales leídas pertenece a otra cuenta, el pago queda
-  en revisión y Kapta bloquea su validación también en servidor. Si una señal no
-  pudo leerse, se conserva la imagen y se exige contraste manual sin inventar el
-  dato faltante.
+- Si cualquiera de las dos señales leídas **contradice** la cuenta esperada, el
+  pago queda en revisión y Kapta bloquea su validación también en servidor. Si
+  una señal no pudo leerse, se conserva la imagen y se exige contraste manual
+  sin inventar el dato faltante.
+- Un destinatario leído **a medias** no contradice: el voucher de Yape y el de
+  BCP truncan o enmascaran el nombre por ancho de pantalla («Grupo Gf S»,
+  «Grupo G\*\*\*»). Una lectura que empieza como el nombre esperado y se corta
+  no verifica la cuenta, pero tampoco la acusa: queda como verificación parcial
+  con contraste manual, nunca como *receptor distinto*. La regla se lee por
+  palabras y desde el principio, que es como recorta una pantalla; el celular no
+  admite este matiz, porque leído y sin terminar en `309` es otra cuenta.
+- Esta distinción es de seguridad, no de comodidad: una alarma de desvío que
+  salta casi siempre por un nombre cortado deja de leerse, y tiene que ser
+  creíble el día que el receptor sea de verdad otro.
 - La captura del comprobante permanece grande y visible durante la revisión y
   puede abrirse a tamaño completo. `Titular/pagador` no es un campo operativo:
   si la visión lo obtiene, se conserva internamente para trazabilidad y
@@ -1826,6 +2063,29 @@ recoge; antes no lo recogía nadie.
 - Olva no se crea con menos de S/ 30 validados aunque el navegador sea alterado.
 - Dos salidas del mismo pedido reciben QR y código `Sxx` diferentes.
 - Con una salida activa, la salida adicional exige una justificación auditada.
+- La vía de contingencia de Shalom («Ya la creé en Shalom Pro») rechaza el pedido
+  que ya tiene una salida viva, igual que la vía API. Se salta los frenos del
+  API —para eso existe— pero no este: ahí el problema no es la llamada, es que
+  el pedido acabaría con dos paquetes en la calle. Reenviar la **misma** guía
+  para completar identificadores sigue siendo idempotente. Y como cualquier otra
+  vía de guía, **rellena** la salida «por definir» si la hay en vez de abrir otra.
+- Rellenar decide el **courier** de una caja que ya existe: no toca el avance de
+  preparación, la custodia ni la identidad de la salida (QR, consecutivo,
+  código). Escribir «rótulo generado» sobre una caja ya escaneada como «listo
+  despacho» sería borrar un escaneo real para registrar una guía.
+- **Anular la guía de un courier sobre una salida rellenada la devuelve a «por
+  definir», no a anulada.** La caja no desaparece: sigue armada, rotulada y en el
+  almacén, y lo único que dejó de ser cierto es quién la lleva. Marcarla anulada
+  cerraba la venta entera cuando era la única salida —el pedido pasa a `anulado`
+  con todas sus guías anuladas— y encima bloqueaba la guía nueva que motivaba la
+  corrección. Que una salida fue rellenada se sabe por su **evento**, no por su
+  forma: una fila rellenada y una creada de cero acaban idénticas.
+- Una salida de ruta manual pendiente y en almacén ofrece **Anular salida** en
+  «Salidas y guías», con confirmación en dos pasos y evento auditado. Tras
+  anularla, el pedido vuelve a poder crear guía de agencia y a finalizarse.
+- La misma salida ya transferida al motorizado **no** ofrece anular, y el
+  servidor la rechaza aunque se llame a la acción directamente: esa se cierra
+  recibiendo su retorno.
 - Un courier con salida **viva** deja de ofrecerse, y la tarjeta **nombra esa
   salida**: número del courier, código corto y el estado que el courier reporta.
   Decir «no disponible» sin decir cuál obliga a bajar a «Salidas y guías» para

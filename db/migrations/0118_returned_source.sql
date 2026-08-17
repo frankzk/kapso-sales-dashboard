@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0116_returned_source.sql — quién dio por devuelta la guía.
+-- 0118_returned_source.sql — quién dio por devuelta la guía.
 --
 -- `returned_at` es el sello que abre la cola de recuperación (MOM §11.1): en
 -- cuanto tiene fecha, el pedido pasa a `devuelto` y la clienta entra en la lista
@@ -38,7 +38,7 @@ alter table shipments
   add column if not exists returned_by uuid references auth.users(id) on delete set null;
 
 comment on column shipments.returned_source is
-  'Procedencia del sello de devolución: aliclik_api | aliclik_report | <courier>_report | manual. NULL = guía sin devolver (o sellada antes de 0116 sin rastro). Se escribe JUNTO a returned_at y no se pisa mientras el sello siga en pie.';
+  'Procedencia del sello de devolución: aliclik_api | aliclik_report | <courier>_report | manual. NULL = guía sin devolver (o sellada antes de 0118 sin rastro). Se escribe JUNTO a returned_at y no se pisa mientras el sello siga en pie.';
 
 comment on column shipments.returned_by is
   'Quién marcó la devolución cuando returned_source = manual. NULL para las que reportó el courier.';

@@ -96,7 +96,18 @@ roles and the `auth` schema, so it just works.
    - `/api/cron/aliclik-reconcile` — cada 20 min. Red de seguridad del webhook de
      Aliclik, que llega **sin firma y sin garantía de entrega**: relee los
      pedidos de los últimos 14 días y resuelve las creaciones que se fueron en
-     timeout. Si el webhook falla, un estado tarda como mucho un ciclo.
+     timeout. Si el webhook falla, un estado tarda como mucho un ciclo. Deja
+     constancia de cada pasada en `aliclik_sweep_state`, que es de lo que se fía
+     el cierre de abajo.
+   - `/api/cron/aliclik-close` — cada 20 min, al medio de las del barrido
+     (`10,30,50`). Caduca los candados de creación que ya no protegen nada
+     (MOM §10.2) y persigue de una en una a las guías vivas que la ventana de 14
+     días ya no alcanza — sobre todo devoluciones, que tardan semanas.
+     **Es un cron aparte a propósito**: las dos tareas iban al final del barrido
+     y dejaron de ejecutarse por completo cuando el recorrido empezó a agotar
+     `maxDuration`. Si vuelven a fallar, el informe dice por dónde: `orphansHeld`
+     explica cada candado que no se soltó y `sweepAgeMinutes` delata un barrido
+     que dejó de completarse.
    - `/api/cron/backup` — daily 08:00 UTC (~03:00 Lima). Snapshots the
      dashboard-native tables (`leads`, `lead_calls`, `shipment_calls`) to CSV in
      the private Supabase Storage bucket `db-backups` (auto-created, keeps the

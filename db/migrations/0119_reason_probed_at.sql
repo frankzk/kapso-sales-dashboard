@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0117_reason_probed_at.sql — cuándo le preguntamos a la API por el motivo.
+-- 0119_reason_probed_at.sql — cuándo le preguntamos a la API por el motivo.
 --
 -- EL MOTIVO DEL COURIER ES LO QUE APLICA EL MOM §11. La regla —«si la clienta
 -- vio el producto y aun así lo rechazó, normalmente no reenviar»— se evalúa

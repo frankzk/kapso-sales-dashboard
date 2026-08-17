@@ -12,7 +12,7 @@ import {
   quoteShippingCost,
   type AliclikClientOpts,
 } from "@/lib/aliclik";
-import { statusFingerprint } from "@/lib/aliclik-track";
+import { apiSnapshotIsStale, statusFingerprint } from "@/lib/aliclik-track";
 
 const BASE = "https://api.aliclik-test.local";
 
@@ -285,6 +285,56 @@ describe("statusFingerprint", () => {
     const base = { orderNumber: "ALC1", status: "PENDING_DELIVERY", callStatus: "CONFIRMED", dispatchStatus: "TO_PREPARE" };
     const moved = statusFingerprint({ ...base, dispatchStatus: "PICKED" });
     expect(moved).not.toBe(statusFingerprint(base));
+  });
+});
+
+describe("apiSnapshotIsStale — la guarda mira SOLO el reloj de la API", () => {
+  // El bug que motivó la separación: la guarda comparaba el `updatedAt` de
+  // Aliclik contra `last_report_at`, que el importador de Excel escribe con la
+  // hora de la SUBIDA. Cada reporte importado dejaba esa marca en "ahora" para
+  // todas las guías del archivo y, desde ese instante, el barrido las daba por
+  // rezagadas y no volvía a tocarlas. Se apagaba la vía automática justo sobre
+  // las guías que más se miran.
+
+  it("EL CASO: subir un reporte hoy no puede callar a la API", () => {
+    // Chimbote: el pedido se movió por última vez el 13-08 en Aliclik y el
+    // Excel se subió el 15-08. La API la seguía reportando NOT_RESPOND en cada
+    // pasada y la guarda la descartaba entera, así que el NO CONTESTA nunca la
+    // devolvió a la cola de llamadas.
+    const movidoEnAliclik = "2026-08-13T10:00:00.000Z";
+    const nuncaLeidaPorLaApi = null;
+    expect(apiSnapshotIsStale(movidoEnAliclik, nuncaLeidaPorLaApi)).toBe(false);
+  });
+
+  it("sigue descartando un snapshot anterior al que ya aplicamos", () => {
+    expect(apiSnapshotIsStale("2026-08-13T10:00:00.000Z", "2026-08-14T10:00:00.000Z")).toBe(true);
+  });
+
+  it("aplica el snapshot más nuevo", () => {
+    expect(apiSnapshotIsStale("2026-08-15T10:00:00.000Z", "2026-08-14T10:00:00.000Z")).toBe(false);
+  });
+
+  it("el mismo snapshot repetido no se descarta: reescribirlo es inocuo", () => {
+    const t = "2026-08-14T10:00:00.000Z";
+    expect(apiSnapshotIsStale(t, t)).toBe(false);
+  });
+
+  it("compara instantes, no cadenas: el formato de Postgres no altera el orden", () => {
+    // Postgres devuelve "2026-08-14 10:00:00+00" (con espacio) y la API entrega
+    // ISO con "T". Comparadas como texto, la "T" gana a cualquier espacio en la
+    // misma fecha e invierte el resultado.
+    expect(apiSnapshotIsStale("2026-08-14T09:00:00.000Z", "2026-08-14 10:00:00+00")).toBe(true);
+    expect(apiSnapshotIsStale("2026-08-14T11:00:00.000Z", "2026-08-14 10:00:00+00")).toBe(false);
+  });
+
+  it("sin fecha del snapshot no hay guarda: no tenerla no congela la guía", () => {
+    expect(apiSnapshotIsStale(null, "2026-08-14T10:00:00.000Z")).toBe(false);
+    expect(apiSnapshotIsStale(undefined, "2026-08-14T10:00:00.000Z")).toBe(false);
+  });
+
+  it("una fecha ilegible tampoco bloquea", () => {
+    expect(apiSnapshotIsStale("no es una fecha", "2026-08-14T10:00:00.000Z")).toBe(false);
+    expect(apiSnapshotIsStale("2026-08-14T10:00:00.000Z", "no es una fecha")).toBe(false);
   });
 });
 

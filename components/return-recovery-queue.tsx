@@ -266,7 +266,7 @@ export function ReturnRecoveryQueue({
                           </div>
                         </>
                       )}
-                      {/* «Sellada a mano» (0116) va JUNTO al motivo y no en la
+                      {/* «Sellada a mano» (0118) va JUNTO al motivo y no en la
                           fecha: las dos frases responden la misma pregunta —qué
                           constancia hay detrás de esta devolución— y separarlas
                           obligaba a leer dos columnas para contestarla. */}

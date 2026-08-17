@@ -116,7 +116,7 @@ export function wasRefusedInPerson(
  * no «consta que no la rechazó». Hasta acá la cola trata igual a las dos —una
  * devolución sin motivo entra— pero de ahí en adelante no: quien va a pedir un
  * adelanto ve escrito que no se sabe, y el cron sale a preguntárselo a la API
- * (0117, `fillReturnReasons`).
+ * (0119, `fillReturnReasons`).
  */
 export function courierReason(
   c: Pick<RecoveryCandidate, "reported_status" | "non_delivery_reason">,
@@ -144,7 +144,7 @@ export interface RecoveryCandidate {
   province: string | null;
   reported_collect_amount: number | null;
   returned_at: string | null;
-  /** Quién dio por devuelta la guía (0116). No excluye a nadie de la cola —un
+  /** Quién dio por devuelta la guía (0118). No excluye a nadie de la cola —un
    *  paquete recibido a mano es tan real como uno reportado— pero SÍ se muestra:
    *  quien pulsa «Enviar» le está pidiendo un adelanto a la clienta y tiene
    *  derecho a saber si detrás hay constancia del courier. */

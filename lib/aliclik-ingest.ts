@@ -14,9 +14,10 @@ import {
   isPending,
   maxDeliveryDate,
   reconcileReportedDeliveryStatus,
+  reopensForFailedAttempt,
 } from "./shipments";
 import { evaluateFenix, type FenixStockRow } from "./fenix";
-import { recomputeOrderMasterSafe } from "./order-master";
+import { describeRecompute, recomputeOrderMasterSafe, type RecomputeOutcome } from "./order-master";
 import {
   isProvisionalGuideCode,
   reconcileAliclikApiGuides,
@@ -38,8 +39,11 @@ interface ExistingShipment {
   last_report_at: string | null;
   /** Solo la escribe la vía API; decide si este reporte puede tocar el estado. */
   api_report_at: string | null;
+  /** Día para el que el equipo reprogramó la entrega; protege una reprogramación
+   *  futura de un intento fallido viejo (ver reopensForFailedAttempt). */
+  next_followup_at: string | null;
   returned_at: string | null;
-  /** Procedencia del sello (0116). Acompaña a `returned_at` y no se pisa. */
+  /** Procedencia del sello (0118). Acompaña a `returned_at` y no se pisa. */
   returned_source: string | null;
   dispatched_at: string | null;
   delivered_source: string | null;
@@ -66,9 +70,10 @@ export interface IngestResult {
    *  las gestiona). Se informan para que el operador sepa que el archivo traía
    *  más filas de las que se importaron, y no parezca que se perdieron. */
   skippedImportadoCount: number;
-  /** Pedidos cuya guía se movió pero cuyo Master no se pudo recalcular. Si no es
-   *  cero, hay pedidos mostrando una etapa que ya no es la suya. */
-  masterStaleCount: number;
+  /** Qué pasó al refrescar el Master. Se informa aunque el reporte se ingestara
+   *  bien: un recálculo corto deja el Master mintiendo, y el operador que acaba
+   *  de subir el archivo es quien puede notarlo. */
+  master: RecomputeOutcome;
 }
 
 const CHUNK = 500;
@@ -183,7 +188,20 @@ export async function ingestAliclikReport(
       existing?.delivery_status,
       inc.row.delivery_status,
       existing?.api_report_at,
+      new Date(),
+      { reportAt: meta.reportAt },
     );
+    // Un NO CONTESTA del día agendado devuelve la guía a nuestra cola de
+    // llamadas: es la única transición hacia atrás. Si se queda En ruta nadie
+    // la vuelve a llamar, se agota la ventana de reprogramación con Aliclik y
+    // el paquete se devuelve a Lima con flete a cargo nuestro.
+    const reopen = reopensForFailedAttempt({
+      existingStatus: existing?.delivery_status,
+      attemptFailed: inc.row.attempt_failed === true,
+      attemptDate: inc.row.aliclik_service_date,
+      scheduledFor: existing?.next_followup_at,
+    });
+    const finalStatus = reopen ? "pendiente" : mergedStatus;
     const keepManualAddress = existing?.address_override === true;
     const district = keepManualAddress
       ? existing.district
@@ -207,13 +225,13 @@ export async function ingestAliclikReport(
       : (inc.row.longitude ?? existing?.longitude ?? null);
     // Fenix coverage/stock is evaluated for every managed (pendiente) guide — the
     // UI splits Pendiente vs "Sin cobertura" by this flag.
-    const fenix = isPending(mergedStatus)
+    const fenix = isPending(finalStatus)
       ? evaluateFenix({ city, product: inc.row.product }, stockRows).eligible
       : false;
     // delivered_source: keep an existing source; a delivery that comes from the
     // report (not from agent gestión) is "aliclik".
     let delivered_source = existing?.delivered_source ?? null;
-    if (mergedStatus === "entregado" && !delivered_source) delivered_source = "aliclik";
+    if (finalStatus === "entregado" && !delivered_source) delivered_source = "aliclik";
 
     // linkage: never downgrade an established link or a dismissal
     let order_id: string | null;
@@ -241,7 +259,7 @@ export async function ingestAliclikReport(
         ? existing.last_report_at
         : meta.reportAt;
 
-    // La devolución se sella una sola vez, con su procedencia (0116), y no se
+    // La devolución se sella una sola vez, con su procedencia (0118), y no se
     // borra: un reporte posterior que ya no mencione el retorno no puede
     // deshacerlo, igual que `entregado` no se reabre. Sin fecha propia en el
     // reporte, vale la del propio reporte.
@@ -283,8 +301,8 @@ export async function ingestAliclikReport(
       latitude,
       longitude,
       address_override: keepManualAddress,
-      delivery_status: mergedStatus,
-      status_category: categoryOf(mergedStatus),
+      delivery_status: finalStatus,
+      status_category: categoryOf(finalStatus),
       returned_at,
       returned_source,
       dispatched_at,
@@ -358,15 +376,16 @@ export async function ingestAliclikReport(
   const unmatchedCount = rowMetas.filter((r) => r.matchStatus === "review").length;
   const errorCount = rowMetas.filter((r) => r.matchStatus === "error").length;
 
-  await admin
-    .from("import_batches")
-    .update({ matched_count: matchedCount, unmatched_count: unmatchedCount, status: "processed" })
-    .eq("id", batchId);
-
   // El reporte acaba de mover el estado logístico de estos pedidos: refresca el
   // Master para que la consolidación no espere al barrido del cron. Best-effort
   // — el reporte ya quedó ingestado pase lo que pase con el recálculo.
-  const masterReport = await recomputeOrderMasterSafe(
+  //
+  // Va ANTES de cerrar el lote a propósito: si se quedó corto, esa constancia
+  // entra en la misma fila que el resto del resultado. Un recálculo que falla en
+  // silencio deja el Master enseñando el estado viejo, y sin huella nadie lo
+  // descubre hasta que un pedido entregado lleva dos meses en la cola de
+  // llamadas (Aurela, junio-julio 2026).
+  const master = await recomputeOrderMasterSafe(
     admin,
     [
       ...new Set(
@@ -376,6 +395,17 @@ export async function ingestAliclikReport(
       ),
     ],
   );
+  const masterTrace = describeRecompute(master);
+
+  await admin
+    .from("import_batches")
+    .update({
+      matched_count: matchedCount,
+      unmatched_count: unmatchedCount,
+      status: "processed",
+      ...(masterTrace ? { errors: [masterTrace] } : {}),
+    })
+    .eq("id", batchId);
 
   return {
     batchId,
@@ -384,10 +414,7 @@ export async function ingestAliclikReport(
     unmatchedCount,
     errorCount,
     skippedImportadoCount,
-    // Pedidos que se quedaron con la etapa vieja pese a haberles movido la guía.
-    // El 09-08 fueron 1.125 de 1.126 y no lo dijo nadie: el import salió
-    // «procesado» mientras el Master se congelaba (0118).
-    masterStaleCount: masterReport.failed,
+    master,
   };
 }
 
@@ -502,14 +529,14 @@ async function fetchExistingShipments(
   for (const chunk of chunked(guideCodes, 200)) {
     const currentResult = await admin
       .from("shipments")
-      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,returned_at,returned_source,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,next_followup_at,returned_at,returned_source,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
       .eq("courier", "aliclik")
       .in("guide_code", chunk);
     let data: unknown = currentResult.data;
     if (isMissingProvinceColumn(currentResult.error)) {
       const legacyResult = await admin
         .from("shipments")
-        .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,returned_at,returned_source,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+        .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,next_followup_at,returned_at,returned_source,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
         .eq("courier", "aliclik")
         .in("guide_code", chunk);
       data = legacyResult.data;

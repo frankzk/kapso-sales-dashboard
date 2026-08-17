@@ -77,7 +77,7 @@ describe("recoverySkipReason", () => {
     expect(recoverySkipReason(candidate({ returned_at: null }), OPTS)).toBe("la guía no volvió");
   });
 
-  it("una devolución sellada a mano SÍ entra a la cola (0116)", () => {
+  it("una devolución sellada a mano SÍ entra a la cola (0118)", () => {
     // El paquete sobre la mesa del almacén es tan real como un CSV. La
     // procedencia no excluye: se muestra, y quien decide decide. Excluirla
     // dejaría fuera justamente los casos que Aliclik no reporta, que son los que

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { planPhoneLinkRepairs, type PhoneLinkedGuide } from "@/lib/phone-link-repair";
-import { orderNameFromGuideCode } from "@/lib/aliclik-import";
+import {
+  derivedOrderName,
+  planPhoneLinkRepairs,
+  type PhoneLinkedGuide,
+} from "@/lib/phone-link-repair";
 
 // UN VÍNCULO POR TELÉFONO CADUCA.
 //
@@ -13,27 +16,32 @@ import { orderNameFromGuideCode } from "@/lib/aliclik-import";
 //
 // La evidencia que faltaba venía escrita en el código de la guía.
 
-describe("orderNameFromGuideCode — el pedido que nombra la guía", () => {
+describe("derivedOrderName — el pedido que nombra la guía", () => {
   it("saca el número del código con el prefijo de la tienda", () => {
-    expect(orderNameFromGuideCode("AUR5X121336", "KP")).toBe("#KP121336");
-    expect(orderNameFromGuideCode("AUR5X174316", "AUR")).toBe("#AUR174316");
+    expect(derivedOrderName("AUR5X121336", "KP")).toBe("#KP121336");
+    expect(derivedOrderName("AUR5X174316", "AUR")).toBe("#AUR174316");
   });
 
   it("tolera el prefijo escrito con # o en minúscula", () => {
-    expect(orderNameFromGuideCode("aur5x121336", "#kp")).toBe("#KP121336");
+    expect(derivedOrderName("aur5x121336", "#kp")).toBe("#KP121336");
   });
 
   it("no adivina sin prefijo de tienda", () => {
     // Ponerle el prefijo de otra tienda convertiría «no sé de quién es» en «es
     // de aquella», que es peor que no responder.
-    expect(orderNameFromGuideCode("AUR5X121336", null)).toBeNull();
-    expect(orderNameFromGuideCode("AUR5X121336", "  ")).toBeNull();
+    expect(derivedOrderName("AUR5X121336", null)).toBeNull();
+    expect(derivedOrderName("AUR5X121336", "  ")).toBeNull();
   });
 
   it("ignora códigos que no siguen la numeración de Aliclik", () => {
-    expect(orderNameFromGuideCode("ALC000123", "KP")).toBeNull();
-    expect(orderNameFromGuideCode("AUR5X12AB34", "KP")).toBeNull();
-    expect(orderNameFromGuideCode(null, "KP")).toBeNull();
+    expect(derivedOrderName("ALC000123", "KP")).toBeNull();
+    expect(derivedOrderName("AUR5X12AB34", "KP")).toBeNull();
+    expect(derivedOrderName(null, "KP")).toBeNull();
+    // Las familias de 7 y 12 dígitos son identificadores de Aliclik, no pedidos:
+    // quien lo decide es `orderRefInGuideCode`, y acá se comprueba que este
+    // barrido hereda esa misma lectura en vez de tener la suya.
+    expect(derivedOrderName("AUR5X5086616", "KP")).toBeNull();
+    expect(derivedOrderName("AUR5X000340013716", "KP")).toBeNull();
   });
 });
 

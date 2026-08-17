@@ -1,8 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
-import { orderNameFromGuideCode } from "@/lib/aliclik-import";
 import {
+  derivedOrderName,
   planPhoneLinkRepairs,
   type PhoneLinkedGuide,
   type RepairOrderCandidate,
@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// Devuelve a su pedido las guías que se engancharon SOLO por teléfono (0119).
+// Devuelve a su pedido las guías que se engancharon SOLO por teléfono.
 //
 // Ver la cabecera de lib/phone-link-repair.ts para el porqué. En resumen: el
 // respaldo por teléfono del emparejador acierta en el instante en que corre pero
@@ -43,8 +43,9 @@ function authorized(req: NextRequest): boolean {
   return secretEquals(req.nextUrl.searchParams.get("secret"), secret);
 }
 
-/** Techo por pasada. Son 15 hoy; el tope es el seguro de siempre. */
+/** Techo por pasada. Son 14 hoy; el tope es el seguro de siempre. */
 const LIMIT = 200;
+
 
 async function run(req: NextRequest) {
   if (!authorized(req)) return new NextResponse("unauthorized", { status: 401 });
@@ -81,7 +82,7 @@ async function run(req: NextRequest) {
   const guides: PhoneLinkedGuide[] = ((guideRows ?? []) as Omit<PhoneLinkedGuide, "derived_order_name">[])
     .map((g) => ({
       ...g,
-      derived_order_name: orderNameFromGuideCode(g.guide_code, prefixByStore.get(g.store_id)),
+      derived_order_name: derivedOrderName(g.guide_code, prefixByStore.get(g.store_id)),
     }));
 
   const wanted = [...new Set(guides.map((g) => g.derived_order_name).filter((n): n is string => Boolean(n)))];
@@ -207,7 +208,11 @@ async function run(req: NextRequest) {
     moved,
     skipped: skippedByReason,
     masterRecomputed: master.written,
-    masterFailed: master.failed,
+    // Los que se quedaron con la etapa vieja pese a haberles movido la guía. La
+    // resta es la cuenta buena tanto si el recálculo lanzó como si escribió de
+    // menos sin lanzar: las dos formas dejan el mismo Master mintiendo.
+    masterFailed: master.requested - master.written,
+    masterError: master.error,
     failures: failures.slice(0, 20),
     failureCount: failures.length,
   });

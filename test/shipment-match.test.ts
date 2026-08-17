@@ -39,6 +39,50 @@ describe("matchShipment", () => {
     expect(r.order_id).toBe(null);
   });
 
+  describe("el código impreso nombra su pedido (familia de 6 dígitos)", () => {
+    // El caso real de AUR5X122767 (17-07-2026) y sus 16 hermanas: la guía se
+    // importó nueve días antes de que su pedido llegara desde Shopify, así que
+    // el único pedido con ese teléfono era otro anterior del mismo cliente.
+    const mismoCliente: OrderCandidate[] = [
+      { id: "junio", store_id: "s1", name: "#KP120351", customer_phone: "51985169380" },
+    ];
+
+    it("no enlaza al otro pedido del cliente cuando el suyo aún no existe", () => {
+      const r = matchShipment(
+        row({ "Guia Aliclik": "AUR5X122767", CELULAR: "985169380" }),
+        mismoCliente,
+      );
+      expect(r.matched).toBe(false);
+      expect(r.status).toBe("review");
+      expect(r.order_id).toBe(null);
+    });
+
+    it("enlaza al pedido que el código nombra cuando sí está", () => {
+      const r = matchShipment(row({ "Guia Aliclik": "AUR5X122767", CELULAR: "985169380" }), [
+        ...mismoCliente,
+        { id: "julio", store_id: "s1", name: "#KP122767", customer_phone: "51985169380" },
+      ]);
+      expect(r).toMatchObject({ order_id: "julio", matched: true, method: "phone" });
+    });
+
+    it("el código también le gana a un nombre de pedido que diga otra cosa", () => {
+      const r = matchShipment(
+        row({ "Guia Aliclik": "AUR5X122767", PEDIDO: "#KP120351", CELULAR: "985169380" }),
+        mismoCliente,
+      );
+      expect(r.matched).toBe(false);
+    });
+
+    it("no lee un pedido en las familias de 7 y 12 dígitos", () => {
+      // Medido en producción: ninguna de esas 2.853 guías nombra a su pedido.
+      // Si se leyeran como referencia, se vetarían enlaces buenos en masa.
+      for (const code of ["AUR5X5086616", "AUR5X000340013716"]) {
+        const r = matchShipment(row({ "Guia Aliclik": code, CELULAR: "914699634" }), orders);
+        expect(r).toMatchObject({ order_id: "o1", matched: true, method: "phone" });
+      }
+    });
+  });
+
   it("only matches within the provided (accessible) candidates", () => {
     const r = matchShipment(row({ PEDIDO: "#KP114985" }), []);
     expect(r.matched).toBe(false);
