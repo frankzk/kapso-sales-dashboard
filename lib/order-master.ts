@@ -87,6 +87,33 @@ const VERSION_RECONCILE_PAGE = 250;
  */
 const SHIPMENT_STALE_PAGE = 2000;
 
+/**
+ * Cuánto reloj le toca a la tienda que viene ahora.
+ *
+ * POR QUÉ EXISTE ESTA FUNCIÓN, que son cuatro líneas. Hasta hoy el barrido del
+ * Master era la ÚLTIMA sentencia de `runStoreSync`, y las tiendas se recorrían en
+ * serie bajo un solo `maxDuration`:
+ *
+ *     for (const id of storeIds) await runStoreSync(id, admin);
+ *
+ * Sin reparto, la segunda tienda hereda lo que la primera no gastó, y lo primero
+ * que muere cuando se acaba el reloj es la última línea de la segunda. Medido en
+ * producción el 17-08-2026: Aurela sin un solo pedido desfasado y Kenku con 207,
+ * con **50 horas de desfase medio**. La regla del barrido era correcta —el atraso
+ * bajó de 955 a ~200 en cuanto se desplegó— pero a una de las dos tiendas no le
+ * llegaba nunca.
+ *
+ * Es el mismo desperfecto que documenta `aliclik-close/route.ts`: un trabajo
+ * colgado del final de otro más largo no tiene garantía de ejecutarse jamás. Se
+ * arregla igual —reloj propio y repartido— y se deja escrito como función aparte
+ * para poder AFIRMAR sobre ella: lo que hay que demostrar es que la última tienda
+ * de la cola recibe tiempo, y eso no se ve mirando el bucle.
+ */
+export function budgetShareMs(remainingMs: number, storesLeft: number): number {
+  if (storesLeft <= 0) return 0;
+  return Math.max(0, remainingMs) / storesLeft;
+}
+
 interface OrderRecord {
   id: string;
   store_id: string;
@@ -685,6 +712,9 @@ export interface RecomputeResult {
    *  tandas y sigue adelante en vez de abortar; si no es cero, quedan etapas
    *  viejas en pantalla y hay que mirar por qué. */
   failed?: number;
+  /** Pedidos que no cupieron en el reloj de la pasada. Distinto de `failed`: no
+   *  se intentaron, y vuelven solos en la siguiente. */
+  deferred?: number;
 }
 
 /**
@@ -1150,6 +1180,10 @@ export interface SafeRecomputeReport {
   failed: number;
   /** El primer fallo, para que el rastro diga POR QUÉ y no solo cuántos. */
   error: string | null;
+  /** Pedidos que no cupieron en el reloj de esta pasada. No es un fallo: vuelven
+   *  en la siguiente porque el barrido se ancla en el desfase, no en una lista.
+   *  Si no baja nunca, el presupuesto se quedó corto y eso hay que mirarlo. */
+  deferred: number;
 }
 
 /** Tamaño de tanda del recálculo best-effort. */
@@ -1165,16 +1199,18 @@ const SAFE_RETRY_BATCH = 10;
 export async function recomputeInBatches(
   ids: readonly string[],
   run: (batch: string[]) => Promise<number>,
-  opts: { batch?: number; retry?: number } = {},
+  opts: { batch?: number; retry?: number; deadline?: number; now?: () => number } = {},
 ): Promise<SafeRecomputeReport> {
   const unique = [...new Set(ids.filter(Boolean))];
   const size = opts.batch ?? SAFE_BATCH;
   const retrySize = opts.retry ?? SAFE_RETRY_BATCH;
+  const clock = opts.now ?? Date.now;
   const report: SafeRecomputeReport = {
     requested: unique.length,
     written: 0,
     failed: 0,
     error: null,
+    deferred: 0,
   };
   const note = (error: unknown) => {
     if (report.error === null) {
@@ -1182,7 +1218,17 @@ export async function recomputeInBatches(
     }
   };
 
+  let done = 0;
   for (const batch of chunk(unique, size)) {
+    // El corte va ENTRE tandas, nunca dentro: una tanda a medias dejaría unos
+    // recalculados y otros no sin que nadie sepa cuáles. Lo que no cupo se
+    // cuenta en `deferred` y entra en la pasada siguiente — el barrido se ancla
+    // en el desfase, así que lo aplazado vuelve solo.
+    if (opts.deadline !== undefined && clock() > opts.deadline) {
+      report.deferred = unique.length - done;
+      break;
+    }
+    done += batch.length;
     try {
       report.written += await run(batch);
       continue;
@@ -1279,7 +1325,7 @@ export async function recomputeOrderMasterForShipmentsSafe(
 export async function reconcileOrderMaster(
   admin: SupabaseClient,
   storeIds: readonly string[],
-  opts: { limit?: number; staleBefore?: string } = {},
+  opts: { limit?: number; staleBefore?: string; deadline?: number } = {},
 ): Promise<RecomputeResult> {
   if (!storeIds.length) return { requested: 0, written: 0 };
   const limit = opts.limit ?? PAGE;
@@ -1379,6 +1425,7 @@ export async function reconcileOrderMaster(
   const done = await recomputeInBatches(
     pending,
     async (batch) => (await recomputeOrderMaster(admin, batch)).written,
+    { deadline: opts.deadline },
   );
   const trace = describeRecompute({
     requested: done.requested,
@@ -1386,5 +1433,10 @@ export async function reconcileOrderMaster(
     error: done.error,
   });
   if (trace) console.error(trace);
-  return { requested: pending.length, written: done.written, failed: done.failed };
+  return {
+    requested: pending.length,
+    written: done.written,
+    failed: done.failed,
+    deferred: done.deferred,
+  };
 }

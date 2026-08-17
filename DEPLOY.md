@@ -89,7 +89,21 @@ roles and the `auth` schema, so it just works.
    Vercel.
 4. Deploy. The crons in `vercel.json` are picked up automatically; Vercel sends
    `Authorization: Bearer $CRON_SECRET`:
-   - `/api/cron/sync` — every 5 min (reconciliation + ops snapshots).
+   - `/api/cron/sync` — every 5 min (reconciliation + ops snapshots). Recorre
+     las tiendas activas en serie. **No barre el Master**: eso lo hace el cron de
+     abajo, por el motivo que explica.
+   - `/api/cron/master-reconcile` — cada 10 min, intercalado con el sync
+     (`5,15,25,…`). Pone al día las filas de `order_master` que se quedaron con
+     la etapa vieja. **Es un cron aparte a propósito, y es la tercera vez que
+     este repositorio aprende lo mismo**: el barrido era la última línea de
+     `runStoreSync`, y con las tiendas recorriéndose en serie bajo un solo
+     `maxDuration`, a la segunda no le llegaba nunca. Medido el 17-08-2026:
+     Kenku con 207 pedidos desfasados y 50 h de media, Aurela con cero. Ahora
+     tiene reloj propio y lo reparte entre las tiendas que faltan.
+     El informe por tienda dice `requested/written/failed/deferred` y el
+     `budgetMs` que le tocó: **`failed` distinto de cero es un fallo**, pero
+     `deferred` solo dice que no cupo y vuelve en la pasada siguiente — si no
+     baja nunca, el presupuesto se quedó corto.
    - `/api/cron/telegram-summary` — daily 13:00 UTC (per-store daily summary).
    - `/api/cron/aliclik-catalog` — diario 09:00 UTC. Refresca el espejo del
      catálogo de Aliclik (EAN, stock por almacén, agencias Shalom). Solo lectura.

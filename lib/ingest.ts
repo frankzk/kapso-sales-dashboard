@@ -836,6 +836,7 @@ export async function resolveMetaAdNames(
 export async function runStoreSync(
   storeId: string,
   admin: SupabaseClient = createAdminSupabase(),
+  opts: { skipMasterReconcile?: boolean } = {},
 ): Promise<SyncReport> {
   const report: SyncReport = {
     storeId,
@@ -1223,6 +1224,19 @@ export async function runStoreSync(
   // Red de seguridad del Master: cualquier ruta que haya tocado una guía sin
   // recalcular deja aquí su fila al día. También es lo que rellena el Master la
   // primera vez, sin necesidad de un backfill manual.
+  //
+  // VA LA ÚLTIMA, Y ESO TIENE UN PRECIO. Cuando quien llama recorre VARIAS
+  // tiendas en serie bajo un solo `maxDuration`, la última línea de la última
+  // tienda es lo primero que se queda sin ejecutar — medido el 17-08-2026:
+  // Kenku con 207 pedidos desfasados y 50 h de media, Aurela con cero. Por eso
+  // el cron la salta y delega en `/api/cron/master-reconcile`, que tiene reloj
+  // propio y lo reparte entre tiendas.
+  //
+  // Se conserva aquí para quien sincroniza UNA tienda y espera verla al día
+  // enseguida: la conexión inicial de Shopify —que estrena el Master— y el botón
+  // de sincronizar. Ahí no hay cola que agote el reloj.
+  if (opts.skipMasterReconcile) return report;
+
   try {
     const reconciled = await reconcileOrderMaster(admin, [storeId]);
     report.orderMaster = reconciled.written;

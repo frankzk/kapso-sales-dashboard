@@ -48,7 +48,10 @@ async function run(req: NextRequest) {
   const reports = [];
   for (const id of storeIds) {
     try {
-      reports.push(await runStoreSync(id, admin));
+      // El barrido del Master NO va aquí: colgado del final de esta cola, la
+      // segunda tienda se quedaba sin él (ver la cabecera de
+      // /api/cron/master-reconcile, que ahora lo hace con reloj propio).
+      reports.push(await runStoreSync(id, admin, { skipMasterReconcile: true }));
     } catch (e) {
       reports.push({ storeId: id, error: e instanceof Error ? e.message : String(e) });
     }
