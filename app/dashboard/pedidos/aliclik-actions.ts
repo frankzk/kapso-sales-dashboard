@@ -31,6 +31,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { normalizeDistrictKey } from "@/lib/district-coverage";
+import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
 import { getStoreCreds } from "@/lib/ingest";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { getOrderMasterDetail } from "@/lib/orders-master-access";
@@ -1707,22 +1708,18 @@ export async function markDistrictCoveredByAliclik(
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const { error } = await admin.from("district_coverage").upsert(
-    {
-      // Sin tienda: la clasificación de hoy es global y un distrito cubierto lo
-      // está para las dos tiendas, que comparten la misma cuenta de Aliclik.
-      store_id: null,
-      district,
-      coverage: "provincia_cod",
-      note:
-        `Aliclik cotizó ${quotedCost != null ? `S/ ${quotedCost.toFixed(2)} ` : ""}` +
-        `desde el pedido ${row.order_name ?? orderId} el ${today}.`,
-      updated_at: new Date().toISOString(),
-      updated_by: user.id,
-    },
-    { onConflict: "store_id,district" },
-  );
-  if (error) return { error: error.message };
+  const { error } = await saveDistrictCoverageRow(admin, {
+    // Sin tienda: la clasificación de hoy es global y un distrito cubierto lo
+    // está para las dos tiendas, que comparten la misma cuenta de Aliclik.
+    storeId: null,
+    district,
+    coverage: "provincia_cod",
+    note:
+      `Aliclik cotizó ${quotedCost != null ? `S/ ${quotedCost.toFixed(2)} ` : ""}` +
+      `desde el pedido ${row.order_name ?? orderId} el ${today}.`,
+    updatedBy: user.id,
+  });
+  if (error) return { error };
 
   // Los pedidos abiertos de ese distrito estaban clasificados con la regla
   // vieja. Sin esto, el que acabas de comprobar seguiría enseñando Agencia.

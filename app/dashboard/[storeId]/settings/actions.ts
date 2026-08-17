@@ -22,7 +22,8 @@ import { listProducts } from "@/lib/aliclik";
 import { syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { env } from "@/lib/env";
 import { REPLY_TOKENS } from "@/lib/wa-reply-templates";
-import { normalizeDistrictKey } from "@/lib/district-coverage";
+import { normalizeDistrictKey, type DistrictCoverageValue } from "@/lib/district-coverage";
+import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { describeShalomError, describeShalomProbeFailure } from "@/lib/shalom/client";
 import { clientFor, loadStoreShalom, mintSession, publicClient } from "@/lib/shalom/session";
@@ -873,17 +874,14 @@ export async function saveDistrictCoverage(
     return { error: "Cobertura no válida." };
   }
 
-  const { error } = await ctx.admin.from("district_coverage").upsert(
-    {
-      store_id: allStores ? null : storeId,
-      district,
-      coverage,
-      note,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "store_id,district" },
-  );
-  if (error) return { error: error.message };
+  const { error } = await saveDistrictCoverageRow(ctx.admin, {
+    storeId: allStores ? null : storeId,
+    district,
+    coverage: coverage as DistrictCoverageValue,
+    note,
+    updatedBy: null,
+  });
+  if (error) return { error };
 
   const recomputed = await recomputeDistrictOrders(ctx.admin, storeId, district, allStores);
   revalidatePath(`/dashboard/${storeId}/settings`);
