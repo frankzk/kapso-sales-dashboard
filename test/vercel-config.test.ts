@@ -86,6 +86,31 @@ describe("vercel.json", () => {
     expect(at("/api/cron/aliclik-close")).toBe("10,30,50 * * * *");
   });
 
+  it("las tarifas de Aliclik NO se cotizan en la franja mala de su API", () => {
+    // Los 5xx de Aliclik llegan siempre a la misma hora: el 29/07 fallaron 136
+    // de 203 peticiones entre las 09:25 y las 09:45 UTC, y el 17/08 saltó una
+    // alerta de Vercel con 78 fallos a partir de las 09:30 UTC clavadas — la
+    // hora a la que estaba agendado este cron. Son las 04:25-04:45 de Lima:
+    // parece su ventana de mantenimiento.
+    //
+    // Devolverlo a esa hora no rompe nada de forma visible: el cron sigue
+    // "funcionando", solo que las tarifas no se refrescan y llega un correo de
+    // alerta que se parece demasiado a una caída de verdad. Por eso se fija acá.
+    const crons = cfg.crons as { path: string; schedule: string }[];
+    const schedule = crons.find((c) => c.path === "/api/cron/aliclik-tariffs")?.schedule;
+    expect(schedule).toBeDefined();
+    const [minute, hour] = schedule!.trim().split(/\s+/);
+    // Una hora fija, no un comodín: `*` o `*/n` lo harían pasar por la franja.
+    expect(hour).toMatch(/^\d+$/);
+    expect(minute).toMatch(/^\d+$/);
+    const minutosUtc = Number(hour) * 60 + Number(minute);
+    // Ventana vedada con margen a cada lado: la racha dura minutos, y la pasada
+    // también, así que arrancar cerca del borde igual la pisa.
+    const desde = 8 * 60 + 30; // 08:30 UTC
+    const hasta = 10 * 60 + 45; // 10:45 UTC
+    expect(minutosUtc >= desde && minutosUtc <= hasta).toBe(false);
+  });
+
   it("cada cron apunta a una ruta que existe", () => {
     // Un cron con la ruta mal escrita no falla el despliegue: se ejecuta y
     // devuelve 404 en silencio, que es la forma más cara de no enterarse.

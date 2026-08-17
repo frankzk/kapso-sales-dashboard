@@ -293,9 +293,22 @@ export async function syncAliclikTariffs(
   }
 
   // SEGUNDA VUELTA, y no más reintentos dentro de la primera. Los 5xx de Aliclik
-  // llegan en rachas de minutos —el 29/07 fallaron 136 de 203 peticiones entre
-  // las 09:25 y las 09:45 UTC—, y los tres reintentos que ya hace el cliente HTTP
-  // se agotan en poco más de un segundo, dentro de la misma racha. Volver al
+  // llegan en rachas de minutos, y SIEMPRE EN LA MISMA FRANJA: el 29/07 fallaron
+  // 136 de 203 peticiones entre las 09:25 y las 09:45 UTC, y el 17/08 la alerta
+  // de Vercel saltó con 78 fallos a partir de las 09:30 UTC clavadas — que era
+  // justo la hora a la que estaba agendado este cron. Son las 04:25-04:45 de
+  // Lima: tiene toda la pinta de ser su ventana de mantenimiento.
+  //
+  // POR ESO EL CRON YA NO CORRE AHÍ. Se movió a las 11:30 UTC (06:30 de Lima):
+  // fuera de esa franja, y todavía antes de que arranque la operación, para que
+  // el barrido de tarifas no compita por la API con la creación de guías, que sí
+  // es urgente. Ver el test de vercel.json, que lo fija. Si algún día vuelven a
+  // aparecer 5xx en masa a otra hora, la franja cambió y este comentario miente:
+  // mirar la hora real antes de mover nada.
+  //
+  // LA SEGUNDA VUELTA SE CONSERVA IGUAL, porque mover el cron reduce el riesgo
+  // pero no lo elimina: los tres reintentos que ya hace el cliente HTTP se
+  // agotan en poco más de un segundo, o sea dentro de la misma racha. Volver al
   // final de la pasada pone minutos de por medio sin dormir el proceso.
   //
   // Un distrito que falla tampoco se pierde: al no escribirse ninguna tarifa
