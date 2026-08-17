@@ -25,11 +25,22 @@ const samePlace = (a: string | null | undefined, b: string | null | undefined) =
   Boolean(text(a) && text(b) && text(a) === text(b));
 
 /**
- * La API oficial solo lista pedidos creados por la integración (ALC…). Las
- * guías creadas directamente en el portal AURELA/KENKU usan códigos impresos
- * AUR5X… y no aparecen allí. Para habilitar una excepción auditada sin aceptar
- * cualquier guía, el tramo numérico del pedido Shopify debe ser el sufijo
- * exacto del código impreso.
+ * ¿El código impreso lleva dentro el número del pedido Shopify?
+ *
+ * La API oficial solo lista pedidos creados por la integración (ALC…). Las guías
+ * creadas directamente en el portal AURELA/KENKU usan códigos impresos AUR5X… y
+ * no aparecen allí, así que al vincularlas no hay nada que consultar.
+ *
+ * ESTO CORROBORA, NO AUTORIZA. Se usó como requisito para vincular, y era una
+ * regla que solo cumple una de las tres familias de código: medido sobre 3.976
+ * guías, las de 6 dígitos terminan en su pedido 1.162 veces de 1.179, y de las
+ * de 7 y 12 dígitos (2.853 guías) ninguna lo hace. Exigirlo dejaba sin vincular
+ * una guía real creada en el portal solo porque Aliclik le dio un código largo.
+ *
+ * Quien autoriza es la confirmación auditada —escribir el código del pedido y
+ * dar un motivo— y la guarda de que la guía no cuelgue ya de otro pedido. Esta
+ * función decide si además hay respaldo en el propio código, para poder decirlo
+ * o advertir de su ausencia.
  */
 export function isCompatibleManualPortalGuide(
   guideCode: string | null | undefined,

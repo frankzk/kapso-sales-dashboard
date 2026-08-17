@@ -599,12 +599,29 @@ function ExistingGuideLinkPanel({
               {preview.verificationMode === "manual_portal" ? (
                 <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
                   <div>
-                    <p className="font-semibold">Vinculación excepcional auditada</p>
+                    <p className="font-semibold">
+                      {preview.codeMatchesOrder
+                        ? "Vinculación excepcional auditada"
+                        : "Vinculación bajo tu responsabilidad"}
+                    </p>
                     <p className="mt-1 text-xs leading-5">
                       La API oficial solo lista pedidos creados por la integración con código ALC.
-                      Esta guía creada en el portal AURELA/KENKU no puede aparecer allí. El código
-                      sí termina en el número de {preview.expectedOrderName}; también se comprobará
-                      que no esté vinculado a otro pedido.
+                      Esta guía creada en el portal AURELA/KENKU no puede aparecer allí.{" "}
+                      {preview.codeMatchesOrder ? (
+                        <>
+                          El código sí termina en el número de {preview.expectedOrderName}; también
+                          se comprobará que no esté vinculado a otro pedido.
+                        </>
+                      ) : (
+                        <>
+                          Y su código <strong>no lleva dentro el número de{" "}
+                          {preview.expectedOrderName}</strong>, así que nada corrobora que sea de
+                          este pedido salvo lo que afirmes aquí. Se comprobará que no esté vinculada
+                          a otro pedido, pero eso no dice que sea de este. Si te equivocas, este
+                          pedido cargará el desenlace de un paquete ajeno y el dueño real quedará
+                          figurando sin salida.
+                        </>
+                      )}
                     </p>
                     {preview.apiCandidateCount != null ? (
                       <p className="mt-1 text-xs">

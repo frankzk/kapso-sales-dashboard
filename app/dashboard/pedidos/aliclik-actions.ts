@@ -30,6 +30,8 @@ import { isFillableRouteOutput } from "@/lib/shipment-output";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { getMasterPermissions } from "@/lib/permissions-access";
+import { normalizeDistrictKey } from "@/lib/district-coverage";
+import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
 import { getStoreCreds } from "@/lib/ingest";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { getOrderMasterDetail } from "@/lib/orders-master-access";
@@ -98,6 +100,14 @@ export interface ExistingAliclikGuidePreview {
   totalMatches?: boolean | null;
   alreadyLinked?: boolean;
   verificationMode?: "api" | "manual_portal";
+  /**
+   * ¿El código impreso lleva dentro el número del pedido? Es una CORROBORACIÓN,
+   * no un requisito: solo la familia de seis dígitos lo cumple, y una guía
+   * creada en el portal puede salir con un código de otra familia. Cuando es
+   * false, lo único que sostiene el vínculo es la palabra de quien lo afirma, y
+   * la pantalla tiene que decirlo con esas letras.
+   */
+  codeMatchesOrder?: boolean;
   expectedOrderName?: string | null;
   apiCandidateCount?: number;
   apiMatchSummary?: string;
@@ -152,6 +162,7 @@ interface AliclikContext {
 async function authorize(
   orderId: string,
   permission: "aliclik.create_guide" | "aliclik.cancel_guide",
+  opts: { coverageProbe?: boolean } = {},
 ): Promise<{ ctx?: AliclikContext; error?: string }> {
   const perms = await getMasterPermissions();
   if (!perms.can(permission)) {
@@ -176,7 +187,20 @@ async function authorize(
   // Solo bloquea CREAR y VINCULAR. Anular sigue permitido: un pedido puede
   // haberse reclasificado después de tener su guía, y dejarlo sin poder cerrarla
   // sería peor que el problema que esto evita.
-  if (permission === "aliclik.create_guide" && classifyOperation(row) === "agencia") {
+  // La COMPROBACIÓN DE COBERTURA es la excepción, y por eso lleva su propia
+  // puerta. Cotizar es un GET: no crea guía, no reserva stock, no cuesta nada.
+  // La clasificación decide a dónde va el paquete, no si tenemos derecho a
+  // preguntarle a Aliclik si llega — y mientras la pregunta estuvo detrás de la
+  // respuesta, una clasificación equivocada no se podía desmentir nunca. Fue el
+  // caso de Pisac: la operación sabía que Aliclik cubre, y el pedido no ofrecía
+  // ni el botón de cotizar porque figuraba como Agencia.
+  //
+  // Escribir sigue cerrado: crear y vincular pasan por aquí sin la excepción.
+  if (
+    permission === "aliclik.create_guide" &&
+    !opts.coverageProbe &&
+    classifyOperation(row) === "agencia"
+  ) {
     return {
       error:
         "Este pedido tiene cobertura Agencia y va con Shalom u Olva; Aliclik no lo atiende. " +
@@ -273,6 +297,7 @@ async function resolveExistingAliclikGuide(
   let remoteOrder: AliclikOrder | null = null;
   let matchExplanation: string | undefined;
   let verificationMode: "api" | "manual_portal" = "api";
+  let codeMatchesOrder = false;
   let apiCandidateCount: number | undefined;
   let apiMatchSummary: string | undefined;
   if (/^ALC/i.test(code)) {
@@ -403,23 +428,37 @@ async function resolveExistingAliclikGuide(
       } else {
         const best = selected.matches[0];
         const matched = best?.reasons.length ? best.reasons.join(", ") : "ningún campo";
-        if (!isCompatibleManualPortalGuide(code, ctx.row.order_name)) {
-          return {
-            error:
-              `Aliclik no expone la guía de portal ${code} por la API oficial y el código no corresponde ` +
-              `al pedido ${ctx.row.order_name ?? "actual"}. Verifica el número de guía.`,
-          };
-        }
 
-        // GET /integration/order documenta expresamente que devuelve los
-        // “pedidos de tu integración”. Una guía AUR5X creada en el portal
-        // compartido no forma parte de esos pedidos ALC. Construimos una vista
-        // previa local; la escritura exigirá una confirmación auditada.
-        remoteOrder = manualPortalOrder(ctx, code);
-        verificationMode = "manual_portal";
-        matchExplanation = "sufijo exacto del pedido Shopify";
-        apiCandidateCount = candidates.size;
-        apiMatchSummary = matched;
+        // Un ALC que no aparece en la API no es una guía de portal: es un código
+        // que no existe en la cuenta. Ahí no hay nada que atestiguar y se cae al
+        // error de más abajo.
+        if (!/^ALC/i.test(code)) {
+          // GET /integration/order documenta expresamente que devuelve los
+          // “pedidos de tu integración”. Una guía AUR5X creada en el portal
+          // compartido no forma parte de esos pedidos ALC. Construimos una vista
+          // previa local; la escritura exigirá una confirmación auditada.
+          //
+          // EL SUFIJO YA NO ES LA PUERTA. Se exigía que el código terminara en el
+          // número del pedido, y eso solo lo cumple la familia de seis dígitos:
+          // medido sobre 3.976 guías, de las de 7 y 12 dígitos ninguna lo hace.
+          // Con la guarda anterior, una guía creada en la web de Aliclik que
+          // saliera con código largo era IMPOSIBLE de vincular desde el Master
+          // —le pasó a AUR5X7478480 con #KP128572— y el operador se quedaba sin
+          // salida para un paquete que ya existía.
+          //
+          // Lo que sostiene esta vinculación no es el sufijo: es la confirmación
+          // auditada que viene después —escribir el código del pedido y dar un
+          // motivo— más la guarda de que la guía no cuelgue ya de otro pedido.
+          // El sufijo pasa a ser lo que siempre fue, una corroboración: cuando
+          // está, se enseña; cuando no, la pantalla avisa de que no hay más
+          // respaldo que la palabra de quien firma.
+          codeMatchesOrder = isCompatibleManualPortalGuide(code, ctx.row.order_name);
+          remoteOrder = manualPortalOrder(ctx, code);
+          verificationMode = "manual_portal";
+          matchExplanation = codeMatchesOrder ? "sufijo exacto del pedido Shopify" : undefined;
+          apiCandidateCount = candidates.size;
+          apiMatchSummary = matched;
+        }
       }
     }
   }
@@ -547,6 +586,7 @@ async function resolveExistingAliclikGuide(
           : Math.abs(total - ctx.row.order_total) <= 0.01,
     alreadyLinked: linked?.order_id === orderId,
     verificationMode,
+    codeMatchesOrder,
     expectedOrderName: ctx.row.order_name,
     apiCandidateCount,
     apiMatchSummary,
@@ -634,9 +674,20 @@ const norm = (v: string | null | undefined) =>
  */
 export async function previewAliclikGuide(
   orderId: string,
-  input: { coordinate?: string | null; modality?: "cod" | "agency" } = {},
+  input: {
+    coordinate?: string | null;
+    modality?: "cod" | "agency";
+    /**
+     * Comprobación de cobertura sobre un pedido clasificado como Agencia. Solo
+     * levanta la puerta de la clasificación para poder COTIZAR; crear sigue
+     * cerrado, así que lo peor que puede pasar es enterarse de un precio.
+     */
+    coverageProbe?: boolean;
+  } = {},
 ): Promise<AliclikPreview> {
-  const { ctx, error } = await authorize(orderId, "aliclik.create_guide");
+  const { ctx, error } = await authorize(orderId, "aliclik.create_guide", {
+    coverageProbe: input.coverageProbe,
+  });
   if (!ctx) return { ok: false, error };
 
   // Pedido recién creado desde Leads: la fila local existe (la acción del botón
@@ -1314,8 +1365,16 @@ export async function linkExistingAliclikGuide(
     status_category: categoryOf(deliveryStatus),
     order_id: orderId,
     matched: true,
+    // Distingue las dos vinculaciones de portal, porque no valen lo mismo: en
+    // una el código impreso nombra al pedido, en la otra lo único que hay es la
+    // firma del operador. Un solo valor para ambas borraría esa diferencia justo
+    // en la columna que se mira para auditar cómo llegó una guía a su pedido.
     match_method:
-      preview.verificationMode === "manual_portal" ? "portal_code_suffix" : "manual_api",
+      preview.verificationMode === "manual_portal"
+        ? preview.codeMatchesOrder
+          ? "portal_code_suffix"
+          : "portal_operator_attested"
+        : "manual_api",
     order_name: ctx.row.order_name,
     customer_name: customerName,
     customer_phone: customerPhone,
@@ -1577,4 +1636,106 @@ export async function cancelAliclikGuide(
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
   return { notice: "Pedido cancelado en Aliclik." };
+}
+
+/**
+ * Marca el distrito de un pedido como Provincia COD porque Aliclik acaba de
+ * cotizarlo.
+ *
+ * DE DÓNDE SALE. El bloque de Agencia deja comprobar si Aliclik llega
+ * (`previewAliclikGuide` con `coverageProbe`). Si contesta con un precio, esa
+ * respuesta es la prueba de cobertura, y hasta ahora se enseñaba y se tiraba:
+ * el operador tenía que ir a Ajustes a escribir a mano lo que el sistema
+ * acababa de averiguar.
+ *
+ * POR QUÉ NO SE ESCRIBE SOLA. La cotización es por COORDENADA y la cobertura es
+ * por DISTRITO. Que Aliclik llegue a un punto de Pisac no prueba que llegue a
+ * todo Pisac, así que la generalización la firma una persona. Lo que se
+ * automatiza es el trabajo —la consulta, el nombre normalizado, la nota con el
+ * precio y la fecha, el recálculo de los pedidos abiertos—, no la decisión.
+ *
+ * QUIÉN PUEDE. Sigue exigiendo admin de la tienda, igual que Ajustes: esto
+ * cambia por dónde se despacha TODO ese distrito, no solo este pedido. Quien
+ * cotiza y no es admin ve el precio y a quién pedírselo.
+ */
+export async function markDistrictCoveredByAliclik(
+  orderId: string,
+  quotedCost: number | null,
+): Promise<{ notice?: string; error?: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("aliclik.create_guide")) {
+    return { error: "Tu rol no permite esta acción sobre Aliclik." };
+  }
+
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  const { data } = await sb.from("order_master").select("*").eq("order_id", orderId).maybeSingle();
+  if (!data) return { error: "Sin acceso a este pedido." };
+  const row = data as unknown as OrderMasterRow;
+
+  const raw = (row.district ?? "").trim();
+  const district = normalizeDistrictKey(raw);
+  if (!district) {
+    return { error: "El pedido no tiene distrito; corrígelo en Ubicación y cobertura." };
+  }
+
+  const admin = createAdminSupabase();
+  const { data: store } = await admin
+    .from("stores")
+    .select("org_id")
+    .eq("id", row.store_id)
+    .maybeSingle();
+  const orgId = (store as { org_id: string } | null)?.org_id;
+  if (!orgId) return { error: "No se pudo leer la tienda del pedido." };
+
+  const { data: membership } = await sb
+    .from("memberships")
+    .select("role")
+    .eq("org_id", orgId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const role = (membership as { role: string } | null)?.role;
+  if (role !== "owner" && role !== "admin") {
+    return {
+      error:
+        `Aliclik sí cubre ${raw}, pero marcar un distrito cambia el despacho de todos sus ` +
+        "pedidos y eso lo hace un administrador. Pídeselo indicando el distrito y el precio.",
+    };
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const { error } = await saveDistrictCoverageRow(admin, {
+    // Sin tienda: la clasificación de hoy es global y un distrito cubierto lo
+    // está para las dos tiendas, que comparten la misma cuenta de Aliclik.
+    storeId: null,
+    district,
+    coverage: "provincia_cod",
+    note:
+      `Aliclik cotizó ${quotedCost != null ? `S/ ${quotedCost.toFixed(2)} ` : ""}` +
+      `desde el pedido ${row.order_name ?? orderId} el ${today}.`,
+    updatedBy: user.id,
+  });
+  if (error) return { error };
+
+  // Los pedidos abiertos de ese distrito estaban clasificados con la regla
+  // vieja. Sin esto, el que acabas de comprobar seguiría enseñando Agencia.
+  const { data: affected } = await admin
+    .from("order_master")
+    .select("order_id")
+    .ilike("district", district)
+    .not("macro_stage", "in", "(finalizado)")
+    .limit(2000);
+  const ids = ((affected ?? []) as { order_id: string }[]).map((r) => r.order_id);
+  const done = ids.length ? await recomputeOrderMasterSafe(admin, ids) : { written: 0 };
+
+  revalidatePath(MASTER_PATH);
+  return {
+    notice:
+      `«${raw}» queda como Provincia COD.` +
+      (done.written ? ` ${done.written} pedido(s) abiertos reclasificados.` : ""),
+  };
 }
