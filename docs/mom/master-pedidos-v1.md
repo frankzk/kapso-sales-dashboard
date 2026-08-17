@@ -2006,6 +2006,30 @@ Tres reglas, a partir de acá:
 3. **Best-effort no es en silencio.** Seguir adelante ante un fallo es correcto;
    no dejar rastro no lo es. El recálculo devuelve cuántos pedidos se quedaron
    sin recalcular, y el reporte de sincronización lo dice.
+4. **Una regla correcta no sirve si no llega a ejecutarse.** El barrido vivía en
+   la última línea de `runStoreSync`, y el cron recorría las tiendas en serie
+   bajo un solo `maxDuration`. Sin reparto de reloj, la segunda tienda hereda lo
+   que la primera no gastó — y lo primero que muere cuando se acaba es
+   precisamente la última línea de la segunda. **Medido el 17-08-2026**, con la
+   regla ya desplegada: el atraso global cayó de 955 pedidos a ~200 y ahí se
+   detuvo; al agrupar los que no drenaban salió **una sola tienda, Kenku, con
+   207 pedidos y 50 horas de desfase medio**, y Aurela con cero. Misma regla,
+   mismo código, dos tiendas activas: a una no le llegaba nunca.
+
+   Ahora el barrido tiene **su propio cron** (`/api/cron/master-reconcile`) con
+   presupuesto propio, repartido entre las tiendas que faltan por barrer
+   (`budgetShareMs`), y lo que no cabe se cuenta en `deferred` —que no es un
+   fallo: vuelve solo en la pasada siguiente porque el ancla es el desfase, no
+   una lista—. La sincronización sigue barriendo cuando se pide **una** tienda
+   (la conexión inicial, el botón de sincronizar); lo que ya no hace es barrer
+   desde la cola de un recorrido multitienda.
+
+   Es la tercera vez que este repositorio paga el mismo defecto —antes fue la
+   caducidad de huérfanas y el pase de rezagadas detrás del bucle de Aliclik— y
+   la lección está escrita en `aliclik-close/route.ts`: **un trabajo colgado del
+   final de otro más largo no tiene garantía de ejecutarse nunca.** Al revisar
+   por qué algo «no funciona», la pregunta va antes que la regla: ¿llegó a
+   correr?
 
 Y una cuarta, para quien toque la base a mano: **enlazar una guía a un pedido por
 SQL deja el Master mintiendo hasta el siguiente barrido.** Ahora el barrido lo

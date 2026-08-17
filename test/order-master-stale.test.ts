@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { recomputeInBatches, staleByShipment } from "@/lib/order-master";
+import { budgetShareMs, recomputeInBatches, staleByShipment } from "@/lib/order-master";
 
 // LA CUARTA PUERTA DEL BARRIDO.
 //
@@ -116,7 +116,7 @@ describe("recomputeInBatches — un fallo cuesta un trozo, no la lista", () => {
       },
       { batch: 2, retry: 1 },
     );
-    expect(r).toEqual({ requested: 5, written: 5, failed: 0, error: null });
+    expect(r).toEqual({ requested: 5, written: 5, failed: 0, error: null, deferred: 0 });
     expect(vistos).toEqual([["a", "b"], ["c", "d"], ["e"]]);
   });
 
@@ -130,7 +130,7 @@ describe("recomputeInBatches — un fallo cuesta un trozo, no la lista", () => {
       { batch: 4, retry: 1 },
     );
     // La tanda de 4 falla, se reintenta de uno en uno: 3 salvados, 1 perdido.
-    expect(r).toEqual({ requested: 4, written: 3, failed: 1, error: "boom" });
+    expect(r).toEqual({ requested: 4, written: 3, failed: 1, error: "boom", deferred: 0 });
   });
 
   it("cuenta los perdidos cuando el trozo entero sigue fallando", async () => {
@@ -141,7 +141,7 @@ describe("recomputeInBatches — un fallo cuesta un trozo, no la lista", () => {
       },
       { batch: 4, retry: 2 },
     );
-    expect(r).toEqual({ requested: 4, written: 0, failed: 4, error: "Supabase caído" });
+    expect(r).toEqual({ requested: 4, written: 0, failed: 4, error: "Supabase caído", deferred: 0 });
   });
 
   it("no pregunta dos veces por el mismo pedido", async () => {
@@ -156,5 +156,81 @@ describe("recomputeInBatches — un fallo cuesta un trozo, no la lista", () => {
     );
     expect(vistos).toEqual(["a", "b"]);
     expect(r.requested).toBe(2);
+  });
+});
+
+// ── Que a la última tienda de la cola le llegue reloj ───────────────────────
+//
+// El barrido del Master era la última línea de `runStoreSync`, y el cron
+// recorría las tiendas en serie bajo un solo `maxDuration`. Sin reparto, la
+// segunda hereda lo que sobre — y lo que sobra, cuando la primera se pasa, es
+// nada. Medido en producción el 17-08-2026: Kenku 207 pedidos desfasados con 50
+// horas de media, Aurela cero. Misma regla, mismo código; a una tienda no le
+// llegaba.
+//
+// Es lo que estas pruebas fijan, y es lo que ninguna prueba miraba: no si la
+// regla acierta —eso ya estaba cubierto— sino si llega a EJECUTARSE.
+
+describe("budgetShareMs — el reparto del reloj entre tiendas", () => {
+  it("parte lo que queda entre las tiendas que faltan, esta incluida", () => {
+    expect(budgetShareMs(240_000, 2)).toBe(120_000);
+    expect(budgetShareMs(120_000, 1)).toBe(120_000);
+  });
+
+  it("A LA ÚLTIMA TIENDA LE QUEDA TIEMPO aunque la primera se pase", () => {
+    // La prueba que habría cazado el incidente. Se simula el bucle entero: dos
+    // tiendas, y la primera consume TODA su parte. La segunda tiene que recibir
+    // un reparto mayor que cero — antes recibía lo que la primera no gastó, que
+    // era cero.
+    const total = 240_000;
+    let reloj = 0;
+    const partes: number[] = [];
+    for (const i of [0, 1]) {
+      const parte = budgetShareMs(total - reloj, 2 - i);
+      partes.push(parte);
+      reloj += parte; // la tienda agota su parte entera
+    }
+    expect(partes[0]).toBe(120_000);
+    expect(partes[1]).toBeGreaterThan(0);
+    expect(partes[1]).toBe(120_000);
+  });
+
+  it("no reparte tiempo negativo cuando el presupuesto ya se pasó", () => {
+    expect(budgetShareMs(-5_000, 2)).toBe(0);
+  });
+
+  it("no divide por cero cuando no quedan tiendas", () => {
+    expect(budgetShareMs(10_000, 0)).toBe(0);
+  });
+});
+
+describe("recomputeInBatches — el corte por reloj", () => {
+  it("corta ENTRE tandas y cuenta lo aplazado, sin darlo por fallido", () => {
+    // Una tanda a medias dejaría unos recalculados y otros no sin saber cuáles.
+    let ahora = 0;
+    const vistos: string[][] = [];
+    return recomputeInBatches(
+      ["a", "b", "c", "d", "e", "f"],
+      async (batch) => {
+        vistos.push(batch);
+        ahora += 50; // cada tanda cuesta 50
+        return batch.length;
+      },
+      { batch: 2, deadline: 90, now: () => ahora },
+    ).then((r) => {
+      // Tercera tanda: el reloj va por 100 y el corte era 90, así que para.
+      expect(vistos).toEqual([["a", "b"], ["c", "d"]]);
+      expect(r.written).toBe(4);
+      expect(r.deferred).toBe(2);
+      // Aplazado NO es fallido: nadie lo intentó y vuelve en la pasada siguiente.
+      expect(r.failed).toBe(0);
+      expect(r.error).toBeNull();
+    });
+  });
+
+  it("sin `deadline` no corta nunca, que es como se llama desde las acciones", async () => {
+    const r = await recomputeInBatches(["a", "b", "c"], async (b) => b.length, { batch: 1 });
+    expect(r.written).toBe(3);
+    expect(r.deferred).toBe(0);
   });
 });
