@@ -2839,6 +2839,24 @@ function OrderDrawer({
                           Rótulo ↗
                         </a>
                       )}
+                      {/* Los dos rótulos del paquete en UNA hoja: el de
+                          Tanders arriba y, debajo, el QR de la salida y qué va
+                          dentro de la caja. Se suma a los otros dos en vez de
+                          reemplazarlos mientras se valida en el almacén. Marca
+                          «rótulo generado» igual que el enlace suyo: para
+                          Tanders el paquete quedó rotulado, lo imprimas junto o
+                          por separado. */}
+                      {g.courier === "tanders" && (
+                        <a
+                          href={`/api/pedidos/guia-combinada?ids=${g.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={() => void markTandersLabelGenerated([g.id])}
+                          className="rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-xs font-medium text-brand-700 hover:bg-brand-100"
+                        >
+                          Guía combinada ↗
+                        </a>
+                      )}
                       {/* Un solo papel para la caja de agencia: la etiqueta de
                           Shalom —que la compone ELLOS y se pide a su API—
                           arriba, y debajo nuestra banda con el QR de la salida
@@ -4042,6 +4060,16 @@ function OrderActions({
             <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               Corregir vínculo de guía
             </h4>
+            {/* Qué hace, dicho antes de pulsar. Es la única vía para mover una
+                guía que se enganchó al pedido equivocado —pasa cuando un cliente
+                tiene dos pedidos y el emparejador solo tuvo el teléfono— y sin
+                decirlo se lee como «vincular una guía suelta», que es lo que ya
+                hace la tarjeta de Aliclik de arriba. */}
+            <p className="text-xs text-slate-500">
+              MUEVE la guía a este pedido, aunque esté en otro: se la quita al anterior, renumera la
+              salida y deja constancia en los dos historiales. Es la corrección para una guía
+              enganchada al pedido equivocado.
+            </p>
             <div className="flex flex-col gap-2 sm:flex-row">
               <input
                 value={relinkCode}

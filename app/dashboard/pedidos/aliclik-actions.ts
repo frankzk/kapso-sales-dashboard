@@ -466,10 +466,19 @@ async function resolveExistingAliclikGuide(
     order_name: string | null;
   } | null;
   if (linked?.order_id && linked.order_id !== orderId) {
+    // NO ES UN CALLEJÓN SIN SALIDA, y decirlo importa. Esta acción es para traer
+    // de Aliclik una guía que aún no conocemos; mover una que ya está en otro
+    // pedido es otra cosa —una corrección— y tiene su propia herramienta, que
+    // renumera la salida y recalcula los dos pedidos. Sin esta frase, quien se
+    // topa con el error concluye que no se puede y acaba pidiendo que alguien
+    // toque la base: pasó con AUR5X121336, enganchada por teléfono al pedido
+    // anterior del mismo cliente.
     return {
       error:
         `La guía ${code} ya está vinculada a ${linked.order_name ?? "otro pedido"}. ` +
-        "No se modificó ningún vínculo.",
+        "No se modificó ningún vínculo. Para traerla a ESTE pedido usa «Gestión manual → " +
+        "correcciones excepcionales → Corregir vínculo de guía», que la mueve dejando " +
+        "constancia en los dos pedidos.",
     };
   }
 
@@ -1334,7 +1343,11 @@ export async function linkExistingAliclikGuide(
     insert.closed_at = lastReportAt;
     insert.delivered_source = "aliclik_api";
   }
-  if (mapped.returned) insert.returned_at = lastReportAt;
+  if (mapped.returned) {
+    insert.returned_at = lastReportAt;
+    // Lo dice la API de Aliclik, no la persona que pulsó «verificar» (0118).
+    insert.returned_source = "aliclik_api";
+  }
 
   // ADOPTAR ANTES DE INSERTAR. La guía puede existir YA en `shipments` sin estar
   // enganchada a ningún pedido: es el caso de las miles de guías que entraron por

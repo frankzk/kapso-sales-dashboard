@@ -1226,6 +1226,11 @@ export async function runStoreSync(
   try {
     const reconciled = await reconcileOrderMaster(admin, [storeId]);
     report.orderMaster = reconciled.written;
+    // Que el barrido siga adelante ante un pedido que revienta es lo correcto;
+    // que nadie se entere, no. Un fallo aquí significa etapas viejas en pantalla.
+    if (reconciled.failed) {
+      report.errors.push(`order_master: ${reconciled.failed} pedidos sin recalcular`);
+    }
   } catch (e: any) {
     report.errors.push(`order_master: ${e.message}`);
   }

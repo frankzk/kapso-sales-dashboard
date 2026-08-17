@@ -1,4 +1,5 @@
 import { isEffectiveOn, specificity, type CostTariff } from "@/lib/costs";
+import { findDistrictOverride, type DistrictCoverageRule } from "@/lib/district-coverage";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type OrderCoverage = "lima" | "provincia_cod" | "agencia" | "por_revisar";
@@ -447,7 +448,19 @@ export function classifyOrderCoverage(
   location: CoverageLocation,
   tariffs: readonly CostTariff[],
   day: string,
+  overrides: readonly DistrictCoverageRule[] = [],
 ): OrderCoverage {
+  // Excepción explícita del distrito (0121). Va PRIMERO, por delante de Cañete y
+  // de Lima Metropolitana: es una decisión de la operación y existe justamente
+  // para poder contradecir a las reglas automáticas.
+  //
+  // El orden es el MISMO que el de `order_coverage_for` en la base a propósito.
+  // Esta función es solo el respaldo de cuando la base no pudo responder, y dos
+  // precedencias distintas darían dos respuestas a la misma pregunta — que es el
+  // bug que motivó la 0104.
+  const override = findDistrictOverride(overrides, location.storeId, location.district);
+  if (override) return override;
+
   // Decisión comercial explícita: Cañete se atiende por agencia, aunque exista
   // una tarifa histórica de otro courier que accidentalmente coincida.
   if (isCaneteLocation(location)) return "agencia";

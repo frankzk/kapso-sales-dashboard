@@ -10,6 +10,7 @@ import {
   type SweepEvidence,
 } from "@/lib/aliclik-orphan-expiry";
 import { readSweepEvidence } from "@/lib/aliclik-sweep-state";
+import { courierReason, RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -97,6 +98,14 @@ const FOLLOW_UP_POOL = 2000;
  * es el selector puro.
  */
 const FOLLOW_UP_RETURN_WINDOW_MS = 21 * DAY_MS;
+/** Consultas por pasada de la tercera vuelta (el motivo del courier, 0119). El
+ *  atraso de ~100 guías se drena en poco más de una hora sin comerle el reloj a
+ *  la persecución de rezagadas, que es la tarea larga de este cron. */
+const REASON_PROBE_LIMIT = 30;
+/** Cada cuánto se vuelve a preguntar por una guía que sigue sin motivo. Aliclik
+ *  puede escribirlo tarde; repreguntar cada veinte minutos sería castigar a la
+ *  API por un dato que casi nunca cambia. */
+const REASON_PROBE_COOLDOWN_MS = 7 * DAY_MS;
 /** Corte por reloj, por debajo de `maxDuration`: el corte tiene que ser nuestro. */
 const FOLLOW_UP_BUDGET_MS = 230_000;
 /** Cada cuántas consultas se sella el turno. Ver `flushAsked`. */
@@ -138,6 +147,13 @@ interface StoreReport {
   followUpMissing: number;
   /** `true` si el reloj cortó la cola antes que el tope de consultas. */
   followUpStoppedByBudget: boolean;
+  /** Devoluciones sin motivo a las que se les preguntó por el motivo (0119). */
+  reasonProbed: number;
+  /** De esas, cuántas volvieron CON motivo: el MOM §11 ya se puede evaluar. */
+  reasonFound: number;
+  /** Las que ni así lo tienen. Si este número no baja, el dato no está en
+   *  Aliclik y esas decisiones se seguirán tomando a ciegas. */
+  reasonStillBlind: number;
   errors: string[];
 }
 
@@ -153,6 +169,9 @@ const emptyReport = (storeId: string): StoreReport => ({
   followUpAbandoned: 0,
   followUpMissing: 0,
   followUpStoppedByBudget: false,
+  reasonProbed: 0,
+  reasonFound: 0,
+  reasonStillBlind: 0,
   errors: [],
 });
 
@@ -358,6 +377,128 @@ async function followUpLiveGuides(
   await flushAsked();
 }
 
+/** Lo que necesita la pasada de motivo: con qué preguntar y qué mirar después. */
+interface ReasonProbeCandidate {
+  id: string;
+  external_order_number: string | null;
+  guide_code: string | null;
+  reported_status: string | null;
+  non_delivery_reason: string | null;
+  api_report_at: string | null;
+}
+
+/**
+ * Tercera vuelta: el MOTIVO de las devoluciones que volvieron sin él (0119).
+ *
+ * POR QUÉ ES UNA PASADA APARTE. Las otras dos persiguen el ESTADO de la guía, y
+ * para estas el estado ya está resuelto: volvieron, están `anulado`, no hay nada
+ * más que esperar. Lo que falta es el motivo — y el motivo no es un adorno del
+ * estado, es el dato con el que se aplica el MOM §11 en lib/return-recovery.ts.
+ * Con las dos columnas vacías `wasRefusedInPerson` devuelve `false` y la guía
+ * entra a la cola de recuperación, desde donde sale un mensaje pidiéndole un
+ * adelanto a una clienta que, por lo que consta, bien pudo haber rechazado el
+ * paquete en la puerta.
+ *
+ * Eran 100 de 130 candidatas: guías importadas del Excel del 20-07 que nunca
+ * pasaron por la API. El barrido por fechas ya no las alcanza y la persecución
+ * de rezagadas tampoco —a una anulada le da tres semanas de silencio y estas
+ * llevan más—, así que el ancla acá no es el estado ni la fecha del reporte,
+ * sino la PREGUNTA sin responder.
+ *
+ * Se acota a la ventana de recuperación (`RECOVERY_DEFAULT_MAX_DAYS`): fuera de
+ * ella no se le escribe a nadie, así que preguntar sería gastar llamadas en una
+ * decisión que ya no se va a tomar. Y se anota en `reason_probed_at` HAYA O NO
+ * respuesta, que es lo único que evita repreguntar en bucle cada veinte minutos
+ * por un dato que Aliclik quizá no tenga.
+ *
+ * Un fallo acá no rompe la pasada, igual que el seguimiento: son consultas extra
+ * sobre un estado ya aplicado, y se reintentan en el siguiente ciclo.
+ */
+async function fillReturnReasons(
+  storeId: string,
+  apiToken: string,
+  admin: ReturnType<typeof createAdminSupabase>,
+  sweep: SweepEvidence | null,
+  now: Date,
+  deadline: number,
+  report: StoreReport,
+): Promise<void> {
+  const windowStart = new Date(now.getTime() - RECOVERY_DEFAULT_MAX_DAYS * DAY_MS).toISOString();
+  const cooldown = new Date(now.getTime() - REASON_PROBE_COOLDOWN_MS).toISOString();
+
+  const { data, error } = await admin
+    .from("shipments")
+    .select("id,external_order_number,guide_code,reported_status,non_delivery_reason,api_report_at")
+    .eq("store_id", storeId)
+    .eq("courier", "aliclik")
+    .not("returned_at", "is", null)
+    .gte("returned_at", windowStart)
+    // `is null` a secas alcanza porque 0119 dejó una sola forma del vacío y
+    // `reportedStatusPatch` ya no escribe cadenas vacías.
+    .is("reported_status", null)
+    .is("non_delivery_reason", null)
+    .or(`reason_probed_at.is.null,reason_probed_at.lt.${cooldown}`)
+    // Las devueltas más recientes primero: son las que la cola va a trabajar hoy
+    // y las que más lejos están de caerse de la ventana.
+    .order("returned_at", { ascending: false })
+    .limit(REASON_PROBE_LIMIT);
+
+  if (error) {
+    report.errors.push(`motivo: ${error.message}`);
+    return;
+  }
+
+  // Si el barrido acaba de releerla y sigue sin motivo, la respuesta ya la
+  // tenemos: preguntar otra vez por lo mismo no la cambiaría.
+  const sweptAt = sweep ? new Date(sweep.startedAt).getTime() : NaN;
+
+  for (const guide of (data ?? []) as ReasonProbeCandidate[]) {
+    if (Date.now() > deadline) break;
+    if (
+      Number.isFinite(sweptAt) &&
+      guide.api_report_at &&
+      new Date(guide.api_report_at).getTime() >= sweptAt
+    ) {
+      continue;
+    }
+
+    const key = followUpKey(guide);
+    report.reasonProbed++;
+    try {
+      const res = await refreshAliclikOrder(key, { apiToken }, admin);
+      if (res.outcome === "error" && res.error) {
+        report.errors.push(`motivo ${key}: ${res.error}`);
+      }
+    } catch (e) {
+      report.errors.push(`motivo ${key}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // Se relee la guía en vez de deducirlo del resultado: `applyAliclikSnapshot`
+    // informa de si aplicó un ESTADO, y acá lo que importa es otra cosa —si la
+    // columna del motivo quedó escrita—. Una guía puede volver `unchanged`
+    // porque el snapshot era más viejo que el último reporte y seguir sin motivo.
+    const { data: after } = await admin
+      .from("shipments")
+      .select("reported_status,non_delivery_reason")
+      .eq("id", guide.id)
+      .maybeSingle();
+
+    if (
+      after &&
+      courierReason(after as Pick<ReasonProbeCandidate, "reported_status" | "non_delivery_reason">)
+    ) {
+      report.reasonFound++;
+    } else {
+      report.reasonStillBlind++;
+    }
+
+    await admin
+      .from("shipments")
+      .update({ reason_probed_at: new Date().toISOString() })
+      .eq("id", guide.id);
+  }
+}
+
 async function run(req: NextRequest) {
   if (!authorized(req)) return new NextResponse("unauthorized", { status: 401 });
 
@@ -405,6 +546,19 @@ async function run(req: NextRequest) {
         sweep,
         now,
         Date.now() + share,
+        report,
+      );
+
+      // Va la última y con lo que sobre del reloj: son treinta consultas por un
+      // dato que ya llegó tarde. La persecución de rezagadas persigue estados
+      // que aún se pueden mover, y esa tiene prioridad sobre esta.
+      await fillReturnReasons(
+        storeId,
+        creds.aliclik_api_token,
+        admin,
+        sweep,
+        now,
+        deadline,
         report,
       );
     } catch (e) {

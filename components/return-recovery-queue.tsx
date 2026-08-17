@@ -20,7 +20,8 @@ import {
   sendRecoveryAction,
   type RecoveryView,
 } from "@/app/dashboard/envios/recuperacion/actions";
-import { RECOVERY_SKIP_NO_ORDER, type RecoveryQueueRow } from "@/lib/return-recovery";
+import { courierReason, RECOVERY_SKIP_NO_ORDER, type RecoveryQueueRow } from "@/lib/return-recovery";
+import { isManualReturn } from "@/lib/returned-source";
 
 type Tab = "pendientes" | "enviadas" | "descartadas";
 
@@ -73,10 +74,21 @@ export function ReturnRecoveryQueue({
 
   const rows = groups[tab];
   const elegibles = groups.pendientes.filter((r) => r.skip === null).length;
+  // Cuántas de las elegibles lo son sin que conste el motivo. No es una
+  // curiosidad: mide qué parte de la cola pasó el MOM §11 por falta de dato y no
+  // por constancia.
+  const ciegas = groups.pendientes.filter((r) => r.skip === null && !courierReason(r)).length;
 
   const send = (row: RecoveryQueueRow) => {
     const quien = row.customer_name?.trim() || row.customer_phone || "esta clienta";
-    if (!confirm(`Enviar la plantilla de recuperación a ${quien}?\n\nSale del WhatsApp de ${storeName} y no se puede deshacer.`)) {
+    // El aviso de la fila se pudo haber leído hace diez minutos; el confirmar es
+    // el instante en que se decide. Si no consta el motivo, la advertencia va acá
+    // y con todas las letras: la exclusión del MOM §11 no se aplicó porque no
+    // había con qué, no porque esta guía la haya pasado.
+    const aCiegas = !courierReason(row)
+      ? `\n\nOJO: esta devolución no trae motivo del courier. No consta si ${quien} rechazó el producto en la puerta — y a quien lo rechazó no se le pide adelanto (MOM §11).`
+      : "";
+    if (!confirm(`Enviar la plantilla de recuperación a ${quien}?${aCiegas}\n\nSale del WhatsApp de ${storeName} y no se puede deshacer.`)) {
       return;
     }
     setMsg(null);
@@ -174,6 +186,9 @@ export function ReturnRecoveryQueue({
         {tab === "pendientes" && (
           <span className="self-center text-xs text-slate-500">
             {elegibles} elegible{elegibles === 1 ? "" : "s"} de {groups.pendientes.length}
+            {ciegas > 0 && (
+              <span className="text-amber-700"> · {ciegas} sin motivo del courier</span>
+            )}
           </span>
         )}
       </nav>
@@ -229,9 +244,35 @@ export function ReturnRecoveryQueue({
                     <td className="px-3 py-2 tabular-nums text-slate-700">
                       {money(r.reported_collect_amount)}
                     </td>
-                    <td className="px-3 py-2 text-slate-600">{daysAgo(r.returned_at)}</td>
-                    <td className="px-3 py-2 text-xs text-slate-500">
-                      {r.reported_status || r.non_delivery_reason || "—"}
+                    <td className="px-3 py-2 text-slate-600">
+                      {daysAgo(r.returned_at)}
+                    </td>
+                    {/* El motivo del courier NO es una columna informativa: es
+                        con lo que se aplica el MOM §11, la regla que saca de la
+                        cola a quien rechazó el paquete teniéndolo delante. Por
+                        eso el vacío no puede pintarse como un guion más. Un
+                        guion se lee «no hay nada que decir»; lo que pasa acá es
+                        que NO SE SABE qué ocurrió en la puerta, y la regla no
+                        excluyó a esta guía porque no pudo evaluarla. Quien pulsa
+                        Enviar está pidiendo un adelanto: que lo vea. */}
+                    <td className="px-3 py-2 text-xs">
+                      {courierReason(r) ? (
+                        <span className="text-slate-500">{courierReason(r)}</span>
+                      ) : (
+                        <>
+                          <div className="font-medium text-amber-700">sin motivo del courier</div>
+                          <div className="text-slate-500">
+                            no consta si la rechazó en la puerta (MOM §11 sin evaluar)
+                          </div>
+                        </>
+                      )}
+                      {/* «Sellada a mano» (0118) va JUNTO al motivo y no en la
+                          fecha: las dos frases responden la misma pregunta —qué
+                          constancia hay detrás de esta devolución— y separarlas
+                          obligaba a leer dos columnas para contestarla. */}
+                      {isManualReturn(r.returned_source) && (
+                        <div className="text-amber-700">sellada a mano</div>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-right">
                       {tab === "pendientes" && r.skip === null && (

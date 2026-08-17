@@ -8618,3 +8618,285 @@ alter table shipments
 
 comment on column shipments.api_updated_at is
   'El `updatedAt` de Aliclik tal como lo vio la última lectura de la API. Guarda monotónica del barrido. A diferencia de last_report_at, el Excel NO lo escribe: por eso importar un reporte ya no deja ciega a la API.';
+
+-- ---- 0118 ----
+-- ============================================================================
+-- 0118_returned_source.sql — quién dio por devuelta la guía.
+--
+-- `returned_at` es el sello que abre la cola de recuperación (MOM §11.1): en
+-- cuanto tiene fecha, el pedido pasa a `devuelto` y la clienta entra en la lista
+-- de gente a la que se le va a pedir dinero por adelantado para reenviar. Ese
+-- sello lo pueden escribir cuatro manos distintas:
+--
+--   aliclik_api      la lectura de la API (lib/aliclik-track.ts, y el enlace
+--                    manual contra Aliclik desde el Master)
+--   aliclik_report   el Excel del courier (lib/aliclik-ingest.ts)
+--   <courier>_report el reporte de otro courier (lib/report-ingest.ts)
+--   manual           una persona, recibiendo el paquete en el almacén
+--
+-- Hasta ahora las cuatro se veían IGUAL en pantalla. Una guía sellada a mano —
+-- porque el paquete estaba físicamente sobre la mesa y Aliclik nunca lo reportó—
+-- aparecía como «anulado · devuelta» sin nada que la distinguiera de una con
+-- constancia del courier. Eso importa justo acá y no en otros campos: sobre este
+-- dato se manda un mensaje que pide un adelanto, y si el sello estaba mal puesto
+-- se le pide plata a alguien cuyo paquete sigue en ruta.
+--
+-- La columna es el mismo trato que ya se le da a las entregas con
+-- `delivered_source` (0026): el hecho se guarda CON su procedencia, no a secas.
+-- `returned_by` completa el par para el caso manual — el resto de acciones de
+-- persona del MOM (ready_by, custody_transferred_by, 0086) ya guardan actor.
+--
+-- Backfill. Las 341 guías selladas hasta hoy se reparten con una regla que no
+-- inventa nada: si el sello llegó DESPUÉS del último reporte del courier, no hay
+-- constancia detrás y es manual (son exactamente 3, las que se sellaron a mano
+-- el 10-08 para destrabar la cola); el resto coincide con un reporte y queda
+-- como `aliclik_report`. Para esas filas antiguas no se puede separar API de
+-- Excel —ambas vías escriben `last_report_at` en el mismo movimiento— y no hace
+-- falta: las dos son constancia del courier, que es la distinción por la que
+-- existe esta columna.
+-- ============================================================================
+alter table shipments
+  add column if not exists returned_source text,
+  add column if not exists returned_by uuid references auth.users(id) on delete set null;
+
+comment on column shipments.returned_source is
+  'Procedencia del sello de devolución: aliclik_api | aliclik_report | <courier>_report | manual. NULL = guía sin devolver (o sellada antes de 0118 sin rastro). Se escribe JUNTO a returned_at y no se pisa mientras el sello siga en pie.';
+
+comment on column shipments.returned_by is
+  'Quién marcó la devolución cuando returned_source = manual. NULL para las que reportó el courier.';
+
+update shipments
+   set returned_source = case
+         -- Sello posterior al último reporte: nadie lo reportó, lo puso una
+         -- persona. El minuto de holgura es para no confundir el sello que la
+         -- propia importación escribe en el mismo movimiento.
+         when last_report_at is null then 'manual'
+         when returned_at > last_report_at + interval '1 minute' then 'manual'
+         else courier || '_report'
+       end
+ where returned_at is not null
+   and returned_source is null;
+
+-- ---- 0119 ----
+-- ============================================================================
+-- 0119_reason_probed_at.sql — cuándo le preguntamos a la API por el motivo.
+--
+-- EL MOTIVO DEL COURIER ES LO QUE APLICA EL MOM §11. La regla —«si la clienta
+-- vio el producto y aun así lo rechazó, normalmente no reenviar»— se evalúa
+-- contra `reported_status` y `non_delivery_reason` (lib/return-recovery.ts,
+-- `wasRefusedInPerson`). Cuando las dos columnas están vacías, la regla NO
+-- excluye: pasa. Y pasar significa que la guía entra a la cola de recuperación,
+-- desde donde sale un mensaje que le pide un adelanto a la clienta.
+--
+-- O sea que la ausencia del dato se estaba leyendo como «nunca vio el
+-- producto», que es justo lo contrario de lo que dice: no se sabe.
+--
+-- CUÁNTAS. De las 130 devoluciones candidatas de los últimos 30 días, 100 no
+-- tienen motivo alguno. Son guías `anulado` importadas del Excel del 20-07, con
+-- `api_report_at` en nulo: nunca pasaron por la API. El barrido por fechas no
+-- las alcanza (se cayeron del rango) y el segundo pase tampoco (a una anulada le
+-- da tres semanas de silencio). El motivo existe en Aliclik; nadie se lo había
+-- preguntado.
+--
+-- Esta columna es el registro de haberlo preguntado. Sin ella la pasada volvería
+-- a consultar las mismas guías cada veinte minutos para siempre: una guía sin
+-- motivo que la API tampoco explica es indistinguible de una que nunca se
+-- consultó. No se reutiliza `api_report_at` para esto, aunque parezca el mismo
+-- dato: ese sello significa «lectura fresca de API» y con él
+-- `reconcileReportedDeliveryStatus` BLOQUEA que un Excel posterior cambie el
+-- estado de la guía. Estamparlo para anotar un sondeo silenciaría los reportes.
+-- ============================================================================
+alter table shipments
+  add column if not exists reason_probed_at timestamptz;
+
+comment on column shipments.reason_probed_at is
+  'Última vez que se le preguntó a la API del courier por el motivo de una devolución que no lo traía. Solo evita repreguntar en bucle: no dice que el motivo se haya encontrado.';
+
+-- Una sola forma de decir «no consta». `aliclikStatusLabel` une tres campos de
+-- la API y devolvía cadena vacía cuando los tres venían vacíos, así que la
+-- columna tenía dos representaciones del mismo vacío y cualquier consulta que
+-- preguntara `is null` se dejaba 5 guías fuera sin avisar. El origen queda
+-- cerrado en lib/aliclik-track.ts (`reportedStatusPatch`, que ya no escribe la
+-- columna si no hay nada que escribir); esto limpia lo que quedó.
+update shipments set reported_status = null where btrim(reported_status) = '';
+update shipments set non_delivery_reason = null where btrim(non_delivery_reason) = '';
+
+-- Las que se van a consultar: devueltas, sin motivo y dentro de la ventana de
+-- recuperación. El índice parcial es diminuto (son ~100 filas de 3.818) y es
+-- exactamente la consulta que corre cada veinte minutos.
+create index if not exists shipments_reason_probe_idx
+  on shipments (returned_at desc)
+  where returned_at is not null
+    and reported_status is null
+    and non_delivery_reason is null;
+
+-- ---- 0121 ----
+-- ============================================================================
+-- 0121_district_coverage.sql — excepciones de cobertura por distrito, editables.
+--
+-- EL PROBLEMA. Qué cobertura tiene un distrito es una decisión COMERCIAL, no
+-- geográfica: Pucusana y Chaclacayo están dentro de la provincia de Lima y el
+-- clasificador los da por reparto propio, pero la operación los atiende por
+-- agencia. Hasta hoy eso solo se podía cambiar tocando código —la lista vive en
+-- `is_lima_metropolitana`— así que cada distrito nuevo era un despliegue.
+--
+-- QUÉ NO ES ESTA TABLA. No es un catálogo de los 1.870 distritos del país ni una
+-- copia de la lista de Lima Metropolitana. Nace VACÍA y solo guarda lo que se
+-- aparta de la regla general, por tres razones:
+--
+--   1. Sembrarla con los 51 distritos de Lima/Callao crearía una TERCERA copia
+--      de esa lista —ya está en `is_lima_metropolitana` (SQL) y en
+--      `LIMA_METROPOLITANA` (TS)—. Este repositorio lleva media docena de
+--      incidentes causados por dos definiciones de lo mismo divergiendo; añadir
+--      una más para «poder verla» sale carísimo.
+--   2. Vacía, el día del despliegue el comportamiento es EXACTAMENTE el de hoy.
+--      No hay que revisar 51 filas para comprobar que nada cambió.
+--   3. Lo que se quiere editar son las excepciones. Las 51 no se tocan nunca.
+--
+-- La pantalla enseña, para el distrito que se busque, qué dice hoy la regla
+-- general y permite apartarse de ella. Ver la fila es innecesario; ver la
+-- RESPUESTA es lo que hace falta.
+--
+-- DÓNDE MANDA. `order_coverage_for` es la definición canónica de la cobertura
+-- (0104): el Master se la pregunta a la base en vez de recalcularla en TS
+-- justamente porque tener dos definiciones fue el bug que motivó aquella
+-- migración. Por eso la excepción se consulta ACÁ DENTRO y en primer lugar, por
+-- delante de Cañete, de Lima Metropolitana y del mapa de tarifas. Ponerla solo
+-- en TypeScript la habría dejado sin efecto: la base gana.
+--
+-- ALCANCE. `store_id` nulo = vale para todas las tiendas, que es como está hoy
+-- la clasificación. Una fila con tienda gana sobre la global, para el día en que
+-- Kenku y Aurela difieran en un destino; hoy no ocurre y no hace falta llenar
+-- nada por tienda.
+-- ============================================================================
+
+create table if not exists district_coverage (
+  id uuid primary key default gen_random_uuid(),
+  -- NULL = todas las tiendas. Una fila con tienda gana sobre la global.
+  store_id uuid references stores(id) on delete cascade,
+  -- Normalizado con `coverage_norm`: sin tildes, minúsculas, sin puntuación.
+  -- Se guarda ya normalizado para que la búsqueda sea una igualdad y no una
+  -- función sobre cada fila.
+  district text not null,
+  coverage text not null check (coverage in ('lima', 'provincia_cod', 'agencia')),
+  -- Por qué. Una excepción sin motivo es indistinguible de un error de dedo
+  -- dentro de seis meses.
+  note text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  updated_by uuid references auth.users(id) on delete set null
+);
+
+-- Una sola regla por distrito y alcance. El `coalesce` mete a la fila global en
+-- el mismo índice que las de tienda, que es lo que impide dos globales del
+-- mismo distrito contradiciéndose.
+create unique index if not exists district_coverage_scope_uniq
+  on district_coverage (coalesce(store_id, '00000000-0000-0000-0000-000000000000'::uuid), district);
+
+comment on table district_coverage is
+  'Excepciones de cobertura por distrito. Vacía = manda la regla general de order_coverage_for. Solo se guarda lo que se aparta de ella.';
+comment on column district_coverage.store_id is
+  'NULL = todas las tiendas. Una fila con tienda gana sobre la global.';
+comment on column district_coverage.district is
+  'Distrito ya normalizado con coverage_norm (sin tildes, minúsculas).';
+
+alter table district_coverage enable row level security;
+
+-- Lectura para la sesión —la pantalla de ajustes la lista— y escritura solo por
+-- el servidor, igual que el resto de la configuración de tienda.
+drop policy if exists district_coverage_read on district_coverage;
+create policy district_coverage_read on district_coverage for select to authenticated using (true);
+
+grant select on district_coverage to authenticated;
+grant select, insert, update, delete on district_coverage to service_role;
+
+-- ── La regla, dentro de la definición canónica ─────────────────────────────
+--
+-- Va PRIMERO, antes que Cañete y que Lima Metropolitana: es una decisión
+-- explícita de la operación y tiene que poder contradecir a cualquiera de las
+-- reglas automáticas — para eso existe. La fila de tienda gana sobre la global
+-- (`order by store_id nulls last` con el filtro de alcance).
+create or replace function order_coverage_for(
+  p_store_id uuid,
+  p_region text,
+  p_province text,
+  p_district text,
+  p_lat double precision,
+  p_lng double precision,
+  p_day date default current_date
+)
+returns text
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_org_id uuid;
+  v_region text := coverage_norm(p_region);
+  v_province text := coverage_norm(p_province);
+  v_district text := coverage_norm(p_district);
+  v_override text;
+begin
+  -- Excepción explícita del distrito (0121). Manda sobre todo lo demás.
+  if v_district <> '' then
+    select dc.coverage into v_override
+      from district_coverage dc
+     where dc.district = v_district
+       and (dc.store_id is null or dc.store_id = p_store_id)
+     order by dc.store_id nulls last
+     limit 1;
+    if v_override is not null then
+      return v_override;
+    end if;
+  end if;
+
+  if v_province = 'canete' or v_district = 'canete' or v_district like '% canete' then
+    return 'agencia';
+  end if;
+
+  if is_lima_metropolitana(p_region, p_province, p_district) then
+    return 'lima';
+  end if;
+
+  select org_id into v_org_id from stores where id = p_store_id;
+
+  if exists (
+    select 1
+    from cost_tariffs t
+    where t.org_id = v_org_id
+      and t.concept = 'primer_intento'
+      and t.courier is not null
+      and coverage_norm(t.courier) not in ('shalom', 'olva', 'olva courier')
+      and (t.region is not null or t.province is not null or t.district is not null)
+      and t.effective_from <= p_day
+      and (t.effective_to is null or t.effective_to >= p_day)
+      and (t.store_id is null or t.store_id = p_store_id)
+      and (t.region is null or coverage_norm(t.region) = v_region)
+      and (t.province is null or coverage_norm(t.province) = v_province)
+      and (t.district is null or coverage_norm(t.district) = v_district)
+  ) then
+    return 'provincia_cod';
+  end if;
+
+  if aliclik_cod_point_near(v_org_id, p_lat, p_lng, 10.0) then
+    return 'provincia_cod';
+  end if;
+
+  if v_district = '' then
+    return 'por_revisar';
+  end if;
+
+  return 'agencia';
+end;
+$function$;
+
+comment on function order_coverage_for(uuid, text, text, text, double precision, double precision, date) is
+  'Cobertura canónica del pedido. Orden: excepción de district_coverage (0121) > Cañete > Lima Metropolitana > tarifas COD > punto COD cercano > agencia.';
+
+-- El caso que motivó la tabla: Pucusana se atiende por agencia aunque el ubigeo
+-- lo ponga en la provincia de Lima.
+insert into district_coverage (store_id, district, coverage, note)
+values (null, coverage_norm('Pucusana'), 'agencia',
+        'Decision operativa: el reparto propio no llega; sale por agencia.')
+on conflict do nothing;

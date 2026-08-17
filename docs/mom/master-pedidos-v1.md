@@ -1219,6 +1219,29 @@ Mientras Aliclik no dé una vía por guía impresa, **subir el reporte es parte 
 la operación de recuperar**, no una tarea administrativa: si no se sube, la cola
 se queda vacía y parece que no hubo devoluciones.
 
+**Toda devolución se registra con su procedencia** (`returned_source`, 0118). El
+sello lo pueden poner tres manos —la API de Aliclik, su reporte en Excel, o una
+persona recibiendo el paquete en el almacén— y hasta 0118 las tres se veían
+iguales en pantalla: una guía sellada a mano figuraba como «devuelta» sin nada
+que la distinguiera de una con constancia del courier. Sobre este dato se manda
+un mensaje que **pide un adelanto**, así que la cola marca «sellada a mano»
+cuando no hay reporte detrás.
+
+Marcar **no es excluir**: una devolución sellada a mano entra a la cola como
+cualquier otra. El paquete sobre la mesa es un hecho tan real como una fila de un
+CSV, y son justamente los casos que Aliclik no reporta —los que obligan a sellar
+a mano— los que más falta hacen en esta pantalla. Lo que cambia es que quien
+decide lo ve antes de pulsar.
+
+La procedencia **se sella junto a la fecha y no se pisa**, igual que la fecha: un
+reporte posterior del courier no convierte en «reporte de Aliclik» una devolución
+que recibió una persona. Cuando el sello es manual se guarda además **quién**
+(`returned_by`), como ya se hace con el alistamiento y la transferencia de
+custodia (§8). La regla vive en un solo sitio (`sealReturn`) y la aplican las
+tres vías de escritura; con la pasada de motivo de abajo dejó de ser una
+precaución teórica, porque esa pasada consulta la API **justo por las guías ya
+devueltas** y sin la guarda las habría reetiquetado a todas en la primera vuelta.
+
 Qué guía entra:
 
 - Devolución **consumada** (`returned_at` sellado), no `POR DEVOLVER` (§10).
@@ -1231,6 +1254,39 @@ Qué guía entra:
   reporte le cuesta la plantilla a **toda la tienda**, no solo a ese chat. El
   motivo se lee del reporte del courier y también del texto libre de quien
   gestionó, donde aparece conjugado.
+- **Sin motivo del courier, la exclusión de arriba no se aplica: no hay con qué
+  aplicarla.** Y eso no es un detalle de borde, es la mayoría de la cola. De las
+  130 devoluciones candidatas de los últimos 30 días (medido el 2026-08-10),
+  **100 no traen motivo alguno** — guías `anulado` importadas del Excel del 20-07
+  que nunca pasaron por la API. La regla se estaba aplicando de verdad a 27 de
+  127: las otras 100 pasaban por **ausencia de dato**, no por constancia de que
+  la clienta nunca viera el producto.
+
+  Ausencia de motivo **no equivale a recuperable**. Un `false` de la exclusión
+  significa «no consta que lo rechazara», no «consta que no lo rechazó», y la
+  diferencia se paga en la moneda del párrafo anterior. Por eso:
+
+  1. La cola **lo escribe**: donde no hay motivo dice «sin motivo del courier ·
+     no consta si la rechazó en la puerta», y el confirmar del envío lo repite.
+     Un guion se lee «no hay nada que decir»; lo que pasa es otra cosa.
+  2. El cron **sale a buscarlo**. Una tercera pasada del cron de cierre
+     (`/api/cron/aliclik-close`, `fillReturnReasons`) consulta a Aliclik por las
+     devoluciones sin motivo dentro de la ventana de recuperación. Va ahí y no
+     en el barrido por dos razones: es donde ya vive la persecución de guías una
+     a una, y es la que tiene presupuesto propio (§10.2) — colgada del final del
+     barrido correría el mismo riesgo de no ejecutarse nunca. Con lo que le
+     sobre del reloj, además: persigue un dato que ya llegó tarde, mientras la
+     de rezagadas persigue estados que aún se pueden mover.
+
+     Las otras dos pasadas no las alcanzaban: la de fechas se les cayó del rango
+     y la de rezagadas le da a una anulada tres semanas de silencio. Se anota en
+     `reason_probed_at` haya o no respuesta, que es lo único que evita
+     repreguntar en bucle por un dato que Aliclik quizá no tenga.
+
+  **No excluye.** Sacar de la cola a las 100 sería tratar la falta de dato como
+  si fuera un rechazo, el mismo error que se está corrigiendo, y en la dirección
+  que además vacía la pantalla. Se marca y se busca; quien decide, decide viendo
+  lo que no se sabe.
 - Con nombre, producto y número de WhatsApp peruano válido: un parámetro vacío
   lo rechaza Meta, y un «¡Hola !» quema el mensaje.
 - Devuelta hace poco. Una devolución de hace meses ya se reingresó o se dio de
@@ -1820,6 +1876,140 @@ sombra. La Fase 2 activa estas columnas como navegación principal:
    reglas heredadas y correcciones autorizadas; ya no organizan las pestañas.
 5. Las diferencias se corrigen en el resolver o mediante nuevos eventos, nunca
    editando directamente el read-model.
+
+### 19.0 Un vínculo por teléfono es provisional
+
+Al importar un reporte, el emparejador vincula la guía a un pedido por nombre de
+pedido y, si no lo hay, **por teléfono — solo cuando existe un único pedido con
+ese número**. La regla es correcta en el instante en que corre, y ahí está la
+trampa: **la respuesta caduca**. El pedido bueno puede llegar después.
+
+Pasó con AUR5X121336. Entró el 10-07, cuando `#KP121336` (creado el 06-07) aún no
+se había importado, así que el único pedido con ese teléfono era el ANTERIOR del
+mismo cliente —anulado desde junio— y ahí se quedó. Nadie vuelve a mirar un
+vínculo ya hecho, así que el error es permanente y silencioso: al 10-08 eran
+**15 guías colgando de pedidos ajenos y 15 pedidos legítimos sin ninguna guía**,
+mostrando «Por confirmar» con el paquete entregado. Los pedidos que las recibían
+acumulaban dos y tres guías que no eran suyas.
+
+**La evidencia que faltaba estaba a la vista.** Aliclik numera sus guías `AUR5X` +
+el número del pedido: AUR5X121336 dice `#KP121336` en su propio nombre. Con
+`stores.order_prefix` ese número se convierte en un nombre de pedido real. Dos
+reglas nuevas:
+
+1. **Al importar**, el número del código de guía entra como candidato SIN
+   CONFIRMAR (`orderNameFromGuideCode`). Sin confirmar a propósito: es una
+   convención del courier, no una garantía, así que el emparejador solo lo acepta
+   si el teléfono apunta al MISMO pedido. Dos señales independientes donde antes
+   había una.
+2. **Hacia atrás**, `/api/cron/aliclik-fix-phone-links` devuelve a su sitio las ya
+   enganchadas mal. Solo mueve con las dos señales de acuerdo y cuando el destino
+   **no tiene ninguna guía propia** — el patrón que corrige es «pedido huérfano de
+   su guía»; encimar una guía a un pedido que ya tiene la suya es decisión de una
+   persona, no de un barrido. Ensayo por defecto (`?apply=true` para ejecutar) y
+   fuera de `vercel.json`: mover una guía reescribe a qué venta pertenece un
+   paquete, y de ahí salen el cierre, el costo y la liquidación.
+
+Y para el caso suelto que ninguna regla alcanza, la corrección a mano vive en
+**Gestión manual → correcciones excepcionales → «Corregir vínculo de guía»**: la
+mueve, renumera la salida, deja constancia en los dos historiales y recalcula los
+dos Masters.
+
+### 19.0.1 La cobertura de un distrito es una decisión, no un mapa
+
+La regla general clasifica por geografía: Lima Metropolitana y Callao son
+**Lima**, un destino con tarifa COD vigente es **Provincia COD**, el resto
+**Agencia**. Acierta casi siempre y se queda corta donde la operación manda:
+Pucusana está dentro de la provincia de Lima y el reparto propio no llega, así
+que sale por agencia. Hasta 0121 eso solo se cambiaba tocando código —la lista
+vive en `is_lima_metropolitana`— y cada distrito nuevo era un despliegue.
+
+`district_coverage` guarda esas decisiones y **nace vacía**. No es un catálogo de
+los 1.870 distritos del país ni una copia de la lista de Lima: sembrarla con los
+51 distritos de Lima/Callao crearía una TERCERA copia de algo que ya está en SQL
+y en TypeScript, y este MOM lleva media docena de incidentes causados por dos
+definiciones de lo mismo divergiendo. Vacía, además, el comportamiento del día
+del despliegue es exactamente el anterior.
+
+**La excepción manda sobre todo lo demás.** El orden en `order_coverage_for` es:
+
+1. `district_coverage` — la decisión explícita.
+2. Cañete.
+3. Lima Metropolitana.
+4. Tarifa COD vigente, o punto COD cercano (§10).
+5. Agencia.
+
+Si una excepción no pudiera contradecir a las reglas automáticas no serviría de
+nada: existe justamente para eso. Y vive **en la base**, no en TypeScript, porque
+la definición canónica de la cobertura es `order_coverage_for` (§19.1 y 0104): el
+Master se la pregunta a ella. Una excepción escrita solo en TS no habría tenido
+ningún efecto.
+
+`store_id` nulo vale para todas las tiendas —así está hoy la clasificación— y una
+fila con tienda gana sobre la global, para el día en que dos tiendas difieran en
+un destino.
+
+**Al guardar se reclasifican los pedidos ABIERTOS de ese distrito**, no solo los
+nuevos. Sin eso la excepción sería cierta para el futuro y mentira para lo que ya
+está en pantalla, que es el desfase de §19.1. Los finalizados no se tocan: su
+historia queda como ocurrió.
+
+### 19.1 La etapa es una foto, y alguien tiene que revelarla
+
+`order_master` no calcula en vivo: guarda el resultado del resolver y lo sirve.
+Eso hace que el listado sea una consulta a una tabla, y trae la contrapartida
+obvia —**una etapa correcta depende de que alguien recalcule cuando cambia una
+guía**— más una menos obvia: cuando el recálculo no ocurre, **no se nota**. La
+pantalla no muestra un error; muestra la etapa de antes, con toda naturalidad.
+
+Pasó el 09-08, y la causa importa porque no es la que parece. Ese día se
+enlazaron **71 guías huérfanas a sus pedidos con SQL a mano contra la base** —53
+a las 19:24 emparejadas por nombre de pedido + teléfono, y 18 a las 21:25 por
+código de guía, verificado en `pg_stat_statements`—. No hubo import: cero filas
+en `import_rows` y cero lotes ese día. **Ninguna ruta de la aplicación
+intervino**, así que tampoco hubo un recálculo que pudiera fallar; simplemente no
+lo llamó nadie.
+
+Esos pedidos acababan de recibir su PRIMERA guía. Su fila del Master seguía
+respondiendo lo que se había calculado cuando no tenían ninguna —«Por confirmar ·
+Sin llamar», `courier_count = 0`—, incluidas guías ya **entregadas**. El síntoma
+apareció días después: #AUR173240, con su guía entregada, decía **48 días en esta
+macroetapa**, porque `macro_since` nunca dejó de ser su fecha de creación. Eran
+69 pedidos así.
+
+Lo que los dejó pegados no fue un fallo, sino que **nada los buscaba**. El barrido
+de reconciliación miraba tres cosas, y ninguna miraba las guías:
+
+| Puerta | Por qué no los veía |
+|---|---|
+| Fila ausente en el Master | La tenían |
+| `macro_version` anticuada | Era la vigente (`mom-v1.8`) |
+| `macro_version is null` | **Nunca podía abrir**: la columna es NOT NULL |
+
+Y como la lista de candidatos salía de los **1.000 pedidos más recientes de la
+tienda**, 66 de los 69 quedaban fuera solo por edad. Un pedido viejo que se movía
+no tenía forma de volver a entrar.
+
+Tres reglas, a partir de acá:
+
+1. **La señal de «etapa vieja» son las guías, no el pedido.** El barrido compara
+   el `updated_at` de las guías contra el `recomputed_at` del Master
+   (`staleByShipment`). No basta con que cada ruta se acuerde de recalcular,
+   porque **la escritura puede venir de fuera de la aplicación** —de una consola
+   de SQL, como el 09-08— y ninguna ruta puede responder por eso. El read-model
+   se reconcilia contra los datos, no contra las llamadas. Alcanza además a un
+   pedido de hace tres meses en cuanto su guía se mueve.
+2. **El recálculo va por tandas.** Un pedido que revienta cuesta su trozo, no la
+   lista entera. Endurecimiento, no la causa de este incidente: el import de
+   Aliclik llega a llamar con más de mil pedidos de golpe y cualquier fallo los
+   congelaba a todos.
+3. **Best-effort no es en silencio.** Seguir adelante ante un fallo es correcto;
+   no dejar rastro no lo es. El recálculo devuelve cuántos pedidos se quedaron
+   sin recalcular, y el reporte de sincronización lo dice.
+
+Y una cuarta, para quien toque la base a mano: **enlazar una guía a un pedido por
+SQL deja el Master mintiendo hasta el siguiente barrido.** Ahora el barrido lo
+recoge; antes no lo recogía nadie.
 
 ## 20. Criterios de aceptación de la Fase 1
 

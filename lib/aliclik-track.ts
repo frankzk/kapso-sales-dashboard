@@ -25,6 +25,7 @@ import {
   reconcileAliclikPreparationState,
 } from "@/lib/aliclik-status";
 import { categoryOf, reconcileDeliveryStatus, reopensForFailedAttempt } from "@/lib/shipments";
+import { sealReturn } from "@/lib/returned-source";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 
 /**
@@ -96,6 +97,11 @@ interface TrackedShipment {
   custody_state: string | null;
   ready_at: string | null;
   custody_transferred_at: string | null;
+  /** El sello de devolución que ya tenga la guía. Entra para poder RESPETARLO
+   *  (0118): la API relee guías ya devueltas —es lo que llena el motivo del
+   *  courier, 0119— y sin esto cada relectura reescribiría el sello. */
+  returned_at: string | null;
+  returned_source: string | null;
   /** Lo que agendó la asesora: protege una reprogramación que aún no le toca. */
   next_followup_at: string | null;
 }
@@ -145,7 +151,8 @@ export async function applyAliclikSnapshot(
   // parámetro y no hay nada que escapar.
   const COLUMNS =
     "id,store_id,order_id,delivery_status,last_report_at,api_updated_at,external_order_number,guide_code," +
-    "preparation_state,custody_state,ready_at,custody_transferred_at,next_followup_at";
+    "preparation_state,custody_state,ready_at,custody_transferred_at,next_followup_at," +
+    "returned_at,returned_source";
 
   const byExternal = await admin
     .from("shipments")
@@ -202,7 +209,7 @@ export async function applyAliclikSnapshot(
     await admin
       .from("shipments")
       .update({
-        reported_status: aliclikStatusLabel(order),
+        ...reportedStatusPatch(order),
         last_report_at: updatedAt ?? new Date().toISOString(),
         ...seenPatch,
         ...collectAmountPatch(order),
@@ -232,7 +239,7 @@ export async function applyAliclikSnapshot(
   const patch: Record<string, unknown> = {
     delivery_status: next,
     status_category: categoryOf(next),
-    reported_status: aliclikStatusLabel(order),
+    ...reportedStatusPatch(order),
     last_report_at: updatedAt ?? nowIso,
     // Sella la lectura de API: mientras siga fresca, un Excel importado no puede
     // cambiar el estado de esta guía (`reconcileReportedDeliveryStatus`). Va con
@@ -246,7 +253,22 @@ export async function applyAliclikSnapshot(
     ...linkPatch,
   };
   if (mapped.pickupState) patch.pickup_state = mapped.pickupState;
-  if (mapped.returned) patch.returned_at = updatedAt ?? nowIso;
+  // El sello viaja con su procedencia (0118) y se pone UNA VEZ. La regla vive en
+  // `sealReturn` y acá importa más que en ningún otro camino: la pasada de motivo
+  // (0119) relee justo las guías ya devueltas, así que sin esta guarda cada
+  // consulta a la API convertiría en «API de Aliclik» un paquete que recibió una
+  // persona en el almacén, borrando de paso su nombre de `returned_by`. Escribir
+  // solo cuando el sello CAMBIA deja intacto lo que ya estaba.
+  const seal = sealReturn(shipment, {
+    returned: mapped.returned,
+    at: updatedAt ?? nowIso,
+    source: "aliclik_api",
+  });
+  if (seal.returned_at && seal.returned_at !== shipment.returned_at) {
+    patch.returned_at = seal.returned_at;
+    patch.returned_source = seal.returned_source;
+    patch.returned_by = null;
+  }
   if (next === "entregado") {
     patch.closed_at = updatedAt ?? nowIso;
     patch.delivered_source = "aliclik_api";
@@ -310,6 +332,25 @@ export async function applyAliclikSnapshot(
  * lo corrige a mano en el panel de Aliclik. Si no viene el dato, no se toca la
  * columna: un `null` accidental borraría la última lectura buena.
  */
+/**
+ * El motivo tal y como lo dice Aliclik, y NADA cuando no dice nada.
+ *
+ * Mismo trato que el importe, y por la misma razón: `aliclikStatusLabel` une
+ * tres campos y devuelve cadena vacía si los tres vienen vacíos. Escribirla
+ * borraba un motivo que otra vía ya había registrado, y dejaba la columna con
+ * dos formas de decir «no sé» —`''` y `null`— que cada consulta tenía que
+ * distinguir a mano (así entraron las 5 vacías que limpia 0119).
+ *
+ * Importa más de lo que parece: sobre esta columna se evalúa el MOM §11
+ * (lib/return-recovery.ts). Un motivo perdido no es un dato cosmético que falta,
+ * es una guía que entra a la cola de recuperación sin que conste qué pasó en la
+ * puerta.
+ */
+function reportedStatusPatch(order: AliclikOrder): Record<string, unknown> {
+  const label = aliclikStatusLabel(order).trim();
+  return label ? { reported_status: label } : {};
+}
+
 function collectAmountPatch(order: AliclikOrder): Record<string, unknown> {
   const total = order.total;
   if (total == null || !Number.isFinite(total) || total <= 0) return {};

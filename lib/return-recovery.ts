@@ -105,6 +105,28 @@ export function wasRefusedInPerson(
   return REFUSED_MARKERS.some((m) => haystack.includes(m));
 }
 
+/**
+ * Lo que consta sobre por qué la guía no se entregó, o `null` cuando no consta
+ * nada. `reported_status` es lo que dijo el courier y `non_delivery_reason` lo
+ * que anotó quien gestionó; se prefiere el primero.
+ *
+ * VALE LA PENA MIRARLO APARTE porque `null` no es un caso más: es el caso en el
+ * que el MOM §11 NO SE PUEDE EVALUAR. `wasRefusedInPerson` sobre dos columnas
+ * vacías devuelve `false`, y ese `false` significa «no consta que la rechazara»,
+ * no «consta que no la rechazó». Hasta acá la cola trata igual a las dos —una
+ * devolución sin motivo entra— pero de ahí en adelante no: quien va a pedir un
+ * adelanto ve escrito que no se sabe, y el cron sale a preguntárselo a la API
+ * (0119, `fillReturnReasons`).
+ */
+export function courierReason(
+  c: Pick<RecoveryCandidate, "reported_status" | "non_delivery_reason">,
+): string | null {
+  const reported = String(c.reported_status ?? "").trim();
+  if (reported) return reported;
+  const noted = String(c.non_delivery_reason ?? "").trim();
+  return noted || null;
+}
+
 /** La fila de `shipments` que necesitan la cola y el envío. */
 export interface RecoveryCandidate {
   id: string;
@@ -122,6 +144,11 @@ export interface RecoveryCandidate {
   province: string | null;
   reported_collect_amount: number | null;
   returned_at: string | null;
+  /** Quién dio por devuelta la guía (0118). No excluye a nadie de la cola —un
+   *  paquete recibido a mano es tan real como uno reportado— pero SÍ se muestra:
+   *  quien pulsa «Enviar» le está pidiendo un adelanto a la clienta y tiene
+   *  derecho a saber si detrás hay constancia del courier. */
+  returned_source: string | null;
   reported_status: string | null;
   non_delivery_reason: string | null;
   recovery_state: string | null;
@@ -269,7 +296,7 @@ export function recoveryWithinHours(
 
 /** Columnas que la cola y el envío leen de `shipments`. */
 export const RECOVERY_COLS =
-  "id, courier, guide_code, order_name, order_id, customer_name, customer_phone, product, district, province, reported_collect_amount, returned_at, reported_status, non_delivery_reason, recovery_state, recovery_sent_at";
+  "id, courier, guide_code, order_name, order_id, customer_name, customer_phone, product, district, province, reported_collect_amount, returned_at, returned_source, reported_status, non_delivery_reason, recovery_state, recovery_sent_at";
 
 export interface RecoveryQueueRow extends RecoveryCandidate {
   /** `null` cuando es elegible; el motivo cuando no. */

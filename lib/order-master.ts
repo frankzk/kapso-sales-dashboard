@@ -79,6 +79,13 @@ const PAGE = 1000;
 const ID_BATCH = 200;
 /** Límite del backfill de versión por tienda y cron para no competir con la operación. */
 const VERSION_RECONCILE_PAGE = 250;
+/**
+ * Guías tocadas que se miran por pasada para detectar pedidos con la etapa
+ * vieja. Cubre de sobra una escritura masiva —el backfill del 09-08 tocó 502
+ * guías en una sentencia— sin arrastrar el histórico: las que ya se recalcularon
+ * dejan de aparecer, así que un atraso se drena en pasadas sucesivas.
+ */
+const SHIPMENT_STALE_PAGE = 2000;
 
 interface OrderRecord {
   id: string;
@@ -632,9 +639,52 @@ async function fetchGeoOverrides(
   return out;
 }
 
+/**
+ * Pedidos cuya guía se escribió después del último recálculo de su Master. Pura.
+ *
+ * Es la señal que faltaba, y funciona sin saber QUIÉN escribió: una ruta que
+ * toca `shipments` y no recalcula deja siempre la misma huella —guía nueva,
+ * Master viejo—, así que basta con leerla. Un Master ausente también entra: hay
+ * guía y no hay fila que la refleje.
+ *
+ * La comparación es de cadenas ISO a propósito: vienen de Postgres en UTC con el
+ * mismo formato, y `Date.parse` solo añadiría una forma de equivocarse con las
+ * fechas raras. El empate NO cuenta como viejo — el recálculo que corre justo
+ * después de escribir la guía comparte instante y ya está al día.
+ */
+export function staleByShipment(
+  writes: readonly { order_id: string | null; updated_at: string | null }[],
+  masters: readonly { order_id: string; recomputed_at: string | null }[],
+): string[] {
+  const lastWrite = new Map<string, string>();
+  for (const w of writes) {
+    if (!w.order_id || !w.updated_at) continue;
+    const prev = lastWrite.get(w.order_id);
+    if (!prev || w.updated_at > prev) lastWrite.set(w.order_id, w.updated_at);
+  }
+
+  const recomputed = new Map<string, string | null>();
+  for (const m of masters) recomputed.set(m.order_id, m.recomputed_at);
+
+  const out: string[] = [];
+  for (const [orderId, wroteAt] of lastWrite) {
+    if (!recomputed.has(orderId)) {
+      out.push(orderId);
+      continue;
+    }
+    const at = recomputed.get(orderId);
+    if (!at || wroteAt > at) out.push(orderId);
+  }
+  return out;
+}
+
 export interface RecomputeResult {
   requested: number;
   written: number;
+  /** Pedidos que no se pudieron recalcular. Solo lo llena el barrido, que va por
+   *  tandas y sigue adelante en vez de abortar; si no es cero, quedan etapas
+   *  viejas en pantalla y hay que mirar por qué. */
+  failed?: number;
 }
 
 /**
@@ -1085,27 +1135,94 @@ export function describeRecompute(outcome: RecomputeOutcome): string | null {
  * Sigue sin lanzar —esa parte era correcta— pero ahora DEVUELVE lo que pasó, y
  * quien lo llame decide dónde dejarlo escrito. `console.error` es el mínimo:
  * que el fallo llegue al menos a los logs de ejecución.
+ *
+ * Y VA POR TANDAS. Llamar con mil pedidos de una vez hace que uno solo que
+ * reviente cueste los mil: todos se quedan con la etapa que tuvieran. Con tandas
+ * un fallo cuesta `SAFE_BATCH`, y al reintentar la tanda rota en trozos
+ * pequeños, `SAFE_RETRY_BATCH`. No es la causa del incidente del 09-08 —aquello
+ * fue SQL a mano, que nunca pasa por aquí— sino el mismo riesgo por otra puerta:
+ * el import de Aliclik llega a llamar con más de mil pedidos de golpe.
  */
+export interface SafeRecomputeReport {
+  requested: number;
+  written: number;
+  /** Pedidos que se quedaron sin recalcular. Si no es cero, hay etapas viejas. */
+  failed: number;
+  /** El primer fallo, para que el rastro diga POR QUÉ y no solo cuántos. */
+  error: string | null;
+}
+
+/** Tamaño de tanda del recálculo best-effort. */
+const SAFE_BATCH = 100;
+/** Trozo del reintento cuando una tanda falla entera. */
+const SAFE_RETRY_BATCH = 10;
+
+/**
+ * Recorre los ids por tandas y aísla los fallos. Separada de su único uso para
+ * poder probarla: lo que hay que demostrar es que un id que revienta cuesta un
+ * trozo y no la lista entera, y eso no se ve pasando por Supabase.
+ */
+export async function recomputeInBatches(
+  ids: readonly string[],
+  run: (batch: string[]) => Promise<number>,
+  opts: { batch?: number; retry?: number } = {},
+): Promise<SafeRecomputeReport> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  const size = opts.batch ?? SAFE_BATCH;
+  const retrySize = opts.retry ?? SAFE_RETRY_BATCH;
+  const report: SafeRecomputeReport = {
+    requested: unique.length,
+    written: 0,
+    failed: 0,
+    error: null,
+  };
+  const note = (error: unknown) => {
+    if (report.error === null) {
+      report.error = error instanceof Error ? error.message : String(error);
+    }
+  };
+
+  for (const batch of chunk(unique, size)) {
+    try {
+      report.written += await run(batch);
+      continue;
+    } catch (error) {
+      // Cae al reintento en trozos: un solo pedido que reviente no debería
+      // llevarse por delante a los otros de su tanda.
+      note(error);
+    }
+    for (const small of chunk(batch, retrySize)) {
+      try {
+        report.written += await run(small);
+      } catch (error) {
+        note(error);
+        report.failed += small.length;
+      }
+    }
+  }
+
+  return report;
+}
+
 export async function recomputeOrderMasterSafe(
   admin: SupabaseClient,
   orderIds: readonly string[],
 ): Promise<RecomputeOutcome> {
-  const requested = new Set(orderIds.filter(Boolean)).size;
-  try {
-    const { written } = await recomputeOrderMaster(admin, orderIds);
-    const outcome = { requested, written, error: null };
-    const trace = describeRecompute(outcome);
-    if (trace) console.error(trace);
-    return outcome;
-  } catch (error) {
-    const outcome = {
-      requested,
-      written: 0,
-      error: error instanceof Error ? error.message : String(error),
-    };
-    console.error(describeRecompute(outcome));
-    return outcome;
-  }
+  const report = await recomputeInBatches(
+    orderIds,
+    async (batch) => (await recomputeOrderMaster(admin, batch)).written,
+  );
+  // `failed` no necesita viajar aparte: quien llama ya se entera por
+  // `written < requested`, que es la misma pregunta —¿quedaron etapas viejas?—
+  // y la que entienden `recomputeFellShort` y `describeRecompute`.
+  const outcome: RecomputeOutcome = {
+    requested: report.requested,
+    written: report.written,
+    error: report.error,
+  };
+  const trace = describeRecompute(outcome);
+  if (trace) console.error(trace);
+  return outcome;
 }
 
 export async function recomputeOrderMasterForShipmentsSafe(
@@ -1136,6 +1253,28 @@ export async function recomputeOrderMasterForShipmentsSafe(
  * Barrido de reconciliación: pedidos cuya fila del Master falta o quedó vieja.
  * Es la red de seguridad frente a cualquier ruta que escriba en `shipments` sin
  * recalcular. Se ejecuta desde el cron de sincronización.
+ *
+ * QUÉ CUENTA COMO «VIEJA». Eran tres cosas —fila ausente, `recomputed_at`
+ * anterior a un `staleBefore` que pasara quien llama, y versión del MOM
+ * anticuada—, y ninguna miraba las guías. Un pedido con su fila puesta, la
+ * versión vigente y una guía escrita DESPUÉS del último recálculo era invisible
+ * por las tres a la vez. Como la lista de candidatos salía además de los pedidos
+ * más recientes de la tienda, un pedido viejo que se moviera no tenía forma de
+ * volver a entrar.
+ *
+ * LO QUE LO DESTAPÓ, Y POR QUÉ ESTA PUERTA ES LA QUE IMPORTA. El 09-08 se
+ * enlazaron 71 guías huérfanas a sus pedidos con SQL a mano contra la base (53 a
+ * las 19:24 y 18 a las 21:25, verificado en `pg_stat_statements`). Ninguna ruta
+ * de la aplicación intervino, así que no hubo recálculo que pudiera fallar: esos
+ * pedidos recibieron su PRIMERA guía y su Master siguió respondiendo lo que
+ * habían calculado cuando no tenían ninguna — «Por confirmar · Sin llamar»—,
+ * incluyendo pedidos con la guía ya ENTREGADA.
+ *
+ * Ahí está la lección: no basta con que cada ruta se acuerde de recalcular,
+ * porque la escritura puede venir de fuera de la aplicación. El read-model tiene
+ * que reconciliarse contra los DATOS. Por eso el ancla es el `updated_at` de la
+ * guía y no una llamada: funciona igual si quien escribió fue un import, una
+ * acción manual, un cron o una consola de SQL.
  */
 export async function reconcileOrderMaster(
   admin: SupabaseClient,
@@ -1168,30 +1307,61 @@ export async function reconcileOrderMaster(
   }
   const pending = candidateIds.filter((id) => !known.has(id));
 
+  // CUARTA PUERTA: guías escritas después del último recálculo de su pedido.
+  //
+  // Se ancla en la ESCRITURA de la guía y no en el pedido, que es lo que la hace
+  // funcionar donde las otras tres fallan: alcanza a un pedido de hace tres
+  // meses en cuanto su guía se mueve, sin depender de que esté entre los más
+  // recientes de la tienda. Se piden las guías tocadas más recientemente porque
+  // son las que llevan la etapa equivocada delante de alguien ahora mismo.
+  const seenPending = new Set(pending);
+  const roomForStale = Math.max(0, limit - pending.length);
+  if (roomForStale > 0) {
+    const { data: touched } = await admin
+      .from("shipments")
+      .select("order_id,updated_at")
+      .in("store_id", storeIds as string[])
+      .not("order_id", "is", null)
+      .order("updated_at", { ascending: false })
+      .limit(SHIPMENT_STALE_PAGE);
+
+    const writes = (touched ?? []) as { order_id: string | null; updated_at: string | null }[];
+    const masters: { order_id: string; recomputed_at: string | null }[] = [];
+    const touchedIds = [...new Set(writes.map((w) => w.order_id).filter((v): v is string => Boolean(v)))];
+    for (const batch of chunk(touchedIds, ID_BATCH)) {
+      const { data } = await admin
+        .from("order_master")
+        .select("order_id,recomputed_at")
+        .in("order_id", batch);
+      masters.push(...((data ?? []) as { order_id: string; recomputed_at: string | null }[]));
+    }
+
+    for (const id of staleByShipment(writes, masters)) {
+      if (seenPending.has(id) || pending.length >= limit) continue;
+      pending.push(id);
+      seenPending.add(id);
+    }
+  }
+
   // Una fase nueva puede cambiar el resultado aun cuando ninguna fuente del
   // pedido haya sido tocada. Recalcula por tandas las filas de versiones
   // anteriores; al escribir la versión vigente dejan de aparecer en el
   // siguiente cron. Así el histórico completo converge sin exponer secretos en
   // un backfill local ni bloquear una sincronización normal.
+  // Había aquí una consulta por `macro_version is null` que no podía devolver
+  // nada: la columna es NOT NULL en la base. Se quita en vez de dejarla como
+  // adorno — una puerta que no abre es peor que no tenerla, porque se cuenta
+  // como cobertura cuando se revisa por qué un pedido no se recalculó.
   const remaining = Math.min(VERSION_RECONCILE_PAGE, Math.max(0, limit - pending.length));
   if (remaining > 0) {
     const staleIds: string[] = [];
-    const { data: nullVersion } = await admin
-      .from("order_master")
-      .select("order_id")
-      .in("store_id", storeIds as string[])
-      .is("macro_version", null)
-      .limit(remaining);
-    staleIds.push(...((nullVersion ?? []) as { order_id: string }[]).map((row) => row.order_id));
-
-    const stillRemaining = remaining - staleIds.length;
-    if (stillRemaining > 0) {
+    {
       const { data: oldVersion } = await admin
         .from("order_master")
         .select("order_id")
         .in("store_id", storeIds as string[])
         .neq("macro_version", MOM_RESOLUTION_VERSION)
-        .limit(stillRemaining);
+        .limit(remaining);
       staleIds.push(...((oldVersion ?? []) as { order_id: string }[]).map((row) => row.order_id));
     }
     const seen = new Set(pending);
@@ -1203,5 +1373,18 @@ export async function reconcileOrderMaster(
     }
   }
   if (!pending.length) return { requested: 0, written: 0 };
-  return recomputeOrderMaster(admin, pending);
+  // Por tandas y sin abortar: el barrido es justamente lo que tiene que seguir
+  // funcionando cuando un pedido concreto revienta, y hasta ahora un solo fallo
+  // dejaba sin recalcular a los otros 999 de la pasada.
+  const done = await recomputeInBatches(
+    pending,
+    async (batch) => (await recomputeOrderMaster(admin, batch)).written,
+  );
+  const trace = describeRecompute({
+    requested: done.requested,
+    written: done.written,
+    error: done.error,
+  });
+  if (trace) console.error(trace);
+  return { requested: pending.length, written: done.written, failed: done.failed };
 }

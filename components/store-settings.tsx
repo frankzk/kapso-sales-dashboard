@@ -10,6 +10,8 @@ import {
   addReplyTemplate,
   backfillStoreMetaInsights,
   deleteReplyTemplate,
+  deleteDistrictCoverage,
+  saveDistrictCoverage,
   generateAliclikWebhookSecret,
   generateKapsoWebhookSecret,
   setReplyTemplateActive,
@@ -128,6 +130,16 @@ export interface StoreSettingsData {
     active: boolean;
     sort: number;
   }>;
+  /** Excepciones de cobertura por distrito (0121). Vacío = manda la regla
+   *  general; es el estado normal, no una configuración pendiente. */
+  districtCoverage: Array<{
+    id: string;
+    store_id: string | null;
+    district: string;
+    coverage: string;
+    note: string | null;
+    updated_at: string;
+  }>;
 }
 
 /** Friendly label for a webhook topic in the received-webhooks log. */
@@ -232,6 +244,7 @@ export function StoreSettings({
       <SettingsForm data={data} shalomProducts={shalomTest.shalomProducts} />
 
       <ReplyTemplatesSection storeId={s.id} rows={data.replyTemplates} />
+      <DistrictCoverageSection storeId={s.id} rows={data.districtCoverage} />
 
       <div className="-mt-2">
         <ActionButton
@@ -1546,6 +1559,131 @@ function SettingsForm({
  * porque el nombre tiene que coincidir EXACTO con lo aprobado en Meta: escribirlo
  * mal no rompe un chat, le baja la calidad a la WABA de toda la tienda.
  */
+const COVERAGE_LABEL: Record<string, string> = {
+  lima: "Lima",
+  provincia_cod: "Provincia COD",
+  agencia: "Agencia",
+};
+
+/**
+ * Excepciones de cobertura por distrito (0121).
+ *
+ * La lista está VACÍA casi siempre, y eso es lo correcto: solo guarda lo que se
+ * aparta de la regla general. Por eso el texto explica primero qué decide la
+ * regla y luego para qué sirve apartarse — sin eso, una tabla vacía se lee como
+ * «falta configurar algo».
+ */
+function DistrictCoverageSection({
+  storeId,
+  rows,
+}: {
+  storeId: string;
+  rows: StoreSettingsData["districtCoverage"];
+}) {
+  const [state, formAction, pending] = useActionState(saveDistrictCoverage, initial);
+  const [rowPending, startRowTransition] = useTransition();
+  const [rowMsg, setRowMsg] = useState<string | null>(null);
+
+  function remove(id: string, district: string) {
+    if (!confirm(`¿Quitar la excepción de «${district}»? Vuelve a la regla general.`)) return;
+    startRowTransition(async () => {
+      const res = await deleteDistrictCoverage(storeId, id);
+      setRowMsg(res.error ?? res.notice ?? null);
+    });
+  }
+
+  return (
+    <Section
+      title="Cobertura por distrito"
+      subtitle="Dónde la operación se aparta de lo que dice la geografía."
+    >
+      <Card>
+        <p className="text-xs text-slate-500">
+          Por defecto la cobertura la decide la regla general: Lima Metropolitana y Callao son{" "}
+          <strong>Lima</strong>, un destino con tarifa COD vigente es <strong>Provincia COD</strong>,
+          y el resto <strong>Agencia</strong>. Acá solo se anota lo que se aparta de eso — por
+          ejemplo Pucusana, que el ubigeo pone en la provincia de Lima pero al que el reparto propio
+          no llega. Lo que se escriba acá <strong>gana sobre cualquier regla automática</strong>.
+        </p>
+        <p className="mt-2 text-xs text-slate-500">
+          Al guardar se reclasifican también los pedidos <strong>abiertos</strong> de ese distrito,
+          no solo los nuevos. Los ya finalizados no se tocan: su historia queda como ocurrió.
+        </p>
+
+        {rows.length > 0 && (
+          <ul className="mt-4 divide-y divide-slate-200 rounded-xl border border-slate-200">
+            {rows.map((r) => (
+              <li key={r.id} className="flex flex-wrap items-start gap-3 px-3 py-2.5">
+                <div className="min-w-0 grow">
+                  <p className="text-sm font-medium capitalize text-slate-800">
+                    {r.district}
+                    <span className="ml-2 rounded bg-brand-50 px-1.5 py-0.5 text-[11px] font-semibold text-brand-700">
+                      {COVERAGE_LABEL[r.coverage] ?? r.coverage}
+                    </span>
+                    {r.store_id === null && (
+                      <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
+                        todas las tiendas
+                      </span>
+                    )}
+                  </p>
+                  {r.note && <p className="text-xs text-slate-500">{r.note}</p>}
+                </div>
+                <button
+                  type="button"
+                  disabled={rowPending}
+                  onClick={() => remove(r.id, r.district)}
+                  className="text-xs font-medium text-rose-600 hover:underline disabled:text-slate-400"
+                >
+                  Quitar
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {rowMsg && <p className="mt-2 text-xs text-slate-600">{rowMsg}</p>}
+
+        <form action={formAction} className="mt-4 grid gap-3 sm:grid-cols-4">
+          <input type="hidden" name="store_id" value={storeId} />
+          <div className="sm:col-span-2">
+            <label className={labelCls} htmlFor="dc_district">Distrito</label>
+            <input id="dc_district" name="district" placeholder="Pucusana" className={inputCls} required />
+          </div>
+          <div>
+            <label className={labelCls} htmlFor="dc_coverage">Cobertura</label>
+            <select id="dc_coverage" name="coverage" className={inputCls} defaultValue="agencia">
+              <option value="agencia">Agencia</option>
+              <option value="provincia_cod">Provincia COD</option>
+              <option value="lima">Lima</option>
+            </select>
+          </div>
+          <div className="sm:col-span-3">
+            <label className={labelCls} htmlFor="dc_note">Motivo</label>
+            <input
+              id="dc_note"
+              name="note"
+              placeholder="El reparto propio no llega; sale por agencia"
+              className={inputCls}
+            />
+          </div>
+          <label className="flex items-center gap-2 self-end text-sm text-slate-700">
+            <input type="checkbox" name="all_stores" defaultChecked className="size-4" />
+            Todas las tiendas
+          </label>
+          <div className="sm:col-span-4">
+            <button
+              disabled={pending}
+              className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:bg-slate-300"
+            >
+              {pending ? "Guardando…" : "Guardar excepción"}
+            </button>
+          </div>
+        </form>
+        <ActionResult state={state} />
+      </Card>
+    </Section>
+  );
+}
+
 function ReplyTemplatesSection({
   storeId,
   rows,
