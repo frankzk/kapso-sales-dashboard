@@ -16,7 +16,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import QRCode from "qrcode";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { describeShalomError } from "@/lib/shalom/client";
-import { loadStoreShalom, readWithFreshSession, type StoreShalom } from "@/lib/shalom/session";
+import { loadStoreShalom, type StoreShalom } from "@/lib/shalom/session";
+import { shalomLabelPdf } from "@/lib/shalom/label-cache";
 import { buildAgencyRotuloPdf } from "@/lib/labels/agency-rotulo";
 import { labelItemsFor } from "@/lib/labels/line-items";
 import { outputDisplayCode } from "@/lib/shipment-output";
@@ -86,12 +87,15 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ shipmentId
     return new NextResponse("La tienda no tiene cuenta de Shalom Pro configurada.", { status: 409 });
   }
 
-  let courierPdf: ArrayBuffer;
+  let courierPdf: Uint8Array;
   try {
-    // Lectura: si el token murió se renueva y reintenta sola. Bajar el rótulo no
-    // crea ni modifica nada, así que repetirlo es gratis.
-    courierPdf = await readWithFreshSession(admin, row.store_id, store as StoreShalom, (client) =>
-      client.label(row.shalom_ose_id as number),
+    // De la caché si ya se pidió una vez. Su PDF no cambia una vez emitida la
+    // guía, y pedirlo cuesta ~45 s — al filo del timeout.
+    courierPdf = await shalomLabelPdf(
+      admin,
+      row.store_id,
+      store as StoreShalom,
+      row.shalom_ose_id as number,
     );
   } catch (err) {
     return new NextResponse(describeShalomError(err), { status: 502 });

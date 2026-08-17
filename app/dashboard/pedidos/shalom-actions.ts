@@ -32,6 +32,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { writeCourierGuide } from "@/lib/route-output-fill";
+import { warmShalomLabel } from "@/lib/shalom/label-cache";
 import {
   filledShipmentIds,
   isFillableRouteOutput,
@@ -956,6 +957,13 @@ export async function createShalomGuide(
 
   await recomputeOrderMasterSafe(admin, [row.order_id]);
   revalidatePath(MASTER_PATH);
+
+  // Deja el rótulo listo mientras la operadora sigue con lo suyo. Pedirlo a
+  // Shalom cuesta ~45 s: pagarlos AHORA, sin esperar, es la diferencia entre que
+  // el almacén imprima al instante o se quede mirando una pestaña en blanco.
+  // Sin `await` a propósito, y traga sus errores: si falla, la impresión lo
+  // volverá a pedir — exactamente lo que pasaba antes de existir la caché.
+  void warmShalomLabel(admin, row.store_id, store as StoreShalom, oseId);
 
   const keyWarning = keyWrite.error
     ? ` ATENCIÓN: la clave de recojo NO se pudo guardar (${keyWrite.error.message}); regístrala a mano desde la salida Shalom en Salidas y guías.`
