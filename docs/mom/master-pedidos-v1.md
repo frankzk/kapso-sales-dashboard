@@ -1075,6 +1075,46 @@ vuelve a comprar tiene dos. Por eso no basta para elegir entre ellos.
 > (106620–127540). El día que lleguen al millón, siete dígitos dejarán de ser
 > «identificador de Aliclik» y habrá que revisar esto.
 
+#### Vincular una guía creada en el portal de Aliclik
+
+La API oficial solo lista los pedidos de la integración (`ALC…`). Una guía creada
+a mano en la web de Aliclik no aparece ahí, así que al vincularla **no hay nada
+que consultar**: hay que decidir con lo que se tiene.
+
+**Lo que autoriza el vínculo es la confirmación auditada** —escribir el código
+del pedido y dejar un motivo— más la comprobación de que la guía no cuelgue ya de
+otro pedido. Que el código impreso lleve dentro el número del pedido **corrobora,
+no autoriza**: solo lo cumple la familia de seis dígitos (§10.1), así que
+exigirlo dejaba sin vincular guías reales. Ocurrió con `AUR5X7478480` y
+`#KP128572` el 17-08-2026: la operación había creado la guía en el portal para no
+quedarse parada, y el Master no admitía registrarla.
+
+`shipments.match_method` distingue las dos: `portal_code_suffix` cuando el código
+nombra al pedido y `portal_operator_attested` cuando lo único que hay es la firma
+de quien lo afirmó. Un solo valor para ambas borraría esa diferencia justo en la
+columna que se mira para auditar cómo llegó una guía a su pedido.
+
+#### Preguntar si Aliclik llega, aunque el pedido sea de Agencia
+
+**La clasificación decide a dónde va el paquete, no si podemos preguntar.**
+Cotizar es una lectura: no crea guía, no reserva stock, no cuesta nada. Mientras
+la pregunta estuvo detrás de la respuesta —el bloque de Aliclik no se dibujaba
+para un pedido de Agencia, y la acción de cotizar exigía el permiso de crear—,
+una clasificación equivocada no se podía desmentir nunca. Es lo que pasó con
+Pisac: la operación sabía que Aliclik cubre y el pedido no ofrecía ni el botón.
+
+Hoy el bloque de Agencia deja cotizar. **Escribir sigue cerrado**: crear y
+vincular siguen rechazando un pedido de Agencia, así que lo peor que puede pasar
+al preguntar es enterarse de un precio.
+
+Si Aliclik cotiza, se ofrece marcar el distrito como Provincia COD, y eso escribe
+la excepción de §19.0.1 con la nota rellenada —precio, pedido y fecha— y
+recalcula los pedidos abiertos de ese distrito. **La generalización la firma una persona**:
+la cotización es por coordenada y la cobertura es por distrito, así que llegar a
+un punto de Pisac no prueba que se llegue a todo Pisac. Se automatiza el trabajo,
+no la decisión. Y marcar un distrito exige ser administrador, como en Ajustes:
+cambia el despacho de todos sus pedidos, no el de este.
+
 ### 10.2 Crear una guía en Aliclik: el candado y su caducidad
 
 Crear un pedido en Aliclik es una escritura hacia afuera, irreversible, con

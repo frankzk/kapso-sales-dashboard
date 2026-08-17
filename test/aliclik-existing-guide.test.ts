@@ -19,8 +19,21 @@ describe("isCompatibleManualPortalGuide", () => {
     expect(isCompatibleManualPortalGuide("ALC00000174797", "#AUR174797")).toBe(false);
   });
 
-  it("rechaza una guía de portal que pertenece a otro pedido", () => {
+  it("no corrobora una guía de portal cuyo número es el de otro pedido", () => {
     expect(isCompatibleManualPortalGuide("AUR5X174798", "#AUR174797")).toBe(false);
+  });
+
+  it("no corrobora las familias de código que no llevan el pedido dentro", () => {
+    // El caso de AUR5X7478480 con #KP128572: una guía real, creada en la web de
+    // Aliclik, con un código de siete dígitos. Medido en producción, ninguna de
+    // las 2.853 guías de 7 y 12 dígitos termina en el número de su pedido.
+    //
+    // Devolver false aquí es CORRECTO: no hay corroboración. Lo que cambió es
+    // que ya no es un veto — la vinculación sigue disponible bajo confirmación
+    // auditada, y la pantalla avisa de que nada respalda el vínculo salvo la
+    // firma de quien lo hace.
+    expect(isCompatibleManualPortalGuide("AUR5X7478480", "#KP128572")).toBe(false);
+    expect(isCompatibleManualPortalGuide("AUR5X000340013716", "#KP128572")).toBe(false);
   });
 });
 

@@ -21,6 +21,7 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, cn, EmptyState, STICKY_HEAD, TABLE_LAYER, TABLE_WRAP_PAGE_X } from "@/components/ui";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
+import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
 import { OrderClosureDesk } from "@/components/order-closure-desk";
@@ -3114,7 +3115,9 @@ function OrderDrawer({
                 </h3>
                 <p className="mt-1 text-sm leading-5 text-slate-600">
                   Aliclik no atiende pedidos de Agencia; este va con Shalom u Olva. Si la dirección
-                  está mal clasificada, corrígela y la cobertura se recalcula sola.
+                  está mal clasificada, corrígela y la cobertura se recalcula sola. Y si la
+                  dirección está bien pero crees que Aliclik sí llega, pregúntaselo: cotizar no
+                  crea nada.
                 </p>
                 <button
                   type="button"
@@ -3123,6 +3126,11 @@ function OrderDrawer({
                 >
                   Revisar ubicación y cobertura ↓
                 </button>
+                <AliclikCoverageProbe
+                  orderId={detail.row.order_id}
+                  district={detail.row.district}
+                  canMark={canCreateGuide}
+                />
               </div>
             )}
 
