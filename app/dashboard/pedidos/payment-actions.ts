@@ -14,7 +14,7 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { decryptOrNull, encrypt } from "@/lib/crypto";
-import { getMasterPermissions } from "@/lib/permissions-access";
+import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
   analyzeYapeVoucherFromEnv,
@@ -58,6 +58,7 @@ export interface PaymentActionState {
 interface OrderContext {
   userId: string;
   storeId: string;
+  orgId: string;
   row: OrderMasterRow;
 }
 
@@ -70,7 +71,13 @@ async function authorizeOrder(orderId: string): Promise<OrderContext | null> {
   const { data } = await sb.from("order_master").select("*").eq("order_id", orderId).maybeSingle();
   if (!data) return null;
   const row = data as unknown as OrderMasterRow;
-  return { userId: user.id, storeId: row.store_id, row };
+  const { data: store } = await sb
+    .from("stores")
+    .select("org_id")
+    .eq("id", row.store_id)
+    .maybeSingle();
+  if (!store?.org_id) return null;
+  return { userId: user.id, storeId: row.store_id, orgId: String(store.org_id), row };
 }
 
 let bucketReady = false;
@@ -158,7 +165,10 @@ export async function loadPaymentPanel(
 ): Promise<{ panel: PickupKeyPanel } | { error: string }> {
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
-  const perms = await getMasterPermissions();
+  const [perms, canValidatePayment] = await Promise.all([
+    getMasterPermissions(),
+    hasOrgPermission(ctx.orgId, "payments.validate"),
+  ]);
   const sb = await createServerSupabase();
 
   const [paymentsRes, keyRes, sharesRes, viewsRes, shalomRes] = await Promise.all([
@@ -237,7 +247,7 @@ export async function loadPaymentPanel(
       shares: (sharesRes.data ?? []) as PickupKeyPanel["shares"],
       views: (viewsRes.data ?? []) as PickupKeyPanel["views"],
       canRegister: perms.can("shalom.register_payment"),
-      canValidate: perms.can("shalom.validate_payment"),
+      canValidate: canValidatePayment,
       canViewKey: perms.can("shalom.reveal_pickup_key"),
       canManageKey: perms.can("shalom.view_pickup_key"),
       canOverride: perms.can("shalom.override_payment_validation"),
@@ -737,10 +747,13 @@ async function loadPayment(paymentId: string) {
 
 /** Marca un pago como validado. Es lo que habilita la clave, así que va aparte. */
 export async function validatePayment(paymentId: string): Promise<PaymentActionState> {
-  const perms = await getMasterPermissions();
-  if (!perms.can("shalom.validate_payment")) return { error: "Tu rol no permite validar pagos." };
   const payment = await loadPayment(paymentId);
   if (!payment) return { error: "Pago no encontrado." };
+  const ctx = await authorizeOrder(payment.order_id);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!(await hasOrgPermission(ctx.orgId, "payments.validate"))) {
+    return { error: "No estas autorizado para validar pagos." };
+  }
   // Sin nº de operación no hay forma de garantizar que este mismo Yape no se
   // use en otro pedido: el índice único no puede actuar sobre un nulo. Es la
   // condición que cierra el hueco de la captura recortada.
@@ -760,9 +773,6 @@ export async function validatePayment(paymentId: string): Promise<PaymentActionS
         "Grupo GF S.A.C. · 930 555 309. Revisa la imagen y rechaza el comprobante si fue enviado a otra cuenta.",
     };
   }
-  const ctx = await authorizeOrder(payment.order_id);
-  if (!ctx) return { error: "Sin acceso a este pedido." };
-
   const admin = createAdminSupabase();
   const { error } = await admin
     .from("order_payments")
@@ -793,14 +803,15 @@ export async function rejectPayment(
   paymentId: string,
   reason: string,
 ): Promise<PaymentActionState> {
-  const perms = await getMasterPermissions();
-  if (!perms.can("shalom.validate_payment")) return { error: "Tu rol no permite validar pagos." };
   const motive = reason.trim();
   if (!motive) return { error: "Indica el motivo del rechazo." };
   const payment = await loadPayment(paymentId);
   if (!payment) return { error: "Pago no encontrado." };
   const ctx = await authorizeOrder(payment.order_id);
   if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!(await hasOrgPermission(ctx.orgId, "payments.validate"))) {
+    return { error: "No estas autorizado para validar pagos." };
+  }
 
   const admin = createAdminSupabase();
   // Rechazar NO borra el pago: se conserva con su historial, y su nº de

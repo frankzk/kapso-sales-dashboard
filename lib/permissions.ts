@@ -31,6 +31,12 @@ export const PERMISSIONS = [
   "closure.refund", // confirmar que el reembolso externo ya fue ejecutado
   // Pagos Yape / clave de recojo Shalom
   "shalom.register_payment",
+  // Permiso transversal de pagos. Se concede persona por persona desde Equipo;
+  // no viene incluido en ningun rol para que cambiar a alguien a admin no le
+  // permita validar movimientos bancarios de forma implicita.
+  "payments.validate",
+  // Nombre historico. Se conserva para poder migrar concesiones existentes,
+  // pero las acciones nuevas usan `payments.validate`.
   "shalom.validate_payment",
   // Ver la clave cuando el cobro cumple las reglas operativas. Es distinto de
   // administrarla o forzar una excepción: las vendedoras pueden usar este
@@ -100,10 +106,17 @@ export function isPermission(value: string): value is Permission {
  *  - `viewer` — nada.
  */
 const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
-  owner: PERMISSIONS,
+  // El owner conserva la capacidad financiera por continuidad operativa, pero
+  // puede revocarsela explicitamente cuando ya exista otro validador.
+  owner: PERMISSIONS.filter((permission) => permission !== "shalom.validate_payment"),
   // Solo el owner (Frankz en la operación actual) confirma reembolsos. Un
   // administrador conserva el resto de facultades de cierre.
-  admin: PERMISSIONS.filter((permission) => permission !== "closure.refund"),
+  admin: PERMISSIONS.filter(
+    (permission) =>
+      permission !== "closure.refund" &&
+      permission !== "payments.validate" &&
+      permission !== "shalom.validate_payment",
+  ),
   // La vendedora carga la liquidación y corrige vínculos, pero NO la cierra:
   // cerrar congela lo que se le paga al motorizado y no se deshace.
   vendedora: [
@@ -153,10 +166,18 @@ export function permissionsFor(
   for (const role of roles) {
     for (const p of ROLE_PERMISSIONS[role] ?? []) out.add(p);
   }
+  const hasNewPaymentGrant = grants.some((grant) => grant.permission === "payments.validate");
   for (const g of grants) {
     if (!isPermission(g.permission)) continue;
     if (g.granted === false) out.delete(g.permission);
     else out.add(g.permission);
+    // Compatibilidad sin migracion: una excepcion individual guardada con el
+    // nombre historico sigue funcionando hasta que Equipo escriba el nuevo
+    // permiso. Una fila nueva siempre gana y evita dos fuentes de verdad.
+    if (g.permission === "shalom.validate_payment" && !hasNewPaymentGrant) {
+      if (g.granted === false) out.delete("payments.validate");
+      else out.add("payments.validate");
+    }
   }
   return out;
 }

@@ -1627,12 +1627,31 @@ registra en cada evento.
 
 - Reembolso: solo Frankz.
 - Reapertura: Frankz o Yohalis.
-- Validar pagos: grupo autorizado por cuenta.
+- Validar pagos: autorización individual `payments.validate`, administrada con
+  un check en **Equipo**. El owner lo conserva por continuidad operativa; para
+  los demás, el rol por sí solo no concede este permiso y cambiar a alguien a
+  admin no le permite validar movimientos bancarios. Debe quedar al
+  menos un validador activo y, al retirar un miembro, se eliminan sus permisos
+  puntuales para que no reaparezcan si vuelve a ser invitado.
 - Excepción COD por riesgo: justificación obligatoria.
 - Continuar con discrepancia geográfica: justificación obligatoria.
 - Retirar del manifiesto: motivo obligatorio.
 - Corrección de resultado courier: evento de corrección, nunca edición destructiva.
 - Cerrar liquidación observada: rol financiero autorizado.
+
+### 16.1 Bandeja de validación de pagos
+
+El control de acceso anterior cierra quién puede decidir, pero la operación
+necesita además una bandeja central para que ningún comprobante quede escondido
+dentro de un pedido. La vista aprobada tendrá tres columnas visibles:
+`Pendientes`, `Observados` y `Validados hoy`. La lista `Todos` permanece oculta
+y solo se consulta mediante búsqueda o filtros, para no renderizar una cola
+histórica innecesariamente larga.
+
+Mientras Kapta y el Excel convivan, validar un pago deja el comprobante listo
+para continuar y registra actor y fecha, pero **no cambia por sí solo la
+macroetapa ni marca el pedido como pagado en Shopify**. Esas automatizaciones se
+activan cuando la migración operativa al sistema sea completa.
 
 ## 17. KPI principales
 

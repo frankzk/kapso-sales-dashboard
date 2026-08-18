@@ -5,9 +5,11 @@ import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import type { Role } from "@/lib/types";
+import { permissionsFor } from "@/lib/permissions";
 import {
   canAddMember,
   canRemoveMember,
+  canSetPaymentValidator,
   canSetRole,
   isRole,
   type MemberLite,
@@ -39,6 +41,35 @@ async function requireOrgAdmin(orgId: string): Promise<{ userId: string; role: R
 async function orgMembers(admin: SupabaseClient, orgId: string): Promise<MemberLite[]> {
   const { data } = await admin.from("memberships").select("user_id, role").eq("org_id", orgId);
   return (data as MemberLite[]) ?? [];
+}
+
+async function orgPaymentValidatorIds(
+  admin: SupabaseClient,
+  orgId: string,
+  members: MemberLite[],
+): Promise<{ ids: string[]; error?: string }> {
+  const { data, error } = await admin
+    .from("user_permissions")
+    .select("user_id, permission, granted")
+    .eq("org_id", orgId)
+    .in("permission", ["payments.validate", "shalom.validate_payment"]);
+  if (error) return { ids: [], error: error.message };
+  const grantsByUser = new Map<string, { permission: string; granted: boolean }[]>();
+  for (const row of
+    (data as { user_id: string; permission: string; granted: boolean }[]) ?? []) {
+    const grants = grantsByUser.get(row.user_id) ?? [];
+    grants.push({ permission: row.permission, granted: row.granted });
+    grantsByUser.set(row.user_id, grants);
+  }
+  return {
+    ids: members
+      .filter((member) =>
+        permissionsFor([member.role], grantsByUser.get(member.user_id) ?? []).has(
+          "payments.validate",
+        ),
+      )
+      .map((member) => member.user_id),
+  };
 }
 
 async function findUserIdByEmail(admin: SupabaseClient, email: string): Promise<string | null> {
@@ -143,12 +174,32 @@ export async function removeMember(
   const guard = canRemoveMember(members, userId, actor.role);
   if (!guard.ok) return { error: guard.reason };
 
+  const validators = await orgPaymentValidatorIds(admin, orgId, members);
+  if (validators.error) return { error: validators.error };
+  const validatorGuard = canSetPaymentValidator(
+    members,
+    userId,
+    false,
+    actor.role,
+    validators.ids,
+  );
+  if (!validatorGuard.ok) return { error: validatorGuard.reason };
+
   // Revoke per-store access for this org's stores, then drop the membership.
   const { data: stores } = await admin.from("stores").select("id").eq("org_id", orgId);
   const ids = (stores ?? []).map((s: { id: string }) => s.id);
   if (ids.length) {
     await admin.from("user_store_access").delete().eq("user_id", userId).in("store_id", ids);
   }
+  // A removed member must not recover old exceptional permissions if invited
+  // again later. The membership delete and this cleanup are deliberately
+  // explicit because user_permissions belongs to the organization, not a store.
+  const { error: permissionError } = await admin
+    .from("user_permissions")
+    .delete()
+    .eq("org_id", orgId)
+    .eq("user_id", userId);
+  if (permissionError) return { error: permissionError.message };
   const { error } = await admin
     .from("memberships")
     .delete()
@@ -202,6 +253,47 @@ export async function setStoreAccess(
   }
   revalidatePath("/dashboard/team");
   return { notice: "Acceso actualizado." };
+}
+
+/** Concede o revoca la capacidad financiera de validar pagos. */
+export async function setPaymentValidationPermission(
+  _prev: TeamActionState,
+  formData: FormData,
+): Promise<TeamActionState> {
+  const orgId = String(formData.get("org_id") ?? "");
+  const actor = await requireOrgAdmin(orgId);
+  if (!actor) return { error: "Sin permiso." };
+
+  const userId = String(formData.get("user_id") ?? "");
+  const grant = String(formData.get("grant") ?? "") === "1";
+  const admin = createAdminSupabase();
+  const members = await orgMembers(admin, orgId);
+  const validators = await orgPaymentValidatorIds(admin, orgId, members);
+  if (validators.error) return { error: validators.error };
+
+  const guard = canSetPaymentValidator(
+    members,
+    userId,
+    grant,
+    actor.role,
+    validators.ids,
+  );
+  if (!guard.ok) return { error: guard.reason };
+
+  const { error } = await admin.from("user_permissions").upsert(
+    {
+      user_id: userId,
+      org_id: orgId,
+      permission: "payments.validate",
+      granted: grant,
+      granted_by: actor.userId,
+    },
+    { onConflict: "user_id,org_id,permission" },
+  );
+  if (error) return { error: error.message };
+
+  revalidatePath("/dashboard/team");
+  return { notice: grant ? "Puede validar pagos." : "Permiso de validacion retirado." };
 }
 
 // ---------------------------------------------------------------------------

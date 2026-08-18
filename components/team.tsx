@@ -9,6 +9,7 @@ import {
   addMember,
   removeMember,
   setMemberRole,
+  setPaymentValidationPermission,
   setStoreAccess,
   saveRider,
   setRiderActive,
@@ -45,6 +46,7 @@ export interface TeamMember {
   email: string;
   role: Role;
   stores: string[]; // store ids the member has explicit access to
+  can_validate_payments: boolean;
 }
 
 interface Store {
@@ -145,6 +147,7 @@ export function TeamManager({
                     <th className="py-2 text-left font-medium">Miembro</th>
                     <th className="py-2 text-left font-medium">Rol</th>
                     <th className="py-2 text-left font-medium">Acceso a tiendas</th>
+                    <th className="py-2 text-left font-medium">Validar pagos</th>
                     <th className="py-2 text-right font-medium">Acción</th>
                   </tr>
                 </thead>
@@ -163,6 +166,9 @@ export function TeamManager({
                       <td className="py-3">
                         <StoreAccessCell orgId={org.id} member={m} stores={stores} />
                       </td>
+                      <td className="py-3">
+                        <PaymentValidationToggle orgId={org.id} member={m} myRole={myRole} />
+                      </td>
                       <td className="py-3 text-right">
                         <RemoveForm orgId={org.id} member={m} myRole={myRole} ownerCnt={ownerCnt} />
                       </td>
@@ -170,7 +176,7 @@ export function TeamManager({
                   ))}
                   {!members.length && (
                     <tr>
-                      <td colSpan={4} className="py-4 text-sm text-slate-400">
+                      <td colSpan={5} className="py-4 text-sm text-slate-400">
                         Sin miembros todavía.
                       </td>
                     </tr>
@@ -387,6 +393,49 @@ function AccessToggle({
         {store.name}
       </label>
       {saved && <span className="text-xs font-medium text-emerald-600" title="Guardado">✓</span>}
+    </form>
+  );
+}
+
+function PaymentValidationToggle({
+  orgId,
+  member,
+  myRole,
+}: {
+  orgId: string;
+  member: TeamMember;
+  myRole: Role;
+}) {
+  const [state, action, pending] = useActionState(setPaymentValidationPermission, initial);
+  const saved = useSavedFlash(pending, state.notice);
+  const canEdit = myRole === "owner" || member.role !== "owner";
+  return (
+    <form action={action} className="flex min-w-36 flex-col gap-1">
+      <input type="hidden" name="org_id" value={orgId} />
+      <input type="hidden" name="user_id" value={member.user_id} />
+      <input type="hidden" name="grant" value={member.can_validate_payments ? "0" : "1"} />
+      <label
+        className={cn(
+          "inline-flex w-fit items-center gap-2 text-xs font-medium",
+          canEdit ? "cursor-pointer text-slate-700" : "cursor-not-allowed text-slate-400",
+        )}
+      >
+        <input
+          type="checkbox"
+          defaultChecked={member.can_validate_payments}
+          disabled={pending || !canEdit}
+          onChange={(event) => event.currentTarget.form?.requestSubmit()}
+          aria-label={`Permitir que ${member.email} valide pagos`}
+          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+        />
+        {member.can_validate_payments ? "Autorizado" : "Sin permiso"}
+      </label>
+      {pending ? (
+        <span className="text-xs text-slate-400">Guardando…</span>
+      ) : saved ? (
+        <span className="text-xs font-medium text-emerald-600">Guardado ✓</span>
+      ) : null}
+      {state.error && <span className="max-w-56 text-xs text-red-600">{state.error}</span>}
     </form>
   );
 }
