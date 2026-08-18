@@ -96,6 +96,20 @@ describe("concesiones explícitas", () => {
     ).toBe(false);
   });
 
+  it("una revocación histórica de Shalom no oculta la nueva bandeja al owner", () => {
+    expect(
+      permissionsFor(["owner"], [
+        { permission: "shalom.validate_payment", granted: false },
+      ]).has("payments.validate"),
+    ).toBe(true);
+    expect(
+      permissionsFor(["owner"], [
+        { permission: "shalom.validate_payment", granted: false },
+        { permission: "payments.validate", granted: false },
+      ]).has("payments.validate"),
+    ).toBe(false);
+  });
+
   it("una revocación gana sobre el rol", () => {
     const p = permissionsFor(["admin"], [{ permission: "shalom.view_pickup_key", granted: false }]);
     expect(p.has("shalom.view_pickup_key")).toBe(false);

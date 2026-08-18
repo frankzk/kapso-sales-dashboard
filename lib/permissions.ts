@@ -171,12 +171,13 @@ export function permissionsFor(
     if (!isPermission(g.permission)) continue;
     if (g.granted === false) out.delete(g.permission);
     else out.add(g.permission);
-    // Compatibilidad sin migracion: una excepcion individual guardada con el
-    // nombre historico sigue funcionando hasta que Equipo escriba el nuevo
-    // permiso. Una fila nueva siempre gana y evita dos fuentes de verdad.
+    // Compatibilidad sin migracion: una concesion historica sigue habilitando
+    // la bandeja hasta que Equipo escriba el permiso nuevo. Una revocacion del
+    // permiso historico NO puede retirar `payments.validate`: aquel permiso era
+    // exclusivo de Shalom y no representa una decision sobre la nueva bandeja
+    // transversal. Una fila nueva siempre gana y evita dos fuentes de verdad.
     if (g.permission === "shalom.validate_payment" && !hasNewPaymentGrant) {
-      if (g.granted === false) out.delete("payments.validate");
-      else out.add("payments.validate");
+      if (g.granted !== false) out.add("payments.validate");
     }
   }
   return out;
