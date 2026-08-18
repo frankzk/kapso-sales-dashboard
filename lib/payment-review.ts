@@ -8,6 +8,23 @@ export const PAYMENT_OBSERVED_STATUSES = [
 
 export type PaymentReviewLane = "pending" | "observed" | "validated";
 
+const ORDER_CONTEXT_BATCH_SIZE = 40;
+
+/**
+ * PostgREST serializa `.in()` dentro de la URL. La bandeja puede reunir hasta
+ * 240 pedidos entre sus tres columnas y enviarlos todos juntos supera el
+ * límite de algunos proxies de Supabase. Mantener lotes pequeños evita que la
+ * página completa falle justo cuando crece el trabajo pendiente.
+ */
+export function paymentReviewBatches<T>(values: T[], size = ORDER_CONTEXT_BATCH_SIZE): T[][] {
+  if (!Number.isInteger(size) || size < 1) throw new Error("El tamaño del lote debe ser positivo");
+  const batches: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    batches.push(values.slice(index, index + size));
+  }
+  return batches;
+}
+
 /**
  * La bandeja solo contiene trabajo accionable y las aprobaciones del día.
  * `rechazado` queda en el historial del pedido, no como tarea abierta.
