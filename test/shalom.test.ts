@@ -12,6 +12,7 @@ import {
   splitReceiverName,
   suggestedAgencyQuery,
   blockingActiveGuide,
+  shalomDraftDocumentToSave,
   shalomGuideIsCancelable,
   shalomSoftBlockers,
   shalomAirRoute,
@@ -858,5 +859,33 @@ describe("describeShalomError — culpar a quien corresponde", () => {
     const msg = describeShalomError(new ShalomApiError("gateway", 502));
     expect(msg).not.toMatch(/FALLO DEL PROVEEDOR/);
     expect(msg).toMatch(/se puede volver a intentar/i);
+  });
+});
+
+describe("qué documento viaja al guardar solo el borrador de Shalom", () => {
+  // El paso «DNI y agencia» del panel de pagos se guarda solo, y el servidor
+  // rechaza la escritura ENTERA si el documento no pasa su validación. Sin esta
+  // regla, un DNI a medio teclear impediría guardar la AGENCIA, que no tiene
+  // nada que ver con él.
+
+  it("lo válido se manda tal cual", () => {
+    expect(shalomDraftDocumentToSave("18002660", true, null)).toBe("18002660");
+    expect(shalomDraftDocumentToSave("  18002660  ", true, "77777777")).toBe("18002660");
+  });
+
+  it("a medio teclear NO pisa lo que ya estaba guardado", () => {
+    // Es el caso de todos los días: se elige la agencia mientras el DNI va por
+    // la mitad. La agencia tiene que guardarse y el DNI bueno sobrevivir.
+    expect(shalomDraftDocumentToSave("1800", false, "18002660")).toBe("18002660");
+  });
+
+  it("a medio teclear sin nada guardado no inventa nada", () => {
+    expect(shalomDraftDocumentToSave("1800", false, null)).toBeNull();
+  });
+
+  it("vaciar el campo SÍ borra: es una decisión, no un descuido", () => {
+    // Si se conservara lo anterior, quitar un DNI equivocado sería imposible.
+    expect(shalomDraftDocumentToSave("", true, "18002660")).toBeNull();
+    expect(shalomDraftDocumentToSave("   ", true, "18002660")).toBeNull();
   });
 });
