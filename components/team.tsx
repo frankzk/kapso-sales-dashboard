@@ -17,7 +17,7 @@ import {
   unlinkRiderUser,
   type TeamActionState,
 } from "@/app/dashboard/team/actions";
-import { Card, cn, STICKY_HEAD, TABLE_WRAP, TABLE_WRAP_FROM } from "@/components/ui";
+import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 
 const initial: TeamActionState = {};
 
@@ -140,14 +140,18 @@ export function TeamManager({
         <>
           <AddMemberForm orgId={org.id} myRole={myRole} />
           <Card>
-            <div className={TABLE_WRAP}>
-              <table className="w-full text-sm">
+            <p className="mb-3 text-xs text-slate-500">
+              Activa <strong className="font-semibold text-slate-700">Validar pagos</strong> para
+              quienes revisan las cuentas bancarias. El acceso aparecerá en su menú al recargar.
+            </p>
+            <div className={TABLE_WRAP_FROM[1110]}>
+              <table className="w-full min-w-[880px] text-sm">
                 <thead>
                   <tr className={cn(STICKY_HEAD, "text-xs text-slate-500")}>
                     <th className="py-2 text-left font-medium">Miembro</th>
+                    <th className="py-2 text-left font-medium">Validar pagos</th>
                     <th className="py-2 text-left font-medium">Rol</th>
                     <th className="py-2 text-left font-medium">Acceso a tiendas</th>
-                    <th className="py-2 text-left font-medium">Validar pagos</th>
                     <th className="py-2 text-right font-medium">Acción</th>
                   </tr>
                 </thead>
@@ -161,13 +165,13 @@ export function TeamManager({
                         )}
                       </td>
                       <td className="py-3">
+                        <PaymentValidationToggle orgId={org.id} member={m} myRole={myRole} />
+                      </td>
+                      <td className="py-3">
                         <RoleForm orgId={org.id} member={m} myRole={myRole} ownerCnt={ownerCnt} />
                       </td>
                       <td className="py-3">
                         <StoreAccessCell orgId={org.id} member={m} stores={stores} />
-                      </td>
-                      <td className="py-3">
-                        <PaymentValidationToggle orgId={org.id} member={m} myRole={myRole} />
                       </td>
                       <td className="py-3 text-right">
                         <RemoveForm orgId={org.id} member={m} myRole={myRole} ownerCnt={ownerCnt} />
