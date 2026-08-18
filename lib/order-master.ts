@@ -80,14 +80,6 @@ const ID_BATCH = 200;
 /** Límite del backfill de versión por tienda y cron para no competir con la operación. */
 const VERSION_RECONCILE_PAGE = 250;
 /**
- * Guías tocadas que se miran por pasada para detectar pedidos con la etapa
- * vieja. Cubre de sobra una escritura masiva —el backfill del 09-08 tocó 502
- * guías en una sentencia— sin arrastrar el histórico: las que ya se recalcularon
- * dejan de aparecer, así que un atraso se drena en pasadas sucesivas.
- */
-const SHIPMENT_STALE_PAGE = 2000;
-
-/**
  * Cuánto reloj le toca a la tienda que viene ahora.
  *
  * POR QUÉ EXISTE ESTA FUNCIÓN, que son cuatro líneas. Hasta hoy el barrido del
@@ -666,44 +658,6 @@ async function fetchGeoOverrides(
   return out;
 }
 
-/**
- * Pedidos cuya guía se escribió después del último recálculo de su Master. Pura.
- *
- * Es la señal que faltaba, y funciona sin saber QUIÉN escribió: una ruta que
- * toca `shipments` y no recalcula deja siempre la misma huella —guía nueva,
- * Master viejo—, así que basta con leerla. Un Master ausente también entra: hay
- * guía y no hay fila que la refleje.
- *
- * La comparación es de cadenas ISO a propósito: vienen de Postgres en UTC con el
- * mismo formato, y `Date.parse` solo añadiría una forma de equivocarse con las
- * fechas raras. El empate NO cuenta como viejo — el recálculo que corre justo
- * después de escribir la guía comparte instante y ya está al día.
- */
-export function staleByShipment(
-  writes: readonly { order_id: string | null; updated_at: string | null }[],
-  masters: readonly { order_id: string; recomputed_at: string | null }[],
-): string[] {
-  const lastWrite = new Map<string, string>();
-  for (const w of writes) {
-    if (!w.order_id || !w.updated_at) continue;
-    const prev = lastWrite.get(w.order_id);
-    if (!prev || w.updated_at > prev) lastWrite.set(w.order_id, w.updated_at);
-  }
-
-  const recomputed = new Map<string, string | null>();
-  for (const m of masters) recomputed.set(m.order_id, m.recomputed_at);
-
-  const out: string[] = [];
-  for (const [orderId, wroteAt] of lastWrite) {
-    if (!recomputed.has(orderId)) {
-      out.push(orderId);
-      continue;
-    }
-    const at = recomputed.get(orderId);
-    if (!at || wroteAt > at) out.push(orderId);
-  }
-  return out;
-}
 
 export interface RecomputeResult {
   requested: number;
@@ -1355,37 +1309,40 @@ export async function reconcileOrderMaster(
 
   // CUARTA PUERTA: guías escritas después del último recálculo de su pedido.
   //
-  // Se ancla en la ESCRITURA de la guía y no en el pedido, que es lo que la hace
-  // funcionar donde las otras tres fallan: alcanza a un pedido de hace tres
-  // meses en cuanto su guía se mueve, sin depender de que esté entre los más
-  // recientes de la tienda. Se piden las guías tocadas más recientemente porque
-  // son las que llevan la etapa equivocada delante de alguien ahora mismo.
+  // Se ancla en el DESFASE, no en una ventana de recencia, y esa diferencia es
+  // la que costó 381 pedidos. La primera versión (#453) pedía las 2.000 guías
+  // tocadas más recientemente y comparaba en TypeScript, porque PostgREST no
+  // sabe comparar dos columnas de tablas distintas. Funcionaba mientras el
+  // pedido siguiera dentro de esa ventana — y un pedido que cae por debajo no
+  // podía volver a entrar jamás: cada guía nueva lo hundía un poco más. Medido
+  // el 18-08-2026 en Kenku: 487 desfasados, 381 de ellos bajo la línea, mientras
+  // el barrido recalculaba 620 pedidos por hora. No es que no le diera tiempo:
+  // no los veía.
+  //
+  // Ahora la pregunta la responde la base (`order_master_stale`, 0122), que es
+  // donde la comparación se puede hacer de verdad y donde vive ya la única
+  // definición del desfase.
   const seenPending = new Set(pending);
   const roomForStale = Math.max(0, limit - pending.length);
   if (roomForStale > 0) {
-    const { data: touched } = await admin
-      .from("shipments")
-      .select("order_id,updated_at")
-      .in("store_id", storeIds as string[])
-      .not("order_id", "is", null)
-      .order("updated_at", { ascending: false })
-      .limit(SHIPMENT_STALE_PAGE);
-
-    const writes = (touched ?? []) as { order_id: string | null; updated_at: string | null }[];
-    const masters: { order_id: string; recomputed_at: string | null }[] = [];
-    const touchedIds = [...new Set(writes.map((w) => w.order_id).filter((v): v is string => Boolean(v)))];
-    for (const batch of chunk(touchedIds, ID_BATCH)) {
-      const { data } = await admin
-        .from("order_master")
-        .select("order_id,recomputed_at")
-        .in("order_id", batch);
-      masters.push(...((data ?? []) as { order_id: string; recomputed_at: string | null }[]));
-    }
-
-    for (const id of staleByShipment(writes, masters)) {
-      if (seenPending.has(id) || pending.length >= limit) continue;
-      pending.push(id);
-      seenPending.add(id);
+    for (const storeId of storeIds) {
+      if (pending.length >= limit) break;
+      const { data, error } = await admin.rpc("order_master_stale", {
+        p_store_id: storeId,
+        p_limit: Math.max(0, limit - pending.length),
+      });
+      // Un fallo acá no tumba el barrido: las otras puertas ya llenaron su parte
+      // y la siguiente pasada lo reintenta. Pero deja rastro — un desfase que no
+      // se detecta es una etapa vieja en pantalla, y eso no puede ser silencioso.
+      if (error) {
+        console.error(`order_master: puerta del desfase — ${error.message}`);
+        continue;
+      }
+      for (const row of (data ?? []) as { order_id: string }[]) {
+        if (seenPending.has(row.order_id) || pending.length >= limit) continue;
+        pending.push(row.order_id);
+        seenPending.add(row.order_id);
+      }
     }
   }
 

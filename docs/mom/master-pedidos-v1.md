@@ -2033,12 +2033,28 @@ no tenía forma de volver a entrar.
 Tres reglas, a partir de acá:
 
 1. **La señal de «etapa vieja» son las guías, no el pedido.** El barrido compara
-   el `updated_at` de las guías contra el `recomputed_at` del Master
-   (`staleByShipment`). No basta con que cada ruta se acuerde de recalcular,
-   porque **la escritura puede venir de fuera de la aplicación** —de una consola
-   de SQL, como el 09-08— y ninguna ruta puede responder por eso. El read-model
-   se reconcilia contra los datos, no contra las llamadas. Alcanza además a un
-   pedido de hace tres meses en cuanto su guía se mueve.
+   el `updated_at` de las guías contra el `recomputed_at` del Master. No basta
+   con que cada ruta se acuerde de recalcular, porque **la escritura puede venir
+   de fuera de la aplicación** —de una consola de SQL, como el 09-08— y ninguna
+   ruta puede responder por eso. El read-model se reconcilia contra los datos, no
+   contra las llamadas.
+
+   **Y «contra los datos» quiere decir sin ventana.** La primera versión
+   (`staleByShipment`, en TypeScript) comparaba sobre las **2.000 guías tocadas
+   más recientemente** de la tienda, porque PostgREST no sabe comparar dos
+   columnas de tablas distintas. Eso seguía siendo una llamada disfrazada de
+   dato: un pedido que caía por debajo de esa línea **no podía volver a entrar
+   jamás**, y cada guía nueva lo hundía un poco más. Medido el 18-08-2026 en
+   Kenku: **487 desfasados, 381 bajo la línea**, mientras el barrido recalculaba
+   620 pedidos por hora en esa misma tienda — no le faltaba tiempo, no los veía.
+
+   La pregunta la responde ahora la base (`order_master_stale`, 0122), que es
+   donde la comparación se puede hacer de verdad, y con eso la definición del
+   desfase existe en **un solo sitio** —como `order_coverage_for` desde la 0104,
+   y por la misma razón—. Se recorre del recálculo más viejo al más nuevo: lo
+   que lleva más tiempo mintiendo sale primero, y lo que un tope de recorrido
+   deje fuera es siempre lo más recientemente recalculado, que es lo que menos
+   falta hace mirar.
 2. **El recálculo va por tandas.** Un pedido que revienta cuesta su trozo, no la
    lista entera. Endurecimiento, no la causa de este incidente: el import de
    Aliclik llega a llamar con más de mil pedidos de golpe y cualquier fallo los

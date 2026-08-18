@@ -245,4 +245,6 @@
 \ir migrations/0119_reason_probed_at.sql
 \echo 'Applying 0121_district_coverage.sql'
 \ir migrations/0121_district_coverage.sql
+\echo 'Applying 0122_order_master_stale.sql'
+\ir migrations/0122_order_master_stale.sql
 \echo 'Done.'
