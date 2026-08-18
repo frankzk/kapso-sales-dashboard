@@ -110,6 +110,77 @@ async function fileSha256(file: File): Promise<string | null> {
   }
 }
 
+/**
+ * Carga del panel, compartida por los dos que lo usan.
+ *
+ * Está extraída porque el arreglo tenía que caer en los dos sitios y estaban
+ * copiados letra por letra: el siguiente que toque uno no puede dejar al otro
+ * atrás. Lo que arregla es que un fallo de carga se vea COMO fallo — antes la
+ * server action podía devolver "Sin acceso a este pedido." y esa frase no
+ * llegaba nunca a la pantalla, porque el `return` de "Cargando…" iba por delante
+ * del sitio donde se pinta el error.
+ */
+function usePaymentPanel(orderId: string) {
+  const [panel, setPanel] = useState<PanelData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const reload = useMemo(
+    () => async () => {
+      try {
+        const res = await loadPaymentPanel(orderId);
+        if ("error" in res) setError(res.error);
+        else {
+          setPanel(res.panel);
+          setError(null);
+        }
+      } catch {
+        // Una server action que no llega —red caída, despliegue a medias, sesión
+        // caducada— deja la promesa rechazada. Sin este catch el panel se
+        // quedaba en "Cargando pagos…" para siempre: ni error, ni reintento, ni
+        // forma de saber que había un comprobante esperando del otro lado.
+        setError("No se pudo cargar el panel de pagos. Revisa la conexión y vuelve a intentarlo.");
+      }
+    },
+    [orderId],
+  );
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  return { panel, error, setError, notice, setNotice, pending, startTransition, reload };
+}
+
+/**
+ * Lo que se enseña cuando el panel NO cargó: el motivo y un botón para volver a
+ * intentar. Nunca el contenido del panel — un panel vacío por error se lee como
+ * "este pedido no tiene pagos", que es justo lo contrario de lo que pasó.
+ */
+function PanelLoadError({
+  message,
+  onRetry,
+  className,
+}: {
+  message: string;
+  onRetry: () => void;
+  className?: string;
+}) {
+  return (
+    <div className={cn("space-y-2", className)}>
+      <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+      >
+        Intentar nuevamente
+      </button>
+    </div>
+  );
+}
+
 export function PickupKeyPanel({
   orderId,
   onChanged,
@@ -119,26 +190,8 @@ export function PickupKeyPanel({
   onChanged: () => void;
   mode?: OrderPaymentPanelMode;
 }) {
-  const [panel, setPanel] = useState<PanelData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
-
-  const reload = useMemo(
-    () => async () => {
-      const res = await loadPaymentPanel(orderId);
-      if ("error" in res) setError(res.error);
-      else {
-        setPanel(res.panel);
-        setError(null);
-      }
-    },
-    [orderId],
-  );
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
+  const { panel, error, setError, notice, setNotice, pending, startTransition, reload } =
+    usePaymentPanel(orderId);
 
   function run(action: () => Promise<{ error?: string; notice?: string }>) {
     startTransition(async () => {
@@ -153,6 +206,7 @@ export function PickupKeyPanel({
   }
 
   if (!panel) {
+    if (error) return <PanelLoadError message={error} onRetry={() => void reload()} />;
     return <p className="text-sm text-slate-400">Cargando pagos…</p>;
   }
 
@@ -235,26 +289,8 @@ export function ShalomPickupKeyPanel({
   orderId: string;
   onChanged: () => void;
 }) {
-  const [panel, setPanel] = useState<PanelData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
-
-  const reload = useMemo(
-    () => async () => {
-      const res = await loadPaymentPanel(orderId);
-      if ("error" in res) setError(res.error);
-      else {
-        setPanel(res.panel);
-        setError(null);
-      }
-    },
-    [orderId],
-  );
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
+  const { panel, error, setError, notice, setNotice, pending, startTransition, reload } =
+    usePaymentPanel(orderId);
 
   function run(action: () => Promise<{ error?: string; notice?: string }>) {
     startTransition(async () => {
@@ -269,6 +305,15 @@ export function ShalomPickupKeyPanel({
   }
 
   if (!panel) {
+    if (error) {
+      return (
+        <PanelLoadError
+          message={error}
+          onRetry={() => void reload()}
+          className="border-t border-sky-100 pt-3"
+        />
+      );
+    }
     return (
       <p className="border-t border-sky-100 pt-3 text-sm text-slate-400">
         Cargando credencial Shalom…

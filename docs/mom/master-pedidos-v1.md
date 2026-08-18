@@ -1510,6 +1510,13 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - El drawer muestra tres importes distintos: total cargado, total validado y
   saldo por cargar. El check **Adelanto mínimo validado** aparece únicamente
   cuando existen al menos S/30 validados, no solo por haber subido una imagen.
+- **Una lectura fallida no es una respuesta.** Si Kapta no consigue leer los
+  pagos del pedido, el drawer dice que no pudo leerlos y ofrece reintentar.
+  Nunca imprime «Todavía no se ha cargado ningún comprobante» ni «S/ 0.00
+  validados»: esas frases afirman algo sobre el dinero del cliente y solo valen
+  cuando la consulta respondió. Se vio en #AUR175525 — el comprobante estaba
+  registrado y el drawer lo negaba, que es como mandar al equipo a pedir un Yape
+  que el cliente ya envió.
 - Validadores actuales: Milagros, Mildred, Gabriela, Yohalis y Frankz, según la
   cuenta receptora.
 - Hoy existe validación interna por WhatsApp/app bancaria; Kapta debe conservar
@@ -1517,6 +1524,11 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - Al pulsar **Leer y rellenar**, Kapta separa dos identidades del comprobante:
   el pagador o remitente se conserva internamente para trazabilidad y detección
   de duplicados; la interfaz valida la **cuenta receptora**.
+- Un comprobante **no se registra** si la comprobación de duplicidad no llegó a
+  ejecutarse. Con esas consultas caídas, «no hay duplicado» quiere decir «no se
+  sabe». El nº de operación y la huella del archivo tienen índice único detrás y
+  chocarían igual; la tercera señal —mismo monto y misma fecha— no lo tiene, así
+  que ahí el silencio se cobra dos veces el mismo Yape.
 - La cuenta receptora se comprueba con dos señales independientes y visibles:
   el destinatario debe coincidir con `Grupo GF S.A.C.` y el celular debe ser
   `930 555 309` o conservar de forma legible la terminación `309`. Cada señal
