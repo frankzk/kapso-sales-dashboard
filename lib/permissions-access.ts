@@ -7,7 +7,7 @@
 
 import { cache } from "react";
 import { createServerSupabase } from "@/lib/db";
-import { getUserRoleSummary } from "@/lib/access";
+import { getCurrentUser, getUserRoleSummary } from "@/lib/access";
 import {
   hasPermission,
   isReadOnly,
@@ -56,8 +56,15 @@ export const getMasterPermissions = cache(loadUncached);
  */
 const loadOrgPermissions = cache(async (orgId: string): Promise<Set<Permission>> => {
   const sb = await createServerSupabase();
+  const user = await getCurrentUser();
+  if (!user) return new Set<Permission>();
   const [{ data: membership }, { data: grantRows }] = await Promise.all([
-    sb.from("memberships").select("role").eq("org_id", orgId).maybeSingle(),
+    sb
+      .from("memberships")
+      .select("role")
+      .eq("org_id", orgId)
+      .eq("user_id", user.id)
+      .maybeSingle(),
     sb.from("user_permissions").select("permission,granted").eq("org_id", orgId),
   ]);
   if (!membership) return new Set<Permission>();
