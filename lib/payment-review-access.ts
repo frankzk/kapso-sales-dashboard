@@ -6,6 +6,7 @@ import { createServerSupabase } from "@/lib/db";
 import { hasOrgPermission } from "@/lib/permissions-access";
 import {
   limaDayBounds,
+  paymentReviewBatches,
   PAYMENT_OBSERVED_STATUSES,
   PAYMENT_PENDING_STATUSES,
   type PaymentReviewLane,
@@ -155,30 +156,45 @@ export async function getPaymentReviewBoard(): Promise<PaymentReviewBoardData | 
   };
   const allRows = [...laneRows.pending, ...laneRows.observed, ...laneRows.validated];
   const orderIds = [...new Set(allRows.map((row) => row.order_id))];
-  const [ordersRes, totalsRes] = orderIds.length
+  const contextBatches = paymentReviewBatches(orderIds);
+  const [orderResults, totalResults] = orderIds.length
     ? await Promise.all([
-        sb
-          .from("order_master")
-          .select(
-            "order_id,store_id,order_name,customer_name,customer_phone,order_total,payment_state",
-          )
-          .in("order_id", orderIds),
-        sb
-          .from("order_payments")
-          .select("order_id,amount,validation_status")
-          .in("order_id", orderIds)
-          .neq("validation_status", "rechazado"),
+        Promise.all(
+          contextBatches.map((batch) =>
+            sb
+              .from("order_master")
+              .select(
+                "order_id,store_id,order_name,customer_name,customer_phone,order_total,payment_state",
+              )
+              .in("order_id", batch),
+          ),
+        ),
+        Promise.all(
+          contextBatches.map((batch) =>
+            sb
+              .from("order_payments")
+              .select("order_id,amount,validation_status")
+              .in("order_id", batch)
+              .neq("validation_status", "rechazado"),
+          ),
+        ),
       ])
-    : [{ data: [], error: null }, { data: [], error: null }];
-  if (ordersRes.error) throw new Error(ordersRes.error.message);
-  if (totalsRes.error) throw new Error(totalsRes.error.message);
+    : [[], []];
+  const contextErrors = [...orderResults, ...totalResults]
+    .map((result) => result.error)
+    .filter(Boolean);
+  if (contextErrors.length) {
+    throw new Error(contextErrors.map((error) => error!.message).join("; "));
+  }
+  const orderRows = orderResults.flatMap((result) => result.data ?? []);
+  const totalRows = totalResults.flatMap((result) => result.data ?? []);
 
   const orders = new Map(
-    ((ordersRes.data ?? []) as unknown as RawOrder[]).map((order) => [order.order_id, order]),
+    (orderRows as unknown as RawOrder[]).map((order) => [order.order_id, order]),
   );
   const totals = new Map<string, { registered: number; validated: number }>();
   for (const row of
-    (totalsRes.data ?? []) as { order_id: string; amount: number | string | null; validation_status: string }[]) {
+    totalRows as { order_id: string; amount: number | string | null; validation_status: string }[]) {
     const current = totals.get(row.order_id) ?? { registered: 0, validated: 0 };
     const amount = numberOrNull(row.amount) ?? 0;
     current.registered += amount;
