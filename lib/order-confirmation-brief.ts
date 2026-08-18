@@ -269,6 +269,44 @@ export function confirmationRisk(
   return { antecedents, requirement, reasons };
 }
 
+export interface AliclikRiskGate {
+  allowed: boolean;
+  requiresException: boolean;
+  message: string | null;
+}
+
+/**
+ * La regla financiera se hace exigible al CREAR Aliclik, porque es la única
+ * ruta que cobra el intento fallido. En Swayp, Lima y motorizados propios sigue
+ * siendo información para decidir, no una barrera del sistema.
+ */
+export function aliclikRiskGate(
+  requirement: PaymentRequirement,
+  paymentState: string | null | undefined,
+  exceptionReason?: string | null,
+): AliclikRiskGate {
+  const state = paymentState ?? "sin_pago";
+  const advanceValidated = ["adelanto_validado", "diferencia_cargada", "pago_completo"].includes(
+    state,
+  );
+  const fullValidated = state === "pago_completo";
+  const unmet =
+    (requirement === "exigir_adelanto" && !advanceValidated) ||
+    (requirement === "pago_completo" && !fullValidated);
+  if (!unmet) return { allowed: true, requiresException: false, message: null };
+
+  const reason = exceptionReason?.trim() ?? "";
+  if (reason.length >= 8) return { allowed: true, requiresException: true, message: null };
+  return {
+    allowed: false,
+    requiresException: true,
+    message:
+      requirement === "pago_completo"
+        ? "Aliclik exige el pago completo validado por los antecedentes del cliente. Para exceptuarlo, escribe una justificación corta."
+        : "Aliclik exige un adelanto validado de S/ 30 por los antecedentes del cliente. Para exceptuarlo, escribe una justificación corta.",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Duplicados (MOM §8)
 // ---------------------------------------------------------------------------

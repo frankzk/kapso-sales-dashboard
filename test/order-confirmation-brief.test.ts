@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  aliclikRiskGate,
   confirmationRisk,
   countLaterOrders,
   dispatchState,
@@ -282,5 +283,31 @@ describe("confirmationRisk — cuánto de lo anulado costó flete", () => {
     const risk = confirmationRisk(summarizeOutcomes(priors), priors);
     expect(risk.antecedents).toBe(3);
     expect(risk.requirement).toBe("pago_completo");
+  });
+});
+
+describe("aliclikRiskGate", () => {
+  it("un adelanto validado habilita la salida Aliclik cuando se exige S/ 30", () => {
+    expect(aliclikRiskGate("exigir_adelanto", "adelanto_validado").allowed).toBe(true);
+  });
+
+  it("tres antecedentes exigen pago completo validado", () => {
+    expect(aliclikRiskGate("pago_completo", "adelanto_validado").allowed).toBe(false);
+    expect(aliclikRiskGate("pago_completo", "pago_completo").allowed).toBe(true);
+  });
+
+  it("la excepción necesita una justificación útil", () => {
+    expect(aliclikRiskGate("exigir_adelanto", "sin_pago", "sí").allowed).toBe(false);
+    expect(
+      aliclikRiskGate(
+        "exigir_adelanto",
+        "sin_pago",
+        "Cliente recurrente; confirma recepción hoy.",
+      ),
+    ).toMatchObject({ allowed: true, requiresException: true });
+  });
+
+  it("sugerir adelanto nunca bloquea", () => {
+    expect(aliclikRiskGate("sugerir_adelanto", "sin_pago").allowed).toBe(true);
   });
 });

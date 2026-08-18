@@ -63,6 +63,7 @@ describe("buildMasterQuery", () => {
     f.withComments = true;
     f.staleDays = 5;
     f.search = "KP124";
+    f.confirmationDue = "hoy";
 
     const qs = buildMasterQuery({ filters: f, sortKey: "movement", page: 4 });
     const back = parseMasterQuery(qs);
@@ -74,6 +75,7 @@ describe("buildMasterQuery", () => {
     expect(back.filters.withComments).toBe(true);
     expect(back.filters.staleDays).toBe(5);
     expect(back.filters.search).toBe("KP124");
+    expect(back.filters.confirmationDue).toBe("hoy");
     expect(back.sortKey).toBe("movement");
     expect(back.page).toBe(4);
   });
@@ -101,5 +103,8 @@ describe("hasQueryFilters", () => {
     const g = emptyFilters();
     g.search = "  ";
     expect(hasQueryFilters(g)).toBe(false); // espacios no son un filtro
+    const h = emptyFilters();
+    h.confirmationDue = "vencido";
+    expect(hasQueryFilters(h)).toBe(true);
   });
 });

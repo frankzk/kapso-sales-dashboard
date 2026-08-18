@@ -1,10 +1,10 @@
 # Master Operations Map — Master de Pedidos v1
 
-Estado: Fase 4 implementada; Mesa de cierre y resumen operativo publicados
+Estado: Fase 4 implementada; macroetapa Por confirmar cerrada funcionalmente
 Propietario del proceso: Frankz  
 Sistema: Kapta (`kapso-sales-dashboard`)  
 Fuente visual: board Miro «Master Operations Map»  
-Última consolidación: 2026-08-08
+Última consolidación: 2026-08-18
 
 ## 1. Propósito
 
@@ -232,6 +232,8 @@ Subetapas:
 - `por_confirmar`: hay al menos un intento y ningún compromiso vigente.
 - `volver_a_contactar`: el intento más reciente dejó pactada una fecha.
 - `ultimo_intento`: séptimo día distinto de gestión.
+- `historico_sin_gestion`: pedido anterior al corte operativo de Kapta que no
+  tiene contactos. Se conserva para consulta, pero no es trabajo nuevo.
 
 Motivos (conviven con la subetapa, no la reemplazan):
 
@@ -240,6 +242,11 @@ Motivos (conviven con la subetapa, no la reemplazan):
 
 Reglas:
 
+- El corte operativo de confirmación se configura por tienda y empieza el
+  **01/06/2026**. La base puede contener pedidos anteriores por backfill; si no
+  tienen gestión, no inflan `Sin llamar`, los conteos ni los KPI del equipo.
+- Si un pedido anterior al corte sí tiene gestión, sale del histórico y se
+  clasifica por sus hechos reales.
 - La subetapa dice en qué punto va la gestión; el motivo dice qué falta para
   avanzar. Un pedido de Agencia con próximo contacto pactado y sin abono
   validado está en `volver_a_contactar` **con** el motivo
@@ -263,7 +270,9 @@ Reglas:
 - `Último intento` se **deriva** del conteo; no depende de que alguien recuerde
   marcarlo.
 - El día siete es `Último intento`; después se crea una tarea de anulación
-  manual en Shopify. Kapta nunca anula automáticamente.
+  manual en Shopify. Se asigna a la última persona que gestionó y la responsable
+  de respaldo configurable es Milagros. Kapta nunca anula automáticamente; la
+  tarea se completa cuando Shopify sincroniza la anulación.
 - Un intento posterior sin compromiso de fecha devuelve el pedido a
   `por_confirmar`: el compromiso anterior ya no describe nada. Manda el hecho
   más reciente.
@@ -273,6 +282,9 @@ Reglas:
 - Existe un recordatorio automático una vez transcurridas dos horas laborales
   sin respuesta.
 - Horario laboral: 08:00–22:00, hora de Lima. El reloj se pausa fuera de horario.
+- `Volver a contactar` y `Pendiente de abono` guardan únicamente una **fecha**,
+  no una hora. Vencidos, hoy y próximos forman colas operativas; los
+  recordatorios de dos horas entran en las mismas colas según su vencimiento.
 - Provincia COD queda confirmada al validar producto, cantidad, monto, fecha
   aproximada y dirección de entrega.
 - Agencia queda confirmada solo cuando el pago exigido ha sido validado.
@@ -281,6 +293,10 @@ Reglas:
 
 Registro:
 
+- Registrar un intento es una transacción atómica: contacto, seguimiento,
+  confirmación y tarea derivada se guardan juntos o no se guarda ninguno.
+- Cada gesto lleva un `operation_id`. Un doble clic o reintento de red devuelve
+  el resultado existente y no duplica eventos, días ni tareas.
 - Cada intento se registra en la **mesa de confirmación** del pedido, con canal
   y resultado. Escribe `confirmation_contact`; si el resultado pacta una fecha
   escribe además `confirmation_followup`, y si el cliente confirma, `confirmed`.
@@ -734,8 +750,13 @@ que nadie tenga que resumirla a mano:
   de la misma matriz que clasifica la cobertura del pedido, así que no puede
   contradecirla. Vacío significa que va por agencia.
 - Con `Exigir adelanto` o `Exigir pago completo`, el panel de cobro pasa a ser
-  dominante también en Provincia COD. `Sugerir` no lo fuerza: es una
-  recomendación para la llamada, y un COD puede salir contra entrega.
+  dominante también en Provincia COD. La barrera de pago se aplica al crear una
+  salida **Aliclik**, porque es el courier que cobra incluso el intento no
+  entregado. Swayp, Lima y los demás motorizados no se bloquean por esta regla:
+  el antecedente permanece visible como advertencia, pero pueden salir contra
+  entrega. `Sugerir` nunca bloquea.
+- La excepción Aliclik requiere una explicación corta y genera un evento
+  append-only con actor, fecha, requisito, estado del pago y antecedentes.
 - La ficha se lee bajo RLS: el historial de un teléfono nunca cruza a una tienda
   que quien mira no puede ver.
 
@@ -1882,7 +1903,7 @@ Primer bloque publicado en el drawer del Master:
   reembolsos; los permisos puntuales de `user_permissions` siguen prevaleciendo.
 - El resolver quedó versionado —`mom-v1.4` en este bloque; la versión vigente es
   siempre `MOM_RESOLUTION_VERSION` en `lib/order-macro-stage.ts`, hoy
-  `mom-v1.8`—; el cron detecta versiones anteriores y recalcula el histórico por
+  `mom-v1.9`—; el cron detecta versiones anteriores y recalcula el histórico por
   lotes hasta que todo el Master converja, sin necesitar credenciales locales ni
   detener la sincronización. Toda regla que cambie el resultado de filas que
   nadie tocó debe subir esa constante, o el histórico queda con el veredicto
@@ -2201,6 +2222,24 @@ recoge; antes no lo recogía nadie.
   históricas no lo vuelven a cerrar automáticamente.
 - Finalizar se bloquea mientras existan salidas activas u otras obligaciones.
 - Todas las acciones se guardan como eventos append-only y recalculan el Master.
+
+### 24.1 Criterios de aceptación de Por confirmar
+
+- Los pedidos sin gestión anteriores al 01/06/2026 aparecen como
+  `Histórico sin gestión`, no como `Sin llamar`.
+- Llamada, WhatsApp y mensaje del mismo día consumen un solo día de los siete,
+  aunque cada intento queda auditado.
+- Un seguimiento exige fecha y nunca hora; la cola distingue vencidos, hoy y
+  próximos.
+- `Sin respuesta` y `Se deja mensaje` generan un recordatorio a las dos horas
+  laborales dentro de 08:00–22:00 de Lima.
+- El séptimo día sin confirmación crea una tarea manual de revisión en Shopify;
+  no anula el pedido desde Kapta.
+- Un doble clic no duplica el día, los eventos ni la tarea.
+- El riesgo del cliente se muestra para todas las rutas, pero solo Aliclik queda
+  bloqueado por el pago requerido. Una excepción Aliclik deja motivo auditado.
+- El bloqueo de pedido por asesor queda expresamente diferido hasta abandonar
+  el Excel; no forma parte de esta activación.
 
 ## 25. User journey del drawer del Master
 

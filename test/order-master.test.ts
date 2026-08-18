@@ -30,6 +30,7 @@ function stubAdmin(
     from(table: string) {
       const rows: any[] = (tables as Record<string, any[]>)[table] ?? [];
       let failThisSelect = false;
+      let mutation = false;
       const builder: any = {
         select(columns: string) {
           if (table === "shipments") {
@@ -42,6 +43,7 @@ function stubAdmin(
           return builder;
         },
         in() {
+          if (mutation) return builder;
           if (failThisSelect) return Promise.resolve({ data: null, error: { message: "column does not exist" } });
           return Promise.resolve({ data: rows, error: null });
         },
@@ -57,6 +59,10 @@ function stubAdmin(
         upsert(batch: any[]) {
           upserts.push(batch);
           return Promise.resolve({ data: null, error: null });
+        },
+        update() {
+          mutation = true;
+          return builder;
         },
       };
       return builder;

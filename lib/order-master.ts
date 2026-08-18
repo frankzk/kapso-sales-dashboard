@@ -21,6 +21,11 @@ import { normalizeDistrict } from "@/lib/shipments";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
 import { computeLogisticsCost, costDay, type CostTariff } from "@/lib/costs";
+import {
+  CONFIRMATION_CONTACT_KINDS,
+  CONFIRMATION_FOLLOWUP_KINDS,
+  confirmationDayCount,
+} from "@/lib/order-confirmation";
 import { classifyOrderCoverage, type OrderCoverage } from "@/lib/order-coverage";
 import {
   MOM_RESOLUTION_VERSION,
@@ -186,6 +191,7 @@ interface EventRecord {
   shipment_id: string | null;
   kind: string;
   occurred_at: string;
+  actor: string | null;
   courier: string | null;
   new_status: string | null;
   new_operational: string | null;
@@ -433,7 +439,7 @@ async function fetchEvents(admin: SupabaseClient, ids: string[]): Promise<EventR
   for (const batch of chunk(ids, ID_BATCH)) {
     const { data, error } = await admin
       .from("order_events")
-      .select("order_id,shipment_id,kind,occurred_at,courier,new_status,new_operational,reason,payload")
+      .select("order_id,shipment_id,kind,occurred_at,actor,courier,new_status,new_operational,reason,payload")
       .in("order_id", batch);
     if (error) throw new Error(`order_master: no se pudieron leer los eventos — ${error.message}`);
     out.push(...((data ?? []) as unknown as EventRecord[]));
@@ -610,28 +616,90 @@ async function fetchPaymentSignals(
 async function fetchTariffs(
   admin: SupabaseClient,
   storeIds: string[],
-): Promise<{ tariffs: CostTariff[]; orgByStore: Map<string, string> }> {
+): Promise<{
+  tariffs: CostTariff[];
+  orgByStore: Map<string, string>;
+  confirmationActivationByStore: Map<string, string>;
+}> {
   const orgByStore = new Map<string, string>();
+  const confirmationActivationByStore = new Map<string, string>();
   const tariffs: CostTariff[] = [];
-  if (!storeIds.length) return { tariffs, orgByStore };
+  if (!storeIds.length) return { tariffs, orgByStore, confirmationActivationByStore };
 
   for (const batch of chunk(storeIds, ID_BATCH)) {
-    const { data } = await admin.from("stores").select("id,org_id").in("id", batch);
-    for (const row of (data ?? []) as { id: string; org_id: string }[]) {
+    const { data, error } = await admin
+      .from("stores")
+      .select("id,org_id,confirmation_activation_date")
+      .in("id", batch);
+    let storeRows = (data ?? []) as unknown as {
+      id: string;
+      org_id: string;
+      confirmation_activation_date?: string | null;
+    }[];
+    // Despliegue compatible: durante los segundos entre código y migración se
+    // usa el corte acordado, sin detener la sincronización del Master.
+    if (error) {
+      const fallback = await admin.from("stores").select("id,org_id").in("id", batch);
+      storeRows = (fallback.data ?? []) as unknown as {
+        id: string;
+        org_id: string;
+        confirmation_activation_date?: string | null;
+      }[];
+    }
+    for (const row of storeRows) {
       orgByStore.set(row.id, row.org_id);
+      confirmationActivationByStore.set(
+        row.id,
+        row.confirmation_activation_date ?? "2026-06-01",
+      );
     }
   }
   const orgIds = [...new Set(orgByStore.values())];
-  if (!orgIds.length) return { tariffs, orgByStore };
+  if (!orgIds.length) return { tariffs, orgByStore, confirmationActivationByStore };
 
   const { data, error } = await admin
     .from("cost_tariffs")
     .select("id,org_id,store_id,courier,region,province,district,concept,amount,effective_from,effective_to")
     .in("org_id", orgIds);
   // La fase 4 puede no estar aplicada todavía: sin tarifas, el costo queda vacío.
-  if (error) return { tariffs, orgByStore };
+  if (error) return { tariffs, orgByStore, confirmationActivationByStore };
   tariffs.push(...((data ?? []) as unknown as CostTariff[]));
-  return { tariffs, orgByStore };
+  return { tariffs, orgByStore, confirmationActivationByStore };
+}
+
+function confirmationRollup(events: readonly EventRecord[]) {
+  const contacts = new Set<string>(CONFIRMATION_CONTACT_KINDS);
+  const followups = new Set<string>(CONFIRMATION_FOLLOWUP_KINDS);
+  const latest = (allowed: Set<string>) =>
+    events.reduce<EventRecord | null>(
+      (best, event) =>
+        allowed.has(event.kind) && (!best || event.occurred_at > best.occurred_at)
+          ? event
+          : best,
+      null,
+    );
+  const contact = latest(contacts);
+  const followup = latest(followups);
+  const followupWins = Boolean(
+    followup && (!contact || followup.occurred_at >= contact.occurred_at),
+  );
+  const nextContact = followupWins
+    ? typeof followup?.payload?.next_contact_on === "string"
+      ? followup.payload.next_contact_on
+      : null
+    : null;
+  const reminderDue = !followupWins && contact
+    ? typeof contact.payload?.reminder_due_at === "string"
+      ? contact.payload.reminder_due_at
+      : null
+    : null;
+  return {
+    dayCount: confirmationDayCount(events),
+    lastContactAt: contact?.occurred_at ?? null,
+    nextContactOn: nextContact,
+    reminderDueAt: reminderDue,
+    lastActor: contact?.actor ?? null,
+  };
 }
 
 interface GeoOverride {
@@ -739,7 +807,10 @@ export async function recomputeOrderMaster(
   const drafts = await fetchDraftAddresses(admin, orders);
   const geoOverrides = await fetchGeoOverrides(admin, ids);
   const signals = await fetchPaymentSignals(admin, ids);
-  const { tariffs, orgByStore } = await fetchTariffs(admin, [...new Set(orders.map((o) => o.store_id))]);
+  const { tariffs, orgByStore, confirmationActivationByStore } = await fetchTariffs(
+    admin,
+    [...new Set(orders.map((o) => o.store_id))],
+  );
   const historicalGeo = await fetchHistoricalGeo(admin, orders);
 
   const shipmentsByOrder = groupBy(shipments, (s) => s.order_id);
@@ -947,6 +1018,8 @@ export async function recomputeOrderMaster(
     const macro = resolveMacroStage({
       order: {
         created_at: order.created_at,
+        confirmation_activation_date:
+          confirmationActivationByStore.get(order.store_id) ?? "2026-06-01",
         cancelled_at: order.cancelled_at,
         financial_status: order.financial_status,
         shipping_mode: order.shipping_mode,
@@ -1074,6 +1147,18 @@ export async function recomputeOrderMaster(
       agency_arrived_at: state.agencyArrivedAt,
       agency_expires_at: state.agencyExpiresAt,
       recomputed_at: now,
+      ...(() => {
+        const confirmation = confirmationRollup(orderEvents);
+        return {
+          confirmation_active:
+            macro.stage === "por_confirmar" && macro.substage !== "historico_sin_gestion",
+          confirmation_day_count: confirmation.dayCount,
+          confirmation_last_contact_at: confirmation.lastContactAt,
+          confirmation_next_contact_on: confirmation.nextContactOn,
+          confirmation_reminder_due_at: confirmation.reminderDueAt,
+          confirmation_last_actor: confirmation.lastActor,
+        };
+      })(),
     };
   });
 
@@ -1083,7 +1168,12 @@ export async function recomputeOrderMaster(
     // Deploy compatible: si el código llega antes que 0059, el Master antiguo
     // continúa recalculándose. Tras aplicar la migración, el siguiente barrido
     // llena automáticamente las columnas MOM.
-    if (error && /macro_(stage|substage|reasons|operation|version|since)/i.test(error.message)) {
+    if (
+      error &&
+      /(macro_(stage|substage|reasons|operation|version|since)|confirmation_(active|day_count|last_contact_at|next_contact_on|reminder_due_at|last_actor))/i.test(
+        error.message,
+      )
+    ) {
       const legacyBatch = batch.map((row) => {
         const copy = { ...row } as Record<string, unknown>;
         delete copy.macro_stage;
@@ -1092,12 +1182,45 @@ export async function recomputeOrderMaster(
         delete copy.macro_operation;
         delete copy.macro_version;
         delete copy.macro_since;
+        delete copy.confirmation_active;
+        delete copy.confirmation_day_count;
+        delete copy.confirmation_last_contact_at;
+        delete copy.confirmation_next_contact_on;
+        delete copy.confirmation_reminder_due_at;
+        delete copy.confirmation_last_actor;
         return copy;
       });
       ({ error } = await admin.from("order_master").upsert(legacyBatch, { onConflict: "order_id" }));
     }
     if (error) throw new Error(`order_master: no se pudo escribir — ${error.message}`);
     written += batch.length;
+  }
+
+  // Las tareas son una proyección operativa. Cuando la fuente de verdad ya
+  // movió el pedido, se cierran solas para no dejar trabajo fantasma en la cola.
+  const leftConfirmation = rows
+    .filter((row) => row.macro_stage !== "por_confirmar")
+    .map((row) => row.order_id);
+  for (const batch of chunk(leftConfirmation, ID_BATCH)) {
+    await admin
+      .from("order_tasks")
+      .update({ status: "cancelled", resolution_note: "El pedido salió de Por confirmar." })
+      .in("order_id", batch)
+      .eq("status", "pending")
+      .in("kind", ["confirmation_reminder", "confirmation_followup"]);
+  }
+  const cancelledOrders = orders.filter((order) => order.cancelled_at).map((order) => order.id);
+  for (const batch of chunk(cancelledOrders, ID_BATCH)) {
+    await admin
+      .from("order_tasks")
+      .update({
+        status: "completed",
+        completed_at: now,
+        resolution_note: "Shopify reportó el pedido anulado.",
+      })
+      .in("order_id", batch)
+      .eq("status", "pending")
+      .eq("kind", "shopify_cancellation_review");
   }
   return { requested: ids.length, written };
 }

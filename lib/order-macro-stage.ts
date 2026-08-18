@@ -13,9 +13,13 @@ import {
   CONFIRMATION_FOLLOWUP_KINDS,
   CONFIRMATION_LAST_ATTEMPT_KINDS,
   hasConfirmationSignal,
+  limaDayKey,
   reachedLastAttempt,
 } from "@/lib/order-confirmation";
 
+// v1.9: separa los backfills anteriores al corte operativo de Kapta. Siguen
+// visibles y trazables, pero no inflan la cola nueva de «Sin llamar».
+//
 // v1.8: la cobertura la decide la base (`order_coverage_for`), no una segunda
 // implementación en TypeScript que ignoraba el mapa de puntos COD de la 0100.
 // Corrige 585 filas que se contradecían —`coverage` provincia_cod contra
@@ -30,7 +34,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.8" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.9" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -57,6 +61,7 @@ export const ORDER_MACRO_STAGES: readonly MacroStageDef[] = [
 
 export type MacroSubstage =
   // Por confirmar
+  | "historico_sin_gestion"
   | "sin_llamar"
   | "por_confirmar"
   | "volver_a_contactar"
@@ -114,7 +119,13 @@ export const MACRO_SUBSTAGES_BY_STAGE: Record<
 > = {
   // `pago_requerido_pendiente` no está aquí a propósito: es un motivo, y como
   // subetapa competía con «Volver a contactar» por el mismo pedido.
-  por_confirmar: ["sin_llamar", "por_confirmar", "volver_a_contactar", "ultimo_intento"],
+  por_confirmar: [
+    "sin_llamar",
+    "por_confirmar",
+    "volver_a_contactar",
+    "ultimo_intento",
+    "historico_sin_gestion",
+  ],
   preparacion: ["por_generar_rotulo", "por_armar", "incidencia_preparacion"],
   por_despachar: [
     "listo_para_asignar",
@@ -161,6 +172,7 @@ export const MACRO_SUBSTAGES_BY_STAGE: Record<
 };
 
 export const MACRO_SUBSTAGE_LABEL: Record<MacroSubstage, string> = {
+  historico_sin_gestion: "Histórico sin gestión",
   sin_llamar: "Sin llamar",
   por_confirmar: "Por confirmar",
   volver_a_contactar: "Volver a contactar",
@@ -221,6 +233,8 @@ export type OperationKind = "lima" | "provincia_cod" | "agencia" | "desconocida"
 
 export interface MacroOrderSnapshot {
   created_at: string | null;
+  /** Corte por tienda; los backfills anteriores no son trabajo nuevo. */
+  confirmation_activation_date?: string | null;
   cancelled_at: string | null;
   financial_status: string | null;
   shipping_mode: string | null;
@@ -646,6 +660,13 @@ function confirmationSubstage(
     return { substage: "volver_a_contactar", since: followup.occurred_at, reasons };
   }
   if (contact) return { substage: "por_confirmar", since: contact.occurred_at, reasons };
+  if (
+    order.created_at &&
+    order.confirmation_activation_date &&
+    limaDayKey(order.created_at) < order.confirmation_activation_date
+  ) {
+    return { substage: "historico_sin_gestion", since: order.created_at, reasons };
+  }
   return { substage: "sin_llamar", since: order.created_at, reasons };
 }
 

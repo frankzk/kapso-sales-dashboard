@@ -457,6 +457,13 @@ export interface OrderMasterRow {
   macro_operation?: string | null;
   macro_version?: string | null;
   macro_since?: string | null;
+  /** Cola materializada de confirmación (0122). */
+  confirmation_active?: boolean;
+  confirmation_day_count?: number;
+  confirmation_last_contact_at?: string | null;
+  confirmation_next_contact_on?: string | null;
+  confirmation_reminder_due_at?: string | null;
+  confirmation_last_actor?: string | null;
   status_since: string | null;
   status_source?: string | null;
   status_locked: boolean;

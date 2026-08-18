@@ -222,6 +222,84 @@ export function limaDayKey(iso: string): string {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
+/**
+ * Vencimiento del recordatorio automático: dos horas efectivas dentro de la
+ * jornada 08:00–22:00 de Lima. Un intento a las 21:30 vence al día siguiente a
+ * las 09:30; nunca despierta una tarea en mitad de la noche.
+ */
+export function confirmationReminderDueAt(
+  iso: string,
+  workingHours = 2,
+): string | null {
+  const source = new Date(iso);
+  if (Number.isNaN(source.getTime()) || workingHours <= 0) return null;
+
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = formatter.formatToParts(source);
+  const number = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value ?? 0);
+
+  // Perú permanece en UTC-5. La zona se usa para leer el día local y la
+  // conversión explícita evita depender de la zona horaria del servidor.
+  let cursor = new Date(
+    Date.UTC(number("year"), number("month") - 1, number("day"), number("hour") + 5, number("minute"), number("second")),
+  );
+  let remainingMinutes = workingHours * 60;
+
+  const limaHour = (date: Date) => {
+    const hourParts = formatter.formatToParts(date);
+    return Number(hourParts.find((part) => part.type === "hour")?.value ?? 0);
+  };
+  const nextLocalStart = (date: Date, nextDay: boolean) => {
+    const local = formatter.formatToParts(date);
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+      Number(local.find((entry) => entry.type === type)?.value ?? 0);
+    const day = new Date(Date.UTC(part("year"), part("month") - 1, part("day") + (nextDay ? 1 : 0)));
+    return new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 13, 0, 0));
+  };
+
+  const hour = limaHour(cursor);
+  if (hour < 8) cursor = nextLocalStart(cursor, false);
+  else if (hour >= 22) cursor = nextLocalStart(cursor, true);
+
+  while (remainingMinutes > 0) {
+    const local = formatter.formatToParts(cursor);
+    const hourNow = Number(local.find((part) => part.type === "hour")?.value ?? 0);
+    const minuteNow = Number(local.find((part) => part.type === "minute")?.value ?? 0);
+    const available = Math.max(0, (22 - hourNow) * 60 - minuteNow);
+    if (remainingMinutes <= available) {
+      cursor = new Date(cursor.getTime() + remainingMinutes * 60_000);
+      remainingMinutes = 0;
+    } else {
+      remainingMinutes -= available;
+      cursor = nextLocalStart(cursor, true);
+    }
+  }
+  return cursor.toISOString();
+}
+
+export type ConfirmationDueBucket = "vencido" | "hoy" | "proximo";
+
+/** Clasificación de la cola de fechas, siempre por día de Lima. */
+export function confirmationDueBucket(
+  dueOn: string,
+  nowIso: string = new Date().toISOString(),
+): ConfirmationDueBucket {
+  const today = limaDayKey(nowIso);
+  if (dueOn < today) return "vencido";
+  if (dueOn === today) return "hoy";
+  return "proximo";
+}
+
 export interface ConfirmationEventLike {
   kind: string;
   occurred_at: string;

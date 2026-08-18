@@ -31,6 +31,11 @@ import {
   type AliclikHealthState,
   type HealthTone,
 } from "@/lib/aliclik-health";
+import {
+  PAYMENT_REQUIREMENT_LABEL,
+  aliclikRiskGate,
+  type PaymentRequirement,
+} from "@/lib/order-confirmation-brief";
 
 /**
  * El foco de salud de la API de Aliclik. Solo informa; no bloquea el botón —un
@@ -65,17 +70,24 @@ export function AliclikGuidePanel({
   orderId,
   hasCoordinate,
   health,
+  riskRequirement = "ninguno",
+  paymentState = null,
+  riskReasons = [],
   onCreated,
 }: {
   orderId: string;
   hasCoordinate: boolean;
   health: AliclikHealthState;
+  riskRequirement?: PaymentRequirement;
+  paymentState?: string | null;
+  riskReasons?: string[];
   onCreated: () => void;
 }) {
   const [coordinate, setCoordinate] = useState("");
   const [preview, setPreview] = useState<AliclikPreview | null>(null);
   const [transportId, setTransportId] = useState<number | null>(null);
   const [note, setNote] = useState("");
+  const [riskExceptionReason, setRiskExceptionReason] = useState("");
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
   /** Cuántas veces se ha reintentado por "pedido todavía sin dirección". */
@@ -93,6 +105,7 @@ export function AliclikGuidePanel({
   const shortened = isShortenedMapsLink(coordinate);
   const waiting = Boolean(preview?.notReady);
   const creating = busy === "create";
+  const riskGate = aliclikRiskGate(riskRequirement, paymentState, riskExceptionReason);
 
   const quote = () => {
     setMessage(null);
@@ -136,6 +149,7 @@ export function AliclikGuidePanel({
         // Se devuelve el monto que se acaba de ENSEÑAR: el servidor lo recalcula
         // y aborta si cambió entre cotizar y pulsar.
         expectedCollectTotal: preview?.collectTotal ?? null,
+        riskExceptionReason: riskExceptionReason || null,
       });
       if (res.error) setMessage({ kind: "error", text: res.error });
       else {
@@ -183,8 +197,39 @@ export function AliclikGuidePanel({
                 Cotiza primero: la cotización no crea nada y sirve para confirmar cobertura y ubicación.
               </p>
             </div>
+
             <HealthBadge health={health} />
           </div>
+
+          {riskGate.requiresException && (
+            <div className="mt-3 rounded-lg bg-amber-50 px-3 py-3 text-sm text-amber-950 ring-1 ring-amber-200">
+              <p className="font-semibold">{PAYMENT_REQUIREMENT_LABEL[riskRequirement]}</p>
+              <p className="mt-1 text-xs leading-5">
+                Aliclik cobra el intento no entregado. Valida el pago exigido o registra por qué
+                autorizas esta excepción.
+              </p>
+              {riskReasons.length > 0 && (
+                <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs">
+                  {riskReasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              )}
+              <label className="mt-3 block">
+                <span className="text-xs font-semibold">Justificación de la excepción</span>
+                <textarea
+                  value={riskExceptionReason}
+                  onChange={(event) => setRiskExceptionReason(event.target.value)}
+                  rows={2}
+                  placeholder="Ej. Cliente recurrente; confirmó que recibe hoy."
+                  className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900"
+                />
+              </label>
+              {!riskGate.allowed && (
+                <p className="mt-1 text-xs text-amber-800">{riskGate.message}</p>
+              )}
+            </div>
+          )}
 
         {/* Esperando a Shopify: ni campo de coordenada ni botón de cotizar. Ambos
             pedirían a la vendedora un trabajo que el webhook hace solo. */}
@@ -386,7 +431,12 @@ export function AliclikGuidePanel({
             <button
               type="button"
               onClick={create}
-              disabled={busy !== null || transportId === null || Boolean(preview.writeBlocked)}
+              disabled={
+                busy !== null ||
+                transportId === null ||
+                Boolean(preview.writeBlocked) ||
+                !riskGate.allowed
+              }
               className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-70"
             >
               {creating ? <Spinner /> : null}

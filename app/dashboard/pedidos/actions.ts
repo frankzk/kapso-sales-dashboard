@@ -12,6 +12,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -33,7 +34,7 @@ import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 import {
   CONFIRMATION_MAX_DAYS,
-  confirmationDayCount,
+  confirmationReminderDueAt,
   confirmationResult,
   isConfirmationChannel,
 } from "@/lib/order-confirmation";
@@ -147,6 +148,25 @@ export async function loadOrderDetail(
 /** Búsqueda global, para encontrar un pedido fuera de la pestaña activa. */
 export async function searchOrders(query: string): Promise<OrderMasterRow[]> {
   return searchOrderMaster(query);
+}
+
+/**
+ * Huella liviana para refrescar el listado solo cuando cambió algo. Evita
+ * recargar 100 filas cada pocos segundos si la operación está quieta.
+ */
+export async function getOrderMasterChangeToken(): Promise<string | null> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) return null;
+  const { data } = await sb
+    .from("order_master")
+    .select("updated_at")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data as { updated_at?: string } | null)?.updated_at ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -846,7 +866,13 @@ export async function loadConfirmationBrief(
  */
 export async function registerConfirmationAttempt(
   orderId: string,
-  input: { result: string; channel: string; note?: string; nextContactOn?: string },
+  input: {
+    result: string;
+    channel: string;
+    note?: string;
+    nextContactOn?: string;
+    operationId?: string;
+  },
 ): Promise<MasterActionState> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) {
@@ -876,54 +902,38 @@ export async function registerConfirmationAttempt(
   if (!ctx) return { error: "Sin acceso a este pedido." };
 
   const admin = createAdminSupabase();
-  // El conteo previo es lo que permite decir «día 3 de 7» sin esperar al
-  // recálculo, y avisar cuando este intento agota el cupo.
-  const { data: priorRows } = await admin
-    .from("order_events")
-    .select("kind,occurred_at")
-    .eq("order_id", orderId);
-  const prior = (priorRows as { kind: string; occurred_at: string }[] | null) ?? [];
-
   const occurredAt = new Date().toISOString();
-  const contactError = await recordEvent(admin, ctx, {
-    kind: "confirmation_contact",
-    occurredAt,
-    note: note || null,
-    payload: {
-      channel: input.channel,
-      result: result.code,
-      next_contact_on: result.schedulesFollowup ? nextContactOn : null,
-    },
+  const reminderDueAt = ["sin_respuesta", "se_deja_mensaje"].includes(result.code)
+    ? confirmationReminderDueAt(occurredAt)
+    : null;
+  const operationId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    input.operationId ?? "",
+  )
+    ? input.operationId!
+    : randomUUID();
+  const { data, error } = await admin.rpc("register_confirmation_attempt_v1", {
+    p_store_id: ctx.storeId,
+    p_order_id: orderId,
+    p_actor: ctx.userId,
+    p_operation_id: operationId,
+    p_result: result.code,
+    p_channel: input.channel,
+    p_note: note || null,
+    p_next_contact_on: result.schedulesFollowup ? nextContactOn : null,
+    p_occurred_at: occurredAt,
+    p_reminder_due_at: reminderDueAt,
   });
-  if (contactError) return { error: contactError };
-
-  // El seguimiento se graba junto al intento que lo pactó, no antes: si se
-  // guardara primero, un empate de milisegundos lo dejaría por debajo del
-  // contacto y el pedido no llegaría a «Volver a contactar».
-  if (result.schedulesFollowup) {
-    const followupError = await recordEvent(admin, ctx, {
-      kind: "confirmation_followup",
-      occurredAt,
-      reason: `Próximo contacto: ${nextContactOn}`,
-      payload: { channel: input.channel, next_contact_on: nextContactOn },
-    });
-    if (followupError) return { error: followupError };
-  }
-
-  if (result.confirms) {
-    const confirmedError = await recordEvent(admin, ctx, {
-      kind: "confirmed",
-      occurredAt,
-      note: note || null,
-      payload: { channel: input.channel },
-    });
-    if (confirmedError) return { error: confirmedError };
-  }
+  if (error) return { error: `No se pudo registrar el intento: ${error.message}` };
 
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
 
-  const days = confirmationDayCount([...prior, { kind: "confirmation_contact", occurred_at: occurredAt }]);
+  const response = (data ?? {}) as {
+    duplicate?: boolean;
+    day_count?: number;
+    last_attempt?: boolean;
+  };
+  const days = Number(response.day_count ?? 0);
   if (result.confirms) {
     // Agencia no queda confirmada por la palabra del cliente: el pedido sigue en
     // confirmación hasta que el abono se valide (§6.1). Decir «pasa a
@@ -940,10 +950,14 @@ export async function registerConfirmationAttempt(
   }
   if (days >= CONFIRMATION_MAX_DAYS) {
     return {
-      notice: `Día ${days} de ${CONFIRMATION_MAX_DAYS}: último intento. La anulación se crea a mano en Shopify.`,
+      notice: `Día ${days} de ${CONFIRMATION_MAX_DAYS}: se creó la tarea para revisar y anular manualmente en Shopify.`,
     };
   }
-  return { notice: `Intento registrado — día ${days} de ${CONFIRMATION_MAX_DAYS}.` };
+  return {
+    notice: response.duplicate
+      ? `Este intento ya estaba registrado; no se duplicó.`
+      : `Intento registrado, día ${days} de ${CONFIRMATION_MAX_DAYS}.`,
+  };
 }
 
 /** Comentario interno del equipo (§12). Complementa al estado, no lo sustituye. */
