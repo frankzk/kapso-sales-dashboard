@@ -37,6 +37,7 @@ export type ClientPerformanceMetric = {
 export const DASHBOARD_SECTIONS = [
   "leads",
   "pedidos",
+  "pagos",
   "envios",
   "productividad",
   "costos",

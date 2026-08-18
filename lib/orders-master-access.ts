@@ -89,6 +89,8 @@ const MASTER_COLUMNS =
   "coverage," +
   "shipping_mode,order_total,general_status," +
   "operational_status,macro_stage,macro_substage,macro_reasons,macro_operation,macro_version,macro_since," +
+  "confirmation_active,confirmation_day_count,confirmation_last_contact_at," +
+  "confirmation_next_contact_on,confirmation_reminder_due_at,confirmation_last_actor," +
   "status_since,status_locked,current_courier,last_courier," +
   "courier_count,attempt_count,guide_code,dispatched_at,delivered_at,delivered_courier,returned_at," +
   "last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
@@ -323,6 +325,18 @@ export interface OrderMasterDetail {
   routePlan: OrderRoutePlan;
   /** Foco de salud de la API de Aliclik, para el panel de crear guía. */
   aliclikHealth: AliclikHealthState;
+  tasks: OrderTaskSummary[];
+}
+
+export interface OrderTaskSummary {
+  id: string;
+  kind: "confirmation_reminder" | "confirmation_followup" | "shopify_cancellation_review";
+  status: "pending" | "completed" | "cancelled";
+  dueAt: string | null;
+  dueOn: string | null;
+  assignedTo: string | null;
+  assignedName: string | null;
+  payload: Record<string, unknown>;
 }
 
 const GUIDE_COLUMNS =
@@ -420,7 +434,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
   if (!rowData) return null;
   const row = withRuntimeCoverage(rowData as unknown as OrderMasterRow);
 
-  const [orderRes, guidesRes, eventsRes] = await Promise.all([
+  const [orderRes, guidesRes, eventsRes, tasksRes] = await Promise.all([
     sb.from("orders").select("line_items,raw").eq("id", orderId).maybeSingle(),
     sb.from("shipments").select(GUIDE_COLUMNS).eq("order_id", orderId).order("created_at"),
     sb
@@ -428,10 +442,25 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
       .select("*")
       .eq("order_id", orderId)
       .order("occurred_at", { ascending: true }),
+    sb
+      .from("order_tasks")
+      .select("id,kind,status,due_at,due_on,assigned_to,payload")
+      .eq("order_id", orderId)
+      .eq("status", "pending")
+      .order("due_on", { ascending: true }),
   ]);
 
   const guides = (guidesRes.data ?? []) as unknown as ShipmentRow[];
   const events = (eventsRes.data ?? []) as unknown as OrderEventRow[];
+  const taskRows = (tasksRes.error ? [] : tasksRes.data ?? []) as unknown as {
+    id: string;
+    kind: OrderTaskSummary["kind"];
+    status: OrderTaskSummary["status"];
+    due_at: string | null;
+    due_on: string | null;
+    assigned_to: string | null;
+    payload: Record<string, unknown> | null;
+  }[];
 
   // La cola de Leads: lo que pasó ANTES de que existiera el pedido. Es donde
   // queda quién lo generó y con qué nota — «Venta nueva · pedido generado en
@@ -474,6 +503,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
         ...events.map((e) => e.actor),
         ...calls.map((c) => c.agent),
         ...leadCalls.map((c) => c.vendedora),
+        ...taskRows.map((task) => task.assigned_to),
       ].filter((v): v is string => typeof v === "string" && v.length > 0),
     ),
   ];
@@ -522,6 +552,16 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
   const timeline = [...fromEvents, ...fromCalls, ...fromLeads]
     .filter((t) => t.occurredAt)
     .sort((a, b) => (a.occurredAt < b.occurredAt ? -1 : a.occurredAt > b.occurredAt ? 1 : 0));
+  const tasks: OrderTaskSummary[] = taskRows.map((task) => ({
+    id: task.id,
+    kind: task.kind,
+    status: task.status,
+    dueAt: task.due_at,
+    dueOn: task.due_on,
+    assignedTo: task.assigned_to,
+    assignedName: task.assigned_to ? names.get(task.assigned_to) ?? null : null,
+    payload: task.payload ?? {},
+  }));
 
   const orderRow = orderRes.data as { line_items?: OrderLineItem[]; raw?: unknown } | null;
   const lineItems = orderRow?.line_items ?? [];
@@ -535,6 +575,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     timeline,
     lineItems,
     aliclikHealth,
+    tasks,
     address: shopifyShippingAddress(orderRow?.raw),
     routePlan: buildOrderRoutePlan({
       operation: operationOf(row, guides),
@@ -652,6 +693,34 @@ function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
     // es justamente el que nadie está mirando, así que se incluyen los nulos.
     const cutoff = new Date(now.getTime() - f.staleDays * 86_400_000).toISOString();
     q = q.or(`last_movement_at.is.null,last_movement_at.lte.${cutoff}`);
+  }
+
+  if (f.confirmationDue) {
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Lima",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(now);
+    const nowIso = now.toISOString();
+    const tomorrowStart = new Date(`${today}T05:00:00.000Z`);
+    tomorrowStart.setUTCDate(tomorrowStart.getUTCDate() + 1);
+    const tomorrowIso = tomorrowStart.toISOString();
+    if (f.confirmationDue === "vencido") {
+      q = q.or(
+        `confirmation_next_contact_on.lt.${today},confirmation_reminder_due_at.lt.${nowIso}`,
+      );
+    }
+    if (f.confirmationDue === "hoy") {
+      q = q.or(
+        `confirmation_next_contact_on.eq.${today},and(confirmation_reminder_due_at.gte.${nowIso},confirmation_reminder_due_at.lt.${tomorrowIso})`,
+      );
+    }
+    if (f.confirmationDue === "proximo") {
+      q = q.or(
+        `confirmation_next_contact_on.gt.${today},confirmation_reminder_due_at.gte.${tomorrowIso}`,
+      );
+    }
   }
 
   const term = searchTerm(f);

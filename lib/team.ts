@@ -71,3 +71,28 @@ export function canAddMember(newRole: string, actorRole: Role): GuardResult {
   }
   return { ok: true };
 }
+
+/**
+ * Protege la lista explicita de personas que validan pagos.
+ *
+ * - Un admin no puede modificar los permisos de un owner.
+ * - Nunca se puede desactivar al ultimo validador de la organizacion.
+ */
+export function canSetPaymentValidator(
+  members: MemberLite[],
+  targetUserId: string,
+  grant: boolean,
+  actorRole: Role,
+  activeValidatorIds: readonly string[],
+): GuardResult {
+  const target = members.find((member) => member.user_id === targetUserId);
+  if (!target) return { ok: false, reason: "No es miembro de la organizacion." };
+  if (target.role === "owner" && actorRole !== "owner") {
+    return { ok: false, reason: "Solo un owner puede modificar los permisos de otro owner." };
+  }
+  const active = new Set(activeValidatorIds);
+  if (!grant && active.has(targetUserId) && active.size <= 1) {
+    return { ok: false, reason: "Debe quedar al menos una persona autorizada para validar pagos." };
+  }
+  return { ok: true };
+}

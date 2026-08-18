@@ -7,7 +7,7 @@
 
 import { cache } from "react";
 import { createServerSupabase } from "@/lib/db";
-import { getUserRoleSummary } from "@/lib/access";
+import { getCurrentUser, getUserRoleSummary } from "@/lib/access";
 import {
   hasPermission,
   isReadOnly,
@@ -48,3 +48,38 @@ async function loadUncached(): Promise<MasterPermissions> {
 }
 
 export const getMasterPermissions = cache(loadUncached);
+
+/**
+ * Comprueba un permiso dentro de una organizacion concreta. Los permisos
+ * financieros configurados desde Equipo son por organizacion: una concesion
+ * en una empresa nunca debe habilitar acciones sobre pedidos de otra.
+ */
+const loadOrgPermissions = cache(async (orgId: string): Promise<Set<Permission>> => {
+  const sb = await createServerSupabase();
+  const user = await getCurrentUser();
+  if (!user) return new Set<Permission>();
+  const [{ data: membership }, { data: grantRows }] = await Promise.all([
+    sb
+      .from("memberships")
+      .select("role")
+      .eq("org_id", orgId)
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    sb.from("user_permissions").select("permission,granted").eq("org_id", orgId),
+  ]);
+  if (!membership) return new Set<Permission>();
+  return permissionsFor(
+    [String(membership.role)],
+    ((grantRows ?? []) as { permission: string; granted: boolean | null }[]).map((row) => ({
+      permission: row.permission,
+      granted: row.granted ?? true,
+    })),
+  );
+});
+
+export async function hasOrgPermission(
+  orgId: string,
+  permission: Permission,
+): Promise<boolean> {
+  return (await loadOrgPermissions(orgId)).has(permission);
+}

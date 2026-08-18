@@ -161,6 +161,30 @@ describe("resolveMacroStage — Por confirmar y Preparación", () => {
     });
   });
 
+  it("un backfill anterior al corte queda histórico, no Sin llamar", () => {
+    const state = resolve({
+      order: order({
+        created_at: "2026-05-31T20:00:00.000Z",
+        confirmation_activation_date: "2026-06-01",
+      }),
+    });
+    expect(state).toMatchObject({
+      stage: "por_confirmar",
+      substage: "historico_sin_gestion",
+    });
+  });
+
+  it("un histórico contactado entra al flujo normal", () => {
+    const state = resolve({
+      order: order({
+        created_at: "2026-05-20T20:00:00.000Z",
+        confirmation_activation_date: "2026-06-01",
+      }),
+      events: [event("confirmation_contact")],
+    });
+    expect(state.substage).toBe("por_confirmar");
+  });
+
   it("un contacto nunca vuelve a Sin llamar", () => {
     const state = resolve({ events: [event("confirmation_contact")] });
     expect(state.substage).toBe("por_confirmar");

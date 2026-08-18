@@ -1,4 +1,4 @@
--- Detección del desfase del Master (migración 0122). Se ejecuta sobre el clúster
+-- Detección del desfase del Master (migración 0123). Se ejecuta sobre el clúster
 -- desechable, después de aplicar todas las migraciones, y reutiliza la
 -- org/tienda del fixture de rls_smoke.sql (org 3333…, store aaaa…).
 --

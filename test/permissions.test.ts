@@ -15,6 +15,7 @@ describe("permissionsFor", () => {
       expect(p.has("shalom.view_pickup_key")).toBe(true);
       expect(p.has("shalom.reveal_pickup_key")).toBe(true);
       expect(p.has("shalom.override_payment_validation")).toBe(true);
+      expect(p.has("payments.validate")).toBe(role === "owner");
       expect(p.has("costs.manage")).toBe(true);
       expect(p.has("closure.finance")).toBe(true);
     }
@@ -33,6 +34,7 @@ describe("permissionsFor", () => {
     expect(p.has("master.edit")).toBe(true);
     expect(p.has("shalom.register_payment")).toBe(true);
     expect(p.has("shalom.validate_payment")).toBe(false);
+    expect(p.has("payments.validate")).toBe(false);
     expect(p.has("shalom.view_pickup_key")).toBe(false);
     expect(p.has("shalom.reveal_pickup_key")).toBe(true);
     expect(p.has("warehouse.prepare")).toBe(true);
@@ -63,6 +65,49 @@ describe("concesiones explícitas", () => {
   it("una concesión añade un permiso que el rol no da", () => {
     const p = permissionsFor(["vendedora"], [{ permission: "shalom.view_pickup_key" }]);
     expect(p.has("shalom.view_pickup_key")).toBe(true);
+  });
+
+  it("solo el owner la conserva por continuidad; el resto exige concesión individual", () => {
+    expect(permissionsFor(["owner"]).has("payments.validate")).toBe(true);
+    expect(permissionsFor(["admin"]).has("payments.validate")).toBe(false);
+    expect(
+      permissionsFor(["vendedora"], [{ permission: "payments.validate", granted: true }]).has(
+        "payments.validate",
+      ),
+    ).toBe(true);
+    expect(
+      permissionsFor(["owner"], [{ permission: "payments.validate", granted: false }]).has(
+        "payments.validate",
+      ),
+    ).toBe(false);
+  });
+
+  it("conserva una concesión histórica hasta que exista el permiso nuevo", () => {
+    expect(
+      permissionsFor(["vendedora"], [
+        { permission: "shalom.validate_payment", granted: true },
+      ]).has("payments.validate"),
+    ).toBe(true);
+    expect(
+      permissionsFor(["vendedora"], [
+        { permission: "shalom.validate_payment", granted: true },
+        { permission: "payments.validate", granted: false },
+      ]).has("payments.validate"),
+    ).toBe(false);
+  });
+
+  it("una revocación histórica de Shalom no oculta la nueva bandeja al owner", () => {
+    expect(
+      permissionsFor(["owner"], [
+        { permission: "shalom.validate_payment", granted: false },
+      ]).has("payments.validate"),
+    ).toBe(true);
+    expect(
+      permissionsFor(["owner"], [
+        { permission: "shalom.validate_payment", granted: false },
+        { permission: "payments.validate", granted: false },
+      ]).has("payments.validate"),
+    ).toBe(false);
   });
 
   it("una revocación gana sobre el rol", () => {

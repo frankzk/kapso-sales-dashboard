@@ -97,6 +97,10 @@ export function parseMasterQuery(params: URLSearchParams | Record<string, string
   if (Number.isFinite(stale) && stale > 0) f.staleDays = Math.trunc(stale);
 
   f.search = get("q")?.trim() ?? "";
+  const confirmationDue = get("cq") ?? "";
+  if (["vencido", "hoy", "proximo"].includes(confirmationDue)) {
+    f.confirmationDue = confirmationDue as MasterFilters["confirmationDue"];
+  }
 
   const rawSort = get("s") ?? "";
   const sortKey = SORT_KEYS.includes(rawSort as MasterSortKey)
@@ -130,6 +134,7 @@ export function buildMasterQuery(q: MasterQuery): URLSearchParams {
   }
   if (f.staleDays > 0) out.set("sd", String(f.staleDays));
   if (f.search.trim()) out.set("q", f.search.trim());
+  if (f.confirmationDue) out.set("cq", f.confirmationDue);
   if (q.sortKey !== "created") out.set("s", q.sortKey);
   // La página vuelve a 1 sola: si cambia un filtro, quedarse en la página 7 del
   // resultado anterior es una pantalla en blanco sin explicación.
@@ -146,5 +151,6 @@ export function hasQueryFilters(f: MasterFilters): boolean {
     FLAG_KEYS.some(({ field }) => Boolean(f[field] as boolean)) ||
     f.staleDays > 0 ||
     Boolean(f.search.trim())
+    || Boolean(f.confirmationDue)
   );
 }

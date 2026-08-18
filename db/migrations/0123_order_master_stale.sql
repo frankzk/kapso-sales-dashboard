@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0122_order_master_stale.sql — qué filas del Master se quedaron viejas, sin
+-- 0123_order_master_stale.sql — qué filas del Master se quedaron viejas, sin
 -- ventana de recencia y con la definición en UN solo sitio.
 --
 -- EL PROBLEMA. La cuarta puerta del barrido (#453) detecta el desfase comparando
@@ -95,6 +95,6 @@ as $function$
 $function$;
 
 comment on function order_master_stale(uuid, int, int) is
-  'Pedidos cuya fila del Master es anterior a la última escritura de sus guías. Definición canónica del desfase (0122): sin ventana de recencia, del recálculo más viejo al más nuevo. Reemplaza a staleByShipment en TypeScript.';
+  'Pedidos cuya fila del Master es anterior a la última escritura de sus guías. Definición canónica del desfase (0123): sin ventana de recencia, del recálculo más viejo al más nuevo. Reemplaza a staleByShipment en TypeScript.';
 
 grant execute on function order_master_stale(uuid, int, int) to service_role;

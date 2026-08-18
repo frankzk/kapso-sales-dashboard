@@ -154,6 +154,17 @@ describe("matchesFilters — banderas operativas", () => {
     expect(matchesFilters(row("3", { last_movement_at: null }), f, NOW)).toBe(true);
   });
 
+  it("agrupa seguimientos por fecha y recordatorios de dos horas en la misma cola", () => {
+    const overdue = withFilter({ confirmationDue: "vencido" });
+    const today = withFilter({ confirmationDue: "hoy" });
+    const upcoming = withFilter({ confirmationDue: "proximo" });
+    expect(matchesFilters(row("1", { confirmation_next_contact_on: "2026-07-19" }), overdue, NOW)).toBe(true);
+    expect(matchesFilters(row("2", { confirmation_reminder_due_at: "2026-07-20T10:00:00.000Z" }), overdue, NOW)).toBe(true);
+    expect(matchesFilters(row("3", { confirmation_reminder_due_at: "2026-07-20T18:00:00.000Z" }), today, NOW)).toBe(true);
+    expect(matchesFilters(row("4", { confirmation_next_contact_on: "2026-07-21" }), upcoming, NOW)).toBe(true);
+    expect(matchesFilters(row("5"), today, NOW)).toBe(false);
+  });
+
   it("la búsqueda libre cubre código, cliente, teléfono y guía", () => {
     const r = row("114985", { order_name: "#KP114985", guide_code: "AUR5XABC" });
     expect(matchesFilters(r, withFilter({ search: "kp114985" }), NOW)).toBe(true);

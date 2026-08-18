@@ -9,7 +9,7 @@ import { budgetShareMs, recomputeInBatches } from "@/lib/order-master";
 // volvía a entrar nunca: 381 de 487 desfasados en Kenku el 18-08-2026, mientras
 // el barrido recalculaba 620 pedidos por hora en esa misma tienda.
 //
-// La regla se mudó a la base (`order_master_stale`, 0122), que es donde la
+// La regla se mudó a la base (`order_master_stale`, 0123), que es donde la
 // comparación se puede hacer sin techo, y sus pruebas con ella:
 // `scripts/sql/order_master_stale_smoke.sql`. Dejarlas duplicadas acá habría
 // conservado la segunda definición que aquel cambio vino a eliminar.

@@ -364,6 +364,33 @@ export function blockingActiveGuide<T extends { guide_code: string | null }>(
   return active.find((g) => (g.guide_code ?? "").trim().toUpperCase() !== own) ?? null;
 }
 
+/**
+ * Qué documento se manda al guardar el borrador de Shalom automáticamente.
+ *
+ * El paso «DNI y agencia» del panel de pagos se guarda solo, y eso obliga a
+ * decidir qué pasa con un documento a medio teclear. El servidor valida el
+ * documento con `documentError` y RECHAZA LA ESCRITURA ENTERA si no pasa, así
+ * que mandar un DNI incompleto impediría guardar la AGENCIA, que no tiene nada
+ * que ver con él.
+ *
+ * Las tres respuestas, y por qué:
+ *
+ *   - VACÍO → `null`. Vaciar el campo es una decisión, igual que quitar la
+ *     agencia: si se conservara lo anterior, borrarlo sería imposible.
+ *   - VÁLIDO → lo escrito. El caso normal.
+ *   - INVÁLIDO → lo último guardado. No se pisa un dato bueno con uno a medias,
+ *     y el campo lo guardará solo en cuanto termine de escribirse.
+ */
+export function shalomDraftDocumentToSave(
+  typed: string,
+  typedIsValid: boolean,
+  saved: string | null,
+): string | null {
+  const value = typed.trim();
+  if (!value) return null;
+  return typedIsValid ? value : saved;
+}
+
 /** Mínimo de un motivo de excepción. Corto de más es "ok" o ".", que no explica nada. */
 export const MIN_OVERRIDE_REASON = 10;
 

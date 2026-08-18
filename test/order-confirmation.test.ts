@@ -5,6 +5,8 @@ import {
   confirmationAttemptDetail,
   confirmationDayCount,
   confirmationDays,
+  confirmationDueBucket,
+  confirmationReminderDueAt,
   confirmationResult,
   confirmationResultLabel,
   hasConfirmationSignal,
@@ -81,6 +83,34 @@ describe("confirmationDays", () => {
         attempt("2026-07-20T15:00:00.000Z"),
       ]),
     ).toEqual(["2026-07-20", "2026-07-28"]);
+  });
+});
+
+describe("recordatorios de confirmación", () => {
+  it("suma dos horas dentro de la jornada", () => {
+    expect(confirmationReminderDueAt("2026-08-18T15:00:00.000Z")).toBe(
+      "2026-08-18T17:00:00.000Z",
+    );
+  });
+
+  it("continúa al día siguiente cuando cruza las 22:00 de Lima", () => {
+    // 21:30 Lima: usa 30 minutos hoy y los otros 90 desde las 08:00.
+    expect(confirmationReminderDueAt("2026-08-19T02:30:00.000Z")).toBe(
+      "2026-08-19T14:30:00.000Z",
+    );
+  });
+
+  it("un intento fuera de horario empieza a contar a las 08:00", () => {
+    expect(confirmationReminderDueAt("2026-08-18T11:00:00.000Z")).toBe(
+      "2026-08-18T15:00:00.000Z",
+    );
+  });
+
+  it("separa vencidos, hoy y próximos por fecha de Lima", () => {
+    const now = "2026-08-18T18:00:00.000Z";
+    expect(confirmationDueBucket("2026-08-17", now)).toBe("vencido");
+    expect(confirmationDueBucket("2026-08-18", now)).toBe("hoy");
+    expect(confirmationDueBucket("2026-08-19", now)).toBe("proximo");
   });
 });
 

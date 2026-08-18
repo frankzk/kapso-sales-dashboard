@@ -39,6 +39,7 @@ import {
   cancelManualRouteOutput,
   clearOrderGeo,
   createManualRouteOutputsBulk,
+  getOrderMasterChangeToken,
   loadOrderDetail,
   resolveLabelsForOrders,
   loadOrderGeo,
@@ -94,6 +95,7 @@ import {
   CONFIRMATION_RESULTS,
   confirmationChannelLabel,
   confirmationDays,
+  confirmationDueBucket,
   confirmationResult,
   confirmationResultLabel,
   limaDayKey,
@@ -462,6 +464,7 @@ export function OrdersMasterBoard({
   const [navigating, startNav] = useTransition();
   const [showMore, setShowMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  const changeToken = useRef<string | null>(null);
   // Selección para acciones en lote (hoy: imprimir rótulos).
   //
   // SOBREVIVE A LAS BÚSQUEDAS. La tanda de rótulos del día se arma buscando
@@ -473,6 +476,34 @@ export function OrdersMasterBoard({
   // pagina en servidor y no expone los ids del filtro completo, así que prometer
   // "todos los 4.000" sería mentir.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    let stopped = false;
+    const check = async () => {
+      if (document.visibilityState !== "visible" || navigating) return;
+      const next = await getOrderMasterChangeToken();
+      if (stopped || !next) return;
+      if (changeToken.current === null) {
+        changeToken.current = next;
+        return;
+      }
+      if (next !== changeToken.current) {
+        changeToken.current = next;
+        router.refresh();
+      }
+    };
+    void check();
+    const interval = window.setInterval(() => void check(), 45_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void check();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [navigating, router]);
 
   const toggleRow = (orderId: string) => {
     setSelectedIds((prev) => {
@@ -704,6 +735,7 @@ export function OrdersMasterBoard({
                 rows={shown}
                 storeName={storeName}
                 multiStore={stores.length > 1}
+                showConfirmation={view === "por_confirmar"}
                 onOpen={setOpenId}
                 selected={selectedIds}
                 onToggleRow={toggleRow}
@@ -811,6 +843,34 @@ export function OrdersMasterBoard({
                 })}
               </div>
             )}
+            {view === "por_confirmar" &&
+              (substage === null || substage === "volver_a_contactar") && (
+                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                  <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">
+                    Fecha pactada
+                  </span>
+                  {([
+                    ["", "Todos los plazos"],
+                    ["vencido", "Vencidos"],
+                    ["hoy", "Hoy"],
+                    ["proximo", "Próximos"],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value || "todos"}
+                      type="button"
+                      onClick={() => patch({ confirmationDue: value })}
+                      className={cn(
+                        "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
+                        filters.confirmationDue === value
+                          ? "border-indigo-600 bg-indigo-50 text-indigo-800"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
           </section>
 
           {/* Filtros */}
@@ -1023,6 +1083,7 @@ export function OrdersMasterBoard({
                   rows={listed}
                   storeName={storeName}
                   multiStore={stores.length > 1}
+                  showConfirmation={view === "por_confirmar"}
                   onOpen={setOpenId}
                   selected={selectedIds}
                   onToggleRow={toggleRow}
@@ -1701,6 +1762,7 @@ function MasterTable({
   rows,
   storeName,
   multiStore,
+  showConfirmation,
   onOpen,
   selected,
   onToggleRow,
@@ -1709,6 +1771,7 @@ function MasterTable({
   rows: OrderMasterRow[];
   storeName: (id: string) => string;
   multiStore: boolean;
+  showConfirmation: boolean;
   onOpen: (orderId: string) => void;
   selected: Set<string>;
   onToggleRow: (orderId: string) => void;
@@ -1782,6 +1845,12 @@ function MasterTable({
             </th>
             <th className="px-2 py-2 font-medium">Macroetapa</th>
             <th className="px-2 py-2 font-medium">Subetapa</th>
+            {showConfirmation && (
+              <>
+                <th className="px-2 py-2 font-medium">Gestión</th>
+                <th className="px-2 py-2 font-medium">Próximo contacto</th>
+              </>
+            )}
             <th className="px-2 py-2 font-medium">Últ. movimiento</th>
             <th className="px-4 py-2 font-medium">Antigüedad</th>
           </tr>
@@ -1838,6 +1907,22 @@ function MasterTable({
                 <MacroStageBadge stage={r.macro_stage} />
               </td>
               <td className="px-2 py-2.5 text-slate-600">{macroSubstageLabel(r.macro_substage)}</td>
+              {showConfirmation && (
+                <>
+                  <td className="px-2 py-2.5 text-slate-600">
+                    {r.macro_substage === "historico_sin_gestion"
+                      ? "Fuera del corte"
+                      : `${r.confirmation_day_count ?? 0}/7 días`}
+                  </td>
+                  <td className="px-2 py-2.5 text-slate-600">
+                    {r.confirmation_next_contact_on
+                      ? fmtDate(`${r.confirmation_next_contact_on}T12:00:00.000Z`)
+                      : r.confirmation_reminder_due_at
+                        ? fmtDateTime(r.confirmation_reminder_due_at)
+                        : "—"}
+                  </td>
+                </>
+              )}
               <td className="px-2 py-2.5 text-slate-600">{fmtDate(r.last_movement_at)}</td>
               <td className="px-4 py-2.5 text-slate-600">{fmtAge(r.macro_since ?? r.status_since)}</td>
             </tr>
@@ -2635,6 +2720,9 @@ function OrderDrawer({
               >
                 <ConfirmationDesk
                   brief={brief}
+                  row={detail.row}
+                  tasks={detail.tasks}
+                  shopifyUrl={shopifyUrl}
                   timeline={detail.timeline}
                   pending={pending}
                   onAttempt={(payload) =>
@@ -3084,6 +3172,9 @@ function OrderDrawer({
                   orderId={orderId}
                   hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
                   health={detail.aliclikHealth}
+                  riskRequirement={brief?.risk.requirement ?? "ninguno"}
+                  paymentState={detail.row.payment_state}
+                  riskReasons={brief?.risk.reasons ?? []}
                   onCreated={() => {
                     void reload();
                     onSaved();
@@ -3723,11 +3814,17 @@ function ConfirmationBrief({ brief }: { brief: OrderConfirmationBrief }) {
 
 function ConfirmationDesk({
   brief,
+  row,
+  tasks,
+  shopifyUrl,
   timeline,
   pending,
   onAttempt,
 }: {
   brief: OrderConfirmationBrief | null;
+  row: OrderMasterRow;
+  tasks: OrderMasterDetail["tasks"];
+  shopifyUrl: string | null;
   timeline: TimelineEntry[];
   pending: boolean;
   onAttempt: (input: {
@@ -3735,6 +3832,7 @@ function ConfirmationDesk({
     channel: string;
     note?: string;
     nextContactOn?: string;
+    operationId?: string;
   }) => void;
 }) {
   const [result, setResult] = useState(CONFIRMATION_RESULTS[0]!.code);
@@ -3755,10 +3853,19 @@ function ConfirmationDesk({
   const opensNewDay = !days.includes(today);
   const projected = Math.min(used + (opensNewDay ? 1 : 0), CONFIRMATION_MAX_DAYS);
   const lastAttempt = used >= CONFIRMATION_MAX_DAYS;
+  const cancellationTask = tasks.find(
+    (task) => task.kind === "shopify_cancellation_review" && task.status === "pending",
+  );
+  const reminderTask = tasks.find(
+    (task) => task.kind === "confirmation_reminder" && task.status === "pending",
+  );
+  const followupBucket = row.confirmation_next_contact_on
+    ? confirmationDueBucket(row.confirmation_next_contact_on)
+    : null;
 
   const selected = confirmationResult(result);
   const needsDate = Boolean(selected?.schedulesFollowup);
-  const blocked = pending || (needsDate && !nextContactOn);
+  const blocked = pending || lastAttempt || (needsDate && !nextContactOn);
 
 
   return (
@@ -3804,9 +3911,63 @@ function ConfirmationDesk({
       )}
 
       {lastAttempt && (
-        <p className="rounded-lg bg-white/70 px-3 py-2 text-xs leading-5 text-amber-900 ring-1 ring-amber-200">
-          <strong>Último intento.</strong> Se agotaron los {CONFIRMATION_MAX_DAYS} días de gestión.
-          La anulación se crea a mano en Shopify — Kapta nunca anula por su cuenta.
+        <div className="rounded-lg bg-white px-3 py-3 text-xs leading-5 text-amber-950 ring-1 ring-amber-200">
+          <p>
+            <strong>Último intento completado.</strong> Se agotaron los {CONFIRMATION_MAX_DAYS} días
+            de gestión. Kapta no anula automáticamente.
+          </p>
+          {cancellationTask && (
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-amber-100 pt-2">
+              <span>
+                Tarea asignada a {cancellationTask.assignedName ?? "la última persona que gestionó"}.
+              </span>
+              {shopifyUrl && (
+                <a
+                  href={shopifyUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-md bg-amber-900 px-2.5 py-1.5 font-semibold text-white hover:bg-amber-950"
+                >
+                  Revisar en Shopify ↗
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {row.macro_substage === "historico_sin_gestion" && (
+        <p className="rounded-lg bg-slate-100 px-3 py-2 text-xs leading-5 text-slate-700">
+          Pedido anterior al corte operativo del 01/06/2026. Se conserva en el historial y no
+          cuenta como trabajo nuevo de Sin llamar.
+        </p>
+      )}
+
+      {row.confirmation_next_contact_on && (
+        <div
+          className={cn(
+            "flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs ring-1",
+            followupBucket === "vencido"
+              ? "bg-rose-50 text-rose-900 ring-rose-200"
+              : followupBucket === "hoy"
+                ? "bg-amber-50 text-amber-900 ring-amber-200"
+                : "bg-sky-50 text-sky-900 ring-sky-200",
+          )}
+        >
+          <strong>
+            {followupBucket === "vencido"
+              ? "Contacto vencido"
+              : followupBucket === "hoy"
+                ? "Contactar hoy"
+                : "Próximo contacto"}
+          </strong>
+          <span>{fmtDate(`${row.confirmation_next_contact_on}T12:00:00.000Z`)}</span>
+        </div>
+      )}
+
+      {reminderTask?.dueAt && !lastAttempt && (
+        <p className="text-xs text-slate-500">
+          Recordatorio de confirmación: {fmtDateTime(reminderTask.dueAt)}.
         </p>
       )}
 
@@ -3877,7 +4038,13 @@ function ConfirmationDesk({
           type="button"
           disabled={blocked}
           onClick={() => {
-            onAttempt({ result, channel, note, nextContactOn });
+            onAttempt({
+              result,
+              channel,
+              note,
+              nextContactOn,
+              operationId: crypto.randomUUID(),
+            });
             setNote("");
             setNextContactOn("");
           }}

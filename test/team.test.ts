@@ -4,6 +4,7 @@ import {
   canRemoveMember,
   canSetRole,
   canAddMember,
+  canSetPaymentValidator,
   type MemberLite,
 } from "@/lib/team";
 
@@ -72,6 +73,24 @@ describe("team guards", () => {
       expect(canAddMember("owner", "owner").ok).toBe(true);
       expect(canAddMember("viewer", "admin").ok).toBe(true);
       expect(canAddMember("admin", "admin").ok).toBe(true);
+    });
+  });
+
+  describe("canSetPaymentValidator", () => {
+    it("permite autorizar a cualquier miembro", () => {
+      expect(canSetPaymentValidator(members, "v1", true, "admin", ["a1"])).toEqual({ ok: true });
+    });
+    it("impide dejar la organización sin validador", () => {
+      const result = canSetPaymentValidator(members, "a1", false, "admin", ["a1"]);
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain("al menos una");
+    });
+    it("permite retirar un validador cuando queda otro", () => {
+      expect(canSetPaymentValidator(members, "a1", false, "admin", ["a1", "o1"]).ok).toBe(true);
+    });
+    it("un admin no modifica el permiso de un owner", () => {
+      expect(canSetPaymentValidator(members, "o1", true, "admin", ["a1"]).ok).toBe(false);
+      expect(canSetPaymentValidator(members, "o1", true, "owner", ["a1"]).ok).toBe(true);
     });
   });
 });

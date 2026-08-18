@@ -34,7 +34,11 @@ import { normalizeDistrictKey } from "@/lib/district-coverage";
 import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
 import { getStoreCreds } from "@/lib/ingest";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { getOrderMasterDetail } from "@/lib/orders-master-access";
+import {
+  getOrderConfirmationBrief,
+  getOrderMasterDetail,
+} from "@/lib/orders-master-access";
+import { aliclikRiskGate } from "@/lib/order-confirmation-brief";
 import { classifyOperation } from "@/lib/order-macro-stage";
 import { normalizePhone } from "@/lib/phone";
 import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
@@ -962,6 +966,8 @@ export interface CreateGuideInput {
    * irreversible y lo paga la clienta.
    */
   expectedCollectTotal?: number | null;
+  /** Excepción auditada a la regla de adelanto/pago del historial. */
+  riskExceptionReason?: string | null;
 }
 
 /**
@@ -1008,6 +1014,19 @@ export async function createAliclikGuide(
   if (!ctx) return { error };
 
   const admin = createAdminSupabase();
+  const confirmationBrief = await getOrderConfirmationBrief(orderId);
+  if (!confirmationBrief) {
+    return { error: "No se pudo verificar el historial del cliente antes de crear la guía." };
+  }
+  const riskGate = aliclikRiskGate(
+    confirmationBrief.risk.requirement,
+    ctx.row.payment_state,
+    input.riskExceptionReason,
+  );
+  if (!riskGate.allowed) return { error: riskGate.message ?? "Falta validar el pago exigido." };
+  const riskExceptionReason = riskGate.requiresException
+    ? input.riskExceptionReason?.trim() ?? null
+    : null;
 
   // El pedido no puede tener ya una guía activa. Mismo criterio que
   // `createDirectFenixGuide`: dos guías vivas para un pedido es un paquete
@@ -1216,23 +1235,46 @@ export async function createAliclikGuide(
     };
   }
 
-  await admin.from("order_events").insert({
-    store_id: ctx.storeId,
-    order_id: orderId,
-    kind: "guide_registered",
-    occurred_at: new Date().toISOString(),
-    actor: ctx.userId,
-    source: "aliclik",
-    courier: "aliclik",
-    guide_code: orderNumber,
-    payload: {
-      transportName: courierBlock.transportName,
-      deliveryCost: courierBlock.deliveryCost,
-      returnCost: courierBlock.returnCost,
-      warehouseId: preview.warehouseId,
-      ubigeo: preview.aliclikUbigeo,
+  const registeredAt = new Date().toISOString();
+  await admin.from("order_events").insert([
+    {
+      store_id: ctx.storeId,
+      order_id: orderId,
+      kind: "guide_registered",
+      occurred_at: registeredAt,
+      actor: ctx.userId,
+      source: "aliclik",
+      courier: "aliclik",
+      guide_code: orderNumber,
+      payload: {
+        transportName: courierBlock.transportName,
+        deliveryCost: courierBlock.deliveryCost,
+        returnCost: courierBlock.returnCost,
+        warehouseId: preview.warehouseId,
+        ubigeo: preview.aliclikUbigeo,
+      },
     },
-  });
+    ...(riskExceptionReason
+      ? [
+          {
+            store_id: ctx.storeId,
+            order_id: orderId,
+            kind: "aliclik_risk_exception",
+            occurred_at: registeredAt,
+            actor: ctx.userId,
+            source: "manual",
+            courier: "aliclik",
+            guide_code: orderNumber,
+            reason: riskExceptionReason,
+            payload: {
+              requirement: confirmationBrief.risk.requirement,
+              payment_state: ctx.row.payment_state,
+              antecedents: confirmationBrief.risk.antecedents,
+            },
+          },
+        ]
+      : []),
+  ]);
 
   // El mismo hecho, también en el HISTORIAL DEL LEAD.
   //

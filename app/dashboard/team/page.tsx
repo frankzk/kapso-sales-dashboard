@@ -4,6 +4,7 @@ import { getUserRoleSummary } from "@/lib/access";
 import { EmptyState } from "@/components/ui";
 import { TeamManager, type TeamMember, type RiderRow } from "@/components/team";
 import type { Role } from "@/lib/types";
+import { permissionsFor } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -51,7 +52,7 @@ export default async function TeamPage({
   const selected = adminOrgs.find((o) => o.id === sp.org) ?? adminOrgs[0]!;
   const admin = createAdminSupabase();
 
-  const [{ data: memberRows }, { data: storeRows }, { data: riderRows }] = await Promise.all([
+  const [{ data: memberRows }, { data: storeRows }, { data: riderRows }, { data: permissionRows }] = await Promise.all([
     admin.from("memberships").select("user_id, role").eq("org_id", selected.id),
     admin.from("stores").select("id, name").eq("org_id", selected.id).order("name"),
     admin
@@ -60,6 +61,11 @@ export default async function TeamPage({
       .eq("org_id", selected.id)
       .order("active", { ascending: false })
       .order("full_name"),
+    admin
+      .from("user_permissions")
+      .select("user_id, permission, granted")
+      .eq("org_id", selected.id)
+      .in("permission", ["payments.validate", "shalom.validate_payment"]),
   ]);
 
   const stores = (storeRows as { id: string; name: string }[]) ?? [];
@@ -85,12 +91,24 @@ export default async function TeamPage({
     accessByUser.set(a.user_id, arr);
   }
 
+  const paymentPermissionByUser = new Map<string, { permission: string; granted: boolean }[]>();
+  for (const row of
+    (permissionRows as { user_id: string; permission: string; granted: boolean }[]) ?? []) {
+    const current = paymentPermissionByUser.get(row.user_id) ?? [];
+    current.push({ permission: row.permission, granted: row.granted });
+    paymentPermissionByUser.set(row.user_id, current);
+  }
+
   const members: TeamMember[] = ((memberRows as { user_id: string; role: Role }[]) ?? [])
     .map((m) => ({
       user_id: m.user_id,
       email: emailById.get(m.user_id) ?? m.user_id,
       role: m.role,
       stores: accessByUser.get(m.user_id) ?? [],
+      can_validate_payments: permissionsFor(
+        [m.role],
+        paymentPermissionByUser.get(m.user_id) ?? [],
+      ).has("payments.validate"),
     }))
     .sort((a, b) => a.email.localeCompare(b.email));
 

@@ -7,6 +7,7 @@
 // un conjunto VACÍO significa "todas", nunca "ninguna".
 
 import type { OrderMasterRow } from "@/lib/types";
+import { limaDayKey } from "@/lib/order-confirmation";
 
 export interface MasterFilters {
   stores: Set<string>;
@@ -38,6 +39,8 @@ export interface MasterFilters {
   expiringSoon: boolean;
   /** Búsqueda libre sobre código, cliente, teléfono y guía. */
   search: string;
+  /** Cola de Volver a contactar: vencido | hoy | proximo. */
+  confirmationDue: "" | "vencido" | "hoy" | "proximo";
 }
 
 export function emptyFilters(): MasterFilters {
@@ -66,6 +69,7 @@ export function emptyFilters(): MasterFilters {
     pickupStates: new Set(),
     expiringSoon: false,
     search: "",
+    confirmationDue: "",
   };
 }
 
@@ -92,6 +96,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.pickupStates.size > 0 ||
     f.expiringSoon ||
     f.search.trim().length > 0
+    || Boolean(f.confirmationDue)
   );
 }
 
@@ -174,6 +179,25 @@ export function matchesFilters(
 
   const q = f.search.trim().toLowerCase().replace(/^#/, "");
   if (q && !haystack(row).includes(q)) return false;
+
+  if (f.confirmationDue) {
+    const today = limaDayKey(now);
+    const nextContact = row.confirmation_next_contact_on;
+    const reminderAt = row.confirmation_reminder_due_at;
+    const reminderDay = reminderAt ? limaDayKey(reminderAt) : null;
+    const overdue = Boolean(
+      (nextContact && nextContact < today)
+      || (reminderAt && Date.parse(reminderAt) < Date.parse(now)),
+    );
+    const dueToday = nextContact === today || reminderDay === today;
+    const upcoming = Boolean(
+      (nextContact && nextContact > today)
+      || (reminderDay && reminderDay > today),
+    );
+    if (f.confirmationDue === "vencido" && !overdue) return false;
+    if (f.confirmationDue === "hoy" && (overdue || !dueToday)) return false;
+    if (f.confirmationDue === "proximo" && !upcoming) return false;
+  }
 
   return true;
 }

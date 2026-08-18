@@ -9,6 +9,7 @@ import {
   addMember,
   removeMember,
   setMemberRole,
+  setPaymentValidationPermission,
   setStoreAccess,
   saveRider,
   setRiderActive,
@@ -16,7 +17,7 @@ import {
   unlinkRiderUser,
   type TeamActionState,
 } from "@/app/dashboard/team/actions";
-import { Card, cn, STICKY_HEAD, TABLE_WRAP, TABLE_WRAP_FROM } from "@/components/ui";
+import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 
 const initial: TeamActionState = {};
 
@@ -45,6 +46,7 @@ export interface TeamMember {
   email: string;
   role: Role;
   stores: string[]; // store ids the member has explicit access to
+  can_validate_payments: boolean;
 }
 
 interface Store {
@@ -138,11 +140,16 @@ export function TeamManager({
         <>
           <AddMemberForm orgId={org.id} myRole={myRole} />
           <Card>
-            <div className={TABLE_WRAP}>
-              <table className="w-full text-sm">
+            <p className="mb-3 text-xs text-slate-500">
+              Activa <strong className="font-semibold text-slate-700">Validar pagos</strong> para
+              quienes revisan las cuentas bancarias. El acceso aparecerá en su menú al recargar.
+            </p>
+            <div className={TABLE_WRAP_FROM[1110]}>
+              <table className="w-full min-w-[880px] text-sm">
                 <thead>
                   <tr className={cn(STICKY_HEAD, "text-xs text-slate-500")}>
                     <th className="py-2 text-left font-medium">Miembro</th>
+                    <th className="py-2 text-left font-medium">Validar pagos</th>
                     <th className="py-2 text-left font-medium">Rol</th>
                     <th className="py-2 text-left font-medium">Acceso a tiendas</th>
                     <th className="py-2 text-right font-medium">Acción</th>
@@ -158,6 +165,9 @@ export function TeamManager({
                         )}
                       </td>
                       <td className="py-3">
+                        <PaymentValidationToggle orgId={org.id} member={m} myRole={myRole} />
+                      </td>
+                      <td className="py-3">
                         <RoleForm orgId={org.id} member={m} myRole={myRole} ownerCnt={ownerCnt} />
                       </td>
                       <td className="py-3">
@@ -170,7 +180,7 @@ export function TeamManager({
                   ))}
                   {!members.length && (
                     <tr>
-                      <td colSpan={4} className="py-4 text-sm text-slate-400">
+                      <td colSpan={5} className="py-4 text-sm text-slate-400">
                         Sin miembros todavía.
                       </td>
                     </tr>
@@ -387,6 +397,49 @@ function AccessToggle({
         {store.name}
       </label>
       {saved && <span className="text-xs font-medium text-emerald-600" title="Guardado">✓</span>}
+    </form>
+  );
+}
+
+function PaymentValidationToggle({
+  orgId,
+  member,
+  myRole,
+}: {
+  orgId: string;
+  member: TeamMember;
+  myRole: Role;
+}) {
+  const [state, action, pending] = useActionState(setPaymentValidationPermission, initial);
+  const saved = useSavedFlash(pending, state.notice);
+  const canEdit = myRole === "owner" || member.role !== "owner";
+  return (
+    <form action={action} className="flex min-w-36 flex-col gap-1">
+      <input type="hidden" name="org_id" value={orgId} />
+      <input type="hidden" name="user_id" value={member.user_id} />
+      <input type="hidden" name="grant" value={member.can_validate_payments ? "0" : "1"} />
+      <label
+        className={cn(
+          "inline-flex w-fit items-center gap-2 text-xs font-medium",
+          canEdit ? "cursor-pointer text-slate-700" : "cursor-not-allowed text-slate-400",
+        )}
+      >
+        <input
+          type="checkbox"
+          defaultChecked={member.can_validate_payments}
+          disabled={pending || !canEdit}
+          onChange={(event) => event.currentTarget.form?.requestSubmit()}
+          aria-label={`Permitir que ${member.email} valide pagos`}
+          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+        />
+        {member.can_validate_payments ? "Autorizado" : "Sin permiso"}
+      </label>
+      {pending ? (
+        <span className="text-xs text-slate-400">Guardando…</span>
+      ) : saved ? (
+        <span className="text-xs font-medium text-emerald-600">Guardado ✓</span>
+      ) : null}
+      {state.error && <span className="max-w-56 text-xs text-red-600">{state.error}</span>}
     </form>
   );
 }

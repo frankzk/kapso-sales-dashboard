@@ -1,10 +1,10 @@
 # Master Operations Map — Master de Pedidos v1
 
-Estado: Fase 4 implementada; Mesa de cierre y resumen operativo publicados
+Estado: Fase 4 implementada; macroetapa Por confirmar cerrada funcionalmente
 Propietario del proceso: Frankz  
 Sistema: Kapta (`kapso-sales-dashboard`)  
 Fuente visual: board Miro «Master Operations Map»  
-Última consolidación: 2026-08-08
+Última consolidación: 2026-08-18
 
 ## 1. Propósito
 
@@ -232,6 +232,8 @@ Subetapas:
 - `por_confirmar`: hay al menos un intento y ningún compromiso vigente.
 - `volver_a_contactar`: el intento más reciente dejó pactada una fecha.
 - `ultimo_intento`: séptimo día distinto de gestión.
+- `historico_sin_gestion`: pedido anterior al corte operativo de Kapta que no
+  tiene contactos. Se conserva para consulta, pero no es trabajo nuevo.
 
 Motivos (conviven con la subetapa, no la reemplazan):
 
@@ -240,6 +242,11 @@ Motivos (conviven con la subetapa, no la reemplazan):
 
 Reglas:
 
+- El corte operativo de confirmación se configura por tienda y empieza el
+  **01/06/2026**. La base puede contener pedidos anteriores por backfill; si no
+  tienen gestión, no inflan `Sin llamar`, los conteos ni los KPI del equipo.
+- Si un pedido anterior al corte sí tiene gestión, sale del histórico y se
+  clasifica por sus hechos reales.
 - La subetapa dice en qué punto va la gestión; el motivo dice qué falta para
   avanzar. Un pedido de Agencia con próximo contacto pactado y sin abono
   validado está en `volver_a_contactar` **con** el motivo
@@ -263,7 +270,9 @@ Reglas:
 - `Último intento` se **deriva** del conteo; no depende de que alguien recuerde
   marcarlo.
 - El día siete es `Último intento`; después se crea una tarea de anulación
-  manual en Shopify. Kapta nunca anula automáticamente.
+  manual en Shopify. Se asigna a la última persona que gestionó y la responsable
+  de respaldo configurable es Milagros. Kapta nunca anula automáticamente; la
+  tarea se completa cuando Shopify sincroniza la anulación.
 - Un intento posterior sin compromiso de fecha devuelve el pedido a
   `por_confirmar`: el compromiso anterior ya no describe nada. Manda el hecho
   más reciente.
@@ -273,6 +282,9 @@ Reglas:
 - Existe un recordatorio automático una vez transcurridas dos horas laborales
   sin respuesta.
 - Horario laboral: 08:00–22:00, hora de Lima. El reloj se pausa fuera de horario.
+- `Volver a contactar` y `Pendiente de abono` guardan únicamente una **fecha**,
+  no una hora. Vencidos, hoy y próximos forman colas operativas; los
+  recordatorios de dos horas entran en las mismas colas según su vencimiento.
 - Provincia COD queda confirmada al validar producto, cantidad, monto, fecha
   aproximada y dirección de entrega.
 - Agencia queda confirmada solo cuando el pago exigido ha sido validado.
@@ -281,6 +293,10 @@ Reglas:
 
 Registro:
 
+- Registrar un intento es una transacción atómica: contacto, seguimiento,
+  confirmación y tarea derivada se guardan juntos o no se guarda ninguno.
+- Cada gesto lleva un `operation_id`. Un doble clic o reintento de red devuelve
+  el resultado existente y no duplica eventos, días ni tareas.
 - Cada intento se registra en la **mesa de confirmación** del pedido, con canal
   y resultado. Escribe `confirmation_contact`; si el resultado pacta una fecha
   escribe además `confirmation_followup`, y si el cliente confirma, `confirmed`.
@@ -734,8 +750,13 @@ que nadie tenga que resumirla a mano:
   de la misma matriz que clasifica la cobertura del pedido, así que no puede
   contradecirla. Vacío significa que va por agencia.
 - Con `Exigir adelanto` o `Exigir pago completo`, el panel de cobro pasa a ser
-  dominante también en Provincia COD. `Sugerir` no lo fuerza: es una
-  recomendación para la llamada, y un COD puede salir contra entrega.
+  dominante también en Provincia COD. La barrera de pago se aplica al crear una
+  salida **Aliclik**, porque es el courier que cobra incluso el intento no
+  entregado. Swayp, Lima y los demás motorizados no se bloquean por esta regla:
+  el antecedente permanece visible como advertencia, pero pueden salir contra
+  entrega. `Sugerir` nunca bloquea.
+- La excepción Aliclik requiere una explicación corta y genera un evento
+  append-only con actor, fecha, requisito, estado del pago y antecedentes.
 - La ficha se lee bajo RLS: el historial de un teléfono nunca cruza a una tienda
   que quien mira no puede ver.
 
@@ -1489,6 +1510,13 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - El drawer muestra tres importes distintos: total cargado, total validado y
   saldo por cargar. El check **Adelanto mínimo validado** aparece únicamente
   cuando existen al menos S/30 validados, no solo por haber subido una imagen.
+- **Una lectura fallida no es una respuesta.** Si Kapta no consigue leer los
+  pagos del pedido, el drawer dice que no pudo leerlos y ofrece reintentar.
+  Nunca imprime «Todavía no se ha cargado ningún comprobante» ni «S/ 0.00
+  validados»: esas frases afirman algo sobre el dinero del cliente y solo valen
+  cuando la consulta respondió. Se vio en #AUR175525 — el comprobante estaba
+  registrado y el drawer lo negaba, que es como mandar al equipo a pedir un Yape
+  que el cliente ya envió.
 - Validadores actuales: Milagros, Mildred, Gabriela, Yohalis y Frankz, según la
   cuenta receptora.
 - Hoy existe validación interna por WhatsApp/app bancaria; Kapta debe conservar
@@ -1496,6 +1524,11 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - Al pulsar **Leer y rellenar**, Kapta separa dos identidades del comprobante:
   el pagador o remitente se conserva internamente para trazabilidad y detección
   de duplicados; la interfaz valida la **cuenta receptora**.
+- Un comprobante **no se registra** si la comprobación de duplicidad no llegó a
+  ejecutarse. Con esas consultas caídas, «no hay duplicado» quiere decir «no se
+  sabe». El nº de operación y la huella del archivo tienen índice único detrás y
+  chocarían igual; la tercera señal —mismo monto y misma fecha— no lo tiene, así
+  que ahí el silencio se cobra dos veces el mismo Yape.
 - La cuenta receptora se comprueba con dos señales independientes y visibles:
   el destinatario debe coincidir con `Grupo GF S.A.C.` y el celular debe ser
   `930 555 309` o conservar de forma legible la terminación `309`. Cada señal
@@ -1606,12 +1639,45 @@ registra en cada evento.
 
 - Reembolso: solo Frankz.
 - Reapertura: Frankz o Yohalis.
-- Validar pagos: grupo autorizado por cuenta.
+- Validar pagos: autorización individual `payments.validate`, administrada con
+  un check en **Equipo**. El owner lo conserva por continuidad operativa; para
+  los demás, el rol por sí solo no concede este permiso y cambiar a alguien a
+  admin no le permite validar movimientos bancarios. Debe quedar al
+  menos un validador activo y, al retirar un miembro, se eliminan sus permisos
+  puntuales para que no reaparezcan si vuelve a ser invitado.
 - Excepción COD por riesgo: justificación obligatoria.
 - Continuar con discrepancia geográfica: justificación obligatoria.
 - Retirar del manifiesto: motivo obligatorio.
 - Corrección de resultado courier: evento de corrección, nunca edición destructiva.
 - Cerrar liquidación observada: rol financiero autorizado.
+
+### 16.1 Bandeja de validación de pagos
+
+El control de acceso anterior cierra quién puede decidir, pero la operación
+necesita además una bandeja central para que ningún comprobante quede escondido
+dentro de un pedido. La vista aprobada tendrá tres columnas visibles:
+`Pendientes`, `Observados` y `Validados hoy`. La lista `Todos` permanece oculta
+y solo se consulta mediante búsqueda o filtros, para no renderizar una cola
+histórica innecesariamente larga.
+
+La bandeja vive en **Finanzas → Validar pagos** y se limita a las tiendas de las
+organizaciones donde el usuario tiene `payments.validate`. Cada comprobante
+muestra el pedido, cliente, tienda, tipo de pago, monto, operación, fecha,
+cuenta receptora leída, evidencia y progreso acumulado del pedido.
+
+- `Pendientes`: `pendiente_revision`, ordenados del más antiguo al más reciente.
+- `Observados`: `posible_duplicado`, `info_incompleta` o `revision_admin`.
+- `Validados hoy`: pagos `validado` durante el día calendario de Lima.
+- `Observar` exige motivo y mueve el comprobante a `revision_admin`.
+- `Rechazar` es una decisión definitiva desde Observados. No borra el pago: sale
+  de la cola activa y queda preservado en el expediente y sus eventos.
+- `Validar` exige número de operación y bloquea una cuenta receptora incompatible
+  con Grupo GF S.A.C. / terminación 309.
+
+Mientras Kapta y el Excel convivan, validar un pago deja el comprobante listo
+para continuar y registra actor y fecha, pero **no cambia por sí solo la
+macroetapa ni marca el pedido como pagado en Shopify**. Esas automatizaciones se
+activan cuando la migración operativa al sistema sea completa.
 
 ## 17. KPI principales
 
@@ -1882,7 +1948,7 @@ Primer bloque publicado en el drawer del Master:
   reembolsos; los permisos puntuales de `user_permissions` siguen prevaleciendo.
 - El resolver quedó versionado —`mom-v1.4` en este bloque; la versión vigente es
   siempre `MOM_RESOLUTION_VERSION` en `lib/order-macro-stage.ts`, hoy
-  `mom-v1.8`—; el cron detecta versiones anteriores y recalcula el histórico por
+  `mom-v1.9`—; el cron detecta versiones anteriores y recalcula el histórico por
   lotes hasta que todo el Master converja, sin necesitar credenciales locales ni
   detener la sincronización. Toda regla que cambie el resultado de filas que
   nadie tocó debe subir esa constante, o el histórico queda con el veredicto
@@ -2048,7 +2114,7 @@ Tres reglas, a partir de acá:
    Kenku: **487 desfasados, 381 bajo la línea**, mientras el barrido recalculaba
    620 pedidos por hora en esa misma tienda — no le faltaba tiempo, no los veía.
 
-   La pregunta la responde ahora la base (`order_master_stale`, 0122), que es
+   La pregunta la responde ahora la base (`order_master_stale`, 0123), que es
    donde la comparación se puede hacer de verdad, y con eso la definición del
    desfase existe en **un solo sitio** —como `order_coverage_for` desde la 0104,
    y por la misma razón—. Se recorre del recálculo más viejo al más nuevo: lo
@@ -2217,6 +2283,24 @@ recoge; antes no lo recogía nadie.
   históricas no lo vuelven a cerrar automáticamente.
 - Finalizar se bloquea mientras existan salidas activas u otras obligaciones.
 - Todas las acciones se guardan como eventos append-only y recalculan el Master.
+
+### 24.1 Criterios de aceptación de Por confirmar
+
+- Los pedidos sin gestión anteriores al 01/06/2026 aparecen como
+  `Histórico sin gestión`, no como `Sin llamar`.
+- Llamada, WhatsApp y mensaje del mismo día consumen un solo día de los siete,
+  aunque cada intento queda auditado.
+- Un seguimiento exige fecha y nunca hora; la cola distingue vencidos, hoy y
+  próximos.
+- `Sin respuesta` y `Se deja mensaje` generan un recordatorio a las dos horas
+  laborales dentro de 08:00–22:00 de Lima.
+- El séptimo día sin confirmación crea una tarea manual de revisión en Shopify;
+  no anula el pedido desde Kapta.
+- Un doble clic no duplica el día, los eventos ni la tarea.
+- El riesgo del cliente se muestra para todas las rutas, pero solo Aliclik queda
+  bloqueado por el pago requerido. Una excepción Aliclik deja motivo auditado.
+- El bloqueo de pedido por asesor queda expresamente diferido hasta abandonar
+  el Excel; no forma parte de esta activación.
 
 ## 25. User journey del drawer del Master
 

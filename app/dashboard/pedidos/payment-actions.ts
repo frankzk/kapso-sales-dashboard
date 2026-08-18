@@ -14,7 +14,7 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { decryptOrNull, encrypt } from "@/lib/crypto";
-import { getMasterPermissions } from "@/lib/permissions-access";
+import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
   analyzeYapeVoucherFromEnv,
@@ -43,6 +43,7 @@ import {
 import type { OrderMasterRow } from "@/lib/types";
 
 const MASTER_PATH = "/dashboard/pedidos";
+const PAYMENT_REVIEW_PATH = "/dashboard/pagos";
 /** Los comprobantes llevan datos bancarios del cliente: bucket privado. */
 const VOUCHER_BUCKET = "yape-vouchers";
 /** Una captura de móvil no pesa más que esto; corta las subidas absurdas. */
@@ -58,6 +59,7 @@ export interface PaymentActionState {
 interface OrderContext {
   userId: string;
   storeId: string;
+  orgId: string;
   row: OrderMasterRow;
 }
 
@@ -70,7 +72,13 @@ async function authorizeOrder(orderId: string): Promise<OrderContext | null> {
   const { data } = await sb.from("order_master").select("*").eq("order_id", orderId).maybeSingle();
   if (!data) return null;
   const row = data as unknown as OrderMasterRow;
-  return { userId: user.id, storeId: row.store_id, row };
+  const { data: store } = await sb
+    .from("stores")
+    .select("org_id")
+    .eq("id", row.store_id)
+    .maybeSingle();
+  if (!store?.org_id) return null;
+  return { userId: user.id, storeId: row.store_id, orgId: String(store.org_id), row };
 }
 
 let bucketReady = false;
@@ -158,12 +166,18 @@ export async function loadPaymentPanel(
 ): Promise<{ panel: PickupKeyPanel } | { error: string }> {
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
-  const perms = await getMasterPermissions();
+  const [perms, canValidatePayment] = await Promise.all([
+    getMasterPermissions(),
+    hasOrgPermission(ctx.orgId, "payments.validate"),
+  ]);
   const sb = await createServerSupabase();
 
-  const [paymentsRes, keyRes, sharesRes, viewsRes, shalomRes] = await Promise.all([
+  // `shalom_pickup_keys` NO se pide acá: `authenticated` no tiene ni policy
+  // (0049) ni privilegio (0053), así que esa consulta solo podía devolver error.
+  // La existencia de la clave se pregunta más abajo con el service role, que es
+  // lo único que se expone — nunca su contenido.
+  const [paymentsRes, sharesRes, viewsRes, shalomRes] = await Promise.all([
     sb.from("order_payments").select("*").eq("order_id", orderId).order("registered_at"),
-    sb.from("shalom_pickup_keys").select("order_id").eq("order_id", orderId).maybeSingle(),
     sb.from("pickup_key_shares").select("*").eq("order_id", orderId).order("shared_at", { ascending: false }),
     sb.from("pickup_key_views").select("id,viewed_at,reason,override").eq("order_id", orderId).order("viewed_at", { ascending: false }).limit(50),
     sb
@@ -174,17 +188,34 @@ export async function loadPaymentPanel(
       .order("created_at", { ascending: false }),
   ]);
 
+  // UN FALLO DE LECTURA NO ES UNA RESPUESTA.
+  //
+  // `data ?? []` convertía cualquier error —permiso, red, PostgREST— en una
+  // lista vacía, y la lista vacía se imprime como "Todavía no se ha cargado
+  // ningún comprobante" y "S/ 0.00 validados": dos afirmaciones sobre el dinero
+  // del cliente fabricadas a partir de una consulta que nunca respondió. Es lo
+  // que se vio en #AUR175525, con el comprobante ya registrado en la base.
+  //
+  // Fallar acá es lo correcto: el panel enseña el error y ofrece reintentar. Eso
+  // es una pantalla honesta; "no hay pagos" no lo es. Las tres consultas de
+  // auditoría entran en la misma regla: "nadie consultó la clave" leído de una
+  // consulta caída es la misma mentira en el marco de seguridad.
+  const reads: { what: string; error: { message: string } | null }[] = [
+    { what: "los pagos", error: paymentsRes.error },
+    { what: "las entregas de la clave", error: sharesRes.error },
+    { what: "el historial de consultas de la clave", error: viewsRes.error },
+    { what: "las guías de Shalom", error: shalomRes.error },
+  ];
+  const failed = reads.find((r) => r.error);
+  if (failed?.error) return { error: `No se pudo leer ${failed.what}: ${failed.error.message}` };
+
   const payments = (paymentsRes.data ?? []) as unknown as PaymentRow[];
-  // `shalom_pickup_keys` no es legible por `authenticated` (0049, RLS sin
-  // policy): la existencia de la clave se consulta con el service role, que es
-  // lo único que se expone — nunca su contenido.
   const admin = createAdminSupabase();
   const { data: keyRow } = await admin
     .from("shalom_pickup_keys")
     .select("order_id")
     .eq("order_id", orderId)
     .maybeSingle();
-  void keyRes;
 
   const snapshots: PaymentSnapshot[] = payments.map((p) => ({
     kind: p.kind,
@@ -237,7 +268,7 @@ export async function loadPaymentPanel(
       shares: (sharesRes.data ?? []) as PickupKeyPanel["shares"],
       views: (viewsRes.data ?? []) as PickupKeyPanel["views"],
       canRegister: perms.can("shalom.register_payment"),
-      canValidate: perms.can("shalom.validate_payment"),
+      canValidate: canValidatePayment,
       canViewKey: perms.can("shalom.reveal_pickup_key"),
       canManageKey: perms.can("shalom.view_pickup_key"),
       canOverride: perms.can("shalom.override_payment_validation"),
@@ -507,11 +538,20 @@ export async function registerPayment(
     : input.payerName ?? vision.fields.payerName;
   const payerPhone = normalizePhone(input.payerPhone);
 
-  const { data: currentPayments } = await admin
+  const { data: currentPayments, error: currentPaymentsError } = await admin
     .from("order_payments")
     .select("kind,validation_status,amount")
     .eq("order_id", orderId)
     .neq("validation_status", "rechazado");
+  // Acá el fallo de lectura no solo desinforma: abre la puerta. Sin esta
+  // comprobación, un error deja `existingAmount` en 0 y `liveKinds` vacío, y
+  // `paymentPlanProblem` ve un pedido sin ningún pago — deja entrar un segundo
+  // adelanto, o un "total" encima de lo ya cobrado.
+  if (currentPaymentsError) {
+    return {
+      error: `No se pudieron leer los pagos ya registrados de este pedido (${currentPaymentsError.message}). Vuelve a intentarlo.`,
+    };
+  }
   const liveKinds = new Set(
     ((currentPayments ?? []) as { kind: string; validation_status: string; amount: number | null }[])
       .map((p) => p.kind),
@@ -544,8 +584,18 @@ export async function registerPayment(
   // la tienda de otro dueño debe detectarse igual, y RLS lo ocultaría.
   const existing: ExistingPayment[] = [];
   const seen = new Set<string>();
-  const push = (rows: unknown) => {
-    for (const r of (rows ?? []) as ExistingPayment[]) {
+  const lookupErrors: string[] = [];
+  const push = (res: { data: unknown; error: { message: string } | null }) => {
+    // Una consulta caída deja `existing` corta, y `findDuplicate` responde "no
+    // hay duplicado" por falta de datos en vez de por hecho comprobado. Los
+    // índices únicos de 0049 tapan el nº de operación y la huella, pero la
+    // tercera señal —mismo monto y misma fecha— no tiene índice detrás: ahí el
+    // silencio se cobra dos veces el mismo Yape.
+    if (res.error) {
+      lookupErrors.push(res.error.message);
+      return;
+    }
+    for (const r of (res.data ?? []) as ExistingPayment[]) {
       if (!seen.has(r.id)) {
         seen.add(r.id);
         existing.push(r);
@@ -555,16 +605,18 @@ export async function registerPayment(
   const COLUMNS =
     "id,order_id,kind,amount,operation_number,paid_at,payer_name,payer_phone,file_sha256,validation_status";
   if (operation) {
-    const { data } = await admin.from("order_payments").select(COLUMNS).eq("operation_number", operation);
-    push(data);
+    push(await admin.from("order_payments").select(COLUMNS).eq("operation_number", operation));
   }
   if (input.sha256) {
-    const { data } = await admin.from("order_payments").select(COLUMNS).eq("file_sha256", input.sha256);
-    push(data);
+    push(await admin.from("order_payments").select(COLUMNS).eq("file_sha256", input.sha256));
   }
   if (amount !== null && amount !== undefined) {
-    const { data } = await admin.from("order_payments").select(COLUMNS).eq("amount", amount);
-    push(data);
+    push(await admin.from("order_payments").select(COLUMNS).eq("amount", amount));
+  }
+  if (lookupErrors.length) {
+    return {
+      error: `No se pudo comprobar si el comprobante ya estaba usado (${lookupErrors.join("; ")}). No se registró nada; vuelve a intentarlo.`,
+    };
   }
 
   // Nombre del pedido en conflicto, para poder decirle al operador dónde está.
@@ -658,6 +710,7 @@ export async function registerPayment(
   });
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
+  revalidatePath(PAYMENT_REVIEW_PATH);
 
   // `vision.ok === false` NO significa "la imagen no se entiende": significa que
   // el lector no llegó a correr — clave de Anthropic ausente o inválida, modelo
@@ -719,7 +772,7 @@ async function loadPayment(paymentId: string) {
   const admin = createAdminSupabase();
   const { data } = await admin
     .from("order_payments")
-    .select("id,order_id,store_id,kind,validation_status,operation_number,vision")
+    .select("id,order_id,store_id,kind,validation_status,operation_number,vision,notes")
     .eq("id", paymentId)
     .maybeSingle();
   return data as
@@ -731,16 +784,20 @@ async function loadPayment(paymentId: string) {
         validation_status: string;
         operation_number: string | null;
         vision: unknown;
+        notes: string | null;
       }
     | null;
 }
 
 /** Marca un pago como validado. Es lo que habilita la clave, así que va aparte. */
 export async function validatePayment(paymentId: string): Promise<PaymentActionState> {
-  const perms = await getMasterPermissions();
-  if (!perms.can("shalom.validate_payment")) return { error: "Tu rol no permite validar pagos." };
   const payment = await loadPayment(paymentId);
   if (!payment) return { error: "Pago no encontrado." };
+  const ctx = await authorizeOrder(payment.order_id);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!(await hasOrgPermission(ctx.orgId, "payments.validate"))) {
+    return { error: "No estas autorizado para validar pagos." };
+  }
   // Sin nº de operación no hay forma de garantizar que este mismo Yape no se
   // use en otro pedido: el índice único no puede actuar sobre un nulo. Es la
   // condición que cierra el hueco de la captura recortada.
@@ -760,9 +817,6 @@ export async function validatePayment(paymentId: string): Promise<PaymentActionS
         "Grupo GF S.A.C. · 930 555 309. Revisa la imagen y rechaza el comprobante si fue enviado a otra cuenta.",
     };
   }
-  const ctx = await authorizeOrder(payment.order_id);
-  if (!ctx) return { error: "Sin acceso a este pedido." };
-
   const admin = createAdminSupabase();
   const { error } = await admin
     .from("order_payments")
@@ -786,21 +840,71 @@ export async function validatePayment(paymentId: string): Promise<PaymentActionS
   });
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
+  revalidatePath(PAYMENT_REVIEW_PATH);
   return { notice: "Pago validado." };
+}
+
+/**
+ * Separa una duda de un rechazo definitivo. Una observación continúa visible
+ * en la bandeja financiera hasta que alguien corrija el dato o tome la decisión.
+ */
+export async function observePayment(
+  paymentId: string,
+  reason: string,
+): Promise<PaymentActionState> {
+  const motive = reason.trim();
+  if (!motive) return { error: "Indica qué debe revisarse." };
+  const payment = await loadPayment(paymentId);
+  if (!payment) return { error: "Pago no encontrado." };
+  const ctx = await authorizeOrder(payment.order_id);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!(await hasOrgPermission(ctx.orgId, "payments.validate"))) {
+    return { error: "No estas autorizado para validar pagos." };
+  }
+
+  const admin = createAdminSupabase();
+  const notes = [payment.notes?.trim(), `Observación: ${motive}`].filter(Boolean).join("\n");
+  const { error } = await admin
+    .from("order_payments")
+    .update({
+      validation_status: "revision_admin",
+      validated_by: null,
+      validated_at: null,
+      notes,
+    })
+    .eq("id", paymentId);
+  if (error) return { error: error.message };
+
+  await admin.from("order_events").insert({
+    store_id: ctx.storeId,
+    order_id: payment.order_id,
+    kind: "payment",
+    actor: ctx.userId,
+    source: "manual",
+    previous_status: payment.validation_status,
+    new_status: "revision_admin",
+    reason: motive,
+    note: `Yape de ${payment.kind} enviado a observación.`,
+  });
+  await recomputeOrderMasterSafe(admin, [payment.order_id]);
+  revalidatePath(MASTER_PATH);
+  revalidatePath(PAYMENT_REVIEW_PATH);
+  return { notice: "Pago enviado a Observados." };
 }
 
 export async function rejectPayment(
   paymentId: string,
   reason: string,
 ): Promise<PaymentActionState> {
-  const perms = await getMasterPermissions();
-  if (!perms.can("shalom.validate_payment")) return { error: "Tu rol no permite validar pagos." };
   const motive = reason.trim();
   if (!motive) return { error: "Indica el motivo del rechazo." };
   const payment = await loadPayment(paymentId);
   if (!payment) return { error: "Pago no encontrado." };
   const ctx = await authorizeOrder(payment.order_id);
   if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!(await hasOrgPermission(ctx.orgId, "payments.validate"))) {
+    return { error: "No estas autorizado para validar pagos." };
+  }
 
   const admin = createAdminSupabase();
   // Rechazar NO borra el pago: se conserva con su historial, y su nº de
@@ -830,6 +934,7 @@ export async function rejectPayment(
   });
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
+  revalidatePath(PAYMENT_REVIEW_PATH);
   return { notice: "Pago rechazado." };
 }
 
@@ -1113,6 +1218,7 @@ export async function completePaymentData(
   });
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
+  revalidatePath(PAYMENT_REVIEW_PATH);
   return {
     notice: operation
       ? "Datos completados. El pago ya se puede validar."
@@ -1178,5 +1284,6 @@ export async function overridePaymentValidation(
   }
   await recomputeOrderMasterSafe(admin, affected);
   revalidatePath(MASTER_PATH);
+  revalidatePath(PAYMENT_REVIEW_PATH);
   return { notice: "Corrección registrada." };
 }
