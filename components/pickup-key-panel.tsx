@@ -45,7 +45,7 @@ import {
   type YapeRecipientReading,
 } from "@/lib/yape-recipient";
 import { operationalLabel } from "@/lib/order-status";
-import { documentError } from "@/lib/shalom/draft";
+import { documentError, shalomDraftDocumentToSave } from "@/lib/shalom/draft";
 import type { ShalomAgency, ShalomDocumentType } from "@/lib/shalom/types";
 
 const VOUCHER_BUCKET = "yape-vouchers";
@@ -889,6 +889,25 @@ function VoucherForm({
   /** La operadora ya tocó los campos de Shalom: no rellenar por encima. */
   const shalomTouched = useRef(false);
 
+  // LO QUE EL SERVIDOR CONFIRMÓ, aparte de lo que hay escrito en pantalla.
+  //
+  // Son dos cosas distintas y confundirlas fue el bug: el paso «1. DNI y
+  // agencia» se marcaba hecho con `Boolean(shalomDoc || shalomAgency)` —estado
+  // local— así que el ✓ se encendía al teclear, sin haber tocado la base. Y como
+  // el guardado solo ocurría al registrar el pago, quien rellenaba el DNI y
+  // recargaba la página lo perdía: la pantalla le había dicho que estaba.
+  //
+  // Un indicador que se enciende con lo tecleado vuelve a mentir el día que la
+  // escritura falle, así que ahora refleja esto y no aquello.
+  const [shalomSaved, setShalomSaved] = useState<{
+    document: string | null;
+    terminalId: number | null;
+  }>({ document: null, terminalId: null });
+  const savedRef = useRef(shalomSaved);
+  savedRef.current = shalomSaved;
+  const [shalomSaving, setShalomSaving] = useState(false);
+  const [shalomSaveError, setShalomSaveError] = useState<string | null>(null);
+
   // Pintar lo que YA se apuntó en un pago anterior.
   //
   // `loadShalomOrderDraft` existía desde 0073 —su comentario dice literalmente
@@ -909,6 +928,10 @@ function VoucherForm({
       if (shalomTouched.current) return;
       if (draft.documentType) setShalomDocType(draft.documentType);
       if (draft.document) setShalomDoc(draft.document);
+      setShalomSaved({
+        document: draft.document ?? null,
+        terminalId: draft.destinyTerminalId ?? null,
+      });
       if (draft.destinyTerminalId && draft.destinyTerminalName) {
         // El borrador solo guarda id y nombre, que es lo que `ShalomAgency`
         // exige; el resto son opcionales y solo decoran la ficha.
@@ -957,6 +980,55 @@ function VoucherForm({
       if (agencyTimer.current) clearTimeout(agencyTimer.current);
     };
   }, [shalomAgencyQuery, shalomAgency, storeId]);
+
+  /**
+   * Guarda el borrador de Shalom en cuanto se decide, sin esperar al pago.
+   *
+   * Antes esto solo ocurría dentro del envío del pago, y por tanto el paso 1 no
+   * existía sin el paso 3: quien apuntaba el DNI y la agencia mientras hablaba
+   * con la clienta —que es EXACTAMENTE para lo que está ahí— los perdía si el
+   * comprobante llegaba más tarde.
+   *
+   * EL DOCUMENTO SOLO VIAJA SI ES VÁLIDO. El servidor lo valida con la misma
+   * función que la creación de la guía y rechaza la escritura entera si no pasa;
+   * mandar un DNI a medio teclear impediría guardar la AGENCIA, que no tiene
+   * nada que ver. Si lo escrito todavía no vale, se conserva lo último guardado
+   * en vez de borrarlo — y el propio campo lo guardará al salir de él.
+   */
+  async function persistShalomDraft(over: {
+    document?: string | null;
+    terminalId?: number | null;
+    terminalName?: string | null;
+  }): Promise<void> {
+    const document =
+      over.document !== undefined
+        ? over.document
+        : shalomDraftDocumentToSave(shalomDoc, !shalomDocumentProblem, savedRef.current.document);
+    const terminalId = over.terminalId !== undefined ? over.terminalId : (shalomAgency?.id ?? null);
+    const terminalName =
+      over.terminalName !== undefined ? over.terminalName : (shalomAgency?.nombre ?? null);
+
+    // Nada que decir: ni hay dato nuevo ni hay dato guardado que quitar.
+    if (!document && !terminalId && !savedRef.current.document && !savedRef.current.terminalId) {
+      return;
+    }
+
+    setShalomSaving(true);
+    setShalomSaveError(null);
+    const res = await saveShalomOrderDraft(orderId, {
+      documentType: shalomDocType,
+      document,
+      destinyTerminalId: terminalId,
+      destinyTerminalName: terminalName,
+    });
+    setShalomSaving(false);
+    if ("error" in res && res.error) {
+      // No se toca `shalomSaved`: el ✓ tiene que seguir diciendo la verdad.
+      setShalomSaveError(res.error);
+      return;
+    }
+    setShalomSaved({ document, terminalId });
+  }
 
   function changeDocument(value: string) {
     shalomTouched.current = true;
@@ -1097,16 +1169,26 @@ function VoucherForm({
         onError(res.error);
         return;
       }
-      // Se guarda DESPUÉS del pago y sin condicionarlo: si esto fallara, el
-      // cobro ya quedó registrado, que es lo que no puede perderse.
+      // Red de seguridad. Desde que el paso 1 se guarda solo, esto ya no es la
+      // única oportunidad — cubre el caso de teclear el DNI y darle a registrar
+      // sin salir del campo, que no dispara el `onBlur`.
+      //
+      // Va DESPUÉS del pago y sin condicionarlo: si esto fallara, el cobro ya
+      // quedó registrado, que es lo que no puede perderse.
       if (shalomDoc.trim() || shalomAgency) {
+        const document = shalomDoc.trim() || null;
+        const terminalId = shalomAgency?.id ?? null;
         const pre = await saveShalomOrderDraft(orderId, {
           documentType: shalomDocType,
-          document: shalomDoc.trim() || null,
-          destinyTerminalId: shalomAgency?.id ?? null,
+          document,
+          destinyTerminalId: terminalId,
           destinyTerminalName: shalomAgency?.nombre ?? null,
         });
-        if ("error" in pre) onError(`El pago se registró, pero los datos de Shalom no: ${pre.error}`);
+        if ("error" in pre && pre.error) {
+          onError(`El pago se registró, pero los datos de Shalom no: ${pre.error}`);
+        } else {
+          setShalomSaved({ document, terminalId });
+        }
       }
 
       onNotice(res.notice ?? null);
@@ -1119,11 +1201,10 @@ function VoucherForm({
       setReadNotice(null);
       setReadWarning(null);
       setRecipientCheck(null);
-      setShalomDoc("");
+      // El DNI y la agencia NO se limpian: son del PEDIDO, no de este pago. Se
+      // limpiaban porque solo existían como carga del formulario; ahora están
+      // guardados y siguen sirviendo para la guía y para el siguiente cobro.
       setDocumentNotice(null);
-      setShalomAgencyQuery("");
-      setShalomAgency(null);
-      setShalomAgencies([]);
       onRegistered();
     } finally {
       setBusy(false);
@@ -1140,7 +1221,8 @@ function VoucherForm({
       </div>
       <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
         {[
-          ["1", "DNI y agencia", Boolean(shalomDoc || shalomAgency)],
+          // Lo GUARDADO, no lo tecleado: ver `shalomSaved`.
+          ["1", "DNI y agencia", Boolean(shalomSaved.document || shalomSaved.terminalId)],
           ["2", "Comprobante", Boolean(file)],
           ["3", "Revisar y registrar", Boolean(readNotice)],
         ].map(([step, label, done]) => (
@@ -1221,8 +1303,27 @@ function VoucherForm({
           1. DNI y agencia Shalom <span className="font-normal text-slate-500">(opcional)</span>
         </summary>
         <p className="mt-2 text-xs text-slate-400">
-          Completa primero estos datos si el cliente recogerá por Shalom. Quedarán listos para crear la guía.
+          Completa primero estos datos si el cliente recogerá por Shalom. Se guardan solos y quedan
+          listos para crear la guía, aunque el comprobante llegue después.
         </p>
+        {/* El guardado ocurre solo, así que tiene que VERSE: una escritura
+            silenciosa que falla es indistinguible de una que funcionó, y eso es
+            justo lo que hacía perder el DNI sin que nadie se enterara. */}
+        {(shalomSaving || shalomSaveError || shalomSaved.document || shalomSaved.terminalId) && (
+          <p
+            className={cn(
+              "mt-1 text-xs font-medium",
+              shalomSaveError ? "text-red-600" : shalomSaving ? "text-slate-500" : "text-emerald-600",
+            )}
+            aria-live="polite"
+          >
+            {shalomSaveError
+              ? `No se pudo guardar: ${shalomSaveError}`
+              : shalomSaving
+                ? "Guardando…"
+                : `✓ Guardado${shalomSaved.document ? ` · ${shalomSaved.document}` : ""}`}
+          </p>
+        )}
         <div className="mt-2 flex flex-wrap gap-2">
           <select
             value={shalomDocType}
@@ -1243,6 +1344,9 @@ function VoucherForm({
               <input
                 value={shalomDoc}
                 onChange={(e) => changeDocument(e.target.value)}
+                // Al salir del campo, no en cada tecla: un DNI a medio escribir
+                // no es una decisión, y el servidor lo rechazaría igual.
+                onBlur={() => void persistShalomDraft({})}
                 inputMode={shalomDocType === "CE" ? "text" : "numeric"}
                 maxLength={shalomDocType === "DNI" ? 8 : shalomDocType === "RUC" ? 11 : 20}
                 placeholder={
@@ -1310,6 +1414,8 @@ function VoucherForm({
                   shalomTouched.current = true;
                   setShalomAgency(null);
                   setShalomAgencyQuery("");
+                  // Quitarla también se guarda: si no, recargar la resucitaría.
+                  void persistShalomDraft({ terminalId: null, terminalName: null });
                 }}
                 className="shrink-0 text-xs font-medium text-emerald-800 underline"
               >
@@ -1346,6 +1452,11 @@ function VoucherForm({
                           setShalomAgency(agency);
                           setShalomAgencyQuery(agency.nombre);
                           setShalomAgencies([]);
+                          // Elegirla ES la decisión: se guarda aquí, no al pagar.
+                          void persistShalomDraft({
+                            terminalId: agency.id,
+                            terminalName: agency.nombre,
+                          });
                         }}
                         className="block w-full rounded-lg px-3 py-2 text-left hover:bg-brand-50"
                       >
