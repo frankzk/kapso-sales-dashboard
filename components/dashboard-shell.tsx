@@ -18,6 +18,7 @@ export function DashboardShell({
   userEmail,
   roleLabel,
   yapeAlertsEnabled,
+  canValidatePayments,
 }: {
   children: ReactNode;
   isVendedoraOnly: boolean;
@@ -25,6 +26,7 @@ export function DashboardShell({
   userEmail: string | null;
   roleLabel: string;
   yapeAlertsEnabled: boolean;
+  canValidatePayments: boolean;
 }) {
   const pathname = usePathname();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
@@ -48,6 +50,7 @@ export function DashboardShell({
         signOut={signOut}
         userEmail={userEmail}
         roleLabel={roleLabel}
+        canValidatePayments={canValidatePayments}
         pendingHref={routePending ? pendingHref : null}
         onNavigate={setPendingHref}
       />

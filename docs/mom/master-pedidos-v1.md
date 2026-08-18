@@ -1648,6 +1648,20 @@ dentro de un pedido. La vista aprobada tendrá tres columnas visibles:
 y solo se consulta mediante búsqueda o filtros, para no renderizar una cola
 histórica innecesariamente larga.
 
+La bandeja vive en **Finanzas → Validar pagos** y se limita a las tiendas de las
+organizaciones donde el usuario tiene `payments.validate`. Cada comprobante
+muestra el pedido, cliente, tienda, tipo de pago, monto, operación, fecha,
+cuenta receptora leída, evidencia y progreso acumulado del pedido.
+
+- `Pendientes`: `pendiente_revision`, ordenados del más antiguo al más reciente.
+- `Observados`: `posible_duplicado`, `info_incompleta` o `revision_admin`.
+- `Validados hoy`: pagos `validado` durante el día calendario de Lima.
+- `Observar` exige motivo y mueve el comprobante a `revision_admin`.
+- `Rechazar` es una decisión definitiva desde Observados. No borra el pago: sale
+  de la cola activa y queda preservado en el expediente y sus eventos.
+- `Validar` exige número de operación y bloquea una cuenta receptora incompatible
+  con Grupo GF S.A.C. / terminación 309.
+
 Mientras Kapta y el Excel convivan, validar un pago deja el comprobante listo
 para continuar y registra actor y fecha, pero **no cambia por sí solo la
 macroetapa ni marca el pedido como pagado en Shopify**. Esas automatizaciones se

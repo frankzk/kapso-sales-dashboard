@@ -2,13 +2,15 @@ import { redirect } from "next/navigation";
 import { getCurrentUser, getUserRoleSummary } from "@/lib/access";
 import { signOut } from "./actions";
 import { DashboardShell } from "@/components/dashboard-shell";
+import { canValidatePaymentsAnywhere } from "@/lib/payment-review-access";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const [{ isVendedoraOnly, isRiderOnly, roles }, user] = await Promise.all([
+  const [{ isVendedoraOnly, isRiderOnly, roles }, user, canValidatePayments] = await Promise.all([
     getUserRoleSummary(),
     getCurrentUser(),
+    canValidatePaymentsAnywhere(),
   ]);
   // El motorizado entra al panel por costumbre o por un enlace viejo: se le
   // manda a su ruta en vez de enseñarle un panel al que RLS le vaciaría entero.
@@ -26,6 +28,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       userEmail={user?.email ?? null}
       roleLabel={roleLabel}
       yapeAlertsEnabled={roles.includes("vendedora")}
+      canValidatePayments={canValidatePayments}
     >
       {children}
     </DashboardShell>
