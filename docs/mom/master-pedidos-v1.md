@@ -2198,6 +2198,15 @@ recoge; antes no lo recogía nadie.
 - Olva no se crea con menos de S/ 30 validados aunque el navegador sea alterado.
 - Dos salidas del mismo pedido reciben QR y código `Sxx` diferentes.
 - Con una salida activa, la salida adicional exige una justificación auditada.
+- **Una salida «por definir» no cuenta como salida que estorba.** Crear la guía
+  del courier la rellena en vez de abrir otra, así que la mesa no advierte de una
+  salida adicional que no se va a crear: nombra la salida —`KP128892-S01`— y dice
+  que se le escribirá el courier encima. El aviso de justificación auditada se
+  reserva para las salidas que sí obligarían a un segundo paquete, y vuelve a
+  aparecer en cuanto la caja deja de ser rellenable —custodia transferida al
+  motorizado, o guía emitida ya por el courier—, porque entonces sí se crea una
+  nueva. Con varias por definir se nombra la de consecutivo más alto, que es la
+  que se rellena y la caja que el almacén tiene delante.
 - La vía de contingencia de Shalom («Ya la creé en Shalom Pro») rechaza el pedido
   que ya tiene una salida viva, igual que la vía API. Se salta los frenos del
   API —para eso existe— pero no este: ahí el problema no es la llamada, es que

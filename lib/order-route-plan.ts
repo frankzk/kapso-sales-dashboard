@@ -1,5 +1,10 @@
 import type { OperationKind } from "@/lib/order-macro-stage";
-import { MAX_OUTPUTS_PER_ORDER, canRepeatCourier } from "@/lib/shipment-output";
+import {
+  MAX_OUTPUTS_PER_ORDER,
+  canRepeatCourier,
+  isFillableRouteOutput,
+  pickFillableRouteOutput,
+} from "@/lib/shipment-output";
 
 export type RouteKey =
   | "aliclik"
@@ -26,6 +31,20 @@ export interface RouteOutputSnapshot {
   shortCode?: string | null;
   /** Estado del flujo de agencia, que es lo que el courier reporta. */
   pickupState?: string | null;
+  /**
+   * Los tres campos que faltaban para saber si la salida es RELLENABLE.
+   *
+   * Sin ellos la mesa avisaba «una salida adicional exige motivo» sobre una
+   * salida «por definir» a la que crear la guía no le añade nada: se la escribe
+   * encima. El aviso describía el comportamiento anterior al relleno y asustaba
+   * justo en el caso que ya no tiene problema.
+   */
+  createdVia?: string | null;
+  custodyTransferredAt?: string | null;
+  /** `KP128892-S01`, para poder NOMBRAR la salida que se va a rellenar. */
+  outputCode?: string | null;
+  /** Decide cuál se rellena cuando hay varias por definir: la más reciente. */
+  outputNumber?: number | null;
 }
 
 /**
@@ -137,6 +156,34 @@ function courierKey(value: string): RouteKey | null {
 function isActive(output: RouteOutputSnapshot): boolean {
   if (output.custodyState === "devuelto") return false;
   return ["pendiente", "en_ruta", "por_preparar"].includes(output.deliveryStatus);
+}
+
+/**
+ * ¿Esta salida se rellenará al crear la guía?
+ *
+ * Traduce el snapshot en camelCase a la fila que esperan los predicados, y
+ * DELEGA. Reescribir aquí las condiciones sería tener dos definiciones de
+ * «rellenable»: el día que una cambie, la mesa avisaría de una cosa y el
+ * servidor haría otra — y quien arma la caja se fía del aviso.
+ */
+function asOutputRow(output: RouteOutputSnapshot) {
+  return {
+    courier: output.courier,
+    created_via: output.createdVia ?? null,
+    delivery_status: output.deliveryStatus,
+    custody_state: output.custodyState ?? null,
+    custody_transferred_at: output.custodyTransferredAt ?? null,
+    output_number: output.outputNumber ?? null,
+    snapshot: output,
+  };
+}
+
+function isFillableSnapshot(output: RouteOutputSnapshot): boolean {
+  return isFillableRouteOutput(asOutputRow(output));
+}
+
+function pickFillableSnapshot(outputs: RouteOutputSnapshot[]): RouteOutputSnapshot | null {
+  return pickFillableRouteOutput(outputs.map(asOutputRow))?.snapshot ?? null;
 }
 
 function limaMinute(now: Date): number {
@@ -303,10 +350,28 @@ function swaypCandidate(input: OrderRoutePlanInput, recommended: boolean): Route
 export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan {
   const operation = input.operation;
   const active = input.outputs.filter(isActive);
+  // Una salida «por definir» no cuenta como salida que estorba: crear la guía
+  // del courier la RELLENA en vez de abrir otra (lib/route-output-fill.ts), así
+  // que ni exige motivo ni gasta una del presupuesto de cinco. Separarlas es lo
+  // que evita advertir de un problema que ya no existe.
+  const fillable = active.filter(isFillableSnapshot);
+  const blocking = active.filter((o) => !isFillableSnapshot(o));
   const warnings: string[] = [];
-  if (active.length > 0) {
+  if (blocking.length > 0) {
     warnings.push(
-      `${active.length} salida${active.length === 1 ? "" : "s"} sigue${active.length === 1 ? "" : "n"} activa${active.length === 1 ? "" : "s"}. Una salida adicional exige motivo y seguimiento independiente.`,
+      `${blocking.length} salida${blocking.length === 1 ? "" : "s"} sigue${blocking.length === 1 ? "" : "n"} activa${blocking.length === 1 ? "" : "s"}. Una salida adicional exige motivo y seguimiento independiente.`,
+    );
+  }
+  if (fillable.length > 0) {
+    // Se nombra la que de verdad se va a rellenar —la de consecutivo más alto,
+    // misma regla que `pickFillableRouteOutput`— porque decir «hay una salida
+    // por definir» con tres en pantalla no dice a cuál le va a caer la guía.
+    const target = pickFillableSnapshot(fillable);
+    const name = target?.outputCode ? `La salida ${target.outputCode}` : "La salida";
+    warnings.push(
+      fillable.length === 1
+        ? `${name} está por definir: al crear la guía se le escribe el courier encima, sin abrir otra.`
+        : `Hay ${fillable.length} salidas por definir. Al crear la guía se escribe sobre ${target?.outputCode ?? "la más reciente"}, sin abrir otra.`,
     );
   }
   if (input.outputs.length >= MAX_OUTPUTS_PER_ORDER) {

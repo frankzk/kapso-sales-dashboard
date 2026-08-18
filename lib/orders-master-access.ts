@@ -592,6 +592,13 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
         guideCode: guide.guide_code,
         shortCode: guide.shalom_codigo ?? null,
         pickupState: guide.pickup_state,
+        // Para distinguir la salida «por definir» —que la guía RELLENA— de una
+        // que de verdad estorba. Sin esto la mesa advertía de una salida
+        // adicional que no se va a crear.
+        createdVia: guide.created_via ?? null,
+        custodyTransferredAt: guide.custody_transferred_at ?? null,
+        outputCode: guide.output_code ?? null,
+        outputNumber: guide.output_number ?? null,
       })),
     }),
   };
