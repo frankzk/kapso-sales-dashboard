@@ -43,6 +43,7 @@ import {
 import type { OrderMasterRow } from "@/lib/types";
 
 const MASTER_PATH = "/dashboard/pedidos";
+const PAYMENT_REVIEW_PATH = "/dashboard/pagos";
 /** Los comprobantes llevan datos bancarios del cliente: bucket privado. */
 const VOUCHER_BUCKET = "yape-vouchers";
 /** Una captura de móvil no pesa más que esto; corta las subidas absurdas. */
@@ -709,6 +710,7 @@ export async function registerPayment(
   });
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
+  revalidatePath(PAYMENT_REVIEW_PATH);
 
   // `vision.ok === false` NO significa "la imagen no se entiende": significa que
   // el lector no llegó a correr — clave de Anthropic ausente o inválida, modelo
@@ -770,7 +772,7 @@ async function loadPayment(paymentId: string) {
   const admin = createAdminSupabase();
   const { data } = await admin
     .from("order_payments")
-    .select("id,order_id,store_id,kind,validation_status,operation_number,vision")
+    .select("id,order_id,store_id,kind,validation_status,operation_number,vision,notes")
     .eq("id", paymentId)
     .maybeSingle();
   return data as
@@ -782,6 +784,7 @@ async function loadPayment(paymentId: string) {
         validation_status: string;
         operation_number: string | null;
         vision: unknown;
+        notes: string | null;
       }
     | null;
 }
@@ -837,7 +840,56 @@ export async function validatePayment(paymentId: string): Promise<PaymentActionS
   });
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
+  revalidatePath(PAYMENT_REVIEW_PATH);
   return { notice: "Pago validado." };
+}
+
+/**
+ * Separa una duda de un rechazo definitivo. Una observación continúa visible
+ * en la bandeja financiera hasta que alguien corrija el dato o tome la decisión.
+ */
+export async function observePayment(
+  paymentId: string,
+  reason: string,
+): Promise<PaymentActionState> {
+  const motive = reason.trim();
+  if (!motive) return { error: "Indica qué debe revisarse." };
+  const payment = await loadPayment(paymentId);
+  if (!payment) return { error: "Pago no encontrado." };
+  const ctx = await authorizeOrder(payment.order_id);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!(await hasOrgPermission(ctx.orgId, "payments.validate"))) {
+    return { error: "No estas autorizado para validar pagos." };
+  }
+
+  const admin = createAdminSupabase();
+  const notes = [payment.notes?.trim(), `Observación: ${motive}`].filter(Boolean).join("\n");
+  const { error } = await admin
+    .from("order_payments")
+    .update({
+      validation_status: "revision_admin",
+      validated_by: null,
+      validated_at: null,
+      notes,
+    })
+    .eq("id", paymentId);
+  if (error) return { error: error.message };
+
+  await admin.from("order_events").insert({
+    store_id: ctx.storeId,
+    order_id: payment.order_id,
+    kind: "payment",
+    actor: ctx.userId,
+    source: "manual",
+    previous_status: payment.validation_status,
+    new_status: "revision_admin",
+    reason: motive,
+    note: `Yape de ${payment.kind} enviado a observación.`,
+  });
+  await recomputeOrderMasterSafe(admin, [payment.order_id]);
+  revalidatePath(MASTER_PATH);
+  revalidatePath(PAYMENT_REVIEW_PATH);
+  return { notice: "Pago enviado a Observados." };
 }
 
 export async function rejectPayment(
@@ -882,6 +934,7 @@ export async function rejectPayment(
   });
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
+  revalidatePath(PAYMENT_REVIEW_PATH);
   return { notice: "Pago rechazado." };
 }
 
@@ -1165,6 +1218,7 @@ export async function completePaymentData(
   });
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
+  revalidatePath(PAYMENT_REVIEW_PATH);
   return {
     notice: operation
       ? "Datos completados. El pago ya se puede validar."
@@ -1230,5 +1284,6 @@ export async function overridePaymentValidation(
   }
   await recomputeOrderMasterSafe(admin, affected);
   revalidatePath(MASTER_PATH);
+  revalidatePath(PAYMENT_REVIEW_PATH);
   return { notice: "Corrección registrada." };
 }

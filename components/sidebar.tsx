@@ -36,9 +36,9 @@ interface NavItem {
   icon: Icon;
 }
 
-function navItems(isVendedoraOnly: boolean): NavItem[] {
-  if (isVendedoraOnly)
-    return [
+function navItems(isVendedoraOnly: boolean, canValidatePayments: boolean): NavItem[] {
+  if (isVendedoraOnly) {
+    const items: NavItem[] = [
       { href: "/dashboard/leads", label: "Leads", icon: IconChat },
       { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
       { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
@@ -49,7 +49,12 @@ function navItems(isVendedoraOnly: boolean): NavItem[] {
       // vendedora nunca ve los resultados del resto del equipo.
       { href: "/dashboard/productividad", label: "Mi productividad", icon: IconHeadset },
     ];
-  return [
+    if (canValidatePayments) {
+      items.splice(2, 0, { href: "/dashboard/pagos", label: "Validar pagos", icon: IconMoney });
+    }
+    return items;
+  }
+  const items: NavItem[] = [
     { href: "/dashboard", label: "Consolidado", icon: IconGrid },
     { href: "/dashboard/leads", label: "Leads", icon: IconChat },
     { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
@@ -68,6 +73,10 @@ function navItems(isVendedoraOnly: boolean): NavItem[] {
     { href: "/dashboard/team", label: "Equipo", icon: IconUsers },
     { href: "/dashboard/stores/new", label: "Conectar tienda", icon: IconPlug },
   ];
+  if (canValidatePayments) {
+    items.splice(3, 0, { href: "/dashboard/pagos", label: "Validar pagos", icon: IconMoney });
+  }
+  return items;
 }
 
 const SIDEBAR_COLLAPSED_KEY = "kapta.sidebar.collapsed";
@@ -88,6 +97,7 @@ export function Sidebar({
   signOut,
   userEmail,
   roleLabel,
+  canValidatePayments,
   pendingHref,
   onNavigate,
 }: {
@@ -95,13 +105,14 @@ export function Sidebar({
   signOut: () => void | Promise<void>;
   userEmail?: string | null;
   roleLabel: string;
+  canValidatePayments: boolean;
   pendingHref?: string | null;
   onNavigate?: (href: string) => void;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
-  const items = navItems(isVendedoraOnly);
+  const items = navItems(isVendedoraOnly, canValidatePayments);
   const pendingPath = pendingHref?.split("?", 1)[0] ?? null;
   const displayPath = pendingPath ?? pathname;
 

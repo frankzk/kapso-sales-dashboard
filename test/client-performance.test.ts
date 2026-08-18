@@ -23,6 +23,7 @@ describe("panel prefetch", () => {
   it("removes query strings and dynamic ids from reported routes", () => {
     expect(sanitizeDashboardPath("/dashboard/leads?store=private-id")).toBe("/dashboard/leads");
     expect(sanitizeDashboardPath("/dashboard/pedidos?view=devuelto")).toBe("/dashboard/pedidos");
+    expect(sanitizeDashboardPath("/dashboard/pagos?order=private-id")).toBe("/dashboard/pagos");
     expect(sanitizeDashboardPath("/dashboard/4c6522f9-c775/settings")).toBe("/dashboard/other");
   });
 
