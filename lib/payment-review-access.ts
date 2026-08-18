@@ -109,14 +109,16 @@ export async function getPaymentReviewBoard(): Promise<PaymentReviewBoardData | 
         .select(columns)
         .in("store_id", storeIds)
         .in("validation_status", [...PAYMENT_PENDING_STATUSES])
-        .order("registered_at", { ascending: true })
+        .order("paid_at", { ascending: false, nullsFirst: false })
+        .order("registered_at", { ascending: false })
         .limit(LANE_LIMIT),
       sb
         .from("order_payments")
         .select(columns)
         .in("store_id", storeIds)
         .in("validation_status", [...PAYMENT_OBSERVED_STATUSES])
-        .order("registered_at", { ascending: true })
+        .order("paid_at", { ascending: false, nullsFirst: false })
+        .order("registered_at", { ascending: false })
         .limit(LANE_LIMIT),
       sb
         .from("order_payments")

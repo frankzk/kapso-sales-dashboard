@@ -366,7 +366,7 @@ export function PaymentReviewBoard({ data }: { data: PaymentReviewBoardData }) {
                 )}
                 {!deferredSearch && data.truncated[lane.key] && (
                   <p className="px-2 py-1 text-center text-xs text-slate-500">
-                    Se muestran los {items.length} más antiguos de esta cola.
+                    Se muestran los {items.length} más recientes de esta cola.
                   </p>
                 )}
               </div>
