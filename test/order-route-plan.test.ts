@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildOrderRoutePlan } from "@/lib/order-route-plan";
 
@@ -238,5 +240,101 @@ describe("una salida viva bloquea repetir ese mismo courier", () => {
       outputs: [{ id: "g1", courier: "shalom", deliveryStatus: "pendiente" }],
     });
     expect(plan.candidates.find((route) => route.key === "olva")?.availability).not.toBe("blocked");
+  });
+});
+
+describe("el aviso de la mesa distingue la salida que estorba de la que se rellena", () => {
+  // POR QUÉ. Una salida «por definir» no impide nada: crear la guía del courier
+  // la RELLENA en vez de abrir otra. El aviso decía «una salida adicional exige
+  // motivo y seguimiento independiente» sobre ella — describía el mundo anterior
+  // al relleno y frenaba justo en el caso que ya no tiene problema. Pasó en
+  // #KP128892: había que preguntar si crear en Tanders duplicaba la salida.
+
+  const porDefinir = (over: Record<string, unknown> = {}) => ({
+    id: "s1",
+    courier: "por_definir",
+    createdVia: "mom_manual_route",
+    deliveryStatus: "pendiente",
+    custodyState: "empresa",
+    custodyTransferredAt: null,
+    outputCode: "KP128892-S01",
+    outputNumber: 1,
+    ...over,
+  });
+
+  const avisos = (outputs: Parameters<typeof buildOrderRoutePlan>[0]["outputs"]) =>
+    buildOrderRoutePlan({ operation: "lima", outputs }).warnings.join(" ");
+
+  it("una salida por definir NO advierte de salida adicional", () => {
+    const texto = avisos([porDefinir()]);
+    expect(texto).not.toContain("salida adicional");
+    expect(texto).toContain("KP128892-S01");
+    expect(texto).toContain("sin abrir otra");
+  });
+
+  it("una guía de courier viva SÍ sigue advirtiendo", () => {
+    // El aviso no desaparece: sigue siendo verdad cuando hay un paquete en la
+    // calle, que es para lo que se escribió.
+    const texto = avisos([{ id: "g1", courier: "tanders", deliveryStatus: "en_ruta" }]);
+    expect(texto).toContain("salida adicional exige motivo");
+  });
+
+  it("con las dos, cuenta solo la que estorba", () => {
+    // Decir «2 salidas siguen activas» mezclaría una caja en la calle con una
+    // caja en el almacén esperando courier. Solo una de las dos exige motivo.
+    const texto = avisos([porDefinir(), { id: "g1", courier: "tanders", deliveryStatus: "en_ruta" }]);
+    expect(texto).toContain("1 salida sigue activa");
+    expect(texto).toContain("KP128892-S01");
+  });
+
+  it("si la caja ya salió con el motorizado, vuelve a advertir", () => {
+    // Ahí sí se creará una salida nueva: hay un paquete en la calle y rellenar
+    // su fila lo borraría del seguimiento.
+    for (const salida of [
+      porDefinir({ custodyTransferredAt: "2026-08-18T10:00:00Z" }),
+      porDefinir({ custodyState: "motorizado" }),
+    ]) {
+      const texto = avisos([salida]);
+      expect(texto).toContain("salida adicional exige motivo");
+      expect(texto).not.toContain("sin abrir otra");
+    }
+  });
+
+  it("nombra la salida de consecutivo más alto, que es la que se rellena", () => {
+    // Misma regla que `pickFillableRouteOutput`: es la última creada, o sea la
+    // caja que el almacén tiene delante. Nombrar otra mandaría a rotular mal.
+    const texto = avisos([
+      porDefinir({ id: "a", outputCode: "KP128892-S01", outputNumber: 1 }),
+      porDefinir({ id: "b", outputCode: "KP128892-S03", outputNumber: 3 }),
+      porDefinir({ id: "c", outputCode: "KP128892-S02", outputNumber: 2 }),
+    ]);
+    expect(texto).toContain("3 salidas por definir");
+    expect(texto).toContain("KP128892-S03");
+  });
+
+  it("sin código de salida el aviso sigue siendo legible", () => {
+    expect(avisos([porDefinir({ outputCode: null })])).toContain("La salida está por definir");
+  });
+
+  it("una salida sin `createdVia` no se da por rellenable", () => {
+    // Es el caso de las guías que emite el courier del otro lado: escribirles
+    // encima dejaría su guía viva allá y otra distinta acá. Ante la duda, avisa.
+    const texto = avisos([porDefinir({ createdVia: null })]);
+    expect(texto).toContain("salida adicional exige motivo");
+  });
+
+  it("el Master pasa de verdad los cuatro campos que deciden el aviso", () => {
+    // Las pruebas de arriba llaman a `buildOrderRoutePlan` directamente, así que
+    // no verían que el ÚNICO llamador real dejara de mandar `createdVia`. Y no
+    // rompería nada visible: los campos son opcionales, la salida dejaría de
+    // parecer rellenable y el aviso volvería a advertir de una salida adicional
+    // que no se va a crear — el bug que esto arregla, reaparecido en silencio.
+    const source = readFileSync(resolve(process.cwd(), "lib/orders-master-access.ts"), "utf8");
+    const start = source.indexOf("routePlan: buildOrderRoutePlan({");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const block = source.slice(start, source.indexOf("})),", start));
+    for (const field of ["createdVia", "custodyTransferredAt", "outputCode", "outputNumber"]) {
+      expect(block, field).toContain(`${field}:`);
+    }
   });
 });
