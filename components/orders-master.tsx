@@ -117,6 +117,7 @@ import {
   dispatchState,
   priorCourier,
   priorOutcome,
+  needsConfirmationBrief,
   priorTiming,
   sameProducts,
   type PaymentRequirement,
@@ -2433,25 +2434,6 @@ function OrderDrawer({
     ? shopifyOrderAdminUrl(storeDomain(row.store_id), row.shopify_order_id)
     : null;
 
-  // La ficha del §8 se carga aparte del detalle —recorre el historial del
-  // teléfono y la matriz de tarifas— y SOLO en confirmación, que es donde la
-  // sección se aplica. Cargarla en cada apertura pondría una consulta más sobre
-  // pedidos ya entregados, donde no cambia ninguna decisión.
-  const inConfirmation = detail?.row.macro_stage === "por_confirmar";
-  const [brief, setBrief] = useState<OrderConfirmationBrief | null>(null);
-  useEffect(() => {
-    if (!inConfirmation) {
-      setBrief(null);
-      return;
-    }
-    let alive = true;
-    void loadConfirmationBrief(orderId).then((res) => {
-      if (alive && "brief" in res) setBrief(res.brief);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [orderId, inConfirmation]);
   // El plan de rutas es quien sabe si Aliclik atiende a este pedido. Se lee de
   // ahí, no se vuelve a decidir: una segunda regla equivalente es una regla que
   // tarde o temprano deja de coincidir con la primera. `blocked` también cuenta:
@@ -2462,6 +2444,34 @@ function OrderDrawer({
       (candidate) => candidate.action === "aliclik" && candidate.availability !== "blocked",
     ),
   );
+
+  // La ficha del §8 se carga aparte del detalle —recorre el historial del
+  // teléfono y la matriz de tarifas— así que no se pide en cada apertura: sobre
+  // un pedido ya entregado no cambia ninguna decisión.
+  //
+  // PERO NO SOLO EN CONFIRMACIÓN. La regla de riesgo se APLICA al crear la guía,
+  // que ocurre en Preparación, después de confirmar. Cargando la ficha solo en
+  // confirmación, el panel de Aliclik recibía `riskRequirement: "ninguno"` y no
+  // dibujaba el campo de justificación, mientras `createAliclikGuide` —que sí se
+  // trae la ficha él mismo— rechazaba la creación pidiendo esa justificación por
+  // escrito. La regla se aplicaba donde la salida no existía: el pedido quedaba
+  // sin forma de avanzar (#KP128958, Juliaca, 17-08-2026).
+  const inConfirmation = detail?.row.macro_stage === "por_confirmar";
+  const wantsBrief = needsConfirmationBrief(detail?.row.macro_stage, aliclikOffered);
+  const [brief, setBrief] = useState<OrderConfirmationBrief | null>(null);
+  useEffect(() => {
+    if (!wantsBrief) {
+      setBrief(null);
+      return;
+    }
+    let alive = true;
+    void loadConfirmationBrief(orderId).then((res) => {
+      if (alive && "brief" in res) setBrief(res.brief);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [orderId, wantsBrief]);
   const paymentPanel = detail
     ? orderPaymentPanelPresentation({
         operation: detail.routePlan.operation,

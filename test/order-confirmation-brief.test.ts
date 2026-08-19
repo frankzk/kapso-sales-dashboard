@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   aliclikRiskGate,
+  needsConfirmationBrief,
   confirmationRisk,
   countLaterOrders,
   dispatchState,
@@ -309,5 +310,29 @@ describe("aliclikRiskGate", () => {
 
   it("sugerir adelanto nunca bloquea", () => {
     expect(aliclikRiskGate("sugerir_adelanto", "sin_pago").allowed).toBe(true);
+  });
+});
+
+describe("needsConfirmationBrief", () => {
+  it("la pide en confirmación, que es donde se lee la ficha", () => {
+    expect(needsConfirmationBrief("por_confirmar", false)).toBe(true);
+  });
+
+  it("y también cuando Aliclik está ofrecido, aunque ya se haya confirmado", () => {
+    // El caso real (#KP128958): pedido en Preparación, con Aliclik disponible.
+    // La exigencia de abono la calcula esta ficha y la APLICA `createAliclikGuide`.
+    // Sin cargarla, el panel recibía «ninguno», no dibujaba el campo de
+    // justificación, y el servidor rechazaba la creación pidiendo justo eso: la
+    // regla se aplicaba donde su salida no existía.
+    expect(needsConfirmationBrief("preparacion", true)).toBe(true);
+  });
+
+  it("no la pide donde su resultado no puede frenar nada", () => {
+    // Sin Aliclik ofrecido y fuera de confirmación no hay decisión que dependa
+    // de ella, y recorrer el historial del teléfono cuesta una consulta.
+    expect(needsConfirmationBrief("finalizado", false)).toBe(false);
+    expect(needsConfirmationBrief("por_cerrar", false)).toBe(false);
+    expect(needsConfirmationBrief(null, false)).toBe(false);
+    expect(needsConfirmationBrief(undefined, false)).toBe(false);
   });
 });
