@@ -409,6 +409,109 @@ describe("resolveOrderState — override manual (§4, §11)", () => {
   });
 });
 
+describe("resolveOrderState — anular en Shopify DESPUÉS del cambio manual", () => {
+  // #KP126722. El 12/08 se marcó «Pendiente · no responde»; después se anuló el
+  // pedido en Shopify —productos eliminados, total 0— y el Master lo siguió
+  // enseñando como Pendiente · Provincia COD: dentro de la cola operativa,
+  // llamable y despachable, por S/ 99 que ya no existían.
+  //
+  // El candado se escribió para que un courier o un cron no pisen el criterio de
+  // una persona. Anular en Shopify TAMBIÉN lo hace una persona, así que entre dos
+  // decisiones humanas manda la más reciente, no la que llegó primero.
+
+  const ANTES = "2026-07-12T15:59:00.000Z";
+  const DESPUES = "2026-07-15T09:00:00.000Z";
+  const pendiente = {
+    general_status: "pendiente" as const,
+    operational_status: null,
+    occurred_at: ANTES,
+  };
+
+  it("la anulación posterior gana al cambio manual", () => {
+    const s = resolveOrderState({
+      order: order({ cancelled_at: DESPUES }),
+      guides: [],
+      events: [],
+      override: pendiente,
+      now: NOW,
+    });
+    expect(s.general).toBe("anulado");
+    expect(s.source).toBe("shopify");
+    expect(s.since).toBe(DESPUES);
+  });
+
+  it("y el candado se suelta: ya no gobierna nadie a mano", () => {
+    // Dejarlo puesto pondría la etiqueta de «cambio manual» sobre un estado que
+    // decidió Shopify, y mandaría a buscar un override que no manda nada.
+    const s = resolveOrderState({
+      order: order({ cancelled_at: DESPUES }),
+      guides: [],
+      events: [],
+      override: pendiente,
+      now: NOW,
+    });
+    expect(s.overrideApplied).toBe(false);
+  });
+
+  it("un cambio manual POSTERIOR a la anulación sigue mandando", () => {
+    // Es el caso legítimo: lo anularon en Shopify por error y alguien lo
+    // reactiva a mano. Invertir la prioridad sin mirar fechas lo rompería.
+    const s = resolveOrderState({
+      order: order({ cancelled_at: ANTES }),
+      guides: [],
+      events: [],
+      override: { general_status: "en_proceso", operational_status: null, occurred_at: DESPUES },
+      now: NOW,
+    });
+    expect(s.general).toBe("en_proceso");
+    expect(s.source).toBe("manual");
+    expect(s.overrideApplied).toBe(true);
+  });
+
+  it("sin anulación, el cambio manual manda como siempre", () => {
+    const s = resolveOrderState({
+      order: order(),
+      guides: [],
+      events: [],
+      override: pendiente,
+      now: NOW,
+    });
+    expect(s.general).toBe("pendiente");
+    expect(s.overrideApplied).toBe(true);
+  });
+
+  it("la anulación no gana un privilegio nuevo: entregado le sigue ganando", () => {
+    // Al ceder el override, el pedido baja por la cadena NORMAL. «Entregado es
+    // pegajoso» va por delante de la anulación para cualquier otro pedido, y
+    // tiene que seguir yendo también acá: el paquete se entregó de verdad, y
+    // anular después es un asiento contable, no un des-entregar.
+    const s = resolveOrderState({
+      order: order({ cancelled_at: DESPUES }),
+      guides: [guide("1", { delivery_status: "entregado", closed_at: "2026-07-06T15:00:00.000Z" })],
+      events: [],
+      override: pendiente,
+      now: NOW,
+    });
+    expect(s.general).toBe("entregado");
+    expect(s.overrideApplied).toBe(false);
+  });
+
+  it("empate exacto: manda el cambio manual", () => {
+    // Solo cede ante una anulación ESTRICTAMENTE posterior. Con el mismo sello
+    // de tiempo no hay forma de saber cuál fue después, y la regla vigente
+    // —gana el override— es la que no sorprende a nadie.
+    const s = resolveOrderState({
+      order: order({ cancelled_at: ANTES }),
+      guides: [],
+      events: [],
+      override: pendiente,
+      now: NOW,
+    });
+    expect(s.general).toBe("pendiente");
+    expect(s.overrideApplied).toBe(true);
+  });
+});
+
 describe("helpers", () => {
   it("currentGuide prefiere una guía activa sobre una congelada", () => {
     const frozen = guide("1", { delivery_status: "transferido", updated_at: "2026-07-09T10:00:00.000Z" });

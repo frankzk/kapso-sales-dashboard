@@ -200,6 +200,15 @@ export interface ResolvedOrderState {
   since: string | null;
   /** Quién decidió el estado: shopify | manual | <courier> | system. */
   source: string;
+  /**
+   * ¿El cambio manual es el que manda? Es lo que congela el estado y dibuja el
+   * candado.
+   *
+   * No es lo mismo que «existe un override»: uno anterior a la anulación en
+   * Shopify deja de aplicarse, y entonces el candado sería una etiqueta sobre un
+   * estado que ya no decidió nadie a mano.
+   */
+  overrideApplied: boolean;
   // Rollup logístico que alimenta las columnas del listado (§14).
   currentCourier: string | null;
   lastCourier: string | null;
@@ -464,10 +473,32 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
     agencyBranch: agencyGuide?.agency_branch ?? null,
     agencyArrivedAt: agencyGuide?.agency_arrived_at ?? null,
     agencyExpiresAt: agencyGuide?.agency_expires_at ?? null,
+    // Falso por defecto: solo la regla 0 lo pone en cierto, y solo cuando el
+    // override es de verdad el que manda. Es lo que dibuja el candado.
+    overrideApplied: false,
   };
 
-  // ── 0. Override manual: un humano decidió, nada automático lo pisa.
-  if (override) {
+  // ── 0. Override manual: un humano decidió, nada AUTOMÁTICO lo pisa.
+  //
+  // Con UNA excepción, y no es un automatismo: anular el pedido en Shopify
+  // también lo hace una persona. Si lo hizo DESPUÉS del cambio manual, la suya
+  // es la decisión vigente — el candado existe para que un courier o un cron no
+  // pisen el criterio de alguien, no para que un criterio del martes gane a otro
+  // del jueves.
+  //
+  // Pasó en #KP126722: el 12/08 se marcó «Pendiente · no responde», luego se
+  // anuló en Shopify —productos eliminados, total 0— y el Master lo siguió
+  // enseñando como Pendiente · Provincia COD. O sea dentro de la cola operativa,
+  // llamable y despachable, por S/ 99 que ya no existían.
+  //
+  // La anulación NO gana un privilegio nuevo: deja de estar tapada. Al ceder, el
+  // pedido baja por la cadena normal, así que «entregado es pegajoso» y «devuelto
+  // exige evidencia» siguen por delante, igual que para cualquier otro pedido
+  // anulado. Se resuelve como si el override no se hubiera escrito.
+  const cancelledAfterOverride = Boolean(
+    override && order.cancelled_at && order.cancelled_at > override.occurred_at,
+  );
+  if (override && !cancelledAfterOverride) {
     return {
       ...rollup,
       general: override.general_status,
@@ -477,6 +508,7 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
           : defaultOperationalFor(override.general_status),
       since: override.occurred_at,
       source: "manual",
+      overrideApplied: true,
     };
   }
 
