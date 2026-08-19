@@ -23,6 +23,31 @@ function coord(value: unknown, limit: number): number | null {
   return n;
 }
 
+/**
+ * La NOTA del pedido, tal como la escribió una persona en Shopify.
+ *
+ * POR QUÉ IMPORTA. Es texto libre, pero en la operación no se usa como adorno:
+ * ahí es donde la asesora apunta lo que Shopify no tiene campo para guardar. El
+ * caso que motivó esto (#KP128879) decía «dni 42771213 shalom SAN JUAN DE
+ * MARCONA» — el documento del destinatario y la agencia de destino, que son
+ * exactamente los dos datos que el modal de Shalom pide a mano porque «el pedido
+ * no los trae». Los traía; nadie los estaba leyendo.
+ *
+ * SE DEVUELVE TAL CUAL, y eso es una decisión, no pereza. Es tentador sacarle el
+ * DNI con una expresión regular y rellenar el campo solo, pero lo escribe una
+ * persona distinta cada vez: «dni 42771213», «DNI: 42771213», «doc 42771213»,
+ * o el número de otra persona que pagó. Una regla así acertaría casi siempre y
+ * fallaría en silencio el resto — y el modo de fallo es emitir una guía a nombre
+ * de quien no es. Se muestra el texto y decide quien mira.
+ *
+ * Vale para las dos formas del payload: REST manda `note` y GraphQL `note`
+ * también, pero se acepta `customAttributes`/`note_attributes` aparte (ver
+ * `noteAttributesToMap`), que es otra cosa y no se mezcla acá.
+ */
+export function shopifyOrderNote(raw: unknown): string | null {
+  return text(record(raw)?.note);
+}
+
 /** Extracts the delivery address from either REST or GraphQL Shopify payloads. */
 export function shopifyShippingAddress(raw: unknown): OrderShippingAddress | null {
   const source = record(raw);

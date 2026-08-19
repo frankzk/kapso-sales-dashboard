@@ -2804,6 +2804,24 @@ function OrderDrawer({
                 </div>
                 <Field label="Costo logístico" value={fmtMoney(detail.row.logistics_cost)} />
               </dl>
+
+              {/* LA NOTA DEL PEDIDO, tal como se escribió en Shopify.
+                  Va FUERA de la rejilla y a ancho completo porque es texto libre
+                  y de largo imprevisible: como un campo más de cuatro columnas se
+                  cortaría justo donde está el dato. `whitespace-pre-wrap` respeta
+                  los saltos de línea que puso quien la escribió.
+                  Solo aparece si hay nota: un bloque vacío enseñaría un hueco
+                  permanente en todos los pedidos que no la usan. */}
+              {detail.shopifyNote && (
+                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/70 p-3">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-800">
+                    Nota del pedido
+                  </p>
+                  <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-800">
+                    {detail.shopifyNote}
+                  </p>
+                </div>
+              )}
             </section>
 
             <div hidden={workspace !== "informacion"} className="order-2 scroll-mt-28">
