@@ -73,6 +73,17 @@ interface StoreReport {
   /** Milisegundos que le tocaron a esta tienda. Se informa porque el reparto es
    *  justo lo que aquí se está arreglando: verlo evita volver a discutirlo. */
   budgetMs: number;
+  /**
+   * La puerta del desfase no pudo mirar. DISTINTO de `requested: 0`.
+   *
+   * Sin esto los dos casos se ven idénticos: «no hay nada desfasado» y «no puedo
+   * comprobar si lo hay» dan el mismo informe en verde, y son opuestos. Pasó de
+   * verdad — la 0123 se desplegó sin aplicar en la base, el RPC no existía, y la
+   * puerta llevaba horas sin detectar nada con el informe impecable.
+   *
+   * Si esto no es null, MIRA LA MIGRACIÓN antes que cualquier otra cosa.
+   */
+  staleDoorError: string | null;
   error: string | null;
 }
 
@@ -107,6 +118,7 @@ async function run(req: NextRequest) {
       failed: 0,
       deferred: 0,
       budgetMs: Math.round(share),
+      staleDoorError: null,
       error: null,
     };
     reports.push(report);
@@ -117,6 +129,7 @@ async function run(req: NextRequest) {
       report.written = done.written;
       report.failed = done.failed ?? 0;
       report.deferred = done.deferred ?? 0;
+      report.staleDoorError = done.staleDoorError ?? null;
     } catch (e) {
       report.error = e instanceof Error ? e.message : String(e);
     }

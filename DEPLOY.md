@@ -41,6 +41,35 @@ This runs `0001_init`, `0002_rollups`, `0003_refunds` and `supabase/policies.sql
 (idempotent). Supabase already provides the `authenticated` / `service_role`
 roles and the `auth` schema, so it just works.
 
+> [!WARNING]
+> **Desplegar NO aplica migraciones.** El `build` es `next build` a secas: no hay
+> `vercel-build`, ni `buildCommand`, ni paso de migración en ninguna parte. Cada
+> migración nueva se aplica **a mano**, con el comando de arriba, y conviene
+> hacerlo **antes** de que salga el código que la necesita — así el despliegue
+> encuentra la base lista en vez de al revés.
+>
+> **Qué pasa si se olvida**, porque pasó el 19-08-2026 con la 0123: el código
+> salió llamando a un RPC que no existía, el barrido del Master atrapó el error y
+> siguió, y la cuarta puerta se quedó horas sin detectar un solo desfase mientras
+> el informe del cron salía impecable. Un trabajo que no puede mirar se parece
+> demasiado a uno que miró y no encontró nada. Desde entonces el informe de
+> `/api/cron/master-reconcile` trae **`staleDoorError`** justo para distinguirlos:
+> si no es `null`, la primera sospecha es una migración sin aplicar.
+>
+> **Y ojo con los índices sobre tablas grandes.** Un `create index` normal bloquea
+> las escrituras de su tabla mientras se construye — instantáneo en el Postgres
+> vacío de CI, nada instantáneo sobre `shipments` en producción. Cuando una
+> migración cree índices ahí, córrelos antes por separado en su forma
+> concurrente, que no bloquea, y luego el fichero completo (los encontrará
+> creados y se los saltará):
+>
+> ```sql
+> create index concurrently if not exists <nombre> on <tabla> (<columnas>);
+> ```
+>
+> `concurrently` no puede ir dentro de una transacción, y por eso las migraciones
+> no lo usan: `db/apply.sql` las aplica en bloque y fallaría.
+
 ## 3. Configure Auth
 
 **Authentication → Providers**
