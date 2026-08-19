@@ -4,6 +4,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import {
   MASTER_PAGE_SIZE,
   getAgencySummaryCached,
+  getConfirmationDueCounts,
   getMasterFacetsCached,
   getOrderMasterMomCounts,
   getOrderMasterPage,
@@ -69,12 +70,17 @@ async function PedidosContent({
   // El Master es consolidado: se consultan TODAS las tiendas accesibles, y el
   // filtro por tienda es uno más, aplicado también en la base.
   const storeIds = stores.map((s) => s.id);
-  const [momCounts, pageData, facets, agency] = await Promise.all([
+  const showConfirmationDue =
+    view === "por_confirmar" && (substage === null || substage === "volver_a_contactar");
+  const [momCounts, pageData, facets, agency, confirmationDueCounts] = await Promise.all([
     getOrderMasterMomCounts(storeIds),
     getOrderMasterPage(storeIds, { view, substage, filters, sortKey: "created", page }),
     // Cacheadas: no dependen de lo que se esté filtrando ni buscando.
     getMasterFacetsCached(storeIds),
     getAgencySummaryCached(storeIds),
+    showConfirmationDue
+      ? getConfirmationDueCounts(storeIds, { substage, filters })
+      : Promise.resolve({ all: 0, vencido: 0, hoy: 0, proximo: 0 }),
   ]);
 
   return (
@@ -84,6 +90,7 @@ async function PedidosContent({
       substage={substage}
       counts={momCounts.stages}
       substageCounts={momCounts.substages}
+      confirmationDueCounts={confirmationDueCounts}
       rows={pageData.rows}
       total={pageData.total}
       page={pageData.page}

@@ -1665,7 +1665,7 @@ organizaciones donde el usuario tiene `payments.validate`. Cada comprobante
 muestra el pedido, cliente, tienda, tipo de pago, monto, operación, fecha,
 cuenta receptora leída, evidencia y progreso acumulado del pedido.
 
-- `Pendientes`: `pendiente_revision`, ordenados del más antiguo al más reciente.
+- `Pendientes`: `pendiente_revision`, ordenados del más reciente al más antiguo.
 - `Observados`: `posible_duplicado`, `info_incompleta` o `revision_admin`.
 - `Validados hoy`: pagos `validado` durante el día calendario de Lima.
 - `Observar` exige motivo y mueve el comprobante a `revision_admin`.
@@ -2275,7 +2275,8 @@ recoge; antes no lo recogía nadie.
 - Llamada, WhatsApp y mensaje del mismo día consumen un solo día de los siete,
   aunque cada intento queda auditado.
 - Un seguimiento exige fecha y nunca hora; la cola distingue vencidos, hoy y
-  próximos.
+  próximos. Cada chip de Fecha pactada muestra el conteo exacto de su grupo
+  sobre todos los pedidos filtrados, no solamente sobre la página visible.
 - `Sin respuesta` y `Se deja mensaje` generan un recordatorio a las dos horas
   laborales dentro de 08:00–22:00 de Lima.
 - El séptimo día sin confirmación crea una tarea manual de revisión en Shopify;

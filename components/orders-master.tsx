@@ -104,6 +104,7 @@ import {
   MASTER_VIEWS,
   type MasterCounts,
   type MasterView,
+  type ConfirmationDueCounts,
   type OrderConfirmationBrief,
   type OrderMasterDetail,
   type TimelineEntry,
@@ -400,6 +401,7 @@ export function OrdersMasterBoard({
   substage,
   counts,
   substageCounts,
+  confirmationDueCounts,
   rows,
   total,
   page,
@@ -422,6 +424,7 @@ export function OrdersMasterBoard({
   substage: MacroSubstage | null;
   counts: MasterCounts;
   substageCounts: Partial<Record<MacroSubstage, number>>;
+  confirmationDueCounts: ConfirmationDueCounts;
   /** UNA página ya filtrada y ordenada por la base. Antes llegaban las ~10.000
    *  filas y se filtraba aquí: eran 13 MB por carga y ~10 s de espera. */
   rows: OrderMasterRow[];
@@ -850,11 +853,11 @@ export function OrdersMasterBoard({
                     Fecha pactada
                   </span>
                   {([
-                    ["", "Todos los plazos"],
-                    ["vencido", "Vencidos"],
-                    ["hoy", "Hoy"],
-                    ["proximo", "Próximos"],
-                  ] as const).map(([value, label]) => (
+                    ["", "Todos los plazos", confirmationDueCounts.all],
+                    ["vencido", "Vencidos", confirmationDueCounts.vencido],
+                    ["hoy", "Hoy", confirmationDueCounts.hoy],
+                    ["proximo", "Próximos", confirmationDueCounts.proximo],
+                  ] as const).map(([value, label, count]) => (
                     <button
                       key={value || "todos"}
                       type="button"
@@ -866,7 +869,7 @@ export function OrdersMasterBoard({
                           : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
                       )}
                     >
-                      {label}
+                      {label} · {count.toLocaleString("es-PE")}
                     </button>
                   ))}
                 </div>

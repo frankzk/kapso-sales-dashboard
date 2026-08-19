@@ -613,6 +613,20 @@ export interface MasterPage {
   pageSize: number;
 }
 
+export interface ConfirmationDueCounts {
+  all: number;
+  vencido: number;
+  hoy: number;
+  proximo: number;
+}
+
+export const EMPTY_CONFIRMATION_DUE_COUNTS: ConfirmationDueCounts = {
+  all: 0,
+  vencido: 0,
+  hoy: 0,
+  proximo: 0,
+};
+
 /** Columna por la que ordena cada opción del selector, y si va descendente. */
 const SORT_COLUMN: Record<MasterSortKey, { column: string; ascending: boolean }> = {
   created: { column: "order_created_at", ascending: false },
@@ -732,6 +746,55 @@ function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
   }
 
   return q as T;
+}
+
+/**
+ * Conteos exactos de la fila "Fecha pactada".
+ *
+ * Se calculan sobre toda la consulta vigente, no sobre las 100 filas visibles.
+ * El propio filtro de fecha se quita antes de contar para que los cuatro chips
+ * sigan mostrando su universo completo aunque uno de ellos esté seleccionado.
+ */
+export async function getConfirmationDueCounts(
+  storeIds: string[],
+  params: {
+    substage?: MacroSubstage | null;
+    filters: MasterFilters;
+    now?: Date;
+  },
+): Promise<ConfirmationDueCounts> {
+  if (!storeIds.length) return EMPTY_CONFIRMATION_DUE_COUNTS;
+
+  const sb = await createServerSupabase();
+  const now = params.now ?? new Date();
+  const baseFilters: MasterFilters = { ...params.filters, confirmationDue: "" };
+
+  const countFor = async (
+    confirmationDue: MasterFilters["confirmationDue"],
+  ): Promise<number> => {
+    let query = sb
+      .from("order_master")
+      .select("id", { count: "exact", head: true })
+      .in("store_id", storeIds)
+      .eq("macro_stage", "por_confirmar");
+    if (params.substage) query = query.eq("macro_substage", params.substage);
+
+    const { count, error } = await applyServerFilters(
+      query,
+      { ...baseFilters, confirmationDue },
+      now,
+    );
+    return error ? 0 : (count ?? 0);
+  };
+
+  const [all, vencido, hoy, proximo] = await Promise.all([
+    countFor(""),
+    countFor("vencido"),
+    countFor("hoy"),
+    countFor("proximo"),
+  ]);
+
+  return { all, vencido, hoy, proximo };
 }
 
 /**
