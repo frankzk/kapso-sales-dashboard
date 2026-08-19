@@ -10,6 +10,7 @@
 // El punto del mapa es obligatorio para Tanders y NO se resuelve solo: lo
 // confirma el operador. Ver lib/geo-link.ts.
 
+import { shopifyOrderNote } from "@/lib/shopify-address";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
@@ -126,8 +127,13 @@ async function activeGuides(
 }
 
 /**
- * La nota del pedido en Shopify: donde el equipo apunta a mano lo que averiguó
- * al llamar (el enlace de Google Maps del cliente, un horario, una advertencia).
+ * La nota del pedido en Shopify, LEÍDA EN VIVO: donde el equipo apunta a mano lo
+ * que averiguó al llamar (el enlace de Google Maps del cliente, un horario, una
+ * advertencia).
+ *
+ * El nombre dice «live» porque lo único que la distingue de `shopifyOrderNote`
+ * —que es quien decide QUÉ dice la nota, y se usa acá dentro— es de dónde la
+ * saca. El drawer usa la copia local; esto pide a Shopify.
  *
  * Se pide EN VIVO y solo se usa lo sincronizado como respaldo. Es un campo que
  * un humano edita segundos antes de despachar —a menudo para pegar justamente
@@ -135,7 +141,7 @@ async function activeGuides(
  * último que se escribió. Best-effort: si Shopify no responde, se sigue con lo
  * que haya en `orders.raw` y la guía se puede crear igual.
  */
-async function shopifyOrderNote(
+async function liveOrderNote(
   admin: ReturnType<typeof createAdminSupabase>,
   orderId: string,
 ): Promise<string | null> {
@@ -145,11 +151,16 @@ async function shopifyOrderNote(
     .eq("id", orderId)
     .maybeSingle();
   const order = data as
-    | { store_id: string; shopify_order_id: string | null; raw: { note?: string | null } | null }
+    | { store_id: string; shopify_order_id: string | null; raw: unknown }
     | null;
   if (!order) return null;
 
-  const stored = typeof order.raw?.note === "string" ? order.raw.note : null;
+  // Qué dice la nota lo decide `shopifyOrderNote` —el mismo ayudante que usa el
+  // drawer— y no un `typeof` propio. Lo que NO se comparte es de dónde se lee:
+  // acá en vivo, porque esto va a emitir una guía; en el drawer la copia local,
+  // porque abrir un pedido no puede costar una llamada a Shopify. Una respuesta,
+  // dos políticas de frescura, cada una explícita.
+  const stored = shopifyOrderNote(order.raw);
 
   try {
     const creds = await getStoreCreds(order.store_id, admin);
@@ -160,8 +171,13 @@ async function shopifyOrderNote(
       storeId: order.store_id,
       orderGid: `gid://shopify/Order/${order.shopify_order_id}`,
     });
-    const raw = live?.raw as { note?: string | null } | undefined;
-    return typeof raw?.note === "string" ? raw.note : stored;
+    // El `?? stored` conserva el comportamiento de siempre, y con él una
+    // peculiaridad que conviene conocer: si alguien BORRA la nota en Shopify,
+    // GraphQL devuelve `null` y acá se cae al respaldo, así que la guía sale con
+    // la nota vieja. No se cambia en este commit —tocar lo que se imprime en una
+    // guía merece su propia decisión— pero queda anotado: hoy una nota se puede
+    // corregir a tiempo y no se puede retirar a tiempo.
+    return shopifyOrderNote(live?.raw) ?? stored;
   } catch {
     return stored;
   }
@@ -257,7 +273,7 @@ export async function loadTandersDraft(
       }),
       note: composeTandersNote({
         reference: row.reference,
-        shopifyNote: await shopifyOrderNote(admin, orderId),
+        shopifyNote: await liveOrderNote(admin, orderId),
       }),
       blockers,
       warnings,
