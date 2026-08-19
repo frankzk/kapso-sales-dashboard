@@ -99,6 +99,8 @@ echo "  ✅ all migrations apply on a fresh database"
 # aislamiento por org se respetan.
 echo "▶ cobertura por coordenada"
 $PSQL -f "$ROOT/scripts/sql/coverage_smoke.sql" >/dev/null
+echo "▶ order_master_stale (0123): el desfase se ve aunque sea ANTIGUO"
+$PSQL -f "$ROOT/scripts/sql/order_master_stale_smoke.sql"
 echo "  ✅ cerca de un punto COD → provincia_cod; lejos → agencia; Cañete y aislamiento por org intactos"
 
 # order_events is the audit trail of the Master de Pedidos: it must be

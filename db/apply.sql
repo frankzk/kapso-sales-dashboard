@@ -247,4 +247,6 @@
 \ir migrations/0121_district_coverage.sql
 \echo 'Applying 0122_confirmation_workbench.sql'
 \ir migrations/0122_confirmation_workbench.sql
+\echo 'Applying 0123_order_master_stale.sql'
+\ir migrations/0123_order_master_stale.sql
 \echo 'Done.'

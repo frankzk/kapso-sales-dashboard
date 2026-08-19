@@ -1,103 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { budgetShareMs, recomputeInBatches, staleByShipment } from "@/lib/order-master";
+import { budgetShareMs, recomputeInBatches } from "@/lib/order-master";
 
-// LA CUARTA PUERTA DEL BARRIDO.
+// LA REGLA DEL DESFASE YA NO VIVE ACÁ.
 //
-// `order_master` es una foto derivada: si algo escribe en `shipments` y no
-// recalcula, el pedido se queda mostrando la etapa anterior para siempre. El
-// 09-08 se enlazaron 71 guías huérfanas a sus pedidos con SQL a mano contra la
-// base — ninguna ruta de la aplicación intervino, así que no hubo recálculo que
-// pudiera fallar. Pedidos que recibían su PRIMERA guía, algunos ya ENTREGADA,
-// siguieron en «Por confirmar · Sin llamar» durante días.
+// `staleByShipment` comparaba en TypeScript sobre una VENTANA de las 2.000 guías
+// tocadas más recientemente, porque PostgREST no sabe comparar dos columnas de
+// tablas distintas. Esa ventana tenía fondo, y un pedido que caía por debajo no
+// volvía a entrar nunca: 381 de 487 desfasados en Kenku el 18-08-2026, mientras
+// el barrido recalculaba 620 pedidos por hora en esa misma tienda.
 //
-// El barrido no los veía: tenían fila, tenían la versión vigente del MOM, y por
-// antigüedad quedaban fuera de la lista de candidatos. Esta función es la señal
-// que faltaba —guía escrita después del último recálculo— y funciona sin saber
-// quién escribió, que es justo lo que hace falta cuando la escritura vino de
-// fuera de la aplicación.
+// La regla se mudó a la base (`order_master_stale`, 0123), que es donde la
+// comparación se puede hacer sin techo, y sus pruebas con ella:
+// `scripts/sql/order_master_stale_smoke.sql`. Dejarlas duplicadas acá habría
+// conservado la segunda definición que aquel cambio vino a eliminar.
+//
+// Lo que sigue probándose desde acá es lo que NO se fue a la base: el reparto
+// del reloj entre tiendas y el recálculo por tandas.
 
-const master = (order_id: string, recomputed_at: string | null) => ({ order_id, recomputed_at });
-const write = (order_id: string | null, updated_at: string | null) => ({ order_id, updated_at });
-
-describe("staleByShipment — pedidos con la etapa vieja", () => {
-  it("señala el pedido cuya guía se escribió después del recálculo", () => {
-    // El caso real: #AUR173240, enlazada a su pedido el 09-08, Master del 07-08.
-    expect(
-      staleByShipment(
-        [write("AUR173240", "2026-08-09T19:24:01Z")],
-        [master("AUR173240", "2026-08-07T19:50:56Z")],
-      ),
-    ).toEqual(["AUR173240"]);
-  });
-
-  it("deja en paz al pedido recalculado después de su última guía", () => {
-    expect(
-      staleByShipment(
-        [write("ok", "2026-08-09T19:24:01Z")],
-        [master("ok", "2026-08-09T19:24:30Z")],
-      ),
-    ).toEqual([]);
-  });
-
-  it("no cuenta el empate: el recálculo que sigue a la escritura ya está al día", () => {
-    // Las dos marcas nacen del mismo movimiento y coinciden al segundo. Contarlo
-    // como viejo metía al pedido en TODAS las pasadas del cron, para siempre.
-    expect(
-      staleByShipment([write("a", "2026-08-09T19:24:01Z")], [master("a", "2026-08-09T19:24:01Z")]),
-    ).toEqual([]);
-  });
-
-  it("señala al pedido que no tiene fila en el Master todavía", () => {
-    expect(staleByShipment([write("nuevo", "2026-08-09T19:24:01Z")], [])).toEqual(["nuevo"]);
-  });
-
-  it("señala la fila sin recomputed_at, que no prueba ningún recálculo", () => {
-    expect(
-      staleByShipment([write("a", "2026-08-09T19:24:01Z")], [master("a", null)]),
-    ).toEqual(["a"]);
-  });
-
-  it("compara contra la ESCRITURA MÁS RECIENTE de un pedido con varias guías", () => {
-    // Un pedido con dos salidas: basta con que UNA se haya movido después. Mirar
-    // la primera que llegue dejaría fuera al pedido reexpedido, que es justo el
-    // que más se mueve.
-    expect(
-      staleByShipment(
-        [
-          write("multi", "2026-08-01T10:00:00Z"),
-          write("multi", "2026-08-09T19:24:01Z"),
-        ],
-        [master("multi", "2026-08-07T19:50:56Z")],
-      ),
-    ).toEqual(["multi"]);
-
-    expect(
-      staleByShipment(
-        [
-          write("multi", "2026-08-09T19:24:01Z"),
-          write("multi", "2026-08-01T10:00:00Z"),
-        ],
-        [master("multi", "2026-08-10T00:00:00Z")],
-      ),
-    ).toEqual([]);
-  });
-
-  it("ignora guías sin pedido y sin fecha en vez de romperse", () => {
-    expect(
-      staleByShipment(
-        [write(null, "2026-08-09T19:24:01Z"), write("sinfecha", null)],
-        [],
-      ),
-    ).toEqual([]);
-  });
-
-  it("no repite un pedido aunque tenga muchas escrituras viejas", () => {
-    const writes = Array.from({ length: 5 }, (_, i) =>
-      write("uno", `2026-08-0${i + 1}T10:00:00Z`),
-    );
-    expect(staleByShipment(writes, [master("uno", "2026-07-01T00:00:00Z")])).toEqual(["uno"]);
-  });
-});
 
 // ── Que un pedido envenenado no congele a los demás ─────────────────────────
 //
