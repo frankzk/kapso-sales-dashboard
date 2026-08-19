@@ -737,6 +737,21 @@ export interface RecomputeResult {
   /** Pedidos que no cupieron en el reloj de la pasada. Distinto de `failed`: no
    *  se intentaron, y vuelven solos en la siguiente. */
   deferred?: number;
+  /**
+   * El fallo de la puerta del desfase, si la hubo.
+   *
+   * VIAJA HASTA QUIEN LLAMA A PROPÓSITO. Antes solo se escribía con
+   * `console.error`, y un `console.error` dentro de una función de Vercel es
+   * silencioso en la práctica: nadie lee esos registros salvo que ya sospeche
+   * algo. Con la puerta muerta el barrido se ve IDÉNTICO a un barrido sano —
+   * `requested` bajo puede significar «no hay nada que hacer» o «no puedo
+   * mirar», y son cosas opuestas.
+   *
+   * El caso que lo destapó: la 0123 se desplegó sin aplicar en la base, así que
+   * el RPC `order_master_stale` no existía y la cuarta puerta llevaba horas sin
+   * detectar nada mientras el informe salía en verde.
+   */
+  staleDoorError?: string | null;
 }
 
 /**
@@ -1446,6 +1461,7 @@ export async function reconcileOrderMaster(
   // donde la comparación se puede hacer de verdad y donde vive ya la única
   // definición del desfase.
   const seenPending = new Set(pending);
+  let staleDoorError: string | null = null;
   const roomForStale = Math.max(0, limit - pending.length);
   if (roomForStale > 0) {
     for (const storeId of storeIds) {
@@ -1458,6 +1474,9 @@ export async function reconcileOrderMaster(
       // y la siguiente pasada lo reintenta. Pero deja rastro — un desfase que no
       // se detecta es una etapa vieja en pantalla, y eso no puede ser silencioso.
       if (error) {
+        // Se guarda para que SUBA al informe del cron. El `console.error` se
+        // queda como mínimo, pero no es el rastro que alguien va a mirar.
+        staleDoorError ??= error.message;
         console.error(`order_master: puerta del desfase — ${error.message}`);
         continue;
       }
@@ -1518,5 +1537,6 @@ export async function reconcileOrderMaster(
     written: done.written,
     failed: done.failed,
     deferred: done.deferred,
+    staleDoorError,
   };
 }

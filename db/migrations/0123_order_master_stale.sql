@@ -55,6 +55,32 @@
 -- normal.
 -- ============================================================================
 
+-- ⚠️ AL APLICAR ESTO EN PRODUCCIÓN, LEE ESTO PRIMERO.
+--
+-- Los dos `create index` de abajo BLOQUEAN LAS ESCRITURAS de su tabla mientras
+-- se construyen. En el clúster desechable de CI son instantáneos porque está
+-- vacío; sobre `shipments` en producción no lo son, y durante ese rato la
+-- operación no puede escribir guías.
+--
+-- Aplícalos ANTES y por separado, en su forma concurrente, que no bloquea:
+--
+--   create index concurrently if not exists order_master_store_recomputed_idx
+--     on order_master (store_id, recomputed_at);
+--   create index concurrently if not exists shipments_order_updated_idx
+--     on shipments (order_id, updated_at desc);
+--
+-- (`concurrently` no puede ir dentro de una transacción, y por eso no está
+-- escrito así acá: db/apply.sql aplica las migraciones en bloque y fallaría.)
+-- Después corre este fichero: al encontrarlos ya creados se los salta y solo
+-- define la función.
+--
+-- Y APLÍCALA. Los despliegues NO aplican migraciones —`build` es `next build` a
+-- secas— así que desplegar el código sin correr esto deja el RPC inexistente y
+-- la cuarta puerta del barrido sin ver nada. Pasó el 19-08-2026: el código salió
+-- con el #462 y la migración se quedó sin aplicar. Desde entonces el informe del
+-- cron trae `staleDoorError` para que ese caso deje de parecerse a «no hay nada
+-- desfasado».
+
 -- Recorrido por antigüedad del recálculo, dentro de una tienda. Es el índice que
 -- permite parar pronto: sin él, cada pasada leería la tabla entera.
 create index if not exists order_master_store_recomputed_idx

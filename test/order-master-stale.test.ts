@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { budgetShareMs, recomputeInBatches } from "@/lib/order-master";
+import { budgetShareMs, reconcileOrderMaster, recomputeInBatches } from "@/lib/order-master";
 
 // LA REGLA DEL DESFASE YA NO VIVE ACÁ.
 //
@@ -151,5 +151,71 @@ describe("recomputeInBatches — el corte por reloj", () => {
     const r = await recomputeInBatches(["a", "b", "c"], async (b) => b.length, { batch: 1 });
     expect(r.written).toBe(3);
     expect(r.deferred).toBe(0);
+  });
+});
+
+// ── Que una puerta que no puede mirar no se parezca a una que miró ──────────
+//
+// La 0123 se desplegó sin aplicar en la base: el RPC `order_master_stale` no
+// existía, el barrido atrapaba el error y seguía, y la cuarta puerta pasó horas
+// sin detectar un solo desfase con el informe del cron impecable. `requested: 0`
+// significaba las dos cosas opuestas — «no hay nada» y «no puedo comprobarlo».
+//
+// Es el mismo defecto que el cron de respaldo borrado en #456: algo que solo
+// sabe dar verde no informa de nada. Acá se fija que el fallo SUBE.
+
+describe("reconcileOrderMaster — la puerta del desfase que no puede mirar", () => {
+  // El barrido sale antes de la cuarta puerta si la tienda no tiene pedidos, así
+  // que el stub devuelve UNO y lo da por ya recalculado: así `pending` queda
+  // vacío, sobra sitio, y la puerta del desfase llega a ejecutarse — que es lo
+  // único que se quiere observar.
+  // El barrido sale antes de la cuarta puerta si la tienda no tiene pedidos, así
+  // que el stub devuelve UNO y lo da por ya recalculado: `pending` queda vacío,
+  // sobra sitio, y la puerta del desfase llega a ejecutarse — que es lo único
+  // que se quiere observar.
+  //
+  // El constructor es encadenable Y esperable a la vez porque PostgREST lo es:
+  // unas consultas terminan en `.in(...)` y otras siguen con `.order().limit()`.
+  const stubAdmin = (rpcError: string | null) => ({
+    from(table: string) {
+      const rows =
+        table === "orders"
+          ? [{ id: "order-1" }]
+          : [{ order_id: "order-1", recomputed_at: "2999-01-01T00:00:00Z" }];
+      const result = { data: rows, error: null };
+      const b: any = {
+        select: () => b,
+        in: () => b,
+        eq: () => b,
+        neq: () => b,
+        not: () => b,
+        order: () => b,
+        limit: () => b,
+        then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve),
+      };
+      return b;
+    },
+    rpc(fn: string) {
+      if (fn !== "order_master_stale") return Promise.resolve({ data: null, error: null });
+      return Promise.resolve(
+        rpcError ? { data: null, error: { message: rpcError } } : { data: [], error: null },
+      );
+    },
+  });
+
+  it("devuelve el fallo del RPC en vez de tragárselo", async () => {
+    const res = await reconcileOrderMaster(
+      stubAdmin("function order_master_stale does not exist") as any,
+      ["store-a"],
+    );
+    // Sin candidatos por las otras puertas el barrido no escribe nada — pero el
+    // motivo tiene que llegar a quien llama, que es lo único que distingue esto
+    // de una pasada sana.
+    expect(res.staleDoorError).toContain("does not exist");
+  });
+
+  it("cuando la puerta responde, no inventa un fallo", async () => {
+    const res = await reconcileOrderMaster(stubAdmin(null) as any, ["store-a"]);
+    expect(res.staleDoorError ?? null).toBeNull();
   });
 });
