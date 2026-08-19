@@ -738,6 +738,29 @@ export function ShalomGuideModal({
                   )}
                 </Field>
 
+                {/* LA NOTA DEL PEDIDO, justo encima del destinatario.
+                    Va ACÁ y no al principio del modal a propósito: el documento
+                    y la agencia son lo que más veces lleva escrito, y el aviso
+                    de arriba dice que «el pedido no lo trae». Muchas veces sí lo
+                    trae, y hasta ahora había que abrir el admin de Shopify en
+                    otra pestaña para leerlo.
+
+                    Se muestra tal cual y no se rellena nada solo: lo escribe una
+                    persona distinta cada vez —«dni 42771213», «DNI: 42771213»,
+                    o el documento de quien pagó, que no es el destinatario— y
+                    una regla que acierte «casi siempre» aquí significa emitir
+                    una guía a nombre de quien no es. Lee y decide el operador. */}
+                {draft.shopifyNote && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-3">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-800">
+                      Nota del pedido
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-800">
+                      {draft.shopifyNote}
+                    </p>
+                  </div>
+                )}
+
                 {/* 3. Destinatario */}
                 <div className="grid grid-cols-[7rem_1fr] gap-3">
                   <Field label="Tipo doc.">

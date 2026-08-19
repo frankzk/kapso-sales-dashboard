@@ -26,6 +26,7 @@
 //     ahora nace con la guía. El circuito de Yape → validación → revelar la clave
 //     no cambia: sigue siendo la única vía de verla, y sigue auditado.
 
+import { shopifyOrderNote } from "@/lib/shopify-address";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
@@ -118,6 +119,18 @@ export interface ShalomDraftView {
   prefilledDocument: string | null;
   prefilledTerminalId: number | null;
   prefilledTerminalName: string | null;
+  /**
+   * La nota del pedido de Shopify, tal cual. Viaja hasta acá porque es donde
+   * hace falta: el aviso de abajo dice que el documento «el pedido no lo trae»,
+   * y en la práctica muchas veces SÍ lo trae — escrito a mano en la nota, junto
+   * con la agencia. Sin esto había que abrir el admin de Shopify en otra pestaña
+   * para leer un dato que ya estaba en la base.
+   *
+   * No se interpreta: ni se extrae el DNI ni se preselecciona la agencia. Lo
+   * escribe una persona distinta cada vez y una regla acertaría casi siempre —
+   * el «casi» es emitir una guía a nombre de quien no es.
+   */
+  shopifyNote: string | null;
   /** Clave de recojo generada en el servidor. Solo viaja si el rol puede verla. */
   pickupCode: string | null;
   /** Motivos para NO crear la guía todavía. Imposibles: no se saltan. */
@@ -263,6 +276,15 @@ export async function loadShalomDraft(
   const store = await loadStoreShalom(admin, row.store_id);
   const configured = isConfigured(store);
 
+  // La nota del pedido. Se lee del payload de Shopify con el MISMO ayudante que
+  // usa el drawer (`shopifyOrderNote`): dos lecturas distintas del mismo campo
+  // acabarían enseñando dos notas distintas para el mismo pedido.
+  const { data: orderRaw } = await admin
+    .from("orders")
+    .select("raw")
+    .eq("id", orderId)
+    .maybeSingle();
+
   const blockers: string[] = [];
   const contingencyBlockers: string[] = [];
   const warnings: string[] = [];
@@ -346,6 +368,7 @@ export async function loadShalomDraft(
       receiverPhone: row.customer_phone,
       prefilledDocumentType: (prefilled?.document_type as ShalomDocumentType | null) ?? null,
       prefilledDocument: prefilled?.document ?? null,
+      shopifyNote: shopifyOrderNote((orderRaw as { raw?: unknown } | null)?.raw),
       prefilledTerminalId: prefilled?.destiny_terminal_id ?? null,
       prefilledTerminalName: prefilled?.destiny_terminal_name ?? null,
       pickupCode: perms.can("shalom.view_pickup_key") ? pickupCode : null,

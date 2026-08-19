@@ -11,7 +11,7 @@ import { unstable_cache } from "next/cache";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
-import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { shopifyOrderNote, shopifyShippingAddress } from "@/lib/shopify-address";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import { codCouriersFor, isNonMetroLimaLocation } from "@/lib/order-coverage";
@@ -322,6 +322,10 @@ export interface OrderMasterDetail {
   timeline: TimelineEntry[];
   lineItems: OrderLineItem[];
   address: ReturnType<typeof shopifyShippingAddress>;
+  /** La nota que alguien escribió en el pedido de Shopify, tal cual. Suele
+   *  llevar lo que Shopify no tiene dónde guardar —el DNI del destinatario, la
+   *  agencia— y hasta ahora solo se veía entrando al admin de Shopify. */
+  shopifyNote: string | null;
   routePlan: OrderRoutePlan;
   /** Foco de salud de la API de Aliclik, para el panel de crear guía. */
   aliclikHealth: AliclikHealthState;
@@ -577,6 +581,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     aliclikHealth,
     tasks,
     address: shopifyShippingAddress(orderRow?.raw),
+    shopifyNote: shopifyOrderNote(orderRow?.raw),
     routePlan: buildOrderRoutePlan({
       operation: operationOf(row, guides),
       paymentState: row.payment_state,
