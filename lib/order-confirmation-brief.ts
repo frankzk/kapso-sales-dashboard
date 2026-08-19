@@ -307,6 +307,32 @@ export function aliclikRiskGate(
   };
 }
 
+/**
+ * ¿Hace falta cargar la ficha del §8 para este pedido?
+ *
+ * La ficha recorre el historial del teléfono y la matriz de tarifas, así que no
+ * se pide en cada apertura del cajón: sobre un pedido ya entregado no cambia
+ * ninguna decisión.
+ *
+ * PERO NO BASTA CON LA CONFIRMACIÓN, y esa fue la trampa. La exigencia de abono
+ * la calcula la ficha, y quien la APLICA es la creación de la guía —que ocurre
+ * en Preparación, cuando el pedido ya está confirmado—. Pidiéndola solo en
+ * confirmación, el panel de Aliclik recibía «ninguno» y no dibujaba el campo de
+ * justificación, mientras el servidor rechazaba la creación pidiendo justo esa
+ * justificación. La regla se aplicaba donde su salida no existía y el pedido se
+ * quedaba sin forma de avanzar (#KP128958, 17-08-2026).
+ *
+ * La regla queda aquí, y no dentro de un efecto de React, para poder afirmarla:
+ * lo que hay que sostener es que la ficha esté disponible en TODO sitio donde su
+ * resultado pueda frenar una acción.
+ */
+export function needsConfirmationBrief(
+  macroStage: string | null | undefined,
+  aliclikOffered: boolean,
+): boolean {
+  return macroStage === "por_confirmar" || aliclikOffered;
+}
+
 // ---------------------------------------------------------------------------
 // Duplicados (MOM §8)
 // ---------------------------------------------------------------------------
