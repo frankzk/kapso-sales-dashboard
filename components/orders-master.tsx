@@ -20,6 +20,12 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, cn, EmptyState, STICKY_HEAD, TABLE_LAYER, TABLE_WRAP_PAGE_X } from "@/components/ui";
+import {
+  frozenCellStyle,
+  frozenOffsets,
+  frozenTextWidth,
+  type FrozenKey,
+} from "@/lib/master-table-columns";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
@@ -1788,33 +1794,24 @@ function MasterTable({
   // así que al ir a la derecha se perdía de vista de QUÉ pedido es cada fila.
   // Estas se quedan pegadas a la izquierda.
   //
-  // Necesitan ancho fijo porque el desplazamiento de cada una es la suma de las
-  // anteriores: con anchos automáticos los offsets no cuadrarían y las columnas
-  // se superpondrían. Se calculan acá (y no como clases) porque "Tienda" solo
-  // existe en multitienda y correría todo lo que viene después.
-  const FROZEN_W = { check: 40, pedido: 132, tienda: 96, creado: 88, cliente: 190 };
-  const left: Record<string, number> = {};
-  {
-    let x = 0;
-    for (const k of ["check", "pedido", ...(multiStore ? ["tienda"] : []), "creado", "cliente"]) {
-      left[k] = x;
-      x += FROZEN_W[k as keyof typeof FROZEN_W];
-    }
-  }
+  // La geometría vive en lib/master-table-columns.ts, con pruebas: el
+  // desplazamiento de cada una es la suma de los anchos de las anteriores, así
+  // que esos anchos tienen que ser TECHO y no sugerencia. Sin `maxWidth`, un
+  // nombre de cliente largo ensanchaba la columna y cizallaba la tabla entera.
+  const left = frozenOffsets(multiStore);
   /** Props de una celda congelada. El fondo se HEREDA de la fila: así sigue el
    *  hover y el resaltado de selección, que en un color fijo se perderían. */
   //
   // Las capas salen de TABLE_LAYER, no de números sueltos: la esquina congelada
   // estaba en 30, empatada con los desplegables de filtro, y los tapaba — pero
   // solo los de la izquierda, que son los que caen encima de ella.
-  const frozen = (key: keyof typeof FROZEN_W, header = false) => ({
+  const frozen = (key: FrozenKey, header = false) => ({
     className: cn("sticky", header ? "bg-slate-50" : "bg-inherit"),
-    style: {
-      left: left[key],
-      width: FROZEN_W[key],
-      minWidth: FROZEN_W[key],
-      zIndex: header ? TABLE_LAYER.frozenHead : TABLE_LAYER.frozenCell,
-    },
+    style: frozenCellStyle(
+      key,
+      left,
+      header ? TABLE_LAYER.frozenHead : TABLE_LAYER.frozenCell,
+    ),
   });
 
   return (
@@ -1888,8 +1885,18 @@ function MasterTable({
               <td {...frozen("pedido")} className={cn(frozen("pedido").className, "px-4 py-2.5 font-medium text-slate-900")}>{r.order_name ?? "—"}</td>
               {multiStore && <td {...frozen("tienda")} className={cn(frozen("tienda").className, "px-2 py-2.5 text-slate-600")}>{storeName(r.store_id)}</td>}
               <td {...frozen("creado")} className={cn(frozen("creado").className, "px-2 py-2.5 text-slate-600")}>{fmtDate(r.order_created_at)}</td>
-              <td {...frozen("cliente")} className={cn(frozen("cliente").className, "truncate px-2 py-2.5 text-slate-700")} title={r.customer_name ?? ""}>
-                {r.customer_name ?? "—"}
+              <td {...frozen("cliente")} className={cn(frozen("cliente").className, "px-2 py-2.5 text-slate-700")}>
+                {/* El recorte va en un bloque propio, no en el `<td>`: `max-width`
+                    sobre una celda de tabla no es fiable, y sin un techo real
+                    `truncate` no tiene contra qué recortar. El nombre entero
+                    sigue a un `title` de distancia. */}
+                <span
+                  className="block truncate"
+                  style={{ maxWidth: frozenTextWidth("cliente") }}
+                  title={r.customer_name ?? ""}
+                >
+                  {r.customer_name ?? "—"}
+                </span>
               </td>
               <td className="px-2 py-2.5 text-slate-600">{r.customer_phone ?? "—"}</td>
               <td className="px-2 py-2.5 text-slate-600">{r.region ?? "—"}</td>
