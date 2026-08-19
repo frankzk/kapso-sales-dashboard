@@ -365,6 +365,32 @@ describe("recomputeOrderMaster — eventos del Master", () => {
     expect(row.status_source).toBe("manual");
   });
 
+  it("anular en Shopify después del override lo descongela y lo anula", async () => {
+    // #KP126722: marcado a mano «Pendiente · no responde» el 12/08 y anulado en
+    // Shopify después. El Master lo seguía enseñando Pendiente · Provincia COD,
+    // o sea llamable y despachable, por S/ 99 que ya no existían.
+    //
+    // Se comprueba en el RECÁLCULO, no solo en el resolvedor: `status_locked`
+    // salía de `Boolean(override)` —existe un override— en vez de si ese
+    // override manda de verdad, y ahí es donde el candado quedaba pegado.
+    const { row } = await recompute({
+      orders: [{ ...ORDER, cancelled_at: "2026-07-18T09:00:00.000Z" }],
+      order_events: [
+        {
+          order_id: "order-1",
+          kind: "status_override",
+          occurred_at: "2026-07-16T10:00:00.000Z",
+          courier: null,
+          new_status: "pendiente",
+          new_operational: null,
+        },
+      ],
+    });
+    expect(row.general_status).toBe("anulado");
+    expect(row.status_source).toBe("shopify");
+    expect(row.status_locked).toBe(false);
+  });
+
   it("gana el override más reciente", async () => {
     const { row } = await recompute({
       orders: [ORDER],

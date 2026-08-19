@@ -325,6 +325,19 @@ Registro:
 - Los comentarios y el cambio manual de estado **no** son registro de gestión.
   El cambio manual es un override que congela el pedido frente al recálculo:
   usarlo como bitácora de llamadas lo desconecta del MOM.
+- **El congelamiento es frente a lo automático, no frente a otra persona.**
+  Anular el pedido en Shopify también lo decide alguien, así que entre dos
+  decisiones humanas manda la más reciente: una anulación **posterior** al cambio
+  manual lo deja sin efecto y el pedido pasa a `anulado`; un cambio manual
+  posterior a la anulación sigue mandando —es el caso de «lo anularon por error y
+  lo reactivo»—. Con el mismo sello de tiempo gana el override, porque no hay
+  forma de saber cuál fue después. Al ceder, el pedido se resuelve por la cadena
+  normal: la anulación no gana prioridad nueva, solo deja de estar tapada, y
+  «entregado es pegajoso» le sigue ganando. El candado del drawer marca si el
+  cambio manual **gobierna**, no si existe: sobre un pedido anulado después se
+  suelta. Sin esto, en #KP126722 un «Pendiente · no responde» del 12/08 mantuvo
+  en la cola operativa —llamable y despachable— un pedido de S/ 99 que en Shopify
+  ya no tenía ni productos.
 - La subetapa y el conteo de días se derivan de esos hechos. No hay un contador
   que alguien tenga que mantener.
 

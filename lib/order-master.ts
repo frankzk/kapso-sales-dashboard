@@ -1053,7 +1053,10 @@ export async function recomputeOrderMaster(
       macro_since: macro.since,
       status_since: state.since,
       status_source: state.source,
-      status_locked: Boolean(override),
+      // Que EXISTA un override no basta: uno anterior a la anulación en Shopify
+      // deja de aplicarse, y el candado sobre un estado que ya no decidió nadie
+      // a mano manda a buscar un cambio manual que no está gobernando nada.
+      status_locked: state.overrideApplied,
       current_courier: state.currentCourier,
       last_courier: state.lastCourier,
       courier_count: state.courierCount,
