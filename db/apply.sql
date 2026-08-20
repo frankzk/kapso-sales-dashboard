@@ -249,4 +249,6 @@
 \ir migrations/0122_confirmation_workbench.sql
 \echo 'Applying 0123_order_master_stale.sql'
 \ir migrations/0123_order_master_stale.sql
+\echo 'Applying 0124_meta_social_webhook_log.sql'
+\ir migrations/0124_meta_social_webhook_log.sql
 \echo 'Done.'

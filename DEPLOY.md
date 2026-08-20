@@ -113,6 +113,8 @@ roles and the `auth` schema, so it just works.
    | `SHALOM_API_KEY` | API key (`sk_…`) del wrapper de Shalom. **Global: una para todas las tiendas.** Sin ella no aparece «+ Guía Shalom» (ver 5ñ) |
    | `SHALOM_API_BASE` | `https://api.shalom-api-peru.com` (optional). **El host a secas, sin `/v1`**: el cliente ya añade la ruta, y una base con `/v1` produce `/v1/v1/…` → 404. Si no existe la variable, el valor por defecto ya es el correcto |
    | `CHATBY_WEBHOOK_SECRET` | Secreto del «Live Chat Webhook» de Chatby. **Lo elegís vos** (`openssl rand -hex 32`), no lo emite Chatby. Va también en Chatby → Integrations → Live Chat Support → Webhook, campo *Custom Header*: `X-Webhook-Secret: <valor>`. Sin él el receptor rechaza todo (ver 5q) |
+   | `META_APP_SECRET` | *App Secret* de la app de Meta — **lo emite Meta**, es el mismo que ya usa la Marketing API. Con él se verifica la firma `X-Hub-Signature-256` de cada entrega del webhook de página/Instagram. Sin él el receptor rechaza todo (ver 5s) |
+   | `META_WEBHOOK_VERIFY_TOKEN` | Token del apretón de manos del webhook de Meta. **Lo elegís vos** (`openssl rand -hex 32`) y lo tecleás en el panel de Meta al dar de alta la URL. Sin él Meta **nunca activa la suscripción** y no llega nada, sin error visible (ver 5s) |
 
    `DATABASE_URL` is only needed for migrations; you don't have to add it to
    Vercel.
@@ -1383,6 +1385,59 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   from ingest_anomalies
   where dia > current_date - 14
   order by dia desc, count desc;
+  ```
+
+## 5s. Comentarios de Facebook e Instagram — la sonda
+
+- **Requiere migración 0124** (`meta_social_webhook_log`).
+- **Es una SONDA, no una función.** Guarda cada entrega entera y no interpreta
+  nada más allá del sobre. No responde comentarios, no toca leads ni pedidos, y
+  no enseña nada en la interfaz. Si mañana se apaga, no queda rastro en el
+  negocio.
+- **Para qué**: antes de construir la bandeja de comentarios hay tres preguntas
+  que hoy son opinión y que ninguna documentación contesta con certeza —
+  **cuántos comentarios al día**, **cuántos son sobre anuncios**, y sobre todo
+  **si los de anuncios llegan siquiera**. Las fuentes se contradicen, y como el
+  volumen del negocio está casi todo en anuncios, esa duda decide si el proyecto
+  entero tiene sentido. De paso se aprende la forma real del payload, que es lo
+  que después se convierte en el parser sin adivinar un campo.
+- **Dos variables, y se olvida una**:
+
+  | Variable | Quién la emite | Para qué |
+  |---|---|---|
+  | `META_APP_SECRET` | Meta (es el App Secret de tu app) | Firma cada entrega: HMAC-SHA256 del cuerpo en `X-Hub-Signature-256` |
+  | `META_WEBHOOK_VERIFY_TOKEN` | **Vos** (`openssl rand -hex 32`) | Solo el apretón de manos inicial — sin él Meta nunca activa la suscripción |
+
+- En la app de Meta → **Webhooks**, dar de alta:
+
+  | Campo | Valor |
+  |---|---|
+  | Callback URL | `{NEXT_PUBLIC_SITE_URL}/api/webhooks/meta-social` |
+  | Verify Token | `<META_WEBHOOK_VERIFY_TOKEN>` |
+  | Campos | `feed` en **Page** · `comments` en **Instagram** |
+
+- Antes de darle a *Verify and Save*, un **GET a la misma URL** (sin `hub.mode`)
+  confirma que la ruta existe y que **las dos** variables están cargadas, sin
+  revelarlas. Es el mismo GET de Chatby y por el mismo motivo: la alternativa
+  sería esperar a que alguien comente y ver si llegó algo.
+- **No es por tienda**, y no por descuido: Meta configura el webhook por **app**,
+  así que una sola URL cubre Aurela y Kenku. Por eso `meta_social_webhook_log`
+  todavía no tiene `store_id` — la tienda saldrá de `entry[].id`, que es
+  justamente uno de los datos que la sonda viene a recoger. Escribirla a ciegas
+  mandaría los comentarios de una tienda a la bandeja de la otra.
+- **Probablemente no necesita App Review**: son páginas propias y app propia, y
+  los permisos se conceden sobre activos propios. La revisión de Meta hace falta
+  para operar sobre activos de terceros. Confirmarlo al configurar.
+- Qué preguntarle a los datos después de una semana:
+
+  ```sql
+  select date_trunc('day', received_at) as dia,
+         object_type,
+         unnest(fields) as campo,
+         count(*)
+  from meta_social_webhook_log
+  group by 1, 2, 3
+  order by 1 desc, 4 desc;
   ```
 
 ## 7. Post-deploy verification
