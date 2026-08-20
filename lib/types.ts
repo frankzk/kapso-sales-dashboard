@@ -81,6 +81,9 @@ export interface OrderRow {
   currency: string | null;
   financial_status: string | null;
   cancelled_at: string | null;
+  /** Motivo de anulación según Shopify, en minúscula (0125). NULL si no está
+   *  anulado, o si se sincronizó antes de que se pidiera el campo. */
+  cancel_reason?: string | null;
   total_refunded: number;
   customer_phone?: string | null;
   tags: string[];
