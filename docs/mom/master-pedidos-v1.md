@@ -1541,16 +1541,51 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - Al pulsar **Leer y rellenar**, Kapta separa dos identidades del comprobante:
   el pagador o remitente se conserva internamente para trazabilidad y detección
   de duplicados; la interfaz valida la **cuenta receptora**.
+- Un comprobante es **la constancia de un pago hecho**, venga de la billetera o
+  del banco que venga: Yape, Plin, BCP, Interbank, BBVA o Scotiabank. Lo que
+  decide es que se vea una interfaz de pago con la operación concretada, no de
+  qué app sea. Preguntar «¿es un Yape?» en vez de «¿es un pago?» tenía dos
+  efectos que se refuerzan: la constancia de una transferencia salía «no es
+  comprobante» y el pago entraba como `info_incompleta`, y el lector exigía el
+  rótulo de Yape —«Nro. de operación»— y devolvía vacío el número que la imagen
+  sí mostraba bajo «Código de operación». Lo que NO es comprobante sigue igual
+  de acotado: una captura de chat, la foto de un producto o la pantalla para
+  ingresar un monto **antes** de pagar.
+- El nº de operación se acepta bajo el rótulo de cualquiera de esos bancos, y
+  Kapta guarda **con qué rótulo** lo leyó. Sin ese dato, un comprobante que no
+  se pudo leer y uno de un banco que no reconocemos son el mismo hueco, y la
+  pregunta «¿de qué bancos nos llegan los comprobantes?» no se puede responder.
+  Un rótulo nuevo no invalida el número: se registra, para que el banco
+  siguiente aparezca en los datos en vez de desaparecer en un vacío silencioso.
+- Ampliar los rótulos **no** afloja el guardarraíl que los ancló: el «Código de
+  seguridad» de 3 dígitos, el monto y el celular siguen sin poder convertirse en
+  nº de operación. Un identificador tan corto leído por OCR nunca es llave
+  global (§ deduplicación).
 - Un comprobante **no se registra** si la comprobación de duplicidad no llegó a
   ejecutarse. Con esas consultas caídas, «no hay duplicado» quiere decir «no se
   sabe». El nº de operación y la huella del archivo tienen índice único detrás y
   chocarían igual; la tercera señal —mismo monto y misma fecha— no lo tiene, así
   que ahí el silencio se cobra dos veces el mismo Yape.
 - La cuenta receptora se comprueba con dos señales independientes y visibles:
-  el destinatario debe coincidir con `Grupo GF S.A.C.` y el celular debe ser
-  `930 555 309` o conservar de forma legible la terminación `309`. Cada señal
-  muestra su propio check verde; la cuenta solo queda `verificada` cuando ambas
-  coinciden.
+  el destinatario y los últimos tres dígitos del celular. Cada señal muestra su
+  propio check verde; la cuenta solo queda `verificada` cuando ambas coinciden,
+  y entonces se nombra **con cuál** de las cuentas encajó.
+- Las cuentas de cobro son **varias y viven en los datos**, una lista por tienda
+  (`store_collection_accounts`, migración 0126): la de la empresa —`Grupo GF
+  S.A.C.` · `930 555 309`— y las de las dos personas dueñas. Estuvo escrita a
+  mano y era una sola, y como el negocio cobra por más de una, cada comprobante
+  a la cuenta de una dueña quedaba en `revision_admin` —la etiqueta que dice que
+  el dinero se fue a OTRA cuenta—: diecisiete comprobantes en tres semanas,
+  ninguno validado nunca, y los pedidos salieron igual. El bloqueo no protegía
+  nada; solo enseñaba a no leer la alarma.
+- **Una tienda sin cuentas configuradas NO acusa a nadie.** Vacío significa "no
+  sabemos contra qué contrastar" y cae en verificación parcial —contraste
+  manual—, jamás en `receptor distinto`. Lo contrario convertiría un despiste de
+  configuración en una acusación de desvío sobre todos los cobros de la tienda.
+- Una cuenta puede declarar **otras formas de escribir su nombre**: la constancia
+  del banco pone los apellidos primero donde la billetera los pone al final, y es
+  la misma persona. Se declara en la ficha de la cuenta y no aflojando la
+  comparación: enseñarle a ignorar el orden la volvería permisiva con cualquiera.
 - Si cualquiera de las dos señales leídas **contradice** la cuenta esperada, el
   pago queda en revisión y Kapta bloquea su validación también en servidor. Si
   una señal no pudo leerse, se conserva la imagen y se exige contraste manual
@@ -1565,6 +1600,16 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - Esta distinción es de seguridad, no de comodidad: una alarma de desvío que
   salta casi siempre por un nombre cortado deja de leerse, y tiene que ser
   creíble el día que el receptor sea de verdad otro.
+- La visión corre **una sola vez**, al subir el comprobante, y su lectura queda
+  guardada en la fila. Arreglar el lector no mueve lo ya cargado: hay que
+  releerlo (`scripts/reprocess-vouchers.ts`). El estado del receptor sí se
+  recalcula en cada pantalla a partir del nombre y el celular guardados, así que
+  ese sí mejora solo; el `recipient_check` escrito en la fila es únicamente
+  rastro de auditoría y **no** es la regla que decide.
+- El reproceso solo **rellena huecos** y nunca pisa un dato que ya tenga valor:
+  puede haberlo escrito una persona mirando la imagen, y su lectura manda. Tocar
+  `revision_admin` tampoco le corresponde: ahí hay alguien revisando, y moverlo
+  por su cuenta le vaciaría la cola sin que nadie haya mirado.
 - La captura del comprobante permanece grande y visible durante la revisión y
   puede abrirse a tamaño completo. `Titular/pagador` no es un campo operativo:
   si la visión lo obtiene, se conserva internamente para trazabilidad y

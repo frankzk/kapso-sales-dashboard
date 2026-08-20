@@ -1,3 +1,5 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 // Detección de comprobantes Yape repetidos. Puro + testeado.
 //
 // La regla del negocio es tajante: un mismo pago no puede registrarse dos veces,
@@ -71,8 +73,43 @@ export interface DuplicateVerdict {
 export const FUZZY_WINDOW_MS = 3 * 60 * 1000;
 
 /** Un pago rechazado libera su sitio: pudo ser un error de carga. */
-function isLive(payment: ExistingPayment): boolean {
+function isLive(payment: { validation_status: string }): boolean {
   return payment.validation_status !== "rechazado";
+}
+
+/** Lo mínimo que hay que saber de un pago para decir con cuál choca un número. */
+export interface OperationClash {
+  id: string;
+  order_id: string;
+  kind: string;
+  validation_status: string;
+}
+
+/**
+ * ¿Este nº de operación ya lo está usando OTRO pago vivo?
+ *
+ * El número es una llave global (índice único parcial
+ * `order_payments_operation_uniq`), así que antes de escribirlo hay que mirar.
+ * Vive aquí, y no en quien llama, porque lo consultan dos caminos muy distintos
+ * —el operador completando datos a mano y el reproceso de comprobantes— y son
+ * exactamente los dos que no pueden discrepar sobre qué cuenta como choque: el
+ * filtro de `rechazado` es el mismo `isLive` de arriba y el mismo del índice.
+ *
+ * Devuelve null si el número está libre. No escribe nada ni registra eventos:
+ * quién avisa y cómo es decisión de cada camino.
+ */
+export async function findOperationClash(
+  admin: SupabaseClient,
+  operation: string,
+  excludePaymentId: string,
+): Promise<OperationClash | null> {
+  const { data } = await admin
+    .from("order_payments")
+    .select("id,order_id,kind,validation_status")
+    .eq("operation_number", operation)
+    .neq("id", excludePaymentId);
+  const live = ((data ?? []) as OperationClash[]).filter(isLive);
+  return live[0] ?? null;
 }
 
 /**

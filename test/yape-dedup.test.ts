@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   describeDuplicate,
   findDuplicate,
+  findOperationClash,
   normalizeManualOperationNumber,
   normalizeOperationNumber,
   type CandidatePayment,
@@ -234,5 +235,55 @@ describe("findDuplicate — qué se le dice al operador", () => {
 
   it("sin duplicado no hay mensaje", () => {
     expect(describeDuplicate({ duplicate: false, signals: [], conflict: null, sameOrder: false })).toBe("");
+  });
+});
+
+describe("findOperationClash", () => {
+  /** Supabase mínimo: captura el filtro y devuelve las filas que se le den. */
+  function admin(rows: unknown[], cap: { op?: string; exclude?: string } = {}) {
+    return {
+      from: () => ({
+        select: () => ({
+          eq: (_c: string, op: string) => {
+            cap.op = op;
+            return {
+              neq: async (_c2: string, id: string) => {
+                cap.exclude = id;
+                return { data: rows };
+              },
+            };
+          },
+        }),
+      }),
+    } as never;
+  }
+
+  const live = { id: "pay-2", order_id: "order-9", kind: "adelanto", validation_status: "validado" };
+  const rejected = { ...live, id: "pay-3", validation_status: "rechazado" };
+
+  it("un número libre no choca con nada", async () => {
+    expect(await findOperationClash(admin([]), "12345678", "pay-1")).toBeNull();
+  });
+
+  it("encuentra el pago vivo que ya usa ese número", async () => {
+    const cap: { op?: string; exclude?: string } = {};
+    const clash = await findOperationClash(admin([live], cap), "12345678", "pay-1");
+    expect(clash?.id).toBe("pay-2");
+    expect(cap.op).toBe("12345678");
+    // Nunca choca consigo mismo: completar dos veces el mismo pago no es un
+    // duplicado.
+    expect(cap.exclude).toBe("pay-1");
+  });
+
+  it("un pago rechazado libera su número", async () => {
+    // Misma regla que el índice único parcial `order_payments_operation_uniq`.
+    // Si esto discrepara del índice, el reproceso creería tener sitio y la
+    // escritura moriría con un 23505 sin explicación.
+    expect(await findOperationClash(admin([rejected]), "12345678", "pay-1")).toBeNull();
+  });
+
+  it("entre varios, se queda con uno vivo y descarta los rechazados", async () => {
+    const clash = await findOperationClash(admin([rejected, live]), "12345678", "pay-1");
+    expect(clash?.id).toBe("pay-2");
   });
 });

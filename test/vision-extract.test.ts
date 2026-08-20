@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  OPERATION_NUMBER_LABELS,
   checkYapeRecipient,
   extractYapeVoucher,
   parseVoucherInstant,
@@ -12,6 +13,23 @@ function reply(payload: unknown) {
       ok: true,
       json: async () => ({ content: [{ type: "text", text: JSON.stringify(payload) }] }),
     }) as unknown as Response;
+}
+
+/** Captura el prompt que se le manda al modelo. */
+async function capturePrompt(): Promise<string> {
+  let sent = "";
+  await extractYapeVoucher("AAAA", "image/jpeg", {
+    ...OPTS,
+    fetchImpl: (async (_url: unknown, req: RequestInit) => {
+      const body = JSON.parse(String(req.body));
+      sent = body.messages[0].content
+        .filter((b: { type: string }) => b.type === "text")
+        .map((b: { text: string }) => b.text)
+        .join("\n");
+      return { ok: true, json: async () => ({ content: [] }) } as unknown as Response;
+    }) as unknown as typeof fetch,
+  });
+  return sent;
 }
 
 const OPTS = { apiKey: "k", model: "m" };
@@ -98,6 +116,23 @@ describe("extractYapeVoucher", () => {
     }
   });
 
+  it("el guardarraíl de los 3 dígitos sigue en pie aunque el rótulo sea de otro banco", async () => {
+    // Enumerar rótulos NO puede reabrir el bug que ancló el rótulo original: el
+    // "Código de seguridad" de Interbank tampoco es un nº de operación.
+    const out = await extractYapeVoucher("AAAA", "image/jpeg", {
+      ...OPTS,
+      fetchImpl: reply({
+        operation_number: "551",
+        operation_label: "Código de operación",
+        security_code: "551",
+      }),
+    });
+    expect(out.operationNumber).toBeNull();
+    // Sin número aceptado, el rótulo no se guarda: sería ruido en la
+    // distribución por banco y no respalda ningún dato.
+    expect(out.operationLabel).toBeNull();
+  });
+
   it("una captura recortada deja en null lo que no se ve", async () => {
     // Este es el caso que importa: sin nº de operación el pago no se podrá
     // validar, y el equipo tendrá que completarlo a mano.
@@ -116,6 +151,43 @@ describe("extractYapeVoucher", () => {
     expect(out.operationNumber).toBeNull();
     expect(out.paidAt).toBeNull();
     expect(out.amount).toBe(50);
+  });
+
+  it("acepta el nº de operación bajo el rótulo de cualquiera de los bancos", async () => {
+    // El motivo de este test: el prompt exigía literalmente "Nro. de operación"
+    // —el rótulo de Yape— y el modelo, obedeciendo, devolvía null ante un
+    // comprobante de Interbank que rotula "Código de operación". Eran 19 de los
+    // 21 comprobantes observados sin nº: el número estaba en la imagen.
+    for (const label of OPERATION_NUMBER_LABELS) {
+      const out = await extractYapeVoucher("AAAA", "image/jpeg", {
+        ...OPTS,
+        fetchImpl: reply({ operation_number: "62251837", operation_label: label }),
+      });
+      expect(out.operationNumber, `rótulo: ${label}`).toBe("62251837");
+      expect(out.operationLabel, `rótulo: ${label}`).toBe(label);
+    }
+  });
+
+  it("guarda el rótulo desconocido en vez de perderlo, para que el banco nuevo se vea", async () => {
+    // Un rótulo que no está en la lista no invalida un número que sí se leyó; y
+    // queda registrado, así el siguiente banco aparece en los datos en lugar de
+    // desaparecer en un null silencioso.
+    const out = await extractYapeVoucher("AAAA", "image/jpeg", {
+      ...OPTS,
+      fetchImpl: reply({ operation_number: "998877665", operation_label: "N° de transacción" }),
+    });
+    expect(out.operationNumber).toBe("998877665");
+    expect(out.operationLabel).toBe("N° de transacción");
+  });
+
+  it("el prompt enumera los rótulos desde la única definición que hay", async () => {
+    // Si alguien añade un banco a OPERATION_NUMBER_LABELS, el prompt tiene que
+    // enterarse solo. Una segunda lista escrita a mano dentro del prompt es la
+    // forma en que estas dos cosas se separan.
+    const prompt = await capturePrompt();
+    for (const label of OPERATION_NUMBER_LABELS) expect(prompt).toContain(label);
+    expect(prompt).toContain("operation_label");
+    expect(prompt).toContain("Código de seguridad");
   });
 
   it('trata el texto "null" como ausencia', async () => {
@@ -161,15 +233,19 @@ describe("extractYapeVoucher", () => {
 });
 
 describe("checkYapeRecipient", () => {
+  // La cuenta de la empresa. La lista completa y su corpus real viven en
+  // test/yape-recipient.test.ts; acá solo se comprueba que el envoltorio de
+  // lib/vision la reexporta y le pasa las cuentas.
+  const CUENTAS = [{ name: "Grupo GF S.A.C.", phoneLastDigits: "309" }];
   it("verifica Grupo GF S.A.C. y el celular terminado en 309", () => {
-    expect(checkYapeRecipient("Grupo Gf S.a.c.", "309")).toBe("verified");
+    expect(checkYapeRecipient("Grupo Gf S.a.c.", "309", CUENTAS)).toBe("verified");
   });
 
   it("distingue una lectura parcial de un receptor incorrecto", () => {
-    expect(checkYapeRecipient("Grupo GF SAC", null)).toBe("partial");
-    expect(checkYapeRecipient(null, "309")).toBe("partial");
-    expect(checkYapeRecipient("Otro comercio", "309")).toBe("mismatch");
-    expect(checkYapeRecipient("Grupo GF SAC", "123")).toBe("mismatch");
-    expect(checkYapeRecipient(null, null)).toBe("missing");
+    expect(checkYapeRecipient("Grupo GF SAC", null, CUENTAS)).toBe("partial");
+    expect(checkYapeRecipient(null, "309", CUENTAS)).toBe("partial");
+    expect(checkYapeRecipient("Otro comercio", "309", CUENTAS)).toBe("mismatch");
+    expect(checkYapeRecipient("Grupo GF SAC", "123", CUENTAS)).toBe("mismatch");
+    expect(checkYapeRecipient(null, null, CUENTAS)).toBe("missing");
   });
 });
