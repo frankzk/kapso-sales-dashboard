@@ -249,4 +249,6 @@
 \ir migrations/0122_confirmation_workbench.sql
 \echo 'Applying 0123_order_master_stale.sql'
 \ir migrations/0123_order_master_stale.sql
+\echo 'Applying 0124_aliclik_cod_points_rls.sql'
+\ir migrations/0124_aliclik_cod_points_rls.sql
 \echo 'Done.'
