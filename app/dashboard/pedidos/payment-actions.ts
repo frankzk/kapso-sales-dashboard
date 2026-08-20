@@ -36,18 +36,20 @@ import {
 import {
   describeDuplicate,
   findDuplicate,
+  findOperationClash,
   normalizeManualOperationNumber,
   normalizeOperationNumber,
   type ExistingPayment,
 } from "@/lib/yape-dedup";
+import {
+  MAX_VOUCHER_BYTES,
+  VOUCHER_BUCKET,
+  inspectVoucher,
+} from "@/lib/voucher-inspect";
 import type { OrderMasterRow } from "@/lib/types";
 
 const MASTER_PATH = "/dashboard/pedidos";
 const PAYMENT_REVIEW_PATH = "/dashboard/pagos";
-/** Los comprobantes llevan datos bancarios del cliente: bucket privado. */
-const VOUCHER_BUCKET = "yape-vouchers";
-/** Una captura de móvil no pesa más que esto; corta las subidas absurdas. */
-const MAX_VOUCHER_BYTES = 6 * 1024 * 1024;
 
 export interface PaymentActionState {
   error?: string;
@@ -313,22 +315,6 @@ export async function createVoucherUpload(
  * lanza: si la visión no está disponible, el comprobante sigue su camino y lo
  * valida una persona.
  */
-interface VoucherInspection {
-  ok: boolean;
-  isVoucher: boolean;
-  /** Datos leídos de la imagen, para rellenar lo que el operador dejó en blanco. */
-  fields: {
-    operationNumber: string | null;
-    amount: number | null;
-    paidAt: string | null;
-    payerName: string | null;
-    recipientName: string | null;
-    recipientPhoneLastDigits: string | null;
-    recipientCheck: YapeRecipientCheck;
-  };
-  payload: Record<string, unknown>;
-}
-
 export interface VoucherPrefillFields {
   operationNumber: string | null;
   amount: number | null;
@@ -337,92 +323,6 @@ export interface VoucherPrefillFields {
   recipientName: string | null;
   recipientPhoneLastDigits: string | null;
   recipientCheck: YapeRecipientCheck;
-}
-
-const EMPTY_INSPECTION: VoucherInspection = {
-  ok: false,
-  isVoucher: false,
-  fields: {
-    operationNumber: null,
-    amount: null,
-    paidAt: null,
-    payerName: null,
-    recipientName: null,
-    recipientPhoneLastDigits: null,
-    recipientCheck: "missing",
-  },
-  payload: {},
-};
-
-async function inspectVoucher(
-  admin: ReturnType<typeof createAdminSupabase>,
-  path: string | null,
-  storeId: string,
-): Promise<VoucherInspection> {
-  if (!path) return EMPTY_INSPECTION;
-  // Clave de visión de ESTA tienda (0052): el gasto cae en su propia cuenta de
-  // Anthropic. Si no tiene clave propia se usa la del entorno.
-  const { data: store } = await admin
-    .from("stores")
-    .select("anthropic_api_key_enc,anthropic_model")
-    .eq("id", storeId)
-    .maybeSingle();
-  const storeCreds = {
-    anthropicApiKey: decryptOrNull(
-      (store as { anthropic_api_key_enc?: string | null } | null)?.anthropic_api_key_enc ?? null,
-    ),
-    anthropicModel: (store as { anthropic_model?: string | null } | null)?.anthropic_model ?? null,
-  };
-  try {
-    const { data, error } = await admin.storage.from(VOUCHER_BUCKET).download(path);
-    if (error || !data) return EMPTY_INSPECTION;
-    const bytes = new Uint8Array(await data.arrayBuffer());
-    if (bytes.byteLength > MAX_VOUCHER_BYTES) {
-      return { ...EMPTY_INSPECTION, payload: { error: "imagen demasiado grande" } };
-    }
-    const base64 = Buffer.from(bytes).toString("base64");
-    // Dos preguntas distintas a la misma imagen: "¿es un comprobante?" y "¿qué
-    // dice?". La segunda es la que evita teclear el nº de operación a mano —y es
-    // el nº de operación lo que hace posible detectar el mismo Yape recortado.
-    const [verdict, extracted] = await Promise.all([
-      analyzeYapeVoucherFromEnv(base64, data.type, storeCreds),
-      extractYapeVoucherFromEnv(base64, data.type, storeCreds),
-    ]);
-    const recipientCheck = checkYapeRecipient(
-      extracted.recipientName,
-      extracted.recipientPhoneLastDigits,
-    );
-    return {
-      ok: verdict.ok,
-      isVoucher: verdict.isVoucher,
-      fields: {
-        operationNumber: extracted.operationNumber,
-        amount: extracted.amount,
-        paidAt: extracted.paidAt,
-        payerName: extracted.payerName,
-        recipientName: extracted.recipientName,
-        recipientPhoneLastDigits: extracted.recipientPhoneLastDigits,
-        recipientCheck,
-      },
-      payload: {
-        indicators: verdict.indicators,
-        model: verdict.model,
-        ok: verdict.ok,
-        extracted: {
-          operation_number: extracted.operationNumber,
-          amount: extracted.amount,
-          paid_at: extracted.paidAt,
-          payer_name: extracted.payerName,
-          recipient_name: extracted.recipientName,
-          recipient_phone_last_digits: extracted.recipientPhoneLastDigits,
-          recipient_check: recipientCheck,
-          ok: extracted.ok,
-        },
-      },
-    };
-  } catch {
-    return EMPTY_INSPECTION;
-  }
 }
 
 /**
@@ -1152,15 +1052,8 @@ export async function completePaymentData(
   // El nº de operación es global: antes de escribirlo hay que asegurarse de que
   // no pertenece ya a otro pago.
   if (operation) {
-    const { data: clash } = await admin
-      .from("order_payments")
-      .select("id,order_id,kind,validation_status")
-      .eq("operation_number", operation)
-      .neq("id", paymentId);
-    const live = ((clash ?? []) as { id: string; order_id: string; kind: string; validation_status: string }[])
-      .filter((c) => c.validation_status !== "rechazado");
-    if (live.length) {
-      const other = live[0]!;
+    const other = await findOperationClash(admin, operation, paymentId);
+    if (other) {
       const { data: otherOrder } = await admin
         .from("order_master")
         .select("order_name")

@@ -1,11 +1,11 @@
-// Vision check for Yape payment vouchers (Claude Messages API).
+// Vision check for payment vouchers (Claude Messages API).
 //
 // The "Yape/Shalom por verificar" alert must fire on a REAL voucher, not on any
 // screenshot a customer sends. Text/caption signals (lib/kapso.ts) catch the
 // explicit cases; a silent voucher IMAGE needs its CONTENT read. This module
-// asks Claude to look at one image and report whether it is a genuine Yape
-// payment confirmation, checking the indicators the operator specified:
-//   - el logo / la interfaz oficial de Yape
+// asks Claude to look at one image and report whether it is a genuine payment
+// confirmation, checking the indicators the operator specified:
+//   - la interfaz oficial de pago (Yape/Plin o la constancia de un banco)
 //   - el monto (S/ …)
 //   - la fecha y hora
 //   - el destinatario (se espera "Grupo GF SAC")
@@ -29,7 +29,8 @@ const SUPPORTED_MEDIA = new Set(["image/jpeg", "image/png", "image/gif", "image/
  *  alias (not an interface) so it carries an implicit index signature and stays
  *  assignable to `Record<string, unknown>` for the jsonb column / audit path. */
 export type YapeVoucherIndicators = {
-  logo?: boolean; // Yape logo / official payment interface
+  /** Interfaz oficial de pago — la de Yape/Plin o la constancia de un banco. */
+  logo?: boolean;
   monto?: boolean; // amount (S/ …)
   fecha_hora?: boolean; // date & time
   destinatario?: boolean; // recipient — expected "Grupo GF SAC"
@@ -55,15 +56,29 @@ export interface AnalyzeYapeOpts {
   fetchImpl?: typeof fetch;
 }
 
+// La pregunta es "¿esto es un comprobante de pago?", NO "¿esto es Yape?".
+//
+// Decía Yape, y no era un matiz: el cliente que paga por transferencia manda una
+// constancia de Interbank o del BCP, sin el morado de Yape, y el veredicto salía
+// "no es comprobante" → el pago entraba como `info_incompleta` aunque el nº de
+// operación y el receptor se hubieran leído perfectos (ver payment-actions.ts,
+// donde `vision.ok && !vision.isVoucher` decide el estado). Arreglar solo la
+// extracción no habría destrabado ninguno: seguían chocando contra esta puerta.
+//
+// La precisión que importa se conserva intacta, porque nunca dependió del morado
+// sino de que hubiera UNA interfaz de pago: una captura de chat o la foto de un
+// producto no muestran la de ningún banco.
 const SYSTEM_PROMPT =
-  "Eres un verificador de comprobantes de pago Yape (billetera móvil peruana). " +
-  "Recibes UNA imagen y decides si es un comprobante REAL de un pago Yape ya " +
-  "realizado. Un comprobante auténtico muestra la interfaz/logo oficial de Yape " +
-  "(fondo morado característico, ✓ de confirmación) con un pago concretado. " +
-  "NO son comprobantes: capturas de una conversación de chat, fotos de un " +
-  "producto, la pantalla para INGRESAR un monto antes de pagar, catálogos, o " +
-  "cualquier imagen sin la interfaz de pago de Yape. Ante la duda, NO es " +
-  "comprobante. Responde ÚNICAMENTE con un objeto JSON, sin texto adicional.";
+  "Eres un verificador de comprobantes de pago de bancos y billeteras peruanas " +
+  "(Yape, Plin, BCP, Interbank, BBVA, Scotiabank). Recibes UNA imagen y decides " +
+  "si es la constancia REAL de un pago o transferencia ya realizada. Una " +
+  "constancia auténtica muestra la interfaz oficial de la app o de la banca por " +
+  "internet (el morado de Yape, o la pantalla de constancia del banco) con la " +
+  "operación concretada. NO son comprobantes: capturas de una conversación de " +
+  "chat, fotos de un producto, la pantalla para INGRESAR un monto antes de " +
+  "pagar, catálogos, o cualquier imagen sin la interfaz de pago de un banco o " +
+  "billetera. Ante la duda, NO es comprobante. Responde ÚNICAMENTE con un objeto " +
+  "JSON, sin texto adicional.";
 
 // The recipient the operator expects on a valid advance ("adelanto"). Passed to
 // the model as a strong positive signal, not a hard requirement (a different
@@ -74,18 +89,21 @@ function buildUserPrompt(): string {
   return (
     "Analiza la imagen y devuelve JSON con esta forma exacta:\n" +
     "{\n" +
-    '  "is_voucher": boolean,   // true SOLO si es un comprobante Yape de pago realizado\n' +
+    '  "is_voucher": boolean,   // true SOLO si es la constancia de un pago ya realizado\n' +
     '  "indicators": {\n' +
-    '    "logo": boolean,          // se ve el logo/interfaz oficial de Yape\n' +
+    '    "logo": boolean,          // se ve la interfaz oficial de pago (Yape, Plin o la del banco)\n' +
     '    "monto": boolean,         // aparece un monto (S/ …)\n' +
     '    "fecha_hora": boolean,    // aparece fecha y/u hora del pago\n' +
     `    "destinatario": boolean,  // aparece el destinatario (se espera "${EXPECTED_RECIPIENT}")\n` +
-    '    "estado": boolean,        // dice "Pago realizado", "Transferencia exitosa" o "Yapeaste"\n' +
-    '    "operacion": boolean      // aparece el número de operación/transacción\n' +
+    '    "estado": boolean,        // dice "Pago realizado", "Transferencia exitosa", "Yapeaste" o "Constancia"\n' +
+    '    "operacion": boolean      // aparece el número/código de operación o transacción\n' +
     "  }\n" +
     "}\n" +
-    "Marca cada indicador según lo que REALMENTE veas en la imagen. Una simple " +
-    "captura de chat o una foto de producto debe dar is_voucher=false y logo=false."
+    "Marca cada indicador según lo que REALMENTE veas en la imagen. La constancia " +
+    "de una transferencia bancaria vale igual que un Yape: lo que decide es que " +
+    "haya una interfaz de pago con la operación hecha, no de qué app sea. Una " +
+    "simple captura de chat o una foto de producto debe dar is_voucher=false y " +
+    "logo=false."
   );
 }
 
@@ -139,11 +157,12 @@ function parseVerdict(text: string): { is_voucher: boolean; indicators: YapeVouc
 }
 
 /**
- * Decide, from the model's verdict, whether the image is a Yape voucher.
+ * Decide, from the model's verdict, whether the image is a payment receipt.
  * Precision over recall (the whole point is to stop false positives on random
  * screenshots), so we require BOTH:
- *   - the Yape interface/logo (`logo === true`) — a chat/product screenshot
- *     never shows the payment UI; and
+ *   - an official payment interface (`logo === true`) — de Yape/Plin o la
+ *     constancia de un banco; una captura de chat o la foto de un producto no
+ *     muestran ninguna; y
  *   - at least one concrete payment fact (monto / estado / nº de operación) —
  *     guards against a terse or hallucinated `{"is_voucher": true}` with no
  *     corroborating indicator.
@@ -274,9 +293,38 @@ export async function analyzeYapeVoucherFromEnv(
 // el campo vacío en vez de inventarlo — un nº de operación mal leído sería peor
 // que ninguno, porque bloquearía un pago legítimo o dejaría pasar un duplicado.
 
+/**
+ * Los rótulos bajo los que un comprobante peruano publica el nº de operación.
+ *
+ * Existe esta lista porque el prompt pedía literalmente "Nro. de operación" —el
+ * rótulo de Yape— y le ordenaba al modelo devolver null si no lo veía. Contra un
+ * comprobante de Interbank, que rotula "Código de operación", el modelo obedecía
+ * y descartaba un número que tenía delante: en 19 de los 21 comprobantes
+ * observados sin nº de operación, `indicators.operacion` era true. No era una
+ * lectura fallida, era una instrucción nuestra.
+ *
+ * Se ENUMERA en vez de aflojar el requisito. Quitarlo reabriría el bug que lo
+ * puso ahí: el modelo devolvía el "Código de seguridad" de 3 dígitos, o el
+ * monto, como si fueran el nº de operación. Un rótulo desconocido sigue dando
+ * null, y ahora además queda registrado (`operationLabel`) para que el siguiente
+ * banco aparezca en los datos en vez de desaparecer en un null silencioso.
+ */
+export const OPERATION_NUMBER_LABELS = [
+  "Nro. de operación", // Yape
+  "Número de operación", // BCP, Plin
+  "Código de operación", // Interbank
+  "Nº de operación", // BBVA, Scotiabank
+] as const;
+
 export interface YapeVoucherFields {
   /** Nº de operación tal como aparece, solo dígitos y letras. */
   operationNumber: string | null;
+  /**
+   * El rótulo bajo el que el modelo encontró el número, tal como se lee en la
+   * imagen. Es nuestra única señal de qué banco emitió el comprobante: sin él,
+   * "no se pudo leer" y "no reconocimos el rótulo" son el mismo null.
+   */
+  operationLabel: string | null;
   amount: number | null;
   /** Fecha y hora del movimiento en ISO, cuando ambas se pueden leer. */
   paidAt: string | null;
@@ -290,17 +338,20 @@ export interface YapeVoucherFields {
 }
 
 const EXTRACT_SYSTEM_PROMPT =
-  "Eres un lector de comprobantes de pago Yape (billetera móvil peruana). " +
+  "Eres un lector de comprobantes de pago de bancos y billeteras peruanas " +
+  "(Yape, Plin, BCP, Interbank, BBVA, Scotiabank). " +
   "Recibes UNA imagen de un comprobante y transcribes SOLO lo que se ve. " +
   "Nunca inventes ni completes un dato parcial: si un campo está cortado, " +
   "borroso o no aparece, devuélvelo como null. Un número de operación mal " +
   "transcrito es peor que ninguno. Responde ÚNICAMENTE con un objeto JSON.";
 
 function buildExtractPrompt(): string {
+  const labels = OPERATION_NUMBER_LABELS.map((l) => `"${l}"`).join(", ");
   return (
     "Transcribe el comprobante y devuelve JSON con esta forma exacta:\n" +
     "{\n" +
-    '  "operation_number": string|null,  // valor rotulado exactamente "Nro. de operación"\n' +
+    `  "operation_number": string|null,  // valor rotulado ${labels} o equivalente\n` +
+    '  "operation_label": string|null,   // el rótulo TAL COMO se lee junto a ese valor\n' +
     '  "security_code": string|null,      // código de seguridad de 3 dígitos; dato distinto\n' +
     '  "amount": number|null,            // monto en soles, solo el número\n' +
     '  "date": string|null,              // fecha, tal como se ve (p. ej. "10 jul 2026")\n' +
@@ -309,11 +360,16 @@ function buildExtractPrompt(): string {
     '  "recipient_name": string|null,    // quien recibe\n' +
     '  "recipient_phone_last_digits": string|null // últimos 3 dígitos del Nro. de celular destino\n' +
     "}\n" +
-    'IMPORTANTE: "Nro. de operación" y "Código de seguridad" NO son el mismo dato. ' +
-    "El número de operación aparece en DATOS DE LA TRANSACCIÓN y normalmente tiene " +
-    "varios dígitos; nunca uses como operation_number el código de seguridad de 3 " +
-    "dígitos, el monto, el celular ni parte de otro campo. Si no ves claramente la " +
-    'etiqueta "Nro. de operación" junto a su valor completo, operation_number es null. ' +
+    "El comprobante puede venir de CUALQUIER banco o billetera peruana (Yape, " +
+    "Plin, BCP, Interbank, BBVA, Scotiabank), y cada uno rotula ese dato a su " +
+    `manera: ${labels}. Todos valen. Copia en "operation_label" el rótulo tal ` +
+    "como aparece, sin normalizarlo.\n" +
+    "IMPORTANTE: el número de operación y el \"Código de seguridad\" NO son el " +
+    "mismo dato. El número de operación acompaña a los datos de la transacción y " +
+    "normalmente tiene varios dígitos; nunca uses como operation_number el código " +
+    "de seguridad de 3 dígitos, el monto, el celular ni parte de otro campo. Si no " +
+    "ves con claridad un rótulo de nº de operación junto a su valor completo, " +
+    "operation_number y operation_label son null. " +
     "Si la imagen está recortada y algún dato no se ve completo, ese campo es null."
   );
 }
@@ -410,11 +466,15 @@ function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | nu
   const cleanedOperation = rawOperation
     ? rawOperation.toUpperCase().replace(/[^A-Z0-9]/g, "")
     : "";
+  // El código de seguridad de Yape tiene 3 dígitos. También hemos visto al
+  // modelo devolver aquí el monto ("30"). Un identificador tan corto no es
+  // confiable y se deja vacío para que el operador lo revise.
+  const operationNumber = cleanedOperation.length >= 6 ? cleanedOperation : null;
   return {
-    // El código de seguridad de Yape tiene 3 dígitos. También hemos visto al
-    // modelo devolver aquí el monto ("30"). Un identificador tan corto no es
-    // confiable y se deja vacío para que el operador lo revise.
-    operationNumber: cleanedOperation.length >= 6 ? cleanedOperation : null,
+    operationNumber,
+    // El rótulo sin número no dice nada y sería ruido en la distribución por
+    // banco: solo se guarda cuando acompaña a un número que sí aceptamos.
+    operationLabel: operationNumber ? str(o.operation_label) : null,
     amount: num(o.amount),
     paidAt: parseVoucherInstant(str(o.date), str(o.time)),
     payerName: str(o.payer_name),
@@ -439,6 +499,7 @@ export async function extractYapeVoucher(
   const model = opts.model;
   const empty: YapeVoucherFields = {
     operationNumber: null,
+    operationLabel: null,
     amount: null,
     paidAt: null,
     payerName: null,
@@ -507,6 +568,7 @@ export async function extractYapeVoucherFromEnv(
   if (!apiKey) {
     return {
       operationNumber: null,
+      operationLabel: null,
       amount: null,
       paidAt: null,
       payerName: null,

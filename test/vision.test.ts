@@ -47,7 +47,7 @@ describe("isVoucherVerdict (decision threshold — precision over recall)", () =
   it("false when the model says it is not a voucher", () => {
     expect(isVoucherVerdict({ is_voucher: false, indicators: { logo: true, monto: true, estado: true } })).toBe(false);
   });
-  it("false when the Yape interface/logo is absent (chat/product screenshot)", () => {
+  it("false when no payment interface is visible at all (chat/product screenshot)", () => {
     expect(isVoucherVerdict({ is_voucher: true, indicators: { logo: false, monto: true, estado: true } })).toBe(false);
     expect(isVoucherVerdict({ is_voucher: true, indicators: { monto: true, estado: true } })).toBe(false); // logo unspecified
   });
@@ -59,10 +59,45 @@ describe("isVoucherVerdict (decision threshold — precision over recall)", () =
       false,
     );
   });
-  it("true with the Yape interface + at least one payment fact (monto / estado / operación)", () => {
+  it("true with a payment interface + at least one payment fact (monto / estado / operación)", () => {
     expect(isVoucherVerdict({ is_voucher: true, indicators: { logo: true, monto: true } })).toBe(true);
     expect(isVoucherVerdict({ is_voucher: true, indicators: { logo: true, estado: true } })).toBe(true);
     expect(isVoucherVerdict({ is_voucher: true, indicators: { logo: true, operacion: true } })).toBe(true);
+  });
+});
+
+describe("el veredicto pregunta por un pago, no por Yape", () => {
+  // La constancia de una transferencia de Interbank o del BCP no tiene el morado
+  // de Yape. Mientras el prompt preguntaba "¿es un Yape?", el veredicto salía
+  // negativo y payment-actions mandaba el pago a `info_incompleta` aunque el nº
+  // de operación y el receptor estuvieran perfectos: leer bien el número no
+  // habría destrabado ni uno solo de esos comprobantes.
+  it("le pregunta al modelo por cualquier banco o billetera peruana", async () => {
+    const cap: { url?: string; headers?: Record<string, string>; body?: any } = {};
+    await analyzeYapeVoucher("x", "image/jpeg", {
+      apiKey: KEY,
+      model: "m",
+      fetchImpl: mockAnthropic('{"is_voucher": true, "indicators": {"logo": true, "monto": true}}', cap),
+    });
+    const system: string = cap.body.system;
+    for (const bank of ["Yape", "Plin", "BCP", "Interbank", "BBVA", "Scotiabank"]) {
+      expect(system).toContain(bank);
+    }
+    // Y sigue diciendo qué NO es un comprobante: la precisión no se negocia.
+    expect(system).toContain("conversación de chat");
+    expect(system).toContain("Ante la duda, NO es comprobante");
+  });
+
+  it("una constancia bancaria con interfaz de pago cuenta como comprobante", async () => {
+    const res = await analyzeYapeVoucher("x", "image/jpeg", {
+      apiKey: KEY,
+      model: "m",
+      fetchImpl: mockAnthropic(
+        '{"is_voucher": true, "indicators": {"logo": true, "monto": true, "operacion": true, "estado": true}}',
+      ),
+    });
+    expect(res.isVoucher).toBe(true);
+    expect(res.ok).toBe(true);
   });
 });
 

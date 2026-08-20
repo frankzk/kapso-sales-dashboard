@@ -1537,6 +1537,26 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - Al pulsar **Leer y rellenar**, Kapta separa dos identidades del comprobante:
   el pagador o remitente se conserva internamente para trazabilidad y detección
   de duplicados; la interfaz valida la **cuenta receptora**.
+- Un comprobante es **la constancia de un pago hecho**, venga de la billetera o
+  del banco que venga: Yape, Plin, BCP, Interbank, BBVA o Scotiabank. Lo que
+  decide es que se vea una interfaz de pago con la operación concretada, no de
+  qué app sea. Preguntar «¿es un Yape?» en vez de «¿es un pago?» tenía dos
+  efectos que se refuerzan: la constancia de una transferencia salía «no es
+  comprobante» y el pago entraba como `info_incompleta`, y el lector exigía el
+  rótulo de Yape —«Nro. de operación»— y devolvía vacío el número que la imagen
+  sí mostraba bajo «Código de operación». Lo que NO es comprobante sigue igual
+  de acotado: una captura de chat, la foto de un producto o la pantalla para
+  ingresar un monto **antes** de pagar.
+- El nº de operación se acepta bajo el rótulo de cualquiera de esos bancos, y
+  Kapta guarda **con qué rótulo** lo leyó. Sin ese dato, un comprobante que no
+  se pudo leer y uno de un banco que no reconocemos son el mismo hueco, y la
+  pregunta «¿de qué bancos nos llegan los comprobantes?» no se puede responder.
+  Un rótulo nuevo no invalida el número: se registra, para que el banco
+  siguiente aparezca en los datos en vez de desaparecer en un vacío silencioso.
+- Ampliar los rótulos **no** afloja el guardarraíl que los ancló: el «Código de
+  seguridad» de 3 dígitos, el monto y el celular siguen sin poder convertirse en
+  nº de operación. Un identificador tan corto leído por OCR nunca es llave
+  global (§ deduplicación).
 - Un comprobante **no se registra** si la comprobación de duplicidad no llegó a
   ejecutarse. Con esas consultas caídas, «no hay duplicado» quiere decir «no se
   sabe». El nº de operación y la huella del archivo tienen índice único detrás y
@@ -1561,6 +1581,16 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - Esta distinción es de seguridad, no de comodidad: una alarma de desvío que
   salta casi siempre por un nombre cortado deja de leerse, y tiene que ser
   creíble el día que el receptor sea de verdad otro.
+- La visión corre **una sola vez**, al subir el comprobante, y su lectura queda
+  guardada en la fila. Arreglar el lector no mueve lo ya cargado: hay que
+  releerlo (`scripts/reprocess-vouchers.ts`). El estado del receptor sí se
+  recalcula en cada pantalla a partir del nombre y el celular guardados, así que
+  ese sí mejora solo; el `recipient_check` escrito en la fila es únicamente
+  rastro de auditoría y **no** es la regla que decide.
+- El reproceso solo **rellena huecos** y nunca pisa un dato que ya tenga valor:
+  puede haberlo escrito una persona mirando la imagen, y su lectura manda. Tocar
+  `revision_admin` tampoco le corresponde: ahí hay alguien revisando, y moverlo
+  por su cuenta le vaciaría la cola sin que nadie haya mirado.
 - La captura del comprobante permanece grande y visible durante la revisión y
   puede abrirse a tamaño completo. `Titular/pagador` no es un campo operativo:
   si la visión lo obtiene, se conserva internamente para trazabilidad y
