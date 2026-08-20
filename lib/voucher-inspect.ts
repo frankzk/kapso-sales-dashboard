@@ -9,13 +9,17 @@
 // divergiendo, que es el fallo que este repo repite.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { loadStoreCollectionAccounts } from "@/lib/collection-accounts";
 import { decryptOrNull } from "@/lib/crypto";
 import {
   analyzeYapeVoucherFromEnv,
-  checkYapeRecipient,
   extractYapeVoucherFromEnv,
-  type YapeRecipientCheck,
 } from "@/lib/vision";
+import {
+  verifyYapeRecipient,
+  type CollectionAccount,
+  type YapeRecipientCheck,
+} from "@/lib/yape-recipient";
 
 /** Los comprobantes llevan datos bancarios del cliente: bucket privado. */
 export const VOUCHER_BUCKET = "yape-vouchers";
@@ -40,6 +44,8 @@ export interface VoucherInspection {
     recipientName: string | null;
     recipientPhoneLastDigits: string | null;
     recipientCheck: YapeRecipientCheck;
+    /** Con qué cuenta de cobro encajó, si encajó con alguna. */
+    recipientAccount: CollectionAccount | null;
   };
   payload: Record<string, unknown>;
 }
@@ -56,6 +62,7 @@ export const EMPTY_INSPECTION: VoucherInspection = {
     recipientName: null,
     recipientPhoneLastDigits: null,
     recipientCheck: "missing",
+    recipientAccount: null,
   },
   payload: {},
 };
@@ -98,10 +105,15 @@ export async function inspectVoucher(
       analyzeYapeVoucherFromEnv(base64, data.type, storeCreds),
       extractYapeVoucherFromEnv(base64, data.type, storeCreds),
     ]);
-    const recipientCheck = checkYapeRecipient(
+    // Las cuentas de cobro de ESTA tienda. Si no hay ninguna configurada, la
+    // verificación cae en «no se puede contrastar», jamás en «se desvió».
+    const accounts = await loadStoreCollectionAccounts(admin, storeId);
+    const recipient = verifyYapeRecipient(
       extracted.recipientName,
       extracted.recipientPhoneLastDigits,
+      accounts,
     );
+    const recipientCheck = recipient.status;
     return {
       ok: verdict.ok,
       isVoucher: verdict.isVoucher,
@@ -114,6 +126,7 @@ export async function inspectVoucher(
         recipientName: extracted.recipientName,
         recipientPhoneLastDigits: extracted.recipientPhoneLastDigits,
         recipientCheck,
+        recipientAccount: recipient.account,
       },
       payload: {
         indicators: verdict.indicators,
@@ -131,6 +144,9 @@ export async function inspectVoucher(
           recipient_name: extracted.recipientName,
           recipient_phone_last_digits: extracted.recipientPhoneLastDigits,
           recipient_check: recipientCheck,
+          // A qué cuenta de cobro llegó, cuando se pudo determinar. Con varias
+          // cuentas, "verificado" a secas ya no dice dónde está el dinero.
+          recipient_account: recipient.account?.name ?? null,
           ok: extracted.ok,
         },
       },

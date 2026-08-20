@@ -76,14 +76,12 @@ async function main() {
     { inspectVoucher },
     { PAYMENT_OBSERVED_STATUSES },
     { findOperationClash, normalizeOperationNumber },
-    { verifyYapeRecipient },
     { recomputeOrderMasterSafe },
   ] = await Promise.all([
     import("@/lib/db"),
     import("@/lib/voucher-inspect"),
     import("@/lib/payment-review"),
     import("@/lib/yape-dedup"),
-    import("@/lib/yape-recipient"),
     import("@/lib/order-master"),
   ]);
 
@@ -102,6 +100,7 @@ async function main() {
   console.log(`${rows.length} comprobantes observados con imagen.${WRITE ? "" : "  (SIMULACRO)"}\n`);
 
   const byLabel = new Map<string, number>();
+  const byAccount = new Map<string, number>();
   const touchedOrders = new Set<string>();
   let reread = 0;
   let visionFailed = 0;
@@ -171,17 +170,21 @@ async function main() {
     const operation = row.operation_number ?? (gainedOperation ? readOperation : null);
     if (!operation) stillNoOperation += 1;
 
-    const recipient = verifyYapeRecipient(
-      inspection.fields.recipientName,
-      inspection.fields.recipientPhoneLastDigits,
-    );
-    if (recipient.status === "mismatch") recipientMismatch += 1;
+    // El receptor ya lo juzgó `inspectVoucher` contra las cuentas de cobro de
+    // ESTA tienda. Volver a calcularlo acá sería una segunda definición de la
+    // misma regla esperando el día en que discrepen.
+    const recipientCheck = inspection.fields.recipientCheck;
+    if (recipientCheck === "mismatch") recipientMismatch += 1;
+    if (inspection.fields.recipientAccount) {
+      const cuenta = inspection.fields.recipientAccount.name;
+      byAccount.set(cuenta, (byAccount.get(cuenta) ?? 0) + 1);
+    }
 
     // Misma regla que completePaymentData: tener el nº de operación es lo que
     // saca al pago de "información incompleta" y lo devuelve a la cola normal.
     // No se toca `revision_admin`: ahí hay una persona mirando, y moverlo por
     // nuestra cuenta le vaciaría la cola sin que nadie lo haya revisado.
-    if (operation && row.validation_status === "info_incompleta" && recipient.status !== "mismatch") {
+    if (operation && row.validation_status === "info_incompleta" && recipientCheck !== "mismatch") {
       patch.validation_status = "pendiente_revision";
       unblocked += 1;
     }
@@ -222,7 +225,13 @@ async function main() {
   console.log(`Pasan a pendiente_revision:      ${unblocked}`);
   console.log(`Nº ya usado por otro pago:       ${clashes}`);
   console.log(`Siguen sin nº de operación:      ${stillNoOperation}`);
-  console.log(`Receptor que NO es Grupo GF:     ${recipientMismatch}   ← esto lo mira una persona`);
+  console.log(`Receptor de ninguna cuenta:      ${recipientMismatch}   ← esto lo mira una persona`);
+
+  console.log(`\nA qué cuenta de cobro llegó cada uno:`);
+  if (!byAccount.size) console.log("  (ninguna reconocida)");
+  for (const [cuenta, n] of [...byAccount].sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${String(n).padStart(3)}  ${cuenta}`);
+  }
 
   console.log(`\nDistribución por rótulo (de qué banco vino cada comprobante):`);
   if (!byLabel.size) console.log("  (ninguno legible)");

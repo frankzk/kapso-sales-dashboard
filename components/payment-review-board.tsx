@@ -78,10 +78,15 @@ function normalizedSearch(item: PaymentReviewItem): string {
 }
 
 function RecipientSignal({ item }: { item: PaymentReviewItem }) {
-  const reading = yapeRecipientReadingFromVision(item.vision);
+  const reading = yapeRecipientReadingFromVision(item.vision, item.collectionAccounts);
   const config =
     reading.status === "verified"
-      ? { label: "Cuenta GF verificada", tone: "bg-emerald-50 text-emerald-700" }
+      // Con varias cuentas de cobro, "verificada" a secas ya no dice a cuál
+      // llegó el dinero, y eso es justo lo que el revisor necesita ver.
+      ? {
+          label: `Cuenta verificada: ${reading.account?.name ?? "de la tienda"}`,
+          tone: "bg-emerald-50 text-emerald-700",
+        }
       : reading.status === "mismatch"
         ? { label: "Cuenta receptora no coincide", tone: "bg-red-50 text-red-700" }
         : reading.status === "partial"
@@ -100,7 +105,7 @@ function ReviewCard({ item, lane }: { item: PaymentReviewItem; lane: PaymentRevi
   const [mode, setMode] = useState<"observe" | "reject" | null>(null);
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState<PaymentActionState | null>(null);
-  const recipient = yapeRecipientReadingFromVision(item.vision);
+  const recipient = yapeRecipientReadingFromVision(item.vision, item.collectionAccounts);
   const canApprove = Boolean(item.operationNumber) && recipient.status !== "mismatch";
   const remaining =
     item.orderTotal === null ? null : Math.max(0, item.orderTotal - item.validatedTotal);

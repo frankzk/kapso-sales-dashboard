@@ -42,6 +42,7 @@ import type { OrderPaymentPanelMode } from "@/lib/order-payment-panel";
 import {
   verifyYapeRecipient,
   yapeRecipientReadingFromVision,
+  type CollectionAccount,
   type YapeRecipientReading,
 } from "@/lib/yape-recipient";
 import { operationalLabel } from "@/lib/order-status";
@@ -248,6 +249,7 @@ export function PickupKeyPanel({
 
       <PaymentList
         payments={panel.payments}
+        accounts={panel.collectionAccounts}
         canValidate={panel.canValidate}
         canRegister={panel.canRegister}
         pending={pending}
@@ -260,6 +262,7 @@ export function PickupKeyPanel({
         <VoucherForm
           orderId={orderId}
           storeId={panel.storeId}
+          accounts={panel.collectionAccounts}
           orderTotal={panel.orderTotal}
           existing={panel.payments}
           shalomGuide={panel.shalomGuide}
@@ -395,6 +398,7 @@ function PaymentMoneySummary({
 
 function PaymentList({
   payments,
+  accounts,
   canValidate,
   canRegister,
   pending,
@@ -403,6 +407,8 @@ function PaymentList({
   onComplete,
 }: {
   payments: PaymentRow[];
+  /** Las cuentas de cobro de la tienda, para juzgar el receptor de cada uno. */
+  accounts: CollectionAccount[];
   canValidate: boolean;
   canRegister: boolean;
   pending: boolean;
@@ -438,7 +444,11 @@ function PaymentList({
             {fmtDateTime(p.paid_at)}
             {p.payer_name ? ` · Pagó: ${p.payer_name}` : ""}
           </p>
-          <StoredRecipientStatus vision={p.vision} hasVoucher={Boolean(p.file_path)} />
+          <StoredRecipientStatus
+            vision={p.vision}
+            hasVoucher={Boolean(p.file_path)}
+            accounts={accounts}
+          />
           {p.notes && <p className="text-xs text-slate-500">{p.notes}</p>}
           {/* El comprobante se guardaba y no se podía ver: quien validaba tenía
               que fiarse de los campos transcritos, que es justo lo que la imagen
@@ -475,12 +485,13 @@ function PaymentList({
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <button
                 disabled={
-                  pending || yapeRecipientReadingFromVision(p.vision).status === "mismatch"
+                  pending ||
+                  yapeRecipientReadingFromVision(p.vision, accounts).status === "mismatch"
                 }
                 onClick={() => onValidate(p.id)}
                 title={
-                  yapeRecipientReadingFromVision(p.vision).status === "mismatch"
-                    ? "El receptor leído no coincide con la cuenta de Grupo GF"
+                  yapeRecipientReadingFromVision(p.vision, accounts).status === "mismatch"
+                    ? "El receptor leído no coincide con ninguna cuenta de cobro de la tienda"
                     : "Validar comprobante"
                 }
                 className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
@@ -524,12 +535,22 @@ function PaymentList({
   );
 }
 
-function StoredRecipientStatus({ vision, hasVoucher }: { vision: unknown; hasVoucher: boolean }) {
-  const reading = yapeRecipientReadingFromVision(vision);
+function StoredRecipientStatus({
+  vision,
+  hasVoucher,
+  accounts,
+}: {
+  vision: unknown;
+  hasVoucher: boolean;
+  accounts: CollectionAccount[];
+}) {
+  const reading = yapeRecipientReadingFromVision(vision, accounts);
   if (!hasVoucher && reading.status === "missing") return null;
   const label =
     reading.status === "verified"
-      ? "Cuenta receptora verificada: Grupo GF S.A.C. · ***309"
+      // Se nombra la cuenta con la que encajó: con varias cuentas de cobro,
+      // "verificada" a secas ya no dice a cuál llegó el dinero.
+      ? `Cuenta receptora verificada: ${reading.account?.name ?? "cuenta de cobro"} · ***${reading.account?.phoneLastDigits ?? "···"}`
       : reading.status === "mismatch"
         ? `Receptor distinto: ${reading.name ?? "nombre no leído"} · ${
             reading.phoneLastDigits ? `***${reading.phoneLastDigits}` : "celular no leído"
@@ -537,7 +558,7 @@ function StoredRecipientStatus({ vision, hasVoucher }: { vision: unknown; hasVou
         : // El voucher corta el destinatario y esa lectura corta NO acusa a
           // nadie: se nombra lo leído para que se contraste con la imagen, sin
           // afirmar que la cuenta sea otra.
-          verifyYapeRecipient(reading.name, reading.phoneLastDigits).nameCutShort
+          verifyYapeRecipient(reading.name, reading.phoneLastDigits, accounts).nameCutShort
           ? `Destinatario leído a medias: «${reading.name}». Contrasta la imagen antes de validar.`
           : reading.status === "partial"
             ? "Cuenta receptora parcialmente leída. Contrasta la imagen antes de validar."
@@ -821,13 +842,23 @@ function RecipientSignal({
   );
 }
 
-function RecipientAccountCheck({ reading }: { reading: YapeRecipientReading | null }) {
-  const verification = verifyYapeRecipient(reading?.name, reading?.phoneLastDigits);
+function RecipientAccountCheck({
+  reading,
+  accounts,
+}: {
+  reading: YapeRecipientReading | null;
+  accounts: CollectionAccount[];
+}) {
+  const verification = verifyYapeRecipient(reading?.name, reading?.phoneLastDigits, accounts);
   const message =
     verification.status === "verified"
-      ? "Cuenta receptora verificada. Las dos señales coinciden."
+      ? `Cuenta receptora verificada: ${verification.account?.name ?? ""}. Las dos señales coinciden.`
       : verification.status === "mismatch"
-        ? "El comprobante apunta a otra cuenta. No podrá validarse."
+        ? "El comprobante apunta a una cuenta que no es de la tienda. No podrá validarse."
+        : verification.unknownAccounts
+          // Sin cuentas configuradas no se puede juzgar, y decirlo así evita que
+          // el operador lea "revisa la imagen" cuando el problema es de ajustes.
+          ? "La tienda no tiene cuentas de cobro configuradas, así que no se puede contrastar el receptor. Avisa a un administrador."
         : verification.nameCutShort
           ? "El destinatario se leyó a medias: el voucher lo corta. Empieza como la cuenta esperada, pero confírmalo en la imagen antes de validar."
           : verification.status === "partial"
@@ -841,7 +872,7 @@ function RecipientAccountCheck({ reading }: { reading: YapeRecipientReading | nu
         <RecipientSignal
           label="Destinatario leído"
           value={reading?.name ?? "Pendiente de lectura"}
-          expected="Grupo GF S.A.C."
+          expected={accounts.map((a) => a.name).join(" o ") || "una cuenta de cobro configurada"}
           present={verification.hasName}
           matches={verification.nameMatches}
           cutShort={verification.nameCutShort}
@@ -849,7 +880,10 @@ function RecipientAccountCheck({ reading }: { reading: YapeRecipientReading | nu
         <RecipientSignal
           label="Celular receptor"
           value={reading?.phoneLastDigits ? `*** *** ${reading.phoneLastDigits}` : "Pendiente de lectura"}
-          expected="930 555 309 (o terminación 309)"
+          expected={
+            accounts.map((a) => `terminación ${a.phoneLastDigits}`).join(" o ") ||
+            "una cuenta de cobro configurada"
+          }
           present={verification.hasPhone}
           matches={verification.phoneMatches}
         />
@@ -876,6 +910,7 @@ function RecipientAccountCheck({ reading }: { reading: YapeRecipientReading | nu
 function VoucherForm({
   orderId,
   storeId,
+  accounts,
   orderTotal,
   existing,
   shalomGuide,
@@ -886,6 +921,8 @@ function VoucherForm({
 }: {
   orderId: string;
   storeId: string;
+  /** Las cuentas de cobro de la tienda, para juzgar el receptor leído. */
+  accounts: CollectionAccount[];
   orderTotal: number | null;
   existing: PaymentRow[];
   shalomGuide: PanelData["shalomGuide"];
@@ -1169,6 +1206,7 @@ function VoucherForm({
         status: result.fields.recipientCheck,
         name: result.fields.recipientName,
         phoneLastDigits: result.fields.recipientPhoneLastDigits,
+        account: result.fields.recipientAccount,
       });
       setReadNotice(result.notice);
       if (!result.isVoucher) {
@@ -1651,7 +1689,7 @@ function VoucherForm({
                 />
               </label>
             </div>
-            <RecipientAccountCheck reading={recipientCheck} />
+            <RecipientAccountCheck reading={recipientCheck} accounts={accounts} />
           </section>
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">

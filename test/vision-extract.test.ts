@@ -233,15 +233,19 @@ describe("extractYapeVoucher", () => {
 });
 
 describe("checkYapeRecipient", () => {
+  // La cuenta de la empresa. La lista completa y su corpus real viven en
+  // test/yape-recipient.test.ts; acá solo se comprueba que el envoltorio de
+  // lib/vision la reexporta y le pasa las cuentas.
+  const CUENTAS = [{ name: "Grupo GF S.A.C.", phoneLastDigits: "309" }];
   it("verifica Grupo GF S.A.C. y el celular terminado en 309", () => {
-    expect(checkYapeRecipient("Grupo Gf S.a.c.", "309")).toBe("verified");
+    expect(checkYapeRecipient("Grupo Gf S.a.c.", "309", CUENTAS)).toBe("verified");
   });
 
   it("distingue una lectura parcial de un receptor incorrecto", () => {
-    expect(checkYapeRecipient("Grupo GF SAC", null)).toBe("partial");
-    expect(checkYapeRecipient(null, "309")).toBe("partial");
-    expect(checkYapeRecipient("Otro comercio", "309")).toBe("mismatch");
-    expect(checkYapeRecipient("Grupo GF SAC", "123")).toBe("mismatch");
-    expect(checkYapeRecipient(null, null)).toBe("missing");
+    expect(checkYapeRecipient("Grupo GF SAC", null, CUENTAS)).toBe("partial");
+    expect(checkYapeRecipient(null, "309", CUENTAS)).toBe("partial");
+    expect(checkYapeRecipient("Otro comercio", "309", CUENTAS)).toBe("mismatch");
+    expect(checkYapeRecipient("Grupo GF SAC", "123", CUENTAS)).toBe("mismatch");
+    expect(checkYapeRecipient(null, null, CUENTAS)).toBe("missing");
   });
 });

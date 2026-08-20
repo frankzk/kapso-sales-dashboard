@@ -1563,10 +1563,25 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   chocarían igual; la tercera señal —mismo monto y misma fecha— no lo tiene, así
   que ahí el silencio se cobra dos veces el mismo Yape.
 - La cuenta receptora se comprueba con dos señales independientes y visibles:
-  el destinatario debe coincidir con `Grupo GF S.A.C.` y el celular debe ser
-  `930 555 309` o conservar de forma legible la terminación `309`. Cada señal
-  muestra su propio check verde; la cuenta solo queda `verificada` cuando ambas
-  coinciden.
+  el destinatario y los últimos tres dígitos del celular. Cada señal muestra su
+  propio check verde; la cuenta solo queda `verificada` cuando ambas coinciden,
+  y entonces se nombra **con cuál** de las cuentas encajó.
+- Las cuentas de cobro son **varias y viven en los datos**, una lista por tienda
+  (`store_collection_accounts`, migración 0126): la de la empresa —`Grupo GF
+  S.A.C.` · `930 555 309`— y las de las dos personas dueñas. Estuvo escrita a
+  mano y era una sola, y como el negocio cobra por más de una, cada comprobante
+  a la cuenta de una dueña quedaba en `revision_admin` —la etiqueta que dice que
+  el dinero se fue a OTRA cuenta—: diecisiete comprobantes en tres semanas,
+  ninguno validado nunca, y los pedidos salieron igual. El bloqueo no protegía
+  nada; solo enseñaba a no leer la alarma.
+- **Una tienda sin cuentas configuradas NO acusa a nadie.** Vacío significa "no
+  sabemos contra qué contrastar" y cae en verificación parcial —contraste
+  manual—, jamás en `receptor distinto`. Lo contrario convertiría un despiste de
+  configuración en una acusación de desvío sobre todos los cobros de la tienda.
+- Una cuenta puede declarar **otras formas de escribir su nombre**: la constancia
+  del banco pone los apellidos primero donde la billetera los pone al final, y es
+  la misma persona. Se declara en la ficha de la cuenta y no aflojando la
+  comparación: enseñarle a ignorar el orden la volvería permisiva con cualquiera.
 - Si cualquiera de las dos señales leídas **contradice** la cuenta esperada, el
   pago queda en revisión y Kapta bloquea su validación también en servidor. Si
   una señal no pudo leerse, se conserva la imagen y se exige contraste manual

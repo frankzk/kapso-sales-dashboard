@@ -1,8 +1,34 @@
 import { describe, expect, it } from "vitest";
 import {
-  verifyYapeRecipient,
-  yapeRecipientReadingFromVision,
+  verifyYapeRecipient as verifyAgainstAccounts,
+  yapeRecipientReadingFromVision as readingAgainstAccounts,
+  type CollectionAccount,
+  type YapeRecipientCheck,
 } from "@/lib/yape-recipient";
+
+/** Las cuentas de cobro reales del negocio (semilla de la migración 0126). */
+const CUENTAS: CollectionAccount[] = [
+  { name: "Grupo GF S.A.C.", phoneLastDigits: "309" },
+  { name: "Gabriela Reaño Vera", phoneLastDigits: "147" },
+  {
+    name: "Frankz Alberto Paolo Kastner Cam",
+    // La constancia del banco escribe los apellidos primero.
+    aliases: ["Kastner Cam Frankz Alberto Paolo"],
+    phoneLastDigits: "481",
+  },
+];
+
+/** La mayoría de las pruebas hablan de la cuenta de la empresa. */
+const verifyYapeRecipient = (
+  name: string | null | undefined,
+  phone: string | null | undefined,
+  accounts: CollectionAccount[] = CUENTAS,
+) => verifyAgainstAccounts(name, phone, accounts);
+
+const yapeRecipientReadingFromVision = (
+  vision: unknown,
+  accounts: CollectionAccount[] = CUENTAS,
+) => readingAgainstAccounts(vision, accounts);
 
 describe("verificación de la cuenta receptora Yape", () => {
   it("verifica Grupo GF S.A.C. con el celular completo", () => {
@@ -33,7 +59,12 @@ describe("verificación de la cuenta receptora Yape", () => {
           recipient_check: "verified",
         },
       }),
-    ).toEqual({ name: "Otro negocio", phoneLastDigits: "309", status: "mismatch" });
+    ).toEqual({
+      name: "Otro negocio",
+      phoneLastDigits: "309",
+      status: "mismatch",
+      account: null,
+    });
   });
 });
 
@@ -72,8 +103,6 @@ describe("el nombre que el voucher corta no es un receptor distinto", () => {
     // Estos también estaban en los datos, y son los que la alarma existe para
     // cazar. Si el recorte los tapara, el arreglo habría salido caro.
     for (const leido of [
-      "Gabriela Reaño Vera",
-      "Gabriela Rea*",
       "WAYKI - ADOLFO MIGUEL ERNESTO EGUILUZ OCHOA",
       "Elizabeth Sua*",
       "BCP",
@@ -100,6 +129,12 @@ describe("el nombre que el voucher corta no es un receptor distinto", () => {
 
   it("el recorte se lee desde el principio y en orden, no a trozos", () => {
     // Un recorte conserva el comienzo. Nada de esto lo es.
+    //
+    // El orden SÍ decide, y se mantuvo a propósito: la constancia del banco
+    // escribe los apellidos primero («KASTNER CAM FRANKZ ALBERTO PAOLO») donde
+    // Yape los pone al final, pero eso se resuelve declarando la otra forma en
+    // los `aliases` de la cuenta —explícito, y lo decide una persona—. Enseñarle
+    // a la comparación a ignorar el orden la volvía permisiva con todo el mundo.
     expect(verifyYapeRecipient("Gf Grupo", null).status).toBe("mismatch");
     expect(verifyYapeRecipient("Grupo Gf S A X Y", null).status).toBe("mismatch");
     expect(verifyYapeRecipient("Grupo Rf S", null).status).toBe("mismatch");
@@ -110,6 +145,91 @@ describe("el nombre que el voucher corta no es un receptor distinto", () => {
       yapeRecipientReadingFromVision({
         extracted: { recipient_name: "Grupo Gf S", recipient_phone_last_digits: null },
       }),
-    ).toEqual({ name: "Grupo Gf S", phoneLastDigits: null, status: "partial" });
+    ).toEqual({
+      name: "Grupo Gf S",
+      phoneLastDigits: null,
+      status: "partial",
+      account: CUENTAS[0],
+    });
+  });
+});
+
+describe("el corpus real de producción", () => {
+  // Estas son lecturas TEXTUALES de `order_payments.vision`, no inventadas. Se
+  // congelan aquí porque cada renglón costó una consulta a producción y porque
+  // la regla que las decide es la que dice si el dinero se desvió: si alguien la
+  // toca, tiene que ver exactamente a qué comprobante le cambia la respuesta.
+  const corpus: [string | null, string | null, YapeRecipientCheck, string][] = [
+    // — la cuenta de la empresa, entera, recortada o enmascarada —
+    ["GRUPO GF S.A.C.", "309", "verified", "lectura completa"],
+    ["Grupo Gf S.a.c.", "309", "verified", "con puntos"],
+    ["GRUPO GF S A C", "309", "verified", "separada por espacios"],
+    ["Grupo GF SAC", "309", "verified", "SAC pegado: la lectura más común"],
+    ["Grupo Gf S", "309", "partial", "recortada por ancho de pantalla"],
+    ["Grupo Gf S", null, "partial", "recortada y sin celular"],
+    ["GRUPO GF S.A.C.", null, "partial", "completa pero sin celular"],
+    ["Gr*** Gf*** S*** A*** C***", "309", "partial", "enmascarada entera"],
+    ["Grupo G***", "309", "partial", "enmascarada corta"],
+    ["Grupo Gf S.", null, "partial", "recortada con punto"],
+
+    // — las cuentas de las personas dueñas (migración 0126) —
+    ["Gabriela Reaño Vera", "147", "verified", "cuenta de una de las dueñas"],
+    ["Gabriela reaño vera", "147", "verified", "la misma en minúsculas"],
+    ["Gabriela Rea*", "147", "partial", "recortada por la pantalla"],
+    ["FRANKZ ALBERTO PAOLO KASTNER CAM", "481", "verified", "orden de la app"],
+    ["KASTNER CAM FRANKZ ALBERTO PAOL", null, "partial", "orden del banco (alias)"],
+    ["Kastner Ca*** Fr*** Al*** Pa***", null, "partial", "alias enmascarado"],
+
+    // — lo que TIENE que seguir siendo un receptor distinto —
+    ["Otro comercio", "309", "mismatch", "nombre ajeno"],
+    ["GRUPO GF S.A.C.", "123", "mismatch", "celular de nadie"],
+    ["Gabriela Reaño Vera", "309", "mismatch", "nombre de una, celular de otra"],
+    ["Grupo Rf S", null, "mismatch", "una letra distinta"],
+    ["Grupo Gf S A X Y", null, "mismatch", "palabras de más"],
+    ["Grupo", null, "mismatch", "una palabra no distingue nada"],
+    ["G", null, "mismatch", "una letra menos todavía"],
+    ["BCP", null, "mismatch", "leyó el banco como titular"],
+    // Estas dos son capturas de NUESTRO Yape, donde el nombre visible es el del
+    // CLIENTE y no hay receptor que verificar. La lista de cuentas no las
+    // resuelve —ni debe—: hacen falta la perspectiva del comprobante y el cruce
+    // contra el cliente del pedido. Hasta entonces quedan en revisión, que es
+    // la respuesta honesta.
+    ["Elizabeth Sua*", "616", "mismatch", "captura entrante, pendiente"],
+    ["WAYKI - ADOLFO MIGUEL ERNESTO EGUILUZ OCHOA", null, "mismatch", "captura entrante"],
+
+    [null, null, "missing", "sin lectura"],
+  ];
+
+  for (const [name, phone, want, why] of corpus) {
+    it(`${want}: ${why} — ${JSON.stringify(name)} / ${phone ?? "sin celular"}`, () => {
+      expect(verifyYapeRecipient(name, phone).status).toBe(want);
+    });
+  }
+});
+
+describe("una tienda sin cuentas configuradas", () => {
+  // La regla que no se puede romper. Si `store_collection_accounts` queda vacía
+  // —tienda nueva, semilla que no corrió— "no sabemos contra qué contrastar" NO
+  // puede convertirse en "el dinero se desvió": sería acusar de desvío a todos
+  // los cobros de la tienda por un despiste de configuración.
+  it("nunca acusa de desvío: cae en contraste manual", () => {
+    const v = verifyAgainstAccounts("Quien Sea", "999", []);
+    expect(v.status).toBe("partial");
+    expect(v.unknownAccounts).toBe(true);
+  });
+
+  it("sin lectura y sin cuentas sigue siendo «falta el dato»", () => {
+    expect(verifyAgainstAccounts(null, null, []).status).toBe("missing");
+  });
+
+  it("una cuenta mal cargada no cuenta como cuenta", () => {
+    // Un celular que no son tres dígitos, o un nombre vacío, no pueden dejar la
+    // verificación en pie a medias: se descartan y se cae en el mismo "no se
+    // puede contrastar".
+    const rotas = [
+      { name: "", phoneLastDigits: "309" },
+      { name: "Grupo GF S.A.C.", phoneLastDigits: "30" },
+    ];
+    expect(verifyAgainstAccounts("Otro comercio", "111", rotas).unknownAccounts).toBe(true);
   });
 });

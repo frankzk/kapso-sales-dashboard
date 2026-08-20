@@ -2,8 +2,10 @@ import "server-only";
 
 import { cache } from "react";
 import { getAccessibleStores } from "@/lib/access";
-import { createServerSupabase } from "@/lib/db";
+import { loadCollectionAccounts } from "@/lib/collection-accounts";
+import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { hasOrgPermission } from "@/lib/permissions-access";
+import type { CollectionAccount } from "@/lib/yape-recipient";
 import {
   limaDayBounds,
   paymentReviewBatches,
@@ -60,6 +62,12 @@ export interface PaymentReviewItem {
   validatedAt: string | null;
   notes: string | null;
   vision: unknown;
+  /**
+   * Las cuentas de cobro de la tienda de ESTE pago. Viajan con el ítem —y no
+   * como un mapa aparte— porque la bandeja mezcla tiendas y cada comprobante
+   * tiene que juzgarse contra las cuentas de la suya, no contra las de otra.
+   */
+  collectionAccounts: CollectionAccount[];
   registeredTotal: number;
   validatedTotal: number;
 }
@@ -97,6 +105,10 @@ export async function getPaymentReviewBoard(): Promise<PaymentReviewBoardData | 
   const storeIds = stores.map((store) => store.id);
   const storeNames = new Map(stores.map((store) => [store.id, store.name]));
   const sb = await createServerSupabase();
+  // Las cuentas de cobro de cada tienda, para juzgar el receptor de cada
+  // comprobante contra las de SU tienda. Si la lectura falla el mapa queda
+  // vacío y la verificación cae en "no se puede contrastar", nunca en desvío.
+  const accountsByStore = await loadCollectionAccounts(createAdminSupabase(), storeIds);
   const day = limaDayBounds();
   const columns =
     "id,store_id,order_id,kind,amount,operation_number,paid_at,file_path," +
@@ -227,6 +239,7 @@ export async function getPaymentReviewBoard(): Promise<PaymentReviewBoardData | 
       validatedAt: row.validated_at,
       notes: row.notes,
       vision: row.vision,
+      collectionAccounts: accountsByStore.get(row.store_id) ?? [],
       registeredTotal: progress.registered,
       validatedTotal: progress.validated,
     };

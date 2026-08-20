@@ -13,6 +13,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { loadStoreCollectionAccounts } from "@/lib/collection-accounts";
 import { decryptOrNull, encrypt } from "@/lib/crypto";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -23,6 +24,7 @@ import {
 import {
   checkYapeRecipient,
   yapeRecipientReadingFromVision,
+  type CollectionAccount,
   type YapeRecipientCheck,
 } from "@/lib/yape-recipient";
 import { normalizePhone } from "@/lib/phone";
@@ -131,6 +133,12 @@ export interface PaymentRow {
 
 export interface PickupKeyPanel {
   storeId: string;
+  /**
+   * Las cuentas de cobro de la tienda. Viajan al navegador porque el panel
+   * recalcula ahí el estado del receptor desde la auditoría guardada, y sin la
+   * lista no podría distinguir «otra cuenta» de «no sabemos cuál esperar».
+   */
+  collectionAccounts: CollectionAccount[];
   orderTotal: number | null;
   payments: PaymentRow[];
   paymentState: string;
@@ -258,9 +266,17 @@ export async function loadPaymentPanel(
       }
     : null;
 
+  // Las cuentas de cobro viajan con el panel: el navegador recalcula ahí el
+  // estado del receptor de cada comprobante y sin la lista no podría hacerlo.
+  const collectionAccounts = await loadStoreCollectionAccounts(
+    createAdminSupabase(),
+    ctx.storeId,
+  );
+
   return {
     panel: {
       storeId: ctx.storeId,
+      collectionAccounts,
       orderTotal: ctx.row.order_total,
       payments,
       paymentState: paymentState(snapshots, ctx.row.order_total),
@@ -317,6 +333,8 @@ export async function createVoucherUpload(
  */
 export interface VoucherPrefillFields {
   operationNumber: string | null;
+  /** Con qué cuenta de cobro encajó el receptor, si encajó con alguna. */
+  recipientAccount: CollectionAccount | null;
   amount: number | null;
   paidAt: string | null;
   payerName: string | null;
@@ -709,15 +727,22 @@ export async function validatePayment(paymentId: string): Promise<PaymentActionS
         "con «Corregir pago».",
     };
   }
-  const recipient = yapeRecipientReadingFromVision(payment.vision);
+  const admin = createAdminSupabase();
+  // Se recalcula contra las cuentas de cobro VIVAS de la tienda, no contra el
+  // `recipient_check` que quedó escrito el día de la carga: así, dar de alta una
+  // cuenta destraba también lo que ya estaba cargado.
+  const accounts = await loadStoreCollectionAccounts(admin, payment.store_id);
+  const recipient = yapeRecipientReadingFromVision(payment.vision, accounts);
   if (recipient.status === "mismatch") {
+    const cuentas = accounts.length
+      ? accounts.map((a) => `${a.name} · ···${a.phoneLastDigits}`).join(" / ")
+      : "ninguna cuenta de cobro configurada";
     return {
       error:
         "No se puede validar: el destinatario o el celular receptor leído no coincide con " +
-        "Grupo GF S.A.C. · 930 555 309. Revisa la imagen y rechaza el comprobante si fue enviado a otra cuenta.",
+        `${cuentas}. Revisa la imagen y rechaza el comprobante si fue enviado a otra cuenta.`,
     };
   }
-  const admin = createAdminSupabase();
   const { error } = await admin
     .from("order_payments")
     .update({
