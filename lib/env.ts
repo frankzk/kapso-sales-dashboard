@@ -134,6 +134,23 @@ export const env = {
   //     en dos paneles distintos y un blanco invisible da 401 siempre.
   chatbyWebhookSecret: () => (process.env.CHATBY_WEBHOOK_SECRET ?? "").trim(),
 
+  // --- Webhooks de página de Facebook e Instagram (sonda de comentarios) ---
+  //
+  // SON DOS COSAS DISTINTAS Y SE OLVIDA UNA:
+  //
+  //   · META_APP_SECRET firma cada entrega. Es el "App Secret" de la app de Meta
+  //     —el mismo que ya usa la Marketing API—, y con él se recalcula el HMAC del
+  //     cuerpo para comprobar que la entrega es de Meta y llegó intacta.
+  //   · META_WEBHOOK_VERIFY_TOKEN es un valor que INVENTAS y tecleas en el panel
+  //     de Meta al dar de alta la URL. Solo sirve para el apretón de manos
+  //     inicial; sin él, Meta nunca activa la suscripción y no llega nada nunca.
+  //
+  // Se recortan por lo mismo que CHATBY_WEBHOOK_SECRET y SHALOM_API_KEY: se
+  // pegan a mano entre dos paneles y un blanco invisible da 401 siempre — que es
+  // indistinguible de haberlos copiado mal.
+  metaAppSecret: () => (process.env.META_APP_SECRET ?? "").trim(),
+  metaWebhookVerifyToken: () => (process.env.META_WEBHOOK_VERIFY_TOKEN ?? "").trim(),
+
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---
   shopifyAppApiKey: () => process.env.SHOPIFY_APP_API_KEY ?? "",
   shopifyAppApiSecret: () => process.env.SHOPIFY_APP_API_SECRET ?? "",
