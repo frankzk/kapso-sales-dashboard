@@ -120,8 +120,12 @@ Reglas:
   que escanear. La medida de la página del courier no se da por supuesta: se
   escala conservando la proporción contra lo que devuelva su API, y **la banda
   arranca donde termina su etiqueta**, no a una altura fija — un reparto fijo
-  solo acierta con una proporción, y la de cada courier es la suya. El sitio que
-  sobra se reparte en QR más grande y más líneas de producto, no en margen.
+  solo acierta con una proporción, y la de cada courier es la suya.
+- **La página del rótulo de agencia termina donde termina el contenido**, y sus
+  márgenes son estrechos. Se imprime cuatro por hoja en A4, y ahí manda el
+  ancho: la celda son 105 mm, la página 100, así que sale casi 1:1 y la etiqueta
+  del courier vale exactamente el ancho útil que se le deje. Cada milímetro de
+  margen y cada milímetro en blanco al pie salen impresos y se pagan en tamaño.
 - El PDF del courier **se guarda la primera vez** y se pide adelantado al crear
   la guía. Ese documento es inmutable una vez emitida —se indexa por su
   identificador de envío, no por el pedido— y pedirlo cuesta unos 45 segundos,
