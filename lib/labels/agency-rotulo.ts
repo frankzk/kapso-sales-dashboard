@@ -33,10 +33,9 @@ import {
   INK,
   MM,
   MUTED,
-  PAD,
   PAGE_H,
   PAGE_W,
-  PRODUCT_LINE_H,
+  productsHeight,
   type Fonts,
 } from "./rotulo-pdf";
 import type { LabelLineItem } from "./line-items";
@@ -58,35 +57,34 @@ export interface AgencyRotuloData {
 }
 
 /**
- * Alto MÍNIMO de nuestra banda, y con eso el máximo que puede ocupar el courier.
+ * Márgenes propios, más estrechos que los del rótulo interno.
  *
- * Es un suelo, no un reparto. La primera versión partía la hoja en dos cajas
- * fijas —88 mm arriba, 46 abajo— y el rótulo de Shalom resultó ser APAISADO: a
- * todo el ancho ocupa unos 45 mm de alto, así que dejaba 43 mm de aire muerto en
- * el centro de la etiqueta. Un reparto fijo solo acierta con una proporción, y
- * la de cada courier es la suya.
- *
- * Ahora la banda arranca donde termina su etiqueta, sea donde sea. Este número
- * solo garantiza que un rótulo desproporcionadamente alto no la deje sin sitio.
+ * POR QUÉ NO SON LOS 8 mm DE `PAD`. Este papel se imprime 4 por hoja en A4, y
+ * ahí manda el ancho: la celda son 105 mm y nuestra página 100, así que sale
+ * casi 1:1 y la etiqueta de Shalom hereda lo que le dejemos de ancho útil. Con
+ * 8 mm por lado eran 84; con 4 son 92 — un 10% más de etiqueta sin tocar nada
+ * más. El rótulo interno conserva los suyos: ese sí lleva dirección larga y
+ * banda de cobro, y necesita el aire.
  */
-const BAND_MIN_H = 34 * MM;
+const AGENCY_PAD = 4 * MM;
 
 /** Aire entre su etiqueta y nuestra línea divisoria. */
 const GAP = 3 * MM;
 
 /**
- * El QR crece con el sitio disponible, entre estos dos topes.
- *
- * El suelo es lo que necesita la cámara: el token es un UUID, que a corrección M
- * son 29 módulos, y a 20 mm da 0,7 mm por módulo. El techo existe porque pasado
- * cierto tamaño ya no se lee mejor y sí le quita líneas al producto.
+ * El QR ya no crece con el hueco: ahora la página se ajusta al contenido, así
+ * que no hay hueco que rellenar. 26 mm es cómodo de escanear —el token es un
+ * UUID, 29 módulos a corrección M, casi 0,9 mm por módulo— sin robarle ancho a
+ * los productos.
  */
-const QR_MIN = 20 * MM;
-const QR_MAX = 30 * MM;
+const QR_SIZE = 26 * MM;
 
-/** Alto máximo que se le concede al rótulo del courier. */
-export function maxCourierHeight(): number {
-  return PAGE_H - PAD * 2 - BAND_MIN_H - GAP;
+/** Tope de líneas de producto. Más que esto y el papel deja de ser una etiqueta. */
+const MAX_PRODUCT_LINES = 6;
+
+/** Ancho útil: lo que le queda a su etiqueta después de los márgenes. */
+export function agencyInnerWidth(): number {
+  return PAGE_W - AGENCY_PAD * 2;
 }
 
 /**
@@ -102,21 +100,69 @@ export function fitScale(w: number, h: number, boxW: number, boxH: number): numb
 }
 
 /**
+ * Techo del rótulo del courier: lo que quede del papel tras servir a la banda.
+ *
+ * Depende del contenido a propósito. Un número fijo se pasaba: con una etiqueta
+ * vertical —un A4 suyo— la página salía de 156 mm y ya no cabía en el papel de
+ * 100 × 150. La página crece con el contenido, pero nunca más allá de la hoja.
+ */
+export function maxCourierHeight(
+  items: readonly LabelLineItem[] = [],
+  hasName = true,
+): number {
+  return PAGE_H - AGENCY_PAD * 2 - GAP - 3.5 * MM - bandContentHeight(items, hasName);
+}
+
+/**
  * Alto que va a ocupar de verdad la etiqueta del courier en la hoja.
  *
  * Existe como función aparte para poder AFIRMAR sobre ella: es el número que
- * decide dónde empieza nuestra banda, y el que la primera versión daba por
- * supuesto. Con el rótulo apaisado de Shalom vale unos 45 mm de los 100 que se
- * le reservaban.
+ * decide el alto de toda la página, y el que la primera versión daba por
+ * supuesto.
  */
-export function courierDrawHeight(w: number, h: number): number {
-  const innerW = PAGE_W - PAD * 2;
-  return h * fitScale(w, h, innerW, maxCourierHeight());
+export function courierDrawHeight(
+  w: number,
+  h: number,
+  items: readonly LabelLineItem[] = [],
+  hasName = true,
+): number {
+  return h * fitScale(w, h, agencyInnerWidth(), maxCourierHeight(items, hasName));
 }
 
-/** Alto que le queda a nuestra banda con esa etiqueta encima. */
-export function bandHeight(w: number, h: number): number {
-  return PAGE_H - PAD * 2 - courierDrawHeight(w, h) - GAP;
+/**
+ * Alto de nuestra banda: lo que ocupa su contenido, ni un milímetro más.
+ *
+ * Es la mitad del arreglo. Antes la página medía 150 mm fijos y el contenido
+ * llegaba a ~100: los 50 restantes salían impresos en blanco y, al imprimir 4
+ * por hoja, se llevaban un tercio de la celda sin decir nada. Ahora la página
+ * termina donde termina lo que hay que leer.
+ */
+export function bandContentHeight(
+  items: readonly LabelLineItem[],
+  hasName: boolean,
+): number {
+  const header =
+    11 + 1.6 * MM + // tienda y pedido, en una fila
+    8 + 1.4 * MM + // codigo de salida y guia
+    (hasName ? 8 + 1.2 * MM : 0) +
+    1.4 * MM;
+  return header + Math.max(QR_SIZE, productsHeight(items, MAX_PRODUCT_LINES));
+}
+
+/** Alto total de la página, ya ajustado a lo que de verdad se imprime. */
+export function agencyPageHeight(
+  courierW: number,
+  courierH: number,
+  items: readonly LabelLineItem[],
+  hasName: boolean,
+): number {
+  return (
+    AGENCY_PAD * 2 +
+    courierDrawHeight(courierW, courierH, items, hasName) +
+    GAP +
+    3.5 * MM +
+    bandContentHeight(items, hasName)
+  );
 }
 
 export async function buildAgencyRotuloPdf(
@@ -132,33 +178,50 @@ export async function buildAgencyRotuloPdf(
     bold: await doc.embedFont(StandardFonts.HelveticaBold),
   };
 
-  const page = doc.addPage([PAGE_W, PAGE_H]);
-  const innerW = PAGE_W - PAD * 2;
-
   // Su página va PRIMERO y arriba: es la que se lee en el mostrador. Si viniera
   // con varias páginas se toma la primera, que es la etiqueta; las siguientes
   // suelen ser condiciones del servicio y no viajan pegadas a la caja.
   const [courierPage] = await doc.embedPdf(courierLabelPdf, [0]);
-  let courierH = 0;
+  const innerW = agencyInnerWidth();
+  const legend = sanitizeWinAnsi(data.customerName);
+
+  // La página se mide ANTES de crearla: pdf-lib necesita el tamaño por
+  // adelantado, y aquí eso juega a favor — obliga a saber cuánto ocupa el
+  // contenido en vez de reservar de más «por si acaso», que es lo que dejaba
+  // 50 mm en blanco al pie.
+  const courierH = courierPage
+    ? courierDrawHeight(courierPage.width, courierPage.height, data.items, Boolean(legend))
+    : 0;
+  const pageH = agencyPageHeight(
+    courierPage?.width ?? 0,
+    courierPage?.height ?? 0,
+    data.items,
+    Boolean(legend),
+  );
+  const page = doc.addPage([PAGE_W, pageH]);
+
   if (courierPage) {
-    const scale = fitScale(courierPage.width, courierPage.height, innerW, maxCourierHeight());
-    const drawW = courierPage.width * scale;
-    courierH = courierPage.height * scale;
+    const drawW =
+      courierPage.width *
+      fitScale(
+        courierPage.width,
+        courierPage.height,
+        innerW,
+        maxCourierHeight(data.items, Boolean(legend)),
+      );
     page.drawPage(courierPage, {
-      x: PAD + (innerW - drawW) / 2,
-      y: PAGE_H - PAD - courierH,
+      x: AGENCY_PAD + (innerW - drawW) / 2,
+      y: pageH - AGENCY_PAD - courierH,
       width: drawW,
       height: courierH,
     });
   }
 
-  // La banda EMPIEZA DONDE TERMINA SU ETIQUETA, no en una altura fija. Es la
-  // diferencia entre ajustarse a cualquier proporción y acertar solo con una.
-  let y = PAGE_H - PAD - courierH - GAP;
+  let y = pageH - AGENCY_PAD - courierH - GAP;
 
   page.drawLine({
-    start: { x: PAD, y },
-    end: { x: PAGE_W - PAD, y },
+    start: { x: AGENCY_PAD, y },
+    end: { x: PAGE_W - AGENCY_PAD, y },
     thickness: 1.4,
     color: INK,
   });
@@ -168,10 +231,10 @@ export async function buildAgencyRotuloPdf(
   // número del courier se repite acá a propósito, aunque esté en su papel: si
   // alguien despega su etiqueta, la caja todavía dice a dónde iba.
   const store = sanitizeWinAnsi(data.storeName).toUpperCase() || "-";
-  page.drawText(store, { x: PAD, y: y - 9, size: 9, font: fonts.bold, color: INK });
+  page.drawText(store, { x: AGENCY_PAD, y: y - 9, size: 9, font: fonts.bold, color: INK });
   const order = sanitizeWinAnsi(data.orderName) || sanitizeWinAnsi(data.code);
   page.drawText(order, {
-    x: PAGE_W - PAD - fonts.bold.widthOfTextAtSize(order, 11),
+    x: PAGE_W - AGENCY_PAD - fonts.bold.widthOfTextAtSize(order, 11),
     y: y - 11,
     size: 11,
     font: fonts.bold,
@@ -181,42 +244,34 @@ export async function buildAgencyRotuloPdf(
 
   const guide = sanitizeWinAnsi(data.guideCode ?? "");
   const codeLine = guide ? `${sanitizeWinAnsi(data.code)}  ·  GUIA ${guide}` : sanitizeWinAnsi(data.code);
-  page.drawText(codeLine, { x: PAD, y: y - 8, size: 8, font: fonts.regular, color: MUTED });
+  page.drawText(codeLine, { x: AGENCY_PAD, y: y - 8, size: 8, font: fonts.regular, color: MUTED });
   y -= 8 + 1.4 * MM;
 
   // El destinatario va aquí, bajo el código, y no suelto al pie: es dato de la
   // caja, no un adorno del margen.
-  const legend = sanitizeWinAnsi(data.customerName);
   if (legend) {
-    page.drawText(legend, { x: PAD, y: y - 8, size: 8, font: fonts.regular, color: MUTED });
+    page.drawText(legend, { x: AGENCY_PAD, y: y - 8, size: 8, font: fonts.regular, color: MUTED });
     y -= 8 + 1.2 * MM;
   }
   y -= 1.4 * MM;
 
-  // EL SITIO QUE SOBRA SE REPARTE, no se deja en blanco. Con un rótulo apaisado
-  // como el de Shalom la banda hereda casi la mitad de la hoja, y ese aire vale
-  // más como QR grande y más líneas de producto que como margen: el QR se
-  // escanea desde una faja transportadora y el operario lee el producto de pie.
-  const available = y - PAD;
-  const qrSize = Math.max(QR_MIN, Math.min(QR_MAX, available * 0.45));
+  // QR a la derecha, productos a la izquierda: el QR se escanea sin leer y los
+  // productos se leen sin escanear, así que no compiten por el mismo sitio.
   const qr = await doc.embedPng(data.qrPng);
   page.drawImage(qr, {
-    x: PAGE_W - PAD - qrSize,
-    y: y - qrSize,
-    width: qrSize,
-    height: qrSize,
+    x: PAGE_W - AGENCY_PAD - QR_SIZE,
+    y: y - QR_SIZE,
+    width: QR_SIZE,
+    height: QR_SIZE,
   });
 
-  // Los productos ocupan lo que el QR no usa, y bajan hasta el borde: el bloque
-  // recorta por producto entero y avisa de las líneas que dejó fuera.
-  const maxLines = Math.max(3, Math.floor((available - 4 * MM) / PRODUCT_LINE_H));
   drawProducts(page, fonts, {
-    x: PAD,
+    x: AGENCY_PAD,
     y,
-    width: innerW - qrSize - 4 * MM,
+    width: innerW - QR_SIZE - 4 * MM,
     items: data.items,
-    minY: PAD,
-    maxLines,
+    minY: AGENCY_PAD,
+    maxLines: MAX_PRODUCT_LINES,
   });
 
   return doc.save();
