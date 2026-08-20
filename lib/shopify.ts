@@ -95,6 +95,24 @@ export function noteAttributesToMap(
   return map;
 }
 
+/**
+ * El motivo de anulación de Shopify, en minúscula.
+ *
+ * El mismo motivo llega con DOS grafías según la puerta: `customer` por REST y
+ * `CUSTOMER` por GraphQL. Se normaliza AL ENTRAR, una sola vez, para que quien
+ * consulte no tenga que acordarse — el día que se olvide, un
+ * `where cancel_reason = 'customer'` se dejaría fuera la mitad de los pedidos
+ * sin decir nada, que es el modo de fallo más caro: el silencioso.
+ *
+ * Valores de Shopify: customer, declined, fraud, inventory, staff, other. No se
+ * validan contra esa lista: es su vocabulario y puede crecer, y un valor
+ * desconocido se lee igual de bien como texto.
+ */
+export function normalizeCancelReason(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return value.trim().toLowerCase() || null;
+}
+
 function toNumber(v: unknown): number | null {
   if (v == null || v === "") return null;
   const n = typeof v === "number" ? v : Number(v);
@@ -202,6 +220,7 @@ export function mapRestOrder(payload: any, storeId: string): OrderRow {
     currency: payload?.currency ?? payload?.presentment_currency ?? null,
     financial_status: payload?.financial_status ?? null,
     cancelled_at: payload?.cancelled_at ?? null,
+    cancel_reason: normalizeCancelReason(payload?.cancel_reason),
     total_refunded: toNumber(payload?.total_refunded) ?? sumRestRefunds(payload?.refunds),
     customer_phone: normalizePhone(
       payload?.customer?.phone ??
@@ -259,6 +278,7 @@ export function mapGraphqlOrder(node: any, storeId: string): OrderRow {
       ? String(node.displayFinancialStatus).toLowerCase()
       : null,
     cancelled_at: node?.cancelledAt ?? null,
+    cancel_reason: normalizeCancelReason(node?.cancelReason),
     total_refunded: toNumber(node?.totalRefundedSet?.shopMoney?.amount) ?? 0,
     customer_phone: normalizePhone(
       node?.phone ?? node?.shippingAddress?.phone ?? node?.billingAddress?.phone,
@@ -539,6 +559,7 @@ export function buildOrdersQuery(withPhone: boolean): string {
           processedAt
           updatedAt
           cancelledAt
+          cancelReason
           displayFinancialStatus
           totalPriceSet { shopMoney { amount currencyCode } }
           currentTotalPriceSet { shopMoney { amount currencyCode } }
@@ -646,6 +667,7 @@ function buildOrderByIdQuery(withPhone: boolean): string {
       processedAt
       updatedAt
       cancelledAt
+      cancelReason
       displayFinancialStatus
       totalPriceSet { shopMoney { amount currencyCode } }
       currentTotalPriceSet { shopMoney { amount currencyCode } }

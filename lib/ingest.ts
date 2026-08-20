@@ -267,27 +267,50 @@ export async function upsertWhatsappNumbers(
   return rows.length;
 }
 
+/**
+ * Columnas de `orders` que añade una migración posterior al código que las
+ * escribe.
+ *
+ * POR QUÉ EXISTE ESTA LISTA. Desplegar NO aplica migraciones —el `build` es
+ * `next build` a secas— así que hay una ventana, a veces de días, en la que el
+ * código escribe una columna que la base todavía no tiene. Sin escalón, ese
+ * upsert falla y se lleva por delante la ingesta ENTERA de pedidos: se pierde
+ * todo por un campo accesorio.
+ *
+ * Antes esto cubría solo `discount_codes` con un `if` a medida. Se generaliza al
+ * añadir `cancel_reason` (0125) porque el segundo caso demuestra que no era una
+ * excepción, era un patrón.
+ */
+const LATE_ORDER_COLUMNS = ["discount_codes", "cancel_reason"] as const;
+
 export async function upsertOrders(
   admin: SupabaseClient,
   rows: OrderRow[],
 ): Promise<void> {
   if (!rows.length) return;
-  const { error } = await admin
-    .from("orders")
-    .upsert(rows, { onConflict: "store_id,shopify_order_id" });
-  if (!error) return;
-  // `discount_codes` is added by migration 0030; before it runs, writing that
-  // column errors and would break the whole order sync. Drop it and retry once
-  // so the sync keeps working — attribution just misses coupons until migrated.
-  if (/discount_codes/.test(error.message)) {
-    const stripped = rows.map(({ discount_codes: _drop, ...rest }) => rest);
-    const retry = await admin
+
+  let payload: Record<string, unknown>[] = rows as unknown as Record<string, unknown>[];
+  // Un intento por columna prescindible, más el inicial. El bucle termina
+  // siempre: cada vuelta quita una columna de `payload`, y solo reintenta si la
+  // columna que Postgres nombra sigue presente.
+  for (let intento = 0; intento <= LATE_ORDER_COLUMNS.length; intento++) {
+    const { error } = await admin
       .from("orders")
-      .upsert(stripped, { onConflict: "store_id,shopify_order_id" });
-    if (!retry.error) return;
-    throw new Error(`upsertOrders: ${retry.error.message}`);
+      .upsert(payload, { onConflict: "store_id,shopify_order_id" });
+    if (!error) return;
+
+    const faltante = LATE_ORDER_COLUMNS.find(
+      (col) => error.message.includes(col) && payload.some((row) => col in row),
+    );
+    if (!faltante) throw new Error(`upsertOrders: ${error.message}`);
+
+    // Se sigue sin ese campo: el pedido entra igual y solo se pierde el dato
+    // accesorio hasta que la migración corra. Deja rastro, porque un dato que
+    // desaparece en silencio es exactamente lo que cuesta encontrar después.
+    console.error(`upsertOrders: la base aún no tiene "${faltante}"; se ingiere sin ese campo`);
+    payload = payload.map(({ [faltante]: _drop, ...resto }) => resto);
   }
-  throw new Error(`upsertOrders: ${error.message}`);
+  throw new Error("upsertOrders: no se pudo insertar ni quitando las columnas opcionales");
 }
 
 export async function upsertDraftOrders(
