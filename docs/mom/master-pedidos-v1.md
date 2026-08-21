@@ -1606,6 +1606,12 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   recalcula en cada pantalla a partir del nombre y el celular guardados, así que
   ese sí mejora solo; el `recipient_check` escrito en la fila es únicamente
   rastro de auditoría y **no** es la regla que decide.
+- El reproceso se dispara de dos formas que hacen **exactamente lo mismo**: la
+  ruta `/api/cron/reprocess-vouchers` (con `CRON_SECRET`, simulacro por defecto,
+  `escribir=1` para aplicar) y el script `scripts/reprocess-vouchers.ts` desde
+  una máquina con el repo. La regla vive una sola vez, en
+  `lib/voucher-reprocess.ts`: dos copias de «qué se rellena» acabarían
+  discrepando.
 - El reproceso solo **rellena huecos** y nunca pisa un dato que ya tenga valor:
   puede haberlo escrito una persona mirando la imagen, y su lectura manda. Tocar
   `revision_admin` tampoco le corresponde: ahí hay alguien revisando, y moverlo
