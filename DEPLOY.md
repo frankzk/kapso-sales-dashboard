@@ -162,6 +162,38 @@ roles and the `auth` schema, so it just works.
      project gone". **Restore:** download the CSV from the bucket and `COPY`/
      import it back into the table.
 
+### Pases a mano (bajo `/api/cron`, pero SIN horario)
+
+No todo lo que vive bajo `/api/cron` es periódico. Estas rutas comparten la
+autorización por `CRON_SECRET` y nada más: **no están en `vercel.json`** y no se
+disparan solas. Se llaman cuando hace falta.
+
+- `/api/cron/reprocess-vouchers` — relee los comprobantes de pago que quedaron
+  en estado observado y rellena lo que falta. Existe porque la visión corre
+  **una sola vez**, al subir el comprobante, y su lectura queda cacheada en la
+  columna `vision`: arreglar el lector no mueve lo ya cargado.
+
+  **El simulacro es el modo por defecto.** Sin `escribir=1` calcula todo, te
+  devuelve el informe y no toca la base:
+
+  ```
+  GET /api/cron/reprocess-vouchers?secret=<CRON_SECRET>
+  GET /api/cron/reprocess-vouchers?secret=<CRON_SECRET>&escribir=1
+  ```
+
+  Acepta `limit=N` para acotar la pasada. Corta por reloj a los 240 s e informa
+  en `deferred` cuántos quedaron para la siguiente llamada — si ese número nunca
+  baja, el presupuesto se quedó corto.
+
+  Solo **rellena huecos**: nunca pisa un valor que ya esté, porque puede haberlo
+  escrito una persona mirando la imagen. No toca `revision_admin`, donde hay
+  alguien revisando. Y pega una vez a la API de Anthropic por comprobante, con
+  la clave de cada tienda, así que no es gratis.
+
+  El mismo trabajo se puede correr desde una máquina con el repo con
+  `pnpm exec tsx scripts/reprocess-vouchers.ts`; la lógica está compartida en
+  `lib/voucher-reprocess.ts` para que las dos formas no puedan discrepar.
+
 > **Cron on Vercel Hobby**: the Hobby plan runs cron jobs only ~once/day, and
 > caps them at two. This project declares **twelve**, nine of them sub-hourly, so
 > `vercel.json` as it stands only deploys on **Pro** — where Vercel runs each one
