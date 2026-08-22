@@ -1597,6 +1597,14 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   con contraste manual, nunca como *receptor distinto*. La regla se lee por
   palabras y desde el principio, que es como recorta una pantalla; el celular no
   admite este matiz, porque leído y sin terminar en `309` es otra cuenta.
+- Una lectura puede venir con **el pagador y el receptor cambiados de sitio**, y
+  entonces no se juzga tal cual: se corrige antes. La contradicción que lo
+  delata es no poder ser las dos puntas del mismo pago — que quien paga sea una
+  cuenta de cobro de la tienda **y** el celular del receptor también lo sea. Con
+  una sola de las dos no se afirma nada: en un reembolso la tienda sí es quien
+  paga, legítimamente. La corrección **se dice en pantalla**, nunca se aplica en
+  silencio: esta comprobación decide si el dinero se desvió, y quien valida
+  tiene que saber que el nombre que ve salió del otro campo.
 - Esta distinción es de seguridad, no de comodidad: una alarma de desvío que
   salta casi siempre por un nombre cortado deja de leerse, y tiene que ser
   creíble el día que el receptor sea de verdad otro.

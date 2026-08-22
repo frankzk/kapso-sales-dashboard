@@ -850,6 +850,12 @@ function RecipientAccountCheck({
   accounts: CollectionAccount[];
 }) {
   const verification = verifyYapeRecipient(reading?.name, reading?.phoneLastDigits, accounts);
+  // Corregir la lectura invertida en silencio sería peor que no corregirla: esto
+  // decide si el dinero se desvió, y quien valida tiene que saber que el nombre
+  // que está viendo salió del campo del pagador.
+  const swapNotice = reading?.swapped
+    ? " La lectura vino con el pagador y el receptor cambiados de sitio; se corrigió, pero contrasta la imagen."
+    : "";
   const message =
     verification.status === "verified"
       ? `Cuenta receptora verificada: ${verification.account?.name ?? ""}. Las dos señales coinciden.`
@@ -864,6 +870,7 @@ function RecipientAccountCheck({
           : verification.status === "partial"
             ? "Verificación parcial. Revisa la señal que no pudo leerse antes de validar."
             : "Se completa automáticamente al pulsar Leer y rellenar.";
+  const fullMessage = message + swapNotice;
 
   return (
     <fieldset className="rounded-lg bg-slate-50 p-3" aria-live="polite">
@@ -901,7 +908,7 @@ function RecipientAccountCheck({
         )}
       >
         {verification.status === "verified" ? "✓ " : verification.status === "mismatch" ? "⚠ " : ""}
-        {message}
+        {fullMessage}
       </p>
     </fieldset>
   );
@@ -1207,6 +1214,7 @@ function VoucherForm({
         name: result.fields.recipientName,
         phoneLastDigits: result.fields.recipientPhoneLastDigits,
         account: result.fields.recipientAccount,
+        swapped: result.fields.recipientSwapped,
       });
       setReadNotice(result.notice);
       if (!result.isVoucher) {

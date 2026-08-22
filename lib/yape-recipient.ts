@@ -54,6 +54,15 @@ export interface YapeRecipientReading {
   phoneLastDigits: string | null;
   status: YapeRecipientCheck;
   account: CollectionAccount | null;
+  /**
+   * La lectura vino con el pagador y el receptor intercambiados, y se corrigió.
+   *
+   * Se expone en vez de corregirse en silencio: esta comprobación decide si el
+   * dinero se desvió, y arreglar un dato callando que estaba mal es justo lo que
+   * no puede hacer. Quien valida tiene que saber que el nombre que ve salió del
+   * otro campo.
+   */
+  swapped: boolean;
 }
 
 function comparableRecipientName(value: string | null | undefined): string {
@@ -262,6 +271,38 @@ export function checkYapeRecipient(
 }
 
 /**
+ * ¿La lectura trae el pagador y el receptor cambiados de sitio?
+ *
+ * Pasó de verdad: en un comprobante de S/ 212 el lector puso «Grupo Gf S.a.c.»
+ * —nuestra cuenta— en `payer_name`, y el nombre de la clienta en
+ * `recipient_name`. La alarma saltó como «Receptor distinto», que es la etiqueta
+ * más grave que hay, sobre un cobro impecable.
+ *
+ * La pista de cómo ocurre está en que el CELULAR sí lo leyó bien: encontró el
+ * bloque del receptor, sacó de ahí el teléfono, y para el nombre se fue a otro
+ * bloque. Compone la respuesta campo por campo en vez de por bloques.
+ *
+ * LA REGLA EXIGE LAS DOS PUNTAS, y no es escrúpulo: pedir solo que el pagador
+ * sea una cuenta nuestra rompería los reembolsos, donde SÍ somos el pagador
+ * legítimamente. Nadie puede ser las dos puntas del mismo Yape, así que la
+ * contradicción —pagador nuestro Y celular receptor nuestro— es lo que la
+ * delata. Si el celular no se leyó, no se puede afirmar nada y no se toca.
+ *
+ * Se exige además que el nombre del pagador encaje ENTERO con una cuenta. Una
+ * lectura corta o enmascarada no basta para dar por invertido un comprobante.
+ */
+export function readingLooksSwapped(
+  payerName: string | null | undefined,
+  recipientPhone: string | null | undefined,
+  accounts: CollectionAccount[],
+): boolean {
+  if (!payerName?.trim()) return false;
+  const payerIsOurs = verifyYapeRecipient(payerName, null, accounts).nameMatches;
+  if (!payerIsOurs) return false;
+  return verifyYapeRecipient(null, recipientPhone, accounts).phoneMatches;
+}
+
+/**
  * Lee la auditoría JSON guardada con cada comprobante sin confiar en su estado.
  *
  * El `recipient_check` que hay dentro del jsonb se escribió el día de la carga,
@@ -284,11 +325,22 @@ export function yapeRecipientReadingFromVision(
     : null;
   const digits = (rawPhone ?? "").replace(/\D/g, "");
   const phoneLastDigits = digits.length >= 3 ? digits.slice(-3) : null;
-  const verification = verifyYapeRecipient(name, phoneLastDigits, accounts);
+  const payerName = typeof extracted.payer_name === "string"
+    ? extracted.payer_name.trim() || null
+    : null;
+
+  // La corrección va AQUÍ, donde todo se recalcula, y no en la carga: así los
+  // comprobantes ya guardados con la lectura invertida se arreglan solos, sin
+  // backfill, igual que se arreglaron los del nombre recortado.
+  const swapped = readingLooksSwapped(payerName, phoneLastDigits, accounts);
+  const effectiveName = swapped ? payerName : name;
+
+  const verification = verifyYapeRecipient(effectiveName, phoneLastDigits, accounts);
   return {
-    name,
+    name: effectiveName,
     phoneLastDigits,
     status: verification.status,
     account: verification.account,
+    swapped,
   };
 }

@@ -3,6 +3,7 @@ import {
   verifyYapeRecipient as verifyAgainstAccounts,
   yapeRecipientReadingFromVision as readingAgainstAccounts,
   type CollectionAccount,
+  readingLooksSwapped,
   type YapeRecipientCheck,
 } from "@/lib/yape-recipient";
 
@@ -64,6 +65,7 @@ describe("verificación de la cuenta receptora Yape", () => {
       phoneLastDigits: "309",
       status: "mismatch",
       account: null,
+      swapped: false,
     });
   });
 });
@@ -150,6 +152,7 @@ describe("el nombre que el voucher corta no es un receptor distinto", () => {
       phoneLastDigits: null,
       status: "partial",
       account: CUENTAS[0],
+      swapped: false,
     });
   });
 });
@@ -231,5 +234,76 @@ describe("una tienda sin cuentas configuradas", () => {
       { name: "Grupo GF S.A.C.", phoneLastDigits: "30" },
     ];
     expect(verifyAgainstAccounts("Otro comercio", "111", rotas).unknownAccounts).toBe(true);
+  });
+});
+
+describe("la lectura que viene con el pagador y el receptor cambiados", () => {
+  // KP129133, comprobante de S/ 212: el lector puso «Grupo Gf S.a.c.» —nuestra
+  // cuenta— en `payer_name` y a la clienta en `recipient_name`. Saltó «Receptor
+  // distinto» sobre un cobro impecable. La pista de cómo pasa está en que el
+  // CELULAR sí lo leyó bien: encontró el bloque del receptor, sacó de ahí el
+  // teléfono, y para el nombre se fue a otro bloque.
+  const invertido = {
+    extracted: {
+      payer_name: "Grupo Gf S.a.c.",
+      recipient_name: "Gloria Fujimotom",
+      recipient_phone_last_digits: "309",
+    },
+  };
+
+  it("detecta la inversión: nadie es las dos puntas del mismo Yape", () => {
+    expect(readingLooksSwapped("Grupo Gf S.a.c.", "309", CUENTAS)).toBe(true);
+  });
+
+  it("el caso real deja de acusar de desvío y queda verificado", () => {
+    const r = yapeRecipientReadingFromVision(invertido);
+    expect(r.status).toBe("verified");
+    expect(r.name).toBe("Grupo Gf S.a.c.");
+    expect(r.swapped).toBe(true);
+  });
+
+  it("NO da por invertido un reembolso, donde sí somos quien paga", () => {
+    // Ahí el receptor es la clienta y su celular no es de la tienda: no hay
+    // contradicción, así que no hay nada que corregir. Exigir las dos puntas es
+    // lo que separa un caso del otro.
+    expect(readingLooksSwapped("Grupo Gf S.a.c.", "555", CUENTAS)).toBe(false);
+    expect(readingLooksSwapped("Grupo Gf S.a.c.", null, CUENTAS)).toBe(false);
+  });
+
+  it("sin poder leer el celular no se afirma nada", () => {
+    // Es el segundo de los dos casos invertidos que había en producción: sin la
+    // otra punta no se puede demostrar la contradicción, y adivinar acá sería
+    // reescribir el nombre del receptor de un cobro por una corazonada.
+    const r = yapeRecipientReadingFromVision({
+      extracted: { payer_name: "Grupo Gf S.a.c.", recipient_name: "Otra Persona" },
+    });
+    expect(r.swapped).toBe(false);
+    expect(r.status).toBe("mismatch");
+  });
+
+  it("un pagador leído a medias no basta para invertir", () => {
+    // Una lectura corta ya es dudosa; dar por invertido un comprobante con ella
+    // sería apilar una suposición sobre otra.
+    expect(readingLooksSwapped("Grupo Gf S", "309", CUENTAS)).toBe(false);
+  });
+
+  it("un pagador que no es ninguna cuenta nuestra no invierte nada", () => {
+    expect(readingLooksSwapped("Gloria Fujimoto", "309", CUENTAS)).toBe(false);
+  });
+
+  it("una lectura normal sigue intacta", () => {
+    const r = yapeRecipientReadingFromVision({
+      extracted: {
+        payer_name: "Gloria Fujimoto",
+        recipient_name: "GRUPO GF S.A.C.",
+        recipient_phone_last_digits: "309",
+      },
+    });
+    expect(r.swapped).toBe(false);
+    expect(r.status).toBe("verified");
+  });
+
+  it("sin cuentas configuradas no se inventa una inversión", () => {
+    expect(readingLooksSwapped("Grupo Gf S.a.c.", "309", [])).toBe(false);
   });
 });
