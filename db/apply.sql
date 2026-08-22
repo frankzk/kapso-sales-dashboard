@@ -255,4 +255,6 @@
 \ir migrations/0125_orders_cancel_reason.sql
 \echo 'Applying 0126_store_collection_accounts.sql'
 \ir migrations/0126_store_collection_accounts.sql
+\echo 'Applying 0127_peru_districts_geografia.sql'
+\ir migrations/0127_peru_districts_geografia.sql
 \echo 'Done.'

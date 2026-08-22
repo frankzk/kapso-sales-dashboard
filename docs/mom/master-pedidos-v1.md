@@ -2150,6 +2150,38 @@ nuevos. Sin eso la excepción sería cierta para el futuro y mentira para lo que
 está en pantalla, que es el desfase de §19.1. Los finalizados no se tocan: su
 historia queda como ocurrió.
 
+**La cobertura se calcula sobre `peru_districts`, que es texto libre.** El
+Master rellena la región y la provincia del pedido desde esa tabla
+(`fetchGeo` en `lib/order-master.ts`), y esa región entra a `order_coverage_for`
+→ `is_lima_metropolitana` → `lima_region_kind`. La tabla se llena a mano y nada
+valida lo que se escribe, así que un departamento inventado **no da error: da
+otra cobertura**, en silencio.
+
+La 0127 corrigió ocho filas que lo demostraban. Siete tenían el departamento
+copiado del propio distrito —`Pachacamac`, `Pucusana`, `HUACHIPA`, `Chancay`,
+`Huaral`, `Lurigancho chosica`, `Barranca`— y una tenía la geografía de otra
+región entera: **Pacasmayo, que es de La Libertad, decía `Callao`** en provincia
+y en departamento, y `lima_region_kind` sí reconoce «Callao», de modo que un
+destino a 600 km de Lima se clasificaba como reparto local.
+
+Tres de las ocho (`chancay`, `huaral`, `paramonga paramonga`) ya devolvían
+`agencia`, que es lo correcto —pero **por accidente**: un departamento que no
+empareja con nada da el mismo resultado que uno correcto fuera de Lima
+Metropolitana. Se corrigieron igual. El acierto por accidente deja de serlo en
+cuanto alguien añada una tarifa con alcance por departamento.
+
+Dos cosas que conviene recordar antes de estimar el daño de un caso así:
+
+- **La región de Shopify gana a la de esta tabla** en la prioridad de
+  `order-master.ts`. El departamento inventado solo llegaba a los pedidos cuya
+  dirección de Shopify venía sin provincia —siete—. La provincia, en cambio, se
+  usa en más sitios y se leía en pantalla tal cual: `Pucusana` para Chaclacayo.
+- **`district_key` es la clave de unión, no `district`.** Corregir el texto
+  visible no arregla ninguna cobertura, y por eso la 0127 no lo tocó.
+
+Convención de la tabla para Lima Metropolitana: `Lima` / `Lima`. Es lo que
+`lima_region_kind` resuelve a `'lima'`, dejando que decida el distrito.
+
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 
 `order_master` no calcula en vivo: guarda el resultado del resolver y lo sirve.
