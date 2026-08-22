@@ -341,6 +341,8 @@ export interface VoucherPrefillFields {
   recipientName: string | null;
   recipientPhoneLastDigits: string | null;
   recipientCheck: YapeRecipientCheck;
+  /** La lectura vino invertida —pagador y receptor cambiados— y se corrigió. */
+  recipientSwapped: boolean;
 }
 
 /**

@@ -364,6 +364,17 @@ function buildExtractPrompt(): string {
     "Plin, BCP, Interbank, BBVA, Scotiabank), y cada uno rotula ese dato a su " +
     `manera: ${labels}. Todos valen. Copia en "operation_label" el rótulo tal ` +
     "como aparece, sin normalizarlo.\n" +
+    "QUIÉN PAGA Y QUIÉN RECIBE NO SE MEZCLAN. En una captura de Yape hecha por " +
+    "quien pagó —la que dice \"¡Yapeaste!\"— el nombre grande junto al monto es " +
+    "QUIEN RECIBE, no quien paga. En una constancia bancaria, quien recibe es el " +
+    "que va bajo \"Enviado a\" o \"Destino\". El nombre de quien pagó suele estar " +
+    "en otra parte de la pantalla, o no aparecer: si no lo ves, payer_name es " +
+    "null — nunca lo rellenes con el del receptor, ni al revés.\n" +
+    "EL NOMBRE Y EL CELULAR DEL RECEPTOR SALEN DEL MISMO BLOQUE. Si tomas los " +
+    "últimos dígitos del celular de una parte de la imagen, el nombre del receptor " +
+    "tiene que salir de ESA MISMA parte. Leer el teléfono de un sitio y el nombre " +
+    "de otro es el error más caro de esta tarea: hace que un cobro correcto " +
+    "parezca un desvío de dinero.\n" +
     "IMPORTANTE: el número de operación y el \"Código de seguridad\" NO son el " +
     "mismo dato. El número de operación acompaña a los datos de la transacción y " +
     "normalmente tiene varios dígitos; nunca uses como operation_number el código " +

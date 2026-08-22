@@ -16,6 +16,7 @@ import {
   extractYapeVoucherFromEnv,
 } from "@/lib/vision";
 import {
+  readingLooksSwapped,
   verifyYapeRecipient,
   type CollectionAccount,
   type YapeRecipientCheck,
@@ -44,6 +45,8 @@ export interface VoucherInspection {
     recipientName: string | null;
     recipientPhoneLastDigits: string | null;
     recipientCheck: YapeRecipientCheck;
+    /** La lectura vino invertida y se corrigió antes de juzgarla. */
+    recipientSwapped: boolean;
     /** Con qué cuenta de cobro encajó, si encajó con alguna. */
     recipientAccount: CollectionAccount | null;
   };
@@ -62,6 +65,7 @@ export const EMPTY_INSPECTION: VoucherInspection = {
     recipientName: null,
     recipientPhoneLastDigits: null,
     recipientCheck: "missing",
+    recipientSwapped: false,
     recipientAccount: null,
   },
   payload: {},
@@ -108,8 +112,17 @@ export async function inspectVoucher(
     // Las cuentas de cobro de ESTA tienda. Si no hay ninguna configurada, la
     // verificación cae en «no se puede contrastar», jamás en «se desvió».
     const accounts = await loadStoreCollectionAccounts(admin, storeId);
+    // El lector a veces devuelve el pagador y el receptor cambiados de sitio.
+    // Se corrige ANTES de juzgar: si no, un cobro impecable queda acusado de
+    // desvío por un nombre que ni siquiera es el del receptor.
+    const swapped = readingLooksSwapped(
+      extracted.payerName,
+      extracted.recipientPhoneLastDigits,
+      accounts,
+    );
+    const recipientName = swapped ? extracted.payerName : extracted.recipientName;
     const recipient = verifyYapeRecipient(
-      extracted.recipientName,
+      recipientName,
       extracted.recipientPhoneLastDigits,
       accounts,
     );
@@ -122,11 +135,12 @@ export async function inspectVoucher(
         operationLabel: extracted.operationLabel,
         amount: extracted.amount,
         paidAt: extracted.paidAt,
-        payerName: extracted.payerName,
-        recipientName: extracted.recipientName,
+        payerName: swapped ? extracted.recipientName : extracted.payerName,
+        recipientName,
         recipientPhoneLastDigits: extracted.recipientPhoneLastDigits,
         recipientCheck,
         recipientAccount: recipient.account,
+        recipientSwapped: swapped,
       },
       payload: {
         indicators: verdict.indicators,
@@ -140,8 +154,12 @@ export async function inspectVoucher(
           operation_label: extracted.operationLabel,
           amount: extracted.amount,
           paid_at: extracted.paidAt,
+          // Se guarda lo que el lector DIJO, sin corregir: el jsonb es la
+          // auditoría de la lectura, y `yapeRecipientReadingFromVision` vuelve a
+          // aplicar la corrección cada vez que alguien mira el comprobante.
           payer_name: extracted.payerName,
           recipient_name: extracted.recipientName,
+          recipient_swapped: swapped,
           recipient_phone_last_digits: extracted.recipientPhoneLastDigits,
           recipient_check: recipientCheck,
           // A qué cuenta de cobro llegó, cuando se pudo determinar. Con varias
