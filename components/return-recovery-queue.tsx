@@ -20,7 +20,12 @@ import {
   sendRecoveryAction,
   type RecoveryView,
 } from "@/app/dashboard/envios/recuperacion/actions";
-import { courierReason, RECOVERY_SKIP_NO_ORDER, type RecoveryQueueRow } from "@/lib/return-recovery";
+import {
+  courierReason,
+  recoveryOrderName,
+  RECOVERY_SKIP_NO_ORDER,
+  type RecoveryQueueRow,
+} from "@/lib/return-recovery";
 import { isManualReturn } from "@/lib/returned-source";
 
 type Tab = "pendientes" | "enviadas" | "descartadas";
@@ -231,8 +236,13 @@ export function ReturnRecoveryQueue({
                           Aliclik, así que lo que falte se nombra en vez de
                           desaparecer. */}
                       <div className="text-xs text-slate-400">
-                        <span className={r.order_name ? "" : "italic"}>
-                          {r.order_name || "sin pedido"}
+                        {/* El MISMO nombre que mira el filtro y que va en la
+                            plantilla. Antes esto leía `r.order_name` a secas y
+                            la pantalla se contradecía sola: escribía «sin
+                            pedido» junto a un botón Enviar habilitado, porque
+                            el filtro miraba el enlace y la etiqueta la copia. */}
+                        <span className={recoveryOrderName(r) ? "" : "italic"}>
+                          {recoveryOrderName(r) || "sin pedido"}
                         </span>
                         {" · "}
                         <span className={r.guide_code ? "" : "italic"}>

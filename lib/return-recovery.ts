@@ -132,11 +132,24 @@ export interface RecoveryCandidate {
   id: string;
   courier: string;
   guide_code: string | null;
+  /**
+   * El nombre COPIADO en la guía. NO se usa para nada que la clienta vea: puede
+   * ser una conjetura del importador (0115) —18 guías donde difiere del enlace,
+   * medidas el 2026-08-21— y muy a menudo está vacío aunque el pedido sí esté
+   * enlazado (602 guías así, 134 devueltas y dentro de la ventana). Se conserva
+   * porque lo mira la búsqueda y el enlazador lo usa de prefill.
+   */
   order_name: string | null;
   /** El pedido de Shopify REALMENTE enlazado. Es la única señal que no miente:
    *  `order_name` puede ser una conjetura del importador (ver 0115), así que la
    *  cola gatea por esto y no por el texto. */
   order_id: string | null;
+  /**
+   * El nombre que trae el pedido enlazado (`orders.name`), leído por el embed
+   * de la consulta. Es la FUENTE: la columna de la guía es una copia que se
+   * quedó vacía en cientos de casos, y el nombre de verdad estaba a un join.
+   */
+  order?: { name: string | null } | null;
   customer_name: string | null;
   customer_phone: string | null;
   product: string | null;
@@ -153,6 +166,36 @@ export interface RecoveryCandidate {
   non_delivery_reason: string | null;
   recovery_state: string | null;
   recovery_sent_at: string | null;
+}
+
+/**
+ * El nombre del pedido que se le puede ENSEÑAR a la clienta, o `null`.
+ *
+ * UNA SOLA DEFINICIÓN, y existe porque había tres. El filtro gateaba por
+ * `order_id`, la etiqueta de la cola imprimía `order_name || "sin pedido"` y el
+ * token de la plantilla hacía `order_name ?? guide_code`. Con las 602 guías que
+ * tienen el enlace puesto y la copia del nombre vacía, las tres decían cosas
+ * distintas sobre el mismo pedido: el filtro lo daba por bueno, la pantalla
+ * escribía «sin pedido» al lado de un botón Enviar habilitado, y el mensaje
+ * salía con el código del courier.
+ *
+ * SOLO vale el nombre del pedido ENLAZADO, y la copia de la guía no se usa
+ * jamás. No es purismo: medido el 2026-08-21 sobre las 7 099 guías enlazadas,
+ * `orders.name` estaba presente en TODAS —así que exigirlo no pierde ni una— y
+ * en 18 la copia DIFERÍA del enlace. Esas 18 son el problema de 0115 todavía
+ * vivo: el importador conjeturaba el nombre, durante meses con el prefijo de
+ * otra tienda. Confiar en la copia es enseñarle a la clienta el número de un
+ * pedido que no es el suyo.
+ *
+ * NO cae al código de guía. Ese fallback es el que convertía un hueco en un
+ * mensaje que le decía a la clienta «por tu pedido AUR5X619171670545» — un
+ * código interno que ella no ha visto nunca, en un mensaje que además le pide un
+ * adelanto. Sin nombre no se escribe, y punto. Pura.
+ */
+export function recoveryOrderName(
+  c: Pick<RecoveryCandidate, "order">,
+): string | null {
+  return String(c.order?.name ?? "").trim() || null;
 }
 
 /**
@@ -186,20 +229,25 @@ export function recoverySkipReason(
     const days = (opts.nowMs - returnedMs) / 86_400_000;
     if (days > opts.maxDays) return `devuelta hace más de ${opts.maxDays} días`;
   }
-  // Sin pedido enlazado no se escribe. El token `pedido` de la plantilla cae al
-  // código de guía cuando falta el nombre, así que a la clienta le llegaría
-  // «por tu pedido AUR5X146449144483» — un código interno del courier que ella
-  // no ha visto nunca.
+  // Sin un nombre de pedido que enseñarle a la clienta no se escribe.
   //
-  // Se mira `order_id` y NO `order_name`: el nombre puede ser una conjetura del
-  // importador (0115), y durante meses fue una conjetura CON EL PREFIJO DE OTRA
-  // TIENDA. Un texto inventado pasaría este filtro; el enlace no.
+  // Se exige LO QUE LA PLANTILLA NECESITA, no la existencia del enlace. Antes
+  // esto miraba `order_id` y ahí estaba el agujero: una guía con el enlace
+  // puesto y la copia del nombre vacía pasaba el filtro, y el token caía al
+  // código de guía. La clienta recibía «por tu pedido AUR5X619171670545» — que
+  // es exactamente el daño que este filtro decía estar impidiendo. Eran 134
+  // devoluciones vivas el 2026-08-21.
+  //
+  // El enlace sigue siendo la señal fuerte: `recoveryOrderName` lee de él
+  // primero y solo cae a la copia —que puede ser una conjetura del importador
+  // (0115), y durante meses fue una conjetura CON EL PREFIJO DE OTRA TIENDA—
+  // cuando el pedido enlazado no trae nombre.
   //
   // Va la ÚLTIMA de las exclusiones a propósito: es la única que quien mira la
   // cola puede resolver ahí mismo, así que solo debe aparecer cuando no hay otro
   // motivo por delante. No tiene sentido ofrecer «enlazar pedido» en una guía
   // que además está excluida por el MOM §11.
-  if (!c.order_id) return RECOVERY_SKIP_NO_ORDER;
+  if (!recoveryOrderName(c)) return RECOVERY_SKIP_NO_ORDER;
   return null;
 }
 
@@ -270,7 +318,11 @@ export function recoveryBodyParams(
       case "monto":
         return amountLabel(c.reported_collect_amount);
       case "pedido":
-        return sanitizeTemplateParam(c.order_name ?? c.guide_code);
+        // Sin `?? c.guide_code`: ese fallback mandaba el código del courier a la
+        // clienta. Si no hay nombre, el valor sale vacío y el `every` de abajo
+        // aborta el envío — que es lo correcto, porque el filtro ya debería
+        // haber excluido la guía y esto es la última red.
+        return sanitizeTemplateParam(recoveryOrderName(c));
       case "distrito":
         return sanitizeTemplateParam(c.district ?? c.province);
       case "agencia":
@@ -295,8 +347,11 @@ export function recoveryWithinHours(
 // ── Cola y envío ────────────────────────────────────────────────────────────
 
 /** Columnas que la cola y el envío leen de `shipments`. */
+// `order:orders(name)` trae el nombre del pedido ENLAZADO. Sin el embed, la
+// cola solo veía la copia de `shipments.order_name`, vacía en 602 guías, y
+// decidía a ciegas sobre pedidos que sí existían.
 export const RECOVERY_COLS =
-  "id, courier, guide_code, order_name, order_id, customer_name, customer_phone, product, district, province, reported_collect_amount, returned_at, returned_source, reported_status, non_delivery_reason, recovery_state, recovery_sent_at";
+  "id, courier, guide_code, order_name, order_id, order:orders(name), customer_name, customer_phone, product, district, province, reported_collect_amount, returned_at, returned_source, reported_status, non_delivery_reason, recovery_state, recovery_sent_at";
 
 export interface RecoveryQueueRow extends RecoveryCandidate {
   /** `null` cuando es elegible; el motivo cuando no. */

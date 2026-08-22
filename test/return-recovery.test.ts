@@ -6,6 +6,7 @@ import {
   parseRecoveryParams,
   recoveryBodyParams,
   recoveryConfig,
+  recoveryOrderName,
   recoverySkipReason,
   RECOVERY_SKIP_NO_ORDER,
   recoveryWithinHours,
@@ -26,6 +27,9 @@ function candidate(over: Partial<RecoveryCandidate> = {}): RecoveryCandidate {
     // Enlazada por defecto: sin pedido la guía no es elegible (ver el bloque
     // "sin pedido enlazado"), y el resto de pruebas mira otras exclusiones.
     order_id: "ord-1",
+    // El nombre del pedido ENLAZADO. Es lo único que la plantilla puede
+    // mostrarle a la clienta: `order_name` de arriba es una copia y no se usa.
+    order: { name: "#KP123499" },
     customer_name: "Jose Pio Padilla",
     customer_phone: "51987654321",
     product: "Nails Repairing — Sérum Tea Tree Ginger para Uñas (30ml)",
@@ -194,9 +198,9 @@ describe("buildRecoveryQueue", () => {
 
 describe("sin pedido enlazado", () => {
   it("no se le escribe: la plantilla nombra el pedido y no habría cuál", () => {
-    // El token `pedido` cae al código de guía cuando falta el nombre, así que a
-    // la clienta le llegaría "por tu pedido AUR5X…", que ella no ha visto nunca.
-    expect(recoverySkipReason(candidate({ order_id: null }), OPTS)).toBe(
+    // El token `pedido` caía al código de guía cuando faltaba el nombre, así que
+    // a la clienta le llegaba "por tu pedido AUR5X…", que ella no ha visto nunca.
+    expect(recoverySkipReason(candidate({ order_id: null, order: null }), OPTS)).toBe(
       RECOVERY_SKIP_NO_ORDER,
     );
   });
@@ -204,9 +208,42 @@ describe("sin pedido enlazado", () => {
   it("mira el ENLACE, no el texto: un nombre inventado no basta", () => {
     // Durante meses el importador escribía nombres con el prefijo de otra tienda
     // (ver 0115). Ese texto pasaría un filtro sobre `order_name`; el enlace no.
+    // Medido el 2026-08-21: en 18 guías la copia DIFIERE del pedido enlazado.
     expect(
-      recoverySkipReason(candidate({ order_id: null, order_name: "#KP115389" }), OPTS),
+      recoverySkipReason(
+        candidate({ order_id: null, order: null, order_name: "#KP115389" }),
+        OPTS,
+      ),
     ).toBe(RECOVERY_SKIP_NO_ORDER);
+  });
+
+  it("EL CASO REAL: enlace puesto y la copia vacía — antes se enviaba mal", () => {
+    // 602 guías así el 2026-08-21, 134 devueltas y dentro de la ventana. El
+    // filtro miraba `order_id` y las daba por buenas; el token miraba
+    // `order_name`, lo encontraba vacío y mandaba el código del courier.
+    // La pantalla, mientras tanto, escribía «sin pedido» al lado del botón.
+    const c = candidate({ order_name: null, order: { name: "#KP126289" } });
+    expect(recoverySkipReason(c, OPTS)).toBeNull();
+    expect(recoveryOrderName(c)).toBe("#KP126289");
+  });
+
+  it("enlace puesto pero el pedido sin nombre: tampoco se escribe", () => {
+    // No pasa hoy (0 de 7 099 guías enlazadas), pero si pasara no hay nada que
+    // enseñarle a la clienta y el silencio es la respuesta correcta.
+    expect(
+      recoverySkipReason(candidate({ order: { name: null } }), OPTS),
+    ).toBe(RECOVERY_SKIP_NO_ORDER);
+  });
+
+  it("la copia NUNCA gana sobre el enlace", () => {
+    // El caso de las 18: la guía dice un pedido y el enlace dice otro. Manda el
+    // enlace, porque la copia pudo escribirla el importador a ojo.
+    //
+    // La firma de `recoveryOrderName` ni siquiera recibe `order_name`, así que
+    // esto no depende de que nadie se acuerde: el compilador lo impide.
+    expect(
+      recoveryOrderName(candidate({ order_name: "#KP115389", order: { name: "#AUR174734" } })),
+    ).toBe("#AUR174734");
   });
 
   it("va la última: una exclusión que no se puede resolver tiene prioridad", () => {
