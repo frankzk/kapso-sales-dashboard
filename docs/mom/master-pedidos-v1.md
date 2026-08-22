@@ -1320,6 +1320,20 @@ tres vías de escritura; con la pasada de motivo de abajo dejó de ser una
 precaución teórica, porque esa pasada consulta la API **justo por las guías ya
 devueltas** y sin la guarda las habría reetiquetado a todas en la primera vuelta.
 
+**El mensaje nombra el pedido, y ese nombre sale del pedido ENLAZADO.** No de la
+copia que guarda la guía. La copia puede ser una conjetura del importador (0115)
+—18 guías donde difiere del enlace— y sobre todo puede estar vacía aunque el
+enlace exista: 602 guías así el 2026-08-21, 134 de ellas devueltas y dentro de la
+ventana. Sin nombre del pedido **no se escribe**: el token no cae al código de
+guía, porque «por tu pedido AUR5X619171670545» es un código interno del courier
+que la clienta no ha visto nunca, en un mensaje que además le pide un adelanto.
+
+Esa regla vive en **una sola función** (`recoveryOrderName`) y la usan las tres
+cosas que antes decidían por su cuenta: el filtro de la cola, el token de la
+plantilla y la etiqueta de la pantalla. Estaban en desacuerdo — el filtro miraba
+el enlace, la etiqueta miraba la copia y el token caía a la guía—, y el síntoma
+era una fila que decía «sin pedido» al lado de un botón «Enviar» habilitado.
+
 Qué guía entra:
 
 - Devolución **consumada** (`returned_at` sellado), no `POR DEVOLVER` (§10).
