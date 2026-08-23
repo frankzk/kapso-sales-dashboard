@@ -56,6 +56,7 @@ import { REPLY_TOKEN_LABEL, renderReplyPreview, validateReplyParams } from "@/li
 import { shopifyDraftOrderAdminUrl } from "@/lib/shopify-urls";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { cn } from "@/components/ui";
+import { formatPeruMobile, peruMobileDigits, peruMobileProblem } from "@/lib/phone";
 import { YapeAssign } from "@/components/yape-alerts";
 import { reportClientPerformanceMetric } from "@/lib/client-performance";
 
@@ -2268,7 +2269,10 @@ function OrderFormPanel({
       } else {
         setItems(res.lineItems.map((li) => ({ ...li, key: rid() })));
         setName(res.customerName ?? "");
-        setPhone(res.phone ?? "");
+        // Solo la parte nacional: el campo pinta el `+51` fijo al lado, y el
+        // teléfono del lead viene de WhatsApp CON el 51 delante. Sin quitarlo se
+        // vería "+51 51988805509", que confunde y da un dígito de más al ojo.
+        setPhone(formatPeruMobile(res.phone));
         setAddress1(res.address1 ?? "");
         setDistrict(res.district ?? "");
         setProvince(matchPeruRegion(res.province));
@@ -2291,7 +2295,18 @@ function OrderFormPanel({
         : Math.min(subtotal, discountValue)
       : 0;
   const total = Math.max(0, subtotal - discountAmount);
-  const valid = items.length > 0 && address1.trim().length > 0 && district.trim().length > 0 && subtotal > 0;
+  // El celular es obligatorio y con forma de móvil peruano: es por donde el
+  // courier llama y por donde va la confirmación de WhatsApp que ofrece este
+  // mismo formulario. La regla NO se escribe acá — sale de lib/phone.ts, la
+  // misma que vuelve a comprobar la server action. Dos copias de la regla
+  // acabarían discrepando, y quien lo sufriría es quien se fía de la pantalla.
+  const phoneProblem = peruMobileProblem(phone);
+  const valid =
+    items.length > 0 &&
+    address1.trim().length > 0 &&
+    district.trim().length > 0 &&
+    subtotal > 0 &&
+    !phoneProblem;
 
   function patchItem(key: string, patch: Partial<OrderItem>) {
     setItems((x) => x.map((it) => (it.key === key ? { ...it, ...patch } : it)));
@@ -2547,7 +2562,7 @@ function OrderFormPanel({
 
           <div className="grid grid-cols-2 gap-2">
             <Field label="Cliente" value={name} onChange={setName} disabled={pending} placeholder="Nombre" />
-            <Field label="Teléfono" value={phone} onChange={setPhone} disabled={pending} placeholder="519…" />
+            <PeruMobileField value={phone} onChange={setPhone} disabled={pending} problem={phoneProblem} />
           </div>
           <Field label="Dirección *" value={address1} onChange={setAddress1} disabled={pending} placeholder="Av. / Calle y número" />
           <div className="grid grid-cols-2 gap-2">
@@ -2702,6 +2717,63 @@ function OrderFormPanel({
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * El celular del cliente, con el `+51` fuera del campo y los 9 dígitos dentro.
+ *
+ * POR QUÉ ASÍ. El campo era libre, y unos 9 dígitos sueltos acababan en Shopify
+ * como `+988805509` —sin código de país—, que Shopify rechaza; el pedido se
+ * creaba SIN teléfono y el aviso no lo mencionaba. Con el prefijo fuera del
+ * input no hay forma de olvidarlo ni de escribirlo dos veces.
+ *
+ * Y la máscara `XXX-XXX-XXX` no es decoración: en una tira de nueve cifras
+ * seguidas nadie ve que falta una; partida en tres grupos, salta a la vista.
+ *
+ * El estado guarda lo formateado y `peruMobileDigits` lo desnuda cuando hace
+ * falta, así que da igual si alguien pega `+51 988 805 509` o `51988805509`.
+ */
+function PeruMobileField({
+  value,
+  onChange,
+  disabled,
+  problem,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  problem: string | null;
+}) {
+  // Solo se avisa de lo que ya se escribió: gritarle "faltan 9 dígitos" a un
+  // campo vacío que nadie ha tocado es ruido, no ayuda.
+  const showProblem = Boolean(problem) && peruMobileDigits(value).length > 0;
+  return (
+    <div>
+      <label className={labelCls}>Teléfono *</label>
+      <div
+        className={cn(
+          "flex items-center overflow-hidden rounded-lg border bg-white",
+          showProblem ? "border-red-300" : "border-slate-200",
+        )}
+      >
+        <span className="select-none border-r border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-medium text-slate-500">
+          +51
+        </span>
+        <input
+          value={value}
+          onChange={(e) => onChange(formatPeruMobile(e.currentTarget.value))}
+          // `tel` saca el teclado numérico en el móvil, que es donde más se usa.
+          type="tel"
+          inputMode="numeric"
+          placeholder="988-805-509"
+          className="w-full px-2 py-1.5 text-xs text-slate-700 outline-none disabled:bg-slate-50"
+          disabled={disabled}
+          aria-invalid={showProblem}
+        />
+      </div>
+      {showProblem && <p className="mt-1 text-[11px] text-red-600">{problem}</p>}
+    </div>
   );
 }
 
