@@ -247,6 +247,18 @@ vuela, y se bloquea si nuestro origen no está en esa lista — marcarla ahí se
 pedir una vía que no existe. Si Shalom no devuelve las listas, se deja elegir y
 no se afirma nada: impedirlo por falta de dato bloquearía un envío legítimo.
 
+> **«No vuela» y «no lo sabemos» no son lo mismo.** La agencia apuntada al
+> cobrar (0073) se guarda con id y nombre y nada más, así que el modal la
+> reconstruía sin `aereo` — y la casilla desaparecía. El efecto era el inverso
+> del buscado: cuanto mejor se hacía el proceso, menos sabía quien creaba la
+> guía, y un envío a Iquitos se quedaba sin la única vía que existe. Ahora el
+> modal pide la agencia completa por su id (`loadShalomAgency`) al abrirse, y
+> `shalomAirRoute` responde `unknown` —no `offered: false`— cuando el campo
+> viene ausente. Solo un `aereo: false` del directorio esconde la casilla.
+
+Del mismo viaje sale `reparto_habilitado`: cuando es `false` el modal avisa de
+que esa agencia es **solo recojo**. Antes tampoco se veía, por la misma razón.
+
 > ⚠️ **La cotización puede no reflejar el recargo.** `POST /v1/tariff/calculate`
 > no acepta el flag `aereo` en su cuerpo documentado, así que el precio que se ve
 > antes de crear puede no incluirlo. El modal lo avisa cuando la casilla está

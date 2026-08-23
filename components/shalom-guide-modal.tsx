@@ -5,6 +5,7 @@ import {
   connectShalomSession,
   createShalomGuide,
   registerManualShalomGuide,
+  loadShalomAgency,
   loadShalomDraft,
   loadShalomProducts,
   lookupShalomPerson,
@@ -73,6 +74,12 @@ export function ShalomGuideModal({
   const [agencies, setAgencies] = useState<ShalomAgency[]>([]);
   const [agencySearching, setAgencySearching] = useState(false);
   const [agency, setAgency] = useState<ShalomAgency | null>(null);
+  /**
+   * La agencia prellenada llega del cobro con id y nombre y nada más. Mientras
+   * el directorio no la complete no se puede decir nada de la vía aérea, y
+   * decirlo antes de tiempo sería afirmar un «no vuela» que no consta.
+   */
+  const [agencyDetailing, setAgencyDetailing] = useState(false);
 
   // Destinatario
   const [documentType, setDocumentType] = useState<ShalomDocumentType>("DNI");
@@ -138,6 +145,10 @@ export function ShalomGuideModal({
         if (d.prefilledDocumentType) setDocumentType(d.prefilledDocumentType);
       }
       if (d.prefilledTerminalId) {
+        // Se pinta ya con lo guardado —el modal no espera a nadie— y se
+        // completa después con el directorio: `aereo`, `origenes_aereos` y
+        // `reparto_habilitado` no están en nuestra base, y sin ellos la vía
+        // aérea no se puede ni ofrecer ni descartar.
         setAgency({
           id: d.prefilledTerminalId,
           nombre: d.prefilledTerminalName ?? `Agencia ${d.prefilledTerminalId}`,
@@ -145,6 +156,16 @@ export function ShalomGuideModal({
         // Con la agencia ya elegida no hace falta gastar una búsqueda del cupo
         // compartido solo para volver a encontrar lo que ya sabemos.
         setAgencyQuery("");
+        setAgencyDetailing(true);
+        void loadShalomAgency(d.storeId, d.prefilledTerminalId).then((res) => {
+          if (!alive) return;
+          setAgencyDetailing(false);
+          // Un fallo aquí no es motivo para tocar nada: la agencia elegida
+          // sigue siendo válida y la vía aérea se queda en «no consta», que es
+          // exactamente lo que sabemos.
+          if ("error" in res) return;
+          setAgency((prev) => (prev && prev.id === res.agency.id ? res.agency : prev));
+        });
       }
       setManualAgency(d.prefilledTerminalName ?? "");
     })();
@@ -662,12 +683,24 @@ export function ShalomGuideModal({
                         cambiar
                       </button>
                     </div>
+                    {/* La agencia que viene del cobro se guarda con id y nombre;
+                        el resto se está pidiendo al directorio. Un instante sin
+                        casilla es mejor que una casilla que cambie sola. */}
+                    {agencyDetailing && (
+                      <p className="mt-2 text-xs text-slate-400">Consultando la agencia…</p>
+                    )}
+                    {agency.reparto_habilitado === false && (
+                      <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        Esta agencia es <strong>solo recojo</strong>: no hace entrega a domicilio.
+                        El cliente tiene que ir a recogerlo.
+                      </p>
+                    )}
                     {/* Vía aérea. Explícita a propósito: encarece el envío, así
                         que la decide quien despacha y no un automatismo. Solo
                         aparece si la agencia vuela, y se bloquea si no hay ruta
                         desde nuestro origen — marcarla ahí sería pedir algo que
                         no existe. */}
-                    {air.offered && (
+                    {!agencyDetailing && air.offered && (
                       <div className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
                         <label className="flex items-start gap-2 text-sm text-sky-900">
                           <input
@@ -692,8 +725,9 @@ export function ShalomGuideModal({
                             )}
                             {air.fromOrigin === "unknown" && (
                               <span className="block text-xs text-sky-700">
-                                Shalom no informó las rutas aéreas de esta agencia, así que no se
-                                pudo confirmar. Si el destino no tiene acceso por carretera, marca.
+                                No consta la ruta aérea de esta agencia, así que no se pudo
+                                confirmar ni descartar. Si el destino no tiene acceso por carretera
+                                —Iquitos, por ejemplo—, marca.
                               </span>
                             )}
                             {aereo && (
