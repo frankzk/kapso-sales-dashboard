@@ -12,7 +12,7 @@
 import { chunk } from "@/lib/access";
 import { createServerSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
-import { getAdvisorProductivity } from "@/lib/productivity";
+import { getAdvisorProductivity, isSalesTouch } from "@/lib/productivity";
 import type { StoreScope } from "@/lib/leads-access";
 
 export const SHIFT_START = 8;
@@ -34,9 +34,10 @@ export interface TrendPoint {
 
 export interface AdvisorToday {
   name: string;
-  /** Leads distintos tocados hoy por CUALQUIER acción (llamada, mensaje, cambio
-   *  de estado, "generar pedido"). Es el denominador del % de cierre — el mismo
-   *  que usa la página de Productividad, para que ambas vistas coincidan. */
+  /** Leads distintos TRABAJADOS hoy: cualquier acción de venta (llamada, mensaje,
+   *  cambio de estado, "generar pedido"). Ordenar la cola con "Resuelto" no cuenta
+   *  — no es trabajar el lead. Es el denominador del % de cierre — el mismo que
+   *  usa la página de Productividad, para que ambas vistas coincidan. */
   leads: number;
   llamadas: number; // solo kind="call" registradas hoy (subconjunto de `leads`)
   pedidos: number; // wins attributed today (last-touch)
@@ -45,22 +46,24 @@ export interface AdvisorToday {
 
 /** One day of the team conversion chart: contactos (gestión calls) vs pedidos
  *  (won leads credited to their last-TOUCH day). Pedidos se atribuye por ÚLTIMO
- *  TOQUE (cualquier tipo), IGUAL que el panel de Productividad — así el "Hoy" del
+ *  TOQUE DE VENTA, IGUAL que el panel de Productividad — así el "Hoy" del
  *  gráfico cuadra con la suma de pedidos por asesora (un cierre registrado sin
- *  llamada — "generar pedido" / cambio de estado — igual cuenta). contactos sigue
- *  contando solo kind="call". En un día muy flojo pedidos podría superar contactos;
+ *  llamada — "generar pedido" / cambio de estado — igual cuenta; una nota de
+ *  máquina como "Handoff resuelto" NO). contactos sigue contando solo
+ *  kind="call". En un día muy flojo pedidos podría superar contactos;
  *  el gráfico recorta el relleno verde y topa el % a 100. */
 export interface ConversionDay {
   dia: string; // weekday label, or "Hoy"
   contactos: number; // kind="call" calls that day
-  pedidos: number; // distinct won leads whose last TOUCH (any kind) fell that day
+  pedidos: number; // distinct won leads whose last SALES touch fell that day
 }
 
 /**
  * Team conversion per day. contactos = kind="call" calls; a won lead is credited
- * to the DAY of its last TOUCH (any kind) — the same last-touch attribution the
- * Productividad panel uses, so the chart's "Hoy" pedidos equals the sum of the
- * per-advisor pedidos (a sale closed without logging a call still counts). Pure so
+ * to the DAY of its last SALES touch (`isSalesTouch`) — the same last-touch
+ * attribution the Productividad panel uses, so the chart's "Hoy" pedidos equals
+ * the sum of the per-advisor pedidos (a sale closed without logging a call still
+ * counts; ordenar la cola con "Resuelto" no mueve el día del cierre). Pure so
  * it can be unit-tested. `calls` are all advisor (`vendedora` not null) lead_calls
  * in the window; `wonLeadIds` is the set of those leads currently won.
  */
@@ -72,13 +75,14 @@ export function computeTeamConversionByDay(opts: {
 }): ConversionDay[] {
   const daySet = new Set(opts.days.map((d) => d.date));
   const contactosByDate: Record<string, number> = {};
-  const lastTouchByLead: Record<string, string> = {}; // ANY kind → el pedido cae el día del ÚLTIMO TOQUE (igual que Productividad)
+  const lastTouchByLead: Record<string, string> = {}; // último toque DE VENTA → ese día cae el pedido (igual que Productividad)
   for (const c of opts.calls) {
     if (!c.occurred_at) continue;
     if (c.kind === "call") {
       const d = tzParts(c.occurred_at, opts.tz).date;
       if (daySet.has(d)) contactosByDate[d] = (contactosByDate[d] ?? 0) + 1;
     }
+    if (!isSalesTouch(c.kind)) continue;
     const prev = lastTouchByLead[c.lead_id];
     if (!prev || c.occurred_at > prev) lastTouchByLead[c.lead_id] = c.occurred_at;
   }

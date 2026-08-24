@@ -50,6 +50,17 @@ describe("computeTeamConversionByDay (conversión por día del equipo)", () => {
     ]);
   });
 
+  it("una nota de máquina ('Resuelto') NO mueve el día del cierre — cuadra con Productividad", () => {
+    const calls = [
+      { lead_id: "A", kind: "message", occurred_at: at("2026-07-08") }, // la venta se trabajó el 08
+      { lead_id: "A", kind: "system", occurred_at: at("2026-07-09") }, // solo se sacó de la cola el 09
+    ];
+    expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz })).toEqual([
+      { dia: "Mié", contactos: 0, pedidos: 1 },
+      { dia: "Hoy", contactos: 0, pedidos: 0 },
+    ]);
+  });
+
   it("un lead ganado tocado hoy SOLO por una acción que no es llamada igual cuenta como pedido (0 contactos · 1 pedido, igual que el panel)", () => {
     const calls = [
       // "Generar pedido" / cambio de estado sin registrar una llamada: 0 contactos ese día, 1 pedido.

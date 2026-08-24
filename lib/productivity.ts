@@ -1,7 +1,8 @@
 // Per-advisor (vendedora) productivity for a date range. Activity comes from
 // `lead_calls`; a won lead is credited to the advisor who registered the LAST
-// call on it within the period (last-touch attribution). Pure aggregation is
-// split from the fetch so it can be unit-tested.
+// SALES touch on it within the period (last-touch attribution — see
+// `isSalesTouch`: housekeeping notes like "Handoff resuelto" don't move a sale).
+// Pure aggregation is split from the fetch so it can be unit-tested.
 
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
@@ -125,6 +126,39 @@ export function storeInitials(name: string | null | undefined): string {
  *  a lost call as a sale. */
 export function isWonLead(category: string | null | undefined): boolean {
   return category === "won";
+}
+
+/** `kind`s de `lead_calls` que NO son trabajo de venta: anotaciones de máquina.
+ *  Agregar acá cualquier `kind` nuevo que escriba el sistema y no una persona. */
+const NON_SALES_KINDS = new Set(["system"]);
+
+/**
+ * ¿Este toque cuenta para atribuir el cierre?
+ *
+ * POR QUÉ EXISTE. La atribución es last-touch: la venta se le acredita a quien
+ * registró el ÚLTIMO toque del lead en el período. Hasta ahora "toque" era
+ * CUALQUIER fila de `lead_calls` firmada, y eso incluía las notas de máquina que
+ * lleva firmadas un click humano — en concreto `resolveHandoff` ("✅ Handoff
+ * resuelto"), que por su propia definición NO es una venta: no cambia
+ * status/category y existe para sacar de la cola handoffs que no llevan a nada.
+ *
+ * El resultado es que ordenar la cola movía la venta de persona. Caso real
+ * #KP121762: Tania mandó seis mensajes al lead entre 14:53 y 18:17; a las 19:30
+ * Yohalis le dio a "Resuelto" y los S/ 250.20 pasaron a Yohalis. Ese día 12 de
+ * los 154 leads trabajados cambiaron de dueña por ese click — S/ 2 245.40.
+ *
+ * La regla se apoya en lo que `kind` YA significa: en 60 días `call`, `message`
+ * y `sale` vienen firmados el 100% de las veces (son personas), y de las 25 029
+ * filas `system` solo 1 166 llevan firma, todas con el MISMO texto: el click de
+ * "Resuelto". O sea `kind` ya es exactamente la frontera persona/máquina; lo que
+ * faltaba era mirarlo.
+ *
+ * NO gobierna las horas activas. Un click de "Resuelto" es prueba legítima de
+ * que la asesora estaba conectada, así que `timesByAgentDay` sigue contándolo:
+ * esto decide de quién es la venta, no quién estaba trabajando.
+ */
+export function isSalesTouch(kind: string | null | undefined): boolean {
+  return !NON_SALES_KINDS.has((kind ?? "").trim());
 }
 
 /** Canonical acquisition-source bucket for a lead's `source`. */
@@ -284,8 +318,9 @@ export interface TrendCell {
 
 /** Daily contactos/pedidos series PER ADVISOR. Same attribution as
  *  computeAdvisorStats so the sparkline reconciles with "Cerrados": the win goes
- *  to the advisor of the lead's LAST touch (any kind), on that touch's local day;
- *  contactos count only the advisor's own kind="call". Pure. */
+ *  to the advisor of the lead's last SALES touch (`isSalesTouch` — housekeeping
+ *  excluded), on that touch's local day; contactos count only the advisor's own
+ *  kind="call". Pure. */
 export function computeAdvisorConversionByDay(opts: {
   calls: AdvisorCall[];
   wonLeadIds: Set<string>;
@@ -303,6 +338,7 @@ export function computeAdvisorConversionByDay(opts: {
       const i = idx.get(tzParts(c.occurred_at, opts.tz).date);
       if (i != null) rowOf(c.vendedora)[i]!.contactos += 1;
     }
+    if (!isSalesTouch(c.kind)) continue;
     const prev = lastTouch.get(c.lead_id);
     if (!prev || c.occurred_at > prev.at) lastTouch.set(c.lead_id, { vendedora: c.vendedora, at: c.occurred_at });
   }
@@ -456,7 +492,9 @@ function activeHoursFromTimes(sorted: number[]): number {
 }
 
 /** Aggregate advisor activity + last-touch-attributed wins + inferred active
- *  hours (from the spread of their action timestamps, by local day). Pure. */
+ *  hours (from the spread of their action timestamps, by local day). The wins go
+ *  to the advisor of the lead's last SALES touch (`isSalesTouch`) — housekeeping
+ *  notes don't move a sale. Pure. */
 export function computeAdvisorStats(
   { calls, leadOutcome, emailById }: ProductivityInput,
   tz = "America/Lima",
@@ -469,11 +507,17 @@ export function computeAdvisorStats(
     if (!c.vendedora) continue;
     const a = agg.get(c.vendedora) ?? { llamadas: 0, leads: new Set<string>() };
     if (c.kind === "call") a.llamadas += 1;
-    a.leads.add(c.lead_id);
+    // Solo el trabajo de venta cuenta como "lead trabajado": ordenar la cola con
+    // "Resuelto" no es trabajar el lead, y si contara inflaría el denominador del
+    // % cierre de quien ordena. La asesora sigue apareciendo en el tablero por
+    // sus horas activas aunque su único registro del día sea ese click.
+    if (isSalesTouch(c.kind)) a.leads.add(c.lead_id);
     agg.set(c.vendedora, a);
 
-    const prev = lastCaller.get(c.lead_id);
-    if (!prev || c.occurred_at > prev.at) lastCaller.set(c.lead_id, { vendedora: c.vendedora, at: c.occurred_at });
+    if (isSalesTouch(c.kind)) {
+      const prev = lastCaller.get(c.lead_id);
+      if (!prev || c.occurred_at > prev.at) lastCaller.set(c.lead_id, { vendedora: c.vendedora, at: c.occurred_at });
+    }
 
     const ms = new Date(c.occurred_at).getTime();
     if (Number.isFinite(ms)) {
