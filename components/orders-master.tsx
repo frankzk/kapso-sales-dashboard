@@ -27,6 +27,7 @@ import {
   type FrozenKey,
 } from "@/lib/master-table-columns";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
+import { CopyButton } from "@/components/copy-button";
 import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
@@ -2569,10 +2570,26 @@ function OrderDrawer({
                 {detail && <CoverageBadge coverage={detail.row.coverage} />}
               </div>
               {row && (
-                <p className="truncate text-xs text-slate-500">
-                  {storeName(row.store_id)} · creado el {fmtDate(row.order_created_at)}
-                  {detail?.row.customer_name ? ` · ${detail.row.customer_name}` : ""}
-                </p>
+                // `flex` y no un solo <p>: el botón de copiar tiene que quedar
+                // FUERA del texto que se recorta. Dentro de un `truncate`, un
+                // nombre de cliente largo se lo lleva por delante y el teléfono
+                // deja de poder copiarse justo en los pedidos donde más se
+                // necesita.
+                <div className="flex min-w-0 items-center gap-1 text-xs text-slate-500">
+                  <span className="truncate">
+                    {storeName(row.store_id)} · creado el {fmtDate(row.order_created_at)}
+                    {detail?.row.customer_name ? ` · ${detail.row.customer_name}` : ""}
+                  </span>
+                  {detail?.row.customer_phone && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="tabular-nums whitespace-nowrap">
+                        {detail.row.customer_phone}
+                      </span>
+                      <CopyButton value={detail.row.customer_phone} label="el teléfono" />
+                    </>
+                  )}
+                </div>
               )}
             </div>
             <div className="flex shrink-0 items-center gap-1">

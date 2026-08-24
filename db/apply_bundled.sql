@@ -9584,3 +9584,226 @@ comment on column order_master.total_refunded is
 create index if not exists order_master_prepaid_idx
   on order_master (store_id)
   where financial_status = 'paid';
+
+-- ---- 0129 ----
+-- Ocho distritos con la geografía inventada.
+--
+-- `peru_districts` se llena a mano y nadie valida lo que se escribe. Ocho filas
+-- acabaron con el DEPARTAMENTO copiado del propio distrito —`Pachacamac`,
+-- `Pucusana`, `HUACHIPA`, `Chancay`, `Huaral`, `Lurigancho chosica`,
+-- `Barranca`— y una con la geografía de otra región entera: Pacasmayo, que es
+-- de La Libertad, decía `Callao` en provincia Y en departamento.
+--
+-- No es cosmético. `lib/order-master.ts` usa esta tabla para rellenar la región
+-- del pedido, y esa región entra a `order_coverage_for` → `is_lima_metropolitana`
+-- → `lima_region_kind`. Un departamento inventado no coincide con nada y el
+-- distrito se cae de Lima; «Callao» sí coincide, y arrastra a Pacasmayo DENTRO
+-- de Lima.
+--
+-- Medido con order_coverage_for sobre las dos tiendas, antes y después:
+--
+--   pacasmayo            lima          -> agencia   (La Libertad tratada como Lima)
+--   lurigancho           provincia_cod -> lima
+--   lurigancho chosica   provincia_cod -> lima
+--   chaclacayo           provincia_cod -> lima
+--   pachacamac           agencia       -> lima
+--   chancay              agencia       -> agencia   (correcto de casualidad)
+--   huaral               agencia       -> agencia   (correcto de casualidad)
+--   paramonga paramonga  agencia       -> agencia   (correcto de casualidad)
+--
+-- Las tres últimas ya acertaban, pero por accidente: un departamento que no
+-- empareja con nada da el mismo resultado que uno correcto FUERA de Lima
+-- Metropolitana. Se corrigen igual, porque el acierto por accidente deja de
+-- serlo en cuanto alguien añada una tarifa con alcance por departamento.
+--
+-- El alcance real es menor que la tabla de arriba: en el Master la región de
+-- Shopify GANA a la de esta tabla (order-master.ts, prioridad de `region`), así
+-- que el departamento inventado solo llegaba a los pedidos cuya dirección de
+-- Shopify venía sin provincia. Son 7 pedidos. La provincia sí se usa en más
+-- casos, y ahí `Pucusana` para Chaclacayo o `Callao` para Pacasmayo se leían en
+-- pantalla tal cual.
+--
+-- Convención de la tabla: Lima Metropolitana se escribe `Lima` / `Lima`, que es
+-- lo que `lima_region_kind` resuelve a 'lima' y deja que el distrito decida.
+--
+-- No se toca `district`: `district_key` es la clave de unión y cambiar el texto
+-- visible no arregla ninguna cobertura. «Paramonga Paramonga» sigue duplicado.
+
+update peru_districts as p
+   set province   = f.province,
+       department = f.department,
+       source     = 'manual',
+       updated_at = now()
+  from (values
+    -- Pacasmayo es de La Libertad, no del Callao.
+    ('pacasmayo',           'Pacasmayo', 'La Libertad'),
+    -- Paramonga: distrito de la provincia de Barranca, departamento de Lima.
+    ('paramonga paramonga', 'Barranca',  'Lima'),
+    -- Chancay es distrito de la provincia de Huaral.
+    ('chancay',             'Huaral',    'Lima'),
+    ('huaral',              'Huaral',    'Lima'),
+    -- Los cuatro que sí son Lima Metropolitana.
+    ('lurigancho',          'Lima',      'Lima'),
+    ('lurigancho chosica',  'Lima',      'Lima'),
+    ('pachacamac',          'Lima',      'Lima'),
+    ('chaclacayo',          'Lima',      'Lima')
+  ) as f(district_key, province, department)
+ where p.district_key = f.district_key;
+
+-- ---- 0130 ----
+-- Un distrito de Lima escrito en el campo de REGIÓN sacaba al pedido de Lima.
+--
+-- `is_lima_metropolitana` tenía una salida en seco:
+--
+--     -- Región de otro departamento: no es Lima, aunque el distrito se llame
+--     -- igual que uno de Lima (Independencia/Huaraz, La Victoria/Chiclayo…).
+--     if coverage_norm(p_region) <> '' then
+--       return false;
+--     end if;
+--
+-- La regla es correcta para lo que dice defender: una región que nombra OTRO
+-- departamento. El hueco es que trataba igual a una región que no nombra ningún
+-- departamento, sino un DISTRITO de Lima Metropolitana. «Chaclacayo», «Ate»,
+-- «La Molina», «HUACHIPA» — alguien escribe el distrito o el barrio donde va el
+-- departamento, y el pedido se cae de Lima sin que nada avise.
+--
+-- Se destapó persiguiendo dos pedidos que la 0129 NO arregló: `#KP127256`, con
+-- `shippingAddress.province = "Chaclacayo"` puesto por Shopify, y `#KP127130`,
+-- con una corrección MANUAL del equipo que puso `region = "HUACHIPA"`. Dos
+-- fuentes distintas, el mismo agujero, y ninguna de las dos pasa por
+-- `peru_districts`: por eso corregir la tabla no los movió.
+--
+-- LA REGLA NUEVA. Si la región resuelve a un distrito de Lima Metropolitana
+-- —con los alias ya existentes, que es como «HUACHIPA» llega a `lurigancho`—,
+-- se lee como un distrito mal colocado y el pedido es Lima.
+--
+-- LO QUE NO CAMBIA, Y POR QUÉ IMPORTA. Los nombres ambiguos siguen fuera:
+-- Bellavista, Independencia, La Victoria, Miraflores, Pueblo Libre, San Luis,
+-- San Miguel y Santa Rosa existen en Lima Y en otros departamentos, y son
+-- exactamente los casos que el comentario de arriba nombraba. Esa lista ya vivía
+-- en esta función, escrita a mano en la rama «sin región». Se saca a
+-- `lima_ambiguous_districts()` para que las DOS ramas lean la misma: duplicarla
+-- habría sido plantar la siguiente divergencia con las manos.
+--
+-- Tampoco cambia nada para «Lima», «Callao» ni sus variantes: `lima_region_kind`
+-- las resuelve antes y no llegan a la rama nueva. Se comprobó que los únicos
+-- nombres de distrito de Lima que chocan con un departamento peruano son
+-- justamente «lima» y «callao», así que no hay ningún «San Martín» que se cuele.
+--
+-- MEDIDO EN PRODUCCIÓN, sobre las 16 650 filas del Master: cambian 12.
+--
+--   abiertos (5)     Ate · Chaclacayo · HUACHIPA · La Molina · Lurigancho ·
+--                    puente piedra
+--   finalizados (7)  Carabayllo · la molina · Lurigancho chosica · Pachacamac ·
+--                    San Juan de Lurigancho (×2)
+--
+-- Las doce son inequívocamente Lima Metropolitana; no hay un solo falso positivo
+-- en toda la historia. Y la lista de ambiguos se gana el sitio con una fila
+-- real: un pedido con región Y distrito «bellavista» y sin provincia, que sigue
+-- sin clasificarse como Lima porque de verdad no se sabe.
+--
+-- Los candidatos por el texto de la región eran 13, no 12: Pucusana también
+-- nombra un distrito metropolitano, pero tiene una excepción explícita en
+-- `district_coverage` que lo fija en `agencia`, y esa manda sobre todo lo demás
+-- (§19). El caso confirma que el orden de precedencia funciona: la regla nueva
+-- no atropella una decisión tomada a mano.
+--
+-- El refresco arrastra además 2 filas que NO son de esta migración —dos pedidos
+-- a Coronel Portillo (Ucayali) con `agencia` guardado y `provincia_cod` en la
+-- función, porque la excepción de ese distrito se creó DESPUÉS de su último
+-- cálculo—. Es justamente el desfase que el refresco existe para cerrar; se deja
+-- dicho aquí para que nadie lo lea como un efecto de la regla nueva.
+--
+-- SE REFRESCAN TAMBIÉN LOS FINALIZADOS, al contrario que en las excepciones de
+-- `district_coverage` (§19). No es la misma situación: allí una persona decide a
+-- mano reclasificar un distrito y sería raro que eso reescribiera historia; aquí
+-- se corrige la definición canónica, y una `coverage` guardada que ya no
+-- coincide con la función es el desfase que este repo lleva media docena de
+-- incidentes pagando. Además `coverage` describe cómo ES el destino, no lo que
+-- se hizo con el pedido, así que ponerla al día hace el histórico más fiel — y
+-- los análisis de cobertura por región dejan de arrastrar el error.
+
+create or replace function lima_ambiguous_districts()
+returns text[]
+language sql
+immutable
+parallel safe
+as $$
+  -- Distritos de Lima cuyo nombre se repite en otro departamento. Con uno de
+  -- estos a secas no se puede afirmar que el destino sea Lima.
+  select array[
+    'bellavista','independencia','la victoria','miraflores','pueblo libre',
+    'san luis','san miguel','santa rosa'
+  ];
+$$;
+
+create or replace function is_lima_metropolitana(
+  p_region text,
+  p_province text,
+  p_district text
+)
+returns boolean
+language plpgsql
+immutable
+parallel safe
+as $$
+declare
+  v_kind text := lima_region_kind(p_region);
+  v_province text := coverage_norm(p_province);
+  v_district text;
+  v_region_as_district text;
+begin
+  if v_kind in ('metropolitana', 'callao') then
+    return true;
+  end if;
+
+  -- Con la región ya dentro del departamento de Lima, el texto del distrito se
+  -- puede leer con confianza: no hay otro departamento con el que confundirlo.
+  v_district := resolve_lima_district(p_district, v_kind is not null);
+
+  -- "Lima (departamento)" con un distrito metropolitano: gana el distrito.
+  -- San Luis es la excepción — también es un distrito de Cañete.
+  if v_kind = 'departamento' then
+    return v_district is not null and v_district <> 'san luis';
+  end if;
+
+  -- Región "Lima" a secas: el distrito desempata entre la metropolitana y el
+  -- resto del departamento (Huaral, Cañete, Yauyos…).
+  if v_kind = 'lima' then
+    return v_district is not null;
+  end if;
+
+  if coverage_norm(p_region) <> '' then
+    -- La región no nombra ningún departamento: nombra un DISTRITO de Lima
+    -- Metropolitana. Es el distrito escrito una casilla más arriba de la que
+    -- le tocaba, y el destino es Lima. Sin búsqueda dentro del texto: se exige
+    -- que la región SEA el distrito (o uno de sus alias), no que lo contenga.
+    v_region_as_district := resolve_lima_district(p_region, false);
+    if v_region_as_district is not null
+       and v_region_as_district <> all(lima_ambiguous_districts()) then
+      return true;
+    end if;
+
+    -- Región de otro departamento: no es Lima, aunque el distrito se llame
+    -- igual que uno de Lima (Independencia/Huaraz, La Victoria/Chiclayo…).
+    return false;
+  end if;
+
+  -- Sin región: la provincia manda si es concluyente; si no, solo un distrito
+  -- cuyo nombre no se repita en otro departamento.
+  if v_district is null then
+    return false;
+  end if;
+  if v_province in ('lima', 'lima metropolitana') or v_province like '%callao%' then
+    return true;
+  end if;
+  return v_district <> all(lima_ambiguous_districts());
+end;
+$$;
+
+revoke all on function lima_ambiguous_districts() from public, anon, authenticated;
+revoke all on function is_lima_metropolitana(text, text, text) from public, anon, authenticated;
+grant execute on function lima_ambiguous_districts() to service_role;
+grant execute on function is_lima_metropolitana(text, text, text) to service_role;
+
+select refresh_order_coverage(null);

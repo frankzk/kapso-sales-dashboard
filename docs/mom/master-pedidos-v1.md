@@ -2178,6 +2178,76 @@ nuevos. Sin eso la excepción sería cierta para el futuro y mentira para lo que
 está en pantalla, que es el desfase de §19.1. Los finalizados no se tocan: su
 historia queda como ocurrió.
 
+**La cobertura se calcula sobre `peru_districts`, que es texto libre.** El
+Master rellena la región y la provincia del pedido desde esa tabla
+(`fetchGeo` en `lib/order-master.ts`), y esa región entra a `order_coverage_for`
+→ `is_lima_metropolitana` → `lima_region_kind`. La tabla se llena a mano y nada
+valida lo que se escribe, así que un departamento inventado **no da error: da
+otra cobertura**, en silencio.
+
+La 0129 corrigió ocho filas que lo demostraban. Siete tenían el departamento
+copiado del propio distrito —`Pachacamac`, `Pucusana`, `HUACHIPA`, `Chancay`,
+`Huaral`, `Lurigancho chosica`, `Barranca`— y una tenía la geografía de otra
+región entera: **Pacasmayo, que es de La Libertad, decía `Callao`** en provincia
+y en departamento, y `lima_region_kind` sí reconoce «Callao», de modo que un
+destino a 600 km de Lima se clasificaba como reparto local.
+
+Tres de las ocho (`chancay`, `huaral`, `paramonga paramonga`) ya devolvían
+`agencia`, que es lo correcto —pero **por accidente**: un departamento que no
+empareja con nada da el mismo resultado que uno correcto fuera de Lima
+Metropolitana. Se corrigieron igual. El acierto por accidente deja de serlo en
+cuanto alguien añada una tarifa con alcance por departamento.
+
+Dos cosas que conviene recordar antes de estimar el daño de un caso así:
+
+- **La región de Shopify gana a la de esta tabla** en la prioridad de
+  `order-master.ts`. El departamento inventado solo llegaba a los pedidos cuya
+  dirección de Shopify venía sin provincia —siete—. La provincia, en cambio, se
+  usa en más sitios y se leía en pantalla tal cual: `Pucusana` para Chaclacayo.
+- **`district_key` es la clave de unión, no `district`.** Corregir el texto
+  visible no arregla ninguna cobertura, y por eso la 0129 no lo tocó.
+
+Convención de la tabla para Lima Metropolitana: `Lima` / `Lima`. Es lo que
+`lima_region_kind` resuelve a `'lima'`, dejando que decida el distrito.
+
+**Una región que nombra un DISTRITO de Lima también es Lima.** `peru_districts`
+no era el único sitio por donde entraba una región inventada. Corrigiendo la
+tabla quedaron dos pedidos sin arreglar, y al perseguirlos aparecieron otras dos
+fuentes: `#KP127256` traía `shippingAddress.province = "Chaclacayo"` de Shopify,
+y `#KP127130` traía `region = "HUACHIPA"` de una **corrección manual del equipo**
+en `order_geo_overrides`. Tres orígenes distintos, el mismo síntoma.
+
+El agujero estaba en `is_lima_metropolitana`, que cortaba en seco ante cualquier
+región no vacía que no sonara a Lima. La regla defendía un caso real —una región
+que nombra OTRO departamento (Independencia/Huaraz, La Victoria/Chiclayo)— pero
+trataba igual a una región que no nombra ningún departamento sino un **distrito
+de Lima**, que es lo que pasa cada vez que alguien escribe el distrito o el
+barrio una casilla más arriba de la que toca.
+
+La 0130 lo separa: si la región resuelve a un distrito metropolitano —alias
+incluidos, que es como «HUACHIPA» llega a `lurigancho`— el destino es Lima.
+
+Dos límites que son la mitad importante del arreglo:
+
+- **Los nombres ambiguos siguen fuera.** Bellavista, Independencia, La Victoria,
+  Miraflores, Pueblo Libre, San Luis, San Miguel y Santa Rosa existen en Lima y
+  en otros departamentos. Esa lista ya vivía escrita a mano dentro de la función;
+  ahora es `lima_ambiguous_districts()` y **las dos ramas leen la misma** —
+  duplicarla habría sido plantar la siguiente divergencia con las manos.
+- **La región tiene que SER el distrito, no mencionarlo.** Sin búsqueda dentro
+  del texto: «Cerca de Chaclacayo» no dice dónde entregar.
+
+Cambiaron 12 pedidos en toda la historia, todos inequívocamente de Lima. Y
+`Pucusana`, que también encaja en la regla, **no** cambió: tiene una excepción
+explícita en `district_coverage` y esa manda sobre todo lo demás. El orden de
+precedencia de §19 hizo su trabajo.
+
+La prueba vive en `scripts/sql/lima_region_smoke.sql` y se comprobó que **puede
+fallar**: se verificó contra cuatro mutantes —la función anterior, la versión sin
+el guardarraíl de ambigüedad, la que busca dentro del texto y la que rompe la
+rama sin región— y los caza los cuatro. Una prueba que no falla ante ninguno de
+esos no habría estado protegiendo nada.
+
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 
 `order_master` no calcula en vivo: guarda el resultado del resolver y lo sirve.
