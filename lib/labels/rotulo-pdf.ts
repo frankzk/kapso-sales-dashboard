@@ -48,6 +48,8 @@ export interface RotuloData {
   items: LabelLineItem[];
   /** Total del pedido = lo que se cobra en la puerta. `null` si no se conoce. */
   collectAmount: number | null;
+  /** ¿Ya está cobrado (Yape completo o checkout)? Ver lib/order-paid.ts. */
+  paid?: boolean;
   /** Moneda del pedido; por defecto PEN. */
   currency: string | null;
   destination: string | null;
@@ -442,7 +444,15 @@ const AMOUNT_BAND_H = 14 * MM;
 function drawCollectBand(
   page: PDFPage,
   fonts: Fonts,
-  opts: { x: number; y: number; width: number; amount: number | null; currency: string | null },
+  opts: {
+    x: number;
+    y: number;
+    width: number;
+    amount: number | null;
+    currency: string | null;
+    /** El pedido ya está cobrado: la banda dice PAGADO en vez de un importe. */
+    paid?: boolean;
+  },
 ): number {
   const top = opts.y;
   const bottom = top - AMOUNT_BAND_H;
@@ -464,10 +474,14 @@ function drawCollectBand(
     color: MUTED,
   });
 
-  const text = formatCollectAmount(opts.amount, opts.currency);
+  // UN PEDIDO YA COBRADO NO IMPRIME "S/ 0". Cero es un importe, y un importe de
+  // cero a un metro de distancia se lee como un error del sistema — y un rótulo
+  // ambiguo sobre dinero se resuelve cobrando, que es cobrar dos veces. La
+  // palabra no admite otra lectura.
+  const text = opts.paid ? null : formatCollectAmount(opts.amount, opts.currency);
   // Sin cifra el mensaje es una instrucción, no un importe: va más pequeño para
   // que nadie lo confunda de lejos con un monto real.
-  const value = sanitizeWinAnsi(text ?? "VER PEDIDO");
+  const value = sanitizeWinAnsi(text ?? (opts.paid ? "PAGADO - NO COBRAR" : "VER PEDIDO"));
   let size = text ? 26 : 14;
   const maxW = opts.width - 6 * MM;
   while (size > 8 && fonts.bold.widthOfTextAtSize(value, size) > maxW) size -= 0.5;
@@ -627,6 +641,7 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     y,
     width: innerW,
     amount: data.collectAmount,
+    paid: data.paid ?? false,
     currency: data.currency,
   });
 

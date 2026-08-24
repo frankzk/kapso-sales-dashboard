@@ -257,4 +257,6 @@
 \ir migrations/0126_store_collection_accounts.sql
 \echo 'Applying 0127_collect_alert_sent_at.sql'
 \ir migrations/0127_collect_alert_sent_at.sql
+\echo 'Applying 0128_order_master_payment_facts.sql'
+\ir migrations/0128_order_master_payment_facts.sql
 \echo 'Done.'

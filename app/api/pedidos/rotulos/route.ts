@@ -15,6 +15,7 @@ import { outputDisplayCode } from "@/lib/shipment-output";
 import { buildRotulosPdf, type RotuloData } from "@/lib/labels/rotulo-pdf";
 import { selectLabelsForOrders, type ShipmentForLabel } from "@/lib/labels/pick-shipment";
 import { labelItemsFor } from "@/lib/labels/line-items";
+import { orderFullyPaid } from "@/lib/order-paid";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -108,7 +109,10 @@ export async function GET(request: NextRequest) {
   // El total del pedido es además lo que se cobra en la puerta, así que viaja en
   // la misma consulta: es el dato más caro de equivocar del rótulo.
   const lineItemsByOrder = new Map<string, unknown>();
-  const moneyByOrder = new Map<string, { total: number | null; currency: string | null }>();
+  const moneyByOrder = new Map<
+    string,
+    { total: number | null; currency: string | null; paid: boolean }
+  >();
   const noteByOrder = new Map<string, string | null>();
   const selectedOrderIds = Array.from(
     new Set(selected.map((row) => row.order_id).filter(Boolean) as string[]),
@@ -119,7 +123,7 @@ export async function GET(request: NextRequest) {
     // pedido— para sacarle una línea.
     const { data: orderRows } = await sb
       .from("orders")
-      .select("id,line_items,total_amount,currency,shopify_note")
+      .select("id,line_items,total_amount,currency,shopify_note,financial_status,total_refunded")
       .in("id", selectedOrderIds);
     type OrderRow = {
       id: string;
@@ -127,10 +131,33 @@ export async function GET(request: NextRequest) {
       total_amount: number | null;
       currency: string | null;
       shopify_note: string | null;
+      financial_status: string | null;
+      total_refunded: number | null;
     };
+    // El estado de los comprobantes Yape vive en el read-model, no en `orders`.
+    // Sin él, un pedido cobrado por Yape imprimiría igualmente el total en el
+    // rótulo — el mismo doble cobro que el pagado en el checkout, por la otra
+    // puerta. Son dos consultas pequeñas por tanda, no por rótulo.
+    const paymentStateByOrder = new Map<string, string | null>();
+    const { data: masterRows } = await sb
+      .from("order_master")
+      .select("order_id,payment_state")
+      .in("order_id", selectedOrderIds);
+    for (const m of (masterRows as { order_id: string; payment_state: string | null }[] | null) ?? []) {
+      paymentStateByOrder.set(m.order_id, m.payment_state);
+    }
     for (const order of (orderRows as OrderRow[] | null) ?? []) {
       lineItemsByOrder.set(order.id, order.line_items);
-      moneyByOrder.set(order.id, { total: order.total_amount, currency: order.currency });
+      const facts = {
+        financialStatus: order.financial_status,
+        totalRefunded: order.total_refunded,
+        paymentState: paymentStateByOrder.get(order.id) ?? null,
+      };
+      moneyByOrder.set(order.id, {
+        total: order.total_amount,
+        currency: order.currency,
+        paid: orderFullyPaid(facts),
+      });
       noteByOrder.set(order.id, order.shopify_note);
     }
   }
@@ -161,6 +188,7 @@ export async function GET(request: NextRequest) {
           row.product,
         ),
         collectAmount: money?.total ?? null,
+        paid: money?.paid ?? false,
         currency: money?.currency ?? null,
         note: row.order_id ? (noteByOrder.get(row.order_id) ?? null) : null,
         // Sin la región: repite la provincia en casi todo el país y gastaba una

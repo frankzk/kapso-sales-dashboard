@@ -112,6 +112,10 @@ export const MASTER_DETAIL_EXTRA_COLUMNS = [
   "reference",
   "geo_source",
   "status_source",
+  // Cómo se cobró (0128): el panel del drawer decide con esto si pide
+  // comprobante o solo enseña la constancia de que ya está pagado.
+  "financial_status",
+  "total_refunded",
 ] as const;
 const MASTER_DETAIL_COLUMNS =
   `${MASTER_COLUMNS},${MASTER_DETAIL_EXTRA_COLUMNS.join(",")}`;
