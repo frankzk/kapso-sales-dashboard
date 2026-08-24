@@ -264,12 +264,51 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
   const diferencias = findAll(ctx.payments, "diferencia");
   const total = find(ctx.payments, "total");
 
+  // ¿EL DINERO CARGADO YA CUBRE EL PEDIDO? Se pregunta antes que la forma, y por
+  // una razón concreta: la forma es una convención del flujo COD —adelanto para
+  // despachar, diferencia antes de soltar la clave— y el dinero es el hecho.
+  //
+  // #KP128018 lo enseñó: un adelanto de S/ 200.00 validado sobre un pedido de
+  // S/ 198.00. El panel decía «S/ 200.00 validados de S/ 198.00 · Saldo por
+  // cargar: S/ 0.00» con la barra llena, y tres centímetros más arriba
+  // «Completar el pago antes de liberar la clave». La pantalla se contradecía a
+  // sí misma porque esta función miraba si existía una fila `diferencia`, no si
+  // alcanzaba la plata. El cliente pagó todo de una y la asesora lo registró
+  // como «Adelanto», que es lo natural cuando es el primer pago.
+  //
+  // El listón NO baja: se suman los comprobantes VIVOS (no rechazados) igual que
+  // hacía la comprobación de monto de abajo, así que un pedido a medio pagar
+  // sigue bloqueado. Lo único que deja de exigirse es que el dinero venga
+  // repartido en dos filas con los nombres correctos.
+  const live = ctx.payments.filter(isLive);
+  const orderTotalCents =
+    Number.isFinite(Number(ctx.orderTotal)) && Number(ctx.orderTotal) > 0
+      ? Math.round(Number(ctx.orderTotal) * 100)
+      : null;
+  // Un comprobante sin monto suma CERO, no invalida la cuenta: `inCents` mapea
+  // el nulo a cero. O sea que no puede inflar el total, solo dejarlo corto — que
+  // es el lado correcto del error. No hace falta descartarlo aparte.
+  const liveCents = live.map((payment) => inCents(payment.amount) ?? 0);
+  // Sin comprobantes la suma es cero y `orderTotalCents` solo existe cuando es
+  // mayor que cero, así que un pedido sin pagos nunca «cubre»: no hace falta
+  // comprobar la lista aparte. El `?? 0` de arriba es exigencia del tipo, no de
+  // la lógica — `inCents` solo devuelve nulo si el campo no viene del todo.
+  const covered =
+    orderTotalCents !== null &&
+    liveCents.reduce<number>((sum, c) => sum + c, 0) >= orderTotalCents;
+
   if (total) {
     if (total.validation_status === "posible_duplicado") blockers.push("pago_observado");
   } else {
-    if (!adelanto) blockers.push("adelanto_no_registrado");
-    if (!diferencias.length) blockers.push("diferencia_no_registrada");
-    if ([adelanto, ...diferencias].some((p) => p?.validation_status === "posible_duplicado")) {
+    // Con el total cubierto, faltar el «adelanto» o la «diferencia» deja de ser
+    // un impedimento: es una etiqueta, no una deuda.
+    if (!adelanto && !covered) blockers.push("adelanto_no_registrado");
+    if (!diferencias.length && !covered) blockers.push("diferencia_no_registrada");
+    // Un comprobante observado sí sigue bloqueando, cubra o no: un posible
+    // duplicado no es dinero nuevo, y contarlo dos veces es justo lo que la
+    // deduplicación persigue. Se miran TODOS los vivos y no solo los dos
+    // esperados, porque ahora el monto puede venir de cualquiera de ellos.
+    if (live.some((p) => p.validation_status === "posible_duplicado")) {
       blockers.push("pago_observado");
     }
   }
@@ -357,6 +396,12 @@ export function paymentState(
   if (!adelanto) return "sin_pago";
   if (adelanto.validation_status !== "validado") return "adelanto_cargado";
   if (!paymentProgress([adelanto], orderTotal).advanceValidated) return "adelanto_cargado";
+  // Si lo VALIDADO ya cubre el pedido, está pagado — venga en una fila o en
+  // tres. Sin esto, un adelanto de S/ 200 sobre un pedido de S/ 198 se anunciaba
+  // como «Diferencia pendiente» mientras el mismo panel mostraba «Saldo por
+  // cargar: S/ 0.00». La contradicción no era cosmética: de este estado cuelgan
+  // la subetapa `pendiente_pago_diferencia` y el monto que se manda al courier.
+  if (paymentProgress(payments, orderTotal).completeValidated) return "pago_completo";
   if (!diferencias.length) return "adelanto_validado";
   if (diferencias.some((payment) => payment.validation_status !== "validado")) {
     return "diferencia_cargada";

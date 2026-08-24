@@ -1657,6 +1657,19 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   puede abrirse a tamaño completo. `Titular/pagador` no es un campo operativo:
   si la visión lo obtiene, se conserva internamente para trazabilidad y
   deduplicación, sin pedirle al asesor que lo complete.
+- **La clave se libera cuando el monto cubre el total, no cuando los pagos tienen
+  la forma esperada.** Adelanto y diferencia son la convención del flujo COD, no
+  el requisito: si un solo comprobante validado ya cubre el pedido, está pagado y
+  la clave se entrega. Pasó en #KP128018 —adelanto de S/ 200.00 sobre un pedido
+  de S/ 198.00— donde el panel mostraba «Saldo por cargar: S/ 0.00» y encima
+  «Completar el pago antes de liberar la clave»: la pantalla se contradecía
+  porque la compuerta miraba si existía una fila `diferencia`, no si alcanzaba la
+  plata.
+  El listón no baja: se suman los comprobantes **vivos** (no rechazados), un
+  comprobante sin monto suma cero, y un **posible duplicado sigue bloqueando
+  aunque cubra** — un duplicado no es dinero nuevo. Lo mismo vale para el
+  indicador de estado: si lo validado cubre el total, es `pago_completo`, y de
+  ahí cuelgan la subetapa y el monto que se manda al courier.
 - Si el pago es menor al requerido, la clave permanece bloqueada y se alerta al
   asesor.
 - Solo Frankz ejecuta reembolsos.

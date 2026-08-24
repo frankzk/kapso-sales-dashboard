@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { canRevealPickupKey } from "@/lib/pickup-key";
+import { canRevealPickupKey, paymentState } from "@/lib/pickup-key";
 import { orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
 
 /**
@@ -213,5 +213,101 @@ describe("la guarda: con comprobantes mandan las reglas de Yape", () => {
       { kind: "adelanto", validation_status: "rechazado", order_id: "o1", amount: 30 },
     ];
     expect(canRevealPickupKey(ctx({ payments: rechazado, paymentFacts: PREPAID })).allowed).toBe(true);
+  });
+});
+
+describe("la clave se libera cuando el monto cubre el total, sin importar la forma", () => {
+  // #KP128018: adelanto de S/ 200.00 validado sobre un pedido de S/ 198.00. El
+  // panel decía «S/ 200.00 validados de S/ 198.00 · Saldo por cargar: S/ 0.00»
+  // con la barra llena, y arriba «Completar el pago antes de liberar la clave».
+  // La compuerta miraba si EXISTÍA una fila `diferencia`, no si alcanzaba la
+  // plata. El cliente pagó todo de una y la asesora lo registró como «Adelanto»,
+  // que es lo natural cuando es el primer pago.
+  const pago = (over: Record<string, unknown> = {}) => ({
+    kind: "adelanto",
+    validation_status: "validado",
+    order_id: "o1",
+    amount: 200,
+    ...over,
+  });
+
+  it("un adelanto que cubre el total libera la clave", () => {
+    const v = canRevealPickupKey(ctx({ payments: [pago()], orderTotal: 198 }));
+    expect(v.allowed).toBe(true);
+    expect(v.blockers).toEqual([]);
+  });
+
+  it("y el estado deja de anunciar una diferencia que no existe", () => {
+    // De este estado cuelgan la subetapa `pendiente_pago_diferencia` y el monto
+    // que se le manda al courier: no es solo la etiqueta del panel.
+    expect(paymentState([pago()], 198)).toBe("pago_completo");
+  });
+
+  it("el listón NO baja: a medio pagar sigue bloqueado", () => {
+    const v = canRevealPickupKey(ctx({ payments: [pago({ amount: 100 })], orderTotal: 198 }));
+    expect(v.allowed).toBe(false);
+    expect(v.blockers).toContain("diferencia_no_registrada");
+    expect(paymentState([pago({ amount: 100 })], 198)).toBe("adelanto_validado");
+  });
+
+  it("justo el total alcanza; un céntimo menos no", () => {
+    expect(canRevealPickupKey(ctx({ payments: [pago({ amount: 198 })], orderTotal: 198 })).allowed).toBe(true);
+    expect(canRevealPickupKey(ctx({ payments: [pago({ amount: 197.99 })], orderTotal: 198 })).allowed).toBe(false);
+  });
+
+  it("varios comprobantes suman, aunque ninguno cubra por sí solo", () => {
+    const v = canRevealPickupKey(
+      ctx({
+        payments: [pago({ amount: 100 }), pago({ kind: "diferencia", amount: 98 })],
+        orderTotal: 198,
+      }),
+    );
+    expect(v.allowed).toBe(true);
+  });
+
+  it("un comprobante RECHAZADO no suma: no es dinero", () => {
+    const v = canRevealPickupKey(
+      ctx({
+        payments: [pago({ amount: 100 }), pago({ amount: 98, validation_status: "rechazado" })],
+        orderTotal: 198,
+      }),
+    );
+    expect(v.allowed).toBe(false);
+  });
+
+  it("un posible duplicado sigue bloqueando aunque cubra", () => {
+    // Un duplicado no es dinero nuevo: contarlo sería exactamente lo que la
+    // deduplicación persigue.
+    const v = canRevealPickupKey(
+      ctx({ payments: [pago({ validation_status: "posible_duplicado" })], orderTotal: 198 }),
+    );
+    expect(v.allowed).toBe(false);
+    expect(v.blockers).toContain("pago_observado");
+  });
+
+  it("sin total del pedido no se puede afirmar que cubra", () => {
+    const v = canRevealPickupKey(ctx({ payments: [pago()], orderTotal: null }));
+    expect(v.allowed).toBe(false);
+  });
+
+  it("un monto sin informar no cubre nada", () => {
+    const v = canRevealPickupKey(ctx({ payments: [pago({ amount: null })], orderTotal: 198 }));
+    expect(v.allowed).toBe(false);
+  });
+
+  it("un comprobante sin monto suma cero: no infla ni invalida", () => {
+    // `inCents` mapea el nulo a cero, así que una fila sin monto solo puede
+    // dejar la cuenta corta — nunca darla por cubierta. Es el lado correcto del
+    // error, y por eso no hace falta descartarla aparte.
+    const cubre = canRevealPickupKey(
+      ctx({ payments: [pago({ amount: 200 }), pago({ kind: "diferencia", amount: null })], orderTotal: 198 }),
+    );
+    expect(cubre.allowed).toBe(true);
+
+    const noCubre = canRevealPickupKey(
+      ctx({ payments: [pago({ amount: 100 }), pago({ kind: "diferencia", amount: null })], orderTotal: 198 }),
+    );
+    expect(noCubre.allowed).toBe(false);
+    expect(noCubre.blockers).toContain("monto_insuficiente");
   });
 });
