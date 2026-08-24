@@ -27,6 +27,7 @@ import {
   confirmationDayCount,
 } from "@/lib/order-confirmation";
 import { classifyOrderCoverage, type OrderCoverage } from "@/lib/order-coverage";
+import { isWebPrepaid } from "@/lib/order-paid";
 import {
   MOM_RESOLUTION_VERSION,
   resolveMacroStage,
@@ -953,9 +954,23 @@ export async function recomputeOrderMaster(
     const override = latestOverride(orderEvents);
 
     const paymentSignals = signals.get(order.id) ?? null;
-    const resolvedPaymentState = paymentSignals
+    const voucherState = paymentSignals
       ? paymentState(paymentSignals.payments, order.total_amount)
       : null;
+    // EL PREPAGO WEB TAMBIÉN ES ESTADO DE COBRO. `paymentState` solo sabe de
+    // comprobantes, así que un pedido cobrado en el checkout salía `sin_pago` —
+    // y de ese valor cuelgan la macroetapa (que lo dejaba en «pendiente de pago
+    // de diferencia») y el monto que se le manda al courier.
+    //
+    // Se resuelve acá, en el único sitio que tiene delante las dos vías, y no
+    // dentro de `paymentState`: esa función es pura sobre comprobantes y la usan
+    // sitios que no conocen a Shopify.
+    const paymentFacts = {
+      financialStatus: order.financial_status,
+      totalRefunded: order.total_refunded,
+      paymentState: voucherState,
+    };
+    const resolvedPaymentState = isWebPrepaid(paymentFacts) ? "pago_completo" : voucherState;
     // `classifyOrderCoverage` queda como reserva para el caso en que la 0104 no
     // esté aplicada todavía: resuelve solo por nombre, así que da el mismo
     // resultado que la base salvo en los destinos que dependen del mapa COD.
@@ -1117,6 +1132,10 @@ export async function recomputeOrderMaster(
             orderTotal: order.total_amount,
             hasKey: paymentSignals.hasKey,
             shared: paymentSignals.shared,
+            // Sin esto, el indicador del listado decía «clave bloqueada» en un
+            // pedido que el drawer sí deja abrir: dos cálculos de lo mismo con
+            // entradas distintas. Es la divergencia que destapó #KP126188.
+            paymentFacts,
           })
         : null,
       pickup_state: state.pickupState,

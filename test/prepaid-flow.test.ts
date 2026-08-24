@@ -311,3 +311,39 @@ describe("la clave se libera cuando el monto cubre el total, sin importar la for
     expect(noCubre.blockers).toContain("monto_insuficiente");
   });
 });
+
+describe("el recálculo y el drawer deciden lo MISMO", () => {
+  // #KP126188 lo destapó: `financial_status = 'paid'` ya escrito en el Master,
+  // cero comprobantes, y aun así `key_state = 'clave_bloqueada'` y
+  // `macro_substage = 'pendiente_pago_diferencia'`. El drawer sí lo dejaba
+  // pasar. Dos cálculos de la misma pregunta con entradas distintas: el del
+  // recálculo no recibía los datos de pago.
+  const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
+  const source = () => read("lib/order-master.ts");
+
+  it("el recálculo le pasa los datos de pago a la compuerta de la clave", () => {
+    const s = source();
+    const i = s.indexOf("keyState({");
+    expect(i).toBeGreaterThan(0);
+    const call = s.slice(i, s.indexOf("})", i));
+    expect(call).toContain("paymentFacts");
+  });
+
+  it("y el prepago web cuenta como estado de cobro", () => {
+    // De `payment_state` cuelgan la macroetapa y el monto que va al courier. Sin
+    // esto, un pedido cobrado en el checkout quedaba `sin_pago` y la macroetapa
+    // lo dejaba en «pendiente de pago de diferencia» para siempre.
+    const s = source();
+    expect(s).toMatch(/isWebPrepaid\(paymentFacts\) \? "pago_completo" : voucherState/);
+  });
+
+  it("la traducción NO vive dentro de `paymentState`", () => {
+    // Esa función es pura sobre comprobantes y la usan sitios que no conocen a
+    // Shopify. Meterle `financial_status` la ataría a una fuente que no es suya.
+    const s = read("lib/pickup-key.ts");
+    const i = s.indexOf("export function paymentState(");
+    const body = s.slice(i, s.indexOf("\n}", i));
+    expect(body).not.toContain("financial");
+    expect(body).not.toContain("isWebPrepaid");
+  });
+});
