@@ -257,4 +257,6 @@
 \ir migrations/0126_store_collection_accounts.sql
 \echo 'Applying 0127_peru_districts_geografia.sql'
 \ir migrations/0127_peru_districts_geografia.sql
+\echo 'Applying 0128_lima_region_es_un_distrito.sql'
+\ir migrations/0128_lima_region_es_un_distrito.sql
 \echo 'Done.'
