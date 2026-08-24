@@ -289,9 +289,12 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
   // el nulo a cero. O sea que no puede inflar el total, solo dejarlo corto — que
   // es el lado correcto del error. No hace falta descartarlo aparte.
   const liveCents = live.map((payment) => inCents(payment.amount) ?? 0);
+  // Sin comprobantes la suma es cero y `orderTotalCents` solo existe cuando es
+  // mayor que cero, así que un pedido sin pagos nunca «cubre»: no hace falta
+  // comprobar la lista aparte. El `?? 0` de arriba es exigencia del tipo, no de
+  // la lógica — `inCents` solo devuelve nulo si el campo no viene del todo.
   const covered =
     orderTotalCents !== null &&
-    liveCents.length > 0 &&
     liveCents.reduce<number>((sum, c) => sum + c, 0) >= orderTotalCents;
 
   if (total) {
