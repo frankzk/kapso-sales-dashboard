@@ -74,6 +74,26 @@ export function isMasterView(v: string | undefined | null): v is MasterView {
   return !!v && MASTER_VIEWS.some((s) => s.key === v);
 }
 
+/**
+ * La lectura del Master no pudo hacerse. Distinto de "no hay fila": esto es la
+ * base diciendo que NO PUDO responder, y quien lo reciba tiene que enseñarlo tal
+ * cual en vez de inventar una conclusión sobre el pedido.
+ *
+ * El mensaje lleva el código de PostgREST porque es lo único que distingue de un
+ * vistazo una columna que falta (42703, migración sin aplicar) de un permiso
+ * (42501) o de un corte de red — y quien mira el drawer no tiene los logs.
+ */
+export class OrderMasterReadError extends Error {
+  readonly code: string | null;
+
+  constructor(what: string, cause: { message: string; code?: string | null }) {
+    const code = cause.code ?? null;
+    super(`No se pudo leer ${what}: ${cause.message}${code ? ` [${code}]` : ""}`);
+    this.name = "OrderMasterReadError";
+    this.code = code;
+  }
+}
+
 // Columnas del LISTADO. Deliberadamente más cortas que la fila completa: en un
 // listado de 10.000 pedidos, cada columna se paga 10.000 veces — y no solo su
 // valor, también su NOMBRE repetido en cada objeto JSON. Con las 43 columnas
@@ -434,11 +454,18 @@ function withRuntimeCoverage(row: OrderMasterRow): OrderMasterRow {
 export async function getOrderMasterDetail(orderId: string): Promise<OrderMasterDetail | null> {
   const sb = await createServerSupabase();
 
-  const { data: rowData } = await sb
+  const { data: rowData, error: rowError } = await sb
     .from("order_master")
     .select(MASTER_DETAIL_COLUMNS)
     .eq("order_id", orderId)
     .maybeSingle();
+  // Una consulta QUE FALLA no es un pedido que no existe. Ignorar este `error`
+  // costó una tarde: la 0128 añade `financial_status` y `total_refunded` a este
+  // select, el código salió a producción antes que la migración, y PostgREST
+  // devolvía 42703 con `rowData` en null. El drawer traducía ese null a "No
+  // encontrado" sobre un pedido que estaba ahí, visible en la tabla de atrás,
+  // sin una sola pista de que el problema era la columna que faltaba.
+  if (rowError) throw new OrderMasterReadError("order_master", rowError);
   if (!rowData) return null;
   const row = withRuntimeCoverage(rowData as unknown as OrderMasterRow);
 
