@@ -1530,6 +1530,21 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 
 ### Pagos
 
+- **Un pedido pagado en el checkout no tiene cobro que gestionar.** Desde que
+  entran pedidos con pasarela (`financial_status = 'paid'`), «ya está cobrado»
+  tiene dos vías —comprobante Yape o pago web— y **no se suman**: sumarlas sería
+  contar dos veces el mismo dinero. Un reembolso deshace el prepago.
+  De esa regla única cuelga todo lo demás:
+  - El panel de cobro colapsa a una constancia: ni pide comprobante ni enseña
+    saldo por cargar. Lo que sí sigue haciendo falta en Agencia —DNI y agencia de
+    Shalom— no es cobro: son datos de entrega.
+  - **La clave de recojo se entrega sin comprobantes.** Exigirlos a quien pagó
+    con tarjeta la bloqueaba para siempre: no existe un Yape que cargar, así que
+    «falta el adelanto» era cierto de forma permanente y el paquete se quedaba en
+    la agencia. Lo que NO se salta: que la clave exista, que el pedido no esté
+    cerrado y que el paquete esté disponible.
+  - La guía sale con **cobro 0** y el rótulo dice **PAGADO · NO COBRAR**, nunca
+    «S/ 0»: cero es un importe, y un importe ambiguo se resuelve cobrando.
 - Cualquier asesor puede subir el comprobante.
 - El comprobante puede registrarse como `Adelanto`, `Diferencia` o `Pago total`.
   `Pago total` es un camino de captura visible, no una combinación implícita de
@@ -1642,6 +1657,19 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   puede abrirse a tamaño completo. `Titular/pagador` no es un campo operativo:
   si la visión lo obtiene, se conserva internamente para trazabilidad y
   deduplicación, sin pedirle al asesor que lo complete.
+- **La clave se libera cuando el monto cubre el total, no cuando los pagos tienen
+  la forma esperada.** Adelanto y diferencia son la convención del flujo COD, no
+  el requisito: si un solo comprobante validado ya cubre el pedido, está pagado y
+  la clave se entrega. Pasó en #KP128018 —adelanto de S/ 200.00 sobre un pedido
+  de S/ 198.00— donde el panel mostraba «Saldo por cargar: S/ 0.00» y encima
+  «Completar el pago antes de liberar la clave»: la pantalla se contradecía
+  porque la compuerta miraba si existía una fila `diferencia`, no si alcanzaba la
+  plata.
+  El listón no baja: se suman los comprobantes **vivos** (no rechazados), un
+  comprobante sin monto suma cero, y un **posible duplicado sigue bloqueando
+  aunque cubra** — un duplicado no es dinero nuevo. Lo mismo vale para el
+  indicador de estado: si lo validado cubre el total, es `pago_completo`, y de
+  ahí cuelgan la subetapa y el monto que se manda al courier.
 - Si el pago es menor al requerido, la clave permanece bloqueada y se alerta al
   asesor.
 - Solo Frankz ejecuta reembolsos.
@@ -2157,7 +2185,7 @@ Master rellena la región y la provincia del pedido desde esa tabla
 valida lo que se escribe, así que un departamento inventado **no da error: da
 otra cobertura**, en silencio.
 
-La 0127 corrigió ocho filas que lo demostraban. Siete tenían el departamento
+La 0129 corrigió ocho filas que lo demostraban. Siete tenían el departamento
 copiado del propio distrito —`Pachacamac`, `Pucusana`, `HUACHIPA`, `Chancay`,
 `Huaral`, `Lurigancho chosica`, `Barranca`— y una tenía la geografía de otra
 región entera: **Pacasmayo, que es de La Libertad, decía `Callao`** en provincia
@@ -2177,7 +2205,7 @@ Dos cosas que conviene recordar antes de estimar el daño de un caso así:
   dirección de Shopify venía sin provincia —siete—. La provincia, en cambio, se
   usa en más sitios y se leía en pantalla tal cual: `Pucusana` para Chaclacayo.
 - **`district_key` es la clave de unión, no `district`.** Corregir el texto
-  visible no arregla ninguna cobertura, y por eso la 0127 no lo tocó.
+  visible no arregla ninguna cobertura, y por eso la 0129 no lo tocó.
 
 Convención de la tabla para Lima Metropolitana: `Lima` / `Lima`. Es lo que
 `lima_region_kind` resuelve a `'lima'`, dejando que decida el distrito.
@@ -2196,7 +2224,7 @@ trataba igual a una región que no nombra ningún departamento sino un **distrit
 de Lima**, que es lo que pasa cada vez que alguien escribe el distrito o el
 barrio una casilla más arriba de la que toca.
 
-La 0128 lo separa: si la región resuelve a un distrito metropolitano —alias
+La 0130 lo separa: si la región resuelve a un distrito metropolitano —alias
 incluidos, que es como «HUACHIPA» llega a `lurigancho`— el destino es Lima.
 
 Dos límites que son la mitad importante del arreglo:

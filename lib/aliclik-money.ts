@@ -29,6 +29,8 @@
 // ya con descuentos e impuestos). Aquí se busca el ENTERO más alto que no lo
 // supere y que sea representable con las cantidades del pedido.
 
+import { orderFullyPaid, type OrderPaymentFacts } from "@/lib/order-paid";
+
 /** Lo mínimo que hace falta de cada línea para repartir el dinero. */
 export interface PricedLine {
   quantity: number;
@@ -207,8 +209,31 @@ export function collectAmountMismatch(
   reported: number | null | undefined,
   orderTotal: number | null | undefined,
   maxLoss: number = MAX_ACCEPTABLE_LOSS,
+  facts: OrderPaymentFacts = {},
 ): CollectMismatch {
   if (reported == null || !Number.isFinite(reported) || reported <= 0) return null;
+
+  // UN PEDIDO YA COBRADO DEBE COBRAR 0, y este detector era ciego a eso por
+  // construcción: comparaba contra el total del pedido, así que en uno pagado en
+  // el checkout veía 456.30 contra 456.30 y decía «cuadra» — cuando es
+  // exactamente el caso que hay que gritar. Va ANTES del filtro de `orderTotal`
+  // porque acá el total es irrelevante: lo esperado es cero, venga de donde
+  // venga el dinero.
+  //
+  // Importa especialmente en Aliclik, cuyo importe sale de los precios de línea
+  // reconciliados contra el total del pedido y no pasa por
+  // `defaultCollectionAmount`: ahí este aviso es lo único que se interpone entre
+  // un prepago y un segundo cobro en la puerta.
+  if (orderFullyPaid(facts)) {
+    return {
+      kind: "cobra_de_mas",
+      gap: round2(reported),
+      message:
+        `Este pedido YA ESTÁ PAGADO y la guía va a cobrar S/ ${reported.toFixed(2)} en la puerta. ` +
+        `Anula el cobro con el courier antes del reparto o el cliente paga dos veces.`,
+    };
+  }
+
   if (orderTotal == null || !Number.isFinite(orderTotal) || orderTotal <= 0) return null;
 
   const diff = round2(reported - orderTotal);

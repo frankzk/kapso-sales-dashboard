@@ -240,6 +240,13 @@ export async function loadPaymentPanel(
     payments: snapshots,
     orderTotal: ctx.row.order_total,
     hasKey: Boolean(keyRow),
+    // El dinero pudo entrar por el checkout: exigirle comprobantes a un pedido
+    // ya pagado es pedirle al cliente que pague otra vez para poder recoger.
+    paymentFacts: {
+      financialStatus: ctx.row.financial_status,
+      totalRefunded: ctx.row.total_refunded,
+      paymentState: ctx.row.payment_state,
+    },
   });
 
   // Solo una guía VIVA sella el borrador. Una anulada no: después de anular hay
@@ -945,6 +952,13 @@ export async function revealPickupKey(
     payments,
     orderTotal: ctx.row.order_total,
     hasKey: Boolean(keyRow),
+    // El dinero pudo entrar por el checkout: exigirle comprobantes a un pedido
+    // ya pagado es pedirle al cliente que pague otra vez para poder recoger.
+    paymentFacts: {
+      financialStatus: ctx.row.financial_status,
+      totalRefunded: ctx.row.total_refunded,
+      paymentState: ctx.row.payment_state,
+    },
   });
 
   const wantsOverride = Boolean(input.override);

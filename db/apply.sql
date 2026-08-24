@@ -255,8 +255,12 @@
 \ir migrations/0125_orders_cancel_reason.sql
 \echo 'Applying 0126_store_collection_accounts.sql'
 \ir migrations/0126_store_collection_accounts.sql
-\echo 'Applying 0127_peru_districts_geografia.sql'
-\ir migrations/0127_peru_districts_geografia.sql
-\echo 'Applying 0128_lima_region_es_un_distrito.sql'
-\ir migrations/0128_lima_region_es_un_distrito.sql
+\echo 'Applying 0127_collect_alert_sent_at.sql'
+\ir migrations/0127_collect_alert_sent_at.sql
+\echo 'Applying 0128_order_master_payment_facts.sql'
+\ir migrations/0128_order_master_payment_facts.sql
+\echo 'Applying 0129_peru_districts_geografia.sql'
+\ir migrations/0129_peru_districts_geografia.sql
+\echo 'Applying 0130_lima_region_es_un_distrito.sql'
+\ir migrations/0130_lima_region_es_un_distrito.sql
 \echo 'Done.'

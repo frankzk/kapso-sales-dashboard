@@ -124,8 +124,36 @@ grant execute on function public.recompute_daily_rollups(uuid, date, date) to se
 
 -- 2) Purge existing non-Kapso orders. FK-safe: leads.order_id is
 --    ON DELETE SET NULL; leads.has_order self-heals on the next lead sync.
-delete from orders o
- where not exists (select 1 from unnest(o.tags) t where lower(t) = 'kapso');
+--
+-- SOLO EN LA INSTALACIÓN ORIGINAL. Esto es una limpieza de UNA VEZ, escrita para
+-- la base de 2026 que arrastraba pedidos previos a Kapso. En una instalación
+-- nueva no borra nada (la tabla está vacía) y en la de producción ya se ejecutó.
+--
+-- POR QUÉ AHORA LLEVA GUARDA. `db/apply_bundled.sql` concatena TODAS las
+-- migraciones y la documentación lo ofrece para pegar en el SQL Editor. Al
+-- hacerlo contra una base con datos, esta línea intenta borrar cada pedido sin
+-- la etiqueta `kapso` — que hoy incluye los pedidos pagados en el checkout, que
+-- entran por Shopify sin esa etiqueta. Pasó de verdad (24-08-2026): el intento
+-- llegó a producción y lo abortó el trigger append-only de `order_events`, que
+-- cuelga de `orders` con ON DELETE CASCADE. Esa cerradura fue lo único que
+-- impidió perder miles de pedidos.
+--
+-- La guarda es la existencia de `order_events` (migración 0045): si ya está, no
+-- estamos en la instalación original y no hay nada que purgar. En una base nueva
+-- 0006 corre mucho antes que 0045, así que la limpieza mantiene su sentido
+-- original — y sobre una tabla vacía sigue sin borrar nada.
+--
+-- El purgado NO se elimina para no reescribir lo que ya pasó, y CI lo verifica
+-- «desde cero», donde no se distingue lo inofensivo de lo destructivo.
+do $$
+begin
+  if to_regclass('public.order_events') is null then
+    delete from orders o
+     where not exists (select 1 from unnest(o.tags) t where lower(t) = 'kapso');
+  else
+    raise notice '0006: purgado omitido — la base ya pasó de 0045, no es la instalación original.';
+  end if;
+end $$;
 
 -- 3) Recompute every store's rollups over full history so the cleaned figures
 --    show up immediately for the ranges the dashboard queries.

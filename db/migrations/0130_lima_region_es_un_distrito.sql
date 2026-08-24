@@ -14,7 +14,7 @@
 -- «La Molina», «HUACHIPA» — alguien escribe el distrito o el barrio donde va el
 -- departamento, y el pedido se cae de Lima sin que nada avise.
 --
--- Se destapó persiguiendo dos pedidos que la 0127 NO arregló: `#KP127256`, con
+-- Se destapó persiguiendo dos pedidos que la 0129 NO arregló: `#KP127256`, con
 -- `shippingAddress.province = "Chaclacayo"` puesto por Shopify, y `#KP127130`,
 -- con una corrección MANUAL del equipo que puso `region = "HUACHIPA"`. Dos
 -- fuentes distintas, el mismo agujero, y ninguna de las dos pasa por

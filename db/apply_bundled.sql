@@ -838,8 +838,36 @@ grant execute on function public.recompute_daily_rollups(uuid, date, date) to se
 
 -- 2) Purge existing non-Kapso orders. FK-safe: leads.order_id is
 --    ON DELETE SET NULL; leads.has_order self-heals on the next lead sync.
-delete from orders o
- where not exists (select 1 from unnest(o.tags) t where lower(t) = 'kapso');
+--
+-- SOLO EN LA INSTALACIÓN ORIGINAL. Esto es una limpieza de UNA VEZ, escrita para
+-- la base de 2026 que arrastraba pedidos previos a Kapso. En una instalación
+-- nueva no borra nada (la tabla está vacía) y en la de producción ya se ejecutó.
+--
+-- POR QUÉ AHORA LLEVA GUARDA. `db/apply_bundled.sql` concatena TODAS las
+-- migraciones y la documentación lo ofrece para pegar en el SQL Editor. Al
+-- hacerlo contra una base con datos, esta línea intenta borrar cada pedido sin
+-- la etiqueta `kapso` — que hoy incluye los pedidos pagados en el checkout, que
+-- entran por Shopify sin esa etiqueta. Pasó de verdad (24-08-2026): el intento
+-- llegó a producción y lo abortó el trigger append-only de `order_events`, que
+-- cuelga de `orders` con ON DELETE CASCADE. Esa cerradura fue lo único que
+-- impidió perder miles de pedidos.
+--
+-- La guarda es la existencia de `order_events` (migración 0045): si ya está, no
+-- estamos en la instalación original y no hay nada que purgar. En una base nueva
+-- 0006 corre mucho antes que 0045, así que la limpieza mantiene su sentido
+-- original — y sobre una tabla vacía sigue sin borrar nada.
+--
+-- El purgado NO se elimina para no reescribir lo que ya pasó, y CI lo verifica
+-- «desde cero», donde no se distingue lo inofensivo de lo destructivo.
+do $$
+begin
+  if to_regclass('public.order_events') is null then
+    delete from orders o
+     where not exists (select 1 from unnest(o.tags) t where lower(t) = 'kapso');
+  else
+    raise notice '0006: purgado omitido — la base ya pasó de 0045, no es la instalación original.';
+  end if;
+end $$;
 
 -- 3) Recompute every store's rollups over full history so the cleaned figures
 --    show up immediately for the ranges the dashboard queries.
@@ -9480,6 +9508,84 @@ cross join (values
 on conflict (store_id, phone_last_digits) do nothing;
 
 -- ---- 0127 ----
+-- 0127 — Cuándo se avisó de que una guía va a cobrar de más.
+--
+-- POR QUÉ. La 0060 ya guarda `reported_collect_amount`: lo que el courier
+-- DECLARA que va a cobrar en la puerta, refrescado por el cron cada 20 minutos.
+-- Su cabecera decía que persistirlo «convierte esa pasada en un detector
+-- permanente» — pero el detector nunca se conectó. `collectAmountMismatch`
+-- existe, está probado, y hasta hoy solo lo llamaba su propio test. O sea que
+-- el dato se recogía y nadie lo miraba.
+--
+-- Conectarlo exige exactamente una cosa que no había: memoria de a quién ya se
+-- avisó. Sin ella, un cron que corre cada 20 minutos repite la misma alerta
+-- para el mismo pedido hasta que alguien lo entrega — y una alerta que se repite
+-- setenta veces deja de leerse, que es la forma más cara de tener un detector.
+--
+-- Misma solución que `leads.yape_alert_sent_at`, del que esto es hermano: se
+-- marca cuándo se avisó y se re-avisa como mucho cada N horas mientras el
+-- descuadre siga vivo. Se re-avisa, y no una sola vez, porque el problema no se
+-- resuelve solo: hay dinero a punto de cobrarse dos veces y alguien tiene que
+-- ir al panel del courier.
+
+alter table shipments
+  add column if not exists collect_alert_sent_at timestamptz;
+
+comment on column shipments.collect_alert_sent_at is
+  'Última vez que se avisó por Telegram de que esta guía cobra un importe que no '
+  'corresponde (ver lib/collect-alert.ts). NULL = nunca avisada. Solo controla la '
+  'repetición del aviso: el descuadre se decide en cada pasada con el dato fresco.';
+
+-- El barrido pregunta "guías vivas con importe declarado", que es una fracción
+-- pequeña de la tabla. El índice parcial lo resuelve sin recorrerla entera.
+create index if not exists shipments_collect_alert_idx
+  on shipments (store_id, collect_alert_sent_at)
+  where reported_collect_amount is not null;
+
+-- ---- 0128 ----
+-- 0128 — Cómo se cobró el pedido, en el read-model del Master.
+--
+-- POR QUÉ. Desde que entran pedidos pagados en el checkout, «ya está cobrado»
+-- tiene dos vías (ver lib/order-paid.ts) y la de la pasarela vive en `orders`,
+-- no en `order_master`. Tres consumidores la necesitan y los tres leen el Master:
+--
+--   * la compuerta de la clave de recojo — sin esto, un pedido por Agencia
+--     pagado con tarjeta no puede recibir NUNCA su clave: no tiene ni una fila
+--     en `order_payments`, así que «falta el adelanto» sería cierto para siempre;
+--   * el panel de cobro del drawer, que le pedía comprobante de Yape a un pedido
+--     ya pagado;
+--   * el rótulo, que imprimía el total a cobrar de algo ya cobrado.
+--
+-- Repetir la consulta a `orders` en cada uno era la alternativa. Se descarta por
+-- lo de siempre en este repositorio: tres lecturas separadas de la misma verdad
+-- terminan discrepando, y acá discrepar significa cobrar dos veces.
+--
+-- `financial_status` ya lo leía el recálculo (está en ORDER_COLUMNS); solo no se
+-- escribía. `total_refunded` se añade a esa lectura porque un reembolso deshace
+-- el prepago.
+--
+-- SIN BACKFILL A PROPÓSITO. Las filas viejas quedan en NULL hasta que el
+-- recálculo las toque, y NULL no cuenta como pagado — o sea, exactamente el
+-- comportamiento de hoy. El barrido las irá poniendo al día sin una pasada
+-- masiva sobre 15.000 filas, y el lado seguro del error es el de partida.
+
+alter table order_master
+  add column if not exists financial_status text,
+  add column if not exists total_refunded   numeric(14, 2) not null default 0;
+
+comment on column order_master.financial_status is
+  'Estado de cobro de Shopify (`paid` = cobrado en el checkout). Copiado de '
+  'orders en cada recálculo. NULL en filas aún no recalculadas: no cuenta como pagado.';
+comment on column order_master.total_refunded is
+  'Reembolsado según Shopify. Un reembolso deshace el prepago (lib/order-paid.ts).';
+
+-- Los pedidos prepagados son una fracción pequeña y se buscan por sí solos
+-- («cuáles están pagados y siguen con cobro»), así que el índice va parcial.
+create index if not exists order_master_prepaid_idx
+  on order_master (store_id)
+  where financial_status = 'paid';
+
+-- ---- 0129 ----
 -- Ocho distritos con la geografía inventada.
 --
 -- `peru_districts` se llena a mano y nadie valida lo que se escribe. Ocho filas
@@ -9544,7 +9650,7 @@ update peru_districts as p
   ) as f(district_key, province, department)
  where p.district_key = f.district_key;
 
--- ---- 0128 ----
+-- ---- 0130 ----
 -- Un distrito de Lima escrito en el campo de REGIÓN sacaba al pedido de Lima.
 --
 -- `is_lima_metropolitana` tenía una salida en seco:
@@ -9561,7 +9667,7 @@ update peru_districts as p
 -- «La Molina», «HUACHIPA» — alguien escribe el distrito o el barrio donde va el
 -- departamento, y el pedido se cae de Lima sin que nada avise.
 --
--- Se destapó persiguiendo dos pedidos que la 0127 NO arregló: `#KP127256`, con
+-- Se destapó persiguiendo dos pedidos que la 0129 NO arregló: `#KP127256`, con
 -- `shippingAddress.province = "Chaclacayo"` puesto por Shopify, y `#KP127130`,
 -- con una corrección MANUAL del equipo que puso `region = "HUACHIPA"`. Dos
 -- fuentes distintas, el mismo agujero, y ninguna de las dos pasa por

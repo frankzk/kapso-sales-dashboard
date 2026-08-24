@@ -1,5 +1,5 @@
 -- `is_lima_metropolitana` cuando la REGIÓN trae un distrito, no un departamento
--- (migración 0128). Se ejecuta sobre el clúster desechable, después de aplicar
+-- (migración 0130). Se ejecuta sobre el clúster desechable, después de aplicar
 -- todas las migraciones.
 --
 -- POR QUÉ ESTA PRUEBA. La función tenía una salida en seco —«región no vacía y

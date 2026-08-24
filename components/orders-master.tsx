@@ -2489,6 +2489,10 @@ function OrderDrawer({
         macroReasons: detail.row.macro_reasons,
         riskRequirement: brief?.risk.requirement ?? null,
         paymentState: detail.row.payment_state,
+        paymentFacts: {
+          financialStatus: detail.row.financial_status,
+          totalRefunded: detail.row.total_refunded,
+        },
         hasAgencyCandidate:
           canCreateShalomGuide &&
           detail.routePlan.candidates.some(

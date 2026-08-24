@@ -469,6 +469,10 @@ export interface OrderMasterRow {
   confirmation_last_actor?: string | null;
   status_since: string | null;
   status_source?: string | null;
+  /** Estado de cobro de Shopify (`paid` = cobrado en el checkout). 0128. */
+  financial_status?: string | null;
+  /** Reembolsado: deshace el prepago (lib/order-paid.ts). 0128. */
+  total_refunded?: number | null;
   status_locked: boolean;
   current_courier: string | null;
   last_courier: string | null;

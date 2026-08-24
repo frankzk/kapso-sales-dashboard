@@ -77,6 +77,7 @@ import {
   type WhatsappOutboxRow,
 } from "@/lib/whatsapp-outbox";
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
+import { normalizePhone, peruMobileProblem } from "@/lib/phone";
 
 // Process-level cache of vendedora id → display name (emails ~never change).
 const agentNameCache = new Map<string, string>();
@@ -2243,7 +2244,23 @@ export async function generateOrder(
   const creds = await getStoreCreds(ctx.storeId);
   if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify configurado." };
   const currency = creds.currency ?? "PEN";
-  const phone = ((input.phone ?? "").trim() || l.phone) ?? null;
+  // El teléfono se NORMALIZA antes de salir hacia Shopify. Sin esto, lo tecleado
+  // viajaba crudo hasta `toE164`, que solo quita lo que no es dígito y antepone
+  // `+`: unos 9 dígitos sueltos se convertían en `+988805509` —sin código de
+  // país—, Shopify los rechazaba, y el reintento de más abajo creaba el pedido
+  // SIN teléfono sin decírselo a nadie.
+  //
+  // El formulario ya bloquea el envío con `peruMobileProblem`, pero esto es un
+  // server action: no puede fiarse de la interfaz, y además el camino de abajo
+  // —caer al teléfono del lead cuando el campo va vacío— nunca pasa por el
+  // formulario.
+  const phone = normalizePhone((input.phone ?? "").trim() || l.phone);
+  // Se comprueba solo lo que ESCRIBIÓ una persona. El del lead viene de WhatsApp
+  // y ya es bueno por construcción; rechazarlo acá bloquearía ventas por un
+  // número que el propio cliente usa para escribirnos.
+  const typedProblem = (input.phone ?? "").trim() ? peruMobileProblem(input.phone) : null;
+  if (typedProblem) return { error: typedProblem };
+
 
   const lineItemsInput = items.map((li) => ({
     variantId: li.variantId ?? null,
@@ -2309,12 +2326,19 @@ export async function generateOrder(
 
   // 1) Create/update the draft, then complete it (COD ⇒ payment pending).
   let completed: Awaited<ReturnType<typeof completeDraftOrder>>;
+  // Si Shopify acaba rechazando el número, el pedido se crea igual pero HAY QUE
+  // DECIRLO. Callarlo es lo que hizo que un pedido llegara sin celular y la
+  // asesora jurara —con razón— que lo había escrito: el aviso decía solo
+  // "Pedido generado ✓" y nadie tenía forma de enterarse (#KP129725).
+  let phoneRejected = false;
   try {
     try {
       draftGid = await runDraft(true);
     } catch (e: any) {
       if (/phone/i.test(String(e?.message ?? e))) {
-        draftGid = await runDraft(false); // bad phone → generate the order without it
+        // Una venta no se cae por un teléfono: se crea sin él y se avisa.
+        draftGid = await runDraft(false);
+        phoneRejected = true;
       } else {
         throw e;
       }
@@ -2468,7 +2492,10 @@ export async function generateOrder(
     }
   }
 
-  const notice = `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}`;
+  const phoneNote = phoneRejected
+    ? ` · ⚠️ Shopify RECHAZÓ el celular ${phone ?? ""}: el pedido quedó sin teléfono. Corrígelo en Shopify.`
+    : "";
+  const notice = `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}${phoneNote}`;
   const confirmationSent = confirmNote.toLowerCase().includes("enviada");
 
   revalidatePath("/dashboard/leads");

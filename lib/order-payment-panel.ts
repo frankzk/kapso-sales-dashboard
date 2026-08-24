@@ -1,8 +1,17 @@
 import type { OperationKind } from "@/lib/order-macro-stage";
 import type { PaymentRequirement } from "@/lib/order-confirmation-brief";
 import { usesPickupKeyFlow } from "@/lib/pickup-key";
+import { isWebPrepaid, type OrderPaymentFacts } from "@/lib/order-paid";
 
-export type OrderPaymentPanelMode = "required" | "optional";
+/**
+ * `prepaid` = el dinero ya entró por el checkout, así que no hay nada que
+ * cobrar ni comprobante que pedir. El panel colapsa a una constancia.
+ *
+ * Es un modo y no un `show: false` porque el panel sigue teniendo trabajo en
+ * Agencia: el DNI del destinatario y la agencia de Shalom no son cobro — son
+ * datos de entrega, y sin ellos no se emite la guía.
+ */
+export type OrderPaymentPanelMode = "required" | "optional" | "prepaid";
 
 export interface OrderPaymentPanelPresentation {
   show: boolean;
@@ -24,6 +33,8 @@ interface OrderPaymentPanelInput {
    * principio sin tener de dónde leerlo.
    */
   riskRequirement?: PaymentRequirement | null;
+  /** Cómo se cobró: si lo cobró el checkout, no hay cobro que gestionar. */
+  paymentFacts?: OrderPaymentFacts;
 }
 
 /**
@@ -37,6 +48,16 @@ interface OrderPaymentPanelInput {
 export function orderPaymentPanelPresentation(
   input: OrderPaymentPanelInput,
 ): OrderPaymentPanelPresentation {
+  // PAGADO EN EL CHECKOUT: manda sobre todo lo demás. Pedirle un comprobante de
+  // Yape a un pedido ya cobrado es pedirle al cliente que pague dos veces, y
+  // enseñarle «Saldo por cargar: S/ 456.30» al asesor es mentirle sobre el
+  // dinero que ya entró. Se decide antes que los requisitos porque ninguno de
+  // ellos —Agencia, abono exigido, regla de riesgo— habla de otra cosa que de
+  // cobrar, y acá ya está cobrado.
+  if (isWebPrepaid(input.paymentFacts ?? {})) {
+    return { show: true, mode: "prepaid" };
+  }
+
   const pickupKeyFlow = usesPickupKeyFlow(input.currentCourier, input.shippingMode);
   const paymentRequired =
     pickupKeyFlow ||

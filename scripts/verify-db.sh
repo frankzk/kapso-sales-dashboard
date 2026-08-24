@@ -102,12 +102,13 @@ $PSQL -f "$ROOT/scripts/sql/coverage_smoke.sql" >/dev/null
 echo "▶ order_master_stale (0123): el desfase se ve aunque sea ANTIGUO"
 $PSQL -f "$ROOT/scripts/sql/order_master_stale_smoke.sql"
 
-# Un distrito de Lima escrito en la casilla del departamento sacaba al pedido de
-# Lima (0128). Lo delicado es la mitad que NO cambia: Bellavista, La Victoria e
-# Independencia existen fuera de Lima y no pueden colarse en el reparto local.
-echo "▶ región que nombra un distrito de Lima (0128)"
-$PSQL -f "$ROOT/scripts/sql/lima_region_smoke.sql"
 echo "  ✅ cerca de un punto COD → provincia_cod; lejos → agencia; Cañete y aislamiento por org intactos"
+
+# Un distrito de Lima escrito en la casilla del departamento sacaba al pedido de
+# Lima (0130). Lo delicado es la mitad que NO cambia: Bellavista, La Victoria e
+# Independencia existen fuera de Lima y no pueden colarse en el reparto local.
+echo "▶ región que nombra un distrito de Lima (0130)"
+$PSQL -f "$ROOT/scripts/sql/lima_region_smoke.sql"
 
 # order_events is the audit trail of the Master de Pedidos: it must be
 # impossible to rewrite history, even for the role the server actions use.
@@ -121,6 +122,13 @@ echo "▶ paridad de los conteos de la cola de Leads"
 $PSQL -f "$ROOT/scripts/sql/lead_queue_counts_smoke.sql"
 echo "  ✅ lead_queue_counts == los siete filtros originales, y la firma se mueve al tocar un lead"
 
+# OJO: esta comprobación corre SOBRE UNA BASE VACÍA, y ahí un `delete` destructivo
+# y uno inofensivo son indistinguibles — los dos borran cero filas. El 24-08-2026
+# el purgado de una vez de 0006 llegó a producción por pegar este mismo bundle, y
+# lo abortó el trigger append-only de order_events. Lo que vigila que ninguna
+# migración borre datos a nivel de migración es test/migrations-safe-to-rerun.ts,
+# que mira el fuente; esto solo prueba que el esquema levanta.
+#
 # db/apply_bundled.sql es lo que se pega en el SQL Editor de Supabase para
 # levantar el esquema entero de cero. Se generaba a mano y llevaba meses
 # derivando —le faltaba más de la mitad de las migraciones— porque nada lo
