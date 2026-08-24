@@ -407,6 +407,38 @@ export async function searchShalomAgencies(
   }
 }
 
+/**
+ * Una agencia concreta por su id, con todo lo que el directorio sabe de ella.
+ *
+ * Existe por la agencia que viene apuntada desde el cobro (0073): de esa solo
+ * guardamos id y nombre, así que el modal la reconstruía a mano y salía sin
+ * `aereo`, sin `origenes_aereos` y sin `reparto_habilitado`. El efecto era el
+ * contrario del buscado — cuanto mejor se hacía el proceso (apuntar la agencia
+ * al cobrar), menos sabía quien creaba la guía: la vía aérea desaparecía del
+ * modal justo en los destinos donde es la única, como Iquitos.
+ *
+ * Solo pide la API key, igual que la búsqueda: el directorio no toca la cuenta
+ * del cliente, así que se resuelve sin esperar a la sesión.
+ */
+export async function loadShalomAgency(
+  storeId: string,
+  agencyId: number,
+): Promise<{ agency: ShalomAgency } | { error: string }> {
+  if (!(await authorizeStore(storeId))) return { error: "Sin acceso a esta tienda." };
+  if (!Number.isInteger(agencyId) || agencyId <= 0) return { error: "Agencia inválida." };
+
+  const admin = createAdminSupabase();
+  const store = await loadStoreShalom(admin, storeId);
+  const blocker = configurationBlocker(store);
+  if (blocker && !store?.shalom_pro_email) return { error: blocker };
+
+  try {
+    return { agency: await publicClient().getAgency(agencyId) };
+  } catch (err) {
+    return { error: describeShalomError(err) };
+  }
+}
+
 /** Catálogo de cajas de la cuenta. Necesita sesión. */
 export async function loadShalomProducts(
   storeId: string,

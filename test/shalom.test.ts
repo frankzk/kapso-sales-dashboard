@@ -26,7 +26,7 @@ import {
   shalomRetryDelay,
   ShalomClient,
 } from "@/lib/shalom/client";
-import { ShalomApiError, ShalomTimeoutError } from "@/lib/shalom/types";
+import { ShalomApiError, ShalomTimeoutError, type ShalomAgency } from "@/lib/shalom/types";
 import { configurationBlocker, isConfigured } from "@/lib/shalom/session";
 import { buildStoreUpdate } from "@/lib/store-settings";
 import { PERMISSIONS, permissionsFor } from "@/lib/permissions";
@@ -811,6 +811,26 @@ describe("shalomAirRoute", () => {
       fromOrigin: "unknown",
     });
     expect(shalomAirRoute(iquitos, null)).toEqual({ offered: true, fromOrigin: "unknown" });
+  });
+
+  // El fallo que se vio en KP129919, a Iquitos: la agencia venía apuntada desde
+  // el cobro, el modal la reconstruía con id y nombre, y sin el campo `aereo` la
+  // casilla no salía. Iquitos no tiene acceso por carretera, así que ocultarla
+  // dejaba el pedido sin la única vía que existe.
+  //
+  // «Shalom dice que no vuela» y «no tenemos el dato» no son lo mismo: el campo
+  // ausente se responde `unknown`, no `offered: false`.
+  it("distingue la agencia sin el dato de la agencia que no vuela", () => {
+    // Exactamente lo que el modal fabricaba: lo que cabe en nuestra base.
+    const desdeElCobro: ShalomAgency = { id: 594, nombre: "AV JOSE A. QUIÑONES" };
+    expect(shalomAirRoute(desdeElCobro, 587)).toEqual({ offered: true, fromOrigin: "unknown" });
+    // Y con el dato de verdad, la 594 vuela desde la 587.
+    expect(shalomAirRoute({ ...desdeElCobro, ...iquitos }, 587)).toEqual({
+      offered: true,
+      fromOrigin: "yes",
+    });
+    // Lo que sí esconde la casilla es un «no» explícito del directorio.
+    expect(shalomAirRoute({ ...desdeElCobro, aereo: false }, 587)).toEqual({ offered: false });
   });
 });
 

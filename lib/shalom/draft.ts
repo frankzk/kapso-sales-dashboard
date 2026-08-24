@@ -430,6 +430,12 @@ export function shalomSoftBlockers(paymentState: string | null): string[] {
  * `unknown` no es un error: la búsqueda de agencias no siempre devuelve esas
  * listas. En ese caso se deja elegir y no se afirma nada, porque impedirlo por
  * falta de dato sería bloquear un envío legítimo con una excusa.
+ *
+ * Por lo mismo, «Shalom dice que no vuela» y «no tenemos el dato» NO son lo
+ * mismo y no se resuelven igual. Cuando la agencia llega sin el campo —porque
+ * la reconstruimos de lo guardado en vez de traerla del directorio— ocultar la
+ * casilla convierte una laguna nuestra en un «no se puede», y quien despacha a
+ * Iquitos se queda sin la única vía que existe. Falta el dato ⇒ `unknown`.
  */
 export type AirRoute =
   | { offered: false }
@@ -439,7 +445,11 @@ export function shalomAirRoute(
   agency: { aereo?: boolean | null; origenes_aereos?: number[] | null } | null | undefined,
   originTerminalId: number | null | undefined,
 ): AirRoute {
-  if (!agency?.aereo) return { offered: false };
+  if (!agency) return { offered: false };
+  // `undefined` es la ausencia del campo; `false`/`null` es Shalom respondiendo
+  // que esa agencia no vuela. Solo lo segundo esconde la casilla.
+  if (agency.aereo === undefined) return { offered: true, fromOrigin: "unknown" };
+  if (!agency.aereo) return { offered: false };
   const origins = agency.origenes_aereos;
   if (!Array.isArray(origins) || !origins.length) return { offered: true, fromOrigin: "unknown" };
   if (!positiveInt(originTerminalId)) return { offered: true, fromOrigin: "unknown" };
