@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { runStoreSync } from "@/lib/ingest";
 import { alertUnattendedYapes } from "@/lib/yape-alert-telegram";
+import { alertCollectMismatches } from "@/lib/collect-alert";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -70,7 +71,29 @@ async function run(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, stores: storeIds.length, yapeAlerts, reports });
+  // Guías que van a cobrar lo que no toca — de más sobre el total, o cualquier
+  // cosa sobre un pedido YA PAGADO. El dato (`reported_collect_amount`) lo
+  // refresca el cron de Aliclik cada 20 minutos desde la migración 0060; hasta
+  // ahora nadie lo miraba. Caduca con la entrega, así que va por el mismo canal
+  // que los Yape sin atender y con el mismo trato: best-effort, nunca tumba la
+  // sincronización.
+  let collectAlerts = 0;
+  for (const id of storeIds) {
+    try {
+      const r = await alertCollectMismatches(id, admin);
+      collectAlerts += r.alerted;
+    } catch {
+      /* ignore — alerting is best-effort */
+    }
+  }
+
+  return NextResponse.json({
+    ok: true,
+    stores: storeIds.length,
+    yapeAlerts,
+    collectAlerts,
+    reports,
+  });
 }
 
 export async function GET(req: NextRequest) {

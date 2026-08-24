@@ -1472,6 +1472,35 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   order by 1 desc, 4 desc;
   ```
 
+## 5t. Cobros equivocados — la alerta que faltaba conectar
+
+- **Requiere migración 0127** (`shipments.collect_alert_sent_at`).
+- **Qué avisa**, por el mismo canal de Telegram que el resumen de las 8 y los
+  Yape sin atender:
+
+  | Caso | Ejemplo |
+  |---|---|
+  | La guía cobra MÁS que el total | el fallo original de la 0060: S/ 447 por un pedido de S/ 298 |
+  | La guía cobra algo sobre un pedido **ya pagado** | pago en el checkout, y el motorizado sigue con orden de cobrar |
+
+- **Por qué hacía falta.** La 0060 ya guardaba `reported_collect_amount` —lo que
+  el courier declara que cobrará, refrescado cada 20 minutos— y decía que
+  persistirlo «convierte esa pasada en un detector permanente». Pero
+  `collectAmountMismatch` **solo lo llamaba su propio test**: el dato se recogía
+  y no lo miraba nadie. Con las pruebas en verde todo el tiempo.
+- Corre dentro de `/api/cron/sync`, detrás de la alerta de Yapes y con el mismo
+  trato: **best-effort**, un fallo de Telegram nunca tumba la sincronización.
+- **No avisa** de pedidos entregados, devueltos o anulados: ahí ya no hay nada
+  que evitar. Y **re-avisa como mucho cada 3h** mientras el descuadre siga vivo —
+  sin ese freno, un cron de 20 minutos genera setenta alertas por pedido y el
+  canal deja de leerse justo cuando importa.
+- Requiere que la tienda tenga Telegram configurado (`telegram_bot_token` +
+  `telegram_chat_id`). Sin eso no hace nada, en silencio.
+- **Lo que esto NO arregla:** Aliclik sigue calculando su importe desde los
+  precios de línea sin preguntar si el pedido está pagado. Esta alerta es la red,
+  no la solución — pero es la red que cubre el caso mientras no se toque su
+  contrato (cambiarlo a ciegas es el fallo que documenta la 0060).
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle
