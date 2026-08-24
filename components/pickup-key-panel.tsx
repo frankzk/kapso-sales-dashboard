@@ -776,9 +776,14 @@ function MissingOperation({
 
   return (
     <div className="mt-1.5 space-y-1.5 rounded-lg bg-amber-50 px-2.5 py-2">
+      {/* El texto depende de si HAY campo debajo. Decía «escribe el número
+          aquí» siempre, también cuando `canRegister` es falso y no se dibuja
+          ninguna casilla: una pantalla que nombra una acción que no ofrece
+          manda a quien la lee a buscar algo que no existe. */}
       <p className="text-xs text-amber-900">
-        Sin nº de operación no se puede validar. Si la captura está recortada, pide al cliente el
-        comprobante completo o escribe el número aquí.
+        {canRegister
+          ? "Sin nº de operación no se puede validar. Si la captura está recortada, pide al cliente el comprobante completo o escribe el número aquí."
+          : "Sin nº de operación no se puede validar, y tu rol no permite completarlo. Pide al cliente el comprobante completo o avisa a quien registre pagos."}
       </p>
       {canRegister && (
         <div className="flex flex-wrap gap-1.5">

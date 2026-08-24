@@ -54,7 +54,24 @@ export function orderPaymentPanelPresentation(
   // dinero que ya entró. Se decide antes que los requisitos porque ninguno de
   // ellos —Agencia, abono exigido, regla de riesgo— habla de otra cosa que de
   // cobrar, y acá ya está cobrado.
-  if (isWebPrepaid(input.paymentFacts ?? {})) {
+  //
+  // EL `paymentState` SE PONE ACÁ, NO SE ESPERA DEL QUE LLAMA. `isWebPrepaid`
+  // tiene una guarda que es la mitad de la regla —«si hay comprobantes, mandan
+  // las de Yape»— y la lee de `facts.paymentState`. Ese dato ya viene en
+  // `input.paymentState`, obligatorio, pero vivía TAMBIÉN dentro de
+  // `paymentFacts`, opcional: el mismo hecho en dos sitios, y el drawer llenaba
+  // solo uno. Con el hueco vacío la guarda no podía disparar nunca y cualquier
+  // pedido `paid` en Shopify —que en esta operación es casi todo lo cobrado por
+  // Yape— se dibujaba como «Pagado por web»: 331 pedidos, 141 abiertos.
+  //
+  // El daño se vio en `#KP126297`: con la diferencia sin nº de operación, el
+  // recuadro decía «escribe el número aquí» y el campo no salía, porque esa
+  // rama pasa `canRegister={false}`. Un comprobante que no se puede completar
+  // ni validar, sin nada en pantalla que lo explique.
+  //
+  // Se rellena desde el campo que la función YA exige para que no dependa de
+  // que el siguiente que llame se acuerde de copiarlo.
+  if (isWebPrepaid({ ...(input.paymentFacts ?? {}), paymentState: input.paymentState })) {
     return { show: true, mode: "prepaid" };
   }
 

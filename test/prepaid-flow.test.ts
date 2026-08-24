@@ -111,6 +111,62 @@ describe("el panel del drawer", () => {
       orderPaymentPanelPresentation({ ...base, paymentFacts: { financialStatus: "pending" } }),
     ).toEqual({ show: true, mode: "required" });
   });
+
+  // LA REGRESIÓN. `isWebPrepaid` lee la guarda «si hay comprobantes mandan las
+  // reglas de Yape» de `facts.paymentState`. Ese dato viaja TAMBIÉN en
+  // `input.paymentState`, y el drawer llenaba solo ese: con el hueco vacío la
+  // guarda no disparaba nunca y cualquier pedido `paid` en Shopify —que acá es
+  // casi todo lo cobrado por Yape— salía como «Pagado por web». Medido en
+  // producción: 331 pedidos, 141 abiertos, 16 con un comprobante observado que
+  // nadie podía completar porque esa rama esconde el campo.
+  it("el estado de cobro por comprobantes gana al `paid` de Shopify", () => {
+    for (const state of [
+      "adelanto_validado",
+      "diferencia_cargada",
+      "adelanto_cargado",
+      "pago_completo",
+    ]) {
+      const p = orderPaymentPanelPresentation({
+        ...base,
+        paymentState: state,
+        paymentFacts: PREPAID,
+      });
+      expect(p.mode, state).not.toBe("prepaid");
+    }
+  });
+
+  it("y no depende de que quien llama lo copie dentro de paymentFacts", () => {
+    // El mismo hecho vivía en dos sitios y uno se quedó sin llenar. La función
+    // lo toma del campo que ya exige, así que da igual lo que traiga el bolso
+    // opcional: si el pedido tiene cobro por comprobantes, no es prepago web.
+    expect(
+      orderPaymentPanelPresentation({
+        ...base,
+        paymentState: "diferencia_cargada",
+        paymentFacts: { financialStatus: "paid", totalRefunded: 0 },
+      }).mode,
+    ).not.toBe("prepaid");
+
+    // Y al revés: sin comprobantes sigue siendo prepago, que es el caso real
+    // que este modo existe para servir.
+    expect(
+      orderPaymentPanelPresentation({
+        ...base,
+        paymentState: "sin_pago",
+        paymentFacts: { financialStatus: "paid", totalRefunded: 0 },
+      }).mode,
+    ).toBe("prepaid");
+  });
+
+  it("el drawer le pasa el estado de cobro al panel", () => {
+    // El fallo entró por el sitio que construye el input, no por la regla. Si
+    // alguien vuelve a armar `paymentFacts` a mano sin el estado, esto avisa.
+    const source = readFileSync(
+      resolve(process.cwd(), "lib/order-payment-panel.ts"),
+      "utf8",
+    );
+    expect(source).toContain("paymentState: input.paymentState");
+  });
 });
 
 describe("el rótulo no imprime «S/ 0» sobre un pedido cobrado", () => {
