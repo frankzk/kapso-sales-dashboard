@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   COLLECT_REALERT_MIN,
+  MAX_PER_ALERT,
   formatCollectAlert,
   selectCollectMismatches,
   type CollectAlertRow,
@@ -123,6 +124,46 @@ describe("el mensaje", () => {
       AHORA,
     );
     expect(formatCollectAlert("Kenku", dos)).toContain("2 guías van a cobrar");
+  });
+});
+
+describe("el aviso cabe en Telegram", () => {
+  // Telegram rechaza los mensajes de más de 4096 caracteres y `lib/telegram.ts`
+  // no trunca ni parte. Sin tope, un atraso grande produce un mensaje que falla
+  // con 400 — y como no se marca ninguna guía, el siguiente ciclo reconstruye el
+  // MISMO mensaje y falla igual cada 20 minutos, para siempre. El aviso se
+  // rompería exactamente cuando más hay que contar.
+  const muchas = Array.from({ length: 60 }, (_, i) =>
+    row({ id: `s${i}`, orderName: `#KP1300${i}`, facts: { financialStatus: "paid" } }),
+  );
+
+  it("un atraso de 60 guías no produce un mensaje que Telegram rechace", () => {
+    const due = selectCollectMismatches(muchas, AHORA);
+    expect(due).toHaveLength(60);
+    const text = formatCollectAlert("Kenku Peru", due.slice(0, MAX_PER_ALERT), due.length);
+    expect(text.length).toBeLessThan(4096);
+  });
+
+  it("dice cuántas quedan fuera, en vez de fingir que no existen", () => {
+    const due = selectCollectMismatches(muchas, AHORA);
+    const text = formatCollectAlert("Kenku", due.slice(0, MAX_PER_ALERT), due.length);
+    // El encabezado cuenta TODAS, no solo las que caben.
+    expect(text).toContain("60 guías van a cobrar");
+    expect(text).toContain(`…y ${60 - MAX_PER_ALERT} más`);
+  });
+
+  it("cuando caben todas no sobra la coletilla", () => {
+    const due = selectCollectMismatches([row({ facts: { financialStatus: "paid" } })], AHORA);
+    expect(formatCollectAlert("Kenku", due, due.length)).not.toContain("más. Salen");
+  });
+
+  it("solo se marcan las guías que se NOMBRARON", () => {
+    // El tope solo drena el atraso si lo no dicho vuelve. Marcar las 60 cuando
+    // se nombraron 20 silencia 40 durante tres horas sin haberlas contado nunca
+    // — que es peor que el mensaje demasiado largo, porque no falla: calla.
+    const source = readFileSync(resolve(process.cwd(), "lib/collect-alert.ts"), "utf8");
+    expect(source).toMatch(/\.in\([\s\S]{0,40}?"id",[\s\S]{0,40}?shown\.map/);
+    expect(source).not.toMatch(/\.in\([\s\S]{0,40}?"id",[\s\S]{0,40}?due\.map/);
   });
 });
 
