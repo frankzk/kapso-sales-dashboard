@@ -40,7 +40,21 @@ export interface OrderPaymentFacts {
 export function isWebPrepaid(facts: OrderPaymentFacts): boolean {
   if ((facts.financialStatus ?? "").trim().toLowerCase() !== "paid") return false;
   const refunded = facts.totalRefunded ?? 0;
-  return !(Number.isFinite(refunded) && refunded > 0);
+  if (Number.isFinite(refunded) && refunded > 0) return false;
+
+  // SI HAY COMPROBANTES, EL DINERO ENTRÓ POR YAPE — y entonces mandan las reglas
+  // de Yape, no `financial_status`.
+  //
+  // No es una sutileza: en la operación real casi todo pedido cobrado por Yape
+  // acaba también marcado `paid` en Shopify. Sin esta condición, un pedido con
+  // el adelanto cargado y la diferencia pendiente contaría como «pagado por
+  // web» y abriría la compuerta de la clave de recojo — que es exactamente la
+  // pérdida de dinero que esa compuerta existe para evitar.
+  //
+  // `paid` sin ningún comprobante es lo único que solo puede venir de la
+  // pasarela. Lo demás lo decide `paymentState`, que sabe de montos.
+  const state = (facts.paymentState ?? "").trim();
+  return !state || state === "sin_pago";
 }
 
 /**

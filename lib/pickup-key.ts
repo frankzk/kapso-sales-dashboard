@@ -247,7 +247,12 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
   //
   // Lo que NO se salta: que la clave exista, que el pedido no esté cerrado y que
   // el paquete esté disponible en la agencia. Esos no hablan de dinero.
-  if (isWebPrepaid(ctx.paymentFacts ?? {})) {
+  // La compuerta no se fía de `payment_state` del read-model: tiene delante la
+  // lista real de comprobantes, que es el dato del que aquel se deriva y que no
+  // puede llegar desfasado. Con un solo comprobante vivo, el dinero entró por
+  // Yape y manda su regla de montos, no `financial_status`.
+  const sinComprobantes = !ctx.payments.some(isLive);
+  if (sinComprobantes && isWebPrepaid(ctx.paymentFacts ?? {})) {
     if (CLOSED_STATUSES.includes(ctx.generalStatus)) blockers.push("pedido_cerrado");
     if (ctx.pickupState && !AVAILABLE_PICKUP_STATES.includes(ctx.pickupState)) {
       blockers.push("paquete_no_disponible");

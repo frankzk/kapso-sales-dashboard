@@ -170,3 +170,48 @@ describe("el dato viaja hasta donde se decide", () => {
     expect((source.match(/paymentFacts: \{/g) ?? []).length).toBe(2);
   });
 });
+
+describe("la guarda: con comprobantes mandan las reglas de Yape", () => {
+  // POR QUÉ. En la operación real casi todo pedido cobrado por Yape acaba
+  // también marcado `paid` en Shopify. Sin esta condición, un pedido con el
+  // adelanto cargado y la diferencia pendiente contaría como «pagado por web» y
+  // abriría la compuerta de la clave — la pérdida de dinero que esa compuerta
+  // existe para evitar. `paid` SIN comprobantes es lo único que solo puede venir
+  // de la pasarela.
+  const conComprobante = [
+    { kind: "adelanto", validation_status: "validado", order_id: "o1", amount: 30 },
+  ];
+
+  it("un pedido con adelanto y diferencia pendiente NO pasa por prepago", () => {
+    const v = canRevealPickupKey(ctx({ payments: conComprobante, paymentFacts: PREPAID }));
+    expect(v.allowed).toBe(false);
+    expect(v.blockers).toContain("diferencia_no_registrada");
+  });
+
+  it("y el panel tampoco lo da por cobrado por web", () => {
+    expect(
+      orderPaymentPanelPresentation({
+        operation: "agencia",
+        currentCourier: "shalom",
+        shippingMode: "agency",
+        macroSubstage: "pendiente_pago_diferencia",
+        paymentState: "adelanto_validado",
+        hasAgencyCandidate: true,
+        paymentFacts: { ...PREPAID, paymentState: "adelanto_validado" },
+      }).mode,
+    ).toBe("required");
+  });
+
+  it("sin comprobantes sí es prepago: es lo único que solo puede venir de la pasarela", () => {
+    expect(canRevealPickupKey(ctx({ payments: [], paymentFacts: PREPAID })).allowed).toBe(true);
+  });
+
+  it("un comprobante RECHAZADO no cuenta como comprobante vivo", () => {
+    // Un Yape rechazado no es dinero: si además el pedido está pagado por web,
+    // bloquear por esa fila sería negarle la clave a quien sí pagó.
+    const rechazado = [
+      { kind: "adelanto", validation_status: "rechazado", order_id: "o1", amount: 30 },
+    ];
+    expect(canRevealPickupKey(ctx({ payments: rechazado, paymentFacts: PREPAID })).allowed).toBe(true);
+  });
+});
