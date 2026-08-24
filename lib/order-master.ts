@@ -42,7 +42,7 @@ import {
 } from "@/lib/order-status";
 
 const ORDER_COLUMNS =
-  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,shipping_mode,customer_phone,total_amount,raw";
+  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,shipping_mode,customer_phone,total_amount,total_refunded,raw";
 
 // Las columnas de gestión (assigned_at … agency_expires_at) las añade 0047. El
 // código se despliega antes que la migración, así que se intenta el conjunto
@@ -122,6 +122,7 @@ interface OrderRecord {
   shipping_mode: string | null;
   customer_phone: string | null;
   total_amount: number | null;
+  total_refunded: number | null;
   raw: unknown;
 }
 
@@ -1066,6 +1067,10 @@ export async function recomputeOrderMaster(
       macro_operation: macro.operation,
       macro_version: macro.version,
       macro_since: macro.since,
+      // Cómo se cobró: lo necesitan la compuerta de la clave, el panel del
+      // drawer y el rótulo, y los tres leen esta tabla (0128).
+      financial_status: order.financial_status,
+      total_refunded: order.total_refunded ?? 0,
       status_since: state.since,
       status_source: state.source,
       // Que EXISTA un override no basta: uno anterior a la anulación en Shopify

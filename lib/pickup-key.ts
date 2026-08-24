@@ -7,6 +7,7 @@
 // descifrarla, y cada visualización queda registrada de forma imborrable.
 
 import type { GeneralStatus } from "@/lib/order-status";
+import { isWebPrepaid, type OrderPaymentFacts } from "@/lib/order-paid";
 
 export type PaymentKind = "adelanto" | "diferencia" | "total";
 export const SHALOM_MINIMUM_ADVANCE = 30;
@@ -161,6 +162,16 @@ export interface PickupKeyContext {
   orderTotal: number | null;
   /** ¿Existe una clave registrada para este pedido? */
   hasKey: boolean;
+  /**
+   * Cómo se cobró el pedido, para el caso en que el dinero NO entró por
+   * comprobantes: pagado en el checkout de Shopify.
+   *
+   * Sin esto, un pedido por Agencia pagado con tarjeta no podía recibir NUNCA su
+   * clave de recojo: no tiene ni una fila en `order_payments`, así que faltaban
+   * el adelanto y la diferencia para siempre. El cliente pagaba, el paquete
+   * llegaba a la agencia, y nadie podía darle la clave para recogerlo.
+   */
+  paymentFacts?: OrderPaymentFacts;
 }
 
 /** Motivos por los que la clave sigue bloqueada, en el orden en que se explican. */
@@ -228,6 +239,21 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
   const blockers: PickupBlocker[] = [];
 
   if (!ctx.hasKey) blockers.push("sin_clave");
+
+  // EL DINERO PUEDE HABER ENTRADO POR OTRA PUERTA. Si el pedido se pagó en el
+  // checkout, exigirle comprobantes es pedirle que pague otra vez para poder
+  // recoger lo que ya pagó: no tiene NI UNA fila en `order_payments`, así que
+  // «falta el adelanto» y «falta la diferencia» serían ciertos para siempre.
+  //
+  // Lo que NO se salta: que la clave exista, que el pedido no esté cerrado y que
+  // el paquete esté disponible en la agencia. Esos no hablan de dinero.
+  if (isWebPrepaid(ctx.paymentFacts ?? {})) {
+    if (CLOSED_STATUSES.includes(ctx.generalStatus)) blockers.push("pedido_cerrado");
+    if (ctx.pickupState && !AVAILABLE_PICKUP_STATES.includes(ctx.pickupState)) {
+      blockers.push("paquete_no_disponible");
+    }
+    return { allowed: blockers.length === 0, blockers };
+  }
 
   const adelanto = find(ctx.payments, "adelanto");
   const diferencias = findAll(ctx.payments, "diferencia");

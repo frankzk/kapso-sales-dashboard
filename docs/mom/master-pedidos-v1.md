@@ -1530,6 +1530,21 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 
 ### Pagos
 
+- **Un pedido pagado en el checkout no tiene cobro que gestionar.** Desde que
+  entran pedidos con pasarela (`financial_status = 'paid'`), «ya está cobrado»
+  tiene dos vías —comprobante Yape o pago web— y **no se suman**: sumarlas sería
+  contar dos veces el mismo dinero. Un reembolso deshace el prepago.
+  De esa regla única cuelga todo lo demás:
+  - El panel de cobro colapsa a una constancia: ni pide comprobante ni enseña
+    saldo por cargar. Lo que sí sigue haciendo falta en Agencia —DNI y agencia de
+    Shalom— no es cobro: son datos de entrega.
+  - **La clave de recojo se entrega sin comprobantes.** Exigirlos a quien pagó
+    con tarjeta la bloqueaba para siempre: no existe un Yape que cargar, así que
+    «falta el adelanto» era cierto de forma permanente y el paquete se quedaba en
+    la agencia. Lo que NO se salta: que la clave exista, que el pedido no esté
+    cerrado y que el paquete esté disponible.
+  - La guía sale con **cobro 0** y el rótulo dice **PAGADO · NO COBRAR**, nunca
+    «S/ 0»: cero es un importe, y un importe ambiguo se resuelve cobrando.
 - Cualquier asesor puede subir el comprobante.
 - El comprobante puede registrarse como `Adelanto`, `Diferencia` o `Pago total`.
   `Pago total` es un camino de captura visible, no una combinación implícita de

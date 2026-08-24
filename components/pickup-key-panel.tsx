@@ -211,6 +211,47 @@ export function PickupKeyPanel({
     return <p className="text-sm text-slate-400">Cargando pagos…</p>;
   }
 
+  // PAGADO EN EL CHECKOUT: no hay cobro que gestionar. El panel colapsa a una
+  // constancia en vez de pedir un comprobante de Yape y enseñar «saldo por
+  // cargar» sobre dinero que ya entró. Lo que SÍ sigue haciendo falta en Agencia
+  // —el DNI y la agencia de Shalom— no es cobro: son datos de entrega, y viven
+  // en el panel de la salida, no acá.
+  if (mode === "prepaid") {
+    return (
+      <section className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-emerald-800">
+            Cobro
+          </h3>
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+            Pagado por web
+          </span>
+        </div>
+        <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          Este pedido se pagó en el checkout
+          {panel.orderTotal != null ? `: S/ ${panel.orderTotal.toFixed(2)}` : ""}. No hay que
+          cobrar en la entrega ni cargar comprobante.
+        </p>
+        {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        {/* Si además hay comprobantes cargados se siguen listando: un pedido
+            puede tener historia de Yape antes de haberse pagado por web, y
+            esconderla dejaría dinero registrado sin rastro en pantalla. */}
+        {panel.payments.length > 0 && (
+          <PaymentList
+            payments={panel.payments}
+            accounts={panel.collectionAccounts}
+            canValidate={panel.canValidate}
+            canRegister={false}
+            pending={pending}
+            onValidate={(id) => run(() => validatePayment(id))}
+            onReject={(id, reason) => run(() => rejectPayment(id, reason))}
+            onComplete={(id, data) => run(() => completePaymentData(id, data))}
+          />
+        )}
+      </section>
+    );
+  }
+
   const paymentOptional = mode === "optional";
   const paymentLabel =
     paymentOptional && panel.paymentState === "sin_pago"
