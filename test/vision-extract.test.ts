@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  NOT_OPERATION_NUMBER_LABELS,
   OPERATION_NUMBER_LABELS,
   checkYapeRecipient,
   extractYapeVoucher,
+  labelIsNotOperationNumber,
   parseVoucherInstant,
 } from "@/lib/vision";
 
@@ -188,6 +190,66 @@ describe("extractYapeVoucher", () => {
     for (const label of OPERATION_NUMBER_LABELS) expect(prompt).toContain(label);
     expect(prompt).toContain("operation_label");
     expect(prompt).toContain("Código de seguridad");
+  });
+
+  // LA CLÁUSULA «o equivalente» ES LO QUE HACE ACERTAR RÓTULOS QUE NADIE
+  // ENUMERÓ —en producción ya aparecieron `Nro. Operación` y `NO.OPE`, ambos
+  // correctos— y también lo que puede pasarse de generosa. En el pase de
+  // relectura, 2 de 15 números recuperados venían rotulados «Código de
+  // solicitud», que identifica la SOLICITUD de transferencia y no el
+  // movimiento. Guardarlo no rompe nada el día que se escribe —el pase midió 0
+  // choques— pero deja la detección de duplicados apuntando a un dato que no
+  // identifica el pago: el fallo saldría meses después, como un cobro repetido
+  // que nadie cazó.
+  it("descarta el número cuando el rótulo dice que NO es el de la operación", async () => {
+    for (const label of NOT_OPERATION_NUMBER_LABELS) {
+      const out = await extractYapeVoucher("AAAA", "image/jpeg", {
+        ...OPTS,
+        fetchImpl: reply({ operation_number: "62231336", operation_label: label }),
+      });
+      expect(out.operationNumber, `rótulo: ${label}`).toBeNull();
+      // Sin número aceptado tampoco se guarda el rótulo, como en el resto.
+      expect(out.operationLabel, `rótulo: ${label}`).toBeNull();
+    }
+  });
+
+  it("el filtro no depende de que el modelo obedezca al prompt", async () => {
+    // El prompt ya pide que devuelva null ante esos rótulos. Esta prueba fija
+    // que si NO obedece —devuelve el número igual— el parser lo descarta de
+    // todas formas. Una instrucción que el modelo puede saltarse sin que nada
+    // se entere no es una garantía.
+    const out = await extractYapeVoucher("AAAA", "image/jpeg", {
+      ...OPTS,
+      fetchImpl: reply({
+        operation_number: "0000123456789",
+        operation_label: "Código de solicitud",
+        amount: 106,
+      }),
+    });
+    expect(out.operationNumber).toBeNull();
+    // Y lo demás del comprobante se conserva: descartar el número no puede
+    // llevarse por delante el monto, que sí se leyó bien.
+    expect(out.amount).toBe(106);
+  });
+
+  it("compara el rótulo sin tildes, mayúsculas ni puntuación", () => {
+    // El rótulo llega tal como se lee, y los comprobantes no son consistentes.
+    for (const variant of [
+      "Código de solicitud",
+      "codigo de solicitud",
+      "CÓDIGO DE SOLICITUD",
+      "Código  de  solicitud.",
+    ]) {
+      expect(labelIsNotOperationNumber(variant), variant).toBe(true);
+    }
+    // Y no se pasa de listo: el de operación sigue valiendo.
+    expect(labelIsNotOperationNumber("Código de operación")).toBe(false);
+    expect(labelIsNotOperationNumber(null)).toBe(false);
+  });
+
+  it("el prompt también enumera los rótulos que NO valen", async () => {
+    const prompt = await capturePrompt();
+    for (const label of NOT_OPERATION_NUMBER_LABELS) expect(prompt).toContain(label);
   });
 
   it('trata el texto "null" como ausencia', async () => {

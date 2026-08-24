@@ -316,6 +316,47 @@ export const OPERATION_NUMBER_LABELS = [
   "Nº de operación", // BBVA, Scotiabank
 ] as const;
 
+/**
+ * Rótulos que se PARECEN al del nº de operación y no lo son.
+ *
+ * La lista de arriba termina en «o equivalente», y esa cláusula es la que hace
+ * que el lector acierte rótulos que nadie enumeró —en producción ya aparecieron
+ * `Nro. Operación` y `NO.OPE`, ambos correctos—. El precio es que también puede
+ * pasarse de generosa.
+ *
+ * SE VIO EN EL PASE DE RELECTURA: de 15 números recuperados, 2 venían rotulados
+ * «Código de solicitud», que es la referencia de la SOLICITUD de transferencia
+ * y convive en el mismo comprobante con el código de operación. Guardarlo como
+ * nº de operación no rompe nada el día que se escribe —el pase midió 0 choques—
+ * pero deja la detección de duplicados apuntando a un dato que no identifica el
+ * movimiento: el fallo aparecería meses después, como un cobro repetido que
+ * nadie cazó.
+ *
+ * Se enumeran para el prompt Y se hacen cumplir en `parseFields`. Solo en el
+ * prompt sería una instrucción que el modelo puede desobedecer sin que nada se
+ * entere; el filtro del parser no depende de su buena voluntad.
+ */
+export const NOT_OPERATION_NUMBER_LABELS = [
+  "Código de seguridad", // Yape: 3 dígitos, dato distinto
+  "Código de solicitud", // referencia de la solicitud, no del movimiento
+  "Número de tarjeta",
+  "Código de comercio",
+] as const;
+
+/** ¿Este rótulo dice explícitamente que NO es el nº de operación? */
+export function labelIsNotOperationNumber(label: string | null): boolean {
+  if (!label) return false;
+  const norm = (s: string) =>
+    s
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  const value = norm(label);
+  return NOT_OPERATION_NUMBER_LABELS.some((bad) => value === norm(bad));
+}
+
 export interface YapeVoucherFields {
   /** Nº de operación tal como aparece, solo dígitos y letras. */
   operationNumber: string | null;
@@ -347,6 +388,7 @@ const EXTRACT_SYSTEM_PROMPT =
 
 function buildExtractPrompt(): string {
   const labels = OPERATION_NUMBER_LABELS.map((l) => `"${l}"`).join(", ");
+  const notLabels = NOT_OPERATION_NUMBER_LABELS.map((l) => `"${l}"`).join(", ");
   return (
     "Transcribe el comprobante y devuelve JSON con esta forma exacta:\n" +
     "{\n" +
@@ -375,6 +417,12 @@ function buildExtractPrompt(): string {
     "tiene que salir de ESA MISMA parte. Leer el teléfono de un sitio y el nombre " +
     "de otro es el error más caro de esta tarea: hace que un cobro correcto " +
     "parezca un desvío de dinero.\n" +
+    `HAY RÓTULOS QUE SE PARECEN Y NO VALEN: ${notLabels}. Conviven con el de ` +
+    "operación en el mismo comprobante y nombran otra cosa — el código de " +
+    "solicitud identifica la SOLICITUD de transferencia, no el movimiento. Si el " +
+    "único código que ves lleva uno de esos rótulos, operation_number es null " +
+    "aunque no haya ningún otro: es preferible que lo complete una persona a " +
+    "guardar como nº de operación algo que no identifica el pago.\n" +
     "IMPORTANTE: el número de operación y el \"Código de seguridad\" NO son el " +
     "mismo dato. El número de operación acompaña a los datos de la transacción y " +
     "normalmente tiene varios dígitos; nunca uses como operation_number el código " +
@@ -480,7 +528,14 @@ function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | nu
   // El código de seguridad de Yape tiene 3 dígitos. También hemos visto al
   // modelo devolver aquí el monto ("30"). Un identificador tan corto no es
   // confiable y se deja vacío para que el operador lo revise.
-  const operationNumber = cleanedOperation.length >= 6 ? cleanedOperation : null;
+  //
+  // Y el rótulo puede delatar que el número NO es el de la operación aunque sea
+  // largo. El prompt ya lo pide, pero una instrucción que el modelo puede
+  // desobedecer sin que nada se entere no es una garantía: si el propio rótulo
+  // que devolvió dice «Código de solicitud», el número se descarta acá.
+  const labeledAsSomethingElse = labelIsNotOperationNumber(str(o.operation_label));
+  const operationNumber =
+    cleanedOperation.length >= 6 && !labeledAsSomethingElse ? cleanedOperation : null;
   return {
     operationNumber,
     // El rótulo sin número no dice nada y sería ruido en la distribución por
