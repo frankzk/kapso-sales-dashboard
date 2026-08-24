@@ -4,6 +4,7 @@
 
 import type { TandersOrderPayload, TandersPackageType } from "./types";
 import { isLimaMetropolitanaOrCallao, isNonMetroLimaLocation } from "@/lib/order-coverage";
+import { expectedCollectAmount } from "@/lib/order-paid";
 
 /**
  * Caja y peso por defecto. La operación despacha siempre XXS con 100 g
@@ -75,16 +76,28 @@ export function tandersPhone(raw: string | null | undefined): string | null {
 }
 
 /**
- * Cuánto cobrar al destinatario. Un pedido ya cobrado por Yape va en 0: si se
- * manda el total, el repartidor le cobra al cliente algo que ya pagó.
+ * Cuánto cobrar al destinatario. Un pedido ya cobrado va en 0: si se manda el
+ * total, el repartidor le cobra al cliente algo que ya pagó.
+ *
+ * «Ya cobrado» son DOS vías —comprobantes Yape y pago en el checkout— y la
+ * decisión vive entera en `expectedCollectAmount`. Antes esto solo miraba el
+ * estado de los comprobantes, así que un pedido pagado con tarjeta (que no tiene
+ * ninguna fila en `order_payments`) salía con el total a cobrar.
  */
 export function defaultCollectionAmount(input: {
   paymentState: string | null | undefined;
   orderTotal: number | null | undefined;
+  financialStatus?: string | null;
+  totalRefunded?: number | null;
 }): number {
-  if (input.paymentState === "pago_completo") return 0;
-  const total = input.orderTotal ?? 0;
-  return total > 0 ? Math.round(total * 100) / 100 : 0;
+  return expectedCollectAmount(
+    {
+      paymentState: input.paymentState,
+      financialStatus: input.financialStatus,
+      totalRefunded: input.totalRefunded,
+    },
+    input.orderTotal,
+  );
 }
 
 /** Dirección de destino sugerida cuando el equipo todavía no confirmó una. */
