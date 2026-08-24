@@ -245,6 +245,7 @@ export async function loadPaymentPanel(
     paymentFacts: {
       financialStatus: ctx.row.financial_status,
       totalRefunded: ctx.row.total_refunded,
+      paymentState: ctx.row.payment_state,
     },
   });
 
@@ -956,6 +957,7 @@ export async function revealPickupKey(
     paymentFacts: {
       financialStatus: ctx.row.financial_status,
       totalRefunded: ctx.row.total_refunded,
+      paymentState: ctx.row.payment_state,
     },
   });
 
