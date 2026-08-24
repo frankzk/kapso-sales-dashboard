@@ -9,6 +9,7 @@ import {
   computeHourlyActivity,
   emptyPorFuente,
   formatMinutes,
+  isSalesTouch,
   isWonLead,
   localDayPreset,
   localPresetRange,
@@ -34,6 +35,25 @@ describe("isWonLead (a close requires the lead's OWN disposition, not has_order)
     expect(isWonLead("hot")).toBe(false);
     expect(isWonLead(null)).toBe(false);
     expect(isWonLead(undefined)).toBe(false);
+  });
+});
+
+describe("isSalesTouch (ordenar la cola no es trabajo de venta)", () => {
+  it("false para las notas de máquina (kind='system'), que es lo que firma 'Resuelto'", () => {
+    expect(isSalesTouch("system")).toBe(false);
+  });
+  it("true para el trabajo humano: call, message, sale", () => {
+    expect(isSalesTouch("call")).toBe(true);
+    expect(isSalesTouch("message")).toBe(true);
+    expect(isSalesTouch("sale")).toBe(true);
+  });
+  it("true para un kind desconocido — un kind humano nuevo debe SEGUIR atribuyendo", () => {
+    // El lado seguro del error: si mañana aparece un kind que no conocemos, que
+    // la venta se le acredite a alguien (visible, alguien reclama) antes que se
+    // pierda en silencio.
+    expect(isSalesTouch("state_change")).toBe(true);
+    expect(isSalesTouch(null)).toBe(true);
+    expect(isSalesTouch(undefined)).toBe(true);
   });
 });
 
@@ -85,6 +105,60 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
     expect(u2.ingresos).toBe(288); // 189 + 99
     expect(u2.conversion).toBe(1); // 2 / 2
     expect(u2.email).toBe("gaby@aurela.pe");
+  });
+
+  it("darle a 'Resuelto' NO le quita la venta a quien trabajó el lead (#KP121762)", () => {
+    // El caso real: Tania (u1) mandó seis mensajes al lead entre 14:53 y 18:17;
+    // a las 19:30 Yohalis (u2) le dio a "Resuelto" para sacarlo de la cola y los
+    // S/ 250.20 se pasaron a Yohalis. Ese click es una nota de máquina firmada,
+    // no una venta: no puede mover la atribución.
+    const calls: AdvisorCall[] = [
+      { vendedora: "u1", lead_id: "L1", kind: "message", occurred_at: "2026-08-24T14:53:49Z" },
+      { vendedora: "u1", lead_id: "L1", kind: "message", occurred_at: "2026-08-24T18:17:18Z" },
+      { vendedora: "u2", lead_id: "L1", kind: "system", occurred_at: "2026-08-24T19:30:13Z" },
+    ];
+    const leadOutcome = new Map([["L1", { won: true, net: 250.2 }]]);
+    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const u1 = rows.find((r) => r.userId === "u1")!;
+    const u2 = rows.find((r) => r.userId === "u2")!;
+
+    expect(u1.cerrados).toBe(1);
+    expect(u1.ingresos).toBe(250.2);
+    expect(u2.cerrados).toBe(0);
+    expect(u2.ingresos).toBe(0);
+  });
+
+  it("el click de 'Resuelto' tampoco infla los leads trabajados de quien ordena la cola", () => {
+    const calls: AdvisorCall[] = [
+      { vendedora: "u1", lead_id: "L1", kind: "call", occurred_at: "2026-08-24T14:00:00Z" },
+      { vendedora: "u2", lead_id: "L1", kind: "system", occurred_at: "2026-08-24T19:30:00Z" },
+      { vendedora: "u2", lead_id: "L2", kind: "call", occurred_at: "2026-08-24T20:00:00Z" },
+    ];
+    const leadOutcome = new Map([
+      ["L1", { won: true, net: 100 }],
+      ["L2", { won: false, net: 0 }],
+    ]);
+    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const u2 = rows.find((r) => r.userId === "u2")!;
+    expect(u2.leadsTrabajados).toBe(1); // solo L2 — L1 lo trabajó u1, u2 solo lo archivó
+  });
+
+  it("pero quien solo dio 'Resuelto' SIGUE en el tablero con sus horas activas", () => {
+    // El click no vende, pero sí prueba que la asesora estaba conectada: el
+    // tablero tiene que poder mostrar "conectada y sin registrar nada".
+    const calls: AdvisorCall[] = [
+      { vendedora: "u1", lead_id: "L1", kind: "call", occurred_at: "2026-08-24T14:00:00Z" },
+      { vendedora: "u2", lead_id: "L1", kind: "system", occurred_at: "2026-08-24T15:00:00Z" },
+      { vendedora: "u2", lead_id: "L2", kind: "system", occurred_at: "2026-08-24T15:30:00Z" },
+    ];
+    const leadOutcome = new Map([["L1", { won: true, net: 100 }]]);
+    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const u2 = rows.find((r) => r.userId === "u2")!;
+    expect(u2).toBeDefined();
+    expect(u2.leadsTrabajados).toBe(0);
+    expect(u2.cerrados).toBe(0);
+    expect(u2.horas).toBe(0.5); // 15:00 → 15:30 sigue contando como presencia
+    expect(u2.dias).toBe(1);
   });
 
   it("collects the won orders' code+date per advisor (cerradosDetalle, oldest first)", () => {
@@ -338,7 +412,7 @@ describe("computeAdvisorConversionByDay (sparkline: contactos y pedidos por día
     expect(s.u2!.map((c) => c.contactos)).toEqual([0, 1]);
   });
 
-  it("el pedido va a la asesora del ÚLTIMO toque global (cualquier kind), en su día", () => {
+  it("el pedido va a la asesora del ÚLTIMO toque DE VENTA (cualquier kind humano), en su día", () => {
     const calls: AdvisorCall[] = [
       { vendedora: "u1", lead_id: "A", kind: "call", occurred_at: at("2026-07-08", 15) },
       // u2 toca después con un MENSAJE → se lleva el pedido el 09 (no suma contactos)
@@ -348,6 +422,18 @@ describe("computeAdvisorConversionByDay (sparkline: contactos y pedidos por día
     expect(s.u1!.map((c) => c.pedidos)).toEqual([0, 0]);
     expect(s.u2!.map((c) => c.pedidos)).toEqual([0, 1]);
     expect(s.u2!.map((c) => c.contactos)).toEqual([0, 0]);
+  });
+
+  it("el sparkline no le pasa el pedido a quien solo dio 'Resuelto' un día después", () => {
+    const calls: AdvisorCall[] = [
+      { vendedora: "u1", lead_id: "A", kind: "message", occurred_at: at("2026-07-08", 15) },
+      { vendedora: "u2", lead_id: "A", kind: "system", occurred_at: at("2026-07-09", 15) },
+    ];
+    const s = computeAdvisorConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz });
+    expect(s.u1!.map((c) => c.pedidos)).toEqual([1, 0]); // se queda con u1, el día 08
+    // u2 no genera serie: no tiene contactos ni pedidos. El tablero ya cubre ese
+    // caso con `trendSeries[r.userId] ?? emptyTrend()` → sparkline plano.
+    expect(s.u2).toBeUndefined();
   });
 
   it("siempre devuelve una celda por día (ceros incluidos) y ignora días fuera de la ventana", () => {
