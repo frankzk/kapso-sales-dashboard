@@ -82,19 +82,42 @@ export function selectCollectMismatches(
   return due;
 }
 
+/**
+ * Cuántas guías caben en un aviso.
+ *
+ * TELEGRAM RECHAZA LOS MENSAJES DE MÁS DE 4096 CARACTERES, y `lib/telegram.ts`
+ * no trunca ni parte. Cada línea acá ronda los 150, así que a partir de unas
+ * veintisiete el envío devuelve 400 — y entonces no se marca ninguna, el
+ * siguiente ciclo reconstruye el MISMO mensaje gigante, y falla igual cada 20
+ * minutos para siempre. El aviso se rompería justo cuando más hay que contar.
+ *
+ * Con tope, se nombran las primeras y solo ESAS se marcan: las demás salen en el
+ * siguiente ciclo. El atraso se drena en tandas y ningún pedido se queda sin
+ * nombrar, que es lo que haría marcarlas todas para callarlas.
+ */
+export const MAX_PER_ALERT = 20;
+
 /** El mensaje. Cada línea nombra el pedido, porque hay que ir a buscarlo. */
-export function formatCollectAlert(storeName: string | null, due: readonly DueCollectAlert[]): string {
+export function formatCollectAlert(
+  storeName: string | null,
+  shown: readonly DueCollectAlert[],
+  totalDue: number = shown.length,
+): string {
   const head =
-    due.length === 1
+    totalDue === 1
       ? `⚠️ ${storeName ?? "Tienda"} · 1 guía va a cobrar lo que no toca`
-      : `⚠️ ${storeName ?? "Tienda"} · ${due.length} guías van a cobrar lo que no toca`;
-  const lines = due.map((d) => {
+      : `⚠️ ${storeName ?? "Tienda"} · ${totalDue} guías van a cobrar lo que no toca`;
+  const lines = shown.map((d) => {
     const pedido = d.row.orderName ?? "(sin nº)";
     const guia = d.row.guideCode ? ` · guía ${d.row.guideCode}` : "";
     const courier = d.row.courier ? ` · ${d.row.courier}` : "";
     return `• ${pedido}${guia}${courier}\n  ${d.message}`;
   });
-  return [head, "", ...lines].join("\n");
+  const rest = totalDue - shown.length;
+  // Decirlo importa: sin esta línea, un aviso de 20 sobre 60 se lee como si
+  // fueran 20 y las otras 40 no existieran hasta dentro de 20 minutos.
+  const tail = rest > 0 ? [``, `…y ${rest} más. Salen en el próximo aviso.`] : [];
+  return [head, "", ...lines, ...tail].join("\n");
 }
 
 /** Columnas mínimas para decidir. `orders` aporta cómo se pagó. */
@@ -156,10 +179,14 @@ export async function alertCollectMismatches(
   const due = selectCollectMismatches(rows, nowMs);
   if (!due.length) return { alerted: 0 };
 
+  // Tope por mensaje: ver MAX_PER_ALERT. Se marcan SOLO las nombradas, así que
+  // el resto vuelve en el siguiente ciclo en vez de callarse sin haberse dicho.
+  const shown = due.slice(0, MAX_PER_ALERT);
+
   const res = await sendTelegramToAll(
     creds.telegram_bot_token,
     creds.telegram_chat_id,
-    formatCollectAlert(creds.name, due),
+    formatCollectAlert(creds.name, shown, due.length),
   );
   if (!res.sent) return { alerted: 0, skipped: res.results[0]?.error ?? "sin destinatarios" };
 
@@ -168,9 +195,9 @@ export async function alertCollectMismatches(
     .update({ collect_alert_sent_at: new Date(nowMs).toISOString() })
     .in(
       "id",
-      due.map((d) => d.row.id),
+      shown.map((d) => d.row.id),
     );
-  return { alerted: due.length };
+  return { alerted: shown.length };
 }
 
 /** Supabase devuelve los `numeric` como string. */
