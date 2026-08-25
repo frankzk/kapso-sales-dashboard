@@ -192,7 +192,9 @@ export async function reprocessObservedVouchers(
 
     // El nº de operación es llave global: se comprueba antes de escribirlo, con
     // la MISMA definición de choque que usa el operador al completarlo a mano.
-    const readOperation = normalizeOperationNumber(inspection.fields.operationNumber);
+    const readOperation = normalizeOperationNumber(inspection.fields.operationNumber, {
+      labelled: Boolean(inspection.fields.operationLabel),
+    });
     let gainedOperation = false;
     if (!row.operation_number && readOperation) {
       const clash = await findOperationClash(admin, readOperation, row.id);

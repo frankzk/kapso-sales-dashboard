@@ -314,7 +314,30 @@ export const OPERATION_NUMBER_LABELS = [
   "Número de operación", // BCP, Plin
   "Código de operación", // Interbank
   "Nº de operación", // BBVA, Scotiabank
+  // Los dos de PAPEL, que rotulan distinto y traen el número MÁS CORTO:
+  "NO.OPE.", // BCP, voucher de cajero automático
+  "OPER.", // BBVA, voucher de depósito en agente
 ] as const;
+
+/**
+ * ¿Este rótulo es, reconocidamente, el del nº de operación?
+ *
+ * Sirve para decidir si un número corto se acepta. El rótulo es la evidencia de
+ * que ese número identifica el movimiento; la longitud solo era un sustituto
+ * mientras no se sabía de dónde salía el valor.
+ */
+export function isOperationLabel(label: string | null | undefined): boolean {
+  if (!label) return false;
+  const norm = (s: string) =>
+    s
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  const value = norm(label);
+  return OPERATION_NUMBER_LABELS.some((known) => value === norm(known));
+}
 
 /**
  * Rótulos que se PARECEN al del nº de operación y no lo son.
@@ -406,6 +429,13 @@ function buildExtractPrompt(): string {
     "Plin, BCP, Interbank, BBVA, Scotiabank), y cada uno rotula ese dato a su " +
     `manera: ${labels}. Todos valen. Copia en "operation_label" el rótulo tal ` +
     "como aparece, sin normalizarlo.\n" +
+    "TAMBIÉN VALEN LOS COMPROBANTES DE PAPEL fotografiados: el ticket de un " +
+    "cajero del BCP rotula \"NO.OPE.\" y el de un depósito en agente del BBVA " +
+    "rotula \"OPER.\", los dos con un número CORTO, de unos cuatro dígitos. Es " +
+    "el número de operación igual que los demás: devuélvelo tal cual, sin " +
+    "completarlo ni alargarlo, con su rótulo. No lo confundas con los otros " +
+    "números del mismo ticket —terminal, tarjeta, cuenta de abono, ARQC—, que " +
+    "son más largos y no identifican el movimiento.\n" +
     "QUIÉN PAGA Y QUIÉN RECIBE NO SE MEZCLAN. En una captura de Yape hecha por " +
     "quien pagó —la que dice \"¡Yapeaste!\"— el nombre grande junto al monto es " +
     "QUIEN RECIBE, no quien paga. En una constancia bancaria, quien recibe es el " +
@@ -533,14 +563,36 @@ function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | nu
   // largo. El prompt ya lo pide, pero una instrucción que el modelo puede
   // desobedecer sin que nada se entere no es una garantía: si el propio rótulo
   // que devolvió dice «Código de solicitud», el número se descarta acá.
-  const labeledAsSomethingElse = labelIsNotOperationNumber(str(o.operation_label));
+  const rawLabel = str(o.operation_label);
+  const labeledAsSomethingElse = labelIsNotOperationNumber(rawLabel);
+
+  // EL RÓTULO MANDA SOBRE LA LONGITUD, CUANDO LO HAY.
+  //
+  // El mínimo de 6 existía por una razón buena —«podría ser el código de
+  // seguridad»— escrita cuando el lector no devolvía el rótulo. Pero deja fuera
+  // los vouchers de PAPEL, que traen operaciones de cuatro dígitos:
+  //
+  //   BCP, cajero automático:  NO.OPE.: 5782
+  //   BBVA, depósito en agente: OPER.: 4437
+  //
+  // Y BCP es el banco más grande del Perú. Con `operation_label` ya se sabe de
+  // qué rótulo salió el número: el rótulo ES la evidencia que la longitud
+  // estaba sustituyendo. Sin rótulo reconocido se mantiene el 6, porque ahí
+  // sigue sin saberse si son los tres dígitos del código de seguridad o el
+  // monto.
+  //
+  // No es una regla nueva en el sistema: `normalizeManualOperationNumber` ya
+  // aceptaba cuatro caracteres cuando los escribía una persona, y en la base
+  // hay uno así. Lo que se cierra es que la máquina y la persona usaran dos
+  // varas distintas para el mismo dato.
+  const minLength = isOperationLabel(rawLabel) ? 4 : 6;
   const operationNumber =
-    cleanedOperation.length >= 6 && !labeledAsSomethingElse ? cleanedOperation : null;
+    cleanedOperation.length >= minLength && !labeledAsSomethingElse ? cleanedOperation : null;
   return {
     operationNumber,
     // El rótulo sin número no dice nada y sería ruido en la distribución por
     // banco: solo se guarda cuando acompaña a un número que sí aceptamos.
-    operationLabel: operationNumber ? str(o.operation_label) : null,
+    operationLabel: operationNumber ? rawLabel : null,
     amount: num(o.amount),
     paidAt: parseVoucherInstant(str(o.date), str(o.time)),
     payerName: str(o.payer_name),
