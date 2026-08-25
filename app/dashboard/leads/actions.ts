@@ -29,6 +29,7 @@ import { onlineVendedorasForStore } from "@/lib/presence";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { recordOrderSale } from "@/lib/order-sale";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import {
@@ -939,6 +940,15 @@ export async function closeSale(
     new_status: "pedido_generado",
     note: noteParts.join(" · "),
   });
+  // Y fija a quién es la venta. La línea de arriba es el historial del lead; esta
+  // es la atribución, y no la puede mover ningún toque posterior.
+  await recordOrderSale(admin, {
+    orderId: (order as { id: string }).id,
+    storeId: ctx.storeId,
+    vendedora: ctx.userId,
+    leadId,
+    occurredAt: nowIso,
+  });
 
   // 4) Recompute the day's rollups so revenue / COD / AOV reflect the sale now
   //    (otherwise it would only appear on the next 15-min cron).
@@ -1097,6 +1107,13 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
     kind: "sale",
     new_status: "pedido_generado",
     note: noteParts.join(" · "),
+  });
+  await recordOrderSale(admin, {
+    orderId: (order as { id: string }).id,
+    storeId: ctx.storeId,
+    vendedora: ctx.userId,
+    leadId,
+    occurredAt: nowIso,
   });
 
   // 6) Recompute the day's rollups so revenue / COD reflect the recovery now.
@@ -2448,7 +2465,17 @@ export async function generateOrder(
     new_status: "pedido_generado",
     note,
   });
-  await Promise.all([leadUpdate, draftMirror, saleLog].filter(Boolean));
+  // La atribución va en el mismo lote: es independiente de las otras tres y
+  // esperar por ella en serie solo sumaría un viaje con la asesora mirando
+  // "Generando…".
+  const saleAttribution = recordOrderSale(admin, {
+    orderId: internalOrderId,
+    storeId: ctx.storeId,
+    vendedora: ctx.userId,
+    leadId,
+    occurredAt: nowIso,
+  });
+  await Promise.all([leadUpdate, draftMirror, saleLog, saleAttribution].filter(Boolean));
 
   // 5) Recompute today's rollups so revenue/COD reflect it now — DESPUÉS de
   // responder. Es el paso más caro de toda la acción (recorre el día entero de
