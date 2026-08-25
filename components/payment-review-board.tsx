@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useDeferredValue, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
+  completePaymentData,
   observePayment,
   rejectPayment,
   validatePayment,
@@ -216,11 +217,24 @@ function ReviewCard({ item, lane }: { item: PaymentReviewItem; lane: PaymentRevi
 
       {lane !== "validated" && (
         <div className="mt-3 space-y-2">
-          {!canApprove && (
+          {/* El número se escribe ACÁ, no en el pedido. Mandarlo al Master era
+              pedirle a quien tiene el comprobante delante que se fuera a otra
+              pantalla a copiar ocho dígitos y volviera. Lo que separa las dos
+              responsabilidades no es la navegación —eso solo era fricción— sino
+              el guardarraíl del servidor: quien escribe el número no puede
+              validar ese pago (0131). */}
+          {!item.operationNumber && (
+            <MissingOperationField
+              paymentId={item.id}
+              pending={pending}
+              onComplete={(id, operationNumber) =>
+                run(() => completePaymentData(id, { operationNumber }))
+              }
+            />
+          )}
+          {!canApprove && item.operationNumber && (
             <p className="text-xs font-medium text-red-700">
-              {!item.operationNumber
-                ? "Completa el número de operación desde el pedido antes de validar."
-                : "La cuenta receptora no coincide; no se puede validar."}
+              La cuenta receptora no coincide; no se puede validar.
             </p>
           )}
           <div className="flex gap-2">
@@ -379,6 +393,66 @@ export function PaymentReviewBoard({ data }: { data: PaymentReviewBoardData }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Escribir a mano el nº de operación, aquí mismo.
+ *
+ * POR QUÉ ESTÁ EN ESTA PANTALLA Y NO SOLO EN EL PEDIDO. Quien valida es quien
+ * tiene el comprobante delante; mandarlo al Master a copiar ocho dígitos y
+ * volver era fricción sin contrapartida. La separación de responsabilidades que
+ * importa —que no sea la misma persona la que transcribe y la que da por bueno—
+ * no la sostiene la navegación, que se salta con dos clics, sino el guardarraíl
+ * del servidor (0131). Por eso el campo puede vivir cómodo acá.
+ *
+ * El aviso lo dice ANTES de escribir, no después de un error: quien lo rellena
+ * tiene que saber que el pago pasará a otra persona, o creerá que la pantalla
+ * se rompió.
+ */
+function MissingOperationField({
+  paymentId,
+  pending,
+  onComplete,
+}: {
+  paymentId: string;
+  pending: boolean;
+  onComplete: (paymentId: string, operationNumber: string) => void;
+}) {
+  const [value, setValue] = useState("");
+  // El mismo mínimo que aplica el servidor. Repetirlo acá no es duplicar la
+  // regla: es no dejar que el botón invite a un envío que ya se sabe que falla.
+  const usable = value.replace(/[^a-z0-9]/gi, "").length >= 4;
+
+  return (
+    <div className="space-y-1.5 rounded-lg bg-amber-50 px-2.5 py-2">
+      <p className="text-xs text-amber-900">
+        Sin nº de operación no se puede validar. Cópialo del comprobante; si la captura está
+        recortada, pide al cliente la constancia completa.
+      </p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="Nº de operación"
+          autoComplete="off"
+          inputMode="numeric"
+          aria-label="Nº de operación"
+          className="w-40 rounded-lg border border-amber-200 px-2 py-1 text-xs"
+        />
+        <button
+          type="button"
+          disabled={pending || !usable}
+          onClick={() => onComplete(paymentId, value)}
+          className="rounded-lg bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+        >
+          Guardar número
+        </button>
+      </div>
+      <p className="text-[11px] text-amber-800">
+        Lo validará otra persona: quien escribe el número no puede darlo por bueno.
+      </p>
     </div>
   );
 }

@@ -28,6 +28,7 @@ import {
   type YapeRecipientCheck,
 } from "@/lib/yape-recipient";
 import { normalizePhone } from "@/lib/phone";
+import { typedTheOperationNumber } from "@/lib/payment-review";
 import {
   canRevealPickupKey,
   describeBlockers,
@@ -699,7 +700,10 @@ async function loadPayment(paymentId: string) {
   const admin = createAdminSupabase();
   const { data } = await admin
     .from("order_payments")
-    .select("id,order_id,store_id,kind,validation_status,operation_number,vision,notes")
+    .select(
+      "id,order_id,store_id,kind,validation_status,operation_number," +
+        "operation_completed_by,vision,notes",
+    )
     .eq("id", paymentId)
     .maybeSingle();
   return data as
@@ -710,6 +714,8 @@ async function loadPayment(paymentId: string) {
         kind: string;
         validation_status: string;
         operation_number: string | null;
+        /** Quién lo transcribió a mano; nulo si lo leyó la visión. */
+        operation_completed_by: string | null;
         vision: unknown;
         notes: string | null;
       }
@@ -734,6 +740,22 @@ export async function validatePayment(paymentId: string): Promise<PaymentActionS
         "Este pago no tiene nº de operación, así que no se puede validar. " +
         "Complétalo a mano (o pide el comprobante completo si la captura está recortada) " +
         "con «Corregir pago».",
+    };
+  }
+  // CUATRO OJOS SOBRE EL DATO QUE DETECTA DUPLICADOS. Un nº de operación
+  // transcrito a mano puede llevar un dígito cambiado, y eso no falla el día
+  // que se escribe: el índice único no choca con nada porque el número que se
+  // guardó no existe. Sale meses después, como un cobro repetido que nadie cazó.
+  //
+  // Revisar mejor no es una defensa; que lo mire otra persona sí. Solo aplica
+  // cuando hubo transcripción humana: si el número lo leyó la visión,
+  // `operation_completed_by` es nulo y no hay nada que contrastar.
+  if (typedTheOperationNumber(payment.operation_completed_by, ctx.userId)) {
+    return {
+      error:
+        "Escribiste tú el nº de operación de este pago, así que tiene que validarlo otra " +
+        "persona. Es el dato con el que se detectan los pagos duplicados: quien lo " +
+        "transcribe no puede ser quien lo da por bueno.",
     };
   }
   const admin = createAdminSupabase();
@@ -1121,7 +1143,14 @@ export async function completePaymentData(
   }
 
   const patch: Record<string, unknown> = {};
-  if (input.operationNumber !== undefined) patch.operation_number = operation;
+  if (input.operationNumber !== undefined) {
+    patch.operation_number = operation;
+    // Queda firmado quién lo transcribió, para que `validatePayment` pueda
+    // exigir que lo valide otra persona (0131). Se firma solo cuando de verdad
+    // se escribió un número: al borrarlo vuelve a nulo, que es «lo leyó la
+    // visión o no hay nada», y no deja a alguien atado a un dato que ya no está.
+    patch.operation_completed_by = operation ? ctx.userId : null;
+  }
   if (input.amount !== undefined) patch.amount = input.amount;
   if (input.paidAt !== undefined) patch.paid_at = input.paidAt;
   if (input.payerName !== undefined) patch.payer_name = input.payerName?.trim() || null;
