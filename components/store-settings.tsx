@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useActionState, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card, Section, SimpleTable } from "@/components/ui";
+import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import { STORE_STATUSES } from "@/lib/store-settings";
 import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
@@ -505,7 +506,7 @@ function AliclikSection({
     : `${siteUrl}/api/webhooks/aliclik/${storeId}?secret=${
         hasSecret ? "<TU_SECRETO_DE_ESTA_TIENDA>" : "<GENERA_EL_SECRETO_ABAJO>"
       }`;
-  const [copied, setCopied] = useState(false);
+  const { state: copied, copy } = useCopyToClipboard();
 
   return (
     <Section
@@ -613,14 +614,10 @@ function AliclikSection({
               </code>
               <button
                 type="button"
-                onClick={() => {
-                  void navigator.clipboard.writeText(url);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 1500);
-                }}
+                onClick={() => copy(url)}
                 className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
               >
-                {copied ? "Copiado" : "Copiar"}
+                {copyLabel(copied)}
               </button>
             </div>
             <p className="mt-2 text-xs text-slate-500">
@@ -653,7 +650,7 @@ function KapsoWebhookSection({
     : `${siteUrl}/api/webhooks/kapso/${storeId}?secret=${
         hasSecret ? "<TU_SECRETO_DE_ESTA_TIENDA>" : "<GENERA_EL_SECRETO_ABAJO>"
       }`;
-  const [copied, setCopied] = useState(false);
+  const { state: copied, copy } = useCopyToClipboard();
   return (
     <Section
       title="Webhooks de Kapso"
@@ -709,18 +706,10 @@ function KapsoWebhookSection({
             {revealed ? (
               <button
                 type="button"
-                onClick={() => {
-                  navigator.clipboard?.writeText(url).then(
-                    () => {
-                      setCopied(true);
-                      setTimeout(() => setCopied(false), 1500);
-                    },
-                    () => {},
-                  );
-                }}
+                onClick={() => copy(url)}
                 className="shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
               >
-                {copied ? "¡Copiado!" : "Copiar"}
+                {copyLabel(copied)}
               </button>
             ) : null}
           </div>
