@@ -1,20 +1,19 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Copiar un dato al portapapeles, con acuse.
  *
- * POR QUÉ EXISTE. Copiar al portapapeles estaba escrito a mano en tres sitios
+ * POR QUÉ EXISTE. Copiar al portapapeles estaba escrito a mano en cuatro sitios
  * —`store-settings.tsx` (dos veces) y `leads-drawer.tsx` (dos veces)— y las
- * cuatro copias ya habían divergido en el acuse: unas dicen «Copiado», otra
+ * cuatro copias ya habían divergido en el acuse: unas decían «Copiado», otra
  * «¡Copiado!», otra «copiado» en minúscula, y los tiempos de espera no
- * coinciden. Ninguna anuncia el cambio a un lector de pantalla. Añadir una
+ * coincidían. Ninguna anunciaba el cambio a un lector de pantalla. Añadir una
  * quinta para el teléfono habría sido plantar el mismo problema una vez más.
  *
- * Las cuatro que ya existen NO se tocan aquí: cambiarlas es un cambio aparte,
- * con su propia revisión. Lo que este componente garantiza es que a partir de
- * ahora no haga falta escribirlo otra vez.
+ * Las cuatro llaman ya a `useCopyToClipboard`; el detalle de lo que cada una
+ * hacía mal está en la documentación del hook, más abajo.
  *
  * EL PORTAPAPELES FALLA MÁS DE LO QUE PARECE. `navigator.clipboard` no existe
  * en contextos no seguros y el navegador puede denegar el permiso; en ese caso
@@ -23,6 +22,101 @@ import { useEffect, useRef, useState } from "react";
  * copió — peor que no ofrecer el botón. Aquí un fallo deja el botón como
  * estaba y lo dice.
  */
+
+export type CopyState = "idle" | "ok" | "fail";
+
+/**
+ * Copiar al portapapeles, con acuse y sin sorpresas.
+ *
+ * ESTABA ESCRITO A MANO EN CUATRO SITIOS y las cuatro copias eran distintas,
+ * en la forma y en lo que hacían mal:
+ *
+ *   store-settings, webhook de Aliclik → `void writeText(url)` y a continuación
+ *     `setCopied(true)` SIN esperar nada. Si el portapapeles falla, el botón
+ *     dice «Copiado» igual y la promesa rechazada sube sin manejar. Decir que se
+ *     copió algo que no se copió es peor que no ofrecer el botón: quien lo lee
+ *     se va a pegar un secreto que no tiene.
+ *   store-settings, webhook de Kapso  → `.then(ok, () => {})`. El fallo se
+ *     traga en silencio y el botón simplemente no reacciona.
+ *   leads-drawer, copiar teléfono    → try/catch con el catch vacío. Igual.
+ *   leads-drawer, copiar pedido      → try/catch con el catch vacío. Igual.
+ *
+ * Y ninguna cancelaba su temporizador al desmontar, que en un DRAWER es el caso
+ * normal: copias y cierras.
+ *
+ * El hook —y no un componente— porque los cuatro sitios son botones de TEXTO
+ * con etiquetas propias («Copiar», «copiar», `Copiar ${handle}`, «Copiar
+ * pedido»). Meterlos todos en `CopyButton` les habría cambiado el aspecto; lo
+ * que tenían que compartir es la conducta, no la forma.
+ */
+export function useCopyToClipboard(resetMs = 1600): {
+  state: CopyState;
+  copy: (value: string) => void;
+  reset: () => void;
+} {
+  const [state, setState] = useState<CopyState>("idle");
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
+
+  const copy = useCallback(
+    (value: string) => {
+      if (timer.current) clearTimeout(timer.current);
+      // `navigator.clipboard` no existe en contextos no seguros y el navegador
+      // puede denegar el permiso: ahí `writeText` RECHAZA. Se captura para que
+      // el acuse diga la verdad, y porque una promesa rota sin manejar sube
+      // como error no capturado.
+      const done = (next: CopyState) => {
+        if (!alive.current) return;
+        setState(next);
+        timer.current = setTimeout(() => {
+          if (alive.current) setState("idle");
+        }, resetMs);
+      };
+      try {
+        const write = navigator.clipboard?.writeText(value);
+        if (!write) return done("fail");
+        void write.then(
+          () => done("ok"),
+          () => done("fail"),
+        );
+      } catch {
+        done("fail");
+      }
+    },
+    [resetMs],
+  );
+
+  // Bajar el acuse a mano. Hace falta cuando lo COPIADO deja de existir: el
+  // panel de pedido generado se vacía al cambiar de lead y al volver a generar,
+  // y un «Copiado» heredado se leería como que el pedido NUEVO ya está copiado.
+  const reset = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    setState("idle");
+  }, []);
+
+  return { state, copy, reset };
+}
+
+/**
+ * El texto del botón según cómo fue.
+ *
+ * Vive acá para que las cuatro pantallas digan lo MISMO. Antes cada una tenía
+ * su acuse —«Copiado», «¡Copiado!», «copiado» en minúscula— y ninguna decía
+ * nada cuando fallaba: quien lo usaba no distinguía «ya está» de «no se pudo».
+ */
+export function copyLabel(state: CopyState, idle = "Copiar"): string {
+  if (state === "ok") return "Copiado";
+  if (state === "fail") return "No se pudo copiar";
+  return idle;
+}
+
 export function CopyButton({
   value,
   label,
@@ -34,29 +128,14 @@ export function CopyButton({
   label: string;
   className?: string;
 }) {
-  const [state, setState] = useState<"idle" | "ok" | "fail">("idle");
-  // El temporizador se cancela al desmontar: sin esto, cerrar el panel justo
-  // después de copiar deja un setState apuntando a un componente que ya no está.
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const { state, copy } = useCopyToClipboard();
 
   if (!value) return null;
-
-  async function copy() {
-    if (timer.current) clearTimeout(timer.current);
-    try {
-      await navigator.clipboard.writeText(value as string);
-      setState("ok");
-    } catch {
-      setState("fail");
-    }
-    timer.current = setTimeout(() => setState("idle"), 1600);
-  }
 
   return (
     <button
       type="button"
-      onClick={copy}
+      onClick={() => copy(value)}
       title={state === "fail" ? `No se pudo copiar ${label}` : `Copiar ${label}`}
       aria-label={`Copiar ${label}`}
       className={`inline-flex shrink-0 items-center rounded p-0.5 align-middle transition-colors ${

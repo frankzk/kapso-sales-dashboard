@@ -3,6 +3,7 @@
 import { mergeConversationMessages } from "@/lib/conversation-merge";
 import { type ReactNode, useActionState, useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { CallQr } from "@/components/call-qr";
+import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import {
   adObjectiveLabel,
@@ -367,7 +368,7 @@ export function LeadDrawer({
 }: LeadDrawerProps) {
   const handoffTone = categoryOf(lead.status) === "hot" ? "red" : "amber";
   const [orderOpen, setOrderOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { state: copied, copy } = useCopyToClipboard();
   const [confirmingWon, startConfirmWon] = useTransition();
   const readyReportedRef = useRef(false);
 
@@ -433,16 +434,6 @@ export function LeadDrawer({
   const canCall = leadCanCall(lead);
   const initial = (lead.name || handle).trim()[0]?.toUpperCase() || "?";
 
-  async function copyPhone() {
-    try {
-      await navigator.clipboard.writeText(handle);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard no disponible */
-    }
-  }
-
   return (
     <>
       <div className="fixed inset-0 z-10 bg-slate-900/30" onClick={onClose} aria-hidden="true" />
@@ -467,14 +458,14 @@ export function LeadDrawer({
                 <span className="tabular-nums text-slate-700">{handle}</span>
                 <button
                   type="button"
-                  onClick={copyPhone}
+                  onClick={() => copy(handle)}
                   className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline"
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="9" y="9" width="11" height="11" rx="2" />
                     <path d="M5 15V5a2 2 0 0 1 2-2h10" />
                   </svg>
-                  {copied ? "copiado" : "copiar"}
+                  {copyLabel(copied, "copiar")}
                 </button>
                 {canCall ? (
                   <a href={`tel:+${lead.phone}`} className="text-xs text-slate-400 hover:text-slate-600">
@@ -544,14 +535,14 @@ export function LeadDrawer({
                 </div>
                 <button
                   type="button"
-                  onClick={copyPhone}
+                  onClick={() => copy(handle)}
                   className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-brand-700 hover:bg-slate-50"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="9" y="9" width="11" height="11" rx="2" />
                     <path d="M5 15V5a2 2 0 0 1 2-2h10" />
                   </svg>
-                  {copied ? "Copiado" : `Copiar ${handle}`}
+                  {copyLabel(copied, `Copiar ${handle}`)}
                 </button>
               </div>
             )}
@@ -2256,12 +2247,12 @@ function OrderFormPanel({
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const [generatedOrder, setGeneratedOrder] = useState<NonNullable<LeadActionState["generatedOrder"]> | null>(null);
-  const [copiedOrder, setCopiedOrder] = useState(false);
+  const { state: copiedOrder, copy: copyOrder, reset: resetCopiedOrder } = useCopyToClipboard();
 
   useEffect(() => {
     let alive = true;
     setGeneratedOrder(null);
-    setCopiedOrder(false);
+    resetCopiedOrder();
     loadOrderDraft(leadId).then((res) => {
       if (!alive) return;
       if ("error" in res) {
@@ -2285,7 +2276,7 @@ function OrderFormPanel({
     return () => {
       alive = false;
     };
-  }, [leadId]);
+  }, [leadId, resetCopiedOrder]);
 
   const subtotal = items.reduce((s, it) => s + (it.unitPrice ?? 0) * (Number(it.quantity) || 0), 0);
   const discountAmount =
@@ -2322,7 +2313,7 @@ function OrderFormPanel({
     }
     setMsg(null);
     setGeneratedOrder(null);
-    setCopiedOrder(false);
+    resetCopiedOrder();
     startTransition(async () => {
       const res = await generateOrder(leadId, {
         lineItems: items.map((it) => ({
@@ -2366,16 +2357,9 @@ function OrderFormPanel({
     });
   }
 
-  async function copyGeneratedOrder() {
+  function copyGeneratedOrder() {
     if (!generatedOrder) return;
-    try {
-      const label = generatedOrder.name || generatedOrder.id || "Pedido generado";
-      await navigator.clipboard.writeText(label);
-      setCopiedOrder(true);
-      setTimeout(() => setCopiedOrder(false), 1400);
-    } catch {
-      /* clipboard no disponible */
-    }
+    copyOrder(generatedOrder.name || generatedOrder.id || "Pedido generado");
   }
 
   return (
@@ -2665,7 +2649,7 @@ function OrderFormPanel({
                   onClick={copyGeneratedOrder}
                   className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
                 >
-                  {copiedOrder ? "Copiado" : "Copiar pedido"}
+                  {copyLabel(copiedOrder, "Copiar pedido")}
                 </button>
                 {generatedOrder.adminUrl && (
                   <a
