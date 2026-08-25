@@ -64,6 +64,16 @@ describe("findDuplicate — identificadores fuertes", () => {
 
   it("acepta una operación bancaria corta solo cuando se transcribe manualmente", () => {
     expect(normalizeOperationNumber("5782")).toBeNull();
+    // Pero CON un rótulo de operación reconocido detrás sí vale: los vouchers
+    // de papel de BCP (`NO.OPE.: 5782`) y BBVA (`OPER.: 4437`) traen cuatro
+    // dígitos, y el rótulo es la evidencia que la longitud sustituía. Es además
+    // la misma vara que `normalizeManualOperationNumber` aplica desde siempre a
+    // lo que escribe una persona.
+    expect(normalizeOperationNumber("5782", { labelled: true })).toBe("5782");
+    expect(normalizeOperationNumber("4437", { labelled: true })).toBe("4437");
+    // Tres dígitos no pasan ni con rótulo: ahí sigue viviendo el código de
+    // seguridad de Yape.
+    expect(normalizeOperationNumber("565", { labelled: true })).toBeNull();
     expect(normalizeManualOperationNumber(" 57-82 ")).toBe("5782");
     expect(normalizeManualOperationNumber("030")).toBeNull();
   });

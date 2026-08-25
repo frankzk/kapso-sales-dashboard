@@ -444,7 +444,9 @@ export async function registerPayment(
   // El OCR mantiene el umbral estricto para no confundir el código de
   // seguridad de tres dígitos con el nº de operación.
   const typedOperation = normalizeManualOperationNumber(input.operationNumber);
-  const readOperation = normalizeOperationNumber(vision.fields.operationNumber);
+  const readOperation = normalizeOperationNumber(vision.fields.operationNumber, {
+    labelled: Boolean(vision.fields.operationLabel),
+  });
   const identityDiscrepancy = Boolean(
     readOperation && typedOperation && readOperation !== typedOperation,
   );

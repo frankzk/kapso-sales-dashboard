@@ -247,6 +247,59 @@ describe("extractYapeVoucher", () => {
     expect(labelIsNotOperationNumber(null)).toBe(false);
   });
 
+  // LOS COMPROBANTES DE PAPEL. El ticket del cajero del BCP rotula «NO.OPE.» y
+  // el del depósito en agente del BBVA rotula «OPER.», los dos con un número de
+  // CUATRO dígitos —`NO.OPE.: 5782`, `OPER.: 4437`—. El mínimo de 6 los tiraba
+  // aunque el lector los hubiera leído bien: `indicators.operacion` decía true,
+  // el monto y la fecha salían correctos, y el número acababa en null.
+  //
+  // El 6 existía por «podría ser el código de seguridad», escrito cuando el
+  // lector no devolvía el rótulo. Ahora sí lo devuelve, y el rótulo es la
+  // evidencia que la longitud sustituía.
+  it("acepta el número corto de un voucher de papel, si el rótulo lo respalda", async () => {
+    for (const [label, number] of [
+      ["NO.OPE.", "5782"],
+      ["OPER.", "4437"],
+    ] as const) {
+      const out = await extractYapeVoucher("AAAA", "image/jpeg", {
+        ...OPTS,
+        fetchImpl: reply({ operation_number: number, operation_label: label }),
+      });
+      expect(out.operationNumber, label).toBe(number);
+      expect(out.operationLabel, label).toBe(label);
+    }
+  });
+
+  it("pero SIN rótulo reconocido, cuatro caracteres siguen sin bastar", async () => {
+    // Es la mitad que protege: sin saber de dónde salió el número, un valor
+    // corto puede ser el código de seguridad, el monto o un trozo de otro campo.
+    const out = await extractYapeVoucher("AAAA", "image/jpeg", {
+      ...OPTS,
+      fetchImpl: reply({ operation_number: "5782", operation_label: null }),
+    });
+    expect(out.operationNumber).toBeNull();
+  });
+
+  it("y el código de seguridad de tres dígitos no pasa ni con rótulo", async () => {
+    // Tres es menos que cuatro, así que el guardarraíl aguanta por longitud; y
+    // además su rótulo está en la lista de los que NO valen.
+    for (const label of ["Nro. de operación", "Código de seguridad"]) {
+      const out = await extractYapeVoucher("AAAA", "image/jpeg", {
+        ...OPTS,
+        fetchImpl: reply({ operation_number: "565", operation_label: label }),
+      });
+      expect(out.operationNumber, label).toBeNull();
+    }
+  });
+
+  it("el prompt nombra los dos rótulos de papel", async () => {
+    const prompt = await capturePrompt();
+    expect(prompt).toContain("NO.OPE.");
+    expect(prompt).toContain("OPER.");
+    // Y avisa de con qué NO confundirlos en ese mismo ticket.
+    expect(prompt).toContain("ARQC");
+  });
+
   it("el prompt también enumera los rótulos que NO valen", async () => {
     const prompt = await capturePrompt();
     for (const label of NOT_OPERATION_NUMBER_LABELS) expect(prompt).toContain(label);

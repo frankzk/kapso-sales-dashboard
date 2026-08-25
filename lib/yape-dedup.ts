@@ -120,10 +120,19 @@ export async function findOperationClash(
  * puede confundirlos cuando la captura es pequeña, por lo que un valor corto
  * nunca debe convertirse en una llave global capaz de bloquear otro pago.
  */
-export function normalizeOperationNumber(value: string | null | undefined): string | null {
+export function normalizeOperationNumber(
+  value: string | null | undefined,
+  opts: { labelled?: boolean } = {},
+): string | null {
   if (!value) return null;
   const cleaned = String(value).toUpperCase().replace(/[^A-Z0-9]/g, "");
-  return cleaned.length >= 6 ? cleaned : null;
+  // Con un rótulo de operación reconocido detrás, cuatro caracteres bastan: los
+  // vouchers de PAPEL de BCP (`NO.OPE.`) y BBVA (`OPER.`) traen operaciones de
+  // cuatro dígitos, y el rótulo es la evidencia que la longitud sustituía. Sin
+  // rótulo se mantiene el 6, que es lo que separa un nº de operación del código
+  // de seguridad de tres dígitos o de un monto suelto.
+  const min = opts.labelled ? 4 : 6;
+  return cleaned.length >= min ? cleaned : null;
 }
 
 /**
