@@ -4,7 +4,7 @@ import { getUserRoleSummary } from "@/lib/access";
 import { EmptyState } from "@/components/ui";
 import { TeamManager, type TeamMember, type RiderRow } from "@/components/team";
 import type { Role } from "@/lib/types";
-import { permissionsFor } from "@/lib/permissions";
+import { GRANTED_ONE_BY_ONE, permissionsFor } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -65,7 +65,7 @@ export default async function TeamPage({
       .from("user_permissions")
       .select("user_id, permission, granted")
       .eq("org_id", selected.id)
-      .in("permission", ["payments.validate", "shalom.validate_payment"]),
+      .in("permission", [...GRANTED_ONE_BY_ONE.map((g) => g.permission), "shalom.validate_payment"]),
   ]);
 
   const stores = (storeRows as { id: string; name: string }[]) ?? [];
@@ -105,10 +105,16 @@ export default async function TeamPage({
       email: emailById.get(m.user_id) ?? m.user_id,
       role: m.role,
       stores: accessByUser.get(m.user_id) ?? [],
-      can_validate_payments: permissionsFor(
-        [m.role],
-        paymentPermissionByUser.get(m.user_id) ?? [],
-      ).has("payments.validate"),
+      // Un mapa y no un booleano por permiso: cada vez que se añada uno a
+      // GRANTED_ONE_BY_ONE aparece solo, sin tocar el tipo ni esta consulta.
+      grants: Object.fromEntries(
+        GRANTED_ONE_BY_ONE.map((entry) => [
+          entry.permission,
+          permissionsFor([m.role], paymentPermissionByUser.get(m.user_id) ?? []).has(
+            entry.permission,
+          ),
+        ]),
+      ),
     }))
     .sort((a, b) => a.email.localeCompare(b.email));
 

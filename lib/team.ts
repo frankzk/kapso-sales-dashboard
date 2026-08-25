@@ -84,6 +84,12 @@ export function canSetPaymentValidator(
   grant: boolean,
   actorRole: Role,
   activeValidatorIds: readonly string[],
+  /**
+   * Cómo se llama el permiso, para el mensaje. `null` desactiva la regla del
+   * último: hay permisos cuya ausencia total no deja nada parado, y ahí exigir
+   * que quede alguien sería un candado sin motivo.
+   */
+  label: string | null = "validar pagos",
 ): GuardResult {
   const target = members.find((member) => member.user_id === targetUserId);
   if (!target) return { ok: false, reason: "No es miembro de la organizacion." };
@@ -91,8 +97,11 @@ export function canSetPaymentValidator(
     return { ok: false, reason: "Solo un owner puede modificar los permisos de otro owner." };
   }
   const active = new Set(activeValidatorIds);
-  if (!grant && active.has(targetUserId) && active.size <= 1) {
-    return { ok: false, reason: "Debe quedar al menos una persona autorizada para validar pagos." };
+  if (label && !grant && active.has(targetUserId) && active.size <= 1) {
+    return {
+      ok: false,
+      reason: `Debe quedar al menos una persona autorizada para ${label.toLocaleLowerCase("es")}.`,
+    };
   }
   return { ok: true };
 }

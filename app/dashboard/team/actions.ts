@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import type { Role } from "@/lib/types";
-import { permissionsFor } from "@/lib/permissions";
+import { GRANTED_ONE_BY_ONE, permissionsFor, type Permission } from "@/lib/permissions";
 import {
   canAddMember,
   canRemoveMember,
@@ -43,16 +43,25 @@ async function orgMembers(admin: SupabaseClient, orgId: string): Promise<MemberL
   return (data as MemberLite[]) ?? [];
 }
 
-async function orgPaymentValidatorIds(
+/**
+ * Quién tiene HOY un permiso de concesión individual.
+ *
+ * Recibe cuál: antes miraba siempre `payments.validate`, así que al añadir el
+ * segundo permiso la comprobación de «no dejes a la organización sin nadie»
+ * habría contado a los validadores para decidir sobre los correctores — y
+ * habría dejado quitar al último corrector mientras hubiera un validador.
+ */
+async function orgGrantHolderIds(
   admin: SupabaseClient,
   orgId: string,
   members: MemberLite[],
+  permission: Permission,
 ): Promise<{ ids: string[]; error?: string }> {
   const { data, error } = await admin
     .from("user_permissions")
     .select("user_id, permission, granted")
     .eq("org_id", orgId)
-    .in("permission", ["payments.validate", "shalom.validate_payment"]);
+    .in("permission", [...GRANTED_ONE_BY_ONE.map((g) => g.permission), "shalom.validate_payment"]);
   if (error) return { ids: [], error: error.message };
   const grantsByUser = new Map<string, { permission: string; granted: boolean }[]>();
   for (const row of
@@ -64,9 +73,7 @@ async function orgPaymentValidatorIds(
   return {
     ids: members
       .filter((member) =>
-        permissionsFor([member.role], grantsByUser.get(member.user_id) ?? []).has(
-          "payments.validate",
-        ),
+        permissionsFor([member.role], grantsByUser.get(member.user_id) ?? []).has(permission),
       )
       .map((member) => member.user_id),
   };
@@ -174,16 +181,24 @@ export async function removeMember(
   const guard = canRemoveMember(members, userId, actor.role);
   if (!guard.ok) return { error: guard.reason };
 
-  const validators = await orgPaymentValidatorIds(admin, orgId, members);
-  if (validators.error) return { error: validators.error };
-  const validatorGuard = canSetPaymentValidator(
-    members,
-    userId,
-    false,
-    actor.role,
-    validators.ids,
-  );
-  if (!validatorGuard.ok) return { error: validatorGuard.reason };
+  // Sacar a alguien del equipo le quita TODOS sus permisos individuales, así
+  // que hay que mirarlos uno a uno. Con la comprobación fijada en
+  // `payments.validate` se podía echar a la última persona capaz de corregir un
+  // pago y nadie se enteraba hasta que hiciera falta corregir uno.
+  for (const entry of GRANTED_ONE_BY_ONE) {
+    if (!entry.lastOneMatters) continue;
+    const holders = await orgGrantHolderIds(admin, orgId, members, entry.permission);
+    if (holders.error) return { error: holders.error };
+    const holderGuard = canSetPaymentValidator(
+      members,
+      userId,
+      false,
+      actor.role,
+      holders.ids,
+      entry.label,
+    );
+    if (!holderGuard.ok) return { error: holderGuard.reason };
+  }
 
   // Revoke per-store access for this org's stores, then drop the membership.
   const { data: stores } = await admin.from("stores").select("id").eq("org_id", orgId);
@@ -255,7 +270,14 @@ export async function setStoreAccess(
   return { notice: "Acceso actualizado." };
 }
 
-/** Concede o revoca la capacidad financiera de validar pagos. */
+/**
+ * Concede o revoca uno de los permisos de concesión individual.
+ *
+ * El permiso llega en el formulario, PERO se comprueba contra
+ * `GRANTED_ONE_BY_ONE` antes de escribir nada: sin esa comprobación, cualquiera
+ * que pudiera abrir Equipo podría concederse `closure.refund` cambiando un
+ * campo oculto del navegador.
+ */
 export async function setPaymentValidationPermission(
   _prev: TeamActionState,
   formData: FormData,
@@ -264,19 +286,26 @@ export async function setPaymentValidationPermission(
   const actor = await requireOrgAdmin(orgId);
   if (!actor) return { error: "Sin permiso." };
 
+  // Por defecto el de siempre: un formulario viejo en una pestaña abierta desde
+  // antes del cambio sigue concediendo lo que su casilla decía.
+  const permission = String(formData.get("permission") ?? "payments.validate");
+  const entry = GRANTED_ONE_BY_ONE.find((g) => g.permission === permission);
+  if (!entry) return { error: "Ese permiso no se concede desde acá." };
+
   const userId = String(formData.get("user_id") ?? "");
   const grant = String(formData.get("grant") ?? "") === "1";
   const admin = createAdminSupabase();
   const members = await orgMembers(admin, orgId);
-  const validators = await orgPaymentValidatorIds(admin, orgId, members);
-  if (validators.error) return { error: validators.error };
+  const holders = await orgGrantHolderIds(admin, orgId, members, entry.permission);
+  if (holders.error) return { error: holders.error };
 
   const guard = canSetPaymentValidator(
     members,
     userId,
     grant,
     actor.role,
-    validators.ids,
+    holders.ids,
+    entry.lastOneMatters ? entry.label : null,
   );
   if (!guard.ok) return { error: guard.reason };
 
@@ -284,7 +313,7 @@ export async function setPaymentValidationPermission(
     {
       user_id: userId,
       org_id: orgId,
-      permission: "payments.validate",
+      permission: entry.permission,
       granted: grant,
       granted_by: actor.userId,
     },
@@ -293,7 +322,9 @@ export async function setPaymentValidationPermission(
   if (error) return { error: error.message };
 
   revalidatePath("/dashboard/team");
-  return { notice: grant ? "Puede validar pagos." : "Permiso de validacion retirado." };
+  return {
+    notice: grant ? `Ahora puede: ${entry.label}.` : `Permiso retirado: ${entry.label}.`,
+  };
 }
 
 // ---------------------------------------------------------------------------

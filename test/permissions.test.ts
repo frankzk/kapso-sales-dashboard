@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  GRANTED_ONE_BY_ONE,
+  PERMISSIONS,
   hasPermission,
+  isGrantedOneByOne,
   isPermission,
   isReadOnly,
   permissionsFor,
@@ -14,7 +17,12 @@ describe("permissionsFor", () => {
       expect(p.has("master.edit")).toBe(true);
       expect(p.has("shalom.view_pickup_key")).toBe(true);
       expect(p.has("shalom.reveal_pickup_key")).toBe(true);
-      expect(p.has("shalom.override_payment_validation")).toBe(true);
+      // Los dos permisos financieros van juntos y siguen la misma regla: el
+      // owner los conserva por continuidad, el admin los recibe persona por
+      // persona desde Equipo. Corregir un pago —moverlo a otro pedido o forzar
+      // su estado— es de la misma familia que darlo por bueno, y venía incluido
+      // en el rol `admin`, que son catorce personas.
+      expect(p.has("shalom.override_payment_validation")).toBe(role === "owner");
       expect(p.has("payments.validate")).toBe(role === "owner");
       expect(p.has("costs.manage")).toBe(true);
       expect(p.has("closure.finance")).toBe(true);
@@ -58,6 +66,54 @@ describe("permissionsFor", () => {
   it("varios roles se acumulan: gana el más permisivo", () => {
     const p = permissionsFor(["viewer", "admin"]);
     expect(p.has("shalom.view_pickup_key")).toBe(true);
+  });
+});
+
+describe("los permisos de concesión individual salen de UNA lista", () => {
+  // POR QUÉ. `payments.validate` ya se concedía persona por persona, pero la
+  // regla vivía en un comentario y en tres `.in([...])` escritos a mano: la
+  // consulta de Equipo, la de sus acciones y el `upsert`. Con esa forma de
+  // hacerlo, `shalom.override_payment_validation` se quedó dentro del rol
+  // `admin` —catorce personas— sin que nadie lo hubiera decidido.
+  it("ninguno viene con el rol admin", () => {
+    for (const entry of GRANTED_ONE_BY_ONE) {
+      expect(permissionsFor(["admin"]).has(entry.permission), entry.permission).toBe(false);
+    }
+  });
+
+  it("y el owner los conserva todos, por continuidad", () => {
+    for (const entry of GRANTED_ONE_BY_ONE) {
+      expect(permissionsFor(["owner"]).has(entry.permission), entry.permission).toBe(true);
+    }
+  });
+
+  it("una concesión individual los da a quien sea", () => {
+    for (const entry of GRANTED_ONE_BY_ONE) {
+      expect(
+        permissionsFor(["admin"], [{ permission: entry.permission, granted: true }]).has(
+          entry.permission,
+        ),
+        entry.permission,
+      ).toBe(true);
+    }
+  });
+
+  it("corregir pagos es uno de ellos", () => {
+    // La razón de todo el cambio: mover dinero de un pedido a otro es de la
+    // misma familia que darlo por bueno.
+    expect(GRANTED_ONE_BY_ONE.map((g) => g.permission)).toContain(
+      "shalom.override_payment_validation",
+    );
+    expect(isGrantedOneByOne("shalom.override_payment_validation")).toBe(true);
+    expect(isGrantedOneByOne("master.edit")).toBe(false);
+  });
+
+  it("todos son permisos que existen de verdad", () => {
+    // Un nombre mal escrito acá dibujaría una casilla en Equipo que no concede
+    // nada, y nadie lo notaría hasta que alguien no pudiera hacer su trabajo.
+    for (const entry of GRANTED_ONE_BY_ONE) {
+      expect(PERMISSIONS, entry.permission).toContain(entry.permission);
+    }
   });
 });
 

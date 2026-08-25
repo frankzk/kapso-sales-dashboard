@@ -43,6 +43,10 @@ export const PERMISSIONS = [
   // permiso sin poder registrar/reemplazar claves ni saltarse bloqueos.
   "shalom.reveal_pickup_key",
   "shalom.view_pickup_key",
+  // Reasignar un pago a otro pedido o forzar su estado. Se concede persona por
+  // persona, igual que `payments.validate`: mover dinero de un pedido a otro es
+  // de la misma familia que darlo por bueno, y venía incluido en el rol `admin`
+  // —catorce personas— sin que nadie lo hubiera decidido.
   "shalom.override_payment_validation",
   // Costos
   "costs.manage",
@@ -105,17 +109,71 @@ export function isPermission(value: string): value is Permission {
  *    la genera el servidor y solo se revela por el circuito auditado de pagos.
  *  - `viewer` — nada.
  */
+/**
+ * Permisos que no vienen con el rol `admin` y se conceden persona por persona
+ * desde Equipo. El `owner` los conserva por continuidad operativa y puede
+ * revocárselos a sí mismo cuando ya haya otra persona con ellos.
+ *
+ * POR QUÉ EXISTE LA LISTA, Y NO SOLO LA COSTUMBRE. `payments.validate` ya se
+ * trataba así, pero la regla vivía en un comentario y en tres `.in([...])`
+ * escritos a mano —la consulta de Equipo, la de sus acciones y el `upsert`—.
+ * Añadir el segundo permiso a esa manera de hacerlo habría sido escribir la
+ * misma lista en un cuarto sitio.
+ *
+ * De acá salen las dos cosas a la vez: qué se descuenta del rol `admin` y qué
+ * casillas dibuja Equipo. Así no puede haber un permiso que se quite del rol y
+ * nadie pueda conceder — que lo dejaría sin poder ejercer NADIE.
+ */
+export const GRANTED_ONE_BY_ONE = [
+  {
+    permission: "payments.validate",
+    label: "Validar pagos",
+    /** Lo que se le dice a quien concede, no el nombre técnico. */
+    description: "Dar por bueno un comprobante y el dinero que representa.",
+    /** Sin nadie con este permiso, la cola de validación se queda parada. */
+    lastOneMatters: true,
+  },
+  {
+    permission: "shalom.override_payment_validation",
+    label: "Corregir pagos",
+    description: "Mover un pago al pedido correcto o forzar su estado.",
+    lastOneMatters: true,
+  },
+] as const satisfies readonly {
+  permission: Permission;
+  label: string;
+  description: string;
+  lastOneMatters: boolean;
+}[];
+
+const ONE_BY_ONE: ReadonlySet<string> = new Set(
+  GRANTED_ONE_BY_ONE.map((entry) => entry.permission),
+);
+
+/** ¿Este permiso se concede a mano en vez de venir con el rol? */
+export function isGrantedOneByOne(permission: string): boolean {
+  return ONE_BY_ONE.has(permission);
+}
+
 const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
   // El owner conserva la capacidad financiera por continuidad operativa, pero
   // puede revocarsela explicitamente cuando ya exista otro validador.
+  // El owner los conserva TODOS, también los de concesión individual: es la
+  // continuidad operativa, y puede revocárselos explícitamente cuando ya exista
+  // otra persona con el permiso. Descontárselos acá le habría quitado la
+  // capacidad de validar que ya tenía — lo cazaron las pruebas.
   owner: PERMISSIONS.filter((permission) => permission !== "shalom.validate_payment"),
   // Solo el owner (Frankz en la operación actual) confirma reembolsos. Un
   // administrador conserva el resto de facultades de cierre.
   admin: PERMISSIONS.filter(
     (permission) =>
       permission !== "closure.refund" &&
-      permission !== "payments.validate" &&
-      permission !== "shalom.validate_payment",
+      permission !== "shalom.validate_payment" &&
+      // Los de concesión individual se descuentan desde la lista, no uno a uno:
+      // enumerarlos acá era lo que dejó a `shalom.override_payment_validation`
+      // dentro del rol `admin` —catorce personas— cuando `payments.validate` ya
+      // se había sacado por la misma razón.
+      !ONE_BY_ONE.has(permission),
   ),
   // La vendedora carga la liquidación y corrige vínculos, pero NO la cierra:
   // cerrar congela lo que se le paga al motorizado y no se deshace.
