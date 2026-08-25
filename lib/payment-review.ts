@@ -8,6 +8,32 @@ export const PAYMENT_OBSERVED_STATUSES = [
 
 export type PaymentReviewLane = "pending" | "observed" | "validated";
 
+/**
+ * ¿Está esta persona a punto de validar un nº de operación que escribió ella?
+ *
+ * El nº de operación es lo que detecta pagos duplicados: el índice único vive
+ * sobre esa columna. Un dígito mal transcrito no falla el día que se escribe
+ * —el número inventado no choca con nada— y aparece meses después, como un
+ * cobro repetido que nadie cazó o un comprobante usado en dos pedidos.
+ *
+ * Contra eso no sirve revisar con más cuidado; sirve que lo mire otra persona.
+ * Medido antes de escribir la regla: de 13 pagos completados a mano, en 3 la
+ * misma persona escribió el número y validó el pago.
+ *
+ * NULO NO ES SOSPECHOSO. Si `completedBy` viene vacío, el número lo leyó la
+ * visión y no hay transcripción humana que contrastar: pedir un segundo par de
+ * ojos ahí sería fricción sin nada que proteger. Vive acá, y no dentro de la
+ * server action, para poder probar la regla sin arrastrar `next/headers` ni el
+ * cliente de Supabase.
+ */
+export function typedTheOperationNumber(
+  completedBy: string | null | undefined,
+  userId: string | null | undefined,
+): boolean {
+  if (!completedBy || !userId) return false;
+  return completedBy === userId;
+}
+
 const ORDER_CONTEXT_BATCH_SIZE = 40;
 
 /**
