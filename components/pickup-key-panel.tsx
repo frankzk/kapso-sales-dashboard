@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import {
   completePaymentData,
+  overridePaymentValidation,
   createVoucherUpload,
   loadPaymentPanel,
   readVoucherFields,
@@ -246,6 +247,10 @@ export function PickupKeyPanel({
             onValidate={(id) => run(() => validatePayment(id))}
             onReject={(id, reason) => run(() => rejectPayment(id, reason))}
             onComplete={(id, data) => run(() => completePaymentData(id, data))}
+            canOverride={panel.canOverride}
+            onReassign={(id, targetOrderName, reason) =>
+              run(() => overridePaymentValidation(id, { targetOrderName, reason }))
+            }
           />
         )}
       </section>
@@ -297,6 +302,10 @@ export function PickupKeyPanel({
         onValidate={(id) => run(() => validatePayment(id))}
         onReject={(id, reason) => run(() => rejectPayment(id, reason))}
         onComplete={(id, data) => run(() => completePaymentData(id, data))}
+        canOverride={panel.canOverride}
+        onReassign={(id, targetOrderName, reason) =>
+          run(() => overridePaymentValidation(id, { targetOrderName, reason }))
+        }
       />
 
       {panel.canRegister && (
@@ -446,6 +455,8 @@ function PaymentList({
   onValidate,
   onReject,
   onComplete,
+  canOverride,
+  onReassign,
 }: {
   payments: PaymentRow[];
   /** Las cuentas de cobro de la tienda, para juzgar el receptor de cada uno. */
@@ -456,6 +467,9 @@ function PaymentList({
   onValidate: (id: string) => void;
   onReject: (id: string, reason: string) => void;
   onComplete: (id: string, data: { operationNumber: string; amount: number | null; paidAt: string | null }) => void;
+  /** Mover el pago al pedido correcto. Solo para quien puede corregir. */
+  canOverride: boolean;
+  onReassign: (paymentId: string, targetOrderName: string, reason: string) => void;
 }) {
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [reason, setReason] = useState("");
@@ -570,9 +584,106 @@ function PaymentList({
               )}
             </div>
           )}
+          {/* Reasignar vive FUERA del bloque de validar/rechazar: un pago
+              cargado en el pedido equivocado casi siempre se descubre DESPUÉS
+              de validarlo, y ahí el bloque de arriba ya no se dibuja. Colgarlo
+              de la misma condición lo habría dejado invisible justo en el caso
+              que viene a resolver. */}
+          {canOverride && p.validation_status !== "rechazado" && (
+            <ReassignPayment payment={p} pending={pending} onReassign={onReassign} />
+          )}
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Mover un pago al pedido correcto.
+ *
+ * POR QUÉ EXISTE. Cargar el comprobante en el pedido de al lado es un error de
+ * dedo corriente, y hasta ahora la única salida era rechazarlo y volver a
+ * subirlo. Eso funciona —un rechazo libera el nº de operación— pero deja en el
+ * historial de la clienta un pago RECHAZADO, que se lee como «mandó un
+ * comprobante malo». No fue eso lo que pasó.
+ *
+ * La server action ya existía desde la 0049 y nunca se conectó a nada.
+ */
+function ReassignPayment({
+  payment,
+  pending,
+  onReassign,
+}: {
+  payment: PaymentRow;
+  pending: boolean;
+  onReassign: (paymentId: string, targetOrderName: string, reason: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [target, setTarget] = useState("");
+  const [reason, setReason] = useState("");
+  const ready = target.trim().length > 2 && reason.trim().length > 0;
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => setOpen(true)}
+        className="mt-1.5 text-[11px] font-medium text-slate-500 underline underline-offset-2 hover:text-slate-800 disabled:opacity-50"
+      >
+        Está en el pedido equivocado
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-1.5 space-y-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
+      <p className="text-xs font-semibold text-slate-700">Mover este pago a otro pedido</p>
+      <div className="flex flex-wrap gap-1.5">
+        <input
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          placeholder="#KP130243"
+          autoComplete="off"
+          aria-label="Pedido de destino"
+          className="w-36 rounded-lg border border-slate-200 px-2 py-1 text-xs"
+        />
+        <input
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Motivo (obligatorio)"
+          aria-label="Motivo de la corrección"
+          className="min-w-[10rem] flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs"
+        />
+      </div>
+      {/* Se dice ANTES, no como confirmación después: quien mueve dinero entre
+          pedidos tiene que saber que queda firmado en los dos. */}
+      <p className="text-[11px] text-slate-500">
+        Quedará en el historial de los dos pedidos, con tu nombre y el motivo.
+      </p>
+      <div className="flex gap-1.5">
+        <button
+          type="button"
+          disabled={pending || !ready}
+          onClick={() => {
+            onReassign(payment.id, target, reason);
+            setOpen(false);
+            setTarget("");
+            setReason("");
+          }}
+          className="rounded-lg bg-slate-800 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-900 disabled:opacity-50"
+        >
+          Mover el pago
+        </button>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-white"
+        >
+          Cancelar
+        </button>
+      </div>
+    </div>
   );
 }
 

@@ -1190,13 +1190,54 @@ export async function completePaymentData(
 }
 
 /**
+ * El pedido que se llama así, si quien pregunta puede verlo.
+ *
+ * Va con el cliente del USUARIO, no con el service role: la RLS es lo que
+ * impide mover un pago a un pedido de una tienda ajena, y consultarlo como
+ * administrador la desactivaría justo en la comprobación que importa.
+ *
+ * El nombre se compara sin distinguir mayúsculas y tolerando que falte el `#`,
+ * porque se teclea a mano desde otra pantalla. Si hay más de una coincidencia
+ * NO se elige una: mover dinero al pedido equivocado por adivinar es
+ * exactamente el error que esta pantalla viene a corregir.
+ */
+async function resolveOrderByName(name: string): Promise<string | null> {
+  const wanted = name.trim().replace(/^#/, "");
+  if (!wanted) return null;
+  const sb = await createServerSupabase();
+  const { data, error } = await sb
+    .from("order_master")
+    .select("order_id")
+    .ilike("order_name", `#${wanted}`)
+    .limit(2);
+  // Un error de lectura no puede leerse como "no existe": eso mandaría a
+  // corregir un nombre que estaba bien escrito.
+  if (error) return null;
+  const rows = (data ?? []) as { order_id: string }[];
+  return rows.length === 1 ? rows[0]!.order_id : null;
+}
+
+/**
  * Corrige un pago: cambia su estado o lo reasigna a otro pedido. Solo
  * administradores, con motivo obligatorio, y todo queda en el historial con el
  * valor anterior y el nuevo.
+ *
+ * EL DESTINO SE PIDE POR NOMBRE, NO POR UUID. Quien corrige está mirando
+ * «#KP130243» en una pantalla, no un identificador. Y resolverlo acá, con el
+ * cliente del USUARIO, hace que la RLS decida a qué pedidos puede mover: pasar
+ * un uuid a pelo desde el navegador dejaba esa puerta abierta a cualquiera que
+ * supiera inventarse uno.
+ *
+ * SE COMPRUEBA EL ACCESO A LOS DOS PEDIDOS. Antes solo se autorizaba el
+ * DESTINO —`authorizeOrder(input.targetOrderId ?? payment.order_id)`—, así que
+ * alguien con acceso a una tienda podía arrastrar un pago de otra a un pedido
+ * suyo: el dinero cambiaba de libro sin que nadie del origen lo autorizara. La
+ * acción nunca se llegó a conectar a la interfaz, así que el hueco no se
+ * explotó; conectarla sin cerrarlo habría sido peor que dejarla muerta.
  */
 export async function overridePaymentValidation(
   paymentId: string,
-  input: { status?: string; targetOrderId?: string; reason: string },
+  input: { status?: string; targetOrderName?: string; reason: string },
 ): Promise<PaymentActionState> {
   const perms = await getMasterPermissions();
   if (!perms.can("shalom.override_payment_validation")) {
@@ -1207,14 +1248,41 @@ export async function overridePaymentValidation(
 
   const payment = await loadPayment(paymentId);
   if (!payment) return { error: "Pago no encontrado." };
-  const ctx = await authorizeOrder(input.targetOrderId ?? payment.order_id);
-  if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  // El pago sale de este pedido: quien lo mueve tiene que poder verlo.
+  const source = await authorizeOrder(payment.order_id);
+  if (!source) return { error: "Sin acceso al pedido de origen." };
+
+  let targetOrderId: string | undefined;
+  const wantedName = input.targetOrderName?.trim();
+  if (wantedName) {
+    const resolved = await resolveOrderByName(wantedName);
+    if (!resolved) {
+      return {
+        error: `No se encontró el pedido ${wantedName}. Revisa el nombre tal como aparece en el Master.`,
+      };
+    }
+    if (resolved === payment.order_id) {
+      return { error: "El pago ya está en ese pedido." };
+    }
+    targetOrderId = resolved;
+  }
+
+  const ctx = targetOrderId ? await authorizeOrder(targetOrderId) : source;
+  if (!ctx) return { error: "Sin acceso al pedido de destino." };
 
   const admin = createAdminSupabase();
-  const patch: Record<string, unknown> = { notes: reason };
+  // Las notas se ACUMULAN, como en `observePayment`. Sobrescribirlas borraba el
+  // motivo por el que el pago estaba observado justo cuando alguien lo corrige,
+  // que es cuando más falta hace saber de dónde venía.
+  const patch: Record<string, unknown> = {
+    notes: [payment.notes?.trim(), `Corrección: ${reason}`].filter(Boolean).join("\n"),
+  };
   if (input.status) patch.validation_status = input.status;
-  if (input.targetOrderId && input.targetOrderId !== payment.order_id) {
-    patch.order_id = input.targetOrderId;
+  if (targetOrderId) {
+    patch.order_id = targetOrderId;
+    // El pago viaja con su tienda: las dos tiendas llevan libros separados y
+    // dejar el `store_id` viejo pondría el dinero en el de quien no lo cobró.
     patch.store_id = ctx.storeId;
   }
 
@@ -1229,10 +1297,17 @@ export async function overridePaymentValidation(
     return { error: error.message };
   }
 
-  const affected = [...new Set([payment.order_id, input.targetOrderId].filter(Boolean))] as string[];
-  for (const orderId of affected) {
+  // El evento se escribe en los DOS pedidos, cada uno con SU tienda: en el
+  // origen para que se vea de dónde salió el dinero, y en el destino para que
+  // no aparezca de la nada. Con el `store_id` del destino en ambos, el evento
+  // del origen quedaba archivado en el libro equivocado.
+  const affected: { orderId: string; storeId: string }[] = [
+    { orderId: payment.order_id, storeId: source.storeId },
+  ];
+  if (targetOrderId) affected.push({ orderId: targetOrderId, storeId: ctx.storeId });
+  for (const { orderId, storeId } of affected) {
     await admin.from("order_events").insert({
-      store_id: ctx.storeId,
+      store_id: storeId,
       order_id: orderId,
       kind: "payment",
       actor: ctx.userId,
@@ -1240,13 +1315,17 @@ export async function overridePaymentValidation(
       previous_status: payment.validation_status,
       new_status: input.status ?? payment.validation_status,
       reason,
-      note: input.targetOrderId
+      note: targetOrderId
         ? `Pago reasignado por un administrador (excepción).`
         : `Estado del pago corregido por un administrador (excepción).`,
     });
   }
-  await recomputeOrderMasterSafe(admin, affected);
+  await recomputeOrderMasterSafe(admin, affected.map((a) => a.orderId));
   revalidatePath(MASTER_PATH);
   revalidatePath(PAYMENT_REVIEW_PATH);
-  return { notice: "Corrección registrada." };
+  return {
+    notice: targetOrderId
+      ? `Pago reasignado a ${wantedName}. Queda en el historial de los dos pedidos.`
+      : "Corrección registrada.",
+  };
 }
