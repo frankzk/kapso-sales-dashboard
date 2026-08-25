@@ -140,3 +140,48 @@ describe("el botón, en la pantalla", () => {
     expect(read(PANEL)).toContain("Quedará en el historial de los dos pedidos");
   });
 });
+
+describe("corregir pagos se concede persona por persona", () => {
+  // POR QUÉ CAMBIÓ. `shalom.override_payment_validation` venía dentro del rol
+  // `admin`, que en esta operación son catorce personas. Mover dinero de un
+  // pedido a otro es de la misma familia que darlo por bueno, y `payments.validate`
+  // ya estaba fuera de los roles por esa misma razón, con este comentario:
+  // «no viene incluido en ningun rol para que cambiar a alguien a admin no le
+  // permita validar movimientos bancarios de forma implicita».
+  const TEAM_ACTIONS = "app/dashboard/team/actions.ts";
+
+  it("el permiso que llega del formulario se comprueba contra la lista", () => {
+    // Es un campo oculto: sin esta comprobación, cualquiera que pueda abrir
+    // Equipo se concede `closure.refund` cambiándolo desde el navegador.
+    const source = read(TEAM_ACTIONS);
+    const start = source.indexOf("export async function setPaymentValidationPermission(");
+    expect(start).toBeGreaterThan(0);
+    const body = source.slice(start, source.indexOf("\nexport ", start + 10));
+    expect(body).toContain("GRANTED_ONE_BY_ONE.find((g) => g.permission === permission)");
+    expect(body).toContain("Ese permiso no se concede desde acá");
+    // Y se rechaza ANTES de escribir.
+    expect(body.indexOf("Ese permiso no se concede desde acá")).toBeLessThan(
+      body.indexOf("user_permissions"),
+    );
+  });
+
+  it("la regla del último titular mira EL permiso que se toca", () => {
+    // Fijada en `payments.validate`, contaba a los validadores para decidir
+    // sobre los correctores: dejaba quitar al último corrector con tal de que
+    // hubiera un validador.
+    const source = read(TEAM_ACTIONS);
+    expect(source).toContain("orgGrantHolderIds(admin, orgId, members, entry.permission)");
+    expect(source).not.toContain("orgPaymentValidatorIds");
+  });
+
+  it("sacar a alguien del equipo los revisa todos", () => {
+    // Quitarle la membresía le quita todos sus permisos individuales de golpe.
+    const source = read(TEAM_ACTIONS);
+    const start = source.indexOf("for (const entry of GRANTED_ONE_BY_ONE)");
+    expect(start, "la baja no recorre la lista").toBeGreaterThan(0);
+  });
+
+  it("Equipo dibuja una casilla por permiso, desde la misma lista", () => {
+    expect(read("components/team.tsx")).toContain("GRANTED_ONE_BY_ONE.map((entry)");
+  });
+});

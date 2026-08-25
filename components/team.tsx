@@ -5,6 +5,7 @@ import { useActionState, useEffect, useRef, useState, useTransition } from "reac
 import { useRouter } from "next/navigation";
 import type { Role } from "@/lib/types";
 import { ROLES } from "@/lib/team";
+import { GRANTED_ONE_BY_ONE } from "@/lib/permissions";
 import {
   addMember,
   removeMember,
@@ -46,7 +47,8 @@ export interface TeamMember {
   email: string;
   role: Role;
   stores: string[]; // store ids the member has explicit access to
-  can_validate_payments: boolean;
+  /** Permiso de concesión individual → si esta persona lo tiene hoy. */
+  grants: Record<string, boolean>;
 }
 
 interface Store {
@@ -140,16 +142,25 @@ export function TeamManager({
         <>
           <AddMemberForm orgId={org.id} myRole={myRole} />
           <Card>
+            {/* El texto se arma desde la misma lista que las casillas: con la
+                frase escrita a mano, añadir un permiso dejaba la explicación
+                hablando solo del primero. */}
             <p className="mb-3 text-xs text-slate-500">
-              Activa <strong className="font-semibold text-slate-700">Validar pagos</strong> para
-              quienes revisan las cuentas bancarias. El acceso aparecerá en su menú al recargar.
+              Estos permisos NO vienen con el rol: se dan persona por persona a quien revisa las
+              cuentas bancarias. El acceso aparece en su menú al recargar.{" "}
+              {GRANTED_ONE_BY_ONE.map((entry) => (
+                <span key={entry.permission} className="mr-1 inline-block">
+                  <strong className="font-semibold text-slate-700">{entry.label}</strong>:{" "}
+                  {entry.description}
+                </span>
+              ))}
             </p>
             <div className={TABLE_WRAP_FROM[1110]}>
               <table className="w-full min-w-[880px] text-sm">
                 <thead>
                   <tr className={cn(STICKY_HEAD, "text-xs text-slate-500")}>
                     <th className="py-2 text-left font-medium">Miembro</th>
-                    <th className="py-2 text-left font-medium">Validar pagos</th>
+                    <th className="py-2 text-left font-medium">Permisos financieros</th>
                     <th className="py-2 text-left font-medium">Rol</th>
                     <th className="py-2 text-left font-medium">Acceso a tiendas</th>
                     <th className="py-2 text-right font-medium">Acción</th>
@@ -410,36 +421,72 @@ function PaymentValidationToggle({
   member: TeamMember;
   myRole: Role;
 }) {
+  return (
+    <div className="flex min-w-44 flex-col gap-1.5">
+      {GRANTED_ONE_BY_ONE.map((entry) => (
+        <OneByOneToggle
+          key={entry.permission}
+          orgId={orgId}
+          member={member}
+          myRole={myRole}
+          entry={entry}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Una casilla por permiso de concesión individual.
+ *
+ * Cada una es su propio formulario y su propio `useActionState`: con uno solo
+ * compartido, guardar «Corregir pagos» habría pintado el «Guardado ✓» sobre
+ * «Validar pagos» y quien mira no sabría cuál se guardó.
+ */
+function OneByOneToggle({
+  orgId,
+  member,
+  myRole,
+  entry,
+}: {
+  orgId: string;
+  member: TeamMember;
+  myRole: Role;
+  entry: (typeof GRANTED_ONE_BY_ONE)[number];
+}) {
   const [state, action, pending] = useActionState(setPaymentValidationPermission, initial);
   const saved = useSavedFlash(pending, state.notice);
   const canEdit = myRole === "owner" || member.role !== "owner";
+  const has = member.grants[entry.permission] ?? false;
   return (
-    <form action={action} className="flex min-w-36 flex-col gap-1">
+    <form action={action} className="flex flex-col gap-0.5">
       <input type="hidden" name="org_id" value={orgId} />
       <input type="hidden" name="user_id" value={member.user_id} />
-      <input type="hidden" name="grant" value={member.can_validate_payments ? "0" : "1"} />
+      <input type="hidden" name="permission" value={entry.permission} />
+      <input type="hidden" name="grant" value={has ? "0" : "1"} />
       <label
         className={cn(
           "inline-flex w-fit items-center gap-2 text-xs font-medium",
           canEdit ? "cursor-pointer text-slate-700" : "cursor-not-allowed text-slate-400",
         )}
+        title={entry.description}
       >
         <input
           type="checkbox"
-          defaultChecked={member.can_validate_payments}
+          defaultChecked={has}
           disabled={pending || !canEdit}
           onChange={(event) => event.currentTarget.form?.requestSubmit()}
-          aria-label={`Permitir que ${member.email} valide pagos`}
+          aria-label={`${entry.label} — permitir a ${member.email}`}
           className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
         />
-        {member.can_validate_payments ? "Autorizado" : "Sin permiso"}
+        {entry.label}
       </label>
       {pending ? (
-        <span className="text-xs text-slate-400">Guardando…</span>
+        <span className="text-[11px] text-slate-400">Guardando…</span>
       ) : saved ? (
-        <span className="text-xs font-medium text-emerald-600">Guardado ✓</span>
+        <span className="text-[11px] font-medium text-emerald-600">Guardado ✓</span>
       ) : null}
-      {state.error && <span className="max-w-56 text-xs text-red-600">{state.error}</span>}
+      {state.error && <span className="max-w-56 text-[11px] text-red-600">{state.error}</span>}
     </form>
   );
 }
