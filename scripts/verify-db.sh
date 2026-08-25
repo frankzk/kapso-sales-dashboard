@@ -116,6 +116,13 @@ echo "▶ auditoría inmutable + clave de recojo + unicidad del Yape"
 $PSQL -f "$ROOT/scripts/sql/append_only_smoke.sql"
 echo "  ✅ auditoría inmutable, clave de recojo sin lectura directa y comprobante Yape único"
 
+# De quién es una venta se decide UNA vez (0132). El fallo que motivó la tabla no
+# fue nadie reasignando a mano: fue un número que se recalculaba y cambiaba de
+# dueña solo. Por eso la garantía tiene que estar en la base, no en el código.
+echo "▶ la venta no se traspasa (0132)"
+$PSQL -f "$ROOT/scripts/sql/order_sales_smoke.sql" >/dev/null
+echo "  ✅ sin UPDATE ni DELETE, la primera dueña gana y el backfill se calla si duda"
+
 # Los conteos de las pestañas de Leads viven ahora en SQL (0059) y en ningún
 # sitio más: esta prueba compara la función con los filtros originales, uno a uno.
 echo "▶ paridad de los conteos de la cola de Leads"

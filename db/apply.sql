@@ -265,4 +265,6 @@
 \ir migrations/0130_lima_region_es_un_distrito.sql
 \echo 'Applying 0131_operation_completed_by.sql'
 \ir migrations/0131_operation_completed_by.sql
+\echo 'Applying 0132_order_sales.sql'
+\ir migrations/0132_order_sales.sql
 \echo 'Done.'
