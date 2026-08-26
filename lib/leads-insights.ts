@@ -12,7 +12,7 @@
 import { chunk } from "@/lib/access";
 import { createServerSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
-import { getAdvisorProductivity, isSalesTouch } from "@/lib/productivity";
+import { getAdvisorProductivity } from "@/lib/productivity";
 import type { StoreScope } from "@/lib/leads-access";
 
 export const SHIFT_START = 8;
@@ -40,56 +40,48 @@ export interface AdvisorToday {
    *  usa la página de Productividad, para que ambas vistas coincidan. */
   leads: number;
   llamadas: number; // solo kind="call" registradas hoy (subconjunto de `leads`)
-  pedidos: number; // wins attributed today (last-touch)
+  pedidos: number; // ventas que ELLA registró hoy (`order_sales`)
   pedidosDetalle: { code: string | null; fecha: string | null }[]; // "#AUR1091" + "05/07/26"
 }
 
-/** One day of the team conversion chart: contactos (gestión calls) vs pedidos
- *  (won leads credited to their last-TOUCH day). Pedidos se atribuye por ÚLTIMO
- *  TOQUE DE VENTA, IGUAL que el panel de Productividad — así el "Hoy" del
- *  gráfico cuadra con la suma de pedidos por asesora (un cierre registrado sin
- *  llamada — "generar pedido" / cambio de estado — igual cuenta; una nota de
- *  máquina como "Handoff resuelto" NO). contactos sigue contando solo
- *  kind="call". En un día muy flojo pedidos podría superar contactos;
- *  el gráfico recorta el relleno verde y topa el % a 100. */
+/** One day of the team conversion chart: contactos (gestión calls) vs pedidos.
+ *  El pedido cae el día en que se REGISTRÓ la venta, misma fuente que el panel
+ *  de Productividad — así el "Hoy" del gráfico cuadra con la suma de pedidos por
+ *  asesora. contactos sigue contando solo kind="call", así que en un día muy
+ *  flojo pedidos podría superar contactos; el gráfico recorta el relleno verde y
+ *  topa el % a 100. */
 export interface ConversionDay {
   dia: string; // weekday label, or "Hoy"
   contactos: number; // kind="call" calls that day
-  pedidos: number; // distinct won leads whose last SALES touch fell that day
+  pedidos: number; // ventas registradas ese día
 }
 
 /**
- * Team conversion per day. contactos = kind="call" calls; a won lead is credited
- * to the DAY of its last SALES touch (`isSalesTouch`) — the same last-touch
- * attribution the Productividad panel uses, so the chart's "Hoy" pedidos equals
- * the sum of the per-advisor pedidos (a sale closed without logging a call still
- * counts; ordenar la cola con "Resuelto" no mueve el día del cierre). Pure so
- * it can be unit-tested. `calls` are all advisor (`vendedora` not null) lead_calls
- * in the window; `wonLeadIds` is the set of those leads currently won.
+ * Team conversion per day. contactos = kind="call" calls; el pedido cae el día en
+ * que se registró la venta (`order_sales.occurred_at`), no el del último toque —
+ * antes reabrir un lead una semana después movía la venta de día. Pura para poder
+ * probarla. `calls` son los lead_calls de asesora (`vendedora` not null) de la
+ * ventana; `sales` las ventas registradas en ella.
  */
 export function computeTeamConversionByDay(opts: {
   calls: { lead_id: string; kind: string | null; occurred_at: string | null }[];
-  wonLeadIds: Set<string>;
+  sales: { occurredAt: string | null }[];
   days: { date: string; label: string }[];
   tz: string;
 }): ConversionDay[] {
   const daySet = new Set(opts.days.map((d) => d.date));
   const contactosByDate: Record<string, number> = {};
-  const lastTouchByLead: Record<string, string> = {}; // último toque DE VENTA → ese día cae el pedido (igual que Productividad)
   for (const c of opts.calls) {
     if (!c.occurred_at) continue;
     if (c.kind === "call") {
       const d = tzParts(c.occurred_at, opts.tz).date;
       if (daySet.has(d)) contactosByDate[d] = (contactosByDate[d] ?? 0) + 1;
     }
-    if (!isSalesTouch(c.kind)) continue;
-    const prev = lastTouchByLead[c.lead_id];
-    if (!prev || c.occurred_at > prev) lastTouchByLead[c.lead_id] = c.occurred_at;
   }
   const pedidosByDate: Record<string, number> = {};
-  for (const [leadId, at] of Object.entries(lastTouchByLead)) {
-    if (!opts.wonLeadIds.has(leadId)) continue;
-    const d = tzParts(at, opts.tz).date;
+  for (const s of opts.sales) {
+    if (!s.occurredAt) continue;
+    const d = tzParts(s.occurredAt, opts.tz).date;
     if (daySet.has(d)) pedidosByDate[d] = (pedidosByDate[d] ?? 0) + 1;
   }
   return opts.days.map((dd) => ({
@@ -102,9 +94,8 @@ export function computeTeamConversionByDay(opts: {
 /**
  * Fetch + compute the team conversion series, robust to PostgREST's `max-rows`
  * cap. PAGES the window's advisor calls (a `.limit()` alone is silently capped, so
- * a busy store would only get an arbitrary slice) and looks up the won flag for
- * ONLY the touched leads in chunks — never "all won leads in the store", which is
- * unbounded and was the truncation that collapsed the chart's pedidos. Best-effort.
+ * a busy store would only get an arbitrary slice) y pagina igual las ventas
+ * registradas. Best-effort.
  */
 async function computeTeamConversion(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,
@@ -131,18 +122,25 @@ async function computeTeamConversion(
     calls.push(...batch);
     if (batch.length < PAGE) break;
   }
-  // Won flag for the touched leads only (chunked .in — never "all won leads").
-  const touchedIds = [...new Set(calls.map((c) => c.lead_id))];
-  const wonLeadIds = new Set<string>();
-  for (let i = 0; i < touchedIds.length; i += 300) {
-    const { data } = await sb
-      .from("leads")
-      .select("id")
-      .in("id", touchedIds.slice(i, i + 300))
-      .eq("category", "won");
-    for (const l of (data as { id: string }[]) ?? []) wonLeadIds.add(l.id);
+  // Las ventas registradas de la ventana. Antes acá se buscaba qué leads siguen
+  // `won` y el pedido caía el día del último toque — por eso una venta se movía
+  // de día (y de asesora) cuando alguien reabría el lead una semana después.
+  const sales: { occurredAt: string | null }[] = [];
+  for (let from = 0; from < CAP; from += PAGE) {
+    const { data, error } = await sb
+      .from("order_sales")
+      .select("order_id, occurred_at")
+      .in("store_id", storeIds)
+      .gte("occurred_at", sinceIso)
+      .order("occurred_at", { ascending: false })
+      .order("order_id", { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    const batch = (data as { occurred_at: string | null }[]) ?? [];
+    for (const r of batch) sales.push({ occurredAt: r.occurred_at });
+    if (batch.length < PAGE) break;
   }
-  return computeTeamConversionByDay({ calls, wonLeadIds, days, tz });
+  return computeTeamConversionByDay({ calls, sales, days, tz });
 }
 
 const PAGE_SIZE = 1000;

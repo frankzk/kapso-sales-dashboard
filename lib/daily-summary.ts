@@ -9,6 +9,7 @@ import { formatCurrency, salesAttribution, tzParts, type AttributionInputs, type
 import type { OrderRow } from "@/lib/types";
 import {
   computeAdvisorStats,
+  type AdvisorSale,
   resolveEmails,
   type AdvisorCall,
   type AdvisorStat,
@@ -114,8 +115,9 @@ export function limaDayBounds(dateOverride: string | null = null): {
 
 /**
  * Build a store's daily summary for [startIso, endIso): total active orders +
- * net revenue (by created_at), and per-advisor cerrados/ingresos (last-touch on
- * lead_calls in the window). Service-role; never throws on empty data.
+ * net revenue (by created_at), y por asesora sus llamadas (de `lead_calls`) y sus
+ * cierres/ingresos (de `order_sales`, la venta que ella registró en la ventana).
+ * Service-role; never throws on empty data.
  */
 export async function buildStoreDailySummary(
   admin: SupabaseClient,
@@ -184,7 +186,8 @@ export async function buildStoreDailySummary(
     revenue: s.revenue,
   }));
 
-  // 2) Per-advisor: human touches (vendedora) in the window → last-touch wins.
+  // 2) Por asesora: sus toques humanos de la ventana (llamadas y leads
+  //    trabajados). Los cierres vienen aparte, de `order_sales`.
   //    Paged: PostgREST responde ~1000 filas como máximo por llamada, y un día
   //    movido supera eso — el recorte silencioso descontaba gestiones (y con
   //    ellas cierres last-touch) del resumen.
@@ -205,28 +208,51 @@ export async function buildStoreDailySummary(
     calls.push(...batch);
     if (batch.length < 1000) break;
   }
+  // Las ventas de la ventana, ya atribuidas. Antes esto reconstruía el cierre a
+  // mano —y con la regla MÁS floja de todas, `won: !!has_order`, que contaba
+  // como cierre cualquier lead con un pedido enganchado, fuese de cuando fuese—.
+  // Ahora es una lectura: `order_sales` ya dice quién vendió qué y cuándo.
+  const sales: AdvisorSale[] = [];
+  for (let from = 0; from < 20_000; from += 1000) {
+    const { data, error } = await admin
+      .from("order_sales")
+      .select("order_id, store_id, vendedora, occurred_at, orders(name, created_at, total_amount, total_refunded)")
+      .eq("store_id", storeId)
+      .gte("occurred_at", startIso)
+      .lt("occurred_at", endIso)
+      .order("occurred_at", { ascending: true })
+      .order("order_id", { ascending: true })
+      .range(from, from + 999);
+    if (error) break;
+    type Row = {
+      order_id: string;
+      store_id: string | null;
+      vendedora: string;
+      occurred_at: string;
+      orders: { name: string | null; created_at: string | null; total_amount: number | null; total_refunded: number | null } | null;
+    };
+    const batch = (data as unknown as Row[]) ?? [];
+    for (const r of batch) {
+      sales.push({
+        vendedora: r.vendedora,
+        orderId: r.order_id,
+        occurredAt: r.occurred_at,
+        storeId: r.store_id,
+        net: (r.orders?.total_amount ?? 0) - (r.orders?.total_refunded ?? 0),
+        orderName: r.orders?.name ?? null,
+        orderAt: r.orders?.created_at ?? null,
+        source: "organic", // el resumen diario no abre por fuente
+      });
+    }
+    if (batch.length < 1000) break;
+  }
+
   let advisors: AdvisorStat[] = [];
-  if (calls.length) {
-    const leadIds = [...new Set(calls.map((c) => c.lead_id))];
-    const touched: { id: string; has_order: boolean; order_id: string | null }[] = [];
-    for (const part of chunk(leadIds, 300)) {
-      const { data: leadsRaw } = await admin.from("leads").select("id, has_order, order_id").in("id", part);
-      touched.push(...((leadsRaw as typeof touched | null) ?? []));
-    }
-    const orderIds = touched.filter((l) => l.has_order && l.order_id).map((l) => l.order_id as string);
-    const netByOrder = new Map<string, number>();
-    for (const part of chunk(orderIds, 300)) {
-      const { data: oRaw } = await admin.from("orders").select("id, total_amount, total_refunded").in("id", part);
-      for (const o of (oRaw as { id: string; total_amount: number | null; total_refunded: number | null }[]) ?? []) {
-        netByOrder.set(o.id, (o.total_amount ?? 0) - (o.total_refunded ?? 0));
-      }
-    }
-    const leadOutcome = new Map<string, { won: boolean; net: number }>();
-    for (const l of touched) {
-      leadOutcome.set(l.id, { won: !!l.has_order, net: l.order_id ? (netByOrder.get(l.order_id) ?? 0) : 0 });
-    }
-    const emailById = await resolveEmails([...new Set(calls.map((c) => c.vendedora))]);
-    advisors = computeAdvisorStats({ calls, leadOutcome, emailById }, tz);
+  if (calls.length || sales.length) {
+    const emailById = await resolveEmails([
+      ...new Set([...calls.map((c) => c.vendedora), ...sales.map((s) => s.vendedora)]),
+    ]);
+    advisors = computeAdvisorStats({ calls, sales, leadStore: new Map(), emailById }, tz);
   }
 
   return { totalOrders, totalRevenue, advisors, bySource };

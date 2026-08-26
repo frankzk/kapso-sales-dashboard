@@ -16,68 +16,59 @@ describe("computeTeamConversionByDay (conversión por día del equipo)", () => {
   const tz = "America/Lima";
   const at = (date: string) => `${date}T17:00:00Z`; // 12:00 Lima (UTC−5) → mismo día local
 
-  it("cuenta kind='call' como contactos y leads ganados (último toque) como pedidos", () => {
+  it("cuenta kind='call' como contactos y las ventas registradas como pedidos", () => {
     const calls = [
-      { lead_id: "A", kind: "call", occurred_at: at("2026-07-08") }, // ganado → pedido el 08
-      { lead_id: "B", kind: "call", occurred_at: at("2026-07-09") }, // no ganado
-      { lead_id: "C", kind: "call", occurred_at: at("2026-07-09") }, // ganado → pedido el 09
+      { lead_id: "A", kind: "call", occurred_at: at("2026-07-08") },
+      { lead_id: "B", kind: "call", occurred_at: at("2026-07-09") },
+      { lead_id: "C", kind: "call", occurred_at: at("2026-07-09") },
     ];
-    expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A", "C"]), days, tz })).toEqual([
+    const sales = [{ occurredAt: at("2026-07-08") }, { occurredAt: at("2026-07-09") }];
+    expect(computeTeamConversionByDay({ calls, sales, days, tz })).toEqual([
       { dia: "Mié", contactos: 1, pedidos: 1 },
       { dia: "Hoy", contactos: 2, pedidos: 1 },
     ]);
   });
 
-  it("atribuye el pedido al ÚLTIMO toque; varias llamadas = varios contactos, un pedido", () => {
+  it("varias llamadas al mismo lead = varios contactos, y el pedido cae donde está la venta", () => {
     const calls = [
       { lead_id: "A", kind: "call", occurred_at: at("2026-07-08") },
-      { lead_id: "A", kind: "call", occurred_at: at("2026-07-09") }, // más reciente → pedido aquí
+      { lead_id: "A", kind: "call", occurred_at: at("2026-07-09") },
     ];
-    expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz })).toEqual([
+    expect(computeTeamConversionByDay({ calls, sales: [{ occurredAt: at("2026-07-09") }], days, tz })).toEqual([
       { dia: "Mié", contactos: 1, pedidos: 0 },
       { dia: "Hoy", contactos: 1, pedidos: 1 },
     ]);
   });
 
-  it("atribuye el pedido al ÚLTIMO TOQUE (cualquier tipo), no solo a la última llamada — cuadra con Productividad; contactos sigue contando solo kind='call'", () => {
+  it("un toque posterior NO arrastra el pedido a otro día — antes reabrir un lead lo movía", () => {
+    // La venta se registró el 08. El 09 alguien vuelve a tocar el lead: con la
+    // atribución vieja el pedido se mudaba al 09 y descuadraba con Productividad.
     const calls = [
-      { lead_id: "A", kind: "call", occurred_at: at("2026-07-08") }, // contacto (llamada) el 08
-      { lead_id: "A", kind: "state_change", occurred_at: at("2026-07-09") }, // se cerró el 09 → pedido el 09
+      { lead_id: "A", kind: "message", occurred_at: at("2026-07-08") },
+      { lead_id: "A", kind: "state_change", occurred_at: at("2026-07-09") },
     ];
-    expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz })).toEqual([
-      { dia: "Mié", contactos: 1, pedidos: 0 },
-      { dia: "Hoy", contactos: 0, pedidos: 1 },
-    ]);
-  });
-
-  it("una nota de máquina ('Resuelto') NO mueve el día del cierre — cuadra con Productividad", () => {
-    const calls = [
-      { lead_id: "A", kind: "message", occurred_at: at("2026-07-08") }, // la venta se trabajó el 08
-      { lead_id: "A", kind: "system", occurred_at: at("2026-07-09") }, // solo se sacó de la cola el 09
-    ];
-    expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz })).toEqual([
+    expect(computeTeamConversionByDay({ calls, sales: [{ occurredAt: at("2026-07-08") }], days, tz })).toEqual([
       { dia: "Mié", contactos: 0, pedidos: 1 },
       { dia: "Hoy", contactos: 0, pedidos: 0 },
     ]);
   });
 
-  it("un lead ganado tocado hoy SOLO por una acción que no es llamada igual cuenta como pedido (0 contactos · 1 pedido, igual que el panel)", () => {
-    const calls = [
-      // "Generar pedido" / cambio de estado sin registrar una llamada: 0 contactos ese día, 1 pedido.
-      { lead_id: "A", kind: "state_change", occurred_at: at("2026-07-09") },
-    ];
-    expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz })).toEqual([
+  it("una venta sin ninguna llamada registrada igual cuenta (0 contactos · 1 pedido)", () => {
+    expect(
+      computeTeamConversionByDay({ calls: [], sales: [{ occurredAt: at("2026-07-09") }], days, tz }),
+    ).toEqual([
       { dia: "Mié", contactos: 0, pedidos: 0 },
       { dia: "Hoy", contactos: 0, pedidos: 1 },
     ]);
   });
 
-  it("ignora toques fuera de la ventana y sin timestamp", () => {
+  it("ignora toques y ventas fuera de la ventana o sin timestamp", () => {
     const calls = [
       { lead_id: "A", kind: "call", occurred_at: at("2026-07-01") }, // fuera de la ventana
       { lead_id: "B", kind: "call", occurred_at: null },
     ];
-    expect(computeTeamConversionByDay({ calls, wonLeadIds: new Set(["A", "B"]), days, tz })).toEqual([
+    const sales = [{ occurredAt: at("2026-07-01") }, { occurredAt: null }];
+    expect(computeTeamConversionByDay({ calls, sales, days, tz })).toEqual([
       { dia: "Mié", contactos: 0, pedidos: 0 },
       { dia: "Hoy", contactos: 0, pedidos: 0 },
     ]);
