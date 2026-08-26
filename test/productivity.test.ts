@@ -17,6 +17,7 @@ import {
   productivityInitialRange,
   storeInitials,
   type AdvisorCall,
+  type AdvisorSale,
   type AdvisorStat,
   type FirstTouchLeadInput,
 } from "@/lib/productivity";
@@ -78,54 +79,87 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
     ["u2", "gaby@aurela.pe"],
   ]);
 
-  it("aggregates activity and credits a win to the LAST caller", () => {
+  /** Una venta registrada, con lo mínimo que mira computeAdvisorStats. */
+  const venta = (vendedora: string, net: number, over: Partial<AdvisorSale> = {}): AdvisorSale => ({
+    vendedora,
+    orderId: `O-${vendedora}-${net}`,
+    occurredAt: "2026-06-20T12:00:00Z",
+    storeId: null,
+    net,
+    orderName: null,
+    orderAt: null,
+    source: "organic",
+    ...over,
+  });
+
+  it("cuenta llamadas y leads trabajados de los toques, y los cierres de las ventas registradas", () => {
     const calls: AdvisorCall[] = [
       { vendedora: "u1", lead_id: "L1", kind: "call", occurred_at: "2026-06-20T10:00:00Z" },
       { vendedora: "u1", lead_id: "L2", kind: "call", occurred_at: "2026-06-20T11:00:00Z" },
-      { vendedora: "u2", lead_id: "L1", kind: "call", occurred_at: "2026-06-21T09:00:00Z" }, // later touch on L1
-      { vendedora: "u2", lead_id: "L3", kind: "note", occurred_at: "2026-06-21T10:00:00Z" }, // not a "call"
+      { vendedora: "u2", lead_id: "L1", kind: "call", occurred_at: "2026-06-21T09:00:00Z" },
+      { vendedora: "u2", lead_id: "L3", kind: "note", occurred_at: "2026-06-21T10:00:00Z" }, // no es "call"
     ];
-    const leadOutcome = new Map([
-      ["L1", { won: true, net: 189 }], // last caller = u2
-      ["L2", { won: false, net: 0 }],
-      ["L3", { won: true, net: 99 }], // last caller = u2
-    ]);
-    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    // u2 registró las dos ventas; que u1 tocara L1 primero ya no le da nada.
+    const sales = [venta("u2", 189), venta("u2", 99)];
+    const rows = computeAdvisorStats({ calls, sales, leadStore: new Map(), emailById });
     const u1 = rows.find((r) => r.userId === "u1")!;
     const u2 = rows.find((r) => r.userId === "u2")!;
 
     expect(u1.llamadas).toBe(2);
     expect(u1.leadsTrabajados).toBe(2); // L1, L2
-    expect(u1.cerrados).toBe(0); // L1 went to u2 (later touch); L2 not won
+    expect(u1.cerrados).toBe(0);
     expect(u1.ingresos).toBe(0);
 
-    expect(u2.llamadas).toBe(1); // only kind="call"; the note doesn't count
+    expect(u2.llamadas).toBe(1); // solo kind="call"; la nota no cuenta
     expect(u2.leadsTrabajados).toBe(2); // L1, L3
-    expect(u2.cerrados).toBe(2); // L1 (last touch) + L3
+    expect(u2.cerrados).toBe(2);
     expect(u2.ingresos).toBe(288); // 189 + 99
     expect(u2.conversion).toBe(1); // 2 / 2
     expect(u2.email).toBe("gaby@aurela.pe");
   });
 
-  it("darle a 'Resuelto' NO le quita la venta a quien trabajó el lead (#KP121762)", () => {
-    // El caso real: Tania (u1) mandó seis mensajes al lead entre 14:53 y 18:17;
-    // a las 19:30 Yohalis (u2) le dio a "Resuelto" para sacarlo de la cola y los
-    // S/ 250.20 se pasaron a Yohalis. Ese click es una nota de máquina firmada,
-    // no una venta: no puede mover la atribución.
+  it("ningún toque posterior mueve la venta de quien la registró (#KP130367)", () => {
+    // El caso real: Daphne (u1) registró la venta a las 22:57:26 (S/ 298). A las
+    // 22:57:58 —treinta y dos segundos después— Tania (u2) mandó "gracias por la
+    // confianza" y con la atribución vieja se llevaba el cierre. Ahora el
+    // mensaje es trabajo sobre el lead, pero la venta ya tiene dueña.
     const calls: AdvisorCall[] = [
-      { vendedora: "u1", lead_id: "L1", kind: "message", occurred_at: "2026-08-24T14:53:49Z" },
-      { vendedora: "u1", lead_id: "L1", kind: "message", occurred_at: "2026-08-24T18:17:18Z" },
-      { vendedora: "u2", lead_id: "L1", kind: "system", occurred_at: "2026-08-24T19:30:13Z" },
+      { vendedora: "u2", lead_id: "L1", kind: "message", occurred_at: "2026-08-25T22:54:17Z" },
+      { vendedora: "u1", lead_id: "L1", kind: "sale", occurred_at: "2026-08-25T22:57:26Z" },
+      { vendedora: "u2", lead_id: "L1", kind: "message", occurred_at: "2026-08-25T22:57:58Z" },
     ];
-    const leadOutcome = new Map([["L1", { won: true, net: 250.2 }]]);
-    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const sales = [venta("u1", 298, { occurredAt: "2026-08-25T22:57:26Z" })];
+    const rows = computeAdvisorStats({ calls, sales, leadStore: new Map(), emailById });
     const u1 = rows.find((r) => r.userId === "u1")!;
     const u2 = rows.find((r) => r.userId === "u2")!;
 
     expect(u1.cerrados).toBe(1);
-    expect(u1.ingresos).toBe(250.2);
+    expect(u1.ingresos).toBe(298);
     expect(u2.cerrados).toBe(0);
     expect(u2.ingresos).toBe(0);
+    expect(u2.leadsTrabajados).toBe(1); // sí trabajó el lead: eso no se le quita
+  });
+
+  it("una asesora que SOLO vendió, sin registrar ni un toque, igual sale en el tablero", () => {
+    // Con las dos fuentes separadas esto deja de ser hipotético: las filas del
+    // tablero salían de `calls`, así que una venta registrada por alguien que no
+    // dejó ningún `lead_call` existiría en la base y no en la pantalla — que es
+    // justo la clase de fallo silencioso que esta tabla vino a cerrar.
+    const calls: AdvisorCall[] = [
+      { vendedora: "u1", lead_id: "L1", kind: "call", occurred_at: "2026-08-25T14:00:00Z" },
+    ];
+    const rows = computeAdvisorStats({
+      calls,
+      sales: [venta("u2", 298)],
+      leadStore: new Map(),
+      emailById,
+    });
+    const u2 = rows.find((r) => r.userId === "u2");
+    expect(u2).toBeDefined();
+    expect(u2!.cerrados).toBe(1);
+    expect(u2!.ingresos).toBe(298);
+    expect(u2!.llamadas).toBe(0);
+    expect(u2!.leadsTrabajados).toBe(0);
   });
 
   it("el click de 'Resuelto' tampoco infla los leads trabajados de quien ordena la cola", () => {
@@ -134,11 +168,7 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
       { vendedora: "u2", lead_id: "L1", kind: "system", occurred_at: "2026-08-24T19:30:00Z" },
       { vendedora: "u2", lead_id: "L2", kind: "call", occurred_at: "2026-08-24T20:00:00Z" },
     ];
-    const leadOutcome = new Map([
-      ["L1", { won: true, net: 100 }],
-      ["L2", { won: false, net: 0 }],
-    ]);
-    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const rows = computeAdvisorStats({ calls, sales: [venta("u1", 100)], leadStore: new Map(), emailById });
     const u2 = rows.find((r) => r.userId === "u2")!;
     expect(u2.leadsTrabajados).toBe(1); // solo L2 — L1 lo trabajó u1, u2 solo lo archivó
   });
@@ -151,8 +181,7 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
       { vendedora: "u2", lead_id: "L1", kind: "system", occurred_at: "2026-08-24T15:00:00Z" },
       { vendedora: "u2", lead_id: "L2", kind: "system", occurred_at: "2026-08-24T15:30:00Z" },
     ];
-    const leadOutcome = new Map([["L1", { won: true, net: 100 }]]);
-    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const rows = computeAdvisorStats({ calls, sales: [venta("u1", 100)], leadStore: new Map(), emailById });
     const u2 = rows.find((r) => r.userId === "u2")!;
     expect(u2).toBeDefined();
     expect(u2.leadsTrabajados).toBe(0);
@@ -168,15 +197,15 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
       { vendedora: "u1", lead_id: "L3", kind: "call", occurred_at: "2026-07-05T12:00:00Z" },
       { vendedora: "u2", lead_id: "L4", kind: "call", occurred_at: "2026-07-05T13:00:00Z" },
     ];
-    const leadOutcome = new Map([
-      // L1's order is NEWER than L2's → the detail must come out chronological (L2's first).
-      ["L1", { won: true, net: 189, orderName: "#AUR1091", orderAt: "2026-07-05T14:00:00Z" }],
-      ["L2", { won: true, net: 99, orderName: "#AUR1088", orderAt: "2026-07-05T09:00:00Z" }],
-      // Won but the order isn't ingested/linked yet → placeholder entry, sorted last.
-      ["L3", { won: true, net: 0 }],
-      ["L4", { won: false, net: 0 }],
-    ]);
-    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const sales = [
+      // El pedido de la primera venta es MÁS NUEVO que el de la segunda → el
+      // detalle tiene que salir cronológico (primero el #AUR1088).
+      venta("u1", 189, { orderName: "#AUR1091", orderAt: "2026-07-05T14:00:00Z" }),
+      venta("u1", 99, { orderName: "#AUR1088", orderAt: "2026-07-05T09:00:00Z" }),
+      // Venta registrada cuyo pedido aún no se ingirió → entrada sin fecha, al final.
+      venta("u1", 0),
+    ];
+    const rows = computeAdvisorStats({ calls, sales, leadStore: new Map(), emailById });
     const u1 = rows.find((r) => r.userId === "u1")!;
     const u2 = rows.find((r) => r.userId === "u2")!;
 
@@ -198,20 +227,19 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
       { vendedora: "u1", lead_id: "L4", kind: "call", occurred_at: "2026-07-05T13:00:00Z" }, // won, no source → organic
       { vendedora: "u1", lead_id: "L5", kind: "call", occurred_at: "2026-07-05T14:00:00Z" }, // not won → ignored
     ];
-    const leadOutcome = new Map<string, { won: boolean; net: number; source?: "meta_ad" | "cod_cart" | "abandoned_browse" | "organic" }>([
-      ["L1", { won: true, net: 100, source: "meta_ad" }],
-      ["L2", { won: true, net: 50, source: "cod_cart" }],
-      ["L3", { won: true, net: 30, source: "meta_ad" }], // second ad sale → aggregates
-      ["L4", { won: true, net: 20 }], // no source → organic bucket
-      ["L5", { won: false, net: 999, source: "abandoned_browse" }], // not won → not counted
-    ]);
-    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const sales = [
+      venta("u1", 100, { source: "meta_ad" }),
+      venta("u1", 50, { source: "cod_cart" }),
+      venta("u1", 30, { source: "meta_ad" }), // segunda venta de campaña → agrega
+      venta("u1", 20), // sin fuente conocida → bucket organic
+    ];
+    const rows = computeAdvisorStats({ calls, sales, leadStore: new Map(), emailById });
     const u1 = rows.find((r) => r.userId === "u1")!;
     expect(u1.cerrados).toBe(4);
     expect(u1.porFuente.meta_ad).toEqual({ cerrados: 2, ingresos: 130 });
     expect(u1.porFuente.cod_cart).toEqual({ cerrados: 1, ingresos: 50 });
     expect(u1.porFuente.organic).toEqual({ cerrados: 1, ingresos: 20 });
-    expect(u1.porFuente.abandoned_browse).toEqual({ cerrados: 0, ingresos: 0 }); // L5 not won
+    expect(u1.porFuente.abandoned_browse).toEqual({ cerrados: 0, ingresos: 0 }); // sin ventas de ese bucket
     // Per-source cerrados sum to the total.
     const sum = Object.values(u1.porFuente).reduce((a, c) => a + c.cerrados, 0);
     expect(sum).toBe(u1.cerrados);
@@ -229,13 +257,7 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
       // Day 2 (Lima 2026-06-21): a single action → 0h but still a worked day
       { vendedora: "u1", lead_id: "L4", kind: "call", occurred_at: "2026-06-21T15:00:00Z" },
     ];
-    const leadOutcome = new Map([
-      ["L1", { won: false, net: 0 }],
-      ["L2", { won: false, net: 0 }],
-      ["L3", { won: false, net: 0 }],
-      ["L4", { won: false, net: 0 }],
-    ]);
-    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const rows = computeAdvisorStats({ calls, sales: [], leadStore: new Map(), emailById });
     const u1 = rows.find((r) => r.userId === "u1")!;
     expect(u1.horas).toBeCloseTo(1.5); // 1h + 0.5h; the day-2 singleton adds 0
     expect(u1.dias).toBe(2);
@@ -284,11 +306,8 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
       { vendedora: "u2", lead_id: "L2", kind: "call", occurred_at: "2026-06-20T10:00:00Z" },
       { vendedora: "", lead_id: "L3", kind: "system", occurred_at: "2026-06-20T10:00:00Z" },
     ];
-    const leadOutcome = new Map([
-      ["L1", { won: true, net: 50 }],
-      ["L2", { won: true, net: 500 }],
-    ]);
-    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const sales = [venta("u1", 50), venta("u2", 500)];
+    const rows = computeAdvisorStats({ calls, sales, leadStore: new Map(), emailById });
     expect(rows.map((r) => r.userId)).toEqual(["u2", "u1"]); // u2 has more revenue first
     expect(rows).toHaveLength(2); // the empty-vendedora system row is skipped
   });
@@ -299,12 +318,16 @@ describe("computeAdvisorStats (per-advisor productivity)", () => {
       { vendedora: "u1", lead_id: "L2", kind: "call", occurred_at: "2026-06-20T11:00:00Z" },
       { vendedora: "u1", lead_id: "L3", kind: "call", occurred_at: "2026-06-20T12:00:00Z" }, // no ganado
     ];
-    const leadOutcome = new Map([
-      ["L1", { won: true, net: 100, storeId: "aurela" }],
-      ["L2", { won: true, net: 250, storeId: "kenku" }],
-      ["L3", { won: false, net: 0, storeId: "kenku" }],
+    const leadStore = new Map([
+      ["L1", "aurela"],
+      ["L2", "kenku"],
+      ["L3", "kenku"],
     ]);
-    const rows = computeAdvisorStats({ calls, leadOutcome, emailById });
+    const sales = [
+      venta("u1", 100, { storeId: "aurela" }),
+      venta("u1", 250, { storeId: "kenku" }),
+    ];
+    const rows = computeAdvisorStats({ calls, sales, leadStore, emailById });
     const u1 = rows.find((r) => r.userId === "u1")!;
     // kenku = "1/2": cerró 1 de los 2 leads que trabajó ahí (el chip "KP 1/2").
     expect(u1.porTienda).toEqual({
@@ -400,6 +423,16 @@ describe("computeAdvisorConversionByDay (sparkline: contactos y pedidos por día
   ];
   const tz = "America/Lima";
   const at = (date: string, h = 17) => `${date}T${String(h).padStart(2, "0")}:00:00Z`; // 12:00 Lima
+  const vta = (vendedora: string, occurredAt: string): AdvisorSale => ({
+    vendedora,
+    orderId: `O-${vendedora}-${occurredAt}`,
+    occurredAt,
+    storeId: null,
+    net: 100,
+    orderName: null,
+    orderAt: null,
+    source: "organic",
+  });
 
   it("contactos = kind 'call' de la PROPIA asesora por día local", () => {
     const calls: AdvisorCall[] = [
@@ -407,33 +440,28 @@ describe("computeAdvisorConversionByDay (sparkline: contactos y pedidos por día
       { vendedora: "u1", lead_id: "B", kind: "message", occurred_at: at("2026-07-08") }, // no cuenta
       { vendedora: "u2", lead_id: "C", kind: "call", occurred_at: at("2026-07-09") },
     ];
-    const s = computeAdvisorConversionByDay({ calls, wonLeadIds: new Set(), days, tz });
+    const s = computeAdvisorConversionByDay({ calls, sales: [], days, tz });
     expect(s.u1!.map((c) => c.contactos)).toEqual([1, 0]);
     expect(s.u2!.map((c) => c.contactos)).toEqual([0, 1]);
   });
 
-  it("el pedido va a la asesora del ÚLTIMO toque DE VENTA (cualquier kind humano), en su día", () => {
+  it("el pedido cae el día en que se REGISTRÓ la venta, con quien la registró", () => {
     const calls: AdvisorCall[] = [
       { vendedora: "u1", lead_id: "A", kind: "call", occurred_at: at("2026-07-08", 15) },
-      // u2 toca después con un MENSAJE → se lleva el pedido el 09 (no suma contactos)
-      { vendedora: "u2", lead_id: "A", kind: "message", occurred_at: at("2026-07-09", 15) },
+      // u2 LLAMA al lead al día siguiente, después de la venta: sale en el
+      // sparkline por su contacto, pero el pedido no se mueve.
+      { vendedora: "u2", lead_id: "A", kind: "call", occurred_at: at("2026-07-09", 15) },
     ];
-    const s = computeAdvisorConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz });
-    expect(s.u1!.map((c) => c.pedidos)).toEqual([0, 0]);
-    expect(s.u2!.map((c) => c.pedidos)).toEqual([0, 1]);
-    expect(s.u2!.map((c) => c.contactos)).toEqual([0, 0]);
+    const s = computeAdvisorConversionByDay({ calls, sales: [vta("u1", at("2026-07-08", 16))], days, tz });
+    expect(s.u1!.map((c) => c.pedidos)).toEqual([1, 0]);
+    expect(s.u2!.map((c) => c.contactos)).toEqual([0, 1]); // su llamada sí cuenta
+    expect(s.u2!.map((c) => c.pedidos)).toEqual([0, 0]); // la venta no
   });
 
-  it("el sparkline no le pasa el pedido a quien solo dio 'Resuelto' un día después", () => {
-    const calls: AdvisorCall[] = [
-      { vendedora: "u1", lead_id: "A", kind: "message", occurred_at: at("2026-07-08", 15) },
-      { vendedora: "u2", lead_id: "A", kind: "system", occurred_at: at("2026-07-09", 15) },
-    ];
-    const s = computeAdvisorConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz });
-    expect(s.u1!.map((c) => c.pedidos)).toEqual([1, 0]); // se queda con u1, el día 08
-    // u2 no genera serie: no tiene contactos ni pedidos. El tablero ya cubre ese
-    // caso con `trendSeries[r.userId] ?? emptyTrend()` → sparkline plano.
-    expect(s.u2).toBeUndefined();
+  it("una asesora que SOLO vendió (sin registrar toques) igual sale en el sparkline", () => {
+    const s = computeAdvisorConversionByDay({ calls: [], sales: [vta("u3", at("2026-07-09", 16))], days, tz });
+    expect(s.u3!.map((c) => c.pedidos)).toEqual([0, 1]);
+    expect(s.u3!.map((c) => c.contactos)).toEqual([0, 0]);
   });
 
   it("siempre devuelve una celda por día (ceros incluidos) y ignora días fuera de la ventana", () => {
@@ -441,7 +469,7 @@ describe("computeAdvisorConversionByDay (sparkline: contactos y pedidos por día
       { vendedora: "u1", lead_id: "A", kind: "call", occurred_at: at("2026-07-01") }, // fuera
       { vendedora: "u1", lead_id: "B", kind: "call", occurred_at: at("2026-07-09") },
     ];
-    const s = computeAdvisorConversionByDay({ calls, wonLeadIds: new Set(["A"]), days, tz });
+    const s = computeAdvisorConversionByDay({ calls, sales: [vta("u1", at("2026-07-01", 16))], days, tz });
     expect(s.u1).toEqual([
       { date: "2026-07-08", label: "Mié", contactos: 0, pedidos: 0 },
       { date: "2026-07-09", label: "Hoy", contactos: 1, pedidos: 0 },

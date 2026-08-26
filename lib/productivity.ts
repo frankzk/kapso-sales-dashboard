@@ -1,8 +1,16 @@
-// Per-advisor (vendedora) productivity for a date range. Activity comes from
-// `lead_calls`; a won lead is credited to the advisor who registered the LAST
-// SALES touch on it within the period (last-touch attribution — see
-// `isSalesTouch`: housekeeping notes like "Handoff resuelto" don't move a sale).
-// Pure aggregation is split from the fetch so it can be unit-tested.
+// Productividad por asesora en un rango. DOS FUENTES, a propósito:
+//
+//   • el TRABAJO (llamadas, leads trabajados, horas activas) sale de `lead_calls`;
+//   • el CIERRE (cerrados, ingresos) sale de `order_sales`, la venta registrada
+//     en el instante en que la asesora apretó el botón.
+//
+// Antes las dos salían de `lead_calls` y el cierre se DEDUCÍA —"el último que
+// tocó un lead ganado"—, que es por lo que las ventas se movían solas: un
+// mensaje de cortesía treinta segundos después de la venta se la llevaba, y una
+// clienta recurrente arrastraba la compra vieja al mes siguiente. Quién vendió y
+// quién trabajó el lead son dos preguntas distintas; ahora tienen dos respuestas.
+//
+// La agregación pura va separada del fetch para poder probarla.
 
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { tzParts } from "@/lib/metrics";
@@ -98,7 +106,7 @@ export interface AdvisorStat {
   email: string;
   llamadas: number; // calls of kind="call"
   leadsTrabajados: number; // distinct leads touched
-  cerrados: number; // touched leads now won, attributed by last touch
+  cerrados: number; // ventas REGISTRADAS por ella en el rango (`order_sales`)
   cerradosDetalle: WonOrderRef[]; // the orders behind `cerrados`, oldest first
   ingresos: number; // net revenue (total - refunded) of those orders
   porFuente: Record<SourceBucket, SourceCell>; // cerrados+ingresos split by acquisition source
@@ -133,29 +141,27 @@ export function isWonLead(category: string | null | undefined): boolean {
 const NON_SALES_KINDS = new Set(["system"]);
 
 /**
- * ¿Este toque cuenta para atribuir el cierre?
+ * ¿Este toque es TRABAJO sobre el lead?
  *
- * POR QUÉ EXISTE. La atribución es last-touch: la venta se le acredita a quien
- * registró el ÚLTIMO toque del lead en el período. Hasta ahora "toque" era
- * CUALQUIER fila de `lead_calls` firmada, y eso incluía las notas de máquina que
- * lleva firmadas un click humano — en concreto `resolveHandoff` ("✅ Handoff
- * resuelto"), que por su propia definición NO es una venta: no cambia
- * status/category y existe para sacar de la cola handoffs que no llevan a nada.
- *
- * El resultado es que ordenar la cola movía la venta de persona. Caso real
- * #KP121762: Tania mandó seis mensajes al lead entre 14:53 y 18:17; a las 19:30
- * Yohalis le dio a "Resuelto" y los S/ 250.20 pasaron a Yohalis. Ese día 12 de
- * los 154 leads trabajados cambiaron de dueña por ese click — S/ 2 245.40.
+ * Decide qué cuenta como "lead trabajado", el denominador del % de cierre. Deja
+ * fuera las notas de máquina que lleva firmadas un click humano — en concreto
+ * `resolveHandoff` ("✅ Handoff resuelto"), que por su propia definición no es
+ * trabajar el lead: no cambia status/category y existe para sacar de la cola
+ * handoffs que no llevan a nada. Contarlo inflaba el denominador de quien ordena
+ * la cola y le hundía el porcentaje por ser ordenada.
  *
  * La regla se apoya en lo que `kind` YA significa: en 60 días `call`, `message`
  * y `sale` vienen firmados el 100% de las veces (son personas), y de las 25 029
  * filas `system` solo 1 166 llevan firma, todas con el MISMO texto: el click de
- * "Resuelto". O sea `kind` ya es exactamente la frontera persona/máquina; lo que
- * faltaba era mirarlo.
+ * "Resuelto". O sea `kind` ya es exactamente la frontera persona/máquina.
  *
- * NO gobierna las horas activas. Un click de "Resuelto" es prueba legítima de
- * que la asesora estaba conectada, así que `timesByAgentDay` sigue contándolo:
- * esto decide de quién es la venta, no quién estaba trabajando.
+ * YA NO DECIDE DE QUIÉN ES LA VENTA. Eso lo dice `order_sales`, que guarda quién
+ * la registró. Cuando esta función gobernaba la atribución hacía falta para que
+ * un click no moviera S/ 250 de una asesora a otra (#KP121762); hoy esa puerta
+ * está cerrada por diseño y esto solo mide trabajo.
+ *
+ * Tampoco gobierna las horas activas: un click de "Resuelto" es prueba legítima
+ * de que la asesora estaba conectada, así que `timesByAgentDay` sigue contándolo.
  */
 export function isSalesTouch(kind: string | null | undefined): boolean {
   return !NON_SALES_KINDS.has((kind ?? "").trim());
@@ -316,14 +322,13 @@ export interface TrendCell {
   pedidos: number; // leads ganados acreditados a la asesora ese día
 }
 
-/** Daily contactos/pedidos series PER ADVISOR. Same attribution as
- *  computeAdvisorStats so the sparkline reconciles with "Cerrados": the win goes
- *  to the advisor of the lead's last SALES touch (`isSalesTouch` — housekeeping
- *  excluded), on that touch's local day; contactos count only the advisor's own
- *  kind="call". Pure. */
+/** Daily contactos/pedidos series PER ADVISOR. Misma fuente que
+ *  computeAdvisorStats para que el sparkline cuadre con "Cerrados": el pedido va
+ *  a la asesora que REGISTRÓ la venta, el día en que la registró; contactos
+ *  cuenta solo los kind="call" propios. Pura. */
 export function computeAdvisorConversionByDay(opts: {
   calls: AdvisorCall[];
-  wonLeadIds: Set<string>;
+  sales: AdvisorSale[];
   days: { date: string; label: string }[];
   tz: string;
 }): Record<string, TrendCell[]> {
@@ -331,21 +336,17 @@ export function computeAdvisorConversionByDay(opts: {
   const series: Record<string, TrendCell[]> = {};
   const rowOf = (agent: string) =>
     (series[agent] ??= opts.days.map((d) => ({ date: d.date, label: d.label, contactos: 0, pedidos: 0 })));
-  const lastTouch = new Map<string, { vendedora: string; at: string }>();
   for (const c of opts.calls) {
     if (!c.vendedora || !c.occurred_at) continue;
     if (c.kind === "call") {
       const i = idx.get(tzParts(c.occurred_at, opts.tz).date);
       if (i != null) rowOf(c.vendedora)[i]!.contactos += 1;
     }
-    if (!isSalesTouch(c.kind)) continue;
-    const prev = lastTouch.get(c.lead_id);
-    if (!prev || c.occurred_at > prev.at) lastTouch.set(c.lead_id, { vendedora: c.vendedora, at: c.occurred_at });
   }
-  for (const [leadId, t] of lastTouch) {
-    if (!opts.wonLeadIds.has(leadId)) continue;
-    const i = idx.get(tzParts(t.at, opts.tz).date);
-    if (i != null) rowOf(t.vendedora)[i]!.pedidos += 1;
+  for (const s of opts.sales) {
+    if (!s.vendedora || !s.occurredAt) continue;
+    const i = idx.get(tzParts(s.occurredAt, opts.tz).date);
+    if (i != null) rowOf(s.vendedora)[i]!.pedidos += 1;
   }
   return series;
 }
@@ -452,21 +453,33 @@ export function computeFirstTouchStats(opts: {
   return { carritos: cell(mins.carritos, pend.carritos), resto: cell(mins.resto, pend.resto), byAgent };
 }
 
+/**
+ * Una venta REGISTRADA (`order_sales`), que es de dónde sale ahora el cierre.
+ *
+ * Antes el cierre se deducía —"el último que tocó un lead ganado"— y por eso se
+ * movía solo. Esto es un hecho guardado en el instante de la venta: quién,
+ * cuándo, qué pedido y cuánto. No se recalcula, así que no se mueve.
+ */
+export interface AdvisorSale {
+  vendedora: string;
+  orderId: string;
+  /** ISO del instante de la venta (`order_sales.occurred_at`). */
+  occurredAt: string;
+  storeId: string | null;
+  /** Neto del pedido: total − reembolsado. */
+  net: number;
+  orderName: string | null;
+  orderAt: string | null;
+  source: SourceBucket;
+}
+
 export interface ProductivityInput {
   calls: AdvisorCall[];
-  /** Outcome of every touched lead: won? + net order revenue + acquisition
-   *  source bucket + store (+ the linked order's code/date, when known). */
-  leadOutcome: Map<
-    string,
-    {
-      won: boolean;
-      net: number;
-      source?: SourceBucket;
-      storeId?: string | null;
-      orderName?: string | null;
-      orderAt?: string | null;
-    }
-  >;
+  /** Las ventas registradas en el rango. El cierre y los ingresos salen de acá. */
+  sales: AdvisorSale[];
+  /** Tienda de cada lead tocado — el DENOMINADOR de los chips por tienda. Ya no
+   *  lleva el resultado del lead: quién cerró qué lo dice `sales`. */
+  leadStore: Map<string, string | null | undefined>;
   emailById: Map<string, string>;
 }
 
@@ -491,16 +504,25 @@ function activeHoursFromTimes(sorted: number[]): number {
   return total / 3_600_000;
 }
 
-/** Aggregate advisor activity + last-touch-attributed wins + inferred active
- *  hours (from the spread of their action timestamps, by local day). The wins go
- *  to the advisor of the lead's last SALES touch (`isSalesTouch`) — housekeeping
- *  notes don't move a sale. Pure. */
+/**
+ * Actividad por asesora + sus ventas REGISTRADAS + horas activas inferidas del
+ * reparto de sus marcas de tiempo por día local. Pura.
+ *
+ * El cierre ya no se deduce de los toques: viene de `order_sales`, escrito en el
+ * instante de la venta. Lo que sale de `calls` es lo que de verdad son toques
+ * —llamadas, leads trabajados y presencia—, y nada más.
+ *
+ * Las dos mitades no se mezclan A PROPÓSITO. Antes el numerador (cierres) y el
+ * denominador (leads trabajados) salían de la misma fuente, y por eso un mensaje
+ * de cortesía movía los dos a la vez. Ahora el cierre lo decide quién apretó el
+ * botón y el trabajo lo decide quién tocó el lead, que son dos preguntas
+ * distintas y merecen dos respuestas distintas.
+ */
 export function computeAdvisorStats(
-  { calls, leadOutcome, emailById }: ProductivityInput,
+  { calls, sales, leadStore, emailById }: ProductivityInput,
   tz = "America/Lima",
 ): AdvisorStat[] {
   const agg = new Map<string, { llamadas: number; leads: Set<string> }>();
-  const lastCaller = new Map<string, { vendedora: string; at: string }>();
   const timesByAgentDay = new Map<string, number[]>(); // `${agent}|${localDate}` → ms[]
 
   for (const c of calls) {
@@ -513,11 +535,6 @@ export function computeAdvisorStats(
     // sus horas activas aunque su único registro del día sea ese click.
     if (isSalesTouch(c.kind)) a.leads.add(c.lead_id);
     agg.set(c.vendedora, a);
-
-    if (isSalesTouch(c.kind)) {
-      const prev = lastCaller.get(c.lead_id);
-      if (!prev || c.occurred_at > prev.at) lastCaller.set(c.lead_id, { vendedora: c.vendedora, at: c.occurred_at });
-    }
 
     const ms = new Date(c.occurred_at).getTime();
     if (Number.isFinite(ms)) {
@@ -549,20 +566,27 @@ export function computeAdvisorStats(
   };
   const emptyWon = (): WonAgg => ({ cerrados: 0, ingresos: 0, detalle: [], porFuente: emptyPorFuente(), porTienda: {} });
   const won = new Map<string, WonAgg>();
-  for (const [leadId, lc] of lastCaller) {
-    const o = leadOutcome.get(leadId);
-    if (!o?.won) continue;
-    const w = won.get(lc.vendedora) ?? emptyWon();
+  // Una fila de `order_sales` = un cierre. Ni se busca a quién tocó el lead ni
+  // se pregunta si sigue `won`: la venta ocurrió y tiene dueña.
+  for (const s of sales) {
+    if (!s.vendedora) continue;
+    const w = won.get(s.vendedora) ?? emptyWon();
     w.cerrados += 1;
-    w.ingresos += o.net;
-    const bucket = o.source ?? "organic";
-    w.porFuente[bucket].cerrados += 1;
-    w.porFuente[bucket].ingresos += o.net;
-    const t = (w.porTienda[o.storeId ?? "otras"] ??= { cerrados: 0, ingresos: 0 });
+    w.ingresos += s.net;
+    w.porFuente[s.source].cerrados += 1;
+    w.porFuente[s.source].ingresos += s.net;
+    const t = (w.porTienda[s.storeId ?? "otras"] ??= { cerrados: 0, ingresos: 0 });
     t.cerrados += 1;
-    t.ingresos += o.net;
-    w.detalle.push({ name: o.orderName ?? null, at: o.orderAt ?? null });
-    won.set(lc.vendedora, w);
+    t.ingresos += s.net;
+    w.detalle.push({ name: s.orderName, at: s.orderAt });
+    won.set(s.vendedora, w);
+  }
+
+  // Una asesora que SOLO vendió en el rango —sin registrar toques— tiene que
+  // salir igual: si el tablero se armara solo desde `calls`, su venta
+  // desaparecería de la vista sin dejar de existir en la base.
+  for (const userId of won.keys()) {
+    if (!agg.has(userId)) agg.set(userId, { llamadas: 0, leads: new Set<string>() });
   }
 
   const rows: AdvisorStat[] = [];
@@ -571,12 +595,12 @@ export function computeAdvisorStats(
     const h = hoursByAgent.get(userId);
     const leadsTrabajados = a.leads.size;
     // Por tienda: el DENOMINADOR son los leads distintos que la asesora trabajó
-    // de esa tienda (leadOutcome trae el store de cada lead tocado — sin fetch
-    // extra); encima se montan los cierres/ingresos last-touch de WonAgg. Así
-    // los chips pueden decir "AUR 5/30" y no solo "AUR 5".
+    // de esa tienda (`leadStore` trae el store de cada lead tocado — sin fetch
+    // extra); encima se montan los cierres/ingresos de las ventas registradas.
+    // Así los chips pueden decir "AUR 5/30" y no solo "AUR 5".
     const porTienda: Record<string, StoreCell> = {};
     for (const leadId of a.leads) {
-      const sid = leadOutcome.get(leadId)?.storeId ?? "otras";
+      const sid = leadStore.get(leadId) ?? "otras";
       (porTienda[sid] ??= { leads: 0, cerrados: 0, ingresos: 0 }).leads += 1;
     }
     for (const [sid, cell] of Object.entries(w.porTienda)) {
@@ -632,28 +656,101 @@ export async function resolveEmails(userIds: string[]): Promise<Map<string, stri
   return map;
 }
 
-/** From the range's advisor calls, resolve the touched leads' outcome (won? +
- *  linked order + source) and apply the optional source lens. Shared by
+/**
+ * Las ventas REGISTRADAS del rango, con su pedido y su fuente de captación.
+ *
+ * Se pagina como todo lo demás: un `.select()` pelado tope a ~1000 filas en
+ * silencio, y un mes movido pasa de eso. El rango se mide por `occurred_at` —el
+ * instante en que la asesora apretó el botón—, no por la fecha del pedido: son
+ * la misma hasta el segundo cuando la venta la genera el sistema, pero la que
+ * responde "¿cuánto cerró esta asesora hoy?" es la del click.
+ */
+async function fetchAdvisorSalesPaged(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: string[],
+  startIso: string,
+  endIso: string,
+): Promise<AdvisorSale[]> {
+  const PAGE = 1000;
+  const CAP = 40000;
+  type Row = {
+    order_id: string;
+    store_id: string | null;
+    vendedora: string;
+    lead_id: string | null;
+    occurred_at: string;
+    orders: {
+      name: string | null;
+      created_at: string | null;
+      total_amount: number | null;
+      total_refunded: number | null;
+    } | null;
+  };
+  const raw: Row[] = [];
+  for (let from = 0; from < CAP; from += PAGE) {
+    const { data, error } = await sb
+      .from("order_sales")
+      .select("order_id, store_id, vendedora, lead_id, occurred_at, orders(name, created_at, total_amount, total_refunded)")
+      .in("store_id", storeIds)
+      .gte("occurred_at", startIso)
+      .lte("occurred_at", endIso)
+      .order("occurred_at", { ascending: true })
+      .order("order_id", { ascending: true }) // desempate estable: sin él las páginas se solapan
+      .range(from, from + PAGE - 1);
+    if (error) break; // best-effort, igual que el resto de los fetchers del tablero
+    const batch = (data as unknown as Row[]) ?? [];
+    raw.push(...batch);
+    if (batch.length < PAGE) break;
+  }
+  if (!raw.length) return [];
+
+  // La fuente de captación vive en el lead, y `order_sales.lead_id` no lleva FK
+  // (es contexto, no integridad), así que no se puede embeber: se busca aparte.
+  const leadIds = [...new Set(raw.map((r) => r.lead_id).filter((id): id is string => !!id))];
+  const sourceByLead = new Map<string, string | null>();
+  if (leadIds.length) {
+    const pages = await mapInBatches(chunk(leadIds, 300), async (part) =>
+      await sb.from("leads").select("id, source").in("id", part),
+    );
+    for (const { data } of pages) {
+      for (const l of (data as { id: string; source: string | null }[]) ?? []) {
+        sourceByLead.set(l.id, l.source);
+      }
+    }
+  }
+
+  return raw.map((r) => ({
+    vendedora: r.vendedora,
+    orderId: r.order_id,
+    occurredAt: r.occurred_at,
+    storeId: r.store_id,
+    net: (r.orders?.total_amount ?? 0) - (r.orders?.total_refunded ?? 0),
+    orderName: r.orders?.name ?? null,
+    orderAt: r.orders?.created_at ?? null,
+    source: sourceKey(r.lead_id ? sourceByLead.get(r.lead_id) : null),
+  }));
+}
+
+/** From the range's advisor calls, resolve each touched lead's store and apply
+ *  the optional source lens (to the calls AND to the registered sales). Shared by
  *  getAdvisorProductivity and getProductivityBoard so the board reuses the same
  *  (already paged) calls for metrics AND heatmap without a second fetch. */
 async function buildAdvisorInputs(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,
   calls: AdvisorCall[],
   source: SourceBucket | null,
-): Promise<{ scopedCalls: AdvisorCall[]; leadOutcome: ProductivityInput["leadOutcome"] }> {
+  sales: AdvisorSale[] = [],
+): Promise<{
+  scopedCalls: AdvisorCall[];
+  leadStore: ProductivityInput["leadStore"];
+  scopedSales: AdvisorSale[];
+}> {
   // Outcome of the touched leads, in chunks of 300 — hundreds of ids in one
   // `.in()` overflow the GET URL. `source` is selected with a fallback so a
   // pending 0008 migration can't break the page; it degrades ONCE and stays
   // degraded for the remaining chunks.
   const leadIds = [...new Set(calls.map((c) => c.lead_id))];
-  type TouchedLead = {
-    id: string;
-    store_id: string;
-    category: string | null;
-    has_order: boolean;
-    order_id: string | null;
-    source?: string | null;
-  };
+  type TouchedLead = { id: string; store_id: string; source?: string | null };
   let leadsTouched: TouchedLead[] = [];
   let sourceMissing = false;
   let loadedInParallel = false;
@@ -661,7 +758,7 @@ async function buildAdvisorInputs(
   const parallelLeadPages = await mapInBatches(leadParts, async (part) =>
     await sb
       .from("leads")
-      .select("id, store_id, category, has_order, order_id, source")
+      .select("id, store_id, source")
       .in("id", part),
   );
   if (parallelLeadPages.every((page) => !page.error)) {
@@ -675,7 +772,7 @@ async function buildAdvisorInputs(
       if (!sourceMissing) {
         const withSource = await sb
           .from("leads")
-          .select("id, store_id, category, has_order, order_id, source")
+          .select("id, store_id, source")
           .in("id", part);
         if (!withSource.error) {
           leadsTouched.push(...((withSource.data as unknown as TouchedLead[]) ?? []));
@@ -685,65 +782,28 @@ async function buildAdvisorInputs(
       }
       const base = await sb
         .from("leads")
-        .select("id, store_id, category, has_order, order_id")
+        .select("id, store_id")
         .in("id", part);
       leadsTouched.push(...((base.data as unknown as TouchedLead[]) ?? []));
     }
   }
 
-  // Optional source lens: keep only calls/leads of the chosen acquisition source.
+  // Lente de fuente: deja solo los toques Y las ventas de la fuente elegida. Las
+  // ventas se filtran por SU PROPIA fuente (la del lead desde el que se vendió),
+  // no por la de los leads tocados en el rango: una venta puede venir de un lead
+  // que hoy nadie tocó, y seguir siendo de campaña.
   let scopedCalls = calls;
+  let scopedSales = sales;
   if (source) {
     const allowed = new Set(leadsTouched.filter((l) => sourceKey(l.source) === source).map((l) => l.id));
     scopedCalls = calls.filter((c) => allowed.has(c.lead_id));
     leadsTouched = leadsTouched.filter((l) => allowed.has(l.id));
+    scopedSales = sales.filter((s) => s.source === source);
   }
 
-  // Net revenue + code/date per linked order (code/date feed cerradosDetalle).
-  // Chunked like the leads lookup.
-  const orderIds = [
-    ...new Set(
-      leadsTouched.filter((l) => l.has_order && l.order_id).map((l) => l.order_id as string),
-    ),
-  ];
-  type OrderInfo = { net: number; name: string | null; created_at: string | null };
-  const infoByOrder = new Map<string, OrderInfo>();
-  const orderPages = await mapInBatches(chunk(orderIds, 300), async (part) =>
-    await sb
-      .from("orders")
-      .select("id, name, created_at, total_amount, total_refunded")
-      .in("id", part),
-  );
-  for (const { data: ordersRaw } of orderPages) {
-    type OrderRaw = {
-      id: string;
-      name: string | null;
-      created_at: string | null;
-      total_amount: number | null;
-      total_refunded: number | null;
-    };
-    for (const o of (ordersRaw as OrderRaw[]) ?? []) {
-      infoByOrder.set(o.id, {
-        net: (o.total_amount ?? 0) - (o.total_refunded ?? 0),
-        name: o.name,
-        created_at: o.created_at,
-      });
-    }
-  }
-
-  const leadOutcome: ProductivityInput["leadOutcome"] = new Map();
-  for (const l of leadsTouched) {
-    const info = l.order_id ? infoByOrder.get(l.order_id) : undefined;
-    leadOutcome.set(l.id, {
-      won: isWonLead(l.category),
-      net: info?.net ?? 0,
-      source: sourceKey(l.source),
-      storeId: l.store_id,
-      orderName: info?.name ?? null,
-      orderAt: info?.created_at ?? null,
-    });
-  }
-  return { scopedCalls, leadOutcome };
+  const leadStore: ProductivityInput["leadStore"] = new Map();
+  for (const l of leadsTouched) leadStore.set(l.id, l.store_id);
+  return { scopedCalls, leadStore, scopedSales };
 }
 
 /** Fetch + aggregate per-advisor productivity for the stores/range (RLS-scoped).
@@ -758,17 +818,24 @@ export async function getAdvisorProductivity(
   const sb = await createServerSupabase();
   const { startIso, endIso } = localRangeBoundsIso(range.from, range.to, tz);
 
-  // 1) Advisor calls in range (vendedora not null = a human touch), paged past
-  //    PostgREST's max-rows cap.
-  const calls = await fetchAdvisorLeadCallsPaged(sb, storeIds, startIso, endIso);
-  if (!calls.length) return [];
+  // 1) Toques del rango (para llamadas/leads/horas) y ventas registradas (para
+  //    cierres e ingresos). Son dos preguntas distintas y ahora dos fuentes.
+  const [calls, sales] = await Promise.all([
+    fetchAdvisorLeadCallsPaged(sb, storeIds, startIso, endIso),
+    fetchAdvisorSalesPaged(sb, storeIds, startIso, endIso),
+  ]);
+  // Sin toques PERO con ventas el tablero sigue teniendo algo que decir: una
+  // asesora puede haber vendido sin registrar ni una llamada.
+  if (!calls.length && !sales.length) return [];
 
-  // 2+3) Touched-lead outcomes + linked orders + source lens (shared helper).
-  const { scopedCalls, leadOutcome } = await buildAdvisorInputs(sb, calls, source);
-  if (!scopedCalls.length) return [];
+  // 2) Tienda de cada lead tocado + lente de fuente (helper compartido).
+  const { scopedCalls, leadStore, scopedSales } = await buildAdvisorInputs(sb, calls, source, sales);
+  if (!scopedCalls.length && !scopedSales.length) return [];
 
-  const emailById = await resolveEmails([...new Set(scopedCalls.map((c) => c.vendedora))]);
-  return computeAdvisorStats({ calls: scopedCalls, leadOutcome, emailById }, tz);
+  const emailById = await resolveEmails([
+    ...new Set([...scopedCalls.map((c) => c.vendedora), ...scopedSales.map((s) => s.vendedora)]),
+  ]);
+  return computeAdvisorStats({ calls: scopedCalls, sales: scopedSales, leadStore, emailById }, tz);
 }
 
 // ───────────────────────── Comparativo vs período anterior ─────────────────────
@@ -1030,7 +1097,10 @@ export async function getProductivityBoard(
   const needPrefix = trendStartIso < startIso; // rango corto (Hoy/Ayer) → faltan días previos
   const prefixEndIso = new Date(Date.parse(startIso) - 1).toISOString();
 
-  const [calls, prevRows, shipEvents, onlineIds, prefixCalls, createdLeads] = await Promise.all([
+  // El sparkline abarca 7 días, que en un rango corto (Hoy/Ayer) empiezan ANTES
+  // del rango: las ventas se piden por la ventana completa y luego se recorta.
+  const salesFromIso = trendStartIso < startIso ? trendStartIso : startIso;
+  const [calls, prevRows, shipEvents, onlineIds, prefixCalls, createdLeads, salesWindow] = await Promise.all([
     fetchAdvisorLeadCallsPaged(sb, storeIds, startIso, endIso),
     getAdvisorProductivity(storeIds, prevRange, source, tz),
     fetchShipmentEventsPaged(sb, storeIds, startIso, endIso),
@@ -1045,24 +1115,30 @@ export async function getProductivityBoard(
       ? fetchAdvisorLeadCallsPaged(sb, storeIds, trendStartIso, prefixEndIso)
       : Promise.resolve([] as AdvisorCall[]),
     fetchLeadsCreatedPaged(sb, storeIds, startIso, endIso),
+    fetchAdvisorSalesPaged(sb, storeIds, salesFromIso, endIso),
   ]);
 
   // Metrics from the SAME calls (source lens inside), same as getAdvisorProductivity.
-  const { scopedCalls, leadOutcome } = await buildAdvisorInputs(sb, calls, source);
-  const emailById = await resolveEmails([...new Set(scopedCalls.map((c) => c.vendedora))]);
-  const cur = scopedCalls.length ? computeAdvisorStats({ calls: scopedCalls, leadOutcome, emailById }, tz) : [];
+  const salesInRange = salesWindow.filter((s) => s.occurredAt >= startIso);
+  const { scopedCalls, leadStore, scopedSales } = await buildAdvisorInputs(sb, calls, source, salesInRange);
+  const emailById = await resolveEmails([
+    ...new Set([...scopedCalls.map((c) => c.vendedora), ...scopedSales.map((s) => s.vendedora)]),
+  ]);
+  const cur =
+    scopedCalls.length || scopedSales.length
+      ? computeAdvisorStats({ calls: scopedCalls, sales: scopedSales, leadStore, emailById }, tz)
+      : [];
   const { rows: withDeltas, prevTotals } = attachDeltas(cur, prevRows);
 
   // Trend series: window calls (range slice + prefix) with the SAME source lens.
   let trendCalls = scopedCalls.filter((c) => c.occurred_at >= trendStartIso);
-  const trendWon = new Set<string>();
-  for (const [id, o] of leadOutcome) if (o.won) trendWon.add(id);
+  // La lente de fuente vive en la venta, así que se aplica igual fuera del rango.
+  const trendSales = source ? salesWindow.filter((s) => s.source === source) : salesWindow;
   if (prefixCalls.length) {
     const prefix = await buildAdvisorInputs(sb, prefixCalls, source);
     trendCalls = trendCalls.concat(prefix.scopedCalls);
-    for (const [id, o] of prefix.leadOutcome) if (o.won) trendWon.add(id);
   }
-  const trendSeries = computeAdvisorConversionByDay({ calls: trendCalls, wonLeadIds: trendWon, days: trendDays, tz });
+  const trendSeries = computeAdvisorConversionByDay({ calls: trendCalls, sales: trendSales, days: trendDays, tz });
 
   // Heatmap: ALL human events in range (no source lens) + Envíos gestiones,
   // counted as DISTINCT leads/shipments per hour.
