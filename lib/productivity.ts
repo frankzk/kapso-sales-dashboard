@@ -127,15 +127,6 @@ export function storeInitials(name: string | null | undefined): string {
     .slice(0, 3);
 }
 
-/** A touched lead counts as a close only if its OWN disposition is `won` —
- *  `has_order` alone is not enough: it can be `true` from an unrelated order
- *  linked by phone (e.g. a past purchase) while the advisor dispositioned THIS
- *  lead as lost ("ya compró en otro lado"). Crediting on `has_order` would count
- *  a lost call as a sale. */
-export function isWonLead(category: string | null | undefined): boolean {
-  return category === "won";
-}
-
 /** `kind`s de `lead_calls` que NO son trabajo de venta: anotaciones de máquina.
  *  Agregar acá cualquier `kind` nuevo que escriba el sistema y no una persona. */
 const NON_SALES_KINDS = new Set(["system"]);
@@ -1193,8 +1184,8 @@ export interface AgentLeadRow {
   category: string | null;
   source: SourceBucket;
   segment: LeadSegment; // calidad del lead (carrito/distrito/conversó/frío)
-  won: boolean;
-  net: number; // net revenue if won, else 0
+  won: boolean; // ELLA registró la venta de este lead en el rango
+  net: number; // neto de esa venta; 0 si no la cerró ella
   llamadas: number; // calls this advisor logged on the lead
   lastTouch: string; // ISO of this advisor's last action on the lead
 }
@@ -1265,16 +1256,31 @@ export async function getAgentLeadsWorked(
   if (source) leads = leads.filter((l) => sourceKey(l.source) === source);
   if (!leads.length) return [];
 
-  // 3) Net revenue per linked order (chunked).
-  const orderIds = leads.filter((l) => l.has_order && l.order_id).map((l) => l.order_id as string);
-  const netByOrder = new Map<string, number>();
-  for (const part of chunk(orderIds, 300)) {
-    const { data: ordersRaw } = await sb
-      .from("orders")
-      .select("id, total_amount, total_refunded")
-      .in("id", part);
-    for (const o of (ordersRaw as { id: string; total_amount: number | null; total_refunded: number | null }[]) ?? []) {
-      netByOrder.set(o.id, (o.total_amount ?? 0) - (o.total_refunded ?? 0));
+  // 3) ¿Cuáles de estos leads cerró ELLA, en este rango?
+  //
+  // Antes esto era `isWonLead(l.category)`: la bandera del LEAD, que no sabe de
+  // quién es la venta ni de cuándo. Con ella el desglose contradecía a la fila de
+  // arriba — el lead de #KP130367 salía como cierre para quien mandó el mensaje
+  // de cortesía, mientras el tablero ya se lo daba a quien lo vendió.
+  //
+  // Va acotado al rango a propósito: el chip dice "de los leads que trabajaste en
+  // este período, estos cerraste". Mezclar una venta de otra semana devolvería
+  // justo la confusión de períodos que acabamos de sacar del tablero.
+  const saleByLead = new Map<string, number>();
+  for (const part of chunk(leads.map((l) => l.id), 300)) {
+    const { data } = await sb
+      .from("order_sales")
+      .select("lead_id, orders(total_amount, total_refunded)")
+      .in("lead_id", part)
+      .eq("vendedora", vendedoraId)
+      .gte("occurred_at", startIso)
+      .lte("occurred_at", endIso);
+    type Row = {
+      lead_id: string | null;
+      orders: { total_amount: number | null; total_refunded: number | null } | null;
+    };
+    for (const r of (data as unknown as Row[]) ?? []) {
+      if (r.lead_id) saleByLead.set(r.lead_id, (r.orders?.total_amount ?? 0) - (r.orders?.total_refunded ?? 0));
     }
   }
 
@@ -1286,8 +1292,8 @@ export async function getAgentLeadsWorked(
     category: l.category,
     source: sourceKey(l.source),
     segment: leadSegment(l),
-    won: isWonLead(l.category),
-    net: l.order_id ? (netByOrder.get(l.order_id) ?? 0) : 0,
+    won: saleByLead.has(l.id),
+    net: saleByLead.get(l.id) ?? 0,
     llamadas: llamadasByLead.get(l.id) ?? 0,
     lastTouch: lastTouchByLead.get(l.id) ?? startIso,
   }));
