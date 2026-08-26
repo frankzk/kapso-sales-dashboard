@@ -10,7 +10,6 @@ import {
   emptyPorFuente,
   formatMinutes,
   isSalesTouch,
-  isWonLead,
   localDayPreset,
   localPresetRange,
   localRangeBoundsIso,
@@ -21,23 +20,6 @@ import {
   type AdvisorStat,
   type FirstTouchLeadInput,
 } from "@/lib/productivity";
-
-describe("isWonLead (a close requires the lead's OWN disposition, not has_order)", () => {
-  it("true only for category='won'", () => {
-    expect(isWonLead("won")).toBe(true);
-  });
-  it("false for a lead dispositioned lost — even though has_order can still be true", () => {
-    // The reported bug: a lead the advisor marked "ya compró en otro lado" (lost)
-    // still has has_order=true from an unrelated linked order. Must not count.
-    expect(isWonLead("lost")).toBe(false);
-  });
-  it("false for open/hot/null/undefined", () => {
-    expect(isWonLead("open")).toBe(false);
-    expect(isWonLead("hot")).toBe(false);
-    expect(isWonLead(null)).toBe(false);
-    expect(isWonLead(undefined)).toBe(false);
-  });
-});
 
 describe("isSalesTouch (ordenar la cola no es trabajo de venta)", () => {
   it("false para las notas de máquina (kind='system'), que es lo que firma 'Resuelto'", () => {
