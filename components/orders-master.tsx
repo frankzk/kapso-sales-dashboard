@@ -1961,6 +1961,7 @@ const TIMELINE_LABEL: Record<string, string> = {
   dispatched: "Pedido despachado",
   out_for_delivery: "Salida a reparto",
   attempt_failed: "Intento fallido",
+  novelty_solved: "Novedad de Swayp resuelta",
   comment: "Comentario",
   confirmation_contact: "Intento de confirmación",
   confirmation_followup: "Próximo contacto pactado",

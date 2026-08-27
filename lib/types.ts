@@ -304,6 +304,15 @@ export interface ShipmentRow {
   /** Current stock evaluation, added at read time for the Envios UI. */
   fenix_reason?: "ok" | "sin_stock" | "sin_cobertura";
   fenix_shipment_id: string | null;
+  /**
+   * Guía que emitió Swayp y su estado CRUDO (1..12), espejados del webhook. El
+   * `delivery_status` de la app es un mapeo con pérdida —6 Novedad y 8 Revisión
+   * caen los dos en 'pendiente'—, así que sin el estado crudo la UI no puede
+   * distinguir un envío que espera una instrucción de uno que simplemente no
+   * salió todavía. Nulos en las guías manuales.
+   */
+  swayp_guide?: string | null;
+  swayp_state?: number | null;
   /** 'fenix_directo' = guía creada desde un pedido, sin guía Aliclik madre. */
   created_via?: string | null;
   delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado

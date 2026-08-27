@@ -68,6 +68,7 @@ import {
 import { ChecklistFilter } from "@/components/filters";
 import { OrderLinkPicker } from "@/components/order-link-picker";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
+import { SwaypNoveltyModal } from "@/components/swayp-novelty-modal";
 import {
   currentFenixReason,
   matchesFenixAvailability,
@@ -1090,10 +1091,12 @@ function ShipmentDrawer({
         guideHistory: ShipmentHistoryGuide[];
         order: ShipmentOrderDetail | null;
         linkedFenixShipment: LinkedShipmentSummary | null;
+        can: { solveNovelty: boolean; return: boolean };
       }
     | { error: string }
     | null
   >(null);
+  const [noveltyOpen, setNoveltyOpen] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const [claimState, setClaimState] = useState<"claiming" | "mine" | "blocked">("claiming");
@@ -1263,6 +1266,12 @@ function ShipmentDrawer({
   const fenixDeliverySchedule = shipment
     ? getFenixDeliverySchedule(shipment.city, shipment.district)
     : null;
+  // 6 Novedad y 8 Revisión: los dos estados en los que Swayp todavía acepta una
+  // instrucción. Sin guía de Swayp no hay nada que responder — una guía manual
+  // se gestiona por teléfono, como siempre.
+  const swaypNovelty = Boolean(
+    shipment?.swayp_guide && (shipment.swayp_state === 6 || shipment.swayp_state === 8),
+  );
   const shopifyAddress = detail && !("error" in detail) ? detail.order?.shipping_address ?? null : null;
   const deliveryAddress = shipment?.delivery_address ?? shopifyAddress?.address1 ?? null;
   const deliveryReference = shipment?.delivery_reference ?? shopifyAddress?.address2 ?? null;
@@ -1483,6 +1492,32 @@ function ShipmentDrawer({
                       <span className="text-amber-800"> · {fenixDeliverySchedule.note}</span>
                     )}
                   </span>
+                </div>
+              )}
+              {swaypNovelty && (
+                // El estado crudo de Swayp es lo único que distingue «el
+                // mensajero está esperando una instrucción» de «todavía no
+                // salió»: los dos caen en `pendiente` al mapearse.
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-950">
+                  <span>
+                    <strong>
+                      {detail.shipment.swayp_state === 8
+                        ? "Swayp marcó devolución"
+                        : "Swayp reportó una novedad"}
+                    </strong>
+                    <span className="text-rose-800">
+                      {" "}
+                      · el mensajero espera una instrucción
+                    </span>
+                  </span>
+                  {detail.can.solveNovelty && (
+                    <button
+                      onClick={() => setNoveltyOpen(true)}
+                      className="rounded-lg bg-rose-700 px-2.5 py-1 font-medium text-white"
+                    >
+                      Resolver novedad
+                    </button>
+                  )}
                 </div>
               )}
             </section>
@@ -2214,6 +2249,20 @@ function ShipmentDrawer({
           </div>
         )}
       </div>
+      {noveltyOpen && shipment && detail && !("error" in detail) && (
+        <SwaypNoveltyModal
+          shipmentId={shipment.id}
+          guideCode={shipment.guide_code}
+          swaypGuide={shipment.swayp_guide ?? null}
+          swaypState={shipment.swayp_state ?? null}
+          canReturn={detail.can.return}
+          onClose={() => setNoveltyOpen(false)}
+          onSolved={() => {
+            void refresh();
+            void onShipmentUpdated(shipment.id);
+          }}
+        />
+      )}
     </div>
   );
 }

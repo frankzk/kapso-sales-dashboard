@@ -59,6 +59,25 @@ describe("buildSwaypGuideInput", () => {
     expect(r.input.telefonoRecogida).toBe(SENDER.telefono);
   });
 
+  describe("idBusiness", () => {
+    // La documentación lo marca obligatorio; el entorno de pruebas acepta la
+    // guía sin él. Se manda cuando está configurado y se omite cuando no, en
+    // vez de mandar un 0 que Swayp leería como un comercio.
+    it("lo incluye cuando es un número positivo", () => {
+      const r = buildSwaypGuideInput({ ...base, idBusiness: 69956 });
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.input.idBusiness).toBe(69956);
+    });
+
+    it("lo omite —no lo manda vacío— cuando no está configurado", () => {
+      for (const idBusiness of [null, undefined, 0, -1, Number.NaN]) {
+        const r = buildSwaypGuideInput({ ...base, idBusiness });
+        expect(r.ok, String(idBusiness)).toBe(true);
+        if (r.ok) expect(r.input, String(idBusiness)).not.toHaveProperty("idBusiness");
+      }
+    });
+  });
+
   it("refuses an inexact district — a cercado fallback would misroute the package", () => {
     const r = buildSwaypGuideInput({ ...base, district: "Distrito Inventado" });
     expect(r.ok).toBe(false);

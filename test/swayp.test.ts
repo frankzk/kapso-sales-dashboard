@@ -7,6 +7,8 @@ import {
   cancelGuides,
   mapSwaypState,
   isSwaypAuthError,
+  swaypAuthErrorHint,
+  swaypTokenSubject,
   trackingUrl,
   SwaypError,
   type SwaypClientOpts,
@@ -239,6 +241,77 @@ describe("isSwaypAuthError", () => {
     expect(isSwaypAuthError(new SwaypError(400, "La dirección debe tener al menos 5 caracteres"))).toBe(false);
     expect(isSwaypAuthError(new SwaypError(500, "Error en manejo de inventario"))).toBe(false);
     expect(isSwaypAuthError(new Error("boom"))).toBe(false);
+  });
+
+  it("sigue marcando «Token expired», que también sale por email que no coincide", () => {
+    // Verificado contra su API: el MISMO token da 200 con su email y 403
+    // «Token expired» con cualquier otro. Es un problema de credencial en los
+    // dos casos, así que clasifica igual; lo que cambia es el consejo.
+    expect(isSwaypAuthError(new SwaypError(403, '{"error":"Error: Token expired"}'))).toBe(true);
+  });
+});
+
+// Payload real del token de pruebas: {"sub":"gaby@kenku.pe","iat":...,"exp":...}
+const JWT_GABY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." +
+  "eyJzdWIiOiJnYWJ5QGtlbmt1LnBlIiwiaWF0IjoxNzgxNjM3ODIxLCJleHAiOjE3ODE2NDE0MjF9." +
+  "ZmlybWE";
+
+describe("swaypTokenSubject", () => {
+  it("lee el sub de un JWT sin validar firma ni expiración", () => {
+    expect(swaypTokenSubject(JWT_GABY)).toBe("gaby@kenku.pe");
+  });
+
+  it("devuelve null cuando no se puede saber, en vez de adivinar", () => {
+    for (const token of [
+      "un-token-opaco-cualquiera",
+      "",
+      "a.b",
+      "a.b.c.d",
+      // JWT válido pero sin `sub`
+      `eyJhbGciOiJIUzI1NiJ9.${btoa('{"iat":1}').replace(/=+$/, "")}.x`,
+      // `sub` que no es un email: no sirve para comparar con SWAYP_EMAIL
+      `eyJhbGciOiJIUzI1NiJ9.${btoa('{"sub":"12345"}').replace(/=+$/, "")}.x`,
+    ]) {
+      expect(swaypTokenSubject(token), token).toBeNull();
+    }
+  });
+
+  it("no revienta con base64 corrupto", () => {
+    expect(swaypTokenSubject("aaa.!!!!.ccc")).toBeNull();
+  });
+});
+
+describe("swaypAuthErrorHint", () => {
+  it("señala el email cuando no coincide, y ofrece las DOS salidas", () => {
+    // Verificado contra su API: el token va atado a un usuario, no a la
+    // organización — fkc@monono.pe es Administrador activo en la misma empresa
+    // que gaby@kenku.pe y falla igual que un email inventado. Así que corregir
+    // la variable no siempre es lo que la operación quiere: si la integración
+    // debe correr como fkc@monono.pe, hay que pedir el token a ese nombre.
+    const hint = swaypAuthErrorHint({ token: JWT_GABY, email: "fkc@monono.pe" });
+    expect(hint).toContain("fkc@monono.pe");
+    expect(hint).toContain("gaby@kenku.pe");
+    expect(hint).toMatch(/SWAYP_EMAIL/);
+    expect(hint).toMatch(/token emitido para/i);
+    expect(hint).not.toMatch(/ya no es válida/i);
+  });
+
+  it("ignora mayúsculas y espacios: eso no es una discrepancia real", () => {
+    const hint = swaypAuthErrorHint({ token: JWT_GABY, email: "  GABY@Kenku.PE  " });
+    expect(hint).toMatch(/ya no es válida/i);
+  });
+
+  it("cuando el email coincide, el consejo sí es pedir token nuevo", () => {
+    expect(swaypAuthErrorHint({ token: JWT_GABY, email: "gaby@kenku.pe" })).toMatch(
+      /pedirle un token nuevo/i,
+    );
+  });
+
+  it("con un token opaco no inventa un diagnóstico", () => {
+    expect(swaypAuthErrorHint({ token: "token-opaco", email: "quien@sea.pe" })).toMatch(
+      /ya no es válida/i,
+    );
   });
 });
 
