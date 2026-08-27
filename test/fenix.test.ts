@@ -193,6 +193,84 @@ describe("Fenix availability filters", () => {
     expect(currentFenixReason({ city: "Tacna", fenix_eligible: false })).toBe("sin_cobertura");
     expect(currentFenixReason({ city: "Piura", fenix_eligible: false })).toBe("sin_stock");
   });
+
+  describe("cuando `city` viene vacía", () => {
+    // Caso real: AUR5X392242419936 (#KP130479), dada de alta por la API de
+    // Aliclik. `city` vacía, distrito/provincia «Arequipa». La cola la mostraba
+    // fuera de cobertura y nadie la intentaba, aunque hubiera stock.
+    it("deriva del distrito y la provincia en vez de darla por sin cobertura", () => {
+      expect(
+        currentFenixReason({
+          city: "",
+          district: "Arequipa",
+          province: "Arequipa",
+          fenix_eligible: false,
+        }),
+      ).toBe("sin_stock");
+    });
+
+    it("también con city null o solo espacios", () => {
+      for (const city of [null, undefined, "   "]) {
+        expect(
+          currentFenixReason({ city, district: "Cusco", province: "Cusco", fenix_eligible: false }),
+          String(city),
+        ).toBe("sin_stock");
+      }
+    });
+
+    it("sin cobertura sigue siendo sin cobertura: no inventa una ciudad", () => {
+      expect(
+        currentFenixReason({ city: "", district: "Tacna", province: "Tacna", fenix_eligible: false }),
+      ).toBe("sin_cobertura");
+    });
+
+    it("hereda la cobertura del departamento, igual que la creación de guía", () => {
+      // Camaná es otra provincia de Arequipa, y aun así deriva a `arequipa`:
+      // deriveFenixCoverageCity escanea la etiqueta combinada buscando un token
+      // de ciudad conocida, y ese es su comportamiento documentado. No se
+      // corrige acá a propósito — el punto de este cambio es que la pantalla
+      // responda LO MISMO que el despacho, no algo distinto pero más estricto.
+      //
+      // Lo que frena de verdad un destino así es el ubigeo al crear la guía:
+      // resolveUbigeo("arequipa","Camaná") devuelve exact=false y el envío se
+      // rechaza con un mensaje explícito, en vez de salir con un código
+      // aproximado que desviaría el paquete.
+      expect(
+        currentFenixReason({ city: "", district: "Camaná", province: "Arequipa", fenix_eligible: false }),
+      ).toBe("sin_stock");
+    });
+
+    it("sin ningún dato de destino no hay nada que derivar", () => {
+      expect(currentFenixReason({ city: "", fenix_eligible: false })).toBe("sin_cobertura");
+    });
+  });
+
+  it("cuando `city` viene cargada MANDA ella: derivar taparía localityMismatch", () => {
+    // El courier puede contradecir a Shopify —«cusco» contra «Juliaca · Puno»—
+    // y esa discrepancia la reporta localityMismatch(). Si acá se derivara por
+    // encima de un dato presente, la pantalla mostraría la cobertura del
+    // destino equivocado y el conflicto no se vería.
+    expect(
+      currentFenixReason({
+        city: "Tacna",
+        district: "Arequipa",
+        province: "Arequipa",
+        fenix_eligible: false,
+      }),
+    ).toBe("sin_cobertura");
+  });
+
+  it("una razón ya calculada en el servidor gana sobre cualquier derivación", () => {
+    expect(
+      currentFenixReason({
+        city: "",
+        district: "Arequipa",
+        province: "Arequipa",
+        fenix_eligible: false,
+        fenix_reason: "sin_cobertura",
+      }),
+    ).toBe("sin_cobertura");
+  });
 });
 
 describe("evaluateDirectFenixStock (gate de guía directa: TODOS los ítems)", () => {

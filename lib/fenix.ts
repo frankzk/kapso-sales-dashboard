@@ -3,7 +3,7 @@
 // product in that city. Real stock comes from the fenix_stock table; this module
 // decides eligibility from a shipment + the relevant stock rows.
 
-import { fenixWarehouseKey, isFenixCity, normalizeCity } from "./shipments";
+import { deriveFenixCoverageCity, fenixWarehouseKey, isFenixCity, normalizeCity } from "./shipments";
 
 export interface FenixStockRow {
   city: string; // normalized coverage key
@@ -38,14 +38,38 @@ export function fenixStockCityKey(city: string | null | undefined): string {
 
 /** Resolves the UI status, including a safe fallback for legacy rows that were
  * loaded without the read-time reason enrichment. */
+/**
+ * La razón que se le muestra al operador. Pura.
+ *
+ * `city` puede venir VACÍA —el alta desde la API de Aliclik no la rellena— y
+ * antes eso se leía como «fuera de cobertura», que es una conclusión distinta
+ * de la verdadera: no es que no haya cobertura, es que falta el dato. Medido
+ * sobre la base: 234 envíos con `city` vacía y ciudad perfectamente derivable
+ * de su distrito/provincia, en las diez ciudades; 33 de ellos pendientes, con
+ * stock, y despachables hoy. Nadie los intentaba porque la cola los daba por
+ * imposibles.
+ *
+ * Así que cuando falta `city` se deriva igual que en la creación de la guía
+ * —`deriveFenixCoverageCity`, la misma función—, en vez de que la pantalla y el
+ * despacho respondan distinto sobre el mismo envío.
+ *
+ * Cuando `city` SÍ viene, manda ella y no se deriva nada. Es deliberado: el
+ * courier puede contradecir a Shopify, y esa discrepancia la reporta
+ * `localityMismatch()`. Derivar por encima de un dato presente la taparía.
+ */
 export function currentFenixReason(shipment: {
   city?: string | null;
+  district?: string | null;
+  province?: string | null;
   fenix_eligible: boolean;
   fenix_reason?: FenixEligibility["reason"];
 }): FenixEligibility["reason"] {
   if (shipment.fenix_reason) return shipment.fenix_reason;
   if (shipment.fenix_eligible) return "ok";
-  return isFenixCity(shipment.city) ? "sin_stock" : "sin_cobertura";
+  const city = normalizeCity(shipment.city)
+    ? shipment.city
+    : deriveFenixCoverageCity(shipment.district, shipment.province);
+  return isFenixCity(city) ? "sin_stock" : "sin_cobertura";
 }
 
 export function matchesFenixAvailability(
