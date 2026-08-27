@@ -39,23 +39,34 @@ export function fenixStockCityKey(city: string | null | undefined): string {
 /** Resolves the UI status, including a safe fallback for legacy rows that were
  * loaded without the read-time reason enrichment. */
 /**
+ * La clave de cobertura de un envío. UNA sola definición, a propósito.
+ *
+ * Existió repartida en dos: `evaluateFenix` (que decide en la cola, del lado
+ * del servidor) leía sólo `city`, y la creación de guía derivaba de la
+ * dirección. Con `city` vacía —el alta por la API de Aliclik no la rellena— la
+ * pantalla decía «fuera de cobertura» sobre envíos que el despacho aceptaba sin
+ * chistar. 234 envíos así, 33 de ellos pendientes, con stock y despachables.
+ *
+ * `city` manda cuando viene: el courier puede contradecir a Shopify, y esa
+ * discrepancia la reporta `localityMismatch()`. Derivar por encima de un dato
+ * presente la taparía. Sólo se deriva cuando no hay nada que tapar. Pura.
+ */
+export function coverageCityOf(shipment: {
+  city?: string | null;
+  district?: string | null;
+  province?: string | null;
+}): string {
+  const explicit = normalizeCity(shipment.city);
+  if (explicit) return explicit;
+  return normalizeCity(deriveFenixCoverageCity(shipment.district, shipment.province));
+}
+
+/**
  * La razón que se le muestra al operador. Pura.
  *
- * `city` puede venir VACÍA —el alta desde la API de Aliclik no la rellena— y
- * antes eso se leía como «fuera de cobertura», que es una conclusión distinta
- * de la verdadera: no es que no haya cobertura, es que falta el dato. Medido
- * sobre la base: 234 envíos con `city` vacía y ciudad perfectamente derivable
- * de su distrito/provincia, en las diez ciudades; 33 de ellos pendientes, con
- * stock, y despachables hoy. Nadie los intentaba porque la cola los daba por
- * imposibles.
- *
- * Así que cuando falta `city` se deriva igual que en la creación de la guía
- * —`deriveFenixCoverageCity`, la misma función—, en vez de que la pantalla y el
- * despacho respondan distinto sobre el mismo envío.
- *
- * Cuando `city` SÍ viene, manda ella y no se deriva nada. Es deliberado: el
- * courier puede contradecir a Shopify, y esa discrepancia la reporta
- * `localityMismatch()`. Derivar por encima de un dato presente la taparía.
+ * Camino de respaldo: en la cola gana `fenix_reason`, que el servidor calcula
+ * con `evaluateFenix`. Los dos resuelven la ciudad con `coverageCityOf`, que
+ * es donde vive la regla — separarlos fue el bug.
  */
 export function currentFenixReason(shipment: {
   city?: string | null;
@@ -66,10 +77,7 @@ export function currentFenixReason(shipment: {
 }): FenixEligibility["reason"] {
   if (shipment.fenix_reason) return shipment.fenix_reason;
   if (shipment.fenix_eligible) return "ok";
-  const city = normalizeCity(shipment.city)
-    ? shipment.city
-    : deriveFenixCoverageCity(shipment.district, shipment.province);
-  return isFenixCity(city) ? "sin_stock" : "sin_cobertura";
+  return isFenixCity(coverageCityOf(shipment)) ? "sin_stock" : "sin_cobertura";
 }
 
 export function matchesFenixAvailability(
@@ -152,11 +160,23 @@ export function stockCoversRef(stock: FenixStockRow, ref: ProductRef): boolean {
  * `stockRows` should already be scoped to the shipment's org and (ideally) city.
  */
 export function evaluateFenix(
-  shipment: { city?: string | null; product?: string | null },
+  shipment: {
+    city?: string | null;
+    /**
+     * Se usan SÓLO si `city` viene vacía. El alta por la API de Aliclik no
+     * rellena esa columna, y leerla sola convertía «falta el dato» en «no hay
+     * cobertura» — dos cosas distintas, y la segunda esconde trabajo
+     * despachable. Misma regla y misma función que la creación de guía, para
+     * que la cola y el despacho no respondan distinto sobre el mismo envío.
+     */
+    district?: string | null;
+    province?: string | null;
+    product?: string | null;
+  },
   stockRows: FenixStockRow[],
   orderProducts?: ProductRef[],
 ): FenixEligibility {
-  const city = normalizeCity(shipment.city);
+  const city = coverageCityOf(shipment);
   const stockCity = fenixStockCityKey(city);
   const cityRows = stockRows.filter((r) => fenixStockCityKey(r.city) === stockCity);
   const covered = isFenixCity(city) || cityRows.length > 0;

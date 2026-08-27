@@ -34,6 +34,54 @@ describe("evaluateFenix", () => {
     expect(r.reason).toBe("sin_cobertura");
   });
 
+  // Este es EL camino que decide en la cola: el servidor guarda su resultado en
+  // `fenix_reason`, y `currentFenixReason` se corta ahí. Arreglar sólo aquella
+  // no cambiaba nada de lo que se ve —lo comprobamos en producción con
+  // AUR5X392242419936 (#KP130479), que siguió saliendo «fuera de cobertura»
+  // después del primer intento.
+  describe("con `city` vacía deriva del destino, igual que la creación de guía", () => {
+    it("resuelve la ciudad y llega a evaluar el stock", () => {
+      const r = evaluateFenix(
+        { city: "", district: "Cusco", province: "Cusco", product: "SUPER HUMAN Ethiopian Black Seed Oil" },
+        stock,
+      );
+      expect(r.city).toBe("cusco");
+      expect(r.reason).toBe("ok");
+      expect(r.eligible).toBe(true);
+    });
+
+    it("cobertura sin stock dice sin_stock, no sin_cobertura", () => {
+      const r = evaluateFenix(
+        { city: "", district: "Arequipa", province: "Arequipa", product: "Pulsera Magnética" },
+        stock,
+      );
+      expect(r.reason).toBe("sin_stock");
+    });
+
+    it("un destino de verdad fuera de cobertura sigue estándolo", () => {
+      const r = evaluateFenix(
+        { city: "", district: "Tacna", province: "Tacna", product: "Mushroom Coffee" },
+        stock,
+      );
+      expect(r.reason).toBe("sin_cobertura");
+    });
+
+    it("sin `city` y sin destino no hay nada que derivar", () => {
+      expect(evaluateFenix({ city: "", product: "Mushroom Coffee" }, stock).reason).toBe(
+        "sin_cobertura",
+      );
+    });
+
+    it("cuando `city` viene cargada manda ella: derivar taparía localityMismatch", () => {
+      const r = evaluateFenix(
+        { city: "Lima", district: "Cusco", province: "Cusco", product: "SUPER HUMAN Ethiopian Black Seed Oil" },
+        stock,
+      );
+      expect(r.city).toBe("lima");
+      expect(r.reason).toBe("sin_cobertura");
+    });
+  });
+
   it("sin_stock when the product doesn't match any stock row in a covered city", () => {
     const r = evaluateFenix({ city: "Trujillo", product: "Producto desconocido" }, stock);
     expect(r.eligible).toBe(false);
