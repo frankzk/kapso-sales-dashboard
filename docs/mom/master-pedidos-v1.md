@@ -1478,6 +1478,52 @@ Horarios Swayp documentados:
 - Trujillo: 09:00–17:00.
 - Juliaca: 09:00–16:00.
 
+### 11.2 Novedades de Swayp
+
+Una **novedad** es el estado 6 de Swayp: el mensajero llegó, no pudo entregar, y
+la guía queda detenida esperando una instrucción. No es un intento fallido ya
+cerrado —eso se registra aparte—; es una pregunta abierta que alguien tiene que
+responder para que el paquete siga moviéndose.
+
+El estado 8, «Revisión», es el mensajero marcando devolución por su cuenta.
+Admite la misma gestión, y es la única puerta para revertir una devolución que la
+operación no pidió. Ambos estados mapean a `pendiente` en el modelo de la app
+—que solo tiene cinco estados—, así que el estado crudo de Swayp es lo único que
+distingue «esperando instrucción» de «todavía no salió».
+
+Swayp acepta exactamente tres respuestas:
+
+| Acción | Qué significa | Reversible |
+| --- | --- | --- |
+| Volver a ofrecer | El mensajero reintenta la entrega sin cambiar la fecha | Sí |
+| Devolver al remitente | Se cierra el intento y el paquete vuelve a la bodega | No |
+| Reprogramar | El mensajero vuelve en la fecha que se indique | Sí |
+
+Reglas:
+
+- **El comentario es obligatorio en las tres.** Swayp se lo muestra al mensajero:
+  es lo único que va a leer antes de decidir qué hacer con el paquete.
+- **La fecha solo existe al reprogramar**, y no puede ser hoy: Swayp arma la ruta
+  del día siguiente entre las 16:00 y las 17:00 (§9), así que reprogramar «para
+  hoy» es pedir algo que ya no entra en ninguna ruta.
+- **Resolver una novedad NO es una salida nueva.** No crea guía, no crea QR, no
+  consume el máximo global de cinco salidas ni la política de §9.3 de que Swayp
+  se use una sola vez por pedido en Lima. Es gestión de la guía que ya existe.
+  Devolver al remitente sí abre la devolución física, que en Swayp se recoge cada
+  semana o cada quince días (§9.4).
+- **El desenlace lo confirma Swayp, no nosotros.** Al resolver una novedad la app
+  no toca el estado del envío: lo actualiza el webhook cuando el mensajero
+  ejecuta la instrucción —o cuando no la ejecuta—. Adelantarlo sería pintar en el
+  Master un final que todavía no ocurrió.
+- Queda registrado en `order_events` con el término `novelty_solved`, que guarda
+  quién decidió, qué acción, con qué comentario y para qué fecha. Es append-only.
+
+Permisos: resolver una novedad exige `swayp.solve_novelty`, que la vendedora
+tiene —es gestión de venta, la misma persona que llamaría a la clienta—.
+**Devolver al remitente exige además `closure.return`**, porque cierra la entrega
+y dispara la devolución física, que es lo que ese permiso gobierna en el resto
+del sistema.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom

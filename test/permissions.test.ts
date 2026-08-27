@@ -229,6 +229,28 @@ describe("permisos de Aliclik", () => {
     expect(perms.has("aliclik.create_guide")).toBe(false);
     expect(perms.has("master.edit")).toBe(true);
   });
+
+  it("la vendedora resuelve novedades de Swayp: es gestión de venta", () => {
+    const perms = permissionsFor(["vendedora"]);
+    expect(perms.has("swayp.solve_novelty")).toBe(true);
+    // Devolver al remitente exige ADEMÁS closure.return, que también tiene: la
+    // prueba fija que hoy nadie pierde capacidad por haber separado los dos.
+    expect(perms.has("closure.return")).toBe(true);
+  });
+
+  it("viewer no resuelve novedades", () => {
+    expect(permissionsFor(["viewer"]).has("swayp.solve_novelty")).toBe(false);
+  });
+
+  it("quitarle closure.return a alguien también le cierra la devolución por novedad", () => {
+    // El motivo de haber reutilizado closure.return en vez de inventar un
+    // permiso nuevo: revocarlo cierra TODAS las puertas a la devolución, no
+    // solo la del expediente.
+    const perms = permissionsFor(["vendedora"], [{ permission: "closure.return", granted: false }]);
+    expect(perms.has("closure.return")).toBe(false);
+    // Y sigue pudiendo reintentar o reprogramar, que no cierran nada.
+    expect(perms.has("swayp.solve_novelty")).toBe(true);
+  });
 });
 
 describe("riders.manage (registro de motorizados)", () => {

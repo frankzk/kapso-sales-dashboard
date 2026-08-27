@@ -64,8 +64,10 @@ import {
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { env } from "@/lib/env";
-import { createGuide, isSwaypAuthError, swaypOptsFromEnv } from "@/lib/swayp";
+import { createGuide, isSwaypAuthError, solveNovelty, swaypOptsFromEnv } from "@/lib/swayp";
 import { buildSwaypGuideInput, parseSenders } from "@/lib/swayp-guide";
+import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
+import { getMasterPermissions } from "@/lib/permissions-access";
 import type {
   LinkedShipmentSummary,
   OrderLineItem,
@@ -183,6 +185,12 @@ export async function loadShipmentDetail(
       guideHistory: ShipmentHistoryGuide[];
       order: ShipmentOrderDetail | null;
       linkedFenixShipment: LinkedShipmentSummary | null;
+      /**
+       * Permisos que el drawer necesita para decidir qué OFRECER. La puerta de
+       * verdad sigue estando en cada acción del servidor; esto sólo evita
+       * dibujar un botón que va a rebotar.
+       */
+      can: { solveNovelty: boolean; return: boolean };
     }
   | { error: string }
 > {
@@ -245,12 +253,17 @@ export async function loadShipmentDetail(
       }
     }
   }
+  const perms = await getMasterPermissions();
   return {
     shipment: detail.shipment,
     calls,
     guideHistory,
     order,
     linkedFenixShipment: detail.linkedFenixShipment,
+    can: {
+      solveNovelty: perms.can("swayp.solve_novelty"),
+      return: perms.can("closure.return"),
+    },
   };
 }
 
@@ -2331,4 +2344,128 @@ export async function recomputeFenixEligibility(): Promise<
   const updated = toEligible.length + toIneligible.length;
   revalidatePath("/dashboard/envios");
   return { notice: `Elegibilidad recalculada — ${updated} guías actualizadas.`, updated };
+}
+
+// ── Novedades de Swayp ───────────────────────────────────────────────────────
+
+/** Estados de Swayp en los que una novedad todavía admite respuesta. */
+const SWAYP_SOLVABLE_STATES = new Set([
+  6, // Novedad: el mensajero llegó y no pudo entregar.
+  8, // Revisión: el mensajero marcó devolución y todavía se puede gestionar
+  //    —mapSwaypState() ya lo documenta así—, que es justamente la puerta para
+  //    revertir una devolución que la operación no pidió.
+]);
+
+/**
+ * Responde una novedad de Swayp: volver a ofrecer, devolver al remitente o
+ * reprogramar.
+ *
+ * NO ESCRIBE `delivery_status`. El estado resultante lo confirma Swayp por el
+ * webhook, igual que el resto de la integración; adelantarnos acá sería pintar
+ * en el Master un desenlace que todavía no ocurrió —y que puede no ocurrir, si
+ * el mensajero no llega a ejecutar la instrucción—. Lo único que persistimos es
+ * QUE SE PIDIÓ, en `order_events`, que es append-only.
+ */
+export async function solveSwaypNovelty(input: {
+  shipmentId: string;
+  accion: string;
+  comentario: string;
+  fechaEntregaIso?: string | null;
+}): Promise<ShipmentActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("swayp.solve_novelty")) {
+    return { error: "Tu rol no permite resolver novedades de Swayp." };
+  }
+
+  const ctx = await authorizeShipment(input.shipmentId);
+  if (!ctx) return { error: "Envío inválido o sin acceso." };
+
+  if (!env.swaypEnabled()) {
+    return { error: "La integración con Swayp está desactivada en este entorno." };
+  }
+
+  const admin = createAdminSupabase();
+  const { data } = await admin
+    .from("shipments")
+    .select("id,order_id,guide_code,swayp_guide,swayp_state")
+    .eq("id", input.shipmentId)
+    .maybeSingle();
+  const shipment = data as {
+    id: string;
+    order_id: string | null;
+    guide_code: string | null;
+    swayp_guide: string | null;
+    swayp_state: number | null;
+  } | null;
+  if (!shipment) return { error: "Envío inválido o sin acceso." };
+
+  const built = buildNoveltySolution({
+    guia: shipment.swayp_guide,
+    accion: input.accion,
+    comentario: input.comentario,
+    fechaEntregaIso: input.fechaEntregaIso,
+  });
+  if (!built.ok) return { error: built.error };
+  const { accion } = built.input;
+
+  // Devolver al remitente cierra el intento y dispara la devolución física, que
+  // es lo que `closure.return` gobierna en todo el resto del sistema.
+  if (noveltyActionIsReturn(accion) && !perms.can("closure.return")) {
+    return { error: "Devolver al remitente exige el permiso de retornos y devoluciones." };
+  }
+
+  // El estado lo espejamos del webhook, así que puede ir por detrás de Swayp. Se
+  // dice cuál vemos: si la novedad ya se resolvió por el panel, el número explica
+  // por qué el botón no sirve, en vez de dejar a la operadora reintentando.
+  if (!SWAYP_SOLVABLE_STATES.has(shipment.swayp_state ?? 0)) {
+    return {
+      error:
+        `Este envío no está en novedad según lo último que reportó Swayp ` +
+        `(estado ${shipment.swayp_state ?? "desconocido"}). Recarga y vuelve a mirar.`,
+    };
+  }
+
+  try {
+    await solveNovelty(swaypOptsFromEnv(), built.input);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "error desconocido";
+    console.error(
+      isSwaypAuthError(e)
+        ? "[swayp] CREDENCIAL INVÁLIDA — pedir token nuevo a Swayp:"
+        : "[swayp] solveNovelty falló:",
+      msg,
+    );
+    return {
+      error: isSwaypAuthError(e)
+        ? "La credencial de Swayp ya no es válida; avisa a quien administra la integración."
+        : `Swayp rechazó la solución de la novedad: ${msg}`,
+    };
+  }
+
+  const meta = NOVELTY_ACTIONS[accion];
+  if (shipment.order_id) {
+    // Append-only: deja el rastro de quién decidió qué sobre un paquete real.
+    await admin.from("order_events").insert({
+      store_id: ctx.storeId,
+      order_id: shipment.order_id,
+      kind: "novelty_solved",
+      occurred_at: new Date().toISOString(),
+      actor: ctx.userId,
+      source: "fenix",
+      courier: "fenix",
+      guide_code: shipment.guide_code,
+      shipment_id: shipment.id,
+      reason: meta.label,
+      note: built.input.comentario,
+      payload: {
+        accion,
+        swayp_guide: shipment.swayp_guide,
+        ...(built.input.fechaEntrega ? { fecha_entrega: built.input.fechaEntrega } : {}),
+      },
+    });
+  }
+
+  revalidatePath("/dashboard/envios");
+  revalidatePath("/dashboard/pedidos");
+  return { notice: `Novedad resuelta en Swayp: ${meta.label.toLowerCase()}.` };
 }

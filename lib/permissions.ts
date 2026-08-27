@@ -65,6 +65,19 @@ export const PERMISSIONS = [
   // es una escritura hacia afuera y cobrable — mismo criterio que Aliclik y
   // Tanders. Crear la guía NO implica poder ver la clave que la acompaña.
   "shalom.create_guide",
+  // Swayp: resolver una novedad (estado 6) es responderle al mensajero que está
+  // parado frente a la puerta —volver a ofrecer, devolver o reprogramar—. Es una
+  // escritura hacia AFUERA que mueve un paquete real, así que sigue el criterio
+  // de Aliclik/Tanders/Shalom y no cae bajo `master.edit`.
+  //
+  // OJO con la acción 2 (devolver al remitente): termina el intento de entrega y
+  // dispara la devolución física, que en Swayp se recoge cada semana o quincena
+  // (MOM §9.4). Por eso la acción exige ADEMÁS `closure.return`, que ya significa
+  // exactamente eso —"solicitar/recibir retornos"— en vez de inventar un permiso
+  // nuevo. Hoy la vendedora tiene los dos, así que nadie pierde capacidad; lo que
+  // se gana es que quitarle `closure.return` a alguien también le impida cerrar
+  // una entrega por esta puerta lateral.
+  "swayp.solve_novelty",
   // Dar por bueno un cobro que el lector de comprobantes rechazó. Es la única
   // forma de levantar el bloqueo, así que NO cae bajo `master.edit`: quien
   // revisa un posible Yape a otra cuenta no puede ser cualquiera que pueda
@@ -190,6 +203,10 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "aliclik.create_guide",
     "tanders.create_guide",
     "shalom.create_guide",
+    // Gestionar la novedad es gestión de venta: la misma persona que llamaría a
+    // la clienta para preguntarle por qué no abrió es la que le dice al mensajero
+    // si vuelve a intentarlo o reprograma. Mismo criterio que `recovery.contact`.
+    "swayp.solve_novelty",
     "settlements.manage",
     // Recuperar una devolución es gestión de venta, que es su trabajo: la misma
     // persona que llamaría a esa clienta es la que manda el mensaje.
