@@ -112,7 +112,9 @@ export function swaypAuthErrorHint(opts: Pick<SwaypClientOpts, "token" | "email"
     return (
       `SWAYP_EMAIL es «${email}» pero el token fue emitido para «${sub}». ` +
       `Swayp rechaza esa combinación diciendo «Token expired», que es engañoso: ` +
-      `el token está bien, el email no. Corrige la variable — no hace falta pedir token nuevo.`
+      `el token está bien, el email no. El token va atado a UN usuario, no a la ` +
+      `organización, así que hay dos salidas: poner «${sub}» en SWAYP_EMAIL, o ` +
+      `pedirle a Swayp un token emitido para «${email}».`
     );
   }
   return "La credencial de Swayp ya no es válida; hay que pedirle un token nuevo a Swayp.";

@@ -283,11 +283,18 @@ describe("swaypTokenSubject", () => {
 });
 
 describe("swaypAuthErrorHint", () => {
-  it("señala el email cuando no coincide con el token, y no manda a pedir uno nuevo", () => {
+  it("señala el email cuando no coincide, y ofrece las DOS salidas", () => {
+    // Verificado contra su API: el token va atado a un usuario, no a la
+    // organización — fkc@monono.pe es Administrador activo en la misma empresa
+    // que gaby@kenku.pe y falla igual que un email inventado. Así que corregir
+    // la variable no siempre es lo que la operación quiere: si la integración
+    // debe correr como fkc@monono.pe, hay que pedir el token a ese nombre.
     const hint = swaypAuthErrorHint({ token: JWT_GABY, email: "fkc@monono.pe" });
     expect(hint).toContain("fkc@monono.pe");
     expect(hint).toContain("gaby@kenku.pe");
-    expect(hint).not.toMatch(/pedirle un token nuevo/i);
+    expect(hint).toMatch(/SWAYP_EMAIL/);
+    expect(hint).toMatch(/token emitido para/i);
+    expect(hint).not.toMatch(/ya no es válida/i);
   });
 
   it("ignora mayúsculas y espacios: eso no es una discrepancia real", () => {
