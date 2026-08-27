@@ -370,6 +370,14 @@ export interface SwaypGuide {
  * Consulta una guía. La API responde 200 con `{}` cuando la guía no existe o no
  * pertenece a la cuenta, así que eso se traduce a null en vez de a un objeto
  * vacío que el llamador confundiría con datos.
+ *
+ * OJO: hoy este endpoint **revienta con 500 cuando la guía está en novedad**
+ * —`TypeError: Cannot read properties of undefined (reading 'novedadFoto')`,
+ * reproducido en el entorno de pruebas—. Es un fallo del lado de Swayp, no
+ * nuestro. Lanza excepción, que es lo correcto, pero significa que no se puede
+ * consultar una guía justo en el estado en el que más falta haría. El flujo de
+ * novedades no depende de esto: trabaja con el `swayp_state` que trae el
+ * webhook.
  */
 export async function getGuide(
   opts: SwaypClientOpts,
@@ -399,11 +407,42 @@ export interface SwaypNoveltySolution {
   geoReferencia?: { url?: string; coords?: { lat: number; lon: number } };
 }
 
+/**
+ * Lo que contesta `setNoveltySolution`, verificado sobre una novedad real —no
+ * es lo que sugería la documentación, que no publica la respuesta—:
+ *
+ *   {"status":200,"msg":"Actualizado Con Exito!","guia":50000004102,
+ *    "accion":{"codigo":"3","tipo":"Reprogramar"},
+ *    "cambios":{"estado":"Solucionado","codigoEstado":"5",
+ *               "fechaSolucionado":"…","fechaReprogramada":"…",
+ *               "partnerNotificado":false}}
+ *
+ * `cambios.codigoEstado` es el estado al que queda la guía: reprogramar la
+ * devuelve a 5 (Reparto), no a un estado propio de «reprogramada». Se tipa pero
+ * NO se usa para escribir `delivery_status`: el estado sigue llegando por el
+ * webhook, que es la única fuente que también cubre lo que pasa después.
+ */
+export interface SwaypNoveltyResult {
+  status?: number;
+  msg?: string;
+  guia?: number | string;
+  accion?: { codigo?: string; tipo?: string };
+  cambios?: {
+    estado?: string;
+    codigoEstado?: string;
+    fechaSolucionado?: string;
+    fechaReprogramada?: string;
+    /** Falso en pruebas; conviene confirmar con Swayp qué implica en producción. */
+    partnerNotificado?: boolean;
+  };
+  [k: string]: unknown;
+}
+
 /** Responde una novedad de tipo Gestión. */
 export function solveNovelty(
   opts: SwaypClientOpts,
   input: SwaypNoveltySolution,
-): Promise<{ success?: boolean; [k: string]: unknown }> {
+): Promise<SwaypNoveltyResult> {
   return swaypFetch(opts, "POST", "/v2/guias/setNoveltySolution", input);
 }
 
