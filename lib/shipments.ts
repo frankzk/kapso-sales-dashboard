@@ -15,6 +15,37 @@
 
 export type ShipmentCategory = "pending" | "in_route" | "delivered" | "closed" | "transferred";
 
+/**
+ * Couriers que NO se trabajan desde Repro Provincia.
+ *
+ * POR QUÉ EXISTE. `shipments` es el libro de TODAS las salidas —el ingest de
+ * los Excel y las guías creadas por API escriben ahí, cada una con su courier—,
+ * pero la cola de Repro Provincia no preguntaba de cuál venían: filtraba por
+ * tienda y por categoría, y listaba lo que quedara. Así, de 2255 pendientes,
+ * 255 eran de Shalom. El caso que lo destapó: una guía de Shalom en Arequipa
+ * a la que la pantalla le ofrecía «Fenix Ok» — proponer una ruta para un
+ * paquete que ya está esperando en el mostrador de la agencia.
+ *
+ * QUÉ SE VA. Shalom es AGENCIA: la clienta recoge en el terminal, no hay
+ * intento de entrega que reprogramar. El MOM §11 nombra la entrada elegible a
+ * Reproprovincia —no contesta, intento fallido, rechazo sujeto a revisión,
+ * guía cancelada por courier y devolución— y §11.1 pone a la agencia como
+ * DESTINO de una recuperación, no como insumo. Tanders, Urpi y propio salen
+ * por la misma razón: no se reprograman desde esta cola.
+ *
+ * ES UNA LISTA DE EXCLUIDOS, NO DE ADMITIDOS, y a propósito: con una lista de
+ * admitidos, un courier nuevo desaparecería de la cola sin que nadie se
+ * enterara. Así aparece, y alguien pregunta qué hace ahí. Trabajo que sobra se
+ * ve; trabajo que falta, no.
+ */
+export const COURIERS_FUERA_DE_REPRO = ["shalom", "tanders", "urpi", "propio"] as const;
+
+/** ¿Esta guía se trabaja desde Repro Provincia? */
+export function perteneceARepro(courier: string | null | undefined): boolean {
+  if (!courier) return true;
+  return !(COURIERS_FUERA_DE_REPRO as readonly string[]).includes(courier.trim().toLowerCase());
+}
+
 export interface DeliveryStatusDef {
   code: string;
   label: string;

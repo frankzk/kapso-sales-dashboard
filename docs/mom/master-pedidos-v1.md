@@ -1258,6 +1258,24 @@ Responsables: Akemi y Mariannys. Akemi es la jefa de Mariannys.
 Entrada elegible desde Aliclik: no contesta, intento fallido, rechazo sujeto a
 revisión, guía cancelada por courier y devolución.
 
+**Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
+que la cola tiene que recortar: quedan fuera **Shalom, Tanders, Urpi y el
+reparto propio**. Shalom es agencia —la clienta recoge en el terminal, no hay
+intento de entrega que reprogramar— y por eso aparece como DESTINO de una
+recuperación (§11.1, §12), nunca como insumo. Los otros tres no se reprograman
+desde esta pantalla.
+
+El recorte es una lista de **excluidos**, no de admitidos: un courier nuevo
+entra en la cola y alguien pregunta qué hace ahí. Con una lista de admitidos
+desaparecería sin que nadie se enterara, y trabajo que falta no se ve.
+
+Las guías `por_definir` —filas sintéticas de pedidos que todavía no tienen
+salida— SÍ se quedan. Sacarlas es otra decisión y no está tomada.
+
+El mismo recorte se aplica a la lista y a los contadores de las pestañas, desde
+una sola definición: el número del chip se lee justo encima de la tabla, y si
+cada uno filtrara por su cuenta podrían decir cosas distintas.
+
 Antes de enviar:
 
 - Revisar el motivo anterior.
