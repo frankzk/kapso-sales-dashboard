@@ -52,9 +52,16 @@ export class SwaypError extends Error {
 }
 
 /**
- * True when the failure means "our credential no longer works" — the token is
- * static and cannot be renewed programmatically, so this needs a human to ask
- * Swayp for a new one. Worth alerting on rather than retrying.
+ * True when the failure means "our credential no longer works" — el token no se
+ * renueva por código, así que esto necesita que una persona actúe. Vale alertar
+ * en vez de reintentar.
+ *
+ * OJO con `token expired`: Swayp lo devuelve TAMBIÉN cuando el token es
+ * perfectamente válido pero el header `email` no corresponde al del token
+ * —verificado contra su API: el mismo token da 200 con su email y 403
+ * «Token expired» con cualquier otro—. Sigue siendo un problema de credencial,
+ * y por eso sigue clasificando acá; lo que no se puede es decirle a alguien que
+ * pida un token nuevo sin más. Para eso está `swaypAuthErrorHint()`.
  */
 export function isSwaypAuthError(err: unknown): boolean {
   if (!(err instanceof SwaypError)) return false;
@@ -63,6 +70,52 @@ export function isSwaypAuthError(err: unknown): boolean {
   // gateway, WAF) answers 403 too, and treating that as a dead credential
   // would page someone over a network policy. Match Swayp's own wording.
   return /token expired|no tienes autorizaci|no tienes permisos/i.test(err.body);
+}
+
+/** Formato de un JWT: tres segmentos base64url. */
+const JWT_SHAPE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
+/**
+ * El `sub` del token, cuando es un JWT y lo trae en forma de email. Devuelve
+ * null si no se puede saber —token opaco, JWT sin `sub`, base64 corrupto—, para
+ * que quien llame no invente un diagnóstico sobre una suposición.
+ *
+ * No valida la firma ni la expiración: no es autenticación, es sólo leer a
+ * nombre de quién se emitió para poder explicar un 403.
+ */
+export function swaypTokenSubject(token: string): string | null {
+  const raw = token.trim();
+  if (!JWT_SHAPE.test(raw)) return null;
+  const payload = raw.split(".")[1];
+  if (!payload) return null;
+  try {
+    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    const sub = (JSON.parse(json) as { sub?: unknown }).sub;
+    return typeof sub === "string" && sub.includes("@") ? sub : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Qué decirle a la persona que va a leer el aviso cuando la credencial falla.
+ *
+ * Distingue el caso que la API NO distingue: si el token declara un `sub` y
+ * `SWAYP_EMAIL` no coincide, el problema es la configuración —gratis de
+ * arreglar— y no hay ningún token que pedir. Sin esta comprobación, el mensaje
+ * manda a alguien a solicitar credenciales nuevas por un email mal escrito.
+ */
+export function swaypAuthErrorHint(opts: Pick<SwaypClientOpts, "token" | "email">): string {
+  const sub = swaypTokenSubject(opts.token);
+  const email = opts.email.trim();
+  if (sub && sub.toLowerCase() !== email.toLowerCase()) {
+    return (
+      `SWAYP_EMAIL es «${email}» pero el token fue emitido para «${sub}». ` +
+      `Swayp rechaza esa combinación diciendo «Token expired», que es engañoso: ` +
+      `el token está bien, el email no. Corrige la variable — no hace falta pedir token nuevo.`
+    );
+  }
+  return "La credencial de Swayp ya no es válida; hay que pedirle un token nuevo a Swayp.";
 }
 
 function baseFor(opts: SwaypClientOpts): string {

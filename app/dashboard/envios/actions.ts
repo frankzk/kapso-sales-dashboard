@@ -64,7 +64,13 @@ import {
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { env } from "@/lib/env";
-import { createGuide, isSwaypAuthError, solveNovelty, swaypOptsFromEnv } from "@/lib/swayp";
+import {
+  createGuide,
+  isSwaypAuthError,
+  solveNovelty,
+  swaypAuthErrorHint,
+  swaypOptsFromEnv,
+} from "@/lib/swayp";
 import { buildSwaypGuideInput, parseSenders } from "@/lib/swayp-guide";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
 import { getMasterPermissions } from "@/lib/permissions-access";
@@ -1585,19 +1591,18 @@ async function createFenixGuideViaApi(args: {
   const built = buildSwaypGuideInput({ ...args, senders: parseSenders(env.swaypSenders()) });
   if (!built.ok) return { ok: false, reason: built.error };
 
+  const opts = swaypOptsFromEnv();
   try {
-    const created = await createGuide(swaypOptsFromEnv(), built.input);
+    const created = await createGuide(opts, built.input);
     return { ok: true, guia: String(created.guia), idEstado: created.idEstado };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "error desconocido";
     // Visible en los logs de Vercel. El motivo también sube al operador en el
     // aviso de la acción, que es hoy la única señal de que la API dejó de
     // responder — el token de Swayp no se puede renovar por código.
-    console.error(
-      isSwaypAuthError(e) ? "[swayp] CREDENCIAL INVÁLIDA — pedir token nuevo a Swayp:" : "[swayp] createGuide falló:",
-      msg,
-    );
-    return { ok: false, reason: isSwaypAuthError(e) ? "la credencial de Swayp ya no es válida" : msg };
+    const hint = isSwaypAuthError(e) ? swaypAuthErrorHint(opts) : null;
+    console.error(hint ? `[swayp] CREDENCIAL: ${hint}` : "[swayp] createGuide falló:", msg);
+    return { ok: false, reason: hint ?? msg };
   }
 }
 
@@ -2425,21 +2430,14 @@ export async function solveSwaypNovelty(input: {
     };
   }
 
+  const opts = swaypOptsFromEnv();
   try {
-    await solveNovelty(swaypOptsFromEnv(), built.input);
+    await solveNovelty(opts, built.input);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "error desconocido";
-    console.error(
-      isSwaypAuthError(e)
-        ? "[swayp] CREDENCIAL INVÁLIDA — pedir token nuevo a Swayp:"
-        : "[swayp] solveNovelty falló:",
-      msg,
-    );
-    return {
-      error: isSwaypAuthError(e)
-        ? "La credencial de Swayp ya no es válida; avisa a quien administra la integración."
-        : `Swayp rechazó la solución de la novedad: ${msg}`,
-    };
+    const hint = isSwaypAuthError(e) ? swaypAuthErrorHint(opts) : null;
+    console.error(hint ? `[swayp] CREDENCIAL: ${hint}` : "[swayp] solveNovelty falló:", msg);
+    return { error: hint ?? `Swayp rechazó la solución de la novedad: ${msg}` };
   }
 
   const meta = NOVELTY_ACTIONS[accion];
