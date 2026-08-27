@@ -80,6 +80,18 @@ export interface BuildGuideInput {
   dispatchDateIso?: string | null;
   observaciones?: string | null;
   senders: Record<string, SwaypSender>;
+  /**
+   * Comercio dentro de Swayp (`SWAYP_ID_BUSINESS`). Su documentación lo marca
+   * OBLIGATORIO en `POST /v2/guias`, pero el entorno de pruebas acepta la guía
+   * sin él —comprobado—, así que acá es opcional: exigirlo rompería lo que hoy
+   * funciona sin avisar de nada nuevo.
+   *
+   * Conviene configurarlo igual. La cuenta agrupa más de un comercio
+   * (AURELA/KENKU) y sin este campo es Swayp quien decide a cuál se atribuye la
+   * guía: si acierta, no nos enteramos; si se equivoca, tampoco. Un fallo por
+   * campo faltante sería ruidoso; una atribución equivocada es silenciosa.
+   */
+  idBusiness?: number | null;
 }
 
 export type BuildGuideResult =
@@ -164,6 +176,9 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
       ciudadDestinatario: destino.code,
 
       contenido,
+      ...(Number.isFinite(b.idBusiness) && Number(b.idBusiness) > 0
+        ? { idBusiness: Number(b.idBusiness) }
+        : {}),
       ...(b.observaciones?.trim() ? { observaciones: b.observaciones.trim() } : {}),
       ...(b.dispatchDateIso ? { fechaEntrega: b.dispatchDateIso } : {}),
 

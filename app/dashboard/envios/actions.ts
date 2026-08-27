@@ -1588,7 +1588,11 @@ async function createFenixGuideViaApi(args: {
 }): Promise<{ ok: true; guia: string; idEstado: number } | { ok: false; reason: string }> {
   if (!env.swaypEnabled()) return { ok: false, reason: "integración Swayp desactivada" };
 
-  const built = buildSwaypGuideInput({ ...args, senders: parseSenders(env.swaypSenders()) });
+  const built = buildSwaypGuideInput({
+    ...args,
+    senders: parseSenders(env.swaypSenders()),
+    idBusiness: env.swaypIdBusiness(),
+  });
   if (!built.ok) return { ok: false, reason: built.error };
 
   const opts = swaypOptsFromEnv();

@@ -71,6 +71,16 @@ export const env = {
   swaypWebhookToken: () => (process.env.SWAYP_WEBHOOK_TOKEN ?? "").trim(),
   /** JSON: ciudad de cobertura → datos de la bodega remitente. Ver lib/swayp-guide.ts. */
   swaypSenders: () => process.env.SWAYP_SENDERS ?? "",
+  /**
+   * Comercio dentro de Swayp. Su documentación lo marca obligatorio al crear
+   * guía; el entorno de pruebas lo acepta ausente. Devuelve null si no está
+   * configurado o no es un número positivo, y entonces no se manda —mejor eso
+   * que mandar un 0 o un NaN, que Swayp interpretaría como un comercio.
+   */
+  swaypIdBusiness: () => {
+    const n = Number(process.env.SWAYP_ID_BUSINESS ?? "");
+    return Number.isFinite(n) && n > 0 ? n : null;
+  },
   swaypEnabled: () => Boolean(process.env.SWAYP_TOKEN && process.env.SWAYP_EMAIL),
 
   // --- Aliclik: API de integración (crear guías desde el Master) ---
