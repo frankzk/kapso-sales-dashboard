@@ -48,7 +48,6 @@ export function DirectFenixGuideModal({
 
   const [dispatchDate, setDispatchDate] = useState(earliestDispatchDate());
   const [guideCode, setGuideCode] = useState("");
-  const [codeTouched, setCodeTouched] = useState(false);
   const [note, setNote] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [createdNotice, setCreatedNotice] = useState<string | null>(null);
@@ -62,7 +61,9 @@ export function DirectFenixGuideModal({
       if ("error" in result) setMsg(result.error);
       else {
         setPreview(result);
-        setCodeTouched(false);
+        // Un código escrito para OTRO pedido no puede sobrevivir al cambio: se
+        // lo llevaría puesto y apagaría la API para el pedido nuevo.
+        setGuideCode("");
       }
     });
   }, [initialOrderId]);
@@ -91,14 +92,20 @@ export function DirectFenixGuideModal({
     };
   }, [q]);
 
-  // El código se autogenera del N° de pedido + fecha (formato de reprogramación);
-  // editable por si Fenix entrega un código propio.
-  useEffect(() => {
-    if (!preview || codeTouched) return;
-    setGuideCode(
-      rescheduleGuideCode(preview.orderName, dispatchDate ? new Date(dispatchDate).toISOString() : null),
-    );
-  }, [preview, dispatchDate, codeTouched]);
+  // EL CAMPO ARRANCA VACÍO, Y ES DELIBERADO.
+  //
+  // Antes se autogeneraba el código al abrir el modal. Parecía una comodidad y
+  // era el bloqueo de toda la integración: el servidor sólo pide la guía a la
+  // API cuando el campo llega VACÍO —si trae algo, entiende que el operador ya
+  // la creó en el panel de Swayp y pedir otra duplicaría el paquete—. Con el
+  // autorrelleno, ese campo nunca llegaba vacío, así que la guía por API era
+  // inalcanzable desde esta pantalla: se creó en el #294 y nunca se ejecutó.
+  //
+  // Vacío no significa quedarse sin código: si Swayp responde, manda SU número;
+  // y si la integración está apagada, el servidor genera el mismo código local
+  // que se generaba acá (rescheduleGuideCode, con los mismos argumentos). El
+  // botón «Autogenerar» sigue disponible para el caso que lo justifica: que
+  // Swayp haya entregado un código propio y haya que escribirlo.
 
   async function searchShopify() {
     const term = q.trim();
@@ -119,7 +126,7 @@ export function DirectFenixGuideModal({
         return;
       }
       setPreview(r);
-      setCodeTouched(false);
+      setGuideCode("");
     });
   }
 
@@ -151,8 +158,10 @@ export function DirectFenixGuideModal({
     !blockedByOrder &&
     !blockedByStock &&
     !!dispatchDate &&
-    dispatchDate >= earliestDispatchDate() &&
-    !!guideCode.trim();
+    dispatchDate >= earliestDispatchDate();
+  // Ojo: NO se exige `guideCode`. Exigirlo era la otra mitad del bloqueo —el
+  // botón sólo se activaba con el campo lleno, y el campo lleno apaga la API—.
+  // El servidor ya resuelve el código cuando llega vacío.
 
   return (
     <div className="fixed inset-0 z-30 flex items-start justify-center overflow-y-auto bg-slate-900/30 p-4 sm:p-8" onClick={onClose}>
@@ -429,17 +438,13 @@ export function DirectFenixGuideModal({
                 <div className="mt-0.5 flex gap-2">
                   <input
                     value={guideCode}
-                    onChange={(e) => {
-                      setGuideCode(e.target.value);
-                      setCodeTouched(true);
-                    }}
-                    placeholder="Se autogenera con la fecha"
+                    onChange={(e) => setGuideCode(e.target.value)}
+                    placeholder="Vacío: lo asigna Swayp"
                     className="w-full flex-1 rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-xs"
                   />
                   <button
                     type="button"
                     onClick={() => {
-                      setCodeTouched(false);
                       setGuideCode(
                         rescheduleGuideCode(
                           preview.orderName,
@@ -453,6 +458,11 @@ export function DirectFenixGuideModal({
                     Autogenerar
                   </button>
                 </div>
+                <span className="mt-1 block text-[11px] text-slate-400">
+                  Déjalo vacío y el número lo emite Swayp. Escribe uno solo si la guía
+                  <strong> ya existe</strong> en el panel de Swayp: con el campo lleno no se le pide,
+                  para no duplicar el paquete.
+                </span>
               </label>
             </div>
             <textarea
