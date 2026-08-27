@@ -12,6 +12,7 @@ import type {
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
 import {
   ALICLIK_REPROGRAM_OUTCOMES,
+  COURIERS_FUERA_DE_REPRO,
   aggregateReproDay,
   computeReprogramStats,
   limaCalendarDayBounds,
@@ -316,6 +317,20 @@ const VIEW_CATEGORIES: Record<ShipmentView, string[]> = {
   revision: [], // special-cased: unmatched guides
 };
 
+/**
+ * El recorte de couriers, ya en la forma que entiende PostgREST.
+ *
+ * Una sola constante para la LISTA y para los CONTADORES de las pestañas, que
+ * es lo que se lee junto: el chip dice «Pendiente 2255» justo encima de la
+ * tabla. Filtrados por separado, el día que uno cambiara el chip diría un
+ * número y la tabla mostraría otro, y no habría forma de saber cuál miente.
+ *
+ * `courier` es NOT NULL en la base (default 'aliclik'), así que `not.in` no
+ * puede tragarse una fila por venir en nulo — que es la trampa habitual de
+ * `NOT IN` en SQL.
+ */
+const FUERA_DE_REPRO = `(${COURIERS_FUERA_DE_REPRO.join(",")})`;
+
 // PostgREST caps a single response at its `db-max-rows` (1000 on Supabase by
 // default), so we paginate with .range() instead of a big .limit().
 const PAGE = 1000;
@@ -337,6 +352,7 @@ export async function getStoreShipments(
         .select(columns)
         .in("store_id", storeIds)
         .in("status_category", cats)
+        .not("courier", "in", FUERA_DE_REPRO)
         .eq("shipment_calls.kind", "call");
       query =
         view === "pendiente"
@@ -379,7 +395,8 @@ async function countByCategory(
     .from("shipments")
     .select("id", { count: "exact", head: true })
     .in("store_id", storeIds)
-    .in("status_category", cats);
+    .in("status_category", cats)
+    .not("courier", "in", FUERA_DE_REPRO);
   return count ?? 0;
 }
 
