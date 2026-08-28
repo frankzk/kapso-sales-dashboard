@@ -17,27 +17,22 @@
 // El orden es idéntico en las dos tiendas (carrito > distrito > converso > frío);
 // lo que cambia son las magnitudes, y por eso los pesos son POR TIENDA.
 //
-// `producto` (llegó desde la ficha de un producto) se separó de `converso` más
-// tarde. Remedido con el mismo método, ya con el balde propio:
+// `distrito` pasó a ser `interes` cuando se le sumó "llegó desde la ficha de un
+// producto" (ver leadSegment). Remedido con el mismo método:
 //
 //            Aurela   Kenku
 //   carrito   43,5     35,6
-//   producto  13,8     17,5
-//   distrito  10,4     21,0
+//   interes   12,2     19,1      ← distrito + ficha de producto
 //   converso   2,6      6,3
 //   frío       0,5      1,3
 //
-// Acá el orden NO es idéntico entre tiendas: en Aurela producto supera a
-// distrito y en Kenku no. Los pesos de abajo respetan cada medición, así que en
-// Kenku se sigue llamando antes a distrito. Es a propósito que el peso no copie
-// el orden del cascade de `leadSegment`: el cascade decide EN QUÉ BALDE cae el
-// lead, el peso decide A QUIÉN SE LLAMA PRIMERO, y solo el segundo es una
-// pregunta que el dato puede responder.
-//
-// Las magnitudes de esta segunda tabla salen más altas que las de la primera
-// (misma ventana, distinta corrida): no se mezclan las dos. Los pesos conservan
-// la escala de la medición original y `producto` se ubicó dentro de ella por la
-// RAZÓN entre su tasa y la de distrito en cada tienda, no por su valor absoluto.
+// El orden sigue siendo idéntico en las dos tiendas, que es lo que sostiene la
+// cascada. Las magnitudes de esta segunda tabla salen más altas que las de la
+// primera (misma ventana, distinta corrida) y NO se mezclan: los pesos conservan
+// la escala original, y `interes` se ubicó dentro de ella moviendo el peso que
+// tenía `distrito` por la RAZÓN en que la fusión cambió su tasa medida —hacia
+// arriba en Aurela (10,4 → 12,2) y hacia abajo en Kenku (21,0 → 19,1)—, no por
+// el valor absoluto.
 //
 // Ojo al medir de nuevo: hay que mirar la tasa entre los LLAMADOS, no la global.
 // Los leads que nadie llamó cierran mucho más (hasta 96%) porque el bot cierra
@@ -64,8 +59,8 @@ export type SegmentWeights = Record<LeadSegment, number>;
  *  usa de verdad sale de CART_WEIGHT_BY_AGE (ver abajo). Se conserva acá como
  *  respaldo para cuando no se puede calcular la antigüedad. */
 const WEIGHTS_BY_STORE: Record<string, SegmentWeights> = {
-  aurela: { carrito: 20, producto: 5, distrito: 4, converso: 3, frio: 0 },
-  "kenku peru": { carrito: 14, distrito: 9, producto: 8, converso: 4, frio: 1 },
+  aurela: { carrito: 20, interes: 5, converso: 3, frio: 0 },
+  "kenku peru": { carrito: 14, interes: 8, converso: 4, frio: 1 },
 };
 
 // Un carrito es un momento PERECEDERO: la misma medición, cortada por horas
@@ -106,13 +101,7 @@ const CART_WEIGHT_BY_AGE: Record<string, { maxHours: number; weight: number }[]>
 
 /** Promedio de las tiendas medidas: conserva el orden, que es lo que importa.
  *  Se usa en una tienda nueva, hasta tener historia propia para medirla. */
-const DEFAULT_WEIGHTS: SegmentWeights = {
-  carrito: 17,
-  producto: 7,
-  distrito: 6,
-  converso: 3,
-  frio: 0.5,
-};
+const DEFAULT_WEIGHTS: SegmentWeights = { carrito: 17, interes: 7, converso: 3, frio: 0.5 };
 
 const storeKey = (storeName: string | null | undefined) => (storeName ?? "").trim().toLowerCase();
 

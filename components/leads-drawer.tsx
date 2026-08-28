@@ -214,8 +214,7 @@ function MetaAttribution({ lead, adMeta }: { lead: LeadRow; adMeta: AdMeta | nul
 
 const SEGMENT_BADGE: Record<LeadSegment, string> = {
   carrito: "bg-emerald-50 text-emerald-700",
-  producto: "bg-amber-50 text-amber-700",
-  distrito: "bg-red-50 text-red-600",
+  interes: "bg-amber-50 text-amber-700",
   converso: "bg-blue-50 text-blue-700",
   frio: "bg-slate-100 text-slate-500",
 };
@@ -223,8 +222,7 @@ const SEGMENT_BADGE: Record<LeadSegment, string> = {
 // Plain calificación labels (no emoji) for the row/drawer pills, per the redesign.
 const SEG_PILL_LABEL: Record<LeadSegment, string> = {
   carrito: "Con carrito",
-  producto: "Vio producto",
-  distrito: "Dio distrito",
+  interes: "Distrito o producto",
   converso: "Conversó",
   frio: "Frío",
 };
@@ -232,8 +230,7 @@ const SEG_PILL_LABEL: Record<LeadSegment, string> = {
 // Labels for the segment "accesos directos" row (only Carrito carries an emoji).
 const SEG_TAB_LABEL: Record<LeadSegment, string> = {
   carrito: "🛒 Carrito",
-  producto: "Vio producto",
-  distrito: "Dio distrito",
+  interes: "Distrito o producto",
   converso: "Conversó",
   frio: "Frío",
 };
