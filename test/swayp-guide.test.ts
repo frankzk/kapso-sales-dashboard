@@ -97,6 +97,31 @@ describe("buildSwaypGuideInput", () => {
     expect(r.ok).toBe(false);
   });
 
+  // SWAYP_SENDERS es la frontera entre «va por API» y «va por Excel», y no hay
+  // otra: la reprogramación pide el número a Swayp y cae al código local cuando
+  // esto falla. Hoy sólo Arequipa está habilitada. Si alguien hiciera opcional
+  // la bodega, la frontera desaparecería en silencio y saldrían guías por API
+  // de ciudades que Swayp no atiende.
+  describe("SWAYP_SENDERS decide qué ciudades van por API", () => {
+    const soloArequipa = { arequipa: SENDER };
+
+    it("la ciudad configurada arma el payload", () => {
+      expect(buildSwaypGuideInput({ ...base, city: "arequipa", senders: soloArequipa }).ok).toBe(true);
+    });
+
+    it("una ciudad de cobertura SIN bodega se rechaza, y dice cuál", () => {
+      const r = buildSwaypGuideInput({ ...base, city: "cusco", district: "Cusco", senders: soloArequipa });
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error).toContain("cusco");
+      expect(r.error).toMatch(/bodega/i);
+    });
+
+    it("sin ninguna bodega configurada no sale nada por API", () => {
+      expect(buildSwaypGuideInput({ ...base, city: "arequipa", senders: {} }).ok).toBe(false);
+    });
+  });
+
   it("refuses an address shorter than the API's 5-character minimum", () => {
     const r = buildSwaypGuideInput({ ...base, address1: "Av." });
     expect(r.ok).toBe(false);
