@@ -4,7 +4,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { getStoreCreds } from "@/lib/ingest";
 import { pickTopWarehouse } from "@/lib/aliclik-tariffs";
-import { runAliclikHealthProbe, withinBusinessHoursPeru } from "@/lib/aliclik-health";
+import { runAliclikHealthProbe } from "@/lib/aliclik-health";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -16,9 +16,21 @@ export const maxDuration = 60;
 // SOLO LECTURA hacia Aliclik: sondea con el mismo GET de cotización que ya usa el
 // cron de tarifas —no crea pedidos ni reserva stock—, por el mismo Edge y token.
 //
-// SOLO EN HORARIO LABORAL (7am–11pm Perú). Fuera de esa ventana no se sondea:
-// nadie está creando guías, y el drawer muestra gris ("sin monitoreo") solo. El
-// gate va en el handler además del cron, por si el cron se dispara al borde.
+// LAS 24 HORAS, desde el 28/08/2026. Antes solo sondeaba de 7am a 11pm Perú, con
+// el argumento de que fuera de esa ventana nadie crea guías. Cierto, y aun así
+// era el argumento equivocado: el barrido `aliclik-close` corre a toda hora, así
+// que una caída de Aliclik de madrugada SÍ produce fallos reales — solo que no
+// quedaba constancia de ninguno.
+//
+// Se vio en un día concreto. Aliclik falló en tres ventanas: 21:00 y 09:00 y
+// 15:00 hora Perú, más un pico a las 06:30 del que esta tabla no tiene NI UNA
+// fila, porque a esa hora la sonda no corría. Y la peor de las tres —media hora
+// de fallos a las 21:00— tampoco disparó la alerta de Vercel, porque a esa hora
+// hay tan poco tráfico que los 5xx no llegan al umbral de anomalía.
+//
+// O sea: los dos vigilantes miraban a horas distintas y ninguno veía el día
+// entero. El costo de cerrar el hueco son ~288 sondas de lectura más al día
+// contra una API que ya recibe barridos cada 20 minutos sin parar.
 
 function secretEquals(provided: string | null, expected: string): boolean {
   if (!provided) return false;
@@ -65,12 +77,6 @@ async function orgWarehouse(
 
 async function run(req: NextRequest) {
   if (!authorized(req)) return new NextResponse("unauthorized", { status: 401 });
-
-  // `?force=true` salta el gate horario, para probar la sonda a cualquier hora.
-  const force = req.nextUrl.searchParams.get("force") === "true";
-  if (!force && !withinBusinessHoursPeru(new Date())) {
-    return NextResponse.json({ ok: true, skipped: "fuera de horario laboral (7am–11pm Perú)" });
-  }
 
   const admin = createAdminSupabase();
   const { data: stores } = await admin

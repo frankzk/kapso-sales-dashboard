@@ -60,18 +60,20 @@ export const HEALTH_REFERENCE_POINTS: readonly { name: string; lat: number; lng:
   { name: "Trujillo · Cercado", lat: -8.112, lng: -79.0288 },
 ];
 
-/** Una sonda ya no cuenta como "fresca" pasado esto. El cron corre cada 5 min,
- * así que en horario laboral siempre hay una < 5 min; de noche no hay ninguna y
- * el estado cae a gris solo. 12 min = 2 pasadas y algo de margen. */
+/** Una sonda ya no cuenta como "fresca" pasado esto. El cron corre cada 5 min a
+ * TODA HORA, así que siempre debería haber una de menos de 5 min: si no la hay,
+ * es que el monitor falló, no que sea de noche. 12 min = 2 pasadas y margen. */
 export const HEALTH_FRESHNESS_MS = 12 * 60_000;
 
 /**
  * Resuelve el foco a partir de la última sonda guardada. PURA.
  *
- * Gris ("sin_monitoreo") cuando no hay sonda, cuando la última es vieja (de
- * noche, o si el cron se cayó) o si su fecha viene del futuro (reloj torcido).
- * Un verde viejo sería mentira, y de noche —sin sondeo, como se pidió— el foco
- * apagado es lo honesto.
+ * Gris ("sin_monitoreo") cuando no hay sonda, cuando la última es vieja o si su
+ * fecha viene del futuro (reloj torcido). Un verde viejo sería mentira.
+ *
+ * Desde que la sonda corre 24/7 el gris CAMBIÓ DE SIGNIFICADO: antes era lo
+ * normal de madrugada, ahora siempre quiere decir que el monitor no corrió. Es
+ * una señal, no un estado de reposo.
  */
 export function resolveAliclikHealth(
   latest: { status: string; checkedAt: string } | null | undefined,
@@ -164,24 +166,6 @@ export function resolveAliclikCreateHealth(
   return seenAny ? "ok" : "sin_datos";
 }
 
-/**
- * ¿Es horario laboral en Perú (7am–11pm)? El sondeo solo corre en esa ventana;
- * fuera de ella no hay foco (gris), que es lo acordado. Perú es UTC−5 fijo.
- *
- * Se sondea con la hora en [7, 22]: la última pasada cae ~22:55, y como una
- * sonda vale 12 min, el foco sigue vivo hasta pasadas las 23:00.
- */
-export function withinBusinessHoursPeru(now: Date): boolean {
-  const hour = Number(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/Lima",
-      hour: "2-digit",
-      hourCycle: "h23",
-    }).format(now),
-  );
-  return hour >= 7 && hour <= 22;
-}
-
 export type HealthTone = "verde" | "ambar" | "rojo" | "gris";
 
 export interface HealthBadgeCopy {
@@ -224,7 +208,10 @@ export function describeAliclikHealth(state: AliclikHealthState): HealthBadgeCop
     return {
       tone: "gris",
       label: "Sin monitoreo",
-      hint: "Sin sondeo reciente (fuera del horario 7am–11pm, o el monitor no ha corrido).",
+      // Desde que la sonda corre 24/7, el gris ya no puede significar "es de
+      // noche": significa que el monitor no corrió. Dejar el texto viejo haría
+      // que se leyera como normal justo cuando es la señal de que algo falla.
+      hint: "Sin sondeo reciente: el monitor no ha corrido. Revisa el cron antes de fiarte del semáforo.",
     };
   }
   return {
