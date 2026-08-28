@@ -23,6 +23,7 @@ import {
 } from "@/lib/meta-audience";
 import {
   LEAD_GESTIONES,
+  LEAD_SEGMENTS,
   QUEUE_STATES,
   categoryOf,
   countGestiones,
@@ -1412,10 +1413,17 @@ export function LeadsBoard({
               onChange={(key) => setSegFilter(key === "all" ? null : (key as LeadSegment))}
               options={[
                 { key: "all", label: "Todos", count: segTotal },
-                ...(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((s) => ({
-                  key: s,
-                  label: SEG_TAB_LABEL[s],
-                  count: segCounts[s],
+                // Sale de LEAD_SEGMENTS, no de una lista escrita acá. Estaba a
+                // mano y con un `as LeadSegment[]` que silenciaba al compilador:
+                // al fusionar `distrito` en `interes`, esta fila siguió pidiendo
+                // «distrito» —una clave que ya no existe— y el chip del balde
+                // nuevo, con 490 leads dentro, no se dibujó. Los segmentos
+                // dejaron de sumar el total y nadie podía filtrarlos.
+                // Invertida porque la fila se lee de menor a mayor intención.
+                ...[...LEAD_SEGMENTS].reverse().map(({ key }) => ({
+                  key,
+                  label: SEG_TAB_LABEL[key],
+                  count: segCounts[key],
                 })),
               ]}
             />
