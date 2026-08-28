@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  coverageInputOf,
   currentFenixReason,
   evaluateDirectFenixStock,
   evaluateFenix,
+  FENIX_COVERAGE_COLUMNS,
   fenixStockCityKey,
   matchesFenixAvailability,
   type FenixStockRow,
@@ -215,6 +217,53 @@ describe("evaluateFenix", () => {
     // no orderProducts (undefined or empty) → uses shipment.product
     expect(evaluateFenix({ city: "Trujillo", product: "Mushroom Coffee 180g" }, s).eligible).toBe(true);
     expect(evaluateFenix({ city: "Trujillo", product: "Otra cosa" }, s, []).eligible).toBe(false);
+  });
+});
+
+/**
+ * `evaluateFenix` ya sabía derivar del distrito; lo que faltaba era que los
+ * llamadores le pasaran el destino. Las rejas de escritura seleccionaban `city`
+ * a secas, así que la cola decía «Fenix Ok» y el botón «Fenix no tiene cobertura
+ * en la ciudad indicada» sobre el MISMO envío —#KP130656, Arequipa, con `city`
+ * NULL porque el alta vino por la API de Aliclik (219 envíos así, 85 pendientes)—.
+ * Esto fija la pieza que lo destapó.
+ */
+describe("coverageInputOf: el destino de una fila de `shipments`", () => {
+  it("una guía del alta por API resuelve igual que una del portal", () => {
+    // Tal cual está en la base: city NULL, el resto con el dato.
+    const porApi = coverageInputOf({
+      city: null,
+      district: "Arequipa",
+      province: "Arequipa",
+      region: "Arequipa",
+      product: "Pulsera Magnética",
+    });
+    expect(evaluateFenix(porApi, stock).city).toBe("arequipa");
+    expect(evaluateFenix(porApi, stock).reason).toBe("sin_stock"); // cubierta, sin unidades
+  });
+
+  it("cae a `region` cuando `province` está vacía —la columna llegó en la 0039—", () => {
+    const historica = coverageInputOf({ city: null, district: "Cusco", province: null, region: "Cusco" });
+    expect(historica.province).toBe("Cusco");
+    expect(evaluateFenix({ ...historica, product: "SUPER HUMAN Ethiopian Black Seed Oil" }, stock).eligible)
+      .toBe(true);
+  });
+
+  it("`province` manda sobre `region` cuando las dos vienen", () => {
+    expect(coverageInputOf({ province: "Arequipa", region: "Cusco" }).province).toBe("Arequipa");
+  });
+
+  it("no inventa provincia cuando no hay ninguna de las dos", () => {
+    expect(coverageInputOf({ city: null, district: "Arequipa" }).province).toBeNull();
+  });
+
+  // El select se arma con esta constante. Si alguien le saca una columna, la
+  // cobertura vuelve a decidirse con datos incompletos —que es exactamente el
+  // bug— y aquí se ve antes de que llegue a producción.
+  it("FENIX_COVERAGE_COLUMNS nombra las cuatro columnas del destino", () => {
+    expect(FENIX_COVERAGE_COLUMNS.split(",").sort()).toEqual(
+      ["city", "district", "province", "region"],
+    );
   });
 });
 

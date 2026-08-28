@@ -2348,6 +2348,34 @@ el guardarraíl de ambigüedad, la que busca dentro del texto y la que rompe la
 rama sin región— y los caza los cuatro. Una prueba que no falla ante ninguno de
 esos no habría estado protegiendo nada.
 
+### 19.0.2 «No hay dato» no es «no hay cobertura»
+
+La cobertura Fenix/Swayp de un envío se decide por su ciudad. La columna `city`
+de `shipments` es la que la nombra, y **el alta por la API de Aliclik la deja
+vacía**: 219 envíos, 85 de ellos pendientes. Leerla sola convierte «falta el
+dato» en «fuera de cobertura», que son dos cosas distintas —y la segunda esconde
+trabajo despachable—.
+
+La regla: **cuando `city` viene vacía, la ciudad se deriva del distrito y la
+provincia.** Cuando viene cargada manda ella, sin derivar nada por encima: el
+courier puede contradecir a Shopify, y esa discrepancia es un aviso que hay que
+ver, no tapar.
+
+Vive en una sola función (`coverageCityOf`) porque estuvo repartida y las copias
+se desincronizaron. Tenerla en un sitio no basta: **hay que pasarle el destino
+completo**. Las rejas que escriben la elegibilidad seleccionaban `city` a secas,
+así que la cola mostraba «Fenix Ok» —la lectura sí traía el distrito— y el botón
+respondía «Fenix no tiene cobertura en la ciudad indicada» sobre el mismo envío.
+La frase delataba el bug: «la ciudad indicada» es el texto de respaldo de cuando
+`city` es NULL. Por eso las cuatro columnas del destino se seleccionan juntas,
+desde una constante única (`FENIX_COVERAGE_COLUMNS`), en los cuatro caminos: la
+lectura de la cola, la reja de reprogramación, la excepción sobre guía anulada y
+el barrido masivo que resincroniza la elegibilidad.
+
+`province` llegó en la migración 0039 y el histórico guarda la suya en `region`.
+Se resuelve una sola vez (`province ?? region`): sin ese respaldo, media base
+pierde la provincia y con ella la derivación.
+
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 
 `order_master` no calcula en vivo: guarda el resultado del resolver y lo sirve.
