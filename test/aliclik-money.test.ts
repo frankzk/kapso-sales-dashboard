@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   MAX_ACCEPTABLE_LOSS,
+  aliclikPrepaidBlocker,
   collectAmountMismatch,
   linesTotal,
   reconcileToOrderTotal,
@@ -214,6 +217,34 @@ describe("reconcileToOrderTotal · minimiza de verdad", () => {
   });
 });
 
+describe("aliclikPrepaidBlocker (Aliclik es solo contraentrega)", () => {
+  it("bloquea un pedido pagado en el checkout", () => {
+    const msg = aliclikPrepaidBlocker({ financialStatus: "paid", totalRefunded: 0 });
+    expect(msg).toContain("YA ESTÁ PAGADO");
+    expect(msg).toContain("Tanders"); // la salida, no solo la negativa
+  });
+
+  it("bloquea un pedido cubierto por comprobantes Yape", () => {
+    expect(aliclikPrepaidBlocker({ paymentState: "pago_completo" })).not.toBeNull();
+  });
+
+  it("deja pasar lo normal: contraentrega sin cobrar", () => {
+    expect(aliclikPrepaidBlocker({ financialStatus: "pending" })).toBeNull();
+    expect(aliclikPrepaidBlocker({})).toBeNull();
+  });
+
+  it("un reembolso devuelve el pedido a cobrable, así que puede ir por Aliclik", () => {
+    // El dinero volvió: vuelve a ser contraentrega, que es lo que Aliclik sabe hacer.
+    expect(aliclikPrepaidBlocker({ financialStatus: "paid", totalRefunded: 149 })).toBeNull();
+  });
+
+  it("un adelanto NO lo bloquea: queda diferencia por cobrar en la puerta", () => {
+    // El caso que separa "pagado" de "pagado a medias". Bloquear acá dejaría sin
+    // courier a los pedidos con adelanto, que son el grueso de la operación.
+    expect(aliclikPrepaidBlocker({ paymentState: "adelanto" })).toBeNull();
+  });
+});
+
 describe("collectAmountMismatch", () => {
   it("avisa cuando Aliclik cobra de MÁS, aunque sea poco", () => {
     // El fallo original: guía a S/447 sobre un pedido de S/298.
@@ -251,5 +282,35 @@ describe("collectAmountMismatch", () => {
     expect(collectAmountMismatch(298, null)).toBeNull();
     expect(collectAmountMismatch(0, 298)).toBeNull();
     expect(collectAmountMismatch(298, 0)).toBeNull();
+  });
+});
+
+describe("la compuerta de prepago está enchufada en las DOS puertas", () => {
+  // La lección que ya nos costó una vez: `collectAmountMismatch` era correcta y
+  // no la llamaba nadie, con las pruebas en verde todo el tiempo. Una compuerta
+  // que solo existe en la vista previa no es una compuerta — la creación real se
+  // puede alcanzar con un reintento o llamando a la acción directamente.
+  const source = readFileSync(resolve(process.cwd(), "app/dashboard/pedidos/aliclik-actions.ts"), "utf8");
+
+  it("la vista previa la consulta antes de calcular el importe", () => {
+    // Se busca la LLAMADA, no el nombre a secas: la línea del import contiene
+    // el identificador y está siempre arriba, así que compararla contra nada es
+    // una aserción que no puede fallar. (Lo fue: una mutación la sobrevivió.)
+    const i = source.indexOf("aliclikPrepaidBlocker({");
+    const j = source.indexOf("reconcileToOrderTotal(resolved.items");
+    expect(i).toBeGreaterThan(-1);
+    expect(j).toBeGreaterThan(-1);
+    expect(i).toBeLessThan(j); // cortar ANTES: acá no hay importe correcto que calcular
+  });
+
+  it("y la creación real también, no solo la vista previa", () => {
+    const veces = source.split("aliclikPrepaidBlocker(").length - 1;
+    expect(veces).toBeGreaterThanOrEqual(2);
+  });
+
+  it("la creación real corta antes de tocar Aliclik", () => {
+    const i = source.lastIndexOf("aliclikPrepaidBlocker({");
+    const j = source.indexOf("aliclikRiskGate(");
+    expect(i).toBeLessThan(j); // junto al resto de compuertas, antes de crear nada
   });
 });

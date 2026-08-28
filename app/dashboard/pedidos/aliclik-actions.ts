@@ -68,7 +68,7 @@ import {
 } from "@/lib/aliclik-catalog";
 import { listActiveShopifyCatalogVariants, type ShopifyClientOpts } from "@/lib/shopify";
 import { canAdoptExistingGuide } from "@/lib/aliclik-orphans";
-import { MAX_ACCEPTABLE_LOSS, reconcileToOrderTotal } from "@/lib/aliclik-money";
+import { MAX_ACCEPTABLE_LOSS, aliclikPrepaidBlocker, reconcileToOrderTotal } from "@/lib/aliclik-money";
 import { stampOrderMarker } from "@/lib/aliclik-reconcile";
 import {
   canScheduleExpress,
@@ -757,6 +757,16 @@ export async function previewAliclikGuide(
     };
   }
 
+  // 1-ter. ¿PUEDE SIQUIERA IR POR ALICLIK? Un pedido ya cobrado no: Aliclik es
+  //        solo contraentrega y no admite cobro cero. Se corta ANTES de calcular
+  //        el importe, porque acá no hay importe correcto que calcular.
+  const prepaidBlock = aliclikPrepaidBlocker({
+    financialStatus: ctx.row.financial_status,
+    totalRefunded: ctx.row.total_refunded,
+    paymentState: ctx.row.payment_state,
+  });
+  if (prepaidBlock) return { ok: false, error: prepaidBlock };
+
   // 1-bis. EL DINERO. Aliclik cobra la suma de `precio × cantidad` y no tiene
   //        campo de descuento, pero los precios de Shopify son los de LISTA
   //        (`originalUnitPriceSet`, antes de descuentos). Mandarlos tal cual
@@ -1018,6 +1028,16 @@ export async function createAliclikGuide(
   if (!confirmationBrief) {
     return { error: "No se pudo verificar el historial del cliente antes de crear la guía." };
   }
+  // La misma compuerta que la vista previa, repetida acá A PROPÓSITO: la vista
+  // previa es una cortesía y esto es la creación real. Un cliente viejo, un
+  // reintento o una llamada directa a la acción no pueden saltarse el bloqueo.
+  const prepaidBlock = aliclikPrepaidBlocker({
+    financialStatus: ctx.row.financial_status,
+    totalRefunded: ctx.row.total_refunded,
+    paymentState: ctx.row.payment_state,
+  });
+  if (prepaidBlock) return { error: prepaidBlock };
+
   const riskGate = aliclikRiskGate(
     confirmationBrief.risk.requirement,
     ctx.row.payment_state,
