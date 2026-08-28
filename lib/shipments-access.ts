@@ -331,6 +331,34 @@ const VIEW_CATEGORIES: Record<ShipmentView, string[]> = {
  */
 const FUERA_DE_REPRO = `(${COURIERS_FUERA_DE_REPRO.join(",")})`;
 
+/**
+ * El recorte por custodia (`esperaSalidaDeAliclik`), en la forma de PostgREST.
+ *
+ * Es la negación de «Aliclik Y todavía en el almacén», y por eso va como un OR:
+ * basta que el courier sea otro, o que el paquete ya haya salido. Se aplica
+ * junto al recorte de couriers y en las mismas dos consultas —lista y
+ * contadores— por la misma razón: el chip se lee justo encima de la tabla.
+ *
+ * `custody_state` es NOT NULL con default 'empresa' (migración 0086), así que
+ * ninguna fila se cuela por venir en nulo.
+ */
+const YA_SALIO_O_NO_ES_ALICLIK = "courier.neq.aliclik,custody_state.neq.empresa";
+
+/**
+ * SOLO EN PENDIENTE, y esto no es un detalle: medido contra producción, el mismo
+ * recorte aplicado a todas las pestañas se llevaba 317 anuladas, 78 entregadas,
+ * 46 en ruta y 15 transferidas. `custody_state` no se actualiza al entregar, así
+ * que en una guía ya cerrada el valor es viejo y no significa «sigue en el
+ * almacén». Las otras pestañas son el REGISTRO de lo que pasó; esconder ahí una
+ * guía entregada sería perder el historial, no limpiar una cola.
+ *
+ * La pregunta que responde el recorte —«¿hay algo que reprogramar?»— solo tiene
+ * sentido sobre lo que está pendiente.
+ */
+export function esColaDeReprogramacion(cats: string[]): boolean {
+  return cats.length === 1 && cats[0] === "pending";
+}
+
 // PostgREST caps a single response at its `db-max-rows` (1000 on Supabase by
 // default), so we paginate with .range() instead of a big .limit().
 const PAGE = 1000;
@@ -354,6 +382,7 @@ export async function getStoreShipments(
         .in("status_category", cats)
         .not("courier", "in", FUERA_DE_REPRO)
         .eq("shipment_calls.kind", "call");
+      if (esColaDeReprogramacion(cats)) query = query.or(YA_SALIO_O_NO_ES_ALICLIK);
       query =
         view === "pendiente"
           ? query.order("next_followup_at", { ascending: true, nullsFirst: true }).order("updated_at", { ascending: false })
@@ -391,12 +420,14 @@ async function countByCategory(
   storeIds: string[],
   cats: string[],
 ): Promise<number> {
-  const { count } = await sb
+  let query = sb
     .from("shipments")
     .select("id", { count: "exact", head: true })
     .in("store_id", storeIds)
     .in("status_category", cats)
     .not("courier", "in", FUERA_DE_REPRO);
+  if (esColaDeReprogramacion(cats)) query = query.or(YA_SALIO_O_NO_ES_ALICLIK);
+  const { count } = await query;
   return count ?? 0;
 }
 

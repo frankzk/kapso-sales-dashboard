@@ -46,6 +46,39 @@ export function perteneceARepro(courier: string | null | undefined): boolean {
   return !(COURIERS_FUERA_DE_REPRO as readonly string[]).includes(courier.trim().toLowerCase());
 }
 
+/**
+ * El segundo recorte de Repro Provincia: una guía de Aliclik que TODAVÍA NO
+ * SALIÓ del almacén no se reprograma.
+ *
+ * POR QUÉ. La cola es para lo que Aliclik intentó entregar y no pudo. Una guía
+ * recién preparada no tiene nada que reprogramar: el paquete sigue en casa y el
+ * intento ni se ha hecho. Aparecían 92 así entre las pendientes —89 sin un solo
+ * intento, creadas ese mismo día— mezcladas con el trabajo real, y la pantalla
+ * les ofrecía ruta Fenix como a cualquier otra.
+ *
+ * EL CRITERIO ES LA CUSTODIA, NO EL CONTADOR DE INTENTOS. `custody_state` es un
+ * hecho que Aliclik acredita con su propio cotejo (§6.2): `TO_PREPARE` y
+ * `PREPARED` dejan el paquete en `empresa`; desde `PICKED` pasa a `courier`.
+ * `aliclik_attempts` sale del Excel y puede sencillamente no venir —la pantalla
+ * ya lo dice, «Sin NRO. INTENTOS en Excel»—, así que filtrar por él confundiría
+ * «no hubo intento» con «no nos lo contaron», y esconder trabajo por un dato que
+ * falta es justo lo que no se hace acá. De hecho hay 2 guías en poder del
+ * courier sin intentos informados: con la custodia se quedan, que es lo correcto.
+ *
+ * SOLO APLICA A ALICLIK. Las `por_definir` —pedidos sin salida todavía— y las
+ * guías Fenix pendientes también están en custodia `empresa`, pero sacarlas es
+ * otra decisión y no está tomada (§11).
+ */
+export function esperaSalidaDeAliclik(
+  courier: string | null | undefined,
+  custodyState: string | null | undefined,
+): boolean {
+  return (
+    (courier ?? "").trim().toLowerCase() === "aliclik" &&
+    (custodyState ?? "").trim().toLowerCase() === "empresa"
+  );
+}
+
 export interface DeliveryStatusDef {
   code: string;
   label: string;

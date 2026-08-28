@@ -1272,6 +1272,29 @@ desaparecería sin que nadie se enterara, y trabajo que falta no se ve.
 Las guías `por_definir` —filas sintéticas de pedidos que todavía no tienen
 salida— SÍ se quedan. Sacarlas es otra decisión y no está tomada.
 
+**Y tampoco entra lo que Aliclik todavía no ha sacado del almacén.** La cola es
+para lo que se intentó entregar y no se pudo; una guía recién preparada no tiene
+nada que reprogramar. Había 92 así entre las pendientes —89 sin un solo intento,
+varias creadas ese mismo día— y la pantalla les ofrecía ruta Fenix como a
+cualquier otra.
+
+El criterio es la **custodia física**, no el contador de intentos. `TO_PREPARE`
+y `PREPARED` dejan el paquete en custodia `empresa`; desde `PICKED` pasa a
+`courier` (§6.2). El contador sale del Excel y puede sencillamente no venir —la
+pantalla ya lo dice, «Sin NRO. INTENTOS en Excel»—, así que filtrar por él
+confundiría «no hubo intento» con «no nos lo contaron». Hay 2 guías en poder del
+courier sin intentos informados: con la custodia se quedan, que es lo correcto.
+
+Dos límites, los dos deliberados:
+
+- **Solo Aliclik.** Las `por_definir` y las guías Fenix pendientes también están
+  en custodia `empresa`; sacarlas es otra decisión y no está tomada.
+- **Solo la pestaña Pendiente.** `custody_state` no se actualiza al entregar, así
+  que en una guía cerrada el valor es viejo y no significa «sigue en el almacén».
+  Aplicar el recorte a todas las pestañas escondía 317 anuladas, 78 entregadas,
+  46 en ruta y 15 transferidas. Las otras pestañas son el REGISTRO de lo que
+  pasó: esconder ahí una guía entregada es perder historial, no limpiar una cola.
+
 El mismo recorte se aplica a la lista y a los contadores de las pestañas, desde
 una sola definición: el número del chip se lee justo encima de la tabla, y si
 cada uno filtrara por su cuenta podrían decir cosas distintas.
