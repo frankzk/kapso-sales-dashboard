@@ -217,3 +217,60 @@ describe("sortLeadsByPriority", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// El balde `producto` (llegó desde la ficha de un producto).
+// ---------------------------------------------------------------------------
+
+const producto = (over = {}) => ({
+  id: "p",
+  first_inbound_text: "https://kenku.pe/products/x Tengo una consulta",
+  last_interaction_at: daysAgo(0),
+  ...over,
+});
+
+describe("producto: el cascade y el orden de llamada son preguntas distintas", () => {
+  // Esta es LA sutileza del cambio. `leadSegment` pone `producto` por encima de
+  // `distrito` porque así se pidió; el ORDEN DE LLAMADA lo deciden los pesos, y
+  // esos van con la medición de cada tienda. En Kenku producto cierra al 17,5%
+  // y distrito al 21,0%, así que ahí se llama antes a distrito — aunque el
+  // balde se asigne después. Si alguien "corrige" los pesos para que copien el
+  // cascade, esta prueba cae.
+  it("en Kenku se llama ANTES a distrito que a producto", () => {
+    expect(leadPriorityScore(distrito(), KENKU, NOW)).toBeGreaterThan(
+      leadPriorityScore(producto(), KENKU, NOW),
+    );
+  });
+
+  it("en Aurela es al revés: producto va antes que distrito", () => {
+    expect(leadPriorityScore(producto(), AURELA, NOW)).toBeGreaterThan(
+      leadPriorityScore(distrito(), AURELA, NOW),
+    );
+  });
+
+  it("en las dos tiendas producto pesa más que conversó y menos que carrito", () => {
+    for (const profile of [AURELA, KENKU]) {
+      const p = leadPriorityScore(producto(), profile, NOW);
+      expect(p).toBeGreaterThan(leadPriorityScore(converso(), profile, NOW));
+      expect(p).toBeLessThan(leadPriorityScore(carrito(), profile, NOW));
+    }
+  });
+
+  it("una tienda sin medición propia pone producto por encima de distrito", () => {
+    // El promedio por defecto sigue la regla que se pidió, que es lo único que
+    // hay hasta tener historia de esa tienda.
+    const nueva = scoringProfileFor("Tienda Nueva");
+    expect(leadPriorityScore(producto(), nueva, NOW)).toBeGreaterThan(
+      leadPriorityScore(distrito(), nueva, NOW),
+    );
+  });
+
+  it("un carrito con link sigue puntuando como carrito, no como producto", () => {
+    // El cascade pone carrito primero; si se invirtiera, un carrito armado
+    // perdería su peso —el más alto que hay— por traer un link.
+    const conAmbos = carrito({ first_inbound_text: "https://kenku.pe/products/x hola" });
+    expect(leadPriorityScore(conAmbos, KENKU, NOW)).toEqual(
+      leadPriorityScore(carrito(), KENKU, NOW),
+    );
+  });
+});

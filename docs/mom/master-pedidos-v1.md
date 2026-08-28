@@ -1258,6 +1258,21 @@ Responsables: Akemi y Mariannys. Akemi es la jefa de Mariannys.
 Entrada elegible desde Aliclik: no contesta, intento fallido, rechazo sujeto a
 revisión, guía cancelada por courier y devolución.
 
+**Segmentos de la cola de leads.** Un lead cae en UN solo balde, primera
+coincidencia gana: `carrito` → `producto` → `distrito` → `converso` → `frio`.
+
+`producto` es quien llegó desde la ficha de un producto: el mensaje trae la URL
+prellenada porque tocó «consultar por WhatsApp». Antes se mezclaba en
+`converso`, donde cerraba al 2,6 % (Aurela) y 6,3 % (Kenku); con balde propio
+cierra al 13,8 % y 17,5 %.
+
+Que `producto` vaya por encima de `distrito` es **decisión de negocio, no
+lectura del dato**: en Aurela la medición la respalda (13,8 > 10,4) y en Kenku
+no (17,5 < 21,0). El ORDEN DE LLAMADA no sale de este cascade sino de los pesos
+por tienda, que sí siguen cada medición — en Kenku se llama antes a `distrito`
+aunque el balde se asigne después. Son dos preguntas distintas y solo la
+segunda la responde el dato.
+
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
 que la cola tiene que recortar: quedan fuera **Shalom, Tanders, Urpi y el
 reparto propio**. Shalom es agencia —la clienta recoge en el terminal, no hay

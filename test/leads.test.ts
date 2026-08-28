@@ -184,7 +184,11 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
   // Quien llega desde la ficha de un producto manda UN mensaje, pero ese mensaje
   // trae el link: ya dijo qué quiere. Contarlo como "solo saludó" lo hundía al
   // fondo de la cola junto a quien escribió "hola" y nada más.
-  it("converso con un solo mensaje si trae el link de un producto", () => {
+  //
+  // Tuvo balde propio después de medirlo: metido en `converso` cerraba al 2,6%
+  // (Aurela) y 6,3% (Kenku) mezclado con quien escribió dos veces; separado,
+  // cierra al 13,8% y 17,5%.
+  it("balde propio con un solo mensaje si trae el link de un producto", () => {
     expect(
       leadSegment({
         status: "nuevo",
@@ -192,7 +196,19 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
         first_inbound_text:
           "https://kenku.pe/products/purely-nutrient-ethiopian-black-seed-oil Tengo una consulta",
       }),
-    ).toBe("converso");
+    ).toBe("producto");
+  });
+
+  it("y NO cae en converso ni aunque haya escrito varias veces", () => {
+    // El link manda sobre el conteo de mensajes: si volviera a `converso`, estos
+    // leads regresarían al fondo de la cola, que es lo que vino a corregir.
+    expect(
+      leadSegment({
+        status: "nuevo",
+        inbound_count: 9,
+        first_inbound_text: "https://kenku.pe/products/x Tengo una consulta",
+      }),
+    ).toBe("producto");
   });
 
   it("un saludo suelto sigue siendo frío aunque haya texto", () => {
@@ -205,10 +221,15 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
     ).toBe("frio");
   });
 
-  it("el carrito y el distrito siguen mandando sobre el link", () => {
+  it("solo el carrito manda sobre el link; el distrito ya no", () => {
     const conLink = { first_inbound_text: "https://kenku.pe/products/x Tengo una consulta" };
+    // Un carrito armado sigue siendo la señal más fuerte que hay (35-43% de
+    // cierre), así que se queda arriba.
     expect(leadSegment({ status: "nuevo", cart_item_count: 1, ...conLink })).toBe("carrito");
-    expect(leadSegment({ status: "nuevo", district: "Wanchaq", ...conLink })).toBe("distrito");
+    // El distrito, en cambio, quedó POR DEBAJO: decisión de negocio, no lectura
+    // del dato. En Aurela lo respalda (13,8 > 10,4) y en Kenku no (17,5 < 21,0),
+    // y por eso el peso de llamada de Kenku sigue poniendo distrito primero.
+    expect(leadSegment({ status: "nuevo", district: "Wanchaq", ...conLink })).toBe("producto");
   });
 
   it("hasProductLink tolera mayúsculas y texto alrededor", () => {
@@ -227,8 +248,15 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
       { status: "nuevo", inbound_count: 4 },
       { status: "nuevo", inbound_count: 0 },
     ]);
-    expect(counts).toEqual({ carrito: 1, distrito: 1, converso: 1, frio: 2 });
-    expect(LEAD_SEGMENTS.map((s) => s.key)).toEqual(["carrito", "distrito", "converso", "frio"]);
+    expect(counts).toEqual({ carrito: 1, producto: 0, distrito: 1, converso: 1, frio: 2 });
+    // El orden de la lista ES el orden de la cascada y el de la fila de chips.
+    expect(LEAD_SEGMENTS.map((s) => s.key)).toEqual([
+      "carrito",
+      "producto",
+      "distrito",
+      "converso",
+      "frio",
+    ]);
     expect(isLeadSegment("carrito")).toBe(true);
     expect(isLeadSegment("nope")).toBe(false);
   });

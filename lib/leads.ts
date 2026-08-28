@@ -201,10 +201,11 @@ export function nextLeadState(
 // order == call order: pago → carrito → distrito → converso → frio.
 // ---------------------------------------------------------------------------
 
-export type LeadSegment = "carrito" | "distrito" | "converso" | "frio";
+export type LeadSegment = "carrito" | "producto" | "distrito" | "converso" | "frio";
 
 export const LEAD_SEGMENTS: { key: LeadSegment; label: string }[] = [
   { key: "carrito", label: "🛒 Con carrito" },
+  { key: "producto", label: "🔗 Vio producto" },
   { key: "distrito", label: "📍 Dio distrito" },
   { key: "converso", label: "💬 Conversó" },
   { key: "frio", label: "❄️ Frío" },
@@ -224,6 +225,9 @@ export interface LeadSegmentSignals {
 //   "https://kenku.pe/products/purely-nutrient-… Tengo una consulta"
 // Un solo mensaje, pero dice QUÉ producto quiere. Contarlo como "solo saludó" lo
 // hundía al fondo de la cola junto a quien escribió "hola" y nada más.
+//
+// OJO si tu tienda no usa /products/: la ruta es lo único que dispara la regla.
+// Con /producto/ o /p/ el patrón no engancha y estos leads caen a frío.
 const PRODUCT_LINK_RE = /https?:\/\/\S*\/products\/\S/i;
 
 /** ¿El primer mensaje del cliente trae el link de una ficha de producto? Puro. */
@@ -231,15 +235,39 @@ export function hasProductLink(text: string | null | undefined): boolean {
   return PRODUCT_LINK_RE.test(text ?? "");
 }
 
-/** Assign a "Por llamar" lead to one sub-segment (highest-priority match).
- *  (Leads en Yape ya tienen su propia pestaña superior, no un sub-bucket.) */
+/**
+ * Assign a "Por llamar" lead to one sub-segment (highest-priority match).
+ * (Leads en Yape ya tienen su propia pestaña superior, no un sub-bucket.)
+ *
+ * POR QUÉ `producto` VA SEGUNDO. Antes, traer el link de la ficha solo empujaba
+ * al lead a `converso`, y ahí quedaba mezclado con quien escribió dos veces
+ * "hola". Medido sobre 60 días, contando solo a los que la asesora llamó, el
+ * balde propio cierra MUY por encima de conversó:
+ *
+ *              Aurela   Kenku      ← % de cierre cuando se llama
+ *   carrito     43,5     35,6
+ *   producto    13,8     17,5      ← el escalón nuevo
+ *   distrito    10,4     21,0
+ *   converso     2,6      6,3
+ *   frío         0,5      1,3
+ *
+ * El orden del CASCADE (producto por encima de distrito) es una decisión de
+ * negocio, no una lectura del dato: en Aurela el dato la respalda (13,8 > 10,4)
+ * y en Kenku no (17,5 < 21,0). Lo que el dato sí sostiene sin discusión es que
+ * estos leads no pertenecen a `converso`. El ORDEN DE LLAMADA no depende de
+ * este cascade sino de los pesos por tienda de lib/lead-priority.ts, que sí van
+ * con el número medido de cada una — así que en Kenku distrito se sigue
+ * llamando antes que producto aunque el balde se asigne después.
+ */
 export function leadSegment(lead: LeadSegmentSignals): LeadSegment {
   // Cart from a real Shopify draft (draft_order_gid) OR parsed from the chat.
   if ((lead.cart_item_count ?? 0) > 0 || (lead.draft_order_gid ?? "").length > 0) return "carrito";
+  // Llegó desde la ficha de un producto: sabe qué quiere, aunque no haya escrito
+  // nada más. Si el texto no está cargado (base sin migrar) no dispara y el lead
+  // cae por las reglas de abajo, como antes.
+  if (hasProductLink(lead.first_inbound_text)) return "producto";
   if ((lead.district ?? "").trim()) return "distrito"; // dio distrito de envío
-  // ≥2 mensajes, o uno solo que ya trae el producto que le interesa. Si el texto
-  // no está cargado (base sin migrar), cae al conteo de mensajes como antes.
-  if ((lead.inbound_count ?? 0) >= 2 || hasProductLink(lead.first_inbound_text)) return "converso";
+  if ((lead.inbound_count ?? 0) >= 2) return "converso";
   return "frio"; // solo saludó / no respondió
 }
 
@@ -405,6 +433,7 @@ export function leadHook(lead: LeadHookSignals): LeadHook | null {
 export function countLeadSegments(leads: LeadSegmentSignals[]): Record<LeadSegment, number> {
   const out: Record<LeadSegment, number> = {
     carrito: 0,
+    producto: 0,
     distrito: 0,
     converso: 0,
     frio: 0,
