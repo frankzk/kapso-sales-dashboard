@@ -205,6 +205,37 @@ export type CollectMismatch = null | {
  *
  * Pura: la decisión de qué es un descuadre no depende de la base de datos.
  */
+/**
+ * ¿Se puede mandar este pedido por Aliclik? Devuelve el motivo si NO.
+ *
+ * ALICLIK ES SOLO CONTRA ENTREGA. No admite una guía con cobro cero: el importe
+ * mínimo ronda los S/ 24, y de hecho en 5.316 guías el cobro más bajo registrado
+ * es S/ 30. Así que un pedido YA PAGADO no tiene forma correcta de viajar por
+ * Aliclik: o se le cobra el total otra vez —el fallo que persigue
+ * `collectAmountMismatch`— o se le cobra el mínimo, que es menos plata indebida
+ * pero igual de indebida.
+ *
+ * POR ESO SE BLOQUEA ANTES, y no se "arregla" el importe. Bajar la guía al
+ * mínimo parece la solución elegante y es exactamente el error: convierte un
+ * cobro duplicado grande en uno pequeño, y encima lo hace en silencio.
+ *
+ * Y hay salida: Tanders SÍ acepta cobro cero, y Shalom es agencia y no cobra en
+ * la puerta. De hecho la operación ya lo resuelve así sin que nadie lo
+ * programara — de los pedidos pagados con guía, 364 fueron por Shalom y 3 por
+ * Aliclik. Esto solo pone en el sistema lo que el equipo ya hace a mano.
+ *
+ * Pura, y con el mismo `OrderPaymentFacts` que el resto: una sola definición de
+ * "ya está cobrado" para el detector, el drawer y esta compuerta.
+ */
+export function aliclikPrepaidBlocker(facts: OrderPaymentFacts): string | null {
+  if (!orderFullyPaid(facts)) return null;
+  return (
+    "Este pedido YA ESTÁ PAGADO y Aliclik es solo contraentrega: no acepta guías con cobro cero " +
+    "(su mínimo ronda los S/ 24). Si se crea igual, al cliente se le cobra en la puerta algo que ya pagó. " +
+    "Mándalo por Tanders, que sí admite cobro cero, o por agencia (Shalom), donde no se cobra en la entrega."
+  );
+}
+
 export function collectAmountMismatch(
   reported: number | null | undefined,
   orderTotal: number | null | undefined,
