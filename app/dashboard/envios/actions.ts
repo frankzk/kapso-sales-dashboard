@@ -557,11 +557,31 @@ export async function registerRerouteCall(
     reprogramProvider === "fenix" &&
     !cur.fenix_shipment_id
   ) {
-    const guideCode = rescheduleGuideCode(cur.order_name, input.nextFollowupAt);
+    // Se le pide el número a Swayp; si la ciudad no está habilitada por API
+    // —hoy sólo Arequipa— se cae al código local, que es el flujo por Excel de
+    // siempre. Un solo intento: `createGuide` no reintenta a propósito, porque
+    // la API no acepta clave de idempotencia y un POST repetido tras un timeout
+    // crearía una segunda guía y un segundo paquete.
+    const viaApi = await swaypGuideForReprogram(
+      admin,
+      cur.order_id,
+      input.nextFollowupAt,
+      input.note,
+    );
+    const localCode = rescheduleGuideCode(cur.order_name, input.nextFollowupAt);
+    const guideCode = viaApi.ok ? String(viaApi.guia) : localCode;
+    // El operador tiene que enterarse de que la guía NO existe en Swayp: es la
+    // única señal de que hay que cargarla a mano por el Excel.
+    const swaypNotice =
+      !viaApi.ok && env.swaypEnabled()
+        ? ` Swayp no la emitió (${viaApi.reason}); quedó con código manual.`
+        : "";
     if (guideCode) {
       // carry the reprogramación date onto the new active guide at insert time
       const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
         childNextFollowupAt: input.nextFollowupAt,
+        swaypGuide: viaApi.ok ? String(viaApi.guia) : null,
+        swaypState: viaApi.ok ? viaApi.idEstado : null,
       });
       // A failure here (e.g. the code was already used) is surfaced rather than
       // falling back to En ruta — that would re-activate the old, unusable guide.
@@ -578,7 +598,11 @@ export async function registerRerouteCall(
       });
       await syncMasterForShipment(admin, shipmentId, spun.childId);
       revalidatePath("/dashboard/envios");
-      return { notice: `Confirmado — nueva guía Fenix ${spun.guideCode} (En ruta).` };
+      return {
+        notice:
+          `Confirmado — nueva guía Fenix ${spun.guideCode} (En ruta).` +
+          (viaApi.ok ? " Emitida por Swayp." : swaypNotice),
+      };
     }
   }
 
@@ -1065,6 +1089,15 @@ async function spinOffFenixGuide(
     childNextFollowupAt?: string | null;
     expectedSourceStatus?: string;
     parentAuditNote?: string;
+    /**
+     * Número y estado que EMITIÓ Swayp, cuando la guía se pidió por API. Sin
+     * esto la hija quedaría con el número correcto en `guide_code` y
+     * `swayp_guide` nulo — y el webhook busca por esa columna
+     * (`swayp-ingest.ts:96`), así que jamás encontraría la guía y el envío se
+     * quedaría En ruta para siempre por más que Swayp reportara.
+     */
+    swaypGuide?: string | null;
+    swaypState?: number | null;
   } = {},
 ): Promise<{ error: string } | { childId: string; guideCode: string }> {
   const code = guideCode.trim().toUpperCase();
@@ -1128,6 +1161,8 @@ async function spinOffFenixGuide(
       delivery_status: "en_ruta",
       status_category: "in_route",
       next_followup_at: opts.childNextFollowupAt ?? null,
+      swayp_guide: opts.swaypGuide ?? null,
+      swayp_state: opts.swaypState ?? null,
     })
     .select("id")
     .single();
@@ -1608,6 +1643,97 @@ async function createFenixGuideViaApi(args: {
     console.error(hint ? `[swayp] CREDENCIAL: ${hint}` : "[swayp] createGuide falló:", msg);
     return { ok: false, reason: hint ?? msg };
   }
+}
+
+/**
+ * Pide a Swayp el número de guía para el pedido de un envío que se reprograma.
+ *
+ * POR QUÉ EXISTE. La reprogramación desde Repro Provincia inventaba el código
+ * localmente (`rescheduleGuideCode`) y nunca hablaba con Swayp: la guía había
+ * que cargarla después a mano por el Excel de programación. El comentario de
+ * `createFenixGuide` lo declaraba pendiente desde el #294 —«API-ready: a later
+ * phase swaps the manual guideCode for createFenixGuideViaApi()»—; esto es esa
+ * fase.
+ *
+ * LA FRONTERA POR CIUDAD NO SE DECIDE ACÁ, y es deliberado. `SWAYP_SENDERS`
+ * solo tiene las ciudades habilitadas por API —hoy Arequipa—, así que un
+ * destino de otra provincia falla dentro de `buildSwaypGuideInput` con «No hay
+ * bodega Swayp configurada para …» y el llamador cae al código local. Habilitar
+ * Trujillo será agregar una clave al JSON, sin tocar código ni reentrenar a
+ * nadie.
+ *
+ * Devuelve el motivo en vez de lanzar: para el llamador, no conseguir número de
+ * Swayp no es un error —es seguir por Excel, como hasta hoy.
+ */
+async function swaypGuideForReprogram(
+  admin: SupabaseClient,
+  orderId: string | null | undefined,
+  dispatchDateIso: string | null | undefined,
+  note?: string | null,
+): Promise<{ ok: true; guia: string; idEstado: number } | { ok: false; reason: string }> {
+  if (!env.swaypEnabled()) return { ok: false, reason: "integración Swayp desactivada" };
+  if (!orderId) return { ok: false, reason: "el envío no está vinculado a un pedido" };
+
+  const { data } = await admin
+    .from("orders")
+    .select(DIRECT_GUIDE_ORDER_COLUMNS)
+    .eq("id", orderId)
+    .maybeSingle();
+  const order = data as unknown as DirectGuideOrderRecord | null;
+  if (!order) return { ok: false, reason: "no se pudo leer el pedido" };
+
+  const { address } = await resolveDirectGuideAddress(admin, order);
+  const district = address?.city ?? null;
+  const city = deriveFenixCoverageCity(district, address?.province ?? null);
+  const totalRefunded = order.total_refunded ?? 0;
+  const lineItems = (order.line_items ?? []).map((li) => ({
+    title: li.title ?? "",
+    quantity: li.quantity ?? 1,
+    sku: li.sku ?? null,
+  }));
+
+  // Stock ÍTEM POR ÍTEM, el mismo criterio que la guía directa. La reja de más
+  // arriba (`resolveCurrentFenixEligibility`) usa `evaluateFenix`, que aprueba
+  // si CUALQUIER producto tiene stock; sirve para decidir si el envío se sigue
+  // trabajando, pero no para mandar un paquete: en un pedido de dos productos
+  // con uno solo en bodega, Swayp recibiría una guía que su almacén no puede
+  // armar. Falla suave —se cae al código local— porque hasta hoy este camino
+  // no validaba nada y bloquear al operador sería una regresión.
+  const { data: store } = await admin
+    .from("stores")
+    .select("org_id")
+    .eq("id", order.store_id)
+    .maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  if (!orgId) return { ok: false, reason: "no se encontró la organización de la tienda" };
+  const { data: stock, error: stockError } = await admin
+    .from("fenix_stock")
+    .select("city,product,sku,quantity")
+    .eq("org_id", orgId);
+  if (stockError) return { ok: false, reason: `no se pudo consultar el stock: ${stockError.message}` };
+  const check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
+  if (!check.ok) {
+    return {
+      ok: false,
+      reason:
+        check.reason === "sin_stock"
+          ? `sin stock en ${city} para: ${check.uncovered.join(", ")}`
+          : `sin cobertura en ${district || "el destino"}`,
+    };
+  }
+
+  return createFenixGuideViaApi({
+    city,
+    district,
+    customerName: address?.name ?? null,
+    customerPhone: order.customer_phone ?? normalizePhone(address?.phone) ?? null,
+    address1: address?.address1 ?? null,
+    reference: address?.address2 ?? null,
+    lineItems,
+    codAmount: Math.max(0, (order.total_amount ?? 0) - totalRefunded),
+    dispatchDateIso: dispatchDateIso ?? null,
+    observaciones: note?.trim() || null,
+  });
 }
 
 export async function createDirectFenixGuide(input: {

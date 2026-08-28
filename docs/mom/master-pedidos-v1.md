@@ -1542,6 +1542,42 @@ tiene —es gestión de venta, la misma persona que llamaría a la clienta—.
 y dispara la devolución física, que es lo que ese permiso gobierna en el resto
 del sistema.
 
+### 11.3 Quién emite el número de guía al reprogramar
+
+Al reprogramar hacia Swayp desde Reproprovincia, el número de guía **lo emite
+Swayp por API**, no la app. Hasta ahora la app inventaba un código local y la
+guía había que cargarla después a mano por el Excel de programación; ese código
+seguía siendo el que la operadora leía, así que nadie notaba que en el sistema
+de Swayp no existía nada.
+
+**Qué ciudades van por API y quién lo decide.** La frontera es una sola:
+`SWAYP_SENDERS`, el JSON de bodegas configuradas. Hoy solo tiene Arequipa,
+porque es la única bodega con stock cargado del lado de Swayp. Un destino de
+otra provincia no encuentra bodega, la API no se llama y el envío sigue por
+Excel exactamente como hasta hoy. **Habilitar una ciudad es agregarle una clave
+a ese JSON**: no se toca código y no se reentrena a nadie.
+
+**No conseguir número de Swayp no es un error.** Integración apagada, ciudad sin
+bodega, dirección incompleta, token vencido o API caída: en todos los casos la
+reprogramación se completa con el código local y el aviso dice por qué. Dejar a
+la operadora bloqueada porque un courier no responde sería peor que una guía
+manual —y la guía manual es el procedimiento que ya conoce—.
+
+**Se pide una sola vez.** La API de Swayp no acepta clave de idempotencia, así
+que un POST repetido tras un timeout crearía una segunda guía y un segundo
+paquete. Un intento, y si falla, código local.
+
+**El stock se valida ítem por ítem, no por pedido.** La reja que decide si el
+envío se sigue trabajando aprueba cuando *cualquier* producto tiene stock; para
+mandar un paquete eso no alcanza. En un pedido de dos productos con uno solo en
+bodega, Swayp recibiría una guía que su almacén no puede armar. Si falta
+cualquier ítem, el envío cae al código local con el motivo —no se bloquea la
+reprogramación, que antes de esto no validaba nada—.
+
+**El número que emite Swayp se guarda en `swayp_guide`, no solo en
+`guide_code`.** El webhook de Swayp busca la guía por esa columna: sin ella el
+envío se quedaría En ruta para siempre por más que el mensajero reportara.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom
