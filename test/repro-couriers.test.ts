@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { COURIERS_FUERA_DE_REPRO, perteneceARepro } from "@/lib/shipments";
+import { COURIERS_FUERA_DE_REPRO, esperaSalidaDeAliclik, perteneceARepro } from "@/lib/shipments";
+import { esColaDeReprogramacion } from "@/lib/shipments-access";
 
 /**
  * Qué se trabaja desde Repro Provincia y qué no.
@@ -95,5 +96,91 @@ describe("la lista y el contador recortan IGUAL", () => {
     const body = source.slice(start, source.indexOf("\n}", start));
     expect(body).toContain('.not("courier", "in", FUERA_DE_REPRO)');
     expect(body).not.toContain("perteneceARepro");
+  });
+});
+
+/**
+ * El segundo recorte: lo que Aliclik todavía no ha sacado del almacén.
+ *
+ * EL CASO REAL. Entre las pendientes había 92 guías de Aliclik en custodia
+ * `empresa` —89 sin un solo intento, varias creadas ese mismo día— con estado
+ * «PENDING_DELIVERY · PREPARED · CONFIRMED». La cola es para lo que Aliclik
+ * intentó entregar y no pudo; una guía recién preparada no tiene nada que
+ * reprogramar, y aun así la pantalla le ofrecía ruta Fenix como a cualquier otra.
+ */
+describe("una guía que todavía no salió del almacén no se reprograma", () => {
+  it("Aliclik con el paquete en casa se va de la cola", () => {
+    expect(esperaSalidaDeAliclik("aliclik", "empresa")).toBe(true);
+  });
+
+  it("en cuanto el courier lo recoge, vuelve", () => {
+    expect(esperaSalidaDeAliclik("aliclik", "courier")).toBe(false);
+    expect(esperaSalidaDeAliclik("aliclik", "devuelto")).toBe(false);
+  });
+
+  it("el criterio es la custodia, NO el contador de intentos", () => {
+    // `aliclik_attempts` sale del Excel y puede no venir —la pantalla ya lo dice,
+    // «Sin NRO. INTENTOS en Excel»—. Hay 2 guías en poder del courier sin
+    // intentos informados: filtrar por el contador las escondería, y esconder
+    // trabajo por un dato que falta es el error que este repo ya cometió con la
+    // cobertura (§19.0.2). La custodia es un hecho, no un dato que puede faltar.
+    expect(esperaSalidaDeAliclik("aliclik", "courier")).toBe(false);
+  });
+
+  it("solo aplica a Aliclik: `por_definir` y Fénix se quedan", () => {
+    // Las dos están en custodia `empresa` y salir de la cola es, para ellas,
+    // otra decisión que no está tomada (MOM §11).
+    expect(esperaSalidaDeAliclik("por_definir", "empresa")).toBe(false);
+    expect(esperaSalidaDeAliclik("fenix", "empresa")).toBe(false);
+    expect(esperaSalidaDeAliclik("swayp", "empresa")).toBe(false);
+  });
+
+  it("no se cae por mayúsculas, espacios ni vacíos", () => {
+    expect(esperaSalidaDeAliclik(" Aliclik ", " EMPRESA ")).toBe(true);
+    expect(esperaSalidaDeAliclik(null, "empresa")).toBe(false);
+    expect(esperaSalidaDeAliclik("aliclik", null)).toBe(false);
+  });
+
+  it("la lista y el contador lo aplican los dos, desde la misma constante", () => {
+    const source = read(ACCESS);
+    expect(source.match(/query\.or\(YA_SALIO_O_NO_ES_ALICLIK\)/g) ?? []).toHaveLength(2);
+    // Es la negación de «Aliclik Y en el almacén»: basta con que el courier sea
+    // otro, o que el paquete ya haya salido.
+    expect(source).toContain('"courier.neq.aliclik,custody_state.neq.empresa"');
+  });
+
+  it("va en la consulta, no después de traer las filas", () => {
+    const source = read(ACCESS);
+    const start = source.indexOf("export async function getStoreShipments(");
+    const body = source.slice(start, source.indexOf("\n}", start));
+    expect(body).toContain("query.or(YA_SALIO_O_NO_ES_ALICLIK)");
+    expect(body).not.toContain("esperaSalidaDeAliclik");
+  });
+
+  // ESTO ES LO QUE CASI SE ROMPE. Medido contra producción antes de acotarlo, el
+  // mismo recorte sobre todas las pestañas se llevaba 317 anuladas, 78
+  // entregadas, 46 en ruta y 15 transferidas: `custody_state` no se actualiza al
+  // entregar, así que en una guía cerrada el valor es viejo y no significa «sigue
+  // en el almacén». Esas pestañas son el REGISTRO de lo que pasó; esconder ahí
+  // una guía entregada sería perder historial, no limpiar una cola.
+  describe("solo recorta la cola de Pendiente", () => {
+    it("las dos consultas lo condicionan a la categoría", () => {
+      const source = read(ACCESS);
+      expect(source.match(/if \(esColaDeReprogramacion\(cats\)\)/g) ?? []).toHaveLength(2);
+    });
+
+    it("Pendiente sí; entregado, anulado, en ruta y transferido no", () => {
+      expect(esColaDeReprogramacion(["pending"])).toBe(true);
+      for (const cat of ["delivered", "closed", "in_route", "transferred"]) {
+        expect(esColaDeReprogramacion([cat]), cat).toBe(false);
+      }
+    });
+
+    it("una vista que MEZCLA pendientes con otra cosa tampoco recorta", () => {
+      // Revisión es ["pending","in_route"]: recortar ahí escondería guías en
+      // ruta, que no es lo que se pidió.
+      expect(esColaDeReprogramacion(["pending", "in_route"])).toBe(false);
+      expect(esColaDeReprogramacion([])).toBe(false);
+    });
   });
 });

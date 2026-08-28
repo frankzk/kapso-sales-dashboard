@@ -16,7 +16,7 @@ import {
   reconcileReportedDeliveryStatus,
   reopensForFailedAttempt,
 } from "./shipments";
-import { evaluateFenix, type FenixStockRow } from "./fenix";
+import { coverageInputOf, evaluateFenix, type FenixStockRow } from "./fenix";
 import { describeRecompute, recomputeOrderMasterSafe, type RecomputeOutcome } from "./order-master";
 import {
   isProvisionalGuideCode,
@@ -225,8 +225,17 @@ export async function ingestAliclikReport(
       : (inc.row.longitude ?? existing?.longitude ?? null);
     // Fenix coverage/stock is evaluated for every managed (pendiente) guide — the
     // UI splits Pendiente vs "Sin cobertura" by this flag.
+    //
+    // Se le pasa el destino COMPLETO, no solo `city`: el alta por la API de
+    // Aliclik no rellena esa columna, y con ella sola cada guía nueva de
+    // Arequipa entraba marcada «fuera de cobertura» desde el minuto uno. El
+    // distrito y la provincia sí vienen —están tres líneas más arriba— y
+    // `evaluateFenix` sabe derivar la ciudad de ellos.
     const fenix = isPending(finalStatus)
-      ? evaluateFenix({ city, product: inc.row.product }, stockRows).eligible
+      ? evaluateFenix(
+          coverageInputOf({ city, district, province, region, product: inc.row.product }),
+          stockRows,
+        ).eligible
       : false;
     // delivered_source: keep an existing source; a delivery that comes from the
     // report (not from agent gestión) is "aliclik".

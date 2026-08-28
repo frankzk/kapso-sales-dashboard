@@ -47,8 +47,11 @@ import {
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
 import {
+  coverageInputOf,
   evaluateDirectFenixStock,
   evaluateFenix,
+  FENIX_COVERAGE_COLUMNS,
+  type FenixCoverageRow,
   type FenixEligibility,
   type FenixStockRow,
 } from "@/lib/fenix";
@@ -101,10 +104,21 @@ export async function loadReprogramData(): Promise<{
   return getReprogramRows(storeIds);
 }
 
+/**
+ * Reevalúa la cobertura y el stock de un envío contra el inventario de hoy.
+ *
+ * PIDE EL DESTINO COMPLETO, no solo `city`. El alta por la API de Aliclik deja
+ * esa columna vacía —219 envíos, 85 de ellos pendientes— y `evaluateFenix` la
+ * deriva del distrito, pero solo si se la pasan. Cuando esta reja leía `city` a
+ * secas, la cola mostraba «Fenix Ok» (la lectura sí trae el distrito) y el botón
+ * respondía «Fenix no tiene cobertura en la ciudad indicada» sobre el mismo
+ * envío. La frase delataba el bug: «la ciudad indicada» es el texto de respaldo
+ * de cuando `city` es NULL.
+ */
 async function resolveCurrentFenixEligibility(
   admin: SupabaseClient,
   storeId: string,
-  shipment: { city: string | null; product: string | null; order_id: string | null },
+  shipment: FenixCoverageRow & { product: string | null; order_id: string | null },
 ): Promise<FenixEligibility | { error: string }> {
   const { data: store, error: storeError } = await admin
     .from("stores")
@@ -129,7 +143,7 @@ async function resolveCurrentFenixEligibility(
   const lineItems = (order as {
     line_items?: { title?: string | null; sku?: string | null }[] | null;
   } | null)?.line_items ?? undefined;
-  return evaluateFenix(shipment, (stock as FenixStockRow[]) ?? [], lineItems);
+  return evaluateFenix(coverageInputOf(shipment), (stock as FenixStockRow[]) ?? [], lineItems);
 }
 
 // Process-level cache of agent id → display name (email local-part).
@@ -422,13 +436,13 @@ export async function registerRerouteCall(
     .eq("id", shipmentId)
     .maybeSingle();
   let shipmentResult = await fetchShipment(
-    "id,courier,guide_code,delivery_status,reroute_attempts,order_id,order_name,city,product,fenix_eligible,fenix_shipment_id,aliclik_attempts,aliclik_service_date",
+    `id,courier,guide_code,delivery_status,reroute_attempts,order_id,order_name,${FENIX_COVERAGE_COLUMNS},product,fenix_eligible,fenix_shipment_id,aliclik_attempts,aliclik_service_date`,
   );
   // 0038 may land moments after the app deploy. Preserve the existing Fenix
   // workflow instead of making every gestión return "No encontrado".
   if (shipmentResult.error) {
     shipmentResult = await fetchShipment(
-      "id,courier,guide_code,delivery_status,reroute_attempts,order_id,order_name,city,product,fenix_eligible,fenix_shipment_id",
+      "id,courier,guide_code,delivery_status,reroute_attempts,order_id,order_name,city,district,region,product,fenix_eligible,fenix_shipment_id",
     );
   }
   const ship = shipmentResult.data;
@@ -441,6 +455,9 @@ export async function registerRerouteCall(
     order_id: string | null;
     order_name: string | null;
     city: string | null;
+    district?: string | null;
+    province?: string | null;
+    region?: string | null;
     product: string | null;
     fenix_eligible: boolean;
     fenix_shipment_id: string | null;
@@ -546,8 +563,11 @@ export async function registerRerouteCall(
     if (!currentFenix.eligible) {
       return {
         error: currentFenix.reason === "sin_stock"
-          ? `Fenix no tiene stock disponible para este producto en ${cur.city ?? "la ciudad indicada"}.`
-          : `Fenix no tiene cobertura en ${cur.city ?? "la ciudad indicada"}.`,
+          // La ciudad la nombra `currentFenix`, que es la que se evaluó de
+          // verdad: `cur.city` viene vacía en las guías de la API de Aliclik y
+          // el mensaje quedaba en «la ciudad indicada», que no dice nada.
+          ? `Fenix no tiene stock disponible para este producto en ${currentFenix.city || cur.district || "la ciudad indicada"}.`
+          : `Fenix no tiene cobertura en ${currentFenix.city || cur.district || "la ciudad indicada"}.`,
       };
     }
   }
@@ -998,7 +1018,9 @@ export async function reprogramCancelledShipmentException(
   const admin = createAdminSupabase();
   const { data: shipment, error: shipmentError } = await admin
     .from("shipments")
-    .select("id,courier,guide_code,delivery_status,order_id,order_name,city,product,fenix_eligible,fenix_shipment_id")
+    .select(
+      `id,courier,guide_code,delivery_status,order_id,order_name,${FENIX_COVERAGE_COLUMNS},product,fenix_eligible,fenix_shipment_id`,
+    )
     .eq("id", shipmentId)
     .maybeSingle();
   if (shipmentError || !shipment) {
@@ -1011,6 +1033,9 @@ export async function reprogramCancelledShipmentException(
     order_id: string | null;
     order_name: string | null;
     city: string | null;
+    district?: string | null;
+    province?: string | null;
+    region?: string | null;
     product: string | null;
     fenix_eligible: boolean;
     fenix_shipment_id: string | null;
@@ -1042,8 +1067,8 @@ export async function reprogramCancelledShipmentException(
   if (!currentFenix.eligible) {
     return {
       error: currentFenix.reason === "sin_stock"
-        ? `Fenix no tiene stock disponible para este pedido en ${current.city ?? "la ciudad indicada"}.`
-        : `Fenix no tiene cobertura en ${current.city ?? "la ciudad indicada"}.`,
+        ? `Fenix no tiene stock disponible para este pedido en ${currentFenix.city || current.district || "la ciudad indicada"}.`
+        : `Fenix no tiene cobertura en ${currentFenix.city || current.district || "la ciudad indicada"}.`,
     };
   }
 
@@ -2412,9 +2437,8 @@ export async function recomputeFenixEligibility(): Promise<
   // Only pending guides carry eligibility; re-evaluate each and flip the ones
   // whose stored flag no longer matches. Paginate past Supabase's 1,000-row
   // response cap so a large queue is never only partially synchronized.
-  type PendingShipment = {
+  type PendingShipment = FenixCoverageRow & {
     id: string;
-    city: string | null;
     product: string | null;
     order_id: string | null;
     fenix_eligible: boolean;
@@ -2424,7 +2448,7 @@ export async function recomputeFenixEligibility(): Promise<
   for (let from = 0; ; from += pageSize) {
     const { data: rows, error: rowsError } = await admin
       .from("shipments")
-      .select("id,city,product,order_id,fenix_eligible")
+      .select(`id,${FENIX_COVERAGE_COLUMNS},product,order_id,fenix_eligible`)
       .in("store_id", storeIds)
       .eq("status_category", "pending")
       .range(from, from + pageSize - 1);
@@ -2457,7 +2481,7 @@ export async function recomputeFenixEligibility(): Promise<
   const toIneligible: string[] = [];
   for (const s of shipments) {
     const orderProducts = s.order_id ? productsByOrder.get(s.order_id) : undefined;
-    const eligible = evaluateFenix(s, stockRows, orderProducts).eligible;
+    const eligible = evaluateFenix(coverageInputOf(s), stockRows, orderProducts).eligible;
     if (eligible !== s.fenix_eligible) {
       (eligible ? toEligible : toIneligible).push(s.id);
     }

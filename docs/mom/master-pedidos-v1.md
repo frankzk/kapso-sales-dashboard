@@ -1299,6 +1299,29 @@ desaparecería sin que nadie se enterara, y trabajo que falta no se ve.
 Las guías `por_definir` —filas sintéticas de pedidos que todavía no tienen
 salida— SÍ se quedan. Sacarlas es otra decisión y no está tomada.
 
+**Y tampoco entra lo que Aliclik todavía no ha sacado del almacén.** La cola es
+para lo que se intentó entregar y no se pudo; una guía recién preparada no tiene
+nada que reprogramar. Había 92 así entre las pendientes —89 sin un solo intento,
+varias creadas ese mismo día— y la pantalla les ofrecía ruta Fenix como a
+cualquier otra.
+
+El criterio es la **custodia física**, no el contador de intentos. `TO_PREPARE`
+y `PREPARED` dejan el paquete en custodia `empresa`; desde `PICKED` pasa a
+`courier` (§6.2). El contador sale del Excel y puede sencillamente no venir —la
+pantalla ya lo dice, «Sin NRO. INTENTOS en Excel»—, así que filtrar por él
+confundiría «no hubo intento» con «no nos lo contaron». Hay 2 guías en poder del
+courier sin intentos informados: con la custodia se quedan, que es lo correcto.
+
+Dos límites, los dos deliberados:
+
+- **Solo Aliclik.** Las `por_definir` y las guías Fenix pendientes también están
+  en custodia `empresa`; sacarlas es otra decisión y no está tomada.
+- **Solo la pestaña Pendiente.** `custody_state` no se actualiza al entregar, así
+  que en una guía cerrada el valor es viejo y no significa «sigue en el almacén».
+  Aplicar el recorte a todas las pestañas escondía 317 anuladas, 78 entregadas,
+  46 en ruta y 15 transferidas. Las otras pestañas son el REGISTRO de lo que
+  pasó: esconder ahí una guía entregada es perder historial, no limpiar una cola.
+
 El mismo recorte se aplica a la lista y a los contadores de las pestañas, desde
 una sola definición: el número del chip se lee justo encima de la tabla, y si
 cada uno filtrara por su cuenta podrían decir cosas distintas.
@@ -2374,6 +2397,34 @@ fallar**: se verificó contra cuatro mutantes —la función anterior, la versi�
 el guardarraíl de ambigüedad, la que busca dentro del texto y la que rompe la
 rama sin región— y los caza los cuatro. Una prueba que no falla ante ninguno de
 esos no habría estado protegiendo nada.
+
+### 19.0.2 «No hay dato» no es «no hay cobertura»
+
+La cobertura Fenix/Swayp de un envío se decide por su ciudad. La columna `city`
+de `shipments` es la que la nombra, y **el alta por la API de Aliclik la deja
+vacía**: 219 envíos, 85 de ellos pendientes. Leerla sola convierte «falta el
+dato» en «fuera de cobertura», que son dos cosas distintas —y la segunda esconde
+trabajo despachable—.
+
+La regla: **cuando `city` viene vacía, la ciudad se deriva del distrito y la
+provincia.** Cuando viene cargada manda ella, sin derivar nada por encima: el
+courier puede contradecir a Shopify, y esa discrepancia es un aviso que hay que
+ver, no tapar.
+
+Vive en una sola función (`coverageCityOf`) porque estuvo repartida y las copias
+se desincronizaron. Tenerla en un sitio no basta: **hay que pasarle el destino
+completo**. Las rejas que escriben la elegibilidad seleccionaban `city` a secas,
+así que la cola mostraba «Fenix Ok» —la lectura sí traía el distrito— y el botón
+respondía «Fenix no tiene cobertura en la ciudad indicada» sobre el mismo envío.
+La frase delataba el bug: «la ciudad indicada» es el texto de respaldo de cuando
+`city` es NULL. Por eso las cuatro columnas del destino se seleccionan juntas,
+desde una constante única (`FENIX_COVERAGE_COLUMNS`), en los cuatro caminos: la
+lectura de la cola, la reja de reprogramación, la excepción sobre guía anulada y
+el barrido masivo que resincroniza la elegibilidad.
+
+`province` llegó en la migración 0039 y el histórico guarda la suya en `region`.
+Se resuelve una sola vez (`province ?? region`): sin ese respaldo, media base
+pierde la provincia y con ella la derivación.
 
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 

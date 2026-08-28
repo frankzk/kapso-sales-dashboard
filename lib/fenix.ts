@@ -62,6 +62,39 @@ export function coverageCityOf(shipment: {
 }
 
 /**
+ * Las columnas de `shipments` que describen el destino. Se seleccionan JUNTAS o
+ * la cobertura miente.
+ *
+ * `coverageCityOf` sabe derivar la ciudad del distrito, pero solo puede hacerlo
+ * con los datos que le pasan: un llamador que selecciona `city` a secas le
+ * entrega un destino vacío, y un destino vacío es «fuera de cobertura». Eso pasó
+ * —la cola decía «Fenix Ok» sobre un envío que el botón rechazaba— porque la
+ * lectura de la cola sí traía el distrito y las rejas de escritura no. Tener el
+ * nombre de las columnas en un solo sitio no lo impide, pero deja el olvido a la
+ * vista en el diff.
+ */
+export const FENIX_COVERAGE_COLUMNS = "city,district,province,region";
+
+/** Fila con destino, tal cual sale de `shipments`. */
+export interface FenixCoverageRow {
+  city?: string | null;
+  district?: string | null;
+  province?: string | null;
+  /** La columna vieja. `province` (migración 0039) llegó después y no todas las
+   *  filas la tienen; sin este respaldo, la mitad del histórico pierde la
+   *  provincia y con ella la derivación por distrito. */
+  region?: string | null;
+}
+
+/** Normaliza el destino de una fila a lo que `evaluateFenix` sabe leer,
+ *  resolviendo el par `province`/`region` en un solo lugar. Pura. */
+export function coverageInputOf<T extends FenixCoverageRow>(
+  row: T,
+): T & { province: string | null } {
+  return { ...row, province: row.province ?? row.region ?? null };
+}
+
+/**
  * La razón que se le muestra al operador. Pura.
  *
  * Camino de respaldo: en la cola gana `fenix_reason`, que el servidor calcula
