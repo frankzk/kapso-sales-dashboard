@@ -169,8 +169,8 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
   it("carrito also triggers on a real Shopify draft (draft_order_gid)", () => {
     expect(leadSegment({ status: "nuevo", draft_order_gid: "gid://shopify/DraftOrder/1" })).toBe("carrito");
   });
-  it("distrito when a district was given but no cart", () => {
-    expect(leadSegment({ status: "nuevo", district: "Pueblo Libre", inbound_count: 5 })).toBe("distrito");
+  it("interes when a district was given but no cart", () => {
+    expect(leadSegment({ status: "nuevo", district: "Pueblo Libre", inbound_count: 5 })).toBe("interes");
     expect(leadSegment({ status: "nuevo", district: "   ", inbound_count: 5 })).toBe("converso"); // blank ignored
   });
   it("converso when engaged (inbound >= 2) without cart/district", () => {
@@ -184,7 +184,11 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
   // Quien llega desde la ficha de un producto manda UN mensaje, pero ese mensaje
   // trae el link: ya dijo qué quiere. Contarlo como "solo saludó" lo hundía al
   // fondo de la cola junto a quien escribió "hola" y nada más.
-  it("converso con un solo mensaje si trae el link de un producto", () => {
+  //
+  // Va al MISMO balde que el distrito: las dos son la misma pregunta contestada
+  // de dos maneras —DÓNDE lo quiere o QUÉ quiere—. Metido en `converso` cerraba
+  // al 2,6% (Aurela) y 6,3% (Kenku); en este balde, al 12,2% y 19,1%.
+  it("con un solo mensaje, si trae el link de un producto, va a interés", () => {
     expect(
       leadSegment({
         status: "nuevo",
@@ -192,7 +196,19 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
         first_inbound_text:
           "https://kenku.pe/products/purely-nutrient-ethiopian-black-seed-oil Tengo una consulta",
       }),
-    ).toBe("converso");
+    ).toBe("interes");
+  });
+
+  it("y NO cae en converso ni aunque haya escrito varias veces", () => {
+    // El link manda sobre el conteo de mensajes: si volviera a `converso`, estos
+    // leads regresarían al fondo de la cola, que es lo que vino a corregir.
+    expect(
+      leadSegment({
+        status: "nuevo",
+        inbound_count: 9,
+        first_inbound_text: "https://kenku.pe/products/x Tengo una consulta",
+      }),
+    ).toBe("interes");
   });
 
   it("un saludo suelto sigue siendo frío aunque haya texto", () => {
@@ -205,10 +221,14 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
     ).toBe("frio");
   });
 
-  it("el carrito y el distrito siguen mandando sobre el link", () => {
+  it("el carrito manda sobre el link; el distrito cae en el mismo balde", () => {
     const conLink = { first_inbound_text: "https://kenku.pe/products/x Tengo una consulta" };
+    // Un carrito armado es la señal más fuerte que hay (35-43% de cierre).
     expect(leadSegment({ status: "nuevo", cart_item_count: 1, ...conLink })).toBe("carrito");
-    expect(leadSegment({ status: "nuevo", district: "Wanchaq", ...conLink })).toBe("distrito");
+    // Distrito y link ya no compiten entre sí: son el mismo balde, así que da
+    // igual si trae uno, el otro o los dos.
+    expect(leadSegment({ status: "nuevo", district: "Wanchaq", ...conLink })).toBe("interes");
+    expect(leadSegment({ status: "nuevo", district: "Wanchaq" })).toBe("interes");
   });
 
   it("hasProductLink tolera mayúsculas y texto alrededor", () => {
@@ -227,8 +247,9 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
       { status: "nuevo", inbound_count: 4 },
       { status: "nuevo", inbound_count: 0 },
     ]);
-    expect(counts).toEqual({ carrito: 1, distrito: 1, converso: 1, frio: 2 });
-    expect(LEAD_SEGMENTS.map((s) => s.key)).toEqual(["carrito", "distrito", "converso", "frio"]);
+    expect(counts).toEqual({ carrito: 1, interes: 1, converso: 1, frio: 2 });
+    // El orden de la lista ES el orden de la cascada y el de la fila de chips.
+    expect(LEAD_SEGMENTS.map((s) => s.key)).toEqual(["carrito", "interes", "converso", "frio"]);
     expect(isLeadSegment("carrito")).toBe(true);
     expect(isLeadSegment("nope")).toBe(false);
   });

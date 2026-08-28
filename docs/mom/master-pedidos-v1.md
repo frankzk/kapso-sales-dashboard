@@ -1258,6 +1258,33 @@ Responsables: Akemi y Mariannys. Akemi es la jefa de Mariannys.
 Entrada elegible desde Aliclik: no contesta, intento fallido, rechazo sujeto a
 revisión, guía cancelada por courier y devolución.
 
+**Segmentos de la cola de leads.** Un lead cae en UN solo balde, primera
+coincidencia gana: `carrito` → `interes` → `converso` → `frio`.
+
+`interes` junta dos señales que son la misma pregunta contestada de dos
+maneras: **dio su distrito** de envío (dónde lo quiere) o **llegó desde la
+ficha de un producto** (qué quiere) — el mensaje trae la URL prellenada porque
+tocó «consultar por WhatsApp». Ninguna de las dos llega a carrito armado.
+
+Van juntas por dos razones. La operativa: se probaron separadas y el equipo no
+trabajaba las del medio — con cinco baldes, los de en medio no los atiende
+nadie, y un balde que nadie mira no clasifica, estorba. La del dato: separadas,
+las dos tiendas se contradecían en el orden (en Aurela la ficha cerraba por
+encima del distrito, en Kenku por debajo), así que no existía un orden único
+que fuera cierto en las dos. Unidas, sí.
+
+Tasa de cierre entre los LLAMADOS, 60 días:
+
+| Segmento | Aurela | Kenku |
+|---|---|---|
+| `carrito` | 43,5 % | 35,6 % |
+| `interes` | 12,2 % | 19,1 % |
+| `converso` | 2,6 % | 6,3 % |
+| `frio` | 0,5 % | 1,3 % |
+
+Mismo orden en las dos tiendas; lo que cambia son las magnitudes, y por eso los
+pesos de llamada son por tienda.
+
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
 que la cola tiene que recortar: quedan fuera **Shalom, Tanders, Urpi y el
 reparto propio**. Shalom es agencia —la clienta recoge en el terminal, no hay

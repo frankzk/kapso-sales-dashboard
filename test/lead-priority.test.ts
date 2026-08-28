@@ -14,22 +14,29 @@ const KENKU = scoringProfileFor("Kenku Peru");
 
 // Señales mínimas por segmento (misma definición que leadSegment).
 const carrito = (over = {}) => ({ id: "c", cart_item_count: 1, last_interaction_at: daysAgo(0), ...over });
-const distrito = (over = {}) => ({ id: "d", district: "Miraflores", last_interaction_at: daysAgo(0), ...over });
+const interes = (over = {}) => ({ id: "d", district: "Miraflores", last_interaction_at: daysAgo(0), ...over });
+// La otra mitad del MISMO balde: llegó desde la ficha de un producto.
+const interesPorLink = (over = {}) => ({
+  id: "dp",
+  first_inbound_text: "https://kenku.pe/products/x Tengo una consulta",
+  last_interaction_at: daysAgo(0),
+  ...over,
+});
 const converso = (over = {}) => ({ id: "v", inbound_count: 3, last_interaction_at: daysAgo(0), ...over });
 const frio = (over = {}) => ({ id: "f", last_interaction_at: daysAgo(0), ...over });
 
 describe("scoringProfileFor", () => {
   it("usa los pesos medidos de cada tienda", () => {
     expect(AURELA.segment.carrito).toBe(20);
-    expect(AURELA.segment.distrito).toBe(4); // en Aurela llamar al distrito rinde poco (3,7%)
+    expect(AURELA.segment.interes).toBe(5); // en Aurela este balde rinde poco (12,2%)
     expect(KENKU.segment.carrito).toBe(14);
-    expect(KENKU.segment.distrito).toBe(9); // en Kenku sí rinde (9,2%)
+    expect(KENKU.segment.interes).toBe(8); // en Kenku rinde bastante más (19,1%)
   });
 
   it("cae a un promedio que conserva el orden en una tienda sin medir", () => {
     const w = scoringProfileFor("Tienda Nueva").segment;
-    expect(w.carrito).toBeGreaterThan(w.distrito);
-    expect(w.distrito).toBeGreaterThan(w.converso);
+    expect(w.carrito).toBeGreaterThan(w.interes);
+    expect(w.interes).toBeGreaterThan(w.converso);
     expect(w.converso).toBeGreaterThan(w.frio);
   });
 
@@ -39,10 +46,10 @@ describe("scoringProfileFor", () => {
 });
 
 describe("leadPriorityScore", () => {
-  it("respeta el orden medido: carrito > distrito > conversó > frío", () => {
+  it("respeta el orden medido: carrito > interés > conversó > frío", () => {
     const s = (lead: Parameters<typeof leadPriorityScore>[0]) => leadPriorityScore(lead, KENKU, NOW);
-    expect(s(carrito())).toBeGreaterThan(s(distrito()));
-    expect(s(distrito())).toBeGreaterThan(s(converso()));
+    expect(s(carrito())).toBeGreaterThan(s(interes()));
+    expect(s(interes())).toBeGreaterThan(s(converso()));
     expect(s(converso())).toBeGreaterThan(s(frio()));
   });
 
@@ -91,9 +98,9 @@ describe("leadPriorityScore", () => {
     expect(Number.isFinite(roto)).toBe(true);
   });
 
-  it("los pesos por tienda cambian el resultado: el distrito rinde distinto", () => {
-    const enAurela = leadPriorityScore(distrito(), AURELA, NOW);
-    const enKenku = leadPriorityScore(distrito(), KENKU, NOW);
+  it("los pesos por tienda cambian el resultado: este balde rinde distinto", () => {
+    const enAurela = leadPriorityScore(interes(), AURELA, NOW);
+    const enKenku = leadPriorityScore(interes(), KENKU, NOW);
     expect(enKenku).toBeGreaterThan(enAurela);
   });
 });
@@ -214,6 +221,38 @@ describe("sortLeadsByPriority", () => {
     // dos pasadas seguidas no pueden dar órdenes distintos
     expect(sortLeadsByPriority(rows, KENKU, NOW).map((r) => r.id)).toEqual(
       sortLeadsByPriority(rows, KENKU, NOW).map((r) => r.id),
+    );
+  });
+});
+
+describe("distrito y ficha de producto son EL MISMO balde", () => {
+  // Se probaron separados y el equipo no trabajaba los de la mitad: con cinco
+  // baldes, los del medio no los atendía nadie. Además, separados, las dos
+  // tiendas se contradecían en el orden (en Aurela el link cerraba por encima
+  // del distrito, en Kenku por debajo), así que no había un orden único que
+  // fuera cierto en las dos. Unidos, sí: el orden es idéntico.
+  it("puntúan igual, den el distrito o vengan de la ficha", () => {
+    for (const profile of [AURELA, KENKU]) {
+      expect(leadPriorityScore(interesPorLink(), profile, NOW)).toEqual(
+        leadPriorityScore(interes(), profile, NOW),
+      );
+    }
+  });
+
+  it("en las dos tiendas van por encima de conversó y por debajo de carrito", () => {
+    for (const profile of [AURELA, KENKU]) {
+      const p = leadPriorityScore(interes(), profile, NOW);
+      expect(p).toBeGreaterThan(leadPriorityScore(converso(), profile, NOW));
+      expect(p).toBeLessThan(leadPriorityScore(carrito(), profile, NOW));
+    }
+  });
+
+  it("un carrito con link sigue puntuando como carrito", () => {
+    // El cascade pone carrito primero; si se invirtiera, un carrito armado
+    // perdería su peso —el más alto que hay— por traer un link.
+    const conAmbos = carrito({ first_inbound_text: "https://kenku.pe/products/x hola" });
+    expect(leadPriorityScore(conAmbos, KENKU, NOW)).toEqual(
+      leadPriorityScore(carrito(), KENKU, NOW),
     );
   });
 });

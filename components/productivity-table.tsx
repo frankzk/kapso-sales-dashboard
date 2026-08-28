@@ -70,7 +70,7 @@ const SOURCE_CHIP: Record<SourceBucket, { label: string; glyph: string; cls: str
 
 const SEGMENT_CHIP: Record<LeadSegment, { cls: string }> = {
   carrito: { cls: "bg-emerald-50 text-emerald-700" },
-  distrito: { cls: "bg-violet-50 text-violet-700" },
+  interes: { cls: "bg-amber-50 text-amber-700" },
   converso: { cls: "bg-sky-50 text-sky-700" },
   frio: { cls: "bg-slate-100 text-slate-500" },
 };

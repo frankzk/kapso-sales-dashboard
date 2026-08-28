@@ -201,11 +201,11 @@ export function nextLeadState(
 // order == call order: pago → carrito → distrito → converso → frio.
 // ---------------------------------------------------------------------------
 
-export type LeadSegment = "carrito" | "distrito" | "converso" | "frio";
+export type LeadSegment = "carrito" | "interes" | "converso" | "frio";
 
 export const LEAD_SEGMENTS: { key: LeadSegment; label: string }[] = [
   { key: "carrito", label: "🛒 Con carrito" },
-  { key: "distrito", label: "📍 Dio distrito" },
+  { key: "interes", label: "📍 Distrito o producto" },
   { key: "converso", label: "💬 Conversó" },
   { key: "frio", label: "❄️ Frío" },
 ];
@@ -224,6 +224,9 @@ export interface LeadSegmentSignals {
 //   "https://kenku.pe/products/purely-nutrient-… Tengo una consulta"
 // Un solo mensaje, pero dice QUÉ producto quiere. Contarlo como "solo saludó" lo
 // hundía al fondo de la cola junto a quien escribió "hola" y nada más.
+//
+// OJO si tu tienda no usa /products/: la ruta es lo único que dispara la regla.
+// Con /producto/ o /p/ el patrón no engancha y estos leads caen a frío.
 const PRODUCT_LINK_RE = /https?:\/\/\S*\/products\/\S/i;
 
 /** ¿El primer mensaje del cliente trae el link de una ficha de producto? Puro. */
@@ -231,15 +234,39 @@ export function hasProductLink(text: string | null | undefined): boolean {
   return PRODUCT_LINK_RE.test(text ?? "");
 }
 
-/** Assign a "Por llamar" lead to one sub-segment (highest-priority match).
- *  (Leads en Yape ya tienen su propia pestaña superior, no un sub-bucket.) */
+/**
+ * Assign a "Por llamar" lead to one sub-segment (highest-priority match).
+ * (Leads en Yape ya tienen su propia pestaña superior, no un sub-bucket.)
+ *
+ * `interes` JUNTA DOS SEÑALES: dio su distrito de envío, o llegó desde la ficha
+ * de un producto (tocó "consultar por WhatsApp" y el mensaje trae la URL). Son
+ * la misma pregunta contestada de dos maneras — DÓNDE lo quiere o QUÉ quiere—,
+ * y ninguna de las dos llega a carrito armado.
+ *
+ * POR QUÉ VAN JUNTAS Y NO SEPARADAS. Se probaron separadas y el equipo no las
+ * trabajaba: con cinco baldes, los de la mitad no los atendía nadie. Un balde
+ * que nadie mira no clasifica, solo estorba. Y la medición acompaña — juntas
+ * dan un escalón limpio, mientras que separadas las dos tiendas se contradecían
+ * en el orden (en Aurela el link cerraba por encima del distrito, en Kenku por
+ * debajo), así que no había un orden único que fuera cierto en las dos.
+ *
+ * Medido sobre 60 días, contando solo a los leads que la asesora llamó:
+ *
+ *              Aurela   Kenku      ← % de cierre cuando se llama
+ *   carrito     43,5     35,6
+ *   interes     12,2     19,1      ← distrito + ficha de producto
+ *   converso     2,6      6,3
+ *   frío         0,5      1,3
+ *
+ * Mismo orden en las dos tiendas, que es lo que hace fiable la cascada.
+ */
 export function leadSegment(lead: LeadSegmentSignals): LeadSegment {
   // Cart from a real Shopify draft (draft_order_gid) OR parsed from the chat.
   if ((lead.cart_item_count ?? 0) > 0 || (lead.draft_order_gid ?? "").length > 0) return "carrito";
-  if ((lead.district ?? "").trim()) return "distrito"; // dio distrito de envío
-  // ≥2 mensajes, o uno solo que ya trae el producto que le interesa. Si el texto
-  // no está cargado (base sin migrar), cae al conteo de mensajes como antes.
-  if ((lead.inbound_count ?? 0) >= 2 || hasProductLink(lead.first_inbound_text)) return "converso";
+  // Dijo DÓNDE lo quiere, o QUÉ quiere. Si el texto no está cargado (base sin
+  // migrar) el link no dispara y el distrito sigue decidiendo solo, como antes.
+  if ((lead.district ?? "").trim() || hasProductLink(lead.first_inbound_text)) return "interes";
+  if ((lead.inbound_count ?? 0) >= 2) return "converso";
   return "frio"; // solo saludó / no respondió
 }
 
@@ -405,7 +432,7 @@ export function leadHook(lead: LeadHookSignals): LeadHook | null {
 export function countLeadSegments(leads: LeadSegmentSignals[]): Record<LeadSegment, number> {
   const out: Record<LeadSegment, number> = {
     carrito: 0,
-    distrito: 0,
+    interes: 0,
     converso: 0,
     frio: 0,
   };
