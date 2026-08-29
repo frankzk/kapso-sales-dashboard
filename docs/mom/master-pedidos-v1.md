@@ -294,10 +294,17 @@ Reglas:
 - Un pedido en confirmación **con gestión** y **sin fecha pactada** vuelve a la
   cola cada `confirmation_cycle_days` días contados desde el último contacto.
   El ciclo se configura por tienda y su valor por defecto es **3 días**.
-- El ciclo se cambia desde el propio Master, junto a los chips de `Fecha
-  pactada`, y también desde Ajustes de la tienda. Lo mueve **owner o admin de la
+- El ciclo se cambia desde el Master, dentro del panel de **Más filtros**, y
+  también desde Ajustes de la tienda. Lo mueve **owner o admin de la
   organización de esa tienda**: reparte la carga diaria de todo el equipo, así
   que no es una preferencia de quien mira la pantalla. Los demás lo ven.
+- **El mando se guarda; el hecho no.** El control vive plegado porque es un
+  ajuste de tienda que se toca una vez cada mucho, y en la fila de los chips le
+  robaba un renglón a los cuatro números de la cola, que son lo que se mira todo
+  el rato. Que un pedido llegara por ciclo sí se ve sin abrir nada: la columna
+  `Próximo contacto` y el aviso del drawer lo dicen en cada pedido. Esconder
+  también esa marca convertiría el ciclo en algo que mueve la cola sin que nadie
+  sepa por qué.
 - El Master es consolidado y el ciclo es por tienda: con varias tiendas a la
   vista el control se lee pero no se edita. Ofrecer un valor único sobre dos
   tiendas daría a elegir algo que no existe.
