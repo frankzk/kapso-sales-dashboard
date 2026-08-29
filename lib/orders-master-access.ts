@@ -31,7 +31,9 @@ import { parseLabelLineItems } from "@/lib/labels/line-items";
 // la del dominio de Leads para no reescribirla acá y que las dos se separen.
 import { labelOf as leadStatusLabel } from "@/lib/leads";
 import {
+  DEFAULT_CONFIRMATION_CYCLE_DAYS,
   confirmationAttemptDetail,
+  confirmationCycleDays,
   type ConfirmationAttemptDetail,
 } from "@/lib/order-confirmation";
 import { evaluateDirectFenixStock, type FenixStockRow } from "@/lib/fenix";
@@ -782,6 +784,35 @@ function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
   }
 
   return q as T;
+}
+
+/**
+ * El ciclo de recontacto configurado en cada tienda.
+ *
+ * Consulta aparte y no un campo más de `getAccessibleStores`: esa función la usa
+ * TODO el panel, y una columna que la migración 0133 todavía no haya creado
+ * dejaría al usuario sin tiendas en cada página. Aquí un fallo solo devuelve el
+ * ciclo por defecto, que es exactamente lo que la operación estaba usando.
+ */
+export async function getConfirmationCycleDays(
+  storeIds: string[],
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  if (!storeIds.length) return out;
+  const sb = await createServerSupabase();
+  const { data, error } = await sb
+    .from("stores")
+    .select("id,confirmation_cycle_days")
+    .in("id", storeIds);
+  if (error) {
+    for (const id of storeIds) out[id] = DEFAULT_CONFIRMATION_CYCLE_DAYS;
+    return out;
+  }
+  for (const row of (data ?? []) as { id: string; confirmation_cycle_days: number | null }[]) {
+    out[row.id] = confirmationCycleDays(row.confirmation_cycle_days);
+  }
+  for (const id of storeIds) out[id] ??= DEFAULT_CONFIRMATION_CYCLE_DAYS;
+  return out;
 }
 
 /**

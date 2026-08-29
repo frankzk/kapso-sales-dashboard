@@ -1401,6 +1401,58 @@ export async function recomputeInBatches(
   return report;
 }
 
+/**
+ * Reescribe `confirmation_cycle_due_on` de una tienda cuando cambia su ciclo.
+ *
+ * NO pasa por `recomputeOrderMaster`: ese recalcula el pedido entero —eventos,
+ * guías, costos, cobertura— y cambiar el ciclo tocaría los ~500 pedidos en
+ * confirmación de una tienda, que es medio minuto de trabajo para mover una
+ * fecha derivada. La regla es la misma (`confirmationCycleDueOn`) y el siguiente
+ * barrido escribirá exactamente estos valores.
+ *
+ * Los pedidos se agrupan POR FECHA RESULTANTE: los días distintos de último
+ * contacto son pocos, así que quinientos pedidos se resuelven en un puñado de
+ * `update`, no en quinientos.
+ */
+export async function applyConfirmationCycleToStore(
+  admin: SupabaseClient,
+  storeId: string,
+  cycleDays: number,
+): Promise<number> {
+  const { data, error } = await admin
+    .from("order_master")
+    .select("order_id,confirmation_last_contact_at")
+    .eq("store_id", storeId)
+    .eq("macro_stage", "por_confirmar")
+    .is("confirmation_next_contact_on", null)
+    .not("confirmation_last_contact_at", "is", null);
+  if (error) return 0;
+
+  const byDueDate = new Map<string, string[]>();
+  for (const row of (data ?? []) as {
+    order_id: string;
+    confirmation_last_contact_at: string;
+  }[]) {
+    const due = confirmationCycleDueOn(row.confirmation_last_contact_at, cycleDays);
+    if (!due) continue;
+    const bucket = byDueDate.get(due);
+    if (bucket) bucket.push(row.order_id);
+    else byDueDate.set(due, [row.order_id]);
+  }
+
+  let touched = 0;
+  for (const [due, ids] of byDueDate) {
+    for (const batch of chunk(ids, ID_BATCH)) {
+      const { error: updateError } = await admin
+        .from("order_master")
+        .update({ confirmation_cycle_due_on: due })
+        .in("order_id", batch);
+      if (!updateError) touched += batch.length;
+    }
+  }
+  return touched;
+}
+
 export async function recomputeOrderMasterSafe(
   admin: SupabaseClient,
   orderIds: readonly string[],

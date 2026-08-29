@@ -4,6 +4,10 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decryptOrNull, encrypt } from "@/lib/crypto";
+import {
+  CONFIRMATION_CYCLE_MAX_DAYS,
+  CONFIRMATION_CYCLE_MIN_DAYS,
+} from "@/lib/order-confirmation";
 
 export const STORE_STATUSES = ["active", "paused", "disabled"] as const;
 export type StoreStatus = (typeof STORE_STATUSES)[number];
@@ -49,6 +53,8 @@ export interface StoreSettingsInput {
   return_recovery_hour_start?: string;
   return_recovery_hour_end?: string;
   return_recovery_max_days?: string;
+  /** Ciclo de recontacto en confirmación, en días (MOM §6.1). */
+  confirmation_cycle_days?: string;
   // Telegram daily summary: chat id is plain, token is a secret.
   telegram_chat_id?: string;
   /** Modelo de visión de esta tienda (plain). Vacío = el del entorno. */
@@ -229,6 +235,12 @@ export function buildStoreUpdate(
   if (rrEnd !== null) patch.return_recovery_hour_end = rrEnd;
   const rrDays = intField(input.return_recovery_max_days, 1, 365);
   if (rrDays !== null) patch.return_recovery_max_days = rrDays;
+  const cycle = intField(
+    input.confirmation_cycle_days,
+    CONFIRMATION_CYCLE_MIN_DAYS,
+    CONFIRMATION_CYCLE_MAX_DAYS,
+  );
+  if (cycle !== null) patch.confirmation_cycle_days = cycle;
 
   const tgChat = clean(input.telegram_chat_id);
   if (tgChat !== null) patch.telegram_chat_id = tgChat;

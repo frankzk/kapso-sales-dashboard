@@ -294,6 +294,16 @@ Reglas:
 - Un pedido en confirmación **con gestión** y **sin fecha pactada** vuelve a la
   cola cada `confirmation_cycle_days` días contados desde el último contacto.
   El ciclo se configura por tienda y su valor por defecto es **3 días**.
+- El ciclo se cambia desde el propio Master, junto a los chips de `Fecha
+  pactada`, y también desde Ajustes de la tienda. Lo mueve **owner o admin de la
+  organización de esa tienda**: reparte la carga diaria de todo el equipo, así
+  que no es una preferencia de quien mira la pantalla. Los demás lo ven.
+- El Master es consolidado y el ciclo es por tienda: con varias tiendas a la
+  vista el control se lee pero no se edita. Ofrecer un valor único sobre dos
+  tiendas daría a elegir algo que no existe.
+- Al cambiarlo se reescribe `confirmation_cycle_due_on` de los pedidos en
+  confirmación de esa tienda en el acto. Es la misma regla del barrido, aplicada
+  ya: sin eso la cola seguiría repartida con el ciclo anterior durante horas.
 - El ciclo es una **derivación**, no un compromiso: se calcula en cada barrido
   del Master (`confirmation_cycle_due_on`) y nunca sustituye a
   `confirmation_next_contact_on`, que es el hecho que alguien pactó en una

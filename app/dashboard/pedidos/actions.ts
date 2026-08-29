@@ -15,7 +15,7 @@ import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
-import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
   getOrderConfirmationBrief,
   getOrderMasterDetail,
@@ -33,6 +33,8 @@ import {
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 import {
+  CONFIRMATION_CYCLE_MAX_DAYS,
+  CONFIRMATION_CYCLE_MIN_DAYS,
   CONFIRMATION_MAX_DAYS,
   confirmationReminderDueAt,
   confirmationResult,
@@ -167,6 +169,78 @@ export async function getOrderMasterChangeToken(): Promise<string | null> {
     .limit(1)
     .maybeSingle();
   return (data as { updated_at?: string } | null)?.updated_at ?? null;
+}
+
+/**
+ * Cambia el ciclo de recontacto de una tienda desde la propia cola (§6.1).
+ *
+ * VIVE EN EL MASTER Y NO SOLO EN AJUSTES porque el efecto se mide acá: quien lo
+ * mueve ve en el mismo renglón cómo cambia «Hoy». Ajustes guarda el mismo campo
+ * para quien está configurando una tienda nueva.
+ *
+ * PIDE OWNER/ADMIN. El ciclo reparte la carga diaria de todo el equipo, así que
+ * no es una preferencia de quien mira la pantalla. La comprobación va contra la
+ * organización DE ESA TIENDA: ser admin en una empresa no da mando sobre otra.
+ */
+export async function setStoreConfirmationCycle(
+  storeId: string,
+  days: number,
+): Promise<MasterActionState> {
+  const requested = Math.trunc(Number(days));
+  if (
+    !Number.isFinite(requested)
+    || requested < CONFIRMATION_CYCLE_MIN_DAYS
+    || requested > CONFIRMATION_CYCLE_MAX_DAYS
+  ) {
+    return {
+      error: `El ciclo debe estar entre ${CONFIRMATION_CYCLE_MIN_DAYS} y ${CONFIRMATION_CYCLE_MAX_DAYS} días.`,
+    };
+  }
+
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  // La tienda se lee por RLS: si el usuario no la ve, no existe para él.
+  const { data: store } = await sb
+    .from("stores")
+    .select("id,org_id,name")
+    .eq("id", storeId)
+    .maybeSingle();
+  if (!store) return { error: "Sin acceso a esta tienda." };
+
+  const { data: membership } = await sb
+    .from("memberships")
+    .select("role")
+    .eq("org_id", (store as { org_id: string }).org_id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const role = (membership as { role?: string } | null)?.role;
+  if (role !== "owner" && role !== "admin") {
+    return { error: "Solo un owner o admin de la tienda puede cambiar el ciclo." };
+  }
+
+  const admin = createAdminSupabase();
+  const { error } = await admin
+    .from("stores")
+    .update({ confirmation_cycle_days: requested })
+    .eq("id", storeId);
+  if (error) return { error: `No se pudo guardar el ciclo: ${error.message}` };
+
+  // Sin esto el ajuste no se notaría hasta que el barrido pasara por cada
+  // pedido: la cola seguiría repartida con el ciclo viejo durante horas.
+  const touched = await applyConfirmationCycleToStore(admin, storeId, requested);
+  revalidatePath(MASTER_PATH);
+  revalidatePath(`/dashboard/${storeId}/settings`);
+
+  const name = (store as { name?: string }).name ?? "la tienda";
+  return {
+    notice:
+      `Ciclo de ${name}: ${requested} ${requested === 1 ? "día" : "días"}.`
+      + (touched ? ` ${touched} pedidos reprogramados.` : ""),
+  };
 }
 
 // ---------------------------------------------------------------------------

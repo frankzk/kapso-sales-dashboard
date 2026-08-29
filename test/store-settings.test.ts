@@ -90,6 +90,20 @@ describe("buildStoreUpdate", () => {
     expect(buildStoreUpdate({ name: "x" }, KEY)).not.toHaveProperty("order_prefix");
   });
 
+  it("guarda el ciclo de recontacto y descarta lo que no cabe (0133)", () => {
+    expect(buildStoreUpdate({ confirmation_cycle_days: "5" }, KEY)).toMatchObject({
+      confirmation_cycle_days: 5,
+    });
+    // Fuera del rango del MOM no se guarda: un ciclo de 0 días sería una cola
+    // que se repite sola cada barrido, y uno de 90 no es una cola.
+    expect(buildStoreUpdate({ confirmation_cycle_days: "0" }, KEY))
+      .not.toHaveProperty("confirmation_cycle_days");
+    expect(buildStoreUpdate({ confirmation_cycle_days: "90" }, KEY))
+      .not.toHaveProperty("confirmation_cycle_days");
+    // No tocarlo no lo pisa: el formulario manda todos los campos a la vez.
+    expect(buildStoreUpdate({ name: "x" }, KEY)).not.toHaveProperty("confirmation_cycle_days");
+  });
+
   it("descarta horas y ventanas fuera de rango en vez de guardarlas", () => {
     const patch = buildStoreUpdate(
       {

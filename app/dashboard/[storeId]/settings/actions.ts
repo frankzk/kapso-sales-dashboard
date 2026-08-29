@@ -24,7 +24,7 @@ import { env } from "@/lib/env";
 import { REPLY_TOKENS } from "@/lib/wa-reply-templates";
 import { normalizeDistrictKey, type DistrictCoverageValue } from "@/lib/district-coverage";
 import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
-import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
 import { describeShalomError, describeShalomProbeFailure } from "@/lib/shalom/client";
 import { clientFor, loadStoreShalom, mintSession, publicClient } from "@/lib/shalom/session";
 
@@ -139,6 +139,7 @@ export async function updateStore(
     return_recovery_hour_start: get("return_recovery_hour_start"),
     return_recovery_hour_end: get("return_recovery_hour_end"),
     return_recovery_max_days: get("return_recovery_max_days"),
+    confirmation_cycle_days: get("confirmation_cycle_days"),
     telegram_chat_id: get("telegram_chat_id"),
     telegram_bot_token: get("telegram_bot_token"),
     meta_access_token: get("meta_access_token"),
@@ -166,6 +167,14 @@ export async function updateStore(
 
   const { error } = await ctx.admin.from("stores").update(patch).eq("id", storeId);
   if (error) return { error: error.message };
+
+  // El ciclo cambia una fecha DERIVADA de cada pedido en confirmación. Sin
+  // reescribirla, la cola seguiría repartida con el ciclo viejo hasta que el
+  // barrido pasara pedido por pedido, y quien acaba de guardar no vería nada.
+  if (typeof patch.confirmation_cycle_days === "number") {
+    await applyConfirmationCycleToStore(ctx.admin, storeId, patch.confirmation_cycle_days);
+    revalidatePath("/dashboard/pedidos");
+  }
 
   revalidatePath(`/dashboard/${storeId}/settings`);
   revalidatePath(`/dashboard/${storeId}`);
