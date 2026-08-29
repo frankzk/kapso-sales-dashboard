@@ -1769,6 +1769,33 @@ function BulkBar({
   );
 }
 
+/**
+ * La celda «Próximo contacto». Sigue el mismo orden de mando que
+ * `confirmationQueueBucket`: fecha pactada, recordatorio de dos horas vigente y
+ * ciclo automático.
+ *
+ * El ciclo se pinta distinto A PROPÓSITO. Una fecha pactada es un compromiso con
+ * el cliente y quien la lee tiene que poder decir «esto lo prometí yo»; el ciclo
+ * lo puso Kapta para que el pedido no desaparezca. Mostrarlos iguales convertiría
+ * una derivación en una promesa que nadie hizo.
+ */
+function NextContactCell({ row, now }: { row: OrderMasterRow; now?: string }) {
+  const today = limaDayKey(now ?? new Date().toISOString());
+  if (row.confirmation_next_contact_on) {
+    return <>{fmtDate(`${row.confirmation_next_contact_on}T12:00:00.000Z`)}</>;
+  }
+  const reminder = row.confirmation_reminder_due_at;
+  if (reminder && limaDayKey(reminder) >= today) return <>{fmtDateTime(reminder)}</>;
+  const cycle = row.confirmation_cycle_due_on;
+  if (!cycle) return <>—</>;
+  return (
+    <span className="inline-flex flex-col leading-tight">
+      <span>{cycle <= today ? "Hoy" : fmtDate(`${cycle}T12:00:00.000Z`)}</span>
+      <span className="text-[11px] text-slate-400">ciclo automático</span>
+    </span>
+  );
+}
+
 function MasterTable({
   rows,
   storeName,
@@ -1927,11 +1954,7 @@ function MasterTable({
                       : `${r.confirmation_day_count ?? 0}/7 días`}
                   </td>
                   <td className="px-2 py-2.5 text-slate-600">
-                    {r.confirmation_next_contact_on
-                      ? fmtDate(`${r.confirmation_next_contact_on}T12:00:00.000Z`)
-                      : r.confirmation_reminder_due_at
-                        ? fmtDateTime(r.confirmation_reminder_due_at)
-                        : "—"}
+                    <NextContactCell row={r} />
                   </td>
                 </>
               )}
@@ -4022,6 +4045,24 @@ function ConfirmationDesk({
                 : "Próximo contacto"}
           </strong>
           <span>{fmtDate(`${row.confirmation_next_contact_on}T12:00:00.000Z`)}</span>
+        </div>
+      )}
+
+      {/* El ciclo automático: sin fecha pactada el pedido igual vuelve a la cola.
+          Se anuncia aquí para que quien abra el pedido sepa que lo trajo el
+          ciclo y no un compromiso con el cliente. */}
+      {!row.confirmation_next_contact_on && row.confirmation_cycle_due_on && !lastAttempt && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700 ring-1 ring-slate-200">
+          <strong>
+            {row.confirmation_cycle_due_on <= today
+              ? "Toca hoy por ciclo automático"
+              : "Vuelve a la cola por ciclo automático"}
+          </strong>
+          <span>
+            {row.confirmation_cycle_due_on <= today
+              ? "Sin fecha pactada"
+              : fmtDate(`${row.confirmation_cycle_due_on}T12:00:00.000Z`)}
+          </span>
         </div>
       )}
 

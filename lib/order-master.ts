@@ -24,6 +24,9 @@ import { computeLogisticsCost, costDay, type CostTariff } from "@/lib/costs";
 import {
   CONFIRMATION_CONTACT_KINDS,
   CONFIRMATION_FOLLOWUP_KINDS,
+  DEFAULT_CONFIRMATION_CYCLE_DAYS,
+  confirmationCycleDays,
+  confirmationCycleDueOn,
   confirmationDayCount,
 } from "@/lib/order-confirmation";
 import { classifyOrderCoverage, type OrderCoverage } from "@/lib/order-coverage";
@@ -614,21 +617,27 @@ async function fetchTariffs(
   tariffs: CostTariff[];
   orgByStore: Map<string, string>;
   confirmationActivationByStore: Map<string, string>;
+  confirmationCycleByStore: Map<string, number>;
 }> {
-  const orgByStore = new Map<string, string>();
-  const confirmationActivationByStore = new Map<string, string>();
-  const tariffs: CostTariff[] = [];
-  if (!storeIds.length) return { tariffs, orgByStore, confirmationActivationByStore };
+  const out = {
+    tariffs: [] as CostTariff[],
+    orgByStore: new Map<string, string>(),
+    confirmationActivationByStore: new Map<string, string>(),
+    confirmationCycleByStore: new Map<string, number>(),
+  };
+  const { orgByStore, confirmationActivationByStore, confirmationCycleByStore } = out;
+  if (!storeIds.length) return out;
 
   for (const batch of chunk(storeIds, ID_BATCH)) {
     const { data, error } = await admin
       .from("stores")
-      .select("id,org_id,confirmation_activation_date")
+      .select("id,org_id,confirmation_activation_date,confirmation_cycle_days")
       .in("id", batch);
     let storeRows = (data ?? []) as unknown as {
       id: string;
       org_id: string;
       confirmation_activation_date?: string | null;
+      confirmation_cycle_days?: number | null;
     }[];
     // Despliegue compatible: durante los segundos entre código y migración se
     // usa el corte acordado, sin detener la sincronización del Master.
@@ -638,6 +647,7 @@ async function fetchTariffs(
         id: string;
         org_id: string;
         confirmation_activation_date?: string | null;
+        confirmation_cycle_days?: number | null;
       }[];
     }
     for (const row of storeRows) {
@@ -646,22 +656,29 @@ async function fetchTariffs(
         row.id,
         row.confirmation_activation_date ?? "2026-06-01",
       );
+      confirmationCycleByStore.set(
+        row.id,
+        confirmationCycleDays(row.confirmation_cycle_days ?? DEFAULT_CONFIRMATION_CYCLE_DAYS),
+      );
     }
   }
   const orgIds = [...new Set(orgByStore.values())];
-  if (!orgIds.length) return { tariffs, orgByStore, confirmationActivationByStore };
+  if (!orgIds.length) return out;
 
   const { data, error } = await admin
     .from("cost_tariffs")
     .select("id,org_id,store_id,courier,region,province,district,concept,amount,effective_from,effective_to")
     .in("org_id", orgIds);
   // La fase 4 puede no estar aplicada todavía: sin tarifas, el costo queda vacío.
-  if (error) return { tariffs, orgByStore, confirmationActivationByStore };
-  tariffs.push(...((data ?? []) as unknown as CostTariff[]));
-  return { tariffs, orgByStore, confirmationActivationByStore };
+  if (error) return out;
+  out.tariffs.push(...((data ?? []) as unknown as CostTariff[]));
+  return out;
 }
 
-function confirmationRollup(events: readonly EventRecord[]) {
+function confirmationRollup(
+  events: readonly EventRecord[],
+  cycleDays: number = DEFAULT_CONFIRMATION_CYCLE_DAYS,
+) {
   const contacts = new Set<string>(CONFIRMATION_CONTACT_KINDS);
   const followups = new Set<string>(CONFIRMATION_FOLLOWUP_KINDS);
   const latest = (allowed: Set<string>) =>
@@ -691,6 +708,11 @@ function confirmationRollup(events: readonly EventRecord[]) {
     dayCount: confirmationDayCount(events),
     lastContactAt: contact?.occurred_at ?? null,
     nextContactOn: nextContact,
+    // El ciclo solo existe donde falta el compromiso: si el intento dejó fecha
+    // pactada, esa fecha es el próximo contacto y Kapta no inventa otra.
+    cycleDueOn: nextContact
+      ? null
+      : confirmationCycleDueOn(contact?.occurred_at ?? null, cycleDays),
     reminderDueAt: reminderDue,
     lastActor: contact?.actor ?? null,
   };
@@ -778,7 +800,12 @@ export async function recomputeOrderMaster(
   const drafts = await fetchDraftAddresses(admin, orders);
   const geoOverrides = await fetchGeoOverrides(admin, ids);
   const signals = await fetchPaymentSignals(admin, ids);
-  const { tariffs, orgByStore, confirmationActivationByStore } = await fetchTariffs(
+  const {
+    tariffs,
+    orgByStore,
+    confirmationActivationByStore,
+    confirmationCycleByStore,
+  } = await fetchTariffs(
     admin,
     [...new Set(orders.map((o) => o.store_id))],
   );
@@ -1144,13 +1171,17 @@ export async function recomputeOrderMaster(
       agency_expires_at: state.agencyExpiresAt,
       recomputed_at: now,
       ...(() => {
-        const confirmation = confirmationRollup(orderEvents);
+        const confirmation = confirmationRollup(
+          orderEvents,
+          confirmationCycleByStore.get(order.store_id) ?? DEFAULT_CONFIRMATION_CYCLE_DAYS,
+        );
         return {
           confirmation_active:
             macro.stage === "por_confirmar" && macro.substage !== "historico_sin_gestion",
           confirmation_day_count: confirmation.dayCount,
           confirmation_last_contact_at: confirmation.lastContactAt,
           confirmation_next_contact_on: confirmation.nextContactOn,
+          confirmation_cycle_due_on: confirmation.cycleDueOn,
           confirmation_reminder_due_at: confirmation.reminderDueAt,
           confirmation_last_actor: confirmation.lastActor,
         };
@@ -1166,7 +1197,7 @@ export async function recomputeOrderMaster(
     // llena automáticamente las columnas MOM.
     if (
       error &&
-      /(macro_(stage|substage|reasons|operation|version|since)|confirmation_(active|day_count|last_contact_at|next_contact_on|reminder_due_at|last_actor))/i.test(
+      /(macro_(stage|substage|reasons|operation|version|since)|confirmation_(active|day_count|last_contact_at|next_contact_on|cycle_due_on|reminder_due_at|last_actor))/i.test(
         error.message,
       )
     ) {
@@ -1182,6 +1213,7 @@ export async function recomputeOrderMaster(
         delete copy.confirmation_day_count;
         delete copy.confirmation_last_contact_at;
         delete copy.confirmation_next_contact_on;
+        delete copy.confirmation_cycle_due_on;
         delete copy.confirmation_reminder_due_at;
         delete copy.confirmation_last_actor;
         return copy;

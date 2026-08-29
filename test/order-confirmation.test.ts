@@ -2,10 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   CONFIRMATION_MAX_DAYS,
   CONFIRMATION_RESULTS,
+  DEFAULT_CONFIRMATION_CYCLE_DAYS,
+  addLimaDays,
   confirmationAttemptDetail,
+  confirmationCycleDays,
+  confirmationCycleDueOn,
   confirmationDayCount,
   confirmationDays,
   confirmationDueBucket,
+  confirmationQueueBucket,
   confirmationReminderDueAt,
   confirmationResult,
   confirmationResultLabel,
@@ -111,6 +116,86 @@ describe("recordatorios de confirmación", () => {
     expect(confirmationDueBucket("2026-08-17", now)).toBe("vencido");
     expect(confirmationDueBucket("2026-08-18", now)).toBe("hoy");
     expect(confirmationDueBucket("2026-08-19", now)).toBe("proximo");
+  });
+});
+
+// El ciclo automático existe por un pedido concreto: #KP126408, veintitrés días
+// en «Por confirmar» con 1/7 días de gestión y ningún próximo contacto. Nadie lo
+// había abandonado a propósito: su recordatorio de dos horas venció el primer
+// día y de ahí no volvió a salir de «Vencidos» nunca más.
+describe("ciclo automático de recontacto", () => {
+  it("suma días de calendario sin salirse del día de Lima", () => {
+    expect(addLimaDays("2026-08-28", 3)).toBe("2026-08-31");
+    expect(addLimaDays("2026-08-30", 3)).toBe("2026-09-02"); // cruza de mes
+    expect(addLimaDays("2026-12-31", 1)).toBe("2027-01-01"); // cruza de año
+    expect(addLimaDays("no-es-fecha", 3)).toBe("");
+  });
+
+  it("el ciclo cuenta desde el último contacto, en día de Lima", () => {
+    // 01:00 UTC del 29 es todavía el 28 en Lima: el ciclo arranca del 28.
+    expect(confirmationCycleDueOn("2026-08-29T01:00:00.000Z", 3)).toBe("2026-08-31");
+    expect(confirmationCycleDueOn("2026-08-28T15:00:00.000Z")).toBe(
+      addLimaDays("2026-08-28", DEFAULT_CONFIRMATION_CYCLE_DAYS),
+    );
+  });
+
+  it("sin un solo contacto no hay ciclo: «Sin llamar» no entra en la cola", () => {
+    expect(confirmationCycleDueOn(null, 3)).toBeNull();
+    expect(confirmationCycleDueOn("", 3)).toBeNull();
+  });
+
+  it("el ciclo por tienda se acota, y un valor imposible cae en el de por defecto", () => {
+    expect(confirmationCycleDays(5)).toBe(5);
+    expect(confirmationCycleDays(0)).toBe(1);
+    expect(confirmationCycleDays(999)).toBe(30);
+    expect(confirmationCycleDays(null)).toBe(DEFAULT_CONFIRMATION_CYCLE_DAYS);
+    expect(confirmationCycleDays("tres")).toBe(DEFAULT_CONFIRMATION_CYCLE_DAYS);
+  });
+});
+
+describe("la cola de confirmación", () => {
+  const now = "2026-08-28T18:00:00.000Z"; // 13:00 en Lima
+
+  it("la fecha pactada manda sobre todo lo demás", () => {
+    expect(
+      confirmationQueueBucket(
+        { nextContactOn: "2026-08-27", cycleDueOn: "2026-08-31", reminderDueAt: now },
+        now,
+      ),
+    ).toBe("vencido");
+    expect(confirmationQueueBucket({ nextContactOn: "2026-08-28" }, now)).toBe("hoy");
+    expect(confirmationQueueBucket({ nextContactOn: "2026-08-30" }, now)).toBe("proximo");
+  });
+
+  it("la fecha pactada SÍ vence: es una promesa al cliente y tiene que verse", () => {
+    expect(confirmationQueueBucket({ nextContactOn: "2026-07-01" }, now)).toBe("vencido");
+  });
+
+  it("el ciclo NO vence: un día que ya pasó significa «toca hoy»", () => {
+    expect(confirmationQueueBucket({ cycleDueOn: "2026-08-31" }, now)).toBe("proximo");
+    expect(confirmationQueueBucket({ cycleDueOn: "2026-08-28" }, now)).toBe("hoy");
+    expect(confirmationQueueBucket({ cycleDueOn: "2026-08-01" }, now)).toBe("hoy");
+  });
+
+  it("el recordatorio de dos horas ordena su propio día", () => {
+    const reminder = (iso: string) => confirmationQueueBucket({ reminderDueAt: iso }, now);
+    expect(reminder("2026-08-28T15:00:00.000Z")).toBe("vencido"); // 10:00 Lima, ya pasó
+    expect(reminder("2026-08-28T21:00:00.000Z")).toBe("hoy"); // 16:00 Lima, falta
+    expect(reminder("2026-08-29T15:00:00.000Z")).toBe("proximo");
+  });
+
+  it("un recordatorio de hace semanas ya no manda: lo coloca el ciclo", () => {
+    // Este es #KP126408. Antes se quedaba en «Vencidos» para siempre.
+    expect(
+      confirmationQueueBucket(
+        { reminderDueAt: "2026-08-05T15:00:00.000Z", cycleDueOn: "2026-08-08" },
+        now,
+      ),
+    ).toBe("hoy");
+  });
+
+  it("sin fecha, sin recordatorio y sin ciclo, el pedido no está en ninguna cola", () => {
+    expect(confirmationQueueBucket({}, now)).toBeNull();
   });
 });
 
