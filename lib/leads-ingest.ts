@@ -853,6 +853,54 @@ export function shouldReopenWonCart(opts: {
 }
 
 /**
+ * Estados que significan «no llegamos a hablar con ella».
+ *
+ * Es la distinción que faltaba. «No responde», «buzón» y «cuelga» NO son un
+ * veredicto sobre la clienta: son un intento fallido NUESTRO. Que no contestara
+ * el martes no dice nada de si quiere comprar el viernes.
+ *
+ * Los demás estados sí son resultados —«contactado», «otros productos», «sin
+ * stock»— y ésos se respetan: hubo conversación, o hay un motivo real.
+ */
+export const UNREACHED_STATUSES = new Set(["no_responde", "buzon", "cuelga"]);
+
+/** Por qué se reabre un lead. `resuelto` = tenía un desenlace (ganado o perdido);
+ *  `no_contactado` = seguía en cola y nunca logramos hablar con ella. La
+ *  distinción decide si se toca `needs_attention` (ver upsertDraftCartLead). */
+export type CartReopen = false | "resuelto" | "no_contactado";
+
+/**
+ * ¿Un carrito nuevo devuelve a la cola un lead que trabajamos pero NO logramos
+ * contactar?
+ *
+ * POR QUÉ EXISTE. «Sin llamar» es `status = 'nuevo'`, y hasta ahora solo volvían
+ * ahí los leads `won` y `lost`. Un lead `open` marcado «no responde» se quedaba
+ * en seguimiento PARA SIEMPRE: la clienta podía volver a la web y llenar otro
+ * carrito —la señal de intención más fuerte que existe— y el sistema solo
+ * actualizaba el importe, sin devolverlo a la cola. Quedaba enterrado entre
+ * miles.
+ *
+ * LO QUE SE RESPETA IGUAL. Sigue mandando `eventOverridesDisposition`: el
+ * carrito tiene que ser POSTERIOR a la última gestión. Sin eso el mismo carrito
+ * viejo reabriría el lead en cada sincronización, y la asesora lo llamaría en
+ * bucle. Con esa guarda la reapertura solo ocurre cuando de verdad hay algo
+ * nuevo — medido sobre 14 días, entre 1 y 19 leads al día, casi siempre menos de
+ * diez.
+ *
+ * Pura, como sus dos hermanas.
+ */
+export function shouldReopenUnreachedCart(opts: {
+  category: string | undefined;
+  status: string | null | undefined;
+  draftCreatedAt: string | null;
+  lastDispositionAt: string | null | undefined;
+}): boolean {
+  if (opts.category !== "open" && opts.category !== "hot") return false;
+  if (!opts.status || !UNREACHED_STATUSES.has(opts.status)) return false;
+  return eventOverridesDisposition(opts.draftCreatedAt, opts.lastDispositionAt);
+}
+
+/**
  * Should a fresh OPEN cart re-open a lead currently `lost` — typically one
  * auto-archived by inactivity (`archiveStaleLeads`)? Yes when the cart was created
  * WITHIN the stale window (a genuine fresh signal, not the same old cart that
@@ -1006,7 +1054,7 @@ async function upsertDraftCartLead(
   storeId: string,
   d: DraftOrderRow,
   exists: boolean,
-  reopen = false,
+  reopen: CartReopen = false,
   fillSource = false,
 ): Promise<void> {
   const qty = d.line_items.reduce((s, li) => s + (Number(li.quantity) || 0), 0);
@@ -1039,11 +1087,17 @@ async function upsertDraftCartLead(
     if (d.created_at) row.first_seen_at = d.created_at;
     if (seen) row.last_interaction_at = seen;
   } else if (reopen) {
-    // Recompra, o sobra de una orden cancelada, o un lead auto-archivado: un carrito
-    // abierto fresco lo vuelve a poner como llamable. Atribuye a "carrito" si no tenía fuente.
+    // Recompra, sobra de una orden cancelada, lead auto-archivado, o uno que
+    // trabajamos sin lograr contactar: un carrito abierto fresco lo vuelve a
+    // poner como llamable. Atribuye a "carrito" si no tenía fuente.
     row.status = "nuevo";
     row.category = "open";
-    row.needs_attention = false;
+    // La marca de atención SOLO se apaga en los reabiertos con desenlace. Un lead
+    // que seguía en cola puede estar en "Atender ahora" por una ola o una
+    // respuesta nueva, y apagarla lo degradaría de la cola urgente a una menos
+    // urgente — justo al revés de lo que pretende reabrirlo. (En won/lost la
+    // marca ya viene apagada: el archivador solo archiva lo que no la tiene.)
+    if (reopen === "resuelto") row.needs_attention = false;
     if (fillSource) row.source = COD_CART_SOURCE;
   }
   await upsertLeadResilient(admin, row);
@@ -1889,7 +1943,10 @@ export async function linkDraftOrdersToLeads(
     // Also reopen a LOST lead (usually auto-archived by inactivity) when a genuinely
     // fresh cart arrives — the customer came back — so a new cart never shows under
     // a "Perdido".
-    const reopen =
+    // Y reabrir un lead que SÍ trabajamos pero al que no logramos contactar
+    // («no responde», «buzón», «cuelga»): ahí el estado no es un resultado sobre
+    // la clienta, es un intento fallido nuestro — y un carrito nuevo lo desmiente.
+    const reopen: CartReopen =
       shouldReopenWonCart({
         category,
         status: existingStatus.get(phone),
@@ -1897,7 +1954,16 @@ export async function linkDraftOrdersToLeads(
         lastOrderAt: orderCreatedAt.get(phone),
         lastDispositionAt,
       }) ||
-      shouldReopenLostCart({ category, draftCreatedAt: d.created_at, lastDispositionAt, staleCutoff });
+      shouldReopenLostCart({ category, draftCreatedAt: d.created_at, lastDispositionAt, staleCutoff })
+        ? "resuelto"
+        : shouldReopenUnreachedCart({
+              category,
+              status: existingStatus.get(phone),
+              draftCreatedAt: d.created_at,
+              lastDispositionAt,
+            })
+          ? "no_contactado"
+          : false;
     // On reopen, attribute the lead to the cart if it has no source yet (a bare lead
     // created by the order link) so it shows under "Carrito" in the Fuente filter.
     const fillSource = reopen && !existingSource.get(phone);
