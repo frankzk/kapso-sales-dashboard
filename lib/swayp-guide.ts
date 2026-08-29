@@ -107,6 +107,30 @@ export function buildContenido(lineItems: Array<{ title: string; quantity: numbe
 }
 
 /**
+ * ¿Esta ciudad emite guía por API, o va por el Excel?
+ *
+ * PARA QUÉ. El drawer avisaba «Se generará automáticamente una nueva guía
+ * Fenix» sin decir por cuál de los dos caminos: la operadora apretaba sin saber
+ * si el número lo iba a poner Swayp o si tendría que cargar la guía a mano
+ * después, y se enteraba recién en el aviso posterior.
+ *
+ * SON LAS DOS PRIMERAS REJAS DE `buildSwaypGuideInput`, y a propósito: bodega
+ * configurada y ciudad con cobertura. Las que dependen del envío concreto
+ * —dirección, distrito, teléfono— NO se miran acá, porque esto responde «¿esta
+ * ciudad va por API?» y no «¿esta guía va a salir?». La segunda no se puede
+ * prometer: la API puede rechazar el envío o no responder, y por eso el aviso
+ * dice que si falla queda con código local.
+ *
+ * `test/swayp-guide.test.ts` fija que las dos funciones no puedan discrepar.
+ */
+export function esCiudadPorApiSwayp(
+  city: string,
+  senders: Record<string, SwaypSender>,
+): boolean {
+  return !!senders[city] && !!warehouseUbigeo(city);
+}
+
+/**
  * Arma el payload de creación, o explica por qué no se puede.
  *
  * Cada validación de acá existe porque la API la rechaza (y una guía rechazada
