@@ -47,6 +47,7 @@ import {
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
 import {
+  coverageCityOf,
   coverageInputOf,
   evaluateDirectFenixStock,
   evaluateFenix,
@@ -74,7 +75,7 @@ import {
   swaypAuthErrorHint,
   swaypOptsFromEnv,
 } from "@/lib/swayp";
-import { buildSwaypGuideInput, parseSenders } from "@/lib/swayp-guide";
+import { buildSwaypGuideInput, esCiudadPorApiSwayp, parseSenders } from "@/lib/swayp-guide";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import type {
@@ -211,6 +212,12 @@ export async function loadShipmentDetail(
        * dibujar un botón que va a rebotar.
        */
       can: { solveNovelty: boolean; return: boolean };
+      /**
+       * Si el destino de este envío emite guía por la API de Swayp o va por el
+       * Excel. Se calcula ACÁ y no en el cliente porque `SWAYP_SENDERS` es
+       * configuración del servidor; el drawer sólo lo pinta.
+       */
+      swaypApiCity: boolean;
     }
   | { error: string }
 > {
@@ -284,6 +291,11 @@ export async function loadShipmentDetail(
       solveNovelty: perms.can("swayp.solve_novelty"),
       return: perms.can("closure.return"),
     },
+    // Misma ciudad de cobertura que resuelve la reprogramación (`coverageCityOf`),
+    // para que el aviso no pueda decir una cosa y el botón hacer otra.
+    swaypApiCity:
+      env.swaypEnabled() &&
+      esCiudadPorApiSwayp(coverageCityOf(detail.shipment), parseSenders(env.swaypSenders())),
   };
 }
 

@@ -1084,18 +1084,12 @@ function ShipmentDrawer({
   onOpenShipment: (id: string) => void;
   onShipmentUpdated: (id: string) => void | Promise<void>;
 }) {
-  const [detail, setDetail] = useState<
-    | {
-        shipment: ShipmentRow;
-        calls: ShipmentCallRow[];
-        guideHistory: ShipmentHistoryGuide[];
-        order: ShipmentOrderDetail | null;
-        linkedFenixShipment: LinkedShipmentSummary | null;
-        can: { solveNovelty: boolean; return: boolean };
-      }
-    | { error: string }
-    | null
-  >(null);
+  // Se DERIVA de la acción del servidor en vez de reescribirla a mano. Estaba
+  // copiada campo por campo, así que un dato nuevo en `loadShipmentDetail`
+  // llegaba al cliente y el tipo no lo dejaba usar hasta acordarse de añadirlo
+  // en los dos sitios. Es el mismo hecho escrito dos veces, que es lo que este
+  // repo repite.
+  const [detail, setDetail] = useState<Awaited<ReturnType<typeof loadShipmentDetail>> | null>(null);
   const [noveltyOpen, setNoveltyOpen] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -2104,9 +2098,26 @@ function ShipmentDrawer({
                         Primero realiza la reprogramación en Aliclik. Luego confírmala aquí: se conservará la guía actual.
                       </p>
                     ) : detail.shipment.order_name ? (
-                      <p className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
-                        Se generará automáticamente una <b>nueva guía Fenix</b> con la fecha elegida.
-                      </p>
+                      // Antes decía sólo «se generará una nueva guía Fenix», sin
+                      // distinguir los DOS caminos que hay detrás del mismo botón.
+                      // La operadora apretaba sin saber si el número lo pondría
+                      // Swayp o si tendría que cargar la guía a mano en el Excel,
+                      // y se enteraba recién en el aviso posterior. El destino ya
+                      // decide cuál es; decirlo antes es gratis.
+                      detail.swaypApiCity ? (
+                        <p className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
+                          Se generará una <b>nueva guía Fenix</b> con la fecha elegida y{" "}
+                          <b>el número lo emite Swayp</b>: quedará creada en su sistema, sin
+                          cargarla al Excel. Si Swayp no responde, queda con código local y el
+                          aviso te dice por qué.
+                        </p>
+                      ) : (
+                        <p className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
+                          Se generará una <b>nueva guía Fenix</b> con la fecha elegida{" "}
+                          <b>con código local</b>: este destino todavía no emite por API, así que
+                          hay que cargarla en el Excel de programación.
+                        </p>
+                      )
                     ) : (
                       <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
                         Sin N° de pedido no se puede autogenerar. Usa <b>Generar guía Fenix (manual)</b> abajo.
