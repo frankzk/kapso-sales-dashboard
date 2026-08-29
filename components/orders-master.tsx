@@ -896,9 +896,6 @@ export function OrdersMasterBoard({
                   ))}
                 </div>
               )}
-            {view === "por_confirmar" && (
-              <ConfirmationCycleControl cycles={cyclesInScope} />
-            )}
           </section>
 
           {/* Filtros */}
@@ -1070,6 +1067,15 @@ export function OrdersMasterBoard({
                   </select>
                 </label>
               </div>
+              {/* El ciclo de recontacto vive acá y no en la fila de los chips:
+                  se toca una vez cada mucho —es un ajuste de tienda, no un
+                  filtro del día— y arriba le robaba un renglón entero a la cola,
+                  que es lo que sí se mira todo el rato. */}
+              {view === "por_confirmar" && cyclesInScope.length > 0 && (
+                <div className="border-t border-slate-100 pt-3">
+                  <ConfirmationCycleControl cycles={cyclesInScope} />
+                </div>
+              )}
             </Card>
           )}
 
