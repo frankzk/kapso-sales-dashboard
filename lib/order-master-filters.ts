@@ -7,7 +7,7 @@
 // un conjunto VACÍO significa "todas", nunca "ninguna".
 
 import type { OrderMasterRow } from "@/lib/types";
-import { limaDayKey } from "@/lib/order-confirmation";
+import { confirmationQueueBucket } from "@/lib/order-confirmation";
 
 export interface MasterFilters {
   stores: Set<string>;
@@ -181,22 +181,18 @@ export function matchesFilters(
   if (q && !haystack(row).includes(q)) return false;
 
   if (f.confirmationDue) {
-    const today = limaDayKey(now);
-    const nextContact = row.confirmation_next_contact_on;
-    const reminderAt = row.confirmation_reminder_due_at;
-    const reminderDay = reminderAt ? limaDayKey(reminderAt) : null;
-    const overdue = Boolean(
-      (nextContact && nextContact < today)
-      || (reminderAt && Date.parse(reminderAt) < Date.parse(now)),
+    // Una sola definición de la cola, compartida con el drawer y con la consulta
+    // del servidor: `confirmationQueueBucket` decide quién manda entre la fecha
+    // pactada, el recordatorio de dos horas y el ciclo automático.
+    const bucket = confirmationQueueBucket(
+      {
+        nextContactOn: row.confirmation_next_contact_on,
+        cycleDueOn: row.confirmation_cycle_due_on,
+        reminderDueAt: row.confirmation_reminder_due_at,
+      },
+      now,
     );
-    const dueToday = nextContact === today || reminderDay === today;
-    const upcoming = Boolean(
-      (nextContact && nextContact > today)
-      || (reminderDay && reminderDay > today),
-    );
-    if (f.confirmationDue === "vencido" && !overdue) return false;
-    if (f.confirmationDue === "hoy" && (overdue || !dueToday)) return false;
-    if (f.confirmationDue === "proximo" && !upcoming) return false;
+    if (bucket !== f.confirmationDue) return false;
   }
 
   return true;

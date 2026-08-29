@@ -267,4 +267,6 @@
 \ir migrations/0131_operation_completed_by.sql
 \echo 'Applying 0132_order_sales.sql'
 \ir migrations/0132_order_sales.sql
+\echo 'Applying 0133_confirmation_cycle.sql'
+\ir migrations/0133_confirmation_cycle.sql
 \echo 'Done.'

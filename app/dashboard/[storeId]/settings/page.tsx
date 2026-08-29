@@ -5,6 +5,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { getAccessibleStores, getAdminOrgs, getUserRoleSummary } from "@/lib/access";
 import { env } from "@/lib/env";
 import { normalizeMetaAdAccounts } from "@/lib/meta-marketing";
+import { confirmationCycleDays } from "@/lib/order-confirmation";
 import { EmptyState } from "@/components/ui";
 import { StoreSettings, type StoreSettingsData } from "@/components/store-settings";
 
@@ -153,6 +154,8 @@ export default async function StoreSettingsPage({
       return_recovery_hour_start: full.return_recovery_hour_start ?? 8,
       return_recovery_hour_end: full.return_recovery_hour_end ?? 21,
       return_recovery_max_days: full.return_recovery_max_days ?? 30,
+      // Pre-0133 la columna no existe ⇒ el ciclo por defecto del MOM.
+      confirmation_cycle_days: confirmationCycleDays(full.confirmation_cycle_days),
       telegram_chat_id: full.telegram_chat_id ?? null,
       anthropic_model: full.anthropic_model ?? null,
       // Pre-0054 la columna no existe ⇒ integración apagada.

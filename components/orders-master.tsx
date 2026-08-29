@@ -16,7 +16,7 @@
 // mantiene el listado anterior en pantalla mientras llega el nuevo en vez de
 // parpadear a vacío.
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, cn, EmptyState, STICKY_HEAD, TABLE_LAYER, TABLE_WRAP_PAGE_X } from "@/components/ui";
@@ -57,9 +57,11 @@ import {
   registerClosureAction,
   relinkGuide,
   setOrderStatus,
+  setStoreConfirmationCycle,
   updateOrderGeo,
   type BulkRouteOutputFailure,
   type ManualRouteCourier,
+  type MasterActionState,
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import { limaTodayKey } from "@/lib/shipments";
@@ -410,6 +412,7 @@ export function OrdersMasterBoard({
   counts,
   substageCounts,
   confirmationDueCounts,
+  confirmationCycles,
   rows,
   total,
   page,
@@ -433,6 +436,8 @@ export function OrdersMasterBoard({
   counts: MasterCounts;
   substageCounts: Partial<Record<MacroSubstage, number>>;
   confirmationDueCounts: ConfirmationDueCounts;
+  /** Ciclo de recontacto por tienda (§6.1). Vacío fuera de «Por confirmar». */
+  confirmationCycles: ConfirmationCycleOption[];
   /** UNA página ya filtrada y ordenada por la base. Antes llegaban las ~10.000
    *  filas y se filtraba aquí: eran 13 MB por carga y ~10 s de espera. */
   rows: OrderMasterRow[];
@@ -640,6 +645,15 @@ export function OrdersMasterBoard({
     return (id: string) => map.get(id) ?? null;
   }, [stores]);
   const stageSubstages = view === "todos" ? [] : MACRO_SUBSTAGES_BY_STAGE[view];
+  // El ciclo es POR TIENDA, así que el control obedece al filtro de tienda: sin
+  // filtro se leen todas y con una sola se puede cambiar la suya.
+  const cyclesInScope = useMemo(
+    () =>
+      filters.stores.size === 0
+        ? confirmationCycles
+        : confirmationCycles.filter((c) => filters.stores.has(c.storeId)),
+    [confirmationCycles, filters.stores],
+  );
 
   function patch(next: Partial<MasterFilters>) {
     navigate({ filters: next });
@@ -882,6 +896,9 @@ export function OrdersMasterBoard({
                   ))}
                 </div>
               )}
+            {view === "por_confirmar" && (
+              <ConfirmationCycleControl cycles={cyclesInScope} />
+            )}
           </section>
 
           {/* Filtros */}
@@ -1769,6 +1786,157 @@ function BulkBar({
   );
 }
 
+export interface ConfirmationCycleOption {
+  storeId: string;
+  storeName: string;
+  days: number;
+  /** Owner o admin de la organización de ESA tienda. */
+  canEdit: boolean;
+}
+
+/** Los ciclos que se ofrecen. Fuera de la lista se sigue guardando lo que haya. */
+const CYCLE_CHOICES = [1, 2, 3, 4, 5, 7, 10, 14, 21, 30] as const;
+
+/**
+ * El ciclo de recontacto, junto a los chips de «Fecha pactada».
+ *
+ * ESTÁ AQUÍ Y NO SOLO EN AJUSTES porque su efecto es el número de al lado: quien
+ * lo mueve ve «Hoy» cambiar en el mismo renglón. En Ajustes —una página de
+ * tokens y webhooks— sería una perilla a ciegas.
+ *
+ * CON VARIAS TIENDAS NO SE EDITA, SE LEE. El ajuste es por tienda y el Master es
+ * consolidado; ofrecer un solo control con Aurela y Kenku a la vista daría a
+ * elegir un valor que no existe. Se listan los dos y se pide filtrar por tienda,
+ * que es un clic y deja claro sobre cuál se está mandando.
+ */
+const cycleLabel = (days: number) => `${days} ${days === 1 ? "día" : "días"}`;
+
+function ConfirmationCycleControl({ cycles }: { cycles: ConfirmationCycleOption[] }) {
+  if (!cycles.length) return null;
+
+  const label = (
+    <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">
+      Ciclo sin fecha pactada
+    </span>
+  );
+
+  if (cycles.length > 1) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        {label}
+        <span>{cycles.map((c) => `${c.storeName} ${c.days} d`).join(" · ")}</span>
+        <span className="text-slate-400">— filtra por tienda para cambiarlo</span>
+      </div>
+    );
+  }
+
+  const cycle = cycles[0]!;
+  if (!cycle.canEdit) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        {label}
+        <span className="font-medium text-slate-700">{cycleLabel(cycle.days)}</span>
+        <span className="text-slate-400">— lo cambia un owner o admin de la tienda</span>
+      </div>
+    );
+  }
+
+  return <ConfirmationCycleSelect cycle={cycle} label={label} />;
+}
+
+function ConfirmationCycleSelect({
+  cycle,
+  label,
+}: {
+  cycle: ConfirmationCycleOption;
+  label: ReactNode;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [feedback, setFeedback] = useState<MasterActionState | null>(null);
+  // El valor elegido se pinta ya, sin esperar al viaje al servidor: con el
+  // `value` colgado solo de la prop, el desplegable volvía al número viejo hasta
+  // que llegara el refresco y parecía que el cambio no había prendido.
+  const [days, setDays] = useState(cycle.days);
+  useEffect(() => setDays(cycle.days), [cycle.days]);
+
+  const choices = CYCLE_CHOICES.includes(days as (typeof CYCLE_CHOICES)[number])
+    ? [...CYCLE_CHOICES]
+    : [...CYCLE_CHOICES, days].sort((a, b) => a - b);
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+      {label}
+      <select
+        value={days}
+        disabled={pending}
+        onChange={(e) => {
+          const next = Number(e.target.value);
+          if (next === days) return;
+          const previous = days;
+          setDays(next);
+          setFeedback(null);
+          startTransition(async () => {
+            const state = await setStoreConfirmationCycle(cycle.storeId, next);
+            setFeedback(state);
+            if (state.error) {
+              setDays(previous);
+              return;
+            }
+            // Los chips de «Fecha pactada» se cuentan en el servidor: sin
+            // refrescar, el ciclo nuevo no se vería en los números de al lado,
+            // que es justo lo que este control tiene que dejar ver.
+            router.refresh();
+          });
+        }}
+        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 disabled:opacity-50"
+      >
+        {choices.map((option) => (
+          <option key={option} value={option}>
+            {cycleLabel(option)}
+          </option>
+        ))}
+      </select>
+      {feedback?.error ? (
+        <span className="text-rose-600">{feedback.error}</span>
+      ) : feedback?.notice ? (
+        <span className="text-emerald-700">{feedback.notice}</span>
+      ) : (
+        <span className="text-slate-400">
+          Sin fecha pactada, el pedido vuelve a «Hoy» cada {cycleLabel(days)}.
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * La celda «Próximo contacto». Sigue el mismo orden de mando que
+ * `confirmationQueueBucket`: fecha pactada, recordatorio de dos horas vigente y
+ * ciclo automático.
+ *
+ * El ciclo se pinta distinto A PROPÓSITO. Una fecha pactada es un compromiso con
+ * el cliente y quien la lee tiene que poder decir «esto lo prometí yo»; el ciclo
+ * lo puso Kapta para que el pedido no desaparezca. Mostrarlos iguales convertiría
+ * una derivación en una promesa que nadie hizo.
+ */
+function NextContactCell({ row, now }: { row: OrderMasterRow; now?: string }) {
+  const today = limaDayKey(now ?? new Date().toISOString());
+  if (row.confirmation_next_contact_on) {
+    return <>{fmtDate(`${row.confirmation_next_contact_on}T12:00:00.000Z`)}</>;
+  }
+  const reminder = row.confirmation_reminder_due_at;
+  if (reminder && limaDayKey(reminder) >= today) return <>{fmtDateTime(reminder)}</>;
+  const cycle = row.confirmation_cycle_due_on;
+  if (!cycle) return <>—</>;
+  return (
+    <span className="inline-flex flex-col leading-tight">
+      <span>{cycle <= today ? "Hoy" : fmtDate(`${cycle}T12:00:00.000Z`)}</span>
+      <span className="text-[11px] text-slate-400">ciclo automático</span>
+    </span>
+  );
+}
+
 function MasterTable({
   rows,
   storeName,
@@ -1927,11 +2095,7 @@ function MasterTable({
                       : `${r.confirmation_day_count ?? 0}/7 días`}
                   </td>
                   <td className="px-2 py-2.5 text-slate-600">
-                    {r.confirmation_next_contact_on
-                      ? fmtDate(`${r.confirmation_next_contact_on}T12:00:00.000Z`)
-                      : r.confirmation_reminder_due_at
-                        ? fmtDateTime(r.confirmation_reminder_due_at)
-                        : "—"}
+                    <NextContactCell row={r} />
                   </td>
                 </>
               )}
@@ -4022,6 +4186,24 @@ function ConfirmationDesk({
                 : "Próximo contacto"}
           </strong>
           <span>{fmtDate(`${row.confirmation_next_contact_on}T12:00:00.000Z`)}</span>
+        </div>
+      )}
+
+      {/* El ciclo automático: sin fecha pactada el pedido igual vuelve a la cola.
+          Se anuncia aquí para que quien abra el pedido sepa que lo trajo el
+          ciclo y no un compromiso con el cliente. */}
+      {!row.confirmation_next_contact_on && row.confirmation_cycle_due_on && !lastAttempt && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700 ring-1 ring-slate-200">
+          <strong>
+            {row.confirmation_cycle_due_on <= today
+              ? "Toca hoy por ciclo automático"
+              : "Vuelve a la cola por ciclo automático"}
+          </strong>
+          <span>
+            {row.confirmation_cycle_due_on <= today
+              ? "Sin fecha pactada"
+              : fmtDate(`${row.confirmation_cycle_due_on}T12:00:00.000Z`)}
+          </span>
         </div>
       )}
 

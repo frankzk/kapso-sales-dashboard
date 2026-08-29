@@ -474,6 +474,8 @@ export interface OrderMasterRow {
   confirmation_day_count?: number;
   confirmation_last_contact_at?: string | null;
   confirmation_next_contact_on?: string | null;
+  /** Ciclo automático de recontacto (0133): último contacto + N días. Derivado. */
+  confirmation_cycle_due_on?: string | null;
   confirmation_reminder_due_at?: string | null;
   confirmation_last_actor?: string | null;
   status_since: string | null;

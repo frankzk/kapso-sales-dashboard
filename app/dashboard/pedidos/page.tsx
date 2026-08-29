@@ -1,9 +1,11 @@
 import { Suspense } from "react";
-import { getAccessibleStores } from "@/lib/access";
+import { getAccessibleStores, getAdminOrgs } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
+import { DEFAULT_CONFIRMATION_CYCLE_DAYS } from "@/lib/order-confirmation";
 import {
   MASTER_PAGE_SIZE,
   getAgencySummaryCached,
+  getConfirmationCycleDays,
   getConfirmationDueCounts,
   getMasterFacetsCached,
   getOrderMasterMomCounts,
@@ -43,10 +45,11 @@ async function PedidosContent({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const [sp, stores, perms] = await Promise.all([
+  const [sp, stores, perms, adminOrgs] = await Promise.all([
     searchParams,
     getAccessibleStores(),
     getMasterPermissions(),
+    getAdminOrgs(),
   ]);
   if (!stores.length) {
     return <EmptyState title="No tienes tiendas asignadas" />;
@@ -72,7 +75,10 @@ async function PedidosContent({
   const storeIds = stores.map((s) => s.id);
   const showConfirmationDue =
     view === "por_confirmar" && (substage === null || substage === "volver_a_contactar");
-  const [momCounts, pageData, facets, agency, confirmationDueCounts] = await Promise.all([
+  // El ciclo de recontacto se muestra junto a los chips de «Fecha pactada», así
+  // que solo hace falta en esa vista.
+  const showConfirmation = view === "por_confirmar";
+  const [momCounts, pageData, facets, agency, confirmationDueCounts, cycleDays] = await Promise.all([
     getOrderMasterMomCounts(storeIds),
     getOrderMasterPage(storeIds, { view, substage, filters, sortKey: "created", page }),
     // Cacheadas: no dependen de lo que se esté filtrando ni buscando.
@@ -81,7 +87,24 @@ async function PedidosContent({
     showConfirmationDue
       ? getConfirmationDueCounts(storeIds, { substage, filters })
       : Promise.resolve({ all: 0, vencido: 0, hoy: 0, proximo: 0 }),
+    showConfirmation
+      ? getConfirmationCycleDays(storeIds)
+      : Promise.resolve({} as Record<string, number>),
   ]);
+
+  // Owner o admin de la organización de la tienda: el ciclo reparte la carga de
+  // todo el equipo, así que se ve siempre pero solo lo mueve quien manda ahí.
+  const adminOrgIds = new Set(
+    adminOrgs.filter((o) => o.role === "owner" || o.role === "admin").map((o) => o.org_id),
+  );
+  const confirmationCycles = showConfirmation
+    ? stores.map((s) => ({
+        storeId: s.id,
+        storeName: s.name,
+        days: cycleDays[s.id] ?? DEFAULT_CONFIRMATION_CYCLE_DAYS,
+        canEdit: adminOrgIds.has(s.org_id),
+      }))
+    : [];
 
   return (
     <OrdersMasterBoard
@@ -91,6 +114,7 @@ async function PedidosContent({
       counts={momCounts.stages}
       substageCounts={momCounts.substages}
       confirmationDueCounts={confirmationDueCounts}
+      confirmationCycles={confirmationCycles}
       rows={pageData.rows}
       total={pageData.total}
       page={pageData.page}

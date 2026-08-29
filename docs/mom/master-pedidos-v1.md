@@ -287,8 +287,44 @@ Reglas:
   sin respuesta.
 - Horario laboral: 08:00–22:00, hora de Lima. El reloj se pausa fuera de horario.
 - `Volver a contactar` y `Pendiente de abono` guardan únicamente una **fecha**,
-  no una hora. Vencidos, hoy y próximos forman colas operativas; los
-  recordatorios de dos horas entran en las mismas colas según su vencimiento.
+  no una hora. Vencidos, hoy y próximos forman colas operativas.
+
+#### Ciclo automático de recontacto
+
+- Un pedido en confirmación **con gestión** y **sin fecha pactada** vuelve a la
+  cola cada `confirmation_cycle_days` días contados desde el último contacto.
+  El ciclo se configura por tienda y su valor por defecto es **3 días**.
+- El ciclo se cambia desde el propio Master, junto a los chips de `Fecha
+  pactada`, y también desde Ajustes de la tienda. Lo mueve **owner o admin de la
+  organización de esa tienda**: reparte la carga diaria de todo el equipo, así
+  que no es una preferencia de quien mira la pantalla. Los demás lo ven.
+- El Master es consolidado y el ciclo es por tienda: con varias tiendas a la
+  vista el control se lee pero no se edita. Ofrecer un valor único sobre dos
+  tiendas daría a elegir algo que no existe.
+- Al cambiarlo se reescribe `confirmation_cycle_due_on` de los pedidos en
+  confirmación de esa tienda en el acto. Es la misma regla del barrido, aplicada
+  ya: sin eso la cola seguiría repartida con el ciclo anterior durante horas.
+- El ciclo es una **derivación**, no un compromiso: se calcula en cada barrido
+  del Master (`confirmation_cycle_due_on`) y nunca sustituye a
+  `confirmation_next_contact_on`, que es el hecho que alguien pactó en una
+  llamada. Si el intento dejó fecha, manda la fecha y no hay ciclo.
+- **La fecha pactada vence; el ciclo no.** Una fecha pactada incumplida se queda
+  en `Vencidos` porque es una promesa al cliente que hay que ver. Un día de
+  ciclo que ya pasó significa «toca hoy»: el pedido aparece en `Hoy` y, al
+  registrarse el intento, el siguiente ciclo se cuenta desde ese contacto. Así
+  el pedido rota cada N días en vez de hundirse para siempre en `Vencidos`.
+- El recordatorio de dos horas ordena el trabajo **dentro de su día** y entra en
+  las colas según su vencimiento. Pasado ese día lo sustituye el ciclo: un
+  recordatorio de hace tres semanas ya no dice nada que la antigüedad no diga
+  mejor, y dejarlo mandando era lo que mantenía pedidos de veintitrés días con
+  un solo intento fuera de la cola de `Hoy`.
+- Orden de mando de la cola: **fecha pactada → recordatorio vigente → ciclo**.
+- `Sin llamar` no entra en el ciclo: sin un solo contacto no hay desde cuándo
+  contar, y su chip propio ya lo separa. Lo delata su antigüedad, no la cola.
+- El ciclo no gasta días de gestión ni acerca el `Último intento`: solo el
+  §6.1 —un día distinto CON gestión— gasta cupo. Un pedido puede rotar por
+  ciclo muchas veces sin pasar de 1/7 si nadie lo llama, y eso es exactamente
+  lo que el número tiene que seguir diciendo.
 - Provincia COD queda confirmada al validar producto, cantidad, monto, fecha
   aproximada y dirección de entrega.
 - Agencia queda confirmada solo cuando el pago exigido ha sido validado.

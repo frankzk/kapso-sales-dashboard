@@ -73,6 +73,8 @@ export interface StoreSettingsData {
     return_recovery_hour_start: number;
     return_recovery_hour_end: number;
     return_recovery_max_days: number;
+    /** Ciclo de recontacto en confirmación (MOM §6.1, migración 0133). */
+    confirmation_cycle_days: number;
     telegram_chat_id: string | null;
     anthropic_model: string | null;
     aliclik_enabled: boolean;
@@ -831,6 +833,39 @@ function SettingsForm({
             </p>
           </div>
         </div>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Gestión de confirmación
+          </legend>
+          <p className="text-xs text-slate-500">
+            El mismo control vive en el Master de Pedidos, junto a los chips de{" "}
+            <strong>Fecha pactada</strong>, que es donde se ve su efecto. Aquí queda para
+            dejar la tienda configurada de entrada.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className={labelCls} htmlFor="confirmation_cycle_days">
+                Ciclo de recontacto sin fecha pactada (días)
+              </label>
+              <input
+                id="confirmation_cycle_days"
+                name="confirmation_cycle_days"
+                type="number"
+                min={1}
+                max={30}
+                defaultValue={s.confirmation_cycle_days}
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Un pedido en <strong>Por confirmar</strong> que ya tuvo contacto y no dejó fecha
+                pactada vuelve a la cola de <strong>Hoy</strong> cada tantos días. No gasta días
+                de gestión: los siete del MOM siguen contando solo los días con intento real.
+                Los que nunca se contactaron («Sin llamar») no entran al ciclo.
+              </p>
+            </div>
+          </div>
+        </fieldset>
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
           <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">

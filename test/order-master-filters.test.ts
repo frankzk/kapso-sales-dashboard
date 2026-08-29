@@ -165,6 +165,34 @@ describe("matchesFilters — banderas operativas", () => {
     expect(matchesFilters(row("5"), today, NOW)).toBe(false);
   });
 
+  it("el ciclo automático devuelve a «Hoy» al pedido que nadie volvió a llamar", () => {
+    const overdue = withFilter({ confirmationDue: "vencido" });
+    const today = withFilter({ confirmationDue: "hoy" });
+    const upcoming = withFilter({ confirmationDue: "proximo" });
+    // El caso real: un intento hace semanas, sin fecha pactada. Su recordatorio
+    // de dos horas venció el primer día y lo dejaba clavado en «Vencidos».
+    const abandoned = row("126408", {
+      confirmation_reminder_due_at: "2026-07-05T15:00:00.000Z",
+      confirmation_cycle_due_on: "2026-07-08",
+    });
+    expect(matchesFilters(abandoned, today, NOW)).toBe(true);
+    expect(matchesFilters(abandoned, overdue, NOW)).toBe(false);
+    // Recién gestionado: el ciclo lo saca de la cola hasta dentro de tres días.
+    const justWorked = row("126409", {
+      confirmation_reminder_due_at: "2026-07-20T18:00:00.000Z",
+      confirmation_cycle_due_on: "2026-07-23",
+    });
+    expect(matchesFilters(justWorked, today, NOW)).toBe(true); // el recordatorio de hoy manda
+    expect(matchesFilters(row("126410", { confirmation_cycle_due_on: "2026-07-23" }), upcoming, NOW)).toBe(true);
+    // Con fecha pactada no hay ciclo que valga: manda el compromiso.
+    const promised = row("126411", {
+      confirmation_next_contact_on: "2026-07-19",
+      confirmation_cycle_due_on: "2026-07-23",
+    });
+    expect(matchesFilters(promised, overdue, NOW)).toBe(true);
+    expect(matchesFilters(promised, today, NOW)).toBe(false);
+  });
+
   it("la búsqueda libre cubre código, cliente, teléfono y guía", () => {
     const r = row("114985", { order_name: "#KP114985", guide_code: "AUR5XABC" });
     expect(matchesFilters(r, withFilter({ search: "kp114985" }), NOW)).toBe(true);
