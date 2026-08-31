@@ -36,7 +36,11 @@ interface NavItem {
   icon: Icon;
 }
 
-function navItems(isVendedoraOnly: boolean, canValidatePayments: boolean): NavItem[] {
+function navItems(
+  isVendedoraOnly: boolean,
+  canValidatePayments: boolean,
+  canManageLogistics: boolean,
+): NavItem[] {
   if (isVendedoraOnly) {
     const items: NavItem[] = [
       { href: "/dashboard/leads", label: "Leads", icon: IconChat },
@@ -51,6 +55,9 @@ function navItems(isVendedoraOnly: boolean, canValidatePayments: boolean): NavIt
     ];
     if (canValidatePayments) {
       items.splice(2, 0, { href: "/dashboard/pagos", label: "Validar pagos", icon: IconMoney });
+    }
+    if (canManageLogistics) {
+      items.push({ href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck });
     }
     return items;
   }
@@ -70,6 +77,9 @@ function navItems(isVendedoraOnly: boolean, canValidatePayments: boolean): NavIt
     { href: "/dashboard/stores", label: "Tiendas", icon: IconStore },
     { href: "/dashboard/liquidaciones", label: "Liquidaciones", icon: IconMoney },
     { href: "/dashboard/costos", label: "Costos", icon: IconMoney },
+    ...(canManageLogistics
+      ? [{ href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck }]
+      : []),
     { href: "/dashboard/team", label: "Equipo", icon: IconUsers },
     { href: "/dashboard/stores/new", label: "Conectar tienda", icon: IconPlug },
   ];
@@ -98,6 +108,7 @@ export function Sidebar({
   userEmail,
   roleLabel,
   canValidatePayments,
+  canManageLogistics,
   pendingHref,
   onNavigate,
 }: {
@@ -106,13 +117,14 @@ export function Sidebar({
   userEmail?: string | null;
   roleLabel: string;
   canValidatePayments: boolean;
+  canManageLogistics: boolean;
   pendingHref?: string | null;
   onNavigate?: (href: string) => void;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
-  const items = navItems(isVendedoraOnly, canValidatePayments);
+  const items = navItems(isVendedoraOnly, canValidatePayments, canManageLogistics);
   const pendingPath = pendingHref?.split("?", 1)[0] ?? null;
   const displayPath = pendingPath ?? pathname;
 

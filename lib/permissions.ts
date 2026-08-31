@@ -50,6 +50,10 @@ export const PERMISSIONS = [
   "shalom.override_payment_validation",
   // Costos
   "costs.manage",
+  // Grupo GF Courier: contratos, tarifas, clientes y parámetros operativos.
+  // Se concede persona por persona porque Daysi debe administrarlo sin recibir
+  // acceso implícito a todas las facultades financieras de un admin.
+  "logistics.manage",
   // Aliclik: crear una guía es una escritura hacia AFUERA e irreversible, con
   // ventanas de cancelación estrictas. Por eso tiene permiso propio y no cae
   // bajo `master.edit`.
@@ -151,6 +155,12 @@ export const GRANTED_ONE_BY_ONE = [
     label: "Corregir pagos",
     description: "Mover un pago al pedido correcto o forzar su estado.",
     lastOneMatters: true,
+  },
+  {
+    permission: "logistics.manage",
+    label: "Administrar Grupo GF Courier",
+    description: "Gestionar clientes, tarifas y parámetros del operador logístico.",
+    lastOneMatters: false,
   },
 ] as const satisfies readonly {
   permission: Permission;

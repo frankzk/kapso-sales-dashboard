@@ -269,4 +269,6 @@
 \ir migrations/0132_order_sales.sql
 \echo 'Applying 0133_confirmation_cycle.sql'
 \ir migrations/0133_confirmation_cycle.sql
+\echo 'Applying 0134_group_gf_courier_foundation.sql'
+\ir migrations/0134_group_gf_courier_foundation.sql
 \echo 'Done.'

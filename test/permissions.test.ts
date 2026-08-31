@@ -265,3 +265,16 @@ describe("riders.manage (registro de motorizados)", () => {
     expect(isPermission("riders.manage")).toBe(true);
   });
 });
+
+describe("logistics.manage (Grupo GF Courier)", () => {
+  it("es individual para Daysi y no viene incluido en admin o vendedora", () => {
+    expect(permissionsFor(["owner"]).has("logistics.manage")).toBe(true);
+    expect(permissionsFor(["admin"]).has("logistics.manage")).toBe(false);
+    expect(permissionsFor(["vendedora"]).has("logistics.manage")).toBe(false);
+    expect(permissionsFor(["vendedora"], [{ permission: "logistics.manage", granted: true }]).has("logistics.manage")).toBe(true);
+  });
+
+  it("aparece entre los permisos concedibles desde Equipo", () => {
+    expect(GRANTED_ONE_BY_ONE.some((entry) => entry.permission === "logistics.manage")).toBe(true);
+  });
+});

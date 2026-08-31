@@ -1,10 +1,11 @@
 # Master Operations Map — Master de Pedidos v1
 
-Estado: Fase 4 implementada; macroetapa Por confirmar cerrada funcionalmente
+Estado: Fase 4 implementada; macroetapa Por confirmar cerrada funcionalmente;
+modelo Grupo GF Courier definido para implementación incremental
 Propietario del proceso: Frankz  
 Sistema: Kapta (`kapso-sales-dashboard`)  
 Fuente visual: board Miro «Master Operations Map»  
-Última consolidación: 2026-08-18
+Última consolidación: 2026-08-30
 
 ## 1. Propósito
 
@@ -3103,4 +3104,258 @@ crear la salida de varios pedidos a la vez, con un solo courier y una sola fecha
 - Un pedido que no cumple **no detiene a los demás**: la tanda informa cuál falló
   y por qué, pedido por pedido.
 - Al terminar se descargan los rótulos de las salidas creadas en el mismo gesto.
+
+## 29. Grupo GF Courier — operador logístico y fulfillment
+
+### 29.1 Decisión de producto
+
+Los motorizados que hasta ahora se llamaban **propios** dejan de ser una
+excepción dentro de Aurela o Kenku. Operan bajo **Grupo GF Courier**, un operador
+logístico de Grupo GF que presta servicio a las tiendas del grupo y, en el
+futuro, a tiendas externas.
+
+La interfaz puede mostrar todos los operadores como alternativas de envío, pero
+las identidades no se mezclan:
+
+- **Tienda cliente**: dueña del pedido comercial y del dinero de la venta.
+- **Operador logístico**: empresa contratada para preparar y/o entregar.
+- **Motorizado**: persona que trabaja para un operador y recibe la custodia.
+- **Solicitud logística**: instrucción de preparar o entregar un pedido.
+- **Paquete/salida**: unidad física con QR estable (§3–4).
+- **Ruta**: trabajo de un motorizado durante un día.
+- **Carga**: conjunto de paquetes entregado al motorizado dentro de esa ruta.
+- **Contrato de servicio**: cobertura, tarifas y reglas entre tienda y operador.
+
+Grupo GF posee cuatro capacidades distintas, aunque compartan administración y
+almacén:
+
+| Capacidad | Responsabilidad |
+| --- | --- |
+| Proveeduría Grupo GF | Puede ser propietaria de una bolsa de inventario compartida |
+| Almacén Grupo GF | Custodia inventario, reserva, arma y rotula |
+| Aurela / Kenku / tienda externa | Canal comercial y propietario del pedido |
+| Grupo GF Courier | Planifica rutas, transfiere custodia, entrega y liquida |
+
+No se crea una tienda Shopify ficticia para Grupo GF Courier. Aurela y Kenku
+deben relacionarse con el operador bajo las mismas reglas que una futura tienda
+externa, para no mantener un segundo flujo especial de «propios».
+
+### 29.2 Alcance inicial
+
+- Cobertura: Lima Metropolitana y Callao.
+- Punto de operación: un único almacén de Grupo GF.
+- Corte para salida el mismo día: **11:30**.
+- La tienda asigna directamente la solicitud a Grupo GF Courier.
+- Grupo GF puede recibir inventario de una tienda, pero en el alcance inicial no
+  recoge paquetes armados en otros almacenes: Grupo GF reserva, arma y rotula.
+- Una ruta puede mezclar pedidos de Aurela, Kenku y otras tiendas autorizadas.
+- El portal de una tienda externa admite conexión Shopify, API y carga Excel.
+
+Shopify continúa siendo la única fuente de **pedidos comerciales administrados
+por Kapta** (§2). Una solicitud recibida directamente por API o Excel es una
+solicitud logística, no un pedido Shopify inventado. Debe conservar el código
+externo de la tienda y una clave de idempotencia para impedir duplicados.
+
+### 29.3 Inventario preparado, pero no obligatorio
+
+El courier no exige implementar ahora un ERP completo. La fundación admite
+**bolsas de inventario** opcionales:
+
+- Una bolsa tiene propietario; inicialmente puede existir la bolsa compartida de
+  Proveeduría Grupo GF.
+- Una tienda puede vender desde una o varias bolsas autorizadas.
+- Cada línea del pedido conserva la bolsa de la que se reservó.
+- El primer pedido que entra y reserva correctamente gana la unidad.
+- Un pedido que mezcla bolsas no queda listo hasta reservar todas sus líneas.
+- La reserva ocurre al ingresar el pedido.
+- Un faltante deja la solicitud logística observada; Grupo GF puede anularla,
+  pero no cancela automáticamente el pedido comercial en Shopify (§2).
+- La tienda y Grupo GF cotejan una futura recepción de inventario; la palabra
+  final sobre la cantidad recibida es de Grupo GF. Una diferencia queda
+  observada hasta que la tienda la acepte.
+- Las filas históricas o tiendas todavía sin control de inventario pueden
+  mantener la bolsa y la reserva nulas. Esta compatibilidad no se interpreta
+  como stock cero.
+
+La Mesa de fulfillment debe ser rápida y excepcional: `Pendiente de armar →
+Armando → Listo`. La reserva es automática y no crea un formulario. En el camino
+normal, almacén comprueba productos, imprime el rótulo y confirma «Armado y
+rotulado» con una sola acción o escaneo. Los motivos aparecen solo ante faltantes
+o correcciones. Debe permitir lotes, impresión masiva, escáner y filtros por
+tienda/fecha; el courier se decide en despacho, no durante el armado.
+
+### 29.4 QR e identidad física
+
+- Un paquete físico tiene **un solo QR interno**.
+- Si la solicitud nace de Kapta, Grupo GF Courier reutiliza el QR de la salida.
+- Si entra directamente por API o Excel, Grupo GF crea la solicitud, la salida y
+  el QR con el mismo esquema de identidad.
+- Una transferencia entre motorizados conserva el QR; cambia la custodia y queda
+  un evento por cada actor.
+- Una reprogramación que conserva el paquete armado conserva su identidad física.
+- Un pedido anulado, rechazado definitivamente o que debe desarmarse libera la
+  reserva y devuelve el producto a su bolsa. Si luego se vuelve a armar, nace una
+  salida nueva con QR nuevo, respetando §4.
+
+### 29.5 Ruta diaria, cargas y transferencias
+
+- Cada motorizado tiene una sola ruta por día. La ruta también es la unidad de su
+  liquidación diaria.
+- Si vuelve al almacén por uno o dos pedidos, se agregan a la misma ruta mediante
+  una **carga adicional**; nunca se crea otra ruta ni se incorporan paquetes sin
+  cotejo.
+- Cada carga registra hora, paquetes, entrega de almacén y recepción del
+  motorizado. La segunda recepción usa el mismo doble cotejo de §18.
+- La ruta puede mezclar tiendas. El cobro, costo e inventario siempre conservan
+  su tienda de origen.
+- Una ruta puede transferirse a otro motorizado. Los paquetes pendientes cambian
+  custodia mediante doble cotejo y el historial conserva quién entregó y quién
+  recibió.
+- Una ruta transferida sigue siendo una ruta operativa; cada motorizado liquida
+  únicamente lo que cobró. Grupo GF emite una sola liquidación diaria a cada
+  tienda.
+- Si Roy es responsable y Daysi o Frankz completa un reporte por él, se guardan
+  por separado `motorizado_responsable` y `reportado_por`, con motivo, fecha y
+  evidencia. Nadie suplanta al motorizado.
+
+Los dos modelos técnicos actuales —`delivery_routes` para `/rutas` y `/reparto`,
+y `dispatch_manifests` para la Mesa de despacho— deben converger en un ciclo
+canónico. Hasta completar la migración no se borra historial ni se duplica una
+custodia. El destino es una ruta diaria con cargas/manifiestos vinculados, paradas
+y eventos append-only.
+
+### 29.6 Agenda y cambios posteriores al corte
+
+- Una tienda puede pactar fecha y una franja amplia de aproximadamente cinco
+  horas.
+- Un cambio después de las 11:30 requiere aprobación de Grupo GF y muestra
+  distrito, tarifa y fecha resultantes.
+- Solo se aprueba dentro del día si el destino permanece en la ruta del mismo
+  motorizado.
+- Si el cambio exige pasar a otro motorizado, se cancela la guía logística y la
+  solicitud vuelve a `Por agendar`. Nunca se mueve silenciosamente entre rutas.
+- La tienda o Grupo GF pueden reprogramar, y siempre se registra actor y motivo.
+- Cancelar una solicitud no tiene costo, incluso si el motorizado ya salió. El
+  paquete puede retornar al almacén al día siguiente y la cancelación logística
+  no cancela por sí sola el pedido Shopify.
+
+### 29.7 Resultado y evidencia
+
+El resultado lo reporta el motorizado o, excepcionalmente, Daysi/Frankz en su
+nombre. Fecha y hora se capturan automáticamente. Una entrega exige:
+
+- foto del paquete entregado;
+- comprobante del pago cuando corresponde;
+- coordenada GPS tomada al reportar; y
+- actor real que cargó la evidencia.
+
+La tienda ve estado y evidencia, no nombre/teléfono del motorizado ni ubicación
+en vivo. El cliente final recibe un enlace público que muestra solo estados.
+
+Catálogo inicial y regla de cobro:
+
+| Resultado | Costo de envío |
+| --- | --- |
+| Entregado | Tarifa del distrito |
+| Rechazado por el cliente | Tarifa de rechazo, una vez por pedido y ruta/día |
+| No responde | S/ 0 |
+| Cliente ausente | S/ 0 |
+| Dirección incorrecta | S/ 0; Grupo GF absorbe el intento y se identifica la falla de origen |
+| Reprogramado | S/ 0; conserva el paquete armado |
+| Cancelado por la tienda | S/ 0 |
+| Incidencia del motorizado | S/ 0 |
+| Paquete dañado o faltante | Observado |
+
+Un rechazo exige motivo y evidencia. Si el cliente rechaza en días distintos,
+se cobra como máximo una vez en cada ruta/día. Otros intentos no entregados
+siguen sin costo aunque se repitan.
+
+### 29.8 Tarifas por distrito y comisión Yape
+
+Grupo GF Courier cobra una tarifa por distrito/zona que **incluye IGV**. Debe
+existir una tabla configurable, no constantes en código:
+
+| Campo | Regla |
+| --- | --- |
+| Distrito | Ubigeo oficial; no texto libre como identidad |
+| Zona | Agrupación opcional para edición masiva |
+| Tarifa de entrega | Importe incluido IGV |
+| Tarifa de rechazo | Importe incluido IGV |
+| Tienda | Nula = general; informada = excepción contractual |
+| Vigencia | Desde/hasta; una edición abre otra vigencia |
+| Estado | Activa/inactiva, sin borrar historial |
+
+Precedencia: tarifa particular de la tienda y distrito, luego tarifa general de
+Grupo GF Courier. Sin coincidencia se muestra `Sin tarifa configurada`, no S/0,
+y se bloquea el cierre financiero. Daysi y Frankz pueden administrar tarifas;
+la pantalla permite edición por zona e importar/exportar Excel.
+
+La comisión general por pagos recibidos en el Yape de Grupo GF es **3.5 %**:
+
+- se calcula solo sobre el importe efectivamente pagado por Yape;
+- se redondea a dos decimales por operación;
+- se descuenta en la liquidación diaria de la tienda;
+- no se aplica a efectivo ni a un rechazo sin pago; y
+- se conserva como regla con vigencia, aunque inicialmente sea general.
+
+### 29.9 Liquidaciones y efectivo
+
+Existen dos conciliaciones relacionadas, no intercambiables:
+
+1. **Motorizado ↔ Grupo GF Courier**: cobros y evidencia de la ruta diaria.
+2. **Grupo GF Courier ↔ tienda**: COD cobrado menos tarifa de entrega/rechazo y
+   comisión Yape aplicable.
+
+Ambas son diarias y requieren aprobación humana después de finalizar todas las
+rutas. Una parada pendiente bloquea la liquidación. Daysi o Frankz pueden
+completar el reporte faltante con la auditoría de §29.5; no existe cierre
+automático silencioso.
+
+El efectivo máximo planificado por motorizado es S/ 5,000 por ruta:
+
+- advertencia desde S/ 4,000;
+- bloqueo de nuevas asignaciones al superar S/ 5,000; y
+- Daysi o Frankz pueden autorizar una excepción con motivo auditado.
+
+Neto de la tienda:
+
+```text
+COD cobrado
+− tarifa de entrega o rechazo
+− 3.5 % del importe recibido por Yape
+= neto diario para la tienda
+```
+
+Si una fila no tiene tarifa, evidencia o resultado definitivo, la liquidación
+completa permanece abierta. Las correcciones conservan lo declarado, el valor
+anterior, actor, motivo y fecha como ya exige §14.
+
+### 29.10 Acceso y administración
+
+- Daysi administra tiendas cliente, motorizados, capacidad, asignaciones, rutas,
+  contratos y tarifas de Grupo GF Courier.
+- Frankz conserva permiso de propietario y excepción.
+- Una tienda ve únicamente sus solicitudes, inventario asociado, estados,
+  evidencias, cargos y liquidaciones.
+- El operador ve solo los datos necesarios de las tiendas con contrato vigente.
+- El motorizado ve únicamente sus cargas y paradas activas.
+- Grupo GF puede suspender una tienda por deuda, incidencias o problemas de
+  inventario; la suspensión no borra pedidos ni liquidaciones existentes.
+
+### 29.11 Implementación incremental
+
+El orden obligatorio evita reescribir las pantallas sobre identidades ambiguas:
+
+1. Crear operador, tienda cliente, contrato, tarifa y comisión con vigencia.
+2. Migrar «motorizados propios» a Grupo GF Courier conservando ids e historial.
+3. Vincular ruta diaria, cargas/manifiestos y paradas; retirar la doble verdad
+   entre `delivery_routes` y `dispatch_manifests` solo después de comprobarla.
+4. Implementar doble liquidación y límites de efectivo.
+5. Publicar portal de tiendas, seguimiento por estados y entrada Shopify/API/
+   Excel.
+6. Añadir bolsas y reservas opcionales; el inventario estricto no bloquea las
+   primeras fases.
+
+Cada fase debe ser compatible con Aurela y Kenku y no debe convertir una
+solicitud logística externa en un pedido comercial de Shopify.
 

@@ -146,8 +146,8 @@ export function TeamManager({
                 frase escrita a mano, añadir un permiso dejaba la explicación
                 hablando solo del primero. */}
             <p className="mb-3 text-xs text-slate-500">
-              Estos permisos NO vienen con el rol: se dan persona por persona a quien revisa las
-              cuentas bancarias. El acceso aparece en su menú al recargar.{" "}
+              Estos permisos NO vienen con el rol: se conceden persona por persona según su
+              responsabilidad. Los accesos correspondientes aparecen en su menú al recargar.{" "}
               {GRANTED_ONE_BY_ONE.map((entry) => (
                 <span key={entry.permission} className="mr-1 inline-block">
                   <strong className="font-semibold text-slate-700">{entry.label}</strong>:{" "}
