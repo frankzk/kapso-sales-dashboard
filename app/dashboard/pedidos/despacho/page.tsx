@@ -7,7 +7,12 @@ import { DispatchWorkspace } from "@/components/dispatch-workspace";
 
 export const dynamic = "force-dynamic";
 
-export default async function DispatchPage() {
+export default async function DispatchPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ manifiesto?: string }>;
+}) {
+  const requestedManifestId = (await searchParams).manifiesto ?? null;
   const [stores, permissions] = await Promise.all([getAccessibleStores(), getMasterPermissions()]);
   if (!stores.length) return <EmptyState title="No tienes tiendas asignadas" />;
   const canPrepare = permissions.can("warehouse.prepare");
@@ -30,6 +35,7 @@ export default async function DispatchPage() {
   return (
     <DispatchWorkspace
       initialData={data}
+      initialSelectedId={requestedManifestId}
       stores={stores}
       riders={riders}
       canPrepare={canPrepare}

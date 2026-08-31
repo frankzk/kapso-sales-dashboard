@@ -55,4 +55,22 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
     expect(courier).toContain("Armado · listo para ruta");
     expect(courier).not.toContain("Ir a Almacén");
   });
+
+  it("asigna pedidos tomados a la caja diaria sin exigir que Almacén termine", () => {
+    const action = readFileSync(resolve(root, "app/dashboard/courier/actions.ts"), "utf8");
+    const courier = readFileSync(resolve(root, "components/grupo-gf-courier.tsx"), "utf8");
+    const dispatchPage = readFileSync(
+      resolve(root, "app/dashboard/pedidos/despacho/page.tsx"),
+      "utf8",
+    );
+    const mom = readFileSync(resolve(root, "docs/mom/master-pedidos-v1.md"), "utf8");
+    expect(action).toContain("assignGroupGfCourierRoute");
+    expect(action).toContain('.from("dispatch_manifests")');
+    expect(action).toContain('.from("dispatch_manifest_items")');
+    expect(action).not.toContain('preparation_state", "listo_despacho"');
+    expect(courier).toContain("Asignar a ruta diaria");
+    expect(courier).toContain("Abrir caja y cotejar");
+    expect(dispatchPage).toContain("requestedManifestId");
+    expect(mom).toContain("Tomar, asignar y cotejar tampoco son el mismo gesto");
+  });
 });
