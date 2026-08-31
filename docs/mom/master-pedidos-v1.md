@@ -3172,6 +3172,21 @@ Las futuras tiendas externas pueden conservar asignación explícita según su
 contrato. La cola automática descrita arriba es el camino de mínima fricción
 para las tiendas de Grupo GF administradas dentro de Kapta.
 
+**Prioridad dentro de Pedidos disponibles.** La bandeja separa dos colas sin
+inventar un estado operativo nuevo:
+
+- **Prioridad urgente · nunca salieron:** el pedido no tiene ninguna salida con
+  `shipments.dispatched_at`. Crear o anular un rótulo sin transferir físicamente
+  el paquete no lo saca de este grupo. Esta es la vista inicial y se ordena del
+  pedido más reciente al más antiguo.
+- **Con salida previa:** existe al menos una salida histórica con
+  `shipments.dispatched_at`, aunque el pedido haya regresado a Preparación. Se
+  trata como reprogramación o recuperación y conserva toda la evidencia de la
+  salida anterior.
+
+La separación solo prioriza la gestión. No cambia la elegibilidad, la tarifa ni
+las comprobaciones idempotentes de `Tomar pedidos`.
+
 Durante la transición, las salidas de Grupo GF siguen guardando el token legado
 `propio` para no romper rutas, QR, manifiestos ni liquidaciones históricas. La
 interfaz ya las nombra **Grupo GF Courier**. El token se reemplazará por el

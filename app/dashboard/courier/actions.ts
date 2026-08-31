@@ -77,9 +77,14 @@ export interface CourierAvailableOrder {
   tariffId: string;
   tariffAmount: number;
   scheduledFor: string;
+  hasPriorDispatch: boolean;
+  lastDispatchedAt: string | null;
 }
 
-export interface CourierAcceptedOrder extends CourierAvailableOrder {
+export interface CourierAcceptedOrder extends Omit<
+  CourierAvailableOrder,
+  "hasPriorDispatch" | "lastDispatchedAt"
+> {
   requestId: string;
   requestStatus: string;
   shipmentId: string | null;
@@ -228,6 +233,28 @@ async function loadCourierOperations(
     throw new Error(`No se pudieron cargar las solicitudes logísticas: ${requestError.message}`);
   }
 
+  const queueOrderIds = ((queueRows ?? []) as QueueOrderRow[]).map((order) => order.order_id);
+  const { data: dispatchHistoryRows, error: dispatchHistoryError } = queueOrderIds.length
+    ? await admin
+        .from("shipments")
+        .select("order_id,dispatched_at")
+        .in("order_id", queueOrderIds)
+        .not("dispatched_at", "is", null)
+        .limit(2_000)
+    : { data: [], error: null };
+  if (dispatchHistoryError) {
+    throw new Error(`No se pudo distinguir el historial de salida: ${dispatchHistoryError.message}`);
+  }
+  const lastDispatchByOrder = new Map<string, string>();
+  for (const row of (dispatchHistoryRows ?? []) as Array<{
+    order_id: string | null;
+    dispatched_at: string | null;
+  }>) {
+    if (!row.order_id || !row.dispatched_at) continue;
+    const current = lastDispatchByOrder.get(row.order_id);
+    if (!current || row.dispatched_at > current) lastDispatchByOrder.set(row.order_id, row.dispatched_at);
+  }
+
   const storeName = new Map(
     ((stores ?? []) as { id: string; name: string }[]).map((store) => [store.id, store.name]),
   );
@@ -281,6 +308,8 @@ async function loadCourierOperations(
       tariffId: tariff.tariff.id,
       tariffAmount: tariff.tariff.delivery_amount,
       scheduledFor: scheduledDay(config.provider.same_day_cutoff),
+      hasPriorDispatch: lastDispatchByOrder.has(order.order_id),
+      lastDispatchedAt: lastDispatchByOrder.get(order.order_id) ?? null,
     });
   }
 
