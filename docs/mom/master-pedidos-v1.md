@@ -3153,12 +3153,23 @@ externa, para no mantener un segundo flujo especial de «propios».
 
 Para Aurela y Kenku, la admisión operativa ocurre desde **Grupo GF Courier →
 Pedidos disponibles**, no creando una salida pedido por pedido en la Mesa de
-ruta. Los pedidos Kapta en `Preparación · Por generar rótulo` aparecen
-automáticamente cuando corresponden a Lima Metropolitana o Callao y tienen
-operador y contrato activos, distrito canónico, tarifa vigente y servicio no
-pausado. El operador puede tomarlos individualmente o en lote. La Mesa de ruta
-solo informa que el pedido está disponible y enlaza esa bandeja; no abre un
-segundo formulario ni genera un rótulo desde el drawer.
+ruta. Los pedidos Kapta aparecen automáticamente desde `Preparación · Por
+generar rótulo`, `Preparación · Por armar` y `Por despachar · Listo para
+asignar`, cuando corresponden a Lima Metropolitana o Callao y tienen operador y
+contrato activos, distrito canónico, tarifa vigente y servicio no pausado. Si
+ya existe una salida, debe ser la caja `por definir`; una salida asignada a otro
+courier no se ofrece. El operador puede tomarlos individualmente o en lote. La
+Mesa de ruta solo informa que el pedido está disponible y enlaza esa bandeja;
+no abre un segundo formulario ni genera un rótulo desde el drawer.
+
+**Tomar y armar son procesos independientes.** Grupo GF Courier puede tomar la
+solicitud antes, durante o después del armado. Tomar congela servicio, tarifa y
+fecha prevista; no certifica que la caja esté armada y no exige el escaneo de
+Almacén. Almacén conserva todos los pedidos en su cola normal y siempre los
+prepara, hayan sido tomados o no. La bandeja del courier muestra
+`Pendiente de armado`, `Almacén armando` o `Armado · listo para ruta` como dato,
+nunca como candado para admitir la solicitud. El operador del courier no debe
+entrar a la pantalla de Almacén para hacer avanzar el pedido.
 
 `Tomar pedidos` crea o reutiliza una **solicitud logística** idempotente, congela
 contrato, tarifa, distrito y fecha prevista, y recién entonces crea la salida.

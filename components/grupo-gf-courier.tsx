@@ -98,7 +98,7 @@ export function GrupoGfCourierBoard({
           </p>
           <h1 className="mt-1 text-xl font-semibold text-slate-950">Grupo GF Courier</h1>
           <p className="mt-1 max-w-3xl text-sm text-slate-600">
-            Toma pedidos de Aurela y Kenku, prepara una sola caja y conserva el mismo QR hasta la entrega.
+            Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.
           </p>
         </div>
         <div className="grid grid-cols-3 divide-x divide-slate-200 rounded-xl border border-slate-200 bg-white px-1 py-3 text-sm shadow-sm">
@@ -118,7 +118,7 @@ export function GrupoGfCourierBoard({
         <CourierTab
           active={tab === "preparation"}
           onClick={() => setTab("preparation")}
-          label="En preparación"
+          label="Pedidos tomados"
           count={snapshot.operations.accepted.length}
         />
         <CourierTab
@@ -257,10 +257,10 @@ function AvailableOrders({
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h2 id="available-orders-title" className="text-base font-semibold text-slate-950">
-            Pedidos listos para tomar
+            Pedidos disponibles para el courier
           </h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-            Kapta los coloca aquí al entrar a Preparación. El rótulo y el QR se crean una sola vez cuando los tomas.
+            Puedes tomarlos antes, durante o después del armado. Almacén siempre los prepara; tomar solo reserva el servicio y la tarifa.
           </p>
           {sourceCount > 300 && (
             <p className="mt-1 text-xs text-slate-500">
@@ -477,18 +477,24 @@ function AvailabilitySegmentTab({
 
 function preparationLabel(order: CourierAcceptedOrder): { label: string; tone: string } {
   if (order.requestStatus === "observed") return { label: "Requiere revisión", tone: "bg-red-50 text-red-700" };
-  if (order.preparationState === "listo_despacho") return { label: "Listo para ruta", tone: "bg-emerald-50 text-emerald-700" };
-  if (order.preparationState === "en_armado") return { label: "Armando", tone: "bg-sky-50 text-sky-700" };
-  return { label: "Por armar", tone: "bg-amber-50 text-amber-700" };
+  if (order.preparationState === "listo_despacho") return { label: "Armado · listo para ruta", tone: "bg-emerald-50 text-emerald-700" };
+  if (order.preparationState === "en_armado") return { label: "Almacén armando", tone: "bg-sky-50 text-sky-700" };
+  return { label: "Pendiente de armado", tone: "bg-amber-50 text-amber-700" };
+}
+
+function preparationNextStep(order: CourierAcceptedOrder): string {
+  if (order.requestStatus === "observed") return "Revisar solicitud";
+  if (order.preparationState === "listo_despacho") return "Puede entrar a una ruta";
+  return "Almacén continúa";
 }
 
 function AcceptedOrders({ orders }: { orders: CourierAcceptedOrder[] }) {
   return (
     <section aria-labelledby="accepted-orders-title" className="space-y-4">
       <div>
-        <h2 id="accepted-orders-title" className="text-base font-semibold text-slate-950">En preparación</h2>
+        <h2 id="accepted-orders-title" className="text-base font-semibold text-slate-950">Pedidos tomados</h2>
         <p className="mt-1 text-sm text-slate-600">
-          Cada pedido ya tiene solicitud, tarifa congelada y una sola salida física. Almacén continúa por escaneo.
+          Tomar y armar son procesos independientes. La solicitud y la tarifa ya están reservadas; Almacén prepara todos los paquetes en su propia cola.
         </p>
       </div>
       <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm")}>
@@ -498,9 +504,9 @@ function AcceptedOrders({ orders }: { orders: CourierAcceptedOrder[] }) {
               <th className="px-4 py-3 font-medium">Pedido</th>
               <th className="px-3 py-3 font-medium">Cliente</th>
               <th className="px-3 py-3 font-medium">Salida</th>
-              <th className="px-3 py-3 font-medium">Estado</th>
+              <th className="px-3 py-3 font-medium">Preparación física</th>
               <th className="px-3 py-3 text-right font-medium">Tarifa</th>
-              <th className="px-4 py-3 text-right font-medium">Siguiente paso</th>
+              <th className="px-4 py-3 text-right font-medium">Situación</th>
             </tr>
           </thead>
           <tbody>
@@ -520,13 +526,7 @@ function AcceptedOrders({ orders }: { orders: CourierAcceptedOrder[] }) {
                   </td>
                   <td className="px-3 py-3 text-right font-semibold tabular-nums text-slate-900">{money(order.tariffAmount)}</td>
                   <td className="px-4 py-3 text-right">
-                    {order.shipmentId ? (
-                      <Link href="/dashboard/pedidos/almacen" className="inline-flex h-9 items-center rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                        Ir a Almacén
-                      </Link>
-                    ) : (
-                      <span className="text-xs text-slate-500">Revisar solicitud</span>
-                    )}
+                    <span className="text-xs font-medium text-slate-600">{preparationNextStep(order)}</span>
                   </td>
                 </tr>
               );
