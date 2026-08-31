@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   pickTopWarehouse,
   planTariffUpdates,
+  QUOTE_PAUSE_MS,
   syncAliclikTariffs,
   type ExistingTariff,
   type ObservedRate,
@@ -174,6 +175,7 @@ describe("syncAliclikTariffs: la pasada no se pierde por una racha de 5xx", () =
       },
       "2026-07-29",
       noAdmin,
+      0, // sin pausa: acá se mide el reintento, no el ritmo
     );
     // 2 distritos × 3 intentos del cliente HTTP × 2 vueltas.
     expect(count()).toBe(12);
@@ -196,6 +198,7 @@ describe("syncAliclikTariffs: la pasada no se pierde por una racha de 5xx", () =
       },
       "2026-07-29",
       noAdmin,
+      0, // sin pausa: acá se mide el reintento, no el ritmo
     );
     expect(count()).toBe(1);
     expect(res.failed).toBe(1);
@@ -214,5 +217,95 @@ describe("pickTopWarehouse", () => {
 
   it("sin nada que contar no inventa un almacén", () => {
     expect(pickTopWarehouse(new Map())).toBeUndefined();
+  });
+});
+
+describe("syncAliclikTariffs: las cotizaciones van espaciadas", () => {
+  // POR QUÉ. Las 60 cotizaciones salían pegadas y eso tumbaba la API de Aliclik
+  // un cuarto de hora, todos los días, a la hora exacta de este cron. La sonda
+  // 24/7 lo dejó ver: 3/3 y ~1 s a las 11:25; 0/3 y ~33 s a las 11:30, 11:35 y
+  // 11:40; 3/3 otra vez a las 11:46. Y ya había pasado antes a las 09:30, que era
+  // la hora vieja del cron: los fallos se mudaron con él.
+  const probe = (district: string) => ({
+    district,
+    lat: -6.7813,
+    lng: -79.842,
+    warehouseId: 133,
+    pending: 5,
+  });
+  const noAdmin = null as unknown as Parameters<typeof syncAliclikTariffs>[4];
+
+  /** fetch que anota CUÁNDO se le llamó. Sin cobertura: así la pasada no toca la base. */
+  const timedStub = (status = 200) => {
+    const at: number[] = [];
+    const impl = (async () => {
+      at.push(Date.now());
+      return new Response(JSON.stringify({ couriers: [] }), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    return { impl, at };
+  };
+
+  const run = (probes: ReturnType<typeof probe>[], impl: typeof fetch, pauseMs: number) =>
+    syncAliclikTariffs(
+      "org",
+      probes,
+      { apiToken: "t", baseUrl: "https://api.aliclik-test.local", fetchImpl: impl, egress: "direct", retryBaseMs: 0 },
+      "2026-07-29",
+      noAdmin,
+      pauseMs,
+    );
+
+  it("espera entre una cotización y la siguiente", async () => {
+    const { impl, at } = timedStub();
+    const started = Date.now();
+    await run([probe("A"), probe("B"), probe("C")], impl, 40);
+
+    expect(at).toHaveLength(3);
+    // La PRIMERA sale enseguida: esperar sin nada delante solo alarga la pasada.
+    expect(at[0]! - started).toBeLessThan(30);
+    // Y entre cada par hay pausa.
+    expect(at[1]! - at[0]!).toBeGreaterThanOrEqual(30);
+    expect(at[2]! - at[1]!).toBeGreaterThanOrEqual(30);
+  });
+
+  it("la segunda vuelta tampoco va en ráfaga", async () => {
+    // Si la primera pasada cayó por saturación, rematarla a ritmo de ráfaga es
+    // exactamente lo que no hay que hacer.
+    const { impl, at } = timedStub(500);
+    await run([probe("A"), probe("B")], impl, 40);
+
+    // 2 distritos × 3 intentos del cliente × 2 vueltas.
+    expect(at).toHaveLength(12);
+    // Entre el último intento del distrito A y el primero del B, en CADA vuelta.
+    expect(at[3]! - at[2]!).toBeGreaterThanOrEqual(30); // 1ª vuelta: A→B
+    expect(at[9]! - at[8]!).toBeGreaterThanOrEqual(30); // 2ª vuelta: A→B
+  });
+
+  it("la pausa POR DEFECTO —la que usa el cron— es real", async () => {
+    // Lo que casi se me escapa: todas las pruebas de arriba inyectan su propia
+    // pausa, así que dejar el valor por defecto en 0 las mantendría verdes
+    // mientras producción vuelve a la ráfaga que tumbaba la API. Se fija acá.
+    expect(QUOTE_PAUSE_MS).toBeGreaterThanOrEqual(1_000);
+  });
+
+  it("y el cron no la pisa: usa el valor por defecto", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const source = readFileSync(resolve(process.cwd(), "app/api/cron/aliclik-tariffs/route.ts"), "utf8");
+    const call = source.slice(source.indexOf("syncAliclikTariffs("));
+    const args = call.slice(0, call.indexOf(");"));
+    // orgId, probes, opts, today, admin — y nada más.
+    expect(args).toContain("admin,");
+    expect(args).not.toMatch(/admin,\s*\d/);
+  });
+
+  it("con pausa 0 no espera nada, para que las pruebas no duerman", async () => {
+    const { impl, at } = timedStub();
+    await run([probe("A"), probe("B"), probe("C")], impl, 0);
+    expect(at).toHaveLength(3);
+    expect(at[2]! - at[0]!).toBeLessThan(30);
   });
 });
