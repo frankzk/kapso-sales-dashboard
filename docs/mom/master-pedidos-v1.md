@@ -1307,6 +1307,22 @@ su guía**: un resultado de entrega fallido (`CANCEL`, `ANNULLED`, `REFUSED`,
 `NOT_RESPOND`, `RESCHEDULED`) con un despacho que no diga que el paquete nunca
 salió del almacén de origen.
 
+**Aparecen en la MISMA cola de Pendiente**, no en una pestaña propia: son la
+misma pregunta —a quién hay que llamar— y esta sección las lista junto a las
+demás entradas elegibles. Se acotan con el chip **«Por recuperar»** de la fila
+de filtros. Una pestaña más sería un balde más que nadie mira, que es el mismo
+motivo por el que los segmentos de leads se fusionaron.
+
+La consulta va **acotada por ventana** —la misma anchura que usa la pantalla de
+recuperación, `RECOVERY_DEFAULT_MAX_DAYS * 2`— porque el conjunto «cerradas de
+Aliclik» crece sin fin. Se consulta más ancho que la elegibilidad a propósito:
+para poder MOSTRAR las vencidas con su motivo en vez de esconderlas.
+
+La lista y el contador salen de la MISMA llamada. El conteo no puede ser un
+`COUNT` exacto porque el predicado necesita partir `reported_status` y eso se
+resuelve en memoria; dos caminos distintos para el número y las filas es cómo
+el chip acaba diciendo una cosa y la tabla otra.
+
 Sobre esos pedidos **se puede crear una salida Swayp aunque estén cerrados**,
 que es lo que da sentido al stock puesto en provincia. Medido al abrirlo: 844
 guías así sobre 842 pedidos; 456 con 15 días o menos, y 254 de la última semana

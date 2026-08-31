@@ -13,6 +13,8 @@
 // the report already says ENTREGADO. The `pendiente` queue is split in the UI by
 // `fenix_eligible` (only guides with Fenix stock in their city are worked).
 
+import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
+
 export type ShipmentCategory = "pending" | "in_route" | "delivered" | "closed" | "transferred";
 
 /**
@@ -76,6 +78,30 @@ export function esperaSalidaDeAliclik(
   return (
     (courier ?? "").trim().toLowerCase() === "aliclik" &&
     (custodyState ?? "").trim().toLowerCase() === "empresa"
+  );
+}
+
+/**
+ * ¿Esta fila está en la cola PORQUE Aliclik la cerró sin entregar?
+ *
+ * Es el chip «Por recuperar». La guía está `closed` —terminó de verdad— pero el
+ * PEDIDO sigue vivo y admite una salida Swayp desde el stock de provincia
+ * (MOM §11). Van en la misma cola que el resto, no en una pestaña aparte: es la
+ * misma pregunta, a quién hay que llamar, y el MOM las lista junto a las demás
+ * entradas elegibles. El chip solo las acota.
+ *
+ * El vocabulario de Aliclik NO se repite acá: se delega en
+ * `etiquetaDiceTerminoSinEntregar`, que vive junto al código que escribe esa
+ * etiqueta. Acá solo se añade la condición de que la guía esté cerrada — una
+ * abierta ya está en la cola por su propio estado y no es «por recuperar».
+ */
+export function esPorRecuperar(row: {
+  status_category?: string | null;
+  reported_status?: string | null;
+}): boolean {
+  return (
+    (row.status_category ?? "") === "closed" &&
+    etiquetaDiceTerminoSinEntregar(row.reported_status)
   );
 }
 

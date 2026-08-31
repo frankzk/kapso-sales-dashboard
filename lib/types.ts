@@ -270,6 +270,10 @@ export interface ShipmentRow {
   qr_token?: string | null;
   preparation_state?: string | null;
   custody_state?: string | null;
+  /** Etiqueta cruda de Aliclik («CANCEL · RETURNED · CONFIRMED»). Es lo único
+   *  que distingue una guía cerrada porque la entrega FALLÓ —y cuyo pedido
+   *  todavía merece otra salida— de una cerrada por decisión nuestra. */
+  reported_status?: string | null;
   ready_at?: string | null;
   ready_by?: string | null;
   custody_transferred_at?: string | null;

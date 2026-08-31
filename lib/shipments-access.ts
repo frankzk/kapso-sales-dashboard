@@ -22,6 +22,8 @@ import {
   type ReprogramChildRow,
   type ReprogramStats,
 } from "@/lib/shipments";
+import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
+import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
@@ -58,14 +60,14 @@ export function isShipmentView(v: string | undefined | null): v is ShipmentView 
 }
 
 const SHIPMENT_COLUMNS =
-  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_eligible,fenix_shipment_id,swayp_guide,swayp_state,created_via,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
+  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_eligible,fenix_shipment_id,swayp_guide,swayp_state,created_via,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,reported_status,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
 // Deployment safety: application deploys and database migrations are separate
 // operations in production. Keep queue reads alive while 0038 is being applied;
 // otherwise PostgREST rejects the whole select and every tab appears empty even
 // though the count queries still show rows.
 const LEGACY_SHIPMENT_COLUMNS =
-  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,delivered_source,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
+  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,delivered_source,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,reported_status,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
 const SHIPMENT_LIST_COLUMNS = `${SHIPMENT_COLUMNS},shipment_calls(count)`;
 const LEGACY_SHIPMENT_LIST_COLUMNS = `${LEGACY_SHIPMENT_COLUMNS},shipment_calls(count)`;
@@ -355,6 +357,52 @@ const YA_SALIO_O_NO_ES_ALICLIK = "courier.neq.aliclik,custody_state.neq.empresa"
  * La pregunta que responde el recorte —«¿hay algo que reprogramar?»— solo tiene
  * sentido sobre lo que está pendiente.
  */
+/**
+ * Guías que Aliclik cerró SIN entregar y cuyo pedido todavía merece un intento.
+ *
+ * POR QUÉ ES UNA CONSULTA APARTE. El MOM §11 las nombra como entrada elegible a
+ * Reproprovincia, pero están `closed` y la cola mira `pending`. No se puede
+ * pedir en la misma consulta porque el predicado necesita PARTIR
+ * `reported_status`, y escribir eso en PostgREST obligaría a repetir el
+ * vocabulario de Aliclik en un segundo sitio — que es el fallo que este repo
+ * repite. Así el vocabulario vive en UN archivo, `lib/aliclik-status.ts`.
+ *
+ * El conjunto está ACOTADO por la ventana, no crece sin fin: se piden las
+ * cerradas de Aliclik de los últimos `RECOVERY_DEFAULT_MAX_DAYS * 2` días y se
+ * filtran acá. Es la misma anchura que usa la pantalla de recuperación, y por la
+ * misma razón: se consulta más ancho que la elegibilidad para poder MOSTRAR las
+ * vencidas con su motivo, en vez de esconderlas. Medido al abrirlo: 844 guías,
+ * de las que solo 1 pasaba de 60 días.
+ *
+ * Devuelve las filas —no un conteo— porque la lista y el chip salen de ACÁ, de
+ * la misma llamada. Un `head:true` no puede contar lo que hay que filtrar en
+ * memoria, y dos caminos distintos para el número y las filas es exactamente
+ * cómo el chip acaba diciendo una cosa y la tabla otra.
+ */
+async function guiasPorRecuperar(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: string[],
+  columns: string,
+): Promise<ShipmentWithCallCount[]> {
+  const desdeIso = new Date(
+    Date.now() - RECOVERY_DEFAULT_MAX_DAYS * 2 * 86_400_000,
+  ).toISOString();
+  const { data, error } = await sb
+    .from("shipments")
+    .select(columns)
+    .in("store_id", storeIds)
+    .eq("status_category", "closed")
+    .eq("courier", "aliclik")
+    .gte("updated_at", desdeIso)
+    .eq("shipment_calls.kind", "call")
+    .order("updated_at", { ascending: false })
+    .limit(PAGE);
+  if (error) return [];
+  return ((data as unknown as ShipmentWithCallCount[]) ?? []).filter((row) =>
+    etiquetaDiceTerminoSinEntregar(row.reported_status),
+  );
+}
+
 export function esColaDeReprogramacion(cats: string[]): boolean {
   return cats.length === 1 && cats[0] === "pending";
 }
@@ -395,6 +443,13 @@ export async function getStoreShipments(
     const rows = ((page.data as unknown as ShipmentWithCallCount[]) ?? []).map(withContactCount);
     out.push(...rows);
     if (rows.length < PAGE) break;
+  }
+  // Las cerradas SIN entregar entran a la misma cola (MOM §11), no a una
+  // pestaña aparte: son la misma pregunta —«¿a quién hay que llamar?»— y el
+  // documento las lista junto a las demás entradas. Se distinguen con el chip
+  // «Por recuperar», no partiendo la cola en dos.
+  if (esColaDeReprogramacion(cats)) {
+    out.push(...(await guiasPorRecuperar(sb, storeIds, SHIPMENT_LIST_COLUMNS)).map(withContactCount));
   }
   // "Última gestión" applies to every view (how long a guide has gone without
   // our team touching it).
@@ -457,7 +512,16 @@ export async function getShipmentCounts(
         .or("match_method.is.null,match_method.neq.dismissed");
       return count ?? 0;
     })(),
-    countByCategory(sb, storeIds, ["pending"]),
+    (async () => {
+      // El chip suma las dos mitades porque la tabla muestra las dos. Sale de la
+      // MISMA función que la lista: contar por otro camino es cómo el número
+      // acaba diciendo una cosa y las filas otra.
+      const [pendientes, recuperables] = await Promise.all([
+        countByCategory(sb, storeIds, ["pending"]),
+        guiasPorRecuperar(sb, storeIds, "id,courier,reported_status"),
+      ]);
+      return pendientes + recuperables.length;
+    })(),
     countByCategory(sb, storeIds, ["in_route"]),
     countByCategory(sb, storeIds, ["delivered"]),
     countByCategory(sb, storeIds, ["closed"]),
