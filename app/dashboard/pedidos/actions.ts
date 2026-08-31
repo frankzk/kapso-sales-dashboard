@@ -30,6 +30,7 @@ import {
   isTerminalGeneral,
   type GeneralStatus,
 } from "@/lib/order-status";
+import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 import {
@@ -299,9 +300,6 @@ export async function createManualRouteOutput(
 
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
-  if (isTerminalGeneral(ctx.row.general_status)) {
-    return { error: "El pedido está cerrado. Reábrelo antes de crear otra salida." };
-  }
 
   const dispatchDate = input.dispatchDate.trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dispatchDate)) {
@@ -310,12 +308,33 @@ export async function createManualRouteOutput(
   if (dispatchDate < limaTodayKey()) return { error: "La fecha de salida no puede estar en el pasado." };
 
   const admin = createAdminSupabase();
+  // Las salidas se leen ANTES del cierre a propósito: para saber si un pedido
+  // cerrado merece otro intento hay que preguntarle a su guía POR QUÉ se cerró.
   const { data: existing, error: existingError } = await admin
     .from("shipments")
-    .select("id,courier,delivery_status,custody_state")
+    .select("id,courier,delivery_status,custody_state,reported_status")
     .eq("order_id", orderId)
     .order("created_at", { ascending: true });
   if (existingError) return { error: existingError.message };
+
+  // UN PEDIDO CERRADO PORQUE LA ENTREGA FALLÓ SÍ MERECE OTRA SALIDA. El MOM §11
+  // nombra «guía cancelada por courier y devolución» como entrada elegible a
+  // Reproprovincia, y su sección de Swayp dice que «una salida Swayp puede
+  // coexistir con la devolución Aliclik». Pero una devolución deja el pedido en
+  // `devuelto` —terminal— y este guarda lo bloqueaba: con stock ya puesto en
+  // provincia, no había forma de emitir la Swayp que lo aprovechara. Eran 844
+  // guías sobre 842 pedidos.
+  //
+  // El guarda NO se quita: sigue vivo para lo que sí está cerrado de verdad. Lo
+  // que se distingue es POR QUÉ se cerró, y eso no lo dice el estado del pedido
+  // —`anulado` cubre tanto «lo canceló el courier» como «lo cancelamos nosotros»—
+  // sino la etiqueta que Aliclik puso en la guía.
+  const cerradoPorEntregaFallida = ((existing ?? []) as { reported_status?: string | null }[]).some(
+    (o) => etiquetaDiceTerminoSinEntregar(o.reported_status),
+  );
+  if (isTerminalGeneral(ctx.row.general_status) && !cerradoPorEntregaFallida) {
+    return { error: "El pedido está cerrado. Reábrelo antes de crear otra salida." };
+  }
   const outputs = (existing ?? []) as {
     id: string;
     courier: string;

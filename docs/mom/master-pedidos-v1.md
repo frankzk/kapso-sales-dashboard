@@ -1294,6 +1294,25 @@ Responsables: Akemi y Mariannys. Akemi es la jefa de Mariannys.
 Entrada elegible desde Aliclik: no contesta, intento fallido, rechazo sujeto a
 revisión, guía cancelada por courier y devolución.
 
+**Una guía cerrada NO cierra el pedido.** Las dos últimas entradas de esa lista
+—cancelada por courier y devolución— cierran la GUÍA: esa guía sí terminó, el
+paquete sí volvió, y `returned_at` se sella. Lo que sigue vivo es el PEDIDO. Por
+eso el estado de la guía no se falsea para que reaparezca: falsearlo rompería el
+registro de lo que de verdad pasó, y las otras pestañas son ese registro.
+
+Lo que distingue a un pedido cerrado que merece otro intento de uno cerrado de
+verdad **no es el estado del pedido** —`anulado` cubre tanto «lo canceló el
+courier» como «lo cancelamos nosotros»— **sino la etiqueta que Aliclik puso en
+su guía**: un resultado de entrega fallido (`CANCEL`, `ANNULLED`, `REFUSED`,
+`NOT_RESPOND`, `RESCHEDULED`) con un despacho que no diga que el paquete nunca
+salió del almacén de origen.
+
+Sobre esos pedidos **se puede crear una salida Swayp aunque estén cerrados**,
+que es lo que da sentido al stock puesto en provincia. Medido al abrirlo: 844
+guías así sobre 842 pedidos; 456 con 15 días o menos, y 254 de la última semana
+todavía de camino de vuelta — el momento en que llamar sirve más, porque el
+paquete sigue cerca de la clienta.
+
 **Segmentos de la cola de leads.** Un lead cae en UN solo balde, primera
 coincidencia gana: `carrito` → `interes` → `converso` → `frio`.
 

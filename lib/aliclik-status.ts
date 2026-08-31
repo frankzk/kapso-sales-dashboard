@@ -372,3 +372,52 @@ export function aliclikStatusLabel(input: AliclikStatusInput): string {
     .filter(Boolean)
     .join(" · ");
 }
+
+/**
+ * ¿Esta guía de Aliclik terminó SIN entregar, y por lo tanto el pedido todavía
+ * merece un intento?
+ *
+ * POR QUÉ EXISTE. El MOM §11 nombra como entrada elegible a Reproprovincia
+ * «no contesta, intento fallido, rechazo sujeto a revisión, GUÍA CANCELADA POR
+ * COURIER y DEVOLUCIÓN», y la sección de Swayp añade que «una salida Swayp puede
+ * coexistir con la devolución Aliclik». Pero el mapeo cierra la guía —con razón,
+ * esa guía SÍ terminó— y la cola filtra por guías abiertas, así que justo las dos
+ * últimas entradas que el documento nombra eran las que nunca llegaban.
+ *
+ * El efecto se veía en el almacén: 844 guías cerradas así, sobre 842 pedidos, con
+ * stock ya puesto en provincia y sin forma de emitir la Swayp que lo aprovechara.
+ * Y 254 de la última semana ni siquiera habían vuelto todavía —van de camino—,
+ * que es cuando llamar sirve más porque el paquete sigue cerca de la clienta.
+ *
+ * LO QUE SIGUE VIVO ES EL PEDIDO, NO LA GUÍA. Por eso esto NO cambia el mapeo:
+ * la guía se sigue cerrando y `returned_at` se sigue sellando. Lo único que hace
+ * es responder si el PEDIDO merece volver a la cola. Falsear el estado de la guía
+ * para que reaparezca habría roto el registro de lo que de verdad pasó.
+ *
+ * DELIVERED NO ENTRA, obviamente: esa terminó bien. Tampoco entra un `status`
+ * vacío —sin resultado de entrega no se sabe si salió— ni un despacho que diga
+ * que el paquete jamás se movió del almacén de origen.
+ */
+export function aliclikTerminoSinEntregar(input: AliclikStatusInput): boolean {
+  const status = norm(input.status);
+  const dispatch = norm(input.dispatchStatus);
+  // El resultado de la ENTREGA es lo que acredita que salió y falló. Se reusa
+  // `ATTEMPTED_DELIVERY` —la misma lista que ya desambigua LEFT_IN_WAREHOUSE—
+  // para no tener dos definiciones de «el intento falló» que puedan divergir.
+  if (!ATTEMPTED_DELIVERY.has(status)) return false;
+  // `PREPARED`/`TO_PREPARE` significan que nunca salió: si el status dice que
+  // falló un intento, el dato se contradice y no se adivina.
+  return dispatch !== "TO_PREPARE" && dispatch !== "PREPARED";
+}
+
+/**
+ * Lo mismo, leyendo la etiqueta tal como se guarda en `shipments.reported_status`.
+ *
+ * El separador vive acá y no en quien pregunta: `aliclikStatusLabel` es quien la
+ * arma, así que el formato lo conoce UN solo archivo. Si mañana cambia, cambia
+ * en un sitio y no en cada sitio que quiso leerla.
+ */
+export function etiquetaDiceTerminoSinEntregar(reportedStatus: string | null | undefined): boolean {
+  const [status = "", dispatchStatus = ""] = (reportedStatus ?? "").split(" · ");
+  return aliclikTerminoSinEntregar({ status, dispatchStatus });
+}
