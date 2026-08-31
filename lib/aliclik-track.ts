@@ -303,6 +303,44 @@ export async function applyAliclikSnapshot(
   const { error: upErr } = await admin.from("shipments").update(patch).eq("id", shipment.id);
   if (upErr) return { ok: false, outcome: "error", error: upErr.message };
 
+  // DEJAR CONSTANCIA EN EL PEDIDO, no solo en la guía.
+  //
+  // Hasta acá este barrido escribía en `shipments` y nada más: el pedido cambiaba
+  // de estado —incluso se cerraba— sin una línea en su historial. Se vio en
+  // #KP131561, una venta cerrada por la asesora que Aliclik anuló 33 segundos
+  // después de crear la guía: la pestaña Actividad mostraba la llamada, la venta
+  // y la guía, pero NO que se había anulado. El dato más importante de ese pedido
+  // era justo el que faltaba, y quien lo abría no tenía cómo saber qué pasó.
+  //
+  // Medido: Shalom llevaba 2.241 eventos `courier_status` y Aliclik 0. Es la
+  // misma información y el mismo courier de contraentrega; no había razón para
+  // que uno dejara rastro y el otro no.
+  //
+  // SOLO EN LA TRANSICIÓN. El barrido relee las mismas guías cada pocos minutos:
+  // escribir en cada pasada llenaría el historial de líneas idénticas y lo haría
+  // ilegible, que es la otra forma de perder la información.
+  //
+  // La nota lleva la etiqueta CRUDA de Aliclik además del estado nuestro, porque
+  // el motivo vive ahí: «anulado» a secas no distingue quién lo anuló ni por qué,
+  // y `ANNULLED` en el tercer campo dice que fue su llamada y no su reparto.
+  if (shipment.order_id && next !== shipment.delivery_status) {
+    const etiqueta = aliclikStatusLabel(order).trim();
+    await admin.from("order_events").insert({
+      store_id: shipment.store_id,
+      order_id: shipment.order_id,
+      kind: "courier_status",
+      occurred_at: updatedAt ?? nowIso,
+      actor: null,
+      source: "aliclik",
+      courier: "aliclik",
+      guide_code: shipment.guide_code,
+      previous_status: shipment.delivery_status,
+      new_status: next,
+      new_operational: mapped.operational ?? null,
+      note: `Aliclik: ${next}${etiqueta ? ` · ${etiqueta}` : ""}.`,
+    });
+  }
+
   // El Master se recalcula desde las guías; sin esto el cambio no se vería en
   // /dashboard/pedidos. `Safe` no lanza: un fallo de recálculo no debe deshacer
   // un estado ya escrito.
