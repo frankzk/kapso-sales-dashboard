@@ -83,10 +83,11 @@ export function resolveDistrictTariff(
   };
 }
 
-/** Solo entrega y rechazo generan tarifa. El rechazo cobra una vez por ruta/día. */
+/** Solo entrega y rechazo generan tarifa; ambos usan el mismo importe distrital. */
 export function tariffForOutcome(tariff: DistrictTariffRow, outcome: CourierOutcome): number {
-  if (outcome === "entregado") return money(tariff.delivery_amount);
-  if (outcome === "rechazado") return money(tariff.rejection_amount);
+  if (outcome === "entregado" || outcome === "rechazado") {
+    return money(tariff.delivery_amount);
+  }
   return 0;
 }
 

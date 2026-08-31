@@ -285,7 +285,6 @@ export interface DistrictTariffInput {
   districtKey: string;
   zone?: string | null;
   deliveryAmount: number | string;
-  rejectionAmount: number | string;
   effectiveFrom: string;
 }
 
@@ -295,8 +294,7 @@ export async function saveDistrictTariff(
   const auth = await requireManager(input.orgId);
   if ("error" in auth) return auth;
   const delivery = amount(input.deliveryAmount);
-  const rejection = amount(input.rejectionAmount);
-  if (delivery == null || rejection == null) return { error: "Completa ambos importes." };
+  if (delivery == null) return { error: "Completa la tarifa." };
   if (!DATE_RE.test(input.effectiveFrom)) return { error: "Fecha de vigencia inválida." };
   const admin = createAdminSupabase();
 
@@ -354,7 +352,7 @@ export async function saveDistrictTariff(
     district_key: input.districtKey,
     zone: input.zone?.trim() || null,
     delivery_amount: delivery,
-    rejection_amount: rejection,
+    rejection_amount: delivery,
     includes_igv: true,
     effective_from: input.effectiveFrom,
     created_by: auth.userId,

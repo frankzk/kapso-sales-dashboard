@@ -189,13 +189,12 @@ function TariffMatrix({
       </section>
 
       <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm")}>
-        <table className="w-full min-w-[880px] text-sm">
+        <table className="w-full min-w-[760px] text-sm">
           <thead className={STICKY_HEAD}>
             <tr className="text-left text-xs text-slate-500">
               <th className="px-4 py-3 font-medium">Distrito</th>
               <th className="px-3 py-3 font-medium">Zona</th>
-              <th className="px-3 py-3 text-right font-medium">Entrega</th>
-              <th className="px-3 py-3 text-right font-medium">Rechazo</th>
+              <th className="px-3 py-3 text-right font-medium">Entrega o rechazo</th>
               <th className="px-3 py-3 font-medium">Origen</th>
               <th className="px-4 py-3 text-right font-medium">Acción</th>
             </tr>
@@ -216,7 +215,7 @@ function TariffMatrix({
               />
             ))}
             {!districts.length && (
-              <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-500">Ningún distrito coincide con la búsqueda.</td></tr>
+              <tr><td colSpan={5} className="px-4 py-10 text-center text-sm text-slate-500">Ningún distrito coincide con la búsqueda.</td></tr>
             )}
           </tbody>
         </table>
@@ -264,7 +263,6 @@ function TariffRow({
   const tariff = resolution.kind === "found" ? resolution.tariff : null;
   const [zone, setZone] = useState(tariff?.zone ?? "");
   const [delivery, setDelivery] = useState(tariff ? String(tariff.delivery_amount) : "");
-  const [rejection, setRejection] = useState(tariff ? String(tariff.rejection_amount) : "");
   const inherited = agreementId != null && resolution.kind === "found" && resolution.source === "general";
 
   return (
@@ -285,10 +283,7 @@ function TariffRow({
         />
       </td>
       <td className="px-3 py-3 text-right">
-        <MoneyInput label={`Tarifa de entrega en ${district.district}`} value={delivery} onChange={setDelivery} />
-      </td>
-      <td className="px-3 py-3 text-right">
-        <MoneyInput label={`Tarifa de rechazo en ${district.district}`} value={rejection} onChange={setRejection} />
+        <MoneyInput label={`Tarifa de entrega o rechazo en ${district.district}`} value={delivery} onChange={setDelivery} />
       </td>
       <td className="px-3 py-3">
         {resolution.kind === "missing" ? (
@@ -302,7 +297,7 @@ function TariffRow({
       <td className="px-4 py-3 text-right">
         <button
           type="button"
-          disabled={pending || delivery.trim() === "" || rejection.trim() === ""}
+          disabled={pending || delivery.trim() === ""}
           onClick={() => onSave({
             orgId,
             providerId,
@@ -310,7 +305,6 @@ function TariffRow({
             districtKey: district.district_key,
             zone,
             deliveryAmount: delivery,
-            rejectionAmount: rejection,
             effectiveFrom,
           })}
           className="h-9 rounded-lg px-3 text-sm font-semibold text-brand-700 transition hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:text-slate-300"

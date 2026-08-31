@@ -3257,7 +3257,7 @@ Catálogo inicial y regla de cobro:
 | Resultado | Costo de envío |
 | --- | --- |
 | Entregado | Tarifa del distrito |
-| Rechazado por el cliente | Tarifa de rechazo, una vez por pedido y ruta/día |
+| Rechazado por el cliente | Misma tarifa distrital que una entrega, una vez por pedido y ruta/día |
 | No responde | S/ 0 |
 | Cliente ausente | S/ 0 |
 | Dirección incorrecta | S/ 0; Grupo GF absorbe el intento y se identifica la falla de origen |
@@ -3279,8 +3279,7 @@ existir una tabla configurable, no constantes en código:
 | --- | --- |
 | Distrito | Ubigeo oficial; no texto libre como identidad |
 | Zona | Agrupación opcional para edición masiva |
-| Tarifa de entrega | Importe incluido IGV |
-| Tarifa de rechazo | Importe incluido IGV |
+| Tarifa de entrega o rechazo | Un solo importe incluido IGV; ambos resultados cobran exactamente lo mismo |
 | Tienda | Nula = general; informada = excepción contractual |
 | Vigencia | Desde/hasta; una edición abre otra vigencia |
 | Estado | Activa/inactiva, sin borrar historial |

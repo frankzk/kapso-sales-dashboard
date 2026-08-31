@@ -80,7 +80,7 @@ describe("tarifas configurables de Grupo GF Courier", () => {
 
   it("cobra solo entrega y rechazo", () => {
     expect(tariffForOutcome(base, "entregado")).toBe(10);
-    expect(tariffForOutcome(base, "rechazado")).toBe(8);
+    expect(tariffForOutcome(base, "rechazado")).toBe(10);
     expect(tariffForOutcome(base, "no_responde")).toBe(0);
     expect(tariffForOutcome(base, "direccion_incorrecta")).toBe(0);
     expect(tariffForOutcome(base, "cancelado")).toBe(0);
