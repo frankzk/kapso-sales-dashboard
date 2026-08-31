@@ -14,6 +14,7 @@ import {
   isRole,
   type MemberLite,
 } from "@/lib/team";
+import { GROUP_GF_RIDER_COURIER } from "@/lib/couriers/catalog";
 
 export interface TeamActionState {
   error?: string;
@@ -337,7 +338,7 @@ export interface RiderInput {
   orgId: string;
   id?: string | null;
   storeId?: string | null;
-  courier?: string | null; // vacío = motorizado propio
+  courier?: string | null; // vacío conserva compatibilidad y se formaliza como Grupo GF Courier
   fullName: string;
   docNumber?: string | null;
   phone?: string | null;
@@ -360,7 +361,7 @@ export async function saveRider(input: RiderInput): Promise<TeamActionState> {
   const admin = createAdminSupabase();
   const fields = {
     store_id: input.storeId || null,
-    courier: cleanText(input.courier),
+    courier: cleanText(input.courier) ?? GROUP_GF_RIDER_COURIER,
     full_name: fullName,
     doc_number: cleanText(input.docNumber),
     phone: cleanText(input.phone),

@@ -3184,6 +3184,14 @@ en la ruta planificada, pero no puede superar el cotejo ni transferir custodia
 hasta existir físicamente. La bandeja enlaza directamente la ruta/caja en la Mesa
 de despacho para continuar ese cotejo sin volver a seleccionar los pedidos.
 
+La operación se lee en dos niveles. `Pedidos tomados` separa **Sin ruta**,
+**Asignados**, **Pendientes de armado** y **Listos para cotejo** sin duplicar
+estados persistidos. `Rutas operativas` agrupa por manifiesto/motorizado y fecha,
+y muestra cuatro contadores distintos: asignados, armados por Almacén, cotejados
+en oficina y recibidos por el motorizado. El porcentaje visible corresponde al
+primer cotejo físico, no al mero armado ni a la planificación. Desde cada fila
+se abre el manifiesto exacto en Mesa de despacho.
+
 `Tomar pedidos` crea o reutiliza una **solicitud logística** idempotente, congela
 contrato, tarifa, distrito y fecha prevista, y recién entonces crea la salida.
 Si Kapta ya había creado una salida `por definir`, se rellena esa misma fila y
@@ -3216,6 +3224,12 @@ Durante la transición, las salidas de Grupo GF siguen guardando el token legado
 interfaz ya las nombra **Grupo GF Courier**. El token se reemplazará por el
 `provider_id` estable al ejecutar el paso 2 de §29.11, con migración auditada y
 sin reescribir el historial.
+
+Las fichas de `riders` ya usan **Grupo GF Courier** como empresa operadora para
+altas y ediciones nuevas. Un `courier` nulo, vacío, `propio` o
+`motorizado propio` sigue siendo un alias histórico de la misma afiliación. Esta
+compatibilidad permite conservar `riders.id`, usuarios vinculados, rutas y
+liquidaciones; la normalización del texto no crea una segunda ficha.
 
 Shopify continúa siendo la única fuente de **pedidos comerciales administrados
 por Kapta** (§2). Una solicitud recibida directamente por API o Excel es una
@@ -3428,7 +3442,10 @@ anterior, actor, motivo y fecha como ya exige §14.
 El orden obligatorio evita reescribir las pantallas sobre identidades ambiguas:
 
 1. Crear operador, tienda cliente, contrato, tarifa y comisión con vigencia.
-2. Migrar «motorizados propios» a Grupo GF Courier conservando ids e historial.
+2. Formalizar «motorizados propios» como Grupo GF Courier conservando ids e
+   historial. **Compatibilidad aplicada:** nuevas altas/ediciones guardan la
+   afiliación formal y las fichas antiguas nulas siguen resolviendo al mismo
+   operador; no se duplican personas ni rutas.
 3. Vincular ruta diaria, cargas/manifiestos y paradas; retirar la doble verdad
    entre `delivery_routes` y `dispatch_manifests` solo después de comprobarla.
 4. Implementar doble liquidación y límites de efectivo.

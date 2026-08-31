@@ -756,7 +756,7 @@ function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchR
                 className="h-11 w-full rounded-xl border border-slate-200 px-3"
               >
                 <option value="">Elige con quién sale</option>
-                <optgroup label="Motorizados propios">
+                <optgroup label="Grupo GF Courier">
                   {own.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
