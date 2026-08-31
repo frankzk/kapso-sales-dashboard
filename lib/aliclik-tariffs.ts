@@ -239,12 +239,41 @@ async function loadLiveDistrictTariffs(
  * pedidos esperando, que son los que más mueven el margen, y el resto entra en
  * pasadas siguientes.
  */
+/**
+ * Pausa entre cotizaciones.
+ *
+ * POR QUÉ EXISTE. Las 60 cotizaciones salían pegadas —un `await` detrás de
+ * otro— y eso tumbaba la API de Aliclik durante un cuarto de hora, TODOS LOS
+ * DÍAS, a la hora exacta de este cron. Con la sonda de salud corriendo 24/7 se
+ * vio limpio: operativa a las 11:25 (3/3, ~1 s de latencia), muerta a las 11:30,
+ * 11:35 y 11:40 (0/3, ~33 s = timeouts), y operativa otra vez a las 11:46.
+ *
+ * Y NO ES LA PRIMERA VEZ. Cuando este cron corría a las 09:30 UTC, los fallos en
+ * masa caían a las 09:30 — el 29/07 y el 17/08, con fechas en el comentario de
+ * abajo. Se leyó como la ventana de mantenimiento de Aliclik y se movió el cron
+ * a las 11:30. Los fallos se mudaron con él. No era su mantenimiento: era esta
+ * ráfaga, y moverla de hora solo cambió a quién le tocaba sufrirla.
+ *
+ * MIENTRAS DURA, TODO LO DEMÁS FALLA: la sonda, el barrido de `aliclik-close` y
+ * —lo caro— la creación de guías, porque comparten la misma API.
+ *
+ * DOS SEGUNDOS ES UN NÚMERO PRUDENTE, NO UNO MEDIDO: sus límites de tasa no
+ * están documentados y no los conocemos. Baja el ritmo de ~1 petición por
+ * segundo a una cada tres, y deja la pasada en ~3 min, cómodamente dentro del
+ * `maxDuration` de 300 s. Si la ventana diaria persiste, el siguiente escalón es
+ * bajar `BATCH` — no volver a mover la hora, que ya se probó.
+ */
+export const QUOTE_PAUSE_MS = 2_000;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export async function syncAliclikTariffs(
   orgId: string,
   probes: readonly DistrictProbe[],
   opts: AliclikClientOpts,
   today: string,
   admin: SupabaseClient = createAdminSupabase(),
+  pauseMs: number = QUOTE_PAUSE_MS,
 ): Promise<TariffSyncResult> {
   const out: TariffSyncResult = {
     ok: true,
@@ -285,8 +314,11 @@ export async function syncAliclikTariffs(
     return "ok";
   };
 
+  // La pausa va ENTRE cotizaciones, no antes de la primera ni después de la
+  // última: esperar sin nada delante ni detrás solo alarga la pasada.
   const retry: DistrictProbe[] = [];
-  for (const p of probes) {
+  for (const [i, p] of probes.entries()) {
+    if (i > 0 && pauseMs > 0) await sleep(pauseMs);
     const r = await attempt(p);
     if (r === "retry") retry.push(p);
     else if (r === "failed") out.failed += 1;
@@ -316,7 +348,10 @@ export async function syncAliclikTariffs(
   // primero mañana. Esto solo evita perder la pasada entera.
   if (retry.length) {
     out.errors.push(`Segunda vuelta para ${retry.length} distrito(s) que fallaron.`);
-    for (const p of retry) {
+    // La segunda vuelta también se espacia: si la primera cayó por saturación,
+    // volver a rematarla a ritmo de ráfaga es exactamente lo que no hay que hacer.
+    for (const [i, p] of retry.entries()) {
+      if (i > 0 && pauseMs > 0) await sleep(pauseMs);
       if ((await attempt(p)) !== "ok") out.failed += 1;
     }
   }
