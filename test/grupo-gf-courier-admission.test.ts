@@ -32,5 +32,15 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
     expect(action).toContain("Se reutilizó la salida existente y su QR.");
     expect(action).toContain("reusedOutput: write.filled");
   });
-});
 
+  it("prioriza pedidos que nunca tuvieron un despacho físico", () => {
+    const action = readFileSync(resolve(root, "app/dashboard/courier/actions.ts"), "utf8");
+    const courier = readFileSync(resolve(root, "components/grupo-gf-courier.tsx"), "utf8");
+    const mom = readFileSync(resolve(root, "docs/mom/master-pedidos-v1.md"), "utf8");
+    expect(action).toContain('.not("dispatched_at", "is", null)');
+    expect(action).toContain("hasPriorDispatch: lastDispatchByOrder.has(order.order_id)");
+    expect(courier).toContain("Prioridad urgente · nunca salieron");
+    expect(courier).toContain("Con salida previa");
+    expect(mom).toContain("Crear o anular un rótulo sin transferir físicamente");
+  });
+});

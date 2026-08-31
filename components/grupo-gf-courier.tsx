@@ -210,17 +210,30 @@ function AvailableOrders({
   run: (action: () => Promise<CourierActionResult>) => void;
 }) {
   const searchParams = useSearchParams();
-  const [query, setQuery] = useState(searchParams.get("pedido") ?? "");
+  const requestedOrderId = searchParams.get("pedido") ?? "";
+  const requestedOrder = orders.find((order) => order.orderId === requestedOrderId);
+  const [query, setQuery] = useState(requestedOrderId);
+  const [segment, setSegment] = useState<"never_dispatched" | "prior_dispatch">(
+    requestedOrder?.hasPriorDispatch ? "prior_dispatch" : "never_dispatched",
+  );
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const segmentCounts = useMemo(() => ({
+    neverDispatched: orders.filter((order) => !order.hasPriorDispatch).length,
+    priorDispatch: orders.filter((order) => order.hasPriorDispatch).length,
+  }), [orders]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("es");
-    if (!needle) return orders;
-    return orders.filter((order) =>
-      `${order.orderId} ${order.orderName} ${order.customerName} ${order.customerPhone ?? ""} ${order.district} ${order.storeName}`
-        .toLocaleLowerCase("es")
-        .includes(needle),
-    );
-  }, [orders, query]);
+    return orders.filter((order) => {
+      const belongsToSegment = segment === "never_dispatched"
+        ? !order.hasPriorDispatch
+        : order.hasPriorDispatch;
+      if (!belongsToSegment) return false;
+      if (!needle) return true;
+      return `${order.orderId} ${order.orderName} ${order.customerName} ${order.customerPhone ?? ""} ${order.district} ${order.storeName}`
+          .toLocaleLowerCase("es")
+          .includes(needle);
+    });
+  }, [orders, query, segment]);
   const visibleIds = filtered.map((order) => order.orderId);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
 
@@ -270,6 +283,39 @@ function AvailableOrders({
           />
         </label>
       </div>
+
+      <div className="border-b border-slate-200" role="tablist" aria-label="Prioridad de pedidos disponibles">
+        <div className="flex flex-wrap gap-6">
+          <AvailabilitySegmentTab
+            active={segment === "never_dispatched"}
+            label="Prioridad urgente · nunca salieron"
+            count={segmentCounts.neverDispatched}
+            onClick={() => {
+              setSegment("never_dispatched");
+              setSelected(new Set());
+            }}
+          />
+          <AvailabilitySegmentTab
+            active={segment === "prior_dispatch"}
+            label="Con salida previa"
+            count={segmentCounts.priorDispatch}
+            onClick={() => {
+              setSegment("prior_dispatch");
+              setSelected(new Set());
+            }}
+          />
+        </div>
+      </div>
+      <p className={cn(
+        "rounded-lg px-3 py-2 text-xs leading-5",
+        segment === "never_dispatched"
+          ? "bg-amber-50 text-amber-800"
+          : "bg-slate-100 text-slate-600",
+      )}>
+        {segment === "never_dispatched"
+          ? "No tienen ningún despacho histórico. Se muestran primero y, dentro de esta cola, del más reciente al más antiguo."
+          : "Ya tuvieron al menos una salida física. Revísalos como reprogramaciones o recuperaciones antes de volver a tomarlos."}
+      </p>
 
       {selected.size > 0 && (
         <div className="sticky top-3 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 shadow-sm">
@@ -339,7 +385,14 @@ function AvailableOrders({
                   <Link href={`/dashboard/pedidos?q=${encodeURIComponent(order.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">
                     {order.orderName}
                   </Link>
-                  <p className="mt-0.5 text-xs text-slate-500">{order.storeName}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {order.storeName}
+                    {order.hasPriorDispatch && order.lastDispatchedAt
+                      ? ` · Última salida ${formatTimestampDate(order.lastDispatchedAt)}`
+                      : order.orderCreatedAt
+                        ? ` · Creado ${formatTimestampDate(order.orderCreatedAt)}`
+                        : ""}
+                  </p>
                 </td>
                 <td className="px-3 py-3">
                   <p className="font-medium text-slate-800">{order.customerName}</p>
@@ -365,10 +418,18 @@ function AvailableOrders({
               <tr>
                 <td colSpan={8} className="px-6 py-16 text-center">
                   <p className="font-medium text-slate-800">
-                    {orders.length ? "Ningún pedido coincide con la búsqueda." : "No hay pedidos pendientes de admisión."}
+                    {query.trim()
+                      ? "Ningún pedido coincide con la búsqueda en este segmento."
+                      : orders.length
+                        ? segment === "never_dispatched"
+                          ? "No hay pedidos urgentes sin salida previa."
+                          : "No hay pedidos con salida previa en la cola visible."
+                        : "No hay pedidos pendientes de admisión."}
                   </p>
                   <p className="mx-auto mt-1 max-w-xl text-sm text-slate-500">
-                    Los pedidos Lima de Aurela y Kenku aparecerán aquí automáticamente al entrar a Preparación.
+                    {orders.length
+                      ? "Puedes revisar el otro segmento sin perder el orden de prioridad."
+                      : "Los pedidos Lima de Aurela y Kenku aparecerán aquí automáticamente al entrar a Preparación."}
                   </p>
                 </td>
               </tr>
@@ -377,6 +438,40 @@ function AvailableOrders({
         </table>
       </div>
     </section>
+  );
+}
+
+function AvailabilitySegmentTab({
+  active,
+  label,
+  count,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        "relative min-h-11 pb-3 pt-2 text-left text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
+        active ? "text-slate-950" : "text-slate-500 hover:text-slate-800",
+      )}
+    >
+      {label}
+      <span className={cn(
+        "ml-2 rounded-full px-2 py-0.5 text-xs tabular-nums",
+        active ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600",
+      )}>
+        {count}
+      </span>
+      {active && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-slate-950" />}
+    </button>
   );
 }
 
@@ -790,6 +885,17 @@ function TariffRow({
 function formatDate(value: string): string {
   const [year, month, day] = value.split("-");
   return `${day}/${month}/${year}`;
+}
+
+function formatTimestampDate(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value.slice(0, 10);
+  return new Intl.DateTimeFormat("es-PE", {
+    timeZone: "America/Lima",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(parsed);
 }
 
 function MoneyInput({
