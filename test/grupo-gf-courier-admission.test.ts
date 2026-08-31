@@ -37,10 +37,22 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
     const action = readFileSync(resolve(root, "app/dashboard/courier/actions.ts"), "utf8");
     const courier = readFileSync(resolve(root, "components/grupo-gf-courier.tsx"), "utf8");
     const mom = readFileSync(resolve(root, "docs/mom/master-pedidos-v1.md"), "utf8");
-    expect(action).toContain('.not("dispatched_at", "is", null)');
     expect(action).toContain("hasPriorDispatch: lastDispatchByOrder.has(order.order_id)");
     expect(courier).toContain("Prioridad urgente · nunca salieron");
     expect(courier).toContain("Con salida previa");
     expect(mom).toContain("Crear o anular un rótulo sin transferir físicamente");
+  });
+
+  it("permite tomar antes o después del armado sin enviar al courier a Almacén", () => {
+    const action = readFileSync(resolve(root, "app/dashboard/courier/actions.ts"), "utf8");
+    const courier = readFileSync(resolve(root, "components/grupo-gf-courier.tsx"), "utf8");
+    const output = readFileSync(resolve(root, "lib/route-output-fill.ts"), "utf8");
+    expect(action).toContain("macro_substage.in.(por_generar_rotulo,por_armar)");
+    expect(action).toContain("macro_substage.eq.listo_para_asignar");
+    expect(action).toContain("createIfMissing: mayCreateOutput");
+    expect(output).toContain("options.createIfMissing === false");
+    expect(courier).toContain("Puedes tomarlos antes, durante o después del armado");
+    expect(courier).toContain("Armado · listo para ruta");
+    expect(courier).not.toContain("Ir a Almacén");
   });
 });

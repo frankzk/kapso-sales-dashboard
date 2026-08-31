@@ -65,6 +65,7 @@ export async function writeCourierGuide(
   admin: SupabaseClient,
   orderId: string,
   row: Record<string, unknown> & { created_via: string },
+  options: { createIfMissing?: boolean } = {},
 ): Promise<RouteOutputWriteResult | { error: string }> {
   const target = await findFillable(admin, orderId);
 
@@ -99,6 +100,10 @@ export async function writeCourierGuide(
       return { shipmentId: (data as { id: string }).id, filled: true, outputCode: target.output_code };
     }
     // Sin fila devuelta la carrera la ganó otro: se sigue por el camino normal.
+  }
+
+  if (options.createIfMissing === false) {
+    return { error: "La salida por definir ya no está disponible; no se creó una caja duplicada." };
   }
 
   const inserted = await admin.from("shipments").insert(row).select("id").single();

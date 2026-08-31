@@ -16,7 +16,7 @@ import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-acces
 import { resolveLimaDistrict } from "@/lib/order-coverage";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeCourierGuide } from "@/lib/route-output-fill";
-import { manualRouteGuideCode } from "@/lib/shipment-output";
+import { manualRouteGuideCode, pickFillableRouteOutput } from "@/lib/shipment-output";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -181,7 +181,37 @@ type QueueOrderRow = {
   district: string | null;
   order_total: number | string | null;
   order_created_at: string | null;
+  macro_stage: string;
+  macro_substage: string;
 };
+
+type AdmissionShipmentRow = {
+  id: string;
+  order_id: string | null;
+  courier: string;
+  created_via: string | null;
+  delivery_status: string;
+  custody_state: string | null;
+  custody_transferred_at: string | null;
+  output_number: number | null;
+  dispatched_at: string | null;
+};
+
+function isCourierAdmissionStage(stage: unknown, substage: unknown): boolean {
+  return (
+    (stage === "preparacion" && ["por_generar_rotulo", "por_armar"].includes(String(substage))) ||
+    (stage === "por_despachar" && substage === "listo_para_asignar")
+  );
+}
+
+function activeAssignedOutput(
+  outputs: AdmissionShipmentRow[],
+  fillableId: string | null,
+): AdmissionShipmentRow | null {
+  return outputs.find((output) =>
+    output.id !== fillableId && ["pendiente", "en_ruta"].includes(output.delivery_status),
+  ) ?? null;
+}
 
 function canonicalDistrictKey(value: string | null): string | null {
   let key = resolveLimaDistrict(value, { searchInText: true });
@@ -205,12 +235,13 @@ async function loadCourierOperations(
       admin
         .from("order_master")
         .select(
-          "order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at",
+          "order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_stage,macro_substage",
           { count: "exact" },
         )
         .in("store_id", storeIds)
-        .eq("macro_stage", "preparacion")
-        .eq("macro_substage", "por_generar_rotulo")
+        .or(
+          "and(macro_stage.eq.preparacion,macro_substage.in.(por_generar_rotulo,por_armar)),and(macro_stage.eq.por_despachar,macro_substage.eq.listo_para_asignar)",
+        )
         .eq("coverage", "lima")
         .order("order_created_at", { ascending: false })
         .limit(300),
@@ -234,25 +265,27 @@ async function loadCourierOperations(
   }
 
   const queueOrderIds = ((queueRows ?? []) as QueueOrderRow[]).map((order) => order.order_id);
-  const { data: dispatchHistoryRows, error: dispatchHistoryError } = queueOrderIds.length
+  const { data: admissionShipmentRows, error: admissionShipmentError } = queueOrderIds.length
     ? await admin
         .from("shipments")
-        .select("order_id,dispatched_at")
+        .select(
+          "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at",
+        )
         .in("order_id", queueOrderIds)
-        .not("dispatched_at", "is", null)
         .limit(2_000)
     : { data: [], error: null };
-  if (dispatchHistoryError) {
-    throw new Error(`No se pudo distinguir el historial de salida: ${dispatchHistoryError.message}`);
+  if (admissionShipmentError) {
+    throw new Error(`No se pudo validar el historial de salidas: ${admissionShipmentError.message}`);
   }
+  const shipmentsByOrder = new Map<string, AdmissionShipmentRow[]>();
   const lastDispatchByOrder = new Map<string, string>();
-  for (const row of (dispatchHistoryRows ?? []) as Array<{
-    order_id: string | null;
-    dispatched_at: string | null;
-  }>) {
-    if (!row.order_id || !row.dispatched_at) continue;
-    const current = lastDispatchByOrder.get(row.order_id);
-    if (!current || row.dispatched_at > current) lastDispatchByOrder.set(row.order_id, row.dispatched_at);
+  for (const row of (admissionShipmentRows ?? []) as AdmissionShipmentRow[]) {
+    if (!row.order_id) continue;
+    shipmentsByOrder.set(row.order_id, [...(shipmentsByOrder.get(row.order_id) ?? []), row]);
+    if (row.dispatched_at) {
+      const current = lastDispatchByOrder.get(row.order_id);
+      if (!current || row.dispatched_at > current) lastDispatchByOrder.set(row.order_id, row.dispatched_at);
+    }
   }
 
   const storeName = new Map(
@@ -271,6 +304,14 @@ async function loadCourierOperations(
 
   for (const order of (queueRows ?? []) as QueueOrderRow[]) {
     if (activeOrderIds.has(order.order_id)) continue;
+    const outputs = shipmentsByOrder.get(order.order_id) ?? [];
+    const fillable = pickFillableRouteOutput(outputs);
+    const assigned = activeAssignedOutput(outputs, fillable?.id ?? null);
+    const needsExistingBox = order.macro_substage !== "por_generar_rotulo";
+    if (assigned || (needsExistingBox && !fillable)) {
+      blockedCount += 1;
+      continue;
+    }
     const agreement = agreementByStore.get(order.store_id);
     const districtKey = canonicalDistrictKey(order.district);
     if (!agreement || !districtKey) {
@@ -552,8 +593,31 @@ export async function takeGroupGfCourierOrders(
         continue;
       }
       const row = orderMaster as Record<string, unknown>;
-      if (row.macro_stage !== "preparacion" || row.macro_substage !== "por_generar_rotulo") {
+      if (!isCourierAdmissionStage(row.macro_stage, row.macro_substage)) {
         failed.push({ orderId, error: "El pedido ya avanzó y salió de Pedidos disponibles." });
+        continue;
+      }
+
+      const { data: outputRows, error: outputError } = await admin
+        .from("shipments")
+        .select(
+          "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at",
+        )
+        .eq("order_id", orderId);
+      if (outputError) {
+        failed.push({ orderId, error: outputError.message });
+        continue;
+      }
+      const outputs = (outputRows ?? []) as AdmissionShipmentRow[];
+      const fillable = pickFillableRouteOutput(outputs);
+      const assigned = activeAssignedOutput(outputs, fillable?.id ?? null);
+      const mayCreateOutput = row.macro_substage === "por_generar_rotulo";
+      if (assigned) {
+        failed.push({ orderId, error: "El pedido ya tiene una salida asignada a otro courier." });
+        continue;
+      }
+      if (!mayCreateOutput && !fillable) {
+        failed.push({ orderId, error: "La caja existente ya no está disponible para asignarla." });
         continue;
       }
 
@@ -655,7 +719,7 @@ export async function takeGroupGfCourierOrders(
         preparation_state: "rotulo_generado",
         custody_state: "empresa",
         created_via: "grupo_gf_courier",
-      });
+      }, { createIfMissing: mayCreateOutput });
       if ("error" in write) {
         await admin
           .from("logistics_requests")
@@ -754,7 +818,7 @@ export async function takeGroupGfCourierOrders(
   const messages: string[] = [];
   if (accepted.length) {
     messages.push(
-      `${accepted.length} pedido${accepted.length === 1 ? "" : "s"} tomado${accepted.length === 1 ? "" : "s"}. Ya ${accepted.length === 1 ? "está" : "están"} en preparación.`,
+      `${accepted.length} pedido${accepted.length === 1 ? "" : "s"} tomado${accepted.length === 1 ? "" : "s"}. Almacén ${accepted.length === 1 ? "lo armará" : "los armará"} o conservará el armado que ya tenían.`,
     );
   }
   if (alreadyAccepted.length) {
