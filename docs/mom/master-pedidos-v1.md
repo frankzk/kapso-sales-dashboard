@@ -1302,6 +1302,21 @@ Responsables: Akemi y Mariannys. Akemi es la jefa de Mariannys.
 Entrada elegible desde Aliclik: no contesta, intento fallido, rechazo sujeto a
 revisión, guía cancelada por courier y devolución.
 
+**Cada transición del courier deja constancia en el PEDIDO.** El barrido de
+Aliclik escribe un `courier_status` en el historial cada vez que el estado
+cambia de verdad —no en cada pasada, que lo llenaría de líneas idénticas— con
+el estado anterior, el nuevo y la **etiqueta cruda de Aliclik**. Esa etiqueta es
+donde vive el motivo: «anulado» a secas no distingue si lo mató su LLAMADA
+(`ANNULLED` en el tercer campo) o su reparto, y esa es toda la diferencia entre
+«el paquete volvió» y «nos cancelaron la venta antes de que saliera».
+
+Se fecha con el `updatedAt` de Aliclik, no con el nuestro: uno es cuándo pasó,
+el otro cuándo nos enteramos.
+
+Lo que Aliclik **no** manda es quién hizo el cambio. Su contrato no trae ni
+autor ni motivo libre, así que el historial puede decir qué pasó y cuándo, pero
+no quién. Para eso hay que preguntarles con el nº de guía y la hora.
+
 **Una guía cerrada NO cierra el pedido.** Las dos últimas entradas de esa lista
 —cancelada por courier y devolución— cierran la GUÍA: esa guía sí terminó, el
 paquete sí volvió, y `returned_at` se sella. Lo que sigue vivo es el PEDIDO. Por
