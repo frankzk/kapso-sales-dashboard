@@ -2,14 +2,21 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getAdminOrgs, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import {
   resolveDistrictAvailability,
+  resolveDistrictTariff,
   type DistrictAvailabilityEventRow,
   type DistrictTariffRow,
 } from "@/lib/grupo-gf-courier";
+import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
+import { resolveLimaDistrict } from "@/lib/order-coverage";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { writeCourierGuide } from "@/lib/route-output-fill";
+import { manualRouteGuideCode } from "@/lib/shipment-output";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -52,7 +59,49 @@ export interface CourierConfigSnapshot {
   availabilityEvents: DistrictAvailabilityEventRow[];
   districts: PeruDistrictRow[];
   yapePercentage: number;
+  operations: CourierOperationsSnapshot;
 }
+
+export interface CourierAvailableOrder {
+  orderId: string;
+  storeId: string;
+  storeName: string;
+  orderName: string;
+  customerName: string;
+  customerPhone: string | null;
+  district: string;
+  orderTotal: number;
+  orderCreatedAt: string | null;
+  agreementId: string;
+  districtKey: string;
+  tariffId: string;
+  tariffAmount: number;
+  scheduledFor: string;
+}
+
+export interface CourierAcceptedOrder extends CourierAvailableOrder {
+  requestId: string;
+  requestStatus: string;
+  shipmentId: string | null;
+  outputCode: string | null;
+  preparationState: string | null;
+  acceptedAt: string | null;
+  observation: string | null;
+}
+
+export interface CourierOperationsSnapshot {
+  available: CourierAvailableOrder[];
+  accepted: CourierAcceptedOrder[];
+  blockedCount: number;
+  sourceCount: number;
+}
+
+const EMPTY_OPERATIONS: CourierOperationsSnapshot = {
+  available: [],
+  accepted: [],
+  blockedCount: 0,
+  sourceCount: 0,
+};
 
 async function requireManager(orgId: string): Promise<{ userId: string } | { error: string }> {
   const user = await getCurrentUser();
@@ -80,6 +129,236 @@ function previousDay(day: string): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
 }
 
+function nextDay(day: string): string {
+  return new Date(Date.parse(`${day}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+}
+
+function limaClock(now = new Date()): { day: string; minute: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    day: `${value.year}-${value.month}-${value.day}`,
+    minute: Number(value.hour) * 60 + Number(value.minute),
+  };
+}
+
+function cutoffMinute(value: string | null | undefined): number {
+  const match = /^(\d{1,2}):(\d{2})/.exec(value ?? "");
+  return match ? Number(match[1]) * 60 + Number(match[2]) : 11 * 60 + 30;
+}
+
+function scheduledDay(cutoff: string | null | undefined, now = new Date()): string {
+  const current = limaClock(now);
+  return current.minute <= cutoffMinute(cutoff) ? current.day : nextDay(current.day);
+}
+
+type OperationsConfig = {
+  provider: CourierProviderRow;
+  agreements: CourierAgreementRow[];
+  tariffs: DistrictTariffRow[];
+  availabilityEvents: DistrictAvailabilityEventRow[];
+};
+
+type QueueOrderRow = {
+  order_id: string;
+  store_id: string;
+  order_name: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  district: string | null;
+  order_total: number | string | null;
+  order_created_at: string | null;
+};
+
+function canonicalDistrictKey(value: string | null): string | null {
+  let key = resolveLimaDistrict(value, { searchInText: true });
+  if (key === "lurigancho chosica") key = "lurigancho";
+  return key;
+}
+
+async function loadCourierOperations(
+  admin: ReturnType<typeof createAdminSupabase>,
+  config: OperationsConfig,
+): Promise<CourierOperationsSnapshot> {
+  const storeIds = config.agreements
+    .map((agreement) => agreement.store_id)
+    .filter((storeId): storeId is string => Boolean(storeId));
+  if (!storeIds.length) return EMPTY_OPERATIONS;
+
+  const day = limaClock().day;
+  const [{ data: stores }, { data: queueRows, error: queueError, count: sourceCount }, { data: requestRows, error: requestError }] =
+    await Promise.all([
+      admin.from("stores").select("id,name").in("id", storeIds),
+      admin
+        .from("order_master")
+        .select(
+          "order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at",
+          { count: "exact" },
+        )
+        .in("store_id", storeIds)
+        .eq("macro_stage", "preparacion")
+        .eq("macro_substage", "por_generar_rotulo")
+        .eq("coverage", "lima")
+        .order("order_created_at", { ascending: false })
+        .limit(300),
+      admin
+        .from("logistics_requests")
+        .select(
+          "id,agreement_id,store_id,order_id,shipment_id,status,district_key,tariff_id,tariff_amount,currency,scheduled_for,accepted_at,observation",
+        )
+        .eq("provider_id", config.provider.id)
+        .neq("status", "cancelled")
+        .order("created_at", { ascending: false })
+        .limit(300),
+    ]);
+  if (queueError) throw new Error(`No se pudo cargar Pedidos disponibles: ${queueError.message}`);
+  if (requestError) {
+    // Permite desplegar el código antes de aplicar 0138 sin convertir todo el
+    // tarifario en una página 500. La bandeja queda vacía con una causa clara en
+    // despliegue; tras la migración la lectura vuelve automáticamente.
+    if (/logistics_requests/i.test(requestError.message)) return EMPTY_OPERATIONS;
+    throw new Error(`No se pudieron cargar las solicitudes logísticas: ${requestError.message}`);
+  }
+
+  const storeName = new Map(
+    ((stores ?? []) as { id: string; name: string }[]).map((store) => [store.id, store.name]),
+  );
+  const agreementByStore = new Map(
+    config.agreements
+      .filter((agreement) => agreement.store_id)
+      .map((agreement) => [agreement.store_id as string, agreement]),
+  );
+  const activeOrderIds = new Set(
+    ((requestRows ?? []) as { order_id: string }[]).map((request) => request.order_id),
+  );
+  let blockedCount = 0;
+  const available: CourierAvailableOrder[] = [];
+
+  for (const order of (queueRows ?? []) as QueueOrderRow[]) {
+    if (activeOrderIds.has(order.order_id)) continue;
+    const agreement = agreementByStore.get(order.store_id);
+    const districtKey = canonicalDistrictKey(order.district);
+    if (!agreement || !districtKey) {
+      blockedCount += 1;
+      continue;
+    }
+    const tariff = resolveDistrictTariff(config.tariffs, {
+      providerId: config.provider.id,
+      agreementId: agreement.id,
+      districtKey,
+      day,
+    });
+    const availability = resolveDistrictAvailability(config.availabilityEvents, {
+      providerId: config.provider.id,
+      agreementId: agreement.id,
+      districtKey,
+      day,
+    });
+    if (tariff.kind === "missing" || availability.status === "paused") {
+      blockedCount += 1;
+      continue;
+    }
+    available.push({
+      orderId: order.order_id,
+      storeId: order.store_id,
+      storeName: storeName.get(order.store_id) ?? agreement.client_label,
+      orderName: order.order_name ?? "Pedido sin código",
+      customerName: order.customer_name ?? "Cliente sin nombre",
+      customerPhone: order.customer_phone,
+      district: order.district ?? districtKey,
+      orderTotal: Number(order.order_total ?? 0),
+      orderCreatedAt: order.order_created_at,
+      agreementId: agreement.id,
+      districtKey,
+      tariffId: tariff.tariff.id,
+      tariffAmount: tariff.tariff.delivery_amount,
+      scheduledFor: scheduledDay(config.provider.same_day_cutoff),
+    });
+  }
+
+  const requests = (requestRows ?? []) as Array<{
+    id: string;
+    agreement_id: string;
+    store_id: string;
+    order_id: string;
+    shipment_id: string | null;
+    status: string;
+    district_key: string;
+    tariff_id: string;
+    tariff_amount: number | string;
+    currency: string;
+    scheduled_for: string;
+    accepted_at: string | null;
+    observation: string | null;
+  }>;
+  const requestOrderIds = [...new Set(requests.map((request) => request.order_id))];
+  const shipmentIds = requests
+    .map((request) => request.shipment_id)
+    .filter((shipmentId): shipmentId is string => Boolean(shipmentId));
+  const [{ data: acceptedOrders }, { data: shipments }] = await Promise.all([
+    requestOrderIds.length
+      ? admin
+          .from("order_master")
+          .select(
+            "order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at",
+          )
+          .in("order_id", requestOrderIds)
+      : Promise.resolve({ data: [] }),
+    shipmentIds.length
+      ? admin
+          .from("shipments")
+          .select("id,output_code,preparation_state")
+          .in("id", shipmentIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const orderById = new Map(
+    ((acceptedOrders ?? []) as QueueOrderRow[]).map((order) => [order.order_id, order]),
+  );
+  const shipmentById = new Map(
+    ((shipments ?? []) as { id: string; output_code: string | null; preparation_state: string | null }[])
+      .map((shipment) => [shipment.id, shipment]),
+  );
+  const accepted: CourierAcceptedOrder[] = requests.flatMap((request) => {
+    const order = orderById.get(request.order_id);
+    const agreement = config.agreements.find((item) => item.id === request.agreement_id);
+    if (!order || !agreement) return [];
+    const shipment = request.shipment_id ? shipmentById.get(request.shipment_id) : null;
+    return [{
+      orderId: request.order_id,
+      storeId: request.store_id,
+      storeName: storeName.get(request.store_id) ?? agreement.client_label,
+      orderName: order.order_name ?? "Pedido sin código",
+      customerName: order.customer_name ?? "Cliente sin nombre",
+      customerPhone: order.customer_phone,
+      district: order.district ?? request.district_key,
+      orderTotal: Number(order.order_total ?? 0),
+      orderCreatedAt: order.order_created_at,
+      agreementId: request.agreement_id,
+      districtKey: request.district_key,
+      tariffId: request.tariff_id,
+      tariffAmount: Number(request.tariff_amount),
+      scheduledFor: request.scheduled_for,
+      requestId: request.id,
+      requestStatus: request.status,
+      shipmentId: request.shipment_id,
+      outputCode: shipment?.output_code ?? null,
+      preparationState: shipment?.preparation_state ?? null,
+      acceptedAt: request.accepted_at,
+      observation: request.observation,
+    }];
+  });
+
+  return { available, accepted, blockedCount, sourceCount: sourceCount ?? available.length };
+}
+
 export async function loadCourierConfig(orgId: string): Promise<CourierConfigSnapshot> {
   const auth = await requireManager(orgId);
   if ("error" in auth) {
@@ -90,6 +369,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       availabilityEvents: [],
       districts: [],
       yapePercentage: 3.5,
+      operations: EMPTY_OPERATIONS,
     };
   }
   const sb = await createServerSupabase();
@@ -123,6 +403,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       availabilityEvents: [],
       districts,
       yapePercentage: 3.5,
+      operations: EMPTY_OPERATIONS,
     };
   }
 
@@ -166,18 +447,297 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       .maybeSingle(),
   ]);
 
+  const normalizedTariffs = ((tariffs ?? []) as Record<string, unknown>[]).map((row) => ({
+    ...row,
+    delivery_amount: Number(row.delivery_amount),
+    rejection_amount: Number(row.rejection_amount),
+  })) as DistrictTariffRow[];
+  const normalizedAvailability = (availabilityEvents ?? []) as DistrictAvailabilityEventRow[];
+  const normalizedAgreements = (agreements ?? []) as CourierAgreementRow[];
+  const operations = await loadCourierOperations(admin, {
+    provider,
+    agreements: normalizedAgreements,
+    tariffs: normalizedTariffs,
+    availabilityEvents: normalizedAvailability,
+  });
+
   return {
     provider,
-    agreements: (agreements ?? []) as CourierAgreementRow[],
-    tariffs: ((tariffs ?? []) as Record<string, unknown>[]).map((row) => ({
-      ...row,
-      delivery_amount: Number(row.delivery_amount),
-      rejection_amount: Number(row.rejection_amount),
-    })) as DistrictTariffRow[],
-    availabilityEvents: (availabilityEvents ?? []) as DistrictAvailabilityEventRow[],
+    agreements: normalizedAgreements,
+    tariffs: normalizedTariffs,
+    availabilityEvents: normalizedAvailability,
     districts,
     yapePercentage: Number(fee?.percentage ?? 3.5),
+    operations,
   };
+}
+
+export interface TakeCourierOrdersResult extends CourierActionResult {
+  accepted: Array<{ orderId: string; shipmentId: string; outputCode: string | null }>;
+  alreadyAccepted: string[];
+  failed: Array<{ orderId: string; error: string }>;
+}
+
+const MAX_TAKE_ORDERS = 50;
+
+/**
+ * Admite pedidos desde la bandeja del operador. Reservar primero la solicitud
+ * hace de candado idempotente: un segundo clic ve la misma solicitud y no llega
+ * a crear otra caja. La tarifa y la disponibilidad se vuelven a leer aquí.
+ */
+export async function takeGroupGfCourierOrders(
+  orgId: string,
+  orderIds: string[],
+): Promise<TakeCourierOrdersResult> {
+  const auth = await requireManager(orgId);
+  if ("error" in auth) return { ...auth, accepted: [], alreadyAccepted: [], failed: [] };
+  const uniqueOrderIds = [...new Set(orderIds.filter(Boolean))];
+  if (!uniqueOrderIds.length) {
+    return { error: "Selecciona al menos un pedido.", accepted: [], alreadyAccepted: [], failed: [] };
+  }
+  if (uniqueOrderIds.length > MAX_TAKE_ORDERS) {
+    return {
+      error: `Puedes tomar hasta ${MAX_TAKE_ORDERS} pedidos por tanda.`,
+      accepted: [],
+      alreadyAccepted: [],
+      failed: [],
+    };
+  }
+
+  const admin = createAdminSupabase();
+  const accepted: TakeCourierOrdersResult["accepted"] = [];
+  const alreadyAccepted: string[] = [];
+  const failed: TakeCourierOrdersResult["failed"] = [];
+
+  // Secuencial a propósito: cada admisión vuelve a comprobar la configuración
+  // vigente y deja su propio resultado. Un pedido inválido no tumba la tanda.
+  for (const orderId of uniqueOrderIds) {
+    try {
+      const { data: orderMaster, error: orderError } = await admin
+        .from("order_master")
+        .select("*")
+        .eq("order_id", orderId)
+        .maybeSingle();
+      if (orderError || !orderMaster) {
+        failed.push({ orderId, error: orderError?.message ?? "El pedido ya no está disponible." });
+        continue;
+      }
+      const row = orderMaster as Record<string, unknown>;
+      if (row.macro_stage !== "preparacion" || row.macro_substage !== "por_generar_rotulo") {
+        failed.push({ orderId, error: "El pedido ya avanzó y salió de Pedidos disponibles." });
+        continue;
+      }
+
+      const check = await loadGroupGfCourierRouteCheck(admin, {
+        store_id: String(row.store_id),
+        region: row.region == null ? null : String(row.region),
+        province: row.province == null ? null : String(row.province),
+        district: row.district == null ? null : String(row.district),
+      });
+      if (
+        !check.eligible ||
+        !check.providerId ||
+        !check.agreementId ||
+        !check.districtKey ||
+        !check.tariffId ||
+        check.tariffAmount == null
+      ) {
+        failed.push({ orderId, error: check.reason });
+        continue;
+      }
+
+      const scheduledFor = scheduledDay(check.sameDayCutoff);
+      const requestId = randomUUID();
+      const idempotencyKey = `kapta:${check.providerId}:${orderId}`;
+      const requestInsert = await admin
+        .from("logistics_requests")
+        .insert({
+          id: requestId,
+          provider_id: check.providerId,
+          agreement_id: check.agreementId,
+          store_id: String(row.store_id),
+          order_id: orderId,
+          source: "kapta",
+          external_reference: row.order_name == null ? null : String(row.order_name),
+          idempotency_key: idempotencyKey,
+          status: "accepting",
+          district_key: check.districtKey,
+          tariff_id: check.tariffId,
+          tariff_amount: check.tariffAmount,
+          currency: check.currency,
+          includes_igv: true,
+          scheduled_for: scheduledFor,
+          requested_by: auth.userId,
+          accepted_by: auth.userId,
+        })
+        .select("id")
+        .single();
+      if (requestInsert.error) {
+        if (requestInsert.error.code === "23505") {
+          alreadyAccepted.push(orderId);
+          continue;
+        }
+        failed.push({ orderId, error: requestInsert.error.message });
+        continue;
+      }
+
+      const { data: sourceOrder } = await admin
+        .from("orders")
+        .select("line_items")
+        .eq("id", orderId)
+        .maybeSingle();
+      const lineItems = ((sourceOrder as {
+        line_items?: Array<{ title?: string | null; quantity?: number | null }>;
+      } | null)?.line_items ?? []);
+      const product = lineItems
+        .map((item) => `${item.title ?? "Producto"}${(item.quantity ?? 1) > 1 ? ` ×${item.quantity}` : ""}`)
+        .join(" | ") || null;
+      const newShipmentId = randomUUID();
+      const guideCode = manualRouteGuideCode(
+        row.order_name == null ? null : String(row.order_name),
+        newShipmentId,
+        "propio",
+      );
+      const acceptedAt = new Date().toISOString();
+      const write = await writeCourierGuide(admin, orderId, {
+        id: newShipmentId,
+        store_id: String(row.store_id),
+        courier: "propio",
+        guide_code: guideCode,
+        delivery_status: "pendiente",
+        status_category: "pending",
+        order_id: orderId,
+        matched: true,
+        match_method: "grupo_gf_courier",
+        order_name: row.order_name ?? null,
+        customer_name: row.customer_name ?? null,
+        customer_phone: row.customer_phone ?? null,
+        product,
+        district: row.district ?? null,
+        province: row.province ?? null,
+        city: row.district ?? null,
+        region: row.region ?? null,
+        delivery_address: row.address ?? null,
+        delivery_reference: row.reference ?? null,
+        latitude: row.latitude ?? null,
+        longitude: row.longitude ?? null,
+        assigned_at: acceptedAt,
+        next_followup_at: `${scheduledFor}T12:00:00-05:00`,
+        preparation_state: "rotulo_generado",
+        custody_state: "empresa",
+        created_via: "grupo_gf_courier",
+      });
+      if ("error" in write) {
+        await admin
+          .from("logistics_requests")
+          .update({ status: "observed", observation: write.error })
+          .eq("id", requestId);
+        await admin.from("logistics_request_events").insert({
+          request_id: requestId,
+          kind: "acceptance_failed",
+          status: "observed",
+          actor: auth.userId,
+          note: write.error,
+        });
+        failed.push({ orderId, error: write.error });
+        continue;
+      }
+
+      const labelUrl = `/api/pedidos/rotulos?ids=${write.shipmentId}`;
+      const [{ data: shipment }, requestUpdate] = await Promise.all([
+        admin
+          .from("shipments")
+          .update({ label_url: labelUrl })
+          .eq("id", write.shipmentId)
+          .select("output_code")
+          .single(),
+        admin
+          .from("logistics_requests")
+          .update({
+            shipment_id: write.shipmentId,
+            status: "accepted",
+            accepted_at: acceptedAt,
+            observation: null,
+          })
+          .eq("id", requestId),
+      ]);
+      if (requestUpdate.error) {
+        await admin
+          .from("logistics_requests")
+          .update({ status: "observed", observation: requestUpdate.error.message })
+          .eq("id", requestId);
+        failed.push({ orderId, error: requestUpdate.error.message });
+        continue;
+      }
+
+      const outputCode = (shipment as { output_code?: string | null } | null)?.output_code ?? write.outputCode;
+      await Promise.all([
+        admin.from("logistics_request_events").insert({
+          request_id: requestId,
+          kind: "accepted",
+          status: "accepted",
+          actor: auth.userId,
+          note: write.filled
+            ? "Se reutilizó la salida existente y su QR."
+            : "Se creó la salida física de la solicitud.",
+          payload: {
+            shipmentId: write.shipmentId,
+            outputCode,
+            reusedOutput: write.filled,
+            tariffAmount: check.tariffAmount,
+            scheduledFor,
+          },
+        }),
+        admin.from("order_events").insert({
+          store_id: String(row.store_id),
+          order_id: orderId,
+          kind: "logistics_request_accepted",
+          occurred_at: acceptedAt,
+          actor: auth.userId,
+          source: "grupo_gf_courier",
+          courier: "propio",
+          guide_code: guideCode,
+          shipment_id: write.shipmentId,
+          note: write.filled
+            ? "Grupo GF Courier tomó el pedido y conservó el QR de la salida existente."
+            : "Grupo GF Courier tomó el pedido desde Pedidos disponibles.",
+          payload: {
+            requestId,
+            outputCode,
+            reusedOutput: write.filled,
+            tariffId: check.tariffId,
+            tariffAmount: check.tariffAmount,
+            districtKey: check.districtKey,
+            scheduledFor,
+          },
+        }),
+      ]);
+      await recomputeOrderMasterSafe(admin, [orderId]);
+      accepted.push({ orderId, shipmentId: write.shipmentId, outputCode: outputCode ?? null });
+    } catch (error) {
+      failed.push({ orderId, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  revalidatePath(COURIER_PATH);
+  revalidatePath("/dashboard/pedidos");
+  revalidatePath("/dashboard/pedidos/almacen");
+  const messages: string[] = [];
+  if (accepted.length) {
+    messages.push(
+      `${accepted.length} pedido${accepted.length === 1 ? "" : "s"} tomado${accepted.length === 1 ? "" : "s"}. Ya ${accepted.length === 1 ? "está" : "están"} en preparación.`,
+    );
+  }
+  if (alreadyAccepted.length) {
+    messages.push(`${alreadyAccepted.length} ya ${alreadyAccepted.length === 1 ? "estaba" : "estaban"} tomado${alreadyAccepted.length === 1 ? "" : "s"}; no se duplicó nada.`);
+  }
+  if (failed.length) messages.push(`${failed.length} no ${failed.length === 1 ? "pudo" : "pudieron"} tomarse.`);
+  const error = !accepted.length && !alreadyAccepted.length && failed.length
+    ? failed.length === 1
+      ? failed[0]!.error
+      : `No se pudieron tomar ${failed.length} pedidos. Revisa tarifa, distrito o estado.`
+    : undefined;
+  return { notice: messages.join(" ") || undefined, error, accepted, alreadyAccepted, failed };
 }
 
 export async function activateGroupGfCourier(orgId: string): Promise<CourierActionResult> {

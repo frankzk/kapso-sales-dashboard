@@ -143,7 +143,7 @@ export function OrderRouteDesk({
                   ? "No disponible"
                   : actionEnabled(route)
                     ? route.key === "propio"
-                      ? "Asignar Grupo GF"
+                      ? "Ver en Grupo GF"
                       : ACTION_LABEL[route.action]
                     : "Sin permiso"}
               </button>

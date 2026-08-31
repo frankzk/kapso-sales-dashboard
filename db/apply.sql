@@ -277,4 +277,6 @@
 \ir migrations/0136_courier_single_delivery_rejection_rate.sql
 \echo 'Applying 0137_courier_district_availability.sql'
 \ir migrations/0137_courier_district_availability.sql
+\echo 'Applying 0138_group_gf_logistics_requests.sql'
+\ir migrations/0138_group_gf_logistics_requests.sql
 \echo 'Done.'

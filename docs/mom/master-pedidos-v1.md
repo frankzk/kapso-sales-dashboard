@@ -3151,14 +3151,26 @@ externa, para no mantener un segundo flujo especial de «propios».
 - Una ruta puede mezclar pedidos de Aurela, Kenku y otras tiendas autorizadas.
 - El portal de una tienda externa admite conexión Shopify, API y carga Excel.
 
-La **Mesa de ruta** muestra Grupo GF Courier en los pedidos clasificados como
-Lima Metropolitana o Callao. Antes de ofrecer la asignación comprueba operador
-y contrato activos, distrito canónico, tarifa vigente y servicio no pausado. Si
-alguna condición falla, conserva la alternativa visible con el motivo exacto y
-recomienda el siguiente courier disponible; nunca interpreta S/0 como cobertura.
-La acción vuelve a comprobar esas reglas en el servidor justo antes de crear la
-salida, porque una tarifa, contrato o pausa puede cambiar mientras el drawer está
-abierto.
+Para Aurela y Kenku, la admisión operativa ocurre desde **Grupo GF Courier →
+Pedidos disponibles**, no creando una salida pedido por pedido en la Mesa de
+ruta. Los pedidos Kapta en `Preparación · Por generar rótulo` aparecen
+automáticamente cuando corresponden a Lima Metropolitana o Callao y tienen
+operador y contrato activos, distrito canónico, tarifa vigente y servicio no
+pausado. El operador puede tomarlos individualmente o en lote. La Mesa de ruta
+solo informa que el pedido está disponible y enlaza esa bandeja; no abre un
+segundo formulario ni genera un rótulo desde el drawer.
+
+`Tomar pedidos` crea o reutiliza una **solicitud logística** idempotente, congela
+contrato, tarifa, distrito y fecha prevista, y recién entonces crea la salida.
+Si Kapta ya había creado una salida `por definir`, se rellena esa misma fila y
+se conserva su QR; nunca se pega un segundo rótulo por elegir Grupo GF Courier.
+La acción vuelve a comprobar todas las reglas en el servidor, porque una tarifa,
+contrato o pausa puede cambiar mientras la bandeja está abierta. Un doble clic o
+dos operadores tomando el mismo pedido no pueden crear dos solicitudes activas.
+
+Las futuras tiendas externas pueden conservar asignación explícita según su
+contrato. La cola automática descrita arriba es el camino de mínima fricción
+para las tiendas de Grupo GF administradas dentro de Kapta.
 
 Durante la transición, las salidas de Grupo GF siguen guardando el token legado
 `propio` para no romper rutas, QR, manifiestos ni liquidaciones históricas. La

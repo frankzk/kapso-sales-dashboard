@@ -1,16 +1,20 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
 import {
   activateGroupGfCourier,
   saveDistrictTariff,
   setDistrictAvailability,
+  takeGroupGfCourierOrders,
   type CourierActionResult,
   type CourierConfigSnapshot,
   type CourierAgreementRow,
+  type CourierAvailableOrder,
+  type CourierAcceptedOrder,
   type PeruDistrictRow,
 } from "@/app/dashboard/courier/actions";
 
@@ -37,6 +41,7 @@ export function GrupoGfCourierBoard({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [tab, setTab] = useState<"available" | "preparation" | "tariffs">("available");
 
   function run(action: () => Promise<CourierActionResult>) {
     startTransition(async () => {
@@ -83,16 +88,361 @@ export function GrupoGfCourierBoard({
     );
   }
 
+  const provider = snapshot.provider;
   return (
-    <TariffMatrix
-      orgId={orgId}
-      snapshot={snapshot}
-      pending={pending}
-      error={error}
-      notice={notice}
-      onSave={(input) => run(() => saveDistrictTariff(input))}
-      onAvailability={(input) => run(() => setDistrictAvailability(input))}
-    />
+    <div className="space-y-5">
+      <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+            Operación logística
+          </p>
+          <h1 className="mt-1 text-xl font-semibold text-slate-950">Grupo GF Courier</h1>
+          <p className="mt-1 max-w-3xl text-sm text-slate-600">
+            Toma pedidos de Aurela y Kenku, prepara una sola caja y conserva el mismo QR hasta la entrega.
+          </p>
+        </div>
+        <div className="grid grid-cols-3 divide-x divide-slate-200 rounded-xl border border-slate-200 bg-white px-1 py-3 text-sm shadow-sm">
+          <Summary label="Corte" value={provider.same_day_cutoff.slice(0, 5)} />
+          <Summary label="Yape" value={`${snapshot.yapePercentage} %`} />
+          <Summary label="Efectivo máximo" value={money(provider.cash_limit_amount)} />
+        </div>
+      </header>
+
+      <nav aria-label="Secciones de Grupo GF Courier" className="flex gap-1 border-b border-slate-200">
+        <CourierTab
+          active={tab === "available"}
+          onClick={() => setTab("available")}
+          label="Pedidos disponibles"
+          count={snapshot.operations.available.length}
+        />
+        <CourierTab
+          active={tab === "preparation"}
+          onClick={() => setTab("preparation")}
+          label="En preparación"
+          count={snapshot.operations.accepted.length}
+        />
+        <CourierTab
+          active={tab === "tariffs"}
+          onClick={() => setTab("tariffs")}
+          label="Tarifario"
+        />
+      </nav>
+
+      {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
+      {notice && <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}
+
+      {tab === "available" && (
+        <AvailableOrders
+          orgId={orgId}
+          orders={snapshot.operations.available}
+          blockedCount={snapshot.operations.blockedCount}
+          sourceCount={snapshot.operations.sourceCount}
+          pending={pending}
+          run={run}
+        />
+      )}
+      {tab === "preparation" && (
+        <AcceptedOrders orders={snapshot.operations.accepted} />
+      )}
+      {tab === "tariffs" && (
+        <TariffMatrix
+          orgId={orgId}
+          snapshot={snapshot}
+          pending={pending}
+          error={null}
+          notice={null}
+          onSave={(input) => run(() => saveDistrictTariff(input))}
+          onAvailability={(input) => run(() => setDistrictAvailability(input))}
+        />
+      )}
+    </div>
+  );
+}
+
+function CourierTab({
+  active,
+  onClick,
+  label,
+  count,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  count?: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "relative min-h-11 px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
+        active ? "text-brand-700" : "text-slate-500 hover:text-slate-800",
+      )}
+    >
+      {label}
+      {count != null && (
+        <span className={cn(
+          "ml-2 rounded-full px-2 py-0.5 text-xs tabular-nums",
+          active ? "bg-brand-50 text-brand-700" : "bg-slate-100 text-slate-600",
+        )}>
+          {count}
+        </span>
+      )}
+      {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-brand-600" />}
+    </button>
+  );
+}
+
+function AvailableOrders({
+  orgId,
+  orders,
+  blockedCount,
+  sourceCount,
+  pending,
+  run,
+}: {
+  orgId: string;
+  orders: CourierAvailableOrder[];
+  blockedCount: number;
+  sourceCount: number;
+  pending: boolean;
+  run: (action: () => Promise<CourierActionResult>) => void;
+}) {
+  const searchParams = useSearchParams();
+  const [query, setQuery] = useState(searchParams.get("pedido") ?? "");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase("es");
+    if (!needle) return orders;
+    return orders.filter((order) =>
+      `${order.orderId} ${order.orderName} ${order.customerName} ${order.customerPhone ?? ""} ${order.district} ${order.storeName}`
+        .toLocaleLowerCase("es")
+        .includes(needle),
+    );
+  }, [orders, query]);
+  const visibleIds = filtered.map((order) => order.orderId);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+
+  function toggle(orderId: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  }
+
+  function take(ids: string[]) {
+    if (!ids.length) return;
+    setSelected(new Set());
+    run(() => takeGroupGfCourierOrders(orgId, ids));
+  }
+
+  return (
+    <section aria-labelledby="available-orders-title" className="space-y-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h2 id="available-orders-title" className="text-base font-semibold text-slate-950">
+            Pedidos listos para tomar
+          </h2>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+            Kapta los coloca aquí al entrar a Preparación. El rótulo y el QR se crean una sola vez cuando los tomas.
+          </p>
+          {sourceCount > 300 && (
+            <p className="mt-1 text-xs text-slate-500">
+              Hay {sourceCount.toLocaleString("es-PE")} pedidos en la cola fuente. Se muestran los 300 más recientes; al tomar una tanda entran los siguientes.
+            </p>
+          )}
+          {blockedCount > 0 && (
+            <p className="mt-1 text-xs text-amber-700">
+              {blockedCount} pedido{blockedCount === 1 ? "" : "s"} no aparece{blockedCount === 1 ? "" : "n"} por tarifa faltante, distrito inválido o servicio pausado.
+            </p>
+          )}
+        </div>
+        <label className="text-xs font-medium text-slate-600">
+          Buscar
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Pedido, cliente, teléfono o distrito"
+            className="mt-1 block h-10 w-full min-w-72 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+          />
+        </label>
+      </div>
+
+      {selected.size > 0 && (
+        <div className="sticky top-3 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 shadow-sm">
+          <p className="text-sm font-semibold text-brand-950">
+            {selected.size} pedido{selected.size === 1 ? "" : "s"} seleccionado{selected.size === 1 ? "" : "s"}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelected(new Set())}
+              className="h-9 rounded-lg px-3 text-sm font-medium text-slate-600 hover:bg-white"
+            >
+              Limpiar
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => take([...selected])}
+              className="h-9 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white transition hover:bg-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:opacity-50"
+            >
+              {pending ? "Tomando pedidos…" : `Tomar ${selected.size} pedido${selected.size === 1 ? "" : "s"}`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm")}>
+        <table className="w-full min-w-[980px] text-sm">
+          <thead className={STICKY_HEAD}>
+            <tr className="text-left text-xs text-slate-500">
+              <th className="w-12 px-4 py-3">
+                <input
+                  type="checkbox"
+                  aria-label="Seleccionar pedidos visibles"
+                  checked={allVisibleSelected}
+                  onChange={() => {
+                    setSelected((current) => {
+                      const next = new Set(current);
+                      if (allVisibleSelected) visibleIds.forEach((id) => next.delete(id));
+                      else visibleIds.forEach((id) => next.add(id));
+                      return next;
+                    });
+                  }}
+                />
+              </th>
+              <th className="px-3 py-3 font-medium">Pedido</th>
+              <th className="px-3 py-3 font-medium">Cliente</th>
+              <th className="px-3 py-3 font-medium">Destino</th>
+              <th className="px-3 py-3 text-right font-medium">Venta</th>
+              <th className="px-3 py-3 text-right font-medium">Tarifa</th>
+              <th className="px-3 py-3 font-medium">Salida prevista</th>
+              <th className="px-4 py-3 text-right font-medium">Acción</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((order) => (
+              <tr key={order.orderId} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/70">
+                <td className="px-4 py-3">
+                  <input
+                    type="checkbox"
+                    aria-label={`Seleccionar ${order.orderName}`}
+                    checked={selected.has(order.orderId)}
+                    onChange={() => toggle(order.orderId)}
+                  />
+                </td>
+                <td className="px-3 py-3">
+                  <Link href={`/dashboard/pedidos?q=${encodeURIComponent(order.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">
+                    {order.orderName}
+                  </Link>
+                  <p className="mt-0.5 text-xs text-slate-500">{order.storeName}</p>
+                </td>
+                <td className="px-3 py-3">
+                  <p className="font-medium text-slate-800">{order.customerName}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">{order.customerPhone ?? "Sin teléfono"}</p>
+                </td>
+                <td className="px-3 py-3 text-slate-700">{order.district}</td>
+                <td className="px-3 py-3 text-right tabular-nums text-slate-700">{money(order.orderTotal)}</td>
+                <td className="px-3 py-3 text-right font-semibold tabular-nums text-slate-900">{money(order.tariffAmount)}</td>
+                <td className="px-3 py-3 text-slate-700">{formatDate(order.scheduledFor)}</td>
+                <td className="px-4 py-3 text-right">
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => take([order.orderId])}
+                    className="h-9 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    Tomar pedido
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {!filtered.length && (
+              <tr>
+                <td colSpan={8} className="px-6 py-16 text-center">
+                  <p className="font-medium text-slate-800">
+                    {orders.length ? "Ningún pedido coincide con la búsqueda." : "No hay pedidos pendientes de admisión."}
+                  </p>
+                  <p className="mx-auto mt-1 max-w-xl text-sm text-slate-500">
+                    Los pedidos Lima de Aurela y Kenku aparecerán aquí automáticamente al entrar a Preparación.
+                  </p>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function preparationLabel(order: CourierAcceptedOrder): { label: string; tone: string } {
+  if (order.requestStatus === "observed") return { label: "Requiere revisión", tone: "bg-red-50 text-red-700" };
+  if (order.preparationState === "listo_despacho") return { label: "Listo para ruta", tone: "bg-emerald-50 text-emerald-700" };
+  if (order.preparationState === "en_armado") return { label: "Armando", tone: "bg-sky-50 text-sky-700" };
+  return { label: "Por armar", tone: "bg-amber-50 text-amber-700" };
+}
+
+function AcceptedOrders({ orders }: { orders: CourierAcceptedOrder[] }) {
+  return (
+    <section aria-labelledby="accepted-orders-title" className="space-y-4">
+      <div>
+        <h2 id="accepted-orders-title" className="text-base font-semibold text-slate-950">En preparación</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Cada pedido ya tiene solicitud, tarifa congelada y una sola salida física. Almacén continúa por escaneo.
+        </p>
+      </div>
+      <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm")}>
+        <table className="w-full min-w-[880px] text-sm">
+          <thead className={STICKY_HEAD}>
+            <tr className="text-left text-xs text-slate-500">
+              <th className="px-4 py-3 font-medium">Pedido</th>
+              <th className="px-3 py-3 font-medium">Cliente</th>
+              <th className="px-3 py-3 font-medium">Salida</th>
+              <th className="px-3 py-3 font-medium">Estado</th>
+              <th className="px-3 py-3 text-right font-medium">Tarifa</th>
+              <th className="px-4 py-3 text-right font-medium">Siguiente paso</th>
+            </tr>
+          </thead>
+          <tbody>
+            {orders.map((order) => {
+              const status = preparationLabel(order);
+              return (
+                <tr key={order.requestId} className="border-b border-slate-100 last:border-0">
+                  <td className="px-4 py-3">
+                    <Link href={`/dashboard/pedidos?q=${encodeURIComponent(order.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">{order.orderName}</Link>
+                    <p className="mt-0.5 text-xs text-slate-500">{order.storeName} · {order.district}</p>
+                  </td>
+                  <td className="px-3 py-3 text-slate-700">{order.customerName}</td>
+                  <td className="px-3 py-3 font-mono text-xs font-semibold text-slate-700">{order.outputCode ?? "Generando…"}</td>
+                  <td className="px-3 py-3">
+                    <span className={cn("rounded-md px-2 py-1 text-xs font-semibold", status.tone)}>{status.label}</span>
+                    {order.observation && <p className="mt-1 max-w-64 text-xs text-red-600">{order.observation}</p>}
+                  </td>
+                  <td className="px-3 py-3 text-right font-semibold tabular-nums text-slate-900">{money(order.tariffAmount)}</td>
+                  <td className="px-4 py-3 text-right">
+                    {order.shipmentId ? (
+                      <Link href="/dashboard/pedidos/almacen" className="inline-flex h-9 items-center rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                        Ir a Almacén
+                      </Link>
+                    ) : (
+                      <span className="text-xs text-slate-500">Revisar solicitud</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {!orders.length && (
+              <tr><td colSpan={6} className="px-6 py-16 text-center text-sm text-slate-500">Todavía no hay pedidos tomados.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -146,23 +496,6 @@ function TariffMatrix({
 
   return (
     <div className="space-y-5">
-      <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-            Operación logística
-          </p>
-          <h1 className="mt-1 text-xl font-semibold text-slate-950">Grupo GF Courier</h1>
-          <p className="mt-1 text-sm text-slate-600">
-            Tarifas incluidas IGV. Cada cambio abre una vigencia y conserva la anterior.
-          </p>
-        </div>
-        <div className="grid grid-cols-3 divide-x divide-slate-200 rounded-xl border border-slate-200 bg-white px-1 py-3 text-sm shadow-sm">
-          <Summary label="Corte" value={provider.same_day_cutoff.slice(0, 5)} />
-          <Summary label="Yape" value={`${snapshot.yapePercentage} %`} />
-          <Summary label="Efectivo máximo" value={money(provider.cash_limit_amount)} />
-        </div>
-      </header>
-
       {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
       {notice && <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}
 

@@ -61,8 +61,10 @@ export interface GroupGfCourierRouteCheck {
   known: boolean;
   eligible: boolean;
   reason: string;
+  providerId: string | null;
   districtKey: string | null;
   agreementId: string | null;
+  tariffId: string | null;
   tariffAmount: number | null;
   currency: string;
   sameDayCutoff: string;

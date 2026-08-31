@@ -1408,7 +1408,6 @@ function AgencyDays({
 // antes de saber con quién sale, y el courier se fija al entrar a la ruta (§4).
 const BULK_COURIERS: { key: ManualRouteCourier; label: string }[] = [
   { key: COURIER_TBD, label: "Sin definir (se decide en despacho)" },
-  { key: "propio", label: "Grupo GF Courier" },
   { key: "axel", label: "Axel Courier" },
   { key: "urpi", label: "Urpi" },
   { key: "olva", label: "Olva (agencia)" },
@@ -2589,6 +2588,10 @@ function OrderDrawer({
   }
 
   function selectRoute(route: RouteCandidate) {
+    if (route.key === "propio") {
+      window.location.assign(`/dashboard/courier?pedido=${encodeURIComponent(orderId)}`);
+      return;
+    }
     if (route.action === "aliclik") {
       jumpTo("aliclik");
       return;
@@ -3511,10 +3514,10 @@ function OrderDrawer({
           }}
         />
       )}
-      {manualRoute && ["axel", "urpi", "propio", "olva"].includes(manualRoute.key) && (
+      {manualRoute && ["axel", "urpi", "olva"].includes(manualRoute.key) && (
         <ManualRouteOutputModal
           orderId={orderId}
-          route={manualRoute as RouteCandidate & { key: "axel" | "urpi" | "propio" | "olva" }}
+          route={manualRoute as RouteCandidate & { key: "axel" | "urpi" | "olva" }}
           activeOutputs={detail?.routePlan.activeOutputCount ?? 0}
           onClose={() => setManualRoute(null)}
           onCreated={() => {

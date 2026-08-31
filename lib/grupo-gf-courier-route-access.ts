@@ -26,8 +26,10 @@ const unavailable = (
   known: true,
   eligible: false,
   reason,
+  providerId: null,
   districtKey: null,
   agreementId: null,
+  tariffId: null,
   tariffAmount: null,
   currency: "PEN",
   sameDayCutoff: "11:30",
@@ -96,6 +98,7 @@ export async function loadGroupGfCourierRouteCheck(
   const sameDayCutoff = (provider.same_day_cutoff ?? "11:30").slice(0, 5);
   if (provider.status !== "active") {
     return unavailable("Grupo GF Courier está suspendido para nuevas asignaciones.", {
+      providerId: provider.id,
       districtKey,
       sameDayCutoff,
     });
@@ -124,6 +127,7 @@ export async function loadGroupGfCourierRouteCheck(
   const agreementId = (agreementData as { id?: string } | null)?.id ?? null;
   if (!agreementId) {
     return unavailable("La tienda no tiene un contrato activo con Grupo GF Courier.", {
+      providerId: provider.id,
       districtKey,
       sameDayCutoff,
     });
@@ -150,6 +154,7 @@ export async function loadGroupGfCourierRouteCheck(
   if (tariffError || eventError) {
     return {
       ...unavailable("No se pudo validar tarifa y disponibilidad de este distrito.", {
+        providerId: provider.id,
         districtKey,
         agreementId,
         sameDayCutoff,
@@ -171,6 +176,7 @@ export async function loadGroupGfCourierRouteCheck(
   });
   if (tariff.kind === "missing") {
     return unavailable("Sin tarifa configurada para este distrito.", {
+      providerId: provider.id,
       districtKey,
       agreementId,
       sameDayCutoff,
@@ -188,8 +194,10 @@ export async function loadGroupGfCourierRouteCheck(
     return unavailable(
       `Servicio pausado${until}: ${availability.event.reason ?? "revisión operativa"}.`,
       {
+        providerId: provider.id,
         districtKey,
         agreementId,
+        tariffId: tariff.tariff.id,
         tariffAmount: tariff.tariff.delivery_amount,
         currency: tariff.tariff.currency,
         sameDayCutoff,
@@ -201,8 +209,10 @@ export async function loadGroupGfCourierRouteCheck(
     known: true,
     eligible: true,
     reason: `Tarifa S/ ${tariff.tariff.delivery_amount.toFixed(2)} incluida IGV.`,
+    providerId: provider.id,
     districtKey,
     agreementId,
+    tariffId: tariff.tariff.id,
     tariffAmount: tariff.tariff.delivery_amount,
     currency: tariff.tariff.currency,
     sameDayCutoff,
