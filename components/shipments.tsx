@@ -6,6 +6,7 @@ import { cn, Card, STICKY_HEAD, TABLE_WRAP } from "@/components/ui";
 import {
   COURIER_REPORT_RESULTS,
   attemptLabel,
+  esPorRecuperar,
   evaluateAliclikReschedule,
   getFenixDeliverySchedule,
   isCallable,
@@ -254,6 +255,10 @@ export function ShipmentsBoard({
   const [dateFilter, setDateFilter] = useState(""); // YYYY-MM-DD on next_followup_at
   const [unmatchedOnly, setUnmatchedOnly] = useState(false);
   const [uncontactedTodayOnly, setUncontactedTodayOnly] = useState(view === "pendiente");
+  // «Por recuperar»: las que Aliclik cerró sin entregar y el pedido todavía puede
+  // reintentar con Swayp (MOM §11). Van en la MISMA cola —son la misma pregunta,
+  // a quién hay que llamar— y este chip solo las acota dentro de Pendiente.
+  const [soloPorRecuperar, setSoloPorRecuperar] = useState(false);
   const [uncontactedOnly, setUncontactedOnly] = useState(false);
   const [fenixFilter, setFenixFilter] = useState<FenixAvailabilityFilter>("all");
   const [aliclikRouteFilter, setAliclikRouteFilter] = useState<AliclikRouteFilter>("all");
@@ -336,6 +341,7 @@ export function ShipmentsBoard({
       (!uncontactedOnly ||
         view !== "pendiente" ||
         isShipmentReadyForContact(s.contact_count, s.next_followup_at)) &&
+      (!soloPorRecuperar || esPorRecuperar(s)) &&
       (reprogFilter === "all" || reprogramCourierOf(s) === reprogFilter) &&
       matchesFenixAvailability(s, fenixFilter),
   );
@@ -731,6 +737,18 @@ export function ShipmentsBoard({
               </label>
               {view === "pendiente" && (
                 <>
+                  <label
+                    className="flex items-center gap-1.5 text-xs text-slate-600"
+                    title="Aliclik las cerró sin entregar: el pedido sigue vivo y admite una salida Swayp"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={soloPorRecuperar}
+                      onChange={(e) => setSoloPorRecuperar(e.target.checked)}
+                      className="rounded border-slate-300"
+                    />
+                    Por recuperar
+                  </label>
                   <label className="flex items-center gap-1.5 text-xs text-slate-600">
                     <input
                       type="checkbox"

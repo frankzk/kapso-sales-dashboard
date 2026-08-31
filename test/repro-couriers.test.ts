@@ -165,8 +165,14 @@ describe("una guía que todavía no salió del almacén no se reprograma", () =>
   // una guía entregada sería perder historial, no limpiar una cola.
   describe("solo recorta la cola de Pendiente", () => {
     it("las dos consultas lo condicionan a la categoría", () => {
+      // Se mide el RECORTE emparejado con su condición, no cada uso de
+      // `esColaDeReprogramacion`: ese guarda responde «¿es la cola de repro?» y
+      // hay más de una decisión que depende de eso —anexar las cerradas por
+      // recuperar es otra—. Contar el guarda a secas mezclaba las dos y fallaba
+      // al añadir la segunda, que no tiene nada que ver con la custodia.
       const source = read(ACCESS);
-      expect(source.match(/if \(esColaDeReprogramacion\(cats\)\)/g) ?? []).toHaveLength(2);
+      const emparejado = /if \(esColaDeReprogramacion\(cats\)\) query = query\.or\(YA_SALIO_O_NO_ES_ALICLIK\);/g;
+      expect(source.match(emparejado) ?? []).toHaveLength(2);
     });
 
     it("Pendiente sí; entregado, anulado, en ruta y transferido no", () => {
