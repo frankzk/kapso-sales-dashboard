@@ -3285,6 +3285,15 @@ existir una tabla configurable, no constantes en código:
 | Vigencia | Desde/hasta; una edición abre otra vigencia |
 | Estado | Activa/inactiva, sin borrar historial |
 
+El universo de la matriz se deriva de los pedidos de la organización que el
+Master clasifica con `coverage = lima`. El distrito libre del pedido nunca se
+muestra directamente: se resuelve contra el catálogo canónico y sus alias
+(`Surco` → `Santiago de Surco`, `SJL` → `San Juan de Lurigancho`, etc.).
+`Lurigancho Chosica` y `Chosica` comparten la tarifa canónica de `Lurigancho`.
+Cada fila muestra también la cantidad histórica de pedidos Lima que la sustenta,
+como señal de auditoría; los textos que no pueden resolverse se corrigen en el
+Master y no crean distritos ni tarifas nuevas por accidente.
+
 Precedencia: tarifa particular de la tienda y distrito, luego tarifa general de
 Grupo GF Courier. Sin coincidencia se muestra `Sin tarifa configurada`, no S/0,
 y se bloquea el cierre financiero. Daysi y Frankz pueden administrar tarifas;

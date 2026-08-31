@@ -271,4 +271,6 @@
 \ir migrations/0133_confirmation_cycle.sql
 \echo 'Applying 0134_group_gf_courier_foundation.sql'
 \ir migrations/0134_group_gf_courier_foundation.sql
+\echo 'Applying 0135_courier_lima_districts_from_master.sql'
+\ir migrations/0135_courier_lima_districts_from_master.sql
 \echo 'Done.'

@@ -38,6 +38,7 @@ export interface PeruDistrictRow {
   district: string;
   province: string;
   department: string | null;
+  order_count: number;
 }
 
 export interface CourierConfigSnapshot {
@@ -80,27 +81,34 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
     return { provider: null, agreements: [], tariffs: [], districts: [], yapePercentage: 3.5 };
   }
   const sb = await createServerSupabase();
-  const [{ data: providerData }, { data: districtsData }] = await Promise.all([
+  const admin = createAdminSupabase();
+  const [{ data: providerData }, districtsResult] = await Promise.all([
     sb
       .from("logistics_providers")
       .select("id,org_id,code,name,status,same_day_cutoff,cash_warning_amount,cash_limit_amount")
       .eq("org_id", orgId)
       .eq("code", "grupo-gf-courier")
       .maybeSingle(),
-    sb
-      .from("peru_districts")
-      .select("district_key,district,province,department")
-      .in("province", ["Lima", "Callao"])
-      .order("province")
-      .order("district"),
+    admin.rpc("courier_lima_districts", { p_org_id: orgId }),
   ]);
+  if (districtsResult.error) {
+    throw new Error(`No se pudo cargar el universo de distritos Lima: ${districtsResult.error.message}`);
+  }
+  const districtsData = districtsResult.data;
+  const districts = ((districtsData ?? []) as Record<string, unknown>[]).map((row) => ({
+    district_key: String(row.district_key),
+    district: String(row.district),
+    province: String(row.province),
+    department: row.department == null ? null : String(row.department),
+    order_count: Number(row.order_count ?? 0),
+  })) satisfies PeruDistrictRow[];
   const provider = providerData as CourierProviderRow | null;
   if (!provider) {
     return {
       provider: null,
       agreements: [],
       tariffs: [],
-      districts: (districtsData ?? []) as PeruDistrictRow[],
+      districts,
       yapePercentage: 3.5,
     };
   }
@@ -141,7 +149,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       delivery_amount: Number(row.delivery_amount),
       rejection_amount: Number(row.rejection_amount),
     })) as DistrictTariffRow[],
-    districts: (districtsData ?? []) as PeruDistrictRow[],
+    districts,
     yapePercentage: Number(fee?.percentage ?? 3.5),
   };
 }

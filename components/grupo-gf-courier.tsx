@@ -271,7 +271,9 @@ function TariffRow({
     <tr className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
       <td className="px-4 py-3">
         <p className="font-medium text-slate-900">{district.district}</p>
-        <p className="text-xs text-slate-500">{district.province}</p>
+        <p className="text-xs text-slate-500">
+          {district.province} · {district.order_count.toLocaleString("es-PE")} pedidos Lima
+        </p>
       </td>
       <td className="px-3 py-3">
         <input
