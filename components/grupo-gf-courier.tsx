@@ -3,10 +3,11 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
-import { resolveDistrictTariff } from "@/lib/grupo-gf-courier";
+import { resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
 import {
   activateGroupGfCourier,
   saveDistrictTariff,
+  setDistrictAvailability,
   type CourierActionResult,
   type CourierConfigSnapshot,
   type CourierAgreementRow,
@@ -90,6 +91,7 @@ export function GrupoGfCourierBoard({
       error={error}
       notice={notice}
       onSave={(input) => run(() => saveDistrictTariff(input))}
+      onAvailability={(input) => run(() => setDistrictAvailability(input))}
     />
   );
 }
@@ -101,6 +103,7 @@ function TariffMatrix({
   error,
   notice,
   onSave,
+  onAvailability,
 }: {
   orgId: string;
   snapshot: CourierConfigSnapshot;
@@ -108,6 +111,7 @@ function TariffMatrix({
   error: string | null;
   notice: string | null;
   onSave: (input: Parameters<typeof saveDistrictTariff>[0]) => void;
+  onAvailability: (input: Parameters<typeof setDistrictAvailability>[0]) => void;
 }) {
   const provider = snapshot.provider!;
   const [scope, setScope] = useState("general");
@@ -129,6 +133,15 @@ function TariffMatrix({
         districtKey: district.district_key,
         day: effectiveFrom,
       }).kind === "found",
+  ).length;
+  const paused = snapshot.districts.filter(
+    (district) =>
+      resolveDistrictAvailability(snapshot.availabilityEvents, {
+        providerId: provider.id,
+        agreementId,
+        districtKey: district.district_key,
+        day: today(),
+      }).status === "paused",
   ).length;
 
   return (
@@ -185,14 +198,18 @@ function TariffMatrix({
             className="mt-1 block h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
           />
         </label>
-        <p className="pb-2 text-xs tabular-nums text-slate-500">{configured}/{snapshot.districts.length} configurados</p>
+        <p className="pb-2 text-xs tabular-nums text-slate-500">
+          {configured}/{snapshot.districts.length} configurados
+          {paused > 0 && <span className="ml-2 font-medium text-amber-700">· {paused} pausado{paused === 1 ? "" : "s"}</span>}
+        </p>
       </section>
 
       <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm")}>
-        <table className="w-full min-w-[760px] text-sm">
+        <table className="w-full min-w-[980px] text-sm">
           <thead className={STICKY_HEAD}>
             <tr className="text-left text-xs text-slate-500">
               <th className="px-4 py-3 font-medium">Distrito</th>
+              <th className="px-3 py-3 font-medium">Servicio</th>
               <th className="px-3 py-3 font-medium">Zona</th>
               <th className="px-3 py-3 text-right font-medium">Entrega o rechazo</th>
               <th className="px-3 py-3 font-medium">Origen</th>
@@ -209,13 +226,15 @@ function TariffMatrix({
                 agreement={snapshot.agreements.find((item) => item.id === agreementId) ?? null}
                 district={district}
                 tariffs={snapshot.tariffs}
+                availabilityEvents={snapshot.availabilityEvents}
                 effectiveFrom={effectiveFrom}
                 pending={pending}
                 onSave={onSave}
+                onAvailability={onAvailability}
               />
             ))}
             {!districts.length && (
-              <tr><td colSpan={5} className="px-4 py-10 text-center text-sm text-slate-500">Ningún distrito coincide con la búsqueda.</td></tr>
+              <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-500">Ningún distrito coincide con la búsqueda.</td></tr>
             )}
           </tbody>
         </table>
@@ -240,9 +259,11 @@ function TariffRow({
   agreement,
   district,
   tariffs,
+  availabilityEvents,
   effectiveFrom,
   pending,
   onSave,
+  onAvailability,
 }: {
   orgId: string;
   providerId: string;
@@ -250,9 +271,11 @@ function TariffRow({
   agreement: CourierAgreementRow | null;
   district: PeruDistrictRow;
   tariffs: CourierConfigSnapshot["tariffs"];
+  availabilityEvents: CourierConfigSnapshot["availabilityEvents"];
   effectiveFrom: string;
   pending: boolean;
   onSave: (input: Parameters<typeof saveDistrictTariff>[0]) => void;
+  onAvailability: (input: Parameters<typeof setDistrictAvailability>[0]) => void;
 }) {
   const resolution = resolveDistrictTariff(tariffs, {
     providerId,
@@ -263,57 +286,177 @@ function TariffRow({
   const tariff = resolution.kind === "found" ? resolution.tariff : null;
   const [zone, setZone] = useState(tariff?.zone ?? "");
   const [delivery, setDelivery] = useState(tariff ? String(tariff.delivery_amount) : "");
+  const [showPauseForm, setShowPauseForm] = useState(false);
+  const [pauseReason, setPauseReason] = useState("");
+  const [pausedUntil, setPausedUntil] = useState("");
   const inherited = agreementId != null && resolution.kind === "found" && resolution.source === "general";
+  const availability = resolveDistrictAvailability(availabilityEvents, {
+    providerId,
+    agreementId,
+    districtKey: district.district_key,
+    day: today(),
+  });
+  const inheritedPause =
+    agreementId != null && availability.status === "paused" && availability.source === "general";
 
   return (
-    <tr className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
-      <td className="px-4 py-3">
-        <p className="font-medium text-slate-900">{district.district}</p>
-        <p className="text-xs text-slate-500">
-          {district.province} · {district.order_count.toLocaleString("es-PE")} pedidos Lima
-        </p>
-      </td>
-      <td className="px-3 py-3">
-        <input
-          value={zone}
-          onChange={(event) => setZone(event.target.value)}
-          aria-label={`Zona de ${district.district}`}
-          placeholder="Sin zona"
-          className="h-9 w-40 rounded-lg border border-slate-200 bg-white px-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-        />
-      </td>
-      <td className="px-3 py-3 text-right">
-        <MoneyInput label={`Tarifa de entrega o rechazo en ${district.district}`} value={delivery} onChange={setDelivery} />
-      </td>
-      <td className="px-3 py-3">
-        {resolution.kind === "missing" ? (
-          <span className="rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">Sin tarifa</span>
-        ) : inherited ? (
-          <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600">Heredada de general</span>
-        ) : (
-          <span className="text-xs text-slate-500">{agreement?.client_label ?? "General"}</span>
-        )}
-      </td>
-      <td className="px-4 py-3 text-right">
-        <button
-          type="button"
-          disabled={pending || delivery.trim() === ""}
-          onClick={() => onSave({
-            orgId,
-            providerId,
-            agreementId,
-            districtKey: district.district_key,
-            zone,
-            deliveryAmount: delivery,
-            effectiveFrom,
-          })}
-          className="h-9 rounded-lg px-3 text-sm font-semibold text-brand-700 transition hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:text-slate-300"
-        >
-          {tariff && !inherited ? "Cambiar" : inherited ? "Crear excepción" : "Guardar"}
-        </button>
-      </td>
-    </tr>
+    <>
+      <tr className={cn(
+        "border-b border-slate-100 last:border-0 hover:bg-slate-50/60",
+        availability.status === "paused" && "bg-amber-50/40 hover:bg-amber-50/60",
+      )}>
+        <td className="px-4 py-3">
+          <p className="font-medium text-slate-900">{district.district}</p>
+          <p className="text-xs text-slate-500">
+            {district.province} · {district.order_count.toLocaleString("es-PE")} pedidos Lima
+          </p>
+        </td>
+        <td className="px-3 py-3">
+          {availability.status === "paused" ? (
+            <div className="min-w-44 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="rounded-md bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">
+                  {inheritedPause ? "Pausado general" : "Pausado"}
+                </span>
+                {!inheritedPause && (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => onAvailability({
+                      orgId,
+                      providerId,
+                      agreementId,
+                      districtKey: district.district_key,
+                      status: "available",
+                    })}
+                    className="rounded-md px-1.5 py-1 text-xs font-semibold text-brand-700 transition hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50"
+                  >
+                    Reactivar
+                  </button>
+                )}
+              </div>
+              <p className="max-w-52 truncate text-xs text-amber-800" title={availability.event.reason ?? undefined}>
+                {availability.event.reason}
+                {availability.event.paused_until && ` · hasta ${formatDate(availability.event.paused_until)}`}
+              </p>
+            </div>
+          ) : (
+            <button
+              type="button"
+              aria-expanded={showPauseForm}
+              onClick={() => setShowPauseForm((current) => !current)}
+              className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+            >
+              Disponible · Pausar
+            </button>
+          )}
+        </td>
+        <td className="px-3 py-3">
+          <input
+            value={zone}
+            onChange={(event) => setZone(event.target.value)}
+            aria-label={`Zona de ${district.district}`}
+            placeholder="Sin zona"
+            className="h-9 w-40 rounded-lg border border-slate-200 bg-white px-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+          />
+        </td>
+        <td className="px-3 py-3 text-right">
+          <MoneyInput label={`Tarifa de entrega o rechazo en ${district.district}`} value={delivery} onChange={setDelivery} />
+        </td>
+        <td className="px-3 py-3">
+          {resolution.kind === "missing" ? (
+            <span className="rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">Sin tarifa</span>
+          ) : inherited ? (
+            <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600">Heredada de general</span>
+          ) : (
+            <span className="text-xs text-slate-500">{agreement?.client_label ?? "General"}</span>
+          )}
+        </td>
+        <td className="px-4 py-3 text-right">
+          <button
+            type="button"
+            disabled={pending || delivery.trim() === ""}
+            onClick={() => onSave({
+              orgId,
+              providerId,
+              agreementId,
+              districtKey: district.district_key,
+              zone,
+              deliveryAmount: delivery,
+              effectiveFrom,
+            })}
+            className="h-9 rounded-lg px-3 text-sm font-semibold text-brand-700 transition hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:text-slate-300"
+          >
+            {tariff && !inherited ? "Cambiar" : inherited ? "Crear excepción" : "Guardar"}
+          </button>
+        </td>
+      </tr>
+      {showPauseForm && availability.status === "available" && (
+        <tr className="border-b border-amber-100 bg-amber-50/60">
+          <td colSpan={6} className="px-4 py-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+              <label className="min-w-0 flex-1 text-xs font-medium text-slate-700">
+                Motivo para pausar {district.district}
+                <input
+                  autoFocus
+                  value={pauseReason}
+                  onChange={(event) => setPauseReason(event.target.value)}
+                  placeholder="Ej. Capacidad completa o zona temporalmente restringida"
+                  className="mt-1 block h-10 w-full rounded-lg border border-amber-200 bg-white px-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                />
+              </label>
+              <label className="text-xs font-medium text-slate-700">
+                Reactivar después de esta fecha (opcional)
+                <input
+                  type="date"
+                  min={today()}
+                  value={pausedUntil}
+                  onChange={(event) => setPausedUntil(event.target.value)}
+                  className="mt-1 block h-10 rounded-lg border border-amber-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                />
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={pending || pauseReason.trim().length < 4}
+                  onClick={() => {
+                    onAvailability({
+                      orgId,
+                      providerId,
+                      agreementId,
+                      districtKey: district.district_key,
+                      status: "paused",
+                      reason: pauseReason,
+                      pausedUntil,
+                    });
+                    setShowPauseForm(false);
+                  }}
+                  className="h-10 rounded-lg bg-amber-600 px-4 text-sm font-semibold text-white transition hover:bg-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 disabled:opacity-50"
+                >
+                  Confirmar pausa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPauseForm(false)}
+                  className="h-10 rounded-lg px-3 text-sm font-medium text-slate-600 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-slate-600">
+              Solo bloquea asignaciones nuevas. Las rutas que ya comenzaron continúan sin cambios.
+            </p>
+          </td>
+        </tr>
+      )}
+    </>
   );
+}
+
+function formatDate(value: string): string {
+  const [year, month, day] = value.split("-");
+  return `${day}/${month}/${year}`;
 }
 
 function MoneyInput({

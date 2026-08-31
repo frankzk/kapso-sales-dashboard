@@ -28,9 +28,92 @@ export interface DistrictTariffRow {
   status: "active" | "inactive";
 }
 
+export interface DistrictAvailabilityEventRow {
+  id: string;
+  provider_id: string;
+  agreement_id: string | null;
+  district_key: string;
+  action: "paused" | "reactivated";
+  reason: string | null;
+  paused_until: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export type DistrictAvailabilityResolution =
+  | { status: "available"; source: "default" }
+  | {
+      status: "paused";
+      source: "general" | "agreement";
+      event: DistrictAvailabilityEventRow;
+    };
+
 export type TariffResolution =
   | { kind: "found"; tariff: DistrictTariffRow; source: "agreement" | "general" }
   | { kind: "missing"; reason: "district_without_tariff" };
+
+function latestAvailabilityEvent(
+  rows: readonly DistrictAvailabilityEventRow[],
+  input: {
+    providerId: string;
+    agreementId: string | null;
+    districtKey: string;
+  },
+): DistrictAvailabilityEventRow | null {
+  return (
+    rows
+      .filter(
+        (row) =>
+          row.provider_id === input.providerId &&
+          row.agreement_id === input.agreementId &&
+          row.district_key === input.districtKey,
+      )
+      .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))[0] ?? null
+  );
+}
+
+function isEffectivePause(event: DistrictAvailabilityEventRow | null, day: string): boolean {
+  return (
+    event?.action === "paused" &&
+    (event.paused_until == null || event.paused_until >= day)
+  );
+}
+
+/**
+ * Resuelve la disponibilidad para una asignación nueva. Una pausa general
+ * siempre gana; la pausa contractual solo afecta a su propia tienda.
+ */
+export function resolveDistrictAvailability(
+  rows: readonly DistrictAvailabilityEventRow[],
+  input: {
+    providerId: string;
+    agreementId: string | null;
+    districtKey: string;
+    day: string;
+  },
+): DistrictAvailabilityResolution {
+  const general = latestAvailabilityEvent(rows, {
+    providerId: input.providerId,
+    agreementId: null,
+    districtKey: input.districtKey,
+  });
+  if (isEffectivePause(general, input.day)) {
+    return { status: "paused", source: "general", event: general! };
+  }
+
+  if (input.agreementId != null) {
+    const agreement = latestAvailabilityEvent(rows, {
+      providerId: input.providerId,
+      agreementId: input.agreementId,
+      districtKey: input.districtKey,
+    });
+    if (isEffectivePause(agreement, input.day)) {
+      return { status: "paused", source: "agreement", event: agreement! };
+    }
+  }
+
+  return { status: "available", source: "default" };
+}
 
 function money(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;

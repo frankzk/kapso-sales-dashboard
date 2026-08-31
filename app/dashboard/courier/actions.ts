@@ -5,7 +5,11 @@ import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getAdminOrgs, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
-import type { DistrictTariffRow } from "@/lib/grupo-gf-courier";
+import {
+  resolveDistrictAvailability,
+  type DistrictAvailabilityEventRow,
+  type DistrictTariffRow,
+} from "@/lib/grupo-gf-courier";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -45,6 +49,7 @@ export interface CourierConfigSnapshot {
   provider: CourierProviderRow | null;
   agreements: CourierAgreementRow[];
   tariffs: DistrictTariffRow[];
+  availabilityEvents: DistrictAvailabilityEventRow[];
   districts: PeruDistrictRow[];
   yapePercentage: number;
 }
@@ -78,7 +83,14 @@ function previousDay(day: string): string {
 export async function loadCourierConfig(orgId: string): Promise<CourierConfigSnapshot> {
   const auth = await requireManager(orgId);
   if ("error" in auth) {
-    return { provider: null, agreements: [], tariffs: [], districts: [], yapePercentage: 3.5 };
+    return {
+      provider: null,
+      agreements: [],
+      tariffs: [],
+      availabilityEvents: [],
+      districts: [],
+      yapePercentage: 3.5,
+    };
   }
   const sb = await createServerSupabase();
   const admin = createAdminSupabase();
@@ -108,12 +120,18 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       provider: null,
       agreements: [],
       tariffs: [],
+      availabilityEvents: [],
       districts,
       yapePercentage: 3.5,
     };
   }
 
-  const [{ data: agreements }, { data: tariffs }, { data: fee }] = await Promise.all([
+  const [
+    { data: agreements },
+    { data: tariffs },
+    { data: availabilityEvents },
+    { data: fee },
+  ] = await Promise.all([
     sb
       .from("logistics_service_agreements")
       .select("id,store_id,client_label,status")
@@ -127,6 +145,13 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       )
       .eq("provider_id", provider.id)
       .order("effective_from", { ascending: false }),
+    sb
+      .from("logistics_district_availability_events")
+      .select(
+        "id,provider_id,agreement_id,district_key,action,reason,paused_until,created_by,created_at",
+      )
+      .eq("provider_id", provider.id)
+      .order("created_at", { ascending: false }),
     sb
       .from("logistics_fee_rules")
       .select("percentage")
@@ -149,6 +174,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       delivery_amount: Number(row.delivery_amount),
       rejection_amount: Number(row.rejection_amount),
     })) as DistrictTariffRow[],
+    availabilityEvents: (availabilityEvents ?? []) as DistrictAvailabilityEventRow[],
     districts,
     yapePercentage: Number(fee?.percentage ?? 3.5),
   };
@@ -369,4 +395,124 @@ export async function saveDistrictTariff(
 
   revalidatePath(COURIER_PATH);
   return { notice: "Tarifa guardada. La vigencia anterior quedó conservada." };
+}
+
+export interface DistrictAvailabilityInput {
+  orgId: string;
+  providerId: string;
+  agreementId?: string | null;
+  districtKey: string;
+  status: "available" | "paused";
+  reason?: string | null;
+  pausedUntil?: string | null;
+}
+
+function todayInLima(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
+export async function setDistrictAvailability(
+  input: DistrictAvailabilityInput,
+): Promise<CourierActionResult> {
+  const auth = await requireManager(input.orgId);
+  if ("error" in auth) return auth;
+  const reason = input.reason?.trim() || null;
+  const pausedUntil = input.pausedUntil?.trim() || null;
+  const day = todayInLima();
+  if (input.status === "paused" && (!reason || reason.length < 4)) {
+    return { error: "Escribe un motivo de al menos 4 caracteres para pausar el distrito." };
+  }
+  if (pausedUntil && (!DATE_RE.test(pausedUntil) || pausedUntil < day)) {
+    return { error: "La reactivación debe ser hoy o una fecha posterior." };
+  }
+
+  const admin = createAdminSupabase();
+  const { data: provider } = await admin
+    .from("logistics_providers")
+    .select("id")
+    .eq("id", input.providerId)
+    .eq("org_id", input.orgId)
+    .maybeSingle();
+  if (!provider) return { error: "Operador no válido." };
+  if (input.agreementId) {
+    const { data: agreement } = await admin
+      .from("logistics_service_agreements")
+      .select("id")
+      .eq("id", input.agreementId)
+      .eq("provider_id", input.providerId)
+      .eq("status", "active")
+      .maybeSingle();
+    if (!agreement) return { error: "Contrato de tienda no válido." };
+  }
+
+  const [{ data: courierDistricts, error: districtError }, eventsResult] = await Promise.all([
+    admin.rpc("courier_lima_districts", { p_org_id: input.orgId }),
+    admin
+      .from("logistics_district_availability_events")
+      .select(
+        "id,provider_id,agreement_id,district_key,action,reason,paused_until,created_by,created_at",
+      )
+      .eq("provider_id", input.providerId)
+      .eq("district_key", input.districtKey)
+      .order("created_at", { ascending: false }),
+  ]);
+  if (districtError) return { error: `No se pudo validar el distrito: ${districtError.message}` };
+  if (eventsResult.error) return { error: eventsResult.error.message };
+  const districtExists = ((courierDistricts ?? []) as Record<string, unknown>[]).some(
+    (row) => String(row.district_key) === input.districtKey,
+  );
+  if (!districtExists) {
+    return { error: "El distrito no pertenece a la matriz Lima Metropolitana y Callao." };
+  }
+
+  const agreementId = input.agreementId || null;
+  const resolution = resolveDistrictAvailability(
+    (eventsResult.data ?? []) as DistrictAvailabilityEventRow[],
+    {
+      providerId: input.providerId,
+      agreementId,
+      districtKey: input.districtKey,
+      day,
+    },
+  );
+  if (input.status === "paused" && resolution.status === "paused") {
+    return {
+      error:
+        resolution.source === "general" && agreementId != null
+          ? "El distrito ya está pausado en el tarifario general. Reactívalo desde ese ámbito."
+          : "El distrito ya está pausado.",
+    };
+  }
+  if (input.status === "available") {
+    if (resolution.status === "available") return { error: "El distrito ya está disponible." };
+    if (resolution.source === "general" && agreementId != null) {
+      return { error: "La pausa es general. Reactívala desde el tarifario General de Grupo GF." };
+    }
+  }
+
+  const { error } = await admin.from("logistics_district_availability_events").insert({
+    provider_id: input.providerId,
+    agreement_id: agreementId,
+    district_key: input.districtKey,
+    action: input.status === "paused" ? "paused" : "reactivated",
+    reason: input.status === "paused" ? reason : null,
+    paused_until: input.status === "paused" ? pausedUntil : null,
+    created_by: auth.userId,
+  });
+  if (error) return { error: error.message };
+
+  revalidatePath(COURIER_PATH);
+  return {
+    notice:
+      input.status === "paused"
+        ? `Distrito pausado${pausedUntil ? ` hasta el ${pausedUntil}` : " hasta reactivación manual"}. Las rutas activas no cambian.`
+        : "Distrito reactivado. Conserva la tarifa configurada.",
+  };
 }

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   merchantSettlement,
+  resolveDistrictAvailability,
   resolveDistrictTariff,
   tariffForOutcome,
   yapeCommission,
   type DistrictTariffRow,
+  type DistrictAvailabilityEventRow,
 } from "@/lib/grupo-gf-courier";
 
 const base: DistrictTariffRow = {
@@ -84,6 +86,80 @@ describe("tarifas configurables de Grupo GF Courier", () => {
     expect(tariffForOutcome(base, "no_responde")).toBe(0);
     expect(tariffForOutcome(base, "direccion_incorrecta")).toBe(0);
     expect(tariffForOutcome(base, "cancelado")).toBe(0);
+  });
+});
+
+const pause: DistrictAvailabilityEventRow = {
+  id: "pause-general",
+  provider_id: "grupo-gf",
+  agreement_id: null,
+  district_key: "miraflores",
+  action: "paused",
+  reason: "Capacidad completa",
+  paused_until: null,
+  created_by: "daysi",
+  created_at: "2026-08-30T15:00:00Z",
+};
+
+describe("disponibilidad distrital de Grupo GF Courier", () => {
+  it("considera disponible un distrito sin eventos", () => {
+    expect(resolveDistrictAvailability([], {
+      providerId: "grupo-gf",
+      agreementId: "aurela",
+      districtKey: "miraflores",
+      day: "2026-08-31",
+    })).toEqual({ status: "available", source: "default" });
+  });
+
+  it("la pausa general bloquea también a una tienda", () => {
+    expect(resolveDistrictAvailability([pause], {
+      providerId: "grupo-gf",
+      agreementId: "aurela",
+      districtKey: "miraflores",
+      day: "2026-08-31",
+    })).toEqual({ status: "paused", source: "general", event: pause });
+  });
+
+  it("una pausa contractual no bloquea a otra tienda", () => {
+    const storePause = { ...pause, id: "pause-aurela", agreement_id: "aurela" };
+    expect(resolveDistrictAvailability([storePause], {
+      providerId: "grupo-gf",
+      agreementId: "kenku",
+      districtKey: "miraflores",
+      day: "2026-08-31",
+    }).status).toBe("available");
+    expect(resolveDistrictAvailability([storePause], {
+      providerId: "grupo-gf",
+      agreementId: "aurela",
+      districtKey: "miraflores",
+      day: "2026-08-31",
+    }).status).toBe("paused");
+  });
+
+  it("la reactivación posterior levanta la pausa", () => {
+    const resumed: DistrictAvailabilityEventRow = {
+      ...pause,
+      id: "resume-general",
+      action: "reactivated",
+      reason: null,
+      paused_until: null,
+      created_at: "2026-08-31T10:00:00Z",
+    };
+    expect(resolveDistrictAvailability([pause, resumed], {
+      providerId: "grupo-gf",
+      agreementId: null,
+      districtKey: "miraflores",
+      day: "2026-08-31",
+    }).status).toBe("available");
+  });
+
+  it("reactiva automáticamente al pasar la fecha indicada", () => {
+    expect(resolveDistrictAvailability([{ ...pause, paused_until: "2026-08-30" }], {
+      providerId: "grupo-gf",
+      agreementId: null,
+      districtKey: "miraflores",
+      day: "2026-08-31",
+    }).status).toBe("available");
   });
 });
 

@@ -275,4 +275,6 @@
 \ir migrations/0135_courier_lima_districts_from_master.sql
 \echo 'Applying 0136_courier_single_delivery_rejection_rate.sql'
 \ir migrations/0136_courier_single_delivery_rejection_rate.sql
+\echo 'Applying 0137_courier_district_availability.sql'
+\ir migrations/0137_courier_district_availability.sql
 \echo 'Done.'

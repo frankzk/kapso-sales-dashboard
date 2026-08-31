@@ -3293,6 +3293,13 @@ Cada fila muestra también la cantidad histórica de pedidos Lima que la sustent
 como señal de auditoría; los textos que no pueden resolverse se corrigen en el
 Master y no crean distritos ni tarifas nuevas por accidente.
 
+La disponibilidad es independiente de la tarifa. Un distrito puede pausarse de
+forma general o solo para una tienda, con motivo obligatorio y fecha opcional de
+reactivación. La pausa general prevalece sobre cualquier excepción contractual,
+bloquea únicamente nuevas asignaciones y no altera rutas ya iniciadas. Poner una
+tarifa en S/0 nunca pausa el servicio. Reactivar conserva el precio y registra un
+nuevo evento; el historial de pausas y reactivaciones es append-only.
+
 Precedencia: tarifa particular de la tienda y distrito, luego tarifa general de
 Grupo GF Courier. Sin coincidencia se muestra `Sin tarifa configurada`, no S/0,
 y se bloquea el cierre financiero. Daysi y Frankz pueden administrar tarifas;
