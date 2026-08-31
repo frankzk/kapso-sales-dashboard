@@ -70,3 +70,20 @@ export function decideLabelAction(outputs: readonly OutputForDecision[]): LabelD
 
   return { kind: "create" };
 }
+
+/** Cuántos pedidos se nombran en un aviso antes de resumir. El aviso es un
+ *  toast: nombrarlos todos en una tanda de 50 lo volvería ilegible, y no
+ *  nombrar ninguno es lo que había — el número sin el "cuáles", que es la
+ *  primera pregunta de quien lo lee. */
+export const MAX_NAMED = 5;
+
+/**
+ * "#A, #B y 3 más" — nombra los primeros y dice cuántos quedan.
+ *
+ * La cola importa: sin ella una lista recortada se lee como completa, y quien
+ * la mira se queda tranquilo creyendo que vio todo. Pura.
+ */
+export function listNames(names: readonly string[]): string {
+  if (names.length <= MAX_NAMED) return names.join(", ");
+  return `${names.slice(0, MAX_NAMED).join(", ")} y ${names.length - MAX_NAMED} más`;
+}

@@ -53,6 +53,7 @@ import {
 } from "@/lib/shipment-output";
 import {
   decideLabelAction,
+  listNames,
   type OutputForDecision,
 } from "@/lib/labels/resolve-output";
 import type { RouteKey } from "@/lib/order-route-plan";
@@ -620,6 +621,16 @@ export interface ResolveLabelsResult extends MasterActionState {
   shipmentIds: string[];
   created: number;
   reused: number;
+  /**
+   * Los pedidos cuyo rótulo se REIMPRIMIÓ, por nombre.
+   *
+   * Antes esto era solo el contador `reused`, y el aviso decía "3 rótulos
+   * reimpresos" sin decir cuáles — la primera pregunta de quien lo lee, y no
+   * había forma de responderla: la reimpresión no crea salida ni deja evento, o
+   * sea que el dato no se podía recuperar después de ninguna manera. El bucle
+   * tenía el pedido delante en el momento de decidir y lo tiraba.
+   */
+  reusedOrders: string[];
   /** Pedidos que exigen una salida adicional justificada (§23). */
   blocked: { orderId: string; error: string }[];
 }
@@ -638,35 +649,41 @@ export interface ResolveLabelsResult extends MasterActionState {
 export async function resolveLabelsForOrders(orderIds: string[]): Promise<ResolveLabelsResult> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) {
-    return { error: "Tu rol no permite crear salidas.", shipmentIds: [], created: 0, reused: 0, blocked: [] };
+    return { error: "Tu rol no permite crear salidas.", shipmentIds: [], created: 0, reused: 0, reusedOrders: [], blocked: [] };
   }
   const unique = Array.from(new Set(orderIds.filter(Boolean)));
   if (!unique.length) {
-    return { error: "No hay pedidos seleccionados.", shipmentIds: [], created: 0, reused: 0, blocked: [] };
+    return { error: "No hay pedidos seleccionados.", shipmentIds: [], created: 0, reused: 0, reusedOrders: [], blocked: [] };
   }
   if (unique.length > MAX_BULK_OUTPUTS) {
     return {
       error: `Demasiados pedidos de una vez (máximo ${MAX_BULK_OUTPUTS}).`,
-      shipmentIds: [], created: 0, reused: 0, blocked: [],
+      shipmentIds: [], created: 0, reused: 0, reusedOrders: [], blocked: [],
     };
   }
 
   const admin = createAdminSupabase();
   const { data: shipmentRows } = await admin
     .from("shipments")
-    .select("id,order_id,custody_state,delivery_status,created_at,output_number")
+    .select("id,order_id,order_name,custody_state,delivery_status,created_at,output_number")
     .in("order_id", unique);
 
   const byOrder = new Map<string, OutputForDecision[]>();
-  for (const row of (shipmentRows ?? []) as (OutputForDecision & { order_id: string | null })[]) {
+  const nameByOrder = new Map<string, string>();
+  for (const row of (shipmentRows ?? []) as (OutputForDecision & {
+    order_id: string | null;
+    order_name: string | null;
+  })[]) {
     if (!row.order_id) continue;
     const list = byOrder.get(row.order_id) ?? [];
     list.push(row);
     byOrder.set(row.order_id, list);
+    if (row.order_name) nameByOrder.set(row.order_id, row.order_name);
   }
 
   const shipmentIds: string[] = [];
   const blocked: ResolveLabelsResult["blocked"] = [];
+  const reusedOrders: string[] = [];
   let created = 0;
   let reused = 0;
 
@@ -675,6 +692,9 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
     if (decision.kind === "reuse") {
       shipmentIds.push(decision.shipmentId);
       reused += 1;
+      // El nombre sale de la salida que se reusa, que por definición existe.
+      const name = nameByOrder.get(orderId);
+      if (name) reusedOrders.push(name);
       continue;
     }
     if (decision.kind === "needs_justification") {
@@ -700,11 +720,17 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
 
   const parts: string[] = [];
   if (created) parts.push(`${created} salida${created === 1 ? "" : "s"} creada${created === 1 ? "" : "s"}`);
-  if (reused) parts.push(`${reused} rótulo${reused === 1 ? "" : "s"} reimpreso${reused === 1 ? "" : "s"}`);
+  if (reused) {
+    parts.push(
+      `${reused} rótulo${reused === 1 ? "" : "s"} reimpreso${reused === 1 ? "" : "s"}` +
+        (reusedOrders.length ? ` (${listNames(reusedOrders)})` : ""),
+    );
+  }
   return {
     shipmentIds,
     created,
     reused,
+    reusedOrders,
     blocked,
     notice: parts.length ? parts.join(" · ") : undefined,
     error: shipmentIds.length ? undefined : "Ningún pedido tiene un rótulo que imprimir.",
