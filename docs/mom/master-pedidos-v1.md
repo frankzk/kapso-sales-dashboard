@@ -3151,6 +3151,21 @@ externa, para no mantener un segundo flujo especial de «propios».
 - Una ruta puede mezclar pedidos de Aurela, Kenku y otras tiendas autorizadas.
 - El portal de una tienda externa admite conexión Shopify, API y carga Excel.
 
+La **Mesa de ruta** muestra Grupo GF Courier en los pedidos clasificados como
+Lima Metropolitana o Callao. Antes de ofrecer la asignación comprueba operador
+y contrato activos, distrito canónico, tarifa vigente y servicio no pausado. Si
+alguna condición falla, conserva la alternativa visible con el motivo exacto y
+recomienda el siguiente courier disponible; nunca interpreta S/0 como cobertura.
+La acción vuelve a comprobar esas reglas en el servidor justo antes de crear la
+salida, porque una tarifa, contrato o pausa puede cambiar mientras el drawer está
+abierto.
+
+Durante la transición, las salidas de Grupo GF siguen guardando el token legado
+`propio` para no romper rutas, QR, manifiestos ni liquidaciones históricas. La
+interfaz ya las nombra **Grupo GF Courier**. El token se reemplazará por el
+`provider_id` estable al ejecutar el paso 2 de §29.11, con migración auditada y
+sin reescribir el historial.
+
 Shopify continúa siendo la única fuente de **pedidos comerciales administrados
 por Kapta** (§2). Una solicitud recibida directamente por API o Excel es una
 solicitud logística, no un pedido Shopify inventado. Debe conservar el código

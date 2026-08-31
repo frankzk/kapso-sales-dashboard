@@ -1408,7 +1408,7 @@ function AgencyDays({
 // antes de saber con quién sale, y el courier se fija al entrar a la ruta (§4).
 const BULK_COURIERS: { key: ManualRouteCourier; label: string }[] = [
   { key: COURIER_TBD, label: "Sin definir (se decide en despacho)" },
-  { key: "propio", label: "Motorizado propio" },
+  { key: "propio", label: "Grupo GF Courier" },
   { key: "axel", label: "Axel Courier" },
   { key: "urpi", label: "Urpi" },
   { key: "olva", label: "Olva (agencia)" },

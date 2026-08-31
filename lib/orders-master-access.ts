@@ -14,6 +14,7 @@ import { resolveEmails } from "@/lib/productivity";
 import { shopifyOrderNote, shopifyShippingAddress } from "@/lib/shopify-address";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
+import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { codCouriersFor, isNonMetroLimaLocation } from "@/lib/order-coverage";
 import { limaTodayKey } from "@/lib/shipments";
 import type { CostTariff } from "@/lib/costs";
@@ -576,9 +577,10 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
 
   const orderRow = orderRes.data as { line_items?: OrderLineItem[]; raw?: unknown } | null;
   const lineItems = orderRow?.line_items ?? [];
-  const [swayp, aliclikHealth] = await Promise.all([
+  const [swayp, aliclikHealth, grupoGfCourier] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
+    loadGroupGfCourierRouteCheck(sb, row),
   ]);
   return {
     row,
@@ -593,6 +595,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
       operation: operationOf(row, guides),
       paymentState: row.payment_state,
       swayp,
+      grupoGfCourier,
       outputs: guides.map((guide) => ({
         id: guide.id,
         courier: guide.courier,

@@ -52,6 +52,22 @@ export type TariffResolution =
   | { kind: "found"; tariff: DistrictTariffRow; source: "agreement" | "general" }
   | { kind: "missing"; reason: "district_without_tariff" };
 
+/**
+ * Resultado único para decidir si una salida nueva puede asignarse a Grupo GF.
+ * Lo consume tanto la Mesa de ruta como el guard del servidor: así la tarjeta
+ * no promete una salida que la acción vaya a rechazar después.
+ */
+export interface GroupGfCourierRouteCheck {
+  known: boolean;
+  eligible: boolean;
+  reason: string;
+  districtKey: string | null;
+  agreementId: string | null;
+  tariffAmount: number | null;
+  currency: string;
+  sameDayCutoff: string;
+}
+
 function latestAvailabilityEvent(
   rows: readonly DistrictAvailabilityEventRow[],
   input: {

@@ -142,7 +142,9 @@ export function OrderRouteDesk({
                   : route.availability === "blocked"
                   ? "No disponible"
                   : actionEnabled(route)
-                    ? ACTION_LABEL[route.action]
+                    ? route.key === "propio"
+                      ? "Asignar Grupo GF"
+                      : ACTION_LABEL[route.action]
                     : "Sin permiso"}
               </button>
             </article>

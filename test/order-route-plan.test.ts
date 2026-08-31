@@ -3,6 +3,17 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildOrderRoutePlan } from "@/lib/order-route-plan";
 
+const grupoGfDisponible = {
+  known: true,
+  eligible: true,
+  reason: "Tarifa S/ 13.00 incluida IGV.",
+  districtKey: "san miguel",
+  agreementId: "agreement-1",
+  tariffAmount: 13,
+  currency: "PEN",
+  sameDayCutoff: "11:30",
+} as const;
+
 describe("motor de rutas MOM Fase 3", () => {
   it("sugiere Aliclik primero para Provincia COD nueva", () => {
     const plan = buildOrderRoutePlan({
@@ -27,6 +38,64 @@ describe("motor de rutas MOM Fase 3", () => {
         (route) => route.key === "tanders",
       ),
     ).toBe(false);
+  });
+
+  it("muestra Grupo GF Courier para un pedido Lima elegible", () => {
+    const plan = buildOrderRoutePlan({
+      operation: "lima",
+      outputs: [],
+      grupoGfCourier: grupoGfDisponible,
+      // 10:00 en Lima: todavía entra al corte de 11:30.
+      now: new Date("2026-08-31T15:00:00Z"),
+    });
+    const grupoGf = plan.candidates.find((route) => route.key === "propio");
+    expect(grupoGf).toMatchObject({
+      label: "Grupo GF Courier",
+      availability: "available",
+      recommended: true,
+    });
+    expect(grupoGf?.timing).toContain("corte 11:30");
+    expect(grupoGf?.reason).toContain("S/ 13.00");
+  });
+
+  it("explica por qué Grupo GF no es elegible y recomienda otra ruta", () => {
+    const plan = buildOrderRoutePlan({
+      operation: "lima",
+      outputs: [],
+      grupoGfCourier: {
+        ...grupoGfDisponible,
+        eligible: false,
+        tariffAmount: null,
+        reason: "Sin tarifa configurada para este distrito.",
+      },
+      now: new Date("2026-08-31T15:00:00Z"),
+    });
+    const grupoGf = plan.candidates.find((route) => route.key === "propio");
+    expect(grupoGf?.availability).toBe("blocked");
+    expect(grupoGf?.reason).toContain("Sin tarifa");
+    expect(plan.candidates.find((route) => route.recommended)?.key).toBe("axel");
+  });
+
+  it("Grupo GF Courier no aparece fuera de Lima Metropolitana y Callao", () => {
+    for (const operation of ["provincia_cod", "agencia"] as const) {
+      const plan = buildOrderRoutePlan({
+        operation,
+        outputs: [],
+        grupoGfCourier: grupoGfDisponible,
+      });
+      expect(plan.candidates.some((route) => route.key === "propio")).toBe(false);
+    }
+  });
+
+  it("una salida propia histórica bloquea una segunda salida Grupo GF activa", () => {
+    const plan = buildOrderRoutePlan({
+      operation: "lima",
+      outputs: [{ id: "legacy-1", courier: "propio", deliveryStatus: "pendiente" }],
+      grupoGfCourier: grupoGfDisponible,
+    });
+    const grupoGf = plan.candidates.find((route) => route.key === "propio");
+    expect(grupoGf?.availability).toBe("blocked");
+    expect(grupoGf?.reason).toContain("salida activa");
   });
 
   it("Agencia no ofrece Aliclik: van Shalom u Olva", () => {

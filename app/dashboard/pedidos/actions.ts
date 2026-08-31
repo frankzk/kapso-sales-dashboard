@@ -32,6 +32,7 @@ import {
 } from "@/lib/order-status";
 import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
+import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 import {
   CONFIRMATION_CYCLE_MAX_DAYS,
@@ -256,7 +257,9 @@ export type ManualRouteCourier = (typeof MANUAL_ROUTE_COURIERS)[number];
 const MANUAL_COURIER_LABEL: Record<ManualRouteCourier, string> = {
   axel: "Axel Courier",
   urpi: "Urpi",
-  propio: "Motorizado propio",
+  // Token legado hasta que la migración de rutas vincule provider_id. Toda
+  // salida nueva que lo usa ya se valida contra el operador Grupo GF.
+  propio: "Grupo GF Courier",
   olva: "Olva",
   [COURIER_TBD]: "Sin courier definido",
 };
@@ -361,6 +364,17 @@ export async function createManualRouteOutput(
   const operation = input.courier === "olva"
     ? "agencia"
     : routeOperation(ctx.row, outputs.map((output) => output.courier));
+  if (input.courier === "propio") {
+    // La tarjeta no es un permiso. Entre abrir el pedido y confirmar pudieron
+    // pausar el distrito, vencer la tarifa o suspender el contrato; por eso se
+    // repite exactamente la misma lectura justo antes de crear la salida.
+    // La pausa gobierna el momento de ASIGNAR, no una fecha futura escrita en
+    // el formulario. Elegir mañana no puede saltarse una pausa vigente hoy.
+    const grupoGf = await loadGroupGfCourierRouteCheck(admin, ctx.row);
+    if (!grupoGf.eligible) {
+      return { error: grupoGf.reason };
+    }
+  }
   if (tbd) {
     if (outputs.length >= MAX_OUTPUTS_PER_ORDER) {
       return { error: "El pedido ya alcanzó el máximo de cinco salidas." };

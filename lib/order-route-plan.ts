@@ -1,4 +1,5 @@
 import type { OperationKind } from "@/lib/order-macro-stage";
+import type { GroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier";
 import {
   MAX_OUTPUTS_PER_ORDER,
   canRepeatCourier,
@@ -104,6 +105,7 @@ export interface OrderRoutePlanInput {
   outputs: readonly RouteOutputSnapshot[];
   paymentState?: string | null;
   swayp?: SwaypRouteCheck | null;
+  grupoGfCourier?: GroupGfCourierRouteCheck | null;
   now?: Date;
 }
 
@@ -115,7 +117,9 @@ const LABELS: Record<RouteKey, string> = {
   tanders: "Tanders",
   axel: "Axel Courier",
   urpi: "Urpi",
-  propio: "Motorizado propio",
+  // `propio` se conserva como token interno hasta migrar las rutas históricas.
+  // En producto ya es un operador, no una excepción de cada tienda.
+  propio: "Grupo GF Courier",
 };
 
 const ACTIONS: Record<RouteKey, RouteAction> = {
@@ -196,6 +200,32 @@ function limaMinute(now: Date): number {
   const number = (type: "hour" | "minute") =>
     Number(parts.find((part) => part.type === type)?.value ?? 0);
   return number("hour") * 60 + number("minute");
+}
+
+function cutoffMinute(value: string | null | undefined): number {
+  const match = /^(\d{1,2}):(\d{2})/.exec(value ?? "");
+  if (!match) return 11 * 60 + 30;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function groupGfCandidate(input: OrderRoutePlanInput, minute: number): RouteCandidate {
+  const check = input.grupoGfCourier;
+  const cutoff = check?.sameDayCutoff || "11:30";
+  const timing = minute <= cutoffMinute(cutoff)
+    ? `Puede salir hoy · corte ${cutoff}`
+    : `Programar para el día siguiente · corte ${cutoff}`;
+  if (!check) {
+    return candidate(
+      "propio",
+      timing,
+      "No se pudo validar la configuración de Grupo GF Courier.",
+      { availability: "blocked" },
+    );
+  }
+  if (!check.eligible) {
+    return candidate("propio", timing, check.reason, { availability: "blocked" });
+  }
+  return candidate("propio", timing, check.reason);
 }
 
 function paymentAllowsAgency(paymentState: string | null | undefined): boolean {
@@ -387,14 +417,15 @@ export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan 
 
   if (operation === "lima") {
     const minute = limaMinute(input.now ?? new Date());
-    const first = minute <= 10 * 60 + 30 ? "propio" : minute <= 12 * 60 ? "axel" : "tanders";
+    const groupGf = groupGfCandidate(input, minute);
+    const groupCutoff = cutoffMinute(input.grupoGfCourier?.sameDayCutoff);
+    const first = input.grupoGfCourier?.eligible && minute <= groupCutoff
+      ? "propio"
+      : minute <= 12 * 60
+        ? "axel"
+        : "tanders";
     routes = [
-      candidate(
-        "propio",
-        minute <= 10 * 60 + 30 ? "Puede salir hoy" : "Siguiente turno disponible",
-        "Entrega con motorizado de la empresa; puede repetirse.",
-        { recommended: first === "propio" },
-      ),
+      { ...groupGf, recommended: first === "propio" && groupGf.availability !== "blocked" },
       candidate(
         "axel",
         minute <= 12 * 60 ? "Puede entrar al corte de hoy" : "Programar para el día siguiente",
