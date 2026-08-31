@@ -116,6 +116,7 @@ function fmtTime(iso: string | null | undefined): string {
 
 export function DispatchWorkspace({
   initialData,
+  initialSelectedId,
   stores,
   riders,
   canPrepare,
@@ -123,6 +124,7 @@ export function DispatchWorkspace({
   canPickup,
 }: {
   initialData: DispatchWorkspaceData;
+  initialSelectedId?: string | null;
   stores: StoreSummary[];
   riders: DispatchRider[];
   canPrepare: boolean;
@@ -133,7 +135,9 @@ export function DispatchWorkspace({
   const defaultMode: Mode = canManage ? "build" : "pickup";
   const [mode, setMode] = useState<Mode>(defaultMode);
   const [selectedId, setSelectedId] = useState<string | null>(
-    initialData.manifests.find((manifest) => !["in_custody", "cancelled"].includes(manifest.state))?.id ?? null,
+    initialData.manifests.some((manifest) => manifest.id === initialSelectedId)
+      ? initialSelectedId ?? null
+      : initialData.manifests.find((manifest) => !["in_custody", "cancelled"].includes(manifest.state))?.id ?? null,
   );
   const [scan, setScan] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);

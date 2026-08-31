@@ -3171,6 +3171,19 @@ prepara, hayan sido tomados o no. La bandeja del courier muestra
 nunca como candado para admitir la solicitud. El operador del courier no debe
 entrar a la pantalla de Almacén para hacer avanzar el pedido.
 
+**Tomar, asignar y cotejar tampoco son el mismo gesto.** Desde `Pedidos tomados`,
+Grupo GF Courier puede seleccionar solicitudes y asignarlas a la ruta diaria de
+un motorizado aunque Almacén todavía no haya terminado de armarlas. La asignación
+reutiliza la única ruta de ese motorizado para la fecha prevista y coloca cada
+salida en su manifiesto; no crea otra caja física, no cambia custodia y no marca
+el paquete como armado. Almacén deja luego una caja o agrupación lista por
+motorizado con todos los pedidos que alcanzaron a preparar. El **cotejo de
+oficina** ocurre frente a esa caja: se escanea cada paquete armado y solo se
+confirma lo que ya estaba asignado. Un pedido pendiente de armado puede figurar
+en la ruta planificada, pero no puede superar el cotejo ni transferir custodia
+hasta existir físicamente. La bandeja enlaza directamente la ruta/caja en la Mesa
+de despacho para continuar ese cotejo sin volver a seleccionar los pedidos.
+
 `Tomar pedidos` crea o reutiliza una **solicitud logística** idempotente, congela
 contrato, tarifa, distrito y fecha prevista, y recién entonces crea la salida.
 Si Kapta ya había creado una salida `por definir`, se rellena esa misma fila y

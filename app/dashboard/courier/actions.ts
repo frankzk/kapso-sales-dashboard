@@ -17,6 +17,7 @@ import { resolveLimaDistrict } from "@/lib/order-coverage";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { manualRouteGuideCode, pickFillableRouteOutput } from "@/lib/shipment-output";
+import { courierKey } from "@/lib/dispatch";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -59,6 +60,7 @@ export interface CourierConfigSnapshot {
   availabilityEvents: DistrictAvailabilityEventRow[];
   districts: PeruDistrictRow[];
   yapePercentage: number;
+  canManageDispatch: boolean;
   operations: CourierOperationsSnapshot;
 }
 
@@ -92,11 +94,26 @@ export interface CourierAcceptedOrder extends Omit<
   preparationState: string | null;
   acceptedAt: string | null;
   observation: string | null;
+  route: CourierRouteAssignment | null;
+}
+
+export interface CourierRouteAssignment {
+  manifestId: string;
+  routeDate: string;
+  riderId: string | null;
+  riderName: string;
+  state: string;
+}
+
+export interface CourierRiderOption {
+  id: string;
+  fullName: string;
 }
 
 export interface CourierOperationsSnapshot {
   available: CourierAvailableOrder[];
   accepted: CourierAcceptedOrder[];
+  riders: CourierRiderOption[];
   blockedCount: number;
   sourceCount: number;
 }
@@ -104,11 +121,14 @@ export interface CourierOperationsSnapshot {
 const EMPTY_OPERATIONS: CourierOperationsSnapshot = {
   available: [],
   accepted: [],
+  riders: [],
   blockedCount: 0,
   sourceCount: 0,
 };
 
-async function requireManager(orgId: string): Promise<{ userId: string } | { error: string }> {
+async function requireManager(
+  orgId: string,
+): Promise<{ userId: string; canManageDispatch: boolean } | { error: string }> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const [permissions, memberships] = await Promise.all([
@@ -121,7 +141,7 @@ async function requireManager(orgId: string): Promise<{ userId: string } | { err
   if (!memberships.some((membership) => membership.org_id === orgId)) {
     return { error: "No perteneces a esta organización." };
   }
-  return { userId: user.id };
+  return { userId: user.id, canManageDispatch: permissions.can("dispatch.manage") };
 }
 
 function amount(raw: unknown): number | null {
@@ -229,7 +249,12 @@ async function loadCourierOperations(
   if (!storeIds.length) return EMPTY_OPERATIONS;
 
   const day = limaClock().day;
-  const [{ data: stores }, { data: queueRows, error: queueError, count: sourceCount }, { data: requestRows, error: requestError }] =
+  const [
+    { data: stores },
+    { data: queueRows, error: queueError, count: sourceCount },
+    { data: requestRows, error: requestError },
+    { data: riderRows },
+  ] =
     await Promise.all([
       admin.from("stores").select("id,name").in("id", storeIds),
       admin
@@ -254,6 +279,12 @@ async function loadCourierOperations(
         .neq("status", "cancelled")
         .order("created_at", { ascending: false })
         .limit(300),
+      admin
+        .from("riders")
+        .select("id,full_name,courier")
+        .eq("org_id", config.provider.org_id)
+        .eq("active", true)
+        .order("full_name"),
     ]);
   if (queueError) throw new Error(`No se pudo cargar Pedidos disponibles: ${queueError.message}`);
   if (requestError) {
@@ -373,7 +404,7 @@ async function loadCourierOperations(
   const shipmentIds = requests
     .map((request) => request.shipment_id)
     .filter((shipmentId): shipmentId is string => Boolean(shipmentId));
-  const [{ data: acceptedOrders }, { data: shipments }] = await Promise.all([
+  const [{ data: acceptedOrders }, { data: shipments }, { data: manifestItems }] = await Promise.all([
     requestOrderIds.length
       ? admin
           .from("order_master")
@@ -388,6 +419,13 @@ async function loadCourierOperations(
           .select("id,output_code,preparation_state")
           .in("id", shipmentIds)
       : Promise.resolve({ data: [] }),
+    shipmentIds.length
+      ? admin
+          .from("dispatch_manifest_items")
+          .select("shipment_id,manifest_id")
+          .in("shipment_id", shipmentIds)
+          .is("removed_at", null)
+      : Promise.resolve({ data: [] }),
   ]);
   const orderById = new Map(
     ((acceptedOrders ?? []) as QueueOrderRow[]).map((order) => [order.order_id, order]),
@@ -396,11 +434,36 @@ async function loadCourierOperations(
     ((shipments ?? []) as { id: string; output_code: string | null; preparation_state: string | null }[])
       .map((shipment) => [shipment.id, shipment]),
   );
+  const manifestIdByShipment = new Map(
+    ((manifestItems ?? []) as { shipment_id: string; manifest_id: string }[])
+      .map((item) => [item.shipment_id, item.manifest_id]),
+  );
+  const manifestIds = [...new Set(manifestIdByShipment.values())];
+  const { data: manifestRows } = manifestIds.length
+    ? await admin
+        .from("dispatch_manifests")
+        .select("id,route_date,rider_id,driver_name,state")
+        .in("id", manifestIds)
+        .neq("state", "cancelled")
+    : { data: [] };
+  const manifestById = new Map(
+    ((manifestRows ?? []) as Array<{
+      id: string;
+      route_date: string;
+      rider_id: string | null;
+      driver_name: string | null;
+      state: string;
+    }>).map((manifest) => [manifest.id, manifest]),
+  );
   const accepted: CourierAcceptedOrder[] = requests.flatMap((request) => {
     const order = orderById.get(request.order_id);
     const agreement = config.agreements.find((item) => item.id === request.agreement_id);
     if (!order || !agreement) return [];
     const shipment = request.shipment_id ? shipmentById.get(request.shipment_id) : null;
+    const manifestId = request.shipment_id
+      ? manifestIdByShipment.get(request.shipment_id) ?? null
+      : null;
+    const manifest = manifestId ? manifestById.get(manifestId) ?? null : null;
     return [{
       orderId: request.order_id,
       storeId: request.store_id,
@@ -423,10 +486,28 @@ async function loadCourierOperations(
       preparationState: shipment?.preparation_state ?? null,
       acceptedAt: request.accepted_at,
       observation: request.observation,
+      route: manifest
+        ? {
+            manifestId: manifest.id,
+            routeDate: manifest.route_date,
+            riderId: manifest.rider_id,
+            riderName: manifest.driver_name ?? "Motorizado sin nombre",
+            state: manifest.state,
+          }
+        : null,
     }];
   });
 
-  return { available, accepted, blockedCount, sourceCount: sourceCount ?? available.length };
+  const riders = ((riderRows ?? []) as Array<{
+    id: string;
+    full_name: string;
+    courier: string | null;
+  }>).filter((rider) => {
+    const key = courierKey(rider.courier);
+    return !key || ["propio", "motorizado propio", "grupo gf courier"].includes(key);
+  }).map((rider) => ({ id: rider.id, fullName: rider.full_name }));
+
+  return { available, accepted, riders, blockedCount, sourceCount: sourceCount ?? available.length };
 }
 
 export async function loadCourierConfig(orgId: string): Promise<CourierConfigSnapshot> {
@@ -439,6 +520,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       availabilityEvents: [],
       districts: [],
       yapePercentage: 3.5,
+      canManageDispatch: false,
       operations: EMPTY_OPERATIONS,
     };
   }
@@ -473,6 +555,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       availabilityEvents: [],
       districts,
       yapePercentage: 3.5,
+      canManageDispatch: auth.canManageDispatch,
       operations: EMPTY_OPERATIONS,
     };
   }
@@ -538,6 +621,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
     availabilityEvents: normalizedAvailability,
     districts,
     yapePercentage: Number(fee?.percentage ?? 3.5),
+    canManageDispatch: auth.canManageDispatch,
     operations,
   };
 }
@@ -831,6 +915,280 @@ export async function takeGroupGfCourierOrders(
       : `No se pudieron tomar ${failed.length} pedidos. Revisa tarifa, distrito o estado.`
     : undefined;
   return { notice: messages.join(" ") || undefined, error, accepted, alreadyAccepted, failed };
+}
+
+export interface AssignCourierRouteResult extends CourierActionResult {
+  assigned: number;
+  manifestIds: string[];
+  failed: Array<{ requestId: string; error: string }>;
+}
+
+const MAX_ASSIGN_ORDERS = 100;
+
+/**
+ * Coloca solicitudes ya tomadas en la caja/ruta diaria del motorizado.
+ *
+ * Planificar no certifica el armado: el paquete puede seguir en la cola de
+ * Almacén. La evidencia física nace después, cuando oficina coteja uno por uno
+ * los QR que efectivamente entraron en la caja del motorizado (MOM §18 y §29.2).
+ */
+export async function assignGroupGfCourierRoute(
+  orgId: string,
+  riderId: string,
+  requestIds: string[],
+): Promise<AssignCourierRouteResult> {
+  const auth = await requireManager(orgId);
+  if ("error" in auth) return { ...auth, assigned: 0, manifestIds: [], failed: [] };
+  if (!auth.canManageDispatch) {
+    return {
+      error: "No tienes permiso para organizar rutas.",
+      assigned: 0,
+      manifestIds: [],
+      failed: [],
+    };
+  }
+  const unique = [...new Set(requestIds.filter(Boolean))];
+  if (!unique.length) {
+    return { error: "Selecciona al menos un pedido.", assigned: 0, manifestIds: [], failed: [] };
+  }
+  if (unique.length > MAX_ASSIGN_ORDERS) {
+    return {
+      error: `Puedes asignar hasta ${MAX_ASSIGN_ORDERS} pedidos por tanda.`,
+      assigned: 0,
+      manifestIds: [],
+      failed: [],
+    };
+  }
+
+  const admin = createAdminSupabase();
+  const [{ data: provider }, { data: rider }] = await Promise.all([
+    admin
+      .from("logistics_providers")
+      .select("id")
+      .eq("org_id", orgId)
+      .eq("code", "grupo-gf-courier")
+      .eq("status", "active")
+      .maybeSingle(),
+    admin
+      .from("riders")
+      .select("id,full_name,courier")
+      .eq("id", riderId)
+      .eq("org_id", orgId)
+      .eq("active", true)
+      .maybeSingle(),
+  ]);
+  if (!provider) {
+    return { error: "Grupo GF Courier no está activo.", assigned: 0, manifestIds: [], failed: [] };
+  }
+  if (!rider) {
+    return { error: "El motorizado ya no está disponible.", assigned: 0, manifestIds: [], failed: [] };
+  }
+  const riderCourier = courierKey(rider.courier);
+  if (riderCourier && !["propio", "motorizado propio", "grupo gf courier"].includes(riderCourier)) {
+    return {
+      error: `${rider.full_name} pertenece a otro courier.`,
+      assigned: 0,
+      manifestIds: [],
+      failed: [],
+    };
+  }
+
+  const { data: requestRows, error: requestError } = await admin
+    .from("logistics_requests")
+    .select("id,order_id,store_id,shipment_id,status,scheduled_for")
+    .eq("provider_id", provider.id)
+    .in("id", unique)
+    .neq("status", "cancelled");
+  if (requestError) {
+    return { error: requestError.message, assigned: 0, manifestIds: [], failed: [] };
+  }
+  type AssignableRequest = {
+    id: string;
+    order_id: string;
+    store_id: string;
+    shipment_id: string | null;
+    status: string;
+    scheduled_for: string;
+  };
+  const requests = (requestRows ?? []) as AssignableRequest[];
+  const requestById = new Map(requests.map((request) => [request.id, request]));
+  const failed: AssignCourierRouteResult["failed"] = unique
+    .filter((id) => !requestById.has(id))
+    .map((requestId) => ({ requestId, error: "La solicitud ya no está disponible." }));
+  const shipmentIds = requests
+    .map((request) => request.shipment_id)
+    .filter((shipmentId): shipmentId is string => Boolean(shipmentId));
+  const [{ data: shipments }, { data: activeItems }] = await Promise.all([
+    shipmentIds.length
+      ? admin
+          .from("shipments")
+          .select("id,courier,custody_state")
+          .in("id", shipmentIds)
+      : Promise.resolve({ data: [] }),
+    shipmentIds.length
+      ? admin
+          .from("dispatch_manifest_items")
+          .select("shipment_id,manifest_id")
+          .in("shipment_id", shipmentIds)
+          .is("removed_at", null)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const shipmentById = new Map(
+    ((shipments ?? []) as Array<{ id: string; courier: string; custody_state: string | null }>)
+      .map((shipment) => [shipment.id, shipment]),
+  );
+  const activeManifestByShipment = new Map(
+    ((activeItems ?? []) as Array<{ shipment_id: string; manifest_id: string }>)
+      .map((item) => [item.shipment_id, item.manifest_id]),
+  );
+
+  const groups = new Map<string, AssignableRequest[]>();
+  for (const request of requests) {
+    if (!request.shipment_id) {
+      failed.push({ requestId: request.id, error: "La solicitud todavía no tiene salida física." });
+      continue;
+    }
+    const shipment = shipmentById.get(request.shipment_id);
+    if (!shipment) {
+      failed.push({ requestId: request.id, error: "No se encontró la salida física." });
+      continue;
+    }
+    if (shipment.custody_state !== "empresa") {
+      failed.push({ requestId: request.id, error: "El paquete ya no está en custodia de Grupo GF." });
+      continue;
+    }
+    if (courierKey(shipment.courier) !== "propio") {
+      failed.push({ requestId: request.id, error: "La salida pertenece a otro courier." });
+      continue;
+    }
+    if (activeManifestByShipment.has(request.shipment_id)) {
+      failed.push({ requestId: request.id, error: "El paquete ya está asignado a una ruta." });
+      continue;
+    }
+    if (!DATE_RE.test(request.scheduled_for)) {
+      failed.push({ requestId: request.id, error: "La fecha prevista no es válida." });
+      continue;
+    }
+    groups.set(request.scheduled_for, [...(groups.get(request.scheduled_for) ?? []), request]);
+  }
+
+  let assigned = 0;
+  const manifestIds: string[] = [];
+  const changedOrderIds = new Set<string>();
+  for (const [routeDate, group] of groups) {
+    let { data: manifest } = await admin
+      .from("dispatch_manifests")
+      .select("id,state")
+      .eq("org_id", orgId)
+      .eq("route_date", routeDate)
+      .eq("rider_id", rider.id)
+      .neq("state", "cancelled")
+      .maybeSingle();
+    if (!manifest) {
+      const created = await admin
+        .from("dispatch_manifests")
+        .insert({
+          org_id: orgId,
+          courier: "propio",
+          kind: "reparto",
+          route_date: routeDate,
+          route_label: rider.full_name,
+          rider_id: rider.id,
+          driver_name: rider.full_name,
+          created_by: auth.userId,
+        })
+        .select("id,state")
+        .single();
+      if (created.error) {
+        for (const request of group) failed.push({ requestId: request.id, error: created.error.message });
+        continue;
+      }
+      manifest = created.data;
+      await admin.from("dispatch_events").insert({
+        org_id: orgId,
+        manifest_id: manifest.id,
+        actor: auth.userId,
+        kind: "manifest_created",
+        payload: { source: "grupo_gf_courier", riderId: rider.id, routeDate },
+      });
+    }
+    if (manifest.state !== "draft") {
+      const message = "La caja de esa ruta ya inició el cotejo. No se pueden mezclar paquetes nuevos en este manifiesto.";
+      for (const request of group) failed.push({ requestId: request.id, error: message });
+      continue;
+    }
+    manifestIds.push(manifest.id);
+
+    for (const request of group) {
+      const shipmentId = request.shipment_id as string;
+      const inserted = await admin.from("dispatch_manifest_items").insert({
+        manifest_id: manifest.id,
+        shipment_id: shipmentId,
+        store_id: request.store_id,
+        added_by: auth.userId,
+      });
+      if (inserted.error) {
+        failed.push({
+          requestId: request.id,
+          error: inserted.error.code === "23505"
+            ? "El paquete ya fue asignado a otra ruta."
+            : inserted.error.message,
+        });
+        continue;
+      }
+      const occurredAt = new Date().toISOString();
+      await Promise.all([
+        admin
+          .from("logistics_requests")
+          .update({ status: "scheduled", observation: null })
+          .eq("id", request.id),
+        admin.from("dispatch_events").insert({
+          org_id: orgId,
+          manifest_id: manifest.id,
+          shipment_id: shipmentId,
+          actor: auth.userId,
+          kind: "package_added",
+          payload: { source: "grupo_gf_courier", requestId: request.id, riderId: rider.id },
+        }),
+        admin.from("logistics_request_events").insert({
+          request_id: request.id,
+          kind: "route_scheduled",
+          status: "scheduled",
+          actor: auth.userId,
+          note: `Asignado a la ruta diaria de ${rider.full_name}.`,
+          payload: { manifestId: manifest.id, riderId: rider.id, routeDate },
+        }),
+        admin.from("order_events").insert({
+          store_id: request.store_id,
+          order_id: request.order_id,
+          kind: "dispatch_route_assigned",
+          occurred_at: occurredAt,
+          actor: auth.userId,
+          source: "grupo_gf_courier",
+          courier: "propio",
+          shipment_id: shipmentId,
+          note: `Paquete asignado a la ruta diaria de ${rider.full_name}; el armado de Almacén continúa de forma independiente.`,
+          payload: { manifestId: manifest.id, riderId: rider.id, routeDate, requestId: request.id },
+        }),
+      ]);
+      changedOrderIds.add(request.order_id);
+      assigned += 1;
+    }
+  }
+
+  if (changedOrderIds.size) await recomputeOrderMasterSafe(admin, [...changedOrderIds]);
+  revalidatePath(COURIER_PATH);
+  revalidatePath("/dashboard/pedidos/despacho");
+  revalidatePath("/dashboard/pedidos");
+  return {
+    notice: assigned
+      ? `${assigned} pedido${assigned === 1 ? "" : "s"} asignado${assigned === 1 ? "" : "s"} a la ruta diaria de ${rider.full_name}. Almacén puede terminar el armado en paralelo.`
+      : undefined,
+    error: assigned ? undefined : failed[0]?.error ?? "No se pudo asignar ningún pedido.",
+    assigned,
+    manifestIds: [...new Set(manifestIds)],
+    failed,
+  };
 }
 
 export async function activateGroupGfCourier(orgId: string): Promise<CourierActionResult> {

@@ -7,6 +7,7 @@ import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
 import {
   activateGroupGfCourier,
+  assignGroupGfCourierRoute,
   saveDistrictTariff,
   setDistrictAvailability,
   takeGroupGfCourierOrders,
@@ -15,6 +16,7 @@ import {
   type CourierAgreementRow,
   type CourierAvailableOrder,
   type CourierAcceptedOrder,
+  type CourierRiderOption,
   type PeruDistrictRow,
 } from "@/app/dashboard/courier/actions";
 
@@ -142,7 +144,14 @@ export function GrupoGfCourierBoard({
         />
       )}
       {tab === "preparation" && (
-        <AcceptedOrders orders={snapshot.operations.accepted} />
+        <AcceptedOrders
+          orgId={orgId}
+          orders={snapshot.operations.accepted}
+          riders={snapshot.operations.riders}
+          canManageDispatch={snapshot.canManageDispatch}
+          pending={pending}
+          run={run}
+        />
       )}
       {tab === "tariffs" && (
         <TariffMatrix
@@ -482,38 +491,137 @@ function preparationLabel(order: CourierAcceptedOrder): { label: string; tone: s
   return { label: "Pendiente de armado", tone: "bg-amber-50 text-amber-700" };
 }
 
-function preparationNextStep(order: CourierAcceptedOrder): string {
-  if (order.requestStatus === "observed") return "Revisar solicitud";
-  if (order.preparationState === "listo_despacho") return "Puede entrar a una ruta";
-  return "Almacén continúa";
-}
+function AcceptedOrders({
+  orgId,
+  orders,
+  riders,
+  canManageDispatch,
+  pending,
+  run,
+}: {
+  orgId: string;
+  orders: CourierAcceptedOrder[];
+  riders: CourierRiderOption[];
+  canManageDispatch: boolean;
+  pending: boolean;
+  run: (action: () => Promise<CourierActionResult>) => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [riderId, setRiderId] = useState(riders[0]?.id ?? "");
+  const assignable = orders.filter(
+    (order) => !order.route && order.shipmentId && order.requestStatus !== "observed",
+  );
+  const assignableIds = assignable.map((order) => order.requestId);
+  const allSelected = assignableIds.length > 0 && assignableIds.every((id) => selected.has(id));
 
-function AcceptedOrders({ orders }: { orders: CourierAcceptedOrder[] }) {
+  function toggle(requestId: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(requestId)) next.delete(requestId);
+      else next.add(requestId);
+      return next;
+    });
+  }
+
+  function assign() {
+    if (!riderId || !selected.size) return;
+    const requestIds = [...selected];
+    setSelected(new Set());
+    run(() => assignGroupGfCourierRoute(orgId, riderId, requestIds));
+  }
+
   return (
     <section aria-labelledby="accepted-orders-title" className="space-y-4">
       <div>
         <h2 id="accepted-orders-title" className="text-base font-semibold text-slate-950">Pedidos tomados</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Tomar y armar son procesos independientes. La solicitud y la tarifa ya están reservadas; Almacén prepara todos los paquetes en su propia cola.
+        <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-600">
+          Asigna desde ahora qué pedidos irán en la caja de cada motorizado. Almacén puede seguir armándolos en paralelo; el cotejo físico se hace después, frente a la caja lista, en Mesa de despacho.
         </p>
       </div>
+
+      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">Asignar a ruta diaria</p>
+          <p className="mt-1 text-xs leading-5 text-slate-600">
+            Se reutiliza una sola ruta por motorizado y fecha. “Pendiente de armado” informa; no bloquea la planificación.
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <label className="text-xs font-medium text-slate-600">
+            Motorizado
+            <select
+              value={riderId}
+              onChange={(event) => setRiderId(event.target.value)}
+              disabled={!canManageDispatch || !riders.length || pending}
+              className="mt-1 block h-10 min-w-56 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:opacity-50"
+            >
+              {!riders.length && <option value="">Sin motorizados disponibles</option>}
+              {riders.map((rider) => <option key={rider.id} value={rider.id}>{rider.fullName}</option>)}
+            </select>
+          </label>
+          <button
+            type="button"
+            disabled={!canManageDispatch || !riderId || !selected.size || pending}
+            onClick={assign}
+            className="h-10 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {pending ? "Asignando…" : `Asignar ${selected.size || ""} a ruta`.replace("  ", " ")}
+          </button>
+        </div>
+      </div>
+      {!riders.length && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Registra o activa los motorizados de Grupo GF en Equipo → Motorizados para poder asignarles una caja.
+        </p>
+      )}
+      {!canManageDispatch && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Puedes revisar los pedidos tomados, pero necesitas el permiso “Organizar despacho” para asignarlos a una ruta.
+        </p>
+      )}
       <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm")}>
-        <table className="w-full min-w-[880px] text-sm">
+        <table className="w-full min-w-[1080px] text-sm">
           <thead className={STICKY_HEAD}>
             <tr className="text-left text-xs text-slate-500">
+              <th className="w-12 px-4 py-3">
+                <input
+                  type="checkbox"
+                  aria-label="Seleccionar pedidos sin ruta"
+                  checked={allSelected}
+                  disabled={!canManageDispatch || !assignableIds.length}
+                  onChange={() => {
+                    setSelected((current) => {
+                      const next = new Set(current);
+                      if (allSelected) assignableIds.forEach((id) => next.delete(id));
+                      else assignableIds.forEach((id) => next.add(id));
+                      return next;
+                    });
+                  }}
+                />
+              </th>
               <th className="px-4 py-3 font-medium">Pedido</th>
               <th className="px-3 py-3 font-medium">Cliente</th>
               <th className="px-3 py-3 font-medium">Salida</th>
               <th className="px-3 py-3 font-medium">Preparación física</th>
               <th className="px-3 py-3 text-right font-medium">Tarifa</th>
-              <th className="px-4 py-3 text-right font-medium">Situación</th>
+              <th className="px-4 py-3 font-medium">Ruta / caja</th>
             </tr>
           </thead>
           <tbody>
             {orders.map((order) => {
               const status = preparationLabel(order);
+              const canAssign = !order.route && !!order.shipmentId && order.requestStatus !== "observed";
               return (
                 <tr key={order.requestId} className="border-b border-slate-100 last:border-0">
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      aria-label={`Seleccionar ${order.orderName} para una ruta`}
+                      checked={selected.has(order.requestId)}
+                      disabled={!canManageDispatch || !canAssign}
+                      onChange={() => toggle(order.requestId)}
+                    />
+                  </td>
                   <td className="px-4 py-3">
                     <Link href={`/dashboard/pedidos?q=${encodeURIComponent(order.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">{order.orderName}</Link>
                     <p className="mt-0.5 text-xs text-slate-500">{order.storeName} · {order.district}</p>
@@ -525,14 +633,32 @@ function AcceptedOrders({ orders }: { orders: CourierAcceptedOrder[] }) {
                     {order.observation && <p className="mt-1 max-w-64 text-xs text-red-600">{order.observation}</p>}
                   </td>
                   <td className="px-3 py-3 text-right font-semibold tabular-nums text-slate-900">{money(order.tariffAmount)}</td>
-                  <td className="px-4 py-3 text-right">
-                    <span className="text-xs font-medium text-slate-600">{preparationNextStep(order)}</span>
+                  <td className="px-4 py-3">
+                    {order.route ? (
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{order.route.riderName}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">Caja del {formatDate(order.route.routeDate)}</p>
+                        <Link
+                          href={`/dashboard/pedidos/despacho?manifiesto=${encodeURIComponent(order.route.manifestId)}`}
+                          className="mt-1 inline-flex text-xs font-semibold text-brand-700 hover:underline"
+                        >
+                          Abrir caja y cotejar →
+                        </Link>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="text-xs font-semibold text-amber-700">Sin ruta asignada</p>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          {order.requestStatus === "observed" ? "Corrige la solicitud primero" : "Selecciona este pedido arriba"}
+                        </p>
+                      </div>
+                    )}
                   </td>
                 </tr>
               );
             })}
             {!orders.length && (
-              <tr><td colSpan={6} className="px-6 py-16 text-center text-sm text-slate-500">Todavía no hay pedidos tomados.</td></tr>
+              <tr><td colSpan={7} className="px-6 py-16 text-center text-sm text-slate-500">Todavía no hay pedidos tomados.</td></tr>
             )}
           </tbody>
         </table>
