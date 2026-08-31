@@ -314,13 +314,21 @@ export async function saveDistrictTariff(
       .maybeSingle();
     if (!agreement) return { error: "Contrato de tienda no válido." };
   }
-  const { data: district } = await admin
-    .from("peru_districts")
-    .select("district_key,province")
-    .eq("district_key", input.districtKey)
-    .in("province", ["Lima", "Callao"])
-    .maybeSingle();
-  if (!district) return { error: "El distrito no pertenece a Lima Metropolitana o Callao." };
+  // La misma fuente que dibuja la matriz debe autorizar el guardado. El
+  // catálogo histórico peru_districts conserva variantes como `LIMA`,
+  // `Lima (Metropolitana)` y `Lima (departamento)`; compararlas literalmente
+  // hacía que filas visibles como San Miguel no pudieran guardarse.
+  const { data: courierDistricts, error: districtError } = await admin.rpc(
+    "courier_lima_districts",
+    { p_org_id: input.orgId },
+  );
+  if (districtError) return { error: `No se pudo validar el distrito: ${districtError.message}` };
+  const districtExists = ((courierDistricts ?? []) as Record<string, unknown>[]).some(
+    (row) => String(row.district_key) === input.districtKey,
+  );
+  if (!districtExists) {
+    return { error: "El distrito no pertenece a la matriz Lima Metropolitana y Callao." };
+  }
 
   let currentQuery = admin
     .from("logistics_district_tariffs")
