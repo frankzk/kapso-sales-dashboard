@@ -18,6 +18,7 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { manualRouteGuideCode, pickFillableRouteOutput } from "@/lib/shipment-output";
 import { courierKey } from "@/lib/dispatch";
+import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -103,6 +104,20 @@ export interface CourierRouteAssignment {
   riderId: string | null;
   riderName: string;
   state: string;
+  officeCheckedAt: string | null;
+  pickupCheckedAt: string | null;
+}
+
+export interface CourierRouteSummary {
+  manifestId: string;
+  routeDate: string;
+  riderId: string | null;
+  riderName: string;
+  state: string;
+  assignedCount: number;
+  armedCount: number;
+  officeCheckedCount: number;
+  pickupCheckedCount: number;
 }
 
 export interface CourierRiderOption {
@@ -113,6 +128,7 @@ export interface CourierRiderOption {
 export interface CourierOperationsSnapshot {
   available: CourierAvailableOrder[];
   accepted: CourierAcceptedOrder[];
+  routes: CourierRouteSummary[];
   riders: CourierRiderOption[];
   blockedCount: number;
   sourceCount: number;
@@ -121,6 +137,7 @@ export interface CourierOperationsSnapshot {
 const EMPTY_OPERATIONS: CourierOperationsSnapshot = {
   available: [],
   accepted: [],
+  routes: [],
   riders: [],
   blockedCount: 0,
   sourceCount: 0,
@@ -422,7 +439,7 @@ async function loadCourierOperations(
     shipmentIds.length
       ? admin
           .from("dispatch_manifest_items")
-          .select("shipment_id,manifest_id")
+          .select("shipment_id,manifest_id,office_checked_at,pickup_checked_at")
           .in("shipment_id", shipmentIds)
           .is("removed_at", null)
       : Promise.resolve({ data: [] }),
@@ -434,11 +451,15 @@ async function loadCourierOperations(
     ((shipments ?? []) as { id: string; output_code: string | null; preparation_state: string | null }[])
       .map((shipment) => [shipment.id, shipment]),
   );
-  const manifestIdByShipment = new Map(
-    ((manifestItems ?? []) as { shipment_id: string; manifest_id: string }[])
-      .map((item) => [item.shipment_id, item.manifest_id]),
+  const manifestItemByShipment = new Map(
+    ((manifestItems ?? []) as Array<{
+      shipment_id: string;
+      manifest_id: string;
+      office_checked_at: string | null;
+      pickup_checked_at: string | null;
+    }>).map((item) => [item.shipment_id, item]),
   );
-  const manifestIds = [...new Set(manifestIdByShipment.values())];
+  const manifestIds = [...new Set([...manifestItemByShipment.values()].map((item) => item.manifest_id))];
   const { data: manifestRows } = manifestIds.length
     ? await admin
         .from("dispatch_manifests")
@@ -460,9 +481,10 @@ async function loadCourierOperations(
     const agreement = config.agreements.find((item) => item.id === request.agreement_id);
     if (!order || !agreement) return [];
     const shipment = request.shipment_id ? shipmentById.get(request.shipment_id) : null;
-    const manifestId = request.shipment_id
-      ? manifestIdByShipment.get(request.shipment_id) ?? null
+    const manifestItem = request.shipment_id
+      ? manifestItemByShipment.get(request.shipment_id) ?? null
       : null;
+    const manifestId = manifestItem?.manifest_id ?? null;
     const manifest = manifestId ? manifestById.get(manifestId) ?? null : null;
     return [{
       orderId: request.order_id,
@@ -493,6 +515,8 @@ async function loadCourierOperations(
             riderId: manifest.rider_id,
             riderName: manifest.driver_name ?? "Motorizado sin nombre",
             state: manifest.state,
+            officeCheckedAt: manifestItem?.office_checked_at ?? null,
+            pickupCheckedAt: manifestItem?.pickup_checked_at ?? null,
           }
         : null,
     }];
@@ -502,12 +526,34 @@ async function loadCourierOperations(
     id: string;
     full_name: string;
     courier: string | null;
-  }>).filter((rider) => {
-    const key = courierKey(rider.courier);
-    return !key || ["propio", "motorizado propio", "grupo gf courier"].includes(key);
-  }).map((rider) => ({ id: rider.id, fullName: rider.full_name }));
+  }>).filter((rider) => isGroupGfRiderCourier(rider.courier))
+    .map((rider) => ({ id: rider.id, fullName: rider.full_name }));
 
-  return { available, accepted, riders, blockedCount, sourceCount: sourceCount ?? available.length };
+  const routeById = new Map<string, CourierRouteSummary>();
+  for (const order of accepted) {
+    if (!order.route) continue;
+    const current = routeById.get(order.route.manifestId) ?? {
+      manifestId: order.route.manifestId,
+      routeDate: order.route.routeDate,
+      riderId: order.route.riderId,
+      riderName: order.route.riderName,
+      state: order.route.state,
+      assignedCount: 0,
+      armedCount: 0,
+      officeCheckedCount: 0,
+      pickupCheckedCount: 0,
+    };
+    current.assignedCount += 1;
+    if (order.preparationState === "listo_despacho") current.armedCount += 1;
+    if (order.route.officeCheckedAt) current.officeCheckedCount += 1;
+    if (order.route.pickupCheckedAt) current.pickupCheckedCount += 1;
+    routeById.set(order.route.manifestId, current);
+  }
+  const routes = [...routeById.values()].sort((a, b) =>
+    b.routeDate.localeCompare(a.routeDate) || a.riderName.localeCompare(b.riderName, "es"),
+  );
+
+  return { available, accepted, routes, riders, blockedCount, sourceCount: sourceCount ?? available.length };
 }
 
 export async function loadCourierConfig(orgId: string): Promise<CourierConfigSnapshot> {
@@ -983,8 +1029,7 @@ export async function assignGroupGfCourierRoute(
   if (!rider) {
     return { error: "El motorizado ya no está disponible.", assigned: 0, manifestIds: [], failed: [] };
   }
-  const riderCourier = courierKey(rider.courier);
-  if (riderCourier && !["propio", "motorizado propio", "grupo gf courier"].includes(riderCourier)) {
+  if (!isGroupGfRiderCourier(rider.courier)) {
     return {
       error: `${rider.full_name} pertenece a otro courier.`,
       assigned: 0,
