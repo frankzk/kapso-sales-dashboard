@@ -1032,6 +1032,36 @@ export function autoFenixGuideCode(orderName: string | null | undefined, now: Da
  * no date is picked, falls back to `now`. Empty string when there's no order name
  * (the caller then keeps the manual "Generar guía Fenix" path). Pure.
  */
+/**
+ * El N° de pedido del envío, cayendo al del pedido enlazado cuando la copia
+ * del envío está vacía.
+ *
+ * POR QUÉ HACE FALTA. `shipments.order_name` es una COPIA denormalizada de
+ * `orders.name`, y hay 601 envíos vinculados donde la copia quedó vacía aunque
+ * el enlace existe. Se ve raro en pantalla —el cajón muestra los productos del
+ * pedido y a la vez dice "Pedido —"— pero lo caro es que **189 de ellos están
+ * anulados y no se pueden reprogramar**, porque la guía Fenix se autogenera a
+ * partir del número y el generador leía solo la copia.
+ *
+ * NO ES UNA SEGUNDA DEFINICIÓN: `orders.name` es la fuente de verdad y la copia
+ * es la caché. Esto no inventa un número alternativo, lee la fuente cuando la
+ * caché está fría. El backfill de la 0134 arregla los datos; esto evita que un
+ * envío quede bloqueado si algún día se vuelve a escribir vacío.
+ *
+ * Pura, y compartida por el cajón y la acción de servidor A PROPÓSITO: que una
+ * de las dos resuelva el nombre y la otra no es cómo se acaba con un botón
+ * habilitado que el servidor rechaza.
+ */
+export function effectiveOrderName(
+  shipmentOrderName: string | null | undefined,
+  linkedOrderName: string | null | undefined,
+): string | null {
+  const own = (shipmentOrderName ?? "").trim();
+  if (own) return own;
+  const linked = (linkedOrderName ?? "").trim();
+  return linked || null;
+}
+
 export function rescheduleGuideCode(
   orderName: string | null | undefined,
   reprogramIso: string | null | undefined,

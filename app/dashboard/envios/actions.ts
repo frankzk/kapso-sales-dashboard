@@ -29,6 +29,7 @@ import {
   limaTodayKey,
   nextShipmentTransition,
   normalizeCity,
+  effectiveOrderName,
   rescheduleGuideCode,
   shipmentRequiresCourierResult,
   type CourierReportResult,
@@ -1059,7 +1060,19 @@ export async function reprogramCancelledShipmentException(
     return { error: "Esta guía anulada ya tiene una guía Fenix de reemplazo." };
   }
 
-  const guideCode = rescheduleGuideCode(current.order_name, input.nextFollowupAt);
+  // La copia del envío puede estar vacía aunque el enlace exista (ver
+  // `effectiveOrderName`): se lee la fuente antes de darse por vencido.
+  let linkedOrderName: string | null = null;
+  if (!current.order_name && current.order_id) {
+    const { data: linked } = await admin
+      .from("orders")
+      .select("name")
+      .eq("id", current.order_id)
+      .maybeSingle();
+    linkedOrderName = (linked as { name: string | null } | null)?.name ?? null;
+  }
+  const orderName = effectiveOrderName(current.order_name, linkedOrderName);
+  const guideCode = rescheduleGuideCode(orderName, input.nextFollowupAt);
   if (!guideCode) {
     return { error: "Este envío no tiene N° de pedido para generar automáticamente la nueva guía Fenix." };
   }

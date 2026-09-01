@@ -283,4 +283,6 @@
 \ir migrations/0139_ad_products.sql
 \echo 'Applying 0140_lead_last_product.sql'
 \ir migrations/0140_lead_last_product.sql
+\echo 'Applying 0141_shipments_backfill_order_name.sql'
+\ir migrations/0141_shipments_backfill_order_name.sql
 \echo 'Done.'

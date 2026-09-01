@@ -16,6 +16,7 @@ import {
   matchesAliclikRouteFilter,
   normalizeCity,
   reprogramCourierOf,
+  effectiveOrderName,
   rescheduleGuideCode,
   SHIPMENT_CLAIM_HEARTBEAT_MS,
   shipmentRequiresCourierResult,
@@ -1358,9 +1359,16 @@ function ShipmentDrawer({
     shipmentRequiresCourierResult(shipment?.courier, shipment?.delivery_status);
   const fenixReadyForCustomerManagement =
     shipment?.courier === "fenix" && shipment.delivery_status === "pendiente";
+  // Una sola resolución para todo el cajón: los dos botones que autogeneran una
+  // guía Fenix leían `shipment.order_name` por su cuenta, y arreglar uno solo
+  // habría dejado el otro deshabilitado sobre el mismo envío.
+  const drawerOrderName = effectiveOrderName(
+    shipment?.order_name,
+    detail && !("error" in detail) ? detail.order?.name : null,
+  );
   const cancelledExceptionGuide = shipment
     ? rescheduleGuideCode(
-        shipment.order_name,
+        drawerOrderName,
         cancelledExceptionDate ? new Date(cancelledExceptionDate).toISOString() : null,
       )
     : "";
@@ -2237,14 +2245,14 @@ function ShipmentDrawer({
                       onClick={() =>
                         setFenixGuide(
                           rescheduleGuideCode(
-                            detail.shipment.order_name,
+                            drawerOrderName,
                             nextDate ? new Date(nextDate).toISOString() : null,
                           ),
                         )
                       }
-                      disabled={!detail.shipment.order_name}
+                      disabled={!drawerOrderName}
                       title={
-                        detail.shipment.order_name
+                        drawerOrderName
                           ? undefined
                           : "Este envío no tiene N° de pedido para generar la guía"
                       }
