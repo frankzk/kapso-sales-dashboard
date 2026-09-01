@@ -765,3 +765,151 @@ describe("buildRotulosPdf", () => {
     expect((await PDFDocument.load(pdf)).getPageCount()).toBe(1);
   });
 });
+
+/**
+ * NINGÚN PRODUCTO SE ESCONDE.
+ *
+ * EL CASO REAL. El rótulo KP131647-S01 —cinco productos, La Molina, S/ 695—
+ * salió de la impresora con tres productos y una línea que decía «+ 2 productos
+ * mas (ver el pedido)». Quien arma la caja no puede armarla con eso, y quien la
+ * recibe no puede cotejarla: el rótulo existe para esas dos cosas.
+ *
+ * Faltaban 0,2 mm. La escalera de sacrificios del planificador ponía los
+ * productos en cuarto lugar —después de la referencia y del distrito, antes que
+ * la dirección— y cedía líneas de la lista hasta que el bloque entraba.
+ *
+ * Ahora la lista no se negocia: se aprieta el CUERPO de la tabla (8,5 → 7,5 →
+ * 6,5 pt) antes que esconder nada, y el armazón de cada campo bajó de 4,2 a
+ * 3,4 mm para pagar la línea que faltaba.
+ */
+describe("la lista de productos entra entera", () => {
+  const qr = async () =>
+    new Uint8Array(await QRCode.toBuffer("42d92526-3838-4b85-bb46-da1c3a5452b1", {
+      type: "png",
+      width: 120,
+    }));
+
+  /** El pedido de la foto, tal como está en producción. */
+  const KP131647 = {
+    code: "KP131647-S01",
+    storeName: "Kenku Peru",
+    orderName: "#KP131647",
+    customerName: "Zoila Kenku",
+    customerPhone: "51994104518",
+    items: [
+      { quantity: 1, name: "Acondicionador para Cabello Grueso y Voluminoso con Romero Keratina Ortiga y Biotina (220 gr.) - IdeasLabCo", variant: null },
+      { quantity: 1, name: "NAD + Resveratrol - Cápsulas de Reparación Celular Antienvejecimiento y Energía Extra (120 Cápsulas) - SuperHuman", variant: null },
+      { quantity: 1, name: "Multi Collagen Peptides - Colágeno Hidrolizado en Polvo Tipo I, II, III, V y X con Glucosamina, Biotina, Condroitina y Cartílago de Tiburón (375 g)", variant: null },
+      { quantity: 1, name: "Shampoo de Cebolla REBROTA - Fortalecimiento Capilar y Control de Caída con Romero y Canela", variant: null },
+      { quantity: 1, name: "Hair+ | Crecimiento y Densidad con Biotina y Hierro Hemo (120 Caps.)", variant: null },
+    ],
+    collectAmount: 695,
+    currency: "PEN",
+    destination: "La Molina / Lima",
+    address: "Jr. De los Conquistadores 363 Dpto. 302. Urb. Las Lomas, Por el Ovalo Los Condores",
+    reference: null,
+    note: "Pedido WhatsApp/Kapso - Contraentrega (efectivo o Yape) Producto(s): 1 x Acondicionador para Cabello Grueso y Voluminoso con Romero Keratina Ortiga y Biotina (220 gr.)",
+    qrPayload: "42d92526-3838-4b85-bb46-da1c3a5452b1",
+  };
+
+  it("los cinco productos de #KP131647 se imprimen, ninguno se esconde", async () => {
+    const pdf = await buildRotulosPdf([{ ...KP131647, qrPng: await qr() }]);
+    const drawn = textWithSizes(pdf).map((t) => t.text);
+
+    // Cada producto por una palabra suya que no aparece en ningún otro sitio del
+    // rótulo. Comprobar solo que no hay aviso dejaría pasar una lista vacía.
+    for (const palabra of ["Acondicionador", "Resveratrol", "Collagen", "Cebolla", "Hair"]) {
+      expect(drawn.some((t) => t.includes(palabra)), `falta «${palabra}»`).toBe(true);
+    }
+  });
+
+  it("y se imprimen al cuerpo completo: cinco productos no obligan a apretar", async () => {
+    // Es lo que compra haber bajado el armazón de cada campo de 4,2 a 3,4 mm.
+    // Sin esos 3,2 mm la lista entra igual, pero a 7,5 pt: se lee peor sin
+    // necesidad. Apretar es el segundo recurso, no el primero.
+    const pdf = await buildRotulosPdf([{ ...KP131647, qrPng: await qr() }]);
+    const linea = textWithSizes(pdf).find((t) => t.text.includes("Acondicionador"));
+    expect(linea?.size).toBe(8.5);
+  });
+
+  it("y no queda ni rastro del «+ N productos mas»", async () => {
+    const pdf = await buildRotulosPdf([{ ...KP131647, qrPng: await qr() }]);
+    const drawn = textWithSizes(pdf).map((t) => t.text).join("\n");
+    expect(drawn).not.toMatch(/productos? mas/);
+  });
+
+  it("sigue siendo UNA página de 100 × 150: el rollo no da para más", async () => {
+    // La página no puede crecer para ganar sitio. Ya se intentó en el rótulo de
+    // agencia: con una etiqueta vertical del courier salía de 156 mm y dejaba de
+    // caber en el papel. Lo que cede es el aire, no el tamaño del papel.
+    const parsed = await PDFDocument.load(await buildRotulosPdf([{ ...KP131647, qrPng: await qr() }]));
+    expect(parsed.getPageCount()).toBe(1);
+    expect(parsed.getPages()[0]!.getHeight()).toBeCloseTo(425.2, 1);
+  });
+
+  it("con referencia larga y dirección larga tampoco esconde ninguno", async () => {
+    // El 88,7 % de los pedidos trae referencia. Es el caso común, no el raro.
+    const pdf = await buildRotulosPdf([
+      {
+        ...KP131647,
+        reference: "A media cuadra del grifo Primax, casa de tres pisos con reja verde, tocar el timbre de arriba",
+        qrPng: await qr(),
+      },
+    ]);
+    const drawn = textWithSizes(pdf).map((t) => t.text);
+    for (const palabra of ["Acondicionador", "Resveratrol", "Collagen", "Cebolla", "Hair"]) {
+      expect(drawn.some((t) => t.includes(palabra)), `falta «${palabra}»`).toBe(true);
+    }
+    expect(drawn.join("\n")).not.toMatch(/productos? mas/);
+  });
+
+  it("con siete productos —el máximo visto en 180 días— tampoco", async () => {
+    const pdf = await buildRotulosPdf([
+      {
+        ...KP131647,
+        items: [
+          ...KP131647.items,
+          { quantity: 2, name: "Omega 3 1000mg Ultra Concentrado", variant: null },
+          { quantity: 1, name: "Vitamina D3 con K2 MK-7", variant: null },
+        ],
+        reference: "Portón azul, al costado de la bodega",
+        qrPng: await qr(),
+      },
+    ]);
+    const drawn = textWithSizes(pdf).map((t) => t.text);
+    for (const palabra of ["Acondicionador", "Resveratrol", "Collagen", "Cebolla", "Hair", "Omega", "Vitamina"]) {
+      expect(drawn.some((t) => t.includes(palabra)), `falta «${palabra}»`).toBe(true);
+    }
+    expect(drawn.join("\n")).not.toMatch(/productos? mas/);
+    // Y la calle entera. Sin el escalón de cuerpo, quien pagaba la lista era la
+    // dirección: se quedaba en «Jr. De los Conquistadores 363 Dpto. 302. Urb...»
+    // y el motorizado perdía la urbanización y la referencia del óvalo.
+    expect(
+      drawn.some((t) => t.includes("Las Lomas")),
+      "la dirección perdió su segunda línea",
+    ).toBe(true);
+  });
+
+  it("la dirección no paga la lista mientras quede otra cosa que ceder", async () => {
+    // El orden de sacrificio importa: la dirección es lo que decide si el
+    // paquete llega. Con cinco productos y una referencia, quien cede es la
+    // referencia y el cuerpo de la tabla, no la calle.
+    const pdf = await buildRotulosPdf([
+      { ...KP131647, reference: "Casa con reja verde", qrPng: await qr() },
+    ]);
+    const drawn = textWithSizes(pdf).map((t) => t.text).join(" ");
+    expect(drawn).toContain("Conquistadores");
+    expect(drawn).toContain("Las Lomas");
+  });
+
+  it("un pedido de un solo producto no se aprieta sin motivo", async () => {
+    // La compactación es un recurso, no el estado normal: el 91 % de los
+    // pedidos trae una sola línea y ese rótulo tiene que seguir leyéndose
+    // cómodo, al cuerpo de siempre.
+    const pdf = await buildRotulosPdf([
+      { ...KP131647, items: [KP131647.items[0]!], reference: "Portón azul", qrPng: await qr() },
+    ]);
+    const linea = textWithSizes(pdf).find((t) => t.text.includes("Acondicionador"));
+    expect(linea?.size).toBe(8.5);
+  });
+});

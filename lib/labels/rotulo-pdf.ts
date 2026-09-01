@@ -140,6 +140,19 @@ export interface Fonts {
 }
 
 /**
+ * El armazón de un campo: lo que ocupa aunque no tenga ni una línea de texto.
+ *
+ * Se apretó de 4,2 a 3,4 mm. Son 0,8 mm por campo y hay cuatro, así que la
+ * etiqueta gana 3,2 mm — una línea entera de producto. En 100 × 150 mm no hay
+ * de dónde sacar espacio salvo del aire, y el aire cuesta menos que un producto
+ * que no se imprime.
+ */
+export const FIELD_LEAD = 1.0 * MM; // etiqueta -> primera línea del valor
+export const FIELD_TAIL = 1.0 * MM; // última línea -> separador
+export const FIELD_AFTER = 1.4 * MM; // separador -> etiqueta del siguiente
+export const FIELD_CHROME = FIELD_LEAD + FIELD_TAIL + FIELD_AFTER;
+
+/**
  * Alto que consume un campo de `lines` líneas, incluido su separador.
  *
  * Los márgenes son ajustados a propósito: en 100 × 150 mm compiten el monto a
@@ -147,7 +160,7 @@ export interface Fonts {
  * primero que se sacrifica para que ninguno de esos cuatro desaparezca.
  */
 export function fieldHeight(lines: number, valueSize: number): number {
-  return 1.2 * MM + lines * (valueSize + 1.2) + 1.2 * MM + 1.8 * MM;
+  return FIELD_CHROME + lines * (valueSize + 1.2);
 }
 
 /**
@@ -206,25 +219,44 @@ function drawField(
   });
 
   const lines = wrapText(opts.value || "-", fonts.bold, valueSize, opts.width, maxLines);
-  let cursor = opts.y - valueSize - 1.2 * MM;
+  let cursor = opts.y - valueSize - FIELD_LEAD;
   for (const line of lines.length ? lines : ["-"]) {
     page.drawText(line, { x: opts.x, y: cursor, size: valueSize, font: fonts.bold, color: INK });
     cursor -= valueSize + 1.2;
   }
 
-  const bottom = cursor + valueSize - 1.2 * MM;
+  const bottom = cursor + valueSize - FIELD_TAIL;
   page.drawLine({
     start: { x: opts.x, y: bottom },
     end: { x: opts.x + opts.width, y: bottom },
     thickness: 0.5,
     color: LINE,
   });
-  return bottom - 1.8 * MM - (opts.gap ?? 0);
+  return bottom - FIELD_AFTER - (opts.gap ?? 0);
 }
 
 /** Tamaño base de la tabla de productos y alto de cada línea suya. */
 export const PRODUCT_SIZE = 8.5;
 export const PRODUCT_LINE_H = PRODUCT_SIZE + 1.4;
+
+/**
+ * Los cuerpos que puede tomar la tabla de productos, del cómodo al apretado.
+ *
+ * QUÉ RESUELVEN. Un rótulo con cinco productos imprimía tres y «+ 2 productos
+ * mas (ver el pedido)»: quien arma la caja no puede armarla, y quien la recibe
+ * no puede cotejarla. Faltaba 0,2 mm. Antes que esconder un producto se aprieta
+ * el cuerpo de la tabla, y solo después ceden la referencia, el distrito y —al
+ * final de todo— una línea de la dirección.
+ *
+ * El suelo son 6,5 pt. Más abajo deja de leerse en un almacén, y una lista
+ * ilegible es otra forma de no imprimirla.
+ */
+export const PRODUCT_SIZES = [8.5, 7.5, 6.5] as const;
+
+/** Alto de una línea de producto al cuerpo dado. */
+export function productLineHeight(size: number): number {
+  return size + 1.4;
+}
 
 /** Cuántas líneas ocupa un producto: el título, y una por variante si las tiene. */
 export function groupLines(group: LabelProductGroup): number {
@@ -261,18 +293,22 @@ export function fitProducts(
  *
  * Lo usa el planificador para saber cuánto sitio pedir antes de dibujar nada.
  */
-export function productsHeight(items: readonly LabelLineItem[], maxLines: number): number {
+export function productsHeight(
+  items: readonly LabelLineItem[],
+  maxLines: number,
+  size: number = PRODUCT_SIZE,
+): number {
   const groups = groupLabelItems(items);
   const { drawn, hidden } = fitProducts(groups, maxLines);
   let lines = drawn.reduce((sum, group) => sum + groupLines(group), 0);
   if (hidden > 0) lines += 1; // "+ N productos mas"
   if (!lines) lines = 1; // el guion de "sin productos"
   // Cabecera del bloque + líneas + el separador que cierra.
-  return PRODUCT_SIZE + 1.2 * MM + lines * PRODUCT_LINE_H + 1.8 * MM;
+  return size + FIELD_LEAD + lines * productLineHeight(size) + FIELD_TAIL + FIELD_AFTER;
 }
 
 /** Total de líneas que pediría la lista completa, sin recortes. */
-function productsNaturalLines(items: readonly LabelLineItem[]): number {
+export function productsNaturalLines(items: readonly LabelLineItem[]): number {
   return groupLabelItems(items).reduce((sum, group) => sum + groupLines(group), 0);
 }
 
@@ -297,13 +333,15 @@ export function drawProducts(
     minY: number;
     /** Líneas concedidas por el planificador; lo que no entra va como aviso. */
     maxLines?: number;
+    /** Cuerpo de la tabla. El planificador lo aprieta antes que esconder nada. */
+    size?: number;
   },
 ): number {
-  const size = PRODUCT_SIZE;
+  const size = opts.size ?? PRODUCT_SIZE;
   const qtyW = 9 * MM;
   const nameX = opts.x + qtyW;
   const nameW = opts.width - qtyW;
-  const lineH = PRODUCT_LINE_H;
+  const lineH = productLineHeight(size);
 
   page.drawText("PRODUCTOS", {
     x: opts.x,
@@ -313,7 +351,7 @@ export function drawProducts(
     color: MUTED,
   });
 
-  let cursor = opts.y - size - 1.2 * MM;
+  let cursor = opts.y - size - FIELD_LEAD;
 
   /** Cantidad + "x". Más de una unidad se imprime más grande: empacar una sola
    * cuando iban dos es un reenvío, así que el número tiene que saltar a la vista. */
@@ -389,14 +427,14 @@ export function drawProducts(
     cursor -= lineH;
   }
 
-  const bottom = cursor + size - 1.2 * MM;
+  const bottom = cursor + size - FIELD_TAIL;
   page.drawLine({
     start: { x: opts.x, y: bottom },
     end: { x: opts.x + opts.width, y: bottom },
     thickness: 0.5,
     color: LINE,
   });
-  return bottom - 1.8 * MM;
+  return bottom - FIELD_AFTER;
 }
 
 /** Alto de las barras del código de barras del pedido. */
@@ -505,33 +543,55 @@ const FIELD_BLOCKS = 5;
 /** Aire extra que puede repartirse entre bloques cuando sobra sitio. */
 const MAX_EXTRA_GAP = 5 * MM;
 
+export interface FieldPlan {
+  address: number;
+  destination: number;
+  reference: number;
+  productLines: number;
+  productSize: number;
+  gap: number;
+}
+
 /**
- * Cuántas líneas recibe cada campo y cuánto aire va entre ellos.
+ * Cuántas líneas recibe cada campo, con qué cuerpo se imprimen los productos y
+ * cuánto aire va entre bloques.
  *
  * POR QUÉ SE PLANIFICA ANTES DE DIBUJAR. Con los campos apretados al mínimo, un
  * rótulo de un solo producto quedaba denso arriba y con un hueco enorme sobre el
  * QR: feo y, peor, engañoso — parece que falta información. Midiendo primero se
  * sabe cuánto sobra y se reparte como aire entre bloques.
  *
- * Cuando en vez de sobrar FALTA, el orden en que se cede está fijado aquí y no
- * en el azar del orden de dibujo: primero la referencia, luego el distrito,
- * después los productos y solo al final la dirección, que es lo que decide si el
- * paquete llega.
+ * LA LISTA DE PRODUCTOS NO SE NEGOCIA. Antes era el cuarto sacrificio de la
+ * escalera y por eso #KP131647 salió con tres de sus cinco productos y un «+ 2
+ * productos mas (ver el pedido)». Un rótulo así no sirve para lo único que hace
+ * el rótulo: armar la caja y cotejarla. Se le da SIEMPRE la lista entera, y lo
+ * que cede para pagarla es, en este orden:
+ *
+ *   1. la referencia, entera si hace falta —es el campo más prescindible—;
+ *   2. la segunda línea del distrito;
+ *   3. el CUERPO de la tabla de productos, de 8,5 a 7,5 y a 6,5 pt: caben más
+ *      líneas en el mismo alto y no desaparece ninguna;
+ *   4. y solo cuando nada de lo anterior alcanza, líneas de la dirección.
+ *
+ * La dirección sigue siendo la última porque es lo que decide si el paquete
+ * llega. Con la lista completa garantizada hasta once líneas de producto —el
+ * máximo visto en 180 días son siete— ese último paso no llega a usarse.
  */
 function planFields(
   fonts: Fonts,
   data: RotuloData,
   width: number,
   available: number,
-): { address: number; destination: number; reference: number; productLines: number; gap: number } {
+): FieldPlan {
   const linesOf = (value: string | null, size: number, max: number) =>
     Math.max(1, wrapText(value || "-", fonts.bold, size, width, max).length);
 
-  const plan = {
+  const plan: FieldPlan = {
     address: linesOf(data.address, 11, 3),
     destination: linesOf(data.destination, 9.5, 2),
     reference: data.reference ? linesOf(data.reference, 9.5, 2) : 1,
     productLines: productsNaturalLines(data.items),
+    productSize: PRODUCT_SIZES[0],
     gap: 0,
   };
 
@@ -540,13 +600,16 @@ function planFields(
     fieldHeight(plan.address, 11) +
     (plan.destination > 0 ? fieldHeight(plan.destination, 9.5) : 0) +
     (plan.reference > 0 ? fieldHeight(plan.reference, 9.5) : 0) +
-    productsHeight(data.items, plan.productLines);
+    productsHeight(data.items, plan.productLines, plan.productSize);
 
   const shrink: (() => boolean)[] = [
     () => (plan.reference > 1 ? ((plan.reference = 1), true) : false),
     () => (plan.reference > 0 ? ((plan.reference = 0), true) : false),
     () => (plan.destination > 1 ? ((plan.destination = 1), true) : false),
-    () => (plan.productLines > 1 ? ((plan.productLines -= 1), true) : false),
+    () => {
+      const next = PRODUCT_SIZES[PRODUCT_SIZES.indexOf(plan.productSize as never) + 1];
+      return next === undefined ? false : ((plan.productSize = next), true);
+    },
     () => (plan.address > 1 ? ((plan.address -= 1), true) : false),
   ];
   for (const step of shrink) {
@@ -735,6 +798,7 @@ function drawRotulo(doc: PDFDocument, fonts: Fonts, data: RotuloData, qr: unknow
     width: innerW,
     items: data.items,
     maxLines: plan.productLines,
+    size: plan.productSize,
     minY: fieldsFloor,
   });
   page.drawLine({
