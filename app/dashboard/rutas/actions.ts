@@ -12,7 +12,12 @@ import { revalidatePath } from "next/cache";
 import { createAdminSupabase } from "@/lib/db";
 import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
-import { getRouteDetail, getRouteTariffs } from "@/lib/routes-access";
+import {
+  getAssignableOrders,
+  getRouteDetail,
+  getRouteTariffs,
+  type AssignableOrder,
+} from "@/lib/routes-access";
 import {
   computeRoutePayout,
   groupByStore,
@@ -88,6 +93,32 @@ export async function ensureRoute(input: {
 
   revalidatePath("/dashboard/rutas");
   return { ok: true, routeId: data.id as string, message: "Ruta creada." };
+}
+
+/**
+ * Busca entre TODOS los pedidos asignables, no solo entre los que bajaron con
+ * la página.
+ *
+ * La lista que se pinta viene recortada a los más recientes porque son ~1.800 y
+ * nadie los navega. Mientras el buscador filtró en memoria sobre ese recorte,
+ * un pedido fuera de él no aparecía por más que se escribiera su código exacto
+ * —es lo que pasaba con #KP131277—. La consulta va contra el pool entero.
+ */
+export async function searchAssignable(
+  day: string,
+  termino: string,
+): Promise<{ ok: boolean; error?: string; rows: AssignableOrder[] }> {
+  const g = await guard();
+  if ("error" in g) return { ok: false, error: g.error, rows: [] };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return { ok: false, error: "Día inválido.", rows: [] };
+
+  const stores = await getAccessibleStores();
+  const rows = await getAssignableOrders(
+    stores.map((s) => s.id),
+    day,
+    { search: termino, limit: 50 },
+  );
+  return { ok: true, rows };
 }
 
 /** Añade pedidos a una ruta. Los que ya estaban se ignoran, no fallan. */

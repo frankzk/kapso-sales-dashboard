@@ -2205,6 +2205,22 @@ destino nuevo es exactamente el cruce que hay que evitar.
 listas de armados, de paquetes sin ruta y de paquetes dentro de una ruta se
 buscan por código de salida, guía, pedido, cliente o distrito.
 
+**La búsqueda mira TODO el universo asignable, no la porción que se pinta.** Una
+lista de miles se muestra recortada por fuerza, y un buscador que solo filtre lo
+recortado no encuentra lo que quedó fuera por más que se escriba el código
+exacto: contesta «no hay» cuando lo cierto es «no bajó». La consulta va al
+servidor, y la muestra dice que es una muestra.
+
+**Qué pedidos se ofrecen para una ruta.** Solo los que están vivos y con el
+paquete bajo custodia de la empresa sin comprometer en otro sitio:
+`listo_para_asignar`, `retirado_del_manifiesto` —salió de un manifiesto con
+motivo y vuelve al pool— y `por_reprogramar_lima` (§13). Quedan fuera
+`asignado_a_ruta` y `en_cotejo` porque ya van en otra —dos motorizados con el
+mismo paquete es el fallo caro—, `listo_para_recojo` porque en agencia recoge la
+clienta, y toda `Preparación` porque el paquete todavía no existe. Ofrecer lo
+que no se puede rutear no es ruido inocuo: gasta el recorte de la lista y empuja
+fuera a los que sí se podían despachar.
+
 #### El Excel de Urpi
 
 Urpi no recibe una lista nuestra: carga los pedidos en **su** sistema desde **su**

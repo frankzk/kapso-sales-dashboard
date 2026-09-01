@@ -8,6 +8,7 @@
 
 import { createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
+import { SUBETAPAS_ASIGNABLES_A_RUTA } from "@/lib/order-macro-stage";
 import type { RouteStop } from "@/lib/routes";
 import type { CostTariff } from "@/lib/costs";
 
@@ -147,26 +148,54 @@ export async function getRouteTariffs(): Promise<CostTariff[]> {
   return (data ?? []) as unknown as CostTariff[];
 }
 
+export interface AssignableOrder {
+  order_id: string;
+  store_id: string;
+  order_name: string | null;
+  customer_name: string | null;
+  district: string | null;
+  address: string | null;
+  order_total: number | null;
+}
+
 /**
- * Pedidos candidatos para armar una ruta: los que están vivos y sin repartir.
- * Se excluyen los que ya están en otra ruta del mismo día para que dos
- * motorizados no salgan con el mismo paquete.
+ * Lo que el coordinador teclea, sin lo que rompería la gramática de `or()` de
+ * PostgREST —la coma separa filtros y el paréntesis los agrupa—. El comodín lo
+ * pone esta función, no el usuario.
+ */
+export function terminoSeguro(raw: string): string {
+  return raw.replace(/[,()"'*\\%]/g, " ").trim();
+}
+
+/**
+ * Pedidos candidatos para armar una ruta: los que están vivos, con el paquete
+ * en casa y sin repartir. Se excluyen los que ya están en otra ruta del mismo
+ * día para que dos motorizados no salgan con el mismo paquete.
+ *
+ * EL CASO REAL. Se tecleaba `KP131277` en «Añadir paradas nuevas» y la pantalla
+ * contestaba «No hay pedidos sin asignar para ese día». El pedido existía, era
+ * de Lima y estaba `Por despachar · Listo para asignar`: asignable de manual.
+ *
+ * Fallaban dos cosas a la vez, y hacían falta las dos para que se viera:
+ *
+ *  1. El filtro pedía `general_status IN (pendiente, en_proceso)` y nada más.
+ *     Eso son 7.643 pedidos, de los cuales 4.250 están en Preparación —el
+ *     atraso de Lima— y NO se pueden rutear: no hay paquete todavía. Ocupaban
+ *     el cupo sin poder usarse nunca.
+ *  2. El tope de 300 recortaba por fecha de creación. #KP131277 era el 422.º
+ *     más reciente, así que jamás bajaba a la pantalla; y el buscador de la
+ *     pantalla filtra EN MEMORIA sobre lo que bajó, de modo que buscar algo
+ *     fuera del recorte era imposible por construcción.
+ *
+ * Acotar por subetapa baja el universo a 1.830, que sigue sin caber en 300: por
+ * eso `search` existe y consulta contra el pool ENTERO. La lista que se pinta
+ * es una muestra; la búsqueda es la que responde.
  */
 export async function getAssignableOrders(
   storeIds: string[],
   day: string,
-  opts: { district?: string | null; limit?: number } = {},
-): Promise<
-  {
-    order_id: string;
-    store_id: string;
-    order_name: string | null;
-    customer_name: string | null;
-    district: string | null;
-    address: string | null;
-    order_total: number | null;
-  }[]
-> {
+  opts: { district?: string | null; limit?: number; search?: string | null } = {},
+): Promise<AssignableOrder[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
 
@@ -174,22 +203,25 @@ export async function getAssignableOrders(
     .from("order_master")
     .select("order_id,store_id,order_name,customer_name,district,address,order_total")
     .in("store_id", storeIds)
-    .in("general_status", ["pendiente", "en_proceso"]);
+    .in("general_status", ["pendiente", "en_proceso"])
+    .in("macro_substage", SUBETAPAS_ASIGNABLES_A_RUTA);
   if (opts.district) q = q.eq("district", opts.district);
+
+  const termino = terminoSeguro(opts.search ?? "");
+  if (termino) {
+    // Los mismos tres campos que ofrecía el filtro en memoria, para que buscar
+    // no signifique una cosa distinta según dónde esté el pedido.
+    const like = `*${termino}*`;
+    q = q.or(
+      `order_name.ilike.${like},customer_name.ilike.${like},district.ilike.${like}`,
+    );
+  }
 
   const { data, error } = await q
     .order("order_created_at", { ascending: false })
     .limit(opts.limit ?? 300);
   if (error) return [];
-  const candidates = (data ?? []) as unknown as {
-    order_id: string;
-    store_id: string;
-    order_name: string | null;
-    customer_name: string | null;
-    district: string | null;
-    address: string | null;
-    order_total: number | null;
-  }[];
+  const candidates = (data ?? []) as unknown as AssignableOrder[];
   if (!candidates.length) return [];
 
   // Los que ya están asignados ese día, en cualquier ruta que el usuario vea.
