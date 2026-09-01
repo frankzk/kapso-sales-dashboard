@@ -217,6 +217,28 @@ export const MACRO_SUBSTAGE_LABEL: Record<MacroSubstage, string> = {
   merma_cerrada: "Merma cerrada",
 };
 
+/**
+ * Las subetapas desde las que un pedido puede entrar en la ruta de un
+ * motorizado. Son las tres en las que el paquete está bajo custodia de la
+ * empresa y no comprometido en otro sitio:
+ *
+ *   `listo_para_asignar`       armado y esperando ruta (§6.3).
+ *   `retirado_del_manifiesto`  se sacó de una ruta con motivo; vuelve al pool.
+ *   `por_reprogramar_lima`     un no entregado de Lima espera segundo intento
+ *                              (§830). El panel de reintentos lo ofrece cuando
+ *                              hay parada fallida; esto lo cubre también cuando
+ *                              el fallo llegó por estado del courier.
+ *
+ * Deliberadamente FUERA: `asignado_a_ruta` y `en_cotejo` (ya van en otra),
+ * `listo_para_recojo` (lo recoge la clienta en agencia) y todo `preparacion`
+ * (el paquete todavía no existe físicamente).
+ */
+export const SUBETAPAS_ASIGNABLES_A_RUTA: readonly MacroSubstage[] = [
+  "listo_para_asignar",
+  "retirado_del_manifiesto",
+  "por_reprogramar_lima",
+] as const;
+
 const MACRO_STAGE_LABEL = new Map(ORDER_MACRO_STAGES.map((stage) => [stage.code, stage.label]));
 
 export function macroStageLabel(code: string | null | undefined): string {
