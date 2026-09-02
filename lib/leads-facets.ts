@@ -36,7 +36,7 @@ export function facetItems<T, K extends string>(
 ): FacetedItems<T, K> {
   const keys = Object.keys(predicates) as K[];
   if (keys.length > 31) {
-    // Nunca ha habido más de ocho; con más de 31 los bits no caben en un entero
+    // Nunca ha habido más de nueve; con más de 31 los bits no caben en un entero
     // de 32 bits y los contadores empezarían a mentir en silencio.
     throw new Error(`facetItems admite hasta 31 facetas, recibió ${keys.length}`);
   }

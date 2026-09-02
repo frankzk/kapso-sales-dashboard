@@ -48,6 +48,9 @@ import {
   type YapeKind,
   leadHandle,
   leadCanCall,
+  canonicalProductHandles,
+  leadProductHandle,
+  productLabel,
 } from "@/lib/leads";
 import {
   loadLeadCustomerHistory,
@@ -659,6 +662,11 @@ export function LeadsBoard({
   const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
   const [numFilter, setNumFilter] = useState<Set<string>>(new Set()); // WhatsApp phone_number_id(s) + "__none__"
+  // Producto: el handle de la ficha que el cliente abrió antes de escribir, más
+  // "__none__" para los que llegaron sin link. Es lo que permite trabajar la
+  // cola por producto —la misma pregunta, el mismo argumentario, una tanda de
+  // llamadas— en vez de saltar de un producto a otro fila por fila.
+  const [prodFilter, setProdFilter] = useState<Set<string>>(new Set());
   const [interactionDateFilter, setInteractionDateFilter] = useState<LeadInteractionDateFilter | null>(
     initialInteractionDate ?? null,
   );
@@ -928,6 +936,21 @@ export function LeadsBoard({
   const inQueue = view === "por_llamar";
   const isYape = view === "yape"; // tinta las filas en rojo + 🔥 en la vista Yape/Shalom
 
+  // El producto de cada lead, resuelto UNA vez sobre la cola entera. Tiene que
+  // ser sobre la cola entera y no lead a lead: plegar los links cortados a media
+  // palabra exige ver todos los handles para saber cuál es el completo.
+  const handleOf = useMemo(() => {
+    const crudo = new Map<string, string>();
+    for (const l of leads) {
+      const h = leadProductHandle(l.first_inbound_text);
+      if (h) crudo.set(l.id, h);
+    }
+    const canon = canonicalProductHandles(crudo.values());
+    const porLead = new Map<string, string>();
+    for (const [id, h] of crudo) porLead.set(id, canon.get(h) ?? h);
+    return (l: LeadRow) => porLead.get(l.id) ?? null;
+  }, [leads]);
+
   // Jerarquía de filtros (faceted counts): los contadores de cada grupo se
   // calculan sobre los leads que pasan TODOS los demás filtros activos, pero NO
   // el propio. Así, al elegir "Con carrito" (18), Gestión/Ventana/Fuente/Número
@@ -960,6 +983,8 @@ export function LeadsBoard({
     numOtros,
     waIds,
     hasMultiNumbers,
+    prodOptions,
+    prodSin,
     shownLeads,
   } = useMemo(() => {
     const matchQuery = (l: LeadRow) => {
@@ -973,6 +998,11 @@ export function LeadsBoard({
       if (numFilter.size === 0) return true;
       if (!l.wa_phone_number_id) return numFilter.has("__none__");
       return numFilter.has(l.wa_phone_number_id);
+    };
+    const matchProd = (l: LeadRow) => {
+      if (prodFilter.size === 0) return true;
+      const handle = handleOf(l);
+      return handle ? prodFilter.has(handle) : prodFilter.has("__none__");
     };
     // Eje 1 (estado) y eje 2 (segmento) son facets independientes que combinan por
     // AND: el segmento se filtra DENTRO del estado activo (no lo reemplaza).
@@ -999,6 +1029,7 @@ export function LeadsBoard({
       query: matchQuery,
       src: matchSrc,
       num: matchNum,
+      prod: matchProd,
       state: matchState,
       seg: matchSeg,
       gest: matchGest,
@@ -1023,6 +1054,19 @@ export function LeadsBoard({
     // chip list comes from the full view so picking a number never hides the
     // others; the counts come from the faceted base.
     const numBase = facets.except("num");
+    // Producto: la lista se ordena por volumen, que es como se decide a quién
+    // llamar primero — 190 esperando por el mismo producto es una tanda, 1 no.
+    const prodBase = facets.except("prod");
+    const prodCountsAcc = new Map<string, number>();
+    let prodSinAcc = 0;
+    for (const l of prodBase) {
+      const h = handleOf(l);
+      if (h) prodCountsAcc.set(h, (prodCountsAcc.get(h) ?? 0) + 1);
+      else prodSinAcc += 1;
+    }
+    const prodOptionsAcc = [...prodCountsAcc.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([handle, count]) => ({ key: handle, label: productLabel(handle), count }));
 
     const gestCountsAcc = countGestiones(gestBase);
     const waCountsAcc = new Map<string, number>();
@@ -1060,14 +1104,18 @@ export function LeadsBoard({
       numOtros: numBase.length - [...waCountsAcc.values()].reduce((a, b) => a + b, 0),
       waIds: waIdsAcc,
       hasMultiNumbers: waIdsAcc.length >= 2,
+      prodOptions: prodOptionsAcc,
+      prodSin: prodSinAcc,
       shownLeads: facets.all,
     };
   }, [
     leads,
+    handleOf,
     q,
     qDigits,
     srcFilter,
     numFilter,
+    prodFilter,
     inQueue,
     queueState,
     segFilter,
@@ -1087,7 +1135,8 @@ export function LeadsBoard({
     (inQueue && winFilter !== "all") ||
     (inQueue && queueState === "sin_llamar" && !!interactionDateFilter) ||
     srcFilter.size > 0 ||
-    numFilter.size > 0;
+    numFilter.size > 0 ||
+    prodFilter.size > 0;
   // Badge on the "Filtros" button: count the active refinement groups (la pestaña
   // primaria de la cola no cuenta aquí).
   const refinementCount =
@@ -1096,6 +1145,7 @@ export function LeadsBoard({
     (inQueue && queueState === "sin_llamar" && interactionDateFilter ? 1 : 0) +
     (srcFilter.size > 0 ? 1 : 0) +
     (numFilter.size > 0 ? 1 : 0) +
+    (prodFilter.size > 0 ? 1 : 0) +
     (isReviewView ? 1 : 0);
   function clearFilters() {
     setSegFilter(null);
@@ -1104,6 +1154,7 @@ export function LeadsBoard({
     setInteractionDateFilter(null);
     setSrcFilter(new Set());
     setNumFilter(new Set());
+    setProdFilter(new Set());
   }
 
   // In search mode show the global results (all stages); otherwise the filtered
@@ -1150,7 +1201,7 @@ export function LeadsBoard({
   // encoge bajo el dedo.
   useEffect(() => {
     setVisibleCount(LEADS_RENDER_STEP);
-  }, [view, queueState, segFilter, gestFilter, winFilter, srcFilter, numFilter, interactionDateFilter, q, searchMode]);
+  }, [view, queueState, segFilter, gestFilter, winFilter, srcFilter, numFilter, prodFilter, interactionDateFilter, q, searchMode]);
   const moreSentinelRef = useRef<HTMLDivElement | null>(null);
   const hasMoreRows = displayLeads.length > visibleCount;
   useEffect(() => {
@@ -1519,6 +1570,25 @@ export function LeadsBoard({
                     ? [{ key: "abandoned_browse", label: "🔎 Búsqueda", count: srcCounts.abandoned_browse }]
                     : []),
                   { key: "organic", label: "Orgánico", count: srcCounts.organic },
+                ]}
+              />
+            )}
+            {(prodOptions.length > 0 || prodFilter.size > 0) && (
+              <MultiSelect
+                label="Producto"
+                summaryAll="Todos"
+                selected={prodFilter}
+                onToggle={(key) => setProdFilter((s) => withToggled(s, key))}
+                onClear={() => setProdFilter(new Set())}
+                options={[
+                  ...prodOptions,
+                  // «Sin producto» son los que no llegaron desde una ficha: los
+                  // que dieron su distrito, los del carrito, los que solo
+                  // saludaron. No es un producto más, es el resto — y tiene que
+                  // estar para que la suma cuadre con «Todos».
+                  ...(prodSin > 0 || prodFilter.has("__none__")
+                    ? [{ key: "__none__", label: "Sin producto", count: prodSin }]
+                    : []),
                 ]}
               />
             )}

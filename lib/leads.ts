@@ -234,6 +234,62 @@ export function hasProductLink(text: string | null | undefined): boolean {
   return PRODUCT_LINK_RE.test(text ?? "");
 }
 
+// El `handle` de Shopify: el trozo de la URL después de /products/. Es el
+// identificador estable del producto —el título cambia, el handle no— y es lo
+// único que el link nos deja. Se corta en `?` (variante) y en `/`.
+const PRODUCT_HANDLE_RE = /https?:\/\/\S*\/products\/([A-Za-z0-9._~-]+)/i;
+
+/**
+ * QUÉ producto abrió el cliente antes de escribir, sacado de su propio link.
+ *
+ * De 4.887 leads con link, los 4.887 dan handle: la ruta `/products/<handle>`
+ * es la que arma la tienda, no algo que el cliente teclee. Aun así devuelve
+ * `null` en vez de inventar cuando no hay: un lead sin producto identificado se
+ * cuenta aparte, no se reparte entre los que sí lo tienen.
+ */
+export function leadProductHandle(text: string | null | undefined): string | null {
+  return PRODUCT_HANDLE_RE.exec(text ?? "")?.[1]?.toLowerCase() || null;
+}
+
+/**
+ * Handles que son el MISMO producto con la URL cortada, plegados en uno.
+ *
+ * EL CASO REAL. `…-alta-potencia-60-softgels` tiene 190 leads y
+ * `…-alta-potencia-60-softge` tiene 1: el mismo producto, con el link cortado a
+ * media palabra en el mensaje. Dos entradas en el desplegable para lo mismo, y
+ * el contador —que es para lo que sirve el filtro— mintiendo en las dos.
+ *
+ * LA REGLA, Y POR QUÉ NO ES «EMPIEZA POR». Plegar todo prefijo sería un error
+ * caro: `superhuman` (5 leads) es prefijo de
+ * `superhuman-focus-nootropico-…` (2), y son DOS PRODUCTOS DISTINTOS. La
+ * diferencia está en el carácter siguiente: si el largo sigue con `-`, el corto
+ * termina en una palabra completa y es un handle por derecho propio; si sigue
+ * con cualquier otra cosa, la palabra quedó partida y es un recorte.
+ *
+ * Entre varios candidatos gana el más corto: el recorte pertenece al handle más
+ * cercano, no al más largo que casualmente también empiece igual.
+ */
+export function canonicalProductHandles(handles: Iterable<string>): Map<string, string> {
+  const all = [...new Set(handles)];
+  const canon = new Map<string, string>();
+  for (const handle of all) {
+    let best: string | null = null;
+    for (const other of all) {
+      if (other.length <= handle.length || !other.startsWith(handle)) continue;
+      if (other[handle.length] === "-") continue; // palabra completa: otro producto
+      if (!best || other.length < best.length) best = other;
+    }
+    canon.set(handle, best ?? handle);
+  }
+  return canon;
+}
+
+/** Etiqueta legible de un handle: `feel-virgin-gel` → `Feel virgin gel`. */
+export function productLabel(handle: string): string {
+  const text = handle.replace(/[-_]+/g, " ").trim();
+  return text ? text[0]!.toUpperCase() + text.slice(1) : handle;
+}
+
 /**
  * Assign a "Por llamar" lead to one sub-segment (highest-priority match).
  * (Leads en Yape ya tienen su propia pestaña superior, no un sub-bucket.)
