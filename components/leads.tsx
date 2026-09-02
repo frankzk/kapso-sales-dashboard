@@ -63,6 +63,7 @@ import {
   searchLeads,
   loadLeadsForAudience,
 } from "@/app/dashboard/leads/actions";
+import { claveAnuncio } from "@/lib/ad-products";
 import { cn } from "@/components/ui";
 import type { LeadDrawerProps, LeadDrawerUpdate } from "@/components/leads-drawer";
 import { reportClientPerformanceMetric } from "@/lib/client-performance";
@@ -585,6 +586,7 @@ export function LeadsBoard({
   queueSignature,
   leads,
   adNames,
+  adProducts,
   waNumbers,
   currency,
   timezone,
@@ -614,6 +616,8 @@ export function LeadsBoard({
   queueSignature?: string;
   leads: LeadRow[];
   adNames?: Record<string, AdMeta>;
+  /** `tienda::anuncio → handle`, solo lo DECLARADO (ver lib/ad-products.ts). */
+  adProducts?: Record<string, string>;
   waNumbers?: Record<string, WaNumber>;
   currency: string;
   timezone: string;
@@ -942,14 +946,20 @@ export function LeadsBoard({
   const handleOf = useMemo(() => {
     const crudo = new Map<string, string>();
     for (const l of leads) {
-      const h = leadProductHandle(l.first_inbound_text);
+      // Primero el link: es lo que el cliente mismo abrió, un hecho suyo.
+      // Si no lo hay, lo declarado para su anuncio — que es un hecho de la
+      // tienda, firmado por alguien. Nunca una conjetura: un anuncio sin
+      // declarar deja al lead en «Sin producto», que es la verdad.
+      const h =
+        leadProductHandle(l.first_inbound_text) ??
+        (l.ad_id ? (adProducts?.[claveAnuncio(l.store_id, l.ad_id)] ?? null) : null);
       if (h) crudo.set(l.id, h);
     }
     const canon = canonicalProductHandles(crudo.values());
     const porLead = new Map<string, string>();
     for (const [id, h] of crudo) porLead.set(id, canon.get(h) ?? h);
     return (l: LeadRow) => porLead.get(l.id) ?? null;
-  }, [leads]);
+  }, [leads, adProducts]);
 
   // Jerarquía de filtros (faceted counts): los contadores de cada grupo se
   // calculan sobre los leads que pasan TODOS los demás filtros activos, pero NO

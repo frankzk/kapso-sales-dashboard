@@ -104,6 +104,12 @@ export const PERMISSIONS = [
   // para dar acceso a /reparto. Vive en Equipo (owner/admin). El alta rápida por
   // nombre desde Liquidaciones sigue bajo settlements.manage.
   "riders.manage",
+  // Declarar qué producto vende un anuncio de Meta (0139). No es edición de un
+  // lead: cambia cómo se lee la cola ENTERA de esa tienda —los 460 leads del
+  // anuncio de la caspa caen o no caen en «Shampoo Birú» según esta firma—, y
+  // firmar mal manda a toda la mesa con el argumentario equivocado. Por eso es
+  // propio y no cae bajo la gestión diaria de la cola.
+  "leads.map_ads",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];

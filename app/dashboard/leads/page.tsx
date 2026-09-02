@@ -19,6 +19,7 @@ import {
   type QueueState,
 } from "@/lib/leads";
 import { EmptyState } from "@/components/ui";
+import { getAdProductMap } from "@/lib/ad-products-access";
 import { LeadsBoard } from "@/components/leads";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
@@ -124,12 +125,19 @@ async function LeadsContent({
   // promise settles instead of waiting for counts and user first.
   const adNamesPromise = leadsPromise.then((rows) => getAdNames(rows.map((l) => l.ad_id)));
   const waNumbersPromise = leadsPromise.then((rows) => getWaNumbers(rows.map((l) => l.wa_phone_number_id)));
-  const [snapshot, leads, user, adNames, waNumbers] = await Promise.all([
+  // Qué producto vende cada anuncio, para que un lead que llegó por anuncio caiga
+  // en el MISMO balde de producto que uno que llegó por la ficha. Solo lo
+  // declarado: las sugerencias del histórico no etiquetan a nadie.
+  const adProductsPromise = leadsPromise.then((rows) =>
+    getAdProductMap(scope, rows.map((l) => l.ad_id)),
+  );
+  const [snapshot, leads, user, adNames, waNumbers, adProductMap] = await Promise.all([
     snapshotPromise,
     leadsPromise,
     userPromise,
     adNamesPromise,
     waNumbersPromise,
+    adProductsPromise,
   ]);
 
   return (
@@ -145,6 +153,7 @@ async function LeadsContent({
       leads={leads}
       adNames={adNames}
       waNumbers={waNumbers}
+      adProducts={Object.fromEntries(adProductMap)}
       currency={currency}
       timezone={timezone}
       insights={null}

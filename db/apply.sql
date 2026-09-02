@@ -279,4 +279,6 @@
 \ir migrations/0137_courier_district_availability.sql
 \echo 'Applying 0138_group_gf_logistics_requests.sql'
 \ir migrations/0138_group_gf_logistics_requests.sql
+\echo 'Applying 0139_ad_products.sql'
+\ir migrations/0139_ad_products.sql
 \echo 'Done.'
