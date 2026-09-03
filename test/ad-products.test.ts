@@ -2,11 +2,13 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  adProductDeclarado,
   claveAnuncio,
+  declaracionVigente,
   fuerzaEvidencia,
+  handleDeAnuncioPara,
   mapaAnuncioProducto,
   sugerenciaDeAnuncio,
+  type AdDeclaration,
   type AdProductRow,
 } from "@/lib/ad-products";
 
@@ -32,62 +34,122 @@ const fila = (over: Partial<AdProductRow> = {}): AdProductRow => ({
   ...over,
 });
 
-describe("una sugerencia NO etiqueta leads", () => {
-  it("con firma y handle, sí", () => {
-    expect(
-      adProductDeclarado(fila({ product_handle: "beewax", confirmed_at: "2026-09-02T10:00:00Z" })),
-    ).toBe(true);
+const decl = (over: Partial<AdDeclaration> = {}): AdDeclaration => ({
+  store_id: "tienda-1",
+  ad_id: "120248136956750056",
+  product_handle: "beewax",
+  valid_from: "-infinity",
+  ...over,
+});
+
+describe("una declaración tiene fecha, y el lead toma la SUYA", () => {
+  // EL CASO REAL. El anuncio 120248301757360056 de Kenku aparece con dos
+  // titulares —«Tu café favorito, ahora saludable ☕» y «GC WIN ICE COFFEE
+  // 2007 (11).mp4»— y sus leads escriben «Quiero más información del Gel de
+  // Limpieza de Lengua». El creativo del café se reutilizó para otro producto.
+  //
+  // Con una declaración eterna ese anuncio no tiene respuesta buena: decir
+  // «café» etiqueta mal a quien preguntó por el gel, decir «gel» etiqueta mal a
+  // los del café — y hacia atrás, sobre leads ya trabajados.
+  const cafe = decl({ product_handle: "mushroom-coffee", valid_from: "-infinity" });
+  const gel = decl({ product_handle: "gel-limpieza-lengua", valid_from: "2026-08-01T00:00:00Z" });
+
+  it("el que entró antes del cambio se queda con lo de antes", () => {
+    expect(declaracionVigente([cafe, gel], "2026-07-15T10:00:00Z")?.product_handle).toBe(
+      "mushroom-coffee",
+    );
   });
 
-  it("con sugerencia del 98 % pero sin firma, NO", () => {
-    // ESTO ES EL CORAZÓN. La evidencia histórica es fuerte en unos anuncios
-    // (98 %) y floja en otros (42 %), y quien llama no ve la diferencia: ve un
-    // producto. Etiquetar sin firma convierte una conjetura en un hecho
-    // invisible, y el 42 % manda a la asesora con el argumentario equivocado
-    // más de la mitad de las veces sin que nadie pueda saberlo.
-    expect(
-      adProductDeclarado(fila({ suggested_label: "Beewax™", evidence_pct: 98, evidence_sample: 44 })),
-    ).toBe(false);
+  it("el que entró después toma lo nuevo", () => {
+    expect(declaracionVigente([cafe, gel], "2026-08-20T10:00:00Z")?.product_handle).toBe(
+      "gel-limpieza-lengua",
+    );
   });
 
-  it("firmado pero sin handle tampoco: sería etiquetar con nada", () => {
-    // La base lo prohíbe con un CHECK, pero la pantalla lee filas que pudieron
-    // escribirse antes. Un `confirmed_at` sin handle etiquetaría con vacío, que
-    // es peor que no etiquetar porque no se ve.
-    expect(adProductDeclarado(fila({ confirmed_at: "2026-09-02T10:00:00Z" }))).toBe(false);
-    expect(
-      adProductDeclarado(fila({ product_handle: "   ", confirmed_at: "2026-09-02T10:00:00Z" })),
-    ).toBe(false);
+  it("el orden en que llegan las declaraciones no cambia el resultado", () => {
+    // Vienen de una consulta; confiar en su orden sería confiar en un `order by`
+    // que alguien puede quitar sin enterarse.
+    expect(declaracionVigente([gel, cafe], "2026-07-15T10:00:00Z")?.product_handle).toBe(
+      "mushroom-coffee",
+    );
+  });
+
+  it("justo en el instante del cambio ya vale la nueva", () => {
+    expect(declaracionVigente([cafe, gel], "2026-08-01T00:00:00Z")?.product_handle).toBe(
+      "gel-limpieza-lengua",
+    );
+  });
+
+  it("«desde siempre» cubre a todos mientras nadie diga que cambió", () => {
+    // Es la primera declaración de cualquier anuncio: no cuesta poner fecha
+    // porque no hay nada que fechar todavía.
+    expect(declaracionVigente([cafe], "2020-01-01T00:00:00Z")?.product_handle).toBe(
+      "mushroom-coffee",
+    );
+  });
+
+  it("si TODAS empiezan después, no hay respuesta — y eso se dice", () => {
+    // Nadie ha declarado qué vendía el anuncio entonces. «Sin producto» es la
+    // verdad; heredar la primera hacia atrás sería inventarla.
+    expect(declaracionVigente([gel], "2026-07-15T10:00:00Z")).toBeNull();
+  });
+
+  it("sin fecha de entrada no se adivina", () => {
+    expect(declaracionVigente([cafe], null)).toBeNull();
+    expect(declaracionVigente([cafe], "no es una fecha")).toBeNull();
+  });
+
+  it("una fecha ilegible NO se cuela como «desde siempre»", () => {
+    // Tratarla como -infinity la haría ganar sobre las buenas y etiquetaría a
+    // todo el mundo con ella: un dato roto mandando sobre los sanos.
+    //
+    // Va PRIMERA en la lista a propósito. Puesta después, el empate a -infinity
+    // dejaba ganar a la buena por orden de llegada y la prueba pasaba aunque la
+    // regla estuviera mal — un caso que no puede fallar no comprueba nada.
+    const rota = decl({ product_handle: "basura", valid_from: "ayer por la tarde" });
+    expect(declaracionVigente([rota, cafe], "2026-07-15T10:00:00Z")?.product_handle).toBe(
+      "mushroom-coffee",
+    );
+  });
+
+  it("handleDeAnuncioPara devuelve null cuando el anuncio no tiene nada", () => {
+    expect(handleDeAnuncioPara([], "2026-07-15T10:00:00Z")).toBeNull();
+    expect(handleDeAnuncioPara(undefined, "2026-07-15T10:00:00Z")).toBeNull();
   });
 });
 
 describe("el mapa que usa la cola", () => {
-  it("solo deja entrar lo declarado", () => {
+  it("agrupa las declaraciones por tienda y anuncio", () => {
     const mapa = mapaAnuncioProducto([
-      fila({ ad_id: "a1", product_handle: "beewax", confirmed_at: "2026-09-02T10:00:00Z" }),
-      fila({ ad_id: "a2", suggested_label: "Nattokinase", evidence_pct: 42, evidence_sample: 24 }),
+      decl({ ad_id: "a1", product_handle: "cafe" }),
+      decl({ ad_id: "a1", product_handle: "gel", valid_from: "2026-08-01T00:00:00Z" }),
+      decl({ ad_id: "a2", product_handle: "beewax" }),
     ]);
-    expect(mapa.get(claveAnuncio("tienda-1", "a1"))).toBe("beewax");
-    expect(mapa.has(claveAnuncio("tienda-1", "a2"))).toBe(false);
+    expect(mapa.get(claveAnuncio("tienda-1", "a1"))).toHaveLength(2);
+    expect(mapa.get(claveAnuncio("tienda-1", "a2"))).toHaveLength(1);
   });
 
   it("normaliza el handle para que empate con el del link", () => {
     // Todo el objetivo es que un lead de anuncio y uno de ficha del mismo
     // producto caigan en el MISMO balde. Guardar «Beewax » cuando el link trae
     // «beewax» mostraría dos productos donde hay uno.
-    const mapa = mapaAnuncioProducto([
-      fila({ product_handle: "  BeeWax  ", confirmed_at: "2026-09-02T10:00:00Z" }),
-    ]);
-    expect([...mapa.values()]).toEqual(["beewax"]);
+    const mapa = mapaAnuncioProducto([decl({ product_handle: "  BeeWax  " })]);
+    expect(mapa.get(claveAnuncio("tienda-1", "120248136956750056"))![0]!.product_handle).toBe(
+      "beewax",
+    );
+  });
+
+  it("una declaración sin producto no entra: no dice nada", () => {
+    expect(mapaAnuncioProducto([decl({ product_handle: "   " })]).size).toBe(0);
   });
 
   it("la clave lleva la tienda: dos tiendas no se pisan", () => {
     const mapa = mapaAnuncioProducto([
-      fila({ store_id: "t1", ad_id: "a", product_handle: "uno", confirmed_at: "x" }),
-      fila({ store_id: "t2", ad_id: "a", product_handle: "dos", confirmed_at: "x" }),
+      decl({ store_id: "t1", ad_id: "a", product_handle: "uno" }),
+      decl({ store_id: "t2", ad_id: "a", product_handle: "dos" }),
     ]);
-    expect(mapa.get(claveAnuncio("t1", "a"))).toBe("uno");
-    expect(mapa.get(claveAnuncio("t2", "a"))).toBe("dos");
+    expect(mapa.get(claveAnuncio("t1", "a"))![0]!.product_handle).toBe("uno");
+    expect(mapa.get(claveAnuncio("t2", "a"))![0]!.product_handle).toBe("dos");
   });
 });
 
@@ -154,28 +216,56 @@ describe("la sugerencia se calcula sobre TÍTULOS, no sobre handles", () => {
 describe("las piezas que sostienen la regla en el código", () => {
   const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
 
-  it("la consulta de la cola pide SOLO filas firmadas", () => {
-    // Si trajera todas y filtrara después, cualquier descuido en el filtro
-    // convertiría las sugerencias en etiquetas sin que nadie lo note.
+  it("la cola resuelve con la fecha de entrada DEL LEAD", () => {
+    // Pasarle `Date.now()` en vez de `first_seen_at` haría que todos tomaran la
+    // declaración de hoy: el bug que la fecha vino a arreglar, reintroducido
+    // por la puerta de al lado.
+    const source = read("components/leads.tsx");
+    expect(source).toContain("l.first_seen_at,");
+  });
+
+  it("la cola lee las DECLARACIONES, no la tabla de sugerencias", () => {
+    // Las dos tablas existen para no confundirse: `ad_products` guarda lo que el
+    // histórico sugiere, y eso no etiqueta a nadie. Si la cola leyera de ahí,
+    // las sugerencias volverían a ser etiquetas sin que nadie lo note.
     const source = read("lib/ad-products-access.ts");
     const start = source.indexOf("export async function getAdProductMap(");
     const body = source.slice(start, source.indexOf("\n}", start));
-    expect(body).toContain('.not("confirmed_at", "is", null)');
+    expect(body).toContain('.from("ad_product_declarations")');
+    expect(body).not.toContain('.from("ad_products")');
   });
 
-  it("recalcular sugerencias no toca lo firmado", () => {
-    // Quien firmó vio la evidencia de entonces y decidió. Una sugerencia nueva
-    // no puede quitarle la firma por la espalda.
+  it("devuelve TODOS los periodos, no solo el último", () => {
+    // Quién gana depende del lead. Quedarse con el último aquí volvería a
+    // reescribir el pasado, que es justo lo que la fecha vino a impedir.
+    const source = read("lib/ad-products-access.ts");
+    const start = source.indexOf("export async function getAdProductMap(");
+    const body = source.slice(start, source.indexOf("\n}", start));
+    expect(body).not.toMatch(/\.limit\(1\)|maybeSingle\(\)/);
+  });
+
+  it("recalcular sugerencias no toca ninguna declaración", () => {
+    // Quien declaró vio la evidencia de entonces y decidió. Una sugerencia
+    // nueva no puede quitarle la declaración por la espalda — y ahora ni
+    // siquiera escribe en la misma tabla.
     const source = read("lib/ad-products-access.ts");
     const start = source.indexOf("export async function recomputeAdSuggestions(");
     const body = source.slice(start);
-    expect(body).not.toContain("product_handle:");
-    expect(body).not.toContain("confirmed_at:");
+    expect(body).not.toContain("product_handle");
+    expect(body).not.toContain("ad_product_declarations");
   });
 
-  it("la base impide firmar sin decir qué producto", () => {
-    expect(read("db/migrations/0139_ad_products.sql")).toContain(
-      "check (confirmed_at is null or coalesce(trim(product_handle), '') <> '')",
+  it("la base impide una declaración sin producto", () => {
+    expect(read("db/migrations/0142_ad_product_declarations.sql")).toContain(
+      "check (length(trim(product_handle)) > 0)",
+    );
+  });
+
+  it("y dos periodos del mismo anuncio no pueden empezar a la vez", () => {
+    // Sin eso habría dos candidatos empatados y el desempate silencioso es peor
+    // que el error: nadie sabría cuál está etiquetando.
+    expect(read("db/migrations/0142_ad_product_declarations.sql")).toContain(
+      "ad_product_declarations_periodo_uniq",
     );
   });
 
@@ -197,7 +287,7 @@ describe("las piezas que sostienen la regla en el código", () => {
     // la primera vez, que es el fallo que esto vino a arreglar.
     const source = read("components/leads.tsx");
     expect(source).toMatch(
-      /\(l\.last_product_handle \?\? ""\)\.trim\(\) \|\|\s*leadProductHandle\(l\.first_inbound_text\) \|\|\s*\(l\.ad_id \? \(adProducts/,
+      /\(l\.last_product_handle \?\? ""\)\.trim\(\) \|\|\s*leadProductHandle\(l\.first_inbound_text\) \|\|\s*\(l\.ad_id\s*\?\s*handleDeAnuncioPara\(/,
     );
   });
 
