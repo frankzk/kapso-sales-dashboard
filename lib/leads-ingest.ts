@@ -667,6 +667,22 @@ async function enrichLeadsFromConversations(
         .is("first_inbound_text", null);
     }
 
+    // Qué producto está consultando AHORA. Al revés que el gancho de arriba,
+    // este SÍ se sobrescribe: quien vuelve por otro producto trae un link nuevo
+    // y la fila es la misma de siempre (el upsert empareja por teléfono). Sin
+    // esta escritura, una clienta que compró aceite de semilla negra en junio y
+    // vuelve en septiembre por Beewax seguía apareciendo como aceite.
+    //
+    // Se escribe solo cuando hay handle: un mensaje sin link no significa que
+    // dejó de querer lo último que preguntó, así que no borra nada.
+    if (sig.last_product_handle) {
+      await admin
+        .from("leads")
+        .update({ last_product_handle: sig.last_product_handle })
+        .eq("store_id", storeId)
+        .eq("kapso_conversation_id", convId);
+    }
+
     // Source attribution: a Click-to-WhatsApp ad referral on the conversation's
     // first inbound message → stamp the lead's source (first-touch, sticky via
     // `is("source", null)`). Separate, self-contained write so a pending 0008

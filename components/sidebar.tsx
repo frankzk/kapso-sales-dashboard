@@ -73,6 +73,10 @@ function navItems(
     // Dato maestro de la integración con Aliclik: se configura una vez por
     // tienda, no pedido a pedido. Sin el mapeo SKU→EAN no se crea ninguna guía.
     { href: "/dashboard/envios/aliclik", label: "Catálogo Aliclik", icon: IconPlug },
+    // Dato maestro de la cola de leads, del mismo tipo que el catálogo Aliclik:
+    // se declara una vez por anuncio, no lead a lead. Sin él, los leads que
+    // llegan por anuncio no tienen producto y no se pueden agrupar para llamar.
+    { href: "/dashboard/leads/anuncios", label: "Producto por anuncio", icon: IconPlug },
     { href: "/dashboard/productividad", label: "Productividad", icon: IconHeadset },
     { href: "/dashboard/stores", label: "Tiendas", icon: IconStore },
     { href: "/dashboard/liquidaciones", label: "Liquidaciones", icon: IconMoney },

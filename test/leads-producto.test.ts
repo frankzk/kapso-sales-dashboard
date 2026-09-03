@@ -61,8 +61,8 @@ describe("qué producto abrió el cliente", () => {
 });
 
 describe("un link cortado no abre un producto nuevo", () => {
-  // EL CASO REAL. `…-alta-potencia-60-softgels` tiene 190 leads y
-  // `…-alta-potencia-60-softge` tiene 1: el mismo producto con el link cortado a
+  // EL CASO REAL. `…-alta-potencia-60-softgels` tiene 1.349 leads y
+  // `…-alta-potencia-60-softge` tiene 1: el mismo producto con la URL cortada a
   // media palabra. Dos entradas en el desplegable para lo mismo, y el contador
   // —que es para lo que sirve el filtro— mintiendo en las dos.
   const LARGO = "purely-nutrient-ethiopian-black-seed-oil-aceite-de-semilla-negra-etiope-alta-potencia-60-softgels";
@@ -90,9 +90,41 @@ describe("un link cortado no abre un producto nuevo", () => {
     expect(canonicalProductHandles(["packa", "packard"]).get("packa")).toBe("packard");
   });
 
-  it("entre varios candidatos gana el más cercano, no el más largo", () => {
-    const canon = canonicalProductHandles(["fee", "feels", "feelsgood"]);
-    expect(canon.get("fee")).toBe("feels");
+  it("MANDA LA FRECUENCIA, NO LA LONGITUD", () => {
+    // ESTO ES LO QUE CASI SE ROMPE, y estuvo mergeado. La primera versión
+    // plegaba el corto dentro del largo dando por hecho que el largo es el
+    // bueno. En producción está el contraejemplo:
+    //
+    //   …-60-softgels        1.349 leads  ← el handle de verdad
+    //   …-60-softgelsKENKU10     1 lead   ← alguien pegó el cupón sin separador
+    //
+    // Con la regla vieja los 1.349 se mudaban al balde del typo: el desastre
+    // exacto que la regla existía para evitar, por el lado que no se miró.
+    const canon = canonicalProductHandles([
+      ...Array<string>(1349).fill(LARGO),
+      CORTADO,
+      `${LARGO}kenku10`,
+    ]);
+    expect(canon.get(LARGO)).toBe(LARGO);
+    expect(canon.get(CORTADO)).toBe(LARGO);
+    expect(canon.get(`${LARGO}kenku10`)).toBe(LARGO);
+  });
+
+  it("una familia encadenada tiene UN solo ganador", () => {
+    // `softge` ⊂ `softgels` ⊂ `softgelsKENKU10`: el primero y el último solo se
+    // relacionan a través del de en medio. Resolver de a pares dejaba cadenas
+    // que no cerraban —uno apuntando a otro que apunta a un tercero— y el
+    // contador sumaba en dos baldes distintos.
+    const canon = canonicalProductHandles(["fee", "feels", "feels", "feelsgood"]);
+    expect(new Set(canon.values()).size).toBe(1);
+    expect(canon.get("fee")).toBe("feels"); // el más votado, no el más largo
+  });
+
+  it("a igualdad de votos gana el largo: cortarse es el daño común", () => {
+    // 494 mensajes llegaron recortados, 413 con link; pegar basura al final
+    // pasó UNA vez. Cuando la frecuencia no dice nada, se apuesta a eso.
+    const canon = canonicalProductHandles([CORTADO, LARGO]);
+    expect(canon.get(CORTADO)).toBe(LARGO);
   });
 
   it("un handle solo se queda como está", () => {

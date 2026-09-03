@@ -23,6 +23,7 @@ import {
   classifyKapsoEvent,
   type KapsoClientOpts,
   type ParsedMsg,
+  FIRST_INBOUND_TEXT_MAX,
 } from "@/lib/kapso";
 
 describe("parseOrderSignals (buyer intent from chat messages)", () => {
@@ -1085,5 +1086,89 @@ describe("mergeTranscripts (full history across Kapso session-conversations)", (
     expect(mergeTranscripts([])).toEqual([]);
     const withNulls = mergeTranscripts([[{ ...msg("", 1000), id: null }, { ...msg("", 1000), id: null }]]);
     expect(withNulls).toHaveLength(2);
+  });
+});
+
+/**
+ * QUÉ PRODUCTO ESTÁ CONSULTANDO AHORA.
+ *
+ * EL CASO REAL. El filtro de producto de la cola salía de `first_inbound_text`,
+ * que es de escritura única a propósito —es el gancho de apertura para la
+ * asesora—. Para «qué escribió primero» está bien; para «qué quiere» falla por
+ * tres lados, y los tres se midieron:
+ *
+ *   · Un lead por teléfono, PARA SIEMPRE: 2.596 leads volvieron pasados 7 días
+ *     o más, 1.157 de ellos ya compradores. Volvían con el producto de la
+ *     primera vez pegado.
+ *   · Solo se miraba el PRIMER mensaje: 1.301 leads abren con un saludo corto
+ *     sin link y mandan la ficha después.
+ *   · El texto se recortaba a 240 caracteres: 494 mensajes cortados, 413 con
+ *     link, y el corte caía a veces dentro de la URL.
+ */
+describe("el último producto enlazado", () => {
+  const inbound = (id: string, t: number, body: string) => ({
+    id,
+    timestamp: String(t),
+    type: "text",
+    text: { body },
+    kapso: { direction: "inbound" },
+  });
+
+  it("gana el ÚLTIMO, no el primero: la clienta volvió por otra cosa", async () => {
+    const messages = [
+      inbound("m3", 1790000000, "https://kenku.pe/products/beewax-cera-de-abeja Hola, y esto?"),
+      inbound("m1", 1782249000, "https://kenku.pe/products/black-seed-oil Tengo una consulta"),
+    ];
+    const sig = await fetchConversationSignals(opts(mockFetch(() => ({ data: messages, meta: { page: 1 } }), [])), "c");
+    expect(sig!.last_product_handle).toBe("beewax-cera-de-abeja");
+    // El gancho de apertura NO se mueve: sigue contando qué escribió primero.
+    expect(sig!.first_inbound_text).toContain("black-seed-oil");
+  });
+
+  it("lo encuentra aunque el primer mensaje sea un «hola» pelado", async () => {
+    // 1.301 leads abren así. Mirando solo el primer mensaje no tenían producto.
+    const messages = [
+      inbound("m2", 1782249100, "https://kenku.pe/products/softflex"),
+      inbound("m1", 1782249000, "Hola buen día"),
+    ];
+    const sig = await fetchConversationSignals(opts(mockFetch(() => ({ data: messages, meta: { page: 1 } }), [])), "c");
+    expect(sig!.last_product_handle).toBe("softflex");
+  });
+
+  it("ignora lo que enlaza la TIENDA: la pregunta es qué quiere el cliente", async () => {
+    // El bot manda fichas todo el rato. Contarlas sería etiquetar al lead con lo
+    // que le ofrecimos, no con lo que pidió.
+    const messages = [
+      {
+        id: "m2",
+        timestamp: "1782249100",
+        type: "text",
+        text: { body: "Mira también https://kenku.pe/products/otro-producto" },
+        kapso: { direction: "outbound" },
+      },
+      inbound("m1", 1782249000, "https://kenku.pe/products/softflex quiero este"),
+    ];
+    const sig = await fetchConversationSignals(opts(mockFetch(() => ({ data: messages, meta: { page: 1 } }), [])), "c");
+    expect(sig!.last_product_handle).toBe("softflex");
+  });
+
+  it("sin ningún link, null — no se inventa ni se hereda", async () => {
+    const messages = [inbound("m1", 1782249000, "Hola, cuánto cuesta?")];
+    const sig = await fetchConversationSignals(opts(mockFetch(() => ({ data: messages, meta: { page: 1 } }), [])), "c");
+    expect(sig!.last_product_handle).toBeNull();
+  });
+
+  it("se lee del mensaje COMPLETO, no del recortado", async () => {
+    // ESTO ES LO QUE ROMPÍA LOS HANDLES. El corte a 240 caracteres partía la URL
+    // por la mitad y salían `…-60-softge` o `keratin`. El handle se extrae antes
+    // de recortar, así que un mensaje largo ya no lo parte.
+    const relleno = "a".repeat(300);
+    const messages = [
+      inbound("m1", 1782249000, `${relleno} https://kenku.pe/products/purely-nutrient-black-seed-oil-60-softgels`),
+    ];
+    const sig = await fetchConversationSignals(opts(mockFetch(() => ({ data: messages, meta: { page: 1 } }), [])), "c");
+    expect(sig!.last_product_handle).toBe("purely-nutrient-black-seed-oil-60-softgels");
+    // Y el gancho sigue recortado: es un resumen, no una transcripción.
+    expect(sig!.first_inbound_text!.length).toBeLessThanOrEqual(FIRST_INBOUND_TEXT_MAX);
   });
 });

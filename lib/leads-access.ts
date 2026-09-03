@@ -65,6 +65,7 @@ const LEAD_BOARD_SELECT = [
   "ship_name",
   "inbound_count",
   "first_inbound_text",
+  "last_product_handle",
   "source",
   "ad_id",
   "ad_headline",
@@ -77,8 +78,13 @@ const LEAD_BOARD_SELECT = [
 
 // Deployment safety: the app can ship before 0043 is applied. Without this the
 // whole select errors and the board renders EMPTY (not just missing the hook).
+//
+// `last_product_handle` (0140) entra por la misma puerta y por la misma razón:
+// mientras la migración no corra, la cola tiene que seguir dibujándose sin el
+// filtro de producto en vez de quedarse en blanco.
+const COLUMNAS_CON_MIGRACION_PENDIENTE = new Set(["first_inbound_text", "last_product_handle"]);
 const LEAD_BOARD_SELECT_LEGACY = LEAD_BOARD_SELECT.split(",")
-  .filter((c) => c !== "first_inbound_text")
+  .filter((c) => !COLUMNAS_CON_MIGRACION_PENDIENTE.has(c))
   .join(",");
 
 /** Cuántas filas carga la página por vista. "Por llamar" se filtra y cuenta en

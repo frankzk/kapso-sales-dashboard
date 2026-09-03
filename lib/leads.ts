@@ -252,36 +252,92 @@ export function leadProductHandle(text: string | null | undefined): string | nul
 }
 
 /**
- * Handles que son el MISMO producto con la URL cortada, plegados en uno.
+ * ¿Son dos escrituras del MISMO handle, una de ellas estropeada?
  *
- * EL CASO REAL. `…-alta-potencia-60-softgels` tiene 190 leads y
- * `…-alta-potencia-60-softge` tiene 1: el mismo producto, con el link cortado a
- * media palabra en el mensaje. Dos entradas en el desplegable para lo mismo, y
- * el contador —que es para lo que sirve el filtro— mintiendo en las dos.
+ * La frontera es el carácter que sigue al prefijo. `superhuman` es prefijo de
+ * `superhuman-focus-nootropico-…` y son DOS PRODUCTOS: el largo sigue con `-`,
+ * así que el corto termina en palabra completa y es un handle por derecho
+ * propio. En cambio `…-60-softge` y `…-60-softgels` parten una palabra por la
+ * mitad: eso no es un handle, es uno roto.
+ */
+function mismaFamiliaDeHandle(a: string, b: string): boolean {
+  const [corto, largo] = a.length < b.length ? [a, b] : [b, a];
+  if (corto === largo || !largo.startsWith(corto)) return false;
+  return largo[corto.length] !== "-";
+}
+
+/**
+ * Handles que son el MISMO producto escrito de dos maneras, plegados en uno.
  *
- * LA REGLA, Y POR QUÉ NO ES «EMPIEZA POR». Plegar todo prefijo sería un error
- * caro: `superhuman` (5 leads) es prefijo de
- * `superhuman-focus-nootropico-…` (2), y son DOS PRODUCTOS DISTINTOS. La
- * diferencia está en el carácter siguiente: si el largo sigue con `-`, el corto
- * termina en una palabra completa y es un handle por derecho propio; si sigue
- * con cualquier otra cosa, la palabra quedó partida y es un recorte.
+ * EL CASO REAL. `…-alta-potencia-60-softgels` tiene 1.349 leads y
+ * `…-alta-potencia-60-softge` tiene 1: el mismo producto con la URL cortada a
+ * media palabra. Dos entradas en el desplegable para lo mismo, y el contador
+ * —que es para lo que sirve el filtro— mintiendo en las dos.
  *
- * Entre varios candidatos gana el más corto: el recorte pertenece al handle más
- * cercano, no al más largo que casualmente también empiece igual.
+ * MANDA LA FRECUENCIA, NO LA LONGITUD. La primera versión plegaba el corto
+ * dentro del largo, dando por hecho que el largo es el bueno. Es falso, y en
+ * producción había el contraejemplo:
+ *
+ *   …-60-softgels          1.349 leads   ← el handle de verdad
+ *   …-60-softgelsKENKU10       1 lead    ← alguien pegó el cupón sin separador
+ *
+ * Con la regla vieja los 1.349 se mudaban al balde del typo. La forma buena de
+ * la escritura no se sabe por su tamaño; se sabe porque es la que llega mil
+ * veces. Lo estropeado es lo raro, en las dos direcciones.
+ *
+ * Por eso `handles` se recibe CON repeticiones —una entrada por lead, no un
+ * conjunto—: sin las repeticiones no hay frecuencia que comparar.
  */
 export function canonicalProductHandles(handles: Iterable<string>): Map<string, string> {
-  const all = [...new Set(handles)];
-  const canon = new Map<string, string>();
-  for (const handle of all) {
-    let best: string | null = null;
-    for (const other of all) {
-      if (other.length <= handle.length || !other.startsWith(handle)) continue;
-      if (other[handle.length] === "-") continue; // palabra completa: otro producto
-      if (!best || other.length < best.length) best = other;
+  const conteo = new Map<string, number>();
+  for (const h of handles) conteo.set(h, (conteo.get(h) ?? 0) + 1);
+  const all = [...conteo.keys()];
+
+  // Familias por cierre transitivo: `softge` ⊂ `softgels` ⊂ `softgelsKENKU10`
+  // son tres escrituras de lo mismo aunque el primero y el último solo se
+  // relacionen a través del de en medio.
+  const padre = new Map<string, string>(all.map((h) => [h, h]));
+  const raiz = (x: string): string => {
+    let r = x;
+    while (padre.get(r) !== r) r = padre.get(r)!;
+    let cursor = x;
+    while (padre.get(cursor) !== r) {
+      const siguiente = padre.get(cursor)!;
+      padre.set(cursor, r);
+      cursor = siguiente;
     }
-    canon.set(handle, best ?? handle);
+    return r;
+  };
+  for (let i = 0; i < all.length; i += 1) {
+    for (let j = i + 1; j < all.length; j += 1) {
+      if (mismaFamiliaDeHandle(all[i]!, all[j]!)) padre.set(raiz(all[i]!), raiz(all[j]!));
+    }
   }
-  return canon;
+
+  // Gana el más frecuente de cada familia.
+  //
+  // EMPATE: el más largo. Cuando la frecuencia no dice nada hay que apostar, y
+  // los datos dicen a qué: la URL se estropea CORTÁNDOSE —494 mensajes llegaron
+  // recortados, 413 de ellos con link— y solo una vez se estropeó por lo
+  // contrario, un cupón pegado al final. Así que a igualdad de votos, el
+  // completo es el largo. Si aún empatan, el alfabético, para que dos
+  // ejecuciones sobre los mismos datos den lo mismo.
+  const mejor = new Map<string, string>();
+  for (const h of all) {
+    const familia = raiz(h);
+    const actual = mejor.get(familia);
+    if (!actual) {
+      mejor.set(familia, h);
+      continue;
+    }
+    const a = conteo.get(h)!;
+    const b = conteo.get(actual)!;
+    if (a > b || (a === b && (h.length > actual.length || (h.length === actual.length && h < actual)))) {
+      mejor.set(familia, h);
+    }
+  }
+
+  return new Map(all.map((h) => [h, mejor.get(raiz(h))!]));
 }
 
 /** Etiqueta legible de un handle: `feel-virgin-gel` → `Feel virgin gel`. */
