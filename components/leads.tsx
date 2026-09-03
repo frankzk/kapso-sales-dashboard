@@ -65,6 +65,7 @@ import {
 } from "@/app/dashboard/leads/actions";
 import { claveAnuncio, handleDeAnuncioPara, type AdDeclaration } from "@/lib/ad-products";
 import { cn } from "@/components/ui";
+import { VentaTelefonica } from "@/components/venta-telefonica";
 import type { LeadDrawerProps, LeadDrawerUpdate } from "@/components/leads-drawer";
 import { reportClientPerformanceMetric } from "@/lib/client-performance";
 
@@ -1435,6 +1436,10 @@ export function LeadsBoard({
               </button>
             )}
           </div>
+          <VentaTelefonica
+            stores={stores.map((s) => ({ id: s.id, name: s.name }))}
+            defaultStoreId={storeId === "all" ? null : storeId}
+          />
           <button
             type="button"
             aria-expanded={more}

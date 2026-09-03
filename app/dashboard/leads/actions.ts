@@ -1,6 +1,8 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
+import { getPedidosRecientesPorTelefono } from "@/lib/leads-access";
+import { avisoDuplicado, cuandoLabel } from "@/lib/pedido-duplicado";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
@@ -106,6 +108,8 @@ async function resolveAgentName(
 
 export interface LeadActionState {
   error?: string;
+  /** El error es un aviso que el asesor puede saltarse volviendo a confirmar. */
+  requiereConfirmacion?: boolean;
   notice?: string;
   windowClosed?: boolean; // the 24h WhatsApp session window is closed (retry won't help)
   savedCall?: LeadCallRow;
@@ -2195,6 +2199,8 @@ export interface GenerateOrderInput {
   confirmationText?: string;
   discount?: { kind: "fixed" | "percent"; value: number } | null;
   allowExisting?: boolean; // permitir generar OTRO pedido aunque el lead ya tenga uno
+  /** El asesor vio el aviso de duplicado y aun así quiere crear el pedido. */
+  confirmarDuplicado?: boolean;
 }
 
 function defaultConfirmation(o: {
@@ -2257,6 +2263,35 @@ export async function generateOrder(
   // Por defecto se bloquea un 2º pedido (evita dobles accidentales); el botón
   // "Generar nuevo pedido" del drawer lo permite explícitamente con allowExisting.
   if (l.has_order && !input.allowExisting) return { error: "Este lead ya tiene un pedido registrado." };
+
+  // AVISO DE DUPLICADO, ahora que ya se sabe QUÉ lleva el pedido.
+  //
+  // El aviso de la pantalla previa solo podía mirar el estado y la fecha; el de
+  // aquí compara los productos, que es lo que distingue «amplió su pedido» de
+  // «se está cobrando dos veces lo mismo».
+  //
+  // Solo frena el riesgo `duplicado` —pedido VIVO, mismos productos, ≤48 h—, que
+  // en 120 días son 148 casos. Los otros avisos informan y no estorban: el 69 %
+  // de los pares con pedido previo vienen de uno ANULADO que se rehizo, y frenar
+  // ahí convertiría la alerta en ruido que se aprende a ignorar.
+  if (l.phone && !input.confirmarDuplicado) {
+    const previos = await getPedidosRecientesPorTelefono(ctx.storeId, l.phone);
+    const aviso = avisoDuplicado(
+      previos,
+      items.map((li) => String(li.title ?? "")),
+      new Date().toISOString(),
+    );
+    if (aviso?.riesgo === "duplicado") {
+      const p = aviso.pedido;
+      return {
+        error:
+          `Este cliente ya tiene ${p.name ?? "un pedido"} con los mismos productos ` +
+          `(${cuandoLabel(aviso.horas)}, ${(p.general_status ?? "").replace(/_/g, " ")}). ` +
+          `Revísalo antes de crear otro; si aun así corresponde, vuelve a confirmar.`,
+        requiereConfirmacion: true,
+      };
+    }
+  }
 
   const creds = await getStoreCreds(ctx.storeId);
   if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify configurado." };
