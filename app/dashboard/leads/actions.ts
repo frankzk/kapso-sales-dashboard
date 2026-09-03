@@ -2198,7 +2198,15 @@ export interface GenerateOrderInput {
   sendConfirmation?: boolean;
   confirmationText?: string;
   discount?: { kind: "fixed" | "percent"; value: number } | null;
-  allowExisting?: boolean; // permitir generar OTRO pedido aunque el lead ya tenga uno
+  /**
+   * Este pedido es NUEVO: no reutilices el borrador de Shopify del anterior.
+   *
+   * Antes se llamaba `allowExisting` y hacía dos cosas — levantar el bloqueo de
+   * «este lead ya tiene pedido» y decidir sobre el borrador—. El bloqueo se fue
+   * (lo cubre `avisoDuplicado`), así que el nombre viejo ya no describía nada de
+   * lo que hace.
+   */
+  noReutilizarBorrador?: boolean;
   /** El asesor vio el aviso de duplicado y aun así quiere crear el pedido. */
   confirmarDuplicado?: boolean;
 }
@@ -2235,6 +2243,12 @@ export async function generateOrder(
 ): Promise<LeadActionState> {
   const ctx = await authorizeLead(leadId);
   if (!ctx) return { error: "Sin acceso a este lead." };
+  // Crear el pedido escribe hacia AFUERA: descuenta stock y arranca un envío
+  // real. Tener acceso a la cola no habilita a vender a nombre de la tienda.
+  const perms = await getMasterPermissions();
+  if (!perms.can("orders.create")) {
+    return { error: "Tu rol no permite generar pedidos." };
+  }
 
   const items = (input.lineItems ?? []).filter(
     (li) => (li.variantId || (li.title ?? "").trim()) && Number(li.quantity) > 0,
@@ -2260,9 +2274,11 @@ export async function generateOrder(
     draft_order_gid: string | null;
     has_order: boolean;
   };
-  // Por defecto se bloquea un 2º pedido (evita dobles accidentales); el botón
-  // "Generar nuevo pedido" del drawer lo permite explícitamente con allowExisting.
-  if (l.has_order && !input.allowExisting) return { error: "Este lead ya tiene un pedido registrado." };
+  // NO se bloquea por `has_order`. Ese candado nació para evitar dobles
+  // accidentales, pero no sabía distinguir: frenaba igual al que recompra un mes
+  // después que al que se está registrando dos veces la misma venta. Ahora eso
+  // lo decide `avisoDuplicado`, que mira el ESTADO del pedido anterior, sus
+  // productos y su fecha — y solo frena cuando de verdad huele a duplicado.
 
   // AVISO DE DUPLICADO, ahora que ya se sabe QUÉ lleva el pedido.
   //
@@ -2345,7 +2361,7 @@ export async function generateOrder(
   // draft. In the normal cart flow, only reuse it when Shopify confirms it is
   // still active. A completed/paid (or unverifiable) draft becomes prefill/history,
   // while this sale gets a fresh draft and therefore a genuinely new order.
-  if (sourceDraftGid && !input.allowExisting) {
+  if (sourceDraftGid && !input.noReutilizarBorrador) {
     try {
       const liveDraft = await getDraftOrderForEdit({ ...sclient, gid: sourceDraftGid });
       reuseExistingDraft = liveDraft?.status === "open" || liveDraft?.status === "invoice_sent";

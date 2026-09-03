@@ -815,14 +815,14 @@ export function LeadDrawer({
             </div>
 
             {/* Formulario de pedido: lo abre el CTA del footer; cubre la columna de acción.
-                allowExisting permite generar OTRO pedido aunque el lead ya tenga uno. */}
+                noReutilizarBorrador: este pedido es nuevo, no toques el borrador del anterior. */}
             {orderOpen && (
               <div className="absolute inset-0 overflow-y-auto bg-slate-50 p-4">
                 <OrderFormPanel
                   leadId={lead.id}
                   currency={currency}
                   hasCart={hasCart}
-                  allowExisting={lead.has_order}
+                  noReutilizarBorrador={lead.has_order}
                   onRegistered={onRegistered}
                   onClose={() => setOrderOpen(false)}
                 />
@@ -2218,14 +2218,14 @@ function OrderFormPanel({
   leadId,
   currency,
   hasCart,
-  allowExisting,
+  noReutilizarBorrador,
   onRegistered,
   onClose,
 }: {
   leadId: string;
   currency: string;
   hasCart: boolean;
-  allowExisting?: boolean; // permitir generar OTRO pedido aunque el lead ya tenga uno
+  noReutilizarBorrador?: boolean; // pedido NUEVO: no reutilizar el borrador anterior
   onRegistered: () => void;
   onClose: () => void;
 }) {
@@ -2335,7 +2335,7 @@ function OrderFormPanel({
           discountKind === "none" || discountValue == null || discountValue <= 0
             ? null
             : { kind: discountKind, value: discountValue },
-        allowExisting,
+        noReutilizarBorrador,
       });
       if (res.error) {
         setMsg(res.error);

@@ -184,6 +184,52 @@ describe("las piezas en el código", () => {
     expect(source).toContain("requiereConfirmacion: true");
   });
 
+  it("YA NO bloquea por `has_order`: eso lo decide el aviso", () => {
+    // El candado viejo no sabía distinguir: frenaba igual al que recompra un mes
+    // después que al que registra dos veces la misma venta. Ahora lo decide
+    // `avisoDuplicado`, que mira estado, productos y fecha.
+    // Acotado a generateOrder A PROPÓSITO: `closeSale` y la recuperación de
+    // carrito conservan su propio bloqueo, y borrarlo no es esta decisión.
+    // Buscar en el archivo entero hacía fallar la prueba por código ajeno.
+    const source = read("app/dashboard/leads/actions.ts");
+    const start = source.indexOf("export async function generateOrder(");
+    const body = source.slice(start, source.indexOf("\n}\n", start));
+    expect(body).not.toContain("ya tiene un pedido registrado");
+  });
+
+  it("pero el flag que decide sobre el BORRADOR sigue vivo, con su nombre", () => {
+    // `allowExisting` hacía dos trabajos. Al quitarle el bloqueo, su nombre
+    // dejaba de describir lo único que le queda —no reutilizar el borrador de
+    // Shopify—, y un nombre que miente es peor que uno feo.
+    // El nombre viejo solo puede sobrevivir en prosa —el comentario que explica
+    // por qué cambió—. Se busca `input.allowExisting`, que es el uso real, en
+    // vez de la palabra suelta: si no, la propia explicación hacía fallar.
+    const source = read("app/dashboard/leads/actions.ts");
+    expect(source).toContain("if (sourceDraftGid && !input.noReutilizarBorrador)");
+    expect(source).not.toContain("input.allowExisting");
+    expect(read("components/leads-drawer.tsx")).not.toMatch(/\ballowExisting[=,:}]/);
+  });
+
+  it("generar un pedido exige permiso propio: escribe hacia AFUERA", () => {
+    // `draftOrderCreate` + `completeDraftOrder` crean un pedido real, descuentan
+    // stock y arrancan un envío. Tener acceso a la cola no puede habilitar a
+    // vender a nombre de la tienda — mismo criterio que las guías de Aliclik.
+    const source = read("app/dashboard/leads/actions.ts");
+    const start = source.indexOf("export async function generateOrder(");
+    const body = source.slice(start, source.indexOf("\n}\n", start));
+    expect(body).toContain('perms.can("orders.create")');
+  });
+
+  it("y la vendedora lo conserva: vender ES su trabajo", () => {
+    // El rol `vendedora` tiene lista EXPLÍCITA, así que un permiso nuevo se lo
+    // quita salvo que se añada. Olvidarlo habría dejado sin vender a quien vive
+    // de eso, y en silencio.
+    const perms = read("lib/permissions.ts");
+    const start = perms.indexOf("  vendedora: [");
+    const body = perms.slice(start, perms.indexOf("\n  ]", start));
+    expect(body).toContain('"orders.create"');
+  });
+
   it("la venta telefónica CREA el lead, no un pedido suelto", () => {
     // La acreditación al asesor vive en `lead_calls.lead_id`, que es NOT NULL.
     // Sin lead no hay a quién acreditarle la venta — que es justo lo que este

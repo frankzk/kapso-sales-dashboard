@@ -110,6 +110,12 @@ export const PERMISSIONS = [
   // firmar mal manda a toda la mesa con el argumentario equivocado. Por eso es
   // propio y no cae bajo la gestión diaria de la cola.
   "leads.map_ads",
+  // Crear un pedido desde el dashboard. NO es gestión de la cola: `draftOrderCreate`
+  // + `completeDraftOrder` escriben hacia AFUERA y crean un pedido real en
+  // Shopify, con su stock descontado y su guía por delante. Mismo criterio que
+  // las guías de Aliclik, Tanders y Shalom: quien puede leer la cola no queda
+  // habilitado por eso a vender a nombre de la tienda.
+  "orders.create",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -229,6 +235,11 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "recovery.contact",
     // Coordinar el reparto es operativo, no financiero: arma la ruta del día.
     "routes.manage",
+    // Generar el pedido ES su trabajo: la vendedora cierra la venta por teléfono
+    // o por WhatsApp y la registra. El permiso existe para que tenerlo sea una
+    // decisión —un `viewer` no vende a nombre de la tienda—, no para quitárselo
+    // a quien vive de eso.
+    "orders.create",
   ],
   viewer: [],
   // El motorizado NO es un usuario del panel: entra a /reparto, ve solo su ruta
