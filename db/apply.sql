@@ -287,4 +287,6 @@
 \ir migrations/0141_shipments_backfill_order_name.sql
 \echo 'Applying 0142_ad_product_declarations.sql'
 \ir migrations/0142_ad_product_declarations.sql
+\echo 'Applying 0143_lead_cart_product.sql'
+\ir migrations/0143_lead_cart_product.sql
 \echo 'Done.'

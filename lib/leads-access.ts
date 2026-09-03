@@ -66,6 +66,7 @@ const LEAD_BOARD_SELECT = [
   "inbound_count",
   "first_inbound_text",
   "last_product_handle",
+  "cart_product_handle",
   "source",
   "ad_id",
   "ad_headline",
@@ -82,7 +83,11 @@ const LEAD_BOARD_SELECT = [
 // `last_product_handle` (0140) entra por la misma puerta y por la misma razón:
 // mientras la migración no corra, la cola tiene que seguir dibujándose sin el
 // filtro de producto en vez de quedarse en blanco.
-const COLUMNAS_CON_MIGRACION_PENDIENTE = new Set(["first_inbound_text", "last_product_handle"]);
+const COLUMNAS_CON_MIGRACION_PENDIENTE = new Set([
+  "first_inbound_text",
+  "last_product_handle",
+  "cart_product_handle",
+]);
 const LEAD_BOARD_SELECT_LEGACY = LEAD_BOARD_SELECT.split(",")
   .filter((c) => !COLUMNAS_CON_MIGRACION_PENDIENTE.has(c))
   .join(",");
