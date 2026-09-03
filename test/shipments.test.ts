@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   DELIVERY_STATUSES,
@@ -36,6 +38,7 @@ import {
   reconcileDeliveryStatus,
   maxDeliveryDate,
   autoFenixGuideCode,
+  effectiveOrderName,
   rescheduleGuideCode,
   shipmentRequiresCourierResult,
   shipmentSearchTerms,
@@ -791,5 +794,63 @@ describe("reprogramRangeStats + limaRangeBounds · cortes por rango del popup", 
     const semana = limaRangeBounds("2026-07-12", "2026-07-18");
     const r7 = reprogramRangeStats(rows, semana.startMs, semana.endMs, NOW);
     expect(r7.counts.total).toBe(2); // hoy + ayer, no el del 10
+  });
+});
+
+describe("effectiveOrderName (la copia vacía no debe bloquear un envío vinculado)", () => {
+  // 601 envíos vinculados tienen `shipments.order_name` vacío aunque el enlace
+  // existe. 189 de ellos están anulados y no se podían reprogramar: la guía
+  // Fenix se autogenera desde el número, y el generador leía solo la copia.
+  it("usa la copia del envío cuando está", () => {
+    expect(effectiveOrderName("#KP118847", "#OTRO")).toBe("#KP118847");
+  });
+
+  it("cae al pedido enlazado cuando la copia está vacía", () => {
+    expect(effectiveOrderName(null, "#KP131418")).toBe("#KP131418");
+    expect(effectiveOrderName("", "#KP131418")).toBe("#KP131418");
+    expect(effectiveOrderName("   ", "#KP131418")).toBe("#KP131418");
+  });
+
+  it("sin ninguno de los dos, null — no inventa un número", () => {
+    expect(effectiveOrderName(null, null)).toBeNull();
+    expect(effectiveOrderName("", "  ")).toBeNull();
+    expect(effectiveOrderName(undefined, undefined)).toBeNull();
+  });
+
+  it("la copia MANDA sobre el enlace: no es una segunda definición", () => {
+    // Si difieren, eso es otro problema (un enlace movido sin actualizar la
+    // copia) y taparlo acá lo escondería. Esto solo cubre el hueco.
+    expect(effectiveOrderName("#VIEJO", "#NUEVO")).toBe("#VIEJO");
+  });
+
+  it("y con ella la guía se genera igual que si la copia estuviera llena", () => {
+    const iso = "2026-07-10T00:00:00.000Z";
+    expect(rescheduleGuideCode(effectiveOrderName(null, "#KP118847"), iso)).toBe(
+      rescheduleGuideCode("#KP118847", iso),
+    );
+  });
+});
+
+describe("los DOS botones de guía Fenix resuelven el nombre igual", () => {
+  // El cajón tenía dos sitios leyendo `shipment.order_name` por su cuenta:
+  // reprogramar un anulado y "Autogenerar" el N° de guía. Arreglar uno solo
+  // habría dejado el otro deshabilitado sobre el mismo envío.
+  const source = readFileSync(resolve(process.cwd(), "components/shipments.tsx"), "utf8");
+
+  it("el cajón resuelve el nombre una sola vez", () => {
+    expect(source).toContain("const drawerOrderName = effectiveOrderName(");
+  });
+
+  it("y ningún botón de guía vuelve a leer la copia cruda", () => {
+    expect(source).not.toMatch(/rescheduleGuideCode\(\s*(detail\.)?shipment\.order_name/);
+    expect(source).not.toContain("disabled={!detail.shipment.order_name}");
+  });
+
+  it("el servidor hace la MISMA resolución, no solo el botón", () => {
+    // Un botón habilitado que el servidor rechaza es peor que un botón apagado.
+    const server = readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
+    const i = server.indexOf("const guideCode = rescheduleGuideCode(");
+    expect(i).toBeGreaterThan(-1);
+    expect(server.slice(Math.max(0, i - 700), i)).toContain("effectiveOrderName(");
   });
 });
