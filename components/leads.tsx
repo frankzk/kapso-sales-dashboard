@@ -946,10 +946,6 @@ export function LeadsBoard({
   const handleOf = useMemo(() => {
     const crudo = new Map<string, string>();
     for (const l of leads) {
-      // Primero el link: es lo que el cliente mismo abrió, un hecho suyo.
-      // Si no lo hay, lo declarado para su anuncio — que es un hecho de la
-      // tienda, firmado por alguien. Nunca una conjetura: un anuncio sin
-      // declarar deja al lead en «Sin producto», que es la verdad.
       // 1) Lo ÚLTIMO que enlazó, que es lo que está consultando ahora (0140).
       //    Cubre a quien vuelve por otro producto y a quien abrió con un «hola»
       //    y mandó la ficha después.
