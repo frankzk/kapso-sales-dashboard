@@ -5,6 +5,7 @@ import { shopifyOrderAdminUrl } from "@/lib/shopify";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
+import type { PedidoPrevio } from "@/lib/pedido-duplicado";
 import {
   buildAnomalyReport,
   EMPTY_REPORT,
@@ -536,4 +537,66 @@ export async function getAnomalyReport(
   } catch {
     return EMPTY_REPORT;
   }
+}
+
+/**
+ * Los pedidos recientes de un teléfono en una tienda, para avisar antes de
+ * crear otro. Ver `lib/pedido-duplicado.ts` para qué se hace con ellos.
+ *
+ * Se comparan SOLO LOS DÍGITOS: el mismo cliente llega como `+51 999 888 777`,
+ * `51999888777` y `999888777` según por dónde entre, y un aviso que no salta
+ * porque sobraba un espacio no protege de nada.
+ */
+export async function getPedidosRecientesPorTelefono(
+  storeId: string,
+  phone: string,
+  dias = 45,
+): Promise<PedidoPrevio[]> {
+  const digitos = phone.replace(/\D/g, "");
+  if (!storeId || digitos.length < 6) return [];
+  const sb = await createServerSupabase();
+  const desde = new Date(Date.now() - dias * 86_400_000).toISOString();
+
+  // Se traen los del rango y se comparan los dígitos en TS: la columna guarda el
+  // teléfono con el formato con el que llegó, así que un `eq` se perdería la
+  // mitad y un `like` por sufijo no puede usar índice igual.
+  const { data } = await sb
+    .from("orders")
+    .select("id,name,created_at,total_amount,customer_phone,line_items")
+    .eq("store_id", storeId)
+    .gte("created_at", desde)
+    .order("created_at", { ascending: false })
+    .limit(500);
+
+  const suyos = ((data ?? []) as unknown as {
+    id: string;
+    name: string | null;
+    created_at: string;
+    total_amount: number | null;
+    customer_phone: string | null;
+    line_items: unknown;
+  }[]).filter((o) => (o.customer_phone ?? "").replace(/\D/g, "") === digitos);
+  if (!suyos.length) return [];
+
+  // El estado vive en `order_master`, no en `orders`: es lo que distingue un
+  // pedido vivo de uno anulado, y esa distinción es la mitad de la regla.
+  const estados = new Map<string, string | null>();
+  const { data: master } = await sb
+    .from("order_master")
+    .select("order_id,general_status")
+    .in("order_id", suyos.map((o) => o.id));
+  for (const m of (master ?? []) as { order_id: string; general_status: string | null }[]) {
+    estados.set(m.order_id, m.general_status);
+  }
+
+  return suyos.map((o) => ({
+    order_id: o.id,
+    name: o.name,
+    created_at: o.created_at,
+    total_amount: o.total_amount,
+    general_status: estados.get(o.id) ?? null,
+    titulos: (Array.isArray(o.line_items) ? o.line_items : [])
+      .map((li) => String((li as Record<string, unknown>)?.title ?? "").trim())
+      .filter(Boolean),
+  }));
 }
