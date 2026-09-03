@@ -950,8 +950,16 @@ export function LeadsBoard({
       // Si no lo hay, lo declarado para su anuncio — que es un hecho de la
       // tienda, firmado por alguien. Nunca una conjetura: un anuncio sin
       // declarar deja al lead en «Sin producto», que es la verdad.
+      // 1) Lo ÚLTIMO que enlazó, que es lo que está consultando ahora (0140).
+      //    Cubre a quien vuelve por otro producto y a quien abrió con un «hola»
+      //    y mandó la ficha después.
+      // 2) Si no lo hay —lead antiguo, todavía sin resincronizar— el link del
+      //    primer mensaje, que es de donde salía todo antes.
+      // 3) Y si tampoco, lo declarado para su anuncio. Nunca una conjetura: un
+      //    anuncio sin declarar deja al lead en «Sin producto», que es la verdad.
       const h =
-        leadProductHandle(l.first_inbound_text) ??
+        (l.last_product_handle ?? "").trim() ||
+        leadProductHandle(l.first_inbound_text) ||
         (l.ad_id ? (adProducts?.[claveAnuncio(l.store_id, l.ad_id)] ?? null) : null);
       if (h) crudo.set(l.id, h);
     }

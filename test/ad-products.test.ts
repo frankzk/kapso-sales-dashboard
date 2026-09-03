@@ -185,13 +185,30 @@ describe("las piezas que sostienen la regla en el código", () => {
     expect(actions).toContain('perms.can("leads.map_ads")');
   });
 
-  it("la cola prefiere el link del cliente antes que lo declarado", () => {
-    // El link es un hecho del cliente —abrió ESA ficha—; la declaración es un
-    // hecho de la tienda sobre el anuncio en general. Cuando los dos existen,
-    // manda el del cliente.
+  it("la cola pregunta en orden: lo último, luego lo primero, luego el anuncio", () => {
+    // El orden es la regla entera:
+    //   1. `last_product_handle` — lo ÚLTIMO que enlazó, o sea lo que consulta
+    //      AHORA. Es un hecho suyo y es reciente.
+    //   2. el link del primer mensaje — el mismo hecho, más viejo. Queda de
+    //      respaldo para leads que todavía no se resincronizaron.
+    //   3. lo declarado para su anuncio — un hecho de la tienda sobre el
+    //      anuncio en general, no sobre esta persona.
+    // Invertirlo dejaría a quien vuelve por otro producto etiquetado con el de
+    // la primera vez, que es el fallo que esto vino a arreglar.
     const source = read("components/leads.tsx");
     expect(source).toMatch(
-      /leadProductHandle\(l\.first_inbound_text\) \?\?\s*\(l\.ad_id \? \(adProducts/,
+      /\(l\.last_product_handle \?\? ""\)\.trim\(\) \|\|\s*leadProductHandle\(l\.first_inbound_text\) \|\|\s*\(l\.ad_id \? \(adProducts/,
     );
+  });
+
+  it("el último producto se escribe SIN el candado de escritura única", () => {
+    // `first_inbound_text` se escribe con `.is(..., null)` a propósito: el
+    // primer mensaje no cambia. Copiar ese candado acá era el bug — quien
+    // vuelve por otro producto se quedaba con el de junio para siempre.
+    const source = read("lib/leads-ingest.ts");
+    const start = source.indexOf("if (sig.last_product_handle) {");
+    const body = source.slice(start, source.indexOf("\n    }", start));
+    expect(body).toContain("last_product_handle: sig.last_product_handle");
+    expect(body).not.toContain(".is(");
   });
 });

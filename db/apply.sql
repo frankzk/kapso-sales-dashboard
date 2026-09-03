@@ -281,4 +281,6 @@
 \ir migrations/0138_group_gf_logistics_requests.sql
 \echo 'Applying 0139_ad_products.sql'
 \ir migrations/0139_ad_products.sql
+\echo 'Applying 0140_lead_last_product.sql'
+\ir migrations/0140_lead_last_product.sql
 \echo 'Done.'

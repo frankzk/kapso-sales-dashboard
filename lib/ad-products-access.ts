@@ -145,15 +145,19 @@ export async function getHandlesConocidos(storeIds: string[]): Promise<string[]>
     .ilike("first_inbound_text", "%/products/%")
     .order("last_interaction_at", { ascending: false })
     .limit(3000);
-  const handles = new Set<string>();
+  // CON repeticiones, una por lead: el plegado decide por FRECUENCIA cuál es la
+  // escritura buena de un handle, y un `Set` se la quita. Pasarle el conjunto
+  // dejaba a `…-60-softgels` (1.349 leads) y a `…-60-softgelsKENKU10` (1) con
+  // un voto cada uno, y el desempate elegía por tamaño — que es justo el
+  // criterio equivocado.
+  const handles: string[] = [];
   for (const row of (data ?? []) as { first_inbound_text: string | null }[]) {
     const h = leadProductHandle(row.first_inbound_text);
-    if (h) handles.add(h);
+    if (h) handles.push(h);
   }
-  // El plegado de recortes también aquí: ofrecer «…-60-softge» en la lista
-  // sería invitar a firmar el handle cortado.
+  // Ofrecer «…-60-softge» en la lista sería invitar a firmar el handle roto.
   const canon = canonicalProductHandles(handles);
-  return [...new Set([...handles].map((h) => canon.get(h) ?? h))].sort();
+  return [...new Set(handles.map((h) => canon.get(h) ?? h))].sort();
 }
 
 /**
