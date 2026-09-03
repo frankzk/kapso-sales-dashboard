@@ -8,23 +8,44 @@
 //
 // LO QUE LA PANTALLA NO HACE: aplicar la sugerencia sola. El histórico propone
 // —«de este anuncio suelen comprar Beewax, 98 % sobre 44 pedidos»— y la persona
-// firma o no. Un anuncio sin firmar deja a sus leads en «Sin producto», que es
-// la verdad, en vez de en un producto probable, que es una mentira que nadie
+// declara o no. Un anuncio sin declarar deja a sus leads en «Sin producto», que
+// es la verdad, en vez de en un producto probable, que es una mentira que nadie
 // puede ver.
+//
+// Y LA DECLARACIÓN TIENE FECHA. Un creativo que funciona se reutiliza para otro
+// producto —el del café que hoy vende el gel de limpieza de lengua—, así que un
+// anuncio puede tener varios periodos. Cada lead toma el que valía el día que
+// entró; declarar hoy no reescribe lo que ya se trabajó.
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card, EmptyState, cn } from "@/components/ui";
-import { FUERZA_LABEL, fuerzaEvidencia, type AdProductRow } from "@/lib/ad-products";
+import {
+  FUERZA_LABEL,
+  fuerzaEvidencia,
+  type AdDeclaration,
+  type AdProductRow,
+} from "@/lib/ad-products";
 import { productLabel } from "@/lib/leads";
 import {
-  clearAdProduct,
-  confirmAdProduct,
+  declareAdProduct,
   refreshAdSuggestions,
+  removeAdDeclaration,
 } from "@/app/dashboard/leads/anuncios/actions";
 
 export interface AdRow extends AdProductRow {
   leads: number;
+  declaraciones: AdDeclaration[];
+}
+
+/** «desde siempre» o la fecha, en corto. */
+function desdeLabel(validFrom: string): string {
+  const v = validFrom.trim().toLowerCase();
+  if (v === "-infinity") return "desde siempre";
+  const t = Date.parse(validFrom);
+  return Number.isNaN(t)
+    ? validFrom
+    : `desde ${new Date(t).toLocaleDateString("es-PE", { day: "2-digit", month: "short", year: "numeric" })}`;
 }
 
 const FUERZA_STYLE: Record<string, string> = {
@@ -48,6 +69,8 @@ export function AdProductsBoard({
   const [busy, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
+  const [desde, setDesde] = useState<Record<string, string>>({});
+  const hoy = new Date().toISOString().slice(0, 10);
   const storeName = useMemo(() => {
     const byId = new Map(stores.map((s) => [s.id, s.name]));
     return (id: string) => byId.get(id) ?? "—";
@@ -63,10 +86,10 @@ export function AdProductsBoard({
   // Cuántos leads dependen de una firma que todavía no existe. Es el número que
   // dice si vale la pena sentarse a esto.
   const pendientes = useMemo(
-    () => ads.filter((a) => !a.confirmed_at).reduce((n, a) => n + a.leads, 0),
+    () => ads.filter((a) => !a.declaraciones.length).reduce((n, a) => n + a.leads, 0),
     [ads],
   );
-  const declarados = useMemo(() => ads.filter((a) => a.confirmed_at).length, [ads]);
+  const declarados = useMemo(() => ads.filter((a) => a.declaraciones.length).length, [ads]);
 
   if (!ads.length) {
     return <EmptyState title="No hay anuncios con leads en la cola" />;
@@ -80,7 +103,9 @@ export function AdProductsBoard({
           <p className="mt-1 text-xs text-slate-500">
             Quien llega por un anuncio nunca pasa por la ficha del producto, así que su lead
             no trae ninguno. Declararlo acá hace que caiga en el mismo producto que los que
-            sí llegaron por la ficha.{" "}
+            sí llegaron por la ficha. Si un creativo se reutilizó para vender otra cosa, pon
+            la fecha desde la que vale: cada lead toma lo que el anuncio vendía el día que
+            entró, y el pasado no se reescribe.{" "}
             <strong className="font-medium text-slate-700">
               {pendientes.toLocaleString("es-PE")} leads
             </strong>{" "}
@@ -117,7 +142,8 @@ export function AdProductsBoard({
               <th className="px-3 py-2 font-medium">Tienda</th>
               <th className="px-3 py-2 text-right font-medium">Leads</th>
               <th className="px-3 py-2 font-medium">Suele vender (histórico)</th>
-              <th className="px-3 py-2 font-medium">Producto declarado</th>
+              <th className="px-3 py-2 font-medium">Qué vendió, y desde cuándo</th>
+              <th className="px-3 py-2 font-medium">Declarar</th>
               <th className="px-3 py-2" />
             </tr>
           </thead>
@@ -125,7 +151,7 @@ export function AdProductsBoard({
             {ads.map((ad) => {
               const key = `${ad.store_id}::${ad.ad_id}`;
               const fuerza = fuerzaEvidencia(ad);
-              const valor = draft[key] ?? ad.product_handle ?? "";
+              const valor = draft[key] ?? "";
               return (
                 <tr key={key} className="border-b border-slate-100 align-top">
                   <td className="px-3 py-2">
@@ -157,58 +183,84 @@ export function AdProductsBoard({
                     )}
                   </td>
                   <td className="px-3 py-2">
-                    {canEdit ? (
-                      <>
+                    {/* Los periodos declarados, del más nuevo al más viejo. Un
+                        anuncio reutilizado tiene varios y cada lead toma el que
+                        valía el día que entró. */}
+                    {ad.declaraciones.length > 0 ? (
+                      <ul className="space-y-0.5">
+                        {ad.declaraciones.map((d) => (
+                          <li key={d.id ?? d.valid_from} className="text-[11px]">
+                            <span className="font-medium text-emerald-700">
+                              {productLabel(d.product_handle)}
+                            </span>{" "}
+                            <span className="text-slate-400">{desdeLabel(d.valid_from)}</span>
+                            {d.note && <span className="text-slate-400"> · {d.note}</span>}
+                            {canEdit && (
+                              <button
+                                disabled={busy}
+                                onClick={() =>
+                                  run(() =>
+                                    removeAdDeclaration({
+                                      storeId: ad.store_id,
+                                      declarationId: d.id!,
+                                    }),
+                                  )
+                                }
+                                className="ml-1.5 text-slate-400 underline hover:text-red-600 disabled:opacity-50"
+                              >
+                                quitar
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <span className="text-xs text-slate-400">Sin declarar</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    {canEdit && (
+                      <div className="space-y-1">
                         <input
                           list="handles-conocidos"
                           value={valor}
                           onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
                           placeholder="handle del producto"
-                          className="w-64 rounded-lg border border-slate-300 px-2 py-1 text-xs"
+                          className="w-56 rounded-lg border border-slate-300 px-2 py-1 text-xs"
                         />
-                        {ad.confirmed_at && (
-                          <p className="mt-0.5 text-[11px] text-emerald-700">
-                            Declarado · {productLabel(ad.product_handle ?? "")}
-                          </p>
-                        )}
-                      </>
-                    ) : (
-                      <span className="text-slate-600">
-                        {ad.product_handle ? productLabel(ad.product_handle) : "—"}
-                      </span>
+                        {/* La fecha solo hace falta cuando el anuncio CAMBIÓ de
+                            producto. En blanco vale desde siempre, que es el
+                            caso normal y no debe costar un clic de más. */}
+                        <input
+                          type="date"
+                          value={desde[key] ?? ""}
+                          onChange={(e) => setDesde((d) => ({ ...d, [key]: e.target.value }))}
+                          max={hoy}
+                          title="Desde cuándo vende este producto. En blanco = desde siempre."
+                          className="w-56 rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-600"
+                        />
+                      </div>
                     )}
                   </td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
                     {canEdit && (
-                      <>
-                        <button
-                          disabled={busy || !valor.trim() || valor.trim() === ad.product_handle}
-                          onClick={() =>
-                            run(() =>
-                              confirmAdProduct({
-                                storeId: ad.store_id,
-                                adId: ad.ad_id,
-                                handle: valor,
-                                adHeadline: ad.ad_headline ?? null,
-                              }),
-                            )
-                          }
-                          className="rounded-lg bg-brand-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-40"
-                        >
-                          {ad.confirmed_at ? "Actualizar" : "Confirmar"}
-                        </button>
-                        {ad.confirmed_at && (
-                          <button
-                            disabled={busy}
-                            onClick={() =>
-                              run(() => clearAdProduct({ storeId: ad.store_id, adId: ad.ad_id }))
-                            }
-                            className="ml-2 text-xs text-slate-500 underline hover:text-red-600 disabled:opacity-50"
-                          >
-                            Retirar
-                          </button>
-                        )}
-                      </>
+                      <button
+                        disabled={busy || !valor.trim()}
+                        onClick={() =>
+                          run(() =>
+                            declareAdProduct({
+                              storeId: ad.store_id,
+                              adId: ad.ad_id,
+                              handle: valor,
+                              validFrom: desde[key] || null,
+                              adHeadline: ad.ad_headline ?? null,
+                            }),
+                          )
+                        }
+                        className="rounded-lg bg-brand-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-40"
+                      >
+                        {ad.declaraciones.length ? "Añadir periodo" : "Declarar"}
+                      </button>
                     )}
                   </td>
                 </tr>

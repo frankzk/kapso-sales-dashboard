@@ -32,41 +32,103 @@
 export interface AdProductRow {
   ad_id: string;
   store_id: string;
-  product_handle?: string | null;
   ad_headline?: string | null;
   suggested_label?: string | null;
   evidence_pct?: number | null;
   evidence_sample?: number | null;
-  confirmed_at?: string | null;
-  confirmed_by?: string | null;
 }
 
 /**
- * ¿Esta fila etiqueta a sus leads?
+ * Una declaración: este anuncio vendió ESTO desde tal día.
  *
- * Las dos condiciones son una sola idea: alguien firmó Y dijo qué. La base ya
- * lo exige con un CHECK, pero la pantalla lee filas que pudieron escribirse
- * antes de esa restricción, y un `confirmed_at` sin handle etiquetaría con
- * `undefined` — que es peor que no etiquetar, porque no se ve.
+ * `valid_from` es `-infinity` en la primera —«hasta donde sé, siempre vendió
+ * esto»— y una fecha real en las que abren un periodo nuevo.
  */
-export function adProductDeclarado(row: AdProductRow): boolean {
-  return !!row.confirmed_at && (row.product_handle ?? "").trim().length > 0;
+export interface AdDeclaration {
+  id?: string;
+  store_id: string;
+  ad_id: string;
+  product_handle: string;
+  valid_from: string;
+  note?: string | null;
+  declared_by?: string | null;
+  declared_at?: string | null;
 }
 
 /**
- * El mapa `ad_id → handle` que usa la cola. Solo entra lo declarado.
+ * Qué vendía este anuncio el día que entró el lead.
+ *
+ * EL CASO REAL. El anuncio 120248301757360056 aparece con titular de café
+ * —«Tu café favorito, ahora saludable ☕», «GC WIN ICE COFFEE 2007 (11).mp4»— y
+ * sus leads escriben «Quiero más información del Gel de Limpieza de Lengua». El
+ * creativo del café se reutilizó para otro producto, que es lo normal: un
+ * creativo que funciona no se tira.
+ *
+ * Con una declaración eterna por anuncio ese caso no tiene respuesta buena.
+ * Decir «café» etiqueta mal a quien preguntó por el gel; decir «gel» etiqueta
+ * mal a los del café — y hacia atrás, reescribiendo leads ya trabajados.
+ *
+ * Gana la declaración VIGENTE: la de `valid_from` más reciente que empiece
+ * antes de que el lead entrara. Si todas son posteriores, no hay respuesta y se
+ * devuelve null: nadie ha dicho qué vendía el anuncio entonces, y «no sé» es
+ * una respuesta que la cola sabe mostrar («Sin producto»).
+ */
+export function declaracionVigente(
+  declaraciones: readonly AdDeclaration[],
+  entroEl: string | null | undefined,
+): AdDeclaration | null {
+  if (!entroEl) return null;
+  const cuando = Date.parse(entroEl);
+  if (Number.isNaN(cuando)) return null;
+  let mejor: AdDeclaration | null = null;
+  for (const d of declaraciones) {
+    const desde = instante(d.valid_from);
+    if (desde > cuando) continue;
+    if (!mejor || desde > instante(mejor.valid_from)) mejor = d;
+  }
+  return mejor;
+}
+
+/** `-infinity` de Postgres no lo parsea `Date`; es «desde siempre». */
+function instante(valor: string): number {
+  const v = valor.trim().toLowerCase();
+  if (v === "-infinity") return Number.NEGATIVE_INFINITY;
+  if (v === "infinity") return Number.POSITIVE_INFINITY;
+  const t = Date.parse(valor);
+  // Una fecha ilegible NO se trata como «desde siempre»: eso la haría ganar
+  // sobre las buenas y etiquetaría a todo el mundo con ella.
+  return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+}
+
+/**
+ * Las declaraciones de cada anuncio, agrupadas por `tienda::anuncio`.
  *
  * La clave incluye la tienda: dos tiendas pueden tener anuncios distintos y el
  * mismo `ad_id` no se repite entre ellas, pero mezclarlas en una clave plana
  * sería confiar en eso sin decirlo.
  */
-export function mapaAnuncioProducto(rows: readonly AdProductRow[]): Map<string, string> {
-  const mapa = new Map<string, string>();
-  for (const row of rows) {
-    if (!adProductDeclarado(row)) continue;
-    mapa.set(claveAnuncio(row.store_id, row.ad_id), row.product_handle!.trim().toLowerCase());
+export function mapaAnuncioProducto(
+  declaraciones: readonly AdDeclaration[],
+): Map<string, AdDeclaration[]> {
+  const mapa = new Map<string, AdDeclaration[]>();
+  for (const d of declaraciones) {
+    const handle = (d.product_handle ?? "").trim().toLowerCase();
+    if (!handle) continue; // una declaración sin producto no dice nada
+    const clave = claveAnuncio(d.store_id, d.ad_id);
+    const lista = mapa.get(clave) ?? [];
+    lista.push({ ...d, product_handle: handle });
+    mapa.set(clave, lista);
   }
   return mapa;
+}
+
+/** El handle que le toca a un lead de este anuncio, o null si nadie lo dijo. */
+export function handleDeAnuncioPara(
+  declaraciones: readonly AdDeclaration[] | undefined,
+  entroEl: string | null | undefined,
+): string | null {
+  if (!declaraciones?.length) return null;
+  return declaracionVigente(declaraciones, entroEl)?.product_handle ?? null;
 }
 
 /** La clave del mapa: tienda + anuncio. */

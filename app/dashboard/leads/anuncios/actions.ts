@@ -32,25 +32,33 @@ async function guard(storeId: string) {
 }
 
 /**
- * Firma: este anuncio vende este producto.
+ * Declara: este anuncio vendió este producto, desde tal día.
+ *
+ * `validFrom` vacío = desde siempre, y es la primera declaración de un anuncio:
+ * mientras nadie diga que cambió de producto, lo que se sabe de él vale para
+ * todos sus leads. Poner fecha es lo que se hace cuando un creativo se reutiliza
+ * —el del café que pasó a vender el gel de lengua—, y entonces cada lead toma la
+ * que valía el día que entró en vez de que la nueva reescriba el pasado.
  *
  * El handle se normaliza igual que el que sale del link —minúsculas, sin
  * espacios— porque el objetivo entero es que los dos caigan en el MISMO balde.
  * Si se guardara «Beewax-Cera» y el link trajera «beewax-cera», la pantalla
- * mostraría dos productos donde hay uno, que es el problema que vinimos a
- * resolver.
+ * mostraría dos productos donde hay uno.
  */
-export async function confirmAdProduct(input: {
+export async function declareAdProduct(input: {
   storeId: string;
   adId: string;
   handle: string;
+  /** ISO. Vacío = desde siempre. */
+  validFrom?: string | null;
+  note?: string | null;
   adHeadline?: string | null;
 }): Promise<AdProductActionResult> {
   const g = await guard(input.storeId);
   if ("error" in g) return { ok: false, error: g.error };
 
   const handle = input.handle.trim().toLowerCase();
-  if (!handle) return { ok: false, error: "Elige un producto antes de confirmar." };
+  if (!handle) return { ok: false, error: "Elige un producto antes de declarar." };
   // El mismo alfabeto que acepta `leadProductHandle` al leer el link. Un handle
   // con un espacio o un acento no empataría nunca con el del link y el anuncio
   // quedaría en un balde propio, con cara de estar resuelto.
@@ -58,49 +66,74 @@ export async function confirmAdProduct(input: {
     return { ok: false, error: "El handle solo admite letras sin tilde, números, punto, guion y guion bajo." };
   }
 
-  const { error } = await g.admin.from("ad_products").upsert(
+  const desde = (input.validFrom ?? "").trim();
+  let validFrom = "-infinity";
+  if (desde) {
+    const t = Date.parse(desde);
+    if (Number.isNaN(t)) return { ok: false, error: "La fecha «desde» no es válida." };
+    // Una fecha futura declararía algo que todavía no pasa: ningún lead la
+    // tomaría hoy y mañana empezaría a etiquetar sin que nadie se acuerde.
+    if (t > Date.now()) return { ok: false, error: "La fecha «desde» no puede ser futura." };
+    validFrom = new Date(t).toISOString();
+  }
+
+  // El titular vive en `ad_products`, que puede no tener fila si el anuncio es
+  // nuevo. Se asegura antes para no perder el nombre con el que se reconoce.
+  if (input.adHeadline) {
+    await g.admin
+      .from("ad_products")
+      .upsert(
+        { store_id: input.storeId, ad_id: input.adId, ad_headline: input.adHeadline },
+        { onConflict: "store_id,ad_id" },
+      );
+  }
+
+  const { error } = await g.admin.from("ad_product_declarations").upsert(
     {
       store_id: input.storeId,
       ad_id: input.adId,
       product_handle: handle,
-      ad_headline: input.adHeadline ?? null,
-      confirmed_by: g.user.id,
-      confirmed_at: new Date().toISOString(),
+      valid_from: validFrom,
+      note: input.note?.trim() || null,
+      declared_by: g.user.id,
+      declared_at: new Date().toISOString(),
     },
-    { onConflict: "store_id,ad_id" },
+    { onConflict: "store_id,ad_id,valid_from" },
   );
   if (error) return { ok: false, error: error.message };
 
   revalidatePath("/dashboard/leads/anuncios");
   revalidatePath("/dashboard/leads");
-  return { ok: true, message: "Anuncio declarado." };
+  return {
+    ok: true,
+    message: desde ? "Periodo declarado desde esa fecha." : "Anuncio declarado.",
+  };
 }
 
 /**
- * Retira la declaración: sus leads vuelven a «Sin producto».
+ * Retira UNA declaración. Los leads que la tomaban caen al periodo anterior, y
+ * si no hay ninguno, a «Sin producto».
  *
- * Borra la firma, no la fila: la sugerencia y el titular siguen ahí para
- * volver a decidir. Y NO borra el handle a la vez que la firma en dos pasos —
- * el CHECK de la base rechaza una fila firmada sin handle, así que los dos
- * campos se limpian juntos o la escritura falla entera, que es lo correcto.
+ * Borra la fila entera y no solo su handle: una declaración sin producto no
+ * dice nada, y guardarla sería dejar un hueco con forma de dato.
  */
-export async function clearAdProduct(input: {
+export async function removeAdDeclaration(input: {
   storeId: string;
-  adId: string;
+  declarationId: string;
 }): Promise<AdProductActionResult> {
   const g = await guard(input.storeId);
   if ("error" in g) return { ok: false, error: g.error };
 
   const { error } = await g.admin
-    .from("ad_products")
-    .update({ product_handle: null, confirmed_at: null, confirmed_by: null })
-    .eq("store_id", input.storeId)
-    .eq("ad_id", input.adId);
+    .from("ad_product_declarations")
+    .delete()
+    .eq("id", input.declarationId)
+    .eq("store_id", input.storeId);
   if (error) return { ok: false, error: error.message };
 
   revalidatePath("/dashboard/leads/anuncios");
   revalidatePath("/dashboard/leads");
-  return { ok: true, message: "Declaración retirada. Sus leads vuelven a «Sin producto»." };
+  return { ok: true, message: "Declaración retirada." };
 }
 
 /**

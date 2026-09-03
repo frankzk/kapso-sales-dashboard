@@ -125,9 +125,10 @@ async function LeadsContent({
   // promise settles instead of waiting for counts and user first.
   const adNamesPromise = leadsPromise.then((rows) => getAdNames(rows.map((l) => l.ad_id)));
   const waNumbersPromise = leadsPromise.then((rows) => getWaNumbers(rows.map((l) => l.wa_phone_number_id)));
-  // Qué producto vende cada anuncio, para que un lead que llegó por anuncio caiga
-  // en el MISMO balde de producto que uno que llegó por la ficha. Solo lo
-  // declarado: las sugerencias del histórico no etiquetan a nadie.
+  // Qué vendía cada anuncio y DESDE CUÁNDO, para que un lead que llegó por
+  // anuncio caiga en el mismo balde que uno que llegó por la ficha —y con el
+  // producto que el anuncio vendía el día que ESE lead entró, no el de ahora.
+  // Solo lo declarado: las sugerencias del histórico no etiquetan a nadie.
   const adProductsPromise = leadsPromise.then((rows) =>
     getAdProductMap(scope, rows.map((l) => l.ad_id)),
   );
@@ -153,7 +154,7 @@ async function LeadsContent({
       leads={leads}
       adNames={adNames}
       waNumbers={waNumbers}
-      adProducts={Object.fromEntries(adProductMap)}
+      adDeclarations={Object.fromEntries(adProductMap)}
       currency={currency}
       timezone={timezone}
       insights={null}

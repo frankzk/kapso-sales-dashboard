@@ -9,6 +9,7 @@ import { chunk } from "@/lib/access";
 import {
   mapaAnuncioProducto,
   sugerenciaDeAnuncio,
+  type AdDeclaration,
   type AdProductRow,
   type CompraDeAnuncio,
 } from "@/lib/ad-products";
@@ -18,10 +19,16 @@ import { canonicalProductHandles, leadProductHandle } from "@/lib/leads";
 type SupabaseLike = ReturnType<typeof createAdminSupabase>;
 
 const AD_PRODUCT_COLUMNS =
-  "ad_id,store_id,product_handle,ad_headline,suggested_label,evidence_pct,evidence_sample,confirmed_at,confirmed_by,updated_at";
+  "ad_id,store_id,ad_headline,suggested_label,evidence_pct,evidence_sample,updated_at";
+const AD_DECLARATION_COLUMNS =
+  "id,store_id,ad_id,product_handle,valid_from,note,declared_by,declared_at";
 
 /**
- * El mapa que usa la cola: `tienda::anuncio → handle`, SOLO lo declarado.
+ * Lo que usa la cola: las declaraciones de cada anuncio, con su fecha.
+ *
+ * Devuelve TODOS los periodos, no solo el último, porque quién gana depende del
+ * lead: el que entró en junio toma la que valía en junio. Resolverlo aquí
+ * obligaría a una consulta por lead.
  *
  * Se pide por los `ad_id` que la cola tiene en pantalla, no la tabla entera:
  * son 88 anuncios hoy pero la tabla crece con cada campaña, y la cola no
@@ -30,19 +37,18 @@ const AD_PRODUCT_COLUMNS =
 export async function getAdProductMap(
   storeIds: string[],
   adIds: readonly (string | null | undefined)[],
-): Promise<Map<string, string>> {
+): Promise<Map<string, AdDeclaration[]>> {
   const ids = [...new Set(adIds.filter((id): id is string => !!id))];
   if (!storeIds.length || !ids.length) return new Map();
   const sb = await createServerSupabase();
-  const rows: AdProductRow[] = [];
+  const rows: AdDeclaration[] = [];
   for (const batch of chunk(ids, 200)) {
     const { data } = await sb
-      .from("ad_products")
-      .select(AD_PRODUCT_COLUMNS)
+      .from("ad_product_declarations")
+      .select(AD_DECLARATION_COLUMNS)
       .in("store_id", storeIds)
-      .in("ad_id", batch)
-      .not("confirmed_at", "is", null);
-    rows.push(...((data ?? []) as unknown as AdProductRow[]));
+      .in("ad_id", batch);
+    rows.push(...((data ?? []) as unknown as AdDeclaration[]));
   }
   return mapaAnuncioProducto(rows);
 }
@@ -57,6 +63,8 @@ export async function getAdProductMap(
  */
 export interface AdProductAsignable extends AdProductRow {
   leads: number;
+  /** Los periodos declarados, del más reciente al más antiguo. */
+  declaraciones: AdDeclaration[];
 }
 
 export async function getAdsParaAsignar(storeIds: string[]): Promise<AdProductAsignable[]> {
@@ -94,15 +102,24 @@ export async function getAdsParaAsignar(storeIds: string[]): Promise<AdProductAs
   if (!porAnuncio.size) return [];
 
   const declarados = new Map<string, AdProductRow>();
+  const periodos = new Map<string, AdDeclaration[]>();
   const ids = [...new Set([...porAnuncio.values()].map((a) => a.ad_id))];
   for (const batch of chunk(ids, 200)) {
-    const { data } = await sb
-      .from("ad_products")
-      .select(AD_PRODUCT_COLUMNS)
-      .in("store_id", storeIds)
-      .in("ad_id", batch);
+    const [{ data }, { data: decls }] = await Promise.all([
+      sb.from("ad_products").select(AD_PRODUCT_COLUMNS).in("store_id", storeIds).in("ad_id", batch),
+      sb
+        .from("ad_product_declarations")
+        .select(AD_DECLARATION_COLUMNS)
+        .in("store_id", storeIds)
+        .in("ad_id", batch)
+        .order("valid_from", { ascending: false }),
+    ]);
     for (const row of (data ?? []) as unknown as AdProductRow[]) {
       declarados.set(`${row.store_id}::${row.ad_id}`, row);
+    }
+    for (const d of (decls ?? []) as unknown as AdDeclaration[]) {
+      const clave = `${d.store_id}::${d.ad_id}`;
+      periodos.set(clave, [...(periodos.get(clave) ?? []), d]);
     }
   }
 
@@ -115,12 +132,10 @@ export async function getAdsParaAsignar(storeIds: string[]): Promise<AdProductAs
         // El titular de la tabla puede estar viejo; el de la cola es el último
         // que llegó. Gana el nuevo, que es el que la persona reconoce.
         ad_headline: anuncio.headline ?? fila?.ad_headline ?? null,
-        product_handle: fila?.product_handle ?? null,
         suggested_label: fila?.suggested_label ?? null,
         evidence_pct: fila?.evidence_pct ?? null,
         evidence_sample: fila?.evidence_sample ?? null,
-        confirmed_at: fila?.confirmed_at ?? null,
-        confirmed_by: fila?.confirmed_by ?? null,
+        declaraciones: periodos.get(key) ?? [],
         leads: anuncio.leads,
       } satisfies AdProductAsignable;
     })
