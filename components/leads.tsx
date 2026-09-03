@@ -949,15 +949,21 @@ export function LeadsBoard({
       // 1) Lo ÚLTIMO que enlazó, que es lo que está consultando ahora (0140).
       //    Cubre a quien vuelve por otro producto y a quien abrió con un «hola»
       //    y mandó la ficha después.
-      // 2) Si no lo hay —lead antiguo, todavía sin resincronizar— el link del
-      //    primer mensaje, que es de donde salía todo antes.
-      // 3) Y si tampoco, lo que su anuncio vendía EL DÍA QUE ESTE LEAD ENTRÓ.
+      // 2) El carrito o lo que estaba mirando (0143).
+      // 3) El link del primer mensaje —lead antiguo, sin resincronizar—, que es
+      //    de donde salía todo antes.
+      // 4) Y si tampoco, lo que su anuncio vendía EL DÍA QUE ESTE LEAD ENTRÓ.
       //    No lo que vende hoy: un creativo reutilizado cambia de producto, y
       //    tomar la declaración nueva reescribiría el pasado de los viejos.
       //    Nunca una conjetura: sin declaración vigente el lead se queda en
       //    «Sin producto», que es la verdad.
       const h =
         (l.last_product_handle ?? "").trim() ||
+        // 2) Lo que tiene en el carrito, o lo que estaba mirando. Va antes que
+        //    el primer mensaje porque es más reciente que la apertura, y llega
+        //    ya como handle desde Shopify — no como título, que no se puede
+        //    emparejar con el del link sin adivinar.
+        (l.cart_product_handle ?? "").trim() ||
         leadProductHandle(l.first_inbound_text) ||
         (l.ad_id
           ? handleDeAnuncioPara(

@@ -275,19 +275,21 @@ describe("las piezas que sostienen la regla en el código", () => {
     expect(actions).toContain('perms.can("leads.map_ads")');
   });
 
-  it("la cola pregunta en orden: lo último, luego lo primero, luego el anuncio", () => {
+  it("la cola pregunta en orden, de lo más reciente y más suyo a lo más general", () => {
     // El orden es la regla entera:
     //   1. `last_product_handle` — lo ÚLTIMO que enlazó, o sea lo que consulta
     //      AHORA. Es un hecho suyo y es reciente.
-    //   2. el link del primer mensaje — el mismo hecho, más viejo. Queda de
-    //      respaldo para leads que todavía no se resincronizaron.
-    //   3. lo declarado para su anuncio — un hecho de la tienda sobre el
-    //      anuncio en general, no sobre esta persona.
+    //   2. `cart_product_handle` — su carrito, o lo que estaba mirando. También
+    //      suyo, y posterior a la apertura de la conversación.
+    //   3. el link del primer mensaje — el mismo tipo de hecho, más viejo.
+    //      Queda de respaldo para leads que todavía no se resincronizaron.
+    //   4. lo declarado para su anuncio, vigente el día que entró — un hecho de
+    //      la tienda sobre el anuncio, no sobre esta persona.
     // Invertirlo dejaría a quien vuelve por otro producto etiquetado con el de
     // la primera vez, que es el fallo que esto vino a arreglar.
     const source = read("components/leads.tsx");
     expect(source).toMatch(
-      /\(l\.last_product_handle \?\? ""\)\.trim\(\) \|\|\s*leadProductHandle\(l\.first_inbound_text\) \|\|\s*\(l\.ad_id\s*\?\s*handleDeAnuncioPara\(/,
+      /\(l\.last_product_handle \?\? ""\)\.trim\(\) \|\|[\s\S]{0,400}?\(l\.cart_product_handle \?\? ""\)\.trim\(\) \|\|\s*leadProductHandle\(l\.first_inbound_text\) \|\|\s*\(l\.ad_id\s*\?\s*handleDeAnuncioPara\(/,
     );
   });
 

@@ -1038,6 +1038,24 @@ export async function linkOrdersToLeads(
 // ---------------------------------------------------------------------------
 
 /** First-3-titles cart summary, matching the WhatsApp parser's format. */
+/**
+ * El handle del producto del carrito, cuando el carrito habla de UNO solo.
+ *
+ * Con varios productos distintos devuelve null a propósito: el filtro agrupa
+ * por UN producto, y elegir uno de tres sería decir que el lead quiere ese
+ * —cuando lo que se sabe es que quiere tres—. `cart_summary` los sigue
+ * nombrando a todos para quien llama; lo que no se hace es fingir que hay una
+ * respuesta única donde no la hay.
+ */
+export function cartProductHandle(items: readonly OrderLineItem[]): string | null {
+  const handles = new Set(
+    items
+      .map((it) => (it.product_handle ?? "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return handles.size === 1 ? [...handles][0]! : null;
+}
+
 function draftCartSummary(items: OrderLineItem[]): string | null {
   const titles = items
     .map((it) => String(it.title ?? "").replace(/\s*\(.*$/, "").trim())
@@ -1085,6 +1103,7 @@ async function upsertDraftCartLead(
     cart_value: d.total_amount,
     cart_item_count: qty > 0 ? qty : 1, // >0 so leadSegment() → "carrito"
     cart_summary: draftCartSummary(d.line_items),
+    cart_product_handle: cartProductHandle(d.line_items),
     district: d.district,
     province: d.province,
     region: d.region,
@@ -1144,6 +1163,8 @@ export interface BrowseLeadSeed {
   name: string | null;
   email: string | null;
   cart_summary: string | null; // product(s) viewed/added, for advisor context
+  /** Handle del producto mirado, si el Flow lo manda. Null si no: no se deriva. */
+  cart_product_handle: string | null;
   cart_item_count: number | null; // only when products were actually added → "carrito"
   district: string | null; // from customer.defaultAddress, if the Flow sends it
   province: string | null;
@@ -1156,6 +1177,34 @@ function flowStr(v: any): string | null {
   if (v == null) return null;
   const t = String(v).trim();
   return t || null;
+}
+
+/**
+ * El handle del producto que la clienta miraba, SI el Flow lo manda.
+ *
+ * Shopify Flow arma su propio payload y hoy solo veníamos leyendo
+ * `productTitle`. Se aceptan las formas en las que puede llegar el handle, y si
+ * no viene ninguna se devuelve null: el lead se queda sin producto, que es la
+ * verdad. Derivarlo del título —quitar tildes, cambiar espacios por guiones—
+ * daría un handle plausible y falso, que se junta con el balde equivocado sin
+ * que nadie lo note.
+ *
+ * OJO: si el Flow no envía el campo, hay que añadirlo a la plantilla en
+ * Shopify. Este código lo lee en cuanto empiece a llegar; no hace falta tocarlo.
+ */
+function browseProductHandle(items: any[]): string | null {
+  const handles = new Set(
+    (Array.isArray(items) ? items : [])
+      .map((it) =>
+        String(it?.productHandle ?? it?.handle ?? it?.product?.handle ?? "")
+          .trim()
+          .toLowerCase(),
+      )
+      .filter(Boolean),
+  );
+  // Con varios productos distintos, ninguno: elegir uno sería decir que quiere
+  // ese cuando lo que se sabe es que miró tres.
+  return handles.size === 1 ? [...handles][0]! : null;
 }
 
 function browseProductSummary(items: any[]): string | null {
@@ -1187,6 +1236,7 @@ export function browseLeadSeed(body: any): BrowseLeadSeed | null {
     name: flowStr(body?.customer?.name),
     email: flowStr(body?.customer?.email),
     cart_summary: browseProductSummary(hasCart ? added : viewed),
+    cart_product_handle: browseProductHandle(hasCart ? added : viewed),
     cart_item_count: hasCart ? (qty > 0 ? qty : added.length) : null,
     district: flowStr(addr?.city),
     province: flowStr(addr?.province),
@@ -1256,6 +1306,7 @@ export async function processBrowseAbandonment(
       name: seed.name,
       email: seed.email,
       cart_summary: seed.cart_summary,
+      cart_product_handle: seed.cart_product_handle,
       cart_item_count: seed.cart_item_count,
       district: seed.district,
       province: seed.province,

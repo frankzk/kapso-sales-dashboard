@@ -37,6 +37,8 @@ export interface OrderLineItem {
   variant_title?: string | null;
   quantity: number;
   sku: string | null;
+  /** Handle de Shopify: el mismo identificador que trae el link `/products/<handle>`. */
+  product_handle?: string | null;
   product_id: string | null;
   variant_id: string | null;
   price: number | null;
@@ -228,6 +230,8 @@ export interface LeadRow {
   first_inbound_text?: string | null;
   /** Handle del ULTIMO producto enlazado (0140): que consulta AHORA. */
   last_product_handle?: string | null;
+  /** Handle del producto del carrito o de la navegacion abandonada (0143). */
+  cart_product_handle?: string | null;
   // Source / channel attribution (0008). 'meta_ad' = structured Click-to-WhatsApp
   // referral (real ad_id); 'fb_web' = reached WhatsApp via a Facebook/IG web link
   // (utm_source=facebook/fbclid, no ad_id); 'cod_cart'/'abandoned_browse' = flows;
