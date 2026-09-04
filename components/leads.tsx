@@ -840,39 +840,53 @@ export function LeadsBoard({
   }
 
   function openLead(lead: LeadRow) {
+    void abrirLeadPorId(lead.id, lead);
+  }
+
+  /**
+   * Abrir la gaveta de un lead, tengamos su fila cargada o no.
+   *
+   * `previa` es solo pintado instantáneo: cuando el lead viene de la lista ya
+   * sabemos su nombre y teléfono, y enseñarlos de una hace que la gaveta no
+   * parezca vacía mientras llega el detalle. Sin ella la gaveta espera, y por eso
+   * esto DEVUELVE una promesa: quien abrió el lead sin tener la fila —la venta
+   * por teléfono, que acaba de crearlo— necesita saber cuándo dejar de decir
+   * «abriendo». Un botón que no dice nada mientras trabaja se acaba pulsando
+   * cuatro veces.
+   */
+  async function abrirLeadPorId(leadId: string, previa?: LeadRow | null): Promise<boolean> {
     markLeadDrawerOpen();
-    activeLeadIdRef.current = lead.id;
+    activeLeadIdRef.current = leadId;
     setBanner(null);
-    setSelected(lead); // instant — render from the data we already have
+    setSelected(previa ?? null);
     setCalls(null);
     setHistory(null);
-    setOpeningId(lead.id); // disable only this row's button while the claim loads
-    void (async () => {
-      const historyPromise = loadLeadCustomerHistory(lead.id).catch(() => null);
-      try {
-        const d = await openLeadDrawer(lead.id);
-        if (activeLeadIdRef.current !== lead.id) return;
-        if ("error" in d) {
-          setBanner(d.error);
-          setSelected(null);
-          activeLeadIdRef.current = null;
-          return;
-        }
-        setSelected(d.lead);
-        setCalls(d.calls);
-        void historyPromise.then((extra) => {
-          if (!extra || "error" in extra || activeLeadIdRef.current !== lead.id) return;
-          setHistory(extra.customerHistory);
-          if (extra.cartSummary) {
-            setSelected((current) =>
-              current?.id === lead.id ? { ...current, cart_summary: extra.cartSummary } : current,
-            );
-          }
-        });
-      } finally {
-        setOpeningId((current) => (current === lead.id ? null : current));
+    setOpeningId(leadId); // disable only this row's button while the claim loads
+    const historyPromise = loadLeadCustomerHistory(leadId).catch(() => null);
+    try {
+      const d = await openLeadDrawer(leadId);
+      if (activeLeadIdRef.current !== leadId) return false;
+      if ("error" in d) {
+        setBanner(d.error);
+        setSelected(null);
+        activeLeadIdRef.current = null;
+        return false;
       }
-    })();
+      setSelected(d.lead);
+      setCalls(d.calls);
+      void historyPromise.then((extra) => {
+        if (!extra || "error" in extra || activeLeadIdRef.current !== leadId) return;
+        setHistory(extra.customerHistory);
+        if (extra.cartSummary) {
+          setSelected((current) =>
+            current?.id === leadId ? { ...current, cart_summary: extra.cartSummary } : current,
+          );
+        }
+      });
+      return true;
+    } finally {
+      setOpeningId((current) => (current === leadId ? null : current));
+    }
   }
 
   function refreshDetail(leadId: string, update?: LeadDrawerUpdate) {
@@ -1439,6 +1453,7 @@ export function LeadsBoard({
           <VentaTelefonica
             stores={stores.map((s) => ({ id: s.id, name: s.name }))}
             defaultStoreId={storeId === "all" ? null : storeId}
+            onAbrir={(leadId) => abrirLeadPorId(leadId)}
           />
           <button
             type="button"
