@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { GOLDEN_MINUTES, countLeadUrgency, leadUrgency, tallyGolden } from "@/lib/lead-urgency";
+import {
+  GOLDEN_MINUTES,
+  countLeadUrgency,
+  goldenBreakdown,
+  leadUrgency,
+  tallyGolden,
+} from "@/lib/lead-urgency";
 
 const NOW = Date.parse("2026-09-04T12:00:00.000Z");
 const minAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
@@ -75,18 +81,37 @@ describe("leadUrgency: datos que faltan o vienen rotos", () => {
 
 describe("tallyGolden", () => {
   const seg = (s: string) => () => s;
+  const cero = { total: 0, carrito: 0, interes: 0, converso: 0, frio: 0 };
 
-  it("cuenta solo lo caro: carrito e interés", () => {
+  // El total tiene que ser el de la hora ENTERA, no el de los segmentos caros:
+  // es el mismo número que muestra el chip «Hora dorada», y si difirieran la
+  // barra enseñaría dos cifras contradictorias (pasó: decía 5 y 8).
+  it("cuenta los cuatro segmentos", () => {
     const leads = [
       { id: "a", first_seen_at: minAgo(10) },
       { id: "b", first_seen_at: minAgo(20) },
     ];
-    expect(tallyGolden(leads, seg("carrito"), NOW)).toEqual({ total: 2, carrito: 2, interes: 0 });
-    expect(tallyGolden(leads, seg("interes"), NOW)).toEqual({ total: 2, carrito: 0, interes: 2 });
-    // Conversó y frío también caen al pasar la hora, pero son 243 leads/día
-    // contra 168 de los otros dos: meterlos aquí convertiría el aviso en ruido.
-    expect(tallyGolden(leads, seg("converso"), NOW)).toEqual({ total: 0, carrito: 0, interes: 0 });
-    expect(tallyGolden(leads, seg("frio"), NOW)).toEqual({ total: 0, carrito: 0, interes: 0 });
+    expect(tallyGolden(leads, seg("carrito"), NOW)).toEqual({ ...cero, total: 2, carrito: 2 });
+    expect(tallyGolden(leads, seg("interes"), NOW)).toEqual({ ...cero, total: 2, interes: 2 });
+    // Conversó y frío NO se esconden: dentro de la primera hora cierran 16,7% y
+    // 11,3% en Kenku, por encima de un interés de 6-24 h (12,9%).
+    expect(tallyGolden(leads, seg("converso"), NOW)).toEqual({ ...cero, total: 2, converso: 2 });
+    expect(tallyGolden(leads, seg("frio"), NOW)).toEqual({ ...cero, total: 2, frio: 2 });
+  });
+
+  it("el total siempre es la suma del desglose", () => {
+    const leads = [
+      { id: "c1", first_seen_at: minAgo(5) },
+      { id: "i1", first_seen_at: minAgo(6) },
+      { id: "i2", first_seen_at: minAgo(7) },
+      { id: "v1", first_seen_at: minAgo(8) },
+      { id: "f1", first_seen_at: minAgo(9) },
+    ];
+    const bySeg = (l: { id: string }) =>
+      ({ c: "carrito", i: "interes", v: "converso", f: "frio" })[l.id[0]!]!;
+    const t = tallyGolden(leads, bySeg, NOW);
+    expect(t).toEqual({ total: 5, carrito: 1, interes: 2, converso: 1, frio: 1 });
+    expect(t.carrito + t.interes + t.converso + t.frio).toBe(t.total);
   });
 
   it("solo cuenta los que están DENTRO de la hora", () => {
@@ -96,21 +121,42 @@ describe("tallyGolden", () => {
       { id: "viejo", first_seen_at: minAgo(60 * 24 * 3) },
       { id: "sin-fecha", first_seen_at: null },
     ];
-    expect(tallyGolden(leads, seg("carrito"), NOW)).toEqual({ total: 1, carrito: 1, interes: 0 });
+    expect(tallyGolden(leads, seg("carrito"), NOW)).toEqual({ ...cero, total: 1, carrito: 1 });
   });
 
-  it("separa los dos segmentos", () => {
-    const leads = [
-      { id: "c1", first_seen_at: minAgo(5) },
-      { id: "c2", first_seen_at: minAgo(6) },
-      { id: "i1", first_seen_at: minAgo(7) },
-    ];
-    const bySeg = (l: { id: string }) => (l.id.startsWith("c") ? "carrito" : "interes");
-    expect(tallyGolden(leads, bySeg, NOW)).toEqual({ total: 3, carrito: 2, interes: 1 });
+  it("un segmento desconocido suma al total pero no al desglose", () => {
+    // Si apareciera un segmento nuevo, el aviso seguiría contándolo (existe y
+    // está en la hora) sin inventarle un balde. Perder la fila del total sería
+    // peor: volvería el desajuste con el chip.
+    const t = tallyGolden([{ first_seen_at: minAgo(5) }], seg("otro"), NOW);
+    expect(t.total).toBe(1);
+    expect(t.carrito + t.interes + t.converso + t.frio).toBe(0);
   });
 
   it("una cola vacía da cero, no revienta", () => {
-    expect(tallyGolden([], seg("carrito"), NOW)).toEqual({ total: 0, carrito: 0, interes: 0 });
+    expect(tallyGolden([], seg("carrito"), NOW)).toEqual(cero);
+  });
+});
+
+describe("goldenBreakdown", () => {
+  it("omite los ceros y respeta el orden de prioridad", () => {
+    expect(goldenBreakdown({ total: 8, carrito: 0, interes: 5, converso: 2, frio: 1 })).toEqual([
+      { label: "de interés", count: 5 },
+      { label: "conversó", count: 2 },
+      { label: "frío", count: 1 },
+    ]);
+  });
+
+  it("lo que se pinta siempre suma el total", () => {
+    const t = { total: 8, carrito: 0, interes: 5, converso: 2, frio: 1 };
+    expect(goldenBreakdown(t).reduce((a, b) => a + b.count, 0)).toBe(t.total);
+  });
+
+  it("carrito va primero cuando lo hay", () => {
+    expect(goldenBreakdown({ total: 4, carrito: 3, interes: 1, converso: 0, frio: 0 })).toEqual([
+      { label: "con carrito", count: 3 },
+      { label: "de interés", count: 1 },
+    ]);
   });
 });
 
@@ -173,7 +219,28 @@ describe("la fila usa la urgencia, no la ventana de 24h", () => {
     // Y se puede filtrar por él: sin esto el aviso informa pero no lleva a
     // ninguna parte.
     expect(src).toContain("edad: matchEdad");
-    expect(src).toContain('setEdadFilter((v) => (v === "dorada" ? "all" : "dorada"))');
+    expect(src).toContain('setEdadFilter("dorada")');
+  });
+
+  // El fallo que originó esto: el aviso decía 5 (solo carrito e interés) y su
+  // botón decía 8 (la hora entera, desde `edadCounts`). Dos cifras que no cuadran
+  // en la misma barra. Las dos tienen que salir del MISMO conteo.
+  it("el número del aviso y el de su botón salen del mismo conteo", () => {
+    expect(src).toContain("{goldenTally.total} {goldenTally.total === 1 ? \"lead\" : \"leads\"}");
+    expect(src).toContain("`Ver estos ${goldenTally.total}`");
+    // Y en particular el botón NO puede volver a leer el contador del chip, que
+    // se calcula sobre otra base faceteada.
+    expect(src).not.toContain("Ver la última hora (${edadCounts.dorada})");
+  });
+
+  // El aviso cuenta la hora entera SIN mirar el chip de segmento (por eso su base
+  // es `except("seg","edad")`). Si al filtrar quedara un segmento activo, la lista
+  // mostraría menos filas que el número del botón — el mismo desajuste otra vez,
+  // solo que un clic más tarde.
+  it("al filtrar por la hora dorada se limpia el segmento", () => {
+    const boton = src.slice(src.indexOf("Ver estos ${goldenTally.total}") - 900);
+    expect(boton).toContain('setEdadFilter("dorada");');
+    expect(boton).toContain("setSegFilter(null);");
   });
 
   // El chip vive en su propio eje. Si alguien lo metiera dentro de "Ventana"

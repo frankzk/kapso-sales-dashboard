@@ -118,36 +118,62 @@ export function countLeadUrgency(
   return out;
 }
 
-/** Los segmentos donde entrar en la hora dorada cambia de verdad el resultado.
- *  `converso` y `frio` también caen, pero desde 12,9% a 4,0%: llamarlos rápido
- *  importa mucho menos que no dejar pasar un carrito, y meterlos en el aviso lo
- *  llenaría de ruido (son 243 leads/día contra 168 de los otros dos juntos). */
-export const GOLDEN_SEGMENTS = ["carrito", "interes"] as const;
+/** Los segmentos del desglose, en el orden en que se llaman. */
+export const GOLDEN_SEGMENTS = ["carrito", "interes", "converso", "frio"] as const;
+export type GoldenSegment = (typeof GOLDEN_SEGMENTS)[number];
 
-export interface GoldenTally {
-  total: number;
-  carrito: number;
-  interes: number;
-}
+export type GoldenTally = { total: number } & Record<GoldenSegment, number>;
 
 /**
  * Cuenta los leads que están dentro de la hora dorada, por segmento. PURA.
  *
- * Solo cuenta `carrito` e `interes` (ver GOLDEN_SEGMENTS): el aviso existe para
- * que no se escape lo caro, no para anunciar que entraron leads.
+ * CUENTA LOS CUATRO SEGMENTOS. La primera versión sumaba solo `carrito` e
+ * `interes`, con el argumento de que meter conversó y frío llenaría el aviso de
+ * ruido —son 243 leads/día contra 168 de los otros dos—. El argumento era sobre
+ * la cola entera y no aplica DENTRO de la hora: ahí la población es de un puñado
+ * (5 de interés, 2 conversó, 1 frío en una medición real), no de cientos.
+ *
+ * Y el valor va al revés de lo que se supuso. Medido en Kenku, dentro de la
+ * primera hora conversó cierra 16,7% y frío 11,3% — por encima de un `interes`
+ * de 6-24 h (12,9%) y muy por encima de casi toda la cola. Esconderlos del aviso
+ * ocultaba leads que sí conviene llamar.
+ *
+ * El coste de esconderlos era además visible: el aviso decía 5 y el botón que
+ * lleva al filtro decía 8. Dos números en la misma barra que no cuadran destruyen
+ * la confianza en los dos, y la asesora no tiene forma de saber cuál mirar.
+ * Ahora el total es el de la hora completa y el desglose dice qué hay dentro.
  */
 export function tallyGolden<T extends { first_seen_at?: string | null }>(
   leads: readonly T[],
   segmentOf: (lead: T) => string,
   nowMs: number,
 ): GoldenTally {
-  let carrito = 0;
-  let interes = 0;
+  const out: GoldenTally = { total: 0, carrito: 0, interes: 0, converso: 0, frio: 0 };
   for (const lead of leads) {
     if (leadUrgency(lead.first_seen_at, nowMs)?.tier !== "dorada") continue;
+    out.total += 1;
     const seg = segmentOf(lead);
-    if (seg === "carrito") carrito += 1;
-    else if (seg === "interes") interes += 1;
+    if (seg === "carrito" || seg === "interes" || seg === "converso" || seg === "frio") {
+      out[seg] += 1;
+    }
   }
-  return { total: carrito + interes, carrito, interes };
+  return out;
+}
+
+/** Etiquetas del desglose. Se omiten los ceros, así que lo que se muestra
+ *  siempre suma el total — que es lo que hace legible la resta. */
+export const GOLDEN_SEGMENT_LABEL: Record<GoldenSegment, string> = {
+  carrito: "con carrito",
+  interes: "de interés",
+  converso: "conversó",
+  frio: "frío",
+};
+
+/** Desglose listo para pintar: pares [etiqueta, n] sin ceros, en orden de
+ *  prioridad. PURA. */
+export function goldenBreakdown(tally: GoldenTally): { label: string; count: number }[] {
+  return GOLDEN_SEGMENTS.filter((seg) => tally[seg] > 0).map((seg) => ({
+    label: GOLDEN_SEGMENT_LABEL[seg],
+    count: tally[seg],
+  }));
 }
