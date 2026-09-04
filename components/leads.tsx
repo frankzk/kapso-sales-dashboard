@@ -15,7 +15,13 @@ import {
 } from "@/lib/leads-access";
 import { facetItems } from "@/lib/leads-facets";
 import { scoringProfileFor, sortLeadsByPriorityScoped } from "@/lib/lead-priority";
-import { countLeadUrgency, leadUrgency, tallyGolden, type UrgencyTier } from "@/lib/lead-urgency";
+import {
+  countLeadUrgency,
+  goldenBreakdown,
+  leadUrgency,
+  tallyGolden,
+  type UrgencyTier,
+} from "@/lib/lead-urgency";
 import type { LeadsInsights } from "@/lib/leads-insights";
 import {
   buildMetaAudienceCsv,
@@ -1809,11 +1815,11 @@ export function LeadsBoard({
           Ese es justamente el punto — son pocos, valen el doble, y hasta ahora
           iban pintados igual que los 1.945 restantes.
 
-          CUENTA MENOS QUE EL CHIP «Hora dorada» a propósito: el chip es un corte
-          de reloj y devuelve todo lo que cae en él; esto es una alarma sobre lo
-          caro y solo cuenta carrito e interés. Por eso el botón dice qué va a
-          mostrar («Ver la última hora») en vez de «ver solo estos», que
-          prometería estos y traería alguno más.
+          UN SOLO NÚMERO. Antes el aviso contaba solo carrito e interés y el
+          botón contaba la hora entera: decían 5 y 8 en la misma barra. Dos cifras
+          que no cuadran a diez centímetros una de otra destruyen la confianza en
+          las dos. Ahora las dos son el total de la hora y el desglose dice qué
+          hay dentro.
 
           NO se muestra cuando está vacío: una banda permanente en cero enseña a
           ignorarla, y entonces no sirve el día que dice 5. La excepción es tenerla
@@ -1834,11 +1840,8 @@ export function LeadsBoard({
                   ⏱️ {goldenTally.total} {goldenTally.total === 1 ? "lead" : "leads"} en hora dorada
                 </span>
                 <span className="text-emerald-800">
-                  {[
-                    goldenTally.carrito > 0 ? `${goldenTally.carrito} con carrito` : null,
-                    goldenTally.interes > 0 ? `${goldenTally.interes} de interés` : null,
-                  ]
-                    .filter(Boolean)
+                  {goldenBreakdown(goldenTally)
+                    .map((b) => `${b.count} ${b.label}`)
                     .join(" · ")}{" "}
                   · llamados dentro de la primera hora cierran{" "}
                   <span className="font-semibold">el doble</span>
@@ -1849,7 +1852,18 @@ export function LeadsBoard({
             )}
             <button
               type="button"
-              onClick={() => setEdadFilter((v) => (v === "dorada" ? "all" : "dorada"))}
+              // Limpia también el segmento: el aviso cuenta la hora entera sin
+              // mirar el chip activo, así que si al filtrar quedara un segmento
+              // puesto la lista mostraría menos filas que el número del botón —
+              // el mismo desajuste que este cambio viene a quitar.
+              onClick={() => {
+                if (edadFilter === "dorada") {
+                  setEdadFilter("all");
+                } else {
+                  setEdadFilter("dorada");
+                  setSegFilter(null);
+                }
+              }}
               className={cn(
                 "ml-auto inline-flex h-[30px] items-center rounded-md border px-2.5 text-[12px] font-semibold",
                 edadFilter === "dorada"
@@ -1857,7 +1871,7 @@ export function LeadsBoard({
                   : "border-emerald-400 bg-white text-emerald-700 hover:bg-emerald-100",
               )}
             >
-              {edadFilter === "dorada" ? "Ver toda la cola" : `Ver la última hora (${edadCounts.dorada})`}
+              {edadFilter === "dorada" ? "Ver toda la cola" : `Ver estos ${goldenTally.total}`}
             </button>
           </div>
         )}
