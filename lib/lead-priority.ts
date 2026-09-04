@@ -198,7 +198,18 @@ const CART_VALUE_CAP = 10;
 // llegado — o sea, el reloj invirtiendo el orden que SÍ está medido. Como el
 // desgaste por antigüedad es criterio (no lo medimos) y los pesos son dato, el
 // reloj solo puede degradar dentro de una escala, nunca dar vuelta la señal.
-/** Desgaste diario de frescura (2% por día). */
+// Y se cuenta por DÍAS ENTEROS, no en continuo. Aplicado en continuo, una hora
+// de diferencia movía el puntaje un 0,08% — ruido puro— pero era suficiente para
+// mandar POR ENCIMA de los tramos, que sí están medidos. En la cola real, cinco
+// carritos de S/99 del mismo tramo (donde la conversión es plana: 24,1%) salían
+// ordenados 12,2 h · 13,0 h · 14,2 h · 15,2 h · 15,7 h — el más cerca de cruzar
+// a "+24 h" y perder 2 puntos de peso quedaba ÚLTIMO, porque su cliente no había
+// vuelto a escribir hace un rato. Un criterio que no medimos decidiendo contra un
+// dato que sí.
+// Por días enteros, todo lo que entró hoy vale igual y el orden dentro del tramo
+// lo decide el vencimiento (ver sortLeadsByPriorityScoped). La cola larga de
+// semanas se sigue castigando igual, que es para lo que se puso.
+/** Desgaste de frescura: 2% por cada día ENTERO transcurrido. */
 const AGE_DECAY_PER_DAY = 0.02;
 /** Piso de frescura: un lead viejo pierde fuerza, no desaparece. */
 const AGE_FRESHNESS_FLOOR = 0.4;
@@ -259,7 +270,7 @@ export function leadPriorityScore(
   const ref = lead.last_interaction_at ?? lead.first_seen_at ?? null;
   let freshness = 1;
   if (ref) {
-    const days = (nowMs - Date.parse(ref)) / 86_400_000;
+    const days = Math.floor((nowMs - Date.parse(ref)) / 86_400_000);
     if (Number.isFinite(days) && days > 0) {
       freshness = Math.max(AGE_FRESHNESS_FLOOR, 1 - days * AGE_DECAY_PER_DAY);
     }
@@ -268,9 +279,26 @@ export function leadPriorityScore(
 }
 
 /**
- * Ordena de mayor a menor prioridad. NO muta la entrada. El desempate por `id`
- * mantiene el orden estable entre renders: sin él, dos leads con el mismo puntaje
- * podrían saltar de lugar y la asesora perdería la fila que estaba mirando.
+ * Ordena de mayor a menor prioridad. NO muta la entrada.
+ *
+ * DESEMPATE: primero el MÁS VIEJO, y solo después el `id`.
+ *
+ * Los tramos son escalones planos —dentro de "6-24 h" un carrito de 7 horas y
+ * uno de 23 cierran igual (24,1%)—, así que a igual segmento y ticket el puntaje
+ * empata y hace falta un criterio. Antes no había ninguno explícito: desempataba
+ * el resto decimal de `freshness`, que iba en la dirección contraria. En la cola
+ * real, cinco carritos de S/99 del mismo tramo salían 12,2 h · 13,0 h · 14,2 h ·
+ * 15,2 h · 15,7 h, o sea el más cerca de cruzar a "+24 h" —y perder 2 puntos de
+ * peso, 11 → 9— quedaba ÚLTIMO.
+ *
+ * Llamar primero al que está por vencer es el resultado clásico de planificación
+ * por vencimiento más próximo: a igual valor AHORA, se atiende antes lo que
+ * antes deja de valer. Y no inventa ninguna curva —los escalones siguen siendo
+ * los medidos—: solo desempata dentro de uno.
+ *
+ * Estable entre renders, que es lo que protegía el desempate por `id`: la edad
+ * relativa de dos leads no cambia nunca, así que la fila que la asesora está
+ * mirando no se le mueve bajo el dedo.
  */
 export function sortLeadsByPriority<T extends LeadPriorityInput & { id: string }>(
   leads: T[],
@@ -297,7 +325,14 @@ export function sortLeadsByPriorityScoped<T extends LeadPriorityInput & { id: st
   nowMs: number = Date.now(),
 ): T[] {
   return leads
-    .map((lead) => ({ lead, score: leadPriorityScore(lead, profileFor(lead), nowMs) }))
-    .sort((a, b) => b.score - a.score || a.lead.id.localeCompare(b.lead.id))
+    .map((lead) => ({
+      lead,
+      score: leadPriorityScore(lead, profileFor(lead), nowMs),
+      // Mismo reloj con el que se eligió el tramo, para que el desempate empuje
+      // hacia el mismo lado que el escalón. Sin fecha va al final del empate: no
+      // se puede afirmar que esté por vencer.
+      age: hoursSince(lead.first_seen_at ?? lead.last_interaction_at, nowMs) ?? -1,
+    }))
+    .sort((a, b) => b.score - a.score || b.age - a.age || a.lead.id.localeCompare(b.lead.id))
     .map((entry) => entry.lead);
 }

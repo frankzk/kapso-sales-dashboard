@@ -80,6 +80,32 @@ describe("leadPriorityScore", () => {
     expect(viejo).toBeLessThan(hoy);
   });
 
+  // El desgaste es "2% por DÍA", y se cuenta por días enteros. En continuo, una
+  // hora movía el puntaje un 0,08% —ruido— pero ese ruido desempataba dentro de
+  // un tramo y lo hacía al revés del vencimiento. Si esto volviera al continuo,
+  // el desempate por vencimiento dejaría de aplicarse sin que nada más falle.
+  it("la frescura se cuenta por días enteros, no en continuo", () => {
+    const aLasDos = leadPriorityScore(
+      { cart_item_count: 1, first_seen_at: daysAgo(0), last_interaction_at: new Date(NOW - 2 * 3_600_000).toISOString() },
+      KENKU,
+      NOW,
+    );
+    const aLasVeinte = leadPriorityScore(
+      { cart_item_count: 1, first_seen_at: daysAgo(0), last_interaction_at: new Date(NOW - 20 * 3_600_000).toISOString() },
+      KENKU,
+      NOW,
+    );
+    // Mismo día ⇒ mismo factor. Idénticos, no "parecidos".
+    expect(aLasVeinte).toBe(aLasDos);
+    // Y cruzar el día sí baja: el castigo de la cola larga sigue existiendo.
+    const alDiaSiguiente = leadPriorityScore(
+      { cart_item_count: 1, first_seen_at: daysAgo(0), last_interaction_at: daysAgo(1) },
+      KENKU,
+      NOW,
+    );
+    expect(alDiaSiguiente).toBeLessThan(aLasDos);
+  });
+
   // El punto del puntaje: la intención pesa más que el reloj. Hoy la cola ordena
   // al revés y por eso los carritos quedan enterrados entre fríos recientes.
   it("un carrito VIEJO sigue por encima de un frío RECIÉN llegado", () => {
@@ -263,7 +289,7 @@ describe("sortLeadsByPriority", () => {
     expect(rows).toEqual(copia);
   });
 
-  it("empates estables: mismo puntaje mantiene siempre el mismo orden", () => {
+  it("empates estables: mismo puntaje y misma edad mantienen siempre el mismo orden", () => {
     const rows = [
       { id: "zzz", cart_item_count: 1, last_interaction_at: daysAgo(0) },
       { id: "aaa", cart_item_count: 1, last_interaction_at: daysAgo(0) },
@@ -273,6 +299,105 @@ describe("sortLeadsByPriority", () => {
     expect(sortLeadsByPriority(rows, KENKU, NOW).map((r) => r.id)).toEqual(
       sortLeadsByPriority(rows, KENKU, NOW).map((r) => r.id),
     );
+  });
+
+  // Dentro de un tramo el puntaje empata (son escalones planos: un carrito de 7 h
+  // y uno de 23 cierran igual). Antes desempataba el resto decimal de `freshness`
+  // y lo hacía al revés: en la cola real, cinco carritos de S/99 del mismo tramo
+  // salían 12,2 · 13,0 · 14,2 · 15,2 · 15,7 h, con el más cerca de cruzar a
+  // "+24 h" en último lugar.
+  describe("desempate por vencimiento más próximo", () => {
+    const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
+    const mismoTramo = (id: string, h: number) => ({
+      id,
+      cart_item_count: 1,
+      cart_value: 99,
+      first_seen_at: hoursAgo(h),
+      last_interaction_at: hoursAgo(h),
+    });
+
+    it("a igual puntaje llama primero al más viejo", () => {
+      // Las cinco edades reales de la cola, con su `id` a la contra a propósito:
+      // ordenadas por id darían 14,2 · 15,2 · 12,9 · 12,1 · 15,7.
+      const rows = [
+        mismoTramo("a", 14.2),
+        mismoTramo("b", 15.2),
+        mismoTramo("c", 12.9),
+        mismoTramo("d", 12.1),
+        mismoTramo("e", 15.7),
+      ];
+      expect(sortLeadsByPriority(rows, KENKU, NOW).map((r) => r.id)).toEqual([
+        "e", // 15,7 h — el más cerca de caer a +24h
+        "b", // 15,2
+        "a", // 14,2
+        "c", // 12,9
+        "d", // 12,1
+      ]);
+    });
+
+    // El desempate mide la EDAD (desde que entró), no cuánto hace que el cliente
+    // escribió. Son relojes distintos y en producción divergen mucho: estas cinco
+    // filas reales tienen 12-16 h de edad pero 1,6-4,4 h desde la última
+    // interacción, y ordenarlas por uno u otro da resultados DISTINTOS. El
+    // acantilado está medido sobre la edad, así que es el que manda.
+    it("desempata por la edad, no por cuándo escribió el cliente", () => {
+      const real = (id: string, edad: number, ultima: number) => ({
+        id,
+        cart_item_count: 1,
+        cart_value: 99,
+        first_seen_at: hoursAgo(edad),
+        last_interaction_at: hoursAgo(ultima),
+      });
+      const rows = [
+        real("junior", 12.158, 1.638),
+        real("t2w", 12.97, 2.692),
+        real("l342", 14.226, 4.42),
+        real("l157", 15.233, 4.415),
+        real("l728", 15.743, 4.415),
+      ];
+      // Por edad: 15,7 · 15,2 · 14,2 · 13,0 · 12,2
+      expect(sortLeadsByPriority(rows, KENKU, NOW).map((r) => r.id)).toEqual([
+        "l728",
+        "l157",
+        "l342",
+        "t2w",
+        "junior",
+      ]);
+      // Por última interacción habría salido l342 primero (4,42 h) — es el orden
+      // que NO queremos, y el único que separa las dos reglas.
+      expect(sortLeadsByPriority(rows, KENKU, NOW)[0]!.id).not.toBe("l342");
+    });
+
+    it("no invierte el puntaje: el ticket sigue mandando sobre la edad", () => {
+      const caroYNuevo = { ...mismoTramo("caro", 7), cart_value: 300 };
+      const baratoYViejo = mismoTramo("barato", 23);
+      expect(sortLeadsByPriority([baratoYViejo, caroYNuevo], KENKU, NOW).map((r) => r.id)).toEqual([
+        "caro",
+        "barato",
+      ]);
+    });
+
+    it("ni el tramo: un carrito fresco va antes que uno a punto de vencer", () => {
+      const fresco = mismoTramo("fresco", 0.2);
+      const porVencer = mismoTramo("porVencer", 23.9);
+      expect(sortLeadsByPriority([porVencer, fresco], KENKU, NOW).map((r) => r.id)).toEqual([
+        "fresco",
+        "porVencer",
+      ]);
+    });
+
+    // Dos leads sin fecha no pueden compararse por vencimiento: caen al `id`,
+    // que al menos es determinista. (Uno sin fecha contra uno con fecha nunca
+    // llega a empatar: el primero usa el peso plano y el segundo un tramo, y no
+    // coinciden en ninguna tienda medida — por eso no se prueba ese caso, que
+    // sería inventar una situación que el código no puede alcanzar.)
+    it("dos leads sin fecha se ordenan determinísticamente, no al azar", () => {
+      const rows = [
+        { id: "zzz", cart_item_count: 1 },
+        { id: "aaa", cart_item_count: 1 },
+      ];
+      expect(sortLeadsByPriority(rows, KENKU, NOW).map((r) => r.id)).toEqual(["aaa", "zzz"]);
+    });
   });
 });
 
