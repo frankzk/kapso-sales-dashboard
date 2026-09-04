@@ -94,6 +94,30 @@ export function leadUrgency(
   return { tier, ageMinutes, minutesLeft: null, label: ageLabel(ageMinutes) };
 }
 
+export interface UrgencyCounts {
+  dorada: number;
+  tibia: number;
+  enfriando: number;
+  fria: number;
+  /** Sin fecha usable: no caen en ningún tramo, pero existen y hay que poder
+   *  cuadrar "Todos" con la suma de los chips. */
+  sin_dato: number;
+}
+
+/** Cuenta los leads por tramo de edad. PURA. */
+export function countLeadUrgency(
+  leads: readonly { first_seen_at?: string | null }[],
+  nowMs: number,
+): UrgencyCounts {
+  const out: UrgencyCounts = { dorada: 0, tibia: 0, enfriando: 0, fria: 0, sin_dato: 0 };
+  for (const lead of leads) {
+    const u = leadUrgency(lead.first_seen_at, nowMs);
+    if (u) out[u.tier] += 1;
+    else out.sin_dato += 1;
+  }
+  return out;
+}
+
 /** Los segmentos donde entrar en la hora dorada cambia de verdad el resultado.
  *  `converso` y `frio` también caen, pero desde 12,9% a 4,0%: llamarlos rápido
  *  importa mucho menos que no dejar pasar un carrito, y meterlos en el aviso lo

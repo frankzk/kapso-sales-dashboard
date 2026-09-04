@@ -15,7 +15,7 @@ import {
 } from "@/lib/leads-access";
 import { facetItems } from "@/lib/leads-facets";
 import { scoringProfileFor, sortLeadsByPriorityScoped } from "@/lib/lead-priority";
-import { leadUrgency, tallyGolden, type UrgencyTier } from "@/lib/lead-urgency";
+import { countLeadUrgency, leadUrgency, tallyGolden, type UrgencyTier } from "@/lib/lead-urgency";
 import type { LeadsInsights } from "@/lib/leads-insights";
 import {
   buildMetaAudienceCsv,
@@ -686,10 +686,12 @@ export function LeadsBoard({
   const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
   const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
-  // "Solo hora dorada": deja los carritos e interés que entraron hace menos de
-  // una hora. No es un segmento sino un corte por reloj, y por eso es su propio
-  // eje: se combina con cualquier chip en vez de reemplazarlo.
-  const [goldenOnly, setGoldenOnly] = useState(false);
+  // Edad del lead. EJE PROPIO, no un desglose de "Ventana": son dos relojes
+  // distintos y mezclarlos daría un chip que miente. Medido sobre la cola real,
+  // de los 7 leads con mensaje entrante hace menos de una hora solo 4 tenían
+  // menos de una hora de vida — uno llevaba 16,2 h esperando y su cliente acababa
+  // de volver a escribir, lo que reinicia la ventana sin rejuvenecer el lead.
+  const [edadFilter, setEdadFilter] = useState<"all" | UrgencyTier>("all");
   const [numFilter, setNumFilter] = useState<Set<string>>(new Set()); // WhatsApp phone_number_id(s) + "__none__"
   // Producto: el handle de la ficha que el cliente abrió antes de escribir, más
   // "__none__" para los que llegaron sin link. Es lo que permite trabajar la
@@ -1017,6 +1019,8 @@ export function LeadsBoard({
     gestOtros,
     winCounts,
     winTotal,
+    edadCounts,
+    edadTotal,
     numTotal,
     waCounts,
     numOtros,
@@ -1065,12 +1069,12 @@ export function LeadsBoard({
       !inQueue ||
       queueState !== "sin_llamar" ||
       matchesLeadInteractionDate(l, interactionDateFilter, timezone);
-    const matchGolden = (l: LeadRow) => {
-      if (!goldenOnly) return true;
-      if (leadUrgency(l.first_seen_at, now)?.tier !== "dorada") return false;
-      const seg = leadSegment(l);
-      return seg === "carrito" || seg === "interes";
-    };
+    // Filtro puro por edad: NO restringe segmentos. El aviso de arriba sí cuenta
+    // solo carrito e interés (es una alarma sobre lo caro), pero el chip es un
+    // corte de reloj y tiene que devolver todo lo que cae en él, o su número no
+    // cuadraría con la lista.
+    const matchEdad = (l: LeadRow) =>
+      !inQueue || edadFilter === "all" || leadUrgency(l.first_seen_at, now)?.tier === edadFilter;
     const facets = facetItems(leads, {
       query: matchQuery,
       src: matchSrc,
@@ -1080,7 +1084,7 @@ export function LeadsBoard({
       seg: matchSeg,
       gest: matchGest,
       win: matchWin,
-      golden: matchGolden,
+      edad: matchEdad,
       interactionDate: matchInteractionDate,
     });
 
@@ -1097,6 +1101,7 @@ export function LeadsBoard({
     const stateBase = facets.except("state", "seg");
     const gestBase = facets.except("gest");
     const winBase = facets.except("win");
+    const edadBase = facets.except("edad");
     // WhatsApp numbers present in this view (to split the queue by number). The
     // chip list comes from the full view so picking a number never hides the
     // others; the counts come from the faceted base.
@@ -1144,6 +1149,8 @@ export function LeadsBoard({
       gestOtros: gestBase.length - Object.values(gestCountsAcc).reduce((a, b) => a + b, 0),
       winCounts: countLeadWindows(winBase, now),
       winTotal: winBase.length,
+      edadCounts: countLeadUrgency(edadBase, now),
+      edadTotal: edadBase.length,
       numTotal: numBase.length,
       waCounts: waCountsAcc,
       // Leads sin número de WhatsApp asignado (ej. carrito/Shopify): el resto para
@@ -1156,7 +1163,7 @@ export function LeadsBoard({
       // Hora dorada: se cuenta sobre `segBase` —todo menos el propio filtro de
       // segmento— para que elegir un chip no apague el aviso. Es una alarma sobre
       // la cola, no un resumen de lo que se está mirando.
-      goldenTally: tallyGolden(facets.except("seg", "golden"), leadSegment, now),
+      goldenTally: tallyGolden(facets.except("seg", "edad"), leadSegment, now),
       shownLeads: facets.all,
     };
   }, [
@@ -1172,7 +1179,7 @@ export function LeadsBoard({
     segFilter,
     gestFilter,
     winFilter,
-    goldenOnly,
+    edadFilter,
     interactionDateFilter,
     timezone,
     now,
@@ -1184,7 +1191,7 @@ export function LeadsBoard({
   // Filtros de refinamiento activos (excluye el buscador, que tiene su propia ✕).
   const hasActiveFilters =
     gestActive ||
-    (inQueue && goldenOnly) ||
+    (inQueue && edadFilter !== "all") ||
     (inQueue && winFilter !== "all") ||
     (inQueue && queueState === "sin_llamar" && !!interactionDateFilter) ||
     srcFilter.size > 0 ||
@@ -1194,7 +1201,7 @@ export function LeadsBoard({
   // primaria de la cola no cuenta aquí).
   const refinementCount =
     (gestActive ? 1 : 0) +
-    (inQueue && goldenOnly ? 1 : 0) +
+    (inQueue && edadFilter !== "all" ? 1 : 0) +
     (inQueue && winFilter !== "all" ? 1 : 0) +
     (inQueue && queueState === "sin_llamar" && interactionDateFilter ? 1 : 0) +
     (srcFilter.size > 0 ? 1 : 0) +
@@ -1205,7 +1212,7 @@ export function LeadsBoard({
     setSegFilter(null);
     setGestFilter(null);
     setWinFilter("all");
-    setGoldenOnly(false);
+    setEdadFilter("all");
     setInteractionDateFilter(null);
     setSrcFilter(new Set());
     setNumFilter(new Set());
@@ -1256,7 +1263,7 @@ export function LeadsBoard({
   // encoge bajo el dedo.
   useEffect(() => {
     setVisibleCount(LEADS_RENDER_STEP);
-  }, [view, queueState, segFilter, gestFilter, winFilter, goldenOnly, srcFilter, numFilter, prodFilter, interactionDateFilter, q, searchMode]);
+  }, [view, queueState, segFilter, gestFilter, winFilter, edadFilter, srcFilter, numFilter, prodFilter, interactionDateFilter, q, searchMode]);
   const moreSentinelRef = useRef<HTMLDivElement | null>(null);
   const hasMoreRows = displayLeads.length > visibleCount;
   useEffect(() => {
@@ -1597,6 +1604,24 @@ export function LeadsBoard({
                 />
               </label>
             )}
+            {/* Edad ANTES que Ventana: es el reloj que decide la venta, y el
+                orden de la barra es parte de lo que enseña cuál mirar. Van
+                separados porque son cosas distintas — la ventana dice si puedo
+                escribirle, la edad si vale el doble llamarlo ahora. */}
+            {view === "por_llamar" && (
+              <SegControl
+                label="Edad"
+                value={edadFilter}
+                onChange={(key) => setEdadFilter(key as "all" | UrgencyTier)}
+                options={[
+                  { key: "all", label: "Todas", count: edadTotal },
+                  { key: "dorada", label: "⏱️ Hora dorada", count: edadCounts.dorada },
+                  { key: "tibia", label: "1-6 h", count: edadCounts.tibia },
+                  { key: "enfriando", label: "6-24 h", count: edadCounts.enfriando },
+                  { key: "fria", label: "+1 día", count: edadCounts.fria },
+                ]}
+              />
+            )}
             {view === "por_llamar" && (
               <SegControl
                 label="Ventana"
@@ -1710,11 +1735,18 @@ export function LeadsBoard({
           una lista: 21 estaban dentro de la hora y solo 3 eran carrito o interés.
           Ese es justamente el punto — son pocos, valen el doble, y hasta ahora
           iban pintados igual que los 1.945 restantes.
+
+          CUENTA MENOS QUE EL CHIP «Hora dorada» a propósito: el chip es un corte
+          de reloj y devuelve todo lo que cae en él; esto es una alarma sobre lo
+          caro y solo cuenta carrito e interés. Por eso el botón dice qué va a
+          mostrar («Ver la última hora») en vez de «ver solo estos», que
+          prometería estos y traería alguno más.
+
           NO se muestra cuando está vacío: una banda permanente en cero enseña a
           ignorarla, y entonces no sirve el día que dice 5. La excepción es tenerla
           activada como filtro, donde hay que poder salir. */}
       {view === "por_llamar" && queueState === "sin_llamar" && !searchMode &&
-        (goldenTally.total > 0 || goldenOnly) && (
+        (goldenTally.total > 0 || edadFilter === "dorada") && (
           <div
             className={cn(
               "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-4 py-2.5 text-sm",
@@ -1744,15 +1776,15 @@ export function LeadsBoard({
             )}
             <button
               type="button"
-              onClick={() => setGoldenOnly((v) => !v)}
+              onClick={() => setEdadFilter((v) => (v === "dorada" ? "all" : "dorada"))}
               className={cn(
                 "ml-auto inline-flex h-[30px] items-center rounded-md border px-2.5 text-[12px] font-semibold",
-                goldenOnly
+                edadFilter === "dorada"
                   ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                   : "border-emerald-400 bg-white text-emerald-700 hover:bg-emerald-100",
               )}
             >
-              {goldenOnly ? "Ver toda la cola" : "Ver solo estos"}
+              {edadFilter === "dorada" ? "Ver toda la cola" : `Ver la última hora (${edadCounts.dorada})`}
             </button>
           </div>
         )}

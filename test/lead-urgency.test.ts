@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { GOLDEN_MINUTES, leadUrgency, tallyGolden } from "@/lib/lead-urgency";
+import { GOLDEN_MINUTES, countLeadUrgency, leadUrgency, tallyGolden } from "@/lib/lead-urgency";
 
 const NOW = Date.parse("2026-09-04T12:00:00.000Z");
 const minAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
@@ -114,6 +114,35 @@ describe("tallyGolden", () => {
   });
 });
 
+describe("countLeadUrgency", () => {
+  it("reparte la cola en los cuatro tramos", () => {
+    const leads = [
+      { first_seen_at: minAgo(5) },
+      { first_seen_at: minAgo(40) },
+      { first_seen_at: minAgo(120) },
+      { first_seen_at: minAgo(10 * 60) },
+      { first_seen_at: minAgo(3 * 24 * 60) },
+      { first_seen_at: minAgo(30 * 24 * 60) },
+    ];
+    expect(countLeadUrgency(leads, NOW)).toEqual({
+      dorada: 2,
+      tibia: 1,
+      enfriando: 1,
+      fria: 2,
+      sin_dato: 0,
+    });
+  });
+
+  // "Todos" del chip tiene que cuadrar con la suma de sus opciones. Sin un balde
+  // para los que no tienen fecha, los números no sumarían y el filtro mentiría.
+  it("los que no tienen fecha se cuentan aparte, no se pierden", () => {
+    const leads = [{ first_seen_at: minAgo(5) }, { first_seen_at: null }, { first_seen_at: "roto" }];
+    const c = countLeadUrgency(leads, NOW);
+    expect(c.sin_dato).toBe(2);
+    expect(c.dorada + c.tibia + c.enfriando + c.fria + c.sin_dato).toBe(leads.length);
+  });
+});
+
 // La urgencia puede estar perfectamente calculada y no pintarse: es exactamente
 // lo que pasaba antes, con `leadPriorityScore` ordenando por la hora dorada
 // mientras la fila mostraba la ventana de WhatsApp. Estas guardas leen el fuente
@@ -139,11 +168,30 @@ describe("la fila usa la urgencia, no la ventana de 24h", () => {
   });
 
   it("el aviso de hora dorada se pinta con el conteo real", () => {
-    expect(src).toContain("tallyGolden(facets.except(\"seg\", \"golden\"), leadSegment, now)");
+    expect(src).toContain('tallyGolden(facets.except("seg", "edad"), leadSegment, now)');
     expect(src).toContain("en hora dorada");
     // Y se puede filtrar por él: sin esto el aviso informa pero no lleva a
     // ninguna parte.
-    expect(src).toContain("golden: matchGolden");
-    expect(src).toContain("setGoldenOnly");
+    expect(src).toContain("edad: matchEdad");
+    expect(src).toContain('setEdadFilter((v) => (v === "dorada" ? "all" : "dorada"))');
+  });
+
+  // El chip vive en su propio eje. Si alguien lo metiera dentro de "Ventana"
+  // —que es la petición natural, y lo que se pidió— el filtro mediría el reloj
+  // equivocado: de los 7 leads con mensaje entrante hace menos de una hora, solo
+  // 4 tenían menos de una hora de vida.
+  it("la edad es un eje propio, separado de la ventana de 24h", () => {
+    expect(src).toContain('label="Edad"');
+    expect(src).toContain('label="Ventana"');
+    // El predicado de edad mira `first_seen_at`, no el último entrante.
+    expect(src).toContain('leadUrgency(l.first_seen_at, now)?.tier === edadFilter');
+    // Y la barra pone Edad antes que Ventana: cuál mirar primero se enseña con
+    // el orden.
+    expect(src.indexOf('label="Edad"')).toBeLessThan(src.indexOf('label="Ventana"'));
+  });
+
+  it("los contadores del chip salen de su propia base faceteada", () => {
+    expect(src).toContain('const edadBase = facets.except("edad");');
+    expect(src).toContain("countLeadUrgency(edadBase, now)");
   });
 });
