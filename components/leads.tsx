@@ -624,6 +624,7 @@ export function LeadsBoard({
   initialGest,
   initialInteractionDate,
   initialOpenId,
+  initialOpenNonce,
   currentUserId,
   leadsComplete = true,
   scope,
@@ -655,6 +656,7 @@ export function LeadsBoard({
   initialGest?: LeadGestion | null;
   initialInteractionDate?: LeadInteractionDateFilter | null;
   initialOpenId?: string | null; // ?open=<id> → auto-abre ese lead (desde el pop-up de Yapes)
+  initialOpenNonce?: string | null; // ?oid=<sello> → identifica ESA orden, no el lead
   currentUserId: string;
   /** false = la página cargó solo un tope de filas para esta vista, así que un
    *  export debe repedir el universo completo al servidor. */
@@ -783,24 +785,36 @@ export function LeadsBoard({
   // último es una navegación: rehacer la página entera —los ~2.500 leads, los
   // siete conteos y los gráficos— para quitar un parámetro de la barra sería
   // pagar segundos por nada.
-  const intencionRef = useRef<string | null>(null);
+  // LO QUE SE LLEVA LA CUENTA ES LA ORDEN, NO EL LEAD. Limpiar la barra de
+  // direcciones no bastó: la orden seguía volviendo. Esta pantalla se refresca
+  // sola cada pocos segundos (`router.refresh()`), y ese refresco vuelve a
+  // renderizar desde la URL que el router considera suya, que no es siempre la
+  // que enseña el navegador. Así que `initialOpenId` iba y venía —X, null, X— y
+  // cada vuelta reabría la ficha. Recordar "ya cumplí ESTA orden" corta el ciclo
+  // sea cual sea el camino por el que reaparezca.
+  //
+  // El sello `?oid=` es lo que permite las dos cosas a la vez: "Tomar" dos veces
+  // el mismo Yape son dos órdenes distintas y las dos se obedecen; una orden que
+  // reaparece sola trae el sello viejo y se ignora. Una URL sin sello —escrita a
+  // mano o guardada de antes— se obedece una sola vez por pestaña, que es
+  // exactamente lo que se quiere de una URL vieja.
+  const cumplidasRef = useRef<Set<string>>(new Set());
   const [pendienteDeAbrir, setPendienteDeAbrir] = useState<string | null>(null);
   useEffect(() => {
-    if (!initialOpenId) {
-      // La URL ya no trae orden: la próxima que llegue vuelve a valer, aunque
-      // sea del mismo lead ("Tomar" dos veces sobre el mismo Yape).
-      intencionRef.current = null;
-      return;
-    }
-    if (intencionRef.current === initialOpenId) return;
-    intencionRef.current = initialOpenId;
+    if (!initialOpenId) return;
+    const orden = `${initialOpenId}:${initialOpenNonce ?? ""}`;
+    if (cumplidasRef.current.has(orden)) return;
+    cumplidasRef.current.add(orden);
     // Se guarda en estado ANTES de limpiar: si el lead todavía no está en la
     // lista cargada, el intento se reintenta desde aquí y no desde la URL, que
     // para entonces ya no lo lleva.
     setPendienteDeAbrir(initialOpenId);
+    // Limpiar la barra sigue valiendo la pena aunque no sea suficiente: sin esto,
+    // recargar o compartir el enlace arrastra la orden a otra sesión.
     const sp = new URLSearchParams(window.location.search);
-    if (sp.has("open")) {
+    if (sp.has("open") || sp.has("oid")) {
       sp.delete("open");
+      sp.delete("oid");
       const qs = sp.toString();
       window.history.replaceState(
         null,
@@ -808,7 +822,7 @@ export function LeadsBoard({
         qs ? `${window.location.pathname}?${qs}` : window.location.pathname,
       );
     }
-  }, [initialOpenId]);
+  }, [initialOpenId, initialOpenNonce]);
 
   // La orden se cumple UNA vez: al abrirla se consume. Si el lead todavía no
   // está en la lista cargada se queda pendiente y se reintenta cuando llegue.
