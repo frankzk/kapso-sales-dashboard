@@ -323,16 +323,29 @@ export function sortLeadsByPriorityScoped<T extends LeadPriorityInput & { id: st
   leads: T[],
   profileFor: (lead: T) => ScoringProfile,
   nowMs: number = Date.now(),
+  pin?: (lead: T) => boolean,
 ): T[] {
   return leads
     .map((lead) => ({
       lead,
+      // El empujón va como llave APARTE, nunca sumado al puntaje. Los pesos son
+      // probabilidades de cierre medidas; inflarle el número a un lead para que
+      // suba haría que la escala dejara de significar lo que dice, y el próximo
+      // que la lea creería que ese lead cierra más. Aquí queda explícito: se
+      // ordena antes POR OTRA RAZÓN, y la razón no es que valga más.
+      pinned: pin?.(lead) === true,
       score: leadPriorityScore(lead, profileFor(lead), nowMs),
       // Mismo reloj con el que se eligió el tramo, para que el desempate empuje
       // hacia el mismo lado que el escalón. Sin fecha va al final del empate: no
       // se puede afirmar que esté por vencer.
       age: hoursSince(lead.first_seen_at ?? lead.last_interaction_at, nowMs) ?? -1,
     }))
-    .sort((a, b) => b.score - a.score || b.age - a.age || a.lead.id.localeCompare(b.lead.id))
+    .sort(
+      (a, b) =>
+        Number(b.pinned) - Number(a.pinned) ||
+        b.score - a.score ||
+        b.age - a.age ||
+        a.lead.id.localeCompare(b.lead.id),
+    )
     .map((entry) => entry.lead);
 }

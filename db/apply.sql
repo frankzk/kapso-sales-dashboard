@@ -289,4 +289,6 @@
 \ir migrations/0142_ad_product_declarations.sql
 \echo 'Applying 0143_lead_cart_product.sql'
 \ir migrations/0143_lead_cart_product.sql
+\echo 'Applying 0144_lead_experiments.sql'
+\ir migrations/0144_lead_experiments.sql
 \echo 'Done.'
