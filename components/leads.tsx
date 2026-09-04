@@ -738,17 +738,56 @@ export function LeadsBoard({
   }, [query, storeId]);
 
   // Auto-abrir un lead cuando llega ?open=<id> (p. ej. al tocar "Tomar" en el
-  // pop-up de Yapes). Solo una vez por id; si no está en la vista cargada, se ignora.
-  const openedRef = useRef<string | null>(null);
+  // pop-up de Yapes).
+  //
+  // `?open=` ES UNA ORDEN, NO UN ESTADO. Se cumple una vez y se borra de la URL.
+  // Mientras se quedaba puesto, cada recarga —y cada enlace guardado, y cada
+  // vuelta atrás del navegador— reabría un lead que ya se había cerrado a
+  // propósito. Y no era solo molesto: abrir la gaveta RECLAMA el lead, así que
+  // recargar la página se lo volvía a adjudicar a quien miraba.
+  //
+  // Se borra con `history.replaceState` y no con `router.replace` porque este
+  // último es una navegación: rehacer la página entera —los ~2.500 leads, los
+  // siete conteos y los gráficos— para quitar un parámetro de la barra sería
+  // pagar segundos por nada.
+  const intencionRef = useRef<string | null>(null);
+  const [pendienteDeAbrir, setPendienteDeAbrir] = useState<string | null>(null);
   useEffect(() => {
-    if (!initialOpenId || openedRef.current === initialOpenId) return;
-    const lead = leads.find((l) => l.id === initialOpenId);
+    if (!initialOpenId) {
+      // La URL ya no trae orden: la próxima que llegue vuelve a valer, aunque
+      // sea del mismo lead ("Tomar" dos veces sobre el mismo Yape).
+      intencionRef.current = null;
+      return;
+    }
+    if (intencionRef.current === initialOpenId) return;
+    intencionRef.current = initialOpenId;
+    // Se guarda en estado ANTES de limpiar: si el lead todavía no está en la
+    // lista cargada, el intento se reintenta desde aquí y no desde la URL, que
+    // para entonces ya no lo lleva.
+    setPendienteDeAbrir(initialOpenId);
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.has("open")) {
+      sp.delete("open");
+      const qs = sp.toString();
+      window.history.replaceState(
+        null,
+        "",
+        qs ? `${window.location.pathname}?${qs}` : window.location.pathname,
+      );
+    }
+  }, [initialOpenId]);
+
+  // La orden se cumple UNA vez: al abrirla se consume. Si el lead todavía no
+  // está en la lista cargada se queda pendiente y se reintenta cuando llegue.
+  useEffect(() => {
+    if (!pendienteDeAbrir) return;
+    const lead = leads.find((l) => l.id === pendienteDeAbrir);
     if (lead) {
-      openedRef.current = initialOpenId;
+      setPendienteDeAbrir(null);
       openLead(lead);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialOpenId, leads]);
+  }, [pendienteDeAbrir, leads]);
 
   // Refresco en vivo: revalida los datos del servidor (lista + contadores, incl.
   // "⚡ Atender ahora") mientras la pestaña está visible, y al instante al volver
