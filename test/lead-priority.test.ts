@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
-  cartWeightForAge,
   leadPriorityScore,
   scoringProfileFor,
   sortLeadsByPriority,
+  weightForAge,
 } from "@/lib/lead-priority";
 
 const NOW = Date.parse("2026-08-02T12:00:00.000Z");
@@ -141,14 +141,29 @@ describe("carrito: el peso decae por HORAS", () => {
     expect(dRecienAurela - dLuegoAurela).toBeCloseTo(aurelaCae, 0);
   });
 
-  // El resto de los segmentos no se toca: ahí la medición mostró que llamar
-  // rápido NO cambia nada dentro del primer día.
-  it("distrito, conversó y frío no decaen por horas", () => {
+  // `interes` TAMBIÉN decae (remedido 2026-09 sobre el balde entero y las dos
+  // tiendas: Kenku 27,6 → 14,5 → 12,9 → 4,7; Aurela 17,0 → 6,9 → 6,0 → 4,4).
+  // Antes este test afirmaba lo contrario apoyado en una medición de UNA fuente
+  // de UNA tienda.
+  it("interés también pierde peso al pasar la primera hora", () => {
     const fresco = leadPriorityScore({ district: "Ate", first_seen_at: hoursAgo(0.2) }, KENKU, NOW);
     const deHoras = leadPriorityScore({ district: "Ate", first_seen_at: hoursAgo(12) }, KENKU, NOW);
-    // Solo el desgaste diario general (~0,1 en 12 h), nada parecido al escalón
-    // del carrito, que en el mismo lapso pierde 13 puntos.
-    expect(Math.abs(fresco - deHoras)).toBeLessThan(0.2);
+    expect(fresco).toBeGreaterThan(deHoras);
+    expect(fresco).toBeCloseTo(16, 0); // tramo <1h de Kenku
+    expect(deHoras).toBeCloseTo(8, 0); // tramo 6-24h
+  });
+
+  // Conversó y frío SÍ siguen planos: no se midieron por tramos, y sin medición
+  // no se inventa la curva. Ese es el contrato de weightForAge — un segmento sin
+  // tabla usa su peso plano, no una interpolación.
+  it("conversó y frío no decaen por horas: no hay tramos medidos", () => {
+    for (const señales of [{ inbound_count: 3 }, {}]) {
+      const fresco = leadPriorityScore({ ...señales, first_seen_at: hoursAgo(0.2) }, KENKU, NOW);
+      const deHoras = leadPriorityScore({ ...señales, first_seen_at: hoursAgo(12) }, KENKU, NOW);
+      // Solo el desgaste diario general (~0,1 en 12 h), nada parecido al escalón
+      // del carrito, que en el mismo lapso pierde 13 puntos.
+      expect(Math.abs(fresco - deHoras)).toBeLessThan(0.2);
+    }
   });
 
   // CONSECUENCIA BUSCADA, no un efecto colateral: en Kenku un carrito de más de
@@ -161,10 +176,38 @@ describe("carrito: el peso decae por HORAS", () => {
     expect(Math.abs(carritoViejo - distritoFresco)).toBeLessThan(2);
   });
 
-  it("pero un carrito FRESCO sigue muy por encima de cualquier distrito", () => {
-    const carritoFresco = leadPriorityScore(carritoDe(0.2), KENKU, NOW);
-    const distritoFresco = leadPriorityScore({ district: "Ate", first_seen_at: hoursAgo(0.2) }, KENKU, NOW);
-    expect(carritoFresco).toBeGreaterThan(distritoFresco * 2);
+  // Antes esto exigía el DOBLE, y esa ventaja era un artefacto: `interes` tenía
+  // un peso plano que le aplicaba a un lead de diez minutos la tasa media de un
+  // balde donde la mitad tiene días. Medido a igualdad de edad, la ventaja del
+  // carrito en la primera hora es de ~1,4× (39,9% contra 27,6% en Kenku), no de
+  // 2×. Sigue ganando —que es lo que sostiene la cascada— pero por lo que mide.
+  it("pero un carrito FRESCO sigue por encima de un interés igual de fresco", () => {
+    for (const profile of [AURELA, KENKU]) {
+      const carritoFresco = leadPriorityScore(carritoDe(0.2), profile, NOW);
+      const interesFresco = leadPriorityScore({ district: "Ate", first_seen_at: hoursAgo(0.2) }, profile, NOW);
+      expect(carritoFresco).toBeGreaterThan(interesFresco);
+    }
+    // Y la ventaja es la medida, no la que daba el peso plano.
+    expect(
+      leadPriorityScore(carritoDe(0.2), KENKU, NOW) /
+        leadPriorityScore({ district: "Ate", first_seen_at: hoursAgo(0.2) }, KENKU, NOW),
+    ).toBeCloseTo(1.5, 1);
+  });
+
+  // La consecuencia BUSCADA de darle tramos a `interes`, y la razón de haberlo
+  // hecho: en Kenku un interés recién llegado cierra 27,6% y un carrito de 6-24h
+  // cierra 24,9%. Con el peso plano el carrito viejo ganaba siempre.
+  it("en Kenku un interés recién llegado pasa a un carrito de medio día", () => {
+    const interesFresco = leadPriorityScore({ district: "Ate", first_seen_at: hoursAgo(0.2) }, KENKU, NOW);
+    expect(interesFresco).toBeGreaterThan(leadPriorityScore(carritoDe(12), KENKU, NOW));
+  });
+
+  // Y el control de que no se pasó de rosca: en Aurela la misma comparación se
+  // mide al revés (interés <1h 17,0% contra carrito 6-24h 19,9%), y los pesos la
+  // respetan. Si el método hubiera inflado `interes`, esto fallaría.
+  it("en Aurela NO lo pasa, porque ahí se mide al revés", () => {
+    const interesFresco = leadPriorityScore({ district: "Ate", first_seen_at: hoursAgo(0.2) }, AURELA, NOW);
+    expect(interesFresco).toBeLessThan(leadPriorityScore(carritoDe(12), AURELA, NOW));
   });
 
   it("una tienda sin tramos medidos usa su peso promedio, no una curva inventada", () => {
@@ -176,11 +219,19 @@ describe("carrito: el peso decae por HORAS", () => {
     expect(Math.abs(viejo - nueva.segment.carrito)).toBeLessThan(0.2);
   });
 
-  it("cartWeightForAge: sin tramos o sin antigüedad cae al respaldo", () => {
-    expect(cartWeightForAge(null, 0.5, 14)).toBe(14);
-    expect(cartWeightForAge(KENKU.cartByAge, null, 14)).toBe(14);
-    expect(cartWeightForAge(KENKU.cartByAge, Number.NaN, 14)).toBe(14);
-    expect(cartWeightForAge(KENKU.cartByAge, -5, 14)).toBe(24); // negativo → tramo más fresco
+  it("weightForAge: sin tramos o sin antigüedad cae al respaldo", () => {
+    expect(weightForAge(null, 0.5, 14)).toBe(14);
+    expect(weightForAge(KENKU.byAge.carrito, null, 14)).toBe(14);
+    expect(weightForAge(KENKU.byAge.carrito, Number.NaN, 14)).toBe(14);
+    expect(weightForAge(KENKU.byAge.carrito, -5, 14)).toBe(24); // negativo → tramo más fresco
+  });
+
+  // Un segmento sin tabla no debe heredar la de otro: si `byAge` se indexara mal
+  // (p. ej. cayendo siempre a `carrito`), un frío recién llegado puntuaría 24.
+  it("weightForAge: un segmento sin tabla usa su peso plano", () => {
+    expect(KENKU.byAge.converso).toBeUndefined();
+    expect(KENKU.byAge.frio).toBeUndefined();
+    expect(weightForAge(KENKU.byAge.frio, 0.2, KENKU.segment.frio)).toBe(KENKU.segment.frio);
   });
 });
 

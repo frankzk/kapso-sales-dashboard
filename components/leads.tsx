@@ -15,6 +15,7 @@ import {
 } from "@/lib/leads-access";
 import { facetItems } from "@/lib/leads-facets";
 import { scoringProfileFor, sortLeadsByPriorityScoped } from "@/lib/lead-priority";
+import { leadUrgency, tallyGolden, type UrgencyTier } from "@/lib/lead-urgency";
 import type { LeadsInsights } from "@/lib/leads-insights";
 import {
   buildMetaAudienceCsv,
@@ -495,7 +496,11 @@ const GESTION_DISPLAY: Record<LeadGestion, { label: string; dot: string; fg: str
   sin_stock: { label: "Sin stock", dot: "bg-blue-500", fg: "text-blue-700" },
 };
 
-// 24h window state → dot/text colour + the inset urgency accent (left border).
+// 24h window state → dot/text colour. Ya NO manda el acento lateral de la fila:
+// ese lo pinta la urgencia (ver URGENCY_DISPLAY). La ventana de WhatsApp es un
+// permiso de mensajería, no una probabilidad de cierre, y usarla como la señal
+// visual dominante hacía que un lead de doce minutos y uno de 67 días llevaran
+// exactamente el mismo verde.
 const WIN_DISPLAY: Record<"fresca" | "por_vencer" | "cerrada", { dot: string; fg: string; accent: string }> = {
   fresca: { dot: "bg-emerald-500", fg: "text-emerald-700", accent: "#34d399" },
   por_vencer: { dot: "bg-amber-500", fg: "text-amber-700", accent: "#fbbf24" },
@@ -506,6 +511,22 @@ function winKey(state: LeadWindow | null): "fresca" | "por_vencer" | "cerrada" {
   if (state === "cerrada") return "cerrada";
   return "fresca"; // fresca or null (no inbound yet) → neutral-fresh accent
 }
+
+// Edad del lead → cómo se pinta la columna y el acento lateral de la fila.
+//
+// El salto de color está donde está el acantilado medido: `dorada` es el único
+// tramo con contraste fuerte, porque es el único donde llamar YA vale el doble.
+// Los tres de abajo son grises de intensidad decreciente a propósito — si
+// «tibia» compitiera visualmente con «dorada», volveríamos a tener 366 filas
+// gritando lo mismo y ninguna destacando.
+const URGENCY_DISPLAY: Record<UrgencyTier, { dot: string; fg: string; accent: string }> = {
+  dorada: { dot: "bg-emerald-500", fg: "text-emerald-700", accent: "#10b981" },
+  tibia: { dot: "bg-amber-400", fg: "text-amber-700", accent: "#fcd34d" },
+  enfriando: { dot: "bg-slate-300", fg: "text-slate-500", accent: "#e2e8f0" },
+  fria: { dot: "bg-slate-200", fg: "text-slate-400", accent: "#f1f5f9" },
+};
+/** Sin edad calculable no se afirma urgencia: gris neutro y una raya. */
+const URGENCY_UNKNOWN = { dot: "bg-slate-200", fg: "text-slate-400", accent: "#f1f5f9" };
 
 /** Small rounded pill (header/drawer chips). */
 function Pill({ children, className, title }: { children: ReactNode; className?: string; title?: string }) {
@@ -665,6 +686,10 @@ export function LeadsBoard({
   const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
   const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
+  // "Solo hora dorada": deja los carritos e interés que entraron hace menos de
+  // una hora. No es un segmento sino un corte por reloj, y por eso es su propio
+  // eje: se combina con cualquier chip en vez de reemplazarlo.
+  const [goldenOnly, setGoldenOnly] = useState(false);
   const [numFilter, setNumFilter] = useState<Set<string>>(new Set()); // WhatsApp phone_number_id(s) + "__none__"
   // Producto: el handle de la ficha que el cliente abrió antes de escribir, más
   // "__none__" para los que llegaron sin link. Es lo que permite trabajar la
@@ -999,6 +1024,7 @@ export function LeadsBoard({
     hasMultiNumbers,
     prodOptions,
     prodSin,
+    goldenTally,
     shownLeads,
   } = useMemo(() => {
     const matchQuery = (l: LeadRow) => {
@@ -1039,6 +1065,12 @@ export function LeadsBoard({
       !inQueue ||
       queueState !== "sin_llamar" ||
       matchesLeadInteractionDate(l, interactionDateFilter, timezone);
+    const matchGolden = (l: LeadRow) => {
+      if (!goldenOnly) return true;
+      if (leadUrgency(l.first_seen_at, now)?.tier !== "dorada") return false;
+      const seg = leadSegment(l);
+      return seg === "carrito" || seg === "interes";
+    };
     const facets = facetItems(leads, {
       query: matchQuery,
       src: matchSrc,
@@ -1048,6 +1080,7 @@ export function LeadsBoard({
       seg: matchSeg,
       gest: matchGest,
       win: matchWin,
+      golden: matchGolden,
       interactionDate: matchInteractionDate,
     });
 
@@ -1120,6 +1153,10 @@ export function LeadsBoard({
       hasMultiNumbers: waIdsAcc.length >= 2,
       prodOptions: prodOptionsAcc,
       prodSin: prodSinAcc,
+      // Hora dorada: se cuenta sobre `segBase` —todo menos el propio filtro de
+      // segmento— para que elegir un chip no apague el aviso. Es una alarma sobre
+      // la cola, no un resumen de lo que se está mirando.
+      goldenTally: tallyGolden(facets.except("seg", "golden"), leadSegment, now),
       shownLeads: facets.all,
     };
   }, [
@@ -1135,6 +1172,7 @@ export function LeadsBoard({
     segFilter,
     gestFilter,
     winFilter,
+    goldenOnly,
     interactionDateFilter,
     timezone,
     now,
@@ -1146,6 +1184,7 @@ export function LeadsBoard({
   // Filtros de refinamiento activos (excluye el buscador, que tiene su propia ✕).
   const hasActiveFilters =
     gestActive ||
+    (inQueue && goldenOnly) ||
     (inQueue && winFilter !== "all") ||
     (inQueue && queueState === "sin_llamar" && !!interactionDateFilter) ||
     srcFilter.size > 0 ||
@@ -1155,6 +1194,7 @@ export function LeadsBoard({
   // primaria de la cola no cuenta aquí).
   const refinementCount =
     (gestActive ? 1 : 0) +
+    (inQueue && goldenOnly ? 1 : 0) +
     (inQueue && winFilter !== "all" ? 1 : 0) +
     (inQueue && queueState === "sin_llamar" && interactionDateFilter ? 1 : 0) +
     (srcFilter.size > 0 ? 1 : 0) +
@@ -1165,6 +1205,7 @@ export function LeadsBoard({
     setSegFilter(null);
     setGestFilter(null);
     setWinFilter("all");
+    setGoldenOnly(false);
     setInteractionDateFilter(null);
     setSrcFilter(new Set());
     setNumFilter(new Set());
@@ -1215,7 +1256,7 @@ export function LeadsBoard({
   // encoge bajo el dedo.
   useEffect(() => {
     setVisibleCount(LEADS_RENDER_STEP);
-  }, [view, queueState, segFilter, gestFilter, winFilter, srcFilter, numFilter, prodFilter, interactionDateFilter, q, searchMode]);
+  }, [view, queueState, segFilter, gestFilter, winFilter, goldenOnly, srcFilter, numFilter, prodFilter, interactionDateFilter, q, searchMode]);
   const moreSentinelRef = useRef<HTMLDivElement | null>(null);
   const hasMoreRows = displayLeads.length > visibleCount;
   useEffect(() => {
@@ -1664,6 +1705,58 @@ export function LeadsBoard({
         </div>
       )}
 
+      {/* Aviso de hora dorada.
+          Con la cola real (1.966 sin llamar) esto muestra un puñado de leads, no
+          una lista: 21 estaban dentro de la hora y solo 3 eran carrito o interés.
+          Ese es justamente el punto — son pocos, valen el doble, y hasta ahora
+          iban pintados igual que los 1.945 restantes.
+          NO se muestra cuando está vacío: una banda permanente en cero enseña a
+          ignorarla, y entonces no sirve el día que dice 5. La excepción es tenerla
+          activada como filtro, donde hay que poder salir. */}
+      {view === "por_llamar" && queueState === "sin_llamar" && !searchMode &&
+        (goldenTally.total > 0 || goldenOnly) && (
+          <div
+            className={cn(
+              "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-4 py-2.5 text-sm",
+              goldenTally.total > 0
+                ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+                : "border-slate-200 bg-slate-50 text-slate-600",
+            )}
+          >
+            {goldenTally.total > 0 ? (
+              <>
+                <span className="font-semibold">
+                  ⏱️ {goldenTally.total} {goldenTally.total === 1 ? "lead" : "leads"} en hora dorada
+                </span>
+                <span className="text-emerald-800">
+                  {[
+                    goldenTally.carrito > 0 ? `${goldenTally.carrito} con carrito` : null,
+                    goldenTally.interes > 0 ? `${goldenTally.interes} de interés` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}{" "}
+                  · llamados dentro de la primera hora cierran{" "}
+                  <span className="font-semibold">el doble</span>
+                </span>
+              </>
+            ) : (
+              <span>Ya no queda ninguno dentro de la primera hora.</span>
+            )}
+            <button
+              type="button"
+              onClick={() => setGoldenOnly((v) => !v)}
+              className={cn(
+                "ml-auto inline-flex h-[30px] items-center rounded-md border px-2.5 text-[12px] font-semibold",
+                goldenOnly
+                  ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  : "border-emerald-400 bg-white text-emerald-700 hover:bg-emerald-100",
+              )}
+            >
+              {goldenOnly ? "Ver toda la cola" : "Ver solo estos"}
+            </button>
+          </div>
+        )}
+
       {/* El 14–20% del carrito está bien medido: un carrito que cierra SIGUE
           teniendo carrito, así que el éxito no cambia su etiqueta. En frío no se
           puede afirmar lo mismo: si la llamada funciona, el cliente da su
@@ -1697,11 +1790,13 @@ export function LeadsBoard({
         <div className="overflow-x-auto">
           <div className="min-w-0">
             {/* Cabecera de columnas — solo md+; en móvil cada fila se apila. */}
-            <div className="hidden grid-cols-[42px_minmax(0,1fr)_184px_78px_78px] items-center gap-[14px] border-b border-slate-200 bg-slate-50 px-[18px] py-2.5 text-[11px] font-semibold tracking-wide text-slate-400 uppercase md:grid">
+            <div className="hidden grid-cols-[42px_minmax(0,1fr)_184px_86px_78px] items-center gap-[14px] border-b border-slate-200 bg-slate-50 px-[18px] py-2.5 text-[11px] font-semibold tracking-wide text-slate-400 uppercase md:grid">
               <span />
               <span>Lead</span>
               <span>Última gestión</span>
-              <span>Ventana</span>
+              <span title="Tiempo desde que entró el lead. Dentro de la primera hora el cierre es el doble.">
+                Edad
+              </span>
               <span />
             </div>
             {visibleLeads.map((lead) => {
@@ -1712,14 +1807,16 @@ export function LeadsBoard({
                 ? GESTION_DISPLAY[g]
                 : { label: labelOf(lead.status), dot: "bg-slate-400", fg: "text-slate-600", hollow: false };
               const metaLine = g === "sin_llamar" ? "nadie aún" : fmtDateShort(lead.last_interaction_at);
-              const { state, msLeft } = leadWindowInfo(lead.last_inbound_at ?? lead.last_interaction_at, now);
+              const { state } = leadWindowInfo(lead.last_inbound_at ?? lead.last_interaction_at, now);
               const wd = WIN_DISPLAY[winKey(state)];
-              const windowLabel =
-                state === null
-                  ? "—"
-                  : state === "cerrada"
-                    ? "venc."
-                    : `${Math.max(1, Math.ceil((msLeft ?? 0) / 3_600_000))}h`;
+              const urgency = leadUrgency(lead.first_seen_at, now);
+              const ud = urgency ? URGENCY_DISPLAY[urgency.tier] : URGENCY_UNKNOWN;
+              // La ventana de 24h solo se nombra cuando limita algo: si está
+              // abierta, saberlo no cambia ninguna decisión, y ponerlo en las
+              // ~2.000 filas de la cola es exactamente el ruido que tapaba la
+              // señal que sí importa.
+              const windowNote =
+                state === "cerrada" ? "sin ventana" : state === "por_vencer" || state === "critica" ? "ventana ⏳" : null;
               const handle = leadHandle(lead);
               const initial = (lead.name || handle).trim()[0]?.toUpperCase() || "?";
               return (
@@ -1738,11 +1835,11 @@ export function LeadsBoard({
                   }}
                   className={cn(
                     // Móvil: tarjeta apilada (flex-wrap). md+: el grid de columnas.
-                    "group flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-4 py-3 transition [contain-intrinsic-size:auto_54px] [content-visibility:auto] last:border-0 md:grid md:grid-cols-[42px_minmax(0,1fr)_184px_78px_78px] md:gap-x-[14px] md:gap-y-0 md:px-[18px] md:py-2.5",
+                    "group flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-4 py-3 transition [contain-intrinsic-size:auto_54px] [content-visibility:auto] last:border-0 md:grid md:grid-cols-[42px_minmax(0,1fr)_184px_86px_78px] md:gap-x-[14px] md:gap-y-0 md:px-[18px] md:py-2.5",
                     locked ? "bg-brand-50" : isYape ? "bg-red-50" : "hover:bg-slate-50",
                     openingId === lead.id && "opacity-60",
                   )}
-                  style={{ boxShadow: `inset 3px 0 0 ${wd.accent}` }}
+                  style={{ boxShadow: `inset 3px 0 0 ${ud.accent}` }}
                 >
                   {/* Col 1 · avatar */}
                   <span
@@ -1837,11 +1934,34 @@ export function LeadsBoard({
                     )}
                   </div>
 
-                  {/* Col 4 · ventana */}
-                  <span className={cn("inline-flex items-center gap-1.5 text-sm font-semibold", wd.fg)}>
-                    <span className={cn("h-[7px] w-[7px] shrink-0 rounded-full", wd.dot)} />
-                    {windowLabel}
-                  </span>
+                  {/* Col 4 · edad (hora dorada) + la ventana de 24h solo si limita */}
+                  <div className="min-w-0">
+                    <span
+                      title={
+                        urgency?.tier === "dorada"
+                          ? `Entró hace ${Math.round(urgency.ageMinutes)} min: dentro de la hora dorada, donde el cierre es el doble`
+                          : "Tiempo desde que entró el lead"
+                      }
+                      className={cn(
+                        "inline-flex items-center gap-1.5 text-sm font-semibold",
+                        urgency?.tier === "dorada" ? "text-emerald-700" : ud.fg,
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "h-[7px] w-[7px] shrink-0 rounded-full",
+                          ud.dot,
+                          // Solo la hora dorada late. Un pulso en cada fila no
+                          // llamaría la atención sobre ninguna.
+                          urgency?.tier === "dorada" && "animate-pulse-dot motion-reduce:animate-none",
+                        )}
+                      />
+                      {urgency?.label ?? "—"}
+                    </span>
+                    {windowNote && (
+                      <div className={cn("mt-0.5 truncate text-[11px]", wd.fg)}>{windowNote}</div>
+                    )}
+                  </div>
 
                   {/* Col 5 · acciones rápidas (hover en desktop; ocultas en móvil, ahí se abre tocando la fila) */}
                   <div className="ml-auto hidden items-center justify-end gap-1.5 md:flex">
