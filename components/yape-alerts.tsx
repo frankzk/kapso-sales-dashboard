@@ -101,7 +101,12 @@ export function YapeAlerts({ enabled = true }: { enabled?: boolean }) {
       void refresh(); // someone else got it first
       return;
     }
-    router.push(`/dashboard/leads?store=${a.storeId}&view=yape&open=${a.id}`);
+    // `oid` sella ESTA pulsación. La cola solo obedece una orden que no haya
+    // cumplido ya, y sin sello no podría distinguir "Tomar otra vez el mismo
+    // Yape" de "el parámetro volvió a aparecer solo".
+    router.push(
+      `/dashboard/leads?store=${a.storeId}&view=yape&open=${a.id}&oid=${Date.now()}`,
+    );
   }
 
   // "Ahora no" → escalate to the next advisor right away (I'm added to `passed`).

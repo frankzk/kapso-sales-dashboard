@@ -39,6 +39,9 @@ type LeadsSearchParams = {
   last_date?: string;
   last_before?: string;
   open?: string;
+  // Sello de la orden `?open=`: distingue "el usuario acaba de pedir abrir este
+  // lead" de "este parámetro reapareció solo". Ver el consumo en LeadsBoard.
+  oid?: string;
 };
 
 export default function LeadsPage({
@@ -163,6 +166,7 @@ async function LeadsContent({
       initialGest={initialGest}
       initialInteractionDate={initialInteractionDate}
       initialOpenId={typeof sp.open === "string" ? sp.open : null}
+      initialOpenNonce={typeof sp.oid === "string" ? sp.oid : null}
       currentUserId={user?.id ?? ""}
       leadsComplete={leadsViewLimit(view) === null}
     />
