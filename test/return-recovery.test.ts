@@ -15,7 +15,13 @@ import {
   type RecoveryCandidate,
 } from "@/lib/return-recovery";
 
-const NOW = Date.parse("2026-08-08T15:00:00Z");
+// Un instante FIJO, y no el reloj de la máquina. Las pruebas de envío que no lo
+// fijaban pasaron meses en verde y se pusieron rojas solas el 4-sep-2026: la
+// guía de la muestra volvió el 5-ago y la ventana es de 30 días, así que al
+// cruzarse el plazo el candidato dejó de ser elegible y el envío ni se intentaba.
+// Una prueba que depende de qué día se ejecuta no comprueba lo que dice comprobar.
+const NOW_ISO = "2026-08-08T15:00:00Z";
+const NOW = Date.parse(NOW_ISO);
 const OPTS = { nowMs: NOW, maxDays: 30 };
 
 function candidate(over: Partial<RecoveryCandidate> = {}): RecoveryCandidate {
@@ -367,7 +373,7 @@ describe("sendRecoveryTemplate", () => {
     const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.1" });
     const res = await sendRecoveryTemplate(admin, "store", candidate(), CFG, {
       maxDays: 30,
-      nowIso: "2026-08-08T15:00:00Z",
+      nowIso: NOW_ISO,
       sendTemplate: send,
       sentBy: "user-1",
     });
@@ -398,6 +404,7 @@ describe("sendRecoveryTemplate", () => {
     const admin = fakeAdmin();
     const send = vi.fn().mockResolvedValue({ ok: false, error: "template paused", code: 132015 });
     const res = await sendRecoveryTemplate(admin, "store", candidate(), CFG, {
+      nowIso: NOW_ISO,
       maxDays: 30,
       sendTemplate: send,
     });
@@ -416,7 +423,7 @@ describe("sendRecoveryTemplate", () => {
       "store",
       candidate({ recovery_state: "enviado" }),
       CFG,
-      { maxDays: 30, sendTemplate: send },
+      { nowIso: NOW_ISO, maxDays: 30, sendTemplate: send },
     );
 
     expect(res).toEqual({ ok: false, error: "ya se le escribió" });
@@ -432,7 +439,7 @@ describe("sendRecoveryTemplate", () => {
       "store",
       candidate({ reported_status: "RECHAZADO" }),
       CFG,
-      { maxDays: 30, sendTemplate: send },
+      { nowIso: NOW_ISO, maxDays: 30, sendTemplate: send },
     );
 
     expect(res.ok).toBe(false);
@@ -443,6 +450,7 @@ describe("sendRecoveryTemplate", () => {
     const admin = fakeAdmin();
     const send = vi.fn().mockRejectedValue(new Error("socket hang up"));
     const res = await sendRecoveryTemplate(admin, "store", candidate(), CFG, {
+      nowIso: NOW_ISO,
       maxDays: 30,
       sendTemplate: send,
     });
