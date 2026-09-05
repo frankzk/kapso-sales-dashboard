@@ -29,6 +29,7 @@ import {
   limaTodayKey,
   nextShipmentTransition,
   normalizeCity,
+  effectiveOrderName,
   rescheduleGuideCode,
   shipmentRequiresCourierResult,
   type CourierReportResult,
@@ -47,8 +48,12 @@ import {
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
 import {
+  coverageCityOf,
+  coverageInputOf,
   evaluateDirectFenixStock,
   evaluateFenix,
+  FENIX_COVERAGE_COLUMNS,
+  type FenixCoverageRow,
   type FenixEligibility,
   type FenixStockRow,
 } from "@/lib/fenix";
@@ -64,8 +69,16 @@ import {
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { env } from "@/lib/env";
-import { createGuide, isSwaypAuthError, swaypOptsFromEnv } from "@/lib/swayp";
-import { buildSwaypGuideInput, parseSenders } from "@/lib/swayp-guide";
+import {
+  createGuide,
+  isSwaypAuthError,
+  solveNovelty,
+  swaypAuthErrorHint,
+  swaypOptsFromEnv,
+} from "@/lib/swayp";
+import { buildSwaypGuideInput, esCiudadPorApiSwayp, parseSenders } from "@/lib/swayp-guide";
+import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
+import { getMasterPermissions } from "@/lib/permissions-access";
 import type {
   LinkedShipmentSummary,
   OrderLineItem,
@@ -93,10 +106,21 @@ export async function loadReprogramData(): Promise<{
   return getReprogramRows(storeIds);
 }
 
+/**
+ * Reevalúa la cobertura y el stock de un envío contra el inventario de hoy.
+ *
+ * PIDE EL DESTINO COMPLETO, no solo `city`. El alta por la API de Aliclik deja
+ * esa columna vacía —219 envíos, 85 de ellos pendientes— y `evaluateFenix` la
+ * deriva del distrito, pero solo si se la pasan. Cuando esta reja leía `city` a
+ * secas, la cola mostraba «Fenix Ok» (la lectura sí trae el distrito) y el botón
+ * respondía «Fenix no tiene cobertura en la ciudad indicada» sobre el mismo
+ * envío. La frase delataba el bug: «la ciudad indicada» es el texto de respaldo
+ * de cuando `city` es NULL.
+ */
 async function resolveCurrentFenixEligibility(
   admin: SupabaseClient,
   storeId: string,
-  shipment: { city: string | null; product: string | null; order_id: string | null },
+  shipment: FenixCoverageRow & { product: string | null; order_id: string | null },
 ): Promise<FenixEligibility | { error: string }> {
   const { data: store, error: storeError } = await admin
     .from("stores")
@@ -121,7 +145,7 @@ async function resolveCurrentFenixEligibility(
   const lineItems = (order as {
     line_items?: { title?: string | null; sku?: string | null }[] | null;
   } | null)?.line_items ?? undefined;
-  return evaluateFenix(shipment, (stock as FenixStockRow[]) ?? [], lineItems);
+  return evaluateFenix(coverageInputOf(shipment), (stock as FenixStockRow[]) ?? [], lineItems);
 }
 
 // Process-level cache of agent id → display name (email local-part).
@@ -183,6 +207,18 @@ export async function loadShipmentDetail(
       guideHistory: ShipmentHistoryGuide[];
       order: ShipmentOrderDetail | null;
       linkedFenixShipment: LinkedShipmentSummary | null;
+      /**
+       * Permisos que el drawer necesita para decidir qué OFRECER. La puerta de
+       * verdad sigue estando en cada acción del servidor; esto sólo evita
+       * dibujar un botón que va a rebotar.
+       */
+      can: { solveNovelty: boolean; return: boolean };
+      /**
+       * Si el destino de este envío emite guía por la API de Swayp o va por el
+       * Excel. Se calcula ACÁ y no en el cliente porque `SWAYP_SENDERS` es
+       * configuración del servidor; el drawer sólo lo pinta.
+       */
+      swaypApiCity: boolean;
     }
   | { error: string }
 > {
@@ -245,12 +281,22 @@ export async function loadShipmentDetail(
       }
     }
   }
+  const perms = await getMasterPermissions();
   return {
     shipment: detail.shipment,
     calls,
     guideHistory,
     order,
     linkedFenixShipment: detail.linkedFenixShipment,
+    can: {
+      solveNovelty: perms.can("swayp.solve_novelty"),
+      return: perms.can("closure.return"),
+    },
+    // Misma ciudad de cobertura que resuelve la reprogramación (`coverageCityOf`),
+    // para que el aviso no pueda decir una cosa y el botón hacer otra.
+    swaypApiCity:
+      env.swaypEnabled() &&
+      esCiudadPorApiSwayp(coverageCityOf(detail.shipment), parseSenders(env.swaypSenders())),
   };
 }
 
@@ -403,13 +449,13 @@ export async function registerRerouteCall(
     .eq("id", shipmentId)
     .maybeSingle();
   let shipmentResult = await fetchShipment(
-    "id,courier,guide_code,delivery_status,reroute_attempts,order_id,order_name,city,product,fenix_eligible,fenix_shipment_id,aliclik_attempts,aliclik_service_date",
+    `id,courier,guide_code,delivery_status,reroute_attempts,order_id,order_name,${FENIX_COVERAGE_COLUMNS},product,fenix_eligible,fenix_shipment_id,aliclik_attempts,aliclik_service_date`,
   );
   // 0038 may land moments after the app deploy. Preserve the existing Fenix
   // workflow instead of making every gestión return "No encontrado".
   if (shipmentResult.error) {
     shipmentResult = await fetchShipment(
-      "id,courier,guide_code,delivery_status,reroute_attempts,order_id,order_name,city,product,fenix_eligible,fenix_shipment_id",
+      "id,courier,guide_code,delivery_status,reroute_attempts,order_id,order_name,city,district,region,product,fenix_eligible,fenix_shipment_id",
     );
   }
   const ship = shipmentResult.data;
@@ -422,6 +468,9 @@ export async function registerRerouteCall(
     order_id: string | null;
     order_name: string | null;
     city: string | null;
+    district?: string | null;
+    province?: string | null;
+    region?: string | null;
     product: string | null;
     fenix_eligible: boolean;
     fenix_shipment_id: string | null;
@@ -527,8 +576,11 @@ export async function registerRerouteCall(
     if (!currentFenix.eligible) {
       return {
         error: currentFenix.reason === "sin_stock"
-          ? `Fenix no tiene stock disponible para este producto en ${cur.city ?? "la ciudad indicada"}.`
-          : `Fenix no tiene cobertura en ${cur.city ?? "la ciudad indicada"}.`,
+          // La ciudad la nombra `currentFenix`, que es la que se evaluó de
+          // verdad: `cur.city` viene vacía en las guías de la API de Aliclik y
+          // el mensaje quedaba en «la ciudad indicada», que no dice nada.
+          ? `Fenix no tiene stock disponible para este producto en ${currentFenix.city || cur.district || "la ciudad indicada"}.`
+          : `Fenix no tiene cobertura en ${currentFenix.city || cur.district || "la ciudad indicada"}.`,
       };
     }
   }
@@ -538,11 +590,31 @@ export async function registerRerouteCall(
     reprogramProvider === "fenix" &&
     !cur.fenix_shipment_id
   ) {
-    const guideCode = rescheduleGuideCode(cur.order_name, input.nextFollowupAt);
+    // Se le pide el número a Swayp; si la ciudad no está habilitada por API
+    // —hoy sólo Arequipa— se cae al código local, que es el flujo por Excel de
+    // siempre. Un solo intento: `createGuide` no reintenta a propósito, porque
+    // la API no acepta clave de idempotencia y un POST repetido tras un timeout
+    // crearía una segunda guía y un segundo paquete.
+    const viaApi = await swaypGuideForReprogram(
+      admin,
+      cur.order_id,
+      input.nextFollowupAt,
+      input.note,
+    );
+    const localCode = rescheduleGuideCode(cur.order_name, input.nextFollowupAt);
+    const guideCode = viaApi.ok ? String(viaApi.guia) : localCode;
+    // El operador tiene que enterarse de que la guía NO existe en Swayp: es la
+    // única señal de que hay que cargarla a mano por el Excel.
+    const swaypNotice =
+      !viaApi.ok && env.swaypEnabled()
+        ? ` Swayp no la emitió (${viaApi.reason}); quedó con código manual.`
+        : "";
     if (guideCode) {
       // carry the reprogramación date onto the new active guide at insert time
       const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
         childNextFollowupAt: input.nextFollowupAt,
+        swaypGuide: viaApi.ok ? String(viaApi.guia) : null,
+        swaypState: viaApi.ok ? viaApi.idEstado : null,
       });
       // A failure here (e.g. the code was already used) is surfaced rather than
       // falling back to En ruta — that would re-activate the old, unusable guide.
@@ -559,7 +631,11 @@ export async function registerRerouteCall(
       });
       await syncMasterForShipment(admin, shipmentId, spun.childId);
       revalidatePath("/dashboard/envios");
-      return { notice: `Confirmado — nueva guía Fenix ${spun.guideCode} (En ruta).` };
+      return {
+        notice:
+          `Confirmado — nueva guía Fenix ${spun.guideCode} (En ruta).` +
+          (viaApi.ok ? " Emitida por Swayp." : swaypNotice),
+      };
     }
   }
 
@@ -955,7 +1031,9 @@ export async function reprogramCancelledShipmentException(
   const admin = createAdminSupabase();
   const { data: shipment, error: shipmentError } = await admin
     .from("shipments")
-    .select("id,courier,guide_code,delivery_status,order_id,order_name,city,product,fenix_eligible,fenix_shipment_id")
+    .select(
+      `id,courier,guide_code,delivery_status,order_id,order_name,${FENIX_COVERAGE_COLUMNS},product,fenix_eligible,fenix_shipment_id`,
+    )
     .eq("id", shipmentId)
     .maybeSingle();
   if (shipmentError || !shipment) {
@@ -968,6 +1046,9 @@ export async function reprogramCancelledShipmentException(
     order_id: string | null;
     order_name: string | null;
     city: string | null;
+    district?: string | null;
+    province?: string | null;
+    region?: string | null;
     product: string | null;
     fenix_eligible: boolean;
     fenix_shipment_id: string | null;
@@ -979,7 +1060,19 @@ export async function reprogramCancelledShipmentException(
     return { error: "Esta guía anulada ya tiene una guía Fenix de reemplazo." };
   }
 
-  const guideCode = rescheduleGuideCode(current.order_name, input.nextFollowupAt);
+  // La copia del envío puede estar vacía aunque el enlace exista (ver
+  // `effectiveOrderName`): se lee la fuente antes de darse por vencido.
+  let linkedOrderName: string | null = null;
+  if (!current.order_name && current.order_id) {
+    const { data: linked } = await admin
+      .from("orders")
+      .select("name")
+      .eq("id", current.order_id)
+      .maybeSingle();
+    linkedOrderName = (linked as { name: string | null } | null)?.name ?? null;
+  }
+  const orderName = effectiveOrderName(current.order_name, linkedOrderName);
+  const guideCode = rescheduleGuideCode(orderName, input.nextFollowupAt);
   if (!guideCode) {
     return { error: "Este envío no tiene N° de pedido para generar automáticamente la nueva guía Fenix." };
   }
@@ -999,8 +1092,8 @@ export async function reprogramCancelledShipmentException(
   if (!currentFenix.eligible) {
     return {
       error: currentFenix.reason === "sin_stock"
-        ? `Fenix no tiene stock disponible para este pedido en ${current.city ?? "la ciudad indicada"}.`
-        : `Fenix no tiene cobertura en ${current.city ?? "la ciudad indicada"}.`,
+        ? `Fenix no tiene stock disponible para este pedido en ${currentFenix.city || current.district || "la ciudad indicada"}.`
+        : `Fenix no tiene cobertura en ${currentFenix.city || current.district || "la ciudad indicada"}.`,
     };
   }
 
@@ -1046,6 +1139,15 @@ async function spinOffFenixGuide(
     childNextFollowupAt?: string | null;
     expectedSourceStatus?: string;
     parentAuditNote?: string;
+    /**
+     * Número y estado que EMITIÓ Swayp, cuando la guía se pidió por API. Sin
+     * esto la hija quedaría con el número correcto en `guide_code` y
+     * `swayp_guide` nulo — y el webhook busca por esa columna
+     * (`swayp-ingest.ts:96`), así que jamás encontraría la guía y el envío se
+     * quedaría En ruta para siempre por más que Swayp reportara.
+     */
+    swaypGuide?: string | null;
+    swaypState?: number | null;
   } = {},
 ): Promise<{ error: string } | { childId: string; guideCode: string }> {
   const code = guideCode.trim().toUpperCase();
@@ -1109,6 +1211,8 @@ async function spinOffFenixGuide(
       delivery_status: "en_ruta",
       status_category: "in_route",
       next_followup_at: opts.childNextFollowupAt ?? null,
+      swayp_guide: opts.swaypGuide ?? null,
+      swayp_state: opts.swaypState ?? null,
     })
     .select("id")
     .single();
@@ -1569,23 +1673,117 @@ async function createFenixGuideViaApi(args: {
 }): Promise<{ ok: true; guia: string; idEstado: number } | { ok: false; reason: string }> {
   if (!env.swaypEnabled()) return { ok: false, reason: "integración Swayp desactivada" };
 
-  const built = buildSwaypGuideInput({ ...args, senders: parseSenders(env.swaypSenders()) });
+  const built = buildSwaypGuideInput({
+    ...args,
+    senders: parseSenders(env.swaypSenders()),
+    idBusiness: env.swaypIdBusiness(),
+  });
   if (!built.ok) return { ok: false, reason: built.error };
 
+  const opts = swaypOptsFromEnv();
   try {
-    const created = await createGuide(swaypOptsFromEnv(), built.input);
+    const created = await createGuide(opts, built.input);
     return { ok: true, guia: String(created.guia), idEstado: created.idEstado };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "error desconocido";
     // Visible en los logs de Vercel. El motivo también sube al operador en el
     // aviso de la acción, que es hoy la única señal de que la API dejó de
     // responder — el token de Swayp no se puede renovar por código.
-    console.error(
-      isSwaypAuthError(e) ? "[swayp] CREDENCIAL INVÁLIDA — pedir token nuevo a Swayp:" : "[swayp] createGuide falló:",
-      msg,
-    );
-    return { ok: false, reason: isSwaypAuthError(e) ? "la credencial de Swayp ya no es válida" : msg };
+    const hint = isSwaypAuthError(e) ? swaypAuthErrorHint(opts) : null;
+    console.error(hint ? `[swayp] CREDENCIAL: ${hint}` : "[swayp] createGuide falló:", msg);
+    return { ok: false, reason: hint ?? msg };
   }
+}
+
+/**
+ * Pide a Swayp el número de guía para el pedido de un envío que se reprograma.
+ *
+ * POR QUÉ EXISTE. La reprogramación desde Repro Provincia inventaba el código
+ * localmente (`rescheduleGuideCode`) y nunca hablaba con Swayp: la guía había
+ * que cargarla después a mano por el Excel de programación. El comentario de
+ * `createFenixGuide` lo declaraba pendiente desde el #294 —«API-ready: a later
+ * phase swaps the manual guideCode for createFenixGuideViaApi()»—; esto es esa
+ * fase.
+ *
+ * LA FRONTERA POR CIUDAD NO SE DECIDE ACÁ, y es deliberado. `SWAYP_SENDERS`
+ * solo tiene las ciudades habilitadas por API —hoy Arequipa—, así que un
+ * destino de otra provincia falla dentro de `buildSwaypGuideInput` con «No hay
+ * bodega Swayp configurada para …» y el llamador cae al código local. Habilitar
+ * Trujillo será agregar una clave al JSON, sin tocar código ni reentrenar a
+ * nadie.
+ *
+ * Devuelve el motivo en vez de lanzar: para el llamador, no conseguir número de
+ * Swayp no es un error —es seguir por Excel, como hasta hoy.
+ */
+async function swaypGuideForReprogram(
+  admin: SupabaseClient,
+  orderId: string | null | undefined,
+  dispatchDateIso: string | null | undefined,
+  note?: string | null,
+): Promise<{ ok: true; guia: string; idEstado: number } | { ok: false; reason: string }> {
+  if (!env.swaypEnabled()) return { ok: false, reason: "integración Swayp desactivada" };
+  if (!orderId) return { ok: false, reason: "el envío no está vinculado a un pedido" };
+
+  const { data } = await admin
+    .from("orders")
+    .select(DIRECT_GUIDE_ORDER_COLUMNS)
+    .eq("id", orderId)
+    .maybeSingle();
+  const order = data as unknown as DirectGuideOrderRecord | null;
+  if (!order) return { ok: false, reason: "no se pudo leer el pedido" };
+
+  const { address } = await resolveDirectGuideAddress(admin, order);
+  const district = address?.city ?? null;
+  const city = deriveFenixCoverageCity(district, address?.province ?? null);
+  const totalRefunded = order.total_refunded ?? 0;
+  const lineItems = (order.line_items ?? []).map((li) => ({
+    title: li.title ?? "",
+    quantity: li.quantity ?? 1,
+    sku: li.sku ?? null,
+  }));
+
+  // Stock ÍTEM POR ÍTEM, el mismo criterio que la guía directa. La reja de más
+  // arriba (`resolveCurrentFenixEligibility`) usa `evaluateFenix`, que aprueba
+  // si CUALQUIER producto tiene stock; sirve para decidir si el envío se sigue
+  // trabajando, pero no para mandar un paquete: en un pedido de dos productos
+  // con uno solo en bodega, Swayp recibiría una guía que su almacén no puede
+  // armar. Falla suave —se cae al código local— porque hasta hoy este camino
+  // no validaba nada y bloquear al operador sería una regresión.
+  const { data: store } = await admin
+    .from("stores")
+    .select("org_id")
+    .eq("id", order.store_id)
+    .maybeSingle();
+  const orgId = (store as { org_id?: string } | null)?.org_id;
+  if (!orgId) return { ok: false, reason: "no se encontró la organización de la tienda" };
+  const { data: stock, error: stockError } = await admin
+    .from("fenix_stock")
+    .select("city,product,sku,quantity")
+    .eq("org_id", orgId);
+  if (stockError) return { ok: false, reason: `no se pudo consultar el stock: ${stockError.message}` };
+  const check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
+  if (!check.ok) {
+    return {
+      ok: false,
+      reason:
+        check.reason === "sin_stock"
+          ? `sin stock en ${city} para: ${check.uncovered.join(", ")}`
+          : `sin cobertura en ${district || "el destino"}`,
+    };
+  }
+
+  return createFenixGuideViaApi({
+    city,
+    district,
+    customerName: address?.name ?? null,
+    customerPhone: order.customer_phone ?? normalizePhone(address?.phone) ?? null,
+    address1: address?.address1 ?? null,
+    reference: address?.address2 ?? null,
+    lineItems,
+    codAmount: Math.max(0, (order.total_amount ?? 0) - totalRefunded),
+    dispatchDateIso: dispatchDateIso ?? null,
+    observaciones: note?.trim() || null,
+  });
 }
 
 export async function createDirectFenixGuide(input: {
@@ -2264,9 +2462,8 @@ export async function recomputeFenixEligibility(): Promise<
   // Only pending guides carry eligibility; re-evaluate each and flip the ones
   // whose stored flag no longer matches. Paginate past Supabase's 1,000-row
   // response cap so a large queue is never only partially synchronized.
-  type PendingShipment = {
+  type PendingShipment = FenixCoverageRow & {
     id: string;
-    city: string | null;
     product: string | null;
     order_id: string | null;
     fenix_eligible: boolean;
@@ -2276,7 +2473,7 @@ export async function recomputeFenixEligibility(): Promise<
   for (let from = 0; ; from += pageSize) {
     const { data: rows, error: rowsError } = await admin
       .from("shipments")
-      .select("id,city,product,order_id,fenix_eligible")
+      .select(`id,${FENIX_COVERAGE_COLUMNS},product,order_id,fenix_eligible`)
       .in("store_id", storeIds)
       .eq("status_category", "pending")
       .range(from, from + pageSize - 1);
@@ -2309,7 +2506,7 @@ export async function recomputeFenixEligibility(): Promise<
   const toIneligible: string[] = [];
   for (const s of shipments) {
     const orderProducts = s.order_id ? productsByOrder.get(s.order_id) : undefined;
-    const eligible = evaluateFenix(s, stockRows, orderProducts).eligible;
+    const eligible = evaluateFenix(coverageInputOf(s), stockRows, orderProducts).eligible;
     if (eligible !== s.fenix_eligible) {
       (eligible ? toEligible : toIneligible).push(s.id);
     }
@@ -2331,4 +2528,121 @@ export async function recomputeFenixEligibility(): Promise<
   const updated = toEligible.length + toIneligible.length;
   revalidatePath("/dashboard/envios");
   return { notice: `Elegibilidad recalculada — ${updated} guías actualizadas.`, updated };
+}
+
+// ── Novedades de Swayp ───────────────────────────────────────────────────────
+
+/** Estados de Swayp en los que una novedad todavía admite respuesta. */
+const SWAYP_SOLVABLE_STATES = new Set([
+  6, // Novedad: el mensajero llegó y no pudo entregar.
+  8, // Revisión: el mensajero marcó devolución y todavía se puede gestionar
+  //    —mapSwaypState() ya lo documenta así—, que es justamente la puerta para
+  //    revertir una devolución que la operación no pidió.
+]);
+
+/**
+ * Responde una novedad de Swayp: volver a ofrecer, devolver al remitente o
+ * reprogramar.
+ *
+ * NO ESCRIBE `delivery_status`. El estado resultante lo confirma Swayp por el
+ * webhook, igual que el resto de la integración; adelantarnos acá sería pintar
+ * en el Master un desenlace que todavía no ocurrió —y que puede no ocurrir, si
+ * el mensajero no llega a ejecutar la instrucción—. Lo único que persistimos es
+ * QUE SE PIDIÓ, en `order_events`, que es append-only.
+ */
+export async function solveSwaypNovelty(input: {
+  shipmentId: string;
+  accion: string;
+  comentario: string;
+  fechaEntregaIso?: string | null;
+}): Promise<ShipmentActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("swayp.solve_novelty")) {
+    return { error: "Tu rol no permite resolver novedades de Swayp." };
+  }
+
+  const ctx = await authorizeShipment(input.shipmentId);
+  if (!ctx) return { error: "Envío inválido o sin acceso." };
+
+  if (!env.swaypEnabled()) {
+    return { error: "La integración con Swayp está desactivada en este entorno." };
+  }
+
+  const admin = createAdminSupabase();
+  const { data } = await admin
+    .from("shipments")
+    .select("id,order_id,guide_code,swayp_guide,swayp_state")
+    .eq("id", input.shipmentId)
+    .maybeSingle();
+  const shipment = data as {
+    id: string;
+    order_id: string | null;
+    guide_code: string | null;
+    swayp_guide: string | null;
+    swayp_state: number | null;
+  } | null;
+  if (!shipment) return { error: "Envío inválido o sin acceso." };
+
+  const built = buildNoveltySolution({
+    guia: shipment.swayp_guide,
+    accion: input.accion,
+    comentario: input.comentario,
+    fechaEntregaIso: input.fechaEntregaIso,
+  });
+  if (!built.ok) return { error: built.error };
+  const { accion } = built.input;
+
+  // Devolver al remitente cierra el intento y dispara la devolución física, que
+  // es lo que `closure.return` gobierna en todo el resto del sistema.
+  if (noveltyActionIsReturn(accion) && !perms.can("closure.return")) {
+    return { error: "Devolver al remitente exige el permiso de retornos y devoluciones." };
+  }
+
+  // El estado lo espejamos del webhook, así que puede ir por detrás de Swayp. Se
+  // dice cuál vemos: si la novedad ya se resolvió por el panel, el número explica
+  // por qué el botón no sirve, en vez de dejar a la operadora reintentando.
+  if (!SWAYP_SOLVABLE_STATES.has(shipment.swayp_state ?? 0)) {
+    return {
+      error:
+        `Este envío no está en novedad según lo último que reportó Swayp ` +
+        `(estado ${shipment.swayp_state ?? "desconocido"}). Recarga y vuelve a mirar.`,
+    };
+  }
+
+  const opts = swaypOptsFromEnv();
+  try {
+    await solveNovelty(opts, built.input);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "error desconocido";
+    const hint = isSwaypAuthError(e) ? swaypAuthErrorHint(opts) : null;
+    console.error(hint ? `[swayp] CREDENCIAL: ${hint}` : "[swayp] solveNovelty falló:", msg);
+    return { error: hint ?? `Swayp rechazó la solución de la novedad: ${msg}` };
+  }
+
+  const meta = NOVELTY_ACTIONS[accion];
+  if (shipment.order_id) {
+    // Append-only: deja el rastro de quién decidió qué sobre un paquete real.
+    await admin.from("order_events").insert({
+      store_id: ctx.storeId,
+      order_id: shipment.order_id,
+      kind: "novelty_solved",
+      occurred_at: new Date().toISOString(),
+      actor: ctx.userId,
+      source: "fenix",
+      courier: "fenix",
+      guide_code: shipment.guide_code,
+      shipment_id: shipment.id,
+      reason: meta.label,
+      note: built.input.comentario,
+      payload: {
+        accion,
+        swayp_guide: shipment.swayp_guide,
+        ...(built.input.fechaEntrega ? { fecha_entrega: built.input.fechaEntrega } : {}),
+      },
+    });
+  }
+
+  revalidatePath("/dashboard/envios");
+  revalidatePath("/dashboard/pedidos");
+  return { notice: `Novedad resuelta en Swayp: ${meta.label.toLowerCase()}.` };
 }

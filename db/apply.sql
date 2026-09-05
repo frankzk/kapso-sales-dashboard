@@ -267,6 +267,36 @@
 \ir migrations/0131_operation_completed_by.sql
 \echo 'Applying 0132_order_sales.sql'
 \ir migrations/0132_order_sales.sql
-\echo 'Applying 0133_aliclik_dispatch_date.sql'
-\ir migrations/0133_aliclik_dispatch_date.sql
+\echo 'Applying 0133_confirmation_cycle.sql'
+\ir migrations/0133_confirmation_cycle.sql
+\echo 'Applying 0134_group_gf_courier_foundation.sql'
+\ir migrations/0134_group_gf_courier_foundation.sql
+\echo 'Applying 0135_courier_lima_districts_from_master.sql'
+\ir migrations/0135_courier_lima_districts_from_master.sql
+\echo 'Applying 0136_courier_single_delivery_rejection_rate.sql'
+\ir migrations/0136_courier_single_delivery_rejection_rate.sql
+\echo 'Applying 0137_courier_district_availability.sql'
+\ir migrations/0137_courier_district_availability.sql
+\echo 'Applying 0138_group_gf_logistics_requests.sql'
+\ir migrations/0138_group_gf_logistics_requests.sql
+\echo 'Applying 0139_ad_products.sql'
+\ir migrations/0139_ad_products.sql
+\echo 'Applying 0140_lead_last_product.sql'
+\ir migrations/0140_lead_last_product.sql
+\echo 'Applying 0141_shipments_backfill_order_name.sql'
+\ir migrations/0141_shipments_backfill_order_name.sql
+\echo 'Applying 0142_ad_product_declarations.sql'
+\ir migrations/0142_ad_product_declarations.sql
+\echo 'Applying 0143_lead_cart_product.sql'
+\ir migrations/0143_lead_cart_product.sql
+\echo 'Applying 0144_lead_experiments.sql'
+\ir migrations/0144_lead_experiments.sql
+\echo 'Applying 0145_append_only_revoke_excess_grants.sql'
+\ir migrations/0145_append_only_revoke_excess_grants.sql
+\echo 'Applying 0146_read_lead_experiment_solo_humanos.sql'
+\ir migrations/0146_read_lead_experiment_solo_humanos.sql
+\echo 'Applying 0147_read_lead_experiment_franja.sql'
+\ir migrations/0147_read_lead_experiment_franja.sql
+\echo 'Applying 0148_aliclik_dispatch_date.sql'
+\ir migrations/0148_aliclik_dispatch_date.sql
 \echo 'Done.'

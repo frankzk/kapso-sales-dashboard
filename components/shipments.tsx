@@ -6,6 +6,7 @@ import { cn, Card, STICKY_HEAD, TABLE_WRAP } from "@/components/ui";
 import {
   COURIER_REPORT_RESULTS,
   attemptLabel,
+  esPorRecuperar,
   evaluateAliclikReschedule,
   getFenixDeliverySchedule,
   isCallable,
@@ -15,6 +16,7 @@ import {
   matchesAliclikRouteFilter,
   normalizeCity,
   reprogramCourierOf,
+  effectiveOrderName,
   rescheduleGuideCode,
   SHIPMENT_CLAIM_HEARTBEAT_MS,
   shipmentRequiresCourierResult,
@@ -68,6 +70,7 @@ import {
 import { ChecklistFilter } from "@/components/filters";
 import { OrderLinkPicker } from "@/components/order-link-picker";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
+import { SwaypNoveltyModal } from "@/components/swayp-novelty-modal";
 import {
   currentFenixReason,
   matchesFenixAvailability,
@@ -253,6 +256,10 @@ export function ShipmentsBoard({
   const [dateFilter, setDateFilter] = useState(""); // YYYY-MM-DD on next_followup_at
   const [unmatchedOnly, setUnmatchedOnly] = useState(false);
   const [uncontactedTodayOnly, setUncontactedTodayOnly] = useState(view === "pendiente");
+  // «Por recuperar»: las que Aliclik cerró sin entregar y el pedido todavía puede
+  // reintentar con Swayp (MOM §11). Van en la MISMA cola —son la misma pregunta,
+  // a quién hay que llamar— y este chip solo las acota dentro de Pendiente.
+  const [soloPorRecuperar, setSoloPorRecuperar] = useState(false);
   const [uncontactedOnly, setUncontactedOnly] = useState(false);
   const [fenixFilter, setFenixFilter] = useState<FenixAvailabilityFilter>("all");
   const [aliclikRouteFilter, setAliclikRouteFilter] = useState<AliclikRouteFilter>("all");
@@ -335,6 +342,7 @@ export function ShipmentsBoard({
       (!uncontactedOnly ||
         view !== "pendiente" ||
         isShipmentReadyForContact(s.contact_count, s.next_followup_at)) &&
+      (!soloPorRecuperar || esPorRecuperar(s)) &&
       (reprogFilter === "all" || reprogramCourierOf(s) === reprogFilter) &&
       matchesFenixAvailability(s, fenixFilter),
   );
@@ -730,6 +738,18 @@ export function ShipmentsBoard({
               </label>
               {view === "pendiente" && (
                 <>
+                  <label
+                    className="flex items-center gap-1.5 text-xs text-slate-600"
+                    title="Aliclik las cerró sin entregar: el pedido sigue vivo y admite una salida Swayp"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={soloPorRecuperar}
+                      onChange={(e) => setSoloPorRecuperar(e.target.checked)}
+                      className="rounded border-slate-300"
+                    />
+                    Por recuperar
+                  </label>
                   <label className="flex items-center gap-1.5 text-xs text-slate-600">
                     <input
                       type="checkbox"
@@ -1083,17 +1103,13 @@ function ShipmentDrawer({
   onOpenShipment: (id: string) => void;
   onShipmentUpdated: (id: string) => void | Promise<void>;
 }) {
-  const [detail, setDetail] = useState<
-    | {
-        shipment: ShipmentRow;
-        calls: ShipmentCallRow[];
-        guideHistory: ShipmentHistoryGuide[];
-        order: ShipmentOrderDetail | null;
-        linkedFenixShipment: LinkedShipmentSummary | null;
-      }
-    | { error: string }
-    | null
-  >(null);
+  // Se DERIVA de la acción del servidor en vez de reescribirla a mano. Estaba
+  // copiada campo por campo, así que un dato nuevo en `loadShipmentDetail`
+  // llegaba al cliente y el tipo no lo dejaba usar hasta acordarse de añadirlo
+  // en los dos sitios. Es el mismo hecho escrito dos veces, que es lo que este
+  // repo repite.
+  const [detail, setDetail] = useState<Awaited<ReturnType<typeof loadShipmentDetail>> | null>(null);
+  const [noveltyOpen, setNoveltyOpen] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const [claimState, setClaimState] = useState<"claiming" | "mine" | "blocked">("claiming");
@@ -1263,6 +1279,12 @@ function ShipmentDrawer({
   const fenixDeliverySchedule = shipment
     ? getFenixDeliverySchedule(shipment.city, shipment.district)
     : null;
+  // 6 Novedad y 8 Revisión: los dos estados en los que Swayp todavía acepta una
+  // instrucción. Sin guía de Swayp no hay nada que responder — una guía manual
+  // se gestiona por teléfono, como siempre.
+  const swaypNovelty = Boolean(
+    shipment?.swayp_guide && (shipment.swayp_state === 6 || shipment.swayp_state === 8),
+  );
   const shopifyAddress = detail && !("error" in detail) ? detail.order?.shipping_address ?? null : null;
   const deliveryAddress = shipment?.delivery_address ?? shopifyAddress?.address1 ?? null;
   const deliveryReference = shipment?.delivery_reference ?? shopifyAddress?.address2 ?? null;
@@ -1337,9 +1359,16 @@ function ShipmentDrawer({
     shipmentRequiresCourierResult(shipment?.courier, shipment?.delivery_status);
   const fenixReadyForCustomerManagement =
     shipment?.courier === "fenix" && shipment.delivery_status === "pendiente";
+  // Una sola resolución para todo el cajón: los dos botones que autogeneran una
+  // guía Fenix leían `shipment.order_name` por su cuenta, y arreglar uno solo
+  // habría dejado el otro deshabilitado sobre el mismo envío.
+  const drawerOrderName = effectiveOrderName(
+    shipment?.order_name,
+    detail && !("error" in detail) ? detail.order?.name : null,
+  );
   const cancelledExceptionGuide = shipment
     ? rescheduleGuideCode(
-        shipment.order_name,
+        drawerOrderName,
         cancelledExceptionDate ? new Date(cancelledExceptionDate).toISOString() : null,
       )
     : "";
@@ -1483,6 +1512,32 @@ function ShipmentDrawer({
                       <span className="text-amber-800"> · {fenixDeliverySchedule.note}</span>
                     )}
                   </span>
+                </div>
+              )}
+              {swaypNovelty && (
+                // El estado crudo de Swayp es lo único que distingue «el
+                // mensajero está esperando una instrucción» de «todavía no
+                // salió»: los dos caen en `pendiente` al mapearse.
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-950">
+                  <span>
+                    <strong>
+                      {detail.shipment.swayp_state === 8
+                        ? "Swayp marcó devolución"
+                        : "Swayp reportó una novedad"}
+                    </strong>
+                    <span className="text-rose-800">
+                      {" "}
+                      · el mensajero espera una instrucción
+                    </span>
+                  </span>
+                  {detail.can.solveNovelty && (
+                    <button
+                      onClick={() => setNoveltyOpen(true)}
+                      className="rounded-lg bg-rose-700 px-2.5 py-1 font-medium text-white"
+                    >
+                      Resolver novedad
+                    </button>
+                  )}
                 </div>
               )}
             </section>
@@ -2069,9 +2124,26 @@ function ShipmentDrawer({
                         Primero realiza la reprogramación en Aliclik. Luego confírmala aquí: se conservará la guía actual.
                       </p>
                     ) : detail.shipment.order_name ? (
-                      <p className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
-                        Se generará automáticamente una <b>nueva guía Fenix</b> con la fecha elegida.
-                      </p>
+                      // Antes decía sólo «se generará una nueva guía Fenix», sin
+                      // distinguir los DOS caminos que hay detrás del mismo botón.
+                      // La operadora apretaba sin saber si el número lo pondría
+                      // Swayp o si tendría que cargar la guía a mano en el Excel,
+                      // y se enteraba recién en el aviso posterior. El destino ya
+                      // decide cuál es; decirlo antes es gratis.
+                      detail.swaypApiCity ? (
+                        <p className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
+                          Se generará una <b>nueva guía Fenix</b> con la fecha elegida y{" "}
+                          <b>el número lo emite Swayp</b>: quedará creada en su sistema, sin
+                          cargarla al Excel. Si Swayp no responde, queda con código local y el
+                          aviso te dice por qué.
+                        </p>
+                      ) : (
+                        <p className="rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs text-orange-800">
+                          Se generará una <b>nueva guía Fenix</b> con la fecha elegida{" "}
+                          <b>con código local</b>: este destino todavía no emite por API, así que
+                          hay que cargarla en el Excel de programación.
+                        </p>
+                      )
                     ) : (
                       <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
                         Sin N° de pedido no se puede autogenerar. Usa <b>Generar guía Fenix (manual)</b> abajo.
@@ -2173,14 +2245,14 @@ function ShipmentDrawer({
                       onClick={() =>
                         setFenixGuide(
                           rescheduleGuideCode(
-                            detail.shipment.order_name,
+                            drawerOrderName,
                             nextDate ? new Date(nextDate).toISOString() : null,
                           ),
                         )
                       }
-                      disabled={!detail.shipment.order_name}
+                      disabled={!drawerOrderName}
                       title={
-                        detail.shipment.order_name
+                        drawerOrderName
                           ? undefined
                           : "Este envío no tiene N° de pedido para generar la guía"
                       }
@@ -2214,6 +2286,20 @@ function ShipmentDrawer({
           </div>
         )}
       </div>
+      {noveltyOpen && shipment && detail && !("error" in detail) && (
+        <SwaypNoveltyModal
+          shipmentId={shipment.id}
+          guideCode={shipment.guide_code}
+          swaypGuide={shipment.swayp_guide ?? null}
+          swaypState={shipment.swayp_state ?? null}
+          canReturn={detail.can.return}
+          onClose={() => setNoveltyOpen(false)}
+          onSolved={() => {
+            void refresh();
+            void onShipmentUpdated(shipment.id);
+          }}
+        />
+      )}
     </div>
   );
 }

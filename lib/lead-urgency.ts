@@ -1,0 +1,179 @@
+// La hora dorada: cuánto le queda a un lead antes de que llamarlo valga la mitad.
+//
+// PARA QUÉ. Medido sobre 60 días (leads con ≥7 días de maduración, contando solo
+// los que la asesora llamó, venta atada por `order_sales.lead_id`), la tasa de
+// cierre según cuánto tardó la PRIMERA llamada:
+//
+//                        <1h    1-6h   6-24h   +24h
+//   carrito             40,5%   22,2%  24,1%   22,6%
+//   producto+distrito   44,9%   23,0%  18,5%   14,0%
+//   solo distrito       20,3%   11,5%  11,0%    8,3%
+//   solo ficha          12,0%    2,3%   3,3%    0,5%
+//   sin señal           12,9%    4,0%   2,5%    0,5%
+//
+// Los cinco segmentos caen a la mitad o menos pasada la primera hora, y el
+// gradiente se sostiene DENTRO de cada balde homogéneo y en LAS DOS tiendas —o
+// sea, no es composición: no es que el balde rápido tenga mejores leads, es que
+// llegar tarde los apaga. En carrito la caída además no continúa: llamarlo a las
+// 2 horas (22,2%) rinde igual que a los tres días (22,6%). Es un ACANTILADO en la
+// primera hora, no una pendiente.
+//
+// POR QUÉ ESTE MÓDULO Y NO LA VENTANA DE 24H. En la fila conviven dos relojes que
+// no tienen nada que ver:
+//
+//   - `leadWindowInfo` (lib/leads) mide la ventana de sesión de WhatsApp desde el
+//     último mensaje ENTRANTE. Responde «¿puedo mandarle texto libre?». Es un
+//     permiso de mensajería: no dice nada de la probabilidad de cierre.
+//   - esto mide la EDAD del lead desde que entró. Responde «¿cuánto me queda para
+//     que llamarlo siga valiendo el doble?».
+//
+// Se estaban pintando como si fueran el mismo. Con la cola real (1.966 sin
+// llamar): de los 366 leads que la ventana pinta de verde, las edades van de 0,2h
+// a 1.604h — el mismo verde para uno de doce minutos y otro de 67 días. Solo 24
+// estaban de verdad dentro de la hora dorada, escondidos entre 342 que no.
+//
+// Y el contador de la ventana se muestra redondeado a horas, así que dentro de la
+// hora dorada marca «24h» constante: por construcción no puede distinguir «quedan
+// 50 minutos» de «quedan 10». Toda la decisión ocurre dentro de un solo escalón
+// suyo.
+
+/** Tramos de la edad de un lead. Los cortes son los mismos con los que se midió
+ *  la tabla de arriba: cambiarlos aquí sin volver a medir rompe la relación
+ *  entre lo que se pinta y lo que se sabe. */
+export type UrgencyTier = "dorada" | "tibia" | "enfriando" | "fria";
+
+/** Duración de la hora dorada, en minutos. */
+export const GOLDEN_MINUTES = 60;
+
+const TIBIA_MINUTES = 6 * 60;
+const ENFRIANDO_MINUTES = 24 * 60;
+
+export interface LeadUrgency {
+  tier: UrgencyTier;
+  /** Minutos desde que entró el lead. Nunca negativo. */
+  ageMinutes: number;
+  /** Minutos que quedan de hora dorada; null fuera de ella. Es un descuento a
+   *  propósito: «quedan 43 min» empuja a actuar, «hace 17 min» no. */
+  minutesLeft: number | null;
+  /** Texto corto para la columna: «43 min», «2 h», «9 h», «5 d». */
+  label: string;
+}
+
+/** Etiqueta compacta de una edad ya pasada la hora dorada. Sube de unidad para
+ *  que quepa en la columna sin recortarse: 5h, 18h, 3d, 67d. */
+function ageLabel(ageMinutes: number): string {
+  const horas = ageMinutes / 60;
+  if (horas < ENFRIANDO_MINUTES / 60) return `${Math.round(horas)} h`;
+  return `${Math.round(horas / 24)} d`;
+}
+
+/**
+ * Urgencia de un lead por su edad. PURA.
+ *
+ * `null` cuando no hay fecha usable: sin edad no hay urgencia que afirmar, y
+ * pintar un lead de verde por un dato que falta sería inventar la señal justo
+ * donde no la hay.
+ */
+export function leadUrgency(
+  firstSeenAt: string | null | undefined,
+  nowMs: number,
+): LeadUrgency | null {
+  if (!firstSeenAt) return null;
+  const t = Date.parse(firstSeenAt);
+  if (!Number.isFinite(t)) return null;
+  // Una fecha del futuro (reloj torcido del ingreso) se trata como recién
+  // llegado en vez de descartarse: es lo que casi seguro es.
+  const ageMinutes = Math.max(0, (nowMs - t) / 60_000);
+
+  if (ageMinutes < GOLDEN_MINUTES) {
+    const minutesLeft = Math.max(1, Math.ceil(GOLDEN_MINUTES - ageMinutes));
+    return { tier: "dorada", ageMinutes, minutesLeft, label: `${minutesLeft} min` };
+  }
+  const tier: UrgencyTier =
+    ageMinutes < TIBIA_MINUTES ? "tibia" : ageMinutes < ENFRIANDO_MINUTES ? "enfriando" : "fria";
+  return { tier, ageMinutes, minutesLeft: null, label: ageLabel(ageMinutes) };
+}
+
+export interface UrgencyCounts {
+  dorada: number;
+  tibia: number;
+  enfriando: number;
+  fria: number;
+  /** Sin fecha usable: no caen en ningún tramo, pero existen y hay que poder
+   *  cuadrar "Todos" con la suma de los chips. */
+  sin_dato: number;
+}
+
+/** Cuenta los leads por tramo de edad. PURA. */
+export function countLeadUrgency(
+  leads: readonly { first_seen_at?: string | null }[],
+  nowMs: number,
+): UrgencyCounts {
+  const out: UrgencyCounts = { dorada: 0, tibia: 0, enfriando: 0, fria: 0, sin_dato: 0 };
+  for (const lead of leads) {
+    const u = leadUrgency(lead.first_seen_at, nowMs);
+    if (u) out[u.tier] += 1;
+    else out.sin_dato += 1;
+  }
+  return out;
+}
+
+/** Los segmentos del desglose, en el orden en que se llaman. */
+export const GOLDEN_SEGMENTS = ["carrito", "interes", "converso", "frio"] as const;
+export type GoldenSegment = (typeof GOLDEN_SEGMENTS)[number];
+
+export type GoldenTally = { total: number } & Record<GoldenSegment, number>;
+
+/**
+ * Cuenta los leads que están dentro de la hora dorada, por segmento. PURA.
+ *
+ * CUENTA LOS CUATRO SEGMENTOS. La primera versión sumaba solo `carrito` e
+ * `interes`, con el argumento de que meter conversó y frío llenaría el aviso de
+ * ruido —son 243 leads/día contra 168 de los otros dos—. El argumento era sobre
+ * la cola entera y no aplica DENTRO de la hora: ahí la población es de un puñado
+ * (5 de interés, 2 conversó, 1 frío en una medición real), no de cientos.
+ *
+ * Y el valor va al revés de lo que se supuso. Medido en Kenku, dentro de la
+ * primera hora conversó cierra 16,7% y frío 11,3% — por encima de un `interes`
+ * de 6-24 h (12,9%) y muy por encima de casi toda la cola. Esconderlos del aviso
+ * ocultaba leads que sí conviene llamar.
+ *
+ * El coste de esconderlos era además visible: el aviso decía 5 y el botón que
+ * lleva al filtro decía 8. Dos números en la misma barra que no cuadran destruyen
+ * la confianza en los dos, y la asesora no tiene forma de saber cuál mirar.
+ * Ahora el total es el de la hora completa y el desglose dice qué hay dentro.
+ */
+export function tallyGolden<T extends { first_seen_at?: string | null }>(
+  leads: readonly T[],
+  segmentOf: (lead: T) => string,
+  nowMs: number,
+): GoldenTally {
+  const out: GoldenTally = { total: 0, carrito: 0, interes: 0, converso: 0, frio: 0 };
+  for (const lead of leads) {
+    if (leadUrgency(lead.first_seen_at, nowMs)?.tier !== "dorada") continue;
+    out.total += 1;
+    const seg = segmentOf(lead);
+    if (seg === "carrito" || seg === "interes" || seg === "converso" || seg === "frio") {
+      out[seg] += 1;
+    }
+  }
+  return out;
+}
+
+/** Etiquetas del desglose. Se omiten los ceros, así que lo que se muestra
+ *  siempre suma el total — que es lo que hace legible la resta. */
+export const GOLDEN_SEGMENT_LABEL: Record<GoldenSegment, string> = {
+  carrito: "con carrito",
+  interes: "de interés",
+  converso: "conversó",
+  frio: "frío",
+};
+
+/** Desglose listo para pintar: pares [etiqueta, n] sin ceros, en orden de
+ *  prioridad. PURA. */
+export function goldenBreakdown(tally: GoldenTally): { label: string; count: number }[] {
+  return GOLDEN_SEGMENTS.filter((seg) => tally[seg] > 0).map((seg) => ({
+    label: GOLDEN_SEGMENT_LABEL[seg],
+    count: tally[seg],
+  }));
+}

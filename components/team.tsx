@@ -19,6 +19,11 @@ import {
   type TeamActionState,
 } from "@/app/dashboard/team/actions";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
+import {
+  DISPATCH_COURIERS,
+  GROUP_GF_RIDER_COURIER,
+  isGroupGfRiderCourier,
+} from "@/lib/couriers/catalog";
 
 const initial: TeamActionState = {};
 
@@ -146,8 +151,8 @@ export function TeamManager({
                 frase escrita a mano, añadir un permiso dejaba la explicación
                 hablando solo del primero. */}
             <p className="mb-3 text-xs text-slate-500">
-              Estos permisos NO vienen con el rol: se dan persona por persona a quien revisa las
-              cuentas bancarias. El acceso aparece en su menú al recargar.{" "}
+              Estos permisos NO vienen con el rol: se conceden persona por persona según su
+              responsabilidad. Los accesos correspondientes aparecen en su menú al recargar.{" "}
               {GRANTED_ONE_BY_ONE.map((entry) => (
                 <span key={entry.permission} className="mr-1 inline-block">
                   <strong className="font-semibold text-slate-700">{entry.label}</strong>:{" "}
@@ -532,7 +537,8 @@ function RidersTab({
         <p className="text-xs text-slate-500">
           El motorizado es una ficha del negocio: puede existir sin usuario. Vincúlale un usuario
           solo si va a entrar a <code>/reparto</code> a cotejar y reportar sus paradas. Deja la
-          transportadora en blanco para los motorizados propios.
+          empresa operadora. Los motorizados internos pertenecen formalmente a Grupo GF Courier;
+          las fichas históricas conservan sus IDs y rutas.
         </p>
       </Card>
 
@@ -615,6 +621,30 @@ function StoreSelectRider({
   );
 }
 
+function RiderCourierSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const normalized = isGroupGfRiderCourier(value) ? GROUP_GF_RIDER_COURIER : value;
+  const options = [...new Set(DISPATCH_COURIERS.map((option) => option.label))];
+  if (normalized && !options.includes(normalized)) options.push(normalized);
+  return (
+    <label className="text-xs font-medium text-slate-600">
+      Empresa operadora
+      <select
+        value={normalized}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-1 block h-9 w-52 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-900 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+      >
+        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </label>
+  );
+}
+
 function RiderForm({
   orgId,
   stores,
@@ -627,7 +657,7 @@ function RiderForm({
   onSubmit: (input: Parameters<typeof saveRider>[0]) => void;
 }) {
   const [fullName, setFullName] = useState("");
-  const [courier, setCourier] = useState("");
+  const [courier, setCourier] = useState(GROUP_GF_RIDER_COURIER);
   const [docNumber, setDocNumber] = useState("");
   const [phone, setPhone] = useState("");
   const [storeId, setStoreId] = useState("");
@@ -644,12 +674,7 @@ function RiderForm({
           placeholder="Nombre completo"
           className="w-48 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
         />
-        <input
-          value={courier}
-          onChange={(e) => setCourier(e.target.value)}
-          placeholder="Transportadora (vacío = propio)"
-          className="w-52 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-        />
+        <RiderCourierSelect value={courier} onChange={setCourier} />
         <input
           value={docNumber}
           onChange={(e) => setDocNumber(e.target.value)}
@@ -675,7 +700,7 @@ function RiderForm({
               phone,
             });
             setFullName("");
-            setCourier("");
+            setCourier(GROUP_GF_RIDER_COURIER);
             setDocNumber("");
             setPhone("");
             setStoreId("");
@@ -713,7 +738,9 @@ function RiderRowView({
   run: (action: () => Promise<TeamActionState>) => void;
 }) {
   const [fullName, setFullName] = useState(rider.full_name);
-  const [courier, setCourier] = useState(rider.courier ?? "");
+  const [courier, setCourier] = useState(
+    isGroupGfRiderCourier(rider.courier) ? GROUP_GF_RIDER_COURIER : rider.courier ?? GROUP_GF_RIDER_COURIER,
+  );
   const [docNumber, setDocNumber] = useState(rider.doc_number ?? "");
   const [phone, setPhone] = useState(rider.phone ?? "");
   const [storeId, setStoreId] = useState(rider.store_id ?? "");
@@ -729,7 +756,7 @@ function RiderRowView({
       <tr className="border-b border-slate-100 last:border-0">
         <td className="px-4 py-2.5 text-slate-800">{rider.full_name}</td>
         <td className="px-2 py-2.5 text-slate-600">
-          {rider.courier ? rider.courier : <span className="text-slate-400">Propio</span>}
+          {isGroupGfRiderCourier(rider.courier) ? GROUP_GF_RIDER_COURIER : rider.courier}
         </td>
         <td className="px-2 py-2.5 text-slate-600">
           {rider.store_id ? (storeName.get(rider.store_id) ?? "—") : "Todas"}
@@ -770,12 +797,7 @@ function RiderRowView({
                   placeholder="Nombre completo"
                   className="w-48 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
                 />
-                <input
-                  value={courier}
-                  onChange={(e) => setCourier(e.target.value)}
-                  placeholder="Transportadora (vacío = propio)"
-                  className="w-52 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-                />
+                <RiderCourierSelect value={courier} onChange={setCourier} />
                 <input
                   value={docNumber}
                   onChange={(e) => setDocNumber(e.target.value)}

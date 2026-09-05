@@ -3,7 +3,7 @@
 // product in that city. Real stock comes from the fenix_stock table; this module
 // decides eligibility from a shipment + the relevant stock rows.
 
-import { fenixWarehouseKey, isFenixCity, normalizeCity } from "./shipments";
+import { deriveFenixCoverageCity, fenixWarehouseKey, isFenixCity, normalizeCity } from "./shipments";
 
 export interface FenixStockRow {
   city: string; // normalized coverage key
@@ -38,14 +38,79 @@ export function fenixStockCityKey(city: string | null | undefined): string {
 
 /** Resolves the UI status, including a safe fallback for legacy rows that were
  * loaded without the read-time reason enrichment. */
+/**
+ * La clave de cobertura de un envío. UNA sola definición, a propósito.
+ *
+ * Existió repartida en dos: `evaluateFenix` (que decide en la cola, del lado
+ * del servidor) leía sólo `city`, y la creación de guía derivaba de la
+ * dirección. Con `city` vacía —el alta por la API de Aliclik no la rellena— la
+ * pantalla decía «fuera de cobertura» sobre envíos que el despacho aceptaba sin
+ * chistar. 234 envíos así, 33 de ellos pendientes, con stock y despachables.
+ *
+ * `city` manda cuando viene: el courier puede contradecir a Shopify, y esa
+ * discrepancia la reporta `localityMismatch()`. Derivar por encima de un dato
+ * presente la taparía. Sólo se deriva cuando no hay nada que tapar. Pura.
+ */
+export function coverageCityOf(shipment: {
+  city?: string | null;
+  district?: string | null;
+  province?: string | null;
+}): string {
+  const explicit = normalizeCity(shipment.city);
+  if (explicit) return explicit;
+  return normalizeCity(deriveFenixCoverageCity(shipment.district, shipment.province));
+}
+
+/**
+ * Las columnas de `shipments` que describen el destino. Se seleccionan JUNTAS o
+ * la cobertura miente.
+ *
+ * `coverageCityOf` sabe derivar la ciudad del distrito, pero solo puede hacerlo
+ * con los datos que le pasan: un llamador que selecciona `city` a secas le
+ * entrega un destino vacío, y un destino vacío es «fuera de cobertura». Eso pasó
+ * —la cola decía «Fenix Ok» sobre un envío que el botón rechazaba— porque la
+ * lectura de la cola sí traía el distrito y las rejas de escritura no. Tener el
+ * nombre de las columnas en un solo sitio no lo impide, pero deja el olvido a la
+ * vista en el diff.
+ */
+export const FENIX_COVERAGE_COLUMNS = "city,district,province,region";
+
+/** Fila con destino, tal cual sale de `shipments`. */
+export interface FenixCoverageRow {
+  city?: string | null;
+  district?: string | null;
+  province?: string | null;
+  /** La columna vieja. `province` (migración 0039) llegó después y no todas las
+   *  filas la tienen; sin este respaldo, la mitad del histórico pierde la
+   *  provincia y con ella la derivación por distrito. */
+  region?: string | null;
+}
+
+/** Normaliza el destino de una fila a lo que `evaluateFenix` sabe leer,
+ *  resolviendo el par `province`/`region` en un solo lugar. Pura. */
+export function coverageInputOf<T extends FenixCoverageRow>(
+  row: T,
+): T & { province: string | null } {
+  return { ...row, province: row.province ?? row.region ?? null };
+}
+
+/**
+ * La razón que se le muestra al operador. Pura.
+ *
+ * Camino de respaldo: en la cola gana `fenix_reason`, que el servidor calcula
+ * con `evaluateFenix`. Los dos resuelven la ciudad con `coverageCityOf`, que
+ * es donde vive la regla — separarlos fue el bug.
+ */
 export function currentFenixReason(shipment: {
   city?: string | null;
+  district?: string | null;
+  province?: string | null;
   fenix_eligible: boolean;
   fenix_reason?: FenixEligibility["reason"];
 }): FenixEligibility["reason"] {
   if (shipment.fenix_reason) return shipment.fenix_reason;
   if (shipment.fenix_eligible) return "ok";
-  return isFenixCity(shipment.city) ? "sin_stock" : "sin_cobertura";
+  return isFenixCity(coverageCityOf(shipment)) ? "sin_stock" : "sin_cobertura";
 }
 
 export function matchesFenixAvailability(
@@ -128,11 +193,23 @@ export function stockCoversRef(stock: FenixStockRow, ref: ProductRef): boolean {
  * `stockRows` should already be scoped to the shipment's org and (ideally) city.
  */
 export function evaluateFenix(
-  shipment: { city?: string | null; product?: string | null },
+  shipment: {
+    city?: string | null;
+    /**
+     * Se usan SÓLO si `city` viene vacía. El alta por la API de Aliclik no
+     * rellena esa columna, y leerla sola convertía «falta el dato» en «no hay
+     * cobertura» — dos cosas distintas, y la segunda esconde trabajo
+     * despachable. Misma regla y misma función que la creación de guía, para
+     * que la cola y el despacho no respondan distinto sobre el mismo envío.
+     */
+    district?: string | null;
+    province?: string | null;
+    product?: string | null;
+  },
   stockRows: FenixStockRow[],
   orderProducts?: ProductRef[],
 ): FenixEligibility {
-  const city = normalizeCity(shipment.city);
+  const city = coverageCityOf(shipment);
   const stockCity = fenixStockCityKey(city);
   const cityRows = stockRows.filter((r) => fenixStockCityKey(r.city) === stockCity);
   const covered = isFenixCity(city) || cityRows.length > 0;

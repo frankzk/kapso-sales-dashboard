@@ -80,6 +80,18 @@ export interface BuildGuideInput {
   dispatchDateIso?: string | null;
   observaciones?: string | null;
   senders: Record<string, SwaypSender>;
+  /**
+   * Comercio dentro de Swayp (`SWAYP_ID_BUSINESS`). Su documentación lo marca
+   * OBLIGATORIO en `POST /v2/guias`, pero el entorno de pruebas acepta la guía
+   * sin él —comprobado—, así que acá es opcional: exigirlo rompería lo que hoy
+   * funciona sin avisar de nada nuevo.
+   *
+   * Conviene configurarlo igual. La cuenta agrupa más de un comercio
+   * (AURELA/KENKU) y sin este campo es Swayp quien decide a cuál se atribuye la
+   * guía: si acierta, no nos enteramos; si se equivoca, tampoco. Un fallo por
+   * campo faltante sería ruidoso; una atribución equivocada es silenciosa.
+   */
+  idBusiness?: number | null;
 }
 
 export type BuildGuideResult =
@@ -92,6 +104,30 @@ export function buildContenido(lineItems: Array<{ title: string; quantity: numbe
     .filter((li) => li.title?.trim())
     .map((li) => `${Math.max(1, li.quantity || 1)} x ${li.title.trim()}`)
     .join(", ");
+}
+
+/**
+ * ¿Esta ciudad emite guía por API, o va por el Excel?
+ *
+ * PARA QUÉ. El drawer avisaba «Se generará automáticamente una nueva guía
+ * Fenix» sin decir por cuál de los dos caminos: la operadora apretaba sin saber
+ * si el número lo iba a poner Swayp o si tendría que cargar la guía a mano
+ * después, y se enteraba recién en el aviso posterior.
+ *
+ * SON LAS DOS PRIMERAS REJAS DE `buildSwaypGuideInput`, y a propósito: bodega
+ * configurada y ciudad con cobertura. Las que dependen del envío concreto
+ * —dirección, distrito, teléfono— NO se miran acá, porque esto responde «¿esta
+ * ciudad va por API?» y no «¿esta guía va a salir?». La segunda no se puede
+ * prometer: la API puede rechazar el envío o no responder, y por eso el aviso
+ * dice que si falla queda con código local.
+ *
+ * `test/swayp-guide.test.ts` fija que las dos funciones no puedan discrepar.
+ */
+export function esCiudadPorApiSwayp(
+  city: string,
+  senders: Record<string, SwaypSender>,
+): boolean {
+  return !!senders[city] && !!warehouseUbigeo(city);
 }
 
 /**
@@ -164,6 +200,9 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
       ciudadDestinatario: destino.code,
 
       contenido,
+      ...(Number.isFinite(b.idBusiness) && Number(b.idBusiness) > 0
+        ? { idBusiness: Number(b.idBusiness) }
+        : {}),
       ...(b.observaciones?.trim() ? { observaciones: b.observaciones.trim() } : {}),
       ...(b.dispatchDateIso ? { fechaEntrega: b.dispatchDateIso } : {}),
 

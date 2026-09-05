@@ -52,9 +52,16 @@ export class SwaypError extends Error {
 }
 
 /**
- * True when the failure means "our credential no longer works" — the token is
- * static and cannot be renewed programmatically, so this needs a human to ask
- * Swayp for a new one. Worth alerting on rather than retrying.
+ * True when the failure means "our credential no longer works" — el token no se
+ * renueva por código, así que esto necesita que una persona actúe. Vale alertar
+ * en vez de reintentar.
+ *
+ * OJO con `token expired`: Swayp lo devuelve TAMBIÉN cuando el token es
+ * perfectamente válido pero el header `email` no corresponde al del token
+ * —verificado contra su API: el mismo token da 200 con su email y 403
+ * «Token expired» con cualquier otro—. Sigue siendo un problema de credencial,
+ * y por eso sigue clasificando acá; lo que no se puede es decirle a alguien que
+ * pida un token nuevo sin más. Para eso está `swaypAuthErrorHint()`.
  */
 export function isSwaypAuthError(err: unknown): boolean {
   if (!(err instanceof SwaypError)) return false;
@@ -63,6 +70,54 @@ export function isSwaypAuthError(err: unknown): boolean {
   // gateway, WAF) answers 403 too, and treating that as a dead credential
   // would page someone over a network policy. Match Swayp's own wording.
   return /token expired|no tienes autorizaci|no tienes permisos/i.test(err.body);
+}
+
+/** Formato de un JWT: tres segmentos base64url. */
+const JWT_SHAPE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
+/**
+ * El `sub` del token, cuando es un JWT y lo trae en forma de email. Devuelve
+ * null si no se puede saber —token opaco, JWT sin `sub`, base64 corrupto—, para
+ * que quien llame no invente un diagnóstico sobre una suposición.
+ *
+ * No valida la firma ni la expiración: no es autenticación, es sólo leer a
+ * nombre de quién se emitió para poder explicar un 403.
+ */
+export function swaypTokenSubject(token: string): string | null {
+  const raw = token.trim();
+  if (!JWT_SHAPE.test(raw)) return null;
+  const payload = raw.split(".")[1];
+  if (!payload) return null;
+  try {
+    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    const sub = (JSON.parse(json) as { sub?: unknown }).sub;
+    return typeof sub === "string" && sub.includes("@") ? sub : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Qué decirle a la persona que va a leer el aviso cuando la credencial falla.
+ *
+ * Distingue el caso que la API NO distingue: si el token declara un `sub` y
+ * `SWAYP_EMAIL` no coincide, el problema es la configuración —gratis de
+ * arreglar— y no hay ningún token que pedir. Sin esta comprobación, el mensaje
+ * manda a alguien a solicitar credenciales nuevas por un email mal escrito.
+ */
+export function swaypAuthErrorHint(opts: Pick<SwaypClientOpts, "token" | "email">): string {
+  const sub = swaypTokenSubject(opts.token);
+  const email = opts.email.trim();
+  if (sub && sub.toLowerCase() !== email.toLowerCase()) {
+    return (
+      `SWAYP_EMAIL es «${email}» pero el token fue emitido para «${sub}». ` +
+      `Swayp rechaza esa combinación diciendo «Token expired», que es engañoso: ` +
+      `el token está bien, el email no. El token va atado a UN usuario, no a la ` +
+      `organización, así que hay dos salidas: poner «${sub}» en SWAYP_EMAIL, o ` +
+      `pedirle a Swayp un token emitido para «${email}».`
+    );
+  }
+  return "La credencial de Swayp ya no es válida; hay que pedirle un token nuevo a Swayp.";
 }
 
 function baseFor(opts: SwaypClientOpts): string {
@@ -315,6 +370,14 @@ export interface SwaypGuide {
  * Consulta una guía. La API responde 200 con `{}` cuando la guía no existe o no
  * pertenece a la cuenta, así que eso se traduce a null en vez de a un objeto
  * vacío que el llamador confundiría con datos.
+ *
+ * OJO: hoy este endpoint **revienta con 500 cuando la guía está en novedad**
+ * —`TypeError: Cannot read properties of undefined (reading 'novedadFoto')`,
+ * reproducido en el entorno de pruebas—. Es un fallo del lado de Swayp, no
+ * nuestro. Lanza excepción, que es lo correcto, pero significa que no se puede
+ * consultar una guía justo en el estado en el que más falta haría. El flujo de
+ * novedades no depende de esto: trabaja con el `swayp_state` que trae el
+ * webhook.
  */
 export async function getGuide(
   opts: SwaypClientOpts,
@@ -344,11 +407,42 @@ export interface SwaypNoveltySolution {
   geoReferencia?: { url?: string; coords?: { lat: number; lon: number } };
 }
 
+/**
+ * Lo que contesta `setNoveltySolution`, verificado sobre una novedad real —no
+ * es lo que sugería la documentación, que no publica la respuesta—:
+ *
+ *   {"status":200,"msg":"Actualizado Con Exito!","guia":50000004102,
+ *    "accion":{"codigo":"3","tipo":"Reprogramar"},
+ *    "cambios":{"estado":"Solucionado","codigoEstado":"5",
+ *               "fechaSolucionado":"…","fechaReprogramada":"…",
+ *               "partnerNotificado":false}}
+ *
+ * `cambios.codigoEstado` es el estado al que queda la guía: reprogramar la
+ * devuelve a 5 (Reparto), no a un estado propio de «reprogramada». Se tipa pero
+ * NO se usa para escribir `delivery_status`: el estado sigue llegando por el
+ * webhook, que es la única fuente que también cubre lo que pasa después.
+ */
+export interface SwaypNoveltyResult {
+  status?: number;
+  msg?: string;
+  guia?: number | string;
+  accion?: { codigo?: string; tipo?: string };
+  cambios?: {
+    estado?: string;
+    codigoEstado?: string;
+    fechaSolucionado?: string;
+    fechaReprogramada?: string;
+    /** Falso en pruebas; conviene confirmar con Swayp qué implica en producción. */
+    partnerNotificado?: boolean;
+  };
+  [k: string]: unknown;
+}
+
 /** Responde una novedad de tipo Gestión. */
 export function solveNovelty(
   opts: SwaypClientOpts,
   input: SwaypNoveltySolution,
-): Promise<{ success?: boolean; [k: string]: unknown }> {
+): Promise<SwaypNoveltyResult> {
   return swaypFetch(opts, "POST", "/v2/guias/setNoveltySolution", input);
 }
 

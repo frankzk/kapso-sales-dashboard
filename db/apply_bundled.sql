@@ -10009,6 +10009,1526 @@ revoke all on function public.backfill_order_sales() from public;
 select public.backfill_order_sales();
 
 -- ---- 0133 ----
+-- Ciclo automático de recontacto (MOM §6.1).
+--
+-- Un pedido Por confirmar que nadie volvió a llamar y al que nadie le pactó
+-- fecha se quedaba veintitrés días con 1/7 días de gestión: su recordatorio de
+-- dos horas vencía el primer día y ahí se hundía, en Vencidos, sin volver a
+-- aparecer nunca en la cola de Hoy. El ciclo lo devuelve al trabajo cada N días
+-- contados desde el último contacto.
+--
+-- `confirmation_cycle_due_on` es DERIVADA y vive aparte de
+-- `confirmation_next_contact_on`: esa la pactó una persona en una llamada y el
+-- MOM la trata como hecho; esta la calcula Kapta y se recalcula sola en cada
+-- barrido del Master.
+
+alter table stores
+  add column if not exists confirmation_cycle_days smallint not null default 3;
+
+comment on column stores.confirmation_cycle_days is
+  'Días entre recontactos automáticos cuando el intento no dejó fecha pactada (MOM §6.1).';
+
+alter table stores
+  drop constraint if exists stores_confirmation_cycle_days_check;
+alter table stores
+  add constraint stores_confirmation_cycle_days_check
+  check (confirmation_cycle_days between 1 and 30);
+
+alter table order_master
+  add column if not exists confirmation_cycle_due_on date;
+
+comment on column order_master.confirmation_cycle_due_on is
+  'Día en que el pedido vuelve a la cola por ciclo automático: último contacto + confirmation_cycle_days. Nulo si hay fecha pactada o si nadie lo ha contactado.';
+
+create index if not exists order_master_confirmation_cycle_idx
+  on order_master(store_id, confirmation_cycle_due_on, order_created_at desc)
+  where macro_stage = 'por_confirmar' and confirmation_cycle_due_on is not null;
+
+-- Relleno inicial con la MISMA regla que el barrido: último contacto + ciclo de
+-- la tienda, en calendario de Lima. Sin esto la cola queda a medias hasta que el
+-- reconciliador vaya recalculando pedido por pedido, que es justo el rato en que
+-- alguien miraría «Hoy» y lo vería vacío. El siguiente barrido reescribe estos
+-- mismos valores: la columna es derivada y no guarda ninguna decisión humana.
+update order_master m
+set confirmation_cycle_due_on =
+      (m.confirmation_last_contact_at at time zone 'America/Lima')::date
+      + coalesce(s.confirmation_cycle_days, 3)
+from stores s
+where s.id = m.store_id
+  and m.macro_stage = 'por_confirmar'
+  and m.confirmation_next_contact_on is null
+  and m.confirmation_last_contact_at is not null;
+
+-- ---- 0134 ----
+-- ============================================================================
+-- 0134_group_gf_courier_foundation.sql
+-- Fundación multi-tienda para Grupo GF Courier (MOM §29).
+--
+-- Esta migración NO mueve rutas ni inventario existentes. Introduce identidades
+-- estables y tablas con vigencia para que la transición desde "motorizados
+-- propios" sea incremental y auditable:
+--
+--   operador → contrato con tienda → tarifa/fee vigente
+--                         └────────→ bolsa de inventario opcional
+--
+-- `delivery_routes` y `dispatch_manifests` se conservan hasta que una migración
+-- posterior pueda vincularlos sin duplicar custodia ni perder historia.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Operador logístico. `org_id` es la organización que lo administra en Kapta;
+-- no es una tienda y no crea pedidos Shopify ficticios.
+-- ----------------------------------------------------------------------------
+
+create table if not exists logistics_providers (
+  id                    uuid primary key default gen_random_uuid(),
+  org_id                uuid not null references organizations(id) on delete cascade,
+  code                  text not null,
+  name                  text not null,
+  legal_name            text,
+  status                text not null default 'active'
+    check (status in ('active', 'suspended', 'inactive')),
+  coverage_note         text,
+  same_day_cutoff       time not null default time '11:30',
+  cash_warning_amount   numeric(12, 2) not null default 4000
+    check (cash_warning_amount >= 0),
+  cash_limit_amount     numeric(12, 2) not null default 5000
+    check (cash_limit_amount > 0),
+  currency              text not null default 'PEN',
+  created_by            uuid references auth.users(id) on delete set null,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
+  check (length(trim(code)) > 0),
+  check (length(trim(name)) > 0),
+  check (cash_warning_amount <= cash_limit_amount)
+);
+
+create unique index if not exists logistics_providers_org_code_idx
+  on logistics_providers(org_id, lower(trim(code)));
+
+drop trigger if exists logistics_providers_touch on logistics_providers;
+create trigger logistics_providers_touch before update on logistics_providers
+  for each row execute function public.touch_updated_at();
+
+comment on table logistics_providers is
+  'Operadores logísticos administrados en Kapta. Grupo GF Courier vive aquí; no es una tienda Shopify.';
+
+-- ----------------------------------------------------------------------------
+-- Contrato entre operador y cliente. `store_id` nulo permite un cliente que
+-- entra por API/Excel y todavía no tiene Shopify conectado. Si se informa, la
+-- aplicación debe comprobar que la tienda pertenece a `client_org_id`.
+-- ----------------------------------------------------------------------------
+
+create table if not exists logistics_service_agreements (
+  id                    uuid primary key default gen_random_uuid(),
+  provider_id           uuid not null references logistics_providers(id) on delete cascade,
+  client_org_id         uuid not null references organizations(id) on delete cascade,
+  store_id              uuid references stores(id) on delete cascade,
+  client_label          text not null,
+  status                text not null default 'active'
+    check (status in ('draft', 'active', 'suspended', 'ended')),
+  assignment_mode       text not null default 'direct'
+    check (assignment_mode in ('direct', 'request_acceptance')),
+  settlement_frequency  text not null default 'daily'
+    check (settlement_frequency in ('daily')),
+  same_day_cutoff       time,
+  coverage_note         text,
+  effective_from        date not null default current_date,
+  effective_to          date,
+  note                  text,
+  created_by            uuid references auth.users(id) on delete set null,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
+  check (length(trim(client_label)) > 0),
+  check (effective_to is null or effective_to >= effective_from)
+);
+
+create index if not exists logistics_agreements_provider_idx
+  on logistics_service_agreements(provider_id, status, effective_from desc);
+create index if not exists logistics_agreements_client_idx
+  on logistics_service_agreements(client_org_id, store_id, status);
+create unique index if not exists logistics_agreements_store_period_idx
+  on logistics_service_agreements(
+    provider_id,
+    client_org_id,
+    coalesce(store_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    effective_from
+  );
+
+drop trigger if exists logistics_service_agreements_touch on logistics_service_agreements;
+create trigger logistics_service_agreements_touch
+  before update on logistics_service_agreements
+  for each row execute function public.touch_updated_at();
+
+-- ----------------------------------------------------------------------------
+-- Matriz configurable por distrito. Una fila contiene las dos columnas que la
+-- operación edita junta: entrega y rechazo. Nulo en agreement_id = tarifa
+-- general; informada = excepción contractual que gana sobre la general.
+-- ----------------------------------------------------------------------------
+
+create table if not exists logistics_district_tariffs (
+  id                    uuid primary key default gen_random_uuid(),
+  provider_id           uuid not null references logistics_providers(id) on delete cascade,
+  agreement_id          uuid references logistics_service_agreements(id) on delete cascade,
+  district_key          text not null references peru_districts(district_key) on delete restrict,
+  zone                  text,
+  delivery_amount       numeric(12, 2) not null check (delivery_amount >= 0),
+  rejection_amount      numeric(12, 2) not null check (rejection_amount >= 0),
+  includes_igv          boolean not null default true,
+  currency              text not null default 'PEN',
+  effective_from        date not null default current_date,
+  effective_to          date,
+  status                text not null default 'active'
+    check (status in ('active', 'inactive')),
+  note                  text,
+  created_by            uuid references auth.users(id) on delete set null,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
+  check (effective_to is null or effective_to >= effective_from)
+);
+
+create index if not exists logistics_tariffs_lookup_idx
+  on logistics_district_tariffs(provider_id, district_key, effective_from desc);
+create index if not exists logistics_tariffs_agreement_idx
+  on logistics_district_tariffs(agreement_id, district_key, effective_from desc)
+  where agreement_id is not null;
+create unique index if not exists logistics_tariffs_scope_period_idx
+  on logistics_district_tariffs(
+    provider_id,
+    coalesce(agreement_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    district_key,
+    effective_from
+  );
+
+drop trigger if exists logistics_district_tariffs_touch on logistics_district_tariffs;
+create trigger logistics_district_tariffs_touch
+  before update on logistics_district_tariffs
+  for each row execute function public.touch_updated_at();
+
+comment on table logistics_district_tariffs is
+  'Tarifa incluida IGV por distrito. La excepción del contrato gana sobre la general; los cambios abren vigencia nueva.';
+
+-- ----------------------------------------------------------------------------
+-- Reglas porcentuales con vigencia. La primera regla acordada es la comisión
+-- Yape de Grupo GF: 3.5 % del importe efectivamente recibido por Yape.
+-- ----------------------------------------------------------------------------
+
+create table if not exists logistics_fee_rules (
+  id                    uuid primary key default gen_random_uuid(),
+  provider_id           uuid not null references logistics_providers(id) on delete cascade,
+  agreement_id          uuid references logistics_service_agreements(id) on delete cascade,
+  kind                  text not null check (kind in ('yape_commission')),
+  percentage            numeric(7, 4) not null default 3.5
+    check (percentage >= 0 and percentage <= 100),
+  effective_from        date not null default current_date,
+  effective_to          date,
+  status                text not null default 'active'
+    check (status in ('active', 'inactive')),
+  note                  text,
+  created_by            uuid references auth.users(id) on delete set null,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
+  check (effective_to is null or effective_to >= effective_from)
+);
+
+create index if not exists logistics_fee_rules_lookup_idx
+  on logistics_fee_rules(provider_id, kind, effective_from desc);
+create unique index if not exists logistics_fee_rules_scope_period_idx
+  on logistics_fee_rules(
+    provider_id,
+    coalesce(agreement_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    kind,
+    effective_from
+  );
+
+drop trigger if exists logistics_fee_rules_touch on logistics_fee_rules;
+create trigger logistics_fee_rules_touch before update on logistics_fee_rules
+  for each row execute function public.touch_updated_at();
+
+-- ----------------------------------------------------------------------------
+-- Inventario futuro. La bolsa existe desde ahora para no volver a cambiar la
+-- identidad, pero `strict_control = false` y todas las referencias futuras
+-- serán anulables: no bloquea Aurela/Kenku ni obliga a migrar existencias.
+-- ----------------------------------------------------------------------------
+
+create table if not exists inventory_pools (
+  id                    uuid primary key default gen_random_uuid(),
+  custodian_provider_id uuid not null references logistics_providers(id) on delete cascade,
+  owner_org_id          uuid references organizations(id) on delete set null,
+  code                  text not null,
+  name                  text not null,
+  owner_label           text,
+  strict_control        boolean not null default false,
+  status                text not null default 'active'
+    check (status in ('active', 'suspended', 'inactive')),
+  note                  text,
+  created_by            uuid references auth.users(id) on delete set null,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
+  check (length(trim(code)) > 0),
+  check (length(trim(name)) > 0)
+);
+
+create unique index if not exists inventory_pools_provider_code_idx
+  on inventory_pools(custodian_provider_id, lower(trim(code)));
+
+create table if not exists inventory_pool_store_access (
+  pool_id               uuid not null references inventory_pools(id) on delete cascade,
+  store_id              uuid not null references stores(id) on delete cascade,
+  active                boolean not null default true,
+  created_by            uuid references auth.users(id) on delete set null,
+  created_at            timestamptz not null default now(),
+  primary key (pool_id, store_id)
+);
+
+drop trigger if exists inventory_pools_touch on inventory_pools;
+create trigger inventory_pools_touch before update on inventory_pools
+  for each row execute function public.touch_updated_at();
+
+comment on column inventory_pools.strict_control is
+  'False = la bolsa documenta propiedad/acceso sin exigir saldo ni reservas; permite activar inventario en una fase posterior.';
+
+-- ----------------------------------------------------------------------------
+-- RLS. El catálogo de operadores contiene solo identidad comercial y es visible
+-- a usuarios autenticados. Contratos, precios y bolsas quedan limitados al
+-- operador administrador o al cliente explícitamente relacionado.
+-- ----------------------------------------------------------------------------
+
+alter table logistics_providers          enable row level security;
+alter table logistics_service_agreements enable row level security;
+alter table logistics_district_tariffs   enable row level security;
+alter table logistics_fee_rules          enable row level security;
+alter table inventory_pools              enable row level security;
+alter table inventory_pool_store_access  enable row level security;
+
+drop policy if exists logistics_providers_select on logistics_providers;
+create policy logistics_providers_select on logistics_providers
+  for select to authenticated using (true);
+drop policy if exists logistics_providers_write on logistics_providers;
+create policy logistics_providers_write on logistics_providers
+  for all to authenticated
+  using (org_id in (select auth_admin_org_ids()))
+  with check (org_id in (select auth_admin_org_ids()));
+
+drop policy if exists logistics_agreements_select on logistics_service_agreements;
+create policy logistics_agreements_select on logistics_service_agreements
+  for select to authenticated using (
+    client_org_id in (select auth_org_ids())
+    or provider_id in (
+      select id from logistics_providers where org_id in (select auth_org_ids())
+    )
+  );
+drop policy if exists logistics_agreements_write on logistics_service_agreements;
+create policy logistics_agreements_write on logistics_service_agreements
+  for all to authenticated
+  using (provider_id in (
+    select id from logistics_providers where org_id in (select auth_admin_org_ids())
+  ))
+  with check (provider_id in (
+    select id from logistics_providers where org_id in (select auth_admin_org_ids())
+  ));
+
+drop policy if exists logistics_tariffs_select on logistics_district_tariffs;
+create policy logistics_tariffs_select on logistics_district_tariffs
+  for select to authenticated using (
+    provider_id in (
+      select id from logistics_providers where org_id in (select auth_org_ids())
+    )
+    or agreement_id in (
+      select id from logistics_service_agreements where client_org_id in (select auth_org_ids())
+    )
+    or (
+      agreement_id is null
+      and provider_id in (
+        select provider_id
+          from logistics_service_agreements
+         where client_org_id in (select auth_org_ids())
+           and status = 'active'
+      )
+    )
+  );
+drop policy if exists logistics_tariffs_write on logistics_district_tariffs;
+create policy logistics_tariffs_write on logistics_district_tariffs
+  for all to authenticated
+  using (provider_id in (
+    select id from logistics_providers where org_id in (select auth_admin_org_ids())
+  ))
+  with check (provider_id in (
+    select id from logistics_providers where org_id in (select auth_admin_org_ids())
+  ));
+
+drop policy if exists logistics_fee_rules_select on logistics_fee_rules;
+create policy logistics_fee_rules_select on logistics_fee_rules
+  for select to authenticated using (
+    provider_id in (
+      select id from logistics_providers where org_id in (select auth_org_ids())
+    )
+    or agreement_id in (
+      select id from logistics_service_agreements where client_org_id in (select auth_org_ids())
+    )
+    or (
+      agreement_id is null
+      and provider_id in (
+        select provider_id
+          from logistics_service_agreements
+         where client_org_id in (select auth_org_ids())
+           and status = 'active'
+      )
+    )
+  );
+drop policy if exists logistics_fee_rules_write on logistics_fee_rules;
+create policy logistics_fee_rules_write on logistics_fee_rules
+  for all to authenticated
+  using (provider_id in (
+    select id from logistics_providers where org_id in (select auth_admin_org_ids())
+  ))
+  with check (provider_id in (
+    select id from logistics_providers where org_id in (select auth_admin_org_ids())
+  ));
+
+drop policy if exists inventory_pools_select on inventory_pools;
+create policy inventory_pools_select on inventory_pools
+  for select to authenticated using (
+    owner_org_id in (select auth_org_ids())
+    or custodian_provider_id in (
+      select id from logistics_providers where org_id in (select auth_org_ids())
+    )
+  );
+drop policy if exists inventory_pools_write on inventory_pools;
+create policy inventory_pools_write on inventory_pools
+  for all to authenticated
+  using (custodian_provider_id in (
+    select id from logistics_providers where org_id in (select auth_admin_org_ids())
+  ))
+  with check (custodian_provider_id in (
+    select id from logistics_providers where org_id in (select auth_admin_org_ids())
+  ));
+
+drop policy if exists inventory_pool_store_access_select on inventory_pool_store_access;
+create policy inventory_pool_store_access_select on inventory_pool_store_access
+  for select to authenticated using (
+    store_id in (select auth_store_ids())
+    or pool_id in (
+      select p.id
+        from inventory_pools p
+        join logistics_providers lp on lp.id = p.custodian_provider_id
+       where lp.org_id in (select auth_org_ids())
+    )
+  );
+drop policy if exists inventory_pool_store_access_write on inventory_pool_store_access;
+create policy inventory_pool_store_access_write on inventory_pool_store_access
+  for all to authenticated
+  using (pool_id in (
+    select p.id
+      from inventory_pools p
+      join logistics_providers lp on lp.id = p.custodian_provider_id
+     where lp.org_id in (select auth_admin_org_ids())
+  ))
+  with check (pool_id in (
+    select p.id
+      from inventory_pools p
+      join logistics_providers lp on lp.id = p.custodian_provider_id
+     where lp.org_id in (select auth_admin_org_ids())
+  ));
+
+grant select on logistics_providers, logistics_service_agreements,
+  logistics_district_tariffs, logistics_fee_rules, inventory_pools,
+  inventory_pool_store_access to authenticated;
+grant insert, update on logistics_providers, logistics_service_agreements,
+  logistics_district_tariffs, logistics_fee_rules, inventory_pools,
+  inventory_pool_store_access to authenticated;
+grant all privileges on logistics_providers, logistics_service_agreements,
+  logistics_district_tariffs, logistics_fee_rules, inventory_pools,
+  inventory_pool_store_access to service_role;
+
+-- ---- 0135 ----
+-- ============================================================================
+-- 0135_courier_lima_districts_from_master.sql
+-- La matriz de Grupo GF Courier usa los distritos que realmente aparecen en
+-- pedidos clasificados con coverage = 'lima', no el catálogo geográfico
+-- parcial acumulado por reportes de courier.
+--
+-- El campo district del histórico contiene alias y, en filas antiguas,
+-- referencias completas. Por eso nunca se copia en crudo: se resuelve con la
+-- misma verdad canónica que clasifica la cobertura (`resolve_lima_district`).
+-- Lurigancho–Chosica se muestra como una sola tarifa: Lurigancho.
+-- ============================================================================
+
+-- La tarifa conserva FK hacia peru_districts. Sembramos los nombres canónicos
+-- para que cualquier distrito válido que aparezca mañana pueda configurarse sin
+-- depender de que antes haya llegado en un Excel de Aliclik.
+insert into peru_districts (
+  district_key,
+  district,
+  province,
+  department,
+  source
+)
+select
+  d.district_key,
+  initcap(d.district_key),
+  case
+    when d.district_key = any(array[
+      'bellavista','callao','carmen de la legua reynoso','la perla','la punta',
+      'mi peru','ventanilla'
+    ]) then 'Callao'
+    else 'Lima'
+  end,
+  'Lima',
+  'manual'
+from unnest(lima_districts()) as d(district_key)
+on conflict (district_key) do nothing;
+
+create or replace function courier_lima_districts(p_org_id uuid)
+returns table (
+  district_key text,
+  district text,
+  province text,
+  department text,
+  order_count bigint
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with resolved as (
+    select
+      case
+        when resolve_lima_district(om.district, true) = 'lurigancho chosica'
+          then 'lurigancho'
+        else resolve_lima_district(om.district, true)
+      end as district_key
+    from order_master om
+    join stores s on s.id = om.store_id
+    where s.org_id = p_org_id
+      and om.coverage = 'lima'
+  ), counted as (
+    select r.district_key, count(*)::bigint as order_count
+    from resolved r
+    where r.district_key is not null
+    group by r.district_key
+  )
+  select
+    c.district_key,
+    case c.district_key
+      when 'ancon' then 'Ancón'
+      when 'brena' then 'Breña'
+      when 'carmen de la legua reynoso' then 'Carmen de la Legua Reynoso'
+      when 'el agustino' then 'El Agustino'
+      when 'jesus maria' then 'Jesús María'
+      when 'la molina' then 'La Molina'
+      when 'la perla' then 'La Perla'
+      when 'la punta' then 'La Punta'
+      when 'la victoria' then 'La Victoria'
+      when 'los olivos' then 'Los Olivos'
+      when 'lurin' then 'Lurín'
+      when 'magdalena del mar' then 'Magdalena del Mar'
+      when 'mi peru' then 'Mi Perú'
+      when 'pachacamac' then 'Pachacámac'
+      when 'rimac' then 'Rímac'
+      when 'san juan de lurigancho' then 'San Juan de Lurigancho'
+      when 'san juan de miraflores' then 'San Juan de Miraflores'
+      when 'san martin de porres' then 'San Martín de Porres'
+      when 'santa maria del mar' then 'Santa María del Mar'
+      when 'santiago de surco' then 'Santiago de Surco'
+      when 'villa maria del triunfo' then 'Villa María del Triunfo'
+      else initcap(c.district_key)
+    end as district,
+    p.province,
+    p.department,
+    c.order_count
+  from counted c
+  join peru_districts p on p.district_key = c.district_key
+  order by p.district;
+$$;
+
+comment on function courier_lima_districts(uuid) is
+  'Distritos canónicos presentes en pedidos coverage=lima de una organización, con alias resueltos y frecuencia histórica.';
+
+revoke all on function courier_lima_districts(uuid) from public, anon, authenticated;
+grant execute on function courier_lima_districts(uuid) to service_role;
+
+-- ---- 0136 ----
+-- ============================================================================
+-- 0136_courier_single_delivery_rejection_rate.sql
+-- Grupo GF Courier cobra exactamente el mismo importe distrital cuando una
+-- parada termina entregada o rechazada por el cliente. Conservamos la columna
+-- rejection_amount por compatibilidad, pero deja de ser una tarifa editable.
+-- ============================================================================
+
+update logistics_district_tariffs
+set rejection_amount = delivery_amount
+where rejection_amount is distinct from delivery_amount;
+
+alter table logistics_district_tariffs
+  drop constraint if exists logistics_tariffs_same_delivery_rejection_amount;
+
+alter table logistics_district_tariffs
+  add constraint logistics_tariffs_same_delivery_rejection_amount
+  check (rejection_amount = delivery_amount);
+
+comment on column logistics_district_tariffs.rejection_amount is
+  'Copia técnica de delivery_amount: entrega y rechazo cobran la misma tarifa distrital.';
+
+-- ---- 0137 ----
+-- ============================================================================
+-- 0137_courier_district_availability.sql
+-- Pausas temporales de cobertura para Grupo GF Courier.
+--
+-- La disponibilidad no se mezcla con la tarifa: poner S/0 nunca significa
+-- "pausado". Cada cambio es un evento append-only para conservar quién tomó la
+-- decisión, el motivo y la fecha opcional de reactivación automática.
+-- ============================================================================
+
+create table if not exists logistics_district_availability_events (
+  id                    uuid primary key default gen_random_uuid(),
+  provider_id           uuid not null references logistics_providers(id) on delete cascade,
+  agreement_id          uuid references logistics_service_agreements(id) on delete cascade,
+  district_key          text not null references peru_districts(district_key) on delete restrict,
+  action                text not null check (action in ('paused', 'reactivated')),
+  reason                text,
+  paused_until          date,
+  created_by            uuid references auth.users(id) on delete set null,
+  created_at            timestamptz not null default now(),
+  check (
+    (action = 'paused' and length(trim(coalesce(reason, ''))) >= 4)
+    or (action = 'reactivated' and paused_until is null)
+  )
+);
+
+create index if not exists logistics_district_availability_latest_idx
+  on logistics_district_availability_events(
+    provider_id,
+    coalesce(agreement_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    district_key,
+    created_at desc,
+    id desc
+  );
+
+alter table logistics_district_availability_events enable row level security;
+
+drop policy if exists logistics_district_availability_select
+  on logistics_district_availability_events;
+create policy logistics_district_availability_select
+  on logistics_district_availability_events
+  for select to authenticated using (
+    provider_id in (
+      select id from logistics_providers where org_id in (select auth_org_ids())
+    )
+    or agreement_id in (
+      select id from logistics_service_agreements where client_org_id in (select auth_org_ids())
+    )
+  );
+
+grant select on logistics_district_availability_events to authenticated;
+grant all privileges on logistics_district_availability_events to service_role;
+
+create or replace function prevent_logistics_availability_event_mutation()
+returns trigger language plpgsql as $$
+begin
+  raise exception 'La disponibilidad logística es append-only: registra un evento nuevo.';
+end;
+$$;
+
+drop trigger if exists logistics_district_availability_immutable
+  on logistics_district_availability_events;
+create trigger logistics_district_availability_immutable
+  before update or delete on logistics_district_availability_events
+  for each row execute function prevent_logistics_availability_event_mutation();
+
+comment on table logistics_district_availability_events is
+  'Historial inmutable de pausas y reactivaciones por distrito y ámbito contractual.';
+
+-- Punto único para que la futura asignación logística falle cerrada cuando un
+-- distrito esté pausado. Una pausa general gana sobre cualquier tienda.
+create or replace function courier_district_is_available(
+  p_provider_id uuid,
+  p_agreement_id uuid,
+  p_district_key text,
+  p_day date default null
+)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_general logistics_district_availability_events%rowtype;
+  v_agreement logistics_district_availability_events%rowtype;
+  v_day date := coalesce(p_day, (now() at time zone 'America/Lima')::date);
+begin
+  select e.* into v_general
+  from logistics_district_availability_events e
+  where e.provider_id = p_provider_id
+    and e.agreement_id is null
+    and e.district_key = p_district_key
+  order by e.created_at desc, e.id desc
+  limit 1;
+
+  if v_general.action = 'paused'
+     and (v_general.paused_until is null or v_general.paused_until >= v_day) then
+    return false;
+  end if;
+
+  if p_agreement_id is not null then
+    select e.* into v_agreement
+    from logistics_district_availability_events e
+    where e.provider_id = p_provider_id
+      and e.agreement_id = p_agreement_id
+      and e.district_key = p_district_key
+    order by e.created_at desc, e.id desc
+    limit 1;
+
+    if v_agreement.action = 'paused'
+       and (v_agreement.paused_until is null or v_agreement.paused_until >= v_day) then
+      return false;
+    end if;
+  end if;
+
+  return true;
+end;
+$$;
+
+comment on function courier_district_is_available(uuid, uuid, text, date) is
+  'Disponibilidad efectiva para una nueva asignación; la pausa general prevalece sobre la contractual.';
+
+revoke all on function courier_district_is_available(uuid, uuid, text, date)
+  from public, anon, authenticated;
+grant execute on function courier_district_is_available(uuid, uuid, text, date)
+  to service_role;
+
+-- ---- 0138 ----
+-- ============================================================================
+-- 0138_group_gf_logistics_requests.sql
+-- Admisión de pedidos Kapta desde la bandeja de Grupo GF Courier (MOM §29.2).
+--
+-- La solicitud es distinta del pedido comercial y de la salida física. Congela
+-- el contrato y la tarifa aceptados, enlaza el único QR de la caja y conserva
+-- una bitácora append-only. Una restricción parcial impide que dos operadores
+-- acepten en paralelo el mismo pedido para Grupo GF.
+-- ============================================================================
+
+create table if not exists logistics_requests (
+  id                    uuid primary key default gen_random_uuid(),
+  provider_id           uuid not null references logistics_providers(id) on delete restrict,
+  agreement_id          uuid not null references logistics_service_agreements(id) on delete restrict,
+  store_id              uuid not null references stores(id) on delete restrict,
+  order_id              uuid not null references orders(id) on delete restrict,
+  shipment_id           uuid references shipments(id) on delete restrict,
+  source                text not null default 'kapta'
+    check (source in ('kapta', 'shopify', 'api', 'excel')),
+  external_reference    text,
+  idempotency_key       text not null,
+  status                text not null default 'accepting'
+    check (status in (
+      'accepting', 'accepted', 'observed', 'cancelled',
+      'scheduled', 'in_route', 'completed'
+    )),
+  district_key          text not null references peru_districts(district_key) on delete restrict,
+  tariff_id             uuid not null references logistics_district_tariffs(id) on delete restrict,
+  tariff_amount         numeric(12, 2) not null check (tariff_amount >= 0),
+  currency              text not null default 'PEN',
+  includes_igv          boolean not null default true,
+  scheduled_for         date not null,
+  requested_by          uuid references auth.users(id) on delete set null,
+  requested_at          timestamptz not null default now(),
+  accepted_by           uuid references auth.users(id) on delete set null,
+  accepted_at           timestamptz,
+  observation           text,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
+  check (length(trim(idempotency_key)) > 0),
+  check (length(trim(currency)) > 0)
+);
+
+create unique index if not exists logistics_requests_idempotency_uniq
+  on logistics_requests(idempotency_key);
+create unique index if not exists logistics_requests_active_order_uniq
+  on logistics_requests(provider_id, order_id)
+  where status <> 'cancelled';
+create unique index if not exists logistics_requests_shipment_uniq
+  on logistics_requests(shipment_id)
+  where shipment_id is not null;
+create index if not exists logistics_requests_provider_status_idx
+  on logistics_requests(provider_id, status, scheduled_for, created_at desc);
+create index if not exists logistics_requests_store_idx
+  on logistics_requests(store_id, created_at desc);
+
+drop trigger if exists logistics_requests_touch on logistics_requests;
+create trigger logistics_requests_touch before update on logistics_requests
+  for each row execute function public.touch_updated_at();
+
+create table if not exists logistics_request_events (
+  id                    uuid primary key default gen_random_uuid(),
+  request_id            uuid not null references logistics_requests(id) on delete cascade,
+  kind                  text not null,
+  status                text,
+  actor                 uuid references auth.users(id) on delete set null,
+  note                  text,
+  payload               jsonb not null default '{}'::jsonb,
+  occurred_at           timestamptz not null default now(),
+  created_at            timestamptz not null default now(),
+  check (length(trim(kind)) > 0)
+);
+
+create index if not exists logistics_request_events_request_idx
+  on logistics_request_events(request_id, occurred_at desc);
+
+comment on table logistics_requests is
+  'Solicitud logística separada del pedido Shopify. Congela contrato, tarifa y salida aceptados por Grupo GF Courier.';
+comment on column logistics_requests.shipment_id is
+  'Salida física de Kapta. Si ya existía una salida por definir, conserva su fila y QR.';
+comment on table logistics_request_events is
+  'Bitácora append-only de la solicitud logística; los hechos no se corrigen destruyendo historial.';
+
+alter table logistics_requests enable row level security;
+alter table logistics_request_events enable row level security;
+
+drop policy if exists logistics_requests_select on logistics_requests;
+create policy logistics_requests_select on logistics_requests
+  for select to authenticated using (
+    store_id in (select auth_store_ids())
+    or provider_id in (
+      select id from logistics_providers where org_id in (select auth_org_ids())
+    )
+  );
+drop policy if exists logistics_requests_write on logistics_requests;
+create policy logistics_requests_write on logistics_requests
+  for all to authenticated
+  using (provider_id in (
+    select id from logistics_providers where org_id in (select auth_admin_org_ids())
+  ))
+  with check (provider_id in (
+    select id from logistics_providers where org_id in (select auth_admin_org_ids())
+  ));
+
+drop policy if exists logistics_request_events_select on logistics_request_events;
+create policy logistics_request_events_select on logistics_request_events
+  for select to authenticated using (
+    request_id in (select id from logistics_requests)
+  );
+drop policy if exists logistics_request_events_insert on logistics_request_events;
+create policy logistics_request_events_insert on logistics_request_events
+  for insert to authenticated with check (
+    request_id in (
+      select lr.id
+        from logistics_requests lr
+        join logistics_providers lp on lp.id = lr.provider_id
+       where lp.org_id in (select auth_admin_org_ids())
+    )
+  );
+
+grant select, insert, update on logistics_requests to authenticated;
+grant select, insert on logistics_request_events to authenticated;
+grant all privileges on logistics_requests, logistics_request_events to service_role;
+
+-- ---- 0139 ----
+-- ============================================================================
+-- 0139_ad_products.sql
+-- Qué producto vende cada anuncio de Meta.
+--
+-- EL PROBLEMA. El filtro «Producto» de la cola de leads saca el producto del
+-- link que el cliente trae en su primer mensaje. Funciona para quien llegó
+-- desde la ficha, pero el 82 % de los leads sin producto (1.061 de 1.294)
+-- vienen de un anuncio: tocan el anuncio, se les abre WhatsApp con un mensaje
+-- genérico y nunca pasan por la ficha. De ellos solo tenemos `ad_id`.
+--
+-- El titular del anuncio NO sirve como producto. Cuatro anuncios de Beewax
+-- llegan con tres titulares distintos —«✨ Brillo Natural para tu Madera»,
+-- «beewax 1107 fk (6).mp4», «beewax 1107 fk (5).mp4»—, dos de ellos nombres de
+-- archivo de video, y uno de los anuncios trae «{{product.name}}» sin
+-- renderizar. Agrupar por titular parte un producto en tres baldes.
+--
+-- LO QUE ESTA TABLA ES, Y LO QUE NO ES. Es una DECLARACIÓN: alguien dice qué
+-- vende un anuncio y firma. `evidence_*` guarda lo que el histórico sugiere
+-- —qué compraron los leads de ese anuncio— pero una sugerencia NO etiqueta a
+-- nadie: mientras `confirmed_at` sea null, sus leads siguen en «Sin producto».
+--
+-- Por qué esa frontera. La evidencia histórica es fuerte en unos anuncios y
+-- floja en otros: hay uno con 42 % de producto dominante. Etiquetar con eso
+-- manda a la asesora con el argumentario equivocado más de la mitad de las
+-- veces, y peor: sin saber que está adivinando. Una cola que dice «no sé» es
+-- trabajable; una que miente con confianza, no.
+--
+-- La clave es el HANDLE de Shopify, el mismo que sale del link, para que un
+-- lead de anuncio y uno de ficha del mismo producto caigan en el MISMO balde.
+-- ============================================================================
+
+create table if not exists ad_products (
+  id                uuid primary key default gen_random_uuid(),
+  store_id          uuid not null references stores(id) on delete cascade,
+  -- El id del anuncio en Meta, tal como llega en `leads.ad_id`.
+  ad_id             text not null,
+  -- El handle de Shopify (`beewax-cera-de-abeja-natural`). Null mientras nadie
+  -- lo declare: el anuncio existe en la lista, sin producto asignado.
+  product_handle    text,
+  -- Último titular visto, solo para reconocer el anuncio en la pantalla de
+  -- asignación. No se usa para agrupar NADA.
+  ad_headline       text,
+  -- Lo que sugiere el histórico: el TÍTULO del producto más comprado por los
+  -- leads de este anuncio, su porcentaje y sobre cuántas líneas se midió.
+  --
+  -- Es un título, no un handle, y esa diferencia es deliberada. Los pedidos
+  -- guardan «Beewax™ - Cera de abeja natural…» y el link guarda
+  -- `beewax-cera-de-abeja-natural`: emparejarlos sería adivinar, que es
+  -- justamente lo que esta tabla existe para no hacer. El título se le MUESTRA
+  -- a quien firma; el handle lo elige esa persona.
+  suggested_label   text,
+  evidence_pct      smallint check (evidence_pct between 0 and 100),
+  evidence_sample   integer check (evidence_sample >= 0),
+  -- La firma. Sin ella la fila es una sugerencia y no etiqueta a ningún lead.
+  confirmed_by      uuid references auth.users(id) on delete set null,
+  confirmed_at      timestamptz,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
+  check (length(trim(ad_id)) > 0),
+  -- Confirmar es decir QUÉ producto vende, no solo que alguien miró. Una fila
+  -- confirmada sin handle sería un «sí» que no dice nada y volvería a dejar a
+  -- sus leads sin producto sin que nadie entienda por qué.
+  check (confirmed_at is null or coalesce(trim(product_handle), '') <> '')
+);
+
+create unique index if not exists ad_products_store_ad_uniq
+  on ad_products(store_id, ad_id);
+-- La consulta de la cola: los anuncios CONFIRMADOS de estas tiendas.
+create index if not exists ad_products_confirmed_idx
+  on ad_products(store_id, ad_id)
+  where confirmed_at is not null;
+
+comment on table ad_products is
+  'Qué producto vende cada anuncio de Meta. Solo las filas con confirmed_at etiquetan leads; el resto son sugerencias del histórico.';
+comment on column ad_products.suggested_label is
+  'Titulo del producto mas comprado por los leads de este anuncio. Es una pista para quien firma, no un handle: no etiqueta a nadie.';
+comment on column ad_products.evidence_pct is
+  'Qué tan dominante es la sugerencia (0-100). Se muestra al confirmar para que quien firma sepa si está firmando un 98 % o un 42 %.';
+
+drop trigger if exists ad_products_touch on ad_products;
+create trigger ad_products_touch before update on ad_products
+  for each row execute function public.touch_updated_at();
+
+alter table ad_products enable row level security;
+
+drop policy if exists ad_products_select on ad_products;
+create policy ad_products_select on ad_products
+  for select to authenticated using (store_id in (select auth_store_ids()));
+
+-- Declarar qué vende un anuncio cambia cómo se lee la cola entera de esa
+-- tienda, así que lo firma quien administra la organización, no cualquiera que
+-- pase por la pantalla.
+drop policy if exists ad_products_write on ad_products;
+create policy ad_products_write on ad_products
+  for all to authenticated
+  using (store_id in (select id from stores where org_id in (select auth_admin_org_ids())))
+  with check (store_id in (select id from stores where org_id in (select auth_admin_org_ids())));
+
+-- ---- 0140 ----
+-- ============================================================================
+-- 0140_lead_last_product.sql
+-- Qué producto está consultando el lead AHORA, no el primer día.
+--
+-- EL PROBLEMA. El filtro «Producto» de la cola sacaba el producto de
+-- `first_inbound_text`, y ese campo es de escritura única a propósito: es el
+-- gancho de apertura para la asesora —«qué escribió primero»— y congelarlo
+-- protege contra que una página que no lo puede leer lo borre.
+--
+-- Para la pregunta «¿qué escribió primero?» está bien. Para «¿qué quiere?» no,
+-- por tres razones distintas y todas medidas:
+--
+--   1. UN LEAD POR TELÉFONO, PARA SIEMPRE. El upsert empareja por
+--      (store_id, phone), así que quien vuelve meses después por otro producto
+--      es la MISMA fila. En la base hay 2.596 leads que volvieron pasados 7
+--      días o más, 1.157 de ellos ya compradores. Y `nextLeadState` los
+--      reabre a propósito cuando traen un carrito nuevo: «a repeat customer
+--      working a NEW purchase». Volvían a la cola con el producto de la
+--      primera vez pegado.
+--   2. SOLO SE MIRABA EL PRIMER MENSAJE. La señal salía de
+--      `msgs.find(dir === "inbound")`. 1.301 leads abren con un saludo corto
+--      sin link y mandan la ficha después: para ellos no había producto.
+--   3. EL RECORTE A 240 CARACTERES ERA NUESTRO. 494 mensajes cortados, 413 con
+--      link, y el corte caía a veces dentro de la URL. De ahí salían handles
+--      rotos como `…-60-softge` o `keratin`, que luego había que replegar.
+--
+-- Esta columna guarda el handle del ÚLTIMO producto enlazado en la
+-- conversación, leído del mensaje COMPLETO. No es de escritura única: cambia
+-- cada vez que la clienta enlaza otra cosa, que es justamente el punto.
+-- ============================================================================
+
+alter table leads add column if not exists last_product_handle text;
+
+comment on column leads.last_product_handle is
+  'Handle del ultimo producto que el lead enlazo en la conversacion. Se actualiza en cada sync: responde que quiere AHORA, no que escribio el primer dia. Ver first_inbound_text para el gancho de apertura, que si es de escritura unica.';
+
+-- El filtro agrupa por este valor, así que la cola lo pide por tienda.
+create index if not exists leads_store_last_product_idx
+  on leads(store_id, last_product_handle)
+  where last_product_handle is not null;
+
+-- ---- 0141 ----
+-- El N° de pedido que se quedó sin copiar en los envíos ya vinculados.
+--
+-- QUÉ PASA. `shipments.order_name` es una COPIA denormalizada de `orders.name`.
+-- Hay 601 envíos donde el enlace existe —`matched`, con `order_id` apuntando a
+-- un pedido real— pero la copia quedó vacía. En pantalla se ve contradictorio:
+-- el cajón lista los productos del pedido y a la vez el encabezado dice
+-- "Pedido —".
+--
+-- LO CARO NO ES LA PANTALLA. De esos 601, **189 están anulados y no se pueden
+-- reprogramar**: la guía Fenix de reemplazo se autogenera a partir del número de
+-- pedido, y sin número el botón se queda bloqueado. Cada uno exige que alguien
+-- entre al cajón, pulse "Cambiar", busque el pedido a mano y lo vuelva a
+-- enlazar — para acabar escribiendo el mismo nombre que ya está en `orders`.
+--
+-- POR QUÉ SE PUEDE ARREGLAR SIN RIESGO. No se inventa nada ni se decide nada: el
+-- enlace ya está hecho y `orders.name` es la fuente de verdad de ese campo. Esto
+-- solo termina una copia a medias.
+--
+-- ACOTADO A PROPÓSITO. Solo toca filas donde la copia está VACÍA y el pedido
+-- enlazado SÍ tiene nombre. Nunca pisa un valor existente —una copia distinta al
+-- pedido enlazado sería otro problema, y taparlo acá lo escondería— y nunca
+-- escribe null sobre null.
+--
+-- Y NO ARREGLA LA CAUSA, que sigue sin identificarse: los 601 están repartidos
+-- entre varios `match_method`, la mayoría `manual`, y todos los escritores de
+-- ese campo que se revisaron sí lo escriben. Por eso el código además resuelve
+-- el nombre leyendo el pedido enlazado cuando la copia falta
+-- (`effectiveOrderName`): así un envío no vuelve a quedar bloqueado aunque la
+-- copia se escriba vacía otra vez.
+
+update shipments s
+   set order_name = o.name
+  from orders o
+ where o.id = s.order_id
+   and s.order_name is null
+   and o.name is not null;
+
+-- ---- 0142 ----
+-- ============================================================================
+-- 0142_ad_product_declarations.sql
+-- Un anuncio puede cambiar de producto, y la declaración tiene fecha.
+--
+-- EL CASO REAL. El anuncio 120248301757360056 de Kenku aparece con dos
+-- titulares distintos —«Tu café favorito, ahora saludable ☕🌿» y
+-- «GC WIN ICE COFFEE 2007 (11).mp4»— y sus leads llegan escribiendo «Quiero
+-- más información del Gel de Limpieza de Lengua». El creativo del café se
+-- reutilizó para vender otra cosa, que es una práctica normal: un creativo que
+-- funciona no se tira.
+--
+-- Con una sola declaración por anuncio, ese anuncio no tiene respuesta buena.
+-- Declararlo «café» etiqueta mal a quien preguntó por el gel; declararlo «gel»
+-- etiqueta mal a los que entraron cuando sí era café. Y lo hace HACIA ATRÁS,
+-- reescribiendo el pasado de leads ya trabajados, sin que nada avise.
+--
+-- Así que la declaración deja de ser un hecho eterno y pasa a tener fecha: este
+-- anuncio vendió ESTO DESDE tal día. El lead toma la que estaba vigente el día
+-- que entró, no la última que alguien escribió.
+--
+-- LA PRIMERA DECLARACIÓN VALE DESDE SIEMPRE (`-infinity`). Es lo correcto y
+-- además conserva lo que ya había: mientras nadie diga que el anuncio cambió,
+-- lo que se sabe de él vale para todos sus leads. Poner fecha es la excepción,
+-- no el trámite de cada día.
+-- ============================================================================
+
+create table if not exists ad_product_declarations (
+  id                uuid primary key default gen_random_uuid(),
+  store_id          uuid not null references stores(id) on delete cascade,
+  ad_id             text not null,
+  -- Una declaración SIEMPRE dice qué producto. No hay «firmado sin decir qué»:
+  -- eso era un sí que no significaba nada, y aquí ni siquiera cabe.
+  product_handle    text not null,
+  -- Desde cuándo vale. `-infinity` = desde siempre, que es la primera.
+  valid_from        timestamptz not null default '-infinity',
+  -- Por qué se abrió un periodo nuevo («se reutilizó el creativo del café»).
+  -- Sin esto, dentro de tres meses nadie sabe por qué un anuncio tiene dos.
+  note              text,
+  declared_by       uuid references auth.users(id) on delete set null,
+  declared_at       timestamptz not null default now(),
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
+  check (length(trim(ad_id)) > 0),
+  check (length(trim(product_handle)) > 0)
+);
+
+-- Dos declaraciones del mismo anuncio no pueden empezar el mismo instante: no
+-- habría forma de decir cuál gana, y el desempate silencioso es peor que el
+-- error.
+create unique index if not exists ad_product_declarations_periodo_uniq
+  on ad_product_declarations(store_id, ad_id, valid_from);
+-- La consulta de la cola: los periodos de estos anuncios, del más nuevo al más
+-- viejo, para quedarse con el primero que empiece antes de que el lead entrara.
+create index if not exists ad_product_declarations_lookup_idx
+  on ad_product_declarations(store_id, ad_id, valid_from desc);
+
+comment on table ad_product_declarations is
+  'Que producto vendio cada anuncio y DESDE CUANDO. Un anuncio reutilizado tiene varias filas; el lead toma la vigente el dia que entro.';
+comment on column ad_product_declarations.valid_from is
+  '-infinity = desde siempre (la primera declaracion). Una fecha real abre un periodo nuevo sin reescribir el pasado.';
+
+drop trigger if exists ad_product_declarations_touch on ad_product_declarations;
+create trigger ad_product_declarations_touch before update on ad_product_declarations
+  for each row execute function public.touch_updated_at();
+
+alter table ad_product_declarations enable row level security;
+
+drop policy if exists ad_product_declarations_select on ad_product_declarations;
+create policy ad_product_declarations_select on ad_product_declarations
+  for select to authenticated using (store_id in (select auth_store_ids()));
+
+drop policy if exists ad_product_declarations_write on ad_product_declarations;
+create policy ad_product_declarations_write on ad_product_declarations
+  for all to authenticated
+  using (store_id in (select id from stores where org_id in (select auth_admin_org_ids())))
+  with check (store_id in (select id from stores where org_id in (select auth_admin_org_ids())));
+
+-- Lo ya declarado se muda con `valid_from = -infinity`: nadie dijo que esos
+-- anuncios hubieran cambiado de producto, así que su declaración vale para
+-- todos sus leads, igual que antes de esta migración.
+insert into ad_product_declarations (store_id, ad_id, product_handle, valid_from, declared_by, declared_at)
+select store_id, ad_id, trim(product_handle), '-infinity', confirmed_by, coalesce(confirmed_at, now())
+  from ad_products
+ where confirmed_at is not null and coalesce(trim(product_handle), '') <> ''
+on conflict (store_id, ad_id, valid_from) do nothing;
+
+-- Y se van de `ad_products`, que se queda con lo que siempre fue suyo: el
+-- titular del anuncio y la SUGERENCIA del histórico. Dejarlas duplicadas en las
+-- dos tablas era garantizar que un día dijeran cosas distintas — el fallo que
+-- este repo repite.
+alter table ad_products drop column if exists product_handle;
+alter table ad_products drop column if exists confirmed_by;
+alter table ad_products drop column if exists confirmed_at;
+drop index if exists ad_products_confirmed_idx;
+
+comment on table ad_products is
+  'Lo que se sabe de cada anuncio de Meta: su titular y la sugerencia del historico. Que producto vende, y desde cuando, vive en ad_product_declarations.';
+
+-- ---- 0143 ----
+-- ============================================================================
+-- 0143_lead_cart_product.sql
+-- El producto del CARRITO, por handle y no por título.
+--
+-- EL PROBLEMA. Los leads que llegan con carrito o navegación abandonada caen en
+-- «Sin producto» aunque sean los que más claro tienen qué quieren. Lo que
+-- guardábamos de ellos era `cart_summary`, un TÍTULO:
+--
+--   carrito:  «Nails Repairing – Sérum Tea Tree Ginger para Uñas (30ml)»
+--   link:     `nails-repairing-suero-reparador-de-unas`
+--
+-- El mismo producto escrito de dos maneras. Emparejar título con handle es
+-- adivinar, y adivinar es exactamente lo que este filtro existe para no hacer:
+-- juntar mal dos productos manda a la asesora con el argumentario equivocado.
+--
+-- Así que se pide el handle a quien lo tiene. Shopify lo da en la línea del
+-- borrador (`lineItems.product.handle`) y es el MISMO identificador que trae el
+-- link, así que el lead del carrito y el de la ficha caen en el mismo balde sin
+-- que nadie tenga que emparejar textos.
+--
+-- POR QUÉ COLUMNA PROPIA Y NO `last_product_handle`. Son dos escritores
+-- distintos —la sincronización de conversaciones y la de borradores— y no
+-- llegan en un orden garantizado. Compartiendo columna, la que corriera después
+-- pisaría a la otra: un carrito viejo borraría el link que el cliente mandó
+-- esta mañana. Separadas, el orden lo decide la pantalla y está escrito en un
+-- solo sitio.
+-- ============================================================================
+
+alter table leads add column if not exists cart_product_handle text;
+
+comment on column leads.cart_product_handle is
+  'Handle del producto del carrito o de la navegacion abandonada. Es el MISMO identificador que trae el link /products/<handle>, para que los dos leads caigan en el mismo balde. cart_summary sigue siendo el titulo legible para la asesora.';
+
+create index if not exists leads_store_cart_product_idx
+  on leads(store_id, cart_product_handle)
+  where cart_product_handle is not null;
+
+-- ---- 0144 ----
+-- lead_experiments — a qué brazo de qué experimento pertenece un lead.
+--
+-- POR QUÉ EXISTE. El peso de `frio` en la cola es 1 (Kenku) y 0 (Aurela): el
+-- último de la escala. Está mal, y NO se puede corregir con otra consulta al
+-- histórico, porque el histórico está contaminado por construcción.
+--
+-- El segmento se calcula con el estado de HOY. Una llamada que funciona hace que
+-- el cliente dé su distrito o arme un carrito, con lo cual el lead deja de ser
+-- frío. Medido: de 1.259 leads sin ninguna señal al entrar, llamados dentro de
+-- la hora, hoy quedan etiquetados frío solo 101 (8%) — y esos cierran 4,0%. Los
+-- otros 1.158 se fueron a interés, conversó y carrito. O sea que "la tasa del
+-- frío" mide el residuo donde la llamada NO funcionó. Es una tautología.
+--
+-- Reconstruyendo el segmento con lo único que una llamada no puede reescribir
+-- —`source='cod_cart'`, draft orders anteriores a la llamada, y
+-- `first_inbound_text`, que se escribe una sola vez—, un lead sin señal llamado
+-- dentro de la hora cierra 19,4% (Kenku) y 5,9% (Aurela), contra 1,7% y 0,8%
+-- pasadas seis horas.
+--
+-- Pero eso sigue sin ser causal: quien se llama en veinte minutos es quien
+-- estaba disponible, y estar disponible correlaciona con comprar. Asignar AL
+-- AZAR antes de conocer el resultado es lo único que rompe esa correlación, y
+-- para eso hace falta guardar la asignación.
+--
+-- APPEND-ONLY, y aquí es lo esencial del método, no una convención. Si el brazo
+-- se pudiera reescribir, cualquiera —o cualquier bug— podría moverlo después de
+-- ver el resultado, y el experimento dejaría de probar nada sin dejar rastro. La
+-- PK (lead_id, experiment) remata: la primera asignación es la definitiva y un
+-- segundo intento choca en vez de sobrescribir.
+--
+-- LA PK ES COMPUESTA para que un lead pueda entrar en experimentos distintos más
+-- adelante. Con la PK solo en `lead_id`, el segundo experimento chocaría contra
+-- las filas del primero y quedaría sin asignar en silencio.
+
+create table if not exists lead_experiments (
+  lead_id     uuid not null references leads(id) on delete cascade,
+  -- Qué experimento. Va en la fila y no implícito en la tabla: las filas viejas
+  -- tienen que seguir diciendo a cuál pertenecen cuando haya un segundo.
+  experiment  text not null,
+  arm         text not null check (arm in ('tratamiento','control')),
+  -- La tienda, copiada: el análisis se parte por tienda (Kenku cierra 19,4% y
+  -- Aurela 5,9% en el mismo balde) y sin esto habría que unir con `leads`, que
+  -- es mutable. Y la RLS necesita la columna aquí.
+  store_id    uuid not null references stores(id) on delete cascade,
+  -- Cuándo se asignó. Es el instante que define "antes de saber el resultado":
+  -- si alguna fila estuviera fechada después de su primera llamada, esa fila
+  -- habría que descartarla del análisis. La consulta de abajo lo comprueba.
+  assigned_at timestamptz not null default now(),
+  primary key (lead_id, experiment)
+);
+
+-- El análisis pregunta siempre lo mismo: los leads de un experimento, por brazo,
+-- en un rango.
+create index if not exists lead_experiments_exp_arm_idx
+  on lead_experiments (experiment, arm, assigned_at desc);
+-- Y la cola pregunta lo contrario: el brazo de los leads que está pintando.
+create index if not exists lead_experiments_store_idx
+  on lead_experiments (store_id, experiment);
+
+alter table lead_experiments enable row level security;
+
+drop policy if exists lead_experiments_select on lead_experiments;
+create policy lead_experiments_select on lead_experiments for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+-- REVOKE ANTES DE GRANT, y no es ceremonia. Supabase trae
+-- `alter default privileges ... grant all on tables to anon, authenticated,
+-- service_role`, así que la tabla NACE con update, delete y truncate para todos;
+-- un `grant select` posterior SUMA y no quita nada. `order_sales` (0132) lleva
+-- así desde que se creó, prometiendo en su cabecera dos capas de defensa cuando
+-- solo tenía una (ver 0145).
+--
+-- Y no es cosmético: el trigger de abajo es de FILA sobre update/delete, y
+-- TRUNCATE no dispara triggers de fila. Con el permiso puesto, la garantía de
+-- "esto no se puede reescribir" se saltaba entera con un truncate.
+revoke all on lead_experiments from anon, authenticated, service_role;
+grant select on lead_experiments to authenticated;
+grant select, insert on lead_experiments to service_role;
+
+drop trigger if exists lead_experiments_append_only on lead_experiments;
+create trigger lead_experiments_append_only before update or delete on lead_experiments
+  for each row execute function public.reject_mutation();
+
+-- ----------------------------------------------------------------------------
+-- Lectura del experimento
+-- ----------------------------------------------------------------------------
+-- Va en una función y no en un cuaderno suelto por la misma razón que
+-- `backfill_order_sales`: lo que se prueba tiene que ser lo que corre. Aquí
+-- además importa más, porque una consulta de análisis escrita a mano cada vez es
+-- una invitación a mirar los cortes hasta que salga el resultado que uno quería.
+--
+-- INTENCIÓN DE TRATAR. Se agrupa por el brazo ASIGNADO, no por quién acabó
+-- llamándose dentro de la hora. Agrupar por cumplimiento volvería a meter la
+-- selección: los tratados que sí se alcanzaron serían otra vez "los
+-- disponibles", que es exactamente el sesgo del que huimos.
+--
+-- Por eso se devuelve `pct_en_1h` de cada brazo: no es el resultado, es el
+-- CUMPLIMIENTO. Si el tratamiento no llega a llamarse mucho más rápido que el
+-- control, el experimento no llegó a administrarse y la diferencia de
+-- conversión no significa nada — hay que arreglar el empuje antes que leer nada.
+--
+-- `maduracion_dias` (7 por defecto) deja fuera los leads demasiado nuevos para
+-- haber cerrado. Sin eso, los últimos días entran con conversión artificialmente
+-- baja en LOS DOS brazos y diluyen la diferencia.
+create or replace function public.read_lead_experiment(
+  p_experiment text,
+  p_maduracion_dias integer default 7
+)
+returns table (
+  tienda text,
+  arm text,
+  leads bigint,
+  llamados bigint,
+  en_1h bigint,
+  pct_en_1h numeric,
+  ventas bigint,
+  conversion numeric
+)
+language sql
+stable
+security definer
+set search_path = public
+as $fn$
+  with fc as (
+    select lead_id, min(occurred_at) as first_call
+    from lead_calls group by 1
+  ),
+  w as (select distinct lead_id from order_sales where lead_id is not null)
+  select
+    s.name as tienda,
+    e.arm,
+    count(*) as leads,
+    count(f.first_call) as llamados,
+    count(*) filter (where f.first_call - l.first_seen_at <= interval '1 hour') as en_1h,
+    round(100.0 * count(*) filter (where f.first_call - l.first_seen_at <= interval '1 hour')
+          / nullif(count(*), 0), 1) as pct_en_1h,
+    count(w.lead_id) as ventas,
+    round(100.0 * count(w.lead_id) / nullif(count(*), 0), 1) as conversion
+  from lead_experiments e
+  join leads l on l.id = e.lead_id
+  join stores s on s.id = e.store_id
+  left join fc f on f.lead_id = e.lead_id
+  left join w on w.lead_id = e.lead_id
+  where e.experiment = p_experiment
+    -- Solo filas asignadas ANTES de la primera llamada. Con la tabla
+    -- append-only y la asignación en el ingreso esto debería ser siempre cierto;
+    -- comprobarlo aquí hace que una regresión futura se note como leads que
+    -- faltan, en vez de contaminar el resultado en silencio.
+    and (f.first_call is null or e.assigned_at <= f.first_call)
+    and l.first_seen_at <= now() - make_interval(days => p_maduracion_dias)
+  group by 1, 2
+  order by 1, 2;
+$fn$;
+
+grant execute on function public.read_lead_experiment(text, integer) to authenticated, service_role;
+
+-- ---- 0145 ----
+-- Las tablas append-only tenían UPDATE, DELETE y TRUNCATE concedidos.
+--
+-- CÓMO SE VIO. Al aplicar 0144 en producción, los permisos reales de
+-- `lead_experiments` no eran los que concede la migración: salían
+-- DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE para anon,
+-- authenticated y service_role. Lo mismo en `order_sales`. `order_events` (0045)
+-- sí estaba bien, y esa diferencia es la pista: se creó antes de que el proyecto
+-- tuviera la configuración por defecto de Supabase.
+--
+-- POR QUÉ PASA. Supabase trae
+--   alter default privileges in schema public
+--     grant all on tables to anon, authenticated, service_role;
+-- así que toda tabla nueva NACE con todos los permisos. Un `grant select`
+-- posterior no revoca nada — los grants suman. La migración creía estar
+-- restringiendo y solo estaba confirmando algo que ya tenía.
+--
+-- POR QUÉ IMPORTA, y no es solo higiene. La cabecera de 0132 promete dos capas:
+-- "la vía de la API queda cerrada por privilegios y el trigger es defensa en
+-- profundidad". Había una. Y la que faltaba es la única que cubre TRUNCATE: los
+-- triggers `reject_mutation` son de FILA sobre update/delete (tgtype = 27), y
+-- TRUNCATE no dispara triggers de fila. O sea que "de quién es la venta,
+-- decidido una vez y para siempre" se podía borrar entero con un truncate desde
+-- cualquier rol que tuviera el permiso, anon incluido.
+--
+-- El alcance real era menor de lo que suena —PostgREST no expone TRUNCATE, así
+-- que no se llegaba desde la app— pero la garantía que el código afirma tener no
+-- existía, y eso es lo que se arregla.
+--
+-- REVOCAR ES SEGURO POR CONSTRUCCIÓN: lo que se quita ya estaba bloqueado por el
+-- trigger para update y delete, así que ningún camino que funcione hoy puede
+-- depender de ello. Lo único que se pierde es la capacidad de truncar, que es
+-- justamente el agujero.
+--
+-- VA SOBRE LAS SIETE, no solo sobre las dos que estaban mal. En producción hoy
+-- las otras cinco tienen los permisos correctos, pero eso es suerte de
+-- calendario: nacieron antes de que el proyecto tuviera los privilegios por
+-- defecto. Si la base se reconstruyera hoy sobre Supabase, `pickup_key_views`,
+-- `dispatch_events` y compañía nacerían abiertas exactamente igual.
+--
+-- Dejarlo dependiente de la fecha de creación sería un invariante que solo se
+-- cumple por accidente, y encima invisible: no hay nada en sus migraciones que
+-- diga "estas están bien porque son viejas". Aplicándolo a todas, la regla pasa
+-- a ser una que se puede comprobar —y que el test de arriba comprueba— sin
+-- listas de excepciones.
+--
+-- Idempotente: revoke/grant se pueden repetir sin efecto. Las cinco que ya
+-- estaban bien no cambian.
+
+do $$
+declare
+  t text;
+begin
+  foreach t in array array[
+    'order_sales', 'lead_experiments', 'order_events', 'dispatch_events',
+    'pickup_key_views', 'aliclik_webhook_events', 'rider_settlement_line_corrections'
+  ] loop
+    -- `if exists` porque el orden de las migraciones no garantiza que todas
+    -- estén creadas al llegar aquí en una base nueva.
+    if to_regclass('public.' || t) is not null then
+      execute format('revoke all on public.%I from anon, authenticated, service_role', t);
+      execute format('grant select on public.%I to authenticated', t);
+      execute format('grant select, insert on public.%I to service_role', t);
+    end if;
+  end loop;
+end $$;
+
+-- ---- 0146 ----
+-- `read_lead_experiment` contaba los toques de MÁQUINA como llamadas.
+--
+-- CÓMO SE VIO. A las cinco horas de arrancar el experimento, 7 de las 100
+-- asignaciones tenían `assigned_at` POSTERIOR a su "primera llamada", cosa que
+-- el barrido no debería permitir —solo asigna leads en estado `nuevo`—. Al
+-- mirarlos, las siete filas eran `kind='system'` con `new_status` nulo: no eran
+-- llamadas, eran toques automáticos (drip, winback, secuencia de carrito).
+--
+-- EL TAMAÑO DEL PROBLEMA. El 51,3% de `lead_calls` es `kind='system'`. Sobre los
+-- 26.346 leads con alguna fila:
+--   • 8.400 tienen SOLO filas de máquina — nadie los llamó nunca;
+--   • de los 17.946 con toque humano, 4.445 (24,8%) tenían una fila de máquina
+--     ANTES, con 4,7 horas de desfase mediano.
+--
+-- POR QUÉ ROMPE EL EXPERIMENTO, y no solo lo ensucia. `pct_en_1h` no es un
+-- resultado: es la medida de CUMPLIMIENTO, la que dice si el tratamiento llegó a
+-- administrarse. Contando toques automáticos, un lead al que nadie llamó pero al
+-- que le saltó un drip figura como "llamado dentro de la hora" — y eso pasa en
+-- los DOS brazos, así que el cumplimiento saldría alto en ambos y la diferencia
+-- entre ellos se aplanaría. O sea: el indicador que existe para detectar que el
+-- experimento no se administró sería justo el que lo ocultaría.
+--
+-- Y el filtro `assigned_at <= first_call`, que está para descartar asignaciones
+-- hechas conociendo el resultado, descartaba leads cuya única fila previa era una
+-- máquina — leads perfectamente válidos.
+--
+-- LA FRONTERA YA ESTABA DEFINIDA en el código: lib/productivity.ts documenta que
+-- `kind` es exactamente la línea persona/máquina («en 60 días `call`, `message` y
+-- `sale` vienen firmados el 100% de las veces»). Esta función simplemente no la
+-- estaba usando.
+--
+-- Comprobado que las conclusiones que motivaron el experimento NO cambian: con
+-- toques humanos solamente, el cierre dentro de la primera hora sube en todos los
+-- segmentos (carrito 40,7 → 41,2 %, interés 25,8 → 32,9 %, conversó 14,9 → 15,5 %,
+-- frío 8,1 → 8,8 %) y el de +6 h se queda igual. El acantilado es más
+-- pronunciado, no menos; contar máquinas lo hacía parecer más suave.
+
+create or replace function public.read_lead_experiment(
+  p_experiment text,
+  p_maduracion_dias integer default 7
+)
+returns table (
+  tienda text,
+  arm text,
+  leads bigint,
+  llamados bigint,
+  en_1h bigint,
+  pct_en_1h numeric,
+  ventas bigint,
+  conversion numeric
+)
+language sql
+stable
+security definer
+set search_path = public
+as $fn$
+  with fc as (
+    select lead_id, min(occurred_at) as first_call
+    from lead_calls
+    -- SOLO PERSONAS. `system` son drip, winback y secuencias de carrito: contarlas
+    -- convertiría el indicador de cumplimiento en uno que no distingue los brazos.
+    where kind in ('call', 'message', 'sale')
+    group by 1
+  ),
+  w as (select distinct lead_id from order_sales where lead_id is not null)
+  select
+    s.name as tienda,
+    e.arm,
+    count(*) as leads,
+    count(f.first_call) as llamados,
+    count(*) filter (where f.first_call - l.first_seen_at <= interval '1 hour') as en_1h,
+    round(100.0 * count(*) filter (where f.first_call - l.first_seen_at <= interval '1 hour')
+          / nullif(count(*), 0), 1) as pct_en_1h,
+    count(w.lead_id) as ventas,
+    round(100.0 * count(w.lead_id) / nullif(count(*), 0), 1) as conversion
+  from lead_experiments e
+  join leads l on l.id = e.lead_id
+  join stores s on s.id = e.store_id
+  left join fc f on f.lead_id = e.lead_id
+  left join w on w.lead_id = e.lead_id
+  where e.experiment = p_experiment
+    and (f.first_call is null or e.assigned_at <= f.first_call)
+    and l.first_seen_at <= now() - make_interval(days => p_maduracion_dias)
+  group by 1, 2
+  order by 1, 2;
+$fn$;
+
+grant execute on function public.read_lead_experiment(text, integer) to authenticated, service_role;
+
+-- ---- 0147 ----
+-- `read_lead_experiment` tiene que analizar la MISMA población que el reparto
+-- selecciona, y desde 0147 el reparto solo entra leads que llegan entre las 7 y
+-- las 18 hora de Lima (ver lib/lead-experiment.ts: fuera de esa franja ocurre
+-- solo el 10,7% de los toques humanos, así que el tratamiento no se puede
+-- administrar).
+--
+-- POR QUÉ HACE FALTA TOCARLA. Las asignaciones hechas ANTES de ese cambio no
+-- llevan el filtro, y la tabla es append-only: no se pueden borrar ni corregir,
+-- que es exactamente la garantía que se quiso. En el momento de escribir esto son
+-- 131 de 167 — el 78%. Sin este filtro, la lectura mezclaría dos poblaciones con
+-- reglas de elegibilidad distintas y arrastraría el resultado hacia abajo con
+-- leads que nadie podía tratar.
+--
+-- NO SESGA. El corte es por HORA DE LLEGADA del lead: un dato anterior al sorteo
+-- y ajeno al brazo, así que descarta la misma proporción de tratamiento y de
+-- control. Lo que hace es dejar la pregunta bien planteada — para los leads que
+-- entran cuando podemos actuar, ¿vale la pena llamarlos rápido?
+--
+-- La franja se escribe aquí como literal en vez de leerla de la aplicación
+-- porque el SQL no puede importar TREATABLE_HOUR_START/END. Si algún día se
+-- mueven allí, hay que moverlos aquí: el test `la franja del SQL coincide con la
+-- del código` lo comprueba.
+
+create or replace function public.read_lead_experiment(
+  p_experiment text,
+  p_maduracion_dias integer default 7
+)
+returns table (
+  tienda text, arm text, leads bigint, llamados bigint,
+  en_1h bigint, pct_en_1h numeric, ventas bigint, conversion numeric
+)
+language sql
+stable
+security definer
+set search_path = public
+as $fn$
+  with fc as (
+    select lead_id, min(occurred_at) as first_call
+    from lead_calls
+    -- Solo personas: `system` son drip, winback y secuencias de carrito, y
+    -- contarlas convertiría `pct_en_1h` —el indicador de cumplimiento— en uno
+    -- que no distingue los brazos (ver 0146).
+    where kind in ('call', 'message', 'sale')
+    group by 1
+  ),
+  w as (select distinct lead_id from order_sales where lead_id is not null)
+  select
+    s.name as tienda,
+    e.arm,
+    count(*) as leads,
+    count(f.first_call) as llamados,
+    count(*) filter (where f.first_call - l.first_seen_at <= interval '1 hour') as en_1h,
+    round(100.0 * count(*) filter (where f.first_call - l.first_seen_at <= interval '1 hour')
+          / nullif(count(*), 0), 1) as pct_en_1h,
+    count(w.lead_id) as ventas,
+    round(100.0 * count(w.lead_id) / nullif(count(*), 0), 1) as conversion
+  from lead_experiments e
+  join leads l on l.id = e.lead_id
+  join stores s on s.id = e.store_id
+  left join fc f on f.lead_id = e.lead_id
+  left join w on w.lead_id = e.lead_id
+  where e.experiment = p_experiment
+    and (f.first_call is null or e.assigned_at <= f.first_call)
+    and l.first_seen_at <= now() - make_interval(days => p_maduracion_dias)
+    -- La franja tratable. Deja fuera las asignaciones anteriores al filtro, que
+    -- por ser append-only no se pueden quitar de la tabla.
+    and extract(hour from l.first_seen_at at time zone 'America/Lima')::int between 7 and 18
+  group by 1, 2
+  order by 1, 2;
+$fn$;
+
+grant execute on function public.read_lead_experiment(text, integer) to authenticated, service_role;
+
+-- ---- 0148 ----
 -- La fecha de despacho de Aliclik: la que debería ser y la que pusieron.
 --
 -- EL CASO. La guía AUR5X846640592825 (#KP123403) se creó el sábado 29-08-2026 a

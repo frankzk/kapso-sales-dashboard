@@ -1,9 +1,10 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   resolveAliclikHealth,
   resolveAliclikCreateHealth,
   describeAliclikHealth,
-  withinBusinessHoursPeru,
   HEALTH_FRESHNESS_MS,
 } from "@/lib/aliclik-health";
 
@@ -37,22 +38,6 @@ describe("resolveAliclikHealth", () => {
   it("gris ante un status desconocido", () => {
     const weird = { status: "otra_cosa", checkedAt: new Date(NOW).toISOString() };
     expect(resolveAliclikHealth(weird, NOW)).toBe("sin_monitoreo");
-  });
-});
-
-describe("withinBusinessHoursPeru", () => {
-  const at = (utc: string) => withinBusinessHoursPeru(new Date(utc));
-
-  it("dentro: 7am–11pm Perú", () => {
-    expect(at("2026-08-03T12:00:00Z")).toBe(true); // 07:00 Perú
-    expect(at("2026-08-03T18:00:00Z")).toBe(true); // 13:00 Perú
-    expect(at("2026-08-04T03:30:00Z")).toBe(true); // 22:30 Perú
-  });
-
-  it("fuera: madrugada Perú", () => {
-    expect(at("2026-08-03T09:00:00Z")).toBe(false); // 04:00 Perú
-    expect(at("2026-08-04T05:00:00Z")).toBe(false); // 00:00 Perú
-    expect(at("2026-08-04T04:30:00Z")).toBe(false); // 23:30 Perú
   });
 });
 
@@ -145,5 +130,30 @@ describe("describeAliclikHealth", () => {
 
   it("sin sonda fresca es gris aunque no haya fallos de creación", () => {
     expect(describeAliclikHealth({ quote: "sin_monitoreo", create: "ok" }).tone).toBe("gris");
+  });
+});
+
+describe("la sonda vigila las 24 horas", () => {
+  // POR QUÉ SE PRUEBA UN CRON. Esto se restringió una vez con un argumento
+  // razonable —"de noche nadie crea guías"— y el hueco tardó semanas en verse:
+  // el barrido `aliclik-close` sí corre a toda hora, así que las caídas de
+  // madrugada producían fallos reales sin dejar ni una fila de salud. Volver a
+  // acotarlo "para ahorrar llamadas" es una tentación con buena pinta, y esta
+  // prueba es lo único que la convierte en una decisión consciente.
+  it("el cron corre cada 5 minutos, sin ventana horaria", () => {
+    const cfg = JSON.parse(readFileSync(resolve(process.cwd(), "vercel.json"), "utf8")) as {
+      crons: { path: string; schedule: string }[];
+    };
+    const health = cfg.crons.find((c) => c.path === "/api/cron/aliclik-health");
+    expect(health).toBeDefined();
+    expect(health!.schedule).toBe("*/5 * * * *");
+  });
+
+  it("y el handler tampoco se salta horas por su cuenta", () => {
+    // El cron dice CUÁNDO se dispara; el handler decidía SI hacía algo. Con las
+    // dos puertas, abrir solo una no cambia nada — que es justo el error que
+    // habría cometido quien tocara únicamente el vercel.json.
+    const source = readFileSync(resolve(process.cwd(), "app/api/cron/aliclik-health/route.ts"), "utf8");
+    expect(source).not.toContain("withinBusinessHoursPeru");
   });
 });

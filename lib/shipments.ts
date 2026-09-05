@@ -13,7 +13,97 @@
 // the report already says ENTREGADO. The `pendiente` queue is split in the UI by
 // `fenix_eligible` (only guides with Fenix stock in their city are worked).
 
+import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
+
 export type ShipmentCategory = "pending" | "in_route" | "delivered" | "closed" | "transferred";
+
+/**
+ * Couriers que NO se trabajan desde Repro Provincia.
+ *
+ * POR QUÉ EXISTE. `shipments` es el libro de TODAS las salidas —el ingest de
+ * los Excel y las guías creadas por API escriben ahí, cada una con su courier—,
+ * pero la cola de Repro Provincia no preguntaba de cuál venían: filtraba por
+ * tienda y por categoría, y listaba lo que quedara. Así, de 2255 pendientes,
+ * 255 eran de Shalom. El caso que lo destapó: una guía de Shalom en Arequipa
+ * a la que la pantalla le ofrecía «Fenix Ok» — proponer una ruta para un
+ * paquete que ya está esperando en el mostrador de la agencia.
+ *
+ * QUÉ SE VA. Shalom es AGENCIA: la clienta recoge en el terminal, no hay
+ * intento de entrega que reprogramar. El MOM §11 nombra la entrada elegible a
+ * Reproprovincia —no contesta, intento fallido, rechazo sujeto a revisión,
+ * guía cancelada por courier y devolución— y §11.1 pone a la agencia como
+ * DESTINO de una recuperación, no como insumo. Tanders, Urpi y propio salen
+ * por la misma razón: no se reprograman desde esta cola.
+ *
+ * ES UNA LISTA DE EXCLUIDOS, NO DE ADMITIDOS, y a propósito: con una lista de
+ * admitidos, un courier nuevo desaparecería de la cola sin que nadie se
+ * enterara. Así aparece, y alguien pregunta qué hace ahí. Trabajo que sobra se
+ * ve; trabajo que falta, no.
+ */
+export const COURIERS_FUERA_DE_REPRO = ["shalom", "tanders", "urpi", "propio"] as const;
+
+/** ¿Esta guía se trabaja desde Repro Provincia? */
+export function perteneceARepro(courier: string | null | undefined): boolean {
+  if (!courier) return true;
+  return !(COURIERS_FUERA_DE_REPRO as readonly string[]).includes(courier.trim().toLowerCase());
+}
+
+/**
+ * El segundo recorte de Repro Provincia: una guía de Aliclik que TODAVÍA NO
+ * SALIÓ del almacén no se reprograma.
+ *
+ * POR QUÉ. La cola es para lo que Aliclik intentó entregar y no pudo. Una guía
+ * recién preparada no tiene nada que reprogramar: el paquete sigue en casa y el
+ * intento ni se ha hecho. Aparecían 92 así entre las pendientes —89 sin un solo
+ * intento, creadas ese mismo día— mezcladas con el trabajo real, y la pantalla
+ * les ofrecía ruta Fenix como a cualquier otra.
+ *
+ * EL CRITERIO ES LA CUSTODIA, NO EL CONTADOR DE INTENTOS. `custody_state` es un
+ * hecho que Aliclik acredita con su propio cotejo (§6.2): `TO_PREPARE` y
+ * `PREPARED` dejan el paquete en `empresa`; desde `PICKED` pasa a `courier`.
+ * `aliclik_attempts` sale del Excel y puede sencillamente no venir —la pantalla
+ * ya lo dice, «Sin NRO. INTENTOS en Excel»—, así que filtrar por él confundiría
+ * «no hubo intento» con «no nos lo contaron», y esconder trabajo por un dato que
+ * falta es justo lo que no se hace acá. De hecho hay 2 guías en poder del
+ * courier sin intentos informados: con la custodia se quedan, que es lo correcto.
+ *
+ * SOLO APLICA A ALICLIK. Las `por_definir` —pedidos sin salida todavía— y las
+ * guías Fenix pendientes también están en custodia `empresa`, pero sacarlas es
+ * otra decisión y no está tomada (§11).
+ */
+export function esperaSalidaDeAliclik(
+  courier: string | null | undefined,
+  custodyState: string | null | undefined,
+): boolean {
+  return (
+    (courier ?? "").trim().toLowerCase() === "aliclik" &&
+    (custodyState ?? "").trim().toLowerCase() === "empresa"
+  );
+}
+
+/**
+ * ¿Esta fila está en la cola PORQUE Aliclik la cerró sin entregar?
+ *
+ * Es el chip «Por recuperar». La guía está `closed` —terminó de verdad— pero el
+ * PEDIDO sigue vivo y admite una salida Swayp desde el stock de provincia
+ * (MOM §11). Van en la misma cola que el resto, no en una pestaña aparte: es la
+ * misma pregunta, a quién hay que llamar, y el MOM las lista junto a las demás
+ * entradas elegibles. El chip solo las acota.
+ *
+ * El vocabulario de Aliclik NO se repite acá: se delega en
+ * `etiquetaDiceTerminoSinEntregar`, que vive junto al código que escribe esa
+ * etiqueta. Acá solo se añade la condición de que la guía esté cerrada — una
+ * abierta ya está en la cola por su propio estado y no es «por recuperar».
+ */
+export function esPorRecuperar(row: {
+  status_category?: string | null;
+  reported_status?: string | null;
+}): boolean {
+  return (
+    (row.status_category ?? "") === "closed" &&
+    etiquetaDiceTerminoSinEntregar(row.reported_status)
+  );
+}
 
 export interface DeliveryStatusDef {
   code: string;
@@ -942,6 +1032,36 @@ export function autoFenixGuideCode(orderName: string | null | undefined, now: Da
  * no date is picked, falls back to `now`. Empty string when there's no order name
  * (the caller then keeps the manual "Generar guía Fenix" path). Pure.
  */
+/**
+ * El N° de pedido del envío, cayendo al del pedido enlazado cuando la copia
+ * del envío está vacía.
+ *
+ * POR QUÉ HACE FALTA. `shipments.order_name` es una COPIA denormalizada de
+ * `orders.name`, y hay 601 envíos vinculados donde la copia quedó vacía aunque
+ * el enlace existe. Se ve raro en pantalla —el cajón muestra los productos del
+ * pedido y a la vez dice "Pedido —"— pero lo caro es que **189 de ellos están
+ * anulados y no se pueden reprogramar**, porque la guía Fenix se autogenera a
+ * partir del número y el generador leía solo la copia.
+ *
+ * NO ES UNA SEGUNDA DEFINICIÓN: `orders.name` es la fuente de verdad y la copia
+ * es la caché. Esto no inventa un número alternativo, lee la fuente cuando la
+ * caché está fría. El backfill de la 0134 arregla los datos; esto evita que un
+ * envío quede bloqueado si algún día se vuelve a escribir vacío.
+ *
+ * Pura, y compartida por el cajón y la acción de servidor A PROPÓSITO: que una
+ * de las dos resuelva el nombre y la otra no es cómo se acaba con un botón
+ * habilitado que el servidor rechaza.
+ */
+export function effectiveOrderName(
+  shipmentOrderName: string | null | undefined,
+  linkedOrderName: string | null | undefined,
+): string | null {
+  const own = (shipmentOrderName ?? "").trim();
+  if (own) return own;
+  const linked = (linkedOrderName ?? "").trim();
+  return linked || null;
+}
+
 export function rescheduleGuideCode(
   orderName: string | null | undefined,
   reprogramIso: string | null | undefined,

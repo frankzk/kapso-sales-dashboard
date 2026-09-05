@@ -98,7 +98,16 @@ export async function processSwaypWebhook(input: {
   if (!shipment) return { status: "ignored", reason: "no_shipment" };
 
   const row = shipment as { id: string; delivery_status: string; swayp_state: number | null };
+  const syncedAt = (input.now ?? new Date()).toISOString();
+
   if (row.swayp_state === stateId && row.delivery_status === deliveryStatus) {
+    // El estado no cambia, pero SÍ se sella la hora: 0080 define
+    // `swayp_synced_at` como «cuándo se recibió la última notificación», y su
+    // razón de ser es detectar guías que dejaron de reportar. Si sólo se
+    // escribiera al cambiar de estado, una guía que Swayp sigue notificando en
+    // el mismo estado —sus reintentos, o un estado que dura días— se leería
+    // como abandonada. La columna mediría otra cosa que la que dice medir.
+    await admin.from("shipments").update({ swayp_synced_at: syncedAt }).eq("id", row.id);
     return { status: "ignored", reason: "no_change" };
   }
 
@@ -108,7 +117,7 @@ export async function processSwaypWebhook(input: {
       delivery_status: deliveryStatus,
       status_category: categoryOf(deliveryStatus),
       swayp_state: stateId,
-      swayp_synced_at: (input.now ?? new Date()).toISOString(),
+      swayp_synced_at: syncedAt,
     })
     .eq("id", row.id);
 

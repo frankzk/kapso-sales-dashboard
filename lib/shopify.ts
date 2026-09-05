@@ -313,6 +313,7 @@ export function mapGraphqlDraftOrder(node: any, storeId: string): DraftOrderRow 
       title: String(n?.title ?? n?.name ?? ""),
       quantity: Number(n?.quantity ?? 0),
       sku: n?.sku ?? null,
+      product_handle: productHandleOf(n),
       product_id: n?.product?.id ? extractNumericId(n.product.id) : null,
       variant_id: n?.variant?.id ? extractNumericId(n.variant.id) : null,
       price: toNumber(n?.originalUnitPriceSet?.shopMoney?.amount),
@@ -828,6 +829,20 @@ export function isRecoveredDraft(opts: {
   return Number.isFinite(ms) && ms >= RECOVERY_MIN_ABANDONED_MINUTES * 60_000;
 }
 
+/**
+ * El handle del producto de una línea, mire donde mire Shopify.
+ *
+ * Los pedidos lo cuelgan de `variant.product` y los borradores de `product`
+ * directo. Se aceptan los dos y se normaliza a minúsculas, que es como llega
+ * del link — el objetivo entero es que el carrito y la ficha caigan en el mismo
+ * balde.
+ */
+export function productHandleOf(node: any): string | null {
+  const raw = node?.product?.handle ?? node?.variant?.product?.handle ?? null;
+  const handle = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  return handle || null;
+}
+
 export function buildDraftOrdersQuery(withPhone: boolean): string {
   // Draft/shipping phone is "protected customer data" — requested only on the
   // first attempt; fetchDraftOrdersPage retries without it if access is denied.
@@ -858,6 +873,13 @@ export function buildDraftOrdersQuery(withPhone: boolean): string {
                 title
                 quantity
                 sku
+                # El handle de Shopify: el identificador ESTABLE del producto,
+                # el mismo que sale del link /products/<handle> que el cliente
+                # pega en WhatsApp. Sin el, un lead con carrito solo trae el
+                # TITULO -- "Nails Repairing - Serum Tea Tree Ginger" -- y el del
+                # link trae nails-repairing-suero-reparador-de-unas: el mismo
+                # producto escrito distinto, imposible de juntar sin adivinar.
+                product { handle }
                 originalUnitPriceSet { shopMoney { amount } }
               }
             }

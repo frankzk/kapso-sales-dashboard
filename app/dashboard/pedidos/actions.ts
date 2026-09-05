@@ -15,7 +15,7 @@ import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
-import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
   getOrderConfirmationBrief,
   getOrderMasterDetail,
@@ -30,9 +30,13 @@ import {
   isTerminalGeneral,
   type GeneralStatus,
 } from "@/lib/order-status";
+import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
+import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 import {
+  CONFIRMATION_CYCLE_MAX_DAYS,
+  CONFIRMATION_CYCLE_MIN_DAYS,
   CONFIRMATION_MAX_DAYS,
   confirmationReminderDueAt,
   confirmationResult,
@@ -49,6 +53,7 @@ import {
 } from "@/lib/shipment-output";
 import {
   decideLabelAction,
+  listNames,
   type OutputForDecision,
 } from "@/lib/labels/resolve-output";
 import type { RouteKey } from "@/lib/order-route-plan";
@@ -169,6 +174,78 @@ export async function getOrderMasterChangeToken(): Promise<string | null> {
   return (data as { updated_at?: string } | null)?.updated_at ?? null;
 }
 
+/**
+ * Cambia el ciclo de recontacto de una tienda desde la propia cola (§6.1).
+ *
+ * VIVE EN EL MASTER Y NO SOLO EN AJUSTES porque el efecto se mide acá: quien lo
+ * mueve ve en el mismo renglón cómo cambia «Hoy». Ajustes guarda el mismo campo
+ * para quien está configurando una tienda nueva.
+ *
+ * PIDE OWNER/ADMIN. El ciclo reparte la carga diaria de todo el equipo, así que
+ * no es una preferencia de quien mira la pantalla. La comprobación va contra la
+ * organización DE ESA TIENDA: ser admin en una empresa no da mando sobre otra.
+ */
+export async function setStoreConfirmationCycle(
+  storeId: string,
+  days: number,
+): Promise<MasterActionState> {
+  const requested = Math.trunc(Number(days));
+  if (
+    !Number.isFinite(requested)
+    || requested < CONFIRMATION_CYCLE_MIN_DAYS
+    || requested > CONFIRMATION_CYCLE_MAX_DAYS
+  ) {
+    return {
+      error: `El ciclo debe estar entre ${CONFIRMATION_CYCLE_MIN_DAYS} y ${CONFIRMATION_CYCLE_MAX_DAYS} días.`,
+    };
+  }
+
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  // La tienda se lee por RLS: si el usuario no la ve, no existe para él.
+  const { data: store } = await sb
+    .from("stores")
+    .select("id,org_id,name")
+    .eq("id", storeId)
+    .maybeSingle();
+  if (!store) return { error: "Sin acceso a esta tienda." };
+
+  const { data: membership } = await sb
+    .from("memberships")
+    .select("role")
+    .eq("org_id", (store as { org_id: string }).org_id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const role = (membership as { role?: string } | null)?.role;
+  if (role !== "owner" && role !== "admin") {
+    return { error: "Solo un owner o admin de la tienda puede cambiar el ciclo." };
+  }
+
+  const admin = createAdminSupabase();
+  const { error } = await admin
+    .from("stores")
+    .update({ confirmation_cycle_days: requested })
+    .eq("id", storeId);
+  if (error) return { error: `No se pudo guardar el ciclo: ${error.message}` };
+
+  // Sin esto el ajuste no se notaría hasta que el barrido pasara por cada
+  // pedido: la cola seguiría repartida con el ciclo viejo durante horas.
+  const touched = await applyConfirmationCycleToStore(admin, storeId, requested);
+  revalidatePath(MASTER_PATH);
+  revalidatePath(`/dashboard/${storeId}/settings`);
+
+  const name = (store as { name?: string }).name ?? "la tienda";
+  return {
+    notice:
+      `Ciclo de ${name}: ${requested} ${requested === 1 ? "día" : "días"}.`
+      + (touched ? ` ${touched} pedidos reprogramados.` : ""),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Fase 3 — salidas manuales con rótulo interno y QR
 // ---------------------------------------------------------------------------
@@ -181,7 +258,9 @@ export type ManualRouteCourier = (typeof MANUAL_ROUTE_COURIERS)[number];
 const MANUAL_COURIER_LABEL: Record<ManualRouteCourier, string> = {
   axel: "Axel Courier",
   urpi: "Urpi",
-  propio: "Motorizado propio",
+  // Token legado hasta que la migración de rutas vincule provider_id. Toda
+  // salida nueva que lo usa ya se valida contra el operador Grupo GF.
+  propio: "Grupo GF Courier",
   olva: "Olva",
   [COURIER_TBD]: "Sin courier definido",
 };
@@ -225,9 +304,6 @@ export async function createManualRouteOutput(
 
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
-  if (isTerminalGeneral(ctx.row.general_status)) {
-    return { error: "El pedido está cerrado. Reábrelo antes de crear otra salida." };
-  }
 
   const dispatchDate = input.dispatchDate.trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dispatchDate)) {
@@ -236,12 +312,33 @@ export async function createManualRouteOutput(
   if (dispatchDate < limaTodayKey()) return { error: "La fecha de salida no puede estar en el pasado." };
 
   const admin = createAdminSupabase();
+  // Las salidas se leen ANTES del cierre a propósito: para saber si un pedido
+  // cerrado merece otro intento hay que preguntarle a su guía POR QUÉ se cerró.
   const { data: existing, error: existingError } = await admin
     .from("shipments")
-    .select("id,courier,delivery_status,custody_state")
+    .select("id,courier,delivery_status,custody_state,reported_status")
     .eq("order_id", orderId)
     .order("created_at", { ascending: true });
   if (existingError) return { error: existingError.message };
+
+  // UN PEDIDO CERRADO PORQUE LA ENTREGA FALLÓ SÍ MERECE OTRA SALIDA. El MOM §11
+  // nombra «guía cancelada por courier y devolución» como entrada elegible a
+  // Reproprovincia, y su sección de Swayp dice que «una salida Swayp puede
+  // coexistir con la devolución Aliclik». Pero una devolución deja el pedido en
+  // `devuelto` —terminal— y este guarda lo bloqueaba: con stock ya puesto en
+  // provincia, no había forma de emitir la Swayp que lo aprovechara. Eran 844
+  // guías sobre 842 pedidos.
+  //
+  // El guarda NO se quita: sigue vivo para lo que sí está cerrado de verdad. Lo
+  // que se distingue es POR QUÉ se cerró, y eso no lo dice el estado del pedido
+  // —`anulado` cubre tanto «lo canceló el courier» como «lo cancelamos nosotros»—
+  // sino la etiqueta que Aliclik puso en la guía.
+  const cerradoPorEntregaFallida = ((existing ?? []) as { reported_status?: string | null }[]).some(
+    (o) => etiquetaDiceTerminoSinEntregar(o.reported_status),
+  );
+  if (isTerminalGeneral(ctx.row.general_status) && !cerradoPorEntregaFallida) {
+    return { error: "El pedido está cerrado. Reábrelo antes de crear otra salida." };
+  }
   const outputs = (existing ?? []) as {
     id: string;
     courier: string;
@@ -268,6 +365,17 @@ export async function createManualRouteOutput(
   const operation = input.courier === "olva"
     ? "agencia"
     : routeOperation(ctx.row, outputs.map((output) => output.courier));
+  if (input.courier === "propio") {
+    // La tarjeta no es un permiso. Entre abrir el pedido y confirmar pudieron
+    // pausar el distrito, vencer la tarifa o suspender el contrato; por eso se
+    // repite exactamente la misma lectura justo antes de crear la salida.
+    // La pausa gobierna el momento de ASIGNAR, no una fecha futura escrita en
+    // el formulario. Elegir mañana no puede saltarse una pausa vigente hoy.
+    const grupoGf = await loadGroupGfCourierRouteCheck(admin, ctx.row);
+    if (!grupoGf.eligible) {
+      return { error: grupoGf.reason };
+    }
+  }
   if (tbd) {
     if (outputs.length >= MAX_OUTPUTS_PER_ORDER) {
       return { error: "El pedido ya alcanzó el máximo de cinco salidas." };
@@ -513,6 +621,16 @@ export interface ResolveLabelsResult extends MasterActionState {
   shipmentIds: string[];
   created: number;
   reused: number;
+  /**
+   * Los pedidos cuyo rótulo se REIMPRIMIÓ, por nombre.
+   *
+   * Antes esto era solo el contador `reused`, y el aviso decía "3 rótulos
+   * reimpresos" sin decir cuáles — la primera pregunta de quien lo lee, y no
+   * había forma de responderla: la reimpresión no crea salida ni deja evento, o
+   * sea que el dato no se podía recuperar después de ninguna manera. El bucle
+   * tenía el pedido delante en el momento de decidir y lo tiraba.
+   */
+  reusedOrders: string[];
   /** Pedidos que exigen una salida adicional justificada (§23). */
   blocked: { orderId: string; error: string }[];
 }
@@ -531,35 +649,41 @@ export interface ResolveLabelsResult extends MasterActionState {
 export async function resolveLabelsForOrders(orderIds: string[]): Promise<ResolveLabelsResult> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) {
-    return { error: "Tu rol no permite crear salidas.", shipmentIds: [], created: 0, reused: 0, blocked: [] };
+    return { error: "Tu rol no permite crear salidas.", shipmentIds: [], created: 0, reused: 0, reusedOrders: [], blocked: [] };
   }
   const unique = Array.from(new Set(orderIds.filter(Boolean)));
   if (!unique.length) {
-    return { error: "No hay pedidos seleccionados.", shipmentIds: [], created: 0, reused: 0, blocked: [] };
+    return { error: "No hay pedidos seleccionados.", shipmentIds: [], created: 0, reused: 0, reusedOrders: [], blocked: [] };
   }
   if (unique.length > MAX_BULK_OUTPUTS) {
     return {
       error: `Demasiados pedidos de una vez (máximo ${MAX_BULK_OUTPUTS}).`,
-      shipmentIds: [], created: 0, reused: 0, blocked: [],
+      shipmentIds: [], created: 0, reused: 0, reusedOrders: [], blocked: [],
     };
   }
 
   const admin = createAdminSupabase();
   const { data: shipmentRows } = await admin
     .from("shipments")
-    .select("id,order_id,custody_state,delivery_status,created_at,output_number")
+    .select("id,order_id,order_name,custody_state,delivery_status,created_at,output_number")
     .in("order_id", unique);
 
   const byOrder = new Map<string, OutputForDecision[]>();
-  for (const row of (shipmentRows ?? []) as (OutputForDecision & { order_id: string | null })[]) {
+  const nameByOrder = new Map<string, string>();
+  for (const row of (shipmentRows ?? []) as (OutputForDecision & {
+    order_id: string | null;
+    order_name: string | null;
+  })[]) {
     if (!row.order_id) continue;
     const list = byOrder.get(row.order_id) ?? [];
     list.push(row);
     byOrder.set(row.order_id, list);
+    if (row.order_name) nameByOrder.set(row.order_id, row.order_name);
   }
 
   const shipmentIds: string[] = [];
   const blocked: ResolveLabelsResult["blocked"] = [];
+  const reusedOrders: string[] = [];
   let created = 0;
   let reused = 0;
 
@@ -568,6 +692,9 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
     if (decision.kind === "reuse") {
       shipmentIds.push(decision.shipmentId);
       reused += 1;
+      // El nombre sale de la salida que se reusa, que por definición existe.
+      const name = nameByOrder.get(orderId);
+      if (name) reusedOrders.push(name);
       continue;
     }
     if (decision.kind === "needs_justification") {
@@ -593,11 +720,17 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
 
   const parts: string[] = [];
   if (created) parts.push(`${created} salida${created === 1 ? "" : "s"} creada${created === 1 ? "" : "s"}`);
-  if (reused) parts.push(`${reused} rótulo${reused === 1 ? "" : "s"} reimpreso${reused === 1 ? "" : "s"}`);
+  if (reused) {
+    parts.push(
+      `${reused} rótulo${reused === 1 ? "" : "s"} reimpreso${reused === 1 ? "" : "s"}` +
+        (reusedOrders.length ? ` (${listNames(reusedOrders)})` : ""),
+    );
+  }
   return {
     shipmentIds,
     created,
     reused,
+    reusedOrders,
     blocked,
     notice: parts.length ? parts.join(" · ") : undefined,
     error: shipmentIds.length ? undefined : "Ningún pedido tiene un rótulo que imprimir.",

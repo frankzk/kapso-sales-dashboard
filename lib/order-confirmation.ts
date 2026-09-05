@@ -300,6 +300,96 @@ export function confirmationDueBucket(
   return "proximo";
 }
 
+/**
+ * Ciclo de recontacto por defecto: sin fecha pactada, el pedido vuelve a la
+ * cola cada tres días.
+ */
+export const DEFAULT_CONFIRMATION_CYCLE_DAYS = 3;
+
+/** Límites del ciclo configurable por tienda. Un ciclo de 0 sería una cola infinita. */
+export const CONFIRMATION_CYCLE_MIN_DAYS = 1;
+export const CONFIRMATION_CYCLE_MAX_DAYS = 30;
+
+export function confirmationCycleDays(value: unknown): number {
+  // `null` es «la tienda no lo configuró», no «cero días»: `Number(null)` da 0 y
+  // acotarlo dejaría a esa tienda con un ciclo diario que nadie pidió.
+  if (value === null || value === undefined || value === "") {
+    return DEFAULT_CONFIRMATION_CYCLE_DAYS;
+  }
+  const days = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(days)) return DEFAULT_CONFIRMATION_CYCLE_DAYS;
+  const whole = Math.trunc(days);
+  if (whole < CONFIRMATION_CYCLE_MIN_DAYS) return CONFIRMATION_CYCLE_MIN_DAYS;
+  if (whole > CONFIRMATION_CYCLE_MAX_DAYS) return CONFIRMATION_CYCLE_MAX_DAYS;
+  return whole;
+}
+
+/** Suma días de calendario a una clave `YYYY-MM-DD` sin salir del día de Lima. */
+export function addLimaDays(dayKey: string, days: number): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return "";
+  const [year = 0, month = 1, day = 1] = dayKey.split("-").map(Number);
+  const moved = new Date(Date.UTC(year, month - 1, day + days));
+  return moved.toISOString().slice(0, 10);
+}
+
+/**
+ * El día en que un pedido sin fecha pactada vuelve a la cola: N días después
+ * del último contacto, en calendario de Lima.
+ *
+ * Es una DERIVACIÓN, no un compromiso con el cliente. Por eso vive aparte de
+ * `confirmation_next_contact_on`: esa fecha la pactó alguien en una llamada y
+ * el §6.1 la trata como hecho; esta la calcula Kapta para que ningún pedido se
+ * quede veintitrés días con un solo intento por no haberla puesto.
+ */
+export function confirmationCycleDueOn(
+  lastContactAt: string | null | undefined,
+  cycleDays: number = DEFAULT_CONFIRMATION_CYCLE_DAYS,
+): string | null {
+  if (!lastContactAt) return null;
+  const day = limaDayKey(lastContactAt);
+  if (!day) return null;
+  return addLimaDays(day, confirmationCycleDays(cycleDays)) || null;
+}
+
+/**
+ * La posición en la cola de «Fecha pactada», con las tres fuentes en el orden
+ * en que mandan: fecha pactada, ciclo automático y recordatorio de dos horas.
+ *
+ * La diferencia que importa: **la fecha pactada vence y se queda vencida** —es
+ * una promesa al cliente que alguien incumplió y tiene que verse—, mientras que
+ * **el ciclo no acumula vencimiento**. Un ciclo cuyo día ya pasó significa
+ * «toca hoy», y al registrar el intento el siguiente ciclo se cuenta desde ese
+ * contacto. Así el pedido rota cada N días en lugar de hundirse para siempre en
+ * Vencidos, que es donde estaban los pedidos de veintitrés días con 1/7.
+ *
+ * El recordatorio de dos horas ordena el trabajo DENTRO de su día; pasado ese
+ * día lo sustituye el ciclo, porque un recordatorio de hace tres semanas ya no
+ * dice nada que la antigüedad del pedido no diga mejor.
+ */
+export function confirmationQueueBucket(
+  input: {
+    nextContactOn?: string | null;
+    cycleDueOn?: string | null;
+    reminderDueAt?: string | null;
+  },
+  nowIso: string = new Date().toISOString(),
+): ConfirmationDueBucket | null {
+  const today = limaDayKey(nowIso);
+  if (input.nextContactOn) return confirmationDueBucket(input.nextContactOn, nowIso);
+  if (input.reminderDueAt) {
+    // El recordatorio manda mientras siga siendo de hoy o del futuro: es la cola
+    // de las dos horas laborales. Uno de días atrás ya no ordena nada y cede el
+    // turno al ciclo.
+    const day = limaDayKey(input.reminderDueAt);
+    if (day > today) return "proximo";
+    if (day === today) {
+      return Date.parse(input.reminderDueAt) <= Date.parse(nowIso) ? "vencido" : "hoy";
+    }
+  }
+  if (input.cycleDueOn) return input.cycleDueOn > today ? "proximo" : "hoy";
+  return null;
+}
+
 export interface ConfirmationEventLike {
   kind: string;
   occurred_at: string;

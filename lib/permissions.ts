@@ -50,6 +50,10 @@ export const PERMISSIONS = [
   "shalom.override_payment_validation",
   // Costos
   "costs.manage",
+  // Grupo GF Courier: contratos, tarifas, clientes y parámetros operativos.
+  // Se concede persona por persona porque Daysi debe administrarlo sin recibir
+  // acceso implícito a todas las facultades financieras de un admin.
+  "logistics.manage",
   // Aliclik: crear una guía es una escritura hacia AFUERA e irreversible, con
   // ventanas de cancelación estrictas. Por eso tiene permiso propio y no cae
   // bajo `master.edit`.
@@ -65,6 +69,19 @@ export const PERMISSIONS = [
   // es una escritura hacia afuera y cobrable — mismo criterio que Aliclik y
   // Tanders. Crear la guía NO implica poder ver la clave que la acompaña.
   "shalom.create_guide",
+  // Swayp: resolver una novedad (estado 6) es responderle al mensajero que está
+  // parado frente a la puerta —volver a ofrecer, devolver o reprogramar—. Es una
+  // escritura hacia AFUERA que mueve un paquete real, así que sigue el criterio
+  // de Aliclik/Tanders/Shalom y no cae bajo `master.edit`.
+  //
+  // OJO con la acción 2 (devolver al remitente): termina el intento de entrega y
+  // dispara la devolución física, que en Swayp se recoge cada semana o quincena
+  // (MOM §9.4). Por eso la acción exige ADEMÁS `closure.return`, que ya significa
+  // exactamente eso —"solicitar/recibir retornos"— en vez de inventar un permiso
+  // nuevo. Hoy la vendedora tiene los dos, así que nadie pierde capacidad; lo que
+  // se gana es que quitarle `closure.return` a alguien también le impida cerrar
+  // una entrega por esta puerta lateral.
+  "swayp.solve_novelty",
   // Dar por bueno un cobro que el lector de comprobantes rechazó. Es la única
   // forma de levantar el bloqueo, así que NO cae bajo `master.edit`: quien
   // revisa un posible Yape a otra cuenta no puede ser cualquiera que pueda
@@ -87,6 +104,18 @@ export const PERMISSIONS = [
   // para dar acceso a /reparto. Vive en Equipo (owner/admin). El alta rápida por
   // nombre desde Liquidaciones sigue bajo settlements.manage.
   "riders.manage",
+  // Declarar qué producto vende un anuncio de Meta (0139). No es edición de un
+  // lead: cambia cómo se lee la cola ENTERA de esa tienda —los 460 leads del
+  // anuncio de la caspa caen o no caen en «Shampoo Birú» según esta firma—, y
+  // firmar mal manda a toda la mesa con el argumentario equivocado. Por eso es
+  // propio y no cae bajo la gestión diaria de la cola.
+  "leads.map_ads",
+  // Crear un pedido desde el dashboard. NO es gestión de la cola: `draftOrderCreate`
+  // + `completeDraftOrder` escriben hacia AFUERA y crean un pedido real en
+  // Shopify, con su stock descontado y su guía por delante. Mismo criterio que
+  // las guías de Aliclik, Tanders y Shalom: quien puede leer la cola no queda
+  // habilitado por eso a vender a nombre de la tienda.
+  "orders.create",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -139,6 +168,12 @@ export const GRANTED_ONE_BY_ONE = [
     description: "Mover un pago al pedido correcto o forzar su estado.",
     lastOneMatters: true,
   },
+  {
+    permission: "logistics.manage",
+    label: "Administrar Grupo GF Courier",
+    description: "Gestionar clientes, tarifas y parámetros del operador logístico.",
+    lastOneMatters: false,
+  },
 ] as const satisfies readonly {
   permission: Permission;
   label: string;
@@ -190,12 +225,21 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "aliclik.create_guide",
     "tanders.create_guide",
     "shalom.create_guide",
+    // Gestionar la novedad es gestión de venta: la misma persona que llamaría a
+    // la clienta para preguntarle por qué no abrió es la que le dice al mensajero
+    // si vuelve a intentarlo o reprograma. Mismo criterio que `recovery.contact`.
+    "swayp.solve_novelty",
     "settlements.manage",
     // Recuperar una devolución es gestión de venta, que es su trabajo: la misma
     // persona que llamaría a esa clienta es la que manda el mensaje.
     "recovery.contact",
     // Coordinar el reparto es operativo, no financiero: arma la ruta del día.
     "routes.manage",
+    // Generar el pedido ES su trabajo: la vendedora cierra la venta por teléfono
+    // o por WhatsApp y la registra. El permiso existe para que tenerlo sea una
+    // decisión —un `viewer` no vende a nombre de la tienda—, no para quitárselo
+    // a quien vive de eso.
+    "orders.create",
   ],
   viewer: [],
   // El motorizado NO es un usuario del panel: entra a /reparto, ve solo su ruta

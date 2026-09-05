@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  coverageInputOf,
   currentFenixReason,
   evaluateDirectFenixStock,
   evaluateFenix,
+  FENIX_COVERAGE_COLUMNS,
   fenixStockCityKey,
   matchesFenixAvailability,
   type FenixStockRow,
@@ -32,6 +34,54 @@ describe("evaluateFenix", () => {
     const r = evaluateFenix({ city: "Lima", product: "Mushroom Coffee" }, stock);
     expect(r.eligible).toBe(false);
     expect(r.reason).toBe("sin_cobertura");
+  });
+
+  // Este es EL camino que decide en la cola: el servidor guarda su resultado en
+  // `fenix_reason`, y `currentFenixReason` se corta ahí. Arreglar sólo aquella
+  // no cambiaba nada de lo que se ve —lo comprobamos en producción con
+  // AUR5X392242419936 (#KP130479), que siguió saliendo «fuera de cobertura»
+  // después del primer intento.
+  describe("con `city` vacía deriva del destino, igual que la creación de guía", () => {
+    it("resuelve la ciudad y llega a evaluar el stock", () => {
+      const r = evaluateFenix(
+        { city: "", district: "Cusco", province: "Cusco", product: "SUPER HUMAN Ethiopian Black Seed Oil" },
+        stock,
+      );
+      expect(r.city).toBe("cusco");
+      expect(r.reason).toBe("ok");
+      expect(r.eligible).toBe(true);
+    });
+
+    it("cobertura sin stock dice sin_stock, no sin_cobertura", () => {
+      const r = evaluateFenix(
+        { city: "", district: "Arequipa", province: "Arequipa", product: "Pulsera Magnética" },
+        stock,
+      );
+      expect(r.reason).toBe("sin_stock");
+    });
+
+    it("un destino de verdad fuera de cobertura sigue estándolo", () => {
+      const r = evaluateFenix(
+        { city: "", district: "Tacna", province: "Tacna", product: "Mushroom Coffee" },
+        stock,
+      );
+      expect(r.reason).toBe("sin_cobertura");
+    });
+
+    it("sin `city` y sin destino no hay nada que derivar", () => {
+      expect(evaluateFenix({ city: "", product: "Mushroom Coffee" }, stock).reason).toBe(
+        "sin_cobertura",
+      );
+    });
+
+    it("cuando `city` viene cargada manda ella: derivar taparía localityMismatch", () => {
+      const r = evaluateFenix(
+        { city: "Lima", district: "Cusco", province: "Cusco", product: "SUPER HUMAN Ethiopian Black Seed Oil" },
+        stock,
+      );
+      expect(r.city).toBe("lima");
+      expect(r.reason).toBe("sin_cobertura");
+    });
   });
 
   it("sin_stock when the product doesn't match any stock row in a covered city", () => {
@@ -170,6 +220,53 @@ describe("evaluateFenix", () => {
   });
 });
 
+/**
+ * `evaluateFenix` ya sabía derivar del distrito; lo que faltaba era que los
+ * llamadores le pasaran el destino. Las rejas de escritura seleccionaban `city`
+ * a secas, así que la cola decía «Fenix Ok» y el botón «Fenix no tiene cobertura
+ * en la ciudad indicada» sobre el MISMO envío —#KP130656, Arequipa, con `city`
+ * NULL porque el alta vino por la API de Aliclik (219 envíos así, 85 pendientes)—.
+ * Esto fija la pieza que lo destapó.
+ */
+describe("coverageInputOf: el destino de una fila de `shipments`", () => {
+  it("una guía del alta por API resuelve igual que una del portal", () => {
+    // Tal cual está en la base: city NULL, el resto con el dato.
+    const porApi = coverageInputOf({
+      city: null,
+      district: "Arequipa",
+      province: "Arequipa",
+      region: "Arequipa",
+      product: "Pulsera Magnética",
+    });
+    expect(evaluateFenix(porApi, stock).city).toBe("arequipa");
+    expect(evaluateFenix(porApi, stock).reason).toBe("sin_stock"); // cubierta, sin unidades
+  });
+
+  it("cae a `region` cuando `province` está vacía —la columna llegó en la 0039—", () => {
+    const historica = coverageInputOf({ city: null, district: "Cusco", province: null, region: "Cusco" });
+    expect(historica.province).toBe("Cusco");
+    expect(evaluateFenix({ ...historica, product: "SUPER HUMAN Ethiopian Black Seed Oil" }, stock).eligible)
+      .toBe(true);
+  });
+
+  it("`province` manda sobre `region` cuando las dos vienen", () => {
+    expect(coverageInputOf({ province: "Arequipa", region: "Cusco" }).province).toBe("Arequipa");
+  });
+
+  it("no inventa provincia cuando no hay ninguna de las dos", () => {
+    expect(coverageInputOf({ city: null, district: "Arequipa" }).province).toBeNull();
+  });
+
+  // El select se arma con esta constante. Si alguien le saca una columna, la
+  // cobertura vuelve a decidirse con datos incompletos —que es exactamente el
+  // bug— y aquí se ve antes de que llegue a producción.
+  it("FENIX_COVERAGE_COLUMNS nombra las cuatro columnas del destino", () => {
+    expect(FENIX_COVERAGE_COLUMNS.split(",").sort()).toEqual(
+      ["city", "district", "province", "region"],
+    );
+  });
+});
+
 describe("Fenix availability filters", () => {
   it("separates no-stock cases from cities outside coverage", () => {
     const noStock = { city: "Cusco", fenix_eligible: false, fenix_reason: "sin_stock" as const };
@@ -192,6 +289,84 @@ describe("Fenix availability filters", () => {
     // «sin stock», que es lo correcto ahora.
     expect(currentFenixReason({ city: "Tacna", fenix_eligible: false })).toBe("sin_cobertura");
     expect(currentFenixReason({ city: "Piura", fenix_eligible: false })).toBe("sin_stock");
+  });
+
+  describe("cuando `city` viene vacía", () => {
+    // Caso real: AUR5X392242419936 (#KP130479), dada de alta por la API de
+    // Aliclik. `city` vacía, distrito/provincia «Arequipa». La cola la mostraba
+    // fuera de cobertura y nadie la intentaba, aunque hubiera stock.
+    it("deriva del distrito y la provincia en vez de darla por sin cobertura", () => {
+      expect(
+        currentFenixReason({
+          city: "",
+          district: "Arequipa",
+          province: "Arequipa",
+          fenix_eligible: false,
+        }),
+      ).toBe("sin_stock");
+    });
+
+    it("también con city null o solo espacios", () => {
+      for (const city of [null, undefined, "   "]) {
+        expect(
+          currentFenixReason({ city, district: "Cusco", province: "Cusco", fenix_eligible: false }),
+          String(city),
+        ).toBe("sin_stock");
+      }
+    });
+
+    it("sin cobertura sigue siendo sin cobertura: no inventa una ciudad", () => {
+      expect(
+        currentFenixReason({ city: "", district: "Tacna", province: "Tacna", fenix_eligible: false }),
+      ).toBe("sin_cobertura");
+    });
+
+    it("hereda la cobertura del departamento, igual que la creación de guía", () => {
+      // Camaná es otra provincia de Arequipa, y aun así deriva a `arequipa`:
+      // deriveFenixCoverageCity escanea la etiqueta combinada buscando un token
+      // de ciudad conocida, y ese es su comportamiento documentado. No se
+      // corrige acá a propósito — el punto de este cambio es que la pantalla
+      // responda LO MISMO que el despacho, no algo distinto pero más estricto.
+      //
+      // Lo que frena de verdad un destino así es el ubigeo al crear la guía:
+      // resolveUbigeo("arequipa","Camaná") devuelve exact=false y el envío se
+      // rechaza con un mensaje explícito, en vez de salir con un código
+      // aproximado que desviaría el paquete.
+      expect(
+        currentFenixReason({ city: "", district: "Camaná", province: "Arequipa", fenix_eligible: false }),
+      ).toBe("sin_stock");
+    });
+
+    it("sin ningún dato de destino no hay nada que derivar", () => {
+      expect(currentFenixReason({ city: "", fenix_eligible: false })).toBe("sin_cobertura");
+    });
+  });
+
+  it("cuando `city` viene cargada MANDA ella: derivar taparía localityMismatch", () => {
+    // El courier puede contradecir a Shopify —«cusco» contra «Juliaca · Puno»—
+    // y esa discrepancia la reporta localityMismatch(). Si acá se derivara por
+    // encima de un dato presente, la pantalla mostraría la cobertura del
+    // destino equivocado y el conflicto no se vería.
+    expect(
+      currentFenixReason({
+        city: "Tacna",
+        district: "Arequipa",
+        province: "Arequipa",
+        fenix_eligible: false,
+      }),
+    ).toBe("sin_cobertura");
+  });
+
+  it("una razón ya calculada en el servidor gana sobre cualquier derivación", () => {
+    expect(
+      currentFenixReason({
+        city: "",
+        district: "Arequipa",
+        province: "Arequipa",
+        fenix_eligible: false,
+        fenix_reason: "sin_cobertura",
+      }),
+    ).toBe("sin_cobertura");
   });
 });
 

@@ -117,10 +117,39 @@ describe("state updates", () => {
 });
 
 describe("defensive handling", () => {
-  it("is a no-op when the same state is redelivered (their retries are safe)", async () => {
+  it("no cambia el estado cuando reentregan el mismo (sus reintentos son seguros)", async () => {
     const { admin, updates } = fakeAdmin({ id: "s1", delivery_status: "entregado", swayp_state: 7 });
-    const r = await processSwaypWebhook({ body: { token: TOKEN, guide_number: "1", state: "7" }, admin });
+    const now = new Date("2026-08-27T06:30:00.000Z");
+    const r = await processSwaypWebhook({
+      body: { token: TOKEN, guide_number: "1", state: "7" },
+      admin,
+      now,
+    });
     expect(r).toEqual({ status: "ignored", reason: "no_change" });
+    // Se sella la hora igual, y NADA más: 0080 define swayp_synced_at como
+    // «cuándo se recibió la última notificación», para detectar guías que
+    // dejaron de reportar. Sin esto, una guía que Swayp sigue notificando en el
+    // mismo estado se leería como abandonada.
+    expect(updates).toEqual([{ swayp_synced_at: now.toISOString() }]);
+  });
+
+  it("el sello de la última notificación no toca el estado ni la categoría", async () => {
+    const { admin, updates } = fakeAdmin({ id: "s1", delivery_status: "en_ruta", swayp_state: 5 });
+    await processSwaypWebhook({ body: { token: TOKEN, guide_number: "1", state: "5" }, admin });
+    expect(updates[0]).not.toHaveProperty("delivery_status");
+    expect(updates[0]).not.toHaveProperty("status_category");
+    expect(updates[0]).not.toHaveProperty("swayp_state");
+  });
+
+  it("una guía desconocida no deja sello: no es nuestra", async () => {
+    const { admin, updates } = fakeAdmin(null);
+    await processSwaypWebhook({ body: { token: TOKEN, guide_number: "999", state: "7" }, admin });
+    expect(updates).toHaveLength(0);
+  });
+
+  it("un token inválido no deja sello: no se toca la base sin autenticar", async () => {
+    const { admin, updates } = fakeAdmin({ id: "s1", delivery_status: "entregado", swayp_state: 7 });
+    await processSwaypWebhook({ body: { token: "otro", guide_number: "1", state: "7" }, admin });
     expect(updates).toHaveLength(0);
   });
 

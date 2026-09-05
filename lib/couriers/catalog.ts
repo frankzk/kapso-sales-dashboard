@@ -11,6 +11,18 @@
 
 import { courierKey } from "@/lib/dispatch";
 
+export const GROUP_GF_RIDER_COURIER = "Grupo GF Courier";
+
+/**
+ * Las fichas históricas de motorizados propios guardaban courier nulo. El
+ * nombre formal nuevo convive con ese alias para no reescribir IDs ni romper
+ * rutas o liquidaciones anteriores.
+ */
+export function isGroupGfRiderCourier(value: string | null | undefined): boolean {
+  const key = courierKey(value);
+  return !key || ["propio", "motorizado propio", "grupo gf courier"].includes(key);
+}
+
 export interface CourierOption {
   /** Identificador estable de la opción (para el <select>). */
   key: string;
@@ -21,7 +33,7 @@ export interface CourierOption {
 }
 
 export const DISPATCH_COURIERS: readonly CourierOption[] = [
-  { key: "propios", value: "propio", label: "Motorizados propios" },
+  { key: "propios", value: "propio", label: GROUP_GF_RIDER_COURIER },
   { key: "aliclik", value: "aliclik", label: "Aliclik" },
   { key: "swayp", value: "fenix", label: "Swayp (antes Fénix)" },
   { key: "shalom", value: "shalom", label: "Shalom" },
@@ -76,7 +88,7 @@ export interface RouteChoice {
 export function routeChoices<T extends { id: string; full_name: string; courier: string | null }>(
   riders: readonly T[],
 ): { own: RouteChoice[]; couriers: RouteChoice[] } {
-  const ownRiders = riders.filter((rider) => !rider.courier || !rider.courier.trim());
+  const ownRiders = riders.filter((rider) => isGroupGfRiderCourier(rider.courier));
   const own: RouteChoice[] = ownRiders.map((rider) => ({
     value: `rider:${rider.id}`,
     label: rider.full_name,
@@ -112,7 +124,7 @@ export function ridersForCourier<T extends { courier: string | null }>(
 ): T[] {
   if (!option) return [];
   if (option.key === "propios") {
-    return riders.filter((r) => !r.courier || !r.courier.trim());
+    return riders.filter((r) => isGroupGfRiderCourier(r.courier));
   }
   const candidates = [option.key, courierKey(option.label), courierKey(option.value)];
   return riders.filter((r) => {

@@ -19,6 +19,7 @@ import {
   type QueueState,
 } from "@/lib/leads";
 import { EmptyState } from "@/components/ui";
+import { getAdProductMap } from "@/lib/ad-products-access";
 import { LeadsBoard } from "@/components/leads";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
@@ -38,6 +39,9 @@ type LeadsSearchParams = {
   last_date?: string;
   last_before?: string;
   open?: string;
+  // Sello de la orden `?open=`: distingue "el usuario acaba de pedir abrir este
+  // lead" de "este parámetro reapareció solo". Ver el consumo en LeadsBoard.
+  oid?: string;
 };
 
 export default function LeadsPage({
@@ -124,12 +128,20 @@ async function LeadsContent({
   // promise settles instead of waiting for counts and user first.
   const adNamesPromise = leadsPromise.then((rows) => getAdNames(rows.map((l) => l.ad_id)));
   const waNumbersPromise = leadsPromise.then((rows) => getWaNumbers(rows.map((l) => l.wa_phone_number_id)));
-  const [snapshot, leads, user, adNames, waNumbers] = await Promise.all([
+  // Qué vendía cada anuncio y DESDE CUÁNDO, para que un lead que llegó por
+  // anuncio caiga en el mismo balde que uno que llegó por la ficha —y con el
+  // producto que el anuncio vendía el día que ESE lead entró, no el de ahora.
+  // Solo lo declarado: las sugerencias del histórico no etiquetan a nadie.
+  const adProductsPromise = leadsPromise.then((rows) =>
+    getAdProductMap(scope, rows.map((l) => l.ad_id)),
+  );
+  const [snapshot, leads, user, adNames, waNumbers, adProductMap] = await Promise.all([
     snapshotPromise,
     leadsPromise,
     userPromise,
     adNamesPromise,
     waNumbersPromise,
+    adProductsPromise,
   ]);
 
   return (
@@ -145,6 +157,7 @@ async function LeadsContent({
       leads={leads}
       adNames={adNames}
       waNumbers={waNumbers}
+      adDeclarations={Object.fromEntries(adProductMap)}
       currency={currency}
       timezone={timezone}
       insights={null}
@@ -153,6 +166,7 @@ async function LeadsContent({
       initialGest={initialGest}
       initialInteractionDate={initialInteractionDate}
       initialOpenId={typeof sp.open === "string" ? sp.open : null}
+      initialOpenNonce={typeof sp.oid === "string" ? sp.oid : null}
       currentUserId={user?.id ?? ""}
       leadsComplete={leadsViewLimit(view) === null}
     />

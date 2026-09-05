@@ -201,11 +201,11 @@ export function nextLeadState(
 // order == call order: pago → carrito → distrito → converso → frio.
 // ---------------------------------------------------------------------------
 
-export type LeadSegment = "carrito" | "distrito" | "converso" | "frio";
+export type LeadSegment = "carrito" | "interes" | "converso" | "frio";
 
 export const LEAD_SEGMENTS: { key: LeadSegment; label: string }[] = [
   { key: "carrito", label: "🛒 Con carrito" },
-  { key: "distrito", label: "📍 Dio distrito" },
+  { key: "interes", label: "📍 Distrito o producto" },
   { key: "converso", label: "💬 Conversó" },
   { key: "frio", label: "❄️ Frío" },
 ];
@@ -224,6 +224,9 @@ export interface LeadSegmentSignals {
 //   "https://kenku.pe/products/purely-nutrient-… Tengo una consulta"
 // Un solo mensaje, pero dice QUÉ producto quiere. Contarlo como "solo saludó" lo
 // hundía al fondo de la cola junto a quien escribió "hola" y nada más.
+//
+// OJO si tu tienda no usa /products/: la ruta es lo único que dispara la regla.
+// Con /producto/ o /p/ el patrón no engancha y estos leads caen a frío.
 const PRODUCT_LINK_RE = /https?:\/\/\S*\/products\/\S/i;
 
 /** ¿El primer mensaje del cliente trae el link de una ficha de producto? Puro. */
@@ -231,15 +234,151 @@ export function hasProductLink(text: string | null | undefined): boolean {
   return PRODUCT_LINK_RE.test(text ?? "");
 }
 
-/** Assign a "Por llamar" lead to one sub-segment (highest-priority match).
- *  (Leads en Yape ya tienen su propia pestaña superior, no un sub-bucket.) */
+// El `handle` de Shopify: el trozo de la URL después de /products/. Es el
+// identificador estable del producto —el título cambia, el handle no— y es lo
+// único que el link nos deja. Se corta en `?` (variante) y en `/`.
+const PRODUCT_HANDLE_RE = /https?:\/\/\S*\/products\/([A-Za-z0-9._~-]+)/i;
+
+/**
+ * QUÉ producto abrió el cliente antes de escribir, sacado de su propio link.
+ *
+ * De 4.887 leads con link, los 4.887 dan handle: la ruta `/products/<handle>`
+ * es la que arma la tienda, no algo que el cliente teclee. Aun así devuelve
+ * `null` en vez de inventar cuando no hay: un lead sin producto identificado se
+ * cuenta aparte, no se reparte entre los que sí lo tienen.
+ */
+export function leadProductHandle(text: string | null | undefined): string | null {
+  return PRODUCT_HANDLE_RE.exec(text ?? "")?.[1]?.toLowerCase() || null;
+}
+
+/**
+ * ¿Son dos escrituras del MISMO handle, una de ellas estropeada?
+ *
+ * La frontera es el carácter que sigue al prefijo. `superhuman` es prefijo de
+ * `superhuman-focus-nootropico-…` y son DOS PRODUCTOS: el largo sigue con `-`,
+ * así que el corto termina en palabra completa y es un handle por derecho
+ * propio. En cambio `…-60-softge` y `…-60-softgels` parten una palabra por la
+ * mitad: eso no es un handle, es uno roto.
+ */
+function mismaFamiliaDeHandle(a: string, b: string): boolean {
+  const [corto, largo] = a.length < b.length ? [a, b] : [b, a];
+  if (corto === largo || !largo.startsWith(corto)) return false;
+  return largo[corto.length] !== "-";
+}
+
+/**
+ * Handles que son el MISMO producto escrito de dos maneras, plegados en uno.
+ *
+ * EL CASO REAL. `…-alta-potencia-60-softgels` tiene 1.349 leads y
+ * `…-alta-potencia-60-softge` tiene 1: el mismo producto con la URL cortada a
+ * media palabra. Dos entradas en el desplegable para lo mismo, y el contador
+ * —que es para lo que sirve el filtro— mintiendo en las dos.
+ *
+ * MANDA LA FRECUENCIA, NO LA LONGITUD. La primera versión plegaba el corto
+ * dentro del largo, dando por hecho que el largo es el bueno. Es falso, y en
+ * producción había el contraejemplo:
+ *
+ *   …-60-softgels          1.349 leads   ← el handle de verdad
+ *   …-60-softgelsKENKU10       1 lead    ← alguien pegó el cupón sin separador
+ *
+ * Con la regla vieja los 1.349 se mudaban al balde del typo. La forma buena de
+ * la escritura no se sabe por su tamaño; se sabe porque es la que llega mil
+ * veces. Lo estropeado es lo raro, en las dos direcciones.
+ *
+ * Por eso `handles` se recibe CON repeticiones —una entrada por lead, no un
+ * conjunto—: sin las repeticiones no hay frecuencia que comparar.
+ */
+export function canonicalProductHandles(handles: Iterable<string>): Map<string, string> {
+  const conteo = new Map<string, number>();
+  for (const h of handles) conteo.set(h, (conteo.get(h) ?? 0) + 1);
+  const all = [...conteo.keys()];
+
+  // Familias por cierre transitivo: `softge` ⊂ `softgels` ⊂ `softgelsKENKU10`
+  // son tres escrituras de lo mismo aunque el primero y el último solo se
+  // relacionen a través del de en medio.
+  const padre = new Map<string, string>(all.map((h) => [h, h]));
+  const raiz = (x: string): string => {
+    let r = x;
+    while (padre.get(r) !== r) r = padre.get(r)!;
+    let cursor = x;
+    while (padre.get(cursor) !== r) {
+      const siguiente = padre.get(cursor)!;
+      padre.set(cursor, r);
+      cursor = siguiente;
+    }
+    return r;
+  };
+  for (let i = 0; i < all.length; i += 1) {
+    for (let j = i + 1; j < all.length; j += 1) {
+      if (mismaFamiliaDeHandle(all[i]!, all[j]!)) padre.set(raiz(all[i]!), raiz(all[j]!));
+    }
+  }
+
+  // Gana el más frecuente de cada familia.
+  //
+  // EMPATE: el más largo. Cuando la frecuencia no dice nada hay que apostar, y
+  // los datos dicen a qué: la URL se estropea CORTÁNDOSE —494 mensajes llegaron
+  // recortados, 413 de ellos con link— y solo una vez se estropeó por lo
+  // contrario, un cupón pegado al final. Así que a igualdad de votos, el
+  // completo es el largo. Si aún empatan, el alfabético, para que dos
+  // ejecuciones sobre los mismos datos den lo mismo.
+  const mejor = new Map<string, string>();
+  for (const h of all) {
+    const familia = raiz(h);
+    const actual = mejor.get(familia);
+    if (!actual) {
+      mejor.set(familia, h);
+      continue;
+    }
+    const a = conteo.get(h)!;
+    const b = conteo.get(actual)!;
+    if (a > b || (a === b && (h.length > actual.length || (h.length === actual.length && h < actual)))) {
+      mejor.set(familia, h);
+    }
+  }
+
+  return new Map(all.map((h) => [h, mejor.get(raiz(h))!]));
+}
+
+/** Etiqueta legible de un handle: `feel-virgin-gel` → `Feel virgin gel`. */
+export function productLabel(handle: string): string {
+  const text = handle.replace(/[-_]+/g, " ").trim();
+  return text ? text[0]!.toUpperCase() + text.slice(1) : handle;
+}
+
+/**
+ * Assign a "Por llamar" lead to one sub-segment (highest-priority match).
+ * (Leads en Yape ya tienen su propia pestaña superior, no un sub-bucket.)
+ *
+ * `interes` JUNTA DOS SEÑALES: dio su distrito de envío, o llegó desde la ficha
+ * de un producto (tocó "consultar por WhatsApp" y el mensaje trae la URL). Son
+ * la misma pregunta contestada de dos maneras — DÓNDE lo quiere o QUÉ quiere—,
+ * y ninguna de las dos llega a carrito armado.
+ *
+ * POR QUÉ VAN JUNTAS Y NO SEPARADAS. Se probaron separadas y el equipo no las
+ * trabajaba: con cinco baldes, los de la mitad no los atendía nadie. Un balde
+ * que nadie mira no clasifica, solo estorba. Y la medición acompaña — juntas
+ * dan un escalón limpio, mientras que separadas las dos tiendas se contradecían
+ * en el orden (en Aurela el link cerraba por encima del distrito, en Kenku por
+ * debajo), así que no había un orden único que fuera cierto en las dos.
+ *
+ * Medido sobre 60 días, contando solo a los leads que la asesora llamó:
+ *
+ *              Aurela   Kenku      ← % de cierre cuando se llama
+ *   carrito     43,5     35,6
+ *   interes     12,2     19,1      ← distrito + ficha de producto
+ *   converso     2,6      6,3
+ *   frío         0,5      1,3
+ *
+ * Mismo orden en las dos tiendas, que es lo que hace fiable la cascada.
+ */
 export function leadSegment(lead: LeadSegmentSignals): LeadSegment {
   // Cart from a real Shopify draft (draft_order_gid) OR parsed from the chat.
   if ((lead.cart_item_count ?? 0) > 0 || (lead.draft_order_gid ?? "").length > 0) return "carrito";
-  if ((lead.district ?? "").trim()) return "distrito"; // dio distrito de envío
-  // ≥2 mensajes, o uno solo que ya trae el producto que le interesa. Si el texto
-  // no está cargado (base sin migrar), cae al conteo de mensajes como antes.
-  if ((lead.inbound_count ?? 0) >= 2 || hasProductLink(lead.first_inbound_text)) return "converso";
+  // Dijo DÓNDE lo quiere, o QUÉ quiere. Si el texto no está cargado (base sin
+  // migrar) el link no dispara y el distrito sigue decidiendo solo, como antes.
+  if ((lead.district ?? "").trim() || hasProductLink(lead.first_inbound_text)) return "interes";
+  if ((lead.inbound_count ?? 0) >= 2) return "converso";
   return "frio"; // solo saludó / no respondió
 }
 
@@ -405,7 +544,7 @@ export function leadHook(lead: LeadHookSignals): LeadHook | null {
 export function countLeadSegments(leads: LeadSegmentSignals[]): Record<LeadSegment, number> {
   const out: Record<LeadSegment, number> = {
     carrito: 0,
-    distrito: 0,
+    interes: 0,
     converso: 0,
     frio: 0,
   };

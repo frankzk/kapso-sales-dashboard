@@ -14,6 +14,7 @@
 import { env } from "@/lib/env";
 import { type ConversationRow } from "@/lib/types";
 import { normalizePhone } from "@/lib/phone";
+import { leadProductHandle } from "@/lib/leads";
 
 export interface KapsoClientOpts {
   apiKey: string;
@@ -1075,8 +1076,33 @@ export function collectVoucherCandidates(msgs: ParsedMsg[]): VoucherCandidate[] 
 }
 
 /** Cap for the stored first-message snippet — it's an opener hint for the
- *  advisor, not a transcript. */
-export const FIRST_INBOUND_TEXT_MAX = 240;
+ *  advisor, not a transcript.
+ *
+ *  Subió de 240 a 600. En 240 se cortaban 494 mensajes, 413 de ellos con el
+ *  link de un producto, y el corte caía a veces DENTRO de la URL: de ahí salían
+ *  handles rotos como `…-60-softge` o `keratin`. El producto ya no depende de
+ *  este campo —se extrae del mensaje ENTERO antes de recortar, ver
+ *  `last_product_handle`—, pero un gancho partido a la mitad tampoco le sirve a
+ *  quien va a llamar. */
+export const FIRST_INBOUND_TEXT_MAX = 600;
+
+/**
+ * El último producto que la clienta enlazó, mirando la conversación entera.
+ *
+ * Recorre de atrás hacia adelante y para en el primer link que encuentra: es el
+ * más reciente, y es el único que describe lo que quiere hoy.
+ */
+function ultimoProductoEnlazado(
+  msgs: readonly { dir: "inbound" | "outbound"; text: string }[],
+): string | null {
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    const m = msgs[i]!;
+    if (m.dir !== "inbound") continue;
+    const handle = leadProductHandle(m.text);
+    if (handle) return handle;
+  }
+  return null;
+}
 
 export interface ConversationSignals extends OrderSignals {
   inbound_count: number;
@@ -1084,6 +1110,21 @@ export interface ConversationSignals extends OrderSignals {
   /** What the customer actually wrote first (text or media caption), trimmed.
    *  Null when the opener carried no words (e.g. a bare image). */
   first_inbound_text: string | null;
+  /**
+   * El handle del ÚLTIMO producto que la clienta enlazó en la conversación.
+   *
+   * Es el que contesta «qué quiere AHORA», que es la pregunta de la cola. Tres
+   * cosas lo separan de mirar `first_inbound_text`:
+   *
+   *   1. Mira TODOS los mensajes entrantes, no el primero. 1.301 leads abren
+   *      con un «hola» corto y mandan el link después; para ellos el primer
+   *      mensaje no dice nada.
+   *   2. Gana el ÚLTIMO. Quien vuelve meses después por otro producto trae uno
+   *      nuevo, y el lead es la misma fila de siempre (`store_id, phone`).
+   *   3. Se lee del texto COMPLETO, antes del recorte, así que un mensaje largo
+   *      ya no parte la URL.
+   */
+  last_product_handle: string | null;
   yape: boolean;
   referral: LeadReferral | null;
   // Inbound images (post voucher-request) the text detector did not confirm — a
@@ -1151,6 +1192,7 @@ export async function fetchConversationSignals(
     inbound_count,
     first_response_seconds,
     first_inbound_text: (firstInbound?.text ?? "").trim().slice(0, FIRST_INBOUND_TEXT_MAX) || null,
+    last_product_handle: ultimoProductoEnlazado(msgs),
     yape: detectYapePayment(msgs),
     referral,
     voucherCandidates: collectVoucherCandidates(msgs),

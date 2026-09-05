@@ -1,10 +1,11 @@
 # Master Operations Map — Master de Pedidos v1
 
-Estado: Fase 4 implementada; macroetapa Por confirmar cerrada funcionalmente
+Estado: Fase 4 implementada; macroetapa Por confirmar cerrada funcionalmente;
+modelo Grupo GF Courier definido para implementación incremental
 Propietario del proceso: Frankz  
 Sistema: Kapta (`kapso-sales-dashboard`)  
 Fuente visual: board Miro «Master Operations Map»  
-Última consolidación: 2026-08-18
+Última consolidación: 2026-08-30
 
 ## 1. Propósito
 
@@ -287,8 +288,51 @@ Reglas:
   sin respuesta.
 - Horario laboral: 08:00–22:00, hora de Lima. El reloj se pausa fuera de horario.
 - `Volver a contactar` y `Pendiente de abono` guardan únicamente una **fecha**,
-  no una hora. Vencidos, hoy y próximos forman colas operativas; los
-  recordatorios de dos horas entran en las mismas colas según su vencimiento.
+  no una hora. Vencidos, hoy y próximos forman colas operativas.
+
+#### Ciclo automático de recontacto
+
+- Un pedido en confirmación **con gestión** y **sin fecha pactada** vuelve a la
+  cola cada `confirmation_cycle_days` días contados desde el último contacto.
+  El ciclo se configura por tienda y su valor por defecto es **3 días**.
+- El ciclo se cambia desde el Master, dentro del panel de **Más filtros**, y
+  también desde Ajustes de la tienda. Lo mueve **owner o admin de la
+  organización de esa tienda**: reparte la carga diaria de todo el equipo, así
+  que no es una preferencia de quien mira la pantalla. Los demás lo ven.
+- **El mando se guarda; el hecho no.** El control vive plegado porque es un
+  ajuste de tienda que se toca una vez cada mucho, y en la fila de los chips le
+  robaba un renglón a los cuatro números de la cola, que son lo que se mira todo
+  el rato. Que un pedido llegara por ciclo sí se ve sin abrir nada: la columna
+  `Próximo contacto` y el aviso del drawer lo dicen en cada pedido. Esconder
+  también esa marca convertiría el ciclo en algo que mueve la cola sin que nadie
+  sepa por qué.
+- El Master es consolidado y el ciclo es por tienda: con varias tiendas a la
+  vista el control se lee pero no se edita. Ofrecer un valor único sobre dos
+  tiendas daría a elegir algo que no existe.
+- Al cambiarlo se reescribe `confirmation_cycle_due_on` de los pedidos en
+  confirmación de esa tienda en el acto. Es la misma regla del barrido, aplicada
+  ya: sin eso la cola seguiría repartida con el ciclo anterior durante horas.
+- El ciclo es una **derivación**, no un compromiso: se calcula en cada barrido
+  del Master (`confirmation_cycle_due_on`) y nunca sustituye a
+  `confirmation_next_contact_on`, que es el hecho que alguien pactó en una
+  llamada. Si el intento dejó fecha, manda la fecha y no hay ciclo.
+- **La fecha pactada vence; el ciclo no.** Una fecha pactada incumplida se queda
+  en `Vencidos` porque es una promesa al cliente que hay que ver. Un día de
+  ciclo que ya pasó significa «toca hoy»: el pedido aparece en `Hoy` y, al
+  registrarse el intento, el siguiente ciclo se cuenta desde ese contacto. Así
+  el pedido rota cada N días en vez de hundirse para siempre en `Vencidos`.
+- El recordatorio de dos horas ordena el trabajo **dentro de su día** y entra en
+  las colas según su vencimiento. Pasado ese día lo sustituye el ciclo: un
+  recordatorio de hace tres semanas ya no dice nada que la antigüedad no diga
+  mejor, y dejarlo mandando era lo que mantenía pedidos de veintitrés días con
+  un solo intento fuera de la cola de `Hoy`.
+- Orden de mando de la cola: **fecha pactada → recordatorio vigente → ciclo**.
+- `Sin llamar` no entra en el ciclo: sin un solo contacto no hay desde cuándo
+  contar, y su chip propio ya lo separa. Lo delata su antigüedad, no la cola.
+- El ciclo no gasta días de gestión ni acerca el `Último intento`: solo el
+  §6.1 —un día distinto CON gestión— gasta cupo. Un pedido puede rotar por
+  ciclo muchas veces sin pasar de 1/7 si nadie lo llama, y eso es exactamente
+  lo que el número tiene que seguir diciendo.
 - Provincia COD queda confirmada al validar producto, cantidad, monto, fecha
   aproximada y dirección de entrega.
 - Agencia queda confirmada solo cuando el pago exigido ha sido validado.
@@ -1291,6 +1335,124 @@ Responsables: Akemi y Mariannys. Akemi es la jefa de Mariannys.
 Entrada elegible desde Aliclik: no contesta, intento fallido, rechazo sujeto a
 revisión, guía cancelada por courier y devolución.
 
+**Cada transición del courier deja constancia en el PEDIDO.** El barrido de
+Aliclik escribe un `courier_status` en el historial cada vez que el estado
+cambia de verdad —no en cada pasada, que lo llenaría de líneas idénticas— con
+el estado anterior, el nuevo y la **etiqueta cruda de Aliclik**. Esa etiqueta es
+donde vive el motivo: «anulado» a secas no distingue si lo mató su LLAMADA
+(`ANNULLED` en el tercer campo) o su reparto, y esa es toda la diferencia entre
+«el paquete volvió» y «nos cancelaron la venta antes de que saliera».
+
+Se fecha con el `updatedAt` de Aliclik, no con el nuestro: uno es cuándo pasó,
+el otro cuándo nos enteramos.
+
+Lo que Aliclik **no** manda es quién hizo el cambio. Su contrato no trae ni
+autor ni motivo libre, así que el historial puede decir qué pasó y cuándo, pero
+no quién. Para eso hay que preguntarles con el nº de guía y la hora.
+
+**Una guía cerrada NO cierra el pedido.** Las dos últimas entradas de esa lista
+—cancelada por courier y devolución— cierran la GUÍA: esa guía sí terminó, el
+paquete sí volvió, y `returned_at` se sella. Lo que sigue vivo es el PEDIDO. Por
+eso el estado de la guía no se falsea para que reaparezca: falsearlo rompería el
+registro de lo que de verdad pasó, y las otras pestañas son ese registro.
+
+Lo que distingue a un pedido cerrado que merece otro intento de uno cerrado de
+verdad **no es el estado del pedido** —`anulado` cubre tanto «lo canceló el
+courier» como «lo cancelamos nosotros»— **sino la etiqueta que Aliclik puso en
+su guía**: un resultado de entrega fallido (`CANCEL`, `ANNULLED`, `REFUSED`,
+`NOT_RESPOND`, `RESCHEDULED`) con un despacho que no diga que el paquete nunca
+salió del almacén de origen.
+
+**Aparecen en la MISMA cola de Pendiente**, no en una pestaña propia: son la
+misma pregunta —a quién hay que llamar— y esta sección las lista junto a las
+demás entradas elegibles. Se acotan con el chip **«Por recuperar»** de la fila
+de filtros. Una pestaña más sería un balde más que nadie mira, que es el mismo
+motivo por el que los segmentos de leads se fusionaron.
+
+La consulta va **acotada por ventana** —la misma anchura que usa la pantalla de
+recuperación, `RECOVERY_DEFAULT_MAX_DAYS * 2`— porque el conjunto «cerradas de
+Aliclik» crece sin fin. Se consulta más ancho que la elegibilidad a propósito:
+para poder MOSTRAR las vencidas con su motivo en vez de esconderlas.
+
+La lista y el contador salen de la MISMA llamada. El conteo no puede ser un
+`COUNT` exacto porque el predicado necesita partir `reported_status` y eso se
+resuelve en memoria; dos caminos distintos para el número y las filas es cómo
+el chip acaba diciendo una cosa y la tabla otra.
+
+Sobre esos pedidos **se puede crear una salida Swayp aunque estén cerrados**,
+que es lo que da sentido al stock puesto en provincia. Medido al abrirlo: 844
+guías así sobre 842 pedidos; 456 con 15 días o menos, y 254 de la última semana
+todavía de camino de vuelta — el momento en que llamar sirve más, porque el
+paquete sigue cerca de la clienta.
+
+**Segmentos de la cola de leads.** Un lead cae en UN solo balde, primera
+coincidencia gana: `carrito` → `interes` → `converso` → `frio`.
+
+`interes` junta dos señales que son la misma pregunta contestada de dos
+maneras: **dio su distrito** de envío (dónde lo quiere) o **llegó desde la
+ficha de un producto** (qué quiere) — el mensaje trae la URL prellenada porque
+tocó «consultar por WhatsApp». Ninguna de las dos llega a carrito armado.
+
+Van juntas por dos razones. La operativa: se probaron separadas y el equipo no
+trabajaba las del medio — con cinco baldes, los de en medio no los atiende
+nadie, y un balde que nadie mira no clasifica, estorba. La del dato: separadas,
+las dos tiendas se contradecían en el orden (en Aurela la ficha cerraba por
+encima del distrito, en Kenku por debajo), así que no existía un orden único
+que fuera cierto en las dos. Unidas, sí.
+
+Tasa de cierre entre los LLAMADOS, 60 días:
+
+| Segmento | Aurela | Kenku |
+|---|---|---|
+| `carrito` | 43,5 % | 35,6 % |
+| `interes` | 12,2 % | 19,1 % |
+| `converso` | 2,6 % | 6,3 % |
+| `frio` | 0,5 % | 1,3 % |
+
+Mismo orden en las dos tiendas; lo que cambia son las magnitudes, y por eso los
+pesos de llamada son por tienda.
+
+**Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
+que la cola tiene que recortar: quedan fuera **Shalom, Tanders, Urpi y el
+reparto propio**. Shalom es agencia —la clienta recoge en el terminal, no hay
+intento de entrega que reprogramar— y por eso aparece como DESTINO de una
+recuperación (§11.1, §12), nunca como insumo. Los otros tres no se reprograman
+desde esta pantalla.
+
+El recorte es una lista de **excluidos**, no de admitidos: un courier nuevo
+entra en la cola y alguien pregunta qué hace ahí. Con una lista de admitidos
+desaparecería sin que nadie se enterara, y trabajo que falta no se ve.
+
+Las guías `por_definir` —filas sintéticas de pedidos que todavía no tienen
+salida— SÍ se quedan. Sacarlas es otra decisión y no está tomada.
+
+**Y tampoco entra lo que Aliclik todavía no ha sacado del almacén.** La cola es
+para lo que se intentó entregar y no se pudo; una guía recién preparada no tiene
+nada que reprogramar. Había 92 así entre las pendientes —89 sin un solo intento,
+varias creadas ese mismo día— y la pantalla les ofrecía ruta Fenix como a
+cualquier otra.
+
+El criterio es la **custodia física**, no el contador de intentos. `TO_PREPARE`
+y `PREPARED` dejan el paquete en custodia `empresa`; desde `PICKED` pasa a
+`courier` (§6.2). El contador sale del Excel y puede sencillamente no venir —la
+pantalla ya lo dice, «Sin NRO. INTENTOS en Excel»—, así que filtrar por él
+confundiría «no hubo intento» con «no nos lo contaron». Hay 2 guías en poder del
+courier sin intentos informados: con la custodia se quedan, que es lo correcto.
+
+Dos límites, los dos deliberados:
+
+- **Solo Aliclik.** Las `por_definir` y las guías Fenix pendientes también están
+  en custodia `empresa`; sacarlas es otra decisión y no está tomada.
+- **Solo la pestaña Pendiente.** `custody_state` no se actualiza al entregar, así
+  que en una guía cerrada el valor es viejo y no significa «sigue en el almacén».
+  Aplicar el recorte a todas las pestañas escondía 317 anuladas, 78 entregadas,
+  46 en ruta y 15 transferidas. Las otras pestañas son el REGISTRO de lo que
+  pasó: esconder ahí una guía entregada es perder historial, no limpiar una cola.
+
+El mismo recorte se aplica a la lista y a los contadores de las pestañas, desde
+una sola definición: el número del chip se lee justo encima de la tabla, y si
+cada uno filtrara por su cuenta podrían decir cosas distintas.
+
 Antes de enviar:
 
 - Revisar el motivo anterior.
@@ -1510,6 +1672,88 @@ Horarios Swayp documentados:
 - San Sebastián y San Jerónimo: 10:00–13:00.
 - Trujillo: 09:00–17:00.
 - Juliaca: 09:00–16:00.
+
+### 11.2 Novedades de Swayp
+
+Una **novedad** es el estado 6 de Swayp: el mensajero llegó, no pudo entregar, y
+la guía queda detenida esperando una instrucción. No es un intento fallido ya
+cerrado —eso se registra aparte—; es una pregunta abierta que alguien tiene que
+responder para que el paquete siga moviéndose.
+
+El estado 8, «Revisión», es el mensajero marcando devolución por su cuenta.
+Admite la misma gestión, y es la única puerta para revertir una devolución que la
+operación no pidió. Ambos estados mapean a `pendiente` en el modelo de la app
+—que solo tiene cinco estados—, así que el estado crudo de Swayp es lo único que
+distingue «esperando instrucción» de «todavía no salió».
+
+Swayp acepta exactamente tres respuestas:
+
+| Acción | Qué significa | Reversible |
+| --- | --- | --- |
+| Volver a ofrecer | El mensajero reintenta la entrega sin cambiar la fecha | Sí |
+| Devolver al remitente | Se cierra el intento y el paquete vuelve a la bodega | No |
+| Reprogramar | El mensajero vuelve en la fecha que se indique | Sí |
+
+Reglas:
+
+- **El comentario es obligatorio en las tres.** Swayp se lo muestra al mensajero:
+  es lo único que va a leer antes de decidir qué hacer con el paquete.
+- **La fecha solo existe al reprogramar**, y no puede ser hoy: Swayp arma la ruta
+  del día siguiente entre las 16:00 y las 17:00 (§9), así que reprogramar «para
+  hoy» es pedir algo que ya no entra en ninguna ruta.
+- **Resolver una novedad NO es una salida nueva.** No crea guía, no crea QR, no
+  consume el máximo global de cinco salidas ni la política de §9.3 de que Swayp
+  se use una sola vez por pedido en Lima. Es gestión de la guía que ya existe.
+  Devolver al remitente sí abre la devolución física, que en Swayp se recoge cada
+  semana o cada quince días (§9.4).
+- **El desenlace lo confirma Swayp, no nosotros.** Al resolver una novedad la app
+  no toca el estado del envío: lo actualiza el webhook cuando el mensajero
+  ejecuta la instrucción —o cuando no la ejecuta—. Adelantarlo sería pintar en el
+  Master un final que todavía no ocurrió.
+- Queda registrado en `order_events` con el término `novelty_solved`, que guarda
+  quién decidió, qué acción, con qué comentario y para qué fecha. Es append-only.
+
+Permisos: resolver una novedad exige `swayp.solve_novelty`, que la vendedora
+tiene —es gestión de venta, la misma persona que llamaría a la clienta—.
+**Devolver al remitente exige además `closure.return`**, porque cierra la entrega
+y dispara la devolución física, que es lo que ese permiso gobierna en el resto
+del sistema.
+
+### 11.3 Quién emite el número de guía al reprogramar
+
+Al reprogramar hacia Swayp desde Reproprovincia, el número de guía **lo emite
+Swayp por API**, no la app. Hasta ahora la app inventaba un código local y la
+guía había que cargarla después a mano por el Excel de programación; ese código
+seguía siendo el que la operadora leía, así que nadie notaba que en el sistema
+de Swayp no existía nada.
+
+**Qué ciudades van por API y quién lo decide.** La frontera es una sola:
+`SWAYP_SENDERS`, el JSON de bodegas configuradas. Hoy solo tiene Arequipa,
+porque es la única bodega con stock cargado del lado de Swayp. Un destino de
+otra provincia no encuentra bodega, la API no se llama y el envío sigue por
+Excel exactamente como hasta hoy. **Habilitar una ciudad es agregarle una clave
+a ese JSON**: no se toca código y no se reentrena a nadie.
+
+**No conseguir número de Swayp no es un error.** Integración apagada, ciudad sin
+bodega, dirección incompleta, token vencido o API caída: en todos los casos la
+reprogramación se completa con el código local y el aviso dice por qué. Dejar a
+la operadora bloqueada porque un courier no responde sería peor que una guía
+manual —y la guía manual es el procedimiento que ya conoce—.
+
+**Se pide una sola vez.** La API de Swayp no acepta clave de idempotencia, así
+que un POST repetido tras un timeout crearía una segunda guía y un segundo
+paquete. Un intento, y si falla, código local.
+
+**El stock se valida ítem por ítem, no por pedido.** La reja que decide si el
+envío se sigue trabajando aprueba cuando *cualquier* producto tiene stock; para
+mandar un paquete eso no alcanza. En un pedido de dos productos con uno solo en
+bodega, Swayp recibiría una guía que su almacén no puede armar. Si falta
+cualquier ítem, el envío cae al código local con el motivo —no se bloquea la
+reprogramación, que antes de esto no validaba nada—.
+
+**El número que emite Swayp se guarda en `swayp_guide`, no solo en
+`guide_code`.** El webhook de Swayp busca la guía por esa columna: sin ella el
+envío se quedaría En ruta para siempre por más que el mensajero reportara.
 
 ## 12. Agencia: Shalom y Olva
 
@@ -1994,6 +2238,22 @@ destino nuevo es exactamente el cruce que hay que evitar.
 listas de armados, de paquetes sin ruta y de paquetes dentro de una ruta se
 buscan por código de salida, guía, pedido, cliente o distrito.
 
+**La búsqueda mira TODO el universo asignable, no la porción que se pinta.** Una
+lista de miles se muestra recortada por fuerza, y un buscador que solo filtre lo
+recortado no encuentra lo que quedó fuera por más que se escriba el código
+exacto: contesta «no hay» cuando lo cierto es «no bajó». La consulta va al
+servidor, y la muestra dice que es una muestra.
+
+**Qué pedidos se ofrecen para una ruta.** Solo los que están vivos y con el
+paquete bajo custodia de la empresa sin comprometer en otro sitio:
+`listo_para_asignar`, `retirado_del_manifiesto` —salió de un manifiesto con
+motivo y vuelve al pool— y `por_reprogramar_lima` (§13). Quedan fuera
+`asignado_a_ruta` y `en_cotejo` porque ya van en otra —dos motorizados con el
+mismo paquete es el fallo caro—, `listo_para_recojo` porque en agencia recoge la
+clienta, y toda `Preparación` porque el paquete todavía no existe. Ofrecer lo
+que no se puede rutear no es ruido inocuo: gasta el recorte de la lista y empuja
+fuera a los que sí se podían despachar.
+
 #### El Excel de Urpi
 
 Urpi no recibe una lista nuestra: carga los pedidos en **su** sistema desde **su**
@@ -2280,6 +2540,34 @@ fallar**: se verificó contra cuatro mutantes —la función anterior, la versi�
 el guardarraíl de ambigüedad, la que busca dentro del texto y la que rompe la
 rama sin región— y los caza los cuatro. Una prueba que no falla ante ninguno de
 esos no habría estado protegiendo nada.
+
+### 19.0.2 «No hay dato» no es «no hay cobertura»
+
+La cobertura Fenix/Swayp de un envío se decide por su ciudad. La columna `city`
+de `shipments` es la que la nombra, y **el alta por la API de Aliclik la deja
+vacía**: 219 envíos, 85 de ellos pendientes. Leerla sola convierte «falta el
+dato» en «fuera de cobertura», que son dos cosas distintas —y la segunda esconde
+trabajo despachable—.
+
+La regla: **cuando `city` viene vacía, la ciudad se deriva del distrito y la
+provincia.** Cuando viene cargada manda ella, sin derivar nada por encima: el
+courier puede contradecir a Shopify, y esa discrepancia es un aviso que hay que
+ver, no tapar.
+
+Vive en una sola función (`coverageCityOf`) porque estuvo repartida y las copias
+se desincronizaron. Tenerla en un sitio no basta: **hay que pasarle el destino
+completo**. Las rejas que escriben la elegibilidad seleccionaban `city` a secas,
+así que la cola mostraba «Fenix Ok» —la lectura sí traía el distrito— y el botón
+respondía «Fenix no tiene cobertura en la ciudad indicada» sobre el mismo envío.
+La frase delataba el bug: «la ciudad indicada» es el texto de respaldo de cuando
+`city` es NULL. Por eso las cuatro columnas del destino se seleccionan juntas,
+desde una constante única (`FENIX_COVERAGE_COLUMNS`), en los cuatro caminos: la
+lectura de la cola, la reja de reprogramación, la excepción sobre guía anulada y
+el barrido masivo que resincroniza la elegibilidad.
+
+`province` llegó en la migración 0039 y el histórico guarda la suya en `region`.
+Se resuelve una sola vez (`province ?? region`): sin ese respaldo, media base
+pierde la provincia y con ella la derivación.
 
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 
@@ -2880,4 +3168,356 @@ crear la salida de varios pedidos a la vez, con un solo courier y una sola fecha
 - Un pedido que no cumple **no detiene a los demás**: la tanda informa cuál falló
   y por qué, pedido por pedido.
 - Al terminar se descargan los rótulos de las salidas creadas en el mismo gesto.
+
+## 29. Grupo GF Courier — operador logístico y fulfillment
+
+### 29.1 Decisión de producto
+
+Los motorizados que hasta ahora se llamaban **propios** dejan de ser una
+excepción dentro de Aurela o Kenku. Operan bajo **Grupo GF Courier**, un operador
+logístico de Grupo GF que presta servicio a las tiendas del grupo y, en el
+futuro, a tiendas externas.
+
+La interfaz puede mostrar todos los operadores como alternativas de envío, pero
+las identidades no se mezclan:
+
+- **Tienda cliente**: dueña del pedido comercial y del dinero de la venta.
+- **Operador logístico**: empresa contratada para preparar y/o entregar.
+- **Motorizado**: persona que trabaja para un operador y recibe la custodia.
+- **Solicitud logística**: instrucción de preparar o entregar un pedido.
+- **Paquete/salida**: unidad física con QR estable (§3–4).
+- **Ruta**: trabajo de un motorizado durante un día.
+- **Carga**: conjunto de paquetes entregado al motorizado dentro de esa ruta.
+- **Contrato de servicio**: cobertura, tarifas y reglas entre tienda y operador.
+
+Grupo GF posee cuatro capacidades distintas, aunque compartan administración y
+almacén:
+
+| Capacidad | Responsabilidad |
+| --- | --- |
+| Proveeduría Grupo GF | Puede ser propietaria de una bolsa de inventario compartida |
+| Almacén Grupo GF | Custodia inventario, reserva, arma y rotula |
+| Aurela / Kenku / tienda externa | Canal comercial y propietario del pedido |
+| Grupo GF Courier | Planifica rutas, transfiere custodia, entrega y liquida |
+
+No se crea una tienda Shopify ficticia para Grupo GF Courier. Aurela y Kenku
+deben relacionarse con el operador bajo las mismas reglas que una futura tienda
+externa, para no mantener un segundo flujo especial de «propios».
+
+### 29.2 Alcance inicial
+
+- Cobertura: Lima Metropolitana y Callao.
+- Punto de operación: un único almacén de Grupo GF.
+- Corte para salida el mismo día: **11:30**.
+- La tienda asigna directamente la solicitud a Grupo GF Courier.
+- Grupo GF puede recibir inventario de una tienda, pero en el alcance inicial no
+  recoge paquetes armados en otros almacenes: Grupo GF reserva, arma y rotula.
+- Una ruta puede mezclar pedidos de Aurela, Kenku y otras tiendas autorizadas.
+- El portal de una tienda externa admite conexión Shopify, API y carga Excel.
+
+Para Aurela y Kenku, la admisión operativa ocurre desde **Grupo GF Courier →
+Pedidos disponibles**, no creando una salida pedido por pedido en la Mesa de
+ruta. Los pedidos Kapta aparecen automáticamente desde `Preparación · Por
+generar rótulo`, `Preparación · Por armar` y `Por despachar · Listo para
+asignar`, cuando corresponden a Lima Metropolitana o Callao y tienen operador y
+contrato activos, distrito canónico, tarifa vigente y servicio no pausado. Si
+ya existe una salida, debe ser la caja `por definir`; una salida asignada a otro
+courier no se ofrece. El operador puede tomarlos individualmente o en lote. La
+Mesa de ruta solo informa que el pedido está disponible y enlaza esa bandeja;
+no abre un segundo formulario ni genera un rótulo desde el drawer.
+
+**Tomar y armar son procesos independientes.** Grupo GF Courier puede tomar la
+solicitud antes, durante o después del armado. Tomar congela servicio, tarifa y
+fecha prevista; no certifica que la caja esté armada y no exige el escaneo de
+Almacén. Almacén conserva todos los pedidos en su cola normal y siempre los
+prepara, hayan sido tomados o no. La bandeja del courier muestra
+`Pendiente de armado`, `Almacén armando` o `Armado · listo para ruta` como dato,
+nunca como candado para admitir la solicitud. El operador del courier no debe
+entrar a la pantalla de Almacén para hacer avanzar el pedido.
+
+**Tomar, asignar y cotejar tampoco son el mismo gesto.** Desde `Pedidos tomados`,
+Grupo GF Courier puede seleccionar solicitudes y asignarlas a la ruta diaria de
+un motorizado aunque Almacén todavía no haya terminado de armarlas. La asignación
+reutiliza la única ruta de ese motorizado para la fecha prevista y coloca cada
+salida en su manifiesto; no crea otra caja física, no cambia custodia y no marca
+el paquete como armado. Almacén deja luego una caja o agrupación lista por
+motorizado con todos los pedidos que alcanzaron a preparar. El **cotejo de
+oficina** ocurre frente a esa caja: se escanea cada paquete armado y solo se
+confirma lo que ya estaba asignado. Un pedido pendiente de armado puede figurar
+en la ruta planificada, pero no puede superar el cotejo ni transferir custodia
+hasta existir físicamente. La bandeja enlaza directamente la ruta/caja en la Mesa
+de despacho para continuar ese cotejo sin volver a seleccionar los pedidos.
+
+La operación se lee en dos niveles. `Pedidos tomados` separa **Sin ruta**,
+**Asignados**, **Pendientes de armado** y **Listos para cotejo** sin duplicar
+estados persistidos. `Rutas operativas` agrupa por manifiesto/motorizado y fecha,
+y muestra cuatro contadores distintos: asignados, armados por Almacén, cotejados
+en oficina y recibidos por el motorizado. El porcentaje visible corresponde al
+primer cotejo físico, no al mero armado ni a la planificación. Desde cada fila
+se abre el manifiesto exacto en Mesa de despacho.
+
+`Tomar pedidos` crea o reutiliza una **solicitud logística** idempotente, congela
+contrato, tarifa, distrito y fecha prevista, y recién entonces crea la salida.
+Si Kapta ya había creado una salida `por definir`, se rellena esa misma fila y
+se conserva su QR; nunca se pega un segundo rótulo por elegir Grupo GF Courier.
+La acción vuelve a comprobar todas las reglas en el servidor, porque una tarifa,
+contrato o pausa puede cambiar mientras la bandeja está abierta. Un doble clic o
+dos operadores tomando el mismo pedido no pueden crear dos solicitudes activas.
+
+Las futuras tiendas externas pueden conservar asignación explícita según su
+contrato. La cola automática descrita arriba es el camino de mínima fricción
+para las tiendas de Grupo GF administradas dentro de Kapta.
+
+**Prioridad dentro de Pedidos disponibles.** La bandeja separa dos colas sin
+inventar un estado operativo nuevo:
+
+- **Prioridad urgente · nunca salieron:** el pedido no tiene ninguna salida con
+  `shipments.dispatched_at`. Crear o anular un rótulo sin transferir físicamente
+  el paquete no lo saca de este grupo. Esta es la vista inicial y se ordena del
+  pedido más reciente al más antiguo.
+- **Con salida previa:** existe al menos una salida histórica con
+  `shipments.dispatched_at`, aunque el pedido haya regresado a Preparación. Se
+  trata como reprogramación o recuperación y conserva toda la evidencia de la
+  salida anterior.
+
+La separación solo prioriza la gestión. No cambia la elegibilidad, la tarifa ni
+las comprobaciones idempotentes de `Tomar pedidos`.
+
+Durante la transición, las salidas de Grupo GF siguen guardando el token legado
+`propio` para no romper rutas, QR, manifiestos ni liquidaciones históricas. La
+interfaz ya las nombra **Grupo GF Courier**. El token se reemplazará por el
+`provider_id` estable al ejecutar el paso 2 de §29.11, con migración auditada y
+sin reescribir el historial.
+
+Las fichas de `riders` ya usan **Grupo GF Courier** como empresa operadora para
+altas y ediciones nuevas. Un `courier` nulo, vacío, `propio` o
+`motorizado propio` sigue siendo un alias histórico de la misma afiliación. Esta
+compatibilidad permite conservar `riders.id`, usuarios vinculados, rutas y
+liquidaciones; la normalización del texto no crea una segunda ficha.
+
+Shopify continúa siendo la única fuente de **pedidos comerciales administrados
+por Kapta** (§2). Una solicitud recibida directamente por API o Excel es una
+solicitud logística, no un pedido Shopify inventado. Debe conservar el código
+externo de la tienda y una clave de idempotencia para impedir duplicados.
+
+### 29.3 Inventario preparado, pero no obligatorio
+
+El courier no exige implementar ahora un ERP completo. La fundación admite
+**bolsas de inventario** opcionales:
+
+- Una bolsa tiene propietario; inicialmente puede existir la bolsa compartida de
+  Proveeduría Grupo GF.
+- Una tienda puede vender desde una o varias bolsas autorizadas.
+- Cada línea del pedido conserva la bolsa de la que se reservó.
+- El primer pedido que entra y reserva correctamente gana la unidad.
+- Un pedido que mezcla bolsas no queda listo hasta reservar todas sus líneas.
+- La reserva ocurre al ingresar el pedido.
+- Un faltante deja la solicitud logística observada; Grupo GF puede anularla,
+  pero no cancela automáticamente el pedido comercial en Shopify (§2).
+- La tienda y Grupo GF cotejan una futura recepción de inventario; la palabra
+  final sobre la cantidad recibida es de Grupo GF. Una diferencia queda
+  observada hasta que la tienda la acepte.
+- Las filas históricas o tiendas todavía sin control de inventario pueden
+  mantener la bolsa y la reserva nulas. Esta compatibilidad no se interpreta
+  como stock cero.
+
+La Mesa de fulfillment debe ser rápida y excepcional: `Pendiente de armar →
+Armando → Listo`. La reserva es automática y no crea un formulario. En el camino
+normal, almacén comprueba productos, imprime el rótulo y confirma «Armado y
+rotulado» con una sola acción o escaneo. Los motivos aparecen solo ante faltantes
+o correcciones. Debe permitir lotes, impresión masiva, escáner y filtros por
+tienda/fecha; el courier se decide en despacho, no durante el armado.
+
+### 29.4 QR e identidad física
+
+- Un paquete físico tiene **un solo QR interno**.
+- Si la solicitud nace de Kapta, Grupo GF Courier reutiliza el QR de la salida.
+- Si entra directamente por API o Excel, Grupo GF crea la solicitud, la salida y
+  el QR con el mismo esquema de identidad.
+- Una transferencia entre motorizados conserva el QR; cambia la custodia y queda
+  un evento por cada actor.
+- Una reprogramación que conserva el paquete armado conserva su identidad física.
+- Un pedido anulado, rechazado definitivamente o que debe desarmarse libera la
+  reserva y devuelve el producto a su bolsa. Si luego se vuelve a armar, nace una
+  salida nueva con QR nuevo, respetando §4.
+
+### 29.5 Ruta diaria, cargas y transferencias
+
+- Cada motorizado tiene una sola ruta por día. La ruta también es la unidad de su
+  liquidación diaria.
+- Si vuelve al almacén por uno o dos pedidos, se agregan a la misma ruta mediante
+  una **carga adicional**; nunca se crea otra ruta ni se incorporan paquetes sin
+  cotejo.
+- Cada carga registra hora, paquetes, entrega de almacén y recepción del
+  motorizado. La segunda recepción usa el mismo doble cotejo de §18.
+- La ruta puede mezclar tiendas. El cobro, costo e inventario siempre conservan
+  su tienda de origen.
+- Una ruta puede transferirse a otro motorizado. Los paquetes pendientes cambian
+  custodia mediante doble cotejo y el historial conserva quién entregó y quién
+  recibió.
+- Una ruta transferida sigue siendo una ruta operativa; cada motorizado liquida
+  únicamente lo que cobró. Grupo GF emite una sola liquidación diaria a cada
+  tienda.
+- Si Roy es responsable y Daysi o Frankz completa un reporte por él, se guardan
+  por separado `motorizado_responsable` y `reportado_por`, con motivo, fecha y
+  evidencia. Nadie suplanta al motorizado.
+
+Los dos modelos técnicos actuales —`delivery_routes` para `/rutas` y `/reparto`,
+y `dispatch_manifests` para la Mesa de despacho— deben converger en un ciclo
+canónico. Hasta completar la migración no se borra historial ni se duplica una
+custodia. El destino es una ruta diaria con cargas/manifiestos vinculados, paradas
+y eventos append-only.
+
+### 29.6 Agenda y cambios posteriores al corte
+
+- Una tienda puede pactar fecha y una franja amplia de aproximadamente cinco
+  horas.
+- Un cambio después de las 11:30 requiere aprobación de Grupo GF y muestra
+  distrito, tarifa y fecha resultantes.
+- Solo se aprueba dentro del día si el destino permanece en la ruta del mismo
+  motorizado.
+- Si el cambio exige pasar a otro motorizado, se cancela la guía logística y la
+  solicitud vuelve a `Por agendar`. Nunca se mueve silenciosamente entre rutas.
+- La tienda o Grupo GF pueden reprogramar, y siempre se registra actor y motivo.
+- Cancelar una solicitud no tiene costo, incluso si el motorizado ya salió. El
+  paquete puede retornar al almacén al día siguiente y la cancelación logística
+  no cancela por sí sola el pedido Shopify.
+
+### 29.7 Resultado y evidencia
+
+El resultado lo reporta el motorizado o, excepcionalmente, Daysi/Frankz en su
+nombre. Fecha y hora se capturan automáticamente. Una entrega exige:
+
+- foto del paquete entregado;
+- comprobante del pago cuando corresponde;
+- coordenada GPS tomada al reportar; y
+- actor real que cargó la evidencia.
+
+La tienda ve estado y evidencia, no nombre/teléfono del motorizado ni ubicación
+en vivo. El cliente final recibe un enlace público que muestra solo estados.
+
+Catálogo inicial y regla de cobro:
+
+| Resultado | Costo de envío |
+| --- | --- |
+| Entregado | Tarifa del distrito |
+| Rechazado por el cliente | Misma tarifa distrital que una entrega, una vez por pedido y ruta/día |
+| No responde | S/ 0 |
+| Cliente ausente | S/ 0 |
+| Dirección incorrecta | S/ 0; Grupo GF absorbe el intento y se identifica la falla de origen |
+| Reprogramado | S/ 0; conserva el paquete armado |
+| Cancelado por la tienda | S/ 0 |
+| Incidencia del motorizado | S/ 0 |
+| Paquete dañado o faltante | Observado |
+
+Un rechazo exige motivo y evidencia. Si el cliente rechaza en días distintos,
+se cobra como máximo una vez en cada ruta/día. Otros intentos no entregados
+siguen sin costo aunque se repitan.
+
+### 29.8 Tarifas por distrito y comisión Yape
+
+Grupo GF Courier cobra una tarifa por distrito/zona que **incluye IGV**. Debe
+existir una tabla configurable, no constantes en código:
+
+| Campo | Regla |
+| --- | --- |
+| Distrito | Ubigeo oficial; no texto libre como identidad |
+| Zona | Agrupación opcional para edición masiva |
+| Tarifa de entrega o rechazo | Un solo importe incluido IGV; ambos resultados cobran exactamente lo mismo |
+| Tienda | Nula = general; informada = excepción contractual |
+| Vigencia | Desde/hasta; una edición abre otra vigencia |
+| Estado | Activa/inactiva, sin borrar historial |
+
+El universo de la matriz se deriva de los pedidos de la organización que el
+Master clasifica con `coverage = lima`. El distrito libre del pedido nunca se
+muestra directamente: se resuelve contra el catálogo canónico y sus alias
+(`Surco` → `Santiago de Surco`, `SJL` → `San Juan de Lurigancho`, etc.).
+`Lurigancho Chosica` y `Chosica` comparten la tarifa canónica de `Lurigancho`.
+Cada fila muestra también la cantidad histórica de pedidos Lima que la sustenta,
+como señal de auditoría; los textos que no pueden resolverse se corrigen en el
+Master y no crean distritos ni tarifas nuevas por accidente.
+
+La disponibilidad es independiente de la tarifa. Un distrito puede pausarse de
+forma general o solo para una tienda, con motivo obligatorio y fecha opcional de
+reactivación. La pausa general prevalece sobre cualquier excepción contractual,
+bloquea únicamente nuevas asignaciones y no altera rutas ya iniciadas. Poner una
+tarifa en S/0 nunca pausa el servicio. Reactivar conserva el precio y registra un
+nuevo evento; el historial de pausas y reactivaciones es append-only.
+
+Precedencia: tarifa particular de la tienda y distrito, luego tarifa general de
+Grupo GF Courier. Sin coincidencia se muestra `Sin tarifa configurada`, no S/0,
+y se bloquea el cierre financiero. Daysi y Frankz pueden administrar tarifas;
+la pantalla permite edición por zona e importar/exportar Excel.
+
+La comisión general por pagos recibidos en el Yape de Grupo GF es **3.5 %**:
+
+- se calcula solo sobre el importe efectivamente pagado por Yape;
+- se redondea a dos decimales por operación;
+- se descuenta en la liquidación diaria de la tienda;
+- no se aplica a efectivo ni a un rechazo sin pago; y
+- se conserva como regla con vigencia, aunque inicialmente sea general.
+
+### 29.9 Liquidaciones y efectivo
+
+Existen dos conciliaciones relacionadas, no intercambiables:
+
+1. **Motorizado ↔ Grupo GF Courier**: cobros y evidencia de la ruta diaria.
+2. **Grupo GF Courier ↔ tienda**: COD cobrado menos tarifa de entrega/rechazo y
+   comisión Yape aplicable.
+
+Ambas son diarias y requieren aprobación humana después de finalizar todas las
+rutas. Una parada pendiente bloquea la liquidación. Daysi o Frankz pueden
+completar el reporte faltante con la auditoría de §29.5; no existe cierre
+automático silencioso.
+
+El efectivo máximo planificado por motorizado es S/ 5,000 por ruta:
+
+- advertencia desde S/ 4,000;
+- bloqueo de nuevas asignaciones al superar S/ 5,000; y
+- Daysi o Frankz pueden autorizar una excepción con motivo auditado.
+
+Neto de la tienda:
+
+```text
+COD cobrado
+− tarifa de entrega o rechazo
+− 3.5 % del importe recibido por Yape
+= neto diario para la tienda
+```
+
+Si una fila no tiene tarifa, evidencia o resultado definitivo, la liquidación
+completa permanece abierta. Las correcciones conservan lo declarado, el valor
+anterior, actor, motivo y fecha como ya exige §14.
+
+### 29.10 Acceso y administración
+
+- Daysi administra tiendas cliente, motorizados, capacidad, asignaciones, rutas,
+  contratos y tarifas de Grupo GF Courier.
+- Frankz conserva permiso de propietario y excepción.
+- Una tienda ve únicamente sus solicitudes, inventario asociado, estados,
+  evidencias, cargos y liquidaciones.
+- El operador ve solo los datos necesarios de las tiendas con contrato vigente.
+- El motorizado ve únicamente sus cargas y paradas activas.
+- Grupo GF puede suspender una tienda por deuda, incidencias o problemas de
+  inventario; la suspensión no borra pedidos ni liquidaciones existentes.
+
+### 29.11 Implementación incremental
+
+El orden obligatorio evita reescribir las pantallas sobre identidades ambiguas:
+
+1. Crear operador, tienda cliente, contrato, tarifa y comisión con vigencia.
+2. Formalizar «motorizados propios» como Grupo GF Courier conservando ids e
+   historial. **Compatibilidad aplicada:** nuevas altas/ediciones guardan la
+   afiliación formal y las fichas antiguas nulas siguen resolviendo al mismo
+   operador; no se duplican personas ni rutas.
+3. Vincular ruta diaria, cargas/manifiestos y paradas; retirar la doble verdad
+   entre `delivery_routes` y `dispatch_manifests` solo después de comprobarla.
+4. Implementar doble liquidación y límites de efectivo.
+5. Publicar portal de tiendas, seguimiento por estados y entrada Shopify/API/
+   Excel.
+6. Añadir bolsas y reservas opcionales; el inventario estricto no bloquea las
+   primeras fases.
+
+Cada fase debe ser compatible con Aurela y Kenku y no debe convertir una
+solicitud logística externa en un pedido comercial de Shopify.
 

@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
 import type { AdMeta } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
@@ -15,6 +15,14 @@ import {
 } from "@/lib/leads-access";
 import { facetItems } from "@/lib/leads-facets";
 import { scoringProfileFor, sortLeadsByPriorityScoped } from "@/lib/lead-priority";
+import { assignArm, isExperimentEligible } from "@/lib/lead-experiment";
+import {
+  countLeadUrgency,
+  goldenBreakdown,
+  leadUrgency,
+  tallyGolden,
+  type UrgencyTier,
+} from "@/lib/lead-urgency";
 import type { LeadsInsights } from "@/lib/leads-insights";
 import {
   buildMetaAudienceCsv,
@@ -23,6 +31,7 @@ import {
 } from "@/lib/meta-audience";
 import {
   LEAD_GESTIONES,
+  LEAD_SEGMENTS,
   QUEUE_STATES,
   categoryOf,
   countGestiones,
@@ -47,6 +56,9 @@ import {
   type YapeKind,
   leadHandle,
   leadCanCall,
+  canonicalProductHandles,
+  leadProductHandle,
+  productLabel,
 } from "@/lib/leads";
 import {
   loadLeadCustomerHistory,
@@ -59,7 +71,9 @@ import {
   searchLeads,
   loadLeadsForAudience,
 } from "@/app/dashboard/leads/actions";
+import { claveAnuncio, handleDeAnuncioPara, type AdDeclaration } from "@/lib/ad-products";
 import { cn } from "@/components/ui";
+import { VentaTelefonica } from "@/components/venta-telefonica";
 import type { LeadDrawerProps, LeadDrawerUpdate } from "@/components/leads-drawer";
 import { reportClientPerformanceMetric } from "@/lib/client-performance";
 
@@ -188,7 +202,7 @@ const OUTCOME_VIEWS: { key: LeadView; label: string }[] = [
 
 const SEGMENT_BADGE: Record<LeadSegment, string> = {
   carrito: "bg-emerald-50 text-emerald-700",
-  distrito: "bg-red-50 text-red-600",
+  interes: "bg-amber-50 text-amber-700",
   converso: "bg-blue-50 text-blue-700",
   frio: "bg-slate-100 text-slate-500",
 };
@@ -196,7 +210,7 @@ const SEGMENT_BADGE: Record<LeadSegment, string> = {
 // Plain calificación labels (no emoji) for the row/drawer pills, per the redesign.
 const SEG_PILL_LABEL: Record<LeadSegment, string> = {
   carrito: "Con carrito",
-  distrito: "Dio distrito",
+  interes: "Distrito o producto",
   converso: "Conversó",
   frio: "Frío",
 };
@@ -204,7 +218,7 @@ const SEG_PILL_LABEL: Record<LeadSegment, string> = {
 // Labels for the segment "accesos directos" row (only Carrito carries an emoji).
 const SEG_TAB_LABEL: Record<LeadSegment, string> = {
   carrito: "🛒 Carrito",
-  distrito: "Dio distrito",
+  interes: "Distrito o producto",
   converso: "Conversó",
   frio: "Frío",
 };
@@ -490,7 +504,11 @@ const GESTION_DISPLAY: Record<LeadGestion, { label: string; dot: string; fg: str
   sin_stock: { label: "Sin stock", dot: "bg-blue-500", fg: "text-blue-700" },
 };
 
-// 24h window state → dot/text colour + the inset urgency accent (left border).
+// 24h window state → dot/text colour. Ya NO manda el acento lateral de la fila:
+// ese lo pinta la urgencia (ver URGENCY_DISPLAY). La ventana de WhatsApp es un
+// permiso de mensajería, no una probabilidad de cierre, y usarla como la señal
+// visual dominante hacía que un lead de doce minutos y uno de 67 días llevaran
+// exactamente el mismo verde.
 const WIN_DISPLAY: Record<"fresca" | "por_vencer" | "cerrada", { dot: string; fg: string; accent: string }> = {
   fresca: { dot: "bg-emerald-500", fg: "text-emerald-700", accent: "#34d399" },
   por_vencer: { dot: "bg-amber-500", fg: "text-amber-700", accent: "#fbbf24" },
@@ -501,6 +519,22 @@ function winKey(state: LeadWindow | null): "fresca" | "por_vencer" | "cerrada" {
   if (state === "cerrada") return "cerrada";
   return "fresca"; // fresca or null (no inbound yet) → neutral-fresh accent
 }
+
+// Edad del lead → cómo se pinta la columna y el acento lateral de la fila.
+//
+// El salto de color está donde está el acantilado medido: `dorada` es el único
+// tramo con contraste fuerte, porque es el único donde llamar YA vale el doble.
+// Los tres de abajo son grises de intensidad decreciente a propósito — si
+// «tibia» compitiera visualmente con «dorada», volveríamos a tener 366 filas
+// gritando lo mismo y ninguna destacando.
+const URGENCY_DISPLAY: Record<UrgencyTier, { dot: string; fg: string; accent: string }> = {
+  dorada: { dot: "bg-emerald-500", fg: "text-emerald-700", accent: "#10b981" },
+  tibia: { dot: "bg-amber-400", fg: "text-amber-700", accent: "#fcd34d" },
+  enfriando: { dot: "bg-slate-300", fg: "text-slate-500", accent: "#e2e8f0" },
+  fria: { dot: "bg-slate-200", fg: "text-slate-400", accent: "#f1f5f9" },
+};
+/** Sin edad calculable no se afirma urgencia: gris neutro y una raya. */
+const URGENCY_UNKNOWN = { dot: "bg-slate-200", fg: "text-slate-400", accent: "#f1f5f9" };
 
 /** Small rounded pill (header/drawer chips). */
 function Pill({ children, className, title }: { children: ReactNode; className?: string; title?: string }) {
@@ -581,6 +615,7 @@ export function LeadsBoard({
   queueSignature,
   leads,
   adNames,
+  adDeclarations,
   waNumbers,
   currency,
   timezone,
@@ -590,6 +625,7 @@ export function LeadsBoard({
   initialGest,
   initialInteractionDate,
   initialOpenId,
+  initialOpenNonce,
   currentUserId,
   leadsComplete = true,
   scope,
@@ -610,6 +646,8 @@ export function LeadsBoard({
   queueSignature?: string;
   leads: LeadRow[];
   adNames?: Record<string, AdMeta>;
+  /** `tienda::anuncio → declaraciones con fecha` (ver lib/ad-products.ts). */
+  adDeclarations?: Record<string, AdDeclaration[]>;
   waNumbers?: Record<string, WaNumber>;
   currency: string;
   timezone: string;
@@ -619,6 +657,7 @@ export function LeadsBoard({
   initialGest?: LeadGestion | null;
   initialInteractionDate?: LeadInteractionDateFilter | null;
   initialOpenId?: string | null; // ?open=<id> → auto-abre ese lead (desde el pop-up de Yapes)
+  initialOpenNonce?: string | null; // ?oid=<sello> → identifica ESA orden, no el lead
   currentUserId: string;
   /** false = la página cargó solo un tope de filas para esta vista, así que un
    *  export debe repedir el universo completo al servidor. */
@@ -657,7 +696,18 @@ export function LeadsBoard({
   const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
   const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
+  // Edad del lead. EJE PROPIO, no un desglose de "Ventana": son dos relojes
+  // distintos y mezclarlos daría un chip que miente. Medido sobre la cola real,
+  // de los 7 leads con mensaje entrante hace menos de una hora solo 4 tenían
+  // menos de una hora de vida — uno llevaba 16,2 h esperando y su cliente acababa
+  // de volver a escribir, lo que reinicia la ventana sin rejuvenecer el lead.
+  const [edadFilter, setEdadFilter] = useState<"all" | UrgencyTier>("all");
   const [numFilter, setNumFilter] = useState<Set<string>>(new Set()); // WhatsApp phone_number_id(s) + "__none__"
+  // Producto: el handle de la ficha que el cliente abrió antes de escribir, más
+  // "__none__" para los que llegaron sin link. Es lo que permite trabajar la
+  // cola por producto —la misma pregunta, el mismo argumentario, una tanda de
+  // llamadas— en vez de saltar de un producto a otro fila por fila.
+  const [prodFilter, setProdFilter] = useState<Set<string>>(new Set());
   const [interactionDateFilter, setInteractionDateFilter] = useState<LeadInteractionDateFilter | null>(
     initialInteractionDate ?? null,
   );
@@ -724,17 +774,68 @@ export function LeadsBoard({
   }, [query, storeId]);
 
   // Auto-abrir un lead cuando llega ?open=<id> (p. ej. al tocar "Tomar" en el
-  // pop-up de Yapes). Solo una vez por id; si no está en la vista cargada, se ignora.
-  const openedRef = useRef<string | null>(null);
+  // pop-up de Yapes).
+  //
+  // `?open=` ES UNA ORDEN, NO UN ESTADO. Se cumple una vez y se borra de la URL.
+  // Mientras se quedaba puesto, cada recarga —y cada enlace guardado, y cada
+  // vuelta atrás del navegador— reabría un lead que ya se había cerrado a
+  // propósito. Y no era solo molesto: abrir la gaveta RECLAMA el lead, así que
+  // recargar la página se lo volvía a adjudicar a quien miraba.
+  //
+  // Se borra con `history.replaceState` y no con `router.replace` porque este
+  // último es una navegación: rehacer la página entera —los ~2.500 leads, los
+  // siete conteos y los gráficos— para quitar un parámetro de la barra sería
+  // pagar segundos por nada.
+  // LO QUE SE LLEVA LA CUENTA ES LA ORDEN, NO EL LEAD. Limpiar la barra de
+  // direcciones no bastó: la orden seguía volviendo. Esta pantalla se refresca
+  // sola cada pocos segundos (`router.refresh()`), y ese refresco vuelve a
+  // renderizar desde la URL que el router considera suya, que no es siempre la
+  // que enseña el navegador. Así que `initialOpenId` iba y venía —X, null, X— y
+  // cada vuelta reabría la ficha. Recordar "ya cumplí ESTA orden" corta el ciclo
+  // sea cual sea el camino por el que reaparezca.
+  //
+  // El sello `?oid=` es lo que permite las dos cosas a la vez: "Tomar" dos veces
+  // el mismo Yape son dos órdenes distintas y las dos se obedecen; una orden que
+  // reaparece sola trae el sello viejo y se ignora. Una URL sin sello —escrita a
+  // mano o guardada de antes— se obedece una sola vez por pestaña, que es
+  // exactamente lo que se quiere de una URL vieja.
+  const cumplidasRef = useRef<Set<string>>(new Set());
+  const [pendienteDeAbrir, setPendienteDeAbrir] = useState<string | null>(null);
   useEffect(() => {
-    if (!initialOpenId || openedRef.current === initialOpenId) return;
-    const lead = leads.find((l) => l.id === initialOpenId);
+    if (!initialOpenId) return;
+    const orden = `${initialOpenId}:${initialOpenNonce ?? ""}`;
+    if (cumplidasRef.current.has(orden)) return;
+    cumplidasRef.current.add(orden);
+    // Se guarda en estado ANTES de limpiar: si el lead todavía no está en la
+    // lista cargada, el intento se reintenta desde aquí y no desde la URL, que
+    // para entonces ya no lo lleva.
+    setPendienteDeAbrir(initialOpenId);
+    // Limpiar la barra sigue valiendo la pena aunque no sea suficiente: sin esto,
+    // recargar o compartir el enlace arrastra la orden a otra sesión.
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.has("open") || sp.has("oid")) {
+      sp.delete("open");
+      sp.delete("oid");
+      const qs = sp.toString();
+      window.history.replaceState(
+        null,
+        "",
+        qs ? `${window.location.pathname}?${qs}` : window.location.pathname,
+      );
+    }
+  }, [initialOpenId, initialOpenNonce]);
+
+  // La orden se cumple UNA vez: al abrirla se consume. Si el lead todavía no
+  // está en la lista cargada se queda pendiente y se reintenta cuando llegue.
+  useEffect(() => {
+    if (!pendienteDeAbrir) return;
+    const lead = leads.find((l) => l.id === pendienteDeAbrir);
     if (lead) {
-      openedRef.current = initialOpenId;
+      setPendienteDeAbrir(null);
       openLead(lead);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialOpenId, leads]);
+  }, [pendienteDeAbrir, leads]);
 
   // Refresco en vivo: revalida los datos del servidor (lista + contadores, incl.
   // "⚡ Atender ahora") mientras la pestaña está visible, y al instante al volver
@@ -826,39 +927,53 @@ export function LeadsBoard({
   }
 
   function openLead(lead: LeadRow) {
+    void abrirLeadPorId(lead.id, lead);
+  }
+
+  /**
+   * Abrir la gaveta de un lead, tengamos su fila cargada o no.
+   *
+   * `previa` es solo pintado instantáneo: cuando el lead viene de la lista ya
+   * sabemos su nombre y teléfono, y enseñarlos de una hace que la gaveta no
+   * parezca vacía mientras llega el detalle. Sin ella la gaveta espera, y por eso
+   * esto DEVUELVE una promesa: quien abrió el lead sin tener la fila —la venta
+   * por teléfono, que acaba de crearlo— necesita saber cuándo dejar de decir
+   * «abriendo». Un botón que no dice nada mientras trabaja se acaba pulsando
+   * cuatro veces.
+   */
+  async function abrirLeadPorId(leadId: string, previa?: LeadRow | null): Promise<boolean> {
     markLeadDrawerOpen();
-    activeLeadIdRef.current = lead.id;
+    activeLeadIdRef.current = leadId;
     setBanner(null);
-    setSelected(lead); // instant — render from the data we already have
+    setSelected(previa ?? null);
     setCalls(null);
     setHistory(null);
-    setOpeningId(lead.id); // disable only this row's button while the claim loads
-    void (async () => {
-      const historyPromise = loadLeadCustomerHistory(lead.id).catch(() => null);
-      try {
-        const d = await openLeadDrawer(lead.id);
-        if (activeLeadIdRef.current !== lead.id) return;
-        if ("error" in d) {
-          setBanner(d.error);
-          setSelected(null);
-          activeLeadIdRef.current = null;
-          return;
-        }
-        setSelected(d.lead);
-        setCalls(d.calls);
-        void historyPromise.then((extra) => {
-          if (!extra || "error" in extra || activeLeadIdRef.current !== lead.id) return;
-          setHistory(extra.customerHistory);
-          if (extra.cartSummary) {
-            setSelected((current) =>
-              current?.id === lead.id ? { ...current, cart_summary: extra.cartSummary } : current,
-            );
-          }
-        });
-      } finally {
-        setOpeningId((current) => (current === lead.id ? null : current));
+    setOpeningId(leadId); // disable only this row's button while the claim loads
+    const historyPromise = loadLeadCustomerHistory(leadId).catch(() => null);
+    try {
+      const d = await openLeadDrawer(leadId);
+      if (activeLeadIdRef.current !== leadId) return false;
+      if ("error" in d) {
+        setBanner(d.error);
+        setSelected(null);
+        activeLeadIdRef.current = null;
+        return false;
       }
-    })();
+      setSelected(d.lead);
+      setCalls(d.calls);
+      void historyPromise.then((extra) => {
+        if (!extra || "error" in extra || activeLeadIdRef.current !== leadId) return;
+        setHistory(extra.customerHistory);
+        if (extra.cartSummary) {
+          setSelected((current) =>
+            current?.id === leadId ? { ...current, cart_summary: extra.cartSummary } : current,
+          );
+        }
+      });
+      return true;
+    } finally {
+      setOpeningId((current) => (current === leadId ? null : current));
+    }
   }
 
   function refreshDetail(leadId: string, update?: LeadDrawerUpdate) {
@@ -927,6 +1042,45 @@ export function LeadsBoard({
   const inQueue = view === "por_llamar";
   const isYape = view === "yape"; // tinta las filas en rojo + 🔥 en la vista Yape/Shalom
 
+  // El producto de cada lead, resuelto UNA vez sobre la cola entera. Tiene que
+  // ser sobre la cola entera y no lead a lead: plegar los links cortados a media
+  // palabra exige ver todos los handles para saber cuál es el completo.
+  const handleOf = useMemo(() => {
+    const crudo = new Map<string, string>();
+    for (const l of leads) {
+      // 1) Lo ÚLTIMO que enlazó, que es lo que está consultando ahora (0140).
+      //    Cubre a quien vuelve por otro producto y a quien abrió con un «hola»
+      //    y mandó la ficha después.
+      // 2) El carrito o lo que estaba mirando (0143).
+      // 3) El link del primer mensaje —lead antiguo, sin resincronizar—, que es
+      //    de donde salía todo antes.
+      // 4) Y si tampoco, lo que su anuncio vendía EL DÍA QUE ESTE LEAD ENTRÓ.
+      //    No lo que vende hoy: un creativo reutilizado cambia de producto, y
+      //    tomar la declaración nueva reescribiría el pasado de los viejos.
+      //    Nunca una conjetura: sin declaración vigente el lead se queda en
+      //    «Sin producto», que es la verdad.
+      const h =
+        (l.last_product_handle ?? "").trim() ||
+        // 2) Lo que tiene en el carrito, o lo que estaba mirando. Va antes que
+        //    el primer mensaje porque es más reciente que la apertura, y llega
+        //    ya como handle desde Shopify — no como título, que no se puede
+        //    emparejar con el del link sin adivinar.
+        (l.cart_product_handle ?? "").trim() ||
+        leadProductHandle(l.first_inbound_text) ||
+        (l.ad_id
+          ? handleDeAnuncioPara(
+              adDeclarations?.[claveAnuncio(l.store_id, l.ad_id)],
+              l.first_seen_at,
+            )
+          : null);
+      if (h) crudo.set(l.id, h);
+    }
+    const canon = canonicalProductHandles(crudo.values());
+    const porLead = new Map<string, string>();
+    for (const [id, h] of crudo) porLead.set(id, canon.get(h) ?? h);
+    return (l: LeadRow) => porLead.get(l.id) ?? null;
+  }, [leads, adDeclarations]);
+
   // Jerarquía de filtros (faceted counts): los contadores de cada grupo se
   // calculan sobre los leads que pasan TODOS los demás filtros activos, pero NO
   // el propio. Así, al elegir "Con carrito" (18), Gestión/Ventana/Fuente/Número
@@ -954,11 +1108,16 @@ export function LeadsBoard({
     gestOtros,
     winCounts,
     winTotal,
+    edadCounts,
+    edadTotal,
     numTotal,
     waCounts,
     numOtros,
     waIds,
     hasMultiNumbers,
+    prodOptions,
+    prodSin,
+    goldenTally,
     shownLeads,
   } = useMemo(() => {
     const matchQuery = (l: LeadRow) => {
@@ -972,6 +1131,11 @@ export function LeadsBoard({
       if (numFilter.size === 0) return true;
       if (!l.wa_phone_number_id) return numFilter.has("__none__");
       return numFilter.has(l.wa_phone_number_id);
+    };
+    const matchProd = (l: LeadRow) => {
+      if (prodFilter.size === 0) return true;
+      const handle = handleOf(l);
+      return handle ? prodFilter.has(handle) : prodFilter.has("__none__");
     };
     // Eje 1 (estado) y eje 2 (segmento) son facets independientes que combinan por
     // AND: el segmento se filtra DENTRO del estado activo (no lo reemplaza).
@@ -994,14 +1158,22 @@ export function LeadsBoard({
       !inQueue ||
       queueState !== "sin_llamar" ||
       matchesLeadInteractionDate(l, interactionDateFilter, timezone);
+    // Filtro puro por edad: NO restringe segmentos. El aviso de arriba sí cuenta
+    // solo carrito e interés (es una alarma sobre lo caro), pero el chip es un
+    // corte de reloj y tiene que devolver todo lo que cae en él, o su número no
+    // cuadraría con la lista.
+    const matchEdad = (l: LeadRow) =>
+      !inQueue || edadFilter === "all" || leadUrgency(l.first_seen_at, now)?.tier === edadFilter;
     const facets = facetItems(leads, {
       query: matchQuery,
       src: matchSrc,
       num: matchNum,
+      prod: matchProd,
       state: matchState,
       seg: matchSeg,
       gest: matchGest,
       win: matchWin,
+      edad: matchEdad,
       interactionDate: matchInteractionDate,
     });
 
@@ -1018,10 +1190,24 @@ export function LeadsBoard({
     const stateBase = facets.except("state", "seg");
     const gestBase = facets.except("gest");
     const winBase = facets.except("win");
+    const edadBase = facets.except("edad");
     // WhatsApp numbers present in this view (to split the queue by number). The
     // chip list comes from the full view so picking a number never hides the
     // others; the counts come from the faceted base.
     const numBase = facets.except("num");
+    // Producto: la lista se ordena por volumen, que es como se decide a quién
+    // llamar primero — 190 esperando por el mismo producto es una tanda, 1 no.
+    const prodBase = facets.except("prod");
+    const prodCountsAcc = new Map<string, number>();
+    let prodSinAcc = 0;
+    for (const l of prodBase) {
+      const h = handleOf(l);
+      if (h) prodCountsAcc.set(h, (prodCountsAcc.get(h) ?? 0) + 1);
+      else prodSinAcc += 1;
+    }
+    const prodOptionsAcc = [...prodCountsAcc.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([handle, count]) => ({ key: handle, label: productLabel(handle), count }));
 
     const gestCountsAcc = countGestiones(gestBase);
     const waCountsAcc = new Map<string, number>();
@@ -1052,6 +1238,8 @@ export function LeadsBoard({
       gestOtros: gestBase.length - Object.values(gestCountsAcc).reduce((a, b) => a + b, 0),
       winCounts: countLeadWindows(winBase, now),
       winTotal: winBase.length,
+      edadCounts: countLeadUrgency(edadBase, now),
+      edadTotal: edadBase.length,
       numTotal: numBase.length,
       waCounts: waCountsAcc,
       // Leads sin número de WhatsApp asignado (ej. carrito/Shopify): el resto para
@@ -1059,19 +1247,28 @@ export function LeadsBoard({
       numOtros: numBase.length - [...waCountsAcc.values()].reduce((a, b) => a + b, 0),
       waIds: waIdsAcc,
       hasMultiNumbers: waIdsAcc.length >= 2,
+      prodOptions: prodOptionsAcc,
+      prodSin: prodSinAcc,
+      // Hora dorada: se cuenta sobre `segBase` —todo menos el propio filtro de
+      // segmento— para que elegir un chip no apague el aviso. Es una alarma sobre
+      // la cola, no un resumen de lo que se está mirando.
+      goldenTally: tallyGolden(facets.except("seg", "edad"), leadSegment, now),
       shownLeads: facets.all,
     };
   }, [
     leads,
+    handleOf,
     q,
     qDigits,
     srcFilter,
     numFilter,
+    prodFilter,
     inQueue,
     queueState,
     segFilter,
     gestFilter,
     winFilter,
+    edadFilter,
     interactionDateFilter,
     timezone,
     now,
@@ -1083,26 +1280,32 @@ export function LeadsBoard({
   // Filtros de refinamiento activos (excluye el buscador, que tiene su propia ✕).
   const hasActiveFilters =
     gestActive ||
+    (inQueue && edadFilter !== "all") ||
     (inQueue && winFilter !== "all") ||
     (inQueue && queueState === "sin_llamar" && !!interactionDateFilter) ||
     srcFilter.size > 0 ||
-    numFilter.size > 0;
+    numFilter.size > 0 ||
+    prodFilter.size > 0;
   // Badge on the "Filtros" button: count the active refinement groups (la pestaña
   // primaria de la cola no cuenta aquí).
   const refinementCount =
     (gestActive ? 1 : 0) +
+    (inQueue && edadFilter !== "all" ? 1 : 0) +
     (inQueue && winFilter !== "all" ? 1 : 0) +
     (inQueue && queueState === "sin_llamar" && interactionDateFilter ? 1 : 0) +
     (srcFilter.size > 0 ? 1 : 0) +
     (numFilter.size > 0 ? 1 : 0) +
+    (prodFilter.size > 0 ? 1 : 0) +
     (isReviewView ? 1 : 0);
   function clearFilters() {
     setSegFilter(null);
     setGestFilter(null);
     setWinFilter("all");
+    setEdadFilter("all");
     setInteractionDateFilter(null);
     setSrcFilter(new Set());
     setNumFilter(new Set());
+    setProdFilter(new Set());
   }
 
   // In search mode show the global results (all stages); otherwise the filtered
@@ -1128,14 +1331,27 @@ export function LeadsBoard({
     () => new Map(stores.map((s) => [s.id, s.name])),
     [stores],
   );
+  // Experimento de la hora dorada: el brazo se DERIVA del id del lead con la
+  // misma función pura que usa el reparto en el cron, así que la fila no necesita
+  // traer nada nuevo de la base y las dos partes no se pueden desincronizar.
+  const enExperimento = useCallback(
+    (lead: LeadRow) =>
+      isExperimentEligible(lead) &&
+      assignArm(lead.id) === "tratamiento" &&
+      leadUrgency(lead.first_seen_at, now)?.tier === "dorada",
+    [now],
+  );
   const displayLeads = useMemo(
     () =>
       priorityOn
-        ? sortLeadsByPriorityScoped(baseLeads, (lead) =>
-            profileByStore.get(lead.store_id) ?? scoringProfileFor(null),
+        ? sortLeadsByPriorityScoped(
+            baseLeads,
+            (lead) => profileByStore.get(lead.store_id) ?? scoringProfileFor(null),
+            now,
+            enExperimento,
           )
         : baseLeads,
-    [priorityOn, baseLeads, profileByStore],
+    [priorityOn, baseLeads, profileByStore, now, enExperimento],
   );
 
   // Render por tramos. La cola completa puede traer miles de filas y montarlas
@@ -1149,7 +1365,7 @@ export function LeadsBoard({
   // encoge bajo el dedo.
   useEffect(() => {
     setVisibleCount(LEADS_RENDER_STEP);
-  }, [view, queueState, segFilter, gestFilter, winFilter, srcFilter, numFilter, interactionDateFilter, q, searchMode]);
+  }, [view, queueState, segFilter, gestFilter, winFilter, edadFilter, srcFilter, numFilter, prodFilter, interactionDateFilter, q, searchMode]);
   const moreSentinelRef = useRef<HTMLDivElement | null>(null);
   const hasMoreRows = displayLeads.length > visibleCount;
   useEffect(() => {
@@ -1355,6 +1571,11 @@ export function LeadsBoard({
               </button>
             )}
           </div>
+          <VentaTelefonica
+            stores={stores.map((s) => ({ id: s.id, name: s.name }))}
+            defaultStoreId={storeId === "all" ? null : storeId}
+            onAbrir={(leadId) => abrirLeadPorId(leadId)}
+          />
           <button
             type="button"
             aria-expanded={more}
@@ -1412,10 +1633,17 @@ export function LeadsBoard({
               onChange={(key) => setSegFilter(key === "all" ? null : (key as LeadSegment))}
               options={[
                 { key: "all", label: "Todos", count: segTotal },
-                ...(["frio", "converso", "distrito", "carrito"] as LeadSegment[]).map((s) => ({
-                  key: s,
-                  label: SEG_TAB_LABEL[s],
-                  count: segCounts[s],
+                // Sale de LEAD_SEGMENTS, no de una lista escrita acá. Estaba a
+                // mano y con un `as LeadSegment[]` que silenciaba al compilador:
+                // al fusionar `distrito` en `interes`, esta fila siguió pidiendo
+                // «distrito» —una clave que ya no existe— y el chip del balde
+                // nuevo, con 490 leads dentro, no se dibujó. Los segmentos
+                // dejaron de sumar el total y nadie podía filtrarlos.
+                // Invertida porque la fila se lee de menor a mayor intención.
+                ...[...LEAD_SEGMENTS].reverse().map(({ key }) => ({
+                  key,
+                  label: SEG_TAB_LABEL[key],
+                  count: segCounts[key],
                 })),
               ]}
             />
@@ -1483,6 +1711,24 @@ export function LeadsBoard({
                 />
               </label>
             )}
+            {/* Edad ANTES que Ventana: es el reloj que decide la venta, y el
+                orden de la barra es parte de lo que enseña cuál mirar. Van
+                separados porque son cosas distintas — la ventana dice si puedo
+                escribirle, la edad si vale el doble llamarlo ahora. */}
+            {view === "por_llamar" && (
+              <SegControl
+                label="Edad"
+                value={edadFilter}
+                onChange={(key) => setEdadFilter(key as "all" | UrgencyTier)}
+                options={[
+                  { key: "all", label: "Todas", count: edadTotal },
+                  { key: "dorada", label: "⏱️ Hora dorada", count: edadCounts.dorada },
+                  { key: "tibia", label: "1-6 h", count: edadCounts.tibia },
+                  { key: "enfriando", label: "6-24 h", count: edadCounts.enfriando },
+                  { key: "fria", label: "+1 día", count: edadCounts.fria },
+                ]}
+              />
+            )}
             {view === "por_llamar" && (
               <SegControl
                 label="Ventana"
@@ -1511,6 +1757,25 @@ export function LeadsBoard({
                     ? [{ key: "abandoned_browse", label: "🔎 Búsqueda", count: srcCounts.abandoned_browse }]
                     : []),
                   { key: "organic", label: "Orgánico", count: srcCounts.organic },
+                ]}
+              />
+            )}
+            {(prodOptions.length > 0 || prodFilter.size > 0) && (
+              <MultiSelect
+                label="Producto"
+                summaryAll="Todos"
+                selected={prodFilter}
+                onToggle={(key) => setProdFilter((s) => withToggled(s, key))}
+                onClear={() => setProdFilter(new Set())}
+                options={[
+                  ...prodOptions,
+                  // «Sin producto» son los que no llegaron desde una ficha: los
+                  // que dieron su distrito, los del carrito, los que solo
+                  // saludaron. No es un producto más, es el resto — y tiene que
+                  // estar para que la suma cuadre con «Todos».
+                  ...(prodSin > 0 || prodFilter.has("__none__")
+                    ? [{ key: "__none__", label: "Sin producto", count: prodSin }]
+                    : []),
                 ]}
               />
             )}
@@ -1572,6 +1837,73 @@ export function LeadsBoard({
         </div>
       )}
 
+      {/* Aviso de hora dorada.
+          Con la cola real (1.966 sin llamar) esto muestra un puñado de leads, no
+          una lista: 21 estaban dentro de la hora y solo 3 eran carrito o interés.
+          Ese es justamente el punto — son pocos, valen el doble, y hasta ahora
+          iban pintados igual que los 1.945 restantes.
+
+          UN SOLO NÚMERO. Antes el aviso contaba solo carrito e interés y el
+          botón contaba la hora entera: decían 5 y 8 en la misma barra. Dos cifras
+          que no cuadran a diez centímetros una de otra destruyen la confianza en
+          las dos. Ahora las dos son el total de la hora y el desglose dice qué
+          hay dentro.
+
+          NO se muestra cuando está vacío: una banda permanente en cero enseña a
+          ignorarla, y entonces no sirve el día que dice 5. La excepción es tenerla
+          activada como filtro, donde hay que poder salir. */}
+      {view === "por_llamar" && queueState === "sin_llamar" && !searchMode &&
+        (goldenTally.total > 0 || edadFilter === "dorada") && (
+          <div
+            className={cn(
+              "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-4 py-2.5 text-sm",
+              goldenTally.total > 0
+                ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+                : "border-slate-200 bg-slate-50 text-slate-600",
+            )}
+          >
+            {goldenTally.total > 0 ? (
+              <>
+                <span className="font-semibold">
+                  ⏱️ {goldenTally.total} {goldenTally.total === 1 ? "lead" : "leads"} en hora dorada
+                </span>
+                <span className="text-emerald-800">
+                  {goldenBreakdown(goldenTally)
+                    .map((b) => `${b.count} ${b.label}`)
+                    .join(" · ")}{" "}
+                  · llamados dentro de la primera hora cierran{" "}
+                  <span className="font-semibold">el doble</span>
+                </span>
+              </>
+            ) : (
+              <span>Ya no queda ninguno dentro de la primera hora.</span>
+            )}
+            <button
+              type="button"
+              // Limpia también el segmento: el aviso cuenta la hora entera sin
+              // mirar el chip activo, así que si al filtrar quedara un segmento
+              // puesto la lista mostraría menos filas que el número del botón —
+              // el mismo desajuste que este cambio viene a quitar.
+              onClick={() => {
+                if (edadFilter === "dorada") {
+                  setEdadFilter("all");
+                } else {
+                  setEdadFilter("dorada");
+                  setSegFilter(null);
+                }
+              }}
+              className={cn(
+                "ml-auto inline-flex h-[30px] items-center rounded-md border px-2.5 text-[12px] font-semibold",
+                edadFilter === "dorada"
+                  ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  : "border-emerald-400 bg-white text-emerald-700 hover:bg-emerald-100",
+              )}
+            >
+              {edadFilter === "dorada" ? "Ver toda la cola" : `Ver estos ${goldenTally.total}`}
+            </button>
+          </div>
+        )}
+
       {/* El 14–20% del carrito está bien medido: un carrito que cierra SIGUE
           teniendo carrito, así que el éxito no cambia su etiqueta. En frío no se
           puede afirmar lo mismo: si la llamada funciona, el cliente da su
@@ -1605,11 +1937,13 @@ export function LeadsBoard({
         <div className="overflow-x-auto">
           <div className="min-w-0">
             {/* Cabecera de columnas — solo md+; en móvil cada fila se apila. */}
-            <div className="hidden grid-cols-[42px_minmax(0,1fr)_184px_78px_78px] items-center gap-[14px] border-b border-slate-200 bg-slate-50 px-[18px] py-2.5 text-[11px] font-semibold tracking-wide text-slate-400 uppercase md:grid">
+            <div className="hidden grid-cols-[42px_minmax(0,1fr)_184px_86px_78px] items-center gap-[14px] border-b border-slate-200 bg-slate-50 px-[18px] py-2.5 text-[11px] font-semibold tracking-wide text-slate-400 uppercase md:grid">
               <span />
               <span>Lead</span>
               <span>Última gestión</span>
-              <span>Ventana</span>
+              <span title="Tiempo desde que entró el lead. Dentro de la primera hora el cierre es el doble.">
+                Edad
+              </span>
               <span />
             </div>
             {visibleLeads.map((lead) => {
@@ -1620,14 +1954,16 @@ export function LeadsBoard({
                 ? GESTION_DISPLAY[g]
                 : { label: labelOf(lead.status), dot: "bg-slate-400", fg: "text-slate-600", hollow: false };
               const metaLine = g === "sin_llamar" ? "nadie aún" : fmtDateShort(lead.last_interaction_at);
-              const { state, msLeft } = leadWindowInfo(lead.last_inbound_at ?? lead.last_interaction_at, now);
+              const { state } = leadWindowInfo(lead.last_inbound_at ?? lead.last_interaction_at, now);
               const wd = WIN_DISPLAY[winKey(state)];
-              const windowLabel =
-                state === null
-                  ? "—"
-                  : state === "cerrada"
-                    ? "venc."
-                    : `${Math.max(1, Math.ceil((msLeft ?? 0) / 3_600_000))}h`;
+              const urgency = leadUrgency(lead.first_seen_at, now);
+              const ud = urgency ? URGENCY_DISPLAY[urgency.tier] : URGENCY_UNKNOWN;
+              // La ventana de 24h solo se nombra cuando limita algo: si está
+              // abierta, saberlo no cambia ninguna decisión, y ponerlo en las
+              // ~2.000 filas de la cola es exactamente el ruido que tapaba la
+              // señal que sí importa.
+              const windowNote =
+                state === "cerrada" ? "sin ventana" : state === "por_vencer" || state === "critica" ? "ventana ⏳" : null;
               const handle = leadHandle(lead);
               const initial = (lead.name || handle).trim()[0]?.toUpperCase() || "?";
               return (
@@ -1646,11 +1982,11 @@ export function LeadsBoard({
                   }}
                   className={cn(
                     // Móvil: tarjeta apilada (flex-wrap). md+: el grid de columnas.
-                    "group flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-4 py-3 transition [contain-intrinsic-size:auto_54px] [content-visibility:auto] last:border-0 md:grid md:grid-cols-[42px_minmax(0,1fr)_184px_78px_78px] md:gap-x-[14px] md:gap-y-0 md:px-[18px] md:py-2.5",
+                    "group flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-4 py-3 transition [contain-intrinsic-size:auto_54px] [content-visibility:auto] last:border-0 md:grid md:grid-cols-[42px_minmax(0,1fr)_184px_86px_78px] md:gap-x-[14px] md:gap-y-0 md:px-[18px] md:py-2.5",
                     locked ? "bg-brand-50" : isYape ? "bg-red-50" : "hover:bg-slate-50",
                     openingId === lead.id && "opacity-60",
                   )}
-                  style={{ boxShadow: `inset 3px 0 0 ${wd.accent}` }}
+                  style={{ boxShadow: `inset 3px 0 0 ${ud.accent}` }}
                 >
                   {/* Col 1 · avatar */}
                   <span
@@ -1687,6 +2023,19 @@ export function LeadsBoard({
                     {/* Marcador de atención: sin esto un reencolado (ola 🔁),
                         una respuesta nueva o un seguimiento vencido eran
                         invisibles en la fila — solo cambiaban el orden. */}
+                    {/* Marca del experimento. Sin esto el lead sube al principio
+                        de la cola sin explicación, y una asesora que ve un frío
+                        arriba concluye que el orden está roto — o lo salta. Que
+                        diga POR QUÉ está ahí es lo que hace que el tratamiento
+                        se administre. */}
+                    {enExperimento(lead) && (
+                      <span
+                        title="Prueba en curso: estamos midiendo si llamar rápido a un lead sin señal vale la pena. Llámalo dentro de la hora aunque no parezca prometedor."
+                        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-1.5 py-0.5 text-[11px] font-semibold text-violet-700"
+                      >
+                        🧪 prueba
+                      </span>
+                    )}
                     {lead.needs_attention && !isYape && (
                       <span
                         title="Requiere atención: reencolado por carrito sin contacto, respuesta nueva o seguimiento vencido"
@@ -1745,11 +2094,34 @@ export function LeadsBoard({
                     )}
                   </div>
 
-                  {/* Col 4 · ventana */}
-                  <span className={cn("inline-flex items-center gap-1.5 text-sm font-semibold", wd.fg)}>
-                    <span className={cn("h-[7px] w-[7px] shrink-0 rounded-full", wd.dot)} />
-                    {windowLabel}
-                  </span>
+                  {/* Col 4 · edad (hora dorada) + la ventana de 24h solo si limita */}
+                  <div className="min-w-0">
+                    <span
+                      title={
+                        urgency?.tier === "dorada"
+                          ? `Entró hace ${Math.round(urgency.ageMinutes)} min: dentro de la hora dorada, donde el cierre es el doble`
+                          : "Tiempo desde que entró el lead"
+                      }
+                      className={cn(
+                        "inline-flex items-center gap-1.5 text-sm font-semibold",
+                        urgency?.tier === "dorada" ? "text-emerald-700" : ud.fg,
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "h-[7px] w-[7px] shrink-0 rounded-full",
+                          ud.dot,
+                          // Solo la hora dorada late. Un pulso en cada fila no
+                          // llamaría la atención sobre ninguna.
+                          urgency?.tier === "dorada" && "animate-pulse-dot motion-reduce:animate-none",
+                        )}
+                      />
+                      {urgency?.label ?? "—"}
+                    </span>
+                    {windowNote && (
+                      <div className={cn("mt-0.5 truncate text-[11px]", wd.fg)}>{windowNote}</div>
+                    )}
+                  </div>
 
                   {/* Col 5 · acciones rápidas (hover en desktop; ocultas en móvil, ahí se abre tocando la fila) */}
                   <div className="ml-auto hidden items-center justify-end gap-1.5 md:flex">

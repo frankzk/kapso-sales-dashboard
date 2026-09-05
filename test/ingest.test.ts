@@ -552,6 +552,81 @@ describe("shouldReopenWonCart (open cart vs a sticky `won` lead)", () => {
   });
 });
 
+describe("shouldReopenUnreachedCart (carrito nuevo sobre un lead que no logramos contactar)", () => {
+  const load = async () => (await import("@/lib/leads-ingest")).shouldReopenUnreachedCart;
+
+  it("devuelve a la cola un lead marcado «no responde» cuando llega un carrito posterior", async () => {
+    // El caso real: la asesora llamó el lunes y no contestaron. El viernes la
+    // clienta vuelve a la web y llena otro carrito — la señal de intención más
+    // fuerte que existe. Antes ese lead se quedaba enterrado en seguimiento.
+    const fn = await load();
+    expect(
+      fn({
+        category: "open",
+        status: "no_responde",
+        draftCreatedAt: "2026-07-05T13:00:00Z",
+        lastDispositionAt: "2026-07-01T10:00:00Z",
+      }),
+    ).toBe(true);
+  });
+
+  it("vale para los tres estados de no-contacto, y solo para ésos", async () => {
+    const fn = await load();
+    const base = { category: "open", draftCreatedAt: "2026-07-05T13:00:00Z", lastDispositionAt: null };
+    expect(fn({ ...base, status: "no_responde" })).toBe(true);
+    expect(fn({ ...base, status: "buzon" })).toBe(true);
+    expect(fn({ ...base, status: "cuelga" })).toBe(true);
+    // Éstos SÍ son resultados: hubo conversación, o hay un motivo real.
+    expect(fn({ ...base, status: "contactado_dejo_wsp" })).toBe(false);
+    expect(fn({ ...base, status: "otros_productos" })).toBe(false);
+    expect(fn({ ...base, status: "sin_stock" })).toBe(false);
+    // Y éste ya está cubierto por la vista Seguimientos: tiene fecha agendada.
+    expect(fn({ ...base, status: "casi_cierra" })).toBe(false);
+  });
+
+  it("NO reabre si la gestión es POSTERIOR al carrito — sin esto habría bucle", async () => {
+    // La guarda que hace que el volumen sea de unos pocos al día en vez de miles:
+    // el mismo carrito viejo reabriría el lead en cada sincronización, y la
+    // asesora lo llamaría una y otra vez.
+    const fn = await load();
+    expect(
+      fn({
+        category: "open",
+        status: "no_responde",
+        draftCreatedAt: "2026-07-05T13:00:00Z",
+        lastDispositionAt: "2026-07-06T09:00:00Z",
+      }),
+    ).toBe(false);
+  });
+
+  it("no toca leads con desenlace: de ésos se ocupan las otras dos reglas", async () => {
+    const fn = await load();
+    const base = { status: "no_responde", draftCreatedAt: "2026-07-05T13:00:00Z", lastDispositionAt: null };
+    expect(fn({ ...base, category: "won" })).toBe(false);
+    expect(fn({ ...base, category: "lost" })).toBe(false);
+  });
+
+  it("un lead sin estado no se reabre a ciegas", async () => {
+    const fn = await load();
+    expect(
+      fn({ category: "open", status: null, draftCreatedAt: "2026-07-05T13:00:00Z", lastDispositionAt: null }),
+    ).toBe(false);
+  });
+});
+
+describe("reabrir por no-contacto NO apaga la marca de atención", () => {
+  it("solo los reabiertos con desenlace limpian needs_attention", async () => {
+    // Un lead que seguía en cola puede estar en "Atender ahora" por una ola o una
+    // respuesta nueva. Apagarle la marca al reabrirlo lo degradaría de la cola
+    // urgente a una menos urgente — al revés de lo que pretende la reapertura.
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const source = readFileSync(resolve(process.cwd(), "lib/leads-ingest.ts"), "utf8");
+    expect(source).toContain('if (reopen === "resuelto") row.needs_attention = false;');
+    expect(source).not.toMatch(/\} else if \(reopen\) \{[\s\S]{0,400}?^\s*row\.needs_attention = false;/m);
+  });
+});
+
 describe("shouldReopenLostCart (fresh cart on an auto-archived lead)", () => {
   const staleCutoff = "2026-06-28T00:00:00Z"; // now − 7d
 

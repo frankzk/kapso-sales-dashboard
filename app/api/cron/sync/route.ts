@@ -4,6 +4,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { runStoreSync } from "@/lib/ingest";
 import { alertUnattendedYapes } from "@/lib/yape-alert-telegram";
 import { alertCollectMismatches } from "@/lib/collect-alert";
+import { assignPendingExperimentArms } from "@/lib/lead-experiment-assign";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -87,11 +88,30 @@ async function run(req: NextRequest) {
     }
   }
 
+  // Reparto de brazos del experimento de la hora dorada.
+  //
+  // VA AQUÍ, DESPUÉS DEL SYNC, y no en el propio ingreso: la elegibilidad mira
+  // `first_inbound_text`, que se escribe en una segunda pasada (write-once, ver
+  // leads-ingest). Repartiendo en el insert, un lead que llegó desde la ficha de
+  // un producto todavía la tendría en null y entraría al estudio por error.
+  //
+  // Best-effort, como las dos alertas de arriba: si el reparto falla se pierde
+  // una tanda de asignaciones —telemetría de un experimento—, y eso nunca puede
+  // tumbar la sincronización de pedidos.
+  let experimento = { asignados: 0, tratamiento: 0 };
+  try {
+    const r = await assignPendingExperimentArms(admin, storeIds);
+    experimento = { asignados: r.asignados, tratamiento: r.tratamiento };
+  } catch {
+    /* ignore — el experimento nunca bloquea el sync */
+  }
+
   return NextResponse.json({
     ok: true,
     stores: storeIds.length,
     yapeAlerts,
     collectAlerts,
+    experimento,
     reports,
   });
 }

@@ -667,6 +667,22 @@ async function enrichLeadsFromConversations(
         .is("first_inbound_text", null);
     }
 
+    // Qué producto está consultando AHORA. Al revés que el gancho de arriba,
+    // este SÍ se sobrescribe: quien vuelve por otro producto trae un link nuevo
+    // y la fila es la misma de siempre (el upsert empareja por teléfono). Sin
+    // esta escritura, una clienta que compró aceite de semilla negra en junio y
+    // vuelve en septiembre por Beewax seguía apareciendo como aceite.
+    //
+    // Se escribe solo cuando hay handle: un mensaje sin link no significa que
+    // dejó de querer lo último que preguntó, así que no borra nada.
+    if (sig.last_product_handle) {
+      await admin
+        .from("leads")
+        .update({ last_product_handle: sig.last_product_handle })
+        .eq("store_id", storeId)
+        .eq("kapso_conversation_id", convId);
+    }
+
     // Source attribution: a Click-to-WhatsApp ad referral on the conversation's
     // first inbound message → stamp the lead's source (first-touch, sticky via
     // `is("source", null)`). Separate, self-contained write so a pending 0008
@@ -853,6 +869,54 @@ export function shouldReopenWonCart(opts: {
 }
 
 /**
+ * Estados que significan «no llegamos a hablar con ella».
+ *
+ * Es la distinción que faltaba. «No responde», «buzón» y «cuelga» NO son un
+ * veredicto sobre la clienta: son un intento fallido NUESTRO. Que no contestara
+ * el martes no dice nada de si quiere comprar el viernes.
+ *
+ * Los demás estados sí son resultados —«contactado», «otros productos», «sin
+ * stock»— y ésos se respetan: hubo conversación, o hay un motivo real.
+ */
+export const UNREACHED_STATUSES = new Set(["no_responde", "buzon", "cuelga"]);
+
+/** Por qué se reabre un lead. `resuelto` = tenía un desenlace (ganado o perdido);
+ *  `no_contactado` = seguía en cola y nunca logramos hablar con ella. La
+ *  distinción decide si se toca `needs_attention` (ver upsertDraftCartLead). */
+export type CartReopen = false | "resuelto" | "no_contactado";
+
+/**
+ * ¿Un carrito nuevo devuelve a la cola un lead que trabajamos pero NO logramos
+ * contactar?
+ *
+ * POR QUÉ EXISTE. «Sin llamar» es `status = 'nuevo'`, y hasta ahora solo volvían
+ * ahí los leads `won` y `lost`. Un lead `open` marcado «no responde» se quedaba
+ * en seguimiento PARA SIEMPRE: la clienta podía volver a la web y llenar otro
+ * carrito —la señal de intención más fuerte que existe— y el sistema solo
+ * actualizaba el importe, sin devolverlo a la cola. Quedaba enterrado entre
+ * miles.
+ *
+ * LO QUE SE RESPETA IGUAL. Sigue mandando `eventOverridesDisposition`: el
+ * carrito tiene que ser POSTERIOR a la última gestión. Sin eso el mismo carrito
+ * viejo reabriría el lead en cada sincronización, y la asesora lo llamaría en
+ * bucle. Con esa guarda la reapertura solo ocurre cuando de verdad hay algo
+ * nuevo — medido sobre 14 días, entre 1 y 19 leads al día, casi siempre menos de
+ * diez.
+ *
+ * Pura, como sus dos hermanas.
+ */
+export function shouldReopenUnreachedCart(opts: {
+  category: string | undefined;
+  status: string | null | undefined;
+  draftCreatedAt: string | null;
+  lastDispositionAt: string | null | undefined;
+}): boolean {
+  if (opts.category !== "open" && opts.category !== "hot") return false;
+  if (!opts.status || !UNREACHED_STATUSES.has(opts.status)) return false;
+  return eventOverridesDisposition(opts.draftCreatedAt, opts.lastDispositionAt);
+}
+
+/**
  * Should a fresh OPEN cart re-open a lead currently `lost` — typically one
  * auto-archived by inactivity (`archiveStaleLeads`)? Yes when the cart was created
  * WITHIN the stale window (a genuine fresh signal, not the same old cart that
@@ -974,6 +1038,24 @@ export async function linkOrdersToLeads(
 // ---------------------------------------------------------------------------
 
 /** First-3-titles cart summary, matching the WhatsApp parser's format. */
+/**
+ * El handle del producto del carrito, cuando el carrito habla de UNO solo.
+ *
+ * Con varios productos distintos devuelve null a propósito: el filtro agrupa
+ * por UN producto, y elegir uno de tres sería decir que el lead quiere ese
+ * —cuando lo que se sabe es que quiere tres—. `cart_summary` los sigue
+ * nombrando a todos para quien llama; lo que no se hace es fingir que hay una
+ * respuesta única donde no la hay.
+ */
+export function cartProductHandle(items: readonly OrderLineItem[]): string | null {
+  const handles = new Set(
+    items
+      .map((it) => (it.product_handle ?? "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return handles.size === 1 ? [...handles][0]! : null;
+}
+
 function draftCartSummary(items: OrderLineItem[]): string | null {
   const titles = items
     .map((it) => String(it.title ?? "").replace(/\s*\(.*$/, "").trim())
@@ -1006,7 +1088,7 @@ async function upsertDraftCartLead(
   storeId: string,
   d: DraftOrderRow,
   exists: boolean,
-  reopen = false,
+  reopen: CartReopen = false,
   fillSource = false,
 ): Promise<void> {
   const qty = d.line_items.reduce((s, li) => s + (Number(li.quantity) || 0), 0);
@@ -1021,6 +1103,7 @@ async function upsertDraftCartLead(
     cart_value: d.total_amount,
     cart_item_count: qty > 0 ? qty : 1, // >0 so leadSegment() → "carrito"
     cart_summary: draftCartSummary(d.line_items),
+    cart_product_handle: cartProductHandle(d.line_items),
     district: d.district,
     province: d.province,
     region: d.region,
@@ -1039,11 +1122,17 @@ async function upsertDraftCartLead(
     if (d.created_at) row.first_seen_at = d.created_at;
     if (seen) row.last_interaction_at = seen;
   } else if (reopen) {
-    // Recompra, o sobra de una orden cancelada, o un lead auto-archivado: un carrito
-    // abierto fresco lo vuelve a poner como llamable. Atribuye a "carrito" si no tenía fuente.
+    // Recompra, sobra de una orden cancelada, lead auto-archivado, o uno que
+    // trabajamos sin lograr contactar: un carrito abierto fresco lo vuelve a
+    // poner como llamable. Atribuye a "carrito" si no tenía fuente.
     row.status = "nuevo";
     row.category = "open";
-    row.needs_attention = false;
+    // La marca de atención SOLO se apaga en los reabiertos con desenlace. Un lead
+    // que seguía en cola puede estar en "Atender ahora" por una ola o una
+    // respuesta nueva, y apagarla lo degradaría de la cola urgente a una menos
+    // urgente — justo al revés de lo que pretende reabrirlo. (En won/lost la
+    // marca ya viene apagada: el archivador solo archiva lo que no la tiene.)
+    if (reopen === "resuelto") row.needs_attention = false;
     if (fillSource) row.source = COD_CART_SOURCE;
   }
   await upsertLeadResilient(admin, row);
@@ -1074,6 +1163,8 @@ export interface BrowseLeadSeed {
   name: string | null;
   email: string | null;
   cart_summary: string | null; // product(s) viewed/added, for advisor context
+  /** Handle del producto mirado, si el Flow lo manda. Null si no: no se deriva. */
+  cart_product_handle: string | null;
   cart_item_count: number | null; // only when products were actually added → "carrito"
   district: string | null; // from customer.defaultAddress, if the Flow sends it
   province: string | null;
@@ -1086,6 +1177,34 @@ function flowStr(v: any): string | null {
   if (v == null) return null;
   const t = String(v).trim();
   return t || null;
+}
+
+/**
+ * El handle del producto que la clienta miraba, SI el Flow lo manda.
+ *
+ * Shopify Flow arma su propio payload y hoy solo veníamos leyendo
+ * `productTitle`. Se aceptan las formas en las que puede llegar el handle, y si
+ * no viene ninguna se devuelve null: el lead se queda sin producto, que es la
+ * verdad. Derivarlo del título —quitar tildes, cambiar espacios por guiones—
+ * daría un handle plausible y falso, que se junta con el balde equivocado sin
+ * que nadie lo note.
+ *
+ * OJO: si el Flow no envía el campo, hay que añadirlo a la plantilla en
+ * Shopify. Este código lo lee en cuanto empiece a llegar; no hace falta tocarlo.
+ */
+function browseProductHandle(items: any[]): string | null {
+  const handles = new Set(
+    (Array.isArray(items) ? items : [])
+      .map((it) =>
+        String(it?.productHandle ?? it?.handle ?? it?.product?.handle ?? "")
+          .trim()
+          .toLowerCase(),
+      )
+      .filter(Boolean),
+  );
+  // Con varios productos distintos, ninguno: elegir uno sería decir que quiere
+  // ese cuando lo que se sabe es que miró tres.
+  return handles.size === 1 ? [...handles][0]! : null;
 }
 
 function browseProductSummary(items: any[]): string | null {
@@ -1117,6 +1236,7 @@ export function browseLeadSeed(body: any): BrowseLeadSeed | null {
     name: flowStr(body?.customer?.name),
     email: flowStr(body?.customer?.email),
     cart_summary: browseProductSummary(hasCart ? added : viewed),
+    cart_product_handle: browseProductHandle(hasCart ? added : viewed),
     cart_item_count: hasCart ? (qty > 0 ? qty : added.length) : null,
     district: flowStr(addr?.city),
     province: flowStr(addr?.province),
@@ -1186,6 +1306,7 @@ export async function processBrowseAbandonment(
       name: seed.name,
       email: seed.email,
       cart_summary: seed.cart_summary,
+      cart_product_handle: seed.cart_product_handle,
       cart_item_count: seed.cart_item_count,
       district: seed.district,
       province: seed.province,
@@ -1889,7 +2010,10 @@ export async function linkDraftOrdersToLeads(
     // Also reopen a LOST lead (usually auto-archived by inactivity) when a genuinely
     // fresh cart arrives — the customer came back — so a new cart never shows under
     // a "Perdido".
-    const reopen =
+    // Y reabrir un lead que SÍ trabajamos pero al que no logramos contactar
+    // («no responde», «buzón», «cuelga»): ahí el estado no es un resultado sobre
+    // la clienta, es un intento fallido nuestro — y un carrito nuevo lo desmiente.
+    const reopen: CartReopen =
       shouldReopenWonCart({
         category,
         status: existingStatus.get(phone),
@@ -1897,7 +2021,16 @@ export async function linkDraftOrdersToLeads(
         lastOrderAt: orderCreatedAt.get(phone),
         lastDispositionAt,
       }) ||
-      shouldReopenLostCart({ category, draftCreatedAt: d.created_at, lastDispositionAt, staleCutoff });
+      shouldReopenLostCart({ category, draftCreatedAt: d.created_at, lastDispositionAt, staleCutoff })
+        ? "resuelto"
+        : shouldReopenUnreachedCart({
+              category,
+              status: existingStatus.get(phone),
+              draftCreatedAt: d.created_at,
+              lastDispositionAt,
+            })
+          ? "no_contactado"
+          : false;
     // On reopen, attribute the lead to the cart if it has no source yet (a bare lead
     // created by the order link) so it shows under "Carrito" in the Fuente filter.
     const fillSource = reopen && !existingSource.get(phone);

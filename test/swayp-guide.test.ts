@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildSwaypGuideInput,
   buildContenido,
+  esCiudadPorApiSwayp,
   parseSenders,
   PLACEHOLDER_NIT,
   type SwaypSender,
@@ -59,6 +60,25 @@ describe("buildSwaypGuideInput", () => {
     expect(r.input.telefonoRecogida).toBe(SENDER.telefono);
   });
 
+  describe("idBusiness", () => {
+    // La documentación lo marca obligatorio; el entorno de pruebas acepta la
+    // guía sin él. Se manda cuando está configurado y se omite cuando no, en
+    // vez de mandar un 0 que Swayp leería como un comercio.
+    it("lo incluye cuando es un número positivo", () => {
+      const r = buildSwaypGuideInput({ ...base, idBusiness: 69956 });
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.input.idBusiness).toBe(69956);
+    });
+
+    it("lo omite —no lo manda vacío— cuando no está configurado", () => {
+      for (const idBusiness of [null, undefined, 0, -1, Number.NaN]) {
+        const r = buildSwaypGuideInput({ ...base, idBusiness });
+        expect(r.ok, String(idBusiness)).toBe(true);
+        if (r.ok) expect(r.input, String(idBusiness)).not.toHaveProperty("idBusiness");
+      }
+    });
+  });
+
   it("refuses an inexact district — a cercado fallback would misroute the package", () => {
     const r = buildSwaypGuideInput({ ...base, district: "Distrito Inventado" });
     expect(r.ok).toBe(false);
@@ -76,6 +96,75 @@ describe("buildSwaypGuideInput", () => {
   it("refuses a city outside Swayp coverage", () => {
     const r = buildSwaypGuideInput({ ...base, city: "lima", senders: { lima: SENDER } });
     expect(r.ok).toBe(false);
+  });
+
+  // SWAYP_SENDERS es la frontera entre «va por API» y «va por Excel», y no hay
+  // otra: la reprogramación pide el número a Swayp y cae al código local cuando
+  // esto falla. Hoy sólo Arequipa está habilitada. Si alguien hiciera opcional
+  // la bodega, la frontera desaparecería en silencio y saldrían guías por API
+  // de ciudades que Swayp no atiende.
+  describe("SWAYP_SENDERS decide qué ciudades van por API", () => {
+    const soloArequipa = { arequipa: SENDER };
+
+    it("la ciudad configurada arma el payload", () => {
+      expect(buildSwaypGuideInput({ ...base, city: "arequipa", senders: soloArequipa }).ok).toBe(true);
+    });
+
+    it("una ciudad de cobertura SIN bodega se rechaza, y dice cuál", () => {
+      const r = buildSwaypGuideInput({ ...base, city: "cusco", district: "Cusco", senders: soloArequipa });
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error).toContain("cusco");
+      expect(r.error).toMatch(/bodega/i);
+    });
+
+    it("sin ninguna bodega configurada no sale nada por API", () => {
+      expect(buildSwaypGuideInput({ ...base, city: "arequipa", senders: {} }).ok).toBe(false);
+    });
+  });
+
+  /**
+   * El aviso del drawer («el número lo emite Swayp» vs «con código local») sale
+   * de `esCiudadPorApiSwayp`, y el botón de `buildSwaypGuideInput`. Son dos
+   * funciones distintas leyendo la misma configuración: si se separan, la
+   * pantalla promete una cosa y la acción hace otra —que es exactamente el bug
+   * de la cobertura, la cola diciendo «Fenix Ok» sobre un envío que el botón
+   * rechazaba—. Esto las ata.
+   */
+  describe("el aviso del drawer no puede contradecir al botón", () => {
+    const ciudades = ["arequipa", "cusco", "puno", "trujillo", "lima", "tacna", "inventada"];
+
+    it("si el aviso dice «por API», el payload no falla por ciudad ni por bodega", () => {
+      for (const city of ciudades) {
+        if (!esCiudadPorApiSwayp(city, senders)) continue;
+        const r = buildSwaypGuideInput({ ...base, city, district: city });
+        // Puede fallar por el envío concreto (distrito, dirección, teléfono),
+        // pero NUNCA por las dos rejas que el aviso ya prometió.
+        if (!r.ok) {
+          expect(r.error, city).not.toMatch(/bodega/i);
+          expect(r.error, city).not.toMatch(/no es una ciudad con cobertura/i);
+        }
+      }
+    });
+
+    it("si el aviso dice «código local», el payload falla por una de esas dos", () => {
+      for (const city of ciudades) {
+        if (esCiudadPorApiSwayp(city, senders)) continue;
+        const r = buildSwaypGuideInput({ ...base, city, district: city });
+        expect(r.ok, city).toBe(false);
+        if (r.ok) continue;
+        expect(r.error, city).toMatch(/bodega|no es una ciudad con cobertura/i);
+      }
+    });
+
+    it("sin bodegas configuradas, ninguna ciudad va por API", () => {
+      for (const city of ciudades) expect(esCiudadPorApiSwayp(city, {}), city).toBe(false);
+    });
+
+    it("una bodega configurada para una ciudad que Swayp no cubre NO va por API", () => {
+      // Configurar Lima en el JSON no la habilita: el ubigeo de bodega manda.
+      expect(esCiudadPorApiSwayp("lima", { lima: SENDER })).toBe(false);
+    });
   });
 
   it("refuses an address shorter than the API's 5-character minimum", () => {

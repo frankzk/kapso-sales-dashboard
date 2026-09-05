@@ -214,7 +214,7 @@ function MetaAttribution({ lead, adMeta }: { lead: LeadRow; adMeta: AdMeta | nul
 
 const SEGMENT_BADGE: Record<LeadSegment, string> = {
   carrito: "bg-emerald-50 text-emerald-700",
-  distrito: "bg-red-50 text-red-600",
+  interes: "bg-amber-50 text-amber-700",
   converso: "bg-blue-50 text-blue-700",
   frio: "bg-slate-100 text-slate-500",
 };
@@ -222,7 +222,7 @@ const SEGMENT_BADGE: Record<LeadSegment, string> = {
 // Plain calificación labels (no emoji) for the row/drawer pills, per the redesign.
 const SEG_PILL_LABEL: Record<LeadSegment, string> = {
   carrito: "Con carrito",
-  distrito: "Dio distrito",
+  interes: "Distrito o producto",
   converso: "Conversó",
   frio: "Frío",
 };
@@ -230,7 +230,7 @@ const SEG_PILL_LABEL: Record<LeadSegment, string> = {
 // Labels for the segment "accesos directos" row (only Carrito carries an emoji).
 const SEG_TAB_LABEL: Record<LeadSegment, string> = {
   carrito: "🛒 Carrito",
-  distrito: "Dio distrito",
+  interes: "Distrito o producto",
   converso: "Conversó",
   frio: "Frío",
 };
@@ -815,14 +815,14 @@ export function LeadDrawer({
             </div>
 
             {/* Formulario de pedido: lo abre el CTA del footer; cubre la columna de acción.
-                allowExisting permite generar OTRO pedido aunque el lead ya tenga uno. */}
+                noReutilizarBorrador: este pedido es nuevo, no toques el borrador del anterior. */}
             {orderOpen && (
               <div className="absolute inset-0 overflow-y-auto bg-slate-50 p-4">
                 <OrderFormPanel
                   leadId={lead.id}
                   currency={currency}
                   hasCart={hasCart}
-                  allowExisting={lead.has_order}
+                  noReutilizarBorrador={lead.has_order}
                   onRegistered={onRegistered}
                   onClose={() => setOrderOpen(false)}
                 />
@@ -2218,14 +2218,14 @@ function OrderFormPanel({
   leadId,
   currency,
   hasCart,
-  allowExisting,
+  noReutilizarBorrador,
   onRegistered,
   onClose,
 }: {
   leadId: string;
   currency: string;
   hasCart: boolean;
-  allowExisting?: boolean; // permitir generar OTRO pedido aunque el lead ya tenga uno
+  noReutilizarBorrador?: boolean; // pedido NUEVO: no reutilizar el borrador anterior
   onRegistered: () => void;
   onClose: () => void;
 }) {
@@ -2335,7 +2335,7 @@ function OrderFormPanel({
           discountKind === "none" || discountValue == null || discountValue <= 0
             ? null
             : { kind: discountKind, value: discountValue },
-        allowExisting,
+        noReutilizarBorrador,
       });
       if (res.error) {
         setMsg(res.error);

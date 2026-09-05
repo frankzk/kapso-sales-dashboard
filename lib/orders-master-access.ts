@@ -14,6 +14,7 @@ import { resolveEmails } from "@/lib/productivity";
 import { shopifyOrderNote, shopifyShippingAddress } from "@/lib/shopify-address";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
+import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { codCouriersFor, isNonMetroLimaLocation } from "@/lib/order-coverage";
 import { limaTodayKey } from "@/lib/shipments";
 import type { CostTariff } from "@/lib/costs";
@@ -31,7 +32,9 @@ import { parseLabelLineItems } from "@/lib/labels/line-items";
 // la del dominio de Leads para no reescribirla acá y que las dos se separen.
 import { labelOf as leadStatusLabel } from "@/lib/leads";
 import {
+  DEFAULT_CONFIRMATION_CYCLE_DAYS,
   confirmationAttemptDetail,
+  confirmationCycleDays,
   type ConfirmationAttemptDetail,
 } from "@/lib/order-confirmation";
 import { evaluateDirectFenixStock, type FenixStockRow } from "@/lib/fenix";
@@ -90,7 +93,8 @@ const MASTER_COLUMNS =
   "shipping_mode,order_total,general_status," +
   "operational_status,macro_stage,macro_substage,macro_reasons,macro_operation,macro_version,macro_since," +
   "confirmation_active,confirmation_day_count,confirmation_last_contact_at," +
-  "confirmation_next_contact_on,confirmation_reminder_due_at,confirmation_last_actor," +
+  "confirmation_next_contact_on,confirmation_cycle_due_on," +
+  "confirmation_reminder_due_at,confirmation_last_actor," +
   "status_since,status_locked,current_courier,last_courier," +
   "courier_count,attempt_count,guide_code,dispatched_at,delivered_at,delivered_courier,returned_at," +
   "last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
@@ -573,9 +577,10 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
 
   const orderRow = orderRes.data as { line_items?: OrderLineItem[]; raw?: unknown } | null;
   const lineItems = orderRow?.line_items ?? [];
-  const [swayp, aliclikHealth] = await Promise.all([
+  const [swayp, aliclikHealth, grupoGfCourier] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
+    loadGroupGfCourierRouteCheck(sb, row),
   ]);
   return {
     row,
@@ -590,6 +595,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
       operation: operationOf(row, guides),
       paymentState: row.payment_state,
       swayp,
+      grupoGfCourier,
       outputs: guides.map((guide) => ({
         id: guide.id,
         courier: guide.courier,
@@ -733,22 +739,41 @@ function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
       day: "2-digit",
     }).format(now);
     const nowIso = now.toISOString();
-    const tomorrowStart = new Date(`${today}T05:00:00.000Z`);
+    const todayStart = new Date(`${today}T05:00:00.000Z`);
+    const tomorrowStart = new Date(todayStart);
     tomorrowStart.setUTCDate(tomorrowStart.getUTCDate() + 1);
+    const todayIso = todayStart.toISOString();
     const tomorrowIso = tomorrowStart.toISOString();
+
+    // Espejo en PostgREST de `confirmationQueueBucket` (lib/order-confirmation).
+    // Manda la fecha pactada; si no hay, el recordatorio de dos horas mientras
+    // sea de hoy o del futuro; y si tampoco, el ciclo automático. Cualquier
+    // cambio de prioridad allá tiene que bajar aquí, o los chips contarían una
+    // cosa y la tabla mostraría otra.
+    const noPacted = "confirmation_next_contact_on.is.null";
+    // Recordatorio vigente = el que todavía ordena el día. Uno de días atrás no
+    // entra en ninguna cola: su pedido lo coloca el ciclo.
+    const noLiveReminder = `or(confirmation_reminder_due_at.is.null,confirmation_reminder_due_at.lt.${todayIso})`;
     if (f.confirmationDue === "vencido") {
+      // Vencido es solo lo pactado que se incumplió y el recordatorio de hoy que
+      // ya pasó de hora. El ciclo NO vence: reaparece en Hoy.
       q = q.or(
-        `confirmation_next_contact_on.lt.${today},confirmation_reminder_due_at.lt.${nowIso}`,
+        `confirmation_next_contact_on.lt.${today},`
+        + `and(${noPacted},confirmation_reminder_due_at.gte.${todayIso},confirmation_reminder_due_at.lte.${nowIso})`,
       );
     }
     if (f.confirmationDue === "hoy") {
       q = q.or(
-        `confirmation_next_contact_on.eq.${today},and(confirmation_reminder_due_at.gte.${nowIso},confirmation_reminder_due_at.lt.${tomorrowIso})`,
+        `confirmation_next_contact_on.eq.${today},`
+        + `and(${noPacted},confirmation_reminder_due_at.gt.${nowIso},confirmation_reminder_due_at.lt.${tomorrowIso}),`
+        + `and(${noPacted},${noLiveReminder},confirmation_cycle_due_on.lte.${today})`,
       );
     }
     if (f.confirmationDue === "proximo") {
       q = q.or(
-        `confirmation_next_contact_on.gt.${today},confirmation_reminder_due_at.gte.${tomorrowIso}`,
+        `confirmation_next_contact_on.gt.${today},`
+        + `and(${noPacted},confirmation_reminder_due_at.gte.${tomorrowIso}),`
+        + `and(${noPacted},${noLiveReminder},confirmation_cycle_due_on.gt.${today})`,
       );
     }
   }
@@ -762,6 +787,35 @@ function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
   }
 
   return q as T;
+}
+
+/**
+ * El ciclo de recontacto configurado en cada tienda.
+ *
+ * Consulta aparte y no un campo más de `getAccessibleStores`: esa función la usa
+ * TODO el panel, y una columna que la migración 0133 todavía no haya creado
+ * dejaría al usuario sin tiendas en cada página. Aquí un fallo solo devuelve el
+ * ciclo por defecto, que es exactamente lo que la operación estaba usando.
+ */
+export async function getConfirmationCycleDays(
+  storeIds: string[],
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  if (!storeIds.length) return out;
+  const sb = await createServerSupabase();
+  const { data, error } = await sb
+    .from("stores")
+    .select("id,confirmation_cycle_days")
+    .in("id", storeIds);
+  if (error) {
+    for (const id of storeIds) out[id] = DEFAULT_CONFIRMATION_CYCLE_DAYS;
+    return out;
+  }
+  for (const row of (data ?? []) as { id: string; confirmation_cycle_days: number | null }[]) {
+    out[row.id] = confirmationCycleDays(row.confirmation_cycle_days);
+  }
+  for (const id of storeIds) out[id] ??= DEFAULT_CONFIRMATION_CYCLE_DAYS;
+  return out;
 }
 
 /**

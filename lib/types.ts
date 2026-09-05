@@ -37,6 +37,8 @@ export interface OrderLineItem {
   variant_title?: string | null;
   quantity: number;
   sku: string | null;
+  /** Handle de Shopify: el mismo identificador que trae el link `/products/<handle>`. */
+  product_handle?: string | null;
   product_id: string | null;
   variant_id: string | null;
   price: number | null;
@@ -226,6 +228,10 @@ export interface LeadRow {
   inbound_count?: number | null;
   /** First message the customer wrote — opener context for the advisor (0044). */
   first_inbound_text?: string | null;
+  /** Handle del ULTIMO producto enlazado (0140): que consulta AHORA. */
+  last_product_handle?: string | null;
+  /** Handle del producto del carrito o de la navegacion abandonada (0143). */
+  cart_product_handle?: string | null;
   // Source / channel attribution (0008). 'meta_ad' = structured Click-to-WhatsApp
   // referral (real ad_id); 'fb_web' = reached WhatsApp via a Facebook/IG web link
   // (utm_source=facebook/fbclid, no ad_id); 'cod_cart'/'abandoned_browse' = flows;
@@ -270,6 +276,10 @@ export interface ShipmentRow {
   qr_token?: string | null;
   preparation_state?: string | null;
   custody_state?: string | null;
+  /** Etiqueta cruda de Aliclik («CANCEL · RETURNED · CONFIRMED»). Es lo único
+   *  que distingue una guía cerrada porque la entrega FALLÓ —y cuyo pedido
+   *  todavía merece otra salida— de una cerrada por decisión nuestra. */
+  reported_status?: string | null;
   ready_at?: string | null;
   ready_by?: string | null;
   custody_transferred_at?: string | null;
@@ -304,6 +314,15 @@ export interface ShipmentRow {
   /** Current stock evaluation, added at read time for the Envios UI. */
   fenix_reason?: "ok" | "sin_stock" | "sin_cobertura";
   fenix_shipment_id: string | null;
+  /**
+   * Guía que emitió Swayp y su estado CRUDO (1..12), espejados del webhook. El
+   * `delivery_status` de la app es un mapeo con pérdida —6 Novedad y 8 Revisión
+   * caen los dos en 'pendiente'—, así que sin el estado crudo la UI no puede
+   * distinguir un envío que espera una instrucción de uno que simplemente no
+   * salió todavía. Nulos en las guías manuales.
+   */
+  swayp_guide?: string | null;
+  swayp_state?: number | null;
   /** 'fenix_directo' = guía creada desde un pedido, sin guía Aliclik madre. */
   created_via?: string | null;
   delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado
@@ -465,6 +484,8 @@ export interface OrderMasterRow {
   confirmation_day_count?: number;
   confirmation_last_contact_at?: string | null;
   confirmation_next_contact_on?: string | null;
+  /** Ciclo automático de recontacto (0133): último contacto + N días. Derivado. */
+  confirmation_cycle_due_on?: string | null;
   confirmation_reminder_due_at?: string | null;
   confirmation_last_actor?: string | null;
   status_since: string | null;

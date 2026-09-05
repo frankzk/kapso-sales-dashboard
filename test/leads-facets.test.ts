@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { facetItems } from "@/lib/leads-facets";
+import { LEAD_SEGMENTS, countLeadSegments } from "@/lib/leads";
 
 type Row = { id: string; src: string; state: string; hot: boolean };
 
@@ -85,5 +89,51 @@ describe("facetItems", () => {
     const predicates: Record<string, (r: Row) => boolean> = {};
     for (let i = 0; i < 32; i++) predicates[`f${i}`] = () => true;
     expect(() => facetItems(rows, predicates)).toThrow(/31 facetas/);
+  });
+});
+
+describe("los chips de segmento no pueden divergir de la lista canónica", () => {
+  // EL FALLO QUE ESTO VIGILA. La fila estaba escrita a mano —["frio",
+  // "converso", "distrito", "carrito"]— con un `as LeadSegment[]` que
+  // silenciaba al compilador. Al fusionar `distrito` dentro de `interes`, el
+  // tipo cazó los siete sitios que enumeran segmentos PERO NO ESTE, por culpa
+  // del cast: la fila siguió pidiendo una clave que ya no existía y el chip del
+  // balde nuevo —con 490 leads dentro— no se dibujó. Los segmentos dejaron de
+  // sumar el total y no había forma de filtrarlos.
+  const SOURCE = readFileSync(resolve(process.cwd(), "components/leads.tsx"), "utf8");
+
+  it("la fila se deriva de LEAD_SEGMENTS, no de una lista escrita al lado", () => {
+    expect(SOURCE).toContain("[...LEAD_SEGMENTS].reverse().map(({ key })");
+  });
+
+  it("ningún `as LeadSegment[]` vuelve a silenciar al compilador acá", () => {
+    // El cast es lo que dejó pasar el fallo: sin él, TypeScript rechaza una
+    // clave que ya no existe en el tipo, que es justo lo que hace falta.
+    //
+    // Exige el `]` de cierre delante para matchear el cast de VERDAD y no la
+    // mención entre comillas del comentario que explica esto en leads.tsx.
+    // Sin esa ancla, la prueba fallaba con el arreglo ya puesto.
+    expect(SOURCE).not.toMatch(/\]\s*as LeadSegment\[\]/);
+  });
+
+  it("el contador devuelve exactamente un balde por segmento de la lista", () => {
+    // La otra mitad del mismo riesgo: si `countLeadSegments` y `LEAD_SEGMENTS`
+    // se desincronizan, un chip queda sin número o sobra un balde que nadie
+    // pinta. Acá se comprueba de verdad, no leyendo el fuente.
+    const counts = countLeadSegments([]);
+    expect(Object.keys(counts).sort()).toEqual(LEAD_SEGMENTS.map((s) => s.key).sort());
+  });
+
+  it("y los baldes suman el total, sin dejar leads fuera", () => {
+    const leads = [
+      { status: "nuevo", cart_item_count: 2 },
+      { status: "nuevo", district: "Surco" },
+      { status: "nuevo", first_inbound_text: "https://kenku.pe/products/x hola" },
+      { status: "nuevo", inbound_count: 3 },
+      { status: "nuevo" },
+    ];
+    const counts = countLeadSegments(leads);
+    const suma = LEAD_SEGMENTS.reduce((n, s) => n + counts[s.key], 0);
+    expect(suma).toBe(leads.length);
   });
 });

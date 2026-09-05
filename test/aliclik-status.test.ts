@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   aliclikStatusLabel,
+  aliclikTerminoSinEntregar,
   mapAliclikStatus,
   reconcileAliclikCustodyState,
   reconcileAliclikPreparationState,
@@ -255,5 +256,59 @@ describe("IN_AGENCY: hub de Aliclik, no agencia Shalom", () => {
       isAgency: true,
     });
     expect(r.operational).toBe("registrado_en_agencia");
+  });
+});
+
+/**
+ * La guía terminó sin entregar → el PEDIDO vuelve a la cola.
+ *
+ * EL CASO REAL. El MOM §11 nombra «guía cancelada por courier y devolución»
+ * como entradas elegibles a Reproprovincia, y la sección de Swayp añade que una
+ * salida Swayp puede coexistir con la devolución Aliclik. Pero el mapeo cierra
+ * esas guías —con razón: esa guía SÍ terminó— y la cola solo miraba guías
+ * abiertas, así que justo las dos entradas que el documento nombra nunca
+ * llegaban. Resultado: 844 guías cerradas así, sobre 842 pedidos, con stock ya
+ * puesto en provincia y sin forma de emitir la Swayp que lo aprovechara.
+ */
+describe("aliclikTerminoSinEntregar", () => {
+  it("una devolución vuelve a la cola: es lo que el MOM §11 nombra", () => {
+    expect(aliclikTerminoSinEntregar({ status: "CANCEL", dispatchStatus: "RETURNED" })).toBe(true);
+    expect(aliclikTerminoSinEntregar({ status: "NOT_RESPOND", dispatchStatus: "RETURNED" })).toBe(true);
+    expect(aliclikTerminoSinEntregar({ status: "REFUSED", dispatchStatus: "RETURNED" })).toBe(true);
+  });
+
+  it("y también la que TODAVÍA va de vuelta, que es cuando más sirve llamar", () => {
+    // 254 de la última semana estaban así: el paquete sigue cerca de la clienta
+    // y una Swayp desde el stock local puede alcanzarlo antes de que viaje entero.
+    expect(aliclikTerminoSinEntregar({ status: "CANCEL", dispatchStatus: "TO_RETURN" })).toBe(true);
+    expect(aliclikTerminoSinEntregar({ status: "CANCEL", dispatchStatus: "REMAINING_IN_TRANSIT" })).toBe(true);
+    expect(aliclikTerminoSinEntregar({ status: "CANCEL", dispatchStatus: "STORE_CENTRAL" })).toBe(true);
+    expect(aliclikTerminoSinEntregar({ status: "CANCEL", dispatchStatus: "LEFT_IN_WAREHOUSE" })).toBe(true);
+  });
+
+  it("una entrega lograda NO vuelve", () => {
+    expect(aliclikTerminoSinEntregar({ status: "DELIVERED", dispatchStatus: "PICKED" })).toBe(false);
+    expect(aliclikTerminoSinEntregar({ status: "DELIVERED", dispatchStatus: "RETURNED" })).toBe(false);
+  });
+
+  it("sin resultado de entrega no se adivina", () => {
+    // `PENDING_DELIVERY` es «todavía no se resolvió», no «falló». Son 22 guías
+    // cerradas por otro motivo: meterlas sería inventar un fracaso que nadie dijo.
+    expect(aliclikTerminoSinEntregar({ status: "PENDING_DELIVERY", dispatchStatus: "TO_PREPARE" })).toBe(false);
+    expect(aliclikTerminoSinEntregar({ status: "PENDING_DELIVERY", dispatchStatus: "IN_AGENCY" })).toBe(false);
+    expect(aliclikTerminoSinEntregar({ status: "", dispatchStatus: "" })).toBe(false);
+    expect(aliclikTerminoSinEntregar({})).toBe(false);
+  });
+
+  it("un despacho que dice que nunca salió gana sobre el status", () => {
+    // Si el status dice que un intento falló pero el despacho dice que el paquete
+    // sigue sin prepararse, los dos datos se contradicen. No se adivina: se
+    // descarta, que es el lado barato del error.
+    expect(aliclikTerminoSinEntregar({ status: "CANCEL", dispatchStatus: "TO_PREPARE" })).toBe(false);
+    expect(aliclikTerminoSinEntregar({ status: "REFUSED", dispatchStatus: "PREPARED" })).toBe(false);
+  });
+
+  it("no se cae por minúsculas ni espacios", () => {
+    expect(aliclikTerminoSinEntregar({ status: " cancel ", dispatchStatus: " returned " })).toBe(true);
   });
 });

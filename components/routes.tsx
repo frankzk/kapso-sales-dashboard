@@ -8,7 +8,7 @@
 //   en_curso    → ya está en su teléfono. Lo que él reporta ya no se borra.
 //   cerrada     → generó su liquidación. Se acabó.
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card, EmptyState, Section, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { NON_DELIVERY_REASONS, PAYMENT_METHODS, routeTotals } from "@/lib/routes";
@@ -21,6 +21,7 @@ import {
   ensureRoute,
   linkRiderAccount,
   removeStop,
+  searchAssignable,
   startRoute,
 } from "@/app/dashboard/rutas/actions";
 
@@ -358,15 +359,47 @@ function RouteDetail({
   const planning = route.status === "planificada";
   const closed = route.status === "cerrada";
 
-  const visible = assignable.filter((o) => {
-    if (!filter.trim()) return true;
-    const q = filter.toLowerCase();
+  // `assignable` es una MUESTRA: los más recientes del pool, que hoy son ~1.800.
+  // Filtrar solo en memoria hacía que un pedido fuera de la muestra no
+  // apareciera nunca, ni tecleando su código exacto. Así que a partir de dos
+  // caracteres la búsqueda se le pregunta al servidor, que mira el pool entero,
+  // y mientras tanto se sigue viendo lo que ya está en pantalla.
+  const [remoto, setRemoto] = useState<Assignable[] | null>(null);
+  const [buscando, setBuscando] = useState(false);
+  const termino = filter.trim();
+
+  useEffect(() => {
+    if (termino.length < 2) {
+      setRemoto(null);
+      setBuscando(false);
+      return;
+    }
+    let vigente = true;
+    setBuscando(true);
+    const t = setTimeout(async () => {
+      const res = await searchAssignable(route.route_date, termino);
+      // Una respuesta vieja no pisa a una nueva: se teclea más rápido de lo que
+      // contesta el servidor.
+      if (!vigente) return;
+      setRemoto(res.ok ? res.rows : []);
+      setBuscando(false);
+    }, 300);
+    return () => {
+      vigente = false;
+      clearTimeout(t);
+    };
+  }, [termino, route.route_date]);
+
+  const enMemoria = assignable.filter((o) => {
+    if (!termino) return true;
+    const q = termino.toLowerCase();
     return (
       (o.customer_name ?? "").toLowerCase().includes(q) ||
       (o.district ?? "").toLowerCase().includes(q) ||
       (o.order_name ?? "").toLowerCase().includes(q)
     );
   });
+  const visible = remoto ?? enMemoria;
 
   return (
     <Card className="space-y-4 p-4">
@@ -507,7 +540,7 @@ function RouteDetail({
             <input
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              placeholder="Filtrar por cliente, distrito o pedido"
+              placeholder="Buscar por cliente, distrito o pedido (ej. KP131277)"
               className="flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
             />
             <button
@@ -524,10 +557,21 @@ function RouteDetail({
               Añadir {picked.size > 0 ? `(${picked.size})` : ""}
             </button>
           </div>
+          {!termino && assignable.length >= 300 && (
+            // Decir que la lista está recortada, en vez de que parezca completa.
+            <p className="text-xs text-slate-500">
+              Se muestran los {assignable.length} más recientes. Escribe para buscar entre
+              todos los pedidos listos para asignar.
+            </p>
+          )}
           <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-200">
             {visible.length === 0 && (
               <p className="p-4 text-center text-sm text-slate-500">
-                No hay pedidos sin asignar para ese día.
+                {buscando
+                  ? "Buscando…"
+                  : termino
+                    ? `Ningún pedido listo para asignar coincide con «${termino}».`
+                    : "No hay pedidos sin asignar para ese día."}
               </p>
             )}
             {visible.map((o) => (

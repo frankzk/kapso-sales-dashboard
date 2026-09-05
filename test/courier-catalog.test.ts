@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   courierLabelFor,
   courierOptionByKey,
+  isGroupGfRiderCourier,
   ridersForCourier,
   routeChoiceByValue,
   routeChoices,
@@ -13,12 +14,13 @@ const riders = [
   { id: "3", full_name: "Ana", courier: "Aliclik" },
   { id: "4", full_name: "Beto", courier: "Swayp" },
   { id: "5", full_name: "Caro", courier: "Axel" },
+  { id: "6", full_name: "Daysi", courier: "Grupo GF Courier" },
 ];
 
 describe("ridersForCourier", () => {
-  it("propios = fichas sin transportadora", () => {
+  it("Grupo GF = fichas históricas sin transportadora y afiliación formal", () => {
     const propios = ridersForCourier(riders, courierOptionByKey("propios"));
-    expect(propios.map((r) => r.full_name).sort()).toEqual(["Johnny", "Roy"]);
+    expect(propios.map((r) => r.full_name).sort()).toEqual(["Daysi", "Johnny", "Roy"]);
   });
   it("empareja por transportadora sin distinguir formato", () => {
     expect(ridersForCourier(riders, courierOptionByKey("aliclik")).map((r) => r.full_name)).toEqual(["Ana"]);
@@ -36,7 +38,7 @@ describe("ridersForCourier", () => {
 describe("routeChoices (el desplegable único de «Nueva ruta»)", () => {
   it("los motorizados propios van por nombre, y guardan courier propio", () => {
     const { own } = routeChoices(riders);
-    expect(own.map((c) => c.label).sort()).toEqual(["Johnny", "Roy"]);
+    expect(own.map((c) => c.label).sort()).toEqual(["Daysi", "Johnny", "Roy"]);
     for (const choice of own) {
       expect(choice.courier).toBe("propio");
       expect(choice.riderId).toBeTruthy();
@@ -76,6 +78,12 @@ describe("routeChoices (el desplegable único de «Nueva ruta»)", () => {
 });
 
 describe("catálogo de couriers", () => {
+  it("reconoce la afiliación formal sin perder alias históricos", () => {
+    expect(isGroupGfRiderCourier("Grupo GF Courier")).toBe(true);
+    expect(isGroupGfRiderCourier("motorizado propio")).toBe(true);
+    expect(isGroupGfRiderCourier(null)).toBe(true);
+    expect(isGroupGfRiderCourier("Aliclik")).toBe(false);
+  });
   it("Swayp se guarda como token fenix pero se muestra como Swayp", () => {
     const swayp = courierOptionByKey("swayp")!;
     expect(swayp.value).toBe("fenix");
