@@ -59,6 +59,62 @@ export type ExperimentArm = "tratamiento" | "control";
 export interface ExperimentEligibility {
   source?: string | null;
   first_inbound_text?: string | null;
+  first_seen_at?: string | null;
+}
+
+/**
+ * Franja en la que hay alguien para administrar el tratamiento, hora de Lima.
+ *
+ * MEDIDO, no supuesto. Los toques humanos de 14 días por hora: 7h 3,8%, 8h 4,3%,
+ * 9h-17h entre 7% y 10% cada una, 18h 4,0%, 19h 1,7%, 20h 1,7%. El 95% cae entre
+ * las 7 y las 19.
+ *
+ * POR QUÉ HACE FALTA ESTE CORTE. El 57% de los leads sin señal entra FUERA de
+ * 9-20, cuando solo ocurre el 10,7% de los toques. Sin filtrar, más de la mitad
+ * de las asignaciones tendría su hora dorada de madrugada, cuando no hay nadie:
+ * el tratamiento no se puede administrar y esos leads solo añaden ruido a los dos
+ * brazos por igual.
+ *
+ * No sesga: el corte es por HORA DE LLEGADA, un dato anterior al sorteo y ajeno
+ * al brazo. Lo que hace es cambiar la pregunta por la única que se puede
+ * responder —y la única que importa para decidir—: para los leads que entran
+ * cuando podemos actuar, ¿vale la pena llamarlos rápido?
+ *
+ * Y ACELERA el experimento en vez de frenarlo. Con la mitad de los tratados sin
+ * poder tratarse, el contraste de cumplimiento entre brazos se aplasta y hacen
+ * falta muchísimos más leads; restringiendo, cada lead asignado cuenta.
+ *
+ * El cierre a las 18 y no a las 19 es porque el tratamiento necesita la hora
+ * ENTERA por delante: quien entra a las 18:00 se llama hasta las 19:00, y a esa
+ * hora todavía queda gente (1,7%). Más tarde, no.
+ */
+export const TREATABLE_HOUR_START = 7;
+export const TREATABLE_HOUR_END = 18;
+
+/** Hora de Lima (0-23) de un instante ISO, o null si la fecha no sirve. Perú es
+ *  UTC-5 fijo y sin horario de verano, pero se resuelve con Intl igual que el
+ *  resto del repo (ver limaTimeHHMM en lib/aliclik-geo.ts) para no codificar el
+ *  desfase a mano. */
+export function limaHour(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  const hh = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "America/Lima",
+    hour: "2-digit",
+    hour12: false,
+  }).format(new Date(t));
+  const n = Number(hh === "24" ? "00" : hh);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** ¿Entró cuando hay alguien que pueda llamarlo dentro de su hora? PURA. */
+export function isWithinTreatableWindow(firstSeenAt: string | null | undefined): boolean {
+  const h = limaHour(firstSeenAt);
+  // Sin hora usable NO entra: meterlo sería asignar un lead que quizá nadie
+  // pueda tratar, y el experimento ya tiene bastante dilución.
+  if (h == null) return false;
+  return h >= TREATABLE_HOUR_START && h <= TREATABLE_HOUR_END;
 }
 
 const PRODUCT_LINK_RE = /https?:\/\/\S*\/products\/\S/i;
@@ -78,6 +134,11 @@ const PRODUCT_LINK_RE = /https?:\/\/\S*\/products\/\S/i;
 export function isExperimentEligible(lead: ExperimentEligibility): boolean {
   if (lead.source === "cod_cart") return false;
   if (PRODUCT_LINK_RE.test(lead.first_inbound_text ?? "")) return false;
+  // La ventana va DENTRO de la elegibilidad, no en el barrido, para que el
+  // reparto del cron y la marca de la cola usen exactamente el mismo criterio.
+  // Si viviera solo en el barrido, la UI marcaría 🧪 leads que nunca se
+  // asignaron — y una asesora los llamaría creyendo que están en el estudio.
+  if (!isWithinTreatableWindow(lead.first_seen_at)) return false;
   return true;
 }
 
