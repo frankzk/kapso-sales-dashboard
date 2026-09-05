@@ -1322,6 +1322,41 @@ sale, porque invita a pulsar el botón que deja el pedido bloqueado.
 - El aviso nombra la **consecuencia**, no el síntoma: lo que la operadora
   necesita saber no es que falla, sino que cada intento le bloquea el pedido.
 
+#### Guardar la fila es lo último que puede fallar
+
+La guía ya existe en Aliclik cuando llega el momento de escribir nuestra fila.
+Por eso esa escritura —`writeCourierGuide`, que comparten Aliclik, Shalom y
+Tanders— tiene que ser **la más difícil de romper del sistema**, no la más
+frágil: cualquier cosa que la tumbe deja un paquete vivo del otro lado que aquí
+no existe, y un pedido que se muestra SIN guía es una invitación a emitir una
+segunda por la misma caja.
+
+**Una columna que la base todavía no tiene no cuesta la fila.** Si el `INSERT`
+—o el `UPDATE` que rellena la salida— se queja de una columna inexistente
+(`PGRST204` de PostgREST, `42703` de Postgres), se suelta esa columna y se
+reintenta. Perder un dato nuevo es un dato de menos; perder la fila es un
+paquete fantasma.
+
+- El reintento **no** lleva una lista de columnas nuevas que alguien deba
+  acordarse de mantener: olvidarla es exactamente el fallo que esto arregla.
+  Lleva la lista de las que **jamás** se sueltan —tienda, pedido, courier,
+  guía, estado, categoría, vínculo, procedencia y nombre del pedido—. Si falta
+  una de esas, la base no es la que el código espera y el error sube tal cual.
+- Solo se suelta lo que se envió, y como mucho cuatro columnas. Más que eso no
+  es una ventana de despliegue: es la base equivocada, y conviene que se note.
+- Las columnas soltadas vuelven al llamador (`droppedColumns`) en vez de
+  desaparecer en silencio.
+
+> ⚠️ **Ocurrió el 05-09-2026.** El despliegue que empezó a escribir
+> `aliclik_expected_dispatch_date` (§10.1) salió antes de que se aplicara su
+> migración. Aliclik respondió 201 a las dos creaciones —irreversibles, con
+> costo— y el `INSERT` reventó por la columna ausente. `AUR5X950324066036`
+> (#KP132639) y `AUR5X431594420316` (#KP132644) quedaron vivas en Aliclik y sin
+> existir en Kapta, con sus pedidos en «Por confirmar». Las filas se
+> reconstruyeron desde el payload guardado en `aliclik_order_requests`, que fue
+> lo único que salvó el caso: la intención se registra ANTES de llamar, así que
+> el rastro sobrevive aunque la fila no llegue a escribirse.
+
 Indemnización Aliclik:
 
 - Responsable: Yohalis.
