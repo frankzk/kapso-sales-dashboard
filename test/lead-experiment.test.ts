@@ -286,10 +286,10 @@ describe("toda tabla append-only revoca sus permisos de más", () => {
 });
 
 describe("la lectura del experimento no reintroduce el sesgo", () => {
-  // La función vive ahora en 0146: la de 0144 contaba los toques de máquina
-  // (drip, winback, secuencias) como llamadas.
+  // La función vive ahora en 0147. 0144 contaba los toques de máquina como
+  // llamadas (arreglado en 0146) y no filtraba la franja horaria (0147).
   const sql = readFileSync(
-    new URL("../db/migrations/0146_read_lead_experiment_solo_humanos.sql", import.meta.url),
+    new URL("../db/migrations/0147_read_lead_experiment_franja.sql", import.meta.url),
     "utf8",
   );
   const sql144 = readFileSync(new URL("../db/migrations/0144_lead_experiments.sql", import.meta.url), "utf8");
@@ -302,6 +302,23 @@ describe("la lectura del experimento no reintroduce el sesgo", () => {
   // carrito. Contarlas como llamadas destruye justo el indicador que existe para
   // detectar que el experimento no se administró: `pct_en_1h` saldría alto en los
   // DOS brazos (a los dos les saltan drips) y la diferencia se aplanaría.
+  // La tabla es append-only, así que las asignaciones hechas antes de que
+  // existiera el filtro de franja siguen ahí —131 de 167 cuando se escribió
+  // esto—. Si la lectura no las descartara, mezclaría dos poblaciones con reglas
+  // de elegibilidad distintas y arrastraría el resultado con leads intratables.
+  it("analiza la misma población que el reparto selecciona", () => {
+    expect(sql).toContain(
+      "extract(hour from l.first_seen_at at time zone 'America/Lima')::int between 7 and 18",
+    );
+  });
+
+  // El SQL no puede importar las constantes del código, así que se comprueba que
+  // no se hayan separado: mover una sin la otra dejaría el análisis mirando una
+  // franja distinta de la que se reparte, en silencio.
+  it("la franja del SQL coincide con la del código", () => {
+    expect(sql).toContain(`between ${TREATABLE_HOUR_START} and ${TREATABLE_HOUR_END}`);
+  });
+
   it("la primera llamada solo cuenta toques de PERSONAS", () => {
     expect(sql).toContain("where kind in ('call', 'message', 'sale')");
     // Y la versión vieja, que no filtraba, ya no puede ser la que corre: si
