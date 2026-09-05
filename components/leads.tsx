@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
 import type { AdMeta } from "@/lib/meta-ads";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
@@ -15,6 +15,7 @@ import {
 } from "@/lib/leads-access";
 import { facetItems } from "@/lib/leads-facets";
 import { scoringProfileFor, sortLeadsByPriorityScoped } from "@/lib/lead-priority";
+import { assignArm, isExperimentEligible } from "@/lib/lead-experiment";
 import {
   countLeadUrgency,
   goldenBreakdown,
@@ -1330,14 +1331,27 @@ export function LeadsBoard({
     () => new Map(stores.map((s) => [s.id, s.name])),
     [stores],
   );
+  // Experimento de la hora dorada: el brazo se DERIVA del id del lead con la
+  // misma función pura que usa el reparto en el cron, así que la fila no necesita
+  // traer nada nuevo de la base y las dos partes no se pueden desincronizar.
+  const enExperimento = useCallback(
+    (lead: LeadRow) =>
+      isExperimentEligible(lead) &&
+      assignArm(lead.id) === "tratamiento" &&
+      leadUrgency(lead.first_seen_at, now)?.tier === "dorada",
+    [now],
+  );
   const displayLeads = useMemo(
     () =>
       priorityOn
-        ? sortLeadsByPriorityScoped(baseLeads, (lead) =>
-            profileByStore.get(lead.store_id) ?? scoringProfileFor(null),
+        ? sortLeadsByPriorityScoped(
+            baseLeads,
+            (lead) => profileByStore.get(lead.store_id) ?? scoringProfileFor(null),
+            now,
+            enExperimento,
           )
         : baseLeads,
-    [priorityOn, baseLeads, profileByStore],
+    [priorityOn, baseLeads, profileByStore, now, enExperimento],
   );
 
   // Render por tramos. La cola completa puede traer miles de filas y montarlas
@@ -2009,6 +2023,19 @@ export function LeadsBoard({
                     {/* Marcador de atención: sin esto un reencolado (ola 🔁),
                         una respuesta nueva o un seguimiento vencido eran
                         invisibles en la fila — solo cambiaban el orden. */}
+                    {/* Marca del experimento. Sin esto el lead sube al principio
+                        de la cola sin explicación, y una asesora que ve un frío
+                        arriba concluye que el orden está roto — o lo salta. Que
+                        diga POR QUÉ está ahí es lo que hace que el tratamiento
+                        se administre. */}
+                    {enExperimento(lead) && (
+                      <span
+                        title="Prueba en curso: estamos midiendo si llamar rápido a un lead sin señal vale la pena. Llámalo dentro de la hora aunque no parezca prometedor."
+                        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-1.5 py-0.5 text-[11px] font-semibold text-violet-700"
+                      >
+                        🧪 prueba
+                      </span>
+                    )}
                     {lead.needs_attention && !isYape && (
                       <span
                         title="Requiere atención: reencolado por carrito sin contacto, respuesta nueva o seguimiento vencido"
