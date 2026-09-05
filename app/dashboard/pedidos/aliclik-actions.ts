@@ -31,6 +31,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { normalizeDistrictKey } from "@/lib/district-coverage";
+import { dispatchFallsOnSunday, expectedDispatchDate } from "@/lib/aliclik-dispatch-date";
 import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
 import { getStoreCreds } from "@/lib/ingest";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -633,6 +634,12 @@ export interface AliclikPreview {
   /** Total del pedido en Shopify. Si difiere de `collectTotal`, se avisa. */
   orderTotal?: number | null;
   coordinate?: { lat: string; lng: string };
+  /**
+   * Cuándo recogerán el paquete según la regla del propio Aliclik, y si su
+   * cálculo va a caer en domingo. `fallsOnSunday` es lo que hay que advertir:
+   * ahí su regla dice lunes y lo observado es que ponen el domingo.
+   */
+  dispatch?: { date: string; fallsOnSunday: boolean };
   /** Falta la coordenada: la interfaz debe pedirla antes de seguir. */
   needsCoordinate?: boolean;
   /**
@@ -942,7 +949,29 @@ export async function previewAliclikGuide(
     ubigeoMismatch,
     couriers: annotated,
     coordinate: { lat, lng },
+    dispatch: dispatchOutlook(annotated),
     writeBlocked: writeBlockedReason() ?? undefined,
+  };
+}
+
+/**
+ * Cuándo recogerán el paquete, y si Aliclik va a equivocarse al fecharlo.
+ *
+ * Se calcula sobre el courier más barato entre los seleccionables, que es el que
+ * el panel preselecciona y el que la asesora elige casi siempre. No sobre todos:
+ * enseñar una fecha por courier convertiría un aviso en una tabla, y el aviso
+ * solo importa cuando hay algo que advertir.
+ */
+function dispatchOutlook(
+  couriers: (AliclikCourierQuote & { selectable: boolean })[],
+): { date: string; fallsOnSunday: boolean } | undefined {
+  const chosen = couriers
+    .filter((c) => c.selectable)
+    .sort((a, b) => a.deliveryCost - b.deliveryCost)[0];
+  if (!chosen) return undefined;
+  return {
+    date: expectedDispatchDate(chosen.schedule),
+    fallsOnSunday: dispatchFallsOnSunday(chosen.schedule),
   };
 }
 
@@ -1221,6 +1250,11 @@ export async function createAliclikGuide(
     latitude: Number(preview.coordinate.lat),
     longitude: Number(preview.coordinate.lng),
     created_via: "aliclik_api",
+    // La fecha que corresponde según la regla del propio Aliclik, con el corte
+    // que su cotización dio para ESTE courier y almacén. No viaja en la
+    // petición —su API de contra entrega no admite fecha— pero queda guardada
+    // para contrastarla después con la que ellos pongan en su reporte.
+    aliclik_expected_dispatch_date: expectedDispatchDate(courierBlock.schedule),
     quoted_delivery_cost: courierBlock.deliveryCost,
     quoted_return_cost: courierBlock.returnCost,
     aliclik_transport_id: courierBlock.transportId,

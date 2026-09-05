@@ -49,6 +49,7 @@ interface ExistingShipment {
   delivered_source: string | null;
   aliclik_attempts: number | null;
   aliclik_service_date: string | null;
+  aliclik_reported_dispatch_date: string | null;
   district: string | null;
   province: string | null;
   city: string | null;
@@ -312,6 +313,13 @@ export async function ingestAliclikReport(
       // Última fecha de entrega: la MÁS RECIENTE vista (no retrocede si se sube
       // un reporte viejo fuera de orden).
       aliclik_service_date: maxDeliveryDate(inc.row.aliclik_service_date, existing?.aliclik_service_date),
+      // La fecha que Aliclik puso de verdad, para contrastarla con la que su
+      // propia regla mandaba (`aliclik_expected_dispatch_date`, 0133). Aquí NO
+      // se toma la más reciente: no es un estado que avance, es un dato que
+      // ellos fijan al crear y que solo cambia si alguien lo corrige a mano.
+      // Quedarse con el máximo escondería justamente la corrección manual, que
+      // es la señal de que el incumplimiento costó trabajo.
+      aliclik_reported_dispatch_date: inc.row.dispatch_date ?? existing?.aliclik_reported_dispatch_date ?? null,
       source_batch_id: batchId,
       last_report_at,
     });
@@ -324,8 +332,15 @@ export async function ingestAliclikReport(
       .from("shipments")
       .upsert(chunk, { onConflict: "courier,guide_code" })
       .select("id,guide_code");
-    if (isMissingProvinceColumn(upsertResult.error)) {
-      const legacyChunk = chunk.map(({ province: _province, ...row }) => row);
+    // El código se despliega antes que la migración, así que el reintento
+    // quita TODAS las columnas que pueden no existir todavía, no solo la que
+    // motivó este respaldo en su día. Quitar únicamente `province` dejaba el
+    // reintento fallando por la siguiente columna nueva —hoy la fecha de
+    // despacho de la 0133— y la importación entera se caía con ella.
+    if (isMissingColumn(upsertResult.error)) {
+      const legacyChunk = chunk.map(
+        ({ province: _p, aliclik_reported_dispatch_date: _d, ...row }) => row,
+      );
       upsertResult = await admin
         .from("shipments")
         .upsert(legacyChunk, { onConflict: "courier,guide_code" })
@@ -520,6 +535,19 @@ async function promoteApiCreatedGuides(
 }
 
 /** Read existing aliclik shipments for the given guide codes (to merge on re-import). */
+const EXISTING_SHIPMENT_BASE =
+  "guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at," +
+  "api_report_at,next_followup_at,returned_at,returned_source,dispatched_at,delivered_source," +
+  "aliclik_attempts,aliclik_service_date";
+const EXISTING_SHIPMENT_TAIL =
+  ",delivery_address,delivery_reference,latitude,longitude,address_override";
+/** Del conjunto de hoy al de ayer. Ver el bucle de `fetchExistingShipments`. */
+const EXISTING_SHIPMENT_COLUMN_SETS = [
+  `${EXISTING_SHIPMENT_BASE},aliclik_reported_dispatch_date,district,province,city,region${EXISTING_SHIPMENT_TAIL}`,
+  `${EXISTING_SHIPMENT_BASE},district,province,city,region${EXISTING_SHIPMENT_TAIL}`,
+  `${EXISTING_SHIPMENT_BASE},district,city,region${EXISTING_SHIPMENT_TAIL}`,
+];
+
 async function fetchExistingShipments(
   admin: SupabaseClient,
   guideCodes: string[],
@@ -527,19 +555,22 @@ async function fetchExistingShipments(
   const map = new Map<string, ExistingShipment>();
   if (!guideCodes.length) return map;
   for (const chunk of chunked(guideCodes, 200)) {
-    const currentResult = await admin
-      .from("shipments")
-      .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,next_followup_at,returned_at,returned_source,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
-      .eq("courier", "aliclik")
-      .in("guide_code", chunk);
-    let data: unknown = currentResult.data;
-    if (isMissingProvinceColumn(currentResult.error)) {
-      const legacyResult = await admin
+    // Escalones de columnas, del completo al mínimo. El código se despliega
+    // antes que la migración, así que se intenta el conjunto de hoy y se cae al
+    // de ayer — el mismo criterio de `SHIPMENT_COLUMN_SETS` en order-master.ts.
+    // Sin esto, una importación entera fallaría durante la ventana en la que la
+    // 0133 aún no está aplicada.
+    let data: unknown = null;
+    for (const columns of EXISTING_SHIPMENT_COLUMN_SETS) {
+      const result = await admin
         .from("shipments")
-        .select("guide_code,delivery_status,matched,match_method,order_id,store_id,last_report_at,api_report_at,next_followup_at,returned_at,returned_source,dispatched_at,delivered_source,aliclik_attempts,aliclik_service_date,district,city,region,delivery_address,delivery_reference,latitude,longitude,address_override")
+        .select(columns)
         .eq("courier", "aliclik")
         .in("guide_code", chunk);
-      data = legacyResult.data;
+      if (!result.error) {
+        data = result.data;
+        break;
+      }
     }
     for (const r of (data as ExistingShipment[]) ?? []) map.set(r.guide_code, r);
   }
@@ -565,10 +596,14 @@ function chunked<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-function isMissingProvinceColumn(error: { code?: string; message?: string } | null): boolean {
-  return !!error && (
-    error.code === "PGRST204" ||
-    error.code === "42703" ||
-    error.message?.toLowerCase().includes("province") === true
-  );
+/**
+ * ¿El error es «esa columna no existe»?
+ *
+ * Se llamaba `isMissingProvinceColumn` por la columna que lo motivó, pero
+ * siempre reconoció cualquier columna ausente (42703 / PGRST204). El nombre
+ * viejo invitaba a que el respaldo quitara solo `province`, que es exactamente
+ * el fallo que tuvo al añadirse la fecha de despacho.
+ */
+function isMissingColumn(error: { code?: string; message?: string } | null): boolean {
+  return !!error && (error.code === "PGRST204" || error.code === "42703");
 }

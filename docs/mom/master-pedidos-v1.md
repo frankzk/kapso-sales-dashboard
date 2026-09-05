@@ -1153,6 +1153,39 @@ un punto de Pisac no prueba que se llegue a todo Pisac. Se automatiza el trabajo
 no la decisión. Y marcar un distrito exige ser administrador, como en Ajustes:
 cambia el despacho de todos sus pedidos, no el de este.
 
+#### Cuándo recogen el paquete, y por qué lo calculamos si lo decide Aliclik
+
+La fecha de despacho **no se envía**: el esquema de `POST /integration/order` no
+tiene campo de fecha y la calcula su servidor. La regla es suya y está en su
+documentación: *el despacho se calcula contra la hora de corte del courier
+(`schedule`); si cae en domingo, se desplaza al lunes*. Aliclik recoge todos los
+días **salvo el domingo** —feriados incluidos—, así que no hay calendario que
+mantener.
+
+**La hora de corte no se codifica.** Llega en la cotización, por courier y por
+almacén. Vale `14:00` para ALIDRIVER y `16:30` para Olva en el ejemplo de su
+documentación; fijarla sería sembrar el próximo fallo.
+
+Replicamos su cálculo por dos motivos, y ninguno es cambiar la guía:
+
+1. **Avisar antes de crear.** Cuando el corte empuja a domingo, la pantalla lo
+   dice y pide revisar la fecha en su portal.
+2. **Contar los incumplimientos.** `aliclik_expected_dispatch_date` guarda lo que
+   su regla manda; `aliclik_reported_dispatch_date`, lo que pusieron —columna
+   «FECHA DESPACHO» de su Excel—. La diferencia es la cifra con la que se
+   reclama, en vez de «nos pasa a veces».
+
+El aviso solo aparece cuando su cálculo cae en domingo. El resto de los días las
+dos fechas coinciden, y un aviso que sale siempre se deja de leer.
+
+> ⚠️ **Esto NO corrige la guía.** Su API no admite fecha, así que el paquete
+> sigue llevando lo que Aliclik decida y corregirlo sigue siendo manual, en su
+> portal. Ocurrió con `AUR5X846640592825` (#KP123403), creada el sábado
+> 29-08-2026 a las 14:13 de Lima —trece minutos pasado el corte— y fechada para
+> el **domingo 30**: su regla mandaba el lunes 31, aplicaron la primera mitad y
+> no la segunda. El lunes el motorizado vio una fecha vencida y no se llevó el
+> paquete.
+
 ### 10.2 Crear una guía en Aliclik: el candado y su caducidad
 
 Crear un pedido en Aliclik es una escritura hacia afuera, irreversible, con

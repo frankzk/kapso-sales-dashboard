@@ -20,18 +20,10 @@ export interface AgencyScheduleResult {
   message: string | null;
 }
 
-const DAY_MS = 86_400_000;
-
-/** Suma días a una fecha "YYYY-MM-DD" sin tocar zonas horarias. */
-function addDays(dateKey: string, days: number): string {
-  const ms = Date.parse(`${dateKey}T00:00:00Z`);
-  return new Date(ms + days * DAY_MS).toISOString().slice(0, 10);
-}
-
-/** Día de la semana de una fecha "YYYY-MM-DD" (0 = domingo). */
-function dayOfWeek(dateKey: string): number {
-  return new Date(`${dateKey}T00:00:00Z`).getUTCDay();
-}
+// La regla de la fecha —corte, y domingo al lunes— vive en un solo sitio y la
+// comparten agencia y contra entrega. Es la misma regla de Aliclik: tenerla dos
+// veces es tenerla mal en cuanto una de las dos se toque.
+import { addDays, dayOfWeek, expectedDispatchDate } from "@/lib/aliclik-dispatch-date";
 
 export function isValidDateKey(value: string | null | undefined): boolean {
   const v = (value ?? "").trim();
@@ -54,16 +46,7 @@ export function minAgencyScheduleDate(
   formatTimeAgency: string | null | undefined,
   now: Date = new Date(),
 ): string {
-  const today = limaDateKey(now);
-  const cutoff = parseHHMM(formatTimeAgency);
-  const nowMin = parseHHMM(limaTimeHHMM(now));
-
-  let date = today;
-  if (cutoff !== null && nowMin !== null && nowMin > cutoff) {
-    date = addDays(date, 1);
-  }
-  if (dayOfWeek(date) === 0) date = addDays(date, 1); // domingo → lunes
-  return date;
+  return expectedDispatchDate(formatTimeAgency, now);
 }
 
 /**
