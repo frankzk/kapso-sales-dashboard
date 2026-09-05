@@ -295,4 +295,6 @@
 \ir migrations/0145_append_only_revoke_excess_grants.sql
 \echo 'Applying 0146_read_lead_experiment_solo_humanos.sql'
 \ir migrations/0146_read_lead_experiment_solo_humanos.sql
+\echo 'Applying 0147_read_lead_experiment_franja.sql'
+\ir migrations/0147_read_lead_experiment_franja.sql
 \echo 'Done.'
