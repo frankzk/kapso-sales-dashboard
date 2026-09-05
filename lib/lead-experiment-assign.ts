@@ -70,11 +70,16 @@ export async function assignPendingExperimentArms(
     .limit(ASSIGN_BATCH);
   if (error || !candidatos) return vacio;
 
+  // `first_seen_at` va en el tipo aunque el barrido no lo lea directamente: lo
+  // usa `isExperimentEligible` para la franja horaria. Sin él aquí, quitarlo del
+  // `select` de arriba no daría error de tipos y el reparto se apagaría entero en
+  // silencio — la elegibilidad devuelve false cuando no hay hora.
   const filas = candidatos as {
     id: string;
     store_id: string;
     source: string | null;
     first_inbound_text: string | null;
+    first_seen_at: string | null;
   }[];
 
   const elegibles = filas.filter(isExperimentEligible);

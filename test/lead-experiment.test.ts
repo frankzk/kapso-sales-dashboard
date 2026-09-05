@@ -3,24 +3,49 @@ import { readFileSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
   FRIO_GOLDEN_EXPERIMENT,
+  TREATABLE_HOUR_END,
+  TREATABLE_HOUR_START,
   TREATMENT_FRACTION,
   assignArm,
   isExperimentEligible,
+  isWithinTreatableWindow,
   shouldPin,
 } from "@/lib/lead-experiment";
 
+// 14:00 en Lima (UTC-5) = 19:00 UTC. Dentro de la franja tratable.
+const enHorario = "2026-09-05T19:00:00.000Z";
+// 03:00 en Lima = 08:00 UTC. Nadie trabajando.
+const deMadrugada = "2026-09-05T08:00:00.000Z";
+
 describe("isExperimentEligible", () => {
   it("entra el lead sin ninguna señal de compra", () => {
-    expect(isExperimentEligible({})).toBe(true);
-    expect(isExperimentEligible({ source: "meta_ad", first_inbound_text: "hola" })).toBe(true);
-    expect(isExperimentEligible({ source: "organic", first_inbound_text: null })).toBe(true);
+    expect(isExperimentEligible({ first_seen_at: enHorario })).toBe(true);
+    expect(
+      isExperimentEligible({ source: "meta_ad", first_inbound_text: "hola", first_seen_at: enHorario }),
+    ).toBe(true);
+    expect(
+      isExperimentEligible({ source: "organic", first_inbound_text: null, first_seen_at: enHorario }),
+    ).toBe(true);
   });
 
   it("queda fuera el que ya trae carrito o ficha", () => {
-    expect(isExperimentEligible({ source: "cod_cart" })).toBe(false);
+    expect(isExperimentEligible({ source: "cod_cart", first_seen_at: enHorario })).toBe(false);
     expect(
-      isExperimentEligible({ first_inbound_text: "https://kenku.pe/products/x hola" }),
+      isExperimentEligible({
+        first_inbound_text: "https://kenku.pe/products/x hola",
+        first_seen_at: enHorario,
+      }),
     ).toBe(false);
+  });
+
+  // El 57% de los leads sin señal entra fuera de horario, cuando solo ocurre el
+  // 10,7% de los toques humanos. Asignarlos metería en el estudio leads que
+  // NADIE puede tratar: no sesga (le pasa igual a los dos brazos) pero aplasta
+  // el contraste de cumplimiento y multiplica el tamaño de muestra necesario.
+  it("queda fuera el que entra cuando no hay nadie para llamarlo", () => {
+    expect(isExperimentEligible({ first_seen_at: deMadrugada })).toBe(false);
+    expect(isExperimentEligible({ first_seen_at: null })).toBe(false);
+    expect(isExperimentEligible({ first_seen_at: "no-es-fecha" })).toBe(false);
   });
 
   // Si la elegibilidad mirara un campo que la llamada puede reescribir, quién
@@ -28,13 +53,40 @@ describe("isExperimentEligible", () => {
   // exactamente ese campo: tras una llamada el cliente lo manda por WhatsApp y
   // el bot lo ingesta.
   it("NO mira el distrito, aunque leadSegment sí lo mire", () => {
-    expect(isExperimentEligible({ district: "Miraflores" } as never)).toBe(true);
+    expect(isExperimentEligible({ district: "Miraflores", first_seen_at: enHorario } as never)).toBe(true);
   });
 
   // Igual con el estado y el conteo de entrantes: los dos cambian después de una
   // llamada.
   it("NO mira el estado ni el número de mensajes", () => {
-    expect(isExperimentEligible({ status: "no_responde", inbound_count: 9 } as never)).toBe(true);
+    expect(
+      isExperimentEligible({ status: "no_responde", inbound_count: 9, first_seen_at: enHorario } as never),
+    ).toBe(true);
+  });
+});
+
+describe("isWithinTreatableWindow", () => {
+  const aLasLima = (h: number) =>
+    new Date(Date.UTC(2026, 8, 5, (h + 5) % 24, 30)).toISOString();
+
+  it("los bordes son los medidos: 7 y 18 dentro, 6 y 19 fuera", () => {
+    expect(isWithinTreatableWindow(aLasLima(TREATABLE_HOUR_START))).toBe(true);
+    expect(isWithinTreatableWindow(aLasLima(TREATABLE_HOUR_END))).toBe(true);
+    expect(isWithinTreatableWindow(aLasLima(TREATABLE_HOUR_START - 1))).toBe(false);
+    expect(isWithinTreatableWindow(aLasLima(TREATABLE_HOUR_END + 1))).toBe(false);
+  });
+
+  it("resuelve la hora en Lima, no en UTC", () => {
+    // 23:30 UTC = 18:30 en Lima → dentro. En UTC caería fuera.
+    expect(isWithinTreatableWindow("2026-09-05T23:30:00.000Z")).toBe(true);
+    // 09:00 UTC = 04:00 en Lima → fuera. En UTC caería dentro.
+    expect(isWithinTreatableWindow("2026-09-05T09:00:00.000Z")).toBe(false);
+  });
+
+  it("sin hora usable no entra", () => {
+    expect(isWithinTreatableWindow(null)).toBe(false);
+    expect(isWithinTreatableWindow("")).toBe(false);
+    expect(isWithinTreatableWindow("roto")).toBe(false);
   });
 });
 
@@ -234,10 +286,29 @@ describe("toda tabla append-only revoca sus permisos de más", () => {
 });
 
 describe("la lectura del experimento no reintroduce el sesgo", () => {
-  const sql = readFileSync(new URL("../db/migrations/0144_lead_experiments.sql", import.meta.url), "utf8");
+  // La función vive ahora en 0146: la de 0144 contaba los toques de máquina
+  // (drip, winback, secuencias) como llamadas.
+  const sql = readFileSync(
+    new URL("../db/migrations/0146_read_lead_experiment_solo_humanos.sql", import.meta.url),
+    "utf8",
+  );
+  const sql144 = readFileSync(new URL("../db/migrations/0144_lead_experiments.sql", import.meta.url), "utf8");
 
   it("la PK es compuesta, para que quepa un segundo experimento", () => {
-    expect(sql).toContain("primary key (lead_id, experiment)");
+    expect(sql144).toContain("primary key (lead_id, experiment)");
+  });
+
+  // El 51,3% de `lead_calls` es `kind='system'` — drip, winback y secuencias de
+  // carrito. Contarlas como llamadas destruye justo el indicador que existe para
+  // detectar que el experimento no se administró: `pct_en_1h` saldría alto en los
+  // DOS brazos (a los dos les saltan drips) y la diferencia se aplanaría.
+  it("la primera llamada solo cuenta toques de PERSONAS", () => {
+    expect(sql).toContain("where kind in ('call', 'message', 'sale')");
+    // Y la versión vieja, que no filtraba, ya no puede ser la que corre: si
+    // alguien reaplicara 0144 sobre 0146 volvería el fallo en silencio.
+    const fnDe144 = sql144.slice(sql144.indexOf("create or replace function public.read_lead_experiment"));
+    expect(fnDe144).not.toContain("kind in ('call'");
+    expect(Number("0146".slice(0, 4))).toBeGreaterThan(Number("0144".slice(0, 4)));
   });
 
   it("el análisis descarta las filas asignadas después de la primera llamada", () => {
