@@ -182,17 +182,30 @@ describe("el tratamiento se administra de verdad", () => {
     expect(src).toContain("isExperimentEligible(lead)");
   });
 
-  it("el lead del tratamiento sube al principio de la cola", () => {
-    expect(src).toContain("enExperimento,");
-    expect(priority).toContain("Number(b.pinned) - Number(a.pinned) ||");
+  // El empujón se RETIRÓ. Medido sobre las primeras 78 asignaciones, el brazo de
+  // tratamiento se llamaba a los 47 minutos de mediana contra 14 del control, y
+  // 1 de 19 dentro de los primeros 30 minutos contra 15 de 59. Marginal
+  // (p ≈ 0,06) pero en la dirección equivocada en todos los cortes — y con un
+  // coste cierto: ponía un frío (~9-19%) por encima de un carrito fresco (41%).
+  it("la cola NO se reordena por el experimento", () => {
+    expect(priority).not.toContain("pinned");
+    expect(priority).not.toMatch(/pin\?\.\(/);
+    // Y en particular el puntaje sigue siendo solo lo medido.
+    expect(priority).not.toMatch(/score:[^\n]*\+[^\n]*pin/);
   });
 
-  // El empujón NO puede ir sumado al puntaje: los pesos son probabilidades de
-  // cierre medidas y falsearlas haría que el próximo que las lea concluya que un
-  // frío cierra más.
-  it("el empujón es una llave aparte, no un puntaje inflado", () => {
-    expect(priority).toContain("pinned: pin?.(lead) === true,");
-    expect(priority).not.toMatch(/score:[^\n]*\+[^\n]*pin/);
+  // El aviso reemplaza al empujón, y tiene que contarse ignorando el chip de
+  // segmento: al filtrar por Carrito, un lead frío del tratamiento desaparecería
+  // de la lista y nadie lo llamaría nunca. Es el fallo que hundió la primera
+  // versión del tratamiento.
+  it("el aviso de la prueba sobrevive al filtro de segmento", () => {
+    expect(src).toContain('enPruebaIds: facets\n        .except("seg", "edad")');
+    expect(src).toContain("🧪 {enPruebaIds.length}");
+    // Y su botón limpia los filtros, o la lista mostraría menos filas que el
+    // número del aviso — y la que faltaría sería justo la de la prueba.
+    const boton = src.slice(src.indexOf("Ver la cola sin filtros") - 700, src.indexOf("Ver la cola sin filtros"));
+    expect(boton).toContain("setSegFilter(null);");
+    expect(boton).toContain('setEdadFilter("all");');
   });
 
   it("la fila dice por qué está arriba", () => {
