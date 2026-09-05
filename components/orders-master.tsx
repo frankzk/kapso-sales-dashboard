@@ -2538,11 +2538,17 @@ function OrderDrawer({
 
   const reload = useMemo(
     () => async () => {
-      const res = await loadOrderDetail(orderId);
-      if ("error" in res) setError(res.error);
-      else {
-        setDetail(res.detail);
-        setError(null);
+      try {
+        const res = await loadOrderDetail(orderId);
+        if ("error" in res) setError(res.error);
+        else {
+          setDetail(res.detail);
+          setError(null);
+        }
+      } catch {
+        // Una acción de servidor que revienta dejaba la promesa rechazada y el
+        // drawer con el esqueleto latiendo para siempre, sin decir nada.
+        setError("No se pudo cargar el pedido. Reintenta en unos segundos.");
       }
     },
     [orderId],
@@ -2862,7 +2868,25 @@ function OrderDrawer({
           </div>
         )}
 
-        {!detail ? (
+        {!detail && error ? (
+          // La carga falló: ya no queda nada que esperar. El esqueleto latiendo
+          // bajo el error decía justo lo contrario —«sigo trayéndolo»— y dejaba
+          // al equipo mirando una pantalla que no iba a llegar nunca. Aquí el
+          // pedido no se pudo traer y lo único útil es volver a intentarlo.
+          <div className="space-y-3 p-5">
+            <p className="text-sm text-slate-500">
+              El detalle de este pedido no se pudo cargar. El pedido sigue en su sitio: esto es un
+              fallo al leerlo, no un pedido perdido.
+            </p>
+            <button
+              type="button"
+              onClick={() => void reload()}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Reintentar
+            </button>
+          </div>
+        ) : !detail ? (
           // Un "Cargando…" suelto no dice nada; un esqueleto con la forma del
           // contenido evita que la pantalla salte cuando llega.
           <div className="space-y-4 p-5" aria-busy="true">

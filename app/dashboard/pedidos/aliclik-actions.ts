@@ -37,6 +37,7 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
   getOrderConfirmationBrief,
   getOrderMasterDetail,
+  OrderMasterReadError,
 } from "@/lib/orders-master-access";
 import { aliclikRiskGate } from "@/lib/order-confirmation-brief";
 import { classifyOperation } from "@/lib/order-macro-stage";
@@ -716,7 +717,15 @@ export async function previewAliclikGuide(
   const admin = createAdminSupabase();
 
   // 1. Productos → EAN → un solo almacén.
-  const detail = await getOrderMasterDetail(orderId);
+  let detail: Awaited<ReturnType<typeof getOrderMasterDetail>>;
+  try {
+    detail = await getOrderMasterDetail(orderId);
+  } catch (cause) {
+    // Sin generar la guía y con el motivo delante: emitirla a ciegas con un
+    // detalle que la base no pudo dar es cómo se despacha una caja equivocada.
+    if (cause instanceof OrderMasterReadError) return { ok: false, error: cause.message };
+    throw cause;
+  }
   if (!detail) return { ok: false, error: "No se pudo cargar el detalle del pedido." };
 
   const { skus, mapping } = await loadCatalogFor(ctx.storeId, admin);

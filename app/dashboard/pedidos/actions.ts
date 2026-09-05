@@ -19,6 +19,7 @@ import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/o
 import {
   getOrderConfirmationBrief,
   getOrderMasterDetail,
+  OrderMasterReadError,
   searchOrderMaster,
   type OrderConfirmationBrief,
   type OrderMasterDetail,
@@ -83,11 +84,15 @@ async function authorizeOrder(orderId: string): Promise<OrderContext | null> {
     data: { user },
   } = await sb.auth.getUser();
   if (!user) redirect("/login");
-  const { data } = await sb
+  const { data, error } = await sb
     .from("order_master")
     .select("*")
     .eq("order_id", orderId)
     .maybeSingle();
+  // Que la consulta falle no significa que el pedido sea de otra tienda. Sin
+  // esto, un error de la base salía como "Sin acceso a este pedido" y mandaba a
+  // revisar permisos que estaban bien.
+  if (error) throw new OrderMasterReadError("el pedido", error);
   if (!data) return null;
   const row = data as unknown as OrderMasterRow;
   return { userId: user.id, storeId: row.store_id, row };
@@ -143,11 +148,20 @@ async function recordEvent(
 export async function loadOrderDetail(
   orderId: string,
 ): Promise<{ detail: OrderMasterDetail } | { error: string }> {
-  const ctx = await authorizeOrder(orderId);
-  if (!ctx) return { error: "Sin acceso a este pedido." };
-  const detail = await getOrderMasterDetail(orderId);
-  if (!detail) return { error: "No encontrado." };
-  return { detail };
+  try {
+    const ctx = await authorizeOrder(orderId);
+    if (!ctx) return { error: "Sin acceso a este pedido." };
+    const detail = await getOrderMasterDetail(orderId);
+    if (!detail) return { error: "No encontrado." };
+    return { detail };
+  } catch (cause) {
+    // El drawer enseña este texto y nada más, así que tiene que decir la verdad:
+    // "No encontrado" solo cuando la base respondió que no hay fila. Si respondió
+    // un error, va el error — es la diferencia entre borrar un pedido de la
+    // cabeza del equipo y ver "column ... does not exist" y aplicar la migración.
+    if (cause instanceof OrderMasterReadError) return { error: cause.message };
+    throw cause;
+  }
 }
 
 /** Búsqueda global, para encontrar un pedido fuera de la pestaña activa. */
