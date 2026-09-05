@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
   FRIO_GOLDEN_EXPERIMENT,
@@ -165,6 +165,9 @@ describe("el tratamiento se administra de verdad", () => {
 // experimento no probaría nada.
 describe("la asignación es inmutable", () => {
   const sql = readFileSync(new URL("../db/migrations/0144_lead_experiments.sql", import.meta.url), "utf8");
+  // Sin comentarios: la cabecera EXPLICA los permisos que no queremos, así que
+  // una regex sobre el texto crudo se dispara con la prosa y no con el SQL.
+  const codigo = sql.replace(/--[^\n]*/g, "");
 
   it("append-only con trigger, no solo por convención", () => {
     expect(sql).toContain("before update or delete on lead_experiments");
@@ -172,9 +175,66 @@ describe("la asignación es inmutable", () => {
   });
 
   it("sin update ni delete ni para service_role", () => {
-    expect(sql).toContain("grant select, insert on lead_experiments to service_role;");
-    expect(sql).not.toMatch(/grant[^;]*update[^;]*on lead_experiments/i);
+    expect(codigo).toContain("grant select, insert on lead_experiments to service_role;");
+    expect(codigo).not.toMatch(/grant[^;]*\b(update|delete|truncate)\b[^;]*on lead_experiments/i);
   });
+
+  // Supabase trae `alter default privileges ... grant all on tables`, así que la
+  // tabla NACE con update, delete y truncate para todos y un `grant select`
+  // posterior no quita nada — los grants suman. Sin el revoke, la migración cree
+  // estar restringiendo y solo confirma lo que ya había. Se vio al aplicar 0144
+  // en producción: `order_sales` llevaba así desde 0132.
+  it("revoca antes de conceder, o el grant no restringe nada", () => {
+    expect(sql).toMatch(/revoke all on lead_experiments from anon, authenticated, service_role;/);
+    expect(sql.indexOf("revoke all on lead_experiments")).toBeLessThan(
+      sql.indexOf("grant select on lead_experiments"),
+    );
+  });
+});
+
+// Guarda general: la siguiente tabla append-only no debe repetir el fallo. El
+// trigger `reject_mutation` es de FILA sobre update/delete, así que NO cubre
+// TRUNCATE; sin revocar el permiso, la garantía de "esto no se reescribe" se
+// salta entera con un truncate.
+describe("toda tabla append-only revoca sus permisos de más", () => {
+  const dir = new URL("../db/migrations/", import.meta.url);
+  const ficheros = readdirSync(dir).filter((f) => f.endsWith(".sql"));
+
+  it("cada migración que instala reject_mutation revoca sobre esa tabla", () => {
+    const sinRevoke: string[] = [];
+    for (const f of ficheros) {
+      const src = readFileSync(new URL(f, dir), "utf8");
+      // Tablas a las que ESTA migración les pone el candado append-only. La
+      // captura llega hasta `reject_mutation` a propósito: mirar solo
+      // `before update ... on X` cogía también los triggers corrientes de
+      // `updated_at`, y marcaba como append-only tablas que no lo son
+      // (order_master, order_payments).
+      const tablas = [
+        ...src.matchAll(/before\s+(?:update|delete)[\s\S]{0,120}?\son\s+(\w+)[\s\S]{0,200}?reject_mutation/gi),
+      ]
+        .map((m) => m[1]!)
+        .filter((t, i, a) => a.indexOf(t) === i);
+      for (const tabla of tablas) {
+        // Sirve el revoke en su propia migración O estar en la lista de 0145.
+        // Sin lista de excepciones por antigüedad: que las viejas estén bien en
+        // producción es suerte de calendario —nacieron antes de que el proyecto
+        // tuviera los privilegios por defecto—, no una propiedad del código.
+        if (!new RegExp(`revoke\\s+all\\s+on\\s+(public\\.)?${tabla}\\b`, "i").test(src)) {
+          sinRevoke.push(tabla);
+        }
+      }
+    }
+    const barrido = readFileSync(
+      new URL("0145_append_only_revoke_excess_grants.sql", dir),
+      "utf8",
+    );
+    const pendientes = [...new Set(sinRevoke)].filter((t) => !barrido.includes(`'${t}'`));
+    expect(pendientes).toEqual([]);
+  });
+});
+
+describe("la lectura del experimento no reintroduce el sesgo", () => {
+  const sql = readFileSync(new URL("../db/migrations/0144_lead_experiments.sql", import.meta.url), "utf8");
 
   it("la PK es compuesta, para que quepa un segundo experimento", () => {
     expect(sql).toContain("primary key (lead_id, experiment)");

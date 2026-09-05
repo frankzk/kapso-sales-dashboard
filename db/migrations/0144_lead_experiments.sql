@@ -63,9 +63,17 @@ drop policy if exists lead_experiments_select on lead_experiments;
 create policy lead_experiments_select on lead_experiments for select to authenticated
   using (store_id in (select auth_store_ids()));
 
--- Sin update/delete ni siquiera para service_role: la vía de la API queda
--- cerrada por privilegios y el trigger es defensa en profundidad para quien
--- entre por psql con otro rol (mismo patrón que order_sales, 0132).
+-- REVOKE ANTES DE GRANT, y no es ceremonia. Supabase trae
+-- `alter default privileges ... grant all on tables to anon, authenticated,
+-- service_role`, así que la tabla NACE con update, delete y truncate para todos;
+-- un `grant select` posterior SUMA y no quita nada. `order_sales` (0132) lleva
+-- así desde que se creó, prometiendo en su cabecera dos capas de defensa cuando
+-- solo tenía una (ver 0145).
+--
+-- Y no es cosmético: el trigger de abajo es de FILA sobre update/delete, y
+-- TRUNCATE no dispara triggers de fila. Con el permiso puesto, la garantía de
+-- "esto no se puede reescribir" se saltaba entera con un truncate.
+revoke all on lead_experiments from anon, authenticated, service_role;
 grant select on lead_experiments to authenticated;
 grant select, insert on lead_experiments to service_role;
 

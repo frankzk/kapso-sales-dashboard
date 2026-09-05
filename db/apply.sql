@@ -291,4 +291,6 @@
 \ir migrations/0143_lead_cart_product.sql
 \echo 'Applying 0144_lead_experiments.sql'
 \ir migrations/0144_lead_experiments.sql
+\echo 'Applying 0145_append_only_revoke_excess_grants.sql'
+\ir migrations/0145_append_only_revoke_excess_grants.sql
 \echo 'Done.'
