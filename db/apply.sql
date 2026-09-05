@@ -297,4 +297,6 @@
 \ir migrations/0146_read_lead_experiment_solo_humanos.sql
 \echo 'Applying 0147_read_lead_experiment_franja.sql'
 \ir migrations/0147_read_lead_experiment_franja.sql
+\echo 'Applying 0148_aliclik_dispatch_date.sql'
+\ir migrations/0148_aliclik_dispatch_date.sql
 \echo 'Done.'
