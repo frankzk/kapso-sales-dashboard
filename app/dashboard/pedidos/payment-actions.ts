@@ -17,6 +17,7 @@ import { loadStoreCollectionAccounts } from "@/lib/collection-accounts";
 import { decryptOrNull, encrypt } from "@/lib/crypto";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { registrarConfirmacionExpresaDeAgencia } from "@/lib/confirmacion-agencia-access";
 import {
   analyzeYapeVoucherFromEnv,
   extractYapeVoucherFromEnv,
@@ -796,10 +797,24 @@ export async function validatePayment(paymentId: string): Promise<PaymentActionS
     new_status: "validado",
     note: `Yape de ${payment.kind} validado.`,
   });
+  // El pago suele ser la ÚLTIMA de las tres piezas: el DNI y la agencia ya
+  // estaban apuntados desde que se registró el cobro. Se pregunta antes de
+  // recalcular para que la macroetapa se resuelva ya con el hecho escrito y el
+  // pedido no pase por un estado intermedio que nadie llegue a ver.
+  const confirmado = await registrarConfirmacionExpresaDeAgencia(
+    admin,
+    payment.order_id,
+    ctx.storeId,
+    ctx.userId,
+  );
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
   revalidatePath(PAYMENT_REVIEW_PATH);
-  return { notice: "Pago validado." };
+  return {
+    notice: confirmado
+      ? "Pago validado. Con el documento y la agencia ya apuntados, el pedido queda confirmado y pasa a Preparación."
+      : "Pago validado.",
+  };
 }
 
 /**

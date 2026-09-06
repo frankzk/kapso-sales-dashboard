@@ -336,6 +336,26 @@ Reglas:
 - Provincia COD queda confirmada al validar producto, cantidad, monto, fecha
   aproximada y dirección de entrega.
 - Agencia queda confirmada solo cuando el pago exigido ha sido validado.
+- **Confirmación expresa de agencia.** Un pedido con las TRES cosas —documento
+  del cliente, sucursal de destino elegida y un pago validado de `adelanto` o
+  `total`— queda confirmado por los hechos y pasa a Preparación sin necesidad de
+  que nadie marque «Confirmó el pedido». Se registra como evento `confirmed` con
+  `source: automatico` y la nota nombra la evidencia.
+  - Las tres son necesarias. El borrador se guarda en cuanto se teclean el
+    documento y la sucursal, así que sin el pago la asesora puede estar todavía
+    negociando: **el dinero es lo que convierte la conversación en compromiso**.
+  - `diferencia` no cuenta como pago que compromete: es un saldo posterior sobre
+    un pedido ya en marcha, y llega cuando la confirmación ya ocurrió.
+  - No mira la cobertura. La evidencia de que el envío va a agencia es el
+    borrador con su terminal elegida, no la etiqueta del clasificador: un pedido
+    puede estar clasificado `provincia_cod` e irse por Shalom.
+  - Por qué: ninguna de las tres se consigue sin el cliente al teléfono, y la
+    del pago no se consigue sin que además mande dinero. Medido sobre los 702
+    pedidos que llegaron a tener las tres, 427 se entregaron, 198 iban en
+    proceso, 74 seguían pendientes y solo **3 se cayeron** (2 anulados, 1
+    devuelto): la regla acierta el 99,6 %. Antes, el clic que faltaba dejaba
+    pedidos ya pagados esperando hasta 69 horas, y el 36 % de los pedidos de
+    agencia llegaba a Preparación sin ninguna gestión registrada.
 - Crear el rótulo implica confirmación; no puede existir rótulo para un pedido
   de Provincia/Agencia sin confirmación válida.
 
