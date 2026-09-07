@@ -293,4 +293,6 @@
 \ir migrations/0144_lead_experiments.sql
 \echo 'Applying 0145_append_only_revoke_excess_grants.sql'
 \ir migrations/0145_append_only_revoke_excess_grants.sql
+\echo 'Applying 0146_cod_points_require_delivery.sql'
+\ir migrations/0146_cod_points_require_delivery.sql
 \echo 'Done.'

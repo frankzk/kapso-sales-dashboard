@@ -195,6 +195,20 @@ Reglas iniciales:
   «Puerto Maldonado» (la ciudad) y Aliclik factura «Tambopata» (el distrito), y
   por texto nunca casan. La modalidad del pedido —y con ella la exigencia de
   abono— se deriva de esa clasificación, así que nada la recalcula por separado.
+- **Un punto COD lo siembra una ENTREGA, no una cotización.** El mapa de
+  `aliclik_cod_points` solo admite guías con `delivery_status = 'entregado'`.
+  Cotizar no es entregar: hasta la 0146 bastaba con que la guía tuviera precio,
+  y dos guías creadas y anuladas el 31-jul-2026 dejaron a **todo Tumbes**
+  clasificado como Provincia COD cuando Aliclik no ha entregado allí ni una vez
+  —las cuatro entregas del departamento son de Shalom—.
+  - Medido al cambiarlo: de 954 puntos quedan 764. La única región que pierde
+    cobertura es Tumbes; Arequipa, Trujillo, Chiclayo, Piura, Huancayo y Juliaca
+    conservan los suyos, porque allí una dirección fallida está rodeada de
+    entregas buenas. Por eso **no** se borran «los puntos que fracasaron» —eso
+    sería ruido en esas ciudades—: se cambia qué siembra un punto.
+  - Una zona con guías en curso y ninguna entregada todavía no siembra punto, y
+    es lo correcto: la cobertura se declara cuando se ha entregado una vez, y se
+    corrige sola en cuanto llegue la primera.
 - La confirmación tiene UNA sola definición, `hasConfirmationSignal`.
   Un pedido está confirmado si existe una guía, si hay evento `confirmed`,
   `guide_registered` o `label_generated`, o si Shopify lo da por pagado —en
