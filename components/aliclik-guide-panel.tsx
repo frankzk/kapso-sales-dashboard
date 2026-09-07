@@ -339,6 +339,33 @@ export function AliclikGuidePanel({
               ) : null}
             </div>
 
+            {/* Cuándo lo recogen. Se enseña siempre —la asesora se lo dice a la
+                clienta— y se marca cuando Aliclik va a fecharlo en domingo, que
+                es el día que no recogen y el que provoca la discusión con el
+                motorizado el lunes. */}
+            {preview.dispatch ? (
+              <div
+                className={`rounded-lg border px-3 py-2 text-xs ${
+                  preview.dispatch.fallsOnSunday
+                    ? "border-amber-300 bg-amber-50 text-amber-900"
+                    : "border-slate-200 bg-slate-50 text-slate-600"
+                }`}
+              >
+                <p>
+                  <span className="font-medium">Recojo:</span>{" "}
+                  {formatDispatchDate(preview.dispatch.date)}
+                </p>
+                {preview.dispatch.fallsOnSunday ? (
+                  <p className="mt-1 leading-5">
+                    ⚠ Ya pasó la hora de corte, así que a Aliclik le toca fecharlo en{" "}
+                    <strong>domingo</strong>, que no recogen. Su regla dice que lo mueva al lunes,
+                    pero se les ha visto no hacerlo: <strong>revisa la fecha en su portal</strong> al
+                    terminar, o el lunes el motorizado no se lo lleva.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             {/* Ubigeo: el contraste es el detector de pines mal puestos */}
             {preview.aliclikUbigeo ? (
               <div
@@ -743,6 +770,22 @@ function ExistingGuideLinkPanel({
       ) : null}
     </div>
   );
+}
+
+/**
+ * "2026-09-07" → "lunes 7 de septiembre". Se construye con UTC a propósito: la
+ * fecha ya viene resuelta en hora de Lima, así que interpretarla en la zona del
+ * navegador la correría un día para quien mire desde otro huso.
+ */
+function formatDispatchDate(dateKey: string): string {
+  const d = new Date(`${dateKey}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return dateKey;
+  return new Intl.DateTimeFormat("es-PE", {
+    timeZone: "UTC",
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(d);
 }
 
 function Spinner() {

@@ -2374,21 +2374,31 @@ export async function generateOrder(
   // Build+run the draft (create for a new sale, update for a cart). withPhone=false
   // is the retry path when Shopify rejects the phone ("Phone is invalid") — a bad
   // phone must never block the sale; the lead keeps the number anyway.
+  // Precios que Shopify guardó distintos a los pactados. Se recogen aquí y se
+  // avisan abajo: durante meses Shopify ignoró el precio que mandábamos y
+  // facturó el de catálogo sin decir nada — así se perdieron los regalos de las
+  // promos (#AUR176302: papel de freidora de S/0 a S/79). Un pedido creado con
+  // otro precio del pactado no es un fallo que se pueda callar: es un rechazo en
+  // la puerta, porque se cobra contra entrega.
+  let desajustes: Awaited<ReturnType<typeof updateDraftOrder>>["priceMismatches"] = [];
   const runDraft = async (withPhone: boolean): Promise<string> => {
     const addr = { ...address, phone: withPhone ? phone : null };
     const ph = withPhone ? phone : null;
+    const base = { note: input.note ?? null, appliedDiscount, currencyCode: currency };
     if (reuseExistingDraft && sourceDraftGid) {
-      await updateDraftOrder({
+      const upd = await updateDraftOrder({
         ...sclient,
         gid: sourceDraftGid,
-        input: { lineItems: lineItemsInput, address: addr, phone: ph, note: input.note ?? null, appliedDiscount },
+        input: { ...base, lineItems: lineItemsInput, address: addr, phone: ph },
       });
+      desajustes = upd.priceMismatches;
       return sourceDraftGid;
     }
     const created = await createDraftOrder({
       ...sclient,
-      input: { lineItems: lineItemsInput, address: addr, phone: ph, note: input.note ?? null, tags: ["venta_manual"], appliedDiscount },
+      input: { ...base, lineItems: lineItemsInput, address: addr, phone: ph, tags: ["venta_manual"] },
     });
+    desajustes = created.priceMismatches;
     return created.gid;
   };
 
@@ -2573,7 +2583,21 @@ export async function generateOrder(
   const phoneNote = phoneRejected
     ? ` · ⚠️ Shopify RECHAZÓ el celular ${phone ?? ""}: el pedido quedó sin teléfono. Corrígelo en Shopify.`
     : "";
-  const notice = `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}${phoneNote}`;
+  // Shopify guardó un precio distinto al pactado. Se avisa con NOMBRE y las dos
+  // cifras porque el pedido ya existe y hay que corregirlo a mano antes de que
+  // salga: en contraentrega, cobrar de más en la puerta es un rechazo.
+  const precioNote = desajustes.length
+    ? ` · ⚠️ Shopify cambió ${desajustes.length === 1 ? "el precio" : "los precios"} de ` +
+      desajustes
+        .map(
+          (d) =>
+            `${d.title} (pediste ${currency} ${d.pedido.toFixed(2)}, quedó ` +
+            `${d.aplicado == null ? "sin precio" : `${currency} ${d.aplicado.toFixed(2)}`})`,
+        )
+        .join(", ") +
+      `. Corrígelo en Shopify ANTES de despachar.`
+    : "";
+  const notice = `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}${phoneNote}${precioNote}`;
   const confirmationSent = confirmNote.toLowerCase().includes("enviada");
 
   revalidatePath("/dashboard/leads");

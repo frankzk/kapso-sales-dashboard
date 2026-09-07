@@ -3,24 +3,49 @@ import { readFileSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
   FRIO_GOLDEN_EXPERIMENT,
+  TREATABLE_HOUR_END,
+  TREATABLE_HOUR_START,
   TREATMENT_FRACTION,
   assignArm,
   isExperimentEligible,
+  isWithinTreatableWindow,
   shouldPin,
 } from "@/lib/lead-experiment";
 
+// 14:00 en Lima (UTC-5) = 19:00 UTC. Dentro de la franja tratable.
+const enHorario = "2026-09-05T19:00:00.000Z";
+// 03:00 en Lima = 08:00 UTC. Nadie trabajando.
+const deMadrugada = "2026-09-05T08:00:00.000Z";
+
 describe("isExperimentEligible", () => {
   it("entra el lead sin ninguna señal de compra", () => {
-    expect(isExperimentEligible({})).toBe(true);
-    expect(isExperimentEligible({ source: "meta_ad", first_inbound_text: "hola" })).toBe(true);
-    expect(isExperimentEligible({ source: "organic", first_inbound_text: null })).toBe(true);
+    expect(isExperimentEligible({ first_seen_at: enHorario })).toBe(true);
+    expect(
+      isExperimentEligible({ source: "meta_ad", first_inbound_text: "hola", first_seen_at: enHorario }),
+    ).toBe(true);
+    expect(
+      isExperimentEligible({ source: "organic", first_inbound_text: null, first_seen_at: enHorario }),
+    ).toBe(true);
   });
 
   it("queda fuera el que ya trae carrito o ficha", () => {
-    expect(isExperimentEligible({ source: "cod_cart" })).toBe(false);
+    expect(isExperimentEligible({ source: "cod_cart", first_seen_at: enHorario })).toBe(false);
     expect(
-      isExperimentEligible({ first_inbound_text: "https://kenku.pe/products/x hola" }),
+      isExperimentEligible({
+        first_inbound_text: "https://kenku.pe/products/x hola",
+        first_seen_at: enHorario,
+      }),
     ).toBe(false);
+  });
+
+  // El 57% de los leads sin señal entra fuera de horario, cuando solo ocurre el
+  // 10,7% de los toques humanos. Asignarlos metería en el estudio leads que
+  // NADIE puede tratar: no sesga (le pasa igual a los dos brazos) pero aplasta
+  // el contraste de cumplimiento y multiplica el tamaño de muestra necesario.
+  it("queda fuera el que entra cuando no hay nadie para llamarlo", () => {
+    expect(isExperimentEligible({ first_seen_at: deMadrugada })).toBe(false);
+    expect(isExperimentEligible({ first_seen_at: null })).toBe(false);
+    expect(isExperimentEligible({ first_seen_at: "no-es-fecha" })).toBe(false);
   });
 
   // Si la elegibilidad mirara un campo que la llamada puede reescribir, quién
@@ -28,13 +53,40 @@ describe("isExperimentEligible", () => {
   // exactamente ese campo: tras una llamada el cliente lo manda por WhatsApp y
   // el bot lo ingesta.
   it("NO mira el distrito, aunque leadSegment sí lo mire", () => {
-    expect(isExperimentEligible({ district: "Miraflores" } as never)).toBe(true);
+    expect(isExperimentEligible({ district: "Miraflores", first_seen_at: enHorario } as never)).toBe(true);
   });
 
   // Igual con el estado y el conteo de entrantes: los dos cambian después de una
   // llamada.
   it("NO mira el estado ni el número de mensajes", () => {
-    expect(isExperimentEligible({ status: "no_responde", inbound_count: 9 } as never)).toBe(true);
+    expect(
+      isExperimentEligible({ status: "no_responde", inbound_count: 9, first_seen_at: enHorario } as never),
+    ).toBe(true);
+  });
+});
+
+describe("isWithinTreatableWindow", () => {
+  const aLasLima = (h: number) =>
+    new Date(Date.UTC(2026, 8, 5, (h + 5) % 24, 30)).toISOString();
+
+  it("los bordes son los medidos: 7 y 18 dentro, 6 y 19 fuera", () => {
+    expect(isWithinTreatableWindow(aLasLima(TREATABLE_HOUR_START))).toBe(true);
+    expect(isWithinTreatableWindow(aLasLima(TREATABLE_HOUR_END))).toBe(true);
+    expect(isWithinTreatableWindow(aLasLima(TREATABLE_HOUR_START - 1))).toBe(false);
+    expect(isWithinTreatableWindow(aLasLima(TREATABLE_HOUR_END + 1))).toBe(false);
+  });
+
+  it("resuelve la hora en Lima, no en UTC", () => {
+    // 23:30 UTC = 18:30 en Lima → dentro. En UTC caería fuera.
+    expect(isWithinTreatableWindow("2026-09-05T23:30:00.000Z")).toBe(true);
+    // 09:00 UTC = 04:00 en Lima → fuera. En UTC caería dentro.
+    expect(isWithinTreatableWindow("2026-09-05T09:00:00.000Z")).toBe(false);
+  });
+
+  it("sin hora usable no entra", () => {
+    expect(isWithinTreatableWindow(null)).toBe(false);
+    expect(isWithinTreatableWindow("")).toBe(false);
+    expect(isWithinTreatableWindow("roto")).toBe(false);
   });
 });
 
@@ -130,17 +182,30 @@ describe("el tratamiento se administra de verdad", () => {
     expect(src).toContain("isExperimentEligible(lead)");
   });
 
-  it("el lead del tratamiento sube al principio de la cola", () => {
-    expect(src).toContain("enExperimento,");
-    expect(priority).toContain("Number(b.pinned) - Number(a.pinned) ||");
+  // El empujón se RETIRÓ. Medido sobre las primeras 78 asignaciones, el brazo de
+  // tratamiento se llamaba a los 47 minutos de mediana contra 14 del control, y
+  // 1 de 19 dentro de los primeros 30 minutos contra 15 de 59. Marginal
+  // (p ≈ 0,06) pero en la dirección equivocada en todos los cortes — y con un
+  // coste cierto: ponía un frío (~9-19%) por encima de un carrito fresco (41%).
+  it("la cola NO se reordena por el experimento", () => {
+    expect(priority).not.toContain("pinned");
+    expect(priority).not.toMatch(/pin\?\.\(/);
+    // Y en particular el puntaje sigue siendo solo lo medido.
+    expect(priority).not.toMatch(/score:[^\n]*\+[^\n]*pin/);
   });
 
-  // El empujón NO puede ir sumado al puntaje: los pesos son probabilidades de
-  // cierre medidas y falsearlas haría que el próximo que las lea concluya que un
-  // frío cierra más.
-  it("el empujón es una llave aparte, no un puntaje inflado", () => {
-    expect(priority).toContain("pinned: pin?.(lead) === true,");
-    expect(priority).not.toMatch(/score:[^\n]*\+[^\n]*pin/);
+  // El aviso reemplaza al empujón, y tiene que contarse ignorando el chip de
+  // segmento: al filtrar por Carrito, un lead frío del tratamiento desaparecería
+  // de la lista y nadie lo llamaría nunca. Es el fallo que hundió la primera
+  // versión del tratamiento.
+  it("el aviso de la prueba sobrevive al filtro de segmento", () => {
+    expect(src).toContain('enPruebaIds: facets\n        .except("seg", "edad")');
+    expect(src).toContain("🧪 {enPruebaIds.length}");
+    // Y su botón limpia los filtros, o la lista mostraría menos filas que el
+    // número del aviso — y la que faltaría sería justo la de la prueba.
+    const boton = src.slice(src.indexOf("Ver la cola sin filtros") - 700, src.indexOf("Ver la cola sin filtros"));
+    expect(boton).toContain("setSegFilter(null);");
+    expect(boton).toContain('setEdadFilter("all");');
   });
 
   it("la fila dice por qué está arriba", () => {
@@ -234,10 +299,46 @@ describe("toda tabla append-only revoca sus permisos de más", () => {
 });
 
 describe("la lectura del experimento no reintroduce el sesgo", () => {
-  const sql = readFileSync(new URL("../db/migrations/0144_lead_experiments.sql", import.meta.url), "utf8");
+  // La función vive ahora en 0147. 0144 contaba los toques de máquina como
+  // llamadas (arreglado en 0146) y no filtraba la franja horaria (0147).
+  const sql = readFileSync(
+    new URL("../db/migrations/0147_read_lead_experiment_franja.sql", import.meta.url),
+    "utf8",
+  );
+  const sql144 = readFileSync(new URL("../db/migrations/0144_lead_experiments.sql", import.meta.url), "utf8");
 
   it("la PK es compuesta, para que quepa un segundo experimento", () => {
-    expect(sql).toContain("primary key (lead_id, experiment)");
+    expect(sql144).toContain("primary key (lead_id, experiment)");
+  });
+
+  // El 51,3% de `lead_calls` es `kind='system'` — drip, winback y secuencias de
+  // carrito. Contarlas como llamadas destruye justo el indicador que existe para
+  // detectar que el experimento no se administró: `pct_en_1h` saldría alto en los
+  // DOS brazos (a los dos les saltan drips) y la diferencia se aplanaría.
+  // La tabla es append-only, así que las asignaciones hechas antes de que
+  // existiera el filtro de franja siguen ahí —131 de 167 cuando se escribió
+  // esto—. Si la lectura no las descartara, mezclaría dos poblaciones con reglas
+  // de elegibilidad distintas y arrastraría el resultado con leads intratables.
+  it("analiza la misma población que el reparto selecciona", () => {
+    expect(sql).toContain(
+      "extract(hour from l.first_seen_at at time zone 'America/Lima')::int between 7 and 18",
+    );
+  });
+
+  // El SQL no puede importar las constantes del código, así que se comprueba que
+  // no se hayan separado: mover una sin la otra dejaría el análisis mirando una
+  // franja distinta de la que se reparte, en silencio.
+  it("la franja del SQL coincide con la del código", () => {
+    expect(sql).toContain(`between ${TREATABLE_HOUR_START} and ${TREATABLE_HOUR_END}`);
+  });
+
+  it("la primera llamada solo cuenta toques de PERSONAS", () => {
+    expect(sql).toContain("where kind in ('call', 'message', 'sale')");
+    // Y la versión vieja, que no filtraba, ya no puede ser la que corre: si
+    // alguien reaplicara 0144 sobre 0146 volvería el fallo en silencio.
+    const fnDe144 = sql144.slice(sql144.indexOf("create or replace function public.read_lead_experiment"));
+    expect(fnDe144).not.toContain("kind in ('call'");
+    expect(Number("0146".slice(0, 4))).toBeGreaterThan(Number("0144".slice(0, 4)));
   });
 
   it("el análisis descarta las filas asignadas después de la primera llamada", () => {

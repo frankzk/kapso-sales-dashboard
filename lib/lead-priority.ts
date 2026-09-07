@@ -319,33 +319,28 @@ export function sortLeadsByPriority<T extends LeadPriorityInput & { id: string }
  * Lo que sí sería un error es lo que hacía la versión anterior en vista
  * combinada: aplicarle a TODAS las filas el perfil de la tienda del selector.
  */
+// SIN LLAVE DE "EMPUJÓN". Hubo una: el experimento de la hora dorada subía su
+// brazo de tratamiento al principio de la cola. Se quitó porque medido salía al
+// revés —47 minutos de mediana hasta la llamada contra 14 del control— y porque
+// tenía un coste cierto: ponía un frío (~9-19% de cierre) por encima de un
+// carrito fresco (41%). Si alguna vez hace falta reordenar por una razón que no
+// sea el valor medido, que vuelva como llave aparte y NUNCA sumada al puntaje:
+// inflar un peso haría que la escala dejara de significar la probabilidad que
+// dice significar.
 export function sortLeadsByPriorityScoped<T extends LeadPriorityInput & { id: string }>(
   leads: T[],
   profileFor: (lead: T) => ScoringProfile,
   nowMs: number = Date.now(),
-  pin?: (lead: T) => boolean,
 ): T[] {
   return leads
     .map((lead) => ({
       lead,
-      // El empujón va como llave APARTE, nunca sumado al puntaje. Los pesos son
-      // probabilidades de cierre medidas; inflarle el número a un lead para que
-      // suba haría que la escala dejara de significar lo que dice, y el próximo
-      // que la lea creería que ese lead cierra más. Aquí queda explícito: se
-      // ordena antes POR OTRA RAZÓN, y la razón no es que valga más.
-      pinned: pin?.(lead) === true,
       score: leadPriorityScore(lead, profileFor(lead), nowMs),
       // Mismo reloj con el que se eligió el tramo, para que el desempate empuje
       // hacia el mismo lado que el escalón. Sin fecha va al final del empate: no
       // se puede afirmar que esté por vencer.
       age: hoursSince(lead.first_seen_at ?? lead.last_interaction_at, nowMs) ?? -1,
     }))
-    .sort(
-      (a, b) =>
-        Number(b.pinned) - Number(a.pinned) ||
-        b.score - a.score ||
-        b.age - a.age ||
-        a.lead.id.localeCompare(b.lead.id),
-    )
+    .sort((a, b) => b.score - a.score || b.age - a.age || a.lead.id.localeCompare(b.lead.id))
     .map((entry) => entry.lead);
 }

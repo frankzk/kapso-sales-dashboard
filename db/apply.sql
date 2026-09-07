@@ -293,6 +293,12 @@
 \ir migrations/0144_lead_experiments.sql
 \echo 'Applying 0145_append_only_revoke_excess_grants.sql'
 \ir migrations/0145_append_only_revoke_excess_grants.sql
-\echo 'Applying 0146_cod_points_require_delivery.sql'
-\ir migrations/0146_cod_points_require_delivery.sql
+\echo 'Applying 0146_read_lead_experiment_solo_humanos.sql'
+\ir migrations/0146_read_lead_experiment_solo_humanos.sql
+\echo 'Applying 0147_read_lead_experiment_franja.sql'
+\ir migrations/0147_read_lead_experiment_franja.sql
+\echo 'Applying 0148_aliclik_dispatch_date.sql'
+\ir migrations/0148_aliclik_dispatch_date.sql
+\echo 'Applying 0149_cod_points_require_delivery.sql'
+\ir migrations/0149_cod_points_require_delivery.sql
 \echo 'Done.'

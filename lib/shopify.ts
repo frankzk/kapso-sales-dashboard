@@ -1228,6 +1228,11 @@ export interface BuildDraftOrderInput {
   note?: string | null;
   tags?: string[];
   appliedDiscount?: AppliedDiscountInput | null;
+  /** Moneda de la tienda. La necesita `priceOverride`, que es un MoneyInput.
+   *  Por defecto PEN: las dos tiendas son peruanas y equivocarse aquí haría que
+   *  Shopify rechazara la mutación en vez de cobrar mal, que es el fallo que
+   *  preferimos. */
+  currencyCode?: string;
 }
 
 /** Discount as captured in the order form: a fixed amount (store currency) or a
@@ -1383,16 +1388,51 @@ export async function updateOrderShippingAddress(
   }
 }
 
-function toGqlDraftInput(input: BuildDraftOrderInput): Record<string, unknown> {
+/**
+ * Cómo se le pide a Shopify que respete un precio distinto al del catálogo.
+ *
+ * `originalUnitPrice` es el campo viejo. La nota que había aquí decía "si una
+ * versión futura lo RECHAZA, cambiar a priceOverride" — y lo que pasó es peor
+ * que un rechazo: Shopify lo IGNORA en silencio para las líneas con
+ * `variantId`, sin error ni userError, y factura el precio de catálogo.
+ *
+ * Medido sobre 30 días de pedidos reales: de las 1.256 líneas que creó Kapta
+ * (97 productos distintos) NINGUNA salió a un precio distinto al de catálogo, y
+ * ninguna a S/ 0 — mientras que los demás canales tienen 52 líneas a cero y 33
+ * productos vendidos a más de un precio. O sea que el campo lleva tiempo sin
+ * hacer nada y no lo sabíamos: cada regalo y cada precio pactado por teléfono
+ * se convertía en precio de lista al llegar a Shopify (#AUR176302, papel de
+ * freidora de S/0 a S/79).
+ */
+export type DraftPriceField = "priceOverride" | "originalUnitPrice";
+
+// `priceField` va SIN valor por defecto a propósito. Con uno, quien lo eligiera
+// no estaría cubierto por ninguna prueba —`runDraftMutation` siempre lo pasa
+// explícito— y cambiarlo al campo roto no rompería nada: la mutación M51 lo
+// demostró. Obligar a decirlo pone la decisión donde se puede probar.
+function toGqlDraftInput(
+  input: BuildDraftOrderInput,
+  priceField: DraftPriceField,
+): Record<string, unknown> {
   const lineItems = input.lineItems
     .filter((li) => (li.variantId || li.title) && li.quantity > 0)
     .map((li) => {
       const item: Record<string, unknown> = { quantity: Math.max(1, Math.floor(li.quantity)) };
       if (li.variantId) item.variantId = li.variantId;
       else item.title = li.title || "Producto";
-      // Preserve the exact agreed unit price. NOTE: if a future API version
-      // rejects `originalUnitPrice`, switch this single line to `priceOverride`.
-      if (li.unitPrice != null) item.originalUnitPrice = li.unitPrice.toFixed(2);
+      // Preserve the exact agreed unit price. `unitPrice === 0` es un caso REAL
+      // —el regalo de una promo— así que la guarda compara contra null, no
+      // contra falsy: un `if (li.unitPrice)` volvería a perder los regalos.
+      if (li.unitPrice != null) {
+        if (priceField === "priceOverride") {
+          item.priceOverride = {
+            amount: li.unitPrice.toFixed(2),
+            currencyCode: input.currencyCode ?? "PEN",
+          };
+        } else {
+          item.originalUnitPrice = li.unitPrice.toFixed(2);
+        }
+      }
       return item;
     });
   const gql: Record<string, unknown> = { lineItems };
@@ -1437,10 +1477,22 @@ function toGqlDraftInput(input: BuildDraftOrderInput): Record<string, unknown> {
   return gql;
 }
 
+// Las mutaciones devuelven los precios RESULTANTES, no solo el id. Sin esto no
+// había forma de notar que Shopify guardaba un precio distinto al pedido: la
+// mutación respondía "ok" y el pedido salía a precio de lista (ver
+// DraftPriceField). Pedir las líneas de vuelta convierte un fallo silencioso en
+// uno que se puede ver y avisar.
+const DRAFT_ORDER_FIELDS = /* GraphQL */ `
+  id
+  name
+  lineItems(first: 50) {
+    edges { node { title quantity originalUnitPriceSet { shopMoney { amount } } } }
+  }
+`;
 const DRAFT_ORDER_CREATE_MUTATION = /* GraphQL */ `
   mutation DraftOrderCreate($input: DraftOrderInput!) {
     draftOrderCreate(input: $input) {
-      draftOrder { id name }
+      draftOrder { ${DRAFT_ORDER_FIELDS} }
       userErrors { field message }
     }
   }
@@ -1448,39 +1500,156 @@ const DRAFT_ORDER_CREATE_MUTATION = /* GraphQL */ `
 const DRAFT_ORDER_UPDATE_MUTATION = /* GraphQL */ `
   mutation DraftOrderUpdate($id: ID!, $input: DraftOrderInput!) {
     draftOrderUpdate(id: $id, input: $input) {
-      draftOrder { id name }
+      draftOrder { ${DRAFT_ORDER_FIELDS} }
       userErrors { field message }
     }
   }
 `;
 
-/** Create a draft order (new sale) → returns its GID; complete it separately. */
+/**
+ * ¿El error dice que Shopify no conoce ESTE campo? PURA.
+ *
+ * Se usa para caer del campo nuevo al viejo, así que tiene que ser ESTRICTA: si
+ * tratara cualquier error como "campo desconocido", un fallo real —permisos,
+ * variante inexistente— dispararía un reintento con el campo que sabemos que no
+ * funciona, y volveríamos a facturar precio de lista sin enterarnos. Ante la
+ * duda, que el error suba.
+ */
+export function isUnknownFieldError(err: unknown, field: string): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  if (!msg.includes(field)) return false;
+  // Los dos textos con los que GraphQL rechaza un campo de entrada que no existe.
+  return (
+    /InputObject .* doesn't accept argument/i.test(msg) ||
+    /Field .* is not defined by type/i.test(msg)
+  );
+}
+
+/** Lo que Shopify dejó guardado en una línea, para poder cotejarlo. */
+export interface AppliedDraftLine {
+  title: string;
+  quantity: number;
+  unitPrice: number | null;
+}
+
+function readDraftLines(draft: any): AppliedDraftLine[] {
+  return ((draft?.lineItems?.edges ?? []) as any[]).map((e) => {
+    const n = e?.node ?? {};
+    return {
+      title: String(n?.title ?? ""),
+      quantity: Number(n?.quantity ?? 0),
+      unitPrice: toNumber(n?.originalUnitPriceSet?.shopMoney?.amount),
+    };
+  });
+}
+
+/** Una línea cuyo precio pedido no coincide con el que Shopify guardó. */
+export interface PriceMismatch {
+  title: string;
+  pedido: number;
+  aplicado: number | null;
+}
+
+/**
+ * Compara lo que se pidió con lo que Shopify guardó. PURA.
+ *
+ * Solo mira las líneas con precio pedido: si no se pidió ninguno, el precio de
+ * catálogo es lo correcto y no hay nada que avisar. Se emparejan por POSICIÓN,
+ * que es como Shopify devuelve las líneas de un draft — por título fallaría con
+ * dos unidades del mismo producto a precios distintos, que es justo un caso de
+ * promo.
+ */
+export function priceMismatches(
+  pedidas: readonly OrderLineItemInput[],
+  aplicadas: readonly AppliedDraftLine[],
+): PriceMismatch[] {
+  const out: PriceMismatch[] = [];
+  const conPrecio = pedidas.filter((li) => (li.variantId || li.title) && li.quantity > 0);
+  for (const [i, li] of conPrecio.entries()) {
+    if (li.unitPrice == null) continue;
+    const ap = aplicadas[i];
+    if (!ap) continue;
+    // Céntimo de tolerancia: Shopify devuelve cadenas y el redondeo no es motivo
+    // de alarma. Un regalo perdido (0 → 79) está a años luz de esto.
+    if (ap.unitPrice == null || Math.abs(ap.unitPrice - li.unitPrice) > 0.005) {
+      out.push({ title: li.title || ap.title, pedido: li.unitPrice, aplicado: ap.unitPrice });
+    }
+  }
+  return out;
+}
+
+// Qué campo de precio acepta esta tienda, descubierto en la primera mutación y
+// recordado mientras viva el proceso. Sin memoria, CADA pedido pagaría el
+// reintento; con ella se paga una vez por arranque.
+let draftPriceFieldMode: DraftPriceField | null = null;
+
+/** Solo para tests: olvida lo aprendido entre casos. */
+export function resetDraftPriceFieldMode(): void {
+  draftPriceFieldMode = null;
+}
+
+/**
+ * Ejecuta una mutación de draft probando primero el campo de precio nuevo y
+ * cayendo al viejo SOLO si Shopify dice que no lo conoce.
+ *
+ * Nunca puede empeorar lo que había: si `priceOverride` no existe en esta
+ * versión de la API, el resultado es exactamente el de antes. Y como el modo se
+ * recuerda, el reintento se paga una vez por proceso, no por pedido.
+ */
+async function runDraftMutation(
+  opts: ShopifyClientOpts & { query: string; input: BuildDraftOrderInput; gid?: string },
+): Promise<any> {
+  const intentos: DraftPriceField[] = draftPriceFieldMode
+    ? [draftPriceFieldMode]
+    : ["priceOverride", "originalUnitPrice"];
+  let ultimo: unknown;
+  for (const [i, field] of intentos.entries()) {
+    try {
+      const data = await shopifyGraphQL<any>({
+        ...opts,
+        variables: {
+          ...(opts.gid ? { id: opts.gid } : {}),
+          input: toGqlDraftInput(opts.input, field),
+        },
+      });
+      draftPriceFieldMode = field;
+      return data;
+    } catch (e) {
+      ultimo = e;
+      const quedanIntentos = i < intentos.length - 1;
+      if (!quedanIntentos || !isUnknownFieldError(e, field)) throw e;
+    }
+  }
+  throw ultimo;
+}
+
+/** Create a draft order (new sale) → returns its GID; complete it separately.
+ *  `priceMismatches` viene relleno cuando Shopify guardó un precio distinto al
+ *  pedido: no es un error —el draft existe— pero hay que decirlo. */
 export async function createDraftOrder(
   opts: ShopifyClientOpts & { input: BuildDraftOrderInput },
-): Promise<{ gid: string; name: string | null }> {
-  const data = await shopifyGraphQL<any>({
-    ...opts,
-    query: DRAFT_ORDER_CREATE_MUTATION,
-    variables: { input: toGqlDraftInput(opts.input) },
-  });
+): Promise<{ gid: string; name: string | null; priceMismatches: PriceMismatch[] }> {
+  const data = await runDraftMutation({ ...opts, query: DRAFT_ORDER_CREATE_MUTATION });
   const errs = data?.draftOrderCreate?.userErrors ?? [];
   if (errs.length) throw new Error(`draftOrderCreate: ${errs.map((e: any) => e.message).join("; ")}`);
   const d = data?.draftOrderCreate?.draftOrder;
   if (!d?.id) throw new Error("draftOrderCreate: respuesta sin draftOrder");
-  return { gid: String(d.id), name: d.name ?? null };
+  return {
+    gid: String(d.id),
+    name: d.name ?? null,
+    priceMismatches: priceMismatches(opts.input.lineItems, readDraftLines(d)),
+  };
 }
 
 /** Update an existing draft (cart) with corrected line items / address. */
 export async function updateDraftOrder(
   opts: ShopifyClientOpts & { gid: string; input: BuildDraftOrderInput },
-): Promise<void> {
-  const data = await shopifyGraphQL<any>({
-    ...opts,
-    query: DRAFT_ORDER_UPDATE_MUTATION,
-    variables: { id: opts.gid, input: toGqlDraftInput(opts.input) },
-  });
+): Promise<{ priceMismatches: PriceMismatch[] }> {
+  const data = await runDraftMutation({ ...opts, query: DRAFT_ORDER_UPDATE_MUTATION });
   const errs = data?.draftOrderUpdate?.userErrors ?? [];
   if (errs.length) throw new Error(`draftOrderUpdate: ${errs.map((e: any) => e.message).join("; ")}`);
+  const d = data?.draftOrderUpdate?.draftOrder;
+  return { priceMismatches: priceMismatches(opts.input.lineItems, readDraftLines(d)) };
 }
 
 export interface DraftOrderEdit {

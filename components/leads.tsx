@@ -1118,6 +1118,7 @@ export function LeadsBoard({
     prodOptions,
     prodSin,
     goldenTally,
+    enPruebaIds,
     shownLeads,
   } = useMemo(() => {
     const matchQuery = (l: LeadRow) => {
@@ -1253,6 +1254,20 @@ export function LeadsBoard({
       // segmento— para que elegir un chip no apague el aviso. Es una alarma sobre
       // la cola, no un resumen de lo que se está mirando.
       goldenTally: tallyGolden(facets.except("seg", "edad"), leadSegment, now),
+      // Leads del brazo de tratamiento vivos dentro de su hora. Sobre la misma
+      // base que el aviso de hora dorada —todo menos el propio segmento y la
+      // edad— porque el experimento tiene que ser visible ELIJA LO QUE ELIJA la
+      // asesora: filtrando por Carrito, un lead frío del tratamiento
+      // desaparecería de la lista y nadie lo llamaría nunca.
+      enPruebaIds: facets
+        .except("seg", "edad")
+        .filter(
+          (l) =>
+            isExperimentEligible(l) &&
+            assignArm(l.id) === "tratamiento" &&
+            leadUrgency(l.first_seen_at, now)?.tier === "dorada",
+        )
+        .map((l) => l.id),
       shownLeads: facets.all,
     };
   }, [
@@ -1341,17 +1356,29 @@ export function LeadsBoard({
       leadUrgency(lead.first_seen_at, now)?.tier === "dorada",
     [now],
   );
+  // YA NO SE EMPUJA AL PRINCIPIO DE LA COLA. Se probó y salió al revés: en las
+  // primeras 78 asignaciones, el tratamiento se llamaba a los 47 minutos de
+  // mediana contra 14 del control, y solo 1 de 19 dentro de los primeros 30
+  // minutos contra 15 de 59. Marginal (p ≈ 0,06) pero en la dirección equivocada
+  // en todos los cortes.
+  //
+  // Y el empujón tenía un coste cierto contra un beneficio no demostrado: ponía
+  // un frío (~9-19% de cierre) por encima de un carrito fresco (41%). Además no
+  // sobrevive a cómo se trabaja de verdad la cola —a veces de arriba abajo, a
+  // veces filtrando por segmento, a veces en handoffs—: en cuanto se elige un
+  // chip, el lead del tratamiento desaparece de la vista, empujado o no.
+  //
+  // El aviso de abajo sí sobrevive al filtro (se cuenta sobre `except("seg")`),
+  // no desplaza a nadie y dice qué hacer. Es el mismo mecanismo que ya funciona
+  // para la hora dorada.
   const displayLeads = useMemo(
     () =>
       priorityOn
-        ? sortLeadsByPriorityScoped(
-            baseLeads,
-            (lead) => profileByStore.get(lead.store_id) ?? scoringProfileFor(null),
-            now,
-            enExperimento,
+        ? sortLeadsByPriorityScoped(baseLeads, (lead) =>
+            profileByStore.get(lead.store_id) ?? scoringProfileFor(null),
           )
         : baseLeads,
-    [priorityOn, baseLeads, profileByStore, now, enExperimento],
+    [priorityOn, baseLeads, profileByStore],
   );
 
   // Render por tramos. La cola completa puede traer miles de filas y montarlas
@@ -1834,6 +1861,39 @@ export function LeadsBoard({
       {banner && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
           {banner}
+        </div>
+      )}
+
+      {/* Aviso de la prueba.
+          SUSTITUYE AL EMPUJÓN EN LA COLA, que salió al revés: el brazo de
+          tratamiento se llamaba a los 47 minutos de mediana contra 14 del
+          control. Además el empujón no sobrevive a cómo se trabaja la cola —a
+          veces de arriba abajo, a veces filtrando por segmento, a veces en
+          handoffs—: al elegir un chip, el lead desaparecía de la vista.
+          Esto se cuenta sobre `except("seg","edad")`, así que sigue visible con
+          cualquier filtro puesto, y no desplaza a ningún carrito. */}
+      {view === "por_llamar" && queueState === "sin_llamar" && !searchMode && enPruebaIds.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-violet-300 bg-violet-50 px-4 py-2.5 text-sm text-violet-900">
+          <span className="font-semibold">
+            🧪 {enPruebaIds.length} {enPruebaIds.length === 1 ? "lead" : "leads"} de la prueba
+          </span>
+          <span className="text-violet-800">
+            Llámalos dentro de su primera hora aunque no parezcan prometedores: estamos midiendo si
+            sirve, y solo sale bien si de verdad se llaman.
+          </span>
+          <button
+            type="button"
+            // Limpia segmento y edad: el aviso cuenta ignorando los dos, así que
+            // con un chip puesto la lista mostraría menos filas que el número —y
+            // el lead de la prueba sería justo el que falta.
+            onClick={() => {
+              setSegFilter(null);
+              setEdadFilter("all");
+            }}
+            className="ml-auto inline-flex h-[30px] items-center rounded-md border border-violet-400 bg-white px-2.5 text-[12px] font-semibold text-violet-700 hover:bg-violet-100"
+          >
+            Ver la cola sin filtros
+          </button>
         </div>
       )}
 

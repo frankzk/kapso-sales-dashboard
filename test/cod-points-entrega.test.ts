@@ -29,7 +29,7 @@ import { describe, expect, it } from "vitest";
  */
 
 const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
-const migracion = () => read("db/migrations/0146_cod_points_require_delivery.sql");
+const migracion = () => read("db/migrations/0149_cod_points_require_delivery.sql");
 
 /** El cuerpo del `insert` que rellena el mapa. */
 function insertDelMapa(sql: string): string {
@@ -100,7 +100,7 @@ describe("el cinturón manual de Tumbes", () => {
     // error de dedo dentro de seis meses».
     const sql = migracion();
     const cuerpo = sql.slice(sql.indexOf("insert into district_coverage"));
-    expect(cuerpo).toContain("0146");
+    expect(cuerpo).toContain("0149");
     expect(cuerpo).toContain("Aliclik nunca entregó en Tumbes");
   });
 

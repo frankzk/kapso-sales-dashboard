@@ -11365,8 +11365,225 @@ begin
 end $$;
 
 -- ---- 0146 ----
+-- `read_lead_experiment` contaba los toques de MÁQUINA como llamadas.
+--
+-- CÓMO SE VIO. A las cinco horas de arrancar el experimento, 7 de las 100
+-- asignaciones tenían `assigned_at` POSTERIOR a su "primera llamada", cosa que
+-- el barrido no debería permitir —solo asigna leads en estado `nuevo`—. Al
+-- mirarlos, las siete filas eran `kind='system'` con `new_status` nulo: no eran
+-- llamadas, eran toques automáticos (drip, winback, secuencia de carrito).
+--
+-- EL TAMAÑO DEL PROBLEMA. El 51,3% de `lead_calls` es `kind='system'`. Sobre los
+-- 26.346 leads con alguna fila:
+--   • 8.400 tienen SOLO filas de máquina — nadie los llamó nunca;
+--   • de los 17.946 con toque humano, 4.445 (24,8%) tenían una fila de máquina
+--     ANTES, con 4,7 horas de desfase mediano.
+--
+-- POR QUÉ ROMPE EL EXPERIMENTO, y no solo lo ensucia. `pct_en_1h` no es un
+-- resultado: es la medida de CUMPLIMIENTO, la que dice si el tratamiento llegó a
+-- administrarse. Contando toques automáticos, un lead al que nadie llamó pero al
+-- que le saltó un drip figura como "llamado dentro de la hora" — y eso pasa en
+-- los DOS brazos, así que el cumplimiento saldría alto en ambos y la diferencia
+-- entre ellos se aplanaría. O sea: el indicador que existe para detectar que el
+-- experimento no se administró sería justo el que lo ocultaría.
+--
+-- Y el filtro `assigned_at <= first_call`, que está para descartar asignaciones
+-- hechas conociendo el resultado, descartaba leads cuya única fila previa era una
+-- máquina — leads perfectamente válidos.
+--
+-- LA FRONTERA YA ESTABA DEFINIDA en el código: lib/productivity.ts documenta que
+-- `kind` es exactamente la línea persona/máquina («en 60 días `call`, `message` y
+-- `sale` vienen firmados el 100% de las veces»). Esta función simplemente no la
+-- estaba usando.
+--
+-- Comprobado que las conclusiones que motivaron el experimento NO cambian: con
+-- toques humanos solamente, el cierre dentro de la primera hora sube en todos los
+-- segmentos (carrito 40,7 → 41,2 %, interés 25,8 → 32,9 %, conversó 14,9 → 15,5 %,
+-- frío 8,1 → 8,8 %) y el de +6 h se queda igual. El acantilado es más
+-- pronunciado, no menos; contar máquinas lo hacía parecer más suave.
+
+create or replace function public.read_lead_experiment(
+  p_experiment text,
+  p_maduracion_dias integer default 7
+)
+returns table (
+  tienda text,
+  arm text,
+  leads bigint,
+  llamados bigint,
+  en_1h bigint,
+  pct_en_1h numeric,
+  ventas bigint,
+  conversion numeric
+)
+language sql
+stable
+security definer
+set search_path = public
+as $fn$
+  with fc as (
+    select lead_id, min(occurred_at) as first_call
+    from lead_calls
+    -- SOLO PERSONAS. `system` son drip, winback y secuencias de carrito: contarlas
+    -- convertiría el indicador de cumplimiento en uno que no distingue los brazos.
+    where kind in ('call', 'message', 'sale')
+    group by 1
+  ),
+  w as (select distinct lead_id from order_sales where lead_id is not null)
+  select
+    s.name as tienda,
+    e.arm,
+    count(*) as leads,
+    count(f.first_call) as llamados,
+    count(*) filter (where f.first_call - l.first_seen_at <= interval '1 hour') as en_1h,
+    round(100.0 * count(*) filter (where f.first_call - l.first_seen_at <= interval '1 hour')
+          / nullif(count(*), 0), 1) as pct_en_1h,
+    count(w.lead_id) as ventas,
+    round(100.0 * count(w.lead_id) / nullif(count(*), 0), 1) as conversion
+  from lead_experiments e
+  join leads l on l.id = e.lead_id
+  join stores s on s.id = e.store_id
+  left join fc f on f.lead_id = e.lead_id
+  left join w on w.lead_id = e.lead_id
+  where e.experiment = p_experiment
+    and (f.first_call is null or e.assigned_at <= f.first_call)
+    and l.first_seen_at <= now() - make_interval(days => p_maduracion_dias)
+  group by 1, 2
+  order by 1, 2;
+$fn$;
+
+grant execute on function public.read_lead_experiment(text, integer) to authenticated, service_role;
+
+-- ---- 0147 ----
+-- `read_lead_experiment` tiene que analizar la MISMA población que el reparto
+-- selecciona, y desde 0147 el reparto solo entra leads que llegan entre las 7 y
+-- las 18 hora de Lima (ver lib/lead-experiment.ts: fuera de esa franja ocurre
+-- solo el 10,7% de los toques humanos, así que el tratamiento no se puede
+-- administrar).
+--
+-- POR QUÉ HACE FALTA TOCARLA. Las asignaciones hechas ANTES de ese cambio no
+-- llevan el filtro, y la tabla es append-only: no se pueden borrar ni corregir,
+-- que es exactamente la garantía que se quiso. En el momento de escribir esto son
+-- 131 de 167 — el 78%. Sin este filtro, la lectura mezclaría dos poblaciones con
+-- reglas de elegibilidad distintas y arrastraría el resultado hacia abajo con
+-- leads que nadie podía tratar.
+--
+-- NO SESGA. El corte es por HORA DE LLEGADA del lead: un dato anterior al sorteo
+-- y ajeno al brazo, así que descarta la misma proporción de tratamiento y de
+-- control. Lo que hace es dejar la pregunta bien planteada — para los leads que
+-- entran cuando podemos actuar, ¿vale la pena llamarlos rápido?
+--
+-- La franja se escribe aquí como literal en vez de leerla de la aplicación
+-- porque el SQL no puede importar TREATABLE_HOUR_START/END. Si algún día se
+-- mueven allí, hay que moverlos aquí: el test `la franja del SQL coincide con la
+-- del código` lo comprueba.
+
+create or replace function public.read_lead_experiment(
+  p_experiment text,
+  p_maduracion_dias integer default 7
+)
+returns table (
+  tienda text, arm text, leads bigint, llamados bigint,
+  en_1h bigint, pct_en_1h numeric, ventas bigint, conversion numeric
+)
+language sql
+stable
+security definer
+set search_path = public
+as $fn$
+  with fc as (
+    select lead_id, min(occurred_at) as first_call
+    from lead_calls
+    -- Solo personas: `system` son drip, winback y secuencias de carrito, y
+    -- contarlas convertiría `pct_en_1h` —el indicador de cumplimiento— en uno
+    -- que no distingue los brazos (ver 0146).
+    where kind in ('call', 'message', 'sale')
+    group by 1
+  ),
+  w as (select distinct lead_id from order_sales where lead_id is not null)
+  select
+    s.name as tienda,
+    e.arm,
+    count(*) as leads,
+    count(f.first_call) as llamados,
+    count(*) filter (where f.first_call - l.first_seen_at <= interval '1 hour') as en_1h,
+    round(100.0 * count(*) filter (where f.first_call - l.first_seen_at <= interval '1 hour')
+          / nullif(count(*), 0), 1) as pct_en_1h,
+    count(w.lead_id) as ventas,
+    round(100.0 * count(w.lead_id) / nullif(count(*), 0), 1) as conversion
+  from lead_experiments e
+  join leads l on l.id = e.lead_id
+  join stores s on s.id = e.store_id
+  left join fc f on f.lead_id = e.lead_id
+  left join w on w.lead_id = e.lead_id
+  where e.experiment = p_experiment
+    and (f.first_call is null or e.assigned_at <= f.first_call)
+    and l.first_seen_at <= now() - make_interval(days => p_maduracion_dias)
+    -- La franja tratable. Deja fuera las asignaciones anteriores al filtro, que
+    -- por ser append-only no se pueden quitar de la tabla.
+    and extract(hour from l.first_seen_at at time zone 'America/Lima')::int between 7 and 18
+  group by 1, 2
+  order by 1, 2;
+$fn$;
+
+grant execute on function public.read_lead_experiment(text, integer) to authenticated, service_role;
+
+-- ---- 0148 ----
+-- La fecha de despacho de Aliclik: la que debería ser y la que pusieron.
+--
+-- EL CASO. La guía AUR5X846640592825 (#KP123403) se creó el sábado 29-08-2026 a
+-- las 14:13 de Lima —trece minutos pasada la hora de corte— y Aliclik la fechó
+-- para el DOMINGO 30. Aliclik no recoge domingos, así que el lunes el motorizado
+-- ve una fecha vencida y se niega a llevarse el paquete. La operación acaba
+-- entrando a su portal a corregirlo a mano, guía por guía.
+--
+-- Y NO ES UNA FUNCIONALIDAD QUE FALTE: es su regla incumplida. Su propia
+-- documentación, en las reglas de negocio de `POST /integration/order`, dice
+-- «Courier estándar: la fecha de despacho se calcula contra `schedule`. Si cae
+-- en domingo, se desplaza al lunes.» El primer paso lo hicieron; el segundo no.
+--
+-- POR QUÉ DOS COLUMNAS Y NO UNA. Son dos hechos distintos y mezclarlos destruye
+-- lo único que hace accionable esto:
+--
+--   * `aliclik_expected_dispatch_date` — lo que su regla manda, calculado por
+--     nosotros al crear la guía, con el `schedule` que su propia cotización nos
+--     dio para ese courier y ese almacén.
+--   * `aliclik_reported_dispatch_date` — la columna «FECHA DESPACHO» de su
+--     Excel, o sea lo que efectivamente pusieron.
+--
+-- Su diferencia es la cifra con la que se reclama. Guardar solo una dejaría la
+-- conversación en «nos pasa a veces», que es justo lo que lleva meses pasando.
+--
+-- LO QUE ESTAS COLUMNAS NO SON. No cambian la guía: Aliclik no admite fecha en
+-- la creación de contra entrega —su esquema no la tiene— así que el paquete
+-- sigue llevando lo que ellos decidan. Esto sirve para avisar antes de crear y
+-- para contar después. Corregir la guía sigue siendo manual hasta que arreglen
+-- su cálculo.
+--
+-- NO SE TOCA `aliclik_service_date`, que guarda la fecha de entrega/visita del
+-- reporte. Es otro hecho y reutilizarla habría hecho ambiguas las dos.
+
+alter table shipments
+  add column if not exists aliclik_expected_dispatch_date date,
+  add column if not exists aliclik_reported_dispatch_date date;
+
+comment on column shipments.aliclik_expected_dispatch_date is
+  'Fecha de despacho que corresponde según la regla de Aliclik (corte del courier; domingo → lunes), calculada al crear la guía. Ver lib/aliclik-dispatch-date.ts.';
+comment on column shipments.aliclik_reported_dispatch_date is
+  'Fecha de despacho que Aliclik reporta en su Excel (columna FECHA DESPACHO). Comparada con la esperada, delata los incumplimientos de su propia regla.';
+
+-- Para contar los incumplimientos sin recorrer la tabla entera. Parcial: solo
+-- interesan las guías que tienen las dos fechas y difieren, que son unas pocas
+-- entre miles.
+create index if not exists shipments_dispatch_date_mismatch_idx
+  on shipments (aliclik_expected_dispatch_date, aliclik_reported_dispatch_date)
+  where aliclik_expected_dispatch_date is not null
+    and aliclik_reported_dispatch_date is not null
+    and aliclik_expected_dispatch_date <> aliclik_reported_dispatch_date;
+
+-- ---- 0149 ----
 -- ============================================================================
--- 0146 — Un punto COD lo siembra una ENTREGA, no una cotización.
+-- 0149 — Un punto COD lo siembra una ENTREGA, no una cotización.
 --
 -- EL CASO. Tumbes salía «Provincia COD» y la operación lo despacha por agencia.
 -- Aliclik no ha entregado NUNCA un paquete en Tumbes: sus dos únicas guías allí
@@ -11449,7 +11666,7 @@ end;
 $$;
 
 comment on function refresh_aliclik_cod_points(uuid) is
-  'Mapa de zonas donde Aliclik ENTREGÓ COD a domicilio. Exige delivery_status = entregado: una guía cotizada y anulada no prueba cobertura (0146).';
+  'Mapa de zonas donde Aliclik ENTREGÓ COD a domicilio. Exige delivery_status = entregado: una guía cotizada y anulada no prueba cobertura (0149).';
 
 -- Reconstruir el mapa con la regla nueva. Sin esto, los puntos viejos —los 190
 -- que ninguna entrega respalda— seguirían en la tabla hasta el próximo refresco.
@@ -11474,10 +11691,10 @@ select refresh_aliclik_cod_points(null);
 insert into district_coverage (store_id, district, coverage, note)
 values
   (null, 'tumbes', 'agencia',
-   'Aliclik nunca entregó en Tumbes: sus dos guías (31-jul-2026) se anularon. Las entregas reales son de Shalom. Ver 0146.'),
+   'Aliclik nunca entregó en Tumbes: sus dos guías (31-jul-2026) se anularon. Las entregas reales son de Shalom. Ver 0149.'),
   (null, 'zarumilla', 'agencia',
-   'Departamento de Tumbes, sin cobertura COD de Aliclik. Ver 0146.'),
+   'Departamento de Tumbes, sin cobertura COD de Aliclik. Ver 0149.'),
   (null, 'corrales', 'agencia',
-   'Departamento de Tumbes, sin cobertura COD de Aliclik. Ver 0146.')
+   'Departamento de Tumbes, sin cobertura COD de Aliclik. Ver 0149.')
 on conflict (coalesce(store_id, '00000000-0000-0000-0000-000000000000'::uuid), district)
 do nothing;

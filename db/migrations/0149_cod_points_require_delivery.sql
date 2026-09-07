@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0146 — Un punto COD lo siembra una ENTREGA, no una cotización.
+-- 0149 — Un punto COD lo siembra una ENTREGA, no una cotización.
 --
 -- EL CASO. Tumbes salía «Provincia COD» y la operación lo despacha por agencia.
 -- Aliclik no ha entregado NUNCA un paquete en Tumbes: sus dos únicas guías allí
@@ -82,7 +82,7 @@ end;
 $$;
 
 comment on function refresh_aliclik_cod_points(uuid) is
-  'Mapa de zonas donde Aliclik ENTREGÓ COD a domicilio. Exige delivery_status = entregado: una guía cotizada y anulada no prueba cobertura (0146).';
+  'Mapa de zonas donde Aliclik ENTREGÓ COD a domicilio. Exige delivery_status = entregado: una guía cotizada y anulada no prueba cobertura (0149).';
 
 -- Reconstruir el mapa con la regla nueva. Sin esto, los puntos viejos —los 190
 -- que ninguna entrega respalda— seguirían en la tabla hasta el próximo refresco.
@@ -107,10 +107,10 @@ select refresh_aliclik_cod_points(null);
 insert into district_coverage (store_id, district, coverage, note)
 values
   (null, 'tumbes', 'agencia',
-   'Aliclik nunca entregó en Tumbes: sus dos guías (31-jul-2026) se anularon. Las entregas reales son de Shalom. Ver 0146.'),
+   'Aliclik nunca entregó en Tumbes: sus dos guías (31-jul-2026) se anularon. Las entregas reales son de Shalom. Ver 0149.'),
   (null, 'zarumilla', 'agencia',
-   'Departamento de Tumbes, sin cobertura COD de Aliclik. Ver 0146.'),
+   'Departamento de Tumbes, sin cobertura COD de Aliclik. Ver 0149.'),
   (null, 'corrales', 'agencia',
-   'Departamento de Tumbes, sin cobertura COD de Aliclik. Ver 0146.')
+   'Departamento de Tumbes, sin cobertura COD de Aliclik. Ver 0149.')
 on conflict (coalesce(store_id, '00000000-0000-0000-0000-000000000000'::uuid), district)
 do nothing;
