@@ -195,6 +195,20 @@ Reglas iniciales:
   «Puerto Maldonado» (la ciudad) y Aliclik factura «Tambopata» (el distrito), y
   por texto nunca casan. La modalidad del pedido —y con ella la exigencia de
   abono— se deriva de esa clasificación, así que nada la recalcula por separado.
+- **Un punto COD lo siembra una ENTREGA, no una cotización.** El mapa de
+  `aliclik_cod_points` solo admite guías con `delivery_status = 'entregado'`.
+  Cotizar no es entregar: hasta la 0149 bastaba con que la guía tuviera precio,
+  y dos guías creadas y anuladas el 31-jul-2026 dejaron a **todo Tumbes**
+  clasificado como Provincia COD cuando Aliclik no ha entregado allí ni una vez
+  —las cuatro entregas del departamento son de Shalom—.
+  - Medido al cambiarlo: de 954 puntos quedan 764. La única región que pierde
+    cobertura es Tumbes; Arequipa, Trujillo, Chiclayo, Piura, Huancayo y Juliaca
+    conservan los suyos, porque allí una dirección fallida está rodeada de
+    entregas buenas. Por eso **no** se borran «los puntos que fracasaron» —eso
+    sería ruido en esas ciudades—: se cambia qué siembra un punto.
+  - Una zona con guías en curso y ninguna entregada todavía no siembra punto, y
+    es lo correcto: la cobertura se declara cuando se ha entregado una vez, y se
+    corrige sola en cuanto llegue la primera.
 - La confirmación tiene UNA sola definición, `hasConfirmationSignal`.
   Un pedido está confirmado si existe una guía, si hay evento `confirmed`,
   `guide_registered` o `label_generated`, o si Shopify lo da por pagado —en
@@ -336,6 +350,26 @@ Reglas:
 - Provincia COD queda confirmada al validar producto, cantidad, monto, fecha
   aproximada y dirección de entrega.
 - Agencia queda confirmada solo cuando el pago exigido ha sido validado.
+- **Confirmación expresa de agencia.** Un pedido con las TRES cosas —documento
+  del cliente, sucursal de destino elegida y un pago validado de `adelanto` o
+  `total`— queda confirmado por los hechos y pasa a Preparación sin necesidad de
+  que nadie marque «Confirmó el pedido». Se registra como evento `confirmed` con
+  `source: automatico` y la nota nombra la evidencia.
+  - Las tres son necesarias. El borrador se guarda en cuanto se teclean el
+    documento y la sucursal, así que sin el pago la asesora puede estar todavía
+    negociando: **el dinero es lo que convierte la conversación en compromiso**.
+  - `diferencia` no cuenta como pago que compromete: es un saldo posterior sobre
+    un pedido ya en marcha, y llega cuando la confirmación ya ocurrió.
+  - No mira la cobertura. La evidencia de que el envío va a agencia es el
+    borrador con su terminal elegida, no la etiqueta del clasificador: un pedido
+    puede estar clasificado `provincia_cod` e irse por Shalom.
+  - Por qué: ninguna de las tres se consigue sin el cliente al teléfono, y la
+    del pago no se consigue sin que además mande dinero. Medido sobre los 702
+    pedidos que llegaron a tener las tres, 427 se entregaron, 198 iban en
+    proceso, 74 seguían pendientes y solo **3 se cayeron** (2 anulados, 1
+    devuelto): la regla acierta el 99,6 %. Antes, el clic que faltaba dejaba
+    pedidos ya pagados esperando hasta 69 horas, y el 36 % de los pedidos de
+    agencia llegaba a Preparación sin ninguna gestión registrada.
 - Crear el rótulo implica confirmación; no puede existir rótulo para un pedido
   de Provincia/Agencia sin confirmación válida.
 

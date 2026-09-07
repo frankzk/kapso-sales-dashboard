@@ -299,4 +299,6 @@
 \ir migrations/0147_read_lead_experiment_franja.sql
 \echo 'Applying 0148_aliclik_dispatch_date.sql'
 \ir migrations/0148_aliclik_dispatch_date.sql
+\echo 'Applying 0149_cod_points_require_delivery.sql'
+\ir migrations/0149_cod_points_require_delivery.sql
 \echo 'Done.'

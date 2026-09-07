@@ -41,6 +41,7 @@ import {
   ROUTE_OUTPUT_FILLED,
 } from "@/lib/shipment-output";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { registrarConfirmacionExpresaDeAgencia } from "@/lib/confirmacion-agencia-access";
 import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
 import {
   describeShalomError,
@@ -1229,8 +1230,23 @@ export async function saveShalomOrderDraft(
   );
   if (error) return { error: error.message };
 
+  // El otro orden posible: el pago ya estaba validado y lo que faltaba era el
+  // DNI o la agencia. Las dos puertas tienen que preguntar lo mismo, o la
+  // confirmación dependería de en qué orden se hicieron las cosas.
+  const confirmado = await registrarConfirmacionExpresaDeAgencia(
+    admin,
+    orderId,
+    row.store_id,
+    ctx.userId,
+  );
+  await recomputeOrderMasterSafe(admin, [orderId]);
+
   revalidatePath(MASTER_PATH);
-  return { notice: "Datos de Shalom guardados para cuando se cree la guía." };
+  return {
+    notice: confirmado
+      ? "Datos de Shalom guardados. Con el pago ya validado, el pedido queda confirmado y pasa a Preparación."
+      : "Datos de Shalom guardados para cuando se cree la guía.",
+  };
 }
 
 /** Lo apuntado por adelantado, para pintarlo en el panel de pagos. */
