@@ -21,7 +21,12 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { extractPaymentEvidence, TandersClient } from "@/lib/tanders/client";
 import { checkTandersPayment, REASON_LABEL } from "@/lib/tanders/payment-check";
 import { readTandersPayment } from "@/lib/tanders/payment-vision";
-import { recordSweepFailure, type SweepFailure } from "@/lib/tanders/sweep-failures";
+import {
+  isThrottled,
+  pace,
+  recordSweepFailure,
+  type SweepFailure,
+} from "@/lib/tanders/sweep-failures";
 import { normalizeMediaType, type StoreVisionCreds } from "@/lib/vision";
 
 const DAY_MS = 86_400_000;
@@ -71,7 +76,7 @@ export interface SweepDetail {
 
 export interface SweepReport {
   scanned: number;
-  /** Tanders todavía no la da por entregada: no hay nada que validar. */
+  /** Sin constancia de pago todavía en Tanders: no hay nada que validar. */
   enCurso: number;
   entregado: number;
   validado: number;
@@ -80,6 +85,8 @@ export interface SweepReport {
   errores: number;
   /** POR QUÉ falló lo que falló, agrupado. Ver sweep-failures.ts. */
   fallos: SweepFailure[];
+  /** true = Tanders devolvió 429 y el barrido paró ahí; lo demás va en la próxima pasada. */
+  detenido: boolean;
   rejected: string[];
   detalle: SweepDetail[];
 }
@@ -120,6 +127,7 @@ export async function sweepTandersPayments(
     pendiente: 0,
     errores: 0,
     fallos: [],
+    detenido: false,
     rejected: [],
     detalle: [],
   };
@@ -173,36 +181,19 @@ export async function sweepTandersPayments(
         continue;
       }
 
-      // 1) ¿Tanders ya la dio por entregada? Si no, no hay nada que validar.
-      const order = await client.getOrder(row.tanders_order_id);
-      if (String(order?.status ?? "").toUpperCase() !== "DELIVERED") {
-        report.enCurso += 1;
-        continue;
-      }
-
-      // 2) La constancia de pago. Sin ella no se decide nada: queda pendiente,
-      //    que bloquea igual pero no acusa a nadie. Ver extractPaymentEvidence.
+      // 1) La constancia de pago, DIRECTAMENTE. Antes se preguntaba primero el
+      //    estado (`GET /orders/{id}`) y solo con DELIVERED se pedía la
+      //    constancia: esa primera llamada era de administrador, respondía 403
+      //    y ninguna guía llegó nunca aquí. La constancia bajo `files_payment/`
+      //    existe solo cuando el motorizado cobró, así que ES la prueba de
+      //    entrega, y pedirla directa además es una llamada menos por guía,
+      //    que con el límite de ritmo de Tanders cuenta. Sin constancia no
+      //    hay nada que validar: queda en curso.
+      await pace();
       const raw = await client.evidences(row.tanders_order_id);
       const payments = extractPaymentEvidence(raw);
       if (!payments.length) {
-        report.pendiente += 1;
-        report.detalle.push({
-          guia: row.guide_code,
-          pedido: row.order_name,
-          cobroEsperado: expectedAmount(row.tanders_raw),
-          leido: null,
-          veredicto: "pendiente",
-          motivos: [],
-          resumen: "Tanders la da por entregada pero no se encontró constancia de pago.",
-          haria: "dejar la guía como está",
-          imagen: null,
-        });
-        if (!dry) {
-          await admin
-            .from("shipments")
-            .update({ payment_check_state: "pendiente" })
-            .eq("id", row.id);
-        }
+        report.enCurso += 1;
         continue;
       }
 
@@ -292,6 +283,11 @@ export async function sweepTandersPayments(
       // motivo se guarda. Ver sweep-failures.ts.
       report.errores += 1;
       recordSweepFailure(report.fallos, err);
+      // Un 429 es Tanders diciendo «basta»: lo que queda va en la próxima.
+      if (isThrottled(err)) {
+        report.detenido = true;
+        break;
+      }
     }
   }
 

@@ -61,3 +61,24 @@ export function recordSweepFailure(list: SweepFailure[], err: unknown): void {
 }
 
 export const OTHER_LABEL = "(otros motivos distintos)";
+
+// ---------------------------------------------------------------------------
+// El ritmo
+// ---------------------------------------------------------------------------
+
+/**
+ * Tanders limita el ritmo: el 08-09-2026, con 200 lecturas seguidas, las
+ * últimas 80 volvieron «429 ThrottlerException: Too Many Requests». Las que
+ * siguen a un 429 son llamadas perdidas —y, peor, alargan el castigo—, así que
+ * el barrido se detiene en el primero y deja el resto para la siguiente pasada.
+ */
+export function isThrottled(err: unknown): boolean {
+  return err instanceof TandersApiError && err.status === 429;
+}
+
+/** Pausa entre guías. Un barrido no es una ráfaga: 60 guías a este ritmo son ~20 s. */
+export const SWEEP_PACE_MS = 300;
+
+export function pace(ms: number = SWEEP_PACE_MS): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

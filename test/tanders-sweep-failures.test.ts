@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   describeSweepError,
+  isThrottled,
   MAX_DISTINCT_FAILURES,
   OTHER_LABEL,
   recordSweepFailure,
+  SWEEP_PACE_MS,
   type SweepFailure,
 } from "@/lib/tanders/sweep-failures";
 import { TandersApiError } from "@/lib/tanders/types";
@@ -44,6 +46,28 @@ describe("describeSweepError", () => {
   it("un error que no es de su API conserva nombre y mensaje", () => {
     expect(describeSweepError(new TypeError("fetch failed"))).toBe("TypeError: fetch failed");
     expect(describeSweepError("algo raro")).toBe("algo raro");
+  });
+});
+
+describe("isThrottled: un 429 no es una guía que falla, es Tanders diciendo «basta»", () => {
+  // El 08-09-2026, con 200 lecturas seguidas, las últimas 80 volvieron «429
+  // ThrottlerException». Seguir tras el primero solo quema llamadas y alarga
+  // el castigo: el barrido para ahí y deja el resto para la próxima pasada.
+  it("reconoce el 429 de su API", () => {
+    expect(isThrottled(new TandersApiError("Too Many Requests", 429, null, "GET", "/orders/me/x"))).toBe(true);
+  });
+
+  it("cualquier otro fallo NO detiene el barrido", () => {
+    expect(isThrottled(new TandersApiError("Forbidden resource", 403))).toBe(false);
+    expect(isThrottled(new TandersApiError("boom", 500))).toBe(false);
+    expect(isThrottled(new TypeError("fetch failed"))).toBe(false);
+    expect(isThrottled(null)).toBe(false);
+  });
+
+  it("la pausa entre guías hace que 60 lecturas duren segundos, no milisegundos", () => {
+    // 60 × 300 ms = 18 s: cabe de sobra en el cron y no parece una ráfaga.
+    expect(SWEEP_PACE_MS).toBeGreaterThanOrEqual(200);
+    expect(60 * SWEEP_PACE_MS).toBeLessThan(60_000);
   });
 });
 

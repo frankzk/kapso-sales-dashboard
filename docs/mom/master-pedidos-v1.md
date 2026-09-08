@@ -975,10 +975,25 @@ sin tope de antigüedad. Reglas:
   pero tiraban el motivo. Ahora los dos reportes (`fallos`) conservan los
   motivos distintos con su cuenta, con método, ruta y status HTTP cuando el
   fallo es de su API, y la pantalla de Cobros Tanders tiene una lectura en
-  seco de estados que los muestra sin necesitar el secreto del cron. De los
-  endpoints que usa Kapta, `GET /orders/{id}` —el único que leen los barridos—
-  es el único que **no** está confirmado contra su frontend; los tres que sí
-  funcionan van por `/orders/me/…`.
+  seco de estados que los muestra sin necesitar el secreto del cron.
+- **La causa, confirmada con esa lectura el mismo día**, eran dos: `GET
+  /orders/{id}` respondía **403 Forbidden resource** (120 de 200) —es una ruta
+  de administrador de Tanders; todo lo que es de la tienda va por
+  `/orders/me/…`— y a partir de ~120 llamadas seguidas Tanders corta con **429
+  Too Many Requests** (las 80 restantes). Reglas desde entonces:
+  - El detalle se lee por `GET /orders/me/{id}`.
+  - Los barridos van con pausa entre guías y **se detienen en el primer 429**:
+    seguir solo quema llamadas y alarga el castigo. Lo que queda va en la
+    siguiente pasada; el tope por pasada bajó de 200 a 60 y las nunca leídas
+    van primero, así que el atraso entra igual, en unas horas.
+  - **El barrido de cobros pide la constancia directamente**, sin preguntar
+    antes el estado. Una constancia bajo `files_payment/` existe solo cuando el
+    motorizado cobró, así que es por sí misma la prueba de entrega; y es una
+    llamada menos por guía, que con el límite de ritmo cuenta. La regla de
+    §9.4 no cambia: la guía pasa a `entregado` únicamente con la constancia
+    validada. Una guía que Tanders da por entregada pero sin constancia ya no
+    la marca este barrido como `pendiente`: se ve como custodia del courier
+    (que sí escribe el barrido de estados) con el cobro sin verificar.
 
 Devoluciones físicas:
 

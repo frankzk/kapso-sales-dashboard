@@ -4,7 +4,17 @@
 //   POST /auth/refresh        {refreshToken}      → par de tokens
 //   POST /orders              TandersOrderPayload → 201 con el pedido creado
 //   GET  /orders/me/capacity                      → cupo del día
-//   GET  /orders/{id}                             → detalle
+//   GET  /orders/me/{id}                          → detalle (el de la tienda)
+//
+// TODO LO QUE ES DE LA TIENDA VA POR /orders/me/…. `GET /orders/{id}` existe
+// pero es de administrador de Tanders: el 08-09-2026 la lectura en seco lo
+// confirmó con 120 × «403 Forbidden resource». Era la única ruta sin ese
+// prefijo y la única que leían los barridos, que por eso llevaban tres semanas
+// sin escribir nada.
+//
+// Y TANDERS LIMITA EL RITMO: a partir de ~120 llamadas seguidas responde
+// «429 ThrottlerException». Los barridos van con pausa y se detienen al primer
+// 429 (ver sweep-failures.ts); lo que quede sigue en la siguiente pasada.
 //
 // El access token dura 15 minutos (900 s entre `iat` y `exp`) y el refresh 7
 // días. Con guías creadas de a una desde el Master, un token cacheado casi
@@ -208,8 +218,12 @@ export class TandersClient {
     });
   }
 
+  /**
+   * Detalle de un pedido de la tienda. Por `/orders/me/…` como todo lo que es
+   * de la tienda: la variante sin `me` es de administrador y responde 403.
+   */
   async getOrder(id: string): Promise<TandersOrder> {
-    return this.request<TandersOrder>(`/orders/${encodeURIComponent(id)}`, {
+    return this.request<TandersOrder>(`/orders/me/${encodeURIComponent(id)}`, {
       token: await this.accessToken(),
     });
   }

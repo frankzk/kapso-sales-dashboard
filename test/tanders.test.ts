@@ -451,6 +451,41 @@ describe("TandersClient", () => {
     expect(orderAttempts).toBe(1);
   });
 
+  it("lee el detalle de un pedido por /orders/me/{id}: la ruta sin `me` es de administrador", async () => {
+    // EL CASO. El 08-09-2026 la lectura en seco devolvió 120 × «403 Forbidden
+    // resource» en `GET /orders/{id}`: la única ruta sin el prefijo `me` y la
+    // única que leían los barridos, que llevaban tres semanas sin escribir nada.
+    const { calls, fetchImpl } = stub((url) =>
+      url.endsWith("/auth/login")
+        ? { status: 200, body: { accessToken: jwt(future()) } }
+        : { status: 200, body: { id: "cmtru1tlb00250m1ysr2upshi", status: "DELIVERED" } },
+    );
+    const client = new TandersClient({ email: "e@x.com", password: "p", fetchImpl });
+    const order = await client.getOrder("cmtru1tlb00250m1ysr2upshi");
+
+    expect(order.status).toBe("DELIVERED");
+    const read = calls.find((c) => !c.url.endsWith("/auth/login"));
+    if (!read) throw new Error("no se llamó al detalle");
+    expect(read.url).toContain("/orders/me/cmtru1tlb00250m1ysr2upshi");
+    expect(read.url).not.toMatch(/\/orders\/cmtru1tlb00250m1ysr2upshi$/);
+    expect((read.init.headers as Record<string, string>).authorization).toMatch(/^Bearer /);
+  });
+
+  it("un error de su API dice método y ruta aparte del mensaje", async () => {
+    const { fetchImpl } = stub((url) =>
+      url.endsWith("/auth/login")
+        ? { status: 200, body: { accessToken: jwt(future()) } }
+        : { status: 403, body: { message: "Forbidden resource" } },
+    );
+    const client = new TandersClient({ email: "e@x.com", password: "p", fetchImpl });
+    await expect(client.getOrder("abc")).rejects.toMatchObject({
+      status: 403,
+      message: "Forbidden resource",
+      method: "GET",
+      path: "/orders/me/abc",
+    });
+  });
+
   it("propaga el status y el mensaje del error (saldo insuficiente, cupo, etc.)", async () => {
     const { fetchImpl } = stub((url) =>
       url.endsWith("/auth/login")
