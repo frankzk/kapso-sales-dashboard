@@ -301,4 +301,6 @@
 \ir migrations/0148_aliclik_dispatch_date.sql
 \echo 'Applying 0149_cod_points_require_delivery.sql'
 \ir migrations/0149_cod_points_require_delivery.sql
+\echo 'Applying 0150_lead_coverage_pushes.sql'
+\ir migrations/0150_lead_coverage_pushes.sql
 \echo 'Done.'

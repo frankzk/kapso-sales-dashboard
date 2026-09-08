@@ -15,7 +15,6 @@ import {
 } from "@/lib/leads-access";
 import { facetItems } from "@/lib/leads-facets";
 import { scoringProfileFor, sortLeadsByPriorityScoped } from "@/lib/lead-priority";
-import { assignArm, isExperimentEligible } from "@/lib/lead-experiment";
 import {
   countLeadUrgency,
   goldenBreakdown,
@@ -1118,7 +1117,6 @@ export function LeadsBoard({
     prodOptions,
     prodSin,
     goldenTally,
-    enPruebaIds,
     shownLeads,
   } = useMemo(() => {
     const matchQuery = (l: LeadRow) => {
@@ -1254,20 +1252,6 @@ export function LeadsBoard({
       // segmento— para que elegir un chip no apague el aviso. Es una alarma sobre
       // la cola, no un resumen de lo que se está mirando.
       goldenTally: tallyGolden(facets.except("seg", "edad"), leadSegment, now),
-      // Leads del brazo de tratamiento vivos dentro de su hora. Sobre la misma
-      // base que el aviso de hora dorada —todo menos el propio segmento y la
-      // edad— porque el experimento tiene que ser visible ELIJA LO QUE ELIJA la
-      // asesora: filtrando por Carrito, un lead frío del tratamiento
-      // desaparecería de la lista y nadie lo llamaría nunca.
-      enPruebaIds: facets
-        .except("seg", "edad")
-        .filter(
-          (l) =>
-            isExperimentEligible(l) &&
-            assignArm(l.id) === "tratamiento" &&
-            leadUrgency(l.first_seen_at, now)?.tier === "dorada",
-        )
-        .map((l) => l.id),
       shownLeads: facets.all,
     };
   }, [
@@ -1346,31 +1330,21 @@ export function LeadsBoard({
     () => new Map(stores.map((s) => [s.id, s.name])),
     [stores],
   );
-  // Experimento de la hora dorada: el brazo se DERIVA del id del lead con la
-  // misma función pura que usa el reparto en el cron, así que la fila no necesita
-  // traer nada nuevo de la base y las dos partes no se pueden desincronizar.
-  const enExperimento = useCallback(
-    (lead: LeadRow) =>
-      isExperimentEligible(lead) &&
-      assignArm(lead.id) === "tratamiento" &&
-      leadUrgency(lead.first_seen_at, now)?.tier === "dorada",
-    [now],
-  );
-  // YA NO SE EMPUJA AL PRINCIPIO DE LA COLA. Se probó y salió al revés: en las
-  // primeras 78 asignaciones, el tratamiento se llamaba a los 47 minutos de
-  // mediana contra 14 del control, y solo 1 de 19 dentro de los primeros 30
-  // minutos contra 15 de 59. Marginal (p ≈ 0,06) pero en la dirección equivocada
-  // en todos los cortes.
+  // ESTA PANTALLA NO SABE NADA DEL EXPERIMENTO, y es el resultado de haberlo
+  // intentado dos veces. Se probó empujar el brazo de tratamiento al principio
+  // de la cola: se llamaba a los 47 minutos de mediana contra 14 del control, y
+  // 1 de 19 dentro de los primeros 30 minutos contra 15 de 59. Se probó luego
+  // marcarlo con un chip sin moverlo: se llamó al 23,5% contra el 34,3% del
+  // control (p ≈ 0,04). Los dos mecanismos, el mismo signo — la etiqueta hace
+  // que el lead se salte, porque se lee como "esto no es un pedido de verdad".
   //
-  // Y el empujón tenía un coste cierto contra un beneficio no demostrado: ponía
-  // un frío (~9-19% de cierre) por encima de un carrito fresco (41%). Además no
-  // sobrevive a cómo se trabaja de verdad la cola —a veces de arriba abajo, a
-  // veces filtrando por segmento, a veces en handoffs—: en cuanto se elige un
-  // chip, el lead del tratamiento desaparece de la vista, empujado o no.
+  // Además ninguna señal en pantalla sobrevive a cómo se trabaja la cola de
+  // verdad —a veces de arriba abajo, a veces filtrando por segmento, a veces en
+  // handoffs—: al elegir un chip, el lead del tratamiento desaparece de la
+  // vista, empujado o marcado o ninguna de las dos.
   //
-  // El aviso de abajo sí sobrevive al filtro (se cuenta sobre `except("seg")`),
-  // no desplaza a nadie y dice qué hacer. Es el mismo mecanismo que ya funciona
-  // para la hora dorada.
+  // v2 entrega el tratamiento fuera de la cola: una lista por Telegram con
+  // enlace a la ficha, sin decir que es una prueba (lib/coverage-push.ts).
   const displayLeads = useMemo(
     () =>
       priorityOn
@@ -1864,38 +1838,14 @@ export function LeadsBoard({
         </div>
       )}
 
-      {/* Aviso de la prueba.
-          SUSTITUYE AL EMPUJÓN EN LA COLA, que salió al revés: el brazo de
-          tratamiento se llamaba a los 47 minutos de mediana contra 14 del
-          control. Además el empujón no sobrevive a cómo se trabaja la cola —a
-          veces de arriba abajo, a veces filtrando por segmento, a veces en
-          handoffs—: al elegir un chip, el lead desaparecía de la vista.
-          Esto se cuenta sobre `except("seg","edad")`, así que sigue visible con
-          cualquier filtro puesto, y no desplaza a ningún carrito. */}
-      {view === "por_llamar" && queueState === "sin_llamar" && !searchMode && enPruebaIds.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-violet-300 bg-violet-50 px-4 py-2.5 text-sm text-violet-900">
-          <span className="font-semibold">
-            🧪 {enPruebaIds.length} {enPruebaIds.length === 1 ? "lead" : "leads"} de la prueba
-          </span>
-          <span className="text-violet-800">
-            Llámalos dentro de su primera hora aunque no parezcan prometedores: estamos midiendo si
-            sirve, y solo sale bien si de verdad se llaman.
-          </span>
-          <button
-            type="button"
-            // Limpia segmento y edad: el aviso cuenta ignorando los dos, así que
-            // con un chip puesto la lista mostraría menos filas que el número —y
-            // el lead de la prueba sería justo el que falta.
-            onClick={() => {
-              setSegFilter(null);
-              setEdadFilter("all");
-            }}
-            className="ml-auto inline-flex h-[30px] items-center rounded-md border border-violet-400 bg-white px-2.5 text-[12px] font-semibold text-violet-700 hover:bg-violet-100"
-          >
-            Ver la cola sin filtros
-          </button>
-        </div>
-      )}
+      {/* AQUÍ NO VA NINGUNA MARCA DEL EXPERIMENTO, y es a propósito.
+          Se probaron las dos formas de señalarlo en la cola y las dos salieron
+          al revés: el empujón (mediana 47 min hasta la llamada contra 14 del
+          control) y el aviso con chip (23,5% de leads llamados alguna vez
+          contra 34,3% del control, p ≈ 0,04). Marcar un lead como "de la
+          prueba" hace que se salte: se lee como "esto no es un pedido de
+          verdad". v2 entrega el tratamiento por Telegram, como trabajo normal,
+          sin decir que hay una prueba (lib/coverage-push.ts). */}
 
       {/* Aviso de hora dorada.
           Con la cola real (1.966 sin llamar) esto muestra un puñado de leads, no
@@ -2083,19 +2033,6 @@ export function LeadsBoard({
                     {/* Marcador de atención: sin esto un reencolado (ola 🔁),
                         una respuesta nueva o un seguimiento vencido eran
                         invisibles en la fila — solo cambiaban el orden. */}
-                    {/* Marca del experimento. Sin esto el lead sube al principio
-                        de la cola sin explicación, y una asesora que ve un frío
-                        arriba concluye que el orden está roto — o lo salta. Que
-                        diga POR QUÉ está ahí es lo que hace que el tratamiento
-                        se administre. */}
-                    {enExperimento(lead) && (
-                      <span
-                        title="Prueba en curso: estamos midiendo si llamar rápido a un lead sin señal vale la pena. Llámalo dentro de la hora aunque no parezca prometedor."
-                        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-1.5 py-0.5 text-[11px] font-semibold text-violet-700"
-                      >
-                        🧪 prueba
-                      </span>
-                    )}
                     {lead.needs_attention && !isYape && (
                       <span
                         title="Requiere atención: reencolado por carrito sin contacto, respuesta nueva o seguimiento vencido"

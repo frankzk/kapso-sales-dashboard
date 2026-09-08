@@ -3,7 +3,7 @@
 
 import type { createAdminSupabase } from "@/lib/db";
 import {
-  FRIO_GOLDEN_EXPERIMENT,
+  ACTIVE_EXPERIMENT,
   assignArm,
   isExperimentEligible,
   type ExperimentArm,
@@ -16,9 +16,9 @@ type Admin = ReturnType<typeof createAdminSupabase>;
  * hora es doce pasadas de margen: si el cron falla un rato, al volver recupera
  * los leads que entraron mientras tanto en vez de perderlos.
  *
- * No más de una hora a propósito. Pasada la hora dorada el tratamiento ya no se
- * puede administrar —consiste justamente en llamar dentro de ella—, así que
- * asignar un lead más viejo solo añadiría ruido a los dos brazos.
+ * Una hora basta y sobra: el barrido solo puede asignar leads que aún no se han
+ * llamado, y el tratamiento de v2 no tiene prisa —"que se llame", no "que se
+ * llame rápido"—, así que un lead recién entrado siempre llega a tiempo.
  */
 export const ASSIGN_LOOKBACK_MS = 60 * 60_000;
 
@@ -54,7 +54,7 @@ export async function assignPendingExperimentArms(
   admin: Admin,
   storeIds: string[],
   nowMs: number = Date.now(),
-  experiment: string = FRIO_GOLDEN_EXPERIMENT,
+  experiment: string = ACTIVE_EXPERIMENT,
 ): Promise<AssignReport> {
   const vacio: AssignReport = { vistos: 0, elegibles: 0, asignados: 0, tratamiento: 0 };
   if (storeIds.length === 0) return vacio;
@@ -70,10 +70,9 @@ export async function assignPendingExperimentArms(
     .limit(ASSIGN_BATCH);
   if (error || !candidatos) return vacio;
 
-  // `first_seen_at` va en el tipo aunque el barrido no lo lea directamente: lo
-  // usa `isExperimentEligible` para la franja horaria. Sin él aquí, quitarlo del
-  // `select` de arriba no daría error de tipos y el reparto se apagaría entero en
-  // silencio — la elegibilidad devuelve false cuando no hay hora.
+  // `first_seen_at` se pide para el orden y para el mensaje de Telegram (la
+  // antigüedad que ve la asesora). Va en el tipo para que quitarlo del `select`
+  // rompa la compilación en vez de vaciar el mensaje en silencio.
   const filas = candidatos as {
     id: string;
     store_id: string;
@@ -102,7 +101,7 @@ export async function assignPendingExperimentArms(
       lead_id: l.id,
       store_id: l.store_id,
       experiment,
-      arm: assignArm(l.id, undefined, experiment) satisfies ExperimentArm as ExperimentArm,
+      arm: assignArm(l.id, experiment) satisfies ExperimentArm as ExperimentArm,
     }));
 
   if (nuevas.length === 0) {
@@ -137,7 +136,7 @@ export async function assignPendingExperimentArms(
 export async function fetchExperimentArms(
   admin: Admin,
   leadIds: string[],
-  experiment: string = FRIO_GOLDEN_EXPERIMENT,
+  experiment: string = ACTIVE_EXPERIMENT,
 ): Promise<Map<string, ExperimentArm>> {
   const out = new Map<string, ExperimentArm>();
   if (leadIds.length === 0) return out;

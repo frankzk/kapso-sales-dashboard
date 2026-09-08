@@ -1,55 +1,95 @@
-// A/B: ¿vale la pena llamar rápido a un lead SIN NINGUNA SEÑAL?
+// A/B sobre los leads que entran SIN NINGUNA SEÑAL de compra.
 //
 // POR QUÉ HACE FALTA UN EXPERIMENTO Y NO OTRA CONSULTA. El peso de `frio` en
 // lib/lead-priority.ts es 1 (Kenku) y 0 (Aurela) — el último de la escala. Ese
 // número está mal, y no se puede arreglar mirando el histórico, porque el
 // histórico está contaminado por construcción: el segmento se calcula con el
 // estado de HOY, y una llamada que funciona hace que el cliente dé su distrito o
-// arme un carrito, con lo cual el lead DEJA de ser frío.
+// arme un carrito, con lo cual el lead DEJA de ser frío. De 1.259 leads sin
+// señal al entrar y llamados dentro de la hora, hoy solo 101 (8%) siguen
+// etiquetados frío — o sea que "la tasa del frío" mide el residuo donde la
+// llamada NO funcionó. Es una tautología, y solo el sorteo la rompe.
 //
-// Medido: de 1.259 leads que no tenían ninguna señal al entrar y se llamaron
-// dentro de la hora, hoy están etiquetados así —
-//
-//   interés   853  (68%)   conversión 18,8%
-//   conversó  240  (19%)              12,9%
-//   carrito    65   (5%)              55,4%
-//   frío      101   (8%)               4,0%
-//
-// El 92% se fue del balde. Medir "frío" por la etiqueta de hoy es mirar el 8% de
-// residuo donde la llamada NO funcionó — literalmente una tautología.
-//
-// Reconstruyendo el segmento con lo que una llamada no puede reescribir
-// (`source='cod_cart'`, draft orders anteriores a la llamada, y
-// `first_inbound_text`, que se escribe una sola vez), un lead sin señal llamado
-// dentro de la hora cierra 19,4% en Kenku y 5,9% en Aurela — contra 1,7% y 0,8%
-// pasadas 6 horas.
-//
-// LO QUE ESA CIFRA TODAVÍA NO PRUEBA. Parte del salto es SELECCIÓN: un lead que
-// se llama en veinte minutos es uno que estaba disponible, y estar disponible
-// correlaciona con comprar. Con datos de observación eso no se separa. De ahí
-// este experimento: asignar al azar ANTES de saber nada del resultado es lo
-// único que rompe la correlación.
-//
-// DISEÑO. Intención de tratar (ITT): se compara por el brazo ASIGNADO, no por
-// quién acabó llamándose dentro de la hora. Analizar por cumplimiento volvería a
-// meter la selección por la puerta de atrás — los tratados que sí se alcanzaron
-// serían otra vez "los disponibles". El incumplimiento diluye el efecto medido,
-// no lo sesga, y la dilución se mide aparte.
-//
-// TAMAÑO. Entran ~256 leads sin señal al día y ~30 ya se llaman dentro de la
-// hora por su cuenta (11,6%). Con un 20% al brazo de tratamiento son ~51/día;
-// para distinguir 2,4% de 5,5% con 80% de potencia hacen falta ~650 por brazo,
-// o sea unas dos semanas. La capacidad no estorba: se tocan ~796 leads al día.
+// Van dos versiones. La primera falló de una forma que enseñó algo, así que las
+// dos están documentadas abajo: v1 (parada) y v2 (la que corre).
 
-/** Identificador del experimento. Va en la fila, no en el código que lee: si
- *  algún día corre un segundo experimento, las filas viejas siguen diciendo a
- *  cuál pertenecen. */
+// ---------------------------------------------------------------------------
+// V1 — PARADO. Lo que enseñó, y por qué se cambió la pregunta.
+// ---------------------------------------------------------------------------
+// El tratamiento de v1 era "llámalo dentro de su primera hora", señalado en la
+// cola. Nunca se administró. Dos mecanismos, los dos fallaron en la MISMA
+// dirección:
+//
+//              % llamado en 1h    % llamado alguna vez
+//   empujón     42,1 vs 35,0       (mediana 47 min vs 17 del control)
+//   aviso 🧪     22,0 vs 29,7       23,5 vs 34,3  (p ≈ 0,04)
+//
+// O sea que marcar un lead como "de la prueba" hace que se llame MENOS. Es una
+// reacción humana razonable: la etiqueta se lee como "esto no es un pedido de
+// verdad". Con dos mecanismos distintos y el mismo signo, una tercera variante
+// visual habría sido repetir el error.
+//
+// Y de paso enseñó que la pregunta estaba mal elegida. Dentro de la población
+// aleatorizada:
+//
+//   llamado dentro de la hora   15,2%   (n=164)
+//   llamado después             13,3%   (n=30)
+//   NUNCA llamado                0,0%   (n=383)
+//
+// La hora vale ~2 puntos. Llamar o no llamar vale ~15. Se confirmó en la cola
+// entera: desde que existe la columna Edad la velocidad subió (15,2% → 25,1% de
+// leads llamados dentro de la hora) y la conversión NO se movió (~10,6% → ~11,0%
+// corrigiendo por maduración), porque a la vez la cobertura cayó (48,7% → 39,4%)
+// al subir el volumen sin subir la capacidad. Se optimizó la variable pequeña.
+//
+// v1 se deja de repartir pero sus filas se conservan: la tabla es append-only y
+// `read_lead_experiment` sigue leyéndolas.
+
+/** Identificador del experimento v1. PARADO — ya no se asigna. Se conserva
+ *  porque las filas históricas lo llevan escrito. */
 export const FRIO_GOLDEN_EXPERIMENT = "frio_hora_dorada_v1";
 
-/** Fracción al brazo de tratamiento. Un quinto, no la mitad: el tratamiento
- *  desvía capacidad de la primera hora hacia leads que probablemente no cierren,
- *  y con ~650 por brazo en dos semanas no hace falta más. */
+// ---------------------------------------------------------------------------
+// V2 — ¿vale la pena LLAMAR a un lead sin señal, aunque sea tarde?
+// ---------------------------------------------------------------------------
+// Tres cambios respecto de v1, cada uno por algo que se midió:
+//
+//  1. EL TRATAMIENTO ES "que se llame", no "que se llame rápido". Ahí está el
+//     salto de 15 puntos, y además es mucho más fácil de administrar: no hay
+//     que ganarle una carrera al reloj.
+//
+//  2. NO SE ETIQUETA EN LA COLA. La marca 🧪 es lo que hacía que la saltaran.
+//     La entrega va por Telegram, con enlace directo al lead, como trabajo
+//     normal — que es el único mecanismo que ha funcionado en toda la serie:
+//     cuando se le pidió a una persona que llamara una lista, cumplió el 81%
+//     contra el 31% del resto del equipo.
+//
+//  3. SIN FRANJA HORARIA. En v1 el lead tenía que ENTRAR entre las 7 y las 18
+//     porque su hora dorada debía caer en horario de trabajo. Aquí no hay prisa:
+//     uno que entra a las 3 de la madrugada se llama a las 9 y recibe el
+//     tratamiento igual. Eso duplica la población elegible — el 57% entraba
+//     fuera de esa franja — y con ella la velocidad del experimento.
+//
+// TAMAÑO. Control: se llama al 34%, y llamado cierra ~15% ⇒ ~5,1% de conversión
+// (medido en v1: 5,9%). Tratamiento al 80% de cobertura ⇒ ~12%. Con ~7 puntos de
+// diferencia hacen falta ~254 por brazo: a 20% de ~256 elegibles/día son ~51/día
+// y el brazo se llena en 5 días. Si al forzar la cobertura la mitad no contesta,
+// el efecto baja a ~3 puntos y hacen falta ~2 semanas — sigue siendo detectable.
+// Coste: ~41 llamadas más al día sobre las 378 primeras llamadas que ya se
+// hacen, un 11% de la capacidad.
+
+export const FRIO_COVERAGE_EXPERIMENT = "frio_cobertura_v1";
+
+/** Fracción al brazo de tratamiento. Un quinto, no la mitad: cada lead tratado
+ *  son llamadas forzadas a leads que probablemente no cierren, y con ~254 por
+ *  brazo el experimento se llena igual en días. */
 export const TREATMENT_FRACTION = 0.2;
+
+/** El experimento que se está repartiendo AHORA. El resto del código lo lee de
+ *  aquí en vez de nombrarlo: cuando llegue v3, se cambia esta línea y no hay que
+ *  ir buscando literales por el repo — que es como v1 se habría quedado a medio
+ *  parar. */
+export const ACTIVE_EXPERIMENT = FRIO_COVERAGE_EXPERIMENT;
 
 export type ExperimentArm = "tratamiento" | "control";
 
@@ -62,61 +102,10 @@ export interface ExperimentEligibility {
   first_seen_at?: string | null;
 }
 
-/**
- * Franja en la que hay alguien para administrar el tratamiento, hora de Lima.
- *
- * MEDIDO, no supuesto. Los toques humanos de 14 días por hora: 7h 3,8%, 8h 4,3%,
- * 9h-17h entre 7% y 10% cada una, 18h 4,0%, 19h 1,7%, 20h 1,7%. El 95% cae entre
- * las 7 y las 19.
- *
- * POR QUÉ HACE FALTA ESTE CORTE. El 57% de los leads sin señal entra FUERA de
- * 9-20, cuando solo ocurre el 10,7% de los toques. Sin filtrar, más de la mitad
- * de las asignaciones tendría su hora dorada de madrugada, cuando no hay nadie:
- * el tratamiento no se puede administrar y esos leads solo añaden ruido a los dos
- * brazos por igual.
- *
- * No sesga: el corte es por HORA DE LLEGADA, un dato anterior al sorteo y ajeno
- * al brazo. Lo que hace es cambiar la pregunta por la única que se puede
- * responder —y la única que importa para decidir—: para los leads que entran
- * cuando podemos actuar, ¿vale la pena llamarlos rápido?
- *
- * Y ACELERA el experimento en vez de frenarlo. Con la mitad de los tratados sin
- * poder tratarse, el contraste de cumplimiento entre brazos se aplasta y hacen
- * falta muchísimos más leads; restringiendo, cada lead asignado cuenta.
- *
- * El cierre a las 18 y no a las 19 es porque el tratamiento necesita la hora
- * ENTERA por delante: quien entra a las 18:00 se llama hasta las 19:00, y a esa
- * hora todavía queda gente (1,7%). Más tarde, no.
- */
-export const TREATABLE_HOUR_START = 7;
-export const TREATABLE_HOUR_END = 18;
-
-/** Hora de Lima (0-23) de un instante ISO, o null si la fecha no sirve. Perú es
- *  UTC-5 fijo y sin horario de verano, pero se resuelve con Intl igual que el
- *  resto del repo (ver limaTimeHHMM en lib/aliclik-geo.ts) para no codificar el
- *  desfase a mano. */
-export function limaHour(iso: string | null | undefined): number | null {
-  if (!iso) return null;
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return null;
-  const hh = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "America/Lima",
-    hour: "2-digit",
-    hour12: false,
-  }).format(new Date(t));
-  const n = Number(hh === "24" ? "00" : hh);
-  return Number.isFinite(n) ? n : null;
-}
-
-/** ¿Entró cuando hay alguien que pueda llamarlo dentro de su hora? PURA. */
-export function isWithinTreatableWindow(firstSeenAt: string | null | undefined): boolean {
-  const h = limaHour(firstSeenAt);
-  // Sin hora usable NO entra: meterlo sería asignar un lead que quizá nadie
-  // pueda tratar, y el experimento ya tiene bastante dilución.
-  if (h == null) return false;
-  return h >= TREATABLE_HOUR_START && h <= TREATABLE_HOUR_END;
-}
-
+/** El enlace a una ficha de producto que el botón de WhatsApp inserta solo.
+ *  Misma expresión que `hasProductLink` en lib/leads: aquí va aparte a propósito
+ *  para que este módulo no dependa de la definición de segmentos, que SÍ cambia
+ *  —y si cambiara, movería la elegibilidad de un experimento ya en marcha. */
 const PRODUCT_LINK_RE = /https?:\/\/\S*\/products\/\S/i;
 
 /**
@@ -134,11 +123,11 @@ const PRODUCT_LINK_RE = /https?:\/\/\S*\/products\/\S/i;
 export function isExperimentEligible(lead: ExperimentEligibility): boolean {
   if (lead.source === "cod_cart") return false;
   if (PRODUCT_LINK_RE.test(lead.first_inbound_text ?? "")) return false;
-  // La ventana va DENTRO de la elegibilidad, no en el barrido, para que el
-  // reparto del cron y la marca de la cola usen exactamente el mismo criterio.
-  // Si viviera solo en el barrido, la UI marcaría 🧪 leads que nunca se
-  // asignaron — y una asesora los llamaría creyendo que están en el estudio.
-  if (!isWithinTreatableWindow(lead.first_seen_at)) return false;
+  // SIN FRANJA HORARIA desde v2. En v1 el lead tenía que entrar entre las 7 y
+  // las 18 porque su hora dorada debía caer en horario de trabajo; aquí el
+  // tratamiento es "que se llame", sin prisa, así que uno de madrugada se llama
+  // por la mañana y lo recibe igual. La franja de v1 sigue viva donde importa:
+  // en el SQL de la migración 0147, que acota SU población histórica.
   return true;
 }
 
@@ -179,11 +168,16 @@ function hash32(input: string): number {
  * Se saliniza con el nombre del experimento para que un segundo experimento no
  * reparta a la MISMA gente al mismo lado: sin sal, quien cayó en tratamiento una
  * vez caería siempre, y los dos experimentos dejarían de ser independientes.
+ *
+ * `experiment` VA SIN VALOR POR DEFECTO y va segundo a propósito. Lo tenía, y
+ * apuntaba a v1; cuando v1 se paró, el defecto se quedó nombrando un
+ * experimento muerto sin que nada fallara, porque el único caller pasaba el
+ * nombre explícito. Un defecto que nadie ejerce es un defecto que nadie prueba.
  */
 export function assignArm(
   leadId: string,
+  experiment: string,
   fraction: number = TREATMENT_FRACTION,
-  experiment: string = FRIO_GOLDEN_EXPERIMENT,
 ): ExperimentArm {
   // Fuera de rango no se reparte: 0 y 1 son apagados válidos y cualquier otra
   // cosa es un error de configuración que no debe traducirse en un reparto raro.
@@ -192,19 +186,4 @@ export function assignArm(
   return hash32(`${experiment}:${leadId}`) / 0x100000000 < fraction
     ? "tratamiento"
     : "control";
-}
-
-/**
- * ¿Hay que empujar este lead al principio de la cola AHORA? PURA.
- *
- * Solo el brazo de tratamiento y solo mientras siga dentro de su hora dorada:
- * pasada la hora el tratamiento ya no se puede administrar, y dejarlo arriba
- * gastaría capacidad sin medir nada. Que después caiga al orden normal no
- * estropea el análisis — el brazo asignado no cambia, y ITT compara por brazo.
- */
-export function shouldPin(
-  arm: ExperimentArm | null | undefined,
-  urgencyTier: string | null | undefined,
-): boolean {
-  return arm === "tratamiento" && urgencyTier === "dorada";
 }
