@@ -236,6 +236,31 @@ curl.exe -s -X POST -H "X-API-Key: $env:SHALOM_API_KEY" `
 
 ---
 
+## La clave de recojo
+
+Cuatro dígitos, y Shalom rechaza tres formas:
+
+| Forma | Ejemplo | Cómo se supo |
+|---|---|---|
+| Los 4 dígitos iguales | `1111` | Documentado |
+| Escalera ascendente | `1234` | Documentado |
+| **Parece un año** | `1965` | **Un 400 en producción** |
+
+La tercera **no estaba en su documentación**. Salió el 08/09/2026: el generador
+sacó `1965` al azar y la creación murió con
+`400 pickup_code inválido: "1965" parece un año del calendario y Shalom lo
+rechaza por seguridad`.
+
+> **El rango 1900–2099 es una inferencia nuestra**, no un dato de Shalom. Lo
+> único comprobado es que `1965` se rechaza. Es la lectura razonable de «parece
+> un año» y cuesta 200 de los 10.000 códigos —un 2 %—, así que pasarse de ancho
+> no quita nada. Si algún día rechazan uno fuera del rango, se amplía.
+
+La regla dice qué acepta Shalom **al crear**. Por eso el registro manual de una
+guía hecha en mostrador usa `pickupCodeFormatError`, que no la aplica: una clave
+que Shalom ya emitió no se puede rechazar por una suposición nuestra sobre su
+regla — sería impedir que se registre un envío real.
+
 ## Vía aérea
 
 **Se elige al crear la guía**, no eligiendo otra agencia. En el panel de Shalom

@@ -71,18 +71,51 @@ function isDescending(code: string): boolean {
 }
 
 /**
- * ¿Es una clave que Shalom va a aceptar? Se comprueba exactamente lo que la
- * documentación prohíbe — ni más ni menos. Rechazar de más bloquearía una clave
+ * Años del calendario: 1900–2099. Shalom los rechaza «por seguridad», y no
+ * estaba en su documentación — se supo por un 400 en producción con la clave
+ * `1965`, que nos había tocado al azar.
+ *
+ * EL RANGO ES UNA INFERENCIA, no un dato: lo único comprobado es que 1965 se
+ * rechaza. 1900–2099 es la lectura razonable de «parece un año» y cuesta 200 de
+ * los 10.000 códigos posibles —un 2 %—, así que pasarse de ancho aquí no quita
+ * nada. Si algún día rechazan uno fuera de este rango, se amplía.
+ */
+function looksLikeCalendarYear(code: string): boolean {
+  const n = Number(code);
+  return n >= 1900 && n <= 2099;
+}
+
+/**
+ * ¿Es una clave que Shalom va a aceptar al CREAR una guía? Se comprueba lo que
+ * sabemos que rechaza — ni más ni menos. Rechazar de más bloquearía una clave
  * válida que el operador escribió a propósito.
  */
 export function isValidPickupCode(code: string | null | undefined): boolean {
   const v = (code ?? "").trim();
   if (!/^\d{4}$/.test(v)) return false;
-  return !isRepeated(v) && !isAscending(v);
+  return !isRepeated(v) && !isAscending(v) && !looksLikeCalendarYear(v);
 }
 
 /** Por qué no sirve esta clave, para decírselo al operador en una línea. */
 export function pickupCodeError(code: string | null | undefined): string | null {
+  const formato = pickupCodeFormatError(code);
+  if (formato) return formato;
+  if (looksLikeCalendarYear((code ?? "").trim())) {
+    return "Shalom no acepta claves que parezcan un año (1900–2099).";
+  }
+  return null;
+}
+
+/**
+ * Lo mismo, pero para una clave que Shalom YA emitió: registro manual de una
+ * guía hecha en mostrador.
+ *
+ * Aquí no se aplica la regla del año a propósito. Esa regla dice qué acepta
+ * Shalom al crear; una clave que ya existe en su sistema no se puede rechazar
+ * por nuestra inferencia de su regla — sería impedir que se registre un envío
+ * real por una suposición nuestra.
+ */
+export function pickupCodeFormatError(code: string | null | undefined): string | null {
   const v = (code ?? "").trim();
   if (!/^\d{4}$/.test(v)) return "La clave de recojo son exactamente 4 dígitos.";
   if (isRepeated(v)) return "Shalom no acepta claves con los 4 dígitos iguales (1111, 2222…).";
