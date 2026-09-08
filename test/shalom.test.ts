@@ -7,6 +7,7 @@ import {
   needsCustomDimensions,
   normalizeDocument,
   pickupCodeError,
+  pickupCodeFormatError,
   preferredShalomProductId,
   shalomPhone,
   splitReceiverName,
@@ -152,6 +153,42 @@ describe("clave de recojo", () => {
     const values = [0.4321, 0.2415];
     const rng = () => values.shift() ?? 0.5;
     expect(generatePickupCode(rng)).toBe("2415");
+  });
+
+  // Producción, 08/09/2026: la guía no se pudo crear porque al azar salió
+  // «1965» y Shalom contestó 400 — «parece un año del calendario y Shalom lo
+  // rechaza por seguridad». No estaba en su documentación; se supo por el fallo.
+  it("rechaza las claves que parecen un año, que Shalom tumba con un 400", () => {
+    expect(isValidPickupCode("1965")).toBe(false);
+    expect(pickupCodeError("1965")).toMatch(/año/);
+    // Los bordes del rango que inferimos.
+    expect(isValidPickupCode("1900")).toBe(false);
+    expect(isValidPickupCode("2099")).toBe(false);
+    expect(isValidPickupCode("1899")).toBe(true);
+    expect(isValidPickupCode("2100")).toBe(true);
+    // Y no se lleva por delante lo que sí vale: 2415 es el respaldo del generador.
+    expect(isValidPickupCode("2415")).toBe(true);
+  });
+
+  it("no genera nunca un año, ni siquiera si el azar insiste", () => {
+    const values = [0.1965, 0.2026, 0.1900, 0.2415];
+    const rng = () => values.shift() ?? 0.5;
+    expect(generatePickupCode(rng)).toBe("2415");
+    for (let i = 0; i < 500; i++) {
+      const n = Number(generatePickupCode());
+      expect(n >= 1900 && n <= 2099).toBe(false);
+    }
+  });
+
+  // La regla del año dice qué acepta Shalom AL CREAR. Una clave que Shalom ya
+  // emitió —guía hecha en mostrador, registrada a mano— no se puede rechazar
+  // por una inferencia nuestra sobre su regla: sería impedir que se registre un
+  // envío real por una suposición.
+  it("al registrar una guía ya existente no aplica la regla del año", () => {
+    expect(pickupCodeFormatError("1965")).toBeNull();
+    // El formato sí se sigue exigiendo.
+    expect(pickupCodeFormatError("1111")).toMatch(/iguales/);
+    expect(pickupCodeFormatError("196")).toMatch(/4 dígitos/);
   });
 });
 

@@ -3210,6 +3210,18 @@ function OrderDrawer({
                           >
                             solo Shalom
                           </a>
+                          {/* El «Ticket Shalom», el recibo de tira del
+                              mostrador. No es el rótulo: es el otro papel, el
+                              que hasta ahora había que bajar a mano de
+                              pro.shalom.pe envío por envío. */}
+                          <a
+                            href={`/api/shalom/ticket/${g.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-slate-500 hover:underline"
+                          >
+                            ticket
+                          </a>
                         </>
                       )}
                       {canCreateShalomGuide && shalomGuideIsCancelable(g) && (

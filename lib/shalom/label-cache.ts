@@ -34,18 +34,34 @@ async function ensureBucket(admin: SupabaseClient): Promise<void> {
   bucketReady = true;
 }
 
-/** La ruta es el `ose_id` y nada más: identifica al documento, no al pedido. */
-export function labelPath(oseId: number): string {
-  return `${oseId}.pdf`;
+/**
+ * Los dos papeles de una guía. Shalom los sirve en rutas hermanas bajo
+ * `/v1/orders/{ose_id}/`, y los dos son igual de inmutables y igual de lentos:
+ *
+ *  - `label`   → el rótulo apaisado, el que se pega en la caja.
+ *  - `voucher` → el «Ticket Shalom», el recibo vertical del mostrador.
+ */
+export type ShalomDocKind = "label" | "voucher";
+
+/**
+ * La ruta es el `ose_id` y nada más: identifica al documento, no al pedido.
+ *
+ * El rótulo se queda en la raíz —`{ose}.pdf`— a propósito: hay cientos ya
+ * guardados ahí y moverlos solo para que hagan juego los tiraría todos a la
+ * basura, y cada uno cuesta 45 s de volver a bajar.
+ */
+export function labelPath(oseId: number, kind: ShalomDocKind = "label"): string {
+  return kind === "label" ? `${oseId}.pdf` : `${kind}/${oseId}.pdf`;
 }
 
 /** El PDF guardado, o `null` si no está. Nunca lanza. */
 export async function readCachedLabel(
   admin: SupabaseClient,
   oseId: number,
+  kind: ShalomDocKind = "label",
 ): Promise<Uint8Array | null> {
   try {
-    const { data, error } = await admin.storage.from(BUCKET).download(labelPath(oseId));
+    const { data, error } = await admin.storage.from(BUCKET).download(labelPath(oseId, kind));
     if (error || !data) return null;
     const bytes = new Uint8Array(await data.arrayBuffer());
     // Un objeto vacío es basura de una subida a medias: se ignora y se vuelve a
@@ -61,12 +77,13 @@ export async function cacheLabel(
   admin: SupabaseClient,
   oseId: number,
   pdf: ArrayBuffer | Uint8Array,
+  kind: ShalomDocKind = "label",
 ): Promise<void> {
   try {
     await ensureBucket(admin);
     const body = pdf instanceof Uint8Array ? pdf : new Uint8Array(pdf);
     if (!body.byteLength) return;
-    await admin.storage.from(BUCKET).upload(labelPath(oseId), body, {
+    await admin.storage.from(BUCKET).upload(labelPath(oseId, kind), body, {
       contentType: "application/pdf",
       // `upsert` porque dos personas pueden imprimir a la vez: el documento es
       // el mismo, así que la carrera no tiene perdedor.
@@ -91,16 +108,44 @@ export async function shalomLabelPdf(
   oseId: number,
   client: { label: (oseId: number) => Promise<ArrayBuffer> } | null = null,
 ): Promise<Uint8Array> {
-  const cached = await readCachedLabel(admin, oseId);
+  return shalomDocPdf(admin, storeId, store, oseId, "label", client);
+}
+
+/**
+ * El «Ticket Shalom» de una guía. Mismo trato que el rótulo: se guarda la
+ * primera vez y las reimpresiones salen gratis.
+ */
+export async function shalomVoucherPdf(
+  admin: SupabaseClient,
+  storeId: string,
+  store: StoreShalom,
+  oseId: number,
+  client: { voucher: (oseId: number) => Promise<ArrayBuffer> } | null = null,
+): Promise<Uint8Array> {
+  return shalomDocPdf(admin, storeId, store, oseId, "voucher", client);
+}
+
+type DocClient = Partial<Record<ShalomDocKind, (oseId: number) => Promise<ArrayBuffer>>>;
+
+async function shalomDocPdf(
+  admin: SupabaseClient,
+  storeId: string,
+  store: StoreShalom,
+  oseId: number,
+  kind: ShalomDocKind,
+  client: DocClient | null,
+): Promise<Uint8Array> {
+  const cached = await readCachedLabel(admin, oseId, kind);
   if (cached) return cached;
 
-  // Lectura: si el token murió se renueva y reintenta sola. Bajar el rótulo no
-  // crea ni modifica nada, así que repetirlo es gratis.
-  const fresh = client
-    ? await client.label(oseId)
-    : await readWithFreshSession(admin, storeId, store, (c) => c.label(oseId));
+  // Lectura: si el token murió se renueva y reintenta sola. Bajar un documento
+  // no crea ni modifica nada, así que repetirlo es gratis.
+  const fetchDoc = client?.[kind];
+  const fresh = fetchDoc
+    ? await fetchDoc(oseId)
+    : await readWithFreshSession(admin, storeId, store, (c) => c[kind](oseId));
   const bytes = fresh instanceof Uint8Array ? fresh : new Uint8Array(fresh);
-  await cacheLabel(admin, oseId, bytes);
+  await cacheLabel(admin, oseId, bytes, kind);
   return bytes;
 }
 

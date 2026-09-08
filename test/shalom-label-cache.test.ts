@@ -5,6 +5,7 @@ import {
   labelPath,
   readCachedLabel,
   shalomLabelPdf,
+  shalomVoucherPdf,
   warmShalomLabel,
 } from "@/lib/shalom/label-cache";
 
@@ -45,6 +46,16 @@ describe("la ruta de la caché identifica al documento, no al pedido", () => {
     // clave por pedido sí habría dejado servir el rótulo de la guía muerta.
     expect(labelPath(95556634)).toBe("95556634.pdf");
     expect(labelPath(1)).not.toBe(labelPath(2));
+  });
+
+  it("el rótulo se queda en la raíz: mover lo ya guardado sería tirarlo", () => {
+    // Hay cientos de rótulos cacheados en `{ose}.pdf`. Cambiar su ruta solo para
+    // que hiciera juego con el ticket los invalidaría todos, y cada uno cuesta
+    // 45 s de volver a bajar.
+    expect(labelPath(7, "label")).toBe("7.pdf");
+    expect(labelPath(7, "voucher")).toBe("voucher/7.pdf");
+    // Y los dos documentos de la MISMA guía no se pisan.
+    expect(labelPath(7, "label")).not.toBe(labelPath(7, "voucher"));
   });
 });
 
@@ -118,6 +129,55 @@ describe("pedir el rótulo", () => {
     const client = { label: vi.fn(async () => PDF.buffer as ArrayBuffer) };
     const out = await shalomLabelPdf(admin, "st", STORE, 7, client);
     expect(out.byteLength).toBe(PDF.byteLength);
+  });
+});
+
+describe("pedir el ticket del mostrador", () => {
+  // El «Ticket Shalom» es OTRO documento que el rótulo: el rótulo es apaisado y
+  // se pega en la caja, el ticket es el recibo de tira del mostrador. Estuvo
+  // meses apuntado bajo `/v1/tracking/{ose}/voucher` —404 siempre— cuando cuelga
+  // de `/v1/orders`, hermana del rótulo.
+  it("usa el cliente de voucher, no el de rótulo", async () => {
+    const { admin, uploads } = fakeAdmin();
+    const client = {
+      voucher: vi.fn(async () => PDF.buffer as ArrayBuffer),
+      label: vi.fn(async () => PDF.buffer as ArrayBuffer),
+    };
+    const out = await shalomVoucherPdf(admin, "st", STORE, 7, client);
+    expect(client.voucher).toHaveBeenCalledWith(7);
+    expect(client.label).not.toHaveBeenCalled();
+    expect(uploads).toEqual([{ path: "voucher/7.pdf", bytes: out }]);
+  });
+
+  it("se cachea aparte del rótulo: un ticket guardado no sirve de rótulo", async () => {
+    // `stored` responde a CUALQUIER ruta, así que si el ticket compartiera clave
+    // con el rótulo esta prueba no distinguiría nada. Lo que se comprueba es la
+    // ruta de subida, que es donde está la separación.
+    const { admin, uploads } = fakeAdmin();
+    const client = {
+      voucher: vi.fn(async () => PDF.buffer as ArrayBuffer),
+      label: vi.fn(async () => PDF.buffer as ArrayBuffer),
+    };
+    await shalomLabelPdf(admin, "st", STORE, 7, client);
+    await shalomVoucherPdf(admin, "st", STORE, 7, client);
+    expect(uploads.map((u) => u.path)).toEqual(["7.pdf", "voucher/7.pdf"]);
+  });
+
+  it("con caché NO llama a Shalom, igual que el rótulo", async () => {
+    const { admin } = fakeAdmin({ stored: PDF });
+    const client = { voucher: vi.fn(async () => PDF.buffer as ArrayBuffer) };
+    expect(await shalomVoucherPdf(admin, "st", STORE, 7, client)).toEqual(PDF);
+    expect(client.voucher).not.toHaveBeenCalled();
+  });
+
+  it("si Shalom falla, el error sube", async () => {
+    const { admin } = fakeAdmin();
+    const client = {
+      voucher: vi.fn(async () => {
+        throw new Error("No hubo respuesta de Shalom");
+      }),
+    };
+    await expect(shalomVoucherPdf(admin, "st", STORE, 7, client)).rejects.toThrow(/Shalom/);
   });
 });
 

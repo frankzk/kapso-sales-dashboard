@@ -99,7 +99,26 @@ romper. El campo `detailed` dice qué esperar.
 | `POST /v1/tracking/batch` | **Hasta 50 guías por llamada.** Lo que usa el cron |
 | `GET /v1/tracking/{ose_id}/events` | Solo el `status`, si ya tienes el `ose_id` |
 | `GET /v1/tracking/{ose_id}/grt?cap_id=…` | Enlace a la Guía de Remisión |
-| `GET /v1/tracking/{ose_id}/voucher` | **Fuera de servicio**: responde 404 siempre |
+
+### Los dos papeles de una guía
+
+Cuelgan los dos de `/v1/orders/{ose_id}/`, y son **documentos distintos**:
+
+| Endpoint | Qué es | Forma |
+|---|---|---|
+| `GET /v1/orders/{ose_id}/label` | Rótulo, el que se pega en la caja | Apaisado, ~1,85:1 |
+| `GET /v1/orders/{ose_id}/voucher` | **«Ticket Shalom»**, la constancia del mostrador | Tira vertical |
+
+> **El voucher NO está bajo `/v1/tracking`.** Aquí estuvo apuntado meses como
+> `GET /v1/tracking/{ose_id}/voucher`, «fuera de servicio, 404 siempre». El 404
+> era real, pero no porque el documento no existiera: la ruta estaba mal. Cuelga
+> de `/v1/orders`, hermana del rótulo. Lo confirmó el proveedor del wrapper el
+> 08/09/2026, después de que se pidiera el ticket bajando cada envío a mano
+> desde pro.shalom.pe con el botón «Descargar Ticket Shalom».
+>
+> La lección no es el typo: es que un 404 se leyó como «esto no se puede» y
+> nadie volvió a preguntar. Es el mismo error que tuvo 93 guías sin rastrear
+> por el `422` de `numero` y `codigo`.
 
 ### Sobre los identificadores
 
@@ -126,6 +145,19 @@ romper. El campo `detailed` dice qué esperar.
   rastreo**, así que una guía vinculada a mano sin código no se puede seguir.
 - **`ose_id`** — id interno. No se puede averiguar; lo devuelve `POST /v1/orders`
   y lo guardamos en `shalom_ose_id`. Es el handle para eventos, comprobante y GRT.
+
+> **SIN VERIFICAR: ¿el rastreo devuelve el `ose_id`?** «No se puede averiguar»
+> es lo que sabemos, no lo que hemos probado. El modo detallado añade un bloque
+> `order` que —según su documentación— trae «los identificadores», sin decir
+> cuáles. Si el `ose_id` está ahí, se resuelve `numero + codigo → ose_id`, y con
+> eso una guía creada **en mostrador** pasa a tener rótulo descargable, igual que
+> las emitidas antes de que existiera la caché. Si no está, no hay nada que
+> construir.
+>
+> Lo comprueba `scripts/shalom-probe.mjs` con `SHALOM_GUIA` y `SHALOM_CODIGO`
+> (solo lectura). Busca el `ose_id` a cualquier profundidad, dice en qué ruta
+> apareció y, si aparece, pide los tres documentos para ver cuáles responden.
+> **Hasta que alguien lo corra, esto es una hipótesis.**
 
 ### El batch, en detalle
 
@@ -222,6 +254,31 @@ curl.exe -s -X POST -H "X-API-Key: $env:SHALOM_API_KEY" `
 ```
 
 ---
+
+## La clave de recojo
+
+Cuatro dígitos, y Shalom rechaza tres formas:
+
+| Forma | Ejemplo | Cómo se supo |
+|---|---|---|
+| Los 4 dígitos iguales | `1111` | Documentado |
+| Escalera ascendente | `1234` | Documentado |
+| **Parece un año** | `1965` | **Un 400 en producción** |
+
+La tercera **no estaba en su documentación**. Salió el 08/09/2026: el generador
+sacó `1965` al azar y la creación murió con
+`400 pickup_code inválido: "1965" parece un año del calendario y Shalom lo
+rechaza por seguridad`.
+
+> **El rango 1900–2099 es una inferencia nuestra**, no un dato de Shalom. Lo
+> único comprobado es que `1965` se rechaza. Es la lectura razonable de «parece
+> un año» y cuesta 200 de los 10.000 códigos —un 2 %—, así que pasarse de ancho
+> no quita nada. Si algún día rechazan uno fuera del rango, se amplía.
+
+La regla dice qué acepta Shalom **al crear**. Por eso el registro manual de una
+guía hecha en mostrador usa `pickupCodeFormatError`, que no la aplica: una clave
+que Shalom ya emitió no se puede rechazar por una suposición nuestra sobre su
+regla — sería impedir que se registre un envío real.
 
 ## Vía aérea
 

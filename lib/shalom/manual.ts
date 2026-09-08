@@ -1,4 +1,4 @@
-import { pickupCodeError } from "@/lib/shalom/draft";
+import { pickupCodeFormatError } from "@/lib/shalom/draft";
 
 /**
  * Datos que el operador copia de pro.shalom.pe cuando la integración de
@@ -68,7 +68,8 @@ export function normalizeManualShalomGuide(
 
   const pickupCode = (input.pickupCode ?? "").trim() || null;
   if (pickupCode) {
-    const keyError = pickupCodeError(pickupCode);
+    // Solo el formato: esta clave ya existe en Shalom. Ver pickupCodeFormatError.
+    const keyError = pickupCodeFormatError(pickupCode);
     if (keyError) return { ok: false, error: `Clave de recojo: ${keyError}` };
   }
 
