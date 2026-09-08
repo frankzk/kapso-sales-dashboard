@@ -2,8 +2,13 @@
 
 import { useState, useTransition } from "react";
 import { Card } from "@/components/ui";
-import { dryRunTandersPayments } from "@/app/dashboard/pedidos/tanders-actions";
+import {
+  dryRunTandersPayments,
+  dryRunTandersStatus,
+} from "@/app/dashboard/pedidos/tanders-actions";
 import type { SweepReport } from "@/lib/tanders/payment-sweep";
+import type { TandersStatusReport } from "@/lib/tanders/status-sweep";
+import type { SweepFailure } from "@/lib/tanders/sweep-failures";
 
 /**
  * Revisión en seco de los cobros Tanders.
@@ -24,6 +29,9 @@ export function TandersCobros() {
   const [report, setReport] = useState<SweepReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const [status, setStatus] = useState<TandersStatusReport | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [statusPending, startStatus] = useTransition();
 
   function run() {
     start(async () => {
@@ -38,8 +46,78 @@ export function TandersCobros() {
     });
   }
 
+  function runStatus() {
+    startStatus(async () => {
+      const res = await dryRunTandersStatus();
+      if ("error" in res) {
+        setStatusError(res.error);
+        setStatus(null);
+        return;
+      }
+      setStatusError(null);
+      setStatus(res.report);
+    });
+  }
+
   return (
     <div className="space-y-4">
+      <section className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+        <div>
+          <h2 className="text-base font-semibold text-slate-900">Estados Tanders · lectura en seco</h2>
+          <p className="mt-1 max-w-3xl text-sm text-slate-500">
+            Pregunta a Tanders por cada guía viva y dice qué haría, sin escribir nada. Si su API
+            falla, aquí sale <strong className="text-slate-700">por qué</strong>: el cron que corre
+            cada hora no se lo cuenta a nadie.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={runStatus}
+            disabled={statusPending}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 disabled:opacity-50"
+          >
+            {statusPending ? "Preguntando a Tanders…" : "Leer estados sin tocar nada"}
+          </button>
+        </div>
+        {statusError && (
+          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{statusError}</p>
+        )}
+        {status && (
+          <>
+            <Card>
+              <dl className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+                <Stat label="Leídas" value={status.scanned} />
+                <Stat label="Cambiarían" value={status.aplicados} tone="text-emerald-700" />
+                <Stat label="Sin novedad" value={status.sinCambio} />
+                <Stat label="Omitidas" value={status.omitidas} tone="text-amber-700" />
+                <Stat label="Errores" value={status.errores} tone="text-red-700" />
+              </dl>
+            </Card>
+            <Failures fallos={status.fallos} />
+            {Object.keys(status.desconocidos).length > 0 && (
+              <p className="text-sm text-slate-600">
+                Estados que Tanders devolvió y todavía no traducimos:{" "}
+                {Object.entries(status.desconocidos)
+                  .map(([code, n]) => `${code} (${n})`)
+                  .join(", ")}
+                .
+              </p>
+            )}
+            {status.cambios.length > 0 && (
+              <ul className="space-y-1 text-sm text-slate-700">
+                {status.cambios.slice(0, 20).map((c) => (
+                  <li key={c.guia}>
+                    <span className="font-medium">{c.pedido ?? "—"}</span>{" "}
+                    <span className="font-mono text-xs text-slate-500">{c.guia}</span>: {c.de} →{" "}
+                    {c.a} <span className="text-xs text-slate-500">(Tanders: {c.estadoTanders})</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </section>
+
       <div>
         <h1 className="text-lg font-semibold text-slate-900">Cobros Tanders · revisión en seco</h1>
         <p className="mt-1 max-w-3xl text-sm text-slate-500">
@@ -79,6 +157,7 @@ export function TandersCobros() {
               <Stat label="Errores" value={report.errores} />
             </dl>
           </Card>
+          <Failures fallos={report.fallos} />
 
           {report.detalle.length === 0 ? (
             <p className="text-sm text-slate-500">
@@ -139,6 +218,27 @@ export function TandersCobros() {
 
 function money(v: number | null): string {
   return v == null ? "—" : `S/ ${v.toFixed(2)}`;
+}
+
+/**
+ * Por qué falló lo que falló. Es la diferencia entre «errores: 200» y saber si
+ * es la contraseña (401), el endpoint (404) o Tanders caído (5xx).
+ */
+function Failures({ fallos }: { fallos: SweepFailure[] }) {
+  if (!fallos.length) return null;
+  return (
+    <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+      <p className="font-medium">Motivos de los fallos</p>
+      <ul className="mt-1 space-y-0.5">
+        {fallos.map((f) => (
+          <li key={f.mensaje} className="flex gap-2">
+            <span className="shrink-0 tabular-nums">×{f.n}</span>
+            <span className="break-all font-mono text-xs">{f.mensaje}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function Stat({ label, value, tone }: { label: string; value: number; tone?: string }) {

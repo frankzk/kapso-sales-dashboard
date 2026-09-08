@@ -21,6 +21,7 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
 import { TandersClient } from "@/lib/tanders/client";
 import { mapTandersStatus, reconcileTandersCustodyState } from "@/lib/tanders/status";
+import { recordSweepFailure, type SweepFailure } from "@/lib/tanders/sweep-failures";
 
 /** Tope por pasada. Cada guía es una llamada a su API, no al modelo: barato. */
 export const MAX_PER_RUN = 200;
@@ -49,6 +50,11 @@ export interface TandersStatusReport {
   errores: number;
   /** Guías sin credenciales de tienda o sin id interno: no se pueden consultar. */
   omitidas: number;
+  /**
+   * POR QUÉ falló lo que falló, agrupado. «errores: 200» no dice si es la
+   * contraseña, el endpoint o la red; esto sí. Ver sweep-failures.ts.
+   */
+  fallos: SweepFailure[];
   cambios: { guia: string; pedido: string | null; de: string; a: string; estadoTanders: string }[];
 }
 
@@ -82,6 +88,7 @@ export async function sweepTandersStatus(
     desconocidos: {},
     errores: 0,
     omitidas: 0,
+    fallos: [],
     cambios: [],
   };
 
@@ -107,6 +114,14 @@ export async function sweepTandersStatus(
       const client = clients.get(row.store_id);
       if (!client || !row.tanders_order_id) {
         report.omitidas += 1;
+        recordSweepFailure(
+          report.fallos,
+          new Error(
+            !client
+              ? "La tienda no tiene credenciales de Tanders configuradas."
+              : "La guía no tiene id interno de Tanders (tanders_order_id).",
+          ),
+        );
         continue;
       }
 
@@ -173,9 +188,12 @@ export async function sweepTandersStatus(
       // El Master se recalcula desde las guías; sin esto el cambio no llega a
       // /dashboard/pedidos ni saca la caja de la cola de armado.
       if (changed && row.order_id) await recomputeOrderMasterSafe(admin, [row.order_id]);
-    } catch {
-      // Una guía que falla no puede tumbar el barrido de las demás.
+    } catch (err) {
+      // Una guía que falla no puede tumbar el barrido de las demás — pero el
+      // motivo se guarda: tres semanas de «errores: 200» sin más es lo que dejó
+      // 330 guías congeladas sin que nadie supiera por qué.
       report.errores += 1;
+      recordSweepFailure(report.fallos, err);
     }
   }
 

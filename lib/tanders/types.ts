@@ -79,12 +79,21 @@ export interface TandersTokens {
   expiresAt: number | null;
 }
 
-/** Error de la API con el status HTTP, para poder distinguir 401 de 402 de 400. */
+/**
+ * Error de la API con el status HTTP, para poder distinguir 401 de 402 de 400.
+ *
+ * `method` y `path` viajan aparte del mensaje a propósito: el mensaje se le
+ * enseña tal cual a la operadora («Tanders rechazó el pedido: …») y ahí la ruta
+ * es ruido; pero en el reporte de un barrido la ruta es justo lo que dice si
+ * el endpoint existe o no. Ver lib/tanders/sweep-failures.ts.
+ */
 export class TandersApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly body?: unknown,
+    readonly method?: string,
+    readonly path?: string,
   ) {
     super(message);
     this.name = "TandersApiError";

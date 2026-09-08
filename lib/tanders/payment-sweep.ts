@@ -21,6 +21,7 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { extractPaymentEvidence, TandersClient } from "@/lib/tanders/client";
 import { checkTandersPayment, REASON_LABEL } from "@/lib/tanders/payment-check";
 import { readTandersPayment } from "@/lib/tanders/payment-vision";
+import { recordSweepFailure, type SweepFailure } from "@/lib/tanders/sweep-failures";
 import { normalizeMediaType, type StoreVisionCreds } from "@/lib/vision";
 
 const DAY_MS = 86_400_000;
@@ -77,6 +78,8 @@ export interface SweepReport {
   rechazado: number;
   pendiente: number;
   errores: number;
+  /** POR QUÉ falló lo que falló, agrupado. Ver sweep-failures.ts. */
+  fallos: SweepFailure[];
   rejected: string[];
   detalle: SweepDetail[];
 }
@@ -116,6 +119,7 @@ export async function sweepTandersPayments(
     rechazado: 0,
     pendiente: 0,
     errores: 0,
+    fallos: [],
     rejected: [],
     detalle: [],
   };
@@ -158,6 +162,14 @@ export async function sweepTandersPayments(
       const client = clients.get(row.store_id);
       if (!client || !row.tanders_order_id) {
         report.errores += 1;
+        recordSweepFailure(
+          report.fallos,
+          new Error(
+            !client
+              ? "La tienda no tiene credenciales de Tanders configuradas."
+              : "La guía no tiene id interno de Tanders (tanders_order_id).",
+          ),
+        );
         continue;
       }
 
@@ -275,9 +287,11 @@ export async function sweepTandersPayments(
       }
       await admin.from("shipments").update(patch).eq("id", row.id);
       if (row.order_id) await recomputeOrderMasterSafe(admin, [row.order_id]);
-    } catch {
-      // Una guía que falla no puede tumbar el barrido de las demás.
+    } catch (err) {
+      // Una guía que falla no puede tumbar el barrido de las demás — pero el
+      // motivo se guarda. Ver sweep-failures.ts.
       report.errores += 1;
+      recordSweepFailure(report.fallos, err);
     }
   }
 
