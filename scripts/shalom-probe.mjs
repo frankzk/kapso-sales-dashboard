@@ -331,8 +331,14 @@ if (GUIA || OSE) {
     record(await call(`/v1/orders/${oseId}/label`, { session, auth: true, binary: true }), {
       keepBody: true,
     });
-    // Documentado como fuera de servicio (404 siempre). Se prueba igual: si un
-    // día vuelve, es el papel que el mostrador entrega al admitir el bulto.
+    // El «Ticket Shalom», el recibo de tira del mostrador. Cuelga de
+    // `/v1/orders`, hermana del rótulo — NO de `/v1/tracking`, que es donde lo
+    // teníamos apuntado y por eso daba 404 siempre.
+    record(await call(`/v1/orders/${oseId}/voucher`, { session, auth: true, binary: true }), {
+      keepBody: true,
+    });
+    // La ruta vieja, a modo de control: si esta da 404 y la de arriba un PDF,
+    // queda demostrado que el problema era nuestro y no de Shalom.
     record(await call(`/v1/tracking/${oseId}/voucher`, { session, auth: true }), { keepBody: true });
     record(await call(`/v1/tracking/${oseId}/events`, { session, auth: true }));
   } else if (oseId) {
