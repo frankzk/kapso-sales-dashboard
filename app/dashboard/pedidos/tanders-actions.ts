@@ -31,6 +31,7 @@ import { writeCourierGuide } from "@/lib/route-output-fill";
 import { isFillableRouteOutput } from "@/lib/shipment-output";
 import { fetchOrderById } from "@/lib/shopify";
 import { sweepTandersPayments, type SweepReport } from "@/lib/tanders/payment-sweep";
+import { sweepTandersStatus, type TandersStatusReport } from "@/lib/tanders/status-sweep";
 import { TandersApiError } from "@/lib/tanders/types";
 import type { OrderMasterRow } from "@/lib/types";
 
@@ -666,5 +667,29 @@ export async function dryRunTandersPayments(): Promise<
     return { report: await sweepTandersPayments(createAdminSupabase(), { dry: true }) };
   } catch (err) {
     return { error: err instanceof Error ? err.message : "No se pudo revisar." };
+  }
+}
+
+/**
+ * Lectura EN SECO de los estados: pregunta a Tanders por cada guía viva y dice
+ * qué haría, sin escribir nada.
+ *
+ * Existe por el mismo motivo que la de cobros, y por uno más: el 08-09-2026 se
+ * descubrió que en tres semanas de cron horario ninguna de las 330 guías había
+ * recibido una sola lectura, y el reporte del cron —que nadie ve— solo decía
+ * «errores». Desde aquí un administrador ve el MOTIVO de cada fallo sin
+ * necesitar el secreto del cron.
+ */
+export async function dryRunTandersStatus(): Promise<
+  { report: TandersStatusReport } | { error: string }
+> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("tanders.review_payment")) {
+    return { error: "Solo un administrador puede leer los estados." };
+  }
+  try {
+    return { report: await sweepTandersStatus(createAdminSupabase(), { dry: true }) };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "No se pudo leer." };
   }
 }

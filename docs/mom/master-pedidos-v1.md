@@ -967,6 +967,18 @@ sin tope de antigüedad. Reglas:
 - El WhatsApp y el cierre de ruta de la noche siguen siendo la fuente para las
   incidencias; la API cubre el estado de la guía, que antes se congelaba en el
   valor del momento de creación y dejaba cajas detenidas en `Por armar`.
+- **Un barrido que falla dice por qué.** El 08-09-2026 se encontró que, tras
+  tres semanas de cron horario, ninguna de las 330 guías Tanders había recibido
+  una sola lectura: sin `last_report_at`, sin `reported_status`, sin
+  comprobación de pago. Los barridos envolvían cada guía en un `try/catch` que
+  sumaba a `errores` y seguía —correcto para que una guía no tumbe a las demás—
+  pero tiraban el motivo. Ahora los dos reportes (`fallos`) conservan los
+  motivos distintos con su cuenta, con método, ruta y status HTTP cuando el
+  fallo es de su API, y la pantalla de Cobros Tanders tiene una lectura en
+  seco de estados que los muestra sin necesitar el secreto del cron. De los
+  endpoints que usa Kapta, `GET /orders/{id}` —el único que leen los barridos—
+  es el único que **no** está confirmado contra su frontend; los tres que sí
+  funcionan van por `/orders/me/…`.
 
 Devoluciones físicas:
 

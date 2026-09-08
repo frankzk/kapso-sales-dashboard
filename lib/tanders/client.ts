@@ -120,7 +120,15 @@ export class TandersClient {
     } catch {
       /* se queda como texto: sirve igual para el mensaje de error */
     }
-    if (!res.ok) throw new TandersApiError(errorMessage(res.status, parsed), res.status, parsed);
+    if (!res.ok) {
+      throw new TandersApiError(
+        errorMessage(res.status, parsed),
+        res.status,
+        parsed,
+        init.method ?? "GET",
+        path,
+      );
+    }
     return parsed as T;
   }
 
