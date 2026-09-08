@@ -2111,7 +2111,7 @@ activan cuando la migración operativa al sistema sea completa.
 
 ## 17. KPI principales
 
-Vistas: ayer, últimos 7 días, mes actual y mes anterior.
+Vistas: hoy, ayer, últimos 7 días, mes actual y mes anterior.
 
 1. Tasa de confirmación Provincia COD.
 2. Tasa de cierre de adelantos de Agencia.
@@ -2126,14 +2126,27 @@ El negocio se mide por pedido; el desempeño del courier se mide por salida.
 
 ### 17.1 Primer tablero diario del owner
 
-El primer tablero operativo de la Fase 4 usa cuatro ventanas fijas en hora de
-Lima: ayer, últimos 7 días, mes actual y mes anterior. Cada porcentaje muestra
-siempre su numerador y denominador; un universo vacío se presenta como `Sin
-datos`, nunca como 0 %.
+El primer tablero operativo de la Fase 4 usa cinco ventanas fijas en hora de
+Lima: hoy, ayer, últimos 7 días, mes actual y mes anterior. Cada porcentaje
+muestra siempre su numerador y denominador; un universo vacío se presenta como
+`Sin datos`, nunca como 0 %.
+
+**Las ventanas se leen según su madurez, no una contra otra.** Todas las tasas
+de confirmación y adelanto son de cohorte: el denominador son los pedidos
+*creados* en la ventana y el numerador es lo que esos mismos pedidos han
+logrado *hasta ahora*. Un pedido creado ayer a las 22:00 lleva pocas horas de
+gestión; uno de hace tres semanas ya cerró su ciclo. Por eso «Ayer» sale por
+debajo de «Mes anterior» aunque la operación no haya cambiado, y «Hoy» arranca
+bajo por la mañana y sube durante el día: **está para ver ese progreso**, no
+para compararlo con un día cerrado. «Últimos 7 días» y «Mes actual» incluyen el
+día de hoy a medias —empiezan seis días atrás y a inicio de mes, y cierran al
+final de hoy—, así que arrastran una fracción pequeña de esa inmadurez
+(auditado el 08-09-2026: 618/778 con hoy dentro frente a 614/759 sin él, un
+punto y medio de diferencia en Provincia).
 
 | Indicador | Cohorte / denominador | Resultado / numerador |
 | --- | --- | --- |
-| Confirmación Provincia COD | Pedidos Shopify creados en la ventana cuya cobertura actual es Provincia COD | Pedido que actualmente conserva evidencia de confirmación mediante evento `confirmed`, generación de rótulo/guía o una salida despachada |
+| Confirmación Provincia COD | Pedidos Shopify creados en la ventana cuya cobertura actual es Provincia COD | Pedido que actualmente conserva evidencia de confirmación: evento `confirmed`, `guide_registered` o `label_generated`, cualquier salida registrada (despachada o no), o macroetapa ya en Preparación, Por despachar, En curso o Por cerrar. Un pedido anulado antes de confirmarse no cuenta |
 | Adelanto de Agencia | Pedidos Shopify creados en la ventana cuya cobertura actual es Agencia | Pagos actualmente validados que acumulan al menos S/ 30 para el pedido |
 | Entrega Aliclik | Salidas Aliclik despachadas dentro de la ventana | Salidas de esa cohorte cuyo resultado actual es Entregado |
 | Entrega Lima total | Pedidos Lima con al menos una salida despachada dentro de la ventana | Pedidos de esa cohorte con al menos una de esas salidas Entregada |
@@ -2407,7 +2420,7 @@ Segundo bloque publicado en el Dashboard consolidado:
   eventos y manifiestos.
 - Las tasas de Confirmación Provincia COD, Adelanto de Agencia, Entrega Aliclik,
   Entrega Lima y Pago completo de Agencia muestran porcentaje, numerador y
-  denominador en las cuatro ventanas de la sección 17.1.
+  denominador en las cinco ventanas de la sección 17.1.
 - Las alertas `Recogido sin pago completo`, `Liquidación vencida`, `Manifiesto
   incompleto` y `Sin movimiento por 60 días` muestran conteos reales y abren la
   cola correspondiente; el resumen no cambia estados ni ejecuta cierres.
