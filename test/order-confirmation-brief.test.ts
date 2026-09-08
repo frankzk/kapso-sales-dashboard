@@ -288,7 +288,7 @@ describe("confirmationRisk — cuánto de lo anulado costó flete", () => {
 });
 
 describe("aliclikRiskGate", () => {
-  it("un adelanto validado habilita la salida Aliclik cuando se exige S/ 30", () => {
+  it("un adelanto validado habilita la salida Aliclik cuando se exige el adelanto mínimo", () => {
     expect(aliclikRiskGate("exigir_adelanto", "adelanto_validado").allowed).toBe(true);
   });
 

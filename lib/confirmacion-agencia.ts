@@ -37,8 +37,9 @@
 // adelanto de S/ 20 validado sobre un pedido de S/ 149. Esa versión lo habría
 // confirmado mientras `payment_state` seguía diciendo `adelanto_cargado` y
 // `agencyPaymentReady` seguía frenándolo, dejando el pedido con un `confirmed`
-// escrito y sin moverse. El mínimo es `SHALOM_MINIMUM_ADVANCE` = S/ 30 y vive en
-// un solo sitio, que es lo que impide que estas dos respuestas se separen.
+// escrito y sin moverse. El mínimo es `ADELANTO_MINIMO` (lib/adelanto-minimo.ts)
+// y vive en un solo sitio, que es lo que impide que estas dos respuestas se
+// separen. Hoy es S/ 20: con eso #KP129361 sí queda confirmado.
 //
 // LO QUE ESTA REGLA NO HACE. No mira la cobertura. #AUR176259 está clasificado
 // `provincia_cod` —Aliclik tiene COD cerca de Puerto Maldonado— y aun así se va

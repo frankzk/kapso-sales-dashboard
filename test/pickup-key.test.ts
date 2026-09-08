@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ADELANTO_MINIMO } from "@/lib/adelanto-minimo";
 import {
   canRevealPickupKey,
   describeBlockers,
@@ -204,10 +205,13 @@ describe("paymentState — indicador del Master", () => {
     ).toBe("pago_completo");
   });
 
-  it("un adelanto validado menor a S/ 30 todavía no habilita la guía", () => {
-    expect(paymentState([payment("adelanto", "validado", ORDER, 20)], 100)).toBe(
-      "adelanto_cargado",
-    );
+  it("un adelanto validado menor al mínimo todavía no habilita la guía", () => {
+    // Se ancla a la constante, no a un número: el mínimo bajó de 30 a 20 el
+    // 08-09-2026 y esta prueba, que usaba «20» como ejemplo de «poco», se habría
+    // puesto a afirmar lo contrario de lo que dice su título.
+    expect(
+      paymentState([payment("adelanto", "validado", ORDER, ADELANTO_MINIMO - 5)], 100),
+    ).toBe("adelanto_cargado");
   });
 });
 

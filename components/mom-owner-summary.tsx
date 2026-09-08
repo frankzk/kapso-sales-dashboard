@@ -1,3 +1,4 @@
+import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import Link from "next/link";
 import { Card, cn } from "@/components/ui";
 import type {
@@ -21,7 +22,7 @@ const KPI_ROWS: Array<{
   {
     key: "agency_advance",
     label: "Adelanto de Agencia",
-    detail: "Pedidos Agencia con S/ 30 validados",
+    detail: `Pedidos Agencia con ${ADELANTO_MINIMO_LABEL} validados`,
     accent: "bg-violet-500",
   },
   {

@@ -777,9 +777,14 @@ Riesgo por teléfono y antecedentes de rechazo/devolución:
 
 | Antecedentes | Regla |
 | --- | --- |
-| 1 | Sugerir adelanto de S/30 |
-| 2 | Exigir adelanto de S/30 |
+| 1 | Sugerir adelanto de S/20 |
+| 2 | Exigir adelanto de S/20 |
 | 3 o más | Exigir pago completo |
+
+El monto del adelanto de la escalera es **el mismo mínimo de agencia**
+(`ADELANTO_MINIMO`, hoy S/20): la compuerta de Aliclik lee `payment_state`,
+que se deriva de esa única constante. No son dos números que puedan moverse
+por separado.
 
 Una excepción COD es posible con justificación corta, actor y fecha. Las
 promesas de pago incumplidas aumentan el riesgo futuro.
@@ -1793,7 +1798,13 @@ envío se quedaría En ruta para siempre por más que el mensajero reportara.
 
 ### Shalom
 
-- Adelanto mínimo: S/30 validado antes de generar rótulo.
+- Adelanto mínimo: **S/20** validado antes de generar rótulo. Era S/30 hasta el
+  08-09-2026; se bajó a lo que la operación ya hacía —de 78 adelantos de S/20
+  cargados, 76 se validaron— porque con el mínimo en 30 esos pedidos quedaban
+  con «Adelanto cargado» sobre plata ya aceptada y, en Agencia, no salían de
+  confirmación (#KP133181). El número vive en UN sitio, `lib/adelanto-minimo.ts`,
+  y de él se derivan las comprobaciones y los textos: si vuelve a moverse, se
+  mueve ahí. La clave de recojo NO depende de él —exige el total cubierto—.
 - El formulario abre siempre con `Caja Paquete XXS`; la operadora puede cambiar
   el tipo de paquete únicamente cuando el envío real lo requiera.
 - La API de creación no exige una fecha de despacho y Kapta no debe pedirla. La
@@ -1833,7 +1844,7 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 ### Olva
 
 - Regla normal: pago completo.
-- Excepción operativa permitida: recojo en agencia con adelanto de S/30.
+- Excepción operativa permitida: recojo en agencia con adelanto de S/20.
 - Cualquier asesor puede seleccionarla.
 - En el drawer se recomienda primero Shalom.
 - Plazo: 6 días desde disponibilidad en agencia destino.
@@ -1866,7 +1877,7 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   `Adelanto` y `Pago total` son mutuamente excluyentes.
 - El drawer muestra tres importes distintos: total cargado, total validado y
   saldo por cargar. El check **Adelanto mínimo validado** aparece únicamente
-  cuando existen al menos S/30 validados, no solo por haber subido una imagen.
+  cuando existen al menos S/20 validados, no solo por haber subido una imagen.
 - **Una lectura fallida no es una respuesta.** Si Kapta no consigue leer los
   pagos del pedido, el drawer dice que no pudo leerlos y ofrece reintentar.
   Nunca imprime «Todavía no se ha cargado ningún comprobante» ni «S/ 0.00
@@ -2133,7 +2144,7 @@ datos`, nunca como 0 %.
 | Indicador | Cohorte / denominador | Resultado / numerador |
 | --- | --- | --- |
 | Confirmación Provincia COD | Pedidos Shopify creados en la ventana cuya cobertura actual es Provincia COD | Pedido que actualmente conserva evidencia de confirmación mediante evento `confirmed`, generación de rótulo/guía o una salida despachada |
-| Adelanto de Agencia | Pedidos Shopify creados en la ventana cuya cobertura actual es Agencia | Pagos actualmente validados que acumulan al menos S/ 30 para el pedido |
+| Adelanto de Agencia | Pedidos Shopify creados en la ventana cuya cobertura actual es Agencia | Pagos actualmente validados que acumulan al menos S/ 20 para el pedido |
 | Entrega Aliclik | Salidas Aliclik despachadas dentro de la ventana | Salidas de esa cohorte cuyo resultado actual es Entregado |
 | Entrega Lima total | Pedidos Lima con al menos una salida despachada dentro de la ventana | Pedidos de esa cohorte con al menos una de esas salidas Entregada |
 | Pago completo de Agencia | Pedidos con salida Shalom u Olva despachada dentro de la ventana | Pedidos de esa cohorte cuyos pagos validados dentro de la misma ventana cubren el total Shopify |
@@ -2353,7 +2364,7 @@ bloquea es la contradicción explícita.
 - Reproprovincia abre la guía concreta en la cola existente; una salida Swayp
   directa valida nuevamente cobertura, stock, pedido y salidas activas.
 - Shalom continúa por su API directa y Olva se registra como salida de agencia;
-  ambas muestran el requisito de adelanto y el servidor exige S/ 30 validados.
+  ambas muestran el requisito de adelanto y el servidor exige S/ 20 validados.
 - Axel, Urpi, motorizado propio y Olva generan una salida interna, un consecutivo
   `Sxx`, un QR opaco y un rótulo imprimible de Kapta.
 - Una salida manual nace como `rotulo_generado`, bajo custodia de la empresa. No
@@ -2754,7 +2765,7 @@ recoge; antes no lo recogía nadie.
 - Cañete se muestra como Agencia y nunca habilita una guía Tanders.
 - Axel y motorizado propio pueden repetirse sin superar cinco salidas.
 - Shalom y Olva avisan que el adelanto debe validarse antes de crear la guía.
-- Olva no se crea con menos de S/ 30 validados aunque el navegador sea alterado.
+- Olva no se crea con menos de S/ 20 validados aunque el navegador sea alterado.
 - Dos salidas del mismo pedido reciben QR y código `Sxx` diferentes.
 - Con una salida activa, la salida adicional exige una justificación auditada.
 - **Una salida «por definir» no cuenta como salida que estorba.** Crear la guía

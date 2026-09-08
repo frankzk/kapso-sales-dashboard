@@ -2,6 +2,7 @@
 // es la capa donde se decide qué se despacha, a qué agencia y con qué clave, y
 // equivocarse acá cuesta un paquete perdido o una clave que no abre nada.
 
+import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import type {
   DeclaracionJurada,
   ShalomDocumentType,
@@ -414,7 +415,7 @@ export function shalomSoftBlockers(paymentState: string | null): string[] {
     return [];
   }
   return [
-    "El adelanto mínimo todavía no está validado. El envío por Shalom requiere S/ 30 validados antes de generar la guía, o una excepción con motivo.",
+    `El adelanto mínimo todavía no está validado. El envío por Shalom requiere ${ADELANTO_MINIMO_LABEL} validados antes de generar la guía, o una excepción con motivo.`,
   ];
 }
 

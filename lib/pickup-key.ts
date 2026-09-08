@@ -8,9 +8,13 @@
 
 import type { GeneralStatus } from "@/lib/order-status";
 import { isWebPrepaid, type OrderPaymentFacts } from "@/lib/order-paid";
+import { ADELANTO_MINIMO } from "@/lib/adelanto-minimo";
 
 export type PaymentKind = "adelanto" | "diferencia" | "total";
-export const SHALOM_MINIMUM_ADVANCE = 30;
+// El número vive en `lib/adelanto-minimo.ts` (módulo hoja, sin imports). Esto
+// es un ENLACE a esa constante, no una copia del número: quien ya lo importaba
+// de aquí sigue funcionando y sigue habiendo una sola definición.
+export const SHALOM_MINIMUM_ADVANCE = ADELANTO_MINIMO;
 
 function isLive(payment: PaymentSnapshot): boolean {
   return payment.validation_status !== "rechazado";

@@ -1,4 +1,5 @@
 import { CONFIRMATION_SIGNAL_KINDS } from "@/lib/order-confirmation";
+import { ADELANTO_MINIMO } from "@/lib/adelanto-minimo";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -193,7 +194,7 @@ function summedPaymentsByOrder(
 }
 
 function hasAdvance(order: MomOwnerOrderFact, currentPayments: Map<string, number>): boolean {
-  if ((currentPayments.get(order.orderId) ?? 0) >= 30) return true;
+  if ((currentPayments.get(order.orderId) ?? 0) >= ADELANTO_MINIMO) return true;
   return [
     "adelanto_validado",
     "diferencia_pendiente",

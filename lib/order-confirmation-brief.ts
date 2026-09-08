@@ -10,6 +10,7 @@
 // Todo lo de aquí es puro: recibe filas ya leídas y devuelve el resumen. Quien
 // las lee es `getOrderConfirmationBrief`.
 
+import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 /** En qué terminó un pedido anterior del mismo cliente. */
 export type PriorOutcome =
   | "entregado"
@@ -187,8 +188,8 @@ export type PaymentRequirement = "ninguno" | "sugerir_adelanto" | "exigir_adelan
 
 export const PAYMENT_REQUIREMENT_LABEL: Record<PaymentRequirement, string> = {
   ninguno: "Sin adelanto requerido",
-  sugerir_adelanto: "Sugerir adelanto de S/ 30",
-  exigir_adelanto: "Exigir adelanto de S/ 30",
+  sugerir_adelanto: `Sugerir adelanto de ${ADELANTO_MINIMO_LABEL}`,
+  exigir_adelanto: `Exigir adelanto de ${ADELANTO_MINIMO_LABEL}`,
   pago_completo: "Exigir pago completo",
 };
 
@@ -204,8 +205,12 @@ export interface ConfirmationRisk {
  * La tabla de riesgo del MOM §8, tal cual está escrita:
  *
  * | Antecedentes | Regla                    |
- * | 1            | Sugerir adelanto de S/30 |
- * | 2            | Exigir adelanto de S/30  |
+ * | 1            | Sugerir adelanto mínimo  |
+ * | 2            | Exigir adelanto mínimo   |
+ *
+ * El monto del adelanto es `ADELANTO_MINIMO` (lib/adelanto-minimo.ts): la
+ * escalera y el mínimo de agencia son EL MISMO número, porque la compuerta lee
+ * `payment_state`, que se deriva de esa única constante.
  * | 3 o más      | Exigir pago completo     |
  *
  * «Antecedentes» son los de RECHAZO o DEVOLUCIÓN —anulados y devueltos—, que es
@@ -303,7 +308,7 @@ export function aliclikRiskGate(
     message:
       requirement === "pago_completo"
         ? "Aliclik exige el pago completo validado por los antecedentes del cliente. Para exceptuarlo, escribe una justificación corta."
-        : "Aliclik exige un adelanto validado de S/ 30 por los antecedentes del cliente. Para exceptuarlo, escribe una justificación corta.",
+        : `Aliclik exige un adelanto validado de ${ADELANTO_MINIMO_LABEL} por los antecedentes del cliente. Para exceptuarlo, escribe una justificación corta.`,
   };
 }
 
