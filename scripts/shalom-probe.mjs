@@ -17,6 +17,16 @@
 //   SHALOM_PRO_PASSWORD='…' \
 //   node scripts/shalom-probe.mjs
 //
+//   # rastreando una guía QUE YA EXISTE, para ver si de ella se puede sacar el
+//   # `ose_id` — el handle de todos los documentos. Es la pregunta que decide si
+//   # una guía creada en mostrador puede tener rótulo descargable:
+//   SHALOM_API_KEY='sk_…' SHALOM_PRO_EMAIL='…' SHALOM_PRO_PASSWORD='…' \
+//   SHALOM_GUIA=94869159 SHALOM_CODIGO=3WTH \
+//   node scripts/shalom-probe.mjs
+//
+//   (si ya conoces el ose_id, SHALOM_OSE=584210 se salta la resolución y va
+//    directo a probar qué documentos responden)
+//
 // Uso — CREAR UNA GUÍA DE VERDAD (última prueba, antes de dar por buena la
 // integración). Requiere el flag explícito y todos los datos del envío:
 //
@@ -45,6 +55,10 @@ const CREATE = process.argv.includes("--create");
 /** Qué buscar en el directorio de agencias. Es como se consigue el id de la
  *  agencia de ORIGEN, que después va en Ajustes de la tienda. */
 const AGENCY_Q = process.env.SHALOM_AGENCY_Q?.trim() || "arequipa";
+/** Guía a rastrear. `numero` y `codigo` VAN JUNTOS; `ose_id` va solo. */
+const GUIA = process.env.SHALOM_GUIA?.trim() || "";
+const CODIGO = process.env.SHALOM_CODIGO?.trim() || "";
+const OSE = process.env.SHALOM_OSE?.trim() || "";
 
 if (!API_KEY) {
   console.error("Falta SHALOM_API_KEY. Uso:\n  SHALOM_API_KEY='sk_…' node scripts/shalom-probe.mjs");
@@ -57,6 +71,30 @@ const FAST_MS = 45_000;
 
 const SECRET_KEY = /token|secret|password|authorization|apikey|api_key|pickup_code/i;
 const PERSONAL_KEY = /name|phone|email|address|direccion|telefono|nombre|document/i;
+
+/**
+ * Busca un `ose_id` en cualquier parte de la respuesta. Devuelve `{ id, at }`
+ * —el valor y la ruta donde apareció— o `null`.
+ *
+ * A ciegas a propósito: si supiéramos dónde viene no haría falta la sonda. Se
+ * acepta cualquier clave que sea `ose_id` u `ose`, a cualquier profundidad, y se
+ * exige que el valor parezca un id (entero positivo) para no cazar un `null` ni
+ * una cadena vacía y dar un falso positivo. La ruta importa tanto como el valor:
+ * es lo que hay que codificar después en el cliente.
+ */
+function findOseId(value, depth = 0, path = "") {
+  if (depth > 8 || !value || typeof value !== "object") return null;
+  for (const [k, v] of Object.entries(value)) {
+    const here = path ? `${path}.${k}` : k;
+    if (/^ose(_id)?$/i.test(k)) {
+      const n = Number(v);
+      if (Number.isInteger(n) && n > 0) return { id: n, at: here };
+    }
+    const deeper = findOseId(v, depth + 1, here);
+    if (deeper) return deeper;
+  }
+  return null;
+}
 
 function redact(value, depth = 0) {
   if (depth > 6) return "[…]";
@@ -76,8 +114,8 @@ function redact(value, depth = 0) {
   return value;
 }
 
-async function call(path, { method = "GET", body, session, timeoutMs = FAST_MS, auth = false } = {}) {
-  const headers = { accept: "application/json", "X-API-Key": API_KEY };
+async function call(path, { method = "GET", body, session, timeoutMs = FAST_MS, auth = false, binary = false } = {}) {
+  const headers = { accept: binary ? "application/pdf" : "application/json", "X-API-Key": API_KEY };
   if (auth) {
     if (session) headers["X-Shalom-Session"] = session;
     else if (EMAIL && PASSWORD) {
@@ -99,14 +137,7 @@ async function call(path, { method = "GET", body, session, timeoutMs = FAST_MS, 
   } catch (err) {
     return { path, method, error: String(err), ms: Date.now() - started };
   }
-  const text = await res.text();
-  let parsed;
-  try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch {
-    parsed = text.slice(0, 400);
-  }
-  return {
+  const common = {
     path,
     method,
     status: res.status,
@@ -115,8 +146,31 @@ async function call(path, { method = "GET", body, session, timeoutMs = FAST_MS, 
       limit: res.headers.get("x-ratelimit-limit"),
       remaining: res.headers.get("x-ratelimit-remaining"),
     },
-    body: parsed,
   };
+  // Un PDF no se lee como texto: se mira el tamaño y la firma. Volcar los bytes
+  // en el JSON solo mete basura binaria en un informe que hay que poder leer.
+  if (binary) {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const head = new TextDecoder().decode(bytes.slice(0, 5));
+    return {
+      ...common,
+      body: {
+        contentType: res.headers.get("content-type"),
+        bytes: bytes.byteLength,
+        looksLikePdf: head === "%PDF-",
+        // Si NO es un PDF suele ser un JSON de error, y ese sí interesa entero.
+        head: head === "%PDF-" ? "%PDF-" : new TextDecoder().decode(bytes.slice(0, 300)),
+      },
+    };
+  }
+  const text = await res.text();
+  let parsed;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = text.slice(0, 400);
+  }
+  return { ...common, body: parsed };
 }
 
 const report = { base: BASE, probedAt: new Date().toISOString(), steps: [] };
@@ -212,7 +266,83 @@ if (EMAIL && PASSWORD) {
   console.log("\n(sin SHALOM_PRO_EMAIL / SHALOM_PRO_PASSWORD: solo se probaron las rutas públicas)");
 }
 
-// ── 3. Crear una guía REAL ───────────────────────────────────────────────────
+// ── 3. Rastrear una guía existente y ver si se puede llegar a sus papeles ────
+//
+// La pregunta que contesta esta sección: de una guía que YA existe —creada en
+// mostrador, sin pasar por nuestra API— ¿se puede sacar el `ose_id`?
+//
+// Importa porque `ose_id` es el handle de TODOS los documentos (rótulo,
+// comprobante, GRT) y hoy solo lo devuelve `POST /v1/orders` al crear. Si no se
+// puede averiguar, una guía de mostrador no tiene rótulo descargable nunca — ni
+// ella ni las 352 emitidas antes de que existiera la caché.
+//
+// La documentación dice que el modo detallado añade un bloque `order` con «los
+// identificadores», sin decir cuáles. Esto lo comprueba en vez de suponerlo.
+if (GUIA || OSE) {
+  console.log("\n── Rastreo de una guía existente ──");
+
+  // 3a. Modo estado: solo API key. `numero` y `codigo` VAN JUNTOS; `ose_id` va
+  //     solo. Mandar uno de los dos primeros suelto da un 422 que parece un
+  //     «no existe» y no lo es.
+  const qs = OSE
+    ? `ose_id=${encodeURIComponent(OSE)}`
+    : `numero=${encodeURIComponent(GUIA)}&codigo=${encodeURIComponent(CODIGO)}`;
+  if (!OSE && !CODIGO) {
+    console.error("  Falta SHALOM_CODIGO. `numero` solo devuelve 422: los dos van juntos.");
+  }
+  const estado = await call(`/v1/tracking?${qs}`);
+  record(estado, { keepBody: true });
+
+  // 3b. Modo detallado: el mismo endpoint con la sesión. Es el único que puede
+  //     traer el `order`.
+  let detallado = null;
+  if (session) {
+    detallado = await call(`/v1/tracking?${qs}`, { session, auth: true, timeoutMs: SLOW_MS });
+    record(detallado, { keepBody: false });
+  } else {
+    console.log("  (sin sesión no se puede pedir el modo detallado, que es donde vendría `order`)");
+  }
+
+  // 3c. El veredicto. Se busca el ose_id en cualquier profundidad, porque la
+  //     forma exacta de la respuesta es justamente lo que no sabemos.
+  const found = findOseId(detallado?.body) ?? findOseId(estado.body);
+  const oseId = OSE || found?.id || null;
+
+  console.log(
+    found
+      ? `\n  ✔ El rastreo SÍ trae el ose_id: ${found.id}   (en \`${found.at}\`)`
+      : "\n  ✘ El rastreo NO trajo ningún ose_id. Una guía de mostrador se queda sin papeles.",
+  );
+  if (detallado?.body) {
+    const order = detallado.body?.tracking?.order ?? detallado.body?.order ?? null;
+    console.log(
+      order
+        ? `  Campos de \`order\`: ${Object.keys(order).join(", ")}`
+        : `  No vino bloque \`order\` (detailed=${detallado.body?.tracking?.detailed}). ` +
+          "Si las credenciales fallan, la API degrada a modo estado en vez de romper.",
+    );
+  }
+  report.trackResolvesOseId = found ? { at: found.at } : false;
+
+  // 3d. Con un ose_id en la mano se cierran las dos preguntas de una vez:
+  //     ¿baja el rótulo? y ¿el comprobante sigue dando 404?
+  if (oseId && session) {
+    console.log("\n  Con ese ose_id, qué documentos responden:");
+    record(await call(`/v1/orders/${oseId}/label`, { session, auth: true, binary: true }), {
+      keepBody: true,
+    });
+    // Documentado como fuera de servicio (404 siempre). Se prueba igual: si un
+    // día vuelve, es el papel que el mostrador entrega al admitir el bulto.
+    record(await call(`/v1/tracking/${oseId}/voucher`, { session, auth: true }), { keepBody: true });
+    record(await call(`/v1/tracking/${oseId}/events`, { session, auth: true }));
+  } else if (oseId) {
+    console.log("  (sin sesión no se piden los documentos)");
+  }
+} else {
+  console.log("\n(sin SHALOM_GUIA / SHALOM_OSE no se rastreó ninguna guía)");
+}
+
+// ── 4. Crear una guía REAL ───────────────────────────────────────────────────
 if (CREATE) {
   const required = {
     SHALOM_ORIGIN: process.env.SHALOM_ORIGIN,

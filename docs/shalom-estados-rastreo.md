@@ -127,6 +127,19 @@ romper. El campo `detailed` dice qué esperar.
 - **`ose_id`** — id interno. No se puede averiguar; lo devuelve `POST /v1/orders`
   y lo guardamos en `shalom_ose_id`. Es el handle para eventos, comprobante y GRT.
 
+> **SIN VERIFICAR: ¿el rastreo devuelve el `ose_id`?** «No se puede averiguar»
+> es lo que sabemos, no lo que hemos probado. El modo detallado añade un bloque
+> `order` que —según su documentación— trae «los identificadores», sin decir
+> cuáles. Si el `ose_id` está ahí, se resuelve `numero + codigo → ose_id`, y con
+> eso una guía creada **en mostrador** pasa a tener rótulo descargable, igual que
+> las emitidas antes de que existiera la caché. Si no está, no hay nada que
+> construir.
+>
+> Lo comprueba `scripts/shalom-probe.mjs` con `SHALOM_GUIA` y `SHALOM_CODIGO`
+> (solo lectura). Busca el `ose_id` a cualquier profundidad, dice en qué ruta
+> apareció y, si aparece, pide los tres documentos para ver cuáles responden.
+> **Hasta que alguien lo corra, esto es una hipótesis.**
+
 ### El batch, en detalle
 
 > **`ose_id` va como STRING.** En su documentación el ejemplo es
