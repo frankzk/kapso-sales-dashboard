@@ -99,7 +99,26 @@ romper. El campo `detailed` dice qué esperar.
 | `POST /v1/tracking/batch` | **Hasta 50 guías por llamada.** Lo que usa el cron |
 | `GET /v1/tracking/{ose_id}/events` | Solo el `status`, si ya tienes el `ose_id` |
 | `GET /v1/tracking/{ose_id}/grt?cap_id=…` | Enlace a la Guía de Remisión |
-| `GET /v1/tracking/{ose_id}/voucher` | **Fuera de servicio**: responde 404 siempre |
+
+### Los dos papeles de una guía
+
+Cuelgan los dos de `/v1/orders/{ose_id}/`, y son **documentos distintos**:
+
+| Endpoint | Qué es | Forma |
+|---|---|---|
+| `GET /v1/orders/{ose_id}/label` | Rótulo, el que se pega en la caja | Apaisado, ~1,85:1 |
+| `GET /v1/orders/{ose_id}/voucher` | **«Ticket Shalom»**, la constancia del mostrador | Tira vertical |
+
+> **El voucher NO está bajo `/v1/tracking`.** Aquí estuvo apuntado meses como
+> `GET /v1/tracking/{ose_id}/voucher`, «fuera de servicio, 404 siempre». El 404
+> era real, pero no porque el documento no existiera: la ruta estaba mal. Cuelga
+> de `/v1/orders`, hermana del rótulo. Lo confirmó el proveedor del wrapper el
+> 08/09/2026, después de que se pidiera el ticket bajando cada envío a mano
+> desde pro.shalom.pe con el botón «Descargar Ticket Shalom».
+>
+> La lección no es el typo: es que un 404 se leyó como «esto no se puede» y
+> nadie volvió a preguntar. Es el mismo error que tuvo 93 guías sin rastrear
+> por el `422` de `numero` y `codigo`.
 
 ### Sobre los identificadores
 

@@ -425,6 +425,19 @@ export class ShalomClient {
   async label(oseId: number): Promise<ArrayBuffer> {
     return this.request<ArrayBuffer>(`/v1/orders/${oseId}/label`, { shalomAuth: true, raw: true });
   }
+
+  /**
+   * «Ticket Shalom»: el recibo vertical de tira que entrega el mostrador, con
+   * nº de orden, código, QR, remitente, destinatario y forma de pago. Es OTRO
+   * documento que el rótulo, que es apaisado y solo sirve para pegar en la caja.
+   *
+   * Cuelga de `/v1/orders`, junto al rótulo — NO de `/v1/tracking`, que es donde
+   * lo teníamos apuntado y por eso daba 404 siempre. Confirmado por el
+   * proveedor del wrapper el 08/09/2026.
+   */
+  async voucher(oseId: number): Promise<ArrayBuffer> {
+    return this.request<ArrayBuffer>(`/v1/orders/${oseId}/voucher`, { shalomAuth: true, raw: true });
+  }
 }
 
 /**
