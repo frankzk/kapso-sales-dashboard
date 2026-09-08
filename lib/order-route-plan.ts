@@ -1,3 +1,4 @@
+import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import type { OperationKind } from "@/lib/order-macro-stage";
 import type { GroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier";
 import {
@@ -261,7 +262,7 @@ function withAgencyPaymentGate(
   return {
     ...route,
     availability: "warning",
-    reason: "Primero valida un adelanto acumulado mínimo de S/ 30.",
+    reason: `Primero valida un adelanto acumulado mínimo de ${ADELANTO_MINIMO_LABEL}.`,
   };
 }
 

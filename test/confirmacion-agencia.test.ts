@@ -98,13 +98,14 @@ describe("y falta una sola para que no", () => {
 
 describe("cuánto tiene que ser el pago: lo dice quien ya lo sabía", () => {
   it("un adelanto POR DEBAJO del mínimo no confirma", () => {
-    // #KP129361: adelanto de S/ 20 validado sobre un pedido de S/ 149. La
-    // primera versión de esta regla lo daba por confirmado, porque preguntaba
-    // «¿hay un adelanto validado?» en vez de usar la definición que ya existía.
-    // Habría escrito `confirmed` sobre un pedido que `agencyPaymentReady` sigue
-    // frenando —su `payment_state` es `adelanto_cargado`—, dejándolo confirmado
-    // y quieto a la vez.
-    expect(confirma(borrador(), [pago({ amount: 20 })])).toBe(false);
+    // #KP129361 lo delató cuando el mínimo era S/ 30: adelanto de S/ 20 validado
+    // sobre un pedido de S/ 149. La primera versión de esta regla lo daba por
+    // confirmado, porque preguntaba «¿hay un adelanto validado?» en vez de usar
+    // la definición que ya existía. Habría escrito `confirmed` sobre un pedido
+    // que `agencyPaymentReady` seguía frenando, dejándolo confirmado y quieto a
+    // la vez. Hoy el mínimo es S/ 20 y ese pedido SÍ confirma; la prueba se
+    // ancla a la constante para seguir vigilando el caso general.
+    expect(confirma(borrador(), [pago({ amount: SHALOM_MINIMUM_ADVANCE - 5 })])).toBe(false);
   });
 
   it("justo el mínimo sí", () => {
@@ -120,7 +121,7 @@ describe("cuánto tiene que ser el pago: lo dice quien ya lo sabía", () => {
       "utf8",
     );
     expect(source).toContain("paymentProgress(pagos, totalDelPedido).advanceValidated");
-    expect(source).not.toMatch(/\b30\b\s*[;)]/);
+    expect(source).not.toMatch(/\b(20|30)\b\s*[;)]/);
   });
 });
 

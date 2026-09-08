@@ -58,6 +58,7 @@ import {
 } from "@/lib/labels/resolve-output";
 import type { RouteKey } from "@/lib/order-route-plan";
 import type { OrderMasterRow } from "@/lib/types";
+import { ADELANTO_MINIMO, ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 
 export interface MasterActionState {
   error?: string;
@@ -414,8 +415,10 @@ export async function createManualRouteOutput(
       (sum, payment) => sum + Number((payment as { amount: number | string | null }).amount ?? 0),
       0,
     );
-    if (validated < 30) {
-      return { error: `Olva Agencia requiere al menos S/ 30 validados. Hay S/ ${validated.toFixed(2)}.` };
+    if (validated < ADELANTO_MINIMO) {
+      return {
+        error: `Olva Agencia requiere al menos ${ADELANTO_MINIMO_LABEL} validados. Hay S/ ${validated.toFixed(2)}.`,
+      };
     }
   }
 
