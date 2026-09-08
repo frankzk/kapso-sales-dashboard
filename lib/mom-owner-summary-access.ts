@@ -69,6 +69,41 @@ const ORDER_COLUMNS =
   "order_id,order_created_at,coverage,order_total,macro_stage,macro_substage," +
   "macro_reasons,payment_state,delivered_at,delivered_courier,last_movement_at";
 
+interface RawShipment {
+  id: string;
+  order_id: string | null;
+  courier: string | null;
+  dispatched_at: string | null;
+  delivery_status: string | null;
+  created_at: string | null;
+  ready_at: string | null;
+  custody_transferred_at: string | null;
+}
+
+const SHIPMENT_COLUMNS =
+  "id,order_id,courier,dispatched_at,delivery_status,created_at,ready_at,custody_transferred_at";
+
+type ShipmentDateColumn = "created_at" | "dispatched_at" | "ready_at";
+
+function readShipments(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: string[],
+  dateColumn: ShipmentDateColumn,
+  fromIso: string,
+  toIso: string,
+): Promise<RawShipment[]> {
+  return readPages<RawShipment>("shipments", (from, to) =>
+    sb
+      .from("shipments")
+      .select(SHIPMENT_COLUMNS)
+      .in("store_id", storeIds)
+      .gte(dateColumn, fromIso)
+      .lt(dateColumn, toIso)
+      .order(dateColumn, { ascending: true })
+      .range(from, to) as unknown as PromiseLike<PageResult<RawShipment>>,
+  );
+}
+
 function orderFact(row: RawOrder): MomOwnerOrderFact {
   return {
     orderId: row.order_id,
@@ -120,6 +155,7 @@ export async function getMomOwnerSummary(
     staleUnmovedRows,
     shipmentCreatedRows,
     shipmentDispatchedRows,
+    shipmentReadyRows,
     eventRows,
     paymentRows,
     manifestRows,
@@ -165,50 +201,13 @@ export async function getMomOwnerSummary(
           .order("order_created_at", { ascending: true })
           .range(from, to) as unknown as PromiseLike<PageResult<RawOrder>>,
       ),
-      readPages<{
-        id: string;
-        order_id: string | null;
-        courier: string | null;
-        dispatched_at: string | null;
-        delivery_status: string | null;
-      }>("shipments", (from, to) =>
-        sb
-          .from("shipments")
-          .select("id,order_id,courier,dispatched_at,delivery_status")
-          .in("store_id", storeIds)
-          .gte("created_at", earliest)
-          .lt("created_at", currentEnd)
-          .order("created_at", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<PageResult<{
-            id: string;
-            order_id: string | null;
-            courier: string | null;
-            dispatched_at: string | null;
-            delivery_status: string | null;
-          }>>,
-      ),
-      readPages<{
-        id: string;
-        order_id: string | null;
-        courier: string | null;
-        dispatched_at: string | null;
-        delivery_status: string | null;
-      }>("shipments", (from, to) =>
-        sb
-          .from("shipments")
-          .select("id,order_id,courier,dispatched_at,delivery_status")
-          .in("store_id", storeIds)
-          .gte("dispatched_at", earliest)
-          .lt("dispatched_at", currentEnd)
-          .order("dispatched_at", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<PageResult<{
-            id: string;
-            order_id: string | null;
-            courier: string | null;
-            dispatched_at: string | null;
-            delivery_status: string | null;
-          }>>,
-      ),
+      // Tres lecturas de salidas, una por cada fecha que puede ser «el
+      // despacho» según el courier (ver dispatchSignalAt): creación de la
+      // guía (Shalom/Olva), `dispatched_at` (Aliclik) y «listo despacho»
+      // (Lima). Se deduplican por id más abajo.
+      readShipments(sb, storeIds, "created_at", earliest, currentEnd),
+      readShipments(sb, storeIds, "dispatched_at", earliest, currentEnd),
+      readShipments(sb, storeIds, "ready_at", earliest, currentEnd),
       readPages<{ order_id: string; kind: string; occurred_at: string }>("order_events", (from, to) =>
         sb
           .from("order_events")
@@ -251,7 +250,10 @@ export async function getMomOwnerSummary(
     ]);
 
   const shipmentMap = new Map(
-    [...shipmentCreatedRows, ...shipmentDispatchedRows].map((shipment) => [shipment.id, shipment]),
+    [...shipmentCreatedRows, ...shipmentDispatchedRows, ...shipmentReadyRows].map((shipment) => [
+      shipment.id,
+      shipment,
+    ]),
   );
   const shipmentRows = [...shipmentMap.values()];
   const rawOrders = new Map<string, RawOrder>();
@@ -272,6 +274,9 @@ export async function getMomOwnerSummary(
     courier: row.courier,
     dispatchedAt: row.dispatched_at,
     deliveryStatus: row.delivery_status,
+    createdAt: row.created_at,
+    readyAt: row.ready_at,
+    custodyTransferredAt: row.custody_transferred_at,
   }));
   const events: MomOwnerEventFact[] = eventRows.map((row) => ({
     orderId: row.order_id,

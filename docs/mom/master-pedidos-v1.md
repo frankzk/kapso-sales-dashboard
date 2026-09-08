@@ -2183,8 +2183,28 @@ punto y medio de diferencia en Provincia).
 | Confirmación Provincia COD | Pedidos Shopify creados en la ventana cuya cobertura actual es Provincia COD | Pedido que actualmente conserva evidencia de confirmación: evento `confirmed`, `guide_registered` o `label_generated`, cualquier salida registrada (despachada o no), o macroetapa ya en Preparación, Por despachar, En curso o Por cerrar. Un pedido anulado antes de confirmarse no cuenta |
 | Adelanto de Agencia | Pedidos Shopify creados en la ventana cuya cobertura actual es Agencia | Pagos actualmente validados que acumulan al menos S/ 30 para el pedido |
 | Entrega Aliclik | Salidas Aliclik despachadas dentro de la ventana | Salidas de esa cohorte cuyo resultado actual es Entregado |
-| Entrega Lima total | Pedidos Lima con al menos una salida despachada dentro de la ventana | Pedidos de esa cohorte con al menos una de esas salidas Entregada |
-| Pago completo de Agencia | Pedidos con salida Shalom u Olva despachada dentro de la ventana | Pedidos de esa cohorte cuyos pagos validados dentro de la misma ventana cubren el total Shopify |
+| Entrega Lima total | Pedidos Lima con al menos una salida despachada dentro de la ventana (ver «qué es despachada» abajo: para Lima, el escaneo «listo despacho») | Pedidos de esa cohorte con al menos una de esas salidas Entregada |
+| Pago completo de Agencia | Pedidos con guía Shalom u Olva **creada** dentro de la ventana | Pedidos de esa cohorte cuyos pagos validados dentro de la misma ventana cubren el total Shopify |
+
+**Qué es «despachada» depende del courier.** `dispatched_at` en la salida solo
+lo escribe Aliclik. Auditado el 08-09-2026: de 3.145 salidas Aliclik desde
+agosto, 2.940 lo tenían; de 809 Shalom, 300 Tanders y 2.641 salidas «por
+definir» de Lima, **cero**. Mientras el tablero miraba solo ese campo, Entrega
+Lima y Pago completo de Agencia daban «Sin datos» con 740 pedidos Lima y 453
+guías Shalom delante. La fecha de despacho se resuelve así
+(`dispatchSignalAt`):
+
+- **Aliclik**: `dispatched_at` y nada más. Una guía lista en la Mesa que el
+  motorizado no recogió no está despachada; contarla bajaría la tasa de entrega
+  por algo que no es culpa del courier.
+- **Shalom / Olva**: la creación de la guía. Es el momento en que la caja va a
+  la agencia y no hay ningún registro posterior.
+- **El resto (Lima: por definir, Tanders, propio, Urpi)**: la entrega de
+  custodia al motorizado si se registró; si no, el escaneo «listo despacho»
+  (`ready_at`). Hoy la custodia no se registra nunca, así que en la práctica
+  es el escaneo: la última señal que existe de que la caja salió. Por eso
+  Entrega Lima muestra «0 de N» y no «Sin datos»: el denominador es real y el
+  numerador espera a que se carguen entregas.
 
 Las tasas de confirmación y adelanto se miden por pedido. Aliclik se mide por
 salida para no ocultar el desempeño de un courier cuando un pedido tuvo varias

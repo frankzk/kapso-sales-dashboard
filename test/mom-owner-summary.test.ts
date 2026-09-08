@@ -1,13 +1,34 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMomOwnerSummary,
+  dispatchSignalAt,
   momOwnerPeriods,
   type BuildMomOwnerSummaryInput,
   type MomOwnerOrderFact,
+  type MomOwnerShipmentFact,
 } from "@/lib/mom-owner-summary";
 
 const TODAY = "2026-08-01";
 const YESTERDAY = "2026-07-31T15:00:00.000Z";
+const LAST_WEEK = "2026-07-24T15:00:00.000Z";
+
+function guide(
+  id: string,
+  orderId: string,
+  over: Partial<MomOwnerShipmentFact> = {},
+): MomOwnerShipmentFact {
+  return {
+    id,
+    orderId,
+    courier: "Aliclik",
+    dispatchedAt: null,
+    deliveryStatus: "pendiente",
+    createdAt: LAST_WEEK,
+    readyAt: null,
+    custodyTransferredAt: null,
+    ...over,
+  };
+}
 
 function order(
   orderId: string,
@@ -94,13 +115,13 @@ describe("indicadores operativos del owner", () => {
     const summary = build({
       orders,
       shipments: [
-        { id: "a1", orderId: "province-confirmed", courier: "Aliclik", dispatchedAt: null, deliveryStatus: "pendiente" },
-        { id: "a2", orderId: "province-open", courier: "Aliclik", dispatchedAt: YESTERDAY, deliveryStatus: "entregado" },
-        { id: "a3", orderId: "agency-open", courier: "Aliclik", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" },
-        { id: "l1", orderId: "lima-delivered", courier: "Axel", dispatchedAt: YESTERDAY, deliveryStatus: "entregado" },
-        { id: "l2", orderId: "lima-open", courier: "Urpi", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" },
-        { id: "g1", orderId: "agency-paid", courier: "Shalom", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" },
-        { id: "g2", orderId: "agency-partial", courier: "Olva", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" },
+        guide("a1", "province-confirmed"),
+        guide("a2", "province-open", { dispatchedAt: YESTERDAY, deliveryStatus: "entregado" }),
+        guide("a3", "agency-open", { dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" }),
+        guide("l1", "lima-delivered", { courier: "Axel", dispatchedAt: YESTERDAY, deliveryStatus: "entregado" }),
+        guide("l2", "lima-open", { courier: "Urpi", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" }),
+        guide("g1", "agency-paid", { courier: "Shalom", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" }),
+        guide("g2", "agency-partial", { courier: "Olva", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" }),
       ],
       payments: [
         { orderId: "agency-advance", amount: 30, paidAt: YESTERDAY },
@@ -171,7 +192,7 @@ describe("indicadores operativos del owner", () => {
     const summary = build({
       orders: [order("agency", { coverage: "agencia", orderTotal: 100 })],
       shipments: [
-        { id: "guide", orderId: "agency", courier: "Shalom", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" },
+        guide("guide", "agency", { courier: "Shalom", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" }),
       ],
       payments: [
         { orderId: "agency", amount: 100, paidAt: "2026-07-20T15:00:00.000Z" },
@@ -179,6 +200,98 @@ describe("indicadores operativos del owner", () => {
     });
     const yesterday = summary.periods.find((period) => period.key === "yesterday")!;
     expect(yesterday.kpis.agency_full_payment).toEqual({ numerator: 0, denominator: 1, rate: 0 });
+  });
+});
+
+describe("cuándo se despachó una salida depende del courier", () => {
+  // AUDITADO EL 08-09-2026. `dispatched_at` solo lo escribe Aliclik; Shalom,
+  // Tanders, propio, Urpi y las 2.641 salidas «por definir» de Lima tenían
+  // CERO. Mientras el tablero miraba solo ese campo, «Entrega Lima total» y
+  // «Pago completo de Agencia» daban 0 de 0 con 740 pedidos Lima y 453 guías
+  // Shalom delante.
+
+  it("Aliclik: solo `dispatched_at`; lista en la Mesa no es despachada", () => {
+    // Una guía Aliclik que el motorizado no recogió no cuenta como salida
+    // despachada: contarla bajaría la tasa de entrega por algo ajeno al courier.
+    expect(dispatchSignalAt(guide("a", "o", { readyAt: YESTERDAY }))).toBeNull();
+    expect(dispatchSignalAt(guide("a", "o", { readyAt: LAST_WEEK, dispatchedAt: YESTERDAY }))).toBe(
+      YESTERDAY,
+    );
+  });
+
+  it("Shalom / Olva: la creación de la guía es el despacho", () => {
+    // La caja va a la agencia al crear la guía y no hay ningún registro después.
+    expect(dispatchSignalAt(guide("g", "o", { courier: "Shalom", createdAt: YESTERDAY }))).toBe(
+      YESTERDAY,
+    );
+    expect(dispatchSignalAt(guide("g", "o", { courier: "olva", createdAt: YESTERDAY }))).toBe(YESTERDAY);
+    // Si algún día llega un `dispatched_at` real, manda él.
+    expect(
+      dispatchSignalAt(guide("g", "o", { courier: "Shalom", createdAt: LAST_WEEK, dispatchedAt: YESTERDAY })),
+    ).toBe(YESTERDAY);
+  });
+
+  it("Lima: la custodia al motorizado si existe, y si no el escaneo «listo despacho»", () => {
+    expect(dispatchSignalAt(guide("l", "o", { courier: "por_definir", readyAt: YESTERDAY }))).toBe(
+      YESTERDAY,
+    );
+    expect(
+      dispatchSignalAt(
+        guide("l", "o", { courier: "por_definir", readyAt: LAST_WEEK, custodyTransferredAt: YESTERDAY }),
+      ),
+    ).toBe(YESTERDAY);
+    expect(dispatchSignalAt(guide("l", "o", { courier: "tanders" }))).toBeNull();
+  });
+
+  it("«Entrega Lima total» ve las salidas listas en la Mesa aunque nadie registre la custodia", () => {
+    // Lo que el owner esperaba ver: «0 de N», no «Sin datos».
+    const summary = build({
+      orders: [
+        order("lima-1", { coverage: "lima" }),
+        order("lima-2", { coverage: "lima" }),
+        order("lima-vieja", { coverage: "lima" }),
+      ],
+      shipments: [
+        guide("s1", "lima-1", { courier: "por_definir", readyAt: YESTERDAY }),
+        guide("s2", "lima-2", { courier: "por_definir", readyAt: YESTERDAY, deliveryStatus: "entregado" }),
+        // Lista la semana pasada: es de otra ventana.
+        guide("s3", "lima-vieja", { courier: "por_definir", readyAt: LAST_WEEK }),
+      ],
+    });
+    const yesterday = summary.periods.find((period) => period.key === "yesterday")!;
+    expect(yesterday.kpis.lima_delivery).toEqual({ numerator: 1, denominator: 2, rate: 0.5 });
+  });
+
+  it("«Pago completo de Agencia» ve las guías Shalom por su fecha de creación", () => {
+    const summary = build({
+      orders: [
+        order("pagado", { coverage: "agencia", orderTotal: 100 }),
+        order("adelanto", { coverage: "agencia", orderTotal: 100 }),
+      ],
+      shipments: [
+        guide("g1", "pagado", { courier: "shalom", createdAt: YESTERDAY, deliveryStatus: "en_ruta" }),
+        guide("g2", "adelanto", { courier: "shalom", createdAt: YESTERDAY, deliveryStatus: "en_ruta" }),
+      ],
+      payments: [
+        { orderId: "pagado", amount: 30, paidAt: YESTERDAY },
+        { orderId: "pagado", amount: 70, paidAt: YESTERDAY },
+        { orderId: "adelanto", amount: 30, paidAt: YESTERDAY },
+      ],
+    });
+    const yesterday = summary.periods.find((period) => period.key === "yesterday")!;
+    expect(yesterday.kpis.agency_full_payment).toEqual({ numerator: 1, denominator: 2, rate: 0.5 });
+  });
+
+  it("«Entrega Aliclik» NO cambia: una guía lista pero no recogida sigue fuera", () => {
+    const summary = build({
+      orders: [order("p1"), order("p2")],
+      shipments: [
+        guide("a1", "p1", { dispatchedAt: YESTERDAY, deliveryStatus: "entregado" }),
+        guide("a2", "p2", { readyAt: YESTERDAY }),
+      ],
+    });
+    const yesterday = summary.periods.find((period) => period.key === "yesterday")!;
+    expect(yesterday.kpis.aliclik_delivery).toEqual({ numerator: 1, denominator: 1, rate: 1 });
   });
 });
 
