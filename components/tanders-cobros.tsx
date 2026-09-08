@@ -93,7 +93,7 @@ export function TandersCobros() {
                 <Stat label="Errores" value={status.errores} tone="text-red-700" />
               </dl>
             </Card>
-            <Failures fallos={status.fallos} />
+            <Failures fallos={status.fallos} detenido={status.detenido} />
             {Object.keys(status.desconocidos).length > 0 && (
               <p className="text-sm text-slate-600">
                 Estados que Tanders devolvió y todavía no traducimos:{" "}
@@ -150,14 +150,14 @@ export function TandersCobros() {
           <Card>
             <dl className="grid grid-cols-2 gap-4 sm:grid-cols-6">
               <Stat label="Revisadas" value={report.scanned} />
-              <Stat label="Aún en ruta" value={report.enCurso} />
+              <Stat label="Sin constancia aún" value={report.enCurso} />
               <Stat label="Validado" value={report.validado} tone="text-emerald-700" />
               <Stat label="Rechazado" value={report.rechazado} tone="text-red-700" />
               <Stat label="Pendiente" value={report.pendiente} tone="text-amber-700" />
               <Stat label="Errores" value={report.errores} />
             </dl>
           </Card>
-          <Failures fallos={report.fallos} />
+          <Failures fallos={report.fallos} detenido={report.detenido} />
 
           {report.detalle.length === 0 ? (
             <p className="text-sm text-slate-500">
@@ -224,19 +224,29 @@ function money(v: number | null): string {
  * Por qué falló lo que falló. Es la diferencia entre «errores: 200» y saber si
  * es la contraseña (401), el endpoint (404) o Tanders caído (5xx).
  */
-function Failures({ fallos }: { fallos: SweepFailure[] }) {
-  if (!fallos.length) return null;
+function Failures({ fallos, detenido }: { fallos: SweepFailure[]; detenido?: boolean }) {
+  if (!fallos.length && !detenido) return null;
   return (
-    <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-      <p className="font-medium">Motivos de los fallos</p>
-      <ul className="mt-1 space-y-0.5">
-        {fallos.map((f) => (
-          <li key={f.mensaje} className="flex gap-2">
-            <span className="shrink-0 tabular-nums">×{f.n}</span>
-            <span className="break-all font-mono text-xs">{f.mensaje}</span>
-          </li>
-        ))}
-      </ul>
+    <div className="space-y-2">
+      {detenido && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Tanders cortó por límite de llamadas (429). El barrido paró ahí; lo que quedó sigue en la
+          próxima pasada.
+        </p>
+      )}
+      {fallos.length > 0 && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          <p className="font-medium">Motivos de los fallos</p>
+          <ul className="mt-1 space-y-0.5">
+            {fallos.map((f) => (
+              <li key={f.mensaje} className="flex gap-2">
+                <span className="shrink-0 tabular-nums">×{f.n}</span>
+                <span className="break-all font-mono text-xs">{f.mensaje}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

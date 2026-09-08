@@ -21,10 +21,19 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
 import { TandersClient } from "@/lib/tanders/client";
 import { mapTandersStatus, reconcileTandersCustodyState } from "@/lib/tanders/status";
-import { recordSweepFailure, type SweepFailure } from "@/lib/tanders/sweep-failures";
+import {
+  isThrottled,
+  pace,
+  recordSweepFailure,
+  type SweepFailure,
+} from "@/lib/tanders/sweep-failures";
 
-/** Tope por pasada. Cada guía es una llamada a su API, no al modelo: barato. */
-export const MAX_PER_RUN = 200;
+/**
+ * Tope por pasada. Eran 200: el 08-09-2026 Tanders cortó con 429 a partir de la
+ * ~120. Sesenta con pausa entra holgado; las que queden van a la siguiente
+ * pasada, que es cada hora, y las nunca leídas van siempre primero.
+ */
+export const MAX_PER_RUN = 60;
 
 interface Candidate {
   id: string;
@@ -55,6 +64,8 @@ export interface TandersStatusReport {
    * contraseña, el endpoint o la red; esto sí. Ver sweep-failures.ts.
    */
   fallos: SweepFailure[];
+  /** true = Tanders devolvió 429 y el barrido paró ahí; lo demás va en la próxima pasada. */
+  detenido: boolean;
   cambios: { guia: string; pedido: string | null; de: string; a: string; estadoTanders: string }[];
 }
 
@@ -89,6 +100,7 @@ export async function sweepTandersStatus(
     errores: 0,
     omitidas: 0,
     fallos: [],
+    detenido: false,
     cambios: [],
   };
 
@@ -125,6 +137,9 @@ export async function sweepTandersStatus(
         continue;
       }
 
+      // Con pausa antes de cada llamada: Tanders corta con 429 a partir de
+      // ~120 seguidas.
+      await pace();
       const order = await client.getOrder(row.tanders_order_id);
       const rawStatus = typeof order?.status === "string" ? order.status : "";
       const mapped = mapTandersStatus(rawStatus);
@@ -194,6 +209,12 @@ export async function sweepTandersStatus(
       // 330 guías congeladas sin que nadie supiera por qué.
       report.errores += 1;
       recordSweepFailure(report.fallos, err);
+      // Un 429 no es una guía que falla: es Tanders diciendo «basta». Seguir
+      // solo quema llamadas y alarga el castigo; lo que queda va en la próxima.
+      if (isThrottled(err)) {
+        report.detenido = true;
+        break;
+      }
     }
   }
 
