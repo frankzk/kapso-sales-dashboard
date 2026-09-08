@@ -138,7 +138,7 @@ export function MomOwnerSummaryPanel({ summary }: { summary: MomOwnerSummary }) 
           </p>
         </div>
         <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="w-full min-w-[760px] border-collapse text-left">
+          <table className="w-full min-w-[900px] border-collapse text-left">
             <thead className="bg-slate-50 text-xs font-medium text-slate-500">
               <tr>
                 <th scope="col" className="w-[31%] px-4 py-2.5">Indicador</th>

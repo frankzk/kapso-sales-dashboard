@@ -3,7 +3,7 @@ import { ADELANTO_MINIMO } from "@/lib/adelanto-minimo";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type MomOwnerPeriodKey = "yesterday" | "last7" | "month" | "previous_month";
+export type MomOwnerPeriodKey = "today" | "yesterday" | "last7" | "month" | "previous_month";
 export type MomOwnerKpiKey =
   | "province_confirmation"
   | "agency_advance"
@@ -43,6 +43,39 @@ export interface MomOwnerShipmentFact {
   courier: string | null;
   dispatchedAt: string | null;
   deliveryStatus: string | null;
+  /** Creación de la guía. Para Shalom/Olva ES el despacho: la caja va a la agencia al crearla. */
+  createdAt: string | null;
+  /** Escaneo «listo despacho» en la Mesa. Para Lima es la última señal que existe. */
+  readyAt: string | null;
+  /** Entrega de custodia al motorizado. Cuando exista, gana sobre `readyAt`. */
+  custodyTransferredAt: string | null;
+}
+
+/**
+ * Cuándo se despachó una salida, según el courier.
+ *
+ * `dispatched_at` solo lo escribe Aliclik (auditado el 08-09-2026: 2.940 de
+ * 3.145 salidas Aliclik lo tenían; Shalom, Tanders, propio, Urpi y las 2.641
+ * salidas «por definir» de Lima, CERO). Mientras el tablero miraba solo ese
+ * campo, «Entrega Lima total» y «Pago completo de Agencia» daban 0 de 0 con 740
+ * pedidos Lima y 453 guías Shalom delante.
+ *
+ *   - Aliclik: `dispatched_at` y nada más. Una guía Aliclik lista en la Mesa
+ *     pero que el motorizado no recogió NO está despachada, y contarla bajaría
+ *     su tasa de entrega por algo que no es culpa del courier.
+ *   - Shalom / Olva: la creación de la guía. Es el momento en que la caja va a
+ *     la agencia; no hay ningún otro registro después.
+ *   - El resto (Lima: por definir, Tanders, propio, Urpi): la entrega de
+ *     custodia al motorizado si se registró, y si no el escaneo «listo
+ *     despacho». Hoy la custodia nunca se registra, así que en la práctica es
+ *     el escaneo — la última señal que existe de que la caja salió.
+ */
+export function dispatchSignalAt(shipment: MomOwnerShipmentFact): string | null {
+  if (isCourier(shipment.courier, ["aliclik"])) return shipment.dispatchedAt;
+  if (isCourier(shipment.courier, ["shalom", "olva"])) {
+    return shipment.dispatchedAt ?? shipment.createdAt;
+  }
+  return shipment.dispatchedAt ?? shipment.custodyTransferredAt ?? shipment.readyAt;
 }
 
 export interface MomOwnerPaymentFact {
@@ -125,6 +158,16 @@ function limaStartIso(day: string): string {
 export function momOwnerPeriods(today: string): MomOwnerPeriod[] {
   const currentMonth = monthStart(today);
   return [
+    // «Hoy» es un día a medias y se lee como tal: la cohorte de esta mañana
+    // apenas ha tenido tiempo de confirmarse o pagar, así que su tasa va a ser
+    // baja a las 9 y subir durante el día. Está para ver ese progreso, no para
+    // compararla con un día cerrado.
+    {
+      key: "today",
+      label: "Hoy",
+      startIso: limaStartIso(today),
+      endIso: limaStartIso(addDays(today, 1)),
+    },
     {
       key: "yesterday",
       label: "Ayer",
@@ -264,7 +307,9 @@ export function buildMomOwnerSummary(input: BuildMomOwnerSummaryInput): MomOwner
     const agencyOrders = orderCohort.filter((order) => order.coverage === "agencia");
     const agencyWithAdvance = agencyOrders.filter((order) => hasAdvance(order, currentPayments)).length;
 
-    const periodShipments = input.shipments.filter((shipment) => inPeriod(shipment.dispatchedAt, period));
+    const periodShipments = input.shipments.filter((shipment) =>
+      inPeriod(dispatchSignalAt(shipment), period),
+    );
     const aliclikShipments = periodShipments.filter((shipment) => isCourier(shipment.courier, ["aliclik"]));
     const deliveredAliclik = aliclikShipments.filter(
       (shipment) => shipment.deliveryStatus === "entregado",

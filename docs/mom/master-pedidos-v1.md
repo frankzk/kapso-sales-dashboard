@@ -1361,6 +1361,41 @@ sale, porque invita a pulsar el botón que deja el pedido bloqueado.
 - El aviso nombra la **consecuencia**, no el síntoma: lo que la operadora
   necesita saber no es que falla, sino que cada intento le bloquea el pedido.
 
+#### Guardar la fila es lo último que puede fallar
+
+La guía ya existe en Aliclik cuando llega el momento de escribir nuestra fila.
+Por eso esa escritura —`writeCourierGuide`, que comparten Aliclik, Shalom y
+Tanders— tiene que ser **la más difícil de romper del sistema**, no la más
+frágil: cualquier cosa que la tumbe deja un paquete vivo del otro lado que aquí
+no existe, y un pedido que se muestra SIN guía es una invitación a emitir una
+segunda por la misma caja.
+
+**Una columna que la base todavía no tiene no cuesta la fila.** Si el `INSERT`
+—o el `UPDATE` que rellena la salida— se queja de una columna inexistente
+(`PGRST204` de PostgREST, `42703` de Postgres), se suelta esa columna y se
+reintenta. Perder un dato nuevo es un dato de menos; perder la fila es un
+paquete fantasma.
+
+- El reintento **no** lleva una lista de columnas nuevas que alguien deba
+  acordarse de mantener: olvidarla es exactamente el fallo que esto arregla.
+  Lleva la lista de las que **jamás** se sueltan —tienda, pedido, courier,
+  guía, estado, categoría, vínculo, procedencia y nombre del pedido—. Si falta
+  una de esas, la base no es la que el código espera y el error sube tal cual.
+- Solo se suelta lo que se envió, y como mucho cuatro columnas. Más que eso no
+  es una ventana de despliegue: es la base equivocada, y conviene que se note.
+- Las columnas soltadas vuelven al llamador (`droppedColumns`) en vez de
+  desaparecer en silencio.
+
+> ⚠️ **Ocurrió el 05-09-2026.** El despliegue que empezó a escribir
+> `aliclik_expected_dispatch_date` (§10.1) salió antes de que se aplicara su
+> migración. Aliclik respondió 201 a las dos creaciones —irreversibles, con
+> costo— y el `INSERT` reventó por la columna ausente. `AUR5X950324066036`
+> (#KP132639) y `AUR5X431594420316` (#KP132644) quedaron vivas en Aliclik y sin
+> existir en Kapta, con sus pedidos en «Por confirmar». Las filas se
+> reconstruyeron desde el payload guardado en `aliclik_order_requests`, que fue
+> lo único que salvó el caso: la intención se registra ANTES de llamar, así que
+> el rastro sobrevive aunque la fila no llegue a escribirse.
+
 Indemnización Aliclik:
 
 - Responsable: Yohalis.
@@ -2121,7 +2156,7 @@ activan cuando la migración operativa al sistema sea completa.
 
 ## 17. KPI principales
 
-Vistas: ayer, últimos 7 días, mes actual y mes anterior.
+Vistas: hoy, ayer, últimos 7 días, mes actual y mes anterior.
 
 1. Tasa de confirmación Provincia COD.
 2. Tasa de cierre de adelantos de Agencia.
@@ -2136,18 +2171,51 @@ El negocio se mide por pedido; el desempeño del courier se mide por salida.
 
 ### 17.1 Primer tablero diario del owner
 
-El primer tablero operativo de la Fase 4 usa cuatro ventanas fijas en hora de
-Lima: ayer, últimos 7 días, mes actual y mes anterior. Cada porcentaje muestra
-siempre su numerador y denominador; un universo vacío se presenta como `Sin
-datos`, nunca como 0 %.
+El primer tablero operativo de la Fase 4 usa cinco ventanas fijas en hora de
+Lima: hoy, ayer, últimos 7 días, mes actual y mes anterior. Cada porcentaje
+muestra siempre su numerador y denominador; un universo vacío se presenta como
+`Sin datos`, nunca como 0 %.
+
+**Las ventanas se leen según su madurez, no una contra otra.** Todas las tasas
+de confirmación y adelanto son de cohorte: el denominador son los pedidos
+*creados* en la ventana y el numerador es lo que esos mismos pedidos han
+logrado *hasta ahora*. Un pedido creado ayer a las 22:00 lleva pocas horas de
+gestión; uno de hace tres semanas ya cerró su ciclo. Por eso «Ayer» sale por
+debajo de «Mes anterior» aunque la operación no haya cambiado, y «Hoy» arranca
+bajo por la mañana y sube durante el día: **está para ver ese progreso**, no
+para compararlo con un día cerrado. «Últimos 7 días» y «Mes actual» incluyen el
+día de hoy a medias —empiezan seis días atrás y a inicio de mes, y cierran al
+final de hoy—, así que arrastran una fracción pequeña de esa inmadurez
+(auditado el 08-09-2026: 618/778 con hoy dentro frente a 614/759 sin él, un
+punto y medio de diferencia en Provincia).
 
 | Indicador | Cohorte / denominador | Resultado / numerador |
 | --- | --- | --- |
-| Confirmación Provincia COD | Pedidos Shopify creados en la ventana cuya cobertura actual es Provincia COD | Pedido que actualmente conserva evidencia de confirmación mediante evento `confirmed`, generación de rótulo/guía o una salida despachada |
+| Confirmación Provincia COD | Pedidos Shopify creados en la ventana cuya cobertura actual es Provincia COD | Pedido que actualmente conserva evidencia de confirmación: evento `confirmed`, `guide_registered` o `label_generated`, cualquier salida registrada (despachada o no), o macroetapa ya en Preparación, Por despachar, En curso o Por cerrar. Un pedido anulado antes de confirmarse no cuenta |
 | Adelanto de Agencia | Pedidos Shopify creados en la ventana cuya cobertura actual es Agencia | Pagos actualmente validados que acumulan al menos S/ 20 para el pedido |
 | Entrega Aliclik | Salidas Aliclik despachadas dentro de la ventana | Salidas de esa cohorte cuyo resultado actual es Entregado |
-| Entrega Lima total | Pedidos Lima con al menos una salida despachada dentro de la ventana | Pedidos de esa cohorte con al menos una de esas salidas Entregada |
-| Pago completo de Agencia | Pedidos con salida Shalom u Olva despachada dentro de la ventana | Pedidos de esa cohorte cuyos pagos validados dentro de la misma ventana cubren el total Shopify |
+| Entrega Lima total | Pedidos Lima con al menos una salida despachada dentro de la ventana (ver «qué es despachada» abajo: para Lima, el escaneo «listo despacho») | Pedidos de esa cohorte con al menos una de esas salidas Entregada |
+| Pago completo de Agencia | Pedidos con guía Shalom u Olva **creada** dentro de la ventana | Pedidos de esa cohorte cuyos pagos validados dentro de la misma ventana cubren el total Shopify |
+
+**Qué es «despachada» depende del courier.** `dispatched_at` en la salida solo
+lo escribe Aliclik. Auditado el 08-09-2026: de 3.145 salidas Aliclik desde
+agosto, 2.940 lo tenían; de 809 Shalom, 300 Tanders y 2.641 salidas «por
+definir» de Lima, **cero**. Mientras el tablero miraba solo ese campo, Entrega
+Lima y Pago completo de Agencia daban «Sin datos» con 740 pedidos Lima y 453
+guías Shalom delante. La fecha de despacho se resuelve así
+(`dispatchSignalAt`):
+
+- **Aliclik**: `dispatched_at` y nada más. Una guía lista en la Mesa que el
+  motorizado no recogió no está despachada; contarla bajaría la tasa de entrega
+  por algo que no es culpa del courier.
+- **Shalom / Olva**: la creación de la guía. Es el momento en que la caja va a
+  la agencia y no hay ningún registro posterior.
+- **El resto (Lima: por definir, Tanders, propio, Urpi)**: la entrega de
+  custodia al motorizado si se registró; si no, el escaneo «listo despacho»
+  (`ready_at`). Hoy la custodia no se registra nunca, así que en la práctica
+  es el escaneo: la última señal que existe de que la caja salió. Por eso
+  Entrega Lima muestra «0 de N» y no «Sin datos»: el denominador es real y el
+  numerador espera a que se carguen entregas.
 
 Las tasas de confirmación y adelanto se miden por pedido. Aliclik se mide por
 salida para no ocultar el desempeño de un courier cuando un pedido tuvo varias
@@ -2417,7 +2485,7 @@ Segundo bloque publicado en el Dashboard consolidado:
   eventos y manifiestos.
 - Las tasas de Confirmación Provincia COD, Adelanto de Agencia, Entrega Aliclik,
   Entrega Lima y Pago completo de Agencia muestran porcentaje, numerador y
-  denominador en las cuatro ventanas de la sección 17.1.
+  denominador en las cinco ventanas de la sección 17.1.
 - Las alertas `Recogido sin pago completo`, `Liquidación vencida`, `Manifiesto
   incompleto` y `Sin movimiento por 60 días` muestran conteos reales y abren la
   cola correspondiente; el resumen no cambia estados ni ejecuta cierres.
