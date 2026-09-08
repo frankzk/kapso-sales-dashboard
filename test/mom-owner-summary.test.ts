@@ -46,6 +46,12 @@ describe("ventanas del resumen diario MOM", () => {
   it("usa cortes de medianoche de Lima y conserva el mes anterior completo", () => {
     expect(momOwnerPeriods(TODAY)).toEqual([
       {
+        key: "today",
+        label: "Hoy",
+        startIso: "2026-08-01T05:00:00.000Z",
+        endIso: "2026-08-02T05:00:00.000Z",
+      },
+      {
         key: "yesterday",
         label: "Ayer",
         startIso: "2026-07-31T05:00:00.000Z",
@@ -130,6 +136,28 @@ describe("indicadores operativos del owner", () => {
       denominator: 2,
       rate: 0.5,
     });
+  });
+
+  it("«Hoy» es la cohorte creada desde la medianoche de Lima, y no se mezcla con «Ayer»", () => {
+    // Un pedido creado a las 23:30 de Lima del 31 de julio es de AYER aunque en
+    // UTC ya sea 1 de agosto. Uno creado a las 00:30 de Lima del 1 de agosto es
+    // de HOY. El corte es la medianoche de Lima, no la de UTC.
+    const summary = build({
+      orders: [
+        order("anoche", { createdAt: "2026-08-01T04:30:00.000Z", stage: "preparacion" }),
+        order("madrugada", { createdAt: "2026-08-01T05:30:00.000Z" }),
+        order("manana", { createdAt: "2026-08-01T14:00:00.000Z", stage: "preparacion" }),
+      ],
+    });
+    const today = summary.periods.find((period) => period.key === "today")!;
+    const yesterday = summary.periods.find((period) => period.key === "yesterday")!;
+    expect(today.kpis.province_confirmation).toEqual({ numerator: 1, denominator: 2, rate: 0.5 });
+    expect(yesterday.kpis.province_confirmation).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+    // Y hoy sigue contando dentro de los 7 días y del mes, como antes.
+    const last7 = summary.periods.find((period) => period.key === "last7")!;
+    const month = summary.periods.find((period) => period.key === "month")!;
+    expect(last7.kpis.province_confirmation.denominator).toBe(3);
+    expect(month.kpis.province_confirmation.denominator).toBe(2);
   });
 
   it("presenta un universo vacío como Sin datos, no como cero por ciento", () => {

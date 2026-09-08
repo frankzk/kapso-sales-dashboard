@@ -10,7 +10,11 @@ import {
   manualRouteGuideCode,
   restoredRouteOutputPatch,
 } from "@/lib/shipment-output";
-import { stripKeys } from "@/lib/route-output-fill";
+import {
+  stripKeys,
+  missingColumnName,
+  retryWithoutMissingColumn,
+} from "@/lib/route-output-fill";
 
 /**
  * Rellenar la salida «por definir» con la guía del courier.
@@ -167,6 +171,127 @@ describe("rellenar decide el courier, no deshace el trabajo del almacén", () =>
   it("una fila que solo trae guía pasa entera", () => {
     const minima = { courier: "tanders", guide_code: "T-1", created_via: "tanders_api" };
     expect(stripKeys(minima)).toEqual(minima);
+  });
+});
+
+describe("una columna que falta no puede costar la guía entera", () => {
+  // EL FALLO DEL 05-09-2026. El despliegue empezó a escribir
+  // `aliclik_expected_dispatch_date` antes de que su migración se aplicara.
+  // Aliclik creó los pedidos —201, irreversible, con costo— y el INSERT de la
+  // fila reventó: dos guías vivas allá (AUR5X950324066036, AUR5X431594420316)
+  // que acá no existían, con sus pedidos mostrándose SIN guía y listos para que
+  // alguien emitiera una segunda por la misma caja.
+  //
+  // Esta escritura va DESPUÉS de una escritura hacia afuera irreversible, así
+  // que tiene que ser la más difícil de romper, no la más frágil.
+
+  const filaAliclik = {
+    store_id: "st-1",
+    order_id: "or-1",
+    courier: "aliclik",
+    guide_code: "AUR5X950324066036",
+    delivery_status: "pendiente",
+    status_category: "pending",
+    matched: true,
+    match_method: "manual",
+    created_via: "aliclik_api",
+    order_name: "#KP132639",
+    aliclik_expected_dispatch_date: "2026-09-07",
+  };
+
+  it("reconoce la queja de PostgREST y la de Postgres", () => {
+    expect(
+      missingColumnName({
+        code: "PGRST204",
+        message: "Could not find the 'aliclik_expected_dispatch_date' column of 'shipments' in the schema cache",
+      }),
+    ).toBe("aliclik_expected_dispatch_date");
+    expect(
+      missingColumnName({
+        code: "42703",
+        message: 'column "aliclik_expected_dispatch_date" of relation "shipments" does not exist',
+      }),
+    ).toBe("aliclik_expected_dispatch_date");
+  });
+
+  it("cualquier otro error NO es una columna que falte", () => {
+    // Un 23505 es una guía duplicada y tiene su propio camino; tratarlo como
+    // columna faltante lo escondería.
+    expect(missingColumnName({ code: "23505", message: "duplicate key value" })).toBeNull();
+    expect(missingColumnName({ message: "network error" })).toBeNull();
+    expect(missingColumnName(null)).toBeNull();
+  });
+
+  it("suelta la columna nueva y la fila se guarda igual", () => {
+    const retry = retryWithoutMissingColumn(filaAliclik, {
+      code: "PGRST204",
+      message: "Could not find the 'aliclik_expected_dispatch_date' column of 'shipments' in the schema cache",
+    });
+    expect(retry?.dropped).toBe("aliclik_expected_dispatch_date");
+    expect(retry?.row).not.toHaveProperty("aliclik_expected_dispatch_date");
+    // Y lo que identifica la guía sigue entero: es lo único que importaba.
+    expect(retry?.row.guide_code).toBe("AUR5X950324066036");
+    expect(retry?.row.order_id).toBe("or-1");
+    expect(retry?.row.courier).toBe("aliclik");
+  });
+
+  it("NO se suelta una columna sin la que la fila no significa nada", () => {
+    // Si falta `guide_code` la base no es la que este código espera. Guardar la
+    // fila sin ella sería peor que fallar: una caja sin guía que nadie busca.
+    for (const esencial of [
+      "store_id",
+      "order_id",
+      "courier",
+      "guide_code",
+      "delivery_status",
+      "status_category",
+      "matched",
+      "match_method",
+      "created_via",
+      "order_name",
+    ]) {
+      expect(
+        retryWithoutMissingColumn(filaAliclik, {
+          code: "PGRST204",
+          message: `Could not find the '${esencial}' column of 'shipments' in the schema cache`,
+        }),
+        esencial,
+      ).toBeNull();
+    }
+  });
+
+  it("no se reintenta por una columna que no mandamos", () => {
+    // Soltar lo que no está en la fila deja el reintento igual que el intento:
+    // el mismo error para siempre.
+    expect(
+      retryWithoutMissingColumn(filaAliclik, {
+        code: "PGRST204",
+        message: "Could not find the 'columna_que_nadie_envio' column of 'shipments' in the schema cache",
+      }),
+    ).toBeNull();
+  });
+
+  it("dos columnas nuevas de la misma migración se sueltan una tras otra", () => {
+    const fila = { ...filaAliclik, aliclik_reported_dispatch_date: "2026-09-06" };
+    const primera = retryWithoutMissingColumn(fila, {
+      code: "PGRST204",
+      message: "Could not find the 'aliclik_expected_dispatch_date' column of 'shipments' in the schema cache",
+    });
+    const segunda = retryWithoutMissingColumn(primera!.row, {
+      code: "PGRST204",
+      message: "Could not find the 'aliclik_reported_dispatch_date' column of 'shipments' in the schema cache",
+    });
+    expect(segunda?.row).not.toHaveProperty("aliclik_expected_dispatch_date");
+    expect(segunda?.row).not.toHaveProperty("aliclik_reported_dispatch_date");
+    expect(segunda?.row.guide_code).toBe("AUR5X950324066036");
+  });
+
+  it("la fila original no se toca: el reintento devuelve una copia", () => {
+    retryWithoutMissingColumn(filaAliclik, {
+      code: "PGRST204",
+      message: "Could not find the 'aliclik_expected_dispatch_date' column of 'shipments' in the schema cache",
+    });
+    expect(filaAliclik.aliclik_expected_dispatch_date).toBe("2026-09-07");
   });
 });
 

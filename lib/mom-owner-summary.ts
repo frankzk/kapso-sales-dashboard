@@ -2,7 +2,7 @@ import { CONFIRMATION_SIGNAL_KINDS } from "@/lib/order-confirmation";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type MomOwnerPeriodKey = "yesterday" | "last7" | "month" | "previous_month";
+export type MomOwnerPeriodKey = "today" | "yesterday" | "last7" | "month" | "previous_month";
 export type MomOwnerKpiKey =
   | "province_confirmation"
   | "agency_advance"
@@ -124,6 +124,16 @@ function limaStartIso(day: string): string {
 export function momOwnerPeriods(today: string): MomOwnerPeriod[] {
   const currentMonth = monthStart(today);
   return [
+    // «Hoy» es un día a medias y se lee como tal: la cohorte de esta mañana
+    // apenas ha tenido tiempo de confirmarse o pagar, así que su tasa va a ser
+    // baja a las 9 y subir durante el día. Está para ver ese progreso, no para
+    // compararla con un día cerrado.
+    {
+      key: "today",
+      label: "Hoy",
+      startIso: limaStartIso(today),
+      endIso: limaStartIso(addDays(today, 1)),
+    },
     {
       key: "yesterday",
       label: "Ayer",
