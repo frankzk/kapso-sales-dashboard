@@ -224,13 +224,27 @@ function uniqueOrderIds(rows: MomOwnerShipmentFact[]): Set<string> {
   return new Set(rows.map((row) => row.orderId).filter((id): id is string => Boolean(id)));
 }
 
-function summedPaymentsByOrder(
-  payments: MomOwnerPaymentFact[],
-  period?: MomOwnerPeriod,
-): Map<string, number> {
+/**
+ * Lo cobrado y validado por pedido, SIN mirar cuándo se cobró.
+ *
+ * Tuvo un parámetro `period` que descartaba los pagos de fuera de la ventana, y
+ * se quitó el 09-09-2026 con las cifras delante. El cobro por agencia llega a
+ * los 5,6 días de mediana tras el despacho, así que exigir que el pago cayera en
+ * la MISMA ventana que el envío borraba todo lo despachado en los últimos ~6
+ * días del mes: agosto mostraba 50,0% (324 de 648) cuando la cobranza real fue
+ * 70,7% (458). Se perdían 134 pedidos, y no en el mes siguiente —donde tampoco
+ * entraban, porque el denominador va por fecha de despacho— sino para siempre.
+ *
+ * De los 134: 107 por cobrar en el mes siguiente y 27 por pagos sin `paid_at`,
+ * que `inPeriod(null)` descartaba en silencio. Al no filtrar por fecha, los dos
+ * casos se arreglan solos: un pago validado cuenta, tenga fecha o no.
+ *
+ * Y no hay `period` opcional «por si acaso»: un parámetro que ningún caller
+ * ejerce es un parámetro que ninguna prueba cubre.
+ */
+function summedPaymentsByOrder(payments: MomOwnerPaymentFact[]): Map<string, number> {
   const out = new Map<string, number>();
   for (const payment of payments) {
-    if (period && !inPeriod(payment.paidAt, period)) continue;
     out.set(payment.orderId, (out.get(payment.orderId) ?? 0) + payment.amount);
   }
   return out;
@@ -331,11 +345,19 @@ export function buildMomOwnerSummary(input: BuildMomOwnerSummaryInput): MomOwner
       isCourier(shipment.courier, ["shalom", "olva"]),
     );
     const dispatchedAgencyOrders = uniqueOrderIds(agencyShipments);
-    const periodPayments = summedPaymentsByOrder(input.payments, period);
+    // La COHORTE es por fecha de despacho; el COBRO cuenta cuando llegue. Igual
+    // que el resto del tablero, «los resultados tardíos actualizan la cohorte de
+    // la fecha original». Antes el pago tenía que caer dentro de la misma
+    // ventana y eso enterraba 134 pedidos de agosto (ver summedPaymentsByOrder).
+    //
+    // Efecto secundario buscado: la fila deja de contradecir a la de arriba.
+    // «Adelanto de Agencia» ya contaba todos los pagos validados sin mirar la
+    // fecha; puestas una debajo de otra, dos reglas distintas se leen como
+    // comparables y no lo eran.
     let fullyPaidAgencyOrders = 0;
     for (const orderId of dispatchedAgencyOrders) {
       const total = orderById.get(orderId)?.orderTotal;
-      if (total != null && total > 0 && (periodPayments.get(orderId) ?? 0) >= total) {
+      if (total != null && total > 0 && (currentPayments.get(orderId) ?? 0) >= total) {
         fullyPaidAgencyOrders += 1;
       }
     }

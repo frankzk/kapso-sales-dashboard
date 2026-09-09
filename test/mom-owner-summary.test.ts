@@ -188,15 +188,68 @@ describe("indicadores operativos del owner", () => {
     }
   });
 
-  it("cuenta el pago completo de Agencia solo si el dinero cayó en la ventana", () => {
+  // LA COHORTE ES POR DESPACHO; EL COBRO CUENTA CUANDO LLEGUE. Hasta el
+  // 09-09-2026 el pago tenía que caer en la MISMA ventana que el envío, y con
+  // una mediana de cobro de 5,6 días eso borraba todo lo despachado en los
+  // últimos ~6 días del mes: agosto mostraba 50,0% (324 de 648) con una cobranza
+  // real del 70,7% (458). Los 134 que faltaban no aparecían el mes siguiente
+  // —el denominador va por fecha de despacho— sino nunca.
+  it("el pago cuenta aunque llegue después de la ventana del despacho", () => {
     const summary = build({
       orders: [order("agency", { coverage: "agencia", orderTotal: 100 })],
       shipments: [
         guide("guide", "agency", { courier: "Shalom", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" }),
       ],
-      payments: [
-        { orderId: "agency", amount: 100, paidAt: "2026-07-20T15:00:00.000Z" },
+      // Cobrado tres semanas ANTES de la ventana: con la regla vieja no contaba.
+      payments: [{ orderId: "agency", amount: 100, paidAt: "2026-07-20T15:00:00.000Z" }],
+    });
+    const yesterday = summary.periods.find((period) => period.key === "yesterday")!;
+    expect(yesterday.kpis.agency_full_payment).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+  });
+
+  // `paid_at` no lo teclea nadie: lo saca la visión del comprobante, y a veces no
+  // lo consigue. Había 62 pagos validados sin fecha (S/ 6.355) que `inPeriod(null)`
+  // descartaba en silencio — 27 de los 134 pedidos perdidos de agosto. Un pago
+  // validado es dinero cobrado, con fecha legible o sin ella.
+  it("un pago validado sin fecha sigue siendo dinero cobrado", () => {
+    const summary = build({
+      orders: [order("agency", { coverage: "agencia", orderTotal: 100 })],
+      shipments: [
+        guide("guide", "agency", { courier: "Shalom", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" }),
       ],
+      payments: [{ orderId: "agency", amount: 100, paidAt: null }],
+    });
+    const yesterday = summary.periods.find((period) => period.key === "yesterday")!;
+    expect(yesterday.kpis.agency_full_payment).toEqual({ numerator: 1, denominator: 1, rate: 1 });
+  });
+
+  // Lo que NO cambia: la cohorte. Un pedido despachado fuera de la ventana no
+  // entra por mucho que esté pagado — si no, «Ayer» acabaría contando el mes
+  // entero.
+  it("la cohorte sigue siendo la del despacho", () => {
+    const summary = build({
+      orders: [order("agency", { coverage: "agencia", orderTotal: 100 })],
+      shipments: [
+        guide("guide", "agency", {
+          courier: "Shalom",
+          dispatchedAt: "2026-07-20T15:00:00.000Z",
+          deliveryStatus: "en_ruta",
+        }),
+      ],
+      payments: [{ orderId: "agency", amount: 100, paidAt: YESTERDAY }],
+    });
+    const yesterday = summary.periods.find((period) => period.key === "yesterday")!;
+    expect(yesterday.kpis.agency_full_payment).toEqual({ numerator: 0, denominator: 0, rate: null });
+  });
+
+  // Y un pago que no llega al total sigue sin contar, venga cuando venga.
+  it("un pago parcial no cuenta por mucho que sea antiguo", () => {
+    const summary = build({
+      orders: [order("agency", { coverage: "agencia", orderTotal: 100 })],
+      shipments: [
+        guide("guide", "agency", { courier: "Shalom", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" }),
+      ],
+      payments: [{ orderId: "agency", amount: 60, paidAt: "2026-07-20T15:00:00.000Z" }],
     });
     const yesterday = summary.periods.find((period) => period.key === "yesterday")!;
     expect(yesterday.kpis.agency_full_payment).toEqual({ numerator: 0, denominator: 1, rate: 0 });

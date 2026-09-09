@@ -2263,7 +2263,7 @@ punto y medio de diferencia en Provincia).
 | Adelanto de Agencia | Pedidos Shopify creados en la ventana cuya cobertura actual es Agencia | Pagos actualmente validados que acumulan al menos S/ 20 para el pedido |
 | Entrega Aliclik | Salidas Aliclik despachadas dentro de la ventana | Salidas de esa cohorte cuyo resultado actual es Entregado |
 | Entrega Lima total | Pedidos Lima con al menos una salida despachada dentro de la ventana (ver «qué es despachada» abajo: para Lima, el escaneo «listo despacho») | Pedidos de esa cohorte con al menos una de esas salidas Entregada |
-| Pago completo de Agencia | Pedidos con guía Shalom u Olva **creada** dentro de la ventana | Pedidos de esa cohorte cuyos pagos validados dentro de la misma ventana cubren el total Shopify |
+| Pago completo de Agencia | Pedidos con guía Shalom u Olva **creada** dentro de la ventana | Pedidos de esa cohorte cuyos pagos actualmente validados cubren el total Shopify, se hayan cobrado cuando se hayan cobrado |
 
 **Qué es «despachada» depende del courier.** `dispatched_at` en la salida solo
 lo escribe Aliclik. Auditado el 08-09-2026: de 3.145 salidas Aliclik desde
@@ -2289,8 +2289,43 @@ Las tasas de confirmación y adelanto se miden por pedido. Aliclik se mide por
 salida para no ocultar el desempeño de un courier cuando un pedido tuvo varias
 cajas. Lima y Agencia se deduplican por pedido porque representan el resultado
 del negocio. Los resultados tardíos actualizan la cohorte de la fecha original
-de creación o despacho, excepto el pago completo de Agencia, que conserva la
-regla aprobada de pago y envío dentro de la misma ventana.
+de creación o despacho, **el pago completo de Agencia incluido**.
+
+**El pago completo de Agencia dejó de exigir que el cobro cayera en la ventana
+del envío (09-09-2026).** La regla anterior —pago y envío dentro de la misma
+ventana— era deliberada, pero producía un número que no era el que la fila
+prometía. Entre despachar por agencia y cobrar el total pasan **5,6 días de
+mediana**, así que exigir ambas cosas en la misma ventana borraba todo lo
+despachado en los últimos seis días del mes. Medido sobre agosto de 2026:
+
+| | Pedidos | Tasa |
+| --- | --- | --- |
+| Lo que mostraba el tablero | 324 de 648 | 50,0 % |
+| Cobranza real de esa cohorte | 458 de 648 | **70,7 %** |
+
+Los 134 que faltaban no reaparecían en septiembre —el denominador va por fecha
+de despacho, y su despacho fue en agosto— sino que no se contaban nunca. De
+ellos, **107** se cobraron el mes siguiente y **27** eran pagos validados sin
+`paid_at`, que el filtro de ventana descartaba en silencio (62 en total desde
+agosto, S/ 6.355): `paid_at` no lo teclea nadie, lo extrae la visión del
+comprobante y a veces no lo consigue. Un pago validado es dinero cobrado, tenga
+fecha legible o no.
+
+El cambio además alinea la fila con la de arriba: «Adelanto de Agencia» ya
+contaba los pagos actualmente validados sin mirar la fecha, y dos reglas
+distintas en filas contiguas se leen como comparables sin serlo.
+
+**Lo que NO cambia: la cohorte sigue siendo la del despacho.** Un pedido pagado
+en la ventana pero despachado fuera no entra; si entrara, «Ayer» acabaría
+contando el mes entero.
+
+**Cómo leer las ventanas cortas de esta fila.** «Hoy» y «Ayer» seguirán
+mostrando cifras cercanas a cero, y no es un fallo: con una mediana de cobro de
+5,6 días, casi ningún pedido despachado hoy puede estar cobrado hoy. Lo mismo
+vale para el mes en curso mientras esté empezando — el 09-09-2026, 120 de los
+218 despachos del mes (el 55 %) llevaban menos de tres días. La comparación
+honesta es contra el mismo día del mes anterior, no contra el mes anterior
+cerrado.
 
 Alertas del primer tablero:
 
