@@ -1060,8 +1060,12 @@ Cómo se clasifica una guía que llega por reporte Excel:
   `Preparación · Por armar`, que es exactamente lo que no es.
 - La guía devuelta se cierra como `anulado` —el vocabulario de guías no tiene
   código `devuelto`— y es `returned_at` lo que convierte el **pedido** en
-  `devuelto`.
-- Si Aliclik no entrega, el pedido puede ingresar a Reproprovincia.
+  `devuelto` **una vez vencida o descartada la ventana de Reproprovincia**
+  (§11). Mientras esa ventana esté abierta, el pedido sigue `en_proceso ·
+  pendiente_nuevo_courier`: el paquete que vuelve es inventario por conciliar,
+  no el fin de la venta.
+- Si Aliclik no entrega, el pedido **ingresa** a Reproprovincia (§11): no es una
+  posibilidad que alguien tenga que activar.
 - Solo Aliclik tiene proceso de indemnización formal.
 
 ### 10.1 Qué fuente manda: la API sobre el Excel
@@ -1463,6 +1467,43 @@ courier» como «lo cancelamos nosotros»— **sino la etiqueta que Aliclik puso
 su guía**: un resultado de entrega fallido (`CANCEL`, `ANNULLED`, `REFUSED`,
 `NOT_RESPOND`, `RESCHEDULED`) con un despacho que no diga que el paquete nunca
 salió del almacén de origen.
+
+#### El ciclo de recuperación (v1.10)
+
+Hasta la v1.10 esa distinción solo la aplicaba el chip «Por recuperar» de
+Envíos. El **estado del pedido** la ignoraba: con todas sus guías anuladas el
+pedido pasaba a `anulado` —o a `devuelto` al volver el paquete— y el Master lo
+mandaba a «Por cerrar · Devolución pendiente de inventario», un balde de almacén
+donde nadie que vende mira. Medido en 60 días: **920** pedidos así, 561 de los
+últimos 15 días, 570 en ciudad con bodega Swayp; **3** salidas Swayp posteriores
+y **0** llamadas registradas — porque la gestión de llamadas es por guía y una
+guía anulada no admite gestión.
+
+La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
+(`resolveOrderState`) y la macroetapa (`resolveMacroStage`):
+
+- **Entra** cuando la guía Aliclik queda `anulado` con etiqueta de intento
+  fallido y el paquete ya fuera. No espera a que el paquete vuelva: los que
+  viajan de vuelta son los más calientes.
+- **Mientras dura**, el pedido es `en_proceso · pendiente_nuevo_courier` y el
+  Master lo enseña en **En curso · En gestión Reproprovincia** (Lima: «Por
+  reprogramar Lima»). La guía Aliclik no se toca —sigue `anulado`, con su
+  `returned_at` cuando vuelva— y el paquete devuelto sigue arrastrando el motivo
+  `devolucion_pendiente_inventario` **como razón**, conviviendo con la gestión.
+- **La ventana** es `return_recovery_max_days` (30 por defecto), el mismo número
+  que la recuperación por WhatsApp, contada desde que el courier cerró la guía
+  (`closed_at`, que el barrido sella al anular).
+- **La gestión es sobre el PEDIDO**: la mesa de confirmación registra los
+  contactos aunque la guía esté anulada. Reenviar por Swayp es la acción normal,
+  no una excepción; si no hay stock en su ciudad, Shalom u Olva con adelanto.
+- **Sale** por cuatro puertas: se crea la salida Swayp (pasa a En curso con la
+  guía nueva); se reprograma Aliclik (excepción con motivo, como hasta ahora);
+  se **descarta a mano con motivo** (evento `recovery_discarded`); o **vence la
+  ventana**. Vencida o descartada, el pedido cae por su cadena normal a
+  `anulado`/`devuelto` y a Por cerrar, con la razón `recuperacion_vencida`
+  escrita cuando fue recuperable y nadie lo trabajó — la única forma de medir
+  cuánto se pierde por no llamar.
+- **No gana** sobre una anulación en Shopify: esa la decide una persona.
 
 **Aparecen en la MISMA cola de Pendiente**, no en una pestaña propia: son la
 misma pregunta —a quién hay que llamar— y esta sección las lista junto a las

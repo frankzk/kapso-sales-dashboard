@@ -104,6 +104,8 @@ interface TrackedShipment {
   returned_source: string | null;
   /** Lo que agendó la asesora: protege una reprogramación que aún no le toca. */
   next_followup_at: string | null;
+  /** Cuándo terminó la guía. Se sella UNA vez: ancla la ventana de Reproprovincia. */
+  closed_at: string | null;
 }
 
 /**
@@ -152,7 +154,7 @@ export async function applyAliclikSnapshot(
   const COLUMNS =
     "id,store_id,order_id,delivery_status,last_report_at,api_updated_at,external_order_number,guide_code," +
     "preparation_state,custody_state,ready_at,custody_transferred_at,next_followup_at," +
-    "returned_at,returned_source";
+    "returned_at,returned_source,closed_at";
 
   const byExternal = await admin
     .from("shipments")
@@ -272,6 +274,16 @@ export async function applyAliclikSnapshot(
   if (next === "entregado") {
     patch.closed_at = updatedAt ?? nowIso;
     patch.delivered_source = "aliclik_api";
+  }
+  // UNA GUÍA ANULADA TAMBIÉN TERMINÓ, y hasta ahora no se sellaba: `closed_at`
+  // quedaba NULL en las 920 guías que Aliclik cerró sin entregar en 60 días. De
+  // ese sello cuelga la ventana de Reproprovincia (`lib/reproprovincia.ts`):
+  // sin él la ventana caía al último movimiento, que una relectura de la API
+  // corre hacia adelante y estira la ventana sin que nadie haya hecho nada. Se
+  // escribe una sola vez, con la hora de Aliclik: cuándo pasó, no cuándo lo
+  // vimos.
+  if (next === "anulado" && !shipment.closed_at) {
+    patch.closed_at = updatedAt ?? nowIso;
   }
   if (next === "en_ruta" && shipment.delivery_status === "pendiente") {
     patch.dispatched_at = updatedAt ?? nowIso;

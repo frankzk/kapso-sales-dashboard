@@ -53,6 +53,7 @@ import {
   applyOrderStatusBulk,
   loadConfirmationBrief,
   registerConfirmationAttempt,
+  descartarRecuperacion,
   registerReturn,
   registerClosureAction,
   relinkGuide,
@@ -2317,7 +2318,18 @@ function drawerNextAction(row: OrderMasterRow, showPayments: boolean): DrawerNex
         tone: "amber",
       };
     }
-    if (substage === "por_reprogramar_lima" || substage === "gestion_reproprovincia") {
+    if (substage === "gestion_reproprovincia") {
+      return {
+        eyebrow: "Reproprovincia",
+        title: "Contactar y decidir el reenvío",
+        description:
+          "Aliclik no entregó y el paquete ya salió. Registra el contacto y reenvía por Swayp desde el stock de su ciudad; si no hay, Shalom u Olva con adelanto. Si no hay reenvío posible, descarta con motivo.",
+        cta: "Registrar contacto",
+        target: "confirmacion",
+        tone: "amber",
+      };
+    }
+    if (substage === "por_reprogramar_lima") {
       return {
         eyebrow: "Seguimiento",
         title: "Volver a confirmar con el cliente",
@@ -2927,7 +2939,13 @@ function OrderDrawer({
                 el trabajo. Se muestra antes que el panel de pago para que el
                 empate de `order-3` lo resuelva el orden del DOM: en Agencia el
                 abono se pide DURANTE la llamada, no en vez de ella. */}
-            {detail.row.macro_stage === "por_confirmar" && canEdit && (
+            {/* Y también en Reproprovincia: la gestión de llamadas era por GUÍA, y
+                una guía anulada no admite gestión, así que estos pedidos no se
+                podían llamar (0 llamadas sobre 920 en 60 días). La mesa de
+                confirmación es por PEDIDO: se reutiliza tal cual. */}
+            {(detail.row.macro_stage === "por_confirmar" ||
+              detail.row.macro_substage === "gestion_reproprovincia") &&
+              canEdit && (
               <div
                 hidden={workspace !== "operar"}
                 data-drawer-section="confirmacion"
@@ -2944,6 +2962,12 @@ function OrderDrawer({
                     run(() => registerConfirmationAttempt(orderId, payload))
                   }
                 />
+                {detail.row.macro_substage === "gestion_reproprovincia" && (
+                  <DescartarRecuperacion
+                    pending={pending}
+                    onDiscard={(motivo) => run(() => descartarRecuperacion(orderId, motivo))}
+                  />
+                )}
               </div>
             )}
 
@@ -4715,6 +4739,69 @@ function Pager({
         {busy && <span className="ml-2 text-slate-400">actualizando…</span>}
       </p>
       <PagerControls page={page} totalPages={totalPages} busy={busy} onPage={onPage} />
+    </div>
+  );
+}
+
+/**
+ * Descartar la recuperación de provincia. Es la única puerta que MATA la venta
+ * a mano en Reproprovincia; por eso pide motivo y no se esconde detrás de un
+ * icono. Las otras salidas —Swayp, reprogramar Aliclik— viven en Rutas.
+ */
+function DescartarRecuperacion({
+  pending,
+  onDiscard,
+}: {
+  pending: boolean;
+  onDiscard: (motivo: string) => void;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const [motivo, setMotivo] = useState("");
+  if (!abierto) {
+    return (
+      <div className="mt-2 flex justify-end">
+        <button
+          type="button"
+          onClick={() => setAbierto(true)}
+          className="text-xs text-slate-500 underline-offset-2 hover:text-rose-700 hover:underline"
+        >
+          No hay reenvío posible · descartar la recuperación
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 space-y-2 rounded-lg border border-rose-200 bg-rose-50/60 p-3">
+      <p className="text-xs font-semibold text-rose-900">Descartar la recuperación</p>
+      <p className="text-xs text-rose-800">
+        El pedido pasa a cierre con este motivo escrito. No se toca la guía de Aliclik ni el inventario.
+      </p>
+      <input
+        value={motivo}
+        onChange={(e) => setMotivo(e.target.value)}
+        placeholder="Motivo (obligatorio): p. ej. la clienta ya no quiere el producto"
+        className="w-full rounded-lg border border-rose-200 px-2 py-1.5 text-sm"
+      />
+      <div className="flex gap-2">
+        <button
+          type="button"
+          disabled={pending || motivo.trim().length < 8}
+          onClick={() => onDiscard(motivo)}
+          className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-40"
+        >
+          Descartar
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setAbierto(false);
+            setMotivo("");
+          }}
+          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100"
+        >
+          Cancelar
+        </button>
+      </div>
     </div>
   );
 }

@@ -16,7 +16,15 @@ import {
   limaDayKey,
   reachedLastAttempt,
 } from "@/lib/order-confirmation";
+import { recoveryActive, recoveryWindow } from "@/lib/reproprovincia";
 
+// v1.10: Reproprovincia. Un pedido cuya guía Aliclik terminó sin entregar —con
+// el paquete ya fuera— deja de caer en «Por cerrar» como si la venta hubiera
+// muerto: mientras dure la ventana (`return_recovery_max_days`) va a «En curso ·
+// En gestión Reproprovincia», y al vencer cae a Por cerrar con la razón
+// `recuperacion_vencida` escrita. Medido: 920 pedidos en 60 días, 3 salidas
+// Swayp, 0 llamadas. La versión sube para que el cron los reconcilie.
+//
 // v1.9: separa los backfills anteriores al corte operativo de Kapta. Siguen
 // visibles y trazables, pero no inflan la cola nueva de «Sin llamar».
 //
@@ -34,7 +42,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.9" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.10" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -99,6 +107,7 @@ export type MacroSubstage =
   | "devolucion_fisica_pendiente"
   | "devolucion_pendiente_inventario"
   | "recogido_sin_pago_completo"
+  | "recuperacion_vencida"
   | "indemnizacion_pendiente"
   | "merma_pendiente"
   | "reembolso_pendiente"
@@ -155,6 +164,7 @@ export const MACRO_SUBSTAGES_BY_STAGE: Record<
     "devolucion_fisica_pendiente",
     "devolucion_pendiente_inventario",
     "recogido_sin_pago_completo",
+    "recuperacion_vencida",
     "indemnizacion_pendiente",
     "merma_pendiente",
     "reembolso_pendiente",
@@ -204,6 +214,7 @@ export const MACRO_SUBSTAGE_LABEL: Record<MacroSubstage, string> = {
   devolucion_fisica_pendiente: "Devolución física pendiente",
   devolucion_pendiente_inventario: "Devolución pendiente de inventario",
   recogido_sin_pago_completo: "Recogido sin pago completo",
+  recuperacion_vencida: "Recuperación vencida",
   indemnizacion_pendiente: "Indemnización pendiente",
   merma_pendiente: "Merma pendiente",
   reembolso_pendiente: "Reembolso pendiente",
@@ -282,6 +293,11 @@ export interface MacroGuideSnapshot {
   preparation_state?: string | null;
   /** empresa | courier | retorno | devuelto */
   custody_state?: string | null;
+  /** Etiqueta cruda de Aliclik: única fuente de «terminó sin entregar». */
+  reported_status?: string | null;
+  /** Ancla de la ventana de Reproprovincia (el barrido la sella al anular). */
+  closed_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface MacroEventSnapshot {
@@ -305,6 +321,10 @@ export interface ResolveMacroStageInput {
   events: readonly MacroEventSnapshot[];
   legacy: LegacyOrderStateSnapshot;
   paymentState?: string | null;
+  /** Días de la ventana de Reproprovincia (`return_recovery_max_days`). */
+  recoveryWindowDays?: number;
+  /** Ahora, inyectable para tests. */
+  now?: string;
 }
 
 export interface ResolvedMacroStage {
@@ -581,6 +601,18 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
     returnedGuides.some((guide) => !inventoryResolvedForGuide(guide, events))
   ) {
     reasons.push("devolucion_pendiente_inventario");
+  }
+  // Fue recuperable y nadie lo trabajó a tiempo. Se escribe la razón para que
+  // «Por cerrar» no sea el mismo balde que un pedido que jamás pudo reenviarse:
+  // es la única forma de medir cuánto se pierde por no llamar.
+  if (["anulado", "devuelto"].includes(legacy.general)) {
+    const window = recoveryWindow(
+      guides,
+      events,
+      input.now ?? new Date().toISOString(),
+      input.recoveryWindowDays,
+    );
+    if (window?.expired) reasons.push("recuperacion_vencida");
   }
   if (isWorkflowOpen(events, ["liquidation_observed"], ["liquidation_closed"])) {
     reasons.push("liquidacion_observada");
@@ -861,6 +893,38 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
       input.legacy.since,
       operation,
       ["validacion_cierre_pendiente"],
+    );
+  }
+
+  // REPROPROVINCIA. El estado del pedido ya decidió que la recuperación está
+  // viva (`pendiente_nuevo_courier`, ver order-status §1.5); aquí solo se honra,
+  // y se hace ANTES de mirar la guía vigente: la guía está anulada y su custodia
+  // dice «devuelto» o «courier», que las ramas de abajo leerían como En retorno
+  // o En reparto — justo lo que no es. Se vuelve a comprobar con la misma regla
+  // y no con el operativo a secas, para que un override manual a
+  // `pendiente_nuevo_courier` sin guía fallida no fabrique una recuperación.
+  //
+  // El paquete que vuelve sigue siendo inventario por conciliar: ese motivo
+  // CONVIVE con la gestión —se arrastra como razón— en vez de taparla.
+  const recovery =
+    input.legacy.operational === "pendiente_nuevo_courier" && !input.order.cancelled_at
+      ? recoveryActive(
+          input.guides,
+          input.events,
+          input.now ?? new Date().toISOString(),
+          input.recoveryWindowDays,
+        )
+      : null;
+  if (recovery) {
+    const inventoryPending = input.guides
+      .filter(hasReturned)
+      .some((guide) => !inventoryResolvedForGuide(guide, input.events));
+    return result(
+      "en_curso",
+      operation === "lima" ? "por_reprogramar_lima" : "gestion_reproprovincia",
+      recovery.closedAt,
+      operation,
+      inventoryPending ? ["devolucion_pendiente_inventario"] : [],
     );
   }
 
