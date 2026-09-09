@@ -59,6 +59,7 @@ import {
 import type { RouteKey } from "@/lib/order-route-plan";
 import type { OrderMasterRow } from "@/lib/types";
 import { ADELANTO_MINIMO, ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
+import { RECOVERY_DISCARDED_KIND } from "@/lib/reproprovincia";
 
 export interface MasterActionState {
   error?: string;
@@ -985,6 +986,50 @@ export async function loadConfirmationBrief(
   const brief = await getOrderConfirmationBrief(orderId);
   if (!brief) return { error: "Sin acceso a este pedido." };
   return { brief };
+}
+
+
+/**
+ * Descartar la recuperación de provincia, con motivo.
+ *
+ * Es la única puerta que MATA la venta a mano en Reproprovincia. Las otras
+ * salidas del ciclo —crear la salida Swayp, reprogramar Aliclik— la continúan;
+ * y el vencimiento de la ventana la cierra solo. Esta existe para el caso en
+ * que la asesora habló con la clienta y no hay reenvío posible, y no puede ser
+ * silenciosa: sin motivo, dentro de un mes nadie sabrá por qué un pedido con
+ * stock en su ciudad se dejó ir.
+ *
+ * Escribe un EVENTO (`recovery_discarded`) y no un override: la regla de
+ * `lib/reproprovincia.ts` lo lee y el estado del pedido vuelve a caer por su
+ * cadena normal —anulado o devuelto según los hechos—, sin congelar nada.
+ */
+export async function descartarRecuperacion(
+  orderId: string,
+  motivo: string,
+): Promise<{ notice?: string; error?: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) {
+    return { error: "Tu rol no permite descartar la recuperación." };
+  }
+  const reason = (motivo ?? "").trim();
+  if (reason.length < 8) return { error: "Escribe el motivo (mínimo 8 caracteres)." };
+  if (reason.length > 500) return { error: "El motivo es demasiado largo (máx. 500)." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const admin = createAdminSupabase();
+  const { error } = await admin.from("order_events").insert({
+    store_id: ctx.storeId,
+    order_id: orderId,
+    kind: RECOVERY_DISCARDED_KIND,
+    actor: ctx.userId,
+    source: "manual",
+    reason,
+    note: `Recuperación de provincia descartada: ${reason}`,
+  });
+  if (error) return { error: `No se pudo registrar el descarte: ${error.message}` };
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  return { notice: "Recuperación descartada. El pedido pasa a cierre con el motivo registrado." };
 }
 
 /**

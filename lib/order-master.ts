@@ -30,6 +30,7 @@ import {
   confirmationDayCount,
 } from "@/lib/order-confirmation";
 import { classifyOrderCoverage, type OrderCoverage } from "@/lib/order-coverage";
+import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
 import { isWebPrepaid } from "@/lib/order-paid";
 import {
   MOM_RESOLUTION_VERSION,
@@ -56,7 +57,7 @@ const SHIPMENT_BASE_COLUMNS =
   "id,order_id,store_id,courier,guide_code,delivery_status,status_category," +
   "aliclik_attempts,reroute_attempts,delivered_source,district,province,region," +
   "delivery_address,delivery_reference,latitude,longitude," +
-  "customer_name,customer_phone,created_at,updated_at";
+  "customer_name,customer_phone,created_at,updated_at,reported_status";
 const SHIPMENT_GESTION_COLUMNS =
   ",assigned_at,dispatched_at,out_for_delivery_at,rescheduled_at,closed_at," +
   "returned_at,pickup_state,agency_branch,agency_arrived_at,agency_expires_at";
@@ -152,6 +153,8 @@ interface ShipmentRecord {
   customer_phone: string | null;
   created_at: string | null;
   updated_at: string | null;
+  /** `status · dispatch · call` de Aliclik: decide si el pedido merece otro intento. */
+  reported_status?: string | null;
   assigned_at?: string | null;
   dispatched_at?: string | null;
   out_for_delivery_at?: string | null;
@@ -278,6 +281,7 @@ function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot 
     rescheduled_at: s.rescheduled_at ?? derived.rescheduled_at,
     closed_at: s.closed_at ?? derived.closed_at,
     returned_at: s.returned_at ?? null,
+    reported_status: s.reported_status ?? null,
     pickup_state: s.pickup_state ?? null,
     agency_branch: s.agency_branch ?? null,
     agency_arrived_at: s.agency_arrived_at ?? null,
@@ -309,6 +313,9 @@ function toMacroGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): MacroGuid
     pickup_state: guide.pickup_state,
     preparation_state: s.preparation_state ?? null,
     custody_state: s.custody_state ?? null,
+    reported_status: guide.reported_status ?? null,
+    closed_at: guide.closed_at,
+    updated_at: guide.updated_at,
   };
 }
 
@@ -618,26 +625,31 @@ async function fetchTariffs(
   orgByStore: Map<string, string>;
   confirmationActivationByStore: Map<string, string>;
   confirmationCycleByStore: Map<string, number>;
+  /** Días de la ventana de Reproprovincia: el MISMO número que la recuperación
+   *  por WhatsApp (`return_recovery_max_days`), para que no haya dos ventanas. */
+  recoveryWindowByStore: Map<string, number>;
 }> {
   const out = {
     tariffs: [] as CostTariff[],
     orgByStore: new Map<string, string>(),
     confirmationActivationByStore: new Map<string, string>(),
     confirmationCycleByStore: new Map<string, number>(),
+    recoveryWindowByStore: new Map<string, number>(),
   };
-  const { orgByStore, confirmationActivationByStore, confirmationCycleByStore } = out;
+  const { orgByStore, confirmationActivationByStore, confirmationCycleByStore, recoveryWindowByStore } = out;
   if (!storeIds.length) return out;
 
   for (const batch of chunk(storeIds, ID_BATCH)) {
     const { data, error } = await admin
       .from("stores")
-      .select("id,org_id,confirmation_activation_date,confirmation_cycle_days")
+      .select("id,org_id,confirmation_activation_date,confirmation_cycle_days,return_recovery_max_days")
       .in("id", batch);
     let storeRows = (data ?? []) as unknown as {
       id: string;
       org_id: string;
       confirmation_activation_date?: string | null;
       confirmation_cycle_days?: number | null;
+      return_recovery_max_days?: number | null;
     }[];
     // Despliegue compatible: durante los segundos entre código y migración se
     // usa el corte acordado, sin detener la sincronización del Master.
@@ -648,6 +660,7 @@ async function fetchTariffs(
         org_id: string;
         confirmation_activation_date?: string | null;
         confirmation_cycle_days?: number | null;
+        return_recovery_max_days?: number | null;
       }[];
     }
     for (const row of storeRows) {
@@ -660,6 +673,7 @@ async function fetchTariffs(
         row.id,
         confirmationCycleDays(row.confirmation_cycle_days ?? DEFAULT_CONFIRMATION_CYCLE_DAYS),
       );
+      recoveryWindowByStore.set(row.id, row.return_recovery_max_days ?? RECOVERY_DEFAULT_MAX_DAYS);
     }
   }
   const orgIds = [...new Set(orgByStore.values())];
@@ -805,6 +819,7 @@ export async function recomputeOrderMaster(
     orgByStore,
     confirmationActivationByStore,
     confirmationCycleByStore,
+    recoveryWindowByStore,
   } = await fetchTariffs(
     admin,
     [...new Set(orders.map((o) => o.store_id))],
@@ -1026,6 +1041,7 @@ export async function recomputeOrderMaster(
       events: eventSnapshots,
       override,
       now,
+      recoveryWindowDays: recoveryWindowByStore.get(order.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
     });
     const macro = resolveMacroStage({
       order: {
@@ -1054,6 +1070,8 @@ export async function recomputeOrderMaster(
         since: state.since,
       },
       paymentState: resolvedPaymentState,
+      recoveryWindowDays: recoveryWindowByStore.get(order.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
+      now,
     });
 
     // El costo REAL del envío, cuando el courier nos lo dijo. Solo lo tienen las

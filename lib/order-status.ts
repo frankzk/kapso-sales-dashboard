@@ -18,6 +18,7 @@
 //   5. Pendiente                 — todavía no arrancó bien el proceso logístico.
 
 import { hasConfirmationSignal } from "@/lib/order-confirmation";
+import { recoveryActive } from "@/lib/reproprovincia";
 import { cancelledAsRecordCorrection, correctedShipmentIds } from "@/lib/shipment-output";
 
 export type GeneralStatus =
@@ -161,6 +162,9 @@ export interface GuideSnapshot {
   agency_expires_at: string | null;
   /** Cuándo la caja pasó al motorizado. Nulo = nunca salió de la empresa. */
   custody_transferred_at?: string | null;
+  /** La etiqueta cruda de Aliclik (`status · dispatch · call`). Es lo único que
+   *  distingue «el courier no pudo entregar» de «nos cancelaron la venta». */
+  reported_status?: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -191,6 +195,8 @@ export interface ResolveInputs {
   override: StatusOverride | null;
   /** Ahora, inyectable para tests. */
   now?: string;
+  /** Días de la ventana de Reproprovincia (`return_recovery_max_days`). */
+  recoveryWindowDays?: number;
 }
 
 export interface ResolvedOrderState {
@@ -521,6 +527,36 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
         deliveredGuide && isAgencyCourier(deliveredGuide.courier) ? "recogido" : "entregado",
       since: deliveredAt,
       source: deliveredCourier ?? "system",
+    };
+  }
+
+  // ── 1.5 Reproprovincia: Aliclik no entregó, pero el PEDIDO sigue vivo.
+  //
+  // Hasta aquí llegaba un pedido con su única guía anulada por el courier y
+  // caía dos ramas más abajo en «todas anuladas ⇒ anulado», o en «devuelto» si
+  // el paquete ya había vuelto. Las dos borran la diferencia que el MOM §11
+  // nombra como la única que importa: «nos cancelaron la venta» contra «el
+  // courier no pudo». La regla vive en `lib/reproprovincia.ts`; aquí solo se
+  // aplica.
+  //
+  // VA DESPUÉS de Entregado —eso es pegajoso— y CEDE ante la anulación en
+  // Shopify: esa la decide una persona y gana, como en el override. Va ANTES de
+  // Devuelto a propósito: un paquete que ya volvió al almacén sigue siendo
+  // reenviable desde el stock de provincia mientras dure la ventana; el retorno
+  // físico es inventario por conciliar, no el fin de la venta.
+  //
+  // `real` y no `guides`: una salida corregida como registro no es un intento
+  // fallido, es un error de dedo.
+  const recovery = order.cancelled_at
+    ? null
+    : recoveryActive(real, events, now, inputs.recoveryWindowDays);
+  if (recovery) {
+    return {
+      ...rollup,
+      general: "en_proceso",
+      operational: "pendiente_nuevo_courier",
+      since: recovery.closedAt,
+      source: recovery.guide.courier,
     };
   }
 
