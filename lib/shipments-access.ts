@@ -24,6 +24,12 @@ import {
 } from "@/lib/shipments";
 import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
+import {
+  RECOVERY_DISCARDED_KIND,
+  recoveryOutcome,
+  type RecoveryEventLike,
+  type RecoveryGuideLike,
+} from "@/lib/reproprovincia";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
@@ -60,7 +66,7 @@ export function isShipmentView(v: string | undefined | null): v is ShipmentView 
 }
 
 const SHIPMENT_COLUMNS =
-  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_eligible,fenix_shipment_id,swayp_guide,swayp_state,created_via,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,reported_status,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
+  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_eligible,fenix_shipment_id,swayp_guide,swayp_state,created_via,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,reported_status,closed_at,returned_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
 // Deployment safety: application deploys and database migrations are separate
 // operations in production. Keep queue reads alive while 0038 is being applied;
@@ -70,6 +76,11 @@ const LEGACY_SHIPMENT_COLUMNS =
   "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,delivered_source,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,reported_status,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
 const SHIPMENT_LIST_COLUMNS = `${SHIPMENT_COLUMNS},shipment_calls(count)`;
+// Lo mínimo para DECIDIR una recuperable sin traer la fila entera: lo que mira
+// `withRecoveryState`. El contador del chip pasa por la misma decisión que la
+// lista, así que necesita las mismas columnas.
+const RECUPERAR_COUNT_COLUMNS =
+  "id,store_id,courier,order_id,delivery_status,status_category,reported_status,closed_at,returned_at,updated_at";
 const LEGACY_SHIPMENT_LIST_COLUMNS = `${LEGACY_SHIPMENT_COLUMNS},shipment_calls(count)`;
 
 type ShipmentWithCallCount = ShipmentRow & {
@@ -165,6 +176,102 @@ async function withLastGestion(
       parentByChild.has(row.id) ? latestById.get(parentByChild.get(row.id)!) : undefined,
     ),
   }));
+}
+
+/**
+ * En qué quedó la recuperación del PEDIDO de cada guía cerrada sin entregar.
+ *
+ * POR QUÉ SE CALCULA ACÁ Y NO SE LEE DEL MASTER. `order_master` ya trae la
+ * respuesta, pero es el resultado de un cron: tras un descarte o una anulación
+ * hay minutos —y en un cambio de versión, horas— en que dice lo de antes. Lo
+ * que no puede pasar es que el badge diga «Reproprovincia» sobre un pedido que
+ * alguien acaba de descartar. Así que se aplica la MISMA función que usan los
+ * resolvedores, `recoveryOutcome`, sobre los mismos hechos: todas las guías del
+ * pedido, sus eventos `recovery_discarded`, la anulación en Shopify y la
+ * ventana de la tienda. Una regla, dos lectores.
+ *
+ * Solo toca las filas candidatas —Aliclik, cerrada, con etiqueta de intento
+ * fallido—; las demás quedan como están. Mejor esfuerzo: si una lectura falla,
+ * la fila se decide con lo que ella misma sabe, nunca se inventa un descarte.
+ */
+async function withRecoveryState(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  rows: ShipmentRow[],
+): Promise<ShipmentRow[]> {
+  const candidateIds = new Set(
+    rows
+      .filter(
+        (r) =>
+          (r.courier ?? "").trim().toLowerCase() === "aliclik" &&
+          r.status_category === "closed" &&
+          etiquetaDiceTerminoSinEntregar(r.reported_status),
+      )
+      .map((r) => r.id),
+  );
+  if (!candidateIds.size) return rows;
+  const candidates = rows.filter((r) => candidateIds.has(r.id));
+  const nowIso = new Date().toISOString();
+  const orderIds = Array.from(
+    new Set(candidates.map((r) => r.order_id).filter((id): id is string => !!id)),
+  );
+
+  const guidesByOrder = new Map<string, RecoveryGuideLike[]>();
+  const eventsByOrder = new Map<string, RecoveryEventLike[]>();
+  const cancelled = new Set<string>();
+  for (const part of chunk(orderIds, 300)) {
+    const [guides, events, orders] = await Promise.all([
+      sb
+        .from("shipments")
+        .select("order_id,courier,delivery_status,reported_status,closed_at,returned_at,updated_at")
+        .in("order_id", part),
+      sb
+        .from("order_events")
+        .select("order_id,kind,occurred_at")
+        .in("order_id", part)
+        .eq("kind", RECOVERY_DISCARDED_KIND),
+      sb.from("orders").select("id,cancelled_at").in("id", part).not("cancelled_at", "is", null),
+    ]);
+    for (const g of ((guides.data ?? []) as (RecoveryGuideLike & { order_id: string })[])) {
+      const list = guidesByOrder.get(g.order_id) ?? [];
+      list.push(g);
+      guidesByOrder.set(g.order_id, list);
+    }
+    for (const e of ((events.data ?? []) as (RecoveryEventLike & { order_id: string })[])) {
+      const list = eventsByOrder.get(e.order_id) ?? [];
+      list.push(e);
+      eventsByOrder.set(e.order_id, list);
+    }
+    for (const o of ((orders.data ?? []) as { id: string }[])) cancelled.add(o.id);
+  }
+
+  // La ventana es por tienda: `return_recovery_max_days`, el mismo número que la
+  // recuperación por WhatsApp y que el Master.
+  const windowByStore = new Map<string, number>();
+  const { data: stores } = await sb
+    .from("stores")
+    .select("id,return_recovery_max_days")
+    .in("id", Array.from(new Set(candidates.map((r) => r.store_id))));
+  for (const s of ((stores ?? []) as { id: string; return_recovery_max_days: number | null }[])) {
+    if (s.return_recovery_max_days != null) windowByStore.set(s.id, s.return_recovery_max_days);
+  }
+
+  return rows.map((row) => {
+    if (!candidateIds.has(row.id)) return row;
+    // Anulado en Shopify: lo decidió una persona y gana. Sin segunda mitad, y
+    // fuera de la cola de Pendiente.
+    if (row.order_id && cancelled.has(row.order_id)) return { ...row, recovery: null };
+    const guides = (row.order_id && guidesByOrder.get(row.order_id)) || [row];
+    const events = (row.order_id && eventsByOrder.get(row.order_id)) || [];
+    return {
+      ...row,
+      recovery: recoveryOutcome(
+        guides,
+        events,
+        nowIso,
+        windowByStore.get(row.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
+      ),
+    };
+  });
 }
 
 /** Attach today's team-wide call count to each queue row. This is deliberately
@@ -398,9 +505,16 @@ async function guiasPorRecuperar(
     .order("updated_at", { ascending: false })
     .limit(PAGE);
   if (error) return [];
-  return ((data as unknown as ShipmentWithCallCount[]) ?? []).filter((row) =>
+  const cerradasSinEntregar = ((data as unknown as ShipmentWithCallCount[]) ?? []).filter((row) =>
     etiquetaDiceTerminoSinEntregar(row.reported_status),
   );
+  // Y de ésas, solo las que el PEDIDO todavía admite: dentro de la ventana y sin
+  // descarte. Es la misma regla que aplica el Master (v1.10); antes acá no había
+  // ventana ni descarte y la cola listaba 164 guías que el Master ya daba por
+  // vencidas. Las vencidas y descartadas siguen en la pestaña Anulado, con su
+  // segunda mitad escrita.
+  const conEstado = await withRecoveryState(sb, cerradasSinEntregar);
+  return conEstado.filter((row) => row.recovery === "activa") as ShipmentWithCallCount[];
 }
 
 export function esColaDeReprogramacion(cats: string[]): boolean {
@@ -444,6 +558,13 @@ export async function getStoreShipments(
     out.push(...rows);
     if (rows.length < PAGE) break;
   }
+  // La segunda mitad del badge en las cerradas sin entregar («Anulado ·
+  // Reproprovincia / Recuperación vencida / Descartada»). Se calcula sobre las
+  // filas propias de la vista ANTES de anexar las recuperables, que ya vienen
+  // decididas de `guiasPorRecuperar` — la misma función, sin pasar dos veces.
+  const decididas = await withRecoveryState(sb, out);
+  out.length = 0;
+  out.push(...decididas);
   // Las cerradas SIN entregar entran a la misma cola (MOM §11), no a una
   // pestaña aparte: son la misma pregunta —«¿a quién hay que llamar?»— y el
   // documento las lista junto a las demás entradas. Se distinguen con el chip
@@ -518,7 +639,7 @@ export async function getShipmentCounts(
       // acaba diciendo una cosa y las filas otra.
       const [pendientes, recuperables] = await Promise.all([
         countByCategory(sb, storeIds, ["pending"]),
-        guiasPorRecuperar(sb, storeIds, "id,courier,reported_status"),
+        guiasPorRecuperar(sb, storeIds, RECUPERAR_COUNT_COLUMNS),
       ]);
       return pendientes + recuperables.length;
     })(),
@@ -571,7 +692,7 @@ export async function searchShipmentsQuery(query: string): Promise<ShipmentRow[]
   let result = await fetchRows(SHIPMENT_COLUMNS);
   if (result.error) result = await fetchRows(LEGACY_SHIPMENT_COLUMNS);
   const rows = ((result.data as unknown as ShipmentRow[]) ?? []).map(withEnhancementDefaults);
-  return withCurrentFenixEligibility(sb, rows);
+  return withCurrentFenixEligibility(sb, await withRecoveryState(sb, rows));
 }
 
 export interface OrderLinkCandidate {
@@ -711,7 +832,10 @@ export async function getShipmentWithCalls(
   if (shipmentResult.error) shipmentResult = await fetchShipment(LEGACY_SHIPMENT_COLUMNS);
   const shipment = shipmentResult.data;
   if (!shipment) return null;
-  const shipmentRow = withEnhancementDefaults(shipment as Partial<ShipmentRow>);
+  // El drawer enseña el mismo badge que la tabla, así que decide igual.
+  const shipmentRow: ShipmentRow =
+    (await withRecoveryState(sb, [withEnhancementDefaults(shipment as Partial<ShipmentRow>)]))[0] ??
+    withEnhancementDefaults(shipment as Partial<ShipmentRow>);
   const lineage = await getShipmentLineage(sb, shipmentRow);
   const lineageIds = lineage.map((guide) => guide.id);
   // Deploy safety: the app may ship before 0042 is applied. Fall back to the

@@ -1511,6 +1511,27 @@ demás entradas elegibles. Se acotan con el chip **«Por recuperar»** de la fil
 de filtros. Una pestaña más sería un balde más que nadie mira, que es el mismo
 motivo por el que los segmentos de leads se fusionaron.
 
+**Envíos aplica la MISMA regla que el Master**, no una propia. Hasta la v1.10
+Envíos decidía «por recuperar» con dos condiciones —cerrada y etiqueta de
+intento fallido— y el Master con cuatro —más la ventana y el descarte—. Medido
+el día que se unificó: 976 guías en la cola de Envíos, de las que 164 el Master
+ya daba por vencidas, y un descarte registrado en el Master no sacaba la fila
+de Envíos. Ahora `recoveryOutcome` (`lib/reproprovincia.ts`) se calcula al leer
+sobre los mismos hechos —todas las guías del pedido, sus `recovery_discarded`,
+la anulación en Shopify y la ventana de la tienda— y **solo las activas entran
+a Pendiente**. No se lee de `order_master` porque es el resultado de un cron:
+tras un descarte diría lo de antes durante minutos.
+
+**El badge de Estado tiene dos mitades.** La primera es la guía —la verdad del
+courier, que no se falsea: sigue diciendo «Anulado»—; la segunda es en qué
+quedó el pedido: **«Anulado · Reproprovincia»** mientras se puede reenviar,
+**«Anulado · Recuperación vencida»** o **«Anulado · Descartada»** después. Es
+el mismo patrón de «Pendiente · Ingestión» y «Entregado · por Fenix». Sin la
+segunda mitad, una guía viva para Swayp se veía igual que una muerta. Las
+vencidas y descartadas se quedan en la pestaña Anulado, que es el registro, con
+su segunda mitad escrita. No se inventa un `delivery_status` «reproprovincia»:
+el barrido de Aliclik lo pisaría en el siguiente ciclo.
+
 La consulta va **acotada por ventana** —la misma anchura que usa la pantalla de
 recuperación, `RECOVERY_DEFAULT_MAX_DAYS * 2`— porque el conjunto «cerradas de
 Aliclik» crece sin fin. Se consulta más ancho que la elegibilidad a propósito:

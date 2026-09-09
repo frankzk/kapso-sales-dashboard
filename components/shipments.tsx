@@ -36,6 +36,7 @@ import type {
   StoreSummary,
 } from "@/lib/types";
 import { SHIPMENT_VIEWS, type ShipmentView, type ReproDayAgentNamed } from "@/lib/shipments-access";
+import { RECOVERY_LABEL, type RecoveryKind } from "@/lib/reproprovincia";
 import {
   sortShipmentRows,
   type ShipmentSortDirection,
@@ -174,11 +175,23 @@ function tomorrowDateInputValue(): string {
   return localDateInputValue(tomorrow);
 }
 
-/** Human sub-state suffix: "· Intento 3" for pending, "· por Fenix" for entregado. */
-function subState(s: { status_category: string; reroute_attempts: number; delivered_source: string | null }): string {
+/**
+ * Segunda mitad del badge: «· Intento 3» en pendiente, «· por Fenix» en
+ * entregado, y en una guía cerrada sin entregar, en qué quedó el PEDIDO:
+ * «Anulado · Reproprovincia» mientras se puede reenviar, «· Recuperación
+ * vencida» o «· Descartada» después. La primera mitad sigue siendo la guía —la
+ * verdad del courier, que no se falsea—; la segunda es lo que hay que hacer.
+ */
+function subState(s: {
+  status_category: string;
+  reroute_attempts: number;
+  delivered_source: string | null;
+  recovery?: RecoveryKind | null;
+}): string {
   if (s.status_category === "pending") return ` · ${attemptLabel(s.reroute_attempts)}`;
   if (s.status_category === "delivered" && s.delivered_source)
     return ` · por ${s.delivered_source === "fenix" ? "Fenix" : "Aliclik"}`;
+  if (s.recovery) return ` · ${RECOVERY_LABEL[s.recovery]}`;
   return "";
 }
 
@@ -740,7 +753,7 @@ export function ShipmentsBoard({
                 <>
                   <label
                     className="flex items-center gap-1.5 text-xs text-slate-600"
-                    title="Aliclik las cerró sin entregar: el pedido sigue vivo y admite una salida Swayp"
+                    title="Aliclik las cerró sin entregar y el pedido sigue en ventana de recuperación: admite una salida Swayp. Las vencidas y las descartadas ya no están en esta cola."
                   >
                     <input
                       type="checkbox"
