@@ -10,8 +10,11 @@ import {
   getShipmentWithCalls,
   searchOrdersForLink,
   searchShipmentsQuery,
+  withRecoveryState,
   type OrderLinkCandidate,
 } from "@/lib/shipments-access";
+import type { RecoveryCallDisposition } from "@/lib/reproprovincia";
+import { discardRecovery, validarMotivoDescarte } from "@/lib/recovery-discard";
 import type { ReprogramChildRow } from "@/lib/shipments";
 import {
   CLAIM_TTL_MINUTES,
@@ -694,6 +697,114 @@ export async function registerRerouteCall(
     notice = `Registrado — ${attemptLabel(t.attempts)}.`;
   }
   return { notice };
+}
+
+/**
+ * Gestión sobre una guía ANULADA cuyo pedido sigue en recuperación (MOM §11).
+ *
+ * `registerRerouteCall` se niega —bien— sobre una guía anulada: sus
+ * disposiciones mueven el estado de la GUÍA, y «confirma» la reabriría o
+ * «cancela» la anularía otra vez. Pero desde la v1.10 el PEDIDO sigue vivo
+ * mientras dura la ventana, y Envíos lo lista para llamar; no tener dónde
+ * anotar la llamada era la mitad del problema (0 llamadas registradas sobre
+ * 920 pedidos). Acá se registra lo que pasó con la clienta sin tocar la guía:
+ * programar la siguiente llamada, dejar constancia de que no contestó, o cerrar
+ * la recuperación porque no quiere. Reenviar tiene su propio botón porque crea
+ * una guía nueva (`reprogramCancelledShipmentException`).
+ *
+ * LA PUERTA ES LA MISMA QUE LA LISTA: `withRecoveryState`. Si el pedido ya no
+ * está activo —venció, alguien lo descartó, o ya tiene guía nueva— la pantalla
+ * que lo ofreció está vieja y se le dice.
+ */
+export async function registerRecoveryCall(
+  shipmentId: string,
+  input: {
+    disposition: RecoveryCallDisposition;
+    note?: string;
+    nextFollowupAt?: string | null;
+  },
+): Promise<ShipmentActionState> {
+  const ctx = await authorizeShipment(shipmentId);
+  if (!ctx) return { error: "Sin acceso a este envío." };
+  const admin = createAdminSupabase();
+  const { data: shipment } = await admin
+    .from("shipments")
+    .select(
+      "id,store_id,courier,guide_code,delivery_status,status_category,order_id,reported_status,closed_at,returned_at,updated_at",
+    )
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (!shipment) return { error: "No encontrado." };
+  const decidida = (await withRecoveryState(admin, [shipment as unknown as ShipmentRow]))[0];
+  if (decidida?.recovery !== "activa") {
+    return {
+      error:
+        "Este pedido ya no está en recuperación (venció, se descartó o ya tiene guía nueva). Actualiza el panel.",
+    };
+  }
+
+  const note = input.note?.trim() || null;
+  if (input.disposition === "programar" && !isFutureShipmentFollowup(input.nextFollowupAt)) {
+    return { error: "Elige una fecha futura para programar la próxima llamada." };
+  }
+
+  if (input.disposition === "no_quiere") {
+    if (!decidida.order_id) return { error: "Vincula el pedido antes de descartar la recuperación." };
+    const motivo = validarMotivoDescarte(note);
+    if ("error" in motivo) return motivo;
+    // El MISMO hecho que escribe el Master: `discardRecovery`. El resolvedor lo
+    // lee y el pedido cae a cierre con el motivo; la guía no se toca.
+    const { error } = await discardRecovery(admin, {
+      storeId: ctx.storeId,
+      orderId: decidida.order_id,
+      actor: ctx.userId,
+      reason: motivo.reason,
+    });
+    if (error) return { error };
+    await admin.from("shipment_calls").insert({
+      shipment_id: shipmentId,
+      store_id: ctx.storeId,
+      agent: ctx.userId,
+      kind: "call",
+      new_status: null,
+      note: `Cliente no quiere. Recuperación descartada: ${motivo.reason}`,
+      next_followup_at: null,
+    });
+    // Sale de la cola: se suelta el reclamo y la próxima llamada.
+    await admin
+      .from("shipments")
+      .update({ next_followup_at: null, claimed_by: null, claimed_at: null })
+      .eq("id", shipmentId);
+    await syncMasterForShipment(admin, shipmentId);
+    revalidatePath("/dashboard/envios");
+    return {
+      notice: "Recuperación descartada. El pedido pasa a cierre con el motivo registrado y la guía sale de la cola.",
+    };
+  }
+
+  const nextFollowup = input.nextFollowupAt ?? null;
+  await admin.from("shipments").update({ next_followup_at: nextFollowup }).eq("id", shipmentId);
+  await admin.from("shipment_calls").insert({
+    shipment_id: shipmentId,
+    store_id: ctx.storeId,
+    agent: ctx.userId,
+    kind: "call",
+    // No es una transición de la guía: sigue anulada. Nulo, como en «programar».
+    new_status: null,
+    note: input.disposition === "no_contesta" ? ["No contesta.", note].filter(Boolean).join(" ") : note,
+    next_followup_at: nextFollowup,
+  });
+  await syncMasterForShipment(admin, shipmentId);
+  revalidatePath("/dashboard/envios");
+  if (input.disposition === "programar") {
+    const date = new Date(nextFollowup!).toLocaleDateString("es-PE", {
+      day: "2-digit",
+      month: "short",
+      timeZone: "UTC",
+    });
+    return { notice: `Llamada programada para el ${date}. El pedido sigue en recuperación.` };
+  }
+  return { notice: "Registrado — No contesta. El pedido sigue en recuperación." };
 }
 
 function aliclikDecisionMessage(

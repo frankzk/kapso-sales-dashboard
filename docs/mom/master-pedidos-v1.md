@@ -1496,6 +1496,16 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
 - **La gestión es sobre el PEDIDO**: la mesa de confirmación registra los
   contactos aunque la guía esté anulada. Reenviar por Swayp es la acción normal,
   no una excepción; si no hay stock en su ciudad, Shalom u Olva con adelanto.
+- **Desde Envíos, sobre la guía anulada**, mientras la segunda mitad diga
+  «Reproprovincia»: **Reenviar por Fenix/Swayp** (el mismo flujo que la
+  excepción sobre anulada, que deja de llamarse excepción: la guía queda madre
+  transferida y nace la guía nueva), **Programar próxima llamada**, **No
+  contesta** y **Cliente no quiere**, que descarta la recuperación con motivo.
+  Ninguna mueve la guía —sigue anulada— y las cuatro alimentan «Última
+  gestión». El descarte es el MISMO evento que el del Master
+  (`lib/recovery-discard.ts`), y la puerta del servidor es la misma función que
+  puso la segunda mitad del badge: si venció, se descartó o ya tiene guía
+  nueva, la acción se niega y pide actualizar el panel.
 - **Sale** por cuatro puertas: se crea la salida Swayp (pasa a En curso con la
   guía nueva); se reprograma Aliclik (excepción con motivo, como hasta ahora);
   se **descarta a mano con motivo** (evento `recovery_discarded`); o **vence la

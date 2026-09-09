@@ -1,6 +1,7 @@
 // RLS-scoped reads for the Envíos module. Mirrors lib/leads-access.ts: queue
 // listing by view, counts, and a shipment + call-history detail loader.
 
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase } from "@/lib/db";
 import type {
   LinkedShipmentSummary,
@@ -193,9 +194,14 @@ async function withLastGestion(
  * Solo toca las filas candidatas —Aliclik, cerrada, con etiqueta de intento
  * fallido—; las demás quedan como están. Mejor esfuerzo: si una lectura falla,
  * la fila se decide con lo que ella misma sabe, nunca se inventa un descarte.
+ *
+ * Se exporta para que la acción que registra llamadas sobre la guía anulada
+ * decida con la MISMA función que la lista que la ofreció (con el cliente
+ * admin, porque escribe): la puerta del servidor y la de la pantalla no pueden
+ * ser dos.
  */
-async function withRecoveryState(
-  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+export async function withRecoveryState(
+  sb: SupabaseClient,
   rows: ShipmentRow[],
 ): Promise<ShipmentRow[]> {
   const candidateIds = new Set(
