@@ -167,6 +167,16 @@ describe("buildSwaypGuideInput", () => {
     });
   });
 
+  // #KP131632: el pedido no tenía dirección y la ciudad llegaba vacía. El motivo
+  // salía «No hay bodega Swayp configurada para .», que no le dice nada a nadie.
+  it("una ciudad vacía dice que falta el destino, no que falte la bodega", () => {
+    const r = buildSwaypGuideInput({ ...base, city: "" });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/destino/i);
+    expect(r.error).not.toMatch(/bodega/i);
+  });
+
   it("refuses an address shorter than the API's 5-character minimum", () => {
     const r = buildSwaypGuideInput({ ...base, address1: "Av." });
     expect(r.ok).toBe(false);

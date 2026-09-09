@@ -140,6 +140,14 @@ export function esCiudadPorApiSwayp(
  * ser la bodega de la misma ciudad, porque Swayp sólo cubre pares intra-ciudad.
  */
 export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
+  // Ciudad vacía es «no sé a dónde va», no «esa ciudad no está habilitada». Sin
+  // esta reja el motivo salía como «No hay bodega Swayp configurada para .» —con
+  // el punto pegado a la nada— y el aviso que lee la operadora no decía nada.
+  // Pasó con #KP131632: guía manual y nadie supo por qué hasta mirar la base.
+  if (!b.city.trim()) {
+    return { ok: false, error: "No se pudo determinar la ciudad de destino del envío." };
+  }
+
   const sender = b.senders[b.city];
   if (!sender) {
     return { ok: false, error: `No hay bodega Swayp configurada para ${b.city}.` };
