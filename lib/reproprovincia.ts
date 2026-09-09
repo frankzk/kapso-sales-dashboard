@@ -146,3 +146,43 @@ export function recoveryActive(
   const w = recoveryWindow(guides, events, nowIso, windowDays);
   return w && !w.expired ? w : null;
 }
+
+/**
+ * En qué quedó la recuperación de un pedido, para ENSEÑARLO.
+ *
+ * Los resolvedores solo necesitan saber si está activa (`recoveryActive`).
+ * Envíos necesita más: la guía anulada se lista igual, y lo que cambia es la
+ * segunda mitad del badge —«Anulado · Reproprovincia», «· Recuperación
+ * vencida», «· Descartada»—. Sin esa mitad, una guía viva para Swayp se ve
+ * igual que una muerta, que es exactamente lo que mareaba.
+ *
+ * `null` es «no aplica»: no hubo intento fallido tras salir, o hay una guía
+ * viva que ya lleva la gestión. En ese caso el badge se queda en una mitad.
+ */
+export type RecoveryKind = "activa" | "vencida" | "descartada";
+
+/** Segunda mitad del badge. UN texto por estado, para Envíos y para el Master. */
+export const RECOVERY_LABEL: Record<RecoveryKind, string> = {
+  activa: "Reproprovincia",
+  vencida: "Recuperación vencida",
+  descartada: "Descartada",
+};
+
+export function recoveryOutcome(
+  guides: readonly RecoveryGuideLike[],
+  events: readonly RecoveryEventLike[],
+  nowIso: string,
+  windowDays?: number,
+): RecoveryKind | null {
+  if (guides.some((g) => g.delivery_status === "pendiente" || g.delivery_status === "en_ruta")) {
+    return null;
+  }
+  if (!guides.some(aliclikGuideFailedAfterDispatch)) return null;
+  // El descarte se mira DESPUÉS de saber que era recuperable: un evento suelto
+  // sobre un pedido que nunca lo fue no convierte una guía cualquiera en
+  // «descartada».
+  if (events.some((e) => e.kind === RECOVERY_DISCARDED_KIND)) return "descartada";
+  const w = recoveryWindow(guides, events, nowIso, windowDays);
+  if (!w) return null;
+  return w.expired ? "vencida" : "activa";
+}

@@ -80,22 +80,28 @@ const BOARD = "components/shipments.tsx";
 const src = (f: string) => readFileSync(resolve(process.cwd(), f), "utf8");
 
 describe("las cerradas por recuperar entran a la cola de Pendiente", () => {
-  it("el chip reconoce una guía cerrada sin entregar", () => {
-    expect(esPorRecuperar({ status_category: "closed", reported_status: "CANCEL · RETURNED · CONFIRMED" })).toBe(true);
-    expect(esPorRecuperar({ status_category: "closed", reported_status: "CANCEL · TO_RETURN · CONFIRMED" })).toBe(true);
+  it("el chip lee la decisión del PEDIDO, no vuelve a decidir", () => {
+    // Desde la v1.10 la regla —cerrada, etiqueta de intento fallido, dentro de
+    // la ventana, sin descarte— vive en `recoveryOutcome` y se aplica al leer.
+    // Acá solo se lee el resultado; volver a decidir con la etiqueta sería la
+    // segunda regla que ya divergió una vez (164 vencidas en la cola).
+    expect(esPorRecuperar({ recovery: "activa" })).toBe(true);
   });
 
-  it("una guía ABIERTA no es «por recuperar»", () => {
-    // Ya está en la cola por su propio estado; marcarla acá la contaría dos veces
-    // como si fuera un rescate, que es otro trabajo.
-    expect(esPorRecuperar({ status_category: "pending", reported_status: "CANCEL · RETURNED · CONFIRMED" })).toBe(false);
-    expect(esPorRecuperar({ status_category: "in_route", reported_status: "REFUSED · PICKED · CONFIRMED" })).toBe(false);
+  it("vencida o descartada NO es «por recuperar», aunque la etiqueta diga intento fallido", () => {
+    expect(esPorRecuperar({ recovery: "vencida" })).toBe(false);
+    expect(esPorRecuperar({ recovery: "descartada" })).toBe(false);
   });
 
-  it("ni una cerrada por entrega lograda o sin etiqueta", () => {
-    expect(esPorRecuperar({ status_category: "closed", reported_status: "DELIVERED · PICKED · CONFIRMED" })).toBe(false);
-    expect(esPorRecuperar({ status_category: "closed", reported_status: null })).toBe(false);
+  it("y sin decisión —guía abierta, entregada, sin etiqueta— tampoco", () => {
+    // Una abierta ya está en la cola por su propio estado; marcarla acá la
+    // contaría dos veces como si fuera un rescate, que es otro trabajo.
+    expect(esPorRecuperar({ recovery: null })).toBe(false);
     expect(esPorRecuperar({})).toBe(false);
+  });
+
+  it("la etiqueta ya no se lee en `lib/shipments.ts`: una regla, un sitio", () => {
+    expect(src("lib/shipments.ts")).not.toContain("etiquetaDiceTerminoSinEntregar");
   });
 
   it("la lista y el contador salen de la MISMA función", () => {

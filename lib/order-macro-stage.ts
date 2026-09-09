@@ -16,7 +16,7 @@ import {
   limaDayKey,
   reachedLastAttempt,
 } from "@/lib/order-confirmation";
-import { recoveryActive, recoveryWindow } from "@/lib/reproprovincia";
+import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovincia";
 
 // v1.10: Reproprovincia. Un pedido cuya guía Aliclik terminó sin entregar —con
 // el paquete ya fuera— deja de caer en «Por cerrar» como si la venta hubiera
@@ -214,7 +214,7 @@ export const MACRO_SUBSTAGE_LABEL: Record<MacroSubstage, string> = {
   devolucion_fisica_pendiente: "Devolución física pendiente",
   devolucion_pendiente_inventario: "Devolución pendiente de inventario",
   recogido_sin_pago_completo: "Recogido sin pago completo",
-  recuperacion_vencida: "Recuperación vencida",
+  recuperacion_vencida: RECOVERY_LABEL.vencida,
   indemnizacion_pendiente: "Indemnización pendiente",
   merma_pendiente: "Merma pendiente",
   reembolso_pendiente: "Reembolso pendiente",

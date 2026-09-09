@@ -1,5 +1,7 @@
 // Shared domain types + constants used across ingestion, metrics and UI.
 
+import type { RecoveryKind } from "@/lib/reproprovincia";
+
 export type Role = "owner" | "admin" | "viewer" | "vendedora";
 export type ShippingMode = "cod" | "agency" | null;
 export type SyncSource = "shopify" | "kapso" | "ops";
@@ -280,6 +282,15 @@ export interface ShipmentRow {
    *  que distingue una guía cerrada porque la entrega FALLÓ —y cuyo pedido
    *  todavía merece otra salida— de una cerrada por decisión nuestra. */
   reported_status?: string | null;
+  /** Cuándo el courier cerró la guía sin entregar. Ancla de la ventana de
+   *  recuperación; el barrido de Aliclik lo sella al anular. */
+  closed_at?: string | null;
+  /**
+   * En qué quedó la recuperación del PEDIDO de esta guía —«activa», «vencida»,
+   * «descartada»— o null si no aplica. Se añade al leer (lib/reproprovincia.ts),
+   * y es la segunda mitad del badge «Anulado · …» en Envíos.
+   */
+  recovery?: RecoveryKind | null;
   ready_at?: string | null;
   ready_by?: string | null;
   custody_transferred_at?: string | null;

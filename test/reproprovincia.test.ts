@@ -3,8 +3,10 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   RECOVERY_DISCARDED_KIND,
+  RECOVERY_LABEL,
   aliclikGuideFailedAfterDispatch,
   recoveryActive,
+  recoveryOutcome,
   recoveryWindow,
 } from "@/lib/reproprovincia";
 import { resolveOrderState, type GuideSnapshot, type OrderSnapshot } from "@/lib/order-status";
@@ -311,5 +313,92 @@ describe("las piezas en el código", () => {
     expect(mom).toContain("#### El ciclo de recuperación (v1.10)");
     expect(mom).toContain("`recovery_discarded`");
     expect(mom).toContain("`recuperacion_vencida`");
+  });
+});
+
+/**
+ * Envíos lee la MISMA regla.
+ *
+ * EL CASO. Tras la v1.10 había dos reglas: Envíos decidía «por recuperar» con
+ * «cerrada + etiqueta de intento fallido», y el Master con eso más la ventana y
+ * el descarte. Medido: 976 guías en la cola de Envíos, 164 que el Master ya
+ * daba por vencidas; y un descarte hecho en el Master no sacaba la fila de
+ * Envíos. En la tabla todas decían «Anulado» a secas, así que una guía viva
+ * para Swayp se veía igual que una muerta.
+ */
+describe("en qué quedó la recuperación, para enseñarlo", () => {
+  const guiaR = (over: Partial<GuideSnapshot> = {}) => guia(over);
+
+  it("activa: dentro de la ventana y sin descarte", () => {
+    expect(recoveryOutcome([guiaR()], [], NOW, 30)).toBe("activa");
+  });
+
+  it("vencida: la ventana pasó", () => {
+    expect(recoveryOutcome([guiaR({ closed_at: hace(31), updated_at: hace(31) })], [], NOW, 30)).toBe("vencida");
+  });
+
+  it("descartada: alguien lo decidió con motivo, aunque la ventana siga abierta", () => {
+    const evento = { kind: RECOVERY_DISCARDED_KIND, occurred_at: hace(1) };
+    expect(recoveryOutcome([guiaR()], [evento], NOW, 30)).toBe("descartada");
+  });
+
+  it("un descarte sobre una guía que nunca fue recuperable no la vuelve «descartada»", () => {
+    const evento = { kind: RECOVERY_DISCARDED_KIND, occurred_at: hace(1) };
+    expect(recoveryOutcome([guiaR({ reported_status: FALLO_SIN_SALIR })], [evento], NOW, 30)).toBeNull();
+    expect(recoveryOutcome([guiaR({ reported_status: "DELIVERED · PICKED · " })], [evento], NOW, 30)).toBeNull();
+  });
+
+  it("con una guía viva la gestión la lleva ella: sin segunda mitad", () => {
+    const swayp = guiaR({ id: "g2", courier: "swayp", delivery_status: "pendiente", reported_status: null });
+    expect(recoveryOutcome([guiaR(), swayp], [], NOW, 30)).toBeNull();
+  });
+
+  it("los tres textos existen y el Master usa el MISMO para «vencida»", () => {
+    expect(RECOVERY_LABEL.activa).toBe("Reproprovincia");
+    expect(RECOVERY_LABEL.vencida).toBe("Recuperación vencida");
+    expect(RECOVERY_LABEL.descartada).toBe("Descartada");
+    expect(readFileSync(resolve(process.cwd(), "lib/order-macro-stage.ts"), "utf8")).toContain(
+      "recuperacion_vencida: RECOVERY_LABEL.vencida,",
+    );
+  });
+});
+
+describe("Envíos, en el código", () => {
+  const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
+
+  it("la cola de Pendiente solo anexa las ACTIVAS, decididas por la misma función", () => {
+    const src = read("lib/shipments-access.ts");
+    const start = src.indexOf("async function guiasPorRecuperar(");
+    const fn = src.slice(start, src.indexOf("\n}\n", start));
+    expect(fn).toContain("await withRecoveryState(sb, cerradasSinEntregar)");
+    expect(fn).toContain('row.recovery === "activa"');
+  });
+
+  it("la decisión se calcula con los hechos del PEDIDO, no se lee del cron", () => {
+    const src = read("lib/shipments-access.ts");
+    const start = src.indexOf("async function withRecoveryState(");
+    const fn = src.slice(start, src.indexOf("\n}\n", start));
+    expect(fn).toContain("recoveryOutcome(");
+    expect(fn).toContain('.eq("kind", RECOVERY_DISCARDED_KIND)');
+    expect(fn).toContain('.not("cancelled_at", "is", null)');
+    expect(fn).toContain('select("id,return_recovery_max_days")');
+    expect(fn).not.toContain("order_master");
+  });
+
+  it("el contador del chip pasa por la MISMA decisión que la lista", () => {
+    const src = read("lib/shipments-access.ts");
+    expect(src).toContain("guiasPorRecuperar(sb, storeIds, RECUPERAR_COUNT_COLUMNS)");
+    expect(src).toMatch(/RECUPERAR_COUNT_COLUMNS =\s*\n?\s*"[^"]*order_id[^"]*reported_status[^"]*closed_at[^"]*"/);
+  });
+
+  it("el badge escribe la segunda mitad desde el mismo texto", () => {
+    const src = read("components/shipments.tsx");
+    expect(src).toContain("if (s.recovery) return ` · ${RECOVERY_LABEL[s.recovery]}`;");
+  });
+
+  it("y el MOM lo dice", () => {
+    const mom = read("docs/mom/master-pedidos-v1.md");
+    expect(mom).toContain("**Envíos aplica la MISMA regla que el Master**");
+    expect(mom).toContain("**El badge de Estado tiene dos mitades.**");
   });
 });

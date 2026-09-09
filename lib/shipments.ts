@@ -13,8 +13,6 @@
 // the report already says ENTREGADO. The `pendiente` queue is split in the UI by
 // `fenix_eligible` (only guides with Fenix stock in their city are worked).
 
-import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
-
 export type ShipmentCategory = "pending" | "in_route" | "delivered" | "closed" | "transferred";
 
 /**
@@ -90,19 +88,16 @@ export function esperaSalidaDeAliclik(
  * misma pregunta, a quién hay que llamar, y el MOM las lista junto a las demás
  * entradas elegibles. El chip solo las acota.
  *
- * El vocabulario de Aliclik NO se repite acá: se delega en
- * `etiquetaDiceTerminoSinEntregar`, que vive junto al código que escribe esa
- * etiqueta. Acá solo se añade la condición de que la guía esté cerrada — una
- * abierta ya está en la cola por su propio estado y no es «por recuperar».
+ * LA REGLA NO VIVE ACÁ. Vivía: «cerrada + etiqueta de intento fallido», y con
+ * eso bastaba hasta que el Master empezó a aplicar la ventana de 30 días y el
+ * descarte a mano (v1.10). Entonces había DOS reglas: Envíos listaba 976 guías
+ * «por recuperar» de las que 164 el Master ya daba por vencidas, y un descarte
+ * registrado en el Master no sacaba la fila de esta cola. Ahora la respuesta se
+ * calcula al leer con `recoveryOutcome` (lib/reproprovincia.ts) —la misma
+ * función que usan los resolvedores— y acá solo se lee el resultado.
  */
-export function esPorRecuperar(row: {
-  status_category?: string | null;
-  reported_status?: string | null;
-}): boolean {
-  return (
-    (row.status_category ?? "") === "closed" &&
-    etiquetaDiceTerminoSinEntregar(row.reported_status)
-  );
+export function esPorRecuperar(row: { recovery?: string | null }): boolean {
+  return row.recovery === "activa";
 }
 
 export interface DeliveryStatusDef {
