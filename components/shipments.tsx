@@ -36,7 +36,12 @@ import type {
   StoreSummary,
 } from "@/lib/types";
 import { SHIPMENT_VIEWS, type ShipmentView, type ReproDayAgentNamed } from "@/lib/shipments-access";
-import { RECOVERY_LABEL, type RecoveryKind } from "@/lib/reproprovincia";
+import {
+  RECOVERY_CALL_DISPOSITIONS,
+  RECOVERY_LABEL,
+  type RecoveryCallDisposition,
+  type RecoveryKind,
+} from "@/lib/reproprovincia";
 import {
   sortShipmentRows,
   type ShipmentSortDirection,
@@ -60,6 +65,7 @@ import {
   loadShipmentDetail,
   reprogramCancelledShipmentException,
   registerCourierReportResult,
+  registerRecoveryCall,
   registerRerouteCall,
   releaseShipment,
   renewShipmentClaim,
@@ -1155,6 +1161,10 @@ function ShipmentDrawer({
   const [showCancelledException, setShowCancelledException] = useState(false);
   const [cancelledExceptionDate, setCancelledExceptionDate] = useState("");
   const [cancelledExceptionNote, setCancelledExceptionNote] = useState("");
+  // Llamadas sobre la guía anulada cuando el PEDIDO sigue en recuperación.
+  const [recoveryDisposition, setRecoveryDisposition] = useState<RecoveryCallDisposition>("programar");
+  const [recoveryDate, setRecoveryDate] = useState("");
+  const [recoveryNote, setRecoveryNote] = useState("");
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -1370,6 +1380,10 @@ function ShipmentDrawer({
     courierResultDefinition.resultingStatus !== "entregado";
   const fenixAwaitingCourierResult =
     shipmentRequiresCourierResult(shipment?.courier, shipment?.delivery_status);
+  // La segunda mitad del badge decide qué se ofrece: solo «activa» admite
+  // llamadas y reenvío como acción normal. La puerta de verdad está en el
+  // servidor, con la misma función que puso esa mitad.
+  const enRecuperacion = shipment?.delivery_status === "anulado" && shipment.recovery === "activa";
   const fenixReadyForCustomerManagement =
     shipment?.courier === "fenix" && shipment.delivery_status === "pendiente";
   // Una sola resolución para todo el cajón: los dos botones que autogeneran una
@@ -1773,11 +1787,14 @@ function ShipmentDrawer({
               <section className="space-y-2.5 rounded-xl border border-rose-200 bg-rose-50/60 p-3 shadow-[0_1px_0_rgba(244,63,94,0.08)]">
                 <div className="flex items-start justify-between gap-3">
                   <div>
+                    {/* En recuperación, reenviar es la acción NORMAL (MOM §11), no
+                        una excepción: la guía sí terminó, el pedido no. El flujo
+                        de abajo es el mismo; cambia lo que se le dice a quien llama. */}
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-rose-700">
-                      Excepción auditada
+                      {enRecuperacion ? "Reproprovincia" : "Excepción auditada"}
                     </p>
                     <p className="mt-0.5 text-sm font-semibold text-rose-950">
-                      Reprogramar un pedido anulado
+                      {enRecuperacion ? "Reenviar por Fenix / Swayp" : "Reprogramar un pedido anulado"}
                     </p>
                   </div>
                   {!showCancelledException && (
@@ -1786,12 +1803,14 @@ function ShipmentDrawer({
                       onClick={() => setShowCancelledException(true)}
                       className="shrink-0 rounded-lg border border-rose-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
                     >
-                      Crear excepción
+                      {enRecuperacion ? "Reenviar" : "Crear excepción"}
                     </button>
                   )}
                 </div>
                 <p className="text-xs leading-relaxed text-rose-800">
-                  No se borrará la anulación. Esta guía quedará como madre transferida y se creará una nueva guía Fenix con la fecha acordada.
+                  {enRecuperacion
+                    ? "La guía Aliclik ya terminó y no se toca: queda como madre transferida y se crea una guía Fenix con la fecha acordada con la clienta."
+                    : "No se borrará la anulación. Esta guía quedará como madre transferida y se creará una nueva guía Fenix con la fecha acordada."}
                 </p>
 
                 {showCancelledException && (
@@ -1807,7 +1826,7 @@ function ShipmentDrawer({
                       />
                     </label>
                     <label className="block text-xs font-medium text-slate-600">
-                      Motivo de la excepción
+                      {enRecuperacion ? "Nota de la llamada" : "Motivo de la excepción"}
                       <textarea
                         value={cancelledExceptionNote}
                         onChange={(e) => setCancelledExceptionNote(e.target.value)}
@@ -1870,6 +1889,92 @@ function ShipmentDrawer({
                     </div>
                   </div>
                 )}
+              </section>
+            )}
+
+            {/* Llamadas sobre la guía anulada mientras el PEDIDO sigue en
+                recuperación. La guía no admite gestión —está cerrada de verdad—,
+                así que esto no pasa por `registerRerouteCall` ni la mueve: anota
+                lo que pasó con la clienta y, si no quiere, cierra la recuperación
+                con motivo. Es lo que faltaba: 0 llamadas sobre 920 pedidos. */}
+            {enRecuperacion && (
+              <section className="space-y-1.5 rounded-xl border border-amber-200 bg-amber-50/45 p-2.5 shadow-[0_1px_0_rgba(245,158,11,0.08)]">
+                <p className="text-sm font-semibold text-amber-950">Registrar o programar llamada</p>
+                <p className="text-xs text-amber-900/80">
+                  Sobre el pedido, no sobre la guía: sigue «Anulado · Reproprovincia» hasta que se reenvíe, se descarte o venza la ventana.
+                </p>
+                <select
+                  value={recoveryDisposition}
+                  onChange={(e) => setRecoveryDisposition(e.target.value as RecoveryCallDisposition)}
+                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                >
+                  {RECOVERY_CALL_DISPOSITIONS.map((d) => (
+                    <option key={d.key} value={d.key}>
+                      {d.label}
+                    </option>
+                  ))}
+                </select>
+                {recoveryDisposition === "no_quiere" && (
+                  <p className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs text-rose-800">
+                    El pedido pasa a cierre con el motivo escrito y la guía sale de la cola. No se toca la guía de Aliclik ni el inventario.
+                  </p>
+                )}
+                {recoveryDisposition !== "no_quiere" && (
+                  <label className="block text-xs text-slate-500">
+                    {recoveryDisposition === "programar" ? "Fecha de próxima llamada" : "Próximo intento (opcional)"}
+                    <input
+                      type="date"
+                      value={recoveryDate}
+                      onChange={(e) => setRecoveryDate(e.target.value)}
+                      min={tomorrowDateInputValue()}
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
+                    />
+                  </label>
+                )}
+                <textarea
+                  value={recoveryNote}
+                  onChange={(e) => setRecoveryNote(e.target.value)}
+                  placeholder={
+                    recoveryDisposition === "no_quiere"
+                      ? "Motivo (obligatorio): p. ej. la clienta ya no quiere el producto"
+                      : "Nota de la llamada…"
+                  }
+                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                  rows={2}
+                />
+                <button
+                  onClick={() =>
+                    run(
+                      () =>
+                        registerRecoveryCall(shipmentId, {
+                          disposition: recoveryDisposition,
+                          note: recoveryNote,
+                          nextFollowupAt: recoveryDate ? new Date(recoveryDate).toISOString() : null,
+                        }),
+                      () => {
+                        setRecoveryNote("");
+                        setRecoveryDate("");
+                      },
+                    )
+                  }
+                  disabled={
+                    pending ||
+                    (recoveryDisposition === "programar" && !recoveryDate) ||
+                    (recoveryDisposition === "no_quiere" && recoveryNote.trim().length < 8)
+                  }
+                  className={cn(
+                    "w-full rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50",
+                    recoveryDisposition === "no_quiere"
+                      ? "bg-rose-600 hover:bg-rose-700"
+                      : "bg-brand-600 hover:bg-brand-700",
+                  )}
+                >
+                  {pending
+                    ? "Registrando…"
+                    : recoveryDisposition === "no_quiere"
+                      ? "Descartar la recuperación"
+                      : "Registrar"}
+                </button>
               </section>
             )}
 

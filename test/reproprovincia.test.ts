@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  RECOVERY_CALL_DISPOSITIONS,
   RECOVERY_DISCARDED_KIND,
   RECOVERY_LABEL,
   aliclikGuideFailedAfterDispatch,
@@ -9,6 +10,7 @@ import {
   recoveryOutcome,
   recoveryWindow,
 } from "@/lib/reproprovincia";
+import { DISCARD_REASON_MAX, DISCARD_REASON_MIN, validarMotivoDescarte } from "@/lib/recovery-discard";
 import { resolveOrderState, type GuideSnapshot, type OrderSnapshot } from "@/lib/order-status";
 import {
   MACRO_SUBSTAGES_BY_STAGE,
@@ -288,9 +290,13 @@ describe("las piezas en el código", () => {
     const src = read("app/dashboard/pedidos/actions.ts");
     const start = src.indexOf("export async function descartarRecuperacion(");
     const body = src.slice(start, src.indexOf("\n}\n", start));
-    expect(body).toContain("kind: RECOVERY_DISCARDED_KIND");
-    expect(body).toContain("reason.length < 8");
+    // El hecho se escribe por `discardRecovery`, el mismo que usa Envíos.
+    expect(body).toContain("validarMotivoDescarte(motivo)");
+    expect(body).toContain("await discardRecovery(admin, {");
     expect(body).not.toContain("status_override");
+    const helper = read("lib/recovery-discard.ts");
+    expect(helper).toContain("kind: RECOVERY_DISCARDED_KIND");
+    expect(helper).toContain('source: "manual"');
   });
 
   it("el barrido sella `closed_at` al anular, una sola vez", () => {
@@ -400,5 +406,70 @@ describe("Envíos, en el código", () => {
     const mom = read("docs/mom/master-pedidos-v1.md");
     expect(mom).toContain("**Envíos aplica la MISMA regla que el Master**");
     expect(mom).toContain("**El badge de Estado tiene dos mitades.**");
+  });
+});
+
+/**
+ * Llamadas desde Envíos sobre la guía anulada.
+ *
+ * La otra mitad del mareo: la guía anulada no admitía gestión —bien, está
+ * cerrada de verdad— y por eso nadie podía anotar «llamé, no quiere». Ahora la
+ * llamada es sobre el PEDIDO y no mueve la guía; «Cliente no quiere» escribe el
+ * MISMO evento de descarte que el Master.
+ */
+describe("gestión sobre la guía anulada, desde Envíos", () => {
+  const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
+  const accion = () => {
+    const src = read("app/dashboard/envios/actions.ts");
+    const start = src.indexOf("export async function registerRecoveryCall(");
+    return src.slice(start, src.indexOf("\n}\n", start));
+  };
+
+  it("tres disposiciones, y ninguna es «confirma» ni «cancela»: ésas mueven la guía", () => {
+    expect(RECOVERY_CALL_DISPOSITIONS.map((d) => d.key)).toEqual(["programar", "no_contesta", "no_quiere"]);
+  });
+
+  it("el motivo del descarte: obligatorio, con sustancia, y un solo mínimo", () => {
+    expect(validarMotivoDescarte("")).toEqual({ error: `Escribe el motivo (mínimo ${DISCARD_REASON_MIN} caracteres).` });
+    expect(validarMotivoDescarte("  no  ")).toHaveProperty("error");
+    expect(validarMotivoDescarte("  ya no quiere el producto  ")).toEqual({ reason: "ya no quiere el producto" });
+    expect(validarMotivoDescarte("x".repeat(DISCARD_REASON_MAX + 1))).toHaveProperty("error");
+    expect(DISCARD_REASON_MIN).toBe(8);
+  });
+
+  it("la puerta del servidor es la MISMA función que puso la segunda mitad del badge", () => {
+    const body = accion();
+    expect(body).toContain("await withRecoveryState(admin, [shipment as unknown as ShipmentRow])");
+    expect(body).toContain('recovery !== "activa"');
+    // Y no la de las guías vivas, que rechaza «anulado» — con razón.
+    expect(body).not.toContain("isCallable(");
+    expect(body).not.toContain("nextShipmentTransition(");
+  });
+
+  it("«no quiere» escribe el mismo descarte que el Master y no toca el estado de la guía", () => {
+    const body = accion();
+    expect(body).toContain("await discardRecovery(admin, {");
+    expect(body).toContain("validarMotivoDescarte(note)");
+    expect(body).not.toMatch(/delivery_status:\s*"/);
+    expect(body).not.toContain("status_category:");
+  });
+
+  it("programar exige fecha futura; no contesta no cambia nada de la guía", () => {
+    const body = accion();
+    expect(body).toContain('input.disposition === "programar" && !isFutureShipmentFollowup(input.nextFollowupAt)');
+    expect(body).toContain("new_status: null,");
+  });
+
+  it("el drawer solo lo ofrece cuando la segunda mitad dice «activa», y reenviar deja de ser «excepción»", () => {
+    const src = read("components/shipments.tsx");
+    expect(src).toContain('const enRecuperacion = shipment?.delivery_status === "anulado" && shipment.recovery === "activa";');
+    expect(src).toContain("{enRecuperacion && (");
+    expect(src).toContain("registerRecoveryCall(shipmentId, {");
+    expect(src).toContain('{enRecuperacion ? "Reproprovincia" : "Excepción auditada"}');
+  });
+
+  it("y el MOM lo dice", () => {
+    const mom = read("docs/mom/master-pedidos-v1.md");
+    expect(mom).toContain("**Desde Envíos, sobre la guía anulada**");
   });
 });

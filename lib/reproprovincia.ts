@@ -168,6 +168,23 @@ export const RECOVERY_LABEL: Record<RecoveryKind, string> = {
   descartada: "Descartada",
 };
 
+/**
+ * Lo que puede registrar Envíos sobre una guía anulada en recuperación.
+ *
+ * La guía no admite las disposiciones normales —«confirma» la reabriría y
+ * «cancela» intentaría anularla otra vez—. Lo que se gestiona es el PEDIDO:
+ * programar la siguiente llamada, dejar constancia de que no contestó, o
+ * cerrar la recuperación porque la clienta no quiere. Reenviar por Fenix/Swayp
+ * tiene su propio botón, porque crea una guía.
+ */
+export type RecoveryCallDisposition = "programar" | "no_contesta" | "no_quiere";
+
+export const RECOVERY_CALL_DISPOSITIONS: { key: RecoveryCallDisposition; label: string }[] = [
+  { key: "programar", label: "Programar próxima llamada" },
+  { key: "no_contesta", label: "No contesta" },
+  { key: "no_quiere", label: "Cliente no quiere · descartar la recuperación" },
+];
+
 export function recoveryOutcome(
   guides: readonly RecoveryGuideLike[],
   events: readonly RecoveryEventLike[],
