@@ -2,19 +2,17 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
+  ACTIVE_EXPERIMENT,
+  FRIO_COVERAGE_EXPERIMENT,
   FRIO_GOLDEN_EXPERIMENT,
-  TREATABLE_HOUR_END,
-  TREATABLE_HOUR_START,
   TREATMENT_FRACTION,
   assignArm,
   isExperimentEligible,
-  isWithinTreatableWindow,
-  shouldPin,
 } from "@/lib/lead-experiment";
 
-// 14:00 en Lima (UTC-5) = 19:00 UTC. Dentro de la franja tratable.
+// 14:00 en Lima (UTC-5) = 19:00 UTC.
 const enHorario = "2026-09-05T19:00:00.000Z";
-// 03:00 en Lima = 08:00 UTC. Nadie trabajando.
+// 03:00 en Lima = 08:00 UTC.
 const deMadrugada = "2026-09-05T08:00:00.000Z";
 
 describe("isExperimentEligible", () => {
@@ -38,14 +36,15 @@ describe("isExperimentEligible", () => {
     ).toBe(false);
   });
 
-  // El 57% de los leads sin señal entra fuera de horario, cuando solo ocurre el
-  // 10,7% de los toques humanos. Asignarlos metería en el estudio leads que
-  // NADIE puede tratar: no sesga (le pasa igual a los dos brazos) pero aplasta
-  // el contraste de cumplimiento y multiplica el tamaño de muestra necesario.
-  it("queda fuera el que entra cuando no hay nadie para llamarlo", () => {
-    expect(isExperimentEligible({ first_seen_at: deMadrugada })).toBe(false);
-    expect(isExperimentEligible({ first_seen_at: null })).toBe(false);
-    expect(isExperimentEligible({ first_seen_at: "no-es-fecha" })).toBe(false);
+  // v1 exigía entrar entre las 7 y las 18 porque su tratamiento era "llámalo
+  // dentro de su primera hora" y esa hora tenía que caer donde hubiera alguien.
+  // v2 pide "que se llame", sin prisa: el de las 3 de la madrugada se llama a las
+  // 9 y recibe el tratamiento igual. Quitar la franja DUPLICA la población —el
+  // 57% entraba fuera— y con ella la velocidad del experimento.
+  it("ya no mira la hora de entrada: sin franja desde v2", () => {
+    expect(isExperimentEligible({ first_seen_at: deMadrugada })).toBe(true);
+    expect(isExperimentEligible({ first_seen_at: null })).toBe(true);
+    expect(isExperimentEligible({ first_seen_at: "no-es-fecha" })).toBe(true);
   });
 
   // Si la elegibilidad mirara un campo que la llamada puede reescribir, quién
@@ -65,41 +64,18 @@ describe("isExperimentEligible", () => {
   });
 });
 
-describe("isWithinTreatableWindow", () => {
-  const aLasLima = (h: number) =>
-    new Date(Date.UTC(2026, 8, 5, (h + 5) % 24, 30)).toISOString();
-
-  it("los bordes son los medidos: 7 y 18 dentro, 6 y 19 fuera", () => {
-    expect(isWithinTreatableWindow(aLasLima(TREATABLE_HOUR_START))).toBe(true);
-    expect(isWithinTreatableWindow(aLasLima(TREATABLE_HOUR_END))).toBe(true);
-    expect(isWithinTreatableWindow(aLasLima(TREATABLE_HOUR_START - 1))).toBe(false);
-    expect(isWithinTreatableWindow(aLasLima(TREATABLE_HOUR_END + 1))).toBe(false);
-  });
-
-  it("resuelve la hora en Lima, no en UTC", () => {
-    // 23:30 UTC = 18:30 en Lima → dentro. En UTC caería fuera.
-    expect(isWithinTreatableWindow("2026-09-05T23:30:00.000Z")).toBe(true);
-    // 09:00 UTC = 04:00 en Lima → fuera. En UTC caería dentro.
-    expect(isWithinTreatableWindow("2026-09-05T09:00:00.000Z")).toBe(false);
-  });
-
-  it("sin hora usable no entra", () => {
-    expect(isWithinTreatableWindow(null)).toBe(false);
-    expect(isWithinTreatableWindow("")).toBe(false);
-    expect(isWithinTreatableWindow("roto")).toBe(false);
-  });
-});
-
 describe("assignArm", () => {
+  const EXP = ACTIVE_EXPERIMENT;
+
   it("es determinista: el mismo lead cae siempre en el mismo brazo", () => {
     const id = "9f1d2c3b-4a5e-6f70-8192-a3b4c5d6e7f8";
-    const primero = assignArm(id);
-    for (let i = 0; i < 20; i++) expect(assignArm(id)).toBe(primero);
+    const primero = assignArm(id, EXP);
+    for (let i = 0; i < 20; i++) expect(assignArm(id, EXP)).toBe(primero);
   });
 
   it("reparte cerca de la fracción pedida", () => {
     const ids = Array.from({ length: 20_000 }, () => randomUUID());
-    const tratados = ids.filter((id) => assignArm(id) === "tratamiento").length;
+    const tratados = ids.filter((id) => assignArm(id, EXP) === "tratamiento").length;
     // 20 % de 20.000 = 4.000; ±1,5 pp es holgado para n=20.000 y detecta un
     // hash que reparta mal (p. ej. si devolviera casi siempre lo mismo).
     expect(tratados / ids.length).toBeGreaterThan(TREATMENT_FRACTION - 0.015);
@@ -108,34 +84,49 @@ describe("assignArm", () => {
 
   it("respeta una fracción distinta", () => {
     const ids = Array.from({ length: 20_000 }, () => randomUUID());
-    const mitad = ids.filter((id) => assignArm(id, 0.5) === "tratamiento").length;
+    const mitad = ids.filter((id) => assignArm(id, EXP, 0.5) === "tratamiento").length;
     expect(mitad / ids.length).toBeGreaterThan(0.48);
     expect(mitad / ids.length).toBeLessThan(0.52);
   });
 
   it("0 y 1 son apagados válidos", () => {
     const ids = Array.from({ length: 200 }, () => randomUUID());
-    expect(ids.every((id) => assignArm(id, 0) === "control")).toBe(true);
-    expect(ids.every((id) => assignArm(id, 1) === "tratamiento")).toBe(true);
+    expect(ids.every((id) => assignArm(id, EXP, 0) === "control")).toBe(true);
+    expect(ids.every((id) => assignArm(id, EXP, 1) === "tratamiento")).toBe(true);
   });
 
   it("una fracción inválida no reparte en vez de repartir raro", () => {
     const id = randomUUID();
-    expect(assignArm(id, Number.NaN)).toBe("control");
-    expect(assignArm(id, -1)).toBe("control");
+    expect(assignArm(id, EXP, Number.NaN)).toBe("control");
+    expect(assignArm(id, EXP, -1)).toBe("control");
   });
 
   // Sin sal, quien cayó en tratamiento en un experimento caería en TODOS, y dos
-  // experimentos dejarían de ser independientes.
+  // experimentos dejarían de ser independientes. Importa AHORA y no en abstracto:
+  // v2 reparte sobre la misma población que v1, así que sin sal heredaría sus
+  // brazos enteros — y con ellos el resultado de un tratamiento que ya se
+  // administró mal.
   it("dos experimentos reparten a gente distinta", () => {
     const ids = Array.from({ length: 5_000 }, () => randomUUID());
-    const a = new Set(ids.filter((id) => assignArm(id, 0.5, "exp_a") === "tratamiento"));
-    const b = new Set(ids.filter((id) => assignArm(id, 0.5, "exp_b") === "tratamiento"));
+    const a = new Set(ids.filter((id) => assignArm(id, "exp_a", 0.5) === "tratamiento"));
+    const b = new Set(ids.filter((id) => assignArm(id, "exp_b", 0.5) === "tratamiento"));
     const solapan = [...a].filter((id) => b.has(id)).length;
     // Independientes ⇒ ~25 % de los ids caen en tratamiento en ambos. Si el
     // reparto ignorara el nombre del experimento serían el 50 %.
     expect(solapan / ids.length).toBeGreaterThan(0.21);
     expect(solapan / ids.length).toBeLessThan(0.29);
+  });
+
+  // El caso concreto del test anterior, con los dos nombres de verdad: los
+  // tratados de v2 no pueden ser los mismos que los de v1.
+  it("v2 no hereda los brazos de v1", () => {
+    const ids = Array.from({ length: 5_000 }, () => randomUUID());
+    const v1 = new Set(ids.filter((id) => assignArm(id, FRIO_GOLDEN_EXPERIMENT) === "tratamiento"));
+    const v2 = new Set(ids.filter((id) => assignArm(id, FRIO_COVERAGE_EXPERIMENT) === "tratamiento"));
+    const solapan = [...v2].filter((id) => v1.has(id)).length;
+    // Independientes ⇒ ~20 % de los tratados de v2 también lo fueron en v1. Si
+    // los heredara sería el 100 %.
+    expect(solapan / Math.max(1, v2.size)).toBeLessThan(0.3);
   });
 
   // Los ids de hoy son UUID v4 (aleatorios), pero si mañana fueran ordenados
@@ -145,72 +136,56 @@ describe("assignArm", () => {
   // bien que los aleatorios.
   it("ids casi idénticos y consecutivos se reparten igual de bien", () => {
     const ids = Array.from({ length: 20_000 }, (_, i) => `0198f2a1-0000-7000-8000-${String(i).padStart(12, "0")}`);
-    const tratados = ids.filter((id) => assignArm(id) === "tratamiento").length;
+    const tratados = ids.filter((id) => assignArm(id, EXP) === "tratamiento").length;
     expect(tratados / ids.length).toBeGreaterThan(TREATMENT_FRACTION - 0.015);
     expect(tratados / ids.length).toBeLessThan(TREATMENT_FRACTION + 0.015);
   });
 
-  it("el experimento por defecto es el de la hora dorada", () => {
-    const ids = Array.from({ length: 500 }, () => randomUUID());
-    for (const id of ids) {
-      expect(assignArm(id)).toBe(assignArm(id, TREATMENT_FRACTION, FRIO_GOLDEN_EXPERIMENT));
-    }
+  // El nombre del experimento NO tiene valor por defecto, y este test es el que
+  // lo fija. Lo tenía, apuntando a v1; cuando v1 se paró el defecto se quedó
+  // nombrando un experimento muerto sin que nada fallara, porque el único caller
+  // pasaba el nombre explícito. Es la misma trampa que dejó pasar M51.
+  it("el nombre del experimento es obligatorio", () => {
+    const src = readFileSync(new URL("../lib/lead-experiment.ts", import.meta.url), "utf8");
+    const firma = src.slice(src.indexOf("export function assignArm"), src.indexOf("): ExperimentArm"));
+    expect(firma).toContain("experiment: string,");
+    expect(firma).not.toMatch(/experiment:\s*string\s*=/);
+  });
+
+  it("el experimento que se reparte es el de cobertura", () => {
+    expect(ACTIVE_EXPERIMENT).toBe(FRIO_COVERAGE_EXPERIMENT);
+    expect(ACTIVE_EXPERIMENT).not.toBe(FRIO_GOLDEN_EXPERIMENT);
   });
 });
 
-describe("shouldPin", () => {
-  it("solo el tratamiento y solo dentro de su hora", () => {
-    expect(shouldPin("tratamiento", "dorada")).toBe(true);
-    expect(shouldPin("tratamiento", "tibia")).toBe(false);
-    expect(shouldPin("control", "dorada")).toBe(false);
-    expect(shouldPin(null, "dorada")).toBe(false);
-    expect(shouldPin("tratamiento", null)).toBe(false);
-  });
-});
-
-// El experimento puede estar perfectamente diseñado y no administrarse: si el
-// lead no sube a la cola ni se marca, la asesora no lo llama y los dos brazos
-// acaban iguales. Estas guardas leen el fuente para probar que el tratamiento
-// LLEGA a la pantalla.
+// El experimento puede estar perfectamente diseñado y no administrarse: si la
+// asesora no recibe el lead, no lo llama, y los dos brazos acaban iguales. Es
+// literalmente lo que pasó en v1 — dos veces. Estas guardas leen el fuente para
+// probar que el tratamiento SALE.
 describe("el tratamiento se administra de verdad", () => {
-  const src = readFileSync(new URL("../components/leads.tsx", import.meta.url), "utf8");
+  const leadsSrc = readFileSync(new URL("../components/leads.tsx", import.meta.url), "utf8");
   const priority = readFileSync(new URL("../lib/lead-priority.ts", import.meta.url), "utf8");
   const cron = readFileSync(new URL("../app/api/cron/sync/route.ts", import.meta.url), "utf8");
+  const push = readFileSync(new URL("../app/api/cron/coverage-push/route.ts", import.meta.url), "utf8");
+  const vercel = readFileSync(new URL("../vercel.json", import.meta.url), "utf8");
 
-  it("el brazo se deriva con la misma función pura que usa el reparto", () => {
-    expect(src).toContain('assignArm(lead.id) === "tratamiento"');
-    expect(src).toContain("isExperimentEligible(lead)");
+  // LAS DOS SEÑALES EN PANTALLA FALLARON, en la misma dirección. El empujón:
+  // mediana 47 min hasta la llamada contra 17 del control. El chip 🧪: 23,5% de
+  // leads llamados alguna vez contra 34,3% (p ≈ 0,04). Marcar un lead como "de la
+  // prueba" hace que se salte. Que la cola vuelva a saber del experimento es la
+  // regresión concreta que este test existe para impedir.
+  it("la cola no sabe nada del experimento", () => {
+    expect(leadsSrc).not.toContain("lead-experiment");
+    expect(leadsSrc).not.toContain("assignArm");
+    expect(leadsSrc).not.toContain("isExperimentEligible");
+    expect(leadsSrc).not.toContain("🧪");
   });
 
-  // El empujón se RETIRÓ. Medido sobre las primeras 78 asignaciones, el brazo de
-  // tratamiento se llamaba a los 47 minutos de mediana contra 14 del control, y
-  // 1 de 19 dentro de los primeros 30 minutos contra 15 de 59. Marginal
-  // (p ≈ 0,06) pero en la dirección equivocada en todos los cortes — y con un
-  // coste cierto: ponía un frío (~9-19%) por encima de un carrito fresco (41%).
-  it("la cola NO se reordena por el experimento", () => {
+  it("la cola tampoco se reordena por el experimento", () => {
     expect(priority).not.toContain("pinned");
     expect(priority).not.toMatch(/pin\?\.\(/);
     // Y en particular el puntaje sigue siendo solo lo medido.
     expect(priority).not.toMatch(/score:[^\n]*\+[^\n]*pin/);
-  });
-
-  // El aviso reemplaza al empujón, y tiene que contarse ignorando el chip de
-  // segmento: al filtrar por Carrito, un lead frío del tratamiento desaparecería
-  // de la lista y nadie lo llamaría nunca. Es el fallo que hundió la primera
-  // versión del tratamiento.
-  it("el aviso de la prueba sobrevive al filtro de segmento", () => {
-    expect(src).toContain('enPruebaIds: facets\n        .except("seg", "edad")');
-    expect(src).toContain("🧪 {enPruebaIds.length}");
-    // Y su botón limpia los filtros, o la lista mostraría menos filas que el
-    // número del aviso — y la que faltaría sería justo la de la prueba.
-    const boton = src.slice(src.indexOf("Ver la cola sin filtros") - 700, src.indexOf("Ver la cola sin filtros"));
-    expect(boton).toContain("setSegFilter(null);");
-    expect(boton).toContain('setEdadFilter("all");');
-  });
-
-  it("la fila dice por qué está arriba", () => {
-    expect(src).toContain("🧪 prueba");
-    expect(src).toContain("enExperimento(lead) && (");
   });
 
   it("el cron reparte, y no puede tumbar el sync si falla", () => {
@@ -222,6 +197,23 @@ describe("el tratamiento se administra de verdad", () => {
     expect(bloque).toContain("try {");
     expect(bloque).toContain("catch");
     expect(bloque).toContain("el experimento nunca bloquea el sync");
+  });
+
+  // La entrega es TODO el tratamiento de v2: sin este cron el brazo de
+  // tratamiento y el de control reciben exactamente lo mismo.
+  it("hay un cron que entrega la lista, y está programado", () => {
+    expect(push).toContain("pendingCoverageLeads");
+    expect(push).toContain("sendTelegramToAll");
+    expect(vercel).toContain("/api/cron/coverage-push");
+  });
+
+  // Se apunta DESPUÉS de enviar. Al revés, un fallo de Telegram quemaría esos
+  // leads —no volverían a salir nunca— y el tratamiento se evaporaría en
+  // silencio para ellos, que es exactamente como v1 se fue al traste sin que
+  // nadie lo notara.
+  it("solo se apunta lo que salió, y después de que saliera", () => {
+    expect(push).toContain("res.sent > 0 ? await recordCoveragePush");
+    expect(push.indexOf("sendTelegramToAll(")).toBeLessThan(push.indexOf("recordCoveragePush("));
   });
 });
 
@@ -299,10 +291,11 @@ describe("toda tabla append-only revoca sus permisos de más", () => {
 });
 
 describe("la lectura del experimento no reintroduce el sesgo", () => {
-  // La función vive ahora en 0147. 0144 contaba los toques de máquina como
-  // llamadas (arreglado en 0146) y no filtraba la franja horaria (0147).
+  // La lectura de v1 vive ahora en 0150. 0144 contaba los toques de máquina como
+  // llamadas (arreglado en 0146), 0147 le metió la franja horaria fija y 0150 la
+  // ató a v1 para que no se le aplique a v2.
   const sql = readFileSync(
-    new URL("../db/migrations/0147_read_lead_experiment_franja.sql", import.meta.url),
+    new URL("../db/migrations/0150_lead_coverage_pushes.sql", import.meta.url),
     "utf8",
   );
   const sql144 = readFileSync(new URL("../db/migrations/0144_lead_experiments.sql", import.meta.url), "utf8");
@@ -311,25 +304,31 @@ describe("la lectura del experimento no reintroduce el sesgo", () => {
     expect(sql144).toContain("primary key (lead_id, experiment)");
   });
 
-  // El 51,3% de `lead_calls` es `kind='system'` — drip, winback y secuencias de
-  // carrito. Contarlas como llamadas destruye justo el indicador que existe para
-  // detectar que el experimento no se administró: `pct_en_1h` saldría alto en los
-  // DOS brazos (a los dos les saltan drips) y la diferencia se aplanaría.
-  // La tabla es append-only, así que las asignaciones hechas antes de que
-  // existiera el filtro de franja siguen ahí —131 de 167 cuando se escribió
-  // esto—. Si la lectura no las descartara, mezclaría dos poblaciones con reglas
-  // de elegibilidad distintas y arrastraría el resultado con leads intratables.
-  it("analiza la misma población que el reparto selecciona", () => {
+  // La tabla es append-only, así que las asignaciones de v1 hechas antes de que
+  // existiera el filtro de franja siguen ahí —131 de 167 cuando se escribió—. Si
+  // la lectura no las descartara, mezclaría dos poblaciones con reglas de
+  // elegibilidad distintas y arrastraría el resultado con leads intratables.
+  it("la franja sigue acotando la población de v1", () => {
     expect(sql).toContain(
       "extract(hour from l.first_seen_at at time zone 'America/Lima')::int between 7 and 18",
     );
   });
 
-  // El SQL no puede importar las constantes del código, así que se comprueba que
-  // no se hayan separado: mover una sin la otra dejaría el análisis mirando una
-  // franja distinta de la que se reparte, en silencio.
-  it("la franja del SQL coincide con la del código", () => {
-    expect(sql).toContain(`between ${TREATABLE_HOUR_START} and ${TREATABLE_HOUR_END}`);
+  // 0147 dejaba la franja fija para CUALQUIER experimento. v2 reparte sin
+  // franja, así que leerlo con ese literal tiraría el 57% de su población en
+  // silencio, y encima por una regla que a v2 no se le aplicó al repartir.
+  it("y solo a la de v1", () => {
+    // La expresión entera, no las dos piezas por separado: lo que importa es que
+    // la franja esté DENTRO del `or` que la ata a v1. Comprobar solo que las dos
+    // cadenas aparecen las daría por buenas aunque estuvieran en cláusulas
+    // distintas, que es precisamente el fallo posible.
+    expect(sql.replace(/--[^\n]*/g, "").replace(/\s+/g, " ")).toContain(
+      "and ( p_experiment <> 'frio_hora_dorada_v1' " +
+        "or extract(hour from l.first_seen_at at time zone 'America/Lima')::int between 7 and 18 )",
+    );
+    // Y el nombre del literal SQL es el mismo que el del código: si se separaran,
+    // la franja se le aplicaría al experimento equivocado en silencio.
+    expect(sql).toContain(`'${FRIO_GOLDEN_EXPERIMENT}'`);
   });
 
   it("la primera llamada solo cuenta toques de PERSONAS", () => {
@@ -338,18 +337,58 @@ describe("la lectura del experimento no reintroduce el sesgo", () => {
     // alguien reaplicara 0144 sobre 0146 volvería el fallo en silencio.
     const fnDe144 = sql144.slice(sql144.indexOf("create or replace function public.read_lead_experiment"));
     expect(fnDe144).not.toContain("kind in ('call'");
-    expect(Number("0146".slice(0, 4))).toBeGreaterThan(Number("0144".slice(0, 4)));
+    expect(Number("0150".slice(0, 4))).toBeGreaterThan(Number("0144".slice(0, 4)));
   });
 
   it("el análisis descarta las filas asignadas después de la primera llamada", () => {
     expect(sql).toContain("e.assigned_at <= f.first_call");
   });
 
-  // Agrupar por quién acabó llamándose dentro de la hora volvería a meter la
-  // selección que el experimento existe para eliminar.
+  // Agrupar por quién acabó llamándose volvería a meter la selección que el
+  // experimento existe para eliminar.
   it("el análisis agrupa por brazo asignado, no por cumplimiento", () => {
     expect(sql).toContain("group by 1, 2");
     expect(sql).toContain("e.arm");
-    expect(sql).toContain("pct_en_1h");
+  });
+});
+
+// v2 mide la COBERTURA, no la velocidad, y su lectura tiene que decir por
+// separado si el tratamiento salió (`empujados`) y si se trabajó (`llamados`).
+// En v1 los dos brazos salieron iguales y hubo que reconstruir a mano si el
+// tratamiento había llegado a administrarse.
+describe("la lectura de v2 separa entrega de cumplimiento", () => {
+  const sql = readFileSync(
+    new URL("../db/migrations/0150_lead_coverage_pushes.sql", import.meta.url),
+    "utf8",
+  );
+  const codigo = sql.replace(/--[^\n]*/g, "");
+
+  it("devuelve empujados y llamados por separado", () => {
+    const fn = sql.slice(sql.indexOf("create or replace function public.read_lead_coverage"));
+    expect(fn).toContain("empujados bigint");
+    expect(fn).toContain("llamados bigint");
+    expect(fn).toContain("pct_llamado numeric");
+    expect(fn).toContain("count(p.lead_id) as empujados");
+  });
+
+  it("cuenta como llamada solo el toque de una persona", () => {
+    const fn = sql.slice(sql.indexOf("create or replace function public.read_lead_coverage"));
+    expect(fn).toContain("where kind in ('call', 'message', 'sale')");
+  });
+
+  it("agrupa por brazo asignado y madura antes de mirar la conversión", () => {
+    const fn = sql.slice(sql.indexOf("create or replace function public.read_lead_coverage"));
+    expect(fn).toContain("e.arm");
+    expect(fn).toContain("make_interval(days => p_maduracion_dias)");
+    expect(fn).toContain("e.assigned_at <= f.first_call");
+  });
+
+  // Cada lead sale UNA vez, y eso es de la PK, no de la consulta: dos pasadas
+  // simultáneas del cron chocan en vez de mandar el lead dos veces.
+  it("la entrega se registra una sola vez por lead y experimento", () => {
+    expect(sql).toContain("primary key (lead_id, experiment)");
+    expect(sql).toContain("before update or delete on lead_coverage_pushes");
+    expect(codigo).toContain("grant select, insert on lead_coverage_pushes to service_role;");
+    expect(codigo).not.toMatch(/grant[^;]*\b(update|delete|truncate)\b[^;]*on lead_coverage_pushes/i);
   });
 });

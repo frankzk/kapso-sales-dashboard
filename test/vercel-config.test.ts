@@ -65,12 +65,33 @@ describe("vercel.json", () => {
     expect(cfg.regions).toEqual(["gru1"]);
   });
 
-  it("mantiene los trece crons con expresiones válidas de 5 campos", () => {
+  it("mantiene los catorce crons con expresiones válidas de 5 campos", () => {
     const crons = cfg.crons as { path: string; schedule: string }[];
-    expect(crons).toHaveLength(13);
+    expect(crons).toHaveLength(14);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);
+    }
+  });
+
+  // La entrega del experimento de cobertura sale DENTRO del horario de trabajo,
+  // y eso es parte del tratamiento, no una preferencia. Fuera de la franja 7-18
+  // de Lima solo ocurre el 10,7% de los toques humanos: una lista mandada de
+  // madrugada la lee nadie, y el brazo de tratamiento acabaría igual que el de
+  // control — que es exactamente cómo se murió v1.
+  it("la lista por llamar sale en horario de trabajo de Lima", () => {
+    const crons = cfg.crons as { path: string; schedule: string }[];
+    const cron = crons.find((c) => c.path === "/api/cron/coverage-push");
+    expect(cron).toBeDefined();
+    const [minuto, horas] = cron!.schedule.split(" ");
+    expect(minuto).toBe("0");
+    // Perú es UTC-5 fijo (sin horario de verano), así que la conversión es una
+    // resta y no cambia dos veces al año.
+    const enLima = horas!.split(",").map((h) => (Number(h) + 24 - 5) % 24);
+    expect(enLima).toEqual([8, 10, 12, 14, 16]);
+    for (const h of enLima) {
+      expect(h).toBeGreaterThanOrEqual(7);
+      expect(h).toBeLessThanOrEqual(18);
     }
   });
 
