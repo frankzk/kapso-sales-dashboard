@@ -10,6 +10,7 @@ import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import {
   getCustomerHistory,
   getLeadQueueSnapshot,
+  type LeadCounts,
   getLeadWithCalls,
   getStoreLeads,
   type CustomerHistory,
@@ -179,8 +180,20 @@ export async function loadLeadsInsightsPanel(
  * RLS-scoped: una tienda que no puedes ver devuelve la firma vacía.
  */
 export async function pollLeadsQueueSignature(storeIds: StoreScope): Promise<string | null> {
+  return (await pollLeadsQueue(storeIds))?.signature ?? null;
+}
+
+/**
+ * La firma Y los contadores. El board los necesita juntos para decidir si una
+ * recarga es urgente («Atender ahora» o Yapes cambiaron) o puede esperar
+ * (lib/leads-live-refresh.ts). Mismo recorrido barato que la firma sola.
+ */
+export async function pollLeadsQueue(
+  storeIds: StoreScope,
+): Promise<{ signature: string; counts: LeadCounts } | null> {
   try {
-    return (await getLeadQueueSnapshot(await allowedScope(storeIds))).signature;
+    const snap = await getLeadQueueSnapshot(await allowedScope(storeIds));
+    return { signature: snap.signature, counts: snap.counts };
   } catch {
     return null; // el board se queda con la firma que tenía y reintenta luego
   }

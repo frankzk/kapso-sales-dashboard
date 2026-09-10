@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   buildBurndown,
@@ -6,6 +8,7 @@ import {
   computeTeamConversionByDay,
   SHIFT_START,
   SHIFT_END,
+  rollupToInputs,
 } from "@/lib/leads-insights";
 
 describe("computeTeamConversionByDay (conversión por día del equipo)", () => {
@@ -143,5 +146,70 @@ describe("buildBurndown (today's backlog reconstructed by hour)", () => {
     // nowHour clamps to SHIFT_START → only 08h is 'real', rest projected/ideal
     expect(pts[0]!.real).toBe(5);
     expect(pts.every((p) => p.ritmo >= 0 && (p.real == null || p.real >= 0))).toBe(true);
+  });
+});
+
+describe("rollupToInputs: de las filas agrupadas en la base a los constructores", () => {
+  // La 0155 devuelve una fila por (cubo, día) o (cubo, hora) en vez de las
+  // ~17.000 filas que se drenaban por carga (28 M al día, medido el 10-09-2026).
+  it("reparte cada cubo en su mapa y expande las horas al histograma que espera buildBurndown", () => {
+    const r = rollupToInputs([
+      { bucket: "entran", key: "2026-09-10", n: 12 },
+      { bucket: "entran", key: "2026-09-09", n: "7" },
+      { bucket: "entran_hora", key: "9", n: 2 },
+      { bucket: "entran_hora", key: "15", n: 1 },
+      { bucket: "cierran", key: "2026-09-10", n: 5 },
+      { bucket: "cierran_hora", key: "10", n: 3 },
+      { bucket: "sin_llamar", key: "2026-08-01", n: 40 },
+      { bucket: "contactos", key: "2026-09-10", n: 30 },
+      { bucket: "pedidos", key: "2026-09-10", n: 4 },
+    ]);
+    expect(r.entranByDate).toEqual({ "2026-09-10": 12, "2026-09-09": 7 });
+    expect(r.entrantHours.sort((a, b) => a - b)).toEqual([9, 9, 15]);
+    expect(r.cierranByDate).toEqual({ "2026-09-10": 5 });
+    expect(r.leaverHours).toEqual([10, 10, 10]);
+    expect(r.sinLlamarByDate).toEqual({ "2026-08-01": 40 });
+    expect(r.contactosByDate).toEqual({ "2026-09-10": 30 });
+    expect(r.pedidosByDate).toEqual({ "2026-09-10": 4 });
+  });
+
+  it("ignora cubos desconocidos, conteos no numéricos y horas ilegibles", () => {
+    const r = rollupToInputs([
+      { bucket: "otro", key: "2026-09-10", n: 5 },
+      { bucket: "entran", key: "2026-09-10", n: "x" },
+      { bucket: "entran_hora", key: "hoy", n: 2 },
+      { bucket: "entran_hora", key: "3", n: 0 },
+    ]);
+    expect(r.entranByDate).toEqual({});
+    expect(r.entrantHours).toEqual([]);
+  });
+});
+
+describe("el panel pregunta primero al RPC y la SQL dice lo mismo que el código", () => {
+  const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
+
+  it("getLeadsInsights llama a lead_insights_rollup y solo drena si no existe", () => {
+    const src = read("lib/leads-insights.ts");
+    const start = src.indexOf("export async function getLeadsInsights(");
+    const body = src.slice(start, src.indexOf("\n}\n", start));
+    const rpc = body.indexOf('sb.rpc("lead_insights_rollup", {');
+    const drain = body.indexOf("await drainInputs(");
+    expect(rpc).toBeGreaterThan(-1);
+    expect(rpc).toBeLessThan(drain);
+    expect(body).toContain("if (!rollup.error && Array.isArray(rollup.data))");
+  });
+
+  it("los predicados de la 0155 son los mismos que los del drenado", () => {
+    // Si divergen, el panel dice una cosa con el RPC y otra sin él.
+    const sql = read("db/migrations/0155_lead_insights_rollup.sql");
+    expect(sql).toContain("first_seen_at >= p_window_start");
+    expect(sql).toContain("or (first_seen_at is null and created_at >= p_window_start)");
+    expect(sql).toContain("and new_status is not null\n      and new_status <> 'nuevo'");
+    expect(sql).toContain("c.lead_id = f.lead_id and c.occurred_at < p_window_start");
+    expect(sql).toContain("and category in ('open', 'hot')\n      and status = 'nuevo'");
+    expect(sql).toContain("and vendedora is not null\n      and kind = 'call'");
+    expect(sql).toContain("from public.order_sales");
+    expect(sql).toContain("security invoker");
+    expect(sql).toContain("revoke all on function public.lead_insights_rollup");
   });
 });

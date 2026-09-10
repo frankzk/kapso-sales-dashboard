@@ -308,10 +308,150 @@ export function buildTrend(opts: {
   return { trend, saldoInicio: trend[0]?.saldo ?? 0 };
 }
 
+/** Una fila del RPC `lead_insights_rollup` (0155): cubo, día u hora, conteo. */
+export interface RollupRow {
+  bucket: string;
+  key: string;
+  n: number | string;
+}
+
+export interface RollupInputs {
+  entranByDate: Record<string, number>;
+  cierranByDate: Record<string, number>;
+  entrantHours: number[];
+  leaverHours: number[];
+  sinLlamarByDate: Record<string, number>;
+  contactosByDate: Record<string, number>;
+  pedidosByDate: Record<string, number>;
+}
+
+/**
+ * De las filas agrupadas a lo que consumen `buildBurndown` y `buildTrend`.
+ * Pura. Los histogramas por hora se expanden a la lista de horas que esperan
+ * los constructores: son decenas de leads al día, no miles.
+ */
+export function rollupToInputs(rows: readonly RollupRow[]): RollupInputs {
+  const out: RollupInputs = {
+    entranByDate: {},
+    cierranByDate: {},
+    entrantHours: [],
+    leaverHours: [],
+    sinLlamarByDate: {},
+    contactosByDate: {},
+    pedidosByDate: {},
+  };
+  const byDate: Record<string, Record<string, number> | undefined> = {
+    entran: out.entranByDate,
+    cierran: out.cierranByDate,
+    sin_llamar: out.sinLlamarByDate,
+    contactos: out.contactosByDate,
+    pedidos: out.pedidosByDate,
+  };
+  const byHour: Record<string, number[] | undefined> = {
+    entran_hora: out.entrantHours,
+    cierran_hora: out.leaverHours,
+  };
+  for (const r of rows) {
+    const n = Number(r.n);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    const dates = byDate[r.bucket];
+    if (dates) {
+      dates[r.key] = (dates[r.key] ?? 0) + n;
+      continue;
+    }
+    const hours = byHour[r.bucket];
+    if (hours) {
+      const h = Number(r.key);
+      if (!Number.isFinite(h)) continue;
+      for (let i = 0; i < n; i++) hours.push(h);
+    }
+  }
+  return out;
+}
+
+/**
+ * Los mismos conteos, drenando filas (el camino de antes). Queda como respaldo
+ * para una base sin la 0155 aplicada: el panel sigue saliendo, solo que caro.
+ */
+async function drainInputs(
+  sb: Sb,
+  storeIds: StoreScope,
+  windowStartIso: string,
+  todayDate: string,
+  days: { date: string; label: string }[],
+  tz: string,
+): Promise<RollupInputs> {
+  const [entrantRows, leaverAts, sinLlamarRows] = await Promise.all([
+    pageAll<{ created_at: string | null; first_seen_at: string | null }>((from, to) =>
+      sb
+        .from("leads")
+        .select("created_at, first_seen_at")
+        .in("store_id", storeIds)
+        .or(`first_seen_at.gte.${windowStartIso},and(first_seen_at.is.null,created_at.gte.${windowStartIso})`)
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
+    fetchQueueLeavers(sb, storeIds, windowStartIso),
+    pageAll<{ last_interaction_at: string | null; first_seen_at: string | null }>((from, to) =>
+      sb
+        .from("leads")
+        .select("last_interaction_at, first_seen_at")
+        .in("store_id", storeIds)
+        .in("category", ["open", "hot"])
+        .eq("status", "nuevo")
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
+  ]);
+  const out: RollupInputs = {
+    entranByDate: {},
+    cierranByDate: {},
+    entrantHours: [],
+    leaverHours: [],
+    sinLlamarByDate: {},
+    contactosByDate: {},
+    pedidosByDate: {},
+  };
+  for (const r of entrantRows) {
+    const arrived = r.first_seen_at ?? r.created_at;
+    if (!arrived) continue;
+    const p = tzParts(arrived, tz);
+    out.entranByDate[p.date] = (out.entranByDate[p.date] ?? 0) + 1;
+    if (p.date === todayDate) out.entrantHours.push(p.hour);
+  }
+  for (const at of leaverAts) {
+    const p = tzParts(at, tz);
+    out.cierranByDate[p.date] = (out.cierranByDate[p.date] ?? 0) + 1;
+    if (p.date === todayDate) out.leaverHours.push(p.hour);
+  }
+  for (const r of sinLlamarRows) {
+    const ts = r.last_interaction_at ?? r.first_seen_at;
+    if (!ts) continue;
+    const d = tzParts(ts, tz).date;
+    out.sinLlamarByDate[d] = (out.sinLlamarByDate[d] ?? 0) + 1;
+  }
+  try {
+    for (const c of await computeTeamConversion(sb, storeIds, windowStartIso, days, tz)) {
+      const date = days.find((d) => d.label === c.dia)?.date;
+      if (!date) continue;
+      out.contactosByDate[date] = c.contactos;
+      out.pedidosByDate[date] = c.pedidos;
+    }
+  } catch {
+    /* best-effort — deja el gráfico en ceros si falla */
+  }
+  return out;
+}
+
 /**
  * Assemble the Leads dashboard insights for one store. `pendingNow` is the
  * current "por llamar" count (already computed by the page, passed in as the
  * anchor). RLS-scoped reads; productivity is best-effort.
+ *
+ * LOS CONTEOS SE AGRUPAN EN LA BASE (RPC `lead_insights_rollup`, 0155): unas
+ * cuarenta filas en vez de las ~17.000 que se drenaban por carga. Medido el
+ * 10-09-2026: 28 millones de filas al día solo de este panel. El drenado queda
+ * como respaldo si el RPC no existe todavía.
  */
 export async function getLeadsInsights(
   storeIds: StoreScope,
@@ -331,73 +471,28 @@ export async function getLeadsInsights(
   }
   const windowStartIso = new Date(nowMs - 7 * 86_400_000).toISOString();
 
-  // Entrants (entraron a "Sin llamar" = se crearon, status nuevo) + leavers
-  // (dejaron "Sin llamar" = primera gestión) + el universo actual sin llamar.
-  // Los tres se DRENAN por páginas (antes iban con .limit(5000/20000) en una
-  // sola llamada y PostgREST recorta a ~1000 filas en silencio). El caso grave
-  // era leavers: pedía TODO el historial ascendente, así que con >1000
-  // gestiones históricas solo llegaban las más viejas y los días recientes
-  // quedaban con cierran=0 — el saldo del trend se inflaba hacia atrás y el
-  // burndown de hoy no bajaba nunca.
-  const [entrantRows, leaverAts, sinLlamarRows] = await Promise.all([
-    // "Entró" = first_seen_at (fecha REAL de primer contacto), no created_at — que
-    // es cuándo se insertó la fila y por un backfill masivo puede caer todo el
-    // mismo día (un pico falso). Caemos a created_at solo si first_seen es null.
-    pageAll<{ created_at: string | null; first_seen_at: string | null }>((from, to) =>
-      sb
-        .from("leads")
-        .select("created_at, first_seen_at")
-        .in("store_id", storeIds)
-        .or(`first_seen_at.gte.${windowStartIso},and(first_seen_at.is.null,created_at.gte.${windowStartIso})`)
-        .order("id", { ascending: true })
-        .range(from, to),
-    ),
-    // "Salió de Sin llamar" = primera gestión del lead dentro de la ventana,
-    // excluyendo a los que ya habían salido antes (ver fetchQueueLeavers).
-    fetchQueueLeavers(sb, storeIds, windowStartIso),
-    // "Sin llamar" = en cola (open/hot) y status `nuevo` (nunca lo gestionó un
-    // asesor). Los agrupamos por fecha de última interacción para ver qué día
-    // se está quedando gente sin llamar.
-    pageAll<{ last_interaction_at: string | null; first_seen_at: string | null }>((from, to) =>
-      sb
-        .from("leads")
-        .select("last_interaction_at, first_seen_at")
-        .in("store_id", storeIds)
-        .in("category", ["open", "hot"])
-        .eq("status", "nuevo")
-        .order("id", { ascending: true })
-        .range(from, to),
-    ),
-  ]);
-
-  const entranByDate: Record<string, number> = {};
-  const entrantHours: number[] = []; // today only
-  for (const r of entrantRows) {
-    const arrived = r.first_seen_at ?? r.created_at;
-    if (!arrived) continue;
-    const p = tzParts(arrived, tz);
-    entranByDate[p.date] = (entranByDate[p.date] ?? 0) + 1;
-    if (p.date === todayDate) entrantHours.push(p.hour);
+  // Primero el RPC; si no existe (base sin la 0155), el drenado de siempre.
+  let inputs: RollupInputs;
+  const rollup = await sb.rpc("lead_insights_rollup", {
+    p_store_ids: storeIds,
+    p_window_start: windowStartIso,
+    p_tz: tz,
+    p_today: todayDate,
+  });
+  if (!rollup.error && Array.isArray(rollup.data)) {
+    inputs = rollupToInputs(rollup.data as RollupRow[]);
+  } else {
+    inputs = await drainInputs(sb, storeIds, windowStartIso, todayDate, days, tz);
   }
-  const cierranByDate: Record<string, number> = {};
-  const leaverHours: number[] = [];
-  for (const at of leaverAts) {
-    const p = tzParts(at, tz);
-    cierranByDate[p.date] = (cierranByDate[p.date] ?? 0) + 1;
-    if (p.date === todayDate) leaverHours.push(p.hour);
-  }
+  const { entranByDate, cierranByDate, entrantHours, leaverHours, sinLlamarByDate, contactosByDate, pedidosByDate } =
+    inputs;
 
   // "Sin llamar" por día de última interacción (+ cuántos son de hace +7 días).
   const daySet = new Set(days.map((d) => d.date));
   const firstDay = days[0]!.date;
-  const sinLlamarByDate: Record<string, number> = {};
   let sinLlamarOlder = 0;
-  for (const r of sinLlamarRows) {
-    const ts = r.last_interaction_at ?? r.first_seen_at;
-    if (!ts) continue;
-    const d = tzParts(ts, tz).date;
-    if (daySet.has(d)) sinLlamarByDate[d] = (sinLlamarByDate[d] ?? 0) + 1;
-    else if (d < firstDay) sinLlamarOlder += 1; // anterior a la ventana = leads viejos sin llamar
+  for (const [d, n] of Object.entries(sinLlamarByDate)) {
+    if (!daySet.has(d) && d < firstDay) sinLlamarOlder += n; // anterior a la ventana = leads viejos sin llamar
   }
   const sinLlamar = days.map((dd) => ({
     date: dd.date,
@@ -406,16 +501,13 @@ export async function getLeadsInsights(
   }));
   const sinLlamarTotal = sinLlamar.reduce((s, x) => s + x.count, 0) + sinLlamarOlder;
 
-  // Conversión por día (equipo). Robusto al tope de filas de PostgREST: pagina las
-  // llamadas de la ventana y consulta el estado "ganado" SOLO de los leads tocados
-  // (acotado), en vez de traer TODOS los ganados de la tienda — que en tiendas con
-  // mucho volumen se truncaba a un subconjunto y hundía los pedidos del gráfico.
-  let conversion: ConversionDay[] = days.map((dd) => ({ dia: dd.label, contactos: 0, pedidos: 0 }));
-  try {
-    conversion = await computeTeamConversion(sb, storeIds, windowStartIso, days, tz);
-  } catch {
-    /* best-effort — deja el gráfico en ceros si falla */
-  }
+  // Conversión por día (equipo): contactos = llamadas de asesora; el pedido cae
+  // el día en que se registró la venta.
+  const conversion: ConversionDay[] = days.map((dd) => ({
+    dia: dd.label,
+    contactos: contactosByDate[dd.date] ?? 0,
+    pedidos: pedidosByDate[dd.date] ?? 0,
+  }));
 
   const burndown = buildBurndown({ pendingNow, nowHour: now.hour, entrantHours, leaverHours });
   const { trend, saldoInicio } = buildTrend({ days, pendingNow, entranByDate, cierranByDate });
