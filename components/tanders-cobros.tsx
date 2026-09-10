@@ -159,6 +159,31 @@ export function TandersCobros() {
           </Card>
           <Failures fallos={report.fallos} detenido={report.detenido} />
 
+          {report.duplicados.length > 0 && (
+            <div className="rounded-xl border-2 border-red-300 bg-red-50 p-4">
+              <p className="text-sm font-semibold text-red-900">
+                🚨 {report.duplicados.length} comprobante
+                {report.duplicados.length === 1 ? "" : "s"} de pago repetido
+                {report.duplicados.length === 1 ? "" : "s"}
+              </p>
+              <p className="mt-1 text-xs text-red-800">
+                El mismo nº de operación ya estaba registrado en otra guía: es el mismo dinero
+                acreditando dos pedidos. Ninguna se dio por cobrada.
+              </p>
+              <ul className="mt-3 space-y-2 text-sm text-red-900">
+                {report.duplicados.map((d) => (
+                  <li key={`${d.guia}-${d.operacion}`}>
+                    <span className="font-medium">{d.pedido ?? d.guia}</span>
+                    {d.monto != null && <span> · S/ {d.monto.toFixed(2)}</span>} · operación{" "}
+                    <span className="font-mono text-xs">{d.operacion}</span>
+                    <br />
+                    <span className="text-xs">ya estaba en: {d.otras.join(", ")}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {report.muestras.length > 0 && (
             <details className="rounded-xl border border-amber-200 bg-amber-50 p-4">
               <summary className="cursor-pointer text-sm font-medium text-amber-900">

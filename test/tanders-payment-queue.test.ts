@@ -115,6 +115,15 @@ function adminFalso(candidatas: unknown[]) {
       }
       if (tabla === "tanders_payment_checks") {
         return {
+          // La búsqueda de comprobante reusado. Acá nunca choca: lo que se
+          // prueba en este archivo es la cola, no el duplicado.
+          select: () => {
+            const q: Record<string, unknown> = {};
+            for (const m of ["eq", "neq", "limit"]) q[m] = () => q;
+            q.then = (ok: (v: unknown) => unknown) =>
+              Promise.resolve({ data: [], error: null }).then(ok);
+            return q;
+          },
           insert: async () => {
             visto.inserts += 1;
             return { error: null };

@@ -65,13 +65,16 @@ const PROMPT =
   '  "method": "yape"|"plin"|"bcp"|"otro", // medio que se ve en la imagen\n' +
   '  "recipient_name": string|null,        // a QUIÉN se pagó, tal como aparece\n' +
   '  "amount": number|null,                // monto en soles, solo el número\n' +
-  '  "operation_number": string|null       // nº de operación / constancia\n' +
+  '  "operation_number": string|null       // SOLO el código, sin "N°" ni etiquetas\n' +
   "}\n" +
   "El medio se reconoce por el logo y el diseño de la app: Yape es morado, " +
   "Plin es celeste. Un Plin puede decir que el destino es un número «Yape»: " +
   "eso sigue siendo un comprobante de Plin, que es lo que hay que devolver.\n" +
   "El destinatario es el dato más importante: cópialo literal, aunque venga " +
-  "recortado. No lo confundas con quien envía el dinero.";
+  "recortado. No lo confundas con quien envía el dinero.\n" +
+  "El nº de operación se compara entre guías para detectar un comprobante " +
+  "reusado, así que devuelve el código y nada más: sin «N°», sin «Código de " +
+  "operación:», sin espacios ni guiones de separación.";
 
 function parseAmount(v: unknown): number | null {
   const n = typeof v === "number" ? v : typeof v === "string" ? Number(v.replace(/[^\d.]/g, "")) : NaN;

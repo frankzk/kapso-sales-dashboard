@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkTandersPayment,
   isExpectedRecipient,
+  normalizeOperationNumber,
   normalizeRecipient,
 } from "@/lib/tanders/payment-check";
 
@@ -36,6 +37,45 @@ describe("normalizeRecipient / isExpectedRecipient", () => {
   });
 });
 
+describe("normalizeOperationNumber", () => {
+  it("hace colisionar dos transcripciones del mismo pago", () => {
+    // Si no colisionan, el reuso del comprobante no se detecta: es toda la
+    // razón de ser de la normalización.
+    expect(normalizeOperationNumber("86 480 816")).toBe(normalizeOperationNumber("864-808-16"));
+    expect(normalizeOperationNumber("864-808-16")).toBe("86480816");
+  });
+
+  it("quita separadores pero NO etiquetas: por eso el prompt pide el código a secas", () => {
+    // Límite conocido y deliberado. Recortar letras del principio rompería un
+    // código BCP alfanumérico legítimo, así que se ataja en el origen
+    // (payment-vision.ts) en vez de adivinar acá.
+    expect(normalizeOperationNumber("N° 86480816")).toBe("N86480816");
+  });
+
+  it("conserva los ceros a la izquierda", () => {
+    // Yape los emite así ("06420756"). Tratarlo como número los perdería y
+    // haría chocar operaciones distintas.
+    expect(normalizeOperationNumber("06420756")).toBe("06420756");
+  });
+
+  it("una lectura truncada no es una clave: devuelve null", () => {
+    // Casos reales del histórico (10-09-2026): el modelo elidió el medio del
+    // número en vez de devolver null. Quitarle los puntos daría un número que
+    // no existe, y compararlo podría acusar en falso o tapar el duplicado
+    // bueno. Sin dato es mejor que con dato inventado.
+    expect(normalizeOperationNumber("202609...495099")).toBeNull();
+    expect(normalizeOperationNumber("2026…675")).toBeNull();
+    // Un punto suelto entre dígitos SÍ es separador, no elisión.
+    expect(normalizeOperationNumber("784.444.034.2156")).toBe("7844440342156");
+  });
+
+  it("acepta los alfanuméricos de banco y no inventa vacíos", () => {
+    expect(normalizeOperationNumber(" bcp-2026a ")).toBe("BCP2026A");
+    expect(normalizeOperationNumber("---")).toBeNull();
+    expect(normalizeOperationNumber(null)).toBeNull();
+  });
+});
+
 describe("checkTandersPayment", () => {
   it("valida el caso bueno", () => {
     const v = checkTandersPayment({ voucher: voucher(), expectedAmount: 89 });
@@ -63,6 +103,33 @@ describe("checkTandersPayment", () => {
     });
     expect(v.state).toBe("validado");
     expect(v.summary).toContain("Plin");
+  });
+
+  it("un comprobante ya usado en otra guía NO cobra, aunque todo lo demás cuadre", () => {
+    // El mismo dinero no acredita dos pedidos. Este motivo bloquea un
+    // comprobante por lo demás perfecto: buen medio, buena cuenta, buen monto.
+    const v = checkTandersPayment({
+      voucher: voucher({ operationNumber: "86480816" }),
+      expectedAmount: 89,
+      duplicateOf: ["#KP131846"],
+    });
+    expect(v.state).toBe("rechazado");
+    expect(v.reasons).toEqual(["operacion_duplicada"]);
+    // El nº y la otra guía van en el veredicto: sin eso es una acusación sin
+    // respaldo y quien revisa no sabe por dónde empezar.
+    expect(v.summary).toContain("86480816");
+    expect(v.summary).toContain("#KP131846");
+  });
+
+  it("sin duplicados no inventa el motivo", () => {
+    for (const dup of [undefined, null, []]) {
+      const v = checkTandersPayment({
+        voucher: voucher(),
+        expectedAmount: 89,
+        duplicateOf: dup,
+      });
+      expect(v.state).toBe("validado");
+    }
   });
 
   it("rechaza un medio que no es Yape, Plin ni BCP", () => {
