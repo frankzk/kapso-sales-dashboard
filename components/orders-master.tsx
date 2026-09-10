@@ -75,6 +75,7 @@ import {
   agencyHasActivity,
   emptyFilters,
   hasActiveFilters,
+  PAYMENT_CHECK_OPTIONS,
   type AgencySummary,
   type MasterFilters,
   type MasterSortKey,
@@ -941,6 +942,19 @@ export function OrdersMasterBoard({
               options={facets.courier}
               selected={filters.couriers}
               onChange={(couriers) => patch({ couriers })}
+            />
+            {/* Las opciones son fijas, no una faceta: «rechazado» tiene que
+                poder pedirse aunque hoy no haya ninguno, que es justo cuando
+                interesa comprobar que no hay ninguno. */}
+            <ChecklistFilter
+              label="Cobro del courier"
+              options={PAYMENT_CHECK_OPTIONS.map((o) => o.value)}
+              selected={filters.paymentChecks}
+              onChange={(paymentChecks) => patch({ paymentChecks })}
+              capitalize={false}
+              optionLabel={(v) =>
+                PAYMENT_CHECK_OPTIONS.find((o) => o.value === v)?.label ?? v
+              }
             />
             <ChecklistFilter
               label="Región"

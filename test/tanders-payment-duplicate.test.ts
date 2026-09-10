@@ -12,6 +12,8 @@ import { formatDuplicateAlert } from "@/lib/tanders/duplicate-alert";
 const h = vi.hoisted(() => ({
   avisos: [] as unknown[][],
   checksPrevios: [] as { shipment_id: string }[],
+  /** Estado de la guía con la que se choca. Por defecto, una que no se cobró. */
+  chocada: { payment_check_state: null, delivery_status: "en_ruta" } as Record<string, unknown>,
 }));
 
 vi.mock("@/lib/crypto", () => ({ decrypt: (s: string) => s }));
@@ -122,16 +124,22 @@ function adminFalso() {
         };
       }
       return {
-        // La consulta de candidatas pide muchas columnas; la de guías chocadas
-        // pide solo estas dos. Es lo que las distingue en el doble.
+        // La consulta de candidatas y la de guías chocadas piden columnas
+        // distintas: es lo que las distingue en el doble.
         select: (cols?: string) =>
-          cols === "order_name,guide_code"
-            ? cadena([{ order_name: "#KP131846", guide_code: "TANDER9" }])
+          cols?.includes("payment_check_state,delivery_status")
+            ? cadena([{ id: "id-9", order_name: "#KP131846", guide_code: "TANDER9", store_id: "tienda", order_id: "ped-9", ...h.chocada }])
             : cadena([CANDIDATA]),
-        update: (patch: Record<string, unknown>) => {
-          visto.updates.push(patch);
-          return { eq: async () => ({ error: null }), in: async () => ({ error: null }) };
-        },
+        update: (patch: Record<string, unknown>) => ({
+          eq: async (_c: string, id: string) => {
+            visto.updates.push({ ...patch, __id: id });
+            return { error: null };
+          },
+          in: async (_c: string, ids: string[]) => {
+            visto.updates.push({ ...patch, __id: ids.join(",") });
+            return { error: null };
+          },
+        }),
       };
     },
   };
@@ -142,6 +150,7 @@ function adminFalso() {
 beforeEach(() => {
   h.avisos.length = 0;
   h.checksPrevios.length = 0;
+  h.chocada = { payment_check_state: null, delivery_status: "en_ruta" };
   vi.mocked(alertDuplicatePayments).mockClear();
   vi.stubGlobal(
     "fetch",
@@ -167,11 +176,45 @@ describe("comprobante de pago reusado", () => {
           pedido: "#AUR176448",
           operacion: "86480816",
           otras: ["#KP131846"],
+          desandadas: [],
           monto: 129,
           storeId: "tienda",
         },
       ]);
     });
+  });
+
+  it("la guía que YA se había cobrado con ese comprobante deja de estar cobrada", async () => {
+    // El caso real del 10-09-2026: #KP125070 y #KP124793 cayeron en la misma
+    // pasada con el yape de S/ 198. Bloquear solo a la segunda dejaría cobrada
+    // justo la que nadie va a revisar, y cuál fue cuál lo decidió el orden de
+    // la cola. `entregado` significa «entregado Y cobrado» (§9.4): si el cobro
+    // deja de estar probado, vuelve a `en_ruta`, que es lo que el courier sí
+    // acredita.
+    h.checksPrevios.push({ shipment_id: "id-9" });
+    h.chocada = { payment_check_state: "validado", delivery_status: "entregado" };
+    const { admin, visto } = adminFalso();
+
+    const r = await sweepTandersPayments(admin);
+    expect(r.duplicados[0]?.desandadas).toEqual(["#KP131846"]);
+    const desandada = visto.updates.find((u) => u.__id === "id-9");
+    expect(desandada).toMatchObject({
+      payment_check_state: "rechazado",
+      delivery_status: "en_ruta",
+    });
+    // Y queda constancia de POR QUÉ, para que el revisor no adivine.
+    expect(visto.insertado.some((f) => f.shipment_id === "id-9")).toBe(true);
+  });
+
+  it("no deshace lo que un administrador ya revisó a mano", async () => {
+    // `revisado` es una decisión humana explícita; un barrido no la tumba.
+    h.checksPrevios.push({ shipment_id: "id-9" });
+    h.chocada = { payment_check_state: "revisado", delivery_status: "entregado" };
+    const { admin, visto } = adminFalso();
+
+    const r = await sweepTandersPayments(admin);
+    expect(r.duplicados[0]?.desandadas).toEqual([]);
+    expect(visto.updates.find((u) => u.__id === "id-9")).toBeUndefined();
   });
 
   it("busca el nº normalizado y excluye la propia guía", async () => {
@@ -211,6 +254,7 @@ describe("formatDuplicateAlert", () => {
         pedido: "#AUR176448",
         operacion: "86480816",
         otras: ["#KP131846"],
+        desandadas: [],
         monto: 129,
         storeId: "t",
       },
@@ -219,6 +263,21 @@ describe("formatDuplicateAlert", () => {
     expect(texto).toContain("S/ 129.00");
     expect(texto).toContain("86480816");
     expect(texto).toContain("#KP131846");
+  });
+
+  it("destaca la que se había dado por cobrada: es lo urgente", () => {
+    const texto = formatDuplicateAlert("Aurela", [
+      {
+        guia: "TANDER1",
+        pedido: "#KP124793",
+        operacion: "14881571",
+        otras: ["#KP125070"],
+        desandadas: ["#KP125070"],
+        monto: 198,
+        storeId: "t",
+      },
+    ]);
+    expect(texto).toContain("#KP125070 estaba dado por COBRADO");
   });
 
   it("escapa el HTML del nombre de la tienda", () => {

@@ -54,6 +54,7 @@ import type {
 import {
   AGENCY_AVAILABLE_STATES,
   emptyFilters,
+  PAYMENT_CHECK_NONE,
   type AgencySummary,
   type MasterFilters,
   type MasterSortKey,
@@ -98,6 +99,7 @@ const MASTER_COLUMNS =
   "status_since,status_locked,current_courier,last_courier," +
   "courier_count,attempt_count,guide_code,dispatched_at,delivered_at,delivered_courier,returned_at," +
   "last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
+  "payment_check_state," +
   // El panel de Aliclik decide con estas dos si enseña "el pedido ya tiene
   // coordenada" o "obligatoria, el pedido no la tiene". Sin traerlas llegaban
   // como `undefined` y el panel decía SIEMPRE que faltaba, también en pedidos
@@ -695,6 +697,23 @@ function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
   if (f.districts.size) q = q.in("district", [...f.districts]);
   if (f.coverages.size) q = q.in("coverage", [...f.coverages]);
   if (f.pickupStates.size) q = q.in("pickup_state", [...f.pickupStates]);
+
+  // La verificación del cobro del courier. `sin` es la columna en NULL —un
+  // courier que no sube constancia por guía— y en PostgREST hay que pedirlo
+  // aparte: `in.(…)` nunca casa con null, así que sin este OR la opción
+  // devolvería cero filas en vez de las que dice.
+  if (f.paymentChecks.size) {
+    const values = [...f.paymentChecks];
+    const conNull = values.includes(PAYMENT_CHECK_NONE);
+    const estados = values.filter((v) => v !== PAYMENT_CHECK_NONE);
+    if (conNull && estados.length) {
+      q = q.or(`payment_check_state.is.null,payment_check_state.in.(${estados.join(",")})`);
+    } else if (conNull) {
+      q = q.is("payment_check_state", null);
+    } else {
+      q = q.in("payment_check_state", estados);
+    }
+  }
 
   // El courier mira el actual Y el último: buscar "los que tocó Fenix" no debe
   // perder los que ya pasaron a otra guía. Es la misma regla que tenía el filtro

@@ -18,6 +18,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decrypt } from "@/lib/crypto";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { categoryOf } from "@/lib/shipments";
 import { extractPaymentEvidence, TandersClient } from "@/lib/tanders/client";
 import { alertDuplicatePayments } from "@/lib/tanders/duplicate-alert";
 import {
@@ -70,15 +71,26 @@ function expectedAmount(raw: Candidate["tanders_raw"]): number | null {
  * en la B sigue siendo el mismo papel presentado dos veces—, y se excluye la
  * propia guía, que se relee en cada pasada mientras siga pendiente.
  *
- * Devuelve los pedidos (o guías) con los que choca, para que el veredicto
- * pueda nombrarlos. Si la consulta falla devuelve vacío: no acusar por un
- * error de red es preferible a acusar en falso, y la guía se vuelve a mirar.
+ * Devuelve las guías con las que choca, con su estado actual: hace falta para
+ * nombrarlas en el veredicto Y para poder desandar la que ya se hubiera dado
+ * por cobrada con ese mismo comprobante. Si la consulta falla devuelve vacío:
+ * no acusar por un error de red es preferible a acusar en falso, y la guía se
+ * vuelve a mirar en la siguiente pasada.
  */
+interface GuiaChocada {
+  id: string;
+  nombre: string;
+  paymentCheckState: string | null;
+  deliveryStatus: string;
+  orderId: string | null;
+  storeId: string;
+}
+
 async function guiasConLaMismaOperacion(
   admin: SupabaseClient,
   operacion: string | null,
   shipmentId: string,
-): Promise<string[]> {
+): Promise<GuiaChocada[]> {
   if (!operacion) return [];
   const { data, error } = await admin
     .from("tanders_payment_checks")
@@ -92,11 +104,68 @@ async function guiasConLaMismaOperacion(
 
   const { data: guias } = await admin
     .from("shipments")
-    .select("order_name,guide_code")
+    .select("id,order_name,guide_code,payment_check_state,delivery_status,order_id,store_id")
     .in("id", ids);
-  return ((guias as { order_name: string | null; guide_code: string }[]) ?? []).map(
-    (g) => g.order_name ?? g.guide_code,
-  );
+  return ((guias as Record<string, string | null>[]) ?? []).map((g) => ({
+    id: String(g.id),
+    nombre: g.order_name ?? String(g.guide_code),
+    paymentCheckState: g.payment_check_state ?? null,
+    deliveryStatus: String(g.delivery_status ?? ""),
+    orderId: g.order_id ?? null,
+    storeId: String(g.store_id),
+  }));
+}
+
+/**
+ * Desanda la guía que YA se había dado por cobrada con el comprobante que
+ * ahora resulta compartido.
+ *
+ * POR QUÉ HACE FALTA. La comprobación bloquea la SEGUNDA guía que ve el mismo
+ * nº de operación — la primera ya pasó. Cuál fue cuál lo decide el orden de la
+ * cola, que es arbitrario: el 10-09-2026 las dos guías del yape de S/ 198
+ * (#KP125070 y #KP124793) cayeron en la misma pasada con un minuto de
+ * diferencia. Sin esto, una de las dos se queda marcada como cobrada con un
+ * comprobante que ya no prueba nada, y justo la que nadie va a revisar.
+ *
+ * `entregado` en este sistema significa «entregado Y cobrado» (§9.4). Si el
+ * cobro deja de estar probado, `entregado` deja de ser cierto: la guía vuelve
+ * a `en_ruta`, que es lo que el courier sí acredita. No es inventar una regla
+ * nueva, es aplicar la que ya había.
+ *
+ * NO se toca una guía en `revisado`: ahí un administrador ya miró y decidió a
+ * mano, y su decisión no la deshace un barrido.
+ */
+async function desandarCobroDuplicado(
+  admin: SupabaseClient,
+  chocadas: GuiaChocada[],
+  operacion: string,
+  nuevaGuia: string,
+): Promise<string[]> {
+  const desandadas: string[] = [];
+  for (const otra of chocadas) {
+    if (otra.paymentCheckState !== "validado") continue;
+    await admin.from("tanders_payment_checks").insert({
+      shipment_id: otra.id,
+      store_id: otra.storeId,
+      state: "rechazado",
+      reasons: ["operacion_duplicada"],
+      operation_number: operacion,
+      raw: {
+        motivo:
+          `Se dio por cobrada con la operación ${operacion}, que después apareció ` +
+          `también en ${nuevaGuia}. Al menos una de las dos no está pagada.`,
+      },
+    });
+    const patch: Record<string, unknown> = { payment_check_state: "rechazado" };
+    if (otra.deliveryStatus === "entregado") {
+      patch.delivery_status = "en_ruta";
+      patch.status_category = categoryOf("en_ruta");
+    }
+    await admin.from("shipments").update(patch).eq("id", otra.id);
+    if (otra.orderId) await recomputeOrderMasterSafe(admin, [otra.orderId]);
+    desandadas.push(otra.nombre);
+  }
+  return desandadas;
 }
 
 /** Un comprobante que apareció en más de una guía. */
@@ -106,6 +175,12 @@ export interface SweepDuplicate {
   operacion: string;
   /** Las otras guías donde ya estaba. */
   otras: string[];
+  /**
+   * De esas otras, las que se habían dado por COBRADAS con este comprobante y
+   * han dejado de estarlo. Son las que urge revisar: alguien ya las contó como
+   * plata entrada.
+   */
+  desandadas: string[];
   monto: number | null;
   storeId: string;
 }
@@ -314,7 +389,8 @@ export async function sweepTandersPayments(
       );
       const expected = expectedAmount(row.tanders_raw);
       const operacion = normalizeOperationNumber(reading.operationNumber);
-      const duplicateOf = await guiasConLaMismaOperacion(admin, operacion, row.id);
+      const chocadas = await guiasConLaMismaOperacion(admin, operacion, row.id);
+      const duplicateOf = chocadas.map((c) => c.nombre);
       const verdict = checkTandersPayment({
         duplicateOf,
         voucher: {
@@ -328,11 +404,23 @@ export async function sweepTandersPayments(
         expectedAmount: expected,
       });
       if (duplicateOf.length) {
+        // La que ya se había dado por cobrada con este mismo comprobante deja
+        // de estarlo: bloquear solo a la recién llegada dejaría cobrada
+        // justamente la que nadie va a revisar. Ver desandarCobroDuplicado.
+        const desandadas = dry
+          ? chocadas.filter((c) => c.paymentCheckState === "validado").map((c) => c.nombre)
+          : await desandarCobroDuplicado(
+              admin,
+              chocadas,
+              operacion ?? "?",
+              row.order_name ?? row.guide_code,
+            );
         report.duplicados.push({
           guia: row.guide_code,
           pedido: row.order_name,
           operacion: operacion ?? "?",
           otras: duplicateOf,
+          desandadas,
           monto: reading.amount,
           storeId: row.store_id,
         });

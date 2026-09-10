@@ -1036,6 +1036,24 @@ sin tope de antigüedad. Reglas:
     la imagen contra el monto de la guía y el nombre de Grupo GF SAC: que el
     courier se dé por pagado a sí mismo no es constancia de que el dinero
     llegó a nuestra cuenta.
+  - **El cobro del courier se ve y se filtra desde el Master** (0156). El
+    veredicto viaja de la guía vigente a `order_master.payment_check_state` y
+    el filtro **«Cobro del courier»** ofrece `validado`, `rechazado`,
+    `pendiente`, `revisado` y **«courier sin constancia por guía»**. Esa última
+    opción no es decorativa: sin ella, pedir «validado» sacaría de la lista
+    todo lo que no es Tanders y parecería que solo esos pedidos están cobrados,
+    cuando los demás se liquidan en bloque (`rider_settlements`) y esta columna
+    nunca se les escribe.
+    - **La columna no es de Tanders.** Hoy es el único courier que sube
+      constancia por guía; el día que otro lo haga, el Master ya sabe
+      enseñarlo. Lo específico de Tanders es quién la escribe, no el concepto.
+    - Motivo: el 10-09-2026 había **21 guías con el cobro rechazado** —una por
+      comprobante reusado— bloqueando pedidos, y ninguna pantalla podía
+      listarlas. Un bloqueo que nadie puede ver es un pedido parado para
+      siempre.
+    - No confundir con `payment_state`, que es el cobro del PEDIDO (adelantos
+      de la clienta). Este dice si el dinero que cobró el motorizado llegó a la
+      cuenta.
   - **Vocabulario de estados de Tanders, confirmado por la operación el
     10-09-2026** (hasta entonces 105 guías vivían en estados que el Master no
     traducía, entre ellas paquetes ya de vuelta que nadie sabía que habían

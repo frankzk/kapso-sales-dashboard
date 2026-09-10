@@ -178,6 +178,14 @@ export function TandersCobros() {
                     <span className="font-mono text-xs">{d.operacion}</span>
                     <br />
                     <span className="text-xs">ya estaba en: {d.otras.join(", ")}</span>
+                    {d.desandadas.length > 0 && (
+                      <>
+                        <br />
+                        <span className="text-xs font-semibold">
+                          ⚠️ {d.desandadas.join(", ")} estaba dado por cobrado y ya no lo está
+                        </span>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>
