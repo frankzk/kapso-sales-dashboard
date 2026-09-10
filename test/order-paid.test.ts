@@ -18,31 +18,36 @@ import { collectAmountMismatch } from "@/lib/aliclik-money";
  */
 
 const YAPE_COMPLETO = { paymentState: "pago_completo" };
-const WEB = { financialStatus: "paid", totalRefunded: 0 };
+// Desde el 10-09-2026 «pagado por web» es SOLO la pasarela confirmada del
+// checkout, guardada. `paid` a secas ya no cuenta.
+const WEB = { financialStatus: "paid", totalRefunded: 0, paymentGateway: "checkout" as const };
 
 describe("isWebPrepaid: ¿lo cobró la pasarela?", () => {
-  it("solo `paid` cuenta", () => {
-    expect(isWebPrepaid({ financialStatus: "paid" })).toBe(true);
+  it("solo `paid` cuenta, y solo con la pasarela del checkout guardada", () => {
+    expect(isWebPrepaid({ financialStatus: "paid", paymentGateway: "checkout" })).toBe(true);
+    // `paid` sin saber por dónde entró el dinero ya no se deduce como web.
+    expect(isWebPrepaid({ financialStatus: "paid" })).toBe(false);
+    expect(isWebPrepaid({ financialStatus: "paid", paymentGateway: "manual" })).toBe(false);
     // Los otros dos estados que existen de verdad en esta operación.
-    expect(isWebPrepaid({ financialStatus: "pending" })).toBe(false);
-    expect(isWebPrepaid({ financialStatus: "voided" })).toBe(false);
+    expect(isWebPrepaid({ financialStatus: "pending", paymentGateway: "checkout" })).toBe(false);
+    expect(isWebPrepaid({ financialStatus: "voided", paymentGateway: "checkout" })).toBe(false);
   });
 
   it("un estado a medias NO cuenta como pagado", () => {
     // Hoy no aparece en la base, y si algún día aparece el lado seguro del error
     // es no darlo por cobrado: como mucho se cobra una vez de más en la puerta,
     // nunca dos veces al cliente.
-    expect(isWebPrepaid({ financialStatus: "partially_paid" })).toBe(false);
-    expect(isWebPrepaid({ financialStatus: "authorized" })).toBe(false);
+    expect(isWebPrepaid({ financialStatus: "partially_paid", paymentGateway: "checkout" })).toBe(false);
+    expect(isWebPrepaid({ financialStatus: "authorized", paymentGateway: "checkout" })).toBe(false);
   });
 
   it("tolera mayúsculas y espacios, que vienen de fuera", () => {
-    expect(isWebPrepaid({ financialStatus: " PAID " })).toBe(true);
+    expect(isWebPrepaid({ financialStatus: " PAID ", paymentGateway: "checkout" })).toBe(true);
   });
 
   it("un reembolso deshace el prepago: el dinero volvió", () => {
-    expect(isWebPrepaid({ financialStatus: "paid", totalRefunded: 0.01 })).toBe(false);
-    expect(isWebPrepaid({ financialStatus: "paid", totalRefunded: 456.3 })).toBe(false);
+    expect(isWebPrepaid({ ...WEB, totalRefunded: 0.01 })).toBe(false);
+    expect(isWebPrepaid({ ...WEB, totalRefunded: 456.3 })).toBe(false);
   });
 
   it("sin datos no inventa un cobro", () => {
@@ -100,6 +105,7 @@ describe("la guía de Tanders sale con el monto correcto", () => {
         orderTotal: 456.3,
         financialStatus: "paid",
         totalRefunded: 0,
+        paymentGateway: "checkout",
       }),
     ).toBe(0);
   });

@@ -2101,17 +2101,21 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   entran pedidos con pasarela (`financial_status = 'paid'`), «ya está cobrado»
   tiene dos vías —comprobante Yape o pago web— y **no se suman**: sumarlas sería
   contar dos veces el mismo dinero. Un reembolso deshace el prepago.
-- **Solo la pasarela del checkout nace pagada** (decidido el 10-09-2026).
-  Shopify dice por dónde entró el dinero (`payment_gateway`,
-  `lib/payment-gateway.ts`): «Checkout Flow | Tarjeta, Transf., Cuotas débito»
-  cobró, y ese pedido se salta la verificación de constancias aunque alguien
-  haya subido una captura como comprobante (#KP132708). **«Manual»** —alguien
-  lo marcó como pagado a mano en Shopify— y **COD** siguen el conducto
-  regular: si se quiere dar por pagado, se sube la constancia y mandan las
-  reglas de Yape. Los pedidos sincronizados antes de pedirle el dato a Shopify
-  no lo tienen; para ésos manda la regla indirecta de siempre: pagado en
-  Shopify y sin ningún comprobante cargado. Traerles la pasarela es una decisión
-  aparte, porque 388 pedidos vivos marcados a mano pasarían a exigir constancia.
+- **Solo la pasarela confirmada del checkout nace pagada** (decidido el
+  10-09-2026, v1.11). Shopify dice por dónde entró el dinero
+  (`payment_gateway`, `lib/payment-gateway.ts`) y solo cuenta la que la
+  operación confirmó con nombre y apellido: «Checkout Flow | Tarjeta, Transf.,
+  Cuotas débito». Ese pedido se salta la verificación de constancias aunque
+  alguien haya subido una captura como comprobante (#KP132708). Todo lo demás
+  sigue el conducto regular: **«manual»** —alguien lo marcó como pagado a mano
+  en Shopify—, **COD**, una pasarela que nadie confirmó, o ningún dato porque
+  el pedido se sincronizó antes de pedírselo a Shopify. **Nada se deduce.**
+  Hasta la v1.11, «pagado en Shopify y sin comprobantes» contaba como pagado por
+  web; la deducción fallaba en los dos sentidos y se quitó. A los pedidos
+  pagados que siguen vivos y no tienen el dato se les pregunta a Shopify por
+  tandas desde el cron de sync (`lib/payment-gateway-backfill.ts`); hasta que
+  llega su respuesta no son prepago. Costo asumido: los marcados a mano sin
+  constancia validada pasan a exigirla.
   De esa regla única cuelga todo lo demás:
   - El panel de cobro colapsa a una constancia: ni pide comprobante ni enseña
     saldo por cargar. Lo que sí sigue haciendo falta en Agencia —DNI y agencia de

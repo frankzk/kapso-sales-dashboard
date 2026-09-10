@@ -12,16 +12,20 @@
 --
 -- Shopify lo expone (`paymentGatewayNames` / `payment_gateway_names`); la
 -- sincronización no lo pedía. Desde ahora se pide y se clasifica al ingerir
--- (lib/payment-gateway.ts): 'checkout' | 'manual' | 'cod'. NULL = no se sabe,
--- y con NULL manda la regla indirecta de antes: nada cambia para lo viejo.
+-- (lib/payment-gateway.ts): 'checkout' (solo la pasarela CONFIRMADA) |
+-- 'manual' | 'cod'. NULL = no se sabe, y con NULL NO hay prepago: nada se
+-- deduce. La regla indirecta de antes se quitó (mom-v1.11); el cron reconcilia
+-- el histórico con el cambio de versión.
 --
 -- Se copia a `order_master` en cada recálculo por lo mismo que 0128: los que
 -- deciden si hay cobro leen el Master, y tres lecturas separadas de la misma
 -- verdad terminan discrepando — y acá discrepar es cobrar dos veces.
 --
--- SIN BACKFILL A PROPÓSITO. Traer la pasarela de los pedidos viejos es una
--- decisión de la operación: 388 pedidos vivos marcados «pagado» sin constancia
--- validada pasarían a exigirla. Se hace aparte, cuando se decida.
+-- SIN BACKFILL EN SQL. Los pedidos viejos quedan en NULL —no son prepago— y a
+-- los pagados que siguen vivos se les pregunta a Shopify por tandas desde el
+-- cron de sync (lib/payment-gateway-backfill.ts). Costo asumido por la
+-- operación: los marcados «pagado» a mano sin constancia validada pasan a
+-- exigirla.
 
 alter table orders
   add column if not exists payment_gateway text;

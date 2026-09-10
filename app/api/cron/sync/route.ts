@@ -5,6 +5,7 @@ import { runStoreSync } from "@/lib/ingest";
 import { alertUnattendedYapes } from "@/lib/yape-alert-telegram";
 import { alertCollectMismatches } from "@/lib/collect-alert";
 import { assignPendingExperimentArms } from "@/lib/lead-experiment-assign";
+import { backfillPaymentGateways } from "@/lib/payment-gateway-backfill";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -56,6 +57,20 @@ async function run(req: NextRequest) {
       reports.push(await runStoreSync(id, admin, { skipMasterReconcile: true }));
     } catch (e) {
       reports.push({ storeId: id, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  // La pasarela de los pedidos pagados que siguen vivos, por tandas (0152).
+  // Sin ella la regla estricta los da por NO pagados, también a los que sí
+  // cobró el checkout. Best-effort: nunca tumba la sincronización.
+  let gatewayBackfill = { candidates: 0, updated: 0 };
+  for (const id of storeIds) {
+    try {
+      const r = await backfillPaymentGateways(id, admin);
+      gatewayBackfill.candidates += r.candidates;
+      gatewayBackfill.updated += r.updated;
+    } catch {
+      /* ignore — el relleno nunca bloquea el sync */
     }
   }
 
@@ -112,6 +127,7 @@ async function run(req: NextRequest) {
     yapeAlerts,
     collectAlerts,
     experimento,
+    gatewayBackfill,
     reports,
   });
 }

@@ -17,13 +17,17 @@
 // pedía, así que el 99 % de los pedidos no lo tienen: para ésos la respuesta es
 // «no se sabe» y manda la regla de antes. No se adivina.
 //
-// QUÉ ES «CHECKOUT». Cualquier pasarela que no sea de las que NO cobran: la
-// lista de las que sí cobran cambia con cada app (Mercado Pago, Culqi, Shopify
-// Payments…) y mantenerla es cómo se deja de reconocer la siguiente. Las que no
-// cobran son dos y no cambian.
+// QUÉ ES «CHECKOUT». La pasarela CONFIRMADA por la operación, con nombre y
+// apellido. No «cualquiera que no sea manual»: una pasarela nueva que aparezca
+// mañana no se salta las constancias sola, alguien la confirma y la añade
+// acá. Hasta entonces se clasifica como desconocida —null— y sigue el
+// conducto regular. Ante la duda, se cobra con constancia, no dos veces.
 
 export type PaymentGateway = "checkout" | "manual" | "cod";
 
+/** Pasarelas confirmadas que cobran en el checkout. Se añaden a mano. */
+export const CHECKOUT_GATEWAYS: readonly string[] = ["Checkout Flow | Tarjeta, Transf., Cuotas débito"];
+const CHECKOUT = new Set(CHECKOUT_GATEWAYS.map((n) => n.trim().toLowerCase()));
 /** Nombres que Shopify pone cuando NADIE cobró en el checkout. */
 const SIN_COBRO = new Set(["manual", "cash on delivery (cod)", "bogus"]);
 
@@ -37,15 +41,17 @@ export function gatewayNamesOf(raw: unknown): string[] | null {
 }
 
 /**
- * `checkout` si alguna pasarela cobró; `manual` si alguien lo marcó a mano;
- * `cod` si solo hay contraentrega; null si no se sabe (sin dato, o lista vacía:
- * una lista vacía no dice quién cobró, y adivinar es cobrar dos veces).
+ * `checkout` si cobró una pasarela CONFIRMADA; `manual` si alguien lo marcó a
+ * mano; `cod` si solo hay contraentrega; null si no se sabe: sin dato, lista
+ * vacía, o una pasarela que nadie ha confirmado todavía. Una lista vacía no
+ * dice quién cobró, y adivinar es cobrar dos veces.
  */
 export function classifyPaymentGateway(names: readonly string[] | null | undefined): PaymentGateway | null {
   if (!names || !names.length) return null;
   const lower = names.map((n) => n.trim().toLowerCase()).filter(Boolean);
   if (!lower.length) return null;
-  if (lower.some((n) => !SIN_COBRO.has(n))) return "checkout";
+  if (lower.some((n) => CHECKOUT.has(n))) return "checkout";
+  if (lower.some((n) => !SIN_COBRO.has(n))) return null;
   if (lower.includes("manual")) return "manual";
   return "cod";
 }

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  CHECKOUT_GATEWAYS,
   PAYMENT_GATEWAY_LABEL,
   classifyPaymentGateway,
   gatewayNamesOf,
@@ -18,21 +19,27 @@ import { isWebPrepaid, orderFullyPaid } from "@/lib/order-paid";
  * en Shopify y sin comprobantes» = pagado por web— se apagó: el pedido quedó en
  * confirmación pidiendo un adelanto ya cobrado.
  *
- * LA REGLA (10-09-2026). El checkout se salta las constancias, haya o no
- * comprobantes. «Manual» y COD siguen el conducto regular. Sin el dato, manda
- * la regla de antes: no se adivina.
+ * LA REGLA (10-09-2026). Solo la pasarela CONFIRMADA del checkout, guardada,
+ * se salta las constancias, haya o no comprobantes. «Manual», COD, una
+ * pasarela sin confirmar o ningún dato: conducto regular. Nada se deduce.
  */
 
 const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
 const CHECKOUT = "Checkout Flow | Tarjeta, Transf., Cuotas débito";
 
 describe("clasificar la pasarela", () => {
-  it("la del checkout cobró", () => {
+  it("la del checkout cobró: solo la CONFIRMADA, con nombre y apellido", () => {
     expect(classifyPaymentGateway([CHECKOUT])).toBe("checkout");
-    // Si mañana entra Mercado Pago o Culqi, también: lo que se enumera es lo
-    // que NO cobra, que son dos nombres y no cambian.
-    expect(classifyPaymentGateway(["mercado_pago"])).toBe("checkout");
+    expect(classifyPaymentGateway([CHECKOUT.toUpperCase()])).toBe("checkout");
     expect(classifyPaymentGateway(["Cash on Delivery (COD)", CHECKOUT])).toBe("checkout");
+    expect(CHECKOUT_GATEWAYS).toEqual([CHECKOUT]);
+  });
+
+  it("una pasarela que nadie confirmó todavía NO se salta nada: desconocida", () => {
+    // Si mañana entra Mercado Pago o Culqi, alguien la confirma y la añade a
+    // CHECKOUT_GATEWAYS. Hasta entonces, conducto regular.
+    expect(classifyPaymentGateway(["mercado_pago"])).toBeNull();
+    expect(classifyPaymentGateway(["manual", "mercado_pago"])).toBeNull();
   });
 
   it("«manual» es alguien marcándolo a mano, aunque venga junto a COD", () => {
@@ -89,10 +96,12 @@ describe("la regla de cobro cuando se sabe la pasarela", () => {
     expect(isWebPrepaid({ financialStatus: "pending", paymentGateway: "checkout" })).toBe(false);
   });
 
-  it("sin pasarela conocida, la regla indirecta de siempre sigue igual", () => {
-    expect(isWebPrepaid({ ...PAGADO })).toBe(true);
-    expect(isWebPrepaid({ ...PAGADO, paymentGateway: null })).toBe(true);
-    expect(isWebPrepaid({ ...PAGADO, paymentState: "adelanto_cargado" })).toBe(false);
+  it("sin pasarela guardada NO es pagado por web: nada de deducir", () => {
+    // Antes «paid sin comprobantes» se daba por pagado por la pasarela. La
+    // operación lo cortó: solo la pasarela confirmada y guardada.
+    expect(isWebPrepaid({ ...PAGADO })).toBe(false);
+    expect(isWebPrepaid({ ...PAGADO, paymentGateway: null })).toBe(false);
+    expect(isWebPrepaid({ ...PAGADO, paymentState: "sin_pago" })).toBe(false);
   });
 });
 
@@ -132,6 +141,28 @@ describe("el dato viaja de Shopify al Master y a quien decide", () => {
   });
 
   it("y el MOM lo dice", () => {
-    expect(read("docs/mom/master-pedidos-v1.md")).toContain("**Solo la pasarela del checkout nace pagada**");
+    const mom = read("docs/mom/master-pedidos-v1.md");
+    expect(mom).toContain("**Solo la pasarela confirmada del checkout nace pagada**");
+    expect(mom).toContain("**Nada se deduce.**");
+  });
+});
+
+describe("los pedidos pagados que siguen vivos van a buscar su pasarela", () => {
+  // Con la regla estricta, un pedido sincronizado antes de pedir el dato deja
+  // de contar como pagado — también si lo cobró el checkout. En Lima saldría
+  // con el total a cobrar: dos veces. Se les pregunta a Shopify por tandas.
+  it("desde el cron de sync, por tandas y solo los vivos sin dato", () => {
+    const src = read("lib/payment-gateway-backfill.ts");
+    expect(src).toContain('.eq("financial_status", "paid")');
+    expect(src).toContain('.in("macro_stage", ETAPAS_VIVAS)');
+    expect(src).toContain('.is("payment_gateway", null)');
+    expect(src).toContain('.is("raw->paymentGatewayNames", null)');
+    expect(src).toContain("await upsertOrders(admin, [fresh]);");
+    expect(src).toContain("await recomputeOrderMasterSafe(admin, updated);");
+    expect(read("app/api/cron/sync/route.ts")).toContain("await backfillPaymentGateways(id, admin);");
+  });
+
+  it("y el Master reconcilia el histórico con el cambio de versión", () => {
+    expect(read("lib/order-macro-stage.ts")).toContain('MOM_RESOLUTION_VERSION = "mom-v1.11"');
   });
 });

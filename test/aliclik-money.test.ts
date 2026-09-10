@@ -219,7 +219,7 @@ describe("reconcileToOrderTotal · minimiza de verdad", () => {
 
 describe("aliclikPrepaidBlocker (Aliclik es solo contraentrega)", () => {
   it("bloquea un pedido pagado en el checkout", () => {
-    const msg = aliclikPrepaidBlocker({ financialStatus: "paid", totalRefunded: 0 });
+    const msg = aliclikPrepaidBlocker({ financialStatus: "paid", totalRefunded: 0, paymentGateway: "checkout" });
     expect(msg).toContain("YA ESTÁ PAGADO");
     expect(msg).toContain("Tanders"); // la salida, no solo la negativa
   });
@@ -235,7 +235,9 @@ describe("aliclikPrepaidBlocker (Aliclik es solo contraentrega)", () => {
 
   it("un reembolso devuelve el pedido a cobrable, así que puede ir por Aliclik", () => {
     // El dinero volvió: vuelve a ser contraentrega, que es lo que Aliclik sabe hacer.
-    expect(aliclikPrepaidBlocker({ financialStatus: "paid", totalRefunded: 149 })).toBeNull();
+    expect(aliclikPrepaidBlocker({ financialStatus: "paid", totalRefunded: 149, paymentGateway: "checkout" })).toBeNull();
+    // Y `paid` sin la pasarela guardada nunca fue prepago: alguien lo marcó.
+    expect(aliclikPrepaidBlocker({ financialStatus: "paid", totalRefunded: 0 })).toBeNull();
   });
 
   it("un adelanto NO lo bloquea: queda diferencia por cobrar en la puerta", () => {

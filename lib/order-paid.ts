@@ -14,11 +14,12 @@
 // repartidor le cobra al cliente algo que ya pagó». Lo que le faltaba era saber
 // que el dinero puede haber entrado por otro sitio.
 //
-// LA REGLA ES DURA A PROPÓSITO. Solo `paid` cuenta. En esta operación los
-// estados que existen son tres —`pending` (9.132), `voided` (2.733) y `paid`
-// (870) en los últimos 60 días, con CERO reembolsos—, así que no hay que
-// adivinar qué hacer con `partially_paid`: no aparece. El día que aparezca, no
-// contará como pagado, que es el lado seguro del error.
+// LA REGLA ES DURA A PROPÓSITO. Solo `paid` cuenta, y desde el 10-09-2026 solo
+// `paid` COBRADO POR LA PASARELA CONFIRMADA DEL CHECKOUT (lib/payment-gateway.ts).
+// En esta operación los estados que existen son tres —`pending`, `voided` y
+// `paid`, con CERO reembolsos—, así que no hay que adivinar qué hacer con
+// `partially_paid`: no aparece. El día que aparezca, no contará como pagado,
+// que es el lado seguro del error.
 
 import type { PaymentGateway } from "@/lib/payment-gateway";
 
@@ -51,30 +52,16 @@ export function isWebPrepaid(facts: OrderPaymentFacts): boolean {
   const refunded = facts.totalRefunded ?? 0;
   if (Number.isFinite(refunded) && refunded > 0) return false;
 
-  // CUANDO SE SABE POR DÓNDE ENTRÓ EL DINERO, ESO MANDA (10-09-2026). La
-  // pasarela del checkout cobró: pagado, haya o no comprobantes cargados —
-  // #KP132708 tenía una captura de Shopify subida como comprobante y la regla
-  // indirecta de abajo lo dejó pidiendo un adelanto ya cobrado. «Manual» o
-  // COD: nadie cobró en el checkout, alguien lo marcó; si se quiere dar por
-  // pagado, se sube la constancia y mandan las reglas de Yape.
-  if (facts.paymentGateway === "checkout") return true;
-  if (facts.paymentGateway === "manual" || facts.paymentGateway === "cod") return false;
-
-  // SIN EL DATO, LA REGLA INDIRECTA DE SIEMPRE.
-  //
-  // SI HAY COMPROBANTES, EL DINERO ENTRÓ POR YAPE — y entonces mandan las reglas
-  // de Yape, no `financial_status`.
-  //
-  // No es una sutileza: en la operación real casi todo pedido cobrado por Yape
-  // acaba también marcado `paid` en Shopify. Sin esta condición, un pedido con
-  // el adelanto cargado y la diferencia pendiente contaría como «pagado por
-  // web» y abriría la compuerta de la clave de recojo — que es exactamente la
-  // pérdida de dinero que esa compuerta existe para evitar.
-  //
-  // `paid` sin ningún comprobante es lo único que solo puede venir de la
-  // pasarela. Lo demás lo decide `paymentState`, que sabe de montos.
-  const state = (facts.paymentState ?? "").trim();
-  return !state || state === "sin_pago";
+  // SOLO LA PASARELA CONFIRMADA DEL CHECKOUT (10-09-2026). Guardada, no
+  // deducida: si Shopify no nos dijo por dónde entró el dinero —o dijo «manual»,
+  // que es alguien marcándolo a mano—, el pedido sigue el conducto de las
+  // constancias, como cualquier otro. Antes acá vivía una deducción: «pagado en
+  // Shopify y sin comprobantes» contaba como pagado por web. Fallaba en los dos
+  // sentidos: #KP132708 nació pagado en el checkout, alguien subió la captura
+  // como comprobante y la deducción se apagó; y un pedido marcado a mano sin
+  // comprobante contaba como cobrado por la pasarela. La operación fijó la
+  // regla: nada de deducir. Haya o no comprobantes cargados, el checkout cobró.
+  return facts.paymentGateway === "checkout";
 }
 
 /**
