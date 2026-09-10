@@ -27,6 +27,7 @@ import {
 import { categoryOf, reconcileDeliveryStatus, reopensForFailedAttempt } from "@/lib/shipments";
 import { sealReturn } from "@/lib/returned-source";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { cambiosMateriales, soloSellos } from "@/lib/aliclik-snapshot-diff";
 
 /**
  * Huella del estado, para la idempotencia que pide la documentación. El mismo
@@ -106,6 +107,14 @@ interface TrackedShipment {
   next_followup_at: string | null;
   /** Cuándo terminó la guía. Se sella UNA vez: ancla la ventana de Reproprovincia. */
   closed_at: string | null;
+  /** Lo demás que el parche puede tocar. Entra para poder COMPARAR: si el
+   *  snapshot no cambia nada de esto, no se recalcula (`cambiosMateriales`). */
+  status_category: string | null;
+  reported_status: string | null;
+  reported_collect_amount: number | null;
+  pickup_state: string | null;
+  delivered_source: string | null;
+  dispatched_at: string | null;
 }
 
 /**
@@ -154,7 +163,8 @@ export async function applyAliclikSnapshot(
   const COLUMNS =
     "id,store_id,order_id,delivery_status,last_report_at,api_updated_at,external_order_number,guide_code," +
     "preparation_state,custody_state,ready_at,custody_transferred_at,next_followup_at," +
-    "returned_at,returned_source,closed_at";
+    "returned_at,returned_source,closed_at," +
+    "status_category,reported_status,reported_collect_amount,pickup_state,delivered_source,dispatched_at";
 
   const byExternal = await admin
     .from("shipments")
@@ -310,6 +320,18 @@ export async function applyAliclikSnapshot(
     if (nextCustody === "courier" && !shipment.custody_transferred_at) {
       patch.custody_transferred_at = updatedAt ?? nowIso;
     }
+  }
+
+  // SIN CAMBIOS, SIN RECÁLCULO. Un snapshot igual al último aplicado pasa la
+  // guarda monotónica (es igual, no más viejo) y hasta acá se escribía entero y
+  // recalculaba el Master: 43.000 veces al día para 1.200 guías reales, con las
+  // 745 tarifas descargadas en cada una. Se escriben solo los sellos de lectura
+  // —siguen importando: mientras la lectura de API esté fresca, un Excel no pisa
+  // el estado— y se sale. Ver `lib/aliclik-snapshot-diff.ts`.
+  if (!cambiosMateriales(patch, shipment as unknown as Record<string, unknown>).length) {
+    const { error: sealErr } = await admin.from("shipments").update(soloSellos(patch)).eq("id", shipment.id);
+    if (sealErr) return { ok: false, outcome: "error", error: sealErr.message };
+    return { ok: true, outcome: "unchanged", shipmentId: shipment.id, orderId: shipment.order_id };
   }
 
   const { error: upErr } = await admin.from("shipments").update(patch).eq("id", shipment.id);

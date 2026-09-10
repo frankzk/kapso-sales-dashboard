@@ -32,6 +32,7 @@ import {
 import { classifyOrderCoverage, type OrderCoverage } from "@/lib/order-coverage";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
 import { derivedGuideDates } from "@/lib/guide-dates";
+import { ttlCache } from "@/lib/ttl-cache";
 import { isWebPrepaid } from "@/lib/order-paid";
 import {
   MOM_RESOLUTION_VERSION,
@@ -648,14 +649,30 @@ async function fetchTariffs(
   const orgIds = [...new Set(orgByStore.values())];
   if (!orgIds.length) return out;
 
-  const { data, error } = await admin
-    .from("cost_tariffs")
-    .select("id,org_id,store_id,courier,region,province,district,concept,amount,effective_from,effective_to")
-    .in("org_id", orgIds);
-  // La fase 4 puede no estar aplicada todavía: sin tarifas, el costo queda vacío.
-  if (error) return out;
-  out.tariffs.push(...((data ?? []) as unknown as CostTariff[]));
+  // EN MEMORIA, CON CADUCIDAD. Eran 745 filas (~370 KB) descargadas en CADA
+  // recálculo: 45.000 al día, 33 millones de filas servidas en 24 horas, la
+  // partida más grande del egress de Supabase (333 GB sobre 250). Las tarifas
+  // cambian cuando alguien las edita; recordarlas unos minutos por instancia
+  // se lleva casi todas esas lecturas. Ver `lib/ttl-cache.ts`.
+  const tariffs = await tariffCache.get([...orgIds].sort().join(","), Date.now(), async () => {
+    const { data, error } = await admin
+      .from("cost_tariffs")
+      .select("id,org_id,store_id,courier,region,province,district,concept,amount,effective_from,effective_to")
+      .in("org_id", orgIds);
+    // La fase 4 puede no estar aplicada todavía: sin tarifas, el costo queda vacío.
+    if (error) return [];
+    return (data ?? []) as unknown as CostTariff[];
+  });
+  out.tariffs.push(...tariffs);
   return out;
+}
+
+/** Cuánto se recuerdan las tarifas dentro de una instancia. */
+export const TARIFF_CACHE_MS = 5 * 60_000;
+const tariffCache = ttlCache<CostTariff[]>(TARIFF_CACHE_MS);
+/** Para pruebas y para quien edite tarifas en la misma instancia. */
+export function clearTariffCache(): void {
+  tariffCache.clear();
 }
 
 function confirmationRollup(
