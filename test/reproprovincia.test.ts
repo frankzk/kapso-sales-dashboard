@@ -305,7 +305,7 @@ describe("las piezas en el código", () => {
     // de la API corre hacia adelante, estirando la ventana sin que nadie haga nada.
     const src = read("lib/aliclik-track.ts");
     expect(src).toContain('if (next === "anulado" && !shipment.closed_at) {');
-    expect(src).toContain('"returned_at,returned_source,closed_at"');
+    expect(src).toContain('"returned_at,returned_source,closed_at,"');
   });
 
   it("el Master lleva la etiqueta cruda y la ventana por tienda a los DOS resolvedores", () => {
