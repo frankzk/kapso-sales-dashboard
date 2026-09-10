@@ -278,7 +278,26 @@ const PAYMENT_KEYS = ["payments", "pagos", "paymentEvidences"];
  *  entrega va en otra. Es el discriminante fiable, y no depende de cómo se
  *  llamen las claves de su JSON. */
 const PAYMENT_PATH = "files_payment";
-const IMAGE_KEYS = ["imageUrl", "image_url", "url", "photoUrl", "photo", "evidenceUrl", "file"];
+/**
+ * Dónde puede venir el enlace de la imagen.
+ *
+ * `paymentDocument` es el nombre REAL y CONFIRMADO (10-09-2026) — el resto son
+ * conjeturas defensivas que se escribieron antes de ver una respuesta. Faltaba
+ * justo el bueno, así que `firstUrl` devolvía null para cada pago, las dos vías
+ * de `extractPaymentEvidence` salían vacías y las 60 guías del barrido se
+ * contaban como «sin constancia aún». Cero validaciones en tres semanas por una
+ * clave que nadie había visto.
+ */
+const IMAGE_KEYS = [
+  "paymentDocument",
+  "imageUrl",
+  "image_url",
+  "url",
+  "photoUrl",
+  "photo",
+  "evidenceUrl",
+  "file",
+];
 
 function firstUrl(obj: Record<string, unknown>): string | null {
   for (const k of IMAGE_KEYS) {
@@ -286,6 +305,22 @@ function firstUrl(obj: Record<string, unknown>): string | null {
     if (typeof v === "string" && /^https?:\/\//.test(v)) return v;
   }
   return null;
+}
+
+/**
+ * Por dónde entró el dinero, según Tanders: `entity` («YAPE», «BCP»).
+ *
+ * NO es `method`. En su respuesta `method` existe, pero cuelga de la evidencia
+ * de ENTREGA y vale «Asignación masiva por mapa»: leerlo como medio de pago
+ * metería esa frase en el veredicto de un cobro. `paymentMethod` («T») tampoco
+ * sirve: es una letra sin diccionario conocido.
+ *
+ * Es un dato de apoyo, no el veredicto: quien decide el medio sigue siendo la
+ * lectura de la imagen. Ver lib/tanders/payment-check.ts.
+ */
+function paymentRail(obj: Record<string, unknown>): string | null {
+  const v = obj.entity;
+  return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
 function num(v: unknown): number | null {
@@ -302,6 +337,20 @@ function num(v: unknown): number | null {
  * con el resultado. Así que solo se acepta lo que está bajo una clave que dice
  * "pagos" de forma inequívoca: si su API cambia de forma, esto devuelve vacío y
  * la comprobación queda PENDIENTE (que bloquea sin acusar), en vez de adivinar.
+ *
+ * LA FORMA REAL, confirmada el 10-09-2026 contra guías entregadas:
+ *
+ *   { orderNumber, evidences: [ … la ENTREGA … ],
+ *     payments: [{ id, amount, paymentMethod, entity: "YAPE",
+ *                  paymentDocument: "…/files_payment%2F…jpg", status: "VERIFIED",
+ *                  paymentDate, createdAt }] }
+ *
+ * Fallar cerrada funcionó —nunca se validó un cobro que no tocaba—, pero
+ * escondió que fallaba SIEMPRE: la clave del enlace es `paymentDocument` y no
+ * estaba en `IMAGE_KEYS`, así que las dos vías salían vacías y el barrido
+ * contaba «sin constancia aún» para todo. De ahí que esta función tenga ahora
+ * pruebas contra la respuesta literal (test/tanders-payment-evidence.test.ts):
+ * una forma adivinada no se puede verificar leyéndola.
  */
 export function extractPaymentEvidence(body: unknown): TandersPaymentEvidence[] {
   const root = (body ?? {}) as Record<string, unknown>;
@@ -328,7 +377,7 @@ export function extractPaymentEvidence(body: unknown): TandersPaymentEvidence[] 
         imageUrl: url,
         status: typeof obj.status === "string" ? obj.status : null,
         amount: num(obj.amount ?? obj.monto),
-        method: typeof obj.method === "string" ? obj.method : null,
+        method: paymentRail(obj),
         at: typeof obj.createdAt === "string" ? obj.createdAt : null,
       });
     }
@@ -352,7 +401,7 @@ export function extractPaymentEvidence(body: unknown): TandersPaymentEvidence[] 
           imageUrl,
           status: typeof obj.status === "string" ? obj.status : null,
           amount: num(obj.amount ?? obj.monto),
-          method: typeof obj.method === "string" ? obj.method : null,
+          method: paymentRail(obj),
           at: typeof obj.createdAt === "string" ? obj.createdAt : null,
         });
       }

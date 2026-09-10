@@ -994,7 +994,30 @@ sin tope de antigüedad. Reglas:
   - Por lo mismo, una guía que responde **200 sin constancia reconocible SÍ está
     entregada**: el problema entonces no es del courier sino de nuestro
     extractor, y la lectura en seco guarda la respuesta cruda de hasta tres de
-    ellas para poder verlo.
+    ellas para poder verlo. **Así se encontró el fallo el 10-09-2026**: las 60
+    guías salían «sin constancia aún» y ninguna lo estaba.
+  - **La forma de la respuesta de evidencias, confirmada el 10-09-2026:**
+
+    ```
+    { orderNumber, evidences: [ … la ENTREGA … ],
+      payments: [{ id, amount, paymentMethod, entity: "YAPE",
+                   paymentDocument: "…/files_payment%2F…jpg",
+                   status: "VERIFIED", paymentDate, createdAt }] }
+    ```
+
+    El enlace de la constancia es **`payments[].paymentDocument`**, y el medio
+    de pago es **`entity`** («YAPE», «BCP»). El `method` de la respuesta NO es
+    el medio de pago: cuelga de la evidencia de entrega y vale «Asignación
+    masiva por mapa». El extractor se había escrito contra una forma imaginada,
+    sin `paymentDocument` en su lista de claves, y por eso no validó ni un cobro
+    entre el 15-08 y el 10-09. Ahora se prueba contra la respuesta literal
+    (`test/tanders-payment-evidence.test.ts`): **una forma adivinada no se
+    verifica leyéndola.**
+  - Lo que Tanders dice del pago (`amount`, `entity`, `status: VERIFIED`) es
+    dato de apoyo, **no el veredicto**. Quien decide sigue siendo la lectura de
+    la imagen contra el monto de la guía y el nombre de Grupo GF SAC: que el
+    courier se dé por pagado a sí mismo no es constancia de que el dinero
+    llegó a nuestra cuenta.
   - **El barrido de cobros pide la constancia directamente**, sin preguntar
     antes el estado. Una constancia bajo `files_payment/` existe solo cuando el
     motorizado cobró, así que es por sí misma la prueba de entrega; y es una
